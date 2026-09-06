@@ -3750,7 +3750,8 @@ refuted clauses are pinned at — a unary constructor, a `union` between two nul
 rule that fires once per class member — and `vuProgram` is the `union`-head one, whose head
 unions a **variable** with an application and so takes `noLitUnion`'s second arm. Both are
 head-scoped, and `ncProgram`'s source run is compiled. The corpus measurement is
-`DiffTest.lean`'s census: 70 of 166 in domain, the same 70 as before the clause. -/
+`DiffTest.lean`'s census: the clause moved nothing when it was added, 70 of 166 in domain
+then and 78 of 174 now. -/
 
 /-- `ncRule`'s head reads only `x`, which its query binds. -/
 theorem ncProgram_headsScoped : ncProgram.HeadsScoped := by decide
@@ -4019,7 +4020,7 @@ domain clause and not a lemma.
 unbound variable outright: `to_core_actions`, the lowering for *actions*, resolves a
 `GenericExpr::Var` only when `ctx.binding` holds it or it is a global, and raises
 `TypeError::Unbound` otherwise (`egglog/src/core.rs:663-670`) — the same shape the clause has.
-The census is unmoved: 70 of 166 in domain, as before it was added.
+The census was unmoved when it was added: 70 of 166 in domain, as before it.
 
 **Neither the bundle nor the reduction is vacuous.** `wPreludeState_encOk` is
 `FDatabase.EncOk` at the state `encode wProgram`'s prelude really leaves — the prelude is
@@ -8835,9 +8836,57 @@ itself — `RowRepr td s s`, where `UnionsInv.envReadsAt` supplies only `ViewRep
 part company exactly when a later `union` moves the let-bound term's row off it: `mergeResult`
 keeps `ordering-min`, so `(let x (A))` followed by a `union` with a `Term.blt`-smaller partner
 leaves `x` bound to a term no live row is keyed at. `envReadsAt` is an invariant clause and can
-be handed to the residue; the *row* reading of it is not established, and whether it holds is
-the next question this line has to answer — `difftest correspond`'s **LOST** column, 0 over the
-70 in-domain cases, is the corpus saying the hazard is not exercised there.
+be handed to the residue; the *row* reading of it is not established, **and it is false — the
+hazard is real, and it is a defect in `encode` and not a gap here.** The corpus did not
+exercise it and now does: `DiffTest.lean`'s eight `glob-*` cases are all in `encode`'s domain
+and all pass against real egglog, and `difftest correspond 64` reports **7 LOST across 6 of
+them** where the whole corpus reported 0. `glob-lost` is the minimal one, five commands:
+
+```
+(let $g (Zz))  (Wrapper (Aa))  (union (Zz) (Aa))  (rule ((Wrapper $g)) ((Hit)))  (run 1)
+```
+
+`Term.blt` orders applications by arity, then by name, so `(Aa)` is the `ordering-min` and
+`(Zz)` is the union's loser, while `$g` stays bound to `(Zz)` on **both** sides —
+`encodeAction`'s `.letBind` binds the same skolem term the source binds. The source fires:
+`patternHolds` closes the instance `(Wrapper (Zz))` into `d`'s congruence and finds
+`(Wrapper (Aa))`, which is what egglog does too. The target cannot. Its one `@WrapperView`
+row is `((Aa)) ↦ (Wrapper (Aa))` (`difftest correspond-dump 64 glob-lost`), the emitted atom
+is `(= (values @v0 @v1) (@WrapperView $g))` at `$g = (Zz)`, and the target asserts no equation
+(`execM_encode_eqsRefl`) — so `patternHolds`' `congrTuple` is equality on the nose and the key
+`((Zz))` reads nothing. Nor can anything re-key a row onto it: `rebuildRules`' column rule
+joins `@UF[@ci] ↦ (@x, @q)` and writes `@x` *into* the column, so rows travel **towards** a
+leader and never back from one, and `encodeCmd` emits no rule per `let`. `(Hit)` is therefore a
+source e-node the target gives no e-class; `glob-lost-eq` is the same firing under a `union`
+head, where what is lost is the equality `(Wrapper (Aa)) = (Hit)` between two terms *both*
+databases hold.
+
+**Two controls say the mechanism is exactly this and nothing wider.** `glob-keyed` also builds
+`(Wrapper (Zz))`, so a row *was* written at the global's key; a re-key adds a row rather than
+moving one — entries are never removed here — so the original survives and the case agrees.
+`glob-leader` binds `$g` to the union's winner, the direction the column rule carries rows in,
+and agrees too. What fails is only a global bound to a **non-leader at a key no build ever
+wrote**.
+
+So `hglob` cannot be proved and this residue is not what has to change. The remedies —
+a tenth `EncodeDomain` clause, a rule emitted per `let` that re-reads the global's class, or a
+`mergeResult` that keeps the let-bound term — are all changes to `Encoding/Encode.lean`'s
+contract and all owner decisions, and none of them belongs here. What the corpus establishes
+is the `execM` reading: the forward half of `encode_corresponds`' conclusion fails at these
+programs, at states the reference implementation reaches. Carrying that to
+`encode_corresponds_complete` itself is the step `difftest correspond` never makes — the sweep
+is about `execM` and not about the substitution a `ProgramStep` picks, the caveat
+`DiffTest.lean` records under "And what no column of it establishes" — so the compiled
+refutation, in `encode_corresponds_unions_literals`' shape, is what a fix or a domain clause
+would have to be argued against.
+
+**This `sorry` is not merely open.** `unionsJoined_fire` is the development's only one, and
+`encode_corresponds_forward` — "no equality is lost" — is exactly the half that carries
+`sorryAx` (`encode_corresponds_complete` does not). The `glob-*` measurement is that half
+failing. So what is wanted here is not a proof of `UnionsFire`: at a source `ProgramStep` the
+interpreter's own state supplies (`exec_programStep`, whose `CtorDecls` and `NoSaturate` these
+programs meet), the conclusion it is spent on is false, and the clause has to be narrowed or
+the encoder fixed before anything can discharge it.
 
 **A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
 that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already
@@ -10441,10 +10490,17 @@ theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDataba
   cong_sameClass ⟨encode_assert hdom hsrc htgt, encode_trans hdom hsrc htgt,
     encode_congr hdom hsrc htgt⟩ h
 
-/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 70
+/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 78
 in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
-70 agreeing, 0 LOST, 0 INVENTED — and `link-diff` 0, which is what says the swept relation
-is this one.
+72 agreeing, 0 INVENTED and `link-diff` 0 — the last is what says the swept relation is this
+one.
+
+**And 7 LOST, on the six `glob-*` cases.** They are the shape `unionsJoined_fire`'s `hglob`
+paragraph names, added to the corpus to settle it: a `let`-bound global read from a rule's
+**query**, and a `union` that makes the bound term the loser, so the encoded query asks for a
+live `@FView` row keyed at a term the rebuild's column rules only ever carry rows *away* from.
+That is this theorem's own conclusion failing, at an `execM` run — a defect in `encode` rather
+than in the proof — and the remedy is a change to `Encoding/Encode.lean`'s contract.
 
 `EncodeDomain` is still needed: outside it `encode` is not defined for the program at all —
 a `:merge` declaration has no table triple to emit, and a source name in the generated

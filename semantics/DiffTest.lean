@@ -58,6 +58,47 @@ private def assocRule : Rule where
                      (add (.var "a") (add (.var "b") (.var "c")))]
   ruleset := ""
 
+/-! #### Reading a global from inside a query
+
+The `glob-*` family. A `let` binds `$g` to a term, a rule's **query** mentions `$g`, and a
+`union` moves the class of that term. `matchQuery` reads `$g` off `d.env` on both sides —
+the encoded `let` binds the same skolem term (`encodeAction`, `.letBind`) — so the source
+asks "is some term congruent to `Wrapper($g)` held?" while the target asks "is there a live
+`@FViewWrapper` row **keyed at** `$g`?". The rebuild's column rules move a key column to its
+`@UF` *leader*, so they carry rows **towards** the leader and never back; when `$g` is bound
+to the loser of a `union` and nothing was ever built at that key, the two questions part
+company.
+
+`Term.blt` orders applications by arity, then by name, then lexicographically, so `(Aa)` is
+below `(Zz)` and below any application of positive arity; `mergeResult` keeps `ordering-min`,
+so `(Aa)` is the leader in every union below. `Cc`, `Hit` and `Mark` are named apart from the
+rest of the corpus so a case's counts read on their own. -/
+
+/-- The global under one constructor: the smallest shape that reads `$g` from a query. -/
+private def wrapGlobRule : Rule where
+  query := [.expr (.app "Wrapper" [.var "$g"])]
+  actions := [.expr (C "Hit")]
+  ruleset := ""
+
+/-- The same query with a `union` head, so what a failure to fire costs is an *equality*
+between two terms both databases hold rather than an e-node. -/
+private def wrapGlobUnionRule : Rule where
+  query := [.expr (.app "Wrapper" [.var "$g"])]
+  actions := [.union (.app "Wrapper" [.var "$g"]) (C "Hit")]
+  ruleset := ""
+
+/-- The global as one key column of two, with the other bound by the match. -/
+private def addGlobRule : Rule where
+  query := [.expr (add (.var "$g") (.var "b"))]
+  actions := [.expr (.app "Mark" [.var "b"])]
+  ruleset := ""
+
+/-- The global two constructors down, so the atom that reads it is not the outermost. -/
+private def wrapWrapGlobRule : Rule where
+  query := [.expr (.app "Wrapper" [.app "Wrapper" [.var "$g"]])]
+  actions := [.expr (C "Hit")]
+  ruleset := ""
+
 private def curated : List (String × Program) :=
   [ ("actions",
       [.action (.expr (add (C "One") (C "Two"))),
@@ -83,7 +124,62 @@ private def curated : List (String × Program) :=
     ("both-2",
       [.action (.expr (add (add (C "One") (C "Two")) (C "Three"))),
        .rule assocRule, .rule commuteRule, .run "", .run ""]),
-    ("seed-2", [.rule ⟨[], [.expr (add (C "One") (C "Two"))], ""⟩, .run "", .run ""]) ]
+    ("seed-2", [.rule ⟨[], [.expr (add (C "One") (C "Two"))], ""⟩, .run "", .run ""]),
+    -- `$g` is the union's loser and nothing was ever built at that key: the source matches
+    -- through congruence, the target has no row to read.
+    ("glob-lost",
+      [.action (.letBind "$g" (C "Zz")),
+       .action (.expr (.app "Wrapper" [C "Aa"])),
+       .action (.union (C "Zz") (C "Aa")),
+       .rule wrapGlobRule, .run ""]),
+    -- The same, with the `union` after a run the rule already sat through.
+    ("glob-lost-after",
+      [.action (.letBind "$g" (C "Zz")),
+       .action (.expr (.app "Wrapper" [C "Aa"])),
+       .rule wrapGlobRule, .run "",
+       .action (.union (C "Zz") (C "Aa")), .run ""]),
+    -- The head is a `union` and both its terms are built up front, so what a missing firing
+    -- costs is an equality between two terms both sides hold.
+    ("glob-lost-eq",
+      [.action (.letBind "$g" (C "Zz")),
+       .action (.expr (.app "Wrapper" [C "Aa"])),
+       .action (.expr (C "Hit")),
+       .action (.union (C "Zz") (C "Aa")),
+       .rule wrapGlobUnionRule, .run ""]),
+    -- The global as one of two key columns.
+    ("glob-lost-add",
+      [.action (.letBind "$g" (C "Zz")),
+       .action (.expr (add (C "Aa") (C "Cc"))),
+       .action (.union (C "Zz") (C "Aa")),
+       .rule addGlobRule, .run ""]),
+    -- The global under two constructors.
+    ("glob-lost-nested",
+      [.action (.letBind "$g" (C "Zz")),
+       .action (.expr (.app "Wrapper" [.app "Wrapper" [C "Aa"]])),
+       .action (.union (C "Zz") (C "Aa")),
+       .rule wrapWrapGlobRule, .run ""]),
+    -- The global bound to an application rather than a nullary constructor, which loses to a
+    -- nullary partner because `Term.blt` compares arity first.
+    ("glob-lost-app",
+      [.action (.letBind "$g" (add (C "Zz") (C "Cc"))),
+       .action (.expr (.app "Wrapper" [C "Aa"])),
+       .action (.union (add (C "Zz") (C "Cc")) (C "Aa")),
+       .rule wrapGlobRule, .run ""]),
+    -- The control: the same union, but a row *was* built at the global's key, and a re-keyed
+    -- row is an extra row rather than a moved one, so the original survives.
+    ("glob-keyed",
+      [.action (.letBind "$g" (C "Zz")),
+       .action (.expr (.app "Wrapper" [C "Zz"])),
+       .action (.expr (.app "Wrapper" [C "Aa"])),
+       .action (.union (C "Zz") (C "Aa")),
+       .rule wrapGlobRule, .run ""]),
+    -- The other control: the global is the union's *winner*, which is the direction the
+    -- rebuild's column rules carry rows in.
+    ("glob-leader",
+      [.action (.letBind "$g" (C "Aa")),
+       .action (.expr (.app "Wrapper" [C "Zz"])),
+       .action (.union (C "Zz") (C "Aa")),
+       .rule wrapGlobRule, .run ""]) ]
 
 /-! **The emitted egglog is unchanged by rulesets.** Every case here names the *unnamed*
 ruleset, which a rule joins by writing no `:ruleset` and which `(run 1)` runs, so
@@ -1478,11 +1574,11 @@ private def allCases : List (String × Program) :=
   curated ++ curatedMerge ++ randomCases ++ randomMergeCases
 
 set_option linter.hashCommand false in
-#guard curated.length = 10
+#guard curated.length = 18
 set_option linter.hashCommand false in
 #guard curatedMerge.length = 66
 set_option linter.hashCommand false in
-#guard allCases.length = 166
+#guard allCases.length = 174
 
 /-! Three cases small enough to pin the encoding's behaviour at compile time. None has a
 rule, so none runs the enumerator, whose cost is `|terms| ^ |vars|`. -/
@@ -1716,10 +1812,14 @@ every proof the rebuild composes joins the candidate universe.
 `Impl/Interp.lean`'s "Pruning the candidate cross product" is what keeps the second variable
 per read from multiplying the whole search rather than its own atom's block. It was not
 enough on its own — 12 of 70 at a 60 s budget — and "Joining over the row index" is what
-followed it. **63 of the 70 in-domain cases finish** at 60 s and 65 at 300 s, all reporting
-`AGREE`, against 58 and 64 *before* the proof column: the enumerator now more than pays for
-the column it was struggling under. Nothing regressed — every case that finished under the
-older enumerators is faster, `union` 6 min 5 s → 1.3 s and `actions` 253 s → 1.1 s.
+followed it. **63 of the 70 in-domain cases the corpus then had finish** at 60 s and 65 at
+300 s, all reporting `AGREE`, against 58 and 64 *before* the proof column: the enumerator now
+more than pays for the column it was struggling under. The eight `glob-*` cases added since
+run in half a second between them, and five of them report `DIFFER` — one fewer e-node in the
+encoded run, which is the same defect "What the sweep reports" measures as LOST.
+
+Nothing regressed — every case that finished under the older enumerators is faster,
+`union` 6 min 5 s → 1.3 s and `actions` 253 s → 1.1 s.
 
 Where it goes is measured, and it is e-matching and not the merge phase: on `unionCase`'s
 last rebuild the round costs 207 s, of which the congruence closure is 106 ms, one merge
@@ -2035,10 +2135,11 @@ than refused. `merge-displaced` counts what is left: a proof the checker can gro
 a term the source names, reported against a row whose claim sits at a rule-created one. The
 report counts those apart from proofs that justify nothing.
 
-**Measured.** `difftest check 64`, all 76 cases — the 70 in-domain corpus cases and the six
-probes — in 47 s: **673 of 683 recorded equalities check, 6 are merge-displaced, and 4 are
+**Measured.** `difftest check 64`, all 84 cases — the 78 in-domain corpus cases and the six
+probes — in 47 s: **715 of 725 recorded equalities check, 6 are merge-displaced, and 4 are
 unjustified**. Only `both-2` (17/4/2) and `rand-43` (22/2/2) reject; every other case is
-clean, `rand-19`, `rand-33`, `rand-45` and `rand-57` among them.
+clean, `rand-19`, `rand-33`, `rand-45` and `rand-57` among them. A failing case prints
+`REJECT` rather than `CHECKS`, so an aggregate has to count both lines.
 
 All ten non-checking rows are the one mechanism, and it is the checker's and not the
 encoder's: `props` seeds a `@Rule_i` node's premises from the source's top-level actions, so
@@ -2979,18 +3080,29 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
 
 /-! #### What the sweep reports
 
-`difftest correspond 64` over the 70 in-domain cases and the seventeen probes. Nothing is
+`difftest correspond 64` over the 78 in-domain cases and the seventeen probes. Nothing is
 capped — the widest pool is 145 terms — no `@UF` walk hits its bound, no `@UF` cycle
 exists, no target equation is asserted, and the leader reading, the joinability reading and
 `sameClassF` agree on every pair.
 
-**No LOST and no INVENTED, anywhere.** Every equality the source derives, the encoding
-reproduces, and it reproduces no other. Over the corpus that is 778 pairs both sides say yes
-to, 159 of them between *distinct* terms; the counts below are the corpus's too.
+**No INVENTED anywhere, and LOST exactly on the `glob-*` family.** 72 cases agree: every
+equality the source derives, the encoding reproduces, and it reproduces no other. Over the
+corpus that is 821 pairs both sides say yes to, 169 of them between *distinct* terms; the
+counts below are the corpus's too.
+
+**The six that disagree are one defect, and it is in `encode`.** They lose 7 equalities
+between them, all by the same mechanism: a `let` binds a global, a rule's **query** reads it,
+and a `union` makes the bound term the *loser*. `matchQuery` reads such a variable off
+`d.env` on both sides, so the source asks whether some held term is congruent to the pattern
+instance while the target asks for a live `@FView` row **keyed at** the bound term — and
+`rebuildRules`' column rule carries rows towards a `@UF` leader and never back, so no row is
+ever keyed at the loser unless a build wrote one. `glob-keyed` and `glob-leader` are the two
+controls that agree, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where this is
+recorded as an open defect: it is what its `hglob` paragraph asks for, refuted.
 
 **And it is the stated relation that is being measured.** `link-diff` is 0 on every case:
 the sweep's verdict and `Encoding/Correspond.lean`'s `sameClassF` — which `sameClassF_iff`
-proves equal to `Encode.lean`'s `SameClass` — never disagree, so "70 agreeing" is a
+proves equal to `Encode.lean`'s `SameClass` — never disagree, so "72 agreeing" is a
 measurement of `Cong src a b ↔ SameClass tgt a b` and not of a near neighbour of it. That
 theorem is `encode_corresponds`, and this is the evidence for it; what the sweep cannot
 supply is the *hypothesis* it is stated under, for which see `encode_corresponds_witness`.
@@ -3005,8 +3117,8 @@ While the term relation carried a `unitE` output column,
 — which builds `(Add 0 1)` — was green by collision rather than by correspondence. The
 `lit` and `lit-zero` probes are kept as the regression test for that.
 
-**The union-find does no work.** 175 of the 180 `@UF` entries the corpus writes move, 38 of
-the 70 cases write at least one, and `CorrReport.viaUF` is 0 in every case: no pair is joined
+**The union-find does no work.** 193 of the 198 `@UF` entries the corpus writes move, 48 of
+the 78 cases write at least one, and `CorrReport.viaUF` is 0 in every case: no pair is joined
 by a `@UF` step. The `no-uf` reading — every edge dropped — reproduces the verdict exactly,
 case for case, because the rebuild has already re-keyed each view's e-class column onto the
 common leader. The `rows` reading reproduces it too, so this is not an artefact of `Out`
@@ -3024,8 +3136,8 @@ rule re-`set`s the view at each parent in turn. `D`'s `ViewRepr` set already con
 leader, so there is nothing for a walk to find.
 
 **Where the work went.** `difftest correspond-norebuild 64` runs the same encodings with
-every `Cmd.saturate rebuildRuleset` dropped. There the views are never re-keyed: 11 of the
-70 cases DIFFER, 116 equalities come back LOST, and 71 pairs are joined by a `@UF` step —
+every `Cmd.saturate rebuildRuleset` dropped. There the views are never re-keyed: 19 of the
+78 cases DIFFER, 127 equalities come back LOST, and 79 pairs are joined by a `@UF` step —
 `chain` among them, where the walk from `D` to `A` is three edges because path compression
 never ran either. That is the measurement that says the union-find is redundant *because of
 the rebuild*, and not because `SameClass` never needed it.
@@ -3037,15 +3149,19 @@ literal operand outright, so `Cong src` never relates a literal to anything but 
 `@UF` key is ever a literal; the `lit-union` and `lit-mix` probes are that refusal, run.
 
 **The inductive reading is load-bearing.** The `flat` reading — a view entry keyed by an
-application's children as written — loses 91 equalities across 5 cases, `both-2` and
-`rand-43` among them, and finds only 88 of the 159 off-diagonal ones. A rule head builds
+application's children as written — loses 100 equalities across 11 cases, `both-2` and
+`rand-43` among them, and finds only 97 of the 169 off-diagonal ones (5 of those cases are
+`flat`'s alone; the other 6 are the `glob-*` family, which the default reading loses too).
+A rule head builds
 over the ids its query bound, so a source term a head produced keys no entry under its own
 children.
 
-**What a green LOST column does not establish.** 32 of the 70 in-domain cases derive no
+**What a green LOST column does not establish.** 32 of the 78 in-domain cases derive no
 equality between distinct terms at all, so their whole left-to-right test is the e-node
-diagonal; 25 more derive exactly one. Two cases carry 86 of the 159. The claim is tested at
-depth on very few programs.
+diagonal; 31 more derive exactly one. Two cases carry 86 of the 169. The claim is tested at
+depth on very few programs — which is how the `glob-*` defect survived a corpus of 70 cases
+with a green column, and the reason a hazard named in a docstring is worth a case rather than
+an argument.
 
 **And what no column of it establishes.** The sweep runs `execM`, and `execM` is not
 `ProgramStep`. `Spec/Step.lean` now reads `identityVals`, so the specification *can* reach a
@@ -3058,21 +3174,21 @@ and not about the state a `ProgramStep` picks. -/
 /-! #### What the harness pins
 
 The census. `encode`'s fragment is the constructor one, so the in-domain cases are exactly
-the two constructor families and none of the `:merge` ones — which is 70 of 166, and the
-reason a green sweep here is a statement about 42% of the suite. -/
+the two constructor families and none of the `:merge` ones — which is 78 of 174, and the
+reason a sweep here is a statement about 45% of the suite. -/
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => (c.2.declared).encodeDomainB).map Prod.fst
   = curated.map Prod.fst ++ randomCases.map Prod.fst
 set_option linter.hashCommand false in
-#guard (allCases.filter fun c => (c.2.declared).encodeDomainB).length = 70
+#guard (allCases.filter fun c => (c.2.declared).encodeDomainB).length = 78
 
 /-! And they are out for the one reason `MERGE.md` calls permanent rather than a gap: every
 one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
 not a generated-name clash or a shadowed primitive.
 
 That is also what says the four newest clauses — `EncodeDomain.queryEncodable`,
-`noLitUnion`, `headsDeclared` and `headsScoped` — **cost the corpus nothing**: the count is 70
-with them as it was without, and the 70 pinned above is what would move if a generated program
+`noLitUnion`, `headsDeclared` and `headsScoped` — **cost the corpus nothing**: the count was 70
+with them as it was without, and the 78 pinned above is what would move if a generated program
 ever wrote a bare-leaf pattern, built a literal under a rule that unions, applied a name it
 does not declare, or read a head variable nothing binds. What each clause excludes is a
 program the domain used to admit and the encoder gets wrong: `Encoding/Match.lean`'s
@@ -3089,13 +3205,13 @@ puts `Encoding/Correspond.lean`'s `bareProgram` out, and `bare_build_invents_equ
 `encode_corresponds_complete` failing there under every other clause. It is a faithfulness
 clause: egglog raises `TypeError::Unbound` for exactly this, in the lowering for actions
 (`egglog/src/core.rs:663-670`). This is the measurement that says adding it moved no number
-here — all seventy in-domain cases satisfy it, so `encode_corresponds_complete` is a
-statement about the same 42% of the suite that the sweep measures. `encodeDomainB` now
+here — all in-domain cases satisfy it, so `encode_corresponds_complete` is a
+statement about the same 45% of the suite that the sweep measures. `encodeDomainB` now
 includes the clause, so the guard below is the redundant half of the count and is kept as the
 record of what was measured before it was folded in. -/
 set_option linter.hashCommand false in
 #guard ((allCases.filter fun c => (c.2.declared).encodeDomainB).filter fun c =>
-  decide (c.2.declared).HeadsScoped).length = 70
+  decide (c.2.declared).HeadsScoped).length = 78
 
 /-! **`encode` runs.** It did not while `encodeBuild` read its view back to get the
 canonical member: `(let x (@fView c…))` is a lookup, which `Program.illegalReads` rejects

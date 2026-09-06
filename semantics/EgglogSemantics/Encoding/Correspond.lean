@@ -181,8 +181,9 @@ both are decided at the witness at the end of this file.
   `encode_corresponds_witness`'s discipline. What survives is `Database.UnionsRead`
   (`ncTgt_unionsRead`) and the correspondence at the pair the clauses fail on
   (`ncSrc_cong_FA_FB`, `ncTgt_sameClass_FA_FB`) — which is why `difftest correspond` still
-  agrees on all seventy in-domain cases: the sweep measures the conclusion, and it was the
-  *factorisation* that was false.
+  agreed on every in-domain case the corpus then had: the sweep measures the conclusion, and it
+  was the *factorisation* that was false. (The corpus now has cases where the conclusion itself
+  fails, and they are a different defect — see `unionsJoined_fire`'s `hglob` paragraph.)
 
 * **Weakened, and the strong form kept with a separation against it**:
   `Database.ViewLeaderRows`. Its four clauses were assembled before that lesson and are
@@ -307,7 +308,8 @@ both are decided at the witness at the end of this file.
   `bareProgram_encodeDomain_but_headsScoped` is every other clause holding, so the clause is
   the only thing between the domain and the refutation. It is faithfulness rather than a
   narrowing — egglog raises `TypeError::Unbound` for an action's unbound variable in
-  `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census is unmoved at 70 of 166.
+  `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census was unmoved when it was
+  added, at 70 of 166.
 * **Refuted, and it was the *reading* that was wrong**: two of those clauses were once false
   at `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all, and
   `Program.EncodeDomain.noBareBuild` was the repair. The defect was `ViewRepr`'s literal clause
@@ -4632,11 +4634,12 @@ no `union`, so no `@UF` entry — and `ncTgt_rowJoined_edge` is that clause at a
 content. The case with content is a round that fires a head `union` — or, for
 the `reads` half of the conclusion, one that fires a head **build** — and that is where it is
 open. `difftest correspond`'s **LOST** column — `Cong src a b` without
-`SameClass tgt a b`, swept with the diagonal included over the 70 in-domain cases, rules and runs
-among them — is 0 and stays 0, which is the `reads` clause measured: every source term has *some*
-id in the target. Asking for that id to be the term itself is the stronger claim the
-counterexample refutes (`Database.ReadsSelf`, `ncTgt_not_readsSelf`), and this clause does not
-ask it. -/
+`SameClass tgt a b`, swept with the diagonal included over the 78 in-domain cases, rules and runs
+among them — is 0 on all but the `glob-*` family, which is the `reads` clause measured: every
+source term has *some* id in the target, except where a rule the encoding could not fire never
+put one there (`unionsJoined_fire`'s `hglob` paragraph). Asking for that id to be the term
+itself is the stronger claim the counterexample refutes (`Database.ReadsSelf`,
+`ncTgt_not_readsSelf`), and this clause does not ask it. -/
 theorem unionsJoined_fire_satisfiable :
     CmdStep rbSrc (.run rbRuleset) rbSrc ∧
       rbState2.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbState2 ∧
@@ -4714,7 +4717,7 @@ theorem encodeCmd_run_tail (R : RulesetName) (n i : Nat) :
 /-- **The fixpoint at a state a program reaches.** Degenerately, as
 `unionsJoined_fire_satisfiable` is: `rbState2` holds no rule, so the round it is a fixpoint of
 fires nothing. The non-degenerate reading is measured rather than compiled — every one of
-`difftest correspond`'s 70 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
+`difftest correspond`'s 78 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
 theorem rbState2_roundClosed : rbState2.RoundClosed rebuildRuleset :=
   roundClosed_of_execProgramM (p := [Cmd.run rbRuleset]) rbState2_execProgramM_run
 
@@ -5068,11 +5071,11 @@ what the command induction wants.
 **Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
 that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
 source text as "no `union` action and no `union` in any rule head" — a `union` between distinct
-built terms is exactly what puts two e-classes at one view key. The in-domain census is 70 of
-166 and the `union` cases are the ones the correspondence exists for: `Encoding/Match.lean`'s
+built terms is exactly what puts two e-classes at one view key. The in-domain census is 78 of
+174 and the `union` cases are the ones the correspondence exists for: `Encoding/Match.lean`'s
 `uProgram` and `witnessProgram` would both leave the domain, and with them the only witnesses
 `execM_unionsJoined` and `Database.ViewLeader.ufClosed` are non-vacuous at. The clause is
-therefore not added, and the census stays 70. -/
+therefore not added, and the census stays 78. -/
 
 /-! #### The two clauses the fixpoint was for, refuted — and what replaced them
 
@@ -5119,8 +5122,10 @@ rests on the transcription.
 `cong_sameClass_of_state` actually consumes — holds here (`ncTgt_unionsRead`), and so does the
 correspondence at the very pair the two clauses fail on: `Cong src (F (A)) (F (B))` and
 `SameClass tgt (F (A)) (F (B))`, both compiled. `(F (B))` has an id; it is `(F (A))` and not
-itself. So `difftest correspond` stays 70 agreeing with 0 LOST — the sweep measures the
-conclusion, and it is the *factorisation* that is false.
+itself. So `difftest correspond` reports no LOST here — the sweep measures the
+conclusion, and it is the *factorisation* that is false. (The `glob-*` cases do lose
+equalities, by a mechanism that has nothing to do with these two clauses; see
+`unionsJoined_fire`'s `hglob` paragraph.)
 
 **What that cost the residues, and what they say now.** The weakenings are read off the
 consumers rather than guessed at. `sameClass_congr_of_shared` uses the coverage clause only at
@@ -10257,7 +10262,7 @@ post-state holds.
 `hlet` is what the two states' shapes cost. `hfired` reads the head at the block's *initial*
 environment, and an action after a `letBind` runs at an extended one; where the head mentions
 none of the block's own binders the two environments agree on what the head reads
-(`Expr.eval_agreeOn`) and the extension drops out. All seventy in-domain cases satisfy it
+(`Expr.eval_agreeOn`) and the extension drops out. Every in-domain case satisfies it
 outright — no rule head there binds anything. -/
 theorem mem_terms_of_headBuild {R : RulesetName} {c : Cmd} {sd sd' : Database}
     {r : Rule} (hfire : c = Cmd.run R ∨ c = Cmd.saturate R)

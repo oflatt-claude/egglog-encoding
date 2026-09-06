@@ -459,7 +459,7 @@ literal or a bare variable. `(rule ((1)) ())` therefore encodes to the *empty* q
 target matches and whose source matches nothing — `Encoding/Match.lean`'s
 `encodeQuery_drops_literal_pattern`, compiled. `Pattern.Grounded` excludes the literal case and
 `Query.VarsKeyed` the variable one; both are decidable conditions on the source **text**, and
-`difftest encode-domain` is unchanged at 70 of 166 with them, so the clause costs the corpus
+`difftest encode-domain` was unchanged at 70 of 166 with them, so the clause costs the corpus
 nothing. The encoder cannot be repaired here instead: there is no atom that asserts a literal
 exists — a literal has no view entry, which is the same root cause as `ViewRepr`'s literal clause
 taking its membership as a hypothesis.

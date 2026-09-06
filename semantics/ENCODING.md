@@ -10,11 +10,23 @@ over `Encoding/Correspond.lean`'s decision procedure `sameClassF`, the proof tha
 (`sameClassF_iff`, both directions, no `sorry`), and a compiled witness that its hypotheses
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
-the corpus and reports 70 of 70 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
+the corpus and reports 72 of 78 agreeing, 7 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
 `iff` is proved outright** — `encode_corresponds_complete`, no `sorryAx` — and the theorem
 carries `sorry` only through the *forward* half, in one named property of the state the run
 reached; it is one *mechanism* rather than a clause, because the clauses are derived from one
 another.
+
+**And the LOST column is now non-zero, on purpose.** The eight `glob-*` cases were added to
+settle the hazard `Egglog.unionsJoined_fire`'s docstring records: a `let`-bound global read
+from a rule's **query**, plus a `union` that makes the bound term the union-find *loser*.
+`matchQuery` reads such a variable off `d.env` on both sides, so the source asks whether some
+held term is congruent to the pattern instance while the encoded query asks for a live `@FView`
+row **keyed at** the bound term — and the rebuild's column rules carry rows towards a leader
+and never back, so no such row exists unless a build wrote one. Six of the eight lose an
+equality; `glob-keyed` and `glob-leader` are the controls that pin the mechanism. It is a
+defect in `encode` rather than a gap in a proof, and the remedies (a tenth `EncodeDomain`
+clause, a rule per `let`, a different `mergeResult`) are all changes to the encoder's
+contract.
 The **action read-back** is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
 on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and supplies the
@@ -57,7 +69,8 @@ the clause is the only thing standing between the domain and the refutation. egg
 exactly this: `to_core_actions`, the lowering for actions, resolves a `GenericExpr::Var` only
 when `ctx.binding` holds it or it is a global, and raises `TypeError::Unbound` otherwise
 (`egglog/src/core.rs:663-670`) — a different error from `UnboundFunction`. The census is
-unmoved: still 70 of 166 in domain, and `DiffTest.lean` pins that.
+unmoved when it was added: still 70 of 166 in domain then, and `DiffTest.lean` pins the
+count, now 78 of 174.
 **Two clauses this factorisation used to run through are
 refuted** and kept as records — `Database.ReadsSelf` (every source term is an id of itself) and
 `Database.ViewsProduct` (a view entry at every id tuple the children form), both false at
@@ -76,7 +89,7 @@ those clauses were once *false* at `.action (.expr (.lit 5))`, and the defect wa
 one. Without the premise the clause `Program.EncodeDomain.noBareBuild` added is gone, that
 program is in the domain, and both statements hold there
 (`litBuild_viewsCover`, `litBuild_unionsJoined`); the reading stays exact because a literal's
-only id is itself (`ViewRepr.eq_of_lit`, `not_sameClass_lit_app`). Still 70 of 166 in domain.
+only id is itself (`ViewRepr.eq_of_lit`, `not_sameClass_lit_app`). The census did not move.
 Finding 3 below
 is why its target is the interpreter's state and not `ProgramStep`'s — the vacuity is gone,
 but the decision procedure still needs an `FDatabase` — and finding 4 is why the `iff` is
