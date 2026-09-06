@@ -3833,7 +3833,17 @@ theorem EncStep.reached {P pre suf : Program} {sd : Database} {d : FDatabase}
 
 /-! ##### The one case that does not close -/
 
-/-- **The command induction's rule-firing case, as a `Prop`.**
+/-- **The command induction's rule-firing case, as a `Prop`. REFUTED at `Cmd.saturate`.**
+
+`Encoding/Complete.lean`'s `unionsJoined_fire` carries the counterexample and the measurement.
+In one line: `encodeCmd` gives a source `.saturate R` the block
+`[.saturate R, .saturate rebuildRuleset]`, so the target rebuilds **once, after** `R` has
+saturated, and its second round reads the first round's rows unre-keyed where the
+specification's second round sees the first round's `union` through `Cong`. The `Cmd.run` half
+is untouched — one source round against one target round and its own rebuild — and is what the
+corpus measures. Left stated over both commands, because narrowing it to `Cmd.run` would move
+the gap into `unionsInv_step` rather than close it, and because the repair belongs in
+`Encoding/Encode.lean` or in a domain clause.
 
 The five other commands are read-backs of `set`s the encoder emitted, and those read-backs are
 proved (`viewReprAll_self_of_execProgramM`, `out_uf_of_execProgramM`). A `Cmd.run` or a

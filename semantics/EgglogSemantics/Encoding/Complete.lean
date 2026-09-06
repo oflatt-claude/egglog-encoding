@@ -9104,7 +9104,7 @@ theorem patternRowRead_of_matches {sd : Database} {td : FDatabase} {σ ρt : Env
         (hidTerm _ r hr₁)
   | values _ _ _ _ => exact hnv.elim
 
-/-- **The command induction's rule-firing case. Not proved.**
+/-- **The command induction's rule-firing case. REFUTED at `Cmd.saturate`, open at `Cmd.run`.**
 
 Its statement, its five closed siblings and the refutation that fixed its hypotheses are in
 `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`).
@@ -9250,18 +9250,56 @@ union-find forward (`proof_encoding.rs`'s `is_encoded_global`,
 through the tables the `let`'s own build already wrote. `difftest correspond 64` now reports
 **0 LOST**, with all eight `glob-*` cases agreeing.
 
-So `hglob` is no longer the obstruction it was, and the residue is no longer false. What is
-still unproved here is `UnionsFire` itself: the rule the target holds is
-`encodeRule i (s.substGlobals G) n` — `UnionsInv.rules` now says so — so the reading a firing
-has to mirror is the *substituted* query's, `mem_matchQuery_encodeQuery` at
-`Query.substGlobals G s.query`, whose globals are already flattened away and whose remaining
-variables the three clauses above answer for.
+So `hglob` is no longer the obstruction it was. What the residue would still have to prove at a
+`Cmd.run` is `UnionsFire` itself: the rule the target holds is `encodeRule i (s.substGlobals G) n`
+— `UnionsInv.rules` now says so — so the reading a firing has to mirror is the *substituted*
+query's, `mem_matchQuery_encodeQuery` at `Query.substGlobals G s.query`, whose globals are
+already flattened away and whose remaining variables the three clauses above answer for.
 
-**This `sorry` is the development's only one**, and `encode_corresponds_forward` — "no equality
-is lost" — is exactly the half that carries `sorryAx` (`encode_corresponds_complete` does not).
-With the `glob-*` defect fixed the sweep no longer refutes what it is spent on:
-`difftest correspond 64` agrees on all 78 in-domain cases and all seventeen probes, so
-`UnionsFire` is an open obligation rather than a false one.
+**But `UnionsFire` is false, and the writer is `Cmd.saturate`.** `encodeCmd` gives a source
+`.saturate R` the block `[.saturate R, .saturate rebuildRuleset]`, so the rebuild runs **once,
+after the whole saturation**, and the target's second round of `R` reads the first round's rows
+unre-keyed. The specification has no rebuild to miss — `Matches` closes over `Cong`, which reads
+`eqs` — so its round 2 sees round 1's `union` and the target's does not. Five commands, all of
+them in `encode`'s domain:
+
+```
+(Wrapper (Zz))  (Aa)
+(rule ((Aa)) ((union (Zz) (Aa))))
+(rule ((Wrapper (Aa))) ((Hit)))
+(run-schedule (saturate))
+```
+
+Round 1 fires the first rule on both sides; round 2 fires the second on the source alone, over
+the congruence `(Zz) = (Aa)` round 1 asserted, and builds `(Hit)`. In the target the union is an
+`@UF` edge — `Term.blt` makes `(Aa)` the `ordering-min` — while `@WrapperView` still sits at the
+key `[(Zz)]`, and the emitted atom for `(Wrapper (Aa))` asks for the key `[(Aa)]`. Nothing joins
+them until the trailing `Cmd.saturate rebuildRuleset`, which is after `R` has saturated.
+**Measured**: `correspond 64` reports `DIFFER … lost=1 … link-diff=0` with `LOST (Hit) = (Hit)`;
+`exec P` holds one `Hit` term and `execM (encode P)` holds **no** `@HitView` entry term at all;
+`P.declared.encodeDomainB` is `true`. The bracket is exact — the same program with the
+`saturate` replaced by two `Cmd.run`s **agrees**, because there each round gets its own rebuild.
+
+**So `encode_corresponds_forward` is false too**, at that program and at `a = b = (Hit)`:
+`Cong src (Hit) (Hit)` holds and `SameClass tgt (Hit) (Hit)` wants a `@HitView` entry there is
+none of. The `sorry` below is therefore not an open obligation but a false one, and no assembly
+of the pieces above can close it. egglog rebuilds after **every** iteration of
+`(run-schedule (saturate R))`, so the defect is `encodeCmd`'s and not the specification's: the
+repair is in `Encoding/Encode.lean` — the maintenance rules have to be members of every source
+ruleset a `saturate` can name, so that a round of `R` rebuilds before the next one searches —
+or a tenth domain clause excluding a source `Cmd.saturate`, which is the `Program.NoSaturate`
+shape `exec_programStep` already carries. Neither is written here.
+
+**Why the corpus is green anyway.** No case uses a *source* `Cmd.saturate`: the only
+`Cmd.saturate` in an encoded program is the encoder's own `rebuildRuleset` one, and every case
+runs its ruleset with `Cmd.run`. `difftest correspond 64` agreeing on all 78 in-domain cases and
+all seventeen probes therefore measures the `Cmd.run` half and says nothing about the other.
+
+**The refutation is measured and not proved**, which is why no `unionsFire_false` stands beside
+`unionsFireClaim_false`. Refuting a firing needs the enumerator's *completeness* at an encoded
+target — no substitution matches, so nothing is written — and that is `execRunRules_RunRules`,
+which wants `Signature.AllConstructors` and is unavailable at a target whose `@UF` and every
+`@fView` carry `:merge`. The kernel cannot run the encoded program either.
 
 **A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
 that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already
