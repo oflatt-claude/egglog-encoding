@@ -225,7 +225,10 @@ both are decided at the witness at the end of this file.
   `Database.Lands` and not absorption along the edge it is handed:
   `Database.RebuildClosedStrong` is the form that did, `cxStale_not_rebuildClosedStrong`
   refutes it at two `union`s in one block, and `Database.RebuildClosed.of_strong` is the check
-  that the weakening is one. Its **forest** obligation is now discharged outright:
+  that the weakening is one. `edged` and `column` land on a **root** of it
+  (`Database.LandsRoot`), at a rootness the state supplies, because the rules move a row only
+  toward roots; `Database.RebuildClosed.of_strong_ufRoot` is the same check with that root
+  named. Its **forest** obligation is now discharged outright:
   `execM_ufRowsDescend` is every live `@UF` row running `ordering-max ↦ ordering-min`,
   `execM_encode_ufRowsForest` is one outgoing edge per key, and `execM_ufRowRoot_unique` is the
   two together — every id of an encoded target reaches a unique `@UF` row root. So is its
@@ -1359,6 +1362,33 @@ theorem Database.Lands.refl (d : Database) (e : Term) : d.Lands e e :=
 theorem Database.Lands.trans {d : Database} {e₁ e₂ e₃ : Term} (h₁ : d.Lands e₁ e₂)
     (h₂ : d.Lands e₂ e₃) : d.Lands e₁ e₃ := ⟨h₁.1.trans h₂.1, h₁.2.trans h₂.2⟩
 
+/-- **A landing site that is a root**, where rootness is whatever notion the state supplies.
+
+`Rooted` is a parameter and not a definition because the two states that matter disagree about
+what a root is. At a `Database` the only rootness available reads `Database.UFStep`, over `@UF`
+**entry terms**, which are never removed; at an `execM` target the rootness the rebuild rules
+deliver is `FDatabase.UFRowRoot`, over live `@UF` **rows**, which are. A superseded edge keeps
+its entry and loses its row, so the two are different predicates and neither is the other's
+reading — `cxTgt_not_indexCurrent` is that gap refuted directly. What the clauses need is not a
+particular notion but that `edged` and `column` name the **same** one, so it is named once.
+
+`Database.Lands` alone is what `edged` used to conclude and `column` to assume, and it is too
+weak for `column`: rows only ever move *toward* roots, so a landing site that is not one carries
+no row and the column rules never re-key onto it. -/
+def Database.LandsRoot (d : Database) (Rooted : Term → Prop) (e e' : Term) : Prop :=
+  d.Lands e e' ∧ Rooted e'
+
+/-- Forgetting the rootness. -/
+theorem Database.LandsRoot.lands {d : Database} {Rooted : Term → Prop} {e e' : Term}
+    (h : d.LandsRoot Rooted e e') : d.Lands e e' := h.1
+
+/-- **The unrooted reading is the trivial instance**, which is what keeps the old clause set on
+the record: `Database.RebuildClosed d (fun _ => True)` is the statement before the root was
+named, and `Database.RebuildClosed.of_strong` is proved at exactly that instance. -/
+theorem Database.landsRoot_true_iff {d : Database} {e e' : Term} :
+    d.LandsRoot (fun _ => True) e e' ↔ d.Lands e e' :=
+  ⟨fun h => h.1, fun h => ⟨h, trivial⟩⟩
+
 /-- **The maintenance ruleset's three closures at their strongest, as they were first
 stated. REFUTED at its `eclass` clause** — `cxStale_not_rebuildClosedStrong`, at a state built
 by the interpreter's own writers over the encoding's own declarations — and kept for the reason
@@ -1416,16 +1446,30 @@ common `Database.Lands`:
   two `union`s that share their `ordering-max` endpoint collide inside one merge phase, so the
   displaced edge is an entry no rebuild ever ran on and no view row is keyed at its far end.
 
-**`pathCompressRule` is absent**, and so is any function on `Term`. -/
-structure Database.RebuildClosed (d : Database) : Prop where
+**Two of the three are stated at a *root*, and `Rooted` is a parameter.** The rules move a row
+only **toward** roots, so `column` at an arbitrary landing site would additionally owe that the
+site is one — an obligation `Database.Absorbs` cannot pay, since it is a property of entry
+terms and no writer removes those. `Database.LandsRoot` is that restriction in the clause;
+`edged` is what has to supply it, because `Database.RebuildClosed.reach_of_forall₂` is the only
+producer of `column`'s tuple and it builds it out of `edged`. What rootness *is* differs by
+state — `Database.UFRoot` over entries at every state built by hand here,
+`FDatabase.UFRowRoot` over live rows at an `execM` target, and a superseded edge separates the
+two — so the notion is named rather than defined. `Database.RebuildClosed d (fun _ => True)` is
+the clause set before the root was named, and `Database.RebuildClosed.of_strong` still proves
+exactly that.
+
+**`pathCompressRule` is absent**, and so is any function on `Term`: `Rooted` is a predicate,
+and `edged` produces a root existentially rather than choosing one. -/
+structure Database.RebuildClosed (d : Database) (Rooted : Term → Prop) : Prop where
   /-- The e-class rebuild rule: an id and a recorded parent of it land on one point. -/
   eclass : ∀ a b, d.UFStep a b → ∃ e, d.Lands a e ∧ d.Lands b e
-  /-- The edge a collision writes: two ids of one term land on one point. -/
-  edged : ∀ t e₁ e₂, ViewRepr d t e₁ → ViewRepr d t e₂ → ∃ e, d.Lands e₁ e ∧ d.Lands e₂ e
-  /-- The column rebuild rules: a row's key may be moved onto landing sites, column by
-  column. -/
-  column : ∀ f es ds e pf, d.Out (viewName f) es [e, pf] → List.Forall₂ d.Lands es ds →
-    ∃ e' pf', d.Out (viewName f) ds [e', pf']
+  /-- The edge a collision writes: two ids of one term land on one **root**. -/
+  edged : ∀ t e₁ e₂, ViewRepr d t e₁ → ViewRepr d t e₂ →
+    ∃ e, d.LandsRoot Rooted e₁ e ∧ d.LandsRoot Rooted e₂ e
+  /-- The column rebuild rules: a row's key may be moved onto **rooted** landing sites, column
+  by column. -/
+  column : ∀ f es ds e pf, d.Out (viewName f) es [e, pf] →
+    List.Forall₂ (d.LandsRoot Rooted) es ds → ∃ e' pf', d.Out (viewName f) ds [e', pf']
 
 /-- **The strong form implies the weak one**, and this is the check that the weakening is a
 weakening rather than a different claim — the same discipline
@@ -1434,31 +1478,66 @@ weakening rather than a different claim — the same discipline
 
 All three strong clauses are used, and `eclass` twice: once as its own clause, where the
 landing site is the edge's own far end, and once through `Database.absorbs_of_eclass` to give
-`edged`'s reachability its absorption. `column` is the same clause on a smaller hypothesis. -/
+`edged`'s reachability its absorption. `column` is the same clause on a smaller hypothesis.
+
+**At the trivial rootness**, which is the clause set as it stood before the root was named: the
+strong form says nothing about where its `edged` join sits, so it cannot produce a root on its
+own. `Database.RebuildClosed.of_strong_ufRoot` is the same weakening with the one extra fact
+that names one, and it is what the three positive witnesses are transported by. -/
 theorem Database.RebuildClosed.of_strong {d : Database} (h : d.RebuildClosedStrong) :
-    d.RebuildClosed where
+    d.RebuildClosed (fun _ => True) where
   eclass a b hs := ⟨b, ⟨hs.toReach, h.1 a b hs⟩, Database.Lands.refl d b⟩
   edged t e₁ e₂ h₁ h₂ := by
     obtain ⟨e, r₁, r₂⟩ := h.2.1 t e₁ e₂ h₁ h₂
-    exact ⟨e, ⟨r₁, Database.absorbs_of_eclass h.1 r₁⟩,
-      ⟨r₂, Database.absorbs_of_eclass h.1 r₂⟩⟩
-  column f es ds e pf ho hl := h.2.2 f es ds e pf ho (hl.imp fun _ _ k => k.1)
+    exact ⟨e, ⟨⟨r₁, Database.absorbs_of_eclass h.1 r₁⟩, trivial⟩,
+      ⟨⟨r₂, Database.absorbs_of_eclass h.1 r₂⟩, trivial⟩⟩
+  column f es ds e pf ho hl := h.2.2 f es ds e pf ho (hl.imp fun _ _ k => k.1.1)
+
+/-- **A root of the recorded union-find**: a term no `@UF` **entry** moves.
+
+The `Database`-level rootness, and the one every state built by hand here is rooted at. It is
+*not* the notion an `execM` target is rooted at: entry terms are never removed, so a superseded
+edge keeps a step its row has lost, and `FDatabase.UFRowRoot` is the reading the rebuild rules
+actually deliver. `Database.RebuildClosed`'s `Rooted` parameter is what lets the two coexist. -/
+def Database.UFRoot (d : Database) (a : Term) : Prop := ∀ b, ¬ d.UFStep a b
+
+/-- **The strong form implies the rooted one**, at the entry-level root and wherever the
+recorded chains terminate. This is `Database.RebuildClosed.of_strong` with the root *named*:
+the strong `edged` answers with some common point and this pushes that point to a root, which
+is legitimate because `Database.UFReach` composes and `Database.absorbs_of_eclass` absorbs
+along the extra steps.
+
+The hypothesis is the only thing the strong form does not already say, and it is the fact every
+hand-built state here has for free — one edge, and its far end is a root. At an `execM` target
+it is `FDatabase.exists_ufRowRoot` that plays this part, at the *rows*, and there the strong
+form is false (`cxStale_not_rebuildClosedStrong`). -/
+theorem Database.RebuildClosed.of_strong_ufRoot {d : Database} (h : d.RebuildClosedStrong)
+    (hterm : ∀ a, ∃ r, d.UFReach a r ∧ d.UFRoot r) : d.RebuildClosed d.UFRoot where
+  eclass a b hs := ⟨b, ⟨hs.toReach, h.1 a b hs⟩, Database.Lands.refl d b⟩
+  edged t e₁ e₂ h₁ h₂ := by
+    obtain ⟨e, r₁, r₂⟩ := h.2.1 t e₁ e₂ h₁ h₂
+    obtain ⟨r, hr, hrr⟩ := hterm e
+    exact ⟨r, ⟨⟨r₁.trans hr, Database.absorbs_of_eclass h.1 (r₁.trans hr)⟩, hrr⟩,
+      ⟨⟨r₂.trans hr, Database.absorbs_of_eclass h.1 (r₂.trans hr)⟩, hrr⟩⟩
+  column f es ds e pf ho hl := h.2.2 f es ds e pf ho (hl.imp fun _ _ k => k.1.1)
 
 /-- **A pointwise-congruent pair of argument lists lands on a common id tuple**, and both
 lists read it: `edged` at each position gives the tuple and the absorption it carries puts
 both lists on it. This is what `Database.ViewLeaderRows` did with
 `viewReprList_map_lead_of_forall₂`, without the function — and now without the chain walk
 either, since `edged` delivers the absorption rather than `eclass` composing to it. -/
-theorem Database.RebuildClosed.reach_of_forall₂ {d : Database} (h : d.RebuildClosed) :
+theorem Database.RebuildClosed.reach_of_forall₂ {d : Database} {Rooted : Term → Prop}
+    (h : d.RebuildClosed Rooted) :
     ∀ {as bs : List Term}, List.Forall₂ (SameClass d) as bs →
       ∀ {es : List Term}, ViewReprList d as es →
-        ∃ ds, List.Forall₂ d.Lands es ds ∧ ViewReprList d as ds ∧ ViewReprList d bs ds
+        ∃ ds, List.Forall₂ (d.LandsRoot Rooted) es ds ∧ ViewReprList d as ds ∧
+          ViewReprList d bs ds
   | [], [], .nil, [], .nil => ⟨[], .nil, .nil, .nil⟩
   | a :: _, b :: _, .cons hab hl, e :: _, .cons hae hes => by
       obtain ⟨c, hac, hbc⟩ := hab
       obtain ⟨x, k₁, k₂⟩ := h.edged a e c hae hac
       obtain ⟨ds, hr, h₁, h₂⟩ := h.reach_of_forall₂ hl hes
-      exact ⟨x :: ds, .cons k₁ hr, .cons (k₁.2 a hae) h₁, .cons (k₂.2 b hbc) h₂⟩
+      exact ⟨x :: ds, .cons k₁ hr, .cons (k₁.1.2 a hae) h₁, .cons (k₂.1.2 b hbc) h₂⟩
 
 /-- **The three closures answer the three clauses**, one apiece and with nothing left over.
 
@@ -1470,11 +1549,11 @@ The **diagonal** instance of `rowShared` (`as = bs`) still costs nothing: `reach
 answers it with reflexivity at each position when the two readings coincide, and `column` is
 then asked at `ds = es`. What the strong form demanded there — `rowLead` moving every key to
 the leader tuple — is not asked at all. -/
-theorem Database.RebuildClosed.toViewJoined {d : Database} (h : d.RebuildClosed) :
-    d.ViewJoined where
+theorem Database.RebuildClosed.toViewJoined {d : Database} {Rooted : Term → Prop}
+    (h : d.RebuildClosed Rooted) : d.ViewJoined where
   ids t e₁ e₂ h₁ h₂ := by
     obtain ⟨e, k₁, k₂⟩ := h.edged t e₁ e₂ h₁ h₂
-    exact ⟨e, k₁.2, k₂.2⟩
+    exact ⟨e, k₁.1.2, k₂.1.2⟩
   ufJoin x y pf ho := by
     obtain ⟨e, k₁, k₂⟩ := h.eclass x y ⟨pf, ho⟩
     exact ⟨e, k₁.2, k₂.2⟩
@@ -1500,8 +1579,9 @@ theorem not_viewJoined_of_out_uf_lits {d : Database} {l₁ l₂ : Lit} {pf : Ter
     (ViewRepr.eq_of_lit (hb _ ViewRepr.lit))))
 
 @[inherit_doc not_viewJoined_of_out_uf_lits]
-theorem not_rebuildClosed_of_out_uf_lits {d : Database} {l₁ l₂ : Lit} {pf : Term}
-    (hne : l₁ ≠ l₂) (h : d.Out ufName [.lit l₁] [.lit l₂, pf]) : ¬ d.RebuildClosed :=
+theorem not_rebuildClosed_of_out_uf_lits {d : Database} {Rooted : Term → Prop}
+    {l₁ l₂ : Lit} {pf : Term} (hne : l₁ ≠ l₂)
+    (h : d.Out ufName [.lit l₁] [.lit l₂, pf]) : ¬ d.RebuildClosed Rooted :=
   fun hrc => not_viewJoined_of_out_uf_lits hne h hrc.toViewJoined
 
 /-- **A state with no `@UF` entry has no chain either**, which is what makes the two clauses
@@ -1551,9 +1631,17 @@ theorem satTarget_rebuildClosedStrong : satTarget.RebuildClosedStrong := by
   · obtain rfl : es = ds := Database.forall₂_ufReach_eq hno hl
     exact ⟨e, pf, ho⟩
 
+/-- **Every chain terminates at `satTarget` in no steps at all**, since it records no `@UF`
+entry: the hypothesis `Database.RebuildClosed.of_strong_ufRoot` adds, degenerately. -/
+theorem satTarget_exists_ufRoot (a : Term) :
+    ∃ r, satTarget.UFReach a r ∧ satTarget.UFRoot r :=
+  ⟨a, .refl, fun b hb => by
+    obtain ⟨pf, bs, -, hmem⟩ := hb
+    exact satTarget_no_uf _ hmem⟩
+
 @[inherit_doc satTarget_rebuildClosedStrong]
-theorem satTarget_rebuildClosed : satTarget.RebuildClosed :=
-  Database.RebuildClosed.of_strong satTarget_rebuildClosedStrong
+theorem satTarget_rebuildClosed : satTarget.RebuildClosed satTarget.UFRoot :=
+  Database.RebuildClosed.of_strong_ufRoot satTarget_rebuildClosedStrong satTarget_exists_ufRoot
 
 /-- **Obligation `congr` reduces to `Database.ViewsCover.shared`.** The clause *is* that
 obligation with the target's side spelled out — one shared id tuple and an entry keyed at it —
@@ -5225,9 +5313,22 @@ theorem ncTgt_rebuildClosedStrong : ncTgt.toDatabase.RebuildClosedStrong := by
           obtain rfl := hfixA _ hx
           exact ⟨e, pf, ho⟩
 
+/-- **And every chain terminates at `ncTgt` in at most one step**: the `union`'s edge is the
+only one, and `((A))` is where it stops. -/
+theorem ncTgt_exists_ufRoot (a : Term) :
+    ∃ r, ncTgt.toDatabase.UFReach a r ∧ ncTgt.toDatabase.UFRoot r := by
+  have hnoA : ∀ x b, x ≠ ncB → ¬ ncTgt.toDatabase.UFStep x b := by
+    rintro x b hx ⟨pf, ho⟩
+    exact hx (ncTgt_out_uf_cases ho).1
+  by_cases h : a = ncB
+  · subst h
+    have hstep : ncTgt.toDatabase.UFStep ncB ncA := ⟨ncFiat, ncTgt_out_uf⟩
+    exact ⟨ncA, hstep.toReach, fun b => hnoA ncA b (by simp [ncA, ncB])⟩
+  · exact ⟨a, .refl, fun b => hnoA a b h⟩
+
 @[inherit_doc ncTgt_rebuildClosedStrong]
-theorem ncTgt_rebuildClosed : ncTgt.toDatabase.RebuildClosed :=
-  Database.RebuildClosed.of_strong ncTgt_rebuildClosedStrong
+theorem ncTgt_rebuildClosed : ncTgt.toDatabase.RebuildClosed ncTgt.toDatabase.UFRoot :=
+  Database.RebuildClosed.of_strong_ufRoot ncTgt_rebuildClosedStrong ncTgt_exists_ufRoot
 
 /-- **`Database.ViewJoined.rowShared` at a positive-arity key, non-vacuously**: the row is
 `@FView((A)) ↦ ((F (A)), @Fiat)`, the list that read its key is `((A))` and the list handed in
@@ -13832,7 +13933,8 @@ The run is a hypothesis for the reason every other target-side witness here take
 satisfied, since `execM (encode ltuProgram)` is `some` — the encoder has nothing to stick on. -/
 theorem execM_viewJoined_false {e : FDatabase}
     (htgt : execM (encode ltuProgram) = some e) :
-    ltuProgram.EncodeDomain ∧ ¬ e.toDatabase.ViewJoined ∧ ¬ e.toDatabase.RebuildClosed := by
+    ltuProgram.EncodeDomain ∧ ¬ e.toDatabase.ViewJoined ∧
+      ∀ Rooted : Term → Prop, ¬ e.toDatabase.RebuildClosed Rooted := by
   obtain ⟨pf, hmem, hl2⟩ := execM_encode_ltu_uf htgt
   have hout : e.toDatabase.Out ufName [.lit (.int 2)] [.lit (.int 1), pf] := by
     refine ⟨[Term.lit (.int 2)], CongList.refl ?_, ?_⟩
@@ -13841,7 +13943,7 @@ theorem execM_viewJoined_false {e : FDatabase}
       rw [FDatabase.toDatabase_terms]; exact hl2
     · rw [FDatabase.toDatabase_terms]; exact hmem
   exact ⟨ltuProgram_encodeDomain, not_viewJoined_of_out_uf_lits (by decide) hout,
-    not_rebuildClosed_of_out_uf_lits (by decide) hout⟩
+    fun _ => not_rebuildClosed_of_out_uf_lits (by decide) hout⟩
 
 
 end Egglog

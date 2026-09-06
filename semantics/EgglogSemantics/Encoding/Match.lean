@@ -2873,9 +2873,25 @@ theorem uRebuilt_rebuildClosedStrong : uRebuilt.RebuildClosedStrong := by
     rcases uRebuilt_out_view ho with ⟨-, rfl, -⟩ | ⟨-, rfl, -⟩ <;>
       (cases hl; exact ⟨e, pf, ho⟩)
 
+/-- **And every chain terminates at `uRebuilt` in at most one step**: the `union`'s edge is the
+only one the state records, and `(A)` is where it stops. This is the hypothesis
+`Database.RebuildClosed.of_strong_ufRoot` adds over `Database.RebuildClosed.of_strong`, and it
+is what names the point the rooted `edged` clause answers with. -/
+theorem uRebuilt_exists_ufRoot (a : Term) :
+    ∃ r, uRebuilt.UFReach a r ∧ uRebuilt.UFRoot r := by
+  have hno : ∀ x b, x ≠ uB → ¬ uRebuilt.UFStep x b := by
+    rintro x b hx ⟨pf, ho⟩
+    exact hx (uRebuilt_out_uf ho).1
+  by_cases h : a = uB
+  · subst h
+    have hstep : uRebuilt.UFStep uB uA :=
+      ⟨Term.app fiatName [], ⟨[uB], .cons uRebuilt_mem_B .nil, uRebuilt_mem_uf⟩⟩
+    exact ⟨uA, hstep.toReach, fun b => hno uA b uA_ne_uB⟩
+  · exact ⟨a, .refl, fun b => hno a b h⟩
+
 @[inherit_doc uRebuilt_rebuildClosedStrong]
-theorem uRebuilt_rebuildClosed : uRebuilt.RebuildClosed :=
-  Database.RebuildClosed.of_strong uRebuilt_rebuildClosedStrong
+theorem uRebuilt_rebuildClosed : uRebuilt.RebuildClosed uRebuilt.UFRoot :=
+  Database.RebuildClosed.of_strong_ufRoot uRebuilt_rebuildClosedStrong uRebuilt_exists_ufRoot
 
 /-- **And `Database.ViewLeader` fails at `uTgt`**, which is where `Database.UnionsRead` fails
 too: the edge is written and unfollowed, so `(A)`'s only `lead` is `(A)` and `(B)`'s is `(B)`,
@@ -2923,7 +2939,7 @@ theorem uTgt_not_viewJoined : ¬ uTgt.ViewJoined := by
 is that clause with the absorber read off the edge's far end. This is the check that the
 per-rule restatement of the residue is not vacuous either — one rebuild firing later
 `uRebuilt_rebuildClosed` holds, and here it cannot. -/
-theorem uTgt_not_rebuildClosed : ¬ uTgt.RebuildClosed :=
+theorem uTgt_not_rebuildClosed {Rooted : Term → Prop} : ¬ uTgt.RebuildClosed Rooted :=
   fun h => uTgt_not_viewJoined h.toViewJoined
 
 /-- **And so does the strong form**, through the weakening: `Database.RebuildClosed.of_strong`

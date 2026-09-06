@@ -6929,6 +6929,136 @@ theorem execM_viewRowsRooted {P : Program} (hdom : P.EncodeDomain)
 
 
 
+/-! ## The merge fixpoint at a view key, run-wide
+
+`FDatabase.row_unique_of_settled` is what identifies two rows one view key carries, and it reads
+`FDatabase.settled` — the merge fixpoint. `encode` emits `Cmd.saturate rebuildRuleset` after an
+action, a run and a saturate and after neither a `Cmd.rule` nor a `Cmd.decl`, so the property is
+*established* at the end of the first three blocks and *carried* across the other two, which
+change no row at all. This is `viewRowsRooted_encodeCmd`'s carry read at the other fixpoint
+fact, and `FDatabase.runSaturateM_settled'` again costs it nothing.
+
+**The carry is of what `FDatabase.settled` delivers and not of `FDatabase.settled` itself.**
+`settled` compares the state against `FDatabase.mergeRound`, which is a function of the *whole*
+state, so a `Cmd.rule` — which changes `rules` and nothing else — would have to be shown not to
+move a fold over `FDatabase.mergeOneWith`. What the clauses spend is the reading over `rows`,
+and there the carry is a rewrite. -/
+
+/-- **What the merge fixpoint leaves at a view key, as a property of a state**: a view key
+carries at most one row. -/
+def FDatabase.ViewRowUnique (d : FDatabase) (P : Program) : Prop :=
+  ∀ (f : FnName) (k : Nat), (f, k) ∈ P.ctors → ∀ (as vs ws : List Term),
+    (⟨viewName f, as, vs⟩ : Row) ∈ d.rows → (⟨viewName f, as, ws⟩ : Row) ∈ d.rows → vs = ws
+
+/-- **A writer that changes no row carries it**, hypothesis and conclusion alike: both read
+`rows`. This is the whole of the `Cmd.rule` and `Cmd.decl` cases. -/
+theorem FDatabase.ViewRowUnique.of_rows_eq {d D : FDatabase} {P : Program}
+    (h : d.ViewRowUnique P) (hrows : D.rows = d.rows) : D.ViewRowUnique P :=
+  fun f k hfk as vs ws h₁ h₂ => h f k hfk as vs ws (hrows ▸ h₁) (hrows ▸ h₂)
+
+/-- **One `Cmd.saturate rebuildRuleset` delivers it.** `FDatabase.runSaturateM_settled'` reads
+the merge fixpoint off the branch the saturating run returned from, and
+`FDatabase.row_unique_of_settled` is that fixpoint at a view table. -/
+theorem viewRowUnique_of_runSaturateM {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {d e : FDatabase} (h : d.RebuildBase P)
+    (hs : d.execCmdM (Cmd.saturate rebuildRuleset) = some e) : e.ViewRowUnique P := by
+  have hs' : d.runSaturateM rebuildRuleset runFuel = some e := hs
+  have hb : e.EncBase P (encodeSig P) :=
+    h.base.execCmdM (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial trivial hs
+  intro f k hfk as vs ws h₁ h₂
+  have hsigd : e.sig = encodeSig P := hb.sig
+  have hdecl : (encodeSig P) (viewName f) = some (viewDecl k) :=
+    (encodeSig_tables hdom hdom.aritiesAgree' hfk).1
+  have hdcm : (viewDecl k).merge = some (MergeSpec.merge mergeBody mergeResult) := rfl
+  have hmgne : e.sig.mergeOf (viewName f) ≠ none := by
+    rw [Signature.mergeOf, hsigd, hdecl, Option.bind_some, hdcm]; simp
+  exact FDatabase.row_unique_of_settled (FDatabase.runSaturateM_settled' runFuel hs')
+    (by rw [hsigd]; exact hb.shape) (by rw [hsigd]; exact hb.merges) hb.inv
+    (fun p hp => diag_closureF hb.eqsRefl hp) (by rw [hsigd]; exact hsy)
+    (by rw [hsigd]; exact htr) (by rw [hsigd]; exact hdecl) hdcm
+    (fun hc => viewName_ne_ufName hc)
+    (rowArgs_mem_closureF hb.eqsRefl hb.inv.index hb.subtermClosed
+      ⟨viewName f, as, vs⟩ h₁ hmgne)
+    h₁ h₂
+
+/-- **One source command's block keeps it.** -/
+theorem viewRowUnique_encodeCmd {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {c : Cmd} (hc : c ∈ P) (n i : Nat) {d D : FDatabase} (h : d.RebuildBase P)
+    (hr : d.ViewRowUnique P) (hs : d.execProgramM (encodeCmd c n i).1 = some D) :
+    D.ViewRowUnique P := by
+  rcases encodeCmd_rebuilds_or_rowsFixed c n i with ⟨q, hq⟩ | hfix
+  · rw [hq] at hs
+    obtain ⟨d₂, h₂, h₃⟩ := FDatabase.execProgramM_append hs
+    have hbase₂ : d₂.RebuildBase P :=
+      rebuildBase_encodeCmd hdom hc
+        (fun c' hc' => by rw [hq]; exact List.mem_append_left _ hc') h h₂
+    have hsat : d₂.execCmdM (Cmd.saturate rebuildRuleset) = some D := by
+      rw [FDatabase.execProgramM] at h₃
+      obtain ⟨x, hx, hx'⟩ := Option.bind_eq_some_iff.mp h₃
+      rw [FDatabase.execProgramM, Option.some.injEq] at hx'
+      exact hx' ▸ hx
+    exact viewRowUnique_of_runSaturateM hdom hsy htr hbase₂ hsat
+  · exact hr.of_rows_eq (hfix hs)
+
+/-- **And the whole aligned run.** -/
+theorem viewRowUnique_encodeCmds {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName) :
+    ∀ (p : Program), (∀ c ∈ p, c ∈ P) → ∀ (n i : Nat) {d D : FDatabase},
+      d.RebuildBase P → d.ViewRowUnique P →
+      d.execProgramM (encodeCmds p n i).1 = some D → D.ViewRowUnique P := by
+  intro p
+  induction p with
+  | nil =>
+    intro _ n i d D _ hr hs
+    rw [show (encodeCmds ([] : Program) n i).1 = ([] : Program) from rfl,
+      FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ hr
+  | cons c cs ih =>
+    intro hp n i d D h hr hs
+    rw [encodeCmds_cons_fst] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := FDatabase.execProgramM_append hs
+    exact ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc')) _ _
+      (rebuildBase_encodeCmd hdom (hp c List.mem_cons_self) (fun _ hc' => hc') h h₁)
+      (viewRowUnique_encodeCmd hdom hsy htr (hp c List.mem_cons_self) n i h hr h₁) h₂
+
+/-- **The merge fixpoint at a view key, at the state `execM` returned**: one view key of an
+encoded run's target carries at most one row. This is the run-wide `FDatabase.settled` carry
+that `Database.RebuildClosed`'s `edged` clause was left waiting on — it is what identifies the
+two rows the bridge produces for two readings of one source term once the column rules have
+moved both keys onto the common root tuple. -/
+theorem execM_viewRowUnique {P : Program} (hdom : P.EncodeDomain)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.ViewRowUnique P := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) :=
+    (encOk_preludeState hdom hdom.aritiesAgree' hprel).base
+  have hdata := execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel
+  have hrows₀ : d₀.rows = [] := by
+    rw [hdata.2.1]; rfl
+  have h₀ : d₀.RebuildBase P := by
+    refine ⟨hb₀, ⟨fun t ht => ?_, fun b hb => ?_⟩, ?_⟩
+    · rw [hdata.1, show FDatabase.empty.terms = ([] : List Term) from rfl] at ht
+      exact absurd ht (by simp)
+    · rw [hdata.2.2.2, show FDatabase.empty.env = ([] : Env) from rfl] at hb
+      exact absurd hb (by simp)
+    · refine FDatabase.ufRowsDescend_iff.mpr fun a b pf hmem => ?_
+      rw [hrows₀] at hmem
+      exact absurd hmem (by simp)
+  have hr₀ : d₀.ViewRowUnique P := by
+    intro f k _ as vs ws hrow
+    rw [hrows₀] at hrow
+    exact absurd hrow (by simp)
+  exact viewRowUnique_encodeCmds hdom hsy htr P (fun _ hc => hc) 0 0 h₀ hr₀ hcmds
+
+/-- **Non-vacuous at the run**, at the program whose rebuild really re-keys a row. -/
+theorem execM_viewRowUnique_witness {tgt : FDatabase}
+    (htgt : execM (encode ncProgram) = some tgt) : tgt.ViewRowUnique ncProgram :=
+  execM_viewRowUnique ncProgram_encodeDomain ncProgram_isCtor_symName
+    ncProgram_isCtor_transName htgt
+
 /-! ## The column rules at their fixpoint, run-wide
 
 `execM_viewRowsRooted` is the e-class rule's fixpoint fact: a live view row's e-class column is a
@@ -6953,14 +7083,15 @@ rather than merely reachable — both ends are e-class columns of live view rows
 them — `execM_columnRow_walk` follows one column's chain, and
 `execM_viewRow_of_rowReachList` moves every column at once.
 
-**What this does and does not settle of `Database.RebuildClosed`.** It is stated over
-`FDatabase.UFRowReach`, over live `@UF` **rows**, because that is what a firing can read. Both
-open clauses are stated over `Database.Lands`, whose reachability half is `Database.UFReach`,
-over `@UF` **entries**. `execM_ufRowRoot_of_ufReach` identifies the two only at their *roots*, so
-what the walk delivers for a tuple `es` is the row at the pointwise-**root** tuple and not the row
-at an arbitrary `Database.Lands` target. `edged` wants exactly the root tuple and is therefore
-what this unblocks; `column` quantifies over every `Database.Lands` target and additionally owes
-that such a target of a live key column is itself an `@UF` row root. -/
+**What this settles of `Database.RebuildClosed`.** It is stated over `FDatabase.UFRowReach`,
+over live `@UF` **rows**, because that is what a firing can read; both clauses are stated over
+`Database.Lands`, whose reachability half is `Database.UFReach`, over `@UF` **entries**. So what
+the walk delivers for a tuple `es` is the row at the pointwise-**root** tuple and not the row at
+an arbitrary landing site, and `Database.LandsRoot` is that restriction written into the
+clauses: `execM_rebuildColumn` is `column` at a rooted tuple and `execM_rootAgree` is `edged`'s
+root agreement, both out of this walk. Rooting `column` is what makes "a landing site of a live
+key column is itself an `@UF` row root" — which `Database.Absorbs` cannot supply, being an
+entry-level property over terms no writer removes — an assumption rather than an obligation. -/
 
 /-- **The column rules' closure as a property of a state**: a live view row's key column may be
 moved along a live `@UF` row, and the row at the moved key is one the state already holds, at an
@@ -7706,6 +7837,280 @@ cost once. `ncTgt_encRule_fired` is that half exhibited on the target side, and
 theorem unionsJoined_fire : UnionsFire := by
   sorry
 
+/-! ## `Database.RebuildClosed`'s two remaining clauses, at the root tuple
+
+The walk delivers a live view row at the pointwise-**root** key tuple, because
+`FDatabase.UFRowReach` is what a firing can read; `edged` and `column` are stated over
+`Database.Lands`, whose reachability half is `Database.UFReach`, over `@UF` **entries**, and
+`execM_ufRowRoot_of_ufReach` identifies the two only at their *roots*. So `column`, quantified
+over every landing site, owed that an arbitrary one of a live key column is itself an `@UF` row
+root — which `Database.Absorbs` does not supply, since `Database.Out` reads entry terms and
+those are never removed.
+
+`Database.LandsRoot` is that obligation moved into the clause, where the walk pays it outright:
+`column` is asked only at rooted tuples and `edged` delivers one, which is what keeps
+`Database.RebuildClosed.reach_of_forall₂` — the only producer of `column`'s tuple — coherent.
+`Database.RebuildClosed.of_strong` records the unrooted clause set as the trivial instance, and
+`Database.RebuildClosed.of_strong_ufRoot` is the rooted reading of the same weakening. -/
+
+/-- **A view entry term names a source constructor**, at the entry's own key width. The
+*declaration* half is `execM_viewDecl_of_mem_terms`; this is the `Program.ctors` membership
+itself, which is what every rebuild-rule firing lemma is keyed on. Same chain, same source
+run: `execM_soundTerms` for the source application and `ctorsIn_of_programStep` for the
+program that makes it. -/
+theorem execM_ctorsIn_of_mem_terms {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) {f : FnName} {es : List Term} {e pf : Term}
+    (hmem : Term.app (viewName f) (es ++ [e, pf]) ∈ tgt.terms) : (f, es.length) ∈ P.ctors := by
+  obtain ⟨as, hasrc, hcl, -⟩ := (execM_soundTerms hdom hsrc htgt).1 f es e pf hmem
+  rw [← hcl.length_eq]
+  exact ctorsIn_of_programStep hdom hsrc f as hasrc
+
+/-- **A live view row is an entry the denotation reads, at the key it sits at.**
+`mem_terms_of_indexOk` is the row's own entry term and `FDatabase.EqsRefl` makes `Database.Out`
+read it on the nose. This is the direction the bridge does not go: `execM_entryRow_of_out`
+answers an entry with a row only up to the union-find, and that asymmetry is why
+`Database.Lands` is stated over entries at all. -/
+theorem execM_out_of_viewRow {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors)
+    {as : List Term} {e pf : Term} (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ tgt.rows) :
+    tgt.toDatabase.Out (viewName f) as [e, pf] := by
+  have hb : tgt.EncBase P (encodeSig P) := execM_encode_encBase hdom hdom.aritiesAgree' htgt
+  have hcv : tgt.RowColumnsValued := execM_rowColumnsValued hdom htgt
+  have hmgne : tgt.sig.mergeOf (viewName f) ≠ none := by
+    rw [Signature.mergeOf, hb.sig, (encodeSig_tables hdom hdom.aritiesAgree' hfk).1,
+      Option.bind_some]
+    simp [viewDecl]
+  refine ⟨as, CongList.refl (fun a ha => ?_), ?_⟩
+  · rw [FDatabase.toDatabase_terms]
+    exact FDatabase.mem_terms_of_mem_valueTerms (hcv _ hrow a (List.mem_append_left _ ha))
+  · rw [FDatabase.toDatabase_terms]
+    exact mem_terms_of_indexOk (execM_encode_eqsRefl htgt) hb.inv.index hrow hmgne
+
+/-- **The bridge's answer is the root itself.** The row the bridge produces for a view entry has
+an e-class column that `execM_viewRowsRooted` makes an `@UF` row root and
+`execM_ufRowRoot_of_ufReach` identifies with the root of the id the entry recorded. So a reader
+of an id is answered by a live row *at the root*, which is what both remaining clauses spend. -/
+theorem execM_viewRow_at_root {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (htgt : execM (encode P) = some tgt) {f : FnName} {es : List Term} {x px r : Term}
+    (ho : tgt.toDatabase.Out (viewName f) es [x, px])
+    (hr : tgt.UFRowReach x r) (hrr : tgt.UFRowRoot r) :
+    ∃ lo, (f, es.length) ∈ P.ctors ∧ (⟨viewName f, es, [r, lo]⟩ : Row) ∈ tgt.rows := by
+  have hb : tgt.EncBase P (encodeSig P) := execM_encode_encBase hdom hdom.aritiesAgree' htgt
+  have hmem : Term.app (viewName f) (es ++ [x, px]) ∈ tgt.terms := by
+    obtain ⟨bs, hcl, hm⟩ := ho
+    obtain rfl : es = bs := CongList.eq_of_eqsRefl (execM_encode_eqsRefl htgt).toDatabase hcl
+    rw [FDatabase.toDatabase_terms] at hm
+    exact hm
+  have hfk : (f, es.length) ∈ P.ctors := execM_ctorsIn_of_mem_terms hdom hsrc htgt hmem
+  obtain ⟨v, lo, hrow, hreach⟩ :=
+    execM_entryRow_of_out hdom htgt (dc := viewDecl es.length)
+      (by rw [hb.sig]; exact (encodeSig_tables hdom hdom.aritiesAgree' hfk).1)
+      (body := mergeBody) (res := mergeResult) rfl rfl ho
+  have hvroot : tgt.UFRowRoot v :=
+    execM_viewRowsRooted hdom hsy htr htgt f es.length hfk es v lo hrow
+  have heq : r = v :=
+    execM_ufRowRoot_of_ufReach hdom hsy htr htgt hreach r v hr hrr .refl hvroot
+  rw [← heq] at hrow
+  exact ⟨lo, hfk, hrow⟩
+
+/-- **Pointwise `@UF` row roots of a tuple**, which is the tuple the walk is pointed at. -/
+theorem execM_exists_rootList {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
+    (htgt : execM (encode P) = some tgt) : ∀ (es : List Term),
+      ∃ rs, List.Forall₂ (fun a r => tgt.UFRowReach a r ∧ tgt.UFRowRoot r) es rs
+  | [] => ⟨[], .nil⟩
+  | a :: as => by
+      obtain ⟨r, hr, hrr⟩ := execM_exists_ufRowRoot hdom htgt a
+      obtain ⟨rs, hrs⟩ := execM_exists_rootList hdom htgt as
+      exact ⟨r :: rs, .cons ⟨hr, hrr⟩ hrs⟩
+
+/-- The walk's two hypotheses, read off such a tuple. -/
+theorem rootList_reach {tgt : FDatabase} {es rs : List Term}
+    (h : List.Forall₂ (fun a r => tgt.UFRowReach a r ∧ tgt.UFRowRoot r) es rs) :
+    ∀ (j : Nat) (hj : j < es.length) (hj' : j < rs.length), tgt.UFRowReach (es[j]) (rs[j]) :=
+  fun j hj hj' => by simpa using (h.get hj hj').1
+
+/-- **The `column` clause at the state `execM` returned, and the restatement is exactly what
+closes it.**
+
+The bridge answers the entry with a live row at its own key; each key column reaches its rooted
+landing site along live `@UF` **rows**, because `execM_ufRowRoot_of_ufReach` identifies entry
+reachability with row reachability at the root and the clause now says the target *is* one; and
+`execM_viewRow_of_rowReachList` moves the whole key onto it in one go, at the very e-class
+column the row started with. `execM_out_of_viewRow` reads the moved row back as an entry.
+
+Nothing here asks that a key column be a root — it is not one, and a view row at a superseded
+key survives forever. What is asked is that the *destination* be one, which is what rows moving
+only toward roots makes necessary and what the clause now supplies. -/
+theorem execM_rebuildColumn {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 →
+      (encodeSig P).IsCtor (congrName k))
+    (htgt : execM (encode P) = some tgt) {f : FnName} {es ds : List Term} {e pf : Term}
+    (ho : tgt.toDatabase.Out (viewName f) es [e, pf])
+    (hl : List.Forall₂ (tgt.toDatabase.LandsRoot tgt.UFRowRoot) es ds) :
+    ∃ e' pf', tgt.toDatabase.Out (viewName f) ds [e', pf'] := by
+  obtain ⟨r, hr, hrr⟩ := execM_exists_ufRowRoot hdom htgt e
+  obtain ⟨lo, hfk, hrow⟩ := execM_viewRow_at_root hdom hsrc hsy htr htgt ho hr hrr
+  have hj : ∀ (j : Nat) (hj : j < es.length) (hj' : j < ds.length),
+      tgt.UFRowReach (es[j]) (ds[j]) := by
+    intro j hj hj'
+    have hlr : tgt.toDatabase.LandsRoot tgt.UFRowRoot (es[j]) (ds[j]) := by
+      simpa using hl.get hj hj'
+    obtain ⟨s, hs, hsr⟩ := execM_exists_ufRowRoot hdom htgt (es[j])
+    have heq : s = ds[j] :=
+      execM_ufRowRoot_of_ufReach hdom hsy htr htgt hlr.1.1 s (ds[j]) hs hsr .refl hlr.2
+    exact heq ▸ hs
+  obtain ⟨pf', hrow'⟩ :=
+    execM_viewRow_of_rowReachList hdom htr hsy hfi hcg htgt hfk hrow hl.length_eq.symm hj
+  exact ⟨r, pf', execM_out_of_viewRow hdom htgt hfk hrow'⟩
+
+mutual
+/-- **Two readings of one source term have one `@UF` row root**, which is the whole of `edged`
+once the landing site is the root.
+
+Induction on the reading. At a **literal** both readings are the literal itself
+(`ViewRepr.eq_of_lit`) and `execM_ufRowRoot_unique` closes it. At an **application** the two
+readings sit at two id tuples that agree rootwise by the list case, so
+`execM_viewRow_of_rowReachList` moves *both* rows onto that common root tuple — with the e-class
+column unmoved, which is what `execM_columnRow_step` bought — and `execM_viewRowUnique`
+identifies the two rows there. `execM_viewRow_at_root` is what says each row's e-class column
+*is* the root of the id its entry recorded.
+
+This is the run-wide merge-fixpoint carry's only consumer, and the reason it is wanted: without
+row-uniqueness the two walks land at one key and say nothing about each other. -/
+theorem execM_rootAgree {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 →
+      (encodeSig P).IsCtor (congrName k))
+    (htgt : execM (encode P) = some tgt) (huq : tgt.ViewRowUnique P) :
+    ∀ {t e₁ : Term}, ViewRepr tgt.toDatabase t e₁ → ∀ {e₂ r₁ r₂ : Term},
+      ViewRepr tgt.toDatabase t e₂ → tgt.UFRowReach e₁ r₁ → tgt.UFRowRoot r₁ →
+        tgt.UFRowReach e₂ r₂ → tgt.UFRowRoot r₂ → r₁ = r₂
+  | _, _, @ViewRepr.lit _ l, _, r₁, r₂, h₂, k₁, k₁', k₂, k₂' => by
+      obtain rfl := h₂.eq_of_lit
+      obtain ⟨_, -, -, huniq⟩ := execM_ufRowRoot_unique hdom hsy htr htgt (Term.lit l)
+      rw [huniq r₁ k₁ k₁', huniq r₂ k₂ k₂']
+  | _, _, @ViewRepr.app _ f as es₁ _ pf₁ hl₁ ho₁, _, r₁, r₂, h₂, k₁, k₁', k₂, k₂' => by
+      cases h₂ with
+      | app hl₂ ho₂ =>
+        obtain ⟨lo₁, hfk₁, hrow₁⟩ := execM_viewRow_at_root hdom hsrc hsy htr htgt ho₁ k₁ k₁'
+        obtain ⟨lo₂, hfk₂, hrow₂⟩ := execM_viewRow_at_root hdom hsrc hsy htr htgt ho₂ k₂ k₂'
+        obtain ⟨rs, hrs₁⟩ := execM_exists_rootList hdom htgt es₁
+        obtain ⟨rs', hrs₂⟩ := execM_exists_rootList hdom htgt _
+        have hsame : rs = rs' :=
+          execM_rootAgreeList hdom hsrc hsy htr hfi hcg htgt huq hl₁ hl₂ hrs₁ hrs₂
+        obtain ⟨q₁, hq₁⟩ :=
+          execM_viewRow_of_rowReachList hdom htr hsy hfi hcg htgt hfk₁ hrow₁
+            hrs₁.length_eq.symm (rootList_reach hrs₁)
+        obtain ⟨q₂, hq₂⟩ :=
+          execM_viewRow_of_rowReachList hdom htr hsy hfi hcg htgt hfk₂ hrow₂
+            hrs₂.length_eq.symm (rootList_reach hrs₂)
+        rw [hsame] at hq₁
+        exact (List.cons.inj (huq f _ hfk₂ rs' [r₁, q₁] [r₂, q₂] hq₁ hq₂)).1
+
+@[inherit_doc execM_rootAgree]
+theorem execM_rootAgreeList {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 →
+      (encodeSig P).IsCtor (congrName k))
+    (htgt : execM (encode P) = some tgt) (huq : tgt.ViewRowUnique P) :
+    ∀ {ts es₁ : List Term}, ViewReprList tgt.toDatabase ts es₁ → ∀ {es₂ rs₁ rs₂ : List Term},
+      ViewReprList tgt.toDatabase ts es₂ →
+        List.Forall₂ (fun a r => tgt.UFRowReach a r ∧ tgt.UFRowRoot r) es₁ rs₁ →
+        List.Forall₂ (fun a r => tgt.UFRowReach a r ∧ tgt.UFRowRoot r) es₂ rs₂ → rs₁ = rs₂
+  | _, _, .nil, _, _, _, h₂, k₁, k₂ => by
+      cases h₂; cases k₁; cases k₂; rfl
+  | _, _, .cons ha hl, _, _, _, h₂, k₁, k₂ => by
+      cases h₂ with
+      | cons ha₂ hl₂ =>
+        cases k₁ with
+        | cons kh₁ kt₁ =>
+          cases k₂ with
+          | cons kh₂ kt₂ =>
+            rw [execM_rootAgree hdom hsrc hsy htr hfi hcg htgt huq ha ha₂
+                  kh₁.1 kh₁.2 kh₂.1 kh₂.2,
+              execM_rootAgreeList hdom hsrc hsy htr hfi hcg htgt huq hl hl₂ kt₁ kt₂]
+end
+
+/-- **The residue, with the literal clause read at the rows and nothing else left.**
+
+`eclass` and `edged` both answer with the id's own `@UF` row root: `execM_ufRowRoot_of_ufReach`
+gives an `@UF` entry's two ends one root, `execM_rootAgree` gives two readings of one source term
+one root, and `execM_viewRow_at_root` is the absorption — a reader of the id is answered by a
+live row whose e-class column *is* that root, which `execM_out_of_viewRow` reads back as the
+entry `Database.Absorbs` wants. `column` is `execM_rebuildColumn`.
+
+**The one hypothesis is the literal reader.** `ViewRepr d (.lit l) a` forces `a = .lit l` with no
+premise at all, so absorption asks that a literal be its own root — and at the *rows*, which is
+the reading `FDatabase.UFLitsIsolated.ufRowRoot` produces from the entry-valued clause. That
+clause's key half is paid (`ufLitsIsolated_of_no_lit_lit`, out of `execM_ufTermsDescend`) and its
+value half is not: of its four writers a top-level source `union` is paid
+(`union_target_notLit`, `union_out_uf_notLit`) and a rule head is excluded
+(`Program.EncodeDomain.noLitUnion`), leaving `mergeBody` at both its tables and
+`pathCompressRule`. -/
+theorem execM_rebuildClosed_of_ufLitRoots {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 →
+      (encodeSig P).IsCtor (congrName k))
+    (htgt : execM (encode P) = some tgt) (hlit : ∀ l : Lit, tgt.UFRowRoot (Term.lit l)) :
+    tgt.toDatabase.RebuildClosed tgt.UFRowRoot := by
+  have hb : tgt.EncBase P (encodeSig P) := execM_encode_encBase hdom hdom.aritiesAgree' htgt
+  have hufmg : tgt.sig.mergeOf ufName ≠ none := by
+    rw [hb.sig]; exact encodeSig_mergeOf_ufName hdom
+  have huq : tgt.ViewRowUnique P := execM_viewRowUnique hdom hsy htr htgt
+  -- the id lands on its own `@UF` row root, at every reader
+  have hlands : ∀ {a r : Term}, tgt.UFRowReach a r → tgt.UFRowRoot r →
+      tgt.toDatabase.Lands a r := by
+    intro a r hr hrr
+    refine ⟨hr.toUFReach hb.inv.index hufmg, ?_⟩
+    intro t ht
+    cases t with
+    | lit l =>
+        obtain rfl := ht.eq_of_lit
+        rcases Relation.ReflTransGen.cases_head hr with rfl | ⟨b, hb', -⟩
+        · exact ht
+        · exact absurd hb' (hlit l b)
+    | app g bs =>
+        cases ht with
+        | app hl ho =>
+          obtain ⟨lo, hfk, hrow⟩ := execM_viewRow_at_root hdom hsrc hsy htr htgt ho hr hrr
+          exact .app hl (execM_out_of_viewRow hdom htgt hfk hrow)
+  refine ⟨fun a b hs => ?_, fun t e₁ e₂ h₁ h₂ => ?_,
+    fun f es ds e pf ho hl => execM_rebuildColumn hdom hsrc hsy htr hfi hcg htgt ho hl⟩
+  · obtain ⟨r, hr, hrr⟩ := execM_exists_ufRowRoot hdom htgt a
+    obtain ⟨s, hs', hsr⟩ := execM_exists_ufRowRoot hdom htgt b
+    obtain rfl : r = s :=
+      execM_ufRowRoot_of_ufReach hdom hsy htr htgt hs.toReach r s hr hrr hs' hsr
+    exact ⟨r, hlands hr hrr, hlands hs' hsr⟩
+  · obtain ⟨r, hr, hrr⟩ := execM_exists_ufRowRoot hdom htgt e₁
+    obtain ⟨s, hs, hsr⟩ := execM_exists_ufRowRoot hdom htgt e₂
+    obtain rfl : r = s :=
+      execM_rootAgree hdom hsrc hsy htr hfi hcg htgt huq h₁ h₂ hr hrr hs hsr
+    exact ⟨r, ⟨hlands hr hrr, hrr⟩, ⟨hlands hs hsr, hrr⟩⟩
+
+/-- **Non-vacuous at the run**: every hypothesis of `execM_rebuildClosed_of_ufLitRoots` but the
+literal one holds together at `ncProgram`, whose rebuild really re-keys a view row — so the four
+`Signature.IsCtor` carries and the source run are inhabited at a program the encoder runs, and
+what separates this from `execM_rebuildClosed` is the literal clause alone. -/
+theorem execM_rebuildClosed_of_ufLitRoots_witness {tgt : FDatabase}
+    (htgt : execM (encode ncProgram) = some tgt)
+    (hlit : ∀ l : Lit, tgt.UFRowRoot (Term.lit l)) :
+    tgt.toDatabase.RebuildClosed tgt.UFRowRoot :=
+  execM_rebuildClosed_of_ufLitRoots ncProgram_encodeDomain ncProgram_programStep
+    ncProgram_isCtor_symName ncProgram_isCtor_transName ncProgram_isCtor_fiatName
+    ncProgram_isCtor_congrName htgt hlit
+
 /-! ## The forward half's residue, and the correspondence
 
 `Database.RebuildClosed` and its four consumers are stated here and not in
@@ -7968,32 +8373,44 @@ a live view row's key column need not be a root and the column rule's conclusion
 `no_ufRowEdge_of_rowsClosed` has no counterpart here, and why the closure is what the fixpoint
 delivers in its place.
 
-**What each of the two still owes on top of it.** The walk is stated over
-`FDatabase.UFRowReach`, over live `@UF` **rows**, because that is what a firing can read; both
-clauses are stated over `Database.Lands`, whose reachability half is `Database.UFReach`, over
-`@UF` **entries**. `execM_ufRowRoot_of_ufReach` identifies the two only at their *roots*.
+**And both clauses are now closed, at the root the walk delivers.** The obstruction was that
+the walk is stated over `FDatabase.UFRowReach`, over live `@UF` **rows**, while the clauses are
+stated over `Database.Lands`, whose reachability half is `Database.UFReach`, over `@UF`
+**entries** — and `execM_ufRowRoot_of_ufReach` identifies the two only at their *roots*. So
+`edged` was pointed where it needed to be and `column`, quantified over every landing site,
+additionally owed that an arbitrary one of a live key column is itself an `@UF` row root, which
+`Database.Absorbs` cannot give: it is an entry-level property and `Database.Out` reads entry
+terms, which are never removed.
 
-* `edged` wants exactly the root tuple, so the walk is pointed where it needs to be. What is
-  left there is `Database.Lands a (root a)` at a **literal** reader — `ViewRepr d (.lit l) a`
-  forces `a = .lit l`, so absorption asks that a literal be its own root, which is the literal
-  clause below at the rows — together with `FDatabase.settled` at the target, which no lemma
-  yet carries run-wide.
-* `column` quantifies over **every** `Database.Lands` target, not the root one, and rows only
-  ever move *toward* roots. So it additionally owes that a `Database.Lands` target of a live key
-  column is itself an `@UF` row root — which absorption does not give, since `Database.Absorbs`
-  is an entry-level property and `Database.Out` reads entry terms, which are never removed.
+`Database.LandsRoot` names the root in the clauses and that obligation vanishes.
+`execM_rebuildColumn` is `column`, out of the bridge and
+`execM_viewRow_of_rowReachList` at a tuple the clause now says is rooted; `execM_rootAgree` is
+`edged`'s root agreement, the two walks landing at one key and `execM_viewRowUnique` — the
+run-wide merge-fixpoint carry, `FDatabase.row_unique_of_settled` pushed across the blocks that
+run no rebuild — identifying the rows there. `execM_rebuildClosed_of_ufLitRoots` is all three
+clauses assembled.
+
+**What is left is one hypothesis and the four carries.** The hypothesis is the *literal reader*:
+`ViewRepr d (.lit l) a` forces `a = .lit l` with no premise at all, so `Database.Absorbs` asks
+that a literal be its own root — `∀ l, tgt.UFRowRoot (.lit l)`, which is the literal clause read
+at the **rows** rather than the full run-wide entry-valued invariant, and which
+`FDatabase.UFLitsIsolated.ufRowRoot` produces from that invariant. The carries are
+`Signature.IsCtor` at `@Sym`, `@Trans`, `@Fiat` and `congrName k`, which every rebuild-firing
+lemma in this file takes and which this statement cannot, since `encode_corresponds` does not.
 
 **Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
 state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
 `eclass` and `edged` both do work — `ncTgt_rebuildClosed` the one with a positive-arity key in
 `column`, and `uTgt_not_rebuildClosed` is the same property one rebuild firing earlier, where it
-fails because `uTgt_not_viewJoined` does. All three positive witnesses are proved at
-`Database.RebuildClosedStrong` and transported by `Database.RebuildClosed.of_strong`, which is
-what says the weakening is a weakening; `cxStale_not_rebuildClosedStrong` is where the two come
-apart. -/
+fails because `uTgt_not_viewJoined` does, at *every* rootness notion. All three positive
+witnesses are proved at `Database.RebuildClosedStrong` and transported by
+`Database.RebuildClosed.of_strong_ufRoot`, which is what says the weakening is a weakening and
+names the root while doing it — `Database.RebuildClosed.of_strong` is the same check at the
+unrooted instance, which is the clause set before the restatement.
+`cxStale_not_rebuildClosedStrong` is where the two forms come apart. -/
 theorem execM_rebuildClosed {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.RebuildClosed := by
+    (htgt : execM (encode P) = some tgt) : tgt.toDatabase.RebuildClosed tgt.UFRowRoot := by
   sorry
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
