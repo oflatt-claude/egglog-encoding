@@ -61,13 +61,15 @@ private def assocRule : Rule where
 /-! #### Reading a global from inside a query
 
 The `glob-*` family. A `let` binds `$g` to a term, a rule's **query** mentions `$g`, and a
-`union` moves the class of that term. `matchQuery` reads `$g` off `d.env` on both sides —
-the encoded `let` binds the same skolem term (`encodeAction`, `.letBind`) — so the source
-asks "is some term congruent to `Wrapper($g)` held?" while the target asks "is there a live
-`@FViewWrapper` row **keyed at** `$g`?". The rebuild's column rules move a key column to its
-`@UF` *leader*, so they carry rows **towards** the leader and never back; when `$g` is bound
-to the loser of a `union` and nothing was ever built at that key, the two questions part
-company.
+`union` moves the class of that term. These are the cases that caught the defect
+`Rule.substGlobals` fixes: the encoding used to leave `$g` in the emitted query, read off the
+target environment, so the source asked "is some term congruent to `Wrapper($g)` held?" while
+the target asked "is there a live `@FViewWrapper` row **keyed at** `$g`?". The rebuild's column
+rules move a key column to its `@UF` *leader*, so they carry rows **towards** the leader and
+never back; when `$g` was bound to the loser of a `union` and nothing was ever built at that
+key, the two questions parted company — six of these eight cases reported LOST. The encoder now
+reads a query's global through the global's own **definition** (`Encode.lean`, "Globals"), so
+the flattening lands on that definition's current e-class and all eight agree.
 
 `Term.blt` orders applications by arity, then by name, then lexicographically, so `(Aa)` is
 below `(Zz)` and below any application of positive arity; `mergeResult` keeps `ordering-min`,
@@ -1815,8 +1817,7 @@ enough on its own — 12 of 70 at a 60 s budget — and "Joining over the row in
 followed it. **63 of the 70 in-domain cases the corpus then had finish** at 60 s and 65 at
 300 s, all reporting `AGREE`, against 58 and 64 *before* the proof column: the enumerator now
 more than pays for the column it was struggling under. The eight `glob-*` cases added since
-run in half a second between them, and five of them report `DIFFER` — one fewer e-node in the
-encoded run, which is the same defect "What the sweep reports" measures as LOST.
+run in half a second between them.
 
 Nothing regressed — every case that finished under the older enumerators is faster,
 `union` 6 min 5 s → 1.3 s and `actions` 253 s → 1.1 s.
@@ -2135,11 +2136,16 @@ than refused. `merge-displaced` counts what is left: a proof the checker can gro
 a term the source names, reported against a row whose claim sits at a rule-created one. The
 report counts those apart from proofs that justify nothing.
 
-**Measured.** `difftest check 64`, all 84 cases — the 78 in-domain corpus cases and the six
-probes — in 47 s: **715 of 725 recorded equalities check, 6 are merge-displaced, and 4 are
+**Measured.** `difftest check 64`, the 78 in-domain corpus cases:
+**723 of 733 recorded equalities check, 6 are merge-displaced, and 4 are
 unjustified**. Only `both-2` (17/4/2) and `rand-43` (22/2/2) reject; every other case is
 clean, `rand-19`, `rand-33`, `rand-45` and `rand-57` among them. A failing case prints
 `REJECT` rather than `CHECKS`, so an aggregate has to count both lines.
+
+The checker reads a rule's query through `Rule.substGlobals` before flattening it, because
+that is the query the encoder flattened; without it `@Rule_i`'s premise count would disagree
+with `proofDecls`' declaration wherever a query names a global, and `glob-lost-eq` — the one
+`glob-*` case whose head derives an equality — would reject on all four of its rows.
 
 All ten non-checking rows are the one mechanism, and it is the checker's and not the
 encoder's: `props` seeds a `@Rule_i` node's premises from the source's top-level actions, so
@@ -3085,20 +3091,19 @@ capped — the widest pool is 145 terms — no `@UF` walk hits its bound, no `@U
 exists, no target equation is asserted, and the leader reading, the joinability reading and
 `sameClassF` agree on every pair.
 
-**No INVENTED anywhere, and LOST exactly on the `glob-*` family.** 72 cases agree: every
-equality the source derives, the encoding reproduces, and it reproduces no other. Over the
-corpus that is 821 pairs both sides say yes to, 169 of them between *distinct* terms; the
-counts below are the corpus's too.
+**No INVENTED and no LOST anywhere.** All 78 cases agree: every equality the source derives,
+the encoding reproduces, and it reproduces no other. Over the corpus that is 828 pairs both
+sides say yes to, 171 of them between *distinct* terms; the counts below are the corpus's too.
 
-**The six that disagree are one defect, and it is in `encode`.** They lose 7 equalities
-between them, all by the same mechanism: a `let` binds a global, a rule's **query** reads it,
-and a `union` makes the bound term the *loser*. `matchQuery` reads such a variable off
-`d.env` on both sides, so the source asks whether some held term is congruent to the pattern
-instance while the target asks for a live `@FView` row **keyed at** the bound term — and
-`rebuildRules`' column rule carries rows towards a `@UF` leader and never back, so no row is
-ever keyed at the loser unless a build wrote one. `glob-keyed` and `glob-leader` are the two
-controls that agree, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where this is
-recorded as an open defect: it is what its `hglob` paragraph asks for, refuted.
+**The `glob-*` family is what the column last caught.** Six of the eight lost 7 equalities
+between them, all by one mechanism: a `let` binds a global, a rule's **query** reads it, and a
+`union` makes the bound term the *loser*. The encoding left the global in the emitted query, so
+the target asked for a live `@FView` row **keyed at** the bound term — and `rebuildRules`'
+column rule carries rows towards a `@UF` leader and never back, so no row is ever keyed at the
+loser unless a build wrote one. `glob-keyed` and `glob-leader` were the two controls that
+agreed. `Encode.lean`'s `Rule.substGlobals` is the fix — a query's global is read through the
+global's own definition, so the flattening lands on that definition's current e-class — and the
+column is 0 again.
 
 **And it is the stated relation that is being measured.** `link-diff` is 0 on every case:
 the sweep's verdict and `Encoding/Correspond.lean`'s `sameClassF` — which `sameClassF_iff`
@@ -3149,19 +3154,17 @@ literal operand outright, so `Cong src` never relates a literal to anything but 
 `@UF` key is ever a literal; the `lit-union` and `lit-mix` probes are that refusal, run.
 
 **The inductive reading is load-bearing.** The `flat` reading — a view entry keyed by an
-application's children as written — loses 100 equalities across 11 cases, `both-2` and
-`rand-43` among them, and finds only 97 of the 169 off-diagonal ones (5 of those cases are
-`flat`'s alone; the other 6 are the `glob-*` family, which the default reading loses too).
+application's children as written — loses 91 equalities across 5 cases, `both-2` and
+`rand-43` among them, and finds only 100 of the 171 off-diagonal ones.
 A rule head builds
 over the ids its query bound, so a source term a head produced keys no entry under its own
 children.
 
-**What a green LOST column does not establish.** 32 of the 78 in-domain cases derive no
+**What a green LOST column does not establish.** Most of the 78 in-domain cases derive no
 equality between distinct terms at all, so their whole left-to-right test is the e-node
-diagonal; 31 more derive exactly one. Two cases carry 86 of the 169. The claim is tested at
-depth on very few programs — which is how the `glob-*` defect survived a corpus of 70 cases
-with a green column, and the reason a hazard named in a docstring is worth a case rather than
-an argument.
+diagonal, and a couple of cases carry half of the 171. The claim is tested at depth on very few
+programs — which is how the `glob-*` defect survived a corpus of 70 cases with a green column,
+and the reason a hazard named in a docstring is worth a case rather than an argument.
 
 **And what no column of it establishes.** The sweep runs `execM`, and `execM` is not
 `ProgramStep`. `Spec/Step.lean` now reads `identityVals`, so the specification *can* reach a

@@ -3272,7 +3272,7 @@ structure UnionsInv (sd : Database) (td D : FDatabase) : Prop where
   /-- **Every source rule has been compiled into the target's ruleset.** Existential in the two
   fresh-name counters, which is all a later command can say about a `Cmd.rule` an earlier one
   emitted; `encodeRule` is a function of them and of the rule alone. -/
-  rules : ∀ r ∈ sd.rules, ∃ i n, (encodeRule i r n).1 ∈ td.rules
+  rules : ∀ r ∈ sd.rules, ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ td.rules
   /-- **And `td` is inside `D`**, which is the direction the run's containment actually runs
   in. Every clause above is therefore available at `D` as well (`UnionsInv.joined`,
   `UnionsInv.reads`, `UnionsInv.envReads`) and none of them is available at `td` *from* `D`. -/
@@ -3401,35 +3401,35 @@ alone by `cmdStep_rule_fields`/`cmdStep_decl_fields`, a run and a saturate by
 `MergeClosure.envRules`, and the encoded block is `Cmd.ActionsAreSets` throughout. The `let`
 case is the one with content, and it is the read-back `FDatabase.execCmdM_letBind` performs. -/
 theorem envAligned_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c ∈ Q)
-    {n i : Nat} {sd sd' : Database} {td td' : FDatabase}
+    {G : List (Var × Expr)} {n i : Nat} {sd sd' : Database} {td td' : FDatabase}
     (hstate : sd.CtorState) (hstep : CmdStep sd c sd')
-    (hblock : td.execProgramM (encodeCmd c n i).1 = some td')
+    (hblock : td.execProgramM (encodeCmd G c n i).1 = some td')
     (henv : td.env = sd.env) : td'.env = sd'.env := by
   cases c with
   | decl f dc =>
       obtain ⟨-, hsenv, -⟩ := cmdStep_decl_fields hstate.sig (hQ.ctorsOnly _ hc) hstep
       obtain rfl : td' = td := by
-        rw [show (encodeCmd (Cmd.decl f dc) n i).1 = [] from rfl, FDatabase.execProgramM,
+        rw [show (encodeCmd G (Cmd.decl f dc) n i).1 = [] from rfl, FDatabase.execProgramM,
           Option.some.injEq] at hblock
         exact hblock.symm
       rw [henv, hsenv]
   | rule r =>
       obtain ⟨-, hsenv, -⟩ := cmdStep_rule_fields hstate.sig hstep
-      have hsets : ∀ c' ∈ (encodeCmd (Cmd.rule r) n i).1, c'.ActionsAreSets := by
+      have hsets : ∀ c' ∈ (encodeCmd G (Cmd.rule r) n i).1, c'.ActionsAreSets := by
         intro c' hc'
-        have hc2 : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
-        obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using hc2
+        have hc2 : c' ∈ [Cmd.rule (encodeRule i (r.substGlobals G) n).1] := hc'
+        obtain rfl : c' = Cmd.rule (encodeRule i (r.substGlobals G) n).1 := by simpa using hc2
         trivial
       rw [FDatabase.execProgramM_env hsets hblock, henv, hsenv]
   | run R =>
-      have hsets : ∀ c' ∈ (encodeCmd (Cmd.run R) n i).1, c'.ActionsAreSets := by
+      have hsets : ∀ c' ∈ (encodeCmd G (Cmd.run R) n i).1, c'.ActionsAreSets := by
         intro c' hc'
         have hc2 : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
         have hd : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
         rcases hd with rfl | rfl <;> trivial
       rw [FDatabase.execProgramM_env hsets hblock, henv, cmdStep_env_of_run hstep]
   | saturate R =>
-      have hsets : ∀ c' ∈ (encodeCmd (Cmd.saturate R) n i).1, c'.ActionsAreSets := by
+      have hsets : ∀ c' ∈ (encodeCmd G (Cmd.saturate R) n i).1, c'.ActionsAreSets := by
         intro c' hc'
         have hc2 : c' ∈ [Cmd.saturate R, Cmd.saturate rebuildRuleset] := hc'
         have hd : c' = Cmd.saturate R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using hc2
@@ -3440,7 +3440,7 @@ theorem envAligned_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c �
       rcases evalAction_eq_some hev with
         ⟨e, tS, rfl, htS, rfl⟩ | ⟨v, e, tS, rfl, htS, rfl⟩ |
         ⟨e₁, e₂, t₁, t₂, rfl, -, -, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, -, -, -⟩
-      · have hsets : ∀ c' ∈ (encodeCmd (Cmd.action (Action.expr e)) n i).1,
+      · have hsets : ∀ c' ∈ (encodeCmd G (Cmd.action (Action.expr e)) n i).1,
             c'.ActionsAreSets := by
           change ∀ c' ∈ (encodeBuild e n).2.1.map Cmd.action
             ++ [Cmd.saturate rebuildRuleset], c'.ActionsAreSets
@@ -3452,7 +3452,7 @@ theorem envAligned_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c �
             = (encodeBuild e n).2.1 ++ [Action.letBind v e] := by
           change (encodeBuild e n).2.1 ++ [Action.letBind v (encodeBuild e n).1] = _
           rw [encodeBuild_fst]
-        have hblk : (encodeCmd (Cmd.action (Action.letBind v e)) n i).1
+        have hblk : (encodeCmd G (Cmd.action (Action.letBind v e)) n i).1
             = (encodeBuild e n).2.1.map Cmd.action
               ++ [Cmd.action (Action.letBind v e), Cmd.saturate rebuildRuleset] := by
           change (encodeAction fiatE (Action.letBind v e) n).1.map Cmd.action
@@ -3497,7 +3497,7 @@ theorem envAligned_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c �
           · obtain rfl : b = Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE] := by
               simpa using hb'
             trivial
-        have hsets : ∀ c' ∈ (encodeCmd (Cmd.action (Action.union e₁ e₂)) n i).1,
+        have hsets : ∀ c' ∈ (encodeCmd G (Cmd.action (Action.union e₁ e₂)) n i).1,
             c'.ActionsAreSets := by
           change ∀ c' ∈ (encodeAction fiatE (Action.union e₁ e₂) n).1.map Cmd.action
             ++ [Cmd.saturate rebuildRuleset], c'.ActionsAreSets
@@ -3508,23 +3508,26 @@ theorem envAligned_step {Q : Program} (hQ : Q.EncodeDomain) {c : Cmd} (hc : c �
 
 /-- **The alignment across a whole source program**, one `envAligned_step` per command. -/
 theorem envAligned_of_programStep {Q : Program} (hQ : Q.EncodeDomain) :
-    ∀ (p : Program) {n i : Nat} {sd sd' : Database} {td td' : FDatabase},
+    ∀ (p : Program) {G : List (Var × Expr)} {n i : Nat} {sd sd' : Database}
+        {td td' : FDatabase},
       (∀ c ∈ p, c ∈ Q) → sd.CtorState → ProgramStep sd p sd' →
-      td.execProgramM (encodeCmds p n i).1 = some td' → td.env = sd.env → td'.env = sd'.env := by
+      td.execProgramM (encodeCmds R G p n i).1 = some td' → td.env = sd.env →
+      td'.env = sd'.env := by
   intro p
   induction p with
   | nil =>
-    intro n i sd sd' td td' _ _ hsrc hrun henv
+    intro G n i sd sd' td td' _ _ hsrc hrun henv
     obtain rfl := hsrc.nil_inv
     have h0 : td.execProgramM [] = some td' := hrun
     rw [FDatabase.execProgramM, Option.some.injEq] at h0
     rw [← h0]; exact henv
   | cons c cs ih =>
-    intro n i sd sd' td td' hsub hstate hsrc hrun henv
+    intro G n i sd sd' td td' hsub hstate hsrc hrun henv
     obtain ⟨sd₁, hstep, hrest⟩ := hsrc.cons_inv
-    have hcmds : (encodeCmds (c :: cs) n i).1
-        = (encodeCmd c n i).1
-          ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+    have hcmds : (encodeCmds R G (c :: cs) n i).1
+        = (encodeCmd G c n i).1
+          ++ (encodeCmds R (c.globalBind R G) cs (encodeCmd G c n i).2.1
+                (encodeCmd G c n i).2.2).1 := rfl
     rw [hcmds] at hrun
     obtain ⟨td₁, hb, hafter⟩ := FDatabase.execProgramM_append hrun
     exact ih (fun c' hc' => hsub c' (List.mem_cons_of_mem c hc'))
@@ -3786,38 +3789,44 @@ inductive EncReached (P : Program) : FDatabase → Prop where
   | prelude {d : FDatabase} :
       FDatabase.empty.execProgramM (encodePrelude P) = some d → EncReached P d
   /-- One source command's whole encoded block later. -/
-  | block {d D : FDatabase} {c : Cmd} {n i : Nat} :
-      EncReached P d → c ∈ P → d.execProgramM (encodeCmd c n i).1 = some D → EncReached P D
+  | block {d D : FDatabase} {c : Cmd} {G : List (Var × Expr)} {n i : Nat} :
+      EncReached P d → c ∈ P → d.execProgramM (encodeCmd G c n i).1 = some D → EncReached P D
 
 /-- **The same chain with the source run alongside**, split at the command about to run. -/
-inductive EncStep (P : Program) : Program → Program → Database → FDatabase → Prop where
+inductive EncStep (P : Program) :
+    Program → Program → Database → FDatabase → List (Var × Expr) → Prop where
   /-- Nothing run yet: the empty source state and the state the prelude leaves. -/
   | prelude {d : FDatabase} :
       FDatabase.empty.execProgramM (encodePrelude P) = some d →
-      EncStep P [] P Database.empty d
-  /-- One source command and its whole encoded block, on both sides at once. -/
-  | block {pre suf : Program} {sd sd' : Database} {d D : FDatabase} {c : Cmd} {n i : Nat} :
-      EncStep P pre (c :: suf) sd d → CmdStep sd c sd' →
-      d.execProgramM (encodeCmd c n i).1 = some D → EncStep P (pre ++ [c]) suf sd' D
+      EncStep P [] P Database.empty d []
+  /-- One source command and its whole encoded block, on both sides at once. The globals the
+  encoder carries are an index, so a chain state names the substitution its next block reads
+  a query through. -/
+  | block {pre suf : Program} {sd sd' : Database} {d D : FDatabase} {c : Cmd}
+      {G : List (Var × Expr)} {n i : Nat} :
+      EncStep P pre (c :: suf) sd d G → CmdStep sd c sd' →
+      d.execProgramM (encodeCmd G c n i).1 = some D →
+      EncStep P (pre ++ [c]) suf sd' D (c.globalBind P G)
 
 /-- **The two indices are the program**, which is the shape `FDatabase.EncOk.stepCmd` asks
 its command to be located by. -/
 theorem EncStep.program {P pre suf : Program} {sd : Database} {d : FDatabase}
-    (h : EncStep P pre suf sd d) : P = pre ++ suf := by
+    {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) : P = pre ++ suf := by
   induction h with
   | prelude _ => rw [List.nil_append]
   | block _ _ _ ih => rw [List.append_assoc, List.cons_append, List.nil_append]; exact ih
 
 /-- **The source side of the chain.** -/
 theorem EncStep.src {P pre suf : Program} {sd : Database} {d : FDatabase}
-    (h : EncStep P pre suf sd d) : ProgramStep Database.empty pre sd := by
+    {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
+    ProgramStep Database.empty pre sd := by
   induction h with
   | prelude _ => exact .nil
   | block _ hstep _ ih => exact ih.append (.cons hstep .nil)
 
 /-- **The target side of the chain.** -/
 theorem EncStep.reached {P pre suf : Program} {sd : Database} {d : FDatabase}
-    (h : EncStep P pre suf sd d) : EncReached P d := by
+    {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) : EncReached P d := by
   induction h with
   | prelude hprel => exact .prelude hprel
   | block h _ hb ih => exact .block ih (by rw [h.program]; simp) hb
@@ -3889,7 +3898,8 @@ def UnionsFire : Prop :=
     (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
     td.execProgramM [c, Cmd.saturate rebuildRuleset] = some td' →
     td.env = sd.env → sd.CtorState →
-    (∀ r ∈ sd.rules, ∃ i n, (encodeRule i r n).1 ∈ td.rules) →
+    (∀ r ∈ sd.rules,
+      ∃ (G : List (Var × Expr)) (i n : Nat), (encodeRule i (r.substGlobals G) n).1 ∈ td.rules) →
     (∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e) →
     td.toDatabase.UnionsJoined sd →
     (∀ t ∈ sd.terms, ∃ r, RowRepr td t r) →
@@ -3903,7 +3913,8 @@ directions are `Encoding/Complete.lean`'s `encStep_exists_rowRepr` — the tuple
 pointwise `@UF` row root — and `ViewRepr.of_rowRepr_of_indexOk`, and `encStep_rowJoined` is the
 clause that makes the reading a function and collapses an `@UF` edge. -/
 def RowMech (Q : Program) : Prop :=
-  ∀ {sd : Database} {d : FDatabase} {pre suf : Program}, EncStep Q pre suf sd d →
+  ∀ {sd : Database} {d : FDatabase} {pre suf : Program} {G : List (Var × Expr)},
+    EncStep Q pre suf sd d G →
     (∀ t e : Term, ViewRepr d.toDatabase t e → ∃ r, RowRepr d t r) ∧
     (∀ t r : Term, RowRepr d t r → ViewRepr d.toDatabase t r) ∧
     d.RowJoined
@@ -3914,13 +3925,13 @@ def RowMech (Q : Program) : Prop :=
 `encodeCmd` emitted for that command — `reads` off the build's own reading, `joined` off the
 `union`'s own `@UF` write — and `unionsJoined_fire`, which is both data clauses at once. -/
 theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
-    (hmech : RowMech Q) {c : Cmd} (hc : c ∈ Q)
+    (hmech : RowMech Q) {c : Cmd} (hc : c ∈ Q) {G : List (Var × Expr)}
     {n i : Nat} {pre suf : Program} {sd sd' : Database} {td D : FDatabase} {rest : Program}
-    (hchain : EncStep Q pre (c :: suf) sd td)
+    (hchain : EncStep Q pre (c :: suf) sd td G)
     (hstep : CmdStep sd c sd')
-    (hrun : td.execProgramM ((encodeCmd c n i).1 ++ rest) = some D)
+    (hrun : td.execProgramM ((encodeCmd G c n i).1 ++ rest) = some D)
     (hinv : UnionsInv sd td D) :
-    ∃ td', td.execProgramM (encodeCmd c n i).1 = some td' ∧ UnionsInv sd' td' D := by
+    ∃ td', td.execProgramM (encodeCmd G c n i).1 = some td' ∧ UnionsInv sd' td' D := by
   have hstate' : sd'.CtorState := hstep.ctorState hinv.state (hQ.ctorsOnly c hc)
   obtain ⟨td', hblock, hafter⟩ := FDatabase.execProgramM_append hrun
   -- the two containments the whole proof runs on: `td ⊆ td' ⊆ D`, and nothing in reverse
@@ -3934,8 +3945,11 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
   have hkeepJ : td'.toDatabase.UnionsJoined sd := hinv.joinedAt.mono hstep'
   have hkeepE : ∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td'.toDatabase s s :=
     fun b hb s hs => ViewRepr.mono hstep' (hinv.envReadsAt b hb s hs)
-  have hkeepR : ∀ r ∈ sd.rules, ∃ i n, (encodeRule i r n).1 ∈ td'.rules :=
-    fun r hr => (hinv.rules r hr).imp fun _ h => h.imp fun _ hm => hrmono _ hm
+  have hkeepR : ∀ r ∈ sd.rules,
+      ∃ G' i n, (encodeRule i (r.substGlobals G') n).1 ∈ td'.rules :=
+    fun r hr =>
+      let ⟨G', i', n', hm⟩ := hinv.rules r hr
+      ⟨G', i', n', hrmono _ hm⟩
   have henvOut : td'.env = sd'.env :=
     envAligned_step hQ hc hinv.state hstep hblock hinv.env
   refine ⟨td', hblock, ?_⟩
@@ -3953,8 +3967,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
       have hsub : sd'.eqs ⊆ sd.eqs := fun p hp => by rw [heqs] at hp; exact hp
       have hterms : sd'.terms = sd.terms := Database.terms_eq_of_eqs_eq heqs
       -- the encoded rule the block just registered is the witness for the new source rule
-      have hnew : (encodeRule i r n).1 ∈ td'.rules := by
-        have hb : td.execProgramM [Cmd.rule (encodeRule i r n).1] = some td' := hblock
+      have hnew : (encodeRule i (r.substGlobals G) n).1 ∈ td'.rules := by
+        have hb : td.execProgramM [Cmd.rule (encodeRule i (r.substGlobals G) n).1] = some td' :=
+          hblock
         rw [FDatabase.execProgramM, FDatabase.execCmdM, Option.bind_some,
           FDatabase.execProgramM, Option.some.injEq] at hb
         rw [← hb]
@@ -3965,7 +3980,7 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
       intro s hs
       rw [hrules] at hs
       rcases Set.mem_insert_iff.mp hs with rfl | hs'
-      · exact ⟨i, n, hnew⟩
+      · exact ⟨G, i, n, hnew⟩
       · exact hkeepR s hs'
   | run R =>
       have hjoin := hfire (Or.inl rfl) hstep hblock hinv.env hinv.state
@@ -3997,7 +4012,7 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         -- block's own read-back, at every subterm `addTerm` recorded.
         have hprim : ∀ g ∈ e.fns, Prim.ofName g = none :=
           noPrim_of_mem_ctors hQ (fun p hp => mem_program_ctors hc hp)
-        have hblk : (encodeCmd (Cmd.action (Action.expr e)) n i).1
+        have hblk : (encodeCmd G (Cmd.action (Action.expr e)) n i).1
             = (encodeBuild e n).2.1.map Cmd.action ++ [Cmd.saturate rebuildRuleset] := rfl
         have hrun' : td.execProgramM ((encodeBuild e n).2.1.map Cmd.action
             ++ [Cmd.saturate rebuildRuleset]) = some td' := by rw [← hblk]; exact hblock
@@ -4026,7 +4041,7 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
             = (encodeBuild e n).2.1 ++ [Action.letBind v e] := by
           change (encodeBuild e n).2.1 ++ [Action.letBind v (encodeBuild e n).1] = _
           rw [encodeBuild_fst]
-        have hblk : (encodeCmd (Cmd.action (Action.letBind v e)) n i).1
+        have hblk : (encodeCmd G (Cmd.action (Action.letBind v e)) n i).1
             = (encodeBuild e n).2.1.map Cmd.action
               ++ [Cmd.action (Action.letBind v e), Cmd.saturate rebuildRuleset] := by
           change (encodeAction fiatE (Action.letBind v e) n).1.map Cmd.action
@@ -4082,7 +4097,7 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           · obtain rfl : b = Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE] := by
               simpa using hb'
             trivial
-        have hblk : (encodeCmd (Cmd.action (Action.union e₁ e₂)) n i).1
+        have hblk : (encodeCmd G (Cmd.action (Action.union e₁ e₂)) n i).1
             = (encodeBuild e₁ n).2.1.map Cmd.action
               ++ ((encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1.map Cmd.action
                 ++ [Cmd.action (Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]),
@@ -4188,24 +4203,25 @@ theorem FDatabase.execProgramM_append' {p q : Program} : ∀ {d m D : FDatabase}
 the encoded block left. -/
 theorem unionsInv_of_programStep (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
     (hmech : RowMech Q) :
-    ∀ (p : Program) {pre : Program} {n i : Nat} {sd sd' : Database} {td D : FDatabase}
-      {rest : Program},
-      (∀ c ∈ p, c ∈ Q) → EncStep Q pre p sd td → ProgramStep sd p sd' →
-      td.execProgramM ((encodeCmds p n i).1 ++ rest) = some D →
+    ∀ (p : Program) {pre : Program} {G : List (Var × Expr)} {n i : Nat}
+      {sd sd' : Database} {td D : FDatabase} {rest : Program},
+      (∀ c ∈ p, c ∈ Q) → EncStep Q pre p sd td G → ProgramStep sd p sd' →
+      td.execProgramM ((encodeCmds Q G p n i).1 ++ rest) = some D →
       UnionsInv sd td D →
-      ∃ td', td.execProgramM (encodeCmds p n i).1 = some td' ∧ UnionsInv sd' td' D := by
+      ∃ td', td.execProgramM (encodeCmds Q G p n i).1 = some td' ∧ UnionsInv sd' td' D := by
   intro p
   induction p with
   | nil =>
-    intro pre n i sd sd' td D rest _ _ hsrc _ hinv
+    intro pre G n i sd sd' td D rest _ _ hsrc _ hinv
     obtain rfl := hsrc.nil_inv
     exact ⟨td, rfl, hinv⟩
   | cons c cs ih =>
-    intro pre n i sd sd' td D rest hsub hchain hsrc hrun hinv
+    intro pre G n i sd sd' td D rest hsub hchain hsrc hrun hinv
     obtain ⟨sd₁, hstep, hrest⟩ := hsrc.cons_inv
-    have hcmds : (encodeCmds (c :: cs) n i).1
-        = (encodeCmd c n i).1
-          ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+    have hcmds : (encodeCmds Q G (c :: cs) n i).1
+        = (encodeCmd G c n i).1
+          ++ (encodeCmds Q (c.globalBind Q G) cs (encodeCmd G c n i).2.1
+                (encodeCmd G c n i).2.2).1 := rfl
     rw [hcmds, List.append_assoc] at hrun
     obtain ⟨td₁, hb, hinv₁⟩ :=
       unionsInv_step hfire hQ hmech (hsub c List.mem_cons_self) hchain hstep hrun hinv
@@ -4222,15 +4238,17 @@ theorem unionsInv_of_programStep (hfire : UnionsFire) {Q : Program} (hQ : Q.Enco
 rules — it runs no action at all — so the environment it leaves is the empty one the source
 starts with, and the invariant holds there with both data clauses vacuous. -/
 
-theorem actionsAreSets_ruleProofDecls : ∀ (rs : List Rule) (i : Nat),
-    ∀ c ∈ ruleProofDecls rs i, c.ActionsAreSets
-  | [], _ => by simp [ruleProofDecls]
-  | r :: rs, i => by
+theorem actionsAreSets_ruleProofDecls :
+    ∀ (G : List (Var × Expr)) (p : Program) (i : Nat),
+    ∀ c ∈ ruleProofDecls R G p i, c.ActionsAreSets
+  | _, [], _ => by simp [ruleProofDecls]
+  | G, c₀ :: cs, i => by
       intro c hc
-      rw [ruleProofDecls, List.mem_cons] at hc
-      rcases hc with rfl | hc
-      · trivial
-      · exact actionsAreSets_ruleProofDecls rs (i + 1) c hc
+      rw [ruleProofDecls] at hc
+      rcases List.mem_append.mp hc with h | h
+      · obtain ⟨r, -, rfl⟩ := mem_proofDeclOf h
+        trivial
+      · exact actionsAreSets_ruleProofDecls _ cs _ c h
 
 /-- **The prelude runs no action**, so it moves neither the environment nor anything else the
 invariant reads. -/
@@ -4248,7 +4266,7 @@ theorem actionsAreSets_encodePrelude (P : Program) :
           rcases h₄ with rfl | rfl | rfl <;> trivial
         · obtain ⟨k, -, rfl⟩ := List.mem_map.mp h₃
           trivial
-      · exact actionsAreSets_ruleProofDecls _ _ c h₂
+      · exact actionsAreSets_ruleProofDecls _ _ _ c h₂
     · rcases List.mem_cons.mp h₁ with rfl | h₂
       · trivial
       · obtain ⟨fk, -, h₃⟩ := List.mem_flatMap.mp h₂
@@ -4644,7 +4662,8 @@ theorem unionsJoined_fire_satisfiable :
     CmdStep rbSrc (.run rbRuleset) rbSrc ∧
       rbState2.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbState2 ∧
       rbState2.env = rbSrc.env ∧ rbSrc.CtorState ∧
-      (∀ r ∈ rbSrc.rules, ∃ i n, (encodeRule i r n).1 ∈ rbState2.rules) ∧
+      (∀ r ∈ rbSrc.rules,
+        ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbState2.rules) ∧
       (∀ t ∈ rbSrc.terms, ∃ e, ViewRepr rbState2.toDatabase t e) ∧
       rbState2.toDatabase.UnionsJoined rbSrc ∧
       (∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r) ∧ rbState2.RowJoined ∧
@@ -4711,8 +4730,8 @@ theorem rowsClosed_of_execProgramM {R : RulesetName} {d D : FDatabase} {p : Prog
 /-- **And that its hypothesis is the shape `encodeCmd` emits.** A `Cmd.run`'s block is the
 source round followed by the rebuild; the `.saturate` and top-level-action blocks are the same
 shape (`encodeCmd`). -/
-theorem encodeCmd_run_tail (R : RulesetName) (n i : Nat) :
-    (encodeCmd (.run R) n i).1 = [Cmd.run R] ++ [Cmd.saturate rebuildRuleset] := rfl
+theorem encodeCmd_run_tail (G : List (Var × Expr)) (R : RulesetName) (n i : Nat) :
+    (encodeCmd G (.run R) n i).1 = [Cmd.run R] ++ [Cmd.saturate rebuildRuleset] := rfl
 
 /-- **The fixpoint at a state a program reaches.** Degenerately, as
 `unionsJoined_fire_satisfiable` is: `rbState2` holds no rule, so the round it is a fixpoint of
@@ -6926,16 +6945,18 @@ theorem FDatabase.execProgramM_mergeShape {p : Program} (hp : ∀ c ∈ p, c.Mer
 
 The prelude is where every declaration is, and `encodeCmds` is where none is. -/
 
-theorem mergeShapeOk_ruleProofDecls : ∀ (rs : List Rule) (i : Nat),
-    ∀ c ∈ ruleProofDecls rs i, c.MergeShapeOk
-  | [], _ => by simp [ruleProofDecls]
-  | r :: rs, i => by
+theorem mergeShapeOk_ruleProofDecls :
+    ∀ (G : List (Var × Expr)) (p : Program) (i : Nat),
+    ∀ c ∈ ruleProofDecls R G p i, c.MergeShapeOk
+  | _, [], _ => by simp [ruleProofDecls]
+  | G, c₀ :: cs, i => by
       intro c hc
-      rw [ruleProofDecls, List.mem_cons] at hc
-      rcases hc with rfl | hc
-      · intro body res hb
+      rw [ruleProofDecls] at hc
+      rcases List.mem_append.mp hc with h | h
+      · obtain ⟨r, -, rfl⟩ := mem_proofDeclOf h
+        intro body res hb
         exact absurd hb (by simp [proofDecl])
-      · exact mergeShapeOk_ruleProofDecls rs (i + 1) c hc
+      · exact mergeShapeOk_ruleProofDecls _ cs _ c h
 
 /-- **The prelude's declarations, enumerated.** The proof vocabulary and the skolem
 constructors have no `:merge`; a term relation has `.noMerge`; `@UF` and the views have
@@ -6954,7 +6975,7 @@ theorem mergeShapeOk_encodePrelude (P : Program) : ∀ c ∈ encodePrelude P, c.
             exact fun body res hb => absurd hb (by simp [proofDecl])
         · obtain ⟨k, -, rfl⟩ := List.mem_map.mp h₃
           exact fun body res hb => absurd hb (by simp [proofDecl])
-      · exact mergeShapeOk_ruleProofDecls _ _ c h₂
+      · exact mergeShapeOk_ruleProofDecls _ _ _ c h₂
     · rcases List.mem_cons.mp h₁ with rfl | h₂
       · intro body res hb
         obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
@@ -6976,8 +6997,8 @@ theorem mergeShapeOk_encodePrelude (P : Program) : ∀ c ∈ encodePrelude P, c.
 
 /-- **`encodeCmd` emits no declaration**, which is why the shape is fixed once the prelude has
 run. -/
-theorem mergeShapeOk_encodeCmd (c : Cmd) (n i : Nat) :
-    ∀ c' ∈ (encodeCmd c n i).1, c'.MergeShapeOk := by
+theorem mergeShapeOk_encodeCmd (G : List (Var × Expr)) (c : Cmd) (n i : Nat) :
+    ∀ c' ∈ (encodeCmd G c n i).1, c'.MergeShapeOk := by
   intro c' hc'
   cases c with
   | action a =>
@@ -6989,8 +7010,8 @@ theorem mergeShapeOk_encodeCmd (c : Cmd) (n i : Nat) :
       · obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using h₁
         trivial
   | rule r =>
-      have h : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
-      obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using h
+      have h : c' ∈ [Cmd.rule (encodeRule i (r.substGlobals G) n).1] := hc'
+      obtain rfl : c' = Cmd.rule (encodeRule i (r.substGlobals G) n).1 := by simpa using h
       trivial
   | run R =>
       have h : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
@@ -7005,28 +7026,30 @@ theorem mergeShapeOk_encodeCmd (c : Cmd) (n i : Nat) :
       simp at h
 
 @[inherit_doc mergeShapeOk_encodeCmd]
-theorem mergeShapeOk_encodeCmds : ∀ (p : Program) (n i : Nat),
-    ∀ c ∈ (encodeCmds p n i).1, c.MergeShapeOk
-  | [], _, _ => by simp [encodeCmds]
-  | c :: cs, n, i => by
+theorem mergeShapeOk_encodeCmds (R : Program) :
+    ∀ (G : List (Var × Expr)) (p : Program) (n i : Nat),
+    ∀ c ∈ (encodeCmds R G p n i).1, c.MergeShapeOk
+  | _, [], _, _ => by simp [encodeCmds]
+  | G, c :: cs, n, i => by
       intro c' hc'
-      have hsplit : (encodeCmds (c :: cs) n i).1
-          = (encodeCmd c n i).1
-            ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+      have hsplit : (encodeCmds R G (c :: cs) n i).1
+          = (encodeCmd G c n i).1
+            ++ (encodeCmds R (c.globalBind R G) cs (encodeCmd G c n i).2.1
+                  (encodeCmd G c n i).2.2).1 := rfl
       rw [hsplit] at hc'
       rcases List.mem_append.mp hc' with h | h
-      · exact mergeShapeOk_encodeCmd c n i c' h
-      · exact mergeShapeOk_encodeCmds cs _ _ c' h
+      · exact mergeShapeOk_encodeCmd G c n i c' h
+      · exact mergeShapeOk_encodeCmds R _ cs _ _ c' h
 
 /-- **The sig-shape invariant at the state `execM` returned.** -/
 theorem execM_encode_mergeShape {P : Program} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) : tgt.sig.MergeShape := by
   rw [execM, encode] at htgt
-  refine FDatabase.execProgramM_mergeShape (p := encodePrelude P ++ (encodeCmds P 0 0).1)
+  refine FDatabase.execProgramM_mergeShape (p := encodePrelude P ++ (encodeCmds P [] P 0 0).1)
     (fun c hc => ?_) ?_ htgt
   · rcases List.mem_append.mp hc with h | h
     · exact mergeShapeOk_encodePrelude P c h
-    · exact mergeShapeOk_encodeCmds P 0 0 c h
+    · exact mergeShapeOk_encodeCmds P [] P 0 0 c h
   · exact Signature.mergeShape_empty
 
 /-! ##### And what a collision compares
@@ -10918,7 +10941,8 @@ source rule's or a maintenance rule's, and there is no third kind. -/
 of `P` — at whichever counters `encodeCmds` reached it with, which nothing below reads — or
 one of `maintenanceRules P`. -/
 def Rule.EncodedIn (P : Program) (r : Rule) : Prop :=
-  (∃ (s : Rule) (i n : Nat), Cmd.rule s ∈ P ∧ r = (encodeRule i s n).1) ∨
+  (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat),
+      Cmd.rule s ∈ P ∧ r = (encodeRule i (s.substGlobals G) n).1) ∨
     r ∈ maintenanceRules P
 
 /-- The rule invariant, as a property of the state. -/
@@ -10986,15 +11010,17 @@ theorem FDatabase.execProgramM_rulesEncoded {P : Program} {p : Program}
 encoded source rule is; and every other command either declares, acts, runs or saturates. -/
 
 /-- The per-rule proof constructors are declarations. -/
-theorem rulesEncodedOk_ruleProofDecls (P : Program) : ∀ (rs : List Rule) (i : Nat),
-    ∀ c ∈ ruleProofDecls rs i, Cmd.RulesEncodedOk P c
-  | [], _ => by simp [ruleProofDecls]
-  | r :: rs, i => by
+theorem rulesEncodedOk_ruleProofDecls (P : Program) :
+    ∀ (G : List (Var × Expr)) (p : Program) (i : Nat),
+    ∀ c ∈ ruleProofDecls R G p i, Cmd.RulesEncodedOk P c
+  | _, [], _ => by simp [ruleProofDecls]
+  | G, c₀ :: cs, i => by
       intro c hc
-      rw [ruleProofDecls, List.mem_cons] at hc
-      rcases hc with rfl | hc
-      · trivial
-      · exact rulesEncodedOk_ruleProofDecls P rs (i + 1) c hc
+      rw [ruleProofDecls] at hc
+      rcases List.mem_append.mp hc with h | h
+      · obtain ⟨r, -, rfl⟩ := mem_proofDeclOf h
+        trivial
+      · exact rulesEncodedOk_ruleProofDecls P _ cs _ c h
 
 /-- **The prelude's rules, enumerated.** Everything before them declares, and the rules are
 exactly `maintenanceRules P` mapped into commands. -/
@@ -11012,7 +11038,7 @@ theorem rulesEncodedOk_encodePrelude (P : Program) :
           rcases h₄ with rfl | rfl | rfl <;> trivial
         · obtain ⟨k, -, rfl⟩ := List.mem_map.mp h₃
           trivial
-      · exact rulesEncodedOk_ruleProofDecls P _ _ c h₂
+      · exact rulesEncodedOk_ruleProofDecls P _ _ _ c h₂
     · rcases List.mem_cons.mp h₁ with rfl | h₂
       · trivial
       · obtain ⟨fk, -, h₃⟩ := List.mem_flatMap.mp h₂
@@ -11025,8 +11051,9 @@ theorem rulesEncodedOk_encodePrelude (P : Program) :
 
 /-- **`encodeCmd` emits one rule and only for a source rule**, which is what makes the
 invariant's first disjunct the *whole* of what a non-maintenance firing can be. -/
-theorem rulesEncodedOk_encodeCmd {P : Program} {c : Cmd} (hc : c ∈ P) (n i : Nat) :
-    ∀ c' ∈ (encodeCmd c n i).1, Cmd.RulesEncodedOk P c' := by
+theorem rulesEncodedOk_encodeCmd {P : Program} {c : Cmd} (hc : c ∈ P)
+    (G : List (Var × Expr)) (n i : Nat) :
+    ∀ c' ∈ (encodeCmd G c n i).1, Cmd.RulesEncodedOk P c' := by
   intro c' hc'
   cases c with
   | action a =>
@@ -11038,9 +11065,9 @@ theorem rulesEncodedOk_encodeCmd {P : Program} {c : Cmd} (hc : c ∈ P) (n i : N
       · obtain rfl : c' = Cmd.saturate rebuildRuleset := by simpa using h₁
         trivial
   | rule r =>
-      have h : c' ∈ [Cmd.rule (encodeRule i r n).1] := hc'
-      obtain rfl : c' = Cmd.rule (encodeRule i r n).1 := by simpa using h
-      exact Or.inl ⟨r, i, n, hc, rfl⟩
+      have h : c' ∈ [Cmd.rule (encodeRule i (r.substGlobals G) n).1] := hc'
+      obtain rfl : c' = Cmd.rule (encodeRule i (r.substGlobals G) n).1 := by simpa using h
+      exact Or.inl ⟨r, G, i, n, hc, rfl⟩
   | run R =>
       have h : c' ∈ [Cmd.run R, Cmd.saturate rebuildRuleset] := hc'
       have h2 : c' = Cmd.run R ∨ c' = Cmd.saturate rebuildRuleset := by simpa using h
@@ -11055,18 +11082,20 @@ theorem rulesEncodedOk_encodeCmd {P : Program} {c : Cmd} (hc : c ∈ P) (n i : N
 
 @[inherit_doc rulesEncodedOk_encodeCmd]
 theorem rulesEncodedOk_encodeCmds {P : Program} : ∀ (p : Program), (∀ c ∈ p, c ∈ P) →
-    ∀ (n i : Nat), ∀ c' ∈ (encodeCmds p n i).1, Cmd.RulesEncodedOk P c'
-  | [], _, _, _ => by simp [encodeCmds]
-  | c :: cs, hp, n, i => by
+    ∀ (G : List (Var × Expr)) (n i : Nat),
+      ∀ c' ∈ (encodeCmds R G p n i).1, Cmd.RulesEncodedOk P c'
+  | [], _, _, _, _ => by simp [encodeCmds]
+  | c :: cs, hp, G, n, i => by
       intro c' hc'
-      have hsplit : (encodeCmds (c :: cs) n i).1
-          = (encodeCmd c n i).1
-            ++ (encodeCmds cs (encodeCmd c n i).2.1 (encodeCmd c n i).2.2).1 := rfl
+      have hsplit : (encodeCmds R G (c :: cs) n i).1
+          = (encodeCmd G c n i).1
+            ++ (encodeCmds R (c.globalBind R G) cs (encodeCmd G c n i).2.1
+                  (encodeCmd G c n i).2.2).1 := rfl
       rw [hsplit] at hc'
       rcases List.mem_append.mp hc' with h | h
-      · exact rulesEncodedOk_encodeCmd (hp c List.mem_cons_self) n i c' h
+      · exact rulesEncodedOk_encodeCmd (hp c List.mem_cons_self) G n i c' h
       · exact rulesEncodedOk_encodeCmds cs
-          (fun x hx => hp x (List.mem_cons_of_mem c hx)) _ _ c' h
+          (fun x hx => hp x (List.mem_cons_of_mem c hx)) _ _ _ c' h
 
 /-- **The rule invariant at the state `execM` returned.** The shape
 `execM_encode_mergeShape` has for declarations. -/
@@ -11074,10 +11103,10 @@ theorem execM_encode_rules {P : Program} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) : tgt.RulesEncoded P := by
   rw [execM, encode] at htgt
   refine FDatabase.execProgramM_rulesEncoded
-    (p := encodePrelude P ++ (encodeCmds P 0 0).1) (fun c hc => ?_) ?_ htgt
+    (p := encodePrelude P ++ (encodeCmds P [] P 0 0).1) (fun c hc => ?_) ?_ htgt
   · rcases List.mem_append.mp hc with h | h
     · exact rulesEncodedOk_encodePrelude P c h
-    · exact rulesEncodedOk_encodeCmds P (fun _ hc' => hc') 0 0 c h
+    · exact rulesEncodedOk_encodeCmds P (fun _ hc' => hc') [] 0 0 c h
   · intro r hr
     exact absurd hr (by simp [FDatabase.empty])
 
@@ -11823,13 +11852,15 @@ three maintenance families are proved, and the source-rule head is what is not. 
 theorem firingsSound_of_rulesEncoded {P : Program} {src : Database} {d : FDatabase}
     (hrules : d.RulesEncoded P) (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed)
     (h : d.SoundTerms src)
-    (hsrc : ∀ (s : Rule) (i n : Nat), Cmd.rule s ∈ P → (encodeRule i s n).1 ∈ d.rules →
-      ∀ σ ∈ matchQuery d (encodeRule i s n).1.query, ∀ e : FDatabase,
-        execLocalActions d (encodeRule i s n).1.actions σ = some e → e.SoundTerms src) :
+    (hsrc : ∀ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P →
+      (encodeRule i (s.substGlobals G) n).1 ∈ d.rules →
+      ∀ σ ∈ matchQuery d (encodeRule i (s.substGlobals G) n).1.query, ∀ e : FDatabase,
+        execLocalActions d (encodeRule i (s.substGlobals G) n).1.actions σ = some e →
+          e.SoundTerms src) :
     d.FiringsSound src := by
   intro r hrm σ hσ e he
-  rcases hrules r hrm with ⟨s, i, n, hmem, rfl⟩ | hmaint
-  · exact hsrc s i n hmem hrm σ hσ e he
+  rcases hrules r hrm with ⟨s, G, i, n, hmem, rfl⟩ | hmaint
+  · exact hsrc s G i n hmem hrm σ hσ e he
   · exact maintenance_soundTerms hmaint hr hidx hsc h hσ he
 
 /-! ###### Descent, writer by writer
@@ -12221,10 +12252,10 @@ theorem firingsUFDescend_of_rulesEncoded {P : Program} {d : FDatabase}
     (hrules : d.RulesEncoded P) (hr : d.EqsRefl) (hmg : d.sig.mergeOf ufName ≠ none)
     (h : d.UFRowsDescend) : d.FiringsUFDescend := by
   intro r hrm σ hσ e he
-  rcases hrules r hrm with ⟨s, i, n, -, rfl⟩ | hmaint
+  rcases hrules r hrm with ⟨s, G, i, n, -, rfl⟩ | hmaint
   · refine execLocalActions_ufRowsDescend ?_ h he
     rw [encodeRule_actions]
-    exact encodeActions_ufWriteSafe _ s.actions _
+    exact encodeActions_ufWriteSafe _ (s.substGlobals G).actions _
   · exact maintenance_ufRowsDescend hmaint hr hmg h hσ he
 
 /-- One firing, unioned into the accumulator. -/
@@ -14251,7 +14282,7 @@ theorem ltuProgram_encodeDomain : ltuProgram.EncodeDomain where
 theorem blt_lit_two_one : Term.blt (Term.lit (.int 2)) (Term.lit (.int 1)) = false := by decide
 
 /-- **The one `@UF` write the program encodes to**, ahead of the trailing rebuild. -/
-theorem ltuProgram_encodeCmds : (encodeCmds ltuProgram 0 0).1 =
+theorem ltuProgram_encodeCmds : (encodeCmds ltuProgram [] ltuProgram 0 0).1 =
     [Cmd.action (.set ufName [maxE (.lit (.int 1)) (.lit (.int 2))]
         [minE (.lit (.int 1)) (.lit (.int 2)), fiatE]),
      Cmd.saturate rebuildRuleset] := rfl

@@ -65,6 +65,19 @@ What the head's path costs is `Database.GlobalsAgree` where the plain correspond
 not merely congruent ones, which is what the encoding gives (`encodeBuild_fst` again, at a
 top-level `let`).
 
+## Globals in the query, and why nothing here sees one
+
+A rule *head* reads a global off the environment on both sides, which is what the two clauses
+above are for. A rule **query** does not: `Encoding/Encode.lean`'s `Rule.substGlobals` replaces
+a global by its (closed) definition before `encodeQuery` ever sees the rule, so what is
+flattened has no global in it and everything below is about an ordinary query. What the
+substitution costs on the source side is `ValidQuerySubst.of_substGlobals` — a source match of
+the substituted query is one of the query — under `Database.GlobalsInline`, the clause saying
+the environment realizes the definitions the encoder carries. `Pattern.Grounded`,
+`Pattern.NoValues` and `Query.VarsKeyed` all survive the substitution
+(`Query.grounded_substGlobals`, `Query.noValues_substGlobals`, `Query.VarsKeyed.substGlobals`),
+so the three text conditions this file consumes hold of the substituted query too.
+
 ## And what it is false for
 
 `encodePattern` emits **no atom** for a source pattern whose expression is a bare literal or
@@ -508,6 +521,155 @@ environment binds is read from the target's environment rather than from the sub
 The one clause of the correspondence that is about the two environments. -/
 def Database.GlobalsRead (src : Database) (ρ : Env) : Prop :=
   ∀ v t i, Env.lookup v src.env = some t → Env.lookup v ρ = some i → Cong src t i
+
+/-! ### Reading a global through its definition
+
+`Encoding/Encode.lean`'s `Rule.substGlobals` replaces a global by the (closed) expression the
+`let` bound it to, so what the encoded query flattens is that expression and not the frozen
+term. Everything below is the source-side half of that: at a state whose environment agrees
+with the substitution, a source pattern and its substituted form evaluate alike, match alike,
+and bind alike — so a source-side match of the substituted query *is* one of the original. -/
+
+/-! #### The substitution is invisible to the source
+
+Three facts, all by the same induction: the substituted expression evaluates to what the
+original does, mentions no variable the original does not, and keeps a bare variable bare
+unless it replaced it by an application. Together they say a source-side match of
+`Query.substGlobals G q` is one of `q`, which is what lets the encoder read the definition
+where the source reads the name. -/
+
+/-- A closed expression's value does not depend on the environment. -/
+theorem Expr.eval_of_vars_nil {sig : Signature} {e : Expr} (h : e.vars = []) (σ : Env) :
+    e.eval sig σ = e.eval sig [] :=
+  Expr.eval_agreeOn e fun v hv => absurd (h ▸ hv) (by simp)
+
+mutual
+
+/-- **What the substitution replaced, the source's own environment binds to the same term.** -/
+theorem Expr.eval_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) (σ : Env)
+    (hσ : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t) :
+    ∀ e : Expr, (e.substGlobals G).eval src.sig (src.env ++ σ)
+      = e.eval src.sig (src.env ++ σ)
+  | .lit _ => rfl
+  | .var v => by
+      rw [Expr.substGlobals]
+      cases hlk : Expr.lookupG v G with
+      | none => simp only []
+      | some e =>
+          obtain ⟨hcl, t, hev, hbind⟩ := hG v e hlk
+          cases e with
+          | lit l => simp only []
+          | var w => simp only []
+          | app f as =>
+              rw [Expr.eval_of_vars_nil hcl, hev, Expr.eval, hσ v t hbind]
+  | .app f args => by
+      rw [Expr.substGlobals, Expr.eval, Expr.eval,
+        Expr.evalList_substGlobals hG σ hσ args]
+
+@[inherit_doc Expr.eval_substGlobals]
+theorem Expr.evalList_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) (σ : Env)
+    (hσ : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t) :
+    ∀ es : List Expr, Expr.evalList src.sig (Expr.substGlobalsList G es) (src.env ++ σ)
+      = Expr.evalList src.sig es (src.env ++ σ)
+  | [] => rfl
+  | e :: es => by
+      rw [Expr.substGlobalsList, Expr.evalList_cons, Expr.evalList_cons,
+        Expr.eval_substGlobals hG σ hσ e, Expr.evalList_substGlobals hG σ hσ es]
+
+end
+
+/-- A closed expression frees nothing. -/
+theorem Expr.freeVars_eq_nil {e : Expr} (h : e.vars = []) (σ : Env) : e.freeVars σ = [] := by
+  refine List.eq_nil_iff_forall_not_mem.mpr fun v hv => ?_
+  exact absurd (e.mem_freeVars.mp hv).1 (by rw [h]; simp)
+
+mutual
+
+/-- **The substitution binds no new variable and frees none the environment holds.** A
+replaced variable was bound by `src.env` and its definition is closed, so `Expr.freeVars` at
+`src.env` is unmoved. -/
+theorem Expr.freeVars_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) :
+    ∀ e : Expr, (e.substGlobals G).freeVars src.env = e.freeVars src.env
+  | .lit _ => rfl
+  | .var v => by
+      rw [Expr.substGlobals]
+      cases hlk : Expr.lookupG v G with
+      | none => simp only []
+      | some e =>
+          obtain ⟨hcl, t, -, hbind⟩ := hG v e hlk
+          cases e with
+          | lit l => simp only []
+          | var w => simp only []
+          | app f as =>
+              simp only [Expr.freeVars_var_of_some hbind]
+              exact Expr.freeVars_eq_nil hcl _
+  | .app f args => by
+      rw [Expr.substGlobals, Expr.freeVars_app, Expr.freeVars_app,
+        Expr.freeVarsList_substGlobals hG args]
+
+@[inherit_doc Expr.freeVars_substGlobals]
+theorem Expr.freeVarsList_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) :
+    ∀ es : List Expr, Expr.freeVarsList (Expr.substGlobalsList G es) src.env
+      = Expr.freeVarsList es src.env
+  | [] => rfl
+  | e :: es => by
+      rw [Expr.substGlobalsList, Expr.freeVarsList_cons, Expr.freeVarsList_cons,
+        Expr.freeVars_substGlobals hG e, Expr.freeVarsList_substGlobals hG es]
+
+end
+
+/-- `Expr.freeVars_substGlobals` over a pattern. -/
+theorem Pattern.freeVars_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) :
+    ∀ p : Pattern, (p.substGlobals G).freeVars src.env = p.freeVars src.env
+  | .expr e => Expr.freeVars_substGlobals hG e
+  | .eq e₁ e₂ => by
+      rw [Pattern.substGlobals, Pattern.freeVars, Pattern.freeVars,
+        Expr.freeVars_substGlobals hG e₁, Expr.freeVars_substGlobals hG e₂]
+  | .values vs f as => by
+      rw [Pattern.substGlobals, Pattern.freeVars, Pattern.freeVars,
+        Expr.freeVarsList_substGlobals hG vs, Expr.freeVarsList_substGlobals hG as]
+
+/-- **A source match of the substituted pattern is one of the pattern.** The instance is the
+same term (`Expr.eval_substGlobals`), so every clause of `Matches` transfers unchanged. -/
+theorem Matches.of_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) {p : Pattern} {σ : Env}
+    (h : Matches src (p.substGlobals G) σ) : Matches src p σ := by
+  have hlk : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t :=
+    fun v t hv => Env.lookup_append_of_mem (Env.mem_dom_of_mem (Env.mem_of_lookup hv)) ▸ hv
+  have he := Expr.eval_substGlobals hG σ hlk
+  have hel := Expr.evalList_substGlobals hG σ hlk
+  cases p with
+  | expr e =>
+      cases h with
+      | expr hw hev hc => exact .expr hw (he e ▸ hev) hc
+  | eq e₁ e₂ =>
+      cases h with
+      | eq hw h₁ h₂ hc₁ hc₂ => exact .eq hw (he e₁ ▸ h₁) (he e₂ ▸ h₂) hc₁ hc₂
+  | values vs f as =>
+      cases h with
+      | values hw h₁ h₂ hc => exact .values hw (hel as ▸ h₁) (hel vs ▸ h₂) hc
+
+/-- **And so a valid substitution of the substituted query is one of the query.** -/
+theorem ValidQuerySubst.of_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hG : src.GlobalsInline G) {q : Query} {τ : Env}
+    (h : ValidQuerySubst src (Query.substGlobals G q) τ) : ValidQuerySubst src q τ := by
+  obtain ⟨σs, hall, hu⟩ := h
+  refine ⟨σs, ?_, hu⟩
+  rw [Query.substGlobals] at hall
+  clear hu
+  induction q generalizing σs with
+  | nil => cases hall; exact .nil
+  | cons p ps ih =>
+      rw [List.map_cons] at hall
+      cases hall with
+      | cons hp hrest =>
+          exact .cons ⟨by rw [← Pattern.freeVars_substGlobals hG p]; exact hp.1,
+            Matches.of_substGlobals hG hp.2⟩ (ih _ hrest)
 
 /-- **The source-side reading exists.** One source term per query variable, congruent to the
 id the target read it as, and equal to the source's own binding wherever there is one.
@@ -1113,6 +1275,15 @@ theorem Expr.evalList_transport {s₁ s₂ : Signature} :
       exact congrArg some hcons
 
 end
+
+/-- **`Database.GlobalsInline` along a signature that still builds what it built.** The form
+a command's step supplies: only a declaration moves the signature, and under
+`Program.CtorDecls` it only ever adds a constructor. -/
+theorem Database.GlobalsInline.mono_ctor {src src' : Database} {G : List (Var × Expr)}
+    (h : src.GlobalsInline G) (hsig : ∀ f, src.sig.IsCtor f → src'.sig.IsCtor f)
+    (henv : ∀ v t, Env.lookup v src.env = some t → Env.lookup v src'.env = some t) :
+    src'.GlobalsInline G :=
+  h.mono_src (fun e _ he => Expr.eval_transport e (fun f _ => hsig f) (fun _ _ => rfl) he) henv
 
 /-! ### The head-build case, discharged
 

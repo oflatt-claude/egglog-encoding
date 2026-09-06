@@ -1,10 +1,16 @@
-import EgglogSemantics.Spec.Step
+import EgglogSemantics.Encoding.Encode
 
 /-!
 # The proof checker
 
 `CHECKER.md`'s constructor-only fragment: five justifications, `Bool`-valued, reading the
 **source** program and nothing else — no database, no e-graph, no rows.
+
+The one thing it takes from `Encoding/Encode.lean` is `Rule.substGlobals`: a rule's query is
+read through the globals *before* it is flattened, because that is the query the encoder
+flattened and `@Rule_i`'s premise count is that query's. Everything else here is a mirror of
+the encoder rather than a call into it, and `DiffTest.lean`'s `premiseCount_eq_ruleProofArity`
+is what keeps the mirror honest.
 
 A proof is an ordinary `Term`:
 
@@ -83,8 +89,12 @@ structure Ctx where
   env : Env
   /-- The equalities the top-level actions assert. -/
   eqs : List (Term × Term)
-  /-- The rules in program order; `@Rule_i` indexes this. -/
+  /-- The rules in program order, each with its **query read through the globals** — the rule
+  as `Encode.lean`'s `Rule.substGlobals` handed it to `encodeRule`, so the premise count and
+  the substitution the checker builds are the encoded rule's own. `@Rule_i` indexes this. -/
   rules : List Rule
+  /-- The globals in scope, as `Cmd.globalBind` accumulates them. -/
+  globals : List (Var × Expr)
 
 /-- One reflexive equality per subterm, which is what building a term asserts. -/
 def reflEqs (t : Term) : List (Term × Term) := t.subtermList.map fun s => (s, s)
@@ -112,21 +122,27 @@ def procActions (sig : Signature) (σ : Env) : List Action → Option (Env × Li
 def headEqs (sig : Signature) (as : List Action) (σ : Env) : List (Term × Term) :=
   ((procActions sig σ as).map Prod.snd).getD []
 
-def Ctx.empty : Ctx := { sig := fun _ => none, env := [], eqs := [], rules := [] }
+def Ctx.empty : Ctx :=
+  { sig := fun _ => none, env := [], eqs := [], rules := [], globals := [] }
 
 /-- One command. An action that does not evaluate contributes nothing: the program is stuck
 there, so no state is reachable. -/
-def Ctx.step (C : Ctx) : Cmd → Ctx
+def Ctx.step (P : Program) (C : Ctx) : Cmd → Ctx
   | .decl f d => { C with sig := Function.update C.sig f (some d) }
-  | .rule r => { C with rules := C.rules ++ [r] }
+  | .rule r => { C with rules := C.rules ++ [r.substGlobals C.globals] }
   | .action a =>
       match procAction C.sig C.env a with
-      | some (σ, es) => { C with env := σ, eqs := C.eqs ++ es }
+      | some (σ, es) =>
+          { sig := C.sig
+            env := σ
+            eqs := C.eqs ++ es
+            rules := C.rules
+            globals := Cmd.globalBind P (.action a) C.globals }
       | none => C
   | .run _ => C
   | .saturate _ => C
 
-def ctxOf (P : Program) : Ctx := P.foldl Ctx.step Ctx.empty
+def ctxOf (P : Program) : Ctx := P.foldl (Ctx.step P) Ctx.empty
 
 /-! ### Matching a body fact against a premise's proposition -/
 
