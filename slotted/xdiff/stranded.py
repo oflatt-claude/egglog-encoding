@@ -9,8 +9,19 @@ up to one injective renaming of the node's own slots.
 This decides that question by pairing each invisible row against every visible one
 and searching for such a renaming. An empty report means the invariant holds on
 this case: every fact on a self-loop-less class is also on a self-looped one.
+
+The observer rules are built from `slotted/languages/toy.egg`, the language the harness
+runs. They used to be written over `App{n}`, the string-headed constructors, which no
+generated case ever builds -- so every case printed "nothing stranded" whatever the state
+was. `def4-edges.py` had the same defect and was fixed at the same time; verify a checker
+like this by INVERTING it and confirming it fires.
+
+    python3 slotted/xdiff/stranded.py            the two migration cases
+    python3 slotted/xdiff/stranded.py all        every curated case
+    python3 slotted/xdiff/stranded.py fuzz 100   generated
 """
 
+import random
 import re
 import subprocess
 import sys
@@ -18,17 +29,29 @@ import sys
 sys.path.insert(0, "slotted/xdiff")
 import xdiff as X
 
-OBS = """
-(relation WithSym (String Renaming U Renaming U))
-(rule ((= V (App2 f p1 C1 p2 C2)) (RenamesToLeader V s V)) ((WithSym f p1 C1 p2 C2)))
-(relation NoSym (String Renaming U Renaming U))
-(rule ((= V (App2 f p1 C1 p2 C2))) ((NoSym f p1 C1 p2 C2)))
-(print-size App2)
-(run 40)
-(print-size App2)
-(print-function WithSym 100000)
-(print-function NoSym 100000)
-"""
+enc = X.slotenc
+LANG = enc.read_language(X.LANG_DIR / "toy.egg")
+
+#: The constructors this reads, each `(Renaming U Renaming U)`. `Var` and `Null` are
+#: leaves with no edges, so nothing about them can be stranded.
+BINARY = {n: sig for n, sig in LANG.items() if sig.count(enc.CHILD) + sig.count(enc.BINDER) == 2 == len(sig)}
+
+
+def _observer():
+    out = [
+        "(relation WithSym (String Renaming U Renaming U))",
+        "(relation NoSym (String Renaming U Renaming U))",
+    ]
+    for name, sig in BINARY.items():
+        pat = enc.pattern(name, sig)
+        out.append(f'(rule ((= V {pat}) (RenamesToLeader V s V)) ((WithSym "{name}" m1 c1 m2 c2)))')
+        out.append(f'(rule ((= V {pat})) ((NoSym "{name}" m1 c1 m2 c2)))')
+    sizes = "\n".join(f"(print-size {n})" for n in BINARY)
+    return "\n".join([*out, sizes, "(run 40)", sizes, "(print-function WithSym 100000)",
+                       "(print-function NoSym 100000)"])
+
+
+OBS = _observer()
 
 
 def split_args(s):
@@ -69,15 +92,16 @@ def slots_of(term):
         return {int(re.findall(r"-?\d+", term)[0])}
     if term.startswith("(Null"):
         return set()
-    if term.startswith("(App2 "):
-        a = split_args(term[len("(App2 ") : -1])
-        out = set()
-        for m, c in ((parse_map(a[1]), a[2]), (parse_map(a[3]), a[4])):
-            cs = slots_of(c)
-            if cs is None:
-                return None
-            out |= {m[k] for k in cs if k in m}
-        return out
+    for name in BINARY:
+        if term.startswith(f"({name} "):
+            a = split_args(term[len(name) + 2 : -1])
+            out = set()
+            for m, c in ((parse_map(a[0]), a[1]), (parse_map(a[2]), a[3])):
+                cs = slots_of(c)
+                if cs is None:
+                    return None
+                out |= {m[k] for k in cs if k in m}
+            return out
     return None  # e.g. `Unextractable`
 
 
@@ -125,10 +149,16 @@ def run_case(case, machinery=None):
             if line.strip().startswith(f"({tag} ")
         ]
 
+    # one `print-size` per constructor, before the run and again after: the state settled
+    # when the two halves agree
+    n = len(BINARY)
     sizes = [int(line.strip()) for line in r.stdout.splitlines() if line.strip().isdigit()]
-    fix = len(sizes) > 1 and sizes[0] == sizes[1]
+    fix = len(sizes) >= 2 * n and sizes[:n] == sizes[n : 2 * n]
     vis, allr = set(rows("WithSym")), rows("NoSym")
     return fix, [x for x in allr if x not in vis], vis
+
+
+TALLY = {"cases": 0, "stranded": 0, "unique": 0}
 
 
 def report(case, machinery=None):
@@ -136,8 +166,10 @@ def report(case, machinery=None):
     if got is None:
         print(f"{case.name:34} timeout")
         return
+    TALLY["cases"] += 1
     fix, invisible, vis = got
     tag = "fixpoint" if fix else "STILL MOVING"
+    TALLY["stranded"] += len(invisible)
     if not invisible:
         print(f"{case.name:34} [{tag}] nothing stranded")
         return
@@ -147,11 +179,24 @@ def report(case, machinery=None):
         p = parse_row(row)
         if not any(alpha_eq(p, q) for q in vparsed):
             lost.append(row)
+    TALLY["unique"] += len(lost)
     print(f"{case.name:34} [{tag}] stranded {len(invisible)}, of those with no visible alpha-variant: {len(lost)}")
     for row in lost:
         print(f"     UNIQUE: {row[:200]}")
 
 
-for c in X.curated():
-    if c.name.startswith(("X1", "X2")):
-        report(c)
+if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
+    rng = random.Random(0)
+    cases = [X.rand_case(rng, i) for i in range(int(sys.argv[2]) if len(sys.argv) > 2 else 100)]
+elif len(sys.argv) > 1 and sys.argv[1] == "all":
+    cases = X.curated()
+else:
+    cases = [c for c in X.curated() if c.name.startswith(("X1", "X2"))]
+
+for c in cases:
+    report(c)
+
+# the case count is part of the result: a probe that looked at nothing would also read 0
+print(f"\n{TALLY['cases']} cases checked, {TALLY['stranded']} stranded rows, "
+      f"{TALLY['unique']} carrying something no visible node carries")
+sys.exit(1 if TALLY["unique"] else 0)

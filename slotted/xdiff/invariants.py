@@ -38,28 +38,55 @@ OBS = """
 (relation NotInjective (Renaming))
 (rule ((RenamesToLeader a m b) (!= (map-length m) (map-length (map-image m))))
       ((NotInjective m)) :ruleset obs)
-(rule ((= n (App2 f m1 c1 m2 c2)) (!= (map-length m1) (map-length (map-image m1))))
-      ((NotInjective m1)) :ruleset obs)
-(rule ((= n (App2 f m1 c1 m2 c2)) (!= (map-length m2) (map-length (map-image m2))))
-      ((NotInjective m2)) :ruleset obs)
 
 ;; an edge naming more slots than its child has
 (relation WideEdge (String Renaming U Renaming))
-(rule ((= n (App2 f m1 c1 m2 c2))
-       (RenamesToLeader c1 s c1)
-       (= s (compose s s))
-       (< (map-length s) (map-length m1)))
-      ((WideEdge f m1 c1 s)) :ruleset obs)
-(rule ((= n (App2 f m1 c1 m2 c2))
-       (RenamesToLeader c2 s c2)
-       (= s (compose s s))
-       (< (map-length s) (map-length m2)))
-      ((WideEdge f m2 c2 s)) :ruleset obs)
+<<NODE RULES>>
 
 (run obs 1)
 (print-size NotInjective)
 (print-function WideEdge 200)
 """
+
+enc = X.slotenc
+LANG = enc.read_language(X.LANG_DIR / "toy.egg")
+
+
+def node_rules():
+    """The per-constructor half of the observer, over the language the harness runs.
+
+    These used to be written over `App2`, the string-headed constructor, which no
+    generated case builds -- so only the `RenamesToLeader` rule above them was ever live,
+    and the edge checks reported nothing whatever the state was. `def4-edges.py` and
+    `stranded.py` had the same defect and were fixed at the same time.
+
+    A BINDER column is left out of the wide-edge check, for the reason `def4-edges.py`
+    gives: what sits there is a name the node binds, so its width is not its child's
+    business. Its injectivity is still checked -- a renaming is a renaming.
+    """
+    out = []
+    for name, sig in LANG.items():
+        _, edges, kids, _ = enc.cols_of(sig)
+        kid_cols = [c for c in sig if c in enc.SLOTTED]
+        pat = enc.pattern(name, sig)
+        for i in range(len(kids)):
+            out.append(
+                f"(rule ((= n {pat}) (!= (map-length {edges[i]}) (map-length (map-image {edges[i]}))))\n"
+                f"      ((NotInjective {edges[i]})) :ruleset obs)"
+            )
+            if kid_cols[i] is enc.BINDER:
+                continue
+            out.append(
+                f"(rule ((= n {pat})\n"
+                f"       (RenamesToLeader {kids[i]} s {kids[i]})\n"
+                f"       (= s (compose s s))\n"
+                f"       (< (map-length s) (map-length {edges[i]})))\n"
+                f'      ((WideEdge "{name} child {i + 1}" {edges[i]} {kids[i]} s)) :ruleset obs)'
+            )
+    return "\n".join(out)
+
+
+OBS = OBS.replace("<<NODE RULES>>", node_rules())
 
 
 def probe(case):
@@ -81,12 +108,13 @@ def probe(case):
     return ni, wide
 
 
-tot_ni = tot_wide = 0
+tot_ni = tot_wide = seen = 0
 for c in X.curated():
     got = probe(c)
     if got is None:
         print(f"  {c.name:34} timeout")
         continue
+    seen += 1
     ni, wide = got
     tot_ni += ni or 0
     tot_wide += len(wide)
@@ -94,4 +122,6 @@ for c in X.curated():
         print(f"  {c.name:34} non-injective {ni}  wide edges {len(wide)}")
         for w in wide[:4]:
             print(f"       {w[:120]}")
-print(f"\ntotals: non-injective {tot_ni}, edges wider than their child {tot_wide}")
+# the case count is part of the result: a probe that looked at nothing would also read 0
+print(f"\n{seen} cases checked, non-injective {tot_ni}, edges wider than their child {tot_wide}")
+sys.exit(1 if tot_ni or tot_wide else 0)

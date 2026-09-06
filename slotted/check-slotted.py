@@ -74,6 +74,29 @@ def zero_categories(out):
     return f"non-zero categories: {'; '.join(bad)}" if bad else None
 
 
+def none_of(pattern, floor):
+    """A summary line with `bad` at zero and `seen` at least `floor`, both named groups.
+
+    The case count is half the check. Three of these probes reported a clean zero for
+    months because they were written over constructors the harness never builds, and
+    nothing said so -- a floor on the cases actually looked at is what a vacuous probe
+    fails.
+    """
+
+    def check(out):
+        m = re.search(pattern, out, re.M)
+        if not m:
+            return f"no summary line matching /{pattern}/"
+        bad, seen = int(m.group("bad")), int(m.group("seen"))
+        if bad:
+            return f"{bad} violation(s)"
+        if seen < floor:
+            return f"only {seen} cases checked, expected at least {floor}"
+        return None
+
+    return check
+
+
 def both(*fns):
     def check(out):
         return next((r for r in (f(out) for f in fns) if r), None)
@@ -205,6 +228,33 @@ CHECKS = [
         both(ratio(r"(\d+)/(\d+) had a usable baseline", 44), zero_categories),
         False,
         True,
+    ),
+    # The encoding's own invariants, read off the raw egglog rows rather than through a
+    # comparison. They need no oracle, and they are here rather than left standalone
+    # because a probe nothing runs is a probe that quietly dies -- all three had.
+    (
+        "def4-edges",
+        ("slotted/xdiff/def4-edges.py",),
+        none_of(r"^(?P<bad>\d+) edges over (?P<seen>\d+) cases", 44),
+        False,
+        False,
+    ),
+    (
+        "renaming-invariants",
+        ("slotted/xdiff/invariants.py",),
+        both(
+            none_of(r"^(?P<seen>\d+) cases checked, non-injective (?P<bad>\d+)", 44),
+            none_of(r"^(?P<seen>\d+) cases checked, non-injective \d+, edges wider than their child (?P<bad>\d+)", 44),
+        ),
+        False,
+        False,
+    ),
+    (
+        "stranded-nodes",
+        ("slotted/xdiff/stranded.py", "all"),
+        none_of(r"^(?P<seen>\d+) cases checked, \d+ stranded rows, (?P<bad>\d+) carrying", 44),
+        False,
+        False,
     ),
     (
         "mutations",

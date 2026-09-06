@@ -42,6 +42,9 @@ SEARCH_CAP = 200_000
 #: cases compared at a database fixpoint because the rules never stop firing
 UNSATURATED = []
 
+#: `(case, count)` for cases that left a class with no node in it. See `drop_residue`.
+RESIDUE = []
+
 
 # --------------------------------------------------------------- s-expressions
 def parse_sexpr(s, i=0):
@@ -239,6 +242,11 @@ def build_encoding_graph(doc):
     included: a partial `m` in `a = m*b` is the redundancy relation, saying b's class does not
     depend on the slots `m` drops, and the reference models that as one class with the smaller
     slot set. `class-count.py` is the independent check on that reading.
+
+    A value can reach here with no node of its own: `ClassSlots` is a function table, so
+    its entry outlives the row that set it, and `RenamesToLeader` keeps a self-loop on a
+    value whose row the alpha-finder deleted. Those become node-less classes, which
+    `drop_residue` removes and reports -- see there for why that is sound.
     """
     slots_of, loops, rows, leaf = read_json_graph(doc)
     values = set(slots_of) | {c for _, _, c in rows} | set(leaf.values())
@@ -704,7 +712,39 @@ def _dump(case, mult, timeout):
     g, unfaithful = to_reference_shape(g, leaf.get("var"))
     if unfaithful:
         return None, f"binder position is not the variable class: {unfaithful[:2]}"
-    return g, None
+    return drop_residue(g, case), None
+
+
+def drop_residue(g, case):
+    """Remove classes holding no node, counting the case in `RESIDUE`.
+
+    The reference never has one: a class is created by a node and keeps it. Ours can be
+    left behind two ways, both when the alpha-finder deletes a row without unioning its
+    value into anything -- an alpha-equivalent node exists elsewhere. The value keeps its
+    self-loop, or loses that too and survives only as a `ClassSlots` entry, that being a
+    function table. Nothing can then reach it: every compiled rule joins a node atom.
+
+    THIS IS A RELAXATION AND IT NEEDS ITS EVIDENCE. On `fuzz616`, the case that made it
+    necessary, the probe partition and every `xdiff.py` invariant AGREE, and the node
+    counts are equal at 23 -- the whole difference was one node-less class, reported as
+    "class count 6 vs 7", which reads as a missed union and is not one. It cost two
+    sessions of hunting a bug that was not there. What the relaxation cannot hide is a
+    class the encoding really lost: that takes its nodes with it, and the node count is
+    compared too. Residue is still counted and reported, not silently dropped. A
+    node-less class some node still points at is KEPT: dropping it would leave a
+    dangling child.
+    """
+    referenced = {e[1] for cid in g.ids() for _, elems in g.nodes[cid] for e in elems if e[0] == "child"}
+    empty = [c for c in g.ids() if not g.nodes[c] and c not in referenced]
+    if not empty:
+        return g
+    if case.name not in {n for n, _ in RESIDUE}:  # `_dump` reruns a case that will not settle
+        RESIDUE.append((case.name, len(empty)))
+    for c in empty:
+        del g.nodes[c]
+        g.slots.pop(c, None)
+        g.group.pop(c, None)
+    return g
 
 
 def encoding_graph(case):
@@ -924,6 +964,12 @@ def main():
             f"{len(UNSATURATED)} compared at a database fixpoint, not a rule "
             f"fixpoint: {', '.join(UNSATURATED[:6])}"
             f"{' ...' if len(UNSATURATED) > 6 else ''}"
+        )
+    if RESIDUE:
+        names = [n for n, _ in RESIDUE[:6]]
+        print(
+            f"{len(RESIDUE)} left {sum(n for _, n in RESIDUE)} class(es) with no node in "
+            f"them, not compared: {', '.join(names)}{' ...' if len(RESIDUE) > 6 else ''}"
         )
     return 1 if tally["FAIL"] else 0
 
