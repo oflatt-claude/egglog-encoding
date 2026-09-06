@@ -79,12 +79,14 @@ namespace Egglog
 `@UF_<Sort>` per sort there is one table here. -/
 def ufName : FnName := "@UF"
 
-/-- The ruleset the maintenance rules join, and the one every emitted `Cmd.saturate` runs.
+/-- The ruleset the maintenance rules join, and the one the emitted rebuild runs.
 
 **One flat ruleset, one `saturate`.** egglog's rebuild schedule nests three
 (`egglog/src/proofs/proof_encoding.rs:1928-1943`); this is exactly as strong, because a
 fixpoint of the union of rulesets is a fixpoint of each, and `Cmd.saturate` runs to a
-fixpoint. -/
+fixpoint. It is not the *only* ruleset the maintenance rules join: `allMaintenanceRules`
+copies them into each ruleset a source `Cmd.saturate` names, which is what rebuilds between
+that command's rounds. -/
 def rebuildRuleset : RulesetName := "@rebuild"
 
 /-- `f`'s view: the functional dependency `children ↦ (eclass, proof)`. All queries read
@@ -748,9 +750,30 @@ def rebuildRules (f : FnName) (k : Nat) : List Rule :=
         [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]],
       ruleset := rebuildRuleset }
 
-/-- Every maintenance rule the encoding of `P` emits. `Rebuilt` is stated over it. -/
+/-- The maintenance rules as they join `rebuildRuleset`. `Rebuilt` is stated over it. -/
 def maintenanceRules (P : Program) : List Rule :=
   pathCompressRule :: P.ctors.flatMap fun fk => rebuildRules fk.1 fk.2
+
+/-- The rulesets a source `Cmd.saturate` names. -/
+def Program.saturateRulesets (P : Program) : List RulesetName :=
+  (P.filterMap fun c => match c with | .saturate R => some R | _ => none).dedup
+
+/-- **Every maintenance rule the encoding of `P` emits**: the `rebuildRuleset` copy, plus one
+copy joining each ruleset a source `Cmd.saturate` names.
+
+**Why the copies.** egglog instruments a schedule node at a time, and its `Run` case is
+`(seq <run> <rebuild>)` (`egglog/src/proofs/proof_encoding.rs:1969`) while its `Saturate`
+case recurses *into* the loop body (`:1978-1980`), so `(run-schedule (saturate R))` becomes
+`(saturate (seq (run R) <rebuild>))` — a rebuild after **every** iteration, not one after the
+loop. `Cmd` has no schedule nesting, so the same thing is had by joining the maintenance
+rules to `R` itself: a round of `R` then re-keys the views the previous round's `union`s
+moved, and the fixpoint of the union of the two rulesets is a fixpoint of each. Without them
+a source `Cmd.saturate` rebuilds once, after `R` has already run to its own fixpoint, and a
+rule needing an equality a *later* round discovered never sees it — `sat-hit` is that
+program, and it lost the source's `(Hit)`. -/
+def allMaintenanceRules (P : Program) : List Rule :=
+  maintenanceRules P ++
+    P.saturateRulesets.flatMap fun R => (maintenanceRules P).map fun r => { r with ruleset := R }
 
 /-! ### The transformation -/
 /-- The source rules, in the order `encodeCmds` numbers them. -/
@@ -798,7 +821,7 @@ def encodePrelude (P : Program) : Program :=
     (P.ctors.flatMap fun fk =>
       [.decl fk.1 (skolemDecl fk.2), .decl (viewName fk.1) (viewDecl fk.2),
        .decl (termName fk.1) (termDecl fk.2)]) ++
-    (maintenanceRules P).map .rule
+    (allMaintenanceRules P).map .rule
 
 /-- Encode one command. A source declaration is dropped: the prelude has already declared
 its function as the skolem-id constructor and emitted its table triple, and re-emitting it
@@ -810,7 +833,19 @@ after each one except a function, rule or sort declaration
 there creates congruence the views must be re-keyed for; without the rebuild it propagates
 only to the columns the union names directly, and `Wrapper(Add One Two)`,
 `Wrapper(Add Two One)`, `union One Two` leaves `Wrapper` as two classes where the source
-has one. A declaration writes nothing and a rule only registers itself.
+has one.
+
+**A `Cmd.saturate` needs one between its rounds, and the block cannot give it.** The trailing
+`Cmd.saturate rebuildRuleset` runs after `R` has already reached its own fixpoint, so a rule
+of round `k + 1` would read round `k`'s rows un-re-keyed where the specification's round
+`k + 1` sees round `k`'s unions through `Cong`. egglog rebuilds after **every** iteration —
+`instrument_schedule`'s `Run` case is `(seq <run> <rebuild>)`
+(`egglog/src/proofs/proof_encoding.rs:1969`) and its `Saturate` case recurses into the loop
+body (`:1978-1980`), so `(run-schedule (saturate R))` becomes
+`(saturate (seq (run R) <rebuild>))`. `allMaintenanceRules` is that here: the maintenance
+rules join `R` too, so a round of `R` rebuilds before the next one searches.
+
+A declaration writes nothing and a rule only registers itself.
 
 Two supplies are threaded: `n` numbers generated variables, and `i` numbers the rules, so
 that the `@Rule_i` a head names is the one the prelude declared for it. -/
@@ -1062,6 +1097,47 @@ theorem maintenanceRules_unionFree (P : Program) :
   · exact ⟨trivial, trivial⟩
   · exact rebuildRules_unionFree fk.1 fk.2 r hmem
 
+/-! #### A copy is the rule it copies
+
+`allMaintenanceRules` changes only `Rule.ruleset`, and every property a maintenance rule is
+ever asked for reads `Rule.query` and `Rule.actions`. `mem_maintenanceRules_of_mem_all` is
+what carries a copy back to the rule it copies, and `{ r with ruleset := rebuildRuleset }`
+has `r`'s two other fields definitionally — so a lemma stated at `r ∈ maintenanceRules P`
+applies to a copy with no rewriting. -/
+
+/-- Every maintenance rule joins `rebuildRuleset`. -/
+theorem maintenanceRules_ruleset (P : Program) :
+    ∀ r ∈ maintenanceRules P, r.ruleset = rebuildRuleset := by
+  intro r hr
+  simp only [maintenanceRules, List.mem_cons, List.mem_flatMap] at hr
+  rcases hr with rfl | ⟨fk, -, hmem⟩
+  · rfl
+  · simp only [rebuildRules, List.mem_cons, List.mem_map, List.mem_range] at hmem
+    rcases hmem with rfl | ⟨i, -, rfl⟩ <;> rfl
+
+/-- **A rule the prelude emits is a maintenance rule, up to the ruleset it joins.** -/
+theorem mem_maintenanceRules_of_mem_all {P : Program} {r : Rule}
+    (h : r ∈ allMaintenanceRules P) :
+    { r with ruleset := rebuildRuleset } ∈ maintenanceRules P := by
+  rcases List.mem_append.mp h with h₁ | h₁
+  · rwa [show ({ r with ruleset := rebuildRuleset } : Rule) = r by
+      rw [← maintenanceRules_ruleset P r h₁]]
+  · obtain ⟨R, -, h₂⟩ := List.mem_flatMap.mp h₁
+    obtain ⟨r₀, hr₀, rfl⟩ := List.mem_map.mp h₂
+    rwa [show ({ ({ r₀ with ruleset := R } : Rule) with ruleset := rebuildRuleset } : Rule) = r₀ by
+      rw [← maintenanceRules_ruleset P r₀ hr₀]]
+
+/-- The `rebuildRuleset` copies are among them. -/
+theorem mem_allMaintenanceRules_of_mem {P : Program} {r : Rule}
+    (h : r ∈ maintenanceRules P) : r ∈ allMaintenanceRules P :=
+  List.mem_append.mpr (Or.inl h)
+
+@[inherit_doc mem_maintenanceRules_of_mem_all]
+theorem allMaintenanceRules_unionFree (P : Program) :
+    ∀ r ∈ allMaintenanceRules P, Actions.UnionFree r.actions :=
+  fun r hr => maintenanceRules_unionFree P { r with ruleset := rebuildRuleset }
+    (mem_maintenanceRules_of_mem_all hr)
+
 /-- A command's own contribution to the prelude is one `@Rule_i` declaration, or nothing. -/
 theorem mem_proofDeclOf {G : List (Var × Expr)} {i : Nat} {c d : Cmd}
     (h : d ∈ c.proofDeclOf G i) :
@@ -1099,7 +1175,7 @@ theorem encodePrelude_unionFree (P : Program) : ∀ c ∈ encodePrelude P, Cmd.U
   · exact unionFree_decl_none rfl
   · exact unionFree_decl_merge rfl
   · exact unionFree_decl_noMerge rfl
-  · exact maintenanceRules_unionFree P r hr
+  · exact allMaintenanceRules_unionFree P r hr
 
 theorem encodeRule_actions (i : Nat) (r : Rule) (n : Nat) :
     (encodeRule i r n).1.actions

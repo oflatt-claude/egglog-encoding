@@ -505,7 +505,7 @@ structure FDatabase.EncOk (d : FDatabase) (P : Program) (sg : Signature) (sd : D
   srcRules : ∀ r ∈ d.rules,
     (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P ∧ s ∈ sd.rules ∧
         sd.GlobalsInline G ∧ P.GlobalsOnce G ∧ r = (encodeRule i (s.substGlobals G) n).1) ∨
-      r ∈ maintenanceRules P
+      r ∈ allMaintenanceRules P
 
 /-- The three source clauses move along a source that grows and keeps its environment. -/
 theorem FDatabase.EncOk.mono_src {d : FDatabase} {P : Program} {sg : Signature}
@@ -604,8 +604,8 @@ theorem firingsSoundIn_rebuild {P : Program} (hdom : P.EncodeDomain) {sg : Signa
   intro r hr hrs σ hσ e he
   rcases hok.base.rules r hr with ⟨s, G, i, n, hmem, rfl⟩ | hmaint
   · exact absurd (hrs ▸ rfl : s.ruleset = rebuildRuleset) (ruleset_ne_rebuild hdom hmem)
-  · exact maintenance_soundTerms hmaint hok.base.eqsRefl hok.base.inv.index
-      hok.base.subtermClosed hok.sound hσ he
+  · exact maintenance_soundTerms (mem_maintenanceRules_of_mem_all hmaint) hok.base.eqsRefl
+      hok.base.inv.index hok.base.subtermClosed hok.sound hσ he
 
 
 /-! ## The environment along a source run
@@ -858,8 +858,9 @@ theorem FDatabase.EncOk.runRoundM {P : Program} {sg : Signature}
     intro r hr hrs σ hσ e' he'
     rcases hok.srcRules r hr with ⟨s, G, i, n, hmem, hsr, hgi, hgo, rfl⟩ | hmaint
     · exact hhead hP hpre hc hstep hok s G i n hmem hsr hrs hgi hgo hr σ hσ e' he'
-    · exact maintenance_soundTerms hmaint hok.base.eqsRefl hok.base.inv.index
-        hok.base.subtermClosed (hok.sound.mono_src (CmdStep.contained hstep).eqs) hσ he'
+    · exact maintenance_soundTerms (mem_maintenanceRules_of_mem_all hmaint) hok.base.eqsRefl
+        hok.base.inv.index hok.base.subtermClosed
+        (hok.sound.mono_src (CmdStep.contained hstep).eqs) hσ he'
   refine ⟨⟨hsig.trans hok.base.sig, ?_, hok.base.shape, hok.base.merges,
       hok.base.inv.runRoundM (by rw [hok.base.sig]; exact hok.base.merges) hok.base.wl' hrun,
       runRoundM_noUnions hok.base.nounions hrun, ?_, ?_, ?_⟩, ?_, ?_, ?_⟩
@@ -1342,7 +1343,7 @@ theorem NoAtLet.of_declOrRule {c : Cmd} (h : c.DeclOrRule) : c.NoAtLet := by
 
 /-- Every rule a prelude command registers is a maintenance rule. -/
 theorem mem_maintenanceRules_of_encodePrelude {P : Program} {r : Rule}
-    (h : Cmd.rule r ∈ encodePrelude P) : r ∈ maintenanceRules P := by
+    (h : Cmd.rule r ∈ encodePrelude P) : r ∈ allMaintenanceRules P := by
   have hproof : ∀ (R : Program) (G : List (Var × Expr)) (p : Program) (i : Nat),
       Cmd.rule r ∉ ruleProofDecls R G p i := by
     intro R G p
@@ -1505,10 +1506,13 @@ theorem preludeState_encOk {P : Program} {d₀ : FDatabase}
       Signature.mergeShape_empty hprel
   · intro r hr
     rcases execProgramM_rules_of_declOrRule hprel r hr with hc | hc
-    · exact hmaint r (mem_maintenanceRules_of_encodePrelude hc)
+    · exact hmaint { r with ruleset := rebuildRuleset }
+        (mem_maintenanceRules_of_mem_all (mem_maintenanceRules_of_encodePrelude hc))
     · exact absurd hc (by simp [FDatabase.empty])
   · exact fun r hr => FDatabase.execProgramM_mem_rules hprel r
-      (by rw [encodePrelude]; exact List.mem_append_right _ (List.mem_map_of_mem hr))
+      (by rw [encodePrelude]
+          exact List.mem_append_right _
+            (List.mem_map_of_mem (mem_allMaintenanceRules_of_mem hr)))
   · intro b hb
     rw [hv, show FDatabase.empty.env = ([] : Env) from rfl] at hb
     exact absurd hb (by simp)
@@ -2684,7 +2688,7 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
       (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P ∧ s ∈ sd'.rules ∧
           sd'.GlobalsInline G ∧ P.GlobalsOnce G ∧
           r = (encodeRule i (s.substGlobals G) n).1) ∨
-        r ∈ maintenanceRules P := by
+        r ∈ allMaintenanceRules P := by
     intro r hr
     have hnr : Cmd.rule r ∉ (encodeAction fiatE a n).1.map Cmd.action := by
       intro hc
@@ -4127,7 +4131,7 @@ rule that fires once per class member — and `vuProgram` is the `union`-head on
 unions a **variable** with an application and so takes `noLitUnion`'s second arm. Both are
 head-scoped, and `ncProgram`'s source run is compiled. The corpus measurement is
 `DiffTest.lean`'s census: the clause moved nothing when it was added, 70 of 166 in domain
-then and 78 of 174 now. -/
+then and 83 of 179 now. -/
 
 /-- `ncRule`'s head reads only `x`, which its query binds. -/
 theorem ncProgram_headsScoped : ncProgram.HeadsScoped := by decide
@@ -4720,7 +4724,8 @@ theorem FDatabase.EncBase.firingsEntryRows {P : Program} (hdom : P.EncodeDomain)
     (mem_terms_of_mem_matchQuery hσ) h he
   rcases hb.rules r hrm with ⟨s, G, i, n, hmem, rfl⟩ | hmaint
   · exact encodeRule_entrySafe hdom hmem G i n
-  · exact maintenance_entrySafe hmaint
+  · exact maintenance_entrySafe (r := { r with ruleset := rebuildRuleset })
+      (mem_maintenanceRules_of_mem_all hmaint)
 
 /-- **Whether a command can record an entry term the bridge would have to answer for.** Only a
 top-level action can; a `.rule`, a `.run` and a `.saturate` write through `d.rules`, which
@@ -6616,7 +6621,8 @@ theorem FDatabase.EncBase.firingsUFTermsDescend {P : Program} (hdom : P.EncodeDo
       (encodeRule_entrySafe hdom hmem G i n) (mem_terms_of_mem_matchQuery hσ) h he
     rw [encodeRule_actions]
     exact encodeActions_ufWriteSafe _ (s.substGlobals G).actions _
-  · exact maintenance_ufTermsDescend hmaint hb.inv hb.eqsRefl hmg (hb.wl' r hrm) hdes h hσ he
+  · exact maintenance_ufTermsDescend (mem_maintenanceRules_of_mem_all hmaint) hb.inv hb.eqsRefl
+      hmg (hb.wl' r hrm) hdes h hσ he
 
 /-- One firing, unioned into the accumulator. -/
 theorem fireInto_ufTermsDescend {d acc : FDatabase} {r : Rule} {σ : Env} (hr : r ∈ d.rules)
@@ -9256,50 +9262,59 @@ So `hglob` is no longer the obstruction it was. What the residue would still hav
 query's, `mem_matchQuery_encodeQuery` at `Query.substGlobals G s.query`, whose globals are
 already flattened away and whose remaining variables the three clauses above answer for.
 
-**But `UnionsFire` is false, and the writer is `Cmd.saturate`.** `encodeCmd` gives a source
-`.saturate R` the block `[.saturate R, .saturate rebuildRuleset]`, so the rebuild runs **once,
-after the whole saturation**, and the target's second round of `R` reads the first round's rows
-unre-keyed. The specification has no rebuild to miss — `Matches` closes over `Cong`, which reads
-`eqs` — so its round 2 sees round 1's `union` and the target's does not. Five commands, all of
-them in `encode`'s domain:
+**`UnionsFire` was false, and the writer was `Cmd.saturate`.** `encodeCmd` gave a source
+`.saturate R` the block `[.saturate R, .saturate rebuildRuleset]`, so the rebuild ran **once,
+after the whole saturation**, and the target's second round of `R` read the first round's rows
+un-re-keyed. The specification has no rebuild to miss — `Matches` closes over `Cong`, which
+reads `eqs` — so its round 2 saw round 1's `union` and the target's did not. Five commands, all
+of them in `encode`'s domain, and `DiffTest.lean`'s `sat-hit`:
 
 ```
 (Wrapper (Zz))  (Aa)
 (rule ((Aa)) ((union (Zz) (Aa))))
 (rule ((Wrapper (Aa))) ((Hit)))
-(run-schedule (saturate))
+(run-schedule (saturate (run)))
 ```
 
 Round 1 fires the first rule on both sides; round 2 fires the second on the source alone, over
 the congruence `(Zz) = (Aa)` round 1 asserted, and builds `(Hit)`. In the target the union is an
-`@UF` edge — `Term.blt` makes `(Aa)` the `ordering-min` — while `@WrapperView` still sits at the
-key `[(Zz)]`, and the emitted atom for `(Wrapper (Aa))` asks for the key `[(Aa)]`. Nothing joins
-them until the trailing `Cmd.saturate rebuildRuleset`, which is after `R` has saturated.
-**Measured**: `correspond 64` reports `DIFFER … lost=1 … link-diff=0` with `LOST (Hit) = (Hit)`;
-`exec P` holds one `Hit` term and `execM (encode P)` holds **no** `@HitView` entry term at all;
-`P.declared.encodeDomainB` is `true`. The bracket is exact — the same program with the
-`saturate` replaced by two `Cmd.run`s **agrees**, because there each round gets its own rebuild.
+`@UF` edge — `Term.blt` makes `(Aa)` the `ordering-min` — while `@WrapperView` still sat at the
+key `[(Zz)]`, and the emitted atom for `(Wrapper (Aa))` asks for the key `[(Aa)]`. Nothing
+joined them until the trailing `Cmd.saturate rebuildRuleset`, which is after `R` has saturated.
+**Measured**: `exec P` held one `Hit` term and `execM (encode P)` held **no** `@HitView` entry
+term at all, where the same program with the `saturate` replaced by two `Cmd.run`s **agreed** —
+each round getting its own rebuild is what made the `run` form right. So
+`encode_corresponds_forward` was false there too, at `a = b = (Hit)`, and this `sorry` was a
+false obligation rather than an open one.
 
-**So `encode_corresponds_forward` is false too**, at that program and at `a = b = (Hit)`:
-`Cong src (Hit) (Hit)` holds and `SameClass tgt (Hit) (Hit)` wants a `@HitView` entry there is
-none of. The `sorry` below is therefore not an open obligation but a false one, and no assembly
-of the pieces above can close it. egglog rebuilds after **every** iteration of
-`(run-schedule (saturate R))`, so the defect is `encodeCmd`'s and not the specification's: the
-repair is in `Encoding/Encode.lean` — the maintenance rules have to be members of every source
-ruleset a `saturate` can name, so that a round of `R` rebuilds before the next one searches —
-or a tenth domain clause excluding a source `Cmd.saturate`, which is the `Program.NoSaturate`
-shape `exec_programStep` already carries. Neither is written here.
+**The repair is in `Encoding/Encode.lean`, and it is what egglog does.** egglog instruments a
+schedule node at a time: its `Run` case becomes `(seq <run> <rebuild>)`
+(`egglog/src/proofs/proof_encoding.rs:1969`) and its `Saturate` case recurses *into* the loop
+body (`:1978-1980`), so `(run-schedule (saturate R))` is instrumented to
+`(saturate (seq (run R) <rebuild>))` — a rebuild after **every** iteration, which
+`RUST_LOG=debug` prints as the schedule the loop runs. `Cmd` has no schedule nesting, so
+`allMaintenanceRules` joins the maintenance rules to each ruleset a source `Cmd.saturate` names
+as well as to `rebuildRuleset`; a round of `R` then re-keys the views the previous round moved,
+and a fixpoint of the union of the two rulesets is a fixpoint of each. `sat-hit` now agrees —
+one source `Hit`, one target `@HitView` — as do the four other `sat-*` cases, and
+`difftest correspond 64` reports 0 LOST over 83 in-domain cases. **This obligation is open, not
+false.**
 
-**Why the corpus is green anyway.** No case uses a *source* `Cmd.saturate`: the only
-`Cmd.saturate` in an encoded program is the encoder's own `rebuildRuleset` one, and every case
-runs its ruleset with `Cmd.run`. `difftest correspond 64` agreeing on all 78 in-domain cases and
-all seventeen probes therefore measures the `Cmd.run` half and says nothing about the other.
+**What the corpus used to miss.** No case used a *source* `Cmd.saturate`: the only
+`Cmd.saturate` in an encoded program was the encoder's own `rebuildRuleset` one, every curated
+case ran its ruleset with `Cmd.run`, and both generators emitted
+`List.replicate (rounds + 1) (Cmd.run "")`. `difftest correspond 64` agreeing on all 78
+in-domain cases therefore measured the `Cmd.run` half and said nothing about the other. The
+`sat-*` family and `genProgram`'s `genCollapseRules` tail are what close that: five curated
+cases and, at the default 60 seeds, ten generated ones now run a source `saturate`, and with
+the repair backed out the sweep reports 13 LOST across those 13 cases.
 
-**The refutation is measured and not proved**, which is why no `unionsFire_false` stands beside
-`unionsFireClaim_false`. Refuting a firing needs the enumerator's *completeness* at an encoded
-target — no substitution matches, so nothing is written — and that is `execRunRules_RunRules`,
-which wants `Signature.AllConstructors` and is unavailable at a target whose `@UF` and every
-`@fView` carry `:merge`. The kernel cannot run the encoded program either.
+**That refutation was measured and not proved**, which is why no `unionsFire_false` ever stood
+beside `unionsFireClaim_false`, and why the corpus is where the repair is checked. Refuting a
+firing needs the enumerator's *completeness* at an encoded target — no substitution matches, so
+nothing is written — and that is `execRunRules_RunRules`, which wants
+`Signature.AllConstructors` and is unavailable at a target whose `@UF` and every `@fView` carry
+`:merge`. The kernel cannot run the encoded program either.
 
 **A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
 that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already
@@ -10931,9 +10946,9 @@ theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDataba
   cong_sameClass ⟨encode_assert hdom hsrc htgt, encode_trans hdom hsrc htgt,
     encode_congr hdom hsrc htgt⟩ h
 
-/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 78
+/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 83
 in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
-78 agreeing, 0 LOST, 0 INVENTED and `link-diff` 0 — the last is what says the swept relation is
+83 agreeing, 0 LOST, 0 INVENTED and `link-diff` 0 — the last is what says the swept relation is
 this one.
 
 **The eight `glob-*` cases are the ones that measure the globals.** A `let`-bound global read

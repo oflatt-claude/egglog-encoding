@@ -3869,6 +3869,15 @@ the encoded rule being one `td` holds — and the two data clauses at `td`; the 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
 `[c, Cmd.saturate rebuildRuleset]`.
 
+**And a `Cmd.saturate` really does rebuild between its rounds**, which is what makes the two
+commands one claim. The rebuild in that block is the trailing one, after the whole saturation;
+what re-keys the views *between* rounds is `allMaintenanceRules`, which joins the maintenance
+rules to each ruleset a source `Cmd.saturate` names — egglog's own instrumentation of
+`(run-schedule (saturate R))` is `(saturate (seq (run R) <rebuild>))`
+(`egglog/src/proofs/proof_encoding.rs:1969`, `:1978-1980`). Without it this was a **false**
+obligation and not an open one: `DiffTest.lean`'s `sat-hit` lost the source's `(Hit)` outright.
+`unionsJoined_fire`'s docstring is the counterexample, the measurement and the repair.
+
 **Three clauses about rows, because a firing reads rows and the invariant carries entries.**
 `readsAt` is a `terms` fact and `matchQuery` reads `FDatabase.rows`, so the residue is handed
 `RowRepr` at `td` — the reading through live rows, at the state the encoded block runs at — and
@@ -4662,7 +4671,7 @@ no `union`, so no `@UF` entry — and `ncTgt_rowJoined_edge` is that clause at a
 content. The case with content is a round that fires a head `union` — or, for
 the `reads` half of the conclusion, one that fires a head **build** — and that is where it is
 open. `difftest correspond`'s **LOST** column — `Cong src a b` without
-`SameClass tgt a b`, swept with the diagonal included over the 78 in-domain cases, rules and runs
+`SameClass tgt a b`, swept with the diagonal included over the 83 in-domain cases, rules and runs
 among them — is 0 on all but the `glob-*` family, which is the `reads` clause measured: every
 source term has *some* id in the target, except where a rule the encoding could not fire never
 put one there (`unionsJoined_fire`'s `hglob` paragraph). Asking for that id to be the term
@@ -4746,7 +4755,7 @@ theorem encodeCmd_run_tail (G : List (Var × Expr)) (R : RulesetName) (n i : Nat
 /-- **The fixpoint at a state a program reaches.** Degenerately, as
 `unionsJoined_fire_satisfiable` is: `rbState2` holds no rule, so the round it is a fixpoint of
 fires nothing. The non-degenerate reading is measured rather than compiled — every one of
-`difftest correspond`'s 78 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
+`difftest correspond`'s 83 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
 theorem rbState2_roundClosed : rbState2.RoundClosed rebuildRuleset :=
   roundClosed_of_execProgramM (p := [Cmd.run rbRuleset]) rbState2_execProgramM_run
 
@@ -5100,11 +5109,11 @@ what the command induction wants.
 **Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
 that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
 source text as "no `union` action and no `union` in any rule head" — a `union` between distinct
-built terms is exactly what puts two e-classes at one view key. The in-domain census is 78 of
-174 and the `union` cases are the ones the correspondence exists for: `Encoding/Match.lean`'s
+built terms is exactly what puts two e-classes at one view key. The in-domain census is 83 of
+179 and the `union` cases are the ones the correspondence exists for: `Encoding/Match.lean`'s
 `uProgram` and `witnessProgram` would both leave the domain, and with them the only witnesses
 `execM_unionsJoined` and `Database.ViewLeader.ufClosed` are non-vacuous at. The clause is
-therefore not added, and the census stays 78. -/
+therefore not added, and the census stays 83. -/
 
 /-! #### The two clauses the fixpoint was for, refuted — and what replaced them
 
@@ -10949,11 +10958,11 @@ source rule's or a maintenance rule's, and there is no third kind. -/
 
 /-- **Every rule an encoded program's state can hold.** Either the encoding of a source rule
 of `P` — at whichever counters `encodeCmds` reached it with, which nothing below reads — or
-one of `maintenanceRules P`. -/
+one of `allMaintenanceRules P`. -/
 def Rule.EncodedIn (P : Program) (r : Rule) : Prop :=
   (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat),
       Cmd.rule s ∈ P ∧ r = (encodeRule i (s.substGlobals G) n).1) ∨
-    r ∈ maintenanceRules P
+    r ∈ allMaintenanceRules P
 
 /-- The rule invariant, as a property of the state. -/
 def FDatabase.RulesEncoded (d : FDatabase) (P : Program) : Prop :=
@@ -11871,7 +11880,7 @@ theorem firingsSound_of_rulesEncoded {P : Program} {src : Database} {d : FDataba
   intro r hrm σ hσ e he
   rcases hrules r hrm with ⟨s, G, i, n, hmem, rfl⟩ | hmaint
   · exact hsrc s G i n hmem hrm σ hσ e he
-  · exact maintenance_soundTerms hmaint hr hidx hsc h hσ he
+  · exact maintenance_soundTerms (mem_maintenanceRules_of_mem_all hmaint) hr hidx hsc h hσ he
 
 /-! ###### Descent, writer by writer
 
@@ -12266,7 +12275,7 @@ theorem firingsUFDescend_of_rulesEncoded {P : Program} {d : FDatabase}
   · refine execLocalActions_ufRowsDescend ?_ h he
     rw [encodeRule_actions]
     exact encodeActions_ufWriteSafe _ (s.substGlobals G).actions _
-  · exact maintenance_ufRowsDescend hmaint hr hmg h hσ he
+  · exact maintenance_ufRowsDescend (mem_maintenanceRules_of_mem_all hmaint) hr hmg h hσ he
 
 /-- One firing, unioned into the accumulator. -/
 theorem fireInto_ufRowsDescend {d acc : FDatabase} {r : Rule} {σ : Env} (hr : r ∈ d.rules)

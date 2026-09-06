@@ -10,23 +10,38 @@ over `Encoding/Correspond.lean`'s decision procedure `sameClassF`, the proof tha
 (`sameClassF_iff`, both directions, no `sorry`), and a compiled witness that its hypotheses
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
-the corpus and reports 72 of 78 agreeing, 7 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
+the corpus and reports 83 of 83 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
 `iff` is proved outright** — `encode_corresponds_complete`, no `sorryAx` — and the theorem
 carries `sorry` only through the *forward* half, in one named property of the state the run
 reached; it is one *mechanism* rather than a clause, because the clauses are derived from one
 another.
 
-**And the LOST column is now non-zero, on purpose.** The eight `glob-*` cases were added to
-settle the hazard `Egglog.unionsJoined_fire`'s docstring records: a `let`-bound global read
-from a rule's **query**, plus a `union` that makes the bound term the union-find *loser*.
-`matchQuery` reads such a variable off `d.env` on both sides, so the source asks whether some
-held term is congruent to the pattern instance while the encoded query asks for a live `@FView`
-row **keyed at** the bound term — and the rebuild's column rules carry rows towards a leader
-and never back, so no such row exists unless a build wrote one. Six of the eight lose an
-equality; `glob-keyed` and `glob-leader` are the controls that pin the mechanism. It is a
-defect in `encode` rather than a gap in a proof, and the remedies (a tenth `EncodeDomain`
-clause, a rule per `let`, a different `mergeResult`) are all changes to the encoder's
-contract.
+**Two encoder defects the LOST column caught, both now fixed.**
+
+The first is the `glob-*` family: a `let`-bound global read from a rule's **query**, plus a
+`union` that makes the bound term the union-find *loser*. The encoding left the global in the
+emitted query, so the source asked whether some held term is congruent to the pattern instance
+while the target asked for a live `@FView` row **keyed at** the bound term — and the rebuild's
+column rules carry rows towards a leader and never back, so no such row exists unless a build
+wrote one. Six of the eight cases lost an equality, seven in all; `glob-keyed` and `glob-leader`
+are the controls that pin the mechanism. `Rule.substGlobals` is the fix: a query's global is
+encoded as if the source had written the global's *definition* out, so the flattening lands on
+that definition's current e-class, which is what egglog's per-global table does by another
+route.
+
+The second is a source `Cmd.saturate`. `encodeCmd` gave it `[.saturate R, .saturate @rebuild]`,
+so the target rebuilt **once, after `R` had already settled**, and a rule of a later round read
+an earlier round's rows un-re-keyed where the specification's `Matches` closes over `Cong`.
+`DiffTest.lean`'s `sat-hit` is five commands and lost the source's `(Hit)` outright. egglog
+rebuilds after **every** iteration — `instrument_schedule`'s `Run` case is
+`(seq <run> <rebuild>)` (`egglog/src/proofs/proof_encoding.rs:1969`) and its `Saturate` case
+recurses into the loop body (`:1978-1980`), so `(run-schedule (saturate R))` runs
+`(saturate (seq (run R) <rebuild>))` — so this was `encodeCmd`'s defect and not the
+specification's. `allMaintenanceRules` is the fix: the maintenance rules join each ruleset a
+source `Cmd.saturate` names as well as `@rebuild`, and a fixpoint of the union of the two is a
+fixpoint of each. The corpus could not see it — no case used a source `Cmd.saturate` — so five
+`sat-*` cases and a generated `saturate` tail were added with it; with the fix backed out they
+report 13 LOST across 13 cases.
 The **action read-back** is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
 on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and supplies the
@@ -70,7 +85,7 @@ exactly this: `to_core_actions`, the lowering for actions, resolves a `GenericEx
 when `ctx.binding` holds it or it is a global, and raises `TypeError::Unbound` otherwise
 (`egglog/src/core.rs:663-670`) — a different error from `UnboundFunction`. The census is
 unmoved when it was added: still 70 of 166 in domain then, and `DiffTest.lean` pins the
-count, now 78 of 174.
+count, now 83 of 179.
 **Two clauses this factorisation used to run through are
 refuted** and kept as records — `Database.ReadsSelf` (every source term is an id of itself) and
 `Database.ViewsProduct` (a view entry at every id tuple the children form), both false at
