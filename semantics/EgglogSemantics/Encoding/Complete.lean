@@ -318,52 +318,9 @@ def FDatabase.NoAtEnv (d : FDatabase) : Prop := ∀ b ∈ d.env, ¬ "@".isPrefix
 
 namespace FDatabase
 
-/-- **`rules` only ever grows.** `Cmd.rule` is the one writer that extends it and no writer
-removes from it — the same case analysis `FDatabase.execCmdM_rulesEncoded` is, read in the
-other direction. -/
-theorem execCmdM_rules_mono {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') :
-    ∀ r ∈ d.rules, r ∈ d'.rules := by
-  intro r hr
-  cases c with
-  | action a =>
-      rw [FDatabase.execCmdM] at hs
-      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-      rw [(FDatabase.mergeSaturateF_fields h₂).2.2, FDatabase.execAction_rules h₁]
-      exact hr
-  | rule s =>
-      rw [FDatabase.execCmdM, Option.some.injEq] at hs
-      subst hs
-      exact List.mem_cons_of_mem s hr
-  | run R =>
-      rw [FDatabase.execCmdM] at hs
-      rw [(FDatabase.runRoundM_fields hs).2.2]
-      exact hr
-  | saturate R =>
-      rw [FDatabase.execCmdM] at hs
-      rw [(FDatabase.runSaturateM_fields runFuel hs).2.2]
-      exact hr
-  | decl f dc =>
-      rw [FDatabase.execCmdM, Option.some.injEq] at hs
-      subst hs
-      exact hr
-
-@[inherit_doc execCmdM_rules_mono]
-theorem execProgramM_rules_mono {p : Program} :
-    ∀ {d D : FDatabase}, d.execProgramM p = some D → ∀ r ∈ d.rules, r ∈ D.rules := by
-  induction p with
-  | nil =>
-    intro d D hs r hr
-    rw [FDatabase.execProgramM, Option.some.injEq] at hs
-    exact hs ▸ hr
-  | cons c cs ih =>
-    intro d D hs r hr
-    rw [FDatabase.execProgramM] at hs
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact ih h₂ r (execCmdM_rules_mono h₁ r hr)
-
-/-- **And every `Cmd.rule` of the block registers its rule.** With the monotonicity above this
-is the converse of `execProgramM_rules_of_declOrRule`: what the prelude emits, the state after
-it holds. -/
+/-- **And every `Cmd.rule` of the block registers its rule.** With
+`FDatabase.execProgramM_rules_mono` this is the converse of
+`execProgramM_rules_of_declOrRule`: what the prelude emits, the state after it holds. -/
 theorem execProgramM_mem_rules {p : Program} :
     ∀ {d D : FDatabase}, d.execProgramM p = some D → ∀ r, Cmd.rule r ∈ p → r ∈ D.rules := by
   induction p with
