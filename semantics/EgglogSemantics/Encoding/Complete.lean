@@ -7719,6 +7719,28 @@ theorem ncTgt_mem_matchQuery : ncIdSubst ∈ matchQuery ncTgt ncEncRule.query :=
 the leader `(A)`, so the id `(B)` reads to is `(A)`. -/
 theorem ncTgt_rowRepr_B : RowRepr ncTgt ncB ncA := .app .nil ncTgt_row_bview
 
+theorem ncTgt_row_aview : (⟨viewName "A", [], [ncA, ncFiat]⟩ : Row) ∈ ncTgt.rows := by decide
+
+/-- **The leader's own reading**, off the row its build wrote and nothing displaced. -/
+theorem ncTgt_rowRepr_A : RowRepr ncTgt ncA ncA := .app .nil ncTgt_row_aview
+
+/-- **`FDatabase.RowJoined.edge` where it has content**: a real `@UF` edge, two **distinct**
+source terms reading its two ends through entry terms, and one row reading for both.
+
+This is the clause `unionsJoined_fire` turns `Database.UnionsJoined`'s edge between *ids* into
+the equality an emitted `.eq` atom compares, and it is what `Database.ViewLeader` would have
+given had it been true. It is not: `(B)` reads to `(B)` and to `(A)` through entries
+(`ncTgt_ids_B`), so the entry reading has no representative here, while through live **rows**
+both `(A)` and `(B)` read to `(A)` alone — the row a merge displaced is gone where its entry
+term stays. `rbState2_rowJoined` is the same clause at the witness state, where `fn` carries
+the content and this one is vacuous. -/
+theorem ncTgt_rowJoined_edge :
+    ncTgt.toDatabase.Out ufName [ncB] [ncA, ncFiat] ∧
+      ViewRepr ncTgt.toDatabase ncB ncB ∧ ViewRepr ncTgt.toDatabase ncA ncA ∧ ncB ≠ ncA ∧
+      RowRepr ncTgt ncB ncA ∧ RowRepr ncTgt ncA ncA :=
+  ⟨ncTgt_out_uf, ncTgt_viewRepr_B, ncTgt_viewRepr_A, by simp [ncA, ncB],
+   ncTgt_rowRepr_B, ncTgt_rowRepr_A⟩
+
 /-- **And the term the source's firing built reads through it**, at the state where
 `Database.ReadsSelf` fails: `(F (B))` reads to `(F (A))`, over `(B)`'s row and then the
 `@FView` row keyed at `(A)`. -/
@@ -8484,6 +8506,218 @@ theorem ncTgt_mirror :
     ncTgt_patternRowRead 0
   exact ⟨τ, ncEncRule_query_eq ▸ hm, hx "x" ncA rfl⟩
 
+/-! #### The reading, along the source's congruence
+
+`Matches` relates a pattern's instance to a witness in `src.withOperands` — so the instance
+need not be a source term at all, and two patterns of one query can be satisfied by two
+*congruent* instances that the emitted `.eq` atom then compares as ids. Both are answered by
+one transport: the row reading is constant on a `CongOn` class, and so total on it as soon as
+the class meets `sd.terms`.
+
+Three cases carry it. `Cong.assert` is the only one with content, and it is where
+`FDatabase.RowJoined` is spent: `Database.UnionsJoined` hands the two endpoints' *ids* and an
+`@UF` edge between them, and `edge` turns that into one row reading for both, while `fn` pins
+every other reading of either endpoint to it. `Cong.congr` is `rowReprList_congr` — a parent
+read is keyed on its children's columns on the nose, so equal child readings give the same key
+and hence the same row. `Cong.symm` and `Cong.trans` are the statement being an *iff*, which is
+why it is stated that way rather than as a function.
+
+`Conservativity.mem_addTerms_eqs` is what makes `withOperands` free: it adds reflexive pairs
+and nothing else, so the operands contribute only the diagonal. -/
+
+/-- The transport read in the other direction, pointwise on an argument list. -/
+theorem forall₂_rowRepr_iff_symm {d : FDatabase} {as bs : List Term}
+    (h : List.Forall₂ (fun a b => ∀ r : Term, RowRepr d a r ↔ RowRepr d b r) as bs) :
+    List.Forall₂ (fun a b => ∀ r : Term, RowRepr d a r ↔ RowRepr d b r) bs as := by
+  induction h with
+  | nil => exact .nil
+  | cons hh _ ih => exact .cons (fun r => (hh r).symm) ih
+
+/-- **The row reading is constant on a source congruence class**, at a state an encoded block
+runs at. This is the clause the emitted `.eq` atom needs — it compares ids, and at a target
+that asserts nothing (`execM_encode_eqsRefl`) that comparison is *equality*. -/
+theorem rowRepr_congOn {sd : Database} {td : FDatabase} (hjoin : td.RowJoined)
+    (hunion : td.toDatabase.UnionsJoined sd) (hread : ∀ t ∈ sd.terms, ∃ r, RowRepr td t r)
+    {ts : List Term} {a b : Term} (hab : CongOn sd ts a b) (r : Term) :
+    RowRepr td a r ↔ RowRepr td b r := by
+  revert r
+  refine Cong.le (db := sd.withOperands ts)
+    (R := fun x y => ∀ r : Term, RowRepr td x r ↔ RowRepr td y r) ?_
+    (fun _ _ h r => (h r).symm) (fun _ _ _ h₁ h₂ r => (h₁ r).trans (h₂ r)) ?_ hab
+  · intro x y hxy
+    rcases Conservativity.mem_addTerms_eqs ts sd (x, y) hxy with hxy' | hxy'
+    · by_cases hne : x = y
+      · subst hne; exact fun _ => Iff.rfl
+      · obtain ⟨e₁, e₂, pf, hv₁, hv₂, hedge⟩ := hunion x y hxy' hne
+        obtain ⟨rx, hrx⟩ := hread x (eqsInTerms_free (Cong.assert hxy')).1
+        obtain ⟨ry, hry⟩ := hread y (eqsInTerms_free (Cong.assert hxy')).2
+        have hxy2 : rx = ry := by
+          rcases hedge with ho | ho
+          · exact hjoin.edge e₁ e₂ pf x y rx ry ho hv₁ hv₂ hrx hry
+          · exact (hjoin.edge e₂ e₁ pf y x ry rx ho hv₂ hv₁ hry hrx).symm
+        exact fun r => ⟨fun h => by rw [hjoin.fn x r rx h hrx, hxy2]; exact hry,
+          fun h => by rw [hjoin.fn y r ry h hry, ← hxy2]; exact hrx⟩
+    · obtain rfl : x = y := hxy'
+      exact fun _ => Iff.rfl
+  · intro f as bs _ _ hl r
+    refine ⟨fun h => ?_, fun h => ?_⟩
+    · cases h with
+      | app hrl hrow => exact .app (rowReprList_congr hl hrl) hrow
+    · cases h with
+      | app hrl hrow => exact .app (rowReprList_congr (forall₂_rowRepr_iff_symm hl) hrl) hrow
+
+/-- **And so the reading is total on the class of any source term**, which is the `CongUp` a
+`Matches` witness needs: the instance need not be held, only congruent to something that is. -/
+theorem exists_rowRepr_congOn {sd : Database} {td : FDatabase} (hjoin : td.RowJoined)
+    (hunion : td.toDatabase.UnionsJoined sd) (hread : ∀ t ∈ sd.terms, ∃ r, RowRepr td t r)
+    {ts : List Term} {w t : Term} (hw : w ∈ sd.terms) (hcong : CongOn sd ts w t) :
+    ∃ r, RowRepr td t r := by
+  obtain ⟨r, hr⟩ := hread w hw
+  exact ⟨r, (rowRepr_congOn hjoin hunion hread hcong r).mp hr⟩
+
+/-- **The `.eq` atom's own clause**: two congruent instances read to *one* id, which is the
+equality the emitted comparison performs. Gap (2) of the residue below, discharged. -/
+theorem rowRepr_eq_of_congOn {sd : Database} {td : FDatabase} (hjoin : td.RowJoined)
+    (hunion : td.toDatabase.UnionsJoined sd) (hread : ∀ t ∈ sd.terms, ∃ r, RowRepr td t r)
+    {ts : List Term} {a b r s : Term} (hab : CongOn sd ts a b)
+    (hr : RowRepr td a r) (hs : RowRepr td b s) : r = s :=
+  hjoin.fn b r s ((rowRepr_congOn hjoin hunion hread hab r).mp hr) hs
+
+/-! #### And the reading, at an expression
+
+`RowRead` is `RowRepr` re-indexed on the *shape of a pattern* rather than of a term, which is
+what the emitted query's generated variables are numbered against. The two are the same reading
+wherever the source's own evaluation produces the term: a source variable's id is whatever the
+environment `ρt` gives it, a literal is its own id, and an application's id is the value column
+of the row its children's ids key — which is exactly `RowRepr.app`.
+
+`Prim.ofName f = none` and `Signature.IsCtor f` are read back off the source evaluation
+itself: `Expr.eval` takes the primitive branch when the name is one, and returns `none` at a
+name the signature does not make a constructor, so an application that evaluated at all
+supplies both. The `:merge` carry is `FDatabase.IndexOk` at the row, one step of
+`encStep_ctorsIn_of_row`. -/
+
+/-- **An application that evaluated at a non-primitive name is a constructor application**,
+which is the pair of side conditions `RowRead.app` carries. `Prim.ofName f = none` is a
+hypothesis rather than a conclusion: at a primitive `Expr.eval` takes the other branch, and
+`Prim.apply`'s `if-then-else` can return an arbitrary operand, so nothing about the *result*
+rules the branch out. `Program.EncodeDomain.noPrim` is where a source query's names get it. -/
+theorem eval_app_inv {sig : Signature} {f : FnName} {args : List Expr} {ρ : Env} {t : Term}
+    (hp : Prim.ofName f = none) (h : Expr.eval sig (.app f args) ρ = some t) :
+    sig.IsCtor f ∧ ∃ ts, Expr.evalList sig args ρ = some ts ∧ t = Term.app f ts := by
+  rw [Expr.eval, hp] at h
+  by_cases hc : sig.IsCtor f
+  · rw [if_pos hc, Option.map_eq_some_iff] at h
+    obtain ⟨ts, hts, rfl⟩ := h
+    exact ⟨hc, ts, hts, rfl⟩
+  · rw [if_neg hc] at h; exact absurd h (by simp)
+
+mutual
+
+/-- **A row reading of an evaluated expression is a `RowRead` of it**, which is the residue's
+own premise in the shape `mem_matchQuery_encodeQuery` consumes. -/
+theorem rowRead_of_rowRepr {sig : Signature} {d : FDatabase} {ρs ρt : Env}
+    (hfn : ∀ t r s : Term, RowRepr d t r → RowRepr d t s → r = s)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows → (d.sig.mergeOf (viewName f)).isSome = true)
+    (hvar : ∀ (v : Var) (t : Term), Env.lookup v ρs = some t →
+      ∃ i, Env.lookup v ρt = some i ∧ RowRepr d t i) :
+    ∀ (e : Expr), (∀ g ∈ Expr.fns e, Prim.ofName g = none) → ∀ {t r : Term},
+      Expr.eval sig e ρs = some t → RowRepr d t r → RowRead sig d ρs ρt e t r
+  | .lit l, _, t, r, hev, hr => by
+      obtain rfl : t = Term.lit l := Option.some.inj hev.symm
+      cases hr; exact .lit
+  | .var v, _, t, r, hev, hr => by
+      obtain ⟨i, hi, hri⟩ := hvar v t hev
+      obtain rfl : i = r := hfn t i r hri hr
+      exact .var hev hi
+  | .app f args, hpr, t, r, hev, hr => by
+      have hp : Prim.ofName f = none := hpr f (by rw [Expr.fns]; exact List.mem_cons_self)
+      obtain ⟨hc, ts, hts, rfl⟩ := eval_app_inv hp hev
+      cases hr with
+      | app hl hrow =>
+        exact .app hp hc (hmg _ _ _ _ hrow)
+          (rowReadList_of_rowReprList hfn hmg hvar args
+            (fun g hg => hpr g (by rw [Expr.fns]; exact List.mem_cons_of_mem _ hg)) hts hl) hrow
+
+@[inherit_doc rowRead_of_rowRepr]
+theorem rowReadList_of_rowReprList {sig : Signature} {d : FDatabase} {ρs ρt : Env}
+    (hfn : ∀ t r s : Term, RowRepr d t r → RowRepr d t s → r = s)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows → (d.sig.mergeOf (viewName f)).isSome = true)
+    (hvar : ∀ (v : Var) (t : Term), Env.lookup v ρs = some t →
+      ∃ i, Env.lookup v ρt = some i ∧ RowRepr d t i) :
+    ∀ (es : List Expr), (∀ g ∈ Expr.fnsList es, Prim.ofName g = none) →
+      ∀ {ts rs : List Term}, Expr.evalList sig es ρs = some ts → RowReprList d ts rs →
+        RowReadList sig d ρs ρt es ts rs
+  | [], _, ts, rs, hev, hl => by
+      obtain rfl : ts = [] := Option.some.inj hev.symm
+      cases hl; exact .nil
+  | e :: es, hpr, ts, rs, hev, hl => by
+      rw [Expr.evalList, Option.bind_eq_some_iff] at hev
+      obtain ⟨u, hu, hev'⟩ := hev
+      rw [Option.map_eq_some_iff] at hev'
+      obtain ⟨us, hus, rfl⟩ := hev'
+      cases hl with
+      | cons ha hrest =>
+        refine .cons (rowRead_of_rowRepr hfn hmg hvar e (fun g hg => hpr g ?_) hu ha)
+          (rowReadList_of_rowReprList hfn hmg hvar es (fun g hg => hpr g ?_) hus hrest)
+        · rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inl hg)
+        · rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inr hg)
+
+end
+/-! #### And the reading, at a pattern
+
+`Matches` and `PatternRowRead` are the same statement read on the two sides: the source
+relates a pattern's instance to a **witness** it holds, up to congruence, and the target wants
+that instance read through live rows at one id per position. `exists_rowRepr_congOn` is the
+step between them — the witness has a reading and the class is constant — and the `.eq` case
+is where the two clauses of `FDatabase.RowJoined` are both spent, since the instance's two
+sides are congruent and the emitted atom compares their ids.
+
+What is still a hypothesis here is `hvar`: the target reading of the environment the source
+evaluated in. For a variable the query's own substitution binds this is the reading of the
+term it is bound to; for one a **global** binds, `matchQuery` reads the value off `d.env`, so
+the reading has to be the value itself — which is `mem_matchQuery_encodeQuery`'s `hglob`, and
+the one thing this assembly does not settle. -/
+
+/-- Every function name a pattern applies. Not in `Spec/`: only the encoding's own domain
+condition (`Program.EncodeDomain.noPrim`) reads it. -/
+def Pattern.fns : Pattern → List FnName
+  | .expr e => e.fns
+  | .eq e₁ e₂ => e₁.fns ∪ e₂.fns
+  | .values vs _ as => Expr.fnsList vs ∪ Expr.fnsList as
+
+/-- **A source match is a target reading**, given the reading of the environment it evaluated
+in. Gaps (1), (2) and (3) of the residue below at one pattern: the instance need not be a
+source term (`exists_rowRepr_congOn`), a variable gets one id (`FDatabase.RowJoined.fn`,
+through `rowRead_of_rowRepr`), and the `.eq` atom's two sides get the *same* id
+(`rowRepr_congOn`). -/
+theorem patternRowRead_of_matches {sd : Database} {td : FDatabase} {σ ρt : Env}
+    (hjoin : td.RowJoined) (hunion : td.toDatabase.UnionsJoined sd)
+    (hread : ∀ t ∈ sd.terms, ∃ r, RowRepr td t r)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
+    (hidTerm : ∀ t r : Term, RowRepr td t r → r ∈ td.terms)
+    (hvar : ∀ (v : Var) (t : Term), Env.lookup v (sd.env ++ σ) = some t →
+      ∃ i, Env.lookup v ρt = some i ∧ RowRepr td t i)
+    {p : Pattern} (hnv : p.NoValues) (hprim : ∀ g ∈ p.fns, Prim.ofName g = none)
+    (hm : Matches sd p σ) : PatternRowRead sd.sig td (sd.env ++ σ) ρt p := by
+  cases hm with
+  | expr hw hev hcong =>
+      obtain ⟨r, hr⟩ := exists_rowRepr_congOn hjoin hunion hread hw hcong
+      exact .expr (rowRead_of_rowRepr hjoin.fn hmg hvar _ hprim hev hr)
+  | eq hw hev₁ hev₂ hcw hc12 =>
+      obtain ⟨r, hr₁⟩ := exists_rowRepr_congOn hjoin hunion hread hw hcw
+      have hr₂ : RowRepr td _ r := (rowRepr_congOn hjoin hunion hread hc12 r).mp hr₁
+      exact .eq
+        (rowRead_of_rowRepr hjoin.fn hmg hvar _
+          (fun g hg => hprim g (List.mem_union_iff.mpr (Or.inl hg))) hev₁ hr₁)
+        (rowRead_of_rowRepr hjoin.fn hmg hvar _
+          (fun g hg => hprim g (List.mem_union_iff.mpr (Or.inr hg))) hev₂ hr₂)
+        (hidTerm _ r hr₁)
+  | values _ _ _ _ => exact hnv.elim
+
 /-- **The command induction's rule-firing case. Not proved.**
 
 Its statement, its five closed siblings and the refutation that fixed its hypotheses are in
@@ -8560,27 +8794,50 @@ prefix (`atPrefix_freshVar` against `FDatabase.NoAtEnv`), which is why the sourc
 sit in front of the generated ones and neither shadow the other. `ncTgt_mirror` runs it at the
 instance, and lands on the substitution `ncTgt_mem_matchQuery` exhibits by hand.
 
-**What is left is the reading, and it is not derivable from what this residue is handed.** The
-mirror's input is a `PatternRowRead`, and three things it wants are things `UnionsFire`'s
-clauses do not say.
+**The reading is written, and the three things it wanted are a derived clause.**
+`FDatabase.RowJoined` is that clause — `fn`, the reading is a function; `edge`, an `@UF` edge
+between two entry readings collapses the two row readings — threaded through `RowMech` and
+`unionsInv_step` and discharged at `EncStep` by `encStep_rowJoined`, in the shape `RowMech`
+already had and not as provenance, which would have emptied `unionsJoined_fire_satisfiable`.
+It answers all three:
 
-* **One id per source term.** `∀ t ∈ sd.terms, ∃ r, RowRepr td t r` chooses an id per term and
-  not a *function* of it, so a variable read at two atoms may be read at two ids. It is a
-  function at the state the block runs at, by `FDatabase.ViewRowUnique` (`execM_viewRowUnique`).
-* **One id per congruence class.** The emitted `.eq` atom compares ids, and at a target that
-  asserts nothing (`execM_encode_eqsRefl`) that comparison is *equality* — so two **congruent**
-  source terms have to read to one id. `Database.UnionsJoined` gives an `@UF` edge between the
-  two ids and not their equality; what closes the gap is `Database.ViewLeader`, which is not
-  among the hypotheses.
-* **The pattern instance, not only a source term.** `Matches` relates a pattern's instance to a
-  witness in `src.withOperands`, so the instance need not be in `sd.terms` at all — this side's
-  `CongUp`, and what the clause above would discharge it from.
+* **One id per source term** is `fn`, off `FDatabase.ViewRowUnique` (`encReached_viewRowUnique`)
+  and a parent read being keyed on its children's columns on the nose (`rowRepr_unique`).
+* **One id per congruence class** is `rowRepr_congOn`: the reading is constant on a `CongOn`
+  class, by induction over `Cong` with `Database.UnionsJoined`'s edge between the two *ids*
+  turned into one reading by `edge`, `rowReprList_congr` at `Cong.congr`, and
+  `Conservativity.mem_addTerms_eqs` making `withOperands` contribute only the diagonal.
+* **The pattern instance, not only a source term** is `exists_rowRepr_congOn`: the reading is
+  total on the class of any source term, so a `Matches` witness carries its instance.
 
-All three hold at the state the encoded block runs at, because a writing block ends with
-`Cmd.saturate rebuildRuleset`; none of them follows from what `UnionsFire` takes. So the next
-step is a further *derived* clause in the shape `RowMech` already has — threaded through
-`unionsInv_step` and discharged from `EncStep` — and not a provenance hypothesis, which would
-empty `unionsJoined_fire_satisfiable`.
+`patternRowRead_of_matches` is the three assembled at one pattern, over `rowRead_of_rowRepr`,
+which is `RowRepr` re-indexed on the shape of the pattern. `Prim.ofName f = none` is a
+hypothesis there and not a conclusion — `Prim.apply`'s `if-then-else` returns an operand, so
+nothing about an evaluation's *result* rules the primitive branch out — and
+`EncodeDomain.noPrim` is where a source query's names pay it.
+
+**`Database.ViewLeader` is not what closed it, and could not have been.** It is the same claim
+through entry **terms**, and it is false in general at states this development reaches
+(`chainD_not_viewLeader`): an entry a merge displaced is never removed, so `Database.Out` keeps
+reading it, and at `chainD` the ids ascend with upper bounds everywhere and no top. Through
+live **rows** the displaced row is *gone*, and a state an encoded block runs at is rooted — a
+live view row's e-class column has no outgoing `@UF` row (`encReached_viewRowsRooted`), a view
+key carries at most one row, and entry-level `@UF` reachability lands on one row root
+(`encReached_ufRowRoot_of_ufReach`). So the upper bound is a representative here and is not one
+there; `uTgt_not_viewLeader` against `uRebuilt_viewLeader` is the same bracket one rebuild
+firing apart, and `ncTgt_rowJoined_edge` is the instance: `(B)` reads to `(B)` and to `(A)`
+through entries, to `(A)` alone through rows.
+
+**What the reading still owes is `hglob`, and it is about globals and not about the three
+above.** `matchQuery` reads a variable a *global* binds off `d.env`, so
+`mem_matchQuery_encodeQuery` asks the target reading of such a variable to be the bound value
+itself — `RowRepr td s s`, where `UnionsInv.envReadsAt` supplies only `ViewRepr td s s`. The two
+part company exactly when a later `union` moves the let-bound term's row off it: `mergeResult`
+keeps `ordering-min`, so `(let x (A))` followed by a `union` with a `Term.blt`-smaller partner
+leaves `x` bound to a term no live row is keyed at. `envReadsAt` is an invariant clause and can
+be handed to the residue; the *row* reading of it is not established, and whether it holds is
+the next question this line has to answer — `difftest correspond`'s **LOST** column, 0 over the
+70 in-domain cases, is the corpus saying the hazard is not exercised there.
 
 **A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
 that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already
@@ -9630,21 +9887,127 @@ theorem execM_exists_rowRepr {P : Program} {src : Database} {tgt : FDatabase}
     ∃ r, RowRepr tgt t r :=
   encStep_exists_rowRepr hdom (execM_encStep hsrc htgt) hv
 
-/-- **`Egglog.RowMech`, discharged.** The two clauses `Egglog.UnionsFire` takes about rows, at
+/-! ### And the reading is a function, because the state is rooted
+
+`Database.ViewLeader` — a representative for the reading through **entry terms** — is false in
+general at states this development reaches (`chainD_not_viewLeader`), and the reason is that an
+entry a merge displaced is never removed, so `Database.Out` keeps reading it: at `chainD` the
+ids ascend with upper bounds everywhere and no top, and there is no representative to pick.
+
+Through live **rows** the same claim holds, and the difference is exactly rootedness. A state
+an encoded block runs at is one a `Cmd.saturate rebuildRuleset` left, so a live view row's
+e-class column has no outgoing `@UF` row (`encReached_viewRowsRooted`), a view key carries at
+most one row (`encReached_viewRowUnique`), and entry-level `@UF` reachability lands on one row
+root (`encReached_ufRowRoot_of_ufReach`). Tops exist, so the upper bound *is* a representative
+— and `uTgt_not_viewLeader` against `uRebuilt_viewLeader` is the same bracket one rebuild
+firing apart. `ncTgt_rowJoined_edge` is the instance: `(B)` reads to `(B)` and to `(A)` through
+entries and to `(A)` alone through rows. -/
+
+/-- **A live view row names a source constructor at its own key width.** `FDatabase.IndexOk`
+turns the row into its entry term — `ctor` forces the row's function to carry a `:merge`, since
+its output columns are not empty, and `entry` then reads the entry off `terms` — and
+`encStep_ctorsIn` is the source-side half at that entry. -/
+theorem encStep_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d)
+    {f : FnName} {es : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) : (f, es.length) ∈ P.ctors := by
+  have hidx := (encReached_encBase hdom h.reached).inv.index
+  have hmg : d.sig.mergeOf (viewName f) ≠ none := by
+    intro hc
+    have h0 := (hidx.ctor ⟨viewName f, es, [e, pf]⟩ hrow hc).1
+    exact absurd h0 (by simp)
+  obtain ⟨bs, hcl, hmem⟩ := hidx.entry ⟨viewName f, es, [e, pf]⟩ hrow hmg
+  obtain rfl : es = bs :=
+    CongList.eq_of_eqsRefl (encReached_eqsRefl hdom h.reached).toDatabase hcl
+  exact encStep_ctorsIn hdom h (FDatabase.mem_toDatabase_terms.mp hmem)
+
+/-- **The `:merge` carry, at a state the run passes through.** A live view row's function is a
+merge function, because its output columns are not empty and `FDatabase.IndexOk.ctor` would
+force them to be. This is the side condition `RowRead.app` carries. -/
+theorem encStep_mergeOf_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d)
+    {f : FnName} {es : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) :
+    (d.sig.mergeOf (viewName f)).isSome = true := by
+  rcases hmg : d.sig.mergeOf (viewName f) with _ | m
+  · have h0 := ((encReached_encBase hdom h.reached).inv.index.ctor
+      ⟨viewName f, es, [e, pf]⟩ hrow hmg).1
+    exact absurd h0 (by simp)
+  · rfl
+
+/-- **Every id the reading produces is an `@UF` row root**, which is the whole of what
+rootedness buys: `FDatabase.ViewRowsRooted` at an application and `encStep_ufLitRoots` at a
+literal. -/
+theorem encStep_rowRepr_root {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) {t r : Term}
+    (hr : RowRepr d t r) : d.UFRowRoot r := by
+  cases hr with
+  | lit => exact encStep_ufLitRoots hdom h _
+  | app _ hrow =>
+      exact encReached_viewRowsRooted hdom (encodeSig_isCtor_symName P)
+        (encodeSig_isCtor_transName P) h.reached _ _ (encStep_ctorsIn_of_row hdom h hrow)
+        _ _ _ hrow
+
+/-- **One term, one id**, at a state the run passes through: `rowRepr_unique` at the merge
+fixpoint's own view-key clause. -/
+theorem encStep_rowRepr_fn {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) {t r s : Term}
+    (h₁ : RowRepr d t r) (h₂ : RowRepr d t s) : r = s :=
+  rowRepr_unique (fun f as e₁ pf₁ e₂ pf₂ hr₁ hr₂ => by
+    have hu := encReached_viewRowUnique hdom (encodeSig_isCtor_symName P)
+      (encodeSig_isCtor_transName P) h.reached f as.length
+      (encStep_ctorsIn_of_row hdom h hr₁) as [e₁, pf₁] [e₂, pf₂] hr₁ hr₂
+    exact (by simpa using hu : _ ∧ _).1) h₁ h₂
+
+/-- **The reading is the root of any id the entries record**, which is `RowRepr` and `ViewRepr`
+identified: `encReached_rowRepr_of_viewRepr` answers the entry at the root, and the reading is a
+function, so the two answers are the same term. -/
+theorem encStep_rowRepr_eq_root {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) {t e r ρ : Term}
+    (hv : ViewRepr d.toDatabase t e) (hr : RowRepr d t r)
+    (hρ : d.UFRowReach e ρ) (hρr : d.UFRowRoot ρ) : ρ = r :=
+  encStep_rowRepr_fn hdom h
+    (encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
+      (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
+      (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached
+      (encStep_ufLitRoots hdom h) (fun _ _ _ _ hmem => encStep_ctorsIn hdom h hmem) hv hρ hρr)
+    hr
+
+/-- **The derived clause, discharged.** `fn` is `rowRepr_unique` at
+`FDatabase.ViewRowUnique`; `edge` is the root argument — each side's reading is the root of the
+id its entry recorded, and an `@UF` entry edge puts the two ids in one component, whose root is
+unique. Neither clause is `Database.ViewLeader`, which the same states refute. -/
+theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} (h : EncStep P pre suf sd d) : d.RowJoined where
+  fn := fun _ _ _ h₁ h₂ => encStep_rowRepr_fn hdom h h₁ h₂
+  edge := by
+    intro x y pf t u r s hout hvt hvu hrt hru
+    obtain ⟨ρx, hρx, hρxr⟩ := encReached_exists_ufRowRoot hdom h.reached x
+    obtain ⟨ρy, hρy, hρyr⟩ := encReached_exists_ufRowRoot hdom h.reached y
+    have hxr : ρx = r := encStep_rowRepr_eq_root hdom h hvt hrt hρx hρxr
+    have hys : ρy = s := encStep_rowRepr_eq_root hdom h hvu hru hρy hρyr
+    rw [← hxr, ← hys]
+    exact encReached_ufRowRoot_of_ufReach hdom (encodeSig_isCtor_symName P)
+      (encodeSig_isCtor_transName P) h.reached
+      (Database.UFStep.toReach ⟨pf, hout⟩) ρx ρy hρx hρxr hρy hρyr
+
+/-- **`Egglog.RowMech`, discharged.** The three clauses `Egglog.UnionsFire` takes about rows, at
 every state one encoded run passes through: `encStep_exists_rowRepr` is the tuple choice — a
-reading is a row reading, at the pointwise `@UF` row root — and `ViewRepr.of_rowRepr_of_indexOk`
-is the way back, off `FDatabase.IndexOk` alone.
+reading is a row reading, at the pointwise `@UF` row root — `ViewRepr.of_rowRepr_of_indexOk`
+is the way back, off `FDatabase.IndexOk` alone, and `encStep_rowJoined` is the reading being a
+function that collapses an `@UF` edge.
 
 This is what `execM_rebuildClosed` could not be asked for. Its `edged` clause is stated at an
 `execM` target and `UnionsFire` quantifies over the state the *next* block runs at, so the
 mechanism had to be restated one block short of the end; `EncStep` is that restatement, and the
 `encReached_*` family is the block inductions consuming it. Nothing was added to `UnionsFire`
-that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries both clauses at the
-witness state, non-vacuously and at positive arity. -/
+that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries all three clauses at
+the witness state, non-vacuously and at positive arity. -/
 theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain) : RowMech P :=
   fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom h hv,
     fun _ _ hr =>
-      ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom h.reached).inv.index hr⟩
+      ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom h.reached).inv.index hr,
+    encStep_rowJoined hdom h⟩
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`, at the rules it fires.**

@@ -125,7 +125,7 @@ both are decided at the witness at the end of this file.
   strengthened to every *subterm*, which is what `Database.addTerm` records. And it is not
   vacuous: `rbState2_unionsInv` is the invariant at a source state a program reaches
   (`rbProgram_programStep`) with a non-empty environment, `rbState2_unionsInv_hvar` is the
-  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's seven
+  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's ten
   hypotheses holding together, and `uRebuilt_unionsJoined` is the data clause at a source with
   a real equation.
 
@@ -3684,6 +3684,81 @@ inductive RowReprList (d : FDatabase) : List Term → List Term → Prop where
 
 end
 
+/-! ##### And what the reading is a function of
+
+`RowRepr` is a *relation*, and a firing's premise needs a **function**: an encoded query binds
+one id per source variable and compares ids on the nose at its `.eq` atoms, so a variable read
+at two atoms has to be read at one id and two **congruent** source terms have to be read at one
+id. Neither follows from the reading alone; both follow at a state an encoded block runs at,
+and `FDatabase.RowJoined` is the pair of them.
+
+**Not `Database.ViewLeader`, which is false in general** (`chainD_not_viewLeader`): that asks
+for a representative of the reading through *entry terms*, where an `@UF` edge leaves both ends
+readable and a chain with no top has no representative at all. This is the same claim one field
+down, through live **rows** — and there a state an encoded block runs at is *rooted*: a live
+view row's e-class column has no outgoing `@UF` row (`FDatabase.ViewRowsRooted`), a key carries
+at most one row (`FDatabase.ViewRowUnique`), and `@UF`-connected roots coincide. So the reading
+through rows really is a function, and really does collapse an `@UF` edge, at exactly the
+states `ViewLeader` fails at — the rows a merge displaced are **gone** where their entry terms
+remain. `Encoding/Complete.lean`'s `encStep_rowJoined` is the derivation and
+`ncTgt_rowJoined_edge` the instance where the second clause has content: `(A)` and `(B)`, the
+two ends of a real `@UF` edge and two distinct ids of the entry reading, read to one row. -/
+
+/-- **The reading through live rows is a function, and an `@UF` edge collapses it.**
+
+`fn`: one term, one id. `edge`: two terms whose entry readings an `@UF` edge joins have the
+same row reading — which is what turns `Database.UnionsJoined`'s edge between *ids* into the
+equality an emitted `.eq` atom compares. -/
+structure FDatabase.RowJoined (d : FDatabase) : Prop where
+  /-- One term, one id. -/
+  fn : ∀ t r s : Term, RowRepr d t r → RowRepr d t s → r = s
+  /-- An `@UF` edge between two entry readings collapses the two row readings. -/
+  edge : ∀ x y pf t u r s : Term, d.toDatabase.Out ufName [x] [y, pf] →
+    ViewRepr d.toDatabase t x → ViewRepr d.toDatabase u y →
+    RowRepr d t r → RowRepr d u s → r = s
+
+mutual
+
+/-- **A view key carrying one row is the whole of `FDatabase.RowJoined.fn`**, since a parent
+read is keyed on its children's columns on the nose: equal keys, equal rows, equal e-class
+column. Stated over the two rows a reading actually uses so that it can be discharged from
+`FDatabase.ViewRowUnique` at a chain state and by decision at a concrete one. -/
+theorem rowRepr_unique {d : FDatabase}
+    (hu : ∀ (f : FnName) (as : List Term) (e₁ pf₁ e₂ pf₂ : Term),
+      (⟨viewName f, as, [e₁, pf₁]⟩ : Row) ∈ d.rows →
+      (⟨viewName f, as, [e₂, pf₂]⟩ : Row) ∈ d.rows → e₁ = e₂) :
+    ∀ {t r s : Term}, RowRepr d t r → RowRepr d t s → r = s
+  | _, _, _, .lit, h => by cases h; rfl
+  | _, _, _, .app hl₁ hrow₁, h => by
+      cases h with
+      | app hl₂ hrow₂ =>
+        obtain rfl := rowReprList_unique hu hl₁ hl₂
+        exact hu _ _ _ _ _ _ hrow₁ hrow₂
+
+@[inherit_doc rowRepr_unique]
+theorem rowReprList_unique {d : FDatabase}
+    (hu : ∀ (f : FnName) (as : List Term) (e₁ pf₁ e₂ pf₂ : Term),
+      (⟨viewName f, as, [e₁, pf₁]⟩ : Row) ∈ d.rows →
+      (⟨viewName f, as, [e₂, pf₂]⟩ : Row) ∈ d.rows → e₁ = e₂) :
+    ∀ {ts rs ss : List Term}, RowReprList d ts rs → RowReprList d ts ss → rs = ss
+  | _, _, _, .nil, h => by cases h; rfl
+  | _, _, _, .cons ha hl, h => by
+      cases h with
+      | cons ha' hl' =>
+        rw [rowRepr_unique hu ha ha', rowReprList_unique hu hl hl']
+
+end
+
+/-- **Congruent argument lists with one reading**, which is `FDatabase.RowJoined` transported
+along a source congruence into the key of a parent's row. -/
+theorem rowReprList_congr {d : FDatabase} : ∀ {as bs : List Term},
+    List.Forall₂ (fun a b => ∀ r : Term, RowRepr d a r ↔ RowRepr d b r) as bs →
+      ∀ {es : List Term}, RowReprList d as es → RowReprList d bs es
+  | _, _, .nil, _, hl => by cases hl; exact .nil
+  | _, _, .cons hh ht, _, hl => by
+      cases hl with
+      | cons ha hr => exact .cons ((hh _).mp ha) (rowReprList_congr ht hr)
+
 /-! ##### The states one encoded run passes through
 
 The residue fires at a state *inside* the run — the one the next encoded block starts at — and
@@ -3773,13 +3848,23 @@ the encoded rule being one `td` holds — and the two data clauses at `td`; the 
 Stated over both firing commands at once, because `encodeCmd` gives them the same block:
 `[c, Cmd.saturate rebuildRuleset]`.
 
-**Two clauses about rows, because a firing reads rows and the invariant carries entries.**
+**Three clauses about rows, because a firing reads rows and the invariant carries entries.**
 `readsAt` is a `terms` fact and `matchQuery` reads `FDatabase.rows`, so the residue is handed
 `RowRepr` at `td` — the reading through live rows, at the state the encoded block runs at — and
-the way back at `td'`. Both are derived rather than assumed: `RowMech` is what discharges them,
-threaded alongside `EncStep`, and `Encoding/Complete.lean`'s `encStep_rowMech` proves it. The
-tuple is the pointwise `@UF` row **root**, which is the only one the column rules' walk can be
-pointed at.
+the way back at `td'`. The tuple is the pointwise `@UF` row **root**, which is the only one the
+column rules' walk can be pointed at.
+
+The third is `FDatabase.RowJoined` at `td`, and it is what makes the reading usable as a
+*substitution*: an encoded query binds one id per source variable and its `.eq` atoms compare
+ids on the nose, so a variable read at two atoms must get one id (`fn`) and two **congruent**
+source terms must get one id (`edge`, against `Database.UnionsJoined`'s edge between the two
+ids). `Database.ViewLeader` would give the second and is false in general
+(`chainD_not_viewLeader`); this is the same claim through live rows, where a merge has
+*removed* the displaced row that `ViewLeader` trips over, and it holds at every state an
+encoded block runs at.
+
+All three are derived rather than assumed: `RowMech` is what discharges them, threaded
+alongside `EncStep`, and `Encoding/Complete.lean`'s `encStep_rowMech` proves it.
 
 **The provenance is deliberately not among them.** `EncStep Q pre (c :: suf) sd td` would say
 everything these two clauses say and more, and it is what `unionsInv_step` supplies — but
@@ -3795,7 +3880,7 @@ this file: `patternHolds_values_of_mem_rows` is the only route from a row to an 
 hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_execM` and
 `execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
 answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
-restructuring of anything above. `unionsJoined_fire_satisfiable` is these nine hypotheses
+restructuring of anything above. `unionsJoined_fire_satisfiable` is these ten hypotheses
 holding together. -/
 def UnionsFire : Prop :=
   ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
@@ -3806,17 +3891,20 @@ def UnionsFire : Prop :=
     (∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e) →
     td.toDatabase.UnionsJoined sd →
     (∀ t ∈ sd.terms, ∃ r, RowRepr td t r) →
+    td.RowJoined →
     (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
-/-- **The two row clauses `UnionsFire` takes**, at every state one encoded run passes through.
-Threaded rather than proved here: `RowRepr` is the reading a firing produces and its two
+/-- **The three row clauses `UnionsFire` takes**, at every state one encoded run passes
+through. Threaded rather than proved here: `RowRepr` is the reading a firing produces, its two
 directions are `Encoding/Complete.lean`'s `encStep_exists_rowRepr` — the tuple choice, at the
-pointwise `@UF` row root — and `ViewRepr.of_rowRepr_of_indexOk`. -/
+pointwise `@UF` row root — and `ViewRepr.of_rowRepr_of_indexOk`, and `encStep_rowJoined` is the
+clause that makes the reading a function and collapses an `@UF` edge. -/
 def RowMech (Q : Program) : Prop :=
   ∀ {sd : Database} {d : FDatabase} {pre suf : Program}, EncStep Q pre suf sd d →
     (∀ t e : Term, ViewRepr d.toDatabase t e → ∃ r, RowRepr d t r) ∧
-    (∀ t r : Term, RowRepr d t r → ViewRepr d.toDatabase t r)
+    (∀ t r : Term, RowRepr d t r → ViewRepr d.toDatabase t r) ∧
+    d.RowJoined
 
 /-! ##### One command -/
 
@@ -3883,7 +3971,8 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (fun t ht => by
           obtain ⟨e, he⟩ := hinv.readsAt t ht
           exact (hmech hchain).1 t e he)
-        (hmech (.block hchain hstep hblock)).2
+        (hmech hchain).2.2
+        (hmech (.block hchain hstep hblock)).2.1
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | saturate R =>
@@ -3892,7 +3981,8 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (fun t ht => by
           obtain ⟨e, he⟩ := hinv.readsAt t ht
           exact (hmech hchain).1 t e he)
-        (hmech (.block hchain hstep hblock)).2
+        (hmech hchain).2.2
+        (hmech (.block hchain hstep hblock)).2.1
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | action a =>
@@ -4493,6 +4583,41 @@ theorem rbState2_exists_rowRepr : ∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2
   · exact ⟨_, .app .nil rbState2_row_aview⟩
   · exact ⟨_, .app (.cons (.app .nil rbState2_row_aview) .nil) rbState2_row_wview⟩
 
+/-- Whether `t` is *not* an application of `@UF`. Decidable, and the whole of what the
+`FDatabase.RowJoined.edge` clause costs at a witness state whose program has no `union`. -/
+def noUFHead (t : Term) : Bool :=
+  match t with
+  | .app g _ => !(g == ufName)
+  | _ => true
+
+set_option maxRecDepth 100000 in
+theorem rbState2_noUFHead : rbState2.terms.all noUFHead = true := by decide
+
+/-- **No `@UF` entry at the witness state**, since `rbProgram` has no `union`. -/
+theorem rbState2_no_out_uf (x y pf : Term) : ¬ rbState2.toDatabase.Out ufName [x] [y, pf] := by
+  rintro ⟨bs, -, hmem⟩
+  have h' := List.all_eq_true.mp rbState2_noUFHead _ (FDatabase.mem_toDatabase_terms.mp hmem)
+  rw [show noUFHead (Term.app ufName (bs ++ [y, pf])) = false from rfl] at h'
+  exact absurd h' (by simp)
+
+set_option maxRecDepth 100000 in
+/-- **One row per key at the witness state**, which is what makes the reading a function. -/
+theorem rbState2_rowsUnique : ∀ r₁ ∈ rbState2.rows, ∀ r₂ ∈ rbState2.rows,
+    r₁.fn = r₂.fn → r₁.args = r₂.args → r₁.out = r₂.out := by decide
+
+/-- **The derived clause `unionsJoined_fire` reads its premise through**, at the witness state.
+
+`fn` has content — `rbState2` holds two view rows and the reading really is pinned by them —
+while `edge` is vacuous here for the reason `joinedAt` is: `rbProgram` asserts nothing, so
+there is no `@UF` entry to follow. `ncTgt_rowJoined_edge` is that clause where it does work,
+at the two ends of a real edge. -/
+theorem rbState2_rowJoined : rbState2.RowJoined where
+  fn := fun _ _ _ h₁ h₂ =>
+    rowRepr_unique (fun _ _ _ _ _ _ hr₁ hr₂ => by
+      have h := rbState2_rowsUnique _ hr₁ _ hr₂ rfl rfl
+      exact (by simpa using h : _ ∧ _).1) h₁ h₂
+  edge := fun x y pf _ _ _ _ hout _ _ _ _ => absurd hout (rbState2_no_out_uf x y pf)
+
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
@@ -4500,8 +4625,11 @@ Satisfiable degenerately in the *round*, and deliberately so: the source holds n
 round adds nothing, the encoded round writes nothing either, and `hrules` is vacuous; three of
 the rest are `rbState2_unionsInv`'s own `td`-side clauses. The two row clauses are not
 degenerate — `rbState2_exists_rowRepr` reads both of `rbSrc`'s terms through live rows, the
-second at positive arity over the first's, and `rbState2_viewRepr_of_rowRepr` is the way back at
-every row the state holds. The case with content is a round that fires a head `union` — or, for
+second at positive arity over the first's, `rbState2_rowJoined`'s `fn` is pinned by the two view
+rows the state really holds, and `rbState2_viewRepr_of_rowRepr` is the way back at every row the
+state holds. `rbState2_rowJoined`'s `edge` is vacuous here for the same reason `joinedAt` is —
+no `union`, so no `@UF` entry — and `ncTgt_rowJoined_edge` is that clause at an instance with
+content. The case with content is a round that fires a head `union` — or, for
 the `reads` half of the conclusion, one that fires a head **build** — and that is where it is
 open. `difftest correspond`'s **LOST** column — `Cong src a b` without
 `SameClass tgt a b`, swept with the diagonal included over the 70 in-domain cases, rules and runs
@@ -4516,11 +4644,11 @@ theorem unionsJoined_fire_satisfiable :
       (∀ r ∈ rbSrc.rules, ∃ i n, (encodeRule i r n).1 ∈ rbState2.rules) ∧
       (∀ t ∈ rbSrc.terms, ∃ e, ViewRepr rbState2.toDatabase t e) ∧
       rbState2.toDatabase.UnionsJoined rbSrc ∧
-      (∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r) ∧
+      (∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r) ∧ rbState2.RowJoined ∧
       (∀ t r : Term, RowRepr rbState2 t r → ViewRepr rbState2.toDatabase t r) :=
   ⟨rbSrc_cmdStep_run rbRuleset, rbState2_execProgramM_run, rbState2_unionsInv.env,
     rbState2_unionsInv.state, rbState2_unionsInv.rules, rbState2_unionsInv.readsAt,
-    rbState2_unionsInv.joinedAt, rbState2_exists_rowRepr,
+    rbState2_unionsInv.joinedAt, rbState2_exists_rowRepr, rbState2_rowJoined,
     fun _ _ h => rbState2_viewRepr_of_rowRepr h⟩
 
 /-! #### The rebuild fixpoint, and the row it does not reach
