@@ -6667,6 +6667,124 @@ theorem FDatabase.UFLitsIsolated.ufRowRoot {d : FDatabase} (h : d.UFLitsIsolated
     mem_terms_of_indexOk hr hidx (r := ⟨ufName, [Term.lit l], [b, pf]⟩) hmem hmg
   exact hedge.2 (h l b pf (by simpa using hterm))
 
+
+/-! ## A view head the target holds is a source constructor
+
+`Database.Absorbs`' **application** case reads a view entry the target holds and then has to
+apply the rules to it — the rebuild rules, whose premise is the view's own read, and the
+declaration widths `Signature.MergeShape` and `Signature.MergesLegal` are stated at. All of
+those are keyed on `tgt.sig (viewName f) = some (viewDecl k)`, and nothing said that a view a
+target *holds an entry of* is one the prelude declared: `encodeSig_tables` answers from
+`Program.ctors`, which is read off the source program's syntax, and the entry is a fact about
+`tgt.terms`.
+
+The bridge between the two is the completeness half's own invariant. `execM_soundTerms` says
+every view entry term claims a source application — `EntrySound`, whose witness is a term the
+*source* holds at the entry's key width — and `ctorsIn_of_programStep` says every application
+a source run holds is one the program makes. So the chain is: entry term, source term,
+`Program.ctors`, declaration. No new invariant on the target, and no clause of the domain. -/
+
+/-- **A view entry term names a source constructor, at its own key width.** The source run is
+the hypothesis that supplies it, through the completeness half's `FDatabase.SoundTerms` — the
+same `hsrc` `execM_rebuildClosed` already takes. -/
+theorem execM_viewDecl_of_mem_terms {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) {f : FnName} {es : List Term} {e pf : Term}
+    (hmem : Term.app (viewName f) (es ++ [e, pf]) ∈ tgt.terms) :
+    tgt.sig (viewName f) = some (viewDecl es.length) ∧
+      tgt.sig (termName f) = some (termDecl es.length) := by
+  obtain ⟨as, hasrc, hcl, -⟩ := (execM_soundTerms hdom hsrc htgt).1 f es e pf hmem
+  have hlen : as.length = es.length := hcl.length_eq
+  have hctor : (f, es.length) ∈ P.ctors := by
+    rw [← hlen]; exact ctorsIn_of_programStep hdom hsrc f as hasrc
+  have hsig : tgt.sig = encodeSig P := (execM_encode_encBase hdom hdom.aritiesAgree' htgt).sig
+  rw [hsig]
+  exact encodeSig_tables hdom hdom.aritiesAgree' hctor
+
+/-- **And the view carries a `:merge`**, which is what every reader of a view row spends:
+`FDatabase.IndexOk.entry` reads a row as an entry only at a merge function, and
+`Signature.MergeShape` is stated at the declaration. -/
+theorem execM_mergeOf_viewName_of_mem_terms {P : Program} {src : Database} {tgt : FDatabase}
+    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
+    (htgt : execM (encode P) = some tgt) {f : FnName} {es : List Term} {e pf : Term}
+    (hmem : Term.app (viewName f) (es ++ [e, pf]) ∈ tgt.terms) :
+    tgt.sig.mergeOf (viewName f) ≠ none := by
+  rw [Signature.mergeOf, (execM_viewDecl_of_mem_terms hdom hsrc htgt hmem).1]
+  simp [viewDecl]
+
+/-- **Non-vacuous at positive arity, and at the entry's own width.** `rbProgram` builds
+`(W (A))`, so `Program.ctors` carries `("W", 1)` (`rbSrc_ctorsIn_W`) and the prelude declared
+the view at width **one** — the width a `@WView` entry's key has, not the nullary width every
+constructor-only program's prelude also installs. -/
+theorem rbProgram_viewDecl_W :
+    ("W", 1) ∈ rbProgram.ctors ∧ encodeSig rbProgram (viewName "W") = some (viewDecl 1) :=
+  ⟨rbSrc_ctorsIn_W.2,
+    (encodeSig_tables rbProgram_encodeDomain rbProgram_encodeDomain.aritiesAgree'
+      rbSrc_ctorsIn_W.2).1⟩
+
+/-! ## The literal-value clause's source-side half
+
+`FDatabase.UFLitsIsolated`'s remaining obligation is a run-wide two-clause invariant over the
+four writers of an `@UF` entry — no `@UF` row records a literal value, no view row records a
+literal e-class column — and one of the four is the **top-level source `union`**, which no
+syntactic clause of the domain excludes. What excludes it is the source run, and the step from
+the source's own refusal (`cmdStep_union_notLit`) to the encoded block's write is exactly the
+environment alignment: `encodeBuild_fst` makes the block evaluate the source's own two
+expressions, `execM_env` and `envAligned_step` make it do so in the source's own environment,
+and `Expr.eval_sigIndep` says the two signatures cannot disagree about the value.
+
+That step is below, standalone. The three remaining writers — a rule head's `union`
+(`Program.EncodeDomain.noLitUnion`), `mergeBody` at either table, and `pathCompressRule` — are
+what the two-clause induction still owes. -/
+
+/-- **The encoded block's `@UF` endpoints are the source's own two terms, and neither is a
+literal.** The `union` head the encoder emits is
+`set @UF [ordering-max e₁ e₂] [ordering-min e₁ e₂, @Fiat]` over the *source* expressions
+(`encodeBuild_fst`), so this is `cmdStep_union_notLit` transported along the alignment. -/
+theorem union_target_notLit {sd sd' : Database} {sig : Signature} {σ : Env} {e₁ e₂ : Expr}
+    {t₁ t₂ : Term}
+    (hstep : CmdStep sd (Cmd.action (Action.union e₁ e₂)) sd') (henv : σ = sd.env)
+    (h₁ : e₁.eval sig σ = some t₁) (h₂ : e₂.eval sig σ = some t₂) :
+    t₁.isLit = false ∧ t₂.isLit = false := by
+  obtain ⟨u₁, u₂, hu₁, hu₂, hl₁, hl₂⟩ := cmdStep_union_notLit hstep
+  rw [← henv] at hu₁ hu₂
+  exact ⟨by rw [Expr.eval_sigIndep e₁ h₁ hu₁]; exact hl₁,
+    by rw [Expr.eval_sigIndep e₂ h₂ hu₂]; exact hl₂⟩
+
+/-- **And the `@UF` entry it writes is between those two**, so a top-level `union` writes no
+`@UF` edge with a literal at either end. `out_uf_of_execProgramM` is the read-back; the
+orientation is `ordering-max`'s and is existential for the reason it is there. -/
+theorem union_out_uf_notLit {sd sd' : Database} {td D : FDatabase} {e₁ e₂ : Expr} {t₁ t₂ : Term}
+    {p : Program}
+    (hstep : CmdStep sd (Cmd.action (Action.union e₁ e₂)) sd') (henv : td.env = sd.env)
+    (hrun : td.execProgramM
+      (Cmd.action (.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]) :: p) = some D)
+    (h₁ : e₁.eval td.sig td.env = some t₁) (h₂ : e₂.eval td.sig td.env = some t₂) :
+    ((∃ pf, D.toDatabase.Out ufName [t₁] [t₂, pf]) ∨
+        ∃ pf, D.toDatabase.Out ufName [t₂] [t₁, pf]) ∧
+      t₁.isLit = false ∧ t₂.isLit = false :=
+  ⟨out_uf_of_execProgramM hrun h₁ h₂, union_target_notLit hstep henv h₁ h₂⟩
+
+/-- **The last command of `uProgram` is a top-level `union`**, which is what makes the two
+theorems above about something. -/
+theorem uSrcBase_cmdStep_union :
+    CmdStep uSrcBase (Cmd.action (Action.union (.app "A" []) (.app "B" []))) uSrcD := by
+  refine ⟨uSrcD, ?_, .refl⟩
+  change cmdEffect _ (.action (.union (.app "A" []) (.app "B" []))) = some uSrcD
+  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, uSrcD, uA, uB]
+  rfl
+
+/-- **And the transport is non-vacuous**, at the *encoded* signature and not at the source's:
+`uSig` is what the prelude of `encode uProgram` installs, `(A)` and `(B)` evaluate there too,
+and neither is a literal. -/
+theorem uSrc_union_target_notLit :
+    (Expr.app "A" []).eval uSig uSrcBase.env = some uA ∧
+      (Expr.app "B" []).eval uSig uSrcBase.env = some uB ∧
+      uA.isLit = false ∧ uB.isLit = false := by
+  have hA : (Expr.app "A" []).eval uSig uSrcBase.env = some uA := rfl
+  have hB : (Expr.app "B" []).eval uSig uSrcBase.env = some uB := rfl
+  exact ⟨hA, hB, union_target_notLit uSrcBase_cmdStep_union rfl hA hB⟩
+
 /-! ## The forward half's residue, and the correspondence
 
 `Database.RebuildClosed` and its four consumers are stated here and not in
@@ -6878,19 +6996,38 @@ the clause reduces to "no `@UF` entry between two **distinct** literals".
 `FDatabase.UFLitsIsolated.ufRowRoot` is the reading `Database.Absorbs` consumes at a literal.
 
 **What is left of it is the *value* half, and the writers to check are four rather than three.**
-An `@UF` entry between two literals could come from a top-level source `union` (excluded by
-`hsrc`, through `cmdStep_union_notLit` and the environment alignment that makes the target
-evaluate the source's own expressions — `encodeBuild_fst`), from a rule head (excluded by
-`Program.EncodeDomain.noLitUnion`), from `mergeBody`, or — the writer the three-way reading
-misses — from `pathCompressRule`, whose head copies an existing row's value. And `mergeBody`
-runs at `@UF`'s own table as well as at a view's, so "the e-class column is always the skolem
-`.app f es`" covers one of its two instances and not the other. So the residual obligation is a
-run-wide invariant with two clauses — no `@UF` row records a literal value, and no view row
-records a literal e-class column — which are mutually recursive across `mergeBody` and the
-e-class rebuild rule. The source-to-target environment alignment the exclusion needs is no
-longer part of that: `execM_env` is it standalone — its own command induction, carrying
-`Database.CtorState` and nothing about equalities — so this residue no longer waits on
-`unionsJoined_fire`.
+An `@UF` entry between two literals could come from a top-level source `union`, from a rule
+head (excluded by `Program.EncodeDomain.noLitUnion`), from `mergeBody`, or — the writer the
+three-way reading misses — from `pathCompressRule`, whose head copies an existing row's value.
+And `mergeBody` runs at `@UF`'s own table as well as at a view's, so "the e-class column is
+always the skolem `.app f es`" covers one of its two instances and not the other.
+
+**The first of the four is paid.** `union_target_notLit` is it: `cmdStep_union_notLit` is the
+source's own refusal, `encodeBuild_fst` makes the encoded block evaluate the source's own two
+expressions, `execM_env` — the environment alignment, now standalone, its own command
+induction carrying `Database.CtorState` and nothing about equalities — makes it do so in the
+source's own environment, and `Expr.eval_sigIndep` says the two signatures cannot disagree
+about the value. `union_out_uf_notLit` is the same at the `@UF` entry the block writes, and
+`uSrc_union_target_notLit` is it at a top-level `union` a program actually runs, transported
+to the *encoded* signature. So this residue no longer waits on `unionsJoined_fire` either.
+
+**What is left is the other three**, as a run-wide invariant with two clauses — no `@UF` row
+records a literal value, and no view row records a literal e-class column — which are mutually
+recursive across `mergeBody` and the e-class rebuild rule. Its induction is
+`execM_ufTermsDescend`'s, writer for writer, and none of it is written.
+
+**And a side condition the clauses read but nothing stated, now discharged.** The `app` case
+of `Database.Absorbs` reads a view entry the target holds and then applies the *rules* to it,
+and every one of those is keyed on `tgt.sig (viewName f) = some (viewDecl k)` — that a view
+head the target holds an entry of is a source constructor, at the entry's own key width.
+`execM_viewDecl_of_mem_terms` is it, and it is not a new invariant on the target: the chain is
+the completeness half's own. `execM_soundTerms` answers a view entry term with a *source*
+application at the entry's key width (`EntrySound`), and `ctorsIn_of_programStep` says every
+application a source run holds is one the program makes — `Database.CtorsInState`, which is
+`Database.NoLits`' shape and carried for its reason, a firing evaluating a head the state
+carries rather than one the command names. `encodeSig_tables` closes it, and
+`execM_mergeOf_viewName_of_mem_terms` is the `:merge` every reader of a view row spends.
+`rbProgram_viewDecl_W` is the chain end to end at positive arity.
 
 **And what `edged` and `column` still owe is one mechanism, the column rules at the fixpoint.**
 With the identification in hand every clause answers with the **`@UF` row root** of the id it is
