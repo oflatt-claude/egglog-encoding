@@ -5044,6 +5044,314 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
   rw [eclassRule, execLocalActions]
   simp only [execActions, Egglog.execAction, hcs, Option.bind_some, hout, Option.map_some]
 
+/-! ### The other rebuild rule
+
+`rebuildRules` emits one rule per child column beside the e-class rule, and the two are the same
+shape at the same size: one view atom, one `@UF` atom, one `set`. What differs is where the
+`@UF` atom is keyed — column `i` rather than the e-class column — and therefore where the head
+writes: the e-class rule re-`set`s the row at **its own key**, and the column rule re-`set`s it
+at a **different** one, keeping the e-class it read and composing a congruence step into the
+proof. That difference is the whole reason the descent contradiction that closes
+`no_ufRowEdge_of_rowsClosed` has no counterpart here.
+
+Below is that rule named, its firing proved through the same three lemmas
+(`mem_matchQuery_of_lookup`, `patternHolds_values_of_mem_rows`, `mem_rows_execRunRules`), and the
+evaluation of the proof term its head builds — `@Trans (@Sym (@Congr_k @Fiat … @q … @Fiat)) @p`,
+whose four heads are the four `Signature.IsCtor` hypotheses the theorem carries. -/
+
+theorem Prim.ofName_of_atPrefix {s : FnName} (h : "@".isPrefixOf s = true) :
+    Prim.ofName s = none := by
+  unfold Prim.ofName
+  split <;> first
+    | rfl
+    | exact absurd h (by decide +kernel)
+
+theorem atPrefix_colVar (i : Nat) : "@".isPrefixOf ("@c" ++ toString i) = true := by
+  rw [String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
+    show ("@c").toList = ['@', 'c'] from by decide]
+  exact ⟨'c' :: (toString i).toList, rfl⟩
+
+theorem prim_ofName_congrName {k : Nat} : Prim.ofName (congrName k) = none :=
+  Prim.ofName_of_atPrefix (by
+    rw [congrName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
+      show ("@Congr_").toList = ['@', 'C', 'o', 'n', 'g', 'r', '_'] from by decide]
+    exact ⟨['C', 'o', 'n', 'g', 'r', '_'] ++ (toString k).toList, rfl⟩)
+
+/-- The column-`i` rebuild rule of a `k`-ary constructor, named. -/
+def columnRule (f : FnName) (k i : Nat) : Rule :=
+  { query := [.values [.var "@e", .var "@p"] (viewName f) (rebuildVars k),
+              .values [.var "@x", .var "@q"] ufName [.var ("@c" ++ toString i)]],
+    actions := [.set (viewName f) ((rebuildVars k).set i (.var "@x"))
+      [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]],
+    ruleset := rebuildRuleset }
+
+theorem columnRule_mem_maintenanceRules {P : Program} {f : FnName} {k i : Nat}
+    (h : (f, k) ∈ P.ctors) (hi : i < k) : columnRule f k i ∈ maintenanceRules P := by
+  rw [maintenanceRules, List.mem_cons]
+  refine Or.inr (List.mem_flatMap.mpr ⟨(f, k), h, ?_⟩)
+  change columnRule f k i ∈ rebuildRules f k
+  rw [rebuildRules]
+  exact List.mem_cons_of_mem _ (List.mem_map.mpr ⟨i, List.mem_range.mpr hi, rfl⟩)
+
+theorem mem_freeVars_columnRule {d : FDatabase} {f : FnName} {k i : Nat} (hi : i < k) {v : Var}
+    (h : v ∈ Query.freeVars (columnRule f k i).query d.env) :
+    v = "@e" ∨ v = "@p" ∨ v = "@x" ∨ v = "@q" ∨ v ∈ rebuildVarNames k := by
+  obtain ⟨p, hp, hv⟩ := Query.mem_freeVars.mp h
+  have hp2 : p = Pattern.values [.var "@e", .var "@p"] (viewName f) (rebuildVars k) ∨
+      p = Pattern.values [.var "@x", .var "@q"] ufName [.var ("@c" ++ toString i)] := by
+    simpa [columnRule] using hp
+  rcases hp2 with rfl | rfl
+  · rw [rebuildVars_eq_map] at hv
+    rcases freeVars_values_subset (vs := ["@e", "@p"]) hv with h' | h'
+    · rcases List.mem_cons.mp h' with rfl | h''
+      · exact Or.inl rfl
+      · exact Or.inr (Or.inl (by simpa using h''))
+    · exact Or.inr (Or.inr (Or.inr (Or.inr h')))
+  · rcases freeVars_values_subset (vs := ["@x", "@q"]) (cs := ["@c" ++ toString i]) hv with h' | h'
+    · rcases List.mem_cons.mp h' with rfl | h''
+      · exact Or.inr (Or.inr (Or.inl rfl))
+      · exact Or.inr (Or.inr (Or.inr (Or.inl (by simpa using h''))))
+    · refine Or.inr (Or.inr (Or.inr (Or.inr ?_)))
+      obtain rfl : v = "@c" ++ toString i := by simpa using h'
+      rw [rebuildVarNames, List.mem_map]
+      exact ⟨i, List.mem_range.mpr hi, rfl⟩
+
+theorem mem_freeVars_ufc {d : FDatabase} (hnoat : d.NoAtEnv) {i : Nat} {v : Var}
+    (h : v = "@x" ∨ v = "@q" ∨ v = "@c" ++ toString i) :
+    v ∈ (Pattern.values [Expr.var "@x", Expr.var "@q"] ufName
+      [Expr.var ("@c" ++ toString i)]).freeVars d.env := by
+  have hn : Env.lookup v d.env = none := by
+    refine lookup_env_eq_none hnoat ?_
+    rcases h with rfl | rfl | rfl
+    · exact (by decide +kernel : "@".isPrefixOf "@x" = true)
+    · exact (by decide +kernel : "@".isPrefixOf "@q" = true)
+    · exact atPrefix_colVar i
+  refine mem_freeVars_values (vs := ["@x", "@q"]) (cs := ["@c" ++ toString i]) hn ?_
+  rcases h with rfl | rfl | rfl
+  · exact Or.inl List.mem_cons_self
+  · exact Or.inl (List.mem_cons_of_mem _ List.mem_cons_self)
+  · exact Or.inr List.mem_cons_self
+
+end Egglog
+
+namespace Egglog
+
+theorem Expr.evalList_map {sig : Signature} {α : Type} (g : α → Expr) (h : α → Term) (ρ : Env) :
+    ∀ (l : List α), (∀ a ∈ l, Expr.eval sig (g a) ρ = some (h a)) →
+      Expr.evalList sig (l.map g) ρ = some (l.map h)
+  | [], _ => rfl
+  | a :: l, hp => by
+      rw [List.map_cons, Expr.evalList, hp a List.mem_cons_self, Option.bind_some,
+        Expr.evalList_map g h ρ l (fun b hb => hp b (List.mem_cons_of_mem _ hb)),
+        Option.map_some, List.map_cons]
+
+theorem evalList_rebuildVars_set {sig : Signature} {k i : Nat} {as : List Term} {x : Term}
+    {ρ : Env} (hlen : as.length = k) (hx : Env.lookup "@x" ρ = some x)
+    (h : ∀ (j : Nat) (hj : j < k), Env.lookup ("@c" ++ toString j) ρ = some (as[j]'(by omega))) :
+    Expr.evalList sig ((rebuildVars k).set i (.var "@x")) ρ = some (as.set i x) := by
+  rw [rebuildVars_eq_map, ← List.map_set]
+  refine Expr.evalList_map_var _ _ _ (by simp [length_rebuildVarNames, hlen]) (fun j hj hj' => ?_)
+  rw [List.length_set, length_rebuildVarNames] at hj
+  rw [List.getElem_set, List.getElem_set]
+  by_cases hji : i = j
+  · subst hji; rw [if_pos rfl, if_pos rfl]; exact hx
+  · rw [if_neg hji, if_neg hji, getElem_rebuildVarNames hj]
+    exact h j hj
+
+/-- The child proofs a column-`i` rebuild firing evaluates: the edge's proof at `i`, `@Fiat`
+elsewhere. -/
+def congrProofs (k i : Nat) (q : Term) : List Term :=
+  (List.range k).map fun j => if j = i then q else Term.app fiatName []
+
+theorem length_congrChildren (k i : Nat) : (congrChildren k i).length = k := by
+  simp [congrChildren]
+
+theorem evalList_congrChildren {sig : Signature} {k i : Nat} {q : Term} {ρ : Env}
+    (hfi : sig.IsCtor fiatName) (hq : Env.lookup "@q" ρ = some q) :
+    Expr.evalList sig (congrChildren k i) ρ = some (congrProofs k i q) := by
+  rw [congrChildren, congrProofs]
+  refine Expr.evalList_map _ _ _ _ (fun j _ => ?_)
+  by_cases hj : j = i
+  · rw [if_pos hj, if_pos hj]; exact hq
+  · rw [if_neg hj, if_neg hj, fiatE,
+      Expr.eval_app_ctor (show Prim.ofName fiatName = none from rfl) hfi]
+    rfl
+
+/-- The proof a column-`i` rebuild firing records. -/
+def columnProof (k i : Nat) (pf q : Term) : Term :=
+  Term.app transName [Term.app symName [Term.app (congrName k) (congrProofs k i q)], pf]
+
+theorem eval_columnProof {sig : Signature} {k i : Nat} {pf q : Term} {ρ : Env}
+    (hfi : sig.IsCtor fiatName) (hsy : sig.IsCtor symName) (hcg : sig.IsCtor (congrName k))
+    (htr : sig.IsCtor transName)
+    (hp : Env.lookup "@p" ρ = some pf) (hq : Env.lookup "@q" ρ = some q) :
+    Expr.eval sig (transE (symE (congrE (congrChildren k i))) (.var "@p")) ρ
+      = some (columnProof k i pf q) := by
+  have hcong : Expr.eval sig (congrE (congrChildren k i)) ρ
+      = some (Term.app (congrName k) (congrProofs k i q)) := by
+    rw [congrE, length_congrChildren,
+      Expr.eval_app_ctor prim_ofName_congrName hcg, evalList_congrChildren hfi hq]
+    rfl
+  have hsym : Expr.eval sig (symE (congrE (congrChildren k i))) ρ
+      = some (Term.app symName [Term.app (congrName k) (congrProofs k i q)]) := by
+    rw [symE, Expr.eval_app_ctor (show Prim.ofName symName = none from rfl) hsy,
+      Expr.evalList, hcong, Option.bind_some, Expr.evalList]
+    rfl
+  rw [transE, Expr.eval_app_ctor (show Prim.ofName transName = none from rfl) htr,
+    Expr.evalList, hsym, Option.bind_some, Expr.evalList, Expr.eval, hp, Option.bind_some,
+    Expr.evalList]
+  rfl
+
+
+/-- **A column rebuild rule fires**, at a view row and the `@UF` row above its column `i`:
+the row it writes carries the same e-class column, the key with column `i` moved to the edge's
+far end, and the congruence proof of the move. Sibling of `eclassRule_fires`. -/
+theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encodeSig P))
+    (hcv : d.RowColumnsValued) {f : FnName} {k : Nat}
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName) (hcg : (encodeSig P).IsCtor (congrName k))
+    (hfk : (f, k) ∈ P.ctors)
+    (hmg : (d.sig.mergeOf (viewName f)).isSome = true)
+    (hmguf : (d.sig.mergeOf ufName).isSome = true)
+    {as : List Term} (hlen : as.length = k) {i : Nat} (hi : i < k) {e pf x q ci : Term}
+    (hci : as[i]? = some ci)
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows)
+    (huf : (⟨ufName, [ci], [x, q]⟩ : Row) ∈ d.rows) :
+    (⟨viewName f, as.set i x, [e, columnProof k i pf q]⟩ : Row) ∈
+      (execRunRules rebuildRuleset d).rows := by
+  have hilen : i < as.length := by omega
+  have hcieq : as[i]'hilen = ci := by
+    rw [List.getElem?_eq_getElem hilen] at hci; exact Option.some.inj hci
+  set τ := eclassSubst k as e pf x q with hτ
+  set qy := (columnRule f k i).query with hqy
+  have hvrow := hcv _ hrow
+  have hvuf := hcv _ huf
+  have hve : e ∈ d.valueTerms := hvrow e (by simp)
+  have hvp : pf ∈ d.valueTerms := hvrow pf (by simp)
+  have hvx : x ∈ d.valueTerms := hvuf x (by simp)
+  have hvq : q ∈ d.valueTerms := hvuf q (by simp)
+  have hvc : ∀ t ∈ as, t ∈ d.valueTerms := fun t ht => hvrow t (by simp [ht])
+  have hat : ∀ v ∈ Query.freeVars qy d.env, "@".isPrefixOf v = true := by
+    intro v hv
+    rcases mem_freeVars_columnRule hi hv with rfl | rfl | rfl | rfl | hv'
+    · exact (by decide +kernel : "@".isPrefixOf "@e" = true)
+    · exact (by decide +kernel : "@".isPrefixOf "@p" = true)
+    · exact (by decide +kernel : "@".isPrefixOf "@x" = true)
+    · exact (by decide +kernel : "@".isPrefixOf "@q" = true)
+    · exact atPrefix_rebuildVarNames hv'
+  have hlkv : ∀ v ∈ Query.freeVars qy d.env, ∃ t, Env.lookup v τ = some t ∧ t ∈ d.valueTerms := by
+    intro v hv
+    rcases mem_freeVars_columnRule hi hv with rfl | rfl | rfl | rfl | hv'
+    · exact ⟨e, lookup_eclassSubst_e, hve⟩
+    · exact ⟨pf, lookup_eclassSubst_p, hvp⟩
+    · exact ⟨x, lookup_eclassSubst_x, hvx⟩
+    · exact ⟨q, lookup_eclassSubst_q, hvq⟩
+    · rw [rebuildVarNames, List.mem_map] at hv'
+      obtain ⟨j, hj, rfl⟩ := hv'
+      rw [List.mem_range] at hj
+      exact ⟨as[j]'(by omega), lookup_eclassSubst_col hlen hj,
+        hvc _ (List.getElem_mem (by omega))⟩
+  have hread : ∀ (vars : List Var), vars.Nodup →
+      (∀ v ∈ vars, v ∈ Query.freeVars qy d.env) → ∀ v ∈ vars,
+        Env.lookup v (d.env ++ Env.canon vars τ) = Env.lookup v τ :=
+    fun vars hnd hsub v hv => lookup_env_canon hb.noAtEnv hnd hv (hat v (hsub v hv))
+  have hv₁ : Pattern.values [Expr.var "@e", Expr.var "@p"] (viewName f) (rebuildVars k) ∈ qy :=
+    List.mem_cons_self
+  have hv₂ : Pattern.values [Expr.var "@x", Expr.var "@q"] ufName
+      [Expr.var ("@c" ++ toString i)] ∈ qy := List.mem_cons_of_mem _ List.mem_cons_self
+  have hcmem : ("@c" ++ toString i) ∈ rebuildVarNames k := by
+    rw [rebuildVarNames, List.mem_map]; exact ⟨i, List.mem_range.mpr hi, rfl⟩
+  have hr₁ : ∀ v, (v = "@e" ∨ v = "@p" ∨ v ∈ rebuildVarNames k) →
+      Env.lookup v (d.env ++ Env.canon
+        ((Pattern.values [Expr.var "@e", Expr.var "@p"] (viewName f)
+          (rebuildVars k)).freeVars d.env) τ) = Env.lookup v τ := by
+    intro v hv
+    exact hread _ (Pattern.freeVars_nodup _ d.env)
+      (fun w hw => Query.mem_freeVars.mpr ⟨_, hv₁, hw⟩) v (mem_freeVars_view hb.noAtEnv hv)
+  have hr₂ : ∀ v, (v = "@x" ∨ v = "@q" ∨ v = "@c" ++ toString i) →
+      Env.lookup v (d.env ++ Env.canon
+        ((Pattern.values [Expr.var "@x", Expr.var "@q"] ufName
+          [Expr.var ("@c" ++ toString i)]).freeVars d.env) τ) = Env.lookup v τ := by
+    intro v hv
+    exact hread _ (Pattern.freeVars_nodup _ d.env)
+      (fun w hw => Query.mem_freeVars.mpr ⟨_, hv₂, hw⟩) v (mem_freeVars_ufc hb.noAtEnv hv)
+  have hrq : ∀ v, (v = "@e" ∨ v = "@p" ∨ v = "@x" ∨ v = "@q" ∨ v ∈ rebuildVarNames k) →
+      Env.lookup v (d.env ++ Env.canon (Query.freeVars qy d.env) τ) = Env.lookup v τ := by
+    intro v hv
+    refine hread _ (Query.freeVars_nodup qy d.env) (fun w hw => hw) v ?_
+    rcases hv with rfl | rfl | rfl | rfl | hv'
+    · exact Query.mem_freeVars.mpr ⟨_, hv₁, mem_freeVars_view hb.noAtEnv (Or.inl rfl)⟩
+    · exact Query.mem_freeVars.mpr ⟨_, hv₁, mem_freeVars_view hb.noAtEnv (Or.inr (Or.inl rfl))⟩
+    · exact Query.mem_freeVars.mpr ⟨_, hv₂, mem_freeVars_ufc hb.noAtEnv (Or.inl rfl)⟩
+    · exact Query.mem_freeVars.mpr ⟨_, hv₂, mem_freeVars_ufc hb.noAtEnv (Or.inr (Or.inl rfl))⟩
+    · exact Query.mem_freeVars.mpr
+        ⟨_, hv₁, mem_freeVars_view hb.noAtEnv (Or.inr (Or.inr hv'))⟩
+  have hterm : ∀ t ∈ as ++ [e, pf], t ∈ d.terms := by
+    intro t ht
+    rcases List.mem_append.mp ht with ht' | ht'
+    · exact FDatabase.mem_terms_of_mem_valueTerms (hvc t ht')
+    · have : t = e ∨ t = pf := by simpa using ht'
+      rcases this with rfl | rfl
+      · exact FDatabase.mem_terms_of_mem_valueTerms hve
+      · exact FDatabase.mem_terms_of_mem_valueTerms hvp
+  have htermu : ∀ t ∈ [ci] ++ [x, q], t ∈ d.terms := by
+    intro t ht
+    have : t = ci ∨ t = x ∨ t = q := by simpa using ht
+    rcases this with rfl | rfl | rfl
+    · exact FDatabase.mem_terms_of_mem_valueTerms
+        (hcieq ▸ hvc _ (List.getElem_mem hilen))
+    · exact FDatabase.mem_terms_of_mem_valueTerms hvx
+    · exact FDatabase.mem_terms_of_mem_valueTerms hvq
+  have hσ : Env.canon (Query.freeVars qy d.env) τ ∈ matchQuery d qy := by
+    refine mem_matchQuery_of_lookup (fun v hv => ?_) (fun v hv t ht => ?_) (fun p hp => ?_)
+    · obtain ⟨t, ht, -⟩ := hlkv v hv; rw [ht]; rfl
+    · obtain ⟨u, hu, hval⟩ := hlkv v hv
+      rw [ht] at hu; exact (Option.some.inj hu) ▸ hval
+    · have hp2 : p = Pattern.values [.var "@e", .var "@p"] (viewName f) (rebuildVars k) ∨
+          p = Pattern.values [.var "@x", .var "@q"] ufName [.var ("@c" ++ toString i)] := by
+        simpa [hqy, columnRule] using hp
+      rcases hp2 with rfl | rfl
+      · refine patternHolds_values_of_mem_rows hmg ?_ ?_ hrow hterm
+        · refine evalList_rebuildVars hlen (fun j hj => ?_)
+          rw [hr₁ _ (Or.inr (Or.inr (by
+            rw [rebuildVarNames, List.mem_map]
+            exact ⟨j, List.mem_range.mpr hj, rfl⟩))), lookup_eclassSubst_col hlen hj]
+        · exact Expr.evalList_pair_var (hr₁ _ (Or.inl rfl) ▸ lookup_eclassSubst_e)
+            (hr₁ _ (Or.inr (Or.inl rfl)) ▸ lookup_eclassSubst_p)
+      · refine patternHolds_values_of_mem_rows hmguf ?_ ?_ huf htermu
+        · refine Expr.evalList_single_var ?_
+          rw [hr₂ _ (Or.inr (Or.inr rfl)), lookup_eclassSubst_col hlen hi, hcieq]
+        · exact Expr.evalList_pair_var (hr₂ _ (Or.inl rfl) ▸ lookup_eclassSubst_x)
+            (hr₂ _ (Or.inr (Or.inl rfl)) ▸ lookup_eclassSubst_q)
+  have hcs : Expr.evalList d.sig ((rebuildVars k).set i (.var "@x"))
+      (d.env ++ Env.canon (Query.freeVars qy d.env) τ) = some (as.set i x) := by
+    refine evalList_rebuildVars_set hlen
+      (by rw [hrq _ (Or.inr (Or.inr (Or.inl rfl)))]; exact lookup_eclassSubst_x)
+      (fun j hj => ?_)
+    rw [hrq _ (Or.inr (Or.inr (Or.inr (Or.inr (by
+      rw [rebuildVarNames, List.mem_map]
+      exact ⟨j, List.mem_range.mpr hj, rfl⟩))))), lookup_eclassSubst_col hlen hj]
+  have hout : Expr.evalList d.sig
+      [Expr.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]
+      (d.env ++ Env.canon (Query.freeVars qy d.env) τ)
+      = some [e, columnProof k i pf q] := by
+    rw [Expr.evalList, Expr.eval, hrq _ (Or.inl rfl), lookup_eclassSubst_e,
+      Option.bind_some, Expr.evalList,
+      eval_columnProof (by rw [hb.sig]; exact hfi) (by rw [hb.sig]; exact hsy)
+        (by rw [hb.sig]; exact hcg) (by rw [hb.sig]; exact htr)
+        (by rw [hrq _ (Or.inr (Or.inl rfl))]; exact lookup_eclassSubst_p)
+        (by rw [hrq _ (Or.inr (Or.inr (Or.inr (Or.inl rfl))))]; exact lookup_eclassSubst_q),
+      Option.bind_some, Expr.evalList]
+    rfl
+  refine mem_rows_execRunRules.mpr (Or.inr ⟨columnRule f k i,
+    hb.held _ (columnRule_mem_maintenanceRules hfk hi), rfl, _, hσ,
+    { FDatabase.addRow (viewName f) (as.set i x) [e, columnProof k i pf q]
+        { d with env := d.env ++ Env.canon (Query.freeVars qy d.env) τ } with
+      env := d.env, rules := d.rules }, ?_, mem_addRow_rows_self⟩)
+  change execLocalActions d (columnRule f k i).actions _ = some _
+  rw [columnRule, execLocalActions]
+  simp only [execActions, Egglog.execAction, hcs, Option.bind_some, hout, Option.map_some]
+
 /-- **The fixpoint's roots**: at a rebuild fixpoint no surviving view row's e-class column has an
 outgoing `@UF` row. The firing is `eclassRule_fires`, and `FDatabase.RowColumnsValued` — that a
 row's columns are terms `matchQuery` will assign — is `execM_rowColumnsValued` at an `execM`
@@ -6364,6 +6672,84 @@ theorem FDatabase.runSaturateM_settled' {R : RulesetName} : ∀ (n : Nat) {d e :
   rw [FDatabase.runRoundM] at hround
   exact FDatabase.mergeSaturateF_settled mergeFuel hround
 
+/-! ### What a merge phase leaves at a key, at the union-find
+
+`mergeSaturateF_rowsDescendCarry` is one reading of `mergeOneOriented_survivorUF` — the survivor's
+e-class column is `Term.blt`-at or below the one the key carried — and it is what
+`no_ufRowEdge_of_rowsClosed` spends. The **other** reading is the union-find one, and it is what
+the column rules' closure spends instead: a `Term.blt` bound cannot say that a firing's e-class
+column and the survivor's are the same point, and `Database.UFReach` between two `@UF` row roots
+can. `FDatabase.RowsCarryUF` is that reading and `mergeOneOriented_rowsCarryUF` is it at one
+firing; what is added here is the pass, the phase, and the round-level fixpoint a firing has to
+be pushed through to come back at the state it started from. -/
+
+/-- **Rows carry across one merge firing, at whichever orientation the pass chose.** -/
+theorem mergeOneWith_rowsCarryUF {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hshape : Signature.MergeShape d.sig) (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2)
+    (hne : r₁ ≠ r₂) (hm : d.mergeOneWith cl r₁ r₂ = some e) : d.RowsCarryUF e := by
+  rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he
+  · exact mergeOneOriented_rowsCarryUF hshape hidx hcl (Ne.symm hne) (he ▸ hm)
+  · exact mergeOneOriented_rowsCarryUF hshape hidx hcl hne (he ▸ hm)
+
+/-- **A merge pass carries them.** -/
+theorem mergeRound_rowsCarryUF {d : FDatabase} (hshape : Signature.MergeShape d.sig)
+    (hlegal : Signature.MergesLegal d.sig) (hinv : d.Inv) (hn : d.NoUnions) :
+    d.RowsCarryUF d.mergeRound := by
+  have hdiag : ∀ p ∈ d.closureF, p.1 = p.2 := fun _ hp => diag_closureF hn.eqsRefl hp
+  have key : d.mergeRound.Inv ∧ d.mergeRound.sig = d.sig ∧ d.mergeRound.NoUnions ∧
+      d.RowsCarryUF d.mergeRound := by
+    refine FDatabase.mergeRound_induction_ne
+      (P := fun x => x.Inv ∧ x.sig = d.sig ∧ x.NoUnions ∧ d.RowsCarryUF x)
+      ⟨hinv, rfl, hn, FDatabase.RowsCarryUF.refl d⟩
+      ⟨FDatabase.Inv.rebuild hinv FDatabase.closureSound_closureF, rfl, rebuild_noUnions hn,
+        FDatabase.RowsCarryUF.of_subset fun r hr => by
+          rw [FDatabase.rebuild_diag hdiag, List.mem_dedup]; exact hr⟩ ?_
+    intro x y r₁ r₂ hne hx hy
+    obtain ⟨htm, heq, hsg, -⟩ := FDatabase.mergeOneWith_confined hy
+    exact ⟨FDatabase.mergeOneWith_inv hx.1 (by rw [hx.2.1]; exact hlegal) hy,
+      hsg.trans hx.2.1, mergeOneWith_noUnions hx.2.2.1 hy,
+      hx.2.2.2.trans
+        (mergeOneWith_rowsCarryUF (by rw [hx.2.1]; exact hshape) hx.1.index hdiag hne hy)
+        htm heq⟩
+  exact key.2.2.2
+
+/-- **And a whole merge phase.** This is `mergeSaturateF_rowsDescendCarry`'s other reading:
+the row the phase leaves at a key carries an e-class column the union-find reaches from the one
+the key started with. -/
+theorem mergeSaturateF_rowsCarryUF : ∀ (n : Nat) {d e : FDatabase},
+    Signature.MergeShape d.sig → Signature.MergesLegal d.sig → d.Inv → d.NoUnions →
+    FDatabase.mergeSaturateF n d = some e → d.RowsCarryUF e
+  | 0, d, e, _, _, _, _, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun
+        exact hrun ▸ FDatabase.RowsCarryUF.refl d
+      · exact absurd hrun (by simp)
+  | n + 1, d, e, hshape, hlegal, hinv, hn, hrun => by
+      rw [FDatabase.mergeSaturateF] at hrun
+      split at hrun
+      · rw [Option.some.injEq] at hrun
+        exact hrun ▸ FDatabase.RowsCarryUF.refl d
+      · have hsig : d.mergeRound.sig = d.sig := FDatabase.mergeRound_confined.2.2.1
+        exact (mergeRound_rowsCarryUF hshape hlegal hinv hn).trans
+          (mergeSaturateF_rowsCarryUF n (by rw [hsig]; exact hshape)
+            (by rw [hsig]; exact hlegal) (FDatabase.Inv.mergeRound_of_legalMerges hinv hlegal)
+            (mergeRound_noUnions hn) hrun)
+          (FDatabase.mergeSaturateF_terms hrun) (FDatabase.mergeSaturateF_eqs hrun)
+
+/-- **A saturating run's state is a round's own fixpoint.** `FDatabase.runSaturateM_settled'`
+reads the same branch for `FDatabase.settled`; this reads it for the round itself, which is
+what a firing has to be pushed through to come back at the state it started from. -/
+theorem FDatabase.runSaturateM_roundFixed {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateM R n = some e → e.runRoundM R = some e := by
+  intro n d e hs
+  obtain ⟨e', hround, hsame⟩ := FDatabase.runSaturateM_settled n hs
+  obtain ⟨hsig, henv, hrules⟩ := FDatabase.runRoundM_fields hround
+  simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at hsame
+  obtain ⟨⟨hterms, hrows⟩, heqs⟩ := hsame
+  obtain rfl : e' = e := by cases e'; cases e; simp_all
+  exact hround
+
 /-- **The fixpoint's roots as a property of a state**: no e-class column a live view row
 records has an outgoing `@UF` row. `no_ufRowEdge_of_rowsClosed` is this at one rebuild
 fixpoint; `execM_viewRowsRooted` is it at the state `execM` returned. -/
@@ -6542,6 +6928,330 @@ theorem execM_viewRowsRooted {P : Program} (hdom : P.EncodeDomain)
   exact viewRowsRooted_encodeCmds hdom hsy htr P (fun _ hc => hc) 0 0 h₀ hr₀ hcmds
 
 
+
+/-! ## The column rules at their fixpoint, run-wide
+
+`execM_viewRowsRooted` is the e-class rule's fixpoint fact: a live view row's e-class column is a
+root. The column rules' fixpoint fact is **not** its analogue at the key — a superseded key is
+never vacated, since only a collision at *one* key removes a row, so a live view row's key column
+need not be a root and the column rule's conclusion sits at a different key from its premise.
+What the fixpoint delivers instead is a **closure**: the row at the moved key is one the state
+already holds.
+
+The establishment is `columnRule_fires` pushed through the merge phase by
+`mergeSaturateF_rowsCarryUF` and back to the state it started at by
+`FDatabase.runSaturateM_roundFixed` — which is `FDatabase.runSaturateM_settled'`'s branch read
+for the round rather than for `FDatabase.settled`, and is what replaces `FDatabase.RowsClosed`
+here: a firing's row has to come back at the **same** state for the closure to be about that
+state's rows. The carry across the two block shapes that run no rebuild is
+`encodeCmd_rebuilds_or_dataFixed`, at the three fields `Database.UFReach` reads and not at `rows`
+alone.
+
+The walk is then the closure iterated: `execM_columnRow_step` makes the e-class column *exact*
+rather than merely reachable — both ends are e-class columns of live view rows, so
+`execM_viewRowsRooted` makes both `@UF` row roots and `execM_ufRowRoot_of_ufReach` identifies
+them — `execM_columnRow_walk` follows one column's chain, and
+`execM_viewRow_of_rowReachList` moves every column at once.
+
+**What this does and does not settle of `Database.RebuildClosed`.** It is stated over
+`FDatabase.UFRowReach`, over live `@UF` **rows**, because that is what a firing can read. Both
+open clauses are stated over `Database.Lands`, whose reachability half is `Database.UFReach`,
+over `@UF` **entries**. `execM_ufRowRoot_of_ufReach` identifies the two only at their *roots*, so
+what the walk delivers for a tuple `es` is the row at the pointwise-**root** tuple and not the row
+at an arbitrary `Database.Lands` target. `edged` wants exactly the root tuple and is therefore
+what this unblocks; `column` quantifies over every `Database.Lands` target and additionally owes
+that such a target of a live key column is itself an `@UF` row root. -/
+
+/-- **The column rules' closure as a property of a state**: a live view row's key column may be
+moved along a live `@UF` row, and the row at the moved key is one the state already holds, at an
+e-class column the union-find reaches from the one the row started with. -/
+def FDatabase.ViewRowsColumnClosed (d : FDatabase) (P : Program) : Prop :=
+  ∀ (f : FnName) (k : Nat), (f, k) ∈ P.ctors → ∀ (as : List Term) (e pf : Term),
+    (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows → ∀ (i : Nat) (ci x : Term),
+      as[i]? = some ci → d.UFRowEdge ci x →
+      ∃ e' pf', (⟨viewName f, as.set i x, [e', pf']⟩ : Row) ∈ d.rows ∧
+        d.toDatabase.UFReach e e'
+
+/-- **A writer that changes no row, term or equation carries it.** -/
+theorem FDatabase.ViewRowsColumnClosed.of_data_eq {d D : FDatabase} {P : Program}
+    (h : d.ViewRowsColumnClosed P) (hrows : D.rows = d.rows) (hterms : D.terms = d.terms)
+    (heqs : D.eqs = d.eqs) : D.ViewRowsColumnClosed P := by
+  intro f k hfk as e pf hrow i ci x hci hedge
+  obtain ⟨⟨q, hq⟩, hne⟩ := hedge
+  obtain ⟨e', pf', hrow', hreach⟩ :=
+    h f k hfk as e pf (hrows ▸ hrow) i ci x hci ⟨⟨q, hrows ▸ hq⟩, hne⟩
+  refine ⟨e', pf', hrows ▸ hrow', Database.UFReach.mono (fun t ht => ?_) (fun p hp => ?_) hreach⟩
+  · rw [hterms]; exact ht
+  · rw [heqs]; exact hp
+
+/-- **One rebuild fixpoint delivers the column closure.** `columnRule_fires` at the state
+`Cmd.saturate rebuildRuleset` returned, pushed through the merge phase by
+`mergeSaturateF_rowsCarryUF` and back to the state it started at by
+`FDatabase.runSaturateM_roundFixed`. -/
+theorem viewRowsColumnClosed_of_roundFixed {P : Program} {d : FDatabase} (hdom : P.EncodeDomain)
+    (hb : d.EncBase P (encodeSig P))
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    (hcv : d.RowColumnsValued) (hround : d.runRoundM rebuildRuleset = some d) :
+    d.ViewRowsColumnClosed P := by
+  intro f k hfk as e pf hrow i ci x hci hedge
+  have hsigd : d.sig = encodeSig P := hb.sig
+  have hdecl : (encodeSig P) (viewName f) = some (viewDecl k) :=
+    (encodeSig_tables hdom hdom.aritiesAgree' hfk).1
+  have hmgne : d.sig.mergeOf (viewName f) ≠ none := by
+    rw [Signature.mergeOf, hsigd, hdecl, Option.bind_some,
+      show (viewDecl k).merge = some (MergeSpec.merge mergeBody mergeResult) from rfl]
+    simp
+  have hlen : as.length = k :=
+    (hb.inv.index.width ⟨viewName f, as, [e, pf]⟩ hrow (viewDecl k)
+      (by rw [hsigd]; exact hdecl) hmgne).1
+  have hi : i < k := by
+    rw [← hlen]; exact (List.getElem?_eq_some_iff.mp hci).1
+  obtain ⟨q, hufrow⟩ := hedge.1
+  have hfired : (⟨viewName f, as.set i x, [e, columnProof k i pf q]⟩ : Row) ∈
+      (execRunRules rebuildRuleset d).rows :=
+    columnRule_fires hb hcv htr hsy hfi (hcg f k hfk (by omega)) hfk
+      (by rw [Option.isSome_iff_ne_none]; exact hmgne)
+      (by
+        rw [Option.isSome_iff_ne_none, Signature.mergeOf, hsigd, encodeSig_ufName hdom,
+          Option.bind_some]
+        simp [ufDecl])
+      hlen hi hci hrow hufrow
+  have hsigR : (execRunRules rebuildRuleset d).sig = d.sig := FDatabase.execRunRules_fields.1
+  rw [FDatabase.runRoundM] at hround
+  have hcarry := mergeSaturateF_rowsCarryUF mergeFuel
+    (by rw [hsigR, hsigd]; exact hb.shape) (by rw [hsigR, hsigd]; exact hb.merges)
+    (hb.inv.execRunRules hb.wl') (execRunRules_noUnions hb.nounions) hround
+  obtain ⟨v, lo, hv, hreach⟩ :=
+    hcarry (viewName f) (as.set i x) e (columnProof k i pf q) hfired
+  exact ⟨v, lo, hv, hreach⟩
+
+
+/-- **One `Cmd.saturate rebuildRuleset` delivers the column closure.** -/
+theorem viewRowsColumnClosed_of_runSaturateM {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {d e : FDatabase} (h : d.RebuildBase P)
+    (hs : d.execCmdM (Cmd.saturate rebuildRuleset) = some e) : e.ViewRowsColumnClosed P := by
+  have hs' : d.runSaturateM rebuildRuleset runFuel = some e := hs
+  have hbe : e.EncBase P (encodeSig P) :=
+    h.base.execCmdM (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial trivial hs
+  have hve : e.Valued := FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs'
+  exact viewRowsColumnClosed_of_roundFixed hdom hbe htr hsy hfi hcg
+    (hve.rowColumnsValued hbe.eqsRefl hbe.subtermClosed hbe.inv.index)
+    (FDatabase.runSaturateM_roundFixed runFuel hs')
+
+/-- **The two shapes a source command's block has**, at the three fields `Database.UFReach`
+reads as well as at `rows`. `encodeCmd_rebuilds_or_rowsFixed` is the same case split; a
+`Cmd.rule` registers a rule and a `Cmd.decl` emits nothing, so neither touches any of them. -/
+theorem encodeCmd_rebuilds_or_dataFixed (c : Cmd) (n i : Nat) :
+    (∃ q, (encodeCmd c n i).1 = q ++ [Cmd.saturate rebuildRuleset]) ∨
+      ∀ {d D : FDatabase}, d.execProgramM (encodeCmd c n i).1 = some D →
+        D.rows = d.rows ∧ D.terms = d.terms ∧ D.eqs = d.eqs := by
+  cases c with
+  | action a => exact Or.inl ⟨_, encodeCmd_action_fst a n i⟩
+  | run R => exact Or.inl ⟨[Cmd.run R], rfl⟩
+  | saturate R => exact Or.inl ⟨[Cmd.saturate R], rfl⟩
+  | rule r =>
+      refine Or.inr fun {d D} hs => ?_
+      rw [encodeCmd_rule_fst, FDatabase.execProgramM, FDatabase.execCmdM, Option.bind_some,
+        FDatabase.execProgramM, Option.some.injEq] at hs
+      exact hs ▸ ⟨rfl, rfl, rfl⟩
+  | decl f dc =>
+      refine Or.inr fun {d D} hs => ?_
+      rw [show (encodeCmd (Cmd.decl f dc) n i).1 = ([] : Program) from rfl,
+        FDatabase.execProgramM, Option.some.injEq] at hs
+      exact hs ▸ ⟨rfl, rfl, rfl⟩
+
+/-- **One source command's block keeps the column closure.** -/
+theorem viewRowsColumnClosed_encodeCmd {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {c : Cmd} (hc : c ∈ P) (n i : Nat) {d D : FDatabase} (h : d.RebuildBase P)
+    (hr : d.ViewRowsColumnClosed P) (hs : d.execProgramM (encodeCmd c n i).1 = some D) :
+    D.ViewRowsColumnClosed P := by
+  rcases encodeCmd_rebuilds_or_dataFixed c n i with ⟨q, hq⟩ | hfix
+  · rw [hq] at hs
+    obtain ⟨d₂, h₂, h₃⟩ := FDatabase.execProgramM_append hs
+    have hbase₂ : d₂.RebuildBase P :=
+      rebuildBase_encodeCmd hdom hc
+        (fun c' hc' => by rw [hq]; exact List.mem_append_left _ hc') h h₂
+    have hsat : d₂.execCmdM (Cmd.saturate rebuildRuleset) = some D := by
+      rw [FDatabase.execProgramM] at h₃
+      obtain ⟨x, hx, hx'⟩ := Option.bind_eq_some_iff.mp h₃
+      rw [FDatabase.execProgramM, Option.some.injEq] at hx'
+      exact hx' ▸ hx
+    exact viewRowsColumnClosed_of_runSaturateM hdom htr hsy hfi hcg hbase₂ hsat
+  · obtain ⟨h₁, h₂, h₃⟩ := hfix hs
+    exact hr.of_data_eq h₁ h₂ h₃
+
+/-- **And the whole aligned run.** -/
+theorem viewRowsColumnClosed_encodeCmds {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 →
+      (encodeSig P).IsCtor (congrName k)) :
+    ∀ (p : Program), (∀ c ∈ p, c ∈ P) → ∀ (n i : Nat) {d D : FDatabase},
+      d.RebuildBase P → d.ViewRowsColumnClosed P →
+      d.execProgramM (encodeCmds p n i).1 = some D → D.ViewRowsColumnClosed P := by
+  intro p
+  induction p with
+  | nil =>
+    intro _ n i d D _ hr hs
+    rw [show (encodeCmds ([] : Program) n i).1 = ([] : Program) from rfl,
+      FDatabase.execProgramM, Option.some.injEq] at hs
+    exact hs ▸ hr
+  | cons c cs ih =>
+    intro hp n i d D h hr hs
+    rw [encodeCmds_cons_fst] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := FDatabase.execProgramM_append hs
+    exact ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc')) _ _
+      (rebuildBase_encodeCmd hdom (hp c List.mem_cons_self) (fun _ hc' => hc') h h₁)
+      (viewRowsColumnClosed_encodeCmd hdom htr hsy hfi hcg (hp c List.mem_cons_self) n i h hr h₁)
+      h₂
+
+/-- **The column rules' closure at the state `execM` returned**: a key column of a live view row
+may be moved along a live `@UF` row, and the row at the moved key is one the target holds. -/
+theorem execM_viewRowsColumnClosed {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.ViewRowsColumnClosed P := by
+  rw [execM, encode] at htgt
+  obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
+  have hb₀ : d₀.EncBase P (encodeSig P) :=
+    (encOk_preludeState hdom hdom.aritiesAgree' hprel).base
+  have hdata := execProgramM_data_of_declOrRule (declOrRule_encodePrelude P) hprel
+  have hrows₀ : d₀.rows = [] := by rw [hdata.2.1]; rfl
+  have h₀ : d₀.RebuildBase P := by
+    refine ⟨hb₀, ⟨fun t ht => ?_, fun b hb => ?_⟩, ?_⟩
+    · rw [hdata.1, show FDatabase.empty.terms = ([] : List Term) from rfl] at ht
+      exact absurd ht (by simp)
+    · rw [hdata.2.2.2, show FDatabase.empty.env = ([] : Env) from rfl] at hb
+      exact absurd hb (by simp)
+    · refine FDatabase.ufRowsDescend_iff.mpr fun a b pf hmem => ?_
+      rw [hrows₀] at hmem
+      exact absurd hmem (by simp)
+  have hr₀ : d₀.ViewRowsColumnClosed P := by
+    intro f k _ as e pf hrow
+    rw [hrows₀] at hrow
+    exact absurd hrow (by simp)
+  exact viewRowsColumnClosed_encodeCmds hdom htr hsy hfi hcg P (fun _ hc => hc) 0 0 h₀ hr₀ hcmds
+
+/-- **One column step at the target, with the e-class column unmoved.** The closure alone leaves
+the new row's e-class column only `Database.UFReach`-reachable from the old one; both are e-class
+columns of live view rows, so `execM_viewRowsRooted` makes both `@UF` row **roots** and
+`execM_ufRowRoot_of_ufReach` identifies them. -/
+theorem execM_columnRow_step {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {as : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ tgt.rows) {i : Nat} {ci x : Term}
+    (hci : as[i]? = some ci) (hedge : tgt.UFRowEdge ci x) :
+    ∃ pf', (⟨viewName f, as.set i x, [e, pf']⟩ : Row) ∈ tgt.rows := by
+  obtain ⟨e', pf', hrow', hreach⟩ :=
+    execM_viewRowsColumnClosed hdom htr hsy hfi hcg htgt f k hfk as e pf hrow i ci x hci hedge
+  have hre : tgt.UFRowRoot e := execM_viewRowsRooted hdom hsy htr htgt f k hfk as e pf hrow
+  have hre' : tgt.UFRowRoot e' :=
+    execM_viewRowsRooted hdom hsy htr htgt f k hfk (as.set i x) e' pf' hrow'
+  have heq : e = e' :=
+    execM_ufRowRoot_of_ufReach hdom hsy htr htgt hreach e e' .refl hre .refl hre'
+  exact ⟨pf', heq ▸ hrow'⟩
+
+/-- **A whole chain of column steps.** One firing moves one column one step; this walks the
+`@UF` row chain to wherever it goes, and the e-class column is unmoved at every step. -/
+theorem execM_columnRow_walk {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {as : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ tgt.rows) {i : Nat} {ci r : Term}
+    (hci : as[i]? = some ci) (hreach : tgt.UFRowReach ci r) :
+    ∃ pf', (⟨viewName f, as.set i r, [e, pf']⟩ : Row) ∈ tgt.rows := by
+  induction hreach with
+  | refl =>
+    obtain ⟨hi, rfl⟩ := List.getElem?_eq_some_iff.mp hci
+    exact ⟨pf, by rw [List.set_getElem_self hi]; exact hrow⟩
+  | tail _ hstep ih =>
+    obtain ⟨pf', hrow'⟩ := ih
+    obtain ⟨hi, -⟩ := List.getElem?_eq_some_iff.mp hci
+    obtain ⟨pf'', hrow''⟩ :=
+      execM_columnRow_step hdom htr hsy hfi hcg htgt hfk hrow' (i := i)
+        (List.getElem?_set_self hi) hstep
+    exact ⟨pf'', by rwa [List.set_set] at hrow''⟩
+
+/-- **Every column at once**, walked left to right: a prefix already moved, the head moved by one
+chain, and the rest by the recursion. -/
+theorem execM_columnRow_walkList {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {e : Term} :
+    ∀ (ps as bs : List Term), bs.length = as.length →
+      (∀ (j : Nat) (hj : j < as.length) (hj' : j < bs.length),
+        tgt.UFRowReach (as[j]) (bs[j])) →
+      (∃ pf, (⟨viewName f, ps ++ as, [e, pf]⟩ : Row) ∈ tgt.rows) →
+      ∃ pf, (⟨viewName f, ps ++ bs, [e, pf]⟩ : Row) ∈ tgt.rows
+  | _, [], [], _, _, h => h
+  | _, [], _ :: _, hlen, _, _ => by simp at hlen
+  | _, _ :: _, [], hlen, _, _ => by simp at hlen
+  | ps, a :: as, b :: bs, hlen, hj, ⟨pf, hrow⟩ => by
+      obtain ⟨pf', hrow'⟩ :=
+        execM_columnRow_walk hdom htr hsy hfi hcg htgt hfk hrow (i := ps.length) (ci := a)
+          (by simp) (hj 0 (by simp) (by simp))
+      rw [show (b :: bs)[0] = b from rfl,
+        show (ps ++ a :: as).set ps.length b = ps ++ b :: as by simp] at hrow'
+      obtain ⟨pf'', hrow''⟩ :=
+        execM_columnRow_walkList hdom htr hsy hfi hcg htgt hfk (ps ++ [b]) as bs
+          (by simpa using hlen)
+          (fun j hj' hj'' => hj (j + 1) (by simpa using hj') (by simpa using hj''))
+          ⟨pf', by simpa using hrow'⟩
+      exact ⟨pf'', by simpa using hrow''⟩
+
+/-- **The column rules at their fixpoint, for a key tuple**: a live view row's key may be moved
+onto any tuple its columns reach along live `@UF` rows, and the row at the moved key is one the
+target holds, at the very e-class column it started with. This is the mechanism
+`Database.RebuildClosed`'s `edged` and `column` clauses were left waiting on. -/
+theorem execM_viewRow_of_rowReachList {P : Program} (hdom : P.EncodeDomain)
+    (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
+    (hfi : (encodeSig P).IsCtor fiatName)
+    (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
+    {tgt : FDatabase} (htgt : execM (encode P) = some tgt)
+    {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors) {as bs : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ tgt.rows) (hlen : bs.length = as.length)
+    (hj : ∀ (j : Nat) (hj : j < as.length) (hj' : j < bs.length),
+      tgt.UFRowReach (as[j]) (bs[j])) :
+    ∃ pf', (⟨viewName f, bs, [e, pf']⟩ : Row) ∈ tgt.rows := by
+  obtain ⟨pf', hrow'⟩ :=
+    execM_columnRow_walkList hdom htr hsy hfi hcg htgt hfk [] as bs hlen hj
+      ⟨pf, by simpa using hrow⟩
+  exact ⟨pf', by simpa using hrow'⟩
+
+/-- **Non-vacuous at the rule**: `columnRule` is the rule `rebuildRules` emits, spelled out at
+`Encoding/Match.lean`'s witness constructor. -/
+theorem columnRule_eq_wRebuildFCol : columnRule "F" 1 0 = wRebuildFCol := rfl
+
+theorem ncProgram_isCtor_fiatName : (encodeSig ncProgram).IsCtor fiatName := by decide
+
+theorem ncProgram_isCtor_congrName : ∀ (g : FnName) (k : Nat), (g, k) ∈ ncProgram.ctors →
+    k ≠ 0 → (encodeSig ncProgram).IsCtor (congrName k) :=
+  have h : ∀ p ∈ ncProgram.ctors, p.2 ≠ 0 → (encodeSig ncProgram).IsCtor (congrName p.2) := by
+    decide
+  fun g k hgk => h (g, k) hgk
+
+/-- **Non-vacuous at the run**: every hypothesis of `execM_viewRowsColumnClosed` holding together,
+at the program whose rule really fires. -/
+theorem execM_viewRowsColumnClosed_witness {tgt : FDatabase}
+    (htgt : execM (encode ncProgram) = some tgt) : tgt.ViewRowsColumnClosed ncProgram :=
+  execM_viewRowsColumnClosed ncProgram_encodeDomain ncProgram_isCtor_transName
+    ncProgram_isCtor_symName ncProgram_isCtor_fiatName ncProgram_isCtor_congrName htgt
 
 /-! ## What the source run owes the literal exclusion
 
@@ -6977,11 +7687,17 @@ key — converts `readsAt` into `RowRepr`.
 trailing `Cmd.saturate rebuildRuleset` can move a *child*'s row: two `set`s at one view key
 collide, the merge keeps `ordering-min`, and the child's e-class column drops to the new leader.
 The parent's row still sits at the **old** key, and the row at the new key is what the **column**
-rebuild rules write — the same fixpoint mechanism `execM_rebuildClosed` is left owing, where its
-e-class half is already discharged (`eclassRule_fires`, `no_ufRowEdge_of_rowsClosed`). So this
-residue is not free of that one after all, and the two are left where they are rather than
-entangled: what this one needs is the column rules at their fixpoint, stated for a key tuple and
-not for an e-class column.
+rebuild rules write.
+
+**That mechanism is now landed**, and it is what this residue was waiting on:
+`execM_viewRow_of_rowReachList` moves a live view row's key onto any tuple its columns reach
+along live `@UF` rows, at the very e-class column the row started with. It is stated for a key
+tuple and not for an e-class column, which is the shape asked for. What it leaves this residue
+is the *choice* of tuple: the walk follows `FDatabase.UFRowReach`, so the tuple it can be pointed
+at is the pointwise-**root** one, and re-keying the parent's row onto the child's new column is
+that instance exactly when the child's new column is a root — which `execM_viewRowsRooted` gives
+for a child column that a view row's *value* column supplied, and does not give for one an
+arbitrary reading supplied. That is what is left, and it is no longer the fixpoint mechanism.
 
 **A valid substitution is still not a firing.** `RuleResults` is a substitution *and* a block
 that evaluates, which is the falsity `mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already
@@ -7234,7 +7950,7 @@ carries rather than one the command names. `encodeSig_tables` closes it, and
 `execM_mergeOf_viewName_of_mem_terms` is the `:merge` every reader of a view row spends.
 `rbProgram_viewDecl_W` is the chain end to end at positive arity.
 
-**And what `edged` and `column` still owe is one mechanism, the column rules at the fixpoint.**
+**The mechanism `edged` and `column` were waiting on is landed**, and it separates the two.
 With the identification in hand every clause answers with the **`@UF` row root** of the id it is
 given: `Database.Lands a (root a)` is `FDatabase.UFRowEdge.toUFStep` for the reachability and,
 for the absorption, the bridge at each reader's own view key — the live row it answers with has
@@ -7242,14 +7958,30 @@ an e-class column that `execM_viewRowsRooted` makes a root and `execM_ufRowRoot_
 identifies with `root a`. `eclass` is then immediate, since an `@UF` entry's two ends have one
 root. `edged` is not: two readings of one source term sit at two id tuples `es₁` and `es₂` that
 agree **rootwise**, and identifying the two rows' e-class columns needs both keys moved onto the
-common root tuple — which is the column rebuild rules firing along the *live* `@UF` rows, then
-`FDatabase.RowsClosed` and `row_unique_of_settled`, the shape `eclassRule_fires` and
-`no_ufRowEdge_of_rowsClosed` have at the e-class rule. `column` is the same mechanism at the
-clause's own statement, and it is **not** answered by "a key column is a root": rows at
-superseded keys are never deleted — only a collision at *one* key removes one — so a live view
-row's key column need not be a root, and the column rule's conclusion sits at a *different* key
-from its premise, where the e-class rule's sits at the same one. That is why the descent
-contradiction that closes `no_ufRowEdge_of_rowsClosed` has no counterpart here.
+common root tuple. `execM_viewRow_of_rowReachList` is that move — `columnRule_fires` at one
+column, `viewRowsColumnClosed_of_roundFixed` at the fixpoint, `execM_viewRowsColumnClosed`
+run-wide, `execM_columnRow_step` making the e-class column exact rather than merely reachable —
+and it is stated for a key tuple, which is the shape asked for and **not** "a key column is a
+root": rows at superseded keys are never deleted, only a collision at *one* key removes one, so
+a live view row's key column need not be a root and the column rule's conclusion sits at a
+*different* key from its premise. That is why the descent contradiction that closes
+`no_ufRowEdge_of_rowsClosed` has no counterpart here, and why the closure is what the fixpoint
+delivers in its place.
+
+**What each of the two still owes on top of it.** The walk is stated over
+`FDatabase.UFRowReach`, over live `@UF` **rows**, because that is what a firing can read; both
+clauses are stated over `Database.Lands`, whose reachability half is `Database.UFReach`, over
+`@UF` **entries**. `execM_ufRowRoot_of_ufReach` identifies the two only at their *roots*.
+
+* `edged` wants exactly the root tuple, so the walk is pointed where it needs to be. What is
+  left there is `Database.Lands a (root a)` at a **literal** reader — `ViewRepr d (.lit l) a`
+  forces `a = .lit l`, so absorption asks that a literal be its own root, which is the literal
+  clause below at the rows — together with `FDatabase.settled` at the target, which no lemma
+  yet carries run-wide.
+* `column` quantifies over **every** `Database.Lands` target, not the root one, and rows only
+  ever move *toward* roots. So it additionally owes that a `Database.Lands` target of a live key
+  column is itself an `@UF` row root — which absorption does not give, since `Database.Absorbs`
+  is an entry-level property and `Database.Out` reads entry terms, which are never removed.
 
 **Non-vacuous, and still failing where it must**: `satTarget_rebuildClosed` is the degenerate
 state, `Encoding/Match.lean`'s `uRebuilt_rebuildClosed` the one with a real `@UF` edge — where
