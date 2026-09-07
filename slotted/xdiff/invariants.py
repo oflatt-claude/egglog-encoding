@@ -27,7 +27,7 @@ import sys
 sys.path.insert(0, "slotted/xdiff")
 import xdiff as X
 
-OBS = """
+OBS_TEMPLATE = """
 ;; Observers live in their own ruleset and are run ALONE, so the machinery cannot
 ;; churn while they look. Running them alongside it would answer a question about
 ;; history instead: these are relations, and a row deleted later still leaves its
@@ -55,10 +55,10 @@ LANG = enc.read_language(X.LANG_DIR / "toy.egg")
 def node_rules():
     """The per-constructor half of the observer, over the language the harness runs.
 
-    These used to be written over `App2`, the string-headed constructor, which no
-    generated case builds -- so only the `RenamesToLeader` rule above them was ever live,
-    and the edge checks reported nothing whatever the state was. `def4-edges.py` and
-    `stranded.py` had the same defect and were fixed at the same time.
+    Written over `App2` -- the string-headed constructor, which no generated case builds --
+    they matched nothing, leaving only the `RenamesToLeader` rule above them live while the
+    edge checks reported nothing whatever the state was. `def4-edges.py` and `stranded.py`
+    share the shape and the trap.
 
     A BINDER column is left out of the wide-edge check, for the reason `def4-edges.py`
     gives: what sits there is a name the node binds, so its width is not its child's
@@ -86,7 +86,7 @@ def node_rules():
     return "\n".join(out)
 
 
-OBS = OBS.replace("<<NODE RULES>>", node_rules())
+OBS = OBS_TEMPLATE.replace("<<NODE RULES>>", node_rules())
 
 
 def probe(case):

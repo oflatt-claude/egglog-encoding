@@ -356,9 +356,7 @@ def alpha_finder(name, sig, bound=(), exempt=(), head=None):
     loops = "\n       ".join(
         f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
     )
-    composed = "\n       ".join(
-        f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound
-    )
+    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound)
     not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
     return f"""\
 (rule ((= e1 {pattern(name, sig, edges=a_o, payloads=pays)})
@@ -400,9 +398,7 @@ def symmetry_finder(name, sig, bound=(), exempt=(), head=None):
     loops = "\n       ".join(
         f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
     )
-    composed = "\n       ".join(
-        f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound
-    )
+    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound)
     not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
     return f"""\
 (rule ((= e {pattern(name, sig, edges=a_o, payloads=pays)}){not_binder}
@@ -571,6 +567,26 @@ def banner(text):
     return [bar, f";;; {text}", bar, ""]
 
 
+def binder_variants(emit_rule, name, sig, comment, bound, heads):
+    """`emit_rule` for the ordinary case, plus a head-pinned copy per string-headed binder.
+
+    `bound` are the columns that are binder columns structurally, and `heads` the operator
+    strings whose first slotted column is a bound name -- which only the string-headed
+    encoding has, since there one constructor serves every operator. Each returned rule is
+    preceded by its comment.
+    """
+    which = ", ".join(str(i + 1) for i in bound)
+    note = f", leaving child {which} alone -- a bound name has no other spelling" if bound else ""
+    out = [comment + note, emit_rule(name, sig, bound=bound, exempt=heads)]
+    pinned = tuple(sorted({*bound, 0}))
+    for head in heads:
+        out += [
+            f"{comment}, for `{head}`, whose child 1 is a bound name",
+            emit_rule(name, sig, bound=pinned, head=head),
+        ]
+    return out
+
+
 def emit(language, binders=(), provided=None, omit=()):
     """All the rules for one language: `{constructor: signature}`.
 
@@ -600,9 +616,7 @@ def emit(language, binders=(), provided=None, omit=()):
     out = []
     for name, sig in language.items():
         if name in omit:
-            out += banner(
-                f"{name} :: {' '.join(shape_of(c) for c in sig)} -- hand-written in egraph-encoding-11.egg"
-            )
+            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)} -- hand-written in egraph-encoding-11.egg")
             continue
         if provided and name in provided:
             if provided[name] != sig:
@@ -626,25 +640,21 @@ def emit(language, binders=(), provided=None, omit=()):
         structural = tuple(i for i, c in enumerate(kid_cols) if c is BINDER)
         # a head-pinned binder always covers the first slotted column
         heads = [head for head, ctor in binders if ctor == name]
-        pinned = tuple(sorted({*structural, 0})) if heads else ()
-
-        def both(build, comment):
-            """A rule, plus the copy a string-headed binder needs with its head pinned."""
-            which = ", ".join(str(i + 1) for i in structural)
-            note = f", leaving child {which} alone -- a bound name has no other spelling" if structural else ""
-            rules = [comment + note, build(bound=structural, exempt=heads)]
-            for head in heads:
-                rules += [f"{comment}, for `{head}`, whose child 1 is a bound name",
-                          build(bound=pinned, head=head)]
-            return rules
-
-        out += both(
-            lambda **kw: alpha_finder(name, sig, **kw),
+        out += binder_variants(
+            alpha_finder,
+            name,
+            sig,
             ";; alpha-finder: two nodes equal up to renaming, one eliminated",
+            structural,
+            heads,
         )
-        out += both(
-            lambda **kw: symmetry_finder(name, sig, **kw),
+        out += binder_variants(
+            symmetry_finder,
+            name,
+            sig,
             ";; the same solve kept as a symmetry, non-destructively",
+            structural,
+            heads,
         )
         out += [";; migration: move a follower's node into the leader's frame", migration(name, sig)]
         for pos in range(len(kids)):

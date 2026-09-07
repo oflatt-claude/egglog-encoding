@@ -45,9 +45,7 @@ def main():
         with tempfile.NamedTemporaryFile("w", suffix=".egg", delete=False) as f:
             f.write(src)
             path = f.name
-        r = subprocess.run(
-            [sys.executable, str(COMPILE), path], capture_output=True, text=True, timeout=1800, cwd=ROOT
-        )
+        r = subprocess.run([sys.executable, str(COMPILE), path], capture_output=True, text=True, timeout=1800, cwd=ROOT)
         ok = r.returncode == 0
         if not ok:
             err = [ln for ln in (r.stdout + r.stderr).splitlines() if "ERROR" in ln or "FAIL" in ln]
@@ -62,7 +60,8 @@ def main():
         print(f"       block {i}: {why}")
     if unused:
         print(f"       claims in the table with no runnable example: {', '.join(unused)}")
-    print(f"\n{len(progs) - len(bad)}/{len(progs)} examples run" + (f", {len(unused)} claims unexercised" if unused else ""))
+    unexercised = f", {len(unused)} claims unexercised" if unused else ""
+    print(f"\n{len(progs) - len(bad)}/{len(progs)} examples run{unexercised}")
     return 1 if bad or unused else 0
 
 

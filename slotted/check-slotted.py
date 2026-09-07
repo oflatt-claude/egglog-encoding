@@ -77,10 +77,9 @@ def zero_categories(out):
 def none_of(pattern, floor):
     """A summary line with `bad` at zero and `seen` at least `floor`, both named groups.
 
-    The case count is half the check. Three of these probes reported a clean zero for
-    months because they were written over constructors the harness never builds, and
-    nothing said so -- a floor on the cases actually looked at is what a vacuous probe
-    fails.
+    THE CASE COUNT IS HALF THE CHECK. A probe written over constructors the corpus never
+    builds reports a clean zero and passes, which is how three of these went dead
+    unnoticed; the floor on cases actually looked at is what such a probe fails.
     """
 
     def check(out):

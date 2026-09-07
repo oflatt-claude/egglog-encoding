@@ -335,9 +335,8 @@ def egg_program(case, rules=None, mult=3):
     # equal-up-to-renaming nodes with `RenamesToLeader` and deletes one, rather
     # than unioning them. So two probes are in the same slotted class when they
     # reach a common leader, which is also what the machinery's own tests check.
-    # In its own ruleset, so reading the probes costs no user-rule steps: the run count
-    # is the whole comparison against the reference, which applies every rule once per
-    # round, so a round there has to mean a `(run)` here and nothing more.
+    # In its own ruleset, so reading the probes costs no user-rule steps: a reference
+    # round applies every rule once, so a round here must mean one `(run)` and no more.
     out.append("(ruleset probes)")
     out.append("(relation ProbeId (U i64))")
     out.append("(relation SameClass (i64 i64))")
@@ -367,11 +366,9 @@ def egg_program(case, rules=None, mult=3):
     for i, t in enumerate(case.probes):
         out.append(f"(let _p{i} {enc(t)})")
     out.append(schedule(case.rounds * mult))
-    # The probes are named after the rules have run, then read without running them
-    # again. Naming them first would work too; running the whole schedule a second time
-    # to read them, which is what this did, quietly gave the encoding twice the
-    # user-rule steps its budget named -- and made it look as though a reference round
-    # were worth two of them.
+    # Named after the rules have run, then read WITHOUT running them again: a second
+    # `schedule(...)` here would hand the encoding twice the user-rule steps its budget
+    # names, and a reference round would look worth two of them.
     for i, _ in enumerate(case.probes):
         out.append(f"(ProbeId _p{i} {i})")
     out.append("(run-schedule (saturate (run slotted)) (saturate (run probes)))")

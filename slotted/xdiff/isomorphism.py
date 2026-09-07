@@ -29,9 +29,9 @@ Run: `python3 slotted/xdiff/isomorphism.py [name-prefix|fuzz N [seed]]`
 
 import itertools
 import json
-import re
 import os
 import random
+import re
 import subprocess
 import sys
 
@@ -43,9 +43,8 @@ SEARCH_CAP = 200_000
 #: cases compared at a database fixpoint because the rules never stop firing
 UNSATURATED = []
 
-#: Raise egglog's serialization limits, which default to 40 and silently truncate. See
-#: `_dump`. Large enough that a generated case cannot reach them, small enough to stay a
-#: guard rather than an invitation to serialize an unbounded graph.
+#: Raise egglog's serialization limits, which default to 40 and silently truncate -- see
+#: `_dump`. Well past anything a generated case reaches, while still bounding the dump.
 SERIALIZE_LIMITS = ["--max-functions", "1000000", "--max-calls-per-function", "1000000"]
 
 
@@ -403,15 +402,13 @@ def to_reference_shape(g, var_class=None):
                     # slot the node's class does not have is renamed freely when nodes
                     # are matched.
                     #
-                    # DO NOT read a missing name as an encoding bug. `build_encoding_graph`
-                    # translates every edge through its child's frame, which is empty
-                    # exactly when the variable class is slotless, so the rendering drops
-                    # the bound name on its own and cannot be told apart from an encoding
-                    # that lost it. Making this a failure turns ~30 of a 1200-case sweep
-                    # red for cases whose answers agree. The invariant is real, and
-                    # `slotted/xdiff/def4-edges.py` is where it can be seen: it reads the
-                    # raw rows, and asserts a binder column's domain is `{0}` and its
-                    # child the variable class.
+                    # DO NOT read a missing name as an encoding bug, however tempting.
+                    # `build_encoding_graph` translates every edge through its child's
+                    # frame, which is empty exactly when the variable class is slotless, so
+                    # the rendering drops the bound name on its own and cannot be told
+                    # apart from an encoding that lost it. `def4-edges.py` is where the
+                    # invariant CAN be seen, on the raw rows: domain `{0}`, child the
+                    # variable class.
                     if 0 in m:
                         bound = m[0]
                     elif len(m) == 1:
@@ -659,16 +656,16 @@ EGG_PROGRAM = None
 def reference_graph(case, mult=3):
     """The reference's graph after the SAME number of rounds the encoding gets steps.
 
-    NOT SATURATION -- a fixed count. A generated rule set need not have a fixpoint, and
-    this used to skip whenever the reference reported `SATURATED no`, which threw the case
-    away rather than comparing it. There is nothing to throw away: a reference round
-    applies every rule once, and so does one `(run)` of the encoding's user rules, so at
-    equal counts the two are answering the same question. Measured on `fuzz1152`, which has
-    no fixpoint at all -- isomorphic at every budget from 3 to 12 rounds.
+    NOT SATURATION -- a fixed count, because a generated rule set need not have a fixpoint.
+    A reference round applies every rule once and so does one `(run)` of the encoding's
+    user rules, so at equal counts the two are answering the same question whether or not
+    either has settled. `fuzz1152`, which never settles, is isomorphic at every budget from
+    3 to 12 rounds. This used to skip a case the moment the reference reported
+    `SATURATED no`, which threw away the only cases that test unbounded growth.
 
-    The count has to be the encoding's, `rounds * mult`, not `rounds`: `_dump` runs
-    `schedule(rounds * mult)`. Where the reference does saturate the extra rounds change
-    nothing, so this is safe for the whole corpus, not just the growing cases.
+    The count is the ENCODING's, `rounds * mult`, since `_dump` runs
+    `schedule(rounds * mult)`. Where the reference saturates the extra rounds change
+    nothing, so it is safe for the whole corpus.
 
     Scaled by rewriting the spec's own `rounds` line rather than by rebuilding the case:
     `xarray` and `xsdql` bring their own case and rule types, and only the spec text is
@@ -703,14 +700,11 @@ def _dump(case, mult, timeout):
     `Unextractable` and the graph cannot be rebuilt.
 
     THE LIMITS ARE NOT OPTIONAL. `--max-functions` and `--max-calls-per-function` default
-    to 40 each -- they are documented as "maximum number of function nodes to render in
-    dot/svg output", and `--to-json` inherits them. At the default, any constructor with
-    more than 40 rows is SILENTLY TRUNCATED, and the comparison is then made against a
-    graph that stops growing while the e-graph does not. That is what `fuzz1152` looked
-    like: the tables went to 120 `G` rows while the dump sat at 40, so the encoding
-    appeared to stall against a reference that kept growing, and it took a session to find
-    that the encoding was right all along. egglog knows when it truncated --
-    `SerializeOutput::is_complete` -- but the CLI does not say so.
+    to 40 each -- documented as "maximum number of function nodes to render in dot/svg
+    output", and `--to-json` inherits them. Any constructor with more than 40 rows is then
+    SILENTLY TRUNCATED, and the graph stops growing while the e-graph does not, which reads
+    as the encoding stalling against a reference that keeps going. egglog knows when it
+    truncated -- `SerializeOutput::is_complete` -- but the CLI does not say so.
     """
     prog = (EGG_PROGRAM or X.egg_program)(case, mult=mult)
     prog = prog.replace("(print-function SameClass 100000)", "")
@@ -894,7 +888,11 @@ def known_groups():
 
     cases = [
         # f($0,$1) = f($1,$0) -- the group is {id, swap}
-        ("swap", 2, X.Case("swap", [("f", v0, v1), ("f", v1, v0)], [(("f", v0, v1), ("f", v1, v0))], [], None, [], rounds=0)),
+        (
+            "swap",
+            2,
+            X.Case("swap", [("f", v0, v1), ("f", v1, v0)], [(("f", v0, v1), ("f", v1, v0))], [], None, [], rounds=0),
+        ),
         # g(g($0,$1),$2) = g(g($1,$2),$0) -- a 3-cycle generates three elements
         (
             "3-cycle",

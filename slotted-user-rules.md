@@ -1889,11 +1889,11 @@ site in the machinery, and checking on real cases which ones actually truncate:
 | site | truncation | why it is or is not a problem |
 | --- | --- | --- |
 | idempotence tests — `(bool= (compose m m) m)`, and the shrinking rule | intended | truncation *is* the test: it is how a non-permutation is detected |
-| child-update, `(compose m1 m)` | **observed on a binder column** | this row used to read *impossible*, on the argument that `m`'s image is inside `m1`'s domain by well-formedness. It is, for an edge that means a USE of its child. A BINDER column does not: what it holds is a name the node binds, and the variable class under it goes slotless as soon as two of its invocations are equated, so `m` is the empty map and the bound name is composed away. Nothing then matches a binder pattern over that node, and the missed unions look like an ordinary matching gap. The rule now asks for the bound slot in the result -- see `BOUND_NAME_KEPT` in `slotted-encoder.py` |
+| child-update, `(compose m1 m)` | **observed on a binder column** | `m`'s image is inside `m1`'s domain by well-formedness — for an edge that means a USE of its child. A binder column is not one; see below |
 | **migration**, `(compose (inverse m) m1)` | **observed** | **was unsound**: the narrowed edge is asserted as fact, claiming its child is slotless. Now `compose-total` |
 | single-parent, `(compose (inverse m1) m2)` | possible, never observed | lands in a `RenamesToLeader` row, where a partial map is meaningful. 0 occurrences across the corpus |
 | transitivity, `(compose m12 m23)` | observed on `X1` | same: narrowing through a partial self-loop says the slots are redundant, which is what a partial map means there |
-| α-finder and symmetry-finder, `(compose m_o sym)` | observed on `X1` | feeds `find-mapping`, which requires equal key sets, so a narrowed map makes the rule *not fire*: incomplete, not unsound |
+| α-finder and symmetry-finder, `(compose m_o sym)` | observed on `X1` | feeds `find-mapping`, which requires equal key sets, so a narrowed map makes the rule *not fire*: incomplete, not unsound. On a BINDER column that incompleteness lost real unions, so those columns are compared as stored |
 | `MISC`, `(compose m1 (inverse m2))` | possible | only feeds an idempotence test, so a truncation means no union: incomplete, not unsound |
 
 The first reading of this table was "truncation is harmless where it makes a rule
@@ -1916,9 +1916,17 @@ primitive, instead of re-derived per site.
 Child-update cannot use `compose-total`, because narrowing there is sometimes the
 point: an edge to a child that has just lost a slot *should* lose it too. So it
 carries a condition instead, and only on the columns where narrowing is never
-right. Reading a whole audit row as settled is what this cost: "impossible" was
-argued for edges that mean a use of their child, and the argument was then applied
-to a column that does not.
+right — a BINDER column, which holds a name the node binds rather than a use of
+its child. The variable class under such a column goes slotless as soon as two of
+its invocations are equated, `m` is then the empty map, and the bound name is
+composed away; nothing afterwards matches a binder pattern over that node, and the
+unions it would have made go missing in a way that looks like an ordinary matching
+gap. `BOUND_NAME_KEPT` in `slotted-encoder.py` is the condition.
+
+The row above read *impossible* until then, and the argument for it was sound —
+about edges that mean a use of their child. It had simply never been checked
+against a column that means something else, which is the way to read the rest of
+this table too: each row is an argument about a shape, not about a site.
 
 ## Primitives
 

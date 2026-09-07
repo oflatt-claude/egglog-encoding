@@ -11,10 +11,10 @@ and searching for such a renaming. An empty report means the invariant holds on
 this case: every fact on a self-loop-less class is also on a self-looped one.
 
 The observer rules are built from `slotted/languages/toy.egg`, the language the harness
-runs. They used to be written over `App{n}`, the string-headed constructors, which no
-generated case ever builds -- so every case printed "nothing stranded" whatever the state
-was. `def4-edges.py` had the same defect and was fixed at the same time; verify a checker
-like this by INVERTING it and confirming it fires.
+runs. Written over `App{n}` -- the string-headed constructors, which no generated case
+builds -- they matched nothing, and every case printed "nothing stranded" whatever the
+state was. `def4-edges.py` and `invariants.py` share the shape and the trap. Verify a
+checker like this by INVERTING it and confirming it fires; a clean zero proves nothing.
 
     python3 slotted/xdiff/stranded.py            the two migration cases
     python3 slotted/xdiff/stranded.py all        every curated case
@@ -32,9 +32,17 @@ import xdiff as X
 enc = X.slotenc
 LANG = enc.read_language(X.LANG_DIR / "toy.egg")
 
-#: The constructors this reads, each `(Renaming U Renaming U)`. `Var` and `Null` are
-#: leaves with no edges, so nothing about them can be stranded.
+#: The constructors this reads: exactly two slotted columns and no payload, which is the
+#: `(String Renaming U Renaming U)` shape the observer relations below are declared at.
+#: `Var` and `Null` are leaves with no edges, so nothing about them can be stranded.
 BINARY = {n: sig for n, sig in LANG.items() if sig.count(enc.CHILD) + sig.count(enc.BINDER) == 2 == len(sig)}
+
+# A constructor of any other shape would be dropped from the probe in silence, which is
+# the failure this file was just rescued from. Widening the relations is the fix if the
+# language grows one; leaving it uncovered is not.
+_uncovered = [n for n, sig in LANG.items() if any(c in enc.SLOTTED for c in sig) and n not in BINARY]
+if _uncovered:
+    raise SystemExit(f"stranded.py covers only arity-2 payload-free constructors; not: {', '.join(_uncovered)}")
 
 
 def _observer():
@@ -47,8 +55,9 @@ def _observer():
         out.append(f'(rule ((= V {pat}) (RenamesToLeader V s V)) ((WithSym "{name}" m1 c1 m2 c2)))')
         out.append(f'(rule ((= V {pat})) ((NoSym "{name}" m1 c1 m2 c2)))')
     sizes = "\n".join(f"(print-size {n})" for n in BINARY)
-    return "\n".join([*out, sizes, "(run 40)", sizes, "(print-function WithSym 100000)",
-                       "(print-function NoSym 100000)"])
+    return "\n".join(
+        [*out, sizes, "(run 40)", sizes, "(print-function WithSym 100000)", "(print-function NoSym 100000)"]
+    )
 
 
 OBS = _observer()
@@ -197,6 +206,8 @@ for c in cases:
     report(c)
 
 # the case count is part of the result: a probe that looked at nothing would also read 0
-print(f"\n{TALLY['cases']} cases checked, {TALLY['stranded']} stranded rows, "
-      f"{TALLY['unique']} carrying something no visible node carries")
+print(
+    f"\n{TALLY['cases']} cases checked, {TALLY['stranded']} stranded rows, "
+    f"{TALLY['unique']} carrying something no visible node carries"
+)
 sys.exit(1 if TALLY["unique"] else 0)
