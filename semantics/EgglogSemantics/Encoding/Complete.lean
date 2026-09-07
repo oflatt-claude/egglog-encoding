@@ -1268,6 +1268,170 @@ theorem globalsInline_step {P : Program} (hdom : P.EncodeDomain) {pre q : Progra
           · rw [if_neg hg]
             exact ⟨hkeep, honce⟩
 
+/-! ### The substitution declines nothing
+
+`Cmd.globalBind`'s two guards are the reason a global can stay frozen in an encoded query, and
+with shadowing out of the model neither ever fires along a source run. The first is
+`letNames_nodup_of_programStep`. The second — the stored definition is closed — follows from
+the first, because `Expr.inlineGlobals` closes an expression exactly when the substitution
+already defines every variable it names, and a `let` that *evaluated* names only variables the
+environment binds. -/
+
+mutual
+
+/-- **Evaluation needs every variable bound.** The scope half of `Expr.eval_isSome`, run
+backwards. -/
+theorem Expr.lookup_isSome_of_eval {sig : Signature} {σ : Env} :
+    ∀ {e : Expr} {t : Term}, e.eval sig σ = some t → ∀ w ∈ e.vars, (Env.lookup w σ).isSome
+  | .lit _, _, _, w, hw => absurd hw (by simp [Expr.vars])
+  | .var v, t, h, w, hw => by
+      obtain rfl : w = v := by simpa [Expr.vars] using hw
+      rw [Expr.eval] at h; rw [h]; rfl
+  | .app f args, t, h, w, hw => by
+      have hl : ∃ ts, Expr.evalList sig args σ = some ts := by
+        cases hl : Expr.evalList sig args σ with
+        | none =>
+            rw [Expr.eval] at h
+            cases hp : Prim.ofName f with
+            | some p => rw [hp, hl] at h; exact absurd h (by simp)
+            | none => rw [hp, hl] at h; split at h <;> exact absurd h (by simp)
+        | some ts => exact ⟨ts, rfl⟩
+      obtain ⟨ts, hts⟩ := hl
+      exact Expr.lookupList_isSome_of_evalList hts w (by rw [Expr.vars] at hw; exact hw)
+
+@[inherit_doc Expr.lookup_isSome_of_eval]
+theorem Expr.lookupList_isSome_of_evalList {sig : Signature} {σ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es σ = some ts →
+      ∀ w ∈ Expr.varsList es, (Env.lookup w σ).isSome
+  | [], _, _, w, hw => absurd hw (by simp [Expr.varsList])
+  | e :: es, ts, h, w, hw => by
+      rw [Expr.evalList_cons] at h
+      obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp h
+      rcases List.mem_union_iff.mp (by rw [Expr.varsList] at hw; exact hw) with hv | hv
+      · exact Expr.lookup_isSome_of_eval ht w hv
+      · exact Expr.lookupList_isSome_of_evalList hus w hv
+
+end
+
+mutual
+
+/-- **Inlining closes an expression the substitution defines every variable of.** This is
+`Cmd.globalBind`'s second guard, and the hypothesis is its first guard's consequence. -/
+theorem Expr.vars_inlineGlobals_nil {G : List (Var × Expr)} (hcl : Expr.ClosedG G) :
+    ∀ {e : Expr}, (∀ w ∈ e.vars, Expr.lookupG w G ≠ none) → (e.inlineGlobals G).vars = []
+  | .lit _, _ => rfl
+  | .var v, h => by
+      rw [Expr.inlineGlobals]
+      obtain ⟨e', he'⟩ := Option.ne_none_iff_exists'.mp (h v (by simp [Expr.vars]))
+      rw [he', Option.getD_some]
+      exact hcl v e' he'
+  | .app f args, h => by
+      rw [Expr.inlineGlobals, Expr.vars]
+      exact Expr.varsList_inlineGlobalsList_nil hcl (by rw [Expr.vars] at h; exact h)
+
+@[inherit_doc Expr.vars_inlineGlobals_nil]
+theorem Expr.varsList_inlineGlobalsList_nil {G : List (Var × Expr)} (hcl : Expr.ClosedG G) :
+    ∀ {es : List Expr}, (∀ w ∈ Expr.varsList es, Expr.lookupG w G ≠ none) →
+      Expr.varsList (Expr.inlineGlobalsList G es) = []
+  | [], _ => rfl
+  | e :: es, h => by
+      rw [Expr.inlineGlobalsList, Expr.varsList,
+        Expr.vars_inlineGlobals_nil hcl
+          (fun w hw => h w (List.mem_union_iff.mpr (Or.inl hw))),
+        Expr.varsList_inlineGlobalsList_nil hcl
+          (fun w hw => h w (List.mem_union_iff.mpr (Or.inr hw)))]
+      rfl
+
+end
+
+/-- **The substitution defines every global the run has bound.** The invariant that says
+`Cmd.globalBind` declined nothing: with it, the second guard passes at the next top-level
+`let`, and the encoder substitutes the global rather than leaving it frozen in the query. -/
+def Database.GlobalsCover (sd : Database) (G : List (Var × Expr)) : Prop :=
+  ∀ v, (Env.lookup v sd.env).isSome → Expr.lookupG v G ≠ none
+
+/-- Nothing is bound yet, so nothing has to be covered. -/
+theorem Database.globalsCover_empty : Database.empty.GlobalsCover [] := by
+  intro v hv; exact absurd hv (by simp [Database.empty])
+
+/-- **The clause survives one source command, and the `let` case is where it pays.** Both of
+`Cmd.globalBind`'s guards pass there: the first because a program the source ran binds no name
+twice (`letNames_nodup_of_programStep`, which is `hnodup`), the second because the `let`
+evaluated, so every variable of its definition is one the environment binds and `hcov` carries
+into `G`. -/
+theorem globalsCover_step {P : Program} {pre q : Program} {c : Cmd}
+    (hP : P = pre ++ c :: q) {sd sd' : Database} (hstep : CmdStep sd c sd')
+    (hnodup : (Program.letNames P).Nodup)
+    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) (hcov : sd.GlobalsCover G) :
+    sd'.GlobalsCover (c.globalBind P G) := by
+  obtain ⟨d₀, hreach, hcl⟩ := hstep
+  have henv : sd'.env = d₀.env := (MergeClosure.envRules hcl).1
+  cases hc : c with
+  | rule r =>
+      subst hc
+      replace hreach : cmdEffect sd (.rule r) = some d₀ := hreach
+      rw [cmdEffect, Option.some.injEq] at hreach
+      intro u hu; exact hcov u (by rw [henv, ← hreach] at hu; exact hu)
+  | run R =>
+      subst hc
+      replace hreach : cmdEffect sd (.run R) = some d₀ := hreach
+      rw [cmdEffect, Option.some.injEq] at hreach
+      intro u hu; exact hcov u (by rw [henv, ← hreach] at hu; exact hu)
+  | decl f dc =>
+      subst hc
+      replace hreach : cmdEffect sd (.decl f dc) = some d₀ := hreach
+      rw [cmdEffect, Option.some.injEq] at hreach
+      intro u hu; exact hcov u (by rw [henv, ← hreach] at hu; exact hu)
+  | saturate R =>
+      subst hc
+      have : d₀.env = sd.env := runStepReach_env (show SaturateReach R sd d₀ from hreach).1
+      intro u hu; exact hcov u (by rw [henv, this] at hu; exact hu)
+  | action a =>
+      subst hc
+      have hev : evalAction sd a = some d₀ := evalAction_of_top hreach
+      cases a with
+      | expr e =>
+          rw [evalAction] at hev
+          obtain ⟨t, -, hd0⟩ := Option.map_eq_some_iff.mp hev
+          intro u hu; exact hcov u (by rw [henv, ← hd0] at hu; exact hu)
+      | union e₁ e₂ =>
+          rw [evalAction] at hev
+          obtain ⟨t₁, -, hev⟩ := Option.bind_eq_some_iff.mp hev
+          obtain ⟨t₂, -, hev⟩ := Option.bind_eq_some_iff.mp hev
+          by_cases hl : t₁.isLit || t₂.isLit
+          · rw [if_pos hl] at hev; exact absurd hev (by simp)
+          · rw [if_neg hl, Option.some.injEq] at hev
+            intro u hu; exact hcov u (by rw [henv, ← hev] at hu; exact hu)
+      | set f args out =>
+          rw [evalAction] at hev
+          obtain ⟨as, -, hev⟩ := Option.bind_eq_some_iff.mp hev
+          obtain ⟨vs, -, hd0⟩ := Option.map_eq_some_iff.mp hev
+          intro u hu; exact hcov u (by rw [henv, ← hd0] at hu; exact hu)
+      | letBind v e =>
+          rw [evalAction] at hev
+          obtain ⟨t, ht, hd0⟩ := Option.map_eq_some_iff.mp hev
+          have henv' : sd'.env = (v, t) :: sd.env := by rw [henv, ← hd0]
+          have hmem : v ∈ Program.letNames P := by
+            rw [hP, Program.letNames_append, Program.letNames_cons_action_letBind]
+            exact List.mem_append_right _ List.mem_cons_self
+          have hg1 : (Program.letNames P).count v = 1 :=
+            List.count_eq_one_of_mem hnodup hmem
+          have hg2 : (e.inlineGlobals G).vars = [] :=
+            Expr.vars_inlineGlobals_nil (fun w e' hw => (hgi w e' hw).1)
+              (fun w hw => hcov w (Expr.lookup_isSome_of_eval ht w hw))
+          have hgb : Cmd.globalBind P (.action (.letBind v e)) G
+              = (v, e.inlineGlobals G) :: G := by
+            rw [Cmd.globalBind, if_pos ⟨hg1, hg2⟩]
+          rw [Database.GlobalsCover, hgb]
+          intro u hu
+          rw [henv'] at hu
+          rw [Expr.lookupG]
+          by_cases huv : u = v
+          · rw [if_pos huv]; simp
+          · rw [if_neg huv]
+            exact hcov u (by simpa [Env.lookup, huv] using hu)
+
 /-- **The globals already carried survive one source command**, which is the half of
 `globalsInline_step` `Egglog.GlobalsMech` spends: `Egglog.UnionsInv.rules` names the `G` a
 rule was *encoded* through, and that one is fixed where `Cmd.globalBind`'s is still growing.
@@ -10386,25 +10550,37 @@ now written both ways: `Matches.to_substGlobals` and `ValidQuerySubst.to_substGl
 source firing's own `ValidQuerySubst` at `s.query` into one at `Query.substGlobals G s.query`,
 which is the query `mem_matchQuery_encodeQuery` is handed. What is left on that step is
 `mem_matchQuery_encodeQuery`'s `hglob`, at a variable the substituted query still names and the
-**environment** binds — a global `Cmd.globalBind` did *not* freeze, which by its two guards is
-one a top-level `let` binds twice (the open-definition guard only ever fails by cascading from
-such a name). `hglob` asks the target reading of that variable to be its own value, so
-`patternRowRead_of_matches` would need `RowRepr td t t`, and that is **false** at states an
-encoded run reaches. Measured, on
+**environment** binds.
+
+**The shape that refuted it is gone.** It was a global `Cmd.globalBind` did *not* freeze, which
+by its two guards was one a top-level `let` binds twice (the open-definition guard only ever
+failed by cascading from such a name). `hglob` asks the target reading of that variable to be
+its own value, so `patternRowRead_of_matches` would need `RowRepr td t t`, and that was
+**false** at states an encoded run reaches. Measured, on
 
 ```
 (let $g (Zz))  (let $g (Yy))  (F (Yy))  (Aa)  (union (Yy) (Aa))
 (rule ((F $g)) ((Hit)))  (run 1)
 ```
 
-which is in `encode`'s domain: `execM (encode P)` holds `@YyView[] ↦ ((Aa), …)`, so `(Yy)` reads
-through rows to `(Aa)` and not to itself. The two sides **agree** there all the same — the run
-holds one `(Hit)` and one `@HitView` — because the column rule *adds* the re-keyed row rather
-than replacing it, and `@FView[(Yy)]` is still live beside `@FView[(Aa)]`. So this is a gap in
-the *route*, not a defect in `encode`: the reading a shadowed global needs is the surviving old
-row, which `RowRepr` at the leader does not name. egglog rejects the program outright
-("Shadowing is not allowed", `check_shadowing.rs`) and `Program.EncodeDomain` does not, so the
-alternatives are a tenth domain clause or a second reading, and neither is this change.
+whose `execM (encode P)` holds `@YyView[] ↦ ((Aa), …)`, so `(Yy)` read through rows to `(Aa)`
+and not to itself. **That program no longer runs.** `Spec/Eval.lean`'s `evalTopAction` refuses a
+top-level `let` that rebinds — egglog's own "Shadowing is not allowed"
+(`egglog/src/ast/check_shadowing.rs:11-12`, `:49-50`) — so it has no `ProgramStep` and `hsrc`
+excludes it, with no tenth `Program.EncodeDomain` clause and no second reading.
+`letNames_nodup_of_programStep` is that as a fact about the program text, and
+`globalBind_letBind_of_encStep` is what it buys: at every top-level `let` the chain reaches,
+**both** guards pass, so no global is left frozen.
+
+**What is left of `hglob` is the literal case alone.** `Expr.substGlobals` replaces `.var v`
+only when the definition is an application, and under `Database.GlobalsInline` a definition that
+is not one is a literal — so the only variable a substituted query can still name and the
+environment bind is a global bound to a literal. That is the case `Expr.substGlobals`' own
+docstring keeps on purpose: a literal's class never moves (`evalAction` refuses a `union` on
+one), so the frozen reading through the environment is already the right one, and `hglob` there
+asks for a reading of `Term.lit l` as itself rather than the `RowRepr td t t` the shadowed
+global needed. Discharging it is a statement about how the `Cmd.run` case builds `ρt`, which is
+still open below.
 
 **The one structural item left is the `Cmd.saturate` half's alone, and the encoder fix did not
 close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
@@ -11551,6 +11727,49 @@ theorem encStep_globals {P : Program} (hdom : P.EncodeDomain) {pre suf : Program
         (hs.src.ctorState Database.CtorState.empty
           (fun c' hc' => hdom.ctorsOnly c' (by rw [hs.program]; exact List.mem_append_left _ hc')))
         hs.src hstep ih.1 ih.2
+
+/-- **The chain's substitution covers every global the source run has bound**, by
+`globalsCover_step` one block at a time from the empty substitution the prelude starts with.
+
+`hnodup` is what the theorem's own `hsrc` supplies (`letNames_nodup_of_programStep`), so this
+costs no new hypothesis anywhere. -/
+theorem encStep_globalsCover {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program} {sd : Database} {d : FDatabase}
+    {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) : sd.GlobalsCover G := by
+  induction h with
+  | prelude _ => exact Database.globalsCover_empty
+  | @block pre' suf' sd₀ sd₁ d₀ D₀ c G' n i hs hstep _ ih =>
+      exact globalsCover_step hs.program hstep hnodup (encStep_globals hdom hs).1 ih
+
+/-- **The encoder freezes no global.** At a top-level `let` the chain has reached, both of
+`Cmd.globalBind`'s guards pass — the first because the program the source ran binds no name
+twice, the second because the `let` evaluated and `encStep_globalsCover` carries its variables
+— so the name joins the substitution and `Rule.substGlobals` reads every later query's use of
+it through its definition.
+
+What survives in a substituted query is therefore only a global whose definition is a
+**literal**: `Expr.substGlobals` replaces `.var v` exactly when the definition is an
+application, and a definition that is not one is a literal (`Database.GlobalsInline` makes them
+closed, so a bare variable is impossible). That is the case `Expr.substGlobals`' own docstring
+keeps deliberately — a literal's class never moves, so the frozen reading is already right. -/
+theorem globalBind_letBind_of_encStep {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program} {v : Var} {e : Expr}
+    {sd sd' : Database} {d : FDatabase} {G : List (Var × Expr)}
+    (h : EncStep P pre (.action (.letBind v e) :: suf) sd d G)
+    (hstep : CmdStep sd (.action (.letBind v e)) sd') :
+    Cmd.globalBind P (.action (.letBind v e)) G = (v, e.inlineGlobals G) :: G := by
+  obtain ⟨d₀, hreach, -⟩ := hstep
+  have hev : evalAction sd (.letBind v e) = some d₀ := evalAction_of_top hreach
+  rw [evalAction] at hev
+  obtain ⟨t, ht, -⟩ := Option.map_eq_some_iff.mp hev
+  have hmem : v ∈ Program.letNames P := by
+    rw [h.program, Program.letNames_append, Program.letNames_cons_action_letBind]
+    exact List.mem_append_right _ List.mem_cons_self
+  have hgi := (encStep_globals hdom h).1
+  exact if_pos ⟨List.count_eq_one_of_mem hnodup hmem,
+    Expr.vars_inlineGlobals_nil (fun w e' hw => (hgi w e' hw).1)
+      (fun w hw => encStep_globalsCover hdom hnodup h w
+        (Expr.lookup_isSome_of_eval ht w hw))⟩
 
 /-- **`Egglog.GlobalsMech`, discharged.** The two facts the residue's `hrules` clause needs
 about the globals a rule was encoded through: the chain's own are `Database.GlobalsInline` and
