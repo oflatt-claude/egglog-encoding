@@ -181,6 +181,20 @@ class Source:
                 self.body.append((form, path))
 
     # ------------------------------------------------------------------ terms
+    def global_ref(self, name, ground):
+        """A `let`-bound global, as a ground reference or as something a pattern can match.
+
+        Ground: the NAME, which compiles to a reference to the value it holds.
+
+        In a pattern it has to be matched, and the encoder's atoms have no case for "the
+        value this name holds" -- a child is a variable, a slot literal, or a term. So the
+        term the name was bound to is inlined. That is sound rather than approximate: a
+        GROUND term's shape determines its class by congruence, so matching the shape and
+        naming the class pick out the same thing. Without this a global in a pattern died
+        with `KeyError: 'name'`, whichever spelling it wore.
+        """
+        return ("name", name) if ground else self.lang.bound[name]
+
     def term(self, form, column=enc.CHILD, ground=True):
         """A slotted term as the encoder's tuple form.
 
@@ -193,6 +207,13 @@ class Source:
         """
         if isinstance(form, str):
             if SLOT.match(form):
+                # A `$`-prefixed name may be a GLOBAL rather than a slot. egglog writes
+                # `(let $I (IConst))` and then `$I` in a rule, where the `$` is just part
+                # of an identifier; here `$x` normally means a slot, so the two spellings
+                # collide. The lookup decides, which is the rule bare names use too. Not
+                # in a BINDER column, where only a slot can stand.
+                if column is not enc.BINDER and form in self.lang.bound:
+                    return self.global_ref(form, ground)
                 if not ground:
                     return form
                 slot = int(form[1:]) if form[1:].isdigit() else form[1:]
@@ -205,7 +226,7 @@ class Source:
                 # renders back with the `?`, so the reference side reads it too.
                 return form[1:]
             if form in self.lang.bound:
-                return ("name", form)
+                return self.global_ref(form, ground)
             # A BARE IDENTIFIER IS A PATTERN VARIABLE, which is how egglog spells one.
             # `?x` is egg's spelling and still works: the sigil is stripped above, so the
             # two name the same variable and a rule may mix them. A global takes

@@ -14,6 +14,8 @@
 (constructor Succ (U) U)
 (constructor Prev (U) U)
 (constructor Pair (U U) U)
+(constructor IConst () U)
+(constructor Mul (U U) U)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -127,4 +129,34 @@
 
 (check (= s3 (Null)))
 (fail (check (= s2 (Null))))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A `let`-bound global used in a PATTERN. The encoder's atoms have no case for "the
+;;; value this name holds", so the term the name was bound to is inlined -- sound
+;;; because a ground term's shape determines its class by congruence.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(let i (IConst))
+(rewrite (Mul a i) a :name id-right)
+
+(let mi (Mul (IConst) (IConst)))
+(run 5)
+(check (= mi (IConst)))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; The same, `$`-prefixed. egglog writes `(let $I (IConst))` and then `$I` in a rule,
+;;; where the `$` is part of an identifier; here `$x` normally means a slot. A bound
+;;; global of that name wins, so egglog's spelling reads as egglog means it.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(let $I (IConst))
+(rewrite (Mul a $I) a :name id-right-dollar)
+
+(let mj (Mul (IConst) (IConst)))
+(run 5)
+(check (= mj (IConst)))
 (pop)
