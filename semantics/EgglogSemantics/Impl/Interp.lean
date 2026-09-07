@@ -1222,6 +1222,24 @@ def execAction (d : FDatabase) : Action → Option FDatabase
   | .set f args out => (Expr.evalList d.sig args d.env).bind fun as =>
       (Expr.evalList d.sig out d.env).map fun vs => d.addRow f as vs
 
+/-- `evalTopAction`, computed: a top-level `let` may not rebind a name the environment
+already holds. -/
+def execTopAction (d : FDatabase) : Action → Option FDatabase
+  | .letBind v e =>
+      if (Env.lookup v d.env).isSome then none else execAction d (.letBind v e)
+  | a => execAction d a
+
+/-- A top-level action that ran is an action that ran. -/
+theorem execAction_of_top {d d' : FDatabase} {a : Action}
+    (h : execTopAction d a = some d') : execAction d a = some d' := by
+  cases a with
+  | letBind v e =>
+      rw [execTopAction] at h
+      split at h
+      · exact absurd h (by simp)
+      · exact h
+  | _ => exact h
+
 /-- `evalActions`, computed. -/
 def execActions (d : FDatabase) : List Action → Option FDatabase
   | [] => some d
@@ -1339,7 +1357,7 @@ def runFuel : Nat := 64
 
 /-- `CmdStep`, computed. -/
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
-  | .action a => execAction d a
+  | .action a => execTopAction d a
   | .rule r => some { d with rules := r :: d.rules }
   | .run R => some (execRunRules R d)
   | .saturate R => d.runSaturateF R runFuel

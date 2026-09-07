@@ -761,6 +761,21 @@ theorem execAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
       | none => simp [execAction, evalAction, hv₁, hv₂]
       | some vs => simp [execAction, evalAction, hv₁, hv₂, FDatabase.toDatabase_addRow he]
 
+/-- **The interpreter's top-level action is the specification's.** The freshness guard reads
+the same environment on both sides. -/
+theorem execTopAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
+    (execTopAction d a).map FDatabase.toDatabase = evalTopAction d.toDatabase a := by
+  cases a with
+  | letBind v e =>
+      have henv : d.toDatabase.env = d.env := rfl
+      rw [execTopAction, evalTopAction, henv]
+      split
+      · simp
+      · exact execAction_toDatabase he
+  | expr e => exact execAction_toDatabase (a := .expr e) he
+  | union e₁ e₂ => exact execAction_toDatabase (a := .union e₁ e₂) he
+  | set f args out => exact execAction_toDatabase (a := .set f args out) he
+
 theorem execActions_toDatabase {as : List Action} : ∀ {d : FDatabase}, d.EqsInTerms →
     (execActions d as).map FDatabase.toDatabase = evalActions d.toDatabase as := by
   induction as with
@@ -1234,7 +1249,7 @@ theorem execCmd_toDatabase {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.All
     {c : Cmd} (hns : c.NoSaturate) :
     (execCmd d c).map FDatabase.toDatabase = cmdEffect d.toDatabase c := by
   cases c with
-  | action a => exact execAction_toDatabase he
+  | action a => exact execTopAction_toDatabase he
   | rule r =>
     rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
       Option.map_some, FDatabase.toDatabase_consRule]
@@ -1264,7 +1279,7 @@ theorem execCmd_cmdReach {d d' : FDatabase} (he : d.EqsInTerms)
 theorem execCmd_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {c : Cmd}
     (h : execCmd d c = some d') : d'.EqsInTerms := by
   cases c with
-  | action a => exact execAction_eqsInTerms he h
+  | action a => exact execAction_eqsInTerms he (execAction_of_top h)
   | rule r =>
     rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
       Option.some.injEq] at h

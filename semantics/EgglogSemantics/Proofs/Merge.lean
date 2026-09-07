@@ -1160,7 +1160,7 @@ theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   refine Database.Contained.trans ?_ (MergeClosure.contained hcl)
   cases c with
   | saturate R => exact RunReach.contained (show SaturateReach R db d from hreach).1
-  | action a => exact evalAction_contained hreach
+  | action a => exact evalAction_contained (evalAction_of_top hreach)
   | rule r =>
     replace hreach : cmdEffect db (.rule r) = some d := hreach
     rw [cmdEffect, Option.some.injEq] at hreach; subst hreach; exact ⟨subset_rfl⟩
@@ -1872,6 +1872,12 @@ after M12 is what `CmdStep.action`, `RuleResults` and `MergeStep.collide` read. 
 theorem FDatabase.execAction_evalAction {d d' : FDatabase} (he : d.EqsInTerms) {a : Action}
     (hs : execAction d a = some d') : evalAction d.toDatabase a = some d'.toDatabase := by
   rw [← execAction_toDatabase he, hs, Option.map_some]
+
+/-- `execTopAction_toDatabase` in the `some` shape the merge proofs use. -/
+theorem FDatabase.execTopAction_evalTopAction {d d' : FDatabase} (he : d.EqsInTerms)
+    {a : Action} (hs : execTopAction d a = some d') :
+    evalTopAction d.toDatabase a = some d'.toDatabase := by
+  rw [← execTopAction_toDatabase he, hs, Option.map_some]
 
 /-- `execActions_toDatabase` in the `some` shape the merge proofs use. -/
 theorem FDatabase.execActions_evalActions {d d' : FDatabase} (he : d.EqsInTerms)
@@ -2640,7 +2646,7 @@ carries `Signature.AllConstructors` along a run. -/
 theorem execCmd_sigBind {d d' : FDatabase} {c : Cmd} (hs : execCmd d c = some d') :
     d'.sig = c.sigBind d.sig := by
   cases c with
-  | action a => exact FDatabase.execAction_sig hs
+  | action a => exact FDatabase.execAction_sig (execAction_of_top hs)
   | rule r => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ rfl
   | run R => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ sig_execRunRules
   | saturate R =>
@@ -2657,12 +2663,14 @@ theorem execProgramM_eq_execProgram {d : FDatabase} (hsig : d.sig.AllConstructor
     have hc : d.execCmdM c = execCmd d c := by
       cases c with
       | action a =>
-        change (execAction d a).bind (FDatabase.mergeSaturateF mergeFuel) = execAction d a
-        cases hv : execAction d a with
+        change (execTopAction d a).bind (FDatabase.mergeSaturateF mergeFuel)
+          = execTopAction d a
+        cases hv : execTopAction d a with
         | none => rfl
         | some e =>
           rw [Option.bind_some, FDatabase.mergeSaturateF_eq_self
-            (FDatabase.hasMergeRow_eq_false (by rw [FDatabase.execAction_sig hv]; exact hsig))]
+            (FDatabase.hasMergeRow_eq_false (by
+              rw [FDatabase.execAction_sig (execAction_of_top hv)]; exact hsig))]
       | rule r => rfl
       | run R => exact FDatabase.runRoundM_eq_round hsig
       | saturate R => exact FDatabase.runSaturateM_eq_runSaturateF runFuel hsig
@@ -3125,7 +3133,7 @@ theorem cmdEffect_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.Declar
     (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig) (hsl : c.SetLegal db.sig)
     (hfresh : c.DeclFresh db.sig) (h : cmdEffect db c = some d) : d.DeclaredTerms := by
   cases c with
-  | action a => exact evalAction_declaredTerms hwf hdt hw hsl h
+  | action a => exact evalAction_declaredTerms hwf hdt hw hsl (evalAction_of_top h)
   | rule r =>
     rw [cmdEffect, Option.some_inj] at h
     subst h
@@ -4846,6 +4854,7 @@ theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
       e.toDatabase.Recorded db := by
   rw [FDatabase.execCmdM] at hs
   obtain ⟨d₁, hd₁, hsat⟩ := Option.bind_eq_some_iff.mp hs
+  replace hd₁ : execAction d a = some d₁ := execAction_of_top hd₁
   have hsig₁ : d₁.sig = d.sig := execAction_sig hd₁
   have hlegal₁ : Signature.MergesLegal d₁.sig := by rw [hsig₁]; exact hlegal
   have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
@@ -4910,7 +4919,7 @@ theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.Un
         (fun _ _ hp hs => RunStep.noUnions hs hp)
         (show SaturateReach R A e from hreach).1 hn
     | action a =>
-      replace heff : cmdEffect A (.action a) = some e := hreach
+      replace heff : evalAction A a = some e := evalAction_of_top hreach
       exact ⟨evalAction_diag hu hn.diag heff, by rw [evalAction_sig heff]; exact hn.sig,
         by rw [evalAction_rules heff]; exact hn.rules⟩
     | rule r =>
@@ -4947,6 +4956,7 @@ theorem cmdEffect_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
     (hu : c.OrderingFree) (heff : cmdEffect A c = some e) : e.NoOrdering := by
   cases c with
   | action a =>
+    replace heff : evalAction A a = some e := evalAction_of_top heff
     exact ⟨by rw [evalAction_sig heff]; exact hn.sig,
       by rw [evalAction_rules heff]; exact hn.rules⟩
   | rule r =>
@@ -5040,8 +5050,10 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
       e.rules = E.rules := by
     cases c with
     | action a =>
+      have htop : evalTopAction A a = some e := heff
+      replace heff : evalAction A a = some e := evalAction_of_top htop
       obtain ⟨E, hE, hcont, hs, he⟩ := evalAction_mono hc hsig henv heff
-      exact ⟨E, hE, hcont, hs, he,
+      exact ⟨E, evalTopAction_of_env henv htop hE, hcont, hs, he,
         by rw [evalAction_rules heff, evalAction_rules hE, hrules]⟩
     | rule r =>
       rw [cmdEffect, Option.some.injEq] at heff
@@ -5165,8 +5177,10 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
     have hwfe : e.WF := cmdEffect_wf hwfA heff
     cases c with
     | action a =>
+      have htop : evalTopAction A a = some e := heff
+      replace heff : evalAction A a = some e := evalAction_of_top htop
       obtain ⟨E, hE, hcont, hs, he⟩ := evalAction_mono_recorded hc hsig henv heff
-      exact ⟨E, hE, hcont, hs, he,
+      exact ⟨E, evalTopAction_of_env henv htop hE, hcont, hs, he,
         by rw [evalAction_rules heff, evalAction_rules hE, hrules],
         evalAction_wf hwfC hE, hwfe⟩
     | rule r =>
@@ -5913,7 +5927,7 @@ theorem execCmdM_sig {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') 
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    rw [(mergeSaturateF_fields h₂).1, execAction_sig h₁]
+    rw [(mergeSaturateF_fields h₂).1, execAction_sig (execAction_of_top h₁)]
     rfl
   | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
   | run R =>
@@ -5964,6 +5978,7 @@ theorem Inv.execCmdM {d d' : FDatabase} (h : d.Inv) {c : Cmd}
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    replace h₁ : Egglog.execAction d a = some d₁ := execAction_of_top h₁
     refine Inv.mergeSaturateF (h.execAction hlegal h₁) ?_ h₂
     rw [execAction_sig h₁]; exact hmerges
   | rule r =>
@@ -5992,6 +6007,7 @@ theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    replace h₁ : execAction d a = some d₁ := execAction_of_top h₁
     rw [(mergeSaturateF_fields h₂).1, (mergeSaturateF_fields h₂).2.2,
       execAction_sig h₁, execAction_rules h₁]
     exact hrules
@@ -6033,6 +6049,9 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.No
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, hd₁, hsat⟩ := Option.bind_eq_some_iff.mp hs
+    have htop : evalTopAction d.toDatabase a = some d₁.toDatabase :=
+      FDatabase.execTopAction_evalTopAction h.eqs hd₁
+    replace hd₁ : execAction d a = some d₁ := execAction_of_top hd₁
     have hmerges₁ : Signature.MergesLegal d₁.sig := by
       rw [execAction_sig hd₁]; exact hmerges
     have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
@@ -6043,7 +6062,7 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.No
         · exact Or.inl ⟨by rw [execAction_sig hd₁]; exact hnu.sig,
             evalAction_diag hcu hnu.diag heval⟩
         · exact Or.inr (by rw [execAction_sig hd₁]; exact hno.sig)) hsat
-    refine ⟨db, ⟨d₁.toDatabase, heval, hcl⟩, hcont,
+    refine ⟨db, ⟨d₁.toDatabase, htop, hcl⟩, hcont,
       ?_, ?_, ?_⟩
     · change d'.sig = db.sig
       rw [MergeClosure.sig hcl]; exact (mergeSaturateF_fields hsat).1

@@ -1,3 +1,4 @@
+import EgglogSemantics.Encoding.Complete
 import EgglogSemantics.Encoding.Correspond
 import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Encoding.Checker
@@ -1855,6 +1856,48 @@ private def litMixCase : Program :=
   [.action (.expr (add (.lit (.int 1)) (C "One"))),
    .action (.union (.lit (.int 1)) (add (.lit (.int 1)) (C "One")))]
 
+/-! #### Shadowing a global
+
+The two shapes that a top-level `let` binding a name the program already binds costs the
+encoder, and that `Spec/Eval.lean`'s `evalTopAction` now refuses. Both are **in**
+`Program.EncodeDomain` — shadowing is a `Spec/` condition, not a domain clause — and both are
+excluded from `encode_corresponds` by `hsrc` alone: a shadowing program has no `ProgramStep`
+(`Egglog.letNames_nodup_of_programStep`), and the interpreter agrees by getting stuck at the
+second `let`.
+
+They are probes rather than corpus cases because **nothing this file emits may be a program
+egglog rejects** (`writeCase`, whose fifth guard is now `Program.shadowedGlobals`): egglog
+answers "Shadowing is not allowed" and a rejected case is a missing one, not a failing one.
+
+What each is for. `shadowGlobCase` is `glob-lost`'s shape with the `let` doubled:
+`Cmd.globalBind`'s once-only guard declines `$g`, `Rule.substGlobals` therefore leaves the
+query keyed at the frozen environment term, and the source derives a `(Hit)` the target's
+`@HitView` does not — one against zero. `shadowInheritCase` is the second, subtler shape: `$a`
+is doubly bound and declined, so `(Wrapper $a)` is not closed when `$b`'s own `let` is reached
+and the *closedness* guard declines `$b` too, a global only one `let` binds. Excluding the
+first excludes the second, which is why one condition covers both. -/
+private def shadowGlobCase : Program :=
+  [.action (.letBind "$g" (C "Yy")),
+   .action (.letBind "$g" (C "Yy")),
+   .action (.expr (.app "Wrapper" [C "Aa"])),
+   .action (.union (C "Yy") (C "Aa")),
+   .rule wrapGlobRule, .run ""]
+
+/-- `shadowInheritCase`'s rule: the query reads the global that inherits the defect. -/
+private def wrapGlobBRule : Rule where
+  query := [.expr (.app "Wrapper" [.var "$b"])]
+  actions := [.expr (C "Hit")]
+  ruleset := ""
+
+@[inherit_doc shadowGlobCase]
+private def shadowInheritCase : Program :=
+  [.action (.letBind "$a" (C "Yy")),
+   .action (.letBind "$a" (C "Yy")),
+   .action (.letBind "$b" (.app "Wrapper" [.var "$a"])),
+   .action (.expr (.app "Wrapper" [.app "Wrapper" [C "Aa"]])),
+   .action (.union (C "Yy") (C "Aa")),
+   .rule wrapGlobBRule, .run ""]
+
 /-- The probes, reachable from `difftest encode <fuel> <name>` by name. The `-run` variants
 append one empty round, which is what makes `encode` emit a `Cmd.saturate rebuildRuleset` and
 so the only way to ask whether the rebuild repairs the gap `upCase` shows. They are out of
@@ -1867,7 +1910,8 @@ private def probeCases : List (String × Program) :=
    ("chain", chainCase), ("chain-run", chainCase ++ [.run ""]),
    ("chain-down", chainDownCase), ("depth", depthCase),
    ("tower", towerCase), ("order", orderCase), ("round", roundCase),
-   ("lit-union", litUnionCase), ("lit-mix", litMixCase)]
+   ("lit-union", litUnionCase), ("lit-mix", litMixCase),
+   ("shadow-glob", shadowGlobCase), ("shadow-inherit", shadowInheritCase)]
 
 namespace Egglog
 /-! ### The proof encoding, by tuple count
@@ -2130,6 +2174,46 @@ def stuckAt (fuel : Nat) (d : FDatabase) (i : Nat) : Program → Option (Nat × 
       match d.execCmdM c with
       | none => some (i, c)
       | some d' => stuckAt fuel d' (i + 1) cs
+
+
+/-- The names more than one top-level `let` binds. egglog rejects such a program outright:
+`remove_globals` turns a top-level `let` into a function declaration and `Names::check`
+answers `Error::Shadowing` — "Shadowing is not allowed" — on a name it has already seen
+(`egglog/src/ast/check_shadowing.rs:49-50`, `:11-12`). `Spec/Eval.lean`'s `evalTopAction` is
+the model's own refusal, so such a program has no `ProgramStep` either. -/
+def Program.shadowedGlobals (p : Program) : List Var :=
+  (p.letNames.filter fun v => 1 < p.letNames.count v).dedup
+
+/-! Both are in `encode`'s domain — the nine clauses say nothing about shadowing — and both
+are what `writeCase`'s new guard refuses to emit. -/
+set_option linter.hashCommand false in
+#guard (shadowGlobCase.declared).encodeDomainB && (shadowInheritCase.declared).encodeDomainB
+set_option linter.hashCommand false in
+#guard (shadowGlobCase.declared).shadowedGlobals = ["$g"]
+set_option linter.hashCommand false in
+#guard (shadowInheritCase.declared).shadowedGlobals = ["$a"]
+
+/-! And both are excluded by `hsrc`: the run stops at the second `let`, which is the
+command the interpreter names. -/
+set_option linter.hashCommand false in
+#guard (stuckAt runFuel FDatabase.empty 0 shadowGlobCase.declared).map (fun c => c.2.toEgg)
+  = some "(let $g (Yy))"
+set_option linter.hashCommand false in
+#guard (stuckAt runFuel FDatabase.empty 0 shadowInheritCase.declared).map (fun c => c.2.toEgg)
+  = some "(let $a (Yy))"
+
+/-- **The first counterexample is out of the theorem's reach**, by `hsrc` and nothing else:
+`Egglog.letNames_nodup_of_programStep` says a program the source ran binds no name twice. -/
+theorem shadowGlobCase_not_programStep :
+    ¬ ∃ D, ProgramStep Database.empty shadowGlobCase.declared D := by
+  rintro ⟨D, h⟩
+  exact absurd (Egglog.letNames_nodup_of_programStep h).1 (by decide)
+
+@[inherit_doc shadowGlobCase_not_programStep]
+theorem shadowInheritCase_not_programStep :
+    ¬ ∃ D, ProgramStep Database.empty shadowInheritCase.declared D := by
+  rintro ⟨D, h⟩
+  exact absurd (Egglog.letNames_nodup_of_programStep h).1 (by decide)
 
 /-- The exponent the e-matcher runs at: the most free variables any one rule's query has.
 `matchQuery` assigns a query's free variables all at once from `valueTerms`, so a case costs
@@ -3461,7 +3545,10 @@ the offending command runs:
 * nothing reads a row except a `Pattern.values` atom (`Program.illegalReads`, over
   `Cmd.noLookup`) — egglog rejects this in a rule head, and the model everywhere;
 * no name is used at two key arities, which the emitted `datatype` header cannot express
-  (`Program.arityConflicts`). -/
+  (`Program.arityConflicts`);
+* no two top-level `let`s bind the same name (`Program.shadowedGlobals`) — egglog answers
+  "Shadowing is not allowed", and `Spec/Eval.lean`'s `evalTopAction` refuses it too, so such a
+  program has no `ProgramStep` and nothing to compare. -/
 private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
   let p := p₀.declared
   unless p.illegalSets.isEmpty do
@@ -3479,6 +3566,10 @@ private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
     throw <| IO.userError
       s!"difftest: {name} uses {p.arityConflicts} at more than one arity, which egglog \
          rejects with \"Function already bound\""
+  unless p.shadowedGlobals.isEmpty do
+    throw <| IO.userError
+      s!"difftest: {name} binds {p.shadowedGlobals} with more than one top-level let, \
+         which egglog rejects with \"Shadowing is not allowed\""
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 

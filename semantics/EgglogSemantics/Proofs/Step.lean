@@ -387,7 +387,7 @@ into a fact about the deterministic effect and `MergeClosure`'s own. -/
 theorem cmdEffect_sig {db d : Database} {c : Cmd} (h : cmdEffect db c = some d) :
     d.sig = c.sigBind db.sig := by
   cases c with
-  | action a => simp only [cmdEffect] at h; exact evalAction_sig h
+  | action a => simp only [cmdEffect] at h; exact evalAction_sig (evalAction_of_top h)
   | rule r => simp only [cmdEffect, Option.some.injEq] at h; subst h; rfl
   | run R => simp only [cmdEffect, Option.some.injEq] at h; subst h; rfl
   | saturate R => exact absurd h (by simp [cmdEffect])
@@ -396,7 +396,7 @@ theorem cmdEffect_sig {db d : Database} {c : Cmd} (h : cmdEffect db c = some d) 
 theorem cmdEffect_wf {db d : Database} (hw : db.WF) {c : Cmd}
     (h : cmdEffect db c = some d) : d.WF := by
   cases c with
-  | action a => simp only [cmdEffect] at h; exact evalAction_wf hw h
+  | action a => simp only [cmdEffect] at h; exact evalAction_wf hw (evalAction_of_top h)
   | rule r => simp only [cmdEffect, Option.some.injEq] at h; subst h; exact hw.congr rfl rfl
   | run R => simp only [cmdEffect, Option.some.injEq] at h; subst h; exact RunRules.wf hw
   | saturate R => exact absurd h (by simp [cmdEffect])

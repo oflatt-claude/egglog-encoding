@@ -339,6 +339,7 @@ theorem execCmdM_noAtEnv {d d' : FDatabase} {c : Cmd} (hc : c.NoAtLet) (h : d.No
   | action a =>
       rw [FDatabase.execCmdM] at hs
       obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+      replace h₁ := execAction_of_top h₁
       rw [NoAtEnv, (FDatabase.mergeSaturateF_fields h₂).2.1]
       cases a with
       | expr e =>
@@ -659,7 +660,7 @@ theorem mem_letNames_of_lookup_env : ∀ {p : Program} {db sd : Database} {v : V
       | action a =>
           subst hc
           obtain ⟨d₀, hreach, hcl⟩ := hstep
-          have hev : evalAction db₀ a = some d₀ := hreach
+          have hev : evalAction db₀ a = some d₀ := evalAction_of_top hreach
           have henv : d.env = d₀.env := (MergeClosure.envRules hcl).1
           cases a with
           | letBind w e =>
@@ -714,6 +715,169 @@ theorem mem_letNames_of_lookup_env : ∀ {p : Program} {db sd : Database} {v : V
               (hc ▸ hstep)] at hd
             exact hd)
 
+theorem Program.letNames_cons_action_letBind (v : Var) (e : Expr) (q : Program) :
+    Program.letNames (Cmd.action (.letBind v e) :: q) = v :: Program.letNames q := rfl
+
+theorem Program.letNames_append (p q : Program) :
+    Program.letNames (p ++ q) = Program.letNames p ++ Program.letNames q := by
+  rw [Program.letNames, Program.letNames, Program.letNames, List.filterMap_append]
+
+/-! ### The shadowing restriction, read off a source run
+
+`Spec/Eval.lean`'s `evalTopAction` is stuck at a top-level `let` whose name the environment
+already holds, so a program that binds a name twice has **no `ProgramStep`** — and a theorem
+whose hypothesis is a source run gets `Cmd.globalBind`'s "exactly once" guard for free rather
+than asking for it. -/
+
+/-- **A top-level `let` that ran found its name free.** `evalTopAction`'s guard, read back off
+a `CmdStep`. -/
+theorem cmdStep_letBind_fresh {sd sd' : Database} {v : Var} {e : Expr}
+    (h : CmdStep sd (.action (.letBind v e)) sd') : Env.lookup v sd.env = none := by
+  obtain ⟨d, hreach, -⟩ := h
+  have htop : evalTopAction sd (.letBind v e) = some d := hreach
+  rw [evalTopAction] at htop
+  split at htop
+  · exact absurd htop (by simp)
+  · rename_i hne; exact Option.not_isSome_iff_eq_none.mp hne
+
+/-- **A top-level `let` that ran left its name bound.** -/
+theorem cmdStep_letBind_bound {sd sd' : Database} {v : Var} {e : Expr}
+    (h : CmdStep sd (.action (.letBind v e)) sd') : (Env.lookup v sd'.env).isSome := by
+  obtain ⟨d, hreach, hcl⟩ := h
+  have hev : evalAction sd (.letBind v e) = some d := evalAction_of_top hreach
+  rw [evalAction] at hev
+  obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hev
+  rw [(MergeClosure.envRules hcl).1]
+  simp [Env.lookup]
+
+/-- **The environment only grows along a command.** Only a top-level `let` writes it, and it
+writes by prepending; the merge phase fixes it (`MergeClosure.envRules`). -/
+theorem cmdStep_lookup_mono {sd sd' : Database} {c : Cmd} (h : CmdStep sd c sd') {v : Var}
+    (hv : (Env.lookup v sd.env).isSome) : (Env.lookup v sd'.env).isSome := by
+  obtain ⟨d, hreach, hcl⟩ := h
+  rw [(MergeClosure.envRules hcl).1]
+  cases c with
+  | action a =>
+      have hev : evalAction sd a = some d := evalAction_of_top hreach
+      cases a with
+      | letBind w e =>
+          rw [evalAction] at hev
+          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hev
+          by_cases hvw : v = w
+          · simp [Env.lookup, hvw]
+          · simpa [Env.lookup, hvw] using hv
+      | expr e =>
+          rw [evalAction] at hev
+          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hev
+          exact hv
+      | union e₁ e₂ =>
+          rw [evalAction] at hev
+          obtain ⟨t₁, -, hev⟩ := Option.bind_eq_some_iff.mp hev
+          obtain ⟨t₂, -, hev⟩ := Option.bind_eq_some_iff.mp hev
+          by_cases hl : t₁.isLit || t₂.isLit
+          · rw [if_pos hl] at hev; exact absurd hev (by simp)
+          · rw [if_neg hl, Option.some.injEq] at hev; rw [← hev]; exact hv
+      | set f args out =>
+          rw [evalAction] at hev
+          obtain ⟨as, -, hev⟩ := Option.bind_eq_some_iff.mp hev
+          obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp hev
+          exact hv
+  | rule r =>
+      replace hreach : cmdEffect sd (.rule r) = some d := hreach
+      rw [cmdEffect, Option.some.injEq] at hreach; exact hreach ▸ hv
+  | run R =>
+      replace hreach : cmdEffect sd (.run R) = some d := hreach
+      rw [cmdEffect, Option.some.injEq] at hreach; exact hreach ▸ hv
+  | saturate R =>
+      rw [runStepReach_env (show SaturateReach R sd d from hreach).1]; exact hv
+  | decl f dc =>
+      replace hreach : cmdEffect sd (.decl f dc) = some d := hreach
+      rw [cmdEffect, Option.some.injEq] at hreach; exact hreach ▸ hv
+
+@[inherit_doc cmdStep_lookup_mono]
+theorem programStep_lookup_mono {p : Program} {sd sd' : Database} (h : ProgramStep sd p sd')
+    {v : Var} (hv : (Env.lookup v sd.env).isSome) : (Env.lookup v sd'.env).isSome := by
+  induction h with
+  | nil => exact hv
+  | cons hstep _ ih => exact ih (cmdStep_lookup_mono hstep hv)
+
+/-- **A source run binds every name its top-level `let`s name.** The converse of
+`mem_letNames_of_lookup_env`. -/
+theorem lookup_env_of_mem_letNames : ∀ {p : Program} {sd sd' : Database} {v : Var},
+    ProgramStep sd p sd' → v ∈ Program.letNames p → (Env.lookup v sd'.env).isSome := by
+  intro p sd sd' v h
+  induction h with
+  | nil => intro hm; exact absurd hm (by simp [Program.letNames])
+  | @cons sd₀ d sd₁ c cs hstep hrest ih =>
+      intro hm
+      cases c with
+      | action a =>
+          cases a with
+          | letBind w e =>
+              rw [Program.letNames_cons_action_letBind, List.mem_cons] at hm
+              rcases hm with rfl | hm
+              · exact programStep_lookup_mono hrest (cmdStep_letBind_bound hstep)
+              · exact ih hm
+          | _ => exact ih (by simpa [Program.letNames] using hm)
+      | _ => exact ih (by simpa [Program.letNames] using hm)
+
+/-- **A program that runs binds no name twice.** `evalTopAction`'s guard, as a property of the
+program text: the second `let` would find the first one's name in the environment and stop
+there, so `hsrc` alone rules the program out. This is egglog's "Shadowing is not allowed"
+(`egglog/src/ast/check_shadowing.rs:11-12`, reached from the `Function` case at `:49-50`, which
+is where `remove_globals` sends a top-level `let`).
+
+What it buys is `Cmd.globalBind`'s first guard: `P.letNames.count v = 1` at every top-level
+`let` of a program the source ran, so the encoder substitutes **every** global rather than
+leaving the declined ones frozen in the query. -/
+theorem letNames_nodup_of_programStep : ∀ {p : Program} {sd sd' : Database},
+    ProgramStep sd p sd' →
+    (Program.letNames p).Nodup ∧ ∀ v ∈ Program.letNames p, Env.lookup v sd.env = none := by
+  intro p sd sd' h
+  induction h with
+  | nil => exact ⟨by simp [Program.letNames], by simp [Program.letNames]⟩
+  | @cons sd₀ d sd₁ c cs hstep hrest ih =>
+      cases c with
+      | action a =>
+          cases a with
+          | letBind w e =>
+              have hfresh : Env.lookup w sd₀.env = none := cmdStep_letBind_fresh hstep
+              have hbound : (Env.lookup w d.env).isSome := cmdStep_letBind_bound hstep
+              have hnot : w ∉ Program.letNames cs := fun hc => by
+                rw [ih.2 w hc] at hbound; exact absurd hbound (by simp)
+              refine ⟨?_, ?_⟩
+              · rw [Program.letNames_cons_action_letBind]
+                exact List.nodup_cons.mpr ⟨hnot, ih.1⟩
+              · intro u hu
+                rw [Program.letNames_cons_action_letBind, List.mem_cons] at hu
+                rcases hu with rfl | hu
+                · exact hfresh
+                · by_contra hc
+                  obtain ⟨t, ht⟩ := Option.ne_none_iff_exists'.mp hc
+                  exact absurd (cmdStep_lookup_mono hstep (v := u) (by rw [ht]; rfl))
+                    (by rw [ih.2 u hu]; simp)
+              | _ =>
+                  refine ⟨by simpa [Program.letNames] using ih.1, fun u hu => ?_⟩
+                  have hu' : u ∈ Program.letNames cs := by simpa [Program.letNames] using hu
+                  by_contra hc
+                  obtain ⟨t, ht⟩ := Option.ne_none_iff_exists'.mp hc
+                  exact absurd (cmdStep_lookup_mono hstep (v := u) (by rw [ht]; rfl))
+                    (by rw [ih.2 u hu']; simp)
+      | _ =>
+          refine ⟨by simpa [Program.letNames] using ih.1, fun u hu => ?_⟩
+          have hu' : u ∈ Program.letNames cs := by simpa [Program.letNames] using hu
+          by_contra hc
+          obtain ⟨t, ht⟩ := Option.ne_none_iff_exists'.mp hc
+          exact absurd (cmdStep_lookup_mono hstep (v := u) (by rw [ht]; rfl))
+            (by rw [ih.2 u hu']; simp)
+
+/-- `Cmd.globalBind`'s **first guard, discharged from the run**: a program the source ran
+binds each of its top-level `let` names exactly once. -/
+theorem letNames_count_of_programStep {p : Program} {sd sd' : Database}
+    (h : ProgramStep sd p sd') {v : Var} (hv : v ∈ Program.letNames p) :
+    (Program.letNames p).count v = 1 :=
+  List.count_eq_one_of_mem (letNames_nodup_of_programStep h).1 hv
+
 /-- Rounds of a ruleset do not move the signature. -/
 theorem runStepReach_sig {R : RulesetName} {sd d : Database}
     (h : Relation.ReflTransGen (RunStep R) sd d) : d.sig = sd.sig := by
@@ -729,7 +893,7 @@ theorem cmdStep_sig_eq_of_noDecl {sd sd' : Database} {c : Cmd}
   cases c with
   | decl f dc => exact absurd rfl (hc f dc)
   | action a =>
-      replace hreach : evalAction sd a = some d := hreach
+      replace hreach : evalAction sd a = some d := evalAction_of_top hreach
       exact evalAction_sig hreach
   | saturate R =>
       replace hreach : SaturateReach R sd d := hreach
@@ -740,13 +904,6 @@ theorem cmdStep_sig_eq_of_noDecl {sd sd' : Database} {c : Cmd}
   | run R =>
       replace hreach : cmdEffect sd (.run R) = some d := hreach
       rw [cmdEffect, Option.some.injEq] at hreach; exact hreach ▸ rfl
-
-theorem Program.letNames_cons_action_letBind (v : Var) (e : Expr) (q : Program) :
-    Program.letNames (Cmd.action (.letBind v e) :: q) = v :: Program.letNames q := rfl
-
-theorem Program.letNames_append (p q : Program) :
-    Program.letNames (p ++ q) = Program.letNames p ++ Program.letNames q := by
-  rw [Program.letNames, Program.letNames, Program.letNames, List.filterMap_append]
 
 /-- **A name the substitution carries is not the one a later `let` binds.** Two occurrences —
 the one the source's environment already has, and this command's — against the guard's
@@ -797,7 +954,7 @@ theorem cmdStep_rules_subset {sd sd' : Database} {c : Cmd} (h : CmdStep sd c sd'
   rw [hd]
   cases c with
   | action a =>
-      have hv : evalAction sd a = some d := hreach
+      have hv : evalAction sd a = some d := evalAction_of_top hreach
       rw [evalAction_rules hv]; exact hr
   | rule r' =>
       replace hreach : cmdEffect sd (.rule r') = some d := hreach
@@ -998,7 +1155,7 @@ theorem globalsInline_action {P pre q : Program} {a : Action} {sd sd' : Database
   have hsig : sd'.sig = sd.sig :=
     cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep
   obtain ⟨d₀, hreach, hcl⟩ := hstep
-  have hev : evalAction sd a = some d₀ := hreach
+  have hev : evalAction sd a = some d₀ := evalAction_of_top hreach
   have henv : sd'.env = d₀.env := (MergeClosure.envRules hcl).1
   cases a with
   | expr e =>
@@ -1078,7 +1235,7 @@ theorem globalsInline_step {P : Program} (hdom : P.EncodeDomain) {pre q : Progra
       have hsig : sd'.sig = sd.sig :=
         cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep
       obtain ⟨d₀, hreach, hcl⟩ := hstep
-      have hev : evalAction sd a = some d₀ := hreach
+      have hev : evalAction sd a = some d₀ := evalAction_of_top hreach
       have henv : sd'.env = d₀.env := (MergeClosure.envRules hcl).1
       cases a with
       | expr e => exact ⟨hkeep, honce⟩
@@ -1447,6 +1604,7 @@ theorem execProgramM_rules_of_declOrRule {p : Program} :
       | action a =>
         rw [FDatabase.execCmdM] at h₁
         obtain ⟨d₀, ha, hm⟩ := Option.bind_eq_some_iff.mp h₁
+        replace ha := execAction_of_top ha
         rw [(FDatabase.mergeSaturateF_fields hm).2.2, FDatabase.execAction_rules ha] at hc
         exact Or.inr hc
       | run R =>
@@ -2541,6 +2699,7 @@ theorem execProgramM_sets_soundTerms {P : Program} {sg : Signature} {src : Datab
     have h₂c : d.execCmdM (Cmd.action b) = some d₂ := h₂
     rw [FDatabase.execCmdM] at h₂
     obtain ⟨d₁, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₂
+    replace hact := execAction_of_top hact
     have hbset : b.IsSet := hset b List.mem_cons_self
     have hwlb : b.WriteLegal d.sig := by
       rw [hb.sig]; exact ⟨(hwl b List.mem_cons_self).1.1, (hwl b List.mem_cons_self).2.1⟩
@@ -2728,6 +2887,7 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
     have hlast : D₁.execCmdM (Cmd.action (.letBind v e)) = some D := execProgramM_single hafter
     rw [FDatabase.execCmdM] at hlast
     obtain ⟨D₂, hact, hmerge⟩ := Option.bind_eq_some_iff.mp hlast
+    replace hact := execAction_of_top hact
     obtain ⟨t', htgtev, hD₂⟩ : ∃ t', e.eval D₁.sig D₁.env = some t' ∧
         D₂ = { D₁.addTerm t' with env := (v, t') :: D₁.env } := by
       rw [execAction] at hact
@@ -2945,6 +3105,7 @@ theorem FDatabase.EncBase.execCmdM_ufRowsDescend {P : Program} {sg : Signature}
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    replace h₁ := execAction_of_top h₁
     refine mergeSaturateF_ufRowsDescend mergeFuel ?_ ?_ ?_ ?_
       (execAction_ufRowsDescend hok hdes h₁) h₂
     · rw [FDatabase.execAction_sig h₁, hb.sig]; exact hb.shape
@@ -3541,7 +3702,7 @@ theorem cmdStep_termsBuilds {db db' : Database} (hc : db.CtorState) (h : db.Term
   obtain ⟨d, hreach, hcl⟩ := hstep
   cases c with
   | action a =>
-      have hv : evalAction db a = some d := hreach
+      have hv : evalAction db a = some d := evalAction_of_top hreach
       obtain rfl : db' = d :=
         hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
       exact ⟨evalAction_termsBuild hc.wf h.terms hns hv,
@@ -4779,6 +4940,7 @@ theorem FDatabase.EncBase.execCmdM_entryRowsUF {P : Program} (hdom : P.EncodeDom
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    replace h₁ := execAction_of_top h₁
     have hsig₁ : d₁.sig = d.sig := FDatabase.execAction_sig h₁
     refine mergeSaturateF_entryRowsUF mergeFuel ?_ ?_ ?_ ?_
       (execAction_entryRowsUF hshape hb.inv hok (by rw [hb.sig]; exact hwl) h h₁) h₂
@@ -6244,6 +6406,7 @@ theorem FDatabase.EncBase.execCmdM_valued {P : Program} {d d' : FDatabase} {c : 
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    replace h₁ := execAction_of_top h₁
     have hsig₁ : d₁.sig = d.sig := FDatabase.execAction_sig h₁
     refine mergeSaturateF_valued mergeFuel ?_ ?_ ?_ (execAction_valued h h₁) h₂
     · rw [hsig₁, hb.sig]; exact hb.merges
@@ -6901,6 +7064,7 @@ theorem FDatabase.EncBase.execCmdM_ufTermsDescend {P : Program} (hdom : P.Encode
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    replace h₁ := execAction_of_top h₁
     refine mergeSaturateF_ufTermsDescend mergeFuel ?_ ?_ ?_ ?_
       (execAction_ufRowsDescend hok hdes h₁)
       (execAction_ufTermsDescend hb.inv hok hent h h₁) h₂
@@ -7948,7 +8112,8 @@ theorem uSrcBase_cmdStep_union :
     CmdStep uSrcBase (Cmd.action (Action.union (.app "A" []) (.app "B" []))) uSrcD := by
   refine ⟨uSrcD, ?_, .refl⟩
   change cmdEffect _ (.action (.union (.app "A" []) (.app "B" []))) = some uSrcD
-  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, uSrcD, uA, uB]
+  simp only [cmdEffect, evalTopAction_union, evalAction, Expr.eval, Expr.evalList, uSrcD,
+    uA, uB]
   rfl
 
 /-- **And the transport is non-vacuous**, at the *encoded* signature and not at the source's:

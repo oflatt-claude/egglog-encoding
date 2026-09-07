@@ -109,9 +109,12 @@ def SaturateReach (R : RulesetName) (db d : Database) : Prop :=
 
 /-- What a command computes before its merge phase. `Option`-valued, so `Spec/Eval.lean`'s
 kind of definition; it sits here because `.run` names `RunRules`. `Cmd.saturate` has no
-such effect — `cmdReach` is what it steps by. -/
+such effect — `cmdReach` is what it steps by.
+
+A top-level action is `evalTopAction`, not `evalAction`: a `let` **declares a global** here,
+so it may not rebind a name the environment already holds. -/
 def cmdEffect (db : Database) : Cmd → Option Database
-  | .action a => evalAction db a
+  | .action a => evalTopAction db a
   | .rule r => some { db with rules := insert r db.rules }
   | .run R => some (RunRules R db)
   | .saturate _ => none

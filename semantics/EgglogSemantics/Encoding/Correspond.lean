@@ -1899,7 +1899,8 @@ theorem execCmdM_terms {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d'
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact fun t ht => mergeSaturateF_terms h₂ t ((execAction_lists h₁).1 t ht)
+    exact fun t ht =>
+      mergeSaturateF_terms h₂ t ((execAction_lists (execAction_of_top h₁)).1 t ht)
   | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
   | run R => exact runRoundM_terms hs
   | saturate R => exact runSaturateM_terms _ hs
@@ -1982,7 +1983,8 @@ theorem execCmdM_eqs {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') 
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact fun p hp => mergeSaturateF_eqs h₂ p ((execAction_lists h₁).2 p hp)
+    exact fun p hp =>
+      mergeSaturateF_eqs h₂ p ((execAction_lists (execAction_of_top h₁)).2 p hp)
   | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
   | run R => exact runRoundM_eqs hs
   | saturate R => exact runSaturateM_eqs _ hs
@@ -2018,7 +2020,8 @@ theorem execCmdM_rules_mono {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = so
   | action a =>
       rw [FDatabase.execCmdM] at hs
       obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-      rw [(FDatabase.mergeSaturateF_fields h₂).2.2, FDatabase.execAction_rules h₁]
+      rw [(FDatabase.mergeSaturateF_fields h₂).2.2,
+        FDatabase.execAction_rules (execAction_of_top h₁)]
       exact hr
   | rule s =>
       rw [FDatabase.execCmdM, Option.some.injEq] at hs
@@ -2468,6 +2471,7 @@ theorem exists_execActions_of_execProgramM {as : List Action} (hs : ∀ a ∈ as
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
     rw [FDatabase.execCmdM] at h₁
     obtain ⟨d₀, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₁
+    replace hact : execAction d a = some d₀ := execAction_of_top hact
     obtain ⟨e₁, he₁, hmem₁⟩ := ih (fun b hb => hs b (List.mem_cons_of_mem _ hb)) h₂
     obtain ⟨hsig, henv, -⟩ := FDatabase.mergeSaturateF_fields hmerge
     obtain ⟨e₀, he₀, hmem₀⟩ :=
@@ -2921,7 +2925,7 @@ theorem execCmdM_env {d d' : FDatabase} : ∀ {c : Cmd}, d.execCmdM c = some d' 
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    rw [(mergeSaturateF_fields h₂).2.1, execAction_env_of_isSet hc h₁]
+    rw [(mergeSaturateF_fields h₂).2.1, execAction_env_of_isSet hc (execAction_of_top h₁)]
   | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
   | run R => exact (runRoundM_fields hs).2.1
   | saturate R => exact (runSaturateM_fields runFuel hs).2.1
@@ -2971,8 +2975,10 @@ theorem execCmdM_letBind {d d' : FDatabase} {v : Var} {e : Expr}
     (h : d.execCmdM (.action (.letBind v e)) = some d') :
     ∃ t, e.eval d.sig d.env = some t ∧ d'.env = (v, t) :: d.env ∧ d'.sig = d.sig ∧
       ∀ s ∈ d.terms, s ∈ d'.terms := by
-  rw [FDatabase.execCmdM, execAction] at h
+  rw [FDatabase.execCmdM] at h
   obtain ⟨m, hm, hmerge⟩ := Option.bind_eq_some_iff.mp h
+  replace hm : execAction d (.letBind v e) = some m := execAction_of_top hm
+  rw [execAction] at hm
   obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp hm
   obtain ⟨hsig, henv, -⟩ := mergeSaturateF_fields hmerge
   exact ⟨t, ht, henv, hsig, fun s hs =>
@@ -3123,7 +3129,7 @@ the function `evalAction` or a field update, and `evalAction_eq_some` reads it b
 theorem cmdStep_action_eq {sd sd' : Database} {a : Action} (hsig : sd.sig.AllConstructors)
     (h : CmdStep sd (.action a) sd') : evalAction sd a = some sd' := by
   obtain ⟨d, hreach, hcl⟩ := h
-  have hd : evalAction sd a = some d := hreach
+  have hd : evalAction sd a = some d := evalAction_of_top hreach
   have heq : sd' = d := MergeClosure.eq_of_allConstructors (db := d)
     (by rw [evalAction_sig hd]; exact hsig) hcl
   rw [heq]
@@ -4655,7 +4661,7 @@ theorem rbProgram_programStep : ProgramStep Database.empty rbProgram rbSrc := by
   refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
     (.cons ⟨_, rfl, .refl⟩ (.cons ⟨rbSrc, ?_, .refl⟩ .nil)))
   change cmdEffect _ (.action (.expr (.app "W" [.var "x"]))) = some rbSrc
-  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, rbSrc]
+  simp only [cmdEffect, evalTopAction_expr, evalAction, Expr.eval, Expr.evalList, rbSrc]
   rfl
 
 /-- **`rbProgram` is in the encoder's domain.** It declares two constructors, holds no rule,
@@ -6961,7 +6967,7 @@ theorem execCmdM_noUnions {d d' : FDatabase} {c : Cmd} (hu : c.UnionFree) (hn : 
   | action a =>
       rw [FDatabase.execCmdM] at h
       obtain ⟨e, he, h⟩ := Option.bind_eq_some_iff.mp h
-      exact mergeSaturateF_noUnions _ (execAction_noUnions hu hn he) h
+      exact mergeSaturateF_noUnions _ (execAction_noUnions hu hn (execAction_of_top he)) h
   | rule r =>
       rw [FDatabase.execCmdM, Option.some.injEq] at h
       refine ⟨by rw [← h]; exact hn.eqs, by rw [← h]; exact hn.sig, ?_⟩
@@ -10022,7 +10028,7 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
   obtain ⟨d, hreach, hcl⟩ := hstep
   cases c with
   | action a =>
-      have hv : evalAction db a = some d := hreach
+      have hv : evalAction db a = some d := evalAction_of_top hreach
       obtain rfl : db' = d :=
         hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
       exact ⟨evalAction_litFree hc.wf h.terms hn.1 hn.2 hv,
@@ -10310,7 +10316,7 @@ theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
   obtain ⟨d, hreach, hcl⟩ := hstep
   cases c with
   | action a =>
-      have hv : evalAction db a = some d := hreach
+      have hv : evalAction db a = some d := evalAction_of_top hreach
       obtain rfl : db' = d :=
         hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
       exact ⟨evalAction_ctorsIn hc.wf h.terms hn hv,
@@ -10834,7 +10840,7 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
   obtain ⟨d, hreach, hcl⟩ := hstep
   cases c with
   | action a =>
-      have hv : evalAction db a = some d := hreach
+      have hv : evalAction db a = some d := evalAction_of_top hreach
       obtain rfl : db' = d :=
         hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
       intro r hr
@@ -11322,7 +11328,8 @@ theorem FDatabase.execCmdM_rulesEncoded {P : Program} {d d' : FDatabase} {c : Cm
       rw [FDatabase.execCmdM] at hs
       obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
       intro r hr
-      rw [(FDatabase.mergeSaturateF_fields h₂).2.2, FDatabase.execAction_rules h₁] at hr
+      rw [(FDatabase.mergeSaturateF_fields h₂).2.2,
+        FDatabase.execAction_rules (execAction_of_top h₁)] at hr
       exact h r hr
   | rule r =>
       rw [FDatabase.execCmdM, Option.some.injEq] at hs
@@ -14658,7 +14665,7 @@ theorem execM_encode_ltu_uf {e : FDatabase} (htgt : execM (encode ltuProgram) = 
   obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hcmds
   rw [FDatabase.execCmdM] at h₁
   obtain ⟨d₂, ha, hm⟩ := Option.bind_eq_some_iff.mp h₁
-  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set ha
+  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set (execAction_of_top ha)
   have hl1 : (Expr.lit (.int 1)).eval d₀.sig d₀.env = some (Term.lit (.int 1)) := rfl
   have hl2 : (Expr.lit (.int 2)).eval d₀.sig d₀.env = some (Term.lit (.int 2)) := rfl
   have hmax : (maxE (.lit (.int 1)) (.lit (.int 2))).eval d₀.sig d₀.env

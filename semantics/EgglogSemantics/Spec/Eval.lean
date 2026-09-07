@@ -54,6 +54,64 @@ def evalAction (db : Database) : Action → Option Database
       (Expr.evalList db.sig args db.env).bind fun as =>
         (Expr.evalList db.sig out db.env).map fun vs => db.addTerm (.app f (as ++ vs))
 
+/-- **Run one top-level action.** A top-level `let` declares a *global*, and a global's name
+must be new: it is stuck where the environment already binds the name. Only at the top level —
+a rule-local `let` binds in the environment `evalLocalActions` builds and is gone when the
+firing ends, so `evalAction` is where a `let` binds and this is where a global is declared.
+
+egglog runs the same check. `remove_globals` turns a top-level `let` into a function
+declaration, and `Names::check_shadowing` puts that declaration through `Names::check`
+(`egglog/src/ast/check_shadowing.rs:49-50`), which raises `Error::Shadowing` — "Shadowing is
+not allowed" — on a name it has already seen (`:11-12`). -/
+def evalTopAction (db : Database) : Action → Option Database
+  | .letBind v e =>
+      if (Env.lookup v db.env).isSome then none else evalAction db (.letBind v e)
+  | a => evalAction db a
+
+/-- A top-level action that ran is an action that ran. -/
+theorem evalAction_of_top {db db' : Database} {a : Action}
+    (h : evalTopAction db a = some db') : evalAction db a = some db' := by
+  cases a with
+  | letBind v e =>
+      rw [evalTopAction] at h
+      split at h
+      · exact absurd h (by simp)
+      · exact h
+  | _ => exact h
+
+/-- Away from a `let`, a top-level action is an action. -/
+@[simp] theorem evalTopAction_expr (db : Database) (e : Expr) :
+    evalTopAction db (.expr e) = evalAction db (.expr e) := rfl
+
+@[simp] theorem evalTopAction_union (db : Database) (e₁ e₂ : Expr) :
+    evalTopAction db (.union e₁ e₂) = evalAction db (.union e₁ e₂) := rfl
+
+@[simp] theorem evalTopAction_set (db : Database) (f : FnName) (args out : List Expr) :
+    evalTopAction db (.set f args out) = evalAction db (.set f args out) := rfl
+
+/-- A `let` on a name the environment does not hold is an ordinary `let`. -/
+theorem evalTopAction_letBind_of_fresh {db : Database} {v : Var} {e : Expr}
+    (h : Env.lookup v db.env = none) :
+    evalTopAction db (.letBind v e) = evalAction db (.letBind v e) := by
+  rw [evalTopAction, if_neg (by simp [h])]
+
+/-- The freshness guard reads the environment alone, so a top-level action that ran at one
+state runs at any state with the same environment where the action itself does. -/
+theorem evalTopAction_of_env {A C e E : Database} {a : Action} (henv : A.env = C.env)
+    (hA : evalTopAction A a = some e) (hC : evalAction C a = some E) :
+    evalTopAction C a = some E := by
+  cases a with
+  | letBind v e' =>
+      rw [evalTopAction] at hA ⊢
+      split at hA
+      · exact absurd hA (by simp)
+      · rename_i hne
+        rw [if_neg (by rw [← henv]; exact hne)]
+        exact hC
+  | expr e' => exact hC
+  | union e₁ e₂ => exact hC
+  | set f args out => exact hC
+
 /-- Run the actions in order, threading the database through. -/
 def evalActions (db : Database) : List Action → Option Database
   | [] => some db

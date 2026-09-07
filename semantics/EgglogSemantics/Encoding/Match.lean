@@ -1553,7 +1553,7 @@ source-side counterpart of `satProgram_programStep`. -/
 theorem satProgramStep_src : ProgramStep Database.empty satProgram satSrcD := by
   refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨satSrcD, ?_, .refl⟩ .nil)
   change cmdEffect _ (.action (.expr (.app "A" []))) = some satSrcD
-  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, satSrcD]
+  simp only [cmdEffect, evalTopAction_expr, evalAction, Expr.eval, Expr.evalList, satSrcD]
   rfl
 
 private theorem satSrcBase_wf : ({ Database.empty with sig := satSrcSig } : Database).WF where
@@ -1738,7 +1738,7 @@ theorem wProgramStep_src : ProgramStep Database.empty wProgram wSrcD := by
   refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
     (.cons ⟨_, rfl, .refl⟩ (.cons ⟨wSrcD, ?_, .refl⟩ .nil)))
   change cmdEffect _ (.action (.expr (.app "F" [.app "A" []]))) = some wSrcD
-  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, wSrcD]
+  simp only [cmdEffect, evalTopAction_expr, evalAction, Expr.eval, Expr.evalList, wSrcD]
   rfl
 
 private theorem wSrcBase_wf : wSrcBase.WF where
@@ -2397,7 +2397,8 @@ theorem uProgramStep_src : ProgramStep Database.empty uProgram uSrcD := by
   refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
     (.cons ⟨_, rfl, .refl⟩ (.cons ⟨uSrcD, ?_, .refl⟩ .nil)))
   change cmdEffect _ (.action (.union (.app "A" []) (.app "B" []))) = some uSrcD
-  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, uSrcD, uA, uB]
+  simp only [cmdEffect, evalTopAction_union, evalAction, Expr.eval, Expr.evalList, uSrcD,
+    uA, uB]
   rfl
 
 /-- **The pair is asserted**, which is what makes the witness non-reflexive. -/

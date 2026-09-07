@@ -583,7 +583,7 @@ top-level actions go through the same staging path as a rule head, so **each top
 `set` is its own merge phase** (`src/lib.rs:1490-1512`). Without that, the three top-level
 `set`s of a difftest case would collide only at the next `(run 1)`. -/
 def FDatabase.execCmdM (d : FDatabase) : Cmd → Option FDatabase
-  | .action a => (execAction d a).bind (FDatabase.mergeSaturateF mergeFuel)
+  | .action a => (execTopAction d a).bind (FDatabase.mergeSaturateF mergeFuel)
   | .rule r => some { d with rules := r :: d.rules }
   | .run R => d.runRoundM R
   | .saturate R => d.runSaturateM R runFuel

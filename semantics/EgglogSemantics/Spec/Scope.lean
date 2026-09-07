@@ -83,6 +83,34 @@ def Cmd.bind : Cmd → Scope → Scope
 /-- A program with no free variables: `Program.Scoped` from the empty scope. -/
 def WellScoped (p : Program) : Prop := Program.Scoped p []
 
+/-! ### Shadowing
+
+A top-level `let` **declares a global**, and a global's name must be new. `Action.bind` lets a
+rule-local `let` shadow; at the top level it may not, and that is a well-formedness condition
+on the program text like the ones above.
+
+egglog runs the same check: `remove_globals` turns a top-level `let` into a function
+declaration, and `Names::check_shadowing` puts that declaration through `Names::check`
+(`egglog/src/ast/check_shadowing.rs:49-50`), which answers `Error::Shadowing` — "Shadowing is
+not allowed" — on a name it has already seen (`:11-12`).
+
+Unlike the checks above this one is also **enforced by the run**: `Spec/Eval.lean`'s
+`evalTopAction` is stuck at a top-level `let` whose name the environment already holds, so a
+shadowing program has no `ProgramStep` at all and a theorem about a run gets the condition
+for free rather than asking for it. -/
+@[simp] def Cmd.NoShadow : Cmd → Scope → Prop
+  | .action (.letBind v _), Γ => v ∉ Γ
+  | _, _ => True
+
+/-- Each command in the scope the earlier ones leave. -/
+@[simp] def Program.NoShadow : Program → Scope → Prop
+  | [], _ => True
+  | c :: cs, Γ => c.NoShadow Γ ∧ Program.NoShadow cs (c.bind Γ)
+
+/-- A program in which no top-level `let` rebinds: `Program.NoShadow` from the empty
+scope. -/
+def NoShadowing (p : Program) : Prop := Program.NoShadow p []
+
 /-! ### Evaluability
 
 `Scoped` is not enough for `Expr.eval` to return a term: an application may be a *lookup*

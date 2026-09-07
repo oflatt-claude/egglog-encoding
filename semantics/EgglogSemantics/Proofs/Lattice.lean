@@ -409,7 +409,7 @@ theorem pB_reaches_entryB {db : Database}
   obtain ⟨_, h3, hnil⟩ := h.cons_inv
   cases hnil.nil_inv
   obtain ⟨_, hact, hcl⟩ := h3
-  simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
+  simp only [cmdReach, cmdEffect, evalTopAction_set, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
   obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
   rw [show eB = Expr.app "b" [] from rfl] at hout
@@ -605,7 +605,7 @@ theorem pC_reaches_entryA {db : Database}
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, h2, r2⟩ := h.cons_inv
   obtain ⟨_, hact, hcl⟩ := h2
-  simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
+  simp only [cmdReach, cmdEffect, evalTopAction_set, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
   obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
   rw [show eA = Expr.app "a" [] from rfl] at hout
