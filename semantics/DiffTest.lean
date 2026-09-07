@@ -1898,6 +1898,51 @@ private def shadowInheritCase : Program :=
    .action (.union (C "Yy") (C "Aa")),
    .rule wrapGlobBRule, .run ""]
 
+/-! #### A global that captures a rule variable
+
+`glob-lost`'s shape with the **rule declared first**. `Spec/Match.lean`'s `ValidSubst` takes
+`Pattern.freeVars` against the *firing state's* environment, so a top-level `let` reached after
+the rule was declared **recaptures** the rule's own query variable: `$g` is a match variable
+when the rule is registered and a global by the time the round runs. `Cmd.globalBind` threads
+the substitution left to right (`encodeCmds`), so the rule was encoded through a `G` that does
+not carry `$g` and `Rule.substGlobals` leaves the query keyed at the frozen environment term —
+which is `glob-lost` exactly, on the one arrival order `Rule.substGlobals` cannot repair.
+
+Probes rather than corpus cases, because egglog reads the rule a **third** way: variables are
+resolved one command at a time (`lib.rs:2615-2617`), `remove_globals` rewrites only a reference
+already marked `is_global_ref`, and `check_shadowing` checks a rule's pattern names in a *clone*
+of the accumulated names (`check_shadowing.rs:60-66`) — so a rule processed before the `let`
+keeps `$g` as an ordinary match variable and fires on every `Wrapper`. The recapture is the
+model's alone, so pinning these against the binary would pin a coincidence: what the encoding
+loses here is measured against the model's own source run, by
+`difftest correspond 64 glob-late glob-late-eq glob-early-eq`. -/
+private def globLateCase : Program :=
+  [.rule wrapGlobRule,
+   .action (.letBind "$g" (C "Zz")),
+   .action (.expr (.app "Wrapper" [C "Aa"])),
+   .action (.union (C "Zz") (C "Aa")),
+   .run ""]
+
+/-- The same with a `union` head, so what the missing firing costs is an **equality** between
+two terms both databases hold — which is the shape `Database.UnionsJoined` is stated in. -/
+private def globLateEqCase : Program :=
+  [.rule wrapGlobUnionRule,
+   .action (.letBind "$g" (C "Zz")),
+   .action (.expr (.app "Wrapper" [C "Aa"])),
+   .action (.expr (C "Hit")),
+   .action (.union (C "Zz") (C "Aa")),
+   .run ""]
+
+/-- The control: the same commands with the `let` moved back in front of the rule, which is
+`glob-lost-eq` and which `Rule.substGlobals` repairs. -/
+private def globEarlyEqCase : Program :=
+  [.action (.letBind "$g" (C "Zz")),
+   .rule wrapGlobUnionRule,
+   .action (.expr (.app "Wrapper" [C "Aa"])),
+   .action (.expr (C "Hit")),
+   .action (.union (C "Zz") (C "Aa")),
+   .run ""]
+
 /-- The probes, reachable from `difftest encode <fuel> <name>` by name. The `-run` variants
 append one empty round, which is what makes `encode` emit a `Cmd.saturate rebuildRuleset` and
 so the only way to ask whether the rebuild repairs the gap `upCase` shows. They are out of
@@ -1911,7 +1956,9 @@ private def probeCases : List (String × Program) :=
    ("chain-down", chainDownCase), ("depth", depthCase),
    ("tower", towerCase), ("order", orderCase), ("round", roundCase),
    ("lit-union", litUnionCase), ("lit-mix", litMixCase),
-   ("shadow-glob", shadowGlobCase), ("shadow-inherit", shadowInheritCase)]
+   ("shadow-glob", shadowGlobCase), ("shadow-inherit", shadowInheritCase),
+   ("glob-late", globLateCase), ("glob-late-eq", globLateEqCase),
+   ("glob-early-eq", globEarlyEqCase)]
 
 namespace Egglog
 /-! ### The proof encoding, by tuple count
@@ -2192,6 +2239,18 @@ set_option linter.hashCommand false in
 #guard (shadowGlobCase.declared).shadowedGlobals = ["$g"]
 set_option linter.hashCommand false in
 #guard (shadowInheritCase.declared).shadowedGlobals = ["$a"]
+
+/-! The three `glob-late` probes are in `encode`'s domain too, and none of them shadows — so
+`Program.EncodeDomain` and `Egglog.letNames_nodup_of_programStep` both admit them and `hsrc`
+does not exclude them. What separates `glob-late-eq` from `glob-early-eq` is the arrival order
+of the `let` and the `rule`, and nothing else. -/
+set_option linter.hashCommand false in
+#guard (globLateCase.declared).encodeDomainB && (globLateEqCase.declared).encodeDomainB
+  && (globEarlyEqCase.declared).encodeDomainB
+set_option linter.hashCommand false in
+#guard (globLateCase.declared).shadowedGlobals = []
+  && (globLateEqCase.declared).shadowedGlobals = []
+  && (globEarlyEqCase.declared).shadowedGlobals = []
 
 /-! And both are excluded by `hsrc`: the run stops at the second `let`, which is the
 command the interpreter names. -/

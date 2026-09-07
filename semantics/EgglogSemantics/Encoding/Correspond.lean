@@ -4065,7 +4065,20 @@ head reading a name no substitution the enumerator offers assigns. `gxSrc_not_gl
 the clause its witness violates, `unionsFire_of_anyG` is the implication that says the repair is
 a strengthening, and `Egglog.GlobalsMech` is how it is threaded — beside `Program.GlobalsOnce`,
 which is what a later `let` cannot invalidate, and which is why the pair rides in
-`Egglog.UnionsInv.rules` while only the `GlobalsInline` half reaches this `Prop`. -/
+`Egglog.UnionsInv.rules` while only the `GlobalsInline` half reaches this `Prop`.
+
+**And a fifth refutation is a defect rather than a missing clause, so it is not repaired here.**
+`Database.GlobalsInline` says every global the substitution defines means what the environment
+binds it to; it does not say the substitution defines every global the environment *binds*
+(`Database.GlobalsCover`), and the `G` `hrules` names is frozen at the command `encodeCmds`
+reached the rule at. A top-level `let` **after** that command extends the environment without
+extending `G`, and `Spec/Match.lean`'s `ValidSubst` takes `Pattern.freeVars p db.env` at the
+state the round runs at — so the source recaptures the rule's own query variable while the
+encoded query stays keyed at the frozen environment term. `Encoding/Complete.lean`'s
+`glob-late` section has the measurement: `difftest correspond 64 glob-late-eq` reports 2 LOST
+where `glob-early-eq` — the same six commands with the `let` moved in front of the rule —
+agrees. Both are in `encode`'s domain and neither shadows, so this refutes
+`Egglog.encode_corresponds_forward` itself and this `Prop` with it. -/
 def UnionsFire : Prop :=
   ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
     (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →

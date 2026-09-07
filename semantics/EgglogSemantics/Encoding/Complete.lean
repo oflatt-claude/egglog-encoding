@@ -10572,15 +10572,46 @@ excludes it, with no tenth `Program.EncodeDomain` clause and no second reading.
 `globalBind_letBind_of_encStep` is what it buys: at every top-level `let` the chain reaches,
 **both** guards pass, so no global is left frozen.
 
-**What is left of `hglob` is the literal case alone.** `Expr.substGlobals` replaces `.var v`
-only when the definition is an application, and under `Database.GlobalsInline` a definition that
-is not one is a literal — so the only variable a substituted query can still name and the
-environment bind is a global bound to a literal. That is the case `Expr.substGlobals`' own
-docstring keeps on purpose: a literal's class never moves (`evalAction` refuses a `union` on
-one), so the frozen reading through the environment is already the right one, and `hglob` there
-asks for a reading of `Term.lit l` as itself rather than the `RowRepr td t t` the shadowed
-global needed. Discharging it is a statement about how the `Cmd.run` case builds `ρt`, which is
-still open below.
+**What is left of `hglob` is the literal case, and `RowRepr.lit` pays it.**
+`Expr.substGlobals` replaces `.var v` only when the definition is an application, and under
+`Database.GlobalsInline` a definition that is not one is a literal — so the only variable a
+substituted query can still name and the environment bind is a global bound to a literal. That
+is the case `Expr.substGlobals`' own docstring keeps on purpose: a literal's class never moves
+(`evalAction` refuses a `union` on one), so the frozen reading through the environment is
+already the right one, and `hglob` there asks for a reading of `Term.lit l` as itself rather
+than the `RowRepr td t t` the shadowed global needed. `lit_of_globalsInline_of_substGlobals`
+and `rowRepr_self_of_globalsCover` below are that, proved: `RowRepr.lit` and `ViewRepr.lit`
+are premise-free, so the residue asks nothing of the target for such a variable, and `ρt` may
+decline to bind the rest — `hglob`'s premise is then false at them.
+
+**But the second clause is not free, and it is a fourth defect in `encode`.** That argument
+needs `Database.GlobalsCover` — every global the environment binds is one the substitution
+defines — and `Egglog.UnionsInv.rules` carries the `G` a rule was encoded **through**, frozen
+at the command `encodeCmds` reached the rule at. A top-level `let` *after* that command extends
+the environment without extending it, and `Spec/Match.lean`'s `ValidSubst` takes
+`Pattern.freeVars p db.env` at the state the round runs at, so the source **recaptures** the
+rule's own query variable while the encoded query stays keyed at the frozen environment term.
+That is `glob-lost` on the one arrival order `Rule.substGlobals` cannot repair.
+
+**Measured**, `DiffTest.lean`'s `glob-late-eq`:
+
+```
+(rule ((Wrapper $g)) ((union (Wrapper $g) (Hit))))
+(let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
+```
+
+`difftest correspond 64 glob-late-eq` reports **2 LOST** — `(Wrapper (Zz)) = (Hit)` and
+`(Hit) = (Wrapper (Aa))` — where `glob-early-eq`, the same six commands with the `let` moved in
+front of the rule, **agrees**; `glob-late` is the `.expr (Hit)` head and reports 1 LOST. Both
+are in `encode`'s domain and neither shadows, so nine clauses and
+`letNames_nodup_of_programStep` admit them: this refutes `Egglog.encode_corresponds_forward`
+itself and not only its residue, and `Egglog.UnionsFire` is false as stated. **And egglog does
+neither** — `check_shadowing.rs` checks a rule's pattern names in a clone of the accumulated
+names (`:60-66`), so a rule processed before the `let` keeps `$g` as an ordinary pattern
+variable and fires on every `Wrapper`. The repair is a choice between `Spec/Match.lean`'s
+firing-time recapture and `Encoding/Encode.lean`'s declaration-time freeze; the section at
+`lit_of_globalsInline_of_substGlobals` is where it is written up. Until it is made, what stands
+under this `sorry` is a **false** obligation and not an open one.
 
 **The one structural item left is the `Cmd.saturate` half's alone, and the encoder fix did not
 close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
@@ -11779,6 +11810,94 @@ them. -/
 theorem encStep_globalsMech {P : Program} (hdom : P.EncodeDomain) : GlobalsMech P :=
   ⟨fun h => encStep_globals hdom h,
     fun hP hpre hstate hstep hgi hgo => globalsInline_keep hdom hP hstate hpre hstep hgi hgo⟩
+
+/-! #### `hglob`'s literal residue, and the fact it is not free
+
+`mem_matchQuery_encodeQuery`'s `hglob` asks that a variable the target reading `ρt` binds and
+the **environment** also binds get the environment's own value: `matchQuery` reads `d.env ++ τ`,
+so an id assigned there beside a different value in `d.env` is an id no atom can see.
+`ρt` may simply decline to bind a variable the substituted query does not name — `hglob`'s
+premise is then false — so the only variables it has to answer for are the ones a *substituted*
+query still names and the environment still binds. Under the two clauses below every one of
+them is bound to a **literal**, and `RowRepr.lit` reads a literal as itself with no target row
+at all, which discharges `hglob` outright.
+
+`Database.GlobalsCover` is the half that is not free, and the section after the two lemmas
+records what its absence costs. -/
+
+/-- **A global a substituted query still names is bound to a literal.** `Expr.substGlobals`
+replaces `.var v` exactly when `G`'s definition for `v` is an application, so a variable it
+leaves alone is one `G` does not define (excluded by `Database.GlobalsCover`) or one whose
+definition is closed and not an application — and a closed non-application is a literal. -/
+theorem lit_of_globalsInline_of_substGlobals {sd : Database} {G : List (Var × Expr)}
+    (hgi : sd.GlobalsInline G) (hcov : sd.GlobalsCover G) {v : Var} {t : Term}
+    (hlk : Env.lookup v sd.env = some t)
+    (hkeep : Expr.substGlobals G (.var v) = .var v) : ∃ l : Lit, t = .lit l := by
+  have hne : Expr.lookupG v G ≠ none := hcov v (by rw [hlk]; rfl)
+  obtain ⟨e, he⟩ : ∃ e, Expr.lookupG v G = some e := by
+    cases hE : Expr.lookupG v G with
+    | none => exact absurd hE hne
+    | some e => exact ⟨e, rfl⟩
+  obtain ⟨hcl, u, hev, hlk'⟩ := hgi v e he
+  obtain rfl : u = t := Option.some.inj (hlk'.symm.trans hlk)
+  cases e with
+  | lit l =>
+      rw [Expr.eval] at hev
+      exact ⟨l, (Option.some.inj hev).symm⟩
+  | var w => exact absurd hcl (by simp [Expr.vars])
+  | app f as =>
+      rw [Expr.substGlobals, he] at hkeep
+      exact absurd hkeep (by simp)
+
+/-- **And so it reads to itself, through rows and through entries alike.** `RowRepr.lit` and
+`ViewRepr.lit` are premise-free, so this asks nothing of the target — which is exactly why
+`mem_matchQuery_encodeQuery`'s `hglob` is answerable at a global at all: the reading a
+non-literal global would need is `RowRepr td t t`, and that is false at states an encoded run
+reaches (`ncTgt_not_readsSelf`). -/
+theorem rowRepr_self_of_globalsCover {sd : Database} {td : FDatabase}
+    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) (hcov : sd.GlobalsCover G)
+    {v : Var} {t : Term} (hlk : Env.lookup v sd.env = some t)
+    (hkeep : Expr.substGlobals G (.var v) = .var v) :
+    RowRepr td t t ∧ ViewRepr td.toDatabase t t := by
+  obtain ⟨l, rfl⟩ := lit_of_globalsInline_of_substGlobals hgi hcov hlk hkeep
+  exact ⟨.lit, .lit⟩
+
+/-! #### `Database.GlobalsCover` does not hold of the substitution a rule was encoded through
+
+`encStep_globalsCover` proves it of the `G` the *chain* carries, which grows at every top-level
+`let`; `Egglog.UnionsInv.rules` carries the `G` a rule was encoded **through**, frozen at the
+command `encodeCmds` reached the rule at, and a `let` after that command extends the
+environment without extending it.
+
+This is not a gap in the bookkeeping, it is a defect in `encode`, and it is measured.
+`DiffTest.lean`'s `glob-late-eq` is `glob-lost-eq` with the rule declared **before** the `let`:
+
+```
+(rule ((Wrapper $g)) ((union (Wrapper $g) (Hit))))
+(let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
+```
+
+`difftest correspond 64 glob-late-eq` reports **2 LOST** — `(Wrapper (Zz)) = (Hit)` and
+`(Hit) = (Wrapper (Aa))` — where `glob-early-eq`, the same six commands with the `let` moved in
+front of the rule, **agrees**. `glob-late` is the `.expr (Hit)` head, 1 LOST. Both are in
+`encode`'s domain and neither shadows, so `Program.EncodeDomain` and
+`letNames_nodup_of_programStep` admit them and `hsrc` does not exclude them: this refutes
+`Egglog.encode_corresponds_forward`, not only its residue.
+
+**Why the arrival order matters.** `Spec/Match.lean`'s `ValidSubst` takes
+`Pattern.freeVars p db.env` at the state the round runs at, so a top-level `let` reached after
+the rule was declared **recaptures** the rule's own query variable — `$g` is a match variable
+when the rule is registered and a global by the time the round fires. `encodeCmds` threads
+`Cmd.globalBind` left to right, so `Rule.substGlobals` sees a `G` without `$g` and leaves the
+encoded query keyed at the frozen environment term, which is `glob-lost` exactly.
+
+**And egglog does neither.** `check_shadowing.rs` walks the command stream in order and
+`NormRule` checks a rule's pattern names in a *clone* of the accumulated names
+(`check_shadowing.rs:60-66`), so a rule processed before the `let` keeps `$g` as an ordinary
+pattern variable and `remove_globals` never rewrites it; egglog's rule fires on **every**
+`Wrapper`. So the model recaptures where egglog does not, and the encoder freezes where the
+model recaptures — three readings of one program, and the repair is a choice between
+`Spec/Match.lean` and `Encoding/Encode.lean` rather than anything provable here. -/
 
 /-- **The completeness half's invariant at every state of the chain**, source and target
 together. -/
