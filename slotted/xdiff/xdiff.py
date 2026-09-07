@@ -1502,7 +1502,16 @@ def rand_rule(rng, terms, unions):
         action = (rng.choice(allv), (rng.choice(fresh_ops), inner, rng.choice(allv)))
     else:
         action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
-    return atoms, action
+
+    # SIDE CONDITIONS, which were never generated: `free`/`not-free` had only the four
+    # curated `CD*` cases, so the one part of a rule that is about a match's SLOTS rather
+    # than its shape went unfuzzed. A condition needs a slot literal to talk about, and
+    # only a binder atom puts one in a pattern.
+    conds = []
+    slots = sorted({c for at in atoms for c in (at[2], at[3]) if c.startswith("$")})
+    if slots and rng.random() < 0.3:
+        conds.append((rng.random() < 0.5, rng.choice(slots), [rng.choice(allv)]))
+    return atoms, action, conds
 
 
 def rand_case(rng, i):
