@@ -113,13 +113,10 @@ def render(atoms, action, conds):
         if i != lead:
             parts.append(f"         :when (= {a[0]} ({ctor(a[1])} {ref(a[2])} {ref(a[3])}))")
     for want, slot, pvars in conds:
-        if root in pvars:
-            # A side condition names a VARIABLE, and the matched root has no name. Unlike
-            # the right-hand side and the `:when` equalities, rebuilding the pattern is not
-            # an option: `free`/`not-free` take a variable, not a term. So a condition
-            # about the term the rule matched cannot be written at all.
-            raise Unexpressible("a side condition is about the matched root")
-        parts.append(f"         :when ({'free' if want else 'not-free'} {slot} {' '.join(pvars)})")
+        # `ref` may render the matched root as the pattern itself, and a condition takes a
+        # call where a variable goes for exactly this reason
+        args = " ".join(ref(v) for v in pvars)
+        parts.append(f"         :when ({'free' if want else 'not-free'} {slot} {args})")
     return "\n".join(parts) + ")"
 
 

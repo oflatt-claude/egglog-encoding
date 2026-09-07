@@ -502,7 +502,22 @@ def rewrite_parts(src, form):
                 else:
                     assert want in ("free", "not-free"), f"unknown condition {want!r}"
                     slot, *pvars = rest
-                    out["conds"].append((want == "free", slot, [v.lstrip("?") for v in pvars]))
+                    # A CALL is allowed where a variable is, and desugars to an equality
+                    # plus a condition on the name it binds. That is what lets a condition
+                    # be about the term the rule MATCHED: `(rewrite lhs rhs)` gives the
+                    # matched root no name, and unlike a right-hand side a condition takes
+                    # a variable rather than a term, so without this there was no way to
+                    # say it at all. Writing the pattern again names the same class, by
+                    # congruence on a ground match.
+                    names = []
+                    for v in pvars:
+                        if isinstance(v, list):
+                            fresh = f"_cond{len(out['equalities'])}"
+                            out["equalities"].append((fresh, v))
+                            names.append(fresh)
+                        else:
+                            names.append(v.lstrip("?"))
+                    out["conds"].append((want == "free", slot, names))
     return out
 
 

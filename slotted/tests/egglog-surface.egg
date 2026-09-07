@@ -16,6 +16,8 @@
 (constructor Pair (U U) U)
 (constructor IConst () U)
 (constructor Mul (U U) U)
+(constructor Lam (U U) U :binder 0)
+(constructor G (U U) U)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -159,4 +161,19 @@
 (let mj (Mul (IConst) (IConst)))
 (run 5)
 (check (= mj (IConst)))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A side condition about the term the rule MATCHED. `(rewrite lhs rhs)` gives that
+;;; term no name, and `free`/`not-free` take a variable, so the pattern is written
+;;; again -- a call is accepted where a variable goes, and names the same class.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Lam $s b) (Null) :when (not-free $s (Lam $s b)) :name shed)
+
+;; a binder never has its own bound slot free, so the condition holds and it fires
+(let shed-yes (Lam $0 (G $1 $1)))
+(run 5)
+(check (= shed-yes (Null)))
 (pop)

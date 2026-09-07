@@ -1,6 +1,6 @@
 ;;; COMPILED from slotted/tests/egglog-surface.egg by slotted/slotted-egglog.py.
 ;;;
-;;; Only the forms THIS file contributes. The machinery for its 6 constructors,
+;;; Only the forms THIS file contributes. The machinery for its 8 constructors,
 ;;; and anything an included library brought, are snapshotted by the generators
 ;;; that emit them -- committing them again per test would be the same thousands
 ;;; of lines over and over.
@@ -281,4 +281,31 @@
 (run-schedule (saturate (run slotted))
               (repeat 5 (seq (run) (saturate (run slotted)))))
 (check (RenamesToLeader $mj _m0 _l) (RenamesToLeader (IConst) _m1 _l) (= _m0 _m1))
+(pop)
+(push)
+(rule ((= V3 (Lam p1 (Var 0) p2 C4))
+       (= dom5 (map-union (map-image p1) (map-image p2)))
+       (= mp6 dom5)
+       (= idm7 (map-image mp6))
+       (= ss (map-get (compose mp6 p1) 0))
+       (= m8 (compose mp6 p2))
+       (= cs9 (ClassSlots C4))
+       (= cs10 (ClassSlots V3))
+       (= V13 (Lam p11 (Var 0) p12 C4))
+       (= dom15 (map-union (map-image p11) (map-image p12)))
+       (RenamesToLeader C4 sym16 C4)
+       (= mp17 (find-mapping-total idm7 dom15 (compose (compose m8 cs9) sym16) (map-insert (map-empty) 0 ss) p12 p11))
+       (= idm18 (map-image mp17))
+       (= av19 (map-union idm7 idm18))
+       (= ss (map-get (compose mp17 p11) 0))
+       (= cs20 (ClassSlots V13))
+       (= alts21 (refine-namings av19 (map-of ss ss) idm7 idm18))
+       (Idx ix22)
+       (= mrg23 (vec-get alts21 ix22))
+       (map-not-contains (map-image (compose mrg23 (compose mp17 cs20))) (map-get mrg23 ss)))
+      ((Equated (Null) (compose mrg23 (compose mp6 cs10)) V3)))
+(let $shed-yes (Lam (map-of 0 0) (Var 0) (map-of 1 1) (G (map-of 0 1) (Var 0) (map-of 0 1) (Var 0))))
+(run-schedule (saturate (run slotted))
+              (repeat 5 (seq (run) (saturate (run slotted)))))
+(check (RenamesToLeader $shed-yes _m0 _l) (RenamesToLeader (Null) _m1 _l) (= _m0 _m1))
 (pop)
