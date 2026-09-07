@@ -477,6 +477,24 @@
  :ruleset slotted)
 
 
+;; A substitution in flight, for a rule whose right-hand side is `subst`. That side is a
+;; CALL, not a node: `slotted-subst` answers with a class and `slotted-subst-frame` with
+;; the renaming into the body's frame, and the result's own slots are not known until the
+;; machinery has seen its node. So the narrowing an action does inline -- M8's
+;; `(compose m (ClassSlots x))` -- happens here instead, one phase later, and `Equated`
+;; leaves the orientation to the machinery (M10). `q` carries the body's frame into the
+;; root's own slots.
+;;
+;; It lives here rather than beside the rules that use it because it is
+;; constructor-independent and there should be one declaration of it: every program that
+;; includes this file can write a `subst` right-hand side, whether or not it does.
+(relation SubstPending (U Renaming Renaming U))
+
+(rule ((SubstPending root q mr r)
+       (= cs (ClassSlots r)))
+      ((Equated root (compose q (compose mr cs)) r))
+      :ruleset slotted)
+
 ;;; Tests ;;;
 
 

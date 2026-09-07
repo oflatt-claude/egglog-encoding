@@ -15,7 +15,9 @@
 ;;; conclusion is the `Equated` the encoder emits, so what the tests observe is what the
 ;;; rule DOES.  There is no `relation` declaration in this file.
 ;;;
-;;; All eleven are the encoder's own output, variable names, line breaks and comments aside.
+;;; All twelve are the encoder's own output, variable names, line breaks and comments
+;;; aside -- the eleven rules below and M12's, which is quoted rather than run and says
+;;; there why.
 ;;; What they are not is byte-identical to the committed generated files, and the reason is
 ;;; worth stating.  Each of those gives its language its OWN constructors -- sdql's
 ;;; `Equality`/`Sub`/`Mult`/`Add` in `target/slotted/slotted-sdql-rules.egg`, the array language's
@@ -34,10 +36,11 @@
 ;;; is `main` after PR #45 was merged.  Two things in it bear on this file: the
 ;;; canonicalisation fix in `extend_subst`, and `final_refine` in
 ;;; `src/rewrite/multipat.rs`, which branches on both readings of a slot pair e-matching
-;;; left undecided.  The encoding has no such branch -- an unconstrained slot is MINTED,
-;;; and a fresh name differs from everything, so it only ever takes the "apart" reading.
-;;; `FINAL_REFINE_GAP` in `slotted/xdiff/xdiff.py` records the two curated
-;;; cases where that costs a match, and explains one of them in full.
+;;; left undecided.  The encoding HAS that branch: `refine-namings` enumerates the ways the
+;;; match's slots can be partitioned and `(Idx ix)` picks one, which is the last step of
+;;; every rule below.  Minting alone -- a fresh name differs from everything, so it takes
+;;; only the "apart" reading -- is what the encoding used to do, and it cost matches the
+;;; reference made.
 ;;;
 ;;; No terms, no schedules, no assertions, no wrong versions.
 ;;; `slotted/encoding/user-rules-tests.egg` includes this file and supplies all of those, so
@@ -891,3 +894,81 @@
        (let _rhs33 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (compose mrg (compose mb csb)) b (compose mrg (compose me cse)) e))
        (let _rhs34 (App2 "app" (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-union (map-image (compose mrg (compose ma csa))) (map-image (compose mrg (compose me cse))))) (map-get mrg sx)) _rhs32 (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-union (map-image (compose mrg (compose mb csb))) (map-image (compose mrg (compose me cse))))) (map-get mrg sx)) _rhs33))
        (Equated _rhs34 (compose mrg (compose mp1 csp)) p)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; M12.  A right-hand side that is a CALL, not a node.
+;;;
+;;;     sdql's beta:
+;;;         (let ?t $x ?body)  =>  ?body[(var $x) := ?t]
+;;;
+;;; THE THREE SHAPES A RIGHT-HAND SIDE CAN TAKE, so this section can say which one it is.
+;;; Whatever a rule writes on the right, the encoder emits one of exactly three things:
+;;;
+;;;   * a VARIABLE concludes directly.  There is nothing to build -- only two invocations
+;;;     to relate -- and the renaming between them is `(compose (inverse mr) mx)`.  M9's
+;;;     action is that, and it is the whole action.
+;;;   * a TREE is built bottom-up, one `let` per node, and the outermost node is `Equated`
+;;;     with the root.  M11 is that, and lists which renaming each column takes.
+;;;   * a CALL cannot be built at all.  That is this section.
+;;;
+;;; THE RULE BELOW IS QUOTED, NOT LIVE, and that is deliberate.  Every other rule in this
+;;; file runs -- `user-rules-tests.egg` includes it and the tests observe what the rules
+;;; DO.  A substituting beta cannot join them: it rewrites any `let` whose bound slot the
+;;; body does not use into the body itself, which collapses M11's counter-example (b) by a
+;;; second route and would stop that section demonstrating anything.  So it is quoted here
+;;; and run in `slotted/tests/sdql-beta.egg` instead.  `check-tutorial.py` compares the
+;;; text below against the encoder exactly as it does the live rules, so quoting costs the
+;;; check nothing.  It is in sdql's own `Let` rather than the generic `App3 "let"` for the
+;;; same reason: the two languages bind different columns, and this is sdql's rule.
+;;;
+;;; WHY IT CANNOT BE BUILT.  `subst` is a primitive, and what it answers with is an
+;;; INVOCATION -- `slotted-subst` the class, `slotted-subst-frame` the renaming into that
+;;; class's frame.  The class's own slots are NOT KNOWN YET: they depend on the node the
+;;; primitive has just made, which the machinery has not seen.  So the narrowing every
+;;; other action does inline -- M8's `(compose m (ClassSlots x))` on each child -- cannot
+;;; be done here.  It happens one phase later.  The action records the invocation in
+;;; `SubstPending`, and the rule that drains it, in `egraph-encoding-11.egg` beside the
+;;; other constructor-independent rules, narrows by `(ClassSlots r)` once the class has
+;;; slots and concludes the `Equated` that M10 would have concluded directly.
+;;;
+;;; THE BRIDGE, which is the rest of the work.  An action is written in PATTERN slot space
+;;; (M11); the primitive works in the BODY's frame.  Composition alone cannot get between
+;;; them, because the body need not use every slot the call mentions:
+;;;
+;;;   * `need18` is what must have a name in the body's frame -- the body's own slots,
+;;;     `?t`'s slots, and the bound slot, since `?t` may name slots the body never had.
+;;;   * `rb19` runs pattern slots into that frame, `find-mapping-total` minting a name for
+;;;     each one the body does not use.  It is the body's own renaming read backwards and
+;;;     widened, which is why it is solved rather than composed.
+;;;   * `xb20` is the bound slot in the body's frame: which slot the substitution replaces.
+;;;   * `tren21` carries `?t` into that frame.  `compose-total`, not `compose`: this
+;;;     asserts the bridge is wide enough for `?t` rather than silently dropping a slot of
+;;;     it, which would substitute a smaller term than the rule asked for.
+;;;   * `q22` carries the body's frame back to the ROOT's own slots -- the one renaming an
+;;;     action needs that is not a child's, deferred to phase two with the conclusion.
+;;;
+;;; `:naive` is not decoration.  `slotted-subst` extracts a term and adds the result back,
+;;; so it both reads and writes tables, and a seminaive rule may not call it.
+;;;
+;;; Covered by: `slotted/tests/sdql-beta.egg`, which runs the whole substitution on real
+;;; terms.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; > (rule ((= V4 (Let p1 C5 p2 (Var 0) p3 C6))
+;;; >        (= dom7 (map-union (map-image p1) (map-union (map-image p2) (map-image p3))))
+;;; >        (= mp8 dom7)
+;;; >        (= idm9 (map-image mp8))
+;;; >        (= sx (map-get (compose mp8 p2) 0))
+;;; >        (= m10 (compose mp8 p1))
+;;; >        (= cs11 (ClassSlots C5))
+;;; >        (= m12 (compose mp8 p3))
+;;; >        (= cs13 (ClassSlots C6))
+;;; >        (= cs14 (ClassSlots V4))
+;;; >        (= alts15 (refine-namings idm9 (map-of sx sx) idm9))
+;;; >        (Idx ix16)
+;;; >        (= mrg17 (vec-get alts15 ix16)))
+;;; >       ((let need18 (map-union (map-image (compose mrg17 (compose m12 cs13))) (map-union (map-image (compose mrg17 (compose m10 cs11))) (map-of (map-get mrg17 sx) (map-get mrg17 sx)))))
+;;; >        (let rb19 (find-mapping-total (map-domain (compose mrg17 (compose m12 cs13))) need18 (map-domain (compose mrg17 (compose m12 cs13))) (compose mrg17 (compose m12 cs13))))
+;;; >        (let xb20 (map-get rb19 (map-get mrg17 sx)))
+;;; >        (let tren21 (compose-total rb19 (compose mrg17 (compose m10 cs11))))
+;;; >        (let q22 (compose (inverse (compose mrg17 (compose mp8 cs14))) (inverse rb19)))
+;;; >        (SubstPending V4 q22 (slotted-subst-frame C6 xb20 (Var 0) tren21 C5) (slotted-subst C6 xb20 (Var 0) tren21 C5))) :naive)

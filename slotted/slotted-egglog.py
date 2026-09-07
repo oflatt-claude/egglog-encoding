@@ -252,11 +252,6 @@ def compile_source(src, own_only=False):
         ]
     else:
         out.append(enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE))))
-        if any(uses_subst(rewrite_parts(src, f)["rhs"]) for f, _ in src.body
-               if isinstance(f, list) and f and f[0] == "rewrite"):
-            # The half a `subst` rule needs and does not carry itself: the
-            # relation it writes into, and the one phase-two rule that reads it.
-            out.append(enc.SUBST_MACHINERY)
     rules = 0
     extracts = 0
     for form, origin in src.body:

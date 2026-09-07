@@ -217,7 +217,7 @@ CHECKS = [
     (
         "tutorial-drift",
         ("slotted/check-tutorial.py",),
-        ratio(r"(\d+)/(\d+) sections are the encoder's own output", 11),
+        ratio(r"(\d+)/(\d+) sections are the encoder's own output", 12),
         False,
         False,
     ),

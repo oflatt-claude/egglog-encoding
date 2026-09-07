@@ -90,10 +90,22 @@ def normalise(text):
     return out
 
 
+#: Constructor-independent rules that mention a watched name and belong outside the
+#: region. `SubstPending` is drained by one rule that narrows by `(ClassSlots r)`; it is
+#: about no constructor, so the generator does not emit it and the region cannot own it.
+EXEMPT = ("SubstPending",)
+
+
 def strays(outside, names):
     """Rules outside the region that are about what the region is supposed to own."""
     watched = (*names, "ClassSlots")
-    return [form for form in normalise(outside) if form.startswith("(rule") and any(n in form for n in watched)]
+    return [
+        form
+        for form in normalise(outside)
+        if form.startswith("(rule")
+        and any(n in form for n in watched)
+        and not any(e in form for e in EXEMPT)
+    ]
 
 
 def main():

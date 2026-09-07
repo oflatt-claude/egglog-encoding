@@ -693,23 +693,6 @@ def emit(language, binders=(), provided=None, omit=()):
 #: The right-hand side head that is a call rather than a node.
 SUBST = "subst"
 
-#: What a `subst` right-hand side needs alongside the rules that use it, emitted once.
-#:
-#: The primitive answers with an INVOCATION -- `slotted-subst` the class and
-#: `slotted-subst-frame` the renaming into the body's frame -- and the result's own
-#: slots are not known until the machinery has seen its node. So the narrowing that M8
-#: does inside one rule happens here instead, one phase later, and `Equated` lets the
-#: machinery pick the orientation (M10).
-SUBST_MACHINERY = """\
-;; A substitution in flight: the class it answered with, the renaming into the body's
-;; frame, and `q` carrying that frame into the root's own slots.
-(relation SubstPending (U Renaming Renaming U))
-
-(rule ((SubstPending root q mr r)
-       (= cs (ClassSlots r)))
-      ((Equated root (compose q (compose mr cs)) r))
-      :ruleset slotted)
-"""
 
 
 # The constructor-independent half of the node machinery. Hand-written in
@@ -1538,6 +1521,9 @@ def compile_rule(
                 # rather than silently dropping one of its slots.
                 f"(let {tren} (compose-total {rb} {mt}))",
                 f"(let {q} (compose (inverse {mr}) (inverse {rb})))",
+                # `SubstPending` and the phase-two rule that drains it are declared in
+                # `MACHINERY`, so a program gets them by including it rather than by
+                # carrying a copy per rule that needs one.
                 f"(SubstPending {cls_of[root]} {q} (slotted-subst-frame {call}) (slotted-subst {call}))",
             ]
         else:

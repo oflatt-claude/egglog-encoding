@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert every rule in `slotted/tests/user-rules.egg` is the encoder's own output.
+"""Assert every rule in `slotted/encoding/user-rules.egg` is the encoder's own output.
 
 The tutorial claims each section shows what a compiler emits for a real rule. This
 checks it: comments and line breaks are dropped, and then structure, constructor
@@ -159,6 +159,22 @@ def m11():
 
 
 # section, the rule it shows, where that rule lives, and the compiler
+def sdql_beta():
+    """sdql's `beta`, compiled in sdql's OWN language rather than the generic one.
+
+    Its `Let` binds a different column from the array language's, which is why this rule
+    cannot be spelled with the tutorial's generic `let`; `gen-sdql-rules.py` compiles the
+    same text, and `tail` here drops only the `:ruleset`/`:name` that file appends.
+    """
+    sc = __import__("slotted-egglog")
+    source = ROOT / "slotted" / "languages" / "sdql.egg"
+    src = sc.Source(source)
+    for form in sc.parse(source.read_text()):
+        if isinstance(form, list) and form and form[0] == "rewrite" and "beta" in form:
+            return sc.compile_rewrite(src, form)
+    raise SystemExit("sdql.egg no longer has a rule named beta")
+
+
 SECTIONS = [
     ("M1", "eq-comm", "sdql benches/sdql.rs", m1),
     ("M2", "sub-identity", "sdql benches/sdql.rs", m2),
@@ -277,6 +293,25 @@ def alpha_eq(a, b, fwd, bwd, path="/"):
     return None
 
 
+#: Sections whose rule is QUOTED rather than run, as `;;; > ` lines. A rule that would
+#: perturb another section's counter-example is shown this way; the check is the same.
+QUOTED = [("M12", "beta", "sdql benches/sdql.rs", sdql_beta)]
+
+
+def quoted_rules(text):
+    """The `;;; > ` blocks, one string per block, with the prefix stripped."""
+    blocks, cur = [], []
+    for line in text.splitlines():
+        if line.startswith(";;; > "):
+            cur.append(line[len(";;; > ") :])
+        elif cur:
+            blocks.append("\n".join(cur))
+            cur = []
+    if cur:
+        blocks.append("\n".join(cur))
+    return blocks
+
+
 def main():
     which = sys.argv[1:]
     rules = [f for f in top_forms(TUTORIAL.read_text()) if f.startswith("(rule")]
@@ -293,7 +328,22 @@ def main():
         )
         if why:
             bad.append(name)
-    shown = [s for s in SECTIONS if not which or s[0] in which]
+    quoted = quoted_rules(TUTORIAL.read_text())
+    if len(quoted) != len(QUOTED):
+        print(f"FAIL: {TUTORIAL.name} quotes {len(quoted)} rules, this file describes {len(QUOTED)}")
+        return 1
+    for (name, rule, where, fn), form in zip(QUOTED, quoted, strict=True):
+        if which and name not in which:
+            continue
+        why = alpha_eq(parse(fn()), parse(form), {}, {})
+        print(
+            f"  {'ok  ' if why is None else 'FAIL'} {name:<4} {rule:<13} {where} (quoted)"
+            + (f"\n       {why}" if why else "")
+        )
+        if why:
+            bad.append(name)
+
+    shown = [s for s in SECTIONS + QUOTED if not which or s[0] in which]
     print(
         f"\n{len(shown) - len(bad)}/{len(shown)} sections are the encoder's own output"
         + (f"   FAILED: {', '.join(bad)}" if bad else "")
