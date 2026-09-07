@@ -286,7 +286,7 @@ CHECKS = [
         # An example nobody runs is an example nobody checked.
         "language-doc",
         ("slotted/check-language-doc.py",),
-        ratio(r"(\d+)/(\d+) examples run", 5),
+        ratio(r"(\d+)/(\d+) examples run", 6),
         False,
         True,
     ),

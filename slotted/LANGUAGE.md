@@ -74,10 +74,42 @@ depend on any of them.
 (rewrite (Let ?t $x ?body) (subst ?body $x ?t) :name beta)
 ```
 
-`?x` is a pattern variable standing for a subterm; `$x` is a slot literal the match
-solves for. `:when (free $x ?f)` and `:when (not-free $x ?f)` are side conditions on
-whether a slot is among a variable's free slots — the reference's
-`subst[v].slots().contains(…)`.
+A **pattern variable** stands for a subterm and may be written bare, `x`, which is
+egglog's spelling, or with a sigil, `?x`, which is egg's. They name the same variable, so
+one rule may mix them. A bare name that is a `let`-bound global means that global, and a
+bare name that is a constructor is a call — so a paren-less `Null` stays `(Null)` rather
+than becoming a variable that matches everything. `$x` is a slot literal the match solves
+for.
+
+A rewrite's **left side must be a call**. A bare variable there matches every class, so
+the rule would say nothing.
+
+`:when` takes conditions, and a clause may carry several — `:when c1 c2` means the same as
+two `:when` clauses. There are two kinds:
+
+| condition | meaning |
+| --- | --- |
+| `(free $x ?f)`, `(not-free $x ?f)` | whether a slot is among a variable's free slots — the reference's `subst[v].slots().contains(…)`. A side condition on the match's *slots* |
+| `(= v <call>)` | `v` also matches `<call>`. Another **pattern**, not a side condition: it constrains the match's *shape*, and several give an arbitrary multipattern |
+
+An `(= v <call>)` pattern nests as deep as you like, and the variables it introduces need
+not appear on the left at all:
+
+```slotted
+(constructor Null () U)
+(constructor Succ (U) U)
+(constructor Prev (U) U)
+
+; fires only where x is at least three deep, and returns what is under the third Succ
+(rewrite (Prev x) y :when (= x (Succ (Succ (Succ y)))) :name reach-in)
+
+(let s3 (Prev (Succ (Succ (Succ (Null))))))
+(let s2 (Prev (Succ (Succ (Null)))))
+(run 10)
+
+(check (= s3 (Null)))
+(fail (check (= s2 (Null))))     ; two deep, so the condition fails and the rule does not fire
+```
 
 `:fresh $s` names a slot the right-hand side binds that the pattern never mentions, so
 the compiler mints one. `:name` names the rule.
