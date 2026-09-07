@@ -79,6 +79,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "slotted"))
 enc = __import__("slotted-encoder")
 
+CARRIER = "U"  # the sort the hand-written core declares
 CORE_FILE = "slotted/encoding/egraph-encoding-11.egg"
 
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
@@ -153,7 +154,15 @@ class Source:
         self.spec = {}
         self.body = []
         self.includes = []
+        # A program may declare its own sort, and then THAT is the sort its terms have --
+        # the core is renamed to it rather than a carrier being invented. Collected first
+        # because a column is a slotted child exactly when its sort is a declared one, so
+        # the constructors cannot be read until the sorts are known.
+        self.sorts = []
+        self._ctors = []
         self._read(path)
+        for form in self._ctors:
+            self.spec.update(enc.read_language_form(form, self.carrier_sorts()))
         assert self.spec, f"{path.name}: no (constructor ...) declaration"
         self.lang = Terms({c: enc.Op(c, c, sig) for c, sig in self.spec.items()})
 
@@ -176,9 +185,61 @@ class Source:
                 self.includes.append(inc)
                 self._read(inc)
             elif isinstance(form, list) and form and form[0] == "constructor":
-                self.spec.update(enc.read_language_form(form))
+                # stashed rather than kept in the body: `signature` needs the declared
+                # sorts, which may come later, and the machinery re-emits the declaration
+                self._ctors.append(form)
             else:
+                if isinstance(form, list) and len(form) == 2 and form[0] == "sort":
+                    self.sorts.append(form[1])
                 self.body.append((form, path))
+
+    def carrier_sorts(self):
+        """The sorts whose columns are slotted children.
+
+        A program's own declarations when it has any, and otherwise the one the
+        hand-written core declares.
+        """
+        return tuple(self.sorts) if self.sorts else (CARRIER,)
+
+    def core(self):
+        """The hand-written core, as text to inline, or None to include it as it stands.
+
+        A program that declares no sort gets the file included, which is what every test
+        did before sorts were a thing and keeps their snapshots unchanged. A program that
+        declares one gets the same core with the carrier RENAMED to it, and without the
+        `(sort ...)` line, since the program's own declaration is now that sort. The rules
+        are untouched: they name relations, and with a single sort the relation names do
+        not change.
+        """
+        if not self.sorts:
+            return None
+        if len(self.sorts) != 1:
+            raise SystemExit(
+                f"{self.path.name}: {len(self.sorts)} sorts declared ({', '.join(self.sorts)}), and the "
+                "machinery is written for one. Each sort needs its own `RenamesToLeader`, `Equated` "
+                "and `ClassSlots`, which is not built yet."
+            )
+        sort = self.sorts[0]
+        text = (ROOT / CORE_FILE).read_text()
+        # The carrier is renamed textually, which is exact for a name the core does not
+        # otherwise use -- every mention of `U` there is a declaration. A name the core
+        # uses as a RULE VARIABLE is a different matter: renaming onto it would silently
+        # capture, so refuse instead. `S` used to be such a name.
+        #
+        # A program naming its sort `U` is asking for the name the core already uses: the
+        # rename is the identity, so nothing can capture and there is nothing to refuse.
+        body = re.sub(r";[^\n]*", "", text)
+        if sort != CARRIER and re.search(rf"\b{re.escape(sort)}\b", body):
+            raise SystemExit(
+                f"{self.path.name}: the sort name {sort!r} is already used inside the machinery, "
+                "so renaming the carrier onto it would capture. Pick another name."
+            )
+        # every mention of the carrier is a DECLARATION -- the rules name relations, not
+        # the sort -- so renaming the whole-word occurrences is exact
+        # the core keeps the `(sort ...)` line, so the sort is declared BEFORE the
+        # relations that use it; the program's own declaration is dropped instead, in
+        # `compile_source`, since two of them is a duplicate binding
+        return re.sub(r"\bU\b", sort, text)
 
     # ------------------------------------------------------------------ terms
     def global_ref(self, name, ground):
@@ -274,7 +335,7 @@ def compile_source(src, own_only=False):
         ";;; edited by hand, and rewritten by `check-slotted.py --update`. This is what",
         ";;; running that test runs, and the only file it includes is the hand-written core.",
         "",
-        f'(include "{CORE_FILE}")',
+        f'(include "{CORE_FILE}")' if src.core() is None else src.core(),
         "",
     ]
     if own_only:
@@ -285,13 +346,19 @@ def compile_source(src, own_only=False):
             ";;; of lines over and over.",
         ]
     else:
-        out.append(enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE))))
+        out.append(
+            enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE, sort=src.carrier_sorts()[0])))
+        )
     rules = 0
     extracts = 0
     for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
         mine = origin == src.path
         keep = mine or not own_only
+        if head == "sort" and len(form) == 2 and form[1] in src.carrier_sorts():
+            # the core declares the carrier, positioned before the relations that use it,
+            # so the program's own declaration of the same sort would be a duplicate
+            continue
         if head == "let":
             _, name, body = form
             _emit(out, keep, f"(let ${name} {src.encode(body)})")

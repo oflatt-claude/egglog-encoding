@@ -86,7 +86,7 @@ SLOTTED = (CHILD, BINDER)
 ###############################################################################
 
 
-def read_language(path):
+def read_language(path, sorts=("U",)):
     """Parse annotated constructor declarations.
 
         (constructor Lam (U U) U :binder 0)
@@ -109,15 +109,25 @@ def read_language(path):
         cols_text, _, tail = rest.partition(")")
         # the closing paren sticks to the last index, so scan for integers
         binders = [int(x) for x in re.findall(r"\d+", tail.split(":binder")[1])] if ":binder" in tail else []
-        language[head.strip()] = signature(cols_text.split(), binders)
+        language[head.strip()] = signature(cols_text.split(), binders, sorts)
     return language
 
 
-def signature(cols, binders):
-    """Columns and the binding child positions as the encoder's signature."""
+def signature(cols, binders, sorts=("U",)):
+    """Columns and the binding child positions as the encoder's signature.
+
+    A column whose sort is one the program DECLARED is a slotted child and expands to
+    `Renaming <sort>`; anything else -- `i64`, `String`, a primitive -- is a payload and
+    passes through. `sorts` defaults to the carrier the hand-written core declares, so a
+    program that declares none reads as it always did.
+
+    This used to compare against the literal name `U`, which made every other sort a
+    payload and every node's sort `U`: `(constructor Succ (S) S)` compiled to
+    `(constructor Succ (S) U)`.
+    """
     sig, seen_kids = [], 0
     for col in cols:
-        if col == "U":
+        if col in sorts:
             sig.append(BINDER if seen_kids in binders else CHILD)
             seen_kids += 1
         else:
@@ -125,7 +135,7 @@ def signature(cols, binders):
     return sig
 
 
-def read_language_form(form):
+def read_language_form(form, sorts=("U",)):
     """One parsed `(constructor Name (U U) U :binder 0)` as `{name: signature}`.
 
     The list form, for a test that declares its language inline rather than pointing
@@ -135,7 +145,7 @@ def read_language_form(form):
     name, cols = form[1], form[2]
     tail = form[4:]
     binders = [int(x) for x in tail[1:]] if tail and tail[0] == ":binder" else []
-    return {name: signature(cols, binders)}
+    return {name: signature(cols, binders, sorts)}
 
 
 def read_correspondence(path):
@@ -220,11 +230,15 @@ def pattern(name, sig, edges=None, kids=None, payloads=None):
     return f"({name} {' '.join(out)})"
 
 
-def declare(name, sig):
-    """The `(constructor ...)` line for one signature: a slotted column becomes the
-    two egglog columns `Renaming U`, a payload column stays as it is."""
-    cols = " ".join("Renaming U" if c in SLOTTED else c for c in sig)
-    return f"(constructor {name} ({cols}) U)\n"
+def declare(name, sig, sort="U"):
+    """The `(constructor ...)` line for one signature: a slotted column becomes the two
+    egglog columns `Renaming <sort>`, a payload column stays as it is.
+
+    `sort` is the carrier -- the sort a node has and a slotted child is reached through.
+    It defaults to the one the hand-written core declares, and is the program's own when
+    it declared one."""
+    cols = " ".join(f"Renaming {sort}" if c in SLOTTED else c for c in sig)
+    return f"(constructor {name} ({cols}) {sort})\n"
 
 
 def shape_of(col):
@@ -587,7 +601,7 @@ def binder_variants(emit_rule, name, sig, comment, bound, heads):
     return out
 
 
-def emit(language, binders=(), provided=None, omit=()):
+def emit(language, binders=(), provided=None, omit=(), sort="U"):
     """All the rules for one language: `{constructor: signature}`.
 
     `binders` pins binders by operator string, for the generic encoding where the
@@ -628,7 +642,7 @@ def emit(language, binders=(), provided=None, omit=()):
         _, edges, kids, _ = cols_of(sig)
         out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}")
         out += [
-            declare(name, sig),
+            declare(name, sig, sort),
             ";; an upper bound on the class's slots; the merge narrows it",
             class_slots(name, sig),
             ";; every class holding a node has a self-loop, so a query can reach it",
@@ -715,12 +729,12 @@ SHARED = """\
 (set (ClassSlots (Null)) (map-empty))
 
 ;; Carry a slot set along a `RenamesToLeader` edge, in both directions: `a = m*b`, so
-;; `m` takes b's slots to a's. Transporting a set S through a renaming is the image of
-;; the renaming restricted to S.
-(rule ((RenamesToLeader a m b) (= S (ClassSlots a)))
-      ((set (ClassSlots b) (map-image (compose (inverse m) S)))))
-(rule ((RenamesToLeader a m b) (= S (ClassSlots b)))
-      ((set (ClassSlots a) (map-image (compose m S)))))
+;; `m` takes b's slots to a's. Transporting a slot set through a renaming is the image of
+;; the renaming restricted to that set.
+(rule ((RenamesToLeader a m b) (= slots (ClassSlots a)))
+      ((set (ClassSlots b) (map-image (compose (inverse m) slots)))))
+(rule ((RenamesToLeader a m b) (= slots (ClassSlots b)))
+      ((set (ClassSlots a) (map-image (compose m slots)))))
 """
 
 MACHINERY_HEADER = """\

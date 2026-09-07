@@ -1,3 +1,10 @@
+;;; COMPILED from slotted/tests/own-sort.egg by slotted/slotted-egglog.py.
+;;;
+;;; Only the forms THIS file contributes. The machinery for its 5 constructors,
+;;; and anything an included library brought, are snapshotted by the generators
+;;; that emit them -- committing them again per test would be the same thousands
+;;; of lines over and over.
+
 ;;; A slotted e-graph in egglog, hand-written for one binary constructor so that the whole
 ;;; machinery reads in one place. `slotted/gen-node-rules.py` emits the same
 ;;; rules for the other arities and the payload leaves.
@@ -126,21 +133,21 @@
 (Idx 62)
 (Idx 63)
 
-;; One `U` value per e-node and per class; a slotted class spans several of them.
-(sort U)
+;; One `S` value per e-node and per class; a slotted class spans several of them.
+(sort S)
 
 ;; A variable. Normalised below so only `(Var 0)` survives, with the slot in the edge.
-(constructor Var (i64) U)
+(constructor Var (i64) S)
 
 ;; `(RenamesToLeader follower m leader)` is `follower = m*leader`, with `leader <= follower`
 ;; under `ordering-max`.
-(relation RenamesToLeader (U Renaming U))
+(relation RenamesToLeader (S Renaming S))
 
 ;; `a = m*b` with no orientation picked. Everything relating two DIFFERENT values writes
 ;; here; only the readers below write `RenamesToLeader`, so it cannot hold a backwards row.
 ;; Repairing that relation in place instead does not work -- transitivity re-derives the
 ;; backwards row as fast as the repair flips it.
-(relation Equated (U Renaming U))
+(relation Equated (S Renaming S))
 
 ;; The invariant rules -- these and every rule the generator emits -- must be SATURATED
 ;; between the user's rule steps:
@@ -178,7 +185,7 @@
       ((delete (RenamesToLeader f m l))) :ruleset slotted)
 
 ;; The nullary object, depending on no slots.
-(constructor Null () U)
+(constructor Null () S)
 
 ;; One family of rules per constructor: a rule naming child positions cannot be written
 ;; once for all arities. Arity 2 is spelled out below -- class slots, self-loop,
@@ -194,7 +201,7 @@
 ;; name more slots than the class has, and a rule that picks one to mean "the class's
 ;; slots" gets whichever the join happened to bind. This narrows on merge and so can
 ;; only ever shrink, which is what the reference's `c.slots` does.
-(function ClassSlots (U) Renaming :merge (map-intersect old new))
+(function ClassSlots (S) Renaming :merge (map-intersect old new))
 
 ;; the leaves, whose slots are known outright
 (set (ClassSlots (Var 0)) (map-of 0 0))
@@ -211,7 +218,7 @@
 ;; `(App2 f m1 c1 m2 c2)` is the term `f(m1*c1, m2*c2)`. The operator rides in a
 ;; payload column, so this one constructor covers every binary operator, and a
 ;; payload never appears in a renaming.
-(constructor App2 (String Renaming U Renaming U) U)
+(constructor App2 (String Renaming S Renaming S) S)
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (App2 p1 m1 c1 m2 c2)))
@@ -488,7 +495,7 @@
 ;; It lives here rather than beside the rules that use it because it is
 ;; constructor-independent and there should be one declaration of it: every program that
 ;; includes this file can write a `subst` right-hand side, whether or not it does.
-(relation SubstPending (U Renaming Renaming U))
+(relation SubstPending (S Renaming Renaming S))
 
 (rule ((SubstPending root q mr r)
        (= cs (ClassSlots r)))
@@ -830,4 +837,79 @@
 (fail (check (= x (App2 f m1 (Var 0) m2 c2)) (= (map-length m1) 0)))
 (fail (check (= x (App2 f m1 c1 m2 (Var 0))) (= (map-length m2) 0)))
 
+(pop)
+
+
+(push)
+(rule ((= V2 (Prev p1 C3))
+       (= dom4 (map-image p1))
+       (= mp5 dom4)
+       (= idm6 (map-image mp5))
+       (= m7 (compose mp5 p1))
+       (= cs8 (ClassSlots C3))
+       (= cs9 (ClassSlots V2))
+       (= C3 (Succ p10 C12))
+       (= dom13 (map-image p10))
+       (RenamesToLeader C3 sym14 C3)
+       (= mp15 (find-mapping-total idm6 dom13 (compose (compose m7 cs8) sym14) (map-domain (compose m7 cs8))))
+       (= idm16 (map-image mp15))
+       (= av17 (map-union idm6 idm16))
+       (= m18 (compose mp15 p10))
+       (= cs19 (ClassSlots C12))
+       (= alts20 (refine-namings av17 (map-empty) idm6 idm16))
+       (Idx ix21)
+       (= mrg22 (vec-get alts20 ix21)))
+      ((Equated V2 (compose (inverse (compose mrg22 (compose mp5 cs9))) (compose mrg22 (compose m18 cs19))) C12)))
+(let $one (Prev (map-empty) (Succ (map-empty) (Null))))
+(let $two (Prev (map-empty) (Succ (map-empty) (Succ (map-empty) (Null)))))
+(run-schedule (saturate (run slotted))
+              (repeat 10 (seq (run) (saturate (run slotted)))))
+(check (RenamesToLeader $one _m0 _l) (RenamesToLeader (Null) _m1 _l) (= _m0 _m1))
+(check (RenamesToLeader $two _m0 _l) (RenamesToLeader (Succ (map-empty) (Null)) _m1 _l) (= _m0 _m1))
+(pop)
+(push)
+(let $id0 (Lam (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(let $id7 (Lam (map-of 0 7) (Var 0) (map-of 0 7) (Var 0)))
+(let $k (Lam (map-of 0 0) (Var 0) (map-of 0 3) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(check (RenamesToLeader $id0 _m0 _l) (RenamesToLeader $id7 _m1 _l) (= _m0 _m1))
+(check (= (ClassSlots $id0) (map-empty)))
+(check (= (ClassSlots $k) (map-of 3 3)))
+(pop)
+(push)
+(rule ((= V3 (G p1 C4 p2 C5))
+       (= dom6 (map-union (map-image p1) (map-image p2)))
+       (= mp7 dom6)
+       (= idm8 (map-image mp7))
+       (= m9 (compose mp7 p1))
+       (= cs10 (ClassSlots C4))
+       (= m11 (compose mp7 p2))
+       (= cs12 (ClassSlots C5))
+       (= cs13 (ClassSlots V3))
+       (= C4 (Succ p14 C16))
+       (= dom17 (map-image p14))
+       (RenamesToLeader C4 sym18 C4)
+       (= mp19 (find-mapping-total idm8 dom17 (compose (compose m9 cs10) sym18) (map-domain (compose m9 cs10))))
+       (= idm20 (map-image mp19))
+       (= av21 (map-union idm8 idm20))
+       (= m22 (compose mp19 p14))
+       (= cs23 (ClassSlots C16))
+       (= C5 (Succ p24 C26))
+       (= dom27 (map-image p24))
+       (RenamesToLeader C5 sym28 C5)
+       (= mp29 (find-mapping-total av21 dom27 (compose (compose m11 cs12) sym28) (map-domain (compose m11 cs12))))
+       (= idm30 (map-image mp29))
+       (= av31 (map-union av21 idm30))
+       (= m32 (compose mp29 p24))
+       (= cs33 (ClassSlots C26))
+       (= alts34 (refine-namings av31 (map-empty) idm8 idm20 idm30))
+       (Idx ix35)
+       (= mrg36 (vec-get alts34 ix35)))
+      ((Equated (Null) (compose mrg36 (compose mp7 cs13)) V3)))
+(let $ss (G (map-empty) (Succ (map-empty) (Null)) (map-empty) (Succ (map-empty) (Null))))
+(let $sn (G (map-empty) (Succ (map-empty) (Null)) (map-empty) (Null)))
+(run-schedule (saturate (run slotted))
+              (repeat 5 (seq (run) (saturate (run slotted)))))
+(check (RenamesToLeader $ss _m0 _l) (RenamesToLeader (Null) _m1 _l) (= _m0 _m1))
+(fail (check (RenamesToLeader $sn _m0 _l) (RenamesToLeader (Null) _m1 _l) (= _m0 _m1)))
 (pop)

@@ -1,3 +1,10 @@
+;;; COMPILED from slotted/tests/carrier-name.egg by slotted/slotted-egglog.py.
+;;;
+;;; Only the forms THIS file contributes. The machinery for its 4 constructors,
+;;; and anything an included library brought, are snapshotted by the generators
+;;; that emit them -- committing them again per test would be the same thousands
+;;; of lines over and over.
+
 ;;; A slotted e-graph in egglog, hand-written for one binary constructor so that the whole
 ;;; machinery reads in one place. `slotted/gen-node-rules.py` emits the same
 ;;; rules for the other arities and the payload leaves.
@@ -830,4 +837,38 @@
 (fail (check (= x (App2 f m1 (Var 0) m2 c2)) (= (map-length m1) 0)))
 (fail (check (= x (App2 f m1 c1 m2 (Var 0))) (= (map-length m2) 0)))
 
+(pop)
+
+
+(push)
+(rule ((= V2 (Prev p1 C3))
+       (= dom4 (map-image p1))
+       (= mp5 dom4)
+       (= idm6 (map-image mp5))
+       (= m7 (compose mp5 p1))
+       (= cs8 (ClassSlots C3))
+       (= cs9 (ClassSlots V2))
+       (= C3 (Succ p10 C12))
+       (= dom13 (map-image p10))
+       (RenamesToLeader C3 sym14 C3)
+       (= mp15 (find-mapping-total idm6 dom13 (compose (compose m7 cs8) sym14) (map-domain (compose m7 cs8))))
+       (= idm16 (map-image mp15))
+       (= av17 (map-union idm6 idm16))
+       (= m18 (compose mp15 p10))
+       (= cs19 (ClassSlots C12))
+       (= alts20 (refine-namings av17 (map-empty) idm6 idm16))
+       (Idx ix21)
+       (= mrg22 (vec-get alts20 ix21)))
+      ((Equated V2 (compose (inverse (compose mrg22 (compose mp5 cs9))) (compose mrg22 (compose m18 cs19))) C12)))
+(let $one (Prev (map-empty) (Succ (map-empty) (Null))))
+(run-schedule (saturate (run slotted))
+              (repeat 5 (seq (run) (saturate (run slotted)))))
+(check (RenamesToLeader $one _m0 _l) (RenamesToLeader (Null) _m1 _l) (= _m0 _m1))
+(pop)
+(push)
+(let $id0 (Lam (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
+(let $id5 (Lam (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
+(run-schedule (saturate (run slotted)))
+(check (RenamesToLeader $id0 _m0 _l) (RenamesToLeader $id5 _m1 _l) (= _m0 _m1))
+(check (= (ClassSlots $id0) (map-empty)))
 (pop)
