@@ -20,12 +20,12 @@
 ;;;
 ;;;     f($x, f($x, null))  ->  g($x, null)
 ;;;
-;;; The two occurrences of `?x` sit at different depths, so their edge renamings
+;;; The two occurrences of `x` sit at different depths, so their edge renamings
 ;;; have to be composed down the pattern before they can be compared.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F ?x (F ?x (Null))) (G ?x (Null)) :name fold)
+(rewrite (F x (F x (Null))) (G x (Null)) :name fold)
 
 (let a (F $17 (F $17 (Null))))
 (let b (G $17 (Null)))
@@ -46,7 +46,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F ?x ?y) (F ?y ?x) :name comm)
+(rewrite (F x y) (F y x) :name comm)
 
 (let a (F $12 $13))
 (let b (F $13 $12))
@@ -67,7 +67,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (H (F ?x ?y) (F ?y ?x)) (Null) :name collapse)
+(rewrite (H (F x y) (F y x)) (Null) :name collapse)
 
 (let a (F $1 $2))
 (let b (F $2 $1))
@@ -91,11 +91,11 @@
 ;;; `sub($0,$0) = null` makes the slot redundant, so the class stands for
 ;;; `sub($x,$x)` at every $x. Only then does `f(sub($0,$0), sub($1,$1))` -- whose
 ;;; two children are invoked at DIFFERENT slots -- match `f(sub(x,x), sub(x,x))`,
-;;; which demands one `?x` for both.
+;;; which demands one `x` for both.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F (Sub ?x ?x) (Sub ?x ?x)) (H (Null) (Null)) :name both-sides)
+(rewrite (F (Sub x x) (Sub x x)) (H (Null) (Null)) :name both-sides)
 
 (union (Sub $0 $0) (Null))
 

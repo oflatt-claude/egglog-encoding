@@ -1,4 +1,4 @@
-;;; SDQL's `beta` rule: `(let ?t $x ?body)` -> `?body[(var $x) := ?t]`.
+;;; SDQL's `beta` rule: `(let t $x body)` -> `body[(var $x) := t]`.
 ;;;
 ;;; `subst` is the only right-hand side head that is not a constructor. It is a CALL,
 ;;; so there is nothing to build, and two things make it more than a call. Run
@@ -27,7 +27,7 @@
 (constructor Add (U U) U)
 (constructor Num (i64) U)
 
-(rewrite (Let ?t $x ?body) (subst ?body $x ?t) :name beta)
+(rewrite (Let t $x body) (subst body $x t) :name beta)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -65,13 +65,13 @@ depend on any of them.
 ## Rules
 
 ```
-(rewrite (Lam $x (App ?f $x)) ?f
+(rewrite (Lam $x (App f $x)) f
          :name eta
-         :when (not-free $x ?f))
+         :when (not-free $x f))
 
-(rewrite (Sum ?e1 $k $v (Sing $k $v)) ?e1)
+(rewrite (Sum e1 $k $v (Sing $k $v)) e1)
 
-(rewrite (Let ?t $x ?body) (subst ?body $x ?t) :name beta)
+(rewrite (Let t $x body) (subst body $x t) :name beta)
 ```
 
 A **pattern variable** stands for a subterm and may be written bare, `x`, which is
@@ -89,7 +89,7 @@ two `:when` clauses. There are two kinds:
 
 | condition | meaning |
 | --- | --- |
-| `(free $x ?f)`, `(not-free $x ?f)` | whether a slot is among a variable's free slots — the reference's `subst[v].slots().contains(…)`. A side condition on the match's *slots* |
+| `(free $x f)`, `(not-free $x f)` | whether a slot is among a variable's free slots — the reference's `subst[v].slots().contains(…)`. A side condition on the match's *slots* |
 | `(= v <call>)` | `v` also matches `<call>`. Another **pattern**, not a side condition: it constrains the match's *shape*, and several give an arbitrary multipattern |
 
 An `(= v <call>)` pattern nests as deep as you like, and the variables it introduces need
@@ -114,8 +114,8 @@ not appear on the left at all:
 `:fresh $s` names a slot the right-hand side binds that the pattern never mentions, so
 the compiler mints one. `:name` names the rule.
 
-`subst` is the one right-hand-side head that is not a constructor. `(subst ?body $x ?t)`
-is `?body[(var $x) := ?t]` — the reference's `b[x := t]`. It is a *call*, so there is
+`subst` is the one right-hand-side head that is not a constructor. `(subst body $x t)`
+is `body[(var $x) := t]` — the reference's `b[x := t]`. It is a *call*, so there is
 nothing to build; `slotted/tests/sdql-beta.egg` explains what the compiler emits for it.
 
 **`rewrite` is the only rule form.** egglog's `rule` and `birewrite` are not part of this
@@ -193,7 +193,7 @@ If commutativity has put the swap in `f`'s group, then
 
 ```slotted
 (constructor F (U U) U)
-(rewrite (F ?x ?y) (F ?y ?x) :name comm)
+(rewrite (F x y) (F y x) :name comm)
 (let a (F $1 $2))
 (let b (F $2 $1))
 (run 5)
@@ -254,7 +254,7 @@ class, so term equality already implied it — checked, with no explicit union i
 case:
 
 ```
-(rewrite (F ?x ?y) (F ?y ?x) :name comm)
+(rewrite (F x y) (F y x) :name comm)
 (let f12 (F $1 $2))
 (let f21 (F $2 $1))
 (let i0 (Lam $0 $0))

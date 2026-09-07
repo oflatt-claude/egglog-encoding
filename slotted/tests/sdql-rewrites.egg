@@ -15,7 +15,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A plain rule, and the `Symbol` payload leaf it builds.
 ;;;
-;;;     mult-app1:  (* ?a ?b)  ->  (binop mult ?a ?b)
+;;;     mult-app1:  (* a b)  ->  (binop mult a b)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -31,7 +31,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A repeated variable, and the `Num` leaf: the Def. 6 check, positive and negative.
 ;;;
-;;;     sub-identity:  (- ?e ?e)  ->  0
+;;;     sub-identity:  (- e e)  ->  0
 ;;;
 ;;; `(- $5 $5)` is `0`; `(- $5 $6)` is two DISTINCT renamed ids of one leader and must
 ;;; not be.
@@ -54,7 +54,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A literal in a CHILD position.
 ;;;
-;;;     add-zero:  (+ ?e 0)  ->  ?e
+;;;     add-zero:  (+ e 0)  ->  e
 ;;;
 ;;; A payload leaf is never deleted or migrated, so its row is a stable handle -- but
 ;;; its class's canonical value need not be that row, so the compiled rule joins
@@ -75,7 +75,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A nested right-hand side over a payload leaf.
 ;;;
-;;;     get-range:  (get (range ?st ?en) ?idx)  ->  (+ ?idx (- ?st 1))
+;;;     get-range:  (get (range st en) idx)  ->  (+ idx (- st 1))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
@@ -91,7 +91,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A slot literal in an ordinary child position, not a binder column.
 ;;;
-;;;     sum-sing:  (sum ?e1 $k $v (sing (var $k) (var $v)))  ->  ?e1
+;;;     sum-sing:  (sum e1 $k $v (sing (var $k) (var $v)))  ->  e1
 ;;;
 ;;; Both of `sing`'s children are the variable class, told apart only by their slots,
 ;;; and each is pinned to one an earlier atom named. That is the case that has to be
@@ -117,10 +117,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; The slot side condition, firing.
 ;;;
-;;;     sum-fact-1:  (sum ?R $x $y (* ?e1 ?e2))  ->  (* ?e1 (sum ?R $x $y ?e2))
-;;;                  if $x, $y not in slots(?e1)
+;;;     sum-fact-1:  (sum R $x $y (* e1 e2))  ->  (* e1 (sum R $x $y e2))
+;;;                  if $x, $y not in slots(e1)
 ;;;
-;;; `?e1` is the free `$7` and `?e2` the bound `$5`, so the guard passes and the
+;;; `e1` is the free `$7` and `e2` the bound `$5`, so the guard passes and the
 ;;; factor comes out. One step, so the only rule that can put a product in the sum's
 ;;; class is this one.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -140,9 +140,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; The same side condition, blocking.
 ;;;
-;;; Same rule, same shape, and the only change is that `?e1` is now the BOUND slot
+;;; Same rule, same shape, and the only change is that `e1` is now the BOUND slot
 ;;; `$5`: pulling it out of the sum would let it escape its binder, so the guard must
-;;; refuse. `sum-fact-2` is refused symmetrically, since its `?e2` is the other bound
+;;; refuse. `sum-fact-2` is refused symmetrically, since its `e2` is the other bound
 ;;; slot -- so NO product may appear in the sum's class, which is what the positive
 ;;; section above relies on.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -159,8 +159,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; One slot literal shared by two SIBLING atoms.
 ;;;
-;;;     let-binop4:  (binop ?f (let ?e1 $x ?e2) (let ?e1 $x ?e3))
-;;;                    ->  (let ?e1 $x (binop ?f ?e2 ?e3))
+;;;     let-binop4:  (binop f (let e1 $x e2) (let e1 $x e3))
+;;;                    ->  (let e1 $x (binop f e2 e3))
 ;;;
 ;;; The hard case: `$x` is a binder of two independently-renamed atoms, so the two
 ;;; bound slots have to be forced onto one pattern slot. Neither atom's bound slot is

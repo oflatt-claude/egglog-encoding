@@ -29,14 +29,14 @@
 ;;; `sub($3,$3) = null` makes the slot redundant, so the class stands for
 ;;; `sub($x,$x)` at every $x -- and only then does `f(sub($0,$0), sub($1,$1))`,
 ;;; whose two children are invoked at DIFFERENT slots, match a pattern that
-;;; demands one `?x` for both.
+;;; demands one `x` for both.
 ;;;
 ;;; The slot the union happened to name must not matter. It used to: this is the
 ;;; $3 version of a pair that disagreed, and the reference had the same split.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F (Sub ?x ?x) (Sub ?x ?x)) (H (Null) (Null)) :name both-sides)
+(rewrite (F (Sub x x) (Sub x x)) (H (Null) (Null)) :name both-sides)
 
 (union (Sub $3 $3) (Null))
 
@@ -59,7 +59,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (Mul ?x (Null)) (Null) :name mul-zero)
+(rewrite (Mul x (Null)) (Null) :name mul-zero)
 
 (let a (F (Mul $7 (Null)) $8))
 (let b (F (Mul $9 (Null)) $8))
@@ -85,7 +85,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F (Sub ?x ?x) (Sub ?x ?x)) (H (Null) (Null)) :name both-sides)
+(rewrite (F (Sub x x) (Sub x x)) (H (Null) (Null)) :name both-sides)
 
 (union (Sub $9 $9) (Null))
 
@@ -113,9 +113,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (Add ?x ?y) (Add ?y ?x) :name comm)
-(rewrite (Add ?x (Add ?y ?z)) (Add (Add ?x ?y) ?z) :name assoc-l)
-(rewrite (Add (Add ?x ?y) ?z) (Add ?x (Add ?y ?z)) :name assoc-r)
+(rewrite (Add x y) (Add y x) :name comm)
+(rewrite (Add x (Add y z)) (Add (Add x y) z) :name assoc-l)
+(rewrite (Add (Add x y) z) (Add x (Add y z)) :name assoc-r)
 
 (let a (Add (Add (Add $0 $1) $2) $3))
 (let b (Add (Add (Add $3 $2) $1) $0))
@@ -130,11 +130,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; KNOWN UNFIXED: a right-hand side that names a slot the match could not pin
 ;;;
-;;; The program below is the one above with `?x` on the right instead of a closed
+;;; The program below is the one above with `x` on the right instead of a closed
 ;;; term, and it is not commented out because it is uninteresting -- it FAILS, in
 ;;; both directions:
 ;;;
-;;;     (rewrite (F (Sub ?x ?x) (Sub ?x ?x)) ?x)
+;;;     (rewrite (F (Sub x x) (Sub x x)) x)
 ;;;     (union (Sub $0 $0) (Null))          ;; or (Sub $9 $9), same outcome
 ;;;     (let w (F (Sub $0 $0) (Sub $1 $1)))
 ;;;     (let k5 (K $5 (Null)))
@@ -144,14 +144,14 @@
 ;;;
 ;;; `k5` and `k6` are unrelated to any of it, so the encoding is collapsing the
 ;;; variable class: every slot becomes interchangeable. The cause is that the
-;;; slotless `sub` class pins nothing, so `?x` is not determined by the match --
-;;; and `?x` appears on the right, where something has to be built. The reference
+;;; slotless `sub` class pins nothing, so `x` is not determined by the match --
+;;; and `x` appears on the right, where something has to be built. The reference
 ;;; declines to fire at all, because revisiting a redundant slot allocates a fresh
 ;;; one and the two occurrences then fail to unify. Firing with a minted slot and
 ;;; then USING it on the right is what goes wrong here.
 ;;;
 ;;; The `H (Null) (Null)` sections above are the same match with a right-hand side
-;;; that does not mention `?x`, and those pass -- so the match is not the problem,
+;;; that does not mention `x`, and those pass -- so the match is not the problem,
 ;;; the use of an unpinned variable in the action is.
 ;;;
 ;;; Both slot choices fail now. `$9` used to pass, which was an artifact of the

@@ -54,7 +54,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F ?x ?y) (F ?y ?x) :name comm)
+(rewrite (F x y) (F y x) :name comm)
 
 (let a (G (F $1 $2) (Null)))
 (let b (G (F $2 $1) (Null)))
@@ -165,14 +165,14 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; a repeated pattern variable matches up to a SYMMETRY of the child
 ;;;
-;;; `f(?x, ?x)` demands one renamed id at both positions, and Def. 6 says the two
+;;; `f(x, x)` demands one renamed id at both positions, and Def. 6 says the two
 ;;; occurrences agree when the renaming between them is a symmetry. `a` is made
 ;;; symmetric, so f(a[$0,$1], a[$1,$0]) matches. Matching on class identity alone
 ;;; would be unsound; on edge equality it would miss this.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F ?x ?x) ?x :name idem)
+(rewrite (F x x) x :name idem)
 
 (let a01 (A $0 $1))
 (union a01 (A $1 $0))
@@ -192,12 +192,12 @@
 ;;; the same rule WITHOUT the symmetry, which is what makes the last one a test
 ;;;
 ;;; a[$0,$1] and a[$1,$0] are one class but two different renamed ids, so
-;;; `f(?x,?x)` must not match -- while `u`, whose children really are one renamed
+;;; `f(x,x)` must not match -- while `u`, whose children really are one renamed
 ;;; id, still must.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F ?x ?x) ?x :name idem)
+(rewrite (F x x) x :name idem)
 
 (let a01 (A $0 $1))
 (let t (F (A $0 $1) (A $1 $0)))
@@ -219,7 +219,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (T ?x (T ?x ?x)) ?x :name three)
+(rewrite (T x (T x x)) x :name three)
 
 (let a01 (A $0 $1))
 (union a01 (A $1 $0))
@@ -243,7 +243,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F (G ?x ?y) ?z) (G ?x (F ?y ?z)) :name rot)
+(rewrite (F (G x y) z) (G x (F y z)) :name rot)
 
 (let a (F (G $1 $2) $3))
 (let b (G $1 (F $2 $3)))
