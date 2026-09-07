@@ -22,8 +22,8 @@ THE LANGUAGE
                                                 one -- how a class gets a symmetry, and
                                                 how a slot becomes redundant
 
-    (rewrite (Sum ?e1 $k $v (Sing $k $v)) ?e1)  a rule, in terms
-    (rewrite lhs rhs :when (not-free $x ?f))    ... with a slot side condition
+    (rewrite (Sum e1 $k $v (Sing $k $v)) e1)    a rule, in terms
+    (rewrite lhs rhs :when (not-free $x f))     ... with a slot side condition
 
     (run 3)                                     three user-rule steps, with the
                                                 machinery saturated around each
@@ -304,7 +304,7 @@ class Source:
         head, args = form[0], form[1:]
         if head == enc.SUBST:
             # Not a constructor: a call, and only legal on a right-hand side. Its
-            # arguments are read like any others so that `?b` and `$x` mean here what
+            # arguments are read like any others so that `b` and `$x` mean here what
             # they mean everywhere else.
             return (head, *(self.term(a, ground=ground) for a in args))
         assert head in self.spec, f"{self.path.name}: unknown constructor {head!r}"
@@ -350,6 +350,7 @@ def compile_source(src, own_only=False):
             enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE, sort=src.carrier_sorts()[0])))
         )
     rules = 0
+    scopes = []  # globals saved by each open `push`, restored by its `pop`
     extracts = 0
     for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
@@ -359,7 +360,19 @@ def compile_source(src, own_only=False):
             # the core declares the carrier, positioned before the relations that use it,
             # so the program's own declaration of the same sort would be a duplicate
             continue
-        if head == "let":
+        if head == "push":
+            # `(pop)` in egglog undoes the `let`s the region made, so the compiler's own
+            # table of globals has to be undone with it. Left flat, a name bound inside a
+            # closed region stayed bound: a later rule mentioning it matched that stale
+            # term instead of binding a pattern variable, and a ground mention compiled to
+            # a reference egglog no longer had.
+            scopes.append(dict(src.lang.bound))
+            _emit(out, keep, render(form))
+        elif head == "pop":
+            if scopes:
+                src.lang.bound = scopes.pop()
+            _emit(out, keep, render(form))
+        elif head == "let":
             _, name, body = form
             _emit(out, keep, f"(let ${name} {src.encode(body)})")
             src.lang.bound[name] = src.term(body)
@@ -407,7 +420,7 @@ def compile_source(src, own_only=False):
         elif head in ("rule", "birewrite"):
             # `rewrite` is the only rule form here, and passing either of these through
             # is worse than rejecting it. At the slotted level neither can typecheck --
-            # an encoded constructor takes a `Renaming` before each child, so `(F ?x ?y)`
+            # an encoded constructor takes a `Renaming` before each child, so `(F x y)`
             # is the wrong arity. Written at the ENCODED level one typechecks, passes
             # through, and then never fires: `rules` below counts only `rewrite`s, so
             # `(run N)` emits a schedule with no user-rule steps at all. Silence is the
@@ -502,7 +515,7 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
         "a bare variable there matches everything"
     )
     root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
-    # each `:when (= ?v <call>)` is another rooted pattern; `tmp` is per-equality so the
+    # each `:when (= v <call>)` is another rooted pattern; `tmp` is per-equality so the
     # names `flatten` invents for nested sub-terms cannot collide between them
     for i, (var, pat) in enumerate(parts["equalities"]):
         _, extra = enc.flatten(src.lang, src.term(pat, ground=False), root=var, tmp=f"?_w{i}_")

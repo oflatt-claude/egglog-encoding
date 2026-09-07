@@ -1,8 +1,8 @@
 ;;; egglog's surface spelling: bare pattern variables, and `:when (= v <call>)`.
 ;;;
-;;; Every other file here writes `?x`, so this is the only cover for the bare spelling
-;;; and for a rewrite whose multipattern comes from `:when`. A sort other than `U` is
-;;; not covered yet -- the carrier is still hardcoded.
+;;; The corpus is written bare, and this file is the cover for a rewrite whose
+;;; multipattern comes from `:when`, for the two spellings of a variable naming one
+;;; variable, and for a global's scope. `own-sort.egg` covers a sort other than `U`.
 ;;;
 ;;; Every `:when` case asserts BOTH halves: that the rule fires where the condition
 ;;; holds, and that it does NOT where the condition fails. Only the second has teeth --
@@ -176,4 +176,24 @@
 (let shed-yes (Lam $0 (G $1 $1)))
 (run 5)
 (check (= shed-yes (Null)))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A global's scope ends with its region. `(pop)` undoes the `let`s a region made,
+;;; so a name bound inside a closed one is a plain pattern variable afterwards --
+;;; not the term it used to hold.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(let gone (Succ (Null)))
+(pop)
+
+(push)
+;; `gone` here is a variable, so this fires on any `Pair` with equal sides
+(rewrite (Pair gone gone) (Null) :name any-pair)
+
+(let nn (Pair (Null) (Null)))
+(run 5)
+
+(check (= nn (Null)))
 (pop)
