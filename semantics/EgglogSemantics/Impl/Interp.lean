@@ -1,5 +1,5 @@
 import EgglogSemantics.Impl.Closure
-import EgglogSemantics.Spec.Match
+import EgglogSemantics.Spec.Step
 
 /-!
 # An executable interpreter
@@ -290,7 +290,7 @@ It compares with `closureF`, which computes exactly the specification's `Cong`. 
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   match p with
   | .values vs f as =>
-    match Expr.evalList d.sig vs (d.env ++ σ), Expr.evalList d.sig as (d.env ++ σ) with
+    match Expr.evalList d.sig vs (σ), Expr.evalList d.sig as (σ) with
     | some us, some ts =>
       if (d.sig.mergeOf f).isSome then
         let cl := ((d.addTerms ts).addTerms us).closureF
@@ -303,13 +303,13 @@ def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
         decide (∃ w ∈ d.terms, (w, t) ∈ cl)
     | _, _ => false
   | .expr e =>
-    match e.eval d.sig (d.env ++ σ) with
+    match e.eval d.sig (σ) with
     | none => false
     | some t =>
       let cl := (d.addTerm t).closureF
       decide (∃ w ∈ d.terms, (w, t) ∈ cl)
   | .eq e₁ e₂ =>
-    match e₁.eval d.sig (d.env ++ σ), e₂.eval d.sig (d.env ++ σ) with
+    match e₁.eval d.sig (σ), e₂.eval d.sig (σ) with
     | some t₁, some t₂ =>
       let cl := ((d.addTerm t₁).addTerm t₂).closureF
       decide ((t₁, t₂) ∈ cl) && decide (∃ w ∈ d.terms, (w, t₁) ∈ cl)
@@ -318,8 +318,8 @@ def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
 /-- The substitutions satisfying a whole query. Assigns from `FDatabase.valueTerms`, not
 from `terms`: a variable is bound to a value the program built, never to a table entry. -/
 def matchQuery (d : FDatabase) (q : Query) : List Env :=
-  (assignments d.valueTerms (Query.freeVars q d.env)).filter fun σ =>
-    q.all fun p => patternHolds d p (Env.canon (p.freeVars d.env) σ)
+  (assignments d.valueTerms (Query.freeVars q [])).filter fun σ =>
+    q.all fun p => patternHolds d p (Env.canon (p.freeVars []) σ)
 
 /-! ### Hoisting the closure out of the candidate loop
 
@@ -407,7 +407,7 @@ def patternHoldsWith (cl : Finset (Term × Term)) (d : FDatabase) (p : Pattern) 
     Bool :=
   match p with
   | .values vs f as =>
-    match Expr.evalList d.sig vs (d.env ++ σ), Expr.evalList d.sig as (d.env ++ σ) with
+    match Expr.evalList d.sig vs (σ), Expr.evalList d.sig as (σ) with
     | some us, some ts =>
       if (d.sig.mergeOf f).isSome then
         let cl' := d.closureWith cl (ts ++ us)
@@ -420,13 +420,13 @@ def patternHoldsWith (cl : Finset (Term × Term)) (d : FDatabase) (p : Pattern) 
         decide (∃ w ∈ d.terms, (w, t) ∈ cl')
     | _, _ => false
   | .expr e =>
-    match e.eval d.sig (d.env ++ σ) with
+    match e.eval d.sig (σ) with
     | none => false
     | some t =>
       let cl' := d.closureWith cl [t]
       decide (∃ w ∈ d.terms, (w, t) ∈ cl')
   | .eq e₁ e₂ =>
-    match e₁.eval d.sig (d.env ++ σ), e₂.eval d.sig (d.env ++ σ) with
+    match e₁.eval d.sig (σ), e₂.eval d.sig (σ) with
     | some t₁, some t₂ =>
       let cl' := d.closureWith cl [t₁, t₂]
       decide ((t₁, t₂) ∈ cl') && decide (∃ w ∈ d.terms, (w, t₁) ∈ cl')
@@ -446,29 +446,29 @@ theorem patternHoldsWith_eq (d : FDatabase) (p : Pattern) (σ : Env) :
     FDatabase.closureWith_eq d [t₁, t₂]
   cases p with
   | expr e =>
-    cases he : e.eval d.sig (d.env ++ σ) with
+    cases he : e.eval d.sig (σ) with
     | none => simp only [patternHoldsWith, patternHolds, he]
     | some t => simp only [patternHoldsWith, patternHolds, he, h1]
   | eq e₁ e₂ =>
-    cases he₁ : e₁.eval d.sig (d.env ++ σ) with
+    cases he₁ : e₁.eval d.sig (σ) with
     | none => simp only [patternHoldsWith, patternHolds, he₁]
     | some t₁ =>
-      cases he₂ : e₂.eval d.sig (d.env ++ σ) with
+      cases he₂ : e₂.eval d.sig (σ) with
       | none => simp only [patternHoldsWith, patternHolds, he₁, he₂]
       | some t₂ => simp only [patternHoldsWith, patternHolds, he₁, he₂, h3]
   | values vs f as =>
-    cases hv : Expr.evalList d.sig vs (d.env ++ σ) with
+    cases hv : Expr.evalList d.sig vs (σ) with
     | none => simp only [patternHoldsWith, patternHolds, hv]
     | some us =>
-      cases ha : Expr.evalList d.sig as (d.env ++ σ) with
+      cases ha : Expr.evalList d.sig as (σ) with
       | none => simp only [patternHoldsWith, patternHolds, hv, ha]
       | some ts =>
         simp only [patternHoldsWith, patternHolds, hv, ha, h1, h2]
 
 /-- `matchQuery` with the closure computed once, as a parameter. -/
 def matchQueryWith (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : List Env :=
-  (assignments d.valueTerms (Query.freeVars q d.env)).filter fun σ =>
-    q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars d.env) σ)
+  (assignments d.valueTerms (Query.freeVars q [])).filter fun σ =>
+    q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars []) σ)
 
 /-- **The fast path.** `matchQuery` with one congruence closure per query instead of one
 per candidate. Taking `cl` through `matchQueryWith`'s parameter rather than a `let` is what
@@ -492,7 +492,7 @@ theorem matchQueryFast_eq (d : FDatabase) (q : Query) : matchQueryFast d q = mat
 `matchQueryWith` assigns every free variable before it checks anything, so a query of `n`
 variables enumerates `|valueTerms| ^ n` candidates however early its patterns decide.
 Nothing of a candidate reaches a pattern's check but the pattern's **own** variables —
-`patternHolds` is applied to `Env.canon (p.freeVars d.env) σ` and reads no more of `σ` — so
+`patternHolds` is applied to `Env.canon (p.freeVars []) σ` and reads no more of `σ` — so
 a prefix that already falsifies a pattern falsifies every extension of it, and those
 extensions need never be built.
 
@@ -513,7 +513,7 @@ with each level's candidate list narrowed, and `matchJoin_eq` is the equality be
 them. -/
 /-- The patterns a substitution already decides: those whose free variables it binds. -/
 def Query.decided (d : FDatabase) (pre : Env) (q : Query) : Query :=
-  q.filter fun p => (p.freeVars d.env).all fun v => decide (v ∈ Env.dom pre)
+  q.filter fun p => (p.freeVars []).all fun v => decide (v ∈ Env.dom pre)
 
 /-- `lookup` reads past an extension that cannot rebind. `Proofs/Database.lean`'s
 `Env.lookup_append_of_mem` is the same fact; `Impl/` does not import `Proofs/`, and the
@@ -563,13 +563,13 @@ signature costs more than the pruning saves. -/
 def matchPrune (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) (ts : List Term)
     (pre : Env) : List Var → List Env
   | [] =>
-      if q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars d.env) pre) then [[]]
+      if q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars []) pre) then [[]]
       else []
   | v :: vs =>
       ts.flatMap fun t =>
         let pre' := pre ++ [(v, t)]
         if (Query.decided d pre' q).all fun p =>
-              patternHoldsWith cl d p (Env.canon (p.freeVars d.env) pre') then
+              patternHoldsWith cl d p (Env.canon (p.freeVars []) pre') then
           (matchPrune cl d q ts pre' vs).map fun σ => (v, t) :: σ
         else []
 
@@ -578,7 +578,7 @@ theorem matchPrune_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query)
     (ts : List Term) :
     ∀ (vs : List Var) (pre : Env), matchPrune cl d q ts pre vs
       = (assignments ts vs).filter fun σ =>
-          q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars d.env) (pre ++ σ)) := by
+          q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars []) (pre ++ σ)) := by
   intro vs
   induction vs with
   | nil =>
@@ -590,7 +590,7 @@ theorem matchPrune_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query)
     refine List.flatMap_congr fun t _ => ?_
     rw [filter_map_comp]
     by_cases hg : (Query.decided d (pre ++ [(v, t)]) q).all fun p =>
-        patternHoldsWith cl d p (Env.canon (p.freeVars d.env) (pre ++ [(v, t)]))
+        patternHoldsWith cl d p (Env.canon (p.freeVars []) (pre ++ [(v, t)]))
     · rw [if_pos hg, ih (pre ++ [(v, t)])]
       congr 1
       refine List.filter_congr fun σ _ => ?_
@@ -598,11 +598,11 @@ theorem matchPrune_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query)
     · -- the prefix already falsifies a pattern, so no extension of it survives
       have hnil : ((assignments ts vs).filter fun σ =>
           q.all fun p => patternHoldsWith cl d p
-            (Env.canon (p.freeVars d.env) (pre ++ (v, t) :: σ))) = [] := by
+            (Env.canon (p.freeVars []) (pre ++ (v, t) :: σ))) = [] := by
         rw [Bool.not_eq_true, List.all_eq_false] at hg
         obtain ⟨p, hp, hfail⟩ := hg
         obtain ⟨hpq, hdecB⟩ := List.mem_filter.mp hp
-        have hdec : ∀ w ∈ p.freeVars d.env, w ∈ Env.dom (pre ++ [(v, t)]) := fun w hw =>
+        have hdec : ∀ w ∈ p.freeVars [], w ∈ Env.dom (pre ++ [(v, t)]) := fun w hw =>
           of_decide_eq_true (List.all_eq_true.mp hdecB w hw)
         refine List.filter_eq_nil_iff.mpr fun σ _ hall => hfail ?_
         have hp' := List.all_eq_true.mp hall p hpq
@@ -613,7 +613,7 @@ theorem matchPrune_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query)
 
 /-- `matchQueryWith`, pruned. -/
 def matchQueryPruned (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : List Env :=
-  matchPrune cl d q d.valueTerms [] (Query.freeVars q d.env)
+  matchPrune cl d q d.valueTerms [] (Query.freeVars q [])
 
 theorem matchQueryPruned_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) :
     matchQueryPruned cl d q = matchQueryWith cl d q := by
@@ -704,10 +704,10 @@ out from under the comparison. -/
 def joinPlan (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var) :
     Pattern → Option JoinAtom
   | .values vs f as =>
-      let vars := (Pattern.values vs f as).freeVars d.env
+      let vars := (Pattern.values vs f as).freeVars []
       if (d.sig.mergeOf f).isSome && joinDrivable as && joinDrivable vs
           && decide (v ∈ vars) then
-        let ρ := d.env ++ Env.canon vars pre
+        let ρ := Env.canon vars pre
         let ka := joinKnown ρ as
         let kv := joinKnown ρ vs
         if d.holdsAll ((ka ++ kv).filterMap id) then
@@ -721,7 +721,7 @@ def joinPlan (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var) 
 /-- Whether the atom's surviving entries still admit `v ↦ t`. -/
 def JoinAtom.keeps (a : JoinAtom) (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env)
     (v : Var) (t : Term) : Bool :=
-  let ρ := d.env ++ Env.canon a.vars (pre ++ [(v, t)])
+  let ρ := Env.canon a.vars (pre ++ [(v, t)])
   a.rows.any fun r =>
     joinConsistent cl (joinKnown ρ a.keys) r.args
       && joinConsistent cl (joinKnown ρ a.outs) r.out
@@ -745,13 +745,13 @@ def joinCands (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) (held : B
 def matchJoin (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) (ts : List Term)
     (held : Bool) (pre : Env) : List Var → List Env
   | [] =>
-      if q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars d.env) pre) then [[]]
+      if q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars []) pre) then [[]]
       else []
   | v :: vs =>
       (joinCands cl d q held ts pre v).flatMap fun t =>
         let pre' := pre ++ [(v, t)]
         if (Query.decided d pre' q).all fun p =>
-              patternHoldsWith cl d p (Env.canon (p.freeVars d.env) pre') then
+              patternHoldsWith cl d p (Env.canon (p.freeVars []) pre') then
           (matchJoin cl d q ts held pre' vs).map fun σ => (v, t) :: σ
         else []
 
@@ -996,12 +996,12 @@ private theorem joinPlan_values {cl : Finset (Term × Term)} {d : FDatabase} {pr
     {v : Var} {vs as : List Expr} {f : FnName} {a : JoinAtom}
     (h : joinPlan cl d pre v (.values vs f as) = some a) :
     joinDrivable as = true ∧ joinDrivable vs = true ∧
-      a.vars = (Pattern.values vs f as).freeVars d.env ∧ a.keys = as ∧ a.outs = vs ∧
-      d.holdsAll ((joinKnown (d.env ++ Env.canon a.vars pre) as).filterMap id) = true ∧
-      d.holdsAll ((joinKnown (d.env ++ Env.canon a.vars pre) vs).filterMap id) = true ∧
+      a.vars = (Pattern.values vs f as).freeVars [] ∧ a.keys = as ∧ a.outs = vs ∧
+      d.holdsAll ((joinKnown (Env.canon a.vars pre) as).filterMap id) = true ∧
+      d.holdsAll ((joinKnown (Env.canon a.vars pre) vs).filterMap id) = true ∧
       ∀ r ∈ d.rows, r.fn = f →
-        joinConsistent cl (joinKnown (d.env ++ Env.canon a.vars pre) as) r.args = true →
-        joinConsistent cl (joinKnown (d.env ++ Env.canon a.vars pre) vs) r.out = true →
+        joinConsistent cl (joinKnown (Env.canon a.vars pre) as) r.args = true →
+        joinConsistent cl (joinKnown (Env.canon a.vars pre) vs) r.out = true →
         r ∈ a.rows := by
   simp only [joinPlan] at h
   split at h
@@ -1027,16 +1027,16 @@ private theorem joinPlan_values {cl : Finset (Term × Term)} {d : FDatabase} {pr
 private theorem patternHoldsWith_values {cl : Finset (Term × Term)} {d : FDatabase}
     {vs as : List Expr} {f : FnName} {σ : Env} (hm : (d.sig.mergeOf f).isSome = true)
     (h : patternHoldsWith cl d (.values vs f as) σ = true) :
-    ∃ us ks, Expr.evalList d.sig vs (d.env ++ σ) = some us ∧
-      Expr.evalList d.sig as (d.env ++ σ) = some ks ∧
+    ∃ us ks, Expr.evalList d.sig vs (σ) = some us ∧
+      Expr.evalList d.sig as (σ) = some ks ∧
       ∃ r ∈ d.rows, r.fn = f ∧
         FDatabase.congrTuple (d.closureWith cl (ks ++ us)) ks r.args = true ∧
         FDatabase.congrTuple (d.closureWith cl (ks ++ us)) us r.out = true := by
   simp only [patternHoldsWith] at h
-  cases hv : Expr.evalList d.sig vs (d.env ++ σ) with
+  cases hv : Expr.evalList d.sig vs (σ) with
   | none => rw [hv] at h; simp at h
   | some us =>
-    cases ha : Expr.evalList d.sig as (d.env ++ σ) with
+    cases ha : Expr.evalList d.sig as (σ) with
     | none => rw [hv, ha] at h; simp at h
     | some ks =>
       rw [hv, ha] at h
@@ -1050,7 +1050,7 @@ theorem joinCands_mem {cl : Finset (Term × Term)} {d : FDatabase} {q : Query} {
     (hheld : held = true → ∀ u ∈ ts, d.holdsAll [u] = true)
     (htm : t ∈ ts) (hσ : ∀ b ∈ σ, b.2 ∈ ts)
     (hall : (q.all fun p => patternHoldsWith cl d p
-        (Env.canon (p.freeVars d.env) (pre ++ [(v, t)] ++ σ))) = true) :
+        (Env.canon (p.freeVars []) (pre ++ [(v, t)] ++ σ))) = true) :
     t ∈ joinCands cl d q held ts pre v := by
   simp only [joinCands]
   split
@@ -1072,25 +1072,22 @@ theorem joinCands_mem {cl : Finset (Term × Term)} {d : FDatabase} {q : Query} {
         · simp at hpa
       obtain ⟨us, ks, hev, hek, r, hr, hrf, hcm1, hcm2⟩ := patternHoldsWith_values hm hph
       -- the three environments: the node's, the candidate's, and the full substitution's
-      set vars := (Pattern.values vs f as).freeVars d.env with hvars
-      set ρ₀ := d.env ++ Env.canon vars pre with hρ₀
-      set ρ₁ := d.env ++ Env.canon vars (pre ++ [(v, t)]) with hρ₁
-      set ρ₂ := d.env ++ Env.canon vars (pre ++ [(v, t)] ++ σ) with hρ₂
+      set vars := (Pattern.values vs f as).freeVars [] with hvars
+      set ρ₀ := Env.canon vars pre with hρ₀
+      set ρ₁ := Env.canon vars (pre ++ [(v, t)]) with hρ₁
+      set ρ₂ := Env.canon vars (pre ++ [(v, t)] ++ σ) with hρ₂
       have mono₀ : ∀ w y, Env.lookup w ρ₀ = some y → Env.lookup w ρ₂ = some y := by
         rw [hρ₀, hρ₂]
-        exact lookup_canon_mono fun w y hw => lookup_append_some (lookup_append_some hw)
+        exact lookup_canon_mono (E := [])
+          fun w y hw => lookup_append_some (lookup_append_some hw)
       have mono₁ : ∀ w y, Env.lookup w ρ₁ = some y → Env.lookup w ρ₂ = some y := by
         rw [hρ₁, hρ₂]
-        exact lookup_canon_mono fun w y hw => lookup_append_some hw
+        exact lookup_canon_mono (E := []) fun w y hw => lookup_append_some hw
       have hnew : ∀ w y, Env.lookup w ρ₀ = none → Env.lookup w ρ₂ = some y →
           d.holdsAll [y] = true := by
         intro w y h0 h2
-        have hE : Env.lookup w d.env = none := by
-          cases hE : Env.lookup w d.env with
-          | none => rfl
-          | some z => rw [hρ₀, lookup_append_some hE] at h0; simp at h0
-        rw [hρ₀, lookup_append_none hE, Env.lookup_canon_eq] at h0
-        rw [hρ₂, lookup_append_none hE, Env.lookup_canon_eq] at h2
+        rw [hρ₀, Env.lookup_canon_eq] at h0
+        rw [hρ₂, Env.lookup_canon_eq] at h2
         by_cases hmv : w ∈ vars
         · rw [if_pos hmv] at h0 h2
           rw [List.append_assoc, lookup_append_none h0, List.singleton_append,
@@ -1178,7 +1175,7 @@ theorem matchJoin_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query)
 /-- `matchQueryWith`, joined. `d.holdsAll d.valueTerms` is computed **once** here rather
 than at every node, which is the reason `matchJoin` takes it as a parameter. -/
 def matchQueryJoin (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : List Env :=
-  matchJoin cl d q d.valueTerms (d.holdsAll d.valueTerms) [] (Query.freeVars q d.env)
+  matchJoin cl d q d.valueTerms (d.holdsAll d.valueTerms) [] (Query.freeVars q [])
 
 theorem matchQueryJoin_eq (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) :
     matchQueryJoin cl d q = matchQueryWith cl d q := by
@@ -1247,7 +1244,7 @@ def execActions (d : FDatabase) : List Action → Option FDatabase
 
 /-- `evalLocalActions`, computed. -/
 def execLocalActions (d : FDatabase) (as : List Action) (σ : Env) : Option FDatabase :=
-  (execActions { d with env := d.env ++ σ } as).map fun d' =>
+  (execActions { d with env := σ ++ d.env } as).map fun d' =>
     { d' with env := d.env, rules := d.rules }
 
 /-- One firing of `r` on `σ`, unioned into `acc`; nothing if the actions get stuck, which
@@ -1358,7 +1355,7 @@ def runFuel : Nat := 64
 /-- `CmdStep`, computed. -/
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
   | .action a => execTopAction d a
-  | .rule r => some { d with rules := r :: d.rules }
+  | .rule r => some { d with rules := r.resolveGlobals d.env :: d.rules }
   | .run R => some (execRunRules R d)
   | .saturate R => d.runSaturateF R runFuel
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }

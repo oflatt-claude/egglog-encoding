@@ -129,6 +129,19 @@ theorem Agree.append_left (ρ : Env) {σ₁ σ₂ : Env} (h : Agree σ₁ σ₂)
   · rw [lookup_append_of_not_mem hv, lookup_append_of_not_mem hv]
     exact h v
 
+/-- Agreement survives a shared **suffix**, which is the order a rule firing appends in: the
+substitution first, the globals behind it (`evalLocalActions`). -/
+theorem Agree.append_right (ρ : Env) {σ₁ σ₂ : Env} (h : Agree σ₁ σ₂) :
+    Agree (σ₁ ++ ρ) (σ₂ ++ ρ) := by
+  intro v
+  by_cases hv : v ∈ dom σ₁
+  · have hv₂ : v ∈ dom σ₂ := by
+      rw [← lookup_isSome_iff_mem_dom, ← h v, lookup_isSome_iff_mem_dom]; exact hv
+    rw [lookup_append_of_mem hv, lookup_append_of_mem hv₂]; exact h v
+  · have hv₂ : v ∉ dom σ₂ := by
+      rw [← lookup_eq_none_iff, ← h v, lookup_eq_none_iff]; exact hv
+    rw [lookup_append_of_not_mem hv, lookup_append_of_not_mem hv₂]
+
 end Env
 /-! ### What the database holds
 

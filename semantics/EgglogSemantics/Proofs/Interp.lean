@@ -438,27 +438,27 @@ asks about. `hv` is not a restriction: it is a consequence of the conclusion
 without inverting. -/
 theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
     (hsig : d.sig.AllConstructors) {p : Pattern} {σ : Env}
-    (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ) :
+    (hv : ValidEnv (p.freeVars []) d.toDatabase σ) :
     patternHolds d p σ = true ↔ ValidSubst d.toDatabase p σ := by
   cases p with
   | values vs f as =>
     have hm : (d.sig.mergeOf f).isSome = false := by rw [hsig f]; rfl
-    cases hev₁ : Expr.evalList d.sig vs (d.env ++ σ) with
+    cases hev₁ : Expr.evalList d.sig vs (σ) with
     | none =>
       simp only [patternHolds, hev₁, Bool.false_eq_true, false_iff]
       intro h
       cases h.2 with
       | values _ _ hus _ =>
-        rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at hus
+        rw [FDatabase.toDatabase_sig, hev₁] at hus
         simp at hus
     | some us =>
-      cases hev₂ : Expr.evalList d.sig as (d.env ++ σ) with
+      cases hev₂ : Expr.evalList d.sig as (σ) with
       | none =>
         simp only [patternHolds, hev₁, hev₂, Bool.false_eq_true, false_iff]
         intro h
         cases h.2 with
         | values _ hts _ _ =>
-          rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at hts
+          rw [FDatabase.toDatabase_sig, hev₂] at hts
           simp at hts
       | some ts =>
         simp only [patternHolds, hev₁, hev₂, hm, Bool.false_eq_true, if_false,
@@ -470,20 +470,20 @@ theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
         · intro h
           cases h.2 with
           | values hwm hts hus hc =>
-            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at hts
-            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at hus
+            rw [FDatabase.toDatabase_sig, hev₂] at hts
+            rw [FDatabase.toDatabase_sig, hev₁] at hus
             cases hts
             cases hus
             exact ⟨_, FDatabase.mem_toDatabase_terms.mp hwm,
               (FDatabase.mem_closureF_addTerm he).mpr (congOn_singleton.mp hc)⟩
   | expr e =>
-    cases hev : e.eval d.sig (d.env ++ σ) with
+    cases hev : e.eval d.sig (σ) with
     | none =>
       simp only [patternHolds, hev, Bool.false_eq_true, false_iff]
       intro h
       cases h.2 with
       | expr _ hee _ =>
-        rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at hee
+        rw [FDatabase.toDatabase_sig, hev] at hee
         simp at hee
     | some t =>
       simp only [patternHolds, hev, decide_eq_true_eq]
@@ -494,27 +494,27 @@ theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
       · intro h
         cases h.2 with
         | expr hwm hee hc =>
-          rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev] at hee
+          rw [FDatabase.toDatabase_sig, hev] at hee
           cases hee
           exact ⟨_, FDatabase.mem_toDatabase_terms.mp hwm,
             (FDatabase.mem_closureF_addTerm he).mpr (congOn_singleton.mp hc)⟩
   | eq e₁ e₂ =>
-    cases hev₁ : e₁.eval d.sig (d.env ++ σ) with
+    cases hev₁ : e₁.eval d.sig (σ) with
     | none =>
       simp only [patternHolds, hev₁, Bool.false_eq_true, false_iff]
       intro h
       cases h.2 with
       | eq _ he₁ _ _ _ =>
-        rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at he₁
+        rw [FDatabase.toDatabase_sig, hev₁] at he₁
         simp at he₁
     | some t₁ =>
-      cases hev₂ : e₂.eval d.sig (d.env ++ σ) with
+      cases hev₂ : e₂.eval d.sig (σ) with
       | none =>
         simp only [patternHolds, hev₁, hev₂, Bool.false_eq_true, false_iff]
         intro h
         cases h.2 with
         | eq _ _ he₂ _ _ =>
-          rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
+          rw [FDatabase.toDatabase_sig, hev₂] at he₂
           simp at he₂
       | some t₂ =>
         simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq]
@@ -526,8 +526,8 @@ theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
         · intro h
           cases h.2 with
           | eq hwm he₁ he₂ hcw hceq =>
-            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₁] at he₁
-            rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig, hev₂] at he₂
+            rw [FDatabase.toDatabase_sig, hev₁] at he₁
+            rw [FDatabase.toDatabase_sig, hev₂] at he₂
             cases he₁
             cases he₂
             exact ⟨(FDatabase.mem_closureF_addTerm₂ he).mpr (congOn_pair.mp hceq),
@@ -538,8 +538,8 @@ theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
 This is the hypothesis `patternHolds_iff` needs, discharged from what `assignments`
 guarantees. -/
 theorem validEnv_canon {d : FDatabase} {q : Query} {σ : Env} {p : Pattern} (hp : p ∈ q)
-    (hdom : Env.dom σ = Query.freeVars q d.env) (hval : ∀ b ∈ σ, b.2 ∈ d.valueTerms) :
-    ValidEnv (p.freeVars d.env) d.toDatabase (Env.canon (p.freeVars d.env) σ) := by
+    (hdom : Env.dom σ = Query.freeVars q []) (hval : ∀ b ∈ σ, b.2 ∈ d.valueTerms) :
+    ValidEnv (p.freeVars []) d.toDatabase (Env.canon (p.freeVars []) σ) := by
   constructor
   · rw [Env.dom_canon_of_subset (Query.freeVars_subset hp) hdom]
   · exact fun b hb => FDatabase.mem_toDatabase_terms.mpr
@@ -554,8 +554,8 @@ substitution. `Env.agree_canon` is what makes the two interchangeable. -/
 theorem mem_matchQuery_iff {d : FDatabase} (he : d.EqsInTerms)
     (hsig : d.sig.AllConstructors) {q : Query} {σ : Env} :
     σ ∈ matchQuery d q ↔
-      Env.dom σ = Query.freeVars q d.env ∧ (∀ b ∈ σ, b.2 ∈ d.valueTerms) ∧
-        ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) := by
+      Env.dom σ = Query.freeVars q [] ∧ (∀ b ∈ σ, b.2 ∈ d.valueTerms) ∧
+        ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars []) σ) := by
   simp only [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true]
   constructor
   · rintro ⟨⟨hdom, hval⟩, hall⟩
@@ -579,7 +579,7 @@ theorem validQuerySubst_of_mem_matchQuery {d : FDatabase} (he : d.EqsInTerms)
     ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
   obtain ⟨hdom, hval, hall⟩ := (mem_matchQuery_iff he hsig).mp h
   obtain ⟨τ, hu, hr⟩ := Env.exists_unionAll (σ := σ)
-    (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
+    (q.map fun p => Env.canon (p.freeVars []) σ) (by
       intro ρ hρ
       obtain ⟨p, -, rfl⟩ := List.mem_map.mp hρ
       exact Env.refines_canon)
@@ -588,7 +588,7 @@ theorem validQuerySubst_of_mem_matchQuery {d : FDatabase} (he : d.EqsInTerms)
   intro v hv
   rw [hdom] at hv
   obtain ⟨p, hp, hvp⟩ := Query.mem_freeVars.mp hv
-  refine hu.mem_dom_iff.mpr ⟨Env.canon (p.freeVars d.env) σ, List.mem_map_of_mem hp, ?_⟩
+  refine hu.mem_dom_iff.mpr ⟨Env.canon (p.freeVars []) σ, List.mem_map_of_mem hp, ?_⟩
   rw [Env.dom_canon_of_subset (Query.freeVars_subset hp) hdom]
   exact hvp
 
@@ -616,15 +616,15 @@ from `FDatabase.valueTerms`, and with no merge function declared that is every t
 theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.EqsInTerms)
     (hsig : d.sig.AllConstructors) {q : Query} {τ : Env}
     (h : ValidQuerySubst d.toDatabase q τ) :
-    Env.canon (Query.freeVars q d.env) τ ∈ matchQuery d q ∧
-      Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) := by
-  have hmd : ∀ v, v ∈ Env.dom τ ↔ v ∈ Query.freeVars q d.env := fun v => by
-    rw [h.mem_dom_iff, Query.mem_freeVars, FDatabase.toDatabase_env]
-  have hbound : ∀ v ∈ Query.freeVars q d.env, (Env.lookup v τ).isSome := fun v hv =>
+    Env.canon (Query.freeVars q []) τ ∈ matchQuery d q ∧
+      Env.Agree τ (Env.canon (Query.freeVars q []) τ) := by
+  have hmd : ∀ v, v ∈ Env.dom τ ↔ v ∈ Query.freeVars q [] := fun v => by
+    rw [h.mem_dom_iff, Query.mem_freeVars]
+  have hbound : ∀ v ∈ Query.freeVars q [], (Env.lookup v τ).isSome := fun v hv =>
     Env.lookup_isSome_iff_mem_dom.mpr ((hmd v).mpr hv)
-  have hdom : Env.dom (Env.canon (Query.freeVars q d.env) τ) = Query.freeVars q d.env :=
+  have hdom : Env.dom (Env.canon (Query.freeVars q []) τ) = Query.freeVars q [] :=
     Env.dom_canon hbound
-  have hag : Env.Agree τ (Env.canon (Query.freeVars q d.env) τ) :=
+  have hag : Env.Agree τ (Env.canon (Query.freeVars q []) τ) :=
     (Env.agree_of_refines Env.refines_canon (fun v hv => by
       rw [hdom]; exact (hmd v).mp hv)).symm
   refine ⟨(mem_matchQuery_iff he hsig).mpr ⟨hdom, ?_, ?_⟩, hag⟩
@@ -633,17 +633,17 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.EqsInTerms)
   · intro p hp
     obtain ⟨σs, hall, hu⟩ := h
     obtain ⟨σp, hσp, hvs⟩ := hall.flip.exists_left hp
-    have hpsub : p.freeVars d.env ⊆ Query.freeVars q d.env := Query.freeVars_subset hp
-    have hpdom : Env.dom (Env.canon (p.freeVars d.env) τ) = p.freeVars d.env :=
+    have hpsub : p.freeVars [] ⊆ Query.freeVars q [] := Query.freeVars_subset hp
+    have hpdom : Env.dom (Env.canon (p.freeVars []) τ) = p.freeVars [] :=
       Env.dom_canon fun v hv => hbound v (hpsub hv)
     have hsc : ∀ ρ ∈ σs, Env.Refines ρ ρ := by
       intro ρ hρ
       obtain ⟨p', -, hvs'⟩ := hall.exists_left hρ
       exact Env.Refines.self_of_nodup (hvs'.validEnv.1.symm.nodup (p'.freeVars_nodup _))
     have hrp : Env.Refines σp τ := (hu.refines_of_mem hsc).1 σp hσp
-    rw [Env.canon_canon hpsub (Query.freeVars_nodup q d.env)]
+    rw [Env.canon_canon hpsub (Query.freeVars_nodup q [])]
     refine ValidSubst.of_agree hvs (fun v => ?_) hpdom
-    by_cases hv : v ∈ p.freeVars d.env
+    by_cases hv : v ∈ p.freeVars []
     · rw [Env.lookup_canon (p.freeVars_nodup _) hv]
       cases hlk : Env.lookup v σp with
       | none =>
@@ -726,7 +726,7 @@ theorem execActions_eqsInTerms {as : List Action} : ∀ {d d' : FDatabase}, d.Eq
 
 theorem execLocalActions_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {as : List Action}
     {σ : Env} (h : execLocalActions d as σ = some d') : d'.EqsInTerms := by
-  cases hv : execActions { d with env := d.env ++ σ } as with
+  cases hv : execActions { d with env := σ ++ d.env } as with
   | none => rw [execLocalActions, hv] at h; simp at h
   | some e =>
     rw [execLocalActions, hv, Option.map_some, Option.some.injEq] at h
@@ -1007,10 +1007,10 @@ theorem fires_iff {R : RulesetName} {d : FDatabase} (he : d.EqsInTerms)
   · rintro ⟨D, ⟨r, hr, hR, τ, hτ, hev⟩, hP⟩
     obtain ⟨hmem, hag⟩ := mem_matchQuery_of_validQuerySubst he hsig hτ
     have hev' : evalLocalActions d.toDatabase r.actions
-        (Env.canon (Query.freeVars r.query d.env) τ) = some D := by
+        (Env.canon (Query.freeVars r.query []) τ) = some D := by
       rw [← evalLocalActions_agree r.actions hag]; exact hev
     have hmap := execLocalActions_toDatabase he (d := d) (as := r.actions)
-      (σ := Env.canon (Query.freeVars r.query d.env) τ)
+      (σ := Env.canon (Query.freeVars r.query []) τ)
     rw [hev'] at hmap
     obtain ⟨d', hd', rfl⟩ := Option.map_eq_some_iff.mp hmap
     exact ⟨r, hr, hR, _, hmem, d', hd', hP⟩
@@ -1251,7 +1251,7 @@ theorem execCmd_toDatabase {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.All
   cases c with
   | action a => exact execTopAction_toDatabase he
   | rule r =>
-    rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
+    rw [show execCmd d (.rule r) = some { d with rules := r.resolveGlobals d.env :: d.rules } from rfl,
       Option.map_some, FDatabase.toDatabase_consRule]
     rfl
   | run R =>
@@ -1281,7 +1281,7 @@ theorem execCmd_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {c : Cmd}
   cases c with
   | action a => exact execAction_eqsInTerms he (execAction_of_top h)
   | rule r =>
-    rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
+    rw [show execCmd d (.rule r) = some { d with rules := r.resolveGlobals d.env :: d.rules } from rfl,
       Option.some.injEq] at h
     exact h ▸ he.consRule r
   | run R =>

@@ -29,6 +29,32 @@ def dom (σ : Env) : List Var := σ.map Prod.fst
 /-- Environments no `lookup` can tell apart. -/
 def Agree (σ₁ σ₂ : Env) : Prop := ∀ v, lookup v σ₁ = lookup v σ₂
 
+/-- `lookup` is left-biased: a binding in the prefix wins. -/
+theorem lookup_append_of_some {v : Var} {t : Term} {σ₁ σ₂ : Env}
+    (h : lookup v σ₁ = some t) : lookup v (σ₁ ++ σ₂) = some t := by
+  induction σ₁ with
+  | nil => rw [lookup] at h; exact absurd h (by simp)
+  | cons b σ ih =>
+      obtain ⟨w, u⟩ := b
+      rw [List.cons_append, lookup]
+      rw [lookup] at h
+      split at h
+      · rename_i hvw; rw [if_pos hvw]; exact h
+      · rename_i hvw; rw [if_neg hvw]; exact ih h
+
+@[inherit_doc lookup_append_of_some]
+theorem lookup_append_of_none {v : Var} {σ₁ σ₂ : Env} (h : lookup v σ₁ = none) :
+    lookup v (σ₁ ++ σ₂) = lookup v σ₂ := by
+  induction σ₁ with
+  | nil => rfl
+  | cons b σ ih =>
+      obtain ⟨w, u⟩ := b
+      rw [List.cons_append, lookup]
+      rw [lookup] at h
+      split at h
+      · exact absurd h (by simp)
+      · rename_i hvw; rw [if_neg hvw]; exact ih h
+
 end Env
 /-- Egglog's global state. -/
 @[ext]

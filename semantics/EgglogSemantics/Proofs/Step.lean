@@ -575,9 +575,11 @@ theorem mergeClosure_setRules {db db' : Database} {R : Set Rule} :
 old effect: every state it adds is one the *preceding* merge phase already reaches. -/
 theorem ruleStep_iff {db db' : Database} {r : Rule} :
     CmdStep db (.rule r) db' ↔
-      ∃ d, MergeClosure db d ∧ db' = { d with rules := insert r db.rules } := by
+      ∃ d, MergeClosure db d ∧
+        db' = { d with rules := insert (r.resolveGlobals db.env) db.rules } := by
   simpa [CmdStep, cmdReach, cmdEffect] using
-    mergeClosure_setRules (db := db) (db' := db') (R := insert r db.rules)
+    mergeClosure_setRules (db := db) (db' := db')
+      (R := insert (r.resolveGlobals db.env) db.rules)
 
 /-! #### The invariant `.decl` carries: the declared name occurs nowhere
 

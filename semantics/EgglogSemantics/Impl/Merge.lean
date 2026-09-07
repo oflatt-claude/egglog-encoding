@@ -584,7 +584,7 @@ top-level actions go through the same staging path as a rule head, so **each top
 `set`s of a difftest case would collide only at the next `(run 1)`. -/
 def FDatabase.execCmdM (d : FDatabase) : Cmd → Option FDatabase
   | .action a => (execTopAction d a).bind (FDatabase.mergeSaturateF mergeFuel)
-  | .rule r => some { d with rules := r :: d.rules }
+  | .rule r => some { d with rules := r.resolveGlobals d.env :: d.rules }
   | .run R => d.runRoundM R
   | .saturate R => d.runSaturateM R runFuel
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }

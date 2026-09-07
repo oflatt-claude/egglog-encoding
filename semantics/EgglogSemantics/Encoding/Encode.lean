@@ -396,17 +396,60 @@ end
 
 mutual
 
-/-- **Inline a global whose definition is an application**, which is the substitution a query
-takes. A definition that is *not* an application is a literal — the definitions are closed —
-and a literal's class never moves (`evalAction` refuses a `union` on one), so the frozen
-reading through the environment is already right for it and leaving the variable alone is what
-keeps `Pattern.Grounded` and `Query.VarsKeyed` true of the substituted query. -/
+/-- **Inlining introduces no primitive** the definitions did not already carry. -/
+theorem ctors_inlineGlobals_noPrim {G : List (Var × Expr)}
+    (hG : ∀ (u : Var) (e' : Expr), Expr.lookupG u G = some e' →
+      ∀ fk ∈ e'.ctors, Prim.ofName fk.1 = none) :
+    ∀ (e : Expr), (∀ fk ∈ e.ctors, Prim.ofName fk.1 = none) →
+      ∀ fk ∈ (e.inlineGlobals G).ctors, Prim.ofName fk.1 = none
+  | .lit _, _, fk, hfk => absurd hfk (by simp [Expr.inlineGlobals, Expr.ctors])
+  | .var v, _, fk, hfk => by
+      rw [Expr.inlineGlobals] at hfk
+      cases hE : Expr.lookupG v G with
+      | none => rw [hE, Option.getD_none] at hfk; exact absurd hfk (by simp [Expr.ctors])
+      | some e' => rw [hE, Option.getD_some] at hfk; exact hG v e' hE fk hfk
+  | .app f args, h, fk, hfk => by
+      rw [Expr.inlineGlobals, Expr.ctors, List.mem_cons] at hfk
+      rcases hfk with rfl | hfk
+      · exact h (f, args.length) (by rw [Expr.ctors]; exact List.mem_cons_self)
+      · exact ctorsList_inlineGlobals_noPrim hG args
+          (fun gk hgk => h gk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hgk)) fk hfk
+
+@[inherit_doc ctors_inlineGlobals_noPrim]
+theorem ctorsList_inlineGlobals_noPrim {G : List (Var × Expr)}
+    (hG : ∀ (u : Var) (e' : Expr), Expr.lookupG u G = some e' →
+      ∀ fk ∈ e'.ctors, Prim.ofName fk.1 = none) :
+    ∀ (es : List Expr), (∀ fk ∈ Expr.ctorsList es, Prim.ofName fk.1 = none) →
+      ∀ fk ∈ Expr.ctorsList (Expr.inlineGlobalsList G es), Prim.ofName fk.1 = none
+  | [], _, fk, hfk => absurd hfk (by simp [Expr.inlineGlobalsList, Expr.ctorsList])
+  | e :: es, h, fk, hfk => by
+      rw [Expr.inlineGlobalsList, Expr.ctorsList] at hfk
+      rcases List.mem_append.mp hfk with hfk' | hfk'
+      · exact ctors_inlineGlobals_noPrim hG e
+          (fun gk hgk => h gk (by rw [Expr.ctorsList]; exact List.mem_append_left _ hgk)) fk hfk'
+      · exact ctorsList_inlineGlobals_noPrim hG es
+          (fun gk hgk => h gk (by rw [Expr.ctorsList]; exact List.mem_append_right _ hgk))
+          fk hfk'
+
+end
+
+mutual
+
+/-- **Inline every global a query names**, which is the substitution a query takes. The
+definitions are closed, so one pass suffices; it is `Expr.inlineGlobals` at a query rather than
+at a `let`, and the two agree because `Cmd.globalBind` closes what it stores.
+
+A definition that is not an application is a **literal**, and substituting it turns
+`.expr (.var $g)` into a bare-literal pattern — the shape `Pattern.Grounded` excludes and
+`encodeQueryExpr` emits no atom for. That is paid rather than avoided: `Pattern.GroundedAt` is
+the semantic clause the correspondence actually needs, and a substituted literal satisfies it
+because the source's own environment binds the global to that very term
+(`Database.GlobalsInline.groundedAt_substGlobals`). Declining the substitution instead would
+make the substituted query differ from `Spec/Step.lean`'s `Rule.resolveGlobals`, which is what
+pairs a stored source rule with its program text. -/
 def Expr.substGlobals (G : List (Var × Expr)) : Expr → Expr
   | .lit l => .lit l
-  | .var v =>
-      match Expr.lookupG v G with
-      | some (.app f as) => .app f as
-      | _ => .var v
+  | .var v => (Expr.lookupG v G).getD (.var v)
   | .app f args => .app f (Expr.substGlobalsList G args)
 
 /-- `Expr.substGlobals` over an argument list. -/
@@ -449,17 +492,21 @@ def Program.letNames (P : Program) : List Var :=
 /-- **The globals in scope after a command**, over the program `P` the command belongs to.
 
 A top-level `let` adds its name bound to its own expression with the earlier globals inlined,
-under two guards:
+under two guards. **Neither ever fires along a run** — `globalBind_letBind_of_encStep` proves
+both pass at every top-level `let` an `EncStep` chain reaches — and that is what
+`Database.GlobalsCover` records and `Rule.resolveGlobals_eq_substGlobals` spends: the encoder
+substitutes every global the source's environment binds, so the query it flattens is the query
+`Spec/Step.lean` resolved into the rule when it registered it.
 
-* **`P` binds the name exactly once.** The source's `Matches` reads a global off `db.env` at
-  **firing** time, so a rebinding changes what a rule declared earlier reads, while a
-  substitution is fixed at encode time. A name more than one top-level `let` binds is therefore
-  left where it was, read through the environment on both sides as it was before. egglog rejects
-  such a program outright ("Shadowing is not allowed", `check_shadowing.rs`), so nothing
-  faithful is given up.
+* **`P` binds the name exactly once.** `Spec/Eval.lean`'s `evalTopAction` refuses a top-level
+  `let` that rebinds — egglog's own "Shadowing is not allowed" (`check_shadowing.rs`) — so a
+  program that rebinds has no `ProgramStep` at all, and `letNames_nodup_of_programStep` is that
+  as a fact about the text. The guard is kept because `Cmd.globalBind` is a function of the
+  program and not of a run.
 * **The inlined expression is closed.** That is what makes a stored definition mean the same
   thing at every later state; it holds whenever the `let`'s own free variables are globals
-  already stored, which is whenever the source's `let` evaluates at all. -/
+  already stored, which is whenever the source's `let` evaluates at all
+  (`Expr.vars_inlineGlobals_nil` at `Database.GlobalsCover`). -/
 def Cmd.globalBind (P : Program) : Cmd → List (Var × Expr) → List (Var × Expr)
   | .action (.letBind v e), G =>
       if P.letNames.count v = 1 ∧ (e.inlineGlobals G).vars = [] then
@@ -485,7 +532,8 @@ state, whatever a later `let` rebinds. `Cmd.globalBind` is what establishes it, 
 guards are exactly this clause's two conjuncts. -/
 def Database.GlobalsInline (src : Database) (G : List (Var × Expr)) : Prop :=
   ∀ v e, Expr.lookupG v G = some e →
-    e.vars = [] ∧ ∃ t, e.eval src.sig [] = some t ∧ Env.lookup v src.env = some t
+    e.vars = [] ∧ (∀ fk ∈ e.ctors, Prim.ofName fk.1 = none) ∧
+      ∃ t, e.eval src.sig [] = some t ∧ Env.lookup v src.env = some t
 
 /-- The clause moves to a state that still builds what it built and still binds what it
 bound. -/
@@ -495,8 +543,8 @@ theorem Database.GlobalsInline.mono_src {src src' : Database} {G : List (Var × 
     (henv : ∀ v t, Env.lookup v src.env = some t → Env.lookup v src'.env = some t) :
     src'.GlobalsInline G := by
   intro v e he
-  obtain ⟨hcl, t, hev, hlk⟩ := h v e he
-  exact ⟨hcl, t, hsig e t hev, henv v t hlk⟩
+  obtain ⟨hcl, hnp, t, hev, hlk⟩ := h v e he
+  exact ⟨hcl, hnp, t, hsig e t hev, henv v t hlk⟩
 
 /-- The static half of the clause, which is what the three text conditions need. -/
 theorem Database.GlobalsInline.closed {src : Database} {G : List (Var × Expr)}
@@ -508,6 +556,207 @@ theorem Database.GlobalsInline.of_eq {src src' : Database} {G : List (Var × Exp
     (h : src.GlobalsInline G) (hsig : src'.sig = src.sig) (henv : src'.env = src.env) :
     src'.GlobalsInline G :=
   h.mono_src (fun _ _ he => by rw [hsig]; exact he) (fun _ _ hv => by rw [henv]; exact hv)
+
+/-- **The substitution defines every global the run has bound.** The invariant that says
+`Cmd.globalBind` declined nothing, and the other half of what makes the encoder's substitution
+and `Spec/Step.lean`'s `Rule.resolveGlobals` the same step. -/
+def Database.GlobalsCover (sd : Database) (G : List (Var × Expr)) : Prop :=
+  ∀ v, (Env.lookup v sd.env).isSome → Expr.lookupG v G ≠ none
+
+/-- Nothing is bound yet, so nothing has to be covered. -/
+theorem Database.globalsCover_empty : Database.empty.GlobalsCover [] := by
+  intro v hv; exact absurd hv (by simp [Database.empty])
+
+/-! #### The encoder's substitution *is* the specification's resolution
+
+`Spec/Step.lean` resolves the globals then in scope into a rule's query when the rule is
+declared, writing each name's **value** back as syntax (`Term.toExpr`); the encoder writes the
+name's **definition** (`Expr.substGlobals`). The two agree, and that identity is what pairs a
+stored source rule with its own program text once resolution has moved to declaration time.
+
+It needs both halves of the bookkeeping: `Database.GlobalsInline` to know a definition
+evaluates to what the environment binds, and `Database.GlobalsCover` to know the environment
+binds nothing the substitution missed. And it needs the definition to be **primitive-free**,
+which is `Database.GlobalsInline`'s own clause and `Program.EncodeDomain.noPrim`'s consequence:
+`(+ 1 2)` evaluates to `3`, and `Term.toExpr 3` is not `(+ 1 2)`. -/
+
+mutual
+
+/-- **A closed primitive-free expression is its own value, read back.** -/
+theorem Term.toExpr_of_eval {sig : Signature} {σ : Env} :
+    ∀ (e : Expr) {t : Term}, (∀ fk ∈ e.ctors, Prim.ofName fk.1 = none) →
+      (∀ w, w ∉ e.vars) → e.eval sig σ = some t → t.toExpr = e
+  | .lit l, t, _, _, h => by
+      rw [Expr.eval, Option.some.injEq] at h; rw [← h]; rfl
+  | .var v, _, _, hv, _ => absurd (show v ∈ (Expr.var v).vars by simp [Expr.vars]) (hv v)
+  | .app f args, t, hc, hv, h => by
+      have hp : Prim.ofName f = none :=
+        hc (f, args.length) (by rw [Expr.ctors]; exact List.mem_cons_self ..)
+      by_cases hctor : sig.IsCtor f
+      · rw [Expr.eval_app_ctor hp hctor] at h
+        obtain ⟨ts, hts, ht⟩ := Option.map_eq_some_iff.mp h
+        rw [← ht, Term.toExpr_app,
+          Term.toExprList_of_evalList args
+            (fun fk hfk => hc fk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hfk))
+            (by rw [Expr.vars] at hv; exact hv) hts]
+      · rw [Expr.eval, hp, if_neg hctor] at h; exact absurd h (by simp)
+
+@[inherit_doc Term.toExpr_of_eval]
+theorem Term.toExprList_of_evalList {sig : Signature} {σ : Env} :
+    ∀ (es : List Expr) {ts : List Term},
+      (∀ fk ∈ Expr.ctorsList es, Prim.ofName fk.1 = none) →
+      (∀ w, w ∉ Expr.varsList es) → Expr.evalList sig es σ = some ts →
+      Term.toExprList ts = es
+  | [], ts, _, _, h => by rw [Expr.evalList, Option.some.injEq] at h; rw [← h]; rfl
+  | e :: es, ts, hc, hv, h => by
+      rw [Expr.evalList] at h
+      obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, hts⟩ := Option.map_eq_some_iff.mp h
+      rw [← hts, Term.toExprList_cons,
+        Term.toExpr_of_eval e
+          (fun fk hfk => hc fk (by rw [Expr.ctorsList]; exact List.mem_append_left _ hfk))
+          (fun w hw => hv w (by
+            rw [Expr.varsList]; exact List.mem_union_iff.mpr (Or.inl hw))) ht,
+        Term.toExprList_of_evalList es
+          (fun fk hfk => hc fk (by rw [Expr.ctorsList]; exact List.mem_append_right _ hfk))
+          (fun w hw => hv w (by
+            rw [Expr.varsList]; exact List.mem_union_iff.mpr (Or.inr hw))) hus]
+
+end
+
+/-- **A definition the substitution carries is the environment's value, read back.** -/
+theorem Database.GlobalsInline.toExpr_eq {src : Database} {G : List (Var × Expr)}
+    (h : src.GlobalsInline G) {v : Var} {e : Expr} (he : Expr.lookupG v G = some e) :
+    ∃ t, Env.lookup v src.env = some t ∧ t.toExpr = e := by
+  obtain ⟨hcl, hnp, t, hev, hlk⟩ := h v e he
+  exact ⟨t, hlk, Term.toExpr_of_eval e hnp
+    (fun w hw => absurd (hcl ▸ hw) (by simp)) hev⟩
+
+mutual
+
+/-- **The resolution and the substitution are the same rewriting**, variable by variable. -/
+theorem Expr.resolveGlobals_eq_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hgi : src.GlobalsInline G) (hcov : src.GlobalsCover G) :
+    ∀ e : Expr, Expr.resolveGlobals src.env e = Expr.substGlobals G e
+  | .lit _ => rfl
+  | .var v => by
+      cases hlk : Expr.lookupG v G with
+      | none =>
+          have hnone : Env.lookup v src.env = none := by
+            cases hE : Env.lookup v src.env with
+            | none => rfl
+            | some t => exact absurd hlk (hcov v (by rw [hE]; rfl))
+          rw [Expr.resolveGlobals_var_none hnone, Expr.substGlobals, hlk, Option.getD_none]
+      | some e =>
+          obtain ⟨t, hlkt, hte⟩ := hgi.toExpr_eq hlk
+          rw [Expr.resolveGlobals_var_some hlkt, Expr.substGlobals, hlk, Option.getD_some, hte]
+  | .app f args => by
+      rw [Expr.resolveGlobals_app, Expr.substGlobals,
+        Expr.resolveGlobalsList_eq_substGlobalsList hgi hcov args]
+
+@[inherit_doc Expr.resolveGlobals_eq_substGlobals]
+theorem Expr.resolveGlobalsList_eq_substGlobalsList {src : Database} {G : List (Var × Expr)}
+    (hgi : src.GlobalsInline G) (hcov : src.GlobalsCover G) :
+    ∀ es : List Expr, Expr.resolveGlobalsList src.env es = Expr.substGlobalsList G es
+  | [] => rfl
+  | e :: es => by
+      rw [Expr.resolveGlobalsList_cons, Expr.substGlobalsList,
+        Expr.resolveGlobals_eq_substGlobals hgi hcov e,
+        Expr.resolveGlobalsList_eq_substGlobalsList hgi hcov es]
+
+end
+
+@[inherit_doc Expr.resolveGlobals_eq_substGlobals]
+theorem Pattern.resolveGlobals_eq_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hgi : src.GlobalsInline G) (hcov : src.GlobalsCover G) :
+    ∀ p : Pattern, Pattern.resolveGlobals src.env p = Pattern.substGlobals G p
+  | .expr e => by
+      rw [Pattern.resolveGlobals, Pattern.substGlobals,
+        Expr.resolveGlobals_eq_substGlobals hgi hcov e]
+  | .eq e₁ e₂ => by
+      rw [Pattern.resolveGlobals, Pattern.substGlobals,
+        Expr.resolveGlobals_eq_substGlobals hgi hcov e₁,
+        Expr.resolveGlobals_eq_substGlobals hgi hcov e₂]
+  | .values vs f as => by
+      rw [Pattern.resolveGlobals, Pattern.substGlobals,
+        Expr.resolveGlobalsList_eq_substGlobalsList hgi hcov vs,
+        Expr.resolveGlobalsList_eq_substGlobalsList hgi hcov as]
+
+@[inherit_doc Expr.resolveGlobals_eq_substGlobals]
+theorem Query.resolveGlobals_eq_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hgi : src.GlobalsInline G) (hcov : src.GlobalsCover G) (q : Query) :
+    Query.resolveGlobals src.env q = Query.substGlobals G q := by
+  rw [Query.resolveGlobals, Query.substGlobals]
+  exact List.map_congr_left fun p _ => Pattern.resolveGlobals_eq_substGlobals hgi hcov p
+
+/-- **The rule the specification stores is the rule the encoder encodes.** -/
+theorem Rule.resolveGlobals_eq_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hgi : src.GlobalsInline G) (hcov : src.GlobalsCover G) (r : Rule) :
+    r.resolveGlobals src.env = r.substGlobals G := by
+  rw [Rule.resolveGlobals, Rule.substGlobals, Query.resolveGlobals_eq_substGlobals hgi hcov]
+
+/-! #### And resolving an already-resolved rule changes nothing
+
+The other half of the pairing: the *encoded* program is run by the same `execCmdM`, so its
+rules are stored `Rule.resolveGlobals`'d too. There is nothing left to resolve — the
+substitution already removed every name the environment binds — so the target's stored rule is
+the encoder's own output on the nose. -/
+
+mutual
+
+/-- A variable no environment binds is one the resolution leaves. -/
+theorem Expr.resolveGlobals_eq_self {σ : Env} :
+    ∀ (e : Expr), (∀ v ∈ e.vars, Env.lookup v σ = none) → Expr.resolveGlobals σ e = e
+  | .lit _, _ => rfl
+  | .var v, h => Expr.resolveGlobals_var_none (h v (by simp [Expr.vars]))
+  | .app f args, h => by
+      rw [Expr.resolveGlobals_app,
+        Expr.resolveGlobalsList_eq_self args (by rw [Expr.vars] at h; exact h)]
+
+@[inherit_doc Expr.resolveGlobals_eq_self]
+theorem Expr.resolveGlobalsList_eq_self {σ : Env} :
+    ∀ (es : List Expr), (∀ v ∈ Expr.varsList es, Env.lookup v σ = none) →
+      Expr.resolveGlobalsList σ es = es
+  | [], _ => rfl
+  | e :: es, h => by
+      rw [Expr.resolveGlobalsList_cons,
+        Expr.resolveGlobals_eq_self e
+          (fun v hv => h v (by rw [Expr.varsList]; exact List.mem_union_iff.mpr (Or.inl hv))),
+        Expr.resolveGlobalsList_eq_self es
+          (fun v hv => h v (by rw [Expr.varsList]; exact List.mem_union_iff.mpr (Or.inr hv)))]
+
+end
+
+@[inherit_doc Expr.resolveGlobals_eq_self]
+theorem Pattern.resolveGlobals_eq_self {σ : Env} :
+    ∀ (p : Pattern), (∀ v ∈ p.vars, Env.lookup v σ = none) →
+      Pattern.resolveGlobals σ p = p
+  | .expr e, h => by rw [Pattern.resolveGlobals, Expr.resolveGlobals_eq_self e h]
+  | .eq e₁ e₂, h => by
+      rw [Pattern.resolveGlobals,
+        Expr.resolveGlobals_eq_self e₁
+          (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))),
+        Expr.resolveGlobals_eq_self e₂
+          (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv)))]
+  | .values vs f as, h => by
+      rw [Pattern.resolveGlobals,
+        Expr.resolveGlobalsList_eq_self vs
+          (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))),
+        Expr.resolveGlobalsList_eq_self as
+          (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv)))]
+
+@[inherit_doc Expr.resolveGlobals_eq_self]
+theorem Query.resolveGlobals_eq_self {σ : Env} (q : Query)
+    (h : ∀ v ∈ Query.vars q, Env.lookup v σ = none) : Query.resolveGlobals σ q = q := by
+  rw [Query.resolveGlobals]
+  conv_rhs => rw [← List.map_id q]
+  exact List.map_congr_left fun p hp =>
+    Pattern.resolveGlobals_eq_self p fun v hv => h v (Query.mem_vars.mpr ⟨p, hp, hv⟩)
+
+@[inherit_doc Expr.resolveGlobals_eq_self]
+theorem Rule.resolveGlobals_eq_self {σ : Env} (r : Rule)
+    (h : ∀ v ∈ Query.vars r.query, Env.lookup v σ = none) : r.resolveGlobals σ = r := by
+  rw [Rule.resolveGlobals, Query.resolveGlobals_eq_self _ h]
 
 /-! ### Queries
 
@@ -563,6 +812,143 @@ def encodeQuery : Query → Nat → Query × Nat
   | p :: ps, n =>
       match encodePattern p n with
       | (qs, n₁) => match encodeQuery ps n₁ with | (qs', n₂) => (qs ++ qs', n₂)
+
+/-! #### Where the flattened query's variables come from
+
+Every variable an encoded query mentions is either one `freshVar` minted — and so
+`@`-prefixed, which `FDatabase.NoAtEnv` keeps out of the environment — or one the source
+query already had. That is what says the target's stored rule is the encoder's own output:
+`FDatabase.execCmdM` resolves the globals then in scope into a rule it registers
+(`Spec/Step.lean`'s `cmdEffect`, mirrored), and at an encoded rule there is nothing left to
+resolve. -/
+
+/-- `Query.vars` over a concatenation. -/
+theorem Query.mem_vars_append {v : Var} {q₁ q₂ : Query} :
+    v ∈ Query.vars (q₁ ++ q₂) ↔ v ∈ Query.vars q₁ ∨ v ∈ Query.vars q₂ := by
+  rw [Query.mem_vars, Query.mem_vars, Query.mem_vars]
+  constructor
+  · rintro ⟨p, hp, hvp⟩
+    exact (List.mem_append.mp hp).imp (fun h => ⟨p, h, hvp⟩) fun h => ⟨p, h, hvp⟩
+  · rintro (⟨p, hp, hvp⟩ | ⟨p, hp, hvp⟩)
+    · exact ⟨p, List.mem_append_left _ hp, hvp⟩
+    · exact ⟨p, List.mem_append_right _ hp, hvp⟩
+
+/-- **A generated variable is in the generated namespace.** -/
+theorem atPrefix_freshVar (n : Nat) : "@".isPrefixOf (freshVar n) = true := by
+  rw [freshVar, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
+    show ("@v").toList = ['@', 'v'] from by decide]
+  exact ⟨'v' :: (toString n).toList, rfl⟩
+
+mutual
+
+@[inherit_doc atPrefix_freshVar]
+theorem mem_vars_encodeQueryExpr : ∀ (e : Expr) (n : Nat) {v : Var},
+    v ∈ Query.vars (encodeQueryExpr e n).2.1 ∨ v ∈ (encodeQueryExpr e n).1.vars →
+      "@".isPrefixOf v = true ∨ v ∈ e.vars
+  | .lit _, n, v, h => by
+      rcases h with h | h
+      · exact absurd h (by rw [encodeQueryExpr]; simp [Query.vars])
+      · exact absurd h (by rw [encodeQueryExpr]; simp [Expr.vars])
+  | .var w, n, v, h => by
+      rcases h with h | h
+      · exact absurd h (by rw [encodeQueryExpr]; simp [Query.vars])
+      · refine Or.inr ?_
+        rw [encodeQueryExpr] at h
+        exact h
+  | .app f args, n, v, h => by
+      rw [encodeQueryExpr] at h
+      rcases h with h | h
+      · rcases Query.mem_vars_append.mp h with h' | h'
+        · exact mem_vars_encodeQueryArgs args n (Or.inl h')
+        · have h'' : v ∈ Query.vars [Pattern.values
+              [Expr.var (freshVar (encodeQueryArgs args n).2.2),
+               Expr.var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
+              (viewName f) (encodeQueryArgs args n).1] := h'
+          rw [Query.vars, Query.vars, Pattern.vars] at h''
+          rcases (by simpa using h'' :
+              (v = freshVar (encodeQueryArgs args n).2.2 ∨
+                  v = freshVar ((encodeQueryArgs args n).2.2 + 1)) ∨
+                v ∈ Expr.varsList (encodeQueryArgs args n).1) with hk | hk
+          · rcases hk with rfl | rfl <;> exact Or.inl (atPrefix_freshVar _)
+          · exact mem_vars_encodeQueryArgs args n (Or.inr hk)
+      · obtain rfl : v = freshVar (encodeQueryArgs args n).2.2 := by
+          simpa [Expr.vars] using h
+        exact Or.inl (atPrefix_freshVar _)
+
+@[inherit_doc atPrefix_freshVar]
+theorem mem_vars_encodeQueryArgs : ∀ (es : List Expr) (n : Nat) {v : Var},
+    v ∈ Query.vars (encodeQueryArgs es n).2.1 ∨ v ∈ Expr.varsList (encodeQueryArgs es n).1 →
+      "@".isPrefixOf v = true ∨ v ∈ Expr.varsList es
+  | [], n, v, h => by
+      rcases h with h | h
+      · exact absurd h (by rw [encodeQueryArgs]; simp [Query.vars])
+      · exact absurd h (by rw [encodeQueryArgs]; simp [Expr.varsList])
+  | e :: es, n, v, h => by
+      have hsplit : (encodeQueryArgs (e :: es) n)
+          = ((encodeQueryExpr e n).1 :: (encodeQueryArgs es (encodeQueryExpr e n).2.2).1,
+             (encodeQueryExpr e n).2.1
+               ++ (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.1,
+             (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.2) := rfl
+      rw [hsplit] at h
+      have hor : ("@".isPrefixOf v = true ∨ v ∈ e.vars) ∨
+          ("@".isPrefixOf v = true ∨ v ∈ Expr.varsList es) := by
+        rcases h with h | h
+        · rcases Query.mem_vars_append.mp h with h' | h'
+          · exact Or.inl (mem_vars_encodeQueryExpr e n (Or.inl h'))
+          · exact Or.inr (mem_vars_encodeQueryArgs es _ (Or.inl h'))
+        · rw [Expr.varsList] at h
+          rcases List.mem_union_iff.mp h with h' | h'
+          · exact Or.inl (mem_vars_encodeQueryExpr e n (Or.inr h'))
+          · exact Or.inr (mem_vars_encodeQueryArgs es _ (Or.inr h'))
+      rw [Expr.varsList]
+      rcases hor with h' | h'
+      · exact h'.imp id fun hv => List.mem_union_iff.mpr (Or.inl hv)
+      · exact h'.imp id fun hv => List.mem_union_iff.mpr (Or.inr hv)
+
+end
+
+@[inherit_doc atPrefix_freshVar]
+theorem mem_vars_encodePattern : ∀ (p : Pattern) (n : Nat) {v : Var},
+    v ∈ Query.vars (encodePattern p n).1 → "@".isPrefixOf v = true ∨ v ∈ p.vars
+  | .values vs f as, n, v, h => by
+      refine Or.inr ?_
+      have h' : v ∈ Query.vars [Pattern.values vs f as] := h
+      rw [Query.vars, Query.vars] at h'
+      simpa using h'
+  | .expr e, n, v, h => mem_vars_encodeQueryExpr e n (Or.inl h)
+  | .eq e₁ e₂, n, v, h => by
+      rw [encodePattern] at h
+      rcases Query.mem_vars_append.mp h with h' | h'
+      · rcases Query.mem_vars_append.mp h' with h'' | h''
+        · exact (mem_vars_encodeQueryExpr e₁ n (Or.inl h'')).imp id fun hv =>
+            List.mem_union_iff.mpr (Or.inl hv)
+        · exact (mem_vars_encodeQueryExpr e₂ _ (Or.inl h'')).imp id fun hv =>
+            List.mem_union_iff.mpr (Or.inr hv)
+      · have h'' : v ∈ Query.vars [Pattern.eq (encodeQueryExpr e₁ n).1
+            (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1] := h'
+        rw [Query.vars, Query.vars, Pattern.vars] at h''
+        rcases (by simpa using h'' :
+            v ∈ (encodeQueryExpr e₁ n).1.vars ∨
+              v ∈ (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1.vars) with hk | hk
+        · exact (mem_vars_encodeQueryExpr e₁ n (Or.inr hk)).imp id fun hv =>
+            List.mem_union_iff.mpr (Or.inl hv)
+        · exact (mem_vars_encodeQueryExpr e₂ _ (Or.inr hk)).imp id fun hv =>
+            List.mem_union_iff.mpr (Or.inr hv)
+
+@[inherit_doc atPrefix_freshVar]
+theorem mem_vars_encodeQuery : ∀ (q : Query) (n : Nat) {v : Var},
+    v ∈ Query.vars (encodeQuery q n).1 → "@".isPrefixOf v = true ∨ v ∈ Query.vars q
+  | [], n, v, h => absurd h (by rw [encodeQuery]; simp [Query.vars])
+  | p :: ps, n, v, h => by
+      have hsplit : (encodeQuery (p :: ps) n).1
+          = (encodePattern p n).1 ++ (encodeQuery ps (encodePattern p n).2).1 := rfl
+      rw [hsplit] at h
+      rw [Query.vars]
+      rcases Query.mem_vars_append.mp h with h' | h'
+      · exact (mem_vars_encodePattern p n h').imp id fun hv =>
+          List.mem_union_iff.mpr (Or.inl hv)
+      · exact (mem_vars_encodeQuery ps _ h').imp id fun hv =>
+          List.mem_union_iff.mpr (Or.inr hv)
 
 /-- The premise proofs an encoded query binds: the second value column of every view read,
 in query order. This is `@Rule_i`'s argument list, and its length is `@Rule_i`'s arity.
@@ -754,6 +1140,59 @@ def rebuildRules (f : FnName) (k : Nat) : List Rule :=
 def maintenanceRules (P : Program) : List Rule :=
   pathCompressRule :: P.ctors.flatMap fun fk => rebuildRules fk.1 fk.2
 
+/-- A rebuild rule's column variable is in the generated namespace. -/
+theorem atPrefix_rebuildVar (i : Nat) : "@".isPrefixOf ("@c" ++ toString i) = true := by
+  rw [String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
+    show ("@c").toList = ['@', 'c'] from by decide]
+  exact ⟨'c' :: (toString i).toList, rfl⟩
+
+@[inherit_doc atPrefix_rebuildVar]
+theorem atPrefix_of_mem_varsList_rebuildVars {k : Nat} {v : Var}
+    (h : v ∈ Expr.varsList (rebuildVars k)) : "@".isPrefixOf v = true := by
+  obtain ⟨e, he, hv⟩ := Expr.mem_varsList h
+  obtain ⟨i, -, rfl⟩ := List.mem_map.mp he
+  obtain rfl : v = "@c" ++ toString i := by simpa [Expr.vars] using hv
+  exact atPrefix_rebuildVar i
+
+/-- **A maintenance rule's query variables are all generated.** `@a`, `@b`, `@c`, `@e`, `@p`,
+`@q`, `@x` and the `@c…` columns, and nothing else — which is what keeps a state's own
+environment (`FDatabase.NoAtEnv`) out of one. -/
+theorem atPrefix_of_mem_vars_maintenanceRules {P : Program} {m : Rule}
+    (hm : m ∈ maintenanceRules P) : ∀ v ∈ Query.vars m.query, "@".isPrefixOf v = true := by
+  rw [maintenanceRules, List.mem_cons] at hm
+  rcases hm with rfl | hm
+  · intro v hv
+    have hv' : v = "@p" ∨ v = "@a" ∨ v = "@c" ∨ v = "@q" ∨ v = "@b" := by
+      simpa [pathCompressRule, Query.vars, Pattern.vars, Expr.varsList, Expr.vars] using hv
+    rcases hv' with rfl | rfl | rfl | rfl | rfl <;> decide +kernel
+  · obtain ⟨fk, -, hm'⟩ := List.mem_flatMap.mp hm
+    have hq : ∃ X : Expr,
+        (X = Expr.var "@e" ∨ ∃ i : Nat, X = Expr.var ("@c" ++ toString i)) ∧
+        m.query = [.values [.var "@e", .var "@p"] (viewName fk.1) (rebuildVars fk.2),
+                   .values [.var "@x", .var "@q"] ufName [X]] := by
+      rw [rebuildRules, List.mem_cons] at hm'
+      rcases hm' with rfl | hm''
+      · exact ⟨.var "@e", Or.inl rfl, rfl⟩
+      · obtain ⟨i, -, rfl⟩ := List.mem_map.mp hm''
+        exact ⟨.var ("@c" ++ toString i), Or.inr ⟨i, rfl⟩, rfl⟩
+    obtain ⟨X, hX, hqe⟩ := hq
+    intro v hv
+    rw [hqe] at hv
+    have hv' : (v = "@e" ∨ v = "@p") ∨ v ∈ Expr.varsList (rebuildVars fk.2) ∨
+        (v = "@x" ∨ v = "@q") ∨ v ∈ X.vars := by
+      simpa [Query.vars, Pattern.vars, Expr.varsList, Expr.vars, or_assoc] using hv
+    rcases hv' with (rfl | rfl) | hc | (rfl | rfl) | hx
+    · decide +kernel
+    · decide +kernel
+    · exact atPrefix_of_mem_varsList_rebuildVars hc
+    · decide +kernel
+    · decide +kernel
+    · rcases hX with rfl | ⟨i, rfl⟩
+      · obtain rfl : v = "@e" := by simpa [Expr.vars] using hx
+        decide +kernel
+      · obtain rfl : v = "@c" ++ toString i := by simpa [Expr.vars] using hx
+        exact atPrefix_rebuildVar i
+
 /-- The rulesets a source `Cmd.saturate` names. -/
 def Program.saturateRulesets (P : Program) : List RulesetName :=
   (P.filterMap fun c => match c with | .saturate R => some R | _ => none).dedup
@@ -774,6 +1213,25 @@ program, and it lost the source's `(Hit)`. -/
 def allMaintenanceRules (P : Program) : List Rule :=
   maintenanceRules P ++
     P.saturateRulesets.flatMap fun R => (maintenanceRules P).map fun r => { r with ruleset := R }
+
+@[inherit_doc atPrefix_of_mem_vars_maintenanceRules]
+theorem atPrefix_of_mem_vars_allMaintenanceRules {P : Program} {m : Rule}
+    (hm : m ∈ allMaintenanceRules P) : ∀ v ∈ Query.vars m.query, "@".isPrefixOf v = true := by
+  rw [allMaintenanceRules] at hm
+  rcases List.mem_append.mp hm with h | h
+  · exact atPrefix_of_mem_vars_maintenanceRules h
+  · obtain ⟨R, -, h'⟩ := List.mem_flatMap.mp h
+    obtain ⟨m₀, hm₀, rfl⟩ := List.mem_map.mp h'
+    exact fun v hv => atPrefix_of_mem_vars_maintenanceRules hm₀ v hv
+
+/-- **And so a state's environment has nothing to resolve in one.** -/
+theorem Rule.resolveGlobals_maintenance {P : Program} {m : Rule}
+    (hm : m ∈ allMaintenanceRules P) {σ : Env} (hat : ∀ b ∈ σ, ¬ "@".isPrefixOf b.1) :
+    m.resolveGlobals σ = m := by
+  refine Rule.resolveGlobals_eq_self _ fun v hv => ?_
+  refine Env.lookup_eq_none_iff.mpr fun hd => ?_
+  obtain ⟨t, hb⟩ := Env.mem_dom_iff.mp hd
+  exact hat (v, t) hb (atPrefix_of_mem_vars_allMaintenanceRules hm v hv)
 
 /-! ### The transformation -/
 /-- The source rules, in the order `encodeCmds` numbers them. -/
@@ -1371,6 +1829,27 @@ def Pattern.Grounded : Pattern → Prop
   | .eq e₁ e₂ => (∀ l, e₁ ≠ .lit l) ∨ (∀ l, e₂ ≠ .lit l)
   | .values _ _ _ => True
 
+/-- **The witness position exists at this source state.** `Pattern.Grounded` says the pattern
+is not a bare literal, which is one way to have a witness; a bare literal the source **holds**
+is another, and that is the one a substituted global takes — `Expr.substGlobals` writes a
+literal-valued global's definition into the query, and the source's own environment binds the
+name to that term.
+
+This is what the correspondence consumes; `Pattern.Grounded` is the text condition
+`Program.EncodeDomain` states and implies it. -/
+def Pattern.GroundedAt (src : Database) : Pattern → Prop
+  | .expr e => ∀ l, e = .lit l → Term.lit l ∈ src.terms
+  | .eq e₁ e₂ => (∀ l, e₁ = .lit l → Term.lit l ∈ src.terms) ∨
+      (∀ l, e₂ = .lit l → Term.lit l ∈ src.terms)
+  | .values _ _ _ => True
+
+@[inherit_doc Pattern.GroundedAt]
+theorem Pattern.Grounded.groundedAt {src : Database} :
+    ∀ {p : Pattern}, p.Grounded → p.GroundedAt src
+  | .expr _, h => fun l he => absurd he (h l)
+  | .eq _ _, h => h.imp (fun h₁ l he => absurd he (h₁ l)) (fun h₂ l he => absurd he (h₂ l))
+  | .values _ _ _, _ => trivial
+
 mutual
 
 /-- The variable occurs as an **argument of an application**: a key column of one of the view
@@ -1410,34 +1889,47 @@ def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, P
 of the substituted query. They do, and the only thing needed is that the definitions the
 substitution carries are **closed**, which `Cmd.globalBind`'s second guard is.
 
-`Pattern.Grounded` is where the *first* guard earns its keep: a definition that is not an
-application is a literal, and substituting it would turn `.expr (.var $g)` into a bare literal
-pattern — the very shape `Grounded` excludes. `Expr.substGlobals` replaces only an application,
-so it never manufactures one. -/
+`Pattern.Grounded` is the one that does not survive as text: substituting a literal-valued
+global turns `.expr (.var $g)` into a bare literal pattern, the very shape `Grounded` excludes.
+`Pattern.GroundedAt` is what survives, and `Database.GlobalsInline` is what pays it — the
+source's environment binds `$g` to that literal, so the source **holds** it. -/
 
 theorem Expr.substGlobalsList_eq_map (G : List (Var × Expr)) :
     ∀ es : List Expr, Expr.substGlobalsList G es = es.map (Expr.substGlobals G)
   | [] => rfl
   | e :: es => by rw [Expr.substGlobalsList, List.map_cons, Expr.substGlobalsList_eq_map G es]
 
-/-- **The substitution never produces a bare literal.** -/
-theorem Expr.substGlobals_ne_lit {G : List (Var × Expr)} {e : Expr} (h : ∀ l, e ≠ .lit l) :
-    ∀ l, e.substGlobals G ≠ .lit l := by
+/-- **A literal the substitution produced is one the source holds.** The only way
+`Expr.substGlobals` makes a bare literal out of a non-literal is by writing a global's own
+definition in, and `Database.GlobalsInline` says the environment binds the name to its
+value — which `Database.WF` puts in `terms`. -/
+theorem Expr.mem_terms_of_substGlobals_lit {src : Database} {G : List (Var × Expr)}
+    (hw : src.WF) (hG : src.GlobalsInline G) {e : Expr} (h : ∀ l, e ≠ .lit l) :
+    ∀ l, e.substGlobals G = .lit l → Term.lit l ∈ src.terms := by
   cases e with
   | lit l => exact absurd rfl (h l)
   | var v =>
-      intro l
-      rw [Expr.substGlobals]
-      cases Expr.lookupG v G with
-      | none => simp
-      | some e' => cases e' <;> simp
-  | app f args => intro l; rw [Expr.substGlobals]; simp
+      intro l hl
+      rw [Expr.substGlobals] at hl
+      cases hlk : Expr.lookupG v G with
+      | none => rw [hlk] at hl; exact absurd hl (by simp)
+      | some e' =>
+          rw [hlk] at hl
+          rw [Option.getD_some] at hl
+          subst hl
+          obtain ⟨-, -, t, hev, hbind⟩ := hG v _ hlk
+          rw [Expr.eval_lit, Option.some.injEq] at hev
+          subst hev
+          exact hw.envInTerms _ (Env.mem_of_lookup hbind)
+  | app f args => intro l hl; rw [Expr.substGlobals] at hl; exact absurd hl (by simp)
 
-@[inherit_doc Expr.substGlobals_ne_lit]
-theorem Pattern.Grounded.substGlobals {G : List (Var × Expr)} :
-    ∀ {p : Pattern}, p.Grounded → (p.substGlobals G).Grounded
-  | .expr _, h => Expr.substGlobals_ne_lit h
-  | .eq _ _, h => h.imp Expr.substGlobals_ne_lit Expr.substGlobals_ne_lit
+@[inherit_doc Expr.mem_terms_of_substGlobals_lit]
+theorem Database.GlobalsInline.groundedAt_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hw : src.WF) (hG : src.GlobalsInline G) :
+    ∀ {p : Pattern}, p.Grounded → (p.substGlobals G).GroundedAt src
+  | .expr _, h => Expr.mem_terms_of_substGlobals_lit hw hG h
+  | .eq _ _, h => h.imp (Expr.mem_terms_of_substGlobals_lit hw hG)
+      (Expr.mem_terms_of_substGlobals_lit hw hG)
   | .values _ _ _, _ => trivial
 
 /-- The substitution moves nothing between the three pattern shapes. -/
@@ -1460,20 +1952,12 @@ theorem Expr.mem_vars_substGlobals {G : List (Var × Expr)} (hcl : Expr.ClosedG 
       rw [Expr.substGlobals] at h
       cases hlk : Expr.lookupG w G with
       | none =>
-          rw [hlk] at h
+          rw [hlk, Option.getD_none] at h
           obtain rfl : v = w := by simpa [Expr.vars] using h
-          exact ⟨by simp [Expr.vars], by rw [Expr.substGlobals, hlk]⟩
+          exact ⟨by simp [Expr.vars], by rw [Expr.substGlobals, hlk, Option.getD_none]⟩
       | some e =>
-          rw [hlk] at h
-          cases e with
-          | lit l =>
-              obtain rfl : v = w := by simpa [Expr.vars] using h
-              exact ⟨by simp [Expr.vars], by rw [Expr.substGlobals, hlk]⟩
-          | var u =>
-              obtain rfl : v = w := by simpa [Expr.vars] using h
-              exact ⟨by simp [Expr.vars], by rw [Expr.substGlobals, hlk]⟩
-          | app f as =>
-              exact absurd h (by rw [hcl w _ hlk]; simp)
+          rw [hlk, Option.getD_some] at h
+          exact absurd h (by rw [hcl w _ hlk]; simp)
   | .app f args, v, h => by
       rw [Expr.substGlobals, Expr.vars] at h
       obtain ⟨hv, hs⟩ := Expr.mem_varsList_substGlobals hcl args h
@@ -1565,13 +2049,14 @@ theorem Query.noValues_substGlobals {G : List (Var × Expr)} {q : Query}
   obtain ⟨p₀, hp₀, rfl⟩ := hp
   exact (h p₀ hp₀).substGlobals
 
-/-- `Pattern.Grounded.substGlobals` over a query. -/
-theorem Query.grounded_substGlobals {G : List (Var × Expr)} {q : Query}
-    (h : ∀ p ∈ q, p.Grounded) : ∀ p ∈ Query.substGlobals G q, p.Grounded := by
+/-- `Database.GlobalsInline.groundedAt_substGlobals` over a query. -/
+theorem Query.groundedAt_substGlobals {src : Database} {G : List (Var × Expr)}
+    (hw : src.WF) (hG : src.GlobalsInline G) {q : Query}
+    (h : ∀ p ∈ q, p.Grounded) : ∀ p ∈ Query.substGlobals G q, p.GroundedAt src := by
   intro p hp
   rw [Query.substGlobals, List.mem_map] at hp
   obtain ⟨p₀, hp₀, rfl⟩ := hp
-  exact (h p₀ hp₀).substGlobals
+  exact hG.groundedAt_substGlobals hw (h p₀ hp₀)
 
 /-- **A query variable the substitution removed is one it carries a definition for.** The
 counterpart of `Query.VarsKeyed.substGlobals`, and what says a rule head reading such a
@@ -1584,7 +2069,7 @@ theorem Query.lookupG_ne_none_of_not_mem_vars_substGlobals {G : List (Var × Exp
   obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp hv
   refine ⟨p.substGlobals G, List.mem_map_of_mem hp, ?_⟩
   have hkeep : Expr.substGlobals G (Expr.var v) = .var v := by
-    rw [Expr.substGlobals, hnone]
+    rw [Expr.substGlobals, hnone, Option.getD_none]
   clear hv hnv hp
   cases p with
   | expr e => exact Expr.mem_vars_substGlobals_of_keep hcl hkeep e hvp
@@ -1623,6 +2108,332 @@ theorem Query.VarsKeyed.substGlobals {G : List (Var × Expr)} (hcl : Expr.Closed
           exact ⟨List.mem_union_iff.mpr (Or.inr hv'), hs⟩
   obtain ⟨p₀, hp₀, ha⟩ := h v (Query.mem_vars.mpr ⟨p, hp, hkeep.1⟩)
   exact ⟨p₀.substGlobals G, List.mem_map_of_mem hp₀, Pattern.ArgVar.substGlobals hkeep.2 ha⟩
+
+/-! #### The target's stored rule is the encoder's output
+
+`FDatabase.execCmdM` resolves the globals then in scope into a rule it registers, exactly as
+`Spec/Step.lean`'s `cmdEffect` does. At an **encoded** rule there is nothing left to resolve:
+every variable it mentions is either generated — `@`-prefixed, and `FDatabase.NoAtEnv` keeps
+those out of the environment — or one `Expr.substGlobals` declined to replace, and
+`Database.GlobalsCover` says the environment does not bind one of those either. -/
+
+/-- A closed expression has nothing to substitute. -/
+theorem Expr.substGlobals_eq_self_of_closed {G : List (Var × Expr)} :
+    ∀ {e : Expr}, (∀ v, v ∉ e.vars) → e.substGlobals G = e
+  | .lit _, _ => rfl
+  | .var v, h => absurd (show v ∈ (Expr.var v).vars by simp [Expr.vars]) (h v)
+  | .app f args, h => by
+      rw [Expr.substGlobals, Expr.substGlobalsList_eq_map]
+      congr 1
+      conv_rhs => rw [← List.map_id args]
+      refine List.map_congr_left fun e he => Expr.substGlobals_eq_self_of_closed
+        fun v hv => h v ?_
+      rw [Expr.vars]
+      clear h
+      induction args with
+      | nil => exact absurd he (by simp)
+      | cons a as ih =>
+          rw [Expr.varsList, List.mem_union_iff]
+          rcases List.mem_cons.mp he with rfl | he'
+          · exact Or.inl hv
+          · exact Or.inr (ih he')
+
+/-- **A variable the substitution leaves is one it carries no definition for.** -/
+theorem Expr.lookupG_eq_none_of_mem_vars_substGlobals {G : List (Var × Expr)}
+    (hcl : Expr.ClosedG G) {v : Var} {e : Expr} (h : v ∈ (e.substGlobals G).vars) :
+    Expr.lookupG v G = none := by
+  have hk := (Expr.mem_vars_substGlobals hcl e h).2
+  rw [Expr.substGlobals] at hk
+  cases hE : Expr.lookupG v G with
+  | none => rfl
+  | some e' =>
+      rw [hE, Option.getD_some] at hk
+      subst hk
+      exact absurd (hcl v _ hE) (by simp [Expr.vars])
+
+@[inherit_doc Expr.lookupG_eq_none_of_mem_vars_substGlobals]
+theorem Query.lookupG_eq_none_of_mem_vars_substGlobals {G : List (Var × Expr)}
+    (hcl : Expr.ClosedG G) {q : Query} {v : Var}
+    (h : v ∈ Query.vars (Query.substGlobals G q)) : Expr.lookupG v G = none := by
+  obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp h
+  rw [Query.substGlobals, List.mem_map] at hp
+  obtain ⟨p₀, -, rfl⟩ := hp
+  cases p₀ with
+  | expr e => exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl hvp
+  | eq e₁ e₂ =>
+      rcases List.mem_union_iff.mp hvp with h' | h'
+      · exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl h'
+      · exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl h'
+  | values vs f as =>
+      rcases List.mem_union_iff.mp hvp with h' | h'
+      · obtain ⟨e, he, hv⟩ := Expr.mem_varsList
+          (by rw [Expr.substGlobalsList_eq_map] at h'; exact h')
+        obtain ⟨e₀, -, rfl⟩ := List.mem_map.mp he
+        exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl hv
+      · obtain ⟨e, he, hv⟩ := Expr.mem_varsList
+          (by rw [Expr.substGlobalsList_eq_map] at h'; exact h')
+        obtain ⟨e₀, -, rfl⟩ := List.mem_map.mp he
+        exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl hv
+
+/-- **Substituting twice is substituting once**: the definitions are closed, so nothing a
+first pass wrote can be rewritten by a second. -/
+theorem Query.substGlobals_idem {G : List (Var × Expr)} (hcl : Expr.ClosedG G) (q : Query) :
+    Query.substGlobals G (Query.substGlobals G q) = Query.substGlobals G q := by
+  have hE : ∀ e : Expr, (e.substGlobals G).substGlobals G = e.substGlobals G := by
+    intro e
+    induction e using Expr.rec
+      (motive_2 := fun es => Expr.substGlobalsList G (Expr.substGlobalsList G es)
+        = Expr.substGlobalsList G es) with
+    | lit l => rfl
+    | var v =>
+        cases hE : Expr.lookupG v G with
+        | none =>
+            rw [Expr.substGlobals, hE, Option.getD_none, Expr.substGlobals, hE,
+              Option.getD_none]
+        | some e' =>
+            rw [Expr.substGlobals, hE, Option.getD_some]
+            exact Expr.substGlobals_eq_self_of_closed
+              fun w hw => absurd (hcl v _ hE ▸ hw) (by simp)
+    | app f args ih => rw [Expr.substGlobals, Expr.substGlobals, ih]
+    | nil => rfl
+    | cons e es ihe ihes =>
+        rw [Expr.substGlobalsList, Expr.substGlobalsList, ihe, ihes]
+  have hL : ∀ es : List Expr, Expr.substGlobalsList G (Expr.substGlobalsList G es)
+      = Expr.substGlobalsList G es := by
+    intro es; induction es with
+    | nil => rfl
+    | cons e es ih => rw [Expr.substGlobalsList, Expr.substGlobalsList, hE, ih]
+  simp only [Query.substGlobals, List.map_map]
+  refine List.map_congr_left fun p _ => ?_
+  cases p with
+  | expr e => rw [Function.comp_apply, Pattern.substGlobals, Pattern.substGlobals, hE]
+  | eq e₁ e₂ => rw [Function.comp_apply, Pattern.substGlobals, Pattern.substGlobals, hE, hE]
+  | values vs f as =>
+      rw [Function.comp_apply, Pattern.substGlobals, Pattern.substGlobals, hL, hL]
+
+@[inherit_doc Query.substGlobals_idem]
+theorem Rule.substGlobals_idem {G : List (Var × Expr)} (hcl : Expr.ClosedG G) (r : Rule) :
+    (r.substGlobals G).substGlobals G = r.substGlobals G := by
+  simp only [Rule.substGlobals, Query.substGlobals_idem hcl]
+
+/-- **There is nothing left to resolve in an encoded rule.** -/
+theorem Rule.resolveGlobals_encodeRule {σ : Env} {G : List (Var × Expr)}
+    (hcl : Expr.ClosedG G) (hat : ∀ b ∈ σ, ¬ "@".isPrefixOf b.1)
+    (hcov : ∀ v, Expr.lookupG v G = none → Env.lookup v σ = none)
+    (s : Rule) (i n : Nat) :
+    ((encodeRule i (s.substGlobals G) n).1).resolveGlobals σ
+      = (encodeRule i (s.substGlobals G) n).1 := by
+  refine Rule.resolveGlobals_eq_self _ fun v hv => ?_
+  have hv' : v ∈ Query.vars (encodeQuery (Query.substGlobals G s.query) n).1 := by
+    rw [encodeRule] at hv; exact hv
+  rcases mem_vars_encodeQuery _ n hv' with hat' | hsrc
+  · refine Env.lookup_eq_none_iff.mpr fun hd => ?_
+    obtain ⟨t, hb⟩ := Env.mem_dom_iff.mp hd
+    exact hat (v, t) hb hat'
+  · exact hcov v (Query.lookupG_eq_none_of_mem_vars_substGlobals hcl hsrc)
+
+mutual
+
+/-- **A term read back as syntax applies only the term's own heads**, none of which is a
+primitive at a state whose terms build (`Database.TermsBuild`). -/
+theorem Term.ctors_toExpr_noPrim {db : Database} (hwf : db.WF)
+    (htb : ∀ f as, Term.app f as ∈ db.terms → Prim.ofName f = none) :
+    ∀ (t : Term), t ∈ db.terms → ∀ fk ∈ t.toExpr.ctors, Prim.ofName fk.1 = none
+  | .lit _, _, _, hfk => absurd hfk (by simp [Term.toExpr, Expr.ctors])
+  | .app f ts, hm, fk, hfk => by
+      rw [Term.toExpr_app, Expr.ctors, List.mem_cons] at hfk
+      rcases hfk with rfl | hfk
+      · exact htb f ts hm
+      · exact Term.ctorsList_toExprList_noPrim hwf htb ts
+          (fun u hu => hwf.subtermClosed _ hm (Term.arg_subterms hu (u.self_mem_subterms)))
+          fk hfk
+
+@[inherit_doc Term.ctors_toExpr_noPrim]
+theorem Term.ctorsList_toExprList_noPrim {db : Database} (hwf : db.WF)
+    (htb : ∀ f as, Term.app f as ∈ db.terms → Prim.ofName f = none) :
+    ∀ (ts : List Term), (∀ u ∈ ts, u ∈ db.terms) →
+      ∀ fk ∈ Expr.ctorsList (Term.toExprList ts), Prim.ofName fk.1 = none
+  | [], _, _, hfk => absurd hfk (by simp [Term.toExprList, Expr.ctorsList])
+  | t :: ts, hm, fk, hfk => by
+      rw [Term.toExprList_cons, Expr.ctorsList] at hfk
+      rcases List.mem_append.mp hfk with hfk' | hfk'
+      · exact Term.ctors_toExpr_noPrim hwf htb t (hm t List.mem_cons_self) fk hfk'
+      · exact Term.ctorsList_toExprList_noPrim hwf htb ts
+          (fun u hu => hm u (List.mem_cons_of_mem _ hu)) fk hfk'
+
+end
+
+mutual
+
+/-- **The two substitutions are the same rewriting.** `Expr.substGlobals` is
+`Expr.inlineGlobals` at a query rather than at a `let`. -/
+theorem Expr.substGlobals_eq_inlineGlobals (G : List (Var × Expr)) :
+    ∀ e : Expr, Expr.substGlobals G e = Expr.inlineGlobals G e
+  | .lit _ => rfl
+  | .var _ => rfl
+  | .app f args => by
+      rw [Expr.substGlobals, Expr.inlineGlobals,
+        Expr.substGlobalsList_eq_inlineGlobalsList G args]
+
+@[inherit_doc Expr.substGlobals_eq_inlineGlobals]
+theorem Expr.substGlobalsList_eq_inlineGlobalsList (G : List (Var × Expr)) :
+    ∀ es : List Expr, Expr.substGlobalsList G es = Expr.inlineGlobalsList G es
+  | [] => rfl
+  | e :: es => by
+      rw [Expr.substGlobalsList, Expr.inlineGlobalsList,
+        Expr.substGlobals_eq_inlineGlobals G e,
+        Expr.substGlobalsList_eq_inlineGlobalsList G es]
+
+end
+
+/-- `ctors_inlineGlobals_noPrim` at a pattern's substitution. -/
+theorem Pattern.ctors_substGlobals_noPrim {G : List (Var × Expr)}
+    (hG : ∀ (u : Var) (e' : Expr), Expr.lookupG u G = some e' →
+      ∀ fk ∈ e'.ctors, Prim.ofName fk.1 = none) :
+    ∀ (p : Pattern), (∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) →
+      ∀ fk ∈ (p.substGlobals G).ctors, Prim.ofName fk.1 = none := by
+  have hL : ∀ (es : List Expr), (∀ fk ∈ Expr.ctorsList es, Prim.ofName fk.1 = none) →
+      ∀ fk ∈ Expr.ctorsList (Expr.substGlobalsList G es), Prim.ofName fk.1 = none := by
+    intro es h
+    rw [Expr.substGlobalsList_eq_inlineGlobalsList]
+    exact ctorsList_inlineGlobals_noPrim hG es h
+  intro p h fk hfk
+  cases p with
+  | expr e =>
+      rw [Pattern.substGlobals, Pattern.ctors, Expr.substGlobals_eq_inlineGlobals] at hfk
+      exact ctors_inlineGlobals_noPrim hG e (by rw [Pattern.ctors] at h; exact h) fk hfk
+  | eq e₁ e₂ =>
+      rw [Pattern.substGlobals, Pattern.ctors] at hfk
+      rw [Pattern.ctors] at h
+      rcases List.mem_append.mp hfk with hfk' | hfk'
+      · rw [Expr.substGlobals_eq_inlineGlobals] at hfk'
+        exact ctors_inlineGlobals_noPrim hG e₁
+          (fun gk hgk => h gk (List.mem_append_left _ hgk)) fk hfk'
+      · rw [Expr.substGlobals_eq_inlineGlobals] at hfk'
+        exact ctors_inlineGlobals_noPrim hG e₂
+          (fun gk hgk => h gk (List.mem_append_right _ hgk)) fk hfk'
+  | values vs f as =>
+      rw [Pattern.substGlobals, Pattern.ctors] at hfk
+      rw [Pattern.ctors] at h
+      rcases List.mem_append.mp hfk with hfk' | hfk'
+      · exact hL vs (fun gk hgk => h gk (List.mem_append_left _ hgk)) fk hfk'
+      · exact hL as (fun gk hgk => h gk (List.mem_append_right _ hgk)) fk hfk'
+
+/-! #### The resolution is the substitution at the environment's own definitions
+
+`Spec/Step.lean`'s `Rule.resolveGlobals` writes each global's **value** back as syntax; that is
+`Expr.substGlobals` at the substitution the environment induces, so everything proved of the
+substitution above transfers to it. -/
+
+mutual
+
+/-- A term read back as syntax mentions no variable. -/
+theorem Term.vars_toExpr : ∀ t : Term, t.toExpr.vars = []
+  | .lit _ => rfl
+  | .app f ts => by rw [Term.toExpr_app, Expr.vars, Term.varsList_toExprList ts]
+
+@[inherit_doc Term.vars_toExpr]
+theorem Term.varsList_toExprList : ∀ ts : List Term, Expr.varsList (Term.toExprList ts) = []
+  | [] => rfl
+  | t :: ts => by
+      rw [Term.toExprList_cons, Expr.varsList, Term.vars_toExpr, Term.varsList_toExprList ts]
+      rfl
+
+end
+
+/-- **The substitution an environment induces**: each name bound to the expression that
+rebuilds its value. -/
+def Env.toG (σ : Env) : List (Var × Expr) := σ.map fun b => (b.1, b.2.toExpr)
+
+@[inherit_doc Env.toG]
+theorem Expr.lookupG_toG : ∀ (σ : Env) (v : Var),
+    Expr.lookupG v (Env.toG σ) = (Env.lookup v σ).map Term.toExpr
+  | [], _ => rfl
+  | b :: σ, v => by
+      rw [Env.toG, List.map_cons, Expr.lookupG, Env.lookup]
+      by_cases h : v = b.1
+      · rw [if_pos h, if_pos h, Option.map_some]
+      · rw [if_neg h, if_neg h]
+        exact Expr.lookupG_toG σ v
+
+@[inherit_doc Env.toG]
+theorem Expr.closedG_toG (σ : Env) : Expr.ClosedG (Env.toG σ) := by
+  intro v e he
+  rw [Expr.lookupG_toG] at he
+  obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp he
+  exact Term.vars_toExpr t
+
+mutual
+
+@[inherit_doc Env.toG]
+theorem Expr.resolveGlobals_eq_substGlobals_toG (σ : Env) :
+    ∀ e : Expr, Expr.resolveGlobals σ e = Expr.substGlobals (Env.toG σ) e
+  | .lit _ => rfl
+  | .var v => by
+      rw [Expr.resolveGlobals_var, Expr.substGlobals, Expr.lookupG_toG]
+      cases Env.lookup v σ with
+      | none => rfl
+      | some t => rfl
+  | .app f args => by
+      rw [Expr.resolveGlobals_app, Expr.substGlobals,
+        Expr.resolveGlobalsList_eq_substGlobalsList_toG σ args]
+
+@[inherit_doc Env.toG]
+theorem Expr.resolveGlobalsList_eq_substGlobalsList_toG (σ : Env) :
+    ∀ es : List Expr, Expr.resolveGlobalsList σ es = Expr.substGlobalsList (Env.toG σ) es
+  | [] => rfl
+  | e :: es => by
+      rw [Expr.resolveGlobalsList_cons, Expr.substGlobalsList,
+        Expr.resolveGlobals_eq_substGlobals_toG σ e,
+        Expr.resolveGlobalsList_eq_substGlobalsList_toG σ es]
+
+end
+
+@[inherit_doc Env.toG]
+theorem Pattern.resolveGlobals_eq_substGlobals_toG (σ : Env) :
+    ∀ p : Pattern, Pattern.resolveGlobals σ p = Pattern.substGlobals (Env.toG σ) p
+  | .expr e => by
+      rw [Pattern.resolveGlobals, Pattern.substGlobals,
+        Expr.resolveGlobals_eq_substGlobals_toG]
+  | .eq e₁ e₂ => by
+      rw [Pattern.resolveGlobals, Pattern.substGlobals,
+        Expr.resolveGlobals_eq_substGlobals_toG, Expr.resolveGlobals_eq_substGlobals_toG]
+  | .values vs f as => by
+      rw [Pattern.resolveGlobals, Pattern.substGlobals,
+        Expr.resolveGlobalsList_eq_substGlobalsList_toG,
+        Expr.resolveGlobalsList_eq_substGlobalsList_toG]
+
+@[inherit_doc Env.toG]
+theorem Query.resolveGlobals_eq_substGlobals_toG (σ : Env) (q : Query) :
+    Query.resolveGlobals σ q = Query.substGlobals (Env.toG σ) q := by
+  rw [Query.resolveGlobals, Query.substGlobals]
+  exact List.map_congr_left fun p _ => Pattern.resolveGlobals_eq_substGlobals_toG σ p
+
+/-- `Pattern.NoValues.substGlobals` at the resolution. -/
+theorem Query.noValues_resolveGlobals {σ : Env} {q : Query}
+    (h : ∀ p ∈ q, p.NoValues) : ∀ p ∈ Query.resolveGlobals σ q, p.NoValues := by
+  rw [Query.resolveGlobals_eq_substGlobals_toG]
+  exact Query.noValues_substGlobals h
+
+/-- `Query.VarsKeyed.substGlobals` at the resolution. -/
+theorem Query.VarsKeyed.resolveGlobals {σ : Env} {q : Query}
+    (h : Query.VarsKeyed q) : Query.VarsKeyed (Query.resolveGlobals σ q) := by
+  rw [Query.resolveGlobals_eq_substGlobals_toG]
+  exact Query.VarsKeyed.substGlobals (Expr.closedG_toG σ) h
+
+/-- **The resolution introduces no primitive**: it writes back terms the state holds, whose
+heads build (`Database.TermsBuild`). -/
+theorem Query.ctors_resolveGlobals_noPrim {db : Database} (hwf : db.WF)
+    (htb : ∀ f as, Term.app f as ∈ db.terms → Prim.ofName f = none) {q : Query}
+    (h : ∀ p ∈ q, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) :
+    ∀ p ∈ Query.resolveGlobals db.env q, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none := by
+  intro p hp
+  rw [Query.resolveGlobals_eq_substGlobals_toG, Query.substGlobals, List.mem_map] at hp
+  obtain ⟨p₀, hp₀, rfl⟩ := hp
+  refine Pattern.ctors_substGlobals_noPrim (fun u e' he' => ?_) p₀ (h p₀ hp₀)
+  rw [Expr.lookupG_toG] at he'
+  obtain ⟨t, hlk, rfl⟩ := Option.map_eq_some_iff.mp he'
+  exact Term.ctors_toExpr_noPrim hwf htb t (hwf.envInTerms (u, t) (Env.mem_of_lookup hlk))
 
 /-- **The queries the flattening handles.** `Pattern.Grounded` and `Pattern.NoValues` at
 every pattern of a rule's query, and `Query.VarsKeyed` at the query. Vacuous at every other

@@ -328,18 +328,14 @@ variable {db : Database} {p : Pattern} {σ : Env}
 
 /-- The hypothesis `patternHolds_validSubst` adds is a consequence of its conclusion,
 which is why requiring it costs nothing. Since the hoist it is the left conjunct. -/
-theorem validEnv (h : ValidSubst db p σ) : ValidEnv (p.freeVars db.env) db σ := h.1
+theorem validEnv (h : ValidSubst db p σ) : ValidEnv (p.freeVars []) db σ := h.1
 
 theorem mem_terms (h : ValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
   h.validEnv.mem_terms
 
-/-- Appending a matching substitution to the globals cannot fail. -/
-theorem union2_env (h : ValidSubst db p σ) : Env.Union2 db.env σ (db.env ++ σ) :=
-  h.validEnv.union2_env fun _ hv => p.freeVars_lookup_eq_none hv
-
 /-- A matching substitution binds exactly the pattern's free variables. -/
 theorem mem_dom_iff (h : ValidSubst db p σ) {v : Var} :
-    v ∈ Env.dom σ ↔ v ∈ p.freeVars db.env :=
+    v ∈ Env.dom σ ↔ v ∈ p.freeVars [] :=
   h.validEnv.mem_dom_iff
 
 end ValidSubst
@@ -350,19 +346,19 @@ Agreement alone is not enough, because `ValidEnv` pins the domain — which is p
 an executable enumerator has to canonicalize rather than emit any agreeing representative. -/
 theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
     (h : ValidSubst db p σ) (hag : Env.Agree σ σ')
-    (hdom : Env.dom σ' = p.freeVars db.env) : ValidSubst db p σ' := by
+    (hdom : Env.dom σ' = p.freeVars []) : ValidSubst db p σ' := by
   have hterms : ∀ b ∈ σ', b.2 ∈ db.terms := by
     intro b hb
-    have hnd : (Env.dom σ').Nodup := hdom ▸ p.freeVars_nodup db.env
+    have hnd : (Env.dom σ').Nodup := hdom ▸ p.freeVars_nodup []
     have hlk : Env.lookup b.1 σ' = some b.2 := (Env.lookup_eq_some_iff_mem hnd).mpr hb
     rw [← hag b.1] at hlk
     exact h.mem_terms _ (Env.mem_of_lookup hlk)
-  have hperm : (Env.dom σ').Perm (p.freeVars db.env) := hdom ▸ List.Perm.refl _
-  have hev : ∀ e : Expr, e.eval db.sig (db.env ++ σ') = e.eval db.sig (db.env ++ σ) :=
-    fun e => Expr.eval_agree (Env.Agree.append_left db.env hag.symm) e
+  have hperm : (Env.dom σ').Perm (p.freeVars []) := hdom ▸ List.Perm.refl _
+  have hev : ∀ e : Expr, e.eval db.sig σ' = e.eval db.sig σ :=
+    fun e => Expr.eval_agree hag.symm e
   have hevl : ∀ es : List Expr,
-      Expr.evalList db.sig es (db.env ++ σ') = Expr.evalList db.sig es (db.env ++ σ) :=
-    fun es => Expr.evalList_agree (Env.Agree.append_left db.env hag.symm) es
+      Expr.evalList db.sig es σ' = Expr.evalList db.sig es σ :=
+    fun es => Expr.evalList_agree hag.symm es
   refine ⟨⟨hperm, hterms⟩, ?_⟩
   cases h.2 with
   | expr hwm he hc => exact .expr hwm (by rw [hev]; exact he) hc
@@ -380,7 +376,7 @@ nothing about a domain: the `ValidEnv` half of `ValidSubst` is what pins it, and
 stated without it precisely so that a substitution *larger* than the pattern's free variables
 — a whole query's union — can be substituted for one atom's own. -/
 theorem Matches.of_agreeOn {db : Database} {p : Pattern} {σ σ' : Env} (h : Matches db p σ)
-    (hag : ∀ v ∈ p.vars, Env.lookup v (db.env ++ σ) = Env.lookup v (db.env ++ σ')) :
+    (hag : ∀ v ∈ p.vars, Env.lookup v σ = Env.lookup v σ') :
     Matches db p σ' := by
   cases h with
   | @expr e _ w t hwm he hc =>
@@ -415,7 +411,7 @@ theorem mem_terms (h : ValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms
 
 /-- A query substitution binds exactly the query's free variables. -/
 theorem mem_dom_iff (h : ValidQuerySubst db q σ) {v : Var} :
-    v ∈ Env.dom σ ↔ ∃ p ∈ q, v ∈ p.freeVars db.env := by
+    v ∈ Env.dom σ ↔ ∃ p ∈ q, v ∈ p.freeVars [] := by
   obtain ⟨σs, hall, hu⟩ := h
   rw [hu.mem_dom_iff]
   constructor
@@ -444,10 +440,7 @@ theorem matches_of_mem (h : ValidQuerySubst db q σ) {p : Pattern} (hp : p ∈ q
     exact Env.Refines.self_of_nodup (hvs'.validEnv.1.symm.nodup (p'.freeVars_nodup _))
   have hrp : Env.Refines σp σ := (hu.refines_of_mem hsc).1 σp hσp
   refine hvs.2.of_agreeOn fun v hv => ?_
-  by_cases hd : v ∈ Env.dom db.env
-  · rw [Env.lookup_append_of_mem hd, Env.lookup_append_of_mem hd]
-  rw [Env.lookup_append_of_not_mem hd, Env.lookup_append_of_not_mem hd]
-  have hfv : v ∈ p.freeVars db.env := p.mem_freeVars.mpr ⟨hv, hd⟩
+  have hfv : v ∈ p.freeVars [] := p.mem_freeVars.mpr ⟨hv, by simp⟩
   obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp
     (Env.lookup_isSome_iff_mem_dom.mpr ((ValidSubst.mem_dom_iff hvs).mpr hfv))
   rw [ht, hrp (v, t) (Env.mem_of_lookup ht)]

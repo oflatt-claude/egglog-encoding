@@ -146,30 +146,30 @@ theorem matches_of_patternHolds {d : FDatabase} (he : d.EqsInTerms) (hr : d.EqsR
   | values vs f as =>
     obtain ⟨ts, us, hats, hvus, hmem⟩ := mem_terms_of_patternHolds_values hr hidx h
     exact .values (FDatabase.mem_toDatabase_terms.mpr hmem)
-      (by rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig]; exact hats)
-      (by rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig]; exact hvus)
+      (by rw [FDatabase.toDatabase_sig]; exact hats)
+      (by rw [FDatabase.toDatabase_sig]; exact hvus)
       (congOn_self _)
   | expr e =>
-    cases hev : e.eval d.sig (d.env ++ σ) with
+    cases hev : e.eval d.sig σ with
     | none => rw [patternHolds, hev] at h; simp at h
     | some t =>
       simp only [patternHolds, hev, decide_eq_true_eq] at h
       obtain ⟨w, hwm, hcl⟩ := h
       exact .expr (FDatabase.mem_toDatabase_terms.mpr hwm)
-        (by rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig]; exact hev)
+        (by rw [FDatabase.toDatabase_sig]; exact hev)
         (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm he).mp hcl))
   | eq e₁ e₂ =>
-    cases hev₁ : e₁.eval d.sig (d.env ++ σ) with
+    cases hev₁ : e₁.eval d.sig σ with
     | none => rw [patternHolds, hev₁] at h; simp at h
     | some t₁ =>
-      cases hev₂ : e₂.eval d.sig (d.env ++ σ) with
+      cases hev₂ : e₂.eval d.sig σ with
       | none => rw [patternHolds, hev₁, hev₂] at h; simp at h
       | some t₂ =>
         simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq] at h
         obtain ⟨heq, w, hwm, hcl⟩ := h
         exact .eq (FDatabase.mem_toDatabase_terms.mpr hwm)
-          (by rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig]; exact hev₁)
-          (by rw [FDatabase.toDatabase_env, FDatabase.toDatabase_sig]; exact hev₂)
+          (by rw [FDatabase.toDatabase_sig]; exact hev₁)
+          (by rw [FDatabase.toDatabase_sig]; exact hev₂)
           (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ he).mp hcl))
           (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ he).mp heq))
 
@@ -183,7 +183,7 @@ theorem validQuerySubst_of_mem_matchQuery_diag {d : FDatabase} (he : d.EqsInTerm
   simp only [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true] at h
   obtain ⟨⟨hdom, hval⟩, hall⟩ := h
   obtain ⟨τ, hu, hrf⟩ := Env.exists_unionAll (σ := σ)
-    (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
+    (q.map fun p => Env.canon (p.freeVars []) σ) (by
       intro ρ hρ
       obtain ⟨p, -, rfl⟩ := List.mem_map.mp hρ
       exact Env.refines_canon)
@@ -193,7 +193,7 @@ theorem validQuerySubst_of_mem_matchQuery_diag {d : FDatabase} (he : d.EqsInTerm
   intro v hv
   rw [hdom] at hv
   obtain ⟨p, hp, hvp⟩ := Query.mem_freeVars.mp hv
-  refine hu.mem_dom_iff.mpr ⟨Env.canon (p.freeVars d.env) σ, List.mem_map_of_mem hp, ?_⟩
+  refine hu.mem_dom_iff.mpr ⟨Env.canon (p.freeVars []) σ, List.mem_map_of_mem hp, ?_⟩
   rw [Env.dom_canon_of_subset (Query.freeVars_subset hp) hdom]
   exact hvp
 
@@ -229,17 +229,6 @@ new here is only that the two are carried along the run rather than read off the
 families. -/
 def FDatabase.RulesHeld (d : FDatabase) (P : Program) : Prop :=
   ∀ r ∈ maintenanceRules P, r ∈ d.rules
-
-/-- **A `let` whose binder is not in the generated namespace**; nothing else binds. -/
-def Action.NoAtLet : Action → Prop
-  | .letBind v _ => ¬ "@".isPrefixOf v
-  | _ => True
-
-/-- `Action.NoAtLet` at a command. Only a top-level action can bind: a firing runs its block
-under `FDatabase.execLocalActions`, which puts the environment back. -/
-def Cmd.NoAtLet : Cmd → Prop
-  | .action a => a.NoAtLet
-  | _ => True
 
 /-- A `set` binds nothing, which is what the encoded blocks of a build are. -/
 theorem Action.NoAtLet.of_isSet {a : Action} (h : a.IsSet) : a.NoAtLet := by
@@ -317,66 +306,26 @@ namespace FDatabase
 /-- **And every `Cmd.rule` of the block registers its rule.** With
 `FDatabase.execProgramM_rules_mono` this is the converse of
 `execProgramM_rules_of_declOrRule`: what the prelude emits, the state after it holds. -/
-theorem execProgramM_mem_rules {p : Program} :
-    ∀ {d D : FDatabase}, d.execProgramM p = some D → ∀ r, Cmd.rule r ∈ p → r ∈ D.rules := by
+theorem execProgramM_mem_rules {p : Program}
+    (hna : ∀ c ∈ p, ∀ a : Action, c ≠ Cmd.action a) :
+    ∀ {d D : FDatabase}, d.env = [] → d.execProgramM p = some D →
+      ∀ r, Cmd.rule r ∈ p → r ∈ D.rules := by
   induction p with
-  | nil => intro d D _ r hr; exact absurd hr (by simp)
+  | nil => intro d D _ _ r hr; exact absurd hr (by simp)
   | cons c cs ih =>
-    intro d D hs r hr
+    intro d D henv hs r hr
     rw [FDatabase.execProgramM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    have henv₁ : d₁.env = [] := by
+      rw [FDatabase.execCmdM_env_of_noAction (hna c List.mem_cons_self) h₁, henv]
     rcases List.mem_cons.mp hr with rfl | hr'
     · refine execProgramM_rules_mono h₂ r ?_
       rw [FDatabase.execCmdM, Option.some.injEq] at h₁
-      exact h₁ ▸ List.mem_cons_self
-    · exact ih h₂ r hr'
-
-/-- **One command keeps the environment clear of the generated namespace.** Only
-`Action.letBind` writes `env`, and only with its own binder. -/
-theorem execCmdM_noAtEnv {d d' : FDatabase} {c : Cmd} (hc : c.NoAtLet) (h : d.NoAtEnv)
-    (hs : d.execCmdM c = some d') : d'.NoAtEnv := by
-  cases c with
-  | action a =>
-      rw [FDatabase.execCmdM] at hs
-      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-      replace h₁ := execAction_of_top h₁
-      rw [NoAtEnv, (FDatabase.mergeSaturateF_fields h₂).2.1]
-      cases a with
-      | expr e =>
-          rw [Egglog.execAction] at h₁
-          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h₁
-          exact h
-      | letBind v e =>
-          rw [Egglog.execAction] at h₁
-          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h₁
-          intro b hb
-          rcases List.mem_cons.mp hb with rfl | hb'
-          · exact hc
-          · exact h b hb'
-      | union e₁ e₂ =>
-          rw [Egglog.execAction] at h₁
-          obtain ⟨t₁, -, h₃⟩ := Option.bind_eq_some_iff.mp h₁
-          obtain ⟨t₂, -, h₄⟩ := Option.bind_eq_some_iff.mp h₃
-          split at h₄
-          · exact absurd h₄ (by simp)
-          · rw [Option.some.injEq] at h₄; exact h₄ ▸ h
-      | set f args out =>
-          rw [Egglog.execAction] at h₁
-          obtain ⟨as, -, h₃⟩ := Option.bind_eq_some_iff.mp h₁
-          obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp h₃
-          exact h
-  | rule r =>
-      rw [FDatabase.execCmdM, Option.some.injEq] at hs
-      subst hs; exact h
-  | run R =>
-      rw [FDatabase.execCmdM] at hs
-      rw [NoAtEnv, (FDatabase.runRoundM_fields hs).2.1]; exact h
-  | saturate R =>
-      rw [FDatabase.execCmdM] at hs
-      rw [NoAtEnv, (FDatabase.runSaturateM_fields runFuel hs).2.1]; exact h
-  | decl f dc =>
-      rw [FDatabase.execCmdM, Option.some.injEq] at hs
-      subst hs; exact h
+      rw [← h₁]
+      show r ∈ r.resolveGlobals d.env :: d.rules
+      rw [henv, Rule.resolveGlobals_nil]
+      exact List.mem_cons_self
+    · exact ih (fun c' hc' => hna c' (List.mem_cons_of_mem c hc')) henv₁ h₂ r hr'
 
 @[inherit_doc execCmdM_noAtEnv]
 theorem execProgramM_noAtEnv {p : Program} (hp : ∀ c ∈ p, c.NoAtLet) :
@@ -444,7 +393,7 @@ theorem execCmdM {d d' : FDatabase} {c : Cmd} (h : d.EncBase P sg)
     (hwl : c.WriteLegal sg) (hlet : c.NoAtLet) (hs : d.execCmdM c = some d') :
     d'.EncBase P sg where
   sig := (execCmdM_sig_of_noDecl hs hnd).trans h.sig
-  rules := FDatabase.execCmdM_rulesEncoded hro h.rules hs
+  rules := FDatabase.execCmdM_rulesEncoded hro h.noAtEnv h.rules hs
   shape := h.shape
   merges := h.merges
   inv := h.inv.execCmdM (by rw [h.sig]; exact hwl) (by rw [h.sig]; exact h.merges)
@@ -459,7 +408,8 @@ theorem execCmdM {d d' : FDatabase} {c : Cmd} (h : d.EncBase P sg)
 
 /-- **A block of them.** -/
 theorem execProgramM {P : Program} {sg : Signature} {p : Program}
-    (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c)
+    (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal sg)
     (hlet : ∀ c ∈ p, c.NoAtLet) :
     ∀ {d D : FDatabase}, d.EncBase P sg → d.execProgramM p = some D → D.EncBase P sg := by
@@ -489,7 +439,13 @@ invariant itself, at the source state the *reading* happens at. -/
 structure FDatabase.EncOk (d : FDatabase) (P : Program) (sg : Signature) (sd : Database) :
     Prop where
   base : d.EncBase P sg
-  glob : sd.GlobalsAgree d.env
+  /-- **The two environments are the same.** A top-level `let` binds `v` to the value of `e` on
+  the source side and to the value of `(encodeBuild e n).1` on the target's, and that expression
+  *is* `e` (`encodeBuild_fst`) — so the encoded block binds the same name to the same term, and
+  nothing else on either side touches the environment. Stated as an equality rather than as
+  `Database.GlobalsAgree` because the converse inclusion is what says a rule the target
+  registers has nothing left to resolve. -/
+  env : d.env = sd.env
   sound : d.SoundTerms sd
   /-- **And every encoded source rule the target holds is one the source already holds.**
   `FDatabase.EncBase.rules` says which rules a target *can* hold, over the whole of `P`;
@@ -499,25 +455,34 @@ structure FDatabase.EncOk (d : FDatabase) (P : Program) (sg : Signature) (sd : D
   nothing else — the pair is carried rather than the rule alone, so that no injectivity of
   `encodeRule` is needed. -/
   srcRules : ∀ r ∈ d.rules,
-    (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P ∧ s ∈ sd.rules ∧
+    (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat),
+        Cmd.rule s ∈ P ∧ s.substGlobals G ∈ sd.rules ∧
         sd.GlobalsInline G ∧ P.GlobalsOnce G ∧ r = (encodeRule i (s.substGlobals G) n).1) ∨
       r ∈ allMaintenanceRules P
+
+namespace FDatabase.EncOk
+
+/-- The half of `FDatabase.EncOk.env` the reading side spends. -/
+theorem glob {d : FDatabase} {P : Program} {sg : Signature} {sd : Database}
+    (h : d.EncOk P sg sd) : sd.GlobalsAgree d.env := fun _ _ hv => by rw [h.env]; exact hv
+
+end FDatabase.EncOk
 
 /-- The three source clauses move along a source that grows and keeps its environment. -/
 theorem FDatabase.EncOk.mono_src {d : FDatabase} {P : Program} {sg : Signature}
     {sd sd' : Database} (h : d.EncOk P sg sd) (heq : sd.eqs ⊆ sd'.eqs)
-    (henv : ∀ v t, Env.lookup v sd'.env = some t → Env.lookup v sd.env = some t)
-    (henv' : ∀ v t, Env.lookup v sd.env = some t → Env.lookup v sd'.env = some t)
+    (henv : sd'.env = sd.env)
     (hsig : ∀ f, sd.sig.IsCtor f → sd'.sig.IsCtor f)
     (hrules : ∀ r ∈ sd.rules, r ∈ sd'.rules) :
     d.EncOk P sg sd' where
   base := h.base
-  glob := fun v t hv => h.glob v t (henv v t hv)
+  env := by rw [h.env, henv]
   sound := h.sound.mono_src heq
   srcRules := fun r hr =>
     (h.srcRules r hr).imp
       (fun ⟨s, G, i, n, hm, hs, hg, hgo, he⟩ =>
-        ⟨s, G, i, n, hm, hrules s hs, hg.mono_ctor hsig henv', hgo, he⟩) id
+        ⟨s, G, i, n, hm, hrules _ hs,
+          hg.mono_ctor hsig (fun v t hv => by rw [henv]; exact hv), hgo, he⟩) id
 
 /-- A substitution extends the target environment on the right, so the globals still agree. -/
 theorem Database.GlobalsAgree.append {sd : Database} {ρ σ : Env} (h : sd.GlobalsAgree ρ) :
@@ -547,7 +512,8 @@ def EncodedHeadSound (P : Program) (sg : Signature) : Prop :=
     ProgramStep Database.empty pre sd →
     ∀ {R : RulesetName} {c : Cmd}, (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
     ∀ {d : FDatabase}, d.EncOk P sg sd →
-    ∀ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P → s ∈ sd.rules →
+    ∀ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P →
+      s.substGlobals G ∈ sd.rules →
       s.ruleset = R → sd.GlobalsInline G → P.GlobalsOnce G →
       (encodeRule i (s.substGlobals G) n).1 ∈ d.rules →
     ∀ σ ∈ matchQuery d (encodeRule i (s.substGlobals G) n).1.query, ∀ e : FDatabase,
@@ -598,7 +564,7 @@ theorem firingsSoundIn_rebuild {P : Program} (hdom : P.EncodeDomain) {sg : Signa
     {sd : Database} {d : FDatabase} (hok : d.EncOk P sg sd) :
     d.FiringsSoundIn rebuildRuleset sd := by
   intro r hr hrs σ hσ e he
-  rcases hok.base.rules r hr with ⟨s, G, i, n, hmem, rfl⟩ | hmaint
+  rcases hok.base.rules r hr with ⟨s, G, i, n, ρ, hmem, rfl⟩ | hmaint
   · exact absurd (hrs ▸ rfl : s.ruleset = rebuildRuleset) (ruleset_ne_rebuild hdom hmem)
   · exact maintenance_soundTerms (mem_maintenanceRules_of_mem_all hmaint) hok.base.eqsRefl
       hok.base.inv.index hok.base.subtermClosed hok.sound hσ he
@@ -915,7 +881,7 @@ theorem lookupG_eq_none_of_letBind {P pre q : Program} {v : Var} {e : Expr}
     (honce : P.GlobalsOnce G) : Expr.lookupG v G = none := by
   by_contra hcon
   obtain ⟨e', he'⟩ := Option.ne_none_iff_exists'.mp hcon
-  obtain ⟨-, t, -, hlk⟩ := hgi v e' he'
+  obtain ⟨-, -, t, -, hlk⟩ := hgi v e' he'
   have hmem : v ∈ Program.letNames pre :=
     (mem_letNames_of_lookup_env hpre (by rw [hlk]; rfl)).resolve_right
       (by simp [Database.empty])
@@ -938,7 +904,7 @@ theorem runStepReach_rules {R : RulesetName} {sd d : Database}
 
 /-- **Rules only ever grow along a command**, and only `Cmd.rule` adds one. -/
 theorem cmdStep_rule_mem {sd sd' : Database} {r : Rule} (h : CmdStep sd (.rule r) sd') :
-    r ∈ sd'.rules := by
+    r.resolveGlobals sd.env ∈ sd'.rules := by
   obtain ⟨d, hreach, hcl⟩ := h
   replace hreach : cmdEffect sd (.rule r) = some d := hreach
   rw [cmdEffect, Option.some.injEq] at hreach
@@ -981,9 +947,7 @@ theorem FDatabase.EncOk.step_src {P : Program} {sg : Signature} {sd sd' : Databa
     {d : FDatabase} (hok : d.EncOk P sg sd) {c : Cmd} (hc : ∀ a, c ≠ Cmd.action a)
     (hsig : ∀ f, sd.sig.IsCtor f → sd'.sig.IsCtor f)
     (hstep : CmdStep sd c sd') : d.EncOk P sg sd' :=
-  hok.mono_src (CmdStep.contained hstep).eqs
-    (fun v t hv => by rw [cmdStep_env_of_noAction hc hstep] at hv; exact hv)
-    (fun v t hv => by rw [cmdStep_env_of_noAction hc hstep]; exact hv) hsig
+  hok.mono_src (CmdStep.contained hstep).eqs (cmdStep_env_of_noAction hc hstep) hsig
     (cmdStep_rules_subset hstep)
 
 /-! ## One round of the aligned run
@@ -1020,9 +984,7 @@ theorem FDatabase.EncOk.runRoundM {P : Program} {sg : Signature}
   · exact fun r hr => hok.base.wl r (hrules ▸ hr)
   · exact fun r hr => hrules ▸ hok.base.held r hr
   · exact fun b hb => hok.base.noAtEnv b (henv ▸ hb)
-  · intro v t hv
-    rw [henv]
-    exact hok.glob v t (by rw [cmdStep_env_of_noAction hna hstep] at hv; exact hv)
+  · rw [henv, hok.env, cmdStep_env_of_noAction hna hstep]
   · exact runRoundM_soundTerms_in (by rw [hok.base.sig]; exact hok.base.shape)
       (by rw [hok.base.sig]; exact hok.base.merges) hok.base.inv hok.base.nounions
       hok.base.wl' hfire (hok.sound.mono_src (CmdStep.contained hstep).eqs) hrun
@@ -1031,7 +993,7 @@ theorem FDatabase.EncOk.runRoundM {P : Program} {sg : Signature}
       rcases hc with rfl | rfl <;> intro f dd hcon <;> exact absurd hcon (by simp)
     exact (hok.srcRules r (hrules ▸ hr)).imp
       (fun ⟨s, G, i, n, hm, hs, hgi, hgo, he⟩ =>
-        ⟨s, G, i, n, hm, cmdStep_rules_subset hstep s hs,
+        ⟨s, G, i, n, hm, cmdStep_rules_subset hstep _ hs,
           hgi.of_eq (cmdStep_sig_eq_of_noDecl hnd hstep)
             (cmdStep_env_of_noAction hna hstep),
           hgo, he⟩) id
@@ -1049,7 +1011,7 @@ theorem FDatabase.EncOk.runRoundM_rebuild {P : Program} (hdom : P.EncodeDomain)
   · exact fun r hr => hok.base.wl r (hrules ▸ hr)
   · exact fun r hr => hrules ▸ hok.base.held r hr
   · exact fun b hb => hok.base.noAtEnv b (henv ▸ hb)
-  · intro v t hv; rw [henv]; exact hok.glob v t hv
+  · rw [henv]; exact hok.env
   · exact runRoundM_soundTerms_in (by rw [hok.base.sig]; exact hok.base.shape)
       (by rw [hok.base.sig]; exact hok.base.merges) hok.base.inv hok.base.nounions
       hok.base.wl' (firingsSoundIn_rebuild hdom hok) hok.sound hrun
@@ -1126,7 +1088,7 @@ theorem Expr.eval_inlineGlobals {sd : Database} {G : List (Var × Expr)}
       cases hlk : Expr.lookupG v G with
       | none => simp only [Option.getD]
       | some e =>
-          obtain ⟨hcl, t, hev, hbind⟩ := hG v e hlk
+          obtain ⟨hcl, -, t, hev, hbind⟩ := hG v e hlk
           simp only [Option.getD]
           rw [Expr.eval_of_vars_nil hcl, hev, Expr.eval, hbind]
   | .app f args => by
@@ -1185,8 +1147,8 @@ theorem globalsInline_action {P pre q : Program} {a : Action} {sd sd' : Database
       intro w e' hw
       have hwv : w ≠ v := by
         intro hcon; rw [hcon, hnone] at hw; exact absurd hw (by simp)
-      obtain ⟨hcl', t', hev', hbind'⟩ := hgi w e' hw
-      exact ⟨hcl', t', by rw [hsig]; exact hev',
+      obtain ⟨hcl', hnp', t', hev', hbind'⟩ := hgi w e' hw
+      exact ⟨hcl', hnp', t', by rw [hsig]; exact hev',
         by rw [henv']; simpa [Env.lookup, hwv] using hbind'⟩
 
 /-- **The two clauses survive one source command**, at the globals `Cmd.globalBind` leaves.
@@ -1246,6 +1208,14 @@ theorem globalsInline_step {P : Program} (hdom : P.EncodeDomain) {pre q : Progra
           obtain ⟨t, ht, hd0⟩ := Option.map_eq_some_iff.mp hev
           have henv' : sd'.env = (v, t) :: sd.env := by rw [henv, ← hd0]
           rw [Cmd.globalBind]
+          have hnp : ∀ fk ∈ (e.inlineGlobals G).ctors, Prim.ofName fk.1 = none := by
+            refine ctors_inlineGlobals_noPrim
+              (fun u e'' hu fk hfk => (hgi u e'' hu).2.1 fk hfk) e ?_
+            intro fk hfk
+            refine hdom.noPrim fk (List.mem_dedup.mpr (List.mem_flatMap.mpr
+              ⟨Cmd.action (.letBind v e), ?_, ?_⟩))
+            · rw [hP]; exact List.mem_append_right _ List.mem_cons_self
+            · rw [Cmd.ctors, Action.ctors]; exact hfk
           by_cases hg : P.letNames.count v = 1 ∧ (e.inlineGlobals G).vars = []
           · rw [if_pos hg]
             refine ⟨?_, ?_⟩
@@ -1255,7 +1225,7 @@ theorem globalsInline_step {P : Program} (hdom : P.EncodeDomain) {pre q : Progra
               · subst hwv
                 rw [if_pos rfl, Option.some.injEq] at hw
                 subst hw
-                refine ⟨hg.2, t, ?_, by rw [henv']; simp [Env.lookup]⟩
+                refine ⟨hg.2, hnp, t, ?_, by rw [henv']; simp [Env.lookup]⟩
                 rw [hsig, ← Expr.eval_of_vars_nil hg.2 sd.env, Expr.eval_inlineGlobals hgi e]
                 exact ht
               · rw [if_neg hwv] at hw
@@ -1344,16 +1314,6 @@ theorem Expr.varsList_inlineGlobalsList_nil {G : List (Var × Expr)} (hcl : Expr
       rfl
 
 end
-
-/-- **The substitution defines every global the run has bound.** The invariant that says
-`Cmd.globalBind` declined nothing: with it, the second guard passes at the next top-level
-`let`, and the encoder substitutes the global rather than leaving it frozen in the query. -/
-def Database.GlobalsCover (sd : Database) (G : List (Var × Expr)) : Prop :=
-  ∀ v, (Env.lookup v sd.env).isSome → Expr.lookupG v G ≠ none
-
-/-- Nothing is bound yet, so nothing has to be covered. -/
-theorem Database.globalsCover_empty : Database.empty.GlobalsCover [] := by
-  intro v hv; exact absurd hv (by simp [Database.empty])
 
 /-- **The clause survives one source command, and the `let` case is where it pays.** Both of
 `Cmd.globalBind`'s guards pass there: the first because a program the source ran binds no name
@@ -1467,13 +1427,15 @@ theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Sign
     (hwlP : EncodedWriteLegal P sg) {pre q : Program} {c : Cmd} (hP : P = pre ++ c :: q)
     {sd sd' : Database} (hpre : ProgramStep Database.empty pre sd)
     (hstep : CmdStep sd c sd') {G : List (Var × Expr)} {n i : Nat} {d D : FDatabase}
-    (hgi : sd.GlobalsInline G) (honce : P.GlobalsOnce G) (hok : d.EncOk P sg sd)
+    (hgi : sd.GlobalsInline G) (honce : P.GlobalsOnce G) (hcov : sd.GlobalsCover G)
+    (hok : d.EncOk P sg sd)
     (hrun : d.execProgramM (encodeCmd G c n i).1 = some D) : D.EncOk P sg sd' := by
   have hcP : c ∈ P := by rw [hP]; exact List.mem_append_right _ List.mem_cons_self
   have hbase : ∀ {c' : Cmd} {x y : FDatabase}, c' ∈ (encodeCmd G c n i).1 →
       Cmd.RulesEncodedOk P c' → x.EncBase P sg → x.execCmdM c' = some y → y.EncBase P sg :=
     fun hmem hro hb hs =>
-      hb.execCmdM hro (encodeCmd_unionFree G c n i _ hmem) (noDecl_encodeCmd G c n i _ hmem)
+      hb.execCmdM hro (encodeCmd_unionFree G c n i _ hmem)
+        (noDecl_encodeCmd G c n i _ hmem)
         (hwlP c hcP G n i _ hmem) (noAtLet_encodeCmd hdom G c hcP n i _ hmem) hs
   cases hc : c with
   | decl f dc =>
@@ -1503,26 +1465,42 @@ theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Sign
     have hmem : Cmd.rule r ∈ P := by rw [hP]; exact List.mem_append_right _ List.mem_cons_self
     have hmem' : Cmd.rule (encodeRule i (r.substGlobals G) n).1
         ∈ (encodeCmd G (Cmd.rule r) n i).1 := List.mem_cons_self
+    -- the target registers the encoder's own output: there is nothing left in an encoded
+    -- rule for `FDatabase.execCmdM`'s own resolution to replace
+    have hres : ((encodeRule i (r.substGlobals G) n).1).resolveGlobals d.env
+        = (encodeRule i (r.substGlobals G) n).1 :=
+      Rule.resolveGlobals_encodeRule hgi.closed
+        (fun b hb => hok.base.noAtEnv b hb)
+        (fun v hv => by
+          rw [hok.env]
+          cases hE : Env.lookup v sd.env with
+          | none => rfl
+          | some t => exact absurd hv (hcov v (by rw [hE]; rfl)))
+        r i n
     have hb : D.EncBase P sg :=
-      hbase hmem' (Or.inl ⟨r, G, i, n, hmem, rfl⟩) hok.base hs
-    obtain rfl : D = { d with rules := (encodeRule i (r.substGlobals G) n).1 :: d.rules } := by
+      hbase hmem' (Or.inl ⟨r, G, i, n, [], hmem, (Rule.resolveGlobals_nil _).symm⟩)
+        hok.base hs
+    obtain rfl : D
+        = { d with rules := ((encodeRule i (r.substGlobals G) n).1).resolveGlobals d.env
+            :: d.rules } := by
       rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs.symm
     have hsigeq : sd'.sig = sd.sig :=
       cmdStep_sig_eq_of_noDecl (by intro f dd h; exact absurd h (by simp)) hstep
     have henveq : sd'.env = sd.env :=
       cmdStep_env_of_noAction (by intro a h; exact absurd h (by simp)) hstep
-    refine ⟨hb, ?_, hok.sound.mono_src (CmdStep.contained hstep).eqs, ?_⟩
-    · intro v t hv
-      rw [henveq] at hv
-      exact hok.glob v t hv
-    · intro r' hr'
-      rcases List.mem_cons.mp hr' with rfl | hr''
-      · exact Or.inl ⟨r, G, i, n, hmem, cmdStep_rule_mem hstep,
-          hgi.of_eq hsigeq henveq, honce, rfl⟩
-      · exact (hok.srcRules r' hr'').imp
-          (fun ⟨s, H, j, m, hm, hs', hgi', hgo', he⟩ =>
-            ⟨s, H, j, m, hm, cmdStep_rules_subset hstep s hs',
-              hgi'.of_eq hsigeq henveq, hgo', he⟩) id
+    have hsrcnew : (r.substGlobals G) ∈ sd'.rules := by
+      have h := cmdStep_rule_mem hstep (r := r)
+      rwa [Rule.resolveGlobals_eq_substGlobals hgi hcov] at h
+    refine ⟨hb, by rw [henveq]; exact hok.env,
+      hok.sound.mono_src (CmdStep.contained hstep).eqs, ?_⟩
+    intro r' hr'
+    rcases List.mem_cons.mp hr' with rfl | hr''
+    · rw [hres]
+      exact Or.inl ⟨r, G, i, n, hmem, hsrcnew, hgi.of_eq hsigeq henveq, honce, rfl⟩
+    · exact (hok.srcRules r' hr'').imp
+        (fun ⟨s, H, j, m, hm, hs', hgi', hgo', he⟩ =>
+          ⟨s, H, j, m, hm, cmdStep_rules_subset hstep _ hs',
+            hgi'.of_eq hsigeq henveq, hgo', he⟩) id
   | run R =>
     subst hc
     have hrun' : d.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some D := hrun
@@ -1566,23 +1544,24 @@ source only at the end, by `FDatabase.SoundTerms.mono_src`.
 The globals the encoder carries are threaded alongside, and `globalsInline_step` is what keeps
 their two clauses true as the source run goes on. -/
 theorem FDatabase.EncOk.stepCmds {P : Program} (hdom : P.EncodeDomain) {sg : Signature}
+    (hnodup : (Program.letNames P).Nodup)
     (hhead : EncodedHeadSound P sg) (hact : EncodedActionSound P sg)
     (hwlP : EncodedWriteLegal P sg) :
     ∀ (p pre : Program), P = pre ++ p →
       ∀ {sd src : Database}, ProgramStep Database.empty pre sd → ProgramStep sd p src →
       ∀ (G : List (Var × Expr)) (n i : Nat) {d D : FDatabase},
-        sd.GlobalsInline G → P.GlobalsOnce G → d.EncOk P sg sd →
+        sd.GlobalsInline G → P.GlobalsOnce G → sd.GlobalsCover G → d.EncOk P sg sd →
         d.execProgramM (encodeCmds P G p n i).1 = some D → D.EncOk P sg src := by
   intro p
   induction p with
   | nil =>
-    intro pre _ sd src _ hsrc G n i d D _ _ hok hrun
+    intro pre _ sd src _ hsrc G n i d D _ _ _ hok hrun
     obtain rfl : sd = src := ProgramStep.nil_inv hsrc
     have hnil : d.execProgramM ([] : Program) = some D := hrun
     rw [FDatabase.execProgramM, Option.some.injEq] at hnil
     exact hnil ▸ hok
   | cons c cs ih =>
-    intro pre hP sd src hpre hsrc G n i d D hgi honce hok hrun
+    intro pre hP sd src hpre hsrc G n i d D hgi honce hcov hok hrun
     obtain ⟨sd', hstep, hrest⟩ := ProgramStep.cons_inv hsrc
     rw [encodeCmds_cons_fst] at hrun
     obtain ⟨d₁, hblock, hafter⟩ := FDatabase.execProgramM_append hrun
@@ -1592,7 +1571,8 @@ theorem FDatabase.EncOk.stepCmds {P : Program} (hdom : P.EncodeDomain) {sg : Sig
     obtain ⟨hgi', honce'⟩ := globalsInline_step hdom hP hstate hpre hstep hgi honce
     exact ih (pre ++ [c]) (by rw [List.append_assoc]; exact hP)
       (hpre.append (ProgramStep.cons hstep ProgramStep.nil)) hrest _ _ _ hgi' honce'
-      (hok.stepCmd hdom hhead hact hwlP hP hpre hstep hgi honce hblock) hafter
+      (globalsCover_step hP hstep hnodup hgi hcov)
+      (hok.stepCmd hdom hhead hact hwlP hP hpre hstep hgi honce hcov hblock) hafter
 
 
 /-! ## The prelude, and the base case
@@ -1741,26 +1721,61 @@ theorem execProgramM_data_of_declOrRule {p : Program} (hp : ∀ c ∈ p, c.DeclO
     obtain ⟨t₂, r₂, e₂, v₂⟩ := ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc')) h₂
     exact ⟨t₂.trans t₁, r₂.trans r₁, e₂.trans e₁, v₂.trans v₁⟩
 
-/-- Every rule the state after a prelude-shaped run holds is one of the run's own. -/
-theorem execProgramM_rules_of_declOrRule {p : Program} :
-    ∀ {d d' : FDatabase}, d.execProgramM p = some d' →
-      ∀ r ∈ d'.rules, Cmd.rule r ∈ p ∨ r ∈ d.rules := by
+/-- **A block with no `Cmd.rule` in it registers none**, whatever its environment. The shape
+an encoded action's block has. -/
+theorem execProgramM_rules_of_noRule {p : Program}
+    (hnr : ∀ c ∈ p, ∀ r : Rule, c ≠ Cmd.rule r) :
+    ∀ {d d' : FDatabase}, d.execProgramM p = some d' → ∀ r ∈ d'.rules, r ∈ d.rules := by
   induction p with
   | nil =>
     intro d d' hs r hr
     rw [FDatabase.execProgramM, Option.some.injEq] at hs
-    exact Or.inr (by rw [← hs] at hr; exact hr)
+    rw [← hs] at hr; exact hr
   | cons c cs ih =>
     intro d d' hs r hr
     rw [FDatabase.execProgramM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    rcases ih h₂ r hr with hc | hc
+    have hc := ih (fun c' hc' => hnr c' (List.mem_cons_of_mem c hc')) h₂ r hr
+    cases c with
+    | rule s => exact absurd rfl (hnr _ List.mem_cons_self s)
+    | decl f dc =>
+      rw [FDatabase.execCmdM, Option.some.injEq] at h₁
+      rw [← h₁] at hc; exact hc
+    | action a =>
+      rw [FDatabase.execCmdM] at h₁
+      obtain ⟨d₀, ha, hm⟩ := Option.bind_eq_some_iff.mp h₁
+      replace ha := execAction_of_top ha
+      rw [(FDatabase.mergeSaturateF_fields hm).2.2, FDatabase.execAction_rules ha] at hc
+      exact hc
+    | run R => rw [(FDatabase.runRoundM_fields h₁).2.2] at hc; exact hc
+    | saturate R => rw [(FDatabase.runSaturateM_fields runFuel h₁).2.2] at hc; exact hc
+
+/-- Every rule the state after a prelude-shaped run holds is one of the run's own. -/
+theorem execProgramM_rules_of_declOrRule {p : Program}
+    (hna : ∀ c ∈ p, ∀ a : Action, c ≠ Cmd.action a) :
+    ∀ {d d' : FDatabase}, d.env = [] → d.execProgramM p = some d' →
+      ∀ r ∈ d'.rules, Cmd.rule r ∈ p ∨ r ∈ d.rules := by
+  induction p with
+  | nil =>
+    intro d d' _ hs r hr
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact Or.inr (by rw [← hs] at hr; exact hr)
+  | cons c cs ih =>
+    intro d d' henv hs r hr
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    have henv₁ : d₁.env = [] := by
+      rw [FDatabase.execCmdM_env_of_noAction (hna c List.mem_cons_self) h₁, henv]
+    rcases ih (fun c' hc' => hna c' (List.mem_cons_of_mem c hc')) henv₁ h₂ r hr with hc | hc
     · exact Or.inl (List.mem_cons_of_mem c hc)
     · cases c with
       | rule s =>
         rw [FDatabase.execCmdM, Option.some.injEq] at h₁
-        rcases List.mem_cons.mp (show r ∈ s :: d.rules by rw [← h₁] at hc; exact hc) with rfl | h
-        · exact Or.inl List.mem_cons_self
+        rcases List.mem_cons.mp
+          (show r ∈ s.resolveGlobals d.env :: d.rules by rw [← h₁] at hc; exact hc)
+          with rfl | h
+        · rw [henv, Rule.resolveGlobals_nil]
+          exact Or.inl List.mem_cons_self
         · exact Or.inr h
       | decl f dc =>
         rw [FDatabase.execCmdM, Option.some.injEq] at h₁
@@ -1815,30 +1830,36 @@ theorem preludeState_encOk {P : Program} {d₀ : FDatabase}
       execProgramM_noUnions (Program.unionFree_of_mem (encodePrelude_unionFree P))
         empty_noUnions hprel, ?_, ?_, ?_⟩, ?_, ?_, ?_⟩
   · exact FDatabase.execProgramM_rulesEncoded (rulesEncodedOk_encodePrelude P)
+      (fun c hc => NoAtLet.of_declOrRule (declOrRule_encodePrelude P c hc))
+      (by intro b hb; exact absurd hb (by simp [FDatabase.empty]))
       (fun r hr => absurd hr (by simp [FDatabase.empty])) hprel
   · rw [← hsig]
     exact FDatabase.execProgramM_mergeShape (mergeShapeOk_encodePrelude P)
       Signature.mergeShape_empty hprel
   · intro r hr
-    rcases execProgramM_rules_of_declOrRule hprel r hr with hc | hc
+    rcases execProgramM_rules_of_declOrRule
+      (fun c hc a hcr => by subst hcr; exact declOrRule_encodePrelude P _ hc) rfl hprel r hr
+      with hc | hc
     · exact hmaint { r with ruleset := rebuildRuleset }
         (mem_maintenanceRules_of_mem_all (mem_maintenanceRules_of_encodePrelude hc))
     · exact absurd hc (by simp [FDatabase.empty])
-  · exact fun r hr => FDatabase.execProgramM_mem_rules hprel r
+  · exact fun r hr => FDatabase.execProgramM_mem_rules
+      (fun c hc a hcr => by subst hcr; exact declOrRule_encodePrelude P _ hc) rfl hprel r
       (by rw [encodePrelude]
           exact List.mem_append_right _
             (List.mem_map_of_mem (mem_allMaintenanceRules_of_mem hr)))
   · intro b hb
     rw [hv, show FDatabase.empty.env = ([] : Env) from rfl] at hb
     exact absurd hb (by simp)
-  · intro v t hv'
-    rw [show Database.empty.env = [] from rfl] at hv'
-    exact absurd hv' (by simp)
+  · rw [hv, show FDatabase.empty.env = ([] : Env) from rfl,
+      show Database.empty.env = ([] : Env) from rfl]
   · refine ⟨fun f cs e pf hm => ?_, fun t p pf hm => ?_⟩ <;>
       rw [ht, show FDatabase.empty.terms = ([] : List Term) from rfl] at hm <;>
       exact absurd hm (by simp)
   · intro r hr
-    rcases execProgramM_rules_of_declOrRule hprel r hr with hc | hc
+    rcases execProgramM_rules_of_declOrRule
+      (fun c hc a hcr => by subst hcr; exact declOrRule_encodePrelude P _ hc) rfl hprel r hr
+      with hc | hc
     · exact Or.inr (mem_maintenanceRules_of_encodePrelude hc)
     · exact absurd hc (by simp [FDatabase.empty])
 
@@ -1949,9 +1970,11 @@ theorem execM_soundTerms_of_obligations {P : Program} (hdom : P.EncodeDomain)
     {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src := by
   rw [execM, encode] at htgt
   obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
-  exact (FDatabase.EncOk.stepCmds hdom hhead hact hwlP P [] rfl ProgramStep.nil hsrc [] 0 0
+  exact (FDatabase.EncOk.stepCmds hdom (letNames_nodup_of_programStep hsrc).1
+    hhead hact hwlP P [] rfl ProgramStep.nil hsrc [] 0 0
     (by intro v e he; exact absurd he (by simp [Expr.lookupG]))
     (by intro v he; exact absurd he (by simp [Expr.lookupG]))
+    Database.globalsCover_empty
     (preludeState_encOk (encodeSig_mergesLegal hdom) hmaint hprel) hcmds).sound
 
 /-- **A clause `Program.EncodeDomain` does not have, and the two legality obligations need.**
@@ -3001,7 +3024,8 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
     writeLegal_singleton _ (writeLegal_encodeAction hdom hag fiatE a n (hnoset _ hcP) hctors)
   have hsound' : d.SoundTerms sd' := hok.sound.mono_src (CmdStep.contained hstep).eqs
   have hDsrc : ∀ r ∈ D.rules,
-      (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P ∧ s ∈ sd'.rules ∧
+      (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat),
+          Cmd.rule s ∈ P ∧ s.substGlobals G ∈ sd'.rules ∧
           sd'.GlobalsInline G ∧ P.GlobalsOnce G ∧
           r = (encodeRule i (s.substGlobals G) n).1) ∨
         r ∈ allMaintenanceRules P := by
@@ -3010,9 +3034,12 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
       intro hc
       obtain ⟨b, -, hb⟩ := List.mem_map.mp hc
       exact absurd hb (by simp)
-    rcases hok.srcRules r ((execProgramM_rules_of_declOrRule hblock r hr).resolve_left hnr) with
+    rcases hok.srcRules r (execProgramM_rules_of_noRule
+      (fun c hc r' hcr => by
+        obtain ⟨b, -, rfl⟩ := List.mem_map.mp hc
+        exact absurd hcr (by simp)) hblock r hr) with
       ⟨s, G, i, m, hm, hs, hgi, hgo, he⟩ | hmaint
-    · exact Or.inl ⟨s, G, i, m, hm, cmdStep_rules_subset hstep s hs,
+    · exact Or.inl ⟨s, G, i, m, hm, cmdStep_rules_subset hstep _ hs,
         globalsInline_action hP hpre hstep hgi hgo, hgo, he⟩
     · exact Or.inr hmaint
   rcases evalAction_eq_some hev with ⟨e, t, rfl, hsrcev, hsd'⟩ | ⟨v, e, t, rfl, hsrcev, hsd'⟩ |
@@ -3026,9 +3053,9 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
     obtain ⟨-, hsD, henvD, -⟩ :=
       execProgramM_sets_soundTerms (encodeBuild e n).2.1 (encodeBuild_isSet e n) hufb hwlb
         hjust hok.base rfl rfl (fun _ ht => ht) hsound' hblock
-    refine ⟨hbD, fun w u hu => ?_, hsD, hDsrc⟩
-    rw [henvD]
-    exact hok.glob w u (by rw [hsd'] at hu; exact hu)
+    refine ⟨hbD, ?_, hsD, hDsrc⟩
+    rw [henvD, hok.env, hsd']
+    rfl
   · -- `.letBind v e`
     obtain ⟨hne, hprim⟩ := head_conditions_of_ctors hdom hctors
     have hmemt : t ∈ sd'.terms := by
@@ -3079,16 +3106,9 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
         (by rw [hsig₂]; exact hbD₁.merges) hinv₂
         (execAction_noUnions (a := Action.letBind v e) trivial hbD₁.nounions hact) hs₂ hmerge
     refine ⟨hbD, ?_, hsD, hDsrc⟩
-    intro w u hu
     rw [(FDatabase.mergeSaturateF_fields hmerge).2.1, hD₂]
-    change Env.lookup w ((v, t) :: D₁.env) = some u
-    rw [henvD₁]
-    have hu' : Env.lookup w ((v, t) :: sd.env) = some u := by rw [hsd'] at hu; exact hu
-    rw [Env.lookup_cons] at hu'
-    rw [Env.lookup_cons]
-    by_cases hwv : w = v
-    · rw [if_pos hwv] at hu' ⊢; exact hu'
-    · rw [if_neg hwv] at hu' ⊢; exact hok.glob w u hu'
+    change ((v, t) :: D₁.env) = sd'.env
+    rw [henvD₁, hok.env, hsd']
   · -- `.union e₁ e₂`
     have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
       fun fk hfk => hctors fk (by rw [Action.ctors]; exact List.mem_append_left _ hfk)
@@ -3169,9 +3189,9 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
     obtain ⟨-, hsD, henvD, -⟩ :=
       execProgramM_sets_soundTerms _ hset hufb hwlb hjust hok.base rfl rfl (fun _ ht => ht)
         hsound' hblock
-    refine ⟨hbD, fun w u hu => ?_, hsD, hDsrc⟩
-    rw [henvD]
-    exact hok.glob w u (by rw [hsd'] at hu; exact hu)
+    refine ⟨hbD, ?_, hsD, hDsrc⟩
+    rw [henvD, hok.env, hsd']
+    rfl
   · -- a source `set` is out of the fragment
     exact absurd (hnoset _ hcP) (fun h => (h : False))
 
@@ -3494,7 +3514,8 @@ theorem FDatabase.EncBase.execCmdM_ufRowsForest {P : Program} {sg : Signature}
 /-- **A block of them.** -/
 theorem FDatabase.EncBase.execProgramM_ufRowsForest {P : Program} {sg : Signature}
     (hufsg : sg ufName = some ufDecl) (hsy : sg.IsCtor symName) (htr : sg.IsCtor transName)
-    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c)
+    (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal sg) (hok : ∀ c ∈ p, c.UFWriteOk)
     (hlet : ∀ c ∈ p, c.NoAtLet) :
     ∀ {d D : FDatabase}, d.EncBase P sg → d.UFRowsDescend → d.UFRowsForest →
@@ -3825,7 +3846,7 @@ theorem evalLocalActions_termsBuild {db db' : Database} (hw : db.WF) (h : db.Ter
     {as : List Action} (hns : ∀ a ∈ as, a.NoSet) {σ : Env} (hσ : ∀ b ∈ σ, b.2 ∈ db.terms)
     (hv : evalLocalActions db as σ = some db') : db'.TermsBuild := by
   obtain ⟨d, hd, rfl⟩ := evalLocalActions_eq_some hv
-  have hlf : ({ db with env := db.env ++ σ } : Database).TermsBuild := by
+  have hlf : ({ db with env := σ ++ db.env } : Database).TermsBuild := by
     intro f q ht; exact h f q (Database.terms_setEnv ▸ ht)
   intro f q ht
   rw [Database.terms_setEnvRules] at ht
@@ -3872,9 +3893,11 @@ theorem cmdStep_termsBuilds {db db' : Database} (hc : db.CtorState) (h : db.Term
       exact ⟨evalAction_termsBuild hc.wf h.terms hns hv,
         by rw [evalAction_rules hv]; exact h.heads⟩
   | rule r =>
-      have hv : some { db with rules := insert r db.rules } = some d := hreach
-      obtain rfl : d = { db with rules := insert r db.rules } := (Option.some.inj hv).symm
-      obtain rfl : db' = { db with rules := insert r db.rules } :=
+      have hv : some { db with rules := insert (r.resolveGlobals db.env) db.rules } = some d :=
+        hreach
+      obtain rfl : d = { db with rules := insert (r.resolveGlobals db.env) db.rules } :=
+        (Option.some.inj hv).symm
+      obtain rfl : db' = { db with rules := insert (r.resolveGlobals db.env) db.rules } :=
         hcl.eq_of_allConstructors hc.sig
       refine ⟨fun f q ht => h.terms f q (Database.terms_setRules ▸ ht), ?_⟩
       intro r' hr'
@@ -4322,9 +4345,10 @@ head's nested applications all read at the same one; `held_of_evalAction` compos
 reaches. -/
 theorem head_facts_of_domain {P : Program} (hdom : P.EncodeDomain) {p q : Program}
     (hP : P = p ++ q) {sd : Database} (hpre : ProgramStep Database.empty p sd) {s : Rule}
-    (hmem : Cmd.rule s ∈ P) (hsrule : s ∈ sd.rules) :
+    {G : List (Var × Expr)}
+    (hmem : Cmd.rule s ∈ P) (hsrule : s.substGlobals G ∈ sd.rules) :
     Actions.Builds s.actions sd.sig ∧ Actions.UnionRunnable s.actions sd := by
-  refine ⟨headsBuild_of_programStep hdom hP hpre s hsrule, ?_⟩
+  refine ⟨headsBuild_of_programStep hdom hP hpre (s.substGlobals G) hsrule, ?_⟩
   rcases hdom.noLitUnion with huf | hlit
   · exact Or.inl ((Cmd.ruleUnionFreeB_iff s).mp (huf _ hmem))
   · exact Or.inr ⟨(noLits_of_programStep hdom hlit
@@ -4344,32 +4368,50 @@ theorem encodedHeadSound {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesA
       fun c' hc' => hdom.ctorsOnly c' (by rw [hP]; exact List.mem_append_left _ hc')
   have hwf' : sd'.WF := hstep.wf hstate.wf
   obtain ⟨hgr₀, hnv₀, hk₀⟩ := hdom.queryEncodable_of_mem hmem
-  -- the three text conditions, at the query the encoder actually flattened
+  -- the three text conditions, at the query the encoder actually flattened — which is the
+  -- query the source state stores, because `Spec/Step.lean` resolved the globals into it at
+  -- the same command
   set q' : Query := Query.substGlobals G s.query with hq'
-  have hgr : ∀ p ∈ q', p.Grounded := Query.grounded_substGlobals hgr₀
+  have hstate₀ : sd.CtorState :=
+    hpre.ctorState Database.CtorState.empty
+      fun c' hc' => hdom.ctorsOnly c' (by rw [hP]; exact List.mem_append_left _ hc')
+  have hgr : ∀ p ∈ q', p.GroundedAt sd :=
+    Query.groundedAt_substGlobals hstate₀.wf hgi hgr₀
   have hnv : ∀ p ∈ q', p.NoValues := Query.noValues_substGlobals hnv₀
   have hk : Query.VarsKeyed q' := Query.VarsKeyed.substGlobals hgi.closed hk₀
   obtain ⟨hbld, hun⟩ := head_facts_of_domain hdom hP hpre hmem hsrule
   have hscoped : s.HeadScoped sd := hhs.headScoped hmem sd
+  -- the substituted query binds no less than the source query, because a variable the
+  -- substitution removed is a global and the environment binds it
+  have hscoped' : Actions.Scoped s.actions (Query.bind q' (Env.dom sd.env)) := by
+    refine Actions.Scoped.mono s.actions (fun v hv => ?_) hscoped
+    rcases List.mem_union_iff.mp hv with hv' | hv'
+    · exact List.mem_union_iff.mpr (Or.inl hv')
+    · by_cases hvq : v ∈ Query.vars q'
+      · exact List.mem_union_iff.mpr (Or.inr hvq)
+      · refine List.mem_union_iff.mpr (Or.inl ?_)
+        obtain ⟨e', hlk⟩ := Option.ne_none_iff_exists'.mp
+          (Query.lookupG_ne_none_of_not_mem_vars_substGlobals hgi.closed hv' hvq)
+        obtain ⟨-, -, t, -, hbind⟩ := hgi v e' hlk
+        exact Env.lookup_isSome_iff_mem_dom.mp (by rw [hbind]; rfl)
   have htb : sd.TermsBuild := termsBuild_of_programStep hdom hP hpre
   have hvs : d.toDatabase.ViewsSound sd :=
     (viewsSound_of_soundTerms hok.base.eqsRefl hok.sound).1
   obtain ⟨τ', hmatch, hagree⟩ := validQuerySubst_of_mem_matchQuery_diag hok.base.inv.eqs
     hok.base.eqsRefl hok.base.inv.index hσ
-  have hglobτ : sd.GlobalsAgree (d.toDatabase.env ++ τ') := hok.glob.append
-  have hread : ∀ p ∈ q', PatternRead d.toDatabase (d.toDatabase.env ++ τ') p :=
+  have hglobτ : sd.GlobalsAgree d.toDatabase.env := by
+    rw [FDatabase.toDatabase_env]; exact hok.glob
+  have hread : ∀ p ∈ q', PatternRead d.toDatabase τ' p :=
     patternReads_of_encodeQuery hok.base.diag hok.base.subterms hnv hk hmatch
-  obtain ⟨τ, hqτ', hτ⟩ := exists_validQuerySubst_at_ids htb hvs hglobτ hgr hk hread
-  -- and the source's own query is matched at the same substitution
-  have hqτ : ValidQuerySubst sd s.query τ := ValidQuerySubst.of_substGlobals hgi hqτ'
+  obtain ⟨τ, hqτ, hdomτ, hτ⟩ := exists_validQuerySubst_at_ids htb hvs hgr hk hread
   obtain ⟨D, hD, hlocal⟩ := evalLocalActions_isSome_of_builds (Scope.Models.dom sd.env)
-    hstate.wf hscoped hbld hun hqτ
+    hstate.wf (r := s.substGlobals G) hscoped' hbld hun hqτ
   -- the target's block
   rw [execLocalActions, encodeRule_actions] at he
   obtain ⟨e₀, he₀, hee⟩ := Option.map_eq_some_iff.mp he
   have hgoal : e₀.SoundTerms sd' := by
-    refine headActions_soundTerms (dk := { d with env := d.env ++ σ })
-      (ss := { sd with env := sd.env ++ τ }) hdom hag hwf'
+    refine headActions_soundTerms (dk := { d with env := σ ++ d.env })
+      (ss := { sd with env := τ ++ sd.env }) hdom hag hwf'
       (notEntryHead_ruleE (queryProofs_var (encodeQuery_valueVars q' hnv n)))
       s.actions (Query.bind s.query (Env.dom sd.env)) (encodeQuery q' n).2
       (fun a ha fk hfk => mem_ctors_of_cmd hmem (by
@@ -4379,21 +4421,42 @@ theorem encodedHeadSound {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesA
       hscoped ?_ hok.base.sig (hok.base.inv.setEnvMatch hσ)
       (hok.sound.mono_src (CmdStep.contained hstep).eqs) hD ?_ ?_ he₀
     · intro v hv
-      have hv' : v ∈ Query.vars q' ∨ (Env.lookup v sd.env).isSome := by
-        rcases List.mem_union_iff.mp hv with hv' | hv'
-        · exact Or.inr (Env.lookup_isSome_iff_mem_dom.mpr hv')
-        · by_cases hvq : v ∈ Query.vars q'
-          · exact Or.inl hvq
-          · -- a query variable the substitution replaced is a global, so the environment
-            -- binds it
-            refine Or.inr ?_
-            obtain ⟨e', hlk⟩ := Option.ne_none_iff_exists'.mp
-              (Query.lookupG_ne_none_of_not_mem_vars_substGlobals hgi.closed hv' hvq)
-            obtain ⟨-, t, -, hbind⟩ := hgi v e' hlk
-            rw [hbind]; rfl
-      change Env.lookup v (d.env ++ σ) = Env.lookup v (sd.env ++ τ)
-      rw [← Env.Agree.append_left d.env hagree v]
-      exact lookup_eq_of_at_ids hvs hglobτ hk hread hτ hv'
+      -- a head variable is a query variable of the *substituted* query, or a global; and a
+      -- global the substituted query no longer names is one the match cannot have bound,
+      -- because the encoded query's variables are the generated ones and the survivors
+      have hnotau : ∀ w : Var, (Env.lookup w sd.env).isSome → w ∉ Query.vars q' →
+          Env.lookup w τ' = none := by
+        intro w hw hwq
+        obtain ⟨u, hu⟩ := Option.isSome_iff_exists.mp hw
+        have hwat : ¬ "@".isPrefixOf w :=
+          hok.base.noAtEnv (w, u) (by rw [hok.env]; exact Env.mem_of_lookup hu)
+        have hdomσ : Env.dom σ = Query.freeVars (encodeQuery q' n).1 [] := by
+          have h' := hσ
+          simp only [matchQuery, List.mem_filter, mem_assignments] at h'
+          exact h'.1.1
+        rw [hagree w]
+        refine Env.lookup_eq_none_iff.mpr fun hd => ?_
+        rw [hdomσ] at hd
+        obtain ⟨a, ha, hva⟩ := Query.mem_freeVars.mp hd
+        rcases mem_vars_encodeQuery q' n
+          (Query.mem_vars.mpr ⟨a, ha, (a.mem_freeVars.mp hva).1⟩) with hat' | hsrc
+        · exact hwat hat'
+        · exact hwq hsrc
+      have hv' : v ∈ Query.vars q' ∨
+          (Env.lookup v sd.env).isSome ∧ v ∉ Query.vars q' ∧ Env.lookup v τ' = none := by
+        by_cases hvq : v ∈ Query.vars q'
+        · exact Or.inl hvq
+        · have hglobv : (Env.lookup v sd.env).isSome := by
+            rcases List.mem_union_iff.mp hv with hv' | hv'
+            · exact Env.lookup_isSome_iff_mem_dom.mpr hv'
+            · obtain ⟨e', hlk⟩ := Option.ne_none_iff_exists'.mp
+                (Query.lookupG_ne_none_of_not_mem_vars_substGlobals hgi.closed hv' hvq)
+              obtain ⟨-, -, t, -, hbind⟩ := hgi v e' hlk
+              rw [hbind]; rfl
+          exact Or.inr ⟨hglobv, hvq, hnotau v hglobv hvq⟩
+      change Env.lookup v (σ ++ d.env) = Env.lookup v (τ ++ sd.env)
+      rw [← Env.Agree.append_right d.env hagree v]
+      exact lookup_eq_of_at_ids hvs hglobτ hk hread hdomτ hτ hv'
     · intro t ht
       exact mem_terms_of_ruleFired hc hstep hsrule hrs hqτ hlocal
         (Database.terms_setEnvRules ▸ ht)
@@ -4637,7 +4700,7 @@ obligation is discharged, one per writer `encode` emits — `entrySound_build`,
     so it is carried as the source-run invariant `Database.NoLits`, whose data clause
     `Database.LitFree` says no term the source holds is a literal.
     `exists_step_of_mem_evalActions` is the environment part the old text called for: an action
-    after a `letBind` runs at `src.env ++ τ` extended by the block's own binders, and where the
+    after a `letBind` runs at `τ ++ src.env` extended by the block's own binders, and where the
     head mentions none of them (`hlet`) the extension drops out by `Expr.eval_agreeOn`, which is
     the shape `hfired` is stated in.
 
@@ -5040,8 +5103,9 @@ theorem FDatabase.EncBase.firingsEntryRows {P : Program} (hdom : P.EncodeDomain)
   have hshape : Signature.MergeShape d.sig := by rw [hb.sig]; exact encodeSig_mergeShape P
   refine execLocalActions_entryRowsUF hshape hb.inv (hb.wl' r hrm) ?_
     (mem_terms_of_mem_matchQuery hσ) h he
-  rcases hb.rules r hrm with ⟨s, G, i, n, hmem, rfl⟩ | hmaint
-  · exact encodeRule_entrySafe hdom hmem G i n
+  rcases hb.rules r hrm with ⟨s, G, i, n, ρ, hmem, rfl⟩ | hmaint
+  · rw [Rule.resolveGlobals_actions]
+    exact encodeRule_entrySafe hdom hmem G i n
   · exact maintenance_entrySafe (r := { r with ruleset := rebuildRuleset })
       (mem_maintenanceRules_of_mem_all hmaint)
 
@@ -5114,7 +5178,7 @@ theorem FDatabase.EncBase.execCmdM_entryRowsUF {P : Program} (hdom : P.EncodeDom
     · exact execAction_noUnions huf hb.nounions h₁
   | rule r =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
-    exact hs ▸ h.setEnvRules d.env (r :: d.rules)
+    exact hs ▸ h.setEnvRules d.env (r.resolveGlobals d.env :: d.rules)
   | run R =>
     rw [FDatabase.execCmdM] at hs
     exact runRoundM_entryRowsUF hshape (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions
@@ -5126,7 +5190,8 @@ theorem FDatabase.EncBase.execCmdM_entryRowsUF {P : Program} (hdom : P.EncodeDom
 
 /-- **A block of them.** -/
 theorem FDatabase.EncBase.execProgramM_entryRowsUF {P : Program} (hdom : P.EncodeDomain)
-    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c)
+    (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
     (hok : ∀ c ∈ p, c.EntryWriteOk) (hlet : ∀ c ∈ p, c.NoAtLet) :
     ∀ {d D : FDatabase}, d.EncBase P (encodeSig P) → d.EntryRowsUF →
@@ -5306,28 +5371,7 @@ theorem not_mem_rebuildVarNames {v : Var} {c : Char} (hv : v.toList = ['@', c]) 
 
 
 
-theorem Env.lookup_append_of_none {v : Var} {σ₁ σ₂ : Env} (h : Env.lookup v σ₁ = none) :
-    Env.lookup v (σ₁ ++ σ₂) = Env.lookup v σ₂ := by
-  induction σ₁ with
-  | nil => rfl
-  | cons b bs ih =>
-    obtain ⟨w, t⟩ := b
-    rw [Env.lookup_cons] at h
-    split at h
-    · exact absurd h (by simp)
-    · next hne => rw [List.cons_append, Env.lookup_cons, if_neg hne]; exact ih h
 
-theorem Env.lookup_append_of_some {v : Var} {t : Term} {σ₁ σ₂ : Env}
-    (h : Env.lookup v σ₁ = some t) : Env.lookup v (σ₁ ++ σ₂) = some t := by
-  induction σ₁ with
-  | nil => exact absurd h (by simp [Env.lookup])
-  | cons b bs ih =>
-    obtain ⟨w, u⟩ := b
-    rw [Env.lookup_cons] at h
-    rw [List.cons_append, Env.lookup_cons]
-    split
-    · next hveq => rwa [if_pos hveq] at h
-    · next hne => exact ih (by rwa [if_neg hne] at h)
 
 theorem Env.dom_zip_subset : ∀ (vs : List Var) (as : List Term), Env.dom (vs.zip as) ⊆ vs
   | [], _ => by simp [Env.dom]
@@ -5401,16 +5445,16 @@ theorem Expr.mem_freeVarsList_map_var : ∀ (vs : List Var) (σ : Env) {v : Var}
 `Env.canon`-shaped at `Query.freeVars`' own order and drawn from `FDatabase.valueTerms`; the
 per-atom check then reads it restricted to that atom, and the two restrictions compose. -/
 theorem mem_matchQuery_of_lookup {d : FDatabase} {q : Query} {τ : Env}
-    (hdef : ∀ v ∈ Query.freeVars q d.env, (Env.lookup v τ).isSome = true)
-    (hval : ∀ v ∈ Query.freeVars q d.env, ∀ t, Env.lookup v τ = some t → t ∈ d.valueTerms)
-    (hp : ∀ p ∈ q, patternHolds d p (Env.canon (p.freeVars d.env) τ) = true) :
-    Env.canon (Query.freeVars q d.env) τ ∈ matchQuery d q := by
+    (hdef : ∀ v ∈ Query.freeVars q [], (Env.lookup v τ).isSome = true)
+    (hval : ∀ v ∈ Query.freeVars q [], ∀ t, Env.lookup v τ = some t → t ∈ d.valueTerms)
+    (hp : ∀ p ∈ q, patternHolds d p (Env.canon (p.freeVars []) τ) = true) :
+    Env.canon (Query.freeVars q []) τ ∈ matchQuery d q := by
   rw [matchQuery, List.mem_filter]
   refine ⟨mem_assignments.mpr ⟨Env.dom_canon hdef, fun b hb => ?_⟩, List.all_eq_true.mpr ?_⟩
   · obtain ⟨hmem, hlk⟩ := Env.mem_canon hb
     exact hval b.1 hmem b.2 hlk
   · intro p hpq
-    rw [Env.canon_canon (Query.freeVars_subset hpq) (Query.freeVars_nodup q d.env)]
+    rw [Env.canon_canon (Query.freeVars_subset hpq) (Query.freeVars_nodup q [])]
     exact hp p hpq
 
 
@@ -5435,13 +5479,9 @@ theorem eclassRule_mem_maintenanceRules {P : Program} {f : FnName} {k : Nat}
   exact Or.inr (List.mem_flatMap.mpr ⟨(f, k), h, List.mem_cons_self⟩)
 
 /-- A generated query variable is read past the environment and off the substitution. -/
-theorem lookup_env_canon {d : FDatabase} (hnoat : d.NoAtEnv) {vars : List Var}
-    (hnd : vars.Nodup) {τ : Env} {v : Var} (hv : v ∈ vars) (hat : "@".isPrefixOf v = true) :
-    Env.lookup v (d.env ++ Env.canon vars τ) = Env.lookup v τ := by
-  rw [Env.lookup_append_of_none (Env.lookup_eq_none_iff.mpr (fun hc => ?_)),
-    Env.lookup_canon hnd hv]
-  obtain ⟨t, ht⟩ := Env.mem_dom_iff.mp hc
-  exact hnoat (v, t) ht hat
+theorem lookup_env_canon {d : FDatabase} (_hnoat : d.NoAtEnv) {vars : List Var}
+    (hnd : vars.Nodup) {τ : Env} {v : Var} (hv : v ∈ vars) (_hat : "@".isPrefixOf v = true) :
+    Env.lookup v (Env.canon vars τ) = Env.lookup v τ := Env.lookup_canon hnd hv
 
 theorem mem_addRow_rows_self {d : FDatabase} {g : FnName} {as vs : List Term} :
     (⟨g, as, vs⟩ : Row) ∈ (FDatabase.addRow g as vs d).rows := by
@@ -5513,8 +5553,8 @@ theorem freeVars_values_subset {vs cs : List Var} {g : FnName} {σ : Env} {v : V
     (fun hv => Expr.freeVarsList_map_var_subset cs σ hv)
 
 /-- Every variable the e-class rule's query leaves free is one of its six families. -/
-theorem mem_freeVars_eclassRule {d : FDatabase} {f : FnName} {k : Nat} {v : Var}
-    (h : v ∈ Query.freeVars (eclassRule f k).query d.env) :
+theorem mem_freeVars_eclassRule {f : FnName} {k : Nat} {v : Var}
+    (h : v ∈ Query.freeVars (eclassRule f k).query []) :
     v = "@e" ∨ v = "@p" ∨ v = "@x" ∨ v = "@q" ∨ v ∈ rebuildVarNames k := by
   obtain ⟨p, hp, hv⟩ := Query.mem_freeVars.mp h
   have hp2 : p = Pattern.values [.var "@e", .var "@p"] (viewName f) (rebuildVars k) ∨
@@ -5580,9 +5620,8 @@ theorem atPrefix_of_eclass_var {v : Var} {k : Nat}
 theorem mem_freeVars_view {d : FDatabase} (hnoat : d.NoAtEnv) {f : FnName} {k : Nat} {v : Var}
     (h : v = "@e" ∨ v = "@p" ∨ v ∈ rebuildVarNames k) :
     v ∈ (Pattern.values [Expr.var "@e", Expr.var "@p"] (viewName f)
-      (rebuildVars k)).freeVars d.env := by
-  have hn : Env.lookup v d.env = none :=
-    lookup_env_eq_none hnoat (atPrefix_of_eclass_var (k := k) (by tauto))
+      (rebuildVars k)).freeVars [] := by
+  have hn : Env.lookup v ([] : Env) = none := rfl
   rw [rebuildVars_eq_map]
   refine mem_freeVars_values (vs := ["@e", "@p"]) hn ?_
   rcases h with rfl | rfl | h'
@@ -5593,9 +5632,8 @@ theorem mem_freeVars_view {d : FDatabase} (hnoat : d.NoAtEnv) {f : FnName} {k : 
 theorem mem_freeVars_uf {d : FDatabase} (hnoat : d.NoAtEnv) {v : Var}
     (h : v = "@x" ∨ v = "@q" ∨ v = "@e") :
     v ∈ (Pattern.values [Expr.var "@x", Expr.var "@q"] ufName
-      [Expr.var "@e"]).freeVars d.env := by
-  have hn : Env.lookup v d.env = none :=
-    lookup_env_eq_none hnoat (atPrefix_of_eclass_var (k := 0) (by tauto))
+      [Expr.var "@e"]).freeVars [] := by
+  have hn : Env.lookup v ([] : Env) = none := rfl
   refine mem_freeVars_values (vs := ["@x", "@q"]) (cs := ["@e"]) hn ?_
   rcases h with rfl | rfl | rfl
   · exact Or.inl List.mem_cons_self
@@ -5626,7 +5664,7 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
   have hvq : q ∈ d.valueTerms := hvuf q (by simp)
   have hvc : ∀ t ∈ as, t ∈ d.valueTerms := fun t ht => hvrow t (by simp [ht])
   -- every free variable of the query is bound by `τ`, to a value
-  have hat : ∀ v ∈ Query.freeVars qy d.env, "@".isPrefixOf v = true := by
+  have hat : ∀ v ∈ Query.freeVars qy [], "@".isPrefixOf v = true := by
     intro v hv
     rcases mem_freeVars_eclassRule hv with rfl | rfl | rfl | rfl | hv'
     · exact (by decide +kernel : "@".isPrefixOf "@e" = true)
@@ -5634,7 +5672,8 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
     · exact (by decide +kernel : "@".isPrefixOf "@x" = true)
     · exact (by decide +kernel : "@".isPrefixOf "@q" = true)
     · exact atPrefix_rebuildVarNames hv'
-  have hlkv : ∀ v ∈ Query.freeVars qy d.env, ∃ t, Env.lookup v τ = some t ∧ t ∈ d.valueTerms := by
+  have hlkv : ∀ v ∈ Query.freeVars qy [],
+      ∃ t, Env.lookup v τ = some t ∧ t ∈ d.valueTerms := by
     intro v hv
     rcases mem_freeVars_eclassRule hv with rfl | rfl | rfl | rfl | hv'
     · exact ⟨e, lookup_eclassSubst_e, hve⟩
@@ -5648,31 +5687,31 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
         hvc _ (List.getElem_mem (by omega))⟩
   -- a variable of either atom reads off `τ`, past the environment and through both canons
   have hread : ∀ (vars : List Var), vars.Nodup →
-      (∀ v ∈ vars, v ∈ Query.freeVars qy d.env) → ∀ v ∈ vars,
-        Env.lookup v (d.env ++ Env.canon vars τ) = Env.lookup v τ :=
+      (∀ v ∈ vars, v ∈ Query.freeVars qy []) → ∀ v ∈ vars,
+        Env.lookup v (Env.canon vars τ) = Env.lookup v τ :=
     fun vars hnd hsub v hv => lookup_env_canon hb.noAtEnv hnd hv (hat v (hsub v hv))
   have hv₁ : Pattern.values [Expr.var "@e", Expr.var "@p"] (viewName f) (rebuildVars k) ∈ qy :=
     List.mem_cons_self
   have hv₂ : Pattern.values [Expr.var "@x", Expr.var "@q"] ufName [Expr.var "@e"] ∈ qy :=
     List.mem_cons_of_mem _ List.mem_cons_self
   have hr₁ : ∀ v, (v = "@e" ∨ v = "@p" ∨ v ∈ rebuildVarNames k) →
-      Env.lookup v (d.env ++ Env.canon
+      Env.lookup v (Env.canon
         ((Pattern.values [Expr.var "@e", Expr.var "@p"] (viewName f)
-          (rebuildVars k)).freeVars d.env) τ) = Env.lookup v τ := by
+          (rebuildVars k)).freeVars []) τ) = Env.lookup v τ := by
     intro v hv
-    exact hread _ (Pattern.freeVars_nodup _ d.env)
+    exact hread _ (Pattern.freeVars_nodup _ [])
       (fun w hw => Query.mem_freeVars.mpr ⟨_, hv₁, hw⟩) v (mem_freeVars_view hb.noAtEnv hv)
   have hr₂ : ∀ v, (v = "@x" ∨ v = "@q" ∨ v = "@e") →
-      Env.lookup v (d.env ++ Env.canon
+      Env.lookup v (Env.canon
         ((Pattern.values [Expr.var "@x", Expr.var "@q"] ufName
-          [Expr.var "@e"]).freeVars d.env) τ) = Env.lookup v τ := by
+          [Expr.var "@e"]).freeVars []) τ) = Env.lookup v τ := by
     intro v hv
-    exact hread _ (Pattern.freeVars_nodup _ d.env)
+    exact hread _ (Pattern.freeVars_nodup _ [])
       (fun w hw => Query.mem_freeVars.mpr ⟨_, hv₂, hw⟩) v (mem_freeVars_uf hb.noAtEnv hv)
   have hrq : ∀ v, (v = "@e" ∨ v = "@p" ∨ v = "@x" ∨ v = "@q" ∨ v ∈ rebuildVarNames k) →
-      Env.lookup v (d.env ++ Env.canon (Query.freeVars qy d.env) τ) = Env.lookup v τ := by
+      Env.lookup v (Env.canon (Query.freeVars qy []) τ) = Env.lookup v τ := by
     intro v hv
-    refine hread _ (Query.freeVars_nodup qy d.env) (fun w hw => hw) v ?_
+    refine hread _ (Query.freeVars_nodup qy []) (fun w hw => hw) v ?_
     rcases hv with rfl | rfl | rfl | rfl | hv'
     · exact Query.mem_freeVars.mpr ⟨_, hv₁, mem_freeVars_view hb.noAtEnv (Or.inl rfl)⟩
     · exact Query.mem_freeVars.mpr ⟨_, hv₁, mem_freeVars_view hb.noAtEnv (Or.inr (Or.inl rfl))⟩
@@ -5697,7 +5736,7 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
     · exact FDatabase.mem_terms_of_mem_valueTerms hvx
     · exact FDatabase.mem_terms_of_mem_valueTerms hvq
   -- the match
-  have hσ : Env.canon (Query.freeVars qy d.env) τ ∈ matchQuery d qy := by
+  have hσ : Env.canon (Query.freeVars qy []) τ ∈ matchQuery d qy := by
     refine mem_matchQuery_of_lookup (fun v hv => ?_) (fun v hv t ht => ?_) (fun p hp => ?_)
     · obtain ⟨t, ht, -⟩ := hlkv v hv; rw [ht]; rfl
     · obtain ⟨u, hu, hval⟩ := hlkv v hv
@@ -5719,13 +5758,13 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
             (hr₂ _ (Or.inr (Or.inl rfl)) ▸ lookup_eclassSubst_q)
   -- the head
   have hcs : Expr.evalList d.sig (rebuildVars k)
-      (d.env ++ Env.canon (Query.freeVars qy d.env) τ) = some as := by
+      (Env.canon (Query.freeVars qy []) τ) = some as := by
     refine evalList_rebuildVars hlen (fun i hi => ?_)
     rw [hrq _ (Or.inr (Or.inr (Or.inr (Or.inr (by
       rw [rebuildVarNames, List.mem_map]
       exact ⟨i, List.mem_range.mpr hi, rfl⟩))))), lookup_eclassSubst_col hlen hi]
   have hout : Expr.evalList d.sig [Expr.var "@x", transE (.var "@p") (.var "@q")]
-      (d.env ++ Env.canon (Query.freeVars qy d.env) τ)
+      (Env.canon (Query.freeVars qy []) τ)
       = some [x, Term.app transName [pf, q]] := by
     rw [Expr.evalList, Expr.eval, hrq _ (Or.inr (Or.inr (Or.inl rfl))), lookup_eclassSubst_x,
       Option.bind_some, Expr.evalList,
@@ -5733,14 +5772,16 @@ theorem eclassRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
         (hrq _ (Or.inr (Or.inr (Or.inr (Or.inl rfl)))) ▸ lookup_eclassSubst_q),
       Option.bind_some, Expr.evalList]
     rfl
+  have hcs' := Expr.evalList_append_env (τ := d.env) _ hcs
+  have hout' := Expr.evalList_append_env (τ := d.env) _ hout
   refine mem_rows_execRunRules.mpr (Or.inr ⟨eclassRule f k,
     hb.held _ (eclassRule_mem_maintenanceRules hfk), rfl, _, hσ,
     { FDatabase.addRow (viewName f) as [x, Term.app transName [pf, q]]
-        { d with env := d.env ++ Env.canon (Query.freeVars qy d.env) τ } with
+        { d with env := Env.canon (Query.freeVars qy []) τ ++ d.env } with
       env := d.env, rules := d.rules }, ?_, mem_addRow_rows_self⟩)
   change execLocalActions d (eclassRule f k).actions _ = some _
   rw [eclassRule, execLocalActions]
-  simp only [execActions, Egglog.execAction, hcs, Option.bind_some, hout, Option.map_some]
+  simp only [execActions, Egglog.execAction, hcs', Option.bind_some, hout', Option.map_some]
 
 /-! ### The other rebuild rule
 
@@ -5791,8 +5832,8 @@ theorem columnRule_mem_maintenanceRules {P : Program} {f : FnName} {k i : Nat}
   rw [rebuildRules]
   exact List.mem_cons_of_mem _ (List.mem_map.mpr ⟨i, List.mem_range.mpr hi, rfl⟩)
 
-theorem mem_freeVars_columnRule {d : FDatabase} {f : FnName} {k i : Nat} (hi : i < k) {v : Var}
-    (h : v ∈ Query.freeVars (columnRule f k i).query d.env) :
+theorem mem_freeVars_columnRule {f : FnName} {k i : Nat} (hi : i < k) {v : Var}
+    (h : v ∈ Query.freeVars (columnRule f k i).query []) :
     v = "@e" ∨ v = "@p" ∨ v = "@x" ∨ v = "@q" ∨ v ∈ rebuildVarNames k := by
   obtain ⟨p, hp, hv⟩ := Query.mem_freeVars.mp h
   have hp2 : p = Pattern.values [.var "@e", .var "@p"] (viewName f) (rebuildVars k) ∨
@@ -5817,13 +5858,8 @@ theorem mem_freeVars_columnRule {d : FDatabase} {f : FnName} {k i : Nat} (hi : i
 theorem mem_freeVars_ufc {d : FDatabase} (hnoat : d.NoAtEnv) {i : Nat} {v : Var}
     (h : v = "@x" ∨ v = "@q" ∨ v = "@c" ++ toString i) :
     v ∈ (Pattern.values [Expr.var "@x", Expr.var "@q"] ufName
-      [Expr.var ("@c" ++ toString i)]).freeVars d.env := by
-  have hn : Env.lookup v d.env = none := by
-    refine lookup_env_eq_none hnoat ?_
-    rcases h with rfl | rfl | rfl
-    · exact (by decide +kernel : "@".isPrefixOf "@x" = true)
-    · exact (by decide +kernel : "@".isPrefixOf "@q" = true)
-    · exact atPrefix_colVar i
+      [Expr.var ("@c" ++ toString i)]).freeVars [] := by
+  have hn : Env.lookup v ([] : Env) = none := rfl
   refine mem_freeVars_values (vs := ["@x", "@q"]) (cs := ["@c" ++ toString i]) hn ?_
   rcases h with rfl | rfl | rfl
   · exact Or.inl List.mem_cons_self
@@ -5929,7 +5965,7 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
   have hvx : x ∈ d.valueTerms := hvuf x (by simp)
   have hvq : q ∈ d.valueTerms := hvuf q (by simp)
   have hvc : ∀ t ∈ as, t ∈ d.valueTerms := fun t ht => hvrow t (by simp [ht])
-  have hat : ∀ v ∈ Query.freeVars qy d.env, "@".isPrefixOf v = true := by
+  have hat : ∀ v ∈ Query.freeVars qy [], "@".isPrefixOf v = true := by
     intro v hv
     rcases mem_freeVars_columnRule hi hv with rfl | rfl | rfl | rfl | hv'
     · exact (by decide +kernel : "@".isPrefixOf "@e" = true)
@@ -5937,7 +5973,8 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
     · exact (by decide +kernel : "@".isPrefixOf "@x" = true)
     · exact (by decide +kernel : "@".isPrefixOf "@q" = true)
     · exact atPrefix_rebuildVarNames hv'
-  have hlkv : ∀ v ∈ Query.freeVars qy d.env, ∃ t, Env.lookup v τ = some t ∧ t ∈ d.valueTerms := by
+  have hlkv : ∀ v ∈ Query.freeVars qy [],
+      ∃ t, Env.lookup v τ = some t ∧ t ∈ d.valueTerms := by
     intro v hv
     rcases mem_freeVars_columnRule hi hv with rfl | rfl | rfl | rfl | hv'
     · exact ⟨e, lookup_eclassSubst_e, hve⟩
@@ -5950,8 +5987,8 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
       exact ⟨as[j]'(by omega), lookup_eclassSubst_col hlen hj,
         hvc _ (List.getElem_mem (by omega))⟩
   have hread : ∀ (vars : List Var), vars.Nodup →
-      (∀ v ∈ vars, v ∈ Query.freeVars qy d.env) → ∀ v ∈ vars,
-        Env.lookup v (d.env ++ Env.canon vars τ) = Env.lookup v τ :=
+      (∀ v ∈ vars, v ∈ Query.freeVars qy []) → ∀ v ∈ vars,
+        Env.lookup v (Env.canon vars τ) = Env.lookup v τ :=
     fun vars hnd hsub v hv => lookup_env_canon hb.noAtEnv hnd hv (hat v (hsub v hv))
   have hv₁ : Pattern.values [Expr.var "@e", Expr.var "@p"] (viewName f) (rebuildVars k) ∈ qy :=
     List.mem_cons_self
@@ -5960,23 +5997,23 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
   have hcmem : ("@c" ++ toString i) ∈ rebuildVarNames k := by
     rw [rebuildVarNames, List.mem_map]; exact ⟨i, List.mem_range.mpr hi, rfl⟩
   have hr₁ : ∀ v, (v = "@e" ∨ v = "@p" ∨ v ∈ rebuildVarNames k) →
-      Env.lookup v (d.env ++ Env.canon
+      Env.lookup v (Env.canon
         ((Pattern.values [Expr.var "@e", Expr.var "@p"] (viewName f)
-          (rebuildVars k)).freeVars d.env) τ) = Env.lookup v τ := by
+          (rebuildVars k)).freeVars []) τ) = Env.lookup v τ := by
     intro v hv
-    exact hread _ (Pattern.freeVars_nodup _ d.env)
+    exact hread _ (Pattern.freeVars_nodup _ [])
       (fun w hw => Query.mem_freeVars.mpr ⟨_, hv₁, hw⟩) v (mem_freeVars_view hb.noAtEnv hv)
   have hr₂ : ∀ v, (v = "@x" ∨ v = "@q" ∨ v = "@c" ++ toString i) →
-      Env.lookup v (d.env ++ Env.canon
+      Env.lookup v (Env.canon
         ((Pattern.values [Expr.var "@x", Expr.var "@q"] ufName
-          [Expr.var ("@c" ++ toString i)]).freeVars d.env) τ) = Env.lookup v τ := by
+          [Expr.var ("@c" ++ toString i)]).freeVars []) τ) = Env.lookup v τ := by
     intro v hv
-    exact hread _ (Pattern.freeVars_nodup _ d.env)
+    exact hread _ (Pattern.freeVars_nodup _ [])
       (fun w hw => Query.mem_freeVars.mpr ⟨_, hv₂, hw⟩) v (mem_freeVars_ufc hb.noAtEnv hv)
   have hrq : ∀ v, (v = "@e" ∨ v = "@p" ∨ v = "@x" ∨ v = "@q" ∨ v ∈ rebuildVarNames k) →
-      Env.lookup v (d.env ++ Env.canon (Query.freeVars qy d.env) τ) = Env.lookup v τ := by
+      Env.lookup v (Env.canon (Query.freeVars qy []) τ) = Env.lookup v τ := by
     intro v hv
-    refine hread _ (Query.freeVars_nodup qy d.env) (fun w hw => hw) v ?_
+    refine hread _ (Query.freeVars_nodup qy []) (fun w hw => hw) v ?_
     rcases hv with rfl | rfl | rfl | rfl | hv'
     · exact Query.mem_freeVars.mpr ⟨_, hv₁, mem_freeVars_view hb.noAtEnv (Or.inl rfl)⟩
     · exact Query.mem_freeVars.mpr ⟨_, hv₁, mem_freeVars_view hb.noAtEnv (Or.inr (Or.inl rfl))⟩
@@ -6000,7 +6037,7 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
         (hcieq ▸ hvc _ (List.getElem_mem hilen))
     · exact FDatabase.mem_terms_of_mem_valueTerms hvx
     · exact FDatabase.mem_terms_of_mem_valueTerms hvq
-  have hσ : Env.canon (Query.freeVars qy d.env) τ ∈ matchQuery d qy := by
+  have hσ : Env.canon (Query.freeVars qy []) τ ∈ matchQuery d qy := by
     refine mem_matchQuery_of_lookup (fun v hv => ?_) (fun v hv t ht => ?_) (fun p hp => ?_)
     · obtain ⟨t, ht, -⟩ := hlkv v hv; rw [ht]; rfl
     · obtain ⟨u, hu, hval⟩ := hlkv v hv
@@ -6022,7 +6059,7 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
         · exact Expr.evalList_pair_var (hr₂ _ (Or.inl rfl) ▸ lookup_eclassSubst_x)
             (hr₂ _ (Or.inr (Or.inl rfl)) ▸ lookup_eclassSubst_q)
   have hcs : Expr.evalList d.sig ((rebuildVars k).set i (.var "@x"))
-      (d.env ++ Env.canon (Query.freeVars qy d.env) τ) = some (as.set i x) := by
+      (Env.canon (Query.freeVars qy []) τ) = some (as.set i x) := by
     refine evalList_rebuildVars_set hlen
       (by rw [hrq _ (Or.inr (Or.inr (Or.inl rfl)))]; exact lookup_eclassSubst_x)
       (fun j hj => ?_)
@@ -6031,7 +6068,7 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
       exact ⟨j, List.mem_range.mpr hj, rfl⟩))))), lookup_eclassSubst_col hlen hj]
   have hout : Expr.evalList d.sig
       [Expr.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]
-      (d.env ++ Env.canon (Query.freeVars qy d.env) τ)
+      (Env.canon (Query.freeVars qy []) τ)
       = some [e, columnProof k i pf q] := by
     rw [Expr.evalList, Expr.eval, hrq _ (Or.inl rfl), lookup_eclassSubst_e,
       Option.bind_some, Expr.evalList,
@@ -6041,14 +6078,16 @@ theorem columnRule_fires {P : Program} {d : FDatabase} (hb : d.EncBase P (encode
         (by rw [hrq _ (Or.inr (Or.inr (Or.inr (Or.inl rfl))))]; exact lookup_eclassSubst_q),
       Option.bind_some, Expr.evalList]
     rfl
+  have hcs' := Expr.evalList_append_env (τ := d.env) _ hcs
+  have hout' := Expr.evalList_append_env (τ := d.env) _ hout
   refine mem_rows_execRunRules.mpr (Or.inr ⟨columnRule f k i,
     hb.held _ (columnRule_mem_maintenanceRules hfk hi), rfl, _, hσ,
     { FDatabase.addRow (viewName f) (as.set i x) [e, columnProof k i pf q]
-        { d with env := d.env ++ Env.canon (Query.freeVars qy d.env) τ } with
+        { d with env := Env.canon (Query.freeVars qy []) τ ++ d.env } with
       env := d.env, rules := d.rules }, ?_, mem_addRow_rows_self⟩)
   change execLocalActions d (columnRule f k i).actions _ = some _
   rw [columnRule, execLocalActions]
-  simp only [execActions, Egglog.execAction, hcs, Option.bind_some, hout, Option.map_some]
+  simp only [execActions, Egglog.execAction, hcs', Option.bind_some, hout', Option.map_some]
 
 /-- **The fixpoint's roots**: at a rebuild fixpoint no surviving view row's e-class column has an
 outgoing `@UF` row. The firing is `eclassRule_fires`, and `FDatabase.RowColumnsValued` — that a
@@ -6353,13 +6392,13 @@ theorem execLocalActions_valued {d d' : FDatabase} {as : List Action} {σ : Env}
     (hrun : execLocalActions d as σ = some d') : d'.Valued := by
   rw [execLocalActions] at hrun
   obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp hrun
-  have hd : ({ d with env := d.env ++ σ } : FDatabase).Valued := by
+  have hd : ({ d with env := σ ++ d.env } : FDatabase).Valued := by
     refine ⟨h.terms, fun b hb => ?_⟩
     rcases List.mem_append.mp hb with hb' | hb'
-    · exact h.env b hb'
     · exact hσ b hb'
+    · exact h.env b hb'
   have hm' := execActions_valued as hd hm
-  have hsig : m.sig = d.sig := FDatabase.execActions_sig (d := { d with env := d.env ++ σ }) hm
+  have hsig : m.sig = d.sig := FDatabase.execActions_sig (d := { d with env := σ ++ d.env }) hm
   refine hm'.setEnv (fun b hb => ?_)
   rw [hsig]
   exact h.env b hb
@@ -6578,7 +6617,7 @@ theorem FDatabase.EncBase.execCmdM_valued {P : Program} {d d' : FDatabase} {c : 
     · exact execAction_noUnions huf hb.nounions h₁
   | rule r =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
-    exact hs ▸ h.setRules (r :: d.rules)
+    exact hs ▸ h.setRules (r.resolveGlobals d.env :: d.rules)
   | run R =>
     rw [FDatabase.execCmdM] at hs
     exact runRoundM_valued (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions hb.wl' h hs
@@ -6818,29 +6857,29 @@ theorem execLocalActions_ufTermsDescend {d e : FDatabase} {as : List Action} {σ
     (hs : execLocalActions d as σ = some e) : e.UFTermsDescend := by
   rw [execLocalActions] at hs
   obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp hs
-  have hinv' : ({ d with env := d.env ++ σ } : FDatabase).Inv := by
+  have hinv' : ({ d with env := σ ++ d.env } : FDatabase).Inv := by
     refine hinv.setEnv (fun b hb => ?_)
     rw [FDatabase.mem_toDatabase_terms]
     rcases List.mem_append.mp hb with hb' | hb'
+    · exact hσ b hb'
     · have h' := hinv.wf.envInTerms b (by rw [FDatabase.toDatabase_env]; exact hb')
       rwa [FDatabase.mem_toDatabase_terms] at h'
-    · exact hσ b hb'
-  exact (execActions_ufTermsDescend as hsafe hentry (d := { d with env := d.env ++ σ })
+  exact (execActions_ufTermsDescend as hsafe hentry (d := { d with env := σ ++ d.env })
     hinv' hwl (h.of_terms_sub fun _ ht => ht) hm).of_terms_sub fun _ ht => ht
 
 
 /-- **The bindings a firing reads**, at the environment a rule head runs in. -/
 theorem entryShaped_bind_of_match {d : FDatabase} (hinv : d.Inv) {σ : Env}
     (hσ : ∀ b ∈ σ, b.2 ∈ d.terms) :
-    ∀ (v : Var) (u : Term), Env.lookup v (d.env ++ σ) = some u →
+    ∀ (v : Var) (u : Term), Env.lookup v (σ ++ d.env) = some u →
       ∀ s ∈ u.subtermList, s.EntryShaped → s ∈ d.terms := by
   have hsc : d.SubtermClosed := FDatabase.SubtermClosed.of_wf hinv.wf
   intro v u hu
   refine entryShaped_mem_of_held hsc ?_
   rcases List.mem_append.mp (Env.mem_of_lookup hu) with hb | hb
+  · exact hσ (v, u) hb
   · have h := hinv.wf.envInTerms (v, u) (by rw [FDatabase.toDatabase_env]; exact hb)
     rwa [FDatabase.mem_toDatabase_terms] at h
-  · exact hσ (v, u) hb
 
 /-- **`pathCompressRule`'s firing descends over entry terms too**, by the same composition of
 the two **rows** its query matched — `mem_rows_of_patternHolds_values` is what makes the reading
@@ -6885,10 +6924,10 @@ theorem pathCompressRule_ufTermsDescend {d e : FDatabase} {σ : Env} (hinv : d.I
   subst hm₂'
   obtain ⟨es, vsh, hes, hvsh, rfl⟩ := execAction_set hm₁'
   obtain ⟨va', hla', rfl⟩ := Expr.evalList_singleton hes
-  obtain rfl : va = va' := Option.some.inj (hla.symm.trans hla')
+  obtain rfl : va = va' := Option.some.inj ((Expr.eval_append_env _ hla).symm.trans hla')
   obtain ⟨vc', pf, hlc', -, rfl⟩ := Expr.evalList_pair hvsh
-  obtain rfl : vc = vc' := Option.some.inj (hlc.symm.trans hlc')
-  refine (FDatabase.UFTermsDescend.addRow' (d := { d with env := d.env ++ σ })
+  obtain rfl : vc = vc' := Option.some.inj ((Expr.eval_append_env _ hlc).symm.trans hlc')
+  refine (FDatabase.UFTermsDescend.addRow' (d := { d with env := σ ++ d.env })
     (h.of_terms_sub fun _ hx => hx) ?_ ?_).of_terms_sub fun _ hx => hx
   · intro a₀ b₀ pf₀ heq
     have hcols : [va, vc, pf] = [a₀, b₀, pf₀] := (Term.app.inj heq).2
@@ -6930,10 +6969,11 @@ theorem FDatabase.EncBase.firingsUFTermsDescend {P : Program} (hdom : P.EncodeDo
   have hmg : d.sig.mergeOf ufName ≠ none := by
     rw [hb.sig]; exact encodeSig_mergeOf_ufName hdom
   intro r hrm σ hσ e he
-  rcases hb.rules r hrm with ⟨s, G, i, n, hmem, rfl⟩ | hmaint
+  rcases hb.rules r hrm with ⟨s, G, i, n, ρ, hmem, rfl⟩ | hmaint
   · refine execLocalActions_ufTermsDescend hb.inv (hb.wl' _ hrm) ?_
-      (encodeRule_entrySafe hdom hmem G i n) (mem_terms_of_mem_matchQuery hσ) h he
-    rw [encodeRule_actions]
+      (by rw [Rule.resolveGlobals_actions]; exact encodeRule_entrySafe hdom hmem G i n)
+      (mem_terms_of_mem_matchQuery hσ) h he
+    rw [Rule.resolveGlobals_actions, encodeRule_actions]
     exact encodeActions_ufWriteSafe _ (s.substGlobals G).actions _
   · exact maintenance_ufTermsDescend (mem_maintenanceRules_of_mem_all hmaint) hb.inv hb.eqsRefl
       hmg (hb.wl' r hrm) hdes h hσ he
@@ -7251,7 +7291,8 @@ theorem FDatabase.EncBase.execCmdM_ufTermsDescend {P : Program} (hdom : P.Encode
 
 /-- **A block of them.** -/
 theorem FDatabase.EncBase.execProgramM_ufTermsDescend {P : Program} (hdom : P.EncodeDomain)
-    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
+    {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c)
+    (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
     (hok : ∀ c ∈ p, c.UFWriteOk) (hent : ∀ c ∈ p, c.EntryWriteOk)
     (hlet : ∀ c ∈ p, c.NoAtLet) :
@@ -8309,14 +8350,14 @@ No congruence closure is asked of anything: `patternHolds_values_of_mem_rows` ne
 reflexive pairs. That is what keeps `Signature.AllConstructors` — and with it
 `execRunRules_RunRules`, which an encoded target cannot satisfy — off the route entirely. -/
 theorem mem_matchQuery_of_rows {d : FDatabase} (hcv : d.RowColumnsValued) {q : Query} {τ : Env}
-    (hdef : ∀ v ∈ Query.freeVars q d.env, (Env.lookup v τ).isSome = true)
-    (hval : ∀ v ∈ Query.freeVars q d.env, ∀ t, Env.lookup v τ = some t → t ∈ d.valueTerms)
+    (hdef : ∀ v ∈ Query.freeVars q [], (Env.lookup v τ).isSome = true)
+    (hval : ∀ v ∈ Query.freeVars q [], ∀ t, Env.lookup v τ = some t → t ∈ d.valueTerms)
     (hrow : ∀ p ∈ q, ∃ vs f as ts us, p = Pattern.values vs f as ∧
       (d.sig.mergeOf f).isSome = true ∧
-      Expr.evalList d.sig as (d.env ++ Env.canon (p.freeVars d.env) τ) = some ts ∧
-      Expr.evalList d.sig vs (d.env ++ Env.canon (p.freeVars d.env) τ) = some us ∧
+      Expr.evalList d.sig as (Env.canon (p.freeVars []) τ) = some ts ∧
+      Expr.evalList d.sig vs (Env.canon (p.freeVars []) τ) = some us ∧
       (⟨f, ts, us⟩ : Row) ∈ d.rows) :
-    Env.canon (Query.freeVars q d.env) τ ∈ matchQuery d q := by
+    Env.canon (Query.freeVars q []) τ ∈ matchQuery d q := by
   refine mem_matchQuery_of_lookup hdef hval fun p hp => ?_
   obtain ⟨vs, f, as, ts, us, rfl, hmg, hats, hvus, hr⟩ := hrow p hp
   exact patternHolds_values_of_mem_rows hmg hats hvus hr
@@ -8403,10 +8444,10 @@ theorem ncTgt_rowColumnsValued : ncTgt.RowColumnsValued := by
 id `(A)` that `(B)`'s row records, and at the read's own two columns. -/
 def ncIdSubst : Env := [("@v0", ncFA), ("@v1", ncFiat), ("x", ncA)]
 
-theorem ncTgt_freeVars : Query.freeVars ncEncRule.query ncTgt.env = ["@v0", "@v1", "x"] := rfl
+theorem ncTgt_freeVars : Query.freeVars ncEncRule.query [] = ["@v0", "@v1", "x"] := rfl
 
 theorem ncTgt_canon :
-    Env.canon (Query.freeVars ncEncRule.query ncTgt.env) ncIdSubst = ncIdSubst := rfl
+    Env.canon (Query.freeVars ncEncRule.query []) ncIdSubst = ncIdSubst := rfl
 
 /-- **The encoded query matches at the id substitution.** -/
 theorem ncTgt_mem_matchQuery : ncIdSubst ∈ matchQuery ncTgt ncEncRule.query := by
@@ -8585,12 +8626,7 @@ theorem freshVar_inj {i j : Nat} (h : freshVar i = freshVar j) : i = j := by
   rw [freshVar, freshVar, String.toList_append, String.toList_append] at h2
   exact toString_nat_inj (String.toList_inj.mp (List.append_cancel_left h2))
 
-/-- **And it is in the generated namespace**, which is what keeps it clear of the source's own
-variables and of `FDatabase.NoAtEnv`'s environment. -/
-theorem atPrefix_freshVar (n : Nat) : "@".isPrefixOf (freshVar n) = true := by
-  rw [freshVar, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
-    show ("@v").toList = ['@', 'v'] from by decide]
-  exact ⟨'v' :: (toString n).toList, rfl⟩
+
 
 /-- A binding of an environment with distinct keys is the one `lookup` finds. -/
 theorem Env.lookup_of_mem_nodup : ∀ {σ : Env} {b : Var × Term}, b ∈ σ →
@@ -9013,52 +9049,36 @@ theorem EncAtom.lookup_isSome {d : FDatabase} {ρ : Env} {a : Pattern} (h : EncA
       exact hv.elim (fun hx => Expr.lookup_isSome_of_mem_varsList hus hx)
         (fun hx => Expr.lookup_isSome_of_mem_varsList hts hx)
 
-/-- **Restricting the substitution is invisible where the environment answers or the
-restriction keeps.** The two cases of `Env.canon` under `d.env`: a variable the environment
-binds is read off the environment either way, and one it does not is one the restriction
-retains. -/
-theorem lookup_canon_agree {d : FDatabase} {τ : Env} {vs : List Var} (hnd : vs.Nodup)
-    {v : Var} (hv : Env.lookup v d.env = none → v ∈ vs) :
-    Env.lookup v (d.env ++ Env.canon vs τ) = Env.lookup v (d.env ++ τ) := by
-  cases hd : Env.lookup v d.env with
-  | some t => rw [Env.lookup_append_of_some hd, Env.lookup_append_of_some hd]
-  | none =>
-      rw [Env.lookup_append_of_none hd, Env.lookup_append_of_none hd,
-        Env.lookup_canon hnd (hv hd)]
-
-/-- **The link at the substitution the enumerator offers.** What a rule head reads is
-`Env.canon`-restricted, and this is `lookup_canon_agree` in the form the head consumes. -/
-theorem lookup_canon_of_mem_freeVars {d : FDatabase} {q : Query} {τ : Env} {v : Var} {j : Term}
-    (hv : (Env.lookup v d.env).isSome ∨ v ∈ Query.freeVars q d.env)
-    (h : Env.lookup v (d.env ++ τ) = some j) :
-    Env.lookup v (d.env ++ Env.canon (Query.freeVars q d.env) τ) = some j := by
-  rw [lookup_canon_agree (Query.freeVars_nodup q d.env)
-    (fun hd => hv.resolve_left (by rw [hd]; simp))]
-  exact h
+/-- **The restriction is invisible at the pattern's own variables.** `matchQuery` reads the
+restricted substitution alone — the state's environment says nothing about a query
+(`Spec/Match.lean`'s `ValidSubst`) — so a variable the pattern mentions is one the restriction
+keeps and reads exactly as the unrestricted one does. -/
+theorem lookup_canon_agree {τ : Env} {a : Pattern} {v : Var} (hv : v ∈ a.vars) :
+    Env.lookup v (Env.canon (a.freeVars []) τ) = Env.lookup v τ :=
+  Env.lookup_canon (Pattern.freeVars_nodup a [])
+    (Pattern.mem_freeVars_of_mem_vars hv (by simp))
 
 /-- **An answered atom is one `patternHolds` accepts.** A read is
 `patternHolds_values_of_mem_rows` at the row's own columns; a comparison is the one id, whose
 reflexive pair the target's own closure has because the target holds it. -/
 theorem patternHolds_of_encAtom {d : FDatabase} {τ : Env} {a : Pattern}
-    (hcv : d.RowColumnsValued) (h : EncAtom d (d.env ++ τ) a) :
-    patternHolds d a (Env.canon (a.freeVars d.env) τ) = true := by
-  have hagree : ∀ v ∈ a.vars, Env.lookup v (d.env ++ Env.canon (a.freeVars d.env) τ)
-      = Env.lookup v (d.env ++ τ) := fun v hv =>
-    lookup_canon_agree (Pattern.freeVars_nodup a d.env)
-      (fun hd => Pattern.mem_freeVars_of_mem_vars hv hd)
+    (hcv : d.RowColumnsValued) (h : EncAtom d τ a) :
+    patternHolds d a (Env.canon (a.freeVars []) τ) = true := by
+  have hagree : ∀ v ∈ a.vars, Env.lookup v (Env.canon (a.freeVars []) τ)
+      = Env.lookup v τ := fun v hv => lookup_canon_agree hv
   cases a with
   | expr _ => exact absurd h id
   | eq e₁ e₂ =>
       obtain ⟨i, h₁, h₂, hi⟩ := h
-      have hv₁ : ∀ v ∈ e₁.vars, Env.lookup v (d.env ++ Env.canon _ τ)
-          = Env.lookup v (d.env ++ τ) :=
+      have hv₁ : ∀ v ∈ e₁.vars, Env.lookup v (Env.canon _ τ)
+          = Env.lookup v τ :=
         fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))
-      have hv₂ : ∀ v ∈ e₂.vars, Env.lookup v (d.env ++ Env.canon _ τ)
-          = Env.lookup v (d.env ++ τ) :=
+      have hv₂ : ∀ v ∈ e₂.vars, Env.lookup v (Env.canon _ τ)
+          = Env.lookup v τ :=
         fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv))
-      have he₁ : Expr.eval d.sig e₁ (d.env ++ Env.canon ((Pattern.eq e₁ e₂).freeVars d.env) τ)
+      have he₁ : Expr.eval d.sig e₁ (Env.canon ((Pattern.eq e₁ e₂).freeVars []) τ)
           = some i := by rw [Expr.eval_agreeOn e₁ hv₁]; exact h₁
-      have he₂ : Expr.eval d.sig e₂ (d.env ++ Env.canon ((Pattern.eq e₁ e₂).freeVars d.env) τ)
+      have he₂ : Expr.eval d.sig e₂ (Env.canon ((Pattern.eq e₁ e₂).freeVars []) τ)
           = some i := by rw [Expr.eval_agreeOn e₂ hv₂]; exact h₂
       have hmem : i ∈ ((d.addTerm i).addTerm i).terms := by
         simp only [FDatabase.mem_addTerm_terms]; exact Or.inr (Or.inr hi)
@@ -9068,11 +9088,11 @@ theorem patternHolds_of_encAtom {d : FDatabase} {τ : Env} {a : Pattern}
       exact Bool.and_eq_true_iff.mpr ⟨decide_eq_true hcl, decide_eq_true ⟨i, hi, hcl⟩⟩
   | values vs f as =>
       obtain ⟨hmg, ts, us, hts, hus, hrow⟩ := h
-      have hva : ∀ v ∈ Expr.varsList as, Env.lookup v (d.env ++ Env.canon _ τ)
-          = Env.lookup v (d.env ++ τ) :=
+      have hva : ∀ v ∈ Expr.varsList as, Env.lookup v (Env.canon _ τ)
+          = Env.lookup v τ :=
         fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv))
-      have hvv : ∀ v ∈ Expr.varsList vs, Env.lookup v (d.env ++ Env.canon _ τ)
-          = Env.lookup v (d.env ++ τ) :=
+      have hvv : ∀ v ∈ Expr.varsList vs, Env.lookup v (Env.canon _ τ)
+          = Env.lookup v τ :=
         fun v hv => hagree v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))
       refine patternHolds_values_of_mem_rows hmg ?_ ?_ hrow ?_
       · rw [Expr.evalList_agreeOn as hva]; exact hts
@@ -9088,51 +9108,39 @@ consistent by construction: the generated ones are numbered per block and the so
 not `@`-prefixed, so neither family shadows the other (`atPrefix_freshVar`,
 `FDatabase.NoAtEnv`, `hnoAtVar`).
 
-`hglob` is the one thing the *environment* has to say: `matchQuery` reads `d.env ++ σ`, so a
-source variable a global binds is read off the environment and not off the substitution, and
-the reading has to agree with it there. `lookup_canon_of_mem_freeVars` moves the link onto the
-restricted substitution a rule head runs at. -/
+**The environment has nothing to say.** `matchQuery` reads the substitution alone — a stored
+rule's query variables are all match variables, because the globals were resolved into it when
+the rule was declared (`Spec/Step.lean`'s `cmdEffect`) — so what used to be `hglob`, a clause
+about a variable a global binds beside the reading, is gone with the recapture that made it
+necessary. -/
 theorem mem_matchQuery_encodeQuery {sig : Signature} {d : FDatabase} {ρs ρt : Env}
-    (hcv : d.RowColumnsValued) (hnoat : d.NoAtEnv)
+    (hcv : d.RowColumnsValued)
     (hnoAtVar : ∀ b ∈ ρt, ¬ "@".isPrefixOf b.1 = true)
-    (hglob : ∀ (v : Var) (j t : Term), Env.lookup v ρt = some j →
-      Env.lookup v d.env = some t → t = j)
     (hvt : ∀ (v : Var) (j : Term), Env.lookup v ρt = some j → j ∈ d.valueTerms)
     {q : Query} (hq : ∀ p ∈ q, PatternRowRead sig d ρs ρt p) (n : Nat) :
     ∃ τ : Env,
-      Env.canon (Query.freeVars (encodeQuery q n).1 d.env) τ
+      Env.canon (Query.freeVars (encodeQuery q n).1 []) τ
         ∈ matchQuery d (encodeQuery q n).1 ∧
       ∀ (v : Var) (j : Term), Env.lookup v ρt = some j →
-        Env.lookup v (d.env ++ τ) = some j := by
+        Env.lookup v τ = some j := by
   obtain ⟨σ, hf, hp⟩ := exists_freshEnv_encodeQuery hcv hq n
   have hext : ∀ (v : Var) (j : Term), Env.lookup v ρt = some j →
-      Env.lookup v (d.env ++ (ρt ++ σ)) = some j := by
-    intro v j hj
-    cases hd : Env.lookup v d.env with
-    | some t =>
-        obtain rfl : t = j := hglob v j t hj hd
-        exact Env.lookup_append_of_some hd
-    | none =>
-        rw [Env.lookup_append_of_none hd]
-        exact Env.lookup_append_of_some hj
-  have hσρ : ∀ b ∈ σ, Env.lookup b.1 (d.env ++ (ρt ++ σ)) = some b.2 := by
+      Env.lookup v (ρt ++ σ) = some j := fun _ _ hj => Env.lookup_append_of_some hj
+  have hσρ : ∀ b ∈ σ, Env.lookup b.1 (ρt ++ σ) = some b.2 := by
     intro b hb
     obtain ⟨k, -, -, hk⟩ := hf.fresh b hb
-    have hde : Env.lookup b.1 d.env = none :=
-      hk ▸ lookup_env_eq_none hnoat (atPrefix_freshVar k)
     have hρt : Env.lookup b.1 ρt = none :=
       Env.lookup_eq_none_iff.mpr fun hc => by
         obtain ⟨t, ht⟩ := Env.mem_dom_iff.mp hc
         exact hnoAtVar (b.1, t) ht (hk ▸ atPrefix_freshVar k)
-    rw [Env.lookup_append_of_none hde, Env.lookup_append_of_none hρt]
+    rw [Env.lookup_append_of_none hρt]
     exact Env.lookup_of_mem_nodup hb hf.nodup
-  have hatoms := hp (d.env ++ (ρt ++ σ)) hσρ hext
+  have hatoms := hp (ρt ++ σ) hσρ hext
   refine ⟨ρt ++ σ, mem_matchQuery_of_lookup (fun v hv => ?_) (fun v hv t ht => ?_)
     (fun a ha => patternHolds_of_encAtom hcv (hatoms a ha)), hext⟩
   · obtain ⟨a, ha, hva⟩ := Query.mem_freeVars.mp hv
-    obtain ⟨hvars, hnone⟩ := Pattern.mem_vars_of_mem_freeVars hva
-    have := (hatoms a ha).lookup_isSome hvars
-    rwa [Env.lookup_append_of_none hnone] at this
+    obtain ⟨hvars, -⟩ := Pattern.mem_vars_of_mem_freeVars hva
+    exact (hatoms a ha).lookup_isSome hvars
   · rcases hlk : Env.lookup v ρt with _ | j
     · rw [Env.lookup_append_of_none hlk] at ht
       exact hf.valued (v, t) (Env.mem_of_lookup ht)
@@ -9206,11 +9214,11 @@ theorem ncTgtSubst_valued : ∀ (v : Var) (j : Term), Env.lookup v ncTgtSubst = 
 that binds the source rule's variable to the id its reading gave, and it is the one
 `ncTgt_mem_matchQuery` exhibits by hand. -/
 theorem ncTgt_mirror :
-    ∃ τ : Env, Env.canon (Query.freeVars ncEncRule.query ncTgt.env) τ
+    ∃ τ : Env, Env.canon (Query.freeVars ncEncRule.query []) τ
         ∈ matchQuery ncTgt ncEncRule.query ∧
-      Env.lookup "x" (ncTgt.env ++ τ) = some ncA := by
+      Env.lookup "x" τ = some ncA := by
   obtain ⟨τ, hm, hx⟩ := mem_matchQuery_encodeQuery (sig := ncSrcSig) (ρs := ncSrcSubst)
-    ncTgt_rowColumnsValued ncTgt_noAtEnv ncTgtSubst_noAt ncTgtSubst_glob ncTgtSubst_valued
+    ncTgt_rowColumnsValued ncTgtSubst_noAt ncTgtSubst_valued
     ncTgt_patternRowRead 0
   exact ⟨τ, ncEncRule_query_eq ▸ hm, hx "x" ncA rfl⟩
 
@@ -9407,10 +9415,10 @@ theorem patternRowRead_of_matches {sd : Database} {td : FDatabase} {σ ρt : Env
     (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
       (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
     (hidTerm : ∀ t r : Term, RowRepr td t r → r ∈ td.terms)
-    (hvar : ∀ (v : Var) (t : Term), Env.lookup v (sd.env ++ σ) = some t →
+    (hvar : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
       ∃ i, Env.lookup v ρt = some i ∧ RowRepr td t i)
     {p : Pattern} (hnv : p.NoValues) (hprim : ∀ g ∈ p.fns, Prim.ofName g = none)
-    (hm : Matches sd p σ) : PatternRowRead sd.sig td (sd.env ++ σ) ρt p := by
+    (hm : Matches sd p σ) : PatternRowRead sd.sig td σ ρt p := by
   cases hm with
   | expr hw hev hcong =>
       obtain ⟨r, hr⟩ := exists_rowRepr_congOn hjoin hunion hread hw hcong
@@ -9687,7 +9695,8 @@ theorem cxfTgt_not_sigMono : ¬ ∀ f, cxfSrc.sig.IsCtor f → cxfTgt.sig.IsCtor
 set_option maxRecDepth 10000 in
 /-- **And the source-rules clause holds at it**, so the two refutations violate *different*
 clauses: an empty query is `Cmd.QueryEncodable` and applies no name at all. -/
-theorem cxfSrc_queriesEncodable : ∀ r ∈ cxfSrc.rules, (Cmd.rule r).QueryEncodable ∧
+theorem cxfSrc_queriesEncodable : ∀ r ∈ cxfSrc.rules,
+    ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
     ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none := by
   intro r hr
   obtain rfl : r = cxfRule := hr
@@ -9963,7 +9972,7 @@ def UnionsFireAnyG : Prop :=
     (∀ r ∈ sd.rules,
       ∃ (G : List (Var × Expr)) (i n : Nat),
         (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i)) →
-    (∀ r ∈ sd.rules, (Cmd.rule r).QueryEncodable ∧
+    (∀ r ∈ sd.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
       ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) →
     td.RowColumnsValued →
     td.NoAtEnv →
@@ -10026,21 +10035,21 @@ def gxA : Term := Term.app "A" []
 Off `assignments` alone, with no hypothesis on the state — which is what lets a firing be
 refuted at a target whose closure does not reduce in the kernel. -/
 theorem dom_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
-    (h : σ ∈ matchQuery d q) : Env.dom σ = Query.freeVars q d.env := by
+    (h : σ ∈ matchQuery d q) : Env.dom σ = Query.freeVars q [] := by
   simp only [matchQuery, List.mem_filter, mem_assignments] at h
   exact h.1.1
 
 /-- **The encoded head is stuck at `y`**, whatever the substitution binds: `encodeBuild` keeps
 a source variable as itself, and the first `set` the head emits reads it. -/
-theorem gx_stuck {σ : Env} (h : Env.lookup "y" (rbEnv ++ σ) = none) :
+theorem gx_stuck {σ : Env} (h : Env.lookup "y" (σ ++ rbEnv) = none) :
     execLocalActions gxTgt gxEncRule.actions σ = none := by
   obtain ⟨rest, hact⟩ := (⟨_, rfl⟩ :
     ∃ rest, gxEncRule.actions
       = Action.set (termName "W") [.var "y", .app "W" [.var "y"]] [] :: rest)
   rw [execLocalActions, hact, execActions, execAction]
   have hev : Expr.evalList gxTgt.sig [Expr.var "y", .app "W" [.var "y"]]
-      ({ gxTgt with env := gxTgt.env ++ σ } : FDatabase).env = none := by
-    change Expr.evalList gxTgt.sig [Expr.var "y", .app "W" [.var "y"]] (rbEnv ++ σ) = none
+      ({ gxTgt with env := σ ++ gxTgt.env } : FDatabase).env = none := by
+    change Expr.evalList gxTgt.sig [Expr.var "y", .app "W" [.var "y"]] (σ ++ rbEnv) = none
     rw [Expr.evalList, Expr.eval, h]
     rfl
   simp [hev]
@@ -10054,9 +10063,9 @@ theorem gx_no_fire {σ : Env} (h : σ ∈ matchQuery gxTgt gxEncRule.query) :
   have h2 : Env.lookup "y" σ = none := by
     refine Env.lookup_eq_none_iff.mpr ?_
     rw [dom_of_mem_matchQuery h]
-    change "y" ∉ Query.freeVars gxEncRule.query rbEnv
+    change "y" ∉ Query.freeVars gxEncRule.query []
     decide +kernel
-  rw [Env.lookup_append_of_none h1, h2]
+  rw [Env.lookup_append_of_none h2, h1]
 
 /-- A round whose every firing is stuck is the identity, which is `fireInto`'s own answer to a
 head that does not evaluate. -/
@@ -10203,14 +10212,15 @@ theorem gxTgt_noAtEnv : gxTgt.NoAtEnv := rbState2_noAtEnv
 
 /-- **And the clause `unionsFire_false_encodeSig` withdrew holds too**: the source rule's query
 is grounded, keyed at `y`, has no entry atom and applies no primitive. -/
-theorem gxSrc_queriesEncodable : ∀ r ∈ gxSrc.rules, (Cmd.rule r).QueryEncodable ∧
+theorem gxSrc_queriesEncodable : ∀ r ∈ gxSrc.rules,
+    ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
     ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none := by
   intro r hr
   obtain rfl : r = gxRule := hr
   refine ⟨⟨?_, ?_⟩, ?_⟩
   · intro p hp
     obtain rfl : p = Pattern.expr (.app "W" [.var "y"]) := by simpa [gxRule] using hp
-    exact ⟨by intro l h; exact absurd h (by simp), trivial⟩
+    trivial
   · intro v hv
     obtain rfl : v = "y" := by simpa [gxRule, Query.vars, Pattern.vars, Expr.vars,
       Expr.varsList] using hv
@@ -10256,13 +10266,13 @@ to bind every name the substitution carries; `rbProgram` binds `x` and nothing e
 bound by nothing and the substituted query is one no source reading agrees with. -/
 theorem gxSrc_not_globalsInline : ¬ gxSrc.GlobalsInline gxG := by
   intro h
-  obtain ⟨-, t, -, hlk⟩ := h "y" (.app "A" []) rfl
+  obtain ⟨-, -, t, -, hlk⟩ := h "y" (.app "A" []) rfl
   have hnone : Env.lookup "y" gxSrc.env = none := by decide +kernel
   rw [hnone] at hlk
   exact absurd hlk (by simp)
 
 /-- **The command induction's rule-firing case. Open — and, after four refutations and their
-repairs, no longer standing at a false statement.**
+repairs and one specification fix, no longer standing at a false statement.**
 
 Its statement, its five closed siblings and the four refutations that fixed its hypotheses are
 in `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`)
@@ -10527,15 +10537,21 @@ threaded the way `Egglog.RowMech` is — never as provenance, which
   `mem_matchQuery_encodeQuery` both take: `matchQuery` draws its candidates from
   `FDatabase.valueTerms`, so a row column outside it is a row no substitution can name.
   `encReached_rowColumnsValued` is the discharge;
-* `FDatabase.NoAtEnv` at `td`, with `hnoAtVar` and `hglob` at the source rule's own variables:
-  `Query.freeVars` drops a variable the environment binds, so an `@`-prefixed binding reroutes
-  a *generated* variable to the environment's value. `FDatabase.EncBase.noAtEnv` is the
-  discharge;
-* the source rules' encodability — `Cmd.QueryEncodable` and
+* `FDatabase.NoAtEnv` at `td`, with `hnoAtVar` at the target reading's own variables: a
+  generated variable must not collide with a source one, which is what keeps
+  `exists_freshEnv_encodeQuery`'s block disjoint from `ρt`. `FDatabase.EncBase.noAtEnv` is the
+  discharge; the old `hglob` beside it is gone, because `matchQuery` no longer reads the
+  environment at all;
+* the source rules' encodability — `Pattern.NoValues` and `Query.VarsKeyed` and
   `∀ fk ∈ p.ctors, Prim.ofName fk.1 = none` at every pattern of every rule `sd.rules` holds,
   which `patternRowRead_of_matches` takes and which `Program.EncodeDomain.queryEncodable` and
-  `noPrim` pay for at the program. This one is a **source-run** invariant, since `UnionsFire`
-  is given no program: `Database.QueriesIn` is the property and `queriesIn_of_prefixStep` the
+  `noPrim` pay for at the program — *through the resolution a registration performs*, since a
+  stored rule's query is `Rule.resolveGlobals`'d (`Query.noValues_resolveGlobals`,
+  `Query.VarsKeyed.resolveGlobals`, `Query.ctors_resolveGlobals_noPrim`); `Pattern.Grounded` is
+  not among them, because the resolution writes a literal-valued global's value into the query
+  and `Pattern.GroundedAt` is what the reading actually needs. This one is a **source-run**
+  invariant, since `UnionsFire` is given no program: `Database.QueriesIn` is the property and
+  `queriesIn_of_prefixStep` the
   induction, over the commands the chain has already run.
 
 **Both refutations are accounted for, each by a different clause.** `cxfTgt_not_sigMono` is
@@ -10572,26 +10588,21 @@ excludes it, with no tenth `Program.EncodeDomain` clause and no second reading.
 `globalBind_letBind_of_encStep` is what it buys: at every top-level `let` the chain reaches,
 **both** guards pass, so no global is left frozen.
 
-**What is left of `hglob` is the literal case, and `RowRepr.lit` pays it.**
-`Expr.substGlobals` replaces `.var v` only when the definition is an application, and under
-`Database.GlobalsInline` a definition that is not one is a literal — so the only variable a
-substituted query can still name and the environment bind is a global bound to a literal. That
-is the case `Expr.substGlobals`' own docstring keeps on purpose: a literal's class never moves
-(`evalAction` refuses a `union` on one), so the frozen reading through the environment is
-already the right one, and `hglob` there asks for a reading of `Term.lit l` as itself rather
-than the `RowRepr td t t` the shadowed global needed. `lit_of_globalsInline_of_substGlobals`
-and `rowRepr_self_of_globalsCover` below are that, proved: `RowRepr.lit` and `ViewRepr.lit`
-are premise-free, so the residue asks nothing of the target for such a variable, and `ρt` may
-decline to bind the rest — `hglob`'s premise is then false at them.
+**And `hglob` itself is gone.** `matchQuery` used to read `d.env ++ σ`, so a source variable a
+global bound was read off the environment rather than off the substitution and the target's
+reading had to agree with it there. `Spec/Match.lean`'s `ValidSubst` now takes a query's free
+variables against the **empty** environment and `Matches` reads the substitution alone, because
+the globals a rule's query mentioned were resolved into it when the rule was declared — so a
+stored query names no global and the clause has nothing to answer for
+(`mem_matchQuery_encodeQuery`). What survives of the same fact is `Pattern.GroundedAt`, and
+`Database.GlobalsInline` pays it.
 
-**But the second clause is not free, and it is a fourth defect in `encode`.** That argument
-needs `Database.GlobalsCover` — every global the environment binds is one the substitution
-defines — and `Egglog.UnionsInv.rules` carries the `G` a rule was encoded **through**, frozen
-at the command `encodeCmds` reached the rule at. A top-level `let` *after* that command extends
-the environment without extending it, and `Spec/Match.lean`'s `ValidSubst` takes
-`Pattern.freeVars p db.env` at the state the round runs at, so the source **recaptures** the
-rule's own query variable while the encoded query stays keyed at the frozen environment term.
-That is `glob-lost` on the one arrival order `Rule.substGlobals` cannot repair.
+**And the fourth defect is repaired.** It was `Database.GlobalsCover` — every global the
+environment binds is one the substitution defines — at the `G` a rule was encoded **through**,
+frozen at the command `encodeCmds` reached the rule at. A top-level `let` *after* that command
+extends the environment without extending it, and `Spec/Match.lean`'s `ValidSubst` used to take
+`Pattern.freeVars p db.env` at the state the round runs at, so the source **recaptured** the
+rule's own query variable while the encoded query stayed keyed at the frozen environment term.
 
 **Measured**, `DiffTest.lean`'s `glob-late-eq`:
 
@@ -10600,18 +10611,18 @@ That is `glob-lost` on the one arrival order `Rule.substGlobals` cannot repair.
 (let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
 ```
 
-`difftest correspond 64 glob-late-eq` reports **2 LOST** — `(Wrapper (Zz)) = (Hit)` and
-`(Hit) = (Wrapper (Aa))` — where `glob-early-eq`, the same six commands with the `let` moved in
-front of the rule, **agrees**; `glob-late` is the `.expr (Hit)` head and reports 1 LOST. Both
-are in `encode`'s domain and neither shadows, so nine clauses and
-`letNames_nodup_of_programStep` admit them: this refutes `Egglog.encode_corresponds_forward`
-itself and not only its residue, and `Egglog.UnionsFire` is false as stated. **And egglog does
-neither** — `check_shadowing.rs` checks a rule's pattern names in a clone of the accumulated
-names (`:60-66`), so a rule processed before the `let` keeps `$g` as an ordinary pattern
-variable and fires on every `Wrapper`. The repair is a choice between `Spec/Match.lean`'s
-firing-time recapture and `Encoding/Encode.lean`'s declaration-time freeze; the section at
-`lit_of_globalsInline_of_substGlobals` is where it is written up. Until it is made, what stands
-under this `sorry` is a **false** obligation and not an open one.
+reported **2 LOST** — `(Wrapper (Zz)) = (Hit)` and `(Hit) = (Wrapper (Aa))` — and `glob-late`,
+the `.expr (Hit)` head, reported 1. Both **agree** now, and so does every other case:
+`difftest correspond 64` is 87 agreeing, 0 LOST. `Spec/Step.lean`'s `cmdEffect` resolves the
+globals then in scope into a rule when it registers it, which is `remove_globals`' own step at
+`remove_globals`' own point (`egglog/src/lib.rs:2615-2617`,
+`egglog/src/ast/remove_globals.rs:183-238`), and `encodeCmds` threads `Cmd.globalBind` through
+the same command — so `Rule.resolveGlobals_eq_substGlobals` makes the source's stored query and
+the encoder's flattened query the *same* query, and coverage is spent where the rule is
+registered rather than at the round. `glob-late-fresh` and `glob-late-head` are the same
+arrival order measured against the binary — `Hit 1` and `(Hit (Bb))` — and both are corpus
+cases. **No measured counterexample stands under this `sorry` any more**: what is left is the
+structural item below.
 
 **The one structural item left is the `Cmd.saturate` half's alone, and the encoder fix did not
 close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
@@ -11656,13 +11667,15 @@ source run, from `Program.EncodeDomain` at the commands it has run, in the shape
 `Program.EncodeDomain.queryEncodable` pays and the second what `noPrim` does — over
 `Program.ctors`, which reads a rule's *query* names as well as its head's. -/
 def Database.QueriesIn (db : Database) : Prop :=
-  ∀ r ∈ db.rules, (Cmd.rule r).QueryEncodable ∧
+  ∀ r ∈ db.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
     ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none
 
 /-- **One command keeps it**: only `Cmd.rule` extends `rules`, and its rule is the program's
 own. -/
 theorem cmdStep_queriesIn {P : Program} (hdom : P.EncodeDomain) {db db' : Database}
-    (hsig : db.sig.AllConstructors) (h : db.QueriesIn) {c : Cmd} (hc : c ∈ P)
+    (hsig : db.sig.AllConstructors) (hwf : db.WF)
+    (htb : ∀ f as, Term.app f as ∈ db.terms → Prim.ofName f = none)
+    (h : db.QueriesIn) {c : Cmd} (hc : c ∈ P)
     (hstep : CmdStep db c db') : db'.QueriesIn := by
   cases c with
   | action a =>
@@ -11673,10 +11686,13 @@ theorem cmdStep_queriesIn {P : Program} (hdom : P.EncodeDomain) {db db' : Databa
       intro s hs
       rw [hrules] at hs
       rcases Set.mem_insert_iff.mp hs with rfl | hs'
-      · refine ⟨hdom.queryEncodable _ hc, fun p hp fk hk => hdom.noPrim fk ?_⟩
-        refine mem_program_ctors hc ?_
+      · obtain ⟨hqe, hk⟩ := hdom.queryEncodable _ hc
+        refine ⟨⟨Query.noValues_resolveGlobals (fun p hp => (hqe p hp).2),
+          Query.VarsKeyed.resolveGlobals hk⟩, ?_⟩
+        refine Query.ctors_resolveGlobals_noPrim hwf htb (fun p hp fk hk' => ?_)
+        refine hdom.noPrim fk (mem_program_ctors hc ?_)
         rw [Cmd.ctors]
-        exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨p, hp, hk⟩)
+        exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨p, hp, hk'⟩)
       · exact h s hs'
   | run R => intro r hr; exact h r (by rw [cmdStep_rules_of_run hstep] at hr; exact hr)
   | saturate R => intro r hr; exact h r (by rw [cmdStep_rules_of_saturate hstep] at hr; exact hr)
@@ -11707,20 +11723,26 @@ theorem cmdStep_sigIn {P : Program} {db db' : Database} (h : db.SigIn P) {c : Cm
 
 /-- **Both, off a prefix of the program.** -/
 theorem queriesIn_sigIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) :
-    ∀ {p : Program} {db db' : Database}, (∀ c ∈ p, c ∈ P) → db.CtorState →
+    ∀ {p : Program} {db db' : Database},
+      (∀ c ∈ p, c ∈ P) → db.CtorState → db.TermsBuilds →
       db.QueriesIn → db.SigIn P → ProgramStep db p db' → db'.QueriesIn ∧ db'.SigIn P := by
   intro p
   induction p with
   | nil =>
-      intro db db' _ _ hq hs hstep
+      intro db db' _ _ _ hq hs hstep
       obtain rfl := hstep.nil_inv
       exact ⟨hq, hs⟩
   | cons c cs ih =>
-      intro db db' hsub hcs hq hs hstep
+      intro db db' hsub hcs htb hq hs hstep
       obtain ⟨db₁, hstep₁, hrest⟩ := hstep.cons_inv
+      have hns : ∀ c' ∈ P, c'.NoSet :=
+        (Program.setLegal_iff_noSet (fun _ => rfl) hdom.ctorsOnly).mp hdom.setLegal
       exact ih (fun c' hc' => hsub c' (List.mem_cons_of_mem c hc'))
         (hstep₁.ctorState hcs (hdom.ctorsOnly c (hsub c List.mem_cons_self)))
-        (cmdStep_queriesIn hdom hcs.sig hq (hsub c List.mem_cons_self) hstep₁)
+        (cmdStep_termsBuilds hcs htb (hns c (hsub c List.mem_cons_self))
+          (hdom.ctorsOnly c (hsub c List.mem_cons_self)) hstep₁)
+        (cmdStep_queriesIn hdom hcs.sig hcs.wf (fun f as hm => (htb.terms f as hm).1) hq
+          (hsub c List.mem_cons_self) hstep₁)
         (cmdStep_sigIn hs (hsub c List.mem_cons_self) hstep₁) hrest
 
 @[inherit_doc queriesIn_sigIn_of_prefixStep]
@@ -11728,6 +11750,7 @@ theorem queriesIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Progr
     (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
     sd.QueriesIn :=
   (queriesIn_sigIn_of_prefixStep hdom hsub Database.CtorState.empty
+    Database.empty_termsBuilds
     (fun r hr => absurd hr (by simp [Database.empty]))
     (fun f hf => absurd hf (by simp [Database.empty, Signature.IsCtor])) hstep).1
 
@@ -11736,6 +11759,7 @@ theorem sigIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
     (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
     sd.SigIn P :=
   (queriesIn_sigIn_of_prefixStep hdom hsub Database.CtorState.empty
+    Database.empty_termsBuilds
     (fun r hr => absurd hr (by simp [Database.empty]))
     (fun f hf => absurd hf (by simp [Database.empty, Signature.IsCtor])) hstep).2
 
@@ -11807,28 +11831,32 @@ about the globals a rule was encoded through: the chain's own are `Database.Glob
 `Program.GlobalsOnce` (`encStep_globals`), and a `G` already carried keeps both across one
 source command (`globalsInline_keep`). `unionsFire_false_globals` is the residue without
 them. -/
-theorem encStep_globalsMech {P : Program} (hdom : P.EncodeDomain) : GlobalsMech P :=
-  ⟨fun h => encStep_globals hdom h,
+theorem encStep_globalsMech {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) : GlobalsMech P :=
+  ⟨fun h => ⟨(encStep_globals hdom h).1, (encStep_globals hdom h).2,
+      encStep_globalsCover hdom hnodup h⟩,
     fun hP hpre hstate hstep hgi hgo => globalsInline_keep hdom hP hstate hpre hstep hgi hgo⟩
 
-/-! #### `hglob`'s literal residue, and the fact it is not free
+/-! #### The literal residue, dissolved
 
-`mem_matchQuery_encodeQuery`'s `hglob` asks that a variable the target reading `ρt` binds and
-the **environment** also binds get the environment's own value: `matchQuery` reads `d.env ++ τ`,
-so an id assigned there beside a different value in `d.env` is an id no atom can see.
-`ρt` may simply decline to bind a variable the substituted query does not name — `hglob`'s
-premise is then false — so the only variables it has to answer for are the ones a *substituted*
-query still names and the environment still binds. Under the two clauses below every one of
-them is bound to a **literal**, and `RowRepr.lit` reads a literal as itself with no target row
-at all, which discharges `hglob` outright.
+`mem_matchQuery_encodeQuery` used to carry an `hglob` clause: `matchQuery` read `d.env ++ σ`,
+so a source variable a global bound was read off the environment rather than off the
+substitution, and the target's reading had to agree with the environment there. It is gone.
+`Spec/Match.lean`'s `ValidSubst` now takes a query's free variables against the **empty**
+environment and `Matches` reads the substitution alone — because the globals a rule's query
+mentioned were resolved into it when the rule was declared — so a stored query names no global
+and the clause has nothing to answer for.
 
-`Database.GlobalsCover` is the half that is not free, and the section after the two lemmas
-records what its absence costs. -/
+What remains of the same fact is `Pattern.GroundedAt`: `Expr.substGlobals` writes a
+literal-valued global's *definition* into the query, and a bare-literal pattern needs a witness
+the source holds. `Database.GlobalsInline` pays it — the environment binds the name to that
+term, and `Database.WF` puts it in `terms`
+(`Database.GlobalsInline.groundedAt_substGlobals`). -/
 
 /-- **A global a substituted query still names is bound to a literal.** `Expr.substGlobals`
-replaces `.var v` exactly when `G`'s definition for `v` is an application, so a variable it
-leaves alone is one `G` does not define (excluded by `Database.GlobalsCover`) or one whose
-definition is closed and not an application — and a closed non-application is a literal. -/
+replaces `.var v` at every definition `G` carries, so a variable it leaves alone is one `G`
+does not define — which `Database.GlobalsCover` excludes at a name the environment binds. The
+statement is therefore vacuous now, and kept as the record of what the old `hglob` needed. -/
 theorem lit_of_globalsInline_of_substGlobals {sd : Database} {G : List (Var × Expr)}
     (hgi : sd.GlobalsInline G) (hcov : sd.GlobalsCover G) {v : Var} {t : Term}
     (hlk : Env.lookup v sd.env = some t)
@@ -11838,70 +11866,47 @@ theorem lit_of_globalsInline_of_substGlobals {sd : Database} {G : List (Var × E
     cases hE : Expr.lookupG v G with
     | none => exact absurd hE hne
     | some e => exact ⟨e, rfl⟩
-  obtain ⟨hcl, u, hev, hlk'⟩ := hgi v e he
+  obtain ⟨hcl, -, u, hev, hlk'⟩ := hgi v e he
   obtain rfl : u = t := Option.some.inj (hlk'.symm.trans hlk)
-  cases e with
-  | lit l =>
-      rw [Expr.eval] at hev
-      exact ⟨l, (Option.some.inj hev).symm⟩
-  | var w => exact absurd hcl (by simp [Expr.vars])
-  | app f as =>
-      rw [Expr.substGlobals, he] at hkeep
-      exact absurd hkeep (by simp)
+  rw [Expr.substGlobals, he, Option.getD_some] at hkeep
+  subst hkeep
+  exact absurd hcl (by simp [Expr.vars])
 
-/-- **And so it reads to itself, through rows and through entries alike.** `RowRepr.lit` and
-`ViewRepr.lit` are premise-free, so this asks nothing of the target — which is exactly why
-`mem_matchQuery_encodeQuery`'s `hglob` is answerable at a global at all: the reading a
-non-literal global would need is `RowRepr td t t`, and that is false at states an encoded run
-reaches (`ncTgt_not_readsSelf`). -/
-theorem rowRepr_self_of_globalsCover {sd : Database} {td : FDatabase}
-    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) (hcov : sd.GlobalsCover G)
-    {v : Var} {t : Term} (hlk : Env.lookup v sd.env = some t)
-    (hkeep : Expr.substGlobals G (.var v) = .var v) :
-    RowRepr td t t ∧ ViewRepr td.toDatabase t t := by
-  obtain ⟨l, rfl⟩ := lit_of_globalsInline_of_substGlobals hgi hcov hlk hkeep
-  exact ⟨.lit, .lit⟩
+/-! #### `Database.GlobalsCover` at the substitution a rule was encoded through
 
-/-! #### `Database.GlobalsCover` does not hold of the substitution a rule was encoded through
+`encStep_globalsCover` proves it of the `G` the chain carries, and that is where it is spent:
+the `G` a rule was encoded **through** is frozen at the command `encodeCmds` reached the rule
+at, and coverage *there* is what makes `Rule.resolveGlobals_eq_substGlobals` identify the rule
+the source stores with the rule the encoder encodes
+(`FDatabase.EncOk.stepCmd`'s `.rule` case). A later `let` extends the environment without
+extending that `G`, and it does not have to: the rule was already resolved.
 
-`encStep_globalsCover` proves it of the `G` the *chain* carries, which grows at every top-level
-`let`; `Egglog.UnionsInv.rules` carries the `G` a rule was encoded **through**, frozen at the
-command `encodeCmds` reached the rule at, and a `let` after that command extends the
-environment without extending it.
-
-This is not a gap in the bookkeeping, it is a defect in `encode`, and it is measured.
-`DiffTest.lean`'s `glob-late-eq` is `glob-lost-eq` with the rule declared **before** the `let`:
+**What that repaired, measured.** `DiffTest.lean`'s `glob-late-eq` is `glob-lost-eq` with the
+rule declared **before** the `let`:
 
 ```
 (rule ((Wrapper $g)) ((union (Wrapper $g) (Hit))))
 (let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
 ```
 
-`difftest correspond 64 glob-late-eq` reports **2 LOST** — `(Wrapper (Zz)) = (Hit)` and
-`(Hit) = (Wrapper (Aa))` — where `glob-early-eq`, the same six commands with the `let` moved in
-front of the rule, **agrees**. `glob-late` is the `.expr (Hit)` head, 1 LOST. Both are in
-`encode`'s domain and neither shadows, so `Program.EncodeDomain` and
-`letNames_nodup_of_programStep` admit them and `hsrc` does not exclude them: this refutes
-`Egglog.encode_corresponds_forward`, not only its residue.
+It used to report **2 LOST** — the encoder froze `$g` at the environment term while the
+specification recaptured it at firing time — and `glob-late` reported 1. Both now **agree**
+(`difftest correspond 64`, 87 agreeing, 0 LOST), because `Spec/Step.lean`'s `cmdEffect`
+resolves the globals then in scope into a rule when it registers it and `encodeCmds` threads
+`Cmd.globalBind` through the same command: specification and encoding are keyed the same way by
+construction rather than by arrival order.
 
-**Why the arrival order matters.** `Spec/Match.lean`'s `ValidSubst` takes
-`Pattern.freeVars p db.env` at the state the round runs at, so a top-level `let` reached after
-the rule was declared **recaptures** the rule's own query variable — `$g` is a match variable
-when the rule is registered and a global by the time the round fires. `encodeCmds` threads
-`Cmd.globalBind` left to right, so `Rule.substGlobals` sees a `G` without `$g` and leaves the
-encoded query keyed at the frozen environment term, which is `glob-lost` exactly.
-
-**And egglog does neither.** `check_shadowing.rs` walks the command stream in order and
+**And that is what egglog does.** `check_shadowing.rs` walks the command stream in order and
 `NormRule` checks a rule's pattern names in a *clone* of the accumulated names
 (`check_shadowing.rs:60-66`), so a rule processed before the `let` keeps `$g` as an ordinary
-pattern variable and `remove_globals` never rewrites it; egglog's rule fires on **every**
-`Wrapper`. So the model recaptures where egglog does not, and the encoder freezes where the
-model recaptures — three readings of one program, and the repair is a choice between
-`Spec/Match.lean` and `Encoding/Encode.lean` rather than anything provable here. -/
+pattern variable and `remove_globals` never rewrites it (`remove_globals.rs:183-238`); egglog's
+rule fires on **every** `Wrapper`. `glob-late-fresh` and `glob-late-head` are that measured
+against the binary — `Hit 1` and `(Hit (Bb))` — and both are corpus cases now. -/
 
 /-- **The completeness half's invariant at every state of the chain**, source and target
 together. -/
-theorem encStep_encOk {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_encOk {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
     d.EncOk P (encodeSig P) sd := by
   induction h with
@@ -11910,39 +11915,44 @@ theorem encStep_encOk {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     obtain ⟨hgi, hgo⟩ := encStep_globals hdom hs
     exact ih.stepCmd hdom (encodedHeadSound hdom hdom.aritiesAgree' hdom.headsScoped)
       (encodedActionSound hdom hdom.aritiesAgree')
-      (encodedWriteLegal hdom hdom.aritiesAgree') hs.program hs.src hstep hgi hgo hb
+      (encodedWriteLegal hdom hdom.aritiesAgree') hs.program hs.src hstep hgi hgo
+      (encStep_globalsCover hdom hnodup hs) hb
 
 @[inherit_doc encStep_encOk]
-theorem encStep_soundTerms {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_soundTerms {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) : d.SoundTerms sd :=
-  (encStep_encOk hdom h).sound
+  (encStep_encOk hdom hnodup h).sound
 
 /-- **A view entry names a source constructor at its own key width**, at a state the run passes
 through. -/
-theorem encStep_ctorsIn {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_ctorsIn {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G)
     {f : FnName} {es : List Term} {e pf : Term}
     (hmem : Term.app (viewName f) (es ++ [e, pf]) ∈ d.terms) : (f, es.length) ∈ P.ctors := by
-  obtain ⟨as, hasrc, hcl, -⟩ := (encStep_soundTerms hdom h).1 f es e pf hmem
+  obtain ⟨as, hasrc, hcl, -⟩ := (encStep_soundTerms hdom hnodup h).1 f es e pf hmem
   rw [← hcl.length_eq]
   exact ctorsIn_of_prefixStep hdom h.mem h.src f as hasrc
 
 /-- **No `@UF` entry is keyed on a literal it does not equal**, at a state the run passes
 through. -/
-theorem encStep_ufLitsIsolated {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_ufLitsIsolated {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) : d.UFLitsIsolated := by
   intro l b pf hmem
-  exact (((encStep_soundTerms hdom h).2 _ _ _ hmem).eq_of_isLit
+  exact (((encStep_soundTerms hdom hnodup h).2 _ _ _ hmem).eq_of_isLit
     (h.src.wf Database.WF.empty).litsIsolated (Or.inl rfl)).symm
 
 /-- **And so a literal is its own `@UF` row root there.** -/
-theorem encStep_ufLitRoots {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_ufLitRoots {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) (l : Lit) :
     d.UFRowRoot (Term.lit l) :=
-  (encStep_ufLitsIsolated hdom h).ufRowRoot (encReached_eqsRefl hdom h.reached)
+  (encStep_ufLitsIsolated hdom hnodup h).ufRowRoot (encReached_eqsRefl hdom h.reached)
     (encReached_encBase hdom h.reached).inv.index
     (by rw [(encReached_encBase hdom h.reached).sig]; exact encodeSig_mergeOf_ufName hdom) l
 
@@ -11953,7 +11963,8 @@ This is what `Egglog.UnionsFire` is missing and what `execM_rebuildClosed` could
 the pointwise `@UF` row root they are the same claim. The four `Signature.IsCtor` carries are
 discharged from `encodePrelude`'s own vocabulary at an arbitrary program, so the whole thing
 asks for the domain and the chain and nothing else. -/
-theorem encStep_exists_rowRepr {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_exists_rowRepr {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t e : Term}
     (hv : ViewRepr d.toDatabase t e) : ∃ r, RowRepr d t r := by
@@ -11961,7 +11972,8 @@ theorem encStep_exists_rowRepr {P : Program} (hdom : P.EncodeDomain) {pre suf : 
   exact ⟨r, encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
     (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
     (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached
-    (encStep_ufLitRoots hdom h) (fun _ _ _ _ hmem => encStep_ctorsIn hdom h hmem) hv hr hrr⟩
+    (encStep_ufLitRoots hdom hnodup h)
+    (fun _ _ _ _ hmem => encStep_ctorsIn hdom hnodup h hmem) hv hr hrr⟩
 
 /-- **A run's own states are chain states**, source and target advancing together. -/
 theorem encStep_encodeCmds {P : Program} :
@@ -12005,7 +12017,8 @@ theorem execM_exists_rowRepr {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) {t e : Term} (hv : ViewRepr tgt.toDatabase t e) :
     ∃ r, RowRepr tgt t r :=
-  let ⟨_, h⟩ := execM_encStep hsrc htgt; encStep_exists_rowRepr hdom h hv
+  let ⟨_, h⟩ := execM_encStep hsrc htgt
+  encStep_exists_rowRepr hdom (letNames_nodup_of_programStep hsrc).1 h hv
 
 /-! ### And the reading is a function, because the state is rooted
 
@@ -12027,7 +12040,8 @@ entries and to `(A)` alone through rows. -/
 turns the row into its entry term — `ctor` forces the row's function to carry a `:merge`, since
 its output columns are not empty, and `entry` then reads the entry off `terms` — and
 `encStep_ctorsIn` is the source-side half at that entry. -/
-theorem encStep_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G)
     {f : FnName} {es : List Term} {e pf : Term}
     (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) : (f, es.length) ∈ P.ctors := by
@@ -12039,7 +12053,7 @@ theorem encStep_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : 
   obtain ⟨bs, hcl, hmem⟩ := hidx.entry ⟨viewName f, es, [e, pf]⟩ hrow hmg
   obtain rfl : es = bs :=
     CongList.eq_of_eqsRefl (encReached_eqsRefl hdom h.reached).toDatabase hcl
-  exact encStep_ctorsIn hdom h (FDatabase.mem_toDatabase_terms.mp hmem)
+  exact encStep_ctorsIn hdom hnodup h (FDatabase.mem_toDatabase_terms.mp hmem)
 
 /-- **The `:merge` carry, at a state the run passes through.** A live view row's function is a
 merge function, because its output columns are not empty and `FDatabase.IndexOk.ctor` would
@@ -12058,58 +12072,63 @@ theorem encStep_mergeOf_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : 
 /-- **Every id the reading produces is an `@UF` row root**, which is the whole of what
 rootedness buys: `FDatabase.ViewRowsRooted` at an application and `encStep_ufLitRoots` at a
 literal. -/
-theorem encStep_rowRepr_root {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_rowRepr_root {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t r : Term}
     (hr : RowRepr d t r) : d.UFRowRoot r := by
   cases hr with
-  | lit => exact encStep_ufLitRoots hdom h _
+  | lit => exact encStep_ufLitRoots hdom hnodup h _
   | app _ hrow =>
       exact encReached_viewRowsRooted hdom (encodeSig_isCtor_symName P)
-        (encodeSig_isCtor_transName P) h.reached _ _ (encStep_ctorsIn_of_row hdom h hrow)
+        (encodeSig_isCtor_transName P) h.reached _ _ (encStep_ctorsIn_of_row hdom hnodup h hrow)
         _ _ _ hrow
 
 /-- **One term, one id**, at a state the run passes through: `rowRepr_unique` at the merge
 fixpoint's own view-key clause. -/
-theorem encStep_rowRepr_fn {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_rowRepr_fn {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t r s : Term}
     (h₁ : RowRepr d t r) (h₂ : RowRepr d t s) : r = s :=
   rowRepr_unique (fun f as e₁ pf₁ e₂ pf₂ hr₁ hr₂ => by
     have hu := encReached_viewRowUnique hdom (encodeSig_isCtor_symName P)
       (encodeSig_isCtor_transName P) h.reached f as.length
-      (encStep_ctorsIn_of_row hdom h hr₁) as [e₁, pf₁] [e₂, pf₂] hr₁ hr₂
+      (encStep_ctorsIn_of_row hdom hnodup h hr₁) as [e₁, pf₁] [e₂, pf₂] hr₁ hr₂
     exact (by simpa using hu : _ ∧ _).1) h₁ h₂
 
 /-- **The reading is the root of any id the entries record**, which is `RowRepr` and `ViewRepr`
 identified: `encReached_rowRepr_of_viewRepr` answers the entry at the root, and the reading is a
 function, so the two answers are the same term. -/
-theorem encStep_rowRepr_eq_root {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_rowRepr_eq_root {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t e r ρ : Term}
     (hv : ViewRepr d.toDatabase t e) (hr : RowRepr d t r)
     (hρ : d.UFRowReach e ρ) (hρr : d.UFRowRoot ρ) : ρ = r :=
-  encStep_rowRepr_fn hdom h
+  encStep_rowRepr_fn hdom hnodup h
     (encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
       (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
       (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached
-      (encStep_ufLitRoots hdom h) (fun _ _ _ _ hmem => encStep_ctorsIn hdom h hmem) hv hρ hρr)
+      (encStep_ufLitRoots hdom hnodup h)
+      (fun _ _ _ _ hmem => encStep_ctorsIn hdom hnodup h hmem) hv hρ hρr)
     hr
 
 /-- **The derived clause, discharged.** `fn` is `rowRepr_unique` at
 `FDatabase.ViewRowUnique`; `edge` is the root argument — each side's reading is the root of the
 id its entry recorded, and an `@UF` entry edge puts the two ids in one component, whose root is
 unique. Neither clause is `Database.ViewLeader`, which the same states refute. -/
-theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) : d.RowJoined where
-  fn := fun _ _ _ h₁ h₂ => encStep_rowRepr_fn hdom h h₁ h₂
+  fn := fun _ _ _ h₁ h₂ => encStep_rowRepr_fn hdom hnodup h h₁ h₂
   edge := by
     intro x y pf t u r s hout hvt hvu hrt hru
     obtain ⟨ρx, hρx, hρxr⟩ := encReached_exists_ufRowRoot hdom h.reached x
     obtain ⟨ρy, hρy, hρyr⟩ := encReached_exists_ufRowRoot hdom h.reached y
-    have hxr : ρx = r := encStep_rowRepr_eq_root hdom h hvt hrt hρx hρxr
-    have hys : ρy = s := encStep_rowRepr_eq_root hdom h hvu hru hρy hρyr
+    have hxr : ρx = r := encStep_rowRepr_eq_root hdom hnodup h hvt hrt hρx hρxr
+    have hys : ρy = s := encStep_rowRepr_eq_root hdom hnodup h hvu hru hρy hρyr
     rw [← hxr, ← hys]
     exact encReached_ufRowRoot_of_ufReach hdom (encodeSig_isCtor_symName P)
       (encodeSig_isCtor_transName P) h.reached
@@ -12138,11 +12157,12 @@ mechanism had to be restated one block short of the end; `EncStep` is that resta
 `encReached_*` family is the block inductions consuming it. Nothing was added to `UnionsFire`
 that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries every clause at the
 witness state, and all but the two about rules non-vacuously. -/
-theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain) : RowMech P :=
-  fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom h hv,
+theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) : RowMech P :=
+  fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom hnodup h hv,
     fun _ _ hr =>
       ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom h.reached).inv.index hr,
-    encStep_rowJoined hdom h,
+    encStep_rowJoined hdom hnodup h,
     (fun f hf => by
       obtain ⟨k, hk⟩ := sigIn_of_prefixStep hdom h.mem h.src f hf
       rw [(encReached_encBase hdom h.reached).sig]
@@ -12526,8 +12546,10 @@ theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
   Database.ViewsCover.of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (unionsInv_execM unionsJoined_fire hdom (encStep_rowMech hdom)
-      (encStep_globalsMech hdom) (encReached_ruleNameMech hdom) hsrc htgt).reads
+    (unionsInv_execM unionsJoined_fire hdom
+      (encStep_rowMech hdom (letNames_nodup_of_programStep hsrc).1)
+      (encStep_globalsMech hdom (letNames_nodup_of_programStep hsrc).1)
+      (encReached_ruleNameMech hdom) hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
 theorem execM_viewsCover_shared {P : Program} {src : Database} {tgt : FDatabase}
@@ -12546,8 +12568,10 @@ theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
   unionsRead_of_viewJoined (execM_viewJoined hdom hsrc htgt)
-    (execM_unionsJoined unionsJoined_fire hdom (encStep_rowMech hdom)
-      (encStep_globalsMech hdom) (encReached_ruleNameMech hdom) hsrc htgt)
+    (execM_unionsJoined unionsJoined_fire hdom
+      (encStep_rowMech hdom (letNames_nodup_of_programStep hsrc).1)
+      (encStep_globalsMech hdom (letNames_nodup_of_programStep hsrc).1)
+      (encReached_ruleNameMech hdom) hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
 reflexive equation per subterm built, and `sameClass_self_of_viewsCover` discharges those out

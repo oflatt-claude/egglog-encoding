@@ -28,7 +28,7 @@ expression and mirrors that flattening as a recursion, which is what makes the
 correspondence one-pattern-to-one-derivation rather than one-atom-to-one-atom.
 
 The source-side conclusion is `ValidQuerySubst src r.query τ` together with
-`Env.lookup v (src.env ++ τ) = some (g v)` for the query's variables: the head needs to know
+`Env.lookup v (τ ++ src.env) = some (g v)` for the query's variables: the head needs to know
 *which* source terms fired it, not only that something did.
 
 ## The two facts it rests on, both already in hand
@@ -131,7 +131,7 @@ recursion is `encodeQueryExpr`'s: a literal and a variable emit no atom and stan
 themselves, an application emits its arguments' reads and then one view read keyed on their
 ids.
 
-`ρ` is the **combined** environment the match ran in — `d.env ++ σ` — so nothing here says
+`ρ` is the **combined** environment the match ran in — `σ ++ d.env` — so nothing here says
 where the encoded query's bindings came from, and the generated variables `@v0`, `@v1`, … do
 not appear: their values *are* the ids this relation carries. -/
 
@@ -299,9 +299,9 @@ congruent to the e-class column, and a variable's id is congruent to the source 
 correspondence is refuted at. -/
 theorem mem_terms_of_queryRead {src d : Database} (hs : d.ViewsSound src) {ρs ρt : Env}
     {e : Expr} {i : Term} (h : QueryRead d ρt e i) (hlink : Env.ReadsAs src ρs ρt e.vars)
-    (hnl : ∀ l, e ≠ .lit l) : i ∈ src.terms := by
+    (hnl : ∀ l, e = .lit l → Term.lit l ∈ src.terms) : i ∈ src.terms := by
   cases h with
-  | lit => exact absurd rfl (hnl _)
+  | lit => exact hnl _ rfl
   | var hlk =>
     obtain ⟨_, _, hc⟩ := hlink _ (by simp [Expr.vars]) _ hlk
     exact hc.mem_right
@@ -320,7 +320,8 @@ built. -/
 /-- **A source pattern `.expr e` matches at the terms the target read.** -/
 theorem matches_expr_of_queryRead {src d : Database} (hb : src.TermsBuild)
     (hs : d.ViewsSound src) {τ ρt : Env} {e : Expr} {i : Term} (h : QueryRead d ρt e i)
-    (hlink : Env.ReadsAs src (src.env ++ τ) ρt e.vars) (hnl : ∀ l, e ≠ .lit l) :
+    (hlink : Env.ReadsAs src τ ρt e.vars)
+    (hnl : ∀ l, e = .lit l → Term.lit l ∈ src.terms) :
     Matches src (.expr e) τ := by
   obtain ⟨t, ht, hup⟩ := congUp_of_queryRead hb hs h hlink
   exact .expr (mem_terms_of_queryRead hs h hlink hnl) ht hup.congOn.symm
@@ -332,11 +333,12 @@ be more than a literal. -/
 theorem matches_eq_of_queryRead {src d : Database} (hb : src.TermsBuild)
     (hs : d.ViewsSound src) {τ ρt : Env} {e₁ e₂ : Expr} {i : Term}
     (h₁ : QueryRead d ρt e₁ i) (h₂ : QueryRead d ρt e₂ i)
-    (hlink : Env.ReadsAs src (src.env ++ τ) ρt (e₁.vars ∪ e₂.vars))
-    (hnl : (∀ l, e₁ ≠ .lit l) ∨ (∀ l, e₂ ≠ .lit l)) : Matches src (.eq e₁ e₂) τ := by
-  have hl₁ : Env.ReadsAs src (src.env ++ τ) ρt e₁.vars :=
+    (hlink : Env.ReadsAs src τ ρt (e₁.vars ∪ e₂.vars))
+    (hnl : (∀ l, e₁ = .lit l → Term.lit l ∈ src.terms) ∨
+      (∀ l, e₂ = .lit l → Term.lit l ∈ src.terms)) : Matches src (.eq e₁ e₂) τ := by
+  have hl₁ : Env.ReadsAs src τ ρt e₁.vars :=
     hlink.mono fun v hv => List.mem_union_iff.mpr (Or.inl hv)
-  have hl₂ : Env.ReadsAs src (src.env ++ τ) ρt e₂.vars :=
+  have hl₂ : Env.ReadsAs src τ ρt e₂.vars :=
     hlink.mono fun v hv => List.mem_union_iff.mpr (Or.inr hv)
   obtain ⟨t₁, ht₁, hu₁⟩ := congUp_of_queryRead hb hs h₁ hl₁
   obtain ⟨t₂, ht₂, hu₂⟩ := congUp_of_queryRead hb hs h₂ hl₂
@@ -348,8 +350,8 @@ theorem matches_eq_of_queryRead {src d : Database} (hb : src.TermsBuild)
 
 @[inherit_doc matches_expr_of_queryRead]
 theorem matches_of_patternRead {src d : Database} (hb : src.TermsBuild)
-    (hs : d.ViewsSound src) {τ ρt : Env} {p : Pattern} (hg : p.Grounded)
-    (h : PatternRead d ρt p) (hlink : Env.ReadsAs src (src.env ++ τ) ρt p.vars) :
+    (hs : d.ViewsSound src) {τ ρt : Env} {p : Pattern} (hg : p.GroundedAt src)
+    (h : PatternRead d ρt p) (hlink : Env.ReadsAs src τ ρt p.vars) :
     Matches src p τ := by
   cases h with
   | expr hr => exact matches_expr_of_queryRead hb hs hr hlink hg
@@ -376,18 +378,11 @@ theorem lookup_sourceSubst {env : Env} {g : Var → Term} {p : Pattern} {v : Var
   (Env.lookup_eq_some_iff_mem (by rw [dom_sourceSubst]; exact p.freeVars_nodup env)).mpr
     (List.mem_map.mpr ⟨v, hv, rfl⟩)
 
-/-- A variable a pattern mentions is read as `g` says, globals included: `hg` is what makes
-the two agree where the source's own environment already binds it. -/
-theorem lookup_append_sourceSubst {src : Database} {g : Var → Term} {p : Pattern}
-    (hg : ∀ v t, Env.lookup v src.env = some t → g v = t) {v : Var} (hv : v ∈ p.vars) :
-    Env.lookup v (src.env ++ sourceSubst src.env g p) = some (g v) := by
-  cases hlk : Env.lookup v src.env with
-  | some t =>
-    rw [Env.lookup_append_of_mem (Env.lookup_isSome_iff_mem_dom.mp (by rw [hlk]; rfl)), hlk,
-      hg v t hlk]
-  | none =>
-    rw [Env.lookup_append_of_not_mem (Env.lookup_eq_none_iff.mp hlk)]
-    exact lookup_sourceSubst (p.mem_freeVars.mpr ⟨hv, Env.lookup_eq_none_iff.mp hlk⟩)
+/-- Every variable a pattern mentions is free against the empty environment, so the
+substitution `g` induces binds all of them. -/
+theorem lookup_nil_sourceSubst {g : Var → Term} {p : Pattern} {v : Var} (hv : v ∈ p.vars) :
+    Env.lookup v (sourceSubst [] g p) = some (g v) :=
+  lookup_sourceSubst (p.mem_freeVars.mpr ⟨hv, by simp [Env.dom]⟩)
 
 /-- `Query.vars` never repeats: it is built with `List.union`. -/
 theorem Query.vars_nodup (q : Query) : (Query.vars q).Nodup := by
@@ -408,27 +403,26 @@ fired; this says it fired at `g`, so `entrySound_build`'s hypothesis — the sou
 term the encoded head built — follows from the head's own source-side evaluation. -/
 theorem validQuerySubst_of_patternReads {src d : Database} (hb : src.TermsBuild)
     (hs : d.ViewsSound src) {q : Query} {g : Var → Term} {ρt : Env}
-    (hg : ∀ v t, Env.lookup v src.env = some t → g v = t)
     (hgt : ∀ v ∈ Query.vars q, g v ∈ src.terms)
     (hlink : ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i → Cong src (g v) i)
-    (hgr : ∀ p ∈ q, p.Grounded) (hread : ∀ p ∈ q, PatternRead d ρt p) :
-    ∃ τ, ValidQuerySubst src q τ ∧
-      ∀ v ∈ Query.vars q, Env.lookup v (src.env ++ τ) = some (g v) := by
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hread : ∀ p ∈ q, PatternRead d ρt p) :
+    ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
+      ∀ v ∈ Query.vars q, Env.lookup v τ = some (g v) := by
   have hmem : ∀ p ∈ q, ∀ v ∈ p.vars, v ∈ Query.vars q := fun p hp v hv =>
     Query.mem_vars.mpr ⟨p, hp, hv⟩
   -- one substitution per pattern, all of them restrictions of `g`
-  have hvalid : ∀ p ∈ q, ValidSubst src p (sourceSubst src.env g p) := by
+  have hvalid : ∀ p ∈ q, ValidSubst src p (sourceSubst [] g p) := by
     intro p hp
     refine ⟨⟨by rw [dom_sourceSubst], ?_⟩, ?_⟩
     · rintro b hb
       obtain ⟨v, hv, rfl⟩ := List.mem_map.mp hb
       exact hgt v (hmem p hp v (p.mem_freeVars.mp hv).1)
     · refine matches_of_patternRead hb hs (hgr p hp) (hread p hp) fun v hv i hi => ?_
-      exact ⟨g v, lookup_append_sourceSubst hg hv, hlink v (hmem p hp v hv) i hi⟩
+      exact ⟨g v, lookup_nil_sourceSubst hv, hlink v (hmem p hp v hv) i hi⟩
   -- they all refine one total reading, so they have a union
   have hnd : (Env.dom (Query.vars q |>.map fun v => (v, g v))).Nodup := by
     simpa [Env.dom, List.map_map, Function.comp_def] using Query.vars_nodup q
-  have hrefines : ∀ ρ ∈ q.map (sourceSubst src.env g),
+  have hrefines : ∀ ρ ∈ q.map (sourceSubst [] g),
       Env.Refines ρ (Query.vars q |>.map fun v => (v, g v)) := by
     rintro ρ hρ
     obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hρ
@@ -436,22 +430,20 @@ theorem validQuerySubst_of_patternReads {src d : Database} (hb : src.TermsBuild)
     obtain ⟨v, hv, rfl⟩ := List.mem_map.mp hb
     exact (Env.lookup_eq_some_iff_mem hnd).mpr
       (List.mem_map.mpr ⟨v, hmem p hp v (p.mem_freeVars.mp hv).1, rfl⟩)
-  obtain ⟨τ, hu, -⟩ := Env.exists_unionAll _ hrefines
-  have hself : ∀ ρ ∈ q.map (sourceSubst src.env g), Env.Refines ρ ρ := by
+  obtain ⟨τ, hu, hrτ⟩ := Env.exists_unionAll _ hrefines
+  have hself : ∀ ρ ∈ q.map (sourceSubst [] g), Env.Refines ρ ρ := by
     rintro ρ hρ
     obtain ⟨p, -, rfl⟩ := List.mem_map.mp hρ
     exact Env.Refines.self_of_nodup (by rw [dom_sourceSubst]; exact p.freeVars_nodup _)
   obtain ⟨hall, -⟩ := hu.refines_of_mem hself
-  refine ⟨τ, ⟨_, List.forall₂_map_self hvalid, hu⟩, fun v hv => ?_⟩
+  refine ⟨τ, ⟨_, List.forall₂_map_self hvalid, hu⟩, ?_, fun v hv => ?_⟩
+  · intro b hb
+    obtain ⟨v, hv, heq⟩ := List.mem_map.mp (Env.mem_of_lookup (hrτ b hb))
+    obtain rfl : v = b.1 := congrArg Prod.fst heq
+    exact hv
   obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp hv
-  cases hlk : Env.lookup v src.env with
-  | some t =>
-    rw [Env.lookup_append_of_mem (Env.lookup_isSome_iff_mem_dom.mp (by rw [hlk]; rfl)), hlk,
-      hg v t hlk]
-  | none =>
-    rw [Env.lookup_append_of_not_mem (Env.lookup_eq_none_iff.mp hlk)]
-    exact hall _ (List.mem_map.mpr ⟨p, hp, rfl⟩) (v, g v)
-      (List.mem_map.mpr ⟨v, p.mem_freeVars.mpr ⟨hvp, Env.lookup_eq_none_iff.mp hlk⟩, rfl⟩)
+  exact hall _ (List.mem_map.mpr ⟨p, hp, rfl⟩) (v, g v)
+    (List.mem_map.mpr ⟨v, p.mem_freeVars.mpr ⟨hvp, by simp [Env.dom]⟩, rfl⟩)
 
 /-! ### Where the source-side reading comes from
 
@@ -522,200 +514,24 @@ The one clause of the correspondence that is about the two environments. -/
 def Database.GlobalsRead (src : Database) (ρ : Env) : Prop :=
   ∀ v t i, Env.lookup v src.env = some t → Env.lookup v ρ = some i → Cong src t i
 
-/-! ### Reading a global through its definition
+/-! ### The globals are gone before the query is read
 
-`Encoding/Encode.lean`'s `Rule.substGlobals` replaces a global by the (closed) expression the
-`let` bound it to, so what the encoded query flattens is that expression and not the frozen
-term. Everything below is the source-side half of that: at a state whose environment agrees
-with the substitution, a source pattern and its substituted form evaluate alike, match alike,
-and bind alike — so a source-side match of the substituted query *is* one of the original. -/
+`Spec/Step.lean` resolves the globals then in scope into a rule's query when the rule is
+**declared**, and `Encoding/Encode.lean`'s `Rule.substGlobals` is that same step on the
+encoder's own record of them (`Rule.resolveGlobals_eq_substGlobals`). So the query a state
+holds and the query the encoder flattened are the *same* query, and no transfer between them
+is needed: what used to be `Matches.of_substGlobals` and its converse is now an identity.
 
-/-! #### The substitution is invisible to the source
-
-Three facts, all by the same induction: the substituted expression evaluates to what the
-original does, mentions no variable the original does not, and keeps a bare variable bare
-unless it replaced it by an application. Together they say a source-side match of
-`Query.substGlobals G q` is one of `q`, which is what lets the encoder read the definition
-where the source reads the name. -/
+What survives is one semantic residue. `Expr.substGlobals` writes a literal-valued global's
+definition into the query, and a bare-literal pattern is the one shape `Matches`' witness
+clause cannot answer from the reading alone. `Pattern.GroundedAt` is that clause and
+`Database.GlobalsInline` pays it: the source's environment binds the name to the literal, so
+`Database.WF` holds it. -/
 
 /-- A closed expression's value does not depend on the environment. -/
 theorem Expr.eval_of_vars_nil {sig : Signature} {e : Expr} (h : e.vars = []) (σ : Env) :
     e.eval sig σ = e.eval sig [] :=
   Expr.eval_agreeOn e fun v hv => absurd (h ▸ hv) (by simp)
-
-mutual
-
-/-- **What the substitution replaced, the source's own environment binds to the same term.** -/
-theorem Expr.eval_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) (σ : Env)
-    (hσ : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t) :
-    ∀ e : Expr, (e.substGlobals G).eval src.sig (src.env ++ σ)
-      = e.eval src.sig (src.env ++ σ)
-  | .lit _ => rfl
-  | .var v => by
-      rw [Expr.substGlobals]
-      cases hlk : Expr.lookupG v G with
-      | none => simp only []
-      | some e =>
-          obtain ⟨hcl, t, hev, hbind⟩ := hG v e hlk
-          cases e with
-          | lit l => simp only []
-          | var w => simp only []
-          | app f as =>
-              rw [Expr.eval_of_vars_nil hcl, hev, Expr.eval, hσ v t hbind]
-  | .app f args => by
-      rw [Expr.substGlobals, Expr.eval, Expr.eval,
-        Expr.evalList_substGlobals hG σ hσ args]
-
-@[inherit_doc Expr.eval_substGlobals]
-theorem Expr.evalList_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) (σ : Env)
-    (hσ : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t) :
-    ∀ es : List Expr, Expr.evalList src.sig (Expr.substGlobalsList G es) (src.env ++ σ)
-      = Expr.evalList src.sig es (src.env ++ σ)
-  | [] => rfl
-  | e :: es => by
-      rw [Expr.substGlobalsList, Expr.evalList_cons, Expr.evalList_cons,
-        Expr.eval_substGlobals hG σ hσ e, Expr.evalList_substGlobals hG σ hσ es]
-
-end
-
-/-- A closed expression frees nothing. -/
-theorem Expr.freeVars_eq_nil {e : Expr} (h : e.vars = []) (σ : Env) : e.freeVars σ = [] := by
-  refine List.eq_nil_iff_forall_not_mem.mpr fun v hv => ?_
-  exact absurd (e.mem_freeVars.mp hv).1 (by rw [h]; simp)
-
-mutual
-
-/-- **The substitution binds no new variable and frees none the environment holds.** A
-replaced variable was bound by `src.env` and its definition is closed, so `Expr.freeVars` at
-`src.env` is unmoved. -/
-theorem Expr.freeVars_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) :
-    ∀ e : Expr, (e.substGlobals G).freeVars src.env = e.freeVars src.env
-  | .lit _ => rfl
-  | .var v => by
-      rw [Expr.substGlobals]
-      cases hlk : Expr.lookupG v G with
-      | none => simp only []
-      | some e =>
-          obtain ⟨hcl, t, -, hbind⟩ := hG v e hlk
-          cases e with
-          | lit l => simp only []
-          | var w => simp only []
-          | app f as =>
-              simp only [Expr.freeVars_var_of_some hbind]
-              exact Expr.freeVars_eq_nil hcl _
-  | .app f args => by
-      rw [Expr.substGlobals, Expr.freeVars_app, Expr.freeVars_app,
-        Expr.freeVarsList_substGlobals hG args]
-
-@[inherit_doc Expr.freeVars_substGlobals]
-theorem Expr.freeVarsList_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) :
-    ∀ es : List Expr, Expr.freeVarsList (Expr.substGlobalsList G es) src.env
-      = Expr.freeVarsList es src.env
-  | [] => rfl
-  | e :: es => by
-      rw [Expr.substGlobalsList, Expr.freeVarsList_cons, Expr.freeVarsList_cons,
-        Expr.freeVars_substGlobals hG e, Expr.freeVarsList_substGlobals hG es]
-
-end
-
-/-- `Expr.freeVars_substGlobals` over a pattern. -/
-theorem Pattern.freeVars_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) :
-    ∀ p : Pattern, (p.substGlobals G).freeVars src.env = p.freeVars src.env
-  | .expr e => Expr.freeVars_substGlobals hG e
-  | .eq e₁ e₂ => by
-      rw [Pattern.substGlobals, Pattern.freeVars, Pattern.freeVars,
-        Expr.freeVars_substGlobals hG e₁, Expr.freeVars_substGlobals hG e₂]
-  | .values vs f as => by
-      rw [Pattern.substGlobals, Pattern.freeVars, Pattern.freeVars,
-        Expr.freeVarsList_substGlobals hG vs, Expr.freeVarsList_substGlobals hG as]
-
-/-- **A source match of the substituted pattern is one of the pattern.** The instance is the
-same term (`Expr.eval_substGlobals`), so every clause of `Matches` transfers unchanged. -/
-theorem Matches.of_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) {p : Pattern} {σ : Env}
-    (h : Matches src (p.substGlobals G) σ) : Matches src p σ := by
-  have hlk : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t :=
-    fun v t hv => Env.lookup_append_of_mem (Env.mem_dom_of_mem (Env.mem_of_lookup hv)) ▸ hv
-  have he := Expr.eval_substGlobals hG σ hlk
-  have hel := Expr.evalList_substGlobals hG σ hlk
-  cases p with
-  | expr e =>
-      cases h with
-      | expr hw hev hc => exact .expr hw (he e ▸ hev) hc
-  | eq e₁ e₂ =>
-      cases h with
-      | eq hw h₁ h₂ hc₁ hc₂ => exact .eq hw (he e₁ ▸ h₁) (he e₂ ▸ h₂) hc₁ hc₂
-  | values vs f as =>
-      cases h with
-      | values hw h₁ h₂ hc => exact .values hw (hel as ▸ h₁) (hel vs ▸ h₂) hc
-
-/-- **And so a valid substitution of the substituted query is one of the query.** -/
-theorem ValidQuerySubst.of_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) {q : Query} {τ : Env}
-    (h : ValidQuerySubst src (Query.substGlobals G q) τ) : ValidQuerySubst src q τ := by
-  obtain ⟨σs, hall, hu⟩ := h
-  refine ⟨σs, ?_, hu⟩
-  rw [Query.substGlobals] at hall
-  clear hu
-  induction q generalizing σs with
-  | nil => cases hall; exact .nil
-  | cons p ps ih =>
-      rw [List.map_cons] at hall
-      cases hall with
-      | cons hp hrest =>
-          exact .cons ⟨by rw [← Pattern.freeVars_substGlobals hG p]; exact hp.1,
-            Matches.of_substGlobals hG hp.2⟩ (ih _ hrest)
-
-/-- **And a source match of the pattern is one of the substituted pattern.** The direction a
-*firing* needs: `encodeCmd` flattens `Rule.substGlobals G`, so the reading the target's own
-match has to mirror is the **substituted** query's, and the source's `ValidQuerySubst` is at the
-query it was written with. Both facts `Matches.of_substGlobals` runs on are equalities
-(`Expr.eval_substGlobals`, `Pattern.freeVars_substGlobals`), so the transfer runs both ways.
-
-`Database.GlobalsInline` is exactly what it costs, and `Encoding/Complete.lean`'s
-`unionsFire_false_globals` is the residue without it: at a `G` no source state realizes the two
-queries are not interchangeable at all, and the encoded rule reads a variable its own query no
-longer binds. -/
-theorem Matches.to_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) {p : Pattern} {σ : Env}
-    (h : Matches src p σ) : Matches src (p.substGlobals G) σ := by
-  have hlk : ∀ v t, Env.lookup v src.env = some t → Env.lookup v (src.env ++ σ) = some t :=
-    fun v t hv => Env.lookup_append_of_mem (Env.mem_dom_of_mem (Env.mem_of_lookup hv)) ▸ hv
-  have he := Expr.eval_substGlobals hG σ hlk
-  have hel := Expr.evalList_substGlobals hG σ hlk
-  cases p with
-  | expr e =>
-      cases h with
-      | expr hw hev hc => exact .expr hw ((he e).trans hev) hc
-  | eq e₁ e₂ =>
-      cases h with
-      | eq hw h₁ h₂ hc₁ hc₂ => exact .eq hw ((he e₁).trans h₁) ((he e₂).trans h₂) hc₁ hc₂
-  | values vs f as =>
-      cases h with
-      | values hw h₁ h₂ hc => exact .values hw ((hel as).trans h₁) ((hel vs).trans h₂) hc
-
-/-- **And so a valid substitution of the query is one of the substituted query**, which is the
-premise `mem_matchQuery_encodeQuery` is handed at `Query.substGlobals G s.query`. -/
-theorem ValidQuerySubst.to_substGlobals {src : Database} {G : List (Var × Expr)}
-    (hG : src.GlobalsInline G) {q : Query} {τ : Env}
-    (h : ValidQuerySubst src q τ) : ValidQuerySubst src (Query.substGlobals G q) τ := by
-  obtain ⟨σs, hall, hu⟩ := h
-  refine ⟨σs, ?_, hu⟩
-  rw [Query.substGlobals]
-  clear hu
-  induction q generalizing σs with
-  | nil => cases hall; exact .nil
-  | cons p ps ih =>
-      rw [List.map_cons]
-      cases hall with
-      | cons hp hrest =>
-          exact .cons ⟨by rw [Pattern.freeVars_substGlobals hG p]; exact hp.1,
-            Matches.to_substGlobals hG hp.2⟩ (ih _ hrest)
 
 /-- **The source-side reading exists.** One source term per query variable, congruent to the
 id the target read it as, and equal to the source's own binding wherever there is one.
@@ -769,14 +585,15 @@ the source program's text that the flattening forces — both refuted below at t
 violates them, and both folded into `Program.EncodeDomain`. -/
 theorem exists_validQuerySubst_of_patternReads {src d : Database} (hw : src.WF)
     (hb : src.TermsBuild) (hs : d.ViewsSound src) {q : Query} {ρt : Env}
-    (hglob : src.GlobalsRead ρt) (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hglob : src.GlobalsRead ρt) (hgr : ∀ p ∈ q, p.GroundedAt src) (hk : Query.VarsKeyed q)
     (hread : ∀ p ∈ q, PatternRead d ρt p) :
     ∃ τ, ValidQuerySubst src q τ ∧
       ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i →
-        ∃ t, Env.lookup v (src.env ++ τ) = some t ∧ Cong src t i := by
-  obtain ⟨g, hg, hgt, hlink⟩ := exists_sourceReading hw hs hglob hk hread
-  obtain ⟨τ, hv, hτ⟩ := validQuerySubst_of_patternReads hb hs hg hgt hlink hgr hread
-  exact ⟨τ, hv, fun v hv' i hi => ⟨g v, hτ v hv', hlink v hv' i hi⟩⟩
+        ∃ t, Env.lookup v (τ ++ src.env) = some t ∧ Cong src t i := by
+  obtain ⟨g, -, hgt, hlink⟩ := exists_sourceReading hw hs hglob hk hread
+  obtain ⟨τ, hv, -, hτ⟩ := validQuerySubst_of_patternReads hb hs hgt hlink hgr hread
+  exact ⟨τ, hv, fun v hv' i hi =>
+    ⟨g v, Env.lookup_append_of_some (hτ v hv'), hlink v hv' i hi⟩⟩
 
 /-! ### What a head build owes
 
@@ -823,8 +640,8 @@ terms, which `Database.Out`'s reflexive `CongList` needs. -/
 theorem out_of_matches_values {d : Database} (hd : d.Diag)
     (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {vs as : List Expr} {f : FnName} {σ : Env}
     (h : Matches d (.values vs f as) σ) :
-    ∃ ts us, Expr.evalList d.sig as (d.env ++ σ) = some ts ∧
-      Expr.evalList d.sig vs (d.env ++ σ) = some us ∧
+    ∃ ts us, Expr.evalList d.sig as (σ) = some ts ∧
+      Expr.evalList d.sig vs (σ) = some us ∧
       Term.app f (ts ++ us) ∈ d.terms ∧ d.Out f ts us := by
   cases h with
   | @values vs f as σ us ts w hw hts hus hc =>
@@ -947,7 +764,7 @@ variable emits no atom, so its own reads say nothing about it, and the *other* p
 mentions it at a key column is where its binding comes from. -/
 theorem lookup_isSome_of_argVar {d : Database} {σ : Env} {v : Var} :
     ∀ (e : Expr) (n : Nat), (∀ a ∈ (encodeQueryExpr e n).2.1, Matches d a σ) →
-      Expr.ArgVar v e → (Env.lookup v (d.env ++ σ)).isSome
+      Expr.ArgVar v e → (Env.lookup v (σ)).isSome
   | .lit _, _, _, hv => absurd hv (by simp [Expr.ArgVar])
   | .var _, _, _, hv => absurd hv (by simp [Expr.ArgVar])
   | .app f args, n, hm, hv => by
@@ -964,7 +781,7 @@ theorem lookup_isSome_of_argVar {d : Database} {σ : Env} {v : Var} :
 @[inherit_doc lookup_isSome_of_argVar]
 theorem lookup_isSome_of_argVarList {d : Database} {σ : Env} {v : Var} :
     ∀ (es : List Expr) (n : Nat), (∀ a ∈ (encodeQueryArgs es n).2.1, Matches d a σ) →
-      Expr.ArgVarList v es → (Env.lookup v (d.env ++ σ)).isSome
+      Expr.ArgVarList v es → (Env.lookup v (σ)).isSome
   | [], _, _, hv => absurd hv (by simp [Expr.ArgVarList])
   | e :: es, n, hm, hv => by
     rw [encodeQueryArgs_cons_atoms] at hm
@@ -980,7 +797,7 @@ end
 theorem lookup_isSome_of_patternArgVar {d : Database} {σ : Env} {v : Var} :
     ∀ (p : Pattern) (n : Nat), p.NoValues →
       (∀ a ∈ (encodePattern p n).1, Matches d a σ) → Pattern.ArgVar v p →
-      (Env.lookup v (d.env ++ σ)).isSome
+      (Env.lookup v (σ)).isSome
   | .expr e, n, _, hm, hv => lookup_isSome_of_argVar e n hm hv
   | .eq e₁ e₂, n, _, hm, hv => by
     rw [encodePattern_eq_atoms] at hm
@@ -996,8 +813,8 @@ binds, a literal's is itself — and a bare *variable*'s is the variable, which 
 binds, so that case is exactly where the hypothesis is spent. -/
 theorem exists_eval_encodeQueryExpr {d : Database} {σ : Env} :
     ∀ (e : Expr) (n : Nat), (∀ a ∈ (encodeQueryExpr e n).2.1, Matches d a σ) →
-      (∀ v ∈ e.vars, (Env.lookup v (d.env ++ σ)).isSome) →
-      ∃ i, Expr.eval d.sig (encodeQueryExpr e n).1 (d.env ++ σ) = some i
+      (∀ v ∈ e.vars, (Env.lookup v (σ)).isSome) →
+      ∃ i, Expr.eval d.sig (encodeQueryExpr e n).1 (σ) = some i
   | .lit l, _, _, _ => ⟨.lit l, rfl⟩
   | .var v, _, _, hb => Option.isSome_iff_exists.mp (hb v (by simp))
   | .app f args, n, hm, _ => by
@@ -1035,8 +852,8 @@ column.
 theorem queryRead_of_matches {d : Database} (hd : d.Diag)
     (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {σ : Env} :
     ∀ (e : Expr) (n : Nat) {i : Term}, (∀ a ∈ (encodeQueryExpr e n).2.1, Matches d a σ) →
-      Expr.eval d.sig (encodeQueryExpr e n).1 (d.env ++ σ) = some i →
-      QueryRead d (d.env ++ σ) e i
+      Expr.eval d.sig (encodeQueryExpr e n).1 (σ) = some i →
+      QueryRead d (σ) e i
   | .lit l, _, _, _, hi => by
     obtain rfl : Term.lit l = _ := Option.some.inj hi
     exact .lit
@@ -1059,8 +876,8 @@ theorem queryReadList_of_matches {d : Database} (hd : d.Diag)
     (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {σ : Env} :
     ∀ (es : List Expr) (n : Nat) {ts : List Term},
       (∀ a ∈ (encodeQueryArgs es n).2.1, Matches d a σ) →
-      Expr.evalList d.sig (encodeQueryArgs es n).1 (d.env ++ σ) = some ts →
-      QueryReadList d (d.env ++ σ) es ts
+      Expr.evalList d.sig (encodeQueryArgs es n).1 (σ) = some ts →
+      QueryReadList d (σ) es ts
   | [], _, _, _, h => by
     obtain rfl : ([] : List Term) = _ := Option.some.inj h
     exact .nil
@@ -1087,8 +904,8 @@ entry atom through unchanged and `PatternRead` has no case for it. -/
 theorem patternRead_of_matches {d : Database} (hd : d.Diag)
     (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {σ : Env} :
     ∀ (p : Pattern) (n : Nat), p.NoValues →
-      (∀ v ∈ p.vars, (Env.lookup v (d.env ++ σ)).isSome) →
-      (∀ a ∈ (encodePattern p n).1, Matches d a σ) → PatternRead d (d.env ++ σ) p
+      (∀ v ∈ p.vars, (Env.lookup v (σ)).isSome) →
+      (∀ a ∈ (encodePattern p n).1, Matches d a σ) → PatternRead d (σ) p
   | .expr e, n, _, hb, hm => by
     rw [encodePattern_expr_atoms] at hm
     obtain ⟨i, hi⟩ := exists_eval_encodeQueryExpr e n hm hb
@@ -1123,12 +940,12 @@ theorem patternReads_of_encodeQuery {tgt : Database} (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
     (hnv : ∀ p ∈ q, p.NoValues) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
-    ∀ p ∈ q, PatternRead tgt (tgt.env ++ σ) p := by
+    ∀ p ∈ q, PatternRead tgt σ p := by
   have hblock : ∀ p ∈ q, ∃ m, ∀ a ∈ (encodePattern p m).1, Matches tgt a σ := by
     intro p hp
     obtain ⟨m, hsub⟩ := encodePattern_subset_encodeQuery hp n
     exact ⟨m, fun a ha => h.matches_of_mem (hsub ha)⟩
-  have hbound : ∀ v ∈ Query.vars q, (Env.lookup v (tgt.env ++ σ)).isSome := by
+  have hbound : ∀ v ∈ Query.vars q, (Env.lookup v σ).isSome := by
     intro v hv
     obtain ⟨p, hp, ha⟩ := hk v hv
     obtain ⟨m, hm⟩ := hblock p hp
@@ -1144,12 +961,12 @@ and `patternReads_of_encodeQuery` establishes its premise from a matched encoded
 theorem exists_validQuerySubst_of_encodeQuery {src tgt : Database} (hw : src.WF)
     (hb : src.TermsBuild) (hs : tgt.ViewsSound src) (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
-    (hglob : src.GlobalsRead (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
-    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hglob : src.GlobalsRead σ) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∃ τ, ValidQuerySubst src q τ ∧
-      ∀ v ∈ Query.vars q, ∀ i, Env.lookup v (tgt.env ++ σ) = some i →
-        ∃ t, Env.lookup v (src.env ++ τ) = some t ∧ Cong src t i :=
+      ∀ v ∈ Query.vars q, ∀ i, Env.lookup v σ = some i →
+        ∃ t, Env.lookup v (τ ++ src.env) = some t ∧ Cong src t i :=
   exists_validQuerySubst_of_patternReads hw hb hs hglob hgr hk
     (patternReads_of_encodeQuery hd hsc hnv hk h)
 
@@ -1224,12 +1041,12 @@ That is what a rule head needs and the weaker form does not give. `encodeBuild` 
 expression at the same values, so the term it builds is that one and no congruence step is
 needed at the key. -/
 theorem exists_validQuerySubst_at_ids {src d : Database} (hb : src.TermsBuild)
-    (hs : d.ViewsSound src) {q : Query} {ρt : Env} (hglob : src.GlobalsAgree ρt)
-    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hs : d.ViewsSound src) {q : Query} {ρt : Env}
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hk : Query.VarsKeyed q)
     (hread : ∀ p ∈ q, PatternRead d ρt p) :
-    ∃ τ, ValidQuerySubst src q τ ∧
+    ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
       ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i →
-        Env.lookup v (src.env ++ τ) = some i := by
+        Env.lookup v (τ ++ src.env) = some i := by
   have hbound : ∀ v ∈ Query.vars q, ∃ i, Env.lookup v ρt = some i ∧ i ∈ src.terms := by
     intro v hv
     obtain ⟨p, hp, ha⟩ := hk v hv
@@ -1238,29 +1055,34 @@ theorem exists_validQuerySubst_at_ids {src d : Database} (hb : src.TermsBuild)
     intro v hv
     obtain ⟨i, hi, hm⟩ := hbound v hv
     rw [idReading_eq hi]; exact hm
-  obtain ⟨τ, hv, hτ⟩ := validQuerySubst_of_patternReads hb hs
-    (g := idReading ρt) (fun v t ht => idReading_eq (hglob v t ht)) hgt
+  obtain ⟨τ, hv, hdom, hτ⟩ := validQuerySubst_of_patternReads hb hs
+    (g := idReading ρt) hgt
     (fun v hv i hi => idReading_eq hi ▸ hgt v hv) hgr hread
-  exact ⟨τ, hv, fun v hvq i hi => by rw [hτ v hvq, idReading_eq hi]⟩
+  exact ⟨τ, hv, hdom, fun v hvq i hi => by
+    rw [Env.lookup_append_of_some (hτ v hvq), idReading_eq hi]⟩
 
 /-- **And the two environments agree wherever a rule head may read.** A head variable is either
 one the query binds — read as the id on both sides, by the substitution above — or a source
 global, which `Database.GlobalsAgree` pins and which shadows the substitution on the source
 side. This is the hypothesis `Expr.eval_transport` consumes. -/
-theorem lookup_eq_of_at_ids {src d : Database} (hs : d.ViewsSound src) {q : Query} {ρt τ : Env}
-    (hglob : src.GlobalsAgree ρt) (hk : Query.VarsKeyed q)
-    (hread : ∀ p ∈ q, PatternRead d ρt p)
+theorem lookup_eq_of_at_ids {src d : Database} (hs : d.ViewsSound src) {q : Query}
+    {ρt ρe τ : Env} (hglob : src.GlobalsAgree ρe) (hk : Query.VarsKeyed q)
+    (hread : ∀ p ∈ q, PatternRead d ρt p) (hdom : ∀ b ∈ τ, b.1 ∈ Query.vars q)
     (hτ : ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i →
-      Env.lookup v (src.env ++ τ) = some i)
-    {v : Var} (hv : v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome) :
-    Env.lookup v ρt = Env.lookup v (src.env ++ τ) := by
-  rcases hv with hv | hv
+      Env.lookup v (τ ++ src.env) = some i)
+    {v : Var} (hv : v ∈ Query.vars q ∨
+      (Env.lookup v src.env).isSome ∧ v ∉ Query.vars q ∧ Env.lookup v ρt = none) :
+    Env.lookup v (ρt ++ ρe) = Env.lookup v (τ ++ src.env) := by
+  rcases hv with hv | ⟨hv, hnq, hρ⟩
   · obtain ⟨p, hp, ha⟩ := hk v hv
     obtain ⟨i, hi, -⟩ := mem_terms_of_patternArgVar hs (hread p hp) ha
-    rw [hi, hτ v hv i hi]
+    rw [Env.lookup_append_of_some hi, hτ v hv i hi]
   · obtain ⟨t, ht⟩ : ∃ t, Env.lookup v src.env = some t := Option.isSome_iff_exists.mp hv
-    rw [hglob v t ht,
-      Env.lookup_append_of_mem (Env.lookup_isSome_iff_mem_dom.mp (by rw [ht]; rfl)), ht]
+    have hnone : Env.lookup v τ = none := by
+      refine Env.lookup_eq_none_iff.mpr fun hd => ?_
+      obtain ⟨u, hb⟩ := Env.mem_dom_iff.mp hd
+      exact hnq (hdom (v, u) hb)
+    rw [Env.lookup_append_of_none hρ, hglob v t ht, Env.lookup_append_of_none hnone, ht]
 
 /-! ### Transporting an evaluation between the two states
 
@@ -1360,36 +1182,38 @@ target and the key is its arguments'. -/
 theorem entrySound_headBuild_post {src src' tgt : Database} (hw : src'.WF)
     (hb : src.TermsBuild) (hs : tgt.ViewsSound src) (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
-    (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
-    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hglob : src.GlobalsAgree tgt.env) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hk : Query.VarsKeyed q)
     (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
     {f : FnName} {args : List Expr} {is : List Term} {m : Nat}
     (hctor : ∀ g ∈ (Expr.app f args).fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
-    (hvars : ∀ v ∈ (Expr.app f args).vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
-    (hval : (encodeBuild (.app f args) m).1.eval tgt.sig (tgt.env ++ σ) = some (.app f is))
+    (hvars : ∀ v ∈ (Expr.app f args).vars, v ∈ Query.vars q ∨
+      (Env.lookup v src.env).isSome ∧ v ∉ Query.vars q ∧ Env.lookup v σ = none)
+    (hval : (encodeBuild (.app f args) m).1.eval tgt.sig (σ ++ tgt.env) = some (.app f is))
     (hfired : ∀ τ, ValidQuerySubst src q τ →
-      (Expr.app f args).eval src.sig (src.env ++ τ) = some (.app f is) →
+      (Expr.app f args).eval src.sig (τ ++ src.env) = some (.app f is) →
       Term.app f is ∈ src'.terms) :
     EntrySound src' f is (.app f is) := by
   rw [encodeBuild_fst] at hval
   have hread := patternReads_of_encodeQuery hd hsc hnv hk hmatch
-  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids hb hs hglob hgr hk hread
+  obtain ⟨τ, hv, hdom, hτ⟩ := exists_validQuerySubst_at_ids hb hs hgr hk hread
   exact entrySound_build hw (hfired τ hv (Expr.eval_transport _ hctor
-    (fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hτ (hvars v hvv)) hval))
+    (fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hdom hτ (hvars v hvv)) hval))
 
 @[inherit_doc entrySound_headBuild_post]
 theorem entrySound_headBuild {src tgt : Database} (hw : src.WF) (hb : src.TermsBuild)
     (hs : tgt.ViewsSound src) (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
-    (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
-    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hglob : src.GlobalsAgree tgt.env) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hk : Query.VarsKeyed q)
     (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
     {f : FnName} {args : List Expr} {is : List Term} {m : Nat}
     (hctor : ∀ g ∈ (Expr.app f args).fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
-    (hvars : ∀ v ∈ (Expr.app f args).vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
-    (hval : (encodeBuild (.app f args) m).1.eval tgt.sig (tgt.env ++ σ) = some (.app f is))
+    (hvars : ∀ v ∈ (Expr.app f args).vars, v ∈ Query.vars q ∨
+      (Env.lookup v src.env).isSome ∧ v ∉ Query.vars q ∧ Env.lookup v σ = none)
+    (hval : (encodeBuild (.app f args) m).1.eval tgt.sig (σ ++ tgt.env) = some (.app f is))
     (hfired : ∀ τ, ValidQuerySubst src q τ →
-      (Expr.app f args).eval src.sig (src.env ++ τ) = some (.app f is) →
+      (Expr.app f args).eval src.sig (τ ++ src.env) = some (.app f is) →
       Term.app f is ∈ src.terms) :
     EntrySound src f is (.app f is) :=
   entrySound_headBuild_post hw hb hs hd hsc hglob hnv hgr hk hmatch hctor hvars hval hfired
@@ -1402,24 +1226,25 @@ picked, as `cong_of_eqs` does for a top-level `union`. -/
 theorem cong_headUnion_post {src src' tgt : Database} (hb : src.TermsBuild)
     (hs : tgt.ViewsSound src)
     (hd : tgt.Diag) (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat}
-    {σ : Env} (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
-    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    {σ : Env} (hglob : src.GlobalsAgree tgt.env) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hk : Query.VarsKeyed q)
     (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
     {e₁ e₂ : Expr} {t₁ t₂ : Term} {m₁ m₂ : Nat}
     (hctor : ∀ g ∈ e₁.fns ∪ e₂.fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
-    (hvars : ∀ v ∈ e₁.vars ∪ e₂.vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
-    (hv₁ : (encodeBuild e₁ m₁).1.eval tgt.sig (tgt.env ++ σ) = some t₁)
-    (hv₂ : (encodeBuild e₂ m₂).1.eval tgt.sig (tgt.env ++ σ) = some t₂)
-    (hfired : ∀ τ, ValidQuerySubst src q τ → e₁.eval src.sig (src.env ++ τ) = some t₁ →
-      e₂.eval src.sig (src.env ++ τ) = some t₂ → (t₁, t₂) ∈ src'.eqs)
+    (hvars : ∀ v ∈ e₁.vars ∪ e₂.vars, v ∈ Query.vars q ∨
+      (Env.lookup v src.env).isSome ∧ v ∉ Query.vars q ∧ Env.lookup v σ = none)
+    (hv₁ : (encodeBuild e₁ m₁).1.eval tgt.sig (σ ++ tgt.env) = some t₁)
+    (hv₂ : (encodeBuild e₂ m₂).1.eval tgt.sig (σ ++ tgt.env) = some t₂)
+    (hfired : ∀ τ, ValidQuerySubst src q τ → e₁.eval src.sig (τ ++ src.env) = some t₁ →
+      e₂.eval src.sig (τ ++ src.env) = some t₂ → (t₁, t₂) ∈ src'.eqs)
     {t p : Term} (ho : (t = t₁ ∧ p = t₂) ∨ (t = t₂ ∧ p = t₁)) : Cong src' t p := by
   rw [encodeBuild_fst] at hv₁
   rw [encodeBuild_fst] at hv₂
   have hread := patternReads_of_encodeQuery hd hsc hnv hk hmatch
-  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids hb hs hglob hgr hk hread
+  obtain ⟨τ, hv, hdom, hτ⟩ := exists_validQuerySubst_at_ids hb hs hgr hk hread
   have hlk : ∀ v ∈ e₁.vars ∪ e₂.vars,
-      Env.lookup v (tgt.env ++ σ) = Env.lookup v (src.env ++ τ) :=
-    fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hτ (hvars v hvv)
+      Env.lookup v (σ ++ tgt.env) = Env.lookup v (τ ++ src.env) :=
+    fun v hvv => lookup_eq_of_at_ids hs hglob hk hread hdom hτ (hvars v hvv)
   exact cong_of_eqs (hfired τ hv
     (Expr.eval_transport _ (fun g hg => hctor g (by simp [hg]))
       (fun v hvv => hlk v (by simp [hvv])) hv₁)
@@ -1429,16 +1254,17 @@ theorem cong_headUnion_post {src src' tgt : Database} (hb : src.TermsBuild)
 @[inherit_doc cong_headUnion_post]
 theorem cong_headUnion {src tgt : Database} (hb : src.TermsBuild) (hs : tgt.ViewsSound src)
     (hd : tgt.Diag) (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat}
-    {σ : Env} (hglob : src.GlobalsAgree (tgt.env ++ σ)) (hnv : ∀ p ∈ q, p.NoValues)
-    (hgr : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    {σ : Env} (hglob : src.GlobalsAgree tgt.env) (hnv : ∀ p ∈ q, p.NoValues)
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hk : Query.VarsKeyed q)
     (hmatch : ValidQuerySubst tgt (encodeQuery q n).1 σ)
     {e₁ e₂ : Expr} {t₁ t₂ : Term} {m₁ m₂ : Nat}
     (hctor : ∀ g ∈ e₁.fns ∪ e₂.fns, tgt.sig.IsCtor g → src.sig.IsCtor g)
-    (hvars : ∀ v ∈ e₁.vars ∪ e₂.vars, v ∈ Query.vars q ∨ (Env.lookup v src.env).isSome)
-    (hv₁ : (encodeBuild e₁ m₁).1.eval tgt.sig (tgt.env ++ σ) = some t₁)
-    (hv₂ : (encodeBuild e₂ m₂).1.eval tgt.sig (tgt.env ++ σ) = some t₂)
-    (hfired : ∀ τ, ValidQuerySubst src q τ → e₁.eval src.sig (src.env ++ τ) = some t₁ →
-      e₂.eval src.sig (src.env ++ τ) = some t₂ → (t₁, t₂) ∈ src.eqs)
+    (hvars : ∀ v ∈ e₁.vars ∪ e₂.vars, v ∈ Query.vars q ∨
+      (Env.lookup v src.env).isSome ∧ v ∉ Query.vars q ∧ Env.lookup v σ = none)
+    (hv₁ : (encodeBuild e₁ m₁).1.eval tgt.sig (σ ++ tgt.env) = some t₁)
+    (hv₂ : (encodeBuild e₂ m₂).1.eval tgt.sig (σ ++ tgt.env) = some t₂)
+    (hfired : ∀ τ, ValidQuerySubst src q τ → e₁.eval src.sig (τ ++ src.env) = some t₁ →
+      e₂.eval src.sig (τ ++ src.env) = some t₂ → (t₁, t₂) ∈ src.eqs)
     {t p : Term} (ho : (t = t₁ ∧ p = t₂) ∨ (t = t₂ ∧ p = t₁)) : Cong src t p :=
   cong_headUnion_post hb hs hd hsc hglob hnv hgr hk hmatch hctor hvars hv₁ hv₂ hfired ho
 
@@ -2015,8 +1841,9 @@ private def wS1 : Database := wPrelude.addTerm wATermE
 /-- The seventeen declaration and rule commands, stepped: each a `cmdEffect` and a reflexive
 merge phase. -/
 theorem wPreludeStep : ProgramStep Database.empty wEncodedPrelude wPrelude := by
-  iterate 16 refine .cons ⟨_, rfl, .refl⟩ ?_
-  exact .cons ⟨wPrelude, rfl, .refl⟩ .nil
+  iterate 12 refine .cons ⟨_, rfl, .refl⟩ ?_
+  iterate 4 refine .cons ⟨_, cmdEffect_rule_of_env_nil rfl _, .refl⟩ ?_
+  exact .cons ⟨wPrelude, cmdEffect_rule_of_env_nil rfl _, .refl⟩ .nil
 
 /-- The four `set`s and the rebuild. -/
 theorem wActionsStep : ProgramStep wPrelude wEncodedActions wTarget :=
@@ -2231,14 +2058,15 @@ theorem exists_validQuerySubst_composed_witness :
       PatternRead wTarget [("x", .app "A" [])] (.expr (.app "F" [.var "x"])) ∧
       ValidQuerySubst wTarget (encodeQuery wSrcRule.query 0).1 wSubst ∧
       ∃ τ, ValidQuerySubst wSrcD wSrcRule.query τ ∧
-        Env.lookup "x" (wSrcD.env ++ τ) = some (.app "A" []) := by
+        Env.lookup "x" (τ ++ wSrcD.env) = some (.app "A" []) := by
   refine ⟨wProgram_encodeDomain, wProgramStep_src, wProgram_programStep, wSrcD_wf,
     wSrcD_termsBuild, wTarget_viewsSound, wSrcRule_query_vars, wSrcRule_varsKeyed,
     wTarget_patternRead, wTarget_validQuerySubst, ?_⟩
   obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_of_encodeQuery wSrcD_wf wSrcD_termsBuild
     wTarget_viewsSound wTarget_diag wTarget_subtermClosed
     (by simp [Database.GlobalsRead, wSrcD, wSrcBase, Database.empty])
-    wSrcRule_noValues wSrcRule_grounded wSrcRule_varsKeyed wTarget_validQuerySubst
+    wSrcRule_noValues (fun p hp => (wSrcRule_grounded p hp).groundedAt) wSrcRule_varsKeyed
+    wTarget_validQuerySubst
   obtain ⟨t, hlk, hc⟩ := hτ "x" (by rw [wSrcRule_query_vars]; simp) (.app "A" []) rfl
   obtain rfl : t = Term.app "A" [] := Cong.eq_of_diag wSrcD_diag hc
   exact ⟨τ, hv, hlk⟩
@@ -2266,10 +2094,9 @@ last conjunct with the reading pinned: the source substitution binds `x` to the 
 `wSubst` bound it to, and not merely to something congruent to it. -/
 theorem exists_validQuerySubst_at_ids_witness :
     ∃ τ, ValidQuerySubst wSrcD wSrcRule.query τ ∧
-      Env.lookup "x" (wSrcD.env ++ τ) = some (.app "A" []) := by
-  obtain ⟨τ, hv, hτ⟩ := exists_validQuerySubst_at_ids wSrcD_termsBuild wTarget_viewsSound
-    (by simp [Database.GlobalsAgree, wSrcD, wSrcBase, Database.empty])
-    wSrcRule_grounded wSrcRule_varsKeyed
+      Env.lookup "x" (τ ++ wSrcD.env) = some (.app "A" []) := by
+  obtain ⟨τ, hv, -, hτ⟩ := exists_validQuerySubst_at_ids wSrcD_termsBuild wTarget_viewsSound
+    (fun p hp => (wSrcRule_grounded p hp).groundedAt) wSrcRule_varsKeyed
     (patternReads_of_encodeQuery wTarget_diag wTarget_subtermClosed wSrcRule_noValues
       wSrcRule_varsKeyed wTarget_validQuerySubst)
   exact ⟨τ, hv, hτ "x" (by rw [wSrcRule_query_vars]; simp) (.app "A" []) rfl⟩
@@ -2291,7 +2118,8 @@ theorem entrySound_headBuild_witness :
   refine ⟨wTarget_out_view, entrySound_headBuild (q := wSrcRule.query) (n := 0) (m := 0)
     wSrcD_wf wSrcD_termsBuild wTarget_viewsSound wTarget_diag wTarget_subtermClosed
     (by simp [Database.GlobalsAgree, wSrcD, wSrcBase, Database.empty])
-    wSrcRule_noValues wSrcRule_grounded wSrcRule_varsKeyed wTarget_validQuerySubst
+    wSrcRule_noValues (fun p hp => (wSrcRule_grounded p hp).groundedAt) wSrcRule_varsKeyed
+    wTarget_validQuerySubst
     (f := "F") (args := [.var "x"]) (fun g hg _ => ?_) (fun v hv => ?_) rfl
     (fun _ _ _ => wSrcD_mem_F)⟩
   · obtain rfl : g = "F" := by simpa [Expr.fns, Expr.fnsList] using hg
@@ -2312,7 +2140,8 @@ theorem cong_headUnion_witness :
   refine cong_headUnion (q := wSrcRule.query) (n := 0) (m₁ := 0) (m₂ := 0)
     wSrcD_termsBuild wTarget_viewsSound wTarget_diag wTarget_subtermClosed
     (by simp [Database.GlobalsAgree, wSrcD, wSrcBase, Database.empty])
-    wSrcRule_noValues wSrcRule_grounded wSrcRule_varsKeyed wTarget_validQuerySubst
+    wSrcRule_noValues (fun p hp => (wSrcRule_grounded p hp).groundedAt) wSrcRule_varsKeyed
+    wTarget_validQuerySubst
     (e₁ := .app "F" [.var "x"]) (e₂ := .app "F" [.var "x"])
     (fun g hg _ => ?_) (fun v hv => ?_) rfl rfl
     (fun _ _ _ _ => wSrcD_wf.eqsRefl _ wSrcD_mem_F) (Or.inl ⟨rfl, rfl⟩)
@@ -2694,8 +2523,9 @@ set_option maxHeartbeats 2000000 in
 /-- The fifteen declaration and rule commands, stepped: each a `cmdEffect` and a reflexive
 merge phase. -/
 theorem uPreludeStep : ProgramStep Database.empty uEncodedPrelude uPrelude := by
-  iterate 14 refine .cons ⟨_, rfl, .refl⟩ ?_
-  exact .cons ⟨uPrelude, rfl, .refl⟩ .nil
+  iterate 11 refine .cons ⟨_, rfl, .refl⟩ ?_
+  iterate 3 refine .cons ⟨_, cmdEffect_rule_of_env_nil rfl _, .refl⟩ ?_
+  exact .cons ⟨uPrelude, cmdEffect_rule_of_env_nil rfl _, .refl⟩ .nil
 
 set_option maxHeartbeats 2000000 in
 -- Each `set` decides `Signature.IsCtor` through the whole eleven-deep declaration chain, and
@@ -2796,7 +2626,8 @@ theorem cong_headUnion_union_witness :
   refine cong_headUnion (q := uSrcRule.query) (n := 0) (m₁ := 0) (m₂ := 0)
     uSrcD_termsBuild uTgt_viewsSound uTgt_diag uTgt_subtermClosed
     (by simp [Database.GlobalsAgree, uSrcD, uSrcBase, Database.empty])
-    uSrcRule_noValues uSrcRule_grounded uSrcRule_varsKeyed uTgt_validQuerySubst
+    uSrcRule_noValues (fun p hp => (uSrcRule_grounded p hp).groundedAt) uSrcRule_varsKeyed
+    uTgt_validQuerySubst
     (e₁ := .app "A" []) (e₂ := .app "B" []) (t₁ := uA) (t₂ := uB)
     (fun g hg _ => ?_) (fun v hv => ?_) rfl rfl
     (fun _ _ _ _ => uSrcD_mem_eq) (Or.inl ⟨rfl, rfl⟩)

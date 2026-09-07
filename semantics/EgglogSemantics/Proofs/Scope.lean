@@ -93,26 +93,24 @@ checked against. -/
 /-- A query substitution together with the globals models exactly the scope the
 query binds. -/
 theorem Query.bind_models {db : Database} {Γ : Scope} (hm : Γ.Models db.env) {q : Query}
-    {σ : Env} (hσ : ValidQuerySubst db q σ) : (Query.bind q Γ).Models (db.env ++ σ) := by
+    {σ : Env} (hσ : ValidQuerySubst db q σ) : (Query.bind q Γ).Models (σ ++ db.env) := by
   intro v
   rw [Query.bind, List.mem_union_iff, Env.dom_append, List.mem_append, hm v,
     hσ.mem_dom_iff, Query.mem_vars]
   constructor
   · rintro (hv | ⟨p, hp, hv⟩)
-    · exact Or.inl hv
-    · by_cases hd : v ∈ Env.dom db.env
-      · exact Or.inl hd
-      · exact Or.inr ⟨p, hp, p.mem_freeVars.mpr ⟨hv, hd⟩⟩
-  · rintro (hv | ⟨p, hp, hv⟩)
-    · exact Or.inl hv
+    · exact Or.inr hv
+    · exact Or.inl ⟨p, hp, p.mem_freeVars.mpr ⟨hv, by simp⟩⟩
+  · rintro (⟨p, hp, hv⟩ | hv)
     · exact Or.inr ⟨p, hp, (p.mem_freeVars.mp hv).1⟩
+    · exact Or.inl hv
 
 theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
     (hm : Γ.Models db.env) {r : Rule} (hr : r.Scoped Γ) (hre : r.Evaluable db.sig)
     {σ : Env} (hσ : ValidQuerySubst db r.query σ) :
     ∃ d, evalLocalActions db r.actions σ = some d := by
   obtain ⟨d, hd, _⟩ := evalActions_isSome_of_scoped
-    (db := { db with env := db.env ++ σ }) (Query.bind_models hm hσ) hr.2 hre
+    (db := { db with env := σ ++ db.env }) (Query.bind_models hm hσ) hr.2 hre
   exact ⟨{ d with env := db.env, rules := db.rules }, by simp [evalLocalActions, hd]⟩
 
 /-! ### Scoped, evaluable programs do not get stuck

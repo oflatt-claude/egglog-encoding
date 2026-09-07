@@ -83,6 +83,32 @@ def subtermListL : List Term → List Term
 
 end
 
+mutual
+
+/-- **The expression that rebuilds `t`.** A ground term read back as syntax, which is what a
+global's *value* looks like once it has been resolved into a rule
+(`Spec/Step.lean`'s `Rule.resolveGlobals`). -/
+def toExpr : Term → Expr
+  | .lit l => .lit l
+  | .app f args => .app f (toExprList args)
+
+/-- `Term.toExpr` over an argument list. -/
+def toExprList : List Term → List Expr
+  | [] => []
+  | t :: ts => toExpr t :: toExprList ts
+
+end
+
+@[simp] theorem toExpr_lit (l : Lit) : (Term.lit l).toExpr = .lit l := rfl
+
+@[simp] theorem toExpr_app (f : FnName) (ts : List Term) :
+    (Term.app f ts).toExpr = .app f (Term.toExprList ts) := rfl
+
+@[simp] theorem toExprList_nil : Term.toExprList [] = [] := rfl
+
+@[simp] theorem toExprList_cons (t : Term) (ts : List Term) :
+    Term.toExprList (t :: ts) = t.toExpr :: Term.toExprList ts := rfl
+
 end Term
 /-! ### The term order
 

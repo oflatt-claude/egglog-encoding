@@ -1243,18 +1243,18 @@ All three atoms read the same way now: the pattern's instance is congruent, in t
 database extended by that instance, to a term the database holds. So each case is
 `congOn_mono` and the re-evaluation of the operands under the same signature. -/
 theorem ValidSubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig)
-    (henv : d₂.env = d₁.env) {p : Pattern} {σ : Env} (h : ValidSubst d₁ p σ) :
+    (_henv : d₂.env = d₁.env) {p : Pattern} {σ : Env} (h : ValidSubst d₁ p σ) :
     ValidSubst d₂ p σ := by
-  refine ⟨by rw [henv]; exact h.1.mono hc, ?_⟩
+  refine ⟨h.1.mono hc, ?_⟩
   cases h.2 with
   | expr hw he hcong =>
-    exact .expr (hc.terms hw) (by rw [henv, ← hsig]; exact he) (congOn_mono hc hcong)
+    exact .expr (hc.terms hw) (by rw [← hsig]; exact he) (congOn_mono hc hcong)
   | eq hw he₁ he₂ hc₁ hc₂ =>
-    exact .eq (hc.terms hw) (by rw [henv, ← hsig]; exact he₁)
-      (by rw [henv, ← hsig]; exact he₂) (congOn_mono hc hc₁) (congOn_mono hc hc₂)
+    exact .eq (hc.terms hw) (by rw [← hsig]; exact he₁)
+      (by rw [← hsig]; exact he₂) (congOn_mono hc hc₁) (congOn_mono hc hc₂)
   | values hw ht hu hcong =>
-    exact .values (hc.terms hw) (by rw [henv, ← hsig]; exact ht)
-      (by rw [henv, ← hsig]; exact hu) (congOn_mono hc hcong)
+    exact .values (hc.terms hw) (by rw [← hsig]; exact ht)
+      (by rw [← hsig]; exact hu) (congOn_mono hc hcong)
 
 theorem ValidQuerySubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
     (hsig : d₁.sig = d₂.sig) (henv : d₂.env = d₁.env) {q : Query} {σ : Env}
@@ -1928,12 +1928,12 @@ term is the application itself (`IndexOk.ctor`), or a merge function's, whose en
 sits at a congruent key (`IndexOk.entry`). Either way there is a term the database holds to
 serve as `Matches`' witness.
 
-`ValidEnv (p.freeVars d.env) d.toDatabase σ` is load-bearing, not decoration:
-`patternHolds` reads `σ` only through `d.env ++ σ`, so a `σ` carrying bindings the pattern
+`ValidEnv (p.freeVars []) d.toDatabase σ` is load-bearing, not decoration:
+`patternHolds` reads `σ` only through `σ` itself, so a `σ` carrying bindings the pattern
 never mentions still passes the test, while `ValidSubst`'s `ValidEnv` pins `Env.dom σ` to a
 permutation of the pattern's free variables. -/
 theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Pattern}
-    {σ : Env} (hv : ValidEnv (p.freeVars d.env) d.toDatabase σ)
+    {σ : Env} (hv : ValidEnv (p.freeVars []) d.toDatabase σ)
     (hs : patternHolds d p σ = true) : ValidSubst d.toDatabase p σ := by
   cases p with
   | expr e =>
@@ -2002,11 +2002,11 @@ theorem FDatabase.matchQuery_validQuerySubst {d : FDatabase} (h : d.Inv) {q : Qu
     ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
   rw [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true] at hs
   obtain ⟨⟨hdom, hval⟩, hall⟩ := hs
-  have hall' : ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars d.env) σ) :=
+  have hall' : ∀ p ∈ q, ValidSubst d.toDatabase p (Env.canon (p.freeVars []) σ) :=
     fun p hp =>
       FDatabase.patternHolds_validSubst h (validEnv_canon hp hdom hval) (hall p hp)
   obtain ⟨τ, hu, hr⟩ := Env.exists_unionAll (σ := σ)
-    (q.map fun p => Env.canon (p.freeVars d.env) σ) (by
+    (q.map fun p => Env.canon (p.freeVars []) σ) (by
       intro ρ hρ
       obtain ⟨p, -, rfl⟩ := List.mem_map.mp hρ
       exact Env.refines_canon)
@@ -2015,7 +2015,7 @@ theorem FDatabase.matchQuery_validQuerySubst {d : FDatabase} (h : d.Inv) {q : Qu
   intro v hv
   rw [hdom] at hv
   obtain ⟨p, hp, hvp⟩ := Query.mem_freeVars.mp hv
-  refine hu.mem_dom_iff.mpr ⟨Env.canon (p.freeVars d.env) σ, List.mem_map_of_mem hp, ?_⟩
+  refine hu.mem_dom_iff.mpr ⟨Env.canon (p.freeVars []) σ, List.mem_map_of_mem hp, ?_⟩
   rw [Env.dom_canon_of_subset (Query.freeVars_subset hp) hdom]
   exact hvp
 
@@ -3269,13 +3269,203 @@ structure Database.NoUnions (db : Database) : Prop where
   sig : Signature.UnionFree db.sig
   rules : ∀ r ∈ db.rules, Actions.UnionFree r.actions
 
-/-- The ordering-free arm's state-level reading. Two fields rather than three, and no
-clause about `eqs`: the condition is about *positions* — where a choice primitive may be
-applied — so nothing has to be said about what the state asserts. `sig` is what a
-`MergeStep` runs, `rules` is what a `RunRules` runs. -/
+/-! #### Ordering-freedom survives the globals a rule is resolved through
+
+`cmdEffect` stores `Rule.resolveGlobals`, which reads a global's *value* back into the query
+as syntax, so the stored query mentions the head of every term the environment binds. Those
+heads are never `ordering-gt`: `Expr.eval` consults `Prim.ofName` first, so a reserved name
+never reaches the constructor branch, and a primitive answers with a literal or with one of
+its own operands. `Database.NoOrdering.env` is that fact carried along the run. -/
+
+/-- Every application in the expression that rebuilds `t`. -/
+def Term.OrderingFree (t : Term) : Prop := Expr.OrderingFree t.toExpr
+
+theorem Term.orderingFree_lit (l : Lit) : Term.OrderingFree (.lit l) := by
+  intro f hf; simp at hf
+
+theorem Term.orderingFree_app {f : FnName} {ts : List Term} (hf : Prim.ofName f = none)
+    (h : ∀ t ∈ ts, Term.OrderingFree t) : Term.OrderingFree (.app f ts) := by
+  intro g hg
+  rw [Term.toExpr_app, Expr.fns_app, List.mem_cons] at hg
+  rcases hg with rfl | hg
+  · rw [hf]; simp
+  · induction ts with
+    | nil => simp at hg
+    | cons t ts ih =>
+        rw [Term.toExprList_cons, Expr.fnsList_cons, List.mem_union_iff] at hg
+        rcases hg with hg | hg
+        · exact h t (by simp) g hg
+        · exact ih (fun x hx => h x (by simp [hx])) hg
+
+/-- `Prim.apply` answers with a literal or with one of its own operands. -/
+theorem Prim.orderingFree_apply {p : Prim} {ts : List Term} {t : Term}
+    (h : ∀ u ∈ ts, Term.OrderingFree u) (ha : p.apply ts = some t) : Term.OrderingFree t := by
+  unfold Prim.apply at ha
+  split at ha
+  · exact Option.some.inj ha ▸ Term.orderingFree_lit _
+  · rename_i c a b
+    rw [Option.some.injEq] at ha
+    subst ha
+    split
+    · exact h a (by simp)
+    · exact h b (by simp)
+  · exact Option.some.inj ha ▸ Term.orderingFree_lit _
+  · exact Option.some.inj ha ▸ Term.orderingFree_lit _
+  · simp at ha
+
+/-- **The evaluator builds only ordering-free terms**, provided the environment holds only
+such terms. Nothing is asked of the expression: a reserved head is *applied*, never built. -/
+theorem Expr.eval_orderingFree {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.OrderingFree b.2) :
+    ∀ (e : Expr) (t : Term), e.eval sig σ = some t → Term.OrderingFree t := by
+  intro e
+  induction e using Expr.rec
+    (motive_2 := fun es => ∀ (ts : List Term),
+      Expr.evalList sig es σ = some ts → ∀ u ∈ ts, Term.OrderingFree u) with
+  | lit l =>
+      intro t h
+      rw [Expr.eval, Option.some.injEq] at h
+      exact h ▸ Term.orderingFree_lit l
+  | var v =>
+      intro t h
+      rw [Expr.eval] at h
+      exact hσ (v, t) (Env.mem_of_lookup h)
+  | app f args ih =>
+      intro t h
+      rw [Expr.eval] at h
+      cases hp : Prim.ofName f with
+      | some pr =>
+          rw [hp] at h
+          cases hl : Expr.evalList sig args σ with
+          | none => rw [hl] at h; simp at h
+          | some ts =>
+              rw [hl] at h
+              exact Prim.orderingFree_apply (ih ts hl) h
+      | none =>
+          rw [hp] at h
+          by_cases hc : sig.IsCtor f
+          · rw [if_pos hc] at h
+            cases hl : Expr.evalList sig args σ with
+            | none => rw [hl] at h; simp at h
+            | some ts =>
+                rw [hl, Option.map_some, Option.some.injEq] at h
+                exact h ▸ Term.orderingFree_app hp (ih ts hl)
+          · rw [if_neg hc] at h; simp at h
+  | nil =>
+      rename_i ts h u hu
+      rw [Expr.evalList, Option.some.injEq] at h
+      subst h
+      simp at hu
+  | cons e es ihe ihes =>
+      rename_i ts h u hu
+      rw [Expr.evalList] at h
+      cases he : e.eval sig σ with
+      | none => rw [he] at h; simp at h
+      | some t =>
+          rw [he, Option.bind_some] at h
+          cases hes : Expr.evalList sig es σ with
+          | none => rw [hes] at h; simp at h
+          | some us =>
+              rw [hes, Option.map_some, Option.some.injEq] at h
+              subst h
+              rcases List.mem_cons.mp hu with rfl | hu'
+              · exact ihe _ he
+              · exact ihes us hes u hu'
+
+/-- **The substitution introduces no name the environment does not already carry.** -/
+theorem Expr.fns_resolveGlobals (σ : Env) :
+    ∀ (e : Expr) (g : FnName), g ∈ (e.resolveGlobals σ).fns →
+      g ∈ e.fns ∨ ∃ b ∈ σ, g ∈ b.2.toExpr.fns := by
+  intro e
+  induction e using Expr.rec
+    (motive_2 := fun es => ∀ (g : FnName),
+      g ∈ Expr.fnsList (Expr.resolveGlobalsList σ es) →
+        g ∈ Expr.fnsList es ∨ ∃ b ∈ σ, g ∈ b.2.toExpr.fns) with
+  | lit l => intro g h; simp at h
+  | var v =>
+      intro g h
+      cases hlk : Env.lookup v σ with
+      | none => rw [Expr.resolveGlobals_var_none hlk] at h; simp at h
+      | some t =>
+          rw [Expr.resolveGlobals_var_some hlk] at h
+          exact Or.inr ⟨(v, t), Env.mem_of_lookup hlk, h⟩
+  | app f args ih =>
+      intro g h
+      rw [Expr.resolveGlobals_app, Expr.fns_app, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact Or.inl (by rw [Expr.fns_app]; simp)
+      · exact (ih g h).imp (fun hm => by
+          rw [Expr.fns_app]; exact List.mem_cons_of_mem _ hm) id
+  | nil => rename_i g h; simp at h
+  | cons e es ihe ihes =>
+      rename_i g h
+      rw [Expr.resolveGlobalsList_cons, Expr.fnsList_cons, List.mem_union_iff] at h
+      rw [Expr.fnsList_cons]
+      rcases h with h | h
+      · exact (ihe g h).imp (fun hm => List.mem_union_iff.mpr (Or.inl hm)) id
+      · exact (ihes g h).imp (fun hm => List.mem_union_iff.mpr (Or.inr hm)) id
+
+@[inherit_doc Expr.fns_resolveGlobals]
+theorem Expr.fnsList_resolveGlobalsList (σ : Env) :
+    ∀ (es : List Expr) (g : FnName), g ∈ Expr.fnsList (Expr.resolveGlobalsList σ es) →
+      g ∈ Expr.fnsList es ∨ ∃ b ∈ σ, g ∈ b.2.toExpr.fns := by
+  intro es
+  induction es with
+  | nil => intro g h; simp at h
+  | cons e es ih =>
+      intro g h
+      rw [Expr.resolveGlobalsList_cons, Expr.fnsList_cons, List.mem_union_iff] at h
+      rw [Expr.fnsList_cons]
+      rcases h with h | h
+      · exact (Expr.fns_resolveGlobals σ e g h).imp
+          (fun hm => List.mem_union_iff.mpr (Or.inl hm)) id
+      · exact (ih g h).imp (fun hm => List.mem_union_iff.mpr (Or.inr hm)) id
+
+/-- **Resolving a rule's globals keeps it ordering-free**, since every term the environment
+binds rebuilds to an ordering-free expression. -/
+theorem Rule.orderingFree_resolveGlobals {σ : Env} (hσ : ∀ b ∈ σ, Term.OrderingFree b.2)
+    {r : Rule} (h : Rule.OrderingFree r) : Rule.OrderingFree (r.resolveGlobals σ) := by
+  have hE : ∀ e : Expr, Expr.OrderingFree e → Expr.OrderingFree (e.resolveGlobals σ) :=
+    fun e hf g hg => (Expr.fns_resolveGlobals σ e g hg).elim (hf g)
+      fun ⟨b, hb, hgb⟩ => hσ b hb g hgb
+  have hL : ∀ es : List Expr, Expr.OrderingFreeList es →
+      Expr.OrderingFreeList (Expr.resolveGlobalsList σ es) :=
+    fun es hf g hg => (Expr.fnsList_resolveGlobalsList σ es g hg).elim (hf g)
+      fun ⟨b, hb, hgb⟩ => hσ b hb g hgb
+  refine ⟨fun p hp => ?_, h.2⟩
+  rw [Rule.resolveGlobals, Query.resolveGlobals, List.mem_map] at hp
+  obtain ⟨p₀, hp₀, rfl⟩ := hp
+  have h₀ := h.1 p₀ hp₀
+  cases p₀ with
+  | expr e => exact hE e h₀
+  | eq e₁ e₂ => exact ⟨hE e₁ h₀.1, hE e₂ h₀.2⟩
+  | values vs f as => exact ⟨hL vs h₀.1, hL as h₀.2⟩
+
+/-- A top-level action leaves an environment of ordering-free terms: only a `let` extends
+it, and `Expr.eval` is what it extends it with. -/
+theorem evalAction_envOrderingFree {A e : Database}
+    (hn : ∀ b ∈ A.env, Term.OrderingFree b.2) {a : Action} (h : evalAction A a = some e) :
+    ∀ b ∈ e.env, Term.OrderingFree b.2 := by
+  rcases evalAction_eq_some h with
+    ⟨e', t, -, -, rfl⟩ | ⟨v, e', t, -, hev, rfl⟩ | ⟨e₁, e₂, t₁, t₂, -, -, -, -, rfl⟩ |
+    ⟨f, args, out, as, vs, -, -, -, rfl⟩
+  · exact hn
+  · intro b hb
+    rcases List.mem_cons.mp hb with rfl | hb'
+    · exact Expr.eval_orderingFree hn e' t hev
+    · exact hn b hb'
+  · exact hn
+  · exact hn
+
+/-- The ordering-free arm's state-level reading. Three fields and no clause about `eqs`: the
+condition is about *positions* — where a choice primitive may be applied — so nothing has to
+be said about what the state asserts. `sig` is what a `MergeStep` runs, `rules` is what a
+`RunRules` runs, and `env` is what a rule declaration is resolved through
+(`Rule.orderingFree_resolveGlobals`). -/
 structure Database.NoOrdering (db : Database) : Prop where
   sig : Signature.OrderingFree db.sig
   rules : ∀ r ∈ db.rules, Rule.OrderingFree r
+  env : ∀ b ∈ db.env, Term.OrderingFree b.2
 
 namespace Database
 
@@ -3376,7 +3566,7 @@ theorem evalLocalActions_diag {db db' : Database} {as : List Action} {σ : Env}
     (hu : Actions.UnionFree as) (hd : db.Diag) (h : evalLocalActions db as σ = some db') :
     db'.Diag := by
   obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
-  exact evalActions_diag (db := { db with env := db.env ++ σ }) (db' := d) hu hd hv
+  exact evalActions_diag (db := { db with env := σ ++ db.env }) (db' := d) hu hd hv
 
 /-- A merge phase runs the body the *signature* names, so this is where
 `Signature.UnionFree` is spent. -/
@@ -4113,7 +4303,7 @@ theorem cong_instance {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC :
 /-- **An ordering-free pattern matches at the recorder, under the moved substitution.** -/
 theorem matches_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
     (hsig : A.sig = C.sig) {p : Pattern} (hof : Pattern.OrderingFree p) {σ σ' : Env}
-    (henv : EnvOwes C (A.env ++ σ) (C.env ++ σ')) (h : Matches A p σ) : Matches C p σ' := by
+    (henv : EnvOwes C σ σ') (h : Matches A p σ) : Matches C p σ' := by
   cases h with
   | @expr e _ w t hw he hcong =>
     obtain ⟨t', he', ho⟩ := eval_owes hwfC.litsIsolated henv hof (hsig ▸ he)
@@ -4251,13 +4441,11 @@ theorem validSubst_mapVals {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (h
     {p : Pattern} (hof : Pattern.OrderingFree p) {τ : Env} (h : ValidSubst A p τ) :
     ValidSubst C p (Env.mapVals w τ) := by
   refine ⟨⟨?_, ?_⟩, ?_⟩
-  · rw [dom_mapVals, ← henv]; exact h.1.1
+  · rw [dom_mapVals]; exact h.1.1
   · intro b hb
     obtain ⟨a, ha, rfl⟩ := mem_mapVals hb
     exact (hw a.2 (h.1.2 a ha)).1
-  · refine matches_owes hc hwfA hwfC hsig hof ?_ h.2
-    exact envOwes_append (fun v t ht => ⟨t, henv ▸ ht, Owes.refl⟩) (by rw [henv])
-      (envOwes_mapVals hw h.1.2)
+  · exact matches_owes hc hwfA hwfC hsig hof (envOwes_mapVals hw h.1.2) h.2
 
 theorem forall₂_validSubst {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : C.WF)
     (hsig : A.sig = C.sig) (henv : A.env = C.env) {w : Term → Term}
@@ -4293,20 +4481,20 @@ theorem RuleResults.mono_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF)
     ⟨σs.map (Env.mapVals w), forall₂_validSubst hc hwfA hwfC hsig henv hw hall hof.1,
       unionAll_mapVals w hu⟩
   obtain ⟨dA, hv, rfl⟩ := evalLocalActions_eq_some hstep
-  have hwfCe : Database.WF { C with env := C.env ++ Env.mapVals w σ } :=
+  have hwfCe : Database.WF { C with env := Env.mapVals w σ ++ C.env } :=
     hwfC.appendEnv fun b hb => by
       obtain ⟨a, ha, rfl⟩ := mem_mapVals hb
       exact (hw a.2 (hvals a ha)).1
-  have hfollows : StateOwes { A with env := A.env ++ σ }
-      { C with env := C.env ++ Env.mapVals w σ } :=
+  have hfollows : StateOwes { A with env := σ ++ A.env }
+      { C with env := Env.mapVals w σ ++ C.env } :=
     ⟨hc.setEnv _ _, hsig,
-      (envOwes_append (fun v t ht => ⟨t, henv ▸ ht, Owes.refl⟩) (by rw [henv])
-        (envOwes_mapVals hw hvals)).setEnv⟩
+      (envOwes_append (envOwes_mapVals hw hvals) (dom_mapVals w σ).symm
+        (fun v t ht => ⟨t, henv ▸ ht, Owes.refl⟩)).setEnv⟩
   obtain ⟨D, hD, hfd⟩ := evalActions_owes hfollows hwfCe hof.2 hv
   refine ⟨{ D with env := C.env, rules := C.rules },
     ⟨Env.mapVals w σ, hq', by rw [evalLocalActions, hD, Option.map_some]⟩,
     hfd.recorded.setEnvRules _ _ _ _, ?_⟩
-  exact (evalActions_sig hD : _ = ({ C with env := C.env ++ Env.mapVals w σ } : Database).sig)
+  exact (evalActions_sig hD : _ = ({ C with env := Env.mapVals w σ ++ C.env } : Database).sig)
 
 /-- **A round's rule phase transports along `Recorded`.** -/
 theorem RunRules.mono_owes {R : RulesetName} {A C : Database} (hc : A.Recorded C)
@@ -4776,21 +4964,21 @@ theorem execRunRules_contained {R : RulesetName} {d : FDatabase} (h : d.Inv) :
       (fireInto d r acc σ).EqsInTerms ∧ (fireInto d r acc σ).toDatabase.Contained S := by
     intro r hr hR σ hσ acc hacce hacc
     rw [fireInto, execLocalActions]
-    cases hv : execActions { d with env := d.env ++ σ } r.actions with
+    cases hv : execActions { d with env := σ ++ d.env } r.actions with
     | none => simpa using ⟨hacce, hacc⟩
     | some e =>
-      have hee : e.EqsInTerms := execActions_eqsInTerms (h.eqs.setEnv (d.env ++ σ)) hv
+      have hee : e.EqsInTerms := execActions_eqsInTerms (h.eqs.setEnv (σ ++ d.env)) hv
       have hmemS : ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase ∈
           {D | ∃ r' ∈ d.toDatabase.rules, r'.ruleset = R ∧ D ∈ RuleResults d.toDatabase r'} := by
         obtain ⟨τ, hτ, hag⟩ := matchQuery_validQuerySubst h hσ
         have hstep : evalActions
-            ({ d.toDatabase with env := d.toDatabase.env ++ σ } : Database) r.actions
+            ({ d.toDatabase with env := σ ++ d.toDatabase.env } : Database) r.actions
             = some e.toDatabase := by
-          have := FDatabase.execActions_evalActions (h.eqs.setEnv (d.env ++ σ)) hv
+          have := FDatabase.execActions_evalActions (h.eqs.setEnv (σ ++ d.env)) hv
           simpa using this
-        have hEA : ({ d.toDatabase with env := d.toDatabase.env ++ σ } : Database).EnvAgree
-            { d.toDatabase with env := d.toDatabase.env ++ τ } :=
-          ⟨rfl, rfl, rfl, Env.Agree.append_left _ hag.symm⟩
+        have hEA : ({ d.toDatabase with env := σ ++ d.toDatabase.env } : Database).EnvAgree
+            { d.toDatabase with env := τ ++ d.toDatabase.env } :=
+          ⟨rfl, rfl, rfl, Env.Agree.append_right _ hag.symm⟩
         exact
           let ⟨e', hstep', hag'⟩ := evalActions_envAgree_exists hEA hstep
           ⟨r, hr, hR, τ, hτ, by
@@ -4880,7 +5068,7 @@ and `ProgramStep.mono` are that, and they are `ValidQuerySubst.mono` (a larger s
 admits every match), `evalActions_mono` (a block re-run on a larger state lands
 on a larger result) and `MergeClosure.transport` composed. They carry `sig`, `env` and
 `rules` equalities alongside the containment because all three are read: `mono` needs the
-signature, a rule fires in `d.env ++ σ`, and `RunRules` ranges over `rules`.
+signature, a rule fires in `σ ++ d.env`, and `RunRules` ranges over `rules`.
 
 **Preservation.** The induction carries `FDatabase.Inv`, so every command has to
 re-establish it. `.action` and `.run` are the lemmas above run to a fixpoint; `.rule`
@@ -4902,7 +5090,8 @@ theorem RunStep.noOrdering {R : RulesetName} {A B : Database} (h : RunStep R A B
     (hn : A.NoOrdering) : B.NoOrdering :=
   ⟨by rw [MergeClosure.sig h, RunRules.sig]; exact hn.sig,
     by rw [(MergeClosure.envRules h).2]
-       simpa only [RunRules, Database.sUnion_rules] using hn.rules⟩
+       simpa only [RunRules, Database.sUnion_rules] using hn.rules,
+    by rw [(MergeClosure.envRules h).1]; exact hn.env⟩
 
 /-- **One command preserves union-freedom, all three clauses.** `.decl` is the only case
 that moves `sig` and `.rule` the only one that moves `rules`, which is why `Cmd.UnionFree`
@@ -4958,22 +5147,23 @@ theorem cmdEffect_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
   | action a =>
     replace heff : evalAction A a = some e := evalAction_of_top heff
     exact ⟨by rw [evalAction_sig heff]; exact hn.sig,
-      by rw [evalAction_rules heff]; exact hn.rules⟩
+      by rw [evalAction_rules heff]; exact hn.rules,
+      evalAction_envOrderingFree hn.env heff⟩
   | rule r =>
     rw [cmdEffect, Option.some.injEq] at heff
     subst heff
-    refine ⟨hn.sig, fun r' hr' => ?_⟩
+    refine ⟨hn.sig, fun r' hr' => ?_, hn.env⟩
     rcases hr' with rfl | hr'
-    exacts [hu, hn.rules r' hr']
+    exacts [Rule.orderingFree_resolveGlobals hn.env hu, hn.rules r' hr']
   | run R =>
     rw [cmdEffect, Option.some.injEq] at heff
     subst heff
-    exact ⟨hn.sig, hn.rules⟩
+    exact ⟨hn.sig, hn.rules, hn.env⟩
   | saturate R => exact absurd heff (by simp [cmdEffect])
   | decl f dc =>
     rw [cmdEffect, Option.some.injEq] at heff
     subst heff
-    refine ⟨fun g dc' hg => ?_, hn.rules⟩
+    refine ⟨fun g dc' hg => ?_, hn.rules, hn.env⟩
     have hg' : Function.update A.sig f (some dc) g = some dc' := hg
     by_cases hgf : g = f
     · rw [hgf, Function.update_self, Option.some.injEq] at hg'
@@ -4992,14 +5182,16 @@ theorem CmdStep.noOrdering {A B : Database} (hn : A.NoOrdering) {c : Cmd}
         (show SaturateReach R A e from hreach).1 hn
     | _ => exact cmdEffect_noOrdering hn hu hreach
   exact ⟨by rw [MergeClosure.sig hcl]; exact hE.sig,
-    by rw [(MergeClosure.envRules hcl).2]; exact hE.rules⟩
+    by rw [(MergeClosure.envRules hcl).2]; exact hE.rules,
+    by rw [(MergeClosure.envRules hcl).1]; exact hE.env⟩
 
 /-- What the interpreter's own state inherits: it agrees with a witness that is
-ordering-free in the two fields the condition reads. -/
+ordering-free in the three fields the condition reads. -/
 theorem Database.NoOrdering.of_eq {A C : Database} (hn : C.NoOrdering) (hsig : A.sig = C.sig)
-    (hrules : A.rules = C.rules) : A.NoOrdering where
+    (hrules : A.rules = C.rules) (henv : A.env = C.env) : A.NoOrdering where
   sig := by rw [hsig]; exact hn.sig
   rules := by rw [hrules]; exact hn.rules
+  env := by rw [henv]; exact hn.env
 
 /-- **A firing available at `A` is available at any `C` containing it.**
 `ValidQuerySubst.mono` finds the same match and `evalActions_mono` re-runs the
@@ -5010,8 +5202,8 @@ theorem RuleResults.mono {A C : Database} (hc : A.Contained C) (hsig : A.sig = C
     ∃ D ∈ RuleResults C r, d.Contained D := by
   obtain ⟨σ, hq, hstep⟩ := hd
   obtain ⟨d', hv, rfl⟩ := evalLocalActions_eq_some hstep
-  have hc0 : ({ A with env := A.env ++ σ } : Database).Contained
-      { C with env := C.env ++ σ } := ⟨hc.eqs⟩
+  have hc0 : ({ A with env := σ ++ A.env } : Database).Contained
+      { C with env := σ ++ C.env } := ⟨hc.eqs⟩
   obtain ⟨D', hD', hcont, -, -⟩ := evalActions_mono hc0 hsig (by simp [henv]) hv
   exact ⟨{ D' with env := C.env, rules := C.rules },
     ⟨σ, ValidQuerySubst.mono hc hsig henv.symm hq,
@@ -5059,8 +5251,9 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
       exact ⟨_, rfl, ⟨hc.eqs⟩, hsig, henv, by
-        change insert r A.rules = insert r C.rules
-        rw [hrules]⟩
+        change insert (r.resolveGlobals A.env) A.rules
+          = insert (r.resolveGlobals C.env) C.rules
+        rw [hrules, henv]⟩
     | run R =>
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
@@ -5187,8 +5380,9 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
       exact ⟨_, rfl, hc.setEnvRules _ _ _ _, hsig, henv, by
-        change insert r A.rules = insert r C.rules
-        rw [hrules], hwfC.congr rfl rfl, hwfe⟩
+        change insert (r.resolveGlobals A.env) A.rules
+          = insert (r.resolveGlobals C.env) C.rules
+        rw [hrules, henv], hwfC.congr rfl rfl, hwfe⟩
     | run R =>
       rw [cmdEffect, Option.some.injEq] at heff
       subst heff
@@ -5508,14 +5702,14 @@ theorem execRunRules_induction {R : RulesetName} {d : FDatabase} {P : FDatabase 
     (hinit : P d)
     (hstep : ∀ (acc e : FDatabase) (r : Rule) (σ : Env), P acc → r ∈ d.rules →
       σ ∈ matchQuery d r.query →
-      execActions { d with env := d.env ++ σ } r.actions = some e →
+      execActions { d with env := σ ++ d.env } r.actions = some e →
       P (acc.union { e with env := d.env, rules := d.rules })) :
     P (execRunRules R d) := by
   have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ matchQuery d r.query →
       ∀ acc : FDatabase, P acc → P (fireInto d r acc σ) := by
     intro r hr σ hσ acc hacc
     rw [fireInto, execLocalActions]
-    cases hv : execActions { d with env := d.env ++ σ } r.actions with
+    cases hv : execActions { d with env := σ ++ d.env } r.actions with
     | none => simpa using hacc
     | some e => simpa using hstep acc e r σ hacc hr hσ hv
   have hinner : ∀ (r : Rule), r ∈ d.rules → ∀ (σs : List Env),
@@ -5554,15 +5748,15 @@ theorem execRunRules_fields {R : RulesetName} {d : FDatabase} :
 /-- Every value a match assigns is a term the database already holds, so extending `d.env`
 by one keeps `Inv`. -/
 theorem Inv.setEnvMatch {d : FDatabase} (h : d.Inv) {q : Query} {σ : Env}
-    (hσ : σ ∈ matchQuery d q) : ({ d with env := d.env ++ σ } : FDatabase).Inv := by
+    (hσ : σ ∈ matchQuery d q) : ({ d with env := σ ++ d.env } : FDatabase).Inv := by
   refine h.setEnv ?_
   intro b hb
   rcases List.mem_append.mp hb with hb' | hb'
-  · exact h.wf.envInTerms b hb'
-  · have hmem : σ ∈ assignments d.valueTerms (Query.freeVars q d.env) :=
+  · have hmem : σ ∈ assignments d.valueTerms (Query.freeVars q []) :=
       (List.mem_filter.mp (by rwa [matchQuery] at hσ)).1
     exact FDatabase.mem_toDatabase_terms.mpr
       (mem_terms_of_mem_valueTerms ((mem_assignments.mp hmem).2 b hb'))
+  · exact h.wf.envInTerms b hb'
 
 /-- **A round's rule phase preserves `Inv`.** Each firing runs a rule head, which is an
 action block like any other, so `hrules` is `Inv.execActions`'s premise per rule; the
@@ -5577,9 +5771,9 @@ theorem Inv.execRunRules {R : RulesetName} {d : FDatabase} (h : d.Inv)
   refine ⟨hacc.1.union ?_ ?_, hacc.2⟩
   · refine Inv.setEnvRules ((h.setEnvMatch hσ).execActions (hrules r hr) hv) ?_
     intro b hb
-    refine (execActions_contained (d := { d with env := d.env ++ σ }) hv).terms ?_
+    refine (execActions_contained (d := { d with env := σ ++ d.env }) hv).terms ?_
     exact Database.mem_terms_of_eqs (d₁ := d.toDatabase)
-      (d₂ := ({ d with env := d.env ++ σ } : FDatabase).toDatabase)
+      (d₂ := ({ d with env := σ ++ d.env } : FDatabase).toDatabase)
       (fun _ hp => hp) (h.wf.envInTerms b hb)
   · change e.sig = acc.sig
     rw [execActions_sig hv, hacc.2]
@@ -5983,8 +6177,8 @@ theorem Inv.execCmdM {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     rw [execAction_sig h₁]; exact hmerges
   | rule r =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
-    exact hs ▸ ⟨h.wf.setEnvRules (rs := r :: d.rules) h.wf.envInTerms, h.eqs,
-      h.index.setEnvRules d.env (r :: d.rules)⟩
+    exact hs ▸ ⟨h.wf.setEnvRules (rs := r.resolveGlobals d.env :: d.rules) h.wf.envInTerms,
+      h.eqs, h.index.setEnvRules d.env (r.resolveGlobals d.env :: d.rules)⟩
   | run R =>
     rw [FDatabase.execCmdM] at hs
     exact h.runRoundM hmerges hrules hs
@@ -6074,12 +6268,14 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.No
   | rule r =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     subst hs
-    refine ⟨{ d.toDatabase with rules := insert r d.toDatabase.rules },
+    refine ⟨{ d.toDatabase with
+        rules := insert (r.resolveGlobals d.env) d.toDatabase.rules },
       ⟨_, rfl, Relation.ReflTransGen.refl⟩,
       ⟨fun p hp => ?_⟩, rfl, rfl, ?_⟩
     · obtain ⟨q, hq, hc₁, hc₂⟩ := (Database.Recorded.refl (db := d.toDatabase)).eqs p hp
       exact ⟨q, hq, congOn_setEnvRules hc₁, congOn_setEnvRules hc₂⟩
-    change ({r' | r' ∈ r :: d.rules} : Set Rule) = insert r {r' | r' ∈ d.rules}
+    change ({r' | r' ∈ r.resolveGlobals d.env :: d.rules} : Set Rule)
+      = insert (r.resolveGlobals d.env) {r' | r' ∈ d.rules}
     ext r'
     simp
   | run R =>
@@ -6189,7 +6385,7 @@ theorem execProgramM_contained_aux {p : Program} : ∀ {d d' : FDatabase}, d.Inv
       · have hnu₁ := CmdStep.noUnions hnu hcu.1 hstep₁
         exact ⟨Or.inl ⟨hnu₁.of_recorded hcont₁ hsig₁ hrules₁, hcu.2⟩, Or.inl hnu₁.diag⟩
       · have hno₁ := CmdStep.noOrdering hno hcof.1 hstep₁
-        exact ⟨Or.inr ⟨hno₁.of_eq hsig₁ hrules₁, hcof.2⟩, Or.inr ⟨hno₁, hcof.2⟩⟩
+        exact ⟨Or.inr ⟨hno₁.of_eq hsig₁ hrules₁ henv₁, hcof.2⟩, Or.inr ⟨hno₁, hcof.2⟩⟩
     obtain ⟨db₂, hstep₂, hcont₂⟩ :=
       ih hinv₁ hnscs (by rw [execCmdM_sig hd₁]; exact hmerges')
         (execCmdM_rulesLegal hlegal hunused hrules hd₁) hnext₁.1 (hnext d₁ hd₁) hcs
@@ -6290,7 +6486,8 @@ theorem execM_contained {p : Program} (hns : p.NoSaturate)
         by simp [FDatabase.toDatabase_empty, Database.empty, Signature.UnionFree],
         by simp [FDatabase.toDatabase_empty, Database.empty]⟩, hu⟩)
       fun ho => ⟨⟨by simp [FDatabase.toDatabase_empty, Database.empty,
-        Signature.OrderingFree], by simp [FDatabase.toDatabase_empty, Database.empty]⟩, ho⟩)
+        Signature.OrderingFree], by simp [FDatabase.toDatabase_empty, Database.empty],
+        by simp [FDatabase.toDatabase_empty, Database.empty]⟩, ho⟩)
     hp h
 
 end Egglog

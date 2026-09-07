@@ -117,10 +117,13 @@ def evalActions (db : Database) : List Action → Option Database
   | [] => some db
   | a :: as => (evalAction db a).bind fun db' => evalActions db' as
 
-/-- Run a rule's actions with `σ` in scope, then forget the resulting environment. `σ` is
-appended *after* the globals, so a global shadows a substitution for the same name. -/
+/-- Run a rule's actions with `σ` in scope, then forget the resulting environment. `σ` comes
+*before* the globals, so a match variable shadows a global of the same name: a rule declared
+before the top-level `let` that binds that name reads its own binding, in the head as in the
+query (`Spec/Step.lean`'s `cmdEffect`). A global the rule was declared under is not a match
+variable — it was resolved into the query — so the two orders agree there. -/
 def evalLocalActions (db : Database) (as : List Action) (σ : Env) : Option Database :=
-  (evalActions { db with env := db.env ++ σ } as).map fun db' =>
+  (evalActions { db with env := σ ++ db.env } as).map fun db' =>
     { db' with env := db.env, rules := db.rules }
 
 end Egglog

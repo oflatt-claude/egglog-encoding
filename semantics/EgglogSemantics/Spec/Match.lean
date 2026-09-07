@@ -55,14 +55,18 @@ def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
 /-! ### Matching -/
 /-- A pattern **matches** under `σ` when its instance is congruent to a term the database
 holds. The **witness** `w` is drawn from the *original* terms: without one, the reflexive
-equation `withOperands` adds for the instance would match everything. -/
+equation `withOperands` adds for the instance would match everything.
+
+`σ` is the **whole** environment a pattern is read in: the globals a rule's query mentions
+were resolved into it when the rule was registered (`Spec/Step.lean`'s `cmdEffect`), so the
+firing state's own environment says nothing about a query and is not consulted. -/
 inductive Matches (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
-      w ∈ db.terms → e.eval db.sig (db.env ++ σ) = some t → CongOn db [t] w t →
+      w ∈ db.terms → e.eval db.sig σ = some t → CongOn db [t] w t →
       Matches db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       w ∈ db.terms →
-      e₁.eval db.sig (db.env ++ σ) = some t₁ → e₂.eval db.sig (db.env ++ σ) = some t₂ →
+      e₁.eval db.sig σ = some t₁ → e₂.eval db.sig σ = some t₂ →
       CongOn db [t₁, t₂] w t₁ → CongOn db [t₁, t₂] t₁ t₂ →
       Matches db (.eq e₁ e₂) σ
   /-- The entry atom: `f`'s entry at a key class congruent to `as`, with value columns
@@ -70,15 +74,18 @@ inductive Matches (db : Database) : Pattern → Env → Prop where
   | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
       {us ts : List Term} {w : Term} :
       w ∈ db.terms →
-      Expr.evalList db.sig as (db.env ++ σ) = some ts →
-      Expr.evalList db.sig vs (db.env ++ σ) = some us →
+      Expr.evalList db.sig as σ = some ts →
+      Expr.evalList db.sig vs σ = some us →
       CongOn db [.app f (ts ++ us)] w (.app f (ts ++ us)) →
       Matches db (.values vs f as) σ
 
 /-- The substitutions one query pattern admits: `σ` binds exactly the pattern's free
-variables, and the pattern matches under it. -/
+variables, and the pattern matches under it. **Free against the empty environment**: every
+variable a stored rule's query still carries is a match variable, because a global was
+resolved into the rule when it was registered and a name that was not a global then never
+becomes one for that rule. -/
 def ValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
-  ValidEnv (p.freeVars db.env) db σ ∧ Matches db p σ
+  ValidEnv (p.freeVars []) db σ ∧ Matches db p σ
 
 /-- The substitutions a whole query admits: one per pattern, unioned. -/
 def ValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=

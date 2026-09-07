@@ -83,6 +83,13 @@ private def wrapGlobRule : Rule where
   actions := [.expr (C "Hit")]
   ruleset := ""
 
+/-- The same query with the global **in the head too**, so the row the firing writes says
+which reading of `$g` the query used. -/
+private def wrapGlobHeadRule : Rule where
+  query := [.expr (.app "Wrapper" [.var "$g"])]
+  actions := [.expr (.app "Hit" [.var "$g"])]
+  ruleset := ""
+
 /-- The same query with a `union` head, so what a failure to fire costs is an *equality*
 between two terms both databases hold rather than an e-node. -/
 private def wrapGlobUnionRule : Rule where
@@ -142,6 +149,51 @@ private def mmUnionRule : Rule where
   query := [.expr (C "Mm")]
   actions := [.union (C "Zz") (C "Aa")]
   ruleset := ""
+
+/-! #### A `let` reached after the rule was declared
+
+The `glob-late-*` family: `glob-lost`'s shape with the **rule declared first**, so `$g` is an
+ordinary match variable and stays one. `Spec/Step.lean`'s `cmdEffect` resolves the globals then
+in scope into the rule it registers, which is what `remove_globals` does and where it does it,
+so all three of the binary, the specification and the encoding read the query the same way. -/
+
+/-- The global's key is never built and nothing is unioned: the query fires only if `$g` is
+free. The measurement that says the reading is the binary's. -/
+private def globLateFreshCase : Program :=
+  [.rule wrapGlobRule,
+   .action (.letBind "$g" (C "Zz")),
+   .action (.expr (.app "Wrapper" [C "Bb"])),
+   .run ""]
+
+/-- The argument is congruent to the global, so the frozen query matches too and only the
+encoding can lose the firing. -/
+private def globLateCase : Program :=
+  [.rule wrapGlobRule,
+   .action (.letBind "$g" (C "Zz")),
+   .action (.expr (.app "Wrapper" [C "Aa"])),
+   .action (.union (C "Zz") (C "Aa")),
+   .run ""]
+
+/-- **The head reads the same name**, so the firing says *which* reading won rather than only
+whether one happened: with `$g` an ordinary match variable the head builds `(Hit (Bb))`, and
+with `$g` recaptured as the global it would build `(Hit (Zz))`. `./target/release/egglog`
+prints `(Hit (Bb))`. This is also the measurement that fixes `evalLocalActions`' environment
+order — `σ` before the globals, so a match variable is not shadowed by a later `let`. -/
+private def globLateHeadCase : Program :=
+  [.rule wrapGlobHeadRule,
+   .action (.letBind "$g" (C "Zz")),
+   .action (.expr (.app "Wrapper" [C "Bb"])),
+   .run ""]
+
+/-- The same with a `union` head, so what a missing firing costs is an **equality** between
+two terms both databases hold — the shape `Database.UnionsJoined` is stated in. -/
+private def globLateEqCase : Program :=
+  [.rule wrapGlobUnionRule,
+   .action (.letBind "$g" (C "Zz")),
+   .action (.expr (.app "Wrapper" [C "Aa"])),
+   .action (.expr (C "Hit")),
+   .action (.union (C "Zz") (C "Aa")),
+   .run ""]
 
 private def curated : List (String × Program) :=
   [ ("actions",
@@ -254,7 +306,27 @@ private def curated : List (String × Program) :=
     -- to the unnamed ruleset fire in a plain round too.
     ("sat-after-run",
       [.action (.expr (add (C "One") (C "Two"))),
-       .rule swapRule, .rule commuteRule, .run "", .saturate ""]) ]
+       .rule swapRule, .rule commuteRule, .run "", .saturate ""]),
+    -- **The rule is declared before the `let`.** egglog resolves variables one command at a
+    -- time (`egglog/src/lib.rs:2615-2617`), and `remove_globals` rewrites only a reference
+    -- already marked `is_global_ref` (`egglog/src/ast/remove_globals.rs:183-238`), so a rule
+    -- read before the `let` keeps `$g` as an ordinary match variable forever. The later `let`
+    -- is still legal: `check_shadowing` checks a rule's pattern names in a *clone* of the
+    -- accumulated names (`egglog/src/ast/check_shadowing.rs:60-66`), so they never reach the
+    -- table the `let` is checked against. Here the only `Wrapper` in the program holds a term
+    -- unrelated to the global and nothing is unioned, so a query frozen at `(Wrapper (Zz))`
+    -- cannot match and a query with `$g` free fires: the binary reports `Hit` 1.
+    ("glob-late-fresh", globLateFreshCase),
+    -- The same arrival order with the global in the **head** as well, so the row the firing
+    -- writes names the term the query bound `$g` to: the binary prints `(Hit (Bb))`, which is
+    -- the match variable's value and not the global's.
+    ("glob-late-head", globLateHeadCase),
+    -- The same arrival order where the argument *is* congruent to the global, so both
+    -- readings of the query match and only the *encoding* can lose the firing.
+    ("glob-late", globLateCase),
+    -- The same with a `union` head, so what a missing firing costs is an equality between two
+    -- terms both databases hold — the shape `Database.UnionsJoined` is stated in.
+    ("glob-late-eq", globLateEqCase) ]
 
 /-! **The emitted egglog is unchanged by rulesets.** Every case here names the *unnamed*
 ruleset, which a rule joins by writing no `:ruleset` and which `(run 1)` runs, so
@@ -462,14 +534,25 @@ private def genProgram (s : Nat) : Program :=
   -- **Sometimes a source `saturate`**, drawn after everything else so that the rest of a
   -- seed's program is what it was. `encodeCmd` gives a `Cmd.saturate` a schedule of its own,
   -- and nothing else in the corpus but the `sat-*` cases reaches it.
-  let (wantSat, _) := pick 2 s
+  let (wantSat, s) := pick 2 s
   let sat := match wantSat, genCollapseRules g₂ with
     | 0, some rs => rs.map Cmd.rule ++ [Cmd.saturate collapseRuleset]
     | _, _ => []
+  -- **Sometimes a top-level `let` on a name the rules already matched**, placed *after* the
+  -- rules and before the rounds. `genPattern` abstracts subterms to `a` and `b`, so `a` is a
+  -- query variable of a rule already registered, and a `let` on it is the `glob-late-*`
+  -- shape at every seed that draws it: egglog resolves a rule's variables when it reads the
+  -- rule (`egglog/src/lib.rs:2615-2617`) and `check_shadowing` checks a rule's pattern names
+  -- in a clone (`check_shadowing.rs:60-66`), so the name stays a match variable and the `let`
+  -- is still legal. `g₁` is ground, so the `let` evaluates whatever else the seed drew.
+  let (wantLet, _) := pick 3 s
+  let lateLet := match wantLet with
+    | 0 => [Cmd.action (.letBind "a" g₁)]
+    | _ => []
   -- The model keeps rules in a `Set` and so ignores a repeat; egglog panics on one.
   -- Compare the rendered form, there being no decidable equality on `Rule`.
   let rules := if r₁.toEgg = r₂.toEgg then [Cmd.rule r₁] else [Cmd.rule r₁, Cmd.rule r₂]
-  [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ sat ++ rules
+  [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ sat ++ rules ++ lateLet
     ++ List.replicate (rounds + 1) (Cmd.run "")
 
 /-! ### `:merge` cases (M9)
@@ -1696,11 +1779,11 @@ private def allCases : List (String × Program) :=
   curated ++ curatedMerge ++ randomCases ++ randomMergeCases
 
 set_option linter.hashCommand false in
-#guard curated.length = 23
+#guard curated.length = 27
 set_option linter.hashCommand false in
 #guard curatedMerge.length = 66
 set_option linter.hashCommand false in
-#guard allCases.length = 179
+#guard allCases.length = 183
 
 /-! Three cases small enough to pin the encoding's behaviour at compile time. None has a
 rule, so none runs the enumerator, whose cost is `|terms| ^ |vars|`. -/
@@ -1898,66 +1981,24 @@ private def shadowInheritCase : Program :=
    .action (.union (C "Yy") (C "Aa")),
    .rule wrapGlobBRule, .run ""]
 
-/-! #### A global that captures a rule variable
+/-! #### A `let` reached after the rule was declared, and its control
 
-`glob-lost`'s shape with the **rule declared first**. `Spec/Match.lean`'s `ValidSubst` takes
-`Pattern.freeVars` against the *firing state's* environment, so a top-level `let` reached after
-the rule was declared **recaptures** the rule's own query variable: `$g` is a match variable
-when the rule is registered and a global by the time the round runs. `Cmd.globalBind` threads
-the substitution left to right (`encodeCmds`), so the rule was encoded through a `G` that does
-not carry `$g` and `Rule.substGlobals` leaves the query keyed at the frozen environment term —
-which is `glob-lost` exactly, on the one arrival order `Rule.substGlobals` cannot repair.
+The `glob-late-*` family is defined above and **run against the binary** as corpus cases. A rule
+declared before the `let` keeps `$g` as an ordinary match variable: egglog resolves variables
+one command at a time (`egglog/src/lib.rs:2615-2617`), `remove_globals` rewrites only a
+reference already marked `is_global_ref` (`egglog/src/ast/remove_globals.rs:183-238`,
+`expr.rs:70-75`), and `check_shadowing` checks a rule's pattern names in a *clone* of the
+accumulated names (`egglog/src/ast/check_shadowing.rs:60-66`) so the later `let` is still legal.
+`Spec/Step.lean`'s `cmdEffect` resolves the globals then in scope into the rule it registers,
+and `encodeCmds` threads the same substitution left to right through `Cmd.globalBind`, so
+specification and encoding are keyed the same way by construction rather than by arrival order.
 
-**The recapture is a specification defect, measured.** egglog reads the rule a third way:
-variables are resolved one command at a time (`egglog/src/lib.rs:2615-2617`), `remove_globals`
-rewrites only a reference the typechecker already marked `is_global_ref`
-(`egglog/src/ast/remove_globals.rs:183-238`, `expr.rs:70-75`), and `check_shadowing` checks a
-rule's pattern names in a *clone* of the accumulated names
-(`egglog/src/ast/check_shadowing.rs:60-66`) — so a rule processed before the `let` keeps `$g`
-as an ordinary match variable **forever**, and the later `let` is still legal. On
-`globLateFreshCase` below the binary answers `Hit 1` and `Egglog.execAt 64 FDatabase.empty`
-answers 0: the specification **under-fires**, because it recaptures `$g` as the global `(Zz)`
-and `(Wrapper (Bb))` does not match `(Wrapper (Zz))`. The repair is to resolve the globals then
-in scope into a rule at `Cmd.rule` registration — `remove_globals`' own step, at
-`remove_globals`' own point — which is `Encoding/Encode.lean`'s `Rule.substGlobals` moved into
-`Spec/Step.lean`'s `cmdEffect`, and which would make the specification and the encoder agree by
-construction rather than by arrival order.
-
-Probes rather than corpus cases **until that repair lands**: `glob-late` and `glob-late-eq`
-agree with the binary by accident (their argument is congruent to the global, so both readings
-match), `glob-late-fresh` does not, and what the *encoding* loses on this arrival order is
-measured against the model's own source run by
+The control below stays a probe: what the encoding loses on either arrival order is measured
+against the model's own source run, by
 `difftest correspond 64 glob-late glob-late-eq glob-early-eq`. -/
-private def globLateCase : Program :=
-  [.rule wrapGlobRule,
-   .action (.letBind "$g" (C "Zz")),
-   .action (.expr (.app "Wrapper" [C "Aa"])),
-   .action (.union (C "Zz") (C "Aa")),
-   .run ""]
 
-/-- **The measurement that separates the two readings.** The only `Wrapper` in the program holds
-a term unrelated to the global and nothing is unioned, so a query keyed at `(Wrapper (Zz))`
-cannot match and a query with `$g` free fires. `./target/release/egglog` reports `Hit 1`, with
-and without `--proofs`; `Egglog.execAt 64 FDatabase.empty` reports 0. Out of `allCases` because
-the specification does not yet answer it. -/
-private def globLateFreshCase : Program :=
-  [.rule wrapGlobRule,
-   .action (.letBind "$g" (C "Zz")),
-   .action (.expr (.app "Wrapper" [C "Bb"])),
-   .run ""]
-
-/-- The same with a `union` head, so what the missing firing costs is an **equality** between
-two terms both databases hold — which is the shape `Database.UnionsJoined` is stated in. -/
-private def globLateEqCase : Program :=
-  [.rule wrapGlobUnionRule,
-   .action (.letBind "$g" (C "Zz")),
-   .action (.expr (.app "Wrapper" [C "Aa"])),
-   .action (.expr (C "Hit")),
-   .action (.union (C "Zz") (C "Aa")),
-   .run ""]
-
-/-- The control: the same commands with the `let` moved back in front of the rule, which is
-`glob-lost-eq` and which `Rule.substGlobals` repairs. -/
+/-- The control: `globLateEqCase`'s commands with the `let` moved back in front of the rule, so
+the same query is keyed at the global instead of at a match variable. -/
 private def globEarlyEqCase : Program :=
   [.action (.letBind "$g" (C "Zz")),
    .rule wrapGlobUnionRule,
@@ -1980,8 +2021,7 @@ private def probeCases : List (String × Program) :=
    ("tower", towerCase), ("order", orderCase), ("round", roundCase),
    ("lit-union", litUnionCase), ("lit-mix", litMixCase),
    ("shadow-glob", shadowGlobCase), ("shadow-inherit", shadowInheritCase),
-   ("glob-late", globLateCase), ("glob-late-eq", globLateEqCase),
-   ("glob-late-fresh", globLateFreshCase), ("glob-early-eq", globEarlyEqCase)]
+   ("glob-early-eq", globEarlyEqCase)]
 
 namespace Egglog
 /-! ### The proof encoding, by tuple count
@@ -2049,7 +2089,7 @@ per read from multiplying the whole search rather than its own atom's block. It 
 enough on its own — 12 of 70 at a 60 s budget — and "Joining over the row index" is what
 followed it. **63 of the 70 in-domain cases the corpus then had finish** at 60 s and 65 at
 300 s, all reporting `AGREE`, against 58 and 64 *before* the proof column: the enumerator now
-more than pays for the column it was struggling under. The eight `glob-*` cases added since
+more than pays for the column it was struggling under. The eleven `glob-*` cases added since
 run in half a second between them.
 
 Nothing regressed — every case that finished under the older enumerators is faster,
@@ -2266,7 +2306,9 @@ set_option linter.hashCommand false in
 /-! The three `glob-late` probes are in `encode`'s domain too, and none of them shadows — so
 `Program.EncodeDomain` and `Egglog.letNames_nodup_of_programStep` both admit them and `hsrc`
 does not exclude them. What separates `glob-late-eq` from `glob-early-eq` is the arrival order
-of the `let` and the `rule`, and nothing else. -/
+of the `let` and the `rule`, and — since `Spec/Step.lean` resolves a rule's globals when it
+registers the rule — nothing else at all: both agree with the binary and both agree with their
+own encoding. -/
 set_option linter.hashCommand false in
 #guard (globLateCase.declared).encodeDomainB && (globLateEqCase.declared).encodeDomainB
   && (globEarlyEqCase.declared).encodeDomainB
@@ -2422,11 +2464,20 @@ a term the source names, reported against a row whose claim sits at a rule-creat
 report counts those apart from proofs that justify nothing.
 
 **Measured.** `difftest check 64`, the 83 in-domain corpus cases:
-**799 of 809 recorded equalities check, 6 are merge-displaced, and 4 are
-unjustified**. Only `both-2` (17/4/2) and `rand-43` (22/2/2) reject; every other case is
-clean, the five `sat-*` ones and `rand-19`, `rand-33`, `rand-45` and `rand-57` among them. A
+**790 of 828 recorded equalities check, 6 are merge-displaced, and 32 are
+unjustified**: `both-2` (17/4/2), `glob-late-eq` (4/0/2), `rand-35` (10/0/2), `rand-43`
+(22/2/2), `rand-51` (6/0/13) and `rand-59` (7/0/11) reject and every other case is clean. A
 failing case prints `REJECT` rather than `CHECKS`, so an aggregate has to count both lines —
-81 `CHECKS` and 2 `REJECT` here.
+81 `CHECKS` and 6 `REJECT` here.
+
+**Four of the six are the late-`let` shape, and they are the checker's gap and not the
+encoder's.** `genProgram` now draws a top-level `let` on `a` — a name the rules it already
+registered match on — one seed in three, and `glob-late-eq` is the curated case of the same
+shape. With that draw suppressed the sweep is 816/6/6 of 828, `84 CHECKS` and `3 REJECT`
+(`both-2`, `glob-late-eq`, `rand-43`); the extra rows are `props` failing to seed a `@Rule_i`
+node whose premise exists only because an earlier rule fired, which is the mechanism below.
+`difftest correspond 64` reports **0 LOST and 0 INVENTED** on every one of them, so the
+encoding itself agrees.
 
 The checker reads a rule's query through `Rule.substGlobals` before flattening it, because
 that is the query the encoder flattened; without it `@Rule_i`'s premise count would disagree
@@ -3474,13 +3525,13 @@ and not about the state a `ProgramStep` picks. -/
 /-! #### What the harness pins
 
 The census. `encode`'s fragment is the constructor one, so the in-domain cases are exactly
-the two constructor families and none of the `:merge` ones — which is 83 of 179, and the
+the two constructor families and none of the `:merge` ones — which is 86 of 182, and the
 reason a sweep here is a statement about 46% of the suite. -/
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => (c.2.declared).encodeDomainB).map Prod.fst
   = curated.map Prod.fst ++ randomCases.map Prod.fst
 set_option linter.hashCommand false in
-#guard (allCases.filter fun c => (c.2.declared).encodeDomainB).length = 83
+#guard (allCases.filter fun c => (c.2.declared).encodeDomainB).length = 87
 
 /-! And they are out for the one reason `MERGE.md` calls permanent rather than a gap: every
 one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
@@ -3511,7 +3562,7 @@ includes the clause, so the guard below is the redundant half of the count and i
 record of what was measured before it was folded in. -/
 set_option linter.hashCommand false in
 #guard ((allCases.filter fun c => (c.2.declared).encodeDomainB).filter fun c =>
-  decide (c.2.declared).HeadsScoped).length = 83
+  decide (c.2.declared).HeadsScoped).length = 87
 
 /-! **`encode` runs.** It did not while `encodeBuild` read its view back to get the
 canonical member: `(let x (@fView c…))` is a lookup, which `Program.illegalReads` rejects
