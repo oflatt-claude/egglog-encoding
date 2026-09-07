@@ -455,28 +455,33 @@ def rewrite_parts(src, form):
         elif key == ":fresh":
             out["fresh"] += list(vals)
         elif key == ":when":
-            want, *rest = vals[0]
-            if want == "=":
-                # NOT a side condition: another rooted pattern, which is how a rewrite
-                # says a multipattern. `(= ?v <call>)` means "?v also matches this", so
-                # the pattern is flattened with `?v` as its root and its atoms join the
-                # left-hand side's. Several `:when` equalities give an arbitrary
-                # multipattern, and one may introduce variables the main pattern never
-                # mentions.
-                assert len(rest) == 2, f"{src.path.name}: `=` takes a variable and a pattern, got {rest}"
-                var, pat = rest
-                assert isinstance(var, str) and not var.startswith("$"), (
-                    f"{src.path.name}: the left of a `:when =` must be a variable, got {var!r}"
-                )
-                assert isinstance(pat, list), (
-                    f"{src.path.name}: the right of a `:when =` must be a call, got {pat!r} -- "
-                    "a bare variable there would identify two variables, which this does not do yet"
-                )
-                out["equalities"].append((var.lstrip("?"), pat))
-            else:
-                slot, *pvars = rest
-                assert want in ("free", "not-free", "="), f"unknown condition {want!r}"
-                out["conds"].append((want == "free", slot, [v.lstrip("?") for v in pvars]))
+            # EVERY condition in the clause. `keywords` gathers all the values up to the
+            # next keyword, so `:when c1 c2` arrives as two; reading only the first
+            # dropped the rest in silence, leaving a rule that looked constrained and was
+            # not. Separate `:when` clauses always worked, and mean the same thing.
+            for cond in vals:
+                want, *rest = cond
+                if want == "=":
+                    # NOT a side condition: another rooted pattern, which is how a
+                    # rewrite says a multipattern. `(= v <call>)` means "v also matches
+                    # this", so the pattern is flattened with `v` as its root and its
+                    # atoms join the left-hand side's. Several of them give an arbitrary
+                    # multipattern, and one may introduce variables the main pattern
+                    # never mentions.
+                    assert len(rest) == 2, f"{src.path.name}: `=` takes a variable and a pattern, got {rest}"
+                    var, pat = rest
+                    assert isinstance(var, str) and not var.startswith("$"), (
+                        f"{src.path.name}: the left of a `:when =` must be a variable, got {var!r}"
+                    )
+                    assert isinstance(pat, list), (
+                        f"{src.path.name}: the right of a `:when =` must be a call, got {pat!r} -- "
+                        "a bare variable there would identify two variables, which this does not do yet"
+                    )
+                    out["equalities"].append((var.lstrip("?"), pat))
+                else:
+                    assert want in ("free", "not-free"), f"unknown condition {want!r}"
+                    slot, *pvars = rest
+                    out["conds"].append((want == "free", slot, [v.lstrip("?") for v in pvars]))
     return out
 
 

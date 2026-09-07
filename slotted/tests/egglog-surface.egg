@@ -4,11 +4,16 @@
 ;;; and for a rewrite whose multipattern comes from `:when`. A sort other than `U` is
 ;;; not covered yet -- the carrier is still hardcoded.
 ;;;
+;;; Every `:when` case asserts BOTH halves: that the rule fires where the condition
+;;; holds, and that it does NOT where the condition fails. Only the second has teeth --
+;;; a condition that is silently ignored passes the first on its own.
+;;;
 ;;;     python3 slotted/slotted-egglog.py slotted/tests/egglog-surface.egg
 
 (constructor Null () U)
 (constructor Succ (U) U)
 (constructor Prev (U) U)
+(constructor Pair (U U) U)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -16,13 +21,11 @@
 ;;; `(rewrite (Id x) x)` and `(rewrite (C2 a b) (C2 b a))`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-
 (rewrite (Prev (Succ x)) x :name bare)
 
 (let one (Prev (Succ (Null))))
 (run 5)
 (check (= one (Null)))
-
 (pop)
 
 
@@ -31,38 +34,11 @@
 ;;; stripped, and `?x` and `x` are one variable rather than two.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-
 (rewrite (Prev (Succ ?x)) x :name mixed)
 
 (let two (Prev (Succ (Succ (Null)))))
 (run 5)
 (check (= two (Succ (Null))))
-
-(pop)
-
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; `:when (= v <call>)` is a MULTIPATTERN, not a side condition: it contributes
-;;; another rooted pattern, so the rule fires only where that pattern also matches.
-;;; Both halves are asserted -- fires where the condition holds, blocked where it does
-;;; not -- since a condition that is silently ignored would pass the first alone.
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(push)
-
-(rewrite (Prev (Succ x)) x :when (= x (Succ (Succ y))) :name peel)
-
-;; x = (Succ (Succ (Null))) does match (Succ (Succ y)), with y = (Null)
-(let deep (Prev (Succ (Succ (Succ (Null))))))
-(let want (Succ (Succ (Null))))
-
-;; x = (Null) does not, so the rule must not fire here
-(let shallow (Prev (Succ (Null))))
-
-(run 10)
-
-(check (= deep want))
-(fail (check (= shallow (Null))))
-
 (pop)
 
 
@@ -71,11 +47,84 @@
 ;;; paren-less `Null` from silently becoming a wildcard that matches everything.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-
 (rewrite (Prev (Succ Null)) (Null) :name bare-nullary)
 
 (let three (Prev (Succ (Null))))
+(let four (Prev (Succ (Succ (Null)))))
 (run 5)
 (check (= three (Null)))
+;; the pattern named a constructor, so it must not have matched the deeper term
+(fail (check (= four (Null))))
+(pop)
 
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; `:when (= v <call>)` contributes another rooted pattern, so the rule fires only
+;;; where that pattern also matches. One condition.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Prev (Succ x)) x :when (= x (Succ (Succ y))) :name peel)
+
+(let deep (Prev (Succ (Succ (Succ (Null))))))
+(let want (Succ (Succ (Null))))
+(let shallow (Prev (Succ (Null))))
+(run 10)
+
+(check (= deep want))
+(fail (check (= shallow (Null))))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; TWO SEPARATE `:when` clauses, each constraining a different variable. This is the
+;;; arbitrary multipattern: two rooted patterns beside the left-hand side's.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Pair a b) (Null)
+         :when (= a (Succ p))
+         :when (= b (Succ q))
+         :name both-clauses)
+
+(let ss (Pair (Succ (Null)) (Succ (Null))))
+;; the second condition fails here, so the rule must not fire
+(let sn (Pair (Succ (Null)) (Null)))
+(run 5)
+
+(check (= ss (Null)))
+(fail (check (= sn (Null))))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; ONE `:when` carrying both conditions, which must mean the same as two clauses.
+;;; Reading only the first condition left the rule looking constrained and firing on
+;;; `sn` below, so the negative claim is what this section is for.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Pair a b) (Null)
+         :when (= a (Succ p)) (= b (Succ q))
+         :name one-clause)
+
+(let ss (Pair (Succ (Null)) (Succ (Null))))
+(let sn (Pair (Succ (Null)) (Null)))
+(run 5)
+
+(check (= ss (Null)))
+(fail (check (= sn (Null))))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A `:when` pattern nests arbitrarily deep, and the variables it introduces are
+;;; usable on the right -- `y` here appears nowhere in the left-hand side.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Prev x) y :when (= x (Succ (Succ (Succ y)))) :name reach-in)
+
+(let s3 (Prev (Succ (Succ (Succ (Null))))))
+(let s2 (Prev (Succ (Succ (Null)))))
+(run 10)
+
+(check (= s3 (Null)))
+(fail (check (= s2 (Null))))
 (pop)
