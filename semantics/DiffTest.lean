@@ -1908,19 +1908,42 @@ the substitution left to right (`encodeCmds`), so the rule was encoded through a
 not carry `$g` and `Rule.substGlobals` leaves the query keyed at the frozen environment term —
 which is `glob-lost` exactly, on the one arrival order `Rule.substGlobals` cannot repair.
 
-Probes rather than corpus cases, because egglog reads the rule a **third** way: variables are
-resolved one command at a time (`lib.rs:2615-2617`), `remove_globals` rewrites only a reference
-already marked `is_global_ref`, and `check_shadowing` checks a rule's pattern names in a *clone*
-of the accumulated names (`check_shadowing.rs:60-66`) — so a rule processed before the `let`
-keeps `$g` as an ordinary match variable and fires on every `Wrapper`. The recapture is the
-model's alone, so pinning these against the binary would pin a coincidence: what the encoding
-loses here is measured against the model's own source run, by
+**The recapture is a specification defect, measured.** egglog reads the rule a third way:
+variables are resolved one command at a time (`egglog/src/lib.rs:2615-2617`), `remove_globals`
+rewrites only a reference the typechecker already marked `is_global_ref`
+(`egglog/src/ast/remove_globals.rs:183-238`, `expr.rs:70-75`), and `check_shadowing` checks a
+rule's pattern names in a *clone* of the accumulated names
+(`egglog/src/ast/check_shadowing.rs:60-66`) — so a rule processed before the `let` keeps `$g`
+as an ordinary match variable **forever**, and the later `let` is still legal. On
+`globLateFreshCase` below the binary answers `Hit 1` and `Egglog.execAt 64 FDatabase.empty`
+answers 0: the specification **under-fires**, because it recaptures `$g` as the global `(Zz)`
+and `(Wrapper (Bb))` does not match `(Wrapper (Zz))`. The repair is to resolve the globals then
+in scope into a rule at `Cmd.rule` registration — `remove_globals`' own step, at
+`remove_globals`' own point — which is `Encoding/Encode.lean`'s `Rule.substGlobals` moved into
+`Spec/Step.lean`'s `cmdEffect`, and which would make the specification and the encoder agree by
+construction rather than by arrival order.
+
+Probes rather than corpus cases **until that repair lands**: `glob-late` and `glob-late-eq`
+agree with the binary by accident (their argument is congruent to the global, so both readings
+match), `glob-late-fresh` does not, and what the *encoding* loses on this arrival order is
+measured against the model's own source run by
 `difftest correspond 64 glob-late glob-late-eq glob-early-eq`. -/
 private def globLateCase : Program :=
   [.rule wrapGlobRule,
    .action (.letBind "$g" (C "Zz")),
    .action (.expr (.app "Wrapper" [C "Aa"])),
    .action (.union (C "Zz") (C "Aa")),
+   .run ""]
+
+/-- **The measurement that separates the two readings.** The only `Wrapper` in the program holds
+a term unrelated to the global and nothing is unioned, so a query keyed at `(Wrapper (Zz))`
+cannot match and a query with `$g` free fires. `./target/release/egglog` reports `Hit 1`, with
+and without `--proofs`; `Egglog.execAt 64 FDatabase.empty` reports 0. Out of `allCases` because
+the specification does not yet answer it. -/
+private def globLateFreshCase : Program :=
+  [.rule wrapGlobRule,
+   .action (.letBind "$g" (C "Zz")),
+   .action (.expr (.app "Wrapper" [C "Bb"])),
    .run ""]
 
 /-- The same with a `union` head, so what the missing firing costs is an **equality** between
@@ -1958,7 +1981,7 @@ private def probeCases : List (String × Program) :=
    ("lit-union", litUnionCase), ("lit-mix", litMixCase),
    ("shadow-glob", shadowGlobCase), ("shadow-inherit", shadowInheritCase),
    ("glob-late", globLateCase), ("glob-late-eq", globLateEqCase),
-   ("glob-early-eq", globEarlyEqCase)]
+   ("glob-late-fresh", globLateFreshCase), ("glob-early-eq", globEarlyEqCase)]
 
 namespace Egglog
 /-! ### The proof encoding, by tuple count
