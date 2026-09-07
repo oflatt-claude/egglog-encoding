@@ -1459,6 +1459,28 @@ def rand_rule(rng, terms, unions):
             r, o, c1, c2 = atoms[j]
             atoms[j] = (r, o, c2, c1)
 
+    # ATOMS THAT ARE NOT PART OF THE SEED'S SHAPE. Everything above descends from one
+    # term's flattening, so the only patterns reachable were that shape and shapes with a
+    # piece removed. These two forms are what a multipattern can say and a single term
+    # cannot, and they are what `:when (= v (Ctor a b))` spells in the surface syntax:
+    #
+    #   * rooted at a variable the pattern ALREADY binds -- "and that one also looks like
+    #     this", which is Rudi's `(= x (Succ (Succ y)))`;
+    #   * rooted at a FRESH variable over children it already binds -- an atom joined to
+    #     the rest only through its children.
+    #
+    # Children come from the bound set either way. An atom whose children were fresh
+    # would be unconstrained, and the cross product costs a sweep more than the extra
+    # shape is worth. `lam` is excluded: its first child has to be a slot literal.
+    if rng.random() < 0.35:
+        plain = [o for o in BINOPS if o != "lam"]
+        for k in range(rng.randint(1, 2)):
+            pvs = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith("$")})
+            if len(pvs) < 2:
+                break
+            root = rng.choice(pvs) if rng.random() < 0.5 else f"w{k}"
+            atoms.append((root, rng.choice(plain), rng.choice(pvs), rng.choice(pvs)))
+
     allv = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith("$")})
     # Any bound variable can be the action's root, and it matters which: an atom
     # ROOT often has the identity for its renaming, so an action rooted there

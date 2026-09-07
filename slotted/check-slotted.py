@@ -231,6 +231,16 @@ CHECKS = [
     # The encoding's own invariants, read off the raw egglog rows rather than through a
     # comparison. They need no oracle, and they are here rather than left standalone
     # because a probe nothing runs is a probe that quietly dies -- all three had.
+    # The surface syntax against the engine. Needs no oracle: the engine is the oracle,
+    # and what is under test is `slotted-egglog.py`'s path to it -- which no sweep
+    # touched, because the fuzzer calls the encoder directly.
+    (
+        "surface-syntax",
+        ("slotted/xdiff/surface.py", "120"),
+        ratio(r"(\d+)/(\d+) cases agree through the surface syntax", 30),
+        False,
+        False,
+    ),
     (
         "def4-edges",
         ("slotted/xdiff/def4-edges.py",),
