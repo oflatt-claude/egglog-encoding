@@ -18,7 +18,7 @@
 //! nested <pattern>           run this rule through the single-pattern matcher;
 //!                            its `cond` lines still apply
 //! probe  <sexpr>              term to include in the reported partition
-//! rounds <n>                  saturation rounds (default 10)
+//! rounds <n>                  rounds to run, each applying every rule once (default 10)
 //! ```
 //!
 //! Two limits of that language, both about payload leaves:
@@ -408,8 +408,10 @@ fn main() {
                 break;
             }
         }
-        // A case that hit the round cap without settling means the two sides ran
-        // different amounts of work, so comparing them says nothing.
+        // Reported, not decisive. A generated rule set need not have a fixpoint, and a
+        // round here applies every rule once, exactly as one `(run)` of the encoding's
+        // user rules does -- so at equal round counts the two sides are answering the
+        // same question whether or not either has settled.
         println!("SATURATED {}", if saturated { "yes" } else { "no" });
     }
 

@@ -29,6 +29,7 @@ Run: `python3 slotted/xdiff/isomorphism.py [name-prefix|fuzz N [seed]]`
 
 import itertools
 import json
+import re
 import os
 import random
 import subprocess
@@ -655,19 +656,36 @@ SEED = "term (null)\nterm (var $0)\n"
 EGG_PROGRAM = None
 
 
-def reference_graph(case):
-    spec = case.spec() + SEED + "dump\n"
+def reference_graph(case, mult=3):
+    """The reference's graph after the SAME number of rounds the encoding gets steps.
+
+    NOT SATURATION -- a fixed count. A generated rule set need not have a fixpoint, and
+    this used to skip whenever the reference reported `SATURATED no`, which threw the case
+    away rather than comparing it. There is nothing to throw away: a reference round
+    applies every rule once, and so does one `(run)` of the encoding's user rules, so at
+    equal counts the two are answering the same question. Measured on `fuzz1152`, which has
+    no fixpoint at all -- isomorphic at every budget from 3 to 12 rounds.
+
+    The count has to be the encoding's, `rounds * mult`, not `rounds`: `_dump` runs
+    `schedule(rounds * mult)`. Where the reference does saturate the extra rounds change
+    nothing, so this is safe for the whole corpus, not just the growing cases.
+
+    Scaled by rewriting the spec's own `rounds` line rather than by rebuilding the case:
+    `xarray` and `xsdql` bring their own case and rule types, and only the spec text is
+    common to all three.
+    """
+    spec = case.spec()
+    spec, subbed = re.subn(r"^rounds \d+$", f"rounds {case.rounds * mult}", spec, count=1, flags=re.M)
+    assert subbed, f"{case.name}: spec has no `rounds` line to scale"
     r = subprocess.run(
         [str(X.XMULTI / "target" / "debug" / "xmulti")],
-        input=spec,
+        input=spec + SEED + "dump\n",
         capture_output=True,
         text=True,
         timeout=X.RUN_TIMEOUT,
     )
     if r.returncode != 0:
         return None, f"reference error: {(r.stderr or '?').strip().splitlines()[-1]}"
-    if any(line.startswith("SATURATED no") for line in r.stdout.splitlines()):
-        return None, "reference did not saturate"
     return parse_reference(r.stdout), None
 
 
@@ -757,9 +775,9 @@ def encoding_graph(case):
 
 
 def check(case):
-    # A reference that errors or will not settle gives nothing to compare against, so
-    # the case is skipped. The encoding failing the same way is not a skip: the
-    # reference reached a fixpoint, so not reaching one is itself a difference.
+    # Only a reference that ERRORS is skipped. One that has not settled is compared
+    # anyway, at the same fixed number of rounds the encoding gets steps -- see
+    # `reference_graph`.
     ref, err = reference_graph(case)
     if err:
         return "skip", err
