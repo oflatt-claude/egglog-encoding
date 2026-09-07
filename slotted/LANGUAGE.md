@@ -86,6 +86,15 @@ the compiler mints one. `:name` names the rule.
 is `?body[(var $x) := ?t]` — the reference's `b[x := t]`. It is a *call*, so there is
 nothing to build; `slotted/tests/sdql-beta.egg` explains what the compiler emits for it.
 
+**`rewrite` is the only rule form.** egglog's `rule` and `birewrite` are not part of this
+language and the compiler rejects them rather than passing them through — write a
+`birewrite`'s two directions as two `rewrite`s. A rewrite's right-hand side is one of
+three things — a variable, a term to build, or `subst` — and its conclusion is always that
+the two sides are equal. egglog's other actions have no spelling here: `set` and `delete`
+would have to name one row of a class that spans several, and `subsume` interacts with the
+alpha-finder retiring rows. `slotted/encoding/user-rules.egg` M12 sets out the three
+right-hand sides and what each compiles to.
+
 ## Running
 
 ```

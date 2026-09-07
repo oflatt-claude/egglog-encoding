@@ -303,6 +303,24 @@ def compile_source(src, own_only=False):
             _emit(out, keep, f"(extract ({fn}))")
         elif head in ("check", "fail"):
             _emit(out, keep, compile_check(src, form))
+        elif head in ("rule", "birewrite"):
+            # `rewrite` is the only rule form here, and passing either of these through
+            # is worse than rejecting it. At the slotted level neither can typecheck --
+            # an encoded constructor takes a `Renaming` before each child, so `(F ?x ?y)`
+            # is the wrong arity. Written at the ENCODED level one typechecks, passes
+            # through, and then never fires: `rules` below counts only `rewrite`s, so
+            # `(run N)` emits a schedule with no user-rule steps at all. Silence is the
+            # worst of the three outcomes, so say it instead.
+            advice = (
+                "write the two directions as two `rewrite`s"
+                if head == "birewrite"
+                else "use `rewrite`, with `:when` for a side condition"
+            )
+            raise SystemExit(
+                f"{src.path.name}: `{head}` is not part of the slotted language -- {advice}. "
+                f"A `{head}` here would be passed through to egglog against the ENCODED "
+                "tables and would not run."
+            )
         else:
             # Everything else is egglog's, and means the same thing here: a command
             # that names no slotted term needs no compiling. `print-size`,
