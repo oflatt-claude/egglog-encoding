@@ -194,7 +194,7 @@ CHECKS = [
     (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
-        ratio(r"(\d+)/(\d+) slotted tests pass", 5),
+        ratio(r"(\d+)/(\d+) slotted tests pass", 16),
         False,
         False,
     ),

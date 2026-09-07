@@ -204,8 +204,21 @@ class Source:
                 # which is the convention `flatten` keys atoms by and `pat_sexpr`
                 # renders back with the `?`, so the reference side reads it too.
                 return form[1:]
-            assert form in self.lang.bound, f"{self.path.name}: {form!r} is not bound"
-            return ("name", form)
+            if form in self.lang.bound:
+                return ("name", form)
+            # A BARE IDENTIFIER IS A PATTERN VARIABLE, which is how egglog spells one.
+            # `?x` is egg's spelling and still works: the sigil is stripped above, so the
+            # two name the same variable and a rule may mix them. A global takes
+            # precedence, as it does in egglog, which is why the lookup comes first.
+            #
+            # Only in a pattern. A ground term -- a `let`, a `union`, a claim -- has
+            # nothing to bind a variable, so an unknown name there is still an error.
+            # A bare name that IS a constructor never reaches here: it is read as a
+            # nullary call above, so a paren-less `Null` cannot silently become a
+            # wildcard. A misspelling that matches nothing still can, exactly as in
+            # egglog.
+            assert not ground, f"{self.path.name}: {form!r} is not bound"
+            return form
         head, args = form[0], form[1:]
         if head == enc.SUBST:
             # Not a constructor: a call, and only legal on a right-hand side. Its
@@ -392,7 +405,20 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
         # and writes tables: callable from the head of a `:naive` rule, not a seminaive
         # one.
         tail = " :naive" + tail
+    # A pattern has to be a CALL. A bare variable on the left matches every class, so the
+    # rule says nothing, and egglog rejects it too. Without this, `flatten` indexes
+    # `lang[t[0]]` and on a string that is its first CHARACTER, so the failure was a
+    # `KeyError` naming a letter.
+    assert isinstance(lhs, list), (
+        f"{src.path.name}: a rewrite's left side must be a call, got {lhs!r} -- "
+        "a bare variable there matches everything"
+    )
     root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
+    # each `:when (= ?v <call>)` is another rooted pattern; `tmp` is per-equality so the
+    # names `flatten` invents for nested sub-terms cannot collide between them
+    for i, (var, pat) in enumerate(parts["equalities"]):
+        _, extra = enc.flatten(src.lang, src.term(pat, ground=False), root=var, tmp=f"?_w{i}_")
+        atoms += extra
     order = enc.connected_order(src.lang, atoms, first=lead)
     return enc.compile_rule(
         src.lang,
@@ -420,7 +446,7 @@ def rewrite_parts(src, form):
     reading of `:when` is a second place for the two to disagree.
     """
     assert form[0] == "rewrite", form[:1]
-    out = {"name": None, "lhs": form[1], "rhs": form[2], "conds": [], "fresh": [], "lead": 0}
+    out = {"name": None, "lhs": form[1], "rhs": form[2], "conds": [], "equalities": [], "fresh": [], "lead": 0}
     for key, vals in keywords(src, form[3:]):
         if key == ":name":
             out["name"] = vals[0]
@@ -429,9 +455,28 @@ def rewrite_parts(src, form):
         elif key == ":fresh":
             out["fresh"] += list(vals)
         elif key == ":when":
-            want, slot, *pvars = vals[0]
-            assert want in ("free", "not-free"), f"unknown condition {want!r}"
-            out["conds"].append((want == "free", slot, [v.lstrip("?") for v in pvars]))
+            want, *rest = vals[0]
+            if want == "=":
+                # NOT a side condition: another rooted pattern, which is how a rewrite
+                # says a multipattern. `(= ?v <call>)` means "?v also matches this", so
+                # the pattern is flattened with `?v` as its root and its atoms join the
+                # left-hand side's. Several `:when` equalities give an arbitrary
+                # multipattern, and one may introduce variables the main pattern never
+                # mentions.
+                assert len(rest) == 2, f"{src.path.name}: `=` takes a variable and a pattern, got {rest}"
+                var, pat = rest
+                assert isinstance(var, str) and not var.startswith("$"), (
+                    f"{src.path.name}: the left of a `:when =` must be a variable, got {var!r}"
+                )
+                assert isinstance(pat, list), (
+                    f"{src.path.name}: the right of a `:when =` must be a call, got {pat!r} -- "
+                    "a bare variable there would identify two variables, which this does not do yet"
+                )
+                out["equalities"].append((var.lstrip("?"), pat))
+            else:
+                slot, *pvars = rest
+                assert want in ("free", "not-free", "="), f"unknown condition {want!r}"
+                out["conds"].append((want == "free", slot, [v.lstrip("?") for v in pvars]))
     return out
 
 

@@ -1,0 +1,81 @@
+;;; egglog's surface spelling: bare pattern variables, and `:when (= v <call>)`.
+;;;
+;;; Every other file here writes `?x`, so this is the only cover for the bare spelling
+;;; and for a rewrite whose multipattern comes from `:when`. A sort other than `U` is
+;;; not covered yet -- the carrier is still hardcoded.
+;;;
+;;;     python3 slotted/slotted-egglog.py slotted/tests/egglog-surface.egg
+
+(constructor Null () U)
+(constructor Succ (U) U)
+(constructor Prev (U) U)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Bare pattern variables, which is egglog's spelling -- its own tests have
+;;; `(rewrite (Id x) x)` and `(rewrite (C2 a b) (C2 b a))`.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Prev (Succ x)) x :name bare)
+
+(let one (Prev (Succ (Null))))
+(run 5)
+(check (= one (Null)))
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; The two spellings name the SAME variable, so a rule may mix them: the sigil is
+;;; stripped, and `?x` and `x` are one variable rather than two.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Prev (Succ ?x)) x :name mixed)
+
+(let two (Prev (Succ (Succ (Null)))))
+(run 5)
+(check (= two (Succ (Null))))
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; `:when (= v <call>)` is a MULTIPATTERN, not a side condition: it contributes
+;;; another rooted pattern, so the rule fires only where that pattern also matches.
+;;; Both halves are asserted -- fires where the condition holds, blocked where it does
+;;; not -- since a condition that is silently ignored would pass the first alone.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Prev (Succ x)) x :when (= x (Succ (Succ y))) :name peel)
+
+;; x = (Succ (Succ (Null))) does match (Succ (Succ y)), with y = (Null)
+(let deep (Prev (Succ (Succ (Succ (Null))))))
+(let want (Succ (Succ (Null))))
+
+;; x = (Null) does not, so the rule must not fire here
+(let shallow (Prev (Succ (Null))))
+
+(run 10)
+
+(check (= deep want))
+(fail (check (= shallow (Null))))
+
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A nullary constructor written bare is a call, not a variable, which is what keeps a
+;;; paren-less `Null` from silently becoming a wildcard that matches everything.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Prev (Succ Null)) (Null) :name bare-nullary)
+
+(let three (Prev (Succ (Null))))
+(run 5)
+(check (= three (Null)))
+
+(pop)

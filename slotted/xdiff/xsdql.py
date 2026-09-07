@@ -205,6 +205,11 @@ def _load_rules():
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
         r = sc.rewrite_parts(src, form)
+        # `:when (= ...)` contributes PATTERN ATOMS, and this builds its own rule object
+        # from `lhs`/`conds` alone, so one would be dropped in silence and the reference
+        # would be asked a different question than the encoding. Teach `Rule` about extra
+        # atoms before using one in this language.
+        assert not r["equalities"], f"{r['name']}: `:when (= ...)` is not supported here yet"
         lhs_term, rhs_term = (src.term(side, ground=False) for side in (r["lhs"], r["rhs"]))
         lhs, rhs = (slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, t)) for t in (lhs_term, rhs_term))
         # the same flattening the encoder does, so the reference can be asked the

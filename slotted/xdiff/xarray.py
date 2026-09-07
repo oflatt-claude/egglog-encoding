@@ -341,6 +341,11 @@ def _load_rules():
             continue
         r = sc.rewrite_parts(src, form)
         assert r["name"], f"a rewrite with no :name in {ARRAY_SRC.name}"
+        # `:when (= ...)` contributes PATTERN ATOMS, and this builds its own rule object
+        # from `lhs`/`conds` alone, so one would be dropped in silence and the reference
+        # would be asked a different question than the encoding. Teach `Rule` about extra
+        # atoms before using one in this language.
+        assert not r["equalities"], f"{r['name']}: `:when (= ...)` is not supported here yet"
         root, atoms = slotenc.flatten(LANG, src.term(r["lhs"], ground=False))
         rhs = slotenc.rhs_of(LANG, src.term(r["rhs"], ground=False))
         out.append(Rule(r["name"], atoms, root, rhs, conds=r["conds"], fresh=r["fresh"]))
