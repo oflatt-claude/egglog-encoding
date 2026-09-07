@@ -10597,7 +10597,8 @@ stored query names no global and the clause has nothing to answer for
 (`mem_matchQuery_encodeQuery`). What survives of the same fact is `Pattern.GroundedAt`, and
 `Database.GlobalsInline` pays it.
 
-**And the fourth defect is repaired.** It was `Database.GlobalsCover` — every global the
+**And the fifth defect — the one that was a defect and not a missing clause — is repaired.**
+It was `Database.GlobalsCover` — every global the
 environment binds is one the substitution defines — at the `G` a rule was encoded **through**,
 frozen at the command `encodeCmds` reached the rule at. A top-level `let` *after* that command
 extends the environment without extending it, and `Spec/Match.lean`'s `ValidSubst` used to take
@@ -10639,7 +10640,7 @@ own. The fixpoint the block ends at is therefore rebuild-closed, since nothing c
 and the maintenance rules are among what fires; the rounds in between are one round behind, and
 `FDatabase.ViewRowUnique` holds at neither `td` nor a mid-block state for them. That is the
 lag a further clause — or a per-round induction — would have to speak about, and it is
-structural rather than one of the five above. -/
+structural rather than one of the four refutations above. -/
 theorem unionsJoined_fire : UnionsFire := by
   sorry
 
