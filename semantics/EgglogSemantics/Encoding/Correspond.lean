@@ -3893,6 +3893,20 @@ remaining obligation, at the environment rather than at the source's terms. -/
 def Database.LitGlobalsHeld (sd : Database) (td : FDatabase) : Prop :=
   ∀ (v : Var) (l : Lit), Env.lookup v sd.env = some (Term.lit l) → Term.lit l ∈ td.terms
 
+/-- **And the source-run half of the same clause**: a bare-literal `.eq` a **stored** query
+carries names a global the environment binds to that literal.
+
+A fact about the source run and not about the target, so it is threaded the way
+`Database.QueriesIn` is: `Cmd.QueryEncodable`'s `Pattern.Grounded` excludes the shape from a
+rule's own *text*, so a stored query has it only where `Rule.resolveGlobals` wrote a
+literal-valued global's value into both sides, and a later top-level `let` cannot invalidate it
+because `evalTopAction` refuses one that rebinds. `eqLit_of_substGlobals` is this and
+`Database.LitGlobalsHeld` spent together, which is `patternRowRead_of_matches`' `hgl`
+discharged at the query `Egglog.UnionsFire`'s `hrules` names. -/
+def Database.EqLitGlobals (db : Database) : Prop :=
+  ∀ r ∈ db.rules, ∀ p ∈ r.query, ∀ l : Lit, p = Pattern.eq (Expr.lit l) (Expr.lit l) →
+    ∃ v, Env.lookup v db.env = some (Term.lit l)
+
 /-! ##### The states one encoded run passes through
 
 The residue fires at a state *inside* the run — the one the next encoded block starts at — and
@@ -4298,7 +4312,7 @@ def UnionsFire : Prop :=
     td'.ViewRowsRootedAll → td'.ViewRowsColumnClosedAll → td'.UFRootsUnique →
     (∀ t r : Term, RowRepr td t r → ViewRepr td.toDatabase t r) →
     (∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td.toDatabase s s) →
-    sd.LitGlobalsHeld td →
+    sd.LitGlobalsHeld td → sd.EqLitGlobals →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
 /-- **The derived clauses `UnionsFire` takes**, at every state one encoded run passes through.
@@ -4329,13 +4343,23 @@ the clause about a rule's *query* does not say. Source-run invariants again:
 
 Three that are **inductive invariants of the encoded run** rather than facts a state exhibits:
 `FDatabase.ViewRowsRootedAll`, `FDatabase.ViewRowsColumnClosedAll` and
-`FDatabase.UFRootsUnique`, which is what the walk `Egglog.UnionsFire`'s step 4 runs
-(`viewRow_of_rowReachList_all`) rests on. Each is established by a block induction from the
-prelude's empty row list, so none is derivable at the state a firing is handed the way the row
-clauses are — threading them *is* the discharge, and `encStep_viewRowsRootedAll`,
-`encStep_viewRowsColumnClosedAll` and `encStep_ufRootsUnique` are it. Program-free, and
-`encStep_ctorsIn_of_row` is what pays for dropping the restriction the block induction
-carries. -/
+`FDatabase.UFRootsUnique`, which is what the re-keying walk
+(`viewRow_of_rowReachList_all`) rests on — `Database.RebuildClosed`'s `edged`/`column`
+mechanism, and **not** what `Egglog.UnionsFire`'s step 4 spends: the row a global-reading head
+keys is one that firing wrote, so `viewRepr_of_evalPair` reads it back where it was written.
+Each is established by a block induction from the prelude's empty row list, so none is
+derivable at the state a firing is handed the way the row clauses are — threading them *is* the
+discharge, and `encStep_viewRowsRootedAll`, `encStep_viewRowsColumnClosedAll` and
+`encStep_ufRootsUnique` are it. Program-free, and `encStep_ctorsIn_of_row` is what pays for
+dropping the restriction the block induction carries.
+
+And two for step 1's `.eq` case, which is the pair `eqLit_of_substGlobals` spends:
+`Database.LitGlobalsHeld` answers for the literal a global is bound to
+(`encStep_litGlobalsHeld`, off `EncStep.envEq` and the target's own
+`Database.WF.envInTerms`) and `Database.EqLitGlobals` is the source-run half that says a
+bare-literal `.eq` in a *stored* query is such a global — a source-run invariant of
+`Database.QueriesIn`'s own shape (`eqLitGlobals_of_prefixStep`). Neither is
+`Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms`, which `litBuild_not_litsHeld` refutes. -/
 def RowMech (Q : Program) : Prop :=
   ∀ {sd : Database} {d : FDatabase} {pre suf : Program} {G : List (Var × Expr)},
     EncStep Q pre suf sd d G →
@@ -4354,7 +4378,7 @@ def RowMech (Q : Program) : Prop :=
     (∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))) ∧
     (∀ r ∈ sd.rules, Actions.Builds r.actions d.sig) ∧
     d.ViewRowsRootedAll ∧ d.ViewRowsColumnClosedAll ∧ d.UFRootsUnique ∧
-    sd.LitGlobalsHeld d
+    sd.LitGlobalsHeld d ∧ sd.EqLitGlobals
 
 /-- **Every `@Rule_i` the encoder's numbering applies is declared**, at every state one encoded
 run passes through. Threaded rather than proved here for `Egglog.RowMech`'s reason: the
@@ -4492,7 +4516,8 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.1
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2.1
         (hmech hchain).2.1 hinv.envReadsAt
-        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | saturate R =>
@@ -4516,7 +4541,8 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.1
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2.1
         (hmech hchain).2.1 hinv.envReadsAt
-        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | action a =>

@@ -9478,6 +9478,16 @@ theorem rbTgtR_envReadsAt :
   fun b hb s hs =>
     ViewRepr.mono rbTgtR_contains (rbState2_unionsInv.envReadsAt b hb s hs)
 
+/-- **And the `.eq` case's source-run clause, vacuous here too**: `rbRule`'s query is one
+`.expr` atom, so it carries no equality at all. `eqLitGlobals_witness` is it with content, at
+the rule whose stored query `Rule.resolveGlobals` really does turn into `(= 5 5)`. -/
+theorem rbSrcR_eqLitGlobals : rbSrcR.EqLitGlobals := by
+  intro r hr p hp l hpl
+  obtain rfl : r = rbRule := rbSrcR_rules_mem hr
+  have hp' : p ∈ [Pattern.expr (Expr.app "W" [Expr.var "y"])] := hp
+  obtain rfl : p = Pattern.expr (Expr.app "W" [Expr.var "y"]) := by simpa using hp'
+  exact absurd hpl (by simp)
+
 /-- **The `.eq` case's clause at the witness, and it is vacuous here**: `rbEnv` binds `x` to an
 *application*, so no global is bound to a literal. `litGlobalsHeld_witness` is the clause with
 content, at `glProgram`'s one `(let $g 5)` — in the domain, and whose encoded run holds `5`. -/
@@ -9493,10 +9503,10 @@ theorem rbSrcR_litGlobalsHeld : rbSrcR.LitGlobalsHeld rbTgtR := by
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Twenty-five conjuncts: the twenty-four `Egglog.UnionsFire` takes, in the order it takes them,
-and `rbSrcR_globalsInline` beside them. Nineteen have content here; the six that do not are
+Twenty-six conjuncts: the twenty-five `Egglog.UnionsFire` takes, in the order it takes them,
+and `rbSrcR_globalsInline` beside them. Nineteen have content here; the seven that do not are
 `Database.UnionsJoined`, `FDatabase.RowJoined`'s `edge`, the three threaded row invariants and
-`Database.LitGlobalsHeld`, each of them for a reason recorded below and each with content at
+the `.eq` case's two clauses, each of them for a reason recorded below and each with content at
 another witness.
 
 **The round has content.** The source holds `rbRule` and the target its encoding, and both
@@ -9535,10 +9545,14 @@ this time, which is where `viewRepr_of_evalPair` reads a query variable's id —
 `rbTgtR_envReadsAt` is the environment clause at the `(A)` a top-level `let` bound and
 `rbProgram`'s own first build wrote, which is what a **global-reading head** spends and what
 `Database.ReadsSelf` is not (`ncTgt_not_readsSelf` is at a term a *firing* built).
-`rbSrcR_litGlobalsHeld` is the one new clause **vacuous** here — `rbEnv` binds `x` to an
-application, so no global is bound to a literal — and `litGlobalsHeld_witness` is it with
-content, at `glProgram`'s one `(let $g 5)`, in the domain, whose encoded run holds `5` where
-`litBuildProgram`'s bare build holds nothing (`litBuild_not_litsHeld`).
+The `.eq` case's two clauses are the ones **vacuous** here, and for two different reasons:
+`rbEnv` binds `x` to an application, so no global is bound to a literal
+(`rbSrcR_litGlobalsHeld`), and `rbRule`'s query is one `.expr` atom, so it carries no equality
+at all (`rbSrcR_eqLitGlobals`). Both have content elsewhere — `litGlobalsHeld_witness` at
+`glProgram`'s one `(let $g 5)`, in the domain, whose encoded run holds `5` where
+`litBuildProgram`'s bare build holds nothing (`litBuild_not_litsHeld`), and
+`eqLitGlobals_witness` at the rule whose *stored* query `Rule.resolveGlobals` really does turn
+into `(= 5 5)`.
 
 **And the three threaded invariants hold here, which is what lets them be clauses at all.**
 `FDatabase.ViewRowsRootedAll`, `FDatabase.ViewRowsColumnClosedAll` and
@@ -9600,7 +9614,7 @@ theorem unionsJoined_fire_satisfiable :
       rbTgtR.ViewRowsRootedAll ∧ rbTgtR.ViewRowsColumnClosedAll ∧ rbTgtR.UFRootsUnique ∧
       (∀ t r : Term, RowRepr rbTgtR t r → ViewRepr rbTgtR.toDatabase t r) ∧
       (∀ b ∈ rbSrcR.env, ∀ s ∈ b.2.subterms, ViewRepr rbTgtR.toDatabase s s) ∧
-      rbSrcR.LitGlobalsHeld rbTgtR ∧
+      rbSrcR.LitGlobalsHeld rbTgtR ∧ rbSrcR.EqLitGlobals ∧
       rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrcR_cmdStep_run, rbTgtR_run, rbTgtR_env, rbSrcR_ctorState, rbTgtR_sig_mono,
     rbTgtR_isCtor_fiatName, rbSrcR_hrules, rbSrcR_queriesEncodable,
@@ -9611,7 +9625,7 @@ theorem unionsJoined_fire_satisfiable :
     (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h),
     rbTgtR_viewRowsRootedAll, rbTgtR_viewRowsColumnClosedAll, rbTgtR_ufRootsUnique,
     (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h), rbTgtR_envReadsAt,
-    rbSrcR_litGlobalsHeld, rbSrcR_globalsInline⟩
+    rbSrcR_litGlobalsHeld, rbSrcR_eqLitGlobals, rbSrcR_globalsInline⟩
 
 /-! ### The forward mirror of `Encoding/Match.lean`
 
@@ -10673,6 +10687,28 @@ theorem glSrc_resolveGlobals_eqLit :
       = Pattern.eq (Expr.lit (.int 5)) (Expr.lit (.int 5)) ∧
     (Pattern.eq (Expr.var "g") (Expr.var "g")).Grounded :=
   ⟨rfl, Or.inl (by simp)⟩
+
+/-- The same pattern as a rule, so the clause about *stored* queries has something to say. -/
+def glEqRule : Rule :=
+  { query := [Pattern.eq (Expr.var "g") (Expr.var "g")], actions := [], ruleset := "r" }
+
+/-- **`Database.EqLitGlobals` with content**, at the state `glProgram` reaches with `glEqRule`
+registered: the rule's *stored* query really is `(= 5 5)` — the shape `Pattern.Grounded`
+excludes from any rule's text and only `Rule.resolveGlobals` creates — and the clause names the
+global `$g` it resolved through, which `litGlobalsHeld_witness` then answers for. Vacuous at
+`rbTgtR`, whose rule's query carries no equality (`rbSrcR_eqLitGlobals`). -/
+theorem eqLitGlobals_witness :
+    (glEqRule.resolveGlobals glSrc.env).query
+        = [Pattern.eq (Expr.lit (.int 5)) (Expr.lit (.int 5))] ∧
+      ({ glSrc with rules := {glEqRule.resolveGlobals glSrc.env} } : Database).EqLitGlobals := by
+  refine ⟨rfl, fun r hr p hp l hpl => ?_⟩
+  obtain rfl : r = glEqRule.resolveGlobals glSrc.env := hr
+  have hp' : p ∈ [Pattern.eq (Expr.lit (Lit.int 5)) (Expr.lit (Lit.int 5))] := hp
+  obtain rfl : p = Pattern.eq (Expr.lit (Lit.int 5)) (Expr.lit (Lit.int 5)) := by simpa using hp'
+  refine ⟨"g", ?_⟩
+  rw [Pattern.eq.injEq, Expr.lit.injEq] at hpl
+  obtain ⟨rfl, -⟩ := hpl
+  rfl
 /-- **A source match is a target reading**, given the reading of the environment it evaluated
 in. Gaps (1), (2) and (3) of the residue below at one pattern: the instance need not be a
 source term (`exists_rowRepr_congOn`), a variable gets one id (`FDatabase.RowJoined.fn`,
@@ -10879,7 +10915,7 @@ def UnionsFireWeak : Prop :=
 refutations below bracket the repair from above and refute nothing it says. -/
 theorem unionsFire_of_weak (hw : UnionsFireWeak) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj _
-    _ _ hback _ _ _ _ _ _
+    _ _ hback _ _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate ?_ hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, -⟩ := hrules r hr
@@ -11343,7 +11379,7 @@ def UnionsFireAnyG : Prop :=
 refutation below refutes nothing the repair says. -/
 theorem unionsFire_of_anyG (hw : UnionsFireAnyG) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate hsig hfiat hrules hq hcv hno hreads hjoin
-    hrow hrj _ _ _ hback _ _ _ _ _ _
+    hrow hrj _ _ _ hback _ _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate hsig hfiat ?_ hq hcv hno hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, hct, -⟩ := hrules r hr
@@ -12477,20 +12513,19 @@ carries the two clauses the residue holds at `td` up to `td'`, and
 obligation per firing** — which is exactly what steps 1-4 are about.
 
 **What is left of the `Cmd.run` half, precisely.** Step 4's global-reading head is closed
-(`viewRepr_of_evalPair`) and step 1's `.eq` clause is threaded
-(`Database.LitGlobalsHeld`, `encStep_litGlobalsHeld`, `eqLit_of_litGlobalsHeld`). Three items
-of *glue* remain, none of them a fact about the encoding:
+(`viewRepr_of_evalPair`), and so is step 1's `.eq` case: `eqLit_of_substGlobals` answers `hgl`
+at the patterns of `Query.substGlobals G r.query` — the query `hrules` names — from
+`Egglog.UnionsFire`'s own clause set and with no appeal to the program's text. Four cases, and
+every one lands on a global the environment binds: a side `Expr.substGlobals` rewrote is one
+`Database.GlobalsInline` binds to that very literal (`exists_lit_global_of_substGlobals`), and
+a side that was the bare literal on both already is `Database.EqLitGlobals`' own instance — the
+source-run invariant that says such a side exists only where `Rule.resolveGlobals` created it,
+since `Cmd.QueryEncodable`'s `Pattern.Grounded` excludes the shape from a rule's text and
+`evalTopAction` refuses a later `let` that would rebind the global (`cmdStep_eqLitGlobals`,
+`eqLitGlobals_of_prefixStep`). `Database.LitGlobalsHeld` then answers for the literal itself.
 
-* **`hgl` at the query the target actually holds.** `eqLit_of_litGlobalsHeld` discharges it at
-  `(r.resolveGlobals sd.env).query` out of `Pattern.Grounded` at the rule's own **text**, and
-  `Egglog.UnionsFire` is given no program, so what it can read of a stored rule is
-  `Database.QueriesIn` and that carries `Pattern.NoValues`/`Query.VarsKeyed`/`noPrim` and not
-  `Pattern.Grounded`. The missing piece is one more source-run invariant of exactly that
-  shape — every bare-literal `.eq` a *stored* query carries names a global the environment
-  binds — which `Cmd.QueryEncodable`'s `Grounded` and
-  `exists_lit_global_of_resolveGlobals` pay at a `Cmd.rule`, and which a later top-level `let`
-  cannot break because `evalTopAction` refuses one that rebinds. `Database.LitGlobalsHeld` then
-  answers for the literal itself.
+Two items of *glue* remain, neither of them a fact about the encoding:
+
 * **Step 2's query identity, at the rule the state stores.** `hrules` names
   `encodeRule i (r.substGlobals G) n` for `r ∈ sd.rules`, and the reading step wants
   `Matches sd p τ` at the patterns of `Query.substGlobals G r.query`, which it has at the
@@ -13649,6 +13684,208 @@ theorem sigIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
     (fun r hr => absurd hr (by simp [Database.empty]))
     (fun f hf => absurd hf (by simp [Database.empty, Signature.IsCtor])) hstep).2
 
+/-! #### And the third: the `.eq` case's own source-run invariant
+
+`Database.LitGlobalsHeld` answers for a literal a *global* is bound to. What says the
+bare-literal `.eq` a **stored** query carries is such a global is a fact about the source run:
+`Cmd.QueryEncodable`'s `Pattern.Grounded` excludes that shape from a rule's own *text*, so a
+stored query has it only where `Rule.resolveGlobals` wrote a literal-valued global's value into
+both sides. A later top-level `let` cannot invalidate it, because `evalTopAction` refuses one
+that rebinds — egglog's own "Shadowing is not allowed" — so the binding the invariant names is
+still the one a later state reads.
+
+`eqLit_of_substGlobals` is the two clauses spent together, at the query the *target* holds:
+`hgl` for `Egglog.patternRowRead_of_matches`, discharged from `Egglog.UnionsFire`'s own clause
+set. -/
+
+/-- **A top-level action ran as a top-level action.** `cmdStep_action_eq` with the shadowing
+guard kept, which is the whole of what the invariant below needs at a `let`. -/
+theorem cmdStep_topAction_eq {sd sd' : Database} {a : Action} (hsig : sd.sig.AllConstructors)
+    (h : CmdStep sd (.action a) sd') : evalTopAction sd a = some sd' := by
+  obtain ⟨d, hreach, hcl⟩ := h
+  have htop : evalTopAction sd a = some d := hreach
+  have hd : evalAction sd a = some d := evalAction_of_top htop
+  have heq : sd' = d := MergeClosure.eq_of_allConstructors (db := d)
+    (by rw [evalAction_sig hd]; exact hsig) hcl
+  rw [heq]
+  exact htop
+
+/-- **A binding a top-level action found survives it.** Only a `let` extends the environment
+and only at a name nothing bound (`evalTopAction`), so no lookup is rerouted. -/
+theorem evalTopAction_lookup_mono {db db' : Database} {a : Action}
+    (htop : evalTopAction db a = some db') {v : Var} {t : Term}
+    (hlk : Env.lookup v db.env = some t) : Env.lookup v db'.env = some t := by
+  have hev : evalAction db a = some db' := evalAction_of_top htop
+  rcases evalAction_eq_some hev with ⟨_, _, -, -, rfl⟩ | ⟨w, e, tS, rfl, -, rfl⟩ |
+    ⟨_, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
+  · exact hlk
+  · rw [evalTopAction] at htop
+    split at htop
+    · exact absurd htop (by simp)
+    · rename_i hfresh
+      have hnone : Env.lookup w db.env = none :=
+        Option.not_isSome_iff_eq_none.mp (by simpa using hfresh)
+      have hne : ¬ (v = w) := fun hvw => by rw [hvw, hnone] at hlk; simp at hlk
+      show Env.lookup v ((w, tS) :: db.env) = some t
+      rw [Env.lookup_cons, if_neg hne]
+      exact hlk
+  · exact hlk
+  · exact hlk
+
+/-- **A bare-literal `.eq` in a stored query names a literal-valued global**, on the rule's own
+text: `Pattern.Grounded` makes one side a non-literal and `exists_lit_global_of_resolveGlobals`
+names the global that side resolved through. -/
+theorem exists_lit_global_of_resolveGlobals_query {sd : Database} {r : Rule}
+    (hg : ∀ p ∈ r.query, p.Grounded)
+    {p : Pattern} (hp : p ∈ (r.resolveGlobals sd.env).query) (l : Lit)
+    (heq : p = Pattern.eq (Expr.lit l) (Expr.lit l)) :
+    ∃ v, Env.lookup v sd.env = some (Term.lit l) := by
+  rw [Rule.resolveGlobals_query, Query.resolveGlobals, List.mem_map] at hp
+  obtain ⟨p₀, hp₀, rfl⟩ := hp
+  have hgp := hg p₀ hp₀
+  cases p₀ with
+  | expr e => rw [Pattern.resolveGlobals] at heq; exact absurd heq (by simp)
+  | values vs f as => rw [Pattern.resolveGlobals] at heq; exact absurd heq (by simp)
+  | eq e₁ e₂ =>
+      rw [Pattern.resolveGlobals, Pattern.eq.injEq] at heq
+      rcases hgp with hne | hne
+      · exact exists_lit_global_of_resolveGlobals heq.1 hne
+      · exact exists_lit_global_of_resolveGlobals heq.2 hne
+
+/-- **One command keeps it.** Only `Cmd.rule` extends `rules`, and its rule is the program's
+own; every other command leaves the environment binding what it bound
+(`evalTopAction_lookup_mono` at a top-level action, and the field equations elsewhere). -/
+theorem cmdStep_eqLitGlobals {P : Program} (hdom : P.EncodeDomain) {db db' : Database}
+    (hsig : db.sig.AllConstructors) (h : db.EqLitGlobals) {c : Cmd} (hc : c ∈ P)
+    (hstep : CmdStep db c db') : db'.EqLitGlobals := by
+  cases c with
+  | action a =>
+      have htop : evalTopAction db a = some db' := cmdStep_topAction_eq hsig hstep
+      have hrules : db'.rules = db.rules := evalAction_rules (evalAction_of_top htop)
+      intro r hr p hp l hpl
+      obtain ⟨v, hv⟩ := h r (by rw [hrules] at hr; exact hr) p hp l hpl
+      exact ⟨v, evalTopAction_lookup_mono htop hv⟩
+  | rule r =>
+      obtain ⟨-, henv, hrules⟩ := cmdStep_rule_fields hsig hstep
+      intro s hs p hp l hpl
+      rw [hrules] at hs
+      rcases Set.mem_insert_iff.mp hs with rfl | hs'
+      · obtain ⟨hqe, -⟩ := hdom.queryEncodable _ hc
+        obtain ⟨v, hv⟩ :=
+          exists_lit_global_of_resolveGlobals_query (fun q hq => (hqe q hq).1) hp l hpl
+        exact ⟨v, by rw [henv]; exact hv⟩
+      · obtain ⟨v, hv⟩ := h s hs' p hp l hpl
+        exact ⟨v, by rw [henv]; exact hv⟩
+  | run R =>
+      intro s hs p hp l hpl
+      obtain ⟨v, hv⟩ :=
+        h s (by rw [cmdStep_rules_of_run hstep] at hs; exact hs) p hp l hpl
+      exact ⟨v, by rw [cmdStep_env_of_run hstep]; exact hv⟩
+  | saturate R =>
+      intro s hs p hp l hpl
+      obtain ⟨v, hv⟩ :=
+        h s (by rw [cmdStep_rules_of_saturate hstep] at hs; exact hs) p hp l hpl
+      exact ⟨v, by rw [cmdStep_env_of_saturate hstep]; exact hv⟩
+  | decl f dc =>
+      obtain ⟨-, henv, hrules⟩ := cmdStep_decl_fields hsig (hdom.ctorsOnly _ hc) hstep
+      intro s hs p hp l hpl
+      obtain ⟨v, hv⟩ := h s (by rw [hrules] at hs; exact hs) p hp l hpl
+      exact ⟨v, by rw [henv]; exact hv⟩
+
+/-- **And the whole prefix keeps it**, one command at a time from the empty source state, which
+holds no rule. -/
+theorem eqLitGlobals_of_step {P : Program} (hdom : P.EncodeDomain) :
+    ∀ {p : Program} {db db' : Database},
+      (∀ c ∈ p, c ∈ P) → db.CtorState → db.EqLitGlobals → ProgramStep db p db' →
+        db'.EqLitGlobals := by
+  intro p
+  induction p with
+  | nil =>
+      intro db db' _ _ hq hstep
+      obtain rfl := hstep.nil_inv
+      exact hq
+  | cons c cs ih =>
+      intro db db' hsub hcs hq hstep
+      obtain ⟨db₁, hstep₁, hrest⟩ := hstep.cons_inv
+      exact ih (fun c' hc' => hsub c' (List.mem_cons_of_mem c hc'))
+        (hstep₁.ctorState hcs (hdom.ctorsOnly c (hsub c List.mem_cons_self)))
+        (cmdStep_eqLitGlobals hdom hcs.sig hq (hsub c List.mem_cons_self) hstep₁) hrest
+
+@[inherit_doc eqLitGlobals_of_step]
+theorem eqLitGlobals_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
+    (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
+    sd.EqLitGlobals :=
+  eqLitGlobals_of_step hdom hsub Database.CtorState.empty
+    (fun r hr => absurd hr (by simp [Database.empty])) hstep
+
+/-- **A substituted expression is a bare literal only through a literal-valued global**, away
+from a text that was that literal already. `Expr.substGlobals`' counterpart of
+`exists_lit_global_of_resolveGlobals`, over `Database.GlobalsInline.toExpr_eq`. -/
+theorem exists_lit_global_of_substGlobals {sd : Database} {G : List (Var × Expr)}
+    (hgi : sd.GlobalsInline G) {e : Expr} {l : Lit}
+    (h : Expr.substGlobals G e = Expr.lit l) (hne : ∀ l' : Lit, e ≠ Expr.lit l') :
+    ∃ v, Env.lookup v sd.env = some (Term.lit l) := by
+  cases e with
+  | lit l' => exact absurd rfl (hne l')
+  | var w =>
+      rw [Expr.substGlobals] at h
+      cases hlk : Expr.lookupG w G with
+      | none => rw [hlk] at h; exact absurd h (by simp)
+      | some e' =>
+          rw [hlk, Option.getD_some] at h
+          subst h
+          obtain ⟨t, hlkt, hte⟩ := hgi.toExpr_eq hlk
+          refine ⟨w, ?_⟩
+          cases t with
+          | lit l'' =>
+              obtain rfl : l'' = l := by simpa using hte
+              exact hlkt
+          | app g ts => exact absurd hte (by simp [Term.toExpr])
+  | app f args => exact absurd h (by simp [Expr.substGlobals])
+
+/-- **`hgl` discharged at the query the target holds.** `Egglog.patternRowRead_of_matches` asks
+the target to hold the literal of a `.eq` both of whose sides are that bare literal, at a
+pattern of `Query.substGlobals G r.query` — the query `hrules` names. Four cases, and every one
+lands on a global the source's environment binds: a side `Expr.substGlobals` rewrote is one
+`Database.GlobalsInline` binds to that very literal, and a side that was the literal on both
+already is `Database.EqLitGlobals`' own instance. `Database.LitGlobalsHeld` then answers for
+the literal.
+
+So the `.eq` case is discharged from `Egglog.UnionsFire`'s clause set, with no appeal to the
+program's text and none to `sd.terms` — which `litBuild_not_litsHeld` refutes. -/
+theorem eqLit_of_substGlobals {sd : Database} {td : FDatabase} {G : List (Var × Expr)}
+    (hgi : sd.GlobalsInline G) (hlit : sd.LitGlobalsHeld td) (heq : sd.EqLitGlobals)
+    {r : Rule} (hr : r ∈ sd.rules) {p : Pattern} (hp : p ∈ Query.substGlobals G r.query)
+    (l : Lit) (hpl : p = Pattern.eq (Expr.lit l) (Expr.lit l)) : Term.lit l ∈ td.terms := by
+  rw [Query.substGlobals, List.mem_map] at hp
+  obtain ⟨p₀, hp₀, rfl⟩ := hp
+  cases p₀ with
+  | expr e => rw [Pattern.substGlobals] at hpl; exact absurd hpl (by simp)
+  | values vs f as => rw [Pattern.substGlobals] at hpl; exact absurd hpl (by simp)
+  | eq e₁ e₂ =>
+      rw [Pattern.substGlobals, Pattern.eq.injEq] at hpl
+      obtain ⟨v, hv⟩ : ∃ v, Env.lookup v sd.env = some (Term.lit l) := by
+        by_cases h₁ : ∀ l' : Lit, e₁ ≠ Expr.lit l'
+        · exact exists_lit_global_of_substGlobals hgi hpl.1 h₁
+        · have he₁ : e₁ = Expr.lit l := by
+            obtain ⟨l', hl'⟩ := not_forall.mp h₁
+            obtain rfl : e₁ = Expr.lit l' := not_not.mp hl'
+            have h' := hpl.1
+            rw [show Expr.substGlobals G (Expr.lit l') = Expr.lit l' from rfl] at h'
+            exact h'
+          by_cases h₂ : ∀ l' : Lit, e₂ ≠ Expr.lit l'
+          · exact exists_lit_global_of_substGlobals hgi hpl.2 h₂
+          · have he₂ : e₂ = Expr.lit l := by
+              obtain ⟨l', hl'⟩ := not_forall.mp h₂
+              obtain rfl : e₂ = Expr.lit l' := not_not.mp hl'
+              have h' := hpl.2
+              rw [show Expr.substGlobals G (Expr.lit l') = Expr.lit l' from rfl] at h'
+              exact h'
+            subst he₁
+            subst he₂
+            exact heq r hr _ hp₀ l rfl
+      exact hlit v l hv
+
 /-! #### The source head's two facts, as state invariants
 
 `Egglog.UnionsFire`'s two source-side clauses about a rule's **head**, where the clause it
@@ -14306,7 +14543,8 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
     encStep_viewRowsRootedAll hdom hnodup h,
     encStep_viewRowsColumnClosedAll hdom hnodup h,
     encStep_ufRootsUnique hdom h,
-    encStep_litGlobalsHeld hdom h⟩
+    encStep_litGlobalsHeld hdom h,
+    eqLitGlobals_of_prefixStep hdom h.mem h.src⟩
 
 /-- **`Egglog.RuleNameMech`, discharged.** The prelude declares one `@Rule_i` per source rule,
 at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`), and the

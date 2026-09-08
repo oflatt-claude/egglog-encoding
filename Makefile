@@ -195,21 +195,26 @@ nightly-local: nightly-uv nightly-rustup
 # nothing — which is why the clause is about `sd.env` and not about `sd.terms`. It rides in
 # `Egglog.RowMech` with the rest and `encStep_litGlobalsHeld` discharges it, out of
 # `EncStep.envEq` (the two environments are the same list) and the target's own
-# `Database.WF.envInTerms` — so it needed no new block induction. Twenty-five conjuncts at the
-# witness now, nineteen with content: `Database.LitGlobalsHeld` is vacuous at `rbTgtR`, where
-# the one global is bound to an application, and the two clauses step 4's read-back spends are
-# not (`rbTgtR_envReadsAt`, `rbTgtR_viewRepr_of_rowRepr` at `td`).
+# `Database.WF.envInTerms` — so it needed no new block induction. And with it the `.eq` case is
+# **discharged** rather than threaded: `Database.EqLitGlobals` is the source-run half — a
+# bare-literal `.eq` a *stored* query carries names a global, since `Pattern.Grounded` excludes
+# the shape from a rule's text and `evalTopAction` refuses a later `let` that would rebind
+# (`cmdStep_eqLitGlobals`) — and `eqLit_of_substGlobals` spends the two together at the query
+# `hrules` names, which is `patternRowRead_of_matches`' `hgl` answered from the residue's own
+# clauses. Twenty-six conjuncts at the witness now, nineteen with content: the `.eq` case's two
+# clauses are vacuous at `rbTgtR` (its one global is bound to an application and its rule's
+# query carries no equality), with `litGlobalsHeld_witness` and `eqLitGlobals_witness` their
+# content instances, and the two clauses step 4's read-back spends are not vacuous
+# (`rbTgtR_envReadsAt`, `rbTgtR_viewRepr_of_rowRepr` at `td`).
 # **And the outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no
 # merge phase, so `cmdStep_run_eq` makes the post-state the *function* `RunRules R sd` and its
 # `Database.sUnion` splits `eqs` and `terms` per firing (`eqs_cases_of_cmdStep_run`,
 # `terms_cases_of_cmdStep_run`); `contained_of_run_block` carries the clauses held at `td` up to
 # `td'`, and `unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus
-# one obligation per firing. What is left of the `Cmd.run` half is three items of *glue* inside
-# that obligation, none of them a fact about the encoding: `hgl` at the query the target holds
-# (one more source-run invariant of `Database.QueriesIn`'s shape, since `Pattern.Grounded` is
-# text and the residue is given no program), step 2's identity between the stored query and
-# `Query.substGlobals G` of it, and the head's key columns as target terms at a **global**
-# position. `unionsJoined_fire`'s own docstring names all three.
+# one obligation per firing. What is left of the `Cmd.run` half is two items of *glue* inside
+# that obligation, neither of them a fact about the encoding: step 2's identity between the
+# stored query and `Query.substGlobals G` of it, and the head's key columns as target terms at
+# a **global** position. `unionsJoined_fire`'s own docstring names both.
 # The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
 # turns a source reading of a query into a substitution the *emitted* query matches at, over
 # `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its
