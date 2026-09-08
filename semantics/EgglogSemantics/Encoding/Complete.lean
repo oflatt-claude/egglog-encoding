@@ -10849,6 +10849,86 @@ theorem gxSrc_not_globalsInline : ¬ gxSrc.GlobalsInline gxG := by
   rw [hnone] at hlk
   exact absurd hlk (by simp)
 
+/-! ### Step 4's transport, provenance-free
+
+The step-4 obligation is "the head's writes, read back at `td'`", and it has two halves. The
+first is **carrying the write out of the firing** — through the round's fold over its
+substitutions, through the merge phase inside `Cmd.run`'s own round, and through the block's
+trailing `Cmd.saturate rebuildRuleset`. That half needs nothing about where `td` came from, and
+it is here.
+
+**`terms` is the field it works over, and that is why it goes through.** A merge phase *deletes
+rows* — `mergeOneOriented` drops the row a collision displaced — so a row the rule phase added
+is not a row the block's post-state holds. Entry *terms* are never removed
+(`FDatabase.mergeSaturateF_terms`), a round only ever unions firings in
+(`mem_terms_execRunRules`), and `Database.Out` reads `terms` and nothing else — so the
+containment below holds of every block, and `ViewRepr`, `Database.Out` and
+`Database.HoldsBuild` all ride on it.
+
+The second half is the head-block decomposition — from the firing of `encodeRule i r n` to the
+single `encodeBuild` block one head action emits, which is what `holdsBuild_of_execActions`
+takes — and, for a head that reads a **global**, the re-keying only the rebuild performs.
+Neither is here: see `unionsJoined_fire`'s own docstring. -/
+
+/-- **A firing's writes reach the block's post-state**, at the denotation. The three steps are
+the round's fold (`mem_terms_execRunRules`, `mem_eqs_execRunRules`), the round's own merge phase
+(`FDatabase.mergeSaturateF_terms`, `FDatabase.mergeSaturateF_eqs`) and the trailing
+`Cmd.saturate rebuildRuleset` (`FDatabase.execProgramM_terms`, `FDatabase.execProgramM_eqs`) —
+each of them monotone on the two fields `Database.Contained` and `FDatabase.toDatabase` read.
+
+Stated at the block `encodeCmd` emits for a source `Cmd.run`, which is the half of
+`Egglog.UnionsFire` this file's residue is about, and at an arbitrary rule of that ruleset: no
+provenance, and nothing about `td.rows`. -/
+theorem contained_of_fired_run_block {R : RulesetName} {td td' dF : FDatabase} {r : Rule}
+    (hmem : r ∈ td.rules) (hR : r.ruleset = R)
+    {σ : Env} (hσ : σ ∈ matchQuery td r.query) (hfired : Fired td r σ dF)
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td') :
+    dF.toDatabase.Contained td'.toDatabase := by
+  rw [FDatabase.execProgramM] at hrun
+  obtain ⟨e, he, htail⟩ := Option.bind_eq_some_iff.mp hrun
+  rw [FDatabase.execCmdM, FDatabase.runRoundM] at he
+  refine FDatabase.toDatabase_contained_of_lists (fun t ht => ?_) (fun q hq => ?_)
+  · exact FDatabase.execProgramM_terms htail t
+      (FDatabase.mergeSaturateF_terms he t
+        (mem_terms_execRunRules.mpr (Or.inr ⟨r, hmem, hR, σ, hσ, dF, hfired, ht⟩)))
+  · exact FDatabase.execProgramM_eqs htail q
+      (FDatabase.mergeSaturateF_eqs he q
+        (mem_eqs_execRunRules.mpr (Or.inr ⟨r, hmem, hR, σ, hσ, dF, hfired, hq⟩)))
+
+/-- **The head's build, read back as a `ViewRepr td'`.** `holdsBuild_of_execActions` delivers
+`Database.HoldsBuild f is v` at the state the firing returned; the view row's entry term rides
+`contained_of_fired_run_block` to `td'`, the operand readings ride
+`FDatabase.execProgramM_toDatabase_contained` there, and `ViewRepr.app` is the two together.
+
+`hval` is the operands' own membership, which the reading a firing is offered already carries:
+`mem_matchQuery_encodeQuery` asks each bound value to be a `FDatabase.valueTerms` member, and
+`FDatabase.mem_terms_of_mem_valueTerms` is the inclusion. -/
+theorem viewRepr_of_holdsBuild_fired_run_block {R : RulesetName} {td td' dF : FDatabase}
+    {r : Rule} (hmem : r ∈ td.rules) (hR : r.ruleset = R)
+    {σ : Env} (hσ : σ ∈ matchQuery td r.query) (hfired : Fired td r σ dF)
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
+    {f : FnName} {ts is : List Term} {v : Term}
+    (hes : ViewReprList td.toDatabase ts is) (hval : ∀ a ∈ is, a ∈ td.terms)
+    (hb : dF.toDatabase.HoldsBuild f is v) :
+    ViewRepr td'.toDatabase (.app f ts) v := by
+  obtain ⟨pf, hview⟩ := hb.view
+  refine .app (ViewReprList.mono (FDatabase.execProgramM_toDatabase_contained hrun) hes)
+    (Database.out_self (vs := [v, pf]) ?_ ?_)
+  · exact Database.mem_terms_of_eqs
+      (contained_of_fired_run_block hmem hR hσ hfired hrun).eqs hview
+  · intro a ha
+    rw [FDatabase.toDatabase_terms]
+    exact FDatabase.execProgramM_terms hrun a (hval a ha)
+
+/-- **And the `@UF` edge an encoded `union` head writes.** The other half of the conclusion —
+`Database.UnionsJoined` asks for an edge between two ids — at the same containment. -/
+theorem out_of_fired_run_block {R : RulesetName} {td td' dF : FDatabase} {r : Rule}
+    (hmem : r ∈ td.rules) (hR : r.ruleset = R)
+    {σ : Env} (hσ : σ ∈ matchQuery td r.query) (hfired : Fired td r σ dF)
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
+    {g : FnName} {as vs : List Term} (ho : dF.toDatabase.Out g as vs) :
+    td'.toDatabase.Out g as vs :=
+  Database.Out.mono (contained_of_fired_run_block hmem hR hσ hfired hrun) ho
 /-- **The command induction's rule-firing case. Open — and, after four refutations and their
 repairs and one specification fix, no longer standing at a false statement.**
 
@@ -11226,11 +11306,13 @@ exactly the shape the query clause is, both are now clauses of `Egglog.UnionsFir
 registers and whose encoding its round fires, and `ncRule_headScoped`/`ncRule_builds` are the
 same two at the rule whose source firing the encoding cannot perform.
 
-Step 4 — the head's writes read back as `ViewRepr td'` — then rides on
-`execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, plus one thing
-the trailing rebuild has to do: `Rule.resolveGlobals` leaves a rule's *head* alone, so a head
-that reads a global evaluates it to the source term `td.env = sd.env` binds and keys its view
-row there, and only `Cmd.saturate rebuildRuleset`'s column rules carry that row to the leader.
+Step 4 — the head's writes read back as `ViewRepr td'` — rides on
+`execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, and on the
+**transport** above, which is: `contained_of_fired_run_block` carries a firing's writes through
+the round's fold, the round's own merge phase and the block's trailing `Cmd.saturate
+rebuildRuleset`, and `viewRepr_of_holdsBuild_fired_run_block` and `out_of_fired_run_block` are
+the build head's view row and the `union` head's `@UF` edge read back at `td'` off it. What that
+transport does *not* do is the two things below.
 
 **The shape that refuted it is gone.** It was a global `Cmd.globalBind` did *not* freeze, which
 by its two guards was one a top-level `let` binds twice (the open-definition guard only ever
@@ -11289,14 +11371,31 @@ arrival order measured against the binary — `Hit 1` and `(Hit (Bb))` — and b
 cases. **No measured counterexample stands under this `sorry` any more**: what is left is the
 structural item below.
 
-**What is left under this `sorry`.** Two of the four items the last pass named are landed —
-the source head's two facts are clauses now, and step 1's membership obligation is a true one.
-What remains is **step 4**: the head's writes read back as `ViewRepr td'`, through the round
-fold, the merge phase and the block's trailing `Cmd.saturate rebuildRuleset`
-(`execActions_encodeBuild_app`, `holdsBuild_of_execActions` and `mem_rows_execRunRules` are the
-pieces, and `Rule.resolveGlobals` leaving a rule's *head* alone is what keys a global-reading
-head's view row at the source term `td.env = sd.env` binds); the `.eq` case's remaining
-environment clause above; and the `Cmd.saturate` lag below.
+**What is left under this `sorry`.** Step 4's transport is landed
+(`contained_of_fired_run_block` and the two read-backs above), so what remains of step 4 is two
+items, and then the assembly.
+
+* **The head-block decomposition.** `holdsBuild_of_execActions` takes the block one head
+  *action* emits, `execActions d (encodeBuild e m).2.1 = some d'`, and what a firing hands over
+  is `execLocalActions td (encodeRule i r n).1.actions τ`, the whole head under
+  `(@Rule_i p…)`. Splitting the second into the first per action is the mirror of
+  `exists_execActions_encodeActions`, run in the reading direction over `execActions_append`,
+  and it is unwritten. `headActions_soundTerms` is the same induction on the *soundness* side.
+* **A head that reads a global.** `Rule.resolveGlobals` leaves a rule's *head* alone, so such a
+  head evaluates the global to the source term `td.env = sd.env` binds and keys its view row
+  **there** rather than at an id of it — and `ViewRepr td' u u` for that term is
+  `Database.ReadsSelf`, which is refuted (`ncTgt_not_readsSelf`, and the `glob-*` measurement in
+  the `hglob` paragraph above). What answers it is the row the *rebuild* re-keys onto the
+  leader, and reaching that row wants `execM_viewRow_of_rowReachList` — a view row at any
+  pointwise-`FDatabase.UFRowReach` key tuple — which is stated at `execM (encode P)` and rests
+  on `eclassRule_fires`/`columnRule_fires`, both of which take `FDatabase.EncBase`. So it is
+  available only as **provenance** today, and `UnionsFire` may not take provenance
+  (`unionsJoined_fire_satisfiable` would not survive it). Carrying it as a further *derived*
+  clause on `td'`, in the `Egglog.RowMech` shape, is what has not been done.
+
+Beside those: the `.eq` case's remaining environment clause above; the outer assembly, which
+decomposes `CmdStep sd (.run R) sd'` into `RunRules`' own `sUnion` and runs steps 1-4 once per
+source firing; and the `Cmd.saturate` lag below.
 
 **The structural item is the `Cmd.saturate` half's alone, and the encoder fix did not
 close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
