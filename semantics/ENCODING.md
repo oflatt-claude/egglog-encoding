@@ -46,7 +46,9 @@ The **action read-back** is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
 on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and supplies the
 totality `Database.ViewsCover` is derived from. The one left is that induction's own open case
-(`unionsJoined_fire`: a source command that fires rules needs a target firing behind the
+(`unionsJoined_fire`, and only its `Cmd.saturate` half: the `Cmd.run` half is proved outright
+at `unionsFire_run`, from `unionsFire_conclusion_of_run` plus `unionsFire_firing` once per
+firing. A source command that fires rules needs a target firing behind the
 source's, and one step below that the premise row must be current in the *index*, not merely an
 entry term; the version of it that stated the invariant's clauses at the run's **final** state
 is refuted — `unionsFireClaim_false` — so `UnionsInv` now carries every clause at the state the

@@ -9097,8 +9097,8 @@ theorem ncTgt_encRule_fires :
 
 /-! ### `unionsJoined_fire`'s hypotheses, satisfied together
 
-`ENCODING.md`'s discipline at the *witness* as much as at the lemma. Four of
-`Egglog.UnionsFire`'s eighteen clauses quantify over `sd.rules`, so a witness whose source
+`ENCODING.md`'s discipline at the *witness* as much as at the lemma. Six of
+`Egglog.UnionsFire`'s clauses quantify over `sd.rules`, so a witness whose source
 holds no rule satisfies them by holding nothing, which shows nothing about their
 satisfiability together with the rest — and the same witness's round then fires nothing on
 either side. `rbSrcR`/`rbTgtR` fix both: `rbSrc` and `rbState2`, the states `rbProgram` and
@@ -9238,6 +9238,27 @@ theorem rbSrcR_queriesEncodable : ∀ r ∈ rbSrcR.rules,
       simpa [rbRule, Query.vars, Pattern.vars, Expr.vars, Expr.varsList] using hv
     refine ⟨Pattern.expr (.app "W" [.var "y"]), by simp [rbRule], ?_⟩
     simp [Pattern.ArgVar, Expr.ArgVar]
+
+/-- **No query variable is in the generated namespace, with content**: `rbRule`'s query really
+does have a variable, and `y` is not `@`-prefixed. -/
+theorem rbSrcR_noAtQuery :
+    ∀ r ∈ rbSrcR.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true := by
+  intro r hr
+  obtain rfl := rbSrcR_rules_mem hr
+  intro v hv
+  obtain rfl : v = "y" := by
+    simpa [rbRule, Query.vars, Pattern.vars, Expr.vars, Expr.varsList] using hv
+  -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
+  exact (by decide +kernel : ¬ "@".isPrefixOf "y" = true)
+
+/-- **And no `set` in the head, with content**: `rbRule`'s head is a build, so the quantifier
+ranges over a real action rather than over nothing. -/
+theorem rbSrcR_noSet : ∀ r ∈ rbSrcR.rules, ∀ a ∈ r.actions, a.NoSet := by
+  intro r hr
+  obtain rfl := rbSrcR_rules_mem hr
+  intro a ha
+  obtain rfl : a = Action.expr (.app "W" [.var "y"]) := by simpa [rbRule] using ha
+  trivial
 
 set_option maxRecDepth 100000 in
 /-- **Every column the witness state's rows record is a value the enumerator assigns.** -/
@@ -9511,8 +9532,8 @@ theorem rbSrcR_litGlobalsHeld : rbSrcR.LitGlobalsHeld rbTgtR := by
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Twenty-six conjuncts: the twenty-five `Egglog.UnionsFire` takes, in the order it takes them,
-and `rbSrcR_globalsInline` beside them. Nineteen have content here; the seven that do not are
+Twenty-eight conjuncts: the twenty-seven `Egglog.UnionsFire` takes, in the order it takes them,
+and `rbSrcR_globalsInline` beside them. Twenty-one have content here; the seven that do not are
 `Database.UnionsJoined`, `FDatabase.RowJoined`'s `edge`, the three threaded row invariants and
 the `.eq` case's two clauses, each of them for a reason recorded below and each with content at
 another witness.
@@ -9523,14 +9544,16 @@ fire: `rbTgtR_mem_matchQuery` is the substitution the emitted entry atom admits,
 post-state records, and `rbTgtR_run` the whole block — round, merge phase and trailing rebuild
 — reducing.
 
-**So the four clauses about rules have content**, which is what this witness is for.
+**So the six clauses about rules have content**, which is what this witness is for.
 `rbSrcR_hrules` names the encoding the target really holds, at the index `ruleProofDecls`
 declares `@Rule_0` for, and at the substitution `rbProgram`'s own top-level `let` freezes, so
 the `Database.GlobalsInline` conjunct riding in it is not the empty substitution;
 `rbSrcR_queriesEncodable` is the source query's encodability at a query with one atom, one
 variable at `W`'s key column and no primitive among its names; `rbSrcR_headsScoped` and
 `rbSrcR_headsBuild` are the head's scope and its evaluability, the second read at the
-*target's* signature. The globals clause is still carried a second time
+*target's* signature; and the two clauses about the rule's **text** land on real syntax rather
+than on an empty quantifier — `rbSrcR_noAtQuery` at the query variable `y` the atom is keyed on,
+`rbSrcR_noSet` at the one build the head runs. The globals clause is still carried a second time
 (`rbSrcR_globalsInline`) rather than left to `hrules` alone; `unionsFire_false_globals` is the
 residue without it.
 
@@ -9624,6 +9647,8 @@ theorem unionsJoined_fire_satisfiable :
       (∀ t r : Term, RowRepr rbTgtR t r → ViewRepr rbTgtR.toDatabase t r) ∧
       (∀ b ∈ rbSrcR.env, ∀ s ∈ b.2.subterms, ViewRepr rbTgtR.toDatabase s s) ∧
       rbSrcR.LitGlobalsHeld rbTgtR ∧ rbSrcR.EqLitGlobals ∧
+      (∀ r ∈ rbSrcR.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true) ∧
+      (∀ r ∈ rbSrcR.rules, ∀ a ∈ r.actions, a.NoSet) ∧
       rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrcR_cmdStep_run, rbTgtR_run, rbTgtR_env, rbSrcR_ctorState, rbTgtR_sig_mono,
     rbTgtR_isCtor_fiatName, rbSrcR_hrules, rbSrcR_queriesEncodable,
@@ -9634,7 +9659,8 @@ theorem unionsJoined_fire_satisfiable :
     (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h),
     rbTgtR_viewRowsRootedAll, rbTgtR_viewRowsColumnClosedAll, rbTgtR_ufRootsUnique,
     (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h), rbTgtR_envReadsAt,
-    rbSrcR_litGlobalsHeld, rbSrcR_eqLitGlobals, rbSrcR_globalsInline⟩
+    rbSrcR_litGlobalsHeld, rbSrcR_eqLitGlobals, rbSrcR_noAtQuery, rbSrcR_noSet,
+    rbSrcR_globalsInline⟩
 
 /-! ### The forward mirror of `Encoding/Match.lean`
 
@@ -10924,7 +10950,7 @@ def UnionsFireWeak : Prop :=
 refutations below bracket the repair from above and refute nothing it says. -/
 theorem unionsFire_of_weak (hw : UnionsFireWeak) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj _
-    _ _ hback _ _ _ _ _ _ _
+    _ _ hback _ _ _ _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate ?_ hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, -⟩ := hrules r hr
@@ -11388,7 +11414,7 @@ def UnionsFireAnyG : Prop :=
 refutation below refutes nothing the repair says. -/
 theorem unionsFire_of_anyG (hw : UnionsFireAnyG) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate hsig hfiat hrules hq hcv hno hreads hjoin
-    hrow hrj _ _ _ hback _ _ _ _ _ _ _
+    hrow hrj _ _ _ hback _ _ _ _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate hsig hfiat ?_ hq hcv hno hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, hct, -⟩ := hrules r hr
@@ -11965,664 +11991,6 @@ theorem unionsFire_conclusion_of_run {R : RulesetName} {sd sd' : Database}
   unionsFire_conclusion_of_firings hstate hstep
     ⟨hjoin.mono (contained_of_run_block hrun),
       fun t ht => (hread t ht).imp fun _ he => he.mono (contained_of_run_block hrun)⟩ hfir
-/-- **The command induction's rule-firing case. Open — and, after four refutations and their
-repairs and one specification fix, no longer standing at a false statement.**
-
-Its statement, its five closed siblings and the four refutations that fixed its hypotheses are
-in `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`)
-and above in this file (`Egglog.UnionsFireWeak`, `unionsFire_false`,
-`unionsFire_false_encodeSig`, `Egglog.UnionsFireAnyG`, `unionsFire_false_globals`). What is
-recorded here is what the route through this file settles and what it does not.
-
-**The fourth refutation is the most recent, and it is what the `Cmd.run` case ran into.** The
-assembly below reaches step 2 — "move to `s.substGlobals G`" — and there discovers that nothing
-in the clause set said which `G` that is. The identity that lines the source's stored query up
-with the encoder's, `Rule.resolveGlobals_eq_substGlobals`, is stated under
-`Database.GlobalsInline` and `Database.GlobalsCover`, and `hrules` did not carry the first:
-`unionsFire_false_globals` runs a source rule whose query is keyed at `y` and whose
-encoding went through `gxG = [("y", (A))]`, so the encoded query binds `y` nowhere, the encoded
-head — `encodeBuild` keeps a source variable as itself — reads it anyway, `Expr.eval` is `none`,
-and `fireInto` returns the accumulator while the source's own firing asserts
-`(A) = (W (A))`. Every other clause holds at that witness: its target is `rbState2` with the
-encoded rule installed and `@Rule_0` declared, so its rows are ones a real encoded run wrote,
-its signature is the encoder's own, and its source rule's query is one the flattening handles.
-`gxSrc_not_globalsInline` is the clause it violates.
-
-**The repair is `Database.GlobalsInline` in `hrules`, and it is derived rather than assumed.**
-`Cmd.globalBind`'s two guards are exactly that clause, `globalsInline_step` carries it along the
-source run, `encStep_globals` reads it off the chain and `globalsInline_keep` moves an
-already-frozen `G` across one more source command; `Egglog.GlobalsMech` is the pair and
-`encStep_globalsMech` the discharge. `Egglog.UnionsInv.rules` carries `Program.GlobalsOnce`
-beside it — a fact about the program *text*, which is what a later `let` cannot invalidate —
-and only the `GlobalsInline` half reaches this `Prop`, since that is what a firing reads.
-`unionsJoined_fire_satisfiable` survives it and carries a conjunct of its own
-(`rbSrcR_globalsInline`, at the substitution `rbProgram`'s own `let` freezes) beside the
-`hrules` conjunct it also rides in, which is stated at that same substitution.
-
-**The route is the enumerator's own, and no general converse is wanted.**
-`execRunRules_RunRules` needs `Signature.AllConstructors`, which an encoded target fails at
-`@UF` and at every view, so the two matchers do not coincide here and a `Spec/Match.lean`-level
-converse would not close this. It is also not needed. `mem_matchQuery_of_rows` is the enumerator
-lower bound directly, over `mem_matchQuery_of_lookup` and `patternHolds_values_of_mem_rows`, and
-it asks the closure for reflexive pairs only. `ncTgt_encRule_fires` is the whole chain — rows,
-`patternHolds`, `matchQuery`, the block evaluating (`ncTgt_encRule_fired`), the head's row in
-the round's post-state — run at a **source** rule's encoding, at the state where
-`Database.ReadsSelf` is refuted (`ncTgt_not_readsSelf`) and `Database.UnionsJoined` holds
-(`ncTgt_unionsJoined`). Proved, not decided: `closureF` does not reduce in the kernel.
-
-**And the enumerator's under-firing is not the obstruction.** The specification fires once per
-*member* of a premise's congruence class and the enumerator once per row; the substitution
-wanted is the row's. In the target rule the source's own variables *are* id variables —
-`encodeQueryExpr` returns a source variable unchanged as the expression naming its e-class — so
-what the match wants is an id per source variable and the read's own two columns per generated
-pair. `ncIdSubst` is that substitution at the instance: the source rule fired at `x := (B)` and
-the encoded one at the id `(A)`, because `mergeResult` keeps `ordering-min` and the `@FView` row
-sits at the leader.
-
-**The `rows` reading is no longer missing.** `UnionsInv.readsAt` is a `terms` fact — `ViewRepr`
-ends in `Database.Out` — while every atom above wants a live row, and `RowRepr` is that reading.
-It is not the same claim at the same ids: `FDatabase.EntryRowsUF` (proved, `execM_entryRowsUF`)
-answers an entry with a row whose e-class column is only `Database.UFReach`-reachable from the
-entry's, and a parent read is keyed on its children's columns **on the nose** — there is no
-slack, because an encoded target asserts nothing (`execM_encode_eqsRefl`) and so `patternHolds`'
-congruence is the identity.
-
-**It is the same claim at the pointwise `@UF` row root, and that was the choice of tuple.**
-`encReached_viewRow_at_root` answers the entry with a live row whose e-class column *is* the
-root of the id the entry recorded; `encReached_exists_rootList` names each key column's root;
-and `encReached_viewRow_of_rowReachList` walks the whole key onto that rooted tuple in one go,
-at the very e-class column the row started with. The child column is a root because it is the
-*value* column of a live view row, which is the instance `FDatabase.ViewRowsRooted` supplies —
-and the one an arbitrary reading does not, which is what made this a choice rather than a
-lemma. `encReached_rowRepr_of_viewRepr` is the induction and `encStep_exists_rowRepr` the form
-this residue is handed.
-
-**Stated one block short of the run's end, which is where the firing happens.**
-`execM_rebuildClosed` is the obvious supplier and does not typecheck here: it takes
-`execM (encode P) = some tgt` and `UnionsFire` quantifies over the state the *next* encoded
-block starts at. That is the hazard `unionsFireClaim_false` already recorded — a clause at a
-state the encoded rule does not run at — so the mechanism was restated at the state that does
-run it rather than the hypothesis being bent to reach it. `EncReached` is the target-side
-provenance, one whole `encodeCmd` block at a time (whole, because `FDatabase.ViewRowsRooted` is
-established by the `Cmd.saturate rebuildRuleset` a block ends with and is false in the middle of
-one); `EncStep` is the same chain with the source run alongside, which is what pays the two
-clauses `EncReached` does not carry — a literal's rootness (`encStep_ufLitRoots`) and a view
-entry's key width (`encStep_ctorsIn`), both through `FDatabase.SoundTerms`. `encStep_rowMech`
-is `RowMech` discharged, and `unionsInv_step` spends it.
-
-**The provenance itself is not a hypothesis of `UnionsFire`, and must not become one.**
-`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbTgtR`, a state written by
-`execActions` rather than by `encode`, and the kernel cannot run an encoded program — so
-`EncReached rbProgram rbTgtR` is not available and an `EncReached` hypothesis would empty the
-non-vacuity check. What `UnionsFire` takes is therefore the two *derived* clauses, `RowRepr`
-at `td` and the read-back at `td'`, both of which the witness state really satisfies
-(`rbTgtR_exists_rowRepr`, `rbTgtR_viewRepr_of_rowRepr`) and at positive arity.
-
-**The forward query mirror is written.** `mem_matchQuery_encodeQuery` turns a source reading of
-a query — one `PatternRowRead` per pattern — into a substitution the *emitted* query matches at,
-over both features of `encodeQuery`. The **flattening**: `RowRead` carries an id per subterm
-position through live rows, so the reading binds the generated variables as well as the
-source's. The **fresh-variable supply**: `FreshEnv` numbers a block's generated bindings inside
-its own stretch of the counter, so two blocks' domains are disjoint (`freshVar_inj`) and their
-concatenation binds each of them; non-collision with the source's own variables is the `@`
-prefix (`atPrefix_freshVar` against `FDatabase.NoAtEnv`), which is why the source bindings can
-sit in front of the generated ones and neither shadow the other. `ncTgt_mirror` runs it at the
-instance, and lands on the substitution `ncTgt_mem_matchQuery` exhibits by hand.
-
-**The reading is written, and the three things it wanted are a derived clause.**
-`FDatabase.RowJoined` is that clause — `fn`, the reading is a function; `edge`, an `@UF` edge
-between two entry readings collapses the two row readings — threaded through `RowMech` and
-`unionsInv_step` and discharged at `EncStep` by `encStep_rowJoined`, in the shape `RowMech`
-already had and not as provenance, which would have emptied `unionsJoined_fire_satisfiable`.
-It answers all three:
-
-* **One id per source term** is `fn`, off `FDatabase.ViewRowUnique` (`encReached_viewRowUnique`)
-  and a parent read being keyed on its children's columns on the nose (`rowRepr_unique`).
-* **One id per congruence class** is `rowRepr_congOn`: the reading is constant on a `CongOn`
-  class, by induction over `Cong` with `Database.UnionsJoined`'s edge between the two *ids*
-  turned into one reading by `edge`, `rowReprList_congr` at `Cong.congr`, and
-  `Conservativity.mem_addTerms_eqs` making `withOperands` contribute only the diagonal.
-* **The pattern instance, not only a source term** is `exists_rowRepr_congOn`: the reading is
-  total on the class of any source term, so a `Matches` witness carries its instance.
-
-`patternRowRead_of_matches` is the three assembled at one pattern, over `rowRead_of_rowRepr`,
-which is `RowRepr` re-indexed on the shape of the pattern. `Prim.ofName f = none` is a
-hypothesis there and not a conclusion — `Prim.apply`'s `if-then-else` returns an operand, so
-nothing about an evaluation's *result* rules the primitive branch out — and
-`EncodeDomain.noPrim` is where a source query's names pay it.
-
-**`Database.ViewLeader` is not what closed it, and could not have been.** It is the same claim
-through entry **terms**, and it is false in general at states this development reaches
-(`chainD_not_viewLeader`): an entry a merge displaced is never removed, so `Database.Out` keeps
-reading it, and at `chainD` the ids ascend with upper bounds everywhere and no top. Through
-live **rows** the displaced row is *gone*, and a state an encoded block runs at is rooted — a
-live view row's e-class column has no outgoing `@UF` row (`encReached_viewRowsRooted`), a view
-key carries at most one row, and entry-level `@UF` reachability lands on one row root
-(`encReached_ufRowRoot_of_ufReach`). So the upper bound is a representative here and is not one
-there; `uTgt_not_viewLeader` against `uRebuilt_viewLeader` is the same bracket one rebuild
-firing apart, and `ncTgt_rowJoined_edge` is the instance: `(B)` reads to `(B)` and to `(A)`
-through entries, to `(A)` alone through rows.
-
-**What the reading owed was `hglob`, and the encoder is what paid it.** `matchQuery` reads a
-variable a *global* binds off `d.env`, so `mem_matchQuery_encodeQuery` asks the target reading
-of such a variable to be the bound value itself — `RowRepr td s s`, where
-`UnionsInv.envReadsAt` supplies only `ViewRepr td s s`. The two part company exactly when a
-later `union` moves the let-bound term's row off it: `mergeResult` keeps `ordering-min`, so
-`(let x (A))` followed by a `union` with a `Term.blt`-smaller partner leaves `x` bound to a term
-no live row is keyed at. That was a **defect in `encode`**, and it was measured:
-`DiffTest.lean`'s eight `glob-*` cases are all in `encode`'s domain and all pass against real
-egglog, and `difftest correspond 64` reported **7 LOST across 6 of them** where the whole corpus
-reported 0. `glob-lost` is the minimal one, five commands:
-
-```
-(let $g (Zz))  (Wrapper (Aa))  (union (Zz) (Aa))  (rule ((Wrapper $g)) ((Hit)))  (run 1)
-```
-
-`Term.blt` orders applications by arity, then by name, so `(Aa)` is the `ordering-min` and
-`(Zz)` is the union's loser. The source fires: `patternHolds` closes the instance
-`(Wrapper (Zz))` into `d`'s congruence and finds `(Wrapper (Aa))`, which is what egglog does
-too. The target could not: its one `@WrapperView` row was `((Aa)) ↦ (Wrapper (Aa))`, the
-emitted atom was `(= (values @v0 @v1) (@WrapperView $g))` at a frozen `$g = (Zz)`, and
-`rebuildRules`' column rule joins `@UF[@ci] ↦ (@x, @q)` and writes `@x` *into* the column, so
-rows travel **towards** a leader and never back from one. `glob-keyed` and `glob-leader` were
-the two controls that agreed throughout — a global whose key a build did write, and a global
-bound to the union's *winner*.
-
-**The fix is `Rule.substGlobals`**, and it is what egglog does by another route: a query that
-names a global is encoded as if the source had written the global's *definition* out, so the
-flattening reads the definition's own views and lands on its **current** e-class exactly as an
-ordinary query does. egglog gets the same effect from a per-global table — `remove_globals`
-desugars `(let $g e)` into a nullary function plus `(set ($g) e)` and rewrites a rule that reads
-`$g` into one that joins on `($g)` — and under `--proofs` that table's value follows the
-union-find forward (`proof_encoding.rs`'s `is_encoded_global`,
-`proof_encoding_rebuild.rs:91-94`). Reading the definition instead reaches the same class
-through the tables the `let`'s own build already wrote. `difftest correspond 64` now reports
-**0 LOST**, with all eight `glob-*` cases agreeing.
-
-So `hglob` is no longer the obstruction it was. What the residue would still have to prove at a
-`Cmd.run` is `UnionsFire` itself: the rule the target holds is `encodeRule i (s.substGlobals G) n`
-— `UnionsInv.rules` now says so — so the reading a firing has to mirror is the *substituted*
-query's, `mem_matchQuery_encodeQuery` at `Query.substGlobals G s.query`, whose globals are
-already flattened away and whose remaining variables the three clauses above answer for.
-
-**`UnionsFire` was false, and the writer was `Cmd.saturate`.** `encodeCmd` gave a source
-`.saturate R` the block `[.saturate R, .saturate rebuildRuleset]`, so the rebuild ran **once,
-after the whole saturation**, and the target's second round of `R` read the first round's rows
-un-re-keyed. The specification has no rebuild to miss — `Matches` closes over `Cong`, which
-reads `eqs` — so its round 2 saw round 1's `union` and the target's did not. Five commands, all
-of them in `encode`'s domain, and `DiffTest.lean`'s `sat-hit`:
-
-```
-(Wrapper (Zz))  (Aa)
-(rule ((Aa)) ((union (Zz) (Aa))))
-(rule ((Wrapper (Aa))) ((Hit)))
-(run-schedule (saturate (run)))
-```
-
-Round 1 fires the first rule on both sides; round 2 fires the second on the source alone, over
-the congruence `(Zz) = (Aa)` round 1 asserted, and builds `(Hit)`. In the target the union is an
-`@UF` edge — `Term.blt` makes `(Aa)` the `ordering-min` — while `@WrapperView` still sat at the
-key `[(Zz)]`, and the emitted atom for `(Wrapper (Aa))` asks for the key `[(Aa)]`. Nothing
-joined them until the trailing `Cmd.saturate rebuildRuleset`, which is after `R` has saturated.
-**Measured**: `exec P` held one `Hit` term and `execM (encode P)` held **no** `@HitView` entry
-term at all, where the same program with the `saturate` replaced by two `Cmd.run`s **agreed** —
-each round getting its own rebuild is what made the `run` form right. So
-`encode_corresponds_forward` was false there too, at `a = b = (Hit)`, and this `sorry` was a
-false obligation rather than an open one.
-
-**The repair is in `Encoding/Encode.lean`, and it is what egglog does.** egglog instruments a
-schedule node at a time: its `Run` case becomes `(seq <run> <rebuild>)`
-(`egglog/src/proofs/proof_encoding.rs:1969`) and its `Saturate` case recurses *into* the loop
-body (`:1978-1980`), so `(run-schedule (saturate R))` is instrumented to
-`(saturate (seq (run R) <rebuild>))` — a rebuild after **every** iteration, which
-`RUST_LOG=debug` prints as the schedule the loop runs. `Cmd` has no schedule nesting, so
-`allMaintenanceRules` joins the maintenance rules to each ruleset a source `Cmd.saturate` names
-as well as to `rebuildRuleset`; a round of `R` then re-keys the views the previous round moved,
-and a fixpoint of the union of the two rulesets is a fixpoint of each. `sat-hit` now agrees —
-one source `Hit`, one target `@HitView` — as do the four other `sat-*` cases, and
-`difftest correspond 64` reports 0 LOST over 87 in-domain cases. **That writer is fixed, and the
-obligation is false anyway** — for two reasons that have nothing to do with `Cmd.saturate` and
-that the `Cmd.run` half fails at too: `unionsFire_false` and `unionsFire_false_encodeSig` above.
-
-**What the corpus used to miss.** No case used a *source* `Cmd.saturate`: the only
-`Cmd.saturate` in an encoded program was the encoder's own `rebuildRuleset` one, every curated
-case ran its ruleset with `Cmd.run`, and both generators emitted
-`List.replicate (rounds + 1) (Cmd.run "")`. `difftest correspond 64` agreeing on all 78
-in-domain cases therefore measured the `Cmd.run` half and said nothing about the other. The
-`sat-*` family and `genProgram`'s `genCollapseRules` tail are what close that: five curated
-cases and, at the default 60 seeds, ten generated ones now run a source `saturate`, and with
-the repair backed out the sweep reports 13 LOST across those 13 cases.
-
-**That refutation was measured and not proved**, which is why no `unionsFire_false` ever stood
-beside `unionsFireClaim_false`, and why the corpus is where the repair is checked. Refuting a
-firing needs the enumerator's *completeness* at an encoded target — no substitution matches, so
-nothing is written — and that is `execRunRules_RunRules`, which wants
-`Signature.AllConstructors` and is unavailable at a target whose `@UF` and every `@fView` carry
-`:merge`. The kernel cannot run the encoded program either.
-
-**A valid substitution is still not a firing, and that is what refuted this.** `RuleResults` is
-a substitution *and* a block that evaluates, which is the falsity
-`mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already cost once. `ncTgt_encRule_fired` is that
-half exhibited on the target side, and `mem_rows_execRunRules` is where the head's writes are
-read back. On the target the same gap was a *hole in the statement*: `Expr.eval` returns `none`
-at a name the signature does not make a constructor, `execLocalActions` propagates it, and
-`fireInto` answers a stuck firing by returning the accumulator unchanged — so `unionsFire_false`
-runs the encoded rule at a `td` whose signature withholds the head's skolem and the round writes
-nothing. `unionsFire_false_encodeSig` is the same conclusion at `encodeSig` itself, over a
-source query that applies a primitive, so the second missing clause is on the **source** side
-and no target-side provenance reaches it.
-
-**What the repair is, and it is now in the statement.** Five derived clauses, à la carte and
-threaded the way `Egglog.RowMech` is — never as provenance, which
-`unionsJoined_fire_satisfiable` would not survive:
-
-* the target's signature, in the form `∀ f, sd.sig.IsCtor f → td.sig.IsCtor f` and
-  `td.sig.IsCtor fiatName`. `FDatabase.EncBase`'s `sig` clause is where an encoded run has
-  them, `encodeSig_isCtor_of_mem_ctors` and `encodeSig_isCtor_fiatName` are the two readings,
-  and `sigIn_of_prefixStep` carries the source signature onto `Program.ctors`. Both are
-  decidable at `rbState2` (`rbState2_sig_mono`, `rbState2_isCtor_fiatName`), at a source
-  constructor of positive arity;
-* `td.sig.IsCtor (ruleName i)` **at the index `hrules` names**, bundled into `hrules` because
-  `ruleProofDecls` declares only the indices the encoder's own numbering reaches and
-  `encodeRule` is a function of an arbitrary one. `Egglog.RuleNameMech` is how the numbering is
-  threaded — `Program.RuleNamesDeclared` walks the program with `Cmd.ruleStep`, which
-  `encodeCmd_ruleStep` says is `encodeCmds`' own counter — and `ruleNamesDeclared_encodeSig`
-  reads it off `ruleProofDecls`;
-* `FDatabase.RowColumnsValued` at `td`, which `mem_matchQuery_of_rows` and
-  `mem_matchQuery_encodeQuery` both take: `matchQuery` draws its candidates from
-  `FDatabase.valueTerms`, so a row column outside it is a row no substitution can name.
-  `encReached_rowColumnsValued` is the discharge;
-* `FDatabase.NoAtEnv` at `td`, with `hnoAtVar` at the target reading's own variables: a
-  generated variable must not collide with a source one, which is what keeps
-  `exists_freshEnv_encodeQuery`'s block disjoint from `ρt`. `FDatabase.EncBase.noAtEnv` is the
-  discharge; the old `hglob` beside it is gone, because `matchQuery` no longer reads the
-  environment at all;
-* the source rules' encodability — `Pattern.NoValues` and `Query.VarsKeyed` and
-  `∀ fk ∈ p.ctors, Prim.ofName fk.1 = none` at every pattern of every rule `sd.rules` holds,
-  which `patternRowRead_of_matches` takes and which `Program.EncodeDomain.queryEncodable` and
-  `noPrim` pay for at the program — *through the resolution a registration performs*, since a
-  stored rule's query is `Rule.resolveGlobals`'d (`Query.noValues_resolveGlobals`,
-  `Query.VarsKeyed.resolveGlobals`, `Query.ctors_resolveGlobals_noPrim`); `Pattern.Grounded` is
-  not among them, because the resolution writes a literal-valued global's value into the query
-  and `Pattern.GroundedAt` is what the reading actually needs. This one is a **source-run**
-  invariant, since `UnionsFire` is given no program: `Database.QueriesIn` is the property and
-  `queriesIn_of_prefixStep` the
-  induction, over the commands the chain has already run.
-
-**Both refutations are accounted for, each by a different clause.** `cxfTgt_not_sigMono` is
-the first witness failing the signature clause, with every other new clause holding at it
-(`cxfSrc_queriesEncodable`, `cxfTgt_other_clauses`); `cxpSrc_not_queriesEncodable` is the
-second failing the source-rules clause, with every clause about names holding at its target
-(`cxpTgt_name_clauses`). `unionsFire_of_weak` is the implication that says what they refute —
-`Egglog.UnionsFireWeak` — is strictly the stronger claim.
-
-**What the repair lands.** Step 2 of the assembly — move the source firing to the query the
-encoder flattened — is no longer a transfer at all, and no `Matches.to_substGlobals` is needed:
-a rule is stored `Rule.resolveGlobals`'d at the environment standing when it is declared, so
-`Query.substGlobals G` has nothing left to rewrite in the query the state holds. `hrules`
-carries that identity as a conjunct rather than deriving it —
-`Rule.resolveGlobals_eq_substGlobals` needs `Database.GlobalsCover` at the environment the
-rule was *registered* at, which no later state remembers — and `unionsInv_step` discharges it
-where the rule is registered, by `Rule.substGlobals_idem`. So the source firing's own
-`ValidQuerySubst` is already at the right query.
-
-**Step 1 goes through at the rule's own query, and one of its two extra facts is now a
-clause.** Reading a firing's substitution forward through live rows is
-`patternRowRead_of_matches` at every pattern of `r.query`, at the reading `Env.mapVals` puts on
-`τ` off the row-reading clause and `ValidQuerySubst.mem_terms`; it is proved from the clauses
-above **plus two facts about `td`**. The first is that a live `@fView` row's name carries a
-`:merge`, which `RowRead.app` carries as data and `rowRead_of_rowRepr` therefore asks for: that
-is now a clause, derived off `FDatabase.IndexOk.ctor` alone — a merge-free row's output columns
-are empty and a view row's are `[e, pf]` — and discharged by `encStep_mergeOf_of_row`, in the
-shape `Egglog.RowMech` already had rather than as provenance.
-
-**The second is false as it reads, and so is the literal residue that was named as its
-replacement.** "Every id the reading gives is a term the target holds",
-`∀ t x, RowRepr td t x → x ∈ td.terms`, would put *every literal* in `td.terms`: `RowRepr.lit`
-is `RowRepr d (.lit l) (.lit l)` for an arbitrary `l`, with no premise at all. Its
-**application** half is a theorem and wants no clause — `mem_terms_of_rowRepr_app`: a
-`RowRepr.app` names a live view row `⟨viewName f, es, [r, pf]⟩` and `FDatabase.RowColumnsValued`
-— already a clause here — puts that row's value column in `td.valueTerms`, hence in
-`td.terms` (`FDatabase.mem_terms_of_mem_valueTerms`).
-
-**And `Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms` is false too, which is measured.**
-`litBuild_not_litsHeld`: `litBuildProgram` is one `.action (.expr (.lit 5))`, it is **in the
-domain** (`litBuildProgram_encodeDomain`), its source holds `5`, and
-`execM (encode litBuildProgram)` holds **no term at all** — `encodeBuild` emits no action for a
-bare leaf. That is by design and not a defect: `ViewRepr.lit` carries no membership premise for
-exactly this reason, and `litBuild_forward` is the correspondence holding there. So no
-`Egglog.RowMech`-shaped clause can carry it, and the run-wide induction that was named here
-would have had nothing to prove.
-
-**What step 1's `.eq` case actually owes is one shape of pattern, and it is now the only
-thing.** `patternRowRead_of_matches` no longer takes the false clause: the `.eq` membership is
-split by the case the *reading* is in — `FDatabase.RowColumnsValued` where a side reads a row,
-the target reading's own value where a side is a variable (`mem_terms_of_rowRead`, and
-`mem_matchQuery_encodeQuery` asks for that value to be a `FDatabase.valueTerms` member anyway),
-and `hgl` where **both** sides are a bare literal of the same value. `Pattern.Grounded.eqLit`
-is `hgl` discharged on the program's text, so the surviving instance is the one
-`Rule.resolveGlobals` creates out of a *literal-valued global* — and there the target does hold
-the literal, because `encodeAction` emits `.letBind v (.lit l)` and `FDatabase.addTerm` inserts
-it. So the residue is a clause about `sd.env`, not about `sd.terms`.
-
-**And it is now the clause and not a guess.** `Database.LitGlobalsHeld` is it — every literal a
-global is bound to is a term the target holds — and `eqLit_of_litGlobalsHeld` is the reduction:
-`Pattern.Grounded` at the *rule's own text* is what `Cmd.QueryEncodable` pays for and what makes
-one side of the surviving `.eq` a variable, `exists_lit_global_of_resolveGlobals` names the
-global that side resolves through, and the clause answers for it. `litGlobalsHeld_witness` is
-the clause with content at a program in the domain — `glProgram` is one `(let $g 5)`, its
-source binds `$g` to `5` and `execM (encode glProgram)` **holds** `5`, where
-`litBuildProgram`'s bare `.expr (.lit 5)` holds nothing — and
-`glSrc_resolveGlobals_eqLit` is the pattern the resolution creates at that very environment.
-What is left of this item is the run-wide induction that carries the clause, in the shape
-`encStep_viewRowsRootedAll` and its siblings have, and not the choice of clause.
-
-**Step 3 has scaffolding now, and it spends the signature clauses.** The encoded rule has to
-**fire**: `execLocalActions td (encodeRule i (r.substGlobals G) n).1.actions τ = some _` at the
-substitution `mem_matchQuery_encodeQuery` returns. Three lemmas, in that order:
-
-* `FDatabase`'s counterpart of `evalActions_isSome_of_builds` —
-  `execActions_isSome_of_builds` and `execLocalActions_isSome_of_builds`, moved along
-  `execActions_toDatabase`, since `execAction` mirrors `evalAction` case for case. That is the
-  fold, and it was simply unwritten.
-* **`Actions.Builds` of an *encoded* head is false, and could not be otherwise.** An encoded
-  `union` is `(set @UF (ordering-max x y) (ordering-min x y, pf))`, and `if` and `ordering-gt`
-  are **primitives**, which `Expr.Evaluable` excludes by name; so the fold above is not what
-  runs an encoded block. What is `Actions.Builds` is the **source** head read at the *target's*
-  signature, and `exists_execActions_encodeBuild`/`exists_execActions_encodeAction`/
-  `exists_execActions_encodeActions` lift that, case by case, to the block `encodeAction`
-  emits — with `eval_ifGt` running the two bundled choices, which are total on their operands.
-* `exists_execLocalActions_encodeRule_head` is the two assembled at `encodeRule`, and it is
-  where the signature clauses are **spent**: `td.sig.IsCtor fiatName` on the proof column of
-  every build's view row (`eval_fiatE`), and `td.sig.IsCtor (ruleName i)` — the conjunct
-  bundled into `hrules` — on the justification a `union` or a `set` head writes, which applies
-  that one name over the emitted query's proof *variables* and nothing else
-  (`queryProofs_var`, `prim_ofName_ruleName`). Nothing is asked of a `set`'s own function name,
-  which is never evaluated.
-
-**What step 3 owed source-side is now carried, as two derived clauses.**
-`Actions.Scoped r.actions Γ` at the scope the substitution models, and
-`Actions.Builds r.actions td.sig` — the source rule's *head* being scoped and building, where
-the clause `UnionsFire` already had is about its *query*. Both are source-run invariants of
-exactly the shape the query clause is, both are now clauses of `Egglog.UnionsFire` in the
-`Egglog.RowMech` shape, and `encStep_rowMech` discharges them: `Database.HeadsScoped` with
-`headsScoped_of_prefixStep` is the first — over `Program.HeadsScoped`, which is
-`EncodeDomain.headsScoped`, and `Rule.headScoped_resolveGlobals`, since a variable
-`Rule.resolveGlobals` removed from a query is a global the environment binds
-(`Query.mem_vars_resolveGlobals`) — and `Database.HeadsBuild` with
-`headsBuild_of_programStep` is the second, read at `td.sig` through
-`Actions.Builds.mono_sig` and the signature clause. `rbSrcR_headsScoped` and
-`rbSrcR_headsBuild` are them in `unionsJoined_fire_satisfiable`, at the rule its witness
-registers and whose encoding its round fires, and `ncRule_headScoped`/`ncRule_builds` are the
-same two at the rule whose source firing the encoding cannot perform.
-
-Step 4 — the head's writes read back as `ViewRepr td'` — rides on
-`execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, and on the
-**transport** above, which is: `contained_of_fired_run_block` carries a firing's writes through
-the round's fold, the round's own merge phase and the block's trailing `Cmd.saturate
-rebuildRuleset`, and `viewRepr_of_holdsBuild_fired_run_block` and `out_of_fired_run_block` are
-the build head's view row and the `union` head's `@UF` edge read back at `td'` off it. What that
-transport does *not* do is the two things below.
-
-**The shape that refuted it is gone.** It was a global `Cmd.globalBind` did *not* freeze, which
-by its two guards was one a top-level `let` binds twice (the open-definition guard only ever
-failed by cascading from such a name). `hglob` asks the target reading of that variable to be
-its own value, so `patternRowRead_of_matches` would need `RowRepr td t t`, and that was
-**false** at states an encoded run reaches. Measured, on
-
-```
-(let $g (Zz))  (let $g (Yy))  (F (Yy))  (Aa)  (union (Yy) (Aa))
-(rule ((F $g)) ((Hit)))  (run 1)
-```
-
-whose `execM (encode P)` holds `@YyView[] ↦ ((Aa), …)`, so `(Yy)` read through rows to `(Aa)`
-and not to itself. **That program no longer runs.** `Spec/Eval.lean`'s `evalTopAction` refuses a
-top-level `let` that rebinds — egglog's own "Shadowing is not allowed"
-(`egglog/src/ast/check_shadowing.rs:11-12`, `:49-50`) — so it has no `ProgramStep` and `hsrc`
-excludes it, with no tenth `Program.EncodeDomain` clause and no second reading.
-`letNames_nodup_of_programStep` is that as a fact about the program text, and
-`globalBind_letBind_of_encStep` is what it buys: at every top-level `let` the chain reaches,
-**both** guards pass, so no global is left frozen.
-
-**And `hglob` itself is gone.** `matchQuery` used to read `d.env ++ σ`, so a source variable a
-global bound was read off the environment rather than off the substitution and the target's
-reading had to agree with it there. `Spec/Match.lean`'s `ValidSubst` now takes a query's free
-variables against the **empty** environment and `Matches` reads the substitution alone, because
-the globals a rule's query mentioned were resolved into it when the rule was declared — so a
-stored query names no global and the clause has nothing to answer for
-(`mem_matchQuery_encodeQuery`). What survives of the same fact is `Pattern.GroundedAt`, and
-`Database.GlobalsInline` pays it.
-
-**And the fifth defect — the one that was a defect and not a missing clause — is repaired.**
-It was `Database.GlobalsCover` — every global the
-environment binds is one the substitution defines — at the `G` a rule was encoded **through**,
-frozen at the command `encodeCmds` reached the rule at. A top-level `let` *after* that command
-extends the environment without extending it, and `Spec/Match.lean`'s `ValidSubst` used to take
-`Pattern.freeVars p db.env` at the state the round runs at, so the source **recaptured** the
-rule's own query variable while the encoded query stayed keyed at the frozen environment term.
-
-**Measured**, `DiffTest.lean`'s `glob-late-eq`:
-
-```
-(rule ((Wrapper $g)) ((union (Wrapper $g) (Hit))))
-(let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
-```
-
-reported **2 LOST** — `(Wrapper (Zz)) = (Hit)` and `(Hit) = (Wrapper (Aa))` — and `glob-late`,
-the `.expr (Hit)` head, reported 1. Both **agree** now, and so does every other case:
-`difftest correspond 64` is 87 agreeing, 0 LOST. `Spec/Step.lean`'s `cmdEffect` resolves the
-globals then in scope into a rule when it registers it, which is `remove_globals`' own step at
-`remove_globals`' own point (`egglog/src/lib.rs:2615-2617`,
-`egglog/src/ast/remove_globals.rs:183-238`), and `encodeCmds` threads `Cmd.globalBind` through
-the same command — so `Rule.resolveGlobals_eq_substGlobals` makes the source's stored query and
-the encoder's flattened query the *same* query, and coverage is spent where the rule is
-registered rather than at the round. `glob-late-fresh` and `glob-late-head` are the same
-arrival order measured against the binary — `Hit 1` and `(Hit (Bb))` — and both are corpus
-cases. **No measured counterexample stands under this `sorry` any more**: what is left is the
-structural item below.
-
-**What is left under this `sorry`.** Step 4's transport is landed
-(`contained_of_fired_run_block` and the two read-backs above), the head-block decomposition is
-landed too, and what remains of step 4 is one item, and then the assembly.
-
-* **The head-block decomposition is written.** `holdsBuild_of_execActions` takes the block one
-  head *action* emits, `execActions d (encodeBuild e m).2.1 = some d'`, and what a firing hands
-  over is `execLocalActions td (encodeRule i r n).1.actions τ`, the whole head under
-  `(@Rule_i p…)`. `holdsBuild_of_execLocalActions_encodeRule` splits the second into the first
-  — `exists_execActions_encodeAction_of_encodeActions` once per source action over
-  `encodeActions_cons_actions` and `execActions_append`, then
-  `exists_execActions_encodeBuild_of_encodeAction` once per build inside it — with the
-  environment each build ran at named: the firing's own `τ ++ td.env` extended by a prefix
-  whose domain is the head's `let`s (`execActions_env_encodeAction`, since the only `letBind`
-  an encoded block emits is the source `let`'s own binder and it comes last). That is the
-  mirror of `exists_execActions_encodeActions` run in the reading direction, and
-  `exists_step_of_mem_evalActions`/`headActions_soundTerms` are the same induction on the
-  source and the soundness sides.
-* **A head that reads a global — closed, and *locally*.** `Rule.resolveGlobals` leaves a
-  rule's *head* alone, so such a head evaluates the global to the source term
-  `td.env = sd.env` binds and keys its view row **there** rather than at an id of it. What is
-  asked of that position is therefore `ViewRepr td' u u` **for a value the environment binds**,
-  and that is not `Database.ReadsSelf`: the refutation `ncTgt_not_readsSelf` is at a term a
-  rule *firing* built, and a global's value is a term a **top-level block built**, whose
-  read-back at every subterm is `viewReprAll_self_of_execProgramM`. That is
-  `Egglog.UnionsInv.envReadsAt` — a clause the command induction already carries and proves
-  — and it is now a clause of `Egglog.UnionsFire` (`rbTgtR_envReadsAt` is it with content at
-  the witness, at the `(A)` `rbProgram`'s own first build wrote).
-
-  `viewRepr_of_evalPair` is the whole read-back at that clause: an induction over the head
-  expression whose only content is `hlink`, the two environments' agreement — one `ViewRepr`
-  per variable — with the query variables answered by step 1's reading, a global by
-  `envReadsAt`, and a head `let` by the same reading one build earlier. **Every application
-  pays for itself**, because `encodeBuild`'s naming expression *is* the source expression
-  (`encodeBuild_fst`): the target's value for `.app f args` is `.app f is` over the argument
-  values, and the row `encodeBuild` emitted for it is keyed at exactly the `is` the induction
-  has just read the arguments onto. No `FDatabase.UFRowReach` chain is walked and no run-wide
-  invariant is spent — which is the sense in which the refuted fact was "true of a row a build
-  wrote": its value column is its naming term, and nothing has moved it yet.
-
-  So the walk below is **not** what closes this item, and the paragraphs that follow are kept
-  as the record of the route that was tried.
-
-  **And the two firing lemmas were not where its provenance lived.** They take three fields of
-  `FDatabase.EncBase` and no more — `sig` (as `d.sig.IsCtor transName` and companions), `held`
-  (as `eclassRule f k ∈ d.rules` / `columnRule f k i ∈ d.rules`) and `noAtEnv` — with
-  `eclassRule_fires_of_encBase` and `columnRule_fires_of_encBase` the check that the weakening
-  is a weakening; `rules`, `shape`, `merges`, `inv`, `nounions` and `wl` a firing never reads.
-  Two of the three are `Egglog.UnionsFire` clauses already (`td.NoAtEnv`, and the signature
-  clause for `@Fiat`), and the third is `Egglog.RowMech`-shaped.
-
-  What the walk *does* rest on is three **inductive invariants** of the encoded run, and they
-  are a different thing from a bundle of facts: `FDatabase.ViewRowsRooted`,
-  `FDatabase.ViewRowsColumnClosed` and `FDatabase.UFRootsUnique`. None is a fact a state
-  exhibits — each is established by a walk from the prelude's **empty** row list
-  (`viewRowsRooted_encodeCmds`, `viewRowsColumnClosed_encodeCmds`) — so none is derivable at a
-  `td` the way the `Egglog.RowMech` clauses are; the weakening above does not do it and could
-  not. **They are threaded now**, in the program-free form the residue can be handed:
-  `FDatabase.ViewRowsRootedAll` and `FDatabase.ViewRowsColumnClosedAll` drop the restriction to
-  a program's own constructors, which `encStep_ctorsIn_of_row` reads back off the row itself, so
-  `Egglog.RowMech` carries all three and `encStep_viewRowsRootedAll`,
-  `encStep_viewRowsColumnClosedAll` and `encStep_ufRootsUnique` discharge them at
-  `Egglog.EncStep`. `viewRow_of_rowReachList_all` is the walk at that form.
-
-  **The guard survived it**, which was the risk: the three are true at `rbTgtR`, the hand-built
-  target `unionsJoined_fire_satisfiable` is witnessed at, so the extra conjuncts make the
-  witness thinner and not false. `rbTgtR_no_uf_row` is the whole reason and it is the same
-  arithmetic that makes conjuncts 12 and 14's `edge` vacuous — `rbProgram` asserts nothing, so
-  the state's union-find is empty. `ncTgt_viewRowsRootedAll` and
-  `ncTgt_ufRootsUnique_instance` are the two of them with content, at a state that holds a live
-  `@UF` row, and `ccTgt_columnClosed_instance` is the third at a state where a **column** rule
-  fired rather than the e-class rule — with `ccStale_not_viewRowsColumnClosedAll` the same
-  clause **false** one firing earlier, so it is a constraint and not a shape.
-
-  **The walk's premise was the gap, and the fact named for it is false — which is what
-  localized the item.** `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain
-  per key position out of the tuple the head's own row sits at, and what a head that reads a
-  global hands over is a *source term* per position. The fact named for that link was
-  `FDatabase.ViewRowsNamedUF` — a live view row's **value** column is
-  `FDatabase.UFRowReach`-reachable from the term that names it, which at a nullary position is
-  exactly the chain `Egglog.RowRepr td' u x` would have to supply. **It is not vacuous and it is
-  refuted**: `ncTgt_viewRowsNamedUF` is it holding with content, at `@BView() ↦ ((A), …)` named
-  by `(B)` one real `@UF` row from its value column, and `ccTgt_not_viewRowsNamedUF` is it
-  failing on the row a **column** rule writes. `columnRule` re-keys a row and leaves its value
-  column alone, so `@FView((A)) ↦ ((F (B)), …)` is named by `(F (A))` — a term the target does
-  not hold at all (`ccTgt_not_mem_FA`), so no `@UF` row can leave it — and the row is the
-  interpreter's own round's (`ccStale_columnRule_fires`).
-
-  The refutation is what said the row in question is one **this very firing** wrote, whose
-  value column *is* its naming term: `viewRepr_of_evalPair` above reads it back at the key
-  tuple it was written at, and no run-wide invariant is needed for (i) at all. The walk stays
-  where it is — it is `Database.RebuildClosed`'s `edged`/`column` mechanism, and the three
-  invariants remain `Egglog.RowMech` clauses — but step 4 no longer spends it.
-  `FDatabase.EntryRowsUF` is a different shape again: it runs from an entry term's value column
-  to a live row's at the **same** key, which is what `encReached_viewRow_at_root` spends.
-
-**The outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no merge
-phase — `MergeClosure.eq_of_allConstructors` — so `cmdStep_run_eq` makes the post-state the
-*function* `RunRules R sd`, whose `Database.sUnion` splits `eqs` and `terms` into the
-pre-state's and one firing's (`eqs_cases_of_cmdStep_run`, `terms_cases_of_cmdStep_run`, the
-converses of `mem_eqs_of_ruleFired` and `mem_terms_of_ruleFired`). `contained_of_run_block`
-carries the two clauses the residue holds at `td` up to `td'`, and
-`unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus **one
-obligation per firing** — which is exactly what steps 1-4 are about.
-
-**What is left of the `Cmd.run` half, precisely.** Step 4's global-reading head is closed
-(`viewRepr_of_evalPair`), and so is step 1's `.eq` case: `eqLit_of_substGlobals` answers `hgl`
-at the patterns of `Query.substGlobals G r.query` — the query `hrules` names — from
-`Egglog.UnionsFire`'s own clause set and with no appeal to the program's text. Four cases, and
-every one lands on a global the environment binds: a side `Expr.substGlobals` rewrote is one
-`Database.GlobalsInline` binds to that very literal (`exists_lit_global_of_substGlobals`), and
-a side that was the bare literal on both already is `Database.EqLitGlobals`' own instance — the
-source-run invariant that says such a side exists only where `Rule.resolveGlobals` created it,
-since `Cmd.QueryEncodable`'s `Pattern.Grounded` excludes the shape from a rule's text and
-`evalTopAction` refuses a later `let` that would rebind the global (`cmdStep_eqLitGlobals`,
-`eqLitGlobals_of_prefixStep`). `Database.LitGlobalsHeld` then answers for the literal itself.
-
-**Both items of glue are closed, and neither cost a fact about the encoding.**
-
-* **Step 2's query identity, at the rule the state stores — a clause, and not a derivation.**
-  `Rule.resolveGlobals_eq_substGlobals` is stated under `Database.GlobalsCover`, which
-  `Egglog.UnionsFire` does not carry and *cannot* derive: `Database.GlobalsInline G` gives
-  `dom G ⊆ dom sd.env` and nothing in the other direction, and the coverage that matters is at
-  the environment the rule was **registered** at, which no later state remembers. What the
-  reading actually needs is weaker and is about the *stored* rule alone —
-  `Query.substGlobals G r.query = r.query` — so that is the conjunct `hrules` now carries,
-  beside the `Database.GlobalsInline G` it already had. `unionsInv_step` discharges it where the
-  rule is registered and nowhere else: `Rule.resolveGlobals_eq_substGlobals` there (under the
-  `Database.GlobalsCover` `encStep_globalsCover` supplies at that very command) followed by
-  `Rule.substGlobals_idem` — resolving an already-resolved rule changes nothing, because the
-  definitions `G` carries are closed. Every later command carries the pair unchanged, and
-  `rbRule_substGlobals` is the conjunct at `unionsJoined_fire_satisfiable`'s own witness, at
-  the **non-empty** `G` `rbProgram`'s top-level `let` freezes.
-* **The head's key columns as target terms — derivable, and no clause.**
-  `∀ b ∈ sd.env, b.2 ∈ td.terms` is not needed at all: `execActions_encodeBuild_app` already
-  proves every subterm of the view row term is in the block's post-state, and
-  `holdsBuild_of_execActions` was simply discarding it. `Database.HoldsBuild.keys` carries it
-  now, so `viewRepr_of_holdsBuild_fired_run_block` has lost its `hval` hypothesis and
-  `Database.out_self`'s key obligation is paid by the row's own build. `Egglog.UnionsInv.envReadsAt`
-  would not have done it — `ViewRepr` at an application ends in a `Database.Out` on the *view
-  row* term, and getting the key back out of that wants `Database.WF.subtermClosed` at `td`,
-  which is not a clause either.
-
-**And the `Cmd.run` half is landed**, at `unionsFire_run`: `unionsFire_conclusion_of_run` plus
-`unionsFire_firing` once per firing, with steps 1-4 assembled as
-`exists_mem_matchQuery_encodeQuery_of_validQuerySubst` (the reading, at the emitted query),
-`exists_fired_encodeRule` (the firing), `contained_of_fired_run_block` (the transport) and
-`headActions_viewRepr` (the head, in lockstep with the source's own block). Three pieces were
-missing and are written: `mem_vars_encodeQuery_of_argVar`, which is `mem_vars_encodeQuery` in
-the direction `Query.VarsKeyed` makes true — a source query variable sits at a key column, so
-the flattening keeps it — and with it `mem_valueTerms_idSubst`, the reading's own values being
-`FDatabase.valueTerms` members *by position* rather than by the refuted
-`∀ t x, RowRepr td t x → x ∈ td.terms`; `viewReprAll_of_evalSrc`, which reads back every
-**subterm** of what a head expression built (at a leaf the target's evaluation is not what
-answers — a variable's value is a source term the reads clause covers, a literal is its own
-id); and `headActions_viewRepr`, the lockstep, which is where a head `let` gets its `hlink`.
-
-**`unionsFire_run` takes two hypotheses `Egglog.UnionsFire` does not carry, and both are
-needed.** Each is a *source-run* invariant of exactly the shape `Database.QueriesIn` is — paid
-by a domain clause the encoder already has — and each is refutation-shaped rather than idle:
-
-* **the source query's variables are outside the generated namespace**
-  (`Program.EncodeDomain.noAt`). `freshVar 0` is `@v0`, so a query `(F @v0)` flattens to the
-  single atom `(@FView (@v0) (@v0) (@v1))` — the read's e-class column *is* the source variable
-  — and the encoded rule then matches only an `F`-entry whose id equals its key while the
-  source rule matches every entry. `FDatabase.NoAtEnv` is about the environment and says
-  nothing about a rule's variables; `mem_matchQuery_encodeQuery`'s `hnoAtVar` is where it is
-  spent, keeping `exists_freshEnv_encodeQuery`'s block disjoint from the reading.
-* **no `set` in a source head** (`Program.EncodeDomain.setLegal`, as `Program.noSet` through
-  `Program.setLegal_iff_noSet` at a constructor signature). A source `set f args out` builds
-  the term `f(as ++ vs)`, while `encodeAction` emits `(set @fView es (xs ++ [pf]))` — a row of
-  key width `|as|`, where `ViewRepr` at the source's term wants a view entry of key width
-  `|as| + |vs|`. So the reads clause fails at that term whenever `vs` is non-empty.
-  `Actions.Builds` admits a `set` head and says nothing about it.
-
-Both are carried by the source run in the shape `queriesIn_of_prefixStep` already has, so
-threading them is the same kind of work `Egglog.RowMech`'s clauses were; they are hypotheses of
-`unionsFire_run` rather than clauses of `Egglog.UnionsFire` so that
-`unionsJoined_fire_satisfiable`, the three refutations and `Egglog.UnionsFireWeak`/`UnionsFireAnyG`
-are all left exactly as they were.
-
-Beside those: the `Cmd.saturate` lag below, which this decomposition does not speak about — a
-`Cmd.saturate`'s post-state is an *iterate* of `RunRules` (`RunReach.iterate`) rather than one
-application.
-
-**The structural item is the `Cmd.saturate` half's alone, and the encoder fix did not
-close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
-*single* round, fired at `td` itself — `allMaintenanceRules` joins the maintenance rules only to
-the rulesets a source `Cmd.saturate` names (`Program.saturateRulesets`), so a source `.run R`
-runs `R`'s rules alone at the state this residue is handed, and every clause above is at exactly
-the state the encoded rule runs at. There is no mid-block gap there.
-
-A `Cmd.saturate` block saturates, and its rounds two onward fire at states strictly inside the
-block. `allMaintenanceRules` does make each of those rounds rebuild — that is what stopped
-`sat-hit` losing a term — but `execRunRules` reads *every* rule of a round off the same
-pre-state, so a round's maintenance firings chase the previous round's `@UF` edges and not its
-own. The fixpoint the block ends at is therefore rebuild-closed, since nothing changes there
-and the maintenance rules are among what fires; the rounds in between are one round behind, and
-`FDatabase.ViewRowUnique` holds at neither `td` nor a mid-block state for them. That is the
-lag a further clause — or a per-round induction — would have to speak about, and it is
-structural rather than one of the four refutations above. -/
-theorem unionsJoined_fire : UnionsFire := by
-  sorry
 
 /-! ## `Database.RebuildClosed`'s two remaining clauses, at the root tuple
 
@@ -13637,19 +13005,60 @@ theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program
 
 /-! #### Two source-run invariants the firing spends
 
-`Egglog.UnionsFire` is given no program, and two of the things a firing needs are facts about
-the *source*: that a rule it holds has a query the flattening handles, and that a constructor
-its signature declares is one the encoded signature declares too. Both are carried by the
-source run, from `Program.EncodeDomain` at the commands it has run, in the shape
+`Egglog.UnionsFire` is given no program, and some of what a firing needs are facts about the
+*source*: that a rule the state holds is one the encoding handles — a query the flattening
+handles, query variables outside the generated namespace, no `set` in the head — and that a
+constructor its signature declares is one the encoded signature declares too. Both are carried
+by the source run, from `Program.EncodeDomain` at the commands it has run, in the shape
 `ctorsIn_of_prefixStep` already has. -/
 
-/-- **The source rules' queries are ones the flattening handles**, as a property of the state:
-`Cmd.QueryEncodable` at each, and no name a query applies is a primitive. The first is what
-`Program.EncodeDomain.queryEncodable` pays and the second what `noPrim` does — over
-`Program.ctors`, which reads a rule's *query* names as well as its head's. -/
+/-- **A stored source rule is one the encoding handles**, as a property of the state. Four
+facts, one domain clause each.
+
+`Cmd.QueryEncodable` at the query and no primitive among the names a query applies are the
+first two — `Program.EncodeDomain.queryEncodable` and `noPrim`, the latter over
+`Program.ctors`, which reads a rule's *query* names as well as its head's.
+
+The other two are what one firing spends past the flattening, and neither is idle. A query
+**variable** outside the generated namespace (`Program.EncodeDomain.noAt`): `freshVar 0` is
+`@v0`, so a query `(F @v0)` flattens to the single atom `(@FView (@v0) (@v0) (@v1))` — the
+read's e-class column *is* the source variable — and the encoded rule then matches only an
+`F`-entry whose id equals its key where the source rule matches every entry. And no `set` in a
+head (`Program.EncodeDomain.setLegal`, through `Program.setLegal_iff_noSet`): a source
+`set f args out` builds `f(as ++ vs)` while `encodeAction` emits `(set @fView es (xs ++ [pf]))`
+at key width `|as|`, where `ViewRepr` at the source's term wants `|as| + |vs|`. -/
 def Database.QueriesIn (db : Database) : Prop :=
-  ∀ r ∈ db.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
-    ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none
+  ∀ r ∈ db.rules, (((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) ∧
+    (∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true) ∧
+    (∀ a ∈ r.actions, a.NoSet)
+
+/-- **A variable the encoder's substitution leaves is one the query already mentioned**, at the
+whole query. `Expr.mem_vars_substGlobals` is the expression-level fact; the definitions are
+closed, so a replaced variable's occurrences vanish rather than moving. -/
+theorem Query.mem_vars_of_mem_vars_substGlobals {G : List (Var × Expr)}
+    (hcl : Expr.ClosedG G) {q : Query} {v : Var}
+    (h : v ∈ Query.vars (Query.substGlobals G q)) : v ∈ Query.vars q := by
+  obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp h
+  rw [Query.substGlobals, List.mem_map] at hp
+  obtain ⟨p₀, hp₀, rfl⟩ := hp
+  refine Query.mem_vars.mpr ⟨p₀, hp₀, ?_⟩
+  cases p₀ with
+  | expr e => exact (Expr.mem_vars_substGlobals hcl e hvp).1
+  | eq e₁ e₂ =>
+      rcases List.mem_union_iff.mp hvp with h' | h'
+      · exact List.mem_union_iff.mpr (Or.inl (Expr.mem_vars_substGlobals hcl e₁ h').1)
+      · exact List.mem_union_iff.mpr (Or.inr (Expr.mem_vars_substGlobals hcl e₂ h').1)
+  | values vs f as =>
+      rcases List.mem_union_iff.mp hvp with h' | h'
+      · exact List.mem_union_iff.mpr (Or.inl (Expr.mem_varsList_substGlobals hcl vs h').1)
+      · exact List.mem_union_iff.mpr (Or.inr (Expr.mem_varsList_substGlobals hcl as h').1)
+
+@[inherit_doc Query.mem_vars_of_mem_vars_substGlobals]
+theorem Query.mem_vars_of_mem_vars_resolveGlobals {σ : Env} {q : Query} {v : Var}
+    (h : v ∈ Query.vars (Query.resolveGlobals σ q)) : v ∈ Query.vars q :=
+  Query.mem_vars_of_mem_vars_substGlobals (Expr.closedG_toG σ)
+    (by rw [← Query.resolveGlobals_eq_substGlobals_toG]; exact h)
 
 /-- **One command keeps it**: only `Cmd.rule` extends `rules`, and its rule is the program's
 own. -/
@@ -13668,12 +13077,23 @@ theorem cmdStep_queriesIn {P : Program} (hdom : P.EncodeDomain) {db db' : Databa
       rw [hrules] at hs
       rcases Set.mem_insert_iff.mp hs with rfl | hs'
       · obtain ⟨hqe, hk⟩ := hdom.queryEncodable _ hc
-        refine ⟨⟨Query.noValues_resolveGlobals (fun p hp => (hqe p hp).2),
-          Query.VarsKeyed.resolveGlobals hk⟩, ?_⟩
-        refine Query.ctors_resolveGlobals_noPrim hwf htb (fun p hp fk hk' => ?_)
-        refine hdom.noPrim fk (mem_program_ctors hc ?_)
-        rw [Cmd.ctors]
-        exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨p, hp, hk'⟩)
+        refine ⟨⟨⟨Query.noValues_resolveGlobals (fun p hp => (hqe p hp).2),
+          Query.VarsKeyed.resolveGlobals hk⟩, ?_⟩, ?_, ?_⟩
+        · refine Query.ctors_resolveGlobals_noPrim hwf htb (fun p hp fk hk' => ?_)
+          refine hdom.noPrim fk (mem_program_ctors hc ?_)
+          rw [Cmd.ctors]
+          exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨p, hp, hk'⟩)
+        · intro v hv
+          refine hdom.noAt v ?_
+          rw [Program.names]
+          refine List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ?_)))
+          rw [Program.vars, List.mem_dedup]
+          refine List.mem_flatMap.mpr ⟨Cmd.rule r, hc, ?_⟩
+          rw [Cmd.vars]
+          exact List.mem_union_iff.mpr
+            (Or.inl (Query.mem_vars_of_mem_vars_resolveGlobals hv))
+        · exact ((Program.setLegal_iff_noSet (fun _ => rfl) hdom.ctorsOnly).mp
+            hdom.setLegal (Cmd.rule r) hc : Cmd.NoSet (Cmd.rule r))
       · exact h s hs'
   | run R => intro r hr; exact h r (by rw [cmdStep_rules_of_run hstep] at hr; exact hr)
   | saturate R => intro r hr; exact h r (by rw [cmdStep_rules_of_saturate hstep] at hr; exact hr)
@@ -14587,7 +14007,7 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
       rw [(encReached_encBase hdom h.reached).sig]
       exact encodeSig_isCtor_of_mem_ctors (fk := (f, k)) hdom hk),
     (by rw [(encReached_encBase hdom h.reached).sig]; exact encodeSig_isCtor_fiatName P),
-    queriesIn_of_prefixStep hdom h.mem h.src,
+    (fun r hr => (queriesIn_of_prefixStep hdom h.mem h.src r hr).1),
     encReached_rowColumnsValued hdom h.reached,
     (encReached_encBase hdom h.reached).noAtEnv,
     (fun _ _ _ _ hrow => encStep_mergeOf_of_row hdom h hrow),
@@ -14604,7 +14024,9 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
     encStep_viewRowsColumnClosedAll hdom hnodup h,
     encStep_ufRootsUnique hdom h,
     encStep_litGlobalsHeld hdom h,
-    eqLitGlobals_of_prefixStep hdom h.mem h.src⟩
+    eqLitGlobals_of_prefixStep hdom h.mem h.src,
+    (fun r hr => (queriesIn_of_prefixStep hdom h.mem h.src r hr).2.1),
+    fun r hr => (queriesIn_of_prefixStep hdom h.mem h.src r hr).2.2⟩
 
 /-- **`Egglog.RuleNameMech`, discharged.** The prelude declares one `@Rule_i` per source rule,
 at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`), and the
@@ -15467,9 +14889,9 @@ theorem noPrim_buildExprs_of_builds {sig : Signature} :
 `unionsFire_conclusion_of_run` reduced the whole `Cmd.run` case to one obligation per firing;
 this is that obligation, and then the case itself.
 
-**Two facts are asked for that `Egglog.UnionsFire` does not carry**, and both are source-run
-invariants of exactly the shape `Database.QueriesIn` is — paid by domain clauses the encoder
-already has, and neither derivable from the clause list nor idle:
+**Two facts past the flattening, and `Egglog.UnionsFire` carries both** — source-run invariants
+of exactly the shape `Database.QueriesIn` is, paid by domain clauses the encoder already has,
+and neither derivable from the rest of the clause list nor idle:
 
 * `hnoAtQuery`, the source query's variables outside the generated namespace
   (`Program.EncodeDomain.noAt`). `freshVar 0` is `@v0`, so a query `(F @v0)` flattens to the
@@ -15595,9 +15017,10 @@ theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
   exact hreadsEnd t ht
 
 /-- **The `Cmd.run` half of `Egglog.UnionsFire`, landed.** `unionsFire_conclusion_of_run` plus
-`unionsFire_firing`, one per firing. The hypotheses are `Egglog.UnionsFire`'s own, with the two
-source-run facts above added; `unionsJoined_fire` therefore still stands open, at the
-`Cmd.saturate` half and at those two clauses. -/
+`unionsFire_firing`, one per firing. Every hypothesis is one `Egglog.UnionsFire` carries — the
+two source-run facts above are clauses of it now — so `unionsJoined_fire` discharges its
+`Cmd.run` case by applying this and nothing else, and the `Cmd.saturate` half is all that
+stands open. -/
 theorem unionsFire_run {R : RulesetName} {sd sd' : Database} {td td' : FDatabase}
     (hstep : CmdStep sd (Cmd.run R) sd')
     (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
@@ -15625,6 +15048,711 @@ theorem unionsFire_run {R : RulesetName} {sd sd' : Database} {td td' : FDatabase
     fun _ hr hR _ _ hq hev =>
       unionsFire_firing hrun henv hstate hfiat hrules hqe hcv hno hreads hjoin hrow hrj hmg
         hsc hb hback henvReads hlit heqlit hnoAtQuery hnoSet hr hR hq hev
+
+/-- **The command induction's rule-firing case. Open — and, after four refutations and their
+repairs and one specification fix, no longer standing at a false statement.**
+
+Its statement, its five closed siblings and the four refutations that fixed its hypotheses are
+in `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`)
+and above in this file (`Egglog.UnionsFireWeak`, `unionsFire_false`,
+`unionsFire_false_encodeSig`, `Egglog.UnionsFireAnyG`, `unionsFire_false_globals`). What is
+recorded here is what the route through this file settles and what it does not.
+
+**The fourth refutation is the most recent, and it is what the `Cmd.run` case ran into.** The
+assembly below reaches step 2 — "move to `s.substGlobals G`" — and there discovers that nothing
+in the clause set said which `G` that is. The identity that lines the source's stored query up
+with the encoder's, `Rule.resolveGlobals_eq_substGlobals`, is stated under
+`Database.GlobalsInline` and `Database.GlobalsCover`, and `hrules` did not carry the first:
+`unionsFire_false_globals` runs a source rule whose query is keyed at `y` and whose
+encoding went through `gxG = [("y", (A))]`, so the encoded query binds `y` nowhere, the encoded
+head — `encodeBuild` keeps a source variable as itself — reads it anyway, `Expr.eval` is `none`,
+and `fireInto` returns the accumulator while the source's own firing asserts
+`(A) = (W (A))`. Every other clause holds at that witness: its target is `rbState2` with the
+encoded rule installed and `@Rule_0` declared, so its rows are ones a real encoded run wrote,
+its signature is the encoder's own, and its source rule's query is one the flattening handles.
+`gxSrc_not_globalsInline` is the clause it violates.
+
+**The repair is `Database.GlobalsInline` in `hrules`, and it is derived rather than assumed.**
+`Cmd.globalBind`'s two guards are exactly that clause, `globalsInline_step` carries it along the
+source run, `encStep_globals` reads it off the chain and `globalsInline_keep` moves an
+already-frozen `G` across one more source command; `Egglog.GlobalsMech` is the pair and
+`encStep_globalsMech` the discharge. `Egglog.UnionsInv.rules` carries `Program.GlobalsOnce`
+beside it — a fact about the program *text*, which is what a later `let` cannot invalidate —
+and only the `GlobalsInline` half reaches this `Prop`, since that is what a firing reads.
+`unionsJoined_fire_satisfiable` survives it and carries a conjunct of its own
+(`rbSrcR_globalsInline`, at the substitution `rbProgram`'s own `let` freezes) beside the
+`hrules` conjunct it also rides in, which is stated at that same substitution.
+
+**The route is the enumerator's own, and no general converse is wanted.**
+`execRunRules_RunRules` needs `Signature.AllConstructors`, which an encoded target fails at
+`@UF` and at every view, so the two matchers do not coincide here and a `Spec/Match.lean`-level
+converse would not close this. It is also not needed. `mem_matchQuery_of_rows` is the enumerator
+lower bound directly, over `mem_matchQuery_of_lookup` and `patternHolds_values_of_mem_rows`, and
+it asks the closure for reflexive pairs only. `ncTgt_encRule_fires` is the whole chain — rows,
+`patternHolds`, `matchQuery`, the block evaluating (`ncTgt_encRule_fired`), the head's row in
+the round's post-state — run at a **source** rule's encoding, at the state where
+`Database.ReadsSelf` is refuted (`ncTgt_not_readsSelf`) and `Database.UnionsJoined` holds
+(`ncTgt_unionsJoined`). Proved, not decided: `closureF` does not reduce in the kernel.
+
+**And the enumerator's under-firing is not the obstruction.** The specification fires once per
+*member* of a premise's congruence class and the enumerator once per row; the substitution
+wanted is the row's. In the target rule the source's own variables *are* id variables —
+`encodeQueryExpr` returns a source variable unchanged as the expression naming its e-class — so
+what the match wants is an id per source variable and the read's own two columns per generated
+pair. `ncIdSubst` is that substitution at the instance: the source rule fired at `x := (B)` and
+the encoded one at the id `(A)`, because `mergeResult` keeps `ordering-min` and the `@FView` row
+sits at the leader.
+
+**The `rows` reading is no longer missing.** `UnionsInv.readsAt` is a `terms` fact — `ViewRepr`
+ends in `Database.Out` — while every atom above wants a live row, and `RowRepr` is that reading.
+It is not the same claim at the same ids: `FDatabase.EntryRowsUF` (proved, `execM_entryRowsUF`)
+answers an entry with a row whose e-class column is only `Database.UFReach`-reachable from the
+entry's, and a parent read is keyed on its children's columns **on the nose** — there is no
+slack, because an encoded target asserts nothing (`execM_encode_eqsRefl`) and so `patternHolds`'
+congruence is the identity.
+
+**It is the same claim at the pointwise `@UF` row root, and that was the choice of tuple.**
+`encReached_viewRow_at_root` answers the entry with a live row whose e-class column *is* the
+root of the id the entry recorded; `encReached_exists_rootList` names each key column's root;
+and `encReached_viewRow_of_rowReachList` walks the whole key onto that rooted tuple in one go,
+at the very e-class column the row started with. The child column is a root because it is the
+*value* column of a live view row, which is the instance `FDatabase.ViewRowsRooted` supplies —
+and the one an arbitrary reading does not, which is what made this a choice rather than a
+lemma. `encReached_rowRepr_of_viewRepr` is the induction and `encStep_exists_rowRepr` the form
+this residue is handed.
+
+**Stated one block short of the run's end, which is where the firing happens.**
+`execM_rebuildClosed` is the obvious supplier and does not typecheck here: it takes
+`execM (encode P) = some tgt` and `UnionsFire` quantifies over the state the *next* encoded
+block starts at. That is the hazard `unionsFireClaim_false` already recorded — a clause at a
+state the encoded rule does not run at — so the mechanism was restated at the state that does
+run it rather than the hypothesis being bent to reach it. `EncReached` is the target-side
+provenance, one whole `encodeCmd` block at a time (whole, because `FDatabase.ViewRowsRooted` is
+established by the `Cmd.saturate rebuildRuleset` a block ends with and is false in the middle of
+one); `EncStep` is the same chain with the source run alongside, which is what pays the two
+clauses `EncReached` does not carry — a literal's rootness (`encStep_ufLitRoots`) and a view
+entry's key width (`encStep_ctorsIn`), both through `FDatabase.SoundTerms`. `encStep_rowMech`
+is `RowMech` discharged, and `unionsInv_step` spends it.
+
+**The provenance itself is not a hypothesis of `UnionsFire`, and must not become one.**
+`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbTgtR`, a state written by
+`execActions` rather than by `encode`, and the kernel cannot run an encoded program — so
+`EncReached rbProgram rbTgtR` is not available and an `EncReached` hypothesis would empty the
+non-vacuity check. What `UnionsFire` takes is therefore the two *derived* clauses, `RowRepr`
+at `td` and the read-back at `td'`, both of which the witness state really satisfies
+(`rbTgtR_exists_rowRepr`, `rbTgtR_viewRepr_of_rowRepr`) and at positive arity.
+
+**The forward query mirror is written.** `mem_matchQuery_encodeQuery` turns a source reading of
+a query — one `PatternRowRead` per pattern — into a substitution the *emitted* query matches at,
+over both features of `encodeQuery`. The **flattening**: `RowRead` carries an id per subterm
+position through live rows, so the reading binds the generated variables as well as the
+source's. The **fresh-variable supply**: `FreshEnv` numbers a block's generated bindings inside
+its own stretch of the counter, so two blocks' domains are disjoint (`freshVar_inj`) and their
+concatenation binds each of them; non-collision with the source's own variables is the `@`
+prefix (`atPrefix_freshVar` against `FDatabase.NoAtEnv`), which is why the source bindings can
+sit in front of the generated ones and neither shadow the other. `ncTgt_mirror` runs it at the
+instance, and lands on the substitution `ncTgt_mem_matchQuery` exhibits by hand.
+
+**The reading is written, and the three things it wanted are a derived clause.**
+`FDatabase.RowJoined` is that clause — `fn`, the reading is a function; `edge`, an `@UF` edge
+between two entry readings collapses the two row readings — threaded through `RowMech` and
+`unionsInv_step` and discharged at `EncStep` by `encStep_rowJoined`, in the shape `RowMech`
+already had and not as provenance, which would have emptied `unionsJoined_fire_satisfiable`.
+It answers all three:
+
+* **One id per source term** is `fn`, off `FDatabase.ViewRowUnique` (`encReached_viewRowUnique`)
+  and a parent read being keyed on its children's columns on the nose (`rowRepr_unique`).
+* **One id per congruence class** is `rowRepr_congOn`: the reading is constant on a `CongOn`
+  class, by induction over `Cong` with `Database.UnionsJoined`'s edge between the two *ids*
+  turned into one reading by `edge`, `rowReprList_congr` at `Cong.congr`, and
+  `Conservativity.mem_addTerms_eqs` making `withOperands` contribute only the diagonal.
+* **The pattern instance, not only a source term** is `exists_rowRepr_congOn`: the reading is
+  total on the class of any source term, so a `Matches` witness carries its instance.
+
+`patternRowRead_of_matches` is the three assembled at one pattern, over `rowRead_of_rowRepr`,
+which is `RowRepr` re-indexed on the shape of the pattern. `Prim.ofName f = none` is a
+hypothesis there and not a conclusion — `Prim.apply`'s `if-then-else` returns an operand, so
+nothing about an evaluation's *result* rules the primitive branch out — and
+`EncodeDomain.noPrim` is where a source query's names pay it.
+
+**`Database.ViewLeader` is not what closed it, and could not have been.** It is the same claim
+through entry **terms**, and it is false in general at states this development reaches
+(`chainD_not_viewLeader`): an entry a merge displaced is never removed, so `Database.Out` keeps
+reading it, and at `chainD` the ids ascend with upper bounds everywhere and no top. Through
+live **rows** the displaced row is *gone*, and a state an encoded block runs at is rooted — a
+live view row's e-class column has no outgoing `@UF` row (`encReached_viewRowsRooted`), a view
+key carries at most one row, and entry-level `@UF` reachability lands on one row root
+(`encReached_ufRowRoot_of_ufReach`). So the upper bound is a representative here and is not one
+there; `uTgt_not_viewLeader` against `uRebuilt_viewLeader` is the same bracket one rebuild
+firing apart, and `ncTgt_rowJoined_edge` is the instance: `(B)` reads to `(B)` and to `(A)`
+through entries, to `(A)` alone through rows.
+
+**What the reading owed was `hglob`, and the encoder is what paid it.** `matchQuery` reads a
+variable a *global* binds off `d.env`, so `mem_matchQuery_encodeQuery` asks the target reading
+of such a variable to be the bound value itself — `RowRepr td s s`, where
+`UnionsInv.envReadsAt` supplies only `ViewRepr td s s`. The two part company exactly when a
+later `union` moves the let-bound term's row off it: `mergeResult` keeps `ordering-min`, so
+`(let x (A))` followed by a `union` with a `Term.blt`-smaller partner leaves `x` bound to a term
+no live row is keyed at. That was a **defect in `encode`**, and it was measured:
+`DiffTest.lean`'s eight `glob-*` cases are all in `encode`'s domain and all pass against real
+egglog, and `difftest correspond 64` reported **7 LOST across 6 of them** where the whole corpus
+reported 0. `glob-lost` is the minimal one, five commands:
+
+```
+(let $g (Zz))  (Wrapper (Aa))  (union (Zz) (Aa))  (rule ((Wrapper $g)) ((Hit)))  (run 1)
+```
+
+`Term.blt` orders applications by arity, then by name, so `(Aa)` is the `ordering-min` and
+`(Zz)` is the union's loser. The source fires: `patternHolds` closes the instance
+`(Wrapper (Zz))` into `d`'s congruence and finds `(Wrapper (Aa))`, which is what egglog does
+too. The target could not: its one `@WrapperView` row was `((Aa)) ↦ (Wrapper (Aa))`, the
+emitted atom was `(= (values @v0 @v1) (@WrapperView $g))` at a frozen `$g = (Zz)`, and
+`rebuildRules`' column rule joins `@UF[@ci] ↦ (@x, @q)` and writes `@x` *into* the column, so
+rows travel **towards** a leader and never back from one. `glob-keyed` and `glob-leader` were
+the two controls that agreed throughout — a global whose key a build did write, and a global
+bound to the union's *winner*.
+
+**The fix is `Rule.substGlobals`**, and it is what egglog does by another route: a query that
+names a global is encoded as if the source had written the global's *definition* out, so the
+flattening reads the definition's own views and lands on its **current** e-class exactly as an
+ordinary query does. egglog gets the same effect from a per-global table — `remove_globals`
+desugars `(let $g e)` into a nullary function plus `(set ($g) e)` and rewrites a rule that reads
+`$g` into one that joins on `($g)` — and under `--proofs` that table's value follows the
+union-find forward (`proof_encoding.rs`'s `is_encoded_global`,
+`proof_encoding_rebuild.rs:91-94`). Reading the definition instead reaches the same class
+through the tables the `let`'s own build already wrote. `difftest correspond 64` now reports
+**0 LOST**, with all eight `glob-*` cases agreeing.
+
+So `hglob` is no longer the obstruction it was. What the residue would still have to prove at a
+`Cmd.run` is `UnionsFire` itself: the rule the target holds is `encodeRule i (s.substGlobals G) n`
+— `UnionsInv.rules` now says so — so the reading a firing has to mirror is the *substituted*
+query's, `mem_matchQuery_encodeQuery` at `Query.substGlobals G s.query`, whose globals are
+already flattened away and whose remaining variables the three clauses above answer for.
+
+**`UnionsFire` was false, and the writer was `Cmd.saturate`.** `encodeCmd` gave a source
+`.saturate R` the block `[.saturate R, .saturate rebuildRuleset]`, so the rebuild ran **once,
+after the whole saturation**, and the target's second round of `R` read the first round's rows
+un-re-keyed. The specification has no rebuild to miss — `Matches` closes over `Cong`, which
+reads `eqs` — so its round 2 saw round 1's `union` and the target's did not. Five commands, all
+of them in `encode`'s domain, and `DiffTest.lean`'s `sat-hit`:
+
+```
+(Wrapper (Zz))  (Aa)
+(rule ((Aa)) ((union (Zz) (Aa))))
+(rule ((Wrapper (Aa))) ((Hit)))
+(run-schedule (saturate (run)))
+```
+
+Round 1 fires the first rule on both sides; round 2 fires the second on the source alone, over
+the congruence `(Zz) = (Aa)` round 1 asserted, and builds `(Hit)`. In the target the union is an
+`@UF` edge — `Term.blt` makes `(Aa)` the `ordering-min` — while `@WrapperView` still sat at the
+key `[(Zz)]`, and the emitted atom for `(Wrapper (Aa))` asks for the key `[(Aa)]`. Nothing
+joined them until the trailing `Cmd.saturate rebuildRuleset`, which is after `R` has saturated.
+**Measured**: `exec P` held one `Hit` term and `execM (encode P)` held **no** `@HitView` entry
+term at all, where the same program with the `saturate` replaced by two `Cmd.run`s **agreed** —
+each round getting its own rebuild is what made the `run` form right. So
+`encode_corresponds_forward` was false there too, at `a = b = (Hit)`, and this `sorry` was a
+false obligation rather than an open one.
+
+**The repair is in `Encoding/Encode.lean`, and it is what egglog does.** egglog instruments a
+schedule node at a time: its `Run` case becomes `(seq <run> <rebuild>)`
+(`egglog/src/proofs/proof_encoding.rs:1969`) and its `Saturate` case recurses *into* the loop
+body (`:1978-1980`), so `(run-schedule (saturate R))` is instrumented to
+`(saturate (seq (run R) <rebuild>))` — a rebuild after **every** iteration, which
+`RUST_LOG=debug` prints as the schedule the loop runs. `Cmd` has no schedule nesting, so
+`allMaintenanceRules` joins the maintenance rules to each ruleset a source `Cmd.saturate` names
+as well as to `rebuildRuleset`; a round of `R` then re-keys the views the previous round moved,
+and a fixpoint of the union of the two rulesets is a fixpoint of each. `sat-hit` now agrees —
+one source `Hit`, one target `@HitView` — as do the four other `sat-*` cases, and
+`difftest correspond 64` reports 0 LOST over 87 in-domain cases. **That writer is fixed, and the
+obligation is false anyway** — for two reasons that have nothing to do with `Cmd.saturate` and
+that the `Cmd.run` half fails at too: `unionsFire_false` and `unionsFire_false_encodeSig` above.
+
+**What the corpus used to miss.** No case used a *source* `Cmd.saturate`: the only
+`Cmd.saturate` in an encoded program was the encoder's own `rebuildRuleset` one, every curated
+case ran its ruleset with `Cmd.run`, and both generators emitted
+`List.replicate (rounds + 1) (Cmd.run "")`. `difftest correspond 64` agreeing on all 78
+in-domain cases therefore measured the `Cmd.run` half and said nothing about the other. The
+`sat-*` family and `genProgram`'s `genCollapseRules` tail are what close that: five curated
+cases and, at the default 60 seeds, ten generated ones now run a source `saturate`, and with
+the repair backed out the sweep reports 13 LOST across those 13 cases.
+
+**That refutation was measured and not proved**, which is why no `unionsFire_false` ever stood
+beside `unionsFireClaim_false`, and why the corpus is where the repair is checked. Refuting a
+firing needs the enumerator's *completeness* at an encoded target — no substitution matches, so
+nothing is written — and that is `execRunRules_RunRules`, which wants
+`Signature.AllConstructors` and is unavailable at a target whose `@UF` and every `@fView` carry
+`:merge`. The kernel cannot run the encoded program either.
+
+**A valid substitution is still not a firing, and that is what refuted this.** `RuleResults` is
+a substitution *and* a block that evaluates, which is the falsity
+`mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already cost once. `ncTgt_encRule_fired` is that
+half exhibited on the target side, and `mem_rows_execRunRules` is where the head's writes are
+read back. On the target the same gap was a *hole in the statement*: `Expr.eval` returns `none`
+at a name the signature does not make a constructor, `execLocalActions` propagates it, and
+`fireInto` answers a stuck firing by returning the accumulator unchanged — so `unionsFire_false`
+runs the encoded rule at a `td` whose signature withholds the head's skolem and the round writes
+nothing. `unionsFire_false_encodeSig` is the same conclusion at `encodeSig` itself, over a
+source query that applies a primitive, so the second missing clause is on the **source** side
+and no target-side provenance reaches it.
+
+**What the repair is, and it is now in the statement.** Five derived clauses, à la carte and
+threaded the way `Egglog.RowMech` is — never as provenance, which
+`unionsJoined_fire_satisfiable` would not survive:
+
+* the target's signature, in the form `∀ f, sd.sig.IsCtor f → td.sig.IsCtor f` and
+  `td.sig.IsCtor fiatName`. `FDatabase.EncBase`'s `sig` clause is where an encoded run has
+  them, `encodeSig_isCtor_of_mem_ctors` and `encodeSig_isCtor_fiatName` are the two readings,
+  and `sigIn_of_prefixStep` carries the source signature onto `Program.ctors`. Both are
+  decidable at `rbState2` (`rbState2_sig_mono`, `rbState2_isCtor_fiatName`), at a source
+  constructor of positive arity;
+* `td.sig.IsCtor (ruleName i)` **at the index `hrules` names**, bundled into `hrules` because
+  `ruleProofDecls` declares only the indices the encoder's own numbering reaches and
+  `encodeRule` is a function of an arbitrary one. `Egglog.RuleNameMech` is how the numbering is
+  threaded — `Program.RuleNamesDeclared` walks the program with `Cmd.ruleStep`, which
+  `encodeCmd_ruleStep` says is `encodeCmds`' own counter — and `ruleNamesDeclared_encodeSig`
+  reads it off `ruleProofDecls`;
+* `FDatabase.RowColumnsValued` at `td`, which `mem_matchQuery_of_rows` and
+  `mem_matchQuery_encodeQuery` both take: `matchQuery` draws its candidates from
+  `FDatabase.valueTerms`, so a row column outside it is a row no substitution can name.
+  `encReached_rowColumnsValued` is the discharge;
+* `FDatabase.NoAtEnv` at `td`, with `hnoAtVar` at the target reading's own variables: a
+  generated variable must not collide with a source one, which is what keeps
+  `exists_freshEnv_encodeQuery`'s block disjoint from `ρt`. `FDatabase.EncBase.noAtEnv` is the
+  discharge; the old `hglob` beside it is gone, because `matchQuery` no longer reads the
+  environment at all;
+* the source rules' encodability — `Pattern.NoValues` and `Query.VarsKeyed` and
+  `∀ fk ∈ p.ctors, Prim.ofName fk.1 = none` at every pattern of every rule `sd.rules` holds,
+  which `patternRowRead_of_matches` takes and which `Program.EncodeDomain.queryEncodable` and
+  `noPrim` pay for at the program — *through the resolution a registration performs*, since a
+  stored rule's query is `Rule.resolveGlobals`'d (`Query.noValues_resolveGlobals`,
+  `Query.VarsKeyed.resolveGlobals`, `Query.ctors_resolveGlobals_noPrim`); `Pattern.Grounded` is
+  not among them, because the resolution writes a literal-valued global's value into the query
+  and `Pattern.GroundedAt` is what the reading actually needs. This one is a **source-run**
+  invariant, since `UnionsFire` is given no program: `Database.QueriesIn` is the property and
+  `queriesIn_of_prefixStep` the
+  induction, over the commands the chain has already run.
+
+**Both refutations are accounted for, each by a different clause.** `cxfTgt_not_sigMono` is
+the first witness failing the signature clause, with every other new clause holding at it
+(`cxfSrc_queriesEncodable`, `cxfTgt_other_clauses`); `cxpSrc_not_queriesEncodable` is the
+second failing the source-rules clause, with every clause about names holding at its target
+(`cxpTgt_name_clauses`). `unionsFire_of_weak` is the implication that says what they refute —
+`Egglog.UnionsFireWeak` — is strictly the stronger claim.
+
+**What the repair lands.** Step 2 of the assembly — move the source firing to the query the
+encoder flattened — is no longer a transfer at all, and no `Matches.to_substGlobals` is needed:
+a rule is stored `Rule.resolveGlobals`'d at the environment standing when it is declared, so
+`Query.substGlobals G` has nothing left to rewrite in the query the state holds. `hrules`
+carries that identity as a conjunct rather than deriving it —
+`Rule.resolveGlobals_eq_substGlobals` needs `Database.GlobalsCover` at the environment the
+rule was *registered* at, which no later state remembers — and `unionsInv_step` discharges it
+where the rule is registered, by `Rule.substGlobals_idem`. So the source firing's own
+`ValidQuerySubst` is already at the right query.
+
+**Step 1 goes through at the rule's own query, and one of its two extra facts is now a
+clause.** Reading a firing's substitution forward through live rows is
+`patternRowRead_of_matches` at every pattern of `r.query`, at the reading `Env.mapVals` puts on
+`τ` off the row-reading clause and `ValidQuerySubst.mem_terms`; it is proved from the clauses
+above **plus two facts about `td`**. The first is that a live `@fView` row's name carries a
+`:merge`, which `RowRead.app` carries as data and `rowRead_of_rowRepr` therefore asks for: that
+is now a clause, derived off `FDatabase.IndexOk.ctor` alone — a merge-free row's output columns
+are empty and a view row's are `[e, pf]` — and discharged by `encStep_mergeOf_of_row`, in the
+shape `Egglog.RowMech` already had rather than as provenance.
+
+**The second is false as it reads, and so is the literal residue that was named as its
+replacement.** "Every id the reading gives is a term the target holds",
+`∀ t x, RowRepr td t x → x ∈ td.terms`, would put *every literal* in `td.terms`: `RowRepr.lit`
+is `RowRepr d (.lit l) (.lit l)` for an arbitrary `l`, with no premise at all. Its
+**application** half is a theorem and wants no clause — `mem_terms_of_rowRepr_app`: a
+`RowRepr.app` names a live view row `⟨viewName f, es, [r, pf]⟩` and `FDatabase.RowColumnsValued`
+— already a clause here — puts that row's value column in `td.valueTerms`, hence in
+`td.terms` (`FDatabase.mem_terms_of_mem_valueTerms`).
+
+**And `Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms` is false too, which is measured.**
+`litBuild_not_litsHeld`: `litBuildProgram` is one `.action (.expr (.lit 5))`, it is **in the
+domain** (`litBuildProgram_encodeDomain`), its source holds `5`, and
+`execM (encode litBuildProgram)` holds **no term at all** — `encodeBuild` emits no action for a
+bare leaf. That is by design and not a defect: `ViewRepr.lit` carries no membership premise for
+exactly this reason, and `litBuild_forward` is the correspondence holding there. So no
+`Egglog.RowMech`-shaped clause can carry it, and the run-wide induction that was named here
+would have had nothing to prove.
+
+**What step 1's `.eq` case actually owes is one shape of pattern, and it is now the only
+thing.** `patternRowRead_of_matches` no longer takes the false clause: the `.eq` membership is
+split by the case the *reading* is in — `FDatabase.RowColumnsValued` where a side reads a row,
+the target reading's own value where a side is a variable (`mem_terms_of_rowRead`, and
+`mem_matchQuery_encodeQuery` asks for that value to be a `FDatabase.valueTerms` member anyway),
+and `hgl` where **both** sides are a bare literal of the same value. `Pattern.Grounded.eqLit`
+is `hgl` discharged on the program's text, so the surviving instance is the one
+`Rule.resolveGlobals` creates out of a *literal-valued global* — and there the target does hold
+the literal, because `encodeAction` emits `.letBind v (.lit l)` and `FDatabase.addTerm` inserts
+it. So the residue is a clause about `sd.env`, not about `sd.terms`.
+
+**And it is now the clause and not a guess.** `Database.LitGlobalsHeld` is it — every literal a
+global is bound to is a term the target holds — and `eqLit_of_litGlobalsHeld` is the reduction:
+`Pattern.Grounded` at the *rule's own text* is what `Cmd.QueryEncodable` pays for and what makes
+one side of the surviving `.eq` a variable, `exists_lit_global_of_resolveGlobals` names the
+global that side resolves through, and the clause answers for it. `litGlobalsHeld_witness` is
+the clause with content at a program in the domain — `glProgram` is one `(let $g 5)`, its
+source binds `$g` to `5` and `execM (encode glProgram)` **holds** `5`, where
+`litBuildProgram`'s bare `.expr (.lit 5)` holds nothing — and
+`glSrc_resolveGlobals_eqLit` is the pattern the resolution creates at that very environment.
+What is left of this item is the run-wide induction that carries the clause, in the shape
+`encStep_viewRowsRootedAll` and its siblings have, and not the choice of clause.
+
+**Step 3 has scaffolding now, and it spends the signature clauses.** The encoded rule has to
+**fire**: `execLocalActions td (encodeRule i (r.substGlobals G) n).1.actions τ = some _` at the
+substitution `mem_matchQuery_encodeQuery` returns. Three lemmas, in that order:
+
+* `FDatabase`'s counterpart of `evalActions_isSome_of_builds` —
+  `execActions_isSome_of_builds` and `execLocalActions_isSome_of_builds`, moved along
+  `execActions_toDatabase`, since `execAction` mirrors `evalAction` case for case. That is the
+  fold, and it was simply unwritten.
+* **`Actions.Builds` of an *encoded* head is false, and could not be otherwise.** An encoded
+  `union` is `(set @UF (ordering-max x y) (ordering-min x y, pf))`, and `if` and `ordering-gt`
+  are **primitives**, which `Expr.Evaluable` excludes by name; so the fold above is not what
+  runs an encoded block. What is `Actions.Builds` is the **source** head read at the *target's*
+  signature, and `exists_execActions_encodeBuild`/`exists_execActions_encodeAction`/
+  `exists_execActions_encodeActions` lift that, case by case, to the block `encodeAction`
+  emits — with `eval_ifGt` running the two bundled choices, which are total on their operands.
+* `exists_execLocalActions_encodeRule_head` is the two assembled at `encodeRule`, and it is
+  where the signature clauses are **spent**: `td.sig.IsCtor fiatName` on the proof column of
+  every build's view row (`eval_fiatE`), and `td.sig.IsCtor (ruleName i)` — the conjunct
+  bundled into `hrules` — on the justification a `union` or a `set` head writes, which applies
+  that one name over the emitted query's proof *variables* and nothing else
+  (`queryProofs_var`, `prim_ofName_ruleName`). Nothing is asked of a `set`'s own function name,
+  which is never evaluated.
+
+**What step 3 owed source-side is now carried, as two derived clauses.**
+`Actions.Scoped r.actions Γ` at the scope the substitution models, and
+`Actions.Builds r.actions td.sig` — the source rule's *head* being scoped and building, where
+the clause `UnionsFire` already had is about its *query*. Both are source-run invariants of
+exactly the shape the query clause is, both are now clauses of `Egglog.UnionsFire` in the
+`Egglog.RowMech` shape, and `encStep_rowMech` discharges them: `Database.HeadsScoped` with
+`headsScoped_of_prefixStep` is the first — over `Program.HeadsScoped`, which is
+`EncodeDomain.headsScoped`, and `Rule.headScoped_resolveGlobals`, since a variable
+`Rule.resolveGlobals` removed from a query is a global the environment binds
+(`Query.mem_vars_resolveGlobals`) — and `Database.HeadsBuild` with
+`headsBuild_of_programStep` is the second, read at `td.sig` through
+`Actions.Builds.mono_sig` and the signature clause. `rbSrcR_headsScoped` and
+`rbSrcR_headsBuild` are them in `unionsJoined_fire_satisfiable`, at the rule its witness
+registers and whose encoding its round fires, and `ncRule_headScoped`/`ncRule_builds` are the
+same two at the rule whose source firing the encoding cannot perform.
+
+Step 4 — the head's writes read back as `ViewRepr td'` — rides on
+`execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, and on the
+**transport** above, which is: `contained_of_fired_run_block` carries a firing's writes through
+the round's fold, the round's own merge phase and the block's trailing `Cmd.saturate
+rebuildRuleset`, and `viewRepr_of_holdsBuild_fired_run_block` and `out_of_fired_run_block` are
+the build head's view row and the `union` head's `@UF` edge read back at `td'` off it. What that
+transport does *not* do is the two things below.
+
+**The shape that refuted it is gone.** It was a global `Cmd.globalBind` did *not* freeze, which
+by its two guards was one a top-level `let` binds twice (the open-definition guard only ever
+failed by cascading from such a name). `hglob` asks the target reading of that variable to be
+its own value, so `patternRowRead_of_matches` would need `RowRepr td t t`, and that was
+**false** at states an encoded run reaches. Measured, on
+
+```
+(let $g (Zz))  (let $g (Yy))  (F (Yy))  (Aa)  (union (Yy) (Aa))
+(rule ((F $g)) ((Hit)))  (run 1)
+```
+
+whose `execM (encode P)` holds `@YyView[] ↦ ((Aa), …)`, so `(Yy)` read through rows to `(Aa)`
+and not to itself. **That program no longer runs.** `Spec/Eval.lean`'s `evalTopAction` refuses a
+top-level `let` that rebinds — egglog's own "Shadowing is not allowed"
+(`egglog/src/ast/check_shadowing.rs:11-12`, `:49-50`) — so it has no `ProgramStep` and `hsrc`
+excludes it, with no tenth `Program.EncodeDomain` clause and no second reading.
+`letNames_nodup_of_programStep` is that as a fact about the program text, and
+`globalBind_letBind_of_encStep` is what it buys: at every top-level `let` the chain reaches,
+**both** guards pass, so no global is left frozen.
+
+**And `hglob` itself is gone.** `matchQuery` used to read `d.env ++ σ`, so a source variable a
+global bound was read off the environment rather than off the substitution and the target's
+reading had to agree with it there. `Spec/Match.lean`'s `ValidSubst` now takes a query's free
+variables against the **empty** environment and `Matches` reads the substitution alone, because
+the globals a rule's query mentioned were resolved into it when the rule was declared — so a
+stored query names no global and the clause has nothing to answer for
+(`mem_matchQuery_encodeQuery`). What survives of the same fact is `Pattern.GroundedAt`, and
+`Database.GlobalsInline` pays it.
+
+**And the fifth defect — the one that was a defect and not a missing clause — is repaired.**
+It was `Database.GlobalsCover` — every global the
+environment binds is one the substitution defines — at the `G` a rule was encoded **through**,
+frozen at the command `encodeCmds` reached the rule at. A top-level `let` *after* that command
+extends the environment without extending it, and `Spec/Match.lean`'s `ValidSubst` used to take
+`Pattern.freeVars p db.env` at the state the round runs at, so the source **recaptured** the
+rule's own query variable while the encoded query stayed keyed at the frozen environment term.
+
+**Measured**, `DiffTest.lean`'s `glob-late-eq`:
+
+```
+(rule ((Wrapper $g)) ((union (Wrapper $g) (Hit))))
+(let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
+```
+
+reported **2 LOST** — `(Wrapper (Zz)) = (Hit)` and `(Hit) = (Wrapper (Aa))` — and `glob-late`,
+the `.expr (Hit)` head, reported 1. Both **agree** now, and so does every other case:
+`difftest correspond 64` is 87 agreeing, 0 LOST. `Spec/Step.lean`'s `cmdEffect` resolves the
+globals then in scope into a rule when it registers it, which is `remove_globals`' own step at
+`remove_globals`' own point (`egglog/src/lib.rs:2615-2617`,
+`egglog/src/ast/remove_globals.rs:183-238`), and `encodeCmds` threads `Cmd.globalBind` through
+the same command — so `Rule.resolveGlobals_eq_substGlobals` makes the source's stored query and
+the encoder's flattened query the *same* query, and coverage is spent where the rule is
+registered rather than at the round. `glob-late-fresh` and `glob-late-head` are the same
+arrival order measured against the binary — `Hit 1` and `(Hit (Bb))` — and both are corpus
+cases. **No measured counterexample stands under this `sorry` any more**: what is left is the
+structural item below.
+
+**What is left under this `sorry`.** Step 4's transport is landed
+(`contained_of_fired_run_block` and the two read-backs above), the head-block decomposition is
+landed too, and what remains of step 4 is one item, and then the assembly.
+
+* **The head-block decomposition is written.** `holdsBuild_of_execActions` takes the block one
+  head *action* emits, `execActions d (encodeBuild e m).2.1 = some d'`, and what a firing hands
+  over is `execLocalActions td (encodeRule i r n).1.actions τ`, the whole head under
+  `(@Rule_i p…)`. `holdsBuild_of_execLocalActions_encodeRule` splits the second into the first
+  — `exists_execActions_encodeAction_of_encodeActions` once per source action over
+  `encodeActions_cons_actions` and `execActions_append`, then
+  `exists_execActions_encodeBuild_of_encodeAction` once per build inside it — with the
+  environment each build ran at named: the firing's own `τ ++ td.env` extended by a prefix
+  whose domain is the head's `let`s (`execActions_env_encodeAction`, since the only `letBind`
+  an encoded block emits is the source `let`'s own binder and it comes last). That is the
+  mirror of `exists_execActions_encodeActions` run in the reading direction, and
+  `exists_step_of_mem_evalActions`/`headActions_soundTerms` are the same induction on the
+  source and the soundness sides.
+* **A head that reads a global — closed, and *locally*.** `Rule.resolveGlobals` leaves a
+  rule's *head* alone, so such a head evaluates the global to the source term
+  `td.env = sd.env` binds and keys its view row **there** rather than at an id of it. What is
+  asked of that position is therefore `ViewRepr td' u u` **for a value the environment binds**,
+  and that is not `Database.ReadsSelf`: the refutation `ncTgt_not_readsSelf` is at a term a
+  rule *firing* built, and a global's value is a term a **top-level block built**, whose
+  read-back at every subterm is `viewReprAll_self_of_execProgramM`. That is
+  `Egglog.UnionsInv.envReadsAt` — a clause the command induction already carries and proves
+  — and it is now a clause of `Egglog.UnionsFire` (`rbTgtR_envReadsAt` is it with content at
+  the witness, at the `(A)` `rbProgram`'s own first build wrote).
+
+  `viewRepr_of_evalPair` is the whole read-back at that clause: an induction over the head
+  expression whose only content is `hlink`, the two environments' agreement — one `ViewRepr`
+  per variable — with the query variables answered by step 1's reading, a global by
+  `envReadsAt`, and a head `let` by the same reading one build earlier. **Every application
+  pays for itself**, because `encodeBuild`'s naming expression *is* the source expression
+  (`encodeBuild_fst`): the target's value for `.app f args` is `.app f is` over the argument
+  values, and the row `encodeBuild` emitted for it is keyed at exactly the `is` the induction
+  has just read the arguments onto. No `FDatabase.UFRowReach` chain is walked and no run-wide
+  invariant is spent — which is the sense in which the refuted fact was "true of a row a build
+  wrote": its value column is its naming term, and nothing has moved it yet.
+
+  So the walk below is **not** what closes this item, and the paragraphs that follow are kept
+  as the record of the route that was tried.
+
+  **And the two firing lemmas were not where its provenance lived.** They take three fields of
+  `FDatabase.EncBase` and no more — `sig` (as `d.sig.IsCtor transName` and companions), `held`
+  (as `eclassRule f k ∈ d.rules` / `columnRule f k i ∈ d.rules`) and `noAtEnv` — with
+  `eclassRule_fires_of_encBase` and `columnRule_fires_of_encBase` the check that the weakening
+  is a weakening; `rules`, `shape`, `merges`, `inv`, `nounions` and `wl` a firing never reads.
+  Two of the three are `Egglog.UnionsFire` clauses already (`td.NoAtEnv`, and the signature
+  clause for `@Fiat`), and the third is `Egglog.RowMech`-shaped.
+
+  What the walk *does* rest on is three **inductive invariants** of the encoded run, and they
+  are a different thing from a bundle of facts: `FDatabase.ViewRowsRooted`,
+  `FDatabase.ViewRowsColumnClosed` and `FDatabase.UFRootsUnique`. None is a fact a state
+  exhibits — each is established by a walk from the prelude's **empty** row list
+  (`viewRowsRooted_encodeCmds`, `viewRowsColumnClosed_encodeCmds`) — so none is derivable at a
+  `td` the way the `Egglog.RowMech` clauses are; the weakening above does not do it and could
+  not. **They are threaded now**, in the program-free form the residue can be handed:
+  `FDatabase.ViewRowsRootedAll` and `FDatabase.ViewRowsColumnClosedAll` drop the restriction to
+  a program's own constructors, which `encStep_ctorsIn_of_row` reads back off the row itself, so
+  `Egglog.RowMech` carries all three and `encStep_viewRowsRootedAll`,
+  `encStep_viewRowsColumnClosedAll` and `encStep_ufRootsUnique` discharge them at
+  `Egglog.EncStep`. `viewRow_of_rowReachList_all` is the walk at that form.
+
+  **The guard survived it**, which was the risk: the three are true at `rbTgtR`, the hand-built
+  target `unionsJoined_fire_satisfiable` is witnessed at, so the extra conjuncts make the
+  witness thinner and not false. `rbTgtR_no_uf_row` is the whole reason and it is the same
+  arithmetic that makes conjuncts 12 and 14's `edge` vacuous — `rbProgram` asserts nothing, so
+  the state's union-find is empty. `ncTgt_viewRowsRootedAll` and
+  `ncTgt_ufRootsUnique_instance` are the two of them with content, at a state that holds a live
+  `@UF` row, and `ccTgt_columnClosed_instance` is the third at a state where a **column** rule
+  fired rather than the e-class rule — with `ccStale_not_viewRowsColumnClosedAll` the same
+  clause **false** one firing earlier, so it is a constraint and not a shape.
+
+  **The walk's premise was the gap, and the fact named for it is false — which is what
+  localized the item.** `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain
+  per key position out of the tuple the head's own row sits at, and what a head that reads a
+  global hands over is a *source term* per position. The fact named for that link was
+  `FDatabase.ViewRowsNamedUF` — a live view row's **value** column is
+  `FDatabase.UFRowReach`-reachable from the term that names it, which at a nullary position is
+  exactly the chain `Egglog.RowRepr td' u x` would have to supply. **It is not vacuous and it is
+  refuted**: `ncTgt_viewRowsNamedUF` is it holding with content, at `@BView() ↦ ((A), …)` named
+  by `(B)` one real `@UF` row from its value column, and `ccTgt_not_viewRowsNamedUF` is it
+  failing on the row a **column** rule writes. `columnRule` re-keys a row and leaves its value
+  column alone, so `@FView((A)) ↦ ((F (B)), …)` is named by `(F (A))` — a term the target does
+  not hold at all (`ccTgt_not_mem_FA`), so no `@UF` row can leave it — and the row is the
+  interpreter's own round's (`ccStale_columnRule_fires`).
+
+  The refutation is what said the row in question is one **this very firing** wrote, whose
+  value column *is* its naming term: `viewRepr_of_evalPair` above reads it back at the key
+  tuple it was written at, and no run-wide invariant is needed for (i) at all. The walk stays
+  where it is — it is `Database.RebuildClosed`'s `edged`/`column` mechanism, and the three
+  invariants remain `Egglog.RowMech` clauses — but step 4 no longer spends it.
+  `FDatabase.EntryRowsUF` is a different shape again: it runs from an entry term's value column
+  to a live row's at the **same** key, which is what `encReached_viewRow_at_root` spends.
+
+**The outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no merge
+phase — `MergeClosure.eq_of_allConstructors` — so `cmdStep_run_eq` makes the post-state the
+*function* `RunRules R sd`, whose `Database.sUnion` splits `eqs` and `terms` into the
+pre-state's and one firing's (`eqs_cases_of_cmdStep_run`, `terms_cases_of_cmdStep_run`, the
+converses of `mem_eqs_of_ruleFired` and `mem_terms_of_ruleFired`). `contained_of_run_block`
+carries the two clauses the residue holds at `td` up to `td'`, and
+`unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus **one
+obligation per firing** — which is exactly what steps 1-4 are about.
+
+**What is left of the `Cmd.run` half, precisely.** Step 4's global-reading head is closed
+(`viewRepr_of_evalPair`), and so is step 1's `.eq` case: `eqLit_of_substGlobals` answers `hgl`
+at the patterns of `Query.substGlobals G r.query` — the query `hrules` names — from
+`Egglog.UnionsFire`'s own clause set and with no appeal to the program's text. Four cases, and
+every one lands on a global the environment binds: a side `Expr.substGlobals` rewrote is one
+`Database.GlobalsInline` binds to that very literal (`exists_lit_global_of_substGlobals`), and
+a side that was the bare literal on both already is `Database.EqLitGlobals`' own instance — the
+source-run invariant that says such a side exists only where `Rule.resolveGlobals` created it,
+since `Cmd.QueryEncodable`'s `Pattern.Grounded` excludes the shape from a rule's text and
+`evalTopAction` refuses a later `let` that would rebind the global (`cmdStep_eqLitGlobals`,
+`eqLitGlobals_of_prefixStep`). `Database.LitGlobalsHeld` then answers for the literal itself.
+
+**Both items of glue are closed, and neither cost a fact about the encoding.**
+
+* **Step 2's query identity, at the rule the state stores — a clause, and not a derivation.**
+  `Rule.resolveGlobals_eq_substGlobals` is stated under `Database.GlobalsCover`, which
+  `Egglog.UnionsFire` does not carry and *cannot* derive: `Database.GlobalsInline G` gives
+  `dom G ⊆ dom sd.env` and nothing in the other direction, and the coverage that matters is at
+  the environment the rule was **registered** at, which no later state remembers. What the
+  reading actually needs is weaker and is about the *stored* rule alone —
+  `Query.substGlobals G r.query = r.query` — so that is the conjunct `hrules` now carries,
+  beside the `Database.GlobalsInline G` it already had. `unionsInv_step` discharges it where the
+  rule is registered and nowhere else: `Rule.resolveGlobals_eq_substGlobals` there (under the
+  `Database.GlobalsCover` `encStep_globalsCover` supplies at that very command) followed by
+  `Rule.substGlobals_idem` — resolving an already-resolved rule changes nothing, because the
+  definitions `G` carries are closed. Every later command carries the pair unchanged, and
+  `rbRule_substGlobals` is the conjunct at `unionsJoined_fire_satisfiable`'s own witness, at
+  the **non-empty** `G` `rbProgram`'s top-level `let` freezes.
+* **The head's key columns as target terms — derivable, and no clause.**
+  `∀ b ∈ sd.env, b.2 ∈ td.terms` is not needed at all: `execActions_encodeBuild_app` already
+  proves every subterm of the view row term is in the block's post-state, and
+  `holdsBuild_of_execActions` was simply discarding it. `Database.HoldsBuild.keys` carries it
+  now, so `viewRepr_of_holdsBuild_fired_run_block` has lost its `hval` hypothesis and
+  `Database.out_self`'s key obligation is paid by the row's own build. `Egglog.UnionsInv.envReadsAt`
+  would not have done it — `ViewRepr` at an application ends in a `Database.Out` on the *view
+  row* term, and getting the key back out of that wants `Database.WF.subtermClosed` at `td`,
+  which is not a clause either.
+
+**And the `Cmd.run` half is landed**, at `unionsFire_run`: `unionsFire_conclusion_of_run` plus
+`unionsFire_firing` once per firing, with steps 1-4 assembled as
+`exists_mem_matchQuery_encodeQuery_of_validQuerySubst` (the reading, at the emitted query),
+`exists_fired_encodeRule` (the firing), `contained_of_fired_run_block` (the transport) and
+`headActions_viewRepr` (the head, in lockstep with the source's own block). Three pieces were
+missing and are written: `mem_vars_encodeQuery_of_argVar`, which is `mem_vars_encodeQuery` in
+the direction `Query.VarsKeyed` makes true — a source query variable sits at a key column, so
+the flattening keeps it — and with it `mem_valueTerms_idSubst`, the reading's own values being
+`FDatabase.valueTerms` members *by position* rather than by the refuted
+`∀ t x, RowRepr td t x → x ∈ td.terms`; `viewReprAll_of_evalSrc`, which reads back every
+**subterm** of what a head expression built (at a leaf the target's evaluation is not what
+answers — a variable's value is a source term the reads clause covers, a literal is its own
+id); and `headActions_viewRepr`, the lockstep, which is where a head `let` gets its `hlink`.
+
+**The two source-run clauses are threaded, and both carry content.** Each is a *source-run*
+invariant of exactly the shape `Database.QueriesIn` is — paid by a domain clause the encoder
+already has — and each is refutation-shaped rather than idle:
+
+* **the source query's variables are outside the generated namespace**
+  (`Program.EncodeDomain.noAt`). `freshVar 0` is `@v0`, so a query `(F @v0)` flattens to the
+  single atom `(@FView (@v0) (@v0) (@v1))` — the read's e-class column *is* the source variable
+  — and the encoded rule then matches only an `F`-entry whose id equals its key while the
+  source rule matches every entry. `FDatabase.NoAtEnv` is about the environment and says
+  nothing about a rule's variables; `mem_matchQuery_encodeQuery`'s `hnoAtVar` is where it is
+  spent, keeping `exists_freshEnv_encodeQuery`'s block disjoint from the reading.
+* **no `set` in a source head** (`Program.EncodeDomain.setLegal`, as `Program.noSet` through
+  `Program.setLegal_iff_noSet` at a constructor signature). A source `set f args out` builds
+  the term `f(as ++ vs)`, while `encodeAction` emits `(set @fView es (xs ++ [pf]))` — a row of
+  key width `|as|`, where `ViewRepr` at the source's term wants a view entry of key width
+  `|as| + |vs|`. So the reads clause fails at that term whenever `vs` is non-empty.
+  `Actions.Builds` admits a `set` head and says nothing about it.
+
+Both ride in `Database.QueriesIn`, which now carries four facts about a stored rule rather than
+two, so `queriesIn_of_prefixStep` pays them where it pays the other two and
+`Egglog.RowMech` carries them to the firing (`encStep_rowMech`, `unionsInv_step`). Neither is
+vacuous at the witness: `rbSrcR_noAtQuery` is the first at `rbRule`'s own query variable `y`
+and `rbSrcR_noSet` the second at its one head action, so `unionsJoined_fire_satisfiable` is
+twenty-eight conjuncts with twenty-one carrying content. `Egglog.UnionsFireWeak` and
+`Egglog.UnionsFireAnyG` drop them along with the rest, so the three refutations are untouched.
+
+**So the `Cmd.run` case of this theorem is discharged in place**, by `unionsFire_run` and
+nothing else, and the `Cmd.saturate` case is the whole of what is left — a
+`Cmd.saturate`'s post-state is an *iterate* of `RunRules` (`RunReach.iterate`) rather than one
+application.
+
+**The structural item is the `Cmd.saturate` half's alone, and the encoder fix did not
+close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
+*single* round, fired at `td` itself — `allMaintenanceRules` joins the maintenance rules only to
+the rulesets a source `Cmd.saturate` names (`Program.saturateRulesets`), so a source `.run R`
+runs `R`'s rules alone at the state this residue is handed, and every clause above is at exactly
+the state the encoded rule runs at. There is no mid-block gap there.
+
+A `Cmd.saturate` block saturates, and its rounds two onward fire at states strictly inside the
+block. `allMaintenanceRules` does make each of those rounds rebuild — that is what stopped
+`sat-hit` losing a term — but `execRunRules` reads *every* rule of a round off the same
+pre-state, so a round's maintenance firings chase the previous round's `@UF` edges and not its
+own. The fixpoint the block ends at is therefore rebuild-closed, since nothing changes there
+and the maintenance rules are among what fires; the rounds in between are one round behind, and
+`FDatabase.ViewRowUnique` holds at neither `td` nor a mid-block state for them. That is the
+lag a further clause — or a per-round induction — would have to speak about, and it is
+structural rather than one of the four refutations above.
+
+**The fixpoint framing was tried, and it does not reach it.** The idea is that the conclusion
+names `td'`, and `FDatabase.runSaturateM_roundFixed` says a saturating run returns a state a
+further round leaves alone — so if the `Cmd.run` argument could be applied *at* the fixpoint,
+the intermediate states would only ever be a source of `Database.Contained`, which
+`FDatabase.execProgramM_toDatabase_contained` and `contained_of_run_block` already give. What
+`unionsFire_firing` spends `hrun` on is exactly two containments —
+`contained_of_fired_run_block`, one firing's writes reaching the block's end, and
+`contained_of_run_block` — and at a fixpoint the second is reflexivity, so the whole question
+is whether an encoded `R`-rule firing *at* `td'` writes into `td'`. It is, precisely,
+`td'.runRoundM R = some td'`. **Two things stand in the way, and they are the same
+`Cmd.saturate rebuildRuleset` the block ends with.**
+
+* `td'` is the fixpoint of the **rebuild** round, not of `R`. The `R`-round fixpoint is the
+  block's *middle* state, one command earlier, and `Egglog.EncReached` is whole blocks and not
+  `FDatabase.execProgramM` prefixes for a reason: `FDatabase.ViewRowsRooted` is established by
+  the trailing `Cmd.saturate rebuildRuleset` and is **false** in the middle of one. So the
+  state that has the `R`-fixpoint has none of `Egglog.RowMech`'s row clauses, and the state
+  that has the row clauses has no `R`-fixpoint.
+* Identifying the two — the trailing rebuild returning its own input — is
+  `FDatabase.sameData tdmid (tdmid.runRoundM rebuildRuleset)`, a **list**-level equality, and
+  it would have to come from `tdmid.runRoundM R = some tdmid` by two steps neither of which is
+  available: that a fixpoint of a *larger* ruleset's round is a fixpoint of a smaller one's
+  (a round deletes rows in its merge phase, so this is not monotonicity), and that every
+  `rebuildRuleset` rule the target holds has a same-query, same-head twin at ruleset `R` — which
+  is a fact about where `td.rules` came from, and provenance is what `Egglog.UnionsFire` may not
+  take.
+
+The round induction has the same shape and the same obstruction. Fixing the target at `td'` and
+inducting on the source rounds `s_j = (RunRules R)^[j] sd` works clause by clause — the two
+data clauses at `(s_j, td')` are the induction hypothesis, `s_j.rules = sd.rules` and
+`s_j.env = sd.env` carry the rule and environment clauses, and every target-side clause at
+`td'` is `Egglog.RowMech` at `.block` — up to the one step above: the firing at `td'` has
+nowhere to land. So what this half needs is not a further clause of the residue but a
+**per-round** form of the three block invariants (`FDatabase.ViewRowsRootedAll`,
+`FDatabase.ViewRowsColumnClosedAll`, `FDatabase.UFRootsUnique`) that survives a state one
+rebuild behind, and those are established by a walk from the prelude's empty row list and are
+false at exactly those states. -/
+theorem unionsJoined_fire : UnionsFire := by
+  intro R c sd sd' td td' hc hstep hrun henv hstate _ hfiat hrules hqe hcv hno hreads hjoin
+    hrow hrj hmg hsc hb _ _ _ _ hback henvReads hlit heqlit hnoAtQuery hnoSet
+  rcases hc with rfl | rfl
+  · exact unionsFire_run hstep hrun henv hstate hfiat hrules hqe hcv hno hreads hjoin hrow hrj
+      hmg hsc hb hback henvReads hlit heqlit hnoAtQuery hnoSet
+  · sorry
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`, at the rules it fires.**

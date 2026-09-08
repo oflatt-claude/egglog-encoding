@@ -125,7 +125,7 @@ both are decided at the witness at the end of this file.
   strengthened to every *subterm*, which is what `Database.addTerm` records. And it is not
   vacuous: `rbState2_unionsInv` is the invariant at a source state a program reaches
   (`rbProgram_programStep`) with a non-empty environment, `rbState2_unionsInv_hvar` is the
-  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's nineteen
+  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's
   hypotheses holding together, and `uRebuilt_unionsJoined` is the data clause at a source with
   a real equation.
 
@@ -4291,6 +4291,23 @@ patterns the encoder flattened. It is a conjunct rather than a derivation becaus
 was *registered* at and no later state remembers it; `unionsInv_step` discharges it there, by
 `Rule.substGlobals_idem` off `Database.GlobalsInline.closed`.
 
+**And two clauses about the source rules' *text*, which the firing spends and which no
+target-side fact reaches.** Both are `Database.QueriesIn`-shaped source-run invariants, paid by
+a domain clause the encoder already has, and neither is idle.
+
+* **A query variable is outside the generated namespace** (`Program.EncodeDomain.noAt`).
+  `freshVar 0` is `@v0`, so a query `(F @v0)` flattens to the single atom
+  `(@FView (@v0) (@v0) (@v1))` — the read's e-class column *is* the source variable — and the
+  encoded rule then matches only an `F`-entry whose id equals its key where the source rule
+  matches every entry. `FDatabase.NoAtEnv` is about the *environment* and says nothing here;
+  `Encoding/Complete.lean`'s `mem_matchQuery_encodeQuery` is where it is spent.
+* **No `set` in a source head** (`Program.EncodeDomain.setLegal`, as `Program.noSet` through
+  `Program.setLegal_iff_noSet` at a constructor signature). A source `set f args out` builds
+  the term `f(as ++ vs)` while `encodeAction` emits `(set @fView es (xs ++ [pf]))` at key width
+  `|as|`, where `ViewRepr` at the source's term wants `|as| + |vs|` — so the reads clause fails
+  at that term whenever `vs` is non-empty. `Actions.Builds` admits a `set` head and says
+  nothing about it.
+
 **A fifth refutation is gone.** It was `glob-late-eq`: a top-level `let` reached *after* the
 rule was declared, where `Spec/Match.lean`'s `ValidSubst` used to take `Pattern.freeVars p
 db.env` at the state the round runs at and so **recaptured** the rule's own query variable,
@@ -4331,6 +4348,8 @@ def UnionsFire : Prop :=
     (∀ t r : Term, RowRepr td t r → ViewRepr td.toDatabase t r) →
     (∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td.toDatabase s s) →
     sd.LitGlobalsHeld td → sd.EqLitGlobals →
+    (∀ r ∈ sd.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true) →
+    (∀ r ∈ sd.rules, ∀ a ∈ r.actions, a.NoSet) →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
 /-- **The derived clauses `UnionsFire` takes**, at every state one encoded run passes through.
@@ -4377,7 +4396,14 @@ And two for step 1's `.eq` case, which is the pair `eqLit_of_substGlobals` spend
 `Database.WF.envInTerms`) and `Database.EqLitGlobals` is the source-run half that says a
 bare-literal `.eq` in a *stored* query is such a global — a source-run invariant of
 `Database.QueriesIn`'s own shape (`eqLitGlobals_of_prefixStep`). Neither is
-`Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms`, which `litBuild_not_litsHeld` refutes. -/
+`Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms`, which `litBuild_not_litsHeld` refutes.
+
+And two last about the source rules' **text**, which the flattening and the head read-back
+spend and which nothing target-side reaches: a query variable outside the generated namespace,
+so that `exists_freshEnv_encodeQuery`'s block stays disjoint from the reading, and no `set` in
+a head, whose row would sit at the wrong key width. `Program.EncodeDomain.noAt` and `.setLegal`
+are what pay them, and `queriesIn_of_prefixStep` carries them beside the other two facts
+`Database.QueriesIn` now holds. -/
 def RowMech (Q : Program) : Prop :=
   ∀ {sd : Database} {d : FDatabase} {pre suf : Program} {G : List (Var × Expr)},
     EncStep Q pre suf sd d G →
@@ -4396,7 +4422,9 @@ def RowMech (Q : Program) : Prop :=
     (∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))) ∧
     (∀ r ∈ sd.rules, Actions.Builds r.actions d.sig) ∧
     d.ViewRowsRootedAll ∧ d.ViewRowsColumnClosedAll ∧ d.UFRootsUnique ∧
-    sd.LitGlobalsHeld d ∧ sd.EqLitGlobals
+    sd.LitGlobalsHeld d ∧ sd.EqLitGlobals ∧
+    (∀ r ∈ sd.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true) ∧
+    (∀ r ∈ sd.rules, ∀ a ∈ r.actions, a.NoSet)
 
 /-- **Every `@Rule_i` the encoder's numbering applies is declared**, at every state one encoded
 run passes through. Threaded rather than proved here for `Egglog.RowMech`'s reason: the
@@ -4537,7 +4565,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2.1
         (hmech hchain).2.1 hinv.envReadsAt
         (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | saturate R =>
@@ -4562,7 +4592,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2.1
         (hmech hchain).2.1 hinv.envReadsAt
         (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | action a =>
