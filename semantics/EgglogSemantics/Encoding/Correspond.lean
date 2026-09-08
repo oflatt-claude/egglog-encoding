@@ -4151,7 +4151,7 @@ beside `RowMech` and discharged by `encReached_ruleNameMech`.
 
 **The provenance is deliberately not among them.** `EncStep Q pre (c :: suf) sd td` would say
 everything these two clauses say and more, and it is what `unionsInv_step` supplies — but
-`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbState2`, a state written by
+`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbTgtR`, a state written by
 `execActions` and not by `encode`, and the kernel cannot run an encoded program. A provenance
 hypothesis would therefore empty the non-vacuity check, which is the second way a residue in
 this line has gone wrong; the derived clauses hold at that state outright.
@@ -4908,10 +4908,6 @@ theorem rbSrc_runRules (R : RulesetName) : RunRules R rbSrc = rbSrc :=
   (runRules_eq_self_iff R rbSrc).mpr fun r hr =>
     absurd hr (by simp [rbSrc, rbSrcBase, Database.addTerm, Database.empty])
 
-@[inherit_doc rbSrc_runRules]
-theorem rbSrc_cmdStep_run (R : RulesetName) : CmdStep rbSrc (.run R) rbSrc :=
-  ⟨RunRules R rbSrc, rfl, by rw [rbSrc_runRules]; exact .refl⟩
-
 /-- A ruleset name for the round below; the program registers no rule under it, or any other. -/
 def rbRuleset : RulesetName := "r"
 
@@ -5007,26 +5003,6 @@ set_option maxRecDepth 100000 in
 theorem rbState2_rowEntries :
     ∀ r ∈ rbState2.rows, Term.app r.fn (r.args ++ r.out) ∈ rbState2.terms := by decide
 
-/-- **A live row reads back as an entry, at the witness state.** -/
-theorem rbState2_viewRepr_of_rowRepr {t r : Term} (h : RowRepr rbState2 t r) :
-    ViewRepr rbState2.toDatabase t r :=
-  ViewRepr.of_rowRepr_of_rowTerms rbState2_rowColumns rbState2_rowEntries h
-
-set_option maxRecDepth 100000 in
-/-- **And every one of them carries a `:merge` or has no output column**, at the witness state.
-Decided against the seven rows `rbState2` really holds: `@WView` and `@AView` take the first
-arm, with the `:merge` `encodePrelude` declared and the two output columns `[e, pf]` a view row
-has, and the other five — the two `@fTerm` rows, the two constructor rows and `@Fiat`'s — take
-the second. -/
-theorem rbState2_rowMerges :
-    ∀ r ∈ rbState2.rows, (rbState2.sig.mergeOf r.fn).isSome = true ∨ r.out = [] := by decide
-
-/-- **A live view row's name carries a `:merge`, at the witness state.** -/
-theorem rbState2_mergeOf_of_row {f : FnName} {es : List Term} {e pf : Term}
-    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ rbState2.rows) :
-    (rbState2.sig.mergeOf (viewName f)).isSome = true :=
-  mergeOf_of_row_of_outNonempty rbState2_rowMerges hrow
-
 set_option maxRecDepth 100000 in
 theorem rbState2_row_aview :
     (⟨viewName "A", [], [Term.app "A" [], Term.app fiatName []]⟩ : Row) ∈ rbState2.rows := by
@@ -5036,20 +5012,6 @@ set_option maxRecDepth 100000 in
 theorem rbState2_row_wview :
     (⟨viewName "W", [Term.app "A" []],
       [Term.app "W" [Term.app "A" []], Term.app fiatName []]⟩ : Row) ∈ rbState2.rows := by decide
-
-/-- **Every source term has a row reading at the witness state**, which is the clause
-`unionsJoined_fire`'s tuple choice adds — non-vacuous at both of `rbSrc`'s terms, and at
-positive arity in the second. -/
-theorem rbState2_exists_rowRepr : ∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r := by
-  intro t ht
-  rw [rbSrc_terms] at ht
-  have ht' : t = Term.app "A" [] ∨ t = Term.app "W" [Term.app "A" []] := by
-    rcases ht with h | h
-    · exact Or.inl (by simpa using h)
-    · simpa [or_comm] using h
-  rcases ht' with rfl | rfl
-  · exact ⟨_, .app .nil rbState2_row_aview⟩
-  · exact ⟨_, .app (.cons (.app .nil rbState2_row_aview) .nil) rbState2_row_wview⟩
 
 /-- Whether `t` is *not* an application of `@UF`. Decidable, and the whole of what the
 `FDatabase.RowJoined.edge` clause costs at a witness state whose program has no `union`. -/
@@ -5072,19 +5034,6 @@ set_option maxRecDepth 100000 in
 /-- **One row per key at the witness state**, which is what makes the reading a function. -/
 theorem rbState2_rowsUnique : ∀ r₁ ∈ rbState2.rows, ∀ r₂ ∈ rbState2.rows,
     r₁.fn = r₂.fn → r₁.args = r₂.args → r₁.out = r₂.out := by decide
-
-/-- **The derived clause `unionsJoined_fire` reads its premise through**, at the witness state.
-
-`fn` has content — `rbState2` holds two view rows and the reading really is pinned by them —
-while `edge` is vacuous here for the reason `joinedAt` is: `rbProgram` asserts nothing, so
-there is no `@UF` entry to follow. `ncTgt_rowJoined_edge` is that clause where it does work,
-at the two ends of a real edge. -/
-theorem rbState2_rowJoined : rbState2.RowJoined where
-  fn := fun _ _ _ h₁ h₂ =>
-    rowRepr_unique (fun _ _ _ _ _ _ hr₁ hr₂ => by
-      have h := rbState2_rowsUnique _ hr₁ _ hr₂ rfl rfl
-      exact (by simpa using h : _ ∧ _).1) h₁ h₂
-  edge := fun x y pf _ _ _ _ hout _ _ _ _ => absurd hout (rbState2_no_out_uf x y pf)
 
 /-- The signature the witness state carries is the one the prelude installed. -/
 theorem rbState2_sig : rbState2.sig = rbSig := rfl
@@ -5117,12 +5066,6 @@ theorem rbState2_sig_mono : ∀ f, rbSrc.sig.IsCtor f → rbState2.sig.IsCtor f 
 theorem rbState2_isCtor_fiatName : rbState2.sig.IsCtor fiatName := by
   rw [rbState2_sig]; decide
 
-set_option maxRecDepth 100000 in
-/-- **Every column the witness state's rows record is a value the enumerator assigns.** -/
-theorem rbState2_rowColumnsValued : rbState2.RowColumnsValued := by
-  change ∀ r ∈ rbState2.rows, ∀ t ∈ r.args ++ r.out, t ∈ rbState2.valueTerms
-  decide
-
 /-- **And its environment binds no generated variable** — non-vacuously: the environment is
 the one the top-level `let` left, and `x` is not `@`-prefixed. -/
 theorem rbState2_noAtEnv : rbState2.NoAtEnv := by
@@ -5146,104 +5089,15 @@ theorem rbSrc_globalsInline : rbSrc.GlobalsInline [("x", Expr.app "A" [])] := by
     · rw [if_neg h] at hv; exact absurd hv (by simp [Expr.lookupG])
   exact ⟨rfl, by simp [Expr.ctors, Expr.ctorsList, Prim.ofName], Term.app "A" [], rfl, rfl⟩
 
-/-- The source holds no rule, so the encodability clause is vacuous here;
-`ncRule_queriesEncodable` is it at a query with content. -/
-theorem rbSrc_queriesEncodable : ∀ r ∈ rbSrc.rules,
-    ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
-    ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none :=
-  fun r hr => absurd hr (by simp [rbSrc, rbSrcBase, Database.empty])
+/-! #### And the witness the hypotheses hold at, together
 
-/-- And so are the two clauses about a rule's **head**, for the same reason;
-`ncRule_headScoped` is the first at a head with content and `ncRule_builds` the second. -/
-theorem rbSrc_headsScoped : ∀ r ∈ rbSrc.rules,
-    Actions.Scoped r.actions (Query.bind r.query (Env.dom rbSrc.env)) :=
-  fun r hr => absurd hr (by simp [rbSrc, rbSrcBase, Database.empty])
-
-@[inherit_doc rbSrc_headsScoped]
-theorem rbSrc_headsBuild : ∀ r ∈ rbSrc.rules, Actions.Builds r.actions rbState2.sig :=
-  fun r hr => absurd hr (by simp [rbSrc, rbSrcBase, Database.empty])
-
-/-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
-vacuous — `ENCODING.md`'s failure, twice.
-
-Nineteen conjuncts: the eighteen `UnionsFire` takes, in the order it takes them, and
-`rbSrc_globalsInline` beside them.
-
-Satisfiable degenerately in the *round*, and deliberately so: the source holds no rule, so the
-round adds nothing, the encoded round writes nothing either, and the four clauses about
-**rules** — `hrules` with its `@Rule_i` conjunct, the source rules' encodability, and the two
-about a rule's *head* — are vacuous; `ncRule_queriesEncodable` is the second of those at a
-rule with a real query, `ncRule_head_clauses` is the pair of head clauses at a
-head with content — `ncRule` builds `(F x)` over its query's own variable, so its scope is
-that variable and its evaluability is the target skolem `encodePrelude` declared for `F`
-(`ncTgt_isCtor_F`) — and `ncTgt_encRule_fires` is a real firing. Three of the rest are
-`rbState2_unionsInv`'s own `td`-side clauses.
-
-The clause about the **globals** is not degenerate either, and it is carried twice for that
-reason: the `hrules` conjunct it rides in is vacuous here, so `rbSrc_globalsInline` states it
-separately at the substitution `rbProgram`'s own top-level `let` freezes — `x` bound to `(A)`,
-at the closed definition `(A)`. `unionsFire_false_globals` is the residue without it.
-
-The clauses about **names and rows** are not degenerate. `rbState2_sig_mono` carries both of
-`rbSrc`'s constructors, `A` and the *unary* `W`, onto the skolems `encodePrelude` declared —
-which is exactly the clause `cxfTgt` withdraws — and `rbState2_isCtor_fiatName` is the head's
-own proof. `rbState2_rowColumnsValued` is decided against the two view rows the state really
-holds, and `rbState2_noAtEnv` against the environment a top-level `let` really left: `x`, not
-the empty list.
-
-The three row clauses are not degenerate either — `rbState2_rowMerges` is decided against the
-seven rows the state really holds, and the two `@fView` rows among them take its **first** arm:
-they carry the prelude's `:merge` and the two output columns a view row has, one of them at
-positive arity, so `rbState2_mergeOf_of_row` is the `:merge` carry with content and not the
-empty-output escape. `rbState2_exists_rowRepr` reads both of
-`rbSrc`'s terms through live rows, the
-second at positive arity over the first's, `rbState2_rowJoined`'s `fn` is pinned by the two view
-rows the state really holds, and `rbState2_viewRepr_of_rowRepr` is the way back at every row the
-state holds. `rbState2_rowJoined`'s `edge` is vacuous here for the same reason `joinedAt` is —
-no `union`, so no `@UF` entry — and `ncTgt_rowJoined_edge` is that clause at an instance with
-content. The case with content is a round that fires a head `union` — or, for
-the `reads` half of the conclusion, one that fires a head **build** — and that is where it is
-open. `difftest correspond`'s **LOST** column — `Cong src a b` without
-`SameClass tgt a b`, swept with the diagonal included over the 87 in-domain cases, rules and runs
-among them — is 0 on all but the `glob-*` family, which is the `reads` clause measured: every
-source term has *some* id in the target, except where a rule the encoding could not fire never
-put one there (`unionsJoined_fire`'s `hglob` paragraph). Asking for that id to be the term
-itself is the stronger claim the counterexample refutes (`Database.ReadsSelf`,
-`ncTgt_not_readsSelf`), and this clause does not ask it. -/
-theorem unionsJoined_fire_satisfiable :
-    CmdStep rbSrc (.run rbRuleset) rbSrc ∧
-      rbState2.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbState2 ∧
-      rbState2.env = rbSrc.env ∧ rbSrc.CtorState ∧
-      (∀ f, rbSrc.sig.IsCtor f → rbState2.sig.IsCtor f) ∧
-      rbState2.sig.IsCtor fiatName ∧
-      (∀ r ∈ rbSrc.rules,
-        ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbState2.rules ∧
-          rbState2.sig.IsCtor (ruleName i) ∧ rbSrc.GlobalsInline G) ∧
-      (∀ r ∈ rbSrc.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
-        ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) ∧
-      rbState2.RowColumnsValued ∧ rbState2.NoAtEnv ∧
-      (∀ t ∈ rbSrc.terms, ∃ e, ViewRepr rbState2.toDatabase t e) ∧
-      rbState2.toDatabase.UnionsJoined rbSrc ∧
-      (∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r) ∧ rbState2.RowJoined ∧
-      (∀ (f : FnName) (es : List Term) (e pf : Term),
-        (⟨viewName f, es, [e, pf]⟩ : Row) ∈ rbState2.rows →
-          (rbState2.sig.mergeOf (viewName f)).isSome = true) ∧
-      (∀ r ∈ rbSrc.rules,
-        Actions.Scoped r.actions (Query.bind r.query (Env.dom rbSrc.env))) ∧
-      (∀ r ∈ rbSrc.rules, Actions.Builds r.actions rbState2.sig) ∧
-      (∀ t r : Term, RowRepr rbState2 t r → ViewRepr rbState2.toDatabase t r) ∧
-      rbSrc.GlobalsInline [("x", Expr.app "A" [])] :=
-  ⟨rbSrc_cmdStep_run rbRuleset, rbState2_execProgramM_run, rbState2_unionsInv.env,
-    rbState2_unionsInv.state, rbState2_sig_mono, rbState2_isCtor_fiatName,
-    (fun r hr => by
-      obtain ⟨G, i, n, hm, hct, hgi, -⟩ := rbState2_unionsInv.rules r hr
-      exact ⟨G, i, n, hm, hct, hgi⟩),
-    rbSrc_queriesEncodable,
-    rbState2_rowColumnsValued, rbState2_noAtEnv, rbState2_unionsInv.readsAt,
-    rbState2_unionsInv.joinedAt, rbState2_exists_rowRepr, rbState2_rowJoined,
-    (fun _ _ _ _ hrow => rbState2_mergeOf_of_row hrow),
-    rbSrc_headsScoped, rbSrc_headsBuild,
-    fun _ _ h => rbState2_viewRepr_of_rowRepr h, rbSrc_globalsInline⟩
+`unionsJoined_fire_satisfiable` is in `Encoding/Complete.lean`, next to the residue it guards
+and after the two lemmas its round spends — `mem_matchQuery_of_rows` and
+`mem_addRow_rows_self`. It is stated at `rbSrcR`/`rbTgtR`: `rbSrc` and `rbState2` with a rule
+registered on each side, so that the four clauses `Egglog.UnionsFire` quantifies over
+`sd.rules` have content rather than an empty list under them, and at a round that really
+fires on both sides. `rbSrc_runRules` and `rbState2_execProgramM_run` above are the ruleless
+round and the ruleless block, kept because `rbState2_roundClosed` reads the second. -/
 
 /-! #### The rebuild fixpoint, and the row it does not reach
 
@@ -5305,10 +5159,11 @@ shape (`encodeCmd`). -/
 theorem encodeCmd_run_tail (G : List (Var × Expr)) (R : RulesetName) (n i : Nat) :
     (encodeCmd G (.run R) n i).1 = [Cmd.run R] ++ [Cmd.saturate rebuildRuleset] := rfl
 
-/-- **The fixpoint at a state a program reaches.** Degenerately, as
-`unionsJoined_fire_satisfiable` is: `rbState2` holds no rule, so the round it is a fixpoint of
-fires nothing. The non-degenerate reading is measured rather than compiled — every one of
-`difftest correspond`'s 87 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
+/-- **The fixpoint at a state a program reaches.** Degenerately here: `rbState2` holds no rule,
+so the round it is a fixpoint of fires nothing. `rbTgtR_run` is the same block at the same
+state with a rule registered, where the round does fire, and the non-degenerate reading of the
+fixpoint itself is measured rather than compiled — every one of `difftest correspond`'s 87
+in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
 theorem rbState2_roundClosed : rbState2.RoundClosed rebuildRuleset :=
   roundClosed_of_execProgramM (p := [Cmd.run rbRuleset]) rbState2_execProgramM_run
 
@@ -5855,11 +5710,11 @@ theorem ncProgram_encodeDomain : ncProgram.EncodeDomain where
   aritiesAgree := by decide
   headsScoped := by decide
 
-/-- **The source-rules clause of `Egglog.UnionsFire`, with content.** It is vacuous at
-`unionsJoined_fire_satisfiable`'s witness state for the reason the `hrules` clause beside it
-already was — `rbSrc` holds no rule — and here it is at a rule with a real query: one pattern,
-one atom, `("F", 1)` in its census and no primitive among its names. Read off
-`ncProgram_encodeDomain`, which is where a program pays for it. -/
+/-- **The source-rules clause of `Egglog.UnionsFire`, at a second rule.**
+`rbSrcR_queriesEncodable` is it at the rule `unionsJoined_fire_satisfiable`'s witness registers;
+here it is at `ncRule`, whose query the source's own round really fires: one pattern, one atom,
+`("F", 1)` in its census and no primitive among its names. Read off `ncProgram_encodeDomain`,
+which is where a program pays for it. -/
 theorem ncRule_queriesEncodable :
     ((Cmd.rule ncRule).QueryEncodable ∧
       ∀ p ∈ ncRule.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) ∧

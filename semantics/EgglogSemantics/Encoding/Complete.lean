@@ -8481,8 +8481,8 @@ the equality an emitted `.eq` atom compares, and it is what `Database.ViewLeader
 given had it been true. It is not: `(B)` reads to `(B)` and to `(A)` through entries
 (`ncTgt_ids_B`), so the entry reading has no representative here, while through live **rows**
 both `(A)` and `(B)` read to `(A)` alone — the row a merge displaced is gone where its entry
-term stays. `rbState2_rowJoined` is the same clause at the witness state, where `fn` carries
-the content and this one is vacuous. -/
+term stays. `rbTgtR_rowJoined` is the same clause at the satisfiability witness's state, where
+`fn` carries the content and this one is vacuous. -/
 theorem ncTgt_rowJoined_edge :
     ncTgt.toDatabase.Out ufName [ncB] [ncA, ncFiat] ∧
       ViewRepr ncTgt.toDatabase ncB ncB ∧ ViewRepr ncTgt.toDatabase ncA ncA ∧ ncB ≠ ncA ∧
@@ -8498,10 +8498,10 @@ theorem ncTgt_rowRepr_FB : RowRepr ncTgt ncFB ncFA :=
 
 theorem ncTgt_isCtor_F : ncTgt.sig.IsCtor "F" := by decide
 
-/-- **`Egglog.UnionsFire`'s head-builds clause, with content.** It is vacuous at
-`unionsJoined_fire_satisfiable`'s witness state for the reason the two clauses about rules
-beside it are — `rbSrc` holds no rule — and `ncRule` is a rule whose head builds `(F x)` over
-its query's own variable. Read at the **target's** signature, which is where the clause reads
+/-- **`Egglog.UnionsFire`'s head-builds clause, at a rule the *source's* round fires.**
+`rbRule_builds` is it at the rule `unionsJoined_fire_satisfiable`'s witness registers, whose
+head the encoded round runs; `ncRule` is the one whose source firing the encoded rule cannot
+perform, and its head builds `(F x)` over its query's own variable. Read at the **target's** signature, which is where the clause reads
 it: the name the head applies is the skolem `encodePrelude` declared, not the source's own
 declaration. `ncRule_headScoped` is its companion, the same head's scope. -/
 theorem ncRule_builds : Actions.Builds ncRule.actions ncTgt.sig := by
@@ -8511,8 +8511,8 @@ theorem ncRule_builds : Actions.Builds ncRule.actions ncTgt.sig := by
   exact ⟨rfl, ncTgt_isCtor_F⟩
 
 /-- **The two head clauses together, at a rule that really fires.** `ncRule_queriesEncodable`'s
-counterpart: the pair `unionsJoined_fire_satisfiable` carries vacuously — `rbSrc` holds no rule
-— stated at the source/target pair `ncTgt_encRule_fired` runs the encoded rule at. -/
+counterpart: the pair `unionsJoined_fire_satisfiable` carries at `rbRule`, stated here at the
+source/target pair `ncTgt_encRule_fired` runs the encoded rule at. -/
 theorem ncRule_head_clauses :
     Actions.Scoped ncRule.actions (Query.bind ncRule.query (Env.dom ncPre.toDatabase.env)) ∧
       Actions.Builds ncRule.actions ncTgt.sig :=
@@ -8553,6 +8553,420 @@ theorem ncTgt_encRule_fires :
     (⟨viewName "F", [ncA], [ncFA, ncFiat]⟩ : Row) ∈ (execRunRules "r" ncTgt).rows :=
   mem_rows_execRunRules.mpr (Or.inr ⟨ncEncRule, ncEncRule_mem, rfl, ncIdSubst,
     ncTgt_mem_matchQuery, ncFired, ncTgt_encRule_fired, ncFired_row⟩)
+
+/-! ### `unionsJoined_fire`'s hypotheses, satisfied together
+
+`ENCODING.md`'s discipline at the *witness* as much as at the lemma. Four of
+`Egglog.UnionsFire`'s eighteen clauses quantify over `sd.rules`, so a witness whose source
+holds no rule satisfies them by holding nothing, which shows nothing about their
+satisfiability together with the rest — and the same witness's round then fires nothing on
+either side. `rbSrcR`/`rbTgtR` fix both: `rbSrc` and `rbState2`, the states `rbProgram` and
+its encoding leave, with a rule registered on each side.
+
+`rbRule` is chosen so that the round *fires*. Its query reads the view row `rbProgram`'s own
+build wrote — `@WView((A)) ↦ ((W (A)), @Fiat)` — and its head builds the same application, so
+each side writes a row it already holds and `FDatabase.sameData` is reached in one round. That
+is what makes the whole block, rebuild included, reduce in the kernel: `rbState2` puts three
+terms in `FDatabase.valueTerms`, so the encoded query's three variables enumerate 27
+candidates. -/
+
+/-- **A rule whose encoding fires at the witness state.** Its head is its premise, so a round
+adds nothing to either side; `?y` sits at `W`'s key column, which is what makes the encoded
+query read it. -/
+def rbRule : Rule where
+  query := [.expr (.app "W" [.var "y"])]
+  actions := [.expr (.app "W" [.var "y"])]
+  ruleset := rbRuleset
+
+/-- Its encoding, at the index and the fresh-variable counter the encoder's own numbering
+gives a program's first rule. -/
+def rbEncRule : Rule := (encodeRule 0 rbRule 0).1
+
+/-- Its query: one view read, with the source variable in the key column and the read's two
+generated columns. -/
+theorem rbEncRule_query :
+    rbEncRule.query = [Pattern.values [.var "@v0", .var "@v1"] (viewName "W") [.var "y"]] := rfl
+
+/-- Its head: `encodeBuild`'s two `set`s for `(W y)`, the view entry under `@Fiat`. -/
+theorem rbEncRule_actions :
+    rbEncRule.actions
+      = [Action.set (termName "W") [.var "y", .app "W" [.var "y"]] [],
+         Action.set (viewName "W") [.var "y"] [.app "W" [.var "y"], fiatE]] := rfl
+
+/-- `rbSig` with the rule's own proof head, which is what `ruleProofDecls` emits for a source
+rule: `(constructor @Rule_0 (@Proof) @Proof)`, at the one proof column its encoded query
+reads. -/
+def rbSigR : Signature := Function.update rbSig (ruleName 0) (some (proofDecl 1))
+
+/-- **The source**: `rbSrc` with `rbRule` registered. -/
+def rbSrcR : Database := { rbSrc with env := rbEnv, rules := {rbRule} }
+
+/-- **The target**: `rbState2` with the rule's proof head declared and the rule's encoding
+registered. -/
+def rbTgtR : FDatabase := { rbState2 with sig := rbSigR, rules := [rbEncRule] }
+
+theorem rbSrcR_terms : rbSrcR.terms = rbSrc.terms := Database.terms_setEnvRules
+
+theorem rbTgtR_sig : rbTgtR.sig = rbSigR := rfl
+
+theorem rbSrcR_rules_mem {r : Rule} (hr : r ∈ rbSrcR.rules) : r = rbRule := hr
+
+/-- **The source round**, as a relation: `CmdStep` needs no computation, and the merge phase
+is neutral on a constructor signature. -/
+theorem rbSrcR_cmdStep_run :
+    CmdStep rbSrcR (.run rbRuleset) (RunRules rbRuleset rbSrcR) := ⟨_, rfl, .refl⟩
+
+/-- The two ends of the environment clause: the target's is the one a top-level `let` left. -/
+theorem rbTgtR_env : rbTgtR.env = rbSrcR.env := rfl
+
+/-- `Database.WF` and `Signature.AllConstructors` are blind to the rules
+(`Database.WF.setEnvRules`). -/
+theorem rbSrcR_ctorState : rbSrcR.CtorState where
+  wf := rbSrc_wf.setEnvRules (fun b hb => rbSrc_wf.envInTerms b hb)
+  sig := rbSrc_ctorState.sig
+
+/-- **The rule's proof head is the only difference between the two signatures**, and
+`proofDecl` has no `:merge`, so every constructor `rbSig` declares `rbSigR` declares too. -/
+theorem rbSigR_isCtor_of_rbSig {f : FnName} (h : rbSig.IsCtor f) : rbSigR.IsCtor f := by
+  by_cases hf : f = ruleName 0
+  · rw [hf]; decide
+  · obtain ⟨d, hd, hm⟩ := h
+    refine ⟨d, ?_, hm⟩
+    rw [rbSigR, Function.update_of_ne hf]
+    exact hd
+
+/-- **Every source constructor is one the target's signature declares too**, which is the
+clause `unionsFire_false` withdraws: `rbSrcSig` declares `A` and the *unary* `W`, and the
+encoded signature makes both skolem constructors (`rbState2_sig_mono`). -/
+theorem rbTgtR_sig_mono : ∀ f, rbSrcR.sig.IsCtor f → rbTgtR.sig.IsCtor f := by
+  intro f hf
+  rw [rbTgtR_sig]
+  exact rbSigR_isCtor_of_rbSig (by rw [← rbState2_sig]; exact rbState2_sig_mono f hf)
+
+/-- **And `@Fiat` is one**, which is what a build's view entry names as its proof. -/
+theorem rbTgtR_isCtor_fiatName : rbTgtR.sig.IsCtor fiatName := by
+  rw [rbTgtR_sig]
+  exact rbSigR_isCtor_of_rbSig (by rw [← rbState2_sig]; exact rbState2_isCtor_fiatName)
+
+/-- **The substitution the encoder flattens the rule through leaves it alone**: `rbRule`'s
+query names `?y`, not the global `x`, so the rule the target holds is the encoding of the
+rule the source holds. -/
+theorem rbEncRule_eq_substGlobals :
+    (encodeRule 0 (rbRule.substGlobals [("x", Expr.app "A" [])]) 0).1 = rbEncRule := rfl
+
+@[inherit_doc rbSrc_globalsInline]
+theorem rbSrcR_globalsInline : rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
+  rbSrc_globalsInline
+
+/-- **The rules clause, with content**: the target holds `rbRule`'s encoding, its signature
+declares the proof head `ruleProofDecls` emitted for it, and the substitution it was encoded
+through is the one `rbProgram`'s own top-level `let` freezes — `x` bound to the closed
+definition `(A)`, so the `Database.GlobalsInline` conjunct riding in this clause is not the
+empty one either. -/
+theorem rbSrcR_hrules : ∀ r ∈ rbSrcR.rules,
+    ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbTgtR.rules ∧
+      rbTgtR.sig.IsCtor (ruleName i) ∧ rbSrcR.GlobalsInline G := by
+  intro r hr
+  obtain rfl := rbSrcR_rules_mem hr
+  refine ⟨[("x", Expr.app "A" [])], 0, 0, ?_, ?_, rbSrcR_globalsInline⟩
+  · rw [rbEncRule_eq_substGlobals]; exact List.mem_cons_self
+  · rw [rbTgtR_sig]; decide
+
+/-- **The source rules' encodability, with content**: one pattern, one atom, `?y` at `W`'s
+key column and no primitive among the names. `ncRule_queriesEncodable` is the same clause at
+`ncRule`. -/
+theorem rbSrcR_queriesEncodable : ∀ r ∈ rbSrcR.rules,
+    ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+    ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none := by
+  intro r hr
+  obtain rfl := rbSrcR_rules_mem hr
+  refine ⟨⟨?_, ?_⟩, by decide⟩
+  · intro p hp
+    obtain rfl : p = Pattern.expr (.app "W" [.var "y"]) := by simpa [rbRule] using hp
+    trivial
+  · intro v hv
+    obtain rfl : v = "y" := by
+      simpa [rbRule, Query.vars, Pattern.vars, Expr.vars, Expr.varsList] using hv
+    refine ⟨Pattern.expr (.app "W" [.var "y"]), by simp [rbRule], ?_⟩
+    simp [Pattern.ArgVar, Expr.ArgVar]
+
+set_option maxRecDepth 100000 in
+/-- **Every column the witness state's rows record is a value the enumerator assigns.** -/
+theorem rbTgtR_rowColumnsValued : rbTgtR.RowColumnsValued := by
+  change ∀ r ∈ rbTgtR.rows, ∀ t ∈ r.args ++ r.out, t ∈ rbTgtR.valueTerms
+  decide
+
+@[inherit_doc rbState2_noAtEnv]
+theorem rbTgtR_noAtEnv : rbTgtR.NoAtEnv := rbState2_noAtEnv
+
+/-- The extra declaration and the extra rule move no equation, so the two denotations contain
+each other and every reading transports. -/
+theorem rbTgtR_contains : rbState2.toDatabase.Contained rbTgtR.toDatabase := ⟨fun _ hp => hp⟩
+
+@[inherit_doc rbTgtR_contains]
+theorem rbTgtR_contained : rbTgtR.toDatabase.Contained rbState2.toDatabase := ⟨fun _ hp => hp⟩
+
+/-- **Every source term has an entry reading**, at both of `rbSrcR`'s terms and at positive
+arity in the second. -/
+theorem rbTgtR_readsAt : ∀ t ∈ rbSrcR.terms, ∃ e, ViewRepr rbTgtR.toDatabase t e := by
+  intro t ht
+  rw [rbSrcR_terms] at ht
+  obtain ⟨e, he⟩ := rbState2_unionsInv.readsAt t ht
+  exact ⟨e, ViewRepr.mono rbTgtR_contains he⟩
+
+/-- `rbProgram` asserts nothing but reflexive equations, so this clause is vacuous here;
+`ncTgt_unionsJoined` is it at a source with a real equation. -/
+theorem rbTgtR_joinedAt : rbTgtR.toDatabase.UnionsJoined rbSrcR :=
+  fun a b hab hne => absurd (rbSrc_diag (a, b) hab) hne
+
+/-- **Every source term has a row reading**, at both of `rbSrcR`'s terms and at positive arity
+in the second. -/
+theorem rbTgtR_exists_rowRepr : ∀ t ∈ rbSrcR.terms, ∃ r, RowRepr rbTgtR t r := by
+  intro t ht
+  rw [rbSrcR_terms, rbSrc_terms] at ht
+  have ht' : t = Term.app "A" [] ∨ t = Term.app "W" [Term.app "A" []] := by
+    rcases ht with h | h
+    · exact Or.inl (by simpa using h)
+    · simpa [or_comm] using h
+  rcases ht' with rfl | rfl
+  · exact ⟨_, .app .nil rbState2_row_aview⟩
+  · exact ⟨_, .app (.cons (.app .nil rbState2_row_aview) .nil) rbState2_row_wview⟩
+
+/-- **The derived clause `unionsJoined_fire` reads its premise through.**
+
+`fn` has content — the state holds two view rows and the reading really is pinned by them —
+while `edge` is vacuous here for the reason `joinedAt` is: `rbProgram` asserts nothing, so
+there is no `@UF` entry to follow. `ncTgt_rowJoined_edge` is that clause where it does work,
+at the two ends of a real edge. -/
+theorem rbTgtR_rowJoined : rbTgtR.RowJoined where
+  fn := fun _ _ _ h₁ h₂ =>
+    rowRepr_unique (fun _ _ _ _ _ _ hr₁ hr₂ => by
+      have h := rbState2_rowsUnique _ hr₁ _ hr₂ rfl rfl
+      exact (by simpa using h : _ ∧ _).1) h₁ h₂
+  edge := fun x y pf _ _ _ _ hout _ _ _ _ =>
+    absurd (Database.Out.mono rbTgtR_contained hout) (rbState2_no_out_uf x y pf)
+
+set_option maxRecDepth 100000 in
+/-- **Every row carries a `:merge` or has no output column.** The two `@fView` rows take the
+first arm, with the `:merge` `encodePrelude` declared and the two output columns a view row
+has, one of them at positive arity. -/
+theorem rbTgtR_rowMerges :
+    ∀ r ∈ rbTgtR.rows, (rbTgtR.sig.mergeOf r.fn).isSome = true ∨ r.out = [] := by decide
+
+/-- **A live view row's name carries a `:merge`, at the witness state.** -/
+theorem rbTgtR_mergeOf_of_row {f : FnName} {es : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ rbTgtR.rows) :
+    (rbTgtR.sig.mergeOf (viewName f)).isSome = true :=
+  mergeOf_of_row_of_outNonempty rbTgtR_rowMerges hrow
+
+/-- **The source head is scoped where it runs**: `?y` is the query's own variable, and the
+scope it is read against is the one the top-level `let` left. -/
+theorem rbRule_headScoped :
+    Actions.Scoped rbRule.actions (Query.bind rbRule.query (Env.dom rbSrcR.env)) := by
+  simp [rbRule, Env.dom, Action.Scoped, Expr.IsApp, Expr.Scoped, Expr.vars,
+    Expr.varsList, Query.bind, Query.vars, Pattern.vars]
+
+@[inherit_doc rbRule_headScoped]
+theorem rbSrcR_headsScoped : ∀ r ∈ rbSrcR.rules,
+    Actions.Scoped r.actions (Query.bind r.query (Env.dom rbSrcR.env)) := by
+  intro r hr
+  obtain rfl := rbSrcR_rules_mem hr
+  exact rbRule_headScoped
+
+/-- **And it builds**, read at the *target's* signature, which is where the clause reads it:
+the name the head applies is the skolem `encodePrelude` declared. -/
+theorem rbRule_builds : Actions.Builds rbRule.actions rbTgtR.sig := by
+  refine ⟨fun f hf => ?_, trivial⟩
+  obtain rfl : f = "W" := by simpa [rbRule, Expr.fns, Expr.fnsList] using hf
+  exact ⟨rfl, (by decide : rbSigR.IsCtor "W")⟩
+
+@[inherit_doc rbRule_builds]
+theorem rbSrcR_headsBuild : ∀ r ∈ rbSrcR.rules, Actions.Builds r.actions rbTgtR.sig := by
+  intro r hr
+  obtain rfl := rbSrcR_rules_mem hr
+  exact rbRule_builds
+
+/-- **A live row reads back as an entry**, at every row the witness state holds. -/
+theorem rbTgtR_viewRepr_of_rowRepr {t r : Term} (h : RowRepr rbTgtR t r) :
+    ViewRepr rbTgtR.toDatabase t r :=
+  ViewRepr.of_rowRepr_of_rowTerms (d := rbTgtR) rbState2_rowColumns rbState2_rowEntries h
+
+/-! #### And the round is not degenerate
+
+The encoded rule matches, its head evaluates at the match, and the row it writes is one the
+round's post-state records — the same three steps `ncTgt_encRule_fires` runs, at the state
+whose whole block also reduces. -/
+
+/-- `(A)`, the key `rbProgram`'s own build left the view row at. -/
+def rbA : Term := .app "A" []
+
+/-- `(W (A))`, the e-class column of that row and the term the rule's head rebuilds. -/
+def rbWA : Term := .app "W" [rbA]
+
+/-- **The id substitution.** The source rule fires at `?y := (A)`; the encoded one fires at
+the same key, and at the row's own two output columns. -/
+def rbIdSubst : Env := [("@v0", rbWA), ("@v1", .app fiatName []), ("y", rbA)]
+
+theorem rbTgtR_freeVars : Query.freeVars rbEncRule.query [] = ["@v0", "@v1", "y"] := rfl
+
+theorem rbTgtR_canon :
+    Env.canon (Query.freeVars rbEncRule.query []) rbIdSubst = rbIdSubst := rfl
+
+set_option maxRecDepth 100000 in
+/-- **The encoded query matches at the id substitution.** -/
+theorem rbTgtR_mem_matchQuery : rbIdSubst ∈ matchQuery rbTgtR rbEncRule.query := by
+  rw [← rbTgtR_canon]
+  refine mem_matchQuery_of_rows rbTgtR_rowColumnsValued (fun v hv => ?_) (fun v hv t ht => ?_)
+    (fun p hp => ?_)
+  · rw [rbTgtR_freeVars] at hv
+    rcases (by simpa using hv : v = "@v0" ∨ v = "@v1" ∨ v = "y") with rfl | rfl | rfl <;> rfl
+  · rw [rbTgtR_freeVars] at hv
+    rcases (by simpa using hv : v = "@v0" ∨ v = "@v1" ∨ v = "y") with rfl | rfl | rfl <;>
+      · obtain rfl : t = _ := Option.some.inj ht.symm
+        decide
+  · obtain rfl : p = Pattern.values [.var "@v0", .var "@v1"] (viewName "W") [.var "y"] := by
+      simpa [rbEncRule_query] using hp
+    exact ⟨_, _, _, [rbA], [rbWA, .app fiatName []], rfl, by decide, rfl, rfl,
+      rbState2_row_wview⟩
+
+/-- The head's key and skolem, evaluated at the id substitution. -/
+theorem rbTgtR_evalList_head :
+    Expr.evalList rbTgtR.sig [Expr.var "y", .app "W" [.var "y"]] (rbIdSubst ++ rbTgtR.env)
+      = some [rbA, rbWA] := by
+  have hy : Expr.eval rbTgtR.sig (.var "y") (rbIdSubst ++ rbTgtR.env) = some rbA := rfl
+  simp only [Expr.evalList, hy, Option.bind_some, Option.map_some,
+    Expr.eval_app_ctor (show Prim.ofName "W" = none from rfl)
+      (show rbTgtR.sig.IsCtor "W" from (by decide : rbSigR.IsCtor "W"))]
+  rfl
+
+/-- The state the encoded rule's own firing returns: the two `set`s its head emitted, at the
+ids the match bound — both of them rows the state already holds. -/
+def rbFired : FDatabase :=
+  { ((({ rbTgtR with env := rbIdSubst ++ rbTgtR.env } : FDatabase).addRow
+        (termName "W") [rbA, rbWA] []).addRow
+          (viewName "W") [rbA] [rbWA, .app fiatName []]) with
+      env := rbTgtR.env, rules := rbTgtR.rules }
+
+theorem rbFired_row :
+    (⟨viewName "W", [rbA], [rbWA, .app fiatName []]⟩ : Row) ∈ rbFired.rows :=
+  @mem_addRow_rows_self
+    ((({ rbTgtR with env := rbIdSubst ++ rbTgtR.env } : FDatabase).addRow
+      (termName "W") [rbA, rbWA] [])) (viewName "W") [rbA] [rbWA, .app fiatName []]
+
+/-- **The block evaluates**, which is the half of a firing a valid substitution is not. -/
+theorem rbTgtR_encRule_fired : Fired rbTgtR rbEncRule rbIdSubst rbFired := by
+  change execLocalActions rbTgtR rbEncRule.actions rbIdSubst = some _
+  rw [execLocalActions, rbEncRule_actions]
+  simp only [execActions, Egglog.execAction, rbTgtR_evalList_head]
+  rfl
+
+/-- **The chain, end to end**: the row makes the encoded atom hold, the atom makes the
+enumerator offer the id substitution, the block evaluates, and the head's row is one the
+round's post-state records. -/
+theorem rbTgtR_encRule_fires :
+    (⟨viewName "W", [rbA], [rbWA, .app fiatName []]⟩ : Row)
+      ∈ (execRunRules rbRuleset rbTgtR).rows :=
+  mem_rows_execRunRules.mpr (Or.inr ⟨rbEncRule, List.mem_cons_self, rfl, rbIdSubst,
+    rbTgtR_mem_matchQuery, rbFired, rbTgtR_encRule_fired, rbFired_row⟩)
+
+set_option maxRecDepth 1000000 in
+set_option maxHeartbeats 1000000 in
+-- The kernel runs a round of rule firing here, and two merge phases after it; `unseal` is
+-- what lets `closureF`'s `Finset` operations reduce at all.
+unseal Egglog.closure in
+/-- **And the whole block reduces.** The round of `rbRuleset`, its merge phase, and the
+trailing `Cmd.saturate rebuildRuleset` — whose ruleset the state registers no rule under, so
+the fixpoint is reached at once. The head writes what the state holds, so the post-state's
+data is the pre-state's and `td'` is `td`. -/
+theorem rbTgtR_run :
+    rbTgtR.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbTgtR := rfl
+
+/-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
+vacuous — `ENCODING.md`'s failure, twice.
+
+Nineteen conjuncts: the eighteen `Egglog.UnionsFire` takes, in the order it takes them, and
+`rbSrcR_globalsInline` beside them.
+
+**The round has content.** The source holds `rbRule` and the target its encoding, and both
+fire: `rbTgtR_mem_matchQuery` is the substitution the emitted entry atom admits,
+`rbTgtR_encRule_fired` the head evaluating at it, `rbTgtR_encRule_fires` the row the round's
+post-state records, and `rbTgtR_run` the whole block — round, merge phase and trailing rebuild
+— reducing.
+
+**So the four clauses about rules have content**, which is what this witness is for.
+`rbSrcR_hrules` names the encoding the target really holds, at the index `ruleProofDecls`
+declares `@Rule_0` for, and at the substitution `rbProgram`'s own top-level `let` freezes, so
+the `Database.GlobalsInline` conjunct riding in it is not the empty substitution;
+`rbSrcR_queriesEncodable` is the source query's encodability at a query with one atom, one
+variable at `W`'s key column and no primitive among its names; `rbSrcR_headsScoped` and
+`rbSrcR_headsBuild` are the head's scope and its evaluability, the second read at the
+*target's* signature. The globals clause is still carried a second time
+(`rbSrcR_globalsInline`) rather than left to `hrules` alone; `unionsFire_false_globals` is the
+residue without it.
+
+**The clauses about names and rows are not degenerate.** `rbTgtR_sig_mono` carries both of
+`rbSrcR`'s constructors, `A` and the *unary* `W`, onto the skolems `encodePrelude` declared —
+which is exactly the clause `cxfTgt` withdraws — and `rbTgtR_isCtor_fiatName` is the head's own
+proof. `rbTgtR_rowColumnsValued` is decided against the seven rows the state really holds, and
+`rbTgtR_noAtEnv` against the environment a top-level `let` really left: `x`, not the empty
+list. `rbTgtR_rowMerges`' two `@fView` rows take its **first** arm — the prelude's `:merge` and
+the two output columns a view row has, one of them at positive arity — so
+`rbTgtR_mergeOf_of_row` is the `:merge` carry with content and not the empty-output escape.
+`rbTgtR_readsAt` and `rbTgtR_exists_rowRepr` read both of `rbSrcR`'s terms through entries and
+through live rows, the second at positive arity over the first's, `rbTgtR_rowJoined`'s `fn` is
+pinned by the two view rows the state really holds, and `rbTgtR_viewRepr_of_rowRepr` is the way
+back at every row it holds.
+
+**Two clauses stay vacuous, and the obstruction is arithmetic rather than logical.**
+`Database.UnionsJoined` and `FDatabase.RowJoined.edge` both need a source `union`, and
+`rbProgram` asserts nothing, so there is no `@UF` entry to follow (`rbSrc_diag`,
+`rbState2_no_out_uf`). Both hold with content at `ncTgt` — `ncTgt_unionsJoined`, and
+`ncTgt_rowJoined_edge`, where `(B)` reads to `(B)` and to `(A)` through entries while both read
+to `(A)` alone through live **rows** — and `ncRule`'s encoding fires there too
+(`ncTgt_encRule_fires`). What `ncTgt` cannot supply is *this* theorem's second conjunct.
+`edge` holds there only because the rebuild re-keyed the displaced view row onto the leader,
+and the proof terms that re-keying writes put **seven** terms in `FDatabase.valueTerms`, so the
+encoded query's three variables enumerate 7³ candidates with one congruence closure each:
+measured, the kernel passes 10 GB on that enumeration alone without finishing, against 3³ = 27
+here. So the two clauses are exhibited at a state whose *round* the kernel cannot reduce and
+the round is exhibited at a state with no `union`; neither clause is known to fail anywhere,
+and no clause is weakened to keep them.
+
+`difftest correspond`'s **LOST** column — `Cong src a b` without `SameClass tgt a b`, swept
+with the diagonal included over the 87 in-domain cases, rules and runs among them — is 0,
+which is the `reads` clause measured: every source term has *some* id in the target. Asking
+for that id to be the term itself is the stronger claim the counterexample refutes
+(`Database.ReadsSelf`, `ncTgt_not_readsSelf`), and this clause does not ask it. -/
+theorem unionsJoined_fire_satisfiable :
+    CmdStep rbSrcR (.run rbRuleset) (RunRules rbRuleset rbSrcR) ∧
+      rbTgtR.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbTgtR ∧
+      rbTgtR.env = rbSrcR.env ∧ rbSrcR.CtorState ∧
+      (∀ f, rbSrcR.sig.IsCtor f → rbTgtR.sig.IsCtor f) ∧
+      rbTgtR.sig.IsCtor fiatName ∧
+      (∀ r ∈ rbSrcR.rules,
+        ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbTgtR.rules ∧
+          rbTgtR.sig.IsCtor (ruleName i) ∧ rbSrcR.GlobalsInline G) ∧
+      (∀ r ∈ rbSrcR.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+        ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) ∧
+      rbTgtR.RowColumnsValued ∧ rbTgtR.NoAtEnv ∧
+      (∀ t ∈ rbSrcR.terms, ∃ e, ViewRepr rbTgtR.toDatabase t e) ∧
+      rbTgtR.toDatabase.UnionsJoined rbSrcR ∧
+      (∀ t ∈ rbSrcR.terms, ∃ r, RowRepr rbTgtR t r) ∧ rbTgtR.RowJoined ∧
+      (∀ (f : FnName) (es : List Term) (e pf : Term),
+        (⟨viewName f, es, [e, pf]⟩ : Row) ∈ rbTgtR.rows →
+          (rbTgtR.sig.mergeOf (viewName f)).isSome = true) ∧
+      (∀ r ∈ rbSrcR.rules,
+        Actions.Scoped r.actions (Query.bind r.query (Env.dom rbSrcR.env))) ∧
+      (∀ r ∈ rbSrcR.rules, Actions.Builds r.actions rbTgtR.sig) ∧
+      (∀ t r : Term, RowRepr rbTgtR t r → ViewRepr rbTgtR.toDatabase t r) ∧
+      rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
+  ⟨rbSrcR_cmdStep_run, rbTgtR_run, rbTgtR_env, rbSrcR_ctorState, rbTgtR_sig_mono,
+    rbTgtR_isCtor_fiatName, rbSrcR_hrules, rbSrcR_queriesEncodable,
+    rbTgtR_rowColumnsValued, rbTgtR_noAtEnv, rbTgtR_readsAt, rbTgtR_joinedAt,
+    rbTgtR_exists_rowRepr, rbTgtR_rowJoined,
+    (fun _ _ _ _ hrow => rbTgtR_mergeOf_of_row hrow),
+    rbSrcR_headsScoped, rbSrcR_headsBuild,
+    fun _ _ h => rbTgtR_viewRepr_of_rowRepr h, rbSrcR_globalsInline⟩
 
 /-! ### The forward mirror of `Encoding/Match.lean`
 
@@ -10117,9 +10531,9 @@ it on the soundness side. `Egglog.GlobalsMech` is how it reaches the residue —
 `Egglog.UnionsInv.rules` carries it beside `Program.GlobalsOnce`, which is what a later `let`
 cannot invalidate — and `encStep_globalsMech` is the discharge.
 
-The witness reuses `rbState2`, the state `unionsJoined_fire_satisfiable` exhibits the clauses
-at, so the arithmetic is the same and the *only* difference is the rule: `rbSrc` with one rule
-added, and the target with that rule's encoding through a bad `G`. Everything below is
+The witness reuses `rbState2`, the state `unionsJoined_fire_satisfiable`'s own `rbTgtR` is
+built from, so the arithmetic is the same and the *only* difference is the rule: `rbSrc` with
+one rule added, and the target with that rule's encoding through a bad `G`. Everything below is
 compiled. -/
 
 /-- **The clause set the refutation below kills**: `Egglog.UnionsFire` with the
@@ -10177,8 +10591,8 @@ def gxEncRule : Rule := (encodeRule 0 (gxRule.substGlobals gxG) 0).1
 not declare. Every other clause about names holds at it unchanged. -/
 def gxSig : Signature := Function.update rbSig (ruleName 0) (some (skolemDecl 0))
 
-/-- **The target**: `rbState2`, the state `unionsJoined_fire_satisfiable` exhibits the clauses
-at, with the encoded rule installed and `@Rule_0` declared. -/
+/-- **The target**: `rbState2` with the encoded rule installed and `@Rule_0` declared, which is
+how `unionsJoined_fire_satisfiable`'s own `rbTgtR` is built too. -/
 def gxTgt : FDatabase := { rbState2 with sig := gxSig, rules := [gxEncRule] }
 
 /-- **The source**: `rbSrc` with the rule added, and nothing else. -/
@@ -10465,9 +10879,9 @@ already-frozen `G` across one more source command; `Egglog.GlobalsMech` is the p
 `encStep_globalsMech` the discharge. `Egglog.UnionsInv.rules` carries `Program.GlobalsOnce`
 beside it — a fact about the program *text*, which is what a later `let` cannot invalidate —
 and only the `GlobalsInline` half reaches this `Prop`, since that is what a firing reads.
-`unionsJoined_fire_satisfiable` survives it and gains a conjunct of its own
-(`rbSrc_globalsInline`, at the substitution `rbProgram`'s own `let` freezes), because the
-`hrules` conjunct it rides in is vacuous at a source that holds no rule.
+`unionsJoined_fire_satisfiable` survives it and carries a conjunct of its own
+(`rbSrcR_globalsInline`, at the substitution `rbProgram`'s own `let` freezes) beside the
+`hrules` conjunct it also rides in, which is stated at that same substitution.
 
 **The route is the enumerator's own, and no general converse is wanted.**
 `execRunRules_RunRules` needs `Signature.AllConstructors`, which an encoded target fails at
@@ -10521,12 +10935,12 @@ entry's key width (`encStep_ctorsIn`), both through `FDatabase.SoundTerms`. `enc
 is `RowMech` discharged, and `unionsInv_step` spends it.
 
 **The provenance itself is not a hypothesis of `UnionsFire`, and must not become one.**
-`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbState2`, a state written by
+`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbTgtR`, a state written by
 `execActions` rather than by `encode`, and the kernel cannot run an encoded program — so
-`EncReached rbProgram rbState2` is not available and an `EncReached` hypothesis would empty the
+`EncReached rbProgram rbTgtR` is not available and an `EncReached` hypothesis would empty the
 non-vacuity check. What `UnionsFire` takes is therefore the two *derived* clauses, `RowRepr`
 at `td` and the read-back at `td'`, both of which the witness state really satisfies
-(`rbState2_exists_rowRepr`, `rbState2_viewRepr_of_rowRepr`) and at positive arity.
+(`rbTgtR_exists_rowRepr`, `rbTgtR_viewRepr_of_rowRepr`) and at positive arity.
 
 **The forward query mirror is written.** `mem_matchQuery_encodeQuery` turns a source reading of
 a query — one `PatternRowRead` per pattern — into a substitution the *emitted* query matches at,
@@ -10807,10 +11221,10 @@ exactly the shape the query clause is, both are now clauses of `Egglog.UnionsFir
 `Rule.resolveGlobals` removed from a query is a global the environment binds
 (`Query.mem_vars_resolveGlobals`) — and `Database.HeadsBuild` with
 `headsBuild_of_programStep` is the second, read at `td.sig` through
-`Actions.Builds.mono_sig` and the signature clause. `rbSrc_headsScoped` and `rbSrc_headsBuild`
-are them in `unionsJoined_fire_satisfiable`, vacuous there for the reason the two clauses about
-rules beside them are, with `ncRule_headScoped` and `ncRule_builds` the instances with
-content.
+`Actions.Builds.mono_sig` and the signature clause. `rbSrcR_headsScoped` and
+`rbSrcR_headsBuild` are them in `unionsJoined_fire_satisfiable`, at the rule its witness
+registers and whose encoding its round fires, and `ncRule_headScoped`/`ncRule_builds` are the
+same two at the rule whose source firing the encoding cannot perform.
 
 Step 4 — the head's writes read back as `ViewRepr td'` — then rides on
 `execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, plus one thing
@@ -12588,7 +13002,7 @@ This is what `execM_rebuildClosed` could not be asked for. Its `edged` clause is
 mechanism had to be restated one block short of the end; `EncStep` is that restatement, and the
 `encReached_*` family is the block inductions consuming it. Nothing was added to `UnionsFire`
 that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries every clause at the
-witness state, and all but the two about rules non-vacuously. -/
+witness state, and all but the two that need a source `union` non-vacuously. -/
 theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
     (hnodup : (Program.letNames P).Nodup) : RowMech P :=
   fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom hnodup h hv,
