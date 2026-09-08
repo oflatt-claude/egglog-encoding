@@ -10,11 +10,12 @@ over `Encoding/Correspond.lean`'s decision procedure `sameClassF`, the proof tha
 (`sameClassF_iff`, both directions, no `sorry`), and a compiled witness that its hypotheses
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
-the corpus and reports 87 of 87 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
-`iff` is proved outright** — `encode_corresponds_complete`, no `sorryAx` — and the theorem
-carries `sorry` only through the *forward* half, in one named property of the state the run
-reached; it is one *mechanism* rather than a clause, because the clauses are derived from one
-another.
+the corpus and reports 87 of 87 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **Both halves of
+the `iff` are proved outright, and there is no `sorry` anywhere in the development.**
+`#print axioms` on `encode_corresponds`, on `encode_corresponds_forward` and on
+`encode_corresponds_complete` reports `[propext, Classical.choice, Quot.sound]` and nothing
+else, so the encoding provably neither loses an equality nor invents one at the source's
+e-nodes. `LEAN_OPEN_SORRIES` in the root `Makefile` is `0`.
 
 **Two encoder defects the LOST column caught, both now fixed.**
 
@@ -45,14 +46,36 @@ report 13 LOST across 13 cases.
 The **action read-back** is proved (`holdsBuild_of_execProgramM`,
 `viewRepr_self_of_execProgramM`) and so is the **induction over `encode P`'s commands** built
 on it (`UnionsInv`, `unionsInv_execM`), which closes `execM_unionsJoined` and supplies the
-totality `Database.ViewsCover` is derived from. The one left is that induction's own open case
-(`unionsJoined_fire`, and only its `Cmd.saturate` half: the `Cmd.run` half is proved outright
-at `unionsFire_run`, from `unionsFire_conclusion_of_run` plus `unionsFire_firing` once per
-firing. A source command that fires rules needs a target firing behind the
-source's, and one step below that the premise row must be current in the *index*, not merely an
-entry term; the version of it that stated the invariant's clauses at the run's **final** state
-is refuted — `unionsFireClaim_false` — so `UnionsInv` now carries every clause at the state the
-next encoded block runs at, the encoded ruleset included, and a containment forward). The
+totality `Database.ViewsCover` is derived from. **That induction's rule-firing case is closed
+too**, and it was the last one: `unionsJoined_fire`, with `unionsFire_run` the `Cmd.run` half
+(`unionsFire_conclusion_of_run` plus `unionsFire_firing` once per firing) and
+`unionsFire_saturate` the `Cmd.saturate` half. A source command that fires rules needs a target
+firing behind the source's, and one step below that the premise row must be current in the
+*index*, not merely an entry term; the version of it that stated the invariant's clauses at the
+run's **final** state is refuted — `unionsFireClaim_false` — so `UnionsInv` carries every clause
+at the state the next encoded block runs at, the encoded ruleset included, and a containment
+forward.
+
+**What closed the `Cmd.saturate` half was containment, not alignment**, and it is worth
+recording because six claims in that line turned out false rather than hard. A source
+`Cmd.saturate R` reaches an *iterate* of `RunRules R` while the target runs one
+`[.saturate R, .saturate @rebuild]` block, and the two round structures cannot be lined up:
+the target's rounds read every rule off one pre-state, so a round's maintenance firings chase
+the *previous* round's `@UF` edges. But the conclusion is monotone in the target
+(`Database.UnionsJoined.mono`, `ViewRepr.mono`), so alignment is not needed — one target state
+that every source round can be read at and that the block's post-state contains is enough.
+That state is the block's **middle**, `td.execCmdM (.saturate R)`, and three facts make it
+work: a firing there lands there (`FDatabase.RoundClosed` and `FDatabase.EqsRoundClosed` are
+the round fixpoint read on `terms` and `eqs`, which is all `unionsFire_firing_at` ever spends a
+target program on); the middle state is **rebuilt**, because `allMaintenanceRules` joins the
+maintenance rules to `R` as well, so a fixpoint of the `R`-round is a fixpoint of the rebuild
+round (`EncReached.satMid`, `viewRowsRooted_of_runSaturateM` at an arbitrary
+`Program.MaintenanceRuleset`); and the trailing rebuild carries `terms` and `eqs` forward,
+which is the field the transport already ran on — a round *deletes* rows in its merge phase and
+nothing here reads the post-state's rows. Two earlier framings are kept as records in
+`unionsJoined_fire`'s docstring: identifying the block's post-state with the `R`-round fixpoint
+needs a list-level `FDatabase.sameData` that is not available, and fixing the target at the
+post-state leaves the firing there with nowhere to land. The
 run-wide index argument it used to sit beside is **closed**: `execM_rebuildClosed` is
 `Database.ViewJoined` restated per mechanism — the rebuild's e-class rule, its column rules and
 the `@UF` edge a view collision writes — proved outright, with `Database.RebuildClosed.toViewJoined`

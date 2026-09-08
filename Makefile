@@ -112,12 +112,16 @@ nightly-local: nightly-uv nightly-rustup
 # see semantics/README.md. `lake build` only warns on a `sorry`, so the sources are
 # grepped for one as well. The second grep drops backtick-quoted prose: two module
 # docstrings discuss `sorry`, and without it the target can never pass.
-# M11's correspondence statement is stated and not proved: `EgglogSemantics/Encoding/`
-# carries exactly LEAN_OPEN_SORRIES of them, each with a vacuity witness beside it
-# (`semantics/ENCODING.md`). None of them is a named obligation any more — both halves are
-# now proved from properties of the state `execM` returned (`cong_sameClass_of_state`,
-# `sameClass_cong_of_state`) — and the three that are left are three *mechanisms* rather than
-# three clauses, because the clauses are now derived from one another. The action read-back is
+# M11's correspondence statement is **proved**, both halves: `EgglogSemantics/Encoding/`
+# carries exactly LEAN_OPEN_SORRIES of them, which is now zero, and `#print axioms` on
+# `encode_corresponds`, `encode_corresponds_forward` and `encode_corresponds_complete` reports
+# `[propext, Classical.choice, Quot.sound]` (`semantics/ENCODING.md`). Both halves are proved
+# from properties of the state `execM` returned (`cong_sameClass_of_state`,
+# `sameClass_cong_of_state`), and the last open obligation was the command induction's
+# rule-firing case (`unionsJoined_fire`) — its `Cmd.run` half at `unionsFire_run` and its
+# `Cmd.saturate` half at `unionsFire_saturate`, which reads the source's rounds at the middle
+# of the target's own saturate block and transports the conclusion up by containment. The
+# action read-back is
 # proved (`holdsBuild_of_execProgramM`, `viewRepr_self_of_execProgramM`) and so is the
 # induction over `encode P`'s commands built on it (`UnionsInv`, `unionsInv_execM`), which
 # closes `execM_unionsJoined` and supplies the totality `Database.ViewsCover` needs. The two
@@ -249,7 +253,7 @@ nightly-local: nightly-uv nightly-rustup
 # rule-head match correspondence of `Encoding/Match.lean` is proved outright, encoder read-back
 # included, and so is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere
 # outside `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
-LEAN_OPEN_SORRIES = 1
+LEAN_OPEN_SORRIES = 0
 LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
 
 lean-check:

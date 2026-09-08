@@ -224,11 +224,16 @@ Neither is a condition on the source program. `Program.EncodeDomain.noAt` is wha
 reduces to at each emitted command, and `encodePrelude` is what supplies the first; what is
 new here is only that the two are carried along the run rather than read off the source. -/
 
-/-- **Every maintenance rule is one the state holds.** The converse of
-`FDatabase.RulesEncoded`, which says only that a rule the state holds is one of the two
-families. -/
+/-- **Every maintenance rule is one the state holds**, at every ruleset it joins. The
+converse of `FDatabase.RulesEncoded`, which says only that a rule the state holds is one of
+the two families.
+
+Over `allMaintenanceRules` and not `maintenanceRules`: the `rebuildRuleset` copy is what a
+rebuild fixpoint fires, and the copy at a ruleset a source `Cmd.saturate` names is what the
+**middle** of that command's encoded block fires — `viewRowsRooted_of_saturateMid` is the
+argument that needs the second one. -/
 def FDatabase.RulesHeld (d : FDatabase) (P : Program) : Prop :=
-  ∀ r ∈ maintenanceRules P, r ∈ d.rules
+  ∀ r ∈ allMaintenanceRules P, r ∈ d.rules
 
 /-- A `set` binds nothing, which is what the encoded blocks of a build are. -/
 theorem Action.NoAtLet.of_isSet {a : Action} (h : a.IsSet) : a.NoAtLet := by
@@ -1846,8 +1851,7 @@ theorem preludeState_encOk {P : Program} {d₀ : FDatabase}
   · exact fun r hr => FDatabase.execProgramM_mem_rules
       (fun c hc a hcr => by subst hcr; exact declOrRule_encodePrelude P _ hc) rfl hprel r
       (by rw [encodePrelude]
-          exact List.mem_append_right _
-            (List.mem_map_of_mem (mem_allMaintenanceRules_of_mem hr)))
+          exact List.mem_append_right _ (List.mem_map_of_mem hr))
   · intro b hb
     rw [hv, show FDatabase.empty.env = ([] : Env) from rfl] at hb
     exact absurd hb (by simp)
@@ -5649,16 +5653,16 @@ theorem mem_freeVars_uf {d : FDatabase} (hnoat : d.NoAtEnv) {v : Var}
 /-- **The e-class rebuild rule fires**, at a view row and the `@UF` row above its e-class
 column: the row it writes carries the row's own key, the edge's far end, and the composed
 proof. This is the residue's second obligation's hole, discharged. -/
-theorem eclassRule_fires {d : FDatabase} (hnoat : d.NoAtEnv)
+theorem eclassRule_fires {d : FDatabase} {R : RulesetName} (hnoat : d.NoAtEnv)
     (htr : d.sig.IsCtor transName) (hcv : d.RowColumnsValued)
-    {f : FnName} {k : Nat} (hheld : eclassRule f k ∈ d.rules)
+    {f : FnName} {k : Nat} (hheld : ({ eclassRule f k with ruleset := R } : Rule) ∈ d.rules)
     (hmg : (d.sig.mergeOf (viewName f)).isSome = true)
     (hmguf : (d.sig.mergeOf ufName).isSome = true)
     {as : List Term} (hlen : as.length = k) {e pf x q : Term}
     (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows)
     (huf : (⟨ufName, [e], [x, q]⟩ : Row) ∈ d.rows) :
     (⟨viewName f, as, [x, Term.app transName [pf, q]]⟩ : Row) ∈
-      (execRunRules rebuildRuleset d).rows := by
+      (execRunRules R d).rows := by
   set τ := eclassSubst k as e pf x q with hτ
   set qy := (eclassRule f k).query with hqy
   -- the two rows' columns are values, hence terms
@@ -5780,7 +5784,7 @@ theorem eclassRule_fires {d : FDatabase} (hnoat : d.NoAtEnv)
     rfl
   have hcs' := Expr.evalList_append_env (τ := d.env) _ hcs
   have hout' := Expr.evalList_append_env (τ := d.env) _ hout
-  refine mem_rows_execRunRules.mpr (Or.inr ⟨eclassRule f k,
+  refine mem_rows_execRunRules.mpr (Or.inr ⟨{ eclassRule f k with ruleset := R },
     hheld, rfl, _, hσ,
     { FDatabase.addRow (viewName f) as [x, Term.app transName [pf, q]]
         { d with env := Env.canon (Query.freeVars qy []) τ ++ d.env } with
@@ -5789,14 +5793,40 @@ theorem eclassRule_fires {d : FDatabase} (hnoat : d.NoAtEnv)
   rw [eclassRule, execLocalActions]
   simp only [execActions, Egglog.execAction, hcs', Option.bind_some, hout', Option.map_some]
 
+/-- **A ruleset the maintenance rules join.** `allMaintenanceRules` emits the
+`rebuildRuleset` copy of every maintenance rule and one further copy per ruleset a source
+`Cmd.saturate` names, so a rebuild firing can be exhibited at either — which is what makes
+the *middle* of a `Cmd.saturate` block a rebuild fixpoint as well as an `R` one
+(`viewRowsRooted_of_saturateMid`). -/
+def Program.MaintenanceRuleset (P : Program) (R : RulesetName) : Prop :=
+  R = rebuildRuleset ∨ Cmd.saturate R ∈ P
+
+@[inherit_doc Program.MaintenanceRuleset]
+theorem mem_allMaintenanceRules_of_maintenanceRuleset {P : Program} {R : RulesetName}
+    (hR : P.MaintenanceRuleset R) {r : Rule} (hr : r ∈ maintenanceRules P) :
+    ({ r with ruleset := R } : Rule) ∈ allMaintenanceRules P := by
+  rcases hR with rfl | hR
+  · rw [show ({ r with ruleset := rebuildRuleset } : Rule) = r by
+      rw [← maintenanceRules_ruleset P r hr]]
+    exact mem_allMaintenanceRules_of_mem hr
+  · refine List.mem_append_right _ (List.mem_flatMap.mpr ⟨R, ?_, List.mem_map_of_mem hr⟩)
+    rw [Program.saturateRulesets, List.mem_dedup, List.mem_filterMap]
+    exact ⟨Cmd.saturate R, hR, rfl⟩
+
+/-- **A rebuild ruleset's own copy is held**, at every state of an aligned run. -/
+theorem FDatabase.EncBase.heldAt {P : Program} {sg : Signature} {d : FDatabase}
+    (h : d.EncBase P sg) {R : RulesetName} (hR : P.MaintenanceRuleset R) {r : Rule}
+    (hr : r ∈ maintenanceRules P) : ({ r with ruleset := R } : Rule) ∈ d.rules :=
+  h.held _ (mem_allMaintenanceRules_of_maintenanceRuleset hR hr)
+
 /-- **`FDatabase.EncBase` implies the three facts `eclassRule_fires` now takes**, which is
 what makes the weakening machine-checked to be a weakening: the old statement, proved from
 the new one. `sig` is where `(encodeSig P).IsCtor transName` becomes a fact about `d.sig`,
 `held` is where `(f, k) ∈ P.ctors` becomes the rule's membership, and `noAtEnv` passes
 straight through. Every other clause of the bundle — `rules`, `shape`, `merges`, `inv`,
 `nounions`, `wl` — the firing never reads. -/
-theorem eclassRule_fires_of_encBase {P : Program} {d : FDatabase}
-    (hb : d.EncBase P (encodeSig P))
+theorem eclassRule_fires_of_encBase {P : Program} {d : FDatabase} {R : RulesetName}
+    (hb : d.EncBase P (encodeSig P)) (hR : P.MaintenanceRuleset R)
     (htr : (encodeSig P).IsCtor transName) (hcv : d.RowColumnsValued)
     {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors)
     (hmg : (d.sig.mergeOf (viewName f)).isSome = true)
@@ -5805,9 +5835,9 @@ theorem eclassRule_fires_of_encBase {P : Program} {d : FDatabase}
     (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows)
     (huf : (⟨ufName, [e], [x, q]⟩ : Row) ∈ d.rows) :
     (⟨viewName f, as, [x, Term.app transName [pf, q]]⟩ : Row) ∈
-      (execRunRules rebuildRuleset d).rows :=
+      (execRunRules R d).rows :=
   eclassRule_fires hb.noAtEnv (by rw [hb.sig]; exact htr) hcv
-    (hb.held _ (eclassRule_mem_maintenanceRules hfk)) hmg hmguf hlen hrow huf
+    (hb.heldAt hR (eclassRule_mem_maintenanceRules hfk)) hmg hmguf hlen hrow huf
 
 /-! ### The other rebuild rule
 
@@ -5966,19 +5996,19 @@ theorem eval_columnProof {sig : Signature} {k i : Nat} {pf q : Term} {ρ : Env}
 /-- **A column rebuild rule fires**, at a view row and the `@UF` row above its column `i`:
 the row it writes carries the same e-class column, the key with column `i` moved to the edge's
 far end, and the congruence proof of the move. Sibling of `eclassRule_fires`. -/
-theorem columnRule_fires {d : FDatabase} (hnoat : d.NoAtEnv)
+theorem columnRule_fires {d : FDatabase} {R : RulesetName} (hnoat : d.NoAtEnv)
     (hcv : d.RowColumnsValued) {f : FnName} {k : Nat}
     (htr : d.sig.IsCtor transName) (hsy : d.sig.IsCtor symName)
     (hfi : d.sig.IsCtor fiatName) (hcg : d.sig.IsCtor (congrName k))
     (hmg : (d.sig.mergeOf (viewName f)).isSome = true)
     (hmguf : (d.sig.mergeOf ufName).isSome = true)
     {as : List Term} (hlen : as.length = k) {i : Nat} (hi : i < k)
-    (hheld : columnRule f k i ∈ d.rules) {e pf x q ci : Term}
+    (hheld : ({ columnRule f k i with ruleset := R } : Rule) ∈ d.rules) {e pf x q ci : Term}
     (hci : as[i]? = some ci)
     (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows)
     (huf : (⟨ufName, [ci], [x, q]⟩ : Row) ∈ d.rows) :
     (⟨viewName f, as.set i x, [e, columnProof k i pf q]⟩ : Row) ∈
-      (execRunRules rebuildRuleset d).rows := by
+      (execRunRules R d).rows := by
   have hilen : i < as.length := by omega
   have hcieq : as[i]'hilen = ci := by
     rw [List.getElem?_eq_getElem hilen] at hci; exact Option.some.inj hci
@@ -6105,7 +6135,7 @@ theorem columnRule_fires {d : FDatabase} (hnoat : d.NoAtEnv)
     rfl
   have hcs' := Expr.evalList_append_env (τ := d.env) _ hcs
   have hout' := Expr.evalList_append_env (τ := d.env) _ hout
-  refine mem_rows_execRunRules.mpr (Or.inr ⟨columnRule f k i,
+  refine mem_rows_execRunRules.mpr (Or.inr ⟨{ columnRule f k i with ruleset := R },
     hheld, rfl, _, hσ,
     { FDatabase.addRow (viewName f) (as.set i x) [e, columnProof k i pf q]
         { d with env := Env.canon (Query.freeVars qy []) τ ++ d.env } with
@@ -6116,8 +6146,8 @@ theorem columnRule_fires {d : FDatabase} (hnoat : d.NoAtEnv)
 
 /-- **`FDatabase.EncBase` implies what `columnRule_fires` now takes.** The same three fields
 as `eclassRule_fires_of_encBase`, and the old statement recovered from the new one. -/
-theorem columnRule_fires_of_encBase {P : Program} {d : FDatabase}
-    (hb : d.EncBase P (encodeSig P))
+theorem columnRule_fires_of_encBase {P : Program} {d : FDatabase} {R : RulesetName}
+    (hb : d.EncBase P (encodeSig P)) (hR : P.MaintenanceRuleset R)
     (hcv : d.RowColumnsValued) {f : FnName} {k : Nat}
     (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
     (hfi : (encodeSig P).IsCtor fiatName) (hcg : (encodeSig P).IsCtor (congrName k))
@@ -6129,20 +6159,27 @@ theorem columnRule_fires_of_encBase {P : Program} {d : FDatabase}
     (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows)
     (huf : (⟨ufName, [ci], [x, q]⟩ : Row) ∈ d.rows) :
     (⟨viewName f, as.set i x, [e, columnProof k i pf q]⟩ : Row) ∈
-      (execRunRules rebuildRuleset d).rows :=
+      (execRunRules R d).rows :=
   columnRule_fires hb.noAtEnv hcv (by rw [hb.sig]; exact htr) (by rw [hb.sig]; exact hsy)
     (by rw [hb.sig]; exact hfi) (by rw [hb.sig]; exact hcg) hmg hmguf hlen hi
-    (hb.held _ (columnRule_mem_maintenanceRules hfk hi)) hci hrow huf
+    (hb.heldAt hR (columnRule_mem_maintenanceRules hfk hi)) hci hrow huf
 
 /-- **The fixpoint's roots**: at a rebuild fixpoint no surviving view row's e-class column has an
 outgoing `@UF` row. The firing is `eclassRule_fires`, and `FDatabase.RowColumnsValued` — that a
 row's columns are terms `matchQuery` will assign — is `execM_rowColumnsValued` at an `execM`
-target. -/
-theorem no_ufRowEdge_of_rowsClosed {P : Program} {d d' : FDatabase} (hdom : P.EncodeDomain)
+target.
+
+**At any ruleset the maintenance rules join**, and not only at `@rebuild`: the fixpoint the
+argument spends is a round of `R`'s, and what it needs of `R` is that the e-class rule has a
+copy there (`Program.MaintenanceRuleset`). That is what makes the *middle* of a
+`Cmd.saturate R` block — the `R`-round fixpoint, one command before the trailing rebuild —
+rooted, which no state inside a `Cmd.run` block is. -/
+theorem no_ufRowEdge_of_rowsClosed {P : Program} {d d' : FDatabase} {R : RulesetName}
+    (hdom : P.EncodeDomain) (hR : P.MaintenanceRuleset R)
     (hb : d.EncBase P (encodeSig P)) (hsy : (encodeSig P).IsCtor symName)
     (htr : (encodeSig P).IsCtor transName) (hcv : d.RowColumnsValued)
     (hset : d.settled = true) (hdes : d.UFRowsDescend)
-    (hclosed : d.RowsClosed rebuildRuleset) (hround : d.runRoundM rebuildRuleset = some d')
+    (hclosed : d.RowsClosed R) (hround : d.runRoundM R = some d')
     {f : FnName} {k : Nat} (hfk : (f, k) ∈ P.ctors)
     {as : List Term} {e pf x : Term}
     (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows) (hedge : d.UFRowEdge e x) :
@@ -6158,8 +6195,8 @@ theorem no_ufRowEdge_of_rowsClosed {P : Program} {d d' : FDatabase} (hdom : P.En
       (by rw [hsigd]; exact hdecl) hmgne).1
   obtain ⟨q, hufrow⟩ := hedge.1
   have hfired : (⟨viewName f, as, [x, Term.app transName [pf, q]]⟩ : Row) ∈
-      (execRunRules rebuildRuleset d).rows :=
-    eclassRule_fires_of_encBase hb htr hcv hfk
+      (execRunRules R d).rows :=
+    eclassRule_fires_of_encBase hb hR htr hcv hfk
       (by rw [Option.isSome_iff_ne_none]; exact hmgne)
       (by
         rw [Option.isSome_iff_ne_none, Signature.mergeOf, hsigd, encodeSig_ufName hdom,
@@ -6168,7 +6205,7 @@ theorem no_ufRowEdge_of_rowsClosed {P : Program} {d d' : FDatabase} (hdom : P.En
       hlen hrow hufrow
   have hshape : Signature.MergeShape d.sig := by rw [hsigd]; exact hb.shape
   have hlegal : Signature.MergesLegal d.sig := by rw [hsigd]; exact hb.merges
-  have hsigR : (execRunRules rebuildRuleset d).sig = d.sig := FDatabase.execRunRules_fields.1
+  have hsigR : (execRunRules R d).sig = d.sig := FDatabase.execRunRules_fields.1
   -- the merge phase leaves a row at the key, at or below the column the firing wrote
   rw [FDatabase.runRoundM] at hround
   have hcarry := mergeSaturateF_rowsDescendCarry mergeFuel
@@ -7596,24 +7633,38 @@ theorem rebuildBase_encodeCmd {P : Program} (hdom : P.EncodeDomain) {c : Cmd} (h
     (fun c' hc' => ufWriteOk_encodeCmd G c n i c' (hq c' hc'))
     (fun c' hc' => noAtLet_encodeCmd hdom G c hc n i c' (hq c' hc')) h hs
 
+/-- **And the middle of a `Cmd.saturate`'s block keeps the bundle.** The same three fields at
+a saturating run rather than at a whole block, which is what `Egglog.EncReached.satMid` takes:
+a `Cmd.saturate` writes through `d.rules`, so every side condition
+`FDatabase.EncBase.execCmdM` asks is vacuous at it. -/
+theorem rebuildBase_saturateMid {P : Program} (hdom : P.EncodeDomain) {R : RulesetName}
+    {d D : FDatabase} (h : d.RebuildBase P)
+    (hs : d.execCmdM (Cmd.saturate R) = some D) : D.RebuildBase P := by
+  have hs' : d.runSaturateM R runFuel = some D := hs
+  exact ⟨h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs,
+    FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs',
+    h.base.execCmdM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
+      (c := Cmd.saturate R) trivial trivial trivial trivial h.descend hs⟩
+
 /-- **One rebuild fixpoint delivers the roots.** `no_ufRowEdge_of_rowsClosed` at the state
 `Cmd.saturate rebuildRuleset` returned: `FDatabase.runSaturateM_rowsClosed` is the fixpoint on
 `rows`, `FDatabase.runSaturateM_settled` the round it still has to run, and
 `FDatabase.runSaturateM_settled'` the merge fixpoint the row-uniqueness half wants. -/
-theorem viewRowsRooted_of_runSaturateM {P : Program} (hdom : P.EncodeDomain)
+theorem viewRowsRooted_of_runSaturateM {P : Program} {R : RulesetName} (hdom : P.EncodeDomain)
+    (hR : P.MaintenanceRuleset R)
     (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
     {d e : FDatabase} (h : d.RebuildBase P)
-    (hs : d.execCmdM (Cmd.saturate rebuildRuleset) = some e) : e.ViewRowsRooted P := by
-  have hs' : d.runSaturateM rebuildRuleset runFuel = some e := hs
+    (hs : d.execCmdM (Cmd.saturate R) = some e) : e.ViewRowsRooted P := by
+  have hs' : d.runSaturateM R runFuel = some e := hs
   have hbe : e.EncBase P (encodeSig P) :=
-    h.base.execCmdM (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial trivial hs
+    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs
   have hve : e.Valued := FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs'
   have hdese : e.UFRowsDescend :=
     h.base.execCmdM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
-      (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial h.descend hs
+      (c := Cmd.saturate R) trivial trivial trivial trivial h.descend hs
   obtain ⟨e', hround, -⟩ := FDatabase.runSaturateM_settled runFuel hs'
   intro f k hfk as x pf hrow y hedge
-  exact no_ufRowEdge_of_rowsClosed hdom hbe hsy htr
+  exact no_ufRowEdge_of_rowsClosed hdom hR hbe hsy htr
     (hve.rowColumnsValued hbe.eqsRefl hbe.subtermClosed hbe.inv.index)
     (FDatabase.runSaturateM_settled' runFuel hs') hdese
     (FDatabase.runSaturateM_rowsClosed hs') hround hfk hrow hedge
@@ -7657,7 +7708,7 @@ theorem viewRowsRooted_encodeCmd {P : Program} (hdom : P.EncodeDomain)
       obtain ⟨x, hx, hx'⟩ := Option.bind_eq_some_iff.mp h₃
       rw [FDatabase.execProgramM, Option.some.injEq] at hx'
       exact hx' ▸ hx
-    exact viewRowsRooted_of_runSaturateM hdom hsy htr hbase₂ hsat
+    exact viewRowsRooted_of_runSaturateM hdom (Or.inl rfl) hsy htr hbase₂ hsat
   · exact hr.of_rows_eq (hfix hs)
 
 /-- **And the whole aligned run.** -/
@@ -7748,13 +7799,13 @@ theorem FDatabase.ViewRowUnique.of_rows_eq {d D : FDatabase} {P : Program}
 /-- **One `Cmd.saturate rebuildRuleset` delivers it.** `FDatabase.runSaturateM_settled'` reads
 the merge fixpoint off the branch the saturating run returned from, and
 `FDatabase.row_unique_of_settled` is that fixpoint at a view table. -/
-theorem viewRowUnique_of_runSaturateM {P : Program} (hdom : P.EncodeDomain)
+theorem viewRowUnique_of_runSaturateM {P : Program} {R : RulesetName} (hdom : P.EncodeDomain)
     (hsy : (encodeSig P).IsCtor symName) (htr : (encodeSig P).IsCtor transName)
     {d e : FDatabase} (h : d.RebuildBase P)
-    (hs : d.execCmdM (Cmd.saturate rebuildRuleset) = some e) : e.ViewRowUnique P := by
-  have hs' : d.runSaturateM rebuildRuleset runFuel = some e := hs
+    (hs : d.execCmdM (Cmd.saturate R) = some e) : e.ViewRowUnique P := by
+  have hs' : d.runSaturateM R runFuel = some e := hs
   have hb : e.EncBase P (encodeSig P) :=
-    h.base.execCmdM (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial trivial hs
+    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs
   intro f k hfk as vs ws h₁ h₂
   have hsigd : e.sig = encodeSig P := hb.sig
   have hdecl : (encodeSig P) (viewName f) = some (viewDecl k) :=
@@ -7910,12 +7961,13 @@ theorem FDatabase.ViewRowsColumnClosed.of_data_eq {d D : FDatabase} {P : Program
 `Cmd.saturate rebuildRuleset` returned, pushed through the merge phase by
 `mergeSaturateF_rowsCarryUF` and back to the state it started at by
 `FDatabase.runSaturateM_roundFixed`. -/
-theorem viewRowsColumnClosed_of_roundFixed {P : Program} {d : FDatabase} (hdom : P.EncodeDomain)
+theorem viewRowsColumnClosed_of_roundFixed {P : Program} {d : FDatabase} {R : RulesetName}
+    (hdom : P.EncodeDomain) (hR : P.MaintenanceRuleset R)
     (hb : d.EncBase P (encodeSig P))
     (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
     (hfi : (encodeSig P).IsCtor fiatName)
     (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
-    (hcv : d.RowColumnsValued) (hround : d.runRoundM rebuildRuleset = some d) :
+    (hcv : d.RowColumnsValued) (hround : d.runRoundM R = some d) :
     d.ViewRowsColumnClosed P := by
   intro f k hfk as e pf hrow i ci x hci hedge
   have hsigd : d.sig = encodeSig P := hb.sig
@@ -7932,15 +7984,15 @@ theorem viewRowsColumnClosed_of_roundFixed {P : Program} {d : FDatabase} (hdom :
     rw [← hlen]; exact (List.getElem?_eq_some_iff.mp hci).1
   obtain ⟨q, hufrow⟩ := hedge.1
   have hfired : (⟨viewName f, as.set i x, [e, columnProof k i pf q]⟩ : Row) ∈
-      (execRunRules rebuildRuleset d).rows :=
-    columnRule_fires_of_encBase hb hcv htr hsy hfi (hcg f k hfk (by omega)) hfk
+      (execRunRules R d).rows :=
+    columnRule_fires_of_encBase hb hR hcv htr hsy hfi (hcg f k hfk (by omega)) hfk
       (by rw [Option.isSome_iff_ne_none]; exact hmgne)
       (by
         rw [Option.isSome_iff_ne_none, Signature.mergeOf, hsigd, encodeSig_ufName hdom,
           Option.bind_some]
         simp [ufDecl])
       hlen hi hci hrow hufrow
-  have hsigR : (execRunRules rebuildRuleset d).sig = d.sig := FDatabase.execRunRules_fields.1
+  have hsigR : (execRunRules R d).sig = d.sig := FDatabase.execRunRules_fields.1
   rw [FDatabase.runRoundM] at hround
   have hcarry := mergeSaturateF_rowsCarryUF mergeFuel
     (by rw [hsigR, hsigd]; exact hb.shape) (by rw [hsigR, hsigd]; exact hb.merges)
@@ -7951,17 +8003,18 @@ theorem viewRowsColumnClosed_of_roundFixed {P : Program} {d : FDatabase} (hdom :
 
 
 /-- **One `Cmd.saturate rebuildRuleset` delivers the column closure.** -/
-theorem viewRowsColumnClosed_of_runSaturateM {P : Program} (hdom : P.EncodeDomain)
+theorem viewRowsColumnClosed_of_runSaturateM {P : Program} {R : RulesetName}
+    (hdom : P.EncodeDomain) (hR : P.MaintenanceRuleset R)
     (htr : (encodeSig P).IsCtor transName) (hsy : (encodeSig P).IsCtor symName)
     (hfi : (encodeSig P).IsCtor fiatName)
     (hcg : ∀ (g : FnName) (k : Nat), (g, k) ∈ P.ctors → k ≠ 0 → (encodeSig P).IsCtor (congrName k))
     {d e : FDatabase} (h : d.RebuildBase P)
-    (hs : d.execCmdM (Cmd.saturate rebuildRuleset) = some e) : e.ViewRowsColumnClosed P := by
-  have hs' : d.runSaturateM rebuildRuleset runFuel = some e := hs
+    (hs : d.execCmdM (Cmd.saturate R) = some e) : e.ViewRowsColumnClosed P := by
+  have hs' : d.runSaturateM R runFuel = some e := hs
   have hbe : e.EncBase P (encodeSig P) :=
-    h.base.execCmdM (c := Cmd.saturate rebuildRuleset) trivial trivial trivial trivial trivial hs
+    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs
   have hve : e.Valued := FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs'
-  exact viewRowsColumnClosed_of_roundFixed hdom hbe htr hsy hfi hcg
+  exact viewRowsColumnClosed_of_roundFixed hdom hR hbe htr hsy hfi hcg
     (hve.rowColumnsValued hbe.eqsRefl hbe.subtermClosed hbe.inv.index)
     (FDatabase.runSaturateM_roundFixed runFuel hs')
 
@@ -8007,7 +8060,7 @@ theorem viewRowsColumnClosed_encodeCmd {P : Program} (hdom : P.EncodeDomain)
       obtain ⟨x, hx, hx'⟩ := Option.bind_eq_some_iff.mp h₃
       rw [FDatabase.execProgramM, Option.some.injEq] at hx'
       exact hx' ▸ hx
-    exact viewRowsColumnClosed_of_runSaturateM hdom htr hsy hfi hcg hbase₂ hsat
+    exact viewRowsColumnClosed_of_runSaturateM hdom (Or.inl rfl) htr hsy hfi hcg hbase₂ hsat
   · obtain ⟨h₁, h₂, h₃⟩ := hfix hs
     exact hr.of_data_eq h₁ h₂ h₃
 
@@ -8849,9 +8902,10 @@ theorem ncBase_exec : execM (encodePrelude ncProgram) = some ncBase := by
 prelude rather than by hand: `("F", 1)` is in the census the two programs share, so
 `columnRule_mem_maintenanceRules` names the rule and `encOk_preludeState` says the prelude
 installed it. -/
-theorem ccStale_columnRule_held : columnRule "F" 1 0 ∈ ccStale.rules :=
+theorem ccStale_columnRule_held :
+    ({ columnRule "F" 1 0 with ruleset := rebuildRuleset } : Rule) ∈ ccStale.rules :=
   (encOk_preludeState ncProgram_encodeDomain ncProgram_encodeDomain.aritiesAgree'
-      ncBase_exec).base.held _
+      ncBase_exec).base.heldAt (Or.inl rfl)
     (columnRule_mem_maintenanceRules (by decide) (by decide))
 
 set_option maxRecDepth 100000 in
@@ -9529,14 +9583,53 @@ theorem rbSrcR_litGlobalsHeld : rbSrcR.LitGlobalsHeld rbTgtR := by
   · exact absurd h (by simp)
   · exact absurd h (by simp)
 
+/-! #### The middle-state clause is a constraint
+
+The conjunct `Egglog.unionsJoined_fire`'s `Cmd.saturate` case takes is guarded on the command,
+so it is vacuous at the witness below — whose command is a `Cmd.run`. What keeps it from being
+a *shape* rather than a constraint is that `FDatabase.RowMechAt` fails at states: the state
+here holds a live view row whose function carries no `:merge`, which is `RowRead.app`'s own
+side condition and the fourth of the bundle's five fields.
+
+Where the conjunct has content is `encStep_encRow_saturateMid`, which is the whole reason the
+`Cmd.saturate` case closes: the middle of a `Cmd.saturate R` block is rebuilt because
+`allMaintenanceRules` joins the maintenance rules to `R` as well, and
+`viewRowsRooted_of_runSaturateM` at `R` is that fact. `ccStale_not_viewRowsColumnClosedAll` is
+the same kind of check one field deeper, at a state one rebuild firing short. -/
+
+/-- A state with a view row and an empty signature. -/
+def rmBadState : FDatabase :=
+  { FDatabase.empty with
+    rows := [⟨viewName "F", [], [Term.lit (.int 0), Term.lit (.int 0)]⟩] }
+
+@[inherit_doc rmBadState]
+theorem rmBadState_not_rowMechAt : ¬ rmBadState.RowMechAt := by
+  intro h
+  have h0 := h.mergeOf "F" [] (Term.lit (.int 0)) (Term.lit (.int 0))
+    (by rw [rmBadState]; exact List.mem_cons_self)
+  rw [rmBadState, show ({ FDatabase.empty with
+      rows := [⟨viewName "F", [], [Term.lit (.int 0), Term.lit (.int 0)]⟩] } :
+      FDatabase).sig = (fun _ => none) from rfl, Signature.mergeOf] at h0
+  simp at h0
+
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Twenty-eight conjuncts: the twenty-seven `Egglog.UnionsFire` takes, in the order it takes them,
-and `rbSrcR_globalsInline` beside them. Twenty-one have content here; the seven that do not are
-`Database.UnionsJoined`, `FDatabase.RowJoined`'s `edge`, the three threaded row invariants and
-the `.eq` case's two clauses, each of them for a reason recorded below and each with content at
-another witness.
+Twenty-nine conjuncts: the twenty-eight `Egglog.UnionsFire` takes, in the order it takes them,
+and `rbSrcR_globalsInline` beside them. Twenty-one have content here; the eight that do not are
+`Database.UnionsJoined`, `FDatabase.RowJoined`'s `edge`, the three threaded row invariants, the
+`.eq` case's two clauses and the middle-state bundle, each of them for a reason recorded below
+and each with content at another witness.
+
+**The middle-state conjunct is guarded on the command**, and this witness's command is a
+`Cmd.run` — so `FDatabase.RowMechAt` is asked of nothing here. It is a constraint and not a
+shape (`rmBadState_not_rowMechAt`, at a state holding a live view row whose function carries no
+`:merge`), and where it has content is `encStep_encRow_saturateMid`: the middle of a
+`Cmd.saturate R` block is rebuilt because `allMaintenanceRules` joins the maintenance rules to
+`R` as well, which `viewRowsRooted_of_runSaturateM` at `R` is. Four of its five fields hold
+here anyway — `rbTgtR_viewRepr_of_rowRepr`, `rbTgtR_rowJoined`, `rbTgtR_rowColumnsValued` and
+`rbTgtR_mergeOf_of_row` — and the fifth is `rbTgtR_exists_rowRepr` restricted to the source's
+own terms.
 
 **The round has content.** The source holds `rbRule` and the target its encoding, and both
 fire: `rbTgtR_mem_matchQuery` is the substitution the emitted entry atom admits,
@@ -9649,6 +9742,8 @@ theorem unionsJoined_fire_satisfiable :
       rbSrcR.LitGlobalsHeld rbTgtR ∧ rbSrcR.EqLitGlobals ∧
       (∀ r ∈ rbSrcR.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true) ∧
       (∀ r ∈ rbSrcR.rules, ∀ a ∈ r.actions, a.NoSet) ∧
+      (∀ (R' : RulesetName) (tm : FDatabase), Cmd.run rbRuleset = Cmd.saturate R' →
+        rbTgtR.execCmdM (Cmd.saturate R') = some tm → tm.RowMechAt) ∧
       rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrcR_cmdStep_run, rbTgtR_run, rbTgtR_env, rbSrcR_ctorState, rbTgtR_sig_mono,
     rbTgtR_isCtor_fiatName, rbSrcR_hrules, rbSrcR_queriesEncodable,
@@ -9660,7 +9755,7 @@ theorem unionsJoined_fire_satisfiable :
     rbTgtR_viewRowsRootedAll, rbTgtR_viewRowsColumnClosedAll, rbTgtR_ufRootsUnique,
     (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h), rbTgtR_envReadsAt,
     rbSrcR_litGlobalsHeld, rbSrcR_eqLitGlobals, rbSrcR_noAtQuery, rbSrcR_noSet,
-    rbSrcR_globalsInline⟩
+    (fun _ _ hc _ => absurd hc (by simp)), rbSrcR_globalsInline⟩
 
 /-! ### The forward mirror of `Encoding/Match.lean`
 
@@ -10950,7 +11045,7 @@ def UnionsFireWeak : Prop :=
 refutations below bracket the repair from above and refute nothing it says. -/
 theorem unionsFire_of_weak (hw : UnionsFireWeak) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj _
-    _ _ hback _ _ _ _ _ _ _ _ _
+    _ _ hback _ _ _ _ _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate ?_ hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, -⟩ := hrules r hr
@@ -11414,7 +11509,7 @@ def UnionsFireAnyG : Prop :=
 refutation below refutes nothing the repair says. -/
 theorem unionsFire_of_anyG (hw : UnionsFireAnyG) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate hsig hfiat hrules hq hcv hno hreads hjoin
-    hrow hrj _ _ _ hback _ _ _ _ _ _ _ _ _
+    hrow hrj _ _ _ hback _ _ _ _ _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate hsig hfiat ?_ hq hcv hno hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, hct, -⟩ := hrules r hr
@@ -12638,6 +12733,7 @@ theorem encReached_rebuildBase {P : Program} (hdom : P.EncodeDomain) {d : FDatab
       rw [hdata.2.1, show FDatabase.empty.rows = ([] : List Row) from rfl] at hmem
       exact absurd hmem (by simp)
   | block _ hc hb ih => exact rebuildBase_encodeCmd hdom hc (fun _ hc' => hc') ih hb
+  | satMid _ _ hs ih => exact rebuildBase_saturateMid hdom ih hs
 
 @[inherit_doc encReached_rebuildBase]
 theorem encReached_encBase {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
@@ -12680,6 +12776,11 @@ theorem encReached_ufRowsForest {P : Program} (hdom : P.EncodeDomain)
       (fun c' hc' => ufWriteOk_encodeCmd _ _ _ _ c' hc')
       (fun c' hc' => noAtLet_encodeCmd hdom _ _ hc _ _ c' hc')
       (encReached_rebuildBase hdom hr).base (encReached_rebuildBase hdom hr).descend ih hb
+  | @satMid _ _ R hr _ hs ih =>
+    exact FDatabase.EncBase.execCmdM_ufRowsForest (encodeSig_ufName hdom) hsy htr
+      (encReached_rebuildBase hdom hr).base (c := Cmd.saturate R)
+      trivial trivial trivial trivial trivial
+      (encReached_rebuildBase hdom hr).descend ih hs
 
 /-- **The bridge at every reached state.** -/
 theorem encReached_entryRowsUF {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
@@ -12699,6 +12800,9 @@ theorem encReached_entryRowsUF {P : Program} (hdom : P.EncodeDomain) {d : FDatab
       (fun c' hc' => entryWriteOk_encodeCmd hdom _ _ hc _ _ c' hc')
       (fun c' hc' => noAtLet_encodeCmd hdom _ _ hc _ _ c' hc')
       (encReached_rebuildBase hdom hr).base ih hb
+  | @satMid _ _ R hr _ hs ih =>
+    exact FDatabase.EncBase.execCmdM_entryRowsUF hdom (encReached_rebuildBase hdom hr).base
+      (c := Cmd.saturate R) trivial trivial trivial trivial ih hs
 
 /-- **Entry-term descent at every reached state.** -/
 theorem encReached_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
@@ -12719,6 +12823,10 @@ theorem encReached_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) {d : FDa
       (fun c' hc' => entryWriteOk_encodeCmd hdom _ _ hc _ _ c' hc')
       (fun c' hc' => noAtLet_encodeCmd hdom _ _ hc _ _ c' hc')
       (encReached_rebuildBase hdom hr).base (encReached_rebuildBase hdom hr).descend ih hb
+  | @satMid _ _ R hr _ hs ih =>
+    exact FDatabase.EncBase.execCmdM_ufTermsDescend hdom (encReached_rebuildBase hdom hr).base
+      (c := Cmd.saturate R) trivial trivial trivial trivial trivial
+      (encReached_rebuildBase hdom hr).descend ih hs
 
 /-- **The identification at every reached state**: entry reachability and row reachability land
 on one `@UF` row root. -/
@@ -12763,6 +12871,9 @@ theorem encReached_viewRowsRooted {P : Program} (hdom : P.EncodeDomain)
     exact absurd hrow (by simp)
   | block hr hc hb ih =>
     exact viewRowsRooted_encodeCmd hdom hsy htr hc _ _ _ (encReached_rebuildBase hdom hr) ih hb
+  | satMid hr hc hs _ =>
+    exact viewRowsRooted_of_runSaturateM hdom (Or.inr hc) hsy htr
+      (encReached_rebuildBase hdom hr) hs
 
 /-- **The merge fixpoint at a view key, at every reached state.** -/
 theorem encReached_viewRowUnique {P : Program} (hdom : P.EncodeDomain)
@@ -12776,6 +12887,8 @@ theorem encReached_viewRowUnique {P : Program} (hdom : P.EncodeDomain)
     exact absurd hrow (by simp)
   | block hr hc hb ih =>
     exact viewRowUnique_encodeCmd hdom hsy htr hc _ _ _ (encReached_rebuildBase hdom hr) ih hb
+  | satMid hr _ hs _ =>
+    exact viewRowUnique_of_runSaturateM hdom hsy htr (encReached_rebuildBase hdom hr) hs
 
 /-- **The column rules' closure at every reached state.** -/
 theorem encReached_viewRowsColumnClosed {P : Program} (hdom : P.EncodeDomain)
@@ -12792,6 +12905,9 @@ theorem encReached_viewRowsColumnClosed {P : Program} (hdom : P.EncodeDomain)
   | block hr hc hb ih =>
     exact viewRowsColumnClosed_encodeCmd hdom htr hsy hfi hcg hc _ _ _
       (encReached_rebuildBase hdom hr) ih hb
+  | satMid hr hc hs _ =>
+    exact viewRowsColumnClosed_of_runSaturateM hdom (Or.inr hc) htr hsy hfi hcg
+      (encReached_rebuildBase hdom hr) hs
 
 /-- **One column step at a reached state.** -/
 theorem encReached_columnRow_step {P : Program} (hdom : P.EncodeDomain)
@@ -13730,24 +13846,169 @@ theorem encStep_ufLitRoots {P : Program} (hdom : P.EncodeDomain)
     (encReached_encBase hdom h.reached).inv.index
     (by rw [(encReached_encBase hdom h.reached).sig]; exact encodeSig_mergeOf_ufName hdom) l
 
-/-- **The tuple choice at a state the run passes through, with nothing left over.**
+/-! ### The row mechanism, off one state
 
-This is what `Egglog.UnionsFire` is missing and what `execM_rebuildClosed` could not supply:
-`ViewRepr` is what the command induction carries and `RowRepr` is what a firing reads, and at
-the pointwise `@UF` row root they are the same claim. The four `Signature.IsCtor` carries are
-discharged from `encodePrelude`'s own vocabulary at an arbitrary program, so the whole thing
-asks for the domain and the chain and nothing else. -/
+Every clause `Egglog.RowMech` carries about **rows** is proved from three facts and no run:
+the state is one the encoded run reaches, a literal is its own `@UF` row root, and a view
+entry names a source constructor at its own key width. `Egglog.EncRow` is that bundle.
+
+**Why it is a bundle and not `Egglog.EncStep`.** The clauses are needed at two states, not
+one: the boundary between two encoded blocks, which is what `Egglog.EncStep` is, and the
+**middle** of a `Cmd.saturate R` block — the `R`-round fixpoint the source's own rounds are
+read at. `Egglog.EncReached.satMid` reaches the second and `FDatabase.EncOk.saturate_src`
+supplies its terms' soundness, so both states inhabit the bundle and the lemmas below are
+stated once. -/
+
+/-- **What the row-mechanism clauses are proved from.** The last two fields are the facts
+`Egglog.EncReached` does not carry — both go through `FDatabase.SoundTerms` — and the first is
+the block induction the walk consumes. -/
+structure EncRow (P : Program) (d : FDatabase) : Prop where
+  /-- The state is one the encoded run reaches. -/
+  reached : EncReached P d
+  /-- A literal is its own `@UF` row root. -/
+  litRoots : ∀ l : Lit, d.UFRowRoot (Term.lit l)
+  /-- A view entry names a source constructor at its own key width. -/
+  ctorsIn : ∀ (f : FnName) (es : List Term) (e pf : Term),
+    Term.app (viewName f) (es ++ [e, pf]) ∈ d.terms → (f, es.length) ∈ P.ctors
+
+@[inherit_doc EncRow]
+theorem EncStep.encRow {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+    {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
+    (h : EncStep P pre suf sd d G) : EncRow P d :=
+  ⟨h.reached, encStep_ufLitRoots hdom hnodup h,
+    fun _ _ _ _ hmem => encStep_ctorsIn hdom hnodup h hmem⟩
+
+
+/-- **The bundle at the middle of a `Cmd.saturate R` block** — the `R`-round fixpoint, one
+command short of the block's trailing rebuild, and the state
+`Egglog.unionsJoined_fire`'s `Cmd.saturate` case reads the source's rounds at.
+
+`Egglog.EncReached.satMid` is the block induction there, and the two source-side fields come
+from `FDatabase.EncOk.saturate_src`: a saturating source ruleset's post-state is a `RunRules`
+fixpoint and so steps to *itself*, which is what makes the target's middle state aligned with
+it and its terms sound there. -/
+theorem encStep_encRow_saturateMid {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program} {sd sd' : Database}
+    {d tm : FDatabase} {G : List (Var × Expr)} {R : RulesetName}
+    (h : EncStep P pre (Cmd.saturate R :: suf) sd d G)
+    (hstep : CmdStep sd (Cmd.saturate R) sd')
+    (hs : d.execCmdM (Cmd.saturate R) = some tm) : EncRow P tm := by
+  have hcmem : Cmd.saturate R ∈ P := by
+    rw [h.program]; exact List.mem_append_right _ List.mem_cons_self
+  have hpre' : ProgramStep Database.empty (pre ++ [Cmd.saturate R]) sd' :=
+    h.src.append (ProgramStep.cons hstep ProgramStep.nil)
+  have hsub' : ∀ c ∈ pre ++ [Cmd.saturate R], c ∈ P := by
+    intro c hc
+    rcases List.mem_append.mp hc with hc' | hc'
+    · exact h.mem c hc'
+    · obtain rfl : c = Cmd.saturate R := by simpa using hc'
+      exact hcmem
+  have hok : tm.EncOk P (encodeSig P) sd' :=
+    FDatabase.EncOk.saturate_src (encodedHeadSound hdom hdom.aritiesAgree' hdom.headsScoped)
+      h.program h.src hstep (encStep_encOk hdom hnodup h) hs
+  have hreached : EncReached P tm := .satMid h.reached hcmem hs
+  refine ⟨hreached, fun l => ?_, fun f es e pf hmem => ?_⟩
+  · refine (?_ : tm.UFLitsIsolated).ufRowRoot (encReached_eqsRefl hdom hreached)
+      (encReached_encBase hdom hreached).inv.index
+      (by rw [(encReached_encBase hdom hreached).sig]; exact encodeSig_mergeOf_ufName hdom) l
+    intro l' b pf' hmem'
+    exact ((hok.sound.2 _ _ _ hmem').eq_of_isLit
+      (hpre'.wf Database.WF.empty).litsIsolated (Or.inl rfl)).symm
+  · obtain ⟨as, hasrc, hcl, -⟩ := hok.sound.1 f es e pf hmem
+    rw [← hcl.length_eq]
+    exact ctorsIn_of_prefixStep hdom hsub' hpre' f as hasrc
+
+/-- **A live view row names a source constructor at its own key width.** `FDatabase.IndexOk`
+turns the row into its entry term — `ctor` forces the row's function to carry a `:merge`, since
+its output columns are not empty, and `entry` then reads the entry off `terms` — and
+`Egglog.EncRow.ctorsIn` is the source-side half at that entry. -/
+theorem encRow_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncRow P d) {f : FnName} {es : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) : (f, es.length) ∈ P.ctors := by
+  have hidx := (encReached_encBase hdom h.reached).inv.index
+  have hmg : d.sig.mergeOf (viewName f) ≠ none := by
+    intro hc
+    have h0 := (hidx.ctor ⟨viewName f, es, [e, pf]⟩ hrow hc).1
+    exact absurd h0 (by simp)
+  obtain ⟨bs, hcl, hmem⟩ := hidx.entry ⟨viewName f, es, [e, pf]⟩ hrow hmg
+  obtain rfl : es = bs :=
+    CongList.eq_of_eqsRefl (encReached_eqsRefl hdom h.reached).toDatabase hcl
+  exact h.ctorsIn f es e pf (FDatabase.mem_toDatabase_terms.mp hmem)
+
+/-- **The tuple choice, with nothing left over**: `ViewRepr` is what the command induction
+carries and `RowRepr` is what a firing reads, and at the pointwise `@UF` row root they are the
+same claim. The four `Signature.IsCtor` carries are discharged from `encodePrelude`'s own
+vocabulary at an arbitrary program, so the whole thing asks for the bundle and nothing else. -/
+theorem encRow_exists_rowRepr {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncRow P d) {t e : Term} (hv : ViewRepr d.toDatabase t e) : ∃ r, RowRepr d t r := by
+  obtain ⟨r, hr, hrr⟩ := encReached_exists_ufRowRoot hdom h.reached e
+  exact ⟨r, encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
+    (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
+    (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached h.litRoots
+    (fun _ _ _ _ hmem => h.ctorsIn _ _ _ _ hmem) hv hr hrr⟩
+
+/-- **One term, one id**: `rowRepr_unique` at the merge fixpoint's own view-key clause. -/
+theorem encRow_rowRepr_fn {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncRow P d) {t r s : Term} (h₁ : RowRepr d t r) (h₂ : RowRepr d t s) : r = s :=
+  rowRepr_unique (fun f as e₁ pf₁ e₂ pf₂ hr₁ hr₂ => by
+    have hu := encReached_viewRowUnique hdom (encodeSig_isCtor_symName P)
+      (encodeSig_isCtor_transName P) h.reached f as.length
+      (encRow_ctorsIn_of_row hdom h hr₁) as [e₁, pf₁] [e₂, pf₂] hr₁ hr₂
+    exact (by simpa using hu : _ ∧ _).1) h₁ h₂
+
+/-- **The reading is the root of any id the entries record**, which is `RowRepr` and `ViewRepr`
+identified: `encReached_rowRepr_of_viewRepr` answers the entry at the root, and the reading is a
+function, so the two answers are the same term. -/
+theorem encRow_rowRepr_eq_root {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncRow P d) {t e r ρ : Term}
+    (hv : ViewRepr d.toDatabase t e) (hr : RowRepr d t r)
+    (hρ : d.UFRowReach e ρ) (hρr : d.UFRowRoot ρ) : ρ = r :=
+  encRow_rowRepr_fn hdom h
+    (encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
+      (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
+      (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached h.litRoots
+      (fun _ _ _ _ hmem => h.ctorsIn _ _ _ _ hmem) hv hρ hρr)
+    hr
+
+/-- **The reading is a function and it collapses an `@UF` edge.** `fn` is `rowRepr_unique` at
+`FDatabase.ViewRowUnique`; `edge` is the root argument — each side's reading is the root of the
+id its entry recorded, and an `@UF` entry edge puts the two ids in one component, whose root is
+unique. Neither clause is `Database.ViewLeader`, which the same states refute. -/
+theorem encRow_rowJoined {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncRow P d) : d.RowJoined where
+  fn := fun _ _ _ h₁ h₂ => encRow_rowRepr_fn hdom h h₁ h₂
+  edge := by
+    intro x y pf t u r s hout hvt hvu hrt hru
+    obtain ⟨ρx, hρx, hρxr⟩ := encReached_exists_ufRowRoot hdom h.reached x
+    obtain ⟨ρy, hρy, hρyr⟩ := encReached_exists_ufRowRoot hdom h.reached y
+    have hxr : ρx = r := encRow_rowRepr_eq_root hdom h hvt hrt hρx hρxr
+    have hys : ρy = s := encRow_rowRepr_eq_root hdom h hvu hru hρy hρyr
+    rw [← hxr, ← hys]
+    exact encReached_ufRowRoot_of_ufReach hdom (encodeSig_isCtor_symName P)
+      (encodeSig_isCtor_transName P) h.reached
+      (Database.UFStep.toReach ⟨pf, hout⟩) ρx ρy hρx hρxr hρy hρyr
+
+/-- **The `:merge` carry.** A live view row's function is a merge function, because its output
+columns are not empty and `FDatabase.IndexOk.ctor` would force them to be. This is the side
+condition `RowRead.app` carries, and it needs only the block induction. -/
+theorem encReached_mergeOf_of_row {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+    (h : EncReached P d) {f : FnName} {es : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) :
+    (d.sig.mergeOf (viewName f)).isSome = true := by
+  rcases hmg : d.sig.mergeOf (viewName f) with _ | m
+  · have h0 := ((encReached_encBase hdom h).inv.index.ctor
+      ⟨viewName f, es, [e, pf]⟩ hrow hmg).1
+    exact absurd h0 (by simp)
+  · rfl
+
+@[inherit_doc encRow_exists_rowRepr]
 theorem encStep_exists_rowRepr {P : Program} (hdom : P.EncodeDomain)
     (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t e : Term}
-    (hv : ViewRepr d.toDatabase t e) : ∃ r, RowRepr d t r := by
-  obtain ⟨r, hr, hrr⟩ := encReached_exists_ufRowRoot hdom h.reached e
-  exact ⟨r, encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
-    (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
-    (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached
-    (encStep_ufLitRoots hdom hnodup h)
-    (fun _ _ _ _ hmem => encStep_ctorsIn hdom hnodup h hmem) hv hr hrr⟩
+    (hv : ViewRepr d.toDatabase t e) : ∃ r, RowRepr d t r :=
+  encRow_exists_rowRepr hdom (h.encRow hdom hnodup) hv
 
 /-- **A run's own states are chain states**, source and target advancing together. -/
 theorem encStep_encodeCmds {P : Program} :
@@ -13818,16 +14079,8 @@ theorem encStep_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain)
     (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G)
     {f : FnName} {es : List Term} {e pf : Term}
-    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) : (f, es.length) ∈ P.ctors := by
-  have hidx := (encReached_encBase hdom h.reached).inv.index
-  have hmg : d.sig.mergeOf (viewName f) ≠ none := by
-    intro hc
-    have h0 := (hidx.ctor ⟨viewName f, es, [e, pf]⟩ hrow hc).1
-    exact absurd h0 (by simp)
-  obtain ⟨bs, hcl, hmem⟩ := hidx.entry ⟨viewName f, es, [e, pf]⟩ hrow hmg
-  obtain rfl : es = bs :=
-    CongList.eq_of_eqsRefl (encReached_eqsRefl hdom h.reached).toDatabase hcl
-  exact encStep_ctorsIn hdom hnodup h (FDatabase.mem_toDatabase_terms.mp hmem)
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) : (f, es.length) ∈ P.ctors :=
+  encRow_ctorsIn_of_row hdom (h.encRow hdom hnodup) hrow
 
 /-- **The `:merge` carry, at a state the run passes through.** A live view row's function is a
 merge function, because its output columns are not empty and `FDatabase.IndexOk.ctor` would
@@ -13836,12 +14089,8 @@ theorem encStep_mergeOf_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : 
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G)
     {f : FnName} {es : List Term} {e pf : Term}
     (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) :
-    (d.sig.mergeOf (viewName f)).isSome = true := by
-  rcases hmg : d.sig.mergeOf (viewName f) with _ | m
-  · have h0 := ((encReached_encBase hdom h.reached).inv.index.ctor
-      ⟨viewName f, es, [e, pf]⟩ hrow hmg).1
-    exact absurd h0 (by simp)
-  · rfl
+    (d.sig.mergeOf (viewName f)).isSome = true :=
+  encReached_mergeOf_of_row hdom h.reached hrow
 
 /-- **Every id the reading produces is an `@UF` row root**, which is the whole of what
 rootedness buys: `FDatabase.ViewRowsRooted` at an application and `encStep_ufLitRoots` at a
@@ -13865,11 +14114,7 @@ theorem encStep_rowRepr_fn {P : Program} (hdom : P.EncodeDomain)
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t r s : Term}
     (h₁ : RowRepr d t r) (h₂ : RowRepr d t s) : r = s :=
-  rowRepr_unique (fun f as e₁ pf₁ e₂ pf₂ hr₁ hr₂ => by
-    have hu := encReached_viewRowUnique hdom (encodeSig_isCtor_symName P)
-      (encodeSig_isCtor_transName P) h.reached f as.length
-      (encStep_ctorsIn_of_row hdom hnodup h hr₁) as [e₁, pf₁] [e₂, pf₂] hr₁ hr₂
-    exact (by simpa using hu : _ ∧ _).1) h₁ h₂
+  encRow_rowRepr_fn hdom (h.encRow hdom hnodup) h₁ h₂
 
 /-- **The reading is the root of any id the entries record**, which is `RowRepr` and `ViewRepr`
 identified: `encReached_rowRepr_of_viewRepr` answers the entry at the root, and the reading is a
@@ -13880,13 +14125,7 @@ theorem encStep_rowRepr_eq_root {P : Program} (hdom : P.EncodeDomain)
     (h : EncStep P pre suf sd d G) {t e r ρ : Term}
     (hv : ViewRepr d.toDatabase t e) (hr : RowRepr d t r)
     (hρ : d.UFRowReach e ρ) (hρr : d.UFRowRoot ρ) : ρ = r :=
-  encStep_rowRepr_fn hdom hnodup h
-    (encReached_rowRepr_of_viewRepr hdom (encodeSig_isCtor_symName P)
-      (encodeSig_isCtor_transName P) (encodeSig_isCtor_fiatName P)
-      (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached
-      (encStep_ufLitRoots hdom hnodup h)
-      (fun _ _ _ _ hmem => encStep_ctorsIn hdom hnodup h hmem) hv hρ hρr)
-    hr
+  encRow_rowRepr_eq_root hdom (h.encRow hdom hnodup) hv hr hρ hρr
 
 /-- **The derived clause, discharged.** `fn` is `rowRepr_unique` at
 `FDatabase.ViewRowUnique`; `edge` is the root argument — each side's reading is the root of the
@@ -13895,18 +14134,8 @@ unique. Neither clause is `Database.ViewLeader`, which the same states refute. -
 theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain)
     (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
-    (h : EncStep P pre suf sd d G) : d.RowJoined where
-  fn := fun _ _ _ h₁ h₂ => encStep_rowRepr_fn hdom hnodup h h₁ h₂
-  edge := by
-    intro x y pf t u r s hout hvt hvu hrt hru
-    obtain ⟨ρx, hρx, hρxr⟩ := encReached_exists_ufRowRoot hdom h.reached x
-    obtain ⟨ρy, hρy, hρyr⟩ := encReached_exists_ufRowRoot hdom h.reached y
-    have hxr : ρx = r := encStep_rowRepr_eq_root hdom hnodup h hvt hrt hρx hρxr
-    have hys : ρy = s := encStep_rowRepr_eq_root hdom hnodup h hvu hru hρy hρyr
-    rw [← hxr, ← hys]
-    exact encReached_ufRowRoot_of_ufReach hdom (encodeSig_isCtor_symName P)
-      (encodeSig_isCtor_transName P) h.reached
-      (Database.UFStep.toReach ⟨pf, hout⟩) ρx ρy hρx hρxr hρy hρyr
+    (h : EncStep P pre suf sd d G) : d.RowJoined :=
+  encRow_rowJoined hdom (h.encRow hdom hnodup)
 
 /-- **Rootedness, program-free, at a state the run passes through.** The block induction
 carries the restricted form (`encReached_viewRowsRooted`) and `encStep_ctorsIn_of_row` reads the
@@ -14026,7 +14255,17 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
     encStep_litGlobalsHeld hdom h,
     eqLitGlobals_of_prefixStep hdom h.mem h.src,
     (fun r hr => (queriesIn_of_prefixStep hdom h.mem h.src r hr).2.1),
-    fun r hr => (queriesIn_of_prefixStep hdom h.mem h.src r hr).2.2⟩
+    (fun r hr => (queriesIn_of_prefixStep hdom h.mem h.src r hr).2.2),
+    by
+      intro R q sd' tm hsuf hstep hs
+      subst hsuf
+      have hrow := encStep_encRow_saturateMid hdom hnodup h hstep hs
+      exact ⟨fun _ _ hv => encRow_exists_rowRepr hdom hrow hv,
+        fun _ _ hr =>
+          ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom hrow.reached).inv.index hr,
+        encRow_rowJoined hdom hrow,
+        encReached_rowColumnsValued hdom hrow.reached,
+        fun _ _ _ _ hr => encReached_mergeOf_of_row hdom hrow.reached hr⟩⟩
 
 /-- **`Egglog.RuleNameMech`, discharged.** The prelude declares one `@Rule_i` per source rule,
 at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`), and the
@@ -14905,12 +15144,22 @@ and neither derivable from the rest of the clause list nor idle:
   width `|as| + |vs|`, is unavailable whenever `vs` is non-empty. `Actions.Builds` admits a
   `set` head and says nothing about this. -/
 
-/-- **The obligation `unionsFire_conclusion_of_run` leaves, at one firing.** Steps 1-4: the
-reading (`exists_mem_matchQuery_encodeQuery_of_validQuerySubst`), the firing
-(`exists_fired_encodeRule`), the transport (`contained_of_fired_run_block`) and the head's
-read-back (`headActions_viewRepr`). -/
-theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
-    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
+/-- **The obligation `unionsFire_conclusion_of_run` leaves, at one firing and at an arbitrary
+landing state.** Steps 1-4: the reading
+(`exists_mem_matchQuery_encodeQuery_of_validQuerySubst`), the firing (`exists_fired_encodeRule`)
+and the head's read-back (`headActions_viewRepr`).
+
+**What the transport is, abstracted.** The two containments below are the whole of what the
+target's own program was ever spent on: one firing's writes reaching the landing state, and the
+pre-state reaching it. A `Cmd.run`'s block supplies them at its post-state
+(`contained_of_fired_run_block`, `contained_of_run_block`); a `Cmd.saturate`'s **middle** state
+supplies them *at itself*, because a saturating run returns a round fixpoint and
+`RoundClosed`/`EqsClosed` are that fixpoint read on `terms` and `eqs`. Stating the obligation
+over the containments rather than over the block is what lets one proof serve both. -/
+theorem unionsFire_firing_at {R : RulesetName} {sd : Database} {td tdX : FDatabase}
+    (hfc : ∀ {r : Rule} {σ : Env} {dF : FDatabase}, r ∈ td.rules → r.ruleset = R →
+      σ ∈ matchQuery td r.query → Fired td r σ dF → dF.toDatabase.Contained tdX.toDatabase)
+    (hcontRun : td.toDatabase.Contained tdX.toDatabase)
     (henv : td.env = sd.env) (hstate : sd.CtorState) (hfiat : td.sig.IsCtor fiatName)
     (hrules : ∀ r ∈ sd.rules, ∃ (G : List (Var × Expr)) (i n : Nat),
       (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
@@ -14932,16 +15181,14 @@ theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
     (hnoSet : ∀ r ∈ sd.rules, ∀ a ∈ r.actions, a.NoSet)
     {r : Rule} (hr : r ∈ sd.rules) (hR : r.ruleset = R) {τ : Env} {dd : Database}
     (hq : ValidQuerySubst sd r.query τ) (hev : evalLocalActions sd r.actions τ = some dd) :
-    td'.toDatabase.UnionsJoined dd ∧ ∀ t ∈ dd.terms, ∃ x, ViewRepr td'.toDatabase t x := by
+    tdX.toDatabase.UnionsJoined dd ∧ ∀ t ∈ dd.terms, ∃ x, ViewRepr tdX.toDatabase t x := by
   obtain ⟨G, i, n, hmem0, hruleName, hgi, hid⟩ := hrules r hr
   rw [hid] at hmem0
   obtain ⟨σ, hσ, hreadσ⟩ := exists_mem_matchQuery_encodeQuery_of_validQuerySubst
     hrj hjoin hrow hmg hcv (hqe r hr) (hnoAtQuery r hr) hgi hid hlit heqlit hr hq n
   obtain ⟨dF, hfired⟩ := exists_fired_encodeRule henv hfiat hruleName (hqe r hr).1.1
     (hqe r hr).1.2 (hsc r hr) (hb r hr) n hσ
-  have hcont : dF.toDatabase.Contained td'.toDatabase :=
-    contained_of_fired_run_block hmem0 hR hσ hfired hrun
-  have hcontRun : td.toDatabase.Contained td'.toDatabase := contained_of_run_block hrun
+  have hcont : dF.toDatabase.Contained tdX.toDatabase := hfc hmem0 hR hσ hfired
   -- the source's block and the target's
   have hev' : (evalActions { sd with env := τ ++ sd.env } r.actions).map
       (fun db' => { db' with env := sd.env, rules := sd.rules }) = some dd := hev
@@ -14951,7 +15198,7 @@ theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
         (encodeQuery r.query n).2).1).map
       (fun d' => { d' with env := td.env, rules := td.rules }) = some dF := hfired
   obtain ⟨tkEnd, htgtBlock, rfl⟩ := Option.map_eq_some_iff.mp hfired'
-  have hmonoT : ∀ x ∈ tkEnd.terms, x ∈ td'.toDatabase.terms := fun x hx =>
+  have hmonoT : ∀ x ∈ tkEnd.terms, x ∈ tdX.toDatabase.terms := fun x hx =>
     Database.mem_terms_of_eqs hcont.eqs (FDatabase.mem_toDatabase_terms.mpr hx)
   -- the source state the block runs at
   have hτ : ∀ b ∈ τ ++ sd.env, b.2 ∈ sd.terms := fun b hb =>
@@ -14963,16 +15210,16 @@ theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
     rw [Database.terms_setEnv]
     exact hτ b hb
   have hreadsF : ∀ t ∈ ({ sd with env := τ ++ sd.env } : Database).terms,
-      ∃ x, ViewRepr td'.toDatabase t x := by
+      ∃ x, ViewRepr tdX.toDatabase t x := by
     intro t ht
     rw [Database.terms_setEnv] at ht
     exact (hreads t ht).imp fun _ he => ViewRepr.mono hcontRun he
-  have hjoinF : td'.toDatabase.UnionsJoined ({ sd with env := τ ++ sd.env } : Database) :=
+  have hjoinF : tdX.toDatabase.UnionsJoined ({ sd with env := τ ++ sd.env } : Database) :=
     fun a b hab hne => (hjoin.mono hcontRun) a b hab hne
   have hlinkF : ∀ (v : Var) (t x : Term),
       Env.lookup v ({ sd with env := τ ++ sd.env } : Database).env = some t →
       Env.lookup v ({ td with env := σ ++ td.env } : FDatabase).env = some x →
-      ViewRepr td'.toDatabase t x := by
+      ViewRepr tdX.toDatabase t x := by
     intro v t x ht hx
     have ht' : Env.lookup v (τ ++ sd.env) = some t := ht
     have hx' : Env.lookup v (σ ++ td.env) = some x := hx
@@ -15016,6 +15263,37 @@ theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
   rw [Database.terms_setEnvRules] at ht
   exact hreadsEnd t ht
 
+/-- **The `Cmd.run` block's own instance.** `contained_of_fired_run_block` and
+`contained_of_run_block` are the two containments there. -/
+theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
+    (henv : td.env = sd.env) (hstate : sd.CtorState) (hfiat : td.sig.IsCtor fiatName)
+    (hrules : ∀ r ∈ sd.rules, ∃ (G : List (Var × Expr)) (i n : Nat),
+      (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
+        sd.GlobalsInline G ∧ r.substGlobals G = r)
+    (hqe : ∀ r ∈ sd.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none)
+    (hcv : td.RowColumnsValued) (hno : td.NoAtEnv)
+    (hreads : ∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e)
+    (hjoin : td.toDatabase.UnionsJoined sd)
+    (hrow : ∀ t ∈ sd.terms, ∃ x, RowRepr td t x) (hrj : td.RowJoined)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
+    (hsc : ∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env)))
+    (hb : ∀ r ∈ sd.rules, Actions.Builds r.actions td.sig)
+    (hback : ∀ t x : Term, RowRepr td t x → ViewRepr td.toDatabase t x)
+    (henvReads : ∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td.toDatabase s s)
+    (hlit : sd.LitGlobalsHeld td) (heqlit : sd.EqLitGlobals)
+    (hnoAtQuery : ∀ r ∈ sd.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true)
+    (hnoSet : ∀ r ∈ sd.rules, ∀ a ∈ r.actions, a.NoSet)
+    {r : Rule} (hr : r ∈ sd.rules) (hR : r.ruleset = R) {τ : Env} {dd : Database}
+    (hq : ValidQuerySubst sd r.query τ) (hev : evalLocalActions sd r.actions τ = some dd) :
+    td'.toDatabase.UnionsJoined dd ∧ ∀ t ∈ dd.terms, ∃ x, ViewRepr td'.toDatabase t x :=
+  unionsFire_firing_at
+    (fun hmem hR' hσ hfired => contained_of_fired_run_block hmem hR' hσ hfired hrun)
+    (contained_of_run_block hrun) henv hstate hfiat hrules hqe hcv hno hreads hjoin hrow hrj
+    hmg hsc hb hback henvReads hlit heqlit hnoAtQuery hnoSet hr hR hq hev
+
 /-- **The `Cmd.run` half of `Egglog.UnionsFire`, landed.** `unionsFire_conclusion_of_run` plus
 `unionsFire_firing`, one per firing. Every hypothesis is one `Egglog.UnionsFire` carries — the
 two source-run facts above are clauses of it now — so `unionsJoined_fire` discharges its
@@ -15049,14 +15327,199 @@ theorem unionsFire_run {R : RulesetName} {sd sd' : Database} {td td' : FDatabase
       unionsFire_firing hrun henv hstate hfiat hrules hqe hcv hno hreads hjoin hrow hrj hmg
         hsc hb hback henvReads hlit heqlit hnoAtQuery hnoSet hr hR hq hev
 
-/-- **The command induction's rule-firing case. Open — and, after four refutations and their
-repairs and one specification fix, no longer standing at a false statement.**
+
+/-! ### The `Cmd.saturate` half, by containment
+
+A source `Cmd.saturate R` reaches an **iterate** of `RunRules R` (`RunReach.iterate`), so the
+conclusion is about `k` rounds and steps 1-4 are about one firing. What joins them is that the
+conclusion is **monotone in the target** — `Database.UnionsJoined.mono` and `ViewRepr.mono`
+both transport upward along `Database.Contained` — so the rounds do not have to be *aligned*
+with the target's. It is enough to find one target state that
+
+* the source's every round can be read at, and
+* the block's post-state contains.
+
+**That state is the block's middle**, `td.execCmdM (Cmd.saturate R)`: the `R`-round's own
+fixpoint, one command short of the trailing rebuild.
+
+* **The firings land there.** `FDatabase.runSaturateM_roundClosed` and
+  `runSaturateM_eqsRoundClosed` are the fixpoint read on the two fields `Database.Contained`
+  and `FDatabase.toDatabase` look at, so an encoded `R`-rule firing at the middle state writes
+  nothing the middle state does not already hold. That is the *whole* of what
+  `unionsFire_firing_at` spends the target's program on, and it is why the two containments are
+  hypotheses of that lemma rather than a block.
+* **The rows are there.** The middle state is not a block boundary, but it *is* rebuilt:
+  `allMaintenanceRules` joins the maintenance rules to every ruleset a source `Cmd.saturate`
+  names, so a fixpoint of the `R`-round is a fixpoint of the rebuild round too, and
+  `Egglog.EncReached.satMid` is the block induction there. `FDatabase.RowMechAt` is what the
+  residue is handed at it and `encStep_encRow_saturateMid` is the discharge.
+* **And the block contains it**, at `terms` and `eqs` — `FDatabase.execProgramM_terms` and
+  `_eqs` across the trailing `Cmd.saturate rebuildRuleset`. Not at `rows`, which the rebuild
+  re-keys and the merge phase deletes from; nothing here reads `rows` at `td'`.
+
+So the induction runs on the *source's* rounds with the target fixed at the middle state, and
+`unionsFire_conclusion_of_firings` is one round of it. No state of the target's own saturation
+is identified with any state of the source's, and no fixpoint of the larger ruleset is claimed
+to be one of the smaller. -/
+
+/-- **The `eqs` half of the fixpoint a saturating run returns at**: every equation one more
+round of `R` would assert is already held. `FDatabase.RoundClosed` is the same statement on
+`terms`, and `FDatabase.sameData` — the test `runSaturateM` returns from — compares both. -/
+def FDatabase.EqsRoundClosed (R : RulesetName) (d : FDatabase) : Prop :=
+  ∀ q ∈ (execRunRules R d).eqs, q ∈ d.eqs
+
+@[inherit_doc FDatabase.EqsRoundClosed]
+theorem runSaturateM_eqsRoundClosed {R : RulesetName} {n : Nat} {d e : FDatabase}
+    (h : d.runSaturateM R n = some e) : e.EqsRoundClosed R := by
+  obtain ⟨e', hround, hsame⟩ := FDatabase.runSaturateM_settled n h
+  have heqs : e'.eqs = e.eqs := by
+    simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at hsame
+    exact hsame.2
+  intro q hq
+  have hround' : (execRunRules R e).mergeSaturateF mergeFuel = some e' := hround
+  exact heqs ▸ FDatabase.mergeSaturateF_eqs hround' q hq
+
+/-- **What a round-closed state already holds**, at one firing: the shape
+`unionsFire_firing_at`'s containment hypothesis is consumed in.
+`FDatabase.RoundClosed.fired` is the same on `terms`. -/
+theorem FDatabase.EqsRoundClosed.fired {R : RulesetName} {d : FDatabase}
+    (h : d.EqsRoundClosed R) {r : Rule} (hr : r ∈ d.rules) (hR : r.ruleset = R) {σ : Env}
+    (hσ : σ ∈ matchQuery d r.query) {d' : FDatabase} (hf : Fired d r σ d')
+    {q : Term × Term} (hq : q ∈ d'.eqs) : q ∈ d.eqs :=
+  h q (mem_eqs_execRunRules.mpr (Or.inr ⟨r, hr, hR, σ, hσ, d', hf, hq⟩))
+
+/-- **A round leaves the environment, the rules and the signature alone, and adds terms.**
+`Database.sUnion` takes the first three from its left operand. -/
+theorem runRules_iterate_fields {R : RulesetName} (sd : Database) :
+    ∀ j : Nat, ((RunRules R)^[j] sd).env = sd.env ∧ ((RunRules R)^[j] sd).rules = sd.rules ∧
+      ((RunRules R)^[j] sd).sig = sd.sig ∧ ∀ t ∈ sd.terms, t ∈ ((RunRules R)^[j] sd).terms := by
+  intro j
+  induction j with
+  | zero => exact ⟨rfl, rfl, rfl, fun _ h => h⟩
+  | succ j ih =>
+    rw [Function.iterate_succ_apply']
+    refine ⟨ih.1, ih.2.1, by rw [RunRules.sig]; exact ih.2.2.1, fun t ht => ?_⟩
+    rw [RunRules, Database.sUnion_terms]
+    exact Or.inl (ih.2.2.2 t ht)
+
+/-- **And it keeps the constructor fragment.** `RunReach.ctorState` at the iterate. -/
+theorem runRules_iterate_ctorState {R : RulesetName} {sd : Database} (h : sd.CtorState) :
+    ∀ j : Nat, ((RunRules R)^[j] sd).CtorState := by
+  intro j
+  induction j with
+  | zero => exact h
+  | succ j ih =>
+    rw [Function.iterate_succ_apply']
+    exact ⟨RunRules.wf ih.wf, by rw [RunRules.sig]; exact ih.sig⟩
+
+/-- **The `Cmd.saturate` half of `Egglog.UnionsFire`, landed.** The source's rounds, read at
+the block's **middle** state and transported up to its post-state by the two `mono` lemmas.
+See the section docstring above. -/
+theorem unionsFire_saturate {R : RulesetName} {sd sd' : Database} {td td' : FDatabase}
+    (hstep : CmdStep sd (Cmd.saturate R) sd')
+    (hrun : td.execProgramM [Cmd.saturate R, Cmd.saturate rebuildRuleset] = some td')
+    (hmid : ∀ (R' : RulesetName) (tm : FDatabase), Cmd.saturate R = Cmd.saturate R' →
+      td.execCmdM (Cmd.saturate R') = some tm → tm.RowMechAt)
+    (henv : td.env = sd.env) (hstate : sd.CtorState) (hfiat : td.sig.IsCtor fiatName)
+    (hrules : ∀ r ∈ sd.rules, ∃ (G : List (Var × Expr)) (i n : Nat),
+      (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
+        sd.GlobalsInline G ∧ r.substGlobals G = r)
+    (hqe : ∀ r ∈ sd.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none)
+    (hno : td.NoAtEnv)
+    (hreads : ∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e)
+    (hjoin : td.toDatabase.UnionsJoined sd)
+    (hsc : ∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env)))
+    (hb : ∀ r ∈ sd.rules, Actions.Builds r.actions td.sig)
+    (henvReads : ∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td.toDatabase s s)
+    (hlit : sd.LitGlobalsHeld td) (heqlit : sd.EqLitGlobals)
+    (hnoAtQuery : ∀ r ∈ sd.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true)
+    (hnoSet : ∀ r ∈ sd.rules, ∀ a ∈ r.actions, a.NoSet) :
+    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e := by
+  -- the block, split at its middle state
+  rw [FDatabase.execProgramM] at hrun
+  obtain ⟨tm, hm, htail⟩ := Option.bind_eq_some_iff.mp hrun
+  have hm' : td.runSaturateM R runFuel = some tm := hm
+  have hmP : td.execProgramM [Cmd.saturate R] = some tm := by
+    rw [FDatabase.execProgramM, hm]; rfl
+  have hmech : tm.RowMechAt := hmid R tm rfl hm
+  obtain ⟨hsigm, henvm, hrulesm⟩ := FDatabase.runSaturateM_fields runFuel hm'
+  -- the two containments the block gives
+  have hcontM : td.toDatabase.Contained tm.toDatabase :=
+    FDatabase.toDatabase_contained_of_lists (FDatabase.execProgramM_terms hmP)
+      (FDatabase.execProgramM_eqs hmP)
+  have hcontT : tm.toDatabase.Contained td'.toDatabase :=
+    FDatabase.execProgramM_toDatabase_contained htail
+  -- and the fixpoint the middle state is: a firing there writes nothing new
+  have hfc : ∀ {r : Rule} {σ : Env} {dF : FDatabase}, r ∈ tm.rules → r.ruleset = R →
+      σ ∈ matchQuery tm r.query → Fired tm r σ dF → dF.toDatabase.Contained tm.toDatabase :=
+    fun hmem hR hσ hf => FDatabase.toDatabase_contained_of_lists
+      (fun _ ht => (FDatabase.runSaturateM_roundClosed hm').fired hmem hR hσ hf ht)
+      (fun _ hq => (runSaturateM_eqsRoundClosed hm').fired hmem hR hσ hf hq)
+  -- the source's rounds
+  obtain ⟨k, hk⟩ := RunReach.iterate hstate.sig (cmdStep_saturate_iff.mp hstep).1
+  have key : ∀ j : Nat, tm.toDatabase.UnionsJoined ((RunRules R)^[j] sd) ∧
+      ∀ t ∈ ((RunRules R)^[j] sd).terms, ∃ e, ViewRepr tm.toDatabase t e := by
+    intro j
+    induction j with
+    | zero =>
+      exact ⟨hjoin.mono hcontM,
+        fun t ht => (hreads t ht).imp fun _ he => ViewRepr.mono hcontM he⟩
+    | succ j ih =>
+      obtain ⟨hjenv, hjrules, hjsig, hjterms⟩ := runRules_iterate_fields (R := R) sd j
+      have hjstate : ((RunRules R)^[j] sd).CtorState := runRules_iterate_ctorState hstate j
+      have hjstep : CmdStep ((RunRules R)^[j] sd) (Cmd.run R)
+          (RunRules R ((RunRules R)^[j] sd)) :=
+        ⟨RunRules R ((RunRules R)^[j] sd), rfl, Relation.ReflTransGen.refl⟩
+      rw [Function.iterate_succ_apply']
+      refine unionsFire_conclusion_of_firings hjstate hjstep ih ?_
+      intro r hr hR τ dd hq hev
+      refine unionsFire_firing_at hfc (Database.Contained.refl _)
+        (by rw [henvm, henv, hjenv]) hjstate (by rw [hsigm]; exact hfiat) ?_ ?_
+        hmech.valued (by intro b hb; exact hno b (by rw [henvm] at hb; exact hb)) ih.2 ih.1
+        (fun t ht => by
+          obtain ⟨e, he⟩ := ih.2 t ht
+          exact hmech.rowRepr t e he)
+        hmech.joined hmech.mergeOf
+        ?_ ?_ hmech.viewRepr ?_ ?_ ?_ ?_ ?_ hr hR hq hev
+      · -- the encoded rules, at the round's own state
+        intro r' hr'
+        rw [hjrules] at hr'
+        obtain ⟨G, i, n, hmemr, hct, hgi, hid⟩ := hrules r' hr'
+        refine ⟨G, i, n, by rw [hrulesm]; exact hmemr, by rw [hsigm]; exact hct, ?_, hid⟩
+        exact hgi.mono_src (fun _ _ he => by rw [hjsig]; exact he)
+          (fun _ _ he => by rw [hjenv]; exact he)
+      · intro r' hr'; rw [hjrules] at hr'; exact hqe r' hr'
+      · intro r' hr'; rw [hjrules] at hr'; rw [hjenv]; exact hsc r' hr'
+      · intro r' hr'
+        rw [hjrules] at hr'
+        exact Actions.Builds.mono_sig (fun f hf => by rw [hsigm]; exact hf) (hb r' hr')
+      · intro bnd hbnd x hx
+        rw [hjenv] at hbnd
+        exact ViewRepr.mono hcontM (henvReads bnd hbnd x hx)
+      · intro v l hlk
+        rw [hjenv] at hlk
+        exact FDatabase.execProgramM_terms hmP _ (hlit v l hlk)
+      · intro r' hr' pt hp l hpl
+        rw [hjrules] at hr'
+        obtain ⟨v, hv⟩ := heqlit r' hr' pt hp l hpl
+        exact ⟨v, by rw [hjenv]; exact hv⟩
+      · intro r' hr'; rw [hjrules] at hr'; exact hnoAtQuery r' hr'
+      · intro r' hr'; rw [hjrules] at hr'; exact hnoSet r' hr'
+  obtain ⟨hjK, hrK⟩ := key k
+  rw [← hk]
+  exact ⟨hjK.mono hcontT, fun t ht => (hrK t ht).imp fun _ he => ViewRepr.mono hcontT he⟩
+
+/-- **The command induction's rule-firing case. Closed** — both halves, after four
+refutations and their repairs and one specification fix, and the last `sorry` in this
+development with it.
 
 Its statement, its five closed siblings and the four refutations that fixed its hypotheses are
 in `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`)
 and above in this file (`Egglog.UnionsFireWeak`, `unionsFire_false`,
 `unionsFire_false_encodeSig`, `Egglog.UnionsFireAnyG`, `unionsFire_false_globals`). What is
-recorded here is what the route through this file settles and what it does not.
+recorded here is what the route through this file settles, and — kept as the record of what was
+tried — what two earlier framings of the `Cmd.saturate` half did not.
 
 **The fourth refutation is the most recent, and it is what the `Cmd.run` case ran into.** The
 assembly below reaches step 2 — "move to `s.substGlobals G`" — and there discovers that nothing
@@ -15684,75 +16147,77 @@ two, so `queriesIn_of_prefixStep` pays them where it pays the other two and
 `Egglog.RowMech` carries them to the firing (`encStep_rowMech`, `unionsInv_step`). Neither is
 vacuous at the witness: `rbSrcR_noAtQuery` is the first at `rbRule`'s own query variable `y`
 and `rbSrcR_noSet` the second at its one head action, so `unionsJoined_fire_satisfiable` is
-twenty-eight conjuncts with twenty-one carrying content. `Egglog.UnionsFireWeak` and
+twenty-nine conjuncts with twenty-one carrying content. `Egglog.UnionsFireWeak` and
 `Egglog.UnionsFireAnyG` drop them along with the rest, so the three refutations are untouched.
 
 **So the `Cmd.run` case of this theorem is discharged in place**, by `unionsFire_run` and
-nothing else, and the `Cmd.saturate` case is the whole of what is left — a
-`Cmd.saturate`'s post-state is an *iterate* of `RunRules` (`RunReach.iterate`) rather than one
-application.
+nothing else, and the `Cmd.saturate` case — a `Cmd.saturate`'s post-state is an *iterate* of
+`RunRules` (`RunReach.iterate`) rather than one application — is `unionsFire_saturate`.
 
-**The structural item is the `Cmd.saturate` half's alone, and the encoder fix did not
-close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a
-*single* round, fired at `td` itself — `allMaintenanceRules` joins the maintenance rules only to
-the rulesets a source `Cmd.saturate` names (`Program.saturateRulesets`), so a source `.run R`
-runs `R`'s rules alone at the state this residue is handed, and every clause above is at exactly
-the state the encoded rule runs at. There is no mid-block gap there.
+**What closed the `Cmd.saturate` half is containment, not alignment.** The conclusion is
+monotone in the target (`Database.UnionsJoined.mono`, `ViewRepr.mono`), so the source's rounds
+never have to be lined up with the target's saturation: it is enough to name one target state
+that every source round can be read at and that the block's post-state contains. That state is
+the block's **middle**, `td.execCmdM (Cmd.saturate R)`, and it works because of three facts.
 
-A `Cmd.saturate` block saturates, and its rounds two onward fire at states strictly inside the
-block. `allMaintenanceRules` does make each of those rounds rebuild — that is what stopped
-`sat-hit` losing a term — but `execRunRules` reads *every* rule of a round off the same
-pre-state, so a round's maintenance firings chase the previous round's `@UF` edges and not its
-own. The fixpoint the block ends at is therefore rebuild-closed, since nothing changes there
-and the maintenance rules are among what fires; the rounds in between are one round behind, and
-`FDatabase.ViewRowUnique` holds at neither `td` nor a mid-block state for them. That is the
-lag a further clause — or a per-round induction — would have to speak about, and it is
-structural rather than one of the four refutations above.
+* **A firing there lands there.** `FDatabase.runSaturateM_roundClosed` and
+  `runSaturateM_eqsRoundClosed` are the round fixpoint read on `terms` and `eqs` — the only two
+  fields `Database.Contained` and `FDatabase.toDatabase` look at — so an encoded `R`-rule
+  firing at the middle state writes nothing the middle state does not already hold. Those two
+  containments are the *whole* of what the target's program was ever spent on, which is why
+  `unionsFire_firing_at` takes them as hypotheses and `unionsFire_firing` is the `Cmd.run`
+  block's instance of the same lemma.
+* **The middle state is rebuilt.** `allMaintenanceRules` joins the maintenance rules to every
+  ruleset a source `Cmd.saturate` names, so the fixpoint of the `R`-round is a fixpoint of the
+  rebuild round too. `no_ufRowEdge_of_rowsClosed` and `viewRowsColumnClosed_of_roundFixed` are
+  stated at any such ruleset now (`Program.MaintenanceRuleset`), `Egglog.EncReached.satMid` is
+  the block induction there, and `encStep_encRow_saturateMid` is `FDatabase.RowMechAt` at it —
+  the one clause this half added to the residue.
+* **And `terms`/`eqs` is what the trailing rebuild carries**, which is exactly the field
+  `contained_of_fired_run_block` already ran on: a round *deletes* rows in its merge phase, so
+  nothing here reads `td'.rows`.
 
-**The fixpoint framing was tried, and it does not reach it.** The idea is that the conclusion
+**The two framings that failed are kept as the record.** Neither is a defect of the encoding;
+both are ways of asking the wrong question.
+
+**The fixpoint framing does not reach it.** The idea is that the conclusion
 names `td'`, and `FDatabase.runSaturateM_roundFixed` says a saturating run returns a state a
 further round leaves alone — so if the `Cmd.run` argument could be applied *at* the fixpoint,
-the intermediate states would only ever be a source of `Database.Contained`, which
-`FDatabase.execProgramM_toDatabase_contained` and `contained_of_run_block` already give. What
-`unionsFire_firing` spends `hrun` on is exactly two containments —
-`contained_of_fired_run_block`, one firing's writes reaching the block's end, and
-`contained_of_run_block` — and at a fixpoint the second is reflexivity, so the whole question
-is whether an encoded `R`-rule firing *at* `td'` writes into `td'`. It is, precisely,
+the intermediate states would only ever be a source of `Database.Contained`. The question is
+then whether an encoded `R`-rule firing *at* `td'` writes into `td'`, precisely
 `td'.runRoundM R = some td'`. **Two things stand in the way, and they are the same
 `Cmd.saturate rebuildRuleset` the block ends with.**
 
 * `td'` is the fixpoint of the **rebuild** round, not of `R`. The `R`-round fixpoint is the
-  block's *middle* state, one command earlier, and `Egglog.EncReached` is whole blocks and not
-  `FDatabase.execProgramM` prefixes for a reason: `FDatabase.ViewRowsRooted` is established by
-  the trailing `Cmd.saturate rebuildRuleset` and is **false** in the middle of one. So the
-  state that has the `R`-fixpoint has none of `Egglog.RowMech`'s row clauses, and the state
-  that has the row clauses has no `R`-fixpoint.
+  block's *middle* state, one command earlier.
 * Identifying the two — the trailing rebuild returning its own input — is
   `FDatabase.sameData tdmid (tdmid.runRoundM rebuildRuleset)`, a **list**-level equality, and
-  it would have to come from `tdmid.runRoundM R = some tdmid` by two steps neither of which is
-  available: that a fixpoint of a *larger* ruleset's round is a fixpoint of a smaller one's
-  (a round deletes rows in its merge phase, so this is not monotonicity), and that every
-  `rebuildRuleset` rule the target holds has a same-query, same-head twin at ruleset `R` — which
-  is a fact about where `td.rules` came from, and provenance is what `Egglog.UnionsFire` may not
-  take.
+  it would have to come from `tdmid.runRoundM R = some tdmid` by a step that is not available:
+  that a fixpoint of a *larger* ruleset's round is a fixpoint of a smaller one's. A round
+  deletes rows in its merge phase, so that is not monotonicity, and it is not needed — the
+  route above never claims it. **What the argument actually needs is the middle state itself**,
+  and the reason it used to look unreachable was `Egglog.EncReached` being whole blocks: at the
+  time, `FDatabase.ViewRowsRooted` was thought false in the middle of every block. It is false
+  in the middle of a `Cmd.run`'s and of a `Cmd.action`'s; it is **true** in the middle of a
+  `Cmd.saturate`'s, for the maintenance-copy reason above, and `EncReached.satMid` is that
+  correction.
 
-The round induction has the same shape and the same obstruction. Fixing the target at `td'` and
+**And the naive round induction fails the same way.** Fixing the target at `td'` and
 inducting on the source rounds `s_j = (RunRules R)^[j] sd` works clause by clause — the two
 data clauses at `(s_j, td')` are the induction hypothesis, `s_j.rules = sd.rules` and
-`s_j.env = sd.env` carry the rule and environment clauses, and every target-side clause at
-`td'` is `Egglog.RowMech` at `.block` — up to the one step above: the firing at `td'` has
-nowhere to land. So what this half needs is not a further clause of the residue but a
-**per-round** form of the three block invariants (`FDatabase.ViewRowsRootedAll`,
-`FDatabase.ViewRowsColumnClosedAll`, `FDatabase.UFRootsUnique`) that survives a state one
-rebuild behind, and those are established by a walk from the prelude's empty row list and are
-false at exactly those states. -/
+`s_j.env = sd.env` carry the rule and environment clauses (`runRules_iterate_fields`), and
+every target-side clause at `td'` is `Egglog.RowMech` at `.block` — up to the one step above:
+the firing at `td'` has nowhere to land. Moving the target from `td'` to the block's middle
+state is the whole of the difference, and it costs one containment in each direction rather
+than a per-round form of any block invariant. -/
 theorem unionsJoined_fire : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate _ hfiat hrules hqe hcv hno hreads hjoin
-    hrow hrj hmg hsc hb _ _ _ _ hback henvReads hlit heqlit hnoAtQuery hnoSet
+    hrow hrj hmg hsc hb _ _ _ _ hback henvReads hlit heqlit hnoAtQuery hnoSet hmid
   rcases hc with rfl | rfl
   · exact unionsFire_run hstep hrun henv hstate hfiat hrules hqe hcv hno hreads hjoin hrow hrj
       hmg hsc hb hback henvReads hlit heqlit hnoAtQuery hnoSet
-  · sorry
+  · exact unionsFire_saturate hstep hrun hmid henv hstate hfiat hrules hqe hno hreads hjoin
+      hsc hb henvReads hlit heqlit hnoAtQuery hnoSet
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`, at the rules it fires.**
@@ -16184,7 +16649,9 @@ theorem encode_congr {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.
   sameClass_congr_of_shared (execM_viewsCover hdom hsrc htgt) ha hl
 
 
-/-- **No equality is lost**: assembled from the three obligations, with `symm` free. -/
+/-- **No equality is lost**: assembled from the three obligations, with `symm` free. Proved
+outright — `execM_unionsRead` was the last consumer of an open residue, and
+`unionsJoined_fire` answers it. -/
 theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) {a b : Term} (h : Cong src a b) :
@@ -16192,7 +16659,13 @@ theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDataba
   cong_sameClass ⟨encode_assert hdom hsrc htgt, encode_trans hdom hsrc htgt,
     encode_congr hdom hsrc htgt⟩ h
 
-/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 87
+/-- **The correspondence, at iff strength and with no `sorry` under it.** The encoding
+provably neither loses an equality nor invents one: `#print axioms` reports
+`[propext, Classical.choice, Quot.sound]` for this theorem, for `encode_corresponds_forward`
+and for `encode_corresponds_complete`. `unionsJoined_fire` was the last open obligation and
+`unionsFire_saturate` closed it.
+
+`difftest correspond 64` runs exactly this claim over the 87
 in-domain cases — and over the twenty probes when they are named — through `sameClassF` and
 `closureF`, and reports 87 agreeing, 0 LOST, 0 INVENTED and `link-diff` 0 — the last is what
 says the swept relation is this one.
