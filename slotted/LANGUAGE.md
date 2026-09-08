@@ -102,6 +102,32 @@ bare name that is a constructor is a call — so a paren-less `Null` stays `(Nul
 than becoming a variable that matches everything. `$x` is a slot literal the match solves
 for.
 
+**`$` is a slot; `#` is a global.** egglog spells a global `$name`, and this language
+cannot borrow that spelling, because `$0` is already a slot. So a global may be marked
+`#name`, at its binding and at its uses, and `$x` is a slot wherever it appears:
+
+```slotted
+(datatype M (IConst) (Mul M M) (Lam M M :binder 0))
+
+(let #j (IConst))
+(rewrite (Mul a #j) a :name "id-right")
+
+; `k` is a global and `$k` is a slot -- the two never read alike
+(let k (IConst))
+(rewrite (Lam $k (Mul #k $k)) #k :name "slot-not-global")
+
+(let mj (Mul (IConst) (IConst)))
+(let ek (Lam $0 (Mul (IConst) $0)))
+(run 5)
+
+(check (= mj (IConst)))
+(check (= ek (IConst)))
+```
+
+The sigil is optional, as it is in egglog, which only warns when a global lacks one —
+`(let j …)` and a bare `j` mean the same thing. Naming a global with a `$` is not
+optional but refused: `$j` in a term would be the slot and never the global.
+
 A rewrite's **left side must be a call**. A bare variable there matches every class, so
 the rule would say nothing.
 

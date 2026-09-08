@@ -154,17 +154,40 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; The same, `$`-prefixed. egglog writes `(let $I (IConst))` and then `$I` in a rule,
-;;; where the `$` is part of an identifier; here `$x` normally means a slot. A bound
-;;; global of that name wins, so egglog's spelling reads as egglog means it.
+;;; The same global, marked with `#`.
+;;;
+;;; egglog writes a global `$name`, and this language cannot borrow that spelling: `$0`
+;;; is a SLOT here. So globals wear `#` instead, at the binding and at the use, and a
+;;; global named with a `$` is refused rather than read two ways -- `$x` is a slot
+;;; wherever it appears.
+;;;
+;;; The sigil is optional, as it is in egglog, which only warns when a global lacks
+;;; one: the section above writes the same rule bare.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(let $I (IConst))
-(rewrite (Mul a $I) a :name "id-right-dollar")
+(let #j (IConst))
+(rewrite (Mul a #j) a :name "id-right-marked")
 
 (let mj (Mul (IConst) (IConst)))
 (run 5)
 (check (= mj (IConst)))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; And `$x` is a slot even where a global of that name is bound, which is the whole
+;;; point of separating the two sigils. `k` is a global; `$k` is a slot the match
+;;; solves for, so this rule is the eta shape and not a rule about `k` at all.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(let k (IConst))
+(rewrite (Lam $k (Mul #k $k)) #k :name "slot-not-global")
+
+;; the bound slot is not free in the body's `k`, so this reduces
+(let ek (Lam $0 (Mul (IConst) $0)))
+(run 5)
+
+(check (= ek (IConst)))
 (pop)
 
 

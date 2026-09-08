@@ -226,6 +226,16 @@ CHECKS = [
         False,
         False,
     ),
+    # Every refusal the language documents, with the phrase its message carries. A
+    # refusal that stops firing mistranslates the program in silence, and one that
+    # arrives as a traceback is not a message -- both went unnoticed before.
+    (
+        "refusals",
+        ("slotted/check-refusals.py",),
+        ratio(r"(\d+)/(\d+) refusals hold, with a message", 12),
+        False,
+        False,
+    ),
     ("handwritten-drift", ("slotted/check-handwritten-encoding.py",), starts_ok, False, False),
     (
         "correspondence",
@@ -316,7 +326,7 @@ CHECKS = [
         # An example nobody runs is an example nobody checked.
         "language-doc",
         ("slotted/check-language-doc.py",),
-        ratio(r"(\d+)/(\d+) examples run", 8),
+        ratio(r"(\d+)/(\d+) examples run", 9),
         False,
         True,
     ),

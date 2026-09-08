@@ -18,6 +18,11 @@ THE LANGUAGE
                                                 slot; in any other child column it is
                                                 a variable occurrence
 
+    (let #g (Sing Null Null))                   `#` marks a GLOBAL, at its binding and
+    (rewrite (Mult x #g) x)                     its uses. Bare works too, as in egglog.
+                                                `$x` is a slot wherever it appears, so a
+                                                global may not be named with a `$`.
+
     (union a b)                                 assert an equation instead of deriving
                                                 one -- how a class gets a symmetry, and
                                                 how a slot becomes redundant
@@ -89,6 +94,10 @@ CORE_FILE = "slotted/encoding/egraph-encoding-11.egg"
 
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
 SLOT = re.compile(r"\$\w+\Z")
+#: A global may be written with this sigil. egglog writes `$name`, which cannot be
+#: borrowed: `$` is a SLOT here, and one spelling cannot mean both. Bare works too, as
+#: it does in egglog.
+GLOBAL = "#"
 
 
 def parse(text):
@@ -310,14 +319,22 @@ class Source:
         `$s` string in either column.
         """
         if isinstance(form, str):
+            if form.startswith(GLOBAL) and len(form) > 1:
+                name = form[1:]
+                if column is enc.BINDER:
+                    raise SystemExit(
+                        f"{self.path.name}: {form!r} stands in a binder column, where only a "
+                        "slot can. A binder binds a slot, not a global."
+                    )
+                if name not in self.lang.bound:
+                    raise SystemExit(f"{self.path.name}: no global {form!r} is bound here")
+                return self.global_ref(name, ground)
             if SLOT.match(form):
-                # A `$`-prefixed name may be a GLOBAL rather than a slot. egglog writes
-                # `(let $I (IConst))` and then `$I` in a rule, where the `$` is just part
-                # of an identifier; here `$x` normally means a slot, so the two spellings
-                # collide. The lookup decides, which is the rule bare names use too. Not
-                # in a BINDER column, where only a slot can stand.
-                if column is not enc.BINDER and form in self.lang.bound:
-                    return self.global_ref(form, ground)
+                # ALWAYS a slot. egglog spells a global `$name`, and this language cannot
+                # borrow that: `$0` is a slot, so `$name` was resolved as a global when one
+                # of that name happened to be bound and as a slot otherwise -- one spelling
+                # meaning two things, decided by what else the file had done. Globals wear
+                # `#` instead, and a `$` in a global's name is refused where it is bound.
                 if not ground:
                     return form
                 slot = int(form[1:]) if form[1:].isdigit() else form[1:]
@@ -334,7 +351,8 @@ class Source:
             # A BARE IDENTIFIER IS A PATTERN VARIABLE, which is how egglog spells one.
             # `?x` is egg's spelling and still works: the sigil is stripped above, so the
             # two name the same variable and a rule may mix them. A global takes
-            # precedence, as it does in egglog, which is why the lookup comes first.
+            # precedence, as it does in egglog, which is why the lookup comes first --
+            # write `#name` to say a global outright.
             #
             # Only in a pattern. A ground term -- a `let`, a `union`, a claim -- has
             # nothing to bind a variable, so an unknown name there is still an error.
@@ -417,6 +435,16 @@ def compile_source(src, own_only=False):
             _emit(out, keep, render(form))
         elif head == "let":
             _, name, body = form
+            # The sigil is optional here, as it is in egglog, which only warns when a
+            # global lacks one. A `$` is not optional but forbidden: `$x` is a slot in
+            # this language, so a global of that name could never be written back.
+            if name.startswith("$"):
+                raise SystemExit(
+                    f"{src.path.name}: a global may not be named {name!r} -- `$` starts a SLOT "
+                    f"here, so `{name}` in a term would mean the slot and never this global. "
+                    f"Name it `{name[1:]}`, or `{GLOBAL}{name[1:]}` to mark it."
+                )
+            name = name[1:] if name.startswith(GLOBAL) and len(name) > 1 else name
             _emit(out, keep, f"(let ${name} {src.encode(body)})")
             src.lang.bound[name] = src.term(body)
         elif head == "union":
@@ -563,10 +591,11 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     # rule says nothing, and egglog rejects it too. Without this, `flatten` indexes
     # `lang[t[0]]` and on a string that is its first CHARACTER, so the failure was a
     # `KeyError` naming a letter.
-    assert isinstance(lhs, list), (
-        f"{src.path.name}: a rewrite's left side must be a call, got {lhs!r} -- "
-        "a bare variable there matches everything"
-    )
+    if not isinstance(lhs, list):
+        raise SystemExit(
+            f"{src.path.name}: a rewrite's left side must be a call, got {lhs!r} -- "
+            "a bare variable there matches everything"
+        )
     root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
     # each `:when (= v <call>)` is another rooted pattern; `tmp` is per-equality so the
     # names `flatten` invents for nested sub-terms cannot collide between them
