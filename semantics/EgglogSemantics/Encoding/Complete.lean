@@ -11672,6 +11672,112 @@ theorem out_of_fired_run_block {R : RulesetName} {td td' dF : FDatabase} {r : Ru
     {g : FnName} {as vs : List Term} (ho : dF.toDatabase.Out g as vs) :
     td'.toDatabase.Out g as vs :=
   Database.Out.mono (contained_of_fired_run_block hmem hR hσ hfired hrun) ho
+/-! #### The outer decomposition, per firing
+
+`Egglog.UnionsFire`'s conclusion is about `sd'`, the state a whole **round** reached, and steps
+1-4 above are about **one** firing. What joins them is that a `Cmd.run` at a
+constructor-fragment source has no merge phase — `MergeClosure.eq_of_allConstructors` off
+`Database.CtorState.sig`, which the residue is handed — so the post-state *is* `RunRules R sd`,
+and `RunRules` is a `Database.sUnion` over the firings. Each of `eqs` and `terms` therefore
+splits into the pre-state's and one firing's, which is exactly the shape steps 1-4 consume.
+
+`mem_eqs_of_ruleFired` and `mem_terms_of_ruleFired` are the containment arms, in the other
+direction: a firing's writes are the post-state's. These are their converses, and
+`unionsFire_conclusion_of_firings` is the assembly they buy — `Egglog.UnionsFire`'s conclusion
+for a `Cmd.run`, reduced to the pre-state's plus one obligation per firing.
+
+**Only the `Cmd.run` half has them.** A `Cmd.saturate`'s post-state is an *iterate* of
+`RunRules` (`RunReach.iterate`) rather than one application, and each round after the first
+fires at a state strictly inside the block — which is the lag the last paragraph of
+`unionsJoined_fire` is about, and a different item from this one. -/
+
+/-- **A `Cmd.run` at a constructor-fragment source is the function `RunRules R`.** The merge
+phase is vacuous on a signature with no `:merge` function, so the round has exactly one
+result. -/
+theorem cmdStep_run_eq {R : RulesetName} {sd sd' : Database} (hstate : sd.CtorState)
+    (hstep : CmdStep sd (Cmd.run R) sd') : sd' = RunRules R sd := by
+  obtain ⟨d, hreach, hcl⟩ := hstep
+  have hv : some (RunRules R sd) = some d := hreach
+  obtain rfl : d = RunRules R sd := (Option.some.inj hv).symm
+  exact RunStep.eq_of_allConstructors hstate.sig hcl
+
+/-- **Every equation the round's post-state asserts is the pre-state's or one firing's.**
+`mem_eqs_of_ruleFired` is the converse. -/
+theorem eqs_cases_of_cmdStep_run {R : RulesetName} {sd sd' : Database} (hstate : sd.CtorState)
+    (hstep : CmdStep sd (Cmd.run R) sd') {p : Term × Term} (hp : p ∈ sd'.eqs) :
+    p ∈ sd.eqs ∨ ∃ r ∈ sd.rules, r.ruleset = R ∧ ∃ (τ : Env) (d : Database),
+      ValidQuerySubst sd r.query τ ∧ evalLocalActions sd r.actions τ = some d ∧
+        p ∈ d.eqs := by
+  rw [cmdStep_run_eq hstate hstep] at hp
+  simp only [RunRules, Database.sUnion_eqs, Set.mem_union, Set.mem_iUnion₂, Set.mem_setOf_eq,
+    RuleResults, exists_prop] at hp
+  rcases hp with hp | ⟨d, ⟨r, hr, hrs, τ, hv, hd⟩, hpd⟩
+  · exact Or.inl hp
+  · exact Or.inr ⟨r, hr, hrs, τ, d, hv, hd, hpd⟩
+
+/-- **And every term it holds is the pre-state's or one firing's.**
+`mem_terms_of_ruleFired` is the converse. -/
+theorem terms_cases_of_cmdStep_run {R : RulesetName} {sd sd' : Database} (hstate : sd.CtorState)
+    (hstep : CmdStep sd (Cmd.run R) sd') {t : Term} (ht : t ∈ sd'.terms) :
+    t ∈ sd.terms ∨ ∃ r ∈ sd.rules, r.ruleset = R ∧ ∃ (τ : Env) (d : Database),
+      ValidQuerySubst sd r.query τ ∧ evalLocalActions sd r.actions τ = some d ∧
+        t ∈ d.terms := by
+  rw [cmdStep_run_eq hstate hstep] at ht
+  simp only [RunRules, Database.sUnion_terms, Set.mem_union, Set.mem_iUnion₂, Set.mem_setOf_eq,
+    RuleResults, exists_prop] at ht
+  rcases ht with ht | ⟨d, ⟨r, hr, hrs, τ, hv, hd⟩, htd⟩
+  · exact Or.inl ht
+  · exact Or.inr ⟨r, hr, hrs, τ, d, hv, hd, htd⟩
+
+/-- **The assembly**: `Egglog.UnionsFire`'s conclusion for a `Cmd.run`, out of the pre-state's
+and one obligation per firing. Both halves of the conclusion split the same way, because
+`Database.UnionsJoined` reads `eqs` and the reading clause reads `terms`, and `Database.sUnion`
+is a union in each.
+
+This is the outer half of the residue and it owes nothing else: what is left under
+`unionsJoined_fire` is the *inner* obligation — steps 1-4 at one firing — and the
+`Cmd.saturate` lag, which this does not speak about. -/
+theorem unionsFire_conclusion_of_firings {R : RulesetName} {sd sd' : Database}
+    {td' : FDatabase} (hstate : sd.CtorState) (hstep : CmdStep sd (Cmd.run R) sd')
+    (hpre : td'.toDatabase.UnionsJoined sd ∧ ∀ t ∈ sd.terms, ∃ e, ViewRepr td'.toDatabase t e)
+    (hfir : ∀ r ∈ sd.rules, r.ruleset = R → ∀ (τ : Env) (d : Database),
+      ValidQuerySubst sd r.query τ → evalLocalActions sd r.actions τ = some d →
+        td'.toDatabase.UnionsJoined d ∧ ∀ t ∈ d.terms, ∃ e, ViewRepr td'.toDatabase t e) :
+    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e := by
+  refine ⟨fun a b hab hne => ?_, fun t ht => ?_⟩
+  · rcases eqs_cases_of_cmdStep_run hstate hstep hab with h | ⟨r, hr, hrs, τ, d, hv, hd, hpd⟩
+    · exact hpre.1 a b h hne
+    · exact (hfir r hr hrs τ d hv hd).1 a b hpd hne
+  · rcases terms_cases_of_cmdStep_run hstate hstep ht with h | ⟨r, hr, hrs, τ, d, hv, hd, htd⟩
+    · exact hpre.2 t h
+    · exact (hfir r hr hrs τ d hv hd).2 t htd
+
+/-- **And the block carries the pre-state's own arm.** `FDatabase.execProgramM_terms` and
+`FDatabase.execProgramM_eqs` are monotone in both lists, so the two clauses the residue is
+handed at `td` read at `td'`. -/
+theorem contained_of_run_block {R : RulesetName} {td td' : FDatabase}
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td') :
+    td.toDatabase.Contained td'.toDatabase :=
+  FDatabase.toDatabase_contained_of_lists (FDatabase.execProgramM_terms hrun)
+    (FDatabase.execProgramM_eqs hrun)
+
+/-- **The assembly at the clauses the residue is actually handed**, which are at `td` and not
+at `td'`: `Database.UnionsJoined.mono` and `ViewRepr.mono` move them along
+`contained_of_run_block`. So the whole outer half of a `Cmd.run` is discharged, and what is
+left under `unionsJoined_fire` is `hfir` — steps 1-4 at one firing — plus the `Cmd.saturate`
+lag. -/
+theorem unionsFire_conclusion_of_run {R : RulesetName} {sd sd' : Database}
+    {td td' : FDatabase} (hstate : sd.CtorState) (hstep : CmdStep sd (Cmd.run R) sd')
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
+    (hjoin : td.toDatabase.UnionsJoined sd)
+    (hread : ∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e)
+    (hfir : ∀ r ∈ sd.rules, r.ruleset = R → ∀ (τ : Env) (d : Database),
+      ValidQuerySubst sd r.query τ → evalLocalActions sd r.actions τ = some d →
+        td'.toDatabase.UnionsJoined d ∧ ∀ t ∈ d.terms, ∃ e, ViewRepr td'.toDatabase t e) :
+    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e :=
+  unionsFire_conclusion_of_firings hstate hstep
+    ⟨hjoin.mono (contained_of_run_block hrun),
+      fun t ht => (hread t ht).imp fun _ he => he.mono (contained_of_run_block hrun)⟩ hfir
 /-- **The command induction's rule-firing case. Open — and, after four refutations and their
 repairs and one specification fix, no longer standing at a false statement.**
 
@@ -12206,9 +12312,20 @@ landed too, and what remains of step 4 is one item, and then the assembly.
   term's value column to a live row's at the **same** key, which is what
   `encReached_viewRow_at_root` spends.
 
-Beside those: the `.eq` case's remaining environment clause above; the outer assembly, which
-decomposes `CmdStep sd (.run R) sd'` into `RunRules`' own `sUnion` and runs steps 1-4 once per
-source firing; and the `Cmd.saturate` lag below.
+**The outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no merge
+phase — `MergeClosure.eq_of_allConstructors` — so `cmdStep_run_eq` makes the post-state the
+*function* `RunRules R sd`, whose `Database.sUnion` splits `eqs` and `terms` into the
+pre-state's and one firing's (`eqs_cases_of_cmdStep_run`, `terms_cases_of_cmdStep_run`, the
+converses of `mem_eqs_of_ruleFired` and `mem_terms_of_ruleFired`). `contained_of_run_block`
+carries the two clauses the residue holds at `td` up to `td'`, and
+`unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus **one
+obligation per firing** — which is exactly what steps 1-4 are about. So what is left of the
+`Cmd.run` half is the inner obligation alone: step 1's `.eq` clause above, and step 4's
+global-reading head, whose fourth fact is refuted above.
+
+Beside those: the `Cmd.saturate` lag below, which this decomposition does not speak about — a
+`Cmd.saturate`'s post-state is an *iterate* of `RunRules` (`RunReach.iterate`) rather than one
+application.
 
 **The structural item is the `Cmd.saturate` half's alone, and the encoder fix did not
 close it.** A `Cmd.run` block is `[.run R, Cmd.saturate rebuildRuleset]` and `.run R` is a

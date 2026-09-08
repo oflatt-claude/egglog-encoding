@@ -185,6 +185,12 @@ nightly-local: nightly-uv nightly-rustup
 # `execM (encode glProgram)` **holds** `5` where `litBuildProgram`'s bare `.expr (.lit 5)` holds
 # nothing — which is why the clause is about `sd.env` and not about `sd.terms`. Threading it is
 # what is left.
+# **And the outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no
+# merge phase, so `cmdStep_run_eq` makes the post-state the *function* `RunRules R sd` and its
+# `Database.sUnion` splits `eqs` and `terms` per firing (`eqs_cases_of_cmdStep_run`,
+# `terms_cases_of_cmdStep_run`); `contained_of_run_block` carries the clauses held at `td` up to
+# `td'`, and `unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus
+# one obligation per firing. What is left of the `Cmd.run` half is the inner obligation alone.
 # The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
 # turns a source reading of a query into a substitution the *emitted* query matches at, over
 # `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its
