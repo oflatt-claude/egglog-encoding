@@ -3494,8 +3494,9 @@ leader, so there is nothing for a walk to find.
 every `Cmd.saturate rebuildRuleset` dropped. There the views are never re-keyed: 20 of the
 87 cases DIFFER, 133 equalities come back LOST, and 88 pairs are joined by a `@UF` step. The
 `chain` probe, named to the same command, adds six of its own, and the walk from `D` to `A` is
-three edges there because path compression never ran either. That is the measurement that says the union-find is redundant *because of
-the rebuild*, and not because `SameClass` never needed it.
+three edges there because path compression never ran either. That is the measurement that says
+the union-find is redundant *because of the rebuild*, and not because `SameClass` never needed
+it.
 
 **One shape the union-find would still be needed for, and it is not a program.** A literal
 has no view entry, so nothing re-keys it and a `union` between two literals would leave the
@@ -3505,16 +3506,15 @@ literal operand outright, so `Cong src` never relates a literal to anything but 
 
 **The inductive reading is load-bearing.** The `flat` reading — a view entry keyed by an
 application's children as written — loses 109 equalities across 8 cases, `both-2` and
-`rand-43` among them, and finds only 146 of the 228 off-diagonal ones.
-A rule head builds
-over the ids its query bound, so a source term a head produced keys no entry under its own
+`rand-43` among them, and finds only 146 of the 228 off-diagonal ones. A rule head builds over
+the ids its query bound, so a source term a head produced keys no entry under its own
 children.
 
 **What a green LOST column does not establish.** 31 of the 87 in-domain cases derive no
 equality between distinct terms at all and another 33 derive exactly one, so for 70 of the 87
 the whole left-to-right test is the e-node diagonal and at most two pairs off it; three cases
-carry 107 of the 228. The claim is tested at depth on very few
-programs — which is how the `glob-*` defect survived a corpus of 70 cases with a green column,
+carry 107 of the 228. The claim is tested at depth on very few programs — which is how the
+`glob-*` defect survived a corpus of 70 cases with a green column,
 and the reason a hazard named in a docstring is worth a case rather than an argument.
 
 **And what no column of it establishes.** The sweep runs `execM`, and `execM` is not

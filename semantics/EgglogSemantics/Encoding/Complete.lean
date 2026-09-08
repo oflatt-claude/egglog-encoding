@@ -9391,11 +9391,11 @@ step between them — the witness has a reading and the class is constant — an
 is where the two clauses of `FDatabase.RowJoined` are both spent, since the instance's two
 sides are congruent and the emitted atom compares their ids.
 
-What is still a hypothesis here is `hvar`: the target reading of the environment the source
-evaluated in. For a variable the query's own substitution binds this is the reading of the
-term it is bound to; for one a **global** binds, `matchQuery` reads the value off `d.env`, so
-the reading has to be the value itself — which is `mem_matchQuery_encodeQuery`'s `hglob`, and
-the one thing this assembly does not settle. -/
+What is still a hypothesis here is `hvar`: the target reading of the substitution the source
+evaluated in, one id per variable the query binds. It is no longer about the *environment* — a
+stored rule's query names no global, because the globals were resolved into it when the rule
+was declared — so a firing has only its own `τ` to read, and `Database.UnionsJoined` with
+`FDatabase.RowJoined` is what reads it (`unionsJoined_fire`, "Step 1"). -/
 
 /-- Every function name a pattern applies. Not in `Spec/`: only the encoding's own domain
 condition (`Program.EncodeDomain.noPrim`) reads it. -/
@@ -10282,9 +10282,10 @@ recorded here is what the route through this file settles and what it does not.
 
 **The fourth refutation is the most recent, and it is what the `Cmd.run` case ran into.** The
 assembly below reaches step 2 — "move to `s.substGlobals G`" — and there discovers that nothing
-in the clause set said which `G` that is. `Egglog.Matches.of_substGlobals` and the converse the
-forward direction wants are both stated under `Database.GlobalsInline`, and `hrules` did not
-carry it: `unionsFire_false_globals` runs a source rule whose query is keyed at `y` and whose
+in the clause set said which `G` that is. The identity that lines the source's stored query up
+with the encoder's, `Rule.resolveGlobals_eq_substGlobals`, is stated under
+`Database.GlobalsInline` and `Database.GlobalsCover`, and `hrules` did not carry the first:
+`unionsFire_false_globals` runs a source rule whose query is keyed at `y` and whose
 encoding went through `gxG = [("y", (A))]`, so the encoded query binds `y` nowhere, the encoded
 head — `encodeBuild` keeps a source variable as itself — reads it anyway, `Expr.eval` is `none`,
 and `fireInto` returns the accumulator while the source's own firing asserts
@@ -10561,12 +10562,39 @@ second failing the source-rules clause, with every clause about names holding at
 (`cxpTgt_name_clauses`). `unionsFire_of_weak` is the implication that says what they refute —
 `Egglog.UnionsFireWeak` — is strictly the stronger claim.
 
-**What the repair lands, and what the `Cmd.run` half still owes.** Step 2 of the assembly is
-now written both ways: `Matches.to_substGlobals` and `ValidQuerySubst.to_substGlobals` turn the
-source firing's own `ValidQuerySubst` at `s.query` into one at `Query.substGlobals G s.query`,
-which is the query `mem_matchQuery_encodeQuery` is handed. What is left on that step is
-`mem_matchQuery_encodeQuery`'s `hglob`, at a variable the substituted query still names and the
-**environment** binds.
+**What the repair lands.** Step 2 of the assembly — move the source firing to the query the
+encoder flattened — is no longer a transfer at all, and no `Matches.to_substGlobals` is needed:
+a rule is stored `Rule.resolveGlobals`'d at the environment standing when it is declared, and
+`Rule.resolveGlobals_eq_substGlobals` under the `Database.GlobalsInline` this residue is handed
+(with `Database.GlobalsCover`) says that is the very query `mem_matchQuery_encodeQuery` takes.
+So the source firing's own `ValidQuerySubst` is already at the right query.
+
+**Step 1 goes through at the rule's own query, and its cost is two more derived clauses.**
+Reading a firing's substitution forward through live rows is `patternRowRead_of_matches` at
+every pattern of `r.query`, at the reading `Env.mapVals` puts on `τ` off the row-reading clause
+and `ValidQuerySubst.mem_terms`; it is proved from the clauses above **plus two facts about
+`td` that are not among them**. That a live `@fView` row's name carries a `:merge`, which
+`RowRead.app` carries as data and `rowRead_of_rowRepr` therefore asks for; and that an id the
+reading gives is a term the target holds — `∀ t x, RowRepr td t x → x ∈ td.terms`, which the
+`.eq` case spends. Both hold at an encoded target off `FDatabase.IndexOk` alone, by the same
+`ctor`/`entry` split `ViewRepr.of_rowRepr_of_indexOk` runs, so both are `Egglog.RowMech`-shaped
+and neither is provenance. They are not added here because adding them closes nothing: unlike
+the four clause sets above, no witness refutes the residue without them, and it is step 3 that
+the `Cmd.run` half is short of.
+
+**Step 3 is where it stalls, and it has no scaffolding.** The encoded rule has to **fire**:
+`execLocalActions td (encodeRule i (r.substGlobals G) n).1.actions τ = some _` at the
+substitution `mem_matchQuery_encodeQuery` returns. `evalActions_isSome_of_builds` is that
+argument on the *specification* side, over `Actions.Scoped` and `Actions.Builds`. `FDatabase`
+has no counterpart of it — `execAction` mirrors `evalAction` case for case, so the fold
+transfers, but it is not written — and neither `Actions.Scoped` nor `Actions.Builds` is
+established for an **encoded** head at the target's signature. That is what the two signature
+clauses and the `@Rule_i` conjunct of `hrules` were added for, and nothing spends them yet.
+Step 4 — the head's writes read back as `ViewRepr td'` — then rides on
+`execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, plus one thing
+the trailing rebuild has to do: `Rule.resolveGlobals` leaves a rule's *head* alone, so a head
+that reads a global evaluates it to the source term `td.env = sd.env` binds and keys its view
+row there, and only `Cmd.saturate rebuildRuleset`'s column rules carry that row to the leader.
 
 **The shape that refuted it is gone.** It was a global `Cmd.globalBind` did *not* freeze, which
 by its two guards was one a top-level `let` binds twice (the open-definition guard only ever

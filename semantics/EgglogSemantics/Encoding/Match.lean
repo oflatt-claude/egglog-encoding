@@ -70,13 +70,16 @@ top-level `let`).
 A rule *head* reads a global off the environment on both sides, which is what the two clauses
 above are for. A rule **query** does not: `Encoding/Encode.lean`'s `Rule.substGlobals` replaces
 a global by its (closed) definition before `encodeQuery` ever sees the rule, so what is
-flattened has no global in it and everything below is about an ordinary query. What the
-substitution costs on the source side is `ValidQuerySubst.of_substGlobals` — a source match of
-the substituted query is one of the query — under `Database.GlobalsInline`, the clause saying
-the environment realizes the definitions the encoder carries. `Pattern.Grounded`,
-`Pattern.NoValues` and `Query.VarsKeyed` all survive the substitution
-(`Query.grounded_substGlobals`, `Query.noValues_substGlobals`, `Query.VarsKeyed.substGlobals`),
-so the three text conditions this file consumes hold of the substituted query too.
+flattened has no global in it and everything below is about an ordinary query. The
+substitution costs nothing on the source side, and there is no transfer lemma for it:
+`Spec/Step.lean` stores a rule `Rule.resolveGlobals`'d at the environment standing when it is
+declared, and `Rule.resolveGlobals_eq_substGlobals` — under `Database.GlobalsInline` and
+`Database.GlobalsCover` — says that is the *same* query, so a source match of the stored query
+already is one of the substituted one. `Pattern.NoValues` and `Query.VarsKeyed` survive the
+substitution (`Query.noValues_substGlobals`, `Query.VarsKeyed.substGlobals`), so the text
+conditions this file consumes hold of it too. `Pattern.Grounded` does not survive and is not
+asked for: the substitution writes a literal-valued global's *value* into the query, and
+`Pattern.GroundedAt` is what the reading actually needs.
 
 ## And what it is false for
 
