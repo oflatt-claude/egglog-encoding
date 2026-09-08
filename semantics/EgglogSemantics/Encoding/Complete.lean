@@ -9468,11 +9468,36 @@ theorem rbTgtR_ufRootsUnique : rbTgtR.UFRootsUnique := by
   obtain rfl := rbTgtR_ufReach_eq hreach
   rw [rbTgtR_ufRowReach_eq hr, rbTgtR_ufRowReach_eq hs]
 
+/-- **The environment reading at the witness, with content.** `rbEnv` binds `x` to `(A)`, a
+term `rbProgram`'s own first build wrote, so the clause is answered by that build's read-back
+(`rbState2_viewRepr_A`, through `UnionsInv.envReadsAt`) and not vacuously. This is the clause
+step 4's global-reading head spends, and it is *not* `Database.ReadsSelf` — which
+`ncTgt_not_readsSelf` refutes at a term a **firing** built. -/
+theorem rbTgtR_envReadsAt :
+    ∀ b ∈ rbSrcR.env, ∀ s ∈ b.2.subterms, ViewRepr rbTgtR.toDatabase s s :=
+  fun b hb s hs =>
+    ViewRepr.mono rbTgtR_contains (rbState2_unionsInv.envReadsAt b hb s hs)
+
+/-- **The `.eq` case's clause at the witness, and it is vacuous here**: `rbEnv` binds `x` to an
+*application*, so no global is bound to a literal. `litGlobalsHeld_witness` is the clause with
+content, at `glProgram`'s one `(let $g 5)` — in the domain, and whose encoded run holds `5`. -/
+theorem rbSrcR_litGlobalsHeld : rbSrcR.LitGlobalsHeld rbTgtR := by
+  intro v l hlk
+  have h : Env.lookup v rbEnv = some (Term.lit l) := hlk
+  rw [rbEnv] at h
+  simp only [Env.lookup_cons, Env.lookup_nil] at h
+  split at h
+  · exact absurd h (by simp)
+  · exact absurd h (by simp)
+
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Twenty-two conjuncts: the twenty-one `Egglog.UnionsFire` takes, in the order it takes them,
-and `rbSrcR_globalsInline` beside them.
+Twenty-five conjuncts: the twenty-four `Egglog.UnionsFire` takes, in the order it takes them,
+and `rbSrcR_globalsInline` beside them. Nineteen have content here; the six that do not are
+`Database.UnionsJoined`, `FDatabase.RowJoined`'s `edge`, the three threaded row invariants and
+`Database.LitGlobalsHeld`, each of them for a reason recorded below and each with content at
+another witness.
 
 **The round has content.** The source holds `rbRule` and the target its encoding, and both
 fire: `rbTgtR_mem_matchQuery` is the substitution the emitted entry atom admits,
@@ -9503,6 +9528,17 @@ the two output columns a view row has, one of them at positive arity — so
 through live rows, the second at positive arity over the first's, `rbTgtR_rowJoined`'s `fn` is
 pinned by the two view rows the state really holds, and `rbTgtR_viewRepr_of_rowRepr` is the way
 back at every row it holds.
+
+**The three clauses step 4's own read-back spends have content.** The `td`-level
+`Egglog.RowRepr`-to-`Egglog.ViewRepr` reading is `rbTgtR_viewRepr_of_rowRepr` again — at `td`
+this time, which is where `viewRepr_of_evalPair` reads a query variable's id — and
+`rbTgtR_envReadsAt` is the environment clause at the `(A)` a top-level `let` bound and
+`rbProgram`'s own first build wrote, which is what a **global-reading head** spends and what
+`Database.ReadsSelf` is not (`ncTgt_not_readsSelf` is at a term a *firing* built).
+`rbSrcR_litGlobalsHeld` is the one new clause **vacuous** here — `rbEnv` binds `x` to an
+application, so no global is bound to a literal — and `litGlobalsHeld_witness` is it with
+content, at `glProgram`'s one `(let $g 5)`, in the domain, whose encoded run holds `5` where
+`litBuildProgram`'s bare build holds nothing (`litBuild_not_litsHeld`).
 
 **And the three threaded invariants hold here, which is what lets them be clauses at all.**
 `FDatabase.ViewRowsRootedAll`, `FDatabase.ViewRowsColumnClosedAll` and
@@ -9562,6 +9598,9 @@ theorem unionsJoined_fire_satisfiable :
       (∀ r ∈ rbSrcR.rules, Actions.Builds r.actions rbTgtR.sig) ∧
       (∀ t r : Term, RowRepr rbTgtR t r → ViewRepr rbTgtR.toDatabase t r) ∧
       rbTgtR.ViewRowsRootedAll ∧ rbTgtR.ViewRowsColumnClosedAll ∧ rbTgtR.UFRootsUnique ∧
+      (∀ t r : Term, RowRepr rbTgtR t r → ViewRepr rbTgtR.toDatabase t r) ∧
+      (∀ b ∈ rbSrcR.env, ∀ s ∈ b.2.subterms, ViewRepr rbTgtR.toDatabase s s) ∧
+      rbSrcR.LitGlobalsHeld rbTgtR ∧
       rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrcR_cmdStep_run, rbTgtR_run, rbTgtR_env, rbSrcR_ctorState, rbTgtR_sig_mono,
     rbTgtR_isCtor_fiatName, rbSrcR_hrules, rbSrcR_queriesEncodable,
@@ -9571,7 +9610,8 @@ theorem unionsJoined_fire_satisfiable :
     rbSrcR_headsScoped, rbSrcR_headsBuild,
     (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h),
     rbTgtR_viewRowsRootedAll, rbTgtR_viewRowsColumnClosedAll, rbTgtR_ufRootsUnique,
-    rbSrcR_globalsInline⟩
+    (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h), rbTgtR_envReadsAt,
+    rbSrcR_litGlobalsHeld, rbSrcR_globalsInline⟩
 
 /-! ### The forward mirror of `Encoding/Match.lean`
 
@@ -10522,11 +10562,6 @@ and `litGlobalsHeld_witness` is the clause with content at a program in the doma
 left of this item is the run-wide induction that carries it, in the shape
 `encStep_viewRowsRootedAll` and its siblings have, and not the choice of clause. -/
 
-/-- **Every literal a global is bound to is a term the target holds.** The `.eq` case's
-remaining obligation, at the environment rather than at the source's terms. -/
-def Database.LitGlobalsHeld (sd : Database) (td : FDatabase) : Prop :=
-  ∀ (v : Var) (l : Lit), Env.lookup v sd.env = some (Term.lit l) → Term.lit l ∈ td.terms
-
 /-- **A resolved expression is a bare literal only through a literal-valued global**, away from
 a text that was that literal already: `Expr.resolveGlobals` is the identity on a literal, maps
 an application to an application, and replaces a bound variable by `Term.toExpr` of its
@@ -10844,7 +10879,7 @@ def UnionsFireWeak : Prop :=
 refutations below bracket the repair from above and refute nothing it says. -/
 theorem unionsFire_of_weak (hw : UnionsFireWeak) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj _
-    _ _ hback _ _ _
+    _ _ hback _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate ?_ hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, -⟩ := hrules r hr
@@ -11308,7 +11343,7 @@ def UnionsFireAnyG : Prop :=
 refutation below refutes nothing the repair says. -/
 theorem unionsFire_of_anyG (hw : UnionsFireAnyG) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate hsig hfiat hrules hq hcv hno hreads hjoin
-    hrow hrj _ _ _ hback _ _ _
+    hrow hrj _ _ _ hback _ _ _ _ _ _
   refine hw hc hstep hrun henv hstate hsig hfiat ?_ hq hcv hno hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, hct, -⟩ := hrules r hr
@@ -11672,6 +11707,112 @@ theorem out_of_fired_run_block {R : RulesetName} {td td' dF : FDatabase} {r : Ru
     {g : FnName} {as vs : List Term} (ho : dF.toDatabase.Out g as vs) :
     td'.toDatabase.Out g as vs :=
   Database.Out.mono (contained_of_fired_run_block hmem hR hσ hfired hrun) ho
+
+/-! #### Step 4's global-reading head, closed **locally**
+
+The obligation is `ViewRepr td' (.app f ts) e` for the application a source head built, and
+what the head's own encoded block wrote is a view row at the tuple the *target's* evaluation
+produced. The fourth fact that was named for the gap between the two —
+`FDatabase.ViewRowsNamedUF`, a live view row's value column `FDatabase.UFRowReach`-reachable
+from the term naming it — is **refuted** (`ccTgt_not_viewRowsNamedUF`), and a run-wide
+replacement is not needed: the row in question is one *this very firing* wrote, so its
+provenance is local, and the two evaluations agree position by position with no re-keying
+between them.
+
+**The whole content is one hypothesis about the two environments**, `hlink` below: wherever the
+source head's environment binds `t` and the target head's binds `i`, the target reads `t` to
+`i`. Its three instances are the three shapes a head argument has, and the middle one is the
+one the walk was wanted for:
+
+* a **query** variable — the match substitution's own reading, which is what step 1 produced;
+* a **global** — `Rule.resolveGlobals` leaves a head alone, so both sides read the *same*
+  source term `td.env = sd.env` binds, and what is asked is `ViewRepr td' u u` **for a value
+  the environment binds**. That is not `Database.ReadsSelf` (refuted at a term a *firing*
+  built, `ncTgt_not_readsSelf`) but `Egglog.UnionsInv.envReadsAt`, the clause the command
+  induction already carries and proves: a global's value is a term a top-level block **built**,
+  and `viewReprAll_self_of_execProgramM` is its read-back at every subterm. So the global
+  position costs nothing new, and no `FDatabase.UFRowReach` chain is walked;
+* a head **`let`** — the same reading, one build earlier in the block.
+
+**And the applications pay for themselves.** `encodeBuild`'s naming expression *is* the source
+expression (`encodeBuild_fst`), so the target's value for `.app f args` is `.app f is` over the
+argument values, and the view row `encodeBuild` emitted for it is keyed at exactly that `is` —
+the tuple the induction has just read the arguments onto. This is the sense in which the fact
+is "true of a row a build wrote": its value column is its naming term, and nothing has moved
+it yet.
+
+`viewRow_of_rowReachList_all` and the three invariants it spends stay where they are — they are
+`Database.RebuildClosed`'s `edged`/`column` mechanism and remain `Egglog.RowMech` clauses — but
+step 4 no longer needs them. -/
+
+mutual
+
+/-- **The head's build, read back at the tuple it was written at.** No provenance and no
+re-keying: the reading of an application is the value the encoded head's own naming expression
+took, and the row supplying it is the one that build emitted (`hrow`).
+
+`hlink` is the two environments' agreement — one `ViewRepr` per variable — and it is where a
+global-reading head is answered, by `Egglog.UnionsInv.envReadsAt` rather than by a walk. -/
+theorem viewRepr_of_evalPair {sigS sigT : Signature} {ρs ρt : Env} {D : Database}
+    (hlink : ∀ (v : Var) (t i : Term),
+      Env.lookup v ρs = some t → Env.lookup v ρt = some i → ViewRepr D t i) :
+    ∀ (e : Expr) {t i : Term}, (∀ g ∈ e.fns, Prim.ofName g = none) →
+      (∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+        ∀ (is : List Term) (v : Term), Expr.evalList sigT args ρt = some is →
+          Expr.eval sigT (.app f args) ρt = some v → ∃ pf, D.Out (viewName f) is [v, pf]) →
+      Expr.eval sigS e ρs = some t → Expr.eval sigT e ρt = some i → ViewRepr D t i
+  | .lit _, _, _, _, _, hs, ht => by
+      rw [Expr.eval_lit, Option.some.injEq] at hs ht
+      subst hs; subst ht; exact .lit
+  | .var v, t, i, _, _, hs, ht =>
+      hlink v t i (by rwa [Expr.eval_var] at hs) (by rwa [Expr.eval_var] at ht)
+  | .app f args, _, _, hnp, hrow, hs, ht => by
+      have hpf : Prim.ofName f = none := hnp f (by rw [Expr.fns]; exact List.mem_cons_self)
+      obtain ⟨ts, hts, rfl⟩ := Expr.eval_app_inv hpf hs
+      obtain ⟨is, his, rfl⟩ := Expr.eval_app_inv hpf ht
+      obtain ⟨pf, hout⟩ :=
+        hrow f args (by rw [Expr.apps]; exact List.mem_cons_self) is _ his ht
+      exact .app
+        (viewReprList_of_evalPair hlink args
+          (fun g hg => hnp g (by rw [Expr.fns]; exact List.mem_cons_of_mem _ hg))
+          (fun f' args' hm => hrow f' args'
+            (by rw [Expr.apps]; exact List.mem_cons_of_mem _ hm))
+          hts his)
+        hout
+
+@[inherit_doc viewRepr_of_evalPair]
+theorem viewReprList_of_evalPair {sigS sigT : Signature} {ρs ρt : Env} {D : Database}
+    (hlink : ∀ (v : Var) (t i : Term),
+      Env.lookup v ρs = some t → Env.lookup v ρt = some i → ViewRepr D t i) :
+    ∀ (es : List Expr) {ts is : List Term}, (∀ g ∈ Expr.fnsList es, Prim.ofName g = none) →
+      (∀ (f : FnName) (args : List Expr), (f, args) ∈ Expr.appsList es →
+        ∀ (js : List Term) (v : Term), Expr.evalList sigT args ρt = some js →
+          Expr.eval sigT (.app f args) ρt = some v → ∃ pf, D.Out (viewName f) js [v, pf]) →
+      Expr.evalList sigS es ρs = some ts → Expr.evalList sigT es ρt = some is →
+      ViewReprList D ts is
+  | [], _, _, _, _, hs, ht => by
+      rw [Expr.evalList_nil, Option.some.injEq] at hs ht
+      subst hs; subst ht; exact .nil
+  | e :: es, _, _, hnp, hrow, hs, ht => by
+      rw [Expr.evalList_cons, Option.bind_eq_some_iff] at hs ht
+      obtain ⟨t, hte, hrest⟩ := hs
+      obtain ⟨i, hie, hrestT⟩ := ht
+      rw [Option.map_eq_some_iff] at hrest hrestT
+      obtain ⟨ts, hts, rfl⟩ := hrest
+      obtain ⟨is, his, rfl⟩ := hrestT
+      exact .cons
+        (viewRepr_of_evalPair hlink e
+          (fun g hg => hnp g (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inl hg)))
+          (fun f' args' hm => hrow f' args'
+            (by rw [Expr.appsList]; exact List.mem_append_left _ hm))
+          hte hie)
+        (viewReprList_of_evalPair hlink es
+          (fun g hg => hnp g (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inr hg)))
+          (fun f' args' hm => hrow f' args'
+            (by rw [Expr.appsList]; exact List.mem_append_right _ hm))
+          hts his)
+
+end
 /-! #### The outer decomposition, per firing
 
 `Egglog.UnionsFire`'s conclusion is about `sd'`, the state a whole **round** reached, and steps
@@ -12248,15 +12389,30 @@ landed too, and what remains of step 4 is one item, and then the assembly.
   mirror of `exists_execActions_encodeActions` run in the reading direction, and
   `exists_step_of_mem_evalActions`/`headActions_soundTerms` are the same induction on the
   source and the soundness sides.
-* **A head that reads a global.** `Rule.resolveGlobals` leaves a rule's *head* alone, so such a
-  head evaluates the global to the source term `td.env = sd.env` binds and keys its view row
-  **there** rather than at an id of it — and `ViewRepr td' u u` for that term is
-  `Database.ReadsSelf`, which is refuted (`ncTgt_not_readsSelf`, and the `glob-*` measurement in
-  the `hglob` paragraph above). What answers it is the row the *rebuild* re-keys onto the
-  leader, and that row is now reachable with **no provenance at all**:
-  `viewRow_of_rowReachList` is a view row at any pointwise-`FDatabase.UFRowReach` key tuple,
-  stated at the three properties of the state it spends rather than at `execM (encode P)`, and
-  `execM_viewRow_of_rowReachList` is it supplied at a run's end.
+* **A head that reads a global — closed, and *locally*.** `Rule.resolveGlobals` leaves a
+  rule's *head* alone, so such a head evaluates the global to the source term
+  `td.env = sd.env` binds and keys its view row **there** rather than at an id of it. What is
+  asked of that position is therefore `ViewRepr td' u u` **for a value the environment binds**,
+  and that is not `Database.ReadsSelf`: the refutation `ncTgt_not_readsSelf` is at a term a
+  rule *firing* built, and a global's value is a term a **top-level block built**, whose
+  read-back at every subterm is `viewReprAll_self_of_execProgramM`. That is
+  `Egglog.UnionsInv.envReadsAt` — a clause the command induction already carries and proves
+  — and it is now a clause of `Egglog.UnionsFire` (`rbTgtR_envReadsAt` is it with content at
+  the witness, at the `(A)` `rbProgram`'s own first build wrote).
+
+  `viewRepr_of_evalPair` is the whole read-back at that clause: an induction over the head
+  expression whose only content is `hlink`, the two environments' agreement — one `ViewRepr`
+  per variable — with the query variables answered by step 1's reading, a global by
+  `envReadsAt`, and a head `let` by the same reading one build earlier. **Every application
+  pays for itself**, because `encodeBuild`'s naming expression *is* the source expression
+  (`encodeBuild_fst`): the target's value for `.app f args` is `.app f is` over the argument
+  values, and the row `encodeBuild` emitted for it is keyed at exactly the `is` the induction
+  has just read the arguments onto. No `FDatabase.UFRowReach` chain is walked and no run-wide
+  invariant is spent — which is the sense in which the refuted fact was "true of a row a build
+  wrote": its value column is its naming term, and nothing has moved it yet.
+
+  So the walk below is **not** what closes this item, and the paragraphs that follow are kept
+  as the record of the route that was tried.
 
   **And the two firing lemmas were not where its provenance lived.** They take three fields of
   `FDatabase.EncBase` and no more — `sig` (as `d.sig.IsCtor transName` and companions), `held`
@@ -12289,10 +12445,10 @@ landed too, and what remains of step 4 is one item, and then the assembly.
   fired rather than the e-class rule — with `ccStale_not_viewRowsColumnClosedAll` the same
   clause **false** one firing earlier, so it is a constraint and not a shape.
 
-  **What the item still owes is the link into the walk's premise, and the fourth fact named for
-  it is false.** `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain per key
-  position out of the tuple the head's own row sits at, and what a head that reads a global
-  hands over is a *source term* per position. The fact named for that link was
+  **The walk's premise was the gap, and the fact named for it is false — which is what
+  localized the item.** `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain
+  per key position out of the tuple the head's own row sits at, and what a head that reads a
+  global hands over is a *source term* per position. The fact named for that link was
   `FDatabase.ViewRowsNamedUF` — a live view row's **value** column is
   `FDatabase.UFRowReach`-reachable from the term that names it, which at a nullary position is
   exactly the chain `Egglog.RowRepr td' u x` would have to supply. **It is not vacuous and it is
@@ -12303,14 +12459,13 @@ landed too, and what remains of step 4 is one item, and then the assembly.
   not hold at all (`ccTgt_not_mem_FA`), so no `@UF` row can leave it — and the row is the
   interpreter's own round's (`ccStale_columnRule_fires`).
 
-  So the fact is true of a row a **build** wrote, whose value column *is* its naming term and
-  thereafter moves only along `@UF` rows, and false of a row a column rule wrote, whose naming
-  term was never a value column of anything. A correct link has to speak about the key tuple the
-  row started at; it is left open rather than guessed at a second time, and the walk itself is
-  unaffected — `viewRow_of_rowReachList_all` is proved and only its premise is missing.
-  `FDatabase.EntryRowsUF` is a different shape and not a route to it: it runs from an entry
-  term's value column to a live row's at the **same** key, which is what
-  `encReached_viewRow_at_root` spends.
+  The refutation is what said the row in question is one **this very firing** wrote, whose
+  value column *is* its naming term: `viewRepr_of_evalPair` above reads it back at the key
+  tuple it was written at, and no run-wide invariant is needed for (i) at all. The walk stays
+  where it is — it is `Database.RebuildClosed`'s `edged`/`column` mechanism, and the three
+  invariants remain `Egglog.RowMech` clauses — but step 4 no longer spends it.
+  `FDatabase.EntryRowsUF` is a different shape again: it runs from an entry term's value column
+  to a live row's at the **same** key, which is what `encReached_viewRow_at_root` spends.
 
 **The outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no merge
 phase — `MergeClosure.eq_of_allConstructors` — so `cmdStep_run_eq` makes the post-state the
@@ -12319,9 +12474,37 @@ pre-state's and one firing's (`eqs_cases_of_cmdStep_run`, `terms_cases_of_cmdSte
 converses of `mem_eqs_of_ruleFired` and `mem_terms_of_ruleFired`). `contained_of_run_block`
 carries the two clauses the residue holds at `td` up to `td'`, and
 `unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus **one
-obligation per firing** — which is exactly what steps 1-4 are about. So what is left of the
-`Cmd.run` half is the inner obligation alone: step 1's `.eq` clause above, and step 4's
-global-reading head, whose fourth fact is refuted above.
+obligation per firing** — which is exactly what steps 1-4 are about.
+
+**What is left of the `Cmd.run` half, precisely.** Step 4's global-reading head is closed
+(`viewRepr_of_evalPair`) and step 1's `.eq` clause is threaded
+(`Database.LitGlobalsHeld`, `encStep_litGlobalsHeld`, `eqLit_of_litGlobalsHeld`). Three items
+of *glue* remain, none of them a fact about the encoding:
+
+* **`hgl` at the query the target actually holds.** `eqLit_of_litGlobalsHeld` discharges it at
+  `(r.resolveGlobals sd.env).query` out of `Pattern.Grounded` at the rule's own **text**, and
+  `Egglog.UnionsFire` is given no program, so what it can read of a stored rule is
+  `Database.QueriesIn` and that carries `Pattern.NoValues`/`Query.VarsKeyed`/`noPrim` and not
+  `Pattern.Grounded`. The missing piece is one more source-run invariant of exactly that
+  shape — every bare-literal `.eq` a *stored* query carries names a global the environment
+  binds — which `Cmd.QueryEncodable`'s `Grounded` and
+  `exists_lit_global_of_resolveGlobals` pay at a `Cmd.rule`, and which a later top-level `let`
+  cannot break because `evalTopAction` refuses one that rebinds. `Database.LitGlobalsHeld` then
+  answers for the literal itself.
+* **Step 2's query identity, at the rule the state stores.** `hrules` names
+  `encodeRule i (r.substGlobals G) n` for `r ∈ sd.rules`, and the reading step wants
+  `Matches sd p τ` at the patterns of `Query.substGlobals G r.query`, which it has at the
+  patterns of `r.query`. `Rule.resolveGlobals_eq_substGlobals` is the identity, but it is
+  stated under `Database.GlobalsCover` (which `UnionsFire` does not carry — `encStep_globalsCover`
+  is where the chain has it) and at the *declared* rule rather than the stored one; what makes
+  the two agree is that `Query.substGlobals G` is idempotent and the stored query is already
+  inlined at `G`.
+* **The head's key columns as target terms.** `viewRepr_of_evalPair`'s `hrow` asks for
+  `Database.Out`, and `Database.out_self` wants each key column in `td'.terms` —
+  `viewRepr_of_holdsBuild_fired_run_block`'s own `hval`. `mem_matchQuery_encodeQuery` pays it
+  at a query variable and `FDatabase.RowColumnsValued` at an application; a **global**
+  position wants `∀ b ∈ sd.env, b.2 ∈ td.terms`, which is `td.env = sd.env` read against the
+  target's own `Database.WF.envInTerms` and is not yet a clause.
 
 Beside those: the `Cmd.saturate` lag below, which this decomposition does not speak about — a
 `Cmd.saturate`'s post-state is an *iterate* of `RunRules` (`RunReach.iterate`) rather than one
@@ -14037,6 +14220,41 @@ theorem encStep_ufRootsUnique {P : Program} (hdom : P.EncodeDomain) {pre suf : P
   fun hreach => encReached_ufRowRoot_of_ufReach hdom (encodeSig_isCtor_symName P)
     (encodeSig_isCtor_transName P) h.reached hreach
 
+/-- **The two environments are the same list at every state of the chain**, one
+`envAligned_step` per block from the empty environment the prelude leaves
+(`actionsAreSets_encodePrelude`). -/
+theorem EncStep.envEq {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
+    (h : EncStep P pre suf sd d G) : d.env = sd.env := by
+  induction h with
+  | prelude hprel =>
+      rw [FDatabase.execProgramM_env (actionsAreSets_encodePrelude P) hprel]; rfl
+  | @block pre' suf' sd₀ sd₁ d₀ D₀ c G' n i hs hstep hb ih =>
+      exact envAligned_step hdom
+        (by rw [hs.program]; exact List.mem_append_right _ List.mem_cons_self)
+        (hs.src.ctorState Database.CtorState.empty
+          (fun c' hc' => hdom.ctorsOnly c'
+            (by rw [hs.program]; exact List.mem_append_left _ hc')))
+        hstep hb ih
+
+/-- **`Database.LitGlobalsHeld`, at every state one encoded run passes through.** The run-wide
+induction the `.eq` case's clause wanted, and it is two facts: the environments are the same
+list (`EncStep.envEq`) and the target holds every value its own environment binds
+(`Database.WF.envInTerms`, off `FDatabase.EncBase.inv`).
+
+So no new block induction is needed — a global's value is a term the *encoded* `let` inserted,
+which is what separates this from the refuted `sd.terms` form (`litBuild_not_litsHeld`), where
+a bare build emits nothing at all. `litGlobalsHeld_witness` is the clause with content. -/
+theorem encStep_litGlobalsHeld {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
+    (h : EncStep P pre suf sd d G) : sd.LitGlobalsHeld d := by
+  intro v l hlk
+  rw [← h.envEq hdom] at hlk
+  have hmem : (v, Term.lit l) ∈ d.toDatabase.env := by
+    rw [FDatabase.toDatabase_env]; exact Env.mem_of_lookup hlk
+  exact FDatabase.mem_toDatabase_terms.mp
+    ((encReached_encBase hdom h.reached).inv.wf.envInTerms (v, Term.lit l) hmem)
+
 /-- **`Egglog.RowMech`, discharged.** The clauses `Egglog.UnionsFire` takes besides its
 provenance-free hypotheses, at every state one encoded run passes through.
 
@@ -14087,7 +14305,8 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
         (headsBuild_of_programStep hdom h.program h.src r hr),
     encStep_viewRowsRootedAll hdom hnodup h,
     encStep_viewRowsColumnClosedAll hdom hnodup h,
-    encStep_ufRootsUnique hdom h⟩
+    encStep_ufRootsUnique hdom h,
+    encStep_litGlobalsHeld hdom h⟩
 
 /-- **`Egglog.RuleNameMech`, discharged.** The prelude declares one `@Rule_i` per source rule,
 at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`), and the

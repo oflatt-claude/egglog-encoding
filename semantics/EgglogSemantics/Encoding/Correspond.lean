@@ -3874,6 +3874,25 @@ theorem rowReprList_congr {d : FDatabase} : ∀ {as bs : List Term},
       cases hl with
       | cons ha hr => exact .cons ((hh _).mp ha) (rowReprList_congr ht hr)
 
+/-! ##### The `.eq` case's environment clause
+
+`PatternRowRead.eq` asks the target to hold the id it reads, and the one case neither the row
+nor the target reading answers for is a `.eq` whose **both** sides are a bare literal of the
+same value. `Pattern.Grounded` empties that on the program's text
+(`Encoding/Complete.lean`'s `Pattern.Grounded.eqLit`); what survives is the shape
+`Rule.resolveGlobals` *creates* out of a literal-valued global, and there the target does hold
+the literal because `encodeAction` emits the binder for it and `FDatabase.addTerm` inserts it.
+
+Not about `sd.terms`, which is **refuted**: `litBuild_not_litsHeld` is an in-domain program
+whose source holds `5` and whose encoded run holds no term at all, because `encodeBuild` emits
+no action for a bare leaf. `litGlobalsHeld_witness` is this clause with content at the same
+literal reached by a `let` instead. -/
+
+/-- **Every literal a global is bound to is a term the target holds.** The `.eq` case's
+remaining obligation, at the environment rather than at the source's terms. -/
+def Database.LitGlobalsHeld (sd : Database) (td : FDatabase) : Prop :=
+  ∀ (v : Var) (l : Lit), Env.lookup v sd.env = some (Term.lit l) → Term.lit l ∈ td.terms
+
 /-! ##### The states one encoded run passes through
 
 The residue fires at a state *inside* the run — the one the next encoded block starts at — and
@@ -4277,6 +4296,9 @@ def UnionsFire : Prop :=
     (∀ r ∈ sd.rules, Actions.Builds r.actions td.sig) →
     (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
     td'.ViewRowsRootedAll → td'.ViewRowsColumnClosedAll → td'.UFRootsUnique →
+    (∀ t r : Term, RowRepr td t r → ViewRepr td.toDatabase t r) →
+    (∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td.toDatabase s s) →
+    sd.LitGlobalsHeld td →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
 /-- **The derived clauses `UnionsFire` takes**, at every state one encoded run passes through.
@@ -4331,7 +4353,8 @@ def RowMech (Q : Program) : Prop :=
         (d.sig.mergeOf (viewName f)).isSome = true) ∧
     (∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))) ∧
     (∀ r ∈ sd.rules, Actions.Builds r.actions d.sig) ∧
-    d.ViewRowsRootedAll ∧ d.ViewRowsColumnClosedAll ∧ d.UFRootsUnique
+    d.ViewRowsRootedAll ∧ d.ViewRowsColumnClosedAll ∧ d.UFRootsUnique ∧
+    sd.LitGlobalsHeld d
 
 /-- **Every `@Rule_i` the encoder's numbering applies is declared**, at every state one encoded
 run passes through. Threaded rather than proved here for `Egglog.RowMech`'s reason: the
@@ -4467,7 +4490,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech (.block hchain hstep hblock)).2.1
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.1
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.1
-        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.1 hinv.envReadsAt
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | saturate R =>
@@ -4489,7 +4514,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech (.block hchain hstep hblock)).2.1
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.1
         (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.1
-        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.1 hinv.envReadsAt
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | action a =>

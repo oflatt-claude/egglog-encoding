@@ -175,22 +175,41 @@ nightly-local: nightly-uv nightly-rustup
 # reachable from the term that names it, holds with content at `ncTgt`
 # (`ncTgt_viewRowsNamedUF`) and fails at `ccTgt` on the row a **column** rule writes
 # (`ccTgt_not_viewRowsNamedUF`) — re-keying leaves the value column alone, so the row is named
-# by a term the target does not hold (`ccTgt_not_mem_FA`) and no `@UF` row can leave it. The
-# walk is unaffected; its premise is still what is missing.
-# **And the `.eq` case's residue is now the clause and not a guess.**
+# by a term the target does not hold (`ccTgt_not_mem_FA`) and no `@UF` row can leave it.
+# **And that refutation is what closed the item, locally.** The row a global-reading head keys
+# is one *this very firing* wrote, whose value column **is** its naming term, so no walk is
+# needed: `viewRepr_of_evalPair` reads a head expression back at the key tuple it was written
+# at, by induction, with its only content the two environments' agreement — the query
+# variables from step 1's reading, a head `let` from the same reading, and a **global** from
+# `UnionsInv.envReadsAt`, which is *not* `Database.ReadsSelf` (refuted at a term a firing
+# built) but the clause the command induction already carries and proves, a global's value
+# being a term a top-level block built. `encodeBuild`'s naming expression being the source
+# expression (`encodeBuild_fst`) is what makes each application pay for itself. The walk stays
+# as `Database.RebuildClosed`'s `edged`/`column` mechanism and step 4 no longer spends it.
+# **And the `.eq` case's clause is threaded.**
 # `Database.LitGlobalsHeld` — every literal a global is bound to is a term the target holds —
 # is what `hgl` needs where `Pattern.Grounded.eqLit` cannot empty it, and
 # `eqLit_of_litGlobalsHeld` is the reduction through `Pattern.Grounded` at the rule's own text.
 # `litGlobalsHeld_witness` gives it content: `glProgram` is one `(let $g 5)`, in the domain, and
 # `execM (encode glProgram)` **holds** `5` where `litBuildProgram`'s bare `.expr (.lit 5)` holds
-# nothing — which is why the clause is about `sd.env` and not about `sd.terms`. Threading it is
-# what is left.
+# nothing — which is why the clause is about `sd.env` and not about `sd.terms`. It rides in
+# `Egglog.RowMech` with the rest and `encStep_litGlobalsHeld` discharges it, out of
+# `EncStep.envEq` (the two environments are the same list) and the target's own
+# `Database.WF.envInTerms` — so it needed no new block induction. Twenty-five conjuncts at the
+# witness now, nineteen with content: `Database.LitGlobalsHeld` is vacuous at `rbTgtR`, where
+# the one global is bound to an application, and the two clauses step 4's read-back spends are
+# not (`rbTgtR_envReadsAt`, `rbTgtR_viewRepr_of_rowRepr` at `td`).
 # **And the outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no
 # merge phase, so `cmdStep_run_eq` makes the post-state the *function* `RunRules R sd` and its
 # `Database.sUnion` splits `eqs` and `terms` per firing (`eqs_cases_of_cmdStep_run`,
 # `terms_cases_of_cmdStep_run`); `contained_of_run_block` carries the clauses held at `td` up to
 # `td'`, and `unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus
-# one obligation per firing. What is left of the `Cmd.run` half is the inner obligation alone.
+# one obligation per firing. What is left of the `Cmd.run` half is three items of *glue* inside
+# that obligation, none of them a fact about the encoding: `hgl` at the query the target holds
+# (one more source-run invariant of `Database.QueriesIn`'s shape, since `Pattern.Grounded` is
+# text and the residue is given no program), step 2's identity between the stored query and
+# `Query.substGlobals G` of it, and the head's key columns as target terms at a **global**
+# position. `unionsJoined_fire`'s own docstring names all three.
 # The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
 # turns a source reading of a query into a substitution the *emitted* query matches at, over
 # `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its
@@ -203,8 +222,9 @@ nightly-local: nightly-uv nightly-rustup
 # `evalActions_isSome_of_builds`, and `exists_execLocalActions_encodeRule_head` runs the block
 # `encodeRule` emits — `Actions.Builds` is false of an *encoded* head, `if` and `ordering-gt`
 # being primitives, so what runs it is the source head read at the target's signature, spending
-# `@Fiat` and `@Rule_i`. What step 3 still owes is source-side: the source rule's *head* being
-# scoped and building are not clauses `UnionsFire` carries. The run-wide index argument it used to
+# `@Fiat` and `@Rule_i`. What step 3 owed source-side is carried: the source rule's *head* being
+# scoped and building are clauses of `UnionsFire` now, discharged by `headsScoped_of_prefixStep`
+# and `headsBuild_of_programStep`. The run-wide index argument it used to
 # sit beside is closed: `execM_rebuildClosed` is `Database.ViewJoined` per mechanism (the e-class
 # rule, the column rules, the `@UF` edge a collision writes), proved outright — its four
 # `Signature.IsCtor`
