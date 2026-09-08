@@ -2286,12 +2286,18 @@ structure Database.HoldsBuild (d : Database) (f : FnName) (is : List Term) (v : 
   view : ∃ pf, Term.app (viewName f) (is ++ [v, pf]) ∈ d.terms
   /-- The term-relation row. -/
   term : Term.app (termName f) (is ++ [v]) ∈ d.terms
+  /-- **And the key columns themselves**, which `FDatabase.addTerm` inserts along with the
+  row it is given (`execActions_encodeBuild_app` returns every subterm of the view row term).
+  It is what `Database.out_self` asks for at the row's own key, so a consumer reading the row
+  back as a `Database.Out` needs no clause about the target's terms: the columns come with
+  the row. -/
+  keys : ∀ a ∈ is, a ∈ d.terms
 
 /-- Both rows are memberships, so they survive anything that only adds terms. -/
 theorem Database.HoldsBuild.mono {d₁ d₂ : Database} (h : d₁.terms ⊆ d₂.terms)
     {f : FnName} {is : List Term} {v : Term} (hb : d₁.HoldsBuild f is v) :
     d₂.HoldsBuild f is v :=
-  ⟨hb.view.imp fun _ hp => h hp, h hb.term⟩
+  ⟨hb.view.imp fun _ hp => h hp, h hb.term, fun a ha => h (hb.keys a ha)⟩
 
 /-- `Database.HoldsBuild.mono` along an inclusion of term *lists*, which is the form the
 interpreter's monotonicity lemmas deliver. -/
@@ -2371,7 +2377,9 @@ theorem holdsBuild_of_execActions : ∀ (e : Expr) (n : Nat) {d d' : FDatabase},
       · obtain ⟨rfl, rfl⟩ : g = f ∧ gargs = args := by simpa using hm
         exact ⟨is, v, his, hv,
           ⟨⟨pf, FDatabase.mem_toDatabase_terms.mpr (hview _ (Term.self_mem_subterms _))⟩,
-            FDatabase.mem_toDatabase_terms.mpr hterm⟩⟩
+            FDatabase.mem_toDatabase_terms.mpr hterm,
+            fun a ha => FDatabase.mem_toDatabase_terms.mpr (hview a
+              (Term.arg_subterms (List.mem_append_left _ ha) (Term.self_mem_subterms a)))⟩⟩
       · obtain ⟨is', v', hk', hv', hb'⟩ :=
           holdsBuildArgs_of_execActions args n hargs g gargs hm
         exact ⟨is', v', hk', hv', hb'.monoF hmono⟩
@@ -3377,7 +3385,9 @@ structure UnionsInv (Q : Program) (sd : Database) (td D : FDatabase) : Prop wher
   existential is what names one. -/
   rules : ∀ r ∈ sd.rules, ∃ G i n,
     (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
-      sd.GlobalsInline G ∧ Q.GlobalsOnce G
+      sd.GlobalsInline G ∧ Q.GlobalsOnce G ∧ r.substGlobals G = r
+  -- the last conjunct is step 2's identity at the *stored* rule: registration already ran
+  -- `Rule.resolveGlobals`, so a second pass at the same `G` rewrites nothing.
   /-- **And `td` is inside `D`**, which is the direction the run's containment actually runs
   in. Every clause above is therefore available at `D` as well (`UnionsInv.joined`,
   `UnionsInv.reads`, `UnionsInv.envReads`) and none of them is available at `td` *from* `D`. -/
@@ -4273,6 +4283,14 @@ a strengthening, and `Egglog.GlobalsMech` is how it is threaded — beside `Prog
 which is what a later `let` cannot invalidate, and which is why the pair rides in
 `Egglog.UnionsInv.rules` while only the `GlobalsInline` half reaches this `Prop`.
 
+**And `r.substGlobals G = r` rides in the same clause**, which is step 2's identity at the rule
+the state **stores**: a rule is registered `Rule.resolveGlobals`'d, so a second pass at the same
+`G` rewrites nothing, and the reading step therefore has `Matches sd p τ` at exactly the
+patterns the encoder flattened. It is a conjunct rather than a derivation because
+`Rule.resolveGlobals_eq_substGlobals` wants `Database.GlobalsCover` at the environment the rule
+was *registered* at and no later state remembers it; `unionsInv_step` discharges it there, by
+`Rule.substGlobals_idem` off `Database.GlobalsInline.closed`.
+
 **A fifth refutation is gone.** It was `glob-late-eq`: a top-level `let` reached *after* the
 rule was declared, where `Spec/Match.lean`'s `ValidSubst` used to take `Pattern.freeVars p
 db.env` at the state the round runs at and so **recaptured** the rule's own query variable,
@@ -4294,7 +4312,7 @@ def UnionsFire : Prop :=
     (∀ r ∈ sd.rules,
       ∃ (G : List (Var × Expr)) (i n : Nat),
         (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
-          sd.GlobalsInline G) →
+          sd.GlobalsInline G ∧ r.substGlobals G = r) →
     (∀ r ∈ sd.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
       ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) →
     td.RowColumnsValued →
@@ -4442,10 +4460,11 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
     fun G' hgi hgo => hglob.2 hchain.program hchain.src hinv.state hstep hgi hgo
   have hkeepR : ∀ r ∈ sd.rules,
       ∃ G' i n, (encodeRule i (r.substGlobals G') n).1 ∈ td'.rules ∧
-        td'.sig.IsCtor (ruleName i) ∧ sd'.GlobalsInline G' ∧ Q.GlobalsOnce G' :=
+        td'.sig.IsCtor (ruleName i) ∧ sd'.GlobalsInline G' ∧ Q.GlobalsOnce G' ∧
+          r.substGlobals G' = r :=
     fun r hr =>
-      let ⟨G', i', n', hm, hct, hgi, hgo⟩ := hinv.rules r hr
-      ⟨G', i', n', hrmono _ hm, by rw [hsigEq]; exact hct, hkeepGI G' hgi hgo, hgo⟩
+      let ⟨G', i', n', hm, hct, hgi, hgo, hid⟩ := hinv.rules r hr
+      ⟨G', i', n', hrmono _ hm, by rw [hsigEq]; exact hct, hkeepGI G' hgi hgo, hgo, hid⟩
   have henvOut : td'.env = sd'.env :=
     envAligned_step hQ hc hinv.state hstep hblock hinv.env
   refine ⟨td', hblock, ?_⟩
@@ -4491,16 +4510,17 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
       intro s hs
       rw [hrules] at hs
       rcases Set.mem_insert_iff.mp hs with rfl | hs'
-      · refine ⟨G, i, n, ?_, by rw [hsigEq]; exact hri _ rfl, hkeepGI G hgi hgo, hgo⟩
-        rw [Rule.resolveGlobals_eq_substGlobals hgi hcov, Rule.substGlobals_idem hgi.closed]
-        exact hnew
+      · refine ⟨G, i, n, ?_, by rw [hsigEq]; exact hri _ rfl, hkeepGI G hgi hgo, hgo, ?_⟩
+        · rw [Rule.resolveGlobals_eq_substGlobals hgi hcov, Rule.substGlobals_idem hgi.closed]
+          exact hnew
+        · rw [Rule.resolveGlobals_eq_substGlobals hgi hcov, Rule.substGlobals_idem hgi.closed]
       · exact hkeepR s hs'
   | run R =>
       have hjoin := hfire (Or.inl rfl) hstep hblock hinv.env hinv.state
         (hmech hchain).2.2.2.1 (hmech hchain).2.2.2.2.1
         (fun r hr => by
-          obtain ⟨G', i', n', hm, hct, hgi, -⟩ := hinv.rules r hr
-          exact ⟨G', i', n', hm, hct, hgi⟩)
+          obtain ⟨G', i', n', hm, hct, hgi, -, hid⟩ := hinv.rules r hr
+          exact ⟨G', i', n', hm, hct, hgi, hid⟩)
         (hmech hchain).2.2.2.2.2.1
         (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2.1
         hinv.readsAt hinv.joinedAt
@@ -4524,8 +4544,8 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
       have hjoin := hfire (Or.inr rfl) hstep hblock hinv.env hinv.state
         (hmech hchain).2.2.2.1 (hmech hchain).2.2.2.2.1
         (fun r hr => by
-          obtain ⟨G', i', n', hm, hct, hgi, -⟩ := hinv.rules r hr
-          exact ⟨G', i', n', hm, hct, hgi⟩)
+          obtain ⟨G', i', n', hm, hct, hgi, -, hid⟩ := hinv.rules r hr
+          exact ⟨G', i', n', hm, hct, hgi, hid⟩)
         (hmech hchain).2.2.2.2.2.1
         (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2.1
         hinv.readsAt hinv.joinedAt

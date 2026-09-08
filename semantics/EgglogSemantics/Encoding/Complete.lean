@@ -9195,6 +9195,14 @@ rule the source holds. -/
 theorem rbEncRule_eq_substGlobals :
     (encodeRule 0 (rbRule.substGlobals [("x", Expr.app "A" [])]) 0).1 = rbEncRule := rfl
 
+/-- **And the rule the source *stores* is already inlined at that substitution**, which is
+step 2's identity at the stored rule: `Rule.resolveGlobals` ran when the rule was registered,
+so a second pass rewrites nothing. Not the empty substitution — `x` is bound to `(A)` — and
+not vacuous on the rule either: `rbRule`'s query really does have a variable for
+`Query.substGlobals` to look at. -/
+theorem rbRule_substGlobals :
+    rbRule.substGlobals [("x", Expr.app "A" [])] = rbRule := rfl
+
 @[inherit_doc rbSrc_globalsInline]
 theorem rbSrcR_globalsInline : rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
   rbSrc_globalsInline
@@ -9202,14 +9210,14 @@ theorem rbSrcR_globalsInline : rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
 /-- **The rules clause, with content**: the target holds `rbRule`'s encoding, its signature
 declares the proof head `ruleProofDecls` emitted for it, and the substitution it was encoded
 through is the one `rbProgram`'s own top-level `let` freezes — `x` bound to the closed
-definition `(A)`, so the `Database.GlobalsInline` conjunct riding in this clause is not the
-empty one either. -/
+definition `(A)`, so neither the `Database.GlobalsInline` conjunct riding in this clause nor
+the stored-rule identity `rbRule_substGlobals` beside it is at the empty substitution. -/
 theorem rbSrcR_hrules : ∀ r ∈ rbSrcR.rules,
     ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbTgtR.rules ∧
-      rbTgtR.sig.IsCtor (ruleName i) ∧ rbSrcR.GlobalsInline G := by
+      rbTgtR.sig.IsCtor (ruleName i) ∧ rbSrcR.GlobalsInline G ∧ r.substGlobals G = r := by
   intro r hr
   obtain rfl := rbSrcR_rules_mem hr
-  refine ⟨[("x", Expr.app "A" [])], 0, 0, ?_, ?_, rbSrcR_globalsInline⟩
+  refine ⟨[("x", Expr.app "A" [])], 0, 0, ?_, ?_, rbSrcR_globalsInline, rbRule_substGlobals⟩
   · rw [rbEncRule_eq_substGlobals]; exact List.mem_cons_self
   · rw [rbTgtR_sig]; decide
 
@@ -9597,7 +9605,8 @@ theorem unionsJoined_fire_satisfiable :
       rbTgtR.sig.IsCtor fiatName ∧
       (∀ r ∈ rbSrcR.rules,
         ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbTgtR.rules ∧
-          rbTgtR.sig.IsCtor (ruleName i) ∧ rbSrcR.GlobalsInline G) ∧
+          rbTgtR.sig.IsCtor (ruleName i) ∧ rbSrcR.GlobalsInline G ∧
+            r.substGlobals G = r) ∧
       (∀ r ∈ rbSrcR.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
         ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) ∧
       rbTgtR.RowColumnsValued ∧ rbTgtR.NoAtEnv ∧
@@ -11714,15 +11723,17 @@ theorem contained_of_fired_run_block {R : RulesetName} {td td' dF : FDatabase} {
 `contained_of_fired_run_block` to `td'`, the operand readings ride
 `FDatabase.execProgramM_toDatabase_contained` there, and `ViewRepr.app` is the two together.
 
-`hval` is the operands' own membership, which the reading a firing is offered already carries:
-`mem_matchQuery_encodeQuery` asks each bound value to be a `FDatabase.valueTerms` member, and
-`FDatabase.mem_terms_of_mem_valueTerms` is the inclusion. -/
+**`Database.out_self`'s key-column obligation costs nothing**, and no clause about `td.terms`
+is needed for it — in particular not `∀ b ∈ sd.env, b.2 ∈ td.terms`, which a global-reading
+head would otherwise want: the key columns ride on `Database.HoldsBuild.keys`, since
+`FDatabase.addTerm` inserts every subterm of the row it is handed
+(`execActions_encodeBuild_app`). So a build's row comes back with its own key. -/
 theorem viewRepr_of_holdsBuild_fired_run_block {R : RulesetName} {td td' dF : FDatabase}
     {r : Rule} (hmem : r ∈ td.rules) (hR : r.ruleset = R)
     {σ : Env} (hσ : σ ∈ matchQuery td r.query) (hfired : Fired td r σ dF)
     (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
     {f : FnName} {ts is : List Term} {v : Term}
-    (hes : ViewReprList td.toDatabase ts is) (hval : ∀ a ∈ is, a ∈ td.terms)
+    (hes : ViewReprList td.toDatabase ts is)
     (hb : dF.toDatabase.HoldsBuild f is v) :
     ViewRepr td'.toDatabase (.app f ts) v := by
   obtain ⟨pf, hview⟩ := hb.view
@@ -11730,9 +11741,8 @@ theorem viewRepr_of_holdsBuild_fired_run_block {R : RulesetName} {td td' dF : FD
     (Database.out_self (vs := [v, pf]) ?_ ?_)
   · exact Database.mem_terms_of_eqs
       (contained_of_fired_run_block hmem hR hσ hfired hrun).eqs hview
-  · intro a ha
-    rw [FDatabase.toDatabase_terms]
-    exact FDatabase.execProgramM_terms hrun a (hval a ha)
+  · exact fun a ha => Database.mem_terms_of_eqs
+      (contained_of_fired_run_block hmem hR hσ hfired hrun).eqs (hb.keys a ha)
 
 /-- **And the `@UF` edge an encoded `union` head writes.** The other half of the conclusion —
 `Database.UnionsJoined` asks for an edge between two ids — at the same containment. -/
@@ -12248,10 +12258,13 @@ second failing the source-rules clause, with every clause about names holding at
 
 **What the repair lands.** Step 2 of the assembly — move the source firing to the query the
 encoder flattened — is no longer a transfer at all, and no `Matches.to_substGlobals` is needed:
-a rule is stored `Rule.resolveGlobals`'d at the environment standing when it is declared, and
-`Rule.resolveGlobals_eq_substGlobals` under the `Database.GlobalsInline` this residue is handed
-(with `Database.GlobalsCover`) says that is the very query `mem_matchQuery_encodeQuery` takes.
-So the source firing's own `ValidQuerySubst` is already at the right query.
+a rule is stored `Rule.resolveGlobals`'d at the environment standing when it is declared, so
+`Query.substGlobals G` has nothing left to rewrite in the query the state holds. `hrules`
+carries that identity as a conjunct rather than deriving it —
+`Rule.resolveGlobals_eq_substGlobals` needs `Database.GlobalsCover` at the environment the
+rule was *registered* at, which no later state remembers — and `unionsInv_step` discharges it
+where the rule is registered, by `Rule.substGlobals_idem`. So the source firing's own
+`ValidQuerySubst` is already at the right query.
 
 **Step 1 goes through at the rule's own query, and one of its two extra facts is now a
 clause.** Reading a firing's substitution forward through live rows is
@@ -12524,22 +12537,69 @@ since `Cmd.QueryEncodable`'s `Pattern.Grounded` excludes the shape from a rule's
 `evalTopAction` refuses a later `let` that would rebind the global (`cmdStep_eqLitGlobals`,
 `eqLitGlobals_of_prefixStep`). `Database.LitGlobalsHeld` then answers for the literal itself.
 
-Two items of *glue* remain, neither of them a fact about the encoding:
+**Both items of glue are closed, and neither cost a fact about the encoding.**
 
-* **Step 2's query identity, at the rule the state stores.** `hrules` names
-  `encodeRule i (r.substGlobals G) n` for `r ∈ sd.rules`, and the reading step wants
-  `Matches sd p τ` at the patterns of `Query.substGlobals G r.query`, which it has at the
-  patterns of `r.query`. `Rule.resolveGlobals_eq_substGlobals` is the identity, but it is
-  stated under `Database.GlobalsCover` (which `UnionsFire` does not carry — `encStep_globalsCover`
-  is where the chain has it) and at the *declared* rule rather than the stored one; what makes
-  the two agree is that `Query.substGlobals G` is idempotent and the stored query is already
-  inlined at `G`.
-* **The head's key columns as target terms.** `viewRepr_of_evalPair`'s `hrow` asks for
-  `Database.Out`, and `Database.out_self` wants each key column in `td'.terms` —
-  `viewRepr_of_holdsBuild_fired_run_block`'s own `hval`. `mem_matchQuery_encodeQuery` pays it
-  at a query variable and `FDatabase.RowColumnsValued` at an application; a **global**
-  position wants `∀ b ∈ sd.env, b.2 ∈ td.terms`, which is `td.env = sd.env` read against the
-  target's own `Database.WF.envInTerms` and is not yet a clause.
+* **Step 2's query identity, at the rule the state stores — a clause, and not a derivation.**
+  `Rule.resolveGlobals_eq_substGlobals` is stated under `Database.GlobalsCover`, which
+  `Egglog.UnionsFire` does not carry and *cannot* derive: `Database.GlobalsInline G` gives
+  `dom G ⊆ dom sd.env` and nothing in the other direction, and the coverage that matters is at
+  the environment the rule was **registered** at, which no later state remembers. What the
+  reading actually needs is weaker and is about the *stored* rule alone —
+  `Query.substGlobals G r.query = r.query` — so that is the conjunct `hrules` now carries,
+  beside the `Database.GlobalsInline G` it already had. `unionsInv_step` discharges it where the
+  rule is registered and nowhere else: `Rule.resolveGlobals_eq_substGlobals` there (under the
+  `Database.GlobalsCover` `encStep_globalsCover` supplies at that very command) followed by
+  `Rule.substGlobals_idem` — resolving an already-resolved rule changes nothing, because the
+  definitions `G` carries are closed. Every later command carries the pair unchanged, and
+  `rbRule_substGlobals` is the conjunct at `unionsJoined_fire_satisfiable`'s own witness, at
+  the **non-empty** `G` `rbProgram`'s top-level `let` freezes.
+* **The head's key columns as target terms — derivable, and no clause.**
+  `∀ b ∈ sd.env, b.2 ∈ td.terms` is not needed at all: `execActions_encodeBuild_app` already
+  proves every subterm of the view row term is in the block's post-state, and
+  `holdsBuild_of_execActions` was simply discarding it. `Database.HoldsBuild.keys` carries it
+  now, so `viewRepr_of_holdsBuild_fired_run_block` has lost its `hval` hypothesis and
+  `Database.out_self`'s key obligation is paid by the row's own build. `Egglog.UnionsInv.envReadsAt`
+  would not have done it — `ViewRepr` at an application ends in a `Database.Out` on the *view
+  row* term, and getting the key back out of that wants `Database.WF.subtermClosed` at `td`,
+  which is not a clause either.
+
+**And the `Cmd.run` half is landed**, at `unionsFire_run`: `unionsFire_conclusion_of_run` plus
+`unionsFire_firing` once per firing, with steps 1-4 assembled as
+`exists_mem_matchQuery_encodeQuery_of_validQuerySubst` (the reading, at the emitted query),
+`exists_fired_encodeRule` (the firing), `contained_of_fired_run_block` (the transport) and
+`headActions_viewRepr` (the head, in lockstep with the source's own block). Three pieces were
+missing and are written: `mem_vars_encodeQuery_of_argVar`, which is `mem_vars_encodeQuery` in
+the direction `Query.VarsKeyed` makes true — a source query variable sits at a key column, so
+the flattening keeps it — and with it `mem_valueTerms_idSubst`, the reading's own values being
+`FDatabase.valueTerms` members *by position* rather than by the refuted
+`∀ t x, RowRepr td t x → x ∈ td.terms`; `viewReprAll_of_evalSrc`, which reads back every
+**subterm** of what a head expression built (at a leaf the target's evaluation is not what
+answers — a variable's value is a source term the reads clause covers, a literal is its own
+id); and `headActions_viewRepr`, the lockstep, which is where a head `let` gets its `hlink`.
+
+**`unionsFire_run` takes two hypotheses `Egglog.UnionsFire` does not carry, and both are
+needed.** Each is a *source-run* invariant of exactly the shape `Database.QueriesIn` is — paid
+by a domain clause the encoder already has — and each is refutation-shaped rather than idle:
+
+* **the source query's variables are outside the generated namespace**
+  (`Program.EncodeDomain.noAt`). `freshVar 0` is `@v0`, so a query `(F @v0)` flattens to the
+  single atom `(@FView (@v0) (@v0) (@v1))` — the read's e-class column *is* the source variable
+  — and the encoded rule then matches only an `F`-entry whose id equals its key while the
+  source rule matches every entry. `FDatabase.NoAtEnv` is about the environment and says
+  nothing about a rule's variables; `mem_matchQuery_encodeQuery`'s `hnoAtVar` is where it is
+  spent, keeping `exists_freshEnv_encodeQuery`'s block disjoint from the reading.
+* **no `set` in a source head** (`Program.EncodeDomain.setLegal`, as `Program.noSet` through
+  `Program.setLegal_iff_noSet` at a constructor signature). A source `set f args out` builds
+  the term `f(as ++ vs)`, while `encodeAction` emits `(set @fView es (xs ++ [pf]))` — a row of
+  key width `|as|`, where `ViewRepr` at the source's term wants a view entry of key width
+  `|as| + |vs|`. So the reads clause fails at that term whenever `vs` is non-empty.
+  `Actions.Builds` admits a `set` head and says nothing about it.
+
+Both are carried by the source run in the shape `queriesIn_of_prefixStep` already has, so
+threading them is the same kind of work `Egglog.RowMech`'s clauses were; they are hypotheses of
+`unionsFire_run` rather than clauses of `Egglog.UnionsFire` so that
+`unionsJoined_fire_satisfiable`, the three refutations and `Egglog.UnionsFireWeak`/`UnionsFireAnyG`
+are all left exactly as they were.
 
 Beside those: the `Cmd.saturate` lag below, which this decomposition does not speak about — a
 `Cmd.saturate`'s post-state is an *iterate* of `RunRules` (`RunReach.iterate`) rather than one
@@ -14551,6 +14611,1020 @@ at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`)
 signature of a state the run passes through is the prelude's (`encReached_encBase`). -/
 theorem encReached_ruleNameMech {P : Program} (hdom : P.EncodeDomain) : RuleNameMech P :=
   fun h => by rw [(encReached_encBase hdom h).sig]; exact ruleNamesDeclared_encodeSig
+
+/-! ## The `Cmd.run` half of `Egglog.UnionsFire`, assembled
+
+`unionsFire_conclusion_of_run` reduced the `Cmd.run` case to **one obligation per firing**, and
+what follows discharges it. Nothing here is provenance: every hypothesis is one
+`Egglog.UnionsFire` already carries, so the whole assembly is available at the state a firing
+is handed.
+
+### Where a source query variable lands in the flattened query
+
+`encodeQueryExpr` keeps a `.var` argument as the read's own key column and emits nothing at all
+for a *leaf*, so what puts a source variable into the emitted query is `Expr.ArgVar` — the
+variable occurring at an argument position — and `Query.VarsKeyed`, already a clause of
+`Egglog.UnionsFire`, is what says every query variable is at one. This is the direction
+`mem_vars_encodeQuery` does not run in. -/
+
+/-- A variable that *is* one of the arguments is one of their variables. -/
+theorem Expr.mem_varsList_of_mem_var : ∀ {es : List Expr} {v : Var},
+    Expr.var v ∈ es → v ∈ Expr.varsList es
+  | [], _, h => absurd h (by simp)
+  | e :: es, v, h => by
+      rw [Expr.varsList, List.mem_union_iff]
+      rcases List.mem_cons.mp h with rfl | h'
+      · exact Or.inl (by rw [Expr.vars]; exact List.mem_cons_self)
+      · exact Or.inr (Expr.mem_varsList_of_mem_var h')
+
+mutual
+
+/-- A variable at an argument position is a variable. -/
+theorem Expr.mem_vars_of_argVar : ∀ {e : Expr} {v : Var}, Expr.ArgVar v e → v ∈ e.vars
+  | .lit _, _, h => absurd h id
+  | .var _, _, h => absurd h id
+  | .app _ args, v, h => by
+      rw [Expr.vars]
+      rcases (h : Expr.var v ∈ args ∨ Expr.ArgVarList v args) with hv | hv
+      · exact Expr.mem_varsList_of_mem_var hv
+      · exact Expr.mem_varsList_of_argVarList hv
+
+@[inherit_doc Expr.mem_vars_of_argVar]
+theorem Expr.mem_varsList_of_argVarList : ∀ {es : List Expr} {v : Var},
+    Expr.ArgVarList v es → v ∈ Expr.varsList es
+  | [], _, h => absurd h id
+  | e :: es, v, h => by
+      rw [Expr.varsList, List.mem_union_iff]
+      exact (h : Expr.ArgVar v e ∨ Expr.ArgVarList v es).imp Expr.mem_vars_of_argVar
+        Expr.mem_varsList_of_argVarList
+
+end
+
+/-- **A `.var` argument survives the flattening as the read's own key column.** -/
+theorem mem_varsList_encodeQueryArgs_of_mem : ∀ (es : List Expr) (n : Nat) {v : Var},
+    Expr.var v ∈ es → v ∈ Expr.varsList (encodeQueryArgs es n).1
+  | [], _, _, h => absurd h (by simp)
+  | e :: es, n, v, h => by
+      have hsplit : (encodeQueryArgs (e :: es) n).1
+          = (encodeQueryExpr e n).1 :: (encodeQueryArgs es (encodeQueryExpr e n).2.2).1 := rfl
+      rw [hsplit, Expr.varsList, List.mem_union_iff]
+      rcases List.mem_cons.mp h with rfl | h'
+      · exact Or.inl (by
+          rw [show (encodeQueryExpr (Expr.var v) n).1 = Expr.var v from rfl, Expr.vars]
+          exact List.mem_cons_self)
+      · exact Or.inr (mem_varsList_encodeQueryArgs_of_mem es _ h')
+
+mutual
+
+/-- **And so a variable at an argument position is one the emitted reads mention.** -/
+theorem mem_vars_encodeQueryExpr_of_argVar : ∀ (e : Expr) (n : Nat) {v : Var},
+    Expr.ArgVar v e → v ∈ Query.vars (encodeQueryExpr e n).2.1
+  | .lit _, _, _, h => absurd h id
+  | .var _, _, _, h => absurd h id
+  | .app f args, n, v, h => by
+      have hsplit : (encodeQueryExpr (.app f args) n).2.1
+          = (encodeQueryArgs args n).2.1
+            ++ [Pattern.values
+                 [Expr.var (freshVar (encodeQueryArgs args n).2.2),
+                  Expr.var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
+                 (viewName f) (encodeQueryArgs args n).1] := rfl
+      rw [hsplit, Query.mem_vars_append]
+      rcases (h : Expr.var v ∈ args ∨ Expr.ArgVarList v args) with hv | hv
+      · refine Or.inr (Query.mem_vars.mpr ⟨_, List.mem_cons_self, ?_⟩)
+        rw [Pattern.vars, List.mem_union_iff]
+        exact Or.inr (mem_varsList_encodeQueryArgs_of_mem args n hv)
+      · exact Or.inl (mem_vars_encodeQueryArgs_of_argVarList args n hv)
+
+@[inherit_doc mem_vars_encodeQueryExpr_of_argVar]
+theorem mem_vars_encodeQueryArgs_of_argVarList : ∀ (es : List Expr) (n : Nat) {v : Var},
+    Expr.ArgVarList v es → v ∈ Query.vars (encodeQueryArgs es n).2.1
+  | [], _, _, h => absurd h id
+  | e :: es, n, v, h => by
+      have hsplit : (encodeQueryArgs (e :: es) n).2.1
+          = (encodeQueryExpr e n).2.1
+            ++ (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.1 := rfl
+      rw [hsplit, Query.mem_vars_append]
+      rcases (h : Expr.ArgVar v e ∨ Expr.ArgVarList v es) with hv | hv
+      · exact Or.inl (mem_vars_encodeQueryExpr_of_argVar e n hv)
+      · exact Or.inr (mem_vars_encodeQueryArgs_of_argVarList es _ hv)
+
+end
+
+@[inherit_doc mem_vars_encodeQueryExpr_of_argVar]
+theorem mem_vars_encodePattern_of_argVar : ∀ (p : Pattern) (n : Nat) {v : Var},
+    Pattern.ArgVar v p → v ∈ Query.vars (encodePattern p n).1
+  | .expr e, n, _, h => mem_vars_encodeQueryExpr_of_argVar e n h
+  | .eq e₁ e₂, n, v, h => by
+      have hsplit : (encodePattern (.eq e₁ e₂) n).1
+          = ((encodeQueryExpr e₁ n).2.1
+              ++ (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).2.1)
+            ++ [Pattern.eq (encodeQueryExpr e₁ n).1
+                 (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1] := rfl
+      rw [hsplit, Query.mem_vars_append]
+      refine Or.inl (Query.mem_vars_append.mpr ?_)
+      rcases (h : Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂) with hv | hv
+      · exact Or.inl (mem_vars_encodeQueryExpr_of_argVar e₁ n hv)
+      · exact Or.inr (mem_vars_encodeQueryExpr_of_argVar e₂ _ hv)
+  | .values vs f as, n, v, h => by
+      rw [show (encodePattern (.values vs f as) n).1 = [Pattern.values vs f as] from rfl]
+      refine Query.mem_vars.mpr ⟨_, List.mem_cons_self, ?_⟩
+      rw [Pattern.vars, List.mem_union_iff]
+      exact (h : Expr.ArgVarList v vs ∨ Expr.ArgVarList v as).imp
+        Expr.mem_varsList_of_argVarList Expr.mem_varsList_of_argVarList
+
+@[inherit_doc mem_vars_encodeQueryExpr_of_argVar]
+theorem mem_vars_encodeQuery_of_argVar : ∀ (q : Query) (n : Nat) {v : Var} {p : Pattern},
+    p ∈ q → Pattern.ArgVar v p → v ∈ Query.vars (encodeQuery q n).1
+  | [], _, _, _, hp, _ => absurd hp (by simp)
+  | p :: ps, n, _, p', hp, h => by
+      have hsplit : (encodeQuery (p :: ps) n).1
+          = (encodePattern p n).1 ++ (encodeQuery ps (encodePattern p n).2).1 := rfl
+      rw [hsplit, Query.mem_vars_append]
+      rcases List.mem_cons.mp hp with rfl | hp'
+      · exact Or.inl (mem_vars_encodePattern_of_argVar p' n h)
+      · exact Or.inr (mem_vars_encodeQuery_of_argVar ps _ hp' h)
+
+/-! ### The reading, at a key column
+
+`mem_matchQuery_encodeQuery` asks each value the target reading binds to be a
+`FDatabase.valueTerms` member, because `matchQuery` draws its candidates from there.
+`∀ t x, RowRepr td t x → x ∈ td.terms` is **refuted** (`RowRepr.lit` has no premise at all),
+so the membership is not read off the reading. It is read off the *position*: a query variable
+sits at a key column (`Query.VarsKeyed`, already a clause), the row the reading of that pattern
+lands on has the variable's id in its key tuple, and `FDatabase.RowColumnsValued` — also a
+clause — puts a row column in `FDatabase.valueTerms`. So the literal case costs nothing extra:
+a literal at a key column is a column of a row the target really holds. -/
+
+/-- The reading of a `.var` argument is one of the row's key columns. -/
+theorem RowReadList.mem_of_mem_var {sig : Signature} {td : FDatabase} {ρs ρt : Env} :
+    ∀ {es : List Expr} {ts is : List Term}, RowReadList sig td ρs ρt es ts is →
+      ∀ {v : Var}, Expr.var v ∈ es → ∀ {j : Term}, Env.lookup v ρt = some j → j ∈ is
+  | [], _, _, .nil, _, hv, _, _ => absurd hv (by simp)
+  | _ :: _, _, _, .cons hr hrs, _, hv, _, hj => by
+      rcases List.mem_cons.mp hv with rfl | hv'
+      · cases hr with
+        | var _ hi => rw [Option.some.inj (hj.symm.trans hi)]; exact List.mem_cons_self
+      · exact List.mem_cons_of_mem _ (RowReadList.mem_of_mem_var hrs hv' hj)
+
+mutual
+
+/-- **An id the reading gives at a key column is a value the enumerator assigns.** -/
+theorem mem_valueTerms_of_rowRead_argVar {sig : Signature} {td : FDatabase} {ρs ρt : Env}
+    (hcv : td.RowColumnsValued) : ∀ {e : Expr} {t i : Term},
+    RowRead sig td ρs ρt e t i → ∀ {v : Var}, Expr.ArgVar v e →
+      ∀ {j : Term}, Env.lookup v ρt = some j → j ∈ td.valueTerms
+  | .lit _, _, _, _, _, hav, _, _ => absurd hav id
+  | .var _, _, _, _, _, hav, _, _ => absurd hav id
+  | .app _ args, _, _, .app _ _ _ hl hrow, v, hav, j, hj => by
+      rcases (hav : Expr.var v ∈ args ∨ Expr.ArgVarList v args) with hv | hv
+      · exact hcv _ hrow j (List.mem_append_left _ (RowReadList.mem_of_mem_var hl hv hj))
+      · exact mem_valueTerms_of_rowReadList_argVarList hcv hl hv hj
+
+@[inherit_doc mem_valueTerms_of_rowRead_argVar]
+theorem mem_valueTerms_of_rowReadList_argVarList {sig : Signature} {td : FDatabase}
+    {ρs ρt : Env} (hcv : td.RowColumnsValued) : ∀ {es : List Expr} {ts is : List Term},
+    RowReadList sig td ρs ρt es ts is → ∀ {v : Var}, Expr.ArgVarList v es →
+      ∀ {j : Term}, Env.lookup v ρt = some j → j ∈ td.valueTerms
+  | [], _, _, .nil, _, hav, _, _ => absurd hav id
+  | _ :: _, _, _, .cons hr hrs, v, hav, _, hj => by
+      rcases (hav : Expr.ArgVar v _ ∨ Expr.ArgVarList v _) with hv | hv
+      · exact mem_valueTerms_of_rowRead_argVar hcv hr hv hj
+      · exact mem_valueTerms_of_rowReadList_argVarList hcv hrs hv hj
+
+end
+
+/-- **The same, off a source match.** The three shapes a pattern has, with `Pattern.NoValues`
+excluding the third; both sides of a `.eq` read to *one* id (`rowRepr_congOn`), so either side's
+key columns answer for it. -/
+theorem mem_valueTerms_of_matches_argVar {sd : Database} {td : FDatabase} {σ ρt : Env}
+    (hjoin : td.RowJoined) (hunion : td.toDatabase.UnionsJoined sd)
+    (hread : ∀ t ∈ sd.terms, ∃ r, RowRepr td t r)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
+    (hcv : td.RowColumnsValued)
+    (hvar : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
+      ∃ i, Env.lookup v ρt = some i ∧ RowRepr td t i)
+    {p : Pattern} (hnv : p.NoValues) (hprim : ∀ g ∈ p.fns, Prim.ofName g = none)
+    (hm : Matches sd p σ) {v : Var} (hav : Pattern.ArgVar v p)
+    {j : Term} (hj : Env.lookup v ρt = some j) : j ∈ td.valueTerms := by
+  cases hm with
+  | expr hw hev hcong =>
+      obtain ⟨r, hr⟩ := exists_rowRepr_congOn hjoin hunion hread hw hcong
+      exact mem_valueTerms_of_rowRead_argVar hcv
+        (rowRead_of_rowRepr hjoin.fn hmg hvar _ hprim hev hr) hav hj
+  | eq hw hev₁ hev₂ hcw hc12 =>
+      obtain ⟨r, hr₁⟩ := exists_rowRepr_congOn hjoin hunion hread hw hcw
+      have hr₂ : RowRepr td _ r := (rowRepr_congOn hjoin hunion hread hc12 r).mp hr₁
+      rcases (hav : Expr.ArgVar v _ ∨ Expr.ArgVar v _) with hv | hv
+      · exact mem_valueTerms_of_rowRead_argVar hcv
+          (rowRead_of_rowRepr hjoin.fn hmg hvar _
+            (fun g hg => hprim g (List.mem_union_iff.mpr (Or.inl hg))) hev₁ hr₁) hv hj
+      · exact mem_valueTerms_of_rowRead_argVar hcv
+          (rowRead_of_rowRepr hjoin.fn hmg hvar _
+            (fun g hg => hprim g (List.mem_union_iff.mpr (Or.inr hg))) hev₂ hr₂) hv hj
+  | values _ _ _ _ => exact hnv.elim
+
+/-- **A head a pattern applies is one of its `Pattern.ctors`**, which carries the source rules'
+clause — stated over `ctors`, with arities — to the `Pattern.fns` form the reading asks for. -/
+theorem Pattern.exists_ctor_of_mem_fns : ∀ {p : Pattern} {g : FnName}, g ∈ p.fns →
+    ∃ k, (g, k) ∈ p.ctors
+  | .expr e, _, hg => Expr.exists_ctor_of_mem_fns (e := e) hg
+  | .eq e₁ e₂, g, hg => by
+      rcases List.mem_union_iff.mp (show g ∈ e₁.fns ∪ e₂.fns from hg) with hg' | hg'
+      · obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg'
+        exact ⟨k, List.mem_append_left _ hk⟩
+      · obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg'
+        exact ⟨k, List.mem_append_right _ hk⟩
+  | .values vs _ as, g, hg => by
+      rcases List.mem_union_iff.mp
+        (show g ∈ Expr.fnsList vs ∪ Expr.fnsList as from hg) with hg' | hg'
+      · obtain ⟨k, hk⟩ := Expr.exists_ctorList_of_mem_fnsList hg'
+        exact ⟨k, List.mem_append_left _ hk⟩
+      · obtain ⟨k, hk⟩ := Expr.exists_ctorList_of_mem_fnsList hg'
+        exact ⟨k, List.mem_append_right _ hk⟩
+
+/-- The source rules' clause, in the form the reading takes. -/
+theorem noPrim_fns_of_ctors {p : Pattern} (h : ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) :
+    ∀ g ∈ p.fns, Prim.ofName g = none := by
+  intro g hg
+  obtain ⟨k, hk⟩ := Pattern.exists_ctor_of_mem_fns hg
+  exact h (g, k) hk
+
+/-! ### The firing's substitution, read into the target
+
+The source firing binds one source **term** per query variable; the encoded query binds one
+**id**. `Egglog.UnionsFire`'s row-reading clause is what turns the first into the second and
+`FDatabase.RowJoined.fn` is what makes the choice canonical, so `Env.mapVals` puts the reading
+on the substitution wholesale. -/
+
+/-- An id for `t` wherever the reading gives one, and `t` itself where it does not — which is
+the shape a *total* choice function needs and the only thing `Env.mapVals` accepts. -/
+theorem exists_rowIdWitness (td : FDatabase) (t : Term) :
+    ∃ r : Term, (∃ r' : Term, RowRepr td t r') → RowRepr td t r := by
+  by_cases h : ∃ r' : Term, RowRepr td t r'
+  · exact ⟨h.choose, fun _ => h.choose_spec⟩
+  · exact ⟨t, fun hc => absurd hc h⟩
+
+/-- The id a firing's reading gives a source term. -/
+noncomputable def rowId (td : FDatabase) (t : Term) : Term :=
+  (exists_rowIdWitness td t).choose
+
+@[inherit_doc rowId]
+theorem rowRepr_rowId {td : FDatabase} {t : Term} (h : ∃ r, RowRepr td t r) :
+    RowRepr td t (rowId td t) := (exists_rowIdWitness td t).choose_spec h
+
+/-- **Step 1's `hvar`, at the whole substitution.** Every value a firing's substitution binds is
+a source term (`ValidQuerySubst.mem_terms`), so the row-reading clause answers for each. -/
+theorem rowRepr_idSubst {sd : Database} {td : FDatabase} {q : Query} {τ : Env}
+    (hread : ∀ t ∈ sd.terms, ∃ r, RowRepr td t r) (hq : ValidQuerySubst sd q τ) :
+    ∀ (v : Var) (t : Term), Env.lookup v τ = some t →
+      ∃ i, Env.lookup v (Env.mapVals (rowId td) τ) = some i ∧ RowRepr td t i := by
+  intro v t hv
+  refine ⟨rowId td t, ?_, rowRepr_rowId (hread t (hq.mem_terms (v, t) (Env.mem_of_lookup hv)))⟩
+  rw [lookup_mapVals, hv, Option.map_some]
+
+/-- **And every id it gives is a value the enumerator assigns.** `Query.VarsKeyed` names the
+key column the variable sits at and `mem_valueTerms_of_matches_argVar` reads the row there. -/
+theorem mem_valueTerms_idSubst {sd : Database} {td : FDatabase} {r : Rule} {τ : Env}
+    (hjoin : td.RowJoined) (hunion : td.toDatabase.UnionsJoined sd)
+    (hread : ∀ t ∈ sd.terms, ∃ r, RowRepr td t r)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
+    (hcv : td.RowColumnsValued)
+    (hqe : ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none)
+    (hq : ValidQuerySubst sd r.query τ) :
+    ∀ (v : Var) (j : Term), Env.lookup v (Env.mapVals (rowId td) τ) = some j →
+      j ∈ td.valueTerms := by
+  intro v j hj
+  have hdom : v ∈ Env.dom τ := by
+    rw [← dom_mapVals (rowId td) τ]
+    exact Env.lookup_isSome_iff_mem_dom.mp (by rw [hj]; rfl)
+  obtain ⟨p, hp, hfv⟩ := hq.mem_dom_iff.mp hdom
+  obtain ⟨p', hp', hav⟩ :=
+    hqe.1.2 v (Query.mem_vars.mpr ⟨p, hp, ((Pattern.mem_freeVars p).mp hfv).1⟩)
+  exact mem_valueTerms_of_matches_argVar hjoin hunion hread hmg hcv
+    (rowRepr_idSubst hread hq) (hqe.1.1 p' hp') (noPrim_fns_of_ctors (hqe.2 p' hp'))
+    (hq.matches_of_mem hp') hav hj
+
+/-- A variable the firing's substitution binds is one the query mentions. -/
+theorem mem_vars_of_mem_dom_validQuerySubst {sd : Database} {q : Query} {τ : Env}
+    (hq : ValidQuerySubst sd q τ) {v : Var} (hv : v ∈ Env.dom τ) : v ∈ Query.vars q := by
+  obtain ⟨p, hp, hfv⟩ := hq.mem_dom_iff.mp hv
+  exact Query.mem_vars.mpr ⟨p, hp, ((Pattern.mem_freeVars p).mp hfv).1⟩
+
+/-! ### Steps 1 and 2: the source firing's substitution, at the emitted query
+
+Step 2 is now an identity and not a transfer: `Egglog.UnionsFire`'s `hrules` names the rule the
+state **stores**, already inlined at the `G` it was encoded through, so
+`Query.substGlobals G r.query` *is* `r.query` and the firing's own `ValidQuerySubst` is at the
+query the encoder flattened.
+
+**One fact is not a clause and is asked for here.** `mem_matchQuery_encodeQuery`'s `hnoAtVar`
+wants the reading's own variables — the source query's — to be outside the generated namespace,
+and `Egglog.UnionsFire` carries `FDatabase.NoAtEnv` at the *environment* only, which is a
+different set. It is not derivable and it is not idle: `freshVar 0` is `@v0`, so a source query
+`(F @v0)` flattens to `(@FView (@v0) (@v0) (@v1))` — the read's e-class column is the source
+variable itself — and the encoded rule then matches only an entry whose id equals its key while
+the source rule matches every entry. `Program.EncodeDomain.noAt` is what excludes the shape from
+a program's text, and `Query.mem_vars_resolveGlobals` carries it to a *stored* rule, so it is a
+source-run invariant of exactly the shape `Database.QueriesIn` is; it is taken as a hypothesis
+here rather than added to the clause list. -/
+
+/-- **A source firing's substitution, read into one the emitted query matches at.** Step 1 is
+`patternRowRead_of_matches` at every pattern, over the reading `Env.mapVals` puts on `τ`, with
+`hgl` discharged by `eqLit_of_substGlobals`; step 2 is `hid`, the stored rule's own identity. -/
+theorem exists_mem_matchQuery_encodeQuery_of_validQuerySubst {sd : Database} {td : FDatabase}
+    {r : Rule} {τ : Env} {G : List (Var × Expr)}
+    (hjoin : td.RowJoined) (hunion : td.toDatabase.UnionsJoined sd)
+    (hread : ∀ t ∈ sd.terms, ∃ x, RowRepr td t x)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
+    (hcv : td.RowColumnsValued)
+    (hqe : ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none)
+    (hnoAtQuery : ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true)
+    (hgi : sd.GlobalsInline G) (hid : r.substGlobals G = r)
+    (hlit : sd.LitGlobalsHeld td) (heqlit : sd.EqLitGlobals) (hr : r ∈ sd.rules)
+    (hq : ValidQuerySubst sd r.query τ) (n : Nat) :
+    ∃ σ : Env, σ ∈ matchQuery td (encodeQuery r.query n).1 ∧
+      ∀ (v : Var) (t : Term), Env.lookup v τ = some t →
+        ∃ i, Env.lookup v σ = some i ∧ RowRepr td t i := by
+  have hqid : Query.substGlobals G r.query = r.query := by
+    rw [← Rule.substGlobals_query G r, hid]
+  have hvar := rowRepr_idSubst hread hq
+  have hvtV := mem_valueTerms_idSubst hjoin hunion hread hmg hcv hqe hq
+  have hvt : ∀ (v : Var) (i : Term),
+      Env.lookup v (Env.mapVals (rowId td) τ) = some i → i ∈ td.terms :=
+    fun v i hi => FDatabase.mem_terms_of_mem_valueTerms (hvtV v i hi)
+  have hnoAt : ∀ b ∈ Env.mapVals (rowId td) τ, ¬ "@".isPrefixOf b.1 = true := by
+    intro b hb
+    obtain ⟨a, ha, rfl⟩ := mem_mapVals hb
+    exact hnoAtQuery a.1 (mem_vars_of_mem_dom_validQuerySubst hq (Env.mem_dom_of_mem ha))
+  have hpr : ∀ p ∈ r.query, PatternRowRead sd.sig td τ (Env.mapVals (rowId td) τ) p := by
+    intro p hp
+    refine patternRowRead_of_matches hjoin hunion hread hmg hcv hvt hvar
+      (hqe.1.1 p hp) (noPrim_fns_of_ctors (hqe.2 p hp)) ?_ (hq.matches_of_mem hp)
+    intro l hpl
+    exact eqLit_of_substGlobals hgi hlit heqlit hr (by rw [hqid]; exact hp) l hpl
+  obtain ⟨τ', hmatch, hext⟩ := mem_matchQuery_encodeQuery hcv hnoAt hvtV hpr n
+  refine ⟨_, hmatch, ?_⟩
+  intro v t hv
+  obtain ⟨p', hp', hav⟩ := hqe.1.2 v (mem_vars_of_mem_dom_validQuerySubst hq
+    (Env.mem_dom_iff.mpr ⟨t, Env.mem_of_lookup hv⟩))
+  obtain ⟨i, hi, hri⟩ := hvar v t hv
+  refine ⟨i, ?_, hri⟩
+  have hvL : v ∈ Query.freeVars (encodeQuery r.query n).1 [] := by
+    obtain ⟨a, ha, hva⟩ := Query.mem_vars.mp (mem_vars_encodeQuery_of_argVar r.query n hp' hav)
+    exact Query.mem_freeVars.mpr ⟨a, ha, (Pattern.mem_freeVars a).mpr ⟨hva, by simp⟩⟩
+  rw [Env.lookup_canon (Query.freeVars_nodup _ _) hvL]
+  exact hext v i hi
+
+/-! ### Step 3: the encoded rule fires
+
+`exists_execLocalActions_encodeRule_head` is the block; what is left is its two scope
+obligations, and both are read off the *domain* of the substitution the enumerator offered.
+`matchQuery` assigns exactly `Query.freeVars` of the query it is given, so the match binds every
+variable the emitted query mentions — the source query's, by `Query.VarsKeyed` and
+`mem_vars_encodeQuery_of_argVar`, and the read's own proof columns, which are variables of the
+atoms they sit in. -/
+
+/-- **A premise proof is a variable of the atom it is read from**, so `@Rule_i`'s argument list
+is scoped wherever the match's own domain is. -/
+theorem mem_vars_of_mem_queryProofs {q : Query} {e : Expr} (h : e ∈ queryProofs q) :
+    ∀ v ∈ e.vars, v ∈ Query.vars q := by
+  rw [queryProofs, List.mem_filterMap] at h
+  obtain ⟨p, hp, hpe⟩ := h
+  intro v hv
+  refine Query.mem_vars.mpr ⟨p, hp, ?_⟩
+  revert hpe
+  cases p with
+  | expr _ => intro hpe; exact absurd hpe (by simp)
+  | eq _ _ => intro hpe; exact absurd hpe (by simp)
+  | values vs f as =>
+      match vs with
+      | [] => intro hpe; exact absurd hpe (by simp)
+      | [_] => intro hpe; exact absurd hpe (by simp)
+      | _ :: _ :: _ :: _ => intro hpe; exact absurd hpe (by simp)
+      | [x, y] =>
+          intro hpe
+          obtain rfl : y = e := by simpa using hpe
+          rw [Pattern.vars, List.mem_union_iff]
+          refine Or.inl ?_
+          rw [Expr.varsList, List.mem_union_iff]
+          refine Or.inr ?_
+          rw [Expr.varsList, List.mem_union_iff]
+          exact Or.inl hv
+
+/-- A variable of the emitted query is one the match binds. -/
+theorem mem_dom_of_mem_vars_encodeQuery {d : FDatabase} {q : Query} {σ : Env} {n : Nat}
+    (hσ : σ ∈ matchQuery d (encodeQuery q n).1) {v : Var}
+    (hv : v ∈ Query.vars (encodeQuery q n).1) : v ∈ Env.dom σ := by
+  rw [dom_of_mem_matchQuery hσ]
+  obtain ⟨a, ha, hva⟩ := Query.mem_vars.mp hv
+  exact Query.mem_freeVars.mpr ⟨a, ha, (Pattern.mem_freeVars a).mpr ⟨hva, by simp⟩⟩
+
+/-- **The encoded rule fires at the substitution the emitted query matched at.** The two
+signature clauses are spent here — `@Fiat` on every build's proof column and `@Rule_i` on the
+justification a `union` or a `set` head writes — and everything else is the source head's own
+`Actions.Scoped` and `Actions.Builds`, the second read at the target's signature. -/
+theorem exists_fired_encodeRule {sd : Database} {td : FDatabase} {r : Rule} {σ : Env}
+    (henv : td.env = sd.env) (hfiat : td.sig.IsCtor fiatName)
+    {i : Nat} (hrule : td.sig.IsCtor (ruleName i))
+    (hnv : ∀ p ∈ r.query, p.NoValues) (hkeyed : Query.VarsKeyed r.query)
+    (hsc : Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env)))
+    (hb : Actions.Builds r.actions td.sig) (n : Nat)
+    (hσ : σ ∈ matchQuery td (encodeQuery r.query n).1) :
+    ∃ dF : FDatabase, Fired td (encodeRule i r n).1 σ dF := by
+  have hmemΓ : ∀ v ∈ Query.vars (encodeQuery r.query n).1, v ∈ Env.dom (σ ++ td.env) := by
+    intro v hv
+    rw [Env.dom_append, List.mem_append]
+    exact Or.inl (mem_dom_of_mem_vars_encodeQuery hσ hv)
+  have hsc' : Actions.Scoped r.actions (Env.dom (σ ++ td.env)) := by
+    refine Actions.Scoped.mono r.actions (fun v hv => ?_) hsc
+    rw [Query.bind, List.mem_union_iff] at hv
+    rcases hv with hv' | hv'
+    · rw [Env.dom_append, List.mem_append]
+      exact Or.inr (by rw [henv]; exact hv')
+    · obtain ⟨p, hp, hav⟩ := hkeyed v hv'
+      exact hmemΓ v (mem_vars_encodeQuery_of_argVar r.query n hp hav)
+  obtain ⟨dF, hf, -⟩ := exists_execLocalActions_encodeRule_head
+    (Γ := Env.dom (σ ++ td.env)) (Scope.Models.dom (σ ++ td.env)) hfiat hrule n hnv
+    (fun e he v hv => hmemΓ v (mem_vars_of_mem_queryProofs he v hv)) hsc' hb
+  exact ⟨dF, hf⟩
+
+/-! ### Step 4: the head's writes, read back at `td'`
+
+`viewRepr_of_evalPair` reads one *application* back at the tuple its build wrote. What a firing
+owes is every **term the source's post-state holds**, which is the pre-state's plus the
+subterms of everything the head built — so the read-back runs over the whole expression and
+then over the whole action block, in lockstep with the source. The lockstep is what supplies
+`hlink` at a head `let`: the source and the target extend their environments at the same
+binder, and the reading of the bound value is the previous build's own.
+
+Nothing about the *target's* evaluation is needed at a leaf: `holdsBuild_of_execActions` speaks
+only at applications, a variable's value is a source term the reads clause already answers for
+(`Database.WF.subtermClosed` at `Database.WF.envInTerms`), and a literal is its own id. -/
+
+/-- **The rows a build's block wrote, as `Database.Out`s at a later state.** `hT` below, and
+`Database.HoldsBuild.keys` is what pays `Database.out_self`'s key obligation. -/
+theorem holdsOut_of_execActions_encodeBuild {td' tk tj : FDatabase} (e : Expr) (m : Nat)
+    (hblock : execActions tk (encodeBuild e m).2.1 = some tj)
+    (hmono : ∀ t ∈ tj.terms, t ∈ td'.toDatabase.terms) :
+    ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+      ∃ is v, Expr.evalList tk.sig args tk.env = some is ∧
+        Expr.eval tk.sig (.app f args) tk.env = some v ∧
+        ∃ pf, td'.toDatabase.Out (viewName f) is [v, pf] := by
+  intro f args hap
+  obtain ⟨is, v, his, hv, hb⟩ := holdsBuild_of_execActions e m hblock f args hap
+  obtain ⟨pf, hview⟩ := hb.view
+  refine ⟨is, v, his, hv, pf, Database.out_self (vs := [v, pf]) ?_ ?_⟩
+  · exact hmono _ (FDatabase.mem_toDatabase_terms.mp hview)
+  · exact fun x hx => hmono x (FDatabase.mem_toDatabase_terms.mp (hb.keys x hx))
+
+/-- `hT` in the form `viewRepr_of_evalPair`'s `hrow` takes: `Expr.eval` is a function, so the
+tuple `hT` names is the only one. -/
+theorem out_of_holdsOut {sigT : Signature} {ρt : Env} {D : Database} {e : Expr}
+    (hT : ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+      ∃ is v, Expr.evalList sigT args ρt = some is ∧
+        Expr.eval sigT (.app f args) ρt = some v ∧ ∃ pf, D.Out (viewName f) is [v, pf]) :
+    ∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+      ∀ (is : List Term) (v : Term), Expr.evalList sigT args ρt = some is →
+        Expr.eval sigT (.app f args) ρt = some v → ∃ pf, D.Out (viewName f) is [v, pf] := by
+  intro f args hap is v his hv
+  obtain ⟨is', v', his', hv', pf, hout⟩ := hT f args hap
+  obtain rfl : is' = is := Option.some.inj (his'.symm.trans his)
+  obtain rfl : v' = v := Option.some.inj (hv'.symm.trans hv)
+  exact ⟨pf, hout⟩
+
+mutual
+
+/-- **Every subterm of what a head expression built has an id.** The source evaluation alone,
+because at a leaf the target's is not what answers: a variable's value is a term the reads
+clause covers and a literal is its own id. -/
+theorem viewReprAll_of_evalSrc {sigS sigT : Signature} {ρs ρt : Env} {D : Database}
+    (hlink : ∀ (v : Var) (t i : Term),
+      Env.lookup v ρs = some t → Env.lookup v ρt = some i → ViewRepr D t i)
+    (hvarAll : ∀ (v : Var) (t : Term), Env.lookup v ρs = some t →
+      ∀ s ∈ t.subterms, ∃ x, ViewRepr D s x) :
+    ∀ (e : Expr) {t : Term}, (∀ g ∈ e.fns, Prim.ofName g = none) →
+      (∀ (f : FnName) (args : List Expr), (f, args) ∈ e.apps →
+        ∃ is v, Expr.evalList sigT args ρt = some is ∧
+          Expr.eval sigT (.app f args) ρt = some v ∧ ∃ pf, D.Out (viewName f) is [v, pf]) →
+      Expr.eval sigS e ρs = some t → ∀ s ∈ t.subterms, ∃ x, ViewRepr D s x
+  | .lit l, t, _, _, hs => by
+      rw [Expr.eval_lit, Option.some.injEq] at hs
+      subst hs
+      intro s hsub
+      obtain rfl : s = Term.lit l := by simpa using hsub
+      exact ⟨_, .lit⟩
+  | .var v, t, _, _, hs => hvarAll v t (by rwa [Expr.eval_var] at hs)
+  | .app f args, _, hnp, hT, hs => by
+      have hpf : Prim.ofName f = none := hnp f (by rw [Expr.fns]; exact List.mem_cons_self)
+      obtain ⟨ts, hts, rfl⟩ := Expr.eval_app_inv hpf hs
+      obtain ⟨is, v, his, hv, pf, hout⟩ :=
+        hT f args (by rw [Expr.apps]; exact List.mem_cons_self)
+      intro s hsub
+      rcases Set.mem_insert_iff.mp (Term.subterms_app ▸ hsub) with rfl | hsub'
+      · refine ⟨v, .app ?_ hout⟩
+        exact viewReprList_of_evalPair hlink args
+          (fun g hg => hnp g (by rw [Expr.fns]; exact List.mem_cons_of_mem _ hg))
+          (out_of_holdsOut (e := .app f args) hT ·  ·  ∘ (by
+            rw [Expr.apps]; exact List.mem_cons_of_mem _ ·)) hts his
+      · obtain ⟨a, ha, hsa⟩ := Set.mem_iUnion₂.mp hsub'
+        exact viewReprAllList_of_evalSrc hlink hvarAll args
+          (fun g hg => hnp g (by rw [Expr.fns]; exact List.mem_cons_of_mem _ hg))
+          (fun f' args' hm => hT f' args'
+            (by rw [Expr.apps]; exact List.mem_cons_of_mem _ hm)) hts a ha s hsa
+
+@[inherit_doc viewReprAll_of_evalSrc]
+theorem viewReprAllList_of_evalSrc {sigS sigT : Signature} {ρs ρt : Env} {D : Database}
+    (hlink : ∀ (v : Var) (t i : Term),
+      Env.lookup v ρs = some t → Env.lookup v ρt = some i → ViewRepr D t i)
+    (hvarAll : ∀ (v : Var) (t : Term), Env.lookup v ρs = some t →
+      ∀ s ∈ t.subterms, ∃ x, ViewRepr D s x) :
+    ∀ (es : List Expr) {ts : List Term}, (∀ g ∈ Expr.fnsList es, Prim.ofName g = none) →
+      (∀ (f : FnName) (args : List Expr), (f, args) ∈ Expr.appsList es →
+        ∃ is v, Expr.evalList sigT args ρt = some is ∧
+          Expr.eval sigT (.app f args) ρt = some v ∧ ∃ pf, D.Out (viewName f) is [v, pf]) →
+      Expr.evalList sigS es ρs = some ts →
+      ∀ a ∈ ts, ∀ s ∈ a.subterms, ∃ x, ViewRepr D s x
+  | [], _, _, _, hs => by
+      rw [Expr.evalList_nil, Option.some.injEq] at hs
+      subst hs
+      intro a ha; exact absurd ha (by simp)
+  | e :: es, _, hnp, hT, hs => by
+      rw [Expr.evalList_cons, Option.bind_eq_some_iff] at hs
+      obtain ⟨t, hte, hrest⟩ := hs
+      obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      intro a ha
+      rcases List.mem_cons.mp ha with rfl | ha'
+      · exact viewReprAll_of_evalSrc hlink hvarAll e
+          (fun g hg => hnp g (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inl hg)))
+          (fun f' args' hm => hT f' args' (by
+            rw [Expr.appsList]; exact List.mem_append_left _ hm)) hte
+      · exact viewReprAllList_of_evalSrc hlink hvarAll es
+          (fun g hg => hnp g (by rw [Expr.fnsList]; exact List.mem_union_iff.mpr (Or.inr hg)))
+          (fun f' args' hm => hT f' args' (by
+            rw [Expr.appsList]; exact List.mem_append_right _ hm)) hts a ha'
+
+end
+
+/-- **`(if (ordering-gt e₁ e₂) _ _)` evaluated its operands**, which is how the target's values
+for a `union`'s two sides are recovered from the one `set` the encoded head emits. -/
+theorem eval_operands_of_eval_ifGt {sig : Signature} {σ : Env} {e₁ e₂ ea eb : Expr} {t : Term}
+    (h : (ifE (gtE e₁ e₂) ea eb).eval sig σ = some t) :
+    ∃ t₁ t₂, e₁.eval sig σ = some t₁ ∧ e₂.eval sig σ = some t₂ := by
+  rw [ifE, Expr.eval, show Prim.ofName "if" = some Prim.ifThenElse from rfl] at h
+  obtain ⟨ts, hts, -⟩ := Option.bind_eq_some_iff.mp h
+  rw [Expr.evalList] at hts
+  obtain ⟨c, hc, -⟩ := Option.bind_eq_some_iff.mp hts
+  rw [gtE, Expr.eval, show Prim.ofName "ordering-gt" = some Prim.orderingGt from rfl] at hc
+  obtain ⟨us, hus, -⟩ := Option.bind_eq_some_iff.mp hc
+  obtain ⟨t₁, t₂, h₁, h₂, -⟩ := Expr.evalList_pair hus
+  exact ⟨t₁, t₂, h₁, h₂⟩
+
+/-- **The `@UF` edge a `union` head's own `set` records**, at a later state.
+`out_uf_of_execProgramM` is the same read-back for a *top-level* `union`; a firing's block is
+`execActions` and its `set` is the block's last action. -/
+theorem out_uf_of_execAction {tk tk₁ : FDatabase} {D : Database} {e₁ e₂ pfe : Expr}
+    {i₁ i₂ : Term}
+    (hact : execAction tk (.set ufName [maxE e₁ e₂] [minE e₁ e₂, pfe]) = some tk₁)
+    (hmono : ∀ t ∈ tk₁.terms, t ∈ D.terms)
+    (h₁ : e₁.eval tk.sig tk.env = some i₁) (h₂ : e₂.eval tk.sig tk.env = some i₂) :
+    (∃ pf, D.Out ufName [i₁] [i₂, pf]) ∨ (∃ pf, D.Out ufName [i₂] [i₁, pf]) := by
+  obtain ⟨ks, vs, hks, hvs, rfl⟩ := execAction_set hact
+  obtain ⟨kv, hkv, rfl⟩ := Expr.evalList_singleton hks
+  obtain ⟨mv, pf, hmv, -, rfl⟩ := Expr.evalList_pair hvs
+  have hmem : ∀ s ∈ (Term.app ufName ([kv] ++ [mv, pf])).subterms, s ∈ D.terms := by
+    intro s hs
+    exact hmono s (FDatabase.mem_addRow_terms.mpr (Or.inl ((Term.mem_subtermList _).mpr hs)))
+  have hout : D.Out ufName [kv] [mv, pf] :=
+    Database.out_self (hmem _ (Term.self_mem_subterms _))
+      (by intro a ha; obtain rfl : a = kv := by simpa using ha
+          exact hmem a (Term.arg_subterms (by simp) (Term.self_mem_subterms a)))
+  have hk := Option.some.inj (hkv.symm.trans (eval_ifGt h₁ h₂ h₁ h₂))
+  have hm := Option.some.inj (hmv.symm.trans (eval_ifGt h₁ h₂ h₂ h₁))
+  cases hb : Term.blt i₂ i₁ with
+  | false =>
+      rw [hb] at hk hm
+      simp only [Bool.false_eq_true, if_false] at hk hm
+      subst hk; subst hm
+      exact Or.inr ⟨pf, hout⟩
+  | true =>
+      rw [hb] at hk hm
+      simp only [if_true] at hk hm
+      subst hk; subst hm
+      exact Or.inl ⟨pf, hout⟩
+
+/-- **One source head action and its encoded block, in lockstep.** The three shapes a
+`Action.NoSet` head has, and in each the source's writes are read back at `td'` off the block's
+own rows: a build's `Database.HoldsBuild`, and a `union`'s `set` on `@UF`.
+
+`hlink` comes out extended at a `let`, which is the whole reason the two blocks are run
+together rather than separately. -/
+theorem headAction_viewRepr_step {td' : FDatabase} {pfe : Expr} {a : Action} {m : Nat}
+    {ss ss₁ : Database} {tk tk₁ : FDatabase}
+    (hns : a.NoSet) (hprim : ∀ e ∈ a.buildExprs, ∀ g ∈ e.fns, Prim.ofName g = none)
+    (hwf : ss.WF) (henvT : ∀ b ∈ ss.env, b.2 ∈ ss.terms)
+    (hlink : ∀ (v : Var) (t i : Term), Env.lookup v ss.env = some t →
+      Env.lookup v tk.env = some i → ViewRepr td'.toDatabase t i)
+    (hreads : ∀ t ∈ ss.terms, ∃ x, ViewRepr td'.toDatabase t x)
+    (hjoin : td'.toDatabase.UnionsJoined ss)
+    (hsrc : evalAction ss a = some ss₁)
+    (htgt : execActions tk (encodeAction pfe a m).1 = some tk₁)
+    (hmono : ∀ t ∈ tk₁.terms, t ∈ td'.toDatabase.terms) :
+    (∀ t ∈ ss₁.terms, ∃ x, ViewRepr td'.toDatabase t x) ∧
+      td'.toDatabase.UnionsJoined ss₁ ∧
+      (∀ (v : Var) (t i : Term), Env.lookup v ss₁.env = some t →
+        Env.lookup v tk₁.env = some i → ViewRepr td'.toDatabase t i) ∧
+      (∀ b ∈ ss₁.env, b.2 ∈ ss₁.terms) := by
+  have hvarAll : ∀ (v : Var) (t : Term), Env.lookup v ss.env = some t →
+      ∀ s ∈ t.subterms, ∃ x, ViewRepr td'.toDatabase s x :=
+    fun v t hv s hs => hreads s (hwf.subtermClosed t (henvT (v, t) (Env.mem_of_lookup hv)) hs)
+  rcases evalAction_eq_some hsrc with ⟨e, t, rfl, hts, rfl⟩ | ⟨v, e, t, rfl, hts, rfl⟩ |
+      ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ | ⟨_, _, _, _, _, rfl, -, -, -⟩
+  · -- a build
+    rw [encodeAction_expr_actions] at htgt
+    have hpr : ∀ g ∈ e.fns, Prim.ofName g = none :=
+      hprim e (by rw [Action.buildExprs]; exact List.mem_cons_self)
+    have hall : ∀ s ∈ t.subterms, ∃ x, ViewRepr td'.toDatabase s x :=
+      viewReprAll_of_evalSrc hlink hvarAll e hpr
+        (holdsOut_of_execActions_encodeBuild e m htgt hmono) hts
+    have henv₁ : tk₁.env = tk.env := execActions_env_of_isSet (encodeBuild_isSet e m) htgt
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro s hs
+      rcases Database.addTerm_terms ▸ hs with hs' | hs'
+      · exact hreads s hs'
+      · exact hall s hs'
+    · intro x y hxy hne
+      rcases eq_of_mem_addTerm_eqs hxy with h | h
+      · exact hjoin x y h hne
+      · exact absurd h hne
+    · intro w u j hu hj
+      exact hlink w u j hu (by rw [henv₁] at hj; exact hj)
+    · intro b hb
+      exact Database.addTerm_terms ▸ Or.inl (henvT b hb)
+  · -- a head `let`
+    rw [encodeAction_letBind_actions, encodeBuild_fst] at htgt
+    obtain ⟨tka, h1, h2⟩ := execActions_append htgt
+    have hmono_a : ∀ x ∈ tka.terms, x ∈ td'.toDatabase.terms :=
+      fun x hx => hmono x ((FDatabase.execActions_lists h2).1 x hx)
+    have hsig_a : tka.sig = tk.sig := FDatabase.execActions_sig h1
+    have henv_a : tka.env = tk.env := execActions_env_of_isSet (encodeBuild_isSet e m) h1
+    have hpr : ∀ g ∈ e.fns, Prim.ofName g = none :=
+      hprim e (by rw [Action.buildExprs]; exact List.mem_cons_self)
+    have hT := holdsOut_of_execActions_encodeBuild e m h1 hmono_a
+    have hall : ∀ s ∈ t.subterms, ∃ x, ViewRepr td'.toDatabase s x :=
+      viewReprAll_of_evalSrc hlink hvarAll e hpr hT hts
+    -- the target's own binder
+    rw [execActions] at h2
+    obtain ⟨tj, hact, hrest⟩ := Option.bind_eq_some_iff.mp h2
+    rw [execActions, Option.some.injEq] at hrest
+    subst hrest
+    simp only [execAction, Option.map_eq_some_iff] at hact
+    obtain ⟨i, hi, rfl⟩ := hact
+    have hi' : e.eval tk.sig tk.env = some i := by rw [← hsig_a, ← henv_a]; exact hi
+    have hvr : ViewRepr td'.toDatabase t i :=
+      viewRepr_of_evalPair hlink e hpr (out_of_holdsOut hT) hts hi'
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro s hs
+      rcases Database.addTerm_terms ▸ Database.terms_setEnv ▸ hs with hs' | hs'
+      · exact hreads s hs'
+      · exact hall s hs'
+    · intro x y hxy hne
+      rcases eq_of_mem_addTerm_eqs (hxy : (x, y) ∈ (ss.addTerm t).eqs) with h | h
+      · exact hjoin x y h hne
+      · exact absurd h hne
+    · intro w u j hu hj
+      have hu' : Env.lookup w ((v, t) :: ss.env) = some u := hu
+      have hj' : Env.lookup w ((v, i) :: tka.env) = some j := hj
+      rw [Env.lookup_cons] at hu' hj'
+      by_cases hw : w = v
+      · rw [if_pos hw] at hu' hj'
+        obtain rfl : u = t := (Option.some.inj hu').symm
+        obtain rfl : j = i := (Option.some.inj hj').symm
+        exact hvr
+      · rw [if_neg hw] at hu' hj'
+        exact hlink w u j hu' (by rw [henv_a] at hj'; exact hj')
+    · intro b hb
+      have hb' : b ∈ (v, t) :: ss.env := hb
+      have hgrow : ∀ u ∈ ss.terms,
+          u ∈ ({ ss.addTerm t with env := (v, t) :: ss.env } : Database).terms := by
+        intro u hu
+        rw [Database.terms_setEnv, Database.addTerm_terms]
+        exact Or.inl hu
+      rcases List.mem_cons.mp hb' with rfl | hb''
+      · change (v, t).2 ∈ _
+        rw [Database.terms_setEnv]
+        exact Database.mem_addTerm t ss
+      · exact hgrow b.2 (henvT b hb'')
+  · -- a `union`
+    rw [encodeAction_union_actions, encodeBuild_fst, encodeBuild_fst] at htgt
+    obtain ⟨tk₂, h12, h3⟩ := execActions_append htgt
+    obtain ⟨tka, h1, h2⟩ := execActions_append h12
+    have hmono₂ : ∀ x ∈ tk₂.terms, x ∈ td'.toDatabase.terms :=
+      fun x hx => hmono x ((FDatabase.execActions_lists h3).1 x hx)
+    have hmono_a : ∀ x ∈ tka.terms, x ∈ td'.toDatabase.terms :=
+      fun x hx => hmono₂ x ((FDatabase.execActions_lists h2).1 x hx)
+    have hsig_a : tka.sig = tk.sig := FDatabase.execActions_sig h1
+    have henv_a : tka.env = tk.env := execActions_env_of_isSet (encodeBuild_isSet e₁ m) h1
+    have hsig₂ : tk₂.sig = tk.sig :=
+      (FDatabase.execActions_sig h2).trans hsig_a
+    have henv₂ : tk₂.env = tk.env :=
+      (execActions_env_of_isSet (encodeBuild_isSet e₂ _) h2).trans henv_a
+    have hpr₁ : ∀ g ∈ e₁.fns, Prim.ofName g = none :=
+      hprim e₁ (by rw [Action.buildExprs]; exact List.mem_cons_self)
+    have hpr₂ : ∀ g ∈ e₂.fns, Prim.ofName g = none :=
+      hprim e₂ (by rw [Action.buildExprs]; exact List.mem_cons_of_mem _ List.mem_cons_self)
+    have hT₁ := holdsOut_of_execActions_encodeBuild e₁ m h1 hmono_a
+    have hT₂ := holdsOut_of_execActions_encodeBuild e₂ _ h2 hmono₂
+    have hall₁ : ∀ s ∈ t₁.subterms, ∃ x, ViewRepr td'.toDatabase s x :=
+      viewReprAll_of_evalSrc hlink hvarAll e₁ hpr₁ hT₁ ht₁
+    have hall₂ : ∀ s ∈ t₂.subterms, ∃ x, ViewRepr td'.toDatabase s x :=
+      viewReprAll_of_evalSrc hlink hvarAll e₂ hpr₂
+        (by rw [hsig_a, henv_a] at hT₂; exact hT₂) ht₂
+    -- the block's own `set`, and the two target values it evaluated
+    rw [execActions] at h3
+    obtain ⟨tj, hact, hrest⟩ := Option.bind_eq_some_iff.mp h3
+    rw [execActions, Option.some.injEq] at hrest
+    rw [hrest] at hact
+    obtain ⟨ks, vs, hks, -, -⟩ := execAction_set hact
+    obtain ⟨kv, hkv, -⟩ := Expr.evalList_singleton hks
+    obtain ⟨i₁, i₂, hi₁, hi₂⟩ := eval_operands_of_eval_ifGt hkv
+    rw [hsig₂, henv₂] at hi₁ hi₂
+    have hvr₁ : ViewRepr td'.toDatabase t₁ i₁ :=
+      viewRepr_of_evalPair hlink e₁ hpr₁ (out_of_holdsOut hT₁) ht₁ hi₁
+    have hvr₂ : ViewRepr td'.toDatabase t₂ i₂ :=
+      viewRepr_of_evalPair hlink e₂ hpr₂
+        (out_of_holdsOut (by rw [hsig_a, henv_a] at hT₂; exact hT₂)) ht₂ hi₂
+    have hedge := out_uf_of_execAction (D := td'.toDatabase) hact hmono
+      (by rw [hsig₂, henv₂]; exact hi₁) (by rw [hsig₂, henv₂]; exact hi₂)
+    have henv₁ : tk₁.env = tk.env := by
+      obtain ⟨as', vs', -, -, heq⟩ := execAction_set hact
+      rw [heq, FDatabase.addRow_env]; exact henv₂
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro s hs
+      rcases Database.addEq_terms ▸ hs with hs' | hs'
+      · rcases hs' with hs'' | hs''
+        · exact hreads s hs''
+        · exact hall₁ s hs''
+      · exact hall₂ s hs'
+    · intro x y hxy hne
+      rcases mem_addEq_eqs hxy with h | h | h
+      · obtain ⟨rfl, rfl⟩ : x = t₁ ∧ y = t₂ := by
+          have := h; simp only [Prod.mk.injEq] at this; exact this
+        rcases hedge with ⟨pf, ho⟩ | ⟨pf, ho⟩
+        · exact ⟨i₁, i₂, pf, hvr₁, hvr₂, Or.inl ho⟩
+        · exact ⟨i₁, i₂, pf, hvr₁, hvr₂, Or.inr ho⟩
+      · exact hjoin x y h hne
+      · exact absurd h hne
+    · intro w u j hu hj
+      exact hlink w u j hu (by rw [henv₁] at hj; exact hj)
+    · intro b hb
+      exact Database.addEq_terms ▸ Or.inl (Or.inl (henvT b hb))
+  · exact absurd hns id
+
+/-- **The whole head, in lockstep.** One `headAction_viewRepr_step` per source action, with the
+reads clause, the `union` clause, the environment link and the environment's own terms all
+carried along. `Egglog.UnionsFire`'s two data clauses at the source's post-state fall out of
+it. -/
+theorem headActions_viewRepr {td' : FDatabase} {pfe : Expr} :
+    ∀ (as : List Action) (m : Nat) {ss ss' : Database} {tk tk' : FDatabase},
+      (∀ a ∈ as, a.NoSet) →
+      (∀ a ∈ as, ∀ e ∈ a.buildExprs, ∀ g ∈ e.fns, Prim.ofName g = none) →
+      ss.WF → (∀ b ∈ ss.env, b.2 ∈ ss.terms) →
+      (∀ (v : Var) (t i : Term), Env.lookup v ss.env = some t →
+        Env.lookup v tk.env = some i → ViewRepr td'.toDatabase t i) →
+      (∀ t ∈ ss.terms, ∃ x, ViewRepr td'.toDatabase t x) →
+      td'.toDatabase.UnionsJoined ss →
+      evalActions ss as = some ss' →
+      execActions tk (encodeActions pfe as m).1 = some tk' →
+      (∀ t ∈ tk'.terms, t ∈ td'.toDatabase.terms) →
+      (∀ t ∈ ss'.terms, ∃ x, ViewRepr td'.toDatabase t x) ∧
+        td'.toDatabase.UnionsJoined ss' := by
+  intro as
+  induction as with
+  | nil =>
+      intro m ss ss' tk tk' _ _ _ _ _ hreads hjoin hsrc htgt _
+      rw [evalActions, Option.some.injEq] at hsrc
+      subst hsrc
+      exact ⟨hreads, hjoin⟩
+  | cons a as ih =>
+      intro m ss ss' tk tk' hns hprim hwf henvT hlink hreads hjoin hsrc htgt hmono
+      rw [encodeActions_cons_actions] at htgt
+      obtain ⟨tk₁, h1, h2⟩ := execActions_append htgt
+      rw [evalActions, Option.bind_eq_some_iff] at hsrc
+      obtain ⟨ss₁, hs1, hs2⟩ := hsrc
+      obtain ⟨hreads₁, hjoin₁, hlink₁, henvT₁⟩ :=
+        headAction_viewRepr_step (hns a List.mem_cons_self)
+          (hprim a List.mem_cons_self) hwf henvT hlink hreads hjoin hs1 h1
+          (fun x hx => hmono x ((FDatabase.execActions_lists h2).1 x hx))
+      exact ih (encodeAction pfe a m).2
+        (fun b hb => hns b (List.mem_cons_of_mem _ hb))
+        (fun b hb => hprim b (List.mem_cons_of_mem _ hb))
+        (evalAction_wf hwf hs1) henvT₁ hlink₁ hreads₁ hjoin₁ hs2 h2 hmono
+
+/-- The head's build expressions apply no primitive, which is `Actions.Builds`' own first
+conjunct read through `Expr.Evaluable`. -/
+theorem noPrim_buildExprs_of_action_builds {sig : Signature} {a : Action}
+    (h : a.Builds sig) : ∀ e ∈ a.buildExprs, ∀ g ∈ e.fns, Prim.ofName g = none := by
+  cases a with
+  | expr e' =>
+      intro e he g hg
+      obtain rfl : e = e' := by simpa [Action.buildExprs] using he
+      exact (h g hg).1
+  | letBind _ e' =>
+      intro e he g hg
+      obtain rfl : e = e' := by simpa [Action.buildExprs] using he
+      exact (h g hg).1
+  | union e₁ e₂ =>
+      intro e he g hg
+      rcases (by simpa [Action.buildExprs] using he : e = e₁ ∨ e = e₂) with rfl | rfl
+      · exact (h.1 g hg).1
+      · exact (h.2 g hg).1
+  | set _ args out =>
+      intro e he g hg
+      rcases List.mem_append.mp (show e ∈ args ++ out from he) with hin | hin
+      · exact (h.1 e hin g hg).1
+      · exact (h.2 e hin g hg).1
+
+@[inherit_doc noPrim_buildExprs_of_action_builds]
+theorem noPrim_buildExprs_of_builds {sig : Signature} :
+    ∀ (as : List Action), Actions.Builds as sig →
+      ∀ a ∈ as, ∀ e ∈ a.buildExprs, ∀ g ∈ e.fns, Prim.ofName g = none := by
+  intro as
+  induction as with
+  | nil => intro _ a ha; exact absurd ha (by simp)
+  | cons b bs ih =>
+      intro hbld a ha
+      rcases List.mem_cons.mp ha with rfl | ha'
+      · exact noPrim_buildExprs_of_action_builds hbld.1
+      · exact ih hbld.2 a ha'
+
+/-! ### One firing, and the `Cmd.run` half
+
+`unionsFire_conclusion_of_run` reduced the whole `Cmd.run` case to one obligation per firing;
+this is that obligation, and then the case itself.
+
+**Two facts are asked for that `Egglog.UnionsFire` does not carry**, and both are source-run
+invariants of exactly the shape `Database.QueriesIn` is — paid by domain clauses the encoder
+already has, and neither derivable from the clause list nor idle:
+
+* `hnoAtQuery`, the source query's variables outside the generated namespace
+  (`Program.EncodeDomain.noAt`). `freshVar 0` is `@v0`, so a query `(F @v0)` flattens to the
+  atom `(@FView (@v0) (@v0) (@v1))` — the read's e-class column *is* the source variable — and
+  the encoded rule then matches only an entry whose id equals its key while the source rule
+  matches every entry. `FDatabase.NoAtEnv` is about the environment and says nothing here.
+* `hnoSet`, no `set` in a source head (`Program.EncodeDomain.setLegal`, as `Program.noSet`
+  through `Program.setLegal_iff_noSet` at a constructor signature). A source `set f args out`
+  builds the term `f(as ++ vs)` while `encodeAction` emits `(set @fView es (xs ++ [pf]))` — a
+  row of key width `|as|` — so `ViewRepr` at the source's term, which needs a view entry of key
+  width `|as| + |vs|`, is unavailable whenever `vs` is non-empty. `Actions.Builds` admits a
+  `set` head and says nothing about this. -/
+
+/-- **The obligation `unionsFire_conclusion_of_run` leaves, at one firing.** Steps 1-4: the
+reading (`exists_mem_matchQuery_encodeQuery_of_validQuerySubst`), the firing
+(`exists_fired_encodeRule`), the transport (`contained_of_fired_run_block`) and the head's
+read-back (`headActions_viewRepr`). -/
+theorem unionsFire_firing {R : RulesetName} {sd : Database} {td td' : FDatabase}
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
+    (henv : td.env = sd.env) (hstate : sd.CtorState) (hfiat : td.sig.IsCtor fiatName)
+    (hrules : ∀ r ∈ sd.rules, ∃ (G : List (Var × Expr)) (i n : Nat),
+      (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
+        sd.GlobalsInline G ∧ r.substGlobals G = r)
+    (hqe : ∀ r ∈ sd.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none)
+    (hcv : td.RowColumnsValued) (hno : td.NoAtEnv)
+    (hreads : ∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e)
+    (hjoin : td.toDatabase.UnionsJoined sd)
+    (hrow : ∀ t ∈ sd.terms, ∃ x, RowRepr td t x) (hrj : td.RowJoined)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
+    (hsc : ∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env)))
+    (hb : ∀ r ∈ sd.rules, Actions.Builds r.actions td.sig)
+    (hback : ∀ t x : Term, RowRepr td t x → ViewRepr td.toDatabase t x)
+    (henvReads : ∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td.toDatabase s s)
+    (hlit : sd.LitGlobalsHeld td) (heqlit : sd.EqLitGlobals)
+    (hnoAtQuery : ∀ r ∈ sd.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true)
+    (hnoSet : ∀ r ∈ sd.rules, ∀ a ∈ r.actions, a.NoSet)
+    {r : Rule} (hr : r ∈ sd.rules) (hR : r.ruleset = R) {τ : Env} {dd : Database}
+    (hq : ValidQuerySubst sd r.query τ) (hev : evalLocalActions sd r.actions τ = some dd) :
+    td'.toDatabase.UnionsJoined dd ∧ ∀ t ∈ dd.terms, ∃ x, ViewRepr td'.toDatabase t x := by
+  obtain ⟨G, i, n, hmem0, hruleName, hgi, hid⟩ := hrules r hr
+  rw [hid] at hmem0
+  obtain ⟨σ, hσ, hreadσ⟩ := exists_mem_matchQuery_encodeQuery_of_validQuerySubst
+    hrj hjoin hrow hmg hcv (hqe r hr) (hnoAtQuery r hr) hgi hid hlit heqlit hr hq n
+  obtain ⟨dF, hfired⟩ := exists_fired_encodeRule henv hfiat hruleName (hqe r hr).1.1
+    (hqe r hr).1.2 (hsc r hr) (hb r hr) n hσ
+  have hcont : dF.toDatabase.Contained td'.toDatabase :=
+    contained_of_fired_run_block hmem0 hR hσ hfired hrun
+  have hcontRun : td.toDatabase.Contained td'.toDatabase := contained_of_run_block hrun
+  -- the source's block and the target's
+  have hev' : (evalActions { sd with env := τ ++ sd.env } r.actions).map
+      (fun db' => { db' with env := sd.env, rules := sd.rules }) = some dd := hev
+  obtain ⟨ssEnd, hsrcBlock, rfl⟩ := Option.map_eq_some_iff.mp hev'
+  have hfired' : (execActions { td with env := σ ++ td.env }
+      (encodeActions (ruleE i (queryProofs (encodeQuery r.query n).1)) r.actions
+        (encodeQuery r.query n).2).1).map
+      (fun d' => { d' with env := td.env, rules := td.rules }) = some dF := hfired
+  obtain ⟨tkEnd, htgtBlock, rfl⟩ := Option.map_eq_some_iff.mp hfired'
+  have hmonoT : ∀ x ∈ tkEnd.terms, x ∈ td'.toDatabase.terms := fun x hx =>
+    Database.mem_terms_of_eqs hcont.eqs (FDatabase.mem_toDatabase_terms.mpr hx)
+  -- the source state the block runs at
+  have hτ : ∀ b ∈ τ ++ sd.env, b.2 ∈ sd.terms := fun b hb =>
+    (List.mem_append.mp hb).elim (hq.mem_terms b) (hstate.wf.envInTerms b)
+  have hwf : ({ sd with env := τ ++ sd.env } : Database).WF := hstate.wf.setEnv hτ
+  have henvT : ∀ b ∈ ({ sd with env := τ ++ sd.env } : Database).env,
+      b.2 ∈ ({ sd with env := τ ++ sd.env } : Database).terms := by
+    intro b hb
+    rw [Database.terms_setEnv]
+    exact hτ b hb
+  have hreadsF : ∀ t ∈ ({ sd with env := τ ++ sd.env } : Database).terms,
+      ∃ x, ViewRepr td'.toDatabase t x := by
+    intro t ht
+    rw [Database.terms_setEnv] at ht
+    exact (hreads t ht).imp fun _ he => ViewRepr.mono hcontRun he
+  have hjoinF : td'.toDatabase.UnionsJoined ({ sd with env := τ ++ sd.env } : Database) :=
+    fun a b hab hne => (hjoin.mono hcontRun) a b hab hne
+  have hlinkF : ∀ (v : Var) (t x : Term),
+      Env.lookup v ({ sd with env := τ ++ sd.env } : Database).env = some t →
+      Env.lookup v ({ td with env := σ ++ td.env } : FDatabase).env = some x →
+      ViewRepr td'.toDatabase t x := by
+    intro v t x ht hx
+    have ht' : Env.lookup v (τ ++ sd.env) = some t := ht
+    have hx' : Env.lookup v (σ ++ td.env) = some x := hx
+    cases hlk : Env.lookup v τ with
+    | some u =>
+        rw [Env.lookup_append_of_some hlk] at ht'
+        have htu : u = t := Option.some.inj ht'
+        obtain ⟨j, hj, hrr⟩ := hreadσ v u hlk
+        rw [Env.lookup_append_of_some hj] at hx'
+        have hjx : j = x := Option.some.inj hx'
+        rw [← htu, ← hjx]
+        exact ViewRepr.mono hcontRun (hback u j hrr)
+    | none =>
+        rw [Env.lookup_append_of_none hlk] at ht'
+        have hσnone : Env.lookup v σ = none := by
+          cases hlkσ : Env.lookup v σ with
+          | none => rfl
+          | some j =>
+              exfalso
+              have hvd : v ∈ Env.dom σ :=
+                Env.lookup_isSome_iff_mem_dom.mp (by rw [hlkσ]; rfl)
+              rw [dom_of_mem_matchQuery hσ] at hvd
+              obtain ⟨a, ha, hva⟩ := Query.mem_freeVars.mp hvd
+              rcases mem_vars_encodeQuery r.query n
+                (Query.mem_vars.mpr ⟨a, ha, ((Pattern.mem_freeVars a).mp hva).1⟩) with hat | hsv
+              · exact hno (v, t) (by rw [henv]; exact Env.mem_of_lookup ht') hat
+              · obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp hsv
+                have hvτ : v ∈ Env.dom τ :=
+                  hq.mem_dom_iff.mpr ⟨p, hp, (Pattern.mem_freeVars p).mpr ⟨hvp, by simp⟩⟩
+                rw [← Env.lookup_isSome_iff_mem_dom, hlk] at hvτ
+                exact absurd hvτ (by simp)
+        rw [Env.lookup_append_of_none hσnone, henv] at hx'
+        have hxt : x = t := Option.some.inj (hx'.symm.trans ht')
+        rw [hxt]
+        exact ViewRepr.mono hcontRun
+          (henvReads (v, t) (Env.mem_of_lookup ht') t (Term.self_mem_subterms t))
+  obtain ⟨hreadsEnd, hjoinEnd⟩ := headActions_viewRepr r.actions (encodeQuery r.query n).2
+    (hnoSet r hr) (noPrim_buildExprs_of_builds r.actions (hb r hr)) hwf henvT hlinkF hreadsF
+    hjoinF hsrcBlock htgtBlock hmonoT
+  refine ⟨fun a b hab hne => hjoinEnd a b hab hne, fun t ht => ?_⟩
+  rw [Database.terms_setEnvRules] at ht
+  exact hreadsEnd t ht
+
+/-- **The `Cmd.run` half of `Egglog.UnionsFire`, landed.** `unionsFire_conclusion_of_run` plus
+`unionsFire_firing`, one per firing. The hypotheses are `Egglog.UnionsFire`'s own, with the two
+source-run facts above added; `unionsJoined_fire` therefore still stands open, at the
+`Cmd.saturate` half and at those two clauses. -/
+theorem unionsFire_run {R : RulesetName} {sd sd' : Database} {td td' : FDatabase}
+    (hstep : CmdStep sd (Cmd.run R) sd')
+    (hrun : td.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some td')
+    (henv : td.env = sd.env) (hstate : sd.CtorState) (hfiat : td.sig.IsCtor fiatName)
+    (hrules : ∀ r ∈ sd.rules, ∃ (G : List (Var × Expr)) (i n : Nat),
+      (encodeRule i (r.substGlobals G) n).1 ∈ td.rules ∧ td.sig.IsCtor (ruleName i) ∧
+        sd.GlobalsInline G ∧ r.substGlobals G = r)
+    (hqe : ∀ r ∈ sd.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
+      ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none)
+    (hcv : td.RowColumnsValued) (hno : td.NoAtEnv)
+    (hreads : ∀ t ∈ sd.terms, ∃ e, ViewRepr td.toDatabase t e)
+    (hjoin : td.toDatabase.UnionsJoined sd)
+    (hrow : ∀ t ∈ sd.terms, ∃ x, RowRepr td t x) (hrj : td.RowJoined)
+    (hmg : ∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows → (td.sig.mergeOf (viewName f)).isSome = true)
+    (hsc : ∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env)))
+    (hb : ∀ r ∈ sd.rules, Actions.Builds r.actions td.sig)
+    (hback : ∀ t x : Term, RowRepr td t x → ViewRepr td.toDatabase t x)
+    (henvReads : ∀ b ∈ sd.env, ∀ s ∈ b.2.subterms, ViewRepr td.toDatabase s s)
+    (hlit : sd.LitGlobalsHeld td) (heqlit : sd.EqLitGlobals)
+    (hnoAtQuery : ∀ r ∈ sd.rules, ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true)
+    (hnoSet : ∀ r ∈ sd.rules, ∀ a ∈ r.actions, a.NoSet) :
+    td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e :=
+  unionsFire_conclusion_of_run hstate hstep hrun hjoin hreads
+    fun _ hr hR _ _ hq hev =>
+      unionsFire_firing hrun henv hstate hfiat hrules hqe hcv hno hreads hjoin hrow hrj hmg
+        hsc hb hback henvReads hlit heqlit hnoAtQuery hnoSet hr hR hq hev
 
 /-- **The residue of obligation `trans`, of the rebuild half of obligation `assert`'s `union`
 case, and of the *key* half of obligation `congr`, at the rules it fires.**
