@@ -1785,10 +1785,14 @@ def known_divergences():
     # fire: a binder's bound slot is renamable, so it can always be moved off `a`'s
     # slots. The encoding fires and over-merges -- ref 6 classes / 6 nodes, enc 5 / 6.
     #
-    # Why: the compiled rule enumerates alternative namings (`refine-namings` into
-    # `(Idx ix)`), and the condition is checked under each. Nothing constrains the
-    # bound slot, so one alternative names it onto a slot `a` has, and `free` holds.
-    # It is the mint commitment, in the smallest shape found so far.
+    # Why: `refine-namings`' first argument is both the set of slots that may MERGE and
+    # the domain of the renaming it returns, and we pass every slot in play. The
+    # reference offers only the slots its substitution carries, and a binder's bound
+    # slot the body does not use is carried by nothing -- so it never merges there. Ours
+    # does, and since a pattern slot may be a merge TARGET (the direction rule is
+    # identical on both sides), an unrelated class's slot lands on it and `free` holds.
+    # Full diagnosis, and the two fixes already ruled out, sit beside `final_refine` in
+    # `slotted-encoder.py`.
     #
     # WHAT ISOLATES IT, each varying one thing from the case above:
     #

@@ -1454,15 +1454,43 @@ def compile_rule(
         # ones. Nothing is lost by that, because the pattern-slot rule is what keeps a
         # condition honest, not the order.
         #
-        # A FIX TRIED AND REVERTED, so it is not tried again blindly. `pinned` keeps the
-        # pattern's own slots from merging with EACH OTHER, and nothing keeps another
-        # class's slot from merging ONTO one -- which is how `K1` over-merges: a
-        # condition about a binder's bound slot finds it among an unrelated class's
-        # slots under one alternative naming. Reading the conditions off the UNREFINED
-        # renamings instead repairs K1 and one sweep case, and breaks a different one.
-        # Measured as an A/B over the same 800 generated cases: {fuzz113} before,
-        # {fuzz583} after. A wash, like the `connected_order` heuristic before it --
-        # which is the tell that the order is not what is wrong.
+        # `K1` IS AN OVER-MERGE FROM THIS CALL, and the cause is the FIRST ARGUMENT.
+        # It does two jobs at once: it is the set of slots that may be MERGED, and it
+        # is the DOMAIN of the renaming the primitive returns
+        # (`all.iter().map(|s| (s, find(uf, s)))` in `renaming_refine_namings`).
+        #
+        # `pat` is every slot in play -- the accumulated image of every atom's renaming.
+        # The reference's `final_refine` takes its candidates from somewhere narrower:
+        #
+        #     let slots = state.subst.values().map(|x| x.slots()).flatten()
+        #
+        # only the slots some bound VARIABLE carries. A binder's bound slot that the
+        # body does not use is in no substitution value, so the reference never offers
+        # it for merging at all. We do, and the direction rule then lets the merge
+        # happen: `allows_directed_union` is identical on both sides -- the slot being
+        # REPLACED may not be one the pattern writes -- so a pattern slot cannot be a
+        # merge source but CAN be a merge target. An unrelated class's slot merges onto
+        # the bound slot, and `free $s0 a` becomes true where the reference says a
+        # renamable bound slot can always be moved off `a`'s slots.
+        #
+        # PASSING ONLY THE CARRIED SLOTS FIXES K1 and breaks `CD1-notin-decides`, for
+        # the second job rather than the first: with the bound slot out of the domain,
+        # `(map-get mrg ss0)` is undefined, `compose` truncates, and the condition can
+        # no longer be evaluated at all -- so a rule that should fire stops. That is a
+        # mechanical consequence of the double duty, not a second bug.
+        #
+        # So the fix is to give this primitive a candidate set distinct from its domain.
+        # Two ways out that do NOT work, checked: `map-union` cannot extend a merged
+        # renaming back to the full domain, because `renaming_union` fails on a
+        # conflicting key rather than preferring a side; and the constraint cannot be
+        # expressed with extra `groups` either, since the slot sets are runtime values
+        # and a group would have to be emitted per slot pair.
+        #
+        # ALSO TRIED AND REVERTED, so it is not tried again blindly: reading the
+        # conditions off the UNREFINED renamings. That repairs K1 and `fuzz113` and
+        # breaks `fuzz583` -- an A/B over the same 800 generated cases, {fuzz113}
+        # before, {fuzz583} after. A wash, like the `connected_order` heuristic before
+        # it, and now explained: the order was never what was wrong.
         pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
         alts, i, mrg = new("alts"), new("ix"), new("mrg")
         body.append(f"(= {alts} (refine-namings {pat} {pinned} {' '.join(slot_groups)}))")
