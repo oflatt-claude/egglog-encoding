@@ -23,10 +23,12 @@ THE LANGUAGE
                                                 how a slot becomes redundant
 
     (rewrite (Sum e1 $k $v (Sing $k $v)) e1)    a rule, in terms
-    (rewrite lhs rhs :when (not-free $x f))     ... with a slot side condition
-    (rewrite lhs rhs :when (= v (Sing a b)))    ... with another PATTERN: `v` matches
-                                                this too, and variables shared between
-                                                the patterns are the join
+    (rewrite lhs rhs :when ((not-free $x f)))   `:when` takes a LIST of facts; this one
+                                                is a slot side condition
+    (rewrite lhs rhs                            a fact `(= v <call>)` is another
+             :when ((= v (Sing a b))            PATTERN: `v` matches this too, and
+                    (not-free $k v))            variables shared between the patterns
+             :name "sum-sing")                  are the join. `:name` is a string.
 
     (run 3)                                     three user-rule steps, with the
                                                 machinery saturated around each
@@ -166,7 +168,11 @@ class Source:
         self._read(path)
         for form in self._ctors:
             self.spec.update(enc.read_language_form(form, self.carrier_sorts()))
-        assert self.spec, f"{path.name}: no (constructor ...) declaration"
+        if not self.spec:
+            raise SystemExit(
+                f"{path.name}: no constructors declared. Write `(datatype U (Succ U) ...)`, "
+                "or a `(sort U)` and its `(constructor ...)` lines."
+            )
         self.lang = Terms({c: enc.Op(c, c, sig) for c, sig in self.spec.items()})
 
     def _read(self, path):
@@ -191,10 +197,44 @@ class Source:
                 # stashed rather than kept in the body: `signature` needs the declared
                 # sorts, which may come later, and the machinery re-emits the declaration
                 self._ctors.append(form)
+            elif isinstance(form, list) and form and form[0] == "datatype":
+                # egglog's own way to declare a language, and so the first thing anyone
+                # coming from egglog writes: one form for the sort and its constructors.
+                # Read as exactly that -- the sort, plus one constructor per variant
+                # whose output sort is the datatype -- so it reaches the same machinery
+                # as `(sort ...)` and `(constructor ...)` written separately.
+                self._ctors.extend(self._variants(path, form))
+            elif isinstance(form, list) and form and form[0] == "datatype*":
+                raise SystemExit(
+                    f"{path.name}: `datatype*` declares several sorts at once, and the "
+                    "machinery is written for one. Declare the one sort with `datatype`."
+                )
             else:
                 if isinstance(form, list) and len(form) == 2 and form[0] == "sort":
                     self.sorts.append(form[1])
                 self.body.append((form, path))
+
+    def _variants(self, path, form):
+        """A `(datatype Name (Ctor <sort>*) ...)` as one `constructor` form per variant.
+
+        A variant's options come after its column sorts -- egglog's own `:cost` and
+        `:unextractable` sit there, and `:binder` goes in the same place.
+        """
+        if len(form) < 2 or not isinstance(form[1], str):
+            raise SystemExit(f"{path.name}: `datatype` needs a sort name, got {form[1:2]}")
+        name = form[1]
+        self.sorts.append(name)
+        out = []
+        for variant in form[2:]:
+            if not isinstance(variant, list) or not variant or not isinstance(variant[0], str):
+                raise SystemExit(
+                    f"{path.name}: a `datatype` variant must be a call like `(Succ {name})`, "
+                    f"got {variant!r}"
+                )
+            ctor, rest = variant[0], variant[1:]
+            opts = next((i for i, t in enumerate(rest) if isinstance(t, str) and t.startswith(":")), len(rest))
+            out.append(["constructor", ctor, list(rest[:opts]), name, *rest[opts:]])
+        return out
 
     def carrier_sorts(self):
         """The sorts whose columns are slotted children.
@@ -504,6 +544,16 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     parts = rewrite_parts(src, form)
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
     lhs, rhs = parts["lhs"], parts["rhs"]
+    if parts["name"] and ":name" not in tail:
+        # A rule's `:name` is what egglog reports it by, so dropping it left every
+        # generated rule anonymous and egglog's own per-rule output unreadable. egglog
+        # takes it as a string literal, and panics on a name already live in the scope
+        # -- reuse is only legal once a `(pop)` has removed the earlier rule.
+        #
+        # Unless the caller's tail already names the rule: `gen-sdql-rules.py` appends
+        # its own `:ruleset`/`:name`, and two `:name` options on one rule is not valid
+        # egglog.
+        tail = f' :name "{parts["name"]}"' + tail
     if uses_subst(rhs):
         # `slotted-subst` extracts a term and adds the result back, so it both reads
         # and writes tables: callable from the head of a `:naive` rule, not a seminaive
@@ -543,6 +593,28 @@ def uses_subst(form):
     return isinstance(form, list) and (form[0] == enc.SUBST or any(uses_subst(a) for a in form))
 
 
+def unquote(token):
+    """A `"name"` token as its text. egglog spells a rule name as a string literal."""
+    return token[1:-1] if len(token) >= 2 and token.startswith('"') and token.endswith('"') else token
+
+
+def when_facts(src, vals):
+    """The facts of one `:when` clause, in either spelling.
+
+    egglog takes ONE argument and reads it as a LIST of facts:
+
+        :when ((= a b) (not-free $x f))
+
+    which is the spelling to write, since it is the one egglog accepts. A clause whose
+    first element is itself a list is that form. A bare fact, `:when (= a b)`, is taken
+    too -- egglog rejects it outright, so it is a convenience here and not a spelling
+    this language documents.
+    """
+    if len(vals) == 1 and isinstance(vals[0], list) and (not vals[0] or isinstance(vals[0][0], list)):
+        return vals[0]
+    return vals
+
+
 def rewrite_parts(src, form):
     """One `(rewrite ...)` broken out, so nothing parses these keywords twice.
 
@@ -551,19 +623,27 @@ def rewrite_parts(src, form):
     """
     assert form[0] == "rewrite", form[:1]
     out = {"name": None, "lhs": form[1], "rhs": form[2], "conds": [], "equalities": [], "fresh": [], "lead": 0}
-    for key, vals in keywords(src, form[3:]):
+    kws = keywords(src, form[3:])
+    # egglog ASSIGNS `:when` rather than accumulating it, so of several clauses only the
+    # LAST survives there while all of them constrain here. That is a difference in
+    # meaning, not in spelling, so it is refused instead of silently disagreeing.
+    if sum(1 for key, _ in kws if key == ":when") > 1:
+        raise SystemExit(
+            f"{src.path.name}: several `:when` clauses. egglog takes one, holding every fact "
+            "in a list -- `:when ((= a b) (= c d))` -- and keeps only the last clause when "
+            "given more, so this would not mean here what it means there. Use one list."
+        )
+    for key, vals in kws:
         if key == ":name":
-            out["name"] = vals[0]
+            out["name"] = unquote(vals[0])
         elif key == ":lead":
             out["lead"] = int(vals[0])
         elif key == ":fresh":
             out["fresh"] += list(vals)
         elif key == ":when":
-            # EVERY condition in the clause. `keywords` gathers all the values up to the
-            # next keyword, so `:when c1 c2` arrives as two; reading only the first
-            # dropped the rest in silence, leaving a rule that looked constrained and was
-            # not. Separate `:when` clauses always worked, and mean the same thing.
-            for cond in vals:
+            # EVERY fact in the clause. Reading only the first dropped the rest in
+            # silence, leaving a rule that looked constrained and was not.
+            for cond in when_facts(src, vals):
                 want, *rest = cond
                 if want == "=":
                     # NOT a side condition: another rooted pattern, which is how a

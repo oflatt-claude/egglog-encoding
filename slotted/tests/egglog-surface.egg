@@ -1,4 +1,4 @@
-;;; egglog's surface spelling: bare pattern variables, and `:when (= v <call>)`.
+;;; egglog's surface spelling: bare pattern variables, and `:when` as a list of facts.
 ;;;
 ;;; The corpus is written bare, and this file is the cover for a rewrite whose
 ;;; multipattern comes from `:when`, for the two spellings of a variable naming one
@@ -25,7 +25,7 @@
 ;;; `(rewrite (Id x) x)` and `(rewrite (C2 a b) (C2 b a))`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev (Succ x)) x :name bare)
+(rewrite (Prev (Succ x)) x :name "bare")
 
 (let one (Prev (Succ (Null))))
 (run 5)
@@ -38,7 +38,7 @@
 ;;; stripped, and `?x` and `x` are one variable rather than two.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev (Succ ?x)) x :name mixed)
+(rewrite (Prev (Succ ?x)) x :name "mixed")
 
 (let two (Prev (Succ (Succ (Null)))))
 (run 5)
@@ -51,7 +51,7 @@
 ;;; paren-less `Null` from silently becoming a wildcard that matches everything.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev (Succ Null)) (Null) :name bare-nullary)
+(rewrite (Prev (Succ Null)) (Null) :name "bare-nullary")
 
 (let three (Prev (Succ (Null))))
 (let four (Prev (Succ (Succ (Null)))))
@@ -67,7 +67,7 @@
 ;;; where that pattern also matches. One condition.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev (Succ x)) x :when (= x (Succ (Succ y))) :name peel)
+(rewrite (Prev (Succ x)) x :when ((= x (Succ (Succ y)))) :name "peel")
 
 (let deep (Prev (Succ (Succ (Succ (Null))))))
 (let want (Succ (Succ (Null))))
@@ -80,17 +80,21 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; TWO SEPARATE `:when` clauses, each constraining a different variable. This is the
-;;; arbitrary multipattern: two rooted patterns beside the left-hand side's.
+;;; SEVERAL FACTS in the one `:when` list, each constraining a different variable.
+;;; This is the arbitrary multipattern: two rooted patterns beside the left-hand
+;;; side's, and one `:when` is where egglog puts them all.
+;;;
+;;; Reading only the first fact left the rule looking constrained and firing on `sn`,
+;;; so the negative claim is what this section is for.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (Pair a b) (Null)
-         :when (= a (Succ p))
-         :when (= b (Succ q))
-         :name both-clauses)
+         :when ((= a (Succ p))
+                (= b (Succ q)))
+         :name "several-facts")
 
 (let ss (Pair (Succ (Null)) (Succ (Null))))
-;; the second condition fails here, so the rule must not fire
+;; the second fact fails here, so the rule must not fire
 (let sn (Pair (Succ (Null)) (Null)))
 (run 5)
 
@@ -100,21 +104,21 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; ONE `:when` carrying both conditions, which must mean the same as two clauses.
-;;; Reading only the first condition left the rule looking constrained and firing on
-;;; `sn` below, so the negative claim is what this section is for.
+;;; A BARE FACT, without the list around it. egglog rejects this outright -- its
+;;; `:when` takes one argument and reads it as a list -- so it is a convenience of
+;;; this compiler and not a spelling to write. Covered because it is accepted, and
+;;; anything accepted can break.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Pair a b) (Null)
-         :when (= a (Succ p)) (= b (Succ q))
-         :name one-clause)
+(rewrite (Pair a b) (Null) :when (= a (Succ p)) :name "bare-fact")
 
-(let ss (Pair (Succ (Null)) (Succ (Null))))
-(let sn (Pair (Succ (Null)) (Null)))
+(let ss (Pair (Succ (Null)) (Null)))
+(let nn (Pair (Null) (Null)))
 (run 5)
 
 (check (= ss (Null)))
-(fail (check (= sn (Null))))
+;; `a` is not a `Succ` here, so the one fact still has to refuse it
+(fail (check (= nn (Null))))
 (pop)
 
 
@@ -123,7 +127,7 @@
 ;;; usable on the right -- `y` here appears nowhere in the left-hand side.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev x) y :when (= x (Succ (Succ (Succ y)))) :name reach-in)
+(rewrite (Prev x) y :when ((= x (Succ (Succ (Succ y))))) :name "reach-in")
 
 (let s3 (Prev (Succ (Succ (Succ (Null))))))
 (let s2 (Prev (Succ (Succ (Null)))))
@@ -141,7 +145,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (let i (IConst))
-(rewrite (Mul a i) a :name id-right)
+(rewrite (Mul a i) a :name "id-right")
 
 (let mi (Mul (IConst) (IConst)))
 (run 5)
@@ -156,7 +160,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (let $I (IConst))
-(rewrite (Mul a $I) a :name id-right-dollar)
+(rewrite (Mul a $I) a :name "id-right-dollar")
 
 (let mj (Mul (IConst) (IConst)))
 (run 5)
@@ -170,7 +174,7 @@
 ;;; again -- a call is accepted where a variable goes, and names the same class.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Lam $s b) (Null) :when (not-free $s (Lam $s b)) :name shed)
+(rewrite (Lam $s b) (Null) :when ((not-free $s (Lam $s b))) :name "shed")
 
 ;; a binder never has its own bound slot free, so the condition holds and it fires
 (let shed-yes (Lam $0 (G $1 $1)))
@@ -190,7 +194,7 @@
 
 (push)
 ;; `gone` here is a variable, so this fires on any `Pair` with equal sides
-(rewrite (Pair gone gone) (Null) :name any-pair)
+(rewrite (Pair gone gone) (Null) :name "any-pair")
 
 (let nn (Pair (Null) (Null)))
 (run 5)

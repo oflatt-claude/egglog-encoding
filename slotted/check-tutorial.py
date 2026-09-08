@@ -170,7 +170,7 @@ def sdql_beta():
     source = ROOT / "slotted" / "languages" / "sdql.egg"
     src = sc.Source(source)
     for form in sc.parse(source.read_text()):
-        if isinstance(form, list) and form and form[0] == "rewrite" and "beta" in form:
+        if isinstance(form, list) and form and form[0] == "rewrite" and '"beta"' in form:
             return sc.compile_rewrite(src, form)
     raise SystemExit("sdql.egg no longer has a rule named beta")
 

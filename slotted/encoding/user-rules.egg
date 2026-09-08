@@ -971,4 +971,4 @@
 ;;; >        (let xb20 (map-get rb19 (map-get mrg17 sx)))
 ;;; >        (let tren21 (compose-total rb19 (compose mrg17 (compose m10 cs11))))
 ;;; >        (let q22 (compose (inverse (compose mrg17 (compose mp8 cs14))) (inverse rb19)))
-;;; >        (SubstPending V4 q22 (slotted-subst-frame C6 xb20 (Var 0) tren21 C5) (slotted-subst C6 xb20 (Var 0) tren21 C5))) :naive)
+;;; >        (SubstPending V4 q22 (slotted-subst-frame C6 xb20 (Var 0) tren21 C5) (slotted-subst C6 xb20 (Var 0) tren21 C5))) :naive :name "beta")

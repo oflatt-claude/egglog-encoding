@@ -113,15 +113,19 @@ def render(atoms, action, conds):
     else:
         rhs = f"({ctor(action[1])} {ref(action[2])} {ref(action[3])})"
 
-    parts = [f"(rewrite {lhs} {rhs}"]
-    for i, a in enumerate(atoms):
-        if i != lead:
-            parts.append(f"         :when (= {a[0]} ({ctor(a[1])} {ref(a[2])} {ref(a[3])}))")
+    facts = [
+        f"(= {a[0]} ({ctor(a[1])} {ref(a[2])} {ref(a[3])}))" for i, a in enumerate(atoms) if i != lead
+    ]
     for want, slot, pvars in conds:
         # `ref` may render the matched root as the pattern itself, and a condition takes a
         # call where a variable goes for exactly this reason
         args = " ".join(ref(v) for v in pvars)
-        parts.append(f"         :when ({'free' if want else 'not-free'} {slot} {args})")
+        facts.append(f"({'free' if want else 'not-free'} {slot} {args})")
+    parts = [f"(rewrite {lhs} {rhs}"]
+    if facts:
+        # ONE `:when`, holding every fact -- egglog's spelling, and the only one it
+        # accepts. Several clauses would be refused, and mean only the last one there.
+        parts.append("         :when (" + "\n                ".join(facts) + ")")
     return "\n".join(parts) + ")"
 
 

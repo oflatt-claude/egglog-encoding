@@ -29,44 +29,44 @@ MUTANT = ROOT / "target/slotted/multipattern-mutant.egg"
 MUTATIONS = [
     (
         "beta premise unjoined from the function",
-        ":when (= f (Lam $v body))\n         :name beta-guarded",
-        ":when (= zz (Lam $v body))\n         :name beta-guarded",
+        ':when ((= f (Lam $v body)))\n         :name "beta-guarded"',
+        ':when ((= zz (Lam $v body)))\n         :name "beta-guarded"',
         {"stuck"},
     ),
     (
         "load-after-store no longer joins on the address",
-        ":when (= m (Store m0 p v))",
-        ":when (= m (Store m0 pp v))",
+        ":when ((= m (Store m0 p v)))",
+        ":when ((= m (Store m0 pp v)))",
         {"other"},
     ),
     (
         "double-product no longer joins the two factor pairs",
-        ":when (= r (Mul a b))",
-        ":when (= r (Mul aa bb))",
+        "(= r (Mul a b))",
+        "(= r (Mul aa bb))",
         {"no"},
     ),
     (
         "double-product's top pattern unjoined from the match",
-        ":when (= e (Add l r))",
-        ":when (= ee (Add l r))",
+        "(= e (Add l r))",
+        "(= ee (Add l r))",
         # any `Root` now qualifies, so either failing claim may be the one reported
         {"no", "no2"},
     ),
     (
         "same-body no longer shares the body",
-        ":when (= g (Lam $w body))",
-        ":when (= g (Lam $w body2))",
+        "(= g (Lam $w body))",
+        "(= g (Lam $w body2))",
         {"q"},
     ),
     (
         "eta's shape premise unjoined from the function",
-        ":when (= f (Lam $w g))",
-        ":when (= zz (Lam $w g))",
+        "(= f (Lam $w g))",
+        "(= zz (Lam $w g))",
         {"notlam"},
     ),
     (
         "eta's slot side condition dropped",
-        ":when (not-free $v f)\n         ",
+        "(not-free $v f)\n                ",
         "",
         {"held"},
     ),
@@ -81,16 +81,41 @@ def broken_claim(text):
     return m.group(1) if m else None
 
 
+def mask_comments(text):
+    """`text` with every comment character replaced by NUL, so an offset found in it is
+    an offset into `text` that is not inside a comment."""
+    out, in_comment = [], False
+    for ch in text:
+        if ch == "\n":
+            in_comment = False
+        elif ch == ";":
+            in_comment = True
+        out.append("\0" if in_comment else ch)
+    return "".join(out)
+
+
+def replace_code(text, old, new):
+    """Replace the first occurrence of `old` in `text` that is NOT inside a comment.
+
+    The sections here quote their own rules, so a plain `str.replace` hit the prose
+    above the rule and mutated nothing -- a no-op mutation, which is exactly the
+    vacuity this file exists to rule out. Returns None when `old` appears in no code.
+    """
+    i = mask_comments(text).find(old)
+    return None if i < 0 else text[:i] + new + text[i + len(old) :]
+
+
 def main():
     src = CORPUS.read_text()
     MUTANT.parent.mkdir(parents=True, exist_ok=True)
     bad = []
     for name, old, new, want in MUTATIONS:
-        if old not in src:
-            print(f"  STALE  {name}: the text it mutates is no longer in the file")
+        mutated = replace_code(src, old, new)
+        if mutated is None:
+            print(f"  STALE  {name}: the text it mutates is in no rule (only prose, or gone)")
             bad.append(name)
             continue
-        MUTANT.write_text(src.replace(old, new, 1))
+        MUTANT.write_text(mutated)
         r = subprocess.run(
             [sys.executable, "slotted/slotted-egglog.py", str(MUTANT)],
             cwd=ROOT, capture_output=True, text=True, timeout=1800,
@@ -99,7 +124,10 @@ def main():
         if got in want:
             print(f"  ok     {name}  ->  `{got}` breaks")
         elif got is None:
-            print(f"  FAIL   {name}  ->  the file still passes, so no claim tests it")
+            # a mutant that fails for some OTHER reason has not shown a claim has teeth
+            why = next((ln for ln in (r.stdout + r.stderr).splitlines() if ln.strip()), "")
+            note = "the file still passes, so no claim tests it" if why.startswith("ok") else why[:80]
+            print(f"  FAIL   {name}  ->  {note}")
             bad.append(name)
         else:
             print(f"  FAIL   {name}  ->  `{got}` broke, expected one of {sorted(want)}")

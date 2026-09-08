@@ -19,7 +19,7 @@
 ;;; The sort is the real carrier, so rewriting over it works.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev (Succ x)) x :name peel)
+(rewrite (Prev (Succ x)) x :name "peel")
 
 (let one (Prev (Succ (Null))))
 (run 5)

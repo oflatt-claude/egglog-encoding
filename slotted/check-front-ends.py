@@ -7,9 +7,9 @@ constructors. Both call `slotted-encoder.py`, so a rule that exists on both side
 free cross-check on the two front-ends -- and on the claim that a slotted test is not
 a second, quietly diverging encoder.
 
-Compared up to a bijection on variable names, which is the only freedom: a generated
-rule carries a `:ruleset`/`:name` tail that a compiled one has no reason to, and that
-tail is stripped rather than ignored.
+Compared up to a bijection on variable names, which is the only freedom. A generated
+rule carries a `:ruleset` that a compiled one has no reason to and that is stripped; the
+`:name` is on both sides and is compared, so the two front-ends have to agree on it.
 
 Usage:  ./check-front-ends.py
 """
@@ -44,7 +44,9 @@ def main():
         if len(named) != 1:
             bad.append(f"{rule}: {len(named)} rules named it in {gen.name}")
             continue
-        from_generator = re.sub(r"\s*:ruleset \w+ :name \"" + rule + r"\"\)\s*\Z", ")", named[0])
+        # Only the `:ruleset` belongs to the generated file alone. The `:name` is on
+        # both sides now, so it is compared rather than stripped.
+        from_generator = re.sub(r"\s*:ruleset \w+(?= :name )", "", named[0])
 
         snap = SNAPSHOTS / snap_name
         user = [r for r in rules_of(snap) if ":ruleset slotted" not in r]

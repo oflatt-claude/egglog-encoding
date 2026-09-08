@@ -27,7 +27,7 @@
 (constructor Add (U U) U)
 (constructor Num (i64) U)
 
-(rewrite (Let t $x body) (subst body $x t) :name beta)
+(rewrite (Let t $x body) (subst body $x t) :name "beta")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

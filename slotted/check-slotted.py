@@ -194,7 +194,7 @@ CHECKS = [
     (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
-        ratio(r"(\d+)/(\d+) slotted tests pass", 19),
+        ratio(r"(\d+)/(\d+) slotted tests pass", 20),
         False,
         False,
     ),
@@ -213,6 +213,16 @@ CHECKS = [
         "multipattern-teeth",
         ("slotted/check-multipattern-teeth.py",),
         ratio(r"(\d+)/(\d+) multipattern claims have teeth", 7),
+        False,
+        False,
+    ),
+    # A rule's `:name` is what egglog reports it by, and it used to be parsed and then
+    # dropped, leaving every generated rule anonymous. Nothing else notices, since a
+    # missing name changes no answer.
+    (
+        "rule-names",
+        ("slotted/check-rule-names.py",),
+        ratio(r"(\d+)/(\d+) rule names reach the generated egglog", 42),
         False,
         False,
     ),

@@ -1,8 +1,9 @@
 ;;; Multipatterns: rules whose premise is several patterns joined by shared variables.
 ;;;
-;;; `rewrite` has no separate premise list. One pattern is the left-hand side and each
-;;; `:when (= v <call>)` is another pattern rooted at `v`, so a rule joins as many
-;;; patterns as it likes and the variables they share are the join.
+;;; `rewrite` has no separate premise list. One pattern is the left-hand side, and
+;;; `:when` carries a LIST of facts -- each `(= v <call>)` another pattern rooted at
+;;; `v`. So a rule joins as many patterns as it likes, and the variables they share are
+;;; the join.
 ;;;
 ;;; Every section asserts BOTH halves: that the rule fires where the join holds, and
 ;;; that it does NOT where the join fails. Only the second half has teeth -- a
@@ -38,8 +39,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (App f x) (subst body $v x)
-         :when (= f (Lam $v body))
-         :name beta-guarded)
+         :when ((= f (Lam $v body)))
+         :name "beta-guarded")
 
 ;; (fun y. y + y) 3   ->   3 + 3
 (let e (App (Lam $0 (Add $0 $0)) (Num 3)))
@@ -65,8 +66,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (LoadFrom m p) v
-         :when (= m (Store m0 p v))
-         :name load-after-store)
+         :when ((= m (Store m0 p v)))
+         :name "load-after-store")
 
 (let m1 (Store (Mem0) (Num 7) (Num 42)))
 (let got (LoadFrom m1 (Num 7)))
@@ -87,10 +88,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (Root e) (Doubled)
-         :when (= e (Add l r))
-         :when (= l (Mul a b))
-         :when (= r (Mul a b))
-         :name double-product)
+         :when ((= e (Add l r))
+                (= l (Mul a b))
+                (= r (Mul a b)))
+         :name "double-product")
 
 (let yes (Root (Add (Mul (Num 2) (Num 3)) (Mul (Num 2) (Num 3)))))
 ;; the factors differ, so the join across the two `Mul` patterns fails
@@ -114,9 +115,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (Pair f g) (Same)
-         :when (= f (Lam $v body))
-         :when (= g (Lam $w body))
-         :name same-body)
+         :when ((= f (Lam $v body))
+                (= g (Lam $w body)))
+         :name "same-body")
 
 ;; the bound slots are spelled differently and the bodies ignore them: one class
 (let p (Pair (Lam $0 (Num 1)) (Lam $3 (Num 1))))
@@ -141,9 +142,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (Pair f g) (Fired)
-         :when (= f (Lam $x c))
-         :when (= g (Lam $x d))
-         :name shared-slot-literal)
+         :when ((= f (Lam $x c))
+                (= g (Lam $x d)))
+         :name "shared-slot-literal")
 
 ;; not alpha-equivalent, unrelated bodies -- and it still fires
 (let unrelated (Pair (Lam $0 (Num 1)) (Lam $0 (Num 2))))
@@ -157,15 +158,15 @@
 ;;; A multipattern and a slot side condition on one rule: eta, but only where the
 ;;; function is itself a lambda.
 ;;;
-;;; The two kinds of `:when` do different work here, so each failing claim below fails
+;;; The two kinds of fact do different work here, so each failing claim below fails
 ;;; a different one: `(= f (Lam $w g))` constrains the match's SHAPE, `(not-free $v f)`
 ;;; its SLOTS.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (Lam $v (App f $v)) f
-         :when (not-free $v f)
-         :when (= f (Lam $w g))
-         :name eta-lam)
+         :when ((not-free $v f)
+                (= f (Lam $w g)))
+         :name "eta-lam")
 
 ;; fun y. (fun z. z + z) y   ->   fun z. z + z
 (let eta (Lam $0 (App (Lam $1 (Add $1 $1)) $0)))

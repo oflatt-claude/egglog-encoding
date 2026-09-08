@@ -21,23 +21,44 @@ whatever egglog gains next.
 ## Declaring a language
 
 ```
+(datatype U
+  (Lam U U :binder 0)
+  (Let U U U :binder 1)
+  (App U U)
+  (Num i64))
+```
+
+or the same thing the long way, which egglog also accepts:
+
+```
+(sort U)
 (constructor Lam (U U) U :binder 0)
 (constructor Let (U U U) U :binder 1)
 (constructor App (U U) U)
 (constructor Num (i64) U)
 ```
 
-A `U` column is a slotted child. Any other column is a payload and carries no slots.
-`:binder` names the child positions whose slot the node binds, counting over the `U`
-columns only — so `Lam` binds the slot in its first child, and `Let` binds the slot in
-its second.
+The sort a program declares **is** the carrier: a column in it is a slotted child, and
+the machinery is renamed to that sort rather than a `U` being invented beside it. Any
+other column — `i64`, `String` — is a payload and carries no slots. One sort per
+program; two are refused rather than mistranslated, since each needs its own
+`RenamesToLeader`, `Equated` and `ClassSlots`.
+
+`:binder` names the child positions whose slot the node binds, counting over the
+carrier columns only — so `Lam` binds the slot in its first child and `Let` in its
+second. It may stand anywhere among a declaration's options, and on a `datatype`
+variant it goes after the columns, where egglog puts a variant's options.
 
 A binder covers the column *after* the one it binds, which is what wrapping a single
 child in `Bind` means. So `Let`'s bound slot is stripped from its third column and not
 from its first: `let x = x in f x` keeps the value's occurrence free.
 
-There is no `(datatype …)`; a constructor is declared one per line, and the file needs
-no include — the compiler emits the machinery for exactly the constructors declared.
+egglog's own declaration options — `:cost`, `:unextractable`,
+`:internal-term-constructor` — are refused rather than ignored: extraction here would
+not honour them. `datatype*` is refused too, being several sorts at once.
+
+No include is needed either way; the compiler emits the machinery for exactly the
+constructors declared.
 
 ## Writing terms
 
@@ -66,12 +87,12 @@ depend on any of them.
 
 ```
 (rewrite (Lam $x (App f $x)) f
-         :name eta
-         :when (not-free $x f))
+         :name "eta"
+         :when ((not-free $x f)))
 
 (rewrite (Sum e1 $k $v (Sing $k $v)) e1)
 
-(rewrite (Let t $x body) (subst body $x t) :name beta)
+(rewrite (Let t $x body) (subst body $x t) :name "beta")
 ```
 
 A **pattern variable** stands for a subterm and may be written bare, `x`, which is
@@ -84,10 +105,16 @@ for.
 A rewrite's **left side must be a call**. A bare variable there matches every class, so
 the rule would say nothing.
 
-`:when` takes conditions, and a clause may carry several — `:when c1 c2` means the same as
-two `:when` clauses. There are two kinds:
+`:when` takes **one** argument, a list of facts — `:when ((= a b) (not-free $x f))`.
+That is egglog's spelling and the only one it accepts, so all of a rule's facts go in
+that one list. A bare fact without the list, `:when (= a b)`, is taken here as a
+convenience; egglog rejects it. Several `:when` clauses are refused rather than merged,
+because egglog keeps only the last one and the rule would not mean there what it means
+here.
 
-| condition | meaning |
+There are two kinds of fact:
+
+| fact | meaning |
 | --- | --- |
 | `(free $x f)`, `(not-free $x f)` | whether a slot is among a variable's free slots — the reference's `subst[v].slots().contains(…)`. A side condition on the match's *slots* |
 | `(= v <call>)` | `v` also matches `<call>`. Another **pattern**, not a side condition: it constrains the match's *shape*, and several give an arbitrary multipattern |
@@ -101,7 +128,7 @@ not appear on the left at all:
 (constructor Prev (U) U)
 
 ; fires only where x is at least three deep, and returns what is under the third Succ
-(rewrite (Prev x) y :when (= x (Succ (Succ (Succ y)))) :name reach-in)
+(rewrite (Prev x) y :when ((= x (Succ (Succ (Succ y))))) :name "reach-in")
 
 (let s3 (Prev (Succ (Succ (Succ (Null))))))
 (let s2 (Prev (Succ (Succ (Null)))))
@@ -121,7 +148,7 @@ occurring in two patterns has to match the same thing in both, which is the join
 (constructor LoadFrom (U U) U)
 
 ; the value a store wrote, read back at the same address: `m` and `p` join the patterns
-(rewrite (LoadFrom m p) v :when (= m (Store m0 p v)) :name load-after-store)
+(rewrite (LoadFrom m p) v :when ((= m (Store m0 p v))) :name "load-after-store")
 
 (let m1 (Store (Mem0) (Num 7) (Num 42)))
 (let got (LoadFrom m1 (Num 7)))
@@ -143,7 +170,8 @@ nothing:
 (constructor Fired () U)
 
 ; `$x` twice relates the two lambdas not at all
-(rewrite (Pair f g) (Fired) :when (= f (Lam $x c)) :when (= g (Lam $x d)) :name inert)
+(rewrite (Pair f g) (Fired) :when ((= f (Lam $x c))
+                                   (= g (Lam $x d))) :name "inert")
 
 (let unrelated (Pair (Lam $0 (Num 1)) (Lam $0 (Num 2))))
 (run 4)
@@ -237,7 +265,7 @@ If commutativity has put the swap in `f`'s group, then
 
 ```slotted
 (constructor F (U U) U)
-(rewrite (F x y) (F y x) :name comm)
+(rewrite (F x y) (F y x) :name "comm")
 (let a (F $1 $2))
 (let b (F $2 $1))
 (run 5)
@@ -298,7 +326,7 @@ class, so term equality already implied it — checked, with no explicit union i
 case:
 
 ```
-(rewrite (F x y) (F y x) :name comm)
+(rewrite (F x y) (F y x) :name "comm")
 (let f12 (F $1 $2))
 (let f21 (F $2 $1))
 (let i0 (Lam $0 $0))

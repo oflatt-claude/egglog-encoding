@@ -36,7 +36,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F (Sub x x) (Sub x x)) (H (Null) (Null)) :name both-sides)
+(rewrite (F (Sub x x) (Sub x x)) (H (Null) (Null)) :name "both-sides")
 
 (union (Sub $3 $3) (Null))
 
@@ -59,7 +59,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (Mul x (Null)) (Null) :name mul-zero)
+(rewrite (Mul x (Null)) (Null) :name "mul-zero")
 
 (let a (F (Mul $7 (Null)) $8))
 (let b (F (Mul $9 (Null)) $8))
@@ -85,7 +85,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (F (Sub x x) (Sub x x)) (H (Null) (Null)) :name both-sides)
+(rewrite (F (Sub x x) (Sub x x)) (H (Null) (Null)) :name "both-sides")
 
 (union (Sub $9 $9) (Null))
 
@@ -113,9 +113,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rewrite (Add x y) (Add y x) :name comm)
-(rewrite (Add x (Add y z)) (Add (Add x y) z) :name assoc-l)
-(rewrite (Add (Add x y) z) (Add x (Add y z)) :name assoc-r)
+(rewrite (Add x y) (Add y x) :name "comm")
+(rewrite (Add x (Add y z)) (Add (Add x y) z) :name "assoc-l")
+(rewrite (Add (Add x y) z) (Add x (Add y z)) :name "assoc-r")
 
 (let a (Add (Add (Add $0 $1) $2) $3))
 (let b (Add (Add (Add $3 $2) $1) $0))

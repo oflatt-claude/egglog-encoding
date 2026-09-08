@@ -73,7 +73,6 @@ values for every one of those variables is at the top of
 `slotted/encoding/user-rules-trace.egg`.
 """
 
-import re
 
 CHILD = object()  # a slotted child: `Renaming U`
 BINDER = object()  # a slotted child that also binds its slot
@@ -107,10 +106,44 @@ def read_language(path, sorts=("U",)):
             continue
         head, _, rest = line[len("(constructor ") :].partition("(")
         cols_text, _, tail = rest.partition(")")
-        # the closing paren sticks to the last index, so scan for integers
-        binders = [int(x) for x in re.findall(r"\d+", tail.split(":binder")[1])] if ":binder" in tail else []
-        language[head.strip()] = signature(cols_text.split(), binders, sorts)
+        name = head.strip()
+        # `tail` is the output sort, then the options, then the closing paren
+        tokens = tail.rstrip(")").split()
+        opts = next((i for i, t in enumerate(tokens) if t.startswith(":")), len(tokens))
+        language[name] = signature(cols_text.split(), constructor_options(name, tokens[opts:]), sorts)
     return language
+
+
+#: egglog's own `(constructor ...)` options. Recognised so they can be refused by name
+#: rather than ignored: extraction here does not honour them, and a silently dropped
+#: `:cost` leaves a program doing something other than what it says.
+EGGLOG_CTOR_OPTIONS = (":cost", ":unextractable", ":internal-term-constructor")
+
+
+def constructor_options(name, tokens):
+    """The binder positions a constructor's options declare.
+
+    `:binder <pos>...` is this language's one addition to egglog's constructor options
+    and may stand ANYWHERE among them. Reading it only in first position silently
+    dropped the binder from `(constructor Lam (U U) U :cost 5 :binder 0)`, and taking
+    every integer after it swallowed the values of whatever option came next.
+    """
+    binders, seen = [], None
+    for tok in tokens:
+        if isinstance(tok, str) and tok.startswith(":"):
+            if tok in EGGLOG_CTOR_OPTIONS:
+                raise SystemExit(
+                    f"constructor {name}: `{tok}` is egglog's and is not implemented here. "
+                    "Extraction over the encoding would not honour it, so it is refused "
+                    "rather than dropped in silence."
+                )
+            if tok != ":binder":
+                raise SystemExit(f"constructor {name}: unknown option `{tok}`")
+            seen = tok
+            continue
+        if seen == ":binder":
+            binders.append(int(tok))
+    return binders
 
 
 def signature(cols, binders, sorts=("U",)):
@@ -143,9 +176,7 @@ def read_language_form(form, sorts=("U",)):
     """
     assert form[0] == "constructor" and isinstance(form[2], list), form
     name, cols = form[1], form[2]
-    tail = form[4:]
-    binders = [int(x) for x in tail[1:]] if tail and tail[0] == ":binder" else []
-    return {name: signature(cols, binders, sorts)}
+    return {name: signature(cols, constructor_options(name, form[4:]), sorts)}
 
 
 def read_correspondence(path):
