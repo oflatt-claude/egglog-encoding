@@ -27,6 +27,11 @@ TWO LIMITS OF `rewrite`, counted rather than worked around:
   * the matched root has no NAME, so a right-hand side mentioning it rebuilds the pattern
     instead -- which is what one writes in egglog, and denotes the same term.
 
+WHAT THE COUNTS SAY. A renderer that expressed nothing would agree on everything, so
+the result reports how many compared cases actually carried more than one atom and how
+wide the widest was. It also splits the skips: a case no `rewrite` can say is a limit of
+this language, a case too big to run either way is not.
+
     python3 slotted/xdiff/surface.py            200 generated cases
     python3 slotted/xdiff/surface.py 500 7      500 cases, seed 7
 """
@@ -131,7 +136,14 @@ def main():
     rng = random.Random(seed)
 
     direct = X.compile_rule
-    compared = skipped = agreed = 0
+    compared = agreed = 0
+    # skips have two very different reasons and lumping them hid how much was skipped
+    # for being inexpressible rather than for being too big to run
+    no_rewrite = too_big = 0
+    # how wide a multipattern each compared case actually carried. `1` is a single
+    # pattern; the interesting rows are the rest, and a run whose widest is 1 has tested
+    # nothing about multipatterns however many cases it agreed on
+    widths = {}
     bad = []
     for i in range(n):
         case = X.rand_case(rng, i)
@@ -140,7 +152,7 @@ def main():
         try:
             texts = [render(a, act, c) for a, act, c in case.rules if a]
         except Unexpressible:
-            skipped += 1
+            no_rewrite += 1
             continue
 
         want = X.run_encoding(case)
@@ -155,9 +167,11 @@ def main():
             if want[0] != got[0]:
                 bad.append((case.name, texts, f"{want[0]} vs {got[0]}: {str(got[1])[:200]}"))
             else:
-                skipped += 1
+                too_big += 1
             continue
         compared += 1
+        width = max(len(atoms) for atoms, _, _ in case.rules if atoms)
+        widths[width] = widths.get(width, 0) + 1
         if want[1] == got[1]:
             agreed += 1
         else:
@@ -169,7 +183,11 @@ def main():
             for line in t.splitlines():
                 print(f"      {line}")
     # the counts are part of the result: a renderer that expressed nothing would agree
-    print(f"\n{agreed}/{compared} cases agree through the surface syntax, {skipped} skipped")
+    multi = sum(c for w, c in widths.items() if w > 1)
+    shape = ", ".join(f"{w} atom{'s' if w > 1 else ''}: {widths[w]}" for w in sorted(widths))
+    print(f"\n{agreed}/{compared} cases agree through the surface syntax")
+    print(f"  multipatterns: {multi}/{compared} carried more than one atom   ({shape})")
+    print(f"  skipped: {no_rewrite} no `rewrite` says it, {too_big} too big to run either way")
     return 1 if bad else 0
 
 

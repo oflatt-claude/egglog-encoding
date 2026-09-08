@@ -194,7 +194,7 @@ CHECKS = [
     (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
-        ratio(r"(\d+)/(\d+) slotted tests pass", 18),
+        ratio(r"(\d+)/(\d+) slotted tests pass", 19),
         False,
         False,
     ),
@@ -203,6 +203,16 @@ CHECKS = [
         "front-ends",
         ("slotted/check-front-ends.py",),
         ratio(r"OK: (\d+)/(\d+) rules compile the same", 1),
+        False,
+        False,
+    ),
+    # The .egg corpus's counterpart to `xdiff/mutations.py`: each mutation drops one
+    # join from a multipattern rule, and a claim must break. Guards the failing halves
+    # of `multipattern.egg` against quietly going vacuous.
+    (
+        "multipattern-teeth",
+        ("slotted/check-multipattern-teeth.py",),
+        ratio(r"(\d+)/(\d+) multipattern claims have teeth", 7),
         False,
         False,
     ),
@@ -296,7 +306,7 @@ CHECKS = [
         # An example nobody runs is an example nobody checked.
         "language-doc",
         ("slotted/check-language-doc.py",),
-        ratio(r"(\d+)/(\d+) examples run", 6),
+        ratio(r"(\d+)/(\d+) examples run", 8),
         False,
         True,
     ),
