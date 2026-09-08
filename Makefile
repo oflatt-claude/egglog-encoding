@@ -170,6 +170,13 @@ nightly-local: nightly-uv nightly-rustup
 # row the closure delivers, `ccStale_columnRule_fires` is the firing that writes it, and
 # `ccStale_not_viewRowsColumnClosedAll` is the clause **false** one firing earlier — so it is a
 # constraint on a state rather than a shape every state has. Nothing is weakened for any of it.
+# That same state refutes the **fourth** fact step 4's global-reading head was named as wanting:
+# `FDatabase.ViewRowsNamedUF`, a live view row's value column being `FDatabase.UFRowReach`-
+# reachable from the term that names it, holds with content at `ncTgt`
+# (`ncTgt_viewRowsNamedUF`) and fails at `ccTgt` on the row a **column** rule writes
+# (`ccTgt_not_viewRowsNamedUF`) — re-keying leaves the value column alone, so the row is named
+# by a term the target does not hold (`ccTgt_not_mem_FA`) and no `@UF` row can leave it. The
+# walk is unaffected; its premise is still what is missing.
 # The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
 # turns a source reading of a query into a substitution the *emitted* query matches at, over
 # `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its

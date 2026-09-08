@@ -8942,6 +8942,94 @@ rule — plus the merge phase that drops the row its re-keying displaces — tha
 theorem ccTgt_not_viewRowsRootedAll : ¬ ccTgt.ViewRowsRootedAll :=
   fun h => h "B" [] ncB ncFiat ccTgt_row_bview ncA ccTgt_ufRowEdge
 
+/-! ##### And the fourth fact step 4 was named as wanting, refuted
+
+`unionsJoined_fire`'s step 4 has one item left for a **global-reading head**: the head keys its
+view row at the *source terms* the environment binds, and `viewRow_of_rowReachList_all` moves a
+row's key only along `FDatabase.UFRowReach`, so the link it wants is one `@UF` row chain per key
+position — from the source term to the id `Egglog.RowRepr` reads it to. The fact named for that
+link was `FDatabase.ViewRowsNamedUF` below: a live view row's **value** column is
+`FDatabase.UFRowReach`-reachable from the term that names it, which at a nullary position is
+exactly that chain.
+
+**It is not vacuous and it is false.** `ncTgt_viewRowsNamedUF` is it holding with content —
+`@BView() ↦ ((A), …)` is named by `(B)` and its value column is `(A)`, one real `@UF` row away
+— and `ccTgt_not_viewRowsNamedUF` refutes it at the state above, on the row a **column** rule
+writes. `columnRule` re-keys a row and leaves its value column alone, so the row it writes at
+the moved key is named by `(F (A))` while its value column is still `(F (B))`; nothing relates
+those two, and `ccTgt_not_mem_FA` is the structural reason — `(F (A))` is not a term the target
+holds at all, and `@UF` rows are only ever written between terms it does. The row is not
+hand-picked: `ccStale_columnRule_fires` is the interpreter's own rebuild round writing it.
+
+**What the refutation localizes.** The fact is true of a row a **build** wrote, whose value
+column *is* its naming term (`encodeBuild` writes `@fView(es) ↦ (f(es), @Fiat)`) and whose value
+column thereafter only moves along `@UF` rows — that is where `ncTgt` gets its content. It is
+false of a row a **column rule** wrote, whose naming term was never a value column of anything.
+So the link step 4 needs is not this fact restricted or weakened; a correct one has to speak
+about the key tuple the row started at, and it is left open rather than guessed at a second
+time. The walk itself is unaffected — `viewRow_of_rowReachList_all` is proved, and what is
+missing is still only its premise. -/
+
+/-- **The fourth fact, stated to be refuted**: a live view row's value column is
+`FDatabase.UFRowReach`-reachable from the term that names it. `FDatabase.EntryRowsUF` is the
+same shape at an entry — from an entry term's value column to a live row's at the **same** key —
+and this is not an instance of it. -/
+def FDatabase.ViewRowsNamedUF (d : FDatabase) : Prop :=
+  ∀ (f : FnName) (es : List Term) (e pf : Term),
+    (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows → d.UFRowReach (Term.app f es) e
+
+set_option maxRecDepth 100000 in
+/-- `ncTgt`'s three view rows, enumerated. -/
+theorem ncTgt_view_rows : ∀ r ∈ ncTgt.rows, r.out.length = 2 → r.fn ≠ ufName →
+    r = ⟨viewName "A", [], [ncA, ncFiat]⟩ ∨ r = ⟨viewName "F", [ncA], [ncFA, ncFiat]⟩ ∨
+      r = ⟨viewName "B", [], [ncA, ncTFF]⟩ := by decide
+
+/-- **The fact with content**, at the state where the rebuild has run: two of the three rows are
+named by their own value column, and `@BView` is named by `(B)` while its value column is the
+leader `(A)` — one real `@UF` row, so the chain is not reflexivity. -/
+theorem ncTgt_viewRowsNamedUF : ncTgt.ViewRowsNamedUF := by
+  intro f es e pf hrow
+  rcases ncTgt_view_rows _ hrow rfl viewName_ne_ufName with h | h | h <;>
+    rw [Row.mk.injEq] at h <;> obtain ⟨hfn, hes, hout⟩ := h
+  · obtain rfl : f = "A" := viewName_inj hfn
+    obtain rfl : es = [] := hes
+    obtain ⟨rfl, -⟩ : e = ncA ∧ pf = ncFiat := by simpa using hout
+    exact .refl
+  · obtain rfl : f = "F" := viewName_inj hfn
+    obtain rfl : es = [ncA] := hes
+    obtain ⟨rfl, -⟩ : e = ncFA ∧ pf = ncFiat := by simpa using hout
+    exact .refl
+  · obtain rfl : f = "B" := viewName_inj hfn
+    obtain rfl : es = [] := hes
+    obtain ⟨rfl, -⟩ : e = ncA ∧ pf = ncTFF := by simpa using hout
+    exact Relation.ReflTransGen.single ⟨⟨ncFiat, ncTgt_row_uf⟩, by simp [ncA, ncB]⟩
+
+@[inherit_doc ncTgt_viewRowsNamedUF]
+theorem ncTgt_viewRowsNamedUF_instance :
+    (⟨viewName "B", [], [ncA, ncTFF]⟩ : Row) ∈ ncTgt.rows ∧ Term.app "B" [] = ncB ∧
+      ncB ≠ ncA ∧ ncTgt.UFRowReach ncB ncA :=
+  ⟨by decide, rfl, by simp [ncA, ncB],
+    Relation.ReflTransGen.single ⟨⟨ncFiat, ncTgt_row_uf⟩, by simp [ncA, ncB]⟩⟩
+
+set_option maxRecDepth 100000 in
+/-- **The naming term of the re-keyed row is not a term the state holds.** `columnRule` moves a
+key and writes no term at the moved key's own application, so nothing ever wrote `(F (A))` — and
+`@UF` rows relate terms the run holds. -/
+theorem ccTgt_not_mem_FA : ncFA ∉ ccTgt.terms := by decide
+
+@[inherit_doc ccTgt_not_mem_FA]
+theorem ccTgt_not_ufRowReach_FA_FB : ¬ ccTgt.UFRowReach ncFA ncFB := by
+  intro h
+  rcases Relation.ReflTransGen.cases_head h with heq | ⟨c, hedge, -⟩
+  · exact absurd heq (by decide)
+  · exact absurd (ccTgt_ufRowEdge_eq hedge).1 (by decide)
+
+/-- **So the fourth fact is false.** The witness is the row a column rule writes: named by
+`(F (A))`, valued at `(F (B))`, and no `@UF` row between them. `ncTgt_viewRowsNamedUF` is the
+same fact holding with content one build later, so this is a refutation and not a vacuity. -/
+theorem ccTgt_not_viewRowsNamedUF : ¬ ccTgt.ViewRowsNamedUF := fun h =>
+  ccTgt_not_ufRowReach_FA_FB (h "F" [ncA] ncFB ccMoved ccTgt_row_fview_A)
+
 /-- **And the term the source's firing built reads through it**, at the state where
 `Database.ReadsSelf` fails: `(F (B))` reads to `(F (A))`, over `(B)`'s row and then the
 `@FView` row keyed at `(A)`. -/
@@ -11946,15 +12034,28 @@ landed too, and what remains of step 4 is one item, and then the assembly.
   fired rather than the e-class rule — with `ccStale_not_viewRowsColumnClosedAll` the same
   clause **false** one firing earlier, so it is a constraint and not a shape.
 
-  **What the item still owes is the link into the walk's premise.**
-  `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain per key position out of
-  the tuple the head's own row sits at, and what a head that reads a global hands over is a
-  *source term* per position. So the missing fact is a fourth one, and it is about a row and not
-  about a walk: a live view row's **value** column is `FDatabase.UFRowReach`-reachable from the
-  term that names it, which is what turns `Egglog.RowRepr td' u x` at that column into the edge
-  the walk consumes. `FDatabase.EntryRowsUF` is the same shape one level up — at an `@UF`
-  *entry* rather than at a naming term, which is what `encReached_viewRow_at_root` spends — and
-  the naming-term reading is not an instance of it. Left open rather than guessed at.
+  **What the item still owes is the link into the walk's premise, and the fourth fact named for
+  it is false.** `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain per key
+  position out of the tuple the head's own row sits at, and what a head that reads a global
+  hands over is a *source term* per position. The fact named for that link was
+  `FDatabase.ViewRowsNamedUF` — a live view row's **value** column is
+  `FDatabase.UFRowReach`-reachable from the term that names it, which at a nullary position is
+  exactly the chain `Egglog.RowRepr td' u x` would have to supply. **It is not vacuous and it is
+  refuted**: `ncTgt_viewRowsNamedUF` is it holding with content, at `@BView() ↦ ((A), …)` named
+  by `(B)` one real `@UF` row from its value column, and `ccTgt_not_viewRowsNamedUF` is it
+  failing on the row a **column** rule writes. `columnRule` re-keys a row and leaves its value
+  column alone, so `@FView((A)) ↦ ((F (B)), …)` is named by `(F (A))` — a term the target does
+  not hold at all (`ccTgt_not_mem_FA`), so no `@UF` row can leave it — and the row is the
+  interpreter's own round's (`ccStale_columnRule_fires`).
+
+  So the fact is true of a row a **build** wrote, whose value column *is* its naming term and
+  thereafter moves only along `@UF` rows, and false of a row a column rule wrote, whose naming
+  term was never a value column of anything. A correct link has to speak about the key tuple the
+  row started at; it is left open rather than guessed at a second time, and the walk itself is
+  unaffected — `viewRow_of_rowReachList_all` is proved and only its premise is missing.
+  `FDatabase.EntryRowsUF` is a different shape and not a route to it: it runs from an entry
+  term's value column to a live row's at the **same** key, which is what
+  `encReached_viewRow_at_root` spends.
 
 Beside those: the `.eq` case's remaining environment clause above; the outer assembly, which
 decomposes `CmdStep sd (.run R) sd'` into `RunRules`' own `sUnion` and runs steps 1-4 once per
