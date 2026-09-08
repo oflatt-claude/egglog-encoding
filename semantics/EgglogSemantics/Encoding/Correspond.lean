@@ -125,7 +125,7 @@ both are decided at the witness at the end of this file.
   strengthened to every *subterm*, which is what `Database.addTerm` records. And it is not
   vacuous: `rbState2_unionsInv` is the invariant at a source state a program reaches
   (`rbProgram_programStep`) with a non-empty environment, `rbState2_unionsInv_hvar` is the
-  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's seventeen
+  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's nineteen
   hypotheses holding together, and `uRebuilt_unionsJoined` is the data clause at a source with
   a real equation.
 
@@ -2746,6 +2746,28 @@ theorem litBuild_forward {tgt : FDatabase} :
       SameClass tgt.toDatabase (.lit (.int 5)) (.lit (.int 5)) :=
   ⟨litBuildSrc_mem, ⟨_, .lit, .lit⟩⟩
 
+/-- The state `encode litBuildProgram` runs to, computed. -/
+def litBuildTgt : FDatabase := (execM (encode litBuildProgram)).getD FDatabase.empty
+
+theorem litBuildTgt_execM : execM (encode litBuildProgram) = some litBuildTgt := by
+  obtain ⟨d, hd⟩ : ∃ d, execM (encode litBuildProgram) = some d :=
+    Option.isSome_iff_exists.mp (by decide)
+  rw [hd, litBuildTgt, hd]
+  rfl
+
+/-- **And the literal the source holds is not a term the target holds.** The clause
+`unionsJoined_fire`'s step 1 was to be handed — every literal the source holds is one the
+target holds — is **false**, at a program in the domain, and it is false by design rather than
+by defect: `ViewRepr.lit` carries no membership premise precisely because the encoding writes
+no e-node for a bare leaf, and `encodeBuild` emits no action for one. So the residue is not
+this clause; `mem_terms_of_rowRepr_app` is the half of it that is a theorem, and
+`patternRowRead_of_matches`' `.eq` case is where what is left of it lives. -/
+theorem litBuild_not_litsHeld :
+    Term.lit (.int 5) ∈ litBuildSrc.terms ∧ Term.lit (.int 5) ∉ litBuildTgt.terms := by
+  refine ⟨litBuildSrc_mem, ?_⟩
+  rw [litBuild_terms litBuildTgt_execM]
+  simp
+
 /-! #### The command induction
 
 `Database.UnionsJoined` is a read-back of the `@UF` set the encoder emitted, and the read-back
@@ -3921,6 +3943,59 @@ def Program.RuleNamesDeclared (sg : Signature) : Program → Nat → Prop
       (∀ r : Rule, c = Cmd.rule r → sg.IsCtor (ruleName i)) ∧
         Program.RuleNamesDeclared sg cs (c.ruleStep i)
 
+/-! ##### What the head has to evaluate
+
+`Spec/Scope.lean`'s `Action.Evaluable` asks a `union` operand to be an **application**, which
+is the strongest condition readable off the expression alone and which a lit-free program's
+*variable* operand fails: a query binds a variable to a term the source holds, and that term
+is not a literal for a reason about the **state**. So the block lemma below is restated with
+that clause replaced by the two arms of `Program.EncodeDomain.noLitUnion`, which is exactly
+what `evalAction`'s own check spends.
+
+Stated here rather than beside `evalActions_isSome_of_builds`, because `Egglog.UnionsFire`
+carries the source head's own `Actions.Builds` — read at the **target's** signature — as one
+of its derived clauses. -/
+
+/-- `Action.Evaluable` with the `union` operands' `Expr.IsApp` dropped: every expression the
+action evaluates builds, and nothing is asked about literals. -/
+def Action.Builds : Action → Signature → Prop
+  | .expr e, sig => e.Evaluable sig
+  | .letBind _ e, sig => e.Evaluable sig
+  | .union e₁ e₂, sig => e₁.Evaluable sig ∧ e₂.Evaluable sig
+  | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
+
+@[simp] def Actions.Builds : List Action → Signature → Prop
+  | [], _ => True
+  | a :: as, sig => a.Builds sig ∧ Actions.Builds as sig
+
+/-- **Evaluability follows the signature up.** `Expr.Evaluable` reads `Signature.IsCtor` and
+nothing else, so a target signature declaring every constructor the source's does carries the
+source head's own condition across — which is what `Egglog.UnionsFire`'s signature clause is
+spent on. -/
+theorem Expr.Evaluable.mono_sig {sig sig' : Signature}
+    (hsub : ∀ f, sig.IsCtor f → sig'.IsCtor f) {e : Expr} (h : e.Evaluable sig) :
+    e.Evaluable sig' := fun f hf => ⟨(h f hf).1, hsub f (h f hf).2⟩
+
+@[inherit_doc Expr.Evaluable.mono_sig]
+theorem Action.Builds.mono_sig {sig sig' : Signature}
+    (hsub : ∀ f, sig.IsCtor f → sig'.IsCtor f) {a : Action} (h : a.Builds sig) :
+    a.Builds sig' := by
+  cases a with
+  | expr e => exact Expr.Evaluable.mono_sig hsub h
+  | letBind v e => exact Expr.Evaluable.mono_sig hsub h
+  | union e₁ e₂ =>
+      exact ⟨Expr.Evaluable.mono_sig hsub h.1, Expr.Evaluable.mono_sig hsub h.2⟩
+  | set f args out =>
+      exact ⟨fun e he => Expr.Evaluable.mono_sig hsub (h.1 e he),
+        fun e he => Expr.Evaluable.mono_sig hsub (h.2 e he)⟩
+
+@[inherit_doc Expr.Evaluable.mono_sig]
+theorem Actions.Builds.mono_sig {sig sig' : Signature}
+    (hsub : ∀ f, sig.IsCtor f → sig'.IsCtor f) :
+    ∀ {as : List Action}, Actions.Builds as sig → Actions.Builds as sig'
+  | [], _ => trivial
+  | _ :: _, h => ⟨Action.Builds.mono_sig hsub h.1, Actions.Builds.mono_sig hsub h.2⟩
+
 /-! ##### The one case that does not close -/
 
 /-- **The command induction's rule-firing case, as a `Prop`. Open, and no longer refuted.**
@@ -3962,6 +4037,17 @@ fires. `gxSrc_not_globalsInline` is the clause the witness violates and `Egglog.
 the threading; the `Program.GlobalsOnce` half of that pair rides in `Egglog.UnionsInv.rules`
 rather than here, because it is what keeps the clause alive across a later `let` and not what
 a firing reads.
+
+**And two about the source rule's *head*, which is what step 3 of the assembly needs.**
+`Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))` — `Rule.HeadScoped`, at the
+scope the substitution models — and `Actions.Builds r.actions td.sig`, the head evaluating at
+the **target's** signature. The clause about a rule this `Prop` already had is about its
+*query*; `exists_execLocalActions_encodeRule_head` takes these two and nothing else of the
+source. Both are source-run invariants of the same shape as the query clause —
+`Database.HeadsScoped` off `Program.HeadsScoped`, which is `EncodeDomain.headsScoped`, and
+`Database.HeadsBuild` off `headsBuild_of_programStep` read up the signature by
+`Actions.Builds.mono_sig` — so both are derived and neither is provenance
+(`encStep_rowMech`).
 
 **The five clauses the earlier repair adds**, each à la carte and in the shape `RowMech`
 already has,
@@ -4046,10 +4132,15 @@ Its companion is **not** here, and the reason is that it is false as it reads. "
 reading gives is a term the target holds", `∀ t r, RowRepr td t r → r ∈ td.terms`, would make
 `td.terms` hold *every literal*: `RowRepr.lit` is `RowRepr d (.lit l) (.lit l)` for an
 arbitrary `l`, with no premise at all. Its **application** half is a theorem and needs no
-clause — a `RowRepr.app` names a live view row and `FDatabase.RowColumnsValued`, already a
-clause here, puts that row's value column in `valueTerms` — so what step 1's `.eq` case is
-short of is only the literal residue, `Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms`, which
-is a run-wide fact about the source's literals rather than a reading of one state.
+clause (`mem_terms_of_rowRepr_app`) — a `RowRepr.app` names a live view row and
+`FDatabase.RowColumnsValued`, already a clause here, puts that row's value column in
+`valueTerms`. And the literal residue that was named as its replacement,
+`Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms`, is **false too** — `litBuild_not_litsHeld`,
+at an in-domain program whose encoded run holds no term at all — so it is not here either.
+`patternRowRead_of_matches` takes the split obligation instead, and what is left of it is one
+shape of pattern: both sides of a `.eq` a bare literal of the same value, which
+`Pattern.Grounded.eqLit` discharges on the program's text and which only
+`Rule.resolveGlobals` on a literal-valued global creates.
 
 All four are derived rather than assumed, and so are the five clauses about names that the
 two refutations cost: `RowMech` is what discharges them, threaded alongside `EncStep`, and
@@ -4072,11 +4163,12 @@ this file: `patternHolds_values_of_mem_rows` is the only route from a row to an 
 hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_execM` and
 `execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
 answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
-restructuring of anything above. `unionsJoined_fire_satisfiable` is these seventeen hypotheses
+restructuring of anything above. `unionsJoined_fire_satisfiable` is these nineteen hypotheses
 holding together — and the two refutations above are the *ten* they used to be, holding at a
 state whose encoded rule cannot run, which is what said the list was too short.
 
-**And a fourth refutation moved the count from fifteen to sixteen.** The clause set with the
+**And a fourth refutation is what put the `Database.GlobalsInline` conjunct on the list.** The
+clause set with the
 `Database.GlobalsInline` conjunct dropped is `Encoding/Complete.lean`'s `UnionsFireAnyG` and
 `unionsFire_false_globals` refutes it: `Rule.substGlobals` rewrites the rule's **query**, and a
 `G` no source state realizes can inline a variable the source query binds, leaving the encoded
@@ -4119,6 +4211,8 @@ def UnionsFire : Prop :=
     (∀ (f : FnName) (es : List Term) (e pf : Term),
       (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows →
         (td.sig.mergeOf (viewName f)).isSome = true) →
+    (∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))) →
+    (∀ r ∈ sd.rules, Actions.Builds r.actions td.sig) →
     (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
@@ -4141,7 +4235,12 @@ target's signature declares every constructor the source's does and `@Fiat` (so 
 head *evaluates*), the source rules' queries are ones the flattening handles (a **source-run**
 invariant, since `UnionsFire` is given no program), every row column is a value `matchQuery`
 will assign, and the environment binds no generated variable. `RuleNameMech` is the fifth,
-apart because it is indexed rather than read off a state. -/
+apart because it is indexed rather than read off a state.
+
+Two about the source rule's **head** — scoped by its own query and the globals, and building at
+the target's signature — which is what `exists_execLocalActions_encodeRule_head` takes and what
+the clause about a rule's *query* does not say. Source-run invariants again:
+`headsScoped_of_prefixStep` and `headsBuild_of_programStep` with `Actions.Builds.mono_sig`. -/
 def RowMech (Q : Program) : Prop :=
   ∀ {sd : Database} {d : FDatabase} {pre suf : Program} {G : List (Var × Expr)},
     EncStep Q pre suf sd d G →
@@ -4156,7 +4255,9 @@ def RowMech (Q : Program) : Prop :=
     d.NoAtEnv ∧
     (∀ (f : FnName) (es : List Term) (e pf : Term),
       (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows →
-        (d.sig.mergeOf (viewName f)).isSome = true)
+        (d.sig.mergeOf (viewName f)).isSome = true) ∧
+    (∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))) ∧
+    (∀ r ∈ sd.rules, Actions.Builds r.actions d.sig)
 
 /-- **Every `@Rule_i` the encoder's numbering applies is declared**, at every state one encoded
 run passes through. Threaded rather than proved here for `Egglog.RowMech`'s reason: the
@@ -4286,7 +4387,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           obtain ⟨e, he⟩ := hinv.readsAt t ht
           exact (hmech hchain).1 t e he)
         (hmech hchain).2.2.1
-        (hmech hchain).2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2
         (hmech (.block hchain hstep hblock)).2.1
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
@@ -4303,7 +4406,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           obtain ⟨e, he⟩ := hinv.readsAt t ht
           exact (hmech hchain).1 t e he)
         (hmech hchain).2.2.1
-        (hmech hchain).2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2
         (hmech (.block hchain hstep hblock)).2.1
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
@@ -5048,18 +5153,31 @@ theorem rbSrc_queriesEncodable : ∀ r ∈ rbSrc.rules,
     ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none :=
   fun r hr => absurd hr (by simp [rbSrc, rbSrcBase, Database.empty])
 
+/-- And so are the two clauses about a rule's **head**, for the same reason;
+`ncRule_headScoped` is the first at a head with content and `ncRule_builds` the second. -/
+theorem rbSrc_headsScoped : ∀ r ∈ rbSrc.rules,
+    Actions.Scoped r.actions (Query.bind r.query (Env.dom rbSrc.env)) :=
+  fun r hr => absurd hr (by simp [rbSrc, rbSrcBase, Database.empty])
+
+@[inherit_doc rbSrc_headsScoped]
+theorem rbSrc_headsBuild : ∀ r ∈ rbSrc.rules, Actions.Builds r.actions rbState2.sig :=
+  fun r hr => absurd hr (by simp [rbSrc, rbSrcBase, Database.empty])
+
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Seventeen conjuncts: the sixteen `UnionsFire` takes, in the order it takes them, and
+Nineteen conjuncts: the eighteen `UnionsFire` takes, in the order it takes them, and
 `rbSrc_globalsInline` beside them.
 
 Satisfiable degenerately in the *round*, and deliberately so: the source holds no rule, so the
-round adds nothing, the encoded round writes nothing either, and the two clauses about **rules**
-— `hrules` with its `@Rule_i` conjunct, and the source rules' encodability — are vacuous;
-`ncRule_queriesEncodable` is the second of those at a rule with a real query, and
-`ncTgt_encRule_fires` at a real firing. Three of the rest are `rbState2_unionsInv`'s own
-`td`-side clauses.
+round adds nothing, the encoded round writes nothing either, and the four clauses about
+**rules** — `hrules` with its `@Rule_i` conjunct, the source rules' encodability, and the two
+about a rule's *head* — are vacuous; `ncRule_queriesEncodable` is the second of those at a
+rule with a real query, `ncRule_head_clauses` is the pair of head clauses at a
+head with content — `ncRule` builds `(F x)` over its query's own variable, so its scope is
+that variable and its evaluability is the target skolem `encodePrelude` declared for `F`
+(`ncTgt_isCtor_F`) — and `ncTgt_encRule_fires` is a real firing. Three of the rest are
+`rbState2_unionsInv`'s own `td`-side clauses.
 
 The clause about the **globals** is not degenerate either, and it is carried twice for that
 reason: the `hrules` conjunct it rides in is vacuous here, so `rbSrc_globalsInline` states it
@@ -5110,6 +5228,9 @@ theorem unionsJoined_fire_satisfiable :
       (∀ (f : FnName) (es : List Term) (e pf : Term),
         (⟨viewName f, es, [e, pf]⟩ : Row) ∈ rbState2.rows →
           (rbState2.sig.mergeOf (viewName f)).isSome = true) ∧
+      (∀ r ∈ rbSrc.rules,
+        Actions.Scoped r.actions (Query.bind r.query (Env.dom rbSrc.env))) ∧
+      (∀ r ∈ rbSrc.rules, Actions.Builds r.actions rbState2.sig) ∧
       (∀ t r : Term, RowRepr rbState2 t r → ViewRepr rbState2.toDatabase t r) ∧
       rbSrc.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrc_cmdStep_run rbRuleset, rbState2_execProgramM_run, rbState2_unionsInv.env,
@@ -5121,6 +5242,7 @@ theorem unionsJoined_fire_satisfiable :
     rbState2_rowColumnsValued, rbState2_noAtEnv, rbState2_unionsInv.readsAt,
     rbState2_unionsInv.joinedAt, rbState2_exists_rowRepr, rbState2_rowJoined,
     (fun _ _ _ _ hrow => rbState2_mergeOf_of_row hrow),
+    rbSrc_headsScoped, rbSrc_headsBuild,
     fun _ _ h => rbState2_viewRepr_of_rowRepr h, rbSrc_globalsInline⟩
 
 /-! #### The rebuild fixpoint, and the row it does not reach
@@ -10488,24 +10610,10 @@ theorem rbSrc_ctorsIn_W : rbSrc.CtorsIn rbProgram ∧ ("W", 1) ∈ rbProgram.cto
 
 /-! ##### The block evaluates
 
-`Spec/Scope.lean`'s `Action.Evaluable` asks a `union` operand to be an **application**, which
-is the strongest condition readable off the expression alone and which a lit-free program's
-*variable* operand fails: a query binds a variable to a term the source holds, and that term
-is not a literal for a reason about the **state**. So the block lemma is restated with that
-clause replaced by the two arms of `Program.EncodeDomain.noLitUnion`, which is exactly what
-`evalAction`'s own check spends. -/
-
-/-- `Action.Evaluable` with the `union` operands' `Expr.IsApp` dropped: every expression the
-action evaluates builds, and nothing is asked about literals. -/
-def Action.Builds : Action → Signature → Prop
-  | .expr e, sig => e.Evaluable sig
-  | .letBind _ e, sig => e.Evaluable sig
-  | .union e₁ e₂, sig => e₁.Evaluable sig ∧ e₂.Evaluable sig
-  | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
-
-@[simp] def Actions.Builds : List Action → Signature → Prop
-  | [], _ => True
-  | a :: as, sig => a.Builds sig ∧ Actions.Builds as sig
+`Action.Builds` is stated earlier in this file, beside `Egglog.UnionsFire`, which carries the
+source head's own instance of it as a derived clause. What follows is the block lemma over it:
+`Action.Evaluable`'s `union` clause replaced by the two arms of
+`Program.EncodeDomain.noLitUnion`, which is exactly what `evalAction`'s own check spends. -/
 
 /-- **The `union` check, as the block needs it**: either the block asserts no equation, or
 the state holds no literal and the block evaluates none. The two arms of
