@@ -1351,6 +1351,68 @@ def Database.UFReach (d : Database) (a b : Term) : Prop :=
 theorem Database.UFStep.toReach {d : Database} {a b : Term} (h : d.UFStep a b) :
     d.UFReach a b := Relation.ReflTransGen.single h
 
+/-! ##### The same relation over live rows, and the three invariants a walk over it spends
+
+`Database.UFStep` reads an `@UF` **entry**, so it ranges over every edge the run ever wrote,
+superseded ones included. The rows are the live edges, and they are what the rebuild rules
+read. The three relations are stated here rather than beside `FDatabase.UFRowsDescend` because
+`Egglog.RowMech` below has to name them: the walk `Egglog.UnionsFire`'s step 4 runs
+(`viewRow_of_rowReachList`) rests on three *inductive invariants* of the encoded run, and an
+invariant is not a fact a state exhibits — each is established by a block induction from the
+prelude's **empty** row list, so it has to be threaded rather than derived at the state a
+firing is handed.
+
+**Program-free, which is what the threading costs.** The two row invariants are stated in
+`Encoding/Complete.lean` over the constructors one program declares — that restriction is what
+the block induction carries — and `Egglog.UnionsFire` is given no program. Dropping the
+restriction is the repair, and it is not a strengthening the discharge cannot pay:
+`encStep_ctorsIn_of_row` reads `(f, es.length) ∈ P.ctors` off the **row itself**, through
+`FDatabase.IndexOk`, so the unrestricted form holds at every state an encoded run passes
+through. `FDatabase.ViewRowsRootedAll.toProgram` and
+`FDatabase.ViewRowsColumnClosedAll.toProgram` are the weakenings back, at whichever program a
+consumer of the restricted form names. -/
+
+namespace FDatabase
+
+/-- **One `@UF` row that moves**, read off `rows` rather than off `terms`. -/
+def UFRowEdge (d : FDatabase) (a b : Term) : Prop :=
+  (∃ pf, (⟨ufName, [a], [b, pf]⟩ : Row) ∈ d.rows) ∧ b ≠ a
+
+/-- Reachability along them. -/
+def UFRowReach (d : FDatabase) (a b : Term) : Prop :=
+  Relation.ReflTransGen d.UFRowEdge a b
+
+/-- A point with no outgoing row. -/
+def UFRowRoot (d : FDatabase) (a : Term) : Prop := ∀ b, ¬ d.UFRowEdge a b
+
+/-- **The fixpoint's roots, at every live view row**: no e-class column a live view row records
+has an outgoing `@UF` row. `FDatabase.ViewRowsRooted` is the same claim restricted to a
+program's own constructors and `no_ufRowEdge_of_rowsClosed` is it at one rebuild fixpoint. -/
+def ViewRowsRootedAll (d : FDatabase) : Prop :=
+  ∀ (f : FnName) (as : List Term) (e pf : Term),
+    (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows → d.UFRowRoot e
+
+/-- **The column rules' closure, at every live view row**: a live view row's key column may be
+moved along a live `@UF` row, and the row at the moved key is one the state already holds, at an
+e-class column the union-find reaches from the one the row started with.
+`FDatabase.ViewRowsColumnClosed` is the same claim restricted to a program's own
+constructors. -/
+def ViewRowsColumnClosedAll (d : FDatabase) : Prop :=
+  ∀ (f : FnName) (as : List Term) (e pf : Term),
+    (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows → ∀ (i : Nat) (ci x : Term),
+      as[i]? = some ci → d.UFRowEdge ci x →
+      ∃ e' pf', (⟨viewName f, as.set i x, [e', pf']⟩ : Row) ∈ d.rows ∧
+        d.toDatabase.UFReach e e'
+
+/-- **Roots are unique per `@UF` class**: `@UF` row roots reached from two `Database.UFReach`-
+related terms coincide. `FDatabase.ufRowRoot_of_ufReach` is the mechanism and
+`execM_ufRowRoot_of_ufReach` supplies it at an encoded run's end. -/
+def UFRootsUnique (d : FDatabase) : Prop :=
+  ∀ {a b : Term}, d.toDatabase.UFReach a b →
+    ∀ r s, d.UFRowReach a r → d.UFRowRoot r → d.UFRowReach b s → d.UFRowRoot s → r = s
+
+end FDatabase
+
 /-- **A landing site of `e`**: a point the union-find reaches from `e` that also absorbs it.
 
 Every clause of `Database.RebuildClosed` is stated over this conjunction, and neither half
@@ -4163,7 +4225,7 @@ this file: `patternHolds_values_of_mem_rows` is the only route from a row to an 
 hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_execM` and
 `execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
 answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
-restructuring of anything above. `unionsJoined_fire_satisfiable` is these nineteen hypotheses
+restructuring of anything above. `unionsJoined_fire_satisfiable` is these twenty-two hypotheses
 holding together — and the two refutations above are the *ten* they used to be, holding at a
 state whose encoded rule cannot run, which is what said the list was too short.
 
@@ -4214,6 +4276,7 @@ def UnionsFire : Prop :=
     (∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))) →
     (∀ r ∈ sd.rules, Actions.Builds r.actions td.sig) →
     (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
+    td'.ViewRowsRootedAll → td'.ViewRowsColumnClosedAll → td'.UFRootsUnique →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
 /-- **The derived clauses `UnionsFire` takes**, at every state one encoded run passes through.
@@ -4240,7 +4303,17 @@ apart because it is indexed rather than read off a state.
 Two about the source rule's **head** — scoped by its own query and the globals, and building at
 the target's signature — which is what `exists_execLocalActions_encodeRule_head` takes and what
 the clause about a rule's *query* does not say. Source-run invariants again:
-`headsScoped_of_prefixStep` and `headsBuild_of_programStep` with `Actions.Builds.mono_sig`. -/
+`headsScoped_of_prefixStep` and `headsBuild_of_programStep` with `Actions.Builds.mono_sig`.
+
+Three that are **inductive invariants of the encoded run** rather than facts a state exhibits:
+`FDatabase.ViewRowsRootedAll`, `FDatabase.ViewRowsColumnClosedAll` and
+`FDatabase.UFRootsUnique`, which is what the walk `Egglog.UnionsFire`'s step 4 runs
+(`viewRow_of_rowReachList_all`) rests on. Each is established by a block induction from the
+prelude's empty row list, so none is derivable at the state a firing is handed the way the row
+clauses are — threading them *is* the discharge, and `encStep_viewRowsRootedAll`,
+`encStep_viewRowsColumnClosedAll` and `encStep_ufRootsUnique` are it. Program-free, and
+`encStep_ctorsIn_of_row` is what pays for dropping the restriction the block induction
+carries. -/
 def RowMech (Q : Program) : Prop :=
   ∀ {sd : Database} {d : FDatabase} {pre suf : Program} {G : List (Var × Expr)},
     EncStep Q pre suf sd d G →
@@ -4257,7 +4330,8 @@ def RowMech (Q : Program) : Prop :=
       (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows →
         (d.sig.mergeOf (viewName f)).isSome = true) ∧
     (∀ r ∈ sd.rules, Actions.Scoped r.actions (Query.bind r.query (Env.dom sd.env))) ∧
-    (∀ r ∈ sd.rules, Actions.Builds r.actions d.sig)
+    (∀ r ∈ sd.rules, Actions.Builds r.actions d.sig) ∧
+    d.ViewRowsRootedAll ∧ d.ViewRowsColumnClosedAll ∧ d.UFRootsUnique
 
 /-- **Every `@Rule_i` the encoder's numbering applies is declared**, at every state one encoded
 run passes through. Threaded rather than proved here for `Egglog.RowMech`'s reason: the
@@ -4389,8 +4463,11 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech hchain).2.2.1
         (hmech hchain).2.2.2.2.2.2.2.2.1
         (hmech hchain).2.2.2.2.2.2.2.2.2.1
-        (hmech hchain).2.2.2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.1
         (hmech (.block hchain hstep hblock)).2.1
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | saturate R =>
@@ -4408,8 +4485,11 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         (hmech hchain).2.2.1
         (hmech hchain).2.2.2.2.2.2.2.2.1
         (hmech hchain).2.2.2.2.2.2.2.2.2.1
-        (hmech hchain).2.2.2.2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.2.2.2.2.1
         (hmech (.block hchain hstep hblock)).2.1
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.1
+        (hmech (.block hchain hstep hblock)).2.2.2.2.2.2.2.2.2.2.2.2.2
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
   | action a =>
@@ -8273,17 +8353,6 @@ namespace FDatabase
 /-- Whether every key column of `r` is at or below `a` in `Term.blt`. -/
 def rowKeyLe (a : Term) (r : Row) : Bool :=
   r.args.all fun k => Term.blt k a || k == a
-
-/-- **One `@UF` row that moves**, read off `rows` rather than off `terms`. -/
-def UFRowEdge (d : FDatabase) (a b : Term) : Prop :=
-  (∃ pf, (⟨ufName, [a], [b, pf]⟩ : Row) ∈ d.rows) ∧ b ≠ a
-
-/-- Reachability along them. -/
-def UFRowReach (d : FDatabase) (a b : Term) : Prop :=
-  Relation.ReflTransGen d.UFRowEdge a b
-
-/-- A point with no outgoing row. -/
-def UFRowRoot (d : FDatabase) (a : Term) : Prop := ∀ b, ¬ d.UFRowEdge a b
 
 /-- Every edge descends. -/
 def UFRowsDescend (d : FDatabase) : Prop :=

@@ -150,6 +150,22 @@ nightly-local: nightly-uv nightly-rustup
 # and `FDatabase.NoAtEnv` — all discharged from `EncStep`, with `cxfTgt_not_sigMono` and
 # `cxpSrc_not_queriesEncodable` naming the clause each witness now violates. The `sorry` is an
 # open obligation again rather than a false one.
+# **And the re-keying walk step 4 wants is threaded rather than owed.** `viewRow_of_rowReachList`
+# rests on three *inductive invariants* of the encoded run — `FDatabase.ViewRowsRootedAll`,
+# `FDatabase.ViewRowsColumnClosedAll` and `FDatabase.UFRootsUnique` — and an invariant is not a
+# fact a state exhibits: each is established by a block induction from the prelude's empty row
+# list. So they ride in `Egglog.RowMech` and `encStep_viewRowsRootedAll`,
+# `encStep_viewRowsColumnClosedAll`, `encStep_ufRootsUnique` discharge them at `EncStep`,
+# program-free because `encStep_ctorsIn_of_row` reads the restriction the induction carries off
+# the row itself; `viewRow_of_rowReachList_all` is the walk at that form. The question that had
+# to be settled first is whether the guard survives, since `unionsJoined_fire_satisfiable` is
+# witnessed at a target `execActions` **hand-built**: it does — all three hold at `rbTgtR`,
+# decidably, off `rbTgtR_no_uf_row`. Twenty-two conjuncts now, seventeen with content: the three
+# hold *degenerately* there, for the one arithmetic reason that makes `Database.UnionsJoined` and
+# `FDatabase.RowJoined.edge` vacuous too — `rbProgram` asserts nothing, so the state's union-find
+# is empty — and `ncTgt_viewRowsRootedAll` and `ncTgt_ufRootsUnique_instance` are the two of them
+# with content, at a state holding a live `@UF` row. Column closure has content at neither
+# (`ncTgt_no_view_key_B`) and is weakened for nothing.
 # The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
 # turns a source reading of a query into a substitution the *emitted* query matches at, over
 # `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its

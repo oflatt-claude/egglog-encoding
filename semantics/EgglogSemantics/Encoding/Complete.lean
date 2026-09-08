@@ -8079,17 +8079,32 @@ What the split says is that the provenance the walk carries is **not** the two f
 invariants* of the encoded run: `FDatabase.ViewRowsRooted`, `FDatabase.ViewRowsColumnClosed`
 and `FDatabase.UFRootsUnique`. None of the three is a fact a state exhibits, so none is
 derivable at a `td` the way the `RowMech` clauses are: each is established by a walk from the
-prelude's **empty** row list (`viewRowsColumnClosed_encodeCmds`, `viewRowsRooted_encodeCmds`)
-and is false at states a hand-built target reaches. Threading them alongside `Egglog.RowMech`
-is therefore what step 4's global-reading head needs, and it is a different job from weakening
-the two firing lemmas. -/
+prelude's **empty** row list (`viewRowsColumnClosed_encodeCmds`, `viewRowsRooted_encodeCmds`).
+So they are **threaded**, alongside `Egglog.RowMech` and over `Egglog.EncStep`, in the
+program-free form `FDatabase.ViewRowsRootedAll`/`FDatabase.ViewRowsColumnClosedAll` — which is
+what step 4's global-reading head needs, and a different job from weakening the two firing
+lemmas.
 
-/-- **Roots are unique per `@UF` class**: `@UF` row roots reached from two `Database.UFReach`-
-related terms coincide. `FDatabase.ufRowRoot_of_ufReach` is the mechanism and
-`execM_ufRowRoot_of_ufReach` supplies it at an encoded run's end. -/
-def FDatabase.UFRootsUnique (d : FDatabase) : Prop :=
-  ∀ {a b : Term}, d.toDatabase.UFReach a b →
-    ∀ r s, d.UFRowReach a r → d.UFRowRoot r → d.UFRowReach b s → d.UFRowRoot s → r = s
+**And the guard survives the threading, which was the question.** "False at states a hand-built
+target reaches" is too general a claim to act on, and at `unionsJoined_fire_satisfiable`'s own
+`rbTgtR` it is simply wrong: all three hold there, decidably. `rbTgtR_no_uf_row` is the reason
+— `rbProgram` has no `union`, so `rbTgtR` holds no `@UF` row and (`rbState2_no_out_uf`) no
+`@UF` entry, hence every term is a row root, no key column has an edge to move along, and
+entry-level reachability is equality. So the three are clauses of `Egglog.UnionsFire` rather
+than a false hypothesis added to it, at the cost of holding degenerately at the witness: the
+non-vacuity they do have is `ncTgt_viewRowsRootedAll` and `ncTgt_ufRootsUnique_instance`, at a
+state with a live `@UF` row. -/
+
+/-- **The restricted forms are weakenings**, at whichever program the consumer names: the
+unrestricted form of each is `Egglog.RowMech`-shaped and `encStep_ctorsIn_of_row` is what pays
+for dropping the restriction. -/
+theorem FDatabase.ViewRowsRootedAll.toProgram {d : FDatabase} (h : d.ViewRowsRootedAll)
+    (P : Program) : d.ViewRowsRooted P := fun f _ _ as e pf hrow => h f as e pf hrow
+
+@[inherit_doc FDatabase.ViewRowsRootedAll.toProgram]
+theorem FDatabase.ViewRowsColumnClosedAll.toProgram {d : FDatabase}
+    (h : d.ViewRowsColumnClosedAll) (P : Program) : d.ViewRowsColumnClosed P :=
+  fun f _ _ as e pf hrow => h f as e pf hrow
 
 /-- **One column step, with the e-class column unmoved.** The closure alone leaves the new
 row's e-class column only `Database.UFReach`-reachable from the old one; both are e-class
@@ -8166,6 +8181,29 @@ theorem viewRow_of_rowReachList {P : Program} {d : FDatabase} (hcc : d.ViewRowsC
   obtain ⟨pf', hrow'⟩ :=
     columnRow_walkList hcc hrt hid hfk [] as bs hlen hj ⟨pf, by simpa using hrow⟩
   exact ⟨pf', by simpa using hrow'⟩
+
+/-- **A one-declaration program declares that constructor**, which is all the restricted form
+of the two row invariants ever asks of a program: the walk below runs at whatever key width the
+row it is handed has, so a program naming exactly that function at exactly that width is a
+legitimate instance and no census is involved. -/
+theorem mem_ctors_declProgram {f : FnName} {k : Nat} :
+    (f, k) ∈ Program.ctors [Cmd.decl f { arity := k, outArity := 1, merge := none }] := by
+  simp [Program.ctors, Cmd.ctors]
+
+/-- **The walk, program-free.** `viewRow_of_rowReachList` at the unrestricted invariants, which
+is the form `Egglog.UnionsFire` can be handed: the program the restricted form wants is
+`mem_ctors_declProgram`'s one-declaration one, at the row's own function and key width. This is
+what step 4's global-reading head spends, at the three invariants and no provenance. -/
+theorem viewRow_of_rowReachList_all {d : FDatabase} (hcc : d.ViewRowsColumnClosedAll)
+    (hrt : d.ViewRowsRootedAll) (hid : d.UFRootsUnique)
+    {f : FnName} {as bs : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, as, [e, pf]⟩ : Row) ∈ d.rows) (hlen : bs.length = as.length)
+    (hj : ∀ (j : Nat) (hj : j < as.length) (hj' : j < bs.length),
+      d.UFRowReach (as[j]) (bs[j])) :
+    ∃ pf', (⟨viewName f, bs, [e, pf']⟩ : Row) ∈ d.rows :=
+  viewRow_of_rowReachList
+    (P := [Cmd.decl f { arity := as.length, outArity := 1, merge := none }])
+    (hcc.toProgram _) (hrt.toProgram _) hid mem_ctors_declProgram hrow hlen hj
 
 /-- The three invariants at an encoded run's end, bundled the way the wrappers below spend
 them. -/
@@ -8596,6 +8634,91 @@ theorem ncTgt_rowJoined_edge :
   ⟨ncTgt_out_uf, ncTgt_viewRepr_B, ncTgt_viewRepr_A, by simp [ncA, ncB],
    ncTgt_rowRepr_B, ncTgt_rowRepr_A⟩
 
+/-! ##### The three threaded invariants, where two of them have content
+
+`unionsJoined_fire_satisfiable` carries all three at `rbTgtR` and `rbTgtR_no_uf_row` is why
+none of them works there: `rbProgram` has no `union`, so the state holds no `@UF` row and no
+`@UF` entry, and rootedness, column closure and root uniqueness are all claims about a
+union-find that is empty. `ncTgt` is the state where it is not — one live `@UF` row
+`(B) ↦ (A)`, written by a source `union` and read past by a rebuild — so this is the same
+bracket `ncTgt_unionsJoined` and `ncTgt_rowJoined_edge` put around the two clauses that are
+vacuous at the witness for the very same arithmetic reason. What `ncTgt` cannot supply is the
+*round*: its encoded rule's enumeration is the one the kernel passes 10 GB on.
+
+**Column closure has content at neither, and the shape it wants is a third state again**: a
+live view row still keyed on a term the union-find moved, which is the *column* rule's premise
+rather than the e-class rule's. At `ncTgt` the union's endpoint `(B)` keys no view row
+(`ncTgt_no_view_key_B`) — `@FView` was built at the leader `(A)` and `@BView` is nullary — so
+the premise is unsatisfiable there too. The gap is recorded, not weakened: the clause is a
+theorem of every encoded run (`encStep_viewRowsColumnClosedAll`) and false at no state known. -/
+
+set_option maxRecDepth 100000 in
+/-- **The live `@UF` row `ncTgt` holds**, the `union`'s own write. -/
+theorem ncTgt_row_uf : (⟨ufName, [ncB], [ncA, ncFiat]⟩ : Row) ∈ ncTgt.rows := by decide
+
+set_option maxRecDepth 100000 in
+/-- **And it is the only one**, which is what makes the row-level union-find here decidable. -/
+theorem ncTgt_uf_rows_eq : ncTgt.rows.all
+    (fun r => !(r.fn == ufName) || (r.args == [ncB] && r.out == [ncA, ncFiat])) = true := by
+  decide
+
+@[inherit_doc ncTgt_uf_rows_eq]
+theorem ncTgt_ufRowEdge_eq {a b : Term} (h : ncTgt.UFRowEdge a b) : a = ncB ∧ b = ncA := by
+  obtain ⟨⟨pf, hpf⟩, -⟩ := h
+  have hb := List.all_eq_true.mp ncTgt_uf_rows_eq _ hpf
+  simp at hb
+  exact ⟨hb.1, hb.2.1⟩
+
+set_option maxRecDepth 100000 in
+/-- **`(B)` is the e-class column of no live row**: the row its own build wrote was overwritten
+by the e-class rebuild rule's re-keying, and only the displaced *entry* term survives. -/
+theorem ncTgt_no_row_out_B : ncTgt.rows.all (fun r => !(r.out[0]? == some ncB)) = true := by
+  decide
+
+/-- **Rootedness where it has content.** The state holds a real `@UF` row, so `(B)` is not a
+root and the claim is a constraint rather than a triviality; it holds because the rebuild moved
+every live view row's e-class column onto the leader. This is the instance `rbTgtR` cannot
+give: there the union-find is empty and every term is a root for want of any edge. -/
+theorem ncTgt_viewRowsRootedAll : ncTgt.ViewRowsRootedAll := by
+  intro f as e pf hrow b hedge
+  obtain ⟨rfl, -⟩ := ncTgt_ufRowEdge_eq hedge
+  have h := List.all_eq_true.mp ncTgt_no_row_out_B _ hrow
+  simp at h
+
+set_option maxRecDepth 100000 in
+/-- **No view row is keyed on the moved endpoint**, which is why column closure is vacuous here
+too: the only live row `(B)` keys is the `@UF` row itself, and `@BTerm((B))` — neither is a
+view row, which two output columns is what tells them apart. -/
+theorem ncTgt_no_view_key_B : ncTgt.rows.all
+    (fun r => !(r.out.length == 2) || r.fn == ufName || !(r.args.contains ncB)) = true := by
+  decide
+
+@[inherit_doc ncTgt_no_view_key_B]
+theorem ncTgt_viewRowsColumnClosedAll : ncTgt.ViewRowsColumnClosedAll := by
+  intro f as e pf hrow i ci x hci hedge
+  obtain ⟨rfl, -⟩ := ncTgt_ufRowEdge_eq hedge
+  have h := List.all_eq_true.mp ncTgt_no_view_key_B _ hrow
+  simp [viewName_ne_ufName] at h
+  obtain ⟨hi, heq⟩ := List.getElem?_eq_some_iff.mp hci
+  exact absurd (heq ▸ List.getElem_mem hi) h
+
+/-- The leader is a root, since the only edge points at it. -/
+theorem ncTgt_ufRowRoot_A : ncTgt.UFRowRoot ncA := by
+  intro b hedge
+  obtain ⟨h, -⟩ := ncTgt_ufRowEdge_eq hedge
+  simp [ncA, ncB] at h
+
+/-- **Root uniqueness where its premise has content**: the `Database.UFReach` it is asked at is
+a *non-reflexive* one — `(B)` reaches `(A)` along the entry the source `union` wrote — and both
+ends walk to the same row root, `(A)`. At `rbTgtR` the premise admits nothing but reflexivity
+(`rbTgtR_ufReach_eq`), so this is where the clause is exhibited doing work. -/
+theorem ncTgt_ufRootsUnique_instance :
+    ncTgt.toDatabase.UFReach ncB ncA ∧ ncB ≠ ncA ∧
+      ncTgt.UFRowReach ncB ncA ∧ ncTgt.UFRowRoot ncA ∧ ncTgt.UFRowReach ncA ncA :=
+  ⟨Database.UFStep.toReach ⟨ncFiat, ncTgt_out_uf⟩, by simp [ncA, ncB],
+   Relation.ReflTransGen.single ⟨⟨ncFiat, ncTgt_row_uf⟩, by simp [ncA, ncB]⟩,
+   ncTgt_ufRowRoot_A, .refl⟩
+
 /-- **And the term the source's firing built reads through it**, at the state where
 `Database.ReadsSelf` fails: `(F (B))` reads to `(F (A))`, over `(B)`'s row and then the
 `@FView` row keyed at `(A)`. -/
@@ -8607,9 +8730,10 @@ theorem ncTgt_isCtor_F : ncTgt.sig.IsCtor "F" := by decide
 /-- **`Egglog.UnionsFire`'s head-builds clause, at a rule the *source's* round fires.**
 `rbRule_builds` is it at the rule `unionsJoined_fire_satisfiable`'s witness registers, whose
 head the encoded round runs; `ncRule` is the one whose source firing the encoded rule cannot
-perform, and its head builds `(F x)` over its query's own variable. Read at the **target's** signature, which is where the clause reads
-it: the name the head applies is the skolem `encodePrelude` declared, not the source's own
-declaration. `ncRule_headScoped` is its companion, the same head's scope. -/
+perform, and its head builds `(F x)` over its query's own variable. Read at the **target's**
+signature, which is where the clause reads it: the name the head applies is the skolem
+`encodePrelude` declared, not the source's own declaration. `ncRule_headScoped` is its
+companion, the same head's scope. -/
 theorem ncRule_builds : Actions.Builds ncRule.actions ncTgt.sig := by
   refine ⟨fun f hf => ?_, trivial⟩
   obtain rfl : f = "F" := by
@@ -8987,11 +9111,57 @@ data is the pre-state's and `td'` is `td`. -/
 theorem rbTgtR_run :
     rbTgtR.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbTgtR := rfl
 
+/-- **No live `@UF` row at the witness**: `rbTgtR`'s seven rows are the two builds' table
+triples and nothing else, because `rbProgram` has no `union`. This is the arithmetic reason the
+three invariants below hold degenerately here — the same one `rbTgtR_joinedAt` and
+`FDatabase.RowJoined.edge` are vacuous for. -/
+theorem rbTgtR_no_uf_row : rbTgtR.rows.all (fun r => r.fn != ufName) = true := by decide
+
+@[inherit_doc rbTgtR_no_uf_row]
+theorem rbTgtR_no_ufRowEdge (a b : Term) : ¬ rbTgtR.UFRowEdge a b := by
+  intro hedge
+  obtain ⟨⟨q, hq⟩, -⟩ := hedge
+  exact absurd (List.all_eq_true.mp rbTgtR_no_uf_row _ hq) (by simp)
+
+/-- Row reachability is therefore equality, and every term is a root. -/
+theorem rbTgtR_ufRowReach_eq {a b : Term} (h : rbTgtR.UFRowReach a b) : b = a := by
+  induction h with
+  | refl => rfl
+  | tail _ hstep _ => exact absurd hstep (rbTgtR_no_ufRowEdge _ _)
+
+/-- **Rootedness at the witness.** The claim is about the two live `@fView` rows the state
+really holds — `@AView[] ↦ ((A), @Fiat)` and `@WView((A)) ↦ ((W (A)), @Fiat)` — and holds
+because no `@UF` row leaves either e-class column, there being no `@UF` row at all. -/
+theorem rbTgtR_viewRowsRootedAll : rbTgtR.ViewRowsRootedAll :=
+  fun _ _ _ _ _ b hedge => rbTgtR_no_ufRowEdge _ b hedge
+
+/-- **Column closure at the witness**, whose premise asks for an `@UF` row out of a live key
+column and so is unsatisfiable here. `rbTgtR_no_uf_row` is the reason, and it is the arithmetic
+one: a column-closure instance needs a source `union` whose endpoint a live view row is still
+keyed on, which is a rebuild the kernel cannot be asked to run at this state's cost. -/
+theorem rbTgtR_viewRowsColumnClosedAll : rbTgtR.ViewRowsColumnClosedAll :=
+  fun _ _ _ _ _ _ _ _ _ hedge => absurd hedge (rbTgtR_no_ufRowEdge _ _)
+
+/-- No `@UF` **entry** either (`rbState2_no_out_uf`), so entry-level reachability is equality
+and the two roots the clause identifies are the same term twice. -/
+theorem rbTgtR_ufReach_eq {a b : Term} (h : rbTgtR.toDatabase.UFReach a b) : b = a := by
+  induction h with
+  | refl => rfl
+  | tail _ hstep _ =>
+      obtain ⟨pf, hout⟩ := hstep
+      exact absurd (Database.Out.mono rbTgtR_contained hout) (rbState2_no_out_uf _ _ pf)
+
+@[inherit_doc rbTgtR_ufReach_eq]
+theorem rbTgtR_ufRootsUnique : rbTgtR.UFRootsUnique := by
+  intro a b hreach r s hr _ hs _
+  obtain rfl := rbTgtR_ufReach_eq hreach
+  rw [rbTgtR_ufRowReach_eq hr, rbTgtR_ufRowReach_eq hs]
+
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Nineteen conjuncts: the eighteen `Egglog.UnionsFire` takes, in the order it takes them, and
-`rbSrcR_globalsInline` beside them.
+Twenty-two conjuncts: the twenty-one `Egglog.UnionsFire` takes, in the order it takes them,
+and `rbSrcR_globalsInline` beside them.
 
 **The round has content.** The source holds `rbRule` and the target its encoding, and both
 fire: `rbTgtR_mem_matchQuery` is the substitution the emitted entry atom admits,
@@ -9022,6 +9192,19 @@ the two output columns a view row has, one of them at positive arity — so
 through live rows, the second at positive arity over the first's, `rbTgtR_rowJoined`'s `fn` is
 pinned by the two view rows the state really holds, and `rbTgtR_viewRepr_of_rowRepr` is the way
 back at every row it holds.
+
+**And the three threaded invariants hold here, which is what lets them be clauses at all.**
+`FDatabase.ViewRowsRootedAll`, `FDatabase.ViewRowsColumnClosedAll` and
+`FDatabase.UFRootsUnique` are inductive invariants of the encoded run rather than facts a state
+exhibits, so adding them to a residue witnessed at a *hand-built* target risks making the
+witness false rather than merely thin. It does not: `rbTgtR_viewRowsRootedAll`,
+`rbTgtR_viewRowsColumnClosedAll` and `rbTgtR_ufRootsUnique` are all three at `rbTgtR`, decided
+off `rbTgtR_no_uf_row` — the state holds no `@UF` row and, by `rbState2_no_out_uf`, no `@UF`
+entry. They therefore hold **degenerately**, for the same arithmetic reason the two clauses
+below are vacuous, and the content they do have is elsewhere: `ncTgt_viewRowsRootedAll` is
+rootedness at a state with a live `@UF` row and `ncTgt_ufRootsUnique_instance` is root
+uniqueness at a non-reflexive reachability. Column closure has content at neither
+(`ncTgt_no_view_key_B`), and no clause is weakened to give it any.
 
 **Two clauses stay vacuous, and the obstruction is arithmetic rather than logical.**
 `Database.UnionsJoined` and `FDatabase.RowJoined.edge` both need a source `union`, and
@@ -9065,6 +9248,7 @@ theorem unionsJoined_fire_satisfiable :
         Actions.Scoped r.actions (Query.bind r.query (Env.dom rbSrcR.env))) ∧
       (∀ r ∈ rbSrcR.rules, Actions.Builds r.actions rbTgtR.sig) ∧
       (∀ t r : Term, RowRepr rbTgtR t r → ViewRepr rbTgtR.toDatabase t r) ∧
+      rbTgtR.ViewRowsRootedAll ∧ rbTgtR.ViewRowsColumnClosedAll ∧ rbTgtR.UFRootsUnique ∧
       rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrcR_cmdStep_run, rbTgtR_run, rbTgtR_env, rbSrcR_ctorState, rbTgtR_sig_mono,
     rbTgtR_isCtor_fiatName, rbSrcR_hrules, rbSrcR_queriesEncodable,
@@ -9072,7 +9256,9 @@ theorem unionsJoined_fire_satisfiable :
     rbTgtR_exists_rowRepr, rbTgtR_rowJoined,
     (fun _ _ _ _ hrow => rbTgtR_mergeOf_of_row hrow),
     rbSrcR_headsScoped, rbSrcR_headsBuild,
-    fun _ _ h => rbTgtR_viewRepr_of_rowRepr h, rbSrcR_globalsInline⟩
+    (fun _ _ h => rbTgtR_viewRepr_of_rowRepr h),
+    rbTgtR_viewRowsRootedAll, rbTgtR_viewRowsColumnClosedAll, rbTgtR_ufRootsUnique,
+    rbSrcR_globalsInline⟩
 
 /-! ### The forward mirror of `Encoding/Match.lean`
 
@@ -10207,7 +10393,7 @@ def UnionsFireWeak : Prop :=
 refutations below bracket the repair from above and refute nothing it says. -/
 theorem unionsFire_of_weak (hw : UnionsFireWeak) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj _
-    _ _ hback
+    _ _ hback _ _ _
   refine hw hc hstep hrun henv hstate ?_ hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, -⟩ := hrules r hr
@@ -10671,7 +10857,7 @@ def UnionsFireAnyG : Prop :=
 refutation below refutes nothing the repair says. -/
 theorem unionsFire_of_anyG (hw : UnionsFireAnyG) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate hsig hfiat hrules hq hcv hno hreads hjoin
-    hrow hrj _ _ _ hback
+    hrow hrj _ _ _ hback _ _ _
   refine hw hc hstep hrun henv hstate hsig hfiat ?_ hq hcv hno hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, hct, -⟩ := hrules r hr
@@ -11516,11 +11702,33 @@ landed too, and what remains of step 4 is one item, and then the assembly.
   are a different thing from a bundle of facts: `FDatabase.ViewRowsRooted`,
   `FDatabase.ViewRowsColumnClosed` and `FDatabase.UFRootsUnique`. None is a fact a state
   exhibits — each is established by a walk from the prelude's **empty** row list
-  (`viewRowsRooted_encodeCmds`, `viewRowsColumnClosed_encodeCmds`) and each is false at states a
-  hand-built target reaches — so none is derivable at a `td` the way the `Egglog.RowMech`
-  clauses are. Threading the three alongside `Egglog.RowMech`, over `Egglog.EncStep`, and
-  extending `unionsJoined_fire_satisfiable` for them, is what has not been done; the weakening
-  above does not do it and could not.
+  (`viewRowsRooted_encodeCmds`, `viewRowsColumnClosed_encodeCmds`) — so none is derivable at a
+  `td` the way the `Egglog.RowMech` clauses are; the weakening above does not do it and could
+  not. **They are threaded now**, in the program-free form the residue can be handed:
+  `FDatabase.ViewRowsRootedAll` and `FDatabase.ViewRowsColumnClosedAll` drop the restriction to
+  a program's own constructors, which `encStep_ctorsIn_of_row` reads back off the row itself, so
+  `Egglog.RowMech` carries all three and `encStep_viewRowsRootedAll`,
+  `encStep_viewRowsColumnClosedAll` and `encStep_ufRootsUnique` discharge them at
+  `Egglog.EncStep`. `viewRow_of_rowReachList_all` is the walk at that form.
+
+  **The guard survived it**, which was the risk: the three are true at `rbTgtR`, the hand-built
+  target `unionsJoined_fire_satisfiable` is witnessed at, so the extra conjuncts make the
+  witness thinner and not false. `rbTgtR_no_uf_row` is the whole reason and it is the same
+  arithmetic that makes conjuncts 12 and 14's `edge` vacuous — `rbProgram` asserts nothing, so
+  the state's union-find is empty. `ncTgt_viewRowsRootedAll` and
+  `ncTgt_ufRootsUnique_instance` are the two of them with content, at a state that holds a live
+  `@UF` row; column closure has content at neither, and the state that would give it any is one
+  where a **column** rule fired rather than the e-class rule (`ncTgt_no_view_key_B`).
+
+  **What the item still owes is the link into the walk's premise.**
+  `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain per key position out of
+  the tuple the head's own row sits at, and what a head that reads a global hands over is a
+  *source term* per position. So the missing fact is a fourth one, and it is about a row and not
+  about a walk: a live view row's **value** column is `FDatabase.UFRowReach`-reachable from the
+  term that names it, which is what turns `Egglog.RowRepr td' u x` at that column into the edge
+  the walk consumes. `FDatabase.EntryRowsUF` is the same shape one level up — at an `@UF`
+  *entry* rather than at a naming term, which is what `encReached_viewRow_at_root` spends — and
+  the naming-term reading is not an instance of it. Left open rather than guessed at.
 
 Beside those: the `.eq` case's remaining environment clause above; the outer assembly, which
 decomposes `CmdStep sd (.run R) sd'` into `RunRules`' own `sUnion` and runs steps 1-4 once per
@@ -13207,6 +13415,35 @@ theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain)
       (encodeSig_isCtor_transName P) h.reached
       (Database.UFStep.toReach ⟨pf, hout⟩) ρx ρy hρx hρxr hρy hρyr
 
+/-- **Rootedness, program-free, at a state the run passes through.** The block induction
+carries the restricted form (`encReached_viewRowsRooted`) and `encStep_ctorsIn_of_row` reads the
+restriction off the row itself, so nothing is lost by dropping it. -/
+theorem encStep_viewRowsRootedAll {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+    {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
+    d.ViewRowsRootedAll :=
+  fun f as e pf hrow =>
+    encReached_viewRowsRooted hdom (encodeSig_isCtor_symName P) (encodeSig_isCtor_transName P)
+      h.reached f as.length (encStep_ctorsIn_of_row hdom hnodup h hrow) as e pf hrow
+
+/-- **The column rules' closure, program-free, at a state the run passes through.** -/
+theorem encStep_viewRowsColumnClosedAll {P : Program} (hdom : P.EncodeDomain)
+    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+    {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
+    d.ViewRowsColumnClosedAll :=
+  fun f as e pf hrow =>
+    encReached_viewRowsColumnClosed hdom (encodeSig_isCtor_transName P)
+      (encodeSig_isCtor_symName P) (encodeSig_isCtor_fiatName P)
+      (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached f as.length
+      (encStep_ctorsIn_of_row hdom hnodup h hrow) as e pf hrow
+
+/-- **Roots are unique per class, at a state the run passes through.** -/
+theorem encStep_ufRootsUnique {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
+    d.UFRootsUnique :=
+  fun hreach => encReached_ufRowRoot_of_ufReach hdom (encodeSig_isCtor_symName P)
+    (encodeSig_isCtor_transName P) h.reached hreach
+
 /-- **`Egglog.RowMech`, discharged.** The clauses `Egglog.UnionsFire` takes besides its
 provenance-free hypotheses, at every state one encoded run passes through.
 
@@ -13254,7 +13491,10 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
           obtain ⟨k, hk⟩ := sigIn_of_prefixStep hdom h.mem h.src f hf
           rw [(encReached_encBase hdom h.reached).sig]
           exact encodeSig_isCtor_of_mem_ctors (fk := (f, k)) hdom hk)
-        (headsBuild_of_programStep hdom h.program h.src r hr)⟩
+        (headsBuild_of_programStep hdom h.program h.src r hr),
+    encStep_viewRowsRootedAll hdom hnodup h,
+    encStep_viewRowsColumnClosedAll hdom hnodup h,
+    encStep_ufRootsUnique hdom h⟩
 
 /-- **`Egglog.RuleNameMech`, discharged.** The prelude declares one `@Rule_i` per source rule,
 at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`), and the
