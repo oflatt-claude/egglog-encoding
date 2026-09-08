@@ -2827,7 +2827,7 @@ def corrSeedPollMs : Nat := 20
 
 /-- The most terms one case sweeps. Beyond it the sweep runs on a prefix of the universe and
 the report says so, since a silent truncation reads as a clean case. No case in the corpus
-or among the probes comes near it; the widest is 145 terms. -/
+or among the probes comes near it; the widest is 170 terms, and 90 among the probes. -/
 def corrCap : Nat := 512
 
 /-- How many disagreements of each kind a case prints before it says how many it dropped. -/
@@ -3422,14 +3422,17 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
 
 /-! #### What the sweep reports
 
-`difftest correspond 64` over the 83 in-domain cases and the seventeen probes. Nothing is
-capped — the widest pool is 170 terms — no `@UF` walk hits its bound, no `@UF` cycle
+`difftest correspond 64` over the 87 in-domain cases, and the same command naming the twenty
+probes, which it sweeps only when they are named. Nothing is capped — the widest pool is 170
+terms, and 90 among the probes — no `@UF` walk hits its bound, no `@UF` cycle
 exists, no target equation is asserted, and the leader reading, the joinability reading and
 `sameClassF` agree on every pair.
 
-**No INVENTED and no LOST anywhere.** All 83 cases agree: every equality the source derives,
-the encoding reproduces, and it reproduces no other. Over the corpus that is 931 pairs both
-sides say yes to, 223 of them between *distinct* terms; the counts below are the corpus's too.
+**No INVENTED and no LOST anywhere.** All 87 cases agree: every equality the source derives,
+the encoding reproduces, and it reproduces no other. Over the corpus that is 953 pairs both
+sides say yes to, 228 of them between *distinct* terms; the counts below are the corpus's too.
+Sixteen of the twenty probes agree on the same terms; the other four are `execAction` refusing
+the program, so there is no run to sweep.
 
 **The `sat-*` family is what the column last caught.** A source `Cmd.saturate` used to get the
 block `[.saturate R, .saturate @rebuild]`, so the target rebuilt once, after `R` had already
@@ -3452,7 +3455,7 @@ column is 0 again.
 
 **And it is the stated relation that is being measured.** `link-diff` is 0 on every case:
 the sweep's verdict and `Encoding/Correspond.lean`'s `sameClassF` — which `sameClassF_iff`
-proves equal to `Encode.lean`'s `SameClass` — never disagree, so "83 agreeing" is a
+proves equal to `Encode.lean`'s `SameClass` — never disagree, so "87 agreeing" is a
 measurement of `Cong src a b ↔ SameClass tgt a b` and not of a near neighbour of it. That
 theorem is `encode_corresponds`, and this is the evidence for it; what the sweep cannot
 supply is the *hypothesis* it is stated under, for which see `encode_corresponds_witness`.
@@ -3467,8 +3470,8 @@ While the term relation carried a `unitE` output column,
 — which builds `(Add 0 1)` — was green by collision rather than by correspondence. The
 `lit` and `lit-zero` probes are kept as the regression test for that.
 
-**The union-find does no work.** 294 of the 309 `@UF` entries the corpus writes move, 56 of
-the 83 cases write at least one, and `CorrReport.viaUF` is 0 in every case: no pair is joined
+**The union-find does no work.** 300 of the 315 `@UF` entries the corpus writes move, 58 of
+the 87 cases write at least one, and `CorrReport.viaUF` is 0 in every case: no pair is joined
 by a `@UF` step. The `no-uf` reading — every edge dropped — reproduces the verdict exactly,
 case for case, because the rebuild has already re-keyed each view's e-class column onto the
 common leader. The `rows` reading reproduces it too, so this is not an artefact of `Out`
@@ -3488,10 +3491,10 @@ rule re-`set`s the view at each parent in turn. `D`'s `ViewRepr` set already con
 leader, so there is nothing for a walk to find.
 
 **Where the work went.** `difftest correspond-norebuild 64` runs the same encodings with
-every `Cmd.saturate rebuildRuleset` dropped. There the views are never re-keyed: 19 of the
-83 cases DIFFER, 130 equalities come back LOST, and 85 pairs are joined by a `@UF` step —
-`chain` among them, where the walk from `D` to `A` is three edges because path compression
-never ran either. That is the measurement that says the union-find is redundant *because of
+every `Cmd.saturate rebuildRuleset` dropped. There the views are never re-keyed: 20 of the
+87 cases DIFFER, 133 equalities come back LOST, and 88 pairs are joined by a `@UF` step. The
+`chain` probe, named to the same command, adds six of its own, and the walk from `D` to `A` is
+three edges there because path compression never ran either. That is the measurement that says the union-find is redundant *because of
 the rebuild*, and not because `SameClass` never needed it.
 
 **One shape the union-find would still be needed for, and it is not a program.** A literal
@@ -3501,15 +3504,16 @@ literal operand outright, so `Cong src` never relates a literal to anything but 
 `@UF` key is ever a literal; the `lit-union` and `lit-mix` probes are that refusal, run.
 
 **The inductive reading is load-bearing.** The `flat` reading — a view entry keyed by an
-application's children as written — loses 106 equalities across 7 cases, `both-2` and
-`rand-43` among them, and finds only 143 of the 223 off-diagonal ones.
+application's children as written — loses 109 equalities across 8 cases, `both-2` and
+`rand-43` among them, and finds only 146 of the 228 off-diagonal ones.
 A rule head builds
 over the ids its query bound, so a source term a head produced keys no entry under its own
 children.
 
-**What a green LOST column does not establish.** Most of the 83 in-domain cases derive no
-equality between distinct terms at all, so their whole left-to-right test is the e-node
-diagonal, and a couple of cases carry half of the 223. The claim is tested at depth on very few
+**What a green LOST column does not establish.** 31 of the 87 in-domain cases derive no
+equality between distinct terms at all and another 33 derive exactly one, so for 70 of the 87
+the whole left-to-right test is the e-node diagonal and at most two pairs off it; three cases
+carry 107 of the 228. The claim is tested at depth on very few
 programs — which is how the `glob-*` defect survived a corpus of 70 cases with a green column,
 and the reason a hazard named in a docstring is worth a case rather than an argument.
 
@@ -3524,8 +3528,8 @@ and not about the state a `ProgramStep` picks. -/
 /-! #### What the harness pins
 
 The census. `encode`'s fragment is the constructor one, so the in-domain cases are exactly
-the two constructor families and none of the `:merge` ones — which is 86 of 182, and the
-reason a sweep here is a statement about 46% of the suite. -/
+the two constructor families and none of the `:merge` ones — which is 87 of 183, and the
+reason a sweep here is a statement about 48% of the suite. -/
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => (c.2.declared).encodeDomainB).map Prod.fst
   = curated.map Prod.fst ++ randomCases.map Prod.fst
@@ -3538,7 +3542,7 @@ not a generated-name clash or a shadowed primitive.
 
 That is also what says the four newest clauses — `EncodeDomain.queryEncodable`,
 `noLitUnion`, `headsDeclared` and `headsScoped` — **cost the corpus nothing**: the count was 70
-with them as it was without, and the 83 pinned above is what would move if a generated program
+with them as it was without, and the 87 pinned above is what would move if a generated program
 ever wrote a bare-leaf pattern, built a literal under a rule that unions, applied a name it
 does not declare, or read a head variable nothing binds. What each clause excludes is a
 program the domain used to admit and the encoder gets wrong: `Encoding/Match.lean`'s

@@ -4512,7 +4512,7 @@ rule that fires once per class member — and `vuProgram` is the `union`-head on
 unions a **variable** with an application and so takes `noLitUnion`'s second arm. Both are
 head-scoped, and `ncProgram`'s source run is compiled. The corpus measurement is
 `DiffTest.lean`'s census: the clause moved nothing when it was added, 70 of 166 in domain
-then and 83 of 179 now. -/
+then and 87 of 183 now. -/
 
 /-- `ncRule`'s head reads only `x`, which its query binds. -/
 theorem ncProgram_headsScoped : ncProgram.HeadsScoped := by decide
@@ -10485,7 +10485,7 @@ body (`:1978-1980`), so `(run-schedule (saturate R))` is instrumented to
 as well as to `rebuildRuleset`; a round of `R` then re-keys the views the previous round moved,
 and a fixpoint of the union of the two rulesets is a fixpoint of each. `sat-hit` now agrees —
 one source `Hit`, one target `@HitView` — as do the four other `sat-*` cases, and
-`difftest correspond 64` reports 0 LOST over 83 in-domain cases. **That writer is fixed, and the
+`difftest correspond 64` reports 0 LOST over 87 in-domain cases. **That writer is fixed, and the
 obligation is false anyway** — for two reasons that have nothing to do with `Cmd.saturate` and
 that the `Cmd.run` half fails at too: `unionsFire_false` and `unionsFire_false_encodeSig` above.
 
@@ -12617,10 +12617,10 @@ theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDataba
   cong_sameClass ⟨encode_assert hdom hsrc htgt, encode_trans hdom hsrc htgt,
     encode_congr hdom hsrc htgt⟩ h
 
-/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 83
-in-domain cases and the seventeen probes, through `sameClassF` and `closureF`, and reports
-83 agreeing, 0 LOST, 0 INVENTED and `link-diff` 0 — the last is what says the swept relation is
-this one.
+/-- **The correspondence.** `difftest correspond 64` runs exactly this claim over the 87
+in-domain cases — and over the twenty probes when they are named — through `sameClassF` and
+`closureF`, and reports 87 agreeing, 0 LOST, 0 INVENTED and `link-diff` 0 — the last is what
+says the swept relation is this one.
 
 **The eight `glob-*` cases are the ones that measure the globals.** A `let`-bound global read
 from a rule's **query**, and a `union` that makes the bound term the loser: the encoding used to

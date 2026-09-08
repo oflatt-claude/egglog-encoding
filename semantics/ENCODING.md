@@ -10,7 +10,7 @@ over `Encoding/Correspond.lean`'s decision procedure `sameClassF`, the proof tha
 (`sameClassF_iff`, both directions, no `sorry`), and a compiled witness that its hypotheses
 are jointly satisfiable at a state where both sides of the `iff` are non-trivial
 (`encode_corresponds_witness`). `difftest correspond 64` sweeps exactly that relation over
-the corpus and reports 83 of 83 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
+the corpus and reports 87 of 87 agreeing, 0 LOST, 0 INVENTED, 0 `link-diff`. **One half of the
 `iff` is proved outright** — `encode_corresponds_complete`, no `sorryAx` — and the theorem
 carries `sorry` only through the *forward* half, in one named property of the state the run
 reached; it is one *mechanism* rather than a clause, because the clauses are derived from one
@@ -85,7 +85,7 @@ exactly this: `to_core_actions`, the lowering for actions, resolves a `GenericEx
 when `ctx.binding` holds it or it is a global, and raises `TypeError::Unbound` otherwise
 (`egglog/src/core.rs:663-670`) — a different error from `UnboundFunction`. The census is
 unmoved when it was added: still 70 of 166 in domain then, and `DiffTest.lean` pins the
-count, now 83 of 179.
+count, now 87 of 183.
 **Two clauses this factorisation used to run through are
 refuted** and kept as records — `Database.ReadsSelf` (every source term is an id of itself) and
 `Database.ViewsProduct` (a view entry at every id tuple the children form), both false at

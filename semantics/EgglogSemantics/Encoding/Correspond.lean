@@ -5023,7 +5023,7 @@ no `union`, so no `@UF` entry — and `ncTgt_rowJoined_edge` is that clause at a
 content. The case with content is a round that fires a head `union` — or, for
 the `reads` half of the conclusion, one that fires a head **build** — and that is where it is
 open. `difftest correspond`'s **LOST** column — `Cong src a b` without
-`SameClass tgt a b`, swept with the diagonal included over the 83 in-domain cases, rules and runs
+`SameClass tgt a b`, swept with the diagonal included over the 87 in-domain cases, rules and runs
 among them — is 0 on all but the `glob-*` family, which is the `reads` clause measured: every
 source term has *some* id in the target, except where a rule the encoding could not fire never
 put one there (`unionsJoined_fire`'s `hglob` paragraph). Asking for that id to be the term
@@ -5119,7 +5119,7 @@ theorem encodeCmd_run_tail (G : List (Var × Expr)) (R : RulesetName) (n i : Nat
 /-- **The fixpoint at a state a program reaches.** Degenerately, as
 `unionsJoined_fire_satisfiable` is: `rbState2` holds no rule, so the round it is a fixpoint of
 fires nothing. The non-degenerate reading is measured rather than compiled — every one of
-`difftest correspond`'s 83 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
+`difftest correspond`'s 87 in-domain cases ends at a `Cmd.saturate rebuildRuleset`. -/
 theorem rbState2_roundClosed : rbState2.RoundClosed rebuildRuleset :=
   roundClosed_of_execProgramM (p := [Cmd.run rbRuleset]) rbState2_execProgramM_run
 
@@ -5473,11 +5473,11 @@ what the command induction wants.
 **Restoring `IndexCurrent` outright is not a side condition worth having.** What it needs is
 that the source assert no equation between distinct terms (`Database.Diag`), decidable on the
 source text as "no `union` action and no `union` in any rule head" — a `union` between distinct
-built terms is exactly what puts two e-classes at one view key. The in-domain census is 83 of
-179 and the `union` cases are the ones the correspondence exists for: `Encoding/Match.lean`'s
+built terms is exactly what puts two e-classes at one view key. The in-domain census is 87 of
+183 and the `union` cases are the ones the correspondence exists for: `Encoding/Match.lean`'s
 `uProgram` and `witnessProgram` would both leave the domain, and with them the only witnesses
 `execM_unionsJoined` and `Database.ViewLeader.ufClosed` are non-vacuous at. The clause is
-therefore not added, and the census stays 83. -/
+therefore not added, and the census stays 87. -/
 
 /-! #### The two clauses the fixpoint was for, refuted — and what replaced them
 
