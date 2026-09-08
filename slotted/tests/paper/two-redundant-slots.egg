@@ -17,7 +17,7 @@
 (constructor Null () U)
 
 
-(rewrite (Mul ?x ?y) (Swp ?y ?x) :name comm)
+(rewrite (Mul x y) (Swp y x) :name comm)
 
 (let m (Mul $7 $8))
 (let z (Null))

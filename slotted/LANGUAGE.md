@@ -111,6 +111,50 @@ not appear on the left at all:
 (fail (check (= s2 (Null))))     ; two deep, so the condition fails and the rule does not fire
 ```
 
+Several `:when` patterns joined by **shared variables** are a multipattern. A variable
+occurring in two patterns has to match the same thing in both, which is the join:
+
+```slotted
+(constructor Num (i64) U)
+(constructor Mem0 () U)
+(constructor Store (U U U) U)
+(constructor LoadFrom (U U) U)
+
+; the value a store wrote, read back at the same address: `m` and `p` join the patterns
+(rewrite (LoadFrom m p) v :when (= m (Store m0 p v)) :name load-after-store)
+
+(let m1 (Store (Mem0) (Num 7) (Num 42)))
+(let got (LoadFrom m1 (Num 7)))
+(let other (LoadFrom m1 (Num 8)))
+(run 4)
+
+(check (= got (Num 42)))
+(fail (check (= other (Num 42))))    ; a different address, so `p` does not join
+```
+
+A shared **slot literal** is not a join. Each pattern looks its own node up and gets its
+own name for that node's bound slot, so the same `$x` in two binder columns constrains
+nothing:
+
+```slotted
+(constructor Num (i64) U)
+(constructor Lam (U U) U :binder 0)
+(constructor Pair (U U) U)
+(constructor Fired () U)
+
+; `$x` twice relates the two lambdas not at all
+(rewrite (Pair f g) (Fired) :when (= f (Lam $x c)) :when (= g (Lam $x d)) :name inert)
+
+(let unrelated (Pair (Lam $0 (Num 1)) (Lam $0 (Num 2))))
+(run 4)
+
+(check (= unrelated (Fired)))        ; fires, though the two lambdas are unrelated
+```
+
+To relate two binders, share the *body* instead — a variable under two binder columns
+joins up to renaming. `slotted/tests/multipattern.egg` works through both, along with
+joins on several variables at once and a four-pattern chain.
+
 `:fresh $s` names a slot the right-hand side binds that the pattern never mentions, so
 the compiler mints one. `:name` names the rule.
 

@@ -24,6 +24,9 @@ THE LANGUAGE
 
     (rewrite (Sum e1 $k $v (Sing $k $v)) e1)    a rule, in terms
     (rewrite lhs rhs :when (not-free $x f))     ... with a slot side condition
+    (rewrite lhs rhs :when (= v (Sing a b)))    ... with another PATTERN: `v` matches
+                                                this too, and variables shared between
+                                                the patterns are the join
 
     (run 3)                                     three user-rule steps, with the
                                                 machinery saturated around each
