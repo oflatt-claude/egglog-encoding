@@ -10931,6 +10931,198 @@ theorem exists_step_of_mem_evalActions : ∀ {as : List Action} {db d : Database
           · exact Or.inl (hdom₁ v hv')
         · rw [henv, henv₁, List.append_assoc]
 
+/-! ##### And where in the *encoded* block it ran
+
+The mirror of `exists_step_of_mem_evalActions`, and the mirror of
+`exists_execActions_encodeActions` run in the **reading** direction:
+`holdsBuild_of_execActions` consumes the block **one** build emits,
+`execActions d (encodeBuild e m).2.1 = some d'`, and what a firing hands over is
+`execLocalActions td (encodeRule i r n).1.actions τ`, the whole head under `(@Rule_i p…)`.
+`encodeActions_cons_actions` and `execActions_append` split the second into the first — once
+per source action, then once per build inside that action — and the environment clause is the
+one the source side owes too: only a source `let` moves it, so every *build* block of an action
+runs at that action's own environment and the extension is a prefix whose domain is the `let`s
+before it. -/
+
+/-- **Only a source `let` moves the environment an encoded action's block leaves**, and it
+moves it by its own binder: `encodeAction` emits `set`s and the source `let`'s own
+`letBind` (`encodeAction_letBind_actions`) and nothing else. -/
+theorem execActions_env_encodeAction {pfe : Expr} :
+    ∀ (a : Action) (n : Nat) {d d' : FDatabase},
+      execActions d (encodeAction pfe a n).1 = some d' →
+        ∃ δ : Env, d'.env = δ ++ d.env ∧ ∀ v ∈ Env.dom δ, v ∈ a.letVars := by
+  rintro (e | ⟨v, e⟩ | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n d d' h
+  · refine ⟨[], ?_, by simp⟩
+    rw [List.nil_append,
+      execActions_env_of_isSet (encodeBuild_isSet e n) (encodeAction_expr_actions .. ▸ h)]
+  · rw [encodeAction_letBind_actions] at h
+    obtain ⟨d₁, h₁, h₂⟩ := execActions_append h
+    have henv₁ : d₁.env = d.env := execActions_env_of_isSet (encodeBuild_isSet e n) h₁
+    rw [execActions] at h₂
+    obtain ⟨d₂, hstep, htail⟩ := Option.bind_eq_some_iff.mp h₂
+    rw [execActions, Option.some.injEq] at htail
+    subst htail
+    rw [execAction] at hstep
+    obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hstep
+    exact ⟨[(v, t)], by rw [show ((v, t) :: d₁.env) = [(v, t)] ++ d₁.env from rfl, henv₁],
+      by simp [Action.letVars]⟩
+  · refine ⟨[], ?_, by simp⟩
+    rw [List.nil_append]
+    refine execActions_env_of_isSet (fun b hb => ?_) h
+    rw [encodeAction_union_actions] at hb
+    rcases List.mem_append.mp hb with hb' | hb'
+    · rcases List.mem_append.mp hb' with hb'' | hb''
+      · exact encodeBuild_isSet e₁ n b hb''
+      · exact encodeBuild_isSet e₂ _ b hb''
+    · obtain rfl : b = Action.set ufName [maxE (encodeBuild e₁ n).1
+          (encodeBuild e₂ (encodeBuild e₁ n).2.2).1]
+          [minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1, pfe] := by
+        simpa using hb'
+      trivial
+  · refine ⟨[], ?_, by simp⟩
+    rw [List.nil_append]
+    refine execActions_env_of_isSet (fun b hb => ?_) h
+    rw [encodeAction_set_actions] at hb
+    rcases List.mem_append.mp hb with hb' | hb'
+    · rcases List.mem_append.mp hb' with hb'' | hb''
+      · exact encodeBuildArgs_isSet args n b hb''
+      · exact encodeBuildArgs_isSet out _ b hb''
+    · obtain rfl : b = Action.set (viewName f) (encodeBuildArgs args n).1
+          ((encodeBuildArgs out (encodeBuildArgs args n).2.2).1 ++ [pfe]) := by simpa using hb'
+      trivial
+
+/-- **The head block, split per source action.** `exists_step_of_mem_evalActions`' target-side
+counterpart: each source action's own encoded block ran, at the head's initial state extended
+by the `let`s before it, and what it wrote is in the whole block's result. -/
+theorem exists_execActions_encodeAction_of_encodeActions {pfe : Expr} :
+    ∀ (as : List Action) (n : Nat) {d d' : FDatabase},
+      execActions d (encodeActions pfe as n).1 = some d' →
+      ∀ a ∈ as, ∃ (δ : Env) (m : Nat) (dk dk' : FDatabase),
+        (∀ v ∈ Env.dom δ, v ∈ Actions.letVars as) ∧ dk.sig = d.sig ∧
+          dk.env = δ ++ d.env ∧ execActions dk (encodeAction pfe a m).1 = some dk' ∧
+          ∀ t ∈ dk'.terms, t ∈ d'.terms := by
+  intro as
+  induction as with
+  | nil => intro n d d' _ a ha; exact absurd ha (by simp)
+  | cons b bs ih =>
+      intro n d d' h a ha
+      rw [encodeActions_cons_actions] at h
+      obtain ⟨d₁, h₁, h₂⟩ := execActions_append h
+      rcases List.mem_cons.mp ha with rfl | ha'
+      · exact ⟨[], n, d, d₁, by simp, rfl, by rw [List.nil_append], h₁,
+          (FDatabase.execActions_lists h₂).1⟩
+      · obtain ⟨δ, m, dk, dk', hdom, hsig, henv, hstep, hmono⟩ := ih _ h₂ a ha'
+        obtain ⟨δ₁, henv₁, hdom₁⟩ := execActions_env_encodeAction b n h₁
+        refine ⟨δ ++ δ₁, m, dk, dk', ?_, hsig.trans (FDatabase.execActions_sig h₁), ?_,
+          hstep, hmono⟩
+        · intro v hv
+          rw [Env.dom_append, List.mem_append] at hv
+          rw [Actions.letVars, List.flatMap_cons, List.mem_append]
+          rcases hv with hv' | hv'
+          · exact Or.inr (hdom v hv')
+          · exact Or.inl (hdom₁ v hv')
+        · rw [henv, henv₁, List.append_assoc]
+
+/-- The expressions an action builds, in the order `encodeAction` emits their blocks. -/
+def Action.buildExprs : Action → List Expr
+  | .expr e => [e]
+  | .letBind _ e => [e]
+  | .union e₁ e₂ => [e₁, e₂]
+  | .set _ args out => args ++ out
+
+/-- **One build inside a list of them.** `encodeBuildArgs` is a fold of `encodeBuild`, so each
+element's block ran at the *list's* own environment: the blocks before it are all `set`s. -/
+theorem exists_execActions_encodeBuild_of_encodeBuildArgs :
+    ∀ (es : List Expr) (n : Nat) {d d' : FDatabase},
+      execActions d (encodeBuildArgs es n).2.1 = some d' →
+      ∀ e ∈ es, ∃ (m : Nat) (dk dk' : FDatabase), dk.sig = d.sig ∧ dk.env = d.env ∧
+        execActions dk (encodeBuild e m).2.1 = some dk' ∧ ∀ t ∈ dk'.terms, t ∈ d'.terms := by
+  intro es
+  induction es with
+  | nil => intro n d d' _ e he; exact absurd he (by simp)
+  | cons g gs ih =>
+      intro n d d' h e he
+      rw [encodeBuildArgs_cons_actions] at h
+      obtain ⟨d₁, h₁, h₂⟩ := execActions_append h
+      have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig h₁
+      have henv₁ : d₁.env = d.env := execActions_env_of_isSet (encodeBuild_isSet g n) h₁
+      rcases List.mem_cons.mp he with rfl | he'
+      · exact ⟨n, d, d₁, rfl, rfl, h₁, (FDatabase.execActions_lists h₂).1⟩
+      · obtain ⟨m, dk, dk', hsig, henv, hstep, hmono⟩ := ih _ h₂ e he'
+        exact ⟨m, dk, dk', hsig.trans hsig₁, henv.trans henv₁, hstep, hmono⟩
+
+/-- **And one build inside one action's block.** Four cases, and in every one the build's own
+block precedes the action's `letBind` — a `let` is the last action `encodeAction` emits — so
+the build ran at the action's own environment. -/
+theorem exists_execActions_encodeBuild_of_encodeAction {pfe : Expr} :
+    ∀ (a : Action) (n : Nat) {d d' : FDatabase},
+      execActions d (encodeAction pfe a n).1 = some d' →
+      ∀ e ∈ a.buildExprs, ∃ (m : Nat) (dk dk' : FDatabase), dk.sig = d.sig ∧ dk.env = d.env ∧
+        execActions dk (encodeBuild e m).2.1 = some dk' ∧ ∀ t ∈ dk'.terms, t ∈ d'.terms := by
+  rintro (e | ⟨v, e⟩ | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n d d' h e' he'
+  · obtain rfl : e' = e := by simpa [Action.buildExprs] using he'
+    exact ⟨n, d, d', rfl, rfl, encodeAction_expr_actions .. ▸ h, fun t ht => ht⟩
+  · obtain rfl : e' = e := by simpa [Action.buildExprs] using he'
+    rw [encodeAction_letBind_actions] at h
+    obtain ⟨d₁, h₁, h₂⟩ := execActions_append h
+    exact ⟨n, d, d₁, rfl, rfl, h₁, (FDatabase.execActions_lists h₂).1⟩
+  · rw [encodeAction_union_actions] at h
+    obtain ⟨d₂, h₁₂, h₃⟩ := execActions_append h
+    obtain ⟨d₁, h₁, h₂⟩ := execActions_append h₁₂
+    have hmono₂ : ∀ t ∈ d₂.terms, t ∈ d'.terms := (FDatabase.execActions_lists h₃).1
+    have he'' : e' = e₁ ∨ e' = e₂ := by simpa [Action.buildExprs] using he'
+    rcases he'' with rfl | rfl
+    · exact ⟨n, d, d₁, rfl, rfl, h₁,
+        fun t ht => hmono₂ t ((FDatabase.execActions_lists h₂).1 t ht)⟩
+    · exact ⟨_, d₁, d₂, FDatabase.execActions_sig h₁,
+        execActions_env_of_isSet (encodeBuild_isSet e₁ n) h₁, h₂, hmono₂⟩
+  · rw [encodeAction_set_actions] at h
+    obtain ⟨d₂, h₁₂, h₃⟩ := execActions_append h
+    obtain ⟨d₁, h₁, h₂⟩ := execActions_append h₁₂
+    have hmono₂ : ∀ t ∈ d₂.terms, t ∈ d'.terms := (FDatabase.execActions_lists h₃).1
+    rcases List.mem_append.mp (show e' ∈ args ++ out from he') with hin | hin
+    · obtain ⟨m, dk, dk', hsig, henv, hstep, hmono⟩ :=
+        exists_execActions_encodeBuild_of_encodeBuildArgs args n h₁ e' hin
+      exact ⟨m, dk, dk', hsig, henv, hstep,
+        fun t ht => hmono₂ t ((FDatabase.execActions_lists h₂).1 t (hmono t ht))⟩
+    · obtain ⟨m, dk, dk', hsig, henv, hstep, hmono⟩ :=
+        exists_execActions_encodeBuild_of_encodeBuildArgs out _ h₂ e' hin
+      exact ⟨m, dk, dk', hsig.trans (FDatabase.execActions_sig h₁),
+        henv.trans (execActions_env_of_isSet (encodeBuildArgs_isSet args n) h₁), hstep,
+        fun t ht => hmono₂ t (hmono t ht)⟩
+
+/-- **The head-block decomposition, landed.** From the firing a target round performs —
+`execLocalActions td (encodeRule i r n).1.actions τ = some dF` — down to
+`holdsBuild_of_execActions`' conclusion at every application of every expression the source
+head builds, with the environment each build ran at named: the firing's own `τ ++ td.env`,
+extended by a prefix whose domain is the head's `let`s.
+
+This is the last of step 4's two structural items and the one that was simply unwritten. It is
+about one block and the state it ran from — no `encode` beyond `encodeRule`, no `execM` — so
+`Egglog.viewRepr_of_holdsBuild_fired_run_block` is what carries its `Database.HoldsBuild` to
+the end of the round. -/
+theorem holdsBuild_of_execLocalActions_encodeRule {i n : Nat} {r : Rule} {τ : Env}
+    {td dF : FDatabase} (hrun : execLocalActions td (encodeRule i r n).1.actions τ = some dF)
+    {a : Action} (ha : a ∈ r.actions) {e : Expr} (he : e ∈ a.buildExprs)
+    {f : FnName} {args : List Expr} (hap : (f, args) ∈ e.apps) :
+    ∃ (δ : Env) (is : List Term) (v : Term),
+      (∀ w ∈ Env.dom δ, w ∈ Actions.letVars r.actions) ∧
+      Expr.evalList td.sig args (δ ++ (τ ++ td.env)) = some is ∧
+      Expr.eval td.sig (.app f args) (δ ++ (τ ++ td.env)) = some v ∧
+      dF.toDatabase.HoldsBuild f is v := by
+  rw [execLocalActions, encodeRule_actions] at hrun
+  obtain ⟨dB, hB, hdF⟩ := Option.map_eq_some_iff.mp hrun
+  subst hdF
+  obtain ⟨δ, m, dk, dk', hdom, hsig, henv, hstep, hmono⟩ :=
+    exists_execActions_encodeAction_of_encodeActions r.actions _ hB a ha
+  obtain ⟨m', dj, dj', hsig', henv', hstep', hmono'⟩ :=
+    exists_execActions_encodeBuild_of_encodeAction a m hstep e he
+  obtain ⟨is, v, hks, hv, hb⟩ := holdsBuild_of_execActions e m' hstep' f args hap
+  rw [hsig'.trans hsig, henv'.trans henv] at hks hv
+  exact ⟨δ, is, v, hdom, hks, hv,
+    hb.monoF (d₂ := { dB with env := td.env, rules := td.rules })
+      (fun t ht => hmono t (hmono' t ht))⟩
+
 /-! ##### `hfired`, discharged
 
 The three parts of `hfired` composed: the block evaluates (`evalLocalActions_isSome_of_builds`,
