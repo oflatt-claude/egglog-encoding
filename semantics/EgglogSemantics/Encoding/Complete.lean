@@ -10500,6 +10500,144 @@ theorem Pattern.Grounded.eqLit {d : FDatabase} : ∀ {p : Pattern}, p.Grounded �
   | .expr _, _, _, hp => by simp at hp
   | .values _ _ _, _, _, hp => by simp at hp
 
+/-! ##### And the instance that survives it, at the clause that pays for it
+
+`Pattern.Grounded.eqLit` empties `hgl` on the program's **text**, and `Cmd.QueryEncodable` is
+where the program pays for it: `Pattern.Grounded` at an `.eq` asks one side not to be a bare
+literal, so no rule the source *reads* has the shape `hgl` names. The one shape left is the one
+`Rule.resolveGlobals` **creates** — a query side that was a variable, at a global the
+environment binds to a literal — and there the target does hold the literal, because
+`encodeAction` emits `.letBind v (.lit l)` for it and `execAction`'s `letBind` case is
+`FDatabase.addTerm`.
+
+So the clause is about `sd.env`, and `Database.LitGlobalsHeld` is it: every literal a global is
+bound to is a term the target holds. Not about `sd.terms`, which is **refuted**
+(`litBuild_not_litsHeld`), and the two are not the same claim — a bare `.expr (.lit l)` build
+puts the literal in `sd.terms` and emits no action at all, while a `let` on the same literal
+emits the binder and inserts it.
+
+**The reduction is proved here and the clause is not threaded yet.** `eqLit_of_litGlobalsHeld`
+is `hgl` discharged from it at a stored rule, over `Pattern.Grounded` at the rule's own text,
+and `litGlobalsHeld_witness` is the clause with content at a program in the domain — so what is
+left of this item is the run-wide induction that carries it, in the shape
+`encStep_viewRowsRootedAll` and its siblings have, and not the choice of clause. -/
+
+/-- **Every literal a global is bound to is a term the target holds.** The `.eq` case's
+remaining obligation, at the environment rather than at the source's terms. -/
+def Database.LitGlobalsHeld (sd : Database) (td : FDatabase) : Prop :=
+  ∀ (v : Var) (l : Lit), Env.lookup v sd.env = some (Term.lit l) → Term.lit l ∈ td.terms
+
+/-- **A resolved expression is a bare literal only through a literal-valued global**, away from
+a text that was that literal already: `Expr.resolveGlobals` is the identity on a literal, maps
+an application to an application, and replaces a bound variable by `Term.toExpr` of its
+value. -/
+theorem exists_lit_global_of_resolveGlobals {σ : Env} {e : Expr} {l : Lit}
+    (h : Expr.resolveGlobals σ e = Expr.lit l) (hne : ∀ l' : Lit, e ≠ Expr.lit l') :
+    ∃ v, Env.lookup v σ = some (Term.lit l) := by
+  cases e with
+  | lit l' => exact absurd rfl (hne l')
+  | var v =>
+      rw [Expr.resolveGlobals_var] at h
+      match hlk : Env.lookup v σ with
+      | none => rw [hlk] at h; exact absurd h (by simp)
+      | some t =>
+          rw [hlk] at h
+          refine ⟨v, ?_⟩
+          cases t with
+          | lit l' =>
+              obtain rfl : l' = l := by simpa using h
+              exact hlk
+          | app f ts => exact absurd h (by simp)
+  | app f args => exact absurd h (by simp)
+
+/-- **So `hgl` is discharged by the clause, at a rule stored `Rule.resolveGlobals`'d.**
+`Pattern.Grounded` at the rule's own text is what makes one side of the `.eq` a variable, and
+the clause answers for the global that side names. -/
+theorem eqLit_of_litGlobalsHeld {sd : Database} {td : FDatabase} {r : Rule}
+    (hlit : sd.LitGlobalsHeld td) (hg : ∀ p ∈ r.query, p.Grounded)
+    {p : Pattern} (hp : p ∈ (r.resolveGlobals sd.env).query) (l : Lit)
+    (heq : p = Pattern.eq (Expr.lit l) (Expr.lit l)) : Term.lit l ∈ td.terms := by
+  rw [Rule.resolveGlobals_query, Query.resolveGlobals, List.mem_map] at hp
+  obtain ⟨p₀, hp₀, rfl⟩ := hp
+  have hgp := hg p₀ hp₀
+  cases p₀ with
+  | expr e => rw [Pattern.resolveGlobals] at heq; exact absurd heq (by simp)
+  | values vs f as => rw [Pattern.resolveGlobals] at heq; exact absurd heq (by simp)
+  | eq e₁ e₂ =>
+      rw [Pattern.resolveGlobals, Pattern.eq.injEq] at heq
+      rcases hgp with hne | hne
+      · obtain ⟨v, hv⟩ := exists_lit_global_of_resolveGlobals heq.1 hne
+        exact hlit v l hv
+      · obtain ⟨v, hv⟩ := exists_lit_global_of_resolveGlobals heq.2 hne
+        exact hlit v l hv
+
+/-! ##### The clause with content
+
+One top-level `let` on a literal, and nothing else. `litBuildProgram`'s sibling: the same
+literal, reached by the binder instead of by a bare build, which is the whole of the difference
+`Database.LitGlobalsHeld` turns on. -/
+
+/-- `(let $g 5)`, and its constructor-free program. -/
+def glProgram : Program := [.action (.letBind "g" (.lit (.int 5)))]
+
+/-- **And it is in the domain**, `litBuildProgram_encodeDomain`'s clauses at the binder. -/
+theorem glProgram_encodeDomain : glProgram.EncodeDomain where
+  ctorsOnly := by
+    intro c hc
+    simp only [glProgram, List.mem_singleton] at hc
+    subst hc
+    trivial
+  setLegal := by decide
+  noPrim := by simp [glProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors]
+  noAt := by decide +kernel
+  queryEncodable := by simp [glProgram, Cmd.QueryEncodable]
+  noLitUnion := Or.inl (by decide)
+  headsDeclared := by decide
+  aritiesAgree := by decide
+  headsScoped := by decide
+
+/-- The state the one binder reaches: the literal, and the global bound to it. -/
+def glSrc : Database :=
+  { Database.empty.addTerm (.lit (.int 5)) with env := [("g", Term.lit (.int 5))] }
+
+theorem glProgram_programStep : ProgramStep Database.empty glProgram glSrc :=
+  .cons ⟨glSrc, rfl, .refl⟩ .nil
+
+/-- The state `encode glProgram` runs to, computed. -/
+def glTgt : FDatabase := (execM (encode glProgram)).getD FDatabase.empty
+
+theorem glTgt_execM : execM (encode glProgram) = some glTgt := by
+  obtain ⟨d, hd⟩ : ∃ d, execM (encode glProgram) = some d :=
+    Option.isSome_iff_exists.mp (by decide)
+  rw [hd, glTgt, hd]
+  rfl
+
+/-- **The clause holds with content here**, and this is what separates it from the `sd.terms`
+form: the source's environment binds `$g` to `5`, the encoded block emits `.letBind "g" (.lit
+5)` — `encodeBuild` returns a leaf unchanged and adds no action — and `execAction`'s `letBind`
+case is `FDatabase.addTerm`, so the target holds `5`. `litBuild_not_litsHeld` is the same
+literal at the same domain with a bare build instead, where the target holds nothing. -/
+theorem litGlobalsHeld_witness :
+    Env.lookup "g" glSrc.env = some (Term.lit (.int 5)) ∧
+      Term.lit (.int 5) ∈ glTgt.terms ∧ glSrc.LitGlobalsHeld glTgt := by
+  have hmem : Term.lit (.int 5) ∈ glTgt.terms := by decide
+  refine ⟨rfl, hmem, fun v l hv => ?_⟩
+  obtain rfl : l = Lit.int 5 := by
+    have h : Env.lookup v [("g", Term.lit (Lit.int 5))] = some (Term.lit l) := hv
+    simp only [Env.lookup_cons, Env.lookup_nil] at h
+    split at h
+    · exact (by simpa using h : Lit.int 5 = l).symm
+    · exact absurd h (by simp)
+  exact hmem
+
+/-- **And the pattern the resolution creates is the one `hgl` names**, at this very
+environment: a query side that was a variable comes out a bare literal on both sides, which is
+the instance `Pattern.Grounded` cannot empty and `eqLit_of_litGlobalsHeld` answers. -/
+theorem glSrc_resolveGlobals_eqLit :
+    Pattern.resolveGlobals glSrc.env (Pattern.eq (Expr.var "g") (Expr.var "g"))
+      = Pattern.eq (Expr.lit (.int 5)) (Expr.lit (.int 5)) ∧
+    (Pattern.eq (Expr.var "g") (Expr.var "g")).Grounded :=
+  ⟨rfl, Or.inl (by simp)⟩
 /-- **A source match is a target reading**, given the reading of the environment it evaluated
 in. Gaps (1), (2) and (3) of the residue below at one pattern: the instance need not be a
 source term (`exists_rowRepr_congOn`), a variable gets one id (`FDatabase.RowJoined.fn`,
@@ -11869,8 +12007,19 @@ and `hgl` where **both** sides are a bare literal of the same value. `Pattern.Gr
 is `hgl` discharged on the program's text, so the surviving instance is the one
 `Rule.resolveGlobals` creates out of a *literal-valued global* — and there the target does hold
 the literal, because `encodeAction` emits `.letBind v (.lit l)` and `FDatabase.addTerm` inserts
-it. So the residue is a clause about `sd.env`, not about `sd.terms`; it is left open rather
-than guessed at a second time.
+it. So the residue is a clause about `sd.env`, not about `sd.terms`.
+
+**And it is now the clause and not a guess.** `Database.LitGlobalsHeld` is it — every literal a
+global is bound to is a term the target holds — and `eqLit_of_litGlobalsHeld` is the reduction:
+`Pattern.Grounded` at the *rule's own text* is what `Cmd.QueryEncodable` pays for and what makes
+one side of the surviving `.eq` a variable, `exists_lit_global_of_resolveGlobals` names the
+global that side resolves through, and the clause answers for it. `litGlobalsHeld_witness` is
+the clause with content at a program in the domain — `glProgram` is one `(let $g 5)`, its
+source binds `$g` to `5` and `execM (encode glProgram)` **holds** `5`, where
+`litBuildProgram`'s bare `.expr (.lit 5)` holds nothing — and
+`glSrc_resolveGlobals_eqLit` is the pattern the resolution creates at that very environment.
+What is left of this item is the run-wide induction that carries the clause, in the shape
+`encStep_viewRowsRootedAll` and its siblings have, and not the choice of clause.
 
 **Step 3 has scaffolding now, and it spends the signature clauses.** The encoded rule has to
 **fire**: `execLocalActions td (encodeRule i (r.substGlobals G) n).1.actions τ = some _` at the

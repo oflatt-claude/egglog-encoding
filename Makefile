@@ -177,6 +177,14 @@ nightly-local: nightly-uv nightly-rustup
 # (`ccTgt_not_viewRowsNamedUF`) — re-keying leaves the value column alone, so the row is named
 # by a term the target does not hold (`ccTgt_not_mem_FA`) and no `@UF` row can leave it. The
 # walk is unaffected; its premise is still what is missing.
+# **And the `.eq` case's residue is now the clause and not a guess.**
+# `Database.LitGlobalsHeld` — every literal a global is bound to is a term the target holds —
+# is what `hgl` needs where `Pattern.Grounded.eqLit` cannot empty it, and
+# `eqLit_of_litGlobalsHeld` is the reduction through `Pattern.Grounded` at the rule's own text.
+# `litGlobalsHeld_witness` gives it content: `glProgram` is one `(let $g 5)`, in the domain, and
+# `execM (encode glProgram)` **holds** `5` where `litBuildProgram`'s bare `.expr (.lit 5)` holds
+# nothing — which is why the clause is about `sd.env` and not about `sd.terms`. Threading it is
+# what is left.
 # The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
 # turns a source reading of a query into a substitution the *emitted* query matches at, over
 # `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its
