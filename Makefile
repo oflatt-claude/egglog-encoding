@@ -128,7 +128,7 @@ nightly-local: nightly-uv nightly-rustup
 # its consumers spend instead: `Database.ViewsCover.shared` at one *shared* id tuple and
 # `Database.UnionsJoined` at the endpoints' *ids*, both holding at the counterexample's own state
 # (`ncTgt_shared_FB`, `ncTgt_unionsJoined`), as does `Database.UnionsRead` and the correspondence
-# itself, which is why `correspond` still agrees on all 70 in-domain cases. And the coverage
+# itself, which is why `correspond` still agrees on all 87 in-domain cases. And the coverage
 # clause is now *derived*: the tuple it answers with is always the union-find leader's, so
 # `Database.ViewsCover.of_viewLeaderRows` gets it from a row-transport clause plus totality, with
 # `ncTgt_viewsCover` running that reduction at the very state the product form fails at. What is
@@ -136,31 +136,37 @@ nightly-local: nightly-uv nightly-rustup
 # read-back does not reach, and it carries both of the induction's data clauses. It is the
 # **forward** half's. The reading it fires on is now supplied rather than owed: `RowRepr` is the
 # reading through live rows, `encStep_exists_rowRepr` turns the induction's `ViewRepr` into one
-# at the pointwise `@UF` row root, and `encStep_rowMech` discharges the two row clauses
-# `UnionsFire` takes — at the state the *next* encoded block runs at (`EncReached`, `EncStep`),
-# which is where `execM_rebuildClosed` could not be asked. And the residue's own clause list was
-# **too short**, twice: `unionsFire_false` and `unionsFire_false_encodeSig` refute the statement
-# that stood there (kept as `UnionsFireWeak`, with `unionsFire_of_weak` recording that it is the
-# stronger claim), because nothing in it made the encoded head evaluate and nothing constrained
-# the rules the source holds. Five clauses answer them — the target's signature declaring every
-# source constructor and `@Fiat`, the `@Rule_i` of the index `hrules` names (`RuleNameMech`),
-# the source rules' queries being ones the flattening handles (`Database.QueriesIn`, a
-# source-run invariant), `FDatabase.RowColumnsValued` and `FDatabase.NoAtEnv` — all discharged
-# from `EncStep`, with `cxfTgt_not_sigMono` and `cxpSrc_not_queriesEncodable` naming the clause
-# each witness now violates. The `sorry` is an open obligation again rather than a false one. The forward half of
-# `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery` turns a source reading
-# of a query into a substitution the *emitted* query matches at, over `encodeQuery`'s flattening
-# (`RowRead`, an id per subterm position through live rows) and its fresh-variable supply
-# (`FreshEnv` plus `freshVar_inj` and the `@` prefix), with `ncTgt_mirror` running it at the
-# instance. What is still open is the *reading* it consumes: `UnionsFire`'s clauses choose an id
-# per source term rather than a function of it, say nothing that makes two **congruent** source
-# terms read to one id — which is what the emitted `.eq` atom compares, since an encoded target
-# asserts nothing — and cover a source term rather than a pattern instance. All three hold at
-# the state an encoded block runs at and none is among the hypotheses, so what is wanted next is
-# a further derived clause in `RowMech`'s shape. The run-wide index argument it used to sit
-# beside is closed:
-# `execM_rebuildClosed` is `Database.ViewJoined` per mechanism (the e-class rule, the column
-# rules, the `@UF` edge a collision writes), proved outright — its four `Signature.IsCtor`
+# at the pointwise `@UF` row root, and `encStep_rowMech` discharges the four row clauses
+# `UnionsFire` takes — `RowRepr` in both directions, `FDatabase.RowJoined`, and the `:merge` a
+# live view row's name carries (`encStep_mergeOf_of_row`) — at the state the *next* encoded
+# block runs at (`EncReached`, `EncStep`), which is where `execM_rebuildClosed` could not be
+# asked. And the residue's own clause list was **too short**, twice: `unionsFire_false` and
+# `unionsFire_false_encodeSig` refute the statement that stood there (kept as `UnionsFireWeak`,
+# with `unionsFire_of_weak` recording that it is the stronger claim), because nothing in it made
+# the encoded head evaluate and nothing constrained the rules the source holds. Five clauses
+# answer them — the target's signature declaring every source constructor and `@Fiat`, the
+# `@Rule_i` of the index `hrules` names (`RuleNameMech`), the source rules' queries being ones the
+# flattening handles (`Database.QueriesIn`, a source-run invariant), `FDatabase.RowColumnsValued`
+# and `FDatabase.NoAtEnv` — all discharged from `EncStep`, with `cxfTgt_not_sigMono` and
+# `cxpSrc_not_queriesEncodable` naming the clause each witness now violates. The `sorry` is an
+# open obligation again rather than a false one.
+# The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
+# turns a source reading of a query into a substitution the *emitted* query matches at, over
+# `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its
+# fresh-variable supply (`FreshEnv` plus `freshVar_inj` and the `@` prefix), with
+# `ncTgt_mirror` running it at the instance. The reading it consumes is supplied: the three facts
+# it wanted — one id per source term, one id per congruence class, and a reading total on a
+# pattern instance and not only on a source term — are `FDatabase.RowJoined` beside the `RowRepr`
+# clauses, all derived from `EncStep`. The *firing* it consumes is scaffolded too:
+# `execLocalActions_isSome_of_builds` is `FDatabase`'s counterpart of
+# `evalActions_isSome_of_builds`, and `exists_execLocalActions_encodeRule_head` runs the block
+# `encodeRule` emits — `Actions.Builds` is false of an *encoded* head, `if` and `ordering-gt`
+# being primitives, so what runs it is the source head read at the target's signature, spending
+# `@Fiat` and `@Rule_i`. What step 3 still owes is source-side: the source rule's *head* being
+# scoped and building are not clauses `UnionsFire` carries. The run-wide index argument it used to
+# sit beside is closed: `execM_rebuildClosed` is `Database.ViewJoined` per mechanism (the e-class
+# rule, the column rules, the `@UF` edge a collision writes), proved outright — its four
+# `Signature.IsCtor`
 # carries off `encodePrelude`'s own proof vocabulary (`encodeSig_isCtor_symName` and
 # companions) and its literal clause off the completeness half (`execM_ufLitsIsolated`).
 #
@@ -171,7 +177,7 @@ nightly-local: nightly-uv nightly-rustup
 # stops the source block there while the encoded block runs on and asserts an equation the source
 # never derives (`bare_build_invents_equality`, at a program every other clause admits). The
 # clause is faithfulness, not a narrowing — egglog raises `TypeError::Unbound` for exactly this
-# in `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census is unmoved at 70 of 166.
+# in `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census is 87 of 183.
 # Everything else the half needed — the per-command induction, the merge phase, the firing fold,
 # the maintenance families, the head obligation `encodedHeadSound` — was already proved. The
 # rule-head match correspondence of `Encoding/Match.lean` is proved outright, encoder read-back

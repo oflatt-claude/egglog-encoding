@@ -9434,6 +9434,67 @@ theorem patternRowRead_of_matches {sd : Database} {td : FDatabase} {σ ρt : Env
         (hidTerm _ r hr₁)
   | values _ _ _ _ => exact hnv.elim
 
+
+/-! #### And the head, at the target's signature
+
+Step 3 of the residue: the encoded rule has to **fire**. `Actions.Builds` is false of an
+*encoded* head and could not be otherwise — a `union` becomes
+`(set @UF (ordering-max x y) (ordering-min x y, pf))`, and `if` and `ordering-gt` are
+**primitives**, which `Expr.Evaluable` rules out by name. So what runs the block is
+`exists_execActions_encodeActions`: the **source** head's own `Actions.Scoped` and
+`Actions.Builds`, the latter read at the *target's* signature, lifted through
+`encodeAction` case by case, with `eval_ifGt` running the two bundled choices.
+
+Two names are the target's own, and they are exactly the two signature clauses
+`Egglog.UnionsFire` gained: `@Fiat`, which every build's view row carries as its proof column,
+and `@Rule_i`, the justification a `union` or a `set` head writes. The `@Rule_i` application is
+over the emitted query's proof **variables** and nothing else (`queryProofs_var` at
+`encodeQuery_valueVars`), so `Signature.IsCtor` at that one name is all it asks. -/
+
+/-- `@Rule_i` is not a primitive, `Prim.ofName`'s four reserved names being `@`-free. -/
+theorem prim_ofName_ruleName {i : Nat} : Prim.ofName (ruleName i) = none :=
+  Prim.ofName_of_atPrefix (by
+    rw [ruleName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
+      show ("@Rule_").toList = ['@', 'R', 'u', 'l', 'e', '_'] from by decide]
+    exact ⟨['R', 'u', 'l', 'e', '_'] ++ (toString i).toList, rfl⟩)
+
+/-- A list of variables applies no function. -/
+theorem Expr.fnsList_eq_nil_of_vars : ∀ (es : List Expr),
+    (∀ e ∈ es, ∃ v, e = Expr.var v) → Expr.fnsList es = []
+  | [], _ => rfl
+  | e :: es, hall => by
+      obtain ⟨w, rfl⟩ := hall e List.mem_cons_self
+      rw [Expr.fnsList, Expr.fns,
+        Expr.fnsList_eq_nil_of_vars es (fun x hx => hall x (List.mem_cons_of_mem _ hx))]
+      rfl
+
+/-- **The encoded rule's head runs**, at the substitution the emitted query matched at: the
+obligation `Egglog.UnionsFire`'s step 3 had no scaffolding for, with `@Fiat` and `@Rule_i`
+spent and nothing else asked of the target.
+
+Everything else is the source rule's own — `Actions.Scoped r.actions Γ` at the scope the
+substitution models, and `Actions.Builds r.actions td.sig`, which is the source's own head
+condition carried across `∀ f, sd.sig.IsCtor f → td.sig.IsCtor f`
+(`Database.HeadsBuild`/`programStep_headsBuild` is where a source run has it, and
+`Program.HeadsScoped` the scoping). What remains open in step 3 is therefore *not* the fold:
+it is that those two source-side facts are not among `Egglog.UnionsFire`'s clauses. -/
+theorem exists_execLocalActions_encodeRule_head {d : FDatabase} {Γ : Scope} {τ : Env}
+    {r : Rule} (hm : Γ.Models (τ ++ d.env)) (hfiat : d.sig.IsCtor fiatName) {i : Nat}
+    (hrule : d.sig.IsCtor (ruleName i)) (n : Nat) (hnv : ∀ p ∈ r.query, p.NoValues)
+    (hproof : ∀ e ∈ queryProofs (encodeQuery r.query n).1, e.Scoped Γ)
+    (hsc : Actions.Scoped r.actions Γ) (hb : Actions.Builds r.actions d.sig) :
+    ∃ d', execLocalActions d (encodeRule i r n).1.actions τ = some d' ∧ d'.sig = d.sig := by
+  have hvars := queryProofs_var (encodeQuery_valueVars r.query hnv n)
+  rw [encodeRule_actions]
+  refine exists_execLocalActions_encodeRule hm hfiat (fun v hv => ?_) (fun g hg => ?_) hsc hb _
+  · rw [ruleE, Expr.vars] at hv
+    obtain ⟨e, hmem, hve⟩ := Expr.mem_varsList hv
+    exact hproof e hmem v hve
+  · rw [ruleE, Expr.fns, Expr.fnsList_eq_nil_of_vars _ hvars, List.mem_cons] at hg
+    rcases hg with rfl | hg
+    · exact ⟨prim_ofName_ruleName, hrule⟩
+    · exact absurd hg (by simp)
+
 /-! #### The head the target cannot run
 
 **Fixed.** What follows is the refutation that fixed it, kept as the record: `UnionsFireWeak`
@@ -9501,7 +9562,8 @@ them and `Egglog.RuleNameMech` the fifth. -/
 about names dropped — the target's signature declaring the source's constructors and `@Fiat`,
 the `@Rule_i` of the index `hrules` names, the source rules' queries being ones the flattening
 handles, and the two the enumerator reads (`FDatabase.RowColumnsValued`,
-`FDatabase.NoAtEnv`). Kept as the record of the refuted statement, the way
+`FDatabase.NoAtEnv`) — and the derived `:merge` carry dropped with them, which only makes it
+stronger still. Kept as the record of the refuted statement, the way
 `Egglog.UnionsInvD` keeps the first one.
 
 Strictly the stronger claim (`unionsFire_of_weak`), so refuting it says nothing against the
@@ -9524,7 +9586,8 @@ def UnionsFireWeak : Prop :=
 /-- **The weak statement implies the repaired one**, by dropping hypotheses — so the two
 refutations below bracket the repair from above and refute nothing it says. -/
 theorem unionsFire_of_weak (hw : UnionsFireWeak) : UnionsFire := by
-  intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj hback
+  intro R c sd sd' td td' hc hstep hrun henv hstate _ _ hrules _ _ _ hreads hjoin hrow hrj _
+    hback
   refine hw hc hstep hrun henv hstate ?_ hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, -⟩ := hrules r hr
@@ -9960,8 +10023,9 @@ added, and the target with that rule's encoding through a bad `G`. Everything be
 compiled. -/
 
 /-- **The clause set the refutation below kills**: `Egglog.UnionsFire` with the
-`Database.GlobalsInline` conjunct of its `hrules` clause dropped, and nothing else changed.
-`unionsFire_of_anyG` says it is the stronger claim. -/
+`Database.GlobalsInline` conjunct of its `hrules` clause dropped, and the derived `:merge`
+carry with it — so it too is strictly the stronger claim, which is what
+`unionsFire_of_anyG` says. -/
 def UnionsFireAnyG : Prop :=
   ∀ {R : RulesetName} {c : Cmd} {sd sd' : Database} {td td' : FDatabase},
     (c = Cmd.run R ∨ c = Cmd.saturate R) → CmdStep sd c sd' →
@@ -9987,7 +10051,7 @@ def UnionsFireAnyG : Prop :=
 refutation below refutes nothing the repair says. -/
 theorem unionsFire_of_anyG (hw : UnionsFireAnyG) : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate hsig hfiat hrules hq hcv hno hreads hjoin
-    hrow hrj hback
+    hrow hrj _ hback
   refine hw hc hstep hrun henv hstate hsig hfiat ?_ hq hcv hno hreads hjoin hrow hrj hback
   intro r hr
   obtain ⟨G, i, n, hm, hct, -⟩ := hrules r hr
@@ -10301,7 +10365,7 @@ already-frozen `G` across one more source command; `Egglog.GlobalsMech` is the p
 `encStep_globalsMech` the discharge. `Egglog.UnionsInv.rules` carries `Program.GlobalsOnce`
 beside it — a fact about the program *text*, which is what a later `let` cannot invalidate —
 and only the `GlobalsInline` half reaches this `Prop`, since that is what a firing reads.
-`unionsJoined_fire_satisfiable` survives it and gains a sixteenth conjunct
+`unionsJoined_fire_satisfiable` survives it and gains a conjunct of its own
 (`rbSrc_globalsInline`, at the substitution `rbProgram`'s own `let` freezes), because the
 `hrules` conjunct it rides in is vacuous at a source that holds no rule.
 
@@ -10569,27 +10633,62 @@ a rule is stored `Rule.resolveGlobals`'d at the environment standing when it is 
 (with `Database.GlobalsCover`) says that is the very query `mem_matchQuery_encodeQuery` takes.
 So the source firing's own `ValidQuerySubst` is already at the right query.
 
-**Step 1 goes through at the rule's own query, and its cost is two more derived clauses.**
-Reading a firing's substitution forward through live rows is `patternRowRead_of_matches` at
-every pattern of `r.query`, at the reading `Env.mapVals` puts on `τ` off the row-reading clause
-and `ValidQuerySubst.mem_terms`; it is proved from the clauses above **plus two facts about
-`td` that are not among them**. That a live `@fView` row's name carries a `:merge`, which
-`RowRead.app` carries as data and `rowRead_of_rowRepr` therefore asks for; and that an id the
-reading gives is a term the target holds — `∀ t x, RowRepr td t x → x ∈ td.terms`, which the
-`.eq` case spends. Both hold at an encoded target off `FDatabase.IndexOk` alone, by the same
-`ctor`/`entry` split `ViewRepr.of_rowRepr_of_indexOk` runs, so both are `Egglog.RowMech`-shaped
-and neither is provenance. They are not added here because adding them closes nothing: unlike
-the four clause sets above, no witness refutes the residue without them, and it is step 3 that
-the `Cmd.run` half is short of.
+**Step 1 goes through at the rule's own query, and one of its two extra facts is now a
+clause.** Reading a firing's substitution forward through live rows is
+`patternRowRead_of_matches` at every pattern of `r.query`, at the reading `Env.mapVals` puts on
+`τ` off the row-reading clause and `ValidQuerySubst.mem_terms`; it is proved from the clauses
+above **plus two facts about `td`**. The first is that a live `@fView` row's name carries a
+`:merge`, which `RowRead.app` carries as data and `rowRead_of_rowRepr` therefore asks for: that
+is now a clause, derived off `FDatabase.IndexOk.ctor` alone — a merge-free row's output columns
+are empty and a view row's are `[e, pf]` — and discharged by `encStep_mergeOf_of_row`, in the
+shape `Egglog.RowMech` already had rather than as provenance.
 
-**Step 3 is where it stalls, and it has no scaffolding.** The encoded rule has to **fire**:
-`execLocalActions td (encodeRule i (r.substGlobals G) n).1.actions τ = some _` at the
-substitution `mem_matchQuery_encodeQuery` returns. `evalActions_isSome_of_builds` is that
-argument on the *specification* side, over `Actions.Scoped` and `Actions.Builds`. `FDatabase`
-has no counterpart of it — `execAction` mirrors `evalAction` case for case, so the fold
-transfers, but it is not written — and neither `Actions.Scoped` nor `Actions.Builds` is
-established for an **encoded** head at the target's signature. That is what the two signature
-clauses and the `@Rule_i` conjunct of `hrules` were added for, and nothing spends them yet.
+**The second is false as it reads, and that is a fact about `RowRepr` and not about the
+target.** "Every id the reading gives is a term the target holds", `∀ t x, RowRepr td t x →
+x ∈ td.terms`, would put *every literal* in `td.terms`: `RowRepr.lit` is
+`RowRepr d (.lit l) (.lit l)` for an arbitrary `l`, with no premise at all, so the statement
+implies `td.terms` is infinite. Its **application** half is a theorem and wants no clause: a
+`RowRepr.app` names a live view row `⟨viewName f, es, [r, pf]⟩` and `FDatabase.RowColumnsValued`
+— already a clause here — puts that row's value column in `td.valueTerms`, hence in
+`td.terms` (`FDatabase.mem_terms_of_mem_valueTerms`). So what the `.eq` case of step 1 is short
+of is exactly the literal residue: `Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms`. That is
+not a reading of one state — the target holds a source literal because some *earlier* block wrote
+it into a key column, so it is a run-wide invariant about the source's literals, of the shape
+`execM_soundTerms` has and not of the shape `RowMech` has. It is left open rather than guessed
+at.
+
+**Step 3 has scaffolding now, and it spends the signature clauses.** The encoded rule has to
+**fire**: `execLocalActions td (encodeRule i (r.substGlobals G) n).1.actions τ = some _` at the
+substitution `mem_matchQuery_encodeQuery` returns. Three lemmas, in that order:
+
+* `FDatabase`'s counterpart of `evalActions_isSome_of_builds` —
+  `execActions_isSome_of_builds` and `execLocalActions_isSome_of_builds`, moved along
+  `execActions_toDatabase`, since `execAction` mirrors `evalAction` case for case. That is the
+  fold, and it was simply unwritten.
+* **`Actions.Builds` of an *encoded* head is false, and could not be otherwise.** An encoded
+  `union` is `(set @UF (ordering-max x y) (ordering-min x y, pf))`, and `if` and `ordering-gt`
+  are **primitives**, which `Expr.Evaluable` excludes by name; so the fold above is not what
+  runs an encoded block. What is `Actions.Builds` is the **source** head read at the *target's*
+  signature, and `exists_execActions_encodeBuild`/`exists_execActions_encodeAction`/
+  `exists_execActions_encodeActions` lift that, case by case, to the block `encodeAction`
+  emits — with `eval_ifGt` running the two bundled choices, which are total on their operands.
+* `exists_execLocalActions_encodeRule_head` is the two assembled at `encodeRule`, and it is
+  where the signature clauses are **spent**: `td.sig.IsCtor fiatName` on the proof column of
+  every build's view row (`eval_fiatE`), and `td.sig.IsCtor (ruleName i)` — the conjunct
+  bundled into `hrules` — on the justification a `union` or a `set` head writes, which applies
+  that one name over the emitted query's proof *variables* and nothing else
+  (`queryProofs_var`, `prim_ofName_ruleName`). Nothing is asked of a `set`'s own function name,
+  which is never evaluated.
+
+**What step 3 still owes is source-side, and it is two clauses `UnionsFire` does not carry.**
+`Actions.Scoped r.actions Γ` at the scope the substitution models, and
+`Actions.Builds r.actions td.sig` — the source rule's *head* being scoped and building, where
+the clause `UnionsFire` has is about its *query*. Both are source-run invariants of exactly the
+shape the query clause is: `Database.HeadsBuild` with `programStep_headsBuild` is the second,
+`Program.HeadsScoped` the first, and `Egglog.encodedHeadSound` already takes the latter as a
+hypothesis rather than as a domain clause. Adding them is a clause decision and not a proof,
+which is why they are named here and not assumed.
+
 Step 4 — the head's writes read back as `ViewRepr td'` — then rides on
 `execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, plus one thing
 the trailing rebuild has to do: `Rule.resolveGlobals` leaves a rule's *head* alone, so a head
@@ -12166,10 +12265,11 @@ theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain)
 /-- **`Egglog.RowMech`, discharged.** The clauses `Egglog.UnionsFire` takes besides its
 provenance-free hypotheses, at every state one encoded run passes through.
 
-Three about rows: `encStep_exists_rowRepr` is the tuple choice — a reading is a row reading, at
+Four about rows: `encStep_exists_rowRepr` is the tuple choice — a reading is a row reading, at
 the pointwise `@UF` row root — `ViewRepr.of_rowRepr_of_indexOk` is the way back, off
-`FDatabase.IndexOk` alone, and `encStep_rowJoined` is the reading being a function that
-collapses an `@UF` edge.
+`FDatabase.IndexOk` alone, `encStep_rowJoined` is the reading being a function that
+collapses an `@UF` edge, and `encStep_mergeOf_of_row` is the `:merge` carry `RowRead.app`
+takes as data, off the same `ctor` clause.
 
 Four more, which are what `unionsFire_false` and `unionsFire_false_encodeSig` cost. The
 target's signature declares every source constructor (`encodeSig_isCtor_of_mem_ctors`, over
@@ -12199,7 +12299,8 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
     (by rw [(encReached_encBase hdom h.reached).sig]; exact encodeSig_isCtor_fiatName P),
     queriesIn_of_prefixStep hdom h.mem h.src,
     encReached_rowColumnsValued hdom h.reached,
-    (encReached_encBase hdom h.reached).noAtEnv⟩
+    (encReached_encBase hdom h.reached).noAtEnv,
+    fun _ _ _ _ hrow => encStep_mergeOf_of_row hdom h hrow⟩
 
 /-- **`Egglog.RuleNameMech`, discharged.** The prelude declares one `@Rule_i` per source rule,
 at the index `encodeCmds` reaches that rule with (`ruleNamesDeclared_encodeSig`), and the

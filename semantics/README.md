@@ -95,7 +95,7 @@ or, from the workspace root:
   `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` included, so any hit is a regression.
 - `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
   compares per-function row counts, for the constructor fragment and for M9's `:merge`
-  functions. 166 cases, all passing. Needs a release `egglog` binary. It reaches the
+  functions. 183 cases, all passing. Needs a release `egglog` binary. It reaches the
   interpreter without going through `Proofs/`, which is why it stays runnable during the
   port.
 

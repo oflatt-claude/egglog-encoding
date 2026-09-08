@@ -125,7 +125,7 @@ both are decided at the witness at the end of this file.
   strengthened to every *subterm*, which is what `Database.addTerm` records. And it is not
   vacuous: `rbState2_unionsInv` is the invariant at a source state a program reaches
   (`rbProgram_programStep`) with a non-empty environment, `rbState2_unionsInv_hvar` is the
-  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's sixteen
+  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's seventeen
   hypotheses holding together, and `uRebuilt_unionsJoined` is the data clause at a source with
   a real equation.
 
@@ -4035,7 +4035,23 @@ ids). `Database.ViewLeader` would give the second and is false in general
 *removed* the displaced row that `ViewLeader` trips over, and it holds at every state an
 encoded block runs at.
 
-All three are derived rather than assumed, and so are the five clauses about names that the
+**And a fourth about rows, which step 1 of the assembly is what wants.** A live `@fView`
+row's name carries a `:merge`, which `RowRead.app` carries as data and so
+`rowRead_of_rowRepr` — and through it `patternRowRead_of_matches`, the step that reads a source
+firing's substitution forward — asks for. It holds off `FDatabase.IndexOk` alone, by the same
+`ctor`/`entry` split `ViewRepr.of_rowRepr_of_indexOk` runs, so it is a *derived* clause and not
+provenance (`encStep_mergeOf_of_row`).
+
+Its companion is **not** here, and the reason is that it is false as it reads. "Every id the
+reading gives is a term the target holds", `∀ t r, RowRepr td t r → r ∈ td.terms`, would make
+`td.terms` hold *every literal*: `RowRepr.lit` is `RowRepr d (.lit l) (.lit l)` for an
+arbitrary `l`, with no premise at all. Its **application** half is a theorem and needs no
+clause — a `RowRepr.app` names a live view row and `FDatabase.RowColumnsValued`, already a
+clause here, puts that row's value column in `valueTerms` — so what step 1's `.eq` case is
+short of is only the literal residue, `Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms`, which
+is a run-wide fact about the source's literals rather than a reading of one state.
+
+All four are derived rather than assumed, and so are the five clauses about names that the
 two refutations cost: `RowMech` is what discharges them, threaded alongside `EncStep`, and
 `Encoding/Complete.lean`'s `encStep_rowMech` proves it. The one exception is the `@Rule_i`
 half, which cannot be read off a state alone — `encodeRule` is a function of an arbitrary
@@ -4056,7 +4072,7 @@ this file: `patternHolds_values_of_mem_rows` is the only route from a row to an 
 hypothesis through `unionsInv_step`, `unionsInv_of_programStep`, `unionsInv_execM` and
 `execM_unionsJoined`, and `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
 answered, with no duplication of `Encoding/Match.lean`'s expression induction and no
-restructuring of anything above. `unionsJoined_fire_satisfiable` is these sixteen hypotheses
+restructuring of anything above. `unionsJoined_fire_satisfiable` is these seventeen hypotheses
 holding together — and the two refutations above are the *ten* they used to be, holding at a
 state whose encoded rule cannot run, which is what said the list was too short.
 
@@ -4100,6 +4116,9 @@ def UnionsFire : Prop :=
     td.toDatabase.UnionsJoined sd →
     (∀ t ∈ sd.terms, ∃ r, RowRepr td t r) →
     td.RowJoined →
+    (∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ td.rows →
+        (td.sig.mergeOf (viewName f)).isSome = true) →
     (∀ t r : Term, RowRepr td' t r → ViewRepr td'.toDatabase t r) →
     td'.toDatabase.UnionsJoined sd' ∧ ∀ t ∈ sd'.terms, ∃ e, ViewRepr td'.toDatabase t e
 
@@ -4107,10 +4126,15 @@ def UnionsFire : Prop :=
 Threaded rather than proved here, and `Encoding/Complete.lean`'s `encStep_rowMech` is the
 discharge.
 
-Three about rows: `RowRepr` is the reading a firing produces, its two directions are
+Four about rows: `RowRepr` is the reading a firing produces, its two directions are
 `encStep_exists_rowRepr` — the tuple choice, at the pointwise `@UF` row root — and
-`ViewRepr.of_rowRepr_of_indexOk`, and `encStep_rowJoined` is the clause that makes the reading
-a function and collapses an `@UF` edge.
+`ViewRepr.of_rowRepr_of_indexOk`, `encStep_rowJoined` is the clause that makes the reading a
+function and collapses an `@UF` edge, and the fourth is the `:merge` carry: a **live** view
+row's function is a merge function, which `RowRead.app` carries as data and
+`rowRead_of_rowRepr` therefore asks for. `encStep_mergeOf_of_row` is its discharge, off
+`FDatabase.IndexOk.ctor` alone — a merge-free row has no output column and a view row has two
+— so it is `RowMech`-shaped and not provenance, and `mergeOf_of_row_of_outNonempty` is the
+same fact in the form a concrete state decides.
 
 Four about names, which is what `unionsFire_false` and `unionsFire_false_encodeSig` cost: the
 target's signature declares every constructor the source's does and `@Fiat` (so the encoded
@@ -4129,7 +4153,10 @@ def RowMech (Q : Program) : Prop :=
     (∀ r ∈ sd.rules, ((∀ p ∈ r.query, p.NoValues) ∧ Query.VarsKeyed r.query) ∧
       ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) ∧
     d.RowColumnsValued ∧
-    d.NoAtEnv
+    d.NoAtEnv ∧
+    (∀ (f : FnName) (es : List Term) (e pf : Term),
+      (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows →
+        (d.sig.mergeOf (viewName f)).isSome = true)
 
 /-- **Every `@Rule_i` the encoder's numbering applies is declared**, at every state one encoded
 run passes through. Threaded rather than proved here for `Egglog.RowMech`'s reason: the
@@ -4219,7 +4246,7 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
       have hres : ((encodeRule i (r.substGlobals G) n).1).resolveGlobals td.env
           = (encodeRule i (r.substGlobals G) n).1 :=
         Rule.resolveGlobals_encodeRule hgi.closed
-          (fun b hb => (hmech hchain).2.2.2.2.2.2.2 b hb)
+          (fun b hb => (hmech hchain).2.2.2.2.2.2.2.1 b hb)
           (fun v hv => by
             rw [hinv.env]
             cases hE : Env.lookup v sd.env with
@@ -4253,12 +4280,13 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           obtain ⟨G', i', n', hm, hct, hgi, -⟩ := hinv.rules r hr
           exact ⟨G', i', n', hm, hct, hgi⟩)
         (hmech hchain).2.2.2.2.2.1
-        (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2.1
         hinv.readsAt hinv.joinedAt
         (fun t ht => by
           obtain ⟨e, he⟩ := hinv.readsAt t ht
           exact (hmech hchain).1 t e he)
         (hmech hchain).2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2
         (hmech (.block hchain hstep hblock)).2.1
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_run hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_run hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
@@ -4269,12 +4297,13 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           obtain ⟨G', i', n', hm, hct, hgi, -⟩ := hinv.rules r hr
           exact ⟨G', i', n', hm, hct, hgi⟩)
         (hmech hchain).2.2.2.2.2.1
-        (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2
+        (hmech hchain).2.2.2.2.2.2.1 (hmech hchain).2.2.2.2.2.2.2.1
         hinv.readsAt hinv.joinedAt
         (fun t ht => by
           obtain ⟨e, he⟩ := hinv.readsAt t ht
           exact (hmech hchain).1 t e he)
         (hmech hchain).2.2.1
+        (hmech hchain).2.2.2.2.2.2.2.2
         (hmech (.block hchain hstep hblock)).2.1
       exact ⟨hjoin.1, hjoin.2, by rw [cmdStep_env_of_saturate hstep]; exact hkeepE,
         by rw [cmdStep_rules_of_saturate hstep]; exact hkeepR, hcont, henvOut, hstate'⟩
@@ -4845,6 +4874,21 @@ theorem ViewReprList.of_rowReprList_of_rowTerms {d : FDatabase}
 
 end
 
+/-- **The `:merge` carry, off the row list alone.** A live view row's function is a merge
+function, because its output columns are not empty and a merge-free row's are: this is the
+decidable form of `Encoding/Complete.lean`'s `encStep_mergeOf_of_row`, which reads the same
+fact off `FDatabase.IndexOk.ctor`. It is the side condition `RowRead.app` carries as data and
+`rowRead_of_rowRepr` therefore asks for, so it is a clause of `Egglog.RowMech` rather than
+provenance. -/
+theorem mergeOf_of_row_of_outNonempty {d : FDatabase}
+    (h : ∀ r ∈ d.rows, (d.sig.mergeOf r.fn).isSome = true ∨ r.out = [])
+    {f : FnName} {es : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) :
+    (d.sig.mergeOf (viewName f)).isSome = true := by
+  rcases h _ hrow with hm | h0
+  · exact hm
+  · exact absurd h0 (by simp)
+
 /-! ##### The two row clauses at the witness state
 
 `rbState2` is written by `execActions`, so its rows and its term list are computed lists and
@@ -4862,6 +4906,21 @@ theorem rbState2_rowEntries :
 theorem rbState2_viewRepr_of_rowRepr {t r : Term} (h : RowRepr rbState2 t r) :
     ViewRepr rbState2.toDatabase t r :=
   ViewRepr.of_rowRepr_of_rowTerms rbState2_rowColumns rbState2_rowEntries h
+
+set_option maxRecDepth 100000 in
+/-- **And every one of them carries a `:merge` or has no output column**, at the witness state.
+Decided against the seven rows `rbState2` really holds: `@WView` and `@AView` take the first
+arm, with the `:merge` `encodePrelude` declared and the two output columns `[e, pf]` a view row
+has, and the other five — the two `@fTerm` rows, the two constructor rows and `@Fiat`'s — take
+the second. -/
+theorem rbState2_rowMerges :
+    ∀ r ∈ rbState2.rows, (rbState2.sig.mergeOf r.fn).isSome = true ∨ r.out = [] := by decide
+
+/-- **A live view row's name carries a `:merge`, at the witness state.** -/
+theorem rbState2_mergeOf_of_row {f : FnName} {es : List Term} {e pf : Term}
+    (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ rbState2.rows) :
+    (rbState2.sig.mergeOf (viewName f)).isSome = true :=
+  mergeOf_of_row_of_outNonempty rbState2_rowMerges hrow
 
 set_option maxRecDepth 100000 in
 theorem rbState2_row_aview :
@@ -4992,7 +5051,7 @@ theorem rbSrc_queriesEncodable : ∀ r ∈ rbSrc.rules,
 /-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
 vacuous — `ENCODING.md`'s failure, twice.
 
-Sixteen conjuncts: the fifteen `UnionsFire` takes, in the order it takes them, and
+Seventeen conjuncts: the sixteen `UnionsFire` takes, in the order it takes them, and
 `rbSrc_globalsInline` beside them.
 
 Satisfiable degenerately in the *round*, and deliberately so: the source holds no rule, so the
@@ -5014,7 +5073,11 @@ own proof. `rbState2_rowColumnsValued` is decided against the two view rows the 
 holds, and `rbState2_noAtEnv` against the environment a top-level `let` really left: `x`, not
 the empty list.
 
-The two row clauses are not degenerate either — `rbState2_exists_rowRepr` reads both of
+The three row clauses are not degenerate either — `rbState2_rowMerges` is decided against the
+seven rows the state really holds, and the two `@fView` rows among them take its **first** arm:
+they carry the prelude's `:merge` and the two output columns a view row has, one of them at
+positive arity, so `rbState2_mergeOf_of_row` is the `:merge` carry with content and not the
+empty-output escape. `rbState2_exists_rowRepr` reads both of
 `rbSrc`'s terms through live rows, the
 second at positive arity over the first's, `rbState2_rowJoined`'s `fn` is pinned by the two view
 rows the state really holds, and `rbState2_viewRepr_of_rowRepr` is the way back at every row the
@@ -5044,6 +5107,9 @@ theorem unionsJoined_fire_satisfiable :
       (∀ t ∈ rbSrc.terms, ∃ e, ViewRepr rbState2.toDatabase t e) ∧
       rbState2.toDatabase.UnionsJoined rbSrc ∧
       (∀ t ∈ rbSrc.terms, ∃ r, RowRepr rbState2 t r) ∧ rbState2.RowJoined ∧
+      (∀ (f : FnName) (es : List Term) (e pf : Term),
+        (⟨viewName f, es, [e, pf]⟩ : Row) ∈ rbState2.rows →
+          (rbState2.sig.mergeOf (viewName f)).isSome = true) ∧
       (∀ t r : Term, RowRepr rbState2 t r → ViewRepr rbState2.toDatabase t r) ∧
       rbSrc.GlobalsInline [("x", Expr.app "A" [])] :=
   ⟨rbSrc_cmdStep_run rbRuleset, rbState2_execProgramM_run, rbState2_unionsInv.env,
@@ -5054,6 +5120,7 @@ theorem unionsJoined_fire_satisfiable :
     rbSrc_queriesEncodable,
     rbState2_rowColumnsValued, rbState2_noAtEnv, rbState2_unionsInv.readsAt,
     rbState2_unionsInv.joinedAt, rbState2_exists_rowRepr, rbState2_rowJoined,
+    (fun _ _ _ _ hrow => rbState2_mergeOf_of_row hrow),
     fun _ _ h => rbState2_viewRepr_of_rowRepr h, rbSrc_globalsInline⟩
 
 /-! #### The rebuild fixpoint, and the row it does not reach
@@ -10536,6 +10603,318 @@ theorem evalLocalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.
         · exact Or.inl huf
         · exact Or.inr ⟨fun t ht => hlf t (Database.terms_setEnv ▸ ht), hnl⟩)
   exact ⟨d, hd, by simp [evalLocalActions, hd]⟩
+
+/-! ##### The same block, on the interpreter's state
+
+`Impl/Interp.lean`'s `execAction` mirrors `evalAction` case for case and
+`execActions_toDatabase` is that mirror as an equation, so the fold above transfers to
+`FDatabase` outright: the block gets stuck on the interpreter's state exactly where the same
+block gets stuck on the denotation.
+
+`FDatabase` had no counterpart of `evalActions_isSome_of_builds`, and a **target** firing is
+what needs one: `Expr.eval` is `none` at a name the signature does not make a constructor,
+`execLocalActions` propagates that, and `fireInto` answers a stuck firing by returning the
+accumulator unchanged — which is how `Encoding/Complete.lean`'s `unionsFire_false` refuted
+"a valid substitution is a firing". -/
+
+/-- **The block does not get stuck, on the interpreter's state.**
+`evalActions_isSome_of_builds` moved along `execActions_toDatabase`. -/
+theorem execActions_isSome_of_builds {d : FDatabase} (he : d.EqsInTerms) {Γ : Scope}
+    (hm : Γ.Models d.env) (hw : d.toDatabase.WF) {as : List Action}
+    (hsc : Actions.Scoped as Γ) (hb : Actions.Builds as d.sig)
+    (hr : Actions.UnionRunnable as d.toDatabase) :
+    ∃ d', execActions d as = some d' := by
+  obtain ⟨db, hdb, -⟩ := evalActions_isSome_of_builds (db := d.toDatabase) hm hw hsc hb hr
+  rcases hx : execActions d as with _ | d'
+  · rw [← execActions_toDatabase he, hx] at hdb; exact absurd hdb (by simp)
+  · exact ⟨d', rfl⟩
+
+/-- **A rule head does not get stuck, on the interpreter's state.**
+`evalLocalActions_isSome_of_builds` moved along `execLocalActions_toDatabase`; this is the
+shape `Egglog.UnionsFire`'s target firing is stated in. -/
+theorem execLocalActions_isSome_of_builds {d : FDatabase} (he : d.EqsInTerms) {Γ : Scope}
+    (hm : Γ.Models d.env) (hw : d.toDatabase.WF) {r : Rule}
+    (hsc : Actions.Scoped r.actions (Query.bind r.query Γ))
+    (hb : Actions.Builds r.actions d.sig)
+    (hr : Actions.UnionRunnable r.actions d.toDatabase) {σ : Env}
+    (hq : ValidQuerySubst d.toDatabase r.query σ) :
+    ∃ d', execLocalActions d r.actions σ = some d' := by
+  obtain ⟨db, -, hloc⟩ := evalLocalActions_isSome_of_builds hm hw hsc hb hr hq
+  rcases hx : execLocalActions d r.actions σ with _ | d'
+  · rw [← execLocalActions_toDatabase he, hx] at hloc; exact absurd hloc (by simp)
+  · exact ⟨d', rfl⟩
+
+/-! ##### And the block the *encoder* emits
+
+The obligation a target firing carries is
+`execLocalActions td (encodeRule i r n).1.actions τ = some _`, and the two lemmas above do not
+reach it: an encoded `union` head is `(set @UF (ordering-max x y) (ordering-min x y, pf))` and
+`if`/`ordering-gt` are **primitives**, so `Actions.Builds` — whose `Expr.Evaluable` asks every
+applied name to be a declared constructor and *not* a primitive — is false of an encoded head
+and could not be otherwise. `eval_ifGt` is what runs those two instead: `ordering-gt` is total
+on a pair of terms and `if` on a `bool`, so a bundled choice evaluates whenever its operands
+do.
+
+What *is* `Actions.Builds` is the **source** head read at the *target's* signature, and the
+lemmas below lift that to the block the encoder emits. Two names the source did not apply are
+what the signature clauses of `Egglog.UnionsFire` pay for: `@Fiat`, which every build's view
+row carries as its proof column (`td.sig.IsCtor fiatName`), and `@Rule_i`, the justification a
+`union` or a `set` head writes (`td.sig.IsCtor (ruleName i)`, the conjunct bundled into
+`hrules`). Nothing else is asked of the target — a `set`'s own function name is never
+evaluated — and nothing at all is asked of the source beyond its own head evaluating. -/
+
+/-- Evaluating a concatenation, in the direction that *builds* one. `Expr.evalList_append` is
+the elimination. -/
+theorem Expr.evalList_append_eq {sig : Signature} {σ : Env} :
+    ∀ {es fs : List Expr} {as bs : List Term},
+      Expr.evalList sig es σ = some as → Expr.evalList sig fs σ = some bs →
+        Expr.evalList sig (es ++ fs) σ = some (as ++ bs) := by
+  intro es
+  induction es with
+  | nil =>
+      intro fs as bs h₁ h₂
+      obtain rfl : as = [] := (Option.some.inj h₁).symm
+      simpa using h₂
+  | cons e es ih =>
+      intro fs as bs h₁ h₂
+      rw [Expr.evalList] at h₁
+      obtain ⟨t, ht, h₁⟩ := Option.bind_eq_some_iff.mp h₁
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h₁
+      simp only [List.cons_append, Expr.evalList, ht, Option.bind_some, ih hus h₂,
+        Option.map_some]
+
+/-- Running a concatenation of action blocks, in the direction that *builds* one.
+`execActions_append` is the elimination. -/
+theorem execActions_append_eq {as bs : List Action} : ∀ {d m e : FDatabase},
+    execActions d as = some m → execActions m bs = some e →
+      execActions d (as ++ bs) = some e := by
+  induction as with
+  | nil =>
+      intro d m e h₁ h₂
+      obtain rfl : d = m := Option.some.inj h₁
+      simpa using h₂
+  | cons a as ih =>
+      intro d m e h₁ h₂
+      rw [execActions] at h₁
+      obtain ⟨d₁, hd₁, h₁⟩ := Option.bind_eq_some_iff.mp h₁
+      rw [List.cons_append, execActions, hd₁, Option.bind_some]
+      exact ih h₁ h₂
+
+/-- The arguments of an application that evaluated, evaluated. Both branches of `Expr.eval`
+run the operands first, so this needs nothing about the head name. -/
+theorem Expr.evalList_of_eval_app {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
+    {t : Term} (h : Expr.eval sig (.app f args) σ = some t) :
+    ∃ ts, Expr.evalList sig args σ = some ts := by
+  cases hp : Prim.ofName f with
+  | some p =>
+      rw [Expr.eval_app_prim hp] at h
+      exact (Option.bind_eq_some_iff.mp h).imp fun _ hx => hx.1
+  | none =>
+      by_cases hc : sig.IsCtor f
+      · rw [Expr.eval_app_ctor hp hc] at h
+        exact (Option.map_eq_some_iff.mp h).imp fun _ hx => hx.1
+      · rw [Expr.eval_app_not_ctor hp hc] at h
+        exact absurd h (by simp)
+
+/-- `(@Fiat)`, evaluated: the one name a build applies that the source did not. -/
+theorem eval_fiatE {sig : Signature} {σ : Env} (hfi : sig.IsCtor fiatName) :
+    Expr.eval sig fiatE σ = some (Term.app fiatName []) := by
+  rw [fiatE, Expr.eval_app_ctor (show Prim.ofName fiatName = none from rfl) hfi]; rfl
+
+mutual
+
+/-- **A build's block runs.** The mirror of `execActions_encodeBuild_app` in the direction a
+firing needs: a build emits `set`s only, so neither the signature nor the environment moves
+inside it (`encodeBuild_isSet`); its key tuple is the source argument expressions and its
+value tuple the source expression itself (`encodeBuild_fst`, "the skolem is the answer"), so
+both evaluate wherever the source expression does; and the only name it applies that the
+source did not is `@Fiat`. -/
+theorem exists_execActions_encodeBuild : ∀ (e : Expr) (n : Nat) {d : FDatabase} {t : Term},
+    d.sig.IsCtor fiatName → Expr.eval d.sig e d.env = some t →
+      ∃ d', execActions d (encodeBuild e n).2.1 = some d' ∧ d'.env = d.env
+  | .lit _, _, d, _, _, _ => ⟨d, rfl, rfl⟩
+  | .var _, _, d, _, _, _ => ⟨d, rfl, rfl⟩
+  | .app f args, n, d, t, hfiat, hev => by
+      obtain ⟨is, his⟩ := Expr.evalList_of_eval_app hev
+      obtain ⟨d₁, hd₁, henv₁⟩ := exists_execActionsArgs_encodeBuildArgs args n hfiat his
+      have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hd₁
+      have hfiat₁ : d₁.sig.IsCtor fiatName := by rw [hsig₁]; exact hfiat
+      have his₁ : Expr.evalList d₁.sig args d₁.env = some is := by
+        rw [hsig₁, henv₁]; exact his
+      have hev₁ : Expr.eval d₁.sig (.app f args) d₁.env = some t := by
+        rw [hsig₁, henv₁]; exact hev
+      have hkey : Expr.evalList d₁.sig (args ++ [.app f args]) d₁.env = some (is ++ [t]) :=
+        Expr.evalList_append_eq his₁
+          (by simp only [Expr.evalList, hev₁, Option.bind_some, Option.map_some])
+      have hstep₁ : execAction d₁ (.set (termName f) (args ++ [.app f args]) [])
+          = some (d₁.addRow (termName f) (is ++ [t]) []) := by
+        simp only [execAction, hkey, Option.bind_some, Expr.evalList, Option.map_some]
+      have hstep₂ : execAction (d₁.addRow (termName f) (is ++ [t]) [])
+            (.set (viewName f) args [.app f args, fiatE])
+          = some ((d₁.addRow (termName f) (is ++ [t]) []).addRow (viewName f) is
+              [t, Term.app fiatName []]) := by
+        simp only [execAction, FDatabase.addRow_sig, FDatabase.addRow_env, his₁,
+          Option.bind_some, Expr.evalList, hev₁, eval_fiatE hfiat₁, Option.map_some]
+      refine ⟨(d₁.addRow (termName f) (is ++ [t]) []).addRow (viewName f) is
+        [t, Term.app fiatName []], ?_, ?_⟩
+      · rw [encodeBuild_app_actions_eq]
+        refine execActions_append_eq hd₁ ?_
+        rw [execActions, hstep₁, Option.bind_some, execActions, hstep₂, Option.bind_some,
+          execActions]
+      · rw [FDatabase.addRow_env, FDatabase.addRow_env]; exact henv₁
+
+@[inherit_doc exists_execActions_encodeBuild]
+theorem exists_execActionsArgs_encodeBuildArgs :
+    ∀ (es : List Expr) (n : Nat) {d : FDatabase} {ts : List Term},
+      d.sig.IsCtor fiatName → Expr.evalList d.sig es d.env = some ts →
+        ∃ d', execActions d (encodeBuildArgs es n).2.1 = some d' ∧ d'.env = d.env
+  | [], _, d, _, _, _ => ⟨d, rfl, rfl⟩
+  | e :: es, n, d, ts, hfiat, hev => by
+      rw [Expr.evalList] at hev
+      obtain ⟨u, hu, hev'⟩ := Option.bind_eq_some_iff.mp hev
+      obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp hev'
+      obtain ⟨d₁, hd₁, henv₁⟩ := exists_execActions_encodeBuild e n hfiat hu
+      have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hd₁
+      obtain ⟨d₂, hd₂, henv₂⟩ := exists_execActionsArgs_encodeBuildArgs es
+        (encodeBuild e n).2.2 (by rw [hsig₁]; exact hfiat) (by rw [hsig₁, henv₁]; exact hus)
+      exact ⟨d₂, by rw [encodeBuildArgs_cons_actions]; exact execActions_append_eq hd₁ hd₂,
+        henv₂.trans henv₁⟩
+
+end
+
+/-- `Expr.Scoped` survives an action's own binder, which is what carries a rule's
+justification across a head `let`: only a `let` moves the scope, and it moves it by adding. -/
+theorem Expr.Scoped.actionBind {e : Expr} {Γ : Scope} (h : e.Scoped Γ) :
+    ∀ a : Action, e.Scoped (a.bind Γ)
+  | .expr _ => h
+  | .letBind v _ => fun w hw => List.mem_cons_of_mem v (h w hw)
+  | .union _ _ => h
+  | .set _ _ _ => h
+
+/-- **One encoded head action's block runs.** Four cases, and each of them is the source
+action's own expressions evaluating plus one name: a build's view row carries `@Fiat`
+(`eval_fiatE`), a `union`'s and a `set`'s `@UF`/view row carries the justification `pfe`, and
+a `union`'s two bundled choices are `if`s over `ordering-gt` — primitives, total on the
+operands, run by `eval_ifGt`. Nothing is asked of the target's signature at a `set`'s own
+function name, which is never evaluated. -/
+theorem exists_execActions_encodeAction {pfe : Expr} :
+    ∀ (a : Action) (n : Nat) {d : FDatabase} {Γ : Scope},
+      Γ.Models d.env → d.sig.IsCtor fiatName → pfe.Scoped Γ → pfe.Evaluable d.sig →
+      a.Scoped Γ → a.Builds d.sig →
+        ∃ d', execActions d (encodeAction pfe a n).1 = some d' ∧
+          d'.sig = d.sig ∧ (a.bind Γ).Models d'.env := by
+  rintro (e | ⟨v, e⟩ | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n d Γ hm hfiat hpfs hpfb hsc hb
+  · obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb
+    obtain ⟨d', hd', henv⟩ := exists_execActions_encodeBuild e n hfiat ht
+    exact ⟨d', by rw [encodeAction_expr_actions]; exact hd', FDatabase.execActions_sig hd',
+      by simpa only [Action.bind, henv] using hm⟩
+  · obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm hsc hb
+    obtain ⟨d₁, hd₁, henv₁⟩ := exists_execActions_encodeBuild e n hfiat ht
+    have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hd₁
+    have ht₁ : Expr.eval d₁.sig e d₁.env = some t := by rw [hsig₁, henv₁]; exact ht
+    refine ⟨{ d₁.addTerm t with env := (v, t) :: d₁.env }, ?_, hsig₁, ?_⟩
+    · rw [encodeAction_letBind_actions, encodeBuild_fst]
+      refine execActions_append_eq hd₁ ?_
+      simp only [execActions, execAction, ht₁, Option.map_some, Option.bind_some]
+    · intro w
+      simp only [Action.bind, List.mem_cons, Env.dom_cons, henv₁]
+      exact or_congr_right (hm w)
+  · obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm hsc.1 hb.1
+    obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb.2
+    obtain ⟨pv, hpv⟩ := Expr.eval_isSome_of_scoped hm hpfs hpfb
+    obtain ⟨d₁, hd₁, henv₁⟩ := exists_execActions_encodeBuild e₁ n hfiat ht₁
+    have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hd₁
+    obtain ⟨d₂, hd₂, henv₂⟩ := exists_execActions_encodeBuild e₂
+      (encodeBuild e₁ n).2.2 (by rw [hsig₁]; exact hfiat)
+      (by rw [hsig₁, henv₁]; exact ht₂)
+    have hsig₂ : d₂.sig = d.sig := (FDatabase.execActions_sig hd₂).trans hsig₁
+    have henv₂' : d₂.env = d.env := henv₂.trans henv₁
+    have h₁' : Expr.eval d₂.sig e₁ d₂.env = some t₁ := by
+      rw [hsig₂, henv₂']; exact ht₁
+    have h₂' : Expr.eval d₂.sig e₂ d₂.env = some t₂ := by
+      rw [hsig₂, henv₂']; exact ht₂
+    have hpv' : Expr.eval d₂.sig pfe d₂.env = some pv := by rw [hsig₂, henv₂']; exact hpv
+    refine ⟨d₂.addRow ufName [if Term.blt t₂ t₁ then t₁ else t₂]
+      [if Term.blt t₂ t₁ then t₂ else t₁, pv], ?_,
+      by rw [FDatabase.addRow_sig]; exact hsig₂,
+      by simpa only [Action.bind, FDatabase.addRow_env, henv₂'] using hm⟩
+    simp only [encodeAction_union_actions, encodeBuild_fst]
+    refine execActions_append_eq (execActions_append_eq hd₁ hd₂) ?_
+    simp only [execActions, execAction, maxE, minE, Expr.evalList,
+      eval_ifGt h₁' h₂' h₁' h₂', eval_ifGt h₁' h₂' h₂' h₁', hpv',
+      Option.bind_some, Option.map_some]
+  · obtain ⟨as, has⟩ := Expr.evalList_isSome args
+      (fun w hw => by
+        obtain ⟨e, hmem, hwe⟩ := Expr.mem_varsList hw
+        exact (hm w).mp (hsc.1 e hmem w hwe))
+      (fun g hg => by
+        obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
+        exact hb.1 e hmem g hge)
+    obtain ⟨vs, hvs⟩ := Expr.evalList_isSome out
+      (fun w hw => by
+        obtain ⟨e, hmem, hwe⟩ := Expr.mem_varsList hw
+        exact (hm w).mp (hsc.2 e hmem w hwe))
+      (fun g hg => by
+        obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
+        exact hb.2 e hmem g hge)
+    obtain ⟨pv, hpv⟩ := Expr.eval_isSome_of_scoped hm hpfs hpfb
+    obtain ⟨d₁, hd₁, henv₁⟩ := exists_execActionsArgs_encodeBuildArgs args n hfiat has
+    have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hd₁
+    obtain ⟨d₂, hd₂, henv₂⟩ := exists_execActionsArgs_encodeBuildArgs out
+      (encodeBuildArgs args n).2.2 (by rw [hsig₁]; exact hfiat)
+      (by rw [hsig₁, henv₁]; exact hvs)
+    have hsig₂ : d₂.sig = d.sig := (FDatabase.execActions_sig hd₂).trans hsig₁
+    have henv₂' : d₂.env = d.env := henv₂.trans henv₁
+    have has' : Expr.evalList d₂.sig args d₂.env = some as := by
+      rw [hsig₂, henv₂']; exact has
+    have hout' : Expr.evalList d₂.sig (out ++ [pfe]) d₂.env = some (vs ++ [pv]) :=
+      Expr.evalList_append_eq (by rw [hsig₂, henv₂']; exact hvs)
+        (by simp only [Expr.evalList, hsig₂, henv₂', hpv, Option.bind_some, Option.map_some])
+    refine ⟨d₂.addRow (viewName f) as (vs ++ [pv]), ?_,
+      by rw [FDatabase.addRow_sig]; exact hsig₂,
+      by simpa only [Action.bind, FDatabase.addRow_env, henv₂'] using hm⟩
+    simp only [encodeAction_set_actions, encodeBuildArgs_fst]
+    refine execActions_append_eq (execActions_append_eq hd₁ hd₂) ?_
+    simp only [execActions, execAction, has', hout', Option.bind_some, Option.map_some]
+
+/-- **The whole encoded head runs.** The fold of `exists_execActions_encodeAction`, with the
+justification carried across a head `let` by `Expr.Scoped.actionBind` and the signature by
+`FDatabase.execActions_sig` — a build emits `set`s only, so the only thing that moves inside
+the block is the environment, and only a `let` moves it. -/
+theorem exists_execActions_encodeActions {pfe : Expr} :
+    ∀ (as : List Action) (n : Nat) {d : FDatabase} {Γ : Scope},
+      Γ.Models d.env → d.sig.IsCtor fiatName → pfe.Scoped Γ → pfe.Evaluable d.sig →
+      Actions.Scoped as Γ → Actions.Builds as d.sig →
+        ∃ d', execActions d (encodeActions pfe as n).1 = some d' ∧
+          d'.sig = d.sig ∧ (Actions.bind as Γ).Models d'.env := by
+  intro as
+  induction as with
+  | nil => intro _ d _ hm _ _ _ _ _; exact ⟨d, rfl, rfl, hm⟩
+  | cons a as ih =>
+      intro n d Γ hm hfiat hpfs hpfb hsc hb
+      obtain ⟨d₁, hd₁, hsig₁, hm₁⟩ :=
+        exists_execActions_encodeAction a n hm hfiat hpfs hpfb hsc.1 hb.1
+      obtain ⟨d₂, hd₂, hsig₂, hm₂⟩ := ih (encodeAction pfe a n).2 hm₁
+        (by rw [hsig₁]; exact hfiat) (Expr.Scoped.actionBind hpfs a)
+        (by rw [hsig₁]; exact hpfb) hsc.2 (by rw [hsig₁]; exact hb.2)
+      exact ⟨d₂, by rw [encodeActions_cons_actions]; exact execActions_append_eq hd₁ hd₂,
+        hsig₂.trans hsig₁, hm₂⟩
+
+/-- **The encoded rule's head runs**, at the substitution the emitted query matched at.
+`execLocalActions` is `execActions` at `τ ++ d.env` with the environment restored, and
+`encodeRule_actions` names the block: the source head, encoded under `(@Rule_i p…)`. This is
+the target-side counterpart of `evalLocalActions_isSome_of_builds`, and the step
+`Egglog.UnionsFire` had no scaffolding for. -/
+theorem exists_execLocalActions_encodeRule {pfe : Expr} {d : FDatabase} {Γ : Scope} {τ : Env}
+    (hm : Γ.Models (τ ++ d.env)) (hfiat : d.sig.IsCtor fiatName)
+    (hpfs : pfe.Scoped Γ) (hpfb : pfe.Evaluable d.sig)
+    {as : List Action} (hsc : Actions.Scoped as Γ) (hb : Actions.Builds as d.sig) (n : Nat) :
+    ∃ d', execLocalActions d (encodeActions pfe as n).1 τ = some d' ∧ d'.sig = d.sig := by
+  obtain ⟨e, he, hsig, -⟩ :=
+    exists_execActions_encodeActions (pfe := pfe) as n
+      (d := { d with env := τ ++ d.env }) hm hfiat hpfs hpfb hsc hb
+  exact ⟨{ e with env := d.env, rules := d.rules },
+    by rw [execLocalActions, he, Option.map_some], hsig⟩
 
 /-! ##### Where in the block an action ran
 

@@ -89,13 +89,14 @@ yet.
 **Where the library stands.** **`Spec/`, `Impl/`, `Proofs/` and `Tests/`: zero `sorry` and zero
 `sorryAx`.** `execM_contained` was the last theorem depending on either and lost them at
 `04eb89e`; `execM_eq_exec` and `exec_programStep` were already clean and are unchanged. Parked
-M11's `Encoding/` has three, one per named property of the state `execM`
-returned that `encode_corresponds` is reduced to (`ENCODING.md`); `make lean-check` pins the number and the directory, and nothing outside it
-depends on them. The whole library builds, `Proofs/Lattice.lean` and
-`Proofs/Counterexamples.lean` included, and difftest is **166 passed / 0 failed**. So the chain from
+M11's `Encoding/` has one, the target firing behind a source firing that the forward half of
+`encode_corresponds` is reduced to (`ENCODING.md`); `make lean-check` pins the number and the
+directory, and nothing outside it depends on it. The whole library builds,
+`Proofs/Lattice.lean` and `Proofs/Counterexamples.lean` included, and difftest is
+**183 passed / 0 failed**. So the chain from
 the egglog binary to `ProgramStep` is unbroken: difftest compares egglog against `execM`,
 `execM_eq_exec` carries `execM` to `exec` on the constructor fragment, and `exec_programStep` is a
-biconditional against `ProgramStep`. The 166 cases constrain the **specification**, not only the
+biconditional against `ProgramStep`. The 183 cases constrain the **specification**, not only the
 interpreter.
 
 ### What is covered, and what is not
@@ -117,7 +118,7 @@ environment computes congruent answers.
 primitive-free and a `:merge` body of `(min old new)` is covered.
 
 **The whole tested corpus is inside the theorem.** No rendered difftest case applies an ordering
-primitive, so all 166 satisfy the second arm; 105 contain a `union` and would fail the first, and
+primitive, so all 183 satisfy the second arm; 123 contain a `union` and would fail the first, and
 the 64 carrying both a `union` and a `:merge` — what difftest exists to exercise — are admitted.
 Excluded: only a program that applies `ordering-min`/`ordering-max` *and* emits an `Action.union`.
 `encode` is not one — it uses `ordering-max` but emits no `union` — which is why both arms are
@@ -667,8 +668,8 @@ it they sat on the interpreter's side of an unproved gap.
 ### Differential testing — ✅ running
 
 `make lean-difftest` (`scripts/difftest.sh`) compares the Lean interpreter against the Rust
-binary. **166 cases pass**: 60 random constructor, 30 random `:merge`, 76 curated (10
-constructor, 66 `:merge`).
+binary. **183 cases pass**: 60 random constructor, 30 random `:merge`, 93 curated (29
+constructor, 64 `:merge`).
 
 The oracle is **`(print-size)`**, one row count per function — the same quantity
 `egglog/tests/files.rs` snapshots. egglog's table for `f` holds one row per distinct
@@ -913,12 +914,12 @@ Other omissions, unaddressed since the port: schedules, extraction, containers.
 ## Verification
 
 - `cd semantics && lake build` — the whole development typechecks, and that is the state to keep.
-- `make lean-difftest` — 166 cases against the real egglog binary. Watch the profile
+- `make lean-difftest` — 183 cases against the real egglog binary. Watch the profile
   distribution, not only the pass count. It reaches `Impl/` through `Tests/Egg.lean` without
   touching `Proofs/`. It shares one scratch directory, so two runs at once will report spurious
   failures.
-- `make lean-check` additionally fails on any `sorry` outside `Encoding/Correspond.lean`, and on
-  any change to the four it carries. Outside that file any hit is new.
+- `make lean-check` additionally fails on any `sorry` outside `EgglogSemantics/Encoding/`, and on
+  any change to the one it carries. Outside that directory any hit is new.
 - Axioms, on every change: `lean_verify` or `#print axioms` against the table in "Checking a
   change". A green build does not catch an axiom leak.
 - `Tests/Examples.lean` compiling *is* the M7 suite — each check is a closed proof or a
