@@ -38,8 +38,19 @@ normal form" below.
 **Incompleteness, exactly.** `props` needs an endpoint to synthesise a `@Congr_k` — the node
 names no head — so a `@Congr_k` standing as a rule premise whose body fact has neither side
 ground under the substitution built so far is rejected. A body fact reading a merge
-function's row is rejected for the same reason, `Expr.eval` having no case for one. Both are
-refusals, so the checker stays sound; `Proof.Sound` is the statement that says so.
+function's row is rejected for the same reason, `Expr.eval` having no case for one. A bare
+`@Fiat` premise at a body fact with both endpoints free is confined to `C.eqs`, the
+*top-level* actions, so it cannot anchor at a term that exists only because an earlier rule
+fired — the residue "`@Fiat` at a rule-created term" measures and bounds below. All three
+are refusals, so the checker stays sound; `Proof.Sound` is the statement that says so.
+
+**The environment order is `evalLocalActions`'.** A rule's query is matched with the globals
+*out of scope* (`Spec/Match.lean`'s `ValidSubst`, "free against the empty environment") and
+its head is run with them behind the match bindings (`σ ++ db.env`). `props`' `@Rule_i` case
+is that, seeding `ruleSubsts` at `[]` and evaluating the head at `σ ++ C.env`. Reversing the
+two — globals in front — makes a top-level `let` recapture a name a rule declared earlier
+matches on, which is the shape `DiffTest.lean`'s `glob-late-eq` draws; it cost 28 of the
+`difftest check 64` corpus's rows.
 
 **A merge needs no justification of its own.** A collision keeps the proof carried by
 whichever side's value survives and composes the displaced edge as
@@ -148,8 +159,15 @@ def ctxOf (P : Program) : Ctx := P.foldl (Ctx.step P) Ctx.empty
 
 mutual
 
-/-- Match `e` against the ground term `t`, extending `σ`. A new binding is appended, so the
-globals `σ` starts from stay in front and shadow rule variables, as in `evalLocalActions`. -/
+/-- Match `e` against the ground term `t`, extending `σ`. `σ` holds the rule's **own** match
+bindings and nothing else: the query is matched against the empty environment
+(`Spec/Match.lean`'s `ValidSubst`, "free against the empty environment"), because a global
+the rule was declared under was resolved into the query when the rule was registered and a
+name that was not a global then never becomes one for that rule. Order within `σ` is
+immaterial — a name already bound is never rebound, only compared — so a new binding is
+appended. The globals go *behind* `σ` when the head runs (`props`, `@Rule_i`), which is
+`evalLocalActions`' `σ ++ db.env`: a match variable shadows a global of the same name, so a
+`let` reached after the rule was declared does not recapture it. -/
 def unifyExpr (sig : Signature) : Expr → Term → Env → Option Env
   | .lit l, .lit l', σ => if l = l' then some σ else none
   | .lit _, .app _ _, _ => none
@@ -357,8 +375,10 @@ def props (C : Ctx) : Term → Option Term → Option Term → List (Term × Ter
               | none => []
               | some r =>
                   if ps.length = premiseCount r then
-                    (ruleSubsts C ps (flatQuery r.query 0).1 [C.env]).flatMap fun σ =>
-                      (headEqs C.sig r.actions σ).filter (endsOk ma mb)
+                    -- `evalLocalActions`' environment: the match bindings, then the globals
+                    -- behind them. Matching itself sees no globals at all.
+                    (ruleSubsts C ps (flatQuery r.query 0).1 [[]]).flatMap fun σ =>
+                      (headEqs C.sig r.actions (σ ++ C.env)).filter (endsOk ma mb)
                   else []
   termination_by pf => size pf
   decreasing_by all_goals (simp [size, sizeL]; try omega)
@@ -630,6 +650,95 @@ ahead of everything. -/
 #guard Checks chain (pRule 0 [pFiat, pTrans (pSym pFiat) (pSym pFiat)]) tA tB
 #guard !Checks chain (pRule 0 [pSym pFiat, pFiat]) tA tB
 #guard !Checks chain (pRule 0 []) tA tB
+
+/-! ### A `let` reached after the rule was declared
+
+The environment order, both halves of it. A rule declared *before* a top-level `let` on `$g`
+keeps `$g` as a match variable — `Rule.substGlobals` had no binding for it — and
+`evalLocalActions` puts the match bindings **before** the globals, so the head reads the
+match variable too and the later `let` recaptures nothing. A rule declared *after* has the
+global already resolved into its query, so it fires at the global's value alone. The two
+programs below differ only in where the `let` sits. `DiffTest.lean`'s `glob-late-eq` and
+`glob-late-head` are this shape run against the binary. -/
+private def globRule : Rule :=
+  ⟨[.expr (.app "F" [.var "$g"])], [.union (.app "F" [.var "$g"]) eB], ""⟩
+
+private def globDecls : Program :=
+  [.decl "A" (cnst 0), .decl "B" (cnst 0), .decl "C" (cnst 0), .decl "F" (cnst 1)]
+
+private def globTail : Program :=
+  [.action (.expr (.app "F" [eA])), .action (.expr eB), .action (.union eC eA), .run ""]
+
+private def lateLet : Program :=
+  globDecls ++ [.rule globRule, .action (.letBind "$g" eC)] ++ globTail
+
+private def earlyLet : Program :=
+  globDecls ++ [.action (.letBind "$g" eC), .rule globRule] ++ globTail
+
+/-! The stored queries differ, and the arity with them: `lateLet`'s reads one application
+and `earlyLet`'s reads two, because the resolved `(C)` is itself an application to flatten.
+That is `Rule.substGlobals` at the declaration and not at the firing. -/
+#guard (ctxOf lateLet).rules.map premiseCount = [1]
+#guard (ctxOf earlyLet).rules.map premiseCount = [2]
+
+/-! `$g` is a match variable in `lateLet`, in the query and in the head alike: the rule fires
+at `(F (A))` and derives `(F (A)) = (B)`, not the global's `(F (C)) = (B)`. -/
+#guard Checks lateLet (pRule 0 [pFiat]) (tF tA) tB
+#guard !Checks lateLet (pRule 0 [pFiat]) (tF tC) tB
+
+/-! Declared after the `let`, `$g` is gone from the query — `Rule.substGlobals` put `(C)`
+there — and the firing is the global's alone. -/
+#guard !Checks earlyLet (pRule 0 [pFiat, pFiat]) (tF tA) tB
+#guard Checks earlyLet (pRule 0 [pFiat, pFiat]) (tF tC) tB
+
+/-! ### `@Fiat` at a rule-created term, which is the residue
+
+`props` at `@Fiat` yields `C.eqs` — the *top-level* actions — plus reflexivity, and
+reflexivity needs an endpoint to be read off (`reflProps`). A premise sitting at a query
+fact neither side of which `σ` grounds is asked with **both** endpoints free, so `@Fiat`
+offers it `C.eqs` and nothing else. `encodeBuild`, meanwhile, writes a view entry under
+`@Fiat` whatever context the build is in, so a row a **rule head** created carries a bare
+`@Fiat` there. Those two meet exactly where a rule must anchor its premise at a term that
+exists only because an earlier rule fired: the checker refuses, and it is the checker's
+incompleteness rather than the encoder's mistake.
+
+It is the *bare* `@Fiat` that fails, and only it: a premise naming the firing that created
+the row checks, because `headEqs` contributes `reflEqs` over **every subterm** of what the
+head builds. That is what bounds the residue rather than leaving it open.
+
+**Measured**, and it is the whole of what `difftest check 64` still refuses: **4 rows of 828,
+on 2 of the 87 in-domain cases** — `both-2` (2 of 23) and `rand-43` (2 of 26). Each is one
+`@Rule_i` node whose `@Fiat` premise stands for a row a rule head built, and each checks
+once that premise names the creating firing. In `both-2` the claim
+`(Add (One) (Add (Three) (Two))) = (Add (One) (Add (Two) (Three)))` needs the commute rule
+anchored at `(Add (Two) (Three))`, which only the assoc rule's head builds:
+`@Trans (@Sym (@Congr_2 (@Fiat) (@Rule_1 (@Fiat)))) (@Fiat)` is refused and
+`@Trans (@Sym (@Congr_2 (@Fiat) (@Rule_1 (@Rule_0 (@Fiat) (@Fiat))))) (@Fiat)` is accepted.
+In `rand-43` the claim `(F (F (F (F (A))))) = (F (F (A)))` needs an anchor at
+`(G (F (F (A))) (B))`, which only rule 0's head builds, and
+`@Trans (@Sym (@Rule_1 (@Rule_1 (@Rule_0 (@Fiat))))) (@Rule_1 (@Rule_1 (@Fiat)))` is accepted
+where the emitted proof's bare `@Fiat` is not. Closing it would mean seeding `@Fiat` with the
+terms a rule head can build, which is a fixpoint over the rules and not a read of the program.
+
+Below, rule 0 turns `(G x y)` into `(F (G y x))`, so `(G (B) (A))` is built as a *subterm*
+and is the endpoint of no asserted equality; rule 1 then has to match it. -/
+private def eG (x y : Expr) : Expr := .app "G" [x, y]
+private def tG2 (x y : Term) : Term := .app "G" [x, y]
+
+private def created : Program :=
+  [.decl "A" (cnst 0), .decl "B" (cnst 0), .decl "F" (cnst 1), .decl "G" (cnst 2),
+   .action (.expr (eG eA eB)),
+   .rule ⟨[.expr (eG (.var "x") (.var "y"))],
+          [.union (eG (.var "x") (.var "y")) (.app "F" [eG (.var "y") (.var "x")])], ""⟩,
+   .rule ⟨[.expr (eG (.var "x") (.var "y"))],
+          [.union (eG (.var "x") (.var "y")) eB], ""⟩,
+   .run "", .run ""]
+
+/-! At the top-level term rule 1 checks; at the term rule 0 created it does not, and the
+same claim with the creating firing named as the premise does. -/
+#guard Checks created (pRule 1 [pFiat]) (tG2 tA tB) tB
+#guard !Checks created (pRule 1 [pFiat]) (tG2 tB tA) tB
+#guard Checks created (pRule 1 [pRule 0 [pFiat]]) (tG2 tB tA) tB
 
 end Witnesses
 end Egglog

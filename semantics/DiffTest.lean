@@ -2463,32 +2463,31 @@ than refused. `merge-displaced` counts what is left: a proof the checker can gro
 a term the source names, reported against a row whose claim sits at a rule-created one. The
 report counts those apart from proofs that justify nothing.
 
-**Measured.** `difftest check 64`, the 83 in-domain corpus cases:
-**790 of 828 recorded equalities check, 6 are merge-displaced, and 32 are
-unjustified**: `both-2` (17/4/2), `glob-late-eq` (4/0/2), `rand-35` (10/0/2), `rand-43`
-(22/2/2), `rand-51` (6/0/13) and `rand-59` (7/0/11) reject and every other case is clean. A
-failing case prints `REJECT` rather than `CHECKS`, so an aggregate has to count both lines —
-81 `CHECKS` and 6 `REJECT` here.
+**Measured.** `difftest check 64`, the 87 in-domain corpus cases:
+**818 of 828 recorded equalities check, 6 are merge-displaced, and 4 are
+unjustified**: `both-2` (17/4/2) and `rand-43` (22/2/2) reject and every other case is clean.
+A failing case prints `REJECT` rather than `CHECKS`, so an aggregate has to count both lines
+— 85 `CHECKS` and 2 `REJECT` here.
 
-**Four of the six are the late-`let` shape, and they are the checker's gap and not the
-encoder's.** `genProgram` now draws a top-level `let` on `a` — a name the rules it already
-registered match on — one seed in three, and `glob-late-eq` is the curated case of the same
-shape. With that draw suppressed the sweep is 816/6/6 of 828, `84 CHECKS` and `3 REJECT`
-(`both-2`, `glob-late-eq`, `rand-43`); the extra rows are `props` failing to seed a `@Rule_i`
-node whose premise exists only because an earlier rule fired, which is the mechanism below.
-`difftest correspond 64` reports **0 LOST and 0 INVENTED** on every one of them, so the
-encoding itself agrees.
+The checker reads a rule's query through `Rule.substGlobals` before flattening it, and runs
+its head with the globals *behind* the match bindings, because that is what the encoder
+flattened and what `evalLocalActions` runs. Without the first, `@Rule_i`'s premise count
+would disagree with `proofDecls`' declaration wherever a query names a global, and
+`glob-lost-eq` — the one `glob-*` case whose head derives an equality — would reject on all
+four of its rows. Without the second, a top-level `let` recaptures a name a rule declared
+earlier matches on: that cost 28 rows and four extra `REJECT` cases — `glob-late-eq` (2),
+`rand-35` (2), `rand-51` (13) and `rand-59` (11) — because `genProgram` draws a late `let` on
+`a`, a name the rules it already registered match on, one seed in three.
+`Encoding/Checker.lean`'s `lateLet`/`earlyLet` witnesses pin both halves.
 
-The checker reads a rule's query through `Rule.substGlobals` before flattening it, because
-that is the query the encoder flattened; without it `@Rule_i`'s premise count would disagree
-with `proofDecls`' declaration wherever a query names a global, and `glob-lost-eq` — the one
-`glob-*` case whose head derives an equality — would reject on all four of its rows.
-
-All ten non-checking rows are the one mechanism, and it is the checker's and not the
-encoder's: `props` seeds a `@Rule_i` node's premises from the source's top-level actions, so
-a term existing only because an earlier rule fired cannot anchor one. Measured, `@Rule_1
-(@Fiat)` yields four propositions at a top-level term, two one step off it, and none at a
-rule-created one.
+Both remaining rows-per-case are the one mechanism, and it is the checker's and not the
+encoder's: `props` seeds a `@Rule_i` node's `@Fiat` premise from the source's top-level
+actions, so a term existing only because an earlier rule fired cannot anchor one. Measured,
+`@Rule_1 (@Fiat)` yields four propositions at a top-level term, two one step off it, and none
+at a rule-created one; naming the creating firing in the premise instead makes each of the
+four rows check. `Encoding/Checker.lean`'s "`@Fiat` at a rule-created term" bounds it, with
+both corpus rows spelled out. `difftest correspond 64` reports **0 LOST and 0 INVENTED** on
+`both-2` and `rand-43`, so the encoding itself agrees.
 
 Checking is not what costs: `check 64 union` is 0.22 s where `encode 64 union` is 0.32 s, and
 the difference is the source run `encodeCompare` does and this does not — reading and
