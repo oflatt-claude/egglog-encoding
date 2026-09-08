@@ -164,8 +164,12 @@ nightly-local: nightly-uv nightly-rustup
 # hold *degenerately* there, for the one arithmetic reason that makes `Database.UnionsJoined` and
 # `FDatabase.RowJoined.edge` vacuous too — `rbProgram` asserts nothing, so the state's union-find
 # is empty — and `ncTgt_viewRowsRootedAll` and `ncTgt_ufRootsUnique_instance` are the two of them
-# with content, at a state holding a live `@UF` row. Column closure has content at neither
-# (`ncTgt_no_view_key_B`) and is weakened for nothing.
+# with content, at a state holding a live `@UF` row. Column closure now has content too, at a
+# third hand-built state: `ccTgt` builds over the union's *member*, so a live view row is still
+# keyed on the moved endpoint, `ccTgt_columnClosed_instance` is the satisfied premise beside the
+# row the closure delivers, `ccStale_columnRule_fires` is the firing that writes it, and
+# `ccStale_not_viewRowsColumnClosedAll` is the clause **false** one firing earlier — so it is a
+# constraint on a state rather than a shape every state has. Nothing is weakened for any of it.
 # The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
 # turns a source reading of a query into a substitution the *emitted* query matches at, over
 # `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its

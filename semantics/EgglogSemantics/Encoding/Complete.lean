@@ -8093,7 +8093,8 @@ target reaches" is too general a claim to act on, and at `unionsJoined_fire_sati
 entry-level reachability is equality. So the three are clauses of `Egglog.UnionsFire` rather
 than a false hypothesis added to it, at the cost of holding degenerately at the witness: the
 non-vacuity they do have is `ncTgt_viewRowsRootedAll` and `ncTgt_ufRootsUnique_instance`, at a
-state with a live `@UF` row. -/
+state with a live `@UF` row, and `ccTgt_columnClosed_instance` beside
+`ccStale_not_viewRowsColumnClosedAll`, at a state one column firing into a rebuild. -/
 
 /-- **The restricted forms are weakenings**, at whichever program the consumer names: the
 unrestricted form of each is `Egglog.RowMech`-shaped and `encStep_ctorsIn_of_row` is what pays
@@ -8649,8 +8650,10 @@ vacuous at the witness for the very same arithmetic reason. What `ncTgt` cannot 
 live view row still keyed on a term the union-find moved, which is the *column* rule's premise
 rather than the e-class rule's. At `ncTgt` the union's endpoint `(B)` keys no view row
 (`ncTgt_no_view_key_B`) — `@FView` was built at the leader `(A)` and `@BView` is nullary — so
-the premise is unsatisfiable there too. The gap is recorded, not weakened: the clause is a
-theorem of every encoded run (`encStep_viewRowsColumnClosedAll`) and false at no state known. -/
+the premise is unsatisfiable there too. **That third state is `ccTgt` below**, where the build
+is over the union's member rather than over its leader: the premise is satisfied, the clause
+holds (`ccTgt_columnClosed_instance`), and one firing earlier it is **false**
+(`ccStale_not_viewRowsColumnClosedAll`), which is the falsifiability the clause had nowhere. -/
 
 set_option maxRecDepth 100000 in
 /-- **The live `@UF` row `ncTgt` holds**, the `union`'s own write. -/
@@ -8718,6 +8721,226 @@ theorem ncTgt_ufRootsUnique_instance :
   ⟨Database.UFStep.toReach ⟨ncFiat, ncTgt_out_uf⟩, by simp [ncA, ncB],
    Relation.ReflTransGen.single ⟨⟨ncFiat, ncTgt_row_uf⟩, by simp [ncA, ncB]⟩,
    ncTgt_ufRowRoot_A, .refl⟩
+
+/-! ##### The state column closure has content at, one column firing into a rebuild
+
+`FDatabase.ViewRowsColumnClosedAll`'s premise is a live view row **still keyed on a term a
+`union` has moved**, and neither state above has one: `rbTgtR` holds no `@UF` row at all
+(`rbTgtR_no_uf_row`), and at `ncTgt` the union's endpoint `(B)` keys nothing
+(`ncTgt_no_view_key_B`) because `ncProgram` builds `(F (A))` over the *leader*. Building over
+the **member** is what gives the premise content, and it is a source command that does it:
+
+```
+(F (B))  (union (A) (B))  (run "r")
+```
+
+`(A)` is below `(B)` in `Term.blt`, so the `union` writes `@UF((B)) ↦ ((A), @Fiat)` while the
+build has already written `@FView((B)) ↦ ((F (B)), @Fiat)` — a live view row whose key column is
+the moved endpoint. The declarations are `ncProgram`'s own, so the two programs share a prelude
+(`ccProgram_encodePrelude`), `ncBase` is that prelude's state, and `columnRule "F" 1 0` is a
+rule the state really holds (`ccStale_columnRule_held`).
+
+`ccStale` is what the second command's `set`s leave, before that block's trailing
+`Cmd.saturate rebuildRuleset`: `FDatabase.addRow` in `encodeBuild`'s own order, the discipline
+`ncTgt` and `cxPre` are built with. The first block's own rebuild had no `@UF` row to read, and
+its re-writes of `(B)`'s two rows are the same rows.
+
+**Column closure is false at `ccStale`** (`ccStale_not_viewRowsColumnClosedAll`), and that is
+the content the clause had nowhere else: it is *falsifiable*, so it is a constraint on a state
+and not a shape every state has, and what makes it true is a **firing**.
+`ccStale_columnRule_fires` is that firing — through `columnRule_fires`, so at the interpreter's
+own round rather than by hand — and `ccTgt` is `ccStale` with the row it writes. **Column
+closure holds at `ccTgt` with its premise satisfied**: `ccTgt_viewRowsColumnClosedAll` is the
+clause and `ccTgt_columnClosed_instance` is the satisfied premise beside the row the closure
+delivers.
+
+`ccTgt` is mid-rebuild and says so: `FDatabase.ViewRowsRootedAll` is **false** at it
+(`ccTgt_not_viewRowsRootedAll`), because the e-class rule has yet to move `@BView`'s own
+e-class column off the member and the merge phase has yet to drop the row that displaces. No
+one state has to carry all three — rootedness is where `ncTgt` has content
+(`ncTgt_viewRowsRootedAll`), root uniqueness where `ncTgt_ufRootsUnique_instance` does, and
+column closure is where this state does. The bracket is what tells a clause with content from
+a clause with none, and all three now have one. -/
+
+/-- The source `ccStale` comes from: `ncProgram`'s declarations and rule, with the build over
+the union's **member** instead of over its leader. -/
+def ccProgram : Program :=
+  [.decl "A" { arity := 0, outArity := 1, merge := none },
+   .decl "B" { arity := 0, outArity := 1, merge := none },
+   .decl "F" { arity := 1, outArity := 1, merge := none },
+   .action (.expr (.app "F" [.app "B" []])),
+   .action (.union (.app "A" []) (.app "B" [])),
+   .rule ncRule,
+   .run "r"]
+
+/-- **And its prelude is `ncProgram`'s**, so `ncBase` is the state `ccProgram`'s own prelude
+leaves: `encodePrelude` reads a program's declarations, its constructor census, its congruence
+arities and its rule count, and the two programs agree on all four. -/
+theorem ccProgram_encodePrelude : encodePrelude ccProgram = encodePrelude ncProgram := rfl
+
+/-- `@Trans (@Sym (@Congr_1 @Fiat)) @Fiat`, the proof a column-`0` firing at a unary
+constructor records: `columnProof` at the two `@Fiat`s this state's two rows carry. -/
+def ccMoved : Term := columnProof 1 0 ncFiat ncFiat
+
+/-- **The state the second command's `set`s leave**, before its block's rebuild: the build of
+`(F (B))`, then the `union`'s two operands and its `@UF` edge. -/
+def ccStale : FDatabase :=
+  ((((((ncBase.addRow (termName "B") [ncB] []).addRow (viewName "B") [] [ncB, ncFiat]
+    ).addRow (termName "F") [ncB, ncFB] []).addRow (viewName "F") [ncB] [ncFB, ncFiat]
+    ).addRow (termName "A") [ncA] []).addRow (viewName "A") [] [ncA, ncFiat]
+    ).addRow ufName [ncB] [ncA, ncFiat]
+
+/-- **And the same state one column firing later**, at the row `ccStale_columnRule_fires`
+delivers. -/
+def ccTgt : FDatabase := ccStale.addRow (viewName "F") [ncA] [ncFB, ccMoved]
+
+set_option maxRecDepth 100000 in
+/-- **The live view row keyed on the moved endpoint**, the build's own write and the premise
+column closure has nowhere else. -/
+theorem ccStale_row_fview :
+    (⟨viewName "F", [ncB], [ncFB, ncFiat]⟩ : Row) ∈ ccStale.rows := by decide
+
+set_option maxRecDepth 100000 in
+/-- **And the `@UF` row that moves it**, the `union`'s own write. -/
+theorem ccStale_row_uf : (⟨ufName, [ncB], [ncA, ncFiat]⟩ : Row) ∈ ccStale.rows := by decide
+
+@[inherit_doc ccStale_row_uf]
+theorem ccStale_ufRowEdge : ccStale.UFRowEdge ncB ncA :=
+  ⟨⟨ncFiat, ccStale_row_uf⟩, by simp [ncA, ncB]⟩
+
+set_option maxRecDepth 100000 in
+/-- **No view row is keyed at the leader yet**: the column rule has not fired. -/
+theorem ccStale_no_fview_at_A :
+    ∀ r ∈ ccStale.rows, r.fn = viewName "F" → r.args ≠ [ncA] := by decide
+
+/-- **So column closure is false at `ccStale`.** The premise is satisfied — a live view row,
+and a live `@UF` row above its one key column — and the row it asks for is not there. This is
+the clause's content: at `rbTgtR` and at `ncTgt` the premise is unsatisfiable and the clause
+therefore unfalsifiable, and here it is neither. Nothing is weakened to get it; what repairs
+the state is `ccStale_columnRule_fires`, a firing of the very rule the clause is named after. -/
+theorem ccStale_not_viewRowsColumnClosedAll : ¬ ccStale.ViewRowsColumnClosedAll := by
+  intro h
+  obtain ⟨e', pf', hmem, -⟩ :=
+    h "F" [ncB] ncFB ncFiat ccStale_row_fview 0 ncB ncA rfl ccStale_ufRowEdge
+  exact ccStale_no_fview_at_A _ hmem rfl (by simp)
+
+set_option maxRecDepth 100000 in
+/-- Every column the state's rows record is a value the enumerator would assign, which is what
+a firing reads its premise through. -/
+theorem ccStale_rowColumnsValued : ccStale.RowColumnsValued := by
+  change ∀ r ∈ ccStale.rows, ∀ t ∈ r.args ++ r.out, t ∈ ccStale.valueTerms
+  decide
+
+set_option maxRecDepth 100000 in
+/-- The prelude binds nothing, so no generated variable collides with the environment. -/
+theorem ccStale_noAtEnv : ccStale.NoAtEnv := by
+  change ∀ b ∈ ccStale.env, ¬ "@".isPrefixOf b.1
+  decide
+
+set_option maxRecDepth 100000 in
+/-- **The prelude state, identified.** -/
+theorem ncBase_exec : execM (encodePrelude ncProgram) = some ncBase := by
+  obtain ⟨d, hd⟩ : ∃ d, execM (encodePrelude ncProgram) = some d :=
+    Option.isSome_iff_exists.mp (by decide)
+  rw [hd, ncBase, hd]
+  rfl
+
+/-- **And the column rule is a rule the state holds**, off `FDatabase.EncBase.held` at that
+prelude rather than by hand: `("F", 1)` is in the census the two programs share, so
+`columnRule_mem_maintenanceRules` names the rule and `encOk_preludeState` says the prelude
+installed it. -/
+theorem ccStale_columnRule_held : columnRule "F" 1 0 ∈ ccStale.rules :=
+  (encOk_preludeState ncProgram_encodeDomain ncProgram_encodeDomain.aritiesAgree'
+      ncBase_exec).base.held _
+    (columnRule_mem_maintenanceRules (by decide) (by decide))
+
+set_option maxRecDepth 100000 in
+/-- **The firing that repairs it**, at the interpreter's own round rather than by hand:
+`columnRule_fires` at the view row and the `@UF` row above its column `0`, whose write is the
+row `ccStale` lacks — same e-class column, key moved to the leader, and the congruence proof of
+the move. -/
+theorem ccStale_columnRule_fires :
+    (⟨viewName "F", [ncA], [ncFB, ccMoved]⟩ : Row) ∈
+      (execRunRules rebuildRuleset ccStale).rows := by
+  have h := columnRule_fires (f := "F") (k := 1) (i := 0) (as := [ncB]) (ci := ncB)
+    ccStale_noAtEnv ccStale_rowColumnsValued (by decide) (by decide) (by decide) (by decide)
+    (by decide) (by decide) rfl (by decide) ccStale_columnRule_held rfl
+    ccStale_row_fview ccStale_row_uf
+  simpa [ccMoved] using h
+
+set_option maxRecDepth 100000 in
+/-- The two rows of `ccStale` survive into `ccTgt`, which only adds one. -/
+theorem ccTgt_row_fview :
+    (⟨viewName "F", [ncB], [ncFB, ncFiat]⟩ : Row) ∈ ccTgt.rows := by decide
+
+set_option maxRecDepth 100000 in
+@[inherit_doc ccTgt_row_fview]
+theorem ccTgt_row_uf : (⟨ufName, [ncB], [ncA, ncFiat]⟩ : Row) ∈ ccTgt.rows := by decide
+
+set_option maxRecDepth 100000 in
+/-- **And the row the column firing wrote.** -/
+theorem ccTgt_row_fview_A :
+    (⟨viewName "F", [ncA], [ncFB, ccMoved]⟩ : Row) ∈ ccTgt.rows := by decide
+
+set_option maxRecDepth 100000 in
+/-- The `union`'s edge is the only `@UF` row here too. -/
+theorem ccTgt_uf_rows :
+    ∀ r ∈ ccTgt.rows, r.fn = ufName → r = ⟨ufName, [ncB], [ncA, ncFiat]⟩ := by decide
+
+@[inherit_doc ccTgt_uf_rows]
+theorem ccTgt_ufRowEdge_eq {a b : Term} (h : ccTgt.UFRowEdge a b) : a = ncB ∧ b = ncA := by
+  obtain ⟨⟨pf, hpf⟩, -⟩ := h
+  have h2 := ccTgt_uf_rows _ hpf rfl
+  simp [Row.mk.injEq] at h2
+  exact ⟨h2.1, h2.2.1⟩
+
+@[inherit_doc ccTgt_row_uf]
+theorem ccTgt_ufRowEdge : ccTgt.UFRowEdge ncB ncA :=
+  ⟨⟨ncFiat, ccTgt_row_uf⟩, by simp [ncA, ncB]⟩
+
+set_option maxRecDepth 100000 in
+/-- **The one view row keyed on the moved endpoint**, which is what makes column closure
+decidable here: a row with two output columns whose name is not `@UF` and whose key mentions
+`(B)` is `@FView((B))`. -/
+theorem ccTgt_view_key_B : ∀ r ∈ ccTgt.rows, r.out.length = 2 → r.fn ≠ ufName →
+    ncB ∈ r.args → r = ⟨viewName "F", [ncB], [ncFB, ncFiat]⟩ := by decide
+
+/-- **Column closure holds at `ccTgt`.** The premise is satisfied and the conclusion is the row
+the column firing wrote, at the *same* e-class column — `columnRule` writes `@e` back
+unchanged, so the `Database.UFReach` half is reflexivity and the content is all in the row. -/
+theorem ccTgt_viewRowsColumnClosedAll : ccTgt.ViewRowsColumnClosedAll := by
+  intro f as e pf hrow i ci x hci hedge
+  obtain ⟨rfl, rfl⟩ := ccTgt_ufRowEdge_eq hedge
+  obtain ⟨hilt, hget⟩ := List.getElem?_eq_some_iff.mp hci
+  have h := ccTgt_view_key_B _ hrow rfl viewName_ne_ufName (hget ▸ List.getElem_mem hilt)
+  rw [Row.mk.injEq] at h
+  obtain rfl : f = "F" := viewName_inj h.1
+  obtain rfl : as = [ncB] := h.2.1
+  obtain rfl : i = 0 := by simp at hilt; omega
+  obtain ⟨rfl, rfl⟩ : e = ncFB ∧ pf = ncFiat := by simpa using h.2.2
+  exact ⟨ncFB, ccMoved, by simpa using ccTgt_row_fview_A, .refl⟩
+
+/-- **The satisfied premise, exhibited.** The four facts column closure's premise is made of
+and the row it delivers, at one instance: this is the non-vacuity `rbTgtR` and `ncTgt` cannot
+supply, and `ccStale_not_viewRowsColumnClosedAll` is the same instance at the state one firing
+earlier, where the last of the five is missing. -/
+theorem ccTgt_columnClosed_instance :
+    (⟨viewName "F", [ncB], [ncFB, ncFiat]⟩ : Row) ∈ ccTgt.rows ∧
+      ccTgt.UFRowEdge ncB ncA ∧ ncB ≠ ncA ∧ ([ncB] : List Term)[0]? = some ncB ∧
+      (⟨viewName "F", [ncA], [ncFB, ccMoved]⟩ : Row) ∈ ccTgt.rows ∧
+      ccTgt.toDatabase.UFReach ncFB ncFB :=
+  ⟨ccTgt_row_fview, ccTgt_ufRowEdge, by simp [ncA, ncB], rfl, ccTgt_row_fview_A, .refl⟩
+
+set_option maxRecDepth 100000 in
+/-- `@BView` still records the **member** as its e-class column. -/
+theorem ccTgt_row_bview : (⟨viewName "B", [], [ncB, ncFiat]⟩ : Row) ∈ ccTgt.rows := by decide
+
+/-- **So rootedness is false at `ccTgt`**, and this state is mid-rebuild rather than at a block
+boundary: `@BView`'s e-class column is the endpoint the `union` moved, and it is the e-class
+rule — plus the merge phase that drops the row its re-keying displaces — that repairs it.
+`ncTgt` is where that has happened and where rootedness has its content. -/
+theorem ccTgt_not_viewRowsRootedAll : ¬ ccTgt.ViewRowsRootedAll :=
+  fun h => h "B" [] ncB ncFiat ccTgt_row_bview ncA ccTgt_ufRowEdge
 
 /-- **And the term the source's firing built reads through it**, at the state where
 `Database.ReadsSelf` fails: `(F (B))` reads to `(F (A))`, over `(B)`'s row and then the
@@ -9204,7 +9427,9 @@ entry. They therefore hold **degenerately**, for the same arithmetic reason the 
 below are vacuous, and the content they do have is elsewhere: `ncTgt_viewRowsRootedAll` is
 rootedness at a state with a live `@UF` row and `ncTgt_ufRootsUnique_instance` is root
 uniqueness at a non-reflexive reachability. Column closure has content at neither
-(`ncTgt_no_view_key_B`), and no clause is weakened to give it any.
+(`ncTgt_no_view_key_B`) and at `ccTgt` (`ccTgt_columnClosed_instance`), where the premise is
+satisfied and `ccStale_not_viewRowsColumnClosedAll` is the clause failing one firing earlier;
+no clause is weakened to give any of the three content.
 
 **Two clauses stay vacuous, and the obstruction is arithmetic rather than logical.**
 `Database.UnionsJoined` and `FDatabase.RowJoined.edge` both need a source `union`, and
@@ -11717,8 +11942,9 @@ landed too, and what remains of step 4 is one item, and then the assembly.
   arithmetic that makes conjuncts 12 and 14's `edge` vacuous — `rbProgram` asserts nothing, so
   the state's union-find is empty. `ncTgt_viewRowsRootedAll` and
   `ncTgt_ufRootsUnique_instance` are the two of them with content, at a state that holds a live
-  `@UF` row; column closure has content at neither, and the state that would give it any is one
-  where a **column** rule fired rather than the e-class rule (`ncTgt_no_view_key_B`).
+  `@UF` row, and `ccTgt_columnClosed_instance` is the third at a state where a **column** rule
+  fired rather than the e-class rule — with `ccStale_not_viewRowsColumnClosedAll` the same
+  clause **false** one firing earlier, so it is a constraint and not a shape.
 
   **What the item still owes is the link into the walk's premise.**
   `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain per key position out of
