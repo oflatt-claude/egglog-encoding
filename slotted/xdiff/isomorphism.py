@@ -674,13 +674,20 @@ def reference_graph(case, mult=3):
     spec = case.spec()
     spec, subbed = re.subn(r"^rounds \d+$", f"rounds {case.rounds * mult}", spec, count=1, flags=re.M)
     assert subbed, f"{case.name}: spec has no `rounds` line to scale"
-    r = subprocess.run(
-        [str(X.XMULTI / "target" / "debug" / "xmulti")],
-        input=spec + SEED + "dump\n",
-        capture_output=True,
-        text=True,
-        timeout=X.RUN_TIMEOUT,
-    )
+    try:
+        r = subprocess.run(
+            [str(X.XMULTI / "target" / "debug" / "xmulti")],
+            input=spec + SEED + "dump\n",
+            capture_output=True,
+            text=True,
+            timeout=X.RUN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        # The reference running out of time is NOT a finding -- it is a case that cannot
+        # be compared, which the encoding side has always reported that way. A rule with
+        # unrelated atoms is a cross product, so some of those are simply too much work
+        # for the reference; the small ones still finish and still get compared.
+        return None, "reference timeout"
     if r.returncode != 0:
         return None, f"reference error: {(r.stderr or '?').strip().splitlines()[-1]}"
     return parse_reference(r.stdout), None
@@ -733,7 +740,10 @@ def _dump(case, mult, timeout):
     finally:
         j.unlink(missing_ok=True)
     if unplaced:
-        return None, ("limit", f"{len(unplaced)} value(s) could not be placed in a frame: {unplaced[:2]}")
+        # Its own outcome, not "not comparable": that bucket is for a run that ran out of
+        # TIME, and this is a graph the reader could not rebuild -- a different thing,
+        # and one that could be hiding an encoding defect rather than a budget.
+        return None, ("unreadable", f"{len(unplaced)} value(s) could not be placed in a frame: {unplaced[:2]}")
     leaf = {"var": None}
     for cid in g.ids():
         if any(n[0] == "var" for n in g.nodes[cid]):
@@ -774,7 +784,9 @@ def check(case):
     # `reference_graph`.
     ref, err = reference_graph(case)
     if err:
-        return "skip", err
+        # A timeout is NOT COMPARABLE, which is what the encoding's own timeout reports.
+        # Any other reference error is a skip, as it always was.
+        return ("limit" if err == "reference timeout" else "skip"), err
     enc, err = encoding_graph(case)
     if isinstance(err, tuple):
         return err[0], err[1]
@@ -929,12 +941,34 @@ def known_groups():
     return 1 if bad else 0
 
 
+def known_open_bugs():
+    """Each reproduction of an open bug must STILL diverge.
+
+    A bug that has been fixed makes its case agree, and that is reported rather than
+    passed over: the entry is then stale and should come out, taking the reproduction
+    into `curated()` where it will be held green from then on.
+    """
+    bad = []
+    cases = X.known_divergences()
+    for why, case in cases:
+        verdict, detail = check(case)
+        if verdict == "FAIL":
+            print(f"  ok    {case.name}\n        {detail}\n        {why}")
+        else:
+            print(f"  STALE {case.name}: {verdict} -- it agrees now, so the bug is fixed?")
+            bad.append(case.name)
+    print(f"\n{len(cases) - len(bad)}/{len(cases)} known divergences still diverge")
+    return 1 if bad else 0
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] == "selftest":
         return selftest()
     if args and args[0] == "known-groups":
         return known_groups()
+    if args and args[0] == "known":
+        return known_open_bugs()
     if args and args[0] == "fuzz":
         n = int(args[1]) if len(args) > 1 else 100
         rng = random.Random(int(args[2]) if len(args) > 2 else 0)
@@ -944,7 +978,7 @@ def main():
     else:
         cases = X.curated()
 
-    tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0}
+    tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
     totals = [0, 0, 0]
     for c in cases:
         verdict, detail = check(c)
@@ -952,12 +986,21 @@ def main():
         if verdict == "ok":
             totals = [a + b for a, b in zip(totals, detail, strict=True)]
         else:
-            print(f"  {verdict:4} {c.name:44} {detail}", flush=True)
-    # the sizes are part of the result: a checker comparing nothing would also pass
+            print(f"  {verdict:5} {c.name:44} {detail}", flush=True)
+    # Out of what could be COMPARED, not out of what was generated. A run the reference
+    # cannot finish is not a verdict either way, and counting it against the total made
+    # one slow case look like a divergence. A rule whose atoms share nothing is a cross
+    # product, so some of those are more work than the reference's budget -- the small
+    # ones still finish, and those are the ones this number is about.
+    #
+    # The sizes are still part of the result: a checker that compared nothing would
+    # otherwise pass, which is what the floor in `check-slotted.py` is for.
+    comparable = tally["ok"] + tally["FAIL"]
     print(
-        f"\n{tally['ok']}/{len(cases)} isomorphic"
+        f"\n{tally['ok']}/{comparable} isomorphic"
         f"   ({tally['FAIL']} differ, {tally['skip']} skipped,"
-        f" {tally['limit']} not comparable)"
+        f" {tally['limit']} ran out of time, {tally['unreadable']} unreadable,"
+        f" of {len(cases)} generated)"
     )
     print(f"matched {totals[0]} e-classes, {totals[1]} e-nodes, {totals[2]} symmetries")
     if UNSATURATED:

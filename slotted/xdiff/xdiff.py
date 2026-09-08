@@ -68,6 +68,37 @@ LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 # a non-trivial symmetry group. Raise it to search symmetry-heavy ground: XDIFF_SYM=0.9
 SYM_PROB = float(os.environ.get("XDIFF_SYM", "0.35"))
 
+# How often a rule gets a DISCONNECTED atom -- root and children all fresh, so it shares
+# no variable with the rest of the pattern. Such an atom is unconstrained: it matches
+# every node of its operator, and the rule becomes a cross product. That is why the extra
+# atoms below draw their children from the bound set instead, and why this is rare rather
+# than either off or common.
+#
+# It was off, and the gap was real. Over 4000 cases the generator never produced more
+# than TWO disconnected pieces, and only 3.6% of multipatterns had two -- so the shape
+# that stresses minting hardest went unsearched: three atoms with nothing to constrain
+# their renamings all mint at once, kept apart only by the accumulated avoid-set (M5).
+#
+# WHAT IT FINDS, measured rather than assumed. At this rate over 800 cases: 3 diverge
+# and 1 is more work than the reference's budget. Every divergent rule so far has its
+# ACTION rooted at a disconnected variable, whose renaming is minted outright, which is
+# the mint commitment already tracked as the encoding's remaining known gap -- reached
+# far more often here than by a connected pattern. Not yet shown to be a NEW defect.
+#
+#     python3 slotted/xdiff/isomorphism.py fuzz 800            -> fuzz731 differs
+#     XDIFF_DISC=0.5 python3 slotted/xdiff/isomorphism.py fuzz 400   -> fuzz68, fuzz288
+#
+# A reference that runs out of time is reported as such and left out of the ratio, not
+# counted as a divergence: the small cases still finish and those are what the number is
+# about. Raise this to search the ground harder: XDIFF_DISC=0.5
+DISCONNECT_PROB = float(os.environ.get("XDIFF_DISC", "0.08"))
+
+# How often a rule's pattern is drawn DIRECTLY as a conjunctive query rather than read
+# off a term -- see `rand_general_rule` for the shapes only that reaches. Most such
+# patterns match nothing, so this trades firing rate for coverage; measure both before
+# moving it. XDIFF_GENERAL=1 makes every rule general.
+GENERAL_PROB = float(os.environ.get("XDIFF_GENERAL", "0.25"))
+
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2) | ('lam', ('var', n), body)
 #
@@ -1170,6 +1201,95 @@ def curated():
         )
     )
 
+    # ---- shapes taught by slotted/tests/multipattern.egg ---------------------
+    # That file states what a multipattern means, in the surface syntax, and checks it
+    # with its own claims. Claims are not the reference, so each shape it teaches is
+    # also asked of the reference here -- in the toy language, since that is what the
+    # differential speaks. Names are `MP<n>`, and `isomorphism.py MP` runs just these.
+    #
+    # All five FIRE, which is what makes agreement evidence: blocking each rule's
+    # pattern changes the encoding's graph, measured as (classes, nodes) fired vs
+    # blocked -- MP1 (7,8)/(7,7), MP2 (4,5)/(5,5), MP3 (6,7)/(7,7), MP4 (7,8)/(7,7),
+    # MP5 (6,7)/(7,7). Cases that deliberately do NOT fire exist here too and are
+    # labelled as controls (`S1b`, `CD2`, `P1a`, `P2a`); these are not those.
+
+    # MP1 -- a premise joined on a child the left-hand side binds, the premise being a
+    # BINDER: "match `f`, and only where its first child is a lam". The shape of
+    # multipattern.egg's guarded beta, without the `subst` that file's version uses --
+    # the join is what is under test here, not the primitive.
+    cs.append(
+        Case(
+            "MP1-premise-on-a-bound-child",
+            [("f", ("lam", V0, ("add", V0, V0)), NUL)],
+            [],
+            [("p", "f", "a", "b"), ("a", "lam", "$v", "body")],
+            ("p", "h", "body", "b"),
+            [("f", ("lam", V0, ("add", V0, V0)), NUL), ("h", V0, V0), ("h", V0, V1)],
+        )
+    )
+
+    # MP2 -- TWO variables shared between the atoms, so both halves of the join have to
+    # hold. One shared variable is `M3` above; this is the case where a second one can
+    # refuse a match the first would allow.
+    cs.append(
+        Case(
+            "MP2-join-on-two-variables",
+            [("f", V0, V1), ("g", V0, V1), ("g", V1, V0)],
+            [],
+            [("p", "f", "x", "y"), ("q", "g", "x", "y")],
+            ("p", "h", "x", "y"),
+            [("f", V0, V1), ("g", V0, V1), ("g", V1, V0), ("h", V0, V1), ("h", V1, V0)],
+        )
+    )
+
+    # MP3 -- four atoms, chained two deep, whose deepest variables are shared only with
+    # each other and occur nowhere in the atom the action is rooted at.
+    cs.append(
+        Case(
+            "MP3-four-atom-chain",
+            [("k", ("add", ("f", V0, V1), ("f", V0, V1)), NUL)],
+            [],
+            [("p", "k", "e", "z"), ("e", "add", "l", "r"), ("l", "f", "a", "b"), ("r", "f", "a", "b")],
+            ("p", "h", "a", "b"),
+            [("k", ("add", ("f", V0, V1), ("f", V0, V1)), NUL), ("h", V0, V1), ("h", V0, V0)],
+        )
+    )
+
+    # MP4 -- a variable shared under TWO BINDERS. `B3` and `B4` above share a slot
+    # LITERAL between two binders, which constrains nothing; this shares the BODY, which
+    # does, and has to hold up to renaming rather than by pointer.
+    cs.append(
+        Case(
+            "MP4-body-shared-under-two-binders",
+            [("f", ("lam", V0, ("g", V1, V1)), ("lam", V2, ("g", V1, V1)))],
+            [],
+            [("p", "f", "a", "b"), ("a", "lam", "$v", "body"), ("b", "lam", "$w", "body")],
+            ("p", "h", "body", "body"),
+            [
+                ("f", ("lam", V0, ("g", V1, V1)), ("lam", V2, ("g", V1, V1))),
+                ("h", V0, V0),
+                ("h", V0, V1),
+            ],
+        )
+    )
+
+    # MP5 -- THREE ATOMS SHARING NOTHING, with the action rooted at the one variable the
+    # pattern constrains. The fuzzer reaches disconnected atoms only under `XDIFF_DISC`,
+    # and every divergence it has found there roots its action at a disconnected variable
+    # -- whose renaming is minted outright. This case separates the two: the pattern is a
+    # cross product, and the action is not minted. If it agrees, disconnection alone is
+    # not what those divergences are about.
+    cs.append(
+        Case(
+            "MP5-three-unrelated-atoms",
+            [("f", V0, V1), ("g", V0, NUL), ("k", V1, NUL)],
+            [],
+            [("p", "f", "x", "y"), ("d0", "g", "d0a", "d0b"), ("d1", "k", "d1a", "d1b")],
+            ("p", "h", "x", "y"),
+            [("f", V0, V1), ("g", V0, NUL), ("k", V1, NUL), ("h", V0, V1), ("h", V0, V0)],
+        )
+    )
+
     # ---- shapes taught by slotted/tests/user-rules.egg -----------------------
     # That file is the readable form of this compiler's recipe, so every shape it
     # teaches should be checked here too. The mapping is in its header; these two
@@ -1481,6 +1601,13 @@ def rand_rule(rng, terms, unions):
             root = rng.choice(pvs) if rng.random() < 0.5 else f"w{k}"
             atoms.append((root, rng.choice(plain), rng.choice(pvs), rng.choice(pvs)))
 
+    # A DISCONNECTED atom, sharing nothing with the rest. Kept rare because it is a cross
+    # product: the case runs longer and the graph grows faster for one extra shape.
+    if rng.random() < DISCONNECT_PROB:
+        plain = [o for o in BINOPS if o != "lam"]
+        for k in range(rng.randint(1, 2)):
+            atoms.append((f"d{k}", rng.choice(plain), f"d{k}a", f"d{k}b"))
+
     allv = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith("$")})
     # Any bound variable can be the action's root, and it matters which: an atom
     # ROOT often has the identity for its renaming, so an action rooted there
@@ -1514,6 +1641,83 @@ def rand_rule(rng, terms, unions):
     return atoms, action, conds
 
 
+def rand_general_rule(rng, terms, unions):
+    """A multipattern drawn DIRECTLY, rather than read off a term.
+
+    `rand_rule` flattens ONE seed term and perturbs it, and any atom it adds afterwards
+    takes its children from the variables already bound. That guarantees the pattern
+    matches, and it is why the sweep finds anything at all -- but it is a corner of what
+    a multipattern is. Three shapes it cannot reach:
+
+      * a pattern that is not any term's shape -- atoms whose operators and joins were
+        never a tree;
+      * arbitrary sharing -- one variable in four atoms, two atoms rooted at the same
+        variable, a child that is also its own atom's root;
+      * a pattern whose joins form a cycle rather than a tree.
+
+    So this builds `k` atoms outright: each operator free, each root and child drawn
+    from the variables bound so far or a fresh one. Most such patterns match nothing,
+    which is why it is mixed with the seeded generator rather than replacing it -- but a
+    pattern that matches nothing still has to match nothing on BOTH sides, and the ones
+    that do match are shapes nothing else reaches.
+
+    A SLOT stands only where the language has one, which here is `lam`'s first column.
+    Putting one anywhere else is not an unexplored shape but an ill-typed term: the
+    reference's binary operators take applied ids, and it rejects `(k $s0 $s0)` with
+    `FromSyntaxFailed`. That is why `rand_rule` draws children from the non-`$`
+    variables, and it is kept.
+    """
+    ops = list(BINOPS)
+    atoms, bound, nslot = [], [], 0
+    for k in range(rng.randint(1, 5)):
+        op = rng.choice(ops) if rng.random() < 0.75 else "lam"
+
+        def pick(k=k):
+            if bound and rng.random() < 0.55:
+                return rng.choice(bound)
+            return f"v{k}_{rng.randrange(3)}"
+
+        root = rng.choice(bound) if bound and rng.random() < 0.3 else f"r{k}"
+        if op == "lam":
+            # the reference's `lam` takes a slot literal first, so that column is not free.
+            # Reusing an earlier binder's slot name is allowed: it constrains nothing, and
+            # that is itself a shape worth generating.
+            if nslot and rng.random() < 0.3:
+                c1 = f"$s{rng.randrange(nslot)}"
+            else:
+                nslot += 1
+                c1 = f"$s{nslot - 1}"
+            c2 = pick()
+        else:
+            c1, c2 = pick(), pick()
+        atoms.append((root, op, c1, c2))
+        for v in (root, c1, c2):
+            if not v.startswith("$") and v not in bound:
+                bound.append(v)
+
+    allv = sorted(bound)
+    if not allv:  # every column was a slot, so there is nothing for an action to name
+        return rand_rule(rng, terms, unions)
+
+    r = rng.random()
+    if r < 0.3:
+        x, y = rng.choice(allv), rng.choice(allv)
+        action = (x, "=", y, y)
+    elif r < 0.55:
+        used = {at[1] for at in atoms}
+        fresh_ops = [o for o in BINOPS if o not in used] or BINOPS
+        inner = (rng.choice(fresh_ops), rng.choice(allv), rng.choice(allv))
+        action = (rng.choice(allv), (rng.choice(fresh_ops), inner, rng.choice(allv)))
+    else:
+        action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
+
+    conds = []
+    slots_seen = sorted({c for at in atoms for c in (at[2], at[3]) if c.startswith("$")})
+    if slots_seen and rng.random() < 0.3:
+        conds.append((rng.random() < 0.5, rng.choice(slots_seen), [rng.choice(allv)]))
+    return atoms, action, conds
+
+
 def rand_case(rng, i):
     # A small term set over few ops, so patterns and terms collide often.
     terms = [rand_top(rng, rng.randrange(1, 3)) for _ in range(rng.randrange(1, 3))]
@@ -1543,9 +1747,78 @@ def rand_case(rng, i):
 
     # Mostly one rule. Sometimes two, so the sweep covers rules interacting -- one
     # producing what the other matches -- which a single rule cannot exercise.
-    rules = [rand_rule(rng, terms, unions) for _ in range(2 if rng.random() < 0.25 else 1)]
+    draw = (lambda: rand_general_rule(rng, terms, unions)) if rng.random() < GENERAL_PROB else (
+        lambda: rand_rule(rng, terms, unions)
+    )
+    rules = [draw() for _ in range(2 if rng.random() < 0.25 else 1)]
     probes = terms + [a for a, _ in unions] + [("h", V0, V1), ("h", V0, V0), ("null",), LEAF0]
     return Case(f"fuzz{i}", terms, unions, None, None, probes, rounds=6, rules=rules)
+
+
+# ------------------------------------------------------------- known divergences
+#: Reproductions of OPEN bugs. Deliberately NOT part of `curated()`, which every
+#: green check shares: a case that is known to diverge would turn those red, and
+#: silencing it there would hide a real one. `isomorphism.py known` runs these and
+#: requires each to STILL diverge -- one that starts agreeing is news, because it
+#: means the bug was fixed and the entry is stale.
+_K1_WHY = (
+    "the encoding over-merges. A side condition whose SLOT is a binder's bound slot "
+    "and whose VARIABLE is in a disconnected atom: the rule enumerates alternative "
+    "namings, so the bound slot -- which nothing else constrains and which is freely "
+    "renamable -- can be renamed onto a slot the other class has, and `free` then holds "
+    "where the reference says it cannot."
+)
+
+
+def known_divergences():
+    """`(why, case)` for each open bug the corpus carries a reproduction of."""
+    # ---- K1: a bound slot in a condition, across disconnected atoms ----------
+    # OPEN. Found by the general pattern generator (`XDIFF_GENERAL`), reduced from
+    # `fuzz224`, and registered in `isomorphism.py`'s KNOWN_DIVERGENCES.
+    #
+    #     terms  (lam $0 (var $2)),  (sub2 (var $0) (var $1))
+    #     rule   r0 == (lam $s0 v0),  r1 == (sub2 a b),  free $s0 a
+    #            =>  union v0 (h r1 r1)
+    #
+    # The two atoms share no variable. The condition is the only thing relating them,
+    # and it relates a BOUND slot to a class in the other atom. The reference does not
+    # fire: a binder's bound slot is renamable, so it can always be moved off `a`'s
+    # slots. The encoding fires and over-merges -- ref 6 classes / 6 nodes, enc 5 / 6.
+    #
+    # Why: the compiled rule enumerates alternative namings (`refine-namings` into
+    # `(Idx ix)`), and the condition is checked under each. Nothing constrains the
+    # bound slot, so one alternative names it onto a slot `a` has, and `free` holds.
+    # It is the mint commitment, in the smallest shape found so far.
+    #
+    # WHAT ISOLATES IT, each varying one thing from the case above:
+    #
+    #     free $s0 a           OVER-MERGES     the condition crosses to the other atom
+    #     (no condition)       agrees
+    #     free $s0 v0          agrees          the condition stays in the binder's body
+    #     atoms joined on v0   agrees          nothing is left unconstrained
+    #
+    # `fuzz113` at the default knobs is the same shape -- a `lam` and a `g` sharing
+    # nothing, with `in $s2` over the `g`'s child -- so it needs no separate entry.
+    # Reading conditions off the unrefined renamings repairs both and breaks another
+    # case; that A/B is recorded in `slotted-encoder.py` beside `final_refine`.
+    K1_ATOMS = [("r0", "lam", "$s0", "v0"), ("r1", "sub2", "a", "b")]
+    KNOWN_CASES = [
+        (
+            _K1_WHY,
+            Case(
+            "K1-bound-slot-condition-across-disconnected-atoms",
+            [("lam", V0, V2), ("sub2", V0, V1)],
+            [],
+            K1_ATOMS,
+            ("v0", "h", "r1", "r1"),
+            [("lam", V0, V2), ("sub2", V0, V1), ("h", V0, V1), ("h", V0, V0), NUL],
+            rounds=6,
+            rules=[(K1_ATOMS, ("v0", "h", "r1", "r1"), [(True, "$s0", ["a"])])],
+        )
+        ),
+    ]
+
+    return KNOWN_CASES
 
 
 # ------------------------------------------------------------------------ main

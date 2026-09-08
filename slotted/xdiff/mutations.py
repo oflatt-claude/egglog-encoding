@@ -34,7 +34,10 @@ EXPECTED = {
     # 2 before the end-of-rule refinement. With minting single-valued again, solving
     # an atom's renaming from its root alone genuinely under-constrains, and the
     # refinement no longer papers over it -- so the mutant is MORE visible, not less.
-    "root-only": 11,  # an atom's renaming solved from its root alone
+    # 12 since the multipattern shapes were curated: `MP2-join-on-two-variables`
+    # newly catches this one, and `MP3-four-atom-chain` catches it as order dependence,
+    # which is tallied separately. More is the corpus getting stronger.
+    "root-only": 12,  # an atom's renaming solved from its root alone
     "union-id": 2,  # the action unions classes instead of invocations
     "slot-late": 1,  # a slot literal checked after the renaming, not with it
 }

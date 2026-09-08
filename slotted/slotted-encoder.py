@@ -1453,6 +1453,16 @@ def compile_rule(
         # condition to the substitutions `multi_ematch` returns, which are the refined
         # ones. Nothing is lost by that, because the pattern-slot rule is what keeps a
         # condition honest, not the order.
+        #
+        # A FIX TRIED AND REVERTED, so it is not tried again blindly. `pinned` keeps the
+        # pattern's own slots from merging with EACH OTHER, and nothing keeps another
+        # class's slot from merging ONTO one -- which is how `K1` over-merges: a
+        # condition about a binder's bound slot finds it among an unrelated class's
+        # slots under one alternative naming. Reading the conditions off the UNREFINED
+        # renamings instead repairs K1 and one sweep case, and breaks a different one.
+        # Measured as an A/B over the same 800 generated cases: {fuzz113} before,
+        # {fuzz583} after. A wash, like the `connected_order` heuristic before it --
+        # which is the tell that the order is not what is wrong.
         pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
         alts, i, mrg = new("alts"), new("ix"), new("mrg")
         body.append(f"(= {alts} (refine-namings {pat} {pinned} {' '.join(slot_groups)}))")

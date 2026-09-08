@@ -14,6 +14,28 @@
 ;;; the rule does.
 ;;;
 ;;;     python3 slotted/slotted-egglog.py slotted/tests/multipattern.egg
+;;;
+;;; AGAINST THE REFERENCE. The claims here are this file's own, and a claim is not the
+;;; reference. So every shape below also has a counterpart in the differential's
+;;; curated corpus, where it is asked of `memoryleak47/slotted-egraphs`:
+;;;
+;;;     python3 slotted/xdiff/isomorphism.py MP          -> 5/5 isomorphic
+;;;
+;;;     MP1  a premise joined on a bound child, the premise a binder
+;;;     MP2  a join on two variables at once
+;;;     MP3  a four-atom chain
+;;;     MP4  a body shared under two binders
+;;;     MP5  three atoms sharing nothing
+;;;
+;;; All five fire -- blocking the pattern changes the graph -- so the agreement is not
+;;; the trivial kind a rule that never matches would give.
+;;;
+;;; The generated sweep says the same for connected multipatterns: 799 of 800 cases
+;;; isomorphic, and the one divergence is the encoding's known mint commitment rather
+;;; than anything about these shapes. Unrelated atoms are sampled under `XDIFF_DISC`
+;;; and raise that to 3 of 799, where every divergent rule roots its ACTION at a
+;;; disconnected variable, whose renaming is minted outright. MP5 pins the other half:
+;;; a cross-product pattern whose action is not minted agrees.
 
 (constructor Num (i64) U)
 (constructor Add (U U) U)
@@ -28,6 +50,8 @@
 (constructor Same () U)
 (constructor Doubled () U)
 (constructor Fired () U)
+(constructor Crossed () U)
+(constructor Minted () U)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -181,4 +205,93 @@
 (check (= eta reduced))
 (fail (check (= notlam (Num 5))))
 (fail (check (= held inner)))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; FOUR PATTERNS SHARING NOTHING: a cross product.
+;;;
+;;; The left-hand side and all three premises are disconnected -- no variable occurs in
+;;; two of them. So the rule says "any Root, provided a Mul, an App and a Store exist
+;;; anywhere", and it fires once per combination rather than joining them.
+;;;
+;;; Worth its own case because every other section here is connected, and because
+;;; disconnected atoms are the ones that all MINT: nothing constrains their renamings
+;;; from elsewhere, so the accumulated avoid-set is what keeps three independent atoms
+;;; from naming the same slot.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Root e) (Crossed)
+         :when ((= p (Mul m1 m2))
+                (= q (App a1 a2))
+                (= r (Store s1 s2 s3)))
+         :name "cross-product")
+
+(let root (Root (Num 1)))
+(let a-mul (Mul (Num 2) (Num 3)))
+(let an-app (App (Num 4) (Num 5)))
+(let a-store (Store (Mem0) (Num 6) (Num 7)))
+(run 4)
+
+(check (= root (Crossed)))
+(pop)
+
+(push)
+;; the same, with no Store anywhere: the third premise has nothing to match, so a rule
+;; that ignored its disconnected atoms would fire here and this claim is what says it
+;; does not
+(rewrite (Root e) (Crossed)
+         :when ((= p (Mul m1 m2))
+                (= q (App a1 a2))
+                (= r (Store s1 s2 s3)))
+         :name "cross-product")
+
+(let root2 (Root (Num 1)))
+(let a-mul2 (Mul (Num 2) (Num 3)))
+(let an-app2 (App (Num 4) (Num 5)))
+(run 4)
+
+(fail (check (= root2 (Crossed))))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; The same shape, with every unrelated pattern carrying SLOTS.
+;;;
+;;; `(Mul $s $s)` asks for a node whose two children are one slot. Three such patterns,
+;;; sharing nothing, each solve their own slot -- so this is the case where three atoms
+;;; mint at once and must not collide.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Root e) (Minted)
+         :when ((= p (Mul $s $s))
+                (= q (App $t $t))
+                (= r (Add $u $u)))
+         :name "cross-slots")
+
+(let root3 (Root (Num 1)))
+;; each names a different slot, which is what the three atoms have to solve separately
+(let mss (Mul $0 $0))
+(let att (App $1 $1))
+(let auu (Add $2 $2))
+(run 4)
+
+(check (= root3 (Minted)))
+(pop)
+
+(push)
+;; the Add's children are DIFFERENT slots, so `(Add $u $u)` has nothing to match
+(rewrite (Root e) (Minted)
+         :when ((= p (Mul $s $s))
+                (= q (App $t $t))
+                (= r (Add $u $u)))
+         :name "cross-slots")
+
+(let root4 (Root (Num 1)))
+(let mss2 (Mul $0 $0))
+(let att2 (App $1 $1))
+(let a23 (Add $2 $3))
+(run 4)
+
+(fail (check (= root4 (Minted))))
 (pop)

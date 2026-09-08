@@ -212,7 +212,7 @@ CHECKS = [
     (
         "multipattern-teeth",
         ("slotted/check-multipattern-teeth.py",),
-        ratio(r"(\d+)/(\d+) multipattern claims have teeth", 7),
+        ratio(r"(\d+)/(\d+) multipattern claims have teeth", 9),
         False,
         False,
     ),
@@ -222,7 +222,7 @@ CHECKS = [
     (
         "rule-names",
         ("slotted/check-rule-names.py",),
-        ratio(r"(\d+)/(\d+) rule names reach the generated egglog", 42),
+        ratio(r"(\d+)/(\d+) rule names reach the generated egglog", 46),
         False,
         False,
     ),
@@ -235,6 +235,16 @@ CHECKS = [
         ratio(r"(\d+)/(\d+) refusals hold, with a message", 12),
         False,
         False,
+    ),
+    # Reproductions of OPEN bugs, which must still reproduce. Kept out of `curated()`
+    # so a known divergence cannot turn the green checks red, and asserted here so it
+    # cannot be quietly lost either -- one that starts agreeing is reported.
+    (
+        "known-divergences",
+        ("slotted/xdiff/isomorphism.py", "known"),
+        ratio(r"(\d+)/(\d+) known divergences still diverge", 1),
+        False,
+        True,
     ),
     ("handwritten-drift", ("slotted/check-handwritten-encoding.py",), starts_ok, False, False),
     (
@@ -339,7 +349,7 @@ CHECKS = [
         False,
         True,
     ),
-    ("iso-curated", ("slotted/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 44), False, True),
+    ("iso-curated", ("slotted/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 49), False, True),
     ("array", ("slotted/xdiff/xarray.py",), ratio(r"(\d+)/(\d+) cases agree", 14), False, True),
     (
         "array-guards",
@@ -370,7 +380,10 @@ CHECKS = [
     ),
     (
         "iso-fuzz",
-        ("slotted/xdiff/isomorphism.py", "fuzz", "60"),
+        # 80 generated for a floor of 60: the ratio is over cases that could be
+        # COMPARED, and a rule whose atoms share nothing is a cross product the
+        # reference sometimes cannot finish, so the denominator has to have slack.
+        ("slotted/xdiff/isomorphism.py", "fuzz", "80"),
         ratio(r"(\d+)/(\d+) isomorphic", 60),
         True,
         True,

@@ -70,6 +70,18 @@ MUTATIONS = [
         "",
         {"held"},
     ),
+    (
+        "cross-product loses its third disconnected pattern",
+        "\n                (= r (Store s1 s2 s3))",
+        "",
+        {"root2"},
+    ),
+    (
+        "cross-slots stops asking the Add's children to be one slot",
+        "(= r (Add $u $u))",
+        "(= r (Add $u $u2))",
+        {"root4"},
+    ),
 ]
 
 BROKE = re.compile(r"check \(RenamesToLeader \$([A-Za-z_][\w-]*)")
@@ -95,14 +107,32 @@ def mask_comments(text):
 
 
 def replace_code(text, old, new):
-    """Replace the first occurrence of `old` in `text` that is NOT inside a comment.
+    """Replace EVERY occurrence of `old` in `text` that is not inside a comment.
 
     The sections here quote their own rules, so a plain `str.replace` hit the prose
     above the rule and mutated nothing -- a no-op mutation, which is exactly the
-    vacuity this file exists to rule out. Returns None when `old` appears in no code.
+    vacuity this file exists to rule out.
+
+    Every occurrence rather than the first, because a rule asked about in two ways
+    is written twice: `(pop)` removes it with its region, so the positive and negative
+    halves of the disconnected cases each declare it. Mutating one and not the other
+    would leave the half under test untouched. The other mutations name text that
+    occurs once, for which this is the same thing.
+
+    Returns None when `old` appears in no code.
     """
-    i = mask_comments(text).find(old)
-    return None if i < 0 else text[:i] + new + text[i + len(old) :]
+    masked = mask_comments(text)
+    if old not in masked:
+        return None
+    out, at = [], 0
+    while True:
+        i = masked.find(old, at)
+        if i < 0:
+            out.append(text[at:])
+            return "".join(out)
+        out.append(text[at:i])
+        out.append(new)
+        at = i + len(old)
 
 
 def main():
