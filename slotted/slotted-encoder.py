@@ -827,15 +827,49 @@ def union_images(edges):
     return out
 
 
-def node_expr(op, edges, kids, pays=()):
-    """`(Ctor pay... m c ...)`: one node, payloads interleaved into their columns."""
+def pay_text(op, pay):
+    """A payload as the ORACLE spells it.
+
+    A pattern tags its payloads, and the oracle's syntax has a place for a literal but
+    not for a variable: its patterns bind slots and applied ids, not payload values. So
+    a variable there is refused rather than mis-spelled.
+    """
+    if isinstance(pay, tuple):
+        if pay[0] == "ppv":
+            raise SystemExit(
+                f"{op.name}: the oracle cannot be asked about a payload VARIABLE "
+                f"({pay[1]!r}); its patterns have no place for one."
+            )
+        pay = pay[1]
+    return pay.strip('"')
+
+
+def node_expr(op, edges, kids, pays=(), pay_var=None):
+    """`(Ctor pay... m c ...)`: one node, payloads interleaved into their columns.
+
+    A payload arrives either already spelled -- a literal the operator pins, or a ground
+    term's value -- or TAGGED by a pattern: `("plit", value)` to spell here against the
+    column's sort, or `("ppv", name)` for a variable, which `pay_var` turns into the
+    egglog name that binds it. Spelling in one place is what keeps a string from being
+    quoted twice.
+    """
     cols, ci, pi = [], 0, 0
     for col in op.sig:
         if col in SLOTTED:
             cols += [edges[ci], kids[ci]]
             ci += 1
         else:
-            cols.append(pays[pi])
+            p = pays[pi]
+            if isinstance(p, tuple):
+                if p[0] == "ppv":
+                    if pay_var is None:
+                        raise SystemExit(
+                            f"{op.name}: a payload variable ({p[1]!r}) where no pattern binds one"
+                        )
+                    p = pay_var(p[1])
+                else:
+                    p = f'"{p[1]}"' if col == "String" else str(p[1])
+            cols.append(p)
             pi += 1
     return f"({op.ctor} {' '.join(cols)})" if cols else f"({op.ctor})"
 
@@ -907,7 +941,9 @@ class Op:
             else:
                 lit = self.pays[pi]
                 if lit is None:
-                    lit = f'"{args[ai]}"' if col == "String" else str(args[ai])
+                    a = args[ai]
+                    # a pattern's payload arrives tagged and is spelled by `compile_rule`
+                    lit = a if isinstance(a, tuple) else (f'"{a}"' if col == "String" else str(a))
                     ai += 1
                 pays.append(lit)
                 pi += 1
@@ -1010,7 +1046,7 @@ class TermLang:
         kids, pays = op.split(t[1:])
         if op.ref is None:
             # a payload leaf, written as its payload
-            return op.ref_prefix + pays[0].strip('"')
+            return op.ref_prefix + pay_text(op, pays[0])
         assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
         parts = [f"${self.slot(k)}" if i in op.binders else self.sexpr(k) for i, k in enumerate(kids)]
         return f"({op.ref} {' '.join(parts)})" if parts else op.ref
@@ -1104,28 +1140,61 @@ def connected_order(lang, atoms, first=None, bugs=frozenset()):
     return out
 
 
+def has_pay_var(t):
+    """Does this sub-term bind a payload VARIABLE anywhere?
+
+    Such a term is not ground, so it cannot be reached through its class -- it has to be
+    matched like any other atom.
+    """
+    if not isinstance(t, tuple):
+        return False
+    if len(t) == 2 and t[0] == "ppv":
+        return True
+    return any(has_pay_var(a) for a in t)
+
+
+def plain_pays(t):
+    """This sub-term with its payload literals untagged, for the ground spellers.
+
+    A pattern tags its payloads; a term named by its class is ground, so every payload
+    in it is a literal and the tag has no more work to do.
+    """
+    if not isinstance(t, tuple):
+        return t
+    if len(t) == 2 and t[0] == "plit":
+        return t[1]
+    if len(t) == 2 and t[0] in ("pv", "sl", "cls", "var", "name"):
+        return t
+    return tuple(plain_pays(a) for a in t)
+
+
 def flatten(lang, term, root="?_p", tmp="?_t"):
     """A nested pattern as depth-1 atoms, pre-order, so every atom's root is a child
     of an earlier one -- which is the connectivity the recipe requires.
 
     Returns `(root, atoms)`. A child written `$x` is a slot literal, a ground leaf
     node is reached through its class, and any other sub-term gets a name of its own.
+
+    An atom is `(root, op, kids, pays)`. The payloads ride along because a pattern may
+    match on one or bind it, and dropping them here is what made an operator with a
+    payload column unusable in any rule.
     """
     atoms, ctr = [], [0]
 
     def go(t, name):
         kids, nested = [], []
-        for c in lang[t[0]].split(t[1:])[0]:
+        cs, pays = lang[t[0]].split(t[1:])
+        for c in cs:
             if isinstance(c, str):
                 kids.append(("sl", c) if c.startswith("$") else ("pv", c))
-            elif not lang[c[0]].kid_cols:
-                kids.append(("cls", c))
+            elif not lang[c[0]].kid_cols and not has_pay_var(c):
+                kids.append(("cls", plain_pays(c)))
             else:
                 ctr[0] += 1
                 nm = f"{tmp}{ctr[0]}"
                 kids.append(("pv", nm))
                 nested.append((c, nm))
-        atoms.append((name, t[0], kids))
+        atoms.append((name, t[0], kids, pays))
         for c, nm in nested:
             go(c, nm)
 
@@ -1172,7 +1241,7 @@ def atom_lines(lang, root, atoms, var="var"):
     is not the same pattern (it records which variables sit under a binder).
     """
     out, extra = [], [0]
-    for name, op, kids in atoms:
+    for name, op, kids, *_pays in atoms:
         binders = set(lang[op].binders)
         spelled = []
         for i, (kind, c) in enumerate(kids):
@@ -1230,7 +1299,7 @@ def pat_sexpr(lang, t, binder=False):
         # read it as a payload rather than a tag, exactly as `TermLang.sexpr` does for
         # a ground term. The two renderers have to agree: one writes a rule's pattern
         # and the other the terms that rule has to match.
-        return op.ref_prefix + pays[0].strip('"')
+        return op.ref_prefix + pay_text(op, pays[0])
     assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
     parts = [pat_sexpr(lang, k, binder=(i in op.binders)) for i, k in enumerate(kids)]
     return f"({op.ref} {' '.join(parts)})" if parts else op.ref
@@ -1334,9 +1403,31 @@ def compile_rule(
             sym_of[pv] = sv
         return sym_of[pv]
 
-    for idx, (aroot, opname, kids) in enumerate(atoms):
+    pay_of = {}  # a payload variable's egglog name, shared so two atoms join on it
+    binding = [True]  # only a PATTERN introduces one; the action may only read them
+
+    def pay_name(n):
+        if n not in pay_of:
+            if not binding[0]:
+                raise SystemExit(
+                    f"the right-hand side names the payload variable {n!r}, which no "
+                    "pattern binds -- there is nothing to take its value from"
+                )
+            pay_of[n] = new("pay")
+        return pay_of[n]
+
+    for idx, atom in enumerate(atoms):
+        aroot, opname, kids = atom[0], atom[1], atom[2]
         op = lang[opname]
-        assert None not in op.pays, f"{opname}: an atom cannot carry a payload argument"
+        if len(atom) > 3:
+            pays = atom[3]
+        else:
+            if None in op.pays:
+                raise SystemExit(
+                    f"{opname}: a payload column with no value. An atom built by hand must "
+                    "pin every payload its operator does not."
+                )
+            pays = op.pays
         edges = [new("p") for _ in kids]
         rv = cls_of.setdefault(aroot, new("V"))
         cols, reached = [], []
@@ -1349,7 +1440,7 @@ def compile_rule(
                 cv = new("L")
                 cols.append(cv)
                 reached.append((k[1], cv))
-        body.append(f"(= {rv} {node_expr(op, edges, cols, op.pays)})")
+        body.append(f"(= {rv} {node_expr(op, edges, cols, pays, pay_name)})")
         for t, cv in reached:
             body.append(f"(RenamesToLeader {lang.enc(t)} {new('ml')} {cv})")
 
@@ -1426,6 +1517,8 @@ def compile_rule(
                 mp_of[k[1]] = narrow(m, cls_of[k[1]])
         if aroot not in mp_of:
             mp_of[aroot] = narrow(mp, rv)
+
+    binding[0] = False  # every atom is read, so a payload variable can only be read now
 
     if refine:
         # `final_refine`: every way the match's slots may be merged, decided once the
@@ -1538,10 +1631,18 @@ def compile_rule(
         op = lang[t[0]]
         args, pays = op.split(t[1:])
         if not args:
+            if has_pay_var(t):
+                # a leaf whose payload the pattern bound: built here, not looked up as a
+                # ground class, since its value is only known once the match is in hand
+                nv = new("_rhs")
+                lets.append(f"(let {nv} {node_expr(op, [], [], pays, pay_name)})")
+                return "(map-empty)", nv
             return map_of(lang.edge(t)), lang.enc(t)  # a leaf node has no slots
         kids = [build(a) for a in args]
         nv = new("_rhs")
-        lets.append(f"(let {nv} {node_expr(op, [e for e, _ in kids], [c for _, c in kids], pays)})")
+        lets.append(
+            f"(let {nv} {node_expr(op, [e for e, _ in kids], [c for _, c in kids], pays, pay_name)})"
+        )
         slots = union_images([e for e, _ in kids])
         for i in op.binders:
             slots = f"(map-remove {slots} {slot_of[args[i][1]]})"

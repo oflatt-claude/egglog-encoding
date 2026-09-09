@@ -145,13 +145,25 @@ class Terms(enc.TermLang):
         return f"${t[1]}" if t[0] == "name" else super().enc(t)
 
 
-def payload(tok):
-    """A payload argument as the encoder wants it: the value, not its egglog spelling.
+def payload(tok, ground=True):
+    """A payload argument -- a node argument carrying no slots, which is the reference's
+    own word for it (`lang.rs`: "payload types that are independent of Slots").
 
-    A source writes a string payload quoted, because that is what egglog syntax is, and
-    `Op.split` quotes it again on the way out -- so the quotes come off here.
+    Ground: the value, not its egglog spelling. A source writes a string payload quoted,
+    because that is egglog's syntax, and `Op.split` quotes it again on the way out, so
+    the quotes come off here.
+
+    In a PATTERN a payload may be matched or bound, as in egglog: a quoted or numeric
+    token is a LITERAL to match on, a bare identifier is a VARIABLE the match binds, and
+    two atoms naming the same variable join on it. Tagged, so `compile_rule` can tell
+    them apart.
     """
-    return tok[1:-1] if len(tok) >= 2 and tok.startswith('"') and tok.endswith('"') else tok
+    quoted = len(tok) >= 2 and tok.startswith('"') and tok.endswith('"')
+    if ground:
+        return tok[1:-1] if quoted else tok
+    if quoted or re.fullmatch(r"-?\d+", tok):
+        return ("plit", tok[1:-1] if quoted else tok)
+    return ("ppv", tok)
 
 
 class Source:
@@ -370,7 +382,10 @@ class Source:
         assert len(args) == len(kinds), f"{self.path.name}: {head} takes {len(kinds)} arguments, given {len(args)}"
         return (
             head,
-            *(self.term(a, k, ground) if k in enc.SLOTTED else payload(a) for a, k in zip(args, kinds, strict=True)),
+            *(
+                self.term(a, k, ground) if k in enc.SLOTTED else payload(a, ground)
+                for a, k in zip(args, kinds, strict=True)
+            ),
         )
 
     def encode(self, form, column=enc.CHILD):

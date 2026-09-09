@@ -88,6 +88,12 @@ MUTATIONS = [
         "(App (Lam $n (Lam $x (Add $x $n))) b)",
         {"f2"},
     ),
+    (
+        "the payload join stops asking for one number",
+        "(= y (Num i))",
+        "(= y (Num j))",
+        {"mixed"},
+    ),
 ]
 
 BROKE = re.compile(r"check \(RenamesToLeader \$([A-Za-z_][\w-]*)")

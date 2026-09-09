@@ -350,3 +350,45 @@
 (fail (check (= f2 a3)))
 (fail (check (= k7 ak)))
 (pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A PAYLOAD COLUMN in a pattern -- a node argument carrying no slots, which is the
+;;; reference's word for it. egglog matches on one or binds it, and so does this:
+;;; a quoted or numeric token is a literal to match, a bare identifier is a variable,
+;;; and two patterns naming the same variable JOIN on it.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+;; a literal: only where the left operand is exactly 2
+(rewrite (Add x y) (Fired) :when ((= x (Num 2))) :name "payload-literal")
+
+(let lit2 (Add (Num 2) (Num 9)))
+(let lit5 (Add (Num 5) (Num 9)))
+(run 3)
+
+(check (= lit2 (Fired)))
+(fail (check (= lit5 (Fired))))
+(pop)
+
+(push)
+;; a payload VARIABLE shared between two patterns: both operands must carry the same
+;; number, which nothing but the join enforces
+(rewrite (Add x y) (Same) :when ((= x (Num i)) (= y (Num i))) :name "payload-join")
+
+(let both4 (Add (Num 4) (Num 4)))
+(let mixed (Add (Num 4) (Num 7)))
+(run 3)
+
+(check (= both4 (Same)))
+(fail (check (= mixed (Same))))
+(pop)
+
+(push)
+;; and a right-hand side may reuse a payload the pattern bound
+(rewrite (Add x y) (Num i) :when ((= x (Num i))) :name "payload-to-rhs")
+
+(let takes6 (Add (Num 6) (Num 9)))
+(run 3)
+
+(check (= takes6 (Num 6)))
+(pop)

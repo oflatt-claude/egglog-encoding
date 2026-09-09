@@ -48,6 +48,12 @@ CASES = [
     ("a program that declares nothing", "(run 1)\n", "no constructors declared"),
     ("a rewrite whose left side is a bare variable", LANG + '(rewrite x (Mul x x) :name "r")\n', "must be a call"),
     ("egglog's `rule`, which this language does not have", LANG + "(rule ((= a (Null))) ())\n", "not part of"),
+    (
+        "a payload variable the right-hand side names and no pattern binds",
+        "(sort M)\n(constructor N (i64) M)\n(constructor A (M M) M)\n"
+        '(rewrite (A x y) (N j) :name "r")\n',
+        "no pattern binds",
+    ),
 ]
 
 
