@@ -283,14 +283,16 @@
 ;;; left-hand side's constant and `b` is the other lambda's. Taking the right-hand
 ;;; side's argument from `b` instead breaks the third claim below and nothing else.
 ;;;
-;;; The premise widens the match rather than gating it: with only one such lambda in
-;;; the graph it binds that same one, since the left-hand side already requires a
-;;; lambda of that shape.
+;;; `(!= a b)` is what makes the premise GATE rather than widen: without it the second
+;;; pattern can bind the same lambda, since the left-hand side already requires one of
+;;; that shape. With it the rule abstracts only where two DIFFERENT constants exist,
+;;; which is when generalising is worth anything -- and a lone lambda is left alone.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (Lam $x (Add $x a))
          (App (Lam $n (Lam $x (Add $x $n))) a)
-         :when ((= other (Lam $y (Add $y b))))
+         :when ((= other (Lam $y (Add $y b)))
+                (!= a b))
          :name "abstract-constant")
 (let f2 (Lam $0 (Add $0 (Num 2))))
 (let f3 (Lam $0 (Add $0 (Num 3))))
@@ -305,6 +307,24 @@
 (check (= f3 a3))
 (fail (check (= f2 a3)))
 (fail (check (= k7 ak)))
+(pop)
+
+(push)
+;; ONE lambda of that shape, so no second constant differs from it: nothing to
+;; generalise over, and `(!= a b)` refuses the match
+(rewrite (Lam $x (Add $x a))
+         (App (Lam $n (Lam $x (Add $x $n))) a)
+         :when ((= other (Lam $y (Add $y b)))
+                (!= a b))
+         :name "abstract-constant")
+
+;; Nothing else is built here on purpose. A general lambda would itself be a lambda of
+;; that shape over a different constant, which is the second match the rule wants -- so
+;; naming one to compare against would supply what the claim is asserting is absent.
+(let lone (Lam $0 (Add $0 (Num 2))))
+(run 3)
+
+(check (not-holds lone App))
 (pop)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A PAYLOAD COLUMN in a pattern -- a node argument carrying no slots, which is the

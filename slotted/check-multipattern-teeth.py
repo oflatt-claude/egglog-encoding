@@ -94,6 +94,12 @@ MUTATIONS = [
         "(= y (Num j))",
         {"mixed"},
     ),
+    (
+        "abstract-constant stops asking the two constants to differ",
+        "(= other (Lam $y (Add $y b)))\n                (!= a b))",
+        "(= other (Lam $y (Add $y b))))",
+        {"lone"},
+    ),
 ]
 
 BROKE = re.compile(r"check \(RenamesToLeader \$([A-Za-z_][\w-]*)")

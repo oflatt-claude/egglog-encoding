@@ -212,7 +212,7 @@ CHECKS = [
     (
         "multipattern-teeth",
         ("slotted/check-multipattern-teeth.py",),
-        ratio(r"(\d+)/(\d+) multipattern claims have teeth", 11),
+        ratio(r"(\d+)/(\d+) multipattern claims have teeth", 12),
         False,
         False,
     ),

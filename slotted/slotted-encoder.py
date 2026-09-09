@@ -1322,6 +1322,7 @@ def compile_rule(
     atoms,
     action,
     conds=(),
+    diseq=(),
     fresh=(),
     bugs=frozenset(),
     slot_prefix="s",
@@ -1629,6 +1630,22 @@ def compile_rule(
         else:
             expr = "(or " + " ".join(f"(bool-map-contains {im} {sv})" for im in images) + ")"
             body.append(f"(guard {expr})" if want else f"(guard (bool= {expr} false))")
+
+    # `!=`: NOT THE SAME INVOCATION, which is what `=` means here -- the same class
+    # reached by the same renaming. So two invocations of one class differ, and the test
+    # is a disjunction over the two halves rather than one value comparison.
+    #
+    # Non-monotonic, as it is in egglog: two classes that differ now may be unioned
+    # later, and a match this admitted is not withdrawn. The oracle cannot be asked
+    # about it either -- its conditions are over slots -- so a rule using it is checked
+    # by claims alone.
+    for a, b in diseq:
+        for v in (a, b):
+            if v not in mp_of:
+                raise SystemExit(f"`!=` names {v!r}, which no pattern binds")
+        same_cls = f"(bool= {cls_of[a]} {cls_of[b]})"
+        same_ren = f"(bool= {mp_of[a]} {mp_of[b]})"
+        body.append(f"(guard (or (not {same_cls}) (not {same_ren})))")
 
     lets = []
 

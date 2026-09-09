@@ -583,6 +583,7 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     """
     parts = rewrite_parts(src, form)
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
+    diseq = parts["diseq"]
     lhs, rhs = parts["lhs"], parts["rhs"]
     if parts["name"] and ":name" not in tail:
         # egglog reports a rule by its `:name` and takes it as a string literal. It
@@ -617,6 +618,7 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
         order,
         ("build", root, enc.rhs_of(src.lang, src.term(rhs, ground=False))),
         conds=conds,
+        diseq=diseq,
         fresh=fresh,
         bugs=bugs,
         tail=tail,
@@ -660,7 +662,16 @@ def rewrite_parts(src, form):
     reading of `:when` is a second place for the two to disagree.
     """
     assert form[0] == "rewrite", form[:1]
-    out = {"name": None, "lhs": form[1], "rhs": form[2], "conds": [], "equalities": [], "fresh": [], "lead": 0}
+    out = {
+        "name": None,
+        "lhs": form[1],
+        "rhs": form[2],
+        "conds": [],
+        "equalities": [],
+        "diseq": [],
+        "fresh": [],
+        "lead": 0,
+    }
     kws = keywords(src, form[3:])
     # egglog ASSIGNS `:when` rather than accumulating it, so of several clauses only the
     # LAST survives there while all of them constrain here. That is a difference in
@@ -700,6 +711,17 @@ def rewrite_parts(src, form):
                         "a bare variable there would identify two variables, which this does not do yet"
                     )
                     out["equalities"].append((var.lstrip("?"), pat))
+                elif want == "!=":
+                    # egglog registers `!=` as a fact (`|a: #, b: #| -?> ()`), so a rule
+                    # may say two things differ. Here it means NOT THE SAME INVOCATION,
+                    # matching what `=` means in this language: the same class reached by
+                    # the same renaming. Two invocations of one class differ.
+                    assert len(rest) == 2, f"{src.path.name}: `!=` takes two variables, got {rest}"
+                    a, b = rest
+                    assert isinstance(a, str) and isinstance(b, str), (
+                        f"{src.path.name}: `!=` compares two variables, got {rest}"
+                    )
+                    out["diseq"].append((a.lstrip("?"), b.lstrip("?")))
                 else:
                     assert want in ("free", "not-free"), f"unknown condition {want!r}"
                     slot, *pvars = rest

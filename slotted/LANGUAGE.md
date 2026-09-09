@@ -144,6 +144,7 @@ There are two kinds of fact:
 | --- | --- |
 | `(free $x f)`, `(not-free $x f)` | whether a slot is among a variable's free slots — the reference's `subst[v].slots().contains(…)`. A side condition on the match's *slots* |
 | `(= v <call>)` | `v` also matches `<call>`. Another **pattern**, not a side condition: it constrains the match's *shape*, and several give an arbitrary multipattern |
+| `(!= x y)` | the two are not the same **invocation** — not the same class reached by the same renaming, so two invocations of one class differ. Non-monotonic, as in egglog: classes that differ now may be unioned later, and a match this admitted is not withdrawn |
 
 An `(= v <call>)` pattern nests as deep as you like, and the variables it introduces need
 not appear on the left at all:
