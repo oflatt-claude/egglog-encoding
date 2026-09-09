@@ -1755,8 +1755,10 @@ def rand_case(rng, i):
 
     # Mostly one rule. Sometimes two, so the sweep covers rules interacting -- one
     # producing what the other matches -- which a single rule cannot exercise.
-    draw = (lambda: rand_general_rule(rng, terms, unions)) if rng.random() < GENERAL_PROB else (
-        lambda: rand_rule(rng, terms, unions)
+    draw = (
+        (lambda: rand_general_rule(rng, terms, unions))
+        if rng.random() < GENERAL_PROB
+        else (lambda: rand_rule(rng, terms, unions))
     )
     rules = [draw() for _ in range(2 if rng.random() < 0.25 else 1)]
     probes = terms + [a for a, _ in unions] + [("h", V0, V1), ("h", V0, V0), ("null",), LEAF0]

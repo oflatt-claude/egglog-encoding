@@ -73,7 +73,6 @@ values for every one of those variables is at the top of
 `slotted/encoding/user-rules-trace.egg`.
 """
 
-
 CHILD = object()  # a slotted child: `Renaming U`
 BINDER = object()  # a slotted child that also binds its slot
 
@@ -110,7 +109,7 @@ def read_language(path, sorts=("U",)):
         # `tail` is the output sort, then the options, then the closing paren
         tokens = tail.rstrip(")").split()
         opts = next((i for i, t in enumerate(tokens) if t.startswith(":")), len(tokens))
-        language[name] = signature(cols_text.split(), constructor_options(name, tokens[opts:]), sorts)
+        language[name] = signature(cols_text.split(), constructor_options(name, tokens[opts:]), sorts, name)
     return language
 
 
@@ -144,13 +143,25 @@ def constructor_options(name, tokens):
     return binders
 
 
-def signature(cols, binders, sorts=("U",)):
+def signature(cols, binders, sorts=("U",), name="constructor"):
     """Columns and the binding child positions as the encoder's signature.
 
     A column whose sort is one the program DECLARED is a slotted child and expands to
     `Renaming <sort>`; anything else -- `i64`, `String`, a primitive -- is a payload and
     passes through. `sorts` defaults to the carrier the hand-written core declares.
     """
+    child_count = sum(col in sorts for col in cols)
+    if len(set(binders)) != len(binders):
+        raise SystemExit(f"constructor {name}: duplicate `:binder` position")
+    if any(pos < 0 or pos >= child_count for pos in binders):
+        raise SystemExit(f"constructor {name}: `:binder` position is outside its {child_count} child columns")
+    if binders:
+        lo, hi = min(binders), max(binders)
+        if sorted(binders) != list(range(lo, hi + 1)):
+            raise SystemExit(f"constructor {name}: `:binder` positions must be contiguous")
+        if hi + 1 >= child_count:
+            raise SystemExit(f"constructor {name}: `:binder` columns must be followed by the child they cover")
+
     sig, seen_kids = [], 0
     for col in cols:
         if col in sorts:
@@ -169,7 +180,7 @@ def read_language_form(form, sorts=("U",)):
     """
     assert form[0] == "constructor" and isinstance(form[2], list), form
     name, cols = form[1], form[2]
-    return {name: signature(cols, constructor_options(name, form[4:]), sorts)}
+    return {name: signature(cols, constructor_options(name, form[4:]), sorts, name)}
 
 
 def read_correspondence(path):
@@ -732,7 +743,6 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
 SUBST = "subst"
 
 
-
 # The constructor-independent half of the node machinery. Hand-written in
 # `slotted/encoding/egraph-encoding-11.egg` along with a constructor or two, and kept
 # here so a generator can state what that text has to say.
@@ -863,9 +873,7 @@ def node_expr(op, edges, kids, pays=(), pay_var=None):
             if isinstance(p, tuple):
                 if p[0] == "ppv":
                     if pay_var is None:
-                        raise SystemExit(
-                            f"{op.name}: a payload variable ({p[1]!r}) where no pattern binds one"
-                        )
+                        raise SystemExit(f"{op.name}: a payload variable ({p[1]!r}) where no pattern binds one")
                     p = pay_var(p[1])
                 else:
                     p = f'"{p[1]}"' if col == "String" else str(p[1])
@@ -1017,6 +1025,86 @@ class TermLang:
             return {0: t[1]}
         return {s: s for s in self.slots(t)}
 
+    def refresh_shadowed_binders(self, t):
+        """Give repeated binder columns the reference's nested-`Bind` meaning.
+
+        `Sum(A, Bind<Bind<A>>)` and `Merge(A, A, Bind<Bind<Bind<A>>>)` are
+        lexically nested binders even though the encoding flattens their names into
+        sibling columns.  If two layers use the same source name, the innermost one
+        shadows the outer one.  Leaving both columns equal instead identifies two
+        private slots and produces a different e-node.  Alpha-refresh only the
+        shadowed OUTER column; occurrences in the covered body continue to name the
+        innermost binder.
+
+        Fresh names avoid every slot written anywhere in this term, including
+        uncovered columns.  Running this over the whole tree before recursive
+        encoding also avoids colliding with an enclosing binder.
+        """
+
+        def all_slots(x):
+            if isinstance(x, str):
+                return {x} if x.startswith("$") else set()
+            if x[0] == self.VAR:
+                return {x[1]}
+            if x[0] not in self.ops:  # a front-end's opaque, already-bound name
+                return set()
+            op = self.ops[x[0]]
+            out = set()
+            for kind, arg in zip(op.arg_kinds(), x[1:], strict=True):
+                if kind is BINDER:
+                    out.add(self.slot(arg))
+                elif kind is CHILD:
+                    out |= all_slots(arg)
+            return out
+
+        used = all_slots(t)
+        pattern_slots = any(isinstance(s, str) and s.startswith("$") for s in used)
+        fresh_index = [0]
+
+        def fresh():
+            if pattern_slots:
+                while True:
+                    s = f"$__shadow{fresh_index[0]}"
+                    fresh_index[0] += 1
+                    if s not in used:
+                        used.add(s)
+                        return s
+            s = 0
+            while s in used:
+                s += 1
+            used.add(s)
+            return s
+
+        def go(x):
+            if isinstance(x, str):
+                return x
+            if x[0] == self.VAR or x[0] not in self.ops:
+                return x
+            op = self.ops[x[0]]
+            args = [
+                go(a) if kind is CHILD and isinstance(a, tuple) else a
+                for kind, a in zip(op.arg_kinds(), x[1:], strict=True)
+            ]
+            kids, _pays = op.split(args)
+            seen = set()
+            for i in reversed(op.binders):
+                name = self.slot(kids[i])
+                if name in seen:
+                    # `args` and child positions differ when fixed payload columns are
+                    # present; find this child column in the argument walk.
+                    child_index = -1
+                    for ai, kind in enumerate(op.arg_kinds()):
+                        if kind in SLOTTED:
+                            child_index += 1
+                            if child_index == i:
+                                args[ai] = fresh()
+                                break
+                else:
+                    seen.add(name)
+            return (x[0], *args)
+
+        return go(t)
+
     def enc(self, t):
         """Encoding syntax.
 
@@ -1024,6 +1112,7 @@ class TermLang:
         covered child's own edge still names that slot: the node carries it, and only
         the class drops it.
         """
+        t = self.refresh_shadowed_binders(t)
         if t[0] == self.VAR:
             return "(Var 0)"
         op = self.ops[t[0]]
@@ -1129,6 +1218,7 @@ def connected_order(lang, atoms, first=None, bugs=frozenset()):
         return atoms
     if first is None:
         first = next((j for j, a in enumerate(atoms) if not lang[a[1]].binders), 0)
+
     def kids_of(a):
         return {c[1] for c in a[2] if c[0] == "pv"}
 
@@ -1212,6 +1302,7 @@ def flatten(lang, term, root="?_p", tmp="?_t"):
     match on one or bind it, and dropping them here is what made an operator with a
     payload column unusable in any rule.
     """
+    term = lang.refresh_shadowed_binders(term)
     atoms, ctr = [], [0]
 
     def go(t, name):
@@ -1243,6 +1334,7 @@ def rhs_of(lang, t):
     `(subst body $x t)` is the one head that is not a constructor. It is a call, not a
     node, so it cannot be built -- see `compile_rule`.
     """
+    t = lang.refresh_shadowed_binders(t)
     if isinstance(t, str):
         return ("sl", t) if t.startswith("$") else ("pv", t)
     if t[0] == SUBST:
@@ -1685,10 +1777,11 @@ def compile_rule(
 
         An action is already in pattern slot space, so the edge from a built node to a
         built child is the identity on that child's slots -- there is no renaming
-        between them, which is what makes this a bottom-up walk. A built binder node's
-        slots are its edges' images MINUS the slots it binds, since the node carries a
-        bound slot and the class does not, and an edge naming a slot its child does
-        not have breaks Def. 4.
+        between them, which is what makes this a bottom-up walk. A built binder node
+        removes a bound slot from the binder column and the ONE child it covers, but
+        not from any uncovered child: in `let x = x in body`, the value's `x` remains
+        free.  This is the same column-wise calculation as `TermLang.slots` and keeps
+        the returned edge's domain equal to the built class's slots (Def. 4).
         """
         if t[0] == "pv":
             return mp_of[t[1]], cls_of[t[1]]
@@ -1707,12 +1800,18 @@ def compile_rule(
             return map_of(lang.edge(t)), lang.enc(t)  # a leaf node has no slots
         kids = [build(a) for a in args]
         nv = new("_rhs")
-        lets.append(
-            f"(let {nv} {node_expr(op, [e for e, _ in kids], [c for _, c in kids], pays, pay_name)})"
-        )
-        slots = union_images([e for e, _ in kids])
-        for i in op.binders:
-            slots = f"(map-remove {slots} {slot_of[args[i][1]]})"
+        lets.append(f"(let {nv} {node_expr(op, [e for e, _ in kids], [c for _, c in kids], pays, pay_name)})")
+        slot_maps = []
+        bound = [slot_of[args[i][1]] for i in op.binders]
+        for i, (edge, _cls) in enumerate(kids):
+            slots = f"(map-image {edge})"
+            if i in op.binders or i == op.covered:
+                for sv in bound:
+                    slots = f"(map-remove {slots} {sv})"
+            slot_maps.append(slots)
+        slots = "(map-empty)"
+        for sm in reversed(slot_maps):
+            slots = f"(map-union {sm} {slots})"
         return slots, nv
 
     root = action[1]

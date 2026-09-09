@@ -340,7 +340,7 @@
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((let _rhs30 (App2 "-" (compose mrg (compose mst csst)) st (map-empty) (Num 1)))
-       (let _rhs31 (App2 "+" (compose mrg (compose midx csidx)) idx (map-union (map-image (compose mrg (compose mst csst))) (map-image (map-empty))) _rhs30))
+       (let _rhs31 (App2 "+" (compose mrg (compose midx csidx)) idx (map-union (map-image (compose mrg (compose mst csst))) (map-union (map-image (map-empty)) (map-empty))) _rhs30))
        (Equated _rhs31 (compose mrg (compose mp2 csg)) g)))
 
 
@@ -443,7 +443,7 @@
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((let _rhs31 (App2 "*" (compose mrg (compose mb csb)) b (compose mrg (compose mc csc)) c))
-       (let _rhs32 (App2 "*" (compose mrg (compose ma csa)) a (map-union (map-image (compose mrg (compose mb csb))) (map-image (compose mrg (compose mc csc)))) _rhs31))
+       (let _rhs32 (App2 "*" (compose mrg (compose ma csa)) a (map-union (map-image (compose mrg (compose mb csb))) (map-union (map-image (compose mrg (compose mc csc))) (map-empty))) _rhs31))
        (Equated _rhs32 (compose mrg (compose mp1 csp)) p)))
 
 
@@ -529,10 +529,10 @@
        (map-not-contains (map-image (compose mrg (compose mf csf))) (map-get mrg sx)))
       ((let _rhs43 (App2 "app" (map-empty) (Sym "map") (compose mrg (compose mf csf)) f))
        (let _rhs44 (App2 "lambda" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (compose mrg (compose mgx csgx)) gx))
-       (let _rhs45 (App2 "app" (map-empty) (Sym "map") (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx)) _rhs44))
-       (let _rhs46 (App2 "app" (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx)))) _rhs45 (map-insert (map-empty) 0 sin) (Var 0)))
-       (let _rhs47 (App2 "app" (map-union (map-image (map-empty)) (map-image (compose mrg (compose mf csf)))) _rhs43 (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx))))) (map-image (map-insert (map-empty) 0 sin))) _rhs46))
-       (let _rhs48 (App2 "lambda" (map-insert (map-empty) 0 sin) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-image (compose mrg (compose mf csf))))) (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-image (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-image (compose mrg (compose mgx csgx)))) (map-get mrg sx))))) (map-image (map-insert (map-empty) 0 sin))))) _rhs47))
+       (let _rhs45 (App2 "app" (map-empty) (Sym "map") (map-union (map-remove (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-get mrg sx)) (map-union (map-remove (map-image (compose mrg (compose mgx csgx))) (map-get mrg sx)) (map-empty))) _rhs44))
+       (let _rhs46 (App2 "app" (map-union (map-image (map-empty)) (map-union (map-image (map-union (map-remove (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-get mrg sx)) (map-union (map-remove (map-image (compose mrg (compose mgx csgx))) (map-get mrg sx)) (map-empty)))) (map-empty))) _rhs45 (map-insert (map-empty) 0 sin) (Var 0)))
+       (let _rhs47 (App2 "app" (map-union (map-image (map-empty)) (map-union (map-image (compose mrg (compose mf csf))) (map-empty))) _rhs43 (map-union (map-image (map-union (map-image (map-empty)) (map-union (map-image (map-union (map-remove (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-get mrg sx)) (map-union (map-remove (map-image (compose mrg (compose mgx csgx))) (map-get mrg sx)) (map-empty)))) (map-empty)))) (map-union (map-image (map-insert (map-empty) 0 sin)) (map-empty))) _rhs46))
+       (let _rhs48 (App2 "lambda" (map-insert (map-empty) 0 sin) (Var 0) (map-union (map-image (map-union (map-image (map-empty)) (map-union (map-image (compose mrg (compose mf csf))) (map-empty)))) (map-union (map-image (map-union (map-image (map-union (map-image (map-empty)) (map-union (map-image (map-union (map-remove (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-get mrg sx)) (map-union (map-remove (map-image (compose mrg (compose mgx csgx))) (map-get mrg sx)) (map-empty)))) (map-empty)))) (map-union (map-image (map-insert (map-empty) 0 sin)) (map-empty)))) (map-empty))) _rhs47))
        (Equated _rhs48 (compose mrg (compose mp1 csp)) p)))
 
 
@@ -673,7 +673,7 @@
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((let _rhs50 (App3 "binop" (compose mrg (compose mf csf)) f (compose mrg (compose me2 cse2)) e2 (compose mrg (compose me3 cse3)) e3))
-       (let _rhs51 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (map-union (map-image (compose mrg (compose mf csf))) (map-union (map-image (compose mrg (compose me2 cse2))) (map-image (compose mrg (compose me3 cse3))))) _rhs50 (compose mrg (compose me1 cse1)) e1))
+       (let _rhs51 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (map-union (map-image (compose mrg (compose mf csf))) (map-union (map-image (compose mrg (compose me2 cse2))) (map-union (map-image (compose mrg (compose me3 cse3))) (map-empty)))) _rhs50 (compose mrg (compose me1 cse1)) e1))
        (Equated _rhs51 (compose mrg (compose mp1 csp)) p)))
 
 
@@ -913,7 +913,7 @@
        (guard (or (bool-map-contains (map-image (compose mrg (compose ma csa))) (map-get mrg sx)) (bool-map-contains (map-image (compose mrg (compose mb csb))) (map-get mrg sx)))))
       ((let _rhs32 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (compose mrg (compose ma csa)) a (compose mrg (compose me cse)) e))
        (let _rhs33 (App3 "let" (map-insert (map-empty) 0 (map-get mrg sx)) (Var 0) (compose mrg (compose mb csb)) b (compose mrg (compose me cse)) e))
-       (let _rhs34 (App2 "app" (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-union (map-image (compose mrg (compose ma csa))) (map-image (compose mrg (compose me cse))))) (map-get mrg sx)) _rhs32 (map-remove (map-union (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-union (map-image (compose mrg (compose mb csb))) (map-image (compose mrg (compose me cse))))) (map-get mrg sx)) _rhs33))
+       (let _rhs34 (App2 "app" (map-union (map-remove (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-get mrg sx)) (map-union (map-remove (map-image (compose mrg (compose ma csa))) (map-get mrg sx)) (map-union (map-image (compose mrg (compose me cse))) (map-empty)))) _rhs32 (map-union (map-remove (map-image (map-insert (map-empty) 0 (map-get mrg sx))) (map-get mrg sx)) (map-union (map-remove (map-image (compose mrg (compose mb csb))) (map-get mrg sx)) (map-union (map-image (compose mrg (compose me cse))) (map-empty)))) _rhs33))
        (Equated _rhs34 (compose mrg (compose mp1 csp)) p)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

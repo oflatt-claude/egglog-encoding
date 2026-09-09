@@ -63,7 +63,7 @@ def check(case):
         for perm in perms:
             rules = list(case.rules)
             rules[r] = ([atoms[i] for i in perm], action, conds)
-            g, err = graph_for(case, rules)
+            g, err, _mult = graph_for(case, rules)
             if err:
                 # a program that will not run or will not settle says nothing here
                 return "skip", f"rule {r} order {perm}: {err if isinstance(err, str) else err[1]}"

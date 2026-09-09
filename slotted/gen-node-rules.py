@@ -87,6 +87,7 @@ def handwritten_region():
     binders = tuple((head, name) for head, name in GENERIC_BINDERS if name in HANDWRITTEN)
     return enc.in_slotted_ruleset(enc.SHARED + "\n" + "\n".join(emit(lang, binders)))
 
+
 # Per-language encodings: one constructor per operator, the shape the reference crate's
 # `define_language!` produces, with no head to indirect through.
 #

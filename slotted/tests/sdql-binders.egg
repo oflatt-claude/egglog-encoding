@@ -11,6 +11,7 @@
 
 (constructor Sing (U U) U)
 (constructor Sum (U U U U) U :binder 1 2)
+(constructor Merge (U U U U U U) U :binder 2 3 4)
 (constructor Null () U)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -64,6 +65,85 @@
 (check (!= first second))
 (check (slots first))
 (check (slots second))
+
+(pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Reusing a name in nested binder columns is lexical shadowing.
+;;;
+;;; `Bind<Bind<body>>` is nested, not a simultaneous set of names.  The second
+;;; `$5` therefore shadows the first, and the body occurrence refers to it.  The
+;;; flattened encoding must alpha-refresh the shadowed outer binder.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(let shadowed (Sum Null $5 $5 $5))
+(let inner (Sum Null $6 $7 $7))
+(let outer (Sum Null $6 $7 $6))
+(run 0)
+
+(check (= shadowed inner))
+(check (!= shadowed outer))
+(check (slots shadowed))
+
+;; and the same nesting law extends to all three of Merge's binders
+(let merge-shadowed (Merge Null Null $5 $5 $5 $5))
+(let merge-inner (Merge Null Null $6 $7 $8 $8))
+(let merge-outer (Merge Null Null $6 $7 $8 $6))
+(run 0)
+(check (= merge-shadowed merge-inner))
+(check (!= merge-shadowed merge-outer))
+(check (slots merge-shadowed))
+
+(pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; The same shadowing law applies while compiling patterns and RHS terms.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Sum Null $x $x body)
+         Null
+         :name "shadowed-binders-pattern")
+(let matched (Sum Null $6 $7 $7))
+(run 1)
+(check (= matched Null))
+
+(pop)
+
+(push)
+
+(rewrite (Sing Null Null)
+         (Sum Null $x $x $x)
+         :name "shadowed-binders-rhs")
+(let seed (Sing Null Null))
+(let built (Sum Null $6 $7 $7))
+(run 1)
+(check (= seed built))
+
+(pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Refreshing a shadowed binder must not capture an ordinary-child slot.
+;;;
+;;; The compiler's generated outer-binder name starts with `$__shadow0`.  That
+;;; spelling is deliberately also pinned by the pattern below.  It is free in the
+;;; RHS body, so the refreshed outer `$x` must avoid it; otherwise the RHS becomes
+;;; the captured term and equating it makes the seed's only free slot redundant.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Sing $__shadow0 Null)
+         (Sum Null $x $x $__shadow0)
+         :name "shadow-refresh-avoids-free-slot")
+(let seed (Sing $9 Null))
+(let free (Sum Null $5 $6 $9))
+(let captured (Sum Null $5 $6 $5))
+(run 1)
+
+(check (= seed free))
+(check (!= seed captured))
+(check (slots seed $9))
 
 (pop)
 

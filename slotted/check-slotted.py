@@ -107,6 +107,11 @@ def starts_ok(out):
     return None if out.lstrip().startswith("OK:") else "no OK line"
 
 
+def paper_sdql_ran(out: str) -> str | None:
+    """The expensive artifact regression is required by name, not just by count."""
+    return None if re.search(r"^\s*ok\s+sdql-paper-batax\.egg\b", out, re.M) else "paper SDQL BATAX test did not run"
+
+
 def run_egg_files():
     """Every hand-written encoded-level file loads and runs clean.
 
@@ -183,10 +188,9 @@ def check_snapshots():
 
 
 # name, argv or a callable, what its output must say, whether --quick skips it, and
-# whether it needs the reference ORACLE. The oracle is `xmulti`, which links a local
-# checkout of `slotted-egraphs`, so a machine without one can still run everything that
-# only exercises the encoding against itself -- which is what `--no-oracle` is for, and
-# what CI runs until that dependency is fetchable.
+# whether it needs the reference ORACLE. The oracle is `xmulti`, pinned to an exact Git
+# revision of `slotted-egraphs`; `--no-oracle` still permits offline encoding-only runs
+# when that revision is not already in Cargo's cache.
 CHECKS = [
     # First: the machinery under `target/` is build output, and five tests include it.
     ("generators", check_generated, None, False, False),
@@ -194,9 +198,23 @@ CHECKS = [
     (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
-        ratio(r"(\d+)/(\d+) slotted tests pass", 20),
+        both(ratio(r"(\d+)/(\d+) slotted tests pass", 20), paper_sdql_ran),
         False,
         False,
+    ),
+    (
+        "paper-sdql-provenance",
+        ("slotted/check-paper-sdql.py",),
+        starts_ok,
+        False,
+        False,
+    ),
+    (
+        "paper-sdql-reference-goal",
+        ("slotted/check-paper-sdql.py", "--reference"),
+        starts_ok,
+        False,
+        True,
     ),
     ("snapshot-drift", check_snapshots, None, False, False),
     (
@@ -231,7 +249,7 @@ CHECKS = [
     (
         "refusals",
         ("slotted/check-refusals.py",),
-        ratio(r"(\d+)/(\d+) refusals hold, with a message", 13),
+        ratio(r"(\d+)/(\d+) refusals hold, with a message", 19),
         False,
         False,
     ),
@@ -242,6 +260,23 @@ CHECKS = [
         "known-divergences",
         ("slotted/xdiff/isomorphism.py", "known"),
         ratio(r"(\d+)/(\d+) known divergences still diverge", 0),
+        False,
+        True,
+    ),
+    (
+        # Pin known semantic gaps separately from the green differential suite. If a
+        # fix makes either side move, this reports the stale witness instead of quietly
+        # accepting a previously wrong answer.
+        "known-substitution-limitations",
+        ("slotted/xdiff/xsdql.py", "known-substitution-limitations"),
+        ratio(r"(\d+)/(\d+) known encoding limitations reproduced", 5),
+        False,
+        True,
+    ),
+    (
+        "reference-limitations",
+        ("slotted/xdiff/xsdql.py", "reference-limitations"),
+        ratio(r"(\d+)/(\d+) pinned-reference limitations reproduced", 4),
         False,
         True,
     ),
@@ -328,7 +363,7 @@ CHECKS = [
     (
         "iso-selftest",
         ("slotted/xdiff/isomorphism.py", "selftest"),
-        ratio(r"(\d+)/(\d+) self-tests pass", 3),
+        ratio(r"(\d+)/(\d+) self-tests pass", 26),
         False,
         True,
     ),
@@ -360,6 +395,27 @@ CHECKS = [
     ("iso-curated", ("slotted/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 51), False, True),
     ("array", ("slotted/xdiff/xarray.py",), ratio(r"(\d+)/(\d+) cases agree", 14), False, True),
     (
+        "array-artifact-shapes",
+        ("slotted/xdiff/xarray.py", "artifact-shapes"),
+        ratio(r"(\d+)/(\d+) array artifact goal shapes match", 11),
+        False,
+        False,
+    ),
+    (
+        "array-goal-smoke-flat",
+        ("slotted/xdiff/xarray.py", "goal-smoke"),
+        ratio(r"(\d+)/(\d+) goal cases reached on both sides", 1),
+        False,
+        True,
+    ),
+    (
+        "array-goal-smoke-nested",
+        ("slotted/xdiff/xarray.py", "goal-smoke-nested"),
+        ratio(r"(\d+)/(\d+) goal cases reached on both sides", 1),
+        False,
+        True,
+    ),
+    (
         "array-guards",
         ("slotted/xdiff/xarray.py", "vac"),
         ratio(r"(\d+)/(\d+) guards are load-bearing", 5),
@@ -376,13 +432,13 @@ CHECKS = [
         True,
     ),
     ("sdql", ("slotted/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 18), False, True),
-    # the stronger sdql check: a witnessed isomorphism, not just the probe partition.
-    # The two recorded divergences are excluded by the mode itself -- they disagree on
-    # purpose, so finding no isomorphism between them would say nothing.
+    # The stronger SDQL check: a witnessed isomorphism, not just the probe partition.
+    # The one checked reference panic and the five checked encoding divergences live in
+    # their explicit limitation modes rather than weakening this successful-case floor.
     (
         "sdql-iso",
         ("slotted/xdiff/xsdql.py", "iso"),
-        ratio(r"(\d+)/(\d+) isomorphic", 16),
+        ratio(r"(\d+)/(\d+) isomorphic", 18),
         False,
         True,
     ),

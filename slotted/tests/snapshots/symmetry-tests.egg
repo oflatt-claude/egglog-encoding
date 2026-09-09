@@ -189,7 +189,7 @@
        (Idx ix30)
        (= mrg31 (vec-get alts29 ix30)))
       ((let _rhs32 (F (compose mrg31 (compose m26 cs27)) C18 (compose mrg31 (compose m11 cs12)) C5))
-       (let _rhs33 (G (compose mrg31 (compose m24 cs25)) C17 (map-union (map-image (compose mrg31 (compose m26 cs27))) (map-image (compose mrg31 (compose m11 cs12)))) _rhs32))
+       (let _rhs33 (G (compose mrg31 (compose m24 cs25)) C17 (map-union (map-image (compose mrg31 (compose m26 cs27))) (map-union (map-image (compose mrg31 (compose m11 cs12))) (map-empty))) _rhs32))
        (Equated _rhs33 (compose mrg31 (compose mp7 cs13)) V3)) :name "rot")
 (let $a (F (map-of 1 1 2 2) (G (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)) (map-of 0 3) (Var 0)))
 (let $b (G (map-of 0 1) (Var 0) (map-of 2 2 3 3) (F (map-of 0 2) (Var 0) (map-of 0 3) (Var 0))))

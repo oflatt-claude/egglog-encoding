@@ -5,15 +5,11 @@ The paper's Listing 1 language and 8 of its 9 rules, compiled into the egglog
 slotted encoding and compared against the reference `slotted-egraphs`
 implementation, exactly as `xdiff.py` does for the toy language.
 
-`beta` is excluded, and not for the reason once written here. The ORACLE handles it
-fine: `Rewrite::new_if` parses its right-hand side with `Pattern::parse`, which
-accepts `b[x := t]` and builds a `Pattern::Subst`, and a spec whose `rhs` line is
-`?body[(var $x) := ?e]` reduces and saturates. What is missing is on THIS side --
-the rule compiler has no substitution, so there is no compiled rule to compare. The
-encoding can do it, with `slotted-subst` and the frame plumbing
-`slotted/encoding/sdql-beta.egg` writes by hand; teaching the compiler to emit
-that is the open piece. The paper's own benchmarks use the let-based rules instead
-(footnote 4), so the remaining 8 are the set that matters.
+The direct-substitution `beta` is excluded from this benchmark rule set.  Both the
+oracle and this compiler now support it (SDQL's `beta` exercises the compiled
+`subst` action), but the paper's array experiment deliberately uses the let-based
+explicit-substitution alternative (footnote 4): `let-intro` followed by the let
+rules.  The remaining 8 are therefore the rules that benchmark actually runs.
 
 The two sides:
 
@@ -109,7 +105,7 @@ class Rule:
         inner = {a[0] for a in self.atoms} - {self.atoms[0][0]}
 
         def go(root):
-            _, op, kids = by_root[root]
+            _, op, kids, *_payloads = by_root[root]
             binders = LANG[op].binders
             parts = []
             for i, k in enumerate(kids):
@@ -177,13 +173,14 @@ class Case:
         self.rounds = rounds
         self.unions = list(unions)
 
-    def spec(self):
+    def spec(self, include_probes=True):
         out = [f"rounds {self.rounds}"]
         out += [f"term {sexpr(t)}" for t in self.terms]
         out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
         for r in self.rules:
             out += r.spec_lines()
-        out += [f"probe {sexpr(t)}" for t in self.probes]
+        if include_probes:
+            out += [f"probe {sexpr(t)}" for t in self.probes]
         return "\n".join(out) + "\n"
 
     def shifted(self, k):
@@ -203,14 +200,15 @@ def schedule(steps):
     )
 
 
-def egg_program(case, atom_order=None, mult=3):
+def egg_program(case, atom_order=None, mult=3, defer_probes=False):
     out = [
         f'(include "{MACHINERY}")',
+        "(ruleset probe)",
         "(relation ProbeId (U i64))",
         "(relation SameClass (i64 i64))",
         "(rule ((ProbeId a i) (ProbeId b j)\n"
         "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
-        "      ((SameClass i j)))",
+        "      ((SameClass i j)) :ruleset probe)",
     ]
     for r in case.rules:
         out.append(f";; {r.name}")
@@ -221,12 +219,22 @@ def egg_program(case, atom_order=None, mult=3):
         out.append(f"(let _ua{i} {enc(a)})")
         out.append(f"(let _ub{i} {enc(b)})")
         out.append(f"(union _ua{i} _ub{i})")
-    for i, t in enumerate(case.probes):
-        out.append(f"(let _p{i} {enc(t)})")
+    if not defer_probes:
+        for i, t in enumerate(case.probes):
+            out.append(f"(let _p{i} {enc(t)})")
     out.append(schedule(case.rounds * mult))
+    if defer_probes:
+        # Goal terms are observational: build them only after the user-rule budget.
+        # The following schedule runs invariant maintenance and the probe relation,
+        # never the user rules, so the expected target cannot seed rewrite search.
+        for i, t in enumerate(case.probes):
+            out.append(f"(let _p{i} {enc(t)})")
     for i, _ in enumerate(case.probes):
         out.append(f"(ProbeId _p{i} {i})")
-    out.append(schedule(case.rounds * mult))
+    # Do not give the encoding a second user-rule budget after installing probes.
+    # The reference runs exactly `rounds * mult`; only invariant maintenance and the
+    # observational rule remain here.
+    out.append("(run-schedule (saturate (run slotted)) (saturate (run probe)))")
     out.append("(print-function SameClass 100000)")
     return "\n".join(out) + "\n"
 
@@ -255,6 +263,28 @@ def run_reference(case):
     return ("OK" if sat else "UNSATURATED", part)
 
 
+def run_reference_goal(case):
+    """Run the artifact criterion without inserting the expected target."""
+    spec = case.spec(include_probes=False) + f"goal {sexpr(case.probes[1])}\n"
+    try:
+        r = subprocess.run(
+            [str(XMULTI / "target" / "debug" / "xmulti")],
+            input=spec,
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return "TIMEOUT", f">{RUN_TIMEOUT}s"
+    if r.returncode != 0:
+        return "ERROR", (r.stderr.strip().splitlines() or ["?"])[-1]
+    goals = [line.split()[1] for line in r.stdout.splitlines() if line.startswith("GOAL ")]
+    if len(goals) != 1:
+        return "ERROR", "no unique GOAL line"
+    saturated = all(not line.startswith("SATURATED no") for line in r.stdout.splitlines())
+    return ("OK" if saturated else "UNSATURATED"), goals[0]
+
+
 def run_encoding(case, atom_order=None, keep=None, mult=3):
     prog = egg_program(case, atom_order, mult)
     path = keep or (ROOT / f"xarray-tmp-{os.getpid()}-{mult}.egg")
@@ -270,6 +300,24 @@ def run_encoding(case, atom_order=None, keep=None, mult=3):
     if not keep:
         path.unlink(missing_ok=True)
     return ("OK", parse_same_class(r.stdout, len(case.probes)))
+
+
+def run_encoding_goal(case, keep=None):
+    """Run user rules with only A present, then observe whether deferred B joins it."""
+    prog = egg_program(case, mult=1, defer_probes=True)
+    path = keep or (ROOT / f"xarray-goal-tmp-{os.getpid()}.egg")
+    path.write_text(prog)
+    try:
+        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
+    except subprocess.TimeoutExpired:
+        return "TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})"
+    if r.returncode != 0:
+        err = [line for line in r.stderr.splitlines() if "ERROR" in line]
+        return "ERROR", err[-1] if err else r.stderr[:160]
+    if keep is None:
+        path.unlink(missing_ok=True)
+    partition = parse_same_class(r.stdout, len(case.probes))
+    return "OK", "yes" if partition.startswith("[0,1]") else "no"
 
 
 def check_case(case, order_check=True, shift_check=True):
@@ -579,63 +627,51 @@ def _chain(fs, arg):
 
 
 def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
-    """The paper's S4.1 transformation: (A) -> (B).
+    """The paper artifact's S4.1 transformation: (A) -> (B).
 
-        (A)  \\f1. \\f2. \\f3. \\f4. \\m. map (map (\\x. f4 (f3 (f2 (f1 x))))) m
-        (B)  \\f1. ... \\m. map (map (\\x. f4 (f3 x)))
-                                (map (map (\\x. f2 (f1 x))) m)
+        (A)  \\f1. ... \\f4. map (map (\\x. f4 (f3 (f2 (f1 x)))))
+        (B)  \\f1. ... \\f4. \\y. map (map (\\x. f4 (f3 x)))
+                                      (map (map (\\x. f2 (f1 x))) y)
 
-    "To increase the difficulty of rewriting (A) into (B), we add a varying amount
-    of parameters to every function. By adding 2 parameters, we use ((f1 p1) p2)
-    instead of f1, where the p_i are bound at the top level."
-
-    `wrap_lams=False` leaves the functions and the matrix as free symbols instead of
-    binding them at the top, which is the same rewriting problem with fewer binders
-    around it; `nfun`/`dims` shrink it further.
-
-    MEASURED, and the one case the encoding does not carry is worth being exact about.
-    `goal-2d-4f-N0` is the full shape with the functions and the matrix lambda-bound at
-    the top. The reference gets there -- `[0,1]`, without saturating -- and the encoding
-    does not finish in 1500s, so raising the budget is not the answer; the earlier 120s
-    reading was not a budget that was merely too small.
-
-    The neighbour says where the cost is. `goal-free-2d-4f-N0` is THE SAME REWRITING
-    PROBLEM at the same size, differing only in that the functions and the matrix stay
-    free symbols, and the encoding finishes it. So what the encoding is paying for is
-    the top-level binders, not the depth of the rewrite -- which is the part of the
-    slotted machinery this whole comparison exists to exercise, and makes this case the
-    interesting one to profile rather than an unexplained timeout.
+    The artifact varies parameters `p1 ... pN` applied to each function. This port
+    follows its `functional-array-language/gen.py`, including two details the prior
+    hand-written case got wrong: (A) is eta-reduced and has no matrix binder, while
+    (B) introduces `y`; and the function binders are outside the parameter binders.
+    `wrap_lams=False` is a smaller diagnostic with those names left free.
     """
     cs = []
     for n in n_params:
         ps = [V(1 + i) for i in range(n)]
-        if wrap_lams:
-            f = [A(V(10 + i), *ps) for i in range(nfun)]
-            mat = V(20)
-        else:
-            f = [A(S(f"f{i + 1}"), *ps) for i in range(nfun)]
-            mat = S("arr")
-        x = V(30)
+        fn_slots = [1000 + i for i in range(nfun)]
+        fs = [A(V(slot), *ps) for slot in fn_slots] if wrap_lams else [A(S(f"f{i + 1}"), *ps) for i in range(nfun)]
         half = nfun // 2
+        fresh_slot = iter(range(100, 1000)).__next__
 
-        def maps(fn, arg):
-            """`map (map ... fn) arg` with `dims` maps."""
-            g = fn
+        def maps(fn):
+            out = fn
             for _ in range(dims):
-                g = ("app", MAP, g)
-            return ("app", g, arg)
+                out = ("app", MAP, out)
+            return out
 
-        a_body = maps(("lam", 30, _chain(f, x)), mat)
-        b_body = maps(("lam", 30, _chain(f[half:], x)), maps(("lam", 30, _chain(f[:half], x)), mat))
+        def chained(parts, fresh_slot=fresh_slot):
+            if len(parts) == 1:
+                return parts[0]
+            x = fresh_slot()
+            return ("lam", x, _chain(parts, V(x)))
 
-        def wrap(t, n=n):
+        a_body = maps(chained(fs))
+        left, right = maps(chained(fs[half:])), maps(chained(fs[:half]))
+        y = fresh_slot()
+        b_body = ("lam", y, ("app", left, ("app", right, V(y))))
+
+        def wrap(t, n=n, fn_slots=fn_slots):
             if not wrap_lams:
                 return t
-            t = ("lam", 20, t)
-            for i in reversed(range(nfun)):
-                t = ("lam", 10 + i, t)
+            # Artifact `nest_lams`: parameters inside function binders.
             for i in reversed(range(n)):
                 t = ("lam", 1 + i, t)
+            for slot in reversed(fn_slots):
+                t = ("lam", slot, t)
             return t
 
         A_, B_ = wrap(a_body), wrap(b_body)
@@ -645,6 +681,84 @@ def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
     return cs
 
 
+def _artifact_goal_text(o):
+    """Literal transcription of artifact commit 83f2e5b's `gen.py` for N=2,M=2."""
+    fresh = [0]
+
+    def fresh_slot():
+        fresh[0] += 1
+        return f"${fresh[0]}"
+
+    def fn_with_args(f):
+        for i in range(1, o + 1):
+            f = f"(app {f} (var $p{i}))"
+        return f
+
+    def chained(indices):
+        fs = [fn_with_args(f"(var $fn{i})") for i in indices]
+        if len(fs) == 1:
+            return fs[0]
+        x = fresh_slot()
+        out = f"(var {x})"
+        for fn in fs:
+            out = f"(app {fn} {out})"
+        return f"(lam {x} {out})"
+
+    def maps(t):
+        for _ in range(2):
+            t = f"(app map {t})"
+        return t
+
+    def wrap(t):
+        for i in reversed(range(1, o + 1)):
+            t = f"(lam $p{i} {t})"
+        for i in reversed(range(1, 5)):
+            t = f"(lam $fn{i} {t})"
+        return t
+
+    lhs = wrap(maps(chained(range(1, 5))))
+    left, right = maps(chained(range(3, 5))), maps(chained(range(1, 3)))
+    x = fresh_slot()
+    rhs = wrap(f"(lam {x} (app {left} (app {right} (var {x}))))")
+    return lhs, rhs
+
+
+def _alpha_shape(text):
+    """A binder-name-free tree, sufficient to compare closed artifact terms."""
+    tree = sc.parse(text)[0]
+    counter = [0]
+
+    def go(term, env):
+        if not isinstance(term, list):
+            return term
+        if term and term[0] == "lam":
+            counter[0] += 1
+            name = f"b{counter[0]}"
+            nested = dict(env)
+            nested[term[1]] = name
+            return "lam", name, go(term[2], nested)
+        if term and term[0] == "var":
+            return "var", env.get(term[1], f"free:{term[1]}")
+        return tuple(go(part, env) for part in term)
+
+    return go(tree, {})
+
+
+def check_artifact_goal_port():
+    """Hold all eleven Figure-8 parameter shapes against the artifact generator."""
+    bad = []
+    for o in range(11):
+        case = goal_cases([o], rounds=6, wrap_lams=True, nfun=4, dims=2)[0]
+        expected = _artifact_goal_text(o)
+        actual = tuple(sexpr(t) for t in case.probes)
+        if tuple(map(_alpha_shape, actual)) != tuple(map(_alpha_shape, expected)):
+            bad.append(o)
+    if bad:
+        print(f"FAIL artifact parameter shapes differ for O={bad}")
+    print(f"\n{11 - len(bad)}/11 array artifact goal shapes match")
+    return 1 if bad else 0
+
+
 def report_goal(case):
     """The paper's criterion: does each side put (A) and (B) in one class?
 
@@ -652,20 +766,21 @@ def report_goal(case):
     producing work -- so this is a bounded comparison, and a `no` means "not within
     this budget", not "never".
     """
-    rs, rv = run_reference(case)
-    es, ev = run_encoding(case)
+    rs, rv = run_reference_goal(case)
+    es, ev = run_encoding_goal(case)
 
     def reached(status, val):
         if status in ("TIMEOUT", "ERROR"):
             return status
-        return "YES" if val.startswith("[0,1]") else "no"
+        return "YES" if val == "yes" else "no"
 
     r_ok, e_ok = reached(rs, rv), reached(es, ev)
-    agree = "AGREE" if r_ok == e_ok else "DISAGREE"
-    print(f"  {case.name:<26} rounds={case.rounds:<3} ref {rs}/{r_ok:<7} enc {es}/{e_ok:<7} {agree}")
+    reached_both = r_ok == e_ok == "YES"
+    verdict = "REACHED" if reached_both else "FAILED"
+    print(f"  {case.name:<26} rounds={case.rounds:<3} ref {rs}/{r_ok:<7} enc {es}/{e_ok:<7} {verdict}")
     if r_ok in ("TIMEOUT", "ERROR") or e_ok in ("TIMEOUT", "ERROR"):
         print(f"      ref {rv}\n      enc {ev}")
-    return agree == "AGREE"
+    return reached_both
 
 
 def unbound_cases():
@@ -673,13 +788,9 @@ def unbound_cases():
     the two sides might reasonably differ."""
     cs = []
     # A `let` whose bound slot is ALSO free in the value. `Bind` hides the slot
-    # from the body only, so the reference keeps it free; the encoding's binder
-    # rule drops it from the whole node. This is the one shape where the two
-    # encodings of `let` are not the same language.
+    # from the body only, so both implementations must keep it free and agree.
     #   let x = x in f1 x      -- the value's `x` is the AMBIENT one, the body's is
-    # the bound one. `Bind` covers the body column only, so the reference keeps the
-    # slot free on the class; the encoding's generated binder rule removes it from
-    # the whole node, so the class comes out slotless. Probing that needs a parent
+    # the bound one. `Bind` covers the body column only. Probing that needs a parent
     # that can see the difference: two applications that differ only in whether the
     # `let`'s slot and the argument's slot coincide.
     B = ("app", S("f1"), V(0))
@@ -833,10 +944,9 @@ EGG_HEADER = """;;; GENERATED by `python3 slotted/xdiff/xarray.py egg` -- do not
 ;;; `Lam` and `Let` bind their column 0 because that file's `:binder` says so, so the
 ;;; binder rules below are generated from the same declaration these terms are.
 ;;;
-;;; `beta` is left out: it rewrites to `?body[(var $x) := ?e]`, and the differential
-;;; rule compiler has no substitution, so there is no compiled rule to compare -- the
-;;; oracle itself handles `b[x := t]` fine. The
-;;; paper's own benchmarks use the let-based rules instead (footnote 4).
+;;; Direct-substitution `beta` is left out because the paper's own array benchmark
+;;; uses the let-based explicit-substitution rules instead (footnote 4). Both sides do
+;;; support the substitution action; SDQL's `beta` compares that path separately.
 ;;;
 ;;; Each section is its own (push)/(pop). Two terms are in one slotted e-class when
 ;;; they reach a common leader, which is what every `check` below asks.
@@ -971,7 +1081,13 @@ def emit_egg():
 
 # ------------------------------------------------------------------------ main
 def main():
+    global FLAT
     args = sys.argv[1:]
+    if args and args[0] == "goal-smoke-nested":
+        FLAT = False
+        args[0] = "goal-smoke"
+    if args and args[0] == "artifact-shapes":
+        return check_artifact_goal_port()
     if args and args[0] == "show":
         cases = (
             per_rule_cases()
@@ -1028,7 +1144,7 @@ def main():
         cases = per_rule_cases() + unbound_cases()
         if len(args) > 1:
             cases = [c for c in cases if c.name.startswith(args[1])]
-        tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0}
+        tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
         for c in cases:
             verdict, detail = I.check(c)
             tally[verdict] += 1
@@ -1036,9 +1152,9 @@ def main():
         print(
             f"\n{tally['ok']}/{len(cases)} isomorphic   "
             f"({tally['FAIL']} differ, {tally['skip']} skipped, "
-            f"{tally['limit']} not comparable)"
+            f"{tally['limit']} not comparable, {tally['unreadable']} unreadable)"
         )
-        return 1 if tally["FAIL"] else 0
+        return 1 if tally["FAIL"] or tally["unreadable"] else 0
 
     if args and args[0] == "egg":
         dest = ROOT / "target" / "slotted" / "slotted-array-rules.egg"
@@ -1055,20 +1171,20 @@ def main():
         print(f"\n{len(cases) - len(fails)}/{len(cases)} guards are load-bearing")
         return 1 if fails else 0
 
-    if args and args[0] == "goal":
+    if args and args[0] in ("goal", "goal-smoke"):
         rounds = int(os.environ.get("XARRAY_ROUNDS", "10"))
         ns = [int(x) for x in args[1:]] or [0, 1]
-        cases = []
+        cases = goal_cases([0], rounds, wrap_lams=False, nfun=2, dims=1)
         # graded, easiest first: the free-symbol 1-D two-function version is the
         # smallest shape that still needs the whole rule set, then the paper's own
         # 2-D four-function program, first with free symbols and then with the
-        # functions and the matrix bound at the top as Listing 1 has them.
-        cases += goal_cases([0], rounds, wrap_lams=False, nfun=2, dims=1)
-        cases += goal_cases(ns, rounds, wrap_lams=False, nfun=4, dims=2)
-        cases += goal_cases(ns, rounds, wrap_lams=True, nfun=4, dims=2)
-        agree = sum(1 for c in cases if report_goal(c))
-        print(f"\n{agree}/{len(cases)} goal cases agree")
-        return 0 if agree == len(cases) else 1
+        # functions bound at the top as Listing 1 has them.
+        if args[0] == "goal":
+            cases += goal_cases(ns, rounds, wrap_lams=False, nfun=4, dims=2)
+            cases += goal_cases(ns, rounds, wrap_lams=True, nfun=4, dims=2)
+        reached = sum(1 for c in cases if report_goal(c))
+        print(f"\n{reached}/{len(cases)} goal cases reached on both sides")
+        return 0 if reached == len(cases) else 1
     cases = unbound_cases() if args and args[0] == "extra" else per_rule_cases()
 
     fails, ok = [], 0

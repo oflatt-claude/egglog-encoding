@@ -166,7 +166,10 @@ def main():
         MUTANT.write_text(mutated)
         r = subprocess.run(
             [sys.executable, "slotted/slotted-egglog.py", str(MUTANT)],
-            cwd=ROOT, capture_output=True, text=True, timeout=1800,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=1800,
         )
         got = broken_claim(r.stdout + r.stderr)
         if got in want:

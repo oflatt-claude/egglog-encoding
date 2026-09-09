@@ -27,6 +27,11 @@ CASES = [
     ("a global named with a `$`", LANG + "(let $I (IConst))\n", "may not be named"),
     ("an unbound `#global`", LANG + '(rewrite (Mul a #nope) a :name "r")\n', "no global"),
     (
+        "a global bound to a bare slot invocation",
+        LANG + "(let v $7)\n",
+        "cannot currently store",
+    ),
+    (
         "a `#global` in a binder column",
         LANG + "(let g (IConst))\n(let bad (Lam #g #g))\n",
         "binder column",
@@ -42,6 +47,31 @@ CASES = [
         "not implemented here",
     ),
     ("an unknown declaration option", "(sort M)\n(constructor Succ (M) M :wat 1)\n", "unknown option"),
+    (
+        "a negative binder position",
+        "(sort M)\n(constructor F (M M) M :binder -1)\n",
+        "outside",
+    ),
+    (
+        "an out-of-range binder position",
+        "(sort M)\n(constructor F (M M) M :binder 2)\n",
+        "outside",
+    ),
+    (
+        "duplicate binder positions",
+        "(sort M)\n(constructor F (M M) M :binder 0 0)\n",
+        "duplicate",
+    ),
+    (
+        "non-contiguous nested binders",
+        "(sort M)\n(constructor F (M M M M) M :binder 0 2)\n",
+        "contiguous",
+    ),
+    (
+        "a binder without a covered child",
+        "(sort M)\n(constructor F (M M) M :binder 1)\n",
+        "followed",
+    ),
     ("two sorts", "(sort A)\n(sort B)\n(constructor F (A) A)\n", "written for one"),
     ("a sort named after a rule variable in the core", "(sort m)\n(constructor F (m) m)\n", "would capture"),
     ("`datatype*`, being several sorts at once", "(datatype* (A (F A)) (B (G B)))\n", "several sorts"),
@@ -50,8 +80,7 @@ CASES = [
     ("egglog's `rule`, which this language does not have", LANG + "(rule ((= a (Null))) ())\n", "not part of"),
     (
         "a payload variable the right-hand side names and no pattern binds",
-        "(sort M)\n(constructor N (i64) M)\n(constructor A (M M) M)\n"
-        '(rewrite (A x y) (N j) :name "r")\n',
+        '(sort M)\n(constructor N (i64) M)\n(constructor A (M M) M)\n(rewrite (A x y) (N j) :name "r")\n',
         "no pattern binds",
     ),
 ]
@@ -64,7 +93,10 @@ def main():
         TMP.write_text(program)
         r = subprocess.run(
             [sys.executable, "slotted/slotted-egglog.py", str(TMP)],
-            cwd=ROOT, capture_output=True, text=True, timeout=600,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=600,
         )
         out = r.stdout + r.stderr
         if r.returncode == 0:

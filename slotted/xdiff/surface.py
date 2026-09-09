@@ -94,6 +94,7 @@ def render(atoms, action, conds):
         # a second atom rooted there would have to be written `:when (= <call> ...)`,
         # and an equality's left side must be a variable
         raise Unexpressible("two atoms are rooted at the conclusion's variable")
+
     def pay(c):
         """A `#k` child is the harness's spelling of the PAYLOAD LEAF `k`, shared with
         the oracle; the surface writes the node itself, `(Num k)`. A bare `#` would read
@@ -122,9 +123,7 @@ def render(atoms, action, conds):
     else:
         rhs = f"({ctor(action[1])} {ref(action[2])} {ref(action[3])})"
 
-    facts = [
-        f"(= {a[0]} ({ctor(a[1])} {ref(a[2])} {ref(a[3])}))" for i, a in enumerate(atoms) if i != lead
-    ]
+    facts = [f"(= {a[0]} ({ctor(a[1])} {ref(a[2])} {ref(a[3])}))" for i, a in enumerate(atoms) if i != lead]
     for want, slot, pvars in conds:
         # `ref` may render the matched root as the pattern itself, and a condition takes a
         # call where a variable goes for exactly this reason

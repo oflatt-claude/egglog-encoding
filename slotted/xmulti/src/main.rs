@@ -18,6 +18,7 @@
 //! nested <pattern>           run this rule through the single-pattern matcher;
 //!                            its `cond` lines still apply
 //! probe  <sexpr>              term to include in the reported partition
+//! goal   <sexpr>              test whether a term is equivalent to the first `term`
 //! rounds <n>                  rounds to run, each applying every rule once (default 10)
 //! ```
 //!
@@ -117,6 +118,8 @@ define_language! {
 
 type G = EGraph<L>;
 
+const GROUP_SLOT_CAP: usize = 6;
+
 /// A side condition on a match: is the slot among the variable's slots?
 ///
 /// `want` says whether the slot should appear in the slots of *any* listed
@@ -155,6 +158,7 @@ struct Spec {
     /// single-rule spec needs no separator.
     rules: Vec<RuleSpec>,
     probes: Vec<String>,
+    goals: Vec<String>,
     rounds: usize,
 }
 
@@ -165,6 +169,7 @@ fn parse_spec(src: &str) -> Spec {
         unions: vec![],
         rules: vec![],
         probes: vec![],
+        goals: vec![],
         rounds: 10,
     };
     for line in src.lines() {
@@ -178,6 +183,7 @@ fn parse_spec(src: &str) -> Spec {
             "dump" => s.dump = true,
             "term" => s.terms.push(rest.to_string()),
             "probe" => s.probes.push(rest.to_string()),
+            "goal" => s.goals.push(rest.to_string()),
             "rounds" => s.rounds = rest.parse().unwrap(),
             "union" => {
                 let (a, b) = split_two_sexprs(rest);
@@ -242,8 +248,7 @@ fn parse_spec(src: &str) -> Spec {
                 if s.rules.is_empty() {
                     s.rules.push(RuleSpec::default());
                 }
-                s.rules.last_mut().unwrap().rhs =
-                    Some((root.to_string(), pat.trim().to_string()));
+                s.rules.last_mut().unwrap().rhs = Some((root.to_string(), pat.trim().to_string()));
             }
             "action" => {
                 let w: Vec<&str> = rest.split_whitespace().collect();
@@ -297,15 +302,18 @@ fn add(eg: &mut G, s: &str) -> AppliedId {
     eg.add_expr(RecExpr::<L>::parse(s).unwrap())
 }
 
+fn goal_reached(eg: &G, start: &AppliedId, goal: &str) -> bool {
+    lookup_rec_expr(&RecExpr::<L>::parse(goal).unwrap(), eg)
+        .is_some_and(|found| eg.eq(start, &found))
+}
+
 fn main() {
     let mut src = String::new();
     std::io::stdin().read_to_string(&mut src).unwrap();
     let spec = parse_spec(&src);
 
     let mut eg = G::default();
-    for t in &spec.terms {
-        add(&mut eg, t);
-    }
+    let term_ids: Vec<AppliedId> = spec.terms.iter().map(|t| add(&mut eg, t)).collect();
     for (a, b) in &spec.unions {
         let x = add(&mut eg, a);
         let y = add(&mut eg, b);
@@ -415,8 +423,28 @@ fn main() {
         println!("SATURATED {}", if saturated { "yes" } else { "no" });
     }
 
+    // The oracle is only useful if the reference graph itself satisfies the
+    // implementation's representation invariants.  The `checks` feature also runs
+    // these assertions during rebuilding; this final check covers the exact state
+    // from which the partition and structured dump are observed.
+    eg.check();
+
+    // Unlike a probe, a goal is deliberately not inserted before rewriting. This
+    // mirrors the paper artifact's `lookup_rec_expr` criterion and prevents the
+    // expected result from changing which rewrites match.  Existence alone is not
+    // enough: the artifact requires the goal to be equivalent to the initial term.
+    for goal in &spec.goals {
+        let reached = term_ids
+            .first()
+            .is_some_and(|start| goal_reached(&eg, start, goal));
+        println!("GOAL {}", if reached { "yes" } else { "no" });
+    }
+
     if spec.dump {
-        dump_structured(&eg);
+        if let Err(message) = dump_structured(&eg) {
+            eprintln!("REFERENCE_LIMIT: {message}");
+            std::process::exit(2);
+        }
     }
     println!("PARTITION {}", partition(&eg, &spec.probes));
 }
@@ -429,14 +457,13 @@ fn main() {
 ///
 /// `group` itself is crate-private, but `eq` on two AppliedIds over the same class is
 /// exactly a membership test on `a.m * b.m^-1`, so enumerating permutations recovers it.
-/// A class with more slots than `SLOT_CAP` is reported as `?` rather than silently
-/// skipped, since 6! is where this stops being cheap.
-fn group_of(eg: &G, id: Id) -> Vec<String> {
-    const SLOT_CAP: usize = 6;
+/// A class with more slots than `GROUP_SLOT_CAP` produces an explicit limit rather
+/// than a partial dump, since 6! is where this stops being cheap.
+fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
     let mut slots: Vec<Slot> = eg.slots(id).iter().copied().collect();
     slots.sort_by_key(|s| s.to_string());
-    if slots.len() > SLOT_CAP {
-        return vec!["?".to_string()];
+    if slots.len() > GROUP_SLOT_CAP {
+        return Err(slots.len());
     }
     let ident = SlotMap::identity(&slots.iter().copied().collect());
     let mut out = Vec::new();
@@ -458,7 +485,7 @@ fn group_of(eg: &G, id: Id) -> Vec<String> {
         }
     }
     out.sort();
-    out
+    Ok(out)
 }
 
 fn permutations(xs: &[Slot]) -> Vec<Vec<Slot>> {
@@ -483,14 +510,28 @@ fn permutations(xs: &[Slot]) -> Vec<Vec<Slot>> {
 /// invocations and slot literals, so nothing has to be recovered from `Debug`
 /// output. Slot *names* are printed as they are; the comparison is what
 /// canonicalises them away, since the two sides pick names independently.
-fn dump_structured(eg: &G) {
+fn dump_structured(eg: &G) -> Result<(), String> {
     let mut ids = eg.ids();
     ids.sort_by_key(|i| format!("{i:?}"));
+
+    // Check the bound before writing anything.  A partial dump is especially
+    // dangerous to a graph-isomorphism oracle because it can look like a valid,
+    // smaller graph.  The caller turns this into a documented nonzero outcome.
+    for id in &ids {
+        let width = eg.slots(*id).len();
+        if width > GROUP_SLOT_CAP {
+            return Err(format!(
+                "class {id:?} has {width} live slots; symmetry enumeration is capped at {GROUP_SLOT_CAP}"
+            ));
+        }
+    }
+
     for id in ids {
         let mut slots: Vec<String> = eg.slots(id).iter().map(|s| s.to_string()).collect();
         slots.sort();
         println!("CLASS {:?} SLOTS {}", id, slots.join(","));
-        println!("GROUP {:?} {}", id, group_of(eg, id).join(";"));
+        let group = group_of(eg, id).expect("group width was checked before dumping");
+        println!("GROUP {:?} {}", id, group.join(";"));
         let mut lines: Vec<String> = Vec::new();
         for node in eg.enodes(id) {
             let mut parts: Vec<String> = Vec::new();
@@ -499,13 +540,14 @@ fn dump_structured(eg: &G) {
                     SyntaxElem::String(t) => parts.push(format!("o:{t}")),
                     SyntaxElem::Slot(s) => parts.push(format!("s:{s}")),
                     SyntaxElem::AppliedId(a) => {
-                        let mut m: Vec<String> = a
-                            .m
-                            .iter()
-                            .map(|(k, v)| format!("{k}>{v}"))
-                            .collect();
+                        // Use one normalized AppliedId for both fields.  Combining
+                        // the leader returned by `find_applied_id` with the old map
+                        // can express an invocation in two incompatible frames.
+                        let a = eg.find_applied_id(&a);
+                        let mut m: Vec<String> =
+                            a.m.iter().map(|(k, v)| format!("{k}>{v}")).collect();
                         m.sort();
-                        parts.push(format!("c:{:?}:{}", eg.find_applied_id(&a).id, m.join("|")));
+                        parts.push(format!("c:{:?}:{}", a.id, m.join("|")));
                     }
                 }
             }
@@ -516,6 +558,7 @@ fn dump_structured(eg: &G) {
             println!("{l}");
         }
     }
+    Ok(())
 }
 
 /// Probe indices grouped by **e-class identity**, as a canonical string.
@@ -561,4 +604,35 @@ fn partition(eg: &G, probes: &[String]) -> String {
         .collect();
     gs.sort();
     format!("{} missing[{:?}]", gs.join(""), missing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_group_is_an_explicit_limit() {
+        let mut eg = G::default();
+        let root = add(
+            &mut eg,
+            "(f (var $a) (f (var $b) (f (var $c) (f (var $d) (f (var $e) (f (var $f) (var $g)))))))",
+        );
+        let id = eg.find_applied_id(&root).id;
+
+        assert_eq!(group_of(&eg, id), Err(7));
+        assert!(dump_structured(&eg)
+            .unwrap_err()
+            .contains("symmetry enumeration is capped at 6"));
+    }
+
+    #[test]
+    fn goal_requires_equivalence_not_only_existence() {
+        let mut eg = G::default();
+        let start = add(&mut eg, "(null)");
+        let other = add(&mut eg, "(f (null) (null))");
+
+        assert!(!goal_reached(&eg, &start, "(f (null) (null))"));
+        eg.union(&start, &other);
+        assert!(goal_reached(&eg, &start, "(f (null) (null))"));
+    }
 }

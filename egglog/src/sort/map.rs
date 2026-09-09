@@ -511,7 +511,15 @@ pub(crate) fn renaming_refine_namings(
     }
 
     let mut out = Vec::new();
-    walk(&cands, &all, &pattern, BTreeMap::new(), diseq, cap, &mut out);
+    walk(
+        &cands,
+        &all,
+        &pattern,
+        BTreeMap::new(),
+        diseq,
+        cap,
+        &mut out,
+    );
     out
 }
 
@@ -966,7 +974,11 @@ mod naming_tests {
     fn refine_leaves_a_non_candidate_alone_but_in_the_domain() {
         // 7 may merge with nothing because it is not offered; 0 and 1 are the group
         let out = renaming_refine_namings(&[ident(&[0]), ident(&[]), ident(&[0, 1, 7])], 64);
-        assert_eq!(out, vec![ident(&[0, 1, 7])], "nothing to merge, domain intact");
+        assert_eq!(
+            out,
+            vec![ident(&[0, 1, 7])],
+            "nothing to merge, domain intact"
+        );
 
         // and with two candidates it merges those and only those
         let out = renaming_refine_namings(&[ident(&[0, 1]), ident(&[]), ident(&[7])], 64);

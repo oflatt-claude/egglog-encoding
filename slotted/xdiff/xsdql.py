@@ -20,12 +20,11 @@ The two sides:
               `target/slotted/slotted-sdql-rules.egg` by its `:name`, so what runs is the
               generated artifact and not a re-derivation of it.
 
-`beta` is not here. It rewrites to `?body[(var $x) := ?t]`, which the encoding
-answers with `slotted-subst` and frame plumbing rather than with a compiled rule,
-so `target/slotted/slotted-sdql-rules.egg` has no `beta` to lift. (The reference side
-could express it: `rhs` hands its text to `Pattern::parse`, which builds
-`Pattern::Subst` for the `[_ := _]` form. There is simply nothing to compare it
-against.)
+`beta` is compiled too. Its right-hand side becomes `slotted-subst` plus the frame
+plumbing needed to return an invocation rather than only an e-class. The focused
+known-substitution-limitations mode pins capture and extraction divergences so they
+remain visible without making the ordinary agreement suite green on a known-wrong
+answer.
 
 Usage:
     ./xsdql.py                every case: each rule firing, and each guard blocking
@@ -33,6 +32,8 @@ Usage:
                               final e-graphs, via `isomorphism.py`
     ./xsdql.py show <name>    one case's spec, its egg program, and both answers
     ./xsdql.py list           the cases and the rules they exercise
+    ./xsdql.py known-substitution-limitations
+                              executable witnesses for known encoding gaps
 """
 
 import functools
@@ -125,21 +126,13 @@ sc = __import__("slotted-egglog")
 
 
 def check_term(t):
-    """Reject terms where the reference and the encoding disagree on a node's slots.
+    """Walk a term so future per-node validation has one central hook.
 
-    `Bind<T>` hides the bound slot from that ONE column; the encoding's `:binder`
-    drops it from the whole node. The two agree only when no uncovered column
-    mentions a bound slot, so a term that does is out of scope for a comparison
-    rather than a mismatch to report -- `target/slotted/slotted-lang-sdql.egg` says the
-    encoding renames such a collision away, which is a different node.
+    A bound name may also occur free in an uncovered column: `Bind<T>` covers only
+    its wrapped body, and the generated binder machinery renames the bound occurrence
+    away from that free one.  Such collisions used to be excluded here, hiding exactly
+    the scope boundary the differential suite needs to compare.
     """
-    k = t[0]
-    if k == "sum":
-        assert not (LANG.slots(t[1]) & {t[2], t[3]}), f"range mentions a bound slot: {t}"
-    if k == "merge":
-        assert not ((LANG.slots(t[1]) | LANG.slots(t[2])) & {t[3], t[4], t[5]}), f"a range mentions a bound slot: {t}"
-    if k == "let":
-        assert not (LANG.slots(t[1]) & {t[2]}), f"value mentions the bound slot: {t}"
     for x in t[1:]:
         if isinstance(x, tuple):
             check_term(x)
@@ -166,7 +159,7 @@ class Rule:
     that actually run.
     """
 
-    def __init__(self, name, lhs, rhs, conds=(), atoms=None):
+    def __init__(self, name, lhs, rhs, conds=(), atoms=None, egg=None):
         self.name = name
         self.lhs = lhs
         self.rhs = rhs
@@ -174,6 +167,11 @@ class Rule:
         #: `(root, atoms)` from `slotenc.flatten`, or None where the pattern has no
         #: atom spelling; see `atom_lines`.
         self.flat = atoms
+        # Ordinary cases lift the generated rule by name. A focused compiler
+        # limitation may instead carry the exact rule text compiled for its synthetic
+        # multipattern; keeping that exceptional path explicit prevents it from
+        # weakening the generated-artifact check above.
+        self.egg = egg
 
     def atom_lines(self):
         """The pattern as `atom` lines, or None where it has no atom spelling."""
@@ -222,18 +220,10 @@ def _load_rules():
     return out
 
 
-#: Rules whose flat comparison is contaminated by upstream issue #48 -- they bind a
-#: slot and reuse it inside the body, and a flat pattern cannot say which variables sit
-#: under the binder, so the two sides identify slots differently. Reported by the `iso`
-#: mode rather than compared: finding no isomorphism between two graphs that answer
-#: different questions says nothing. They must still DIFFER -- an agreement means #48
-#: moved and this record is stale.
-#: `sum-fact-inv-1` is NOT in the set: the end-of-rule refinement reaches the naming
-#: that identifies the two sides, so for that rule the flattened question and the nested
-#: one land on the same graph. `sum-merge` differs.
-ISSUE48_GAP = {
-    "sum-merge": "two nested sums, each binding a slot the body reuses",
-}
+#: With the reference's invariant checks enabled, this rule currently panics while
+#: instantiating its flattened RHS. It is exercised by `reference-limitations`, not
+#: counted as differential evidence from a malformed reference state.
+REFERENCE_RULE_LIMITS = {"sum-merge"}
 
 RULES = _load_rules()
 
@@ -281,10 +271,23 @@ def egg_rule(name):
 
 # ---------------------------------------------------------------------- the cases
 class Case:
-    def __init__(self, name, rule, terms, probes, want, rounds=3, ref_want=None, why=None):
+    def __init__(
+        self,
+        name,
+        rule,
+        terms,
+        probes,
+        want,
+        rounds=3,
+        ref_want=None,
+        why=None,
+        unions=(),
+        flat=None,
+    ):
         self.name = name
         self.rule = rule
         self.terms = list(terms)
+        self.unions = list(unions)
         self.probes = list(probes)
         # the partition both sides must report, so a case that agrees on a
         # collapsed or empty answer still fails
@@ -296,15 +299,20 @@ class Case:
         # known difference, it does not stop comparing.
         self.ref_want = ref_want
         self.why = why
+        # `None` follows the ordinary suite-wide choice. Focused limitations pin the
+        # matcher they exercise: beta is the reference benchmark's nested rewrite,
+        # while the conjunctive query necessarily uses MultiPattern.
+        self.flat = flat
         assert (ref_want is None) == (why is None), "a divergence needs its reason"
-        for t in self.terms + self.probes:
+        for t in self.terms + self.probes + [t for pair in self.unions for t in pair]:
             check_term(t)
 
     def spec(self, with_rule=True):
         out = [f"rounds {self.rounds}"]
         out += [f"term {sexpr(t)}" for t in self.terms]
+        out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
         if with_rule:
-            out += self.rule.spec_lines(flat=FLAT)
+            out += self.rule.spec_lines(flat=FLAT if self.flat is None else self.flat)
         out += [f"probe {sexpr(t)}" for t in self.probes]
         return "\n".join(out) + "\n"
 
@@ -318,6 +326,8 @@ class Case:
             self.rounds,
             self.ref_want,
             self.why,
+            unions=[(shift(a, k), shift(b, k)) for a, b in self.unions],
+            flat=self.flat,
         )
 
 
@@ -332,7 +342,7 @@ def egg_program(case, with_rule=True, mult=3):
     out = [f'(include "{MACHINERY}")', "(ruleset sdql)"]
     if with_rule:
         out.append(f";; {case.rule.name}")
-        out.append(egg_rule(case.rule.name))
+        out.append(case.rule.egg if case.rule.egg is not None else egg_rule(case.rule.name))
     # A slotted e-class is not one egglog e-class: two probes are in the same
     # slotted class when they reach a common leader.
     out += [
@@ -345,12 +355,18 @@ def egg_program(case, with_rule=True, mult=3):
     ]
     for i, t in enumerate(case.terms):
         out.append(f"(let _t{i} {enc(t)})")
+    for i, (a, b) in enumerate(case.unions):
+        out.append(f"(let _ua{i} {enc(a)})")
+        out.append(f"(let _ub{i} {enc(b)})")
+        out.append(f"(union _ua{i} _ub{i})")
     for i, t in enumerate(case.probes):
         out.append(f"(let _p{i} {enc(t)})")
     out.append(schedule(case.rounds * mult))
     for i, _ in enumerate(case.probes):
         out.append(f"(ProbeId _p{i} {i})")
-    out.append(schedule(case.rounds * mult))
+    # The reference gets exactly `rounds * mult` user-rule rounds.  Probe
+    # installation must not silently give the encoding that budget a second time.
+    out.append("(run-schedule (saturate (run slotted)))")
     out.append("(run-schedule (saturate (run probe)))")
     out.append("(print-function SameClass 100000)")
     return "\n".join(out) + "\n"
@@ -368,7 +384,12 @@ def run_reference(case, with_rule=True):
     except subprocess.TimeoutExpired:
         return ("TIMEOUT", f">{RUN_TIMEOUT}s")
     if r.returncode != 0:
-        return ("ERROR", (r.stderr.strip().splitlines() or ["?"])[-1])
+        lines = r.stderr.strip().splitlines()
+        diagnostic = next(
+            (line for line in lines if "SlotMap::index" in line or "SlotMap::compose" in line),
+            next((line for line in lines if "panicked at" in line), lines[-1] if lines else "?"),
+        )
+        return ("ERROR", diagnostic)
     part, sat = None, True
     for line in r.stdout.splitlines():
         if line.startswith("PARTITION "):
@@ -477,6 +498,27 @@ BLOCKED = "[0][1][2] missing[[]]"
 
 def cases():
     out = []
+
+    # --- Repeated names in nested Bind layers mean lexical shadowing, not one
+    # simultaneous binder. The innermost layer captures the body occurrence.  This
+    # baseline comparison caught the flattened encoding leaving the private binder
+    # columns identified with each other.
+    out.append(
+        Case(
+            "nested-binder-shadowing",
+            RULES["eq-comm"],
+            [],
+            [
+                ("sum", ("null",), 5, 5, V(5)),
+                ("sum", ("null",), 6, 7, V(7)),
+                ("sum", ("null",), 6, 7, V(6)),
+                ("merge", ("null",), ("null",), 5, 5, 5, V(5)),
+                ("merge", ("null",), ("null",), 6, 7, 8, V(8)),
+                ("merge", ("null",), ("null",), 6, 7, 8, V(6)),
+            ],
+            "[0,1][2][3,4][5] missing[[]]",
+        )
+    )
 
     # --- a plain binary rule, and the symmetry it puts on the class.
     # The second child is a payload leaf, not a second variable: `(eq (var $1)
@@ -742,6 +784,224 @@ def cases():
     return out
 
 
+def reference_limitations():
+    """Legitimate binder collisions the pinned reference currently cannot add.
+
+    In each term the bound name is also free in an uncovered column. `Bind<T>` scopes
+    only over the body, so the free occurrence must remain.  The encoding is checked
+    on a parent pair that would collapse if it lost that occurrence.  Reference PR
+    #46 cannot add any of the three bare terms: with invariant checks enabled it
+    panics in `EGraph::add` (without them the later symptom is `SlotMap::index`).
+    Keeping that limitation executable is more honest than
+    filtering these shapes out of the differential corpus; if the reference is fixed,
+    this test becomes stale and asks to turn them into ordinary comparisons.
+    """
+    shapes = {
+        "let": ("let", V(5), 5, ("num", 0)),
+        "sum": ("sum", V(5), 5, 6, ("num", 0)),
+        "merge": ("merge", V(5), ("num", 0), 5, 6, 7, ("num", 0)),
+    }
+    return [
+        Case(
+            f"{name}-free-uncovered",
+            RULES["eq-comm"],
+            [],
+            [("apply", term, V(5)), ("apply", term, V(8))],
+            "[0][1] missing[[]]",
+        )
+        for name, term in shapes.items()
+    ]
+
+
+def known_encoding_limitations():
+    """Small witnesses for semantic gaps that must not be mistaken for coverage.
+
+    Each case pins both partitions. Agreement is reported as stale rather than as a
+    pass: these belong in the ordinary differential suite once the encoding implements
+    the reference behavior.
+    """
+    ref_subst = "[0,1][2] missing[[]]"
+    enc_subst = "[0,2][1] missing[[]]"
+
+    # Capture avoidance must refresh the lambda's private slot, not the free slot in
+    # the substituted term. The primitive currently has only flat edge/class pairs and
+    # cannot tell which edge is a binder marker.
+    capture = ("let", V(0), 1, ("lambda", 0, ("add", V(1), V(0))))
+    capture_avoiding = ("lambda", 2, ("add", V(0), V(2)))
+    captured = ("lambda", 0, ("add", V(0), V(0)))
+    out = [
+        Case(
+            "subst-capture",
+            RULES["beta"],
+            [capture],
+            [capture, capture_avoiding, captured],
+            enc_subst,
+            rounds=2,
+            ref_want=ref_subst,
+            why="slotted-subst does not know which child edges carry bound names",
+            flat=False,
+        )
+    ]
+
+    # A nested binder for the same slot shadows the outer substitution target. The
+    # flat encoding walks its marker edge as if it were an ordinary AST child and
+    # consequently substitutes below a scope where the reference stops.
+    shadow_source = ("let", ("num", 1), 0, ("lambda", 0, V(0)))
+    shadow_result = ("lambda", 0, V(0))
+    out.append(
+        Case(
+            "subst-shadowed-target",
+            RULES["beta"],
+            [shadow_source],
+            [shadow_source, shadow_result],
+            "[0][1] missing[[]]",
+            rounds=2,
+            ref_want="[0,1] missing[[]]",
+            why="slotted-subst descends through a binder that shadows its target",
+            flat=False,
+        )
+    )
+
+    # The two bodies are one e-class. The pinned oracle's SynExprSubst keeps the source
+    # body, and the reference's ExtractionSubst would choose it too: a Bind slot is
+    # data in its enclosing e-node, not an AST child, so its costs are 3 versus 4. In
+    # the encoding each binder is another edge to Var; counting those markers as
+    # children reverses the costs to 5 versus 4 and therefore the result beta builds.
+    body_with_two_binders = ("sum", ("null",), 2, 3, V(1))
+    body_without_binders = ("add", ("unique", V(1)), ("null",))
+    cost_source = ("let", ("num", 0), 1, body_with_two_binders)
+    cost_reference = ("sum", ("null",), 2, 3, ("num", 0))
+    cost_encoding = ("add", ("unique", ("num", 0)), ("null",))
+    out.append(
+        Case(
+            "subst-binder-cost",
+            RULES["beta"],
+            [cost_source],
+            [cost_source, cost_reference, cost_encoding],
+            enc_subst,
+            rounds=2,
+            ref_want=ref_subst,
+            why="slotted-subst counts binder-marker Var edges as extracted AST children",
+            unions=[(body_with_two_binders, body_without_binders)],
+            flat=False,
+        )
+    )
+
+    # A conjunctive match against three redundant binary nodes leaves six names to
+    # refine. The reference has a match in which `$x` and `a2` denote one slot; the
+    # compiled query misses it, so its slot guard never admits the rewrite. This is
+    # deliberately a synthetic MultiPattern and carries the compiler's exact output
+    # instead of pretending it came from the generated SDQL rule file.
+    atoms = [
+        ("?r", "add", [("sl", "$x"), ("pv", "b0")], []),
+        ("?r", "mult", [("pv", "a1"), ("pv", "b1")], []),
+        ("?r", "sub", [("pv", "a2"), ("pv", "b2")], []),
+    ]
+    atoms = slotenc.connected_order(LANG, atoms, first=0)
+    conds = [(True, "$x", ["a2"])]
+    multi_egg = slotenc.compile_rule(
+        LANG,
+        atoms,
+        ("build", "?r", ("unique", ("pv", "a2"))),
+        conds=conds,
+        tail=' :ruleset sdql :name "known-multipattern-under-match")',
+    )
+    multi_rule = Rule(
+        "known-multipattern-under-match",
+        "synthetic conjunctive pattern",
+        "(unique ?a2)",
+        conds=conds,
+        atoms=("?r", atoms),
+        egg=multi_egg,
+    )
+    n = ("num", 99)
+    redundant_nodes = [
+        ("add", V(0), V(1)),
+        ("mult", V(2), V(3)),
+        ("sub", V(4), V(5)),
+    ]
+    out.append(
+        Case(
+            "multipattern-under-match",
+            multi_rule,
+            redundant_nodes,
+            [n, ("unique", V(4))],
+            "[0][1] missing[[]]",
+            rounds=2,
+            ref_want="[0,1] missing[[]]",
+            why="the compiled final refinement omits a reference MultiPattern match",
+            unions=[(node, n) for node in redundant_nodes],
+            flat=True,
+        )
+    )
+
+    # Every repeated occurrence of a pattern variable is allowed to witness its
+    # alpha-equivalence with a different element of the matched class's symmetry
+    # group. The compiler instead caches one RenamesToLeader witness per variable
+    # and requires all three occurrences below to use it. The second occurrence
+    # needs the swap while the first and third need the identity.
+    a = ("add", V(0), V(1))
+    swapped = ("add", V(1), V(0))
+    symmetry_source = ("add", V(2), V(3))
+    symmetry_target = ("add", V(3), V(2))
+    repeated = ("subarray", a, swapped, a)
+    atoms = [("?r", "subarray", [("pv", "x"), ("pv", "x"), ("pv", "x")], [])]
+    repeated_egg = slotenc.compile_rule(
+        LANG,
+        atoms,
+        ("build", "?r", ("unique", ("pv", "x"))),
+        tail=' :ruleset sdql :name "known-repeated-pvar-symmetry")',
+    )
+    repeated_rule = Rule(
+        "known-repeated-pvar-symmetry",
+        "synthetic repeated-variable pattern",
+        "(unique ?x)",
+        atoms=("?r", atoms),
+        egg=repeated_egg,
+    )
+    out.append(
+        Case(
+            "repeated-pvar-symmetry",
+            repeated_rule,
+            [repeated],
+            [repeated, ("unique", a)],
+            "[0][1] missing[[]]",
+            rounds=2,
+            ref_want="[0,1] missing[[]]",
+            why="the compiler reuses one symmetry witness for every occurrence of a pattern variable",
+            unions=[(symmetry_source, symmetry_target)],
+            flat=True,
+        )
+    )
+    return out
+
+
+def run_known_encoding_limitations():
+    limited = known_encoding_limitations()
+    bad = 0
+    for case in limited:
+        baseline = "".join(f"[{i}]" for i in range(len(case.probes))) + " missing[[]]"
+        brs, brv = run_reference(case, with_rule=False)
+        bes, bev = run_encoding(case, with_rule=False)
+        rs, rv = run_reference(case)
+        es, ev = run_encoding(case)
+        base_ok = brs == bes == "OK" and brv == bev == baseline
+        ok = base_ok and rs == es == "OK" and rv == case.ref_want and ev == case.want and rv != ev
+        bad += not ok
+        if ok:
+            print(f"  ok   {case.name:<24} ref {rv}  encoding {ev}")
+        elif not base_ok:
+            print(f"  FAIL {case.name}: baseline ref={brs}:{brv}, encoding={bes}:{bev}, expected both {baseline}")
+        elif rs == es == "OK" and rv == ev:
+            print(f"  STALE {case.name}: implementations agree now ({rv}); move it to the ordinary suite")
+        else:
+            print(
+                f"  FAIL {case.name}: ref={rs}:{rv}, expected {case.ref_want}; encoding={es}:{ev}, expected {case.want}"
+            )
+    print(f"\n{len(limited) - bad}/{len(limited)} known encoding limitations reproduced")
+    return 1 if bad else 0
+
+
 def run_iso(args):
     """A witnessed isomorphism of the two final e-graphs, not just the partition.
 
@@ -751,52 +1011,59 @@ def run_iso(args):
     have up to six children and two bound slots, so a structural difference has more
     room to hide behind a probe answer that happens to agree.
 
-    A RECORDED DIVERGENCE cannot be compared this way. Those cases disagree on
-    purpose, so an isomorphism is not expected to exist and finding none says nothing;
-    they are reported as such rather than skipped silently. `ISSUE48_GAP` is the same
-    idea for rules where the FLAT comparison is contaminated: they must keep differing,
-    so a fix upstream shows up here rather than passing unnoticed.
+    A recorded encoding divergence cannot be compared this way. Those cases disagree
+    on purpose, so an isomorphism is not expected to exist and finding none says
+    nothing; they are reported as such rather than skipped silently.
     """
     import isomorphism as I
 
     I.EGG_PROGRAM = egg_program
     I.use_language(LANG)
 
-    cases_ = [c for c in cases() if not args or c.name.startswith(args[0])]
-    tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0}
+    cases_ = [c for c in cases() if c.name not in REFERENCE_RULE_LIMITS and (not args or c.name.startswith(args[0]))]
+    tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
     diverging = []
     for c in cases_:
         if c.ref_want is not None:
             diverging.append(c.name)
             continue
         verdict, detail = I.check(c)
-        if c.name in ISSUE48_GAP:
-            # Contaminated by upstream #48, so no isomorphism is expected. It must
-            # still DIFFER: agreement means #48 moved and the record is stale.
-            if verdict == "ok":
-                tally["FAIL"] += 1
-                print(
-                    f"  FAIL {c.name:24} recorded as an issue-48 gap but AGREES now -- remove it from ISSUE48_GAP",
-                    flush=True,
-                )
-            else:
-                diverging.append(f"{c.name} (#48: {ISSUE48_GAP[c.name]})")
-            continue
         tally[verdict] += 1
         print(f"  {verdict:4} {c.name:24} {detail}", flush=True)
     n = sum(tally.values())
     print(
         f"\n{tally['ok']}/{n} isomorphic   ({tally['FAIL']} differ, {tally['skip']} skipped,"
-        f" {tally['limit']} not comparable)"
+        f" {tally['limit']} not comparable, {tally['unreadable']} unreadable)"
         + (f"\n{len(diverging)} recorded divergence(s) not comparable: {', '.join(diverging)}" if diverging else "")
     )
-    return 1 if tally["FAIL"] else 0
+    return 1 if tally["FAIL"] or tally["unreadable"] else 0
 
 
 def main():
     argv = sys.argv[1:]
     if argv and argv[0] == "iso":
         return run_iso(argv[1:])
+
+    if argv and argv[0] == "known-substitution-limitations":
+        return run_known_encoding_limitations()
+
+    if argv and argv[0] == "reference-limitations":
+        bad = 0
+        limited = [(c, False, "add.rs:100") for c in reference_limitations()]
+        limited += [(next(c for c in cases() if c.name == "sum-merge"), True, "SlotMap::compose")]
+        for c, with_rule, diagnostic in limited:
+            rs, rv = run_reference(c, with_rule=with_rule)
+            es, ev = run_encoding(c, with_rule=with_rule)
+            ok = rs == "ERROR" and diagnostic in rv and es == "OK" and ev == c.want
+            bad += not ok
+            if ok:
+                print(f"  ok   {c.name:<24} reference rejected it; encoding {ev}")
+            elif rs == "OK":
+                print(f"  STALE {c.name}: reference now accepts it ({rv}); make this an ordinary comparison")
+            else:
+                print(f"  FAIL {c.name}: ref={rs}:{rv} enc={es}:{ev}, expected encoding {c.want}")
+        print(f"\n{len(limited) - bad}/{len(limited)} pinned-reference limitations reproduced")
+        return 1 if bad else 0
 
     if argv and argv[0] == "list":
         for c in cases():
@@ -815,7 +1082,7 @@ def main():
         print("---- enc  baseline ", run_encoding(c, with_rule=False))
         return 0
 
-    cs = cases()
+    cs = [c for c in cases() if c.name not in REFERENCE_RULE_LIMITS]
     bad = 0
     for c in cs:
         f = check_case(c)
@@ -824,6 +1091,8 @@ def main():
         for x in f:
             print("FAIL " + x)
     print(f"\n{len(cs) - bad}/{len(cs)} cases agree")
+    if REFERENCE_RULE_LIMITS:
+        print(f"{len(REFERENCE_RULE_LIMITS)} pinned-reference limitation(s) tested separately")
     return 1 if bad else 0
 
 

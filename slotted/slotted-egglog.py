@@ -255,8 +255,7 @@ class Source:
         for variant in form[2:]:
             if not isinstance(variant, list) or not variant or not isinstance(variant[0], str):
                 raise SystemExit(
-                    f"{path.name}: a `datatype` variant must be a call like `(Succ {name})`, "
-                    f"got {variant!r}"
+                    f"{path.name}: a `datatype` variant must be a call like `(Succ {name})`, got {variant!r}"
                 )
             ctor, rest = variant[0], variant[1:]
             opts = next((i for i, t in enumerate(rest) if isinstance(t, str) and t.startswith(":")), len(rest))
@@ -463,6 +462,11 @@ def compile_source(src, own_only=False):
                     f"Name it `{name[1:]}`, or `{GLOBAL}{name[1:]}` to mark it."
                 )
             name = name[1:] if name.startswith(GLOBAL) and len(name) > 1 else name
+            if isinstance(body, str) and SLOT.match(body):
+                raise SystemExit(
+                    f"{src.path.name}: a global cannot currently store the invocation of bare slot {body}. "
+                    "Bind a surrounding term instead; storing only its U class would lose the slot renaming."
+                )
             _emit(out, keep, f"(let ${name} {src.encode(body)})")
             src.lang.bound[name] = src.term(body)
         elif head == "union":
@@ -499,8 +503,7 @@ def compile_source(src, own_only=False):
             _emit(
                 out,
                 keep,
-                f"(rule ((RenamesToLeader {src.encode(form[1])} _m _l))"
-                f" ((set ({fn}) _l)) :ruleset {rs})",
+                f"(rule ((RenamesToLeader {src.encode(form[1])} _m _l)) ((set ({fn}) _l)) :ruleset {rs})",
             )
             _emit(out, keep, f"(run-schedule (saturate (run {rs})))")
             _emit(out, keep, f"(extract ({fn}))")
@@ -578,8 +581,7 @@ def keywords(src, rest):
         if kw not in KEYWORDS:
             if kw in EGGLOG_REWRITE_OPTIONS:
                 raise SystemExit(
-                    f"{src.path.name}: `{kw}` is egglog's and is not implemented here -- "
-                    f"{EGGLOG_REWRITE_OPTIONS[kw]}."
+                    f"{src.path.name}: `{kw}` is egglog's and is not implemented here -- {EGGLOG_REWRITE_OPTIONS[kw]}."
                 )
             raise SystemExit(f"{src.path.name}: expected one of {KEYWORDS}, got {kw!r}")
         i = 1
@@ -610,7 +612,7 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
     diseq, same = parts["diseq"], parts["same"]
     if parts["ruleset"] and ":ruleset" not in tail:
-        tail = f' :ruleset {parts["ruleset"]}' + tail
+        tail = f" :ruleset {parts['ruleset']}" + tail
     lhs, rhs = parts["lhs"], parts["rhs"]
     if parts["name"] and ":name" not in tail:
         # egglog reports a rule by its `:name` and takes it as a string literal. It

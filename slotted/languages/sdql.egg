@@ -1,15 +1,20 @@
-;;; The paper's `sdql` language and its rewrite rules, in the SLOTTED language.
+;;; The SDQL language family and its 44 active fine-grained rewrite rules, in the
+;;; SLOTTED language.
 ;;;
-;;; `slotted-egraphs/benches/sdql.rs` column for column: this is the suite the paper's
-;;; evaluation runs. Written at the slotted level, so a rule says what it rewrites and
-;;; nothing about renamings -- `slotted/slotted-egglog.py` turns it into egglog, and
+;;; These are checked column-for-column against the later locked-reference benchmark
+;;; `slotted-egraphs/benches/sdql.rs`.  That benchmark saturates an already-optimised
+;;; BATAX term; it is NOT the paper artifact's ten-input Table 1/2 evaluation runner.
+;;; `slotted/check-paper-sdql.py` separately pins the artifact provenance of the
+;;; runnable raw-input BATAX regression.  Written at the slotted level, a rule says
+;;; what it rewrites and nothing about renamings -- `slotted/slotted-egglog.py` turns
+;;; it into egglog, and
 ;;; `slotted/gen-sdql-rules.py` compiles these same rules into
 ;;; `target/slotted/slotted-sdql-rules.egg` for the .egg tests and the differential
 ;;; harness. Both read THIS file, so they cannot disagree.
 ;;;
-;;; THE COUNT. The bench DEFINES 46 rules and RUNS 44; this file carries those 44, and
-;;; `slotted/check-reference-rules.py` compares the two name for name, so the claim is
-;;; no longer one anybody takes on trust.
+;;; THE COUNT. The later bench DEFINES 46 rules and RUNS 44; this file carries those
+;;; 44, and `slotted/check-reference-rules.py` compares their normalised LHS, RHS, and
+;;; guards, so the claim is no longer one anybody takes on trust.
 ;;;
 ;;; Counting definitions is the trap, and it caught this file twice: it once claimed
 ;;; "rule for rule" while missing `beta`, and was then given `sum-range-2` to close a gap
@@ -29,6 +34,8 @@
 ;;;
 ;;; `Var(Slot)` is not declared: the encoding has the single variable class, and a
 ;;; variable occurrence is a `$s` in an ordinary child column.
+;;; This port also uses `Num(i64)` where the artifact uses `Num(u32)`, and adds `Null`
+;;; for encoding tests. Neither extension occurs in the pinned BATAX artifact terms.
 ;;;
 ;;; The rules are NOT confluent -- `get-to-sum` and `sum-to-get` alone loop -- so any
 ;;; test over them asks for a bounded number of steps.

@@ -70,7 +70,10 @@ def verdict_of(program):
     TMP.write_text(program)
     r = subprocess.run(
         [sys.executable, "slotted/slotted-egglog.py", str(TMP)],
-        cwd=ROOT, capture_output=True, text=True, timeout=1800,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=1800,
     )
     out = r.stdout + r.stderr
     if "Traceback (most recent call last)" in out:

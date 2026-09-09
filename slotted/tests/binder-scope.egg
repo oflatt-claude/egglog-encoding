@@ -47,3 +47,30 @@
 
 ;; and renaming a bound slot changes nothing, so the two are equal
 (check (= l0 l1))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A binder built below another right-hand-side node keeps slots that are free
+;;; in an uncovered column.
+;;;
+;;; `Let $x body $x` binds `$x` in `body`, but its value is outside that scope,
+;;; so the `Let` and the enclosing `App` both still depend on `$x`.  In
+;;; particular, rewriting the two alpha-variants of `seed $x` must not make their
+;;; invocations equal.  This exercises the slot set returned while recursively
+;;; building a RHS node; the ordinary term encoder above computes the same shape
+;;; through a different path.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (App (Sym "seed") $x)
+         (App (Let $x (Sym "body") $x) (Sym "arg"))
+         :name "nested-rhs-binder-scope")
+
+(let s0 (App (Sym "seed") $0))
+(let s1 (App (Sym "seed") $1))
+
+(run 1)
+
+(check (!= s0 s1))
+
+(pop)

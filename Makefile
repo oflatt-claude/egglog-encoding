@@ -84,10 +84,9 @@ slotted-check:
 	python3 slotted/xdiff/xarray.py egg
 	python3 slotted/check-slotted.py
 
-# The half of the above that CI can run. The rest compares against `xmulti`, which
-# depends on a LOCAL checkout of `slotted-egraphs`, so no runner can build it; when that
-# dependency becomes something a runner can fetch, this target should become the whole
-# `slotted-check`.
+# The offline half of the above. The rest compares against `xmulti`, whose separately
+# locked Cargo workspace fetches the pinned `slotted-egraphs` reference revision; use
+# this target when that Git dependency is unavailable.
 # A deep sweep, for when the 60-case `iso-fuzz` in `slotted-check` is not enough --
 # it is sized to run beside eighteen other checks, not to be a confidence statement.
 # Takes minutes and many cores; `campaign.py`'s header records what a deep run found.

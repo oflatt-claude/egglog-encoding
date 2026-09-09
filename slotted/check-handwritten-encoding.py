@@ -102,9 +102,7 @@ def strays(outside, names):
     return [
         form
         for form in normalise(outside)
-        if form.startswith("(rule")
-        and any(n in form for n in watched)
-        and not any(e in form for e in EXEMPT)
+        if form.startswith("(rule") and any(n in form for n in watched) and not any(e in form for e in EXEMPT)
     ]
 
 
