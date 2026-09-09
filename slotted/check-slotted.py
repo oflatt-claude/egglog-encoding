@@ -212,7 +212,7 @@ CHECKS = [
     (
         "multipattern-teeth",
         ("slotted/check-multipattern-teeth.py",),
-        ratio(r"(\d+)/(\d+) multipattern claims have teeth", 9),
+        ratio(r"(\d+)/(\d+) multipattern claims have teeth", 10),
         False,
         False,
     ),
@@ -221,7 +221,7 @@ CHECKS = [
     (
         "rule-names",
         ("slotted/check-rule-names.py",),
-        ratio(r"(\d+)/(\d+) rule names reach the generated egglog", 46),
+        ratio(r"(\d+)/(\d+) rule names reach the generated egglog", 47),
         False,
         False,
     ),

@@ -82,6 +82,12 @@ MUTATIONS = [
         "(= r (Add $u $u2))",
         {"root4"},
     ),
+    (
+        "abstract-constant takes its argument from the OTHER lambda",
+        "(App (Lam $n (Lam $x (Add $x $n))) a)",
+        "(App (Lam $n (Lam $x (Add $x $n))) b)",
+        {"f2"},
+    ),
 ]
 
 BROKE = re.compile(r"check \(RenamesToLeader \$([A-Za-z_][\w-]*)")

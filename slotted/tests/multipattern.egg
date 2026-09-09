@@ -16,8 +16,8 @@
 ;;;     python3 slotted/slotted-egglog.py slotted/tests/multipattern.egg
 ;;;
 ;;; AGAINST THE REFERENCE. The claims here are this file's own, and a claim is not the
-;;; reference. So every shape below also has a counterpart in the differential's
-;;; curated corpus, where it is asked of `memoryleak47/slotted-egraphs`:
+;;; reference. So the shapes below have counterparts in the differential's curated
+;;; corpus, where they are asked of `memoryleak47/slotted-egraphs`:
 ;;;
 ;;;     python3 slotted/xdiff/isomorphism.py MP          -> 5/5 isomorphic
 ;;;
@@ -29,6 +29,11 @@
 ;;;
 ;;; All five fire -- blocking the pattern changes the graph -- so the agreement is not
 ;;; the trivial kind a rule that never matches would give.
+;;;
+;;; `abstract-constant` has no counterpart: its conclusion BUILDS a binder, and the
+;;; differential's actions are trees over binary operators with no binder among them,
+;;; so the shape cannot be put to the reference through that harness. Its claims are
+;;; this file's own, with the mutation in `check-multipattern-teeth.py` behind them.
 ;;;
 ;;; The generated sweep says the same, and says it of shapes no hand-written file
 ;;; reaches: 800 of 800 at the default knobs, 800 of 800 with every pattern drawn as a
@@ -298,4 +303,50 @@
 (run 4)
 
 (fail (check (= root4 (Minted))))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; TWO LAMBDAS THAT DIFFER ONLY IN A CONSTANT, each rewritten to one general
+;;; lambda applied to its OWN constant.
+;;;
+;;;     fun x. x + 2   =   (fun n. fun x. x + n) 2
+;;;     fun x. x + 3   =   (fun n. fun x. x + n) 3
+;;;
+;;; Two things make this more than a one-pattern rule. The premise binds a SECOND
+;;; lambda of the same shape, so the match covers both at once. And the right-hand
+;;; side builds a NESTED binder over a slot the pattern never mentions, which is
+;;; what `:fresh $n` is for -- so the conclusion introduces a binder rather than
+;;; taking one apart.
+;;;
+;;; RESPECTIVELY is the claim with teeth. Each lambda has to keep its own constant,
+;;; and nothing in the rule's shape enforces that except the join: `a` is the
+;;; left-hand side's constant and `b` is the other lambda's. Taking the right-hand
+;;; side's argument from `b` instead breaks the third claim below and nothing else.
+;;;
+;;; The premise widens the match rather than gating it: with only one such lambda in
+;;; the graph it binds that same one, since the left-hand side already requires a
+;;; lambda of that shape.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Lam $x (Add $x a))
+         (App (Lam $n (Lam $x (Add $x $n))) a)
+         :when ((= other (Lam $y (Add $y b))))
+         :fresh $n
+         :name "abstract-constant")
+
+(let f2 (Lam $0 (Add $0 (Num 2))))
+(let f3 (Lam $0 (Add $0 (Num 3))))
+(let g  (Lam $1 (Lam $0 (Add $0 $1))))
+(let a2 (App g (Num 2)))
+(let a3 (App g (Num 3)))
+;; the body is not an `Add` over the bound slot, so the left-hand side refuses it
+(let k7 (Lam $0 (Num 7)))
+(let ak (App g (Num 7)))
+(run 3)
+
+(check (= f2 a2))
+(check (= f3 a3))
+(fail (check (= f2 a3)))
+(fail (check (= k7 ak)))
 (pop)
