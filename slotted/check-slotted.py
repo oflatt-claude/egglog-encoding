@@ -267,16 +267,16 @@ CHECKS = [
         # Pin known semantic gaps separately from the green differential suite. If a
         # fix makes either side move, this reports the stale witness instead of quietly
         # accepting a previously wrong answer.
-        "known-substitution-limitations",
-        ("slotted/xdiff/xsdql.py", "known-substitution-limitations"),
-        ratio(r"(\d+)/(\d+) known encoding limitations reproduced", 5),
+        "known-encoding-limitations",
+        ("slotted/xdiff/xsdql.py", "known-encoding-limitations"),
+        ratio(r"(\d+)/(\d+) known encoding limitations reproduced", 4),
         False,
         True,
     ),
     (
         "reference-limitations",
         ("slotted/xdiff/xsdql.py", "reference-limitations"),
-        ratio(r"(\d+)/(\d+) pinned-reference limitations reproduced", 4),
+        ratio(r"(\d+)/(\d+) pinned-reference limitations reproduced", 1),
         False,
         True,
     ),
@@ -431,14 +431,23 @@ CHECKS = [
         False,
         True,
     ),
-    ("sdql", ("slotted/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 18), False, True),
+    ("sdql", ("slotted/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 24), False, True),
+    # The reference paper/benchmark uses nested Rewrite. Keep that independently
+    # exercised even though flattened MultiPattern is the like-for-like compiler oracle.
+    (
+        "sdql-nested",
+        ("slotted/xdiff/xsdql.py", "nested"),
+        ratio(r"(\d+)/(\d+) cases agree", 24),
+        False,
+        True,
+    ),
     # The stronger SDQL check: a witnessed isomorphism, not just the probe partition.
-    # The one checked reference panic and the five checked encoding divergences live in
-    # their explicit limitation modes rather than weakening this successful-case floor.
+    # The flat-reference lexical gap and three checked substitution divergences live in
+    # explicit limitation modes rather than weakening this successful-case floor.
     (
         "sdql-iso",
         ("slotted/xdiff/xsdql.py", "iso"),
-        ratio(r"(\d+)/(\d+) isomorphic", 18),
+        ratio(r"(\d+)/(\d+) isomorphic", 24),
         False,
         True,
     ),

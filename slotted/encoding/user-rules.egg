@@ -374,11 +374,15 @@
 ;;;     (= mrg (vec-get alts ix))
 ;;;
 ;;; `carr` is what the match's variables carry between them, and only those slots may
-;;; merge.  A slot in play that no variable carries -- a binder's bound slot whose body
-;;; does not use it -- is left alone, because it is renamable and identifying it with
-;;; another class's slot would say something the reference does not: its `final_refine`
-;;; offers `state.subst.values().map(|x| x.slots())` and nothing else.  Passing every
-;;; slot instead let `free $s ?a` hold for an unrelated `?a`, which over-merged.
+;;; merge. An ordinary-child slot literal is the flattened `(var $x)` pattern and has
+;;; its own variable on the reference side, so that slot is carried too even if every
+;;; surrounding class has made it redundant. A binder-column literal is stored directly
+;;; in its node and is not. A slot in play that no variable carries -- a binder's bound
+;;; slot whose body does not use it -- is left alone, because it is renamable and
+;;; identifying it with another class's slot would say something the reference does not:
+;;; its `final_refine` offers `state.subst.values().map(|x| x.slots())` and nothing else.
+;;; Passing every slot instead let `free $s ?a` hold for an unrelated `?a`, which
+;;; over-merged.
 ;;;
 ;;; and from there on every renaming is read through `mrg` -- the side conditions and the
 ;;; action both.  `vec-get` is undefined past the end of the vector, so the `Idx` join
@@ -589,7 +593,7 @@
        (= avoid2 (map-union avoid1 im2))
        (= sx (map-get (compose mp2 p2) 0))
        (= cse (ClassSlots e))
-       (= carr (map-union (map-image (compose mp2 cse)) (map-union (map-image (compose mp1 csb)) (map-image (compose mf csf)))))
+       (= carr (map-union (map-of sx sx) (map-union (map-image (compose mp2 cse)) (map-union (map-image (compose mp1 csb)) (map-image (compose mf csf))))))
        (= alts (refine-namings carr (map-of sx sx) avoid1 im2))
        (Idx ix)
        (= mrg (vec-get alts ix))
@@ -726,7 +730,7 @@
        (= me (compose mp1 r1))
        (= cse (ClassSlots e))
        (= csp (ClassSlots p))
-       (= carr (map-union (map-image (compose mp1 csp)) (map-image (compose me cse))))
+       (= carr (map-union (map-of sx sx) (map-union (map-image (compose mp1 csp)) (map-image (compose me cse)))))
        (= alts (refine-namings carr (map-of sx sx) avoid1))
        (Idx ix)
        (= mrg (vec-get alts ix)))
@@ -739,9 +743,12 @@
 ;;;     the array language's eta:   (lam $x (app ?f (var $x)))  =>  ?f
 ;;;                                  if $x not free in ?f
 ;;;
-;;; Two atoms -- `(var $x)` is not one, because the machinery represents it as an edge to
-;;; the `(Var 0)` class, which is also why "the argument is the bound slot" reduces to an
-;;; ordinary Def. 6 check on that child.  This is where flattening needs care.  HAZARD:
+;;; Two encoded atoms -- `(var $x)` is not one, because the machinery represents it as an
+;;; edge to the `(Var 0)` class, which is also why "the argument is the bound slot" reduces
+;;; to an ordinary Def. 6 check on that child. The reference's atom syntax does give that
+;;; variable its own substitution entry, so `carr` explicitly includes `sx`; otherwise a
+;;; redundant surrounding class can hide a final-refinement candidate. This is where
+;;; flattening needs care.  HAZARD:
 ;;; flattening is not always meaning-preserving.  A nested pattern is matched under one
 ;;; renaming for the whole pattern, a flattened one gets a renaming per atom, so a slot
 ;;; written both under a binder and outside it means different things in the two forms and
@@ -779,7 +786,7 @@
        (= sx (map-get (compose mp2 q2) 0))
        (= mf (compose mp2 p2))
        (= csf (ClassSlots f))
-       (= carr (map-union (map-image (compose mf csf)) (map-union (map-image (compose mp1 cse)) (map-image (compose mb csb)))))
+       (= carr (map-union (map-of sx sx) (map-union (map-image (compose mf csf)) (map-union (map-image (compose mp1 cse)) (map-image (compose mb csb))))))
        (= alts (refine-namings carr (map-of sx sx) avoid1 im2))
        (Idx ix)
        (= mrg (vec-get alts ix))

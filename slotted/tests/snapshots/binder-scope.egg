@@ -21,7 +21,7 @@
        (= idm8 (map-image mp7))
        (= sx (map-get (compose mp7 p2) 0))
        (= cs9 (ClassSlots V3))
-       (= carr10 (map-image (compose mp7 cs9)))
+       (= carr10 (map-union (map-of sx sx) (map-image (compose mp7 cs9))))
        (= alts11 (refine-namings carr10 (map-of sx sx) idm8))
        (Idx ix12)
        (= mrg13 (vec-get alts11 ix12)))

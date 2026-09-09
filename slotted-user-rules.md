@@ -190,30 +190,24 @@ because permuting its root relabels the pattern's slots, and the action is built
 in pattern slots, so the result is an α-variant the machinery identifies anyway.
 Variables used once need no join for the same reason.
 
-### One symmetry per class, handed to the primitives
+### One symmetry witness per occurrence
 
-The intended shape, and the better one: join **one** `(RenamesToLeader C sym C)`
-per e-class and use that `sym` everywhere that class's renaming is used, rather
-than joining a fresh one at each site. The primitives then receive
-`(compose mx sym)` and work out whether it fits — solving the constraint is what
-decides, instead of the query enumerating candidates site by site.
+Every repeated occurrence must join its **own** `(RenamesToLeader C sym C)` row.
+Sharing one row per class is tempting, but wrong: three occurrences can require
+identity, swap, then identity when the class has a swap symmetry. The reference
+calls `unify` independently for each occurrence, so no single group element has
+to satisfy all of their equations.
 
-Two consequences worth stating:
+The compiler therefore emits one symmetry lookup at every comparison site. The
+first occurrence still costs nothing, and a lookup whose two renamings are fixed
+has at most one satisfying group element. A future optimiser may compute that
+element and perform a keyed lookup, but it may not share the result with another
+occurrence.
 
-* **Fewer joins.** One per class, not one per use, and each is a small relation.
-* **It makes a correctness fix affordable.** A variable bound as an atom's root
-  gets `mp`, whose domain is the matched *node's* slots — but a variable's
-  renaming must have its *class's* slots for a domain, and the two differ exactly
-  when the node carries a redundant slot. Restricting it needs the live slot set,
-  which is precisely what a symmetry's domain is: `(compose mp sym)`. With a
-  per-class join that costs nothing extra.
-
-Measured against a per-use scheme -- a fresh symmetry joined at each place one is needed --
-it was indistinguishable: same answers, same firing count, same single known failure. Only
-per-class is in the tree; keeping both meant carrying an alternative nothing exercised.
-
-The scheme does **not** address the branching question above, and did not fix
-`X1`: both are about redundancy, not symmetry.
+Narrowing remains separate and unconditional: `(compose mx (ClassSlots C))`
+restricts a variable's node-wide renaming to the live slots of its class before
+any occurrence compares it. Using a symmetry's domain as that restriction is not
+sound when different occurrences select different symmetries.
 
 **The stored set has to be closed, not just a set of generators**, or a lookup for
 a composite element would fail and lose matches. It is: the machinery's

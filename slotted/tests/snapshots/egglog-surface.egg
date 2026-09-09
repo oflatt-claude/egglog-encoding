@@ -301,7 +301,7 @@
        (= idm19 (map-image mp18))
        (= av20 (map-union idm7 idm19))
        (= sk (map-get (compose mp18 p12) 0))
-       (= carr21 (map-union (map-image (compose mp6 cs10)) (map-image (compose m8 cs9))))
+       (= carr21 (map-union (map-of sk sk) (map-union (map-image (compose mp6 cs10)) (map-image (compose m8 cs9)))))
        (= alts22 (refine-namings carr21 (map-of sk sk) idm7 idm19))
        (Idx ix23)
        (= mrg24 (vec-get alts22 ix23)))

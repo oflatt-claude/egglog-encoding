@@ -1459,8 +1459,8 @@ def compile_rule(
       * the avoid-set, accumulated, so two atoms that both mint cannot collide (M5);
       * each slot literal read out of its edge, binding on first use and constraining
         on every later one;
-      * the Def. 6 check for a variable repeated inside THIS atom (M2), against the
-        class's one symmetry;
+      * the Def. 6 check for a variable repeated inside THIS atom (M2), with an
+        independent class-symmetry witness for every repeated occurrence;
       * each child's renaming into pattern slots, narrowed by `ClassSlots` (M8).
 
     Then any right-hand side slot the pattern never pinned, the side conditions, and
@@ -1497,7 +1497,12 @@ def compile_rule(
     mp_of = {}  # pvar -> egglog var holding its renaming into slots(pattern)
     cls_of = {}  # pvar -> egglog var holding its leader
     slot_of = {}  # "$v" -> egglog i64 var holding that pattern slot
-    sym_of = {}  # pvar -> its symmetry variable
+    # A slot literal in an ordinary child is the flattened spelling of a `(Var
+    # $v)` pattern. The reference gives that child its own substitution entry, so
+    # its slot participates in final refinement even when every surrounding class
+    # has made it redundant. Binder-column literals are stored directly in the
+    # pattern node and do not add such an entry.
+    carried_slot_literals = set()
     pat = None  # identity on the pattern slots named so far
 
     def narrow(m, cls):
@@ -1519,16 +1524,16 @@ def compile_rule(
         return f"(compose {m} {cs})"
 
     def sym_for(pv):
-        """A symmetry of `pv`'s class, joined from `RenamesToLeader`.
+        """A fresh symmetry witness for one occurrence of `pv`.
 
-        One per class, shared by every use, so all uses must agree on it -- which is
-        also what makes restricting a root's renaming by the live slot set affordable.
+        The reference unifies every repeated occurrence independently.  If a class
+        has several symmetries, one occurrence may therefore need the identity while
+        another needs a permutation.  Sharing one witness across those equations
+        silently under-matches.
         """
-        if pv not in sym_of:
-            sv = new("sym")
-            body.append(f"(RenamesToLeader {cls_of[pv]} {sv} {cls_of[pv]})")
-            sym_of[pv] = sv
-        return sym_of[pv]
+        sv = new("sym")
+        body.append(f"(RenamesToLeader {cls_of[pv]} {sv} {cls_of[pv]})")
+        return sv
 
     pay_of = {}  # a payload variable's egglog name, shared so two atoms join on it
     binding = [True]  # only a PATTERN introduces one; the action may only read them
@@ -1624,6 +1629,7 @@ def compile_rule(
             if k[0] == "sl":
                 sv = slot_of.setdefault(k[1], slot_prefix + k[1][1:])
                 body.append(f"(= {sv} (map-get (compose {mp} {e}) 0))")
+        carried_slot_literals.update(k[1] for i, k in enumerate(kids) if k[0] == "sl" and i not in op.binders)
 
         # walk the children: bind the new ones, check the ones bound in THIS atom
         for k, e in zip(kids, edges, strict=True):
@@ -1682,11 +1688,12 @@ def compile_rule(
         # candidate set was wrong, not the order.
         pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
         cand = pat
-        if mp_of:
+        carried = [f"(map-image {v})" for v in mp_of.values()]
+        carried.extend(f"(map-of {slot_of[s]} {slot_of[s]})" for s in sorted(carried_slot_literals))
+        if carried:
             cand = new("carr")
-            images = [f"(map-image {v})" for v in mp_of.values()]
-            expr = images[0]
-            for im in images[1:]:
+            expr = carried[0]
+            for im in carried[1:]:
                 expr = f"(map-union {im} {expr})"
             body.append(f"(= {cand} {expr})")
         alts, i, mrg = new("alts"), new("ix"), new("mrg")

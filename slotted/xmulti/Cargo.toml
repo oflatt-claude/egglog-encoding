@@ -13,23 +13,17 @@ edition = "2021"
 # reference can build this and the differential half can run in CI.
 #
 # This is upstream `main` (b90adca, after selected fixes from the closed PR #45 were
-# applied) PLUS the three fixes in
-# https://github.com/memoryleak47/slotted-egraphs/pull/46, which is why it points at a
-# fork. Three of the reference's OWN tests fail on `main` -- `lambda::redundancy_matching_bug`,
-# `fgh::shrink_with_symmetry`, and extraction with a redundant slot -- and comparing
-# against a reference known to be wrong attributes its bugs to this encoding: the deep
-# sweep reads 61 divergences against `main` and 21 against `main` + #46, and only the
-# second is about the encoding.
+# applied) plus https://github.com/memoryleak47/slotted-egraphs/pull/46, which is why
+# it points at a fork. Besides the original three fixes, the pinned revision repairs
+# the reference's own remaining checked failures, preserves lexical scope in nested
+# e-matching, and fixes weak-shape binder/free collisions. Its checked suite is green
+# (98 passed, 12 ignored at the time of this audit).
 #
-# The pin is not a wholly green reference release: its own suite still has the two
-# acknowledged `arith2::redundancy_matching_bug{2,3}` failures (71 passed, 2 failed,
-# 12 ignored under `--features checks` at the time of this audit).  Bug 2 is in the
-# nested `Rewrite` matcher, while this oracle normally asks the flattened
-# `MultiPattern` matcher; bug 3's reproducer is itself missing a rule needed to reach
-# its goal.  Keep those limitations explicit rather than treating this fork as an
-# unquestionable ground truth.
+# A green implementation is still not an unquestionable ground truth. In particular,
+# flattened `MultiPattern` does not preserve every lexical role represented by nested
+# `Rewrite`; `xsdql.py reference-limitations` keeps an exact witness executable.
 #
 # Revert to an upstream rev when #46 merges. What `main` alone answers is still worth
 # keeping reachable: `XSDQL_FLAT=0` / `XARRAY_FLAT=0` drive the nested matcher, which is
 # where `let-binop4` shows the bug #46 fixes.
-slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "e1bfe1b036ab74a9e1edfe2551200d408372ab46", features = ["checks"] }
+slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "b92d9e554727ef45c4092012d1414885ee2461a1", features = ["checks"] }

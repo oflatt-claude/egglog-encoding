@@ -11,28 +11,28 @@ language.
 The two sides:
 
   reference   the rule's own pattern text from `sdql_rules()` in
-              `slotted-egraphs/benches/sdql.rs`, handed to `xmulti` as
-              `nested` / `rhs` / `cond` lines -- i.e. literally `Rewrite::new_if`
-              over the reference's single-pattern matcher, which is how the
-              benchmark itself runs them. Every SDQL rule is a single-pattern
-              rewrite, so no multipattern flattening happens on this side.
+              `slotted-egraphs/benches/sdql.rs`, flattened into the same
+              `MultiPattern` atoms as the encoding by default. `XSDQL_FLAT=0`
+              instead exercises the reference benchmark's nested `Rewrite` path.
+              Both are tested; the flattened path is the like-for-like oracle.
   encoding    the compiled rule LIFTED VERBATIM out of
               `target/slotted/slotted-sdql-rules.egg` by its `:name`, so what runs is the
               generated artifact and not a re-derivation of it.
 
 `beta` is compiled too. Its right-hand side becomes `slotted-subst` plus the frame
 plumbing needed to return an invocation rather than only an e-class. The focused
-known-substitution-limitations mode pins capture and extraction divergences so they
-remain visible without making the ordinary agreement suite green on a known-wrong
-answer.
+known-encoding-limitations mode pins capture, extraction, and lexical-flattening
+divergences so they remain visible without making the ordinary agreement suite green
+on a known-wrong answer.
 
 Usage:
     ./xsdql.py                every case: each rule firing, and each guard blocking
     ./xsdql.py iso [prefix]   the stronger check: a witnessed isomorphism of the two
                               final e-graphs, via `isomorphism.py`
+    ./xsdql.py nested         run the corpus through the reference's nested matcher
     ./xsdql.py show <name>    one case's spec, its egg program, and both answers
     ./xsdql.py list           the cases and the rules they exercise
-    ./xsdql.py known-substitution-limitations
+    ./xsdql.py known-encoding-limitations
                               executable witnesses for known encoding gaps
 """
 
@@ -220,11 +220,6 @@ def _load_rules():
     return out
 
 
-#: With the reference's invariant checks enabled, this rule currently panics while
-#: instantiating its flattened RHS. It is exercised by `reference-limitations`, not
-#: counted as differential evidence from a malformed reference state.
-REFERENCE_RULE_LIMITS = {"sum-merge"}
-
 RULES = _load_rules()
 
 #: Ask the reference the FLATTENED question, which is the like-for-like comparison: the
@@ -233,9 +228,9 @@ RULES = _load_rules()
 #: (upstream issue #48). Comparing our flat encoding against the reference's NESTED
 #: matcher therefore attributes that difference to the encoding.
 #:
-#: `XSDQL_FLAT=0` restores the nested comparison, which is what shows that the nested
-#: matcher does not fire `let-binop4` -- a fault in that matcher, fixed in upstream
-#: PR #46.
+#: `XSDQL_FLAT=0` restores the nested comparison. The pinned PR #46 fixes the former
+#: nested matcher gaps, and the suite exercises both paths; the separate
+#: `reference-limitations` mode records the remaining flat-only lexical gap.
 FLAT = os.environ.get("XSDQL_FLAT", "1") == "1"
 
 
@@ -401,6 +396,45 @@ def run_reference(case, with_rule=True):
     return ("OK" if sat else "UNSATURATED", part)
 
 
+def run_reference_limitations():
+    """Pin reference behavior that is known not to model nested lexical scope.
+
+    `MultiPattern` flattens the two lexical roles of surface `$x` into one global
+    slot. The target correctly gives the Let binder and its uncovered/free sibling
+    different internal names, so the flat matcher rejects a valid match that the
+    nested matcher accepts. This matters because the differential oracle normally
+    uses the same flattened question as the encoding: agreement can otherwise hide
+    their shared false negative.
+    """
+    prefix = "rounds 2\nterm (let $a (var $a) (var $b))\nrule\n"
+    flat = prefix + "atom p let $x body value\natom body var $x\natom value var $x\nrhs p null\ngoal null\n"
+    nested = prefix + "nested (let $x (var $x) (var $x))\nrhs _ null\ngoal null\n"
+
+    def goal(spec):
+        try:
+            proc = subprocess.run(
+                [str(XMULTI / "target" / "debug" / "xmulti")],
+                input=spec,
+                capture_output=True,
+                text=True,
+                timeout=RUN_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            return "TIMEOUT"
+        if proc.returncode != 0:
+            return "ERROR: " + (proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "?")
+        return next(
+            (line.removeprefix("GOAL ") for line in proc.stdout.splitlines() if line.startswith("GOAL ")), "MISSING"
+        )
+
+    flat_goal, nested_goal = goal(flat), goal(nested)
+    ok = flat_goal == "no" and nested_goal == "yes"
+    label = "ok" if ok else "FAIL"
+    print(f"  {label:<4} multipattern-binder-free  flat={flat_goal}, nested={nested_goal}")
+    print(f"\n{int(ok)}/1 pinned-reference limitations reproduced")
+    return 0 if ok else 1
+
+
 def run_encoding(case, with_rule=True, keep=None, mult=3):
     prog = egg_program(case, with_rule, mult)
     path = keep or (ROOT / f"xsdql-tmp-{os.getpid()}-{mult}.egg")
@@ -494,6 +528,97 @@ def V(n):
 
 FIRED = "[0,1][2] missing[[]]"
 BLOCKED = "[0][1][2] missing[[]]"
+
+
+def compiler_regression_cases():
+    """Synthetic MultiPatterns that directly exercise the generic compiler.
+
+    They use SDQL constructors only as a convenient shared language.  Keeping the
+    exact `compile_rule` output on the encoding side makes these positive tests of
+    compiler behavior rather than generated-artifact coverage.
+    """
+    out = []
+
+    # An ordinary-child slot literal is flattened from `(var $x)`. The reference
+    # carries that variable in its substitution, even after the surrounding class
+    # has made the slot redundant, so final refinement may merge another carried
+    # slot onto `$x`. The side condition makes that alternative load-bearing.
+    atoms = [
+        ("?r", "add", [("sl", "$x"), ("pv", "b0")], []),
+        ("?r", "mult", [("pv", "a1"), ("pv", "b1")], []),
+        ("?r", "sub", [("pv", "a2"), ("pv", "b2")], []),
+    ]
+    atoms = slotenc.connected_order(LANG, atoms, first=0)
+    conds = [(True, "$x", ["a2"])]
+    multi_egg = slotenc.compile_rule(
+        LANG,
+        atoms,
+        ("build", "?r", ("unique", ("pv", "a2"))),
+        conds=conds,
+        tail=' :ruleset sdql :name "compiler-carried-slot-refinement")',
+    )
+    multi_rule = Rule(
+        "compiler-carried-slot-refinement",
+        "synthetic conjunctive pattern",
+        "(unique ?a2)",
+        conds=conds,
+        atoms=("?r", atoms),
+        egg=multi_egg,
+    )
+    n = ("num", 99)
+    redundant_nodes = [
+        ("add", V(0), V(1)),
+        ("mult", V(2), V(3)),
+        ("sub", V(4), V(5)),
+    ]
+    out.append(
+        Case(
+            "carried-slot-refinement",
+            multi_rule,
+            redundant_nodes,
+            [n, ("unique", V(4)), ("null",)],
+            FIRED,
+            rounds=2,
+            unions=[(node, n) for node in redundant_nodes],
+            flat=True,
+        )
+    )
+
+    # Repeated occurrences of one pvar independently unify modulo the class's
+    # symmetry group. The middle occurrence needs the swap, while the first and
+    # third need the identity; sharing one symmetry witness cannot match this row.
+    a = ("add", V(0), V(1))
+    swapped = ("add", V(1), V(0))
+    symmetry_source = ("add", V(2), V(3))
+    symmetry_target = ("add", V(3), V(2))
+    repeated = ("subarray", a, swapped, a)
+    atoms = [("?r", "subarray", [("pv", "x"), ("pv", "x"), ("pv", "x")], [])]
+    repeated_egg = slotenc.compile_rule(
+        LANG,
+        atoms,
+        ("build", "?r", ("unique", ("pv", "x"))),
+        tail=' :ruleset sdql :name "compiler-repeated-pvar-symmetry")',
+    )
+    repeated_rule = Rule(
+        "compiler-repeated-pvar-symmetry",
+        "synthetic repeated-variable pattern",
+        "(unique ?x)",
+        atoms=("?r", atoms),
+        egg=repeated_egg,
+    )
+    out.append(
+        Case(
+            "repeated-pvar-symmetry",
+            repeated_rule,
+            [repeated],
+            [repeated, ("unique", a), ("null",)],
+            FIRED,
+            rounds=2,
+            unions=[(symmetry_source, symmetry_target)],
+            flat=True,
+        )
+    )
+    return out
 
 
 def cases():
@@ -781,20 +906,20 @@ def cases():
         )
     )
 
+    out.extend(binder_collision_cases())
+    out.extend(compiler_regression_cases())
     return out
 
 
-def reference_limitations():
-    """Legitimate binder collisions the pinned reference currently cannot add.
+def binder_collision_cases():
+    """Legitimate binder collisions repaired in the pinned reference.
 
     In each term the bound name is also free in an uncovered column. `Bind<T>` scopes
     only over the body, so the free occurrence must remain.  The encoding is checked
-    on a parent pair that would collapse if it lost that occurrence.  Reference PR
-    #46 cannot add any of the three bare terms: with invariant checks enabled it
-    panics in `EGraph::add` (without them the later symptom is `SlotMap::index`).
-    Keeping that limitation executable is more honest than
-    filtering these shapes out of the differential corpus; if the reference is fixed,
-    this test becomes stale and asks to turn them into ordinary comparisons.
+    on a parent pair that would collapse if it lost that occurrence. The former
+    reference implementation overwrote and then removed the outer/free weak-shape
+    mapping; these cases now run as ordinary comparisons so a regression fails the
+    main differential suite.
     """
     shapes = {
         "let": ("let", V(5), 5, ("num", 0)),
@@ -887,92 +1012,41 @@ def known_encoding_limitations():
         )
     )
 
-    # A conjunctive match against three redundant binary nodes leaves six names to
-    # refine. The reference has a match in which `$x` and `a2` denote one slot; the
-    # compiled query misses it, so its slot guard never admits the rewrite. This is
-    # deliberately a synthetic MultiPattern and carries the compiler's exact output
-    # instead of pretending it came from the generated SDQL rule file.
-    atoms = [
-        ("?r", "add", [("sl", "$x"), ("pv", "b0")], []),
-        ("?r", "mult", [("pv", "a1"), ("pv", "b1")], []),
-        ("?r", "sub", [("pv", "a2"), ("pv", "b2")], []),
-    ]
-    atoms = slotenc.connected_order(LANG, atoms, first=0)
-    conds = [(True, "$x", ["a2"])]
-    multi_egg = slotenc.compile_rule(
+    # Flattening erases the distinction between the Let binder/body `$x` and the
+    # uncovered/free `$x` in its value. The nested reference matcher gives those
+    # lexical roles different identities and matches this target; both the encoding
+    # and reference MultiPattern make `$x` globally rigid and miss it. Use the nested
+    # path as the oracle here so shared flat incompleteness cannot look like agreement.
+    scoped_pattern = ("let", "$x", "$x", "$x")
+    root, atoms = slotenc.flatten(LANG, scoped_pattern)
+    scope_egg = slotenc.compile_rule(
         LANG,
         atoms,
-        ("build", "?r", ("unique", ("pv", "a2"))),
-        conds=conds,
-        tail=' :ruleset sdql :name "known-multipattern-under-match")',
+        ("build", root, ("null",)),
+        tail=' :ruleset sdql :name "known-flat-binder-free")',
     )
-    multi_rule = Rule(
-        "known-multipattern-under-match",
-        "synthetic conjunctive pattern",
-        "(unique ?a2)",
-        conds=conds,
-        atoms=("?r", atoms),
-        egg=multi_egg,
+    scope_rule = Rule(
+        "known-flat-binder-free",
+        slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, scoped_pattern)),
+        "null",
+        atoms=(root, atoms),
+        egg=scope_egg,
     )
-    n = ("num", 99)
-    redundant_nodes = [
-        ("add", V(0), V(1)),
-        ("mult", V(2), V(3)),
-        ("sub", V(4), V(5)),
-    ]
+    scoped_target = ("let", V(2), 1, V(1))
     out.append(
         Case(
-            "multipattern-under-match",
-            multi_rule,
-            redundant_nodes,
-            [n, ("unique", V(4))],
+            "flat-binder-free",
+            scope_rule,
+            [scoped_target],
+            [scoped_target, ("null",)],
             "[0][1] missing[[]]",
             rounds=2,
             ref_want="[0,1] missing[[]]",
-            why="the compiled final refinement omits a reference MultiPattern match",
-            unions=[(node, n) for node in redundant_nodes],
-            flat=True,
+            why="flattening conflates one surface slot's bound and free lexical roles",
+            flat=False,
         )
     )
 
-    # Every repeated occurrence of a pattern variable is allowed to witness its
-    # alpha-equivalence with a different element of the matched class's symmetry
-    # group. The compiler instead caches one RenamesToLeader witness per variable
-    # and requires all three occurrences below to use it. The second occurrence
-    # needs the swap while the first and third need the identity.
-    a = ("add", V(0), V(1))
-    swapped = ("add", V(1), V(0))
-    symmetry_source = ("add", V(2), V(3))
-    symmetry_target = ("add", V(3), V(2))
-    repeated = ("subarray", a, swapped, a)
-    atoms = [("?r", "subarray", [("pv", "x"), ("pv", "x"), ("pv", "x")], [])]
-    repeated_egg = slotenc.compile_rule(
-        LANG,
-        atoms,
-        ("build", "?r", ("unique", ("pv", "x"))),
-        tail=' :ruleset sdql :name "known-repeated-pvar-symmetry")',
-    )
-    repeated_rule = Rule(
-        "known-repeated-pvar-symmetry",
-        "synthetic repeated-variable pattern",
-        "(unique ?x)",
-        atoms=("?r", atoms),
-        egg=repeated_egg,
-    )
-    out.append(
-        Case(
-            "repeated-pvar-symmetry",
-            repeated_rule,
-            [repeated],
-            [repeated, ("unique", a)],
-            "[0][1] missing[[]]",
-            rounds=2,
-            ref_want="[0,1] missing[[]]",
-            why="the compiler reuses one symmetry witness for every occurrence of a pattern variable",
-            unions=[(symmetry_source, symmetry_target)],
-            flat=True,
-        )
-    )
     return out
 
 
@@ -1020,7 +1094,7 @@ def run_iso(args):
     I.EGG_PROGRAM = egg_program
     I.use_language(LANG)
 
-    cases_ = [c for c in cases() if c.name not in REFERENCE_RULE_LIMITS and (not args or c.name.startswith(args[0]))]
+    cases_ = [c for c in cases() if not args or c.name.startswith(args[0])]
     tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
     diverging = []
     for c in cases_:
@@ -1040,30 +1114,19 @@ def run_iso(args):
 
 
 def main():
+    global FLAT
     argv = sys.argv[1:]
+    if argv and argv[0] == "nested":
+        FLAT = False
+        argv = argv[1:]
     if argv and argv[0] == "iso":
         return run_iso(argv[1:])
 
-    if argv and argv[0] == "known-substitution-limitations":
+    if argv and argv[0] in ("known-encoding-limitations", "known-substitution-limitations"):
         return run_known_encoding_limitations()
 
     if argv and argv[0] == "reference-limitations":
-        bad = 0
-        limited = [(c, False, "add.rs:100") for c in reference_limitations()]
-        limited += [(next(c for c in cases() if c.name == "sum-merge"), True, "SlotMap::compose")]
-        for c, with_rule, diagnostic in limited:
-            rs, rv = run_reference(c, with_rule=with_rule)
-            es, ev = run_encoding(c, with_rule=with_rule)
-            ok = rs == "ERROR" and diagnostic in rv and es == "OK" and ev == c.want
-            bad += not ok
-            if ok:
-                print(f"  ok   {c.name:<24} reference rejected it; encoding {ev}")
-            elif rs == "OK":
-                print(f"  STALE {c.name}: reference now accepts it ({rv}); make this an ordinary comparison")
-            else:
-                print(f"  FAIL {c.name}: ref={rs}:{rv} enc={es}:{ev}, expected encoding {c.want}")
-        print(f"\n{len(limited) - bad}/{len(limited)} pinned-reference limitations reproduced")
-        return 1 if bad else 0
+        return run_reference_limitations()
 
     if argv and argv[0] == "list":
         for c in cases():
@@ -1082,7 +1145,7 @@ def main():
         print("---- enc  baseline ", run_encoding(c, with_rule=False))
         return 0
 
-    cs = [c for c in cases() if c.name not in REFERENCE_RULE_LIMITS]
+    cs = cases()
     bad = 0
     for c in cs:
         f = check_case(c)
@@ -1091,8 +1154,6 @@ def main():
         for x in f:
             print("FAIL " + x)
     print(f"\n{len(cs) - bad}/{len(cs)} cases agree")
-    if REFERENCE_RULE_LIMITS:
-        print(f"{len(REFERENCE_RULE_LIMITS)} pinned-reference limitation(s) tested separately")
     return 1 if bad else 0
 
 

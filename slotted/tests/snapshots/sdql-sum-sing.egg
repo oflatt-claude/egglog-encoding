@@ -26,7 +26,7 @@
        (= av23 (map-union idm10 idm22))
        (= sk (map-get (compose mp21 p16) 0))
        (= sv (map-get (compose mp21 p17) 0))
-       (= carr24 (map-union (map-image (compose mp9 cs15)) (map-union (map-image (compose m13 cs14)) (map-image (compose m11 cs12)))))
+       (= carr24 (map-union (map-of sv sv) (map-union (map-of sk sk) (map-union (map-image (compose mp9 cs15)) (map-union (map-image (compose m13 cs14)) (map-image (compose m11 cs12)))))))
        (= alts25 (refine-namings carr24 (map-of sk sk sv sv) idm10 idm22))
        (Idx ix26)
        (= mrg27 (vec-get alts25 ix26)))
