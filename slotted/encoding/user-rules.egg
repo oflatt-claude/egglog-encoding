@@ -39,8 +39,7 @@
 ;;; left undecided.  The encoding HAS that branch: `refine-namings` enumerates the ways the
 ;;; match's slots can be partitioned and `(Idx ix)` picks one, which is the last step of
 ;;; every rule below.  Minting alone -- a fresh name differs from everything, so it takes
-;;; only the "apart" reading -- is what the encoding used to do, and it cost matches the
-;;; reference made.
+;;; only the "apart" reading -- loses matches the reference makes.
 ;;;
 ;;; No terms, no schedules, no assertions, no wrong versions.
 ;;; `slotted/encoding/user-rules-tests.egg` includes this file and supplies all of those, so

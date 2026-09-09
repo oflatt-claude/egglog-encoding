@@ -84,8 +84,7 @@ def rhs_text(t, ref):
 def render(atoms, action, conds):
     """A `(rewrite ...)` for this rule. Raises `Unexpressible` when there is none.
 
-    Bare variables throughout, on purpose: egglog's spelling, and the path that had no
-    coverage.
+    Bare variables throughout, on purpose: egglog's spelling.
     """
     root = action[0]
     lead = next((i for i, a in enumerate(atoms) if a[0] == root), None)

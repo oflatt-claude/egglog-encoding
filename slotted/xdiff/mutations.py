@@ -10,10 +10,10 @@ is not kept as decoration -- `wide-kids` and `binder-1st` were both removed once
 the first because `def4-edges.py` checks the property it stood for and the second because the
 rule it violated is definitional rather than empirical.
 
-`unordered` went the same way, and for a better reason than the others: compiling the atoms
-in the order written used to lose matches, and a rule that tries every naming recovers them,
-so the mutation no longer breaks a single case. That is the property `order-independence.py`
-measures directly, which is where it is checked now.
+`unordered` went the same way, for a better reason than the others: a rule that tries every
+naming recovers the matches that compiling atoms in the order written would lose, so the
+mutation breaks no case at all. `order-independence.py` measures that property directly,
+which is where it is checked now.
 
     python3 slotted/xdiff/mutations.py
 """
@@ -28,15 +28,9 @@ import xdiff as X
 
 #: mutation -> cases of the curated corpus that must disagree with the reference
 EXPECTED = {
-    # 2 rather than 10: a rule now tries every naming an atom's renaming could take,
-    # so solving one from its root alone loses far fewer matches -- most of the corpus
+    # A rule tries every naming an atom's renaming could take, so solving one from its
+    # root alone under-constrains rather than failing outright and much of the corpus
     # recovers on another index. It still discriminates, so it stays.
-    # 2 before the end-of-rule refinement. With minting single-valued again, solving
-    # an atom's renaming from its root alone genuinely under-constrains, and the
-    # refinement no longer papers over it -- so the mutant is MORE visible, not less.
-    # 12 since the multipattern shapes were curated: `MP2-join-on-two-variables`
-    # newly catches this one, and `MP3-four-atom-chain` catches it as order dependence,
-    # which is tallied separately. More is the corpus getting stronger.
     "root-only": 12,  # an atom's renaming solved from its root alone
     "union-id": 2,  # the action unions classes instead of invocations
     "slot-late": 1,  # a slot literal checked after the renaming, not with it

@@ -70,27 +70,17 @@ SYM_PROB = float(os.environ.get("XDIFF_SYM", "0.35"))
 
 # How often a rule gets a DISCONNECTED atom -- root and children all fresh, so it shares
 # no variable with the rest of the pattern. Such an atom is unconstrained: it matches
-# every node of its operator, and the rule becomes a cross product. That is why the extra
-# atoms below draw their children from the bound set instead, and why this is rare rather
-# than either off or common.
+# every node of its operator and the rule becomes a cross product, which is why the
+# extra atoms below draw their children from the bound set instead, and why this is rare
+# rather than either off or common.
 #
-# It was off, and the gap was real. Over 4000 cases the generator never produced more
-# than TWO disconnected pieces, and only 3.6% of multipatterns had two -- so the shape
-# that stresses minting hardest went unsearched: three atoms with nothing to constrain
-# their renamings all mint at once, kept apart only by the accumulated avoid-set (M5).
+# It earns its place: with it off, no generated rule had more than two disconnected
+# pieces, so three atoms all minting at once -- kept apart only by the accumulated
+# avoid-set (M5) -- went unsearched. That is the shape that found `K1`.
 #
-# WHAT IT FINDS, measured rather than assumed. At this rate over 800 cases: 3 diverge
-# and 1 is more work than the reference's budget. Every divergent rule so far has its
-# ACTION rooted at a disconnected variable, whose renaming is minted outright, which is
-# the mint commitment already tracked as the encoding's remaining known gap -- reached
-# far more often here than by a connected pattern. Not yet shown to be a NEW defect.
-#
-#     python3 slotted/xdiff/isomorphism.py fuzz 800            -> fuzz731 differs
-#     XDIFF_DISC=0.5 python3 slotted/xdiff/isomorphism.py fuzz 400   -> fuzz68, fuzz288
-#
-# A reference that runs out of time is reported as such and left out of the ratio, not
-# counted as a divergence: the small cases still finish and those are what the number is
-# about. Raise this to search the ground harder: XDIFF_DISC=0.5
+# A reference that runs out of time is reported as such and left out of the ratio rather
+# than counted as a divergence, since a cross product is sometimes more work than its
+# budget. Raise this to search the ground harder: XDIFF_DISC=0.5
 DISCONNECT_PROB = float(os.environ.get("XDIFF_DISC", "0.08"))
 
 # How often a rule's pattern is drawn DIRECTLY as a conjunctive query rather than read
@@ -726,25 +716,16 @@ def curated():
         )
     )
 
-    # C11 -- regression for the action bug, found by `fuzz 150 2024` as fuzz56.
+    # C11 -- the action must not assert an identity renaming (FIXED). A plain
+    # `(union root built)` asserts an equation whose two renamings are the identity, and
+    # the root's renaming here is {0->3, 2->2}, so it conflated slot 0 with slot 3. The
+    # e-graph absorbed that as spurious redundancy -- `(Var 0)` went from one live slot
+    # to none -- and child-update then emptied every edge, collapsing h(x,y) with
+    # h(x,x). The reference refuses that by Def. 8's per-lookup injectivity, and pins it
+    # as `regress::same_node_redundant_slots_stay_distinct`.
     #
-    # The compiled action used to emit a plain `(union root built)`, which
-    # asserts an equation whose two renamings are the identity. The root's
-    # renaming here is {0->3, 2->2}, so that equation was false: it conflated
-    # slot 0 with slot 3. The e-graph absorbed it as spurious redundancy -- the
-    # `(Var 0)` class went from 1 live slot to 0 -- and child-update then emptied
-    # every edge, collapsing h(x,y) with h(x,x). The reference refuses that, and
-    # is right to: Def. 8 makes each lookup's renaming injective, so a node with
-    # two distinct slots cannot represent h(x,x) (the crate pins this as
-    # `regress::same_node_redundant_slots_stay_distinct`).
-    #
-    # It was also the only order-dependent case in 150, which fits: the two atoms
-    # share no variable, so one of them mints, and the root's renaming -- hence
-    # how wrong the union was -- depended on which atom went first.
-    #
-    # Worth knowing for the next such hunt: a `BadEdge` width check does NOT
-    # catch this, because by the end the children's classes have gone slotless
-    # too and the widths agree again.
+    # A `BadEdge` width check does not catch it: by the end the children have gone
+    # slotless too and the widths agree again.
     cs.append(
         Case(
             "C11-action-renamed-id-union",
@@ -907,32 +888,13 @@ def curated():
         )
     )
 
-    # X1 -- regression for the migration-truncation bug (FIXED). Found by
-    # `fuzz 250 6161` as fuzz85, in the over-deriving direction: the encoding
-    # merged h(x,y) with h(x,x), which the reference refuses because a node whose
-    # two slots are distinct cannot represent h(x,x) (Def. 8's per-lookup
-    # injectivity). See X2 for the minimal form and the mechanism.
+    # X1 -- migration must not truncate a child edge (FIXED). The encoding merged
+    # h(x,y) with h(x,x), which the reference refuses: a node whose two slots are
+    # distinct cannot represent h(x,x), by Def. 8's per-lookup injectivity.
     #
-    # The action asserts ?x1 = h(?x3, ?x1) -- a node equal to its own child --
-    # which merges the h class into the variable class. BOTH sides assert that
-    # and both merge; the difference is only that the reference still keeps
-    # h(x,x) apart afterwards. The encoding finishes with an h node whose two
-    # edges are identical, `{2->2}` and `{2->2}`, to the same child class.
-    #
-    # Localised as far as: the encoding drives the VARIABLE class slotless (its
-    # self-map reaches length 0) where the reference keeps its slot. Once the
-    # variable class has no slots, collapsing h(x,y) with h(x,x) is *consistent* --
-    # both are then h over the one slotless invocation -- so the error is upstream,
-    # in whatever makes it slotless.
-    #
-    # Matching is not implicated: the reference matches the same things, including
-    # both children at one invocation, and still saturates keeping h(x,x) apart.
-    # The two sides agree after one round and diverge in the second.
-    #
-    # A length-TWO self-map is observed on the one-slot variable class along the
-    # way, which is the "self-edges are derived from nodes" problem the doc lists
-    # as an open question and calls probably harmless. This is evidence against
-    # "harmless" and is the first thing to check.
+    # The action asserts `?x1 = h(?x3, ?x1)`, a node equal to its own child. Both sides
+    # merge the h class into the variable class; only the reference still keeps h(x,x)
+    # apart afterwards. `X2` is the minimal form and carries the mechanism.
     cs.append(
         Case(
             "X1-migration-must-not-truncate",
@@ -945,67 +907,21 @@ def curated():
         )
     )
 
-    # X2 -- the minimal form, and the one that produced the diagnosis (FIXED).
-    # `fuzz 250 6161` as fuzz206, which the per-use scheme had been hiding behind
-    # a timeout. It needs ONE term and no unions; the h(v0,v0) probe is not even
-    # required to drive the collapse.
-    #
-    # CAUSE, found by stepping the minimal case one iteration at a time: the
-    # machinery's MIGRATION rule truncates a child edge. It rewrites
-    # `e2 = f(m1*c1, m2*c2)` with `e2 = m*e1` into `e1 = f((m^-1.m1)*c1, ...)`,
-    # and `compose` keeps only the keys whose value lies in the left map's domain.
-    # When m1 reaches outside im(m) -- exactly when e2 has a slot that is
-    # redundant in e1 -- the edge silently narrows. Here m = {0->0} and
-    # m1 = {0->1} compose to the EMPTY map, and an empty edge to (Var 0) asserts
-    # the variable class has no slots, after which every h(var, var) collapses.
-    #
-    # It is the same dropped-slot bug as M3, inside the machinery: the redundant
-    # slot has no name in e1's space and gets dropped rather than named. Fixed by
-    # guarding migration to decline when it would truncate -- sound but
-    # incomplete, like M3(b); minting a fresh name would be the complete fix.
+    # X2 -- the same bug at its smallest (FIXED), one term and no unions:
     #
     #     term   h(var $2, var $1)
     #     rule   ?c == (h ?a ?b)  =>  union ?a (h ?b ?c)
     #
-    # The reference merges h(v2,v1) with h(v0,v1), which are alpha-variants, and
-    # keeps h(v0,v0) apart. The encoding merges all three. As in X1 the variable
-    # class goes slotless where the reference keeps its slot, and once it has no
-    # slots the merge is consistent -- so the error is in whatever makes it
-    # slotless.
+    # CAUSE. The machinery's migration rule rewrote `e2 = f(m1*c1, m2*c2)` with
+    # `e2 = m*e1` into `e1 = f((m^-1.m1)*c1, ...)`, and `compose` keeps only the keys
+    # whose value lies in the left map's domain. Where m1 reaches outside im(m) -- when
+    # e2 has a slot that is redundant in e1 -- the edge narrowed instead: here
+    # m = {0->0} and m1 = {0->1} compose to the EMPTY map, and an empty edge to
+    # (Var 0) asserts the variable class has no slots, after which every h(var, var)
+    # collapses. The same dropped-slot bug as M3, inside the machinery.
     #
-    # Unlike X1 no over-wide self-map appears here, which rules out "self-edges
-    # are derived from nodes" as the cause. Both cases share one shape: the
-    # action's root is a CHILD and the node it builds contains that child's own
-    # parent, so the assertion relates a class to a node built over it.
-    #
-    # TRIGGER, minimised by varying only the action over one e-graph and pattern:
-    #
-    #     union ?a (h ?b ?c)   OVER-MERGES
-    #     union ?a (h ?c ?b)   agrees          <- same variables, swapped
-    #     union ?a (h ?b ?b)   agrees
-    #     union ?a (h ?a ?b)   agrees
-    #     union ?c (h ?a ?b)   agrees
-    #     union ?a ?b          agrees
-    #     union ?a ?c          agrees
-    #
-    # The reference gives the SAME answer for both argument orders; the encoding
-    # does not. So the encoding is sensitive to which child position a class sits
-    # in, and it over-merges only when the atom root -- the class the assertion is
-    # about -- is the SECOND child. The machinery has separate child-update rules
-    # for the first and second child, which is where to look.
-    #
-    # Ruled out along the way: malformed self-loops are a symptom (deleting them
-    # does not help, and neither does guarding transitivity, which is what derives
-    # them); it is not the refinement gap (writing the refinement into the pattern
-    # makes both sides agree, and both keep the slots apart); and it is not
-    # "self-edges derived from nodes" (no over-wide self-map appears here).
-    #
-    # Timeline: the variable class holds its slot for six egglog iterations and
-    # loses it on about the seventh. Both sides do reach a fixpoint -- the
-    # encoding agrees with itself at N and 2N iterations -- so this is not the
-    # encoding being run longer than the reference. They saturate at DIFFERENT
-    # fixpoints, which means the encoding has a derivation the reference does not,
-    # reached only after the rule has fired on nodes the rule itself built.
+    # Migration now declines when it would truncate -- sound but incomplete, like M3(b);
+    # minting a fresh name would be the complete fix.
     cs.append(
         Case(
             "X2-migration-truncation-minimal",
@@ -1018,29 +934,21 @@ def curated():
         )
     )
 
-    # K1 -- a bound slot in a condition, across disconnected atoms (FIXED). Found by
-    # the general pattern generator (`XDIFF_GENERAL`) and reduced from `fuzz224`;
-    # `fuzz113` was the same shape.
+    # K1 -- a bound slot in a condition, across disconnected atoms (FIXED):
     #
     #     terms  (lam $0 (var $2)),  (sub2 (var $0) (var $1))
     #     rule   r0 == (lam $s0 v0),  r1 == (sub2 a b),  free $s0 a
     #            =>  union v0 (h r1 r1)
     #
-    # The two atoms share no variable, and the condition is the only thing relating
-    # them -- a BOUND slot against a class in the other atom. The reference does not
-    # fire, because a binder's bound slot is renamable and can always be moved off
-    # `a`'s slots. The encoding used to fire and over-merge, ref 6 classes / 6 nodes
-    # against enc 5 / 6.
+    # The atoms share no variable, so the condition is the only thing relating them --
+    # a BOUND slot against a class in the other atom. The reference does not fire,
+    # because a binder's bound slot is renamable and can always be moved off `a`'s
+    # slots. The encoding did, and over-merged: `refine-namings` was offered every slot
+    # in play as a merge candidate rather than only those the substitution carries, and
+    # a pattern slot may be a merge TARGET. See `final_refine` in `slotted-encoder.py`.
     #
-    # `refine-namings` was offered every slot in play as a merge candidate, including a
-    # bound slot no bound variable carries, and a pattern slot may be a merge TARGET --
-    # so an unrelated class's slot landed on it and `free` held. It is now offered only
-    # the slots the substitution carries, which is what the reference offers. The
-    # reasoning is beside `final_refine` in `slotted-encoder.py`.
-    #
-    # WHAT ISOLATES IT, each varying one thing: the condition crossing to the other
-    # atom is what did it -- no condition, a condition on the binder's own body, and
-    # joining the two atoms all agreed even before the fix.
+    # No condition, a condition on the binder's own body, and joining the two atoms all
+    # agreed even before the fix, which is what isolated it.
     K1_ATOMS = [("r0", "lam", "$s0", "v0"), ("r1", "sub2", "a", "b")]
     cs.append(
         Case(

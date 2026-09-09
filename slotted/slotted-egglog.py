@@ -273,10 +273,9 @@ class Source:
             )
         sort = self.sorts[0]
         text = (ROOT / CORE_FILE).read_text()
-        # The carrier is renamed textually, which is exact for a name the core does not
-        # otherwise use -- every mention of `U` there is a declaration. A name the core
-        # uses as a RULE VARIABLE is a different matter: renaming onto it would silently
-        # capture, so refuse instead. `S` used to be such a name.
+        # The rename is textual, which is exact for a name the core does not otherwise
+        # use: every mention of `U` there is a declaration. A name the core uses as a
+        # RULE VARIABLE would be captured instead, so it is refused.
         #
         # A program naming its sort `U` is asking for the name the core already uses: the
         # rename is the identity, so nothing can capture and there is nothing to refuse.
@@ -349,17 +348,15 @@ class Source:
             if form in self.lang.bound:
                 return self.global_ref(form, ground)
             # A BARE IDENTIFIER IS A PATTERN VARIABLE, which is how egglog spells one.
-            # `?x` is egg's spelling and still works: the sigil is stripped above, so the
-            # two name the same variable and a rule may mix them. A global takes
-            # precedence, as it does in egglog, which is why the lookup comes first --
-            # write `#name` to say a global outright.
+            # `?x` is egg's spelling and names the same variable, so a rule may mix
+            # them; a bare name that is a global means the global, as in egglog, and
+            # `#name` says one outright.
             #
             # Only in a pattern. A ground term -- a `let`, a `union`, a claim -- has
-            # nothing to bind a variable, so an unknown name there is still an error.
-            # A bare name that IS a constructor never reaches here: it is read as a
-            # nullary call above, so a paren-less `Null` cannot silently become a
-            # wildcard. A misspelling that matches nothing still can, exactly as in
-            # egglog.
+            # nothing to bind a variable, so an unknown name there is an error. A bare
+            # name that IS a constructor is read as a nullary call above, so a
+            # paren-less `Null` cannot become a wildcard; a misspelling still can,
+            # exactly as in egglog.
             assert not ground, f"{self.path.name}: {form!r} is not bound"
             return form
         head, args = form[0], form[1:]
@@ -573,14 +570,11 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
     lhs, rhs = parts["lhs"], parts["rhs"]
     if parts["name"] and ":name" not in tail:
-        # A rule's `:name` is what egglog reports it by, so dropping it left every
-        # generated rule anonymous and egglog's own per-rule output unreadable. egglog
-        # takes it as a string literal, and panics on a name already live in the scope
-        # -- reuse is only legal once a `(pop)` has removed the earlier rule.
-        #
-        # Unless the caller's tail already names the rule: `gen-sdql-rules.py` appends
-        # its own `:ruleset`/`:name`, and two `:name` options on one rule is not valid
-        # egglog.
+        # egglog reports a rule by its `:name` and takes it as a string literal. It
+        # panics on a name already live in the scope, so reuse is only legal once a
+        # `(pop)` has removed the earlier rule. Skipped when the caller's tail already
+        # names the rule -- `gen-sdql-rules.py` appends its own, and two `:name` options
+        # on one rule is not valid egglog.
         tail = f' :name "{parts["name"]}"' + tail
     if uses_subst(rhs):
         # `slotted-subst` extracts a term and adds the result back, so it both reads
@@ -788,8 +782,7 @@ def compile_check(src, form):
     # encoding -- `(check (RenamesToLeader ...))` and the like. It names no slotted
     # term, so it goes through as written.
     #
-    # `form` is the inner check by now, so a `(fail ...)` around it has to be put back:
-    # dropping it turned a negative claim into the positive one, silently.
+    # `form` is the inner check by now, so a `(fail ...)` around it has to be put back.
     return f"(fail {render(form)})" if negated else render(form)
 
 
@@ -881,8 +874,7 @@ def main():
         return 1
     pathlib.Path(path).unlink(missing_ok=True)
     if r.stdout.strip():
-        # Whatever the program itself printed -- `extract`, `sizes`. It used to be
-        # captured and dropped, so a file could ask for output and get none.
+        # whatever the program itself asked for -- `extract`, `sizes`
         sys.stdout.write(r.stdout)
     print(f"ok   {args.src.name}   {tally(src)}")
     return 0

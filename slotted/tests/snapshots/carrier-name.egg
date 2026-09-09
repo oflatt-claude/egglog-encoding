@@ -792,10 +792,10 @@
 ;;; self-loop is invisible to matching and its node cannot be found.
 ;;;
 ;;; `$N` uses slots {1,2} while its class is just the variable $2, so slot 1 is redundant
-;;; and the node stays on a value that is not the class's smallest. Single parent used to
-;;; delete `$N`'s self-loop once `$N` acquired the leader, and nothing re-derived one --
-;;; the self-loop rule fires on a *new* row, and the row was no longer new. Its `(!= a b)`
-;;; guard is what keeps the loop; this checks that it does.
+;;; and the node stays on a value that is not the class's smallest. A single-parent rule
+;;; that deleted `$N`'s self-loop once `$N` acquired the leader would leave nothing to
+;;; re-derive it: the self-loop rule fires on a *new* row, and that row would not be new.
+;;; The `(!= a b)` guard is what keeps the loop; this checks that it does.
 (push)
 
 ; B = h($2, $1), slots {1,2}

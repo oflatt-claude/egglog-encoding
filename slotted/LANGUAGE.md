@@ -343,10 +343,10 @@ nothing to compose onto. So `(renaming-= a $5)` does **not** say "a is the varia
 ### What happened to egglog's `=`
 
 A slotted file's `=` is the one above: it compiles to the shared-renaming check, not to
-egglog's comparison of two stored values. That third notion is no longer reachable from
-here, and nothing is lost by it.
+egglog's comparison of two stored values. That third notion is not reachable from here,
+and nothing is lost by it.
 
-For two **nodes** it was not a different question anyway. The machinery has a rule that
+For two **nodes** it is not a different question anyway. The machinery has a rule that
 unions two values reaching their leader by the same renaming, up to a symmetry of the
 class, so term equality already implied it — checked, with no explicit union in either
 case:
@@ -407,7 +407,7 @@ outright whenever the class settled on a different invocation:
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
 (run 0)
-(extract q)      ; used to be: extraction failure -- q's node was canonicalised away
+(extract q)      ; q's node is canonicalised away, so this extracts through the leader
 ```
 
 Since egglog's `extract` takes an expression and `RenamesToLeader` is a relation, the

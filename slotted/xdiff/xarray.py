@@ -939,10 +939,10 @@ def emit_egg():
 ;;; `let x = x in f1 x`.  The paper's `Let(RenamedId, Bind<RenamedId>)` -- and the
 ;;; reference's `Let(Bind<AppliedId>, AppliedId)` -- puts the `Bind` on the body
 ;;; column alone, so the value's `x` is the ambient one and the class keeps the
-;;; slot.  This used to be a BASELINE disagreement, before any rule ran: the
-;;; generated binder rule stripped the bound slot from the node's whole slot set,
-;;; leaving the class with no slots and merging two terms the reference keeps
-;;; apart.  `:binder` now covers ONE column -- the one after the binder slots,
+;;; slot.  Stripping the bound slot from the node's whole slot set instead would leave
+;;; the class with no slots and merge two terms the reference keeps apart, and it
+;;; disagreed before any rule ran.  `:binder` covers ONE column -- the one after the
+;;; binder slots,
 ;;; which is what `Bind<T>` wrapping a single child means -- so a bound slot is
 ;;; removed only where it is bound, and an occurrence in an uncovered column stays
 ;;; free.  `xarray.py extra` is the comparison this came from.

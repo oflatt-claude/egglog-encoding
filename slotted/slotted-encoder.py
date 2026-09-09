@@ -123,10 +123,8 @@ EGGLOG_CTOR_OPTIONS = (":cost", ":unextractable", ":internal-term-constructor")
 def constructor_options(name, tokens):
     """The binder positions a constructor's options declare.
 
-    `:binder <pos>...` is this language's one addition to egglog's constructor options
-    and may stand ANYWHERE among them. Reading it only in first position silently
-    dropped the binder from `(constructor Lam (U U) U :cost 5 :binder 0)`, and taking
-    every integer after it swallowed the values of whatever option came next.
+    `:binder <pos>...` is this language's one addition to egglog's constructor options,
+    and may stand anywhere among them. egglog's own are refused by name.
     """
     binders, seen = [], None
     for tok in tokens:
@@ -151,12 +149,7 @@ def signature(cols, binders, sorts=("U",)):
 
     A column whose sort is one the program DECLARED is a slotted child and expands to
     `Renaming <sort>`; anything else -- `i64`, `String`, a primitive -- is a payload and
-    passes through. `sorts` defaults to the carrier the hand-written core declares, so a
-    program that declares none reads as it always did.
-
-    This used to compare against the literal name `U`, which made every other sort a
-    payload and every node's sort `U`: `(constructor Succ (S) S)` compiled to
-    `(constructor Succ (S) U)`.
+    passes through. `sorts` defaults to the carrier the hand-written core declares.
     """
     sig, seen_kids = [], 0
     for col in cols:
@@ -1439,61 +1432,35 @@ def compile_rule(
         # whole match is fixed rather than atom by atom. Minting above committed each
         # unreached slot to being apart from everything; this is where that is revisited.
         #
-        # Two bounds come from the primitive, and both need what is in hand only once
-        # every atom has been read: the slots the PATTERN writes are never merged with
-        # each other, and each atom's own slots are pairwise apart, which is what keeps
-        # every renaming below injective.
+        # Three things bound it, and each needs the whole match in hand:
+        #
+        #   * what may MERGE is what the substitution CARRIES -- the union of the
+        #     variables' slot sets, which is what the reference offers
+        #     (`state.subst.values().map(|x| x.slots())`). A slot no variable carries is
+        #     renamable, so identifying it with another class's slot says something the
+        #     reference does not. A binder's bound slot whose body ignores it is such a
+        #     slot, and offering it was enough to over-merge (`K1`), because a pattern
+        #     slot cannot be a merge SOURCE but can be a merge TARGET;
+        #   * the slots the PATTERN writes are never merged with each other;
+        #   * each atom's own slots stay pairwise apart, which is what keeps every
+        #     renaming below injective.
+        #
+        # What comes back is total on every slot named here, candidate or not: `compose`
+        # truncates outside its domain, so a slot left out could not be spoken about
+        # afterwards. The primitive takes that domain as the union of its arguments.
         #
         # This sits BEFORE the right-hand side's fresh slots on purpose. A `:fresh` slot
-        # is fresh by definition, so it is not a candidate for merging and must not be
-        # in the domain at all.
+        # is fresh by definition, so it is no candidate and must not be in the domain.
         #
-        # Everything after this point -- the side conditions and the action -- reads the
-        # REFINED renamings. The reference does the same: it applies a rewrite's
-        # condition to the substitutions `multi_ematch` returns, which are the refined
-        # ones. Nothing is lost by that, because the pattern-slot rule is what keeps a
-        # condition honest, not the order.
+        # Everything after -- the side conditions and the action -- reads the REFINED
+        # renamings, as the reference applies a condition to the substitutions
+        # `multi_ematch` returns.
         #
-        # WHAT MAY MERGE IS WHAT THE SUBSTITUTION CARRIES, which is what the reference
-        # offers and is not every slot in play. Passing every slot over-merged (`K1`):
-        #
-        #     let slots = state.subst.values().map(|x| x.slots()).flatten()   // reference
-        #
-        # A binder's bound slot whose body does not use it is in no substitution value,
-        # so the reference never offers it for merging. Offering it here was enough to
-        # go wrong, because the direction rule permits the merge: `allows_directed_union`
-        # is identical on both sides -- the slot being REPLACED may not be one the
-        # pattern writes -- so a pattern slot cannot be a merge source but CAN be a
-        # merge target. An unrelated class's slot merged onto the bound slot, and
-        # `free $s ?a` then held where the reference says a renamable bound slot can
-        # always be moved off `?a`'s slots.
-        #
-        # The two jobs had to be separated first. This call's first argument used to be
-        # both the merge candidates AND the domain of the renaming that comes back
-        # (`all.iter().map(|s| (s, find(uf, s)))` in `renaming_refine_namings`), so
-        # simply narrowing it broke `CD1-notin-decides` instead: with the bound slot out
-        # of the domain, `(map-get mrg ss)` is undefined, `compose` truncates, and the
-        # condition cannot be evaluated at all. The primitive now derives its domain as
-        # the union of every argument, which leaves a caller that passes its whole slot
-        # set exactly as it was and lets this one pass something narrower.
-        #
-        # Ruled out on the way, so they are not tried again: `map-union` cannot widen a
-        # merged renaming back over the domain, since `renaming_union` FAILS on a
-        # conflicting key rather than preferring a side; and extra `groups` cannot say
-        # it either, because the slot sets are runtime values and a group would be
-        # needed per slot pair. Reading the conditions off the UNREFINED renamings was a
-        # wash -- {fuzz113} before, {fuzz583} after, over the same 800 cases -- as was
-        # the `connected_order` heuristic before it. Both are explained by this: the
-        # order was never what was wrong, the candidate set was.
+        # Ruled out, so they are not retried: reading the conditions off the UNREFINED
+        # renamings ({fuzz113} before, {fuzz583} after, over the same 800 cases), and
+        # the `connected_order` parent/child preference. Both were washes -- the
+        # candidate set was wrong, not the order.
         pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
-        # The CANDIDATES are the slots the match's substitution carries -- the union of
-        # the variables' slot sets -- and not every slot in play. That is what the
-        # reference offers (`state.subst.values().map(|x| x.slots())`), and a slot no
-        # variable carries must not be a candidate: a binder's bound slot that its body
-        # does not use is one, and offering it let an unrelated class's slot be renamed
-        # ONTO it, which made `free $s a` hold where the reference says a renamable
-        # bound slot can always be moved away. The renaming that comes back is still
-        # total on every slot named here, since the groups below mention them all.
         cand = pat
         if mp_of:
             cand = new("carr")

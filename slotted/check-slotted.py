@@ -216,9 +216,8 @@ CHECKS = [
         False,
         False,
     ),
-    # A rule's `:name` is what egglog reports it by, and it used to be parsed and then
-    # dropped, leaving every generated rule anonymous. Nothing else notices, since a
-    # missing name changes no answer.
+    # A rule's `:name` is what egglog reports it by, and nothing else notices when one
+    # is missing, since it changes no answer.
     (
         "rule-names",
         ("slotted/check-rule-names.py",),
@@ -309,8 +308,8 @@ CHECKS = [
         "mutations",
         ("slotted/xdiff/mutations.py",),
         # 3, not 4: `unordered` stopped discriminating once a rule tried every naming
-        # an atom's renaming could take, since a bad atom order no longer loses the
-        # matches it used to. That property is measured directly by
+        # an atom's renaming could take, so a bad atom order does not lose matches.
+        # That property is measured directly by
         # `order-independence.py` instead, and a mutation that catches nothing is not
         # kept as decoration -- `mutations.py`'s own header says so.
         ratio(r"(\d+)/(\d+) mutations still caught", 3),
