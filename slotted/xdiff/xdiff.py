@@ -68,6 +68,13 @@ LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 # a non-trivial symmetry group. Raise it to search symmetry-heavy ground: XDIFF_SYM=0.9
 SYM_PROB = float(os.environ.get("XDIFF_SYM", "0.35"))
 
+# How often a generated leaf is the PAYLOAD leaf `num`. The language had no payload
+# column at all, so no pattern could hold one and that whole grammar went unsearched --
+# a payload literal is what `(= x (Num 2))` is made of. The oracle can be asked about a
+# literal (its `Pattern::ENode` carries a concrete node) but NOT about a payload
+# variable, so only the literal half is compared here.
+NUM_PROB = float(os.environ.get("XDIFF_NUM", "0.3"))
+
 # How often a rule gets a DISCONNECTED atom -- root and children all fresh, so it shares
 # no variable with the rest of the pattern. Such an atom is unconstrained: it matches
 # every node of its operator and the rule becomes a cross product, which is why the
@@ -114,7 +121,7 @@ def swap_slots(t, s1, s2):
     """`t` with slots `s1` and `s2` exchanged."""
     if t[0] == "var":
         return ("var", s2 if t[1] == s1 else s1 if t[1] == s2 else t[1])
-    if t[0] == "null":
+    if t[0] in ("null", "num"):
         return t
     return (t[0], *(swap_slots(x, s1, s2) for x in t[1:]))
 
@@ -194,7 +201,13 @@ class Case:
             # the separator is only needed from the second rule on, but emitting it
             # always keeps the spec readable
             out.append("rule")
-            out += [f"atom {r} {o} {c1} {c2}" for (r, o, c1, c2) in atoms]
+            # `atom_lines` rather than one line per atom: a child that is neither a
+            # pattern variable nor a binder's slot -- a PAYLOAD LEAF written literally --
+            # cannot sit in a child position on the oracle's side, and needs an atom of
+            # its own. That is the same spelling `xarray` and `xsdql` use, so the two
+            # cannot drift.
+            enc_atoms = [(r, o, [_child(c1), _child(c2)]) for (r, o, c1, c2) in atoms]
+            out += slotenc.atom_lines(LANG, enc_atoms[0][0], enc_atoms)[1]
             for want, slot, pvars in conds:
                 kind = "in" if want else "notin"
                 out.append(f"cond {kind} {slot} {' '.join(pvars)}")
@@ -303,9 +316,15 @@ def check_encodable(case):
 
 # -------------------------------------------------------------- rule compiler
 def _child(c):
-    """An atom's child, in the encoder's grammar. A child written `$v` is a slot
-    literal, not a pattern variable: the encoding stores a binder's slot as an edge
-    to `(Var 0)`, so the child position is that literal class."""
+    """An atom's child, in the encoder's grammar.
+
+    A child written `$v` is a slot literal, not a pattern variable: the encoding stores
+    a binder's slot as an edge to `(Var 0)`, so the child position is that literal
+    class. One written `#k` is the PAYLOAD LEAF `k`, reached through its own class --
+    the same spelling the oracle's `atom` line uses for one.
+    """
+    if c.startswith("#"):
+        return ("cls", ("num", int(c[1:])))
     return ("sl", c) if c.startswith("$") else ("pv", c)
 
 
@@ -1448,7 +1467,11 @@ def curated():
 # ------------------------------------------------------------------- the fuzzer
 def rand_term(rng, depth):
     if depth == 0 or rng.random() < 0.3:
-        return rng.choice([("var", rng.randrange(3)), ("null",)])
+        leaves = [("var", rng.randrange(3)), ("null",)]
+        if rng.random() < NUM_PROB:
+            # a payload leaf, so a term -- and the patterns read off it -- can hold one
+            leaves.append(("num", rng.randrange(3)))
+        return rng.choice(leaves)
     if rng.random() < LAM_PROB:
         return ("lam", ("var", rng.randrange(3)), rand_term(rng, depth - 1))
     op = rng.choice(BINOPS)
@@ -1459,6 +1482,14 @@ def flatten_to_atoms(t, ctr, rng=None):
     """Flatten a term into depth-1 atoms with fresh pvars, so the resulting
     multipattern is guaranteed to match that term. Leaves become bare pvars,
     which is what a multipattern does with them anyway."""
+    if t[0] == "num":
+        # A payload leaf is either kept LITERALLY in the child position -- `#k`, which is
+        # a pattern about the payload -- or read as a plain variable like any other leaf.
+        # Both are shapes worth generating, and only the first tests the payload grammar.
+        if rng is not None and rng.random() < 0.6:
+            return f"#{t[1]}", []
+        ctr[0] += 1
+        return f"x{ctr[0]}", []
     if t[0] in ("var", "null"):
         ctr[0] += 1
         return f"x{ctr[0]}", []
@@ -1508,7 +1539,7 @@ def rand_rule(rng, terms, unions):
     # at all, and a case that never fires tests nothing. Half are left alone so
     # the sweep keeps a healthy share of firing cases.
     if rng.random() < 0.5:
-        pvs = sorted({v for at in atoms for v in (at[2], at[3]) if not v.startswith("$")})
+        pvs = sorted({v for at in atoms for v in (at[2], at[3]) if not v.startswith(("$", "#"))})
         # identify two child pvars (tests repeated-variable semantics)
         if pvs and rng.random() < 0.5:
             keep, drop = rng.choice(pvs), rng.choice(pvs)
@@ -1540,7 +1571,7 @@ def rand_rule(rng, terms, unions):
     if rng.random() < 0.35:
         plain = [o for o in BINOPS if o != "lam"]
         for k in range(rng.randint(1, 2)):
-            pvs = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith("$")})
+            pvs = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith(("$", "#"))})
             if len(pvs) < 2:
                 break
             root = rng.choice(pvs) if rng.random() < 0.5 else f"w{k}"
@@ -1553,7 +1584,7 @@ def rand_rule(rng, terms, unions):
         for k in range(rng.randint(1, 2)):
             atoms.append((f"d{k}", rng.choice(plain), f"d{k}a", f"d{k}b"))
 
-    allv = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith("$")})
+    allv = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith(("$", "#"))})
     # Any bound variable can be the action's root, and it matters which: an atom
     # ROOT often has the identity for its renaming, so an action rooted there
     # cannot tell a union of classes from a union of invocations. A CHILD's
@@ -1637,7 +1668,7 @@ def rand_general_rule(rng, terms, unions):
             c1, c2 = pick(), pick()
         atoms.append((root, op, c1, c2))
         for v in (root, c1, c2):
-            if not v.startswith("$") and v not in bound:
+            if not v.startswith(("$", "#")) and v not in bound:
                 bound.append(v)
 
     allv = sorted(bound)
@@ -1707,12 +1738,46 @@ def rand_case(rng, i):
 #: diverge -- one that starts agreeing is news, because the bug was fixed and the entry
 #: is stale, and its case then belongs in `curated()` where it is held green from then on.
 #:
-#: EMPTY is the good state. `K1` lived here and now sits in `curated()`.
+#: `K1` lived here and now sits in `curated()`.
+_K2_WHY = (
+    "the encoding is missing the node its own ACTION builds. Three atoms over one "
+    "union, and the reference's slotless class holds an `h` the encoding's does not -- "
+    "ref 7 classes / 9 nodes against 7 / 8. The probe partition AGREES, so no equality "
+    "the case asks about is wrong; it is a node that never gets built. Removing the "
+    "union makes both sides agree, and dropping any of the three atoms does too."
+)
 
 
 def known_divergences():
     """`(why, case)` for each open bug the corpus carries a reproduction of."""
-    return []
+    # K2 -- reduced from `fuzz538`, which the payload leaf and the wider pattern
+    # generator between them brought into reach; the divergence is older than both.
+    # Neither is implicated: the same case diverges with the payload term replaced by
+    # `null`, and with the disconnected atoms removed.
+    #
+    #     term   (f (h null (var $2)) (f (var $2) null))
+    #     union  that  =  (sub (var $0) (var $0))
+    #     rule   x3 == (h x5 x2), x6 == (f x4 x5), x7 == (f x3 x6)
+    #            =>  union x7 (h x2 x6)
+    #
+    # A neighbour worth knowing: the same pattern with the action `union x2 x2` instead
+    # diverges the OTHER way, 6 classes against 8, so the encoding over-splits there.
+    lhs = ("f", ("h", NUL, V2), ("f", V2, NUL))
+    atoms = [("x3", "h", "x5", "x2"), ("x6", "f", "x4", "x5"), ("x7", "f", "x3", "x6")]
+    return [
+        (
+            _K2_WHY,
+            Case(
+                "K2-action-node-missing-under-a-union",
+                [lhs],
+                [(lhs, ("sub", V0, V0))],
+                atoms,
+                ("x7", "h", "x2", "x6"),
+                [lhs, ("sub", V0, V0), ("h", V0, V1), ("h", V0, V0), NUL],
+                rounds=6,
+            ),
+        )
+    ]
 
 
 # ------------------------------------------------------------------------ main

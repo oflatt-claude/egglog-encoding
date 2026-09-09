@@ -241,7 +241,7 @@ CHECKS = [
     (
         "known-divergences",
         ("slotted/xdiff/isomorphism.py", "known"),
-        ratio(r"(\d+)/(\d+) known divergences still diverge", 0),
+        ratio(r"(\d+)/(\d+) known divergences still diverge", 1),
         False,
         True,
     ),

@@ -94,16 +94,26 @@ def render(atoms, action, conds):
         # a second atom rooted there would have to be written `:when (= <call> ...)`,
         # and an equality's left side must be a variable
         raise Unexpressible("two atoms are rooted at the conclusion's variable")
+    def pay(c):
+        """A `#k` child is the harness's spelling of the PAYLOAD LEAF `k`, shared with
+        the oracle; the surface writes the node itself, `(Num k)`. A bare `#` would read
+        as this language's global sigil."""
+        if isinstance(c, str) and c.startswith("#"):
+            return f"({ctor('num')} {c[1:]})"
+        return c
+
     head = atoms[lead]
-    lhs = f"({ctor(head[1])} {head[2]} {head[3]})"
+    lhs = f"({ctor(head[1])} {pay(head[2])} {pay(head[3])})"
 
     def ref(c):
-        """The matched root has NO NAME in a `rewrite`, so every other mention of it --
-        on the right, and as another atom's child -- rebuilds the pattern instead. Two
+        """A child, with the matched root written out.
+
+        A `rewrite` gives the matched root NO NAME, so every other mention of it -- on
+        the right, and as another atom's child -- rebuilds the pattern instead. Two
         occurrences of one pattern over the same variables are the same class by
-        congruence, so this says what the atom list says. Leaving the name in place
-        instead invented a fresh variable and quietly dropped the join."""
-        return lhs if c == root else c
+        congruence, so this says what the atom list says.
+        """
+        return lhs if c == root else pay(c)
 
     if len(action) == 2:
         rhs = rhs_text(action[1], ref)
