@@ -982,6 +982,38 @@ def curated():
         )
     )
 
+    # K2 -- a sibling link is not enough to order a chain by (FIXED). Reduced from
+    # `fuzz538`, which the wider pattern generator reached.
+    #
+    #     term   (f (h null (var $2)) (f (var $2) null))
+    #     union  that  =  (sub (var $0) (var $0))
+    #     rule   x3 == (h x5 x2), x6 == (f x4 x5), x7 == (f x3 x6)
+    #            =>  union x7 (h x2 x6)
+    #
+    # The encoding lost the match, so the node its own action builds was absent: ref 7
+    # classes / 9 nodes against 7 / 8. The probe partition AGREED, which is why nothing
+    # about the equalities looked wrong -- only a node was missing.
+    #
+    # ORDER DEPENDENT, which makes it a compiler bug with no reference needed: of the six
+    # orders of these three atoms, the two that put the PARENT atom `x7` last lost the
+    # match and the four that did not found it. `x5` is shared as a CHILD of two atoms,
+    # and that constrains only the shared child's slots, leaving the rest of the second
+    # atom's frame minted; a parent/child share is a stored EDGE and relates whole
+    # frames. `connected_order` now prefers the latter.
+    K2_ATOMS = [("x3", "h", "x5", "x2"), ("x6", "f", "x4", "x5"), ("x7", "f", "x3", "x6")]
+    K2_LHS = ("f", ("h", NUL, V2), ("f", V2, NUL))
+    cs.append(
+        Case(
+            "K2-sibling-link-is-not-an-order",
+            [K2_LHS],
+            [(K2_LHS, ("sub", V0, V0))],
+            K2_ATOMS,
+            ("x7", "h", "x2", "x6"),
+            [K2_LHS, ("sub", V0, V0), ("h", V0, V1), ("h", V0, V0), NUL],
+            rounds=6,
+        )
+    )
+
     # ---- branching in unify --------------------------------------------------
     # The reference's `unify` returns SEVERAL states when two invocations of one
     # class differ in two or more slots and more than one pairing is legal. A
@@ -1738,46 +1770,12 @@ def rand_case(rng, i):
 #: diverge -- one that starts agreeing is news, because the bug was fixed and the entry
 #: is stale, and its case then belongs in `curated()` where it is held green from then on.
 #:
-#: `K1` lived here and now sits in `curated()`.
-_K2_WHY = (
-    "the encoding is missing the node its own ACTION builds. Three atoms over one "
-    "union, and the reference's slotless class holds an `h` the encoding's does not -- "
-    "ref 7 classes / 9 nodes against 7 / 8. The probe partition AGREES, so no equality "
-    "the case asks about is wrong; it is a node that never gets built. Removing the "
-    "union makes both sides agree, and dropping any of the three atoms does too."
-)
+#: EMPTY is the good state. `K1` and `K2` both lived here and now sit in `curated()`.
 
 
 def known_divergences():
     """`(why, case)` for each open bug the corpus carries a reproduction of."""
-    # K2 -- reduced from `fuzz538`, which the payload leaf and the wider pattern
-    # generator between them brought into reach; the divergence is older than both.
-    # Neither is implicated: the same case diverges with the payload term replaced by
-    # `null`, and with the disconnected atoms removed.
-    #
-    #     term   (f (h null (var $2)) (f (var $2) null))
-    #     union  that  =  (sub (var $0) (var $0))
-    #     rule   x3 == (h x5 x2), x6 == (f x4 x5), x7 == (f x3 x6)
-    #            =>  union x7 (h x2 x6)
-    #
-    # A neighbour worth knowing: the same pattern with the action `union x2 x2` instead
-    # diverges the OTHER way, 6 classes against 8, so the encoding over-splits there.
-    lhs = ("f", ("h", NUL, V2), ("f", V2, NUL))
-    atoms = [("x3", "h", "x5", "x2"), ("x6", "f", "x4", "x5"), ("x7", "f", "x3", "x6")]
-    return [
-        (
-            _K2_WHY,
-            Case(
-                "K2-action-node-missing-under-a-union",
-                [lhs],
-                [(lhs, ("sub", V0, V0))],
-                atoms,
-                ("x7", "h", "x2", "x6"),
-                [lhs, ("sub", V0, V0), ("h", V0, V1), ("h", V0, V0), NUL],
-                rounds=6,
-            ),
-        )
-    ]
+    return []
 
 
 # ------------------------------------------------------------------------ main

@@ -241,7 +241,7 @@ CHECKS = [
     (
         "known-divergences",
         ("slotted/xdiff/isomorphism.py", "known"),
-        ratio(r"(\d+)/(\d+) known divergences still diverge", 1),
+        ratio(r"(\d+)/(\d+) known divergences still diverge", 0),
         False,
         True,
     ),
@@ -357,7 +357,7 @@ CHECKS = [
         False,
         True,
     ),
-    ("iso-curated", ("slotted/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 50), False, True),
+    ("iso-curated", ("slotted/xdiff/isomorphism.py",), ratio(r"(\d+)/(\d+) isomorphic", 51), False, True),
     ("array", ("slotted/xdiff/xarray.py",), ratio(r"(\d+)/(\d+) cases agree", 14), False, True),
     (
         "array-guards",

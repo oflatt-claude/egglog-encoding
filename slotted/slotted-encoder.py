@@ -1129,14 +1129,35 @@ def connected_order(lang, atoms, first=None, bugs=frozenset()):
         return atoms
     if first is None:
         first = next((j for j, a in enumerate(atoms) if not lang[a[1]].binders), 0)
+    def kids_of(a):
+        return {c[1] for c in a[2] if c[0] == "pv"}
+
     out = [atoms[first]]
     rest = [a for j, a in enumerate(atoms) if j != first]
     seen = pvars_of(atoms[first])
+    roots = {atoms[first][0]}
+    kids = kids_of(atoms[first])
     while rest:
-        i = next((j for j, a in enumerate(rest) if pvars_of(a) & seen), 0)
+        # A PARENT/CHILD link first, and a sibling one only if there is none. Sharing a
+        # variable is necessary and not sufficient: where the shared variable is a CHILD
+        # of both atoms, the constraint reaches only that child's slots and the rest of
+        # the new atom's frame is minted -- and a mint is a commitment. Where it is one
+        # atom's ROOT and the other's child, the share is a stored EDGE, which relates
+        # the two frames whole.
+        #
+        # `K2` is the case: of the six orders of its three atoms, the two that left the
+        # parent atom last lost a match and the other four did not.
+        i = next(
+            (j for j, a in enumerate(rest) if a[0] in kids or kids_of(a) & roots),
+            None,
+        )
+        if i is None:
+            i = next((j for j, a in enumerate(rest) if pvars_of(a) & seen), 0)
         a = rest.pop(i)
         out.append(a)
         seen |= pvars_of(a)
+        roots.add(a[0])
+        kids |= kids_of(a)
     return out
 
 
