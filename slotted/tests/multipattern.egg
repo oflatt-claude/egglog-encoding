@@ -45,7 +45,6 @@
 ;;; could be satisfied by renaming that slot onto an unrelated class's. `refine-namings`
 ;;; is now offered only the slots the match's substitution carries, which is what the
 ;;; reference offers, and `K1` is a regression test in the curated corpus.
-
 (constructor Num (i64) U)
 (constructor Add (U U) U)
 (constructor Mul (U U) U)
@@ -61,8 +60,6 @@
 (constructor Fired () U)
 (constructor Crossed () U)
 (constructor Minted () U)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Beta, guarded by the shape of the function.
 ;;;
@@ -74,7 +71,6 @@
 (rewrite (App f x) (subst body $v x)
          :when ((= f (Lam $v body)))
          :name "beta-guarded")
-
 ;; (fun y. y + y) 3   ->   3 + 3
 (let e (App (Lam $0 (Add $0 $0)) (Num 3)))
 (let want (Add (Num 3) (Num 3)))
@@ -84,12 +80,9 @@
 ;; its body gives exactly `want`.
 (let stuck (App (Num 1) (Num 3)))
 (run 4)
-
 (check (= e want))
 (fail (check (= stuck want)))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A join on TWO variables at once: load from the memory a store produced, at the
 ;;; address it wrote.
@@ -101,17 +94,13 @@
 (rewrite (LoadFrom m p) v
          :when ((= m (Store m0 p v)))
          :name "load-after-store")
-
 (let m1 (Store (Mem0) (Num 7) (Num 42)))
 (let got (LoadFrom m1 (Num 7)))
 (let other (LoadFrom m1 (Num 8)))
 (run 4)
-
 (check (= got (Num 42)))
 (fail (check (= other (Num 42))))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Four patterns, chained two deep: recognising `(a*b) + (a*b)`.
 ;;;
@@ -125,20 +114,16 @@
                 (= l (Mul a b))
                 (= r (Mul a b)))
          :name "double-product")
-
 (let yes (Root (Add (Mul (Num 2) (Num 3)) (Mul (Num 2) (Num 3)))))
 ;; the factors differ, so the join across the two `Mul` patterns fails
 (let no (Root (Add (Mul (Num 2) (Num 3)) (Mul (Num 2) (Num 4)))))
 ;; the shape is right below but the top is a `Mul`, so the first premise fails
 (let no2 (Root (Mul (Mul (Num 2) (Num 3)) (Mul (Num 2) (Num 3)))))
 (run 6)
-
 (check (= yes (Doubled)))
 (fail (check (= no (Doubled))))
 (fail (check (= no2 (Doubled))))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A variable shared UNDER TWO BINDERS: two lambdas with the same body.
 ;;;
@@ -151,18 +136,14 @@
          :when ((= f (Lam $v body))
                 (= g (Lam $w body)))
          :name "same-body")
-
 ;; the bound slots are spelled differently and the bodies ignore them: one class
 (let p (Pair (Lam $0 (Num 1)) (Lam $3 (Num 1))))
 ;; different bodies, so `body` cannot join
 (let q (Pair (Lam $0 (Num 1)) (Lam $3 (Num 2))))
 (run 4)
-
 (check (= p (Same)))
 (fail (check (= q (Same))))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A SLOT LITERAL shared between two binder columns joins NOTHING.
 ;;;
@@ -178,15 +159,11 @@
          :when ((= f (Lam $x c))
                 (= g (Lam $x d)))
          :name "shared-slot-literal")
-
 ;; not alpha-equivalent, unrelated bodies -- and it still fires
 (let unrelated (Pair (Lam $0 (Num 1)) (Lam $0 (Num 2))))
 (run 4)
-
 (check (= unrelated (Fired)))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A multipattern and a slot side condition on one rule: eta, but only where the
 ;;; function is itself a lambda.
@@ -200,7 +177,6 @@
          :when ((not-free $v f)
                 (= f (Lam $w g)))
          :name "eta-lam")
-
 ;; fun y. (fun z. z + z) y   ->   fun z. z + z
 (let eta (Lam $0 (App (Lam $1 (Add $1 $1)) $0)))
 (let reduced (Lam $1 (Add $1 $1)))
@@ -210,13 +186,10 @@
 (let held (Lam $0 (App (Lam $1 (Add $1 $0)) $0)))
 (let inner (Lam $1 (Add $1 $0)))
 (run 6)
-
 (check (= eta reduced))
 (fail (check (= notlam (Num 5))))
 (fail (check (= held inner)))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; FOUR PATTERNS SHARING NOTHING: a cross product.
 ;;;
@@ -235,16 +208,13 @@
                 (= q (App a1 a2))
                 (= r (Store s1 s2 s3)))
          :name "cross-product")
-
 (let root (Root (Num 1)))
 (let a-mul (Mul (Num 2) (Num 3)))
 (let an-app (App (Num 4) (Num 5)))
 (let a-store (Store (Mem0) (Num 6) (Num 7)))
 (run 4)
-
 (check (= root (Crossed)))
 (pop)
-
 (push)
 ;; the same, with no Store anywhere: the third premise has nothing to match, so a rule
 ;; that ignored its disconnected atoms would fire here and this claim is what says it
@@ -254,16 +224,12 @@
                 (= q (App a1 a2))
                 (= r (Store s1 s2 s3)))
          :name "cross-product")
-
 (let root2 (Root (Num 1)))
 (let a-mul2 (Mul (Num 2) (Num 3)))
 (let an-app2 (App (Num 4) (Num 5)))
 (run 4)
-
 (fail (check (= root2 (Crossed))))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; The same shape, with every unrelated pattern carrying SLOTS.
 ;;;
@@ -277,17 +243,14 @@
                 (= q (App $t $t))
                 (= r (Add $u $u)))
          :name "cross-slots")
-
 (let root3 (Root (Num 1)))
 ;; each names a different slot, which is what the three atoms have to solve separately
 (let mss (Mul $0 $0))
 (let att (App $1 $1))
 (let auu (Add $2 $2))
 (run 4)
-
 (check (= root3 (Minted)))
 (pop)
-
 (push)
 ;; the Add's children are DIFFERENT slots, so `(Add $u $u)` has nothing to match
 (rewrite (Root e) (Minted)
@@ -295,17 +258,13 @@
                 (= q (App $t $t))
                 (= r (Add $u $u)))
          :name "cross-slots")
-
 (let root4 (Root (Num 1)))
 (let mss2 (Mul $0 $0))
 (let att2 (App $1 $1))
 (let a23 (Add $2 $3))
 (run 4)
-
 (fail (check (= root4 (Minted))))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; TWO LAMBDAS THAT DIFFER ONLY IN A CONSTANT, each rewritten to one general
 ;;; lambda applied to its OWN constant.
@@ -316,8 +275,8 @@
 ;;; Two things make this more than a one-pattern rule. The premise binds a SECOND
 ;;; lambda of the same shape, so the match covers both at once. And the right-hand
 ;;; side builds a NESTED binder over a slot the pattern never mentions, which is
-;;; what `:fresh $n` is for -- so the conclusion introduces a binder rather than
-;;; taking one apart.
+;;; minted with nothing to write -- so the conclusion introduces a binder rather
+;;; than taking one apart.
 ;;;
 ;;; RESPECTIVELY is the claim with teeth. Each lambda has to keep its own constant,
 ;;; and nothing in the rule's shape enforces that except the join: `a` is the
@@ -332,9 +291,7 @@
 (rewrite (Lam $x (Add $x a))
          (App (Lam $n (Lam $x (Add $x $n))) a)
          :when ((= other (Lam $y (Add $y b))))
-         :fresh $n
          :name "abstract-constant")
-
 (let f2 (Lam $0 (Add $0 (Num 2))))
 (let f3 (Lam $0 (Add $0 (Num 3))))
 (let g  (Lam $1 (Lam $0 (Add $0 $1))))
@@ -344,14 +301,11 @@
 (let k7 (Lam $0 (Num 7)))
 (let ak (App g (Num 7)))
 (run 3)
-
 (check (= f2 a2))
 (check (= f3 a3))
 (fail (check (= f2 a3)))
 (fail (check (= k7 ak)))
 (pop)
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A PAYLOAD COLUMN in a pattern -- a node argument carrying no slots, which is the
 ;;; reference's word for it. egglog matches on one or binds it, and so does this:
@@ -361,34 +315,26 @@
 (push)
 ;; a literal: only where the left operand is exactly 2
 (rewrite (Add x y) (Fired) :when ((= x (Num 2))) :name "payload-literal")
-
 (let lit2 (Add (Num 2) (Num 9)))
 (let lit5 (Add (Num 5) (Num 9)))
 (run 3)
-
 (check (= lit2 (Fired)))
 (fail (check (= lit5 (Fired))))
 (pop)
-
 (push)
 ;; a payload VARIABLE shared between two patterns: both operands must carry the same
 ;; number, which nothing but the join enforces
 (rewrite (Add x y) (Same) :when ((= x (Num i)) (= y (Num i))) :name "payload-join")
-
 (let both4 (Add (Num 4) (Num 4)))
 (let mixed (Add (Num 4) (Num 7)))
 (run 3)
-
 (check (= both4 (Same)))
 (fail (check (= mixed (Same))))
 (pop)
-
 (push)
 ;; and a right-hand side may reuse a payload the pattern bound
 (rewrite (Add x y) (Num i) :when ((= x (Num i))) :name "payload-to-rhs")
-
 (let takes6 (Add (Num 6) (Num 9)))
 (run 3)
-
 (check (= takes6 (Num 6)))
 (pop)

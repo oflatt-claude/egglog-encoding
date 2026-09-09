@@ -209,8 +209,10 @@ To relate two binders, share the *body* instead — a variable under two binder 
 joins up to renaming. `slotted/tests/multipattern.egg` works through both, along with
 joins on several variables at once and a four-pattern chain.
 
-`:fresh $s` names a slot the right-hand side binds that the pattern never mentions, so
-the compiler mints one. `:name` names the rule.
+A right-hand-side slot the pattern never mentions is **minted**, with nothing to write:
+`(rewrite (F x y) (Lam $s (App (F x y) $s)))` binds a fresh `$s`. That is what the
+reference does too. `:fresh $s` says it explicitly and is still accepted, but adds
+nothing. `:name` names the rule.
 
 `subst` is the one right-hand-side head that is not a constructor. `(subst body $x t)`
 is `body[(var $x) := t]` — the reference's `b[x := t]`. It is a *call*, so there is

@@ -1140,6 +1140,18 @@ def connected_order(lang, atoms, first=None, bugs=frozenset()):
     return out
 
 
+def slot_literals(t, out=None):
+    """Every slot literal a term mentions, as the `$x` strings a pattern writes."""
+    out = set() if out is None else out
+    if isinstance(t, tuple):
+        if len(t) == 2 and t[0] == "sl":
+            out.add(t[1])
+        else:
+            for a in t:
+                slot_literals(a, out)
+    return out
+
+
 def has_pay_var(t):
     """Does this sub-term bind a payload VARIABLE anywhere?
 
@@ -1578,6 +1590,13 @@ def compile_rule(
     # named so far. The reference writes a literal `$x` there; on this side a name has
     # to be invented.
     groups = []
+    # A right-hand-side slot the pattern never pins is FRESH BY DEFINITION, so it is
+    # inferred rather than declared -- the reference mints one on the spot
+    # (`Slot::fresh()` in rewrite/ematch.rs) with nothing written by the author. An
+    # explicit `fresh` is still honoured and adds nothing an inferred set does not hold.
+    pinned = {k[1] for a in atoms for k in a[2] if isinstance(k, tuple) and k[0] == "sl"}
+    fresh = sorted(set(fresh) | (slot_literals(action) - pinned))
+
     if fresh:
         groups = [tuple(fresh)] if fresh_batch else [(f,) for f in fresh]
     for group in groups:
