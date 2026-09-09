@@ -6,10 +6,12 @@
 //! `(slots(body) \ {x}) ∪ im(t_ren)`.
 //!
 //! A slotted node's children occupy two columns each — a `Renaming` naming the
-//! child's slots in the node's frame, then the child class. Any other column is
-//! a payload, carrying no slots. Both are recognised from the table schema: a
-//! column typed as an id holding a renaming value starts a child, and the
-//! column after it is that child's class.
+//! child's slots in the node's frame, then the child class. The current primitive
+//! infers those pairs from runtime column types and values. That is adequate for the
+//! generated languages currently using it, but is not a complete schema: equality
+//! sorts and containers both appear as id columns, so a renaming-valued payload
+//! followed by an equality-sort payload can be misclassified. Compiler-emitted edge
+//! layout metadata is required before this primitive is a general API.
 //!
 //! # One term, not a sub-e-graph
 //!
@@ -24,19 +26,22 @@
 //! than looping. A primitive that returns nothing from an *action* is a program
 //! error in egglog, so that is what the caller sees.
 //!
-//! # Bound slots are not renamed
+//! # Known binder limitation
 //!
-//! Nothing tells this primitive which of a node's children is a binder, so it
-//! substitutes into the extracted term as it stands: a slot in `im(t_ren)` that
-//! the term already uses as a bound slot is captured. The caller chooses `t_ren`,
-//! so keeping its image clear of the slots `body`'s term binds is the caller's
-//! job.
+//! The encoded table schema does not tell this primitive which edge is a binder
+//! marker or which later edge that binder covers. It consequently treats markers
+//! as ordinary AST children: substitution can descend through a binder that shadows
+//! `x`, a free slot of `t_ren` can be captured, and marker nodes contribute to the
+//! extraction cost.
 //!
-//! This matches the reference implementation rather than falling short of it. Its
-//! `do_term_subst` is the same structural walk with no binder handling -- it
-//! rebuilds each node and returns `t` where the rebuilt id equals the one being
-//! replaced -- so capture is ruled out by how the representation names bound
-//! slots, not by renaming them during substitution.
+//! This does **not** match the reference representation. There, `Bind<T>` stores its
+//! slot as data in the enclosing e-node rather than as a child, and insertion gives
+//! private slots fresh names. The reference's structural substitution can therefore
+//! rely on invariants that the flattened marker-edge representation does not retain.
+//! `slotted/xdiff/xsdql.py known-encoding-limitations` pins exact differential
+//! witnesses for capture, shadowing, and the resulting extraction-cost reversal.
+//! A sound repair needs compiler-emitted node/edge/binder layout metadata; choosing
+//! a different `t_ren` at the call site is not sufficient.
 //!
 //! # `Context::Full`
 //!
