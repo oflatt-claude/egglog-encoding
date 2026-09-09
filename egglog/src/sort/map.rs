@@ -413,14 +413,30 @@ pub(crate) fn renaming_refine_namings(
     maps: &[BTreeMap<i64, i64>],
     cap: usize,
 ) -> Vec<BTreeMap<i64, i64>> {
-    let Some((all_map, rest)) = maps.split_first() else {
+    let Some((cand_map, rest)) = maps.split_first() else {
         return Vec::new();
     };
     let Some((pattern_map, groups)) = rest.split_first() else {
         return Vec::new();
     };
-    let all: Vec<i64> = all_map.keys().copied().collect();
+    // The slots that may MERGE, which is not every slot in play. The reference's
+    // `final_refine` offers only the slots its substitution carries
+    // (`state.subst.values().map(|x| x.slots())`), so a slot no bound variable carries
+    // -- a binder's bound slot the body does not use -- is never a candidate there.
+    let cands: Vec<i64> = cand_map.keys().copied().collect();
     let pattern: BTreeSet<i64> = pattern_map.keys().copied().collect();
+
+    // The renaming returned is TOTAL on every slot any argument mentions, which is a
+    // separate question from what may merge: a caller composes the result with its
+    // renamings, and `compose` truncates outside the domain, so a slot left out could
+    // not be spoken about afterwards. Deriving it as the union keeps every caller that
+    // passes its whole slot set as the first argument behaving exactly as before.
+    let mut domain: BTreeSet<i64> = cand_map.keys().copied().collect();
+    domain.extend(pattern_map.keys().copied());
+    for g in groups {
+        domain.extend(g.keys().copied());
+    }
+    let all: Vec<i64> = domain.into_iter().collect();
 
     // One disequality per pair within a group, so a node's slots stay apart.
     let mut diseq: BTreeSet<(i64, i64)> = BTreeSet::new();
@@ -451,6 +467,7 @@ pub(crate) fn renaming_refine_namings(
     }
 
     fn walk(
+        cands: &[i64],
         all: &[i64],
         pattern: &BTreeSet<i64>,
         uf: BTreeMap<i64, i64>,
@@ -461,8 +478,8 @@ pub(crate) fn renaming_refine_namings(
         if out.len() >= cap {
             return;
         }
-        for (i, &a) in all.iter().enumerate() {
-            for &b in &all[i + 1..] {
+        for (i, &a) in cands.iter().enumerate() {
+            for &b in &cands[i + 1..] {
                 let (x, y) = (find(&uf, a), find(&uf, b));
                 if x == y || apart(&uf, &diseq, x, y) {
                     continue;
@@ -482,11 +499,11 @@ pub(crate) fn renaming_refine_namings(
                 // apart first, so the identity lands at index 0
                 let mut d = diseq.clone();
                 d.insert((x.min(y), x.max(y)));
-                walk(all, pattern, uf.clone(), d, cap, out);
+                walk(cands, all, pattern, uf.clone(), d, cap, out);
 
                 let mut u = uf.clone();
                 u.insert(from, to);
-                walk(all, pattern, u, diseq, cap, out);
+                walk(cands, all, pattern, u, diseq, cap, out);
                 return;
             }
         }
@@ -494,7 +511,7 @@ pub(crate) fn renaming_refine_namings(
     }
 
     let mut out = Vec::new();
-    walk(&all, &pattern, BTreeMap::new(), diseq, cap, &mut out);
+    walk(&cands, &all, &pattern, BTreeMap::new(), diseq, cap, &mut out);
     out
 }
 
@@ -939,6 +956,23 @@ mod naming_tests {
             m(&[(0, 0), (7, 0)]),
             "the pattern slot survives, per `allows_directed_union`"
         );
+    }
+
+    /// A slot that is not a CANDIDATE never merges, and is still in the domain of what
+    /// comes back -- the two are different questions. This is what keeps a binder's
+    /// bound slot, which no bound variable carries, from being renamed onto an
+    /// unrelated class's slot, while leaving it nameable afterwards.
+    #[test]
+    fn refine_leaves_a_non_candidate_alone_but_in_the_domain() {
+        // 7 may merge with nothing because it is not offered; 0 and 1 are the group
+        let out = renaming_refine_namings(&[ident(&[0]), ident(&[]), ident(&[0, 1, 7])], 64);
+        assert_eq!(out, vec![ident(&[0, 1, 7])], "nothing to merge, domain intact");
+
+        // and with two candidates it merges those and only those
+        let out = renaming_refine_namings(&[ident(&[0, 1]), ident(&[]), ident(&[7])], 64);
+        assert_eq!(out.len(), 2, "apart and merged");
+        assert_eq!(out[0], ident(&[0, 1, 7]));
+        assert_eq!(out[1], m(&[(0, 1), (1, 1), (7, 7)]), "7 is untouched");
     }
 
     /// Two minted slots have both directions available, so they merge; which of the

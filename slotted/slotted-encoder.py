@@ -1454,46 +1454,56 @@ def compile_rule(
         # ones. Nothing is lost by that, because the pattern-slot rule is what keeps a
         # condition honest, not the order.
         #
-        # `K1` IS AN OVER-MERGE FROM THIS CALL, and the cause is the FIRST ARGUMENT.
-        # It does two jobs at once: it is the set of slots that may be MERGED, and it
-        # is the DOMAIN of the renaming the primitive returns
-        # (`all.iter().map(|s| (s, find(uf, s)))` in `renaming_refine_namings`).
+        # WHAT MAY MERGE IS WHAT THE SUBSTITUTION CARRIES, which is what the reference
+        # offers and is not every slot in play. Passing every slot over-merged (`K1`):
         #
-        # `pat` is every slot in play -- the accumulated image of every atom's renaming.
-        # The reference's `final_refine` takes its candidates from somewhere narrower:
+        #     let slots = state.subst.values().map(|x| x.slots()).flatten()   // reference
         #
-        #     let slots = state.subst.values().map(|x| x.slots()).flatten()
+        # A binder's bound slot whose body does not use it is in no substitution value,
+        # so the reference never offers it for merging. Offering it here was enough to
+        # go wrong, because the direction rule permits the merge: `allows_directed_union`
+        # is identical on both sides -- the slot being REPLACED may not be one the
+        # pattern writes -- so a pattern slot cannot be a merge source but CAN be a
+        # merge target. An unrelated class's slot merged onto the bound slot, and
+        # `free $s ?a` then held where the reference says a renamable bound slot can
+        # always be moved off `?a`'s slots.
         #
-        # only the slots some bound VARIABLE carries. A binder's bound slot that the
-        # body does not use is in no substitution value, so the reference never offers
-        # it for merging at all. We do, and the direction rule then lets the merge
-        # happen: `allows_directed_union` is identical on both sides -- the slot being
-        # REPLACED may not be one the pattern writes -- so a pattern slot cannot be a
-        # merge source but CAN be a merge target. An unrelated class's slot merges onto
-        # the bound slot, and `free $s0 a` becomes true where the reference says a
-        # renamable bound slot can always be moved off `a`'s slots.
+        # The two jobs had to be separated first. This call's first argument used to be
+        # both the merge candidates AND the domain of the renaming that comes back
+        # (`all.iter().map(|s| (s, find(uf, s)))` in `renaming_refine_namings`), so
+        # simply narrowing it broke `CD1-notin-decides` instead: with the bound slot out
+        # of the domain, `(map-get mrg ss)` is undefined, `compose` truncates, and the
+        # condition cannot be evaluated at all. The primitive now derives its domain as
+        # the union of every argument, which leaves a caller that passes its whole slot
+        # set exactly as it was and lets this one pass something narrower.
         #
-        # PASSING ONLY THE CARRIED SLOTS FIXES K1 and breaks `CD1-notin-decides`, for
-        # the second job rather than the first: with the bound slot out of the domain,
-        # `(map-get mrg ss0)` is undefined, `compose` truncates, and the condition can
-        # no longer be evaluated at all -- so a rule that should fire stops. That is a
-        # mechanical consequence of the double duty, not a second bug.
-        #
-        # So the fix is to give this primitive a candidate set distinct from its domain.
-        # Two ways out that do NOT work, checked: `map-union` cannot extend a merged
-        # renaming back to the full domain, because `renaming_union` fails on a
-        # conflicting key rather than preferring a side; and the constraint cannot be
-        # expressed with extra `groups` either, since the slot sets are runtime values
-        # and a group would have to be emitted per slot pair.
-        #
-        # ALSO TRIED AND REVERTED, so it is not tried again blindly: reading the
-        # conditions off the UNREFINED renamings. That repairs K1 and `fuzz113` and
-        # breaks `fuzz583` -- an A/B over the same 800 generated cases, {fuzz113}
-        # before, {fuzz583} after. A wash, like the `connected_order` heuristic before
-        # it, and now explained: the order was never what was wrong.
+        # Ruled out on the way, so they are not tried again: `map-union` cannot widen a
+        # merged renaming back over the domain, since `renaming_union` FAILS on a
+        # conflicting key rather than preferring a side; and extra `groups` cannot say
+        # it either, because the slot sets are runtime values and a group would be
+        # needed per slot pair. Reading the conditions off the UNREFINED renamings was a
+        # wash -- {fuzz113} before, {fuzz583} after, over the same 800 cases -- as was
+        # the `connected_order` heuristic before it. Both are explained by this: the
+        # order was never what was wrong, the candidate set was.
         pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
+        # The CANDIDATES are the slots the match's substitution carries -- the union of
+        # the variables' slot sets -- and not every slot in play. That is what the
+        # reference offers (`state.subst.values().map(|x| x.slots())`), and a slot no
+        # variable carries must not be a candidate: a binder's bound slot that its body
+        # does not use is one, and offering it let an unrelated class's slot be renamed
+        # ONTO it, which made `free $s a` hold where the reference says a renamable
+        # bound slot can always be moved away. The renaming that comes back is still
+        # total on every slot named here, since the groups below mention them all.
+        cand = pat
+        if mp_of:
+            cand = new("carr")
+            images = [f"(map-image {v})" for v in mp_of.values()]
+            expr = images[0]
+            for im in images[1:]:
+                expr = f"(map-union {im} {expr})"
+            body.append(f"(= {cand} {expr})")
         alts, i, mrg = new("alts"), new("ix"), new("mrg")
-        body.append(f"(= {alts} (refine-namings {pat} {pinned} {' '.join(slot_groups)}))")
+        body.append(f"(= {alts} (refine-namings {cand} {pinned} {' '.join(slot_groups)}))")
         body.append(f"(Idx {i})")
         body.append(f"(= {mrg} (vec-get {alts} {i}))")
         # Index 0 is the identity, so a rule reaching only `(Idx 0)` answers as it did

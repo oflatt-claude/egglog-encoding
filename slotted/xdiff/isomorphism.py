@@ -957,6 +957,8 @@ def known_open_bugs():
         else:
             print(f"  STALE {case.name}: {verdict} -- it agrees now, so the bug is fixed?")
             bad.append(case.name)
+    if not cases:
+        print("  (none -- no open bug has a reproduction here, which is the good state)")
     print(f"\n{len(cases) - len(bad)}/{len(cases)} known divergences still diverge")
     return 1 if bad else 0
 

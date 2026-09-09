@@ -1018,6 +1018,43 @@ def curated():
         )
     )
 
+    # K1 -- a bound slot in a condition, across disconnected atoms (FIXED). Found by
+    # the general pattern generator (`XDIFF_GENERAL`) and reduced from `fuzz224`;
+    # `fuzz113` was the same shape.
+    #
+    #     terms  (lam $0 (var $2)),  (sub2 (var $0) (var $1))
+    #     rule   r0 == (lam $s0 v0),  r1 == (sub2 a b),  free $s0 a
+    #            =>  union v0 (h r1 r1)
+    #
+    # The two atoms share no variable, and the condition is the only thing relating
+    # them -- a BOUND slot against a class in the other atom. The reference does not
+    # fire, because a binder's bound slot is renamable and can always be moved off
+    # `a`'s slots. The encoding used to fire and over-merge, ref 6 classes / 6 nodes
+    # against enc 5 / 6.
+    #
+    # `refine-namings` was offered every slot in play as a merge candidate, including a
+    # bound slot no bound variable carries, and a pattern slot may be a merge TARGET --
+    # so an unrelated class's slot landed on it and `free` held. It is now offered only
+    # the slots the substitution carries, which is what the reference offers. The
+    # reasoning is beside `final_refine` in `slotted-encoder.py`.
+    #
+    # WHAT ISOLATES IT, each varying one thing: the condition crossing to the other
+    # atom is what did it -- no condition, a condition on the binder's own body, and
+    # joining the two atoms all agreed even before the fix.
+    K1_ATOMS = [("r0", "lam", "$s0", "v0"), ("r1", "sub2", "a", "b")]
+    cs.append(
+        Case(
+            "K1-bound-slot-condition-across-disconnected-atoms",
+            [("lam", V0, V2), ("sub2", V0, V1)],
+            [],
+            K1_ATOMS,
+            ("v0", "h", "r1", "r1"),
+            [("lam", V0, V2), ("sub2", V0, V1), ("h", V0, V1), ("h", V0, V0), NUL],
+            rounds=6,
+            rules=[(K1_ATOMS, ("v0", "h", "r1", "r1"), [(True, "$s0", ["a"])])],
+        )
+    )
+
     # ---- branching in unify --------------------------------------------------
     # The reference's `unify` returns SEVERAL states when two invocations of one
     # class differ in two or more slots and more than one pairing is legal. A
@@ -1756,73 +1793,18 @@ def rand_case(rng, i):
 
 
 # ------------------------------------------------------------- known divergences
-#: Reproductions of OPEN bugs. Deliberately NOT part of `curated()`, which every
-#: green check shares: a case that is known to diverge would turn those red, and
-#: silencing it there would hide a real one. `isomorphism.py known` runs these and
-#: requires each to STILL diverge -- one that starts agreeing is news, because it
-#: means the bug was fixed and the entry is stale.
-_K1_WHY = (
-    "the encoding over-merges. A side condition whose SLOT is a binder's bound slot "
-    "and whose VARIABLE is in a disconnected atom: the rule enumerates alternative "
-    "namings, so the bound slot -- which nothing else constrains and which is freely "
-    "renamable -- can be renamed onto a slot the other class has, and `free` then holds "
-    "where the reference says it cannot."
-)
+#: Reproductions of OPEN bugs. Deliberately NOT part of `curated()`, which every green
+#: check shares: a case known to diverge would turn those red, and silencing it there
+#: would hide a real one. `isomorphism.py known` runs these and requires each to STILL
+#: diverge -- one that starts agreeing is news, because the bug was fixed and the entry
+#: is stale, and its case then belongs in `curated()` where it is held green from then on.
+#:
+#: EMPTY is the good state. `K1` lived here and now sits in `curated()`.
 
 
 def known_divergences():
     """`(why, case)` for each open bug the corpus carries a reproduction of."""
-    # ---- K1: a bound slot in a condition, across disconnected atoms ----------
-    # OPEN. Found by the general pattern generator (`XDIFF_GENERAL`), reduced from
-    # `fuzz224`, and registered in `isomorphism.py`'s KNOWN_DIVERGENCES.
-    #
-    #     terms  (lam $0 (var $2)),  (sub2 (var $0) (var $1))
-    #     rule   r0 == (lam $s0 v0),  r1 == (sub2 a b),  free $s0 a
-    #            =>  union v0 (h r1 r1)
-    #
-    # The two atoms share no variable. The condition is the only thing relating them,
-    # and it relates a BOUND slot to a class in the other atom. The reference does not
-    # fire: a binder's bound slot is renamable, so it can always be moved off `a`'s
-    # slots. The encoding fires and over-merges -- ref 6 classes / 6 nodes, enc 5 / 6.
-    #
-    # Why: `refine-namings`' first argument is both the set of slots that may MERGE and
-    # the domain of the renaming it returns, and we pass every slot in play. The
-    # reference offers only the slots its substitution carries, and a binder's bound
-    # slot the body does not use is carried by nothing -- so it never merges there. Ours
-    # does, and since a pattern slot may be a merge TARGET (the direction rule is
-    # identical on both sides), an unrelated class's slot lands on it and `free` holds.
-    # Full diagnosis, and the two fixes already ruled out, sit beside `final_refine` in
-    # `slotted-encoder.py`.
-    #
-    # WHAT ISOLATES IT, each varying one thing from the case above:
-    #
-    #     free $s0 a           OVER-MERGES     the condition crosses to the other atom
-    #     (no condition)       agrees
-    #     free $s0 v0          agrees          the condition stays in the binder's body
-    #     atoms joined on v0   agrees          nothing is left unconstrained
-    #
-    # `fuzz113` at the default knobs is the same shape -- a `lam` and a `g` sharing
-    # nothing, with `in $s2` over the `g`'s child -- so it needs no separate entry.
-    # Reading conditions off the unrefined renamings repairs both and breaks another
-    # case; that A/B is recorded in `slotted-encoder.py` beside `final_refine`.
-    K1_ATOMS = [("r0", "lam", "$s0", "v0"), ("r1", "sub2", "a", "b")]
-    KNOWN_CASES = [
-        (
-            _K1_WHY,
-            Case(
-            "K1-bound-slot-condition-across-disconnected-atoms",
-            [("lam", V0, V2), ("sub2", V0, V1)],
-            [],
-            K1_ATOMS,
-            ("v0", "h", "r1", "r1"),
-            [("lam", V0, V2), ("sub2", V0, V1), ("h", V0, V1), ("h", V0, V0), NUL],
-            rounds=6,
-            rules=[(K1_ATOMS, ("v0", "h", "r1", "r1"), [(True, "$s0", ["a"])])],
-        )
-        ),
-    ]
-
-    return KNOWN_CASES
+    return []
 
 
 # ------------------------------------------------------------------------ main

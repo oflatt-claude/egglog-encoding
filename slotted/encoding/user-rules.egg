@@ -80,12 +80,15 @@
 ;;;   (find-mapping-total avoid domain first... second...)
 ;;;                           = least injective m with m . second_i = first_i, made total on
 ;;;                             the keys of `domain`, MINTING outside `avoid`'s slots (M3)
-;;;   (refine-namings all pattern group...)
+;;;   (refine-namings carried pattern group...)
 ;;;                           = every way the match's slots may be MERGED, once the whole
-;;;                             match is fixed.  Read by key set: every slot in play, the
-;;;                             ones the pattern itself writes, and one group per atom
-;;;                             whose slots are pairwise distinct.  Element 0 is the
-;;;                             identity, i.e. no merging (M4)
+;;;                             match is fixed.  Read by key set: the slots that may merge,
+;;;                             the ones the pattern itself writes, and one group per atom
+;;;                             whose slots are pairwise distinct.  What may merge is what
+;;;                             the SUBSTITUTION carries, not every slot in play -- the
+;;;                             renaming that comes back is total on every slot any
+;;;                             argument names, which is a separate question.  Element 0
+;;;                             is the identity, i.e. no merging (M4)
 ;;;   (vec-get v i)           = element i of a vector, UNDEFINED past its end, which is
 ;;;                             what stops the `Idx` join without any rule knowing how
 ;;;                             long the vector is
@@ -211,7 +214,8 @@
        (= mb (compose mp1 q1))
        (= csb (ClassSlots b))
        (= cse (ClassSlots e))
-       (= alts (refine-namings avoid1 (map-empty) avoid1))
+       (= carr (map-union (map-image (compose mp1 cse)) (map-union (map-image (compose mb csb)) (map-image (compose ma csa)))))
+       (= alts (refine-namings carr (map-empty) avoid1))
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((let _rhs17 (App2 "eq" (compose mrg (compose mb csb)) b (compose mrg (compose ma csa)) a))
@@ -257,7 +261,8 @@
        (RenamesToLeader x symx x)
        (= (compose mp1 q1) (compose (compose mx csx) symx))
        (= cse (ClassSlots e))
-       (= alts (refine-namings avoid1 (map-empty) avoid1))
+       (= carr (map-union (map-image (compose mp1 cse)) (map-image (compose mx csx))))
+       (= alts (refine-namings carr (map-empty) avoid1))
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((Equated (Num 0) (compose mrg (compose mp1 cse)) e)))
@@ -331,7 +336,8 @@
        (= midx (compose mp2 q2))
        (= csidx (ClassSlots idx))
        (= csg (ClassSlots g))
-       (= alts (refine-namings avoid2 (map-empty) avoid1 im2))
+       (= carr (map-union (map-image (compose mp2 csg)) (map-union (map-image (compose midx csidx)) (map-union (map-image (compose mp1 csrng)) (map-union (map-image (compose men csen)) (map-image (compose mst csst)))))))
+       (= alts (refine-namings carr (map-empty) avoid1 im2))
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((let _rhs30 (App2 "-" (compose mrg (compose mst csst)) st (map-empty) (Num 1)))
@@ -363,9 +369,17 @@
 ;;;
 ;;; So the naming is chosen ONCE, after every atom has been read:
 ;;;
-;;;     (= alts (refine-namings avoidN patternslots dom1 ... domN))
+;;;     (= carr (map-union (map-image mv1) ... (map-image mvk)))
+;;;     (= alts (refine-namings carr patternslots dom1 ... domN))
 ;;;     (Idx ix)
 ;;;     (= mrg (vec-get alts ix))
+;;;
+;;; `carr` is what the match's variables carry between them, and only those slots may
+;;; merge.  A slot in play that no variable carries -- a binder's bound slot whose body
+;;; does not use it -- is left alone, because it is renamable and identifying it with
+;;; another class's slot would say something the reference does not: its `final_refine`
+;;; offers `state.subst.values().map(|x| x.slots())` and nothing else.  Passing every
+;;; slot instead let `free $s ?a` hold for an unrelated `?a`, which over-merged.
 ;;;
 ;;; and from there on every renaming is read through `mrg` -- the side conditions and the
 ;;; action both.  `vec-get` is undefined past the end of the vector, so the `Idx` join
@@ -425,7 +439,8 @@
        (= csa (ClassSlots a))
        (= mb (compose mp2 q2))
        (= csb (ClassSlots b))
-       (= alts (refine-namings avoid2 (map-empty) avoid1 im2))
+       (= carr (map-union (map-image (compose mb csb)) (map-union (map-image (compose ma csa)) (map-union (map-image (compose mp1 csp)) (map-union (map-image (compose mc csc)) (map-image (compose mab csab)))))))
+       (= alts (refine-namings carr (map-empty) avoid1 im2))
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((let _rhs31 (App2 "*" (compose mrg (compose mb csb)) b (compose mrg (compose mc csc)) c))
@@ -505,7 +520,8 @@
        (= csf (ClassSlots f))
        (= mgx (compose mp3 q3))
        (= csgx (ClassSlots gx))
-       (= alts (refine-namings avoid3 (map-of sx sx) avoid1 im2 im3))
+       (= carr (map-union (map-image (compose mgx csgx)) (map-union (map-image (compose mf csf)) (map-union (map-image (compose mfgx csfgx)) (map-union (map-image (compose mp1 csp)) (map-image (compose ml csl)))))))
+       (= alts (refine-namings carr (map-of sx sx) avoid1 im2 im3))
        (Idx ix)
        (= mrg (vec-get alts ix))
        (= fmin (find-mapping-total (map-image mrg) (map-of 0 0) (map-empty) (map-empty)))
@@ -574,7 +590,8 @@
        (= avoid2 (map-union avoid1 im2))
        (= sx (map-get (compose mp2 p2) 0))
        (= cse (ClassSlots e))
-       (= alts (refine-namings avoid2 (map-of sx sx) avoid1 im2))
+       (= carr (map-union (map-image (compose mp2 cse)) (map-union (map-image (compose mp1 csb)) (map-image (compose mf csf)))))
+       (= alts (refine-namings carr (map-of sx sx) avoid1 im2))
        (Idx ix)
        (= mrg (vec-get alts ix))
        (map-not-contains (map-image (compose mrg (compose mf csf))) (map-get mrg sx)))
@@ -652,7 +669,8 @@
        (= sx (map-get (compose mp3 p3) 0))
        (= me3 (compose mp3 q3))
        (= cse3 (ClassSlots e3))
-       (= alts (refine-namings avoid3 (map-of sx sx) avoid1 im2 im3))
+       (= carr (map-union (map-image (compose me3 cse3)) (map-union (map-image (compose me1 cse1)) (map-union (map-image (compose me2 cse2)) (map-union (map-image (compose mp1 csp)) (map-union (map-image (compose mlb cslb)) (map-union (map-image (compose mla csla)) (map-image (compose mf csf)))))))))
+       (= alts (refine-namings carr (map-of sx sx) avoid1 im2 im3))
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((let _rhs50 (App3 "binop" (compose mrg (compose mf csf)) f (compose mrg (compose me2 cse2)) e2 (compose mrg (compose me3 cse3)) e3))
@@ -709,7 +727,8 @@
        (= me (compose mp1 r1))
        (= cse (ClassSlots e))
        (= csp (ClassSlots p))
-       (= alts (refine-namings avoid1 (map-of sx sx) avoid1))
+       (= carr (map-union (map-image (compose mp1 csp)) (map-image (compose me cse))))
+       (= alts (refine-namings carr (map-of sx sx) avoid1))
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((Equated p (compose (inverse (compose mrg (compose mp1 csp))) (compose mrg (compose me cse))) e)))
@@ -761,7 +780,8 @@
        (= sx (map-get (compose mp2 q2) 0))
        (= mf (compose mp2 p2))
        (= csf (ClassSlots f))
-       (= alts (refine-namings avoid2 (map-of sx sx) avoid1 im2))
+       (= carr (map-union (map-image (compose mf csf)) (map-union (map-image (compose mp1 cse)) (map-image (compose mb csb)))))
+       (= alts (refine-namings carr (map-of sx sx) avoid1 im2))
        (Idx ix)
        (= mrg (vec-get alts ix))
        (map-not-contains (map-image (compose mrg (compose mf csf))) (map-get mrg sx)))
@@ -814,7 +834,8 @@
        (= mx (compose mp1 p1))
        (= csx (ClassSlots x))
        (= cse (ClassSlots e))
-       (= alts (refine-namings avoid1 (map-empty) avoid1))
+       (= carr (map-union (map-image (compose mp1 cse)) (map-image (compose mx csx))))
+       (= alts (refine-namings carr (map-empty) avoid1))
        (Idx ix)
        (= mrg (vec-get alts ix)))
       ((Equated e (compose (inverse (compose mrg (compose mp1 cse))) (compose mrg (compose mx csx))) x)))
@@ -886,7 +907,8 @@
        (= csa (ClassSlots a))
        (= mb (compose mp2 q2))
        (= csb (ClassSlots b))
-       (= alts (refine-namings avoid2 (map-of sx sx) avoid1 im2))
+       (= carr (map-union (map-image (compose mb csb)) (map-union (map-image (compose ma csa)) (map-union (map-image (compose mp1 csp)) (map-union (map-image (compose me cse)) (map-image (compose mab csab)))))))
+       (= alts (refine-namings carr (map-of sx sx) avoid1 im2))
        (Idx ix)
        (= mrg (vec-get alts ix))
        (guard (or (bool-map-contains (map-image (compose mrg (compose ma csa))) (map-get mrg sx)) (bool-map-contains (map-image (compose mrg (compose mb csb))) (map-get mrg sx)))))
@@ -963,7 +985,8 @@
 ;;; >        (= m12 (compose mp8 p3))
 ;;; >        (= cs13 (ClassSlots C6))
 ;;; >        (= cs14 (ClassSlots V4))
-;;; >        (= alts15 (refine-namings idm9 (map-of sx sx) idm9))
+;;; >        (= carr (map-union (map-image (compose mp8 cs14)) (map-union (map-image (compose m12 cs13)) (map-image (compose m10 cs11)))))
+;;; >        (= alts15 (refine-namings carr (map-of sx sx) idm9))
 ;;; >        (Idx ix16)
 ;;; >        (= mrg17 (vec-get alts15 ix16)))
 ;;; >       ((let need18 (map-union (map-image (compose mrg17 (compose m12 cs13))) (map-union (map-image (compose mrg17 (compose m10 cs11))) (map-of (map-get mrg17 sx) (map-get mrg17 sx)))))
