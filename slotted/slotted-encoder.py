@@ -1323,6 +1323,7 @@ def compile_rule(
     action,
     conds=(),
     diseq=(),
+    same=(),
     fresh=(),
     bugs=frozenset(),
     slot_prefix="s",
@@ -1630,6 +1631,15 @@ def compile_rule(
         else:
             expr = "(or " + " ".join(f"(bool-map-contains {im} {sv})" for im in images) + ")"
             body.append(f"(guard {expr})" if want else f"(guard (bool= {expr} false))")
+
+    # `(= x y)` between two variables: the same class reached by the same renaming,
+    # which is what `=` means here, so both halves are asserted.
+    for a, b in same:
+        for v in (a, b):
+            if v not in mp_of:
+                raise SystemExit(f"`=` names {v!r}, which no pattern binds")
+        body.append(f"(= {cls_of[a]} {cls_of[b]})")
+        body.append(f"(= {mp_of[a]} {mp_of[b]})")
 
     # `!=`: NOT THE SAME INVOCATION, which is what `=` means here -- the same class
     # reached by the same renaming. So two invocations of one class differ, and the test

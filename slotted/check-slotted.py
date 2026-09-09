@@ -245,6 +245,15 @@ CHECKS = [
         False,
         True,
     ),
+    # The inventory of egglog's grammar: what this language accepts, and what it
+    # refuses with a message. A verdict that changes is reported either way.
+    (
+        "egglog-forms",
+        ("slotted/check-egglog-forms.py",),
+        ratio(r"(\d+)/(\d+) egglog forms behave as recorded", 29),
+        False,
+        False,
+    ),
     ("handwritten-drift", ("slotted/check-handwritten-encoding.py",), starts_ok, False, False),
     (
         "correspondence",

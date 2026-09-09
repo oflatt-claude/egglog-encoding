@@ -158,6 +158,12 @@ def payload(tok, ground=True):
     two atoms naming the same variable join on it. Tagged, so `compile_rule` can tell
     them apart.
     """
+    if not isinstance(tok, str):
+        raise SystemExit(
+            f"a payload column takes a value, not a call ({tok!r}). egglog's value "
+            "primitives -- arithmetic and comparison over payloads -- are not "
+            "implemented here, so a payload cannot be computed."
+        )
     quoted = len(tok) >= 2 and tok.startswith('"') and tok.endswith('"')
     if ground:
         return tok[1:-1] if quoted else tok
@@ -488,7 +494,7 @@ def compile_source(src, own_only=False):
             # `:merge new` rather than no merge: a term reaches its leader by every
             # renaming in the orbit, so the rule fires once per row and sets the same
             # leader each time.
-            _emit(out, keep, f"(function {fn} () U :merge new)")
+            _emit(out, keep, f"(function {fn} () {src.carrier_sorts()[0]} :merge new)")
             _emit(out, keep, f"(ruleset {rs})")
             _emit(
                 out,
@@ -518,6 +524,13 @@ def compile_source(src, own_only=False):
                 f"A `{head}` here would be passed through to egglog against the ENCODED "
                 "tables and would not run."
             )
+        elif head in ("run-schedule", "run-report"):
+            raise SystemExit(
+                f"{src.path.name}: `{head}` cannot pass through. A `(run N)` here compiles "
+                "to a phased schedule -- the machinery saturated around each user-rule "
+                "step -- so a schedule written by hand would run the user rules without "
+                "it. Use `(run N)`."
+            )
         else:
             # Everything else is egglog's, and means the same thing here: a command
             # that names no slotted term needs no compiling. `print-size`,
@@ -544,7 +557,14 @@ def schedule(steps, rules):
     )
 
 
-KEYWORDS = (":name", ":when", ":lead", ":fresh")
+KEYWORDS = (":name", ":when", ":ruleset", ":lead", ":fresh")
+
+#: egglog's own `rewrite` options this language does not implement, and why. Named so the
+#: refusal says what is missing rather than listing what is not.
+EGGLOG_REWRITE_OPTIONS = {
+    ":subsume": "subsumption has no meaning for a class the machinery keeps several "
+    "values for, and the actions it belongs with -- `set`, `delete` -- are not here either",
+}
 
 
 def keywords(src, rest):
@@ -556,6 +576,11 @@ def keywords(src, rest):
     while rest:
         kw = rest[0]
         if kw not in KEYWORDS:
+            if kw in EGGLOG_REWRITE_OPTIONS:
+                raise SystemExit(
+                    f"{src.path.name}: `{kw}` is egglog's and is not implemented here -- "
+                    f"{EGGLOG_REWRITE_OPTIONS[kw]}."
+                )
             raise SystemExit(f"{src.path.name}: expected one of {KEYWORDS}, got {kw!r}")
         i = 1
         while i < len(rest) and rest[i] not in KEYWORDS:
@@ -583,7 +608,9 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     """
     parts = rewrite_parts(src, form)
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
-    diseq = parts["diseq"]
+    diseq, same = parts["diseq"], parts["same"]
+    if parts["ruleset"] and ":ruleset" not in tail:
+        tail = f' :ruleset {parts["ruleset"]}' + tail
     lhs, rhs = parts["lhs"], parts["rhs"]
     if parts["name"] and ":name" not in tail:
         # egglog reports a rule by its `:name` and takes it as a string literal. It
@@ -619,6 +646,7 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
         ("build", root, enc.rhs_of(src.lang, src.term(rhs, ground=False))),
         conds=conds,
         diseq=diseq,
+        same=same,
         fresh=fresh,
         bugs=bugs,
         tail=tail,
@@ -669,7 +697,9 @@ def rewrite_parts(src, form):
         "conds": [],
         "equalities": [],
         "diseq": [],
+        "same": [],
         "fresh": [],
+        "ruleset": None,
         "lead": 0,
     }
     kws = keywords(src, form[3:])
@@ -685,6 +715,8 @@ def rewrite_parts(src, form):
     for key, vals in kws:
         if key == ":name":
             out["name"] = unquote(vals[0])
+        elif key == ":ruleset":
+            out["ruleset"] = vals[0]
         elif key == ":lead":
             out["lead"] = int(vals[0])
         elif key == ":fresh":
@@ -694,7 +726,17 @@ def rewrite_parts(src, form):
             # silence, leaving a rule that looked constrained and was not.
             for cond in when_facts(src, vals):
                 want, *rest = cond
-                if want == "=":
+                if want in src.spec:
+                    # A BARE CALL as a fact, which in egglog means "such a node exists".
+                    # It is another pattern with nothing joining it to the rest, so it
+                    # gets a root of its own.
+                    out["equalities"].append((f"_fact{len(out['equalities'])}", cond))
+                elif want == "=" and len(rest) == 2 and isinstance(rest[1], str):
+                    # `(= x y)` between two VARIABLES identifies them: the same class
+                    # reached by the same renaming, which is what `=` means here.
+                    a, b = (v.lstrip("?") for v in rest)
+                    out["same"].append((a, b))
+                elif want == "=":
                     # NOT a side condition: another rooted pattern, which is how a
                     # rewrite says a multipattern. `(= v <call>)` means "v also matches
                     # this", so the pattern is flattened with `v` as its root and its
@@ -723,7 +765,13 @@ def rewrite_parts(src, form):
                     )
                     out["diseq"].append((a.lstrip("?"), b.lstrip("?")))
                 else:
-                    assert want in ("free", "not-free"), f"unknown condition {want!r}"
+                    if want not in ("free", "not-free"):
+                        raise SystemExit(
+                            f"{src.path.name}: {want!r} is not a fact this language knows. "
+                            "A fact is a call, `(= v <call>)`, `(= x y)`, `(!= x y)`, or "
+                            "`free`/`not-free` on a slot. egglog's value primitives -- "
+                            "arithmetic and comparison over payloads -- are not implemented."
+                        )
                     slot, *pvars = rest
                     # A CALL is allowed where a variable is, and desugars to an equality
                     # plus a condition on the name it binds. That is what lets a condition
