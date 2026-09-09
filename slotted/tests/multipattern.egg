@@ -30,12 +30,16 @@
 ;;; All five fire -- blocking the pattern changes the graph -- so the agreement is not
 ;;; the trivial kind a rule that never matches would give.
 ;;;
-;;; The generated sweep says the same for connected multipatterns: 799 of 800 cases
-;;; isomorphic, and the one divergence is the encoding's known mint commitment rather
-;;; than anything about these shapes. Unrelated atoms are sampled under `XDIFF_DISC`
-;;; and raise that to 3 of 799, where every divergent rule roots its ACTION at a
-;;; disconnected variable, whose renaming is minted outright. MP5 pins the other half:
-;;; a cross-product pattern whose action is not minted agrees.
+;;; The generated sweep says the same, and says it of shapes no hand-written file
+;;; reaches: 800 of 800 at the default knobs, 800 of 800 with every pattern drawn as a
+;;; conjunctive query (`XDIFF_GENERAL=1`), 400 of 400 with unrelated atoms sampled hard
+;;; (`XDIFF_DISC=0.5`), and 1200 of 1200 with all of that plus symmetry-heavy unions.
+;;;
+;;; It did not always. The last two sections here -- patterns whose atoms share nothing
+;;; -- are the shape that found `K1`, where a side condition about a binder's bound slot
+;;; could be satisfied by renaming that slot onto an unrelated class's. `refine-namings`
+;;; is now offered only the slots the match's substitution carries, which is what the
+;;; reference offers, and `K1` is a regression test in the curated corpus.
 
 (constructor Num (i64) U)
 (constructor Add (U U) U)
