@@ -1,10 +1,9 @@
-"""Which cases does PR #45's multipat fix actually change?
+"""Compare the current pinned oracle with another reference revision.
 
-`multipat.rs` is in `main` too, so the bug -- `extend_subst` storing a child
-`AppliedId` without canonicalising it through the slot union-find -- was in the
-original. PR #45 adds the one-line fix. The encoding is compared against the fixed
-version, so this asks which of our cases can tell the two apart: those are the ones
-whose agreement is evidence about the *fixed* semantics rather than either.
+The normal suite asks only the exact revision in `slotted/xmulti/Cargo.toml`. This
+manual diagnostic runs the same corpus against a second binary so a reference update
+can be audited case by case. It was first written to assess PR #45's `extend_subst`
+canonicalisation fix, but neither side is hard-coded here.
 """
 
 import subprocess

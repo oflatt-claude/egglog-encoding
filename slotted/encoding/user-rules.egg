@@ -32,11 +32,12 @@
 ;;; so the check is exact either way.
 ;;;
 ;;; THE REFERENCE, wherever one is mentioned below, is `memoryleak47/slotted-egraphs` --
-;;; the Rust implementation from the PLDI 2025 paper -- pinned to upstream `b90adca`, which
-;;; is `main` after PR #45 was merged.  Two things in it bear on this file: the
-;;; canonicalisation fix in `extend_subst`, and `final_refine` in
-;;; `src/rewrite/multipat.rs`, which branches on both readings of a slot pair e-matching
-;;; left undecided.  The encoding HAS that branch: `refine-namings` enumerates the ways the
+;;; the Rust implementation from the PLDI 2025 paper.  The exact checked revision is in
+;;; `slotted/xmulti/Cargo.toml`: PR #46 plus the independently stacked weak-shape fix.
+;;; All registered comparisons ask its flattened `MultiPattern` matcher; the crate's
+;;; known-broken nested matcher is not an oracle.  `final_refine` in
+;;; `src/rewrite/multipat.rs` branches on both readings of a slot pair e-matching left
+;;; undecided.  The encoding HAS that branch: `refine-namings` enumerates the ways the
 ;;; match's slots can be partitioned and `(Idx ix)` picks one, which is the last step of
 ;;; every rule below.  Minting alone -- a fresh name differs from everything, so it takes
 ;;; only the "apart" reading -- loses matches the reference makes.
@@ -350,7 +351,7 @@
 ;;;     sdql's mult-assoc1:   (* (* ?a ?b) ?c)  =>  (* ?a (* ?b ?c))
 ;;;
 ;;; Every flattened nested pattern produces this shape, so it is the one that has to be
-;;; cheap, and 38 of sdql's 43 compiled rules are it or a longer chain of it.  It is also
+;;; cheap, and 38 of sdql's 44 compiled rules are it or a longer chain of it.  It is also
 ;;; where the per-atom step the rest of the file reuses first appears.  A compiler walks the
 ;;; atoms in a connected order -- that is compile time, not an order egglog evaluates the
 ;;; finished body in -- and for atom N it emits:
@@ -969,6 +970,24 @@
 ;;;
 ;;; `:naive` is not decoration.  `slotted-subst` extracts a term and adds the result back,
 ;;; so it both reads and writes tables, and a seminaive rule may not call it.
+;;;
+;;; HOW THE PRIMITIVE KNOWS THE AST.  Egglog erases equality-sort and container columns
+;;; to the same runtime `Id` type, and a binder marker is encoded as an edge to `(Var 0)`.
+;;; Guessing from row types would therefore treat the marker as an AST child, count it in
+;;; extraction cost, and substitute through it.  The node generator instead records the
+;;; complete physical schema in hidden Unit-valued `SlottedNodeLayout`,
+;;; `SlottedEdgeLayout`, and `SlottedBinderLayout` functions.  A binder row names its
+;;; marker edge, the child it covers, and, for generic `App2`, the head string that turns
+;;; those columns into a binder.  The primitive reloads and validates those facts on each
+;;; call; missing or ambiguous metadata is an error, not a heuristic fallback.  Containers
+;;; in source constructors are deliberately unsupported for now.
+;;;
+;;; That metadata is what makes substitution match `Bind<T>`: marker edges are node data,
+;;; not recursive children and not part of `AstSize`; a binder for `x` stops descent into
+;;; its covered child; and rebuilding refreshes a private binder before it can capture a
+;;; free slot of the replacement.  Cases E--G in `slotted/tests/sdql-beta.egg` pin capture
+;;; avoidance, shadowing, and the extraction-cost distinction, while
+;;; `slotted/encoding/subst.egg` checks the generic string-head discriminator directly.
 ;;;
 ;;; Covered by: `slotted/tests/sdql-beta.egg`, which runs the whole substitution on real
 ;;; terms.

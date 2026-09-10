@@ -1,3 +1,16 @@
+# Historical audit note (superseded)
+
+This is the September 3, 2026 point-in-time report that motivated several repairs. It
+is retained as provenance, not as a description of the current encoding or test corpus.
+The reported redundancy failure has since been fixed by the phased machinery and direct
+`ClassSlots` tracking; the scratch `tests/claude/*` paths and pass/fail totals below are
+not the current suite. See `slotted-user-rules.md`, `slotted/LANGUAGE.md`, and
+`slotted/check-slotted.py` for the maintained design, language, and executable coverage.
+The exact current Rust oracle revision and its scope are pinned in
+`slotted/xmulti/Cargo.toml`.
+
+## Original report
+
 **Found a redundancy bug, and it's unsound.** `tests/claude/34.egg` (control: `35.egg`) — same program, one slot literal different:
 
 ```

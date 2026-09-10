@@ -40,9 +40,12 @@ or the same thing the long way, which egglog also accepts:
 
 The sort a program declares **is** the carrier: a column in it is a slotted child, and
 the machinery is renamed to that sort rather than a `U` being invented beside it. Any
-other column — `i64`, `String` — is a payload and carries no slots. One sort per
-program; two are refused rather than mistranslated, since each needs its own
-`RenamesToLeader`, `Equated` and `ClassSlots`.
+other supported base column — currently `i64` or `String` — is a payload and carries no
+slots. One sort per program; two are refused rather than mistranslated, since each needs
+its own `RenamesToLeader`, `Equated` and `ClassSlots`. Container-valued constructor
+columns are outside this front end's current contract. In particular, `subst` rejects
+an erased runtime `Id` column that the generated layout has not identified as a slotted
+edge rather than guessing whether it is a container.
 
 `:binder` names the child positions whose slot the node binds, counting over the
 carrier columns only — so `Lam` binds the slot in its first child and `Let` in its
@@ -52,6 +55,11 @@ variant it goes after the columns, where egglog puts a variant's options.
 A binder covers the column *after* the one it binds, which is what wrapping a single
 child in `Bind` means. So `Let`'s bound slot is stripped from its third column and not
 from its first: `let x = x in f x` keeps the value's occurrence free.
+
+Several binder columns represent nested `Bind` layers around that one covered child,
+so they must be distinct, contiguous child positions immediately before it. Duplicate,
+negative, out-of-range, or non-contiguous `:binder` indices are rejected rather than
+given an accidental scope.
 
 egglog's own declaration options — `:cost`, `:unextractable`,
 `:internal-term-constructor` — are refused rather than ignored: extraction here would
@@ -101,6 +109,18 @@ one rule may mix them. A bare name that is a `let`-bound global means that globa
 bare name that is a constructor is a call — so a paren-less `Null` stays `(Null)` rather
 than becoming a variable that matches everything. `$x` is a slot literal the match solves
 for.
+
+There is one known lowering limitation for explicit slot occurrences. `MultiPattern`
+has one rule-global slot namespace, while the source syntax determines which binder
+declaration covers each occurrence. Thus the three printed `$x`s in
+`(Let $x $x $x)` mean “a free initializer slot, a new binder, and that binder's body
+occurrence,” not one global slot. The compiler currently preserves the spelling and
+can miss that match. Spelling the roles distinctly, `(Let $free $bound $bound)`, is the
+scope-preserving form; [issue #81](https://github.com/saulshanabrook/egglog-encoding/issues/81)
+tracks making the compiler do that internally while still projecting matches back to
+the names guards and right-hand sides use. This does not forbid an unconstrained
+pattern variable outside a binder from carrying the same printed slot, which is the
+behavior required by reference issue #48.
 
 **`$` is a slot; `#` is a global.** egglog spells a global `$name`, and this language
 cannot borrow that spelling, because `$0` is already a slot. So a global may be marked
@@ -218,6 +238,12 @@ nothing. `:name` names the rule.
 `subst` is the one right-hand-side head that is not a constructor. `(subst body $x t)`
 is `body[(var $x) := t]` — the reference's `b[x := t]`. It is a *call*, so there is
 nothing to build; `slotted/tests/sdql-beta.egg` explains what the compiler emits for it.
+The primitive extracts one smallest source term, performs capture-avoiding substitution,
+and adds the result back. Generated hidden layout facts distinguish real children from
+binder-marker edges, so markers add no extraction cost, a binder for `$x` shadows the
+substitution below its covered child, and a conflicting private binder is alpha-refreshed
+before it can capture a free slot of `t`. Cases E--G in that file pin all three properties;
+`slotted/encoding/subst.egg` shows the encoded calls and string-head discriminator.
 
 **`rewrite` is the only rule form.** egglog's `rule` and `birewrite` are not part of this
 language and the compiler rejects them rather than passing them through — write a

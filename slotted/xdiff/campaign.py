@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Run one of the fuzz drivers wide, many seeds at once, and total the answers.
 
-The harness runs `iso-fuzz` at 60 cases because it has to finish alongside eighteen
-other checks. Sixty is not a confidence statement, and treating it as one was the gap
-this exists to close: at 60 the sweep is clean, and the divergences below start at
-case 66.
+The harness keeps its CI sweep deliberately small; this command is for wider manual
+campaigns. The executable and reference revision come from the current checkout and
+`slotted/xmulti/Cargo.toml` respectively. Do not treat the historical measurements
+below as current results.
 
-WHAT A DEEP RUN FINDS (24000 cases, 48 seeds, `iso` mode), and WHICH ORACLE MATTERS.
+HISTORICAL RESULT (24000 cases, 48 seeds, `iso` mode).
 
-Against upstream b90adca, the oracle we pin, which HAS `final_refine`:
+Against the then-current upstream b90adca oracle with `final_refine`:
 
     23707/24000 isomorphic -- 278 divergences
 
@@ -17,18 +17,17 @@ Against upstream b90adca, the oracle we pin, which HAS `final_refine`:
        27  same nodes, the encoding has MORE classes: a union we did not make
        10  the encoding built MORE nodes: a rule fired on us, not on the reference
 
-    229 of the 278 are clearly ours. Against the PREVIOUS oracle -- PR #45 before
+    229 of the 278 were classified as encoding-side at the time. Against the previous
+    oracle -- PR #45 before
     `final_refine` landed -- the same 24000 cases gave 23976/24000 and 17 divergences,
     12 of them ours. Nothing in the encoding changed between those two numbers. The
     oracle got sharper and revealed a gap that was always there, so the jump from 12 to
     229 is the SIZE of the gap rather than a regression.
 
-    They are also not 278 bugs. Every one examined traced to the same cause, which
-    `connected_order` documents and `xdiff.FINAL_REFINE_GAP` explains in full: the
-    encoding compiles a pattern into a chain, a slot no earlier atom constrains is
-    MINTED, and the mint cannot be revisited. A fresh name differs from everything, so
-    the encoding only ever takes the "these slots are apart" branch. `final_refine`
-    takes both. `order-independence.py` isolates the same cause without any oracle.
+    These were not 278 independent bugs. The investigation led to connected atom
+    ordering and the current final `refine-namings` phase. Those mechanisms and their
+    mutation tests are documented in `slotted-user-rules.md`; this paragraph is the
+    before-measurement, not a statement that the current compiler still has that gap.
 
     The 39 shape-only divergences are the family the symmetry-generating unions
     exposed; before those existed the corpus had only identity groups and could not

@@ -2,16 +2,21 @@
 
 Companion to these runnable files:
 
+The sections below retain the chronology of bugs found while developing the encoding.
+Numbers explicitly described as “then-current” or “historical” are provenance, not
+today's result. Run `make slotted-check` for the current executable inventory and use
+the “Remaining limits” section for unresolved correctness boundaries.
+
 | file | what it is |
 | --- | --- |
 | `slotted/encoding/egraph-encoding-11.egg` | the machinery: union, congruence, redundancy, symmetry |
-| `slotted/tests/user-rules.egg` | the tutorial: one shape of user rule per section — M1–M11 — each stated as prose plus the single rule a compiler emits, and nothing else. All eleven are a real rewrite, from `sdql_rules()` or the paper's §4.1 array language, and each is exactly what `slotted-encoder.py` emits for it: `slotted/check-tutorial.py` compares every one against the encoder's output and allows only a renaming of the variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice. The shapes no rewrite produces on demand — a multi-rooted left-hand side, two mints in one match, a child wider than its class — are hand-built e-graphs in the fixture block of `slotted/tests/user-rules-tests.egg`, whose rules are still the encoder's output |
-| `slotted/tests/user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds the terms, schedules, assertions and counter-examples |
+| `slotted/encoding/user-rules.egg` | the tutorial: one shape of user rule per section — M1–M12 — each stated as prose plus the single rule a compiler emits. M1–M11 are live real rewrites from `sdql_rules()` or the paper's §4.1 array language; M12 quotes `beta` because making it live would mask another section's control. `slotted/check-tutorial.py` compares all twelve against the encoder's output and allows only a renaming of variables. M6 and M9 are the same rule (`eta`) at two atom orders, since the lead is a compile-time choice |
+| `slotted/encoding/user-rules-tests.egg` | the cases for it: it includes the tutorial, then adds terms, schedules, assertions, counter-examples, and the hand-built e-graphs for shapes no source rewrite produces on demand |
 | `slotted/LANGUAGE.md` | the slotted language as a reference: every form it adds to egglog and why, including the two kinds of equality and the example that separates them |
 | `slotted/slotted-egglog.py` | compiles a test written in the SLOTTED language — its own `(constructor ... :binder ...)` declarations, then terms, `rewrite`s and `(check (= a b))` — into a self-contained egglog program: the hand-written core, the machinery for exactly the constructors declared, and the compiled body. It includes no generated file, so nothing sits between a test and running it. Its `=` is COMPILED, not egglog's: `(RenamesToLeader f m l)` is `f = m*l`, and two terms are equal when ONE renaming reaches both from the leader -- Def. 6, two invocations agree when the renaming between them is a symmetry of the class. Landing in the same class by *some* renaming is weaker and is spelled `renaming-=`; the pair that separates them is two alpha-variants whose free slot is renamed, one class but not equal. `slotted/LANGUAGE.md` is the reference for the language |
 | `slotted/slotted-encoder.py` | the recipe as code: the machinery emitter, the term encoding and the rule compiler, which every generator below goes through |
 | `slotted/xdiff/xdiff.py` | differential tests against the reference implementation |
-| `slotted/languages/sdql.egg` | the paper's `sdql` language and all 43 of its rewrite rules, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-egglog.py` compiles the same file to run it; neither restates a rule |
+| `slotted/languages/sdql.egg` | the `sdql` language and all 44 active fine-grained rewrite rules from the pinned benchmark, in the SLOTTED language. `gen-sdql-rules.py` compiles them for the .egg tests and the differential harness, and `slotted-egglog.py` compiles the same file to run it; neither restates a rule. The paper artifact's separate workloads and rule sets are pinned by `slotted/check-paper-sdql.py` |
 | `slotted/languages/array.egg` | the same, for the paper's §4.1 array language and its 8 rules. `xarray.py` builds its rule objects from this file |
 | `slotted/tests/paper/` | the reference crate's own suites, in the SLOTTED language and standalone, one file per test there so the two diff side by side: `var-xy-eq-yz`, `fgh-transitive-symmetry`, `enode-collisions` (3.4), `figure-3`, `redundancy-orbit` (3.5 step 1) and `two-redundant-slots` (Def. 8) |
 | `slotted/tests/symmetry-tests.egg` | where a class's symmetry group comes from and what has to follow: closure, composition down a union chain, congruence to a parent, and matching a repeated pattern variable up to a symmetry |
@@ -112,8 +117,8 @@ it. A body no ordering can connect has to invent slots, and there the gap is rea
 
 It is tempting to read this as three separate cases — first atom, root known,
 children known — and that reading caused three of the four bugs listed at the end.
-`slotted/tests/user-rules.egg` had drifted back to it and has been brought into
-line; the counter-example under `M4` in `slotted/tests/user-rules-tests.egg` is an
+`slotted/encoding/user-rules.egg` had drifted back to it and has been brought into
+line; the counter-example under `M4` in `slotted/encoding/user-rules-tests.egg` is an
 e-graph where the two readings visibly disagree, the short one computing an *empty*
 renaming for a child that has a slot.
 The cases are only *which* constraints happen to exist:
@@ -1016,9 +1021,9 @@ Curated cases, and what each is for:
 | `S1`,`S1b` | the stored symmetries are closed, so a lookup finds a composite element |
 | `S2` | a symmetry and a redundancy in play at once |
 | `B1`–`B4` | binders: chaining through one, α-equivalence, the same slot literal on two binders |
-| `M1`,`M3` | shapes `slotted/tests/user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
+| `M1`,`M3` | shapes `slotted/encoding/user-rules.egg` teaches that nothing else covered: a swapped action, and one shared variable across two operators |
 
-`slotted/tests/user-rules.egg` is the readable form of this same recipe, so each of
+`slotted/encoding/user-rules.egg` is the readable form of this same recipe, so each of
 its sections names the case above that covers its shape. Keep the
 two in step — the hand-written file passing its own assertions only says it does
 what it expects, and it had drifted to the three-case reading once already. One
@@ -1533,7 +1538,7 @@ multiplicities -- finds **0 differences** on all 249 comparable generated cases.
 surplus alpha-variant row survives to the fixpoint. What the keying difference costs is
 transient rows during the run, not a different answer.
 
-### An upstream crash, found while modelling the class slot set
+### An upstream crash found while modelling the class slot set (historical, fixed)
 
 Looking at how the reference holds a class's slots turned up a panic in it. Shrinking
 a class whose symmetry group is non-trivial:
@@ -1559,14 +1564,14 @@ fixes the panic, and in the case above gives the right answer for a second reaso
 `orbit(0) = {0,1}`, so both slots are redundant, which is what the comment on that loop
 says should happen.
 
-The reference's suite is unchanged by it -- 105 pass before and after, with the same
-three pre-existing `redundancy_matching_bug` failures -- and our corpus still agrees
-43/43.
+The then-current reference suite was unchanged by it -- 105 pass before and after,
+with the same three failures known at that revision -- and the then-current corpus
+still agreed 43/43. These are historical measurements, not today's gate totals.
 
-The fix is part of PR #45 itself -- pushed to its head branch,
-`oflatt-claude/slotted-egraphs:multipat-subst-canonicalisation` -- so the oracle and the
-reference we claim to match are the same code, with no out-of-band patch to remember.
-It carries `tests/fgh/shrink_with_symmetry`, which reproduces the panic without it.
+The fix entered through PR #45 and remains in the exact reference revision now pinned
+by `slotted/xmulti/Cargo.toml`. It carries `tests/fgh/shrink_with_symmetry`, which
+reproduces the panic without it. The current oracle has an additional, separately
+stacked weak-shape fix; the next section is the source of truth for that composition.
 
 That test asserts the surviving slot count is what it is, not that it is optimal. One
 slot is redundant and the class is symmetric in the two, so a stronger shrink may be
@@ -1577,49 +1582,25 @@ settle it.
 
 ### Which slotted-egraphs is this compared against?
 
-Upstream `main`, pinned to `b90adca` in `slotted/xmulti/Cargo.toml` --
-a rev rather than a local checkout, so a CI runner can build the oracle. That is `main`
-after PR #45 was merged, and two things in it matter.
+`slotted/xmulti/Cargo.toml` is the source of truth. It pins an exact git revision rather
+than a local checkout, so CI and local runs ask the same oracle. The current revision is
+[reference PR #46](https://github.com/memoryleak47/slotted-egraphs/pull/46) plus the
+independently stacked
+[weak-shape fix](https://github.com/oflatt-claude/slotted-egraphs/pull/1). The latter
+repairs add/lookup normalisation when one printed slot name is both bound and free in
+an uncovered child; it does not change either matcher.
 
-The first is the fix PR #45 carried: `extend_subst` canonicalising the child
-`AppliedId` through the slot union-find. The second is newer and costs us matches --
-`final_refine`, which takes every slot pair e-matching left undecided and branches on
-BOTH readings, once with the slots unified and once with them apart. The encoding has
-no such branch: an unconstrained slot is minted, a fresh name differs from everything,
-so it only ever takes the "apart" one. Moving to this base took the deep sweep from 17
-divergences to 278, 229 of them ours, with nothing in the encoding changed -- the
-oracle got sharper and showed a gap that was always there. `FINAL_REFINE_GAP` in
-`slotted/xdiff/xdiff.py` pins the two curated cases that show it.
+The dependency enables the reference crate's `checks` feature, and `xmulti` calls
+`eg.check()` before reporting a partition, goal, or structured graph. Its serializer
+normalises each child `AppliedId` before writing both the class id and its map, refuses
+to emit a partial dump when a symmetry group exceeds the adapter's explicit six-slot
+limit, and reports that limit distinctly from a semantic disagreement.
 
-On PR #45's own contribution: `multipat.rs` is in `main` too, so the multipattern
-matcher is not new; what that PR added was the one-line fix.
-Without it a child bound after the matcher merges a freshened bound slot keeps the
-pre-merge name -- surviving into the returned `Subst` only when the child binding is
-the last thing to happen, so a single-atom pattern or the last child of the last atom.
-For a binder that means the body comes back over a *fresh* slot instead of the bound
-one, and the binding escapes.
-
-Six of the curated cases can tell the two apart, and the encoding agrees with the
-fixed one:
-
-| case | fixed | buggy |
-| --- | --- | --- |
-| `U1` | `[0,1,2][3]` | `[0,1][2][3]` |
-| `B3` | `[0,1][2]` | `[0,2][1]` |
-| `CD1` | `[0,1,3][2]` | `[0,1,2,3]` |
-| `CD2` | `[0][1,2][3]` | `[0,1,2][3]` |
-| `CD3` | `[0,2][1][3]` | `[0][1][2][3]` |
-| `CD4` | `[0,1][2][3]` | `[0][1][2][3]` |
-
-All four conditional cases are sensitive, which follows from the symptom: a slot
-condition asks about the body's slots, which is exactly what the bug corrupts. Under
-the buggy version `notin` wrongly succeeds, so `CD1` and `CD2` over-fire, and `in`
-wrongly fails, so `CD3` and `CD4` never fire at all.
-
-`slotted/xdiff/oracle-diff.py` runs the corpus through two oracle
-binaries and reports which cases separate them. Worth running whenever the reference
-is bumped: a case that stops distinguishing them has lost coverage, and a new
-disagreement is either a fix or a regression upstream.
+The rule sources are `.egg` files. Python is orchestration: it parses those rules and,
+for the newer substitution and scope regressions, their ground fixtures, renders the
+equivalent `MultiPattern` input for the Rust adapter, runs both implementations for the
+same number of rule rounds, and compares probe partitions or complete graph structure.
+It retains test metadata such as which terms are probes and what partition is expected.
 
 ### MultiPattern is the oracle contract
 
@@ -1725,23 +1706,25 @@ fact eight cases do.
 `binder-1st` is still caught only indirectly, by order-independence rather than by
 disagreeing with the reference. A direct witness would be better.
 
-### Not covered
+### Remaining limits
 
-* **Symmetry branching.** The reference's `unify` returns several states when two
-  invocations differ in two or more slots and more than one pairing is legal,
-  where a primitive returns one. `U1` builds the shape deliberately — two atoms
-  over a node whose slots are both redundant, so each lookup freshens them
-  independently — and both sides still agree. Two constructions tried, neither
-  discriminates, so the question is *open, not settled*: the encoding may be fine
-  here, or the observable may simply be too coarse to see it.
-* **Other action shapes.** Two are now generated: building a node, and equating
-  two variables (`E1`–`E3`), which is the union of two invocations egglog's own
-  `union` cannot express. Nothing exercises a right-hand side deeper than one
-  level, or the `Subst` form.
-* **Cost.** The one performance problem found turned out to be the minting policy
-  above, and no case in 250 now times out or fails to settle. That is not the same
-  as knowing the encoding is fast: nothing here is a benchmark, the terms are tiny,
-  and the machinery has known derive-and-delete pairs that do redundant work.
+* **Finite naming enumeration.** `refine-namings` now returns every admissible
+  partition it reaches, and every repeated occurrence gets an independent symmetry
+  witness. `carried-slot-refinement` and `repeated-pvar-symmetry` pin the two compiler
+  bugs that used to lose those alternatives. The implementation is still explicitly
+  bounded: the primitive caps its vector at 1024 and the core seeds only 64 `Idx`
+  values. Large patterns can therefore lose matches; this is a correctness ceiling,
+  not merely a performance knob.
+* **Source-to-MultiPattern scope lowering.** Explicit free and bound occurrences with
+  one printed spelling are not yet assigned distinct internal identities. The
+  `flat-binder-free` differential witness and native `sdql-binders.egg` case pin the
+  miss; issue #81 specifies the compiler fix and the harder shared-PVar boundary.
+* **Performance evaluation.** Deep right-hand sides are exercised by M11, and
+  capture-avoiding `subst` by the fixture-backed beta comparisons. The paper BATAX
+  source-to-target regression is also runnable, but it uses a goal-directed subset of
+  rules and is not a reproduction of the paper's Table 1/2 measurements. The fully
+  bound array-paper goal still times out under the short smoke budget. Tiny differential
+  cases therefore remain correctness evidence, not a scalability claim.
 
 ## Mistakes worth not repeating
 
@@ -1873,10 +1856,10 @@ this table too: each row is an argument about a shape, not about a site.
 
 ## Primitives
 
-What the encoding relies on. All of these were already here, ported from
+What the encoding relies on. The map operations began in
 [`memoryleak47/egglog@slotted-encoding2`](https://github.com/memoryleak47/egglog/tree/slotted-encoding2)
-and rewritten against this tree's `add_primitive!`, **except
-`find-mapping-total`**, which is new:
+and were rewritten against this tree's primitive APIs; total naming, exhaustive
+refinement, and binder-aware substitution are local additions:
 
 * `egglog/src/sort/map.rs`
   * `map-union` — partial-map union, fails on a conflicting key.
@@ -1899,6 +1882,19 @@ and rewritten against this tree's `add_primitive!`, **except
   * `find-mapping-total` — as above, extended to be total on a domain, inventing
     slots for the keys the constraints leave unnamed. `Map i64 i64` only, since
     inventing a slot needs the space ordered and unbounded above.
+* `egglog/src/sort/vec.rs`
+  * `refine-namings` — returns admissible quotients of the carried pattern slots,
+    respecting the explicit pattern-slot identity and each node's pairwise-distinct
+    slot group. The compiler reads that vector with the core's `Idx` relation. Both
+    sides are bounded as described under “Remaining limits”.
+* `egglog/src/sort/slotted_subst.rs`
+  * `slotted-subst` and `slotted-subst-frame` — the class and renaming halves of one
+    capture-avoiding extraction substitution. They read compiler-emitted hidden
+    `SlottedNodeLayout`, `SlottedEdgeLayout`, and `SlottedBinderLayout` facts rather
+    than guessing which erased `Id` columns are children. Binder markers are excluded
+    from traversal and extraction cost, shadowing stops descent, and conflicting
+    private binders are refreshed. The primitive rejects missing layout facts and
+    unsupported container columns.
 * `egglog/src/lib.rs` — `bool=`.
 * `egglog/src/sort/bool.rs` — `and` made variadic, like `or`.
 
@@ -1909,7 +1905,11 @@ and deliberately not reserved: reserving `compose` breaks
 Not ported: `shape2` (no consumer here), `has_delta` (a stub), and the `Vec i64`
 flavour of `find-mapping` (a different representation).
 
-## Open questions
+## Historical design questions and their recorded outcomes
+
+This section preserves questions in the order they were investigated. Some answers
+appear later in the same item or in the subsequent `ClassSlots` repair; it is not the
+current unresolved-issues list. That list is “Remaining limits” above.
 
 1. **Choice of first atom.** It must not be a binder (`C13`), and beyond that the
    choice decides how many atoms have to solve for a renaming. Probably pick the
@@ -1976,7 +1976,7 @@ flavour of `find-mapping` (a different representation).
    many rows no symmetry-joining rule can see and how many of those are α-variants
    of nothing visible. Worth running after any change to the maintenance rules.
 
-## Def. 4 is checked, and the encoding breaks it
+## A Def. 4 violation the comparison once missed (fixed)
 
 The reference asserts this outright, in `check_internal_applied_id`:
 
@@ -2044,11 +2044,11 @@ symmetry, and every violation goes:
 reachable through the action's other variables; `wide-kids` and `C15` are that gap,
 under "Do follower classes need self-loops at all?" above.
 
-## Machine-checked invariants
+## Earlier invariant probes, superseded by full graph validation
 
 Def. 4 — an edge's domain is exactly its child's slot set — used to be maintained by
-discipline alone. `slotted/xdiff/invariants.py` checks the half that is
-provable, plus the precondition `inverse` relies on:
+discipline alone. The first checker could establish only the half below, plus the
+precondition `inverse` relies on:
 
 * **An edge wider than its child.** An idempotent self-loop `s` on the child is a
   partial identity, so `child = s*child` and every slot outside `dom(s)` is
@@ -2064,9 +2064,11 @@ provable, plus the precondition `inverse` relies on:
 The narrow direction is not checkable this way, and is what `compose-total` now
 prevents where it was reachable.
 
-Across the corpus: 0 non-injective renamings, and one wide edge, on `X1`. It is
-built by the compiled action out of question 2's surviving too-wide loop, and it is
-inert — the slots it names are redundant for that child, so `m*c = c` either way.
-Both probes take a snapshot: they declare their rules in their own ruleset and run
-only that, because a relation keeps an observation after the row that caused it is
-deleted, which answers a question about history instead.
+Those counts describe the older partial probe. The current isomorphism reader validates
+the raw serialized encoding before constructing a graph: every represented value has
+one identity `ClassSlots` map; every edge domain equals its child's live slots; node
+live slots are contained in the node's free slots; renamings are bijective where the
+definition requires it; self-loops contain the identity and are already closed; and
+non-self `RenamesToLeader` links are path-consistent with the stored group. Missing,
+truncated, or malformed rows produce a hard `unreadable` verdict rather than a repaired
+graph or a skipped comparison. Direct positive and negative selftests pin each check.

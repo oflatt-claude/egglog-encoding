@@ -15,6 +15,15 @@
 ;;; class's canonical member through `RenamesToLeader` first.  The `slotted`
 ;;; machinery must also have populated `ClassSlots`, which is the exact public
 ;;; frame the primitive substitutes in.
+;;;
+;;; The node generator also supplies hidden Unit-valued `SlottedNodeLayout`,
+;;; `SlottedEdgeLayout`, and `SlottedBinderLayout` facts.  They identify every physical
+;;; edge, which binder-marker edge covers which child, and the optional string head that
+;;; activates a generic binder.  The primitive validates them instead of guessing from
+;;; runtime `Id` columns (where an equality-sort child and a container look alike).
+;;; Binder markers are therefore excluded from traversal and `AstSize`, shadowing stops
+;;; descent into the covered child, and rebuilding refreshes a private binder to avoid
+;;; capturing the replacement's free slots.  Source-language containers are unsupported.
 
 (include "slotted/encoding/egraph-encoding-11.egg")
 

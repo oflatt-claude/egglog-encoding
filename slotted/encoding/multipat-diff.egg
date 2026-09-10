@@ -1,5 +1,6 @@
-;;; Differential cases against the reference `multi_ematch`
-;;; (memoryleak47/slotted-egraphs, PR #45 @ e3efcdd).
+;;; Differential cases against the reference `multi_ematch` at the exact revision in
+;;; `slotted/xmulti/Cargo.toml` (PR #46 plus the stacked weak-shape fix).  The oracle
+;;; asks `MultiPattern`, not the known-broken nested matcher.
 ;;;
 ;;; The oracle lives in `slotted/xmulti`; `cargo run` from that
 ;;; directory reproduces the reference answers quoted below.  This file runs the

@@ -26,8 +26,10 @@
 ;;; are dropped. Correct for partial maps, wrong on an edge, where `compose-total` refuses.
 ;;;
 ;;; "The reference", below and throughout these files, is `memoryleak47/slotted-egraphs` --
-;;; the Rust implementation from Schneider et al., Slotted E-Graphs, PLDI 2025 -- on its
-;;; PR #45, which is the branch this encoding is differentially tested against.
+;;; the Rust implementation from Schneider et al., Slotted E-Graphs, PLDI 2025.  The
+;;; exact checked revision lives in `slotted/xmulti/Cargo.toml`: PR #46 plus the stacked
+;;; weak-shape fix.  Every registered oracle query uses `MultiPattern`; the known-broken
+;;; nested matcher is not used as ground truth.
 
 
 ;; A renaming is a partial injection on slots.

@@ -101,7 +101,7 @@ def main():
         cmd = [sys.executable, str(COMPILE), str(src), "--run"]
         # A library's rules are already snapshotted by the generator that emits them
         # into `target/slotted/`, so snapshotting its compiled program too
-        # would commit the same 43 rules twice.
+        # would commit the same language rules twice.
         if args.emit and src.name not in libs:
             # `--own-only`: the machinery and any included library are snapshotted by
             # the generators that emit them, so a test's snapshot is its own compiled
