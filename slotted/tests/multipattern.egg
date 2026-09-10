@@ -326,6 +326,52 @@
 
 (check (not-holds lone App))
 (pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; An ordinary-child slot literal participates in final slot refinement.
+;;;
+;;; All three inner nodes are in the slotless `n` class, so their child slots are
+;;; redundant.  The rule can satisfy `(free $x a2)` only by considering the `$x`
+;;; carried by the ordinary `Add` child and identifying `a2`'s redundant slot with
+;;; it.  Binder-marker literals are deliberately different: they are node data and
+;;; are not carried by the substitution merely because the pattern writes them.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Root r) (Fired)
+         :when ((= r (Add $x b0))
+                (= r (Mul a1 b1))
+                (= r (Pair a2 b2))
+                (free $x a2))
+         :name "carried-slot-refinement")
+(let n99 (Num 99))
+(let redundant-add (Add $0 $1))
+(let redundant-mul (Mul $2 $3))
+(let redundant-pair (Pair $4 $5))
+(union redundant-add n99)
+(union redundant-mul n99)
+(union redundant-pair n99)
+(let carried-slot-root (Root n99))
+(run 4)
+(check (= carried-slot-root (Fired)))
+(pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Every occurrence of a repeated pattern variable gets its own symmetry choice.
+;;;
+;;; The union gives the shared two-slot `Add` class a swap symmetry.  In the `Store`
+;;; row the three invocations of `x` need identity, swap, identity respectively.
+;;; Reusing one symmetry witness for all three occurrences makes the rule miss.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Store x x x) (Root x) :name "repeated-pvar-symmetry")
+(let add01 (Add $0 $1))
+(let add10 (Add $1 $0))
+(union (Add $2 $3) (Add $3 $2))
+(let repeated-symmetry (Store add01 add10 add01))
+(run 4)
+(check (= repeated-symmetry (Root add01)))
+(pop)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A PAYLOAD COLUMN in a pattern -- a node argument carrying no slots, which is the
 ;;; reference's word for it. egglog matches on one or binds it, and so does this:

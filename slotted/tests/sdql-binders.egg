@@ -12,6 +12,7 @@
 (constructor Sing (U U) U)
 (constructor Sum (U U U U) U :binder 1 2)
 (constructor Merge (U U U U U U) U :binder 2 3 4)
+(constructor Let (U U U) U :binder 1)
 (constructor Null () U)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -158,5 +159,42 @@
 
 ;; $9 is neither bound slot, so the class depends on it and on nothing else
 (check (slots free $9))
+
+(pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Flattening must preserve the distinct lexical identities of one free and one
+;;; bound use of the same surface spelling.
+;;;
+;;; `let x = x in x` has TWO slots: the value's `x` is outside the binder, while the
+;;; body's `x` is bound.  MultiPattern itself has a global slot namespace, so spelling
+;;; those roles differently is the scope-preserving lowering and matches the term.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Let $free $bound $bound)
+         Null
+         :name "binder-free-distinct-spellings")
+(let distinct-spellings (Let $2 $1 $1))
+(run 1)
+(check (= distinct-spellings Null))
+
+(pop)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Known compiler limitation: preserving the source spelling verbatim collapses
+;;; those two lexical roles onto one global MultiPattern slot.  They are distinct
+;;; edges in the same encoded e-node, so the required renaming would be non-injective
+;;; and the match is missed.  Flip this expected failure when the front end carries
+;;; lexical slot identities through flattening.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (Let $x $x $x)
+         Null
+         :name "binder-free-same-spelling-known-limit")
+(let same-spelling (Let $2 $1 $1))
+(run 1)
+(fail (check (= same-spelling Null)))
 
 (pop)
