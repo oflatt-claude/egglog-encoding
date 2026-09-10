@@ -19,10 +19,10 @@ The two sides:
               generated artifact and not a re-derivation of it.
 
 `beta` is compiled too. Its right-hand side becomes `slotted-subst` plus the frame
-plumbing needed to return an invocation rather than only an e-class. The focused
-known-encoding-limitations mode pins capture, extraction, and lexical-flattening
-divergences so they remain visible without making the ordinary agreement suite green
-on a known-wrong answer.
+plumbing needed to return an invocation rather than only an e-class. Capture,
+shadowing, and extraction-cost regressions run in the ordinary agreement suite. The
+focused known-encoding-limitations mode pins the remaining scope-erasing flattening
+divergence without making that suite green on a known-wrong answer.
 
 Usage:
     ./xsdql.py                every case: each rule firing, and each guard blocking
@@ -828,6 +828,7 @@ def cases():
 
     out.extend(binder_collision_cases())
     out.extend(compiler_regression_cases())
+    out.extend(substitution_regression_cases())
     return out
 
 
@@ -858,19 +859,12 @@ def binder_collision_cases():
     ]
 
 
-def known_encoding_limitations():
-    """Small witnesses for semantic gaps that must not be mistaken for coverage.
-
-    Each case pins both partitions. Agreement is reported as stale rather than as a
-    pass: these belong in the ordinary differential suite once the encoding implements
-    the reference behavior.
-    """
+def substitution_regression_cases():
+    """Binder-aware extraction/substitution cases ported from former divergences."""
     ref_subst = "[0,1][2] missing[[]]"
-    enc_subst = "[0,2][1] missing[[]]"
 
     # Capture avoidance must refresh the lambda's private slot, not the free slot in
-    # the substituted term. The primitive currently has only flat edge/class pairs and
-    # cannot tell which edge is a binder marker.
+    # the substituted term.
     capture = ("let", V(0), 1, ("lambda", 0, ("add", V(1), V(0))))
     capture_avoiding = ("lambda", 2, ("add", V(0), V(2)))
     captured = ("lambda", 0, ("add", V(0), V(0)))
@@ -880,28 +874,24 @@ def known_encoding_limitations():
             RULES["beta"],
             [capture],
             [capture, capture_avoiding, captured],
-            enc_subst,
+            ref_subst,
             rounds=2,
-            ref_want=ref_subst,
-            why="slotted-subst does not know which child edges carry bound names",
         )
     ]
 
     # A nested binder for the same slot shadows the outer substitution target. The
-    # flat encoding walks its marker edge as if it were an ordinary AST child and
-    # consequently substitutes below a scope where the reference stops.
+    # primitive must leave the covered subtree alone.
     shadow_source = ("let", ("num", 1), 0, ("lambda", 0, V(0)))
     shadow_result = ("lambda", 0, V(0))
+    pierced_result = ("lambda", 0, ("num", 1))
     out.append(
         Case(
             "subst-shadowed-target",
             RULES["beta"],
             [shadow_source],
-            [shadow_source, shadow_result],
-            "[0][1] missing[[]]",
+            [shadow_source, shadow_result, pierced_result],
+            FIRED,
             rounds=2,
-            ref_want="[0,1] missing[[]]",
-            why="slotted-subst descends through a binder that shadows its target",
         )
     )
 
@@ -909,7 +899,8 @@ def known_encoding_limitations():
     # body, and the reference's ExtractionSubst would choose it too: a Bind slot is
     # data in its enclosing e-node, not an AST child, so its costs are 3 versus 4. In
     # the encoding each binder is another edge to Var; counting those markers as
-    # children reverses the costs to 5 versus 4 and therefore the result beta builds.
+    # children used to reverse the costs to 5 versus 4 and therefore the result beta
+    # built. Binder layout metadata now keeps marker edges out of AstSize.
     body_with_two_binders = ("sum", ("null",), 2, 3, V(1))
     body_without_binders = ("add", ("unique", V(1)), ("null",))
     cost_source = ("let", ("num", 0), 1, body_with_two_binders)
@@ -921,18 +912,34 @@ def known_encoding_limitations():
             RULES["beta"],
             [cost_source],
             [cost_source, cost_reference, cost_encoding],
-            enc_subst,
+            ref_subst,
             rounds=2,
-            ref_want=ref_subst,
-            why="slotted-subst counts binder-marker Var edges as extracted AST children",
             unions=[(body_with_two_binders, body_without_binders)],
         )
     )
+    return out
 
-    # Surface binders must be alpha-resolved before entering MultiPattern's global
-    # slot namespace. The reference atoms below correctly give the binder and its
-    # covered body a private spelling while keeping the uncovered value's `$x` free.
-    # The compiler currently emits the naive one-name atoms, so it misses the match.
+
+def known_encoding_limitations():
+    """Small witnesses for semantic gaps that must not be mistaken for coverage.
+
+    Each case pins both partitions. Agreement is reported as stale rather than as a
+    pass: these belong in the ordinary differential suite once the encoding implements
+    the reference behavior.
+    """
+    out = []
+
+    # MultiPattern's slot tokens live in one rule-global namespace, while the slotted
+    # source language gives a binder and its covered child a lexical identity. In
+    # `let x = x in x`, the value's x is free and the body's x is bound despite their
+    # shared surface spelling. The reference atoms below are still a MultiPattern;
+    # they merely perform the scope-preserving lowering first by giving the binder and
+    # covered body a private token. The compiler currently preserves the spelling and
+    # therefore asks one e-node renaming to identify its distinct free and bound slots.
+    #
+    # This does not prohibit the behavior Rudi called out in issue #48: an
+    # unconstrained pvar outside a binder may carry the same printed slot. It is only
+    # about two explicit slot occurrences whose lexical roles the source already says.
     scoped_pattern = ("let", "$x", "$x", "$x")
     root, naive_atoms = slotenc.flatten(LANG, scoped_pattern)
     _, reference_atoms = slotenc.flatten(LANG, ("let", "$x", "$__bound0", "$__bound0"))
@@ -959,7 +966,10 @@ def known_encoding_limitations():
             "[0][1] missing[[]]",
             rounds=2,
             ref_want="[0,1] missing[[]]",
-            why="the compiler does not alpha-resolve explicit binder/free slot collisions before flattening",
+            why=(
+                "the compiler erases the distinct lexical identities of explicit "
+                "free and bound occurrences with one spelling"
+            ),
         )
     )
 

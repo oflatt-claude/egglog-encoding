@@ -269,7 +269,7 @@ CHECKS = [
         # accepting a previously wrong answer.
         "known-encoding-limitations",
         ("slotted/xdiff/xsdql.py", "known-encoding-limitations"),
-        ratio(r"(\d+)/(\d+) known encoding limitations reproduced", 4),
+        ratio(r"(\d+)/(\d+) known encoding limitations reproduced", 1),
         False,
         True,
     ),
@@ -417,14 +417,14 @@ CHECKS = [
         False,
         True,
     ),
-    ("sdql", ("slotted/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 24), False, True),
+    ("sdql", ("slotted/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 27), False, True),
     # The stronger SDQL check: a witnessed isomorphism, not just the probe partition.
-    # Four checked encoding divergences live in their explicit limitation mode rather
-    # than weakening this successful-case floor.
+    # The remaining checked encoding divergence lives in its explicit limitation mode
+    # rather than weakening this successful-case floor.
     (
         "sdql-iso",
         ("slotted/xdiff/xsdql.py", "iso"),
-        ratio(r"(\d+)/(\d+) isomorphic", 24),
+        ratio(r"(\d+)/(\d+) isomorphic", 27),
         False,
         True,
     ),

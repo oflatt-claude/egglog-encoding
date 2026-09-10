@@ -25,7 +25,11 @@
 
 (constructor Let (U U U) U :binder 1)
 (constructor Add (U U) U)
+(constructor Lambda (U U) U :binder 0)
+(constructor Unique (U) U)
+(constructor Sum (U U U U) U :binder 1 2)
 (constructor Num (i64) U)
+(constructor Null () U)
 
 (rewrite (Let t $x body) (subst body $x t) :name "beta")
 
@@ -81,4 +85,62 @@
 (let want (Add (Num 0) $9))
 (run 2)
 (check (= d want))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; E: substitution is capture-avoiding below a nested binder
+;;;
+;;;     let $1 = $0 in (lambda $0. ($1 + $0))
+;;;       = lambda $2. ($0 + $2), not lambda $0. ($0 + $0)
+;;;
+;;; `$2` is only one representative of the answer: binder slots are private, so
+;;; the equality check accepts any consistently fresh alpha-renaming.  The negative
+;;; check is what pins that the replacement's free `$0` was not captured.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(let e (Let $0 $1 (Lambda $0 (Add $1 $0))))
+(let capture-avoiding (Lambda $2 (Add $0 $2)))
+(let captured (Lambda $0 (Add $0 $0)))
+(run 2)
+(check (= e capture-avoiding))
+(check (!= e captured))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; F: an inner binder shadows the outer substitution target
+;;;
+;;;     let $0 = 1 in (lambda $0. $0)   =   lambda $7. $7
+;;;
+;;; The particular spelling `$7` is immaterial.  Substituting through the lambda
+;;; instead would produce the constant body, which the negative check rejects.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(let f (Let (Num 1) $0 (Lambda $0 $0)))
+(let shadowed (Lambda $7 $7))
+(let pierced (Lambda $7 (Num 1)))
+(run 2)
+(check (= f shadowed))
+(check (!= f pierced))
+(pop)
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; G: binder markers are data and do not contribute to extraction cost
+;;;
+;;; The unioned bodies have reference AstSize costs 3 and 4 respectively.  Counting
+;;; `Sum`'s two binder-marker Vars as children reverses that choice (5 versus 4), so
+;;; beta would build `wrong` instead of `want`.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(let with-binders (Sum (Null) $2 $3 $1))
+(let without-binders (Add (Unique $1) (Null)))
+(union with-binders without-binders)
+(let g (Let (Num 0) $1 with-binders))
+(let want (Sum (Null) $2 $3 (Num 0)))
+(let wrong (Add (Unique (Num 0)) (Null)))
+(run 2)
+(check (= g want))
+(check (!= g wrong))
 (pop)

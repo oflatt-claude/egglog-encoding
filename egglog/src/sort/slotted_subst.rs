@@ -6,12 +6,11 @@
 //! `(slots(body) \ {x}) ∪ im(t_ren)`.
 //!
 //! A slotted node's children occupy two columns each — a `Renaming` naming the
-//! child's slots in the node's frame, then the child class. The current primitive
-//! infers those pairs from runtime column types and values. That is adequate for the
-//! generated languages currently using it, but is not a complete schema: equality
-//! sorts and containers both appear as id columns, so a renaming-valued payload
-//! followed by an equality-sort payload can be misclassified. Compiler-emitted edge
-//! layout metadata is required before this primitive is a general API.
+//! child's slots in the node's frame, then the child class. The compiler publishes
+//! the complete physical node and edge layout in hidden Unit-valued functions, so
+//! this primitive never guesses which erased `Id` columns are edges. Input-language
+//! container columns are outside the slotted front end's current contract; the
+//! metadata nevertheless makes every supported constructor layout explicit.
 //!
 //! # One term, not a sub-e-graph
 //!
@@ -26,22 +25,15 @@
 //! than looping. A primitive that returns nothing from an *action* is a program
 //! error in egglog, so that is what the caller sees.
 //!
-//! # Known binder limitation
+//! # Binders
 //!
-//! The encoded table schema does not tell this primitive which edge is a binder
-//! marker or which later edge that binder covers. It consequently treats markers
-//! as ordinary AST children: substitution can descend through a binder that shadows
-//! `x`, a free slot of `t_ren` can be captured, and marker nodes contribute to the
-//! extraction cost.
-//!
-//! This does **not** match the reference representation. There, `Bind<T>` stores its
-//! slot as data in the enclosing e-node rather than as a child, and insertion gives
-//! private slots fresh names. The reference's structural substitution can therefore
-//! rely on invariants that the flattened marker-edge representation does not retain.
-//! `slotted/xdiff/xsdql.py known-encoding-limitations` pins exact differential
-//! witnesses for capture, shadowing, and the resulting extraction-cost reversal.
-//! A sound repair needs compiler-emitted node/edge/binder layout metadata; choosing
-//! a different `t_ren` at the call site is not sufficient.
+//! Binder metadata identifies each marker edge and the one child edge it covers.
+//! Markers are node data rather than AST children: they contribute no extraction
+//! cost and are never traversed as terms. Rebuilding alpha-refreshes their private
+//! names and changes only their covered edge. That both stops substitution below a
+//! binder which shadows `x` and prevents a free slot of the replacement from being
+//! captured, matching the reference representation's `Bind<T>` and fresh private
+//! slots.
 //!
 //! # `Context::Full`
 //!
@@ -54,8 +46,9 @@
 
 use super::*;
 use crate::exec_state::RegistrySealed;
+use egglog_bridge::{TableAction, TableKind};
 use hashbrown::HashMap;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The name of the primitive, as written in an egglog program.
 pub const SLOTTED_SUBST: &str = "slotted-subst";
@@ -74,30 +67,61 @@ type Ren = BTreeMap<Slot, Slot>;
 /// `0 -> s`.
 const VAR_SLOT: Slot = 0;
 
-/// One column of an e-node, after the edge columns have been paired with the
-/// children they name.
+const NODE_LAYOUT: &str = "SlottedNodeLayout";
+const EDGE_LAYOUT: &str = "SlottedEdgeLayout";
+const BINDER_LAYOUT: &str = "SlottedBinderLayout";
+const CLASS_SLOTS: &str = "ClassSlots";
+
+/// One child edge, at its physical renaming column in the constructor.
 #[derive(Clone, Debug)]
-enum Col {
-    /// Carries no slots; copied through unchanged.
-    Payload(Value),
-    /// A child class and the renaming carrying its slots into the node's frame.
-    Edge { ren: Ren, child: Value },
+struct Edge {
+    col: usize,
+    ren: Ren,
+    child: Value,
+}
+
+/// One active binder in an e-node row.
+#[derive(Clone, Copy, Debug)]
+struct Binder {
+    marker: usize,
+    covered: usize,
 }
 
 /// One e-node, ready to be rebuilt in another frame.
 #[derive(Clone, Debug)]
 struct Node {
     ctor: String,
-    cols: Vec<Col>,
+    args: Vec<Value>,
+    edges: Vec<Edge>,
+    binders: Vec<Binder>,
 }
 
 impl Node {
     fn children(&self) -> impl Iterator<Item = Value> + '_ {
-        self.cols.iter().filter_map(|col| match col {
-            Col::Edge { child, .. } => Some(*child),
-            Col::Payload(_) => None,
-        })
+        self.edges
+            .iter()
+            .filter(|edge| !self.binders.iter().any(|binder| binder.marker == edge.col))
+            .map(|edge| edge.child)
     }
+}
+
+#[derive(Clone, Debug)]
+struct BinderLayout {
+    marker: usize,
+    covered: usize,
+    discriminator: Option<(usize, Value)>,
+}
+
+#[derive(Clone, Debug)]
+struct Layout {
+    arity: usize,
+    edges: Vec<usize>,
+    binders: Vec<BinderLayout>,
+}
+
+#[derive(Default)]
+struct Layouts {
+    constructors: HashMap<String, Layout>,
 }
 
 /// The e-nodes reachable from a root, with the smallest-term choice for each
@@ -127,6 +151,41 @@ fn image(m: &Ren) -> Ren {
     m.values().map(|v| (*v, *v)).collect()
 }
 
+fn rename_image(m: &mut Ren, from: Slot, to: Slot) {
+    for value in m.values_mut() {
+        if *value == from {
+            *value = to;
+        }
+    }
+}
+
+/// Deterministic alpha-fresh names for one primitive invocation.
+///
+/// Both result halves perform the rebuild independently, so freshness cannot use a
+/// global counter: the class-producing and frame-producing calls must choose the same
+/// names. The smallest nonnegative name absent from the extracted term, its ambient
+/// frames, and the replacement is stable across both calls.
+struct Fresh {
+    used: BTreeSet<Slot>,
+    next: Slot,
+}
+
+impl Fresh {
+    fn new(used: BTreeSet<Slot>) -> Self {
+        Self { used, next: 0 }
+    }
+
+    fn take(&mut self) -> Option<Slot> {
+        loop {
+            let candidate = self.next;
+            self.next = self.next.checked_add(1)?;
+            if self.used.insert(candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+}
+
 /// Substitute `t_ren * t` for the variable at slot `x` of `body`'s frame.
 ///
 /// `var` is the class every variable lives in; `x` names the slot in `body`'s
@@ -142,24 +201,33 @@ fn substitute(
     var: Value,
     t_ren: &Ren,
     t: Value,
-) -> Option<(Value, Ren)> {
-    let terms = collect_terms(state, body);
-    let root = terms.best.get(&body).copied()?;
+) -> Result<Option<(Value, Ren)>, String> {
+    let layouts = Layouts::load(state)?;
+    let terms = collect_terms(state, body, var, &layouts)?;
+    if !terms.best.contains_key(&body) {
+        return Ok(None);
+    }
 
-    // `body` is spelled in its own frame, so the root renaming is the identity
-    // on its slots. `var`'s slot set is fixed by the primitive's contract, and
-    // is not visible in its e-node.
-    let mut frame: Ren = terms.nodes[&body][root]
-        .cols
-        .iter()
-        .filter_map(|col| match col {
-            Col::Edge { ren, .. } => Some(image(ren)),
-            Col::Payload(_) => None,
-        })
-        .flatten()
-        .collect();
-    if body == var {
-        frame.insert(VAR_SLOT, VAR_SLOT);
+    // A class can hold nodes with redundant slots, so the chosen node's edge
+    // images are only an upper bound. `ClassSlots` is the encoding's exact public
+    // frame and is therefore required at the root.
+    let frame = class_slots_if_present(state, body)?
+        .ok_or_else(|| format!("{CLASS_SLOTS} has no row for the substitution body"))?;
+    if frame.iter().any(|(from, to)| from != to) {
+        return Err(format!(
+            "{CLASS_SLOTS} returned a non-identity slot set for {body:?}: {frame:?}"
+        ));
+    }
+
+    let mut used = BTreeSet::from([x]);
+    used.extend(frame.keys().chain(frame.values()).copied());
+    used.extend(t_ren.keys().chain(t_ren.values()).copied());
+    for nodes in terms.nodes.values() {
+        for node in nodes {
+            for edge in &node.edges {
+                used.extend(edge.ren.keys().chain(edge.ren.values()).copied());
+            }
+        }
     }
 
     let mut rebuild = Rebuild {
@@ -169,8 +237,9 @@ fn substitute(
         t_ren: t_ren.clone(),
         t,
         memo: HashMap::new(),
+        fresh: Fresh::new(used),
     };
-    rebuild.go(state, body, frame)
+    Ok(rebuild.go(state, body, frame))
 }
 
 struct Rebuild {
@@ -180,6 +249,7 @@ struct Rebuild {
     t_ren: Ren,
     t: Value,
     memo: HashMap<(Value, Ren), (Value, Ren)>,
+    fresh: Fresh,
 }
 
 impl Rebuild {
@@ -202,18 +272,47 @@ impl Rebuild {
         // The chosen e-node's cost strictly exceeds its children's, so the
         // recursion terminates even where the e-graph is cyclic.
         let node = self.terms.nodes[&c][*self.terms.best.get(&c)?].clone();
-        let mut args: Vec<Value> = Vec::with_capacity(node.cols.len());
+        let mut args = node.args.clone();
         let mut slots = Ren::new();
-        for col in &node.cols {
-            match col {
-                Col::Payload(v) => args.push(*v),
-                Col::Edge { ren, child } => {
-                    let (child, ren) = self.go(state, *child, carry(&m, ren))?;
-                    slots.extend(image(&ren));
-                    args.push(intern(state, &ren));
-                    args.push(child);
+
+        // Binder markers are data, not AST children. Give every active binder a
+        // fresh private name, and apply that alpha-renaming only to the edge it
+        // covers. An uncovered sibling using the old spelling remains free.
+        let mut refreshed = Vec::with_capacity(node.binders.len());
+        for binder in &node.binders {
+            let marker = node.edges.iter().find(|edge| edge.col == binder.marker)?;
+            let old = *marker.ren.get(&VAR_SLOT)?;
+            let fresh = self.fresh.take()?;
+            let marker_ren = BTreeMap::from([(VAR_SLOT, fresh)]);
+            args[binder.marker] = intern(state, &marker_ren);
+            args[binder.marker + 1] = self.var;
+            refreshed.push((*binder, old, fresh));
+        }
+
+        for edge in &node.edges {
+            if refreshed
+                .iter()
+                .any(|(binder, _, _)| binder.marker == edge.col)
+            {
+                continue;
+            }
+
+            let mut child_frame = carry(&m, &edge.ren);
+            for (binder, old, fresh) in &refreshed {
+                if binder.covered == edge.col {
+                    rename_image(&mut child_frame, *old, *fresh);
                 }
             }
+            let (child, ren) = self.go(state, edge.child, child_frame)?;
+            let mut child_slots = image(&ren);
+            for (binder, _, fresh) in &refreshed {
+                if binder.covered == edge.col {
+                    child_slots.remove(fresh);
+                }
+            }
+            slots.extend(child_slots);
+            args[edge.col] = intern(state, &ren);
+            args[edge.col + 1] = child;
         }
         let out = match state.add(&node.ctor, RawValues(args)) {
             Ok(out) => out,
@@ -222,6 +321,14 @@ impl Rebuild {
                 return None;
             }
         };
+        match class_slots_if_present(state, out) {
+            Ok(Some(existing)) => slots.retain(|slot, _| existing.contains_key(slot)),
+            Ok(None) => {}
+            Err(err) => {
+                log::error!("{SLOTTED_SUBST}: reading rebuilt class slots: {err}");
+                return None;
+            }
+        }
         self.memo.insert((c, m), (out, slots.clone()));
         Some((out, slots))
     }
@@ -245,8 +352,12 @@ fn intern(state: &mut FullState<'_, '_>, ren: &Ren) -> Value {
 // One `eclass_enodes` call per reachable class, and that scans every
 // constructor table: an output-column index, or one grouped pass over every
 // table, would replace this loop without changing the result.
-fn collect_terms(state: &FullState<'_, '_>, root: Value) -> Terms {
-    let mut schemas: HashMap<String, Option<Schema>> = HashMap::new();
+fn collect_terms(
+    state: &FullState<'_, '_>,
+    root: Value,
+    var: Value,
+    layouts: &Layouts,
+) -> Result<Terms, String> {
     let mut nodes: HashMap<Value, Vec<Node>> = HashMap::new();
     let mut stack = vec![root];
     while let Some(eclass) = stack.pop() {
@@ -254,25 +365,25 @@ fn collect_terms(state: &FullState<'_, '_>, root: Value) -> Terms {
             continue;
         }
         let mut rows: Vec<(String, Vec<Value>)> = Vec::new();
-        if let Err(err) = state.eclass_enodes(eclass, |enode| {
-            if !enode.subsumed {
-                rows.push((enode.name.to_owned(), enode.children.to_vec()));
-            }
-        }) {
-            log::error!("{SLOTTED_SUBST}: reading the e-nodes of {eclass:?}: {err}");
-        }
+        state
+            .eclass_enodes(eclass, |enode| {
+                if !enode.subsumed {
+                    rows.push((enode.name.to_owned(), enode.children.to_vec()));
+                }
+            })
+            .map_err(|err| format!("reading the e-nodes of {eclass:?}: {err}"))?;
         let parsed: Vec<Node> = rows
             .into_iter()
-            .filter_map(|(ctor, children)| parse_node(state, &mut schemas, ctor, &children))
-            .collect();
+            .map(|(ctor, children)| parse_node(state, layouts, var, ctor, &children))
+            .collect::<Result<_, _>>()?;
         stack.extend(parsed.iter().flat_map(Node::children));
         nodes.insert(eclass, parsed);
     }
 
-    Terms {
+    Ok(Terms {
         best: cheapest(&nodes),
         nodes,
-    }
+    })
 }
 
 /// The e-node rooting each class's smallest term, by term size. A class with no
@@ -314,90 +425,380 @@ fn cheapest(nodes: &HashMap<Value, Vec<Node>>) -> HashMap<Value, usize> {
     }
 }
 
-/// A constructor's key column types, plus whether its output column is an
-/// e-class.
-struct Schema {
-    keys: Vec<ColumnTy>,
-    eq_output: bool,
-}
-
-/// Pair up an e-node's edge and child columns; `None` for a row that is not a
-/// slotted node.
+/// Decode a constructor row from the compiler-emitted physical layout.
 fn parse_node(
     state: &FullState<'_, '_>,
-    schemas: &mut HashMap<String, Option<Schema>>,
+    layouts: &Layouts,
+    var: Value,
     ctor: String,
     children: &[Value],
-) -> Option<Node> {
-    let schema = schemas
-        .entry(ctor.clone())
-        .or_insert_with(|| schema_of(state, &ctor))
-        .as_ref()?;
-    // A relation is a constructor table too, but its output column is a unit
-    // rather than an e-class, so its rows are not e-nodes.
-    if !schema.eq_output || schema.keys.len() != children.len() {
-        return None;
+) -> Result<Node, String> {
+    let layout = layouts
+        .constructors
+        .get(&ctor)
+        .ok_or_else(|| format!("reachable constructor {ctor} has no {NODE_LAYOUT} row"))?;
+    if layout.arity != children.len() {
+        return Err(format!(
+            "constructor {ctor} has {} runtime inputs but metadata says {}",
+            children.len(),
+            layout.arity
+        ));
     }
 
-    let mut cols = Vec::new();
-    let mut i = 0;
-    while i < children.len() {
-        match renaming_at(state, &schema.keys, children, i) {
-            Some(ren) => {
-                cols.push(Col::Edge {
-                    ren,
-                    child: children[i + 1],
-                });
-                i += 2;
+    let mut edges = Vec::with_capacity(layout.edges.len());
+    for &col in &layout.edges {
+        edges.push(Edge {
+            col,
+            ren: decode_renaming(state, children[col])?,
+            child: children[col + 1],
+        });
+    }
+
+    let mut binders = Vec::new();
+    for binder in &layout.binders {
+        if binder
+            .discriminator
+            .is_some_and(|(col, expected)| children[col] != expected)
+        {
+            continue;
+        }
+        let marker = edges
+            .iter()
+            .find(|edge| edge.col == binder.marker)
+            .expect("validated binder marker edge");
+        if marker.child != var || marker.ren.len() != 1 || !marker.ren.contains_key(&VAR_SLOT) {
+            return Err(format!(
+                "constructor {ctor} binder marker at column {} must be {{0 -> slot}} * var",
+                binder.marker
+            ));
+        }
+        binders.push(Binder {
+            marker: binder.marker,
+            covered: binder.covered,
+        });
+    }
+
+    Ok(Node {
+        ctor,
+        args: children.to_vec(),
+        edges,
+        binders,
+    })
+}
+
+fn decode_renaming(state: &FullState<'_, '_>, value: Value) -> Result<Ren, String> {
+    let map = state
+        .value_to_container::<MapContainer>(value)
+        .ok_or_else(|| format!("metadata marks {value:?} as a Renaming, but it is not a Map"))?;
+    if map.rebuilds_contents() {
+        return Err("a slotted edge Renaming may contain only base slot values".to_owned());
+    }
+    let ren: Ren = map
+        .data
+        .iter()
+        .map(|(k, v)| {
+            (
+                state.value_to_base::<i64>(*k),
+                state.value_to_base::<i64>(*v),
+            )
+        })
+        .collect();
+    if ren.values().copied().collect::<BTreeSet<_>>().len() != ren.len() {
+        return Err("a slotted edge Renaming must be injective".to_owned());
+    }
+    Ok(ren)
+}
+
+fn live_action(state: &FullState<'_, '_>, name: &str) -> Result<TableAction, String> {
+    if !state
+        .table_sizes()
+        .into_iter()
+        .any(|(candidate, _)| candidate == name)
+    {
+        return Err(format!("required table {name} is not live"));
+    }
+    state
+        .registry()
+        .lookup_table(name)
+        .cloned()
+        .ok_or_else(|| format!("required table {name} is not registered"))
+}
+
+fn metadata_rows(
+    state: &FullState<'_, '_>,
+    name: &str,
+    inputs: &[ColumnTy],
+) -> Result<Vec<Vec<Value>>, String> {
+    let action = live_action(state, name)?;
+    let mut expected = inputs.to_vec();
+    expected.push(ColumnTy::Base(state.base_values().get_ty::<()>()));
+    if action.kind() != TableKind::Function
+        || action.input_arity() != inputs.len()
+        || action.output_arity() != 1
+        || action.schema() != expected
+    {
+        return Err(format!(
+            "{name} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
+        ));
+    }
+    let mut rows = Vec::new();
+    state
+        .function_entries(name, |entry| {
+            if !entry.subsumed {
+                rows.push(entry.inputs.to_vec());
             }
+        })
+        .map_err(|err| format!("reading {name}: {err}"))?;
+    Ok(rows)
+}
+
+fn index(value: i64, what: &str) -> Result<usize, String> {
+    usize::try_from(value).map_err(|_| format!("{what} must be a nonnegative column index"))
+}
+
+fn class_slots_if_present(state: &FullState<'_, '_>, class: Value) -> Result<Option<Ren>, String> {
+    let Some(value) = state
+        .lookup(CLASS_SLOTS, RawValues(vec![class]))
+        .map_err(|err| format!("reading {CLASS_SLOTS} for {class:?}: {err}"))?
+    else {
+        return Ok(None);
+    };
+    let slots = decode_renaming(state, value)?;
+    if slots.iter().any(|(from, to)| from != to) {
+        return Err(format!(
+            "{CLASS_SLOTS} for {class:?} is not an identity map: {slots:?}"
+        ));
+    }
+    Ok(Some(slots))
+}
+
+fn validate_class_slots(state: &FullState<'_, '_>) -> Result<(), String> {
+    let action = live_action(state, CLASS_SLOTS)?;
+    if action.kind() != TableKind::Function
+        || action.input_arity() != 1
+        || action.output_arity() != 1
+        || action.schema() != [ColumnTy::Id, ColumnTy::Id]
+    {
+        return Err(format!(
+            "{CLASS_SLOTS} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_constructor_layout(
+    state: &FullState<'_, '_>,
+    ctor: &str,
+    layout: &Layout,
+    string: ColumnTy,
+) -> Result<(), String> {
+    let action = live_action(state, ctor)?;
+    if action.kind() != TableKind::Constructor
+        || action.input_arity() != layout.arity
+        || action.output_arity() != 1
+        || action.schema().get(layout.arity) != Some(&ColumnTy::Id)
+    {
+        return Err(format!(
+            "constructor {ctor} does not have the e-class schema described by {NODE_LAYOUT}"
+        ));
+    }
+
+    let mut occupied = BTreeSet::new();
+    for &edge in &layout.edges {
+        let child = edge
+            .checked_add(1)
+            .ok_or_else(|| format!("{EDGE_LAYOUT} column overflows for {ctor}"))?;
+        if child >= layout.arity {
+            return Err(format!(
+                "{EDGE_LAYOUT} column {edge} for {ctor} has no following child column"
+            ));
+        }
+        if !occupied.insert(edge) || !occupied.insert(child) {
+            return Err(format!(
+                "overlapping {EDGE_LAYOUT} columns in {ctor} at {edge}/{child}"
+            ));
+        }
+        if action.schema().get(edge) != Some(&ColumnTy::Id)
+            || action.schema().get(child) != Some(&ColumnTy::Id)
+        {
+            return Err(format!(
+                "{EDGE_LAYOUT} for {ctor} marks columns {edge}/{child} whose runtime types are not Id"
+            ));
+        }
+    }
+
+    // The slotted source language currently admits only base payloads.  An
+    // unoccupied Id column could be an equality-sort or arbitrary container
+    // payload; the erased runtime schema cannot distinguish those cases or say
+    // how they should be rebuilt, so decline instead of copying an unsound id.
+    for col in 0..layout.arity {
+        if !occupied.contains(&col) && !matches!(action.schema()[col], ColumnTy::Base(_)) {
+            return Err(format!(
+                "constructor {ctor} has an unsupported Id payload at column {col}"
+            ));
+        }
+    }
+
+    let mut unconditional_markers = BTreeSet::new();
+    let mut exact_binders = BTreeSet::new();
+    for binder in &layout.binders {
+        if binder.marker >= binder.covered {
+            return Err(format!(
+                "{BINDER_LAYOUT} for {ctor} must cover an edge after its marker"
+            ));
+        }
+        if !layout.edges.contains(&binder.marker) || !layout.edges.contains(&binder.covered) {
+            return Err(format!(
+                "{BINDER_LAYOUT} for {ctor} names a column which is not in {EDGE_LAYOUT}"
+            ));
+        }
+        if !exact_binders.insert((binder.marker, binder.covered, binder.discriminator)) {
+            return Err(format!("duplicate {BINDER_LAYOUT} row for {ctor}"));
+        }
+        match binder.discriminator {
             None => {
-                cols.push(Col::Payload(children[i]));
-                i += 1;
+                if !unconditional_markers.insert(binder.marker) {
+                    return Err(format!(
+                        "multiple unconditional {BINDER_LAYOUT} rows for {ctor} marker {}",
+                        binder.marker
+                    ));
+                }
+            }
+            Some((col, _)) => {
+                if col >= layout.arity || occupied.contains(&col) {
+                    return Err(format!(
+                        "{BINDER_LAYOUT} discriminator column {col} for {ctor} is not a payload"
+                    ));
+                }
+                if action.schema().get(col) != Some(&string) {
+                    return Err(format!(
+                        "{BINDER_LAYOUT} discriminator column {col} for {ctor} is not a String"
+                    ));
+                }
             }
         }
     }
-    Some(Node { ctor, cols })
+    for binder in &layout.binders {
+        if binder.discriminator.is_some() && unconditional_markers.contains(&binder.marker) {
+            return Err(format!(
+                "{BINDER_LAYOUT} for {ctor} mixes conditional and unconditional rows for marker {}",
+                binder.marker
+            ));
+        }
+    }
+    Ok(())
 }
 
-/// The renaming column `i` holds, if column `i` is an edge: it must be typed as
-/// an id, hold a renaming value, and be followed by a column typed as an id.
-// The column type is what makes this decidable: base values and container
-// values are both plain `Value`s, so a payload column can hold the same number
-// as a live renaming.
-fn renaming_at(
-    state: &FullState<'_, '_>,
-    keys: &[ColumnTy],
-    children: &[Value],
-    i: usize,
-) -> Option<Ren> {
-    if keys[i] != ColumnTy::Id || keys.get(i + 1) != Some(&ColumnTy::Id) {
-        return None;
-    }
-    let map = state.value_to_container::<MapContainer>(children[i])?;
-    if map.rebuilds_contents() {
-        // Keys or values are e-classes, so this is not a renaming on slots.
-        return None;
-    }
-    Some(
-        map.data
-            .iter()
-            .map(|(k, v)| {
-                (
-                    state.value_to_base::<i64>(*k),
-                    state.value_to_base::<i64>(*v),
-                )
-            })
-            .collect(),
-    )
-}
+impl Layouts {
+    fn load(state: &FullState<'_, '_>) -> Result<Self, String> {
+        let string = ColumnTy::Base(state.base_values().get_ty::<S>());
+        let integer = ColumnTy::Base(state.base_values().get_ty::<i64>());
 
-fn schema_of(state: &FullState<'_, '_>, ctor: &str) -> Option<Schema> {
-    let action = state.registry().lookup_table(ctor)?;
-    let keys = action.input_arity();
-    Some(Schema {
-        keys: action.schema()[..keys].to_vec(),
-        eq_output: action.schema().get(keys) == Some(&ColumnTy::Id),
-    })
+        let mut layouts = Self::default();
+        for row in metadata_rows(state, NODE_LAYOUT, &[string, integer])? {
+            let ctor = state.value_to_base::<S>(row[0]).into_inner();
+            let arity = index(
+                state.value_to_base::<i64>(row[1]),
+                &format!("{NODE_LAYOUT} arity for {ctor}"),
+            )?;
+            let previous = layouts.constructors.insert(
+                ctor.clone(),
+                Layout {
+                    arity,
+                    edges: Vec::new(),
+                    binders: Vec::new(),
+                },
+            );
+            if previous.is_some() {
+                return Err(format!("conflicting {NODE_LAYOUT} rows for {ctor}"));
+            }
+        }
+        if layouts.constructors.is_empty() {
+            return Err(format!("{NODE_LAYOUT} contains no constructor rows"));
+        }
+
+        for row in metadata_rows(state, EDGE_LAYOUT, &[string, integer])? {
+            let ctor = state.value_to_base::<S>(row[0]).into_inner();
+            let col = index(
+                state.value_to_base::<i64>(row[1]),
+                &format!("{EDGE_LAYOUT} column for {ctor}"),
+            )?;
+            let layout = layouts
+                .constructors
+                .get_mut(&ctor)
+                .ok_or_else(|| format!("{EDGE_LAYOUT} names unknown constructor {ctor}"))?;
+            if layout.edges.contains(&col) {
+                return Err(format!(
+                    "duplicate {EDGE_LAYOUT} row for {ctor} column {col}"
+                ));
+            }
+            layout.edges.push(col);
+        }
+
+        Self::load_binders(state, string, integer, &mut layouts)?;
+        for (ctor, layout) in &mut layouts.constructors {
+            layout.edges.sort_unstable();
+            layout
+                .binders
+                .sort_by_key(|binder| (binder.marker, binder.covered, binder.discriminator));
+            validate_constructor_layout(state, ctor, layout, string)?;
+        }
+        validate_class_slots(state)?;
+        Ok(layouts)
+    }
+
+    fn load_binders(
+        state: &FullState<'_, '_>,
+        string: ColumnTy,
+        integer: ColumnTy,
+        layouts: &mut Self,
+    ) -> Result<(), String> {
+        let rows = metadata_rows(
+            state,
+            BINDER_LAYOUT,
+            &[string, integer, integer, integer, string],
+        )?;
+        for row in rows {
+            let ctor = state.value_to_base::<S>(row[0]).into_inner();
+            let marker = index(
+                state.value_to_base::<i64>(row[1]),
+                &format!("{BINDER_LAYOUT} marker for {ctor}"),
+            )?;
+            let covered = index(
+                state.value_to_base::<i64>(row[2]),
+                &format!("{BINDER_LAYOUT} covered edge for {ctor}"),
+            )?;
+            let discriminator_col = state.value_to_base::<i64>(row[3]);
+            let discriminator_text = state.value_to_base::<S>(row[4]).into_inner();
+            let discriminator = if discriminator_col == -1 {
+                if !discriminator_text.is_empty() {
+                    return Err(format!(
+                        "unconditional {BINDER_LAYOUT} row for {ctor} has a discriminator value"
+                    ));
+                }
+                None
+            } else {
+                Some((
+                    index(
+                        discriminator_col,
+                        &format!("{BINDER_LAYOUT} discriminator for {ctor}"),
+                    )?,
+                    row[4],
+                ))
+            };
+            layouts
+                .constructors
+                .get_mut(&ctor)
+                .ok_or_else(|| format!("{BINDER_LAYOUT} names unknown constructor {ctor}"))?
+                .binders
+                .push(BinderLayout {
+                    marker,
+                    covered,
+                    discriminator,
+                });
+        }
+        Ok(())
+    }
 }
 
 /// Which half of a substitution's result a primitive answers.
@@ -474,7 +875,14 @@ impl FullPrim for SlottedSubst {
                 )
             })
             .collect();
-        let (class, frame) = substitute(&mut state, *body, x, *var, &t_ren, *t)?;
+        let (class, frame) = match substitute(&mut state, *body, x, *var, &t_ren, *t) {
+            Ok(Some(result)) => result,
+            Ok(None) => return None,
+            Err(err) => {
+                log::error!("{}: {err}", self.name());
+                return None;
+            }
+        };
         Some(match self.half {
             Half::Class => class,
             Half::Frame => intern(&mut state, &frame),

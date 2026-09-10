@@ -276,6 +276,47 @@ def declare(name, sig, sort="U"):
     return f"(constructor {name} ({cols}) {sort})\n"
 
 
+def layout(name, sig, heads=()):
+    """Runtime layout metadata for ``slotted-subst``.
+
+    The primitive cannot distinguish an equality-sort column from a container by
+    looking at egglog's erased ``Id`` column type.  The compiler therefore records
+    every physical edge column explicitly.  Binder rows additionally say which edge
+    is the marker, which later edge it covers, and (for the generic string-headed
+    encoding) the payload value that activates the binder.
+
+    Column indices are zero-based indices into the encoded constructor inputs, after
+    every slotted source column has expanded to ``Renaming <carrier>``.
+    """
+    physical, edges, payloads = 0, [], []
+    child_positions = []
+    for col in sig:
+        if col in SLOTTED:
+            edges.append(physical)
+            child_positions.append(col)
+            physical += 2
+        else:
+            payloads.append(physical)
+            physical += 1
+
+    out = [f'(set (SlottedNodeLayout "{name}" {physical}) ())']
+    out += [f'(set (SlottedEdgeLayout "{name}" {edge}) ())' for edge in edges]
+
+    bound = [i for i, col in enumerate(child_positions) if col is BINDER]
+    if bound:
+        covered = max(bound) + 1
+        out += [f'(set (SlottedBinderLayout "{name}" {edges[pos]} {edges[covered]} -1 "") ())' for pos in bound]
+
+    if heads:
+        assert payloads, f"{name}: a string-headed binder needs a payload discriminator"
+        assert len(edges) >= 2, f"{name}: a binder needs a covered child"
+        discriminator = payloads[0]
+        out += [
+            f'(set (SlottedBinderLayout "{name}" {edges[0]} {edges[1]} {discriminator} "{head}") ())' for head in heads
+        ]
+    return out
+
+
 def shape_of(col):
     """A column's kind as it is written in a generated file's comments."""
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
@@ -676,8 +717,11 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
             continue
         _, edges, kids, _ = cols_of(sig)
         out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}")
+        heads = [head for head, ctor in binders if ctor == name]
         out += [
             declare(name, sig, sort),
+            ";; complete physical layout for the substitution primitive",
+            *layout(name, sig, heads),
             ";; an upper bound on the class's slots; the merge narrows it",
             class_slots(name, sig),
             ";; every class holding a node has a self-loop, so a query can reach it",
@@ -688,7 +732,6 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
         kid_cols = [c for c in sig if c in SLOTTED]
         structural = tuple(i for i, c in enumerate(kid_cols) if c is BINDER)
         # a head-pinned binder always covers the first slotted column
-        heads = [head for head, ctor in binders if ctor == name]
         out += binder_variants(
             alpha_finder,
             name,
@@ -747,6 +790,21 @@ SUBST = "subst"
 # `slotted/encoding/egraph-encoding-11.egg` along with a constructor or two, and kept
 # here so a generator can state what that text has to say.
 SHARED = """\
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; complete physical constructor layouts for `slotted-subst`
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Custom Unit-valued functions keep metadata out of the encoded e-graph.  A
+;; relation would mint an equality-sort value and appear as another constructor.
+;; The primitive validates these schemas and refuses constructors without a complete
+;; row, so an erased Id column is never guessed to be an edge or a payload.
+(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)
+
+(set (SlottedNodeLayout "Var" 1) ())
+(set (SlottedNodeLayout "Null" 0) ())
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; a class's slot set, held once
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

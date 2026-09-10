@@ -1,6 +1,6 @@
 ;;; COMPILED from slotted/tests/sdql-beta.egg by slotted/slotted-egglog.py.
 ;;;
-;;; Only the forms THIS file contributes. The machinery for its 3 constructors,
+;;; Only the forms THIS file contributes. The machinery for its 7 constructors,
 ;;; and anything an included library brought, are snapshotted by the generators
 ;;; that emit them -- committing them again per test would be the same thousands
 ;;; of lines over and over.
@@ -52,4 +52,34 @@
 (run-schedule (saturate (run slotted))
               (repeat 2 (seq (run) (saturate (run slotted)))))
 (check (RenamesToLeader $d _m0 _l) (RenamesToLeader $want _m1 _l) (= _m0 _m1))
+(pop)
+(push)
+(let $e (Let (map-of 0 0) (Var 0) (map-of 0 1) (Var 0) (map-of 1 1) (Lambda (map-of 0 0) (Var 0) (map-of 0 0 1 1) (Add (map-of 0 1) (Var 0) (map-of 0 0) (Var 0)))))
+(let $capture-avoiding (Lambda (map-of 0 2) (Var 0) (map-of 0 0 2 2) (Add (map-of 0 0) (Var 0) (map-of 0 2) (Var 0))))
+(let $captured (Lambda (map-of 0 0) (Var 0) (map-of 0 0) (Add (map-of 0 0) (Var 0) (map-of 0 0) (Var 0))))
+(run-schedule (saturate (run slotted))
+              (repeat 2 (seq (run) (saturate (run slotted)))))
+(check (RenamesToLeader $e _m0 _l) (RenamesToLeader $capture-avoiding _m1 _l) (= _m0 _m1))
+(fail (check (RenamesToLeader $e _m0 _l) (RenamesToLeader $captured _m1 _l) (= _m0 _m1)))
+(pop)
+(push)
+(let $f (Let (map-empty) (Num 1) (map-of 0 0) (Var 0) (map-empty) (Lambda (map-of 0 0) (Var 0) (map-of 0 0) (Var 0))))
+(let $shadowed (Lambda (map-of 0 7) (Var 0) (map-of 0 7) (Var 0)))
+(let $pierced (Lambda (map-of 0 7) (Var 0) (map-empty) (Num 1)))
+(run-schedule (saturate (run slotted))
+              (repeat 2 (seq (run) (saturate (run slotted)))))
+(check (RenamesToLeader $f _m0 _l) (RenamesToLeader $shadowed _m1 _l) (= _m0 _m1))
+(fail (check (RenamesToLeader $f _m0 _l) (RenamesToLeader $pierced _m1 _l) (= _m0 _m1)))
+(pop)
+(push)
+(let $with-binders (Sum (map-empty) (Null) (map-of 0 2) (Var 0) (map-of 0 3) (Var 0) (map-of 0 1) (Var 0)))
+(let $without-binders (Add (map-of 1 1) (Unique (map-of 0 1) (Var 0)) (map-empty) (Null)))
+(union $with-binders $without-binders)
+(let $g (Let (map-empty) (Num 0) (map-of 0 1) (Var 0) (map-of 1 1) $with-binders))
+(let $want (Sum (map-empty) (Null) (map-of 0 2) (Var 0) (map-of 0 3) (Var 0) (map-empty) (Num 0)))
+(let $wrong (Add (map-empty) (Unique (map-empty) (Num 0)) (map-empty) (Null)))
+(run-schedule (saturate (run slotted))
+              (repeat 2 (seq (run) (saturate (run slotted)))))
+(check (RenamesToLeader $g _m0 _l) (RenamesToLeader $want _m1 _l) (= _m0 _m1))
+(fail (check (RenamesToLeader $g _m0 _l) (RenamesToLeader $wrong _m1 _l) (= _m0 _m1)))
 (pop)

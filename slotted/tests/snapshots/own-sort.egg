@@ -196,6 +196,21 @@
 
 ;;; BEGIN generated-equivalent region -- checked by check-handwritten-encoding.py
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; complete physical constructor layouts for `slotted-subst`
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Custom Unit-valued functions keep metadata out of the encoded e-graph.  A
+;; relation would mint an equality-sort value and appear as another constructor.
+;; The primitive validates these schemas and refuses constructors without a complete
+;; row, so an erased Id column is never guessed to be an edge or a payload.
+(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)
+
+(set (SlottedNodeLayout "Var" 1) ())
+(set (SlottedNodeLayout "Null" 0) ())
+
 ;; The slots a class actually depends on, as an identity renaming. Held directly
 ;; rather than read off a self-loop: a self-loop is derived from a node, so it can
 ;; name more slots than the class has, and a rule that picks one to mean "the class's
@@ -219,6 +234,12 @@
 ;; payload column, so this one constructor covers every binary operator, and a
 ;; payload never appears in a renaming.
 (constructor App2 (String Renaming S Renaming S) S)
+
+;; complete physical layout for the substitution primitive
+(set (SlottedNodeLayout "App2" 5) ())
+(set (SlottedEdgeLayout "App2" 1) ())
+(set (SlottedEdgeLayout "App2" 3) ())
+(set (SlottedBinderLayout "App2" 1 3 0 "lambda") ())
 
 ;; an upper bound on the class's slots; the merge narrows it
 (rule ((= e1 (App2 p1 m1 c1 m2 c2)))

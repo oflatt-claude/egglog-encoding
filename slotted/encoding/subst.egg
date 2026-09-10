@@ -12,7 +12,9 @@
 ;;;
 ;;; It reads e-node rows, so it has to be handed a value that still holds the
 ;;; node. Compression deletes a non-canonical node, so a rule should reach the
-;;; class's canonical member through `RenamesToLeader` first.
+;;; class's canonical member through `RenamesToLeader` first.  The `slotted`
+;;; machinery must also have populated `ClassSlots`, which is the exact public
+;;; frame the primitive substitutes in.
 
 (include "slotted/encoding/egraph-encoding-11.egg")
 
@@ -49,6 +51,7 @@
 
 (let $inner (App2 "h" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
 (let $body (App2 "g" (map-of 0 0 1 1) $inner (map-of 0 2) (Var 0)))
+(run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
 (check (= $out (App2 "g"
@@ -68,6 +71,7 @@
 
 (let $c (App2 "h" (map-of 0 0) (Var 0) (map-of 0 7) (Var 0)))
 (let $body (App2 "g" (map-of 0 5) $c (map-of 0 6) (Var 0)))
+(run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 5 (Var 0) (map-empty) (Null)))
 (check (= x (App2 "h" (map-empty) (Null) (map-of 0 7) (Var 0))))
@@ -97,9 +101,52 @@
       ((union e (slotted-subst bod x (Var 0) mt t)))
       :naive)
 
+(run-schedule (saturate (run slotted)))
 (run 1)
 
 ;; ((lambda $0. h($0, $1)) null) = h(null, $1)
 (check (= $redex (App2 "h" (map-empty) (Null) (map-of 0 1) (Var 0))))
+
+(pop)
+
+
+;;; Case 6- a replacement's free slot is not captured by a generic lambda.
+;;;
+;;; `App2` represents many operators, so the binder-layout row is conditional on
+;;; its `"lambda"` payload.  Rebuilding the lambda refreshes its private `$0`
+;;; while leaving the replacement's free `$0` alone.
+(push)
+
+(let $sum (App2 "+" (map-of 0 1) (Var 0) (map-of 0 0) (Var 0)))
+(let $body (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0 1 1) $sum))
+(run-schedule (saturate (run slotted)))
+
+(let $out (slotted-subst $body 1 (Var 0) (map-of 0 0) (Var 0)))
+(let $capture-avoiding
+     (App2 "lambda" (map-of 0 2) (Var 0)
+           (map-of 0 0 2 2)
+           (App2 "+" (map-of 0 0) (Var 0) (map-of 0 2) (Var 0))))
+(let $captured
+     (App2 "lambda" (map-of 0 0) (Var 0)
+           (map-of 0 0)
+           (App2 "+" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0))))
+(run-schedule (saturate (run slotted)))
+(check (= $out $capture-avoiding))
+(fail (check (= $out $captured)))
+
+(pop)
+
+
+;;; Case 7- the same physical columns are ordinary children under another head.
+;;;
+;;; The `"pair"` row must not activate `App2`'s lambda binder metadata.  Its first
+;;; child is therefore traversed and substituted normally.
+(push)
+
+(let $body (App2 "pair" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(run-schedule (saturate (run slotted)))
+
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
+(check (= $out (App2 "pair" (map-empty) (Null) (map-of 0 1) (Var 0))))
 
 (pop)
