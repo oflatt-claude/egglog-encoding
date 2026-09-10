@@ -495,8 +495,9 @@ def main():
         else:
             r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=7200, cwd=ROOT)
             why = expect(r.stdout) if expect else None
-            if why is None and r.returncode != 0:
-                why = f"exit {r.returncode}: {r.stderr.strip()[:200]}"
+            if r.returncode != 0:
+                failure = f"exit {r.returncode}: {r.stderr.strip()[:200]}"
+                why = f"{why}; {failure}" if why else failure
             if why:
                 tail = [line for line in r.stdout.splitlines() if line.strip()][-6:]
                 why += "\n       " + "\n       ".join(tail)

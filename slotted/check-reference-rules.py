@@ -28,19 +28,27 @@ slotenc = __import__("slotted-encoder")
 
 
 def reference_root():
-    """Resolve the exact locked Cargo dependency, independent of CARGO_HOME."""
+    """Resolve the exact locked Cargo dependency.
+
+    Prefer the local Cargo cache. A build does not necessarily download manifests for
+    inactive transitive features, though, while ``cargo metadata`` resolves the whole
+    locked graph. A clean CI cache can therefore need one final locked fetch even after
+    ``xmulti`` itself built successfully.
+    """
     cmd = [
         "cargo",
         "metadata",
         "--format-version",
         "1",
         "--locked",
-        "--offline",
         "--manifest-path",
         str(ROOT / "slotted" / "xmulti" / "Cargo.toml"),
     ]
     try:
-        meta = json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
+        result = subprocess.run([*cmd, "--offline"], capture_output=True, text=True)
+        if result.returncode:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        meta = json.loads(result.stdout)
         manifests = [pathlib.Path(p["manifest_path"]) for p in meta["packages"] if p["name"] == "slotted-egraphs"]
     except (OSError, subprocess.CalledProcessError, KeyError, json.JSONDecodeError) as e:
         raise SystemExit(f"cannot resolve the locked slotted-egraphs dependency: {e}") from e
