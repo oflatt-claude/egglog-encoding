@@ -86,11 +86,13 @@ and it is already the shape of an egglog rule body, which is what makes the rest
 mechanical. `(f (g ?x) ?y)` becomes `?t == (f ?u ?y), ?u == (g ?x)`.
 
 `MultiPattern` deliberately gives all atoms one global slot namespace. A source
-syntax with lexical binders must therefore alpha-resolve explicit occurrences before
-flattening: if one printed name occurs under a binder and in an uncovered/free
-sibling, those roles need different global slot tokens. Pattern variables are
-different: they are global by design and may carry the same slot as a binder, matching
-the reference implementation's intended semantics in issue #48.
+syntax with binders must therefore remember which binder declaration each explicit
+slot occurrence refers to before flattening: if one printed name occurs under a
+binder and in an uncovered/free sibling, those roles need different global slot
+tokens. Pattern variables are different: they are global by design and may carry the
+same slot as a binder, matching the reference implementation's intended semantics in
+issue #48. [Issue #81](https://github.com/saulshanabrook/egglog-encoding/issues/81)
+gives the minimal `let x = x in x` counterexample and the proposed lowering.
 
 **Step 2 — order the atoms so each one shares a variable with the ones before
 it.** This is a correctness condition, not a heuristic. An atom sharing nothing

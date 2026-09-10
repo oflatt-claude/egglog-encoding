@@ -50,6 +50,13 @@ RULES_EGG = ROOT / "target" / "slotted" / "slotted-sdql-rules.egg"
 # `target/slotted/slotted-lang-sdql.egg` is the SDQL language plus the machinery it includes.
 MACHINERY = "target/slotted/slotted-lang-sdql.egg"
 
+# The source-level regression fixtures.  Python supplies the differential-test
+# orchestration and expected partitions, but the terms and the two scope-sensitive
+# patterns below come from these runnable `.egg` files rather than being restated as
+# Python tuples.
+BETA_FIXTURE = ROOT / "slotted" / "tests" / "sdql-beta.egg"
+BINDER_FIXTURE = ROOT / "slotted" / "tests" / "sdql-binders.egg"
+
 
 # --------------------------------------------------------------------- sdql terms
 # term := ('var', slot) | ('num', n) | ('sym', name)
@@ -123,6 +130,98 @@ enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 sc = __import__("slotted-egglog")
 
 
+def _fixture_blocks(path):
+    """The top-level `(push)`/`(pop)` regions contributed by one fixture.
+
+    Included libraries are deliberately excluded: a case is selected by one of the
+    fixture's own `let` names, and a library changing its own scopes must not silently
+    renumber those cases.
+    """
+    src = sc.Source(path)
+    blocks, block = [], None
+    for form, origin in src.body:
+        if origin != path or not isinstance(form, list) or not form:
+            continue
+        if form[0] == "push":
+            if block is not None:
+                raise ValueError(f"{path.name}: nested push regions are not fixture cases")
+            block = []
+        elif form[0] == "pop":
+            if block is None:
+                raise ValueError(f"{path.name}: pop without a fixture case")
+            blocks.append(block)
+            block = None
+        elif block is not None:
+            block.append(form)
+    if block is not None:
+        raise ValueError(f"{path.name}: unterminated fixture case")
+    return src, blocks
+
+
+def _fixture_term(term, named):
+    """Inline a fixture's `let` globals into the tuple form the oracle accepts."""
+    if not isinstance(term, tuple):
+        return term
+    if term[0] == "name":
+        try:
+            return named[term[1]]
+        except KeyError as exc:
+            raise ValueError(f"fixture term refers to unknown global {term[1]!r}") from exc
+    return tuple(_fixture_term(arg, named) for arg in term)
+
+
+def _fixture_block(path, anchor):
+    """Read the unique fixture region that binds `anchor`.
+
+    The result retains names because choosing the seed and observational probes is
+    differential-test metadata.  Their term trees and asserted unions remain owned by
+    the `.egg` source; the differential harness continues to own its round budget.
+    """
+    src, blocks = _fixture_blocks(path)
+    hits = [
+        block for block in blocks if any(form[0] == "let" and len(form) == 3 and form[1] == anchor for form in block)
+    ]
+    if len(hits) != 1:
+        raise ValueError(f"{path.name}: expected one fixture case binding {anchor!r}, found {len(hits)}")
+
+    named, unions = {}, []
+    for form in hits[0]:
+        if form[0] == "let":
+            _, name, body = form
+            if name in named:
+                raise ValueError(f"{path.name}: duplicate global {name!r} in fixture case {anchor!r}")
+            term = src.term(body)
+            src.lang.bound[name] = term
+            named[name] = _fixture_term(term, named)
+        elif form[0] == "union":
+            _, left, right = form
+            unions.append(
+                (
+                    _fixture_term(src.term(left), named),
+                    _fixture_term(src.term(right), named),
+                )
+            )
+    return src, named, unions
+
+
+def _fixture_rewrites(path, *names):
+    """Read uniquely named local rewrites from a source fixture."""
+    src = sc.Source(path)
+    wanted, found = set(names), {}
+    for form, origin in src.body:
+        if origin != path or not (isinstance(form, list) and form and form[0] == "rewrite"):
+            continue
+        parts = sc.rewrite_parts(src, form)
+        if parts["name"] in wanted:
+            if parts["name"] in found:
+                raise ValueError(f"{path.name}: duplicate rewrite {parts['name']!r}")
+            found[parts["name"]] = parts
+    missing = wanted - found.keys()
+    if missing:
+        raise ValueError(f"{path.name}: missing fixture rewrite(s): {', '.join(sorted(missing))}")
+    return src, found
+
+
 def check_term(t):
     """Walk a term so future per-node validation has one central hook.
 
@@ -188,6 +287,19 @@ class Rule:
         return out
 
 
+def _rule_from_parts(src, parts):
+    """Build the oracle rule represented by one parsed source rewrite."""
+    if parts["equalities"]:
+        raise ValueError(f"{parts['name']}: `:when (= ...)` is not supported by the SDQL harness yet")
+    lhs_term, rhs_term = (src.term(side, ground=False) for side in (parts["lhs"], parts["rhs"]))
+    lhs, rhs = (slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, term)) for term in (lhs_term, rhs_term))
+    try:
+        atoms = slotenc.flatten(LANG, lhs_term)
+    except Exception:
+        atoms = None
+    return Rule(parts["name"], lhs, rhs, conds=parts["conds"], atoms=atoms)
+
+
 #: The rules, read from `slotted/languages/sdql.egg` -- the same file `gen-sdql-rules.py`
 #: compiles -- with each side rendered in the oracle's syntax. The cases below ask for
 #: one by name.
@@ -198,24 +310,20 @@ def _load_rules():
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
         r = sc.rewrite_parts(src, form)
-        # `:when (= ...)` contributes PATTERN ATOMS, and this builds its own rule object
-        # from `lhs`/`conds` alone, so one would be dropped in silence and the reference
-        # would be asked a different question than the encoding. Teach `Rule` about extra
-        # atoms before using one in this language.
-        assert not r["equalities"], f"{r['name']}: `:when (= ...)` is not supported here yet"
-        lhs_term, rhs_term = (src.term(side, ground=False) for side in (r["lhs"], r["rhs"]))
-        lhs, rhs = (slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, t)) for t in (lhs_term, rhs_term))
-        # the same flattening the encoder does, so the reference can be asked the
-        # flattened question rather than the nested one
-        try:
-            atoms = slotenc.flatten(LANG, lhs_term)
-        except Exception:
-            atoms = None
-        out[r["name"]] = Rule(r["name"], lhs, rhs, conds=r["conds"], atoms=atoms)
+        out[r["name"]] = _rule_from_parts(src, r)
     return out
 
 
 RULES = _load_rules()
+
+# The substitution cases below use the runnable fixture's beta definition on the
+# reference side.  The encoding side still lifts the production generated rule by
+# name; this exact check makes a drift between those two sources explicit rather than
+# relying on three examples to happen to distinguish it.
+_beta_src, _beta_parts = _fixture_rewrites(BETA_FIXTURE, "beta")
+BETA_RULE = _rule_from_parts(_beta_src, _beta_parts["beta"])
+if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
+    raise ValueError(f"{BETA_FIXTURE.name}: beta no longer matches {SDQL_SRC.name}")
 
 
 @functools.cache
@@ -860,38 +968,36 @@ def binder_collision_cases():
 
 
 def substitution_regression_cases():
-    """Binder-aware extraction/substitution cases ported from former divergences."""
+    """Binder-aware substitution cases read from the runnable source fixture."""
     ref_subst = "[0,1][2] missing[[]]"
 
     # Capture avoidance must refresh the lambda's private slot, not the free slot in
     # the substituted term.
-    capture = ("let", V(0), 1, ("lambda", 0, ("add", V(1), V(0))))
-    capture_avoiding = ("lambda", 2, ("add", V(0), V(2)))
-    captured = ("lambda", 0, ("add", V(0), V(0)))
+    _, capture, capture_unions = _fixture_block(BETA_FIXTURE, "e")
     out = [
         Case(
             "subst-capture",
-            RULES["beta"],
-            [capture],
-            [capture, capture_avoiding, captured],
+            BETA_RULE,
+            [capture["e"]],
+            [capture[name] for name in ("e", "capture-avoiding", "captured")],
             ref_subst,
             rounds=2,
+            unions=capture_unions,
         )
     ]
 
     # A nested binder for the same slot shadows the outer substitution target. The
     # primitive must leave the covered subtree alone.
-    shadow_source = ("let", ("num", 1), 0, ("lambda", 0, V(0)))
-    shadow_result = ("lambda", 0, V(0))
-    pierced_result = ("lambda", 0, ("num", 1))
+    _, shadow, shadow_unions = _fixture_block(BETA_FIXTURE, "f")
     out.append(
         Case(
             "subst-shadowed-target",
-            RULES["beta"],
-            [shadow_source],
-            [shadow_source, shadow_result, pierced_result],
+            BETA_RULE,
+            [shadow["f"]],
+            [shadow[name] for name in ("f", "shadowed", "pierced")],
             FIRED,
             rounds=2,
+            unions=shadow_unions,
         )
     )
 
@@ -901,20 +1007,16 @@ def substitution_regression_cases():
     # the encoding each binder is another edge to Var; counting those markers as
     # children used to reverse the costs to 5 versus 4 and therefore the result beta
     # built. Binder layout metadata now keeps marker edges out of AstSize.
-    body_with_two_binders = ("sum", ("null",), 2, 3, V(1))
-    body_without_binders = ("add", ("unique", V(1)), ("null",))
-    cost_source = ("let", ("num", 0), 1, body_with_two_binders)
-    cost_reference = ("sum", ("null",), 2, 3, ("num", 0))
-    cost_encoding = ("add", ("unique", ("num", 0)), ("null",))
+    _, cost, cost_unions = _fixture_block(BETA_FIXTURE, "g")
     out.append(
         Case(
             "subst-binder-cost",
-            RULES["beta"],
-            [cost_source],
-            [cost_source, cost_reference, cost_encoding],
+            BETA_RULE,
+            [cost["g"]],
+            [cost[name] for name in ("g", "want", "wrong")],
             ref_subst,
             rounds=2,
-            unions=[(body_with_two_binders, body_without_binders)],
+            unions=cost_unions,
         )
     )
     return out
@@ -939,37 +1041,53 @@ def known_encoding_limitations():
     #
     # This does not prohibit the behavior Rudi called out in issue #48: an
     # unconstrained pvar outside a binder may carry the same printed slot. It is only
-    # about two explicit slot occurrences whose lexical roles the source already says.
-    scoped_pattern = ("let", "$x", "$x", "$x")
-    root, naive_atoms = slotenc.flatten(LANG, scoped_pattern)
-    _, reference_atoms = slotenc.flatten(LANG, ("let", "$x", "$__bound0", "$__bound0"))
+    # about two explicit slot occurrences whose binding roles the source already says.
+    # https://github.com/saulshanabrook/egglog-encoding/issues/81 tracks the fix.
+    scope_src, scope_parts = _fixture_rewrites(
+        BINDER_FIXTURE,
+        "binder-free-distinct-spellings",
+        "binder-free-same-spelling-known-limit",
+    )
+    reference = scope_parts["binder-free-distinct-spellings"]
+    naive = scope_parts["binder-free-same-spelling-known-limit"]
+    reference_lhs = scope_src.term(reference["lhs"], ground=False)
+    naive_lhs = scope_src.term(naive["lhs"], ground=False)
+    reference_rhs = slotenc.rhs_of(LANG, scope_src.term(reference["rhs"], ground=False))
+    naive_rhs = slotenc.rhs_of(LANG, scope_src.term(naive["rhs"], ground=False))
+    if reference_rhs != naive_rhs:
+        raise ValueError(f"{BINDER_FIXTURE.name}: the paired scope witnesses must have the same right-hand side")
+    reference_root, reference_atoms = slotenc.flatten(LANG, reference_lhs)
+    root, naive_atoms = slotenc.flatten(LANG, naive_lhs)
     scope_egg = slotenc.compile_rule(
         LANG,
         naive_atoms,
-        ("build", root, ("null",)),
+        ("build", root, naive_rhs),
         tail=' :ruleset sdql :name "known-flat-binder-free")',
     )
     scope_rule = Rule(
         "known-flat-binder-free",
-        "alpha-resolved MultiPattern",
-        "null",
-        atoms=(root, reference_atoms),
+        slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, naive_lhs)),
+        slotenc.pat_sexpr(LANG, reference_rhs),
+        atoms=(reference_root, reference_atoms),
         egg=scope_egg,
     )
-    scoped_target = ("let", V(2), 1, V(1))
+    scope_fixture, scoped, scoped_unions = _fixture_block(BINDER_FIXTURE, "same-spelling")
+    scoped_target = scoped["same-spelling"]
+    scoped_result = scope_fixture.term(naive["rhs"])
     out.append(
         Case(
             "flat-binder-free",
             scope_rule,
             [scoped_target],
-            [scoped_target, ("null",)],
+            [scoped_target, scoped_result],
             "[0][1] missing[[]]",
             rounds=2,
             ref_want="[0,1] missing[[]]",
             why=(
-                "the compiler erases the distinct lexical identities of explicit "
+                "the compiler erases the distinct binding identities of explicit "
                 "free and bound occurrences with one spelling"
             ),
+            unions=scoped_unions,
         )
     )
 
