@@ -22,8 +22,8 @@ Four layers, in the order they build on each other.
 
 LANGUAGE SPECS. A constructor's signature is a list of columns, each either
 
-  * `CHILD`  -- a slotted child, which occupies two egglog columns, `Renaming U`,
-               because reaching it requires a renaming;
+  * `CHILD`  -- a slotted child, which occupies two egglog columns,
+               `Renaming <carrier>`, because reaching it requires a renaming;
   * `BINDER` -- a slotted child whose slot the node binds; or
   * a sort   -- `"i64"`, `"String"`, ... a payload, one column, no renaming, since
                a payload carries no slots.
@@ -31,7 +31,9 @@ LANGUAGE SPECS. A constructor's signature is a list of columns, each either
 So a node's slots come from its slotted columns alone, and payloads ride along
 untouched. `(Num i64)` is then just the zero-child case rather than a special kind
 of leaf, and mixed shapes like `(Index i64 CHILD)` work with no indirection.
-`read_language` reads this off annotated egglog declarations.
+Several independent homogeneous carriers get separate table families; a one-carrier
+program keeps the historical unsuffixed names. `read_language` reads the legacy
+one-carrier form, while `slotted-egglog.py` retains the typed declarations.
 
 MACHINERY. The per-constructor maintenance rules -- `class_slots`, `self_loop`,
 `alpha_finder`, `symmetry_finder`, `migration`, `child_update`, `binder` -- which
@@ -77,6 +79,32 @@ CHILD = object()  # a slotted child: `Renaming U`
 BINDER = object()  # a slotted child that also binds its slot
 
 SLOTTED = (CHILD, BINDER)
+
+
+class SortTables:
+    """The encoding-owned symbols for one slotted equality sort.
+
+    A single-sort program keeps the historical unsuffixed names.  A multi-sort
+    program gets one indexed family per sort, because egglog does not overload a
+    relation name by argument sort.
+    """
+
+    def __init__(self, sort, index=None):
+        suffix = "" if index is None else f"_{index}"
+        self.sort = sort
+        self.var = f"SlottedVar{suffix}" if suffix else "Var"
+        self.renames = f"RenamesToLeader{suffix}"
+        self.equated = f"Equated{suffix}"
+        self.class_slots = f"ClassSlots{suffix}"
+        self.subst_pending = f"SubstPending{suffix}"
+
+
+def sort_tables(sorts):
+    """One symbol family per declared equality sort, in declaration order."""
+    sorts = tuple(sorts)
+    if len(sorts) == 1:
+        return {sorts[0]: SortTables(sorts[0])}
+    return {sort: SortTables(sort, i) for i, sort in enumerate(sorts)}
 
 
 ###############################################################################
@@ -181,6 +209,25 @@ def read_language_form(form, sorts=("U",)):
     assert form[0] == "constructor" and isinstance(form[2], list), form
     name, cols = form[1], form[2]
     return {name: signature(cols, constructor_options(name, form[4:]), sorts, name)}
+
+
+def read_typed_language_form(form, sorts=("U",)):
+    """One constructor declaration with the sort information the generic recipe erases.
+
+    Returns ``(name, signature, output_sort, child_sorts)``.  ``signature`` remains
+    the historical CHILD/BINDER/payload walk, while ``child_sorts`` records the
+    equality sort of each slotted column.  Keeping both lets the existing term and
+    rule algorithms stay structural while multi-sort emission selects the right
+    per-sort tables at every edge.
+    """
+    assert form[0] == "constructor" and isinstance(form[2], list), form
+    name, cols, output = form[1], form[2], form[3]
+    if output not in sorts:
+        raise SystemExit(
+            f"constructor {name}: output sort {output!r} is not one of the declared equality sorts ({', '.join(sorts)})"
+        )
+    sig = signature(cols, constructor_options(name, form[4:]), sorts, name)
+    return name, sig, output, tuple(col for col in cols if col in sorts)
 
 
 def read_correspondence(path):
@@ -339,6 +386,11 @@ MACHINERY = "slotted/encoding/egraph-encoding-11.egg"
 ###############################################################################
 
 
+def _tables(tables):
+    """The historical single-sort names when a caller needs no namespace."""
+    return tables or SortTables("U")
+
+
 def fold(op, xs, empty):
     """`xs` combined right-to-left with a binary egglog operator; `empty` for none."""
     if not xs:
@@ -389,7 +441,7 @@ def lex_greater(a, b, i=0):
 BOUND_NAME_KEPT = "\n       ; a bound name may be renamed but not lost\n       (= bound{i} (map-get {edge} 0))"
 
 
-def class_slots(name, sig):
+def class_slots(name, sig, tables=None):
     """A node's own slots, offered as an upper bound on its class's.
 
     `ClassSlots` intersects on merge, so a class ends up with the slots *every* one of
@@ -398,26 +450,28 @@ def class_slots(name, sig):
     only shrinks. Deriving it from a node is safe here precisely because the merge can
     only narrow, unlike the self-loop rule, which asserts the node's slots outright.
     """
+    tables = _tables(tables)
     _, edges, _, _ = cols_of(sig)
     slots = fold("map-union", [f"(map-image {m})" for m in edges], "(map-empty)")
     return f"""\
 (rule ((= e1 {pattern(name, sig)}))
-      ((set (ClassSlots e1) {slots})))
+      ((set ({tables.class_slots} e1) {slots})))
 """
 
 
-def self_loop(name, sig):
+def self_loop(name, sig, tables=None):
     """A node's class gets the identity on the node's own slots."""
+    tables = _tables(tables)
     _, edges, _, _ = cols_of(sig)
     slots = fold("map-union", [f"(map-image {m})" for m in edges], "(map-empty)")
     return f"""\
 (rule ((= e1 {pattern(name, sig)})
        (= m {slots}))
-      ((RenamesToLeader e1 m e1)))
+      (({tables.renames} e1 m e1)))
 """
 
 
-def alpha_finder(name, sig, bound=(), exempt=(), head=None):
+def alpha_finder(name, sig, bound=(), exempt=(), head=None, tables=None):
     """Two nodes equal up to renaming: keep one, record how the other renames to it.
 
     For `e1 = f(m1*c1, m1'*c2)` and `e2 = f(m2*c1, m2'*c2)`, the solve
@@ -437,6 +491,7 @@ def alpha_finder(name, sig, bound=(), exempt=(), head=None):
     split the rule by operator string, which the string-headed encoding needs and a
     structural binder does not; see `emit`.
     """
+    tables = _tables(tables)
     payloads, edges, kids, _ = cols_of(sig)
     a_o = [f"{e}_o" for e in edges]
     a = [a_o[i] if i in bound else e for i, e in enumerate(edges)]
@@ -444,7 +499,7 @@ def alpha_finder(name, sig, bound=(), exempt=(), head=None):
     syms = [f"sym{i + 1}" for i in range(len(kids))]
     pays = [f'"{head}"'] if head is not None else None
     loops = "\n       ".join(
-        f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
+        f"({tables.renames} {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
     )
     composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound)
     not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
@@ -459,12 +514,12 @@ def alpha_finder(name, sig, bound=(), exempt=(), head=None):
          (or (bool-!= e1 e2)
              (and (bool= e1 e2)
                   {lex_greater(a_o, b)}))))
-      ((Equated e1 m e2)
+      (({tables.equated} e1 m e2)
        (delete {pattern(name, sig, edges=a_o, payloads=pays)})))
 """
 
 
-def symmetry_finder(name, sig, bound=(), exempt=(), head=None):
+def symmetry_finder(name, sig, bound=(), exempt=(), head=None, tables=None):
     """The same solve, kept non-destructively as a symmetry of the class.
 
     Restricted to the class's slots. `sym_out` is solved from a *node's* edges, so its
@@ -480,13 +535,14 @@ def symmetry_finder(name, sig, bound=(), exempt=(), head=None):
     `bound`, `head` and `exempt` mean what they do in `alpha_finder`. A symmetry that moved
     a bound name would say nothing anyway: `cs` has had it removed by the binder rule.
     """
+    tables = _tables(tables)
     payloads, edges, kids, _ = cols_of(sig)
     a_o = [f"{e}_o" for e in edges]
     a = [a_o[i] if i in bound else e for i, e in enumerate(edges)]
     syms = [f"sym{i + 1}" for i in range(len(kids))]
     pays = [f'"{head}"'] if head is not None else None
     loops = "\n       ".join(
-        f"(RenamesToLeader {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
+        f"({tables.renames} {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
     )
     composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound)
     not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
@@ -495,12 +551,12 @@ def symmetry_finder(name, sig, bound=(), exempt=(), head=None):
        {loops}
        {composed}
        (= sym_out (find-mapping {" ".join(a_o)} {" ".join(a)}))
-       (= cs (ClassSlots e)))
-      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)))
+       (= cs ({tables.class_slots} e)))
+      (({tables.renames} e (compose cs (compose sym_out cs)) e)))
 """
 
 
-def migration(name, sig):
+def migration(name, sig, tables=None):
     """Rewrite a follower's node into its leader's frame.
 
     For `e2 = f(m1*c1, m2*c2)` and `e2 = m*e1`, rewriting into e1's frame gives
@@ -520,6 +576,7 @@ def migration(name, sig):
     but not of the rules. `ordering-min` is the orientation the single-parent rule
     already establishes, so following it here makes migration idempotent.
     """
+    tables = _tables(tables)
     _, edges, _, _ = cols_of(sig)
     ns = [f"n{i + 1}" for i in range(len(edges))]
     node_slots = fold("map-union", [f"(map-image {m})" for m in edges], "(map-empty)")
@@ -533,7 +590,7 @@ def migration(name, sig):
         + [f"(= {ns[i]} (compose R {edges[i]}))" for i in range(len(edges))]
     )
     return f"""\
-(rule ((RenamesToLeader e2 m e1)
+(rule (({tables.renames} e2 m e1)
        (= e2 {pattern(name, sig)})
        (!= e1 e2)
        (= e2 (ordering-max e1 e2))       ; toward the leader only
@@ -543,7 +600,7 @@ def migration(name, sig):
 """
 
 
-def child_update(name, sig, pos, exempt=(), head=None, bound_name=False):
+def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, tables=None):
     """Replace child `pos` with its more canonical `m*c'`.
 
     One rule per child position, canonicalising that child to the class's representative:
@@ -564,6 +621,7 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False):
     the direction the single-parent rule already establishes. When the class is unchanged
     the atom holds trivially, so the self-symmetry case below is unaffected.
     """
+    tables = _tables(tables)
     payloads, edges, kids, _ = cols_of(sig)
     new_e, new_k = list(edges), list(kids)
     new_e[pos] = f"(compose {edges[pos]} m)"
@@ -573,7 +631,7 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False):
     if bound_name:
         conds += BOUND_NAME_KEPT.format(i=pos, edge=new_e[pos])
     return f"""\
-(rule ((RenamesToLeader {kids[pos]} m c')
+(rule (({tables.renames} {kids[pos]} m c')
        (= node {pattern(name, sig, payloads=pays)}){conds}
        (= {kids[pos]} (ordering-max {kids[pos]} c'))    ; toward the leader only
        ; if the class is unchanged then m must be idempotent: no self-symmetries
@@ -586,7 +644,7 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False):
 """
 
 
-def binder(name, sig, positions, head=None):
+def binder(name, sig, positions, head=None, tables=None):
     """Take a bound slot out of the node's class's slot set, where it is bound.
 
     A bound slot rides in its child's edge, so it is a slot of the *node* but must
@@ -603,10 +661,11 @@ def binder(name, sig, positions, head=None):
     gets its own rule, since one may be free in an uncovered column while another
     is not: `sdql`'s `Sum` binds two over one body, beside an uncovered range.
     """
+    tables = _tables(tables)
     _, edges, kids, _ = cols_of(sig)
     e, k = list(edges), list(kids)
     for n, pos in enumerate(positions):
-        e[pos], k[pos] = f"mvar{n}", "(Var 0)"
+        e[pos], k[pos] = f"mvar{n}", f"({tables.var} 0)"
     payloads = [f'"{head}"'] if head is not None else None
     node = pattern(name, sig, edges=e, kids=k, payloads=payloads)
 
@@ -618,9 +677,9 @@ def binder(name, sig, positions, head=None):
     for n, pos in enumerate(positions):
         free_elsewhere = "".join(f"\n       (map-not-contains (map-image {edges[u]}) v{n})" for u in uncovered)
         rules.append(f"""\
-(rule ((RenamesToLeader {node} ml l)
+(rule (({tables.renames} {node} ml l)
        (= v{n} (map-get mvar{n} 0)){free_elsewhere})
-      ((Equated {node} (inverse (map-remove (inverse ml) v{n})) l)))
+      (({tables.equated} {node} (inverse (map-remove (inverse ml) v{n})) l)))
 """)
 
         # A collision with an uncovered column blocks the strip above, which would
@@ -657,7 +716,7 @@ def banner(text):
     return [bar, f";;; {text}", bar, ""]
 
 
-def binder_variants(emit_rule, name, sig, comment, bound, heads):
+def binder_variants(emit_rule, name, sig, comment, bound, heads, tables=None):
     """`emit_rule` for the ordinary case, plus a head-pinned copy per string-headed binder.
 
     `bound` are the columns that are binder columns structurally, and `heads` the operator
@@ -667,17 +726,17 @@ def binder_variants(emit_rule, name, sig, comment, bound, heads):
     """
     which = ", ".join(str(i + 1) for i in bound)
     note = f", leaving child {which} alone -- a bound name has no other spelling" if bound else ""
-    out = [comment + note, emit_rule(name, sig, bound=bound, exempt=heads)]
+    out = [comment + note, emit_rule(name, sig, bound=bound, exempt=heads, tables=tables)]
     pinned = tuple(sorted({*bound, 0}))
     for head in heads:
         out += [
             f"{comment}, for `{head}`, whose child 1 is a bound name",
-            emit_rule(name, sig, bound=pinned, head=head),
+            emit_rule(name, sig, bound=pinned, head=head, tables=tables),
         ]
     return out
 
 
-def emit(language, binders=(), provided=None, omit=(), sort="U"):
+def emit(language, binders=(), provided=None, omit=(), sort="U", tables=None):
     """All the rules for one language: `{constructor: signature}`.
 
     `binders` pins binders by operator string, for the generic encoding where the
@@ -703,6 +762,7 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
     is emitted twice: once with those heads ruled out, once with the head pinned. A
     structurally declared binder needs only the second.
     """
+    tables = _tables(tables)
     out = []
     for name, sig in language.items():
         if name in omit:
@@ -723,9 +783,9 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
             ";; complete physical layout for the substitution primitive",
             *layout(name, sig, heads),
             ";; an upper bound on the class's slots; the merge narrows it",
-            class_slots(name, sig),
+            class_slots(name, sig, tables),
             ";; every class holding a node has a self-loop, so a query can reach it",
-            self_loop(name, sig),
+            self_loop(name, sig, tables),
         ]
         if not kids:
             continue  # nothing below touches a child
@@ -739,6 +799,7 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
             ";; alpha-finder: two nodes equal up to renaming, one eliminated",
             structural,
             heads,
+            tables,
         )
         out += binder_variants(
             symmetry_finder,
@@ -747,21 +808,25 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
             ";; the same solve kept as a symmetry, non-destructively",
             structural,
             heads,
+            tables,
         )
-        out += [";; migration: move a follower's node into the leader's frame", migration(name, sig)]
+        out += [";; migration: move a follower's node into the leader's frame", migration(name, sig, tables)]
         for pos in range(len(kids)):
             if kid_cols[pos] is BINDER:
                 out += [
                     f";; child-update, child {pos + 1} -- a bound name",
-                    child_update(name, sig, pos, bound_name=True),
+                    child_update(name, sig, pos, bound_name=True, tables=tables),
                 ]
                 continue
             exempt = heads if pos == 0 else ()
-            out += [f";; child-update, child {pos + 1}", child_update(name, sig, pos, exempt=exempt)]
+            out += [
+                f";; child-update, child {pos + 1}",
+                child_update(name, sig, pos, exempt=exempt, tables=tables),
+            ]
             for head in exempt:
                 out += [
                     f";; child-update, child {pos + 1} of `{head}` -- a bound name there",
-                    child_update(name, sig, pos, head=head, bound_name=True),
+                    child_update(name, sig, pos, head=head, bound_name=True, tables=tables),
                 ]
 
     binder_rules = []
@@ -770,11 +835,21 @@ def emit(language, binders=(), provided=None, omit=(), sort="U"):
         bound = [i for i, c in enumerate(kid_cols) if c is BINDER]
         if bound and name not in omit:
             which = ", ".join(str(i + 1) for i in bound)
-            binder_rules.append((f";; `{name}` binds child {which}, one rule per bound slot", binder(name, sig, bound)))
+            binder_rules.append(
+                (
+                    f";; `{name}` binds child {which}, one rule per bound slot",
+                    binder(name, sig, bound, tables=tables),
+                )
+            )
     for head, name in binders:
         if name in omit:
             continue
-        binder_rules.append((f";; `{head}` binds its first child's slot", binder(name, language[name], [0], head=head)))
+        binder_rules.append(
+            (
+                f";; `{head}` binds its first child's slot",
+                binder(name, language[name], [0], head=head, tables=tables),
+            )
+        )
     if binder_rules:
         out += banner("binders")
         for comment, rule in binder_rules:
@@ -828,6 +903,123 @@ SHARED = """\
 (rule ((RenamesToLeader a m b) (= slots (ClassSlots b)))
       ((set (ClassSlots a) (map-image (compose m slots)))))
 """
+
+
+def multi_sort_core(tables):
+    """Constructor-independent machinery for several homogeneous carrier sorts.
+
+    ``Renaming``, ``Namings`` and ``Idx`` are shared because every carrier uses the
+    same slot type.  Equality-bearing tables and the internal variable constructor
+    are separate: egglog does not overload names, and values of distinct equality
+    sorts must never enter one union component.
+
+    Constructors are currently required to be homogeneous (all their slotted inputs
+    have their output sort).  That keeps one node entirely inside one table family;
+    the front end rejects cross-sort edges explicitly.
+    """
+    out = [
+        ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
+        ";;; multi-sort slotted machinery",
+        ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
+        "",
+        "(ruleset slotted)",
+        "",
+        "(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)",
+        "(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)",
+        "(function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)",
+        "",
+    ]
+    for sort, names in tables.items():
+        out += [
+            ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
+            f";;; carrier {sort}: {names.renames}, {names.equated}, {names.class_slots}",
+            ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
+            "",
+            f"(sort {sort})",
+            f"(constructor {names.var} (i64) {sort})",
+            f"(relation {names.renames} ({sort} Renaming {sort}))",
+            f"(relation {names.equated} ({sort} Renaming {sort}))",
+            f"(function {names.class_slots} ({sort}) Renaming :merge (map-intersect old new))",
+            f"(relation {names.subst_pending} ({sort} Renaming Renaming {sort}))",
+            "",
+            f'(set (SlottedNodeLayout "{names.var}" 1) ())',
+            f"(set ({names.class_slots} ({names.var} 0)) (map-of 0 0))",
+            "",
+            f"""(rule (({names.equated} a m b)
+       (!= a b)
+       (= a (ordering-max a b)))
+      (({names.renames} a m b)) :ruleset slotted)""",
+            "",
+            f"""(rule (({names.equated} a m b)
+       (!= a b)
+       (= b (ordering-max a b)))
+      (({names.renames} b (inverse m) a)) :ruleset slotted)""",
+            "",
+            f"""(rule (({names.equated} a m a))
+      (({names.renames} a m a)) :ruleset slotted)""",
+            "",
+            f"""(rule (({names.renames} f m l)
+       (!= f l)
+       (= l (ordering-max f l)))
+      ((delete ({names.renames} f m l))) :ruleset slotted)""",
+            "",
+            f"""(rule (({names.renames} a m b) (= slots ({names.class_slots} a)))
+      ((set ({names.class_slots} b) (map-image (compose (inverse m) slots))))
+      :ruleset slotted)""",
+            f"""(rule (({names.renames} a m b) (= slots ({names.class_slots} b)))
+      ((set ({names.class_slots} a) (map-image (compose m slots))))
+      :ruleset slotted)""",
+            "",
+            f"""(rule (({names.renames} e1 m12 e2)
+       ({names.renames} e2 m23 e3)
+       (guard (or (bool-!= e2 e3)
+                  (bool= (compose m23 m23) m23)
+                  (bool= e1 e3))))
+      (({names.equated} e1 (compose m12 m23) e3)) :ruleset slotted)""",
+            "",
+            f"""(rule (({names.renames} a m1 b)
+       ({names.renames} a m2 c)
+       (!= a c)
+       (!= a b)
+       (= (ordering-max b c) b)
+       (guard (or (bool-!= b c)
+                  (and (bool= b c)
+                       (bool-!= m1 m2)
+                       (bool= (ordering-max m1 m2) m1)))))
+      ((delete ({names.renames} a m1 b))
+       ({names.equated} b (compose (inverse m1) m2) c)) :ruleset slotted)""",
+            "",
+            f"""(rule (({names.renames} a m1 a)
+       ({names.renames} a m a)
+       (= m (compose m m))
+       (= m2 (compose m (compose m1 m)))
+       (!= m1 m2))
+      ((delete ({names.renames} a m1 a))
+       ({names.renames} a m2 a)) :ruleset slotted)""",
+            "",
+            f"""(rule ((= e ({names.var} v))
+       (!= v 0))
+      (({names.equated} e (map-insert (map-empty) 0 v) ({names.var} 0))
+       (delete ({names.var} v))) :ruleset slotted)""",
+            "",
+            f"({names.renames} ({names.var} 0) (map-insert (map-empty) 0 0) ({names.var} 0))",
+            "",
+            f"""(rule (({names.renames} a m1_o c)
+       ({names.renames} b m2 c)
+       ({names.renames} c sym c)
+       (= m1 (compose m1_o sym))
+       (= m (compose m1 (inverse m2)))
+       (= (compose m m) m))
+      ((union a b)) :ruleset slotted)""",
+            "",
+            f"""(rule (({names.subst_pending} root q mr r)
+       (= cs ({names.class_slots} r)))
+      (({names.equated} root (compose q (compose mr cs)) r))
+      :ruleset slotted)""",
+            "",
+        ]
+    return "\n".join(out)
+
 
 MACHINERY_HEADER = """\
 ;;; GENERATED by slotted/gen-node-rules.py -- do not edit.
@@ -958,10 +1150,25 @@ class Op:
     `CHILD`, a slot for a `BINDER`, a value for a payload the operator does not pin.
     """
 
-    def __init__(self, name, ctor, sig=(), pays=None, ref=None, ref_prefix=""):
+    def __init__(
+        self,
+        name,
+        ctor,
+        sig=(),
+        pays=None,
+        ref=None,
+        ref_prefix="",
+        sort="U",
+        kid_sorts=None,
+    ):
         self.name = name
         self.ctor = ctor
         self.sig = list(sig)
+        self.sort = sort
+        self.kid_sorts = list(kid_sorts) if kid_sorts is not None else [sort] * sum(c in SLOTTED for c in self.sig)
+        assert len(self.kid_sorts) == sum(c in SLOTTED for c in self.sig), (
+            f"{name}: {len(self.kid_sorts)} child sort(s) for {sum(c in SLOTTED for c in self.sig)} slotted column(s)"
+        )
         npay = sum(1 for c in self.sig if c not in SLOTTED)
         self.pays = list(pays) if pays is not None else [None] * npay
         assert len(self.pays) == npay, f"{name}: {npay} payload column(s)"
@@ -1030,8 +1237,15 @@ class TermLang:
 
     VAR = "var"
 
-    def __init__(self, ops):
+    def __init__(self, ops, tables=None):
         self.ops = dict(ops)
+        declared = []
+        for op in self.ops.values():
+            for sort in (op.sort, *op.kid_sorts):
+                if sort not in declared:
+                    declared.append(sort)
+        self.tables = tables or sort_tables(declared or ("U",))
+        self.default_sort = next(iter(self.tables))
 
     @classmethod
     def from_language(cls, language):
@@ -1045,6 +1259,15 @@ class TermLang:
 
     def __contains__(self, name):
         return name in self.ops
+
+    def tables_for(self, sort):
+        return self.tables[sort]
+
+    def sort_of(self, t, expected=None):
+        """The equality sort of a term; a bare variable inherits its context."""
+        if t[0] == self.VAR:
+            return expected
+        return self.ops[t[0]].sort
 
     @staticmethod
     def slot(arg):
@@ -1163,7 +1386,7 @@ class TermLang:
 
         return go(t)
 
-    def enc(self, t):
+    def enc(self, t, expected_sort=None):
         """Encoding syntax.
 
         A binder column holds the bound slot as an edge `0 -> s` to `(Var 0)`. The
@@ -1172,17 +1395,20 @@ class TermLang:
         """
         t = self.refresh_shadowed_binders(t)
         if t[0] == self.VAR:
-            return "(Var 0)"
+            sort = expected_sort or self.default_sort
+            return f"({self.tables_for(sort).var} 0)"
         op = self.ops[t[0]]
+        if expected_sort is not None and op.sort != expected_sort:
+            raise SystemExit(f"{op.name} produces {op.sort}, but this position requires {expected_sort}")
         kids, pays = op.split(t[1:])
         edges, cs = [], []
         for i, k in enumerate(kids):
             if i in op.binders:
                 edges.append(map_of({0: self.slot(k)}))
-                cs.append("(Var 0)")
+                cs.append(f"({self.tables_for(op.kid_sorts[i]).var} 0)")
             else:
                 edges.append(map_of(self.edge(k)))
-                cs.append(self.enc(k))
+                cs.append(self.enc(k, op.kid_sorts[i]))
         return node_expr(op, edges, cs, pays)
 
     def sexpr(self, t):
@@ -1543,6 +1769,31 @@ def compile_rule(
     """
     body, uid = [], [0]
 
+    # Recover the equality sort of every MultiPattern variable before emitting a
+    # table name.  The flat atoms retain constructor identity, so a root has its
+    # constructor's output sort and each child has that constructor column's sort.
+    # A variable reused at two different sorts is ill-typed, just as it would be in
+    # an ordinary egglog rule, but the generated class variables would otherwise
+    # hide that mistake behind erased `Id` columns.
+    pvar_sorts = {}
+
+    def bind_sort(pv, sort):
+        old = pvar_sorts.setdefault(pv, sort)
+        if old != sort:
+            raise SystemExit(f"pattern variable {pv!r} is used at both equality sorts {old} and {sort}")
+
+    for atom in atoms:
+        aroot, opname, kids = atom[0], atom[1], atom[2]
+        op = lang[opname]
+        bind_sort(aroot, op.sort)
+        for kid, kid_sort in zip(kids, op.kid_sorts, strict=True):
+            if kid[0] == "pv":
+                bind_sort(kid[1], kid_sort)
+            elif kid[0] == "cls":
+                actual = lang.sort_of(kid[1], kid_sort)
+                if actual != kid_sort:
+                    raise SystemExit(f"{opname}: a {kid_sort} child cannot contain a {actual} term")
+
     def new(p):
         uid[0] += 1
         return f"{p}{uid[0]}"
@@ -1559,7 +1810,7 @@ def compile_rule(
     carried_slot_literals = set()
     pat = None  # identity on the pattern slots named so far
 
-    def narrow(m, cls):
+    def narrow(m, cls, sort):
         """Cut `m` down from the matched node's slots to its class's -- M8.
 
         A renaming read off a node has the *node's* slots for its domain, and a node
@@ -1574,7 +1825,7 @@ def compile_rule(
         if "wide-kids" in bugs:
             return m
         cs = new("cs")
-        body.append(f"(= {cs} (ClassSlots {cls}))")
+        body.append(f"(= {cs} ({lang.tables_for(sort).class_slots} {cls}))")
         return f"(compose {m} {cs})"
 
     def sym_for(pv):
@@ -1586,7 +1837,8 @@ def compile_rule(
         silently under-matches.
         """
         sv = new("sym")
-        body.append(f"(RenamesToLeader {cls_of[pv]} {sv} {cls_of[pv]})")
+        table = lang.tables_for(pvar_sorts[pv]).renames
+        body.append(f"({table} {cls_of[pv]} {sv} {cls_of[pv]})")
         return sv
 
     pay_of = {}  # a payload variable's egglog name, shared so two atoms join on it
@@ -1617,18 +1869,19 @@ def compile_rule(
         edges = [new("p") for _ in kids]
         rv = cls_of.setdefault(aroot, new("V"))
         cols, reached = [], []
-        for k in kids:
+        for k, kid_sort in zip(kids, op.kid_sorts, strict=True):
             if k[0] == "pv":
                 cols.append(cls_of.setdefault(k[1], new("C")))
             elif k[0] == "sl":
-                cols.append("(Var 0)")
+                cols.append(f"({lang.tables_for(kid_sort).var} 0)")
             else:
                 cv = new("L")
                 cols.append(cv)
-                reached.append((k[1], cv))
+                reached.append((k[1], cv, kid_sort))
         body.append(f"(= {rv} {node_expr(op, edges, cols, pays, pay_name)})")
-        for t, cv in reached:
-            body.append(f"(RenamesToLeader {lang.enc(t)} {new('ml')} {cv})")
+        for t, cv, kid_sort in reached:
+            table = lang.tables_for(kid_sort).renames
+            body.append(f"({table} {lang.enc(t, kid_sort)} {new('ml')} {cv})")
 
         dom = new("dom")
         body.append(f"(= {dom} {union_images(edges)})")
@@ -1701,9 +1954,9 @@ def compile_rule(
             else:
                 m = new("m")
                 body.append(f"(= {m} (compose {mp} {e}))")
-                mp_of[k[1]] = narrow(m, cls_of[k[1]])
+                mp_of[k[1]] = narrow(m, cls_of[k[1]], pvar_sorts[k[1]])
         if aroot not in mp_of:
-            mp_of[aroot] = narrow(mp, rv)
+            mp_of[aroot] = narrow(mp, rv, pvar_sorts[aroot])
 
     binding[0] = False  # every atom is read, so a payload variable can only be read now
 
@@ -1812,6 +2065,8 @@ def compile_rule(
         for v in (a, b):
             if v not in mp_of:
                 raise SystemExit(f"`=` names {v!r}, which no pattern binds")
+        if pvar_sorts[a] != pvar_sorts[b]:
+            raise SystemExit(f"`=` cannot identify {a!r} ({pvar_sorts[a]}) with {b!r} ({pvar_sorts[b]})")
         body.append(f"(= {cls_of[a]} {cls_of[b]})")
         body.append(f"(= {mp_of[a]} {mp_of[b]})")
 
@@ -1827,13 +2082,15 @@ def compile_rule(
         for v in (a, b):
             if v not in mp_of:
                 raise SystemExit(f"`!=` names {v!r}, which no pattern binds")
+        if pvar_sorts[a] != pvar_sorts[b]:
+            raise SystemExit(f"`!=` cannot compare {a!r} ({pvar_sorts[a]}) with {b!r} ({pvar_sorts[b]})")
         same_cls = f"(bool= {cls_of[a]} {cls_of[b]})"
         same_ren = f"(bool= {mp_of[a]} {mp_of[b]})"
         body.append(f"(guard (or (not {same_cls}) (not {same_ren})))")
 
     lets = []
 
-    def build(t):
+    def build(t, expected_sort):
         """`(edge, class)` for a right-hand side, one `let` per built node.
 
         An action is already in pattern slot space, so the edge from a built node to a
@@ -1845,11 +2102,20 @@ def compile_rule(
         the returned edge's domain equal to the built class's slots (Def. 4).
         """
         if t[0] == "pv":
+            if pvar_sorts[t[1]] != expected_sort:
+                raise SystemExit(
+                    f"right-hand side uses {t[1]!r} as {expected_sort}, but the pattern binds it as {pvar_sorts[t[1]]}"
+                )
             return mp_of[t[1]], cls_of[t[1]]
         if t[0] == "sl":
             # the machinery carries a bound slot as an edge to `(Var 0)`
-            return f"(map-insert (map-empty) 0 {slot_of[t[1]]})", "(Var 0)"
+            var = lang.tables_for(expected_sort).var
+            return f"(map-insert (map-empty) 0 {slot_of[t[1]]})", f"({var} 0)"
         op = lang[t[0]]
+        if op.sort != expected_sort:
+            raise SystemExit(
+                f"right-hand side builds {op.name}, which produces {op.sort}, where {expected_sort} is required"
+            )
         args, pays = op.split(t[1:])
         if not args:
             if has_pay_var(t):
@@ -1858,8 +2124,8 @@ def compile_rule(
                 nv = new("_rhs")
                 lets.append(f"(let {nv} {node_expr(op, [], [], pays, pay_name)})")
                 return "(map-empty)", nv
-            return map_of(lang.edge(t)), lang.enc(t)  # a leaf node has no slots
-        kids = [build(a) for a in args]
+            return map_of(lang.edge(t)), lang.enc(t, expected_sort)  # a leaf node has no slots
+        kids = [build(a, sort) for a, sort in zip(args, op.kid_sorts, strict=True)]
         nv = new("_rhs")
         lets.append(f"(let {nv} {node_expr(op, [e for e, _ in kids], [c for _, c in kids], pays, pay_name)})")
         slot_maps = []
@@ -1876,6 +2142,8 @@ def compile_rule(
         return slots, nv
 
     root = action[1]
+    root_sort = pvar_sorts[root]
+    root_tables = lang.tables_for(root_sort)
     mr = mp_of[root]
     if action[0] == "build":
         rhs = action[2]
@@ -1884,7 +2152,11 @@ def compile_rule(
             # neither need be the identity, which is the one action egglog's `union`
             # cannot express -- so solve: from mr*Root = ma*A follows
             # Root = (mr^-1 . ma) * A, and let the machinery re-orient it (M10).
-            act = [f"(Equated {cls_of[root]} (compose (inverse {mr}) {mp_of[rhs[1]]}) {cls_of[rhs[1]]})"]
+            if pvar_sorts[rhs[1]] != root_sort:
+                raise SystemExit(
+                    f"a {root_sort} rewrite cannot return pattern variable {rhs[1]!r} of sort {pvar_sorts[rhs[1]]}"
+                )
+            act = [f"({root_tables.equated} {cls_of[root]} (compose (inverse {mr}) {mp_of[rhs[1]]}) {cls_of[rhs[1]]})"]
         elif rhs[0] == SUBST:
             # A call, not a node, so there is nothing to build. Everything below is in
             # PATTERN slots; the primitive works in the body's own frame, so a bridge
@@ -1892,9 +2164,15 @@ def compile_rule(
             b, sl, tt = rhs[1:]
             assert b[0] == "pv" and tt[0] == "pv", f"{SUBST}: body and term must be variables, got {b}, {tt}"
             assert sl[0] == "sl", f"{SUBST}: the slot must be a slot literal, got {sl}"
+            for pv in (b[1], tt[1]):
+                if pvar_sorts[pv] != root_sort:
+                    raise SystemExit(
+                        f"{SUBST}: {pv!r} has sort {pvar_sorts[pv]}, but the rewritten root has sort {root_sort}"
+                    )
             mb, mt, x = mp_of[b[1]], mp_of[tt[1]], slot_of[sl[1]]
             need, rb, xb, tren, q = (new(p) for p in ("need", "rb", "xb", "tren", "q"))
-            call = f"{cls_of[b[1]]} {xb} (Var 0) {tren} {cls_of[tt[1]]}"
+            table_arg = f' "{root_tables.class_slots}"' if len(lang.tables) > 1 else ""
+            call = f"{cls_of[b[1]]} {xb} ({root_tables.var} 0) {tren} {cls_of[tt[1]]}{table_arg}"
             act = [
                 # the pattern slots that must have a name in the body's frame. `t`'s
                 # slots are the ones the body may not use, which is why a bridge is
@@ -1912,11 +2190,11 @@ def compile_rule(
                 # `SubstPending` and the phase-two rule that drains it are declared in
                 # `MACHINERY`, so a program gets them by including it rather than by
                 # carrying a copy per rule that needs one.
-                f"(SubstPending {cls_of[root]} {q} (slotted-subst-frame {call}) (slotted-subst {call}))",
+                f"({root_tables.subst_pending} {cls_of[root]} {q} (slotted-subst-frame {call}) (slotted-subst {call}))",
             ]
         else:
-            _, built = build(rhs)
-            act = lets + [f"(Equated {built} {mr} {cls_of[root]})"]
+            _, built = build(rhs, root_sort)
+            act = lets + [f"({root_tables.equated} {built} {mr} {cls_of[root]})"]
     else:
         # The flat build: one depth-1 node over bound variables. The built node lives
         # in pattern slots, so the equation to assert is `built = mr * Root` -- a union
@@ -1930,10 +2208,16 @@ def compile_rule(
         # the stale-row deleter then removes a fact with no `Equated` behind it to
         # re-derive. The corpus never built that state, so nothing caught it.
         pvs = action[3]
-        node = node_expr(lang[action[2]], [mp_of[v] for v in pvs], [cls_of[v] for v in pvs], lang[action[2]].pays)
+        action_op = lang[action[2]]
+        if action_op.sort != root_sort:
+            raise SystemExit(f"a {root_sort} rule cannot build {action_op.name}, which produces {action_op.sort}")
+        for pv, kid_sort in zip(pvs, action_op.kid_sorts, strict=True):
+            if pvar_sorts[pv] != kid_sort:
+                raise SystemExit(f"{action_op.name}: child {pv!r} has sort {pvar_sorts[pv]}, not {kid_sort}")
+        node = node_expr(action_op, [mp_of[v] for v in pvs], [cls_of[v] for v in pvs], action_op.pays)
         if "union-id" in bugs:
             act = [f"(union {cls_of[root]} {node})"]
         else:
-            act = [f"(let _hn {node})", f"(Equated _hn {mr} {cls_of[root]})"]
+            act = [f"(let _hn {node})", f"({root_tables.equated} _hn {mr} {cls_of[root]})"]
 
     return "(rule (" + "\n       ".join(body) + ")\n      (" + "\n       ".join(act) + ")" + tail

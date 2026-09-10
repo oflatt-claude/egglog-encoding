@@ -198,7 +198,7 @@ CHECKS = [
     (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
-        both(ratio(r"(\d+)/(\d+) slotted tests pass", 20), paper_sdql_ran),
+        both(ratio(r"(\d+)/(\d+) slotted tests pass", 22), paper_sdql_ran),
         False,
         False,
     ),
@@ -249,7 +249,7 @@ CHECKS = [
     (
         "refusals",
         ("slotted/check-refusals.py",),
-        ratio(r"(\d+)/(\d+) refusals hold, with a message", 19),
+        ratio(r"(\d+)/(\d+) refusals hold, with a message", 29),
         False,
         False,
     ),

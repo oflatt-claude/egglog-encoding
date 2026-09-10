@@ -53,14 +53,22 @@ PROBES = [
     ("ok", "relation", L + "(relation R (M M))\n"),
     ("ok", "function with :merge", L + "(function Cost (M) i64 :merge (min old new))\n"),
     ("refused", "constructor :cost", "(sort M)\n(constructor N (i64) M :cost 5)\n"),
-    ("refused", "datatype*, several sorts at once", "(datatype* (A (F A)) (B (G B)))\n"),
+    (
+        "ok",
+        "datatype*, with independent homogeneous sorts",
+        "(datatype* (A (A0) (F A)) (B (B0) (G B)))\n(let a (F (A0)))\n(let b (G (B0)))\n(run 0)\n",
+    ),
     # ---- other rule forms ---------------------------------------------------------
     ("refused", "rule", L + "(rule ((= a (Nil))) ())\n"),
     ("refused", "birewrite", L + '(birewrite (Add x y) (Add y x) :name "r")\n'),
     ("refused", "set, which needs rule", L + "(function C (M) i64 :no-merge)\n(rule ((= a (Nil))) ((set (C a) 1)))\n"),
     # ---- commands -----------------------------------------------------------------
     ("ok", "push and pop", L + "(push)\n(let a (Nil))\n(pop)\n"),
-    ("ok", "extract", L + "(let a (Nil))\n(run 0)\n(extract a)\n"),
+    (
+        "ok",
+        "extract, selecting either carrier",
+        "(datatype* (A (A0)) (B (B0)))\n(let a (A0))\n(let b (B0))\n(run 0)\n(extract a)\n(extract b)\n",
+    ),
     ("ok", "print-size", L + "(let a (Nil))\n(run 0)\n(print-size)\n"),
     ("refused", "run-schedule, which would skip the phasing", L + "(let a (Nil))\n(run-schedule (run 1))\n"),
 ]

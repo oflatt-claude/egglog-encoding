@@ -4,8 +4,9 @@
 ;;; machinery is renamed to `S` rather than a `U` being invented alongside it -- so the
 ;;; sort name survives into terms, extraction and printing.
 ;;;
-;;; One sort only. Each would need its own `RenamesToLeader`, `Equated` and `ClassSlots`,
-;;; and a program declaring two is refused rather than mistranslated.
+;;; With one sort these table names remain unsuffixed. A program declaring several
+;;; independent carriers gets one indexed table family per sort; see
+;;; `multiple-sorts.egg` for that case.
 ;;;
 ;;;     python3 slotted/slotted-egglog.py slotted/tests/own-sort.egg
 

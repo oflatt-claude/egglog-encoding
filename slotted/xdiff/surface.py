@@ -62,8 +62,8 @@ class FakeSource:
         self.spec = spec
         self.path = type("P", (), {"name": "<fuzz>"})()
 
-    def term(self, form, column=enc.CHILD, ground=True):
-        return sc.Source.term(self, form, column, ground)
+    def term(self, form, column=enc.CHILD, ground=True, expected_sort=None):
+        return sc.Source.term(self, form, column, ground, expected_sort)
 
 
 SRC = FakeSource(X.LANG, {op.ctor: op.sig for op in X.LANG.ops.values()})

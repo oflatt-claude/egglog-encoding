@@ -131,6 +131,46 @@ fn substitutes_an_occurring_slot() -> Result<(), Error> {
     Ok(())
 }
 
+/// A multi-sort compiler gives each carrier its own class-slot function.  The
+/// optional final argument selects that function without changing the legacy
+/// five-argument form above.
+#[test]
+fn accepts_an_explicit_class_slots_table() -> Result<(), Error> {
+    egraph(
+        r#"
+(function ClassSlots_1 (U) Renaming :merge (map-intersect old new))
+(set (ClassSlots_1 (Var 0)) (map-of 0 0))
+(set (ClassSlots_1 (Null)) (map-empty))
+(let $body (H (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
+(set (ClassSlots_1 $body) (map-of 0 0 1 1))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "ClassSlots_1"))
+(let $frame (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null) "ClassSlots_1"))
+(check (= $out (H (map-empty) (Null) (map-of 0 1) (Var 0))))
+(check (= $frame (map-of 1 1)))
+"#,
+    )?;
+    Ok(())
+}
+
+/// The table name is metadata, not an unchecked dynamic lookup. A missing or
+/// differently shaped table is rejected before traversal.
+#[test]
+fn rejects_an_invalid_explicit_class_slots_table() {
+    assert_subst_rejected(
+        r#"
+(let $body (H (map-of 0 0) (Var 0) (map-empty) (Null)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "MissingClassSlots"))
+"#,
+    );
+    assert_subst_rejected(
+        r#"
+(function WrongClassSlots (i64) Renaming :no-merge)
+(let $body (H (map-of 0 0) (Var 0) (map-empty) (Null)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "WrongClassSlots"))
+"#,
+    );
+}
+
 /// A slot `body` does not name cannot occur in it, so `body` comes back as it
 /// is and no row is added.
 #[test]

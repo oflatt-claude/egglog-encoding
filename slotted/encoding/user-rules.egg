@@ -48,6 +48,15 @@
 ;;; the counter-examples live -- for each construction, the spelling it rules out together
 ;;; with the e-graph that tells the two apart.
 ;;;
+;;; ONE CARRIER IS NOT A SEMANTIC LIMIT.  This worked tutorial uses the historical
+;;; unsuffixed `Var`, `RenamesToLeader`, `Equated`, `ClassSlots`, and `SubstPending`
+;;; names.  When a source declares several independent equality sorts, the compiler
+;;; emits this same recipe as `_0`, `_1`, ... table families with `SlottedVar_N`; the
+;;; renaming primitives, `Idx`, layout metadata, and `slotted` schedule remain shared.
+;;; `slotted/tests/multiple-sorts.egg` is the executable and snapshotted two-carrier
+;;; instance.  Constructors with a slotted child of a different carrier remain an
+;;; explicit refusal, so no rule below ever has to mix two families.
+;;;
 ;;; EVERY RULE HERE IS A REAL ONE.  All eleven are rewrites from `benches/sdql.rs` or
 ;;; `tests/array/mod.rs`, and each is what `slotted-encoder.py` emits for it -- checked, not
 ;;; claimed: `slotted/check-tutorial.py` compares every rule below against the
@@ -981,6 +990,10 @@
 ;;; those columns into a binder.  The primitive reloads and validates those facts on each
 ;;; call; missing or ambiguous metadata is an error, not a heuristic fallback.  Containers
 ;;; in source constructors are deliberately unsupported for now.
+;;; In a multi-carrier program the generated primitive calls take one additional String
+;;; argument naming that carrier's `ClassSlots_N` function.  The five-argument spelling
+;;; quoted below defaults to the one-carrier `ClassSlots`, so existing generated output
+;;; and this tutorial stay unchanged.
 ;;;
 ;;; That metadata is what makes substitution match `Bind<T>`: marker edges are node data,
 ;;; not recursive children and not part of `AstSize`; a binder for `x` stops descent into

@@ -38,14 +38,39 @@ or the same thing the long way, which egglog also accepts:
 (constructor Num (i64) U)
 ```
 
-The sort a program declares **is** the carrier: a column in it is a slotted child, and
-the machinery is renamed to that sort rather than a `U` being invented beside it. Any
-other supported base column — currently `i64` or `String` — is a payload and carries no
-slots. One sort per program; two are refused rather than mistranslated, since each needs
-its own `RenamesToLeader`, `Equated` and `ClassSlots`. Container-valued constructor
-columns are outside this front end's current contract. In particular, `subst` rejects
-an erased runtime `Id` column that the generated layout has not identified as a slotted
-edge rather than guessing whether it is a container.
+Every equality sort a program declares is a **carrier**: a column in a carrier is a
+slotted child. Programs may have several independent carriers, either as separate
+`sort`/`constructor` declarations or as a `datatype*`:
+
+```
+(datatype*
+  (Expr (EVar Expr) (ELam Expr Expr :binder 0))
+  (Type (TVar Type) (TForall Type Type :binder 0)))
+```
+
+Each carrier gets its own variable constructor and its own
+`RenamesToLeader_N`, `Equated_N`, `ClassSlots_N`, and `SubstPending_N` tables;
+`Renaming`, `Namings`, `Idx`, layout metadata, and the `slotted` schedule are shared.
+The suffix is the carrier's zero-based declaration order. A one-carrier program keeps
+the historical unsuffixed table names and encoding behavior.
+
+For now every constructor is homogeneous: all its slotted children must have the same
+carrier as its result. Thus `(constructor App (Expr Expr) Expr)` is supported, while
+`(constructor Ann (Expr Type) Expr)` is rejected explicitly. Cross-carrier edges require
+child-sort-specific canonicalisation and substitution and are future work; treating the
+`Type` column as an inert payload would be unsound.
+
+A rewrite and all of its `:when` patterns likewise stay in one carrier, and `union` and
+the slotted equality checks require both terms to have the same carrier. Globals retain
+the carrier of the term bound to them. These mistakes are diagnosed by the source
+compiler rather than left to erased generated `Id` columns.
+
+Any other supported base column — currently `i64` or `String` — is a payload and
+carries no slots. Container-valued constructor columns are outside this front end's
+current contract. In particular, `subst` rejects an erased runtime `Id` column that the
+generated layout has not identified as a slotted edge rather than guessing whether it
+is a container. A top-level bare slot in a multi-carrier program is also rejected when
+there is no constructor context from which to infer its carrier.
 
 `:binder` names the child positions whose slot the node binds, counting over the
 carrier columns only — so `Lam` binds the slot in its first child and `Let` in its
@@ -63,7 +88,7 @@ given an accidental scope.
 
 egglog's own declaration options — `:cost`, `:unextractable`,
 `:internal-term-constructor` — are refused rather than ignored: extraction here would
-not honour them. `datatype*` is refused too, being several sorts at once.
+not honour them.
 
 No include is needed either way; the compiler emits the machinery for exactly the
 constructors declared.

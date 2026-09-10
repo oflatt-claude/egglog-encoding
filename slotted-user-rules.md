@@ -68,6 +68,15 @@ egglog e-class: nodes equal up to renaming are linked by `RenamesToLeader` and o
 is deleted, so a slotted class is a set of `U` values sharing a leader. And every
 `(Var v)` collapses to `[0↦v] * (Var 0)`, so the leaves are one class, not many.
 
+The notation below uses one carrier `U`, which keeps the rules readable. A source may
+declare several independent equality sorts. The compiler emits the same machinery
+once per carrier as `RenamesToLeader_0`, `Equated_0`, `ClassSlots_0`,
+`SubstPending_0`, then `_1`, and so on; its internal `SlottedVar_N` replaces `Var`.
+`Renaming`, naming refinement, physical-layout metadata, and the phased `slotted`
+schedule remain shared. One-sort output retains the unsuffixed spelling shown here.
+Constructors are currently homogeneous—all slotted children have the result carrier—so
+no generated rule ever mixes two table families.
+
 ## The model
 
 **A rule variable is an invocation, not a class.** So a user variable `x`
@@ -1719,6 +1728,11 @@ disagreeing with the reference. A direct witness would be better.
   one printed spelling are not yet assigned distinct internal identities. The
   `flat-binder-free` differential witness and native `sdql-binders.egg` case pin the
   miss; issue #81 specifies the compiler fix and the harder shared-PVar boundary.
+* **Cross-carrier edges.** Several independent homogeneous equality sorts are
+  supported, including `datatype*`, but a constructor returning one carrier cannot yet
+  have a slotted child from another. Such an edge needs the child's table family for
+  canonicalisation and the parent's family for the node; it is rejected rather than
+  flattened as a payload or sent through the wrong relation.
 * **Performance evaluation.** Deep right-hand sides are exercised by M11, and
   capture-avoiding `subst` by the fixture-backed beta comparisons. The paper BATAX
   source-to-target regression is also runnable, but it uses a goal-directed subset of
@@ -1893,8 +1907,10 @@ refinement, and binder-aware substitution are local additions:
     `SlottedNodeLayout`, `SlottedEdgeLayout`, and `SlottedBinderLayout` facts rather
     than guessing which erased `Id` columns are children. Binder markers are excluded
     from traversal and extraction cost, shadowing stops descent, and conflicting
-    private binders are refreshed. The primitive rejects missing layout facts and
-    unsupported container columns.
+    private binders are refreshed. The optional final string argument selects a
+    carrier-specific `ClassSlots_N` table; omitting it retains the legacy
+    `ClassSlots`. The primitive rejects missing layout facts and unsupported container
+    columns.
 * `egglog/src/lib.rs` — `bool=`.
 * `egglog/src/sort/bool.rs` — `and` made variadic, like `or`.
 

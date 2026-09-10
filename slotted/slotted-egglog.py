@@ -9,9 +9,10 @@ so there is no build artifact on the path between a test and running it.
 
 THE LANGUAGE
 
-    (constructor Sum (U U U U) U :binder 1 2)   the language, inline. A `U` column is
-                                                a slotted child; `:binder` names the
-                                                child positions whose slot it binds.
+    (constructor Sum (U U U U) U :binder 1 2)   the language, inline. A column in any
+                                                declared equality sort is a slotted
+                                                child; `:binder` names the child
+                                                positions whose slot it binds.
 
     (let r (Sing Null Null))                    name a term
     (let a (Sum r $5 $6 Null))                  a `$n` in a binder column is the bound
@@ -61,8 +62,10 @@ node as the encoding STORES it, renamings and all.
 
     (extract a)             (F (map-of 0 2) (Var 0) (map-of 0 1) (Var 0))
 
-A check whose claim is none of the ones above is egglog's too, so a test can drop to
-the encoded level -- `(check (RenamesToLeader a m l))` -- without leaving the language.
+A check whose claim is none of the ones above is egglog's too, so a one-sort test can
+drop to the encoded level -- `(check (RenamesToLeader a m l))` -- without leaving the
+language. Multi-sort output uses one indexed family per carrier,
+`RenamesToLeader_0`, `RenamesToLeader_1`, and so on.
 
 WHAT `=` MEANS HERE
 
@@ -134,15 +137,23 @@ class Terms(enc.TermLang):
     opaque value here.
     """
 
-    def __init__(self, ops):
-        super().__init__(ops)
+    def __init__(self, ops, tables=None):
+        super().__init__(ops, tables)
         self.bound = {}
 
     def slots(self, t):
         return self.slots(self.bound[t[1]]) if t[0] == "name" else super().slots(t)
 
-    def enc(self, t):
-        return f"${t[1]}" if t[0] == "name" else super().enc(t)
+    def sort_of(self, t, expected=None):
+        return self.sort_of(self.bound[t[1]], expected) if t[0] == "name" else super().sort_of(t, expected)
+
+    def enc(self, t, expected_sort=None):
+        if t[0] == "name":
+            actual = self.sort_of(t)
+            if expected_sort is not None and actual != expected_sort:
+                raise SystemExit(f"global {t[1]!r} has sort {actual}, but this position requires {expected_sort}")
+            return f"${t[1]}"
+        return super().enc(t, expected_sort)
 
 
 def payload(tok, ground=True):
@@ -184,6 +195,8 @@ class Source:
         except ValueError:
             self.relpath = path.name
         self.spec = {}
+        self.output_sorts = {}
+        self.child_sorts = {}
         self.body = []
         self.includes = []
         # A program may declare its own sort, and then THAT is the sort its terms have --
@@ -193,21 +206,89 @@ class Source:
         self.sorts = []
         self._ctors = []
         self._read(path)
+        if len(set(self.sorts)) != len(self.sorts):
+            raise SystemExit(f"{path.name}: an equality sort is declared more than once")
+        tables = enc.sort_tables(self.carrier_sorts())
+        if len(tables) > 1:
+            reserved = {
+                "Renaming",
+                "Namings",
+                "Idx",
+                "slotted",
+                "SlottedNodeLayout",
+                "SlottedEdgeLayout",
+                "SlottedBinderLayout",
+            }
+            for names in tables.values():
+                reserved.update(
+                    (
+                        names.var,
+                        names.renames,
+                        names.equated,
+                        names.class_slots,
+                        names.subst_pending,
+                    )
+                )
+            collision = next((sort for sort in self.sorts if sort in reserved), None)
+            if collision is None:
+                collision = next((form[1] for form in self._ctors if form[1] in reserved), None)
+            if collision is None:
+                collision = next(
+                    (
+                        form[1]
+                        for form, _origin in self.body
+                        if isinstance(form, list)
+                        and len(form) > 1
+                        and form[0] in ("function", "relation", "ruleset")
+                        and form[1] in reserved
+                    ),
+                    None,
+                )
+            if collision is not None:
+                raise SystemExit(
+                    f"{path.name}: declaration {collision!r} is reserved by the multi-sort slotted encoding"
+                )
         for form in self._ctors:
-            self.spec.update(enc.read_language_form(form, self.carrier_sorts()))
+            name, sig, output, children = enc.read_typed_language_form(form, self.carrier_sorts())
+            if name in self.spec:
+                raise SystemExit(f"{path.name}: constructor {name!r} is declared more than once")
+            foreign = [sort for sort in children if sort != output]
+            if foreign:
+                raise SystemExit(
+                    f"{path.name}: constructor {name} produces {output} but has a slotted child of sort "
+                    f"{foreign[0]}; cross-sort slotted children are not supported yet"
+                )
+            if name in {names.var for names in tables.values()}:
+                raise SystemExit(f"{path.name}: constructor {name!r} is reserved by the slotted encoding")
+            self.spec[name] = sig
+            self.output_sorts[name] = output
+            self.child_sorts[name] = children
         if not self.spec:
             raise SystemExit(
                 f"{path.name}: no constructors declared. Write `(datatype U (Succ U) ...)`, "
                 "or a `(sort U)` and its `(constructor ...)` lines."
             )
-        self.lang = Terms({c: enc.Op(c, c, sig) for c, sig in self.spec.items()})
+        self.tables = tables
+        self.lang = Terms(
+            {
+                c: enc.Op(
+                    c,
+                    c,
+                    sig,
+                    sort=self.output_sorts[c],
+                    kid_sorts=self.child_sorts[c],
+                )
+                for c, sig in self.spec.items()
+            },
+            tables,
+        )
 
     def _read(self, path):
         """This file's declarations and body, with any included source read first.
 
         `(include "...")` in a slotted source names ANOTHER SLOTTED SOURCE, and pulls in
         its constructors and its rules -- so a test over the sdql rules says
-        `(include "slotted/languages/sdql.egg")` instead of restating 43 of them. A slotted
+        `(include "slotted/languages/sdql.egg")` instead of restating 44 of them. A slotted
         source never includes the hand-written core or a generated file: the compiler
         supplies the core and generates the machinery, which is the whole point.
         """
@@ -232,10 +313,10 @@ class Source:
                 # as `(sort ...)` and `(constructor ...)` written separately.
                 self._ctors.extend(self._variants(path, form))
             elif isinstance(form, list) and form and form[0] == "datatype*":
-                raise SystemExit(
-                    f"{path.name}: `datatype*` declares several sorts at once, and the "
-                    "machinery is written for one. Declare the one sort with `datatype`."
-                )
+                for group in form[1:]:
+                    if not isinstance(group, list):
+                        raise SystemExit(f"{path.name}: each `datatype*` entry must be a datatype group, got {group!r}")
+                    self._ctors.extend(self._variants(path, ["datatype", *group]))
             else:
                 if isinstance(form, list) and len(form) == 2 and form[0] == "sort":
                     self.sorts.append(form[1])
@@ -271,23 +352,24 @@ class Source:
         return tuple(self.sorts) if self.sorts else (CARRIER,)
 
     def core(self):
-        """The hand-written core, as text to inline, or None to include it as it stands.
+        """The carrier core to inline, or None to include the legacy one as it stands.
 
         A program that declares no sort gets the file included, which is what every test
         did before sorts were a thing and keeps their snapshots unchanged. A program that
-        declares one gets the same core with the carrier RENAMED to it, and without the
-        `(sort ...)` line, since the program's own declaration is now that sort. The rules
+        declares one gets the same core with the carrier RENAMED to it; the core declares
+        that sort before its relations and the source declaration is dropped. The rules
         are untouched: they name relations, and with a single sort the relation names do
-        not change.
+        not change. Several sorts share the map/naming prelude and get one indexed copy
+        of the carrier-specific tables and rules each.
         """
         if not self.sorts:
             return None
-        if len(self.sorts) != 1:
-            raise SystemExit(
-                f"{self.path.name}: {len(self.sorts)} sorts declared ({', '.join(self.sorts)}), and the "
-                "machinery is written for one. Each sort needs its own `RenamesToLeader`, `Equated` "
-                "and `ClassSlots`, which is not built yet."
-            )
+        if len(self.sorts) > 1:
+            text = (ROOT / CORE_FILE).read_text()
+            marker = ";; One `U` value per e-node and per class; a slotted class spans several of them."
+            shared, found, _carrier = text.partition(marker)
+            assert found, f"{CORE_FILE}: cannot find the carrier-core boundary"
+            return shared.rstrip() + "\n\n" + enc.multi_sort_core(self.tables)
         sort = self.sorts[0]
         text = (ROOT / CORE_FILE).read_text()
         # The rename is textual, which is exact for a name the core does not otherwise
@@ -324,7 +406,7 @@ class Source:
         """
         return ("name", name) if ground else self.lang.bound[name]
 
-    def term(self, form, column=enc.CHILD, ground=True):
+    def term(self, form, column=enc.CHILD, ground=True, expected_sort=None):
         """A slotted term as the encoder's tuple form.
 
         A `$s` means different things in the two settings, and the difference is real
@@ -344,7 +426,14 @@ class Source:
                     )
                 if name not in self.lang.bound:
                     raise SystemExit(f"{self.path.name}: no global {form!r} is bound here")
-                return self.global_ref(name, ground)
+                t = self.global_ref(name, ground)
+                actual = self.lang.sort_of(t, expected_sort)
+                if expected_sort is not None and actual != expected_sort:
+                    raise SystemExit(
+                        f"{self.path.name}: global {form!r} has sort {actual}, "
+                        f"but this position requires {expected_sort}"
+                    )
+                return t
             if SLOT.match(form):
                 # ALWAYS a slot. egglog spells a global `$name`, and this language cannot
                 # borrow that: `$0` is a slot, so `$name` was resolved as a global when one
@@ -356,6 +445,11 @@ class Source:
                 slot = int(form[1:]) if form[1:].isdigit() else form[1:]
                 return slot if column is enc.BINDER else ("var", slot)
             if form in self.spec:  # a nullary constructor, written bare
+                output_sort = getattr(self, "output_sorts", {}).get(form, self.lang[form].sort)
+                if expected_sort is not None and output_sort != expected_sort:
+                    raise SystemExit(
+                        f"{self.path.name}: {form} has sort {output_sort}, but this position requires {expected_sort}"
+                    )
                 return (form,)
             if form.startswith("?"):
                 # a pattern variable. Its NAME is the identifier without the sigil,
@@ -363,7 +457,14 @@ class Source:
                 # renders back with the `?`, so the reference side reads it too.
                 return form[1:]
             if form in self.lang.bound:
-                return self.global_ref(form, ground)
+                t = self.global_ref(form, ground)
+                actual = self.lang.sort_of(t, expected_sort)
+                if expected_sort is not None and actual != expected_sort:
+                    raise SystemExit(
+                        f"{self.path.name}: global {form!r} has sort {actual}, "
+                        f"but this position requires {expected_sort}"
+                    )
+                return t
             # A BARE IDENTIFIER IS A PATTERN VARIABLE, which is how egglog spells one.
             # `?x` is egg's spelling and names the same variable, so a rule may mix
             # them; a bare name that is a global means the global, as in egglog, and
@@ -381,22 +482,50 @@ class Source:
             # Not a constructor: a call, and only legal on a right-hand side. Its
             # arguments are read like any others so that `b` and `$x` mean here what
             # they mean everywhere else.
-            return (head, *(self.term(a, ground=ground) for a in args))
+            return (head, *(self.term(a, ground=ground, expected_sort=expected_sort) for a in args))
         assert head in self.spec, f"{self.path.name}: unknown constructor {head!r}"
+        actual_sort = getattr(self, "output_sorts", {}).get(head, self.lang[head].sort)
+        if expected_sort is not None and actual_sort != expected_sort:
+            raise SystemExit(
+                f"{self.path.name}: {head} has sort {actual_sort}, but this position requires {expected_sort}"
+            )
         kinds = self.lang[head].arg_kinds()
         assert len(args) == len(kinds), f"{self.path.name}: {head} takes {len(kinds)} arguments, given {len(args)}"
-        return (
-            head,
-            *(
-                self.term(a, k, ground) if k in enc.SLOTTED else payload(a, ground)
-                for a, k in zip(args, kinds, strict=True)
-            ),
-        )
+        parsed, child = [], 0
+        child_sorts = getattr(self, "child_sorts", {}).get(head, self.lang[head].kid_sorts)
+        for arg, kind in zip(args, kinds, strict=True):
+            if kind in enc.SLOTTED:
+                parsed.append(self.term(arg, kind, ground, child_sorts[child]))
+                child += 1
+            else:
+                parsed.append(payload(arg, ground))
+        return (head, *parsed)
 
-    def encode(self, form, column=enc.CHILD):
+    def encode(self, form, column=enc.CHILD, expected_sort=None):
         """A ground term as the egglog expression for its value."""
-        t = self.term(form, column)
-        return "(Var 0)" if t[0] == "var" else self.lang.enc(t)
+        t = self.term(form, column, expected_sort=expected_sort)
+        if t[0] == "var":
+            sort = expected_sort
+            if sort is None:
+                if len(self.tables) > 1:
+                    raise SystemExit(
+                        f"{self.path.name}: bare top-level slot {form!r} has no equality sort; "
+                        "put it under a constructor"
+                    )
+                sort = next(iter(self.tables))
+            return f"({self.tables[sort].var} 0)"
+        return self.lang.enc(t, expected_sort)
+
+    def sort_of_form(self, form, expected=None, ground=True):
+        """Infer a slotted expression's equality sort from its typed context."""
+        sort = self.lang.sort_of(self.term(form, ground=ground, expected_sort=expected), expected)
+        if sort is None and len(self.tables) == 1:
+            sort = next(iter(self.tables))
+        if sort is None:
+            raise SystemExit(
+                f"{self.path.name}: {form!r} has no equality-sort context; put the bare slot under a constructor"
+            )
+        return sort
 
 
 def compile_source(src, own_only=False):
@@ -406,6 +535,7 @@ def compile_source(src, own_only=False):
     both are already snapshotted by the generator that emits them. What is left is the
     forms this test wrote, which is the part no other snapshot covers.
     """
+    core = src.core()
     out = [
         f";;; COMPILED from {src.relpath} by slotted/slotted-egglog.py.",
         ";;;",
@@ -413,7 +543,7 @@ def compile_source(src, own_only=False):
         ";;; edited by hand, and rewritten by `check-slotted.py --update`. This is what",
         ";;; running that test runs, and the only file it includes is the hand-written core.",
         "",
-        f'(include "{CORE_FILE}")' if src.core() is None else src.core(),
+        f'(include "{CORE_FILE}")' if core is None else core,
         "",
     ]
     if own_only:
@@ -424,9 +554,17 @@ def compile_source(src, own_only=False):
             ";;; of lines over and over.",
         ]
     else:
-        out.append(
-            enc.in_slotted_ruleset("\n".join(enc.emit(src.spec, provided=enc.CORE, sort=src.carrier_sorts()[0])))
-        )
+        emitted = []
+        for sort in src.carrier_sorts():
+            spec = {name: sig for name, sig in src.spec.items() if src.output_sorts[name] == sort}
+            provided = enc.CORE if len(src.tables) == 1 else None
+            emitted += enc.emit(
+                spec,
+                provided=provided,
+                sort=sort,
+                tables=src.tables[sort],
+            )
+        out.append(enc.in_slotted_ruleset("\n".join(emitted)))
     rules = 0
     scopes = []  # globals saved by each open `push`, restored by its `pop`
     extracts = 0
@@ -475,7 +613,18 @@ def compile_source(src, own_only=False):
             # different slots is what forces slots redundant and what records a
             # class's symmetries.
             _, a, b = form
-            _emit(out, keep, f"(union {src.encode(a)} {src.encode(b)})")
+            ta, tb = src.term(a), src.term(b)
+            sa, sb = src.lang.sort_of(ta), src.lang.sort_of(tb)
+            sort = sa or sb
+            if sort is None and len(src.tables) == 1:
+                sort = next(iter(src.tables))
+            if sort is None:
+                raise SystemExit(
+                    f"{src.path.name}: a union of two bare slots has no equality sort; put them under constructors"
+                )
+            if sa not in (None, sort) or sb not in (None, sort):
+                raise SystemExit(f"{src.path.name}: cannot union terms of sorts {sa} and {sb}")
+            _emit(out, keep, f"(union {src.encode(a, expected_sort=sort)} {src.encode(b, expected_sort=sort)})")
         elif head == "rewrite":
             _emit(out, keep, compile_rewrite(src, form))
             rules += 1
@@ -495,15 +644,18 @@ def compile_source(src, own_only=False):
             # leader, run that one rule, extract the function.
             extracts += 1
             fn, rs = f"_leader{extracts}", f"_extract{extracts}"
+            sort = src.sort_of_form(form[1])
+            tables = src.tables[sort]
             # `:merge new` rather than no merge: a term reaches its leader by every
             # renaming in the orbit, so the rule fires once per row and sets the same
             # leader each time.
-            _emit(out, keep, f"(function {fn} () {src.carrier_sorts()[0]} :merge new)")
+            _emit(out, keep, f"(function {fn} () {sort} :merge new)")
             _emit(out, keep, f"(ruleset {rs})")
             _emit(
                 out,
                 keep,
-                f"(rule ((RenamesToLeader {src.encode(form[1])} _m _l)) ((set ({fn}) _l)) :ruleset {rs})",
+                f"(rule (({tables.renames} {src.encode(form[1], expected_sort=sort)} _m _l)) "
+                f"((set ({fn}) _l)) :ruleset {rs})",
             )
             _emit(out, keep, f"(run-schedule (saturate (run {rs})))")
             _emit(out, keep, f"(extract ({fn}))")
@@ -641,6 +793,13 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     for i, (var, pat) in enumerate(parts["equalities"]):
         _, extra = enc.flatten(src.lang, src.term(pat, ground=False), root=var, tmp=f"?_w{i}_")
         atoms += extra
+    root_sort = src.lang[atoms[0][1]].sort
+    foreign = next((src.lang[atom[1]].sort for atom in atoms if src.lang[atom[1]].sort != root_sort), None)
+    if foreign is not None:
+        raise SystemExit(
+            f"{src.path.name}: a rule rooted in {root_sort} has a side pattern in {foreign}; "
+            "cross-sort multipatterns are not supported"
+        )
     order = enc.connected_order(src.lang, atoms, first=lead)
     return enc.compile_rule(
         src.lang,
@@ -815,18 +974,27 @@ def compile_check(src, form):
         # f($1,$2) = g($2,$1) and g($1,$2) = h($1,$2) the terms f($1,$2) and h($1,$2)
         # share a class but differ by the swap, so they are NOT equal, while f($1,$2)
         # and h($2,$1) are.
+        terms = [src.term(x, enc.CHILD) for x in args]
+        sorts = [src.lang.sort_of(t) for t in terms]
+        sort = next((s for s in sorts if s is not None), None)
+        if sort is None and len(src.tables) == 1:
+            sort = next(iter(src.tables))
+        if sort is None:
+            raise SystemExit(f"{src.path.name}: comparing bare slots has no equality sort; put them under constructors")
+        if any(s not in (None, sort) for s in sorts):
+            raise SystemExit(f"{src.path.name}: cannot compare terms of sorts {sorts[0]} and {sorts[1]}")
+        tables = src.tables[sort]
         atoms, maps = [], []
-        for i, x in enumerate(args):
-            t = src.term(x, enc.CHILD)
+        for i, (x, t) in enumerate(zip(args, terms, strict=True)):
             m = f"_m{i}"
             if t[0] == "var":
                 # A bare slot is not a node: it is the variable class under a renaming.
                 # Its invocation is `(Var 0)`'s with that one slot sent to this one, so
                 # WHICH slot it names lives in the composition rather than in the value.
-                atoms.append(f"(RenamesToLeader (Var 0) {m} _l)")
+                atoms.append(f"({tables.renames} ({tables.var} 0) {m} _l)")
                 maps.append(f"(compose (map-of 0 {t[1]}) {m})")
             else:
-                atoms.append(f"(RenamesToLeader {src.encode(x)} {m} _l)")
+                atoms.append(f"({tables.renames} {src.encode(x, expected_sort=sort)} {m} _l)")
                 maps.append(m)
         body = f"(check {' '.join(atoms)} (= {maps[0]} {maps[1]}))"
         if (kind == "!=") != negated:
@@ -837,8 +1005,18 @@ def compile_check(src, form):
         # renaming down. The pair it exists for is two terms that are alpha-variants
         # of each other with a free slot renamed: they are not equal, because no one
         # renaming reaches both, yet they are the same class.
-        a, b = (src.encode(x) for x in args)
-        body = f"(check (RenamesToLeader {a} _m1 _l) (RenamesToLeader {b} _m2 _l))"
+        terms = [src.term(x, enc.CHILD) for x in args]
+        sorts = [src.lang.sort_of(t) for t in terms]
+        sort = next((s for s in sorts if s is not None), None)
+        if sort is None and len(src.tables) == 1:
+            sort = next(iter(src.tables))
+        if sort is None:
+            raise SystemExit(f"{src.path.name}: comparing bare slots has no equality sort; put them under constructors")
+        if any(s not in (None, sort) for s in sorts):
+            raise SystemExit(f"{src.path.name}: cannot compare terms of sorts {sorts[0]} and {sorts[1]}")
+        table = src.tables[sort].renames
+        a, b = (src.encode(x, expected_sort=sort) for x in args)
+        body = f"(check ({table} {a} _m1 _l) ({table} {b} _m2 _l))"
         if (kind == "renaming-!=") != negated:
             return f"(fail {body})"
         return body
@@ -846,24 +1024,25 @@ def compile_check(src, form):
         # "this class contains an application of this operator", which is what a rule
         # having fired looks like when the built term is not worth writing out -- or,
         # negated, what a guard refusing looks like: nothing of that shape appeared.
-        a = src.encode(args[0])
+        sort = src.sort_of_form(args[0])
+        a = src.encode(args[0], expected_sort=sort)
         ctor = args[1]
         assert ctor in src.spec, f"{src.path.name}: unknown constructor {ctor!r}"
+        if src.output_sorts[ctor] != sort:
+            raise SystemExit(f"{src.path.name}: {ctor} contains {src.output_sorts[ctor]} nodes, not {sort} nodes")
+        table = src.tables[sort].renames
         ncols = sum(2 if c in enc.SLOTTED else 1 for c in src.spec[ctor])
         cols = " ".join(f"_c{i}" for i in range(ncols))
-        body = (
-            f"(check (RenamesToLeader {a} _m1 _l) (RenamesToLeader _n _m2 _l)"
-            f" (= _n ({ctor}{' ' + cols if cols else ''})))"
-        )
+        body = f"(check ({table} {a} _m1 _l) ({table} _n _m2 _l) (= _n ({ctor}{' ' + cols if cols else ''})))"
         if (kind == "not-holds") != negated:
             return f"(fail {body})"
         return body
     if kind == "slots":
-        a = src.encode(args[0])
+        sort = src.sort_of_form(args[0])
+        a = src.encode(args[0], expected_sort=sort)
+        table = src.tables[sort].class_slots
         slots = " ".join(f"{s[1:]} {s[1:]}" for s in args[1:])
-        body = (
-            f"(check (= (ClassSlots {a}) (map-of {slots})))" if slots else f"(check (= (ClassSlots {a}) (map-empty)))"
-        )
+        body = f"(check (= ({table} {a}) (map-of {slots})))" if slots else f"(check (= ({table} {a}) (map-empty)))"
         return f"(fail {body})" if negated else body
     # Not one of the slotted claims, so it is an ordinary egglog check about the
     # encoding -- `(check (RenamesToLeader ...))` and the like. It names no slotted

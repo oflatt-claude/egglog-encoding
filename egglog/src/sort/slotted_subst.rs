@@ -1,6 +1,6 @@
 //! `slotted-subst`: substitution for the slotted e-graph encoding.
 //!
-//! `(slotted-subst body x var t_ren t)` replaces, inside `body`, the variable
+//! `(slotted-subst body x var t_ren t [class_slots])` replaces, inside `body`, the variable
 //! sitting at slot `x` of `body`'s frame with the invocation `t_ren * t`, and
 //! returns a class spelled in `body`'s frame whose slots are
 //! `(slots(body) \ {x}) ∪ im(t_ren)`.
@@ -201,8 +201,9 @@ fn substitute(
     var: Value,
     t_ren: &Ren,
     t: Value,
+    class_slots: &str,
 ) -> Result<Option<(Value, Ren)>, String> {
-    let layouts = Layouts::load(state)?;
+    let layouts = Layouts::load(state, class_slots)?;
     let terms = collect_terms(state, body, var, &layouts)?;
     if !terms.best.contains_key(&body) {
         return Ok(None);
@@ -211,11 +212,11 @@ fn substitute(
     // A class can hold nodes with redundant slots, so the chosen node's edge
     // images are only an upper bound. `ClassSlots` is the encoding's exact public
     // frame and is therefore required at the root.
-    let frame = class_slots_if_present(state, body)?
-        .ok_or_else(|| format!("{CLASS_SLOTS} has no row for the substitution body"))?;
+    let frame = class_slots_if_present(state, class_slots, body)?
+        .ok_or_else(|| format!("{class_slots} has no row for the substitution body"))?;
     if frame.iter().any(|(from, to)| from != to) {
         return Err(format!(
-            "{CLASS_SLOTS} returned a non-identity slot set for {body:?}: {frame:?}"
+            "{class_slots} returned a non-identity slot set for {body:?}: {frame:?}"
         ));
     }
 
@@ -238,6 +239,7 @@ fn substitute(
         t,
         memo: HashMap::new(),
         fresh: Fresh::new(used),
+        class_slots: class_slots.to_owned(),
     };
     Ok(rebuild.go(state, body, frame))
 }
@@ -250,6 +252,7 @@ struct Rebuild {
     t: Value,
     memo: HashMap<(Value, Ren), (Value, Ren)>,
     fresh: Fresh,
+    class_slots: String,
 }
 
 impl Rebuild {
@@ -321,7 +324,7 @@ impl Rebuild {
                 return None;
             }
         };
-        match class_slots_if_present(state, out) {
+        match class_slots_if_present(state, &self.class_slots, out) {
             Ok(Some(existing)) => slots.retain(|slot, _| existing.contains_key(slot)),
             Ok(None) => {}
             Err(err) => {
@@ -556,31 +559,35 @@ fn index(value: i64, what: &str) -> Result<usize, String> {
     usize::try_from(value).map_err(|_| format!("{what} must be a nonnegative column index"))
 }
 
-fn class_slots_if_present(state: &FullState<'_, '_>, class: Value) -> Result<Option<Ren>, String> {
+fn class_slots_if_present(
+    state: &FullState<'_, '_>,
+    class_slots: &str,
+    class: Value,
+) -> Result<Option<Ren>, String> {
     let Some(value) = state
-        .lookup(CLASS_SLOTS, RawValues(vec![class]))
-        .map_err(|err| format!("reading {CLASS_SLOTS} for {class:?}: {err}"))?
+        .lookup(class_slots, RawValues(vec![class]))
+        .map_err(|err| format!("reading {class_slots} for {class:?}: {err}"))?
     else {
         return Ok(None);
     };
     let slots = decode_renaming(state, value)?;
     if slots.iter().any(|(from, to)| from != to) {
         return Err(format!(
-            "{CLASS_SLOTS} for {class:?} is not an identity map: {slots:?}"
+            "{class_slots} for {class:?} is not an identity map: {slots:?}"
         ));
     }
     Ok(Some(slots))
 }
 
-fn validate_class_slots(state: &FullState<'_, '_>) -> Result<(), String> {
-    let action = live_action(state, CLASS_SLOTS)?;
+fn validate_class_slots(state: &FullState<'_, '_>, class_slots: &str) -> Result<(), String> {
+    let action = live_action(state, class_slots)?;
     if action.kind() != TableKind::Function
         || action.input_arity() != 1
         || action.output_arity() != 1
         || action.schema() != [ColumnTy::Id, ColumnTy::Id]
     {
         return Err(format!(
-            "{CLASS_SLOTS} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
+            "{class_slots} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
         ));
     }
     Ok(())
@@ -690,7 +697,7 @@ fn validate_constructor_layout(
 }
 
 impl Layouts {
-    fn load(state: &FullState<'_, '_>) -> Result<Self, String> {
+    fn load(state: &FullState<'_, '_>, class_slots: &str) -> Result<Self, String> {
         let string = ColumnTy::Base(state.base_values().get_ty::<S>());
         let integer = ColumnTy::Base(state.base_values().get_ty::<i64>());
 
@@ -743,7 +750,7 @@ impl Layouts {
                 .sort_by_key(|binder| (binder.marker, binder.covered, binder.discriminator));
             validate_constructor_layout(state, ctor, layout, string)?;
         }
-        validate_class_slots(state)?;
+        validate_class_slots(state, class_slots)?;
         Ok(layouts)
     }
 
@@ -848,18 +855,27 @@ impl Primitive for SlottedSubst {
 
 impl FullPrim for SlottedSubst {
     fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
-        let [body, x, var, t_ren, t] = args else {
-            panic!(
-                "{} takes five arguments; the typechecker admitted {}",
+        let (body, x, var, t_ren, t, class_slots) = match args {
+            [body, x, var, t_ren, t] => (*body, *x, *var, *t_ren, *t, CLASS_SLOTS.to_owned()),
+            [body, x, var, t_ren, t, class_slots] => (
+                *body,
+                *x,
+                *var,
+                *t_ren,
+                *t,
+                state.value_to_base::<S>(*class_slots).into_inner(),
+            ),
+            _ => panic!(
+                "{} takes five or six arguments; the typechecker admitted {}",
                 self.name(),
                 args.len()
-            )
+            ),
         };
-        let x = state.value_to_base::<i64>(*x);
+        let x = state.value_to_base::<i64>(x);
         // Cloned out so the container registry is not still borrowed when the
         // rebuild interns new renamings.
         let t_ren: Ren = state
-            .value_to_container::<MapContainer>(*t_ren)
+            .value_to_container::<MapContainer>(t_ren)
             .unwrap_or_else(|| {
                 panic!(
                     "{}'s type constraint admits only renaming values",
@@ -875,7 +891,7 @@ impl FullPrim for SlottedSubst {
                 )
             })
             .collect();
-        let (class, frame) = match substitute(&mut state, *body, x, *var, &t_ren, *t) {
+        let (class, frame) = match substitute(&mut state, body, x, var, &t_ren, t, &class_slots) {
             Ok(Some(result)) => result,
             Ok(None) => return None,
             Err(err) => {
@@ -890,8 +906,9 @@ impl FullPrim for SlottedSubst {
     }
 }
 
-/// `(slotted-subst body x var t_ren t) : (R, i64, R, Renaming, R) -> R`, and
-/// `slotted-subst-frame` the same with a `Renaming` result, for any eq-sort `R`.
+/// `(slotted-subst body x var t_ren t [class_slots])`, where the optional string
+/// names the carrier's class-slot function. The five-argument form uses the legacy
+/// `ClassSlots`. `slotted-subst-frame` has the same inputs and a `Renaming` result.
 struct SlottedSubstTypeConstraint {
     half: Half,
     name: String,
@@ -906,23 +923,35 @@ impl TypeConstraint for SlottedSubstTypeConstraint {
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
-        let [body, x, var, t_ren, t, out] = arguments else {
-            return vec![constraint::impossible(
-                constraint::ImpossibleConstraint::ArityMismatch {
-                    atom: Atom {
-                        span: self.span.clone(),
-                        head: self.name.clone(),
-                        args: arguments.to_vec(),
+        let (body, x, var, t_ren, t, class_slots, out) = match arguments {
+            [body, x, var, t_ren, t, out] => (body, x, var, t_ren, t, None, out),
+            [body, x, var, t_ren, t, class_slots, out] => {
+                (body, x, var, t_ren, t, Some(class_slots), out)
+            }
+            _ => {
+                return vec![constraint::impossible(
+                    constraint::ImpossibleConstraint::ArityMismatch {
+                        atom: Atom {
+                            span: self.span.clone(),
+                            head: self.name.clone(),
+                            args: arguments.to_vec(),
+                        },
+                        expected: if arguments.len() > 6 { 7 } else { 6 },
                     },
-                    expected: 6,
-                },
-            )];
+                )];
+            }
         };
 
         let mut cs: Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> = vec![
             constraint::assign(x.clone(), self.slot.clone()),
             constraint::assign(t_ren.clone(), self.renaming.clone()),
         ];
+        if let Some(class_slots) = class_slots {
+            cs.push(constraint::assign(
+                class_slots.clone(),
+                StringSort.to_arcsort(),
+            ));
+        }
 
         // The class arguments share one eq-sort, as does the result when it is
         // the class half; `xor` defers the choice until the surrounding program
