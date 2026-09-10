@@ -1649,8 +1649,9 @@ Not ported, with the reason:
 * **`flattening_is_not_faithful_for_a_sibling_slot_literal` as a correctness
   oracle** — it compares the crate's distinct nested and MultiPattern semantics.
   The encoding implements the latter. The actual source-to-MultiPattern
-  alpha-resolution gap for an explicit bound/free collision is covered separately by
-  `xsdql.py`'s `flat-binder-free` counterexample.
+  alpha-resolution gap for an explicit bound/free collision is covered differentially
+  by `xsdql.py`'s `flat-binder-free` counterexample and natively by
+  `slotted/tests/sdql-binders.egg`.
 
 ### Checking that the tests still test something
 
