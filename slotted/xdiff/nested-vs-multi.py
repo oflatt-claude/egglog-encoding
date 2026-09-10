@@ -1,14 +1,15 @@
-"""Does the multipattern matcher prove more than the single-pattern one?
+"""Diagnostic comparison of the reference's two distinct matcher APIs.
 
 The reference's own property test only requires *inclusion*: every equality the
 nested single pattern proves must also be proved by the flattened depth-1 form, and
 "the converse is deliberately not required -- the depth-1 matcher sees through
 redundant slots that `ematch_all` does not, which is the point of it".
 
-So the two are not interchangeable, and the paper's experiments are written as nested
-single patterns while this encoding matches the flattened form. This measures where
-that actually diverges: for every curated case whose atoms reconstruct into one
-nested pattern, run the reference both ways and compare.
+The two are not interchangeable, the nested matcher is known to be incomplete, and
+the encoding implements only `MultiPattern`. Nothing reported here is an encoding
+correctness verdict and this script is deliberately outside the test gate. It merely
+runs both reference APIs on every curated case whose atoms can reconstruct into one
+nested pattern.
 """
 
 import subprocess

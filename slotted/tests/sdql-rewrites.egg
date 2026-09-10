@@ -170,8 +170,8 @@
 ;;; late, and `SDQL_BUGS=slot-late` is that mutant: it loses this match.
 ;;;
 ;;; Only `let-binop4` can put a `let` in a `binop`'s class here, so a `Let` sharing
-;;; the root's class is the rule having fired. This is also the rule the reference's
-;;; nested matcher never fires -- see the two recorded divergences in xsdql.py.
+;;; the root's class is the rule having fired. `xsdql.py` checks the same query against
+;;; the reference MultiPattern matcher.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 

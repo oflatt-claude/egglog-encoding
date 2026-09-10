@@ -13,13 +13,12 @@ rules.  The remaining 8 are therefore the rules that benchmark actually runs.
 
 The two sides:
 
-  reference   `nested <pattern>` / `rhs` / `cond` lines through the reference's own
-              single-pattern matcher -- i.e. literally `Rewrite::new_if`, which is
-              what `rise_rules()` in the reference's `tests/rise` builds. That is the
-              copy to follow: `tests/rise` has Listing 1's language and Listing 1's
-              guard polarity, while `tests/array/mod.rs` in the checkout has a
-              non-binding `Lam(Slot, AppliedId)` and a `slot_free_in` helper that
-              returns "NOT free in", which inverts every guard in that file.
+  reference   the rules flattened to `MultiPattern` atoms. This is the pattern
+              language implemented by the encoding; nested `ematch_all` has different
+              semantics and is not used as an oracle here. The rule source follows
+              `tests/rise`, which has Listing 1's binding language and guard polarity;
+              `tests/array/mod.rs` instead has a non-binding `Lam(Slot, AppliedId)` and
+              an oppositely-polarized `slot_free_in` helper.
   encoding    a generated .egg file, each rule flattened into depth-1 atoms and
               compiled by `slotted/slotted-encoder.py`, which is the
               recipe in `slotted/tests/user-rules.egg`.
@@ -93,44 +92,15 @@ class Rule:
         self.conds = list(conds)
         self.fresh = list(fresh)
 
-    # ---- the reference side: one nested pattern and one nested right-hand side
-    def nested_lhs(self):
-        """The atoms re-nested into the single pattern they came from.
-
-        `atoms[0]` must be the pattern's outermost node; the encoding side is free to
-        lead with any atom (`connected_order`), but the reference gets the pattern
-        back as written.
-        """
-        by_root = {a[0]: a for a in self.atoms}
-        inner = {a[0] for a in self.atoms} - {self.atoms[0][0]}
-
-        def go(root):
-            _, op, kids, *_payloads = by_root[root]
-            binders = LANG[op].binders
-            parts = []
-            for i, k in enumerate(kids):
-                if k[0] == "pv" and k[1] in inner:
-                    parts.append(go(k[1]))
-                else:
-                    parts.append(slotenc.pat_sexpr(LANG, k, binder=(i in binders)))
-            return "({} {})".format(LANG[op].ref, " ".join(parts))
-
-        return go(self.atoms[0][0])
-
     def atom_lines(self):
-        """The pattern as `atom` lines, or None where it has no atom spelling."""
+        """The pattern as `MultiPattern` atom lines."""
         return slotenc.atom_lines(LANG, self.atoms[0][0], self.atoms)
 
     def spec_lines(self):
         pat = slotenc.pat_sexpr(LANG, self.rhs)
-        spelled = self.atom_lines() if FLAT else None
-        if spelled is None:
-            # On the nested path the root is unused -- the whole pattern is the root --
-            # so `rhs_root` keeping its `?` there was harmless.
-            out = ["rule", f"nested {self.nested_lhs()}", f"rhs {self.rhs_root} {pat}"]
-        else:
-            # an `atom`/`rhs` root is written bare; xmulti supplies the `?`
-            out = ["rule", *spelled[1], f"rhs {self.rhs_root.lstrip('?')} {pat}"]
+        spelled = self.atom_lines()
+        # an `atom`/`rhs` root is written bare; xmulti supplies the `?`
+        out = ["rule", *spelled[1], f"rhs {self.rhs_root.lstrip('?')} {pat}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
@@ -350,8 +320,8 @@ def check_case(case, order_check=True, shift_check=True):
     if not fails:
         print(f"  ok  {case.name:<44} {'fired' if fired else 'NO-OP'}  {rv}")
 
-    # 2. order independence of the flattening: which atom leads must not matter.
-    #    The reference sees one nested pattern, so its answer cannot depend on it.
+    # 2. order independence of the compiled query: which atom leads must not matter.
+    #    The reference receives the same unordered MultiPattern atoms each time.
     if order_check and not fails:
         for k in range(1, max(len(r.atoms) for r in case.rules)):
             ys, y = run_encoding(case, atom_order=k)
@@ -379,8 +349,7 @@ def check_case(case, order_check=True, shift_check=True):
 # reader sees are the rules that run here. `slotted-egglog.py` compiles the same file
 # for `run-slotted-tests.py`; neither restates a rule.
 #
-# The atoms come from `flatten`, which emits the pattern's outermost node first -- the
-# order `nested_lhs` needs to put the pattern back together for the reference.
+# The atoms come from `flatten`, which emits the pattern's outermost node first.
 def _load_rules():
     src = sc.Source(ARRAY_SRC)
     out = []
@@ -401,13 +370,8 @@ def _load_rules():
 
 
 #: name -> rule, and the same rules as a list. The per-rule cases below ask for one by
-#: name, which reads as the rule it is rather than as an index.
-#: Ask the reference the FLATTENED question, which is the like-for-like comparison: the
-#: encoding compiles rules by flattening them, and a nested pattern is not the same
-#: pattern -- it records which variables sit under a binder and a multipattern does not
-#: (upstream issue #48). `XARRAY_FLAT=0` restores the nested comparison.
-FLAT = os.environ.get("XARRAY_FLAT", "1") == "1"
-
+#: name, which reads as the rule it is rather than as an index. Both sides receive the
+#: same flattened MultiPattern query.
 RULES = {r.name: r for r in _load_rules()}
 ALL_RULES = list(RULES.values())
 
@@ -1024,7 +988,7 @@ def emit_egg():
         egg_section(
             "map-fission-fires-from-atom-2",
             "the same rule flattened with a different atom leading. The reference\n"
-            "matches one nested pattern, so its answer cannot depend on this.",
+            "receives the same unordered MultiPattern atoms.",
             c,
             want=True,
             atom_order=2,
@@ -1081,11 +1045,7 @@ def emit_egg():
 
 # ------------------------------------------------------------------------ main
 def main():
-    global FLAT
     args = sys.argv[1:]
-    if args and args[0] == "goal-smoke-nested":
-        FLAT = False
-        args[0] = "goal-smoke"
     if args and args[0] == "artifact-shapes":
         return check_artifact_goal_port()
     if args and args[0] == "show":

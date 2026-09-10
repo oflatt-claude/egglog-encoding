@@ -622,22 +622,16 @@
 ;;; compiler needs no case analysis for this: each pair is emitted by the same rule -- if an
 ;;; earlier atom bound it, constrain on it -- and they accumulate into one argument list.
 ;;;
-;;; This rule is also where flattening and the reference part company, and the encoding is
-;;; the more complete side.  `$x` is written for two INDEPENDENT SIBLING binders.  The
-;;; reference's nested matcher gives each `let` node's bound slot its own fresh name and then
-;;; cannot match one `$x` against both, so it never fires; its `tests/multipat/known_bugs.rs`
-;;; calls that `lambda::redundancy_matching_bug`.  Flattening asks the weaker, and here
-;;; intended, question -- two `let`s whose bound slots are IDENTIFIED, the only reading that
-;;; means anything when a binder is alpha-renameable -- and that identification is exactly
-;;; the third pair above.
+;;; `$x` is written for two INDEPENDENT SIBLING binders. In MultiPattern's global pattern
+;;; frame, each atom may map its alpha-renameable private binder name to that same `$x`
+;;; coordinate; their concrete names need not be equal. That is exactly the third pair above.
 ;;;
-;;; Covered by: `let-binop4-fires` and `let-binop4-no-capture` in xsdql.py, both RECORDED
-;;; DIVERGENCES that pin the reference's answer as well as the encoding's.  The second is the
-;;; soundness half: there the first `let` binds a slot that is FREE in the other body, so
-;;; identifying the two binders on that name would capture it, and the case checks that the
-;;; minted binder avoids it instead.  C10-chain-then-join and C13-binder-chain-and-join in
-;;; xdiff.py are the composition without the sibling binders, and the tests file's M7
-;;; fixture is it on plain operators.
+;;; Covered by: `let-binop4-fires` and `let-binop4-no-capture` in xsdql.py, both differential
+;;; agreements with the reference MultiPattern matcher. The second is the soundness half:
+;;; there the first `let` binds a slot that is FREE in the other body, so choosing a private
+;;; binder name that collides with it would capture it; the case checks that minting avoids
+;;; that. C10-chain-then-join and C13-binder-chain-and-join in xdiff.py are the composition
+;;; without sibling binders, and the tests file's M7 fixture is it on plain operators.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (rule ((= p (App3 "binop" p1 f q1 la r1 lb))
@@ -748,13 +742,11 @@
 ;;; to an ordinary Def. 6 check on that child. The reference's atom syntax does give that
 ;;; variable its own substitution entry, so `carr` explicitly includes `sx`; otherwise a
 ;;; redundant surrounding class can hide a final-refinement candidate. This is where
-;;; flattening needs care.  HAZARD:
-;;; flattening is not always meaning-preserving.  A nested pattern is matched under one
-;;; renaming for the whole pattern, a flattened one gets a renaming per atom, so a slot
-;;; written both under a binder and outside it means different things in the two forms and
-;;; the binder escapes.  The crate's
-;;; `flattening_is_not_faithful_for_a_sibling_slot_literal` is that case; a flattener has to
-;;; reject or rename those.
+;;; translating a lexical surface syntax needs care. MultiPattern intentionally gives all
+;;; atoms one global slot namespace. If one printed name occurs both under a binder and in
+;;; an uncovered/free sibling, the translator must alpha-resolve those lexical roles before
+;;; emitting atoms; reusing one global token asks a different query. The exact missing
+;;; alpha-resolution is pinned as `flat-binder-free` in xsdql.py.
 ;;;
 ;;; The side condition is a `map-not-contains` on `?f`'s image -- what "$x is not free in
 ;;; ?f" becomes once slots are explicit -- and it goes last, after every variable is bound

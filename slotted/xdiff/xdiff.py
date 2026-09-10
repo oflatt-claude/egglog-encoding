@@ -1171,9 +1171,8 @@ def curated():
 
     # B3 -- known_bugs::lambda_bug_reaches_the_goal_under_multipat. The pattern
     # writes `$x` for two binders that have nothing to do with each other. Each
-    # equation looks its node up separately and gets its own name for that node's
-    # bound slot, so setting both to `$x` constrains nothing and it matches --
-    # which the nested matcher does not do.
+    # equation looks its node up separately and may map that node's private bound
+    # name to the same `$x` pattern coordinate, so the concrete names need not agree.
     cs.append(
         Case(
             "B3-same-slot-literal-two-binders",

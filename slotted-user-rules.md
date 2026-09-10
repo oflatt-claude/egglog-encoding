@@ -85,10 +85,12 @@ one per e-node, every child a bare variable. This is `MultiPattern` in the crate
 and it is already the shape of an egglog rule body, which is what makes the rest
 mechanical. `(f (g ?x) ?y)` becomes `?t == (f ?u ?y), ?u == (g ?x)`.
 
-Flattening is not always meaning-preserving: a nested pattern is matched under one
-renaming for the whole pattern, a flattened one gets a renaming per atom. A slot
-written both under a binder and outside it therefore means different things in the
-two forms, and the binder escapes. A flattener must reject or rename those.
+`MultiPattern` deliberately gives all atoms one global slot namespace. A source
+syntax with lexical binders must therefore alpha-resolve explicit occurrences before
+flattening: if one printed name occurs under a binder and in an uncovered/free
+sibling, those roles need different global slot tokens. Pattern variables are
+different: they are global by design and may carry the same slot as a binder, matching
+the reference implementation's intended semantics in issue #48.
 
 **Step 2 — order the atoms so each one shares a variable with the ones before
 it.** This is a correctness condition, not a heuristic. An atom sharing nothing
@@ -498,32 +500,29 @@ because that is where the generated binder rule looks for it.
 
 Eight of the nine rules are ported: `eta`, `let-intro`, `let-unused`,
 `let-var-same`, `let-app`, `let-lam-diff`, `map-fusion`, `map-fission`. `beta` is
-left out because its right-hand side is `?body[(var $x) := ?e]`, and the oracle's
-spec language cannot express substitution; the paper's own benchmarks use the
-let-based rules instead (footnote 4).
+left out because the paper's own array benchmark uses the let-based explicit-
+substitution rules instead (footnote 4). Both the reference adapter and this compiler
+support direct substitution; the SDQL `beta` cases exercise it separately.
 
-`xarray.py` compiles each rule by the recipe above and compares it against the
-reference crate's *own* `Rewrite::new_if`, so the reference sees the rule as one
-nested pattern while the encoding sees it flattened into depth-1 atoms.
+`xarray.py` compiles each rule by the recipe above and gives the reference crate the
+same flattened `MultiPattern` atoms. The reference's known-broken nested matcher is
+not a correctness oracle for this encoding.
 
 ```text
 ./xarray.py            each rule firing, and each guard blocking      14/14 agree
 ./xarray.py vac        drop each guard: the answer must change         5/5 load-bearing
-./xarray.py iso        whole-e-graph isomorphism, not just probes     14/14 (+ the one
-                                                                     known difference)
+./xarray.py iso        whole-e-graph isomorphism, not just probes     15/15
 ./xarray.py fuzz 60    random array terms, two seeds                 60/60 and 59/59 agree
 ./xarray.py goal       (A) → (B), the paper's transformation           see below
 ./xarray.py egg        regenerate target/slotted/slotted-array-rules.egg
 ```
 
-Flattening is safe for these eight even though it is not safe in general. The one
-shape where the depth-1 form proves *more* than a nested pattern is the same slot
-literal on two binders in different atoms (`B3` in `xdiff.py`): each atom looks its
-own node up and gets its own name for that node's bound slot, so writing `$x` twice
-constrains nothing. None of the eight does that. `let-var-same` writes `$x` twice but
-both occurrences are children of one atom, so one `mp` pins both; `eta`'s second `$x`
-is a *free* occurrence inside `?b`, which is a public slot of `?b`'s class and so is
-reached through the root constraint.
+The translation preserves the intended MultiPattern query for these eight. In `B3`
+in `xdiff.py`, the same slot literal appears on two binders in different atoms: each
+atom may map its own alpha-private bound name to the same global pattern coordinate,
+so the concrete binder names need not agree. `let-var-same` instead writes `$x` twice
+inside one atom, where one node renaming pins both; `eta`'s second `$x` is an explicit
+variable occurrence under its binder.
 
 Three things the port needed that the toy language never exercised:
 
@@ -539,57 +538,22 @@ Three things the port needed that the toy language never exercised:
   own `build_rhs` had the same gap; no case there builds a binder, so nothing
   observed it.
 
-### (A) → (B), measured
+### (A) → (B), current coverage
 
-`./xarray.py goal 0 1`. "reaches" means (A) and (B) end in one e-class.
+The artifact's generator is pinned structurally for every parameter count `O=0…10`.
+The earlier hand-written goal was materially different: it added a matrix argument
+and binder to both sides and put parameter binders outside the function binders. The
+artifact's (A) is eta-reduced with no matrix binder, (B) introduces `y`, and function
+binders are outermost. `xarray.py artifact-shapes` mechanically checks all eleven
+corrected shapes against a literal transcription of the artifact generator.
 
-| program | reference | encoding |
-| --- | --- | --- |
-| 1-D, 2 functions | reaches, saturates | reaches |
-| 2-D, 4 functions, N=0 extra params | reaches, 2.1s | reaches, saturates, 1.0s |
-| 2-D, 4 functions, N=1 | reaches, 2.5s | reaches, saturates, 1.3s |
-| 2-D, 4 functions, N=2 | reaches, 2.8s | reaches, saturates, 1.6s |
-| 2-D, 4 functions, N=3 | reaches, 3.2s | reaches, saturates, 1.6s |
-| the same, with `λf1…λf4.λm.` wrapped round it | reaches | > 30 min, see below |
-
-`N` is the paper's difficulty knob: "by adding 2 parameters, we use `((f1 p1) p2)`
-instead of `f1`". The functions and the matrix are free symbols in the rows above
-rather than λ-bound at the top as Listing 1 writes them; that is the same rewriting
-problem, and it is the last row that says why the distinction matters.
-
-Neither side saturates in general — `map-fusion`/`map-fission` and `let-app` keep
-producing work — so this is a *bounded* comparison. The reference gets 10 rounds and
-the encoding 30 user steps with the invariants saturated between them, so "reaches"
-means within that budget. The times are not a like-for-like cost comparison either:
-`egglog` here is a debug build, and the encoding does the machinery's work in datalog
-rather than in Rust. They are in the table only because they are the same order of
-magnitude, which is worth knowing.
-
-**Enclosing binders are what the encoding pays for, and the reference does not.**
-Writing the *same* 2-D four-function program with binders around it, `k` of `λm`,
-`λf4`, `λf3`, `λf2`, `λf1`:
-
-| enclosing binders | 0 | 1 | 2 | 3 | 4 | 5 |
-| --- | --- | --- | --- | --- | --- | --- |
-| reference | 2.1s | 1.6s | 1.7s | 6.3s | 6.3s | 5.3s |
-| encoding | 1.0s | > 10 min | not run | not run | not run | > 25 min |
-
-Every reference entry reaches (A) = (B). The reference is flat across the whole row;
-the encoding falls off a cliff at the *first* enclosing binder, which is too early for
-"the problem got harder" to be the whole story, since the reference is doing the same
-rewriting. The encoding entries marked `>` were stopped without a verdict, so they are
-lower bounds and not "does not reach".
-
-Two things it is *not*: no single rule is expensive on its own — each of the eight,
-run alone on the one-binder program, finishes in 0.1s — and it is not the paper's own
-difficulty knob, which the encoding tracks fine (the N=0…3 table above). So it is the
-rule *set* interacting on a program with a binder around it. The suspected mechanism
-is that every atom's renaming is solved by joining against a `RenamesToLeader`
-self-loop of each variable's class, and a class with `k` slots can carry up to `k!` of
-them, where the reference's `ematch_all` walks down from a class and never enumerates
-them. That is a hypothesis: a leave-one-out over the eight rules was started and not
-finished, so which rule and which join dominate is not isolated. It is a different
-axis in any case from the paper's Figure 8, which counts e-nodes and memory.
+The fast gate runs the smallest free-symbol, 1-D/two-function goal and reaches on
+both sides. At the paper's six-round budget, the exact closed 2-D/four-function `O=0`
+goal reaches in the reference MultiPattern oracle but the encoding exceeds a 30-second
+diagnostic timeout. That is an unresolved performance/coverage result, not a failed
+proof of reachability; it is intentionally not hidden behind the smaller smoke case.
+Neither result is a Table/Figure performance reproduction: the harness uses different
+implementations and does not collect the artifact's memory or e-node metrics.
 
 ### A language difference the array comparison found, since fixed
 
@@ -1655,35 +1619,15 @@ binaries and reports which cases separate them. Worth running whenever the refer
 is bumped: a case that stops distinguishing them has lost coverage, and a new
 disagreement is either a fix or a regression upstream.
 
-### Multipattern matching is strictly stronger than single-pattern
+### MultiPattern is the oracle contract
 
-Worth knowing before porting the paper's experiments, because those are written as
-*nested single patterns* while this encoding matches the *flattened* form. The
-reference's own property test is deliberately one-directional -- every equality the
-nested form proves must also be proved by the flattened one, and "the converse is
-deliberately not required: the depth-1 matcher sees through redundant slots that
-`ematch_all` does not, which is the point of it".
-
-Measured, rather than assumed. `slotted/xdiff/nested-vs-multi.py`
-reconstructs a nested pattern from a case's atoms where they form a tree, runs the
-reference both ways, and compares: **27 of the curated cases run both ways, and 3
-differ** -- and in each the multipattern proves more, never less.
-
-| case | multipattern | single nested |
-| --- | --- | --- |
-| `C5-redundant-same-node` | `[0,1][2]` | `[0][1][2]` |
-| `C6-redundant-two-nodes` | `[0,1][2]` | `[0][1][2]` |
-| `B3-same-slot-literal-two-binders` | `[0,1][2]` | `[0][1][2]` |
-
-All three turn on a redundant slot or a slot literal, which is exactly the case the
-upstream comment names. So a ported experiment can legitimately derive *more* than the
-paper's original run did; that is the flattening being stronger, not a divergence to
-fix. Whether it shows up on the paper's own rules is open until those cases exist --
-they do create redundancy, through a `let` whose body ignores the bound variable.
-
-Sixteen cases cannot be compared this way at all: a shared subterm (which is the whole
-reason multipatterns exist), a side condition, an `=` action, or an action naming an
-intermediate atom root, which nesting absorbs.
+This encoding implements the reference crate's flattened `MultiPattern` language.
+The crate's nested matcher is known to be incomplete and has different intended
+semantics; agreement or disagreement with it is not correctness evidence for this
+work. In particular, issue #48 was closed because a PVar outside a binder is allowed
+to carry the same slot that the binder names—lookup accepts such terms, and
+MultiPattern should match them. `nested-vs-multi.py` remains a diagnostic for studying
+the two APIs, but it is not part of the oracle gate.
 
 ### Ported from the crate's own suite, and what is not
 
@@ -1698,13 +1642,15 @@ Not ported, with the reason:
   lives in the parent's edge, so there is no atom to write.
 * **`known_bugs::bug2` / `bug3`** — they need three rules interleaved to
   saturation, and the harness runs one rule per case.
-* **`props.rs` slot-renaming invariance** — the generator does not shift every
-  slot in a program yet. Worth adding.
+* **`props.rs` as source cases** — its slot-renaming property is instead checked
+  generically: every differential case is rerun after shifting all slots by 40.
 * **`refine.rs`** — both sides are incomplete in the same way, so there is nothing
   to compare; the crate marks them `#[ignore]` for the same reason.
-* **`flattening_is_not_faithful_for_a_sibling_slot_literal`** — it compares nested
-  against flattened matching *inside* the crate, and the encoding has no nested
-  matcher to compare against.
+* **`flattening_is_not_faithful_for_a_sibling_slot_literal` as a correctness
+  oracle** — it compares the crate's distinct nested and MultiPattern semantics.
+  The encoding implements the latter. The actual source-to-MultiPattern
+  alpha-resolution gap for an explicit bound/free collision is covered separately by
+  `xsdql.py`'s `flat-binder-free` counterexample.
 
 ### Checking that the tests still test something
 

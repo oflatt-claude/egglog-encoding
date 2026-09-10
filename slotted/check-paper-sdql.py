@@ -162,7 +162,7 @@ def constructors(path: pathlib.Path) -> dict[str, list[Any]]:
 
 
 def reference_goal() -> str | None:
-    """Run the same reduced, nested-rule goal against the locked Rust reference."""
+    """Run the same reduced MultiPattern goal against the locked Rust reference."""
     if not XMULTI.is_file():
         return f"locked reference executable not found: {XMULTI}"
 
@@ -183,11 +183,11 @@ def reference_goal() -> str | None:
         if rule["name"] not in SELECTED_RULES:
             continue
         seen.add(rule["name"])
-        lhs, rhs = (
-            slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, rule_source.term(side, ground=False)))
-            for side in (rule["lhs"], rule["rhs"])
-        )
-        lines += ["rule", f"nested {lhs}", f"rhs _ {rhs}"]
+        lhs_term = rule_source.term(rule["lhs"], ground=False)
+        rhs = slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, rule_source.term(rule["rhs"], ground=False)))
+        root, atoms = slotenc.flatten(lang, lhs_term)
+        root, atom_text = slotenc.atom_lines(lang, root, atoms)
+        lines += ["rule", *atom_text, f"rhs {root} {rhs}"]
         for want, slot_name, variables in rule["conds"]:
             lines.append(f"cond {'in' if want else 'notin'} {slot_name} {' '.join(variables)}")
     if seen != SELECTED_RULES:

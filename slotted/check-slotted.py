@@ -273,13 +273,6 @@ CHECKS = [
         False,
         True,
     ),
-    (
-        "reference-limitations",
-        ("slotted/xdiff/xsdql.py", "reference-limitations"),
-        ratio(r"(\d+)/(\d+) pinned-reference limitations reproduced", 1),
-        False,
-        True,
-    ),
     # The inventory of egglog's grammar: what this language accepts, and what it
     # refuses with a message. A verdict that changes is reported either way.
     (
@@ -402,15 +395,8 @@ CHECKS = [
         False,
     ),
     (
-        "array-goal-smoke-flat",
+        "array-goal-smoke",
         ("slotted/xdiff/xarray.py", "goal-smoke"),
-        ratio(r"(\d+)/(\d+) goal cases reached on both sides", 1),
-        False,
-        True,
-    ),
-    (
-        "array-goal-smoke-nested",
-        ("slotted/xdiff/xarray.py", "goal-smoke-nested"),
         ratio(r"(\d+)/(\d+) goal cases reached on both sides", 1),
         False,
         True,
@@ -432,18 +418,9 @@ CHECKS = [
         True,
     ),
     ("sdql", ("slotted/xdiff/xsdql.py",), ratio(r"(\d+)/(\d+) cases agree", 24), False, True),
-    # The reference paper/benchmark uses nested Rewrite. Keep that independently
-    # exercised even though flattened MultiPattern is the like-for-like compiler oracle.
-    (
-        "sdql-nested",
-        ("slotted/xdiff/xsdql.py", "nested"),
-        ratio(r"(\d+)/(\d+) cases agree", 24),
-        False,
-        True,
-    ),
     # The stronger SDQL check: a witnessed isomorphism, not just the probe partition.
-    # The flat-reference lexical gap and three checked substitution divergences live in
-    # explicit limitation modes rather than weakening this successful-case floor.
+    # Four checked encoding divergences live in their explicit limitation mode rather
+    # than weakening this successful-case floor.
     (
         "sdql-iso",
         ("slotted/xdiff/xsdql.py", "iso"),

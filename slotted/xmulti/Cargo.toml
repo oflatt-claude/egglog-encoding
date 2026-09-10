@@ -12,18 +12,15 @@ edition = "2021"
 # Pinned to a REV rather than a local path, so a runner with no checkout of the
 # reference can build this and the differential half can run in CI.
 #
-# This is upstream `main` (b90adca, after selected fixes from the closed PR #45 were
-# applied) plus https://github.com/memoryleak47/slotted-egraphs/pull/46, which is why
-# it points at a fork. Besides the original three fixes, the pinned revision repairs
-# the reference's own remaining checked failures, preserves lexical scope in nested
-# e-matching, and fixes weak-shape binder/free collisions. Its checked suite is green
-# (98 passed, 12 ignored at the time of this audit).
+# This is https://github.com/memoryleak47/slotted-egraphs/pull/46 plus the
+# independently stacked weak-shape fix at
+# https://github.com/oflatt-claude/slotted-egraphs/pull/1. The latter is required
+# for legal terms that reuse one printed name in bound and uncovered/free positions.
+# It changes add/lookup normalization, not either matcher.
 #
-# A green implementation is still not an unquestionable ground truth. In particular,
-# flattened `MultiPattern` does not preserve every lexical role represented by nested
-# `Rewrite`; `xsdql.py reference-limitations` keeps an exact witness executable.
-#
-# Revert to an upstream rev when #46 merges. What `main` alone answers is still worth
-# keeping reachable: `XSDQL_FLAT=0` / `XARRAY_FLAT=0` drive the nested matcher, which is
-# where `let-binop4` shows the bug #46 fixes.
-slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "b92d9e554727ef45c4092012d1414885ee2461a1", features = ["checks"] }
+# All registered differential and isomorphism checks use `MultiPattern`: that is the
+# pattern language the encoding implements. The helper binary retains a dormant
+# `nested` directive for the unregistered matcher-comparison diagnostic, but
+# `ematch_all` is not used as ground truth. The `checks` feature and explicit
+# `eg.check()` calls make malformed reference state a hard failure.
+slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "e83e31c3b693395122bf3948ef8deef9d0c81059", features = ["checks"] }

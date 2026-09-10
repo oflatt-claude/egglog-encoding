@@ -1026,7 +1026,7 @@ class TermLang:
         return {s: s for s in self.slots(t)}
 
     def refresh_shadowed_binders(self, t):
-        """Give repeated binder columns the reference's nested-`Bind` meaning.
+        """Give repeated binder columns the reference language's `Bind` meaning.
 
         `Sum(A, Bind<Bind<A>>)` and `Merge(A, A, Bind<Bind<Bind<A>>>)` are
         lexically nested binders even though the encoding flattens their names into
@@ -1345,7 +1345,7 @@ def rhs_of(lang, t):
 
 
 def atom_lines(lang, root, atoms, var="var"):
-    """A flattened pattern as the oracle's `atom` lines, or `None` if it has none.
+    """A flattened pattern as the oracle's `MultiPattern` atom lines.
 
     `(root_name, lines)`, with the leading `?` stripped as those lines want. An atom's
     children are pattern variables and slot literals, so:
@@ -1357,13 +1357,9 @@ def atom_lines(lang, root, atoms, var="var"):
         gets an ATOM OF ITS OWN, since it cannot sit in a child position either, and the
         child refers to that; its payload is marked `#` so it stays a payload.
 
-    `None` is not returned today, but the caller still handles it: a shape with no
-    spelling would have to fall back to the nested matcher, which answers a different
-    question.
-
-    Asking the reference the FLATTENED question is what makes the comparison
-    like-for-like: the encoding compiles rules by flattening them, and a nested pattern
-    is not the same pattern (it records which variables sit under a binder).
+    Asking the reference the flattened question makes the comparison like-for-like:
+    the encoding implements `MultiPattern`, not the reference's distinct nested
+    pattern language.
     """
     out, extra = [], [0]
     for name, op, kids, *_pays in atoms:

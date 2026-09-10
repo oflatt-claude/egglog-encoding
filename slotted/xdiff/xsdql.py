@@ -12,9 +12,8 @@ The two sides:
 
   reference   the rule's own pattern text from `sdql_rules()` in
               `slotted-egraphs/benches/sdql.rs`, flattened into the same
-              `MultiPattern` atoms as the encoding by default. `XSDQL_FLAT=0`
-              instead exercises the reference benchmark's nested `Rewrite` path.
-              Both are tested; the flattened path is the like-for-like oracle.
+              `MultiPattern` atoms as the encoding. Nested `ematch_all` is a
+              different pattern language and is not used as an oracle here.
   encoding    the compiled rule LIFTED VERBATIM out of
               `target/slotted/slotted-sdql-rules.egg` by its `:name`, so what runs is the
               generated artifact and not a re-derivation of it.
@@ -29,7 +28,6 @@ Usage:
     ./xsdql.py                every case: each rule firing, and each guard blocking
     ./xsdql.py iso [prefix]   the stronger check: a witnessed isomorphism of the two
                               final e-graphs, via `isomorphism.py`
-    ./xsdql.py nested         run the corpus through the reference's nested matcher
     ./xsdql.py show <name>    one case's spec, its egg program, and both answers
     ./xsdql.py list           the cases and the rules they exercise
     ./xsdql.py known-encoding-limitations
@@ -179,15 +177,12 @@ class Rule:
             return None
         return slotenc.atom_lines(LANG, *self.flat)
 
-    def spec_lines(self, flat=False):
-        # `rhs <root> <pattern>`: on the nested path the root is unused (the whole
-        # pattern is the root), so it is written `_`.
-        spelled = self.atom_lines() if flat else None
+    def spec_lines(self):
+        spelled = self.atom_lines()
         if spelled is None:
-            out = ["rule", f"nested {self.lhs}", f"rhs _ {self.rhs}"]
-        else:
-            root, atoms = spelled
-            out = ["rule", *atoms, f"rhs {root} {self.rhs}"]
+            raise ValueError(f"{self.name}: reference oracle requires a MultiPattern atom spelling")
+        root, atoms = spelled
+        out = ["rule", *atoms, f"rhs {root} {self.rhs}"]
         for want, slot, pvars in self.conds:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
         return out
@@ -221,17 +216,6 @@ def _load_rules():
 
 
 RULES = _load_rules()
-
-#: Ask the reference the FLATTENED question, which is the like-for-like comparison: the
-#: encoding flattens every rule, and the two pattern languages are not the same one -- a
-#: nested pattern records which variables sit under a binder and a multipattern does not
-#: (upstream issue #48). Comparing our flat encoding against the reference's NESTED
-#: matcher therefore attributes that difference to the encoding.
-#:
-#: `XSDQL_FLAT=0` restores the nested comparison. The pinned PR #46 fixes the former
-#: nested matcher gaps, and the suite exercises both paths; the separate
-#: `reference-limitations` mode records the remaining flat-only lexical gap.
-FLAT = os.environ.get("XSDQL_FLAT", "1") == "1"
 
 
 @functools.cache
@@ -277,7 +261,6 @@ class Case:
         ref_want=None,
         why=None,
         unions=(),
-        flat=None,
     ):
         self.name = name
         self.rule = rule
@@ -294,10 +277,6 @@ class Case:
         # known difference, it does not stop comparing.
         self.ref_want = ref_want
         self.why = why
-        # `None` follows the ordinary suite-wide choice. Focused limitations pin the
-        # matcher they exercise: beta is the reference benchmark's nested rewrite,
-        # while the conjunctive query necessarily uses MultiPattern.
-        self.flat = flat
         assert (ref_want is None) == (why is None), "a divergence needs its reason"
         for t in self.terms + self.probes + [t for pair in self.unions for t in pair]:
             check_term(t)
@@ -307,7 +286,7 @@ class Case:
         out += [f"term {sexpr(t)}" for t in self.terms]
         out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
         if with_rule:
-            out += self.rule.spec_lines(flat=FLAT if self.flat is None else self.flat)
+            out += self.rule.spec_lines()
         out += [f"probe {sexpr(t)}" for t in self.probes]
         return "\n".join(out) + "\n"
 
@@ -322,7 +301,6 @@ class Case:
             self.ref_want,
             self.why,
             unions=[(shift(a, k), shift(b, k)) for a, b in self.unions],
-            flat=self.flat,
         )
 
 
@@ -394,45 +372,6 @@ def run_reference(case, with_rule=True):
     if part is None:
         return ("ERROR", "no PARTITION line")
     return ("OK" if sat else "UNSATURATED", part)
-
-
-def run_reference_limitations():
-    """Pin reference behavior that is known not to model nested lexical scope.
-
-    `MultiPattern` flattens the two lexical roles of surface `$x` into one global
-    slot. The target correctly gives the Let binder and its uncovered/free sibling
-    different internal names, so the flat matcher rejects a valid match that the
-    nested matcher accepts. This matters because the differential oracle normally
-    uses the same flattened question as the encoding: agreement can otherwise hide
-    their shared false negative.
-    """
-    prefix = "rounds 2\nterm (let $a (var $a) (var $b))\nrule\n"
-    flat = prefix + "atom p let $x body value\natom body var $x\natom value var $x\nrhs p null\ngoal null\n"
-    nested = prefix + "nested (let $x (var $x) (var $x))\nrhs _ null\ngoal null\n"
-
-    def goal(spec):
-        try:
-            proc = subprocess.run(
-                [str(XMULTI / "target" / "debug" / "xmulti")],
-                input=spec,
-                capture_output=True,
-                text=True,
-                timeout=RUN_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            return "TIMEOUT"
-        if proc.returncode != 0:
-            return "ERROR: " + (proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "?")
-        return next(
-            (line.removeprefix("GOAL ") for line in proc.stdout.splitlines() if line.startswith("GOAL ")), "MISSING"
-        )
-
-    flat_goal, nested_goal = goal(flat), goal(nested)
-    ok = flat_goal == "no" and nested_goal == "yes"
-    label = "ok" if ok else "FAIL"
-    print(f"  {label:<4} multipattern-binder-free  flat={flat_goal}, nested={nested_goal}")
-    print(f"\n{int(ok)}/1 pinned-reference limitations reproduced")
-    return 0 if ok else 1
 
 
 def run_encoding(case, with_rule=True, keep=None, mult=3):
@@ -580,7 +519,6 @@ def compiler_regression_cases():
             FIRED,
             rounds=2,
             unions=[(node, n) for node in redundant_nodes],
-            flat=True,
         )
     )
 
@@ -615,7 +553,6 @@ def compiler_regression_cases():
             FIRED,
             rounds=2,
             unions=[(symmetry_source, symmetry_target)],
-            flat=True,
         )
     )
     return out
@@ -768,29 +705,12 @@ def cases():
         )
     )
 
-    # --- `let-binop4`: `$x` written for two SIBLING binders, which the two matchers
-    # read differently. Asked the FLATTENED question -- the one the encoding actually
-    # compiles -- the reference fires it and agrees, on both cases below. Asked the
-    # NESTED one (`XSDQL_FLAT=0`) it does not fire at all: the nested matcher gives each
-    # binder's bound slot its own fresh name and cannot match a single `$x` against
-    # both. That is a fault in the nested matcher, not a fact about the encoding, and
-    # upstream PR #46 fixes it -- it makes upstream's own
-    # `lambda::redundancy_matching_bug` pass.
-    #
-    # Its own `tests/lambda/mod.rs` documents the shape, and `let_binop4` in
-    # `benches/sdql.rs` has it, so a rule that ships there never fires.
-    #
-    # The reference's nested matcher gives each `let` node's bound slot its own
-    # fresh name and then cannot match the pattern's single `$x` against both, so
-    # it reports no match. Its own `tests/multipat/known_bugs.rs` documents this as
-    # `lambda::redundancy_matching_bug` and says a flattener "would need to reject or
-    # rename patterns that reuse a bound slot outside its binder" -- adding that no
-    # rule in that repo has the shape, which `let_binop4` in its own `benches/sdql.rs`
-    # contradicts. Flattening asks the weaker, and here the intended, question: two
-    # `let`s whose bound slots are IDENTIFIED, which is the only reading that means
-    # anything when a binder is alpha-renameable.
-    #
-    # The encoding's answer is sound, which is the second case's job to show.
+    # --- `let-binop4`: `$x` is written for two sibling binders. MultiPattern has one
+    # global pattern frame, but each atom may map its alpha-renameable private binder
+    # name to that same `$x` coordinate; the concrete names need not agree. This is the
+    # pattern language the encoding compiles and the reference oracle runs. The second
+    # case makes the no-capture consequence observable rather than relying only on the
+    # positive firing case.
     out.append(
         Case(
             "let-binop4-fires",
@@ -964,7 +884,6 @@ def known_encoding_limitations():
             rounds=2,
             ref_want=ref_subst,
             why="slotted-subst does not know which child edges carry bound names",
-            flat=False,
         )
     ]
 
@@ -983,7 +902,6 @@ def known_encoding_limitations():
             rounds=2,
             ref_want="[0,1] missing[[]]",
             why="slotted-subst descends through a binder that shadows its target",
-            flat=False,
         )
     )
 
@@ -1008,28 +926,27 @@ def known_encoding_limitations():
             ref_want=ref_subst,
             why="slotted-subst counts binder-marker Var edges as extracted AST children",
             unions=[(body_with_two_binders, body_without_binders)],
-            flat=False,
         )
     )
 
-    # Flattening erases the distinction between the Let binder/body `$x` and the
-    # uncovered/free `$x` in its value. The nested reference matcher gives those
-    # lexical roles different identities and matches this target; both the encoding
-    # and reference MultiPattern make `$x` globally rigid and miss it. Use the nested
-    # path as the oracle here so shared flat incompleteness cannot look like agreement.
+    # Surface binders must be alpha-resolved before entering MultiPattern's global
+    # slot namespace. The reference atoms below correctly give the binder and its
+    # covered body a private spelling while keeping the uncovered value's `$x` free.
+    # The compiler currently emits the naive one-name atoms, so it misses the match.
     scoped_pattern = ("let", "$x", "$x", "$x")
-    root, atoms = slotenc.flatten(LANG, scoped_pattern)
+    root, naive_atoms = slotenc.flatten(LANG, scoped_pattern)
+    _, reference_atoms = slotenc.flatten(LANG, ("let", "$x", "$__bound0", "$__bound0"))
     scope_egg = slotenc.compile_rule(
         LANG,
-        atoms,
+        naive_atoms,
         ("build", root, ("null",)),
         tail=' :ruleset sdql :name "known-flat-binder-free")',
     )
     scope_rule = Rule(
         "known-flat-binder-free",
-        slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, scoped_pattern)),
+        "alpha-resolved MultiPattern",
         "null",
-        atoms=(root, atoms),
+        atoms=(root, reference_atoms),
         egg=scope_egg,
     )
     scoped_target = ("let", V(2), 1, V(1))
@@ -1042,8 +959,7 @@ def known_encoding_limitations():
             "[0][1] missing[[]]",
             rounds=2,
             ref_want="[0,1] missing[[]]",
-            why="flattening conflates one surface slot's bound and free lexical roles",
-            flat=False,
+            why="the compiler does not alpha-resolve explicit binder/free slot collisions before flattening",
         )
     )
 
@@ -1114,19 +1030,12 @@ def run_iso(args):
 
 
 def main():
-    global FLAT
     argv = sys.argv[1:]
-    if argv and argv[0] == "nested":
-        FLAT = False
-        argv = argv[1:]
     if argv and argv[0] == "iso":
         return run_iso(argv[1:])
 
     if argv and argv[0] in ("known-encoding-limitations", "known-substitution-limitations"):
         return run_known_encoding_limitations()
-
-    if argv and argv[0] == "reference-limitations":
-        return run_reference_limitations()
 
     if argv and argv[0] == "list":
         for c in cases():
