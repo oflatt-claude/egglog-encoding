@@ -137,8 +137,8 @@ class Terms(enc.TermLang):
     opaque value here.
     """
 
-    def __init__(self, ops, tables=None):
-        super().__init__(ops, tables)
+    def __init__(self, ops, carriers=None):
+        super().__init__(ops, carriers)
         self.bound = {}
 
     def slots(self, t):
@@ -208,8 +208,8 @@ class Source:
         self._read(path)
         if len(set(self.sorts)) != len(self.sorts):
             raise SystemExit(f"{path.name}: an equality sort is declared more than once")
-        tables = enc.sort_tables(self.carrier_sorts())
-        if len(tables) > 1:
+        carriers = enc.carrier_symbols(self.carrier_sorts())
+        if len(carriers) > 1:
             reserved = {
                 "Renaming",
                 "Namings",
@@ -219,7 +219,7 @@ class Source:
                 "SlottedEdgeLayout",
                 "SlottedBinderLayout",
             }
-            for names in tables.values():
+            for names in carriers.values():
                 reserved.update(
                     (
                         names.var,
@@ -258,7 +258,7 @@ class Source:
                     f"{path.name}: constructor {name} produces {output} but has a slotted child of sort "
                     f"{foreign[0]}; cross-sort slotted children are not supported yet"
                 )
-            if name in {names.var for names in tables.values()}:
+            if name in {names.var for names in carriers.values()}:
                 raise SystemExit(f"{path.name}: constructor {name!r} is reserved by the slotted encoding")
             self.spec[name] = sig
             self.output_sorts[name] = output
@@ -268,7 +268,7 @@ class Source:
                 f"{path.name}: no constructors declared. Write `(datatype U (Succ U) ...)`, "
                 "or a `(sort U)` and its `(constructor ...)` lines."
             )
-        self.tables = tables
+        self.carriers = carriers
         self.lang = Terms(
             {
                 c: enc.Op(
@@ -280,7 +280,7 @@ class Source:
                 )
                 for c, sig in self.spec.items()
             },
-            tables,
+            carriers,
         )
 
     def _read(self, path):
@@ -369,7 +369,7 @@ class Source:
             marker = ";; One `U` value per e-node and per class; a slotted class spans several of them."
             shared, found, _carrier = text.partition(marker)
             assert found, f"{CORE_FILE}: cannot find the carrier-core boundary"
-            return shared.rstrip() + "\n\n" + enc.multi_sort_core(self.tables)
+            return shared.rstrip() + "\n\n" + enc.multi_sort_core(self.carriers)
         sort = self.sorts[0]
         text = (ROOT / CORE_FILE).read_text()
         # The rename is textual, which is exact for a name the core does not otherwise
@@ -507,25 +507,40 @@ class Source:
         if t[0] == "var":
             sort = expected_sort
             if sort is None:
-                if len(self.tables) > 1:
+                if len(self.carriers) > 1:
                     raise SystemExit(
                         f"{self.path.name}: bare top-level slot {form!r} has no equality sort; "
                         "put it under a constructor"
                     )
-                sort = next(iter(self.tables))
-            return f"({self.tables[sort].var} 0)"
+                sort = next(iter(self.carriers))
+            return f"({self.carriers[sort].var} 0)"
         return self.lang.enc(t, expected_sort)
 
     def sort_of_form(self, form, expected=None, ground=True):
         """Infer a slotted expression's equality sort from its typed context."""
         sort = self.lang.sort_of(self.term(form, ground=ground, expected_sort=expected), expected)
-        if sort is None and len(self.tables) == 1:
-            sort = next(iter(self.tables))
+        if sort is None and len(self.carriers) == 1:
+            sort = next(iter(self.carriers))
         if sort is None:
             raise SystemExit(
                 f"{self.path.name}: {form!r} has no equality-sort context; put the bare slot under a constructor"
             )
         return sort
+
+    def common_sort(self, forms, operation="compare"):
+        """Parse forms and require one carrier, allowing contextual bare slots."""
+        terms = [self.term(form, enc.CHILD) for form in forms]
+        sorts = [self.lang.sort_of(term) for term in terms]
+        sort = next((value for value in sorts if value is not None), None)
+        if sort is None and len(self.carriers) == 1:
+            sort = next(iter(self.carriers))
+        if sort is None:
+            subject = "a union of two bare slots" if operation == "union" else "comparing bare slots"
+            raise SystemExit(f"{self.path.name}: {subject} has no equality sort; put them under constructors")
+        if any(value not in (None, sort) for value in sorts):
+            verb = "union" if operation == "union" else "compare"
+            raise SystemExit(f"{self.path.name}: cannot {verb} terms of sorts {sorts[0]} and {sorts[1]}")
+        return sort, terms
 
 
 def compile_source(src, own_only=False):
@@ -557,12 +572,12 @@ def compile_source(src, own_only=False):
         emitted = []
         for sort in src.carrier_sorts():
             spec = {name: sig for name, sig in src.spec.items() if src.output_sorts[name] == sort}
-            provided = enc.CORE if len(src.tables) == 1 else None
+            provided = enc.CORE if len(src.carriers) == 1 else None
             emitted += enc.emit(
                 spec,
                 provided=provided,
                 sort=sort,
-                tables=src.tables[sort],
+                symbols=src.carriers[sort],
             )
         out.append(enc.in_slotted_ruleset("\n".join(emitted)))
     rules = 0
@@ -613,17 +628,7 @@ def compile_source(src, own_only=False):
             # different slots is what forces slots redundant and what records a
             # class's symmetries.
             _, a, b = form
-            ta, tb = src.term(a), src.term(b)
-            sa, sb = src.lang.sort_of(ta), src.lang.sort_of(tb)
-            sort = sa or sb
-            if sort is None and len(src.tables) == 1:
-                sort = next(iter(src.tables))
-            if sort is None:
-                raise SystemExit(
-                    f"{src.path.name}: a union of two bare slots has no equality sort; put them under constructors"
-                )
-            if sa not in (None, sort) or sb not in (None, sort):
-                raise SystemExit(f"{src.path.name}: cannot union terms of sorts {sa} and {sb}")
+            sort, _terms = src.common_sort((a, b), "union")
             _emit(out, keep, f"(union {src.encode(a, expected_sort=sort)} {src.encode(b, expected_sort=sort)})")
         elif head == "rewrite":
             _emit(out, keep, compile_rewrite(src, form))
@@ -645,7 +650,7 @@ def compile_source(src, own_only=False):
             extracts += 1
             fn, rs = f"_leader{extracts}", f"_extract{extracts}"
             sort = src.sort_of_form(form[1])
-            tables = src.tables[sort]
+            symbols = src.carriers[sort]
             # `:merge new` rather than no merge: a term reaches its leader by every
             # renaming in the orbit, so the rule fires once per row and sets the same
             # leader each time.
@@ -654,7 +659,7 @@ def compile_source(src, own_only=False):
             _emit(
                 out,
                 keep,
-                f"(rule (({tables.renames} {src.encode(form[1], expected_sort=sort)} _m _l)) "
+                f"(rule (({symbols.renames} {src.encode(form[1], expected_sort=sort)} _m _l)) "
                 f"((set ({fn}) _l)) :ruleset {rs})",
             )
             _emit(out, keep, f"(run-schedule (saturate (run {rs})))")
@@ -974,16 +979,8 @@ def compile_check(src, form):
         # f($1,$2) = g($2,$1) and g($1,$2) = h($1,$2) the terms f($1,$2) and h($1,$2)
         # share a class but differ by the swap, so they are NOT equal, while f($1,$2)
         # and h($2,$1) are.
-        terms = [src.term(x, enc.CHILD) for x in args]
-        sorts = [src.lang.sort_of(t) for t in terms]
-        sort = next((s for s in sorts if s is not None), None)
-        if sort is None and len(src.tables) == 1:
-            sort = next(iter(src.tables))
-        if sort is None:
-            raise SystemExit(f"{src.path.name}: comparing bare slots has no equality sort; put them under constructors")
-        if any(s not in (None, sort) for s in sorts):
-            raise SystemExit(f"{src.path.name}: cannot compare terms of sorts {sorts[0]} and {sorts[1]}")
-        tables = src.tables[sort]
+        sort, terms = src.common_sort(args)
+        symbols = src.carriers[sort]
         atoms, maps = [], []
         for i, (x, t) in enumerate(zip(args, terms, strict=True)):
             m = f"_m{i}"
@@ -991,10 +988,10 @@ def compile_check(src, form):
                 # A bare slot is not a node: it is the variable class under a renaming.
                 # Its invocation is `(Var 0)`'s with that one slot sent to this one, so
                 # WHICH slot it names lives in the composition rather than in the value.
-                atoms.append(f"({tables.renames} ({tables.var} 0) {m} _l)")
+                atoms.append(f"({symbols.renames} ({symbols.var} 0) {m} _l)")
                 maps.append(f"(compose (map-of 0 {t[1]}) {m})")
             else:
-                atoms.append(f"({tables.renames} {src.encode(x, expected_sort=sort)} {m} _l)")
+                atoms.append(f"({symbols.renames} {src.encode(x, expected_sort=sort)} {m} _l)")
                 maps.append(m)
         body = f"(check {' '.join(atoms)} (= {maps[0]} {maps[1]}))"
         if (kind == "!=") != negated:
@@ -1005,16 +1002,8 @@ def compile_check(src, form):
         # renaming down. The pair it exists for is two terms that are alpha-variants
         # of each other with a free slot renamed: they are not equal, because no one
         # renaming reaches both, yet they are the same class.
-        terms = [src.term(x, enc.CHILD) for x in args]
-        sorts = [src.lang.sort_of(t) for t in terms]
-        sort = next((s for s in sorts if s is not None), None)
-        if sort is None and len(src.tables) == 1:
-            sort = next(iter(src.tables))
-        if sort is None:
-            raise SystemExit(f"{src.path.name}: comparing bare slots has no equality sort; put them under constructors")
-        if any(s not in (None, sort) for s in sorts):
-            raise SystemExit(f"{src.path.name}: cannot compare terms of sorts {sorts[0]} and {sorts[1]}")
-        table = src.tables[sort].renames
+        sort, _terms = src.common_sort(args)
+        table = src.carriers[sort].renames
         a, b = (src.encode(x, expected_sort=sort) for x in args)
         body = f"(check ({table} {a} _m1 _l) ({table} {b} _m2 _l))"
         if (kind == "renaming-!=") != negated:
@@ -1030,7 +1019,7 @@ def compile_check(src, form):
         assert ctor in src.spec, f"{src.path.name}: unknown constructor {ctor!r}"
         if src.output_sorts[ctor] != sort:
             raise SystemExit(f"{src.path.name}: {ctor} contains {src.output_sorts[ctor]} nodes, not {sort} nodes")
-        table = src.tables[sort].renames
+        table = src.carriers[sort].renames
         ncols = sum(2 if c in enc.SLOTTED else 1 for c in src.spec[ctor])
         cols = " ".join(f"_c{i}" for i in range(ncols))
         body = f"(check ({table} {a} _m1 _l) ({table} _n _m2 _l) (= _n ({ctor}{' ' + cols if cols else ''})))"
@@ -1040,7 +1029,7 @@ def compile_check(src, form):
     if kind == "slots":
         sort = src.sort_of_form(args[0])
         a = src.encode(args[0], expected_sort=sort)
-        table = src.tables[sort].class_slots
+        table = src.carriers[sort].class_slots
         slots = " ".join(f"{s[1:]} {s[1:]}" for s in args[1:])
         body = f"(check (= ({table} {a}) (map-of {slots})))" if slots else f"(check (= ({table} {a}) (map-empty)))"
         return f"(fail {body})" if negated else body
