@@ -363,20 +363,42 @@ After `f($1,$2) = g($2,$1)` and `g($1,$2) = h($1,$2)`, the terms `f($1,$2)` and
 
 ### How they desugar
 
-The difference is one line. Both ask for a common leader; only `=` also asks
-that the two renamings agree.
+A claim's term is matched, by the same recipe a rewrite's left-hand side goes through:
+flattened into depth-1 atoms, solved into a class and a renaming. The claim is stated
+over those.
 
 ```
-(renaming-= p q)   (check (RenamesToLeader $p _m1 _l) (RenamesToLeader $q _m2 _l))
+(renaming-= p q)   <p's atoms> <q's atoms> (= <p's class> <q's class>)
 
-(= p q)            (check (RenamesToLeader $p _m0 _l) (RenamesToLeader $q _m1 _l)
-                          (= _m0 _m1))
+(= p q)            <p's atoms> <q's atoms> (= <p's class> <q's class>)
+                   (RenamesToLeader <p's class> g <p's class>)
+                   (= <p's renaming> (compose <q's renaming> g))
 ```
 
-`(RenamesToLeader f m l)` is `f = m*l`. A class is a connected component of that
-relation and its leader is the component's canonical member, so *sharing a leader* is
-exactly *being in one e-class*. `renaming-=` says only that; `=` adds that one
-renaming reaches both, which is what makes it equality of terms.
+A class is a connected component of `RenamesToLeader` — `(RenamesToLeader f m l)` is
+`f = m*l` — so *being one class* is what `renaming-=` says. `=` adds that one renaming
+reaches both, up to a symmetry of the class: `(RenamesToLeader c g c)` is exactly that
+group, and every class has the identity in it, so a class with no symmetries compares
+its renamings as they stand.
+
+Three things differ from a rewrite's pattern, because a term is ground where a pattern
+is not.
+
+*The atoms are solved CHILD FIRST.* Where an atom's renaming is not pinned from above
+it MINTS the slots it needs, and a mint is a commitment nothing revisits — so a class
+that has made a slot redundant stops carrying it, the atoms below mint a new name, and
+a slot literal further down contradicts it. A term's invocation is a function of its
+children's, so read the other way there is nothing to guess.
+
+*Each term is solved alone*, and the invocations are compared in the numbering the
+SOURCE wrote, so `$0` is slot 0 in both terms whatever each pattern called it. Two
+terms in one pattern would have the second's root minted before the literals below it
+were known — the same failure.
+
+*Slot literals are slots.* `(Lam $0 $3)` is the constant function and must not match
+the identity one by reading `$0` and `$3` off one slot, so the claim states outright
+that slots visible at once are distinct. Two binders in disjoint scopes are not
+visible at once and are left alone.
 
 **A trap.** `renaming-=` between two bare slots is always true, because every variable is
 one e-class:

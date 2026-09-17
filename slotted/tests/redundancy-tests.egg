@@ -16,6 +16,9 @@
 
 (constructor F (U U) U)
 (constructor H (U U) U)
+(constructor App (U U) U)
+(constructor Lam (U U) U)
+(constructor GG (U) U)
 (constructor K (U U) U)
 (constructor Sub (U U) U)
 (constructor Mul (U U) U)
@@ -158,3 +161,54 @@
 ;;; weaker `=`: the two were not egglog-equal but WERE the same invocation, and
 ;;; only `=` sharing its renaming makes that visible.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; a claim about a term the machinery kept no row for
+;;;
+;;; `lam($0,$0) = lam($1,$1)` makes the slot redundant, so `(Lam a a)` may bind `a`
+;;; at any slot at all -- nothing outside the class can see which. The rule fires at
+;;; every one of them, and unioning `g`, whose slot is $0, with `GG` at each in turn
+;;; drives the answer slotless too. The class then settles on ONE invocation and the
+;;; rest are deleted: here it keeps `GG` at $1, so `(GG $0)` names the same term and
+;;; no row of its own.
+;;;
+;;; The `(push)` above it is the same program without the union, and is what gives
+;;; this one teeth: there `lam` keeps its slot, `a` can only be $0, and the answer
+;;; depends on $0 -- so `(GG $1)` is a different term and `g` has a slot.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+
+(rewrite (App (Lam a a) $0) (GG a) :name "app-of-self-lam")
+
+(let live (App (Lam $0 $0) $0))
+
+(run 10)
+
+(check (= live (GG $0)))
+(check (slots live $0))
+(fail (check (= live (GG $1))))
+
+(pop)
+
+(push)
+
+(rewrite (App (Lam a a) $0) (GG a) :name "app-of-self-lam")
+
+(union (Lam $0 $0) (Lam $1 $1))
+
+(let g (App (Lam $0 $0) $0))
+
+(run 10)
+
+;; the slot is redundant twice over: in `lam`, from the union, and in `g`, because
+;; the rule fired once per slot `a` could have been at
+(check (slots (Lam $0 $0)))
+(check (slots g))
+
+;; so every invocation of the answer is the same invocation, whichever slot it names
+(check (= g (GG $0)))
+(check (= g (GG $1)))
+(check (holds g GG))
+
+(pop)

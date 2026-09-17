@@ -907,6 +907,26 @@ def curated():
         )
     )
 
+    # C16 -- a SLOTLESS child leaves the pattern variable it binds unpinned, and the
+    # action builds with it. `f($x,$x)` is unioned with itself at another slot, so its
+    # class depends on nothing and `?a` can be the variable class at ANY slot -- which
+    # is what the rule fires at, once per slot, dragging `g`'s own slot into redundancy
+    # too. So the answer is a slotless class, `h` at $0 and `h` at $1 are one
+    # invocation, and nothing names a node at either spelling in particular.
+    #
+    # It is the shape behind `redundancy-tests.egg`'s claim about a term the machinery
+    # never stored: there the answer is `GG` and the claim is `(check (= g (GG $0)))`.
+    cs.append(
+        Case(
+            "C16-slotless-child-unpins-the-action",
+            [("f", V0, V0), ("f", V1, V1), ("g", ("f", V0, V0), V0)],
+            [(("f", V0, V0), ("f", V1, V1))],
+            [("p", "g", "c", "$0"), ("c", "f", "a", "a")],
+            ("p", "h", "a", "a"),
+            [("g", ("f", V0, V0), V0), ("h", V0, V0), ("h", V1, V1), ("f", V0, V0), LEAF0],
+        )
+    )
+
     # X1 -- migration must not truncate a child edge (FIXED). The encoding merged
     # h(x,y) with h(x,x), which the reference refuses: a node whose two slots are
     # distinct cannot represent h(x,x), by Def. 8's per-lookup injectivity.

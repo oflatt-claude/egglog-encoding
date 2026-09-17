@@ -22,6 +22,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "slotted"))
+sc = __import__("slotted-egglog")
+
 CORPUS = ROOT / "slotted/tests/multipattern.egg"
 MUTANT = ROOT / "target/slotted/multipattern-mutant.egg"
 
@@ -102,13 +105,31 @@ MUTATIONS = [
     ),
 ]
 
-BROKE = re.compile(r"check \(RenamesToLeader \$([A-Za-z_][\w-]*)")
+#: `[ERROR] In <line>:<col>-<col> of <file>: <command>`, which is how egglog reports a
+#: claim that did not hold -- by where it is in the COMPILED program.
+BROKE = re.compile(r"\[ERROR\] In (\d+):")
 
 
-def broken_claim(text):
-    """The term named by the claim egglog reported, or None if the file passed."""
+def broken_claim(text, source):
+    """The term named by the claim egglog reported, or None if the file passed.
+
+    egglog names the compiled command, and a claim compiles to a query over the
+    encoding that mentions no source name at all -- so the line it reports is mapped
+    back through the compiled program, by counting the claims that precede it.
+    """
     m = BROKE.search(text)
-    return m.group(1) if m else None
+    if not m:
+        return None
+    lines = sc.compile_source(source).splitlines()
+    before = sum(1 for ln in lines[: int(m.group(1)) - 1] if ln.startswith("(check ") or ln.startswith("(fail (check "))
+    claims = [form for form, _ in source.body if isinstance(form, list) and form[0] in ("check", "fail")]
+    if before >= len(claims):
+        return None
+    claim = claims[before]
+    while claim[0] in ("fail", "check"):
+        claim = claim[1]
+    # the first term the claim names, which is the one its section is about
+    return next((a for a in claim[1:] if isinstance(a, str) and not a.startswith("$")), None)
 
 
 def mask_comments(text):
@@ -171,7 +192,7 @@ def main():
             text=True,
             timeout=1800,
         )
-        got = broken_claim(r.stdout + r.stderr)
+        got = broken_claim(r.stdout + r.stderr, sc.Source(MUTANT))
         if got in want:
             print(f"  ok     {name}  ->  `{got}` breaks")
         elif got is None:

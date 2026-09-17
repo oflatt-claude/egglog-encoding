@@ -1765,26 +1765,64 @@ def lower_substitution(lang, root, rhs, pvar_sorts, mp_of, cls_of, slot_of, new)
     ]
 
 
-def compile_rule(
+class Query:
+    """A solved multipattern: the facts that match it, and the frame they bind.
+
+    A rule appends an action to this and a claim appends the facts that state it, so
+    both ask the e-graph the same question about the same pattern. The frame is what
+    the action or the claim reads:
+
+      `cls_of[v]`   the leader of the class `v` matched
+      `mp_of[v]`    its renaming from that class's slots into the pattern's, narrowed
+                    to the slots the class actually has
+      `slot_of`     the pattern slot each `$x` was solved to
+
+    `new` and `pay_name` continue the query's own name supplies, so whatever is
+    appended cannot collide with a name the pattern already used.
+    """
+
+    def __init__(self, body, cls_of, mp_of, slot_of, pvar_sorts, new, pay_name):
+        self.body = body
+        self.cls_of = cls_of
+        self.mp_of = mp_of
+        self.slot_of = slot_of
+        self.pvar_sorts = pvar_sorts
+        self.new = new
+        self.pay_name = pay_name
+
+
+def compile_query(
     lang,
     atoms,
-    action,
     conds=(),
     diseq=(),
     same=(),
     fresh=(),
     bugs=frozenset(),
     slot_prefix="s",
+    var_prefix="",
     fresh_batch=True,
-    tail=")",
     refine=True,
 ):
-    """Compile a flattened multipattern and its action into one egglog rule.
+    """Compile a flattened multipattern into the facts that match it.
 
     Connected atoms are solved in order into one shared pattern frame. Each step
-    preserves M1--M8 from `encoding/user-rules.egg`; final refinement, conditions,
-    and the action implement M9--M11. `bugs` deliberately restores past mistakes for
-    mutation testing.
+    preserves M1--M8 from `encoding/user-rules.egg`; final refinement and conditions
+    implement M9--M10. `bugs` deliberately restores past mistakes for mutation
+    testing.
+
+    `fresh` names slots the caller needs that no atom pins, minted against everything
+    the match already used -- a right-hand side's own slots, or a slot a claim asks
+    about and the terms it names never mention.
+
+    `atoms` may be empty: a claim between two bare slots pins its slots and matches
+    nothing, and the frame is then just those mints.
+
+    `var_prefix` and `slot_prefix` name the egglog variables this invents. egglog
+    refuses a pattern variable that shadows a global, so a query compiled beside the
+    program's own `let`s -- a claim's -- takes the `_` prefix the compiler already
+    reserves for its own names, while a rule keeps the bare spelling its committed
+    generated text has.
     """
     body, uid = [], [0]
 
@@ -1792,7 +1830,7 @@ def compile_rule(
 
     def new(p):
         uid[0] += 1
-        return f"{p}{uid[0]}"
+        return f"{var_prefix}{p}{uid[0]}"
 
     slot_groups = []  # one per atom: the pattern slots its node occupies, pairwise apart
     mp_of = {}  # pvar -> egglog var holding its renaming into slots(pattern)
@@ -1804,7 +1842,9 @@ def compile_rule(
     # has made it redundant. Binder-column literals are stored directly in the
     # pattern node and do not add such an entry.
     carried_slot_literals = set()
-    pat = None  # identity on the pattern slots named so far
+    # identity on the pattern slots named so far; the leading atom replaces it, so the
+    # empty map is what an atomless query -- a claim between two bare slots -- mints against
+    pat = "(map-empty)"
 
     def narrow(m, cls, sort):
         """Restrict a node-frame renaming to the class's exact slots (M8)."""
@@ -1940,7 +1980,7 @@ def compile_rule(
 
     binding[0] = False  # every atom is read, so a payload variable can only be read now
 
-    if refine:
+    if refine and atoms:
         # Reconsider minted distinctions after the whole match is known. Only slots
         # carried by substitutions may merge; written slots and slots within one atom
         # remain distinct. Conditions and actions consume the refined frame.
@@ -1970,12 +2010,7 @@ def compile_rule(
     # named so far. The reference writes a literal `$x` there; on this side a name has
     # to be invented.
     groups = []
-    # A right-hand-side slot the pattern never pins is FRESH BY DEFINITION, so it is
-    # inferred rather than declared -- the reference mints one on the spot
-    # (`Slot::fresh()` in rewrite/ematch.rs) with nothing written by the author. An
-    # explicit `fresh` is still honoured and adds nothing an inferred set does not hold.
-    pinned = {k[1] for a in atoms for k in a[2] if isinstance(k, tuple) and k[0] == "sl"}
-    fresh = sorted(set(fresh) | (slot_literals(action) - pinned))
+    fresh = sorted(set(fresh))
 
     if fresh:
         groups = [tuple(fresh)] if fresh_batch else [(f,) for f in fresh]
@@ -2032,6 +2067,51 @@ def compile_rule(
         same_cls = f"(bool= {cls_of[a]} {cls_of[b]})"
         same_ren = f"(bool= {mp_of[a]} {mp_of[b]})"
         body.append(f"(guard (or (not {same_cls}) (not {same_ren})))")
+
+    return Query(body, cls_of, mp_of, slot_of, pvar_sorts, new, pay_name)
+
+
+def pinned_slots(atoms):
+    """The slot literals a pattern writes, and so solves rather than mints."""
+    return {k[1] for a in atoms for k in a[2] if isinstance(k, tuple) and k[0] == "sl"}
+
+
+def compile_rule(
+    lang,
+    atoms,
+    action,
+    conds=(),
+    diseq=(),
+    same=(),
+    fresh=(),
+    bugs=frozenset(),
+    slot_prefix="s",
+    fresh_batch=True,
+    tail=")",
+    refine=True,
+):
+    """Compile a flattened multipattern and its action into one egglog rule.
+
+    The pattern is `compile_query`'s; this adds M11, the action. A right-hand-side
+    slot the pattern never pins is FRESH BY DEFINITION, so it is inferred rather than
+    declared -- the reference mints one on the spot (`Slot::fresh()` in
+    rewrite/ematch.rs) with nothing written by the author. An explicit `fresh` is
+    still honoured and adds nothing an inferred set does not hold.
+    """
+    q = compile_query(
+        lang,
+        atoms,
+        conds=conds,
+        diseq=diseq,
+        same=same,
+        fresh=set(fresh) | (slot_literals(action) - pinned_slots(atoms)),
+        bugs=bugs,
+        slot_prefix=slot_prefix,
+        fresh_batch=fresh_batch,
+        refine=refine,
+    )
+    body, cls_of, mp_of, slot_of = q.body, q.cls_of, q.mp_of, q.slot_of
+    pvar_sorts, new, pay_name = q.pvar_sorts, q.new, q.pay_name
 
     root = action[1]
     root_sort = pvar_sorts[root]

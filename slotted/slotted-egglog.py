@@ -82,6 +82,7 @@ Usage:
 """
 
 import argparse
+import collections
 import pathlib
 import re
 import subprocess
@@ -963,76 +964,265 @@ def rule_name(src, form):
     return rewrite_parts(src, form)["name"]
 
 
+#: A claim's term, once matched: the class it landed in and the renaming that places
+#: that class's slots in the claim's own slot space.
+Matched = collections.namedtuple("Matched", "cls mp")
+
+
+def as_pattern(lang, t):
+    """A term read as GROUND, written the way a pattern writes it.
+
+    A `let`-bound global inlines the term it was bound to, and that was read as
+    ground: a slot there is the integer the encoding stores -- `("var", 5)` in an
+    ordinary column and a bare `5` in a binder one -- where a pattern writes the
+    literal `$5`, and a global inside it is a `("name", ...)` standing for a term
+    rather than the term. Idempotent, so a term already written as a pattern, or one
+    with a global nested part-way down, passes through unchanged.
+    """
+    if isinstance(t, str):
+        return t
+    if t[0] == "name":
+        return as_pattern(lang, lang.bound[t[1]])
+    if t[0] == lang.VAR:
+        return f"${t[1]}"
+    op = lang[t[0]]
+    out = []
+    for kind, a in zip(op.arg_kinds(), t[1:], strict=True):
+        if kind is enc.BINDER:
+            out.append(a if isinstance(a, str) else f"${lang.slot(a)}")
+        elif kind is enc.CHILD:
+            out.append(as_pattern(lang, a))
+        else:
+            out.append(a)
+    return (t[0], *out)
+
+
+def rename_bound_slots(lang, t, counter=None, subst=None, taken=None):
+    """Give every bound slot a name nothing else in the term uses.
+
+    A binder's slot is SCOPED -- `(Let $0 body $0)` binds `$0` in its body and not in
+    its uncovered value column, so those two `$0`s are two different slots that happen
+    to share a printed name. A pattern has no scopes: one `$0` there is one slot. So
+    the bound one is renamed, which is also what the encoding stores, since the
+    machinery renames a colliding bound slot before it strips it from the class.
+
+    Idempotent in effect: a term whose binders collide with nothing comes back with
+    its bound slots spelled differently and meaning the same.
+    """
+    if taken is None:
+        taken, counter, subst = _written(lang, t), [0], {}
+    if isinstance(t, str):
+        return subst.get(t, t) if t.startswith("$") else t
+
+    def mint():
+        while True:
+            counter[0] += 1
+            name = f"$_b{counter[0]}"
+            if name not in taken:
+                taken.add(name)
+                return name
+
+    op = lang[t[0]]
+    kinds = op.arg_kinds()
+    inner, bound = dict(subst), {}
+    for i, (kind, arg) in enumerate(zip(kinds, t[1:], strict=True)):
+        if kind is enc.BINDER:
+            bound[i] = mint()
+            inner[arg] = bound[i]
+    out, child = [], -1
+    for i, (kind, arg) in enumerate(zip(kinds, t[1:], strict=True)):
+        if kind is enc.BINDER:
+            out.append(bound[i])
+            child += 1
+        elif kind is enc.CHILD:
+            child += 1
+            out.append(rename_bound_slots(lang, arg, counter, inner if child == op.covered else subst, taken))
+        else:
+            out.append(arg)
+    return (t[0], *out)
+
+
+def _written(lang, t):
+    """Every slot literal the term spells, binder columns included."""
+    if isinstance(t, str):
+        return {t} if t.startswith("$") else set()
+    out = set()
+    for kind, arg in zip(lang[t[0]].arg_kinds(), t[1:], strict=True):
+        if kind is enc.BINDER:
+            out.add(arg)
+        elif kind is enc.CHILD:
+            out |= _written(lang, arg)
+    return out
+
+
+def slot_scopes(lang, t, free, outer=(), out=None):
+    """The sets of slot literals that are in scope together, and so name different slots.
+
+    A term's free slots are always visible, and a binder's slot is visible wherever it
+    scopes, so a binder's group is itself, the binders it sits under, and the free
+    slots. Two binders in DISJOINT scopes are never visible at once and are not forced
+    apart: each names a slot of its own node, and the encoding may well have picked the
+    same one for both.
+
+    Only groups worth stating come back -- a group of one constrains nothing.
+    """
+    if out is None:
+        # the free slots are in scope everywhere, so they are one group on their own
+        out = [set(free)] if len(free) > 1 else []
+    if isinstance(t, str):
+        return out
+    op = lang[t[0]]
+    kinds = op.arg_kinds()
+    here = [arg for kind, arg in zip(kinds, t[1:], strict=True) if kind is enc.BINDER]
+    group = set(outer) | set(here) | set(free)
+    if here and len(group) > 1 and group not in out:
+        out.append(group)
+    inner, child = tuple(outer) + tuple(here), -1
+    for kind, arg in zip(kinds, t[1:], strict=True):
+        if kind in enc.SLOTTED:
+            child += 1
+        if kind is enc.CHILD:
+            slot_scopes(lang, arg, free, inner if child == op.covered else outer, out)
+    return out
+
+
+def claim_query(src, forms, sort):
+    """Match each term a claim names, in that term's OWN slot numbering.
+
+    CHILDREN BEFORE PARENTS, which is the order a ground term can be solved in at all.
+    An atom whose renaming is not pinned from above MINTS the slots it needs, and a
+    mint is a commitment nothing revisits -- so a class that has made a slot redundant
+    stops carrying it, the atoms below mint a new name, and a slot literal deeper down
+    then contradicts the mint. A term's invocation is a function of its children's, so
+    read the other way there is nothing to guess. `flatten` emits atoms parent-first,
+    so reversing it is that order.
+
+    ONE PATTERN PER TERM, since two terms joined only by their slot literals would have
+    the second's root minted before those literals were known -- the same failure. So
+    each is solved alone and `frame` renames its solved slots back to the `$k` they
+    came from, which is how `$0` means slot 0 in both terms.
+
+    A bare slot is not a node: it is the variable class under a renaming, so it needs
+    no pattern at all -- `$k` is `(Var 0)` with its one slot sent to k.
+    """
+    body, matched = [], []
+    symbols = src.carriers[sort]
+    for i, form in enumerate(forms):
+        ground = src.term(form, expected_sort=sort)
+        free = sorted(src.lang.slots(ground))
+        for slot in free:
+            if not isinstance(slot, int):
+                raise SystemExit(f"{src.path.name}: a claim's term needs numbered slots, got ${slot}")
+        if ground[0] == src.lang.VAR:
+            # narrowed like any other match: a program that equates two slots leaves
+            # even the variable class without one
+            cls = f"({symbols.var} 0)"
+            matched.append(Matched(cls, f"(compose (map-of 0 {ground[1]}) ({symbols.class_slots} {cls}))"))
+            continue
+        pattern = rename_bound_slots(src.lang, as_pattern(src.lang, ground))
+        root, atoms = enc.flatten(src.lang, pattern, root=f"?_c{i}", tmp=f"?_c{i}t")
+        query = enc.compile_query(
+            src.lang,
+            list(reversed(atoms)),
+            # A ground term pins every slot it has, so there is no minted distinction
+            # left for refinement to reconsider -- and the claim is compiled beside the
+            # program's own `let`s, where egglog refuses a pattern variable that
+            # shadows a global, so every name this invents wears the `_` prefix the
+            # compiler already reserves.
+            refine=False,
+            slot_prefix=f"_c{i}s",
+            var_prefix=f"_c{i}",
+        )
+        body += query.body
+        # DISTINCT slots, said outright. A renaming is injective, so two literals read
+        # off two slots of one node come out apart -- but read off the SAME slot they
+        # come out equal, and nothing refuses that. For a rule that is right, since a
+        # `$x` there is a name to solve; for a term it is not, since `(Lam $0 $3)` is a
+        # constant function and must not match the identity one at $0 = $3.
+        for group in slot_scopes(src.lang, pattern, {f"${slot}" for slot in free}):
+            names = [query.slot_of[w] for w in sorted(group)]
+            apart = " ".join(f"{v} {v}" for v in names)
+            body.append(f"(= (map-length (map-of {apart})) {len(names)})")
+        frame = " ".join(f"{query.slot_of[f'${slot}']} {slot}" for slot in free)
+        frame = f"(map-of {frame})" if frame else "(map-empty)"
+        matched.append(Matched(query.cls_of[root], f"(compose {frame} {query.mp_of[root]})"))
+    return body, matched
+
+
 def compile_check(src, form):
-    """A claim about slotted classes, not about egglog values."""
+    """A claim about slotted classes, not about egglog values.
+
+    Every claim that names a term is one query: the facts that match the terms,
+    followed by the facts that state the claim over what they matched.
+    """
     negated = form[0] == "fail"
     if negated:
         assert form[1][0] == "check", f"{src.path.name}: fail takes a check"
         form = form[1]
     claim = form[1]
     kind, args = claim[0], claim[1:]
-    if kind in ("=", "!="):
-        # ONE renaming, not two. `(RenamesToLeader f m l)` is `f = m*l`, so two terms
-        # are equal when they are the same INVOCATION -- reached from the leader by the
-        # same renaming -- and not merely when they land in the same class. The paper's
-        # `fgh::transitive_symmetry` is the case that separates them: after
-        # f($1,$2) = g($2,$1) and g($1,$2) = h($1,$2) the terms f($1,$2) and h($1,$2)
-        # share a class but differ by the swap, so they are NOT equal, while f($1,$2)
-        # and h($2,$1) are.
-        sort, terms = src.common_sort(args)
-        symbols = src.carriers[sort]
-        atoms, maps = [], []
-        for i, (x, t) in enumerate(zip(args, terms, strict=True)):
-            m = f"_m{i}"
-            if t[0] == "var":
-                # A bare slot is not a node: it is the variable class under a renaming.
-                # Its invocation is `(Var 0)`'s with that one slot sent to this one, so
-                # WHICH slot it names lives in the composition rather than in the value.
-                atoms.append(f"({symbols.renames} ({symbols.var} 0) {m} _l)")
-                maps.append(f"(compose (map-of 0 {t[1]}) {m})")
-            else:
-                atoms.append(f"({symbols.renames} {src.encode(x, expected_sort=sort)} {m} _l)")
-                maps.append(m)
-        body = f"(check {' '.join(atoms)} (= {maps[0]} {maps[1]}))"
-        if (kind == "!=") != negated:
-            return f"(fail {body})"
-        return body
-    if kind in ("renaming-=", "renaming-!="):
-        # Same CLASS, by SOME renaming -- strictly weaker than `=`, which pins the
-        # renaming down. The pair it exists for is two terms that are alpha-variants
-        # of each other with a free slot renamed: they are not equal, because no one
-        # renaming reaches both, yet they are the same class.
+
+    def claimed(body, facts, negative=False):
+        """The claim as a command: `(check ...)`, or `(fail (check ...))` once.
+
+        One fact per line, as a rule's query is written: a claim is a query now, and
+        a snapshot of one is only readable if it reads like the rules beside it.
+        """
+        text = "(check " + "\n       ".join(list(body) + facts) + ")"
+        return f"(fail {text})" if negative != negated else text
+
+    if kind in ("=", "!=", "renaming-=", "renaming-!="):
+        # ONE renaming, not two. Two terms are equal when they are the same
+        # INVOCATION -- the same class reached by the same renaming -- and not merely
+        # when they land in the same class. The paper's `fgh::transitive_symmetry` is
+        # the case that separates them: after f($1,$2) = g($2,$1) and
+        # g($1,$2) = h($1,$2) the terms f($1,$2) and h($1,$2) share a class but differ
+        # by the swap, so they are NOT equal, while f($1,$2) and h($2,$1) are.
+        #
+        # `renaming-=` is that weaker question -- one class, by SOME renaming -- and
+        # the pair it exists for is two terms that are alpha-variants of each other
+        # with a free slot renamed: they are not equal, because no one renaming
+        # reaches both, yet they are the same class.
         sort, _terms = src.common_sort(args)
-        table = src.carriers[sort].renames
-        a, b = (src.encode(x, expected_sort=sort) for x in args)
-        body = f"(check ({table} {a} _m1 _l) ({table} {b} _m2 _l))"
-        if (kind == "renaming-!=") != negated:
-            return f"(fail {body})"
-        return body
+        body, (a, b) = claim_query(src, args, sort)
+        facts = [f"(= {a.cls} {b.cls})"]
+        if kind in ("=", "!="):
+            # UP TO A SYMMETRY of the class, which is not a weakening: a class equal to
+            # its own slot-swap is reached by both renamings, so the two name one
+            # invocation. `(RenamesToLeader c g c)` is exactly the group, and every
+            # class has the identity in it, so a class without symmetries compares its
+            # renamings as they stand.
+            table = src.carriers[sort].renames
+            facts.append(f"({table} {a.cls} _gsym {a.cls})")
+            facts.append(f"(= {a.mp} (compose {b.mp} _gsym))")
+        return claimed(body, facts, negative=kind.endswith("!="))
     if kind in ("holds", "not-holds"):
         # "this class contains an application of this operator", which is what a rule
         # having fired looks like when the built term is not worth writing out -- or,
         # negated, what a guard refusing looks like: nothing of that shape appeared.
         sort = src.sort_of_form(args[0])
-        a = src.encode(args[0], expected_sort=sort)
         ctor = args[1]
         assert ctor in src.spec, f"{src.path.name}: unknown constructor {ctor!r}"
         if src.output_sorts[ctor] != sort:
             raise SystemExit(f"{src.path.name}: {ctor} contains {src.output_sorts[ctor]} nodes, not {sort} nodes")
+        body, (a,) = claim_query(src, args[:1], sort)
         table = src.carriers[sort].renames
         ncols = sum(2 if c in enc.SLOTTED else 1 for c in src.spec[ctor])
-        cols = " ".join(f"_c{i}" for i in range(ncols))
-        body = f"(check ({table} {a} _m1 _l) ({table} _n _m2 _l) (= _n ({ctor}{' ' + cols if cols else ''})))"
-        if (kind == "not-holds") != negated:
-            return f"(fail {body})"
-        return body
+        cols = " ".join(f"_hc{i}" for i in range(ncols))
+        facts = [
+            f"({table} {a.cls} _hm1 _hl)",
+            f"({table} _hn _hm2 _hl)",
+            f"(= _hn ({ctor}{' ' + cols if cols else ''}))",
+        ]
+        return claimed(body, facts, negative=(kind == "not-holds"))
     if kind == "slots":
+        # The class's slots, in the numbering the claim writes them in -- which is what
+        # the match's renaming already carries them into.
         sort = src.sort_of_form(args[0])
-        a = src.encode(args[0], expected_sort=sort)
-        table = src.carriers[sort].class_slots
-        slots = " ".join(f"{s[1:]} {s[1:]}" for s in args[1:])
-        body = f"(check (= ({table} {a}) (map-of {slots})))" if slots else f"(check (= ({table} {a}) (map-empty)))"
-        return f"(fail {body})" if negated else body
+        body, (a,) = claim_query(src, args[:1], sort)
+        named = " ".join(f"{s[1:]} {s[1:]}" for s in args[1:])
+        want = f"(map-of {named})" if named else "(map-empty)"
+        return claimed(body, [f"(= (map-image {a.mp}) {want})"])
     # Not one of the slotted claims, so it is an ordinary egglog check about the
     # encoding -- `(check (RenamesToLeader ...))` and the like. It names no slotted
     # term, so it goes through as written.
