@@ -14,8 +14,8 @@ THE LANGUAGE
                                                 child; `:binder` names the child
                                                 positions whose slot it binds.
 
-    (let r (Sing Null Null))                    name a term
-    (let a (Sum r $5 $6 Null))                  a `$n` in a binder column is the bound
+    (let r (Sing (Null) (Null)))                name a term
+    (let a (Sum r $5 $6 (Null)))                a `$n` in a binder column is the bound
                                                 slot; in any other child column it is
                                                 a variable occurrence
 
@@ -445,13 +445,16 @@ class Source:
                     return form
                 slot = int(form[1:]) if form[1:].isdigit() else form[1:]
                 return slot if column is enc.BINDER else ("var", slot)
-            if form in self.spec:  # a nullary constructor, written bare
-                output_sort = getattr(self, "output_sorts", {}).get(form, self.lang[form].sort)
-                if expected_sort is not None and output_sort != expected_sort:
-                    raise SystemExit(
-                        f"{self.path.name}: {form} has sort {output_sort}, but this position requires {expected_sort}"
-                    )
-                return (form,)
+            if form in self.spec:
+                # A CONSTRUCTOR NEEDS ITS PARENS, as it does in egglog: a nullary one is
+                # `(Null)` and never a bare `Null`. egglog refuses the bare spelling in
+                # both positions -- `Unbound symbol` where a term is wanted, and
+                # `Shadowing is not allowed` where a rule variable would be -- so reading
+                # it as a call here was a divergence that bought nothing.
+                raise SystemExit(
+                    f"{self.path.name}: {form!r} is a constructor and needs its parens -- write ({form}). "
+                    "egglog reads a bare name as a variable and refuses one that shadows a constructor."
+                )
             if form.startswith("?"):
                 # a pattern variable. Its NAME is the identifier without the sigil,
                 # which is the convention `flatten` keys atoms by and `pat_sexpr`
@@ -473,8 +476,8 @@ class Source:
             #
             # Only in a pattern. A ground term -- a `let`, a `union`, a claim -- has
             # nothing to bind a variable, so an unknown name there is an error. A bare
-            # name that IS a constructor is read as a nullary call above, so a
-            # paren-less `Null` cannot become a wildcard; a misspelling still can,
+            # name that IS a constructor is refused above rather than reaching here, so
+            # a paren-less `Null` cannot become a wildcard; a misspelling still can,
             # exactly as in egglog.
             assert not ground, f"{self.path.name}: {form!r} is not bound"
             return form

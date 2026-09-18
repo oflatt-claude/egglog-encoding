@@ -126,7 +126,7 @@
        (= alts20 (refine-namings carr19 (map-empty) idm6 idm17))
        (Idx ix21)
        (= mrg22 (vec-get alts20 ix21)))
-      ((Equated (Null) (compose mrg22 (compose mp5 cs9)) V2)) :name "bare-nullary")
+      ((Equated (Null) (compose mrg22 (compose mp5 cs9)) V2)) :name "nullary-call")
 (let $three (Prev (map-empty) (Succ (map-empty) (Null))))
 (let $four (Prev (map-empty) (Succ (map-empty) (Succ (map-empty) (Null)))))
 (run-schedule (saturate (run slotted))

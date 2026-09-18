@@ -11,7 +11,7 @@
 
 (let example (App (Lam $0 (Lam $1 a01))
                   (Lam $0 (Lam $1 a01))))
-(let t Truth)
+(let t (Truth))
 
 (rewrite 
     (Truth)

@@ -249,7 +249,7 @@ CHECKS = [
     (
         "refusals",
         ("slotted/check-refusals.py",),
-        ratio(r"(\d+)/(\d+) refusals hold, with a message", 29),
+        ratio(r"(\d+)/(\d+) refusals hold, with a message", 31),
         False,
         False,
     ),
@@ -278,7 +278,7 @@ CHECKS = [
     (
         "egglog-forms",
         ("slotted/check-egglog-forms.py",),
-        ratio(r"(\d+)/(\d+) egglog forms behave as recorded", 29),
+        ratio(r"(\d+)/(\d+) egglog forms behave as recorded", 30),
         False,
         False,
     ),

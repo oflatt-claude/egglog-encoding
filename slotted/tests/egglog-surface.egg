@@ -47,17 +47,17 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; A nullary constructor written bare is a call, not a variable, which is what keeps a
-;;; paren-less `Null` from silently becoming a wildcard that matches everything.
+;;; A nullary constructor in a pattern is a call like any other, so it pins that child
+;;; rather than standing for anything: the claim with teeth is that the deeper term did
+;;; not match. (A bare `Null` is refused, as in egglog; `check-refusals.py` has it.)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev (Succ Null)) (Null) :name "bare-nullary")
+(rewrite (Prev (Succ (Null))) (Null) :name "nullary-call")
 
 (let three (Prev (Succ (Null))))
 (let four (Prev (Succ (Succ (Null)))))
 (run 5)
 (check (= three (Null)))
-;; the pattern named a constructor, so it must not have matched the deeper term
 (fail (check (= four (Null))))
 (pop)
 

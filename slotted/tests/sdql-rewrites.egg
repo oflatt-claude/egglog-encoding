@@ -126,12 +126,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let s (Sum Null $5 $6 (Mult $7 $5)))
+(let s (Sum (Null) $5 $6 (Mult $7 $5)))
 (run 1)
 
 ;; it is `$7 * sum(_, $5, $6, $5)` exactly: the factored sum binds both slots and its
 ;; body is the first of them, so it has no free slots at all
-(let out (Mult $7 (Sum Null $5 $6 $5)))
+(let out (Mult $7 (Sum (Null) $5 $6 $5)))
 (run 0)
 (check (= s out))
 
@@ -149,7 +149,7 @@
 (push)
 
 ;; body = $5 * $6, and both are the sum's own binders
-(let s (Sum Null $5 $6 (Mult $5 $6)))
+(let s (Sum (Null) $5 $6 (Mult $5 $6)))
 (run 1)
 
 (check (not-holds s Mult))

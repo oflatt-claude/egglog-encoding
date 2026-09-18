@@ -3,7 +3,7 @@
 (constructor Truth () U)
 (constructor GG (U U) U)
 
-(let t Truth)
+(let t (Truth))
 
 (let l0 (Lam $0 $0))
 (let l1 (Lam $1 $1))

@@ -21,7 +21,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let r (Sing Null Null))
+(let r (Sing (Null) (Null)))
 (let s (Sum r $5 $6 (Sing $5 $6)))
 (run 2)
 
@@ -34,7 +34,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let r (Sing Null Null))
+(let r (Sing (Null) (Null)))
 (let swapped (Sum r $5 $6 (Sing $6 $5)))
 (run 2)
 

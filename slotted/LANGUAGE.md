@@ -130,10 +130,8 @@ depend on any of them.
 
 A **pattern variable** stands for a subterm and may be written bare, `x`, which is
 egglog's spelling, or with a sigil, `?x`, which is egg's. They name the same variable, so
-one rule may mix them. A bare name that is a `let`-bound global means that global, and a
-bare name that is a constructor is a call — so a paren-less `Null` stays `(Null)` rather
-than becoming a variable that matches everything. `$x` is a slot literal the match solves
-for.
+one rule may mix them. A bare name that is a `let`-bound global means that global. `$x`
+is a slot literal the match solves for.
 
 There is one known lowering limitation for explicit slot occurrences. `MultiPattern`
 has one rule-global slot namespace, while the source syntax determines which binder

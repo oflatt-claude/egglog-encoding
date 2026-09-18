@@ -47,6 +47,15 @@ CASES = [
         "not implemented here",
     ),
     ("an unknown declaration option", "(sort M)\n(constructor Succ (M) M :wat 1)\n", "unknown option"),
+    # egglog refuses the bare spelling in both positions -- `Unbound symbol` where a term
+    # is wanted, `Shadowing is not allowed` where a rule variable would be -- so reading
+    # it as a call here was a divergence that bought nothing.
+    ("a nullary constructor without its parens, in a term", LANG + "(let n Null)\n", "needs its parens"),
+    (
+        "a nullary constructor without its parens, in a pattern",
+        LANG + '(rewrite (Succ Null) (Null) :name "r")\n',
+        "needs its parens",
+    ),
     (
         "a negative binder position",
         "(sort M)\n(constructor F (M M) M :binder -1)\n",
