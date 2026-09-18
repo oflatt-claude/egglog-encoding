@@ -257,9 +257,14 @@ def read_json_graph(doc):
             o = NODE_OPS[op]
             name = o.ref_prefix + "/".join(payloads) if payloads else (o.ref or o.ctor)
             rows.append((name, elems, n["eclass"], o))
+    # `Var` is seeded by the carrier's own machinery, so a graph always has exactly one.
+    # `Null` is an ordinary constructor of the language under test and exists only where
+    # a term built one -- which is what the reference does too, so a case that never
+    # names it has none on either side.
     for kind, count in leaf_rows.items():
-        if count != 1:
-            issues.append(f"expected exactly one raw {kind.title()} row, found {count}")
+        cap = 1 if kind == "null" else None
+        if (count > cap) if cap is not None else (count != 1):
+            issues.append(f"expected at most one raw {kind.title()} row, found {count}")
     return slots_of, loops, rows, leaf, issues
 
 
@@ -814,13 +819,15 @@ def verify(ga, gb, phi, sig):
 
 
 # ------------------------------------------------------------------- the runners
-#: The machinery seeds `(Var 0)` and `(Null)` unconditionally, so those two classes
-#: exist on the encoding side whether or not the case mentions them. Adding the same two
-#: terms to the reference makes the two graphs comparable as wholes, rather than needing
-#: classes to be dropped from one side by a rule about which ones "do not count". They
-#: are ordinary terms to the reference, so any rule that fires on them fires on the
-#: encoding's copies too.
-SEED = "term (null)\nterm (var $0)\n"
+#: A carrier's machinery seeds `(Var 0)` unconditionally, so that class exists on the
+#: encoding side whether or not the case mentions it. Adding the same term to the
+#: reference makes the two graphs comparable as wholes, rather than needing classes to
+#: be dropped from one side by a rule about which ones "do not count". It is an ordinary
+#: term to the reference, so any rule that fires on it fires on the encoding's copy too.
+#:
+#: `(Null)` is NOT seeded. It is an ordinary constructor of the language under test, and
+#: neither side has a class for it unless a term built one.
+SEED = "term (var $0)\n"
 
 #: How the encoding's program is built. `xarray.py` swaps in the array language's
 #: builder so the same isomorphism check can be run on its cases; the signature is

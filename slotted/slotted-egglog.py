@@ -465,17 +465,16 @@ def compile_source(src, own_only=False):
         ";;; edited by hand, and rewritten by `check-slotted.py --update`. This is what",
         ";;; running that test runs, and it includes nothing: the machinery is generated.",
         "",
-        src.core(),
-        "",
     ]
     if own_only:
         out[2:5] = [
             f";;; Only the forms THIS file contributes. The machinery for its {len(src.spec)} constructors,",
-            ";;; and anything an included library brought, are snapshotted by the generators",
-            ";;; that emit them -- committing them again per test would be the same thousands",
-            ";;; of lines over and over.",
+            ";;; and anything an included library brought, are left out -- committing the",
+            ";;; same generated thousands of lines once per test would swamp the diff that",
+            ";;; a change in the compiler is supposed to show.",
         ]
     else:
+        out += [src.core(), ""]
         emitted = []
         for sort in src.carrier_sorts():
             spec = {name: sig for name, sig in src.spec.items() if src.output_sorts[name] == sort}

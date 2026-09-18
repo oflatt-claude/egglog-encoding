@@ -13,7 +13,7 @@
 ;;; Written at the ENCODED level, so these name shapes to emit machinery for rather than
 ;;; constructors for slotted terms. `App2`, `Var` and `Null` come from the core.
 
-(include "slotted/encoding/egraph-encoding-11.egg")
+(include "target/slotted/slotted-node-rules.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

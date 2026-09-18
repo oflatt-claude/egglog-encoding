@@ -11,15 +11,8 @@ Two kinds of output. `GENERIC` is the string-headed encoding in
 operator can be written without regenerating. Each `slotted/languages/*.egg`
 gets a per-language encoding with one constructor per operator, the shape the
 reference crate's `define_language!` produces. Both include
-`slotted/encoding/egraph-encoding-11.egg`, which is hand-written and holds the
-constructor-independent half -- the sorts, the union-find rules, `Var` normalisation --
-plus the ONE constructor family it works through as a worked example.
-
-That family is arity 2, and `HANDWRITTEN` names it: its rules are hand-written there
-rather than emitted here, so a reader gets a whole constructor's machinery in one
-file. `handwritten_region()` below returns what would be emitted for it, and
-`slotted/checks/check-handwritten-encoding.py` asserts the two agree, so the
-worked example cannot drift away from what every other arity gets.
+`enc.prelude()` and `enc.multi_sort_core()`, the same two the compiler emits, so a
+generated file carries its whole machinery and includes nothing.
 
 Add a constructor to `GENERIC` below, or a language file, and re-run. Do not
 edit the output.
@@ -42,6 +35,9 @@ read_language = enc.read_language
 # without regenerating anything. The compiler does not know this family: to it these
 # are constructors like any others, and a payload column is a payload column.
 GENERIC = {
+    # The nullary leaf. The hand-written core used to declare it; the generated
+    # machinery stands alone, so it declares its own.
+    "Null": [],
     "App2": ["String", CHILD, CHILD],
     "App3": ["String", CHILD, CHILD, CHILD],
     "App4": ["String", CHILD, CHILD, CHILD, CHILD],
@@ -55,11 +51,6 @@ GENERIC_FILE = "target/slotted/slotted-node-rules.egg"
 # declared structurally -- `App2` is not a binder, `App2 "lambda"` is. `emit` takes the
 # pairs and pins them by head string.
 GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
-
-# Constructors whose rules `slotted/encoding/egraph-encoding-11.egg` hand-writes, along
-# with any binder over them and the machinery's SHARED block. They are left out of the
-# generated file, which includes that one, so each is declared exactly once.
-HANDWRITTEN = ("App2",)
 
 
 def machinery():
@@ -83,19 +74,6 @@ def string_headed(head, ctor, ref=None):
     if (head, ctor) in GENERIC_BINDERS:
         sig[next(i for i, c in enumerate(sig) if c in enc.SLOTTED)] = BINDER
     return enc.Op(head, ctor, sig, pays=[f'"{head}"'], ref=head if ref is None else ref)
-
-
-def handwritten_region():
-    """What `slotted/encoding/egraph-encoding-11.egg` has to hold, rules only.
-
-    The machinery's SHARED block plus the `HANDWRITTEN` constructors and their binders:
-    everything this generator could emit but leaves to that file. Comments and blank
-    lines are part of the string; `check-handwritten-encoding.py` strips them before
-    comparing.
-    """
-    lang = {name: GENERIC[name] for name in HANDWRITTEN}
-    binders = tuple((head, name) for head, name in GENERIC_BINDERS if name in HANDWRITTEN)
-    return enc.in_slotted_ruleset(enc.SHARED + "\n" + "\n".join(emit(lang, binders)))
 
 
 # Per-language encodings: one constructor per operator, the shape the reference crate's

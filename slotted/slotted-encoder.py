@@ -312,16 +312,8 @@ def shape_of(col):
     return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
 
 
-# The two constructors `slotted/encoding/egraph-encoding-11.egg` declares and writes the
-# rules for itself, because both are constructor-independent: `Var` is normalised into
-# a renaming so one value stands for every variable, and `Null` is the nullary object.
-# A language file may declare either for the record -- so that it names every
-# constructor a program in it can contain -- and its rules are already there.
-CORE = {"Var": ["i64"], "Null": []}
-
 # The hand-written half, and the generated file that includes it. A language file
 # includes the generated one, so it gets both.
-MACHINERY = "slotted/encoding/egraph-encoding-11.egg"
 
 
 ###############################################################################
@@ -807,45 +799,6 @@ SUBST = "subst"
 # The constructor-independent half of the node machinery. Hand-written in
 # `slotted/encoding/egraph-encoding-11.egg` along with a constructor or two, and kept
 # here so a generator can state what that text has to say.
-SHARED = """\
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; complete physical constructor layouts for `slotted-subst`
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; Custom Unit-valued functions keep metadata out of the encoded e-graph.  A
-;; relation would mint an equality-sort value and appear as another constructor.
-;; The primitive validates these schemas and refuses constructors without a complete
-;; row, so an erased Id column is never guessed to be an edge or a payload.
-(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)
-(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)
-(function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)
-
-(set (SlottedNodeLayout "Var" 1) ())
-(set (SlottedNodeLayout "Null" 0) ())
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; a class's slot set, held once
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; The slots a class actually depends on, as an identity renaming. Held directly
-;; rather than read off a self-loop: a self-loop is derived from a node, so it can
-;; name more slots than the class has, and a rule that picks one to mean "the class's
-;; slots" gets whichever the join happened to bind. This narrows on merge and so can
-;; only ever shrink, which is what the reference's `c.slots` does.
-(function ClassSlots (U) Renaming :merge (map-intersect old new))
-
-;; the leaves, whose slots are known outright
-(set (ClassSlots (Var 0)) (map-of 0 0))
-(set (ClassSlots (Null)) (map-empty))
-
-;; Carry a slot set along a `RenamesToLeader` edge, in both directions: `a = m*b`, so
-;; `m` takes b's slots to a's. Transporting a slot set through a renaming is the image of
-;; the renaming restricted to that set.
-(rule ((RenamesToLeader a m b) (= slots (ClassSlots a)))
-      ((set (ClassSlots b) (map-image (compose (inverse m) slots)))))
-(rule ((RenamesToLeader a m b) (= slots (ClassSlots b)))
-      ((set (ClassSlots a) (map-image (compose m slots)))))
-"""
 
 
 def carrier_core(symbols):

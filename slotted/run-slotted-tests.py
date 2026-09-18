@@ -26,11 +26,6 @@ SNAPSHOTS = SRC_DIR / "snapshots"
 COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 
 
-#: The hand-written core. It includes nothing because everything else includes IT, so
-#: it is the one file the rule below would otherwise misread as a slotted source.
-CORE = "egraph-encoding-11.egg"
-
-
 def slotted_sources():
     """The tests written in the slotted language.
 
@@ -53,8 +48,6 @@ def slotted_sources():
         if key in seen:
             return seen[key]
         seen[key] = False  # a cycle is not a source
-        if key == CORE:
-            return False
         ok = True
         for t in re.findall(r'\(include "([^"]*)"\)', q.read_text()):
             target = ROOT / t

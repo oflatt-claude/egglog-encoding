@@ -25,7 +25,7 @@
 ;;; descent into the covered child, and rebuilding refreshes a private binder to avoid
 ;;; capturing the replacement's free slots.  Source-language containers are unsupported.
 
-(include "slotted/encoding/egraph-encoding-11.egg")
+(include "target/slotted/slotted-node-rules.egg")
 
 
 ;;; Case 1- a slot that occurs: h($0, $1)[$0 := null] = h(null, $1)

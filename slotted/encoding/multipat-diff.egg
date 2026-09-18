@@ -27,7 +27,7 @@
 ;;; IS construction, and constraints computed in earlier atoms thread into later
 ;;; ones as ordinary values.
 
-(include "slotted/encoding/egraph-encoding-11.egg")
+(include "target/slotted/slotted-node-rules.egg")
 
 (relation Mu (String Renaming))
 (relation Hit (String U))
