@@ -82,7 +82,7 @@ slotted-check:
 	python3 slotted/gen-node-rules.py
 	python3 slotted/gen-sdql-rules.py
 	python3 slotted/xdiff/xarray.py egg
-	python3 slotted/check-slotted.py
+	python3 slotted/checks/check-slotted.py
 
 # The offline half of the above. The rest compares against `xmulti`, whose separately
 # locked Cargo workspace fetches the pinned `slotted-egraphs` reference revision; use
@@ -99,7 +99,7 @@ slotted-campaign:
 
 slotted-check-no-oracle:
 	cargo build
-	python3 slotted/check-slotted.py --no-oracle
+	python3 slotted/checks/check-slotted.py --no-oracle
 
 # Use a disposable report path, keeping the default report cache untouched.
 benchmark-smoke:

@@ -23,7 +23,7 @@ sitting just outside them would be drift the comparison never sees. So this also
 refuses any rule outside the region that mentions the hand-written constructors or
 `ClassSlots`.
 
-    python3 slotted/check-handwritten-encoding.py
+    python3 slotted/checks/check-handwritten-encoding.py
 
 Exits 0 when they agree, 1 with a diff when they do not.
 """
@@ -34,7 +34,7 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 GEN = ROOT / "slotted" / "gen-node-rules.py"
 HANDWRITTEN = ROOT / "slotted" / "encoding" / "egraph-encoding-11.egg"
 

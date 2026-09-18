@@ -10,5 +10,5 @@ These two files are copied from commit
   file after its equality-saturation run; its Table 1/2 runners compare extraction
   cost rather than asserting this syntax as a golden result.
 
-`slotted/check-paper-sdql.py` pins their hashes and checks the syntax translation
+`slotted/checks/check-paper-sdql.py` pins their hashes and checks the syntax translation
 used by `slotted/tests/sdql-paper-batax.egg`.

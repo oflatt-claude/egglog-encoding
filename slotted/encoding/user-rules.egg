@@ -28,7 +28,7 @@
 ;;; sdql's binds its column 1 and the array language's its column 0, so no one file can
 ;;; declare both per-constructor.  The generic encoding is what lets eleven rules from two
 ;;; languages sit in one tutorial.  Nothing about the recipe depends on the spelling, and
-;;; `slotted/check-tutorial.py` compiles each rule the way this file writes it,
+;;; `slotted/checks/check-tutorial.py` compiles each rule the way this file writes it,
 ;;; so the check is exact either way.
 ;;;
 ;;; THE REFERENCE, wherever one is mentioned below, is `memoryleak47/slotted-egraphs` --
@@ -59,7 +59,7 @@
 ;;;
 ;;; EVERY RULE HERE IS A REAL ONE.  All eleven are rewrites from `benches/sdql.rs` or
 ;;; `tests/array/mod.rs`, and each is what `slotted-encoder.py` emits for it -- checked, not
-;;; claimed: `slotted/check-tutorial.py` compares every rule below against the
+;;; claimed: `slotted/checks/check-tutorial.py` compares every rule below against the
 ;;; encoder's own output and allows only a renaming of the variables, which is done here for
 ;;; readability.  A tutorial rule is therefore the committed generated rule without its
 ;;; `:ruleset` tail.  Two sections quote the SAME rule at two atom orders (M6 and M9, both

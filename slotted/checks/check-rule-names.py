@@ -10,14 +10,14 @@ name a test's source gives a rule appears on a rule in that test's snapshot.
 
 Reads the committed snapshots rather than recompiling, so it is nearly free.
 
-    python3 slotted/check-rule-names.py
+    python3 slotted/checks/check-rule-names.py
 """
 
 import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / "slotted/tests"
 SNAPSHOTS = TESTS / "snapshots"
 

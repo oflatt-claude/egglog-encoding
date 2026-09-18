@@ -10,14 +10,14 @@ has to carry. Two things rot silently and neither changes any answer:
 
 So each case must exit nonzero, print its phrase, and show no traceback.
 
-    python3 slotted/check-refusals.py
+    python3 slotted/checks/check-refusals.py
 """
 
 import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TMP = ROOT / "target" / "slotted" / "refusal.egg"
 
 LANG = "(datatype M (Null) (IConst) (Succ M) (Mul M M) (Lam M M :binder 0))\n"

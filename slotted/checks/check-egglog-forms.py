@@ -14,14 +14,14 @@ This is what says which egglog forms are missing without anyone having to rememb
 gaps it currently records are value primitives over payloads -- egglog's arithmetic and
 comparisons -- and the actions `set`/`delete`/`subsume`, which need `rule`.
 
-    python3 slotted/check-egglog-forms.py
+    python3 slotted/checks/check-egglog-forms.py
 """
 
 import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 TMP = ROOT / "target" / "slotted" / "forms.egg"
 
 L = "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n"

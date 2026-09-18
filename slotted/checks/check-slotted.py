@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 
@@ -204,14 +204,14 @@ CHECKS = [
     ),
     (
         "paper-sdql-provenance",
-        ("slotted/check-paper-sdql.py",),
+        ("slotted/checks/check-paper-sdql.py",),
         starts_ok,
         False,
         False,
     ),
     (
         "paper-sdql-reference-goal",
-        ("slotted/check-paper-sdql.py", "--reference"),
+        ("slotted/checks/check-paper-sdql.py", "--reference"),
         starts_ok,
         False,
         True,
@@ -219,7 +219,7 @@ CHECKS = [
     ("snapshot-drift", check_snapshots, None, False, False),
     (
         "front-ends",
-        ("slotted/check-front-ends.py",),
+        ("slotted/checks/check-front-ends.py",),
         ratio(r"OK: (\d+)/(\d+) rules compile the same", 1),
         False,
         False,
@@ -229,7 +229,7 @@ CHECKS = [
     # of `multipattern.egg` against quietly going vacuous.
     (
         "multipattern-teeth",
-        ("slotted/check-multipattern-teeth.py",),
+        ("slotted/checks/check-multipattern-teeth.py",),
         ratio(r"(\d+)/(\d+) multipattern claims have teeth", 12),
         False,
         False,
@@ -238,7 +238,7 @@ CHECKS = [
     # is missing, since it changes no answer.
     (
         "rule-names",
-        ("slotted/check-rule-names.py",),
+        ("slotted/checks/check-rule-names.py",),
         ratio(r"(\d+)/(\d+) rule names reach the generated egglog", 50),
         False,
         False,
@@ -248,7 +248,7 @@ CHECKS = [
     # arrives as a traceback is not a message -- both went unnoticed before.
     (
         "refusals",
-        ("slotted/check-refusals.py",),
+        ("slotted/checks/check-refusals.py",),
         ratio(r"(\d+)/(\d+) refusals hold, with a message", 31),
         False,
         False,
@@ -277,22 +277,22 @@ CHECKS = [
     # refuses with a message. A verdict that changes is reported either way.
     (
         "egglog-forms",
-        ("slotted/check-egglog-forms.py",),
+        ("slotted/checks/check-egglog-forms.py",),
         ratio(r"(\d+)/(\d+) egglog forms behave as recorded", 30),
         False,
         False,
     ),
-    ("handwritten-drift", ("slotted/check-handwritten-encoding.py",), starts_ok, False, False),
+    ("handwritten-drift", ("slotted/checks/check-handwritten-encoding.py",), starts_ok, False, False),
     (
         "correspondence",
-        ("slotted/check-correspondence.py",),
+        ("slotted/checks/check-correspondence.py",),
         ratio(r"OK: (\d+)/(\d+) correspondence files", 2),
         False,
         False,
     ),
     (
         "tutorial-drift",
-        ("slotted/check-tutorial.py",),
+        ("slotted/checks/check-tutorial.py",),
         ratio(r"(\d+)/(\d+) sections are the encoder's own output", 12),
         False,
         False,
@@ -363,7 +363,7 @@ CHECKS = [
     (
         # A language file's claim to carry the reference's rules, checked name for name.
         "reference-rules",
-        ("slotted/check-reference-rules.py",),
+        ("slotted/checks/check-reference-rules.py",),
         ratio(r"(\d+)/(\d+) rule sets match", 2),
         False,
         True,
@@ -371,7 +371,7 @@ CHECKS = [
     (
         # An example nobody runs is an example nobody checked.
         "language-doc",
-        ("slotted/check-language-doc.py",),
+        ("slotted/checks/check-language-doc.py",),
         ratio(r"(\d+)/(\d+) examples run", 9),
         False,
         True,

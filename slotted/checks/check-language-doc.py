@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOC = ROOT / "slotted" / "LANGUAGE.md"
 COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 

@@ -18,7 +18,7 @@ plus the ONE constructor family it works through as a worked example.
 That family is arity 2, and `HANDWRITTEN` names it: its rules are hand-written there
 rather than emitted here, so a reader gets a whole constructor's machinery in one
 file. `handwritten_region()` below returns what would be emitted for it, and
-`slotted/check-handwritten-encoding.py` asserts the two agree, so the
+`slotted/checks/check-handwritten-encoding.py` asserts the two agree, so the
 worked example cannot drift away from what every other arity gets.
 
 Add a constructor to `GENERIC` below, or a language file, and re-run. Do not

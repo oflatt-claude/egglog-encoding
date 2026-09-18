@@ -19,7 +19,7 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 # A `.ref` sits beside the file that declares its language, which is the slotted source
 # where the language has rules and `languages/` where it does not.
 REF_DIRS = (ROOT / "slotted" / "languages",)

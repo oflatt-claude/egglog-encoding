@@ -13,7 +13,7 @@ This is the .egg corpus's counterpart to `xdiff/mutations.py`, which puts past b
 into the compiler and requires the curated cases to notice. Same idea, different subject:
 here the rules are mutated and the file's own claims are what must notice.
 
-    python3 slotted/check-multipattern-teeth.py
+    python3 slotted/checks/check-multipattern-teeth.py
 """
 
 import re
@@ -21,7 +21,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
 sc = __import__("slotted-egglog")
 

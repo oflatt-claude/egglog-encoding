@@ -19,10 +19,10 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 SNAPSHOTS = ROOT / "slotted" / "tests" / "snapshots"
 
-_spec = importlib.util.spec_from_file_location("ct", ROOT / "slotted" / "check-tutorial.py")
+_spec = importlib.util.spec_from_file_location("ct", ROOT / "slotted" / "checks" / "check-tutorial.py")
 ct = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ct)
 
