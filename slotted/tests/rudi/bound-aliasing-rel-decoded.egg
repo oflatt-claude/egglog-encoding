@@ -19,5 +19,5 @@
 
 (run 10)
 
-(check (= g (GG $0 $0)))
-(check (= g (GG $0 $1)))
+(check (= t (GG $0 $0)))
+(check (= t (GG $0 $1)))
