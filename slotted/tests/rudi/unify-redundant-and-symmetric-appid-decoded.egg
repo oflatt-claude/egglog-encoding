@@ -18,8 +18,8 @@
 (rewrite 
     (Truth)
     (Rel x w)
-    :when (App (Lam x (Lam y a))
-         (Lam w (Lam z a)))
+    :when ((App (Lam x (Lam y a))
+          (Lam w (Lam z a))))
 )
 
 (run 10)

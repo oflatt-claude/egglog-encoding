@@ -145,19 +145,19 @@ the names guards and right-hand sides use. This does not forbid an unconstrained
 pattern variable outside a binder from carrying the same printed slot, which is the
 behavior required by reference issue #48.
 
-**`$` is a slot; `#` is a global.** egglog spells a global `$name`, and this language
-cannot borrow that spelling, because `$0` is already a slot. So a global may be marked
-`#name`, at its binding and at its uses, and `$x` is a slot wherever it appears:
+**`$` is a slot; a global is named bare.** egglog spells a global `$name`, and this
+language cannot borrow that spelling, because `$0` is already a slot. So a global is
+written bare, as an egglog rule writes one, and `$x` is a slot wherever it appears:
 
 ```slotted
 (datatype M (IConst) (Mul M M) (Lam M M :binder 0))
 
-(let #j (IConst))
-(rewrite (Mul a #j) a :name "id-right")
+(let j (IConst))
+(rewrite (Mul a j) a :name "id-right")
 
 ; `k` is a global and `$k` is a slot -- the two never read alike
 (let k (IConst))
-(rewrite (Lam $k (Mul #k $k)) #k :name "slot-not-global")
+(rewrite (Lam $k (Mul k $k)) k :name "slot-not-global")
 
 (let mj (Mul (IConst) (IConst)))
 (let ek (Lam $0 (Mul (IConst) $0)))
@@ -167,17 +167,16 @@ cannot borrow that spelling, because `$0` is already a slot. So a global may be 
 (check (= ek (IConst)))
 ```
 
-The sigil is optional, as it is in egglog, which only warns when a global lacks one —
-`(let j …)` and a bare `j` mean the same thing. Naming a global with a `$` is not
-optional but refused: `$j` in a term would be the slot and never the global.
+Naming a global with a `$` is refused: `$j` in a term would be the slot and never the
+global.
 
 A rewrite's **left side must be a call**. A bare variable there matches every class, so
 the rule would say nothing.
 
 `:when` takes **one** argument, a list of facts — `:when ((= a b) (not-free $x f))`.
 That is egglog's spelling and the only one it accepts, so all of a rule's facts go in
-that one list. A bare fact without the list, `:when (= a b)`, is taken here as a
-convenience; egglog rejects it. Several `:when` clauses are refused rather than merged,
+that one list. A bare fact without the list, `:when (= a b)`, is refused, because
+egglog refuses it. Several `:when` clauses are refused rather than merged,
 because egglog keeps only the last one and the rule would not mean there what it means
 here.
 

@@ -112,7 +112,7 @@
 ;;; anything accepted can break.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Pair a b) (Null) :when (= a (Succ p)) :name "bare-fact")
+(rewrite (Pair a b) (Null) :when ((= a (Succ p))) :name "one-fact")
 
 (let ss (Pair (Succ (Null)) (Null)))
 (let nn (Pair (Null) (Null)))
@@ -159,16 +159,12 @@
 ;;; The same global, marked with `#`.
 ;;;
 ;;; egglog writes a global `$name`, and this language cannot borrow that spelling: `$0`
-;;; is a SLOT here. So globals wear `#` instead, at the binding and at the use, and a
-;;; global named with a `$` is refused rather than read two ways -- `$x` is a slot
-;;; wherever it appears.
-;;;
-;;; The sigil is optional, as it is in egglog, which only warns when a global lacks
-;;; one: the section above writes the same rule bare.
+;;; is a SLOT here. So a global is named bare, and one named with a `$` is refused
+;;; rather than read two ways -- `$x` is a slot wherever it appears.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(let #j (IConst))
-(rewrite (Mul a #j) a :name "id-right-marked")
+(let j (IConst))
+(rewrite (Mul a j) a :name "id-right-named")
 
 (let mj (Mul (IConst) (IConst)))
 (run 5)
@@ -177,13 +173,13 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; And `$x` is a slot even where a global of that name is bound, which is the whole
-;;; point of separating the two sigils. `k` is a global; `$k` is a slot the match
-;;; solves for, so this rule is the eta shape and not a rule about `k` at all.
+;;; And `$x` is a slot even where a global of that name is bound, which is why a global
+;;; may not be named with a `$`. `k` is a global; `$k` is a slot the match solves for,
+;;; so this rule is the eta shape and not a rule about `k` at all.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (let k (IConst))
-(rewrite (Lam $k (Mul #k $k)) #k :name "slot-not-global")
+(rewrite (Lam $k (Mul k $k)) k :name "slot-not-global")
 
 ;; the bound slot is not free in the body's `k`, so this reduces
 (let ek (Lam $0 (Mul (IConst) $0)))

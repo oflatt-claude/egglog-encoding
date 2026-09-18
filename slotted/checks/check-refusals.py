@@ -25,16 +25,15 @@ LANG = "(datatype M (Null) (IConst) (Succ M) (Mul M M) (Lam M M :binder 0))\n"
 #: (what is refused, program, a phrase the message must carry)
 CASES = [
     ("a global named with a `$`", LANG + "(let $I (IConst))\n", "may not be named"),
-    ("an unbound `#global`", LANG + '(rewrite (Mul a #nope) a :name "r")\n', "no global"),
     (
         "a global bound to a bare slot invocation",
         LANG + "(let v $7)\n",
         "cannot currently store",
     ),
     (
-        "a `#global` in a binder column",
-        LANG + "(let g (IConst))\n(let bad (Lam #g #g))\n",
-        "binder column",
+        "a bare `:when` fact without the list",
+        LANG + '(rewrite (Mul a b) a :when (= a (Succ p)) :name "r")\n',
+        "takes a LIST of facts",
     ),
     (
         "several `:when` clauses",

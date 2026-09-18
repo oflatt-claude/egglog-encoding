@@ -32,10 +32,6 @@ enc = __import__("slotted-encoder")
 
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
 SLOT = re.compile(r"\$\w+\Z")
-#: A global may be written with this sigil. egglog writes `$name`, which cannot be
-#: borrowed: `$` is a SLOT here, and one spelling cannot mean both. Bare works too, as
-#: it does in egglog.
-GLOBAL = "#"
 
 
 def parse(text):
@@ -336,23 +332,6 @@ class Source:
         `$s` string in either column.
         """
         if isinstance(form, str):
-            if form.startswith(GLOBAL) and len(form) > 1:
-                name = form[1:]
-                if column is enc.BINDER:
-                    raise SystemExit(
-                        f"{self.path.name}: {form!r} stands in a binder column, where only a "
-                        "slot can. A binder binds a slot, not a global."
-                    )
-                if name not in self.lang.bound:
-                    raise SystemExit(f"{self.path.name}: no global {form!r} is bound here")
-                t = self.global_ref(name, ground)
-                actual = self.lang.sort_of(t, expected_sort)
-                if expected_sort is not None and actual != expected_sort:
-                    raise SystemExit(
-                        f"{self.path.name}: global {form!r} has sort {actual}, "
-                        f"but this position requires {expected_sort}"
-                    )
-                return t
             if SLOT.match(form):
                 # ALWAYS a slot. egglog spells a global `$name`, and this language cannot
                 # borrow that: `$0` is a slot, so `$name` was resolved as a global when one
@@ -504,16 +483,14 @@ def compile_source(src, own_only=False):
             _emit(out, keep, render(form))
         elif head == "let":
             _, name, body = form
-            # The sigil is optional here, as it is in egglog, which only warns when a
-            # global lacks one. A `$` is not optional but forbidden: `$x` is a slot in
+            # A global is named bare, as in egglog. A `$` is forbidden: `$x` is a slot in
             # this language, so a global of that name could never be written back.
             if name.startswith("$"):
                 raise SystemExit(
                     f"{src.path.name}: a global may not be named {name!r} -- `$` starts a SLOT "
                     f"here, so `{name}` in a term would mean the slot and never this global. "
-                    f"Name it `{name[1:]}`, or `{GLOBAL}{name[1:]}` to mark it."
+                    f"Name it `{name[1:]}`."
                 )
-            name = name[1:] if name.startswith(GLOBAL) and len(name) > 1 else name
             if isinstance(body, str) and SLOT.match(body):
                 raise SystemExit(
                     f"{src.path.name}: a global cannot currently store the invocation of bare slot {body}. "
@@ -732,20 +709,23 @@ def unquote(token):
 
 
 def when_facts(src, vals):
-    """The facts of one `:when` clause, in either spelling.
+    """The facts of one `:when` clause.
 
     egglog takes ONE argument and reads it as a LIST of facts:
 
         :when ((= a b) (not-free $x f))
 
-    which is the spelling to write, since it is the one egglog accepts. A clause whose
-    first element is itself a list is that form. A bare fact, `:when (= a b)`, is taken
-    too -- egglog rejects it outright, so it is a convenience here and not a spelling
-    this language documents.
+    A bare fact, `:when (= a b)`, is refused here because egglog refuses it: a spelling
+    that works in this language and not in the one it compiles to is a trap, however
+    convenient.
     """
     if len(vals) == 1 and isinstance(vals[0], list) and (not vals[0] or isinstance(vals[0][0], list)):
         return vals[0]
-    return vals
+    raise SystemExit(
+        f"{src.path.name}: `:when` takes a LIST of facts -- "
+        f"`:when ({' '.join(render(v) for v in vals)})`, "
+        "with the outer parens. egglog reads its argument as a list and refuses a bare fact."
+    )
 
 
 def rewrite_parts(src, form):
@@ -1192,16 +1172,20 @@ def main():
     src = Source(args.src)
     text = compile_source(src)
 
-    # Desugaring is asked for; running is what happens otherwise. `-o` and `--own-only`
-    # imply it, since neither means anything for a run.
-    desugar = args.desugar or args.out is not None or args.own_only
-    if desugar:
+    # Writing the program out and running it are INDEPENDENT. They used not to be:
+    # `-o` and `--own-only` implied `--desugar` and returned, so `--run -o snap.egg`
+    # wrote the snapshot and reported success without running anything -- which is how
+    # `run-slotted-tests.py --emit` came to report every test as passing.
+    if args.desugar or args.out is not None or args.own_only:
         out = compile_source(src, own_only=args.own_only) if args.own_only else text
         if args.out:
             args.out.write_text(out)
         else:
             sys.stdout.write(out)
-        return 0
+        # `--desugar` asks for the program INSTEAD of a run; `-o` on its own writes it
+        # and still runs, so a caller may snapshot and test in one invocation.
+        if args.desugar or (args.out is None and not args.run):
+            return 0
 
     with tempfile.NamedTemporaryFile("w", suffix=".egg", delete=False) as f:
         f.write(text)

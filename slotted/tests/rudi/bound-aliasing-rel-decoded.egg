@@ -16,7 +16,7 @@
 (rewrite
     (Truth)
     (GG a $0)
-    :when (App (Lam a a) $0)
+    :when ((App (Lam a a) $0))
 )
 
 (run 10)

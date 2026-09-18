@@ -169,14 +169,17 @@ def check_generated():
 
 
 def check_snapshots():
-    """The committed compiled programs match what the compiler emits now."""
+    """The committed compiled programs match what the compiler emits now.
+
+    DRIFT ONLY. Emitting also runs each test, so its exit code is about the tests and
+    is deliberately ignored here -- `slotted-tests` is what reports those. A test that
+    fails to COMPILE writes no snapshot and so shows up below as one that changed.
+    """
     before = {p.name: p.read_bytes() for p in SNAPSHOT_DIR.glob("*.egg")}
     if not before:
         return "no compiled snapshots committed"
     try:
-        r = subprocess.run([sys.executable, *EMIT_SNAPSHOTS], capture_output=True, text=True, timeout=3600, cwd=ROOT)
-        if r.returncode != 0:
-            return f"the compiler failed: {(r.stdout + r.stderr).strip()[-300:]}"
+        subprocess.run([sys.executable, *EMIT_SNAPSHOTS], capture_output=True, text=True, timeout=3600, cwd=ROOT)
         now = {p.name: p.read_bytes() for p in SNAPSHOT_DIR.glob("*.egg")}
         stale = sorted(set(now) - set(before)) + sorted(n for n in before if before[n] != now.get(n))
     finally:
