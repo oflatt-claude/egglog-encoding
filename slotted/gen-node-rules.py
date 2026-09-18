@@ -34,8 +34,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 enc = __import__("slotted-encoder")
 
 CHILD, BINDER = enc.CHILD, enc.BINDER
-CORE, MACHINERY = enc.CORE, enc.MACHINERY
-read_language, emit = enc.read_language, enc.emit
+SYMBOLS = enc.carrier_symbols((enc.CARRIER_SORT,))
+read_language = enc.read_language
 
 # The generic, string-headed encoding, and the file it is written to. One constructor
 # per arity with the operator in a payload column, so any operator can be written
@@ -60,6 +60,16 @@ GENERIC_BINDERS = (("lambda", "App2"), ("let", "App3"))
 # with any binder over them and the machinery's SHARED block. They are left out of the
 # generated file, which includes that one, so each is declared exactly once.
 HANDWRITTEN = ("App2",)
+
+
+def machinery():
+    """The carrier-independent prelude and the one carrier these files encode over."""
+    return enc.prelude() + "\n\n" + enc.multi_sort_core(SYMBOLS)
+
+
+def emit(spec, binders=()):
+    """This file's constructors, over the single carrier the generated files declare."""
+    return enc.emit(spec, sort=enc.CARRIER_SORT, symbols=SYMBOLS[enc.CARRIER_SORT], binders=binders)
 
 
 def string_headed(head, ctor, ref=None):
@@ -111,24 +121,20 @@ def main():
     generic.write_text(
         enc.in_slotted_ruleset(
             enc.MACHINERY_HEADER + ";;;\n;;; The generic, string-headed encoding: one constructor per"
-            " arity, the operator in a\n;;; payload column. Arity 2 is hand-written in the"
-            " file included below.\n\n"
-            f'(include "{MACHINERY}")\n\n' + "\n".join(emit(GENERIC, GENERIC_BINDERS, omit=HANDWRITTEN))
+            " arity, the operator in a\n;;; payload column.\n\n"
+            + machinery()
+            + "\n\n"
+            + "\n".join(emit(GENERIC, GENERIC_BINDERS))
         )
     )
     print(f"wrote {generic} ({len(GENERIC)} constructors, string-headed)")
 
-    # A language file includes the hand-written half DIRECTLY, not the generic
-    # encoding: none of them uses a string-headed `App<n>`, so including it would
-    # declare a whole constructor family none of their rules can name. `CORE` is what
-    # the hand-written half does provide -- `Var` and `Null` -- so a language may
-    # still declare those for the record.
+    # A language file carries its own machinery rather than the generic string-headed
+    # encoding: none of them uses an `App<n>`, so including it would declare a whole
+    # constructor family none of their rules can name.
     for lang, spec in LANGUAGES.items():
         p = pathlib.Path(f"target/slotted/slotted-lang-{lang}.egg")
-        body = (
-            enc.MACHINERY_HEADER + f";;;\n;;; Language: {lang}\n\n"
-            f'(include "{MACHINERY}")\n\n' + "\n".join(emit(spec, provided=CORE))
-        )
+        body = enc.MACHINERY_HEADER + f";;;\n;;; Language: {lang}\n\n" + machinery() + "\n\n" + "\n".join(emit(spec))
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(enc.in_slotted_ruleset(body))
         print(f"wrote {p} ({len(spec)} constructors, one per operator)")

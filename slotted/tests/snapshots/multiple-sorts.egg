@@ -5,73 +5,10 @@
 ;;; that emit them -- committing them again per test would be the same thousands
 ;;; of lines over and over.
 
-;;; A slotted e-graph in egglog, hand-written for one binary constructor so that the whole
-;;; machinery reads in one place. `slotted/gen-node-rules.py` emits the same
-;;; rules for the other arities and the payload leaves.
-;;; This file is deliberately the one-carrier, unsuffixed worked instance.  For a source
-;;; with several independent equality sorts, `slotted-egglog.py` emits the shared
-;;; `Renaming`/`Namings` prelude once and namespaces this carrier machinery as `_0`, `_1`,
-;;; ...; `slotted/tests/multiple-sorts.egg` snapshots that generated form.
-;;;
-;;; A class is a connected component of `RenamesToLeader`: `(RenamesToLeader a m b)` is
-;;; `a = m*b`, with `m` carrying b's slots to a's. A *self*-loop `(RenamesToLeader c p c)`
-;;; says `p` is a symmetry of c, so a rule wanting the class's symmetries joins on that
-;;; form. `Equated` is the same fact with no orientation picked, and is what an action
-;;; writes: `RenamesToLeader` is derived, and a row whose orientation a later `union`
-;;; invalidates is deleted as stale, taking the fact with it.
-;;;
-;;; A node may carry slots its class does not -- Def. 4 permits that for a node, while
-;;; requiring an *edge*'s domain to be exactly its child's slot set. `(ClassSlots c)` holds
-;;; a class's own slots and only ever narrows, which is what makes it safe to offer one from
-;;; a node. A node that is not canonical is deleted, so anything added needs an `Equated`
-;;; entry or a later query will not see it.
-;;;
-;;; `(compose a b)` is `a . b`, b first, and it TRUNCATES: keys b sends outside a's domain
-;;; are dropped. Correct for partial maps, wrong on an edge, where `compose-total` refuses.
-;;;
-;;; "The reference", below and throughout these files, is `memoryleak47/slotted-egraphs` --
-;;; the Rust implementation from Schneider et al., Slotted E-Graphs, PLDI 2025.  The
-;;; exact checked revision lives in `slotted/xmulti/Cargo.toml`: PR #46 plus the stacked
-;;; weak-shape fix.  Every registered oracle query uses `MultiPattern`; the known-broken
-;;; nested matcher is not used as ground truth.
-
-
 ;; A renaming is a partial injection on slots.
 (sort Renaming (Map i64 i64))
 
-;; EVERY way a match's slots may be merged, and the indices to read one at.
-;;
-;; Solving an atom leaves some of its slots unnamed -- the constraints from the atoms
-;; before it do not reach them -- and `find-mapping-total` MINTS a fresh name there. A
-;; fresh name differs from everything, so minting quietly decides the slot is not any
-;; slot already in play. The other readings are matches too, and they build different
-;; e-nodes, so a compiled rule asks `refine-namings` for all of them ONCE, after every
-;; atom is solved, and reads one with `vec-get`. That is the reference's `final_refine`;
-;; `slotted/tests/sdql-beta.egg` says why it happens there
-;; rather than per atom.
-;;
-;; `vec-get` is PARTIAL, so an index past a vector's end matches nothing and the join
-;; stops on its own -- no rule has to know how long the vector is. Seeding more indices
-;; than a rule needs costs join attempts and not correctness. Seeding FEWER loses the
-;; answers past the last one, and since element 0 is the identity, running out degrades
-;; to not refining: matches are missed, never invented.
-;;
-;; How many are there? The number of ways the match's slots can be partitioned, minus
-;; those two slots of one node or two slots the pattern writes rule out. That is
-;; Bell-numbered in the worst case, so it grows fast: three free slots give five, four
-;; give fifteen.
-;;
-;; EIGHT WAS NOT ENOUGH, and the way that was found is worth repeating. Eight was first
-;; kept because raising it to 64 changed no answer -- on the corpus known at the time.
-;; A symmetry-heavy sweep then reached past it: `XDIFF_SYM=0.95 isomorphism.py fuzz 1200
-;; 101` has a case whose class count is 9 against the reference's 6 at eight indices and
-;; 8 at sixty-four, so one union was being lost to truncation alone. 256 finds nothing
-;; more than 64.
-;;
-;; Truncation is silent and always in one direction: element 0 is the identity, so
-;; running out degrades to NOT REFINING, and the cost is a match missed rather than one
-;; invented. That is why it took a sweep to notice, and why "changing no answer" is weak
-;; evidence for a bound -- it only says the corpus did not reach it.
+;; Every way a match's slots may be merged, and the indices to read one at.
 (sort Namings (Vec Renaming))
 (relation Idx (i64))
 (Idx 0)

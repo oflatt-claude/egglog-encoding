@@ -951,6 +951,42 @@ def carrier_core(symbols):
     )
 
 
+#: How many refinement indices a compiled rule may read. `refine-namings` returns every
+#: way a match's slots may be merged and `vec-get` is PARTIAL, so an index past the end
+#: of that vector matches nothing and the join stops on its own: seeding more than a
+#: rule needs costs join attempts, and seeding fewer loses the answers past the last one.
+#: Element 0 is the identity, so running out degrades to not refining -- matches are
+#: missed, never invented.
+#:
+#: Sixty-four because eight was measured to be too few. Eight was kept for a while
+#: because raising it changed no answer on the corpus known then; a symmetry-heavy sweep
+#: reached past it, and `XDIFF_SYM=0.95 isomorphism.py fuzz 1200 101` holds a case whose
+#: class count is 9 against the reference's 6 at eight indices and 8 at sixty-four.
+#: The sort name the generated single-carrier files encode over.
+CARRIER_SORT = "U"
+
+NAMING_INDICES = 64
+
+
+def prelude():
+    """The declarations no carrier owns: renamings, namings, and the refinement indices.
+
+    Nothing here names a carrier, so one copy serves a program however many equality
+    sorts it declares.
+    """
+    return "\n".join(
+        [
+            ";; A renaming is a partial injection on slots.",
+            "(sort Renaming (Map i64 i64))",
+            "",
+            ";; Every way a match's slots may be merged, and the indices to read one at.",
+            "(sort Namings (Vec Renaming))",
+            "(relation Idx (i64))",
+            *(f"(Idx {i})" for i in range(NAMING_INDICES)),
+        ]
+    )
+
+
 def multi_sort_core(carriers):
     """Shared declarations followed by one isolated core per carrier."""
     header = "\n".join(

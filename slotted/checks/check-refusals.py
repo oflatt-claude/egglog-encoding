@@ -86,7 +86,11 @@ CASES = [
         "(sort A)\n(sort B)\n(constructor A0 () A)\n(constructor B0 () B)\n(constructor F (A B) A)\n",
         "cross-sort slotted children",
     ),
-    ("a sort named after a rule variable in the core", "(sort m)\n(constructor F (m) m)\n", "would capture"),
+    # A sort named after one of the machinery's own declarations is a double declaration,
+    # which is the only naming a program may not use. Naming one after a rule VARIABLE
+    # used to be refused too, because the carrier was substituted into a hand-written
+    # file's text; the machinery is generated now, so `(sort m)` and `(sort N)` are fine.
+    ("a sort the machinery already declares", "(sort Idx)\n(constructor F (Idx) Idx)\n", "is reserved"),
     (
         "a cross-sort union",
         "(datatype* (A (A0)) (B (B0)))\n(let a (A0))\n(let b (B0))\n(union a b)\n",

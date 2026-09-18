@@ -29,8 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "slotted"))
 enc = __import__("slotted-encoder")
 
-CARRIER = "U"  # the sort the hand-written core declares
-CORE_FILE = "slotted/encoding/egraph-encoding-11.egg"
+CARRIER = "U"  # the sort a program gets when it declares none of its own
 
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
 SLOT = re.compile(r"\$\w+\Z")
@@ -146,45 +145,45 @@ class Source:
         if len(set(self.sorts)) != len(self.sorts):
             raise SystemExit(f"{path.name}: an equality sort is declared more than once")
         carriers = enc.carrier_symbols(self.carrier_sorts())
-        if len(carriers) > 1:
-            reserved = {
-                "Renaming",
-                "Namings",
-                "Idx",
-                "slotted",
-                "SlottedNodeLayout",
-                "SlottedEdgeLayout",
-                "SlottedBinderLayout",
-            }
-            for names in carriers.values():
-                reserved.update(
-                    (
-                        names.var,
-                        names.renames,
-                        names.equated,
-                        names.class_slots,
-                        names.subst_pending,
-                    )
+        # The machinery declares these whatever a program does, so a program that names
+        # one of them declares it twice. Checked for every program: the machinery is
+        # generated the same way however many sorts a program has.
+        reserved = {
+            "Renaming",
+            "Namings",
+            "Idx",
+            "slotted",
+            "SlottedNodeLayout",
+            "SlottedEdgeLayout",
+            "SlottedBinderLayout",
+        }
+        for names in carriers.values():
+            reserved.update(
+                (
+                    names.var,
+                    names.renames,
+                    names.equated,
+                    names.class_slots,
+                    names.subst_pending,
                 )
-            collision = next((sort for sort in self.sorts if sort in reserved), None)
-            if collision is None:
-                collision = next((form[1] for form in self._ctors if form[1] in reserved), None)
-            if collision is None:
-                collision = next(
-                    (
-                        form[1]
-                        for form, _origin in self.body
-                        if isinstance(form, list)
-                        and len(form) > 1
-                        and form[0] in ("function", "relation", "ruleset")
-                        and form[1] in reserved
-                    ),
-                    None,
-                )
-            if collision is not None:
-                raise SystemExit(
-                    f"{path.name}: declaration {collision!r} is reserved by the multi-sort slotted encoding"
-                )
+            )
+        collision = next((sort for sort in self.sorts if sort in reserved), None)
+        if collision is None:
+            collision = next((form[1] for form in self._ctors if form[1] in reserved), None)
+        if collision is None:
+            collision = next(
+                (
+                    form[1]
+                    for form, _origin in self.body
+                    if isinstance(form, list)
+                    and len(form) > 1
+                    and form[0] in ("function", "relation", "ruleset")
+                    and form[1] in reserved
+                ),
+                None,
+            )
+        if collision is not None:
+            raise SystemExit(f"{path.name}: declaration {collision!r} is reserved by the multi-sort slotted encoding")
         for form in self._ctors:
             name, sig, output, children = enc.read_typed_language_form(form, self.carrier_sorts())
             if name in self.spec:
@@ -233,7 +232,7 @@ class Source:
             if isinstance(form, list) and form and form[0] == "include":
                 inc = ROOT / form[1].strip('"')
                 assert inc.exists(), f"{path.name}: no such file {form[1]}"
-                assert "target/" not in inc.as_posix() and inc.name != CORE_FILE.split("/")[-1], (
+                assert "target/" not in inc.as_posix(), (
                     f"{path.name}: a slotted source may only include another slotted source, not {form[1]}"
                 )
                 self.includes.append(inc)
@@ -289,44 +288,13 @@ class Source:
         return tuple(self.sorts) if self.sorts else (CARRIER,)
 
     def core(self):
-        """The carrier core to inline, or None to include the legacy one as it stands.
+        """The machinery this program's sorts need, generated.
 
-        A program that declares no sort gets the file included, which is what every test
-        did before sorts were a thing and keeps their snapshots unchanged. A program that
-        declares one gets the same core with the carrier RENAMED to it; the core declares
-        that sort before its relations and the source declaration is dropped. The rules
-        are untouched: they name relations, and with a single sort the relation names do
-        not change. Several sorts share the map/naming prelude and get one indexed copy
-        of the carrier-specific tables and rules each.
+        One shape for every program: the carrier-independent prelude, then one isolated
+        core per declared equality sort. Nothing is substituted into a hand-written
+        file's text, so a sort may be named whatever the program likes.
         """
-        if not self.sorts:
-            return None
-        if len(self.sorts) > 1:
-            text = (ROOT / CORE_FILE).read_text()
-            marker = ";; One `U` value per e-node and per class; a slotted class spans several of them."
-            shared, found, _carrier = text.partition(marker)
-            assert found, f"{CORE_FILE}: cannot find the carrier-core boundary"
-            return shared.rstrip() + "\n\n" + enc.multi_sort_core(self.carriers)
-        sort = self.sorts[0]
-        text = (ROOT / CORE_FILE).read_text()
-        # The rename is textual, which is exact for a name the core does not otherwise
-        # use: every mention of `U` there is a declaration. A name the core uses as a
-        # RULE VARIABLE would be captured instead, so it is refused.
-        #
-        # A program naming its sort `U` is asking for the name the core already uses: the
-        # rename is the identity, so nothing can capture and there is nothing to refuse.
-        body = re.sub(r";[^\n]*", "", text)
-        if sort != CARRIER and re.search(rf"\b{re.escape(sort)}\b", body):
-            raise SystemExit(
-                f"{self.path.name}: the sort name {sort!r} is already used inside the machinery, "
-                "so renaming the carrier onto it would capture. Pick another name."
-            )
-        # every mention of the carrier is a DECLARATION -- the rules name relations, not
-        # the sort -- so renaming the whole-word occurrences is exact
-        # the core keeps the `(sort ...)` line, so the sort is declared BEFORE the
-        # relations that use it; the program's own declaration is dropped instead, in
-        # `compile_source`, since two of them is a duplicate binding
-        return re.sub(r"\bU\b", sort, text)
+        return enc.prelude() + "\n\n" + enc.multi_sort_core(self.carriers)
 
     # ------------------------------------------------------------------ terms
     def global_ref(self, name, ground):
@@ -490,15 +458,14 @@ def compile_source(src, own_only=False):
     both are already snapshotted by the generator that emits them. What is left is the
     forms this test wrote, which is the part no other snapshot covers.
     """
-    core = src.core()
     out = [
         f";;; COMPILED from {src.relpath} by slotted/slotted-egglog.py.",
         ";;;",
         ";;; A SNAPSHOT: committed so a change in the compiler shows up as a diff, never",
         ";;; edited by hand, and rewritten by `check-slotted.py --update`. This is what",
-        ";;; running that test runs, and the only file it includes is the hand-written core.",
+        ";;; running that test runs, and it includes nothing: the machinery is generated.",
         "",
-        f'(include "{CORE_FILE}")' if core is None else core,
+        src.core(),
         "",
     ]
     if own_only:
@@ -512,13 +479,7 @@ def compile_source(src, own_only=False):
         emitted = []
         for sort in src.carrier_sorts():
             spec = {name: sig for name, sig in src.spec.items() if src.output_sorts[name] == sort}
-            provided = enc.CORE if len(src.carriers) == 1 else None
-            emitted += enc.emit(
-                spec,
-                provided=provided,
-                sort=sort,
-                symbols=src.carriers[sort],
-            )
+            emitted += enc.emit(spec, sort=sort, symbols=src.carriers[sort])
         out.append(enc.in_slotted_ruleset("\n".join(emitted)))
     rules = 0
     scopes = []  # globals saved by each open `push`, restored by its `pop`
