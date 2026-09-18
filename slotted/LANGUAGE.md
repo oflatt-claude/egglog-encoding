@@ -511,5 +511,4 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `slotted/encoding/` | the encoding itself, written by hand at the encoded level, plus the tutorial that explains it. `value-equality.egg` is where this file's claims about `=` are checked |
-| `slotted/slotted-egglog.py` | the compiler; its module docstring is the short form of this file |
-| `slotted-user-rules.md` | how a rule is compiled, and why each piece is there |
+| `slotted/slotted-egglog.py` | the compiler |

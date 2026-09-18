@@ -7,73 +7,9 @@ self-contained egglog program: the hand-written core, the machinery for exactly 
 constructors declared, and the compiled body. The output includes no generated file,
 so there is no build artifact on the path between a test and running it.
 
-THE LANGUAGE
-
-    (constructor Sum (U U U U) U :binder 1 2)   the language, inline. A column in any
-                                                declared equality sort is a slotted
-                                                child; `:binder` names the child
-                                                positions whose slot it binds.
-
-    (let r (Sing (Null) (Null)))                name a term
-    (let a (Sum r $5 $6 (Null)))                a `$n` in a binder column is the bound
-                                                slot; in any other child column it is
-                                                a variable occurrence
-
-    (let #g (Sing Null Null))                   `#` marks a GLOBAL, at its binding and
-    (rewrite (Mult x #g) x)                     its uses. Bare works too, as in egglog.
-                                                `$x` is a slot wherever it appears, so a
-                                                global may not be named with a `$`.
-
-    (union a b)                                 assert an equation instead of deriving
-                                                one -- how a class gets a symmetry, and
-                                                how a slot becomes redundant
-
-    (rewrite (Sum e1 $k $v (Sing $k $v)) e1)    a rule, in terms
-    (rewrite lhs rhs :when ((not-free $x f)))   `:when` takes a LIST of facts; this one
-                                                is a slot side condition
-    (rewrite lhs rhs                            a fact `(= v <call>)` is another
-             :when ((= v (Sing a b))            PATTERN: `v` matches this too, and
-                    (not-free $k v))            variables shared between the patterns
-             :name "sum-sing")                  are the join. `:name` is a string.
-
-    (run 3)                                     three user-rule steps, with the
-                                                machinery saturated around each
-
-    (check (= a b))                             a and b are EQUAL: the same term, once
-                                                renamings are taken into account
-    (check (!= a b))                            and are not
-    (check (renaming-= a b))                    equal MODULO SOME RENAMING -- one class,
-                                                not necessarily at the same slots
-    (check (renaming-!= a b))                   and are not
-    (check (slots a $5 $6))                     a's class depends on exactly these
-    (check (holds a Mult))                      a's class contains a Mult node
-    (check (not-holds a Mult))                  and does not
-
-`slotted/LANGUAGE.md` is the reference for all of these, with the reason each exists.
-
-EVERYTHING ELSE IS EGGLOG'S
-
-Only a form that NAMES A SLOTTED TERM needs compiling, because only a term has to be
-encoded. Every other command means the same thing here as it does in egglog and goes
-through as written -- `(push)`, `(pop)`, `(print-size)`, `(print-function F 10)`,
-`(query-extract ...)`, and whatever egglog gains next. `(extract a)` is the one in
-between: its argument is a term, so it is encoded, and what egglog then prints is the
-node as the encoding STORES it, renamings and all.
-
-    (extract a)             (F (map-of 0 2) (Var 0) (map-of 0 1) (Var 0))
-
-A check whose claim is none of the ones above is egglog's too, so a one-sort test can
-drop to the encoded level -- `(check (RenamesToLeader a m l))` -- without leaving the
-language. Multi-sort output uses one indexed family per carrier,
-`RenamesToLeader_0`, `RenamesToLeader_1`, and so on.
-
-WHAT `=` MEANS HERE
-
-Egglog's `=` compares two values. A slotted term is not a value: it is a class TOGETHER
-WITH a renaming, so `=` here is compiled, not passed through -- it asks whether the two
-terms are the SAME TERM. `renaming-=` is the weaker question of whether they are equal
-modulo some renaming, which is what two alpha-variants with a renamed free slot are.
-`LANGUAGE.md` gives the example that separates them.
+`slotted/LANGUAGE.md` is the language: every form, and the reason each exists. Only a
+form that NAMES A SLOTTED TERM is compiled, because only a term has to be encoded;
+every other command means here what it means in egglog and goes through as written.
 
 Usage:
     ./slotted-egglog.py SRC.egg              run it

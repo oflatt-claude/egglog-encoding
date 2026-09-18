@@ -25,8 +25,7 @@ Against the then-current upstream b90adca oracle with `final_refine`:
     229 is the SIZE of the gap rather than a regression.
 
     These were not 278 independent bugs. The investigation led to connected atom
-    ordering and the current final `refine-namings` phase. Those mechanisms and their
-    mutation tests are documented in `slotted-user-rules.md`; this paragraph is the
+    ordering and the current final `refine-namings` phase. This paragraph is the
     before-measurement, not a statement that the current compiler still has that gap.
 
     The 39 shape-only divergences are the family the symmetry-generating unions

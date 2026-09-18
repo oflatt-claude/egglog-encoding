@@ -819,8 +819,7 @@ def curated():
     )
 
     # ---- ported from the reference's own test suite (tests/multipat) ----------
-    # Where a test is not portable, it is listed under "Not ported" in
-    # slotted-user-rules.md rather than approximated here.
+    # A test that is not portable is left out rather than approximated here.
 
     # regress::same_node_redundant_slots_stay_distinct. Unioning f's two-slot
     # term into a slotless one makes both slots redundant. A pattern that would

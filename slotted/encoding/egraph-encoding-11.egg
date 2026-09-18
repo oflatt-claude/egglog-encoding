@@ -40,7 +40,7 @@
 ;; slot already in play. The other readings are matches too, and they build different
 ;; e-nodes, so a compiled rule asks `refine-namings` for all of them ONCE, after every
 ;; atom is solved, and reads one with `vec-get`. That is the reference's `final_refine`;
-;; `slotted/tests/sdql-beta.egg` and `slotted-user-rules.md` say why it happens there
+;; `slotted/tests/sdql-beta.egg` says why it happens there
 ;; rather than per atom.
 ;;
 ;; `vec-get` is PARTIAL, so an index past a vector's end matches nothing and the join

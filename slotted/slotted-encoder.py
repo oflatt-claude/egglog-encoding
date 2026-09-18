@@ -6,8 +6,8 @@ rules, term encoding, and MultiPattern rule encoding. Each equality-sort carrier
 its own `CarrierSymbols`; renaming maps and layout metadata are shared.
 
 The executable derivation and worked examples live in
-`slotted/encoding/user-rules.egg`; `slotted-user-rules.md` contains the longer design
-rationale. This module keeps only the invariants needed beside their implementation.
+`slotted/encoding/user-rules.egg`. This module keeps only the invariants needed beside
+their implementation.
 """
 
 from dataclasses import dataclass

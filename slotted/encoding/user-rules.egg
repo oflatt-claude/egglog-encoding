@@ -2,8 +2,8 @@
 ;;;
 ;;; THE ENCODING, one shape of user rule per section: the problem the shape poses, the
 ;;; construction that solves it, and then the rule -- the one a compiler emits, one per
-;;; section and nothing else.  Read it top to bottom.  `slotted-user-rules.md` is the prose
-;;; version, and `slotted/slotted-encoder.py` is this same recipe as code --
+;;; section and nothing else.  Read it top to bottom.  `slotted/slotted-encoder.py` is
+;;; this same recipe as code --
 ;;; one implementation, which every generator goes through: `xdiff.py` (the toy language,
 ;;; checked against the reference), `xarray.py` (the paper's array language, likewise)
 ;;; and `gen-sdql-rules.py` (SDQL).
@@ -128,7 +128,7 @@
 ;;;   sX          the pattern slot a slot literal `$X` was pinned to
 ;;;
 ;;; Contents, in order.  Each section names its rule, the language it comes from and the
-;;; harness cases covering it, and `slotted-user-rules.md` refers to these labels.
+;;; harness cases covering it.
 ;;;   M1   one atom, nothing shared             sdql   eq-comm
 ;;;   M2   a repeated variable, Def. 6           sdql   sub-identity
 ;;;   M3   why an atom's renaming is total     sdql   get-range, at a non-default lead

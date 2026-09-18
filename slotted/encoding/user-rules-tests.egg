@@ -327,8 +327,7 @@
 
 ;; (c) the tutorial's rule: total mp2 -- sound AND fires.  `?z`'s slot is minted, so its
 ;;     name is not predictable; what is asserted is that the built `h3` is in `?p`'s class
-;;     and still has a slot for `?z`.  ((a) and (b) below are the counter-examples, which
-;;     `slotted-user-rules.md` cites by those letters.)
+;;     and still has a slot for `?z`.  ((a) and (b) below are the counter-examples.)
 (push)
 (let $P3 (App2 "f3" (map-of 0 0) (Var 0) (map-of 1 1) (Var 1)))
 (let $Q3 (App2 "g3" (map-of 0 0) (Var 0) (map-of 5 5) (Var 5)))

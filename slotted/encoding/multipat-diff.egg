@@ -11,9 +11,9 @@
 ;;; constrains it -- its root AND every already-bound child -- not from one.
 ;;; ===========================================================================
 ;;;
-;;; `slotted-user-rules.md` splits atoms into three cases (initial / chain /
-;;; join) and gives the chain case `mp = (compose mb symB)`, derived from the
-;;; root alone.  That is under-constrained exactly when the node carries slots
+;;; Splitting atoms into three cases (initial / chain / join) and giving the
+;;; chain case `mp = (compose mb symB)`, derived from the root alone, is
+;;; under-constrained exactly when the node carries slots
 ;;; the root's renaming does not cover -- i.e. redundant slots.  The atom then
 ;;; names those slots on its own, independently of an earlier atom that already
 ;;; named the same ones, and a repeated variable's Def. 6 check fails.
