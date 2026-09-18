@@ -66,6 +66,9 @@ RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 ARRAY_SRC = ROOT / "slotted" / "languages" / "array.egg"
 LANG = slotenc.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 
+# the carrier's table names, read off the language rather than written out
+SYM = LANG.symbols_for(LANG.default_sort)
+
 # the per-language machinery, not the generic string-headed one
 MACHINERY = "target/slotted/slotted-lang-array.egg"
 
@@ -177,7 +180,7 @@ def egg_program(case, atom_order=None, mult=3, defer_probes=False):
         "(relation ProbeId (U i64))",
         "(relation SameClass (i64 i64))",
         "(rule ((ProbeId a i) (ProbeId b j)\n"
-        "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
+        f"       ({SYM.renames} a m1 l) ({SYM.renames} b m2 l))\n"
         "      ((SameClass i j)) :ruleset probe)",
     ]
     for r in case.rules:
@@ -940,7 +943,7 @@ def egg_section(title, comment, case, want, atom_order=None):
         out.append(f"(let $p{i} {enc(t)})")
     out.append("")
     out.append(schedule(case.rounds * 3))
-    chk = "(check (RenamesToLeader $p0 m1 l)\n       (RenamesToLeader $p1 m2 l))"
+    chk = f"(check ({SYM.renames} $p0 m1 l)\n       ({SYM.renames} $p1 m2 l))"
     out.append(chk if want else f"(fail {chk})")
     out += ["", "(pop)"]
     return "\n".join(out)
@@ -1006,7 +1009,7 @@ def emit_egg():
             want=True,
         )
     )
-    out.append("""
+    out.append(f"""
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A `let` whose bound slot is also free in its VALUE.
 ;;;
@@ -1028,15 +1031,15 @@ def emit_egg():
 (run-schedule (saturate (run slotted)))
 
 ;; the value's occurrence keeps the slot free, so the class has exactly one
-(check (= (ClassSlots $L) (map-of 0 0)))
-(check (RenamesToLeader $L m $L) (= (map-length m) 1))
+(check (= ({SYM.class_slots} $L) (map-of 0 0)))
+(check ({SYM.renames} $L m $L) (= (map-length m) 1))
 
 ;; and the two applications below stay apart, as they do in the reference
 ;; the edge to $L must cover its slot now that it has one
 (let $a0 (App (map-of 0 0) $L (map-of 0 0) (Var 0)))
 (let $a1 (App (map-of 0 0) $L (map-of 0 1) (Var 0)))
 (run-schedule (saturate (run slotted)))
-(fail (check (RenamesToLeader $a0 m1 l) (RenamesToLeader $a1 m2 l)))
+(fail (check ({SYM.renames} $a0 m1 l) ({SYM.renames} $a1 m2 l)))
 
 (pop)
 """)

@@ -10,6 +10,8 @@
 ;;; binds, and the same `$k` in `Sing`'s ordinary column is a variable occurrence that
 ;;; the match has to solve to that same slot.
 
+(sort U)
+
 (constructor Sing (U U) U)
 (constructor Sum (U U U U) U :binder 1 2)
 (constructor Null () U)

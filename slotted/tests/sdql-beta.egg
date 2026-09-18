@@ -23,6 +23,8 @@
 ;;;
 ;;;     python3 slotted/slotted-egglog.py slotted/tests/sdql-beta.egg
 
+(sort U)
+
 (constructor Let (U U U) U :binder 1)
 (constructor Add (U U) U)
 (constructor Lambda (U U) U :binder 0)

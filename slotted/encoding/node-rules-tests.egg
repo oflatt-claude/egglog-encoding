@@ -15,16 +15,16 @@
 ;;; records the renaming between them. Exercises the generated arity-3 rules.
 (push)
 
-(let $f3a (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
-(let $f3b (App3 "f3" (map-of 0 3) (Var 0) (map-of 0 4) (Var 0) (map-of 0 5) (Var 0)))
+(let $f3a (App3 "f3" (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
+(let $f3b (App3 "f3" (map-of 0 3) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted)))
 
-(check (RenamesToLeader $f3a m1 leader)
-       (RenamesToLeader $f3b m2 leader))
+(check (RenamesToLeader_0 $f3a m1 leader)
+       (RenamesToLeader_0 $f3b m2 leader))
 
 ;; and three distinct slots may not collapse: f3($0,$1,$2) is not f3($0,$0,$2)
-(let $f3c (App3 "f3" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0) (map-of 0 2) (Var 0)))
+(let $f3c (App3 "f3" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 (fail (check (= $f3a $f3c)))
 
@@ -37,15 +37,15 @@
 ;;; and leave the two identified.
 (push)
 
-(let $let5 (App3 "let" (map-of 0 5) (Var 0) (map-of 0 5) (Var 0) (map-empty) (Null)))
-(let $let6 (App3 "let" (map-of 0 6) (Var 0) (map-of 0 6) (Var 0) (map-empty) (Null)))
+(let $let5 (App3 "let" (map-of 0 5) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0) (map-empty) (Null)))
+(let $let6 (App3 "let" (map-of 0 6) (SlottedVar_0 0) (map-of 0 6) (SlottedVar_0 0) (map-empty) (Null)))
 
 (run-schedule (saturate (run slotted)))
 
 (check (= $let5 $let6))
 
 ;; the bound slot is not free: the class has no slots
-(check (RenamesToLeader $let5 (map-empty) $let5))
+(check (RenamesToLeader_0 $let5 (map-empty) $let5))
 
 (pop)
 
@@ -62,20 +62,20 @@
 (run-schedule (saturate (run slotted)))
 
 ;; slotless, like Null
-(check (RenamesToLeader $one (map-empty) $one))
+(check (RenamesToLeader_0 $one (map-empty) $one))
 
 ;; distinct payloads stay distinct
 (fail (check (= $one $two)))
 
 ;; and they compose into nodes: f(1, $0) and f(1, $1) are alpha-equivalent
-(let $f1a (App2 "f" (map-empty) $one (map-of 0 0) (Var 0)))
-(let $f1b (App2 "f" (map-empty) $one (map-of 0 1) (Var 0)))
+(let $f1a (App2 "f" (map-empty) $one (map-of 0 0) (SlottedVar_0 0)))
+(let $f1b (App2 "f" (map-empty) $one (map-of 0 1) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
-(check (RenamesToLeader $f1a m1 leader)
-       (RenamesToLeader $f1b m2 leader))
+(check (RenamesToLeader_0 $f1a m1 leader)
+       (RenamesToLeader_0 $f1b m2 leader))
 
 ;; but f(1, ...) and f(2, ...) are not
-(let $f2a (App2 "f" (map-empty) $two (map-of 0 0) (Var 0)))
+(let $f2a (App2 "f" (map-empty) $two (map-of 0 0) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 (fail (check (= $f1a $f2a)))
 
@@ -88,20 +88,20 @@
 ;;; needed for the mix -- a payload just never appears in a renaming.
 (push)
 
-(let $s2a (Scale 2 (map-of 0 0) (Var 0)))
-(let $s2b (Scale 2 (map-of 0 1) (Var 0)))
-(let $s3a (Scale 3 (map-of 0 0) (Var 0)))
+(let $s2a (Scale 2 (map-of 0 0) (SlottedVar_0 0)))
+(let $s2b (Scale 2 (map-of 0 1) (SlottedVar_0 0)))
+(let $s3a (Scale 3 (map-of 0 0) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted)))
 
 ;; same payload, child at a different slot: alpha-equivalent
-(check (RenamesToLeader $s2a m1 leader)
-       (RenamesToLeader $s2b m2 leader))
+(check (RenamesToLeader_0 $s2a m1 leader)
+       (RenamesToLeader_0 $s2b m2 leader))
 
 ;; different payload: a different node
 (fail (check (= $s2a $s3a)))
 
 ;; the slots come from the child alone
-(check (RenamesToLeader $s2a (map-of 0 0) $s2a))
+(check (RenamesToLeader_0 $s2a (map-of 0 0) $s2a))
 
 (pop)

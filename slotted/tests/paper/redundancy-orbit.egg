@@ -11,6 +11,8 @@
 ;;; orbit drags $0 along, and the merged class keeps no slots -- without ever becoming
 ;;; `(Null)`.
 
+(sort U)
+
 (constructor F (U U) U)
 (constructor G (U U) U)
 (constructor Null () U)

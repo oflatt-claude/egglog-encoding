@@ -43,6 +43,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from xdiff import EGGLOG, ROOT, XMULTI, parse_same_class, slotenc  # noqa: E402
 
+# the carrier's table names, read off the encoder rather than written out
+SYM = slotenc.carrier_symbols(("U",))["U"]
+
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
 # The generated encoding rules. Lifted by `:name`, never rewritten.
@@ -431,7 +434,7 @@ def egg_program(case, with_rule=True, mult=3):
         "(relation ProbeId (U i64))",
         "(relation SameClass (i64 i64))",
         "(rule ((ProbeId a i) (ProbeId b j)\n"
-        "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
+        f"       ({SYM.renames} a m1 l) ({SYM.renames} b m2 l))\n"
         "      ((SameClass i j)) :ruleset probe)",
     ]
     for i, t in enumerate(case.terms):

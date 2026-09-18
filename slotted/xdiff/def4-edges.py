@@ -70,7 +70,7 @@ def obs():
                 continue
             out.append(
                 f"(rule ((= v {pat})\n"
-                f"       (= s (ClassSlots {kids[i]}))\n"
+                f"       (= s ({X.SYM.class_slots} {kids[i]}))\n"
                 f"       (!= (map-domain {edges[i]}) s))\n"
                 f"      ((BadDomain {where} {edges[i]} s)) :ruleset def4)"
             )

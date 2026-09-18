@@ -52,7 +52,7 @@ def _observer():
     ]
     for name, sig in BINARY.items():
         pat = enc.pattern(name, sig)
-        out.append(f'(rule ((= V {pat}) (RenamesToLeader V s V)) ((WithSym "{name}" m1 c1 m2 c2)))')
+        out.append(f'(rule ((= V {pat}) ({X.SYM.renames} V s V)) ((WithSym "{name}" m1 c1 m2 c2)))')
         out.append(f'(rule ((= V {pat})) ((NoSym "{name}" m1 c1 m2 c2)))')
     sizes = "\n".join(f"(print-size {n})" for n in BINARY)
     return "\n".join(

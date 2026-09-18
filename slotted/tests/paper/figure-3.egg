@@ -12,6 +12,8 @@
 ;;; the node stands for `mul($x, 0)` at every $x. `(Null)` is 0 here. `mul($9,$7)` is
 ;;; a different node and must not come along.
 
+(sort U)
+
 (constructor Mul (U U) U)
 (constructor Null () U)
 

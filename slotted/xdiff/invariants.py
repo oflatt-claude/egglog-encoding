@@ -36,7 +36,7 @@ OBS_TEMPLATE = """
 
 ;; a stored renaming that is not injective
 (relation NotInjective (Renaming))
-(rule ((RenamesToLeader a m b) (!= (map-length m) (map-length (map-image m))))
+(rule (({X.SYM.renames} a m b) (!= (map-length m) (map-length (map-image m))))
       ((NotInjective m)) :ruleset obs)
 
 ;; an edge naming more slots than its child has
@@ -78,7 +78,7 @@ def node_rules():
                 continue
             out.append(
                 f"(rule ((= n {pat})\n"
-                f"       (RenamesToLeader {kids[i]} s {kids[i]})\n"
+                f"       ({X.SYM.renames} {kids[i]} s {kids[i]})\n"
                 f"       (= s (compose s s))\n"
                 f"       (< (map-length s) (map-length {edges[i]})))\n"
                 f'      ((WideEdge "{name} child {i + 1}" {edges[i]} {kids[i]} s)) :ruleset obs)'

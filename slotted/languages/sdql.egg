@@ -39,6 +39,8 @@
 ;;;
 ;;; The rules are NOT confluent -- `get-to-sum` and `sum-to-get` alone loop -- so any
 ;;; test over them asks for a bounded number of steps.
+(sort U)
+
 (constructor Lambda (U U) U :binder 0)            ; Lam(Bind<AppliedId>)          "lambda"
 (constructor Sing (U U) U)                        ; Sing(A, A)                    "sing"
 (constructor Add (U U) U)                         ; Add(A, A)                     "+"

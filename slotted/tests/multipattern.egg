@@ -45,6 +45,8 @@
 ;;; could be satisfied by renaming that slot onto an unrelated class's. `refine-namings`
 ;;; is now offered only the slots the match's substitution carries, which is what the
 ;;; reference offers, and `K1` is a regression test in the curated corpus.
+(sort U)
+
 (constructor Num (i64) U)
 (constructor Add (U U) U)
 (constructor Mul (U U) U)

@@ -30,24 +30,24 @@ class CarrierSymbols:
     subst_pending: str
 
     @classmethod
-    def create(cls, sort, index=None):
-        suffix = "" if index is None else f"_{index}"
+    def create(cls, sort, index):
         return cls(
             sort,
-            f"SlottedVar{suffix}" if suffix else "Var",
-            f"RenamesToLeader{suffix}",
-            f"Equated{suffix}",
-            f"ClassSlots{suffix}",
-            f"SubstPending{suffix}",
+            f"SlottedVar_{index}",
+            f"RenamesToLeader_{index}",
+            f"Equated_{index}",
+            f"ClassSlots_{index}",
+            f"SubstPending_{index}",
         )
 
 
 def carrier_symbols(sorts):
-    """One symbol family per declared equality sort, in declaration order."""
-    sorts = tuple(sorts)
-    if len(sorts) == 1:
-        return {sorts[0]: CarrierSymbols.create(sorts[0])}
-    return {sort: CarrierSymbols.create(sort, i) for i, sort in enumerate(sorts)}
+    """One symbol family per declared equality sort, in declaration order.
+
+    Indexed whether a program declares one sort or ten, so adding a second sort to a
+    working program does not rename the tables its first one compiled to.
+    """
+    return {sort: CarrierSymbols.create(sort, i) for i, sort in enumerate(tuple(sorts))}
 
 
 ###############################################################################
@@ -1739,9 +1739,11 @@ def lower_substitution(lang, root, rhs, pvar_sorts, mp_of, cls_of, slot_of, new)
     needed, into_body, body_x, replacement_renaming, back_to_root = (
         new(name) for name in ("need", "rb", "xb", "tren", "q")
     )
-    table_arg = f' "{symbols.class_slots}"' if len(lang.carriers) > 1 else ""
+    # The primitive reads the class's frame out of a table it is told the name of; the
+    # name is a carrier's, so it is always passed rather than left to a default.
     primitive_args = (
-        f"{cls_of[body[1]]} {body_x} ({symbols.var} 0) {replacement_renaming} {cls_of[replacement[1]]}{table_arg}"
+        f"{cls_of[body[1]]} {body_x} ({symbols.var} 0) {replacement_renaming} "
+        f'{cls_of[replacement[1]]} "{symbols.class_slots}"'
     )
     return [
         f"(let {needed} (map-union (map-image {body_map}) (map-union (map-image {replacement_map}) (map-of {x} {x}))))",

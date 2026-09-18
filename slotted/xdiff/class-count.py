@@ -28,18 +28,18 @@ import sys
 sys.path.insert(0, "slotted/xdiff")
 import xdiff as X
 
-OBS = """
+OBS = f"""
 (ruleset cc)
 (relation NotCanon (U))
 ;; Both directions, because a link is not always stored both ways: marking only the `a`
 ;; side misses a pair whose row happens to name the smaller value first, which showed up as
 ;; a class with no non-canonical members even though it plainly had a peer.
-(rule ((RenamesToLeader a m b) (!= a b) (= a (ordering-max a b)))
+(rule (({X.SYM.renames} a m b) (!= a b) (= a (ordering-max a b)))
       ((NotCanon a)) :ruleset cc)
-(rule ((RenamesToLeader a m b) (!= a b) (= b (ordering-max a b)))
+(rule (({X.SYM.renames} a m b) (!= a b) (= b (ordering-max a b)))
       ((NotCanon b)) :ruleset cc)
 (run cc 3)
-(print-size ClassSlots)
+(print-size {X.SYM.class_slots})
 (print-size NotCanon)
 """
 

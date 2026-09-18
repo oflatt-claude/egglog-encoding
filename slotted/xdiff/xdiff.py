@@ -116,6 +116,11 @@ assert sorted(op for op, o in LANG.ops.items() if op == o.name and len(o.kid_col
 
 slots, enc, sexpr, shift_term = LANG.slots, LANG.enc, LANG.sexpr, LANG.shift
 
+# The machinery's table names are the carrier's, so they are read off the language
+# rather than written out: a program compiles to `RenamesToLeader_0` and friends, and
+# a second declared sort would get its own family.
+SYM = LANG.symbols_for(LANG.default_sort)
+
 
 def swap_slots(t, s1, s2):
     """`t` with slots `s1` and `s2` exchanged."""
@@ -246,7 +251,7 @@ def _invariant_rules():
         for i in range(1, n + 1):
             out.append(
                 f"(rule ((= v (App{n} f {cols}))\n"
-                f"       (RenamesToLeader c{i} s c{i})\n"
+                f"       ({SYM.renames} c{i} s c{i})\n"
                 f"       (= s (compose s s))\n"
                 f"       (< (map-length s) (map-length m{i})))\n"
                 f"      ((WideEdge f m{i} c{i} s)) :ruleset inv)"
@@ -257,9 +262,7 @@ def _invariant_rules():
                 f"      ((NotInjective m{i})) :ruleset inv)"
             )
     out.append(
-        "(rule ((RenamesToLeader a m b)"
-        " (!= (map-length m) (map-length (map-image m))))"
-        " ((NotInjective m)) :ruleset inv)"
+        f"(rule (({SYM.renames} a m b) (!= (map-length m) (map-length (map-image m)))) ((NotInjective m)) :ruleset inv)"
     )
     out += ["(run inv 1)", "(print-size WideEdge)", "(print-size NotInjective)"]
     return "\n".join(out)
@@ -382,7 +385,7 @@ def egg_program(case, rules=None, mult=3):
     out.append("(relation SameClass (i64 i64))")
     out.append(
         "(rule ((ProbeId a i) (ProbeId b j)\n"
-        "       (RenamesToLeader a m1 l) (RenamesToLeader b m2 l))\n"
+        f"       ({SYM.renames} a m1 l) ({SYM.renames} b m2 l))\n"
         "      ((SameClass i j)) :ruleset probes)"
     )
     # Two of a case's rules can compile to the SAME text -- the generator draws each

@@ -9,6 +9,8 @@
 ;;; `Lam` and `Let` bind their column 0. `App` binds nothing, which is what makes the
 ;;; last section a test rather than a tautology.
 
+(sort U)
+
 (constructor Lam (U U) U :binder 0)
 (constructor App (U U) U)
 (constructor Let (U U U) U :binder 0)

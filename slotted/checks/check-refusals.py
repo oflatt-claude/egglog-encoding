@@ -146,7 +146,8 @@ CASES = [
         "(sort A)\n(constructor A0 () A)\n(constructor A0 () A)\n",
         "constructor 'A0' is declared more than once",
     ),
-    ("a program that declares nothing", "(run 1)\n", "no constructors declared"),
+    ("a program that declares nothing", "(run 1)\n", "no equality sort is declared"),
+    ("a sort with no constructors", "(sort A)\n(run 1)\n", "no constructors declared"),
     ("a rewrite whose left side is a bare variable", LANG + '(rewrite x (Mul x x) :name "r")\n', "must be a call"),
     ("egglog's `rule`, which this language does not have", LANG + "(rule ((= a (Null))) ())\n", "not part of"),
     (

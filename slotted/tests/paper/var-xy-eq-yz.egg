@@ -12,6 +12,8 @@
 ;;; class cannot depend on $0 (the right side does not mention it) nor on $1 or $2
 ;;; by the same argument. The reference asserts `eg.slots(id).is_empty()`.
 
+(sort U)
+
 (constructor F (U U) U)
 
 

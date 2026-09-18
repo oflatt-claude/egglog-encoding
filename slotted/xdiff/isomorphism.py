@@ -41,6 +41,10 @@ import sys
 sys.path.insert(0, "slotted/xdiff")
 import xdiff as X
 
+# the carrier's table names, so the serialized graph is read by the names the
+# machinery actually declares rather than by a fixed spelling
+SYM = X.SYM
+
 SEARCH_CAP = 200_000
 MATCH_VARIANT_CAP = 200_000
 
@@ -206,20 +210,20 @@ def read_json_graph(doc):
     leaf_rows = {"var": 0, "null": 0}
     for n in nodes.values():
         op, kids = n.get("op"), n.get("children", [])
-        if op == "ClassSlots" and kids:
+        if op == SYM.class_slots and kids:
             m = maps.get(n["eclass"])
             if m is None:
-                issues.append(f"no map-of row for ClassSlots result {n['eclass']}")
+                issues.append(f"no map-of row for class-slots result {n['eclass']}")
                 m = {}
             if any(k != v for k, v in m.items()):
-                issues.append(f"ClassSlots result {n['eclass']} is not an identity map: {m}")
+                issues.append(f"class-slots result {n['eclass']} is not an identity map: {m}")
             value, slots = cls(kids[0]), tuple(sorted(m))
             if value in slots_of and slots_of[value] != slots:
-                issues.append(f"conflicting ClassSlots rows for {value}")
+                issues.append(f"conflicting class-slots rows for {value}")
             slots_of[value] = slots
-        elif op == "RenamesToLeader" and len(kids) == 3:
+        elif op == SYM.renames and len(kids) == 3:
             loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[2])))
-        elif op == "Var":
+        elif op == SYM.var:
             leaf_rows["var"] += 1
             if len(kids) != 1:
                 issues.append(f"{n['eclass']} Var: {len(kids)} payloads, expected 1")
@@ -1222,10 +1226,10 @@ def selftest():
         nodes = {
             "n": {"op": "Null", "eclass": "U-n", "children": []},
             "i0": {"op": "0", "eclass": "i64-0", "children": []},
-            "v": {"op": "Var", "eclass": "U-v", "children": ["i0"]},
+            "v": {"op": SYM.var, "eclass": "U-v", "children": ["i0"]},
             "vm": {"op": "map-of", "eclass": "Renaming-var-id", "children": ["i0", "i0"]},
-            "vcs": {"op": "ClassSlots", "eclass": "Renaming-var-id", "children": ["v"]},
-            "vrtl": {"op": "RenamesToLeader", "eclass": "Unit-vrtl", "children": ["v", "vm", "v"]},
+            "vcs": {"op": SYM.class_slots, "eclass": "Renaming-var-id", "children": ["v"]},
+            "vrtl": {"op": SYM.renames, "eclass": "Unit-vrtl", "children": ["v", "vm", "v"]},
         }
         if with_slots:
             children = []
@@ -1235,18 +1239,18 @@ def selftest():
                 nodes[val] = {"op": str(slot), "eclass": f"i64-v{i}", "children": []}
                 children += [key, val]
             nodes["m"] = {"op": "map-of", "eclass": "Renaming-id", "children": children}
-            nodes["cs"] = {"op": "ClassSlots", "eclass": "Renaming-id", "children": ["n"]}
-            nodes["rtl"] = {"op": "RenamesToLeader", "eclass": "Unit-rtl", "children": ["n", "m", "n"]}
+            nodes["cs"] = {"op": SYM.class_slots, "eclass": "Renaming-id", "children": ["n"]}
+            nodes["rtl"] = {"op": SYM.renames, "eclass": "Unit-rtl", "children": ["n", "m", "n"]}
         return {"nodes": nodes}
 
     nonidentity_var = {
         "nodes": {
             "i0": {"op": "0", "eclass": "i64-0", "children": []},
             "i1": {"op": "1", "eclass": "i64-1", "children": []},
-            "v": {"op": "Var", "eclass": "U-v", "children": ["i0"]},
+            "v": {"op": SYM.var, "eclass": "U-v", "children": ["i0"]},
             "m": {"op": "map-of", "eclass": "Renaming-weird", "children": ["i0", "i1"]},
-            "cs": {"op": "ClassSlots", "eclass": "Renaming-weird", "children": ["v"]},
-            "rtl": {"op": "RenamesToLeader", "eclass": "Unit-rtl", "children": ["v", "m", "v"]},
+            "cs": {"op": SYM.class_slots, "eclass": "Renaming-weird", "children": ["v"]},
+            "rtl": {"op": SYM.renames, "eclass": "Unit-rtl", "children": ["v", "m", "v"]},
         }
     }
     inconsistent_cycle = {
@@ -1257,12 +1261,12 @@ def selftest():
             "mswap": {"op": "map-of", "eclass": "Renaming-swap", "children": ["i0", "i1", "i1", "i0"]},
             "a": {"op": "opaque-a", "eclass": "U-a", "children": []},
             "b": {"op": "opaque-b", "eclass": "U-b", "children": []},
-            "csa": {"op": "ClassSlots", "eclass": "Renaming-id", "children": ["a"]},
-            "csb": {"op": "ClassSlots", "eclass": "Renaming-id", "children": ["b"]},
-            "aa": {"op": "RenamesToLeader", "eclass": "Unit-aa", "children": ["a", "mid", "a"]},
-            "bb": {"op": "RenamesToLeader", "eclass": "Unit-bb", "children": ["b", "mid", "b"]},
-            "ab-id": {"op": "RenamesToLeader", "eclass": "Unit-ab1", "children": ["a", "mid", "b"]},
-            "ab-swap": {"op": "RenamesToLeader", "eclass": "Unit-ab2", "children": ["a", "mswap", "b"]},
+            "csa": {"op": SYM.class_slots, "eclass": "Renaming-id", "children": ["a"]},
+            "csb": {"op": SYM.class_slots, "eclass": "Renaming-id", "children": ["b"]},
+            "aa": {"op": SYM.renames, "eclass": "Unit-aa", "children": ["a", "mid", "a"]},
+            "bb": {"op": SYM.renames, "eclass": "Unit-bb", "children": ["b", "mid", "b"]},
+            "ab-id": {"op": SYM.renames, "eclass": "Unit-ab1", "children": ["a", "mid", "b"]},
+            "ab-swap": {"op": SYM.renames, "eclass": "Unit-ab2", "children": ["a", "mswap", "b"]},
         }
     }
     seeded = null_doc()["nodes"]
@@ -1286,12 +1290,12 @@ def selftest():
                 },
                 "a": {"op": "opaque-a", "eclass": "U-a", "children": []},
                 "b": {"op": "opaque-b", "eclass": "U-b", "children": []},
-                "csa": {"op": "ClassSlots", "eclass": "Renaming-wide-id", "children": ["a"]},
-                "csb": {"op": "ClassSlots", "eclass": "Renaming-wide-id", "children": ["b"]},
-                "aa": {"op": "RenamesToLeader", "eclass": "Unit-aa", "children": ["a", "wide-id", "a"]},
-                "bb": {"op": "RenamesToLeader", "eclass": "Unit-bb", "children": ["b", "wide-id", "b"]},
+                "csa": {"op": SYM.class_slots, "eclass": "Renaming-wide-id", "children": ["a"]},
+                "csb": {"op": SYM.class_slots, "eclass": "Renaming-wide-id", "children": ["b"]},
+                "aa": {"op": SYM.renames, "eclass": "Unit-aa", "children": ["a", "wide-id", "a"]},
+                "bb": {"op": SYM.renames, "eclass": "Unit-bb", "children": ["b", "wide-id", "b"]},
                 "bad-link": {
-                    "op": "RenamesToLeader",
+                    "op": SYM.renames,
                     "eclass": "Unit-bad-link",
                     "children": ["b" if reverse else "a", "bad", "a" if reverse else "b"],
                 },
@@ -1312,7 +1316,7 @@ def selftest():
     var_one["nodes"]["i1"] = {"op": "1", "eclass": "i64-1", "children": []}
     var_one["nodes"]["v"]["children"] = ["i1"]
     duplicate_var = null_doc()
-    duplicate_var["nodes"]["v2"] = {"op": "Var", "eclass": "U-v", "children": ["i0"]}
+    duplicate_var["nodes"]["v2"] = {"op": SYM.var, "eclass": "U-v", "children": ["i0"]}
     full_reader_cases += [
         ("noncanonical Var", True, var_one),
         ("duplicate Var row", True, duplicate_var),

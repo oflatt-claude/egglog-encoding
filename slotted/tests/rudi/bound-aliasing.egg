@@ -1,3 +1,5 @@
+(sort U)
+
 (constructor Lam (U U) U)
 (constructor App (U U) U)
 (constructor GG (U) U)

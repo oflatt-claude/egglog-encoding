@@ -9,6 +9,8 @@
 ;;; which the middle two bind, which is what `:binder 1 2` says. Both bound slots are
 ;;; taken out of the class's slot set, so renaming either is invisible from outside.
 
+(sort U)
+
 (constructor Sing (U U) U)
 (constructor Sum (U U U U) U :binder 1 2)
 (constructor Merge (U U U U U U) U :binder 2 3 4)

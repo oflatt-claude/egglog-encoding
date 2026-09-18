@@ -12,6 +12,8 @@
 ;;; the same child at both positions, has to pick it up at each position
 ;;; independently.
 
+(sort U)
+
 (constructor C (U U) U)
 (constructor I (U U) U)
 (constructor N (U U) U)

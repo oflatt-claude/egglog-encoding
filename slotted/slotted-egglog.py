@@ -29,7 +29,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "slotted"))
 enc = __import__("slotted-encoder")
 
-CARRIER = "U"  # the sort a program gets when it declares none of its own
 
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
 SLOT = re.compile(r"\$\w+\Z")
@@ -280,12 +279,27 @@ class Source:
         return out
 
     def carrier_sorts(self):
-        """The sorts whose columns are slotted children.
+        """The sorts whose columns are slotted children -- the program's own.
 
-        A program's own declarations when it has any, and otherwise the one the
-        hand-written core declares.
+        Declared, never implied: egglog needs a sort before anything may have it, and
+        the machinery is generated from the declaration rather than renamed onto it.
         """
-        return tuple(self.sorts) if self.sorts else (CARRIER,)
+        if not self.sorts:
+            raise SystemExit(
+                f"{self.path.name}: no equality sort is declared. Write `(sort U)` and give the "
+                "constructors that column, or use `(datatype U ...)`, as in egglog."
+            )
+        return tuple(self.sorts)
+
+    def sole_sort(self, what):
+        """The one carrier, where a form gives no other clue which it means.
+
+        A bare slot has no sort of its own: `$5` is the variable class of SOME carrier,
+        and only its context says which. With one declared there is no ambiguity.
+        """
+        if len(self.carriers) != 1:
+            raise SystemExit(f"{self.path.name}: {what}; put it under a constructor")
+        return next(iter(self.carriers))
 
     def core(self):
         """The machinery this program's sorts need, generated.
@@ -413,38 +427,23 @@ class Source:
         """A ground term as the egglog expression for its value."""
         t = self.term(form, column, expected_sort=expected_sort)
         if t[0] == "var":
-            sort = expected_sort
-            if sort is None:
-                if len(self.carriers) > 1:
-                    raise SystemExit(
-                        f"{self.path.name}: bare top-level slot {form!r} has no equality sort; "
-                        "put it under a constructor"
-                    )
-                sort = next(iter(self.carriers))
+            sort = expected_sort or self.sole_sort(f"bare top-level slot {form!r} has no equality sort")
             return f"({self.carriers[sort].var} 0)"
         return self.lang.enc(t, expected_sort)
 
     def sort_of_form(self, form, expected=None, ground=True):
         """Infer a slotted expression's equality sort from its typed context."""
         sort = self.lang.sort_of(self.term(form, ground=ground, expected_sort=expected), expected)
-        if sort is None and len(self.carriers) == 1:
-            sort = next(iter(self.carriers))
-        if sort is None:
-            raise SystemExit(
-                f"{self.path.name}: {form!r} has no equality-sort context; put the bare slot under a constructor"
-            )
-        return sort
+        return sort or self.sole_sort(f"{form!r} has no equality-sort context")
 
     def common_sort(self, forms, operation="compare"):
         """Parse forms and require one carrier, allowing contextual bare slots."""
         terms = [self.term(form, enc.CHILD) for form in forms]
         sorts = [self.lang.sort_of(term) for term in terms]
         sort = next((value for value in sorts if value is not None), None)
-        if sort is None and len(self.carriers) == 1:
-            sort = next(iter(self.carriers))
         if sort is None:
             subject = "a union of two bare slots" if operation == "union" else "comparing bare slots"
-            raise SystemExit(f"{self.path.name}: {subject} has no equality sort; put them under constructors")
+            sort = self.sole_sort(f"{subject} has no equality sort")
         if any(value not in (None, sort) for value in sorts):
             verb = "union" if operation == "union" else "compare"
             raise SystemExit(f"{self.path.name}: cannot {verb} terms of sorts {sorts[0]} and {sorts[1]}")

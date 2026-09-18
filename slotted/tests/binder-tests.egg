@@ -8,6 +8,8 @@
 ;;; Standalone: run it as it stands.
 ;;;
 ;;;     python3 slotted/slotted-egglog.py slotted/tests/binder-tests.egg
+(sort U)
+
 (constructor Lam (U U) U :binder 0)
 (constructor App (U U) U)
 (constructor Pair (U U) U)

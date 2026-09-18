@@ -193,6 +193,7 @@ An `(= v <call>)` pattern nests as deep as you like, and the variables it introd
 not appear on the left at all:
 
 ```slotted
+(sort U)
 (constructor Null () U)
 (constructor Succ (U) U)
 (constructor Prev (U) U)
@@ -212,6 +213,7 @@ Several `:when` patterns joined by **shared variables** are a multipattern. A va
 occurring in two patterns has to match the same thing in both, which is the join:
 
 ```slotted
+(sort U)
 (constructor Num (i64) U)
 (constructor Mem0 () U)
 (constructor Store (U U U) U)
@@ -234,6 +236,7 @@ own name for that node's bound slot, so the same `$x` in two binder columns cons
 nothing:
 
 ```slotted
+(sort U)
 (constructor Num (i64) U)
 (constructor Lam (U U) U :binder 0)
 (constructor Pair (U U) U)
@@ -304,6 +307,7 @@ Egglog's `check` asks about values. These ask about terms.
 All of them at once:
 
 ```slotted
+(sort U)
 (constructor Lam (U U) U :binder 0)
 (constructor Mult (U U) U)
 (constructor Null () U)
@@ -326,6 +330,7 @@ Because a term is a class *and* a renaming, and the two questions come apart. Ta
 alpha-variants whose free slot is renamed:
 
 ```slotted
+(sort U)
 (constructor Lam (U U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
@@ -342,6 +347,7 @@ equality modulo everything the e-graph already knows, including a class's symmet
 If commutativity has put the swap in `f`'s group, then
 
 ```slotted
+(sort U)
 (constructor F (U U) U)
 (rewrite (F x y) (F y x) :name "comm")
 (let a (F $1 $2))
@@ -402,6 +408,7 @@ visible at once and are left alone.
 one e-class:
 
 ```slotted
+(sort U)
 (constructor F (U U) U)
 (let a (F $1 $2))                 ; something for the graph to hold
 (run 0)
@@ -477,6 +484,7 @@ deletes the non-canonical ones — so asking egglog to extract the term's own va
 outright whenever the class settled on a different invocation:
 
 ```slotted
+(sort U)
 (constructor Lam (U U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))

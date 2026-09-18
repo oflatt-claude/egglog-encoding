@@ -11,6 +11,8 @@
 ;;; every pair, so commutativity has to yield `swp($y,$x) = 0` for every pair too --
 ;;; while an unrelated `k($1,$2)` stays out.
 
+(sort U)
+
 (constructor Mul (U U) U)
 (constructor Swp (U U) U)
 (constructor K (U U) U)

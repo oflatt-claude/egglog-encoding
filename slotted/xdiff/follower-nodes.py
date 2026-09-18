@@ -24,7 +24,7 @@ OBS_HEAD = """
 (ruleset obs)
 (relation FollowerWithNode (U))
 (relation Follower (U))
-(rule ((RenamesToLeader a m l) (!= a l) (= a (ordering-max a l)))
+(rule (({X.SYM.renames} a m l) (!= a l) (= a (ordering-max a l)))
       ((Follower a)) :ruleset obs)
 """
 

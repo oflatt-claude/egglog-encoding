@@ -24,13 +24,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $i0 (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))
-(let $i5 (App2 "lambda" (map-of 0 5) (Var 0) (map-of 0 5) (Var 0)))
+(let $i0 (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
+(let $i5 (App2 "lambda" (map-of 0 5) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted)))
 
 ;; one slotted class ...
-(check (RenamesToLeader $i0 m1 l) (RenamesToLeader $i5 m2 l))
+(check (RenamesToLeader_0 $i0 m1 l) (RenamesToLeader_0 $i5 m2 l))
 ;; ... and, because they are the same TERM, one egglog value too
 (check (= $i0 $i5))
 
@@ -45,8 +45,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $f12 (App2 "f" (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
-(let $f21 (App2 "f" (map-of 0 2) (Var 0) (map-of 0 1) (Var 0)))
+(let $f12 (App2 "f" (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
+(let $f21 (App2 "f" (map-of 0 2) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 (union $f12 $f21)
 
 (run-schedule (saturate (run slotted)))
@@ -66,13 +66,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $p (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 3) (Var 0)))
-(let $q (App2 "lambda" (map-of 0 0) (Var 0) (map-of 0 4) (Var 0)))
+(let $p (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 3) (SlottedVar_0 0)))
+(let $q (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted)))
 
 ;; one class
-(check (RenamesToLeader $p m1 l) (RenamesToLeader $q m2 l))
+(check (RenamesToLeader_0 $p m1 l) (RenamesToLeader_0 $q m2 l))
 ;; two values
 (fail (check (= $p $q)))
 

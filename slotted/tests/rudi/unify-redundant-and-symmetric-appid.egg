@@ -1,3 +1,5 @@
+(sort U)
+
 (constructor Lam (U U) U :binder 0)
 (constructor App (U U) U)
 (constructor Add (U U) U)
