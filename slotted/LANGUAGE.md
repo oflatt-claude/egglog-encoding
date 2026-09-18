@@ -512,3 +512,4 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `slotted/encoding/` | the encoding itself, written by hand at the encoded level, plus the tutorial that explains it. `value-equality.egg` is where this file's claims about `=` are checked |
 | `slotted/slotted-egglog.py` | the compiler |
+| `slotted/ENCODING.md` | what this language compiles TO, and why each table is there |
