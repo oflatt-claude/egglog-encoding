@@ -10,6 +10,8 @@ The executable derivation and worked examples live in
 their implementation.
 """
 
+import re
+
 from dataclasses import dataclass
 
 CHILD = object()  # a slotted child: `Renaming U`
@@ -956,7 +958,8 @@ def multi_sort_core(carriers):
             "",
         ]
     )
-    return "\n".join([header, *(carrier_core(symbols) for symbols in carriers.values())])
+    body = "\n".join([header, *(carrier_core(symbols) for symbols in carriers.values())])
+    return prefix_variables_in_rules(body)
 
 
 MACHINERY_HEADER = """\
@@ -974,6 +977,74 @@ MACHINERY_HEADER = """\
 ;;; collide the bound slot is first renamed to one the node does not use, which keeps
 ;;; it alpha-renameable.
 """
+
+
+#: Keywords that introduce a name the rule does not bind, so the token after one is
+#: left alone.
+_RULE_KEYWORDS = (":ruleset", ":name", ":when", ":subsume")
+
+
+def prefix_rule_variables(text, prefix="_"):
+    """Every variable a generated rule binds, renamed out of the program's namespace.
+
+    egglog refuses a rule variable that shadows a sort, so a machinery rule writing
+    `m` or `a` would make `(sort m)` illegal -- a restriction on the program coming
+    from a name the machinery happened to pick. Prefixing puts them where the compiler
+    already keeps its own names.
+
+    A token is an OPERATOR when it follows `(`, and a variable otherwise; numbers,
+    strings and the token after a keyword are neither. That is enough to tell them
+    apart without knowing which relations and primitives exist.
+    """
+    out, i, after_open, after_kw = [], 0, False, False
+    for tok in re.findall(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+|\s+', text):
+        if tok.startswith(";") or tok.isspace():
+            out.append(tok)
+            continue
+        if tok == "(":
+            out.append(tok)
+            after_open, after_kw = True, False
+            continue
+        if tok == ")":
+            out.append(tok)
+            after_open, after_kw = False, False
+            continue
+        bare = not (after_open or after_kw or tok.startswith(('"', ":")) or re.fullmatch(r"-?\d+", tok))
+        out.append(prefix + tok if bare else tok)
+        after_kw = tok in _RULE_KEYWORDS
+        after_open = False
+    return "".join(out)
+
+
+def prefix_variables_in_rules(text, prefix="_"):
+    """`prefix_rule_variables` over every `(rule ...)` in a block, and nothing else.
+
+    A declaration binds names the program must be able to write -- `(constructor Add
+    ...)` -- so only rule bodies are rewritten.
+    """
+    out, i = [], 0
+    while True:
+        at = text.find("(rule ", i)
+        if at < 0:
+            out.append(text[i:])
+            return "".join(out)
+        out.append(text[i:at])
+        depth, j = 0, at
+        while j < len(text):
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    j += 1
+                    break
+            elif text[j] == '"':
+                j = text.index('"', j + 1)
+            elif text[j] == ";":
+                j = text.find("\n", j)
+            j += 1
+        out.append(prefix_rule_variables(text[at:j], prefix))
+        i = j
 
 
 def in_slotted_ruleset(text):
@@ -1000,7 +1071,7 @@ def in_slotted_ruleset(text):
                 body = body[:i] + " :ruleset slotted)" + body[i + 1 :]
             out.append("".join(buf) + body)
             buf, form, depth = [], [], 0
-    return "".join(out) + "".join(buf)
+    return prefix_variables_in_rules("".join(out) + "".join(buf))
 
 
 ###############################################################################
