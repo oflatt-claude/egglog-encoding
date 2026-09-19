@@ -25,17 +25,17 @@
 ;;; descent into the covered child, and rebuilding refreshes a private binder to avoid
 ;;; capturing the replacement's free slots.  Source-language containers are unsupported.
 
-(include "target/slotted/slotted-node-rules.egg")
+(include "target/slotted/slotted-lang-encoded.egg")
 
 
 ;;; Case 1- a slot that occurs: h($0, $1)[$0 := null] = h(null, $1)
 (push)
 
-(let $body (App2 "h" (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
+(let $body (H (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 0 (SlottedVar_0 0) (map-empty) (Null) "ClassSlots_0"))
-(check (= $out (App2 "h" (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))))
+(check (= $out (H (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))))
 (fail (check (= $out $body)))
 
 (pop)
@@ -45,7 +45,7 @@
 ;;; back as it is.
 (push)
 
-(let $body (App2 "h" (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
+(let $body (H (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 0 (SlottedVar_0 0) (map-empty) (Null) "ClassSlots_0"))
@@ -58,13 +58,13 @@
 ;;; is shared rather than copied.
 (push)
 
-(let $inner (App2 "h" (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
-(let $body (App2 "g" (map-of 0 0 1 1) $inner (map-of 0 2) (SlottedVar_0 0)))
+(let $inner (H (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
+(let $body (G (map-of 0 0 1 1) $inner (map-of 0 2) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 0 (SlottedVar_0 0) (map-empty) (Null) "ClassSlots_0"))
-(check (= $out (App2 "g"
-                     (map-of 1 1) (App2 "h" (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))
+(check (= $out (G
+                     (map-of 1 1) (H (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))
                      (map-of 0 2) (SlottedVar_0 0))))
 
 (pop)
@@ -78,13 +78,13 @@
 ;;; slots `(SlottedVar_0 0)` has.
 (push)
 
-(let $c (App2 "h" (map-of 0 0) (SlottedVar_0 0) (map-of 0 7) (SlottedVar_0 0)))
-(let $body (App2 "g" (map-of 0 5) $c (map-of 0 6) (SlottedVar_0 0)))
+(let $c (H (map-of 0 0) (SlottedVar_0 0) (map-of 0 7) (SlottedVar_0 0)))
+(let $body (G (map-of 0 5) $c (map-of 0 6) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 5 (SlottedVar_0 0) (map-empty) (Null) "ClassSlots_0"))
-(check (= x (App2 "h" (map-empty) (Null) (map-of 0 7) (SlottedVar_0 0))))
-(fail (check (= x (App2 "h" (map-empty) (Null) (map-empty) (SlottedVar_0 0)))))
+(check (= x (H (map-empty) (Null) (map-of 0 7) (SlottedVar_0 0))))
+(fail (check (= x (H (map-empty) (Null) (map-empty) (SlottedVar_0 0)))))
 
 (pop)
 
@@ -98,14 +98,14 @@
 (push)
 
 ;; b = h($0, $1)
-(let $b (App2 "h" (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
+(let $b (H (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 ;; lambda $0. b -- slots {1}, since 0 is bound
-(let $lam (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0 1 1) $b))
+(let $lam (Lam (map-of 0 0) (SlottedVar_0 0) (map-of 0 0 1 1) $b))
 ;; (lambda $0. b) null
-(let $redex (App2 "app" (map-of 1 1) $lam (map-empty) (Null)))
+(let $redex (App (map-of 1 1) $lam (map-empty) (Null)))
 
-(rule ((= e (App2 "app" ml l mt t))
-       (= l (App2 "lambda" mx (SlottedVar_0 0) mb bod))
+(rule ((= e (App ml l mt t))
+       (= l (Lam mx (SlottedVar_0 0) mb bod))
        (= x (map-get mx 0)))
       ((union e (slotted-subst bod x (SlottedVar_0 0) mt t "ClassSlots_0")))
       :naive)
@@ -114,7 +114,7 @@
 (run 1)
 
 ;; ((lambda $0. h($0, $1)) null) = h(null, $1)
-(check (= $redex (App2 "h" (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))))
+(check (= $redex (H (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))))
 
 (pop)
 
@@ -126,19 +126,19 @@
 ;;; while leaving the replacement's free `$0` alone.
 (push)
 
-(let $sum (App2 "+" (map-of 0 1) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
-(let $body (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0 1 1) $sum))
+(let $sum (Plus (map-of 0 1) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
+(let $body (Lam (map-of 0 0) (SlottedVar_0 0) (map-of 0 0 1 1) $sum))
 (run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 1 (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0) "ClassSlots_0"))
 (let $capture-avoiding
-     (App2 "lambda" (map-of 0 2) (SlottedVar_0 0)
+     (Lam (map-of 0 2) (SlottedVar_0 0)
            (map-of 0 0 2 2)
-           (App2 "+" (map-of 0 0) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0))))
+           (Plus (map-of 0 0) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0))))
 (let $captured
-     (App2 "lambda" (map-of 0 0) (SlottedVar_0 0)
+     (Lam (map-of 0 0) (SlottedVar_0 0)
            (map-of 0 0)
-           (App2 "+" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0))))
+           (Plus (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0))))
 (run-schedule (saturate (run slotted)))
 (check (= $out $capture-avoiding))
 (fail (check (= $out $captured)))
@@ -152,10 +152,10 @@
 ;;; child is therefore traversed and substituted normally.
 (push)
 
-(let $body (App2 "pair" (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
+(let $body (Pair (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 
 (let $out (slotted-subst $body 0 (SlottedVar_0 0) (map-empty) (Null) "ClassSlots_0"))
-(check (= $out (App2 "pair" (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))))
+(check (= $out (Pair (map-empty) (Null) (map-of 0 1) (SlottedVar_0 0))))
 
 (pop)

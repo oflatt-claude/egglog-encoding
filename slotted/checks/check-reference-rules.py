@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Our evaluation rule sets are the reference's, semantics included.
 
-`sdql.egg` and `array.egg` claim to carry the reference's rules. That claim went
+`sdql-rules.egg` and `array-rules.egg` claim to carry the reference's rules. That claim went
 unchecked, and drifted twice in one session: the sdql file said "rule for rule" while
 missing `beta`, and then gained `sum-range-2`, which the reference DEFINES but does not
 RUN. Counting `Rewrite::new` calls is the trap -- a rule only counts if it reaches the
@@ -25,6 +25,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
 sc = __import__("slotted-egglog")
 slotenc = __import__("slotted-encoder")
+
+
+def declarations_of(path):
+    """The file declaring the constructors a `-rules.egg` writes rules over."""
+    return path.with_name(path.name.replace("-rules.egg", ".egg"))
 
 
 def reference_root():
@@ -63,12 +68,12 @@ REF = reference_root()
 #: the names we spell differently)
 SUITES = {
     "sdql": (
-        ROOT / "slotted" / "languages" / "sdql.egg",
+        ROOT / "slotted" / "languages" / "sdql-rules.egg",
         REF / "benches" / "sdql.rs",
         {},
     ),
     "array": (
-        ROOT / "slotted" / "languages" / "array.egg",
+        ROOT / "slotted" / "languages" / "array-rules.egg",
         REF / "tests" / "rise" / "rewrite.rs",
         # the reference's name -> ours, where the two chose different words for one rule
         {"beta": "let-intro", "my-let-unused": "let-unused"},
@@ -128,7 +133,8 @@ def their_names(path):
 def local_rules(path):
     """Render the slotted source through the same language metadata as the oracle."""
     src = sc.Source(path)
-    lang = slotenc.language(path, path.with_suffix(".ref"))
+    decls = declarations_of(path)
+    lang = slotenc.language(decls, decls.with_suffix(".ref"))
     out = {}
     for form in sc.parse(path.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):

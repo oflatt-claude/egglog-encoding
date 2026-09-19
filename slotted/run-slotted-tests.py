@@ -51,7 +51,8 @@ def slotted_sources():
         ok = True
         for t in re.findall(r'\(include "([^"]*)"\)', q.read_text()):
             target = ROOT / t
-            if not t.startswith("slotted/tests/") or "generated/" in t or not target.exists():
+            slotted_source = t.startswith(("slotted/tests/", "slotted/languages/"))
+            if not slotted_source or "target/" in t or not target.exists():
                 ok = False
                 break
             if not is_source(target):

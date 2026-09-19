@@ -1,0 +1,46 @@
+;;; The constructors the encoded-level tests under `slotted/encoding/` write terms in.
+;;;
+;;; Those tests are written at the ENCODED level -- renamings spelled out, `Equated_0`
+;;; and `RenamesToLeader_0` named directly -- because what they assert is about the
+;;; machinery rather than about a program. They still need a language to build nodes in,
+;;; and this is it: one constructor per operator, like every other language here.
+;;;
+;;; It has no rules. A test that wants one writes it itself, at the encoded level.
+;;;
+;;; The names are the ones those tests already used when the operator rode in a payload
+;;; column -- `f`, `g`, `h`, `pair` -- so a reader comparing against their prose finds
+;;; the same words.
+;;;
+;;; Compile it for the machinery those tests include:
+;;;
+;;;     python3 slotted/slotted-egglog.py slotted/languages/encoded.egg --desugar \
+;;;         -o target/slotted/slotted-lang-encoded.egg
+
+(sort U)
+
+(constructor Null () U)
+
+;;; binary, no binder
+(constructor F (U U) U)
+(constructor G (U U) U)
+(constructor H (U U) U)
+(constructor K (U U) U)
+(constructor L (U U) U)
+(constructor Y (U U) U)
+(constructor App (U U) U)
+(constructor Pair (U U) U)
+(constructor Add (U U) U)
+(constructor Sub (U U) U)
+(constructor Sub2 (U U) U)
+(constructor Plus (U U) U)
+
+;;; payload columns, which carry no slots
+(constructor Num (i64) U)
+(constructor Scale (i64 U) U)
+
+;;; ternary, no binder
+(constructor F3 (U U U) U)
+
+;;; binders: column 0 is bound and covers column 1
+(constructor Lam (U U) U :binder 0)
+(constructor Let (U U U) U :binder 0)

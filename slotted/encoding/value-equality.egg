@@ -13,7 +13,7 @@
 ;;; Written at the ENCODED level, so these name shapes to emit machinery for rather than
 ;;; constructors for slotted terms. `App2`, `Var` and `Null` come from the core.
 
-(include "target/slotted/slotted-node-rules.egg")
+(include "target/slotted/slotted-lang-encoded.egg")
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -24,8 +24,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $i0 (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
-(let $i5 (App2 "lambda" (map-of 0 5) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0)))
+(let $i0 (Lam (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
+(let $i5 (Lam (map-of 0 5) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted)))
 
@@ -45,8 +45,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $f12 (App2 "f" (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
-(let $f21 (App2 "f" (map-of 0 2) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
+(let $f12 (F (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
+(let $f21 (F (map-of 0 2) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 (union $f12 $f21)
 
 (run-schedule (saturate (run slotted)))
@@ -66,8 +66,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(let $p (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 3) (SlottedVar_0 0)))
-(let $q (App2 "lambda" (map-of 0 0) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0)))
+(let $p (Lam (map-of 0 0) (SlottedVar_0 0) (map-of 0 3) (SlottedVar_0 0)))
+(let $q (Lam (map-of 0 0) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted)))
 

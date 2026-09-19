@@ -17,12 +17,12 @@
 ;;; the machinery stopped saturating at step 6; none at any step after, and it
 ;;; saturates through step 10.
 
-(include "target/slotted/slotted-node-rules.egg")
+(include "target/slotted/slotted-lang-encoded.egg")
 
 ;; Creation order fixes the value order, so $y is smallest and $f largest.
-(let $y (App2 "y" (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
-(let $l (App2 "l" (map-of 0 3) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0)))
-(let $f (App2 "f" (map-of 0 5) (SlottedVar_0 0) (map-of 0 6) (SlottedVar_0 0)))
+(let $y (Y (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
+(let $l (L (map-of 0 3) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0)))
+(let $f (F (map-of 0 5) (SlottedVar_0 0) (map-of 0 6) (SlottedVar_0 0)))
 
 ;; the ordering this test relies on
 (check (= (ordering-max $l $y) $l))    ; y <= l

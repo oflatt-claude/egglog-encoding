@@ -5,7 +5,7 @@
 ;;; encoding, so they include the generated file, which includes the hand-written one.
 ;;; They keep their numbering from there, since they carry on where its list stops.
 
-(include "target/slotted/slotted-node-rules.egg")
+(include "target/slotted/slotted-lang-encoded.egg")
 
 
 ;;; Case 16- a ternary node, alpha-equivalent up to renaming.
@@ -15,8 +15,8 @@
 ;;; records the renaming between them. Exercises the generated arity-3 rules.
 (push)
 
-(let $f3a (App3 "f3" (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
-(let $f3b (App3 "f3" (map-of 0 3) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0)))
+(let $f3a (F3 (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
+(let $f3b (F3 (map-of 0 3) (SlottedVar_0 0) (map-of 0 4) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted)))
 
@@ -24,7 +24,7 @@
        (RenamesToLeader_0 $f3b m2 leader))
 
 ;; and three distinct slots may not collapse: f3($0,$1,$2) is not f3($0,$0,$2)
-(let $f3c (App3 "f3" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
+(let $f3c (F3 (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 (fail (check (= $f3a $f3c)))
 
@@ -37,8 +37,8 @@
 ;;; and leave the two identified.
 (push)
 
-(let $let5 (App3 "let" (map-of 0 5) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0) (map-empty) (Null)))
-(let $let6 (App3 "let" (map-of 0 6) (SlottedVar_0 0) (map-of 0 6) (SlottedVar_0 0) (map-empty) (Null)))
+(let $let5 (Let (map-of 0 5) (SlottedVar_0 0) (map-of 0 5) (SlottedVar_0 0) (map-empty) (Null)))
+(let $let6 (Let (map-of 0 6) (SlottedVar_0 0) (map-of 0 6) (SlottedVar_0 0) (map-empty) (Null)))
 
 (run-schedule (saturate (run slotted)))
 
@@ -68,14 +68,14 @@
 (fail (check (= $one $two)))
 
 ;; and they compose into nodes: f(1, $0) and f(1, $1) are alpha-equivalent
-(let $f1a (App2 "f" (map-empty) $one (map-of 0 0) (SlottedVar_0 0)))
-(let $f1b (App2 "f" (map-empty) $one (map-of 0 1) (SlottedVar_0 0)))
+(let $f1a (F (map-empty) $one (map-of 0 0) (SlottedVar_0 0)))
+(let $f1b (F (map-empty) $one (map-of 0 1) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 (check (RenamesToLeader_0 $f1a m1 leader)
        (RenamesToLeader_0 $f1b m2 leader))
 
 ;; but f(1, ...) and f(2, ...) are not
-(let $f2a (App2 "f" (map-empty) $two (map-of 0 0) (SlottedVar_0 0)))
+(let $f2a (F (map-empty) $two (map-of 0 0) (SlottedVar_0 0)))
 (run-schedule (saturate (run slotted)))
 (fail (check (= $f1a $f2a)))
 

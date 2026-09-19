@@ -22,7 +22,7 @@ slotenc = __import__("slotted-encoder")
 ARTIFACT_COMMIT = "83f2e5bee2b3aa45bf97ef1e3a8abe953790c735"
 FIXTURES = ROOT / "slotted" / "tests" / "artifact" / "sdql"
 TEST = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
-RULES = ROOT / "slotted" / "languages" / "sdql.egg"
+RULES = ROOT / "slotted" / "languages" / "sdql-rules.egg"
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 
 # SHA-256 of the files at ARTIFACT_COMMIT, excluding a trailing newline.  The
@@ -51,7 +51,7 @@ SELECTED_RULES = {
 # SHA-256 of the canonical JSON representation produced by `rewrites()` for an
 # independent translation of those twelve definitions from the artifact's
 # `sdql/slotted/src/rewrite.rs` at ARTIFACT_COMMIT.  Comparing the runnable copy only
-# with `languages/sdql.egg` would let both copies drift together and still pass.
+# with `languages/sdql-rules.egg` would let both copies drift together and still pass.
 ARTIFACT_RULE_SEMANTICS_SHA256 = "b1cb9ae78abfa9a8f46bad55e794c73a704afd3a1116870f0ead7c6e06450030"
 
 SELECTED_CONSTRUCTORS = {
@@ -87,6 +87,11 @@ OP = {
 }
 
 
+def declarations_of(path):
+    """The file declaring the constructors a `-rules.egg` writes rules over."""
+    return path.with_name(path.name.replace("-rules.egg", ".egg"))
+
+
 def slot(atom: str) -> str:
     """Artifact `$var_07`/`var_07` -> the test's alpha-name `$7`."""
     match = re.fullmatch(r"\$?var_0*([1-9][0-9]*)", atom)
@@ -96,7 +101,7 @@ def slot(atom: str) -> str:
 
 
 def translate(term: Any) -> Any:
-    """Translate the artifact's constructor order to `languages/sdql.egg`."""
+    """Translate the artifact's constructor order to `languages/sdql-rules.egg`."""
     if not isinstance(term, list):
         if re.fullmatch(r"-?[0-9]+", term):
             return ["Num", term]
@@ -166,7 +171,8 @@ def reference_goal() -> str | None:
     if not XMULTI.is_file():
         return f"locked reference executable not found: {XMULTI}"
 
-    lang = slotenc.language(RULES, RULES.with_suffix(".ref"))
+    decls = declarations_of(RULES)
+    lang = slotenc.language(decls, decls.with_suffix(".ref"))
     fixture_source = sc.Source(TEST)
     source = sc.parse((FIXTURES / "batax_2nd.sexp").read_text())[0]
     target = sc.parse((FIXTURES / "batax_2nd_esat.sexp").read_text())[0]
@@ -242,10 +248,10 @@ def main() -> int:
         )
     for name in sorted(SELECTED_RULES & set(selected)):
         if selected[name] != local.get(name):
-            errors.append(f"{name}: copied rule differs from languages/sdql.egg")
+            errors.append(f"{name}: copied rule differs from languages/sdql-rules.egg")
     for label, rules in (
         ("runnable test", selected),
-        ("languages/sdql.egg", {n: local[n] for n in SELECTED_RULES if n in local}),
+        ("languages/sdql-rules.egg", {n: local[n] for n in SELECTED_RULES if n in local}),
     ):
         actual = semantic_hash(rules)
         if actual != ARTIFACT_RULE_SEMANTICS_SHA256:
@@ -254,7 +260,7 @@ def main() -> int:
                 f"artifact signature {ARTIFACT_RULE_SEMANTICS_SHA256} (got {actual})"
             )
 
-    local_ctors, selected_ctors = constructors(RULES), constructors(TEST)
+    local_ctors, selected_ctors = constructors(declarations_of(RULES)), constructors(TEST)
     if set(selected_ctors) != SELECTED_CONSTRUCTORS:
         errors.append(
             "selected constructors differ: "

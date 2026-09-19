@@ -115,6 +115,9 @@ BINDER_FIXTURE = ROOT / "slotted" / "tests" / "sdql-binders.egg"
 # The language is declared where its rules are: `slotted/languages/sdql.egg` holds both,
 # and `sdql.ref` beside it says what the reference calls each constructor.
 SDQL_SRC = ROOT / "slotted" / "languages" / "sdql.egg"
+#: the rewrites, split out of the declarations so the machinery can be compiled
+#: from sdql.egg alone
+SDQL_SRC_RULES = ROOT / "slotted" / "languages" / "sdql-rules.egg"
 # The language file says what the constructors are; the `.ref` beside it says what the
 # reference calls them, including the two workarounds above. `slotenc.language` checks
 # that the two name the same constructors, so an operator added to one and not the other
@@ -307,9 +310,9 @@ def _rule_from_parts(src, parts):
 #: compiles -- with each side rendered in the oracle's syntax. The cases below ask for
 #: one by name.
 def _load_rules():
-    src = sc.Source(SDQL_SRC)
+    src = sc.Source(SDQL_SRC_RULES)
     out = {}
-    for form in sc.parse(SDQL_SRC.read_text()):
+    for form in sc.parse(SDQL_SRC_RULES.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
         r = sc.rewrite_parts(src, form)
@@ -326,7 +329,7 @@ RULES = _load_rules()
 _beta_src, _beta_parts = _fixture_rewrites(BETA_FIXTURE, "beta")
 BETA_RULE = _rule_from_parts(_beta_src, _beta_parts["beta"])
 if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
-    raise ValueError(f"{BETA_FIXTURE.name}: beta no longer matches {SDQL_SRC.name}")
+    raise ValueError(f"{BETA_FIXTURE.name}: beta no longer matches {SDQL_SRC_RULES.name}")
 
 
 @functools.cache

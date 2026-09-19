@@ -64,6 +64,9 @@ RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 # The language is declared where its rules are: `slotted/languages/array.egg` holds
 # both, and `array.ref` beside it says what the reference calls each constructor.
 ARRAY_SRC = ROOT / "slotted" / "languages" / "array.egg"
+#: the rewrites, split out of the declarations so the machinery can be compiled
+#: from array.egg alone
+ARRAY_SRC_RULES = ROOT / "slotted" / "languages" / "array-rules.egg"
 LANG = slotenc.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 
 # the carrier's table names, read off the language rather than written out
@@ -354,13 +357,13 @@ def check_case(case, order_check=True, shift_check=True):
 #
 # The atoms come from `flatten`, which emits the pattern's outermost node first.
 def _load_rules():
-    src = sc.Source(ARRAY_SRC)
+    src = sc.Source(ARRAY_SRC_RULES)
     out = []
-    for form in sc.parse(ARRAY_SRC.read_text()):
+    for form in sc.parse(ARRAY_SRC_RULES.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
         r = sc.rewrite_parts(src, form)
-        assert r["name"], f"a rewrite with no :name in {ARRAY_SRC.name}"
+        assert r["name"], f"a rewrite with no :name in {ARRAY_SRC_RULES.name}"
         # `:when (= ...)` contributes PATTERN ATOMS, and this builds its own rule object
         # from `lhs`/`conds` alone, so one would be dropped in silence and the reference
         # would be asked a different question than the encoding. Teach `Rule` about extra

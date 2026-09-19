@@ -30,12 +30,12 @@
 ;;; the two mints apart, and `f5a` is the same e-graph
 ;;; against a rule that does not accumulate, where `?u` and `?v` collapse onto one slot.
 
-(include "target/slotted/slotted-node-rules.egg")
+(include "target/slotted/slotted-lang-encoded.egg")
 
 (relation Step (String Renaming Renaming))
 (relation Child (String Renaming))
 
-(rule ((= p (App2 "f5t" p1 a q1 b))
+(rule ((= p (F p1 a q1 b))
        (= dom1 (map-union (map-image p1) (map-image q1)))
        (= mp1 dom1)
        (= avoid1 (map-image mp1))
@@ -45,7 +45,7 @@
        (= csb (ClassSlots_0 b))
        (= csp (ClassSlots_0 p))
        ;; atom 2 -- chained under `?a`, minting for whatever that leaves unnamed
-       (= a (App2 "g5t" p2 u q2 u))
+       (= a (G p2 u q2 u))
        (= dom2 (map-union (map-image p2) (map-image q2)))
        (RenamesToLeader_0 a syma a)
        (= mp2 (find-mapping-total avoid1 dom2 (compose (compose ma csa) syma)
@@ -57,7 +57,7 @@
        (RenamesToLeader_0 u symu u)
        (= (compose mp2 q2) (compose (compose mu csu) symu))
        ;; atom 3 -- the same again, and it may not mint over anything atom 2 took
-       (= b (App2 "h5t" p3 v q3 v))
+       (= b (H p3 v q3 v))
        (= dom3 (map-union (map-image p3) (map-image q3)))
        (RenamesToLeader_0 b symb b)
        (= mp3 (find-mapping-total avoid2 dom3 (compose (compose mb csb) symb)
@@ -79,18 +79,18 @@
        (Child "u" (compose mu csu))
        (Child "v" (compose mv csv))
        (Child "conclusion" (compose mp1 csp))
-       (let rhs (App2 "k5t" (compose mu csu) u (compose mv csv) v))
+       (let rhs (K (compose mu csu) u (compose mv csv) v))
        (Equated_0 rhs (compose mp1 csp) p)))
 
-(let $g5t (App2 "g5t" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
-(let $h5t (App2 "h5t" (map-of 0 1) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
+(let $g5t (G (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
+(let $h5t (H (map-of 0 1) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 (union $g5t (Null))
 (union $h5t (Null))
-(let $p5t (App2 "f5t" (map-empty) (Null) (map-empty) (Null)))
+(let $p5t (F (map-empty) (Null) (map-empty) (Null)))
 
 ;; the two possible conclusions: `?u` and `?v` on distinct slots, or collapsed onto one
-(let $k5two (App2 "k5t" (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
-(let $k5one (App2 "k5t" (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
+(let $k5two (K (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
+(let $k5one (K (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)))
 
 (run-schedule (saturate (run slotted))
               (repeat 20 (seq (run) (saturate (run slotted)))))

@@ -27,7 +27,7 @@
 ;;; IS construction, and constraints computed in earlier atoms thread into later
 ;;; ones as ordinary values.
 
-(include "target/slotted/slotted-node-rules.egg")
+(include "target/slotted/slotted-lang-encoded.egg")
 
 (relation Mu (String Renaming))
 (relation Hit (String U))
@@ -47,9 +47,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 
-(rule ((= p (App2 "add" pa a pb b))
-       (= a (App2 "sub" u1 u u2 u))
-       (= b (App2 "sub" v1 u v2 u))
+(rule ((= p (Add pa a pb b))
+       (= a (Sub u1 u u2 u))
+       (= b (Sub v1 u v2 u))
        (RenamesToLeader_0 a syma a)
        (RenamesToLeader_0 b symb b)
        (= pat  (map-union (map-image pa) (map-image pb)))
@@ -62,9 +62,9 @@
        (RenamesToLeader_0 u s3 u))
       ((Hit "R1" p)))
 
-(let $sub (App2 "sub" (map-of 0 9) (SlottedVar_0 0) (map-of 0 9) (SlottedVar_0 0)))
+(let $sub (Sub (map-of 0 9) (SlottedVar_0 0) (map-of 0 9) (SlottedVar_0 0)))
 (union $sub (Null))
-(let $add (App2 "add" (map-empty) (Null) (map-empty) (Null)))
+(let $add (Add (map-empty) (Null) (map-empty) (Null)))
 (run-schedule (saturate (run slotted))
               (repeat 25 (seq (run) (saturate (run slotted)))))
 
@@ -94,9 +94,9 @@
 ;; (a) WRONG -- atom 3's mp from its root alone.  The root here is zero's class,
 ;;     which has no slots, so nothing constrains atom 3 and it mints its own
 ;;     name for a slot atom 2 already named.  The match is lost.
-(rule ((= p (App2 "add" pa a pb b))
-       (= a (App2 "sub"  u1 u u2 u))
-       (= b (App2 "sub2" v1 u v2 u))
+(rule ((= p (Add pa a pb b))
+       (= a (Sub  u1 u u2 u))
+       (= b (Sub2 v1 u v2 u))
        (RenamesToLeader_0 a syma a)
        (RenamesToLeader_0 b symb b)
        (= pat  (map-union (map-image pa) (map-image pb)))
@@ -110,16 +110,16 @@
       ((Hit "R2-root-only" p)))
 
 ;; the two minted renamings, witnessed without the Def. 6 check that (a) fails
-(rule ((= p (App2 "add" pa a pb b))
-       (= a (App2 "sub" u1 u u2 u))
+(rule ((= p (Add pa a pb b))
+       (= a (Sub u1 u u2 u))
        (RenamesToLeader_0 a syma a)
        (= pat  (map-union (map-image pa) (map-image pb)))
        (= dom2 (map-union (map-image u1) (map-image u2)))
        (= mp2 (find-mapping-total pat dom2 (compose pa syma) (map-empty))))
       ((Mu "R2-root-only-atom2" (compose mp2 u1))))
 
-(rule ((= p (App2 "add" pa a pb b))
-       (= b (App2 "sub2" v1 u v2 u))
+(rule ((= p (Add pa a pb b))
+       (= b (Sub2 v1 u v2 u))
        (RenamesToLeader_0 b symb b)
        (= pat  (map-union (map-image pa) (map-image pb)))
        (= dom3 (map-union (map-image v1) (map-image v2)))
@@ -129,9 +129,9 @@
 ;; (b) RIGHT -- atom 3's mp solved through the already-bound child ?u as well.
 ;;     `?u`'s renaming is a constraint on atom 3, not just something to check
 ;;     afterwards.
-(rule ((= p (App2 "add" pa a pb b))
-       (= a (App2 "sub"  u1 u u2 u))
-       (= b (App2 "sub2" v1 u v2 u))
+(rule ((= p (Add pa a pb b))
+       (= a (Sub  u1 u u2 u))
+       (= b (Sub2 v1 u v2 u))
        (RenamesToLeader_0 a syma a)
        (RenamesToLeader_0 b symb b)
        (= pat  (map-union (map-image pa) (map-image pb)))
@@ -148,11 +148,11 @@
        (Mu "R2-solved-atom2" mu)
        (Mu "R2-solved-atom3" (compose mp3 v1))))
 
-(let $sub  (App2 "sub"  (map-of 0 9) (SlottedVar_0 0) (map-of 0 9) (SlottedVar_0 0)))
-(let $sub2 (App2 "sub2" (map-of 0 7) (SlottedVar_0 0) (map-of 0 7) (SlottedVar_0 0)))
+(let $sub  (Sub  (map-of 0 9) (SlottedVar_0 0) (map-of 0 9) (SlottedVar_0 0)))
+(let $sub2 (Sub2 (map-of 0 7) (SlottedVar_0 0) (map-of 0 7) (SlottedVar_0 0)))
 (union $sub  (Null))
 (union $sub2 (Null))
-(let $add  (App2 "add" (map-empty) (Null) (map-empty) (Null)))
+(let $add  (Add (map-empty) (Null) (map-empty) (Null)))
 (run-schedule (saturate (run slotted))
               (repeat 25 (seq (run) (saturate (run slotted)))))
 

@@ -79,7 +79,6 @@ proof-tests:
 slotted-check:
 	cargo build
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
-	python3 slotted/gen-node-rules.py
 	python3 slotted/gen-sdql-rules.py
 	python3 slotted/xdiff/xarray.py egg
 	python3 slotted/checks/check-slotted.py
