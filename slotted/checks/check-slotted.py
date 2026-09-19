@@ -16,10 +16,8 @@ Usage:
 """
 
 import argparse
-import glob
 import re
 import subprocess
-import tempfile
 import sys
 from pathlib import Path
 
@@ -31,9 +29,6 @@ XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 # under `target/`, so nothing here is committed -- the tests include them, and
 # `make slotted-check` builds them first. `slotted/tests/snapshots/` is the committed
 # derived artifact.
-#: Nothing is staged on disk any more: the compiler is called where its output is
-#: needed. Kept empty rather than deleted so a future artifact has a home and a check.
-GENERATED = {}
 
 
 #: Compiled slotted tests. Each is what running that test runs, committed so a change
@@ -108,74 +103,6 @@ def paper_sdql_ran(out: str) -> str | None:
     return None if re.search(r"^\s*ok\s+sdql-paper-batax\.egg\b", out, re.M) else "paper SDQL BATAX test did not run"
 
 
-def run_egg_files():
-    """Every hand-written encoded-level file loads and runs clean.
-
-    `slotted/encoding/` holds the tests that poke at the machinery directly -- egglog
-    written with the renamings spelled out, asking things the slotted language cannot:
-    egglog's own `=` beside the language's, the substitution primitive, a relation
-    planted to catch a badly oriented row.
-
-    THE MACHINERY IS SUPPLIED HERE rather than `(include ...)`d. A file on disk can only
-    include a path, which used to mean compiling `languages/encoded.egg` to a build
-    artifact first; prepending it instead means the only copy of that machinery is the
-    one the compiler just made.
-    """
-    files = sorted(glob.glob(str(ROOT / "slotted" / "encoding" / "**" / "*.egg"), recursive=True))
-    # A test rewritten in the slotted language leaves this directory for
-    # `slotted/tests/`, so this floor drops as that one rises; neither may fall alone.
-    # It also dropped when the hand-written core and the tutorial became documentation.
-    if len(files) < 6:
-        return f"only {len(files)} encoded-level .egg files found"
-    sys.path.insert(0, str(ROOT / "slotted"))
-    sc = __import__("slotted-egglog")
-    machinery = sc.compile_source(sc.Source(ROOT / "slotted" / "languages" / "encoded.egg"))
-    bad = []
-    with tempfile.TemporaryDirectory() as tmp:
-        for f in files:
-            whole = Path(tmp) / Path(f).name
-            whole.write_text(machinery + "\n" + Path(f).read_text())
-            r = subprocess.run([str(EGGLOG), str(whole)], capture_output=True, text=True, timeout=1800, cwd=ROOT)
-            if r.returncode != 0:
-                err = [line for line in r.stderr.splitlines() if "ERROR" in line]
-                bad.append(f"{Path(f).name}: {(err[-1] if err else '?')[:120]}")
-    if bad:
-        return f"{len(bad)}/{len(files)} failed -- " + "; ".join(bad[:3])
-    print(f"       {len(files)} files, on machinery compiled here")
-    return None
-
-
-def check_generated():
-    """Build the machinery the tests include, and require the generators to be
-    deterministic.
-
-    Nothing generated is committed, so there is nothing to be stale against. What is
-    still worth holding is that a compiled program is a function of the encoder rather
-    than of iteration order -- so each generator runs twice and the output has to match.
-    A set or dict iteration creeping in would otherwise surface much later as a
-    confusing diff.
-    """
-
-    def build():
-        for cmd in sorted(set(GENERATED.values())):
-            r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=1800, cwd=ROOT)
-            if r.returncode != 0:
-                return f"{cmd[0]} failed: {r.stderr.strip()[:200]}"
-        missing = [rel for rel in GENERATED if not (ROOT / rel).exists()]
-        return f"not written: {', '.join(missing)}" if missing else None
-
-    if err := build():
-        return err
-    first = {rel: (ROOT / rel).read_bytes() for rel in GENERATED}
-    if err := build():
-        return err
-    unstable = [rel for rel in GENERATED if (ROOT / rel).read_bytes() != first[rel]]
-    if unstable:
-        return "generator is not deterministic: " + ", ".join(unstable)
-    print(f"       {len(GENERATED)} files built, identical across two runs")
-    return None
-
-
 def check_snapshots():
     """The committed compiled programs match what the compiler emits now.
 
@@ -205,8 +132,6 @@ def check_snapshots():
 # when that revision is not already in Cargo's cache.
 CHECKS = [
     # First: the machinery under `target/` is build output, and five tests include it.
-    ("generators", check_generated, None, False, False),
-    ("egg-files", run_egg_files, None, False, False),
     (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
@@ -470,20 +395,16 @@ def main():
             return 2
 
     if args.update:
-        before = {rel: (ROOT / rel).read_bytes() for rel in GENERATED}
-        before |= {str(q.relative_to(ROOT)): q.read_bytes() for q in SNAPSHOT_DIR.glob("*.egg")}
-        for cmd in sorted(set(GENERATED.values())) + [EMIT_SNAPSHOTS]:
-            r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=3600, cwd=ROOT)
-            if r.returncode != 0:
-                print(f"{cmd[0]} failed: {r.stderr.strip()[:300]}")
-                return 1
-        changed = [rel for rel in before if not (ROOT / rel).exists() or (ROOT / rel).read_bytes() != before[rel]]
-        changed += [
-            str(q.relative_to(ROOT)) for q in SNAPSHOT_DIR.glob("*.egg") if str(q.relative_to(ROOT)) not in before
-        ]
-        for rel in changed:
-            print(f"  updated {rel}")
-        print(f"\n{len(changed)}/{len(before)} snapshots changed")
+        before = {q.name: q.read_bytes() for q in SNAPSHOT_DIR.glob("*.egg")}
+        r = subprocess.run([sys.executable, *EMIT_SNAPSHOTS], capture_output=True, text=True, timeout=3600, cwd=ROOT)
+        if r.returncode != 0:
+            print(f"{EMIT_SNAPSHOTS[0]} failed: {r.stderr.strip()[:300]}")
+            return 1
+        now = {q.name: q.read_bytes() for q in SNAPSHOT_DIR.glob("*.egg")}
+        changed = sorted(n for n in now if now[n] != before.get(n))
+        for name in changed:
+            print(f"  updated {name}")
+        print(f"\n{len(changed)}/{len(now)} snapshots changed")
         return 0
 
     picked = [

@@ -186,7 +186,6 @@ indices degrades to not refining — matches are missed, never invented.
 | `slotted/LANGUAGE.md` | the source language: every form and why it exists |
 | `slotted/slotted-egglog.py` | the compiler — a program in that language to egglog |
 | `slotted/slotted-encoder.py` | the encoding itself: the tables above, and rule compilation |
-| `slotted/encoding/` | tests written at this level, against the generated machinery |
 | `slotted/tests/` | tests written in the source language |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |

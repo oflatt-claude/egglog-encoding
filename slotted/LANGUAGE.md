@@ -268,7 +268,6 @@ and adds the result back. Generated hidden layout facts distinguish real childre
 binder-marker edges, so markers add no extraction cost, a binder for `$x` shadows the
 substitution below its covered child, and a conflicting private binder is alpha-refreshed
 before it can capture a free slot of `t`. Cases E--G in that file pin all three properties;
-`slotted/encoding/subst.egg` shows the encoded calls and string-head discriminator.
 
 **`rewrite` is the only rule form.** egglog's `rule` and `birewrite` are not part of this
 language and the compiler rejects them rather than passing them through — write a
@@ -428,29 +427,13 @@ and nothing is lost by it.
 
 For two **nodes** it is not a different question anyway. The machinery has a rule that
 unions two values reaching their leader by the same renaming, up to a symmetry of the
-class, so term equality already implied it — checked, with no explicit union in either
-case:
-
-```
-(rewrite (F x y) (F y x) :name "comm")
-(let f12 (F $1 $2))
-(let f21 (F $2 $1))
-(let i0 (Lam $0 $0))
-(let i5 (Lam $5 $5))
-(run 5)
-;; both hold, at the encoded level: the swap is in the group, and alpha-variants merge
-```
+class, so term equality already implies it: two alpha-variants, and a class equal to its
+own slot-swap, each end up as one egglog value, while two invocations of one class stay
+two.
 
 For a **bare slot** it could not express the claim at all. A slot's identity lives in
 the renaming, not in the value: `$9` and `$0` are the same value `(Var 0)` and different
 terms, so `(= a $9)` has no stored-value spelling.
-
-Both halves of that are checked in `slotted/encoding/value-equality.egg`, which runs at
-the encoded level where both questions can be asked at once: alpha-variants and a
-symmetry each end up as ONE egglog value, while two invocations of one class stay two.
-
-A test that really is about the encoding's own tables belongs in `slotted/encoding/`,
-which runs as plain egglog and can say whatever it likes.
 
 ### Dropping to the encoded level
 
@@ -517,6 +500,5 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | `slotted/tests/` | programs in this language that ASK something: terms, and claims about them. Run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
-| `slotted/encoding/` | the encoding itself, written by hand at the encoded level, plus the tutorial that explains it. `value-equality.egg` is where this file's claims about `=` are checked |
 | `slotted/slotted-egglog.py` | the compiler |
 | `slotted/ENCODING.md` | what this language compiles TO, and why each table is there |

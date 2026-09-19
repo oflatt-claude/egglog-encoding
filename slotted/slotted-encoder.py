@@ -798,7 +798,7 @@ SUBST = "subst"
 
 
 # The constructor-independent half of the node machinery. Hand-written in
-# `slotted/encoding/egraph-encoding-11.egg` along with a constructor or two, and kept
+# the machinery along with a constructor or two, and kept
 # here so a generator can state what that text has to say.
 
 
@@ -1035,7 +1035,7 @@ def in_slotted_ruleset(text):
     These rules maintain the encoding's invariants, and they have to be *saturated*
     between the user's rule steps: a user rule that matches a node before the alpha- and
     slot-canonicalisation of that node has finished sees a spelling that is about to
-    change, and then matches again when it does. `egraph-encoding-11.egg` says
+    change, and then matches again when it does. `slotted/ENCODING.md` says
     what schedule to write; this only puts the rules where a schedule can name them.
     """
     out, depth, form, buf = [], 0, [], []
