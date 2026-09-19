@@ -27,7 +27,8 @@
 ;;; IS construction, and constraints computed in earlier atoms thread into later
 ;;; ones as ordinary values.
 
-(include "target/slotted/slotted-lang-encoded.egg")
+;;; The machinery comes from `slotted/languages/encoded.egg`, supplied by
+;;; `slotted/checks/check-slotted.py`; this file declares no constructors of its own.
 
 (relation Mu (String Renaming))
 (relation Hit (String U))

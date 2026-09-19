@@ -15,7 +15,7 @@ The two sides:
               `MultiPattern` atoms as the encoding. Nested `ematch_all` is a
               different pattern language and is not used as an oracle here.
   encoding    the compiled rule LIFTED VERBATIM out of
-              `target/slotted/slotted-sdql-rules.egg` by its `:name`, so what runs is the
+              `gen-sdql-rules.py` by its `:name`, so what runs is the
               generated artifact and not a re-derivation of it.
 
 `beta` is compiled too. Its right-hand side becomes `slotted-subst` plus the frame
@@ -35,6 +35,7 @@ Usage:
 """
 
 import functools
+import importlib.util
 import os
 import subprocess
 import sys
@@ -49,7 +50,10 @@ SYM = slotenc.carrier_symbols(("U",))["U"]
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
 # The generated encoding rules. Lifted by `:name`, never rewritten.
-RULES_EGG = ROOT / "target" / "slotted" / "slotted-sdql-rules.egg"
+#: the compiled sdql rules, from the generator rather than a build artifact
+_gen_spec = importlib.util.spec_from_file_location("gsr", ROOT / "slotted" / "gen-sdql-rules.py")
+gsr = importlib.util.module_from_spec(_gen_spec)
+_gen_spec.loader.exec_module(gsr)
 # `target/slotted/slotted-lang-sdql.egg` is the SDQL language plus the machinery it includes.
 #: the sdql language's machinery, compiled rather than read from `target/`
 MACHINERY = machinery("sdql")
@@ -336,12 +340,12 @@ if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
 @functools.cache
 def egg_rule(name):
     """The compiled rule of that name, lifted out of the generated file."""
-    text = RULES_EGG.read_text()
+    text = gsr.compiled_rules()[0]
     i = 0
     while True:
         j = text.find("\n(rule ", i)
         if j < 0:
-            raise KeyError(f"no compiled rule named {name!r} in {RULES_EGG}")
+            raise KeyError(f"no compiled rule named {name!r} among the generated sdql rules")
         j += 1
         depth, k, instr = 0, j, False
         while k < len(text):

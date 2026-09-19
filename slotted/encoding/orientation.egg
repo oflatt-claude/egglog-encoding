@@ -17,7 +17,8 @@
 ;;; the machinery stopped saturating at step 6; none at any step after, and it
 ;;; saturates through step 10.
 
-(include "target/slotted/slotted-lang-encoded.egg")
+;;; The machinery comes from `slotted/languages/encoded.egg`, supplied by
+;;; `slotted/checks/check-slotted.py`; this file declares no constructors of its own.
 
 ;; Creation order fixes the value order, so $y is smallest and $f largest.
 (let $y (Y (map-of 0 1) (SlottedVar_0 0) (map-of 0 2) (SlottedVar_0 0)))

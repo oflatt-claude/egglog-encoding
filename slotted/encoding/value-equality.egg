@@ -13,7 +13,8 @@
 ;;; Written at the ENCODED level, so these name shapes to emit machinery for rather than
 ;;; constructors for slotted terms. `App2`, `Var` and `Null` come from the core.
 
-(include "target/slotted/slotted-lang-encoded.egg")
+;;; The machinery comes from `slotted/languages/encoded.egg`, supplied by
+;;; `slotted/checks/check-slotted.py`; this file declares no constructors of its own.
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

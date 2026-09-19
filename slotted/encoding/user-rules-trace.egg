@@ -30,7 +30,8 @@
 ;;; the two mints apart, and `f5a` is the same e-graph
 ;;; against a rule that does not accumulate, where `?u` and `?v` collapse onto one slot.
 
-(include "target/slotted/slotted-lang-encoded.egg")
+;;; The machinery comes from `slotted/languages/encoded.egg`, supplied by
+;;; `slotted/checks/check-slotted.py`; this file declares no constructors of its own.
 
 (relation Step (String Renaming Renaming))
 (relation Child (String Renaming))

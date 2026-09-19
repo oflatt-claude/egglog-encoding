@@ -19,6 +19,7 @@ import argparse
 import glob
 import re
 import subprocess
+import tempfile
 import sys
 from pathlib import Path
 
@@ -30,20 +31,9 @@ XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 # under `target/`, so nothing here is committed -- the tests include them, and
 # `make slotted-check` builds them first. `slotted/tests/snapshots/` is the committed
 # derived artifact.
-GENERATED = {
-    # Only what a file on disk has to `(include ...)`: the encoded-level tests under
-    # `slotted/encoding/` name a path, and nothing else does -- the harness compiles the
-    # machinery it needs rather than reading a build artifact.
-    "target/slotted/slotted-lang-encoded.egg": (
-        "slotted/slotted-egglog.py",
-        "slotted/languages/encoded.egg",
-        "--desugar",
-        "-o",
-        "target/slotted/slotted-lang-encoded.egg",
-    ),
-    "target/slotted/slotted-sdql-rules.egg": ("slotted/gen-sdql-rules.py",),
-    "target/slotted/slotted-array-rules.egg": ("slotted/xdiff/xarray.py", "egg"),
-}
+#: Nothing is staged on disk any more: the compiler is called where its output is
+#: needed. Kept empty rather than deleted so a future artifact has a home and a check.
+GENERATED = {}
 
 
 #: Compiled slotted tests. Each is what running that test runs, committed so a change
@@ -121,9 +111,15 @@ def paper_sdql_ran(out: str) -> str | None:
 def run_egg_files():
     """Every hand-written encoded-level file loads and runs clean.
 
-    `slotted/encoding/` is the hand-written half -- the encoding itself, the tutorial
-    that explains it, and the tests that poke at the machinery directly. They are plain
-    egglog, written with the renamings spelled out, so they run as they are.
+    `slotted/encoding/` holds the tests that poke at the machinery directly -- egglog
+    written with the renamings spelled out, asking things the slotted language cannot:
+    egglog's own `=` beside the language's, the substitution primitive, a relation
+    planted to catch a badly oriented row.
+
+    THE MACHINERY IS SUPPLIED HERE rather than `(include ...)`d. A file on disk can only
+    include a path, which used to mean compiling `languages/encoded.egg` to a build
+    artifact first; prepending it instead means the only copy of that machinery is the
+    one the compiler just made.
     """
     files = sorted(glob.glob(str(ROOT / "slotted" / "encoding" / "**" / "*.egg"), recursive=True))
     # A test rewritten in the slotted language leaves this directory for
@@ -131,15 +127,21 @@ def run_egg_files():
     # It also dropped when the hand-written core and the tutorial became documentation.
     if len(files) < 6:
         return f"only {len(files)} encoded-level .egg files found"
+    sys.path.insert(0, str(ROOT / "slotted"))
+    sc = __import__("slotted-egglog")
+    machinery = sc.compile_source(sc.Source(ROOT / "slotted" / "languages" / "encoded.egg"))
     bad = []
-    for f in files:
-        r = subprocess.run([str(EGGLOG), f], capture_output=True, text=True, timeout=1800, cwd=ROOT)
-        if r.returncode != 0:
-            err = [line for line in r.stderr.splitlines() if "ERROR" in line]
-            bad.append(f"{Path(f).name}: {(err[-1] if err else '?')[:120]}")
+    with tempfile.TemporaryDirectory() as tmp:
+        for f in files:
+            whole = Path(tmp) / Path(f).name
+            whole.write_text(machinery + "\n" + Path(f).read_text())
+            r = subprocess.run([str(EGGLOG), str(whole)], capture_output=True, text=True, timeout=1800, cwd=ROOT)
+            if r.returncode != 0:
+                err = [line for line in r.stderr.splitlines() if "ERROR" in line]
+                bad.append(f"{Path(f).name}: {(err[-1] if err else '?')[:120]}")
     if bad:
         return f"{len(bad)}/{len(files)} failed -- " + "; ".join(bad[:3])
-    print(f"       {len(files)} files")
+    print(f"       {len(files)} files, on machinery compiled here")
     return None
 
 

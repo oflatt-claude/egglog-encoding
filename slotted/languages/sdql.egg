@@ -9,7 +9,7 @@
 ;;; what it rewrites and nothing about renamings -- `slotted/slotted-egglog.py` turns
 ;;; it into egglog, and
 ;;; `slotted/gen-sdql-rules.py` compiles these same rules into
-;;; `target/slotted/slotted-sdql-rules.egg` for the .egg tests and the differential
+;;; `gen-sdql-rules.py` for the .egg tests and the differential
 ;;; harness. Both read THIS file, so they cannot disagree.
 ;;;
 ;;; THE COUNT. The later bench DEFINES 46 rules and RUNS 44; this file carries those

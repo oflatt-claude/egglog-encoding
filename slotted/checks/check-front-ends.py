@@ -14,6 +14,7 @@ rule carries a `:ruleset` that a compiled one has no reason to and that is strip
 Usage:  ./check-front-ends.py
 """
 
+import importlib.util
 import pathlib
 import re
 import sys
@@ -124,10 +125,14 @@ def top_forms(text):
     return out
 
 
-#: the rule each slotted test shares with a generated file, and where to find it
+#: the rule each slotted test shares with the table-driven front end
 SHARED = [
-    ("sdql-sum-sing.egg", "target/slotted/slotted-sdql-rules.egg", "sum-sing"),
+    ("sdql-sum-sing.egg", "sum-sing"),
 ]
+
+_gen_spec = importlib.util.spec_from_file_location("gsr", ROOT / "slotted" / "gen-sdql-rules.py")
+gsr = importlib.util.module_from_spec(_gen_spec)
+_gen_spec.loader.exec_module(gsr)
 
 
 def rules_of(path):
@@ -136,11 +141,11 @@ def rules_of(path):
 
 def main():
     bad = []
-    for snap_name, gen_rel, rule in SHARED:
-        gen = ROOT / gen_rel
-        named = [r for r in rules_of(gen) if f':name "{rule}"' in r]
+    generated = [f for f in top_forms(gsr.compiled_rules()[0]) if f.startswith("(rule")]
+    for snap_name, rule in SHARED:
+        named = [r for r in generated if f':name "{rule}"' in r]
         if len(named) != 1:
-            bad.append(f"{rule}: {len(named)} rules named it in {gen.name}")
+            bad.append(f"{rule}: {len(named)} generated rules named it")
             continue
         # Only the `:ruleset` belongs to the generated file alone. The `:name` is on
         # both sides now, so it is compared rather than stripped.
@@ -154,7 +159,7 @@ def main():
 
         why = alpha_eq(parse(from_generator), parse(user[0]), {}, {})
         print(
-            f"  {'ok  ' if why is None else 'FAIL'} {rule:<12} {snap_name} vs {gen.name}"
+            f"  {'ok  ' if why is None else 'FAIL'} {rule:<12} {snap_name} vs gen-sdql-rules.py"
             + (f"\n       {why}" if why else "")
         )
         if why:

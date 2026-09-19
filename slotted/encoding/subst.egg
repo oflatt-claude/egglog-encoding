@@ -25,7 +25,8 @@
 ;;; descent into the covered child, and rebuilding refreshes a private binder to avoid
 ;;; capturing the replacement's free slots.  Source-language containers are unsupported.
 
-(include "target/slotted/slotted-lang-encoded.egg")
+;;; The machinery comes from `slotted/languages/encoded.egg`, supplied by
+;;; `slotted/checks/check-slotted.py`; this file declares no constructors of its own.
 
 
 ;;; Case 1- a slot that occurs: h($0, $1)[$0 := null] = h(null, $1)

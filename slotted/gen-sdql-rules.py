@@ -105,11 +105,15 @@ HEADER = """\
 SOURCE = pathlib.Path("slotted/languages/sdql-rules.egg")
 
 
-def main():
+def compiled_rules():
+    """The 44 sdql rules as egglog, with the machinery they run on.
+
+    Returned rather than written: every caller is Python, so nothing has to be staged
+    on disk for one of them to read it back.
+    """
     src = sc.Source(SOURCE)
     machinery = sc.compile_source(sc.Source(pathlib.Path("slotted/languages/sdql.egg")))
-    out = [HEADER.replace("@MACHINERY@", machinery)]
-    n = 0
+    out, n = [HEADER.replace("@MACHINERY@", machinery)], 0
     for form in sc.parse(SOURCE.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
@@ -119,8 +123,14 @@ def main():
             f"\n;; {name}\n" + sc.compile_rewrite(src, form, tail=f'\n      :ruleset sdql :name "{name}")', bugs=BUGS)
         )
         n += 1
+    return "\n".join(out) + "\n", n
+
+
+def main():
+    """Write them out, for a person who wants to read the file."""
+    text, n = compiled_rules()
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(out) + "\n")
+    OUT.write_text(text)
     print(f"wrote {OUT} ({n} rules)")
 
 
