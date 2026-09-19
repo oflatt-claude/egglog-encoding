@@ -4,6 +4,7 @@
 ;;; and anything an included library brought, are left out -- committing the
 ;;; same generated thousands of lines once per test would swamp the diff that
 ;;; a change in the compiler is supposed to show.
+;;; --update` rewrites it. Under `target/` it is build output.
 
 (let $l0 (Let (map-of 0 0) (SlottedVar_0 0) (map-of 0 0) (App (map-empty) (Sym "f1") (map-of 0 0) (SlottedVar_0 0)) (map-of 0 0) (SlottedVar_0 0)))
 (let $l1 (Let (map-of 0 1) (SlottedVar_0 0) (map-of 1 1) (App (map-empty) (Sym "f1") (map-of 0 1) (SlottedVar_0 0)) (map-of 0 0) (SlottedVar_0 0)))

@@ -961,23 +961,6 @@ def multi_sort_core(carriers):
     return prefix_variables_in_rules(body)
 
 
-MACHINERY_HEADER = """\
-;;; GENERATED -- do not edit.
-;;;
-;;; One block per constructor. A `child` column occupies `Renaming U` and
-;;; contributes its slots; a payload column is one column and contributes none, so a
-;;; zero-child constructor is just a payload leaf. A `binder` is a child whose slot
-;;; the node binds.
-;;;
-;;; A binder COVERS one column -- the one right after the binder slots, which is what
-;;; `Bind<T>` wrapping a single child means. Its slot is taken out of the class's slot
-;;; set only where it is bound, so an occurrence in an uncovered column stays free:
-;;; `let` binds in its body and leaves its value's occurrence alone. When the two
-;;; collide the bound slot is first renamed to one the node does not use, which keeps
-;;; it alpha-renameable.
-"""
-
-
 #: Keywords that introduce a name the rule does not bind, so the token after one is
 #: left alone.
 _RULE_KEYWORDS = (":ruleset", ":name", ":when", ":subsume")

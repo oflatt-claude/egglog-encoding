@@ -439,9 +439,10 @@ def compile_source(src, own_only=False):
     out = [
         f";;; COMPILED from {src.relpath} by slotted/slotted-egglog.py.",
         ";;;",
-        ";;; A SNAPSHOT: committed so a change in the compiler shows up as a diff, never",
-        ";;; edited by hand, and rewritten by `check-slotted.py --update`. This is what",
-        ";;; running that test runs, and it includes nothing: the machinery is generated.",
+        ";;; GENERATED, never edited by hand, and it includes nothing -- the machinery is",
+        ";;; here. Under `slotted/tests/snapshots/` this is the committed copy of what a",
+        ";;; test runs, so a change in the compiler shows up as a diff; `check-slotted.py",
+        ";;; --update` rewrites it. Under `target/` it is build output.",
         "",
     ]
     if own_only:
