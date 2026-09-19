@@ -1,9 +1,8 @@
 ;;; One match, every intermediate value asserted.
 ;;;
-;;; The tutorial in `user-rules.egg` says what each scaffolding variable MEANS.
-;;; This file says what they HOLD, on one concrete e-graph, so the worked example quoted
-;;; at the top of the tutorial is executed rather than described. If a value changes, this
-;;; fails and the tutorial's numbers are known to be stale.
+;;; `slotted/ENCODING.md` says what each scaffolding variable MEANS. This file says what
+;;; they HOLD, on one concrete e-graph, so a compiled rule's intermediate values are
+;;; executed rather than described.
 ;;;
 ;;; THE SHAPE IS M5's, two atom mints in one match, because that is where the
 ;;; accumulating avoid-set is the whole point. Operators are suffixed `t` so no other
@@ -28,7 +27,7 @@
 ;;;
 ;;; So nothing the root knows constrains either inner atom: `?a` and `?b` both land on a
 ;;; class with no slots, and both inner atoms have to MINT. The accumulation is what keeps
-;;; the two mints apart, and `f5a` in `user-rules-tests.egg` is the same e-graph
+;;; the two mints apart, and `f5a` is the same e-graph
 ;;; against a rule that does not accumulate, where `?u` and `?v` collapse onto one slot.
 
 (include "target/slotted/slotted-node-rules.egg")

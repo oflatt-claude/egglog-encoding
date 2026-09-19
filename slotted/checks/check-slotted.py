@@ -122,8 +122,8 @@ def run_egg_files():
     files = sorted(glob.glob(str(ROOT / "slotted" / "encoding" / "**" / "*.egg"), recursive=True))
     # A test rewritten in the slotted language leaves this directory for
     # `slotted/tests/`, so this floor drops as that one rises; neither may fall alone.
-    # It also dropped by one when the hand-written core became documentation.
-    if len(files) < 8:
+    # It also dropped when the hand-written core and the tutorial became documentation.
+    if len(files) < 6:
         return f"only {len(files)} encoded-level .egg files found"
     bad = []
     for f in files:
@@ -290,13 +290,6 @@ CHECKS = [
         "correspondence",
         ("slotted/checks/check-correspondence.py",),
         ratio(r"OK: (\d+)/(\d+) correspondence files", 2),
-        False,
-        False,
-    ),
-    (
-        "tutorial-drift",
-        ("slotted/checks/check-tutorial.py",),
-        ratio(r"(\d+)/(\d+) sections are the encoder's own output", 12),
         False,
         False,
     ),

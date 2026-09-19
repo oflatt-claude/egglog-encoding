@@ -1307,7 +1307,7 @@ def curated():
         )
     )
 
-    # ---- shapes taught by slotted/encoding/user-rules.egg --------------------
+    # ---- shapes taught by slotted/ENCODING.md --------------------
     # That file is the readable form of this compiler's recipe, so every shape it
     # teaches should be checked here too. The mapping is in its header; these two
     # were the shapes it had that nothing here covered.

@@ -14,7 +14,6 @@ rule carries a `:ruleset` that a compiled one has no reason to and that is strip
 Usage:  ./check-front-ends.py
 """
 
-import importlib.util
 import pathlib
 import re
 import sys
@@ -22,9 +21,108 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SNAPSHOTS = ROOT / "slotted" / "tests" / "snapshots"
 
-_spec = importlib.util.spec_from_file_location("ct", ROOT / "slotted" / "checks" / "check-tutorial.py")
-ct = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(ct)
+
+FIXED = {
+    "rule",
+    "let",
+    "union",
+    "delete",
+    "set",
+    "guard",
+    "or",
+    "and",
+    "not",
+    "true",
+    "false",
+    "App2",
+    "App3",
+    "App4",
+    "Num",
+    "Sym",
+    "Scale",
+    "Null",
+    "Var",
+    "ClassSlots",
+    "RenamesToLeader",
+    "Equated",
+    "compose",
+    "inverse",
+}
+VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+TOKEN = re.compile(r'\(|\)|"[^"]*"|[^\s()]+')
+
+
+def parse(text):
+    toks = TOKEN.findall(text)
+    pos = [0]
+
+    def go():
+        t = toks[pos[0]]
+        pos[0] += 1
+        if t != "(":
+            return t
+        out = []
+        while toks[pos[0]] != ")":
+            out.append(go())
+        pos[0] += 1
+        return out
+
+    v = go()
+    assert pos[0] == len(toks), f"trailing tokens in {text[:60]}"
+    return v
+
+
+def is_var(tok):
+    return bool(VARIABLE.match(tok)) and tok not in FIXED
+
+
+def alpha_eq(a, b, fwd, bwd, path="/"):
+    """None if equal up to a variable bijection, else the first difference."""
+    if isinstance(a, list) != isinstance(b, list):
+        return f"{path}: {'a list' if isinstance(a, list) else a} vs {'a list' if isinstance(b, list) else b}"
+    if isinstance(a, list):
+        if len(a) != len(b):
+            return f"{path}: arity {len(a)} vs {len(b)}\n       want {a}\n        got {b}"
+        for i, (x, y) in enumerate(zip(a, b, strict=True)):
+            why = alpha_eq(x, y, fwd, bwd, f"{path}{i}/")
+            if why:
+                return why
+        return None
+    if is_var(a) != is_var(b):
+        return f"{path}: {a!r} vs {b!r} -- one is a variable, the other is not"
+    if not is_var(a):
+        return None if a == b else f"{path}: {a!r} vs {b!r}"
+    if fwd.setdefault(a, b) != b or bwd.setdefault(b, a) != a:
+        return f"{path}: {a!r} is already matched with {fwd.get(a)!r}, and {b!r} with {bwd.get(b)!r}"
+    return None
+
+
+def strip_comment(line):
+    quoted = False
+    for i, ch in enumerate(line):
+        if ch == '"':
+            quoted = not quoted
+        elif ch == ";" and not quoted:
+            return line[:i]
+    return line
+
+
+def top_forms(text):
+    """Every balanced top-level form, comments removed."""
+    out, depth, form = [], 0, []
+    for raw in text.splitlines():
+        line = strip_comment(raw)
+        if not line.strip():
+            continue
+        depth += line.count("(") - line.count(")")
+        form.append(line.strip())
+        if depth <= 0:
+            out.append(" ".join(form))
+            form, depth = [], 0
+    if form:
+        raise SystemExit("unbalanced parens")
+    return out
+
 
 #: the rule each slotted test shares with a generated file, and where to find it
 SHARED = [
@@ -33,7 +131,7 @@ SHARED = [
 
 
 def rules_of(path):
-    return [f for f in ct.top_forms(path.read_text()) if f.startswith("(rule")]
+    return [f for f in top_forms(path.read_text()) if f.startswith("(rule")]
 
 
 def main():
@@ -54,7 +152,7 @@ def main():
             bad.append(f"{snap_name}: {len(user)} user rules, expected 1")
             continue
 
-        why = ct.alpha_eq(ct.parse(from_generator), ct.parse(user[0]), {}, {})
+        why = alpha_eq(parse(from_generator), parse(user[0]), {}, {})
         print(
             f"  {'ok  ' if why is None else 'FAIL'} {rule:<12} {snap_name} vs {gen.name}"
             + (f"\n       {why}" if why else "")

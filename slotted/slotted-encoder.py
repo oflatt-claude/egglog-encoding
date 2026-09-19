@@ -6,12 +6,11 @@ rules, term encoding, and MultiPattern rule encoding. Each equality-sort carrier
 its own `CarrierSymbols`; renaming maps and layout metadata are shared.
 
 The executable derivation and worked examples live in
-`slotted/encoding/user-rules.egg`. This module keeps only the invariants needed beside
+`slotted/ENCODING.md`. This module keeps only the invariants needed beside
 their implementation.
 """
 
 import re
-
 from dataclasses import dataclass
 
 CHILD = object()  # a slotted child: `Renaming U`
@@ -996,7 +995,7 @@ def prefix_rule_variables(text, prefix="_"):
     strings and the token after a keyword are neither. That is enough to tell them
     apart without knowing which relations and primitives exist.
     """
-    out, i, after_open, after_kw = [], 0, False, False
+    out, after_open, after_kw = [], False, False
     for tok in re.findall(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+|\s+', text):
         if tok.startswith(";") or tok.isspace():
             out.append(tok)
@@ -1869,7 +1868,7 @@ def compile_query(
     """Compile a flattened multipattern into the facts that match it.
 
     Connected atoms are solved in order into one shared pattern frame. Each step
-    preserves M1--M8 from `encoding/user-rules.egg`; final refinement and conditions
+    preserves M1--M8 from `slotted/ENCODING.md`; final refinement and conditions
     implement M9--M10. `bugs` deliberately restores past mistakes for mutation
     testing.
 
