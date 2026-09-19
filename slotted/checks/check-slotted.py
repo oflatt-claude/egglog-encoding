@@ -31,18 +31,16 @@ XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 # `make slotted-check` builds them first. `slotted/tests/snapshots/` is the committed
 # derived artifact.
 GENERATED = {
-    # A language's machinery is what the compiler makes of its declarations, so it comes
-    # from the compiler rather than from a second generator that could drift from it.
-    **{
-        f"target/slotted/slotted-lang-{lang}.egg": (
-            "slotted/slotted-egglog.py",
-            f"slotted/languages/{lang}.egg",
-            "--desugar",
-            "-o",
-            f"target/slotted/slotted-lang-{lang}.egg",
-        )
-        for lang in ("array", "encoded", "sdql", "toy")
-    },
+    # Only what a file on disk has to `(include ...)`: the encoded-level tests under
+    # `slotted/encoding/` name a path, and nothing else does -- the harness compiles the
+    # machinery it needs rather than reading a build artifact.
+    "target/slotted/slotted-lang-encoded.egg": (
+        "slotted/slotted-egglog.py",
+        "slotted/languages/encoded.egg",
+        "--desugar",
+        "-o",
+        "target/slotted/slotted-lang-encoded.egg",
+    ),
     "target/slotted/slotted-sdql-rules.egg": ("slotted/gen-sdql-rules.py",),
     "target/slotted/slotted-array-rules.egg": ("slotted/xdiff/xarray.py", "egg"),
 }

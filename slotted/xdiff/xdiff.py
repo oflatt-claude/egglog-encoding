@@ -31,9 +31,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
 slotenc = __import__("slotted-encoder")
+slotcc = __import__("slotted-egglog")
 EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted" / "xmulti"
-MACHINERY = "target/slotted/slotted-lang-toy.egg"
+
+
+def machinery(lang):
+    """A language's machinery, compiled here rather than read from a build artifact.
+
+    The harness writes its programs as text, so it can hold the machinery as text too:
+    nothing has to be staged on disk for an `(include ...)` to find.
+    """
+    return slotcc.compile_source(slotcc.Source(ROOT / "slotted" / "languages" / f"{lang}.egg"))
+
 
 BINOPS = ["add", "f", "g", "h", "k", "sub", "sub2"]
 
@@ -373,7 +383,7 @@ def schedule(steps):
 
 def egg_program(case, rules=None, mult=3):
     rules = case.rules if rules is None else rules
-    out = [f'(include "{MACHINERY}")']
+    out = [machinery("toy")]
     # A slotted e-class is NOT one egglog e-class: the alpha-finder relates
     # equal-up-to-renaming nodes with `RenamesToLeader` and deletes one, rather
     # than unioning them. So two probes are in the same slotted class when they

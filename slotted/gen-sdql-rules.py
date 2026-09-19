@@ -92,7 +92,7 @@ HEADER = """\
 ;;; `slotted/tests/sdql-rewrites.egg` is what checks them -- written in the slotted
 ;;; language over the same rules, and compiled at test time.
 
-(include "target/slotted/slotted-lang-sdql.egg")
+@MACHINERY@
 
 (ruleset sdql)
 """
@@ -107,7 +107,8 @@ SOURCE = pathlib.Path("slotted/languages/sdql-rules.egg")
 
 def main():
     src = sc.Source(SOURCE)
-    out = [HEADER]
+    machinery = sc.compile_source(sc.Source(pathlib.Path("slotted/languages/sdql.egg")))
+    out = [HEADER.replace("@MACHINERY@", machinery)]
     n = 0
     for form in sc.parse(SOURCE.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):

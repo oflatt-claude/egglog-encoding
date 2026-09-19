@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import EGGLOG, ROOT, XMULTI, parse_same_class, slotenc  # noqa: E402
+from xdiff import EGGLOG, ROOT, XMULTI, machinery, parse_same_class, slotenc  # noqa: E402
 
 # the carrier's table names, read off the encoder rather than written out
 SYM = slotenc.carrier_symbols(("U",))["U"]
@@ -51,7 +51,8 @@ RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 # The generated encoding rules. Lifted by `:name`, never rewritten.
 RULES_EGG = ROOT / "target" / "slotted" / "slotted-sdql-rules.egg"
 # `target/slotted/slotted-lang-sdql.egg` is the SDQL language plus the machinery it includes.
-MACHINERY = "target/slotted/slotted-lang-sdql.egg"
+#: the sdql language's machinery, compiled rather than read from `target/`
+MACHINERY = machinery("sdql")
 
 # The source-level regression fixtures.  Python supplies the differential-test
 # orchestration and expected partitions, but the terms and the two scope-sensitive
@@ -426,7 +427,7 @@ def schedule(steps):
 
 
 def egg_program(case, with_rule=True, mult=3):
-    out = [f'(include "{MACHINERY}")', "(ruleset sdql)"]
+    out = [MACHINERY, "(ruleset sdql)"]
     if with_rule:
         out.append(f";; {case.rule.name}")
         out.append(case.rule.egg if case.rule.egg is not None else egg_rule(case.rule.name))
