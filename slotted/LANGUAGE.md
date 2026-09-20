@@ -255,6 +255,14 @@ To relate two binders, share the *body* instead — a variable under two binder 
 joins up to renaming. `slotted/tests/multipattern.egg` works through both, along with
 joins on several variables at once and a four-pattern chain.
 
+Two **different** slot literals are two different slots, everywhere in a rule. `$x` and
+`$y` can never come out as one slot, so `(F $x $y)` does not match `F($0,$0)`, and two
+binders written `$x` and `$y` cannot share a body that uses the bound variable — that
+body would have to have both slots and one at the same time. This is the reference's
+reading of a written slot: a rigid name, which its matcher never identifies with another.
+A pattern *variable* in a binder column is the other thing: it stands for the bound
+variable and may be identified with anything the match makes it.
+
 A right-hand-side slot the pattern never mentions is **minted**, with nothing to write:
 `(rewrite (F x y) (Lam $s (App (F x y) $s)))` binds a fresh `$s`. That is what the
 reference does too. `:fresh $s` says it explicitly and is still accepted, but adds
@@ -387,10 +395,11 @@ Three things differ from a rewrite's pattern, because a term is ground where a p
 is not.
 
 *The atoms are solved CHILD FIRST.* Where an atom's renaming is not pinned from above
-it MINTS the slots it needs, and a mint is a commitment nothing revisits — so a class
-that has made a slot redundant stops carrying it, the atoms below mint a new name, and
-a slot literal further down contradicts it. A term's invocation is a function of its
-children's, so read the other way there is nothing to guess.
+it MINTS the slots it needs, and a mint is revised only where a later equation forces
+it — so a class that has made a slot redundant stops carrying it, the atoms below mint
+a new name, and a slot literal further down has nothing that ties it back. A term's
+invocation is a function of its children's, so read the other way there is nothing to
+guess.
 
 *Each term is solved alone*, and the invocations are compared in the numbering the
 SOURCE wrote, so `$0` is slot 0 in both terms whatever each pattern called it. Two
@@ -499,6 +508,7 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | --- | --- |
 | `slotted/tests/` | programs in this language that ASK something: terms, and claims about them. Run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
+| `slotted/tests/unsupported/` | originals written with constructs the language refuses, kept beside their runnable translations; skipped by the runner |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `slotted/slotted-egglog.py` | the compiler |
 | `slotted/ENCODING.md` | what this language compiles TO, and why each table is there |

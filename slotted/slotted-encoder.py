@@ -1626,6 +1626,10 @@ def atom_lines(lang, root, atoms, var="var"):
     children are pattern variables and slot literals, so:
 
       * a slot literal in a BINDER column is the bare `$x` that `Bind` holds;
+      * a pattern VARIABLE in a binder column stands for the bound variable, which
+        `Bind` cannot hold: it becomes the FLEXIBLE slot `$?x`, one the reference does
+        not pin, and the variable itself is bound by an atom `x == (var $?x)` so the
+        right-hand side can name it. Once per variable, however many binders share it;
       * anywhere else it is the TERM `(var $x)`, which needs an atom of its own, since
         an atom's child has to be a pattern variable;
       * a child reached through its own class -- a payload leaf written literally --
@@ -1636,12 +1640,18 @@ def atom_lines(lang, root, atoms, var="var"):
     the encoding implements `MultiPattern`, not the reference's distinct nested
     pattern language.
     """
-    out, extra = [], [0]
+    out, extra, bound_vars = [], [0], set()
     for name, op, kids, *_pays in atoms:
         binders = set(lang[op].binders)
         spelled = []
         for i, (kind, c) in enumerate(kids):
-            if kind == "pv":
+            if kind == "pv" and i in binders:
+                v = c.lstrip("?")
+                if v not in bound_vars:
+                    bound_vars.add(v)
+                    out.append(f"atom {v} {var} $?{v}")
+                spelled.append(f"$?{v}")
+            elif kind == "pv":
                 spelled.append(c.lstrip("?"))
             elif kind == "sl" and i in binders:
                 spelled.append(c)
@@ -1847,6 +1857,7 @@ def compile_query(
     var_prefix="",
     fresh_batch=True,
     refine=True,
+    literals_apart=False,
 ):
     """Compile a flattened multipattern into the facts that match it.
 
@@ -1867,6 +1878,9 @@ def compile_query(
     program's own `let`s -- a claim's -- takes the `_` prefix the compiler already
     reserves for its own names, while a rule keeps the bare spelling its committed
     generated text has.
+
+    `literals_apart` says that two DIFFERENT slot literals are two different slots,
+    which is what a rule means by them; a claim decides that for itself, by scope.
     """
     body, uid = [], [0]
 
@@ -1972,11 +1986,38 @@ def compile_query(
                 seconds.append(e)
 
         mp = new("mp")
-        pairs = " ".join(firsts + seconds) if firsts else "(map-empty) (map-empty)"
         if idx == 0:
             # the leading atom fixes slots(pattern); its `mp` is the identity
             body.append(f"(= {mp} {dom})")
+        elif len(firsts) >= 2 and "no-unify" not in bugs:
+            # UNIFY. Two equations can name one node slot twice -- the root's renaming
+            # says f3, a child seen earlier says f1 -- and where both names were
+            # minted, the equations are not a contradiction but a discovery: the two
+            # mints are one slot. That is the reference's `unify`. One solve returns
+            # the atom's renaming and the merge the equations forced, and everything
+            # solved before this atom is read through the merge from here on. A
+            # written slot literal and a node's own slots may not merge, which is what
+            # the cliques say. One equation alone cannot force a merge, so an atom
+            # with a single pair keeps the plain solve.
+            pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
+            sol, u = new("uni"), new("u")
+            body.append(
+                f"(= {sol} (find-mapping-unify (vec-of {pat} {dom}) (vec-of {pinned} {' '.join(slot_groups)}) "
+                f"(vec-of {' '.join(firsts)}) (vec-of {' '.join(seconds)})))"
+            )
+            body.append(f"(= {mp} (vec-get {sol} 0))")
+            body.append(f"(= {u} (vec-get {sol} 1))")
+            mp_of = {k: f"(compose {u} {v})" for k, v in mp_of.items()}
+            slot_of = {k: f"(map-get {u} {v})" for k, v in slot_of.items()}
+            merged = []
+            for g in slot_groups:
+                gm = new("grp")
+                body.append(f"(= {gm} (map-image (compose {u} {g})))")
+                merged.append(gm)
+            slot_groups = merged
+            pat = f"(map-image {u})"
         else:
+            pairs = " ".join(firsts + seconds) if firsts else "(map-empty) (map-empty)"
             body.append(f"(= {mp} (find-mapping-total {pat} {dom} {pairs}))")
 
         # Accumulate the avoid-set. Passing only the leading atom's slots would let
@@ -2023,6 +2064,7 @@ def compile_query(
             mp_of[aroot] = narrow(mp, rv, pvar_sorts[aroot])
 
     binding[0] = False  # every atom is read, so a payload variable can only be read now
+    pattern_literals = sorted(slot_of)
 
     if refine and atoms:
         # Reconsider minted distinctions after the whole match is known. Only slots
@@ -2049,6 +2091,18 @@ def compile_query(
         # Two slots that merged no longer occupy two names, so a fresh slot minted
         # below avoids the refined set rather than the pre-merge one.
         pat = f"(map-image {mrg})"
+
+    # Two DIFFERENT literals are two DIFFERENT slots. The reference's pattern slots are
+    # rigid names that `unify` never identifies, so `$a` and `$b` written in one rule
+    # are never one slot: `(F $a $b)` does not match `F($0,$0)`, and two binders that
+    # share a body cannot be spelled `$x` and `$y`. A literal is SOLVED here rather
+    # than declared -- read off whatever slot the node has there -- so two can come
+    # out equal unless this says otherwise. Written literals only: a right-hand side's
+    # fresh slots are minted apart already, and a pattern variable in a binder column
+    # is not a literal, it is the bound variable, free to be identified.
+    if literals_apart and len(pattern_literals) >= 2 and "literals-alias" not in bugs:
+        apart = " ".join(f"{slot_of[s]} {slot_of[s]}" for s in pattern_literals)
+        body.append(f"(= (map-length (map-of {apart})) {len(pattern_literals)})")
 
     # Right-hand side slots the pattern never pinned: mint them, avoiding every slot
     # named so far. The reference writes a literal `$x` there; on this side a name has
@@ -2153,6 +2207,7 @@ def compile_rule(
         slot_prefix=slot_prefix,
         fresh_batch=fresh_batch,
         refine=refine,
+        literals_apart=True,
     )
     body, cls_of, mp_of, slot_of = q.body, q.cls_of, q.mp_of, q.slot_of
     pvar_sorts, new, pay_name = q.pvar_sorts, q.new, q.pay_name

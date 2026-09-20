@@ -167,6 +167,35 @@
 (check (= unrelated (Fired)))
 (pop)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; TWO DIFFERENT LITERALS ARE TWO DIFFERENT SLOTS.
+;;;
+;;; The other half of the section above. `$x` written twice names both bound slots and
+;;; joins nothing; `$x` and `$y` are two rigid names that can never be one slot. So two
+;;; identity lambdas share their body only under the first spelling: under the second
+;;; the shared body would have to be `var $x` and `var $y` at once. The reference
+;;; refuses that match, and so does this. Found by the deep differential campaign as
+;;; `LIT1`; the shape needs the body to USE the bound variable, which is why the section
+;;; above, whose bodies are constants, could not show it.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Pair f g) (Same)
+         :when ((= f (Lam $x body))
+                (= g (Lam $x body)))
+         :name "same-literal-names-both")
+(let one-name (Pair (Lam $0 $0) (Lam $0 $0)))
+(run 4)
+(check (= one-name (Same)))
+(pop)
+(push)
+(rewrite (Pair f g) (Same)
+         :when ((= f (Lam $x body))
+                (= g (Lam $y body)))
+         :name "two-literals-two-slots")
+(let two-names (Pair (Lam $0 $0) (Lam $0 $0)))
+(run 4)
+(fail (check (= two-names (Same))))
+(pop)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A multipattern and a slot side condition on one rule: eta, but only where the
 ;;; function is itself a lambda.
 ;;;

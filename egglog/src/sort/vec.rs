@@ -1,6 +1,5 @@
 use crate::Write;
 use std::any::TypeId;
-use std::collections::BTreeMap;
 use std::iter::zip;
 
 use super::*;
@@ -203,59 +202,28 @@ impl ContainerSort for VecSort {
             && map.key().name() == map.value().name()
         {
             add_primitive!(eg, "find-mappings-total" = {self.clone(): VecSort} [xs: # (self.element())] -?> @VecContainer (arc) {{
-                let bv = state.base_values();
-                let cv = state.container_values();
-                let mut maps: Vec<BTreeMap<i64, i64>> = Vec::new();
-                for v in xs {
-                    let m = cv.get_val::<MapContainer>(v)?.clone();
-                    maps.push(
-                        m.data
-                            .iter()
-                            .map(|(k, val)| (bv.unwrap::<i64>(*k), bv.unwrap::<i64>(*val)))
-                            .collect(),
-                    );
-                }
-                let namings: Vec<BTreeMap<Value, Value>> =
-                    renaming_find_mappings_total(&maps, FIND_MAPPINGS_CAP)
-                        .into_iter()
-                        .map(|n| {
-                            n.into_iter()
-                                .map(|(k, v)| (bv.get::<i64>(k), bv.get::<i64>(v)))
-                                .collect()
-                        })
-                        .collect();
-                let data = namings
-                    .into_iter()
-                    .map(|n| state.register_container::<MapContainer>(MapContainer::renaming(n)))
-                    .collect();
+                let maps = slot_maps(&state, xs)?;
+                let data = register_renamings(&mut state, find_mappings_total(&maps, FIND_MAPPINGS_CAP));
                 Some(VecContainer { do_rebuild: false, data })
             }});
             add_primitive!(eg, "refine-namings" = {self.clone(): VecSort} [xs: # (self.element())] -?> @VecContainer (arc) {{
-                let bv = state.base_values();
-                let cv = state.container_values();
-                let mut maps: Vec<BTreeMap<i64, i64>> = Vec::new();
-                for v in xs {
-                    let m = cv.get_val::<MapContainer>(v)?.clone();
-                    maps.push(
-                        m.data
-                            .iter()
-                            .map(|(k, val)| (bv.unwrap::<i64>(*k), bv.unwrap::<i64>(*val)))
-                            .collect(),
-                    );
-                }
-                let merges: Vec<BTreeMap<Value, Value>> =
-                    renaming_refine_namings(&maps, FIND_MAPPINGS_CAP)
-                        .into_iter()
-                        .map(|n| {
-                            n.into_iter()
-                                .map(|(k, v)| (bv.get::<i64>(k), bv.get::<i64>(v)))
-                                .collect()
-                        })
-                        .collect();
-                let data = merges
-                    .into_iter()
-                    .map(|n| state.register_container::<MapContainer>(MapContainer::renaming(n)))
-                    .collect();
+                let maps = slot_maps(&state, xs)?;
+                let data = register_renamings(&mut state, refine_namings(&maps, FIND_MAPPINGS_CAP));
+                Some(VecContainer { do_rebuild: false, data })
+            }});
+            // One atom's solve with unification, read as a pair: element 0 is the
+            // atom's renaming and element 1 the merge its equations forced on slots
+            // named earlier. Everything comes packed in vectors because two of the
+            // argument lists vary in length: `(vec-of avoid domain)`, the cliques
+            // that must stay apart, the equations' pattern halves, and their node
+            // halves.
+            add_primitive!(eg, "find-mapping-unify" = |head: @VecContainer (arc), cliques: @VecContainer (arc), firsts: @VecContainer (arc), seconds: @VecContainer (arc)| -?> @VecContainer (arc) {{
+                let read = |v: &VecContainer| slot_maps(&state, v.data.iter().copied());
+                let head = read(&head)?;
+                let [avoid, domain] = head.as_slice() else { return None };
+                let (mapping, merge) =
+                    find_mapping_unify(avoid, domain, &read(&cliques)?, &read(&firsts)?, &read(&seconds)?)?;
+                let data = register_renamings(&mut state, [mapping, merge]);
                 Some(VecContainer { do_rebuild: false, data })
             }});
         }

@@ -61,6 +61,8 @@ RUN_TIMEOUT = 25
 #   XDIFF_BUGS=slot-late   a slot literal checked after the renaming, not with it
 #   XDIFF_BUGS=unordered   atoms compiled in the order written
 #   XDIFF_BUGS=union-id    the action unions classes instead of invocations
+#   XDIFF_BUGS=no-unify    an atom's equations may not identify two earlier mints
+#   XDIFF_BUGS=literals-alias   two different slot literals may come out as one slot
 #
 # `mutations.py` asserts that each of these still breaks the corpus by a recorded amount, so
 # a mutation that stops discriminating is a failure rather than a quiet gap. Two were removed
@@ -105,6 +107,41 @@ DISCONNECT_PROB = float(os.environ.get("XDIFF_DISC", "0.08"))
 # patterns match nothing, so this trades firing rate for coverage; measure both before
 # moving it. XDIFF_GENERAL=1 makes every rule general.
 GENERAL_PROB = float(os.environ.get("XDIFF_GENERAL", "0.25"))
+
+# How DEEP a generated term may be, and how often a binary node's two children are ONE
+# subterm. The unify shapes -- `UN1`, `UN2` -- need a body shared under two chains that
+# are themselves equal, which is a depth-3 term with a repeated subterm; at the default
+# depth of 2 and with children drawn independently the generator cannot build one, so
+# those cases are curated rather than found. Raise both to search that ground:
+# XDIFF_DEPTH=3 XDIFF_DUP=0.3, best with XDIFF_SYM=0.9 and XDIFF_LAM=0.55 as well. A
+# deeper term is a bigger e-graph and a slower case, which is why the default stays.
+MAX_DEPTH = int(os.environ.get("XDIFF_DEPTH", "2"))
+DUP_PROB = float(os.environ.get("XDIFF_DUP", "0"))
+
+# How often two EQUAL subterms of a seed term are read off as ONE pattern variable.
+# `flatten_to_atoms` gives every subterm a fresh variable, so a term with a repeated
+# subterm yields a pattern with two unrelated variables and the join that a shared
+# body would make is never written -- which is the other half of why the unify
+# shapes were never generated. With this on, a repeated body becomes a shared variable
+# and the rule says the two occurrences are the same term. A binder is never shared
+# this way: sharing two equal lambda chains as one variable would be the repeated
+# variable the perturbations already write, and it would hide the shape sharing exists
+# for -- two chains whose BODIES are one variable, so that the chains' bound slots have
+# to be identified. XDIFF_SHARE=0.7
+SHARE_PROB = float(os.environ.get("XDIFF_SHARE", "0"))
+
+# How often a binder read off a seed term is a PATTERN VARIABLE rather than a slot
+# literal. A variable binder is the bound variable itself, so it is what a match has to
+# identify across two chains; a literal is rigid on both sides and never needs to be.
+# XDIFF_PVBIND=0.6
+PVBIND_PROB = float(os.environ.get("XDIFF_PVBIND", "0.25"))
+
+# How often a variable leaf under a binder is one of the ENCLOSING binders' variables.
+# Leaves and binders are otherwise drawn independently, so most generated lambdas never
+# mention their own variable, and a body that ignores its binders puts no slot on the
+# inner class -- the shape unify exists for needs the body to reach back to the outer
+# binder. Off by default so the default case numbering is unchanged. XDIFF_USEBIND=0.6
+USEBIND_PROB = float(os.environ.get("XDIFF_USEBIND", "0"))
 
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('null',) | (op, t1, t2) | ('lam', ('var', n), body)
@@ -1524,27 +1561,135 @@ def curated():
         )
     )
 
+    # UN1 -- a shared variable reached through two REDUNDANT slots (FIXED).
+    #
+    #     terms  (k (g (f (var $0) null) null) (h (var $1) null))
+    #     union  (g (f (var $0) null) null)  =  (g (f (var $5) null) null)   slot 0 redundant in g's class
+    #     union  the k term  =  (k (g ...) (h (var $6) null))                slot 1 redundant in k's class
+    #     rule   p == (k q d2), q == (g d1 n), d1 == (f x n2), d2 == (h x n3)
+    #            =>  union p (sub d1 d2)
+    #
+    # Neither class carries the slot its node hands to `x`, so each atom that reaches
+    # `x` MINTS a name for it, and the two mints meet at the second occurrence. The
+    # reference's `unify` identifies them and the rule fires; a solve that reads its
+    # equations as facts about two distinct names declines, and it never does. That is
+    # what `find-mapping-unify` is for, and `no-unify` in `mutations.py` is this case
+    # failing again. `UN2` below is the bound-slot version of the same shape.
+    UN1_ATOMS = [("p", "k", "q", "d2"), ("q", "g", "d1", "n"), ("d1", "f", "x", "n2"), ("d2", "h", "x", "n3")]
+    UN1_Q = ("g", ("f", V0, NUL), NUL)
+    UN1_P = ("k", UN1_Q, ("h", V1, NUL))
+    cs.append(
+        Case(
+            "UN1-shared-var-through-two-redundant-slots",
+            [UN1_P],
+            [(UN1_Q, ("g", ("f", ("var", 5), NUL), NUL)), (UN1_P, ("k", UN1_Q, ("h", ("var", 6), NUL)))],
+            UN1_ATOMS,
+            ("p", "sub", "d1", "d2"),
+            [UN1_P, ("sub", ("f", V0, NUL), ("h", V1, NUL)), ("sub", ("f", V0, NUL), ("h", V0, NUL)), NUL],
+            rounds=6,
+        )
+    )
+
+    # UN2 -- Rudi's `unify-redundant-and-symmetric-appid`: a shared body under two
+    # BINDER chains, with the body's class carrying the swap symmetry.
+    #
+    #     term   (f L L)  where L = (lam $0 (lam $1 (f (var $0) (var $1))))
+    #     union  (f (var $0) (var $1))  =  (f (var $1) (var $0))
+    #     rule   out == (f l1 l2), l1 == (lam x b1), b1 == (lam y a), l2 == (lam w b2), b2 == (lam z a)
+    #            =>  union out (sub x w)
+    #
+    # The binders are PATTERN VARIABLES, so each chain's bound slots are the encoding's
+    # mints, and the second occurrence of `a` has to identify them with the first chain's
+    # -- either straight or, through the symmetry, swapped. Both pairings are matches, so
+    # both `(sub x x)` and `(sub x w)` with two slots join `out`'s class. On the oracle's
+    # side a binder variable is the flexible slot `$?x`, which `atom_lines` spells; written
+    # with rigid slots instead, the reference finds nothing, as the encoding does too.
+    UN2_L = ("lam", V0, ("lam", V1, ("f", V0, V1)))
+    UN2_ATOMS = [
+        ("out", "f", "l1", "l2"),
+        ("l1", "lam", "x", "b1"),
+        ("b1", "lam", "y", "a"),
+        ("l2", "lam", "w", "b2"),
+        ("b2", "lam", "z", "a"),
+    ]
+    cs.append(
+        Case(
+            "UN2-shared-body-under-two-binder-chains",
+            [("f", UN2_L, UN2_L)],
+            [(("f", V0, V1), ("f", V1, V0))],
+            UN2_ATOMS,
+            ("out", "sub", "x", "w"),
+            [("f", UN2_L, UN2_L), ("sub", V0, V0), ("sub", V0, V1), NUL],
+            rounds=6,
+        )
+    )
+
+    # LIT1 -- two DIFFERENT slot literals in binder columns, sharing a body that uses the
+    # bound variable (FIXED). Found by the deep campaign, seed 1006 case 37.
+    #
+    #     term   (lam $2 (var $2))
+    #     rule   r0 == (lam $s0 b), r1 == (lam $s1 b)   =>  union b (h r0 r0)
+    #
+    # Both atoms match the identity lambda. `$s0` and `$s1` are two pattern slots, and
+    # the reference never identifies two of those, so `b` cannot be one term in both
+    # atoms and the rule does not fire. The encoding solves a literal as a name and used
+    # to read `$s1` off the slot the shared body had already pinned; the rule fired,
+    # unioned the variable class with a slotless term, and every variable became one.
+    # `literals_apart` now states that a rule's different literals are different slots;
+    # `literals-alias` in `mutations.py` is this case failing again. With ONE literal in
+    # both binders the two sides always agreed: that spelling names both bound slots.
+    cs.append(
+        Case(
+            "LIT1-two-literals-one-bound-slot",
+            [("lam", V2, V2)],
+            [],
+            [("r0", "lam", "$s0", "b"), ("r1", "lam", "$s1", "b")],
+            ("b", "h", "r0", "r0"),
+            [("lam", V2, V2), ("h", V0, V1), ("h", V0, V0), NUL],
+            rounds=4,
+        )
+    )
+
     return cs
 
 
 # ------------------------------------------------------------------- the fuzzer
-def rand_term(rng, depth):
+def rand_term(rng, depth, bound=()):
+    """A random term; `bound` is the binders it sits under, outermost first."""
     if depth == 0 or rng.random() < 0.3:
         leaves = [("var", rng.randrange(3)), ("null",)]
+        if USEBIND_PROB and bound and rng.random() < USEBIND_PROB:
+            leaves[0] = ("var", rng.choice(bound))
         if rng.random() < NUM_PROB:
             # a payload leaf, so a term -- and the patterns read off it -- can hold one
             leaves.append(("num", rng.randrange(3)))
         return rng.choice(leaves)
     if rng.random() < LAM_PROB:
-        return ("lam", ("var", rng.randrange(3)), rand_term(rng, depth - 1))
+        v = rng.randrange(3)
+        return ("lam", ("var", v), rand_term(rng, depth - 1, (*bound, v)))
     op = rng.choice(BINOPS)
-    return (op, rand_term(rng, depth - 1), rand_term(rng, depth - 1))
+    a = rand_term(rng, depth - 1, bound)
+    b = a if DUP_PROB and rng.random() < DUP_PROB else rand_term(rng, depth - 1, bound)
+    return (op, a, b)
 
 
-def flatten_to_atoms(t, ctr, rng=None):
+def flatten_to_atoms(t, ctr, rng=None, memo=None):
     """Flatten a term into depth-1 atoms with fresh pvars, so the resulting
     multipattern is guaranteed to match that term. Leaves become bare pvars,
-    which is what a multipattern does with them anyway."""
+    which is what a multipattern does with them anyway.
+
+    `memo` remembers the variable a subterm was read off as, so an equal subterm met
+    again may reuse it (`SHARE_PROB`) and the pattern joins the two occurrences."""
+    if memo is None:
+        memo = {}
+    if SHARE_PROB and t in memo and t[0] != "lam" and rng is not None and rng.random() < SHARE_PROB:
+        return memo[t], []
+    root, atoms = _flatten_fresh(t, ctr, rng, memo)
+    memo[t] = root
+    return root, atoms
+
+
+def _flatten_fresh(t, ctr, rng, memo):
     if t[0] == "num":
         # A payload leaf is either kept LITERALLY in the child position -- `#k`, which is
         # a pattern about the payload -- or read as a plain variable like any other leaf.
@@ -1557,16 +1702,23 @@ def flatten_to_atoms(t, ctr, rng=None):
         ctr[0] += 1
         return f"x{ctr[0]}", []
     if t[0] == "lam":
-        pb, ab = flatten_to_atoms(t[2], ctr, rng)
+        pb, ab = flatten_to_atoms(t[2], ctr, rng, memo)
         ctr[0] += 1
         root = f"x{ctr[0]}"
-        # a binder's slot must be a literal; reuse one sometimes, so that two
-        # binders written with the same slot get exercised
-        sl = "$s0" if rng is not None and rng.random() < 0.3 else f"$s{ctr[0]}"
+        # A binder's slot is a literal, or a PATTERN VARIABLE standing for the bound
+        # variable -- the oracle spells that as the flexible slot `$?x`. A literal is
+        # reused sometimes, so that two binders written with the same slot get exercised.
+        r = rng.random() if rng is not None else 1.0
+        if r < PVBIND_PROB:
+            sl = f"bv{ctr[0]}"
+        elif r < PVBIND_PROB + (1 - PVBIND_PROB) / 3:
+            sl = "$s0"
+        else:
+            sl = f"$s{ctr[0]}"
         return root, ab + [(root, "lam", sl, pb)]
     op, a, b = t
-    pa, aa = flatten_to_atoms(a, ctr, rng)
-    pb, ab = flatten_to_atoms(b, ctr, rng)
+    pa, aa = flatten_to_atoms(a, ctr, rng, memo)
+    pb, ab = flatten_to_atoms(b, ctr, rng, memo)
     ctr[0] += 1
     root = f"x{ctr[0]}"
     return root, aa + ab + [(root, op, pa, pb)]
@@ -1610,8 +1762,8 @@ def rand_rule(rng, terms, unions):
         # drop a trailing atom (leaves a pvar unconstrained)
         if len(atoms) > 1 and rng.random() < 0.3:
             atoms = atoms[:-1]
-        # swap an atom's children -- never a binder's, whose slot has to stay
-        # first: `(lam ?x $s)` is not valid syntax on the reference side.
+        # swap an atom's children -- never a binder's, whose bound slot or variable has
+        # to stay first: the body is not a binder position on either side.
         swappable = [j for j, a in enumerate(atoms) if a[1] != "lam"]
         if swappable and rng.random() < 0.4:
             j = rng.choice(swappable)
@@ -1704,7 +1856,8 @@ def rand_general_rule(rng, terms, unions):
     Putting one anywhere else is not an unexplored shape but an ill-typed term: the
     reference's binary operators take applied ids, and it rejects `(k $s0 $s0)` with
     `FromSyntaxFailed`. That is why `rand_rule` draws children from the non-`$`
-    variables, and it is kept.
+    variables, and it is kept. The converse is allowed: a pattern variable in `lam`'s
+    first column is the bound variable, spelled `$?x` for the oracle.
     """
     ops = list(BINOPS)
     atoms, bound, nslot = [], [], 0
@@ -1718,10 +1871,14 @@ def rand_general_rule(rng, terms, unions):
 
         root = rng.choice(bound) if bound and rng.random() < 0.3 else f"r{k}"
         if op == "lam":
-            # the reference's `lam` takes a slot literal first, so that column is not free.
-            # Reusing an earlier binder's slot name is allowed: it constrains nothing, and
-            # that is itself a shape worth generating.
-            if nslot and rng.random() < 0.3:
+            # A binder column holds a slot literal or a pattern variable for the bound
+            # variable, which the oracle takes as the flexible slot `$?x`. Reusing an
+            # earlier binder's slot name is allowed: it constrains nothing, and that is
+            # itself a shape worth generating.
+            r = rng.random()
+            if r < 0.3:
+                c1 = pick()
+            elif nslot and r < 0.5:
                 c1 = f"$s{rng.randrange(nslot)}"
             else:
                 nslot += 1
@@ -1759,14 +1916,14 @@ def rand_general_rule(rng, terms, unions):
 
 def rand_case(rng, i):
     # A small term set over few ops, so patterns and terms collide often.
-    terms = [rand_top(rng, rng.randrange(1, 3)) for _ in range(rng.randrange(1, 3))]
+    terms = [rand_top(rng, rng.randrange(1, MAX_DEPTH + 1)) for _ in range(rng.randrange(1, 3))]
 
     # Unions biased towards creating redundancy: equating a term that has slots
     # with one that has fewer forces the difference to become redundant, which
     # is where matching gets interesting.
     unions = []
     for _ in range(rng.randrange(0, 3)):
-        a = rand_top(rng, rng.randrange(1, 3))
+        a = rand_top(rng, rng.randrange(1, MAX_DEPTH + 1))
         sa = sorted(slots(a))
         if len(sa) >= 2 and rng.random() < SYM_PROB:
             # A term equated with its own slot-swap: the class then proves a
@@ -1803,7 +1960,7 @@ def rand_case(rng, i):
 #: diverge -- one that starts agreeing is news, because the bug was fixed and the entry
 #: is stale, and its case then belongs in `curated()` where it is held green from then on.
 #:
-#: EMPTY is the good state. `K1` and `K2` both lived here and now sit in `curated()`.
+#: EMPTY is the good state. `K1`, `K2` and `LIT1` all lived here and now sit in `curated()`.
 
 
 def known_divergences():

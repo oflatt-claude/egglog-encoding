@@ -46,6 +46,21 @@ which is why nothing here records an index as if it were a name.
 
 `mode` is `iso` (default, the differential isomorphism sweep), `order`
 (order-independence, no oracle), or `checker` (mutate the checker itself).
+
+DEEP GROUND. The generator's knobs are environment variables and reach every worker,
+so a wider search is a knob set in front of the same command. This one puts terms at
+depth three with repeated subterms, shares a repeated body as one pattern variable,
+makes binders pattern variables more often, and has lambda bodies use their binders:
+
+    XDIFF_DEPTH=3 XDIFF_DUP=0.4 XDIFF_SHARE=0.7 XDIFF_LAM=0.55 XDIFF_PVBIND=0.6 \
+    XDIFF_USEBIND=0.6 python3 slotted/xdiff/campaign.py iso --cases 300 --seeds 8
+
+That is the ground the unify shapes `UN1` and `UN2` live on, which the default knobs
+cannot build at all. Measured on 2026-09-20: the pattern half of the shape appears in
+about one generated rule in 300, the whole shape with a matching term in about one in
+700, and 2400 cases were not enough for the sweep to catch `no-unify` on its own, so
+those cases stay curated. The same 2400 cases did surface `LIT1`, so the ground earns
+an occasional run.
 """
 
 import argparse

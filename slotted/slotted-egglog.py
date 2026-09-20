@@ -970,11 +970,11 @@ def claim_query(src, forms, sort):
 
     CHILDREN BEFORE PARENTS, which is the order a ground term can be solved in at all.
     An atom whose renaming is not pinned from above MINTS the slots it needs, and a
-    mint is a commitment nothing revisits -- so a class that has made a slot redundant
-    stops carrying it, the atoms below mint a new name, and a slot literal deeper down
-    then contradicts the mint. A term's invocation is a function of its children's, so
-    read the other way there is nothing to guess. `flatten` emits atoms parent-first,
-    so reversing it is that order.
+    mint is revised only where a later equation forces it -- so a class that has made a
+    slot redundant stops carrying it, the atoms below mint a new name, and a slot
+    literal deeper down has nothing that ties it back. A term's invocation is a
+    function of its children's, so read the other way there is nothing to guess.
+    `flatten` emits atoms parent-first, so reversing it is that order.
 
     ONE PATTERN PER TERM, since two terms joined only by their slot literals would have
     the second's root minted before those literals were known -- the same failure. So
@@ -1015,9 +1015,10 @@ def claim_query(src, forms, sort):
         body += query.body
         # DISTINCT slots, said outright. A renaming is injective, so two literals read
         # off two slots of one node come out apart -- but read off the SAME slot they
-        # come out equal, and nothing refuses that. For a rule that is right, since a
-        # `$x` there is a name to solve; for a term it is not, since `(Lam $0 $3)` is a
-        # constant function and must not match the identity one at $0 = $3.
+        # come out equal, and nothing refuses that. A rule says this over every literal
+        # it writes (`literals_apart`); a term says it by SCOPE, since `(Lam $0 $3)` is
+        # a constant function and must not match the identity one at $0 = $3, while
+        # `$0` under two disjoint binders is the same name for two slots.
         for group in slot_scopes(src.lang, pattern, {f"${slot}" for slot in free}):
             names = [query.slot_of[w] for w in sorted(group)]
             apart = " ".join(f"{v} {v}" for v in names)

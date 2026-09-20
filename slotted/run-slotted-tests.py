@@ -23,6 +23,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "slotted" / "tests"
 SNAPSHOTS = SRC_DIR / "snapshots"
+# Originals written against constructs the language refuses; see the README there.
+UNSUPPORTED = SRC_DIR / "unsupported"
 COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 
 
@@ -62,12 +64,14 @@ def slotted_sources():
         return ok
 
     # Recursive: `paper/` holds one file per reference test. `snapshots/` is compiled
-    # output rather than a source, and is excluded by name rather than by reading it.
+    # output rather than a source, and `unsupported/` holds originals the compiler
+    # refuses; both are excluded by name rather than by reading them.
     # `slotted/languages/` holds a language and its rules -- no terms, nothing asked --
     # so those come out as the rule libraries the count line reports. They are compiled
     # and loaded here so a broken one is caught where it lives, not in a test that
     # happens to include it.
-    files = [q for q in sorted(SRC_DIR.rglob("*.egg")) if SNAPSHOTS not in q.parents]
+    skipped = (SNAPSHOTS, UNSUPPORTED)
+    files = [q for q in sorted(SRC_DIR.rglob("*.egg")) if not any(d in q.parents for d in skipped)]
     files += sorted((ROOT / "slotted" / "languages").glob("*.egg"))
     return [q for q in files if is_source(q)]
 

@@ -169,15 +169,37 @@ already known — the edge from its parent, and any slot literal an earlier atom
 fixed — and `find-mapping-total` **mints** a fresh name for whatever is left
 over.
 
-A mint is a commitment nothing revisits, and that is the encoding's sharpest
-edge. Where an atom's slot is not constrained from above — a class that has made
-it redundant, or a binder's own slot — the mint decides it, and a later atom that
-needed a different answer simply fails to match.
+A mint is a placeholder, not a fact. Where an atom's slot is not constrained from
+above — a class that has made it redundant, or a binder's own slot — the mint
+names it, and a later atom may learn that two such names are one slot. That
+happens when two equations meet on one node slot: the renaming a second inner
+`Lam` inherits from its parent says `f3`, and a body `a` already matched under
+the first `Lam` says `f1`. Read as facts the two contradict; read as placeholders
+they identify `f3` with `f1`. This is the reference's `unify`.
 
-`refine-namings` is the partial remedy: after every atom is solved, it returns
-*every* way the match's slots may be merged, and the rule reads one with
-`vec-get` against an `Idx` row. Element 0 is the identity, so running out of
-indices degrades to not refining — matches are missed, never invented.
+So an atom with two or more equations is solved by `find-mapping-unify`, which
+returns a pair: the atom's renaming, and the **merge** its equations forced on
+the names already in play. Every renaming solved before that atom is read
+through the merge from then on — `(compose u m)` in the rule text — and so are
+the slot literals and the per-atom slot sets. What a merge may not do is
+identify two slots one **clique** says are apart: the slots of one e-node, or two
+slot literals the pattern wrote. Those are the two refusals of the reference's
+`union_slot`. One equation alone cannot force a merge, so an atom with a single
+equation keeps the plain `find-mapping-total`.
+
+A slot literal is solved rather than declared — read off whatever slot the node
+has in that column — so two different literals can come out equal, which the
+reference never allows: its written slots are rigid names. So a rule that writes
+two or more literals also states that they are pairwise distinct, as one
+`map-length` fact over all of them after refinement. A pattern variable in a
+binder column is not a literal and is left free.
+
+Unification decides only what the equations decide. Two mints no equation
+relates may still be one slot, and `refine-namings` is where that is settled:
+after every atom is solved, it returns *every* way the remaining slots may be
+merged, and the rule reads one with `vec-get` against an `Idx` row. Element 0 is
+the identity, so running out of indices degrades to not refining — matches are
+missed, never invented. This is the reference's `final_refine`.
 
 # Where the pieces live
 

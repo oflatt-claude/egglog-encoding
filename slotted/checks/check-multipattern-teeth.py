@@ -56,6 +56,12 @@ MUTATIONS = [
         {"no", "no2"},
     ),
     (
+        "two-literals-two-slots spelled with one literal, so the two bound slots are one name",
+        '(= g (Lam $y body)))\n         :name "two-literals-two-slots"',
+        '(= g (Lam $x body)))\n         :name "two-literals-two-slots"',
+        {"two-names"},
+    ),
+    (
         "same-body no longer shares the body",
         "(= g (Lam $w body))",
         "(= g (Lam $w body2))",
@@ -80,10 +86,13 @@ MUTATIONS = [
         {"root2"},
     ),
     (
+        # Two different literals are two different slots, so the mutated rule not only
+        # admits `(Add $2 $3)` -- breaking `root4` -- it also stops matching `(Add $2 $2)`
+        # and breaks `root3`, which egglog reaches first.
         "cross-slots stops asking the Add's children to be one slot",
         "(= r (Add $u $u))",
         "(= r (Add $u $u2))",
-        {"root4"},
+        {"root3", "root4"},
     ),
     (
         "abstract-constant takes its argument from the OTHER lambda",

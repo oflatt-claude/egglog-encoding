@@ -95,6 +95,8 @@ slotted-campaign:
 	python3 slotted/xdiff/campaign.py iso --cases 500 --seeds 32
 	python3 slotted/xdiff/campaign.py order --cases 100 --seeds 32
 	python3 slotted/xdiff/campaign.py checker --cases 200 --seeds 8
+	XDIFF_DEPTH=3 XDIFF_DUP=0.4 XDIFF_SHARE=0.7 XDIFF_LAM=0.55 XDIFF_PVBIND=0.6 XDIFF_USEBIND=0.6 \
+		python3 slotted/xdiff/campaign.py iso --cases 300 --seeds 8
 
 slotted-check-no-oracle:
 	cargo build

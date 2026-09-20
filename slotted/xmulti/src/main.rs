@@ -28,7 +28,9 @@
 //!   literal, and anything else becomes a *pattern variable* -- so `atom p add e 0` is
 //!   `?p == (add ?e ?0)` and matches any second child, where `atom p add e #0` asks for
 //!   the literal. The child count is free: the atoms are handed to
-//!   `MultiPattern::parse`, which takes any arity.
+//!   `MultiPattern::parse`, which takes any arity. A slot written `$?x` is a FLEXIBLE
+//!   one the reference does not pin, which is how a pattern variable in a binder
+//!   column is spelled here: `atom l lam $?x b` beside `atom x var $?x`.
 //! * a leaf needs an atom of its own, since an atom's child has to be a pattern
 //!   variable: `atom c sym:mult` then `atom p binop c a b`.
 //! * On that path a payload leaf is only a payload if its spelling is not also an

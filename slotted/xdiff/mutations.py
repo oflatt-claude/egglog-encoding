@@ -31,9 +31,17 @@ EXPECTED = {
     # A rule tries every naming an atom's renaming could take, so solving one from its
     # root alone under-constrains rather than failing outright and much of the corpus
     # recovers on another index. It still discriminates, so it stays.
-    "root-only": 12,  # an atom's renaming solved from its root alone
+    # `UN1` and `UN2` are the last two: with the child's equation dropped there is
+    # nothing left to unify, so the shared variable is never joined.
+    "root-only": 14,  # an atom's renaming solved from its root alone
     "union-id": 2,  # the action unions classes instead of invocations
     "slot-late": 1,  # a slot literal checked after the renaming, not with it
+    # Two equations naming one node slot read as a contradiction rather than as two
+    # placeholders for one slot: the atom keeps `find-mapping-total` and never merges.
+    "no-unify": 2,  # `UN1`, through two redundant slots; `UN2`, through two binder chains
+    # A rule's different slot literals are no longer said to be different slots, so two
+    # read off one bound slot come out equal and a rule the reference refuses fires.
+    "literals-alias": 1,  # `LIT1`
 }
 
 

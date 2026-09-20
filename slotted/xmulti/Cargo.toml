@@ -16,11 +16,16 @@ edition = "2021"
 # independently stacked weak-shape fix at
 # https://github.com/oflatt-claude/slotted-egraphs/pull/1. The latter is required
 # for legal terms that reuse one printed name in bound and uncovered/free positions.
-# It changes add/lookup normalization, not either matcher.
+# It changes add/lookup normalization, not either matcher. PR 46 also carries the
+# `MultiPattern` FLEXIBLE slot `$?x`, which is how a pattern variable in a binder
+# column is put to the reference (see `atom_lines` in `slotted-encoder.py`).
 #
 # All registered differential and isomorphism checks use `MultiPattern`: that is the
 # pattern language the encoding implements. The helper binary retains a dormant
 # `nested` directive for the unregistered matcher-comparison diagnostic, but
 # `ematch_all` is not used as ground truth. The `checks` feature and explicit
 # `eg.check()` calls make malformed reference state a hard failure.
-slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "e83e31c3b693395122bf3948ef8deef9d0c81059", features = ["checks"] }
+# TEMPORARY local override while the rev above is not yet pushed; the git line is the intended one.
+# slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "7bfa78208a56984c29192fff32e7cd8357db6ad5", features = ["checks"] }
+slotted-egraphs = { path = "/private/tmp/claude-501/-Users-oflatt-egglog/aec14d49-a309-4aa4-8c29-58bb75bc186d/scratchpad/fork", features = ["checks"] }
+
