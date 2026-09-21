@@ -143,6 +143,11 @@ pub struct EGraph {
     external_write_deps: BTreeMap<ExternalFunctionId, String>,
     /// Lowering data for the encoding's write primitives, keyed by the runtime
     /// id their call sites resolve to. See [`EGraph::mint_insert_plan`].
+    ///
+    /// Each spec names its table rather than holding a [`TableId`], and the
+    /// lowering resolves the name once, when the rule is built. The external
+    /// path re-resolves it per call, so the two agree only because a table
+    /// name is bound at most once (the typechecker rejects a redefinition).
     mint_specs: BTreeMap<ExternalFunctionId, MintSpec>,
     set_if_empty_specs: BTreeMap<ExternalFunctionId, SetIfEmptySpec>,
     view_col_specs: BTreeMap<ExternalFunctionId, ViewColSpec>,
@@ -435,6 +440,7 @@ impl EGraph {
             SetIfEmptySpec {
                 view_name: spec_name,
                 n_keys,
+                out_arity,
             },
         );
         id
@@ -522,39 +528,53 @@ impl EGraph {
         id
     }
 
-    /// The batched-instruction lowering of a `mint-<Relation>!` primitive, or
-    /// `None` if `func` is not one, its table is not installed yet, or its row
-    /// shape is one the instruction does not cover.
-    pub(crate) fn mint_insert_plan(&self, func: ExternalFunctionId) -> Option<MintInsertPlan> {
+    /// The batched-instruction lowering of a `mint-<Relation>!` primitive
+    /// called with `n_args` arguments, or `None` if `func` is not one, its
+    /// table is not installed yet, or its row shape is one the instruction does
+    /// not cover. A `None` here is not an error: the call site stays on the
+    /// per-row external path, which validates the same shape itself.
+    pub(crate) fn mint_insert_plan(
+        &self,
+        func: ExternalFunctionId,
+        n_args: usize,
+    ) -> Option<MintInsertPlan> {
         let spec = self.mint_specs.get(&func)?;
         let registry = self.action_registry.read().unwrap();
         let action = registry.lookup_table(&spec.table_name)?;
         let math = action.table_math;
-        // The instruction writes `args ++ [fresh] ++ vals` and pads to the
-        // physical width with the timestamp, exactly as `TableAction::insert`
-        // does through `write_table_row`. A subsumption column would need its
-        // own value, so leave those tables on the external path.
-        if math.subsume || spec.n_args + 1 + spec.vals.len() != math.func_cols {
+        // The instruction writes `args ++ [fresh] ++ vals` and fills what is
+        // left with the timestamp, which is the whole of `TableAction::insert`
+        // only when the timestamp is the sole trailing column. A subsumption
+        // column would need its own value, so leave those tables on the
+        // external path.
+        if math.subsume || n_args != spec.n_args || n_args + 1 + spec.vals.len() != math.func_cols {
             return None;
         }
         Some(MintInsertPlan {
             table: action.table,
             tail: spec.vals.clone(),
-            n_cols: math.table_columns(),
-            ts_col: math.ts_col(),
             counter: spec.counter,
             ts_counter: self.timestamp_counter,
         })
     }
 
-    /// The instruction lowering of a `set-if-empty-<View>!` primitive, or `None`
-    /// if `func` is not one or its table is not installed yet.
-    pub(crate) fn set_if_empty_plan(&self, func: ExternalFunctionId) -> Option<SetIfEmptyPlan> {
+    /// The instruction lowering of a `set-if-empty-<View>!` primitive called
+    /// with `n_args` arguments, or `None` if `func` is not one, its table is not
+    /// installed yet, or the call does not supply exactly one value per value
+    /// column. A short row would push the timestamp into a value column.
+    pub(crate) fn set_if_empty_plan(
+        &self,
+        func: ExternalFunctionId,
+        n_args: usize,
+    ) -> Option<SetIfEmptyPlan> {
         let spec = self.set_if_empty_specs.get(&func)?;
         let registry = self.action_registry.read().unwrap();
         let action = registry.lookup_table(&spec.view_name)?;
         let math = action.table_math;
-        if math.num_keys() != spec.n_keys {
+        if math.num_keys() != spec.n_keys
+            || math.n_vals() != spec.out_arity
+            || n_args != spec.n_keys + spec.out_arity
+        {
             return None;
         }
         Some(SetIfEmptyPlan {
@@ -562,18 +582,25 @@ impl EGraph {
             n_keys: spec.n_keys,
             ret_val_col: ColumnId::from_usize(math.ret_val_col()),
             subsume: math.subsume,
-            ts_counter: self.timestamp_counter,
         })
     }
 
-    /// The instruction lowering of a view-column read, or `None` if `func` is
-    /// not one or its table is not installed yet.
-    pub(crate) fn view_col_plan(&self, func: ExternalFunctionId) -> Option<ViewColPlan> {
+    /// The instruction lowering of a view-column read called with `n_args`
+    /// arguments (the keys plus the fallback), or `None` if `func` is not one or
+    /// its table is not installed yet.
+    pub(crate) fn view_col_plan(
+        &self,
+        func: ExternalFunctionId,
+        n_args: usize,
+    ) -> Option<ViewColPlan> {
         let spec = self.view_col_specs.get(&func)?;
         let registry = self.action_registry.read().unwrap();
         let action = registry.lookup_table(&spec.view_name)?;
         let math = action.table_math;
-        if math.num_keys() != spec.n_keys || spec.col_idx >= math.n_vals() {
+        if math.num_keys() != spec.n_keys
+            || spec.col_idx >= math.n_vals()
+            || n_args != spec.n_keys + 1
+        {
             return None;
         }
         Some(ViewColPlan {
@@ -2692,6 +2719,7 @@ struct MintSpec {
 struct SetIfEmptySpec {
     view_name: String,
     n_keys: usize,
+    out_arity: usize,
 }
 
 /// A lowered `set-if-empty`: the view table plus the layout its default row needs.
@@ -2701,7 +2729,6 @@ pub(crate) struct SetIfEmptyPlan {
     pub(crate) n_keys: usize,
     pub(crate) ret_val_col: ColumnId,
     pub(crate) subsume: bool,
-    pub(crate) ts_counter: CounterId,
 }
 
 /// What a view-column read (`view-proof-<View>`, `@UF_<S>_canon`,
@@ -2728,8 +2755,6 @@ pub(crate) struct ViewColPlan {
 pub(crate) struct MintInsertPlan {
     pub(crate) table: TableId,
     pub(crate) tail: Vec<Value>,
-    pub(crate) n_cols: usize,
-    pub(crate) ts_col: usize,
     pub(crate) counter: CounterId,
     pub(crate) ts_counter: CounterId,
 }

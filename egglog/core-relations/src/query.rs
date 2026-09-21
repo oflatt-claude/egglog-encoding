@@ -946,27 +946,33 @@ impl RuleBuilder<'_, '_> {
     /// Mint a fresh id from `counter` and stage `args ++ [fresh] ++ tail` into
     /// `table`, binding the fresh id to the returned variable.
     ///
-    /// `n_cols` is the table's physical width and `ts_col` the index of its
-    /// timestamp column; the row is padded to `n_cols` and stamped from
-    /// `ts_counter`.
-    #[allow(clippy::too_many_arguments)]
+    /// Every column past `tail` is filled with the value of `ts_counter`, so
+    /// this only covers tables whose sole trailing column is the timestamp.
     pub fn mint_insert(
         &mut self,
         table: TableId,
         args: &[QueryEntry],
         tail: Vec<Value>,
-        n_cols: usize,
-        ts_col: usize,
         counter: CounterId,
         ts_counter: CounterId,
     ) -> Result<Variable, QueryError> {
+        let n_cols = self.table_info(table).spec.arity();
+        // The written columns must leave room for at least the timestamp; a
+        // wider row would be silently truncated by the padding step.
+        let written = args.len() + 1 + tail.len();
+        if written >= n_cols {
+            return Err(QueryError::TableArityMismatch {
+                table,
+                expected: n_cols,
+                got: written,
+            });
+        }
         let res = self.qb.new_var();
         self.qb.instrs.push(Instr::MintInsert {
             table,
             args: args.to_vec(),
             tail,
             n_cols,
-            ts_col,
             counter,
             ts_counter,
             dst: res,

@@ -529,22 +529,19 @@ impl<'a> ExecutionState<'a> {
         if let Some(row) = self.db.table_info[table].table.get_row(key) {
             return row.vals;
         }
-        let row: PredictedRow = self
-            .predicted
-            .get_val(table, key, || {
-                Self::construct_new_row(
-                    &self.db,
-                    &mut self.buffers,
-                    &mut self.changed,
-                    table,
-                    key,
-                    vals,
-                )
-            })
-            .clone();
+        let row = self.predicted.get_val(table, key, || {
+            Self::construct_new_row(
+                &self.db,
+                &mut self.buffers,
+                &mut self.changed,
+                table,
+                key,
+                vals,
+            )
+        });
         with_pool_set(|ps| {
             let mut out = ps.get::<Vec<Value>>();
-            out.extend_from_slice(&row);
+            out.extend_from_slice(row.as_slice());
             out
         })
     }
@@ -557,21 +554,19 @@ impl<'a> ExecutionState<'a> {
         key: &[Value],
         vals: impl ExactSizeIterator<Item = MergeVal>,
     ) -> PredictedRow {
-        {
-            let mut new = PredictedRow::new();
-            new.reserve(key.len() + vals.len());
-            new.extend_from_slice(key);
-            for val in vals {
-                new.push(match val {
-                    MergeVal::Counter(ctr) => Value::from_usize(db.counters.inc(ctr)),
-                    MergeVal::Constant(c) => c,
-                })
-            }
-            buffers.lazy_init(table, || db.table_info[table].table.new_buffer());
-            buffers.stage_insert(table, &new);
-            *changed = true;
-            new
+        let mut new = PredictedRow::new();
+        new.reserve(key.len() + vals.len());
+        new.extend_from_slice(key);
+        for val in vals {
+            new.push(match val {
+                MergeVal::Counter(ctr) => Value::from_usize(db.counters.inc(ctr)),
+                MergeVal::Constant(c) => c,
+            })
         }
+        buffers.lazy_init(table, || db.table_info[table].table.new_buffer());
+        buffers.stage_insert(table, &new);
+        *changed = true;
+        new
     }
 
     /// A variant of [`ExecutionState::predict_val`] that avoids materializing the full row, and
@@ -706,6 +701,9 @@ impl ExecutionState<'_> {
                     return;
                 }
                 let mut out = bindings.take(*dst_var).unwrap();
+                // Only a lane that adds a new prediction stages a row. Notify
+                // the table once for the whole batch, and only if it did.
+                let predicted_before = self.predicted.data.len();
                 for_each_binding_with_mask!(mask_copy, args.as_slice(), bindings, |iter| {
                     iter.assign_vec(&mut out.vals, |offset, key| {
                         // First, check if the entry is already in the table:
@@ -747,15 +745,17 @@ impl ExecutionState<'_> {
                                         };
                                         row.push(val)
                                     }
-                                    // Insert it into the table. The table is
-                                    // notified once after the batch.
+                                    // Insert it into the table. Notification
+                                    // is batched, below.
                                     buffers.buffers[*table_id].stage_insert(&row);
                                     row
                                 });
                         row[dst_col.index()]
                     });
                 });
-                self.buffers.notify_list.notify(*table_id);
+                if self.predicted.data.len() != predicted_before {
+                    self.buffers.notify_list.notify(*table_id);
+                }
                 bindings.replace(out);
             }
             Instr::LookupWithDefault {
@@ -832,7 +832,6 @@ impl ExecutionState<'_> {
                 args,
                 tail,
                 n_cols,
-                ts_col,
                 counter,
                 ts_counter,
                 dst,
@@ -851,10 +850,8 @@ impl ExecutionState<'_> {
                             let fresh = Value::from_usize(counters.inc(counter));
                             row.push(fresh);
                             row.extend_from_slice(tail);
-                            // Pad to the physical width and stamp the
-                            // timestamp, matching `write_table_row`.
+                            // Every remaining column is the timestamp.
                             row.resize(*n_cols, ts);
-                            row[*ts_col] = ts;
                             buf.stage_insert(&row);
                             out[idx] = fresh;
                         }
@@ -1068,7 +1065,7 @@ pub(crate) enum Instr {
 
     /// Mint a fresh id from `counter`, append it to `args` (followed by the
     /// constant `tail`), stage the resulting row into `table`, and bind the
-    /// fresh id to `dst`.
+    /// fresh id to `dst`. Any column past `tail` is filled with the timestamp.
     ///
     /// This is the batched form of the term encoding's `mint-<Relation>!`
     /// primitive: the whole batch is gathered once and staged through a single
@@ -1081,8 +1078,6 @@ pub(crate) enum Instr {
         tail: Vec<Value>,
         /// Total physical column count of a row in `table`.
         n_cols: usize,
-        /// Index of the timestamp column.
-        ts_col: usize,
         /// Counter minting the fresh id.
         counter: CounterId,
         /// Counter holding the current timestamp.
