@@ -614,7 +614,7 @@ impl<'a> ExecutionState<'a> {
 /// instruction.
 type RowScratch = SmallVec<[Value; 12]>;
 
-/// Where each column of a row comes from: one entry per element of `args`, in
+/// Where each column of a row comes from: one entry per element of `vals`, in
 /// order.
 ///
 /// A variable's entry borrows its whole binding slice, so [`gather_row`] indexes
@@ -622,22 +622,84 @@ type RowScratch = SmallVec<[Value; 12]>;
 /// the lanes come from; a shorter one panics rather than silently truncating the
 /// batch.
 fn row_sources<'a>(
-    args: &[QueryEntry],
+    vals: impl IntoIterator<Item = WriteVal>,
     bindings: &'a Bindings,
-) -> SmallVec<[ValueSource<'a, Value>; 12]> {
-    args.iter()
-        .map(|entry| value_source(entry, bindings))
+) -> SmallVec<[WriteSource<'a>; 12]> {
+    vals.into_iter()
+        .map(|val| match val {
+            WriteVal::QueryEntry(entry) => WriteSource::Value(value_source(&entry, bindings)),
+            WriteVal::IncCounter(ctr) => WriteSource::Counter(ctr),
+            WriteVal::CurrentVal(col) => WriteSource::Current(col),
+        })
         .collect()
+}
+
+/// One column's source within [`row_sources`]. `Counter` and `Current` are
+/// per-row: a counter yields a fresh value for every lane, and `Current` copies
+/// a column written earlier in the same row.
+enum WriteSource<'a> {
+    Value(ValueSource<'a, Value>),
+    Counter(CounterId),
+    Current(usize),
 }
 
 /// Overwrite `out` with lane `idx` of `sources`. Panics if any source slice is
 /// shorter than `idx + 1` (see [`row_sources`]).
-fn gather_row(sources: &[ValueSource<'_, Value>], idx: usize, out: &mut RowScratch) {
+fn gather_row(sources: &[WriteSource<'_>], counters: &Counters, idx: usize, out: &mut RowScratch) {
     out.clear();
-    out.extend(sources.iter().map(|source| source.at(idx)));
+    for source in sources {
+        let val = match source {
+            WriteSource::Value(source) => source.at(idx),
+            WriteSource::Counter(ctr) => Value::from_usize(counters.inc(*ctr)),
+            WriteSource::Current(col) => out[*col],
+        };
+        out.push(val);
+    }
 }
 
 impl ExecutionState<'_> {
+    /// Stage one row per live lane into `table`.
+    fn stage_rows(&mut self, table: TableId, vals: &[WriteVal], mask: &Mask, bindings: &Bindings) {
+        let counters = self.db.counters;
+        let sources = row_sources(vals.iter().copied(), bindings);
+        let mut row = RowScratch::new();
+        self.stage_batch(table, |buf| {
+            for idx in mask.ones() {
+                gather_row(&sources, counters, idx, &mut row);
+                buf.stage_insert(&row);
+            }
+        });
+    }
+
+    /// [`ExecutionState::stage_rows`], also binding column `col` of each staged
+    /// row to `dst`. Kept separate so the common unbound insert stays a tight
+    /// gather-and-stage loop.
+    fn stage_rows_binding(
+        &mut self,
+        table: TableId,
+        vals: &[WriteVal],
+        col: ColumnId,
+        dst: Variable,
+        mask: &Mask,
+        bindings: &mut Bindings,
+    ) {
+        let counters = self.db.counters;
+        let mut out = with_pool_set(|ps| ps.get::<Vec<Value>>());
+        out.resize(bindings.matches, Value::stale());
+        {
+            let sources = row_sources(vals.iter().copied(), bindings);
+            let mut row = RowScratch::new();
+            self.stage_batch(table, |buf| {
+                for idx in mask.ones() {
+                    gather_row(&sources, counters, idx, &mut row);
+                    buf.stage_insert(&row);
+                    out[idx] = row[col.index()];
+                }
+            });
+        }
+        bindings.insert(dst, &out);
+    }
+
     /// Returns the number of matches that make it to the end of the instructions
     pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) -> usize {
         if bindings.var_offsets.next_id().rep() == 0 {
@@ -818,48 +880,10 @@ impl ExecutionState<'_> {
                 lookup_result.union(&to_call_func);
                 *mask = lookup_result;
             }
-            Instr::Insert { table, vals } => {
-                let sources = row_sources(vals, bindings);
-                let mut row = RowScratch::new();
-                self.stage_batch(*table, |buf| {
-                    for idx in mask.ones() {
-                        gather_row(&sources, idx, &mut row);
-                        buf.stage_insert(&row);
-                    }
-                });
-            }
-            Instr::MintInsert {
-                table,
-                args,
-                tail,
-                n_cols,
-                counter,
-                ts_counter,
-                dst,
-            } => {
-                let ts = Value::from_usize(self.read_counter(*ts_counter));
-                let mut out = with_pool_set(|ps| ps.get::<Vec<Value>>());
-                out.resize(bindings.matches, Value::stale());
-                let counter = *counter;
-                let counters = self.db.counters;
-                {
-                    let sources = row_sources(args, bindings);
-                    let mut row = RowScratch::new();
-                    self.stage_batch(*table, |buf| {
-                        for idx in mask.ones() {
-                            gather_row(&sources, idx, &mut row);
-                            let fresh = Value::from_usize(counters.inc(counter));
-                            row.push(fresh);
-                            row.extend_from_slice(tail);
-                            // Every remaining column is the timestamp.
-                            row.resize(*n_cols, ts);
-                            buf.stage_insert(&row);
-                            out[idx] = fresh;
-                        }
-                    });
-                }
-                bindings.insert(*dst, &out);
-            }
+            Instr::Insert { table, vals, bind } => match *bind {
+                None => self.stage_rows(*table, vals, mask, bindings),
+                Some((col, dst)) => self.stage_rows_binding(*table, vals, col, dst, mask, bindings),
+            },
             Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
                 (QueryEntry::Var(v1), QueryEntry::Var(v2)) => {
                     for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
@@ -892,11 +916,12 @@ impl ExecutionState<'_> {
                 }
             },
             Instr::Remove { table, args } => {
-                let sources = row_sources(args, bindings);
+                let counters = self.db.counters;
+                let sources = row_sources(args.iter().copied().map(WriteVal::QueryEntry), bindings);
                 let mut row = RowScratch::new();
                 self.stage_batch(*table, |buf| {
                     for idx in mask.ones() {
-                        gather_row(&sources, idx, &mut row);
+                        gather_row(&sources, counters, idx, &mut row);
                         buf.stage_remove(&row);
                     }
                 });
@@ -1011,11 +1036,16 @@ pub(crate) enum Instr {
         dst_var: Variable,
     },
 
-    /// Insert the given return value value with the provided arguments into the
-    /// table.
+    /// Stage one row per lane into `table`, one column per entry of `vals`.
+    ///
+    /// A [`WriteVal::IncCounter`] column mints a fresh value for every lane, so
+    /// this also covers the term encoding's `mint-<Relation>!`: `bind` names the
+    /// column holding the minted id and the variable to bind it to.
     Insert {
         table: TableId,
-        vals: Vec<QueryEntry>,
+        vals: Vec<WriteVal>,
+        /// Bind this column of each staged row to a variable.
+        bind: Option<(ColumnId, Variable)>,
     },
 
     /// Insert `vals` into `table` if `l` and `r` are equal.
@@ -1062,26 +1092,6 @@ pub(crate) enum Instr {
     AssertAnyNe {
         ops: Vec<QueryEntry>,
         divider: usize,
-    },
-
-    /// Mint a fresh id from `counter`, append it to `args` (followed by the
-    /// constant `tail`), stage the resulting row into `table`, and bind the
-    /// fresh id to `dst`. Any column past `tail` is filled with the timestamp.
-    ///
-    /// This is the batched form of the term encoding's `mint-<Relation>!`
-    /// primitive.
-    MintInsert {
-        table: TableId,
-        args: Vec<QueryEntry>,
-        /// Constant value columns written after the minted id.
-        tail: Vec<Value>,
-        /// Total physical column count of a row in `table`.
-        n_cols: usize,
-        /// Counter minting the fresh id.
-        counter: CounterId,
-        /// Counter holding the current timestamp.
-        ts_counter: CounterId,
-        dst: Variable,
     },
 
     /// Read the value of a counter and write it to the given variable.

@@ -1237,14 +1237,15 @@ fn lookup_with_fallback_partial_success_inner() {
 }
 
 #[test]
-fn mint_insert_batch() {
-    run_serial_and_parallel(mint_insert_batch_inner);
+fn insert_and_bind_batch() {
+    run_serial_and_parallel(insert_and_bind_batch_inner);
 }
 
-fn mint_insert_batch_inner() {
+fn insert_and_bind_batch_inner() {
     // Insert (src 1) (src 2) (src 3).
-    // Iterate over src, binding x to 1, 2, 3, and for each one mint a fresh id,
-    // stage (node x fresh 7 ts), and record the id in (out x fresh).
+    // Iterate over src, binding x to 1, 2, 3, and for each one mint a fresh id
+    // from a counter column, stage (node x fresh 7 ts), and record the id in
+    // (out x fresh).
     let mut db = Database::default();
     let mut add_table = |n_keys: usize, n_cols: usize, sort_col: Option<ColumnId>| {
         db.add_table(
@@ -1285,22 +1286,22 @@ fn mint_insert_batch_inner() {
     let y = query.new_var_named("y");
     query.add_atom(src, &[x.into(), y.into()], &[]).unwrap();
     let mut rb = query.build();
-    // One argument plus the minted id and the `7` tail fills three of `node`'s
-    // four columns, leaving the timestamp as the only padding column.
-    let fresh = rb
-        .mint_insert(node, &[x.into()], vec![v(7)], id_counter, ts_counter)
-        .unwrap();
-    // A row that would not leave room for the timestamp is rejected.
+    let ts = rb.read_counter(ts_counter);
+    // `node` is (arg, minted, 7, ts); binding column 1 reports what was minted.
+    let row = [
+        WriteVal::QueryEntry(x.into()),
+        WriteVal::IncCounter(id_counter),
+        WriteVal::QueryEntry(v(7).into()),
+        WriteVal::QueryEntry(ts.into()),
+    ];
+    let fresh = rb.insert_and_bind(node, &row, ColumnId::new(1)).unwrap();
+    // A row that does not fill the table is rejected, as is an out-of-range
+    // bind column.
     assert!(
-        rb.mint_insert(
-            node,
-            &[x.into(), y.into()],
-            vec![v(7)],
-            id_counter,
-            ts_counter
-        )
-        .is_err()
+        rb.insert_and_bind(node, &row[..3], ColumnId::new(1))
+            .is_err()
     );
+    assert!(rb.insert_and_bind(node, &row, ColumnId::new(4)).is_err());
     rb.insert(out, &[x.into(), fresh.into()]).unwrap();
     rb.build();
     let rs = rsb.build();

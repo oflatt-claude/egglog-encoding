@@ -395,18 +395,27 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
-        // A mint cannot fail, so it needs no panic fallback: lower it to the
-        // batched instruction.
+        // A mint cannot fail, so it needs no panic fallback: lower it to a
+        // batched insert whose minted column comes from the id counter.
         if let Some(mint) = self.egraph.mint_insert_plan(func, args.len()) {
             self.query.add_rule.push(Box::new(move |inner, rb| {
-                let args = inner.convert_all(&args);
-                let var = rb.mint_insert(
-                    mint.table,
-                    &args,
-                    mint.tail.clone(),
-                    mint.counter,
-                    mint.ts_counter,
-                )?;
+                let mut row: Vec<WriteVal> = inner
+                    .convert_all(&args)
+                    .iter()
+                    .copied()
+                    .map(WriteVal::QueryEntry)
+                    .collect();
+                row.push(WriteVal::IncCounter(mint.counter));
+                row.extend(mint.tail.iter().map(|v| WriteVal::from(*v)));
+                mint.math.write_table_row(
+                    &mut row,
+                    RowVals {
+                        timestamp: WriteVal::QueryEntry(inner.next_ts()),
+                        subsume: mint.math.subsume.then(|| WriteVal::from(NOT_SUBSUMED)),
+                        ret_val: None,
+                    },
+                );
+                let var = rb.insert_and_bind(mint.table, &row, mint.minted_col)?;
                 inner.mapping.insert(res.id, var.into());
                 Ok(())
             }));

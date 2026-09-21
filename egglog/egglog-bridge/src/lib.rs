@@ -530,9 +530,9 @@ impl EGraph {
 
     /// The batched-instruction lowering of a `mint-<Relation>!` primitive
     /// called with `n_args` arguments, or `None` if `func` is not one, its
-    /// table is not installed yet, or its row shape is one the instruction does
-    /// not cover. A `None` here is not an error: the call site stays on the
-    /// per-row external path, which validates the same shape itself.
+    /// table is not installed yet, or the call does not fill the row. A `None`
+    /// here is not an error: the call site stays on the per-row external path,
+    /// which validates the same shape itself.
     pub(crate) fn mint_insert_plan(
         &self,
         func: ExternalFunctionId,
@@ -542,18 +542,17 @@ impl EGraph {
         let registry = self.action_registry.read().unwrap();
         let action = registry.lookup_table(&spec.table_name)?;
         let math = action.table_math;
-        // The instruction writes `args ++ [fresh] ++ vals` and fills what is
-        // left with the timestamp, which matches `TableAction::insert` only
-        // when the timestamp is the sole trailing column: a subsumption column
-        // needs its own value, so leave those tables on the external path.
-        if math.subsume || n_args != spec.n_args || n_args + 1 + spec.vals.len() != math.func_cols {
+        // The row is `args ++ [fresh] ++ vals`, so the minted id sits at
+        // `n_args` and the three together must cover every function column.
+        if n_args != spec.n_args || n_args + 1 + spec.vals.len() != math.func_cols {
             return None;
         }
         Some(MintInsertPlan {
             table: action.table,
             tail: spec.vals.clone(),
             counter: spec.counter,
-            ts_counter: self.timestamp_counter,
+            math,
+            minted_col: ColumnId::from_usize(n_args),
         })
     }
 
@@ -2747,13 +2746,17 @@ pub(crate) struct ViewColPlan {
     pub(crate) dst_col: ColumnId,
 }
 
-/// A lowered mint: what [`core_relations`] needs to stage the row.
+/// A lowered mint: what the rule builder needs to stage the row.
 #[derive(Clone)]
 pub(crate) struct MintInsertPlan {
     pub(crate) table: TableId,
+    /// Constant value columns written after the minted id.
     pub(crate) tail: Vec<Value>,
+    /// Counter minting the fresh id.
     pub(crate) counter: CounterId,
-    pub(crate) ts_counter: CounterId,
+    pub(crate) math: SchemaMath,
+    /// The column the minted id lands in.
+    pub(crate) minted_col: ColumnId,
 }
 
 /// A struct containing possible non-key portions of a table row. To be used with
