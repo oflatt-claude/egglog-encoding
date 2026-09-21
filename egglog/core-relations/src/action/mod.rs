@@ -290,8 +290,13 @@ pub(crate) struct ExtractedBinding {
 }
 
 /// The row an [`ExecutionState`] has staged for a key but not yet merged.
-// Held inline rather than pooled: entries live for the whole rule-set run, so
-// the pool could never recycle them.
+//
+// Held inline rather than pooled. Nothing returns these to the pool during a
+// rule-set run -- the map lives as long as the `ExecutionState` -- so a pooled
+// `Vec` cost an allocation per miss, where inline a row this wide is free. The
+// pool would have recycled across runs, so a row past the inline capacity now
+// reaches the allocator instead; measured on three workloads that is under 1%
+// of predicted rows, the bulk of them six columns wide.
 pub(crate) type PredictedRow = SmallVec<[Value; 8]>;
 
 #[derive(Default)]
