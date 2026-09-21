@@ -25,7 +25,7 @@ edition = "2021"
 # `nested` directive for the unregistered matcher-comparison diagnostic, but
 # `ematch_all` is not used as ground truth. The `checks` feature and explicit
 # `eg.check()` calls make malformed reference state a hard failure.
-# TEMPORARY local override while the rev above is not yet pushed; the git line is the intended one.
-# slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "7bfa78208a56984c29192fff32e7cd8357db6ad5", features = ["checks"] }
-slotted-egraphs = { path = "/private/tmp/claude-501/-Users-oflatt-egglog/aec14d49-a309-4aa4-8c29-58bb75bc186d/scratchpad/fork", features = ["checks"] }
+# The rev lives in oflatt's fork until the PR carrying it into oflatt-claude's branch
+# is merged; the SHAs are the same on both once it is fast-forwarded.
+slotted-egraphs = { git = "https://github.com/oflatt/slotted-egraphs.git", rev = "7bfa78208a56984c29192fff32e7cd8357db6ad5", features = ["checks"] }
 
