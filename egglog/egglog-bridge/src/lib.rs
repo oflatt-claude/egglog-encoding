@@ -543,10 +543,9 @@ impl EGraph {
         let action = registry.lookup_table(&spec.table_name)?;
         let math = action.table_math;
         // The instruction writes `args ++ [fresh] ++ vals` and fills what is
-        // left with the timestamp, which is the whole of `TableAction::insert`
-        // only when the timestamp is the sole trailing column. A subsumption
-        // column would need its own value, so leave those tables on the
-        // external path.
+        // left with the timestamp, which matches `TableAction::insert` only
+        // when the timestamp is the sole trailing column: a subsumption column
+        // needs its own value, so leave those tables on the external path.
         if math.subsume || n_args != spec.n_args || n_args + 1 + spec.vals.len() != math.func_cols {
             return None;
         }
@@ -2703,8 +2702,7 @@ struct SchemaMath {
 }
 
 /// What a `mint-<Relation>!` primitive would do, kept so the rule builder can
-/// lower a call site to a batched [`core_relations`] instruction instead of a
-/// per-row external call.
+/// lower a call site to a batched [`core_relations`] instruction.
 #[derive(Clone)]
 struct MintSpec {
     table_name: String,
@@ -2749,8 +2747,7 @@ pub(crate) struct ViewColPlan {
     pub(crate) dst_col: ColumnId,
 }
 
-/// A lowered mint: everything [`core_relations`] needs to stage the row without
-/// consulting the action registry per row.
+/// A lowered mint: what [`core_relations`] needs to stage the row.
 #[derive(Clone)]
 pub(crate) struct MintInsertPlan {
     pub(crate) table: TableId,

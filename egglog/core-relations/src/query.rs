@@ -948,6 +948,7 @@ impl RuleBuilder<'_, '_> {
     ///
     /// Every column past `tail` is filled with the value of `ts_counter`, so
     /// this only covers tables whose sole trailing column is the timestamp.
+    /// Errors if `args`, the minted id and `tail` leave no room for it.
     pub fn mint_insert(
         &mut self,
         table: TableId,
@@ -957,8 +958,7 @@ impl RuleBuilder<'_, '_> {
         ts_counter: CounterId,
     ) -> Result<Variable, QueryError> {
         let n_cols = self.table_info(table).spec.arity();
-        // The written columns must leave room for at least the timestamp; a
-        // wider row would be silently truncated by the padding step.
+        // A wider row would be silently truncated by the padding step below.
         let written = args.len() + 1 + tail.len();
         if written >= n_cols {
             return Err(QueryError::TableArityMismatch {

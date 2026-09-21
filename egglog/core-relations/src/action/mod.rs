@@ -289,8 +289,9 @@ pub(crate) struct ExtractedBinding {
     pub(crate) vals: Pooled<Vec<Value>>,
 }
 
-/// A predicted row, held inline. Entries live for the whole rule-set run, so a
-/// pooled `Vec` here could never be recycled and cost one allocation apiece.
+/// The row an [`ExecutionState`] has staged for a key but not yet merged.
+// Held inline rather than pooled: entries live for the whole rule-set run, so
+// the pool could never recycle them.
 pub(crate) type PredictedRow = SmallVec<[Value; 8]>;
 
 #[derive(Default)]
@@ -701,8 +702,8 @@ impl ExecutionState<'_> {
                     return;
                 }
                 let mut out = bindings.take(*dst_var).unwrap();
-                // Only a lane that adds a new prediction stages a row. Notify
-                // the table once for the whole batch, and only if it did.
+                // Only a lane that adds a new prediction stages a row, so
+                // notify once for the batch, and only if one did.
                 let predicted_before = self.predicted.data.len();
                 for_each_binding_with_mask!(mask_copy, args.as_slice(), bindings, |iter| {
                     iter.assign_vec(&mut out.vals, |offset, key| {
@@ -1068,9 +1069,7 @@ pub(crate) enum Instr {
     /// fresh id to `dst`. Any column past `tail` is filled with the timestamp.
     ///
     /// This is the batched form of the term encoding's `mint-<Relation>!`
-    /// primitive: the whole batch is gathered once and staged through a single
-    /// mutation buffer, rather than resolving the target table and staging one
-    /// row per call.
+    /// primitive.
     MintInsert {
         table: TableId,
         args: Vec<QueryEntry>,

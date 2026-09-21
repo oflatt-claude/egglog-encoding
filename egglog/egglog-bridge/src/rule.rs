@@ -395,8 +395,8 @@ impl RuleBuilder<'_> {
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
-        // A mint cannot fail, so it needs no panic fallback and no per-row
-        // external dispatch: lower it to the batched instruction.
+        // A mint cannot fail, so it needs no panic fallback: lower it to the
+        // batched instruction.
         if let Some(mint) = self.egraph.mint_insert_plan(func, args.len()) {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let args = inner.convert_all(&args);
@@ -412,9 +412,7 @@ impl RuleBuilder<'_> {
             }));
             return res;
         }
-        // `set-if-empty` is exactly a lookup-or-insert on the view, and that
-        // instruction does one vectorized lookup per batch rather than one
-        // registry-mediated probe per row.
+        // `set-if-empty` is exactly a lookup-or-insert on the view.
         if let Some(plan) = self.egraph.set_if_empty_plan(func, args.len()) {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let all = inner.convert_all(&args);
@@ -431,8 +429,8 @@ impl RuleBuilder<'_> {
             }));
             return res;
         }
-        // A view-column read is a lookup with a per-row fallback and cannot
-        // fail, so it lowers to one vectorized instruction with no panic path.
+        // A view-column read is a lookup with a fallback and cannot fail, so it
+        // needs no panic path either.
         if let Some(plan) = self.egraph.view_col_plan(func, args.len()) {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let all = inner.convert_all(&args);
