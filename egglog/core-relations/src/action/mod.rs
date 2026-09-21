@@ -987,6 +987,17 @@ impl ExecutionState<'_> {
             }
             Instr::AssertEq(l, r) => assert_impl(bindings, mask, l, r, |l, r| l == r),
             Instr::AssertNe(l, r) => assert_impl(bindings, mask, l, r, |l, r| l != r),
+            Instr::IncCounter { counter, dst } => {
+                // One atomic for the batch. Lanes take consecutive values in
+                // mask order, exactly as one `inc` per lane would assign them.
+                let base = self.db.counters.inc_by(*counter, mask.count_ones());
+                let mut vals = with_pool_set(|ps| ps.get::<Vec<Value>>());
+                vals.resize(bindings.matches, Value::stale());
+                for (i, idx) in mask.ones().enumerate() {
+                    vals[idx] = Value::from_usize(base + i);
+                }
+                bindings.insert(*dst, &vals);
+            }
             Instr::ReadCounter { counter, dst } => {
                 let mut vals = with_pool_set(|ps| ps.get::<Vec<Value>>());
                 let ctr_val = Value::from_usize(self.read_counter(*counter));
@@ -1098,6 +1109,11 @@ pub(crate) enum Instr {
         ops: Vec<QueryEntry>,
         divider: usize,
     },
+
+    /// Mint a fresh value from a counter for each live lane and write it to the
+    /// given variable. Unlike [`Instr::ReadCounter`] the lanes differ: each one
+    /// advances the counter.
+    IncCounter { counter: CounterId, dst: Variable },
 
     /// Read the value of a counter and write it to the given variable.
     ReadCounter {
