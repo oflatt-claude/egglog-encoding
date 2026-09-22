@@ -1538,25 +1538,63 @@ def slot_literals(t, out=None):
     return out
 
 
-def rhs_binder_literals(lang, t, out=None):
-    """The slot literals a right-hand side BINDS: those in a binder column of a node it builds.
-
-    Such a slot has to be fresh for everything else the match carries, or the node
-    built captures: matching `let x = y in (λw. x w)` with `w` read as `y` is a fine
-    alpha-variant, and `let-lam-diff` then builds `λy. let x = y in x y`. So these are
-    kept apart from every other slot -- never merged by refinement, never forced by
-    an equation -- which is what a binder the pattern wrote is for anyway.
-    """
-    out = set() if out is None else out
-    if not isinstance(t, tuple) or len(t) < 2 or t[0] in ("pv", "sl", SUBST):
+def _binder_scopes(lang, t, under=frozenset(), out=None):
+    """For each pattern variable, the binder slots each of its occurrences sits under."""
+    out = {} if out is None else out
+    if not isinstance(t, tuple) or len(t) < 2 or t[0] == "sl":
+        return out
+    if t[0] == "pv":
+        out.setdefault(t[1], []).append(frozenset(under))
+        return out
+    if t[0] == SUBST:
+        for a in t[1:]:
+            _binder_scopes(lang, a, under, out)
         return out
     op = lang[t[0]]
     kids, _pays = op.split(t[1:])
+    bound = frozenset(kids[i][1] for i in op.binders if isinstance(kids[i], tuple) and kids[i][0] == "sl")
     for i, k in enumerate(kids):
-        if i in op.binders and isinstance(k, tuple) and k[0] == "sl":
-            out.add(k[1])
-        rhs_binder_literals(lang, k, out)
+        _binder_scopes(lang, k, under | bound if i == op.covered else under, out)
     return out
+
+
+def capture_guards(lang, lhs, rhs):
+    """The `(not-free $b v)` guards a rule owes, as `($b, v)` pairs.
+
+    A matched binder's bound slot may be read as any name -- the name of one of the
+    term's free variables included, which is a fine alpha-variant of the term. That is
+    the matcher's semantics here and in the reference's `MultiPattern`, and a language
+    may want it (a bound variable identified with a free one, as `bound-aliasing`
+    does). It puts one duty on a rule: where its right-hand side rebinds a slot `$b`
+    over a variable `v` that the left-hand side did NOT match under `$b`, the reading
+    with `$b` as `v`'s free variable builds a node that captures `v`. `let-lam-diff`
+    reading `let x = y in (λw. x w)` with `w` as `y` builds `λy. let x = y in x y`. So
+    such a rule has to say `(not-free $b v)`, and this is the list of those it owes.
+    Under the reference's nested matcher the guards are vacuous, its bound slots
+    staying injective, so a reference rule set can lack them and still be faithful.
+
+    A slot the right-hand side alone binds is minted fresh and owes nothing.
+    """
+    if not isinstance(rhs, tuple) or rhs[0] in ("pv", "sl", SUBST):
+        return set()
+    seen_in_lhs = slot_literals(lhs)
+    on_left, on_right = _binder_scopes(lang, lhs), _binder_scopes(lang, rhs)
+    owed = set()
+    for v, occurrences in on_right.items():
+        left = on_left.get(v)
+        if not left:
+            continue
+        for under in occurrences:
+            for b in under:
+                if b in seen_in_lhs and all(b not in o for o in left):
+                    owed.add((b, v))
+    return owed
+
+
+def missing_capture_guards(lang, lhs, rhs, conds):
+    """The owed guards a rule does not state."""
+    stated = {(slot, v) for want, slot, pvars in conds if not want for v in pvars}
+    return capture_guards(lang, lhs, rhs) - stated
 
 
 def has_pay_var(t):
@@ -1879,7 +1917,6 @@ def compile_query(
     fresh_batch=True,
     refine=True,
     literals_apart=False,
-    frozen=(),
 ):
     """Compile a flattened multipattern into the facts that match it.
 
@@ -1903,8 +1940,6 @@ def compile_query(
 
     `literals_apart` says that two DIFFERENT slot literals are two different slots,
     which is what a rule means by them; a claim decides that for itself, by scope.
-    `frozen` names the literals the right-hand side binds, which nothing may be
-    identified with: see `rhs_binder_literals`.
     """
     body, uid = [], [0]
 
@@ -2024,12 +2059,10 @@ def compile_query(
             # the cliques say. One equation alone cannot force a merge, so an atom
             # with a single pair keeps the plain solve.
             pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
-            iced = [slot_of[s] for s in sorted(frozen) if s in slot_of and "no-freeze" not in bugs]
-            ice = "(map-of " + " ".join(f"{v} {v}" for v in iced) + ")" if iced else "(map-empty)"
             sol, u = new("uni"), new("u")
             body.append(
                 f"(= {sol} (find-mapping-unify (vec-of {pat} {dom}) (vec-of {pinned} {' '.join(slot_groups)}) "
-                f"(vec-of {' '.join(firsts)}) (vec-of {' '.join(seconds)}) {ice}))"
+                f"(vec-of {' '.join(firsts)}) (vec-of {' '.join(seconds)})))"
             )
             body.append(f"(= {mp} (vec-get {sol} 0))")
             body.append(f"(= {u} (vec-get {sol} 1))")
@@ -2105,11 +2138,6 @@ def compile_query(
             expr = carried[0]
             for im in carried[1:]:
                 expr = f"(map-union {im} {expr})"
-            # a slot the right-hand side binds is carried, but is no candidate: nothing
-            # may be identified with it, or the node built captures
-            for s in sorted(frozen):
-                if s in slot_of and "no-freeze" not in bugs:
-                    expr = f"(map-remove {expr} {slot_of[s]})"
             body.append(f"(= {cand} {expr})")
         alts, i, mrg = new("alts"), new("ix"), new("mrg")
         body.append(f"(= {alts} (refine-namings {cand} {pinned} {' '.join(slot_groups)}))")
@@ -2239,7 +2267,6 @@ def compile_rule(
         fresh_batch=fresh_batch,
         refine=refine,
         literals_apart=True,
-        frozen=rhs_binder_literals(lang, action[2]) if action[0] == "build" else (),
     )
     body, cls_of, mp_of, slot_of = q.body, q.cls_of, q.mp_of, q.slot_of
     pvar_sorts, new, pay_name = q.pvar_sorts, q.new, q.pay_name

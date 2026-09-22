@@ -263,12 +263,14 @@ reading of a written slot: a rigid name, which its matcher never identifies with
 A pattern *variable* in a binder column is the other thing: it stands for the bound
 variable and may be identified with anything the match makes it.
 
-A slot the **right-hand side binds** is fresh for everything else the match carries. A
-matched binder's slot may in general be read as the name of a free variable of the
-term, but a rule that then writes `(Lam $y ...)` over a variable matched outside that
-binder would capture it, so such a slot is identified with nothing:
-`(rewrite (Pair (Lam $y body) e) (Lam $y (Pair body e)))` never puts `e`'s free variable
-under the new lambda.
+A matched binder's slot may be read as the name of a **free** variable of the term, and
+a rule that then writes `(Lam $y ...)` over a variable matched outside that binder would
+capture it. That is the rule's to rule out: `(not-free $y e)` says `e` and the binder do
+not alias, and `check-capture-guards.py` requires it of every rule in the shipped rule
+libraries that rebinds a slot over an outside variable.
+`(rewrite (Pair (Lam $y body) e) (Lam $y (Pair body e)) :when ((not-free $y e)))` never
+puts `e`'s free variable under the new lambda; the same rule without the guard does,
+by design, and `slotted/tests/multipattern.egg` shows both.
 
 A right-hand-side slot the pattern never mentions is **minted**, with nothing to write:
 `(rewrite (F x y) (Lam $s (App (F x y) $s)))` binds a fresh `$s`. That is what the

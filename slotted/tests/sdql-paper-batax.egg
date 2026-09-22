@@ -39,21 +39,24 @@
 (rewrite (Equality a b) (Equality b a) :name "eq-comm")
 (rewrite (Sum (Sum R $k2 $v2 (Sing $k2 body1)) $k1 $v1 body2)
          (Sum R $k2 $v2 (Let $k2 $k1 (Let body1 $v1 body2)))
-         :name "sum-sum-vert-fuse-1")
+         :name "sum-sum-vert-fuse-1"
+    :when ((not-free $k1 body1) (not-free $k2 body2) (not-free $v2 body2)))
 (rewrite (Sum (Sum R $k2 $v2 (Sing (Unique key) body1)) $k1 $v1 body2)
          (Sum R $k2 $v2 (Let (Unique key) $k1 (Let body1 $v1 body2)))
-         :name "sum-sum-vert-fuse-2")
+         :name "sum-sum-vert-fuse-2"
+    :when ((not-free $k1 body1) (not-free $k2 body2) (not-free $v2 body2)))
 (rewrite (Sum (Range st en) $k $v (IfThen (Equality $v key) body))
          (Sum (Range st en) $k $v
            (IfThen (Equality $k (Sub key (Sub st (Num 1)))) body))
-         :name "sum-range-1")
+         :name "sum-range-1"
+    :when ((not-free $k st) (not-free $v st)))
 (rewrite (Get dict key)
          (Sum dict $k $v (IfThen (Equality $k key) $v))
          :name "get-to-sum")
 (rewrite (Sum dict $k $v (IfThen (Equality $k key) body))
          (Let key $k (Let (Get dict $k) $v body))
          :name "sum-to-get"
-         :when ((not-free $k key) (not-free $v key)))
+         :when ((not-free $k dict) (not-free $k key) (not-free $v key)))
 (rewrite (Get (Range st en) idx)
          (Add idx (Sub st (Num 1)))
          :name "get-range")

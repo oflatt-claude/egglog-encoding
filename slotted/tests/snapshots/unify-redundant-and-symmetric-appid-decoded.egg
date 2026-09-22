@@ -60,7 +60,7 @@
        (= dom67 (map-union (map-image p62) (map-image p63)))
        (RenamesToLeader_0 C52 sym68 C52)
        (RenamesToLeader_0 C38 sym69 C38)
-       (= uni71 (find-mapping-unify (vec-of av57 dom67) (vec-of (map-empty) idm4 idm13 idm28 idm42 idm56) (vec-of (compose (compose m60 cs61) sym68) (compose (compose m46 cs47) sym69)) (vec-of (map-domain (compose m60 cs61)) p63) (map-empty)))
+       (= uni71 (find-mapping-unify (vec-of av57 dom67) (vec-of (map-empty) idm4 idm13 idm28 idm42 idm56) (vec-of (compose (compose m60 cs61) sym68) (compose (compose m46 cs47) sym69)) (vec-of (map-domain (compose m60 cs61)) p63)))
        (= mp70 (vec-get uni71 0))
        (= u72 (vec-get uni71 1))
        (= grp73 (map-image (compose u72 idm4)))

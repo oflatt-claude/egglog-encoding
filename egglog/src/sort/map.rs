@@ -295,15 +295,8 @@ fn find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i64, i64>>
 /// that passes those as cliques gets exactly `union_slot`'s two refusals.
 ///
 /// Arguments: `avoid` and `domain` as for the total solve; `cliques`, each an
-/// identity map on slots that must stay pairwise distinct; `frozen`, an identity
-/// map on slots that may not be identified with anything at all; and the equation
-/// halves `firsts` and `seconds`, paired positionally as in [`find_mapping`].
-///
-/// A frozen slot is one the rule's right-hand side BINDS. A binder in the result has
-/// to be fresh for everything else the match carries, or it captures: `let x = y in
-/// (λw. x w)` read with `w` as `y` is a fine alpha-variant of the term, but the rule
-/// `let-lam-diff` then builds `λy. let x = y in x y`, which is `λy. y y`. So such a
-/// slot keeps its own name and no equation may say otherwise.
+/// identity map on slots that must stay pairwise distinct; and the equation halves
+/// `firsts` and `seconds`, paired positionally as in [`find_mapping`].
 ///
 /// Returns the atom's renaming, in merged names, and the merge itself: a map that is
 /// total on every slot any argument mentions and sends each to its representative.
@@ -311,13 +304,12 @@ fn find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i64, i64>>
 /// merged slots survives is not observable, so the smaller name is kept.
 ///
 /// `None` when the halves are unequal in length, when a pair's key sets differ,
-/// when the merge would identify two slots of one clique or touch a frozen slot,
-/// or when the renaming would not be injective.
+/// when the merge would identify two slots of one clique, or when the renaming
+/// would not be injective.
 pub(crate) fn find_mapping_unify(
     avoid: &BTreeMap<i64, i64>,
     domain: &BTreeMap<i64, i64>,
     cliques: &[BTreeMap<i64, i64>],
-    frozen: &BTreeMap<i64, i64>,
     firsts: &[BTreeMap<i64, i64>],
     seconds: &[BTreeMap<i64, i64>],
 ) -> Option<(BTreeMap<i64, i64>, BTreeMap<i64, i64>)> {
@@ -365,7 +357,6 @@ pub(crate) fn find_mapping_unify(
     for c in cliques {
         all.extend(c.keys().chain(c.values()).copied());
     }
-    all.extend(frozen.keys().copied());
     for m in firsts {
         all.extend(m.values().copied());
     }
@@ -373,12 +364,6 @@ pub(crate) fn find_mapping_unify(
     for c in cliques {
         let reps: BTreeSet<i64> = c.keys().map(|&s| find(&uf, s)).collect();
         if reps.len() != c.len() {
-            return None;
-        }
-    }
-    // a frozen slot is alone in its class: nothing merged into it, and it into nothing
-    for &f in frozen.keys() {
-        if find(&uf, f) != f || all.iter().any(|&s| s != f && find(&uf, s) == f) {
             return None;
         }
     }
@@ -1203,7 +1188,7 @@ mod naming_tests {
         );
 
         let (mapping, merge) =
-            find_mapping_unify(&avoid, &domain, &cliques, &ident(&[]), &firsts, &seconds).unwrap();
+            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds).unwrap();
         assert_eq!(mapping, m(&[(0, 0), (1, 1)]), "in merged names");
         assert_eq!(
             merge,
@@ -1219,7 +1204,7 @@ mod naming_tests {
         let (avoid, domain, cliques, _, seconds) = unify_args();
         let firsts = vec![m(&[(0, 2)]), m(&[(0, 1), (1, 0)])];
         let (mapping, merge) =
-            find_mapping_unify(&avoid, &domain, &cliques, &ident(&[]), &firsts, &seconds).unwrap();
+            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds).unwrap();
         assert_eq!(mapping, m(&[(0, 1), (1, 0)]));
         assert_eq!(merge, m(&[(0, 0), (1, 1), (2, 1)]));
     }
@@ -1231,7 +1216,7 @@ mod naming_tests {
         let (avoid, domain, mut cliques, firsts, seconds) = unify_args();
         cliques.push(ident(&[0, 2]));
         assert_eq!(
-            find_mapping_unify(&avoid, &domain, &cliques, &ident(&[]), &firsts, &seconds),
+            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds),
             None
         );
     }
@@ -1245,7 +1230,7 @@ mod naming_tests {
         let firsts = vec![m(&[(7, 5), (8, 5)])];
         let seconds = vec![m(&[(7, 0), (8, 1)])];
         assert_eq!(
-            find_mapping_unify(&avoid, &domain, &[], &ident(&[]), &firsts, &seconds),
+            find_mapping_unify(&avoid, &domain, &[], &firsts, &seconds),
             None
         );
     }
@@ -1256,40 +1241,13 @@ mod naming_tests {
     #[test]
     fn unify_agrees_with_the_total_solve_when_nothing_merges() {
         let args = m3_args();
-        let (mapping, merge) = find_mapping_unify(
-            &args[0],
-            &args[1],
-            &[],
-            &ident(&[]),
-            &args[2..3],
-            &args[3..4],
-        )
-        .unwrap();
+        let (mapping, merge) =
+            find_mapping_unify(&args[0], &args[1], &[], &args[2..3], &args[3..4]).unwrap();
         assert_eq!(mapping, find_mapping_total(&args).unwrap());
         assert_eq!(
             merge,
             ident(&[0, 1]),
             "total on `avoid`, identity throughout"
-        );
-    }
-
-    /// A slot the right-hand side binds may not be identified with anything: the
-    /// equations that identify the second chain's outer binder with the first's
-    /// are refused once that binder is frozen, while a frozen slot no equation
-    /// touches changes nothing.
-    #[test]
-    fn unify_refuses_to_touch_a_frozen_slot() {
-        let (avoid, domain, cliques, firsts, seconds) = unify_args();
-        assert_eq!(
-            find_mapping_unify(&avoid, &domain, &cliques, &ident(&[2]), &firsts, &seconds),
-            None,
-            "the equations want 2 to be 0"
-        );
-        let untouched =
-            find_mapping_unify(&avoid, &domain, &cliques, &ident(&[1]), &firsts, &seconds);
-        assert!(
-            untouched.is_some(),
-            "1 is named by an equation but never merged"
         );
     }
 
@@ -1300,7 +1258,7 @@ mod naming_tests {
         let (avoid, mut domain, cliques, firsts, seconds) = unify_args();
         domain.insert(9, 9);
         let (mapping, _) =
-            find_mapping_unify(&avoid, &domain, &cliques, &ident(&[]), &firsts, &seconds).unwrap();
+            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds).unwrap();
         assert_eq!(mapping[&9], 3, "0, 1, 2 are all spoken for");
     }
 

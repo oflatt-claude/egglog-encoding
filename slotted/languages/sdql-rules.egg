@@ -71,13 +71,15 @@
          :name "let-binop3")
 (rewrite (Binop f (Let e1 $x e2) (Let e1 $x e3))
          (Let e1 $x (Binop f e2 e3))
-         :name "let-binop4")
+         :name "let-binop4"
+    :when ((not-free $x f)))
 (rewrite (Let e1 $x (App e2 e3))
          (App e2 (Let e1 $x e3))
          :name "let-apply1")
 (rewrite (App e2 (Let e1 $x e3))
          (Let e1 $x (App e2 e3))
-         :name "let-apply2")
+         :name "let-apply2"
+    :when ((not-free $x e2)))
 (rewrite (Mult e1 (IfThen e2 e3))
          (IfThen e2 (Mult e1 e3))
          :name "if-mult2")
@@ -116,19 +118,24 @@
          :name "sing-mult-4")
 (rewrite (Mult e1 (Sum R $k $v e2))
          (Sum R $k $v (Mult e1 e2))
-         :name "sum-fact-inv-1")
+         :name "sum-fact-inv-1"
+    :when ((not-free $k e1) (not-free $v e1)))
 (rewrite (Sing e1 (Sum R $k $v e2))
          (Sum R $k $v (Sing e1 e2))
-         :name "sum-fact-inv-3")
+         :name "sum-fact-inv-3"
+    :when ((not-free $k e1) (not-free $v e1)))
 (rewrite (Sum (Sum R $k2 $v2 (Sing $k2 body1)) $k1 $v1 body2)
          (Sum R $k2 $v2 (Let $k2 $k1 (Let body1 $v1 body2)))
-         :name "sum-sum-vert-fuse-1")
+         :name "sum-sum-vert-fuse-1"
+    :when ((not-free $k1 body1) (not-free $k2 body2) (not-free $v2 body2)))
 (rewrite (Sum (Sum R $k2 $v2 (Sing (Unique key) body1)) $k1 $v1 body2)
          (Sum R $k2 $v2 (Let (Unique key) $k1 (Let body1 $v1 body2)))
-         :name "sum-sum-vert-fuse-2")
+         :name "sum-sum-vert-fuse-2"
+    :when ((not-free $k1 body1) (not-free $k2 body2) (not-free $v2 body2)))
 (rewrite (Sum (Range st en) $k $v (IfThen (Equality $v key) body))
          (Sum (Range st en) $k $v (IfThen (Equality $k (Sub key (Sub st (Num 1)))) body))
-         :name "sum-range-1")
+         :name "sum-range-1"
+    :when ((not-free $k st) (not-free $v st)))
 (rewrite (Sum R $k1 $v1 (Sum S $k2 $v2 (IfThen (Equality $v1 $v2) body)))
          (Merge R S $k1 $k2 $v1 (Let $v1 $v2 body))
          :name "sum-merge")
@@ -139,7 +146,7 @@
 (rewrite (Sum dict $k $v (IfThen (Equality $k key) body))
          (Let key $k (Let (Get dict $k) $v body))
          :name "sum-to-get"
-         :when ((not-free $k key)
+         :when ((not-free $k dict) (not-free $k key)
                 (not-free $v key)))
 (rewrite (Get (Range st en) idx)
          (Add idx (Sub st (Num 1)))

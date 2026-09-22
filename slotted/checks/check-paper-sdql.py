@@ -143,13 +143,28 @@ def named(forms: list[Any], head: str, name: str) -> list[Any]:
 
 
 def rewrites(path: pathlib.Path) -> dict[str, tuple[Any, ...]]:
+    """Each rewrite's semantics, without the capture guards this port adds.
+
+    Where a right-hand side rebinds a slot over a variable matched outside it, the rule
+    here says `(not-free $b v)`, because matching may read the binder as that
+    variable's name; the artifact's nested matcher never does, so its rules lack the
+    guard and mean the same thing. The signature below is over the artifact's
+    semantics, so those guards are discounted; `check-capture-guards.py` requires them.
+    """
     src = sc.Source(path)
     out = {}
     for form in sc.parse(path.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
         rule = sc.rewrite_parts(src, form)
-        out[rule["name"]] = tuple(rule[key] for key in ("lhs", "rhs", "conds", "equalities", "diseq", "same", "fresh"))
+        lhs = slotenc.rhs_of(src.lang, src.term(rule["lhs"], ground=False))
+        rhs = slotenc.rhs_of(src.lang, src.term(rule["rhs"], ground=False))
+        owed = slotenc.capture_guards(src.lang, lhs, rhs)
+        conds = [c for c in rule["conds"] if c[0] or not all((c[1], v) in owed for v in c[2])]
+        semantics = dict(rule, conds=conds)
+        out[rule["name"]] = tuple(
+            semantics[key] for key in ("lhs", "rhs", "conds", "equalities", "diseq", "same", "fresh")
+        )
     return out
 
 

@@ -18,22 +18,21 @@ edition = "2021"
 # for legal terms that reuse one printed name in bound and uncovered/free positions.
 # It changes add/lookup normalization, not either matcher. PR 46 also carries the
 # `MultiPattern` FLEXIBLE slot `$?x`, which is how a pattern variable in a binder
-# column is put to the reference (see `atom_lines` in `slotted-encoder.py`).
+# column is put to the reference (see `atom_lines` in `slotted-encoder.py`). The rev
+# lives in oflatt's fork until the PR carrying it into oflatt-claude's branch is
+# merged; the SHAs are the same on both once it is fast-forwarded.
 #
-# The rev is the `eval-oracle` branch of oflatt's fork: PR 46, the weak-shape fix, and
-# one commit more that is NOT proposed upstream -- `MultiPattern::freeze`, by which a
-# rule keeps the slots its right-hand side binds apart from every other slot of a
-# match, as the encoding does. Without it `final_refine` reads a binder's slot as a
-# free variable's name and the right-hand side captures it; upstream has that bug as
-# the failing test of memoryleak47/slotted-egraphs#49, and the oracle here has to be
-# sound in the meantime.
+# Matching here reads a binder's bound slot as any name, a free variable's included,
+# and so does the encoding; a rule that rebinds such a slot over something it matched
+# outside the binder owes a `not-free` guard (`capture_guards` in the encoder), which
+# both sides evaluate. The oracle is not asked to be stricter than that.
 #
 # All registered differential and isomorphism checks use `MultiPattern`: that is the
 # pattern language the encoding implements. The helper binary retains a dormant
 # `nested` directive for the unregistered matcher-comparison diagnostic, but
 # `ematch_all` is not used as ground truth. The `checks` feature and explicit
 # `eg.check()` calls make malformed reference state a hard failure.
-slotted-egraphs = { git = "https://github.com/oflatt/slotted-egraphs.git", rev = "47dfedbb3afb1e39f7da7d38fde7a141aab59702" }
+slotted-egraphs = { git = "https://github.com/oflatt/slotted-egraphs.git", rev = "7bfa78208a56984c29192fff32e7cd8357db6ad5" }
 
 [features]
 # The differential harness wants malformed reference state to be a hard failure, so

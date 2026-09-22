@@ -291,19 +291,6 @@ fn split_two_sexprs(s: &str) -> (String, String) {
     panic!("cannot split two s-exprs from {s:?}");
 }
 
-/// The slots a pattern binds, anywhere in it: the binder positions of its nodes.
-fn binder_slots(pat: &Pattern<L>) -> Vec<Slot> {
-    let mut out = Vec::new();
-    let mut stack = vec![pat];
-    while let Some(p) = stack.pop() {
-        if let Pattern::ENode(n, children) = p {
-            out.extend(n.private_slots());
-            stack.extend(children.iter());
-        }
-    }
-    out
-}
-
 /// Does the match satisfy the condition?
 fn holds(c: &Cond, subst: &Subst) -> bool {
     let found = c
@@ -349,13 +336,10 @@ fn main() {
             if r.atoms.is_empty() || r.nested_lhs.is_some() {
                 return None;
             }
-            let mut pat = MultiPattern::parse(&r.atoms.join(", ")).unwrap();
+            let pat = MultiPattern::parse(&r.atoms.join(", ")).unwrap();
             if let Some((root, text)) = &r.rhs {
                 let from = Pattern::PVar(root.clone());
                 let to = Pattern::parse(text).unwrap();
-                // A binder the right-hand side writes is fresh for everything else the
-                // match carries, or the node built captures; see `MultiPattern::freeze`.
-                pat.freeze(binder_slots(&to));
                 return Some((i, pat, from, to));
             }
             let (root, op, a, b) = r.action.as_ref()?;

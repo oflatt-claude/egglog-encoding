@@ -194,16 +194,18 @@ two or more literals also states that they are pairwise distinct, as one
 `map-length` fact over all of them after refinement. A pattern variable in a
 binder column is not a literal and is left free.
 
-One slot is never identified with anything: a literal the right-hand side
-**binds**. Reading a matched binder's bound slot as the name of some free
-variable of the term is a fine alpha-variant of that term, and refinement
-offers it. But a right-hand side that binds that slot again, over something
-matched outside the binder, then captures: `let-lam-diff` reading
-`let x = y in (λw. x w)` with `w` as `y` builds `λy. let x = y in x y`. So
-`compile_rule` freezes such literals: they are no candidates for
-`refine-namings`, and `find-mapping-unify` declines an equation that would
-touch one. The oracle the harness pins carries the same rule as `MultiPattern::freeze`;
-upstream has the bug as the failing test of its PR 49.
+A matched binder's bound slot may be read as **any** name, a free variable's
+included. Reading `let x = y in (λw. x w)` with `w` as `y` is a fine alpha-variant
+of that term, refinement offers it on purpose, and a language may want it: that is
+how a bound variable gets identified with a free one. The reference's
+`MultiPattern` reads the same way. What follows is a duty on the **rule**: a
+right-hand side that rebinds such a slot over a variable matched outside the
+binder builds a capturing node under that reading — `let-lam-diff` would build
+`λy. let x = y in x y` — so it has to say `(not-free $y e)`, which is evaluated
+after refinement and excludes exactly that reading. `capture_guards` derives what
+a rule owes and `check-capture-guards.py` holds the rule libraries to it; the
+reference's own rule sets can lack these guards because its nested matcher keeps
+bound slots injective, which makes them vacuous there.
 
 Unification decides only what the equations decide. Two mints no equation
 relates may still be one slot, and `refine-namings` is where that is settled:

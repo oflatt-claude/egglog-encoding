@@ -63,7 +63,6 @@ RUN_TIMEOUT = 25
 #   XDIFF_BUGS=union-id    the action unions classes instead of invocations
 #   XDIFF_BUGS=no-unify    an atom's equations may not identify two earlier mints
 #   XDIFF_BUGS=literals-alias   two different slot literals may come out as one slot
-#   XDIFF_BUGS=no-freeze    a slot the right-hand side binds may be identified with another
 #
 # `mutations.py` asserts that each of these still breaks the corpus by a recorded amount, so
 # a mutation that stops discriminating is a failure rather than a quiet gap. Two were removed
@@ -1651,34 +1650,54 @@ def curated():
         )
     )
 
-    # CAP1 -- a binder the right-hand side writes over a variable matched outside it
-    # (FIXED). Reduced from the paper's array study at zero parameters, where
-    # `let-lam-diff` did this six rounds in and every class became one.
+    # CAP1 -- a binder the right-hand side rebinds over a variable matched outside it,
+    # with the guard the rule owes (FIXED, in the rule). Reduced from the paper's array
+    # study at zero parameters, where an unguarded `let-lam-diff` did this six rounds in
+    # and every class became one.
     #
     #     term   (f (lam $0 (sub (var $0) (var $0))) (var $2))
-    #     rule   p == (f l e), l == (lam $y body)   =>  union p (lam $y (f body e))
+    #     rule   p == (f l e), l == (lam $y body), $y not free in e
+    #            =>  union p (lam $y (f body e))
     #
-    # The lambda's bound slot may be read as `$2`, a fine alpha-variant of the term; the
-    # right-hand side then rebinds `$y` over `e`, and that reading builds the closed
-    # `(lam $2 (f (sub $2 $2) $2))`, capturing `e`. Both sides now keep a slot the
-    # right-hand side binds apart from everything else -- `rhs_binder_literals` here,
-    # `MultiPattern::freeze` in the oracle the harness pins -- so only the plain reading
-    # fires; upstream has the bug as the failing test of its PR 49. `no-freeze` in
-    # `mutations.py` is this case failing again. The probes ask for the sound result,
-    # the captured one, and a term the union must not reach.
+    # The lambda's bound slot may be read as `$2`, a fine alpha-variant of the term and
+    # a reading both matchers offer on purpose. The right-hand side then rebinds `$y`
+    # over `e`, and that reading builds the closed `(lam $2 (f (sub $2 $2) $2))`,
+    # capturing `e`. So the rule says `e` and `$y` do not alias, and only the plain
+    # reading fires; `check-capture-guards.py` holds the rule libraries to this. The
+    # probes ask for the sound result, the captured one, and a term the union must not
+    # reach. `CAP0` is the same rule without its guard.
+    CAP_TERM = ("f", ("lam", V0, ("sub", V0, V0)), V2)
+    CAP_ATOMS = [("p", "f", "l", "e"), ("l", "lam", "$y", "body")]
+    CAP_PROBES = [
+        CAP_TERM,
+        ("lam", V1, ("f", ("sub", V1, V1), V2)),
+        ("lam", V1, ("f", ("sub", V1, V1), V1)),
+        NUL,
+    ]
     cs.append(
         Case(
-            "CAP1-rhs-binder-over-outside-variable",
-            [("f", ("lam", V0, ("sub", V0, V0)), V2)],
+            "CAP1-rhs-binder-over-outside-variable-guarded",
+            [CAP_TERM],
             [],
-            [("p", "f", "l", "e"), ("l", "lam", "$y", "body")],
+            CAP_ATOMS,
             ("p", ("lam", "$y", ("f", "body", "e"))),
-            [
-                ("f", ("lam", V0, ("sub", V0, V0)), V2),
-                ("lam", V1, ("f", ("sub", V1, V1), V2)),
-                ("lam", V1, ("f", ("sub", V1, V1), V1)),
-                NUL,
-            ],
+            CAP_PROBES,
+            rounds=3,
+            rules=[(CAP_ATOMS, ("p", ("lam", "$y", ("f", "body", "e"))), [(False, "$y", ["e"])])],
+        )
+    )
+
+    # CAP0 -- the same rule with no guard: the aliasing reading fires on BOTH sides and
+    # the captured term joins the class. Not a divergence -- the two agree -- but the
+    # statement of what an unguarded rule means here, kept beside the guarded one.
+    cs.append(
+        Case(
+            "CAP0-rhs-binder-over-outside-variable-unguarded",
+            [CAP_TERM],
+            [],
+            CAP_ATOMS,
+            ("p", ("lam", "$y", ("f", "body", "e"))),
+            CAP_PROBES,
             rounds=3,
         )
     )

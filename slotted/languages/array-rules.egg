@@ -27,7 +27,7 @@
 (rewrite (Let $x (Lam $y body) e)
          (Lam $y (Let $x body e))
          :name "let-lam-diff"
-         :when ((free $x body)))
+         :when ((not-free $y e) (free $x body)))
 (rewrite (App (App (Sym "map") f) (App (App (Sym "map") g) arg))
          (App (App (Sym "map") (Lam $fu (App f (App g $fu)))) arg)
          :name "map-fusion"

@@ -180,6 +180,17 @@ CHECKS = [
         False,
         False,
     ),
+    # A rule whose right-hand side rebinds a slot over a variable matched outside it
+    # owes `(not-free $b v)`: matching may read the binder as that variable's name, and
+    # the node built would capture it. `let-lam-diff` without this collapsed the array
+    # study. The floor is the two libraries plus the BATAX test's copies.
+    (
+        "capture-guards",
+        ("slotted/checks/check-capture-guards.py",),
+        ratio(r"(\d+)/(\d+) rules state the capture guards they owe", 60),
+        False,
+        False,
+    ),
     # Every refusal the language documents, with the phrase its message carries. A
     # refusal that stops firing mistranslates the program in silence, and one that
     # arrives as a traceback is not a message -- both went unnoticed before.

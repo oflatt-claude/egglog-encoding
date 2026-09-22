@@ -140,11 +140,20 @@ def local_rules(path):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
         rule = sc.rewrite_parts(src, form)
-        sides = []
+        sides, terms = [], []
         for side in (rule["lhs"], rule["rhs"]):
-            term = src.term(side, ground=False)
-            sides.append(slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, term)))
-        out[rule["name"]] = (sides[0], sides[1], rule["conds"])
+            term = slotenc.rhs_of(lang, src.term(side, ground=False))
+            terms.append(term)
+            sides.append(slotenc.pat_sexpr(lang, term))
+        # The guards a rule OWES here are discounted: where a right-hand side rebinds a
+        # slot over a variable matched outside it, this port says `(not-free $b v)`,
+        # since matching may read the binder as that variable's name. The reference's
+        # nested matcher keeps bound slots injective, so its rule sets can lack the
+        # guard and mean the same thing. `check-capture-guards.py` requires the guards;
+        # this compares everything else.
+        owed = slotenc.capture_guards(lang, terms[0], terms[1])
+        conds = [c for c in rule["conds"] if c[0] or not all((c[1], v) in owed for v in c[2])]
+        out[rule["name"]] = (sides[0], sides[1], conds)
     return out
 
 

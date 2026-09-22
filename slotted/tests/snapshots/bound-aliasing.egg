@@ -46,7 +46,7 @@
        (= _c0V10 (App _c0p8 _c0V3 _c0p9 (SlottedVar_0 0)))
        (= _c0dom12 (map-union (map-image _c0p8) (map-image _c0p9)))
        (RenamesToLeader_0 _c0V3 _c0sym13 _c0V3)
-       (= _c0uni15 (find-mapping-unify (vec-of _c0idm6 _c0dom12) (vec-of (map-of _c0s0 _c0s0) _c0idm6) (vec-of (compose (compose _c0mp5 _c0cs7) _c0sym13) (map-insert (map-empty) 0 _c0s0)) (vec-of _c0p8 _c0p9) (map-empty)))
+       (= _c0uni15 (find-mapping-unify (vec-of _c0idm6 _c0dom12) (vec-of (map-of _c0s0 _c0s0) _c0idm6) (vec-of (compose (compose _c0mp5 _c0cs7) _c0sym13) (map-insert (map-empty) 0 _c0s0)) (vec-of _c0p8 _c0p9)))
        (= _c0mp14 (vec-get _c0uni15 0))
        (= _c0u16 (vec-get _c0uni15 1))
        (= _c0grp17 (map-image (compose _c0u16 _c0idm6)))
