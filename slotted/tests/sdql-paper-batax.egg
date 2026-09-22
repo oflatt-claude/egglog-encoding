@@ -11,8 +11,10 @@
 ;;; the alpha-renaming `$var_01` ... `$var_12` to `$1` ... `$12`.
 
 ;;; This is a goal/reachability regression, not a reproduction of Table 1's search-space
-;;; metrics: running all 44 rules is too costly for the ordinary test suite. It uses the
-;;; goal-directed subset of the artifact's fine-grained rules needed by this witness.
+;;; metrics: BATAX under all 44 rules does not saturate and is too costly for the ordinary
+;;; test suite, so this uses the goal-directed subset of the artifact's fine-grained rules
+;;; needed by this witness. The workloads the suite can afford run under all 44 rules in
+;;; `slotted/tests/sdql-paper/`; `slotted/eval.py` runs every workload, BATAX included, with all of them.
 ;;; `slotted/checks/check-paper-sdql.py` keeps these definitions semantically identical to the
 ;;; corresponding rules in `languages/sdql.egg` and checks both fixture transcriptions.
 (sort U)

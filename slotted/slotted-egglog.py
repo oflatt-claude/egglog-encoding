@@ -396,6 +396,18 @@ class Source:
         child_sorts = getattr(self, "child_sorts", {}).get(head, self.lang[head].kid_sorts)
         for arg, kind in zip(args, kinds, strict=True):
             if kind in enc.SLOTTED:
+                if kind is enc.BINDER and not ground and not (isinstance(arg, str) and SLOT.match(arg)):
+                    # A binder column takes a slot literal and nothing else. A literal is a
+                    # rigid name, the reference's reading of a written slot; a pattern
+                    # variable there would be a slot free to become any other, which
+                    # neither matcher has a word for. A rule that wants two binders whether
+                    # or not they bind one slot is two rules.
+                    raise SystemExit(
+                        f"{self.path.name}: {head}'s binder column takes a slot literal, and {render(arg)!r} "
+                        "is not one -- a pattern variable cannot stand in a binder column. Write `$x` "
+                        "there; to match two binders whether or not they bind the same slot, write the "
+                        "rule twice, once with one literal in both columns and once with two."
+                    )
                 parsed.append(self.term(arg, kind, ground, child_sorts[child]))
                 child += 1
             else:

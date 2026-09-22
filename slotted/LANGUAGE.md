@@ -260,8 +260,9 @@ Two **different** slot literals are two different slots, everywhere in a rule. `
 binders written `$x` and `$y` cannot share a body that uses the bound variable — that
 body would have to have both slots and one at the same time. This is the reference's
 reading of a written slot: a rigid name, which its matcher never identifies with another.
-A pattern *variable* in a binder column is the other thing: it stands for the bound
-variable and may be identified with anything the match makes it.
+A binder column takes a slot literal and nothing else: a pattern *variable* there is
+refused. A rule that wants two binders whether or not they bind the same slot is two
+rules, one with a single literal in both columns and one with two.
 
 A matched binder's slot may be read as the name of a **free** variable of the term, and
 a rule that then writes `(Lam $y ...)` over a variable matched outside that binder would
@@ -517,6 +518,7 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | --- | --- |
 | `slotted/tests/` | programs in this language that ASK something: terms, and claims about them. Run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
+| `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/eval.py` runs in full |
 | `slotted/tests/unsupported/` | originals written with constructs the language refuses, kept beside their runnable translations; skipped by the runner |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `slotted/slotted-egglog.py` | the compiler |

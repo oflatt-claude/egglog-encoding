@@ -130,12 +130,6 @@ DUP_PROB = float(os.environ.get("XDIFF_DUP", "0"))
 # to be identified. XDIFF_SHARE=0.7
 SHARE_PROB = float(os.environ.get("XDIFF_SHARE", "0"))
 
-# How often a binder read off a seed term is a PATTERN VARIABLE rather than a slot
-# literal. A variable binder is the bound variable itself, so it is what a match has to
-# identify across two chains; a literal is rigid on both sides and never needs to be.
-# XDIFF_PVBIND=0.6
-PVBIND_PROB = float(os.environ.get("XDIFF_PVBIND", "0.25"))
-
 # How often a variable leaf under a binder is one of the ENCLOSING binders' variables.
 # Leaves and binders are otherwise drawn independently, so most generated lambdas never
 # mention their own variable, and a body that ignores its binders puts no slot on the
@@ -1595,32 +1589,47 @@ def curated():
     #
     #     term   (f L L)  where L = (lam $0 (lam $1 (f (var $0) (var $1))))
     #     union  (f (var $0) (var $1))  =  (f (var $1) (var $0))
-    #     rule   out == (f l1 l2), l1 == (lam x b1), b1 == (lam y a), l2 == (lam w b2), b2 == (lam z a)
-    #            =>  union out (sub x w)
+    #     rule   out == (f l1 l2), l1 == (lam $x b1), b1 == (lam $y a), l2 == (lam $x b2), b2 == (lam $y a)
+    #            =>  union out (sub (var $x) (var $x))
+    #     rule   ... l2 == (lam $y b2), b2 == (lam $x a)  =>  union out (sub (var $x) (var $y))
     #
-    # The binders are PATTERN VARIABLES, so each chain's bound slots are the encoding's
-    # mints, and the second occurrence of `a` has to identify them with the first chain's
-    # -- either straight or, through the symmetry, swapped. Both pairings are matches, so
-    # both `(sub x x)` and `(sub x w)` with two slots join `out`'s class. On the oracle's
-    # side a binder variable is the flexible slot `$?x`, which `atom_lines` spells; written
-    # with rigid slots instead, the reference finds nothing, as the encoding does too.
+    # The second occurrence of `a` has to identify the second chain's bound slots with the
+    # first chain's -- either straight or, through the symmetry, swapped. A binder is a
+    # slot literal, rigid on both sides, so each pairing is its own rule: one literal in
+    # both chains for the straight reading, the two literals swapped for the other. Both
+    # fire, so `(sub x x)` and `(sub x y)` with two slots join `out`'s class; written with
+    # two different literals per chain and no swap, nothing matches on either side.
     UN2_L = ("lam", V0, ("lam", V1, ("f", V0, V1)))
-    UN2_ATOMS = [
+    UN2_TERMS = [("f", UN2_L, UN2_L)]
+    UN2_UNIONS = [(("f", V0, V1), ("f", V1, V0))]
+    UN2_PROBES = [("f", UN2_L, UN2_L), ("sub", V0, V0), ("sub", V0, V1), NUL]
+    UN2_STRAIGHT = [
         ("out", "f", "l1", "l2"),
-        ("l1", "lam", "x", "b1"),
-        ("b1", "lam", "y", "a"),
-        ("l2", "lam", "w", "b2"),
-        ("b2", "lam", "z", "a"),
+        ("l1", "lam", "$x", "b1"),
+        ("b1", "lam", "$y", "a"),
+        ("l2", "lam", "$x", "b2"),
+        ("b2", "lam", "$y", "a"),
+    ]
+    UN2_SWAPPED = [
+        ("out", "f", "l1", "l2"),
+        ("l1", "lam", "$x", "b1"),
+        ("b1", "lam", "$y", "a"),
+        ("l2", "lam", "$y", "b2"),
+        ("b2", "lam", "$x", "a"),
     ]
     cs.append(
         Case(
             "UN2-shared-body-under-two-binder-chains",
-            [("f", UN2_L, UN2_L)],
-            [(("f", V0, V1), ("f", V1, V0))],
-            UN2_ATOMS,
-            ("out", "sub", "x", "w"),
-            [("f", UN2_L, UN2_L), ("sub", V0, V0), ("sub", V0, V1), NUL],
+            UN2_TERMS,
+            UN2_UNIONS,
+            UN2_STRAIGHT,
+            ("out", ("sub", "$x", "$x")),
+            UN2_PROBES,
             rounds=6,
+            rules=[
+                (UN2_STRAIGHT, ("out", ("sub", "$x", "$x")), []),
+                (UN2_SWAPPED, ("out", ("sub", "$x", "$y")), []),
+            ],
         )
     )
 
@@ -1757,16 +1766,10 @@ def _flatten_fresh(t, ctr, rng, memo):
         pb, ab = flatten_to_atoms(t[2], ctr, rng, memo)
         ctr[0] += 1
         root = f"x{ctr[0]}"
-        # A binder's slot is a literal, or a PATTERN VARIABLE standing for the bound
-        # variable -- the oracle spells that as the flexible slot `$?x`. A literal is
-        # reused sometimes, so that two binders written with the same slot get exercised.
+        # A binder's slot is a literal. One is reused sometimes, so that two binders
+        # written with the same slot get exercised beside two written with different ones.
         r = rng.random() if rng is not None else 1.0
-        if r < PVBIND_PROB:
-            sl = f"bv{ctr[0]}"
-        elif r < PVBIND_PROB + (1 - PVBIND_PROB) / 3:
-            sl = "$s0"
-        else:
-            sl = f"$s{ctr[0]}"
+        sl = "$s0" if r < 1 / 3 else f"$s{ctr[0]}"
         return root, ab + [(root, "lam", sl, pb)]
     op, a, b = t
     pa, aa = flatten_to_atoms(a, ctr, rng, memo)
@@ -1908,8 +1911,8 @@ def rand_general_rule(rng, terms, unions):
     Putting one anywhere else is not an unexplored shape but an ill-typed term: the
     reference's binary operators take applied ids, and it rejects `(k $s0 $s0)` with
     `FromSyntaxFailed`. That is why `rand_rule` draws children from the non-`$`
-    variables, and it is kept. The converse is allowed: a pattern variable in `lam`'s
-    first column is the bound variable, spelled `$?x` for the oracle.
+    variables, and it is kept. The converse holds too: `lam`'s first column takes a
+    slot literal only, which the compiler enforces.
     """
     ops = list(BINOPS)
     atoms, bound, nslot = [], [], 0
@@ -1923,14 +1926,10 @@ def rand_general_rule(rng, terms, unions):
 
         root = rng.choice(bound) if bound and rng.random() < 0.3 else f"r{k}"
         if op == "lam":
-            # A binder column holds a slot literal or a pattern variable for the bound
-            # variable, which the oracle takes as the flexible slot `$?x`. Reusing an
-            # earlier binder's slot name is allowed: it constrains nothing, and that is
-            # itself a shape worth generating.
-            r = rng.random()
-            if r < 0.3:
-                c1 = pick()
-            elif nslot and r < 0.5:
+            # A binder column holds a slot literal. Reusing an earlier binder's slot name
+            # is allowed: it constrains nothing, and that is itself a shape worth
+            # generating; two different names are two slots that can never be one.
+            if nslot and rng.random() < 0.3:
                 c1 = f"$s{rng.randrange(nslot)}"
             else:
                 nslot += 1

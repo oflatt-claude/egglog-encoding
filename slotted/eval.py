@@ -3,10 +3,11 @@
 
 Schneider et al., *Slotted E-Graphs* (PLDI 2025) evaluates on two languages this
 repository carries: the S4.1 functional array language, rewriting (A) into (B) with N
-extra function parameters, and the S4.2 SDQL compiler, of which the BATAX second-phase
-kernel is ported. This runs each on up to three SIDES and reports the paper's
-criterion -- was the target reached within the iteration budget -- with the time it
-took and, on request, the size of the e-graph it built:
+extra function parameters, and the S4.2 SDQL compiler, whose ten Table 1 workloads --
+five kernels, two compiler phases each -- `slotted/paper_fixtures.py` carries from the
+artifact. This runs each on up to three SIDES and reports the paper's criterion -- was
+the target reached within the iteration budget -- with the time it took and, on
+request, the size of the e-graph it built beside Table 1's:
 
     encoding    the egglog slotted encoding, `slotted/slotted-encoder.py`
     ref-multi   the reference crate through `MultiPattern`, the pattern language the
@@ -18,16 +19,21 @@ took and, on request, the size of the e-graph it built:
 Usage:
     python3 slotted/eval.py                         both studies, every side, paper budgets
     python3 slotted/eval.py array --params 0 1 2 3  the array goal with 0..3 parameters
-    python3 slotted/eval.py sdql --rules 44         BATAX with the full rule set (Table 1's row)
+    python3 slotted/eval.py sdql                    all ten SDQL workloads, all 44 rules
+    python3 slotted/eval.py sdql --kernel ttm mmm --phase 1st
+    python3 slotted/eval.py sdql --kernel batax --phase 2nd --rules 12
+                                                    the suite's goal-directed BATAX subset
     python3 slotted/eval.py --side encoding,ref-nested --counts --jsonl eval.jsonl
 
-Budgets default to the paper's: 6 iterations for the array goal, 12 for BATAX. Timings
-are of whatever binaries are in place; `make slotted-eval` builds both in release first,
-the oracle without the crate's `checks` feature, since the differential harness uses
-debug, checked builds and those numbers mean nothing. Each reference row says which
-oracle answered. Rows go
-to a Markdown table on stdout and, with `--jsonl`, one JSON object per row appended to a
-file, which is what a graph should be drawn from.
+Budgets default to the paper's: 6 iterations for the array goal, and for SDQL the
+artifact runner's per-workload limit (13 for BATAX's first phase, 12 for its second, 30
+for the rest); `--rounds` overrides them all. `--timeout` defaults to the artifact's
+300 s per run. Timings are of whatever binaries are in place; `make slotted-eval`
+builds both in release first, the oracle without the crate's `checks` feature, since the
+differential harness uses debug, checked builds and those numbers mean nothing. Each
+reference row says which oracle answered. Rows go to a Markdown table on stdout and,
+with `--jsonl`, one JSON object per row appended to a file, which is what a graph should
+be drawn from.
 """
 
 import argparse
@@ -50,6 +56,7 @@ import xarray as XA  # noqa: E402
 
 sc = __import__("slotted-egglog")
 slotenc = __import__("slotted-encoder")
+pf = __import__("paper_fixtures")
 
 _spec = importlib.util.spec_from_file_location("cps", ROOT / "slotted" / "checks" / "check-paper-sdql.py")
 cps = importlib.util.module_from_spec(_spec)
@@ -77,6 +84,7 @@ class Row:
         self.goal, self.saturated, self.seconds = "?", "?", None
         self.classes, self.nodes = None, None
         self.checks = None  # the oracle's `CONFIG checks=` answer, for reference sides
+        self.paper = None  # Table 1's slotted row for this workload, when it has one
 
     def as_dict(self):
         d = dict(vars(self))
@@ -212,70 +220,69 @@ def array_rows(params, rounds, sides, counts, timeout):
 
 
 # ------------------------------------------------------------------- the SDQL study
-def sdql_program(rules, with_target):
-    """The BATAX test as a slotted source: its own 12 rules, or the full 44 by include."""
-    forms = sc.parse(cps.TEST.read_text())
-    text = cps.TEST.read_text()
+def sdql_program(kernel, phase, rules, rounds, with_target):
+    """One workload as a slotted source: the full library by include, or BATAX's own 12."""
     if rules == 12:
-        body = text
+        # the goal-directed test, its own rules and schedule; only its terms are reused
+        forms = sc.parse(cps.TEST.read_text())
+        forms = [["run", str(rounds)] if f[:1] == ["run"] and f[1] != "0" else f for f in forms]
     else:
-        # the test's terms and schedule over the whole rule library
-        keep = [f for f in forms if not (isinstance(f, list) and f and f[0] in ("sort", "constructor", "rewrite"))]
-        body = '(include "slotted/languages/sdql-rules.egg")\n' + "\n".join(sc.render(f) for f in keep) + "\n"
+        forms = pf.test_forms(kernel, phase, rounds)
     if not with_target:
         # the saturated input alone, for counting: no target, no check
-        kept = []
-        for f in sc.parse(body):
-            if isinstance(f, list) and f and f[0] == "check":
-                continue
-            if isinstance(f, list) and f[:2] == ["let", "paper-target"]:
-                continue
-            kept.append(sc.render(f))
-        body = "\n".join(kept) + "\n"
+        forms = [f for f in forms if f[0] != "check" and f[:2] != ["let", "paper-target"]]
     SCRATCH.mkdir(parents=True, exist_ok=True)
-    path = SCRATCH / f"eval-batax-{rules}-{'goal' if with_target else 'counts'}-{os.getpid()}.egg"
-    path.write_text(body)
+    path = SCRATCH / f"eval-{kernel}_{phase}-{rules}-{'goal' if with_target else 'counts'}-{os.getpid()}.egg"
+    path.write_text("\n".join(sc.render(f) for f in forms) + "\n")
     try:
         return sc.compile_source(sc.Source(path))
     finally:
         path.unlink(missing_ok=True)
 
 
-def sdql_rows(rules, rounds, sides, counts, timeout):
-    decls = cps.declarations_of(cps.RULES)
-    lang = slotenc.language(decls, decls.with_suffix(".ref"))
-    fixture = sc.Source(cps.TEST)
-    start = lang.sexpr(
-        fixture.term(cps.translate(sc.parse((cps.FIXTURES / "batax_2nd.sexp").read_text())[0]), ground=True)
-    )
-    target = lang.sexpr(
-        fixture.term(cps.translate(sc.parse((cps.FIXTURES / "batax_2nd_esat.sexp").read_text())[0]), ground=True)
-    )
-    selected = cps.SELECTED_RULES if rules == 12 else None
-    head = [f"rounds {rounds}", f"term {start}"]
-    goal = [f"goal {target}"]
-    name = f"batax-2nd-{rules}rules"
-    for side in sides:
-        row = Row("sdql", name, side, rounds, rules)
-        if side.startswith("ref-"):
-            lines = rule_lines(lang, cps.RULES, selected, nested=(side == "ref-nested"))
-            run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts)
-        else:
+def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
+    lang = pf.reference_language()
+    source = sc.Source(pf.RULES)
+    for kernel, phase in workloads:
+        start, target = pf.workload_text(kernel, phase, source, lang)
+        budget = rounds or pf.iteration_limit(kernel, phase)
+        selected = cps.SELECTED_RULES if rules == 12 else None
+        head = [f"rounds {budget}", f"term {start}"]
+        goal = [f"goal {target}"]
+        name = f"{kernel}_{phase}-{rules}rules"
+        for side in sides:
+            row = Row("sdql", name, side, budget, rules)
+            row.paper = pf.TABLE1[(kernel, phase)]
+            if side.startswith("ref-"):
+                lines = rule_lines(lang, pf.RULES, selected, nested=(side == "ref-nested"))
+                run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts)
+            else:
 
-            def goal_of(r):
-                if r.returncode == 0:
-                    return "yes"
-                return "no" if "(check" in r.stderr else "error"
+                def goal_of(r):
+                    if r.returncode == 0:
+                        return "yes"
+                    return "no" if "(check" in r.stderr else "error"
 
-            run_egglog(sdql_program(rules, True), name, row, timeout, goal_of)
-            if counts:
-                encoding_counts(sdql_program(rules, False), name, lang, row, timeout)
-        yield row
+                run_egglog(sdql_program(kernel, phase, rules, budget, True), name, row, timeout, goal_of)
+                if counts:
+                    encoding_counts(sdql_program(kernel, phase, rules, budget, False), name, lang, row, timeout)
+            yield row
 
 
 # ------------------------------------------------------------------------- output
 def markdown(rows):
-    head = ["study", "case", "side", "rounds", "goal", "saturated", "seconds", "classes", "nodes"]
+    head = [
+        "study",
+        "case",
+        "side",
+        "rounds",
+        "goal",
+        "saturated",
+        "seconds",
+        "classes",
+        "nodes",
+        "paper (iters, nodes, classes, sat.)",
+    ]
     out = ["| " + " | ".join(head) + " |", "|" + "|".join(" --- " for _ in head) + "|"]
     for r in rows:
         secs = "" if r.seconds is None else f"{r.seconds:.1f}"
@@ -290,6 +297,7 @@ def markdown(rows):
             secs,
             str(r.classes or ""),
             str(r.nodes or ""),
+            "" if r.paper is None else f"{r.paper[0]}, {r.paper[1]:,}, {r.paper[2]:,}, {'yes' if r.paper[3] else 'no'}",
         ]
         out.append("| " + " | ".join(cells) + " |")
     return "\n".join(out)
@@ -300,10 +308,22 @@ def main():
     ap.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql"))
     ap.add_argument("--side", default="all", help="comma-separated subset of encoding,ref-multi,ref-nested")
     ap.add_argument("--params", type=int, nargs="*", default=[0, 1, 2], help="array: extra function parameters")
-    ap.add_argument("--rounds", type=int, default=None, help="iterations; default 6 for array, 12 for sdql")
-    ap.add_argument("--rules", type=int, default=12, choices=(12, 44), help="sdql: the goal subset or the full set")
+    ap.add_argument(
+        "--rounds", type=int, default=None, help="iterations; default 6 for array, the artifact's limit for sdql"
+    )
+    ap.add_argument("--kernel", nargs="*", default=list(pf.KERNELS), choices=pf.KERNELS, help="sdql: kernels to run")
+    ap.add_argument(
+        "--phase", nargs="*", default=list(pf.PHASES), choices=pf.PHASES, help="sdql: compiler phases to run"
+    )
+    ap.add_argument(
+        "--rules",
+        type=int,
+        default=44,
+        choices=(12, 44),
+        help="sdql: the full set, or the suite's goal-directed BATAX second-phase subset",
+    )
     ap.add_argument("--counts", action="store_true", help="also count the final e-graph's classes and nodes")
-    ap.add_argument("--timeout", type=int, default=600, help="seconds per run")
+    ap.add_argument("--timeout", type=int, default=300, help="seconds per run; the artifact's own budget")
     ap.add_argument("--jsonl", type=Path, help="append one JSON object per row here")
     args = ap.parse_args()
 
@@ -320,7 +340,10 @@ def main():
     if args.study in ("all", "array"):
         rows += list(array_rows(args.params, args.rounds or 6, sides, args.counts, args.timeout))
     if args.study in ("all", "sdql"):
-        rows += list(sdql_rows(args.rules, args.rounds or 12, sides, args.counts, args.timeout))
+        workloads = [w for w in pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
+        if args.rules == 12 and workloads != [("batax", "2nd")]:
+            ap.error("--rules 12 is the suite's BATAX second-phase subset: use --kernel batax --phase 2nd")
+        rows += list(sdql_rows(workloads, args.rules, args.rounds, sides, args.counts, args.timeout))
 
     print(markdown(rows))
     if args.jsonl:

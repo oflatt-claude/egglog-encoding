@@ -31,14 +31,20 @@ EXPECTED = {
     # A rule tries every naming an atom's renaming could take, so solving one from its
     # root alone under-constrains rather than failing outright and much of the corpus
     # recovers on another index. It still discriminates, so it stays.
-    # `UN1` and `UN2` are the last two: with the child's equation dropped there is
-    # nothing left to unify, so the shared variable is never joined.
-    "root-only": 14,  # an atom's renaming solved from its root alone
+    # `UN1` is the last one: with the child's equation dropped there is nothing left to
+    # unify, so the shared variable is never joined. `UN2` was another while its binders
+    # were pattern variables; written with literals, the literals pin what the root
+    # alone would have left open, and it recovers.
+    "root-only": 13,  # an atom's renaming solved from its root alone
     "union-id": 2,  # the action unions classes instead of invocations
-    "slot-late": 1,  # a slot literal checked after the renaming, not with it
+    # `UN2`'s binder literals are read off the second chain against the first's, so the
+    # late check passes what the joint one refuses; `LIT1` is the other.
+    "slot-late": 2,  # a slot literal checked after the renaming, not with it
     # Two equations naming one node slot read as a contradiction rather than as two
     # placeholders for one slot: the atom keeps `find-mapping-total` and never merges.
-    "no-unify": 2,  # `UN1`, through two redundant slots; `UN2`, through two binder chains
+    # `UN2`'s literals decide its binder slots before the shared body is reached, so
+    # only `UN1`, through two redundant slots the pattern never names, still needs it.
+    "no-unify": 1,  # `UN1`
     # A rule's different slot literals are no longer said to be different slots, so two
     # read off one bound slot come out equal and a rule the reference refuses fires.
     "literals-alias": 1,  # `LIT1`

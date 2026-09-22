@@ -28,9 +28,9 @@
 //!   literal, and anything else becomes a *pattern variable* -- so `atom p add e 0` is
 //!   `?p == (add ?e ?0)` and matches any second child, where `atom p add e #0` asks for
 //!   the literal. The child count is free: the atoms are handed to
-//!   `MultiPattern::parse`, which takes any arity. A slot written `$?x` is a FLEXIBLE
-//!   one the reference does not pin, which is how a pattern variable in a binder
-//!   column is spelled here: `atom l lam $?x b` beside `atom x var $?x`.
+//!   `MultiPattern::parse`, which takes any arity. A binder column holds the bare
+//!   `$x` that `Bind` holds, a rigid pattern slot; the compiler refuses a pattern
+//!   variable there, so no other spelling reaches this binary.
 //! * a leaf needs an atom of its own, since an atom's child has to be a pattern
 //!   variable: `atom c sym:mult` then `atom p binop c a b`.
 //! * On that path a payload leaf is only a payload if its spelling is not also an
@@ -305,8 +305,16 @@ fn add(eg: &mut G, s: &str) -> AppliedId {
 }
 
 fn goal_reached(eg: &G, start: &AppliedId, goal: &str) -> bool {
-    lookup_rec_expr(&RecExpr::<L>::parse(goal).unwrap(), eg)
-        .is_some_and(|found| eg.eq(start, &found))
+    let found = lookup_rec_expr(&RecExpr::<L>::parse(goal).unwrap(), eg);
+    // `XMULTI_DEBUG=1` says which of the two ways a goal fails: the term is not in the
+    // graph at all, or it is there but in another class.
+    if std::env::var("XMULTI_DEBUG").is_ok() {
+        match &found {
+            None => eprintln!("GOAL-LOOKUP none"),
+            Some(f) => eprintln!("GOAL-LOOKUP {f:?} start {start:?} eq {}", eg.eq(start, f)),
+        }
+    }
+    found.is_some_and(|found| eg.eq(start, &found))
 }
 
 fn main() {
@@ -314,7 +322,14 @@ fn main() {
     std::io::stdin().read_to_string(&mut src).unwrap();
     let spec = parse_spec(&src);
     // Which build answered, so a timing log can tell a checked oracle from a plain one.
-    println!("CONFIG checks={}", if cfg!(feature = "checks") { "on" } else { "off" });
+    println!(
+        "CONFIG checks={}",
+        if cfg!(feature = "checks") {
+            "on"
+        } else {
+            "off"
+        }
+    );
 
     let mut eg = G::default();
     let term_ids: Vec<AppliedId> = spec.terms.iter().map(|t| add(&mut eg, t)).collect();
@@ -418,7 +433,8 @@ fn main() {
                     if trace {
                         let mut names: Vec<&String> = s.keys().collect();
                         names.sort();
-                        let shown: Vec<String> = names.iter().map(|k| format!("?{k}={:?}", s[*k])).collect();
+                        let shown: Vec<String> =
+                            names.iter().map(|k| format!("?{k}={:?}", s[*k])).collect();
                         eprintln!("MATCH round={round} rule={i} {}", shown.join(" "));
                         // and the two terms the union equates, as the e-graph spells them,
                         // so a checker outside can decide whether they are really equal
@@ -432,7 +448,11 @@ fn main() {
                             }))
                             .unwrap_or_else(|_| "<unprintable>".to_string())
                         };
-                        eprintln!("UNION round={round} rule={i} {} == {}", spell(&from_id), spell(&to_id));
+                        eprintln!(
+                            "UNION round={round} rule={i} {} == {}",
+                            spell(&from_id),
+                            spell(&to_id)
+                        );
                     }
                     eg.union_instantiations(from, to, &s, None);
                 }

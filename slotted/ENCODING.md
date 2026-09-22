@@ -191,8 +191,8 @@ A slot literal is solved rather than declared — read off whatever slot the nod
 has in that column — so two different literals can come out equal, which the
 reference never allows: its written slots are rigid names. So a rule that writes
 two or more literals also states that they are pairwise distinct, as one
-`map-length` fact over all of them after refinement. A pattern variable in a
-binder column is not a literal and is left free.
+`map-length` fact over all of them after refinement. A binder column holds a literal
+and nothing else.
 
 A matched binder's bound slot may be read as **any** name, a free variable's
 included. Reading `let x = y in (λw. x w)` with `w` as `y` is a fine alpha-variant
@@ -224,7 +224,8 @@ missed, never invented. This is the reference's `final_refine`.
 | `slotted/tests/` | tests written in the source language |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
-| `slotted/eval.py` | the paper's two case studies, on the encoding and on the reference through both of its matchers; `make slotted-eval` |
+| `slotted/paper_fixtures.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
+| `slotted/eval.py` | the paper's two case studies -- the array goal and all ten SDQL workloads -- on the encoding and on the reference through both of its matchers; `make slotted-eval` |
 
 Nothing here is hand-maintained egglog: the machinery is generated from the
 constructors a program declares, so a worked example is a program you run

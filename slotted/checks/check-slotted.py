@@ -99,8 +99,12 @@ def starts_ok(out):
 
 
 def paper_sdql_ran(out: str) -> str | None:
-    """The expensive artifact regression is required by name, not just by count."""
-    return None if re.search(r"^\s*ok\s+sdql-paper-batax\.egg\b", out, re.M) else "paper SDQL BATAX test did not run"
+    """The artifact regressions are required by name, not just by count."""
+    sys.path.insert(0, str(ROOT / "slotted"))
+    pf = __import__("paper_fixtures")
+    names = ["sdql-paper-batax.egg", "sdql-paper-mmm.egg", *(pf.test_path(k, p).name for k, p in pf.SUITE)]
+    missing = [n for n in names if not re.search(rf"^\s*ok\s+{re.escape(n)}\b", out, re.M)]
+    return f"paper SDQL tests did not run: {', '.join(missing)}" if missing else None
 
 
 def check_snapshots():
@@ -154,6 +158,16 @@ CHECKS = [
         True,
     ),
     ("snapshot-drift", check_snapshots, None, False, False),
+    # `slotted-subst` copies one representative of the body; the choice must not follow
+    # the table scan's order, or two runs build two e-graphs. The MMM subset program is
+    # the one that showed it.
+    (
+        "subst-determinism",
+        ("slotted/checks/check-subst-determinism.py",),
+        starts_ok,
+        False,
+        False,
+    ),
     (
         "front-ends",
         ("slotted/checks/check-front-ends.py",),
@@ -197,7 +211,7 @@ CHECKS = [
     (
         "refusals",
         ("slotted/checks/check-refusals.py",),
-        ratio(r"(\d+)/(\d+) refusals hold, with a message", 31),
+        ratio(r"(\d+)/(\d+) refusals hold, with a message", 32),
         False,
         False,
     ),

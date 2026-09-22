@@ -4,8 +4,9 @@
 ;;; These are checked column-for-column against the later locked-reference benchmark
 ;;; `slotted-egraphs/benches/sdql.rs`.  That benchmark saturates an already-optimised
 ;;; BATAX term; it is NOT the paper artifact's ten-input Table 1/2 evaluation runner.
-;;; `slotted/checks/check-paper-sdql.py` separately pins the artifact provenance of the
-;;; runnable raw-input BATAX regression.  Written at the slotted level, a rule says
+;;; Those ten inputs are under `slotted/tests/artifact/sdql/`, run as tests from
+;;; `slotted/tests/sdql-paper/` and by `slotted/eval.py`, with
+;;; `slotted/checks/check-paper-sdql.py` pinning their provenance.  Written at the slotted level, a rule says
 ;;; what it rewrites and nothing about renamings -- `slotted/slotted-egglog.py` turns
 ;;; it into egglog, and
 ;;; `slotted/gen-sdql-rules.py` compiles these same rules into

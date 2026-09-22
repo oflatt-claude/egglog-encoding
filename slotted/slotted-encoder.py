@@ -1684,11 +1684,8 @@ def atom_lines(lang, root, atoms, var="var"):
     `(root_name, lines)`, with the leading `?` stripped as those lines want. An atom's
     children are pattern variables and slot literals, so:
 
-      * a slot literal in a BINDER column is the bare `$x` that `Bind` holds;
-      * a pattern VARIABLE in a binder column stands for the bound variable, which
-        `Bind` cannot hold: it becomes the FLEXIBLE slot `$?x`, one the reference does
-        not pin, and the variable itself is bound by an atom `x == (var $?x)` so the
-        right-hand side can name it. Once per variable, however many binders share it;
+      * a slot literal in a BINDER column is the bare `$x` that `Bind` holds; a pattern
+        variable there is refused by the compiler, and is an error here;
       * anywhere else it is the TERM `(var $x)`, which needs an atom of its own, since
         an atom's child has to be a pattern variable;
       * a child reached through its own class -- a payload leaf written literally --
@@ -1699,18 +1696,14 @@ def atom_lines(lang, root, atoms, var="var"):
     the encoding implements `MultiPattern`, not the reference's distinct nested
     pattern language.
     """
-    out, extra, bound_vars = [], [0], set()
+    out, extra = [], [0]
     for name, op, kids, *_pays in atoms:
         binders = set(lang[op].binders)
         spelled = []
         for i, (kind, c) in enumerate(kids):
             if kind == "pv" and i in binders:
-                v = c.lstrip("?")
-                if v not in bound_vars:
-                    bound_vars.add(v)
-                    out.append(f"atom {v} {var} $?{v}")
-                spelled.append(f"$?{v}")
-            elif kind == "pv":
+                raise SystemExit(f"a pattern variable ({c}) cannot stand in {op}'s binder column")
+            if kind == "pv":
                 spelled.append(c.lstrip("?"))
             elif kind == "sl" and i in binders:
                 spelled.append(c)
