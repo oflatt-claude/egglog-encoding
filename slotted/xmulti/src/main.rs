@@ -291,6 +291,19 @@ fn split_two_sexprs(s: &str) -> (String, String) {
     panic!("cannot split two s-exprs from {s:?}");
 }
 
+/// The slots a pattern binds, anywhere in it: the binder positions of its nodes.
+fn binder_slots(pat: &Pattern<L>) -> Vec<Slot> {
+    let mut out = Vec::new();
+    let mut stack = vec![pat];
+    while let Some(p) = stack.pop() {
+        if let Pattern::ENode(n, children) = p {
+            out.extend(n.private_slots());
+            stack.extend(children.iter());
+        }
+    }
+    out
+}
+
 /// Does the match satisfy the condition?
 fn holds(c: &Cond, subst: &Subst) -> bool {
     let found = c
@@ -313,6 +326,8 @@ fn main() {
     let mut src = String::new();
     std::io::stdin().read_to_string(&mut src).unwrap();
     let spec = parse_spec(&src);
+    // Which build answered, so a timing log can tell a checked oracle from a plain one.
+    println!("CONFIG checks={}", if cfg!(feature = "checks") { "on" } else { "off" });
 
     let mut eg = G::default();
     let term_ids: Vec<AppliedId> = spec.terms.iter().map(|t| add(&mut eg, t)).collect();
@@ -334,10 +349,13 @@ fn main() {
             if r.atoms.is_empty() || r.nested_lhs.is_some() {
                 return None;
             }
-            let pat = MultiPattern::parse(&r.atoms.join(", ")).unwrap();
+            let mut pat = MultiPattern::parse(&r.atoms.join(", ")).unwrap();
             if let Some((root, text)) = &r.rhs {
                 let from = Pattern::PVar(root.clone());
                 let to = Pattern::parse(text).unwrap();
+                // A binder the right-hand side writes is fresh for everything else the
+                // match carries, or the node built captures; see `MultiPattern::freeze`.
+                pat.freeze(binder_slots(&to));
                 return Some((i, pat, from, to));
             }
             let (root, op, a, b) = r.action.as_ref()?;
@@ -385,6 +403,7 @@ fn main() {
 
     if !compiled.is_empty() {
         let debug = std::env::var("XMULTI_DEBUG").is_ok();
+        let trace = std::env::var("XMULTI_TRACE").is_ok();
         let mut saturated = false;
         for round in 0..spec.rounds {
             let before = eg.progress();
@@ -410,6 +429,27 @@ fn main() {
                     if !conds.iter().all(|c| holds(c, &s)) {
                         continue;
                     }
+                    // `XMULTI_TRACE=1` names every match applied, so a wrong union can be
+                    // traced to the rule and substitution that made it.
+                    if trace {
+                        let mut names: Vec<&String> = s.keys().collect();
+                        names.sort();
+                        let shown: Vec<String> = names.iter().map(|k| format!("?{k}={:?}", s[*k])).collect();
+                        eprintln!("MATCH round={round} rule={i} {}", shown.join(" "));
+                        // and the two terms the union equates, as the e-graph spells them,
+                        // so a checker outside can decide whether they are really equal
+                        let from_id = pattern_subst(&mut eg, from, &s);
+                        let to_id = pattern_subst(&mut eg, to, &s);
+                        // the printer can trip over a redundant slot; a union it cannot
+                        // spell is still recorded, unspelt
+                        let spell = |id: &AppliedId| {
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                re_to_pattern(&eg.get_syn_expr(id)).to_string()
+                            }))
+                            .unwrap_or_else(|_| "<unprintable>".to_string())
+                        };
+                        eprintln!("UNION round={round} rule={i} {} == {}", spell(&from_id), spell(&to_id));
+                    }
                     eg.union_instantiations(from, to, &s, None);
                 }
             }
@@ -429,7 +469,11 @@ fn main() {
     // implementation's representation invariants.  The `checks` feature also runs
     // these assertions during rebuilding; this final check covers the exact state
     // from which the partition and structured dump are observed.
-    eg.check();
+    // Under `--no-default-features` the crate runs as the paper's experiments ran it,
+    // and this walk is skipped with the feature: a timing run wants neither.
+    if cfg!(feature = "checks") {
+        eg.check();
+    }
 
     // Unlike a probe, a goal is deliberately not inserted before rewriting. This
     // mirrors the paper artifact's `lookup_rec_expr` criterion and prevents the

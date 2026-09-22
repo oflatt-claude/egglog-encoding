@@ -263,6 +263,13 @@ reading of a written slot: a rigid name, which its matcher never identifies with
 A pattern *variable* in a binder column is the other thing: it stands for the bound
 variable and may be identified with anything the match makes it.
 
+A slot the **right-hand side binds** is fresh for everything else the match carries. A
+matched binder's slot may in general be read as the name of a free variable of the
+term, but a rule that then writes `(Lam $y ...)` over a variable matched outside that
+binder would capture it, so such a slot is identified with nothing:
+`(rewrite (Pair (Lam $y body) e) (Lam $y (Pair body e)))` never puts `e`'s free variable
+under the new lambda.
+
 A right-hand-side slot the pattern never mentions is **minted**, with nothing to write:
 `(rewrite (F x y) (Lam $s (App (F x y) $s)))` binds a fresh `$s`. That is what the
 reference does too. `:fresh $s` says it explicitly and is still accepted, but adds

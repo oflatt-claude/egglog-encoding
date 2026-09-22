@@ -63,6 +63,7 @@ RUN_TIMEOUT = 25
 #   XDIFF_BUGS=union-id    the action unions classes instead of invocations
 #   XDIFF_BUGS=no-unify    an atom's equations may not identify two earlier mints
 #   XDIFF_BUGS=literals-alias   two different slot literals may come out as one slot
+#   XDIFF_BUGS=no-freeze    a slot the right-hand side binds may be identified with another
 #
 # `mutations.py` asserts that each of these still breaks the corpus by a recorded amount, so
 # a mutation that stops discriminating is a failure rather than a quiet gap. Two were removed
@@ -1647,6 +1648,38 @@ def curated():
             ("b", "h", "r0", "r0"),
             [("lam", V2, V2), ("h", V0, V1), ("h", V0, V0), NUL],
             rounds=4,
+        )
+    )
+
+    # CAP1 -- a binder the right-hand side writes over a variable matched outside it
+    # (FIXED). Reduced from the paper's array study at zero parameters, where
+    # `let-lam-diff` did this six rounds in and every class became one.
+    #
+    #     term   (f (lam $0 (sub (var $0) (var $0))) (var $2))
+    #     rule   p == (f l e), l == (lam $y body)   =>  union p (lam $y (f body e))
+    #
+    # The lambda's bound slot may be read as `$2`, a fine alpha-variant of the term; the
+    # right-hand side then rebinds `$y` over `e`, and that reading builds the closed
+    # `(lam $2 (f (sub $2 $2) $2))`, capturing `e`. Both sides now keep a slot the
+    # right-hand side binds apart from everything else -- `rhs_binder_literals` here,
+    # `MultiPattern::freeze` in the oracle the harness pins -- so only the plain reading
+    # fires; upstream has the bug as the failing test of its PR 49. `no-freeze` in
+    # `mutations.py` is this case failing again. The probes ask for the sound result,
+    # the captured one, and a term the union must not reach.
+    cs.append(
+        Case(
+            "CAP1-rhs-binder-over-outside-variable",
+            [("f", ("lam", V0, ("sub", V0, V0)), V2)],
+            [],
+            [("p", "f", "l", "e"), ("l", "lam", "$y", "body")],
+            ("p", ("lam", "$y", ("f", "body", "e"))),
+            [
+                ("f", ("lam", V0, ("sub", V0, V0)), V2),
+                ("lam", V1, ("f", ("sub", V1, V1), V2)),
+                ("lam", V1, ("f", ("sub", V1, V1), V1)),
+                NUL,
+            ],
+            rounds=3,
         )
     )
 

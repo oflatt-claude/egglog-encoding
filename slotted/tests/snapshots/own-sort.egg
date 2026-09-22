@@ -174,7 +174,7 @@
        (= _c0dom23 (map-union (map-image _c0p18) (map-image _c0p19)))
        (RenamesToLeader_0 _c0V10 _c0sym24 _c0V10)
        (RenamesToLeader_0 _c0V2 _c0sym25 _c0V2)
-       (= _c0uni27 (find-mapping-unify (vec-of _c0av16 _c0dom23) (vec-of (map-empty) _c0idm7 _c0idm15) (vec-of (compose (compose _c0mp14 _c0cs17) _c0sym24) (compose (compose _c0mp6 _c0cs8) _c0sym25)) (vec-of _c0p18 _c0p19)))
+       (= _c0uni27 (find-mapping-unify (vec-of _c0av16 _c0dom23) (vec-of (map-empty) _c0idm7 _c0idm15) (vec-of (compose (compose _c0mp14 _c0cs17) _c0sym24) (compose (compose _c0mp6 _c0cs8) _c0sym25)) (vec-of _c0p18 _c0p19) (map-empty)))
        (= _c0mp26 (vec-get _c0uni27 0))
        (= _c0u28 (vec-get _c0uni27 1))
        (= _c0grp29 (map-image (compose _c0u28 _c0idm7)))

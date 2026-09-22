@@ -194,6 +194,17 @@ two or more literals also states that they are pairwise distinct, as one
 `map-length` fact over all of them after refinement. A pattern variable in a
 binder column is not a literal and is left free.
 
+One slot is never identified with anything: a literal the right-hand side
+**binds**. Reading a matched binder's bound slot as the name of some free
+variable of the term is a fine alpha-variant of that term, and refinement
+offers it. But a right-hand side that binds that slot again, over something
+matched outside the binder, then captures: `let-lam-diff` reading
+`let x = y in (λw. x w)` with `w` as `y` builds `λy. let x = y in x y`. So
+`compile_rule` freezes such literals: they are no candidates for
+`refine-namings`, and `find-mapping-unify` declines an equation that would
+touch one. The oracle the harness pins carries the same rule as `MultiPattern::freeze`;
+upstream has the bug as the failing test of its PR 49.
+
 Unification decides only what the equations decide. Two mints no equation
 relates may still be one slot, and `refine-namings` is where that is settled:
 after every atom is solved, it returns *every* way the remaining slots may be
@@ -211,6 +222,7 @@ missed, never invented. This is the reference's `final_refine`.
 | `slotted/tests/` | tests written in the source language |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
+| `slotted/eval.py` | the paper's two case studies, on the encoding and on the reference through both of its matchers; `make slotted-eval` |
 
 Nothing here is hand-maintained egglog: the machinery is generated from the
 constructors a program declares, so a worked example is a program you run

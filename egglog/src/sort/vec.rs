@@ -216,13 +216,15 @@ impl ContainerSort for VecSort {
             // named earlier. Everything comes packed in vectors because two of the
             // argument lists vary in length: `(vec-of avoid domain)`, the cliques
             // that must stay apart, the equations' pattern halves, and their node
-            // halves.
-            add_primitive!(eg, "find-mapping-unify" = |head: @VecContainer (arc), cliques: @VecContainer (arc), firsts: @VecContainer (arc), seconds: @VecContainer (arc)| -?> @VecContainer (arc) {{
+            // halves; last, as one map, the slots the right-hand side binds, which no
+            // merge may touch.
+            add_primitive!(eg, "find-mapping-unify" = |head: @VecContainer (arc), cliques: @VecContainer (arc), firsts: @VecContainer (arc), seconds: @VecContainer (arc), frozen: @MapContainer (self.element())| -?> @VecContainer (arc) {{
                 let read = |v: &VecContainer| slot_maps(&state, v.data.iter().copied());
                 let head = read(&head)?;
                 let [avoid, domain] = head.as_slice() else { return None };
+                let frozen = slot_map(state.base_values(), &frozen.data);
                 let (mapping, merge) =
-                    find_mapping_unify(avoid, domain, &read(&cliques)?, &read(&firsts)?, &read(&seconds)?)?;
+                    find_mapping_unify(avoid, domain, &read(&cliques)?, &frozen, &read(&firsts)?, &read(&seconds)?)?;
                 let data = register_renamings(&mut state, [mapping, merge]);
                 Some(VecContainer { do_rebuild: false, data })
             }});

@@ -196,6 +196,25 @@
 (fail (check (= two-names (Same))))
 (pop)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; A BINDER THE RIGHT-HAND SIDE WRITES IS FRESH FOR EVERYTHING ELSE.
+;;;
+;;; The rule pushes a pair under a lambda. Matching `(Pair (Lam $0 (App $0 $0)) $2)`,
+;;; the lambda's bound slot may be read as any name -- `$2` included, which is a fine
+;;; alpha-variant of the term. But the right-hand side rebinds `$y` over `e`, and with
+;;; `$y` read as `$2` the node built is `(Lam $2 (Pair (App $2 $2) $2))`: `e` captured,
+;;; a closed term, and the class stops depending on `$2`. So a slot the right-hand
+;;; side binds is identified with nothing. This is the shape that collapsed the
+;;; paper's array study at zero parameters, through `let-lam-diff`.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(push)
+(rewrite (Pair (Lam $y body) e) (Lam $y (Pair body e)) :name "pair-under-lam")
+(let pushed (Pair (Lam $0 (App $0 $0)) $2))
+(run 2)
+(check (= pushed (Lam $5 (Pair (App $5 $5) $2))))
+(check (slots pushed $2))
+(fail (check (renaming-= pushed (Lam $5 (Pair (App $5 $5) $5)))))
+(pop)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A multipattern and a slot side condition on one rule: eta, but only where the
 ;;; function is itself a lambda.
 ;;;

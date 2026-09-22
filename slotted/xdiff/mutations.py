@@ -42,6 +42,9 @@ EXPECTED = {
     # A rule's different slot literals are no longer said to be different slots, so two
     # read off one bound slot come out equal and a rule the reference refuses fires.
     "literals-alias": 1,  # `LIT1`
+    # A slot the right-hand side binds may be identified with a free slot of the match,
+    # so the node built captures it.
+    "no-freeze": 1,  # `CAP1`
 }
 
 

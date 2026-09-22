@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests slotted-check slotted-campaign slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-check slotted-campaign slotted-eval slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -97,6 +97,14 @@ slotted-campaign:
 	python3 slotted/xdiff/campaign.py checker --cases 200 --seeds 8
 	XDIFF_DEPTH=3 XDIFF_DUP=0.4 XDIFF_SHARE=0.7 XDIFF_LAM=0.55 XDIFF_PVBIND=0.6 XDIFF_USEBIND=0.6 \
 		python3 slotted/xdiff/campaign.py iso --cases 300 --seeds 8
+
+# The paper's case studies -- the S4.1 array goal and the S4.2 BATAX kernel -- on the
+# encoding and on the reference through both of its matchers, at the paper's budgets.
+# Release builds of both binaries, since these are the numbers a graph is drawn from.
+slotted-eval:
+	cargo build --release --bin egglog
+	cargo build --release --no-default-features --manifest-path slotted/xmulti/Cargo.toml
+	python3 slotted/eval.py --params 0 1 2 3 --counts --jsonl target/slotted/eval.jsonl
 
 slotted-check-no-oracle:
 	cargo build
