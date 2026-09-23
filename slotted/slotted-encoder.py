@@ -43,7 +43,7 @@ class CarrierSymbols:
 
 
 def carrier_symbols(sorts):
-    """One symbol family per declared equality sort, in declaration order.
+    """The table names for one declared equality sort, in declaration order.
 
     Indexed whether a program declares one sort or ten, so adding a second sort to a
     working program does not rename the tables its first one compiled to.
@@ -680,7 +680,7 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
     one structurally and needs no entry.
 
     `provided` names constructors the machinery a language file includes already
-    declares -- `CORE`, and whatever family that file holds. Re-declaring one is a
+    declares -- `CORE`, and whatever constructors that file holds. Re-declaring one is a
     duplicate binding, so its signature must match and then its rules are already there
     too.
 

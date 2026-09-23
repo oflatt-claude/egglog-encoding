@@ -161,7 +161,7 @@ slots, enc, sexpr, shift_term = LANG.slots, LANG.enc, LANG.sexpr, LANG.shift
 
 # The machinery's table names are the carrier's, so they are read off the language
 # rather than written out: a program compiles to `RenamesToLeader_0` and friends, and
-# a second declared sort would get its own family.
+# a second declared sort would get its own set of tables.
 SYM = LANG.symbols_for(LANG.default_sort)
 
 

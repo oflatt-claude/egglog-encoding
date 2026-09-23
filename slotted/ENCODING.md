@@ -39,11 +39,13 @@ the rest are deleted once they are known to be renamings of it. So "are these
 two terms equal?" is not egglog's `=`: it asks whether the two reach the leader
 by the *same* renaming.
 
-# Per-carrier tables
+# Tables, once per sort
 
-One family per declared equality sort. A program declaring several gets one
-indexed family each — `RenamesToLeader_0`, `RenamesToLeader_1` — and nothing is
-shared between them but the renaming sort itself.
+Everything in this section is emitted once per equality sort the program declares,
+with the sort's position as a suffix: a program with two slotted sorts gets
+`RenamesToLeader_0` and `RenamesToLeader_1`, and the two share nothing but the
+`Renaming` sort. The listings below drop that suffix, and the `_` the generator puts
+in front of its own variables.
 
 ```
 (sort Renaming (Map i64 i64))
@@ -79,13 +81,6 @@ one; `Equated` is what the machinery derives `RenamesToLeader` from, and a stale
 row is deleted and re-derived rather than repaired in place. Repairing in place
 does not converge — transitivity keeps re-deriving the backwards row.
 
-```
-(rule ((Equated a m b) (!= a b) (= a (ordering-max a b)))
-      ((RenamesToLeader a m b)) :ruleset slotted)
-(rule ((RenamesToLeader f m l) (!= f l) (= l (ordering-max f l)))
-      ((delete (RenamesToLeader f m l))) :ruleset slotted)
-```
-
 **`ClassSlots c`** is the slots the class actually depends on, as an identity
 renaming. It is held directly rather than read off a self-loop, because a
 self-loop is derived from a *node* and so can name more slots than the class
@@ -93,6 +88,125 @@ has. Its merge is `map-intersect`, so it only ever shrinks — which is what mak
 a slot **redundant**: union two invocations that disagree on a slot and the
 class stops depending on it. A slotless class has one invocation, so all its
 spellings are the same term.
+
+**`SubstPending root q mr r`** is a substitution's answer on its way back: `r` is the
+class the primitive built and `mr` its renaming, and `q` carries `r`'s slot names into
+the root's (C12).
+
+## The rules, once per sort
+
+Twelve rules and one fact, none of which mentions a constructor.
+
+**Orienting `Equated`.** The larger value is the follower, so a leader is the least
+member of its component. An equation of a class with itself is a self-loop as it
+stands.
+
+```
+(rule ((Equated a m b) (!= a b) (= a (ordering-max a b)))
+      ((RenamesToLeader a m b)) :ruleset slotted)
+(rule ((Equated a m b) (!= a b) (= b (ordering-max a b)))
+      ((RenamesToLeader b (inverse m) a)) :ruleset slotted)
+(rule ((Equated a m a))
+      ((RenamesToLeader a m a)) :ruleset slotted)
+```
+
+**Dropping a stale edge.** egglog's own `union` can change which of two values is the
+larger, leaving an edge that points from the smaller to the larger. It is deleted;
+transitivity re-derives it the right way round.
+
+```
+(rule ((RenamesToLeader f m l) (!= f l) (= l (ordering-max f l)))
+      ((delete (RenamesToLeader f m l))) :ruleset slotted)
+```
+
+**Carrying class slots along an edge**, in both directions. One member's slot set,
+taken through the renaming, bounds the other's; the merge intersects, so the whole
+component settles on the slots every member has.
+
+```
+(rule ((RenamesToLeader a m b) (= slots (ClassSlots a)))
+      ((set (ClassSlots b) (map-image (compose (inverse m) slots)))) :ruleset slotted)
+(rule ((RenamesToLeader a m b) (= slots (ClassSlots b)))
+      ((set (ClassSlots a) (map-image (compose m slots)))) :ruleset slotted)
+```
+
+**Transitivity.** Two edges compose into an equation. The guard keeps a symmetry of
+the middle class from multiplying edges: through a self-loop the rule fires only when
+the loop is idempotent, `m * m = m`, which is a loop that drops slots rather than
+permuting them, or when the path closes a cycle, which is how a class learns a
+symmetry of its own.
+
+```
+(rule ((RenamesToLeader e1 m12 e2)
+       (RenamesToLeader e2 m23 e3)
+       (guard (or (bool-!= e2 e3) (bool= (compose m23 m23) m23) (bool= e1 e3))))
+      ((Equated e1 (compose m12 m23) e3)) :ruleset slotted)
+```
+
+**One leader per follower.** A follower with edges to two leaders makes the leaders
+equal and keeps the edge to the smaller. Two different edges to the *same* leader make
+a symmetry of that leader, and the one with the larger renaming goes.
+
+```
+(rule ((RenamesToLeader a m1 b)
+       (RenamesToLeader a m2 c)
+       (!= a c) (!= a b)
+       (= (ordering-max b c) b)
+       (guard (or (bool-!= b c)
+                  (and (bool= b c) (bool-!= m1 m2) (bool= (ordering-max m1 m2) m1)))))
+      ((delete (RenamesToLeader a m1 b))
+       (Equated b (compose (inverse m1) m2) c)) :ruleset slotted)
+```
+
+**Symmetries spelled on the class's slots.** A self-loop derived from a node may name
+slots the class has since dropped. Where the class has an idempotent self-loop `m`,
+its slot set as a projection, every other self-loop is conjugated into it and the
+wider one deleted, so a group has one spelling.
+
+```
+(rule ((RenamesToLeader a m1 a)
+       (RenamesToLeader a m a)
+       (= m (compose m m))
+       (= m2 (compose m (compose m1 m)))
+       (!= m1 m2))
+      ((delete (RenamesToLeader a m1 a))
+       (RenamesToLeader a m2 a)) :ruleset slotted)
+```
+
+**One variable class.** `(Var v)` with `v` other than 0 is restated as `(Var 0)` under
+`{0 -> v}` and deleted. The variable class holds no constructor node, so it gets its
+self-loop as a fact.
+
+```
+(rule ((= e (Var v)) (!= v 0))
+      ((Equated e (map-insert (map-empty) 0 v) (Var 0))
+       (delete (Var v))) :ruleset slotted)
+(RenamesToLeader (Var 0) (map-insert (map-empty) 0 0) (Var 0))
+```
+
+**The same invocation is one value.** Two values that reach one leader by renamings
+agreeing wherever both are defined, up to a symmetry of the leader, are `union`ed.
+This is where "the same class by the same renaming" becomes egglog equality, and why
+a claim's `=` compares renamings up to a symmetry row.
+
+```
+(rule ((RenamesToLeader a m1_o c)
+       (RenamesToLeader b m2 c)
+       (RenamesToLeader c sym c)
+       (= m1 (compose m1_o sym))
+       (= m (compose m1 (inverse m2)))
+       (= (compose m m) m))
+      ((union a b)) :ruleset slotted)
+```
+
+**A substitution's answer.** Once the class the primitive built has its slot set, the
+pending row becomes an equation between the root and that class in the root's slot
+names.
+
+```
+(rule ((SubstPending root q mr r) (= cs (ClassSlots r)))
+      ((Equated root (compose q (compose mr cs)) r)) :ruleset slotted)
+```
 
 # Per-constructor machinery
 
@@ -104,8 +218,9 @@ A child column expands to a renaming column and a class column, so
 ```
 
 and `(Add $0 $1)` is stored as
-`(Add (map-of 0 0) (Var 0) (map-of 0 1) (Var 0))`. Each constructor then gets
-one block of rules. Three are worth reading.
+`(Add (map-of 0 0) (Var 0) (map-of 0 1) (Var 0))`. Each constructor then gets one
+block of rules: class slots, a self-loop, the alpha-finder and its symmetry twin,
+migration, and one child-update per child column.
 
 **Class slots**, an upper bound the merge narrows:
 
@@ -124,7 +239,9 @@ one block of rules. Three are worth reading.
 
 **The alpha-finder**, which is the heart of it: two nodes with the same children
 that differ only by a renaming are one invocation, so one is deleted and the
-renaming between them recorded.
+renaming between them recorded. The guard, paraphrased below, is for two such nodes
+in one class: the one with the larger edges is the one deleted, so exactly one
+survives.
 
 ```
 (rule ((= e1 (Add m1_o c1 m2_o c2))
@@ -135,7 +252,7 @@ renaming between them recorded.
        (= m1 (compose m1_o sym1))
        (= m2 (compose m2_o sym2))
        (= m (find-mapping m1 m2 b1 b2))
-       ...)
+       (guard <e1 and e2 differ, or the deleted node's edges are the larger>))
       ((Equated e1 m e2)
        (delete (Add m1_o c1 m2_o c2))) :ruleset slotted)
 ```
@@ -143,12 +260,63 @@ renaming between them recorded.
 `find-mapping` solves for the renaming carrying one tuple of edges onto another.
 The `RenamesToLeader c sym c` atoms are the children's *symmetries*: two nodes
 may agree only after permuting a child's slots, so the solve quantifies over the
-group. The same solve is kept non-destructively by a second rule, which is how a
-child's symmetry becomes the parent's.
+group.
 
-Because this deletes rows, a class keeps exactly one node per shape — which is
-why a claim about a term matches it rather than spelling it out. A term the
-e-graph holds need not have a row under the spelling you wrote.
+**The symmetry twin** is the same solve against the node itself: a renaming that
+carries the node onto its own reading through its children's symmetries is a symmetry
+of the class, spelled on the class's slots. This is how a child's symmetry becomes the
+parent's, and it deletes nothing.
+
+```
+(rule ((= e (Add m1_o c1 m2_o c2))
+       (RenamesToLeader c1 sym1 c1)
+       (RenamesToLeader c2 sym2 c2)
+       (= m1 (compose m1_o sym1))
+       (= m2 (compose m2_o sym2))
+       (= sym_out (find-mapping m1_o m2_o m1 m2))
+       (= cs (ClassSlots e)))
+      ((RenamesToLeader e (compose cs (compose sym_out cs)) e)) :ruleset slotted)
+```
+
+**Migration** rebuilds a follower's node in the leader's slot names and unions it into
+the leader. `R` takes the node's slots to the leader's, agreeing with the edge where
+the leader has the slot and minting a name where the class has dropped it. After this
+every node lives in a leader, and a follower is a name in `RenamesToLeader` and
+nothing more.
+
+```
+(rule ((RenamesToLeader e2 m e1)
+       (= e2 (Add m1 c1 m2 c2))
+       (!= e1 e2)
+       (= e2 (ordering-max e1 e2))
+       (= nodeslots (map-union (map-image m1) (map-image m2)))
+       (= R (find-mapping-total (map-domain m) nodeslots (map-domain m) m))
+       (= n1 (compose R m1))
+       (= n2 (compose R m2)))
+      ((union e1 (Add n1 c1 n2 c2))
+       (delete (Add m1 c1 m2 c2))) :ruleset slotted)
+```
+
+**Child-update** rebuilds a node whose child has a leader so that it points at the
+leader, its edge composed with the child's renaming. Through a self-loop, `c1 = c'`,
+only an idempotent one counts and only if the edge changes: that is a child that
+dropped a slot, and the parent's edge drops it too, which is how redundancy travels
+upward. One such rule per child column; the one for the second column is the same
+with `m2` and `c2`.
+
+```
+(rule ((RenamesToLeader c1 m c')
+       (= node (Add m1 c1 m2 c2))
+       (= c1 (ordering-max c1 c'))
+       (guard (or (bool-!= c1 c') (bool= (compose m m) m)))
+       (guard (or (bool-!= c1 c') (bool-!= (compose m1 m) m1))))
+      ((union node (Add (compose m1 m) c' m2 c2))
+       (delete (Add m1 c1 m2 c2))) :ruleset slotted)
+```
+
+Because the alpha-finder and migration delete rows, a class keeps exactly one node
+per shape — which is why a claim about a term matches it rather than spelling it
+out. A term the e-graph holds need not have a row under the spelling you wrote.
 
 # Binders
 
@@ -157,6 +325,21 @@ stored as an edge `0 -> s` to `(Var 0)` like any other, so a binder is not a
 different kind of column — what differs is that the slot is taken out of the
 class's slot set over the column the binder **covers**, which is the one right
 after it. `let` binds in its body and leaves its value's occurrence free.
+
+One rule per bound slot does the taking out: the node's edge to its leader is
+restated without the bound slot, and the class-slot transport above then intersects
+that slot away, so the class does not depend on what it binds.
+
+```
+(rule ((RenamesToLeader (Lam mvar (Var 0) m2 c2) ml l)
+       (= v (map-get mvar 0)))
+      ((Equated (Lam mvar (Var 0) m2 c2) (inverse (map-remove (inverse ml) v)) l)) :ruleset slotted)
+```
+
+In the constructor's own block the binder column joins no symmetry row in the
+alpha-finder and its twin, since the variable class has none to offer, and its
+child-update also requires `(map-get (compose m1 m) 0)` to exist: a bound name may be
+renamed but not lost.
 
 When a bound slot collides with a free one the machinery renames the bound one
 first, to a slot the node does not use, which keeps it alpha-renameable.
@@ -293,8 +476,8 @@ The primitives:
 
 ## The compiled rule
 
-What `slotted-encoder.py` emits for `sum-fact-3`, with the carrier suffix `_0`
-dropped from the table names. Names in quotes are the rule's own variables and
+What `slotted-encoder.py` emits for `sum-fact-3`, with the `_0` that says which
+sort's tables these are dropped from the table names. Names in quotes are the rule's own variables and
 literals, so a frame is keyed by the words the rule was written in.
 
 ```
