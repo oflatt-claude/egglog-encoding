@@ -28,9 +28,9 @@ Usage:
 Budgets default to the paper's: 6 iterations for the array goal, and for SDQL the
 artifact runner's per-workload limit (13 for BATAX's first phase, 12 for its second, 30
 for the rest); `--rounds` overrides them all. `--timeout` defaults to the artifact's
-300 s per run. Timings are of whatever binaries are in place; `make slotted-eval`
-builds both in release first, the oracle without the crate's `checks` feature, since the
-differential harness uses debug, checked builds and those numbers mean nothing. Each
+300 s per run. Both binaries are built in release first, the oracle without the crate's
+`checks` feature, since the differential harness uses debug, checked builds and those
+numbers mean nothing; `--no-build` skips that when they are known current. Each
 reference row says which oracle answered. Rows go to a Markdown table on stdout and,
 with `--jsonl`, one JSON object per row appended to a file, which is what a graph should
 be drawn from.
@@ -66,16 +66,22 @@ SIDES = ("encoding", "ref-multi", "ref-nested")
 SCRATCH = ROOT / "target" / "slotted"
 
 
-def pick(release, debug):
-    """The release binary when it exists, else the debug one the harness uses."""
-    return release if release.exists() else debug
-
-
-EGGLOG = pick(ROOT / "target" / "release" / "egglog", ROOT / "target" / "debug" / "egglog")
-XMULTI = pick(
-    ROOT / "slotted" / "xmulti" / "target" / "release" / "xmulti",
-    ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti",
+#: Release builds of both sides: egglog, and the reference through `xmulti` without the
+#: crate's `checks` feature, the way the paper's experiments ran it.
+EGGLOG = ROOT / "target" / "release" / "egglog"
+XMULTI = ROOT / "slotted" / "xmulti" / "target" / "release" / "xmulti"
+BUILDS = (
+    ("cargo", "build", "--release", "--bin", "egglog"),
+    ("cargo", "build", "--release", "--no-default-features", "--manifest-path", "slotted/xmulti/Cargo.toml"),
 )
+
+
+def build():
+    """Bring both binaries up to date, so a timing is of the code in the checkout.
+    cargo's own output stays on stderr."""
+    for cmd in BUILDS:
+        if subprocess.run(cmd, cwd=ROOT, stdout=sys.stderr).returncode != 0:
+            sys.exit(f"eval.py: `{' '.join(cmd)}` failed")
 
 
 class Row:
@@ -325,15 +331,18 @@ def main():
     ap.add_argument("--counts", action="store_true", help="also count the final e-graph's classes and nodes")
     ap.add_argument("--timeout", type=int, default=300, help="seconds per run; the artifact's own budget")
     ap.add_argument("--jsonl", type=Path, help="append one JSON object per row here")
+    ap.add_argument("--no-build", action="store_true", help="skip `cargo build`; the binaries are known current")
     args = ap.parse_args()
 
     sides = SIDES if args.side == "all" else tuple(s.strip() for s in args.side.split(","))
     bad = [s for s in sides if s not in SIDES]
     if bad:
         ap.error(f"unknown side {bad}; choose from {SIDES}")
+    if not args.no_build:
+        build()
     for tool in (EGGLOG, XMULTI):
         if not tool.exists():
-            ap.error(f"missing {tool.relative_to(ROOT)}; build it first (`make slotted-eval` does)")
+            ap.error(f"missing {tool.relative_to(ROOT)}; run without --no-build")
     print(f"egglog {EGGLOG.relative_to(ROOT)}   xmulti {XMULTI.relative_to(ROOT)}", file=sys.stderr)
 
     rows = []

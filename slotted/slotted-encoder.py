@@ -2146,9 +2146,10 @@ def compile_rule(
     egglog runs a body's primitives after the whole join, once per row, and the join
     includes one row per refinement index, so a rule that refined inline would build
     its frame once per index. Instead the first rule finds a match and stores its
-    refinements in a relation of its own, and a second rule in the `slotted-apply`
+    refinements in a relation of its own; a second rule in the `slotted-apply`
     ruleset joins that relation with `Idx`, reads one refinement, checks the
-    conditions and acts. The schedule runs the two in turn within one step.
+    conditions and acts; and a third, in the same ruleset, deletes the row. The
+    schedule runs the two rulesets in turn within one step.
 
     A right-hand-side slot the pattern never pins is FRESH BY DEFINITION, so it is
     inferred rather than declared -- the reference mints one on the spot
@@ -2225,11 +2226,15 @@ def compile_rule(
             rule(body[: q.split], [row], in_ruleset, f':name "{name}"' if name else None),
             rule(
                 [row, *body[q.split :]],
-                [*act, f"(delete {row})"],
+                act,
                 ":naive" if naive else None,
                 ":ruleset slotted-apply",
                 f':name "{name}/apply"' if name else None,
             ),
+            # every stored row is spent once the acting rule has read it, whether or not
+            # a refinement passed the conditions; egglog finds a ruleset's matches
+            # before it applies any action, so the drain never hides a row from it
+            rule([row], [f"(delete {row})"], ":ruleset slotted-apply", f':name "{name}/drain"' if name else None),
         ]
     )
 

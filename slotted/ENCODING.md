@@ -480,12 +480,13 @@ What `slotted-encoder.py` emits for `sum-fact-3`, with the `_0` that says which
 sort's tables these are dropped from the table names. Names in quotes are the rule's
 own variables and literals, so a frame is keyed by the words the rule was written in.
 
-One rewrite becomes a relation and two rules. egglog joins a body's table atoms first
-and runs its primitives afterwards, once per matched row; had the index relation `Idx`
-been in the same body as the frame primitives, every frame would have been built once
-per index. So the first rule finds a match and stores its refinements, and the second,
+One rewrite becomes a relation and three rules. egglog joins a body's table atoms
+first and runs its primitives afterwards, once per matched row; had the index relation
+`Idx` been in the same body as the frame primitives, every frame would have been built
+once per index. So the first rule finds a match and stores its refinements; the second,
 in the `slotted-apply` ruleset, joins the stored row with `Idx`, reads one refinement,
-checks the conditions and acts (C13).
+checks the conditions and acts; and the third deletes the row once that phase has read
+it (C13).
 
 ```
 (relation _matched_sum-fact-3 (Frames U U U U U))
@@ -533,16 +534,20 @@ checks the conditions and acts (C13).
        (let built_sing_slots (map-union (node-slots m (names "e1") (names) (names)) built_sum_slots))
        ;; anchored at _p the root's renaming is the identity, so the equation the rule
        ;; means is egglog's own union (C11)
-       (union built_sing cls_p)
-       ;; the stored match is spent
-       (delete (_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)))
+       (union built_sing cls_p))
       :ruleset slotted-apply :name "sum-fact-3/apply")
+
+;; the stored match is spent, whether or not a refinement passed the conditions
+(rule ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2))
+      ((delete (_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)))
+      :ruleset slotted-apply :name "sum-fact-3/drain")
 ```
 
 **When the rules run.** A user step is `(seq (run) (run slotted-apply) (saturate (run
-slotted)))`: the matching rules, then the acting rules, then the machinery to a fixed
-point. The acting rule consumes the row it read, so a match is acted on once and a
-row rewritten by a later rebuild does not fire it again; a match that recurs after the
+slotted)))`: the matching rules, then the acting and draining rules, then the machinery
+to a fixed point. egglog finds every match of a ruleset before it applies any action,
+so the drain never hides a row from the acting rule, and a row is gone after one phase
+whether or not a refinement passed the conditions; a match that recurs after the
 machinery has changed its nodes is found afresh. On the SDQL matrix-multiplication
 benchmark this took the run from 1.16 s to 0.18 s with one thread, the user rules'
 apply time, where `--timing-summary` books the primitives, falling from 820 ms to
@@ -626,8 +631,9 @@ after its table join, once per row, so a rule that joined `Idx` beside its frame
 primitives would build the frame once per index. Instead the matching rule stores each
 match, its refinements and the classes the action reads, in a relation of its own, and
 a rule in the `slotted-apply` ruleset joins that row with `Idx`, reads one refinement,
-checks the conditions, acts and deletes the row. The schedule runs the two rulesets in
-turn within one step, so a step still means one round of every rule.
+checks the conditions and acts, and a third rule in that ruleset deletes the row. The
+schedule runs the two rulesets in turn within one step, so a step still means one round
+of every rule.
 
 # Where the pieces live
 

@@ -102,8 +102,6 @@ slotted-campaign:
 # encoding and on the reference through both of its matchers, at the artifact's budgets.
 # Release builds of both binaries, since these are the numbers a graph is drawn from.
 slotted-eval:
-	cargo build --release --bin egglog
-	cargo build --release --no-default-features --manifest-path slotted/xmulti/Cargo.toml
 	python3 slotted/eval.py --params 0 1 2 3 --counts --jsonl target/slotted/eval.jsonl
 
 slotted-check-no-oracle:
