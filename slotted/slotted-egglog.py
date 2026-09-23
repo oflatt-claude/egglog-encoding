@@ -602,7 +602,8 @@ def schedule(steps, rules):
     if not rules or steps == 0:
         return "(run-schedule (saturate (run slotted)))"
     return (
-        f"(run-schedule (saturate (run slotted))\n              (repeat {steps} (seq (run) (saturate (run slotted)))))"
+        f"(run-schedule (saturate (run slotted))\n"
+        f"              (repeat {steps} (seq (run) (run slotted-apply) (saturate (run slotted)))))"
     )
 
 
@@ -638,7 +639,7 @@ def keywords(src, rest):
     return out
 
 
-def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
+def compile_rewrite(src, form, bugs=frozenset(), ruleset=None, name=None, **kw):
     """`(rewrite lhs rhs [:name n] [:when c] [:lead N] [:fresh $s...])`.
 
     `:lead` names the atom the query starts from, counting over the flattened pattern.
@@ -651,27 +652,18 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     `:fresh` names the slots the right-hand side binds that the pattern never mentions,
     so the compiler mints them against everything the match already used.
 
-    `tail` closes the rule and is where a ruleset and a name go, so it carries the
-    closing paren -- the generated `sdql` file wants one, a compiled test does not.
+    `ruleset` and `name` override the form's own `:ruleset` and `:name`, for a
+    generator that places the rules itself.
     """
     parts = rewrite_parts(src, form)
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
     diseq, same = parts["diseq"], parts["same"]
-    if parts["ruleset"] and ":ruleset" not in tail:
-        tail = f" :ruleset {parts['ruleset']}" + tail
+    ruleset = ruleset or parts["ruleset"]
+    # egglog reports a rule by its `:name` and takes it as a string literal. It panics
+    # on a name already live in the scope, so reuse is only legal once a `(pop)` has
+    # removed the earlier rule.
+    name = name or parts["name"]
     lhs, rhs = parts["lhs"], parts["rhs"]
-    if parts["name"] and ":name" not in tail:
-        # egglog reports a rule by its `:name` and takes it as a string literal. It
-        # panics on a name already live in the scope, so reuse is only legal once a
-        # `(pop)` has removed the earlier rule. Skipped when the caller's tail already
-        # names the rule -- `gen-sdql-rules.py` appends its own, and two `:name` options
-        # on one rule is not valid egglog.
-        tail = f' :name "{parts["name"]}"' + tail
-    if uses_subst(rhs):
-        # `slotted-subst` extracts a term and adds the result back, so it both reads
-        # and writes tables: callable from the head of a `:naive` rule, not a seminaive
-        # one.
-        tail = " :naive" + tail
     # A pattern has to be a CALL. A bare variable on the left matches every class, so the
     # rule says nothing, and egglog rejects it too. Without this, `flatten` indexes
     # `lang[t[0]]` and on a string that is its first CHARACTER, so the failure was a
@@ -704,7 +696,12 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
         same=same,
         fresh=fresh,
         bugs=bugs,
-        tail=tail,
+        name=name,
+        ruleset=ruleset,
+        # `slotted-subst` extracts a term and adds the result back, so it both reads
+        # and writes tables: callable from the head of a `:naive` rule, not a seminaive
+        # one.
+        naive=uses_subst(rhs),
         # whatever else a caller pins, so a generator that already committed its
         # output keeps emitting the same text
         **kw,

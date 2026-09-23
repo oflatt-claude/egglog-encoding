@@ -10,6 +10,7 @@ The executable derivation and worked examples live in
 their implementation.
 """
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -910,8 +911,8 @@ def carrier_core(symbols):
     )
 
 
-#: How many refinement indices a compiled rule may read. `refine` is PARTIAL past the
-#: last consistent merging, so a rule joining `Idx` against it stops on its own: seeding
+#: How many refinement indices a compiled rule may read. `vec-get` is PARTIAL past the
+#: last refinement, so a rule joining `Idx` against it stops on its own: seeding
 #: more than a rule needs costs join attempts, and seeding fewer loses the answers past
 #: the last one. Index 0 is the identity, so running out degrades to not refining --
 #: matches are missed, never invented.
@@ -927,7 +928,7 @@ NAMING_INDICES = 64
 
 
 def prelude():
-    """The declarations no carrier owns: renamings, namings, and the refinement indices.
+    """The declarations no sort owns: renamings, refinement lists, and their indices.
 
     Nothing here names a carrier, so one copy serves a program however many equality
     sorts it declares.
@@ -938,7 +939,7 @@ def prelude():
             "(sort Renaming (Map i64 i64))",
             "",
             ";; Every way a match's slots may be merged, and the indices to read one at.",
-            "(sort Namings (Vec Renaming))",
+            "(sort Frames (Vec Frame))",
             "(relation Idx (i64))",
             *(f"(Idx {i})" for i in range(NAMING_INDICES)),
         ]
@@ -954,6 +955,7 @@ def multi_sort_core(carriers):
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
             "",
             "(ruleset slotted)",
+            "(ruleset slotted-apply)",
             "",
             "(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)",
             "(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)",
@@ -1829,9 +1831,28 @@ class Query:
 
     `new` and `pay_name` continue the query's own name supplies, so whatever is
     appended cannot collide with a name the pattern already used.
+
+    `split`, `refined` and `pays` are for a rule that stores its matches (C13):
+    `body[:split]` finds a match and binds `refined` to its refinements, `body[split:]`
+    reads one refinement out and checks the conditions, and `pays` maps each payload
+    variable the atoms bind to its sort. `split` is `None` when nothing is refined.
     """
 
-    def __init__(self, body, cls_of, mp_of, slot_of, pvar_sorts, new, pay_name, frame=None, fname=None):
+    def __init__(
+        self,
+        body,
+        cls_of,
+        mp_of,
+        slot_of,
+        pvar_sorts,
+        new,
+        pay_name,
+        frame=None,
+        fname=None,
+        split=None,
+        refined=None,
+        pays=None,
+    ):
         self.body = body
         self.cls_of = cls_of
         self.mp_of = mp_of
@@ -1843,6 +1864,9 @@ class Query:
         #: pattern variable
         self.frame = frame
         self.fname = fname
+        self.split = split
+        self.refined = refined
+        self.pays = pays or {}
 
 
 def compile_query(
@@ -1855,7 +1879,8 @@ def compile_query(
     (C6, and the cliques), `refine` picks one merging of what is left open (C8),
     `mint` adds the right-hand side's fresh slots (C10), and the conditions read the
     result (C9). Nothing here is ordered: `frame-join` is associative and commutative,
-    so the join tree below is a hint to prune early, not a meaning.
+    so the join tree below means nothing; egglog runs every primitive after the table
+    join, once per matched row.
     """
     body, uid, used = [], [0], set()
     pvar_sorts = infer_pattern_sorts(lang, atoms)
@@ -1885,7 +1910,7 @@ def compile_query(
         text = " ".join(f'"{n}"' for n in names)
         return f" {text}" if text else ""
 
-    cls_of, pay_of = {}, {}
+    cls_of, pay_of, pay_sorts = {}, {}, {}
     binding = [True]
 
     def pay_name(n):
@@ -1924,6 +1949,9 @@ def compile_query(
                 )
             pays = op.pays
         edges = [named(f"e{idx}_{kid_label(k, j)}") for j, k in enumerate(kids)]
+        for col, p in zip((c for c in op.sig if c not in SLOTTED), pays, strict=True):
+            if isinstance(p, tuple) and p[0] == "ppv":
+                pay_sorts[pay_name(p[1])] = col
         if aroot not in cls_of:
             cls_of[aroot] = named(f"cls_{label(aroot)}")
         rv = cls_of[aroot]
@@ -1971,7 +1999,16 @@ def compile_query(
         atom_vars.append(av)
     binding[0] = False
 
+    for a, b in same:
+        for v in (a, b):
+            if v not in cls_of:
+                raise SystemExit(f"`=` names {v!r}, which no pattern binds")
+        if pvar_sorts[a] != pvar_sorts[b]:
+            raise SystemExit(f"`=` cannot identify {a!r} ({pvar_sorts[a]}) with {b!r} ({pvar_sorts[b]})")
+        body.append(f"(= {cls_of[a]} {cls_of[b]})")
+
     # the frame: every atom's constraints, joined
+    refined = split = None
     if not atom_vars:
         frame = "(frame)"
     else:
@@ -1986,9 +2023,11 @@ def compile_query(
         # spelled in the root's slot names, so the action's equation is at the identity
         frame = f'(anchor {frame} "{fname(anchor)}")'
     if refine and atoms:
-        choice = named("choice")
+        refined, choice = named("refined"), named("choice")
+        body.append(f"(= {refined} (refinements {frame}))")
+        split = len(body)
         body.append(f"(Idx {choice})")
-        frame = f"(refine {frame} {choice})"
+        frame = f"(vec-get {refined} {choice})"
     fresh = sorted(set(fresh))
     if fresh:
         frame = f"(mint {frame} (names{quoted(fresh)}))"
@@ -2003,12 +2042,6 @@ def compile_query(
             continue
         body.append(f'({"free" if want else "not-free"} {m} "{slot}" (names{quoted(fname(v) for v in pvars)}))')
     for a, b in same:
-        for v in (a, b):
-            if v not in cls_of:
-                raise SystemExit(f"`=` names {v!r}, which no pattern binds")
-        if pvar_sorts[a] != pvar_sorts[b]:
-            raise SystemExit(f"`=` cannot identify {a!r} ({pvar_sorts[a]}) with {b!r} ({pvar_sorts[b]})")
-        body.append(f"(= {cls_of[a]} {cls_of[b]})")
         body.append(f'(same {m} "{fname(a)}" "{fname(b)}")')
     for a, b in diseq:
         for v in (a, b):
@@ -2018,7 +2051,20 @@ def compile_query(
             raise SystemExit(f"`!=` cannot compare {a!r} ({pvar_sorts[a]}) with {b!r} ({pvar_sorts[b]})")
         body.append(f'(guard (or (bool-!= {cls_of[a]} {cls_of[b]}) (not (bool-same {m} "{fname(a)}" "{fname(b)}"))))')
 
-    return Query(body, cls_of, mp_of, slot_of, pvar_sorts, named, pay_name, frame=m, fname=fname)
+    return Query(
+        body,
+        cls_of,
+        mp_of,
+        slot_of,
+        pvar_sorts,
+        named,
+        pay_name,
+        frame=m,
+        fname=fname,
+        split=split,
+        refined=refined,
+        pays=pay_sorts,
+    )
 
 
 def build_rhs(lang, term, expected_sort, q):
@@ -2089,16 +2135,28 @@ def compile_rule(
     same=(),
     fresh=(),
     bugs=frozenset(),
-    tail=")",
     refine=True,
+    name=None,
+    ruleset=None,
+    naive=False,
 ):
-    """Compile a flattened multipattern and its action into one egglog rule.
+    """Compile a flattened multipattern and its action into egglog rules.
 
-    The pattern is `compile_query`'s; this adds C11, the action. A right-hand-side
-    slot the pattern never pins is FRESH BY DEFINITION, so it is inferred rather than
-    declared -- the reference mints one on the spot (`Slot::fresh()` in
-    rewrite/ematch.rs) with nothing written by the author. An explicit `fresh` is
-    still honoured and adds nothing an inferred set does not hold.
+    The pattern is `compile_query`'s; this adds C11, the action, and C13, the split:
+    egglog runs a body's primitives after the whole join, once per row, and the join
+    includes one row per refinement index, so a rule that refined inline would build
+    its frame once per index. Instead the first rule finds a match and stores its
+    refinements in a relation of its own, and a second rule in the `slotted-apply`
+    ruleset joins that relation with `Idx`, reads one refinement, checks the
+    conditions and acts. The schedule runs the two in turn within one step.
+
+    A right-hand-side slot the pattern never pins is FRESH BY DEFINITION, so it is
+    inferred rather than declared -- the reference mints one on the spot
+    (`Slot::fresh()` in rewrite/ematch.rs) with nothing written by the author. An
+    explicit `fresh` is still honoured and adds nothing an inferred set does not hold.
+
+    `name` and `ruleset` are the rule's; `naive` marks an action that reads and writes
+    tables, which egglog allows only in a `:naive` rule.
     """
     q = compile_query(
         lang,
@@ -2149,4 +2207,40 @@ def compile_rule(
         node = node_expr(action_op, [mp_of[v] for v in pvs], [cls_of[v] for v in pvs], action_op.pays)
         act = [f"(union {node} {cls_of[root]})"]
 
-    return "(rule (" + "\n       ".join(body) + ")\n      (" + "\n       ".join(act) + ")" + tail
+    def rule(body, act, *options):
+        opts = "".join(f" {o}" for o in options if o)
+        return "(rule (" + "\n       ".join(body) + ")\n      (" + "\n       ".join(act) + ")" + opts + ")"
+
+    in_ruleset = f":ruleset {ruleset}" if ruleset else None
+    if q.split is None:
+        return rule(body, act, ":naive" if naive else None, in_ruleset, f':name "{name}"' if name else None)
+    # C13: one row per match, its refinements and the classes the action reads
+    columns = [q.refined, *cls_of.values(), *sorted(q.pays)]
+    sorts = ["Frames", *(pvar_sorts[v] for v in cls_of), *(q.pays[v] for v in sorted(q.pays))]
+    relation = match_relation(name, [*body[: q.split], *act])
+    row = f"({relation} {' '.join(columns)})"
+    return "\n".join(
+        [
+            f"(relation {relation} ({' '.join(sorts)}))",
+            rule(body[: q.split], [row], in_ruleset, f':name "{name}"' if name else None),
+            rule(
+                [row, *body[q.split :]],
+                [*act, f"(delete {row})"],
+                ":naive" if naive else None,
+                ":ruleset slotted-apply",
+                f':name "{name}/apply"' if name else None,
+            ),
+        ]
+    )
+
+
+def match_relation(name, text):
+    """The relation a rule's matches wait in: named after the rule, or after a hash of
+    its match and action when the rule has no name, since two unnamed rules may share a
+    match and differ in what they do with it. The `_` prefix is the compiler's, which no
+    author's name begins with."""
+    if name:
+        stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+    else:
+        stem = hashlib.sha1("\n".join(text).encode()).hexdigest()[:10]
+    return f"_matched_{stem}"

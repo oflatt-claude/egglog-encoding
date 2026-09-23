@@ -453,8 +453,8 @@ nothing otherwise, so a reading that identifies two slots of one node simply fai
 join. The cliques are not stored: `sort/frame.rs` in the egglog crate reads them off
 the occurrences (`apart`). The reference matcher keeps the same information as pairwise
 disequality constraints. In the match above every block holds a slot of the root
-node, so the node clique pins all four and `refine` offers only the identity; C8 says
-when it has more to do.
+node, so the node clique pins all four and `refinements` holds the frame alone; C8
+says when it has more to do.
 
 The primitives:
 
@@ -467,20 +467,29 @@ The primitives:
 | `(atom "a" binding...)` | one atom's constraints, closed; fails if its own columns break a clique |
 | `(frame-join f g)` | both frames' constraints, closed; fails where a clique breaks. Associative and commutative |
 | `(anchor f "p")` | the frame spelled in `p`'s slot names: the rule's root, so its renaming is the identity and the action is egglog's `union` |
-| `(refine f i)` | the `i`-th consistent merging of the blocks refinement may touch, `0` the identity; fails past the last |
+| `(refinements f)` | every consistent merging of the blocks refinement may touch, as a `Vec` of frames with `f` itself first; `vec-get` reads one and is partial past the last |
 | `(mint f (names "$z"...))` | fresh slots for a right-hand side, apart from everything named |
 | `(free m "$x" (names v...))`, `(not-free ...)` | is the literal's slot in one of the variables' images |
 | `(same m "a" "b")`, `(bool-same ...)` | the two variables are one invocation |
 | `(ren m "v")` | `v`'s renaming into the pattern's slots; a literal comes back as `{0 -> slot}` |
 | `(node-slots m uncovered covered bound)` | a built node's free slots from its named columns; `(without m slots bound)` for a built child under a binder |
 
-## The compiled rule
+## The compiled rules
 
 What `slotted-encoder.py` emits for `sum-fact-3`, with the `_0` that says which
-sort's tables these are dropped from the table names. Names in quotes are the rule's own variables and
-literals, so a frame is keyed by the words the rule was written in.
+sort's tables these are dropped from the table names. Names in quotes are the rule's
+own variables and literals, so a frame is keyed by the words the rule was written in.
+
+One rewrite becomes a relation and two rules. egglog joins a body's table atoms first
+and runs its primitives afterwards, once per matched row; had the index relation `Idx`
+been in the same body as the frame primitives, every frame would have been built once
+per index. So the first rule finds a match and stores its refinements, and the second,
+in the `slotted-apply` ruleset, joins the stored row with `Idx`, reads one refinement,
+checks the conditions and acts (C13).
 
 ```
+(relation _matched_sum-fact-3 (Frames U U U U U))
+
 (rule (;; egglog's own match of the two atoms, one row pattern each: an ordinary
        ;; column is an edge and a class, a binder column an edge and the variable
        ;; class (Var 0)
@@ -501,10 +510,16 @@ literals, so a frame is keyed by the words the rule was written in.
        ;; the two joined: where they share _t1 the occurrences are identified (C6);
        ;; nothing here if a clique breaks
        (= f (frame-join atom_p atom_t1))
-       ;; spelled in the root's class slots, then the choice-th consistent merging of
-       ;; what the pattern left open, 0 being the frame as it stands (C8)
+       ;; spelled in the root's class slots, then every consistent merging of what the
+       ;; pattern left open, the frame itself first (C8)
+       (= refined (refinements (anchor f "_p"))))
+      ;; the match, stored: its refinements and every class the action will read (C13)
+      ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)) :name "sum-fact-3")
+
+(rule ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)
+       ;; one refinement per index; `vec-get` is partial past the last (C8)
        (Idx choice)
-       (= m (refine (anchor f "_p") choice))
+       (= m (vec-get refined choice))
        ;; the side conditions, read off the refined frame (C9)
        (not-free m "$x" (names "e1"))
        (not-free m "$y" (names "e1")))
@@ -518,8 +533,20 @@ literals, so a frame is keyed by the words the rule was written in.
        (let built_sing_slots (map-union (node-slots m (names "e1") (names) (names)) built_sum_slots))
        ;; anchored at _p the root's renaming is the identity, so the equation the rule
        ;; means is egglog's own union (C11)
-       (union built_sing cls_p)) :name "sum-fact-3")
+       (union built_sing cls_p)
+       ;; the stored match is spent
+       (delete (_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)))
+      :ruleset slotted-apply :name "sum-fact-3/apply")
 ```
+
+**When the rules run.** A user step is `(seq (run) (run slotted-apply) (saturate (run
+slotted)))`: the matching rules, then the acting rules, then the machinery to a fixed
+point. The acting rule consumes the row it read, so a match is acted on once and a
+row rewritten by a later rebuild does not fire it again; a match that recurs after the
+machinery has changed its nodes is found afresh. On the SDQL matrix-multiplication
+benchmark this took the run from 1.16 s to 0.18 s with one thread, the user rules'
+apply time, where `--timing-summary` books the primitives, falling from 820 ms to
+about 20 ms.
 
 ## The contract
 
@@ -536,12 +563,13 @@ they reach one class by renamings that differ at most by a symmetry of it
 one per e-node, every child a variable or a literal. Each atom's columns are one
 `atom`, and the frame is their `frame-join`. Nothing is ordered: an atom is a function
 of its own node's edges, the join is associative and commutative, and the left-nested
-tree the compiler writes is a hint to prune early, not a meaning. A slot no equation
-reaches is a placeholder, a block of its own.
+tree the compiler writes means nothing. A slot no equation reaches is a placeholder, a
+block of its own.
 
 **C3. Atoms are written in a connected order.** `connected_order` puts each atom
-after one it shares a variable with, parent before child, so the join tree fails as
-early as it can. Under frames this is only a heuristic.
+after one it shares a variable with, parent before child. Under frames this is only a
+convention for readable output; the answer does not depend on it, and `xarray.py`
+checks that.
 
 **C4. A variable's renaming is no wider than its class.** Every binding carries the
 class's exact slots, `(ClassSlots cls)`, and the frame's occurrences of `v` are those
@@ -562,11 +590,12 @@ read off the node's slot there; the same literal written twice names one slot; t
 different literals are two blocks, by the literal clique. In a binder column a
 literal is the bound slot (`bound`), and only a literal may stand there.
 
-**C8. Placeholders are refined last.** `refine` enumerates every consistent way to
-merge the blocks a variable or a carried literal reaches -- never two literals, never
-two slots of one node or class -- and the rule reads one per `(Idx choice)`; `0` is
-the identity, so running out of indices loses matches and never invents one. This is
-the reference's `final_refine`.
+**C8. Placeholders are refined last.** `refinements` enumerates every consistent way
+to merge the blocks a variable or a carried literal reaches -- never two literals, never
+two slots of one node or class -- as a `Vec` with the frame itself first, and the rule
+reads one per `(Idx choice)` with `vec-get`, which is partial past the last. Running
+out of indices loses matches and never invents one. This is the reference's
+`final_refine`.
 
 **C9. Conditions are read after refinement.** `free` and `not-free` are facts over the
 refined frame. A matched binder's slot may be read as any name, a free variable's
@@ -591,6 +620,14 @@ t)` cannot be built as a node: `slotted-subst` copies one representative of the 
 -- the smallest term, and among equal sizes the least canonical spelling, so every run
 copies the same one -- and returns an invocation, which `SubstPending` carries back
 into the root's frame.
+
+**C13. A match is stored before it is acted on.** egglog runs a body's primitives
+after its table join, once per row, so a rule that joined `Idx` beside its frame
+primitives would build the frame once per index. Instead the matching rule stores each
+match, its refinements and the classes the action reads, in a relation of its own, and
+a rule in the `slotted-apply` ruleset joins that row with `Idx`, reads one refinement,
+checks the conditions, acts and deletes the row. The schedule runs the two rulesets in
+turn within one step, so a step still means one round of every rule.
 
 # Where the pieces live
 

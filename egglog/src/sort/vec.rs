@@ -207,6 +207,18 @@ impl ContainerSort for VecSort {
                 Some(VecContainer { do_rebuild: false, data })
             }});
         }
+        // Every consistent merging of a frame's open slots, the frame itself first, so
+        // a rule reads one per index with `vec-get` and stops past the last on its own.
+        if self.element.name() == "Frame" {
+            add_primitive!(eg, "refinements" = {self.clone(): VecSort} |f: crate::sort::Fr| -> @VecContainer (arc) { VecContainer {
+                do_rebuild: false,
+                data: f
+                    .refinements(crate::sort::REFINE_CAP)
+                    .into_iter()
+                    .map(|g| state.base_values().get::<crate::sort::Fr>(crate::sort::Fr::new(g)))
+                    .collect(),
+            } });
+        }
         if self.element.is_eq_sort() {
             eg.add_write_primitive(
                 Union {

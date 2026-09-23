@@ -22,12 +22,12 @@
 //! consistent when no clique is broken.
 //!
 //! [`Frame::join`] unions two frames' equations and re-closes; it is associative and
-//! commutative, so the atoms of a pattern may be joined in any order and evaluated as
-//! soon as each is matched. Where two atoms agree on a variable the join identifies
+//! commutative, so the atoms of a pattern may be joined in any order. Where two atoms
+//! agree on a variable the join identifies
 //! the occurrences on both sides, which is the reference's `unify`: a slot no
 //! equation has tied down is a placeholder, not a name that was committed to. The
 //! blocks of the closure are the pattern's slots, numbered in canonical order, and
-//! [`Frame::refine`] enumerates the consistent ways the remaining blocks may be
+//! [`Frame::refinements`] enumerates the consistent ways the remaining blocks may be
 //! merged, which is the reference's `final_refine`.
 
 use super::*;
@@ -470,31 +470,7 @@ impl Frame {
             }
         }
     }
-
-    /// The `i`-th refinement, if there is one.
-    pub fn refine(&self, i: usize) -> Option<Frame> {
-        // a rule asks once per index for the same frame: enumerate once, remember
-        thread_local! {
-            static MEMO: std::cell::RefCell<HashMap<Frame, std::rc::Rc<Vec<Frame>>>> =
-                std::cell::RefCell::new(HashMap::default());
-        }
-        MEMO.with(|memo| {
-            let all = {
-                let mut memo = memo.borrow_mut();
-                if memo.len() > REFINE_MEMO_CAP {
-                    memo.clear();
-                }
-                memo.entry(self.clone())
-                    .or_insert_with(|| std::rc::Rc::new(self.refinements(REFINE_CAP)))
-                    .clone()
-            };
-            all.get(i).cloned()
-        })
-    }
 }
-
-/// How many frames' refinements are remembered before the memo is emptied.
-const REFINE_MEMO_CAP: usize = 4096;
 
 /// The CLIQUES: must these two occurrences be different slots? Two slots of one
 /// e-node, two slots of one class, or two different literals.
@@ -588,8 +564,6 @@ impl BaseSort for FrameSort {
         );
         // both frames' constraints, closed; fails where a clique breaks
         add_primitive!(eg, "frame-join" = |a: Fr, b: Fr| -?> Fr { a.join(&b).map(Fr::new) });
-        // the i-th consistent merging of the slots refinement may touch, 0 the identity
-        add_primitive!(eg, "refine" = |f: Fr, i: i64| -?> Fr { usize::try_from(i).ok().and_then(|i| f.refine(i)).map(Fr::new) });
         // conditions, read after refinement
         add_primitive!(eg, "free"     = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), strings(&vs)).filter(|b| *b).map(|_| ()) });
         add_primitive!(eg, "not-free" = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), strings(&vs)).filter(|b| !*b).map(|_| ()) });

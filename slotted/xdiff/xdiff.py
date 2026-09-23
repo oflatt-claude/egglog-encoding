@@ -408,7 +408,8 @@ def schedule(steps):
     `instrument_schedule` wraps every user run as `(seq <run> <rebuild>)`.
     """
     return (
-        f"(run-schedule (saturate (run slotted))\n              (repeat {steps} (seq (run) (saturate (run slotted)))))"
+        f"(run-schedule (saturate (run slotted))\n"
+        f"              (repeat {steps} (seq (run) (run slotted-apply) (saturate (run slotted)))))"
     )
 
 

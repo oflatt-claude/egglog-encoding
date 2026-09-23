@@ -87,7 +87,7 @@ HEADER = """\
 ;;; saturated between finite steps of them:
 ;;;
 ;;;     (run-schedule (saturate (run slotted))
-;;;                   (repeat N (seq (run sdql 1) (saturate (run slotted)))))
+;;;                   (repeat N (seq (run sdql 1) (run slotted-apply) (saturate (run slotted)))))
 ;;;
 ;;; `slotted/tests/sdql-rewrites.egg` is what checks them -- written in the slotted
 ;;; language over the same rules, and compiled at test time.
@@ -119,9 +119,7 @@ def compiled_rules():
             continue
         name = sc.rule_name(src, form)
         assert name, f"a rewrite with no :name in {SOURCE}: {form[1]}"
-        out.append(
-            f"\n;; {name}\n" + sc.compile_rewrite(src, form, tail=f'\n      :ruleset sdql :name "{name}")', bugs=BUGS)
-        )
+        out.append(f"\n;; {name}\n" + sc.compile_rewrite(src, form, ruleset="sdql", name=name, bugs=BUGS))
         n += 1
     return "\n".join(out) + "\n", n
 

@@ -118,8 +118,8 @@ def compile_array_rule(rule, atom_order=None):
     `slotted/ENCODING.md`.
 
     `atom_order` names the atom written first; the encoding's answer must not depend
-    on which, and `check_case` varies it. Under frames the order is only a pruning
-    hint, so this is the check that it stays one.
+    on which, and `check_case` varies it. Under frames the order means nothing, and
+    this is the check that it stays that way.
     """
     lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
     return slotenc.compile_rule(
@@ -164,7 +164,8 @@ class Case:
 
 def schedule(steps):
     return (
-        f"(run-schedule (saturate (run slotted))\n              (repeat {steps} (seq (run) (saturate (run slotted)))))"
+        f"(run-schedule (saturate (run slotted))\n"
+        f"              (repeat {steps} (seq (run) (run slotted-apply) (saturate (run slotted)))))"
     )
 
 

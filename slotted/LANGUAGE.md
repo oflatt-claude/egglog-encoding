@@ -293,7 +293,7 @@ language and the compiler rejects them rather than passing them through — writ
 three things — a variable, a term to build, or `subst` — and its conclusion is always that
 the two sides are equal. egglog's other actions have no spelling here: `set` and `delete`
 would have to name one row of a class that spans several, and `subsume` interacts with the
-alpha-finder retiring rows. `slotted/ENCODING.md` M12 sets out the three
+alpha-finder retiring rows. `slotted/ENCODING.md` C12 sets out the three
 right-hand sides and what each compiles to.
 
 ## Running
@@ -304,7 +304,9 @@ right-hand sides and what each compiles to.
 
 Three user-rule steps, with the machinery saturated around each. Saturating between
 steps is not optional: the invariants have to hold before the next user rule looks at
-the graph.
+the graph. A step has two phases of its own: the rules find their matches, then the
+`slotted-apply` ruleset acts on them (`slotted/ENCODING.md` C13), so one step is still
+one round of every rule.
 
 ## Asking questions
 
@@ -407,7 +409,7 @@ is not.
 
 *Nothing is refined, and nothing is anchored.* Every slot a term writes is a literal,
 or a name a binder above it binds, so the frame its atoms join into is already the
-finest one: there is no placeholder for `refine` to merge, no fresh slot to `mint`,
+finest one: there is no placeholder for `refinements` to merge, no fresh slot to `mint`,
 and no action whose equation an `anchor` would spell. The term's renaming is read off
 the frame as it stands.
 

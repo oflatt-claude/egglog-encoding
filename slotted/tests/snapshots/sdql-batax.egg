@@ -145,7 +145,7 @@
        (= (compose (map-of (map-get (ren _c0m "$2") 0) 2 (map-get (ren _c0m "$3") 0) 3 (map-get (ren _c0m "$4") 0) 4 (map-get (ren _c0m "$7") 0) 7 (map-get (ren _c0m "$8") 0) 8) (ren _c0m "_c0")) (compose (compose (map-of (map-get (ren _c1m "$2") 0) 2 (map-get (ren _c1m "$3") 0) 3 (map-get (ren _c1m "$4") 0) 4 (map-get (ren _c1m "$5") 0) 5 (map-get (ren _c1m "$7") 0) 7 (map-get (ren _c1m "$8") 0) 8) (ren _c1m "_c1")) _gsym))))
 (print-size)
 (run-schedule (saturate (run slotted))
-              (repeat 2 (seq (run) (saturate (run slotted)))))
+              (repeat 2 (seq (run) (run slotted-apply) (saturate (run slotted)))))
 (check (= _c0cls_c0t23 (Get _c0e0_lit__b5 (SlottedVar_0 0) _c0e0_lit__b12 (SlottedVar_0 0)))
        (= _c0atom_c0t23 (atom "_c0t23" (root "_c0t23" (ClassSlots_0 _c0cls_c0t23)) (lit "$_b5" _c0e0_lit__b5) (lit "$_b12" _c0e0_lit__b12)))
        (= _c0cls_c0t22 (Get _c0e1_lit__b4 (SlottedVar_0 0) _c0e1_lit__b11 (SlottedVar_0 0)))

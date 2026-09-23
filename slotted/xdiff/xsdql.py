@@ -339,32 +339,16 @@ if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
 
 @functools.cache
 def egg_rule(name):
-    """The compiled rule of that name, lifted out of the generated file."""
+    """The compiled text for the rule of that name, lifted out of the generated file:
+    the relation its matches wait in and the two rules that fill and drain it (C13),
+    exactly as `gen-sdql-rules.py` wrote them under the rule's `;; name` line."""
     text = gsr.compiled_rules()[0]
-    i = 0
-    while True:
-        j = text.find("\n(rule ", i)
-        if j < 0:
-            raise KeyError(f"no compiled rule named {name!r} among the generated sdql rules")
-        j += 1
-        depth, k, instr = 0, j, False
-        while k < len(text):
-            c = text[k]
-            if instr:
-                instr = c != '"'
-            elif c == '"':
-                instr = True
-            elif c == "(":
-                depth += 1
-            elif c == ")":
-                depth -= 1
-                if depth == 0:
-                    break
-            k += 1
-        block = text[j : k + 1]
-        if block.endswith(f':name "{name}")'):
-            return block
-        i = k + 1
+    marker = f"\n;; {name}\n"
+    i = text.find(marker)
+    if i < 0:
+        raise KeyError(f"no compiled rule named {name!r} among the generated sdql rules")
+    j = text.find("\n;; ", i + len(marker))
+    return text[i + len(marker) : j if j >= 0 else len(text)].strip()
 
 
 # ---------------------------------------------------------------------- the cases
@@ -426,7 +410,7 @@ class Case:
 def schedule(steps):
     return (
         f"(run-schedule (saturate (run slotted))\n"
-        f"              (repeat {steps} (seq (run sdql) (saturate (run slotted)))))"
+        f"              (repeat {steps} (seq (run sdql) (run slotted-apply) (saturate (run slotted)))))"
     )
 
 
@@ -613,7 +597,8 @@ def compiler_regression_cases():
         atoms,
         ("build", "?r", ("unique", ("pv", "a2"))),
         conds=conds,
-        tail=' :ruleset sdql :name "compiler-carried-slot-refinement")',
+        ruleset="sdql",
+        name="compiler-carried-slot-refinement",
     )
     multi_rule = Rule(
         "compiler-carried-slot-refinement",
@@ -654,7 +639,8 @@ def compiler_regression_cases():
         LANG,
         atoms,
         ("build", "?r", ("unique", ("pv", "x"))),
-        tail=' :ruleset sdql :name "compiler-repeated-pvar-symmetry")',
+        ruleset="sdql",
+        name="compiler-repeated-pvar-symmetry",
     )
     repeated_rule = Rule(
         "compiler-repeated-pvar-symmetry",
@@ -1073,7 +1059,8 @@ def known_encoding_limitations():
         LANG,
         naive_atoms,
         ("build", root, naive_rhs),
-        tail=' :ruleset sdql :name "known-flat-binder-free")',
+        ruleset="sdql",
+        name="known-flat-binder-free",
     )
     scope_rule = Rule(
         "known-flat-binder-free",
