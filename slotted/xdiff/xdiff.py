@@ -95,8 +95,9 @@ NUM_PROB = float(os.environ.get("XDIFF_NUM", "0.3"))
 # rather than either off or common.
 #
 # It earns its place: with it off, no generated rule had more than two disconnected
-# pieces, so three atoms all minting at once -- kept apart only by the accumulated
-# avoid-set (C2) -- went unsearched. That is the shape that found `K1`.
+# pieces, so three atoms whose slots are all placeholders -- kept apart only by the
+# cliques, and offered to refinement together (C8) -- went unsearched. That is the
+# shape that found `K1`.
 #
 # A reference that runs out of time is reported as such and left out of the ratio rather
 # than counted as a divergence, since a cross product is sometimes more work than its
@@ -833,8 +834,8 @@ def curated():
 
     # C13 -- a three-atom body mixing a binder, a chain and a join.
     #
-    # Found as a witness that the first atom must not be a binder, and
-    # `connected_order` still avoids choosing one. It is NOT that witness any more,
+    # Found as a witness that the first atom must not be a binder, back when the atom
+    # order was a meaning rather than a hint. It is NOT that witness any more,
     # and probably never was a clean one: its discrimination came from a union
     # whose operand was a bare leaf, which the encoding cannot represent
     # faithfully. With the leaf replaced no ordering disagrees, and 200
@@ -1562,12 +1563,12 @@ def curated():
     #     rule   p == (k q d2), q == (g d1 n), d1 == (f x n2), d2 == (h x n3)
     #            =>  union p (sub d1 d2)
     #
-    # Neither class carries the slot its node hands to `x`, so each atom that reaches
-    # `x` MINTS a name for it, and the two mints meet at the second occurrence. The
-    # reference's `unify` identifies them and the rule fires; a solve that reads its
-    # equations as facts about two distinct names declines, and it never does. That is
-    # what `find-mapping-unify` is for, and `no-unify` in `mutations.py` is this case
-    # failing again. `UN2` below is the bound-slot version of the same shape.
+    # Neither class carries the slot its node hands to `x`, so at each atom that
+    # reaches `x` the slot is a placeholder, and the two placeholders meet at the
+    # second occurrence. The reference's `unify` identifies them and the rule fires;
+    # so does the frame's join, where the two occurrences simply fall into one class.
+    # A solve that read its equations as facts about two distinct names declined, and
+    # never fired. `UN2` below is the bound-slot version of the same shape.
     UN1_ATOMS = [("p", "k", "q", "d2"), ("q", "g", "d1", "n"), ("d1", "f", "x", "n2"), ("d2", "h", "x", "n3")]
     UN1_Q = ("g", ("f", V0, NUL), NUL)
     UN1_P = ("k", UN1_Q, ("h", V1, NUL))
@@ -1669,8 +1670,8 @@ def curated():
     # atoms and the rule does not fire. The encoding solves a literal as a name and used
     # to read `$s1` off the slot the shared body had already pinned; the rule fired,
     # unioned the variable class with a slotless term, and every variable became one.
-    # `literals_apart` now states that a rule's different literals are different slots;
-    # `literals-alias` in `mutations.py` is this case failing again. With ONE literal in
+    # The frame's literal clique states that a rule's different literals are different
+    # slots; `literals-alias` in `mutations.py` is this case failing again. With ONE literal in
     # both binders the two sides always agreed: that spelling names both bound slots.
     cs.append(
         Case(

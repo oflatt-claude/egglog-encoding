@@ -384,8 +384,9 @@ After `f($1,$2) = g($2,$1)` and `g($1,$2) = h($1,$2)`, the terms `f($1,$2)` and
 ### How they desugar
 
 A claim's term is matched, by the same recipe a rewrite's left-hand side goes through:
-flattened into depth-1 atoms, solved into a class and a renaming. The claim is stated
-over those.
+flattened into depth-1 atoms, each atom an `atom` over its node's slot columns, the
+atoms joined into one frame, and the term's class and renaming read out of that frame.
+The claim is stated over those.
 
 ```
 (renaming-= p q)   <p's atoms> <q's atoms> (= <p's class> <q's class>)
@@ -404,22 +405,21 @@ its renamings as they stand.
 Three things differ from a rewrite's pattern, because a term is ground where a pattern
 is not.
 
-*The atoms are solved CHILD FIRST.* Where an atom's renaming is not pinned from above
-it MINTS the slots it needs, and a mint is revised only where a later equation forces
-it — so a class that has made a slot redundant stops carrying it, the atoms below mint
-a new name, and a slot literal further down has nothing that ties it back. A term's
-invocation is a function of its children's, so read the other way there is nothing to
-guess.
+*Nothing is refined, and nothing is anchored.* Every slot a term writes is a literal,
+or a name a binder above it binds, so the frame its atoms join into is already the
+finest one: there is no placeholder for `refine` to merge, no fresh slot to `mint`,
+and no action whose equation an `anchor` would spell. The term's renaming is read off
+the frame as it stands.
 
-*Each term is solved alone*, and the invocations are compared in the numbering the
-SOURCE wrote, so `$0` is slot 0 in both terms whatever each pattern called it. Two
-terms in one pattern would have the second's root minted before the literals below it
-were known — the same failure.
+*Each term is one frame*, and the invocations are compared in the numbering the
+SOURCE wrote: the frame's slot for the literal `$k` is sent to `k`, so `$0` is slot 0
+in both terms whatever each class calls it.
 
 *Slot literals are slots.* `(Lam $0 $3)` is the constant function and must not match
-the identity one by reading `$0` and `$3` off one slot, so the claim states outright
-that slots visible at once are distinct. Two binders in disjoint scopes are not
-visible at once and are left alone.
+the identity one by reading `$0` and `$3` off one slot, and the frame says so: two
+different literals are two different slots, always (C7 in `ENCODING.md`). A bound
+slot is renamed apart per binder before matching, so `$0` under two disjoint binders
+is two names for two slots, and neither is the free `$0`.
 
 **A trap.** `renaming-=` between two bare slots is always true, because every variable is
 one e-class:

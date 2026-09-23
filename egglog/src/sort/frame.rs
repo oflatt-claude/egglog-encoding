@@ -13,8 +13,12 @@
 //! Var(p, s)`; a literal `$x` at edge `e` says `Node(a, e(0)) = Lit("$x")`. The label
 //! is the atom's own, since three atoms rooted at one variable match three e-nodes of
 //! its class. A second occurrence of a variable comes with a symmetry of its class,
-//! composed into the equation, so the match quantifies over the class's group. Two things may never fall into one class:
-//! two slots of one e-node, and two different literals -- the CLIQUES. A frame is
+//! composed into the equation, so the match quantifies over the class's group.
+//!
+//! The equations say which occurrences are ONE slot; the CLIQUES say which are
+//! DIFFERENT slots. A clique is a set of occurrences every two of which must be
+//! distinct slots, so no two of them may share a block of the partition: the slots
+//! of one e-node, the slots of one class, and the different literals. A frame is
 //! consistent when no clique is broken.
 //!
 //! [`Frame::join`] unions two frames' equations and re-closes; it is associative and
@@ -22,8 +26,8 @@
 //! soon as each is matched. Where two atoms agree on a variable the join identifies
 //! the occurrences on both sides, which is the reference's `unify`: a slot no
 //! equation has tied down is a placeholder, not a name that was committed to. The
-//! classes of the closure are the pattern's slots, numbered in canonical order, and
-//! [`Frame::refine`] enumerates the consistent ways the remaining classes may be
+//! blocks of the closure are the pattern's slots, numbered in canonical order, and
+//! [`Frame::refine`] enumerates the consistent ways the remaining blocks may be
 //! merged, which is the reference's `final_refine`.
 
 use super::*;
@@ -93,19 +97,18 @@ pub type Ns = Boxed<Names>;
 /// The constraints a match has placed on slots so far, closed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Frame {
-    /// the partition of every occurrence named so far: each class sorted, the
-    /// classes sorted by their least member. Each class is one pattern slot, numbered
-    /// by `numbering`.
-    classes: Vec<Vec<Occ>>,
-    /// per atom, the slots of its e-node, which stay pairwise apart
-    atoms: BTreeMap<String, BTreeSet<i64>>,
-    /// per variable, the slots of its class
-    vars: BTreeMap<String, BTreeSet<i64>>,
-    /// every literal, and whether it is carried into refinement
-    lits: BTreeMap<String, bool>,
+    /// the partition of every occurrence named so far into the pattern's slots: two
+    /// occurrences in one block are one slot, and `numbering` gives each block its
+    /// number. Each block sorted, the blocks sorted by their least member. The
+    /// cliques are not stored: `apart` reads them off the occurrences.
+    blocks: Vec<Vec<Occ>>,
+    /// per variable, the slots of its class: the domain of its renaming
+    class_slots: BTreeMap<String, BTreeSet<i64>>,
+    /// every literal, and whether refinement may merge a placeholder into its block
+    literals: BTreeMap<String, bool>,
     /// deliberate violations of the contract, for mutation testing
     bugs: BTreeSet<String>,
-    /// the variable whose class slots name the pattern's slots: a class holding
+    /// the variable whose class slots name the pattern's slots: a block holding
     /// `Var(anchor, t)` is slot `t`, the rest take the smallest free numbers
     anchor: Option<String>,
 }
@@ -144,8 +147,8 @@ impl Frame {
         let mut node_slots: BTreeSet<i64> = BTreeSet::new();
         let mut eqs: Vec<(Occ, Occ)> = Vec::new();
         let mut occs: BTreeSet<Occ> = BTreeSet::new();
-        let mut vars: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
-        let mut lits: BTreeMap<String, bool> = BTreeMap::new();
+        let mut class_slots: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
+        let mut literals: BTreeMap<String, bool> = BTreeMap::new();
 
         // the root: the node is an invocation of the variable's class
         let cs: BTreeSet<i64> = root_slots.keys().copied().collect();
@@ -158,7 +161,7 @@ impl Frame {
             eqs.push((Occ::Node(atom.clone(), s), Occ::Var(root_var.clone(), t)));
         }
         node_slots.extend(cs.iter().copied());
-        vars.insert(root_var.clone(), cs);
+        class_slots.insert(root_var.clone(), cs);
 
         for b in bindings {
             match b {
@@ -166,10 +169,10 @@ impl Frame {
                 Binding::Child {
                     var,
                     edge,
-                    class_slots,
+                    class_slots: cls,
                     sym,
                 } => {
-                    let cs: BTreeSet<i64> = class_slots.keys().copied().collect();
+                    let cs: BTreeSet<i64> = cls.keys().copied().collect();
                     node_slots.extend(edge.values().copied());
                     for &t in &cs {
                         let u = match sym {
@@ -183,7 +186,7 @@ impl Frame {
                             eqs.push((Occ::Node(atom.clone(), s), Occ::Var(var.clone(), u)));
                         }
                     }
-                    if let Some(prev) = vars.insert(var.clone(), cs.clone())
+                    if let Some(prev) = class_slots.insert(var.clone(), cs.clone())
                         && prev != cs
                     {
                         return None;
@@ -198,7 +201,7 @@ impl Frame {
                     node_slots.extend(edge.values().copied());
                     occs.insert(Occ::Lit(name.clone()));
                     eqs.push((Occ::Node(atom.clone(), s), Occ::Lit(name.clone())));
-                    let entry = lits.entry(name.clone()).or_insert(false);
+                    let entry = literals.entry(name.clone()).or_insert(false);
                     *entry |= carried;
                 }
                 Binding::Leaf { edge } => node_slots.extend(edge.values().copied()),
@@ -207,15 +210,13 @@ impl Frame {
         }
         occs.extend(node_slots.iter().map(|&s| Occ::Node(atom.clone(), s)));
 
-        let mut frame = Frame {
-            classes: Vec::new(),
-            atoms: BTreeMap::from([(atom, node_slots)]),
-            vars,
-            lits,
+        let frame = Frame {
+            blocks: close(occs, &eqs),
+            class_slots,
+            literals,
             bugs,
             anchor: None,
         };
-        frame.classes = close(occs, &eqs);
         frame.consistent().then_some(frame)
     }
 
@@ -224,60 +225,51 @@ impl Frame {
     pub fn join(&self, other: &Frame) -> Option<Frame> {
         let mut occs: BTreeSet<Occ> = BTreeSet::new();
         let mut eqs: Vec<(Occ, Occ)> = Vec::new();
-        for class in self.classes.iter().chain(&other.classes) {
-            occs.extend(class.iter().cloned());
-            for pair in class.windows(2) {
+        for block in self.blocks.iter().chain(&other.blocks) {
+            occs.extend(block.iter().cloned());
+            for pair in block.windows(2) {
                 eqs.push((pair[0].clone(), pair[1].clone()));
             }
         }
-        let mut atoms = self.atoms.clone();
-        for (a, slots) in &other.atoms {
-            atoms
-                .entry(a.clone())
-                .or_default()
-                .extend(slots.iter().copied());
-        }
-        let mut vars = self.vars.clone();
-        for (v, cs) in &other.vars {
-            if let Some(prev) = vars.insert(v.clone(), cs.clone())
+        let mut class_slots = self.class_slots.clone();
+        for (v, cs) in &other.class_slots {
+            if let Some(prev) = class_slots.insert(v.clone(), cs.clone())
                 && prev != *cs
             {
                 return None;
             }
         }
-        let mut lits = self.lits.clone();
-        for (x, carried) in &other.lits {
-            *lits.entry(x.clone()).or_insert(false) |= carried;
+        let mut literals = self.literals.clone();
+        for (x, carried) in &other.literals {
+            *literals.entry(x.clone()).or_insert(false) |= carried;
         }
-        let mut frame = Frame {
-            classes: Vec::new(),
-            atoms,
-            vars,
-            lits,
+        let frame = Frame {
+            blocks: close(occs, &eqs),
+            class_slots,
+            literals,
             bugs: self.bugs.union(&other.bugs).cloned().collect(),
             anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
         };
-        frame.classes = close(occs, &eqs);
         frame.consistent().then_some(frame)
     }
 
     /// The frame spelled in this variable's slot names.
     pub fn anchored(&self, var: &str) -> Option<Frame> {
-        self.vars.get(var)?;
+        self.class_slots.get(var)?;
         Some(Frame {
             anchor: Some(var.to_owned()),
             ..self.clone()
         })
     }
 
-    /// Each class's slot number: the anchor's class slot where it holds one, the
-    /// smallest numbers the anchor does not use for the rest, in class order.
+    /// Each block's slot number: the anchor's class slot where the block holds one,
+    /// the smallest numbers the anchor does not use for the rest, in block order.
     fn numbering(&self) -> Vec<i64> {
-        let mut out: Vec<Option<i64>> = vec![None; self.classes.len()];
+        let mut out: Vec<Option<i64>> = vec![None; self.blocks.len()];
         let mut taken: BTreeSet<i64> = BTreeSet::new();
         if let Some(anchor) = &self.anchor {
-            for (i, class) in self.classes.iter().enumerate() {
-                if let Some(t) = class.iter().find_map(|o| match o {
+            for (i, block) in self.blocks.iter().enumerate() {
+                if let Some(t) = block.iter().find_map(|o| match o {
                     Occ::Var(v, t) if v == anchor => Some(*t),
                     _ => None,
                 }) {
@@ -297,7 +289,7 @@ impl Frame {
             }
         }
         out.into_iter()
-            .map(|s| s.expect("every class numbered"))
+            .map(|s| s.expect("every block numbered"))
             .collect()
     }
 
@@ -305,58 +297,46 @@ impl Frame {
         self.bugs.contains(bug)
     }
 
-    /// No clique has two members in one class: an e-node's slots, a class's slots
-    /// (a renaming is injective), and the literals.
+    /// No clique has two members in one block.
     fn consistent(&self) -> bool {
-        if !self.has_bug("no-cliques") {
-            let mut cliques: Vec<Vec<Occ>> = Vec::new();
-            for (a, slots) in &self.atoms {
-                cliques.push(slots.iter().map(|&s| Occ::Node(a.clone(), s)).collect());
-            }
-            for (v, slots) in &self.vars {
-                cliques.push(slots.iter().map(|&t| Occ::Var(v.clone(), t)).collect());
-            }
-            for clique in cliques {
-                let mut seen: BTreeSet<usize> = BTreeSet::new();
-                for occ in &clique {
-                    match self.class_of(occ) {
-                        Some(i) if seen.insert(i) => {}
-                        _ => return false,
-                    }
-                }
-            }
-        }
-        if !self.has_bug("literals-alias") {
-            for class in &self.classes {
-                let lits = class.iter().filter(|o| matches!(o, Occ::Lit(_))).count();
-                if lits > 1 {
-                    return false;
-                }
-            }
-        }
-        true
+        self.blocks.iter().all(|block| {
+            block
+                .iter()
+                .enumerate()
+                .all(|(i, o)| block[i + 1..].iter().all(|p| !self.violated(o, p)))
+        })
     }
 
-    fn class_of(&self, occ: &Occ) -> Option<usize> {
-        self.classes
+    /// `apart`, less the cliques a bug switches off.
+    fn violated(&self, o: &Occ, p: &Occ) -> bool {
+        let bug = match (o, p) {
+            (Occ::Lit(_), Occ::Lit(_)) => "literals-alias",
+            _ => "no-cliques",
+        };
+        apart(o, p) && !self.has_bug(bug)
+    }
+
+    /// The block an occurrence lies in.
+    fn block_of(&self, occ: &Occ) -> Option<usize> {
+        self.blocks
             .iter()
             .position(|c| c.binary_search(occ).is_ok())
     }
 
     /// The pattern slot an occurrence names.
     fn slot(&self, occ: &Occ) -> Option<i64> {
-        self.class_of(occ).map(|i| self.numbering()[i])
+        self.block_of(occ).map(|i| self.numbering()[i])
     }
 
     /// A variable's renaming into the pattern's slots, or a literal's `{0 -> slot}`.
     pub fn ren(&self, name: &str) -> Option<Slots> {
         if name.starts_with('$') {
-            if !self.lits.contains_key(name) {
+            if !self.literals.contains_key(name) {
                 return None;
             }
             return Some(Slots::from([(0, self.slot(&Occ::Lit(name.to_owned()))?)]));
         }
-        let cs = self.vars.get(name)?;
+        let cs = self.class_slots.get(name)?;
         cs.iter()
             .map(|&t| Some((t, self.slot(&Occ::Var(name.to_owned(), t))?)))
             .collect()
@@ -364,12 +344,12 @@ impl Frame {
 
     /// Does the literal's slot lie in any of these variables' images?
     pub fn is_free(&self, lit: &str, vars: &[String]) -> Option<bool> {
-        let i = self.class_of(&Occ::Lit(lit.to_owned()))?;
+        let i = self.block_of(&Occ::Lit(lit.to_owned()))?;
         for v in vars {
-            self.vars.get(v)?;
+            self.class_slots.get(v)?;
         }
         Some(
-            self.classes[i]
+            self.blocks[i]
                 .iter()
                 .any(|o| matches!(o, Occ::Var(v, _) if vars.iter().any(|w| w == v))),
         )
@@ -384,13 +364,13 @@ impl Frame {
     pub fn mint(&self, names: &[String]) -> Option<Frame> {
         let mut out = self.clone();
         for name in names {
-            if !name.starts_with('$') || out.lits.contains_key(name) {
+            if !name.starts_with('$') || out.literals.contains_key(name) {
                 return None;
             }
-            out.lits.insert(name.clone(), false);
-            out.classes.push(vec![Occ::Lit(name.clone())]);
+            out.literals.insert(name.clone(), false);
+            out.blocks.push(vec![Occ::Lit(name.clone())]);
         }
-        out.classes.sort();
+        out.blocks.sort();
         Some(out)
     }
 
@@ -428,59 +408,40 @@ impl Frame {
         Some(slots.into_iter().map(|s| (s, s)).collect())
     }
 
-    /// Whether refinement may merge this class: one a variable or a carried literal
+    /// Whether refinement may merge this block: one a variable or a carried literal
     /// reaches. A redundant node slot or a binder's own slot stays as it is.
-    fn carried(&self, class: &[Occ]) -> bool {
-        class.iter().any(|o| match o {
+    fn carried(&self, block: &[Occ]) -> bool {
+        block.iter().any(|o| match o {
             Occ::Var(..) => true,
-            Occ::Lit(x) => self.lits.get(x).copied().unwrap_or(false),
+            Occ::Lit(x) => self.literals.get(x).copied().unwrap_or(false),
             Occ::Node(..) => false,
         })
     }
 
-    /// May these two classes become one? Not when both hold a literal -- the pattern
-    /// asked for two names -- and not when one e-node or one class has a slot in each.
+    /// May these two blocks become one? Not when a clique has a member in each.
     fn mergeable(&self, i: usize, j: usize) -> bool {
-        let (a, b) = (&self.classes[i], &self.classes[j]);
-        let has_lit = |c: &[Occ]| c.iter().any(|o| matches!(o, Occ::Lit(_)));
-        if has_lit(a) && has_lit(b) {
-            return false;
-        }
-        for o in a {
-            let clash = match o {
-                Occ::Node(atom, _) => b
-                    .iter()
-                    .any(|p| matches!(p, Occ::Node(other, _) if other == atom)),
-                Occ::Var(var, _) => b
-                    .iter()
-                    .any(|p| matches!(p, Occ::Var(other, _) if other == var)),
-                Occ::Lit(_) => false,
-            };
-            if clash {
-                return false;
-            }
-        }
-        true
+        let (a, b) = (&self.blocks[i], &self.blocks[j]);
+        !a.iter().any(|o| b.iter().any(|p| apart(o, p)))
     }
 
     fn merged(&self, i: usize, j: usize) -> Frame {
         let mut out = self.clone();
-        let mut b = out.classes.remove(j.max(i));
-        let a = &mut out.classes[i.min(j)];
+        let mut b = out.blocks.remove(j.max(i));
+        let a = &mut out.blocks[i.min(j)];
         a.append(&mut b);
         a.sort();
-        out.classes.sort();
+        out.blocks.sort();
         out
     }
 
-    /// Every consistent way to merge the classes refinement may touch, the identity
+    /// Every consistent way to merge the blocks refinement may touch, the identity
     /// first, at most `cap` of them. This is the reference's `final_refine`.
     pub fn refinements(&self, cap: usize) -> Vec<Frame> {
         let mut out = vec![self.clone()];
         if self.has_bug("no-refine") {
             return out;
         }
-        let mut seen: BTreeSet<Vec<Vec<Occ>>> = BTreeSet::from([self.classes.clone()]);
+        let mut seen: BTreeSet<Vec<Vec<Occ>>> = BTreeSet::from([self.blocks.clone()]);
         self.walk(cap, &mut seen, &mut out);
         out
     }
@@ -489,8 +450,8 @@ impl Frame {
         if out.len() >= cap {
             return;
         }
-        let cands: Vec<usize> = (0..self.classes.len())
-            .filter(|&i| self.carried(&self.classes[i]))
+        let cands: Vec<usize> = (0..self.blocks.len())
+            .filter(|&i| self.carried(&self.blocks[i]))
             .collect();
         for (k, &i) in cands.iter().enumerate() {
             for &j in &cands[k + 1..] {
@@ -498,7 +459,7 @@ impl Frame {
                     continue;
                 }
                 let next = self.merged(i, j);
-                if !seen.insert(next.classes.clone()) {
+                if !seen.insert(next.blocks.clone()) {
                     continue;
                 }
                 out.push(next.clone());
@@ -535,7 +496,18 @@ impl Frame {
 /// How many frames' refinements are remembered before the memo is emptied.
 const REFINE_MEMO_CAP: usize = 4096;
 
-/// The partition of `occs` generated by `eqs`: each class sorted, the classes sorted.
+/// The CLIQUES: must these two occurrences be different slots? Two slots of one
+/// e-node, two slots of one class, or two different literals.
+fn apart(o: &Occ, p: &Occ) -> bool {
+    match (o, p) {
+        (Occ::Node(a, s), Occ::Node(b, t)) => a == b && s != t,
+        (Occ::Var(v, s), Occ::Var(w, t)) => v == w && s != t,
+        (Occ::Lit(x), Occ::Lit(y)) => x != y,
+        _ => false,
+    }
+}
+
+/// The partition of `occs` generated by `eqs`: each block sorted, the blocks sorted.
 fn close(occs: BTreeSet<Occ>, eqs: &[(Occ, Occ)]) -> Vec<Vec<Occ>> {
     let index: BTreeMap<&Occ, usize> = occs.iter().enumerate().map(|(i, o)| (o, i)).collect();
     let mut parent: Vec<usize> = (0..occs.len()).collect();
@@ -552,12 +524,12 @@ fn close(occs: BTreeSet<Occ>, eqs: &[(Occ, Occ)]) -> Vec<Vec<Occ>> {
             parent[ra.max(rb)] = ra.min(rb);
         }
     }
-    let mut classes: BTreeMap<usize, Vec<Occ>> = BTreeMap::new();
+    let mut blocks: BTreeMap<usize, Vec<Occ>> = BTreeMap::new();
     for (o, &i) in &index {
         let r = find(&mut parent, i);
-        classes.entry(r).or_default().push((*o).clone());
+        blocks.entry(r).or_default().push((*o).clone());
     }
-    let mut out: Vec<Vec<Occ>> = classes
+    let mut out: Vec<Vec<Occ>> = blocks
         .into_values()
         .map(|mut c| {
             c.sort();
@@ -571,12 +543,12 @@ fn close(occs: BTreeSet<Occ>, eqs: &[(Occ, Occ)]) -> Vec<Vec<Occ>> {
 impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{{")?;
-        for (i, class) in self.classes.iter().enumerate() {
+        for (i, block) in self.blocks.iter().enumerate() {
             if i > 0 {
                 write!(f, "; ")?;
             }
             write!(f, "{i}:")?;
-            for o in class {
+            for o in block {
                 write!(f, " {o}")?;
             }
         }

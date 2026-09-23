@@ -1846,51 +1846,13 @@ class Query:
 
 
 def compile_query(
-    lang,
-    atoms,
-    conds=(),
-    diseq=(),
-    same=(),
-    fresh=(),
-    bugs=frozenset(),
-    slot_prefix="slot_",
-    var_prefix="",
-    fresh_batch=True,
-    refine=True,
-    literals_apart=False,
-    anchor=None,
-):
-    """Compile a flattened multipattern into the facts that match it.
-
-    `compile_query_frames` is the whole of it; this keeps the signature callers wrote
-    to. `slot_prefix`, `fresh_batch` and `literals_apart` no longer choose anything:
-    a slot literal is read out of the frame rather than held in a variable of its
-    own, fresh slots are minted in one `mint`, and different literals are different
-    slots by the frame's clique, always.
-    """
-    del slot_prefix, fresh_batch, literals_apart
-    return compile_query_frames(
-        lang,
-        atoms,
-        conds=conds,
-        diseq=diseq,
-        same=same,
-        fresh=fresh,
-        bugs=bugs,
-        var_prefix=var_prefix,
-        refine=refine,
-        anchor=anchor,
-    )
-
-
-def compile_query_frames(
     lang, atoms, conds=(), diseq=(), same=(), fresh=(), bugs=frozenset(), var_prefix="", refine=True, anchor=None
 ):
     """Compile a flattened multipattern into the facts that match it, as FRAMES.
 
     egglog matches the atoms; the slotted part is a set of constraints on them. Each
     atom's columns become one `atom` value (C2, C4, C5, C7), the atoms are joined
-    (C6, and the two cliques), `refine` picks one merging of what is left open (C8),
+    (C6, and the cliques), `refine` picks one merging of what is left open (C8),
     `mint` adds the right-hand side's fresh slots (C10), and the conditions read the
     result (C9). Nothing here is ordered: `frame-join` is associative and commutative,
     so the join tree below is a hint to prune early, not a meaning.
@@ -2127,8 +2089,6 @@ def compile_rule(
     same=(),
     fresh=(),
     bugs=frozenset(),
-    slot_prefix="slot_",
-    fresh_batch=True,
     tail=")",
     refine=True,
 ):
@@ -2148,10 +2108,7 @@ def compile_rule(
         same=same,
         fresh=set(fresh) | (slot_literals(action) - pinned_slots(atoms)),
         bugs=bugs,
-        slot_prefix=slot_prefix,
-        fresh_batch=fresh_batch,
         refine=refine,
-        literals_apart=True,
         anchor=action[1],
     )
     body, cls_of, mp_of, slot_of = q.body, q.cls_of, q.mp_of, q.slot_of

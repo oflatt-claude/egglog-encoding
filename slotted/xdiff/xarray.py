@@ -117,16 +117,9 @@ def compile_array_rule(rule, atom_order=None):
     """One array rule, through the encoder, which is the recipe in
     `slotted/ENCODING.md`.
 
-    `atom_order` names the atom that leads; the encoding's answer must not depend on
-    which, and `check_case` varies it. The leader is named rather than inferred
-    because `atoms[0]` -- the pattern's outermost node -- is a binder for most of
-    these rules, and taking it first pins the bound slot off its own edge.
-
-    The slot variables are `s_x` rather than `sx`, and a minted right-hand side slot
-    gets a solve of its own with the avoid-set growing after it, rather than one solve
-    over the whole batch. Both are spellings, not constructions:
-    the array rules are compiled on demand, so they are kept as they were
-    written.
+    `atom_order` names the atom written first; the encoding's answer must not depend
+    on which, and `check_case` varies it. Under frames the order is only a pruning
+    hint, so this is the check that it stays one.
     """
     lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
     return slotenc.compile_rule(
@@ -135,8 +128,6 @@ def compile_array_rule(rule, atom_order=None):
         ("build", rule.rhs_root, rule.rhs),
         conds=rule.conds,
         fresh=rule.fresh,
-        slot_prefix="s_",
-        fresh_batch=False,
     )
 
 

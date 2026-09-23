@@ -645,8 +645,8 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
     It defaults to 0 -- the pattern's outermost node -- which is what every shipped
     generator pins, so a rule compiled here is the same text as the committed generated
     one. The answer may not depend on the lead, and a test can say another to check
-    that: leading anywhere below the root makes the atoms above it come out
-    child-before-parent, which is the fresh-root case.
+    that: leading anywhere below the root writes the atoms above it child-before-parent,
+    and the frame's join does not care.
 
     `:fresh` names the slots the right-hand side binds that the pattern never mentions,
     so the compiler mints them against everything the match already used.
@@ -705,8 +705,8 @@ def compile_rewrite(src, form, tail=")", bugs=frozenset(), **kw):
         fresh=fresh,
         bugs=bugs,
         tail=tail,
-        # a caller's own spellings -- `slot_prefix`, `fresh_batch` -- so a generator
-        # that already committed its output can keep emitting the same text
+        # whatever else a caller pins, so a generator that already committed its
+        # output keeps emitting the same text
         **kw,
     )
 
@@ -949,18 +949,14 @@ def _written(lang, t):
 def claim_query(src, forms, sort):
     """Match each term a claim names, in that term's OWN slot numbering.
 
-    CHILDREN BEFORE PARENTS, which is the order a ground term can be solved in at all.
-    An atom whose renaming is not pinned from above MINTS the slots it needs, and a
-    mint is revised only where a later equation forces it -- so a class that has made a
-    slot redundant stops carrying it, the atoms below mint a new name, and a slot
-    literal deeper down has nothing that ties it back. A term's invocation is a
-    function of its children's, so read the other way there is nothing to guess.
-    `flatten` emits atoms parent-first, so reversing it is that order.
+    ONE FRAME PER TERM. A term's atoms are joined into a frame of their own and the
+    root's class and renaming are read out of it; `frame` then sends the frame's slot
+    for each literal `$k` back to k, which is how `$0` means slot 0 in both terms
+    whatever each class calls it.
 
-    ONE PATTERN PER TERM, since two terms joined only by their slot literals would have
-    the second's root minted before those literals were known -- the same failure. So
-    each is solved alone and `frame` renames its solved slots back to the `$k` they
-    came from, which is how `$0` means slot 0 in both terms.
+    NOTHING REFINED. A ground term writes every slot it has, as a literal or as a
+    bound name, so the joined frame is already the finest consistent one: there is no
+    placeholder for `refine` to merge and no action for `anchor` to spell.
 
     A bare slot is not a node: it is the variable class under a renaming, so it needs
     no pattern at all -- `$k` is `(Var 0)` with its one slot sent to k.
@@ -983,14 +979,12 @@ def claim_query(src, forms, sort):
         root, atoms = enc.flatten(src.lang, pattern, root=f"?_c{i}", tmp=f"?_c{i}t")
         query = enc.compile_query(
             src.lang,
+            # child first is only a hint to the join tree; the frame has no order
             list(reversed(atoms)),
-            # A ground term pins every slot it has, so there is no minted distinction
-            # left for refinement to reconsider -- and the claim is compiled beside the
-            # program's own `let`s, where egglog refuses a pattern variable that
-            # shadows a global, so every name this invents wears the `_` prefix the
-            # compiler already reserves.
+            # The claim is compiled beside the program's own `let`s, where egglog
+            # refuses a pattern variable that shadows a global, so every name this
+            # invents wears the `_` prefix the compiler already reserves.
             refine=False,
-            slot_prefix=f"_c{i}s",
             var_prefix=f"_c{i}",
         )
         body += query.body
