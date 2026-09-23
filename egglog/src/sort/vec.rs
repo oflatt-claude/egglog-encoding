@@ -206,26 +206,6 @@ impl ContainerSort for VecSort {
                 let data = register_renamings(&mut state, find_mappings_total(&maps, FIND_MAPPINGS_CAP));
                 Some(VecContainer { do_rebuild: false, data })
             }});
-            add_primitive!(eg, "refine-namings" = {self.clone(): VecSort} [xs: # (self.element())] -?> @VecContainer (arc) {{
-                let maps = slot_maps(&state, xs)?;
-                let data = register_renamings(&mut state, refine_namings(&maps, FIND_MAPPINGS_CAP));
-                Some(VecContainer { do_rebuild: false, data })
-            }});
-            // One atom's solve with unification, read as a pair: element 0 is the
-            // atom's renaming and element 1 the merge its equations forced on slots
-            // named earlier. Everything comes packed in vectors because two of the
-            // argument lists vary in length: `(vec-of avoid domain)`, the cliques
-            // that must stay apart, the equations' pattern halves, and their node
-            // halves.
-            add_primitive!(eg, "find-mapping-unify" = |head: @VecContainer (arc), cliques: @VecContainer (arc), firsts: @VecContainer (arc), seconds: @VecContainer (arc)| -?> @VecContainer (arc) {{
-                let read = |v: &VecContainer| slot_maps(&state, v.data.iter().copied());
-                let head = read(&head)?;
-                let [avoid, domain] = head.as_slice() else { return None };
-                let (mapping, merge) =
-                    find_mapping_unify(avoid, domain, &read(&cliques)?, &read(&firsts)?, &read(&seconds)?)?;
-                let data = register_renamings(&mut state, [mapping, merge]);
-                Some(VecContainer { do_rebuild: false, data })
-            }});
         }
         if self.element.is_eq_sort() {
             eg.add_write_primitive(

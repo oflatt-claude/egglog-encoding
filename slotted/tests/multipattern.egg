@@ -42,8 +42,8 @@
 ;;;
 ;;; It did not always. The last two sections here -- patterns whose atoms share nothing
 ;;; -- are the shape that found `K1`, where a side condition about a binder's bound slot
-;;; could be satisfied by renaming that slot onto an unrelated class's. `refine-namings`
-;;; is now offered only the slots the match's substitution carries, which is what the
+;;; could be satisfied by renaming that slot onto an unrelated class's. `refine` is
+;;; now offered only the slots the match's substitution carries, which is what the
 ;;; reference offers, and `K1` is a regression test in the curated corpus.
 (sort U)
 

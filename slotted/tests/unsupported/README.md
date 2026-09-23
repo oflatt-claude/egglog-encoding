@@ -10,6 +10,6 @@ skips `snapshots/`. They are kept as the originals they are, not as tests.
 | `unify-redundant-and-symmetric-appid.egg` | the same, for the shared-body-under-two-binders case | `../rudi/unify-redundant-and-symmetric-appid-decoded.egg` |
 
 Both were written by Rudi Schneider while reporting the matcher bug that
-`find-mapping-unify` fixes. The `-decoded` files spell the same programs as
+the frame's join fixes. The `-decoded` files spell the same programs as
 `(rewrite (Truth) (Rel x w) :when (...))` and carry the checks. If `rule` ever becomes
 part of the language, these move back beside them.

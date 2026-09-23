@@ -163,56 +163,137 @@ first, to a slot the node does not use, which keeps it alpha-renameable.
 
 # Matching
 
-A rule's left-hand side is flattened into depth-1 atoms and solved into one
-shared frame, one atom at a time. Each atom's renaming is pinned by what is
-already known — the edge from its parent, and any slot literal an earlier atom
-fixed — and `find-mapping-total` **mints** a fresh name for whatever is left
-over.
+egglog finds the e-nodes a rule's left-hand side matches; what the match says about
+**slots** is a set of constraints on those nodes, solved by a handful of primitives
+inside the same query. A rule reads like this (the SDQL library's `sum-fact-3`,
+`(Sum R $x $y (Sing e1 e2)) -> (Sing e1 (Sum R $x $y e2))` when `$x` and `$y` are not
+free in `e1`):
 
-A mint is a placeholder, not a fact. Where an atom's slot is not constrained from
-above — a class that has made it redundant, or a binder's own slot — the mint
-names it, and a later atom may learn that two such names are one slot. That
-happens when two equations meet on one node slot: the renaming a second inner
-`Lam` inherits from its parent says `f3`, and a body `a` already matched under
-the first `Lam` says `f1`. Read as facts the two contradict; read as placeholders
-they identify `f3` with `f1`. This is the reference's `unify`.
+```
+(rule ((= cls_p (Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1))
+       (= atom_p (atom "_p" (root "_p" (ClassSlots cls_p))
+                            (child "R" e0_R (ClassSlots cls_R))
+                            (bound "$x" e0_lit_x) (bound "$y" e0_lit_y)
+                            (child "_t1" e0_t1 (ClassSlots cls_t1))))
+       (= cls_t1 (Sing e1_e1 cls_e1 e1_e2 cls_e2))
+       (RenamesToLeader cls_t1 sym_t1 cls_t1)
+       (= atom_t1 (atom "_t1" (root "_t1" (ClassSlots cls_t1) sym_t1)
+                              (child "e1" e1_e1 (ClassSlots cls_e1))
+                              (child "e2" e1_e2 (ClassSlots cls_e2))))
+       (= f (frame-join atom_p atom_t1))
+       (Idx choice)
+       (= m (refine (anchor f "_p") choice))
+       (not-free m "$x" (names "e1"))
+       (not-free m "$y" (names "e1")))
+      ((let built_sum (Sum (ren m "R") cls_R (ren m "$x") (Var 0) (ren m "$y") (Var 0) (ren m "e2") cls_e2))
+       (let built_sum_slots (node-slots m (names "R") (names "$x" "$y" "e2") (names "$x" "$y")))
+       (let built_sing (Sing (ren m "e1") cls_e1 built_sum_slots built_sum))
+       (union built_sing cls_p)) :name "sum-fact-3")
+```
 
-So an atom with two or more equations is solved by `find-mapping-unify`, which
-returns a pair: the atom's renaming, and the **merge** its equations forced on
-the names already in play. Every renaming solved before that atom is read
-through the merge from then on — `(compose u m)` in the rule text — and so are
-the slot literals and the per-atom slot sets. What a merge may not do is
-identify two slots one **clique** says are apart: the slots of one e-node, or two
-slot literals the pattern wrote. Those are the two refusals of the reference's
-`union_slot`. One equation alone cannot force a merge, so an atom with a single
-equation keeps the plain `find-mapping-total`.
+Two atoms, egglog's own; one `atom` value per atom saying what its columns mean;
+their join, anchored at the root so the root's renaming is the identity; one
+refinement; the conditions; the right-hand side built in the frame's slots and
+unioned with the root. Names in quotes are the pattern's own variables and literals (`_p` and `_t1`
+are the flattener's, which no author's name begins with), so a frame is keyed by the
+words the rule was written in.
 
-A slot literal is solved rather than declared — read off whatever slot the node
-has in that column — so two different literals can come out equal, which the
-reference never allows: its written slots are rigid names. So a rule that writes
-two or more literals also states that they are pairwise distinct, as one
-`map-length` fact over all of them after refinement. A binder column holds a literal
-and nothing else.
+## The frame
 
-A matched binder's bound slot may be read as **any** name, a free variable's
-included. Reading `let x = y in (λw. x w)` with `w` as `y` is a fine alpha-variant
-of that term, refinement offers it on purpose, and a language may want it: that is
-how a bound variable gets identified with a free one. The reference's
-`MultiPattern` reads the same way. What follows is a duty on the **rule**: a
-right-hand side that rebinds such a slot over a variable matched outside the
-binder builds a capturing node under that reading — `let-lam-diff` would build
-`λy. let x = y in x y` — so it has to say `(not-free $y e)`, which is evaluated
-after refinement and excludes exactly that reading. `capture_guards` derives what
-a rule owes and `check-capture-guards.py` holds the rule libraries to it; the
-reference's own rule sets can lack these guards because its nested matcher keeps
-bound slots injective, which makes them vacuous there.
+A **frame** is the closure of equations between *slot occurrences*: `Node(a, s)`,
+slot `s` of the e-node matched at the atom labelled `a`; `Var(v, t)`, slot `t` of
+the class variable `v` is bound to; `Lit("$x")`, a slot the pattern wrote or the
+right-hand side minted. Its classes are the pattern's slots, numbered in canonical
+order. Two **cliques** may never collapse: the slots of one e-node (and of one class,
+so a renaming stays injective), and the set of distinct literals. `sort/frame.rs` in
+the egglog crate holds the algebra; the primitives are:
 
-Unification decides only what the equations decide. Two mints no equation
-relates may still be one slot, and `refine-namings` is where that is settled:
-after every atom is solved, it returns *every* way the remaining slots may be
-merged, and the rule reads one with `vec-get` against an `Idx` row. Element 0 is
-the identity, so running out of indices degrades to not refining — matches are
-missed, never invented. This is the reference's `final_refine`.
+| primitive | what it says |
+| --- | --- |
+| `(root "p" cs [sym])` | the atom's node is an invocation of `p`'s class, whose exact slots are `cs`; through the symmetry `sym` if `p` was matched before |
+| `(child "v" e cs [sym])` | the column with edge `e` carries `v`: `Node(a, e(t)) = Var(v, t)` for each class slot `t` |
+| `(lit "$x" e)`, `(bound "$x" e)` | the column is the literal `$x`: `Node(a, e(0)) = Lit("$x")`; `bound` is a binder column, whose literal is node data and not carried into refinement |
+| `(leaf e)` | a payload leaf reached through its own class: node slots, nothing more |
+| `(atom "a" binding...)` | one atom's constraints, closed; fails if its own columns break a clique |
+| `(frame-join f g)` | both frames' constraints, closed; fails where a clique breaks. Associative and commutative |
+| `(anchor f "p")` | the frame spelled in `p`'s slot names: the rule's root, so its renaming is the identity and the action is egglog's `union` |
+| `(refine f i)` | the `i`-th consistent merging of the classes refinement may touch, `0` the identity; fails past the last |
+| `(mint f (names "$z"...))` | fresh slots for a right-hand side, apart from everything named |
+| `(free m "$x" (names v...))`, `(not-free ...)` | is the literal's slot in one of the variables' images |
+| `(same m "a" "b")`, `(bool-same ...)` | the two variables are one invocation |
+| `(ren m "v")` | `v`'s renaming into the pattern's slots; a literal comes back as `{0 -> slot}` |
+| `(node-slots m uncovered covered bound)` | a built node's free slots from its named columns; `(without m slots bound)` for a built child under a binder |
+
+## The contract
+
+What a compiled rule asserts, clause by clause; `compile_query_frames` and
+`compile_rule` in `slotted-encoder.py` name these where they emit them, and
+`mutations.py` breaks one at a time and requires the curated corpus to notice.
+
+**C1. A pattern variable is an invocation.** `x` is a class `cls_x` and a renaming
+`(ren m "x")` of that class's slots into the pattern's. Two occurrences agree when
+they reach one class by renamings that differ at most by a symmetry of it
+(Definition 6); equal renamings alone is too weak, equal classes alone is wrong.
+
+**C2. Atoms, and the frame.** The left-hand side is flattened into depth-1 atoms,
+one per e-node, every child a variable or a literal. Each atom's columns are one
+`atom`, and the frame is their `frame-join`. Nothing is ordered: an atom is a function
+of its own node's edges, the join is associative and commutative, and the left-nested
+tree the compiler writes is a hint to prune early, not a meaning. A slot no equation
+reaches is a placeholder, a class of its own.
+
+**C3. Atoms are written in a connected order.** `connected_order` puts each atom
+after one it shares a variable with, parent before child, so the join tree fails as
+early as it can. Under frames this is only a heuristic.
+
+**C4. A variable's renaming is no wider than its class.** Every binding carries the
+class's exact slots, `(ClassSlots cls)`, and the frame's occurrences of `v` are those
+slots and no others; a node may carry a slot its class has made redundant, and that
+slot is the node's alone.
+
+**C5. Repeated occurrences are compared up to symmetry.** A further occurrence of a
+bound variable joins its own symmetry row `(RenamesToLeader cls_x sym_x cls_x)` and
+hands `sym_x` to its binding; one row per group element, so the match quantifies over
+the group.
+
+**C6. Where two atoms agree on a variable, their occurrences are one.** The join
+identifies `Node(a, e(t))` and `Node(b, e'(t))` through `Var(v, t)`, which is the
+reference's `unify`, and fails only where that breaks a clique.
+
+**C7. A slot literal is solved, and different literals differ.** `$x` in a column is
+read off the node's slot there; the same literal written twice names one slot; two
+different literals are two classes, by the literal clique. In a binder column a
+literal is the bound slot (`bound`), and only a literal may stand there.
+
+**C8. Placeholders are refined last.** `refine` enumerates every consistent way to
+merge the classes a variable or a carried literal reaches -- never two literals, never
+two slots of one node or class -- and the rule reads one per `(Idx choice)`; `0` is
+the identity, so running out of indices loses matches and never invents one. This is
+the reference's `final_refine`.
+
+**C9. Conditions are read after refinement.** `free` and `not-free` are facts over the
+refined frame. A matched binder's slot may be read as any name, a free variable's
+included, so a rule whose right-hand side rebinds such a slot over a variable matched
+outside the binder owes `(not-free $s v)`; `capture_guards` derives what it owes.
+
+**C10. A right-hand-side slot the pattern never pins is fresh.** `mint` adds it after
+refinement, apart from every slot the match named; the reference writes
+`Slot::fresh()` where the encoding has to invent a name.
+
+**C11. An action is a union in the root's frame.** The frame is anchored at the
+rule's root, so the root's renaming is the identity by construction, and the right-hand
+side, built bottom-up in the frame's slots -- one `let` per node and one `node-slots`
+for its slot set -- is an invocation in the root's own frame. egglog's `union` is then
+exactly the equation the rule means, and the machinery's `ClassSlots` merge makes any
+slot the two sides disagree on redundant. The one action that is not a union is a
+right-hand side that is a bare variable `a`: `a`'s renaming need not be the identity,
+so the rule states `(Equated cls_root (ren m "a") cls_a)` and the machinery orients it.
+
+**C12. A right-hand side that is a call is answered by a primitive.** `(subst body $x
+t)` cannot be built as a node: `slotted-subst` copies one representative of the body
+-- the smallest term, and among equal sizes the least canonical spelling, so every run
+copies the same one -- and returns an invocation, which `SubstPending` carries back
+into the root's frame.
 
 # Where the pieces live
 

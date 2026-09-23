@@ -282,118 +282,6 @@ fn find_mapping_total(maps: &[BTreeMap<i64, i64>]) -> Option<BTreeMap<i64, i64>>
     Some(mapping)
 }
 
-/// [`find_mapping_total`] with UNIFICATION: the equations may identify
-/// slots named earlier, where the total solve fails when two of them name one
-/// node slot.
-///
-/// A slot minted for an earlier atom is a placeholder, not a fact. So when this
-/// atom's equations say `R(y) = f3` from its root and `R(y) = f1` from a child seen
-/// once already, and both names were minted, that is not a contradiction but a
-/// discovery: f1 and f3 are one slot. This is the reference's `unify` in
-/// `rewrite/multipat.rs`. What it refuses is what a `clique` says must stay apart:
-/// the slots of one e-node, and the slots a pattern writes as literals. A caller
-/// that passes those as cliques gets exactly `union_slot`'s two refusals.
-///
-/// Arguments: `avoid` and `domain` as for the total solve; `cliques`, each an
-/// identity map on slots that must stay pairwise distinct; and the equation halves
-/// `firsts` and `seconds`, paired positionally as in [`find_mapping`].
-///
-/// Returns the atom's renaming, in merged names, and the merge itself: a map that is
-/// total on every slot any argument mentions and sends each to its representative.
-/// The caller composes the merge onto everything it solved before. Which of two
-/// merged slots survives is not observable, so the smaller name is kept.
-///
-/// `None` when the halves are unequal in length, when a pair's key sets differ,
-/// when the merge would identify two slots of one clique, or when the renaming
-/// would not be injective.
-pub(crate) fn find_mapping_unify(
-    avoid: &BTreeMap<i64, i64>,
-    domain: &BTreeMap<i64, i64>,
-    cliques: &[BTreeMap<i64, i64>],
-    firsts: &[BTreeMap<i64, i64>],
-    seconds: &[BTreeMap<i64, i64>],
-) -> Option<(BTreeMap<i64, i64>, BTreeMap<i64, i64>)> {
-    if firsts.len() != seconds.len() {
-        return None;
-    }
-
-    fn find(uf: &BTreeMap<i64, i64>, mut x: i64) -> i64 {
-        while let Some(&p) = uf.get(&x) {
-            if p == x {
-                break;
-            }
-            x = p;
-        }
-        x
-    }
-    fn union(uf: &mut BTreeMap<i64, i64>, a: i64, b: i64) {
-        let (ra, rb) = (find(uf, a), find(uf, b));
-        if ra != rb {
-            uf.insert(ra.max(rb), ra.min(rb));
-        }
-    }
-
-    // Each shared key gives `R(second[k]) = first[k]`. A node slot named twice does
-    // not fail the solve: it identifies the two names.
-    let mut uf: BTreeMap<i64, i64> = BTreeMap::new();
-    let mut named: BTreeMap<i64, i64> = BTreeMap::new();
-    for (m1, m2) in firsts.iter().zip(seconds) {
-        if m1.len() != m2.len() || !m1.keys().eq(m2.keys()) {
-            return None;
-        }
-        for ((_, v1), (_, v2)) in m1.iter().zip(m2) {
-            match named.get(v2) {
-                Some(&prev) => union(&mut uf, prev, *v1),
-                None => {
-                    named.insert(*v2, *v1);
-                }
-            }
-        }
-    }
-
-    // Every pattern-space slot in play, so the merge is total on all of them and a
-    // caller's `compose` with it truncates nothing.
-    let mut all: BTreeSet<i64> = avoid.keys().chain(avoid.values()).copied().collect();
-    for c in cliques {
-        all.extend(c.keys().chain(c.values()).copied());
-    }
-    for m in firsts {
-        all.extend(m.values().copied());
-    }
-
-    for c in cliques {
-        let reps: BTreeSet<i64> = c.keys().map(|&s| find(&uf, s)).collect();
-        if reps.len() != c.len() {
-            return None;
-        }
-    }
-
-    let mut mapping: BTreeMap<i64, i64> = named.iter().map(|(&y, &p)| (y, find(&uf, p))).collect();
-    let image: BTreeSet<i64> = mapping.values().copied().collect();
-    if image.len() != mapping.len() {
-        return None;
-    }
-
-    let mut used: BTreeSet<i64> = all.iter().copied().chain(image).collect();
-    let mut next = 0;
-    for k in domain.keys() {
-        if mapping.contains_key(k) {
-            continue;
-        }
-        while used.contains(&next) {
-            next += 1;
-        }
-        used.insert(next);
-        mapping.insert(*k, next);
-    }
-
-    let merge = all.iter().map(|&s| (s, find(&uf, s))).collect();
-    Some((mapping, merge))
-}
-
-/// Most namings `find-mappings-total` will build. Beyond this it truncates, so a
-/// caller that must not miss one compares [`find_mappings_total_count`] against
-/// the vector's length.
 pub(crate) const FIND_MAPPINGS_CAP: usize = 1024;
 
 /// How many namings [`find_mappings_total`] would produce for `unnamed`
@@ -530,167 +418,6 @@ pub(crate) fn find_mappings_total(
     out
 }
 
-/// Every way the slots of one match may be merged: the reference's `final_refine`
-/// (`slotted-egraphs/src/rewrite/multipat.rs`) as a pure function.
-///
-/// `maps` is `[all, pattern, group...]`, read by KEY set:
-/// - `all` — every slot in play, which each result is total on;
-/// - `pattern` — the slots the PATTERN writes, as opposed to the ones minted for a
-///   class's own slots;
-/// - each remaining map — a set of slots known pairwise apart. One per matched e-node,
-///   because a node's slots are distinct. This is what keeps a result injective: two
-///   slots of one node can never merge, so composing a merge map onto a renaming
-///   cannot collapse two of its keys.
-///
-/// Two slots the pattern writes are never merged. The pattern asked for two names, and
-/// merging them would let a `not-free` side condition pass by renaming its two slots
-/// together — capture rather than alpha-equivalence.
-///
-/// ELEMENT 0 IS THE IDENTITY, which is the one place this deliberately differs from
-/// the reference: it recurses into the merged branch first, and order does not matter
-/// there because every state is returned. Here the caller reads a result by INDEX out
-/// of a finite relation, so putting the all-apart solution first means an index space
-/// too small to reach the rest degrades to not refining at all, rather than to an
-/// arbitrary merge.
-///
-/// At most `cap` results are built.
-pub(crate) fn refine_namings(maps: &[BTreeMap<i64, i64>], cap: usize) -> Vec<BTreeMap<i64, i64>> {
-    let Some((cand_map, rest)) = maps.split_first() else {
-        return Vec::new();
-    };
-    let Some((pattern_map, groups)) = rest.split_first() else {
-        return Vec::new();
-    };
-    // The slots that may MERGE, which is not every slot in play. The reference's
-    // `final_refine` offers only the slots its substitution carries
-    // (`state.subst.values().map(|x| x.slots())`), so a slot no bound variable carries
-    // -- a binder's bound slot the body does not use -- is never a candidate there.
-    let cands: Vec<i64> = cand_map.keys().copied().collect();
-    let pattern: BTreeSet<i64> = pattern_map.keys().copied().collect();
-
-    // The renaming returned is TOTAL on every slot any argument mentions, which is a
-    // separate question from what may merge: a caller composes the result with its
-    // renamings, and `compose` truncates outside the domain, so a slot left out could
-    // not be spoken about afterwards. Deriving it as the union keeps every caller that
-    // passes its whole slot set as the first argument behaving exactly as before.
-    let mut domain: BTreeSet<i64> = cand_map.keys().copied().collect();
-    domain.extend(pattern_map.keys().copied());
-    for g in groups {
-        domain.extend(g.keys().copied());
-    }
-    let all: Vec<i64> = domain.into_iter().collect();
-
-    // One disequality per pair within a group, so a node's slots stay apart.
-    let mut diseq: BTreeSet<(i64, i64)> = BTreeSet::new();
-    for g in groups {
-        let ks: Vec<i64> = g.keys().copied().collect();
-        for (i, &x) in ks.iter().enumerate() {
-            for &y in &ks[i + 1..] {
-                diseq.insert((x.min(y), x.max(y)));
-            }
-        }
-    }
-
-    fn find(uf: &BTreeMap<i64, i64>, mut x: i64) -> i64 {
-        while let Some(&p) = uf.get(&x) {
-            if p == x {
-                break;
-            }
-            x = p;
-        }
-        x
-    }
-
-    fn apart(uf: &BTreeMap<i64, i64>, diseq: &BTreeSet<(i64, i64)>, x: i64, y: i64) -> bool {
-        diseq.iter().any(|&(p, q)| {
-            let (p, q) = (find(uf, p), find(uf, q));
-            (p == x && q == y) || (p == y && q == x)
-        })
-    }
-
-    fn walk(
-        cands: &[i64],
-        all: &[i64],
-        pattern: &BTreeSet<i64>,
-        uf: BTreeMap<i64, i64>,
-        diseq: BTreeSet<(i64, i64)>,
-        cap: usize,
-        out: &mut Vec<BTreeMap<i64, i64>>,
-    ) {
-        if out.len() >= cap {
-            return;
-        }
-        for (i, &a) in cands.iter().enumerate() {
-            for &b in &cands[i + 1..] {
-                let (x, y) = (find(&uf, a), find(&uf, b));
-                if x == y || apart(&uf, &diseq, x, y) {
-                    continue;
-                }
-                // `allows_directed_union`: the slot being REPLACED may not be one the
-                // pattern writes. Try either direction, and if both are pattern slots
-                // this pair is simply not decidable -- the reference's `continue`.
-                let redirect = if !pattern.contains(&x) {
-                    Some((x, y))
-                } else if !pattern.contains(&y) {
-                    Some((y, x))
-                } else {
-                    None
-                };
-                let Some((from, to)) = redirect else { continue };
-
-                // apart first, so the identity lands at index 0
-                let mut d = diseq.clone();
-                d.insert((x.min(y), x.max(y)));
-                walk(cands, all, pattern, uf.clone(), d, cap, out);
-
-                let mut u = uf.clone();
-                u.insert(from, to);
-                walk(cands, all, pattern, u, diseq, cap, out);
-                return;
-            }
-        }
-        out.push(all.iter().map(|&s| (s, find(&uf, s))).collect());
-    }
-
-    let mut out = Vec::new();
-    walk(
-        &cands,
-        &all,
-        &pattern,
-        BTreeMap::new(),
-        diseq,
-        cap,
-        &mut out,
-    );
-    out
-}
-
-/// A map from a key type to a value type supporting these primitives:
-/// - `map-empty`
-/// - `map-insert`
-/// - `map-get`
-/// - `map-contains`
-/// - `map-not-contains`
-/// - `map-remove`
-/// - `map-length`
-/// - `map-union`
-/// - `map-intersect`
-///
-/// When the key and value sorts coincide, a map also reads as a partial
-/// injection on a single space (a "renaming"), and these are registered too:
-/// - `compose`, and `compose-total`, which refuses to drop a key
-/// - `inverse` (also spelled `map-inverse`)
-/// - `map-image` and `map-domain`, naming a renaming's two slot sets
-/// - `find-mapping`
-///
-/// With `i64` keys a renaming also names slots, and the slotted-e-graph
-/// primitives are registered:
-/// - `find-mapping-total`
-/// - `slotted-subst` and `slotted-subst-frame`, the two halves of one
-///   substitution's result (see [`crate::sort::SLOTTED_SUBST`])
-///
-/// These are not in [`Presort::reserved_primitives`], so a program that never
-/// declares a `Map` sort may still use the names itself.
 #[derive(Clone, Debug)]
 pub struct MapSort {
     name: String,
@@ -887,6 +614,43 @@ impl ContainerSort for MapSort {
             // Minting a fresh slot means naming one that is not in use, which
             // needs the slot space to be ordered and unbounded above.
             if self.key.name() == "i64" {
+                // Slotted matching frames (`sort/frame.rs`) read renamings off matched
+                // e-nodes and hand renamings back: the bindings an `atom` is made of,
+                // a variable's renaming out of a frame, and a built node's slot set.
+                add_primitive!(eg, "root" = |v: S, cs: @MapContainer (arc)| -> Bd {
+                    Bd::new(Binding::Root { var: v.as_str().to_owned(), class_slots: slot_map(state.base_values(), &cs.data), sym: None })
+                });
+                add_primitive!(eg, "root" = |v: S, cs: @MapContainer (arc), sym: @MapContainer (arc)| -> Bd {{
+                    let bv = state.base_values();
+                    Bd::new(Binding::Root { var: v.as_str().to_owned(), class_slots: slot_map(bv, &cs.data), sym: Some(slot_map(bv, &sym.data)) })
+                }});
+                add_primitive!(eg, "child" = |v: S, e: @MapContainer (arc), cs: @MapContainer (arc)| -> Bd {{
+                    let bv = state.base_values();
+                    Bd::new(Binding::Child { var: v.as_str().to_owned(), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: None })
+                }});
+                add_primitive!(eg, "child" = |v: S, e: @MapContainer (arc), cs: @MapContainer (arc), sym: @MapContainer (arc)| -> Bd {{
+                    let bv = state.base_values();
+                    Bd::new(Binding::Child { var: v.as_str().to_owned(), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: Some(slot_map(bv, &sym.data)) })
+                }});
+                add_primitive!(eg, "lit" = |x: S, e: @MapContainer (arc)| -> Bd {
+                    Bd::new(Binding::Lit { name: x.as_str().to_owned(), edge: slot_map(state.base_values(), &e.data), carried: true })
+                });
+                add_primitive!(eg, "bound" = |x: S, e: @MapContainer (arc)| -> Bd {
+                    Bd::new(Binding::Lit { name: x.as_str().to_owned(), edge: slot_map(state.base_values(), &e.data), carried: false })
+                });
+                add_primitive!(eg, "leaf" = |e: @MapContainer (arc)| -> Bd {
+                    Bd::new(Binding::Leaf { edge: slot_map(state.base_values(), &e.data) })
+                });
+                add_primitive!(eg, "ren" = |f: Fr, name: S| -?> @MapContainer (arc) {
+                    Some(MapContainer::renaming(value_map(state.base_values(), f.ren(name.as_str())?)))
+                });
+                add_primitive!(eg, "without" = |f: Fr, slots: @MapContainer (arc), bound: Ns| -?> @MapContainer (arc) {{
+                    let bv = state.base_values();
+                    Some(MapContainer::renaming(value_map(bv, f.without(&slot_map(bv, &slots.data), &bound.0 .0)?)))
+                }});
+                add_primitive!(eg, "node-slots" = |f: Fr, uncovered: Ns, covered: Ns, bound: Ns| -?> @MapContainer (arc) {
+                    Some(MapContainer::renaming(value_map(state.base_values(), f.node_slots(&uncovered.0 .0, &covered.0 .0, &bound.0 .0)?)))
+                });
                 add_primitive!(eg, "find-mapping-total" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
                     let bv = state.base_values();
                     let maps: Vec<BTreeMap<i64, i64>> = xs.map(|m| slot_map(bv, &m.data)).collect();
@@ -1047,221 +811,24 @@ mod naming_tests {
         pairs.iter().copied().collect()
     }
 
-    fn ident(slots: &[i64]) -> BTreeMap<i64, i64> {
-        slots.iter().map(|&s| (s, s)).collect()
-    }
-
     /// Reading index 0 must mean "did not refine", so that an index space too small to
     /// reach the rest degrades to today's behaviour rather than to an arbitrary merge.
-    #[test]
-    fn refine_element_zero_is_the_identity() {
-        let out = refine_namings(&[ident(&[0, 1]), ident(&[]), ident(&[])], 64);
-        assert_eq!(out[0], ident(&[0, 1]));
-    }
-
     /// `allows_directed_union`: the slot being replaced may not be one the pattern
     /// writes, so two pattern slots have no direction available and never merge.
-    #[test]
-    fn refine_never_merges_two_pattern_slots() {
-        let out = refine_namings(&[ident(&[0, 1]), ident(&[0, 1]), ident(&[])], 64);
-        assert_eq!(
-            out,
-            vec![ident(&[0, 1])],
-            "two pattern slots must stay apart"
-        );
-    }
-
     /// A node's slots are pairwise distinct, so a group forbids merging within it --
     /// which is what keeps a merge map composable with a renaming without collapsing
     /// two of its keys.
-    #[test]
-    fn refine_never_merges_two_slots_of_one_node() {
-        let out = refine_namings(&[ident(&[0, 1]), ident(&[]), ident(&[0, 1])], 64);
-        assert_eq!(
-            out,
-            vec![ident(&[0, 1])],
-            "one node's slots must stay apart"
-        );
-    }
-
     /// The case the whole thing exists for: a minted slot may be identified with a
     /// pattern slot, and the pattern slot must be the one that survives.
-    #[test]
-    fn refine_merges_a_minted_slot_into_a_pattern_slot() {
-        // 0 is the pattern's, 7 was minted, and nothing says they are apart
-        let out = refine_namings(&[ident(&[0, 7]), ident(&[0]), ident(&[])], 64);
-        assert_eq!(out.len(), 2, "apart and merged");
-        assert_eq!(out[0], ident(&[0, 7]));
-        assert_eq!(
-            out[1],
-            m(&[(0, 0), (7, 0)]),
-            "the pattern slot survives, per `allows_directed_union`"
-        );
-    }
-
     /// A slot that is not a CANDIDATE never merges, and is still in the domain of what
     /// comes back -- the two are different questions. This is what keeps a binder's
     /// bound slot, which no bound variable carries, from being renamed onto an
     /// unrelated class's slot, while leaving it nameable afterwards.
-    #[test]
-    fn refine_leaves_a_non_candidate_alone_but_in_the_domain() {
-        // 7 may merge with nothing because it is not offered; 0 and 1 are the group
-        let out = refine_namings(&[ident(&[0]), ident(&[]), ident(&[0, 1, 7])], 64);
-        assert_eq!(
-            out,
-            vec![ident(&[0, 1, 7])],
-            "nothing to merge, domain intact"
-        );
-
-        // and with two candidates it merges those and only those
-        let out = refine_namings(&[ident(&[0, 1]), ident(&[]), ident(&[7])], 64);
-        assert_eq!(out.len(), 2, "apart and merged");
-        assert_eq!(out[0], ident(&[0, 1, 7]));
-        assert_eq!(out[1], m(&[(0, 1), (1, 1), (7, 7)]), "7 is untouched");
-    }
-
     /// Two minted slots have both directions available, so they merge; which of the
     /// two survives is not observable, but the partition is.
-    #[test]
-    fn refine_merges_two_minted_slots() {
-        let out = refine_namings(&[ident(&[5, 9]), ident(&[]), ident(&[])], 64);
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0], ident(&[5, 9]));
-        let merged = &out[1];
-        assert_eq!(merged[&5], merged[&9], "one class");
-    }
-
     /// Three free slots give the five partitions of a 3-set (Bell(3)), and the first
     /// is the all-apart one.
-    #[test]
-    fn refine_reaches_every_partition_of_three_free_slots() {
-        let out = refine_namings(&[ident(&[1, 2, 3]), ident(&[]), ident(&[])], 64);
-        let partitions: BTreeSet<Vec<Vec<i64>>> = out
-            .iter()
-            .map(|mp| {
-                let mut by_rep: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
-                for (&k, &v) in mp {
-                    by_rep.entry(v).or_default().push(k);
-                }
-                by_rep.into_values().collect()
-            })
-            .collect();
-        assert_eq!(partitions.len(), 5, "Bell(3) = 5, got {out:?}");
-        assert_eq!(out[0], ident(&[1, 2, 3]));
-    }
-
     /// The cap truncates rather than growing without bound, and index 0 survives it.
-    #[test]
-    fn refine_respects_the_cap() {
-        let out = refine_namings(&[ident(&[1, 2, 3]), ident(&[]), ident(&[])], 2);
-        assert_eq!(out.len(), 2);
-        assert_eq!(out[0], ident(&[1, 2, 3]));
-    }
-
-    /// The shape `unify` exists for. Two nested lambdas were matched twice, with the
-    /// shared body `a` seen under the first pair. The second inner lambda's root names
-    /// its node slot 0 as the mint 2 while `a`, already known at {0 -> 0, 1 -> 1},
-    /// names it 0. The total solve fails; unification learns that 2 is 0.
-    type Maps = Vec<BTreeMap<i64, i64>>;
-    type UnifyArgs = (BTreeMap<i64, i64>, BTreeMap<i64, i64>, Maps, Maps, Maps);
-
-    fn unify_args() -> UnifyArgs {
-        let avoid = ident(&[0, 1, 2]);
-        let domain = ident(&[0, 1]);
-        // the pattern writes no literal; the two lambda nodes' slots stay apart
-        let cliques = vec![ident(&[]), ident(&[0]), ident(&[0, 1]), ident(&[2])];
-        let firsts = vec![m(&[(0, 2)]), m(&[(0, 0), (1, 1)])];
-        let seconds = vec![m(&[(0, 0)]), m(&[(0, 0), (1, 1)])];
-        (avoid, domain, cliques, firsts, seconds)
-    }
-
-    #[test]
-    fn unify_identifies_two_mints_the_total_solve_refuses() {
-        let (avoid, domain, cliques, firsts, seconds) = unify_args();
-        let mut total = vec![avoid.clone(), domain.clone()];
-        total.extend(firsts.iter().cloned());
-        total.extend(seconds.iter().cloned());
-        assert_eq!(
-            find_mapping_total(&total),
-            None,
-            "the total solve sees a contradiction"
-        );
-
-        let (mapping, merge) =
-            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds).unwrap();
-        assert_eq!(mapping, m(&[(0, 0), (1, 1)]), "in merged names");
-        assert_eq!(
-            merge,
-            m(&[(0, 0), (1, 1), (2, 0)]),
-            "2 was a placeholder for 0"
-        );
-    }
-
-    /// The same atom under the child's swap symmetry: the equations now identify the
-    /// mint with the OTHER slot, which is the second of the two matches.
-    #[test]
-    fn unify_follows_the_symmetry_branch() {
-        let (avoid, domain, cliques, _, seconds) = unify_args();
-        let firsts = vec![m(&[(0, 2)]), m(&[(0, 1), (1, 0)])];
-        let (mapping, merge) =
-            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds).unwrap();
-        assert_eq!(mapping, m(&[(0, 1), (1, 0)]));
-        assert_eq!(merge, m(&[(0, 0), (1, 1), (2, 1)]));
-    }
-
-    /// `allows_directed_union`: a merge the cliques forbid fails the atom. Two written
-    /// literals and two slots of one node are the same refusal here.
-    #[test]
-    fn unify_never_merges_within_a_clique() {
-        let (avoid, domain, mut cliques, firsts, seconds) = unify_args();
-        cliques.push(ident(&[0, 2]));
-        assert_eq!(
-            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds),
-            None
-        );
-    }
-
-    /// Two node slots sent to one name is not a merge to make but a renaming that is
-    /// not injective, so the solve declines exactly as the total one does.
-    #[test]
-    fn unify_keeps_the_renaming_injective() {
-        let avoid = ident(&[5]);
-        let domain = ident(&[0, 1]);
-        let firsts = vec![m(&[(7, 5), (8, 5)])];
-        let seconds = vec![m(&[(7, 0), (8, 1)])];
-        assert_eq!(
-            find_mapping_unify(&avoid, &domain, &[], &firsts, &seconds),
-            None
-        );
-    }
-
-    /// With nothing to identify, the answer is the total solve's and the merge is the
-    /// identity on everything in play -- so an atom that reaches this primitive with
-    /// consistent equations behaves as it did with the total one.
-    #[test]
-    fn unify_agrees_with_the_total_solve_when_nothing_merges() {
-        let args = m3_args();
-        let (mapping, merge) =
-            find_mapping_unify(&args[0], &args[1], &[], &args[2..3], &args[3..4]).unwrap();
-        assert_eq!(mapping, find_mapping_total(&args).unwrap());
-        assert_eq!(
-            merge,
-            ident(&[0, 1]),
-            "total on `avoid`, identity throughout"
-        );
-    }
-
-    /// A domain slot no equation names is minted clear of every name in play, the
-    /// pre-merge ones included, so a retired name is never handed out again.
-    #[test]
-    fn unify_mints_clear_of_retired_names() {
-        let (avoid, mut domain, cliques, firsts, seconds) = unify_args();
-        domain.insert(9, 9);
-        let (mapping, _) =
-            find_mapping_unify(&avoid, &domain, &cliques, &firsts, &seconds).unwrap();
-        assert_eq!(mapping[&9], 3, "0, 1, 2 are all spoken for");
-    }
-
     /// The shape of the `M3` divergence: two atoms share one slot, and the second
     /// atom's other slot may either take a fresh name or the one the first atom's
     /// other child already occupies.

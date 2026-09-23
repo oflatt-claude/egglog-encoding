@@ -10,10 +10,12 @@ is not kept as decoration -- `wide-kids` and `binder-1st` were both removed once
 the first because `def4-edges.py` checks the property it stood for and the second because the
 rule it violated is definitional rather than empirical.
 
-`unordered` went the same way, for a better reason than the others: a rule that tries every
-naming recovers the matches that compiling atoms in the order written would lose, so the
-mutation breaks no case at all. `order-independence.py` measures that property directly,
-which is where it is checked now.
+`unordered` went the same way, for a better reason than the others: a frame is the same
+whatever order its atoms are joined in, so the mutation breaks no case at all.
+`order-independence.py` measures that property directly, which is where it is checked now.
+`root-only`, `slot-late` and `no-unify` were bugs of the per-atom solve the frame replaced,
+and went with it; `union-id` went when the frame was anchored at the rule's root, which makes
+the root's renaming the identity and egglog's `union` the action itself.
 
     python3 slotted/xdiff/mutations.py
 """
@@ -28,26 +30,20 @@ import xdiff as X
 
 #: mutation -> cases of the curated corpus that must disagree with the reference
 EXPECTED = {
-    # A rule tries every naming an atom's renaming could take, so solving one from its
-    # root alone under-constrains rather than failing outright and much of the corpus
-    # recovers on another index. It still discriminates, so it stays.
-    # `UN1` is the last one: with the child's equation dropped there is nothing left to
-    # unify, so the shared variable is never joined. `UN2` was another while its binders
-    # were pattern variables; written with literals, the literals pin what the root
-    # alone would have left open, and it recovers.
-    "root-only": 13,  # an atom's renaming solved from its root alone
-    "union-id": 2,  # the action unions classes instead of invocations
-    # `UN2`'s binder literals are read off the second chain against the first's, so the
-    # late check passes what the joint one refuses; `LIT1` is the other.
-    "slot-late": 2,  # a slot literal checked after the renaming, not with it
-    # Two equations naming one node slot read as a contradiction rather than as two
-    # placeholders for one slot: the atom keeps `find-mapping-total` and never merges.
-    # `UN2`'s literals decide its binder slots before the shared body is reached, so
-    # only `UN1`, through two redundant slots the pattern never names, still needs it.
-    "no-unify": 1,  # `UN1`
-    # A rule's different slot literals are no longer said to be different slots, so two
-    # read off one bound slot come out equal and a rule the reference refuses fires.
-    "literals-alias": 1,  # `LIT1`
+    # A frame may identify two slots of one e-node or class: `CLQ1`, one variable over
+    # two node slots inside a slotless class, and three more. With the action a plain
+    # union, a root renaming that is no longer injective is asserted rather than dropped
+    # by the machinery, so more of the corpus notices than when the action was `Equated`.
+    "no-cliques": 4,
+    # Two different slot literals are no longer two different slots: `LIT1`.
+    "literals-alias": 1,
+    # Only the identity refinement is offered, so a match that needs two placeholders
+    # identified is never found.
+    "no-refine": 3,
+    # A repeated variable is compared as if its class had no symmetries.
+    "no-symmetry": 2,
+    # The side conditions are dropped: every guarded case fires where it should not.
+    "no-guard": 6,
 }
 
 

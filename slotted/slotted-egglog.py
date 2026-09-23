@@ -946,37 +946,6 @@ def _written(lang, t):
     return out
 
 
-def slot_scopes(lang, t, free, outer=(), out=None):
-    """The sets of slot literals that are in scope together, and so name different slots.
-
-    A term's free slots are always visible, and a binder's slot is visible wherever it
-    scopes, so a binder's group is itself, the binders it sits under, and the free
-    slots. Two binders in DISJOINT scopes are never visible at once and are not forced
-    apart: each names a slot of its own node, and the encoding may well have picked the
-    same one for both.
-
-    Only groups worth stating come back -- a group of one constrains nothing.
-    """
-    if out is None:
-        # the free slots are in scope everywhere, so they are one group on their own
-        out = [set(free)] if len(free) > 1 else []
-    if isinstance(t, str):
-        return out
-    op = lang[t[0]]
-    kinds = op.arg_kinds()
-    here = [arg for kind, arg in zip(kinds, t[1:], strict=True) if kind is enc.BINDER]
-    group = set(outer) | set(here) | set(free)
-    if here and len(group) > 1 and group not in out:
-        out.append(group)
-    inner, child = tuple(outer) + tuple(here), -1
-    for kind, arg in zip(kinds, t[1:], strict=True):
-        if kind in enc.SLOTTED:
-            child += 1
-        if kind is enc.CHILD:
-            slot_scopes(lang, arg, free, inner if child == op.covered else outer, out)
-    return out
-
-
 def claim_query(src, forms, sort):
     """Match each term a claim names, in that term's OWN slot numbering.
 
@@ -1025,16 +994,10 @@ def claim_query(src, forms, sort):
             var_prefix=f"_c{i}",
         )
         body += query.body
-        # DISTINCT slots, said outright. A renaming is injective, so two literals read
-        # off two slots of one node come out apart -- but read off the SAME slot they
-        # come out equal, and nothing refuses that. A rule says this over every literal
-        # it writes (`literals_apart`); a term says it by SCOPE, since `(Lam $0 $3)` is
-        # a constant function and must not match the identity one at $0 = $3, while
-        # `$0` under two disjoint binders is the same name for two slots.
-        for group in slot_scopes(src.lang, pattern, {f"${slot}" for slot in free}):
-            names = [query.slot_of[w] for w in sorted(group)]
-            apart = " ".join(f"{v} {v}" for v in names)
-            body.append(f"(= (map-length (map-of {apart})) {len(names)})")
+        # Two different literals are two different slots, by the frame's clique;
+        # `rename_bound_slots` gave every bound slot a name of its own, so `(Lam $0 $3)`
+        # is a constant function that does not match the identity one at $0 = $3, while
+        # `$0` under two disjoint binders is two names for two slots.
         frame = " ".join(f"{query.slot_of[f'${slot}']} {slot}" for slot in free)
         frame = f"(map-of {frame})" if frame else "(map-empty)"
         matched.append(Matched(query.cls_of[root], f"(compose {frame} {query.mp_of[root]})"))

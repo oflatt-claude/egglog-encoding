@@ -472,6 +472,10 @@ impl EGraph {
         add_base_sort(&mut eg, F64Sort, span!()).unwrap();
         add_base_sort(&mut eg, BigIntSort, span!()).unwrap();
         add_base_sort(&mut eg, BigRatSort, span!()).unwrap();
+        // the frame's primitives are typed over bindings and names, so those come first
+        add_base_sort(&mut eg, NamesSort, span!()).unwrap();
+        add_base_sort(&mut eg, BindingSort, span!()).unwrap();
+        add_base_sort(&mut eg, FrameSort, span!()).unwrap();
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();

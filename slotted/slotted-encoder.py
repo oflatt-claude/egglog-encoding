@@ -796,6 +796,11 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
 #: The right-hand side head that is a call rather than a node.
 SUBST = "subst"
 
+#: The contract violations the frame primitives can be asked to commit, for mutation
+#: testing; the compiler-side ones (`wide-kids`, `no-symmetry`, `no-guard`, `unordered`)
+#: are read by the emitter.
+FRAME_BUGS = ("no-cliques", "literals-alias", "no-refine")
+
 
 # The constructor-independent half of the node machinery. Hand-written in
 # the machinery along with a constructor or two, and kept
@@ -905,12 +910,11 @@ def carrier_core(symbols):
     )
 
 
-#: How many refinement indices a compiled rule may read. `refine-namings` returns every
-#: way a match's slots may be merged and `vec-get` is PARTIAL, so an index past the end
-#: of that vector matches nothing and the join stops on its own: seeding more than a
-#: rule needs costs join attempts, and seeding fewer loses the answers past the last one.
-#: Element 0 is the identity, so running out degrades to not refining -- matches are
-#: missed, never invented.
+#: How many refinement indices a compiled rule may read. `refine` is PARTIAL past the
+#: last consistent merging, so a rule joining `Idx` against it stops on its own: seeding
+#: more than a rule needs costs join attempts, and seeding fewer loses the answers past
+#: the last one. Index 0 is the identity, so running out degrades to not refining --
+#: matches are missed, never invented.
 #:
 #: Sixty-four because eight was measured to be too few. Eight was kept for a while
 #: because raising it changed no answer on the corpus known then; a symmetry-heavy sweep
@@ -1066,16 +1070,6 @@ def map_of(d):
     if not d:
         return "(map-empty)"
     return "(map-of " + " ".join(f"{k} {v}" for k, v in sorted(d.items())) + ")"
-
-
-def union_images(edges):
-    """The identity on the union of the edges' images -- a node's own slots."""
-    if not edges:
-        return "(map-empty)"
-    out = f"(map-image {edges[-1]})"
-    for e in reversed(edges[:-1]):
-        out = f"(map-union (map-image {e}) {out})"
-    return out
 
 
 def pay_text(op, pay):
@@ -1785,56 +1779,6 @@ def infer_pattern_sorts(lang, atoms):
     return sorts
 
 
-def build_rhs(lang, term, expected_sort, pvar_sorts, mp_of, cls_of, slot_of, new, pay_name):
-    """Build an RHS bottom-up and return its emitted lets, slot map, and class."""
-    lets = []
-
-    def go(t, sort):
-        if t[0] == "pv":
-            actual = pvar_sorts[t[1]]
-            if actual != sort:
-                raise SystemExit(f"right-hand side uses {t[1]!r} as {sort}, but the pattern binds it as {actual}")
-            return mp_of[t[1]], cls_of[t[1]]
-        if t[0] == "sl":
-            var = lang.symbols_for(sort).var
-            return f"(map-insert (map-empty) 0 {slot_of[t[1]]})", f"({var} 0)"
-
-        op = lang[t[0]]
-        if op.sort != sort:
-            raise SystemExit(f"right-hand side builds {op.name}, which produces {op.sort}, where {sort} is required")
-        args, pays = op.split(t[1:])
-        if not args:
-            if has_pay_var(t):
-                value = new("_rhs")
-                lets.append(f"(let {value} {node_expr(op, [], [], pays, pay_name)})")
-                return "(map-empty)", value
-            return map_of(lang.edge(t)), lang.enc(t, sort)
-
-        kids = [go(arg, child_sort) for arg, child_sort in zip(args, op.kid_sorts, strict=True)]
-        value = new("_rhs")
-        lets.append(
-            f"(let {value} {node_expr(op, [edge for edge, _ in kids], [cls for _, cls in kids], pays, pay_name)})"
-        )
-
-        # Binder slots are absent from their marker and covered child, but remain
-        # free in every uncovered child.
-        bound = [slot_of[args[i][1]] for i in op.binders]
-        slot_maps = []
-        for i, (edge, _cls) in enumerate(kids):
-            slots = f"(map-image {edge})"
-            if i in op.binders or i == op.covered:
-                for slot in bound:
-                    slots = f"(map-remove {slots} {slot})"
-            slot_maps.append(slots)
-        slots = "(map-empty)"
-        for child_slots in reversed(slot_maps):
-            slots = f"(map-union {child_slots} {slots})"
-        return slots, value
-
-    edge, cls = go(term, expected_sort)
-    return lets, edge, cls
-
-
 def lower_substitution(lang, root, rhs, pvar_sorts, mp_of, cls_of, slot_of, new):
     """Lower `(subst body $x replacement)` through the body's local frame."""
     root_sort = pvar_sorts[root]
@@ -1852,7 +1796,7 @@ def lower_substitution(lang, root, rhs, pvar_sorts, mp_of, cls_of, slot_of, new)
 
     body_map, replacement_map, x = mp_of[body[1]], mp_of[replacement[1]], slot_of[slot[1]]
     needed, into_body, body_x, replacement_renaming, back_to_root = (
-        new(name) for name in ("need", "rb", "xb", "tren", "q")
+        new(name) for name in ("needed", "into_body", "body_x", "t_ren", "back")
     )
     # The primitive reads the class's frame out of a table it is told the name of; the
     # name is a carrier's, so it is always passed rather than left to a default.
@@ -1887,7 +1831,7 @@ class Query:
     appended cannot collide with a name the pattern already used.
     """
 
-    def __init__(self, body, cls_of, mp_of, slot_of, pvar_sorts, new, pay_name):
+    def __init__(self, body, cls_of, mp_of, slot_of, pvar_sorts, new, pay_name, frame=None, fname=None):
         self.body = body
         self.cls_of = cls_of
         self.mp_of = mp_of
@@ -1895,6 +1839,10 @@ class Query:
         self.pvar_sorts = pvar_sorts
         self.new = new
         self.pay_name = pay_name
+        #: the egglog variable holding the refined frame, and the frame's name for a
+        #: pattern variable
+        self.frame = frame
+        self.fname = fname
 
 
 def compile_query(
@@ -1905,74 +1853,78 @@ def compile_query(
     same=(),
     fresh=(),
     bugs=frozenset(),
-    slot_prefix="s",
+    slot_prefix="slot_",
     var_prefix="",
     fresh_batch=True,
     refine=True,
     literals_apart=False,
+    anchor=None,
 ):
     """Compile a flattened multipattern into the facts that match it.
 
-    Connected atoms are solved in order into one shared pattern frame. Each step
-    preserves M1--M8 from `slotted/ENCODING.md`; final refinement and conditions
-    implement M9--M10. `bugs` deliberately restores past mistakes for mutation
-    testing.
-
-    `fresh` names slots the caller needs that no atom pins, minted against everything
-    the match already used -- a right-hand side's own slots, or a slot a claim asks
-    about and the terms it names never mention.
-
-    `atoms` may be empty: a claim between two bare slots pins its slots and matches
-    nothing, and the frame is then just those mints.
-
-    `var_prefix` and `slot_prefix` name the egglog variables this invents. egglog
-    refuses a pattern variable that shadows a global, so a query compiled beside the
-    program's own `let`s -- a claim's -- takes the `_` prefix the compiler already
-    reserves for its own names, while a rule keeps the bare spelling its committed
-    generated text has.
-
-    `literals_apart` says that two DIFFERENT slot literals are two different slots,
-    which is what a rule means by them; a claim decides that for itself, by scope.
+    `compile_query_frames` is the whole of it; this keeps the signature callers wrote
+    to. `slot_prefix`, `fresh_batch` and `literals_apart` no longer choose anything:
+    a slot literal is read out of the frame rather than held in a variable of its
+    own, fresh slots are minted in one `mint`, and different literals are different
+    slots by the frame's clique, always.
     """
-    body, uid = [], [0]
+    del slot_prefix, fresh_batch, literals_apart
+    return compile_query_frames(
+        lang,
+        atoms,
+        conds=conds,
+        diseq=diseq,
+        same=same,
+        fresh=fresh,
+        bugs=bugs,
+        var_prefix=var_prefix,
+        refine=refine,
+        anchor=anchor,
+    )
 
+
+def compile_query_frames(
+    lang, atoms, conds=(), diseq=(), same=(), fresh=(), bugs=frozenset(), var_prefix="", refine=True, anchor=None
+):
+    """Compile a flattened multipattern into the facts that match it, as FRAMES.
+
+    egglog matches the atoms; the slotted part is a set of constraints on them. Each
+    atom's columns become one `atom` value (C2, C4, C5, C7), the atoms are joined
+    (C6, and the two cliques), `refine` picks one merging of what is left open (C8),
+    `mint` adds the right-hand side's fresh slots (C10), and the conditions read the
+    result (C9). Nothing here is ordered: `frame-join` is associative and commutative,
+    so the join tree below is a hint to prune early, not a meaning.
+    """
+    body, uid, used = [], [0], set()
     pvar_sorts = infer_pattern_sorts(lang, atoms)
 
-    def new(p):
-        uid[0] += 1
-        return f"{var_prefix}{p}{uid[0]}"
+    def named(base):
+        """An egglog variable named for what it holds, suffixed only if the name is taken."""
+        name = f"{var_prefix}{base}"
+        if name in used:
+            uid[0] += 1
+            name = f"{name}_{uid[0]}"
+        used.add(name)
+        return name
 
-    slot_groups = []  # one per atom: the pattern slots its node occupies, pairwise apart
-    mp_of = {}  # pvar -> egglog var holding its renaming into slots(pattern)
-    cls_of = {}  # pvar -> egglog var holding its leader
-    slot_of = {}  # "$v" -> egglog i64 var holding that pattern slot
-    # A slot literal in an ordinary child is the flattened spelling of a `(Var
-    # $v)` pattern. The reference gives that child its own substitution entry, so
-    # its slot participates in final refinement even when every surrounding class
-    # has made it redundant. Binder-column literals are stored directly in the
-    # pattern node and do not add such an entry.
-    carried_slot_literals = set()
-    # identity on the pattern slots named so far; the leading atom replaces it, so the
-    # empty map is what an atomless query -- a claim between two bare slots -- mints against
-    pat = "(map-empty)"
+    def label(pv):
+        """A pattern variable as it appears in an egglog variable name."""
+        return pv.lstrip("?").lstrip("_") or "v"
 
-    def narrow(m, cls, sort):
-        """Restrict a node-frame renaming to the class's exact slots (M8)."""
-        if "wide-kids" in bugs:
-            return m
-        cs = new("cs")
-        body.append(f"(= {cs} ({lang.symbols_for(sort).class_slots} {cls}))")
-        return f"(compose {m} {cs})"
+    def fname(pv):
+        """The frame's name for a pattern variable: the source's own, or `_t1` for one the
+        flattener invented, which no author's name begins with."""
+        return pv.lstrip("?")
 
-    def sym_for(pv):
-        """Give each repeated occurrence an independent class symmetry."""
-        sv = new("sym")
-        table = lang.symbols_for(pvar_sorts[pv]).renames
-        body.append(f"({table} {cls_of[pv]} {sv} {cls_of[pv]})")
-        return sv
+    def kid_label(k, j):
+        return label(k[1]) if k[0] == "pv" else ("lit_" + k[1][1:] if k[0] == "sl" else f"leaf{j}")
 
-    pay_of = {}  # a payload variable's egglog name, shared so two atoms join on it
-    binding = [True]  # only a PATTERN introduces one; the action may only read them
+    def quoted(names):
+        text = " ".join(f'"{n}"' for n in names)
+        return f" {text}" if text else ""
+
+    cls_of, pay_of = {}, {}
+    binding = [True]
 
     def pay_name(n):
         if n not in pay_of:
@@ -1981,8 +1933,21 @@ def compile_query(
                     f"the right-hand side names the payload variable {n!r}, which no "
                     "pattern binds -- there is nothing to take its value from"
                 )
-            pay_of[n] = new("pay")
+            pay_of[n] = named(f"pay_{n}")
         return pay_of[n]
+
+    seen = set()  # pattern variables an earlier occurrence bound: later ones join a symmetry
+    literals = set()
+    atom_vars = []
+    frame_bugs = sorted(b for b in bugs if b in FRAME_BUGS)  # committed by every atom
+    rooted = {}  # how many atoms each variable has rooted: three atoms on one class are three nodes
+
+    def symmetry(pv, syms):
+        """A symmetry row for a repeated occurrence, so the match ranges over the group (C5)."""
+        table = lang.symbols_for(pvar_sorts[pv]).renames
+        sv = named(f"sym_{label(pv)}")
+        syms.append(f"({table} {cls_of[pv]} {sv} {cls_of[pv]})")
+        return " " + sv
 
     for idx, atom in enumerate(atoms):
         aroot, opname, kids = atom[0], atom[1], atom[2]
@@ -1996,229 +1961,156 @@ def compile_query(
                     "pin every payload its operator does not."
                 )
             pays = op.pays
-        edges = [new("p") for _ in kids]
-        rv = cls_of.setdefault(aroot, new("V"))
-        cols, reached = [], []
-        for k, kid_sort in zip(kids, op.kid_sorts, strict=True):
+        edges = [named(f"e{idx}_{kid_label(k, j)}") for j, k in enumerate(kids)]
+        if aroot not in cls_of:
+            cls_of[aroot] = named(f"cls_{label(aroot)}")
+        rv = cls_of[aroot]
+        syms, bindings, cols, reached = [], [], [], []
+
+        root_slots = f"({lang.symbols_for(pvar_sorts[aroot]).class_slots} {rv})"
+        again = aroot in seen and "no-symmetry" not in bugs
+        if frame_bugs:
+            bindings.append(f"(bugs{quoted(frame_bugs)})")
+        bindings.append(f'(root "{fname(aroot)}" {root_slots}{symmetry(aroot, syms) if again else ""})')
+        seen.add(aroot)
+        for j, (k, kid_sort, e) in enumerate(zip(kids, op.kid_sorts, edges, strict=True)):
             if k[0] == "pv":
-                cols.append(cls_of.setdefault(k[1], new("C")))
+                if k[1] not in cls_of:
+                    cls_of[k[1]] = named(f"cls_{label(k[1])}")
+                cols.append(cls_of[k[1]])
+                # the class's exact slots, so the renaming is no wider than the class (C4)
+                slots = (
+                    f"(map-domain {e})"
+                    if "wide-kids" in bugs
+                    else f"({lang.symbols_for(kid_sort).class_slots} {cls_of[k[1]]})"
+                )
+                again = k[1] in seen and "no-symmetry" not in bugs
+                bindings.append(f'(child "{fname(k[1])}" {e} {slots}{symmetry(k[1], syms) if again else ""})')
+                seen.add(k[1])
             elif k[0] == "sl":
                 cols.append(f"({lang.symbols_for(kid_sort).var} 0)")
+                literals.add(k[1])
+                bindings.append(f'({"bound" if j in op.binders else "lit"} "{k[1]}" {e})')
             else:
-                cv = new("L")
+                cv = named(f"leaf{idx}_{j}")
                 cols.append(cv)
-                reached.append((k[1], cv, kid_sort))
+                reached.append((k[1], cv, kid_sort, j))
+                bindings.append(f"(leaf {e})")
         body.append(f"(= {rv} {node_expr(op, edges, cols, pays, pay_name)})")
-        for t, cv, kid_sort in reached:
+        for t, cv, kid_sort, j in reached:
             table = lang.symbols_for(kid_sort).renames
-            body.append(f"({table} {lang.enc(t, kid_sort)} {new('ml')} {cv})")
+            body.append(f"({table} {lang.enc(t, kid_sort)} {named(f'leafren{idx}_{j}')} {cv})")
+        body.extend(syms)
+        # the atom's label: the root's name, and `r2`, `r3` for further nodes of r's class
+        rooted[aroot] = rooted.get(aroot, 0) + 1
+        atom_label = fname(aroot) + (str(rooted[aroot]) if rooted[aroot] > 1 else "")
+        av = named(f"atom_{label(aroot)}" + (str(rooted[aroot]) if rooted[aroot] > 1 else ""))
+        body.append(f'(= {av} (atom "{atom_label}" {" ".join(bindings)}))')
+        atom_vars.append(av)
+    binding[0] = False
 
-        dom = new("dom")
-        body.append(f"(= {dom} {union_images(edges)})")
-
-        firsts, seconds = [], []
-        # the root, if an earlier atom already named its slots
-        if aroot in mp_of:
-            mv = mp_of[aroot]
-            firsts.append(f"(compose {mv} {sym_for(aroot)})")
-            seconds.append(f"(map-domain {mv})")
-        # every child an earlier atom already named
-        bound_before = set(mp_of)
-        for k, e in zip(kids, edges, strict=True):
-            if k[0] == "pv" and k[1] in bound_before and "root-only" not in bugs:
-                firsts.append(f"(compose {mp_of[k[1]]} {sym_for(k[1])})")
-                seconds.append(e)
-        # A slot literal an earlier atom pinned constrains this atom's `mp` too:
-        # `mp . edge = {0 -> that slot}`. Checking it afterwards instead is too late --
-        # `mp` would already have minted a different name for the same binder, and
-        # nothing revises a mint.
-        for k, e in zip(kids, edges, strict=True):
-            if k[0] == "sl" and k[1] in slot_of and "slot-late" not in bugs:
-                firsts.append(f"(map-insert (map-empty) 0 {slot_of[k[1]]})")
-                seconds.append(e)
-
-        mp = new("mp")
-        if idx == 0:
-            # the leading atom fixes slots(pattern); its `mp` is the identity
-            body.append(f"(= {mp} {dom})")
-        elif len(firsts) >= 2 and "no-unify" not in bugs:
-            # UNIFY. Two equations can name one node slot twice -- the root's renaming
-            # says f3, a child seen earlier says f1 -- and where both names were
-            # minted, the equations are not a contradiction but a discovery: the two
-            # mints are one slot. That is the reference's `unify`. One solve returns
-            # the atom's renaming and the merge the equations forced, and everything
-            # solved before this atom is read through the merge from here on. A
-            # written slot literal and a node's own slots may not merge, which is what
-            # the cliques say. One equation alone cannot force a merge, so an atom
-            # with a single pair keeps the plain solve.
-            pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
-            sol, u = new("uni"), new("u")
-            body.append(
-                f"(= {sol} (find-mapping-unify (vec-of {pat} {dom}) (vec-of {pinned} {' '.join(slot_groups)}) "
-                f"(vec-of {' '.join(firsts)}) (vec-of {' '.join(seconds)})))"
-            )
-            body.append(f"(= {mp} (vec-get {sol} 0))")
-            body.append(f"(= {u} (vec-get {sol} 1))")
-            mp_of = {k: f"(compose {u} {v})" for k, v in mp_of.items()}
-            slot_of = {k: f"(map-get {u} {v})" for k, v in slot_of.items()}
-            merged = []
-            for g in slot_groups:
-                gm = new("grp")
-                body.append(f"(= {gm} (map-image (compose {u} {g})))")
-                merged.append(gm)
-            slot_groups = merged
-            pat = f"(map-image {u})"
-        else:
-            pairs = " ".join(firsts + seconds) if firsts else "(map-empty) (map-empty)"
-            body.append(f"(= {mp} (find-mapping-total {pat} {dom} {pairs}))")
-
-        # Accumulate the avoid-set. Passing only the leading atom's slots would let
-        # two atoms that both mint choose the same slot, since the primitive is pure
-        # and sees one atom at a time. Identity maps never conflict under `map-union`,
-        # so the running union is always well defined.
-        idm = new("idm")
-        body.append(f"(= {idm} (map-image {mp}))")
-        slot_groups.append(idm)
-        if idx == 0:
-            pat = idm
-        else:
-            av = new("av")
-            body.append(f"(= {av} (map-union {pat} {idm}))")
-            pat = av
-
-        # A slot literal names one slot in pattern space. `(= v ...)` binds it on
-        # first use and constrains it on every later one, which is how the same `$v`
-        # written twice forces the two slots to agree.
-        for k, e in zip(kids, edges, strict=True):
-            if k[0] == "sl":
-                sv = slot_of.setdefault(k[1], slot_prefix + k[1][1:])
-                body.append(f"(= {sv} (map-get (compose {mp} {e}) 0))")
-        carried_slot_literals.update(k[1] for i, k in enumerate(kids) if k[0] == "sl" and i not in op.binders)
-
-        # walk the children: bind the new ones, check the ones bound in THIS atom
-        for k, e in zip(kids, edges, strict=True):
-            if k[0] != "pv":
-                continue
-            if k[1] in mp_of:
-                # A child bound by an EARLIER atom is already handled: it went into
-                # the renaming as a constraint, so the equation holds by construction.
-                # One bound in THIS atom still needs checking. Under `root-only` the
-                # constraint was skipped, so the check is what that bug had in its
-                # place -- emitting neither would be a different, more permissive
-                # mutant.
-                if k[1] not in bound_before or "root-only" in bugs:
-                    body.append(f"(= (compose {mp} {e}) (compose {mp_of[k[1]]} {sym_for(k[1])}))")
-            else:
-                m = new("m")
-                body.append(f"(= {m} (compose {mp} {e}))")
-                mp_of[k[1]] = narrow(m, cls_of[k[1]], pvar_sorts[k[1]])
-        if aroot not in mp_of:
-            mp_of[aroot] = narrow(mp, rv, pvar_sorts[aroot])
-
-    binding[0] = False  # every atom is read, so a payload variable can only be read now
-    pattern_literals = sorted(slot_of)
-
+    # the frame: every atom's constraints, joined
+    if not atom_vars:
+        frame = "(frame)"
+    else:
+        frame = atom_vars[0]
+        for part in atom_vars[1:]:
+            frame = f"(frame-join {frame} {part})"
+        if len(atom_vars) > 1:
+            fv = named("f")
+            body.append(f"(= {fv} {frame})")
+            frame = fv
+    if anchor is not None and atoms:
+        # spelled in the root's slot names, so the action's equation is at the identity
+        frame = f'(anchor {frame} "{fname(anchor)}")'
     if refine and atoms:
-        # Reconsider minted distinctions after the whole match is known. Only slots
-        # carried by substitutions may merge; written slots and slots within one atom
-        # remain distinct. Conditions and actions consume the refined frame.
-        pinned = "(map-of " + " ".join(f"{v} {v}" for v in slot_of.values()) + ")" if slot_of else "(map-empty)"
-        cand = pat
-        carried = [f"(map-image {v})" for v in mp_of.values()]
-        carried.extend(f"(map-of {slot_of[s]} {slot_of[s]})" for s in sorted(carried_slot_literals))
-        if carried:
-            cand = new("carr")
-            expr = carried[0]
-            for im in carried[1:]:
-                expr = f"(map-union {im} {expr})"
-            body.append(f"(= {cand} {expr})")
-        alts, i, mrg = new("alts"), new("ix"), new("mrg")
-        body.append(f"(= {alts} (refine-namings {cand} {pinned} {' '.join(slot_groups)}))")
-        body.append(f"(Idx {i})")
-        body.append(f"(= {mrg} (vec-get {alts} {i}))")
-        # Index 0 is the identity, so a rule reaching only `(Idx 0)` answers as it did
-        # before refinement existed.
-        mp_of = {k: f"(compose {mrg} {v})" for k, v in mp_of.items()}
-        slot_of = {k: f"(map-get {mrg} {v})" for k, v in slot_of.items()}
-        # Two slots that merged no longer occupy two names, so a fresh slot minted
-        # below avoids the refined set rather than the pre-merge one.
-        pat = f"(map-image {mrg})"
-
-    # Two DIFFERENT literals are two DIFFERENT slots. The reference's pattern slots are
-    # rigid names that `unify` never identifies, so `$a` and `$b` written in one rule
-    # are never one slot: `(F $a $b)` does not match `F($0,$0)`, and two binders that
-    # share a body cannot be spelled `$x` and `$y`. A literal is SOLVED here rather
-    # than declared -- read off whatever slot the node has there -- so two can come
-    # out equal unless this says otherwise. Written literals only: a right-hand side's
-    # fresh slots are minted apart already, and a pattern variable in a binder column
-    # is not a literal, it is the bound variable, free to be identified.
-    if literals_apart and len(pattern_literals) >= 2 and "literals-alias" not in bugs:
-        apart = " ".join(f"{slot_of[s]} {slot_of[s]}" for s in pattern_literals)
-        body.append(f"(= (map-length (map-of {apart})) {len(pattern_literals)})")
-
-    # Right-hand side slots the pattern never pinned: mint them, avoiding every slot
-    # named so far. The reference writes a literal `$x` there; on this side a name has
-    # to be invented.
-    groups = []
+        choice = named("choice")
+        body.append(f"(Idx {choice})")
+        frame = f"(refine {frame} {choice})"
     fresh = sorted(set(fresh))
-
     if fresh:
-        groups = [tuple(fresh)] if fresh_batch else [(f,) for f in fresh]
-    for group in groups:
-        fm = new("fs" if fresh_batch else "fm")
-        domain = " ".join(f"{i} {i}" for i in range(len(group)))
-        body.append(f"(= {fm} (find-mapping-total {pat} (map-of {domain}) (map-empty) (map-empty)))")
-        for i, s in enumerate(group):
-            # a fresh name reusing a pattern literal's would silently constrain it
-            assert s not in slot_of, f"{s} is already pinned by the pattern"
-            sv = slot_of.setdefault(s, slot_prefix + s[1:])
-            body.append(f"(= {sv} (map-get {fm} {i}))")
-        if not fresh_batch:
-            av = new("av")
-            body.append(f"(= {av} (map-union {pat} (map-image {fm})))")
-            pat = av
+        frame = f"(mint {frame} (names{quoted(fresh)}))"
+    m = named("m")
+    body.append(f"(= {m} {frame})")
 
-    # A variable's slots in pattern space are the image of its renaming, so
+    mp_of = {pv: f'(ren {m} "{fname(pv)}")' for pv in cls_of}
+    slot_of = {lit: f'(map-get (ren {m} "{lit}") 0)' for lit in sorted(literals | set(fresh))}
 
-    # `$s in slots(?x)` is membership in `(map-image mx)`. With one variable that is a
-    # fact; with several the disjunction has to be a value, since a fact cannot be
-    # combined with `or`.
     for want, slot, pvars in conds:
         if "no-guard" in bugs:
             continue
-        sv = slot_of[slot]
-        images = [f"(map-image {mp_of[v]})" for v in pvars]
-        if len(images) == 1:
-            kind = "map-contains" if want else "map-not-contains"
-            body.append(f"({kind} {images[0]} {sv})")
-        else:
-            expr = "(or " + " ".join(f"(bool-map-contains {im} {sv})" for im in images) + ")"
-            body.append(f"(guard {expr})" if want else f"(guard (bool= {expr} false))")
-
-    # `(= x y)` between two variables: the same class reached by the same renaming,
-    # which is what `=` means here, so both halves are asserted.
+        body.append(f'({"free" if want else "not-free"} {m} "{slot}" (names{quoted(fname(v) for v in pvars)}))')
     for a, b in same:
         for v in (a, b):
-            if v not in mp_of:
+            if v not in cls_of:
                 raise SystemExit(f"`=` names {v!r}, which no pattern binds")
         if pvar_sorts[a] != pvar_sorts[b]:
             raise SystemExit(f"`=` cannot identify {a!r} ({pvar_sorts[a]}) with {b!r} ({pvar_sorts[b]})")
         body.append(f"(= {cls_of[a]} {cls_of[b]})")
-        body.append(f"(= {mp_of[a]} {mp_of[b]})")
-
-    # Invocations differ when their class or their renaming differs. Like egglog's
-    # native `!=`, this condition is non-monotonic across later unions.
+        body.append(f'(same {m} "{fname(a)}" "{fname(b)}")')
     for a, b in diseq:
         for v in (a, b):
-            if v not in mp_of:
+            if v not in cls_of:
                 raise SystemExit(f"`!=` names {v!r}, which no pattern binds")
         if pvar_sorts[a] != pvar_sorts[b]:
             raise SystemExit(f"`!=` cannot compare {a!r} ({pvar_sorts[a]}) with {b!r} ({pvar_sorts[b]})")
-        same_cls = f"(bool= {cls_of[a]} {cls_of[b]})"
-        same_ren = f"(bool= {mp_of[a]} {mp_of[b]})"
-        body.append(f"(guard (or (not {same_cls}) (not {same_ren})))")
+        body.append(f'(guard (or (bool-!= {cls_of[a]} {cls_of[b]}) (not (bool-same {m} "{fname(a)}" "{fname(b)}"))))')
 
-    return Query(body, cls_of, mp_of, slot_of, pvar_sorts, new, pay_name)
+    return Query(body, cls_of, mp_of, slot_of, pvar_sorts, named, pay_name, frame=m, fname=fname)
+
+
+def build_rhs(lang, term, expected_sort, q):
+    """Build an RHS bottom-up in the frame's slots: one `let` per node, and one for its
+    slot set (C11). A node's slots are its named columns' through `node-slots`, plus a
+    built child's, with the binders' slots taken out of what they cover."""
+    lets = []
+
+    def quoted(names):
+        text = " ".join(f'"{n}"' for n in names)
+        return f" {text}" if text else ""
+
+    def go(t, sort):
+        if t[0] == "pv":
+            actual = q.pvar_sorts[t[1]]
+            if actual != sort:
+                raise SystemExit(f"right-hand side uses {t[1]!r} as {sort}, but the pattern binds it as {actual}")
+            return q.mp_of[t[1]], q.cls_of[t[1]], ("name", q.fname(t[1]))
+        if t[0] == "sl":
+            return f'(ren {q.frame} "{t[1]}")', f"({lang.symbols_for(sort).var} 0)", ("name", t[1])
+        op = lang[t[0]]
+        if op.sort != sort:
+            raise SystemExit(f"right-hand side builds {op.name}, which produces {op.sort}, where {sort} is required")
+        args, pays = op.split(t[1:])
+        if not args:
+            if has_pay_var(t):
+                value = q.new(f"built_{op.name.lower()}")
+                lets.append(f"(let {value} {node_expr(op, [], [], pays, q.pay_name)})")
+                return "(map-empty)", value, ("slots", "(map-empty)")
+            return map_of(lang.edge(t)), lang.enc(t, sort), ("slots", "(map-empty)")
+        kids = [go(arg, child_sort) for arg, child_sort in zip(args, op.kid_sorts, strict=True)]
+        value = q.new(f"built_{op.name.lower()}")
+        lets.append(
+            f"(let {value} {node_expr(op, [e for e, _, _ in kids], [c for _, c, _ in kids], pays, q.pay_name)})"
+        )
+        bound = [args[i][1] for i in op.binders]
+        uncovered, covered, nested = [], [], []
+        for i, (_e, _c, tag) in enumerate(kids):
+            inside = i in op.binders or i == op.covered
+            if tag[0] == "name":
+                (covered if inside else uncovered).append(tag[1])
+            elif inside and bound:
+                nested.append(f"(without {q.frame} {tag[1]} (names{quoted(bound)}))")
+            else:
+                nested.append(tag[1])
+        slots = f"(node-slots {q.frame} (names{quoted(uncovered)}) (names{quoted(covered)}) (names{quoted(bound)}))"
+        for n in nested:
+            slots = f"(map-union {slots} {n})"
+        sv = f"{value}_slots"
+        lets.append(f"(let {sv} {slots})")
+        return sv, value, ("slots", sv)
+
+    edge, cls, _ = go(term, expected_sort)
+    return lets, edge, cls
 
 
 def pinned_slots(atoms):
@@ -2235,14 +2127,14 @@ def compile_rule(
     same=(),
     fresh=(),
     bugs=frozenset(),
-    slot_prefix="s",
+    slot_prefix="slot_",
     fresh_batch=True,
     tail=")",
     refine=True,
 ):
     """Compile a flattened multipattern and its action into one egglog rule.
 
-    The pattern is `compile_query`'s; this adds M11, the action. A right-hand-side
+    The pattern is `compile_query`'s; this adds C11, the action. A right-hand-side
     slot the pattern never pins is FRESH BY DEFINITION, so it is inferred rather than
     declared -- the reference mints one on the spot (`Slot::fresh()` in
     rewrite/ematch.rs) with nothing written by the author. An explicit `fresh` is
@@ -2260,9 +2152,10 @@ def compile_rule(
         fresh_batch=fresh_batch,
         refine=refine,
         literals_apart=True,
+        anchor=action[1],
     )
     body, cls_of, mp_of, slot_of = q.body, q.cls_of, q.mp_of, q.slot_of
-    pvar_sorts, new, pay_name = q.pvar_sorts, q.new, q.pay_name
+    pvar_sorts, new = q.pvar_sorts, q.new
 
     root = action[1]
     root_sort = pvar_sorts[root]
@@ -2271,10 +2164,10 @@ def compile_rule(
     if action[0] == "build":
         rhs = action[2]
         if rhs[0] == "pv":
-            # Equate two variables. Both carry a renaming into pattern slots and
-            # neither need be the identity, which is the one action egglog's `union`
-            # cannot express -- so solve: from mr*Root = ma*A follows
-            # Root = (mr^-1 . ma) * A, and let the machinery re-orient it (M10).
+            # Equate two variables. The root's renaming is the identity, `a`'s need not
+            # be, which is the one action egglog's `union` cannot express -- so from
+            # mr*Root = ma*A follows Root = (mr^-1 . ma) * A, stated as `Equated` for the
+            # machinery to orient (C11).
             if pvar_sorts[rhs[1]] != root_sort:
                 raise SystemExit(
                     f"a {root_sort} rewrite cannot return pattern variable {rhs[1]!r} of sort {pvar_sorts[rhs[1]]}"
@@ -2283,11 +2176,12 @@ def compile_rule(
         elif rhs[0] == SUBST:
             act = lower_substitution(lang, root, rhs, pvar_sorts, mp_of, cls_of, slot_of, new)
         else:
-            lets, _, built = build_rhs(lang, rhs, root_sort, pvar_sorts, mp_of, cls_of, slot_of, new, pay_name)
-            act = lets + [f"({root_symbols.equated} {built} {mr} {cls_of[root]})"]
+            # The frame is anchored at the root, so the built node is an invocation in
+            # the root's own frame and egglog's `union` is exactly the equation (C11).
+            lets, _, built = build_rhs(lang, rhs, root_sort, q)
+            act = lets + [f"(union {built} {cls_of[root]})"]
     else:
-        # A depth-one action writes `Equated`: the built node and root may use
-        # different frames, which native `union` cannot express (M10).
+        # A depth-one action: the same union, over a node built from bound variables.
         pvs = action[3]
         action_op = lang[action[2]]
         if action_op.sort != root_sort:
@@ -2296,9 +2190,6 @@ def compile_rule(
             if pvar_sorts[pv] != kid_sort:
                 raise SystemExit(f"{action_op.name}: child {pv!r} has sort {pvar_sorts[pv]}, not {kid_sort}")
         node = node_expr(action_op, [mp_of[v] for v in pvs], [cls_of[v] for v in pvs], action_op.pays)
-        if "union-id" in bugs:
-            act = [f"(union {cls_of[root]} {node})"]
-        else:
-            act = [f"(let _hn {node})", f"({root_symbols.equated} _hn {mr} {cls_of[root]})"]
+        act = [f"(union {node} {cls_of[root]})"]
 
     return "(rule (" + "\n       ".join(body) + ")\n      (" + "\n       ".join(act) + ")" + tail

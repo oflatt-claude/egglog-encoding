@@ -57,12 +57,13 @@ RUN_TIMEOUT = 25
 
 # Past bugs, re-introducible so the corpus can be checked for still catching
 # them. A bug nothing fails under is a bug that could come back unnoticed.
-#   XDIFF_BUGS=root-only   an atom's renaming solved from its root alone
-#   XDIFF_BUGS=slot-late   a slot literal checked after the renaming, not with it
-#   XDIFF_BUGS=unordered   atoms compiled in the order written
-#   XDIFF_BUGS=union-id    the action unions classes instead of invocations
-#   XDIFF_BUGS=no-unify    an atom's equations may not identify two earlier mints
-#   XDIFF_BUGS=literals-alias   two different slot literals may come out as one slot
+#   XDIFF_BUGS=no-cliques      a frame may identify two slots of one e-node or class
+#   XDIFF_BUGS=literals-alias  two different slot literals may come out as one slot
+#   XDIFF_BUGS=no-refine       only the identity refinement is offered
+#   XDIFF_BUGS=no-symmetry     a repeated variable is not compared up to its class's symmetry
+#   XDIFF_BUGS=no-guard        the rule's side conditions are dropped
+#   XDIFF_BUGS=wide-kids       a variable's renaming is read off the edge, not narrowed to its class
+#   XDIFF_BUGS=unordered       atoms compiled in the order written
 #
 # `mutations.py` asserts that each of these still breaks the corpus by a recorded amount, so
 # a mutation that stops discriminating is a failure rather than a quiet gap. Two were removed
@@ -95,7 +96,7 @@ NUM_PROB = float(os.environ.get("XDIFF_NUM", "0.3"))
 #
 # It earns its place: with it off, no generated rule had more than two disconnected
 # pieces, so three atoms all minting at once -- kept apart only by the accumulated
-# avoid-set (M5) -- went unsearched. That is the shape that found `K1`.
+# avoid-set (C2) -- went unsearched. That is the shape that found `K1`.
 #
 # A reference that runs out of time is reported as such and left out of the ratio rather
 # than counted as a divergence, since a cross product is sometimes more work than its
@@ -380,9 +381,7 @@ def compile_rule(atoms, action, conds=()):
     `(root, op, c1, c2)` over bare names, and an action either `(root, rhs-tree)` or
     the flat `(root, op, a, b)`, whose `=` equates two variables.
 
-    The flat form builds one depth-1 node over bound variables; `union-id` is the
-    mutation that concludes it with egglog's `union` instead, which is only correct
-    when both renamings are the identity.
+    The flat form builds one depth-1 node over bound variables.
     """
     atoms = slotenc.connected_order(LANG, [(r, o, [_child(c1), _child(c2)]) for r, o, c1, c2 in atoms], bugs=BUGS)
     if len(action) == 2:
@@ -767,7 +766,7 @@ def curated():
         )
     )
 
-    # C10 -- three atoms, chain then join (the M7 shape)
+    # C10 -- three atoms, chain then join
     cs.append(
         Case(
             "C10-chain-then-join",
@@ -1000,7 +999,7 @@ def curated():
     # e2 has a slot that is redundant in e1 -- the edge narrowed instead: here
     # m = {0->0} and m1 = {0->1} compose to the EMPTY map, and an empty edge to
     # (Var 0) asserts the variable class has no slots, after which every h(var, var)
-    # collapses. The same dropped-slot bug as M3, inside the machinery.
+    # collapses. The same dropped-slot bug as the `M3` case below, inside the machinery.
     #
     # Migration now declines when it would truncate -- sound but incomplete, like M3(b);
     # minting a fresh name would be the complete fix.
@@ -1025,7 +1024,7 @@ def curated():
     # The atoms share no variable, so the condition is the only thing relating them --
     # a BOUND slot against a class in the other atom. The reference does not fire,
     # because a binder's bound slot is renamable and can always be moved off `a`'s
-    # slots. The encoding did, and over-merged: `refine-namings` was offered every slot
+    # slots. The encoding did, and over-merged: refinement was offered every slot
     # in play as a merge candidate rather than only those the substitution carries, and
     # a pattern slot may be a merge TARGET. See `final_refine` in `slotted-encoder.py`.
     #
@@ -1371,7 +1370,7 @@ def curated():
     # M3 -- only ONE variable shared, across two different operators, so the
     # second atom's renaming is pinned on part of its node and must mint a name
     # for the rest. `U1` has this shape with one operator; two make the join
-    # unambiguous, which is what the doc's M3 discusses.
+    # unambiguous.
     cs.append(
         Case(
             "M3-one-shared-var-two-ops",
@@ -1630,6 +1629,32 @@ def curated():
                 (UN2_STRAIGHT, ("out", ("sub", "$x", "$x")), []),
                 (UN2_SWAPPED, ("out", ("sub", "$x", "$y")), []),
             ],
+        )
+    )
+
+    # CLQ1 -- one variable in both columns of a node whose two slots differ, inside a
+    # class that has made both slots redundant.
+    #
+    #     term   (g (f (var $0) (var $1)) null)
+    #     union  (f (var $0) (var $1)) = null
+    #     rule   r == (g n z), n == (f a a)   =>  union r (h a a)
+    #
+    # `a` is the variable class, one slot, reached at node slot 0 and again at slot 1 of
+    # the `f` node; the two occurrences would have to be one invocation, which identifies
+    # two slots of one e-node, and the reference's disjointness constraint refuses the
+    # match. The frame's node clique refuses it the same way. The `f` class is slotless
+    # so that nothing else notices: with the clique dropped the identified slots are
+    # redundant in `r`, the action goes through, and `(h a a)` joins `r`'s class --
+    # `no-cliques` in `mutations.py` is this case firing.
+    cs.append(
+        Case(
+            "CLQ1-one-variable-two-node-slots",
+            [("g", ("f", V0, V1), NUL)],
+            [(("f", V0, V1), NUL)],
+            [("r", "g", "n", "z"), ("n", "f", "a", "a")],
+            ("r", "h", "a", "a"),
+            [("g", ("f", V0, V1), NUL), ("h", V0, V0), NUL],
+            rounds=3,
         )
     )
 
