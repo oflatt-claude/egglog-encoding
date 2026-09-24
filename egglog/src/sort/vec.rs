@@ -206,6 +206,13 @@ impl ContainerSort for VecSort {
                 let data = register_renamings(&mut state, find_mappings_total(&maps, FIND_MAPPINGS_CAP));
                 Some(VecContainer { do_rebuild: false, data })
             }});
+            // `(shape e1 e2 ...)`: the edges in canonical spelling, then the renaming from
+            // that spelling back to the node's names; see `shape`.
+            add_primitive!(eg, "shape" = {self.clone(): VecSort} [xs: # (self.element())] -?> @VecContainer (arc) {{
+                let maps = slot_maps(&state, xs)?;
+                let data = register_renamings(&mut state, shape(&maps));
+                Some(VecContainer { do_rebuild: false, data })
+            }});
         }
         // Every consistent merging of a frame's open slots, the frame itself first, so
         // a rule reads one per index with `vec-get` and stops past the last on its own.

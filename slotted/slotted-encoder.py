@@ -30,6 +30,7 @@ class CarrierSymbols:
     equated: str
     class_slots: str
     subst_pending: str
+    shape_equal: str
 
     @classmethod
     def create(cls, sort, index):
@@ -40,6 +41,7 @@ class CarrierSymbols:
             f"Equated_{index}",
             f"ClassSlots_{index}",
             f"SubstPending_{index}",
+            f"ShapeEqual_{index}",
         )
 
 
@@ -338,18 +340,6 @@ def fold(op, xs, empty):
     return out
 
 
-def lex_greater(a, b, i=0):
-    """`b` lexicographically greater than `a`, as tuples of renamings.
-
-    The alpha-finder fires in one direction only, so that of two symmetric matches
-    exactly one node is eliminated.
-    """
-    gt = f"(and (bool= (ordering-max {a[i]} {b[i]}) {b[i]}) (bool-!= {a[i]} {b[i]}))"
-    if i == len(a) - 1:
-        return gt
-    return f"(or {gt}\n              (and (bool= {a[i]} {b[i]})\n                   {lex_greater(a, b, i + 1)}))"
-
-
 #: WHAT A BINDER COLUMN IS, and why three rules have to know.
 #:
 #: `Lam([0 -> x] * Var, m2*c2)` is `lam $x. m2*c2`. The `[0 -> x]` is the name the node
@@ -370,11 +360,11 @@ def lex_greater(a, b, i=0):
 #:      spellings of one binder are seen to be alpha-equivalent. So the rule stays and
 #:      asks for the bound name in the result: renaming it passes, losing it does not.
 #:
-#:   `alpha_finder` and `symmetry_finder` compose with the child's own SYMMETRY, to try
-#:      the other spellings of the same invocation. A binder column has no other
-#:      spelling, so they skip it. Asking for the name to survive would not do here: the
-#:      shrinking rule deletes a slotless class's identity self-loop, leaving the empty
-#:      map as the only symmetry on offer, and the rule would simply stop firing.
+#:   `shape_index` composes with the child's own SYMMETRY, to try the other spellings of
+#:      the same invocation. A binder column has no other spelling, so it skips it.
+#:      Asking for the name to survive would not do here: the shrinking rule deletes a
+#:      slotless class's identity self-loop, leaving the empty map as the only symmetry
+#:      on offer, and the rule would simply stop firing.
 BOUND_NAME_KEPT = "\n       ; a bound name may be renamed but not lost\n       (= bound{i} (map-get {edge} 0))"
 
 
@@ -396,100 +386,79 @@ def class_slots(name, sig, symbols=None):
 """
 
 
-def self_loop(name, sig, symbols=None):
-    """A node's class gets the identity on the node's own slots."""
+def shape_table(name):
+    """The function indexing a constructor's rows by shape; `_` is the compiler's prefix."""
+    return f"_shape_{name}"
+
+
+def declare_shape_table(name, sig, symbols=None):
+    """`(function _shape_F (key...) (class back) :merge ...)`: the class index of `F`'s
+    shapes (C14). The key is a row spelled canonically, so two rows that are one node up
+    to renaming meet on it; the value is one class holding the node and the renaming from
+    the shape's names to that class's. A second class arriving at the key is that node
+    under another renaming, and the merge block states the equation between the two.
+    The first arrival stays the representative; a later one that names a class the
+    representative does not is related to it by the edge, never replaced."""
     symbols = _symbols(symbols)
+    cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
+    return (
+        f"(function {shape_table(name)} ({cols}) ({symbols.sort} Renaming)\n"
+        f"  :merge ((set ({symbols.shape_equal} old0 (compose old1 (inverse new1)) new0) ())\n"
+        f"          (values old0 old1)))\n"
+    )
+
+
+def shape_dedup(name, sig, symbols=None):
+    """One row per shape per class: of two rows of one class with the same children and
+    the same weak shape, the one with the greater renaming back to the class goes.
+
+    They are one node under two readings, and the reading the index's merge block
+    already recorded as a symmetry is what a pattern reads the survivor through. The
+    alpha-finder used to do this deletion pairwise with a solve; here the join is on the
+    class and children and the comparison is of canonical spellings (C14)."""
     _, edges, _, _ = cols_of(sig)
-    slots = fold("map-union", [f"(map-image {m})" for m in edges], "(map-empty)")
+    other = [f"n{i + 1}" for i in range(len(edges))]
+    same = "\n       ".join(f"(= (vec-get sh {i}) (vec-get th {i}))" for i in range(len(edges)))
+    k = len(edges)
     return f"""\
-(rule ((= e1 {pattern(name, sig)})
-       (= m {slots}))
-      (({symbols.renames} e1 m e1)))
+(rule ((= c {pattern(name, sig)})
+       (= c {pattern(name, sig, edges=other)})
+       (= sh (shape {" ".join(edges)}))
+       (= th (shape {" ".join(other)}))
+       {same}
+       (!= (vec-get sh {k}) (vec-get th {k}))
+       (= (vec-get sh {k}) (ordering-max (vec-get sh {k}) (vec-get th {k}))))
+      ((delete {pattern(name, sig)})) :ruleset slotted)
 """
 
 
-def alpha_finder(name, sig, bound=(), exempt=(), head=None, symbols=None):
-    """Two nodes equal up to renaming: keep one, record how the other renames to it.
+def shape_index(name, sig, bound=(), exempt=(), head=None, symbols=None):
+    """Every row of `F`, under every symmetric reading of its children, into the index.
 
-    For `e1 = f(m1*c1, m1'*c2)` and `e2 = f(m2*c1, m2'*c2)`, the solve
-    `(find-mapping m1 m1' m2 m2')` is the least `m` with `m*m2 = m1` and `m*m2' = m1'`, so
-
-        m*e2 = f(m*m2*c1, m*m2'*c2) = f(m1*c1, m1'*c2) = e1
-
-    which is the `RenamesToLeader` this records before deleting `e2`'s row.
-
-    Payload columns are named by the same variable on both sides, so a difference
-    there simply does not match -- no separate check needed.
-
-    `bound` names binder columns, which are compared as stored rather than composed with a
-    symmetry of their child; see `BOUND_NAME_KEPT`. What the solve then has to find is the
-    renaming carrying one bound name to the other, which is what makes `lam $1. e` and
-    `lam $2. e` alpha-equivalent once neither name is free in `e`. `head` and `exempt`
-    split the rule by operator string, which the string-headed encoding needs and a
-    structural binder does not; see `emit`.
+    `(shape ...)` spells the edges canonically and returns the renaming back; a child's
+    symmetry `g` composed onto its edge is the same node read another way, so a node
+    and its symmetric variants land on the same keys and a class meeting itself there
+    gains the symmetry. This is the reference's shape hashcons, `weak_shape` over
+    `get_group_compatible_variants`. `bound`, `head` and `exempt` mean what they do in
+    `child_update`: a binder column is spelled as stored, since a bound name has no
+    other spelling.
     """
     symbols = _symbols(symbols)
     payloads, edges, kids, _ = cols_of(sig)
-    a_o = [f"{e}_o" for e in edges]
-    a = [a_o[i] if i in bound else e for i, e in enumerate(edges)]
-    b = [f"b{i + 1}" for i in range(len(edges))]
-    syms = [f"sym{i + 1}" for i in range(len(kids))]
+    syms = [f"g{i + 1}" for i in range(len(kids))]
     pays = [f'"{head}"'] if head is not None else None
     loops = "\n       ".join(
         f"({symbols.renames} {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
     )
-    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound)
+    spelled = " ".join(e if i in bound else f"(compose {e} {syms[i]})" for i, e in enumerate(edges))
     not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
+    canon = [f"(vec-get sh {i})" for i in range(len(edges))]
+    key = pattern(shape_table(name), sig, edges=canon, payloads=pays)
     return f"""\
-(rule ((= e1 {pattern(name, sig, edges=a_o, payloads=pays)})
-       (= e2 {pattern(name, sig, edges=b, payloads=pays)})
-       (= e1 (ordering-max e1 e2)){not_binder}
+(rule ((= c {pattern(name, sig, payloads=pays)}){not_binder}
        {loops}
-       {composed}
-       (= m (find-mapping {" ".join(a)} {" ".join(b)}))
-       (guard
-         (or (bool-!= e1 e2)
-             (and (bool= e1 e2)
-                  {lex_greater(a_o, b)}))))
-      (({symbols.equated} e1 m e2)
-       (delete {pattern(name, sig, edges=a_o, payloads=pays)})))
-"""
-
-
-def symmetry_finder(name, sig, bound=(), exempt=(), head=None, symbols=None):
-    """The same solve, kept non-destructively as a symmetry of the class.
-
-    Restricted to the class's slots. `sym_out` is solved from a *node's* edges, so its
-    domain is the node's slots, and a node may carry slots its class does not depend on --
-    so unrestricted it asserts a symmetry the class does not have. The shrinking rule then
-    deletes that, this rule derives it again, and neither ever wins: four generated cases
-    never reached a fixpoint of the rules for exactly this reason. `ClassSlots` only
-    narrows, so restricting on both sides leaves nothing to shrink.
-
-    This is the same mistake as the self-loop rule's, and the same one open question 2
-    warns about -- do not derive a class-level fact from a node.
-
-    `bound`, `head` and `exempt` mean what they do in `alpha_finder`. A symmetry that moved
-    a bound name would say nothing anyway: `cs` has had it removed by the binder rule.
-    """
-    symbols = _symbols(symbols)
-    payloads, edges, kids, _ = cols_of(sig)
-    a_o = [f"{e}_o" for e in edges]
-    a = [a_o[i] if i in bound else e for i, e in enumerate(edges)]
-    syms = [f"sym{i + 1}" for i in range(len(kids))]
-    pays = [f'"{head}"'] if head is not None else None
-    loops = "\n       ".join(
-        f"({symbols.renames} {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
-    )
-    composed = "\n       ".join(f"(= {a[i]} (compose {a_o[i]} {syms[i]}))" for i in range(len(edges)) if i not in bound)
-    not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
-    return f"""\
-(rule ((= e {pattern(name, sig, edges=a_o, payloads=pays)}){not_binder}
-       {loops}
-       {composed}
-       (= sym_out (find-mapping {" ".join(a_o)} {" ".join(a)}))
-       (= cs ({symbols.class_slots} e)))
-      (({symbols.renames} e (compose cs (compose sym_out cs)) e)))
+       (= sh (shape {spelled})))
+      ((set {key} (values c (vec-get sh {len(edges)})))) :ruleset slotted)
 """
 
 
@@ -689,13 +658,13 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
     so emitting them would be a duplicate binding too. Binders over them are left
     out with them.
 
-    THREE RULES TREAT A BINDER COLUMN DIFFERENTLY -- the alpha-finder, the symmetry-finder
-    and child-update -- because a bound name is not a child. `BOUND_NAME_KEPT` above says
-    what goes wrong when they do not, and which answer each one needs.
+    TWO RULES TREAT A BINDER COLUMN DIFFERENTLY -- the shape index and child-update --
+    because a bound name is not a child. `BOUND_NAME_KEPT` above says what goes wrong
+    when they do not, and which answer each one needs.
 
     Where the binder is declared by the head string rather than the signature -- the
     string-headed encoding, where one constructor serves every operator of an arity -- the
-    same column is a bound name in some rows and a child in others, so each of the three
+    same column is a bound name in some rows and a child in others, so each of the two
     is emitted twice: once with those heads ruled out, once with the head pinned. A
     structurally declared binder needs only the second.
     """
@@ -721,32 +690,29 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
             *layout(name, sig, heads),
             ";; an upper bound on the class's slots; the merge narrows it",
             class_slots(name, sig, symbols),
-            ";; every class holding a node has a self-loop, so a query can reach it",
-            self_loop(name, sig, symbols),
         ]
         if not kids:
             continue  # nothing below touches a child
         kid_cols = [c for c in sig if c in SLOTTED]
         structural = tuple(i for i, c in enumerate(kid_cols) if c is BINDER)
         # a head-pinned binder always covers the first slotted column
+        out += [
+            ";; the class index of this constructor's shapes: rows meeting on a key are one node up to renaming (C14)",
+            declare_shape_table(name, sig, symbols),
+        ]
         out += binder_variants(
-            alpha_finder,
+            shape_index,
             name,
             sig,
-            ";; alpha-finder: two nodes equal up to renaming, one eliminated",
+            ";; every row, under every symmetric reading of its children, into the index",
             structural,
             heads,
             symbols,
         )
-        out += binder_variants(
-            symmetry_finder,
-            name,
-            sig,
-            ";; the same solve kept as a symmetry, non-destructively",
-            structural,
-            heads,
-            symbols,
-        )
+        out += [
+            ";; one row per shape per class: a second spelling is a recorded symmetry",
+            shape_dedup(name, sig, symbols),
+        ]
         out += [";; migration: move a follower's node into the leader's frame", migration(name, sig, symbols)]
         for pos in range(len(kids)):
             if kid_cols[pos] is BINDER:
@@ -823,23 +789,39 @@ def carrier_core(symbols):
             f"(relation {s.equated} ({s.sort} Renaming {s.sort}))",
             f"(function {s.class_slots} ({s.sort}) Renaming :merge (map-intersect old new))",
             f"(relation {s.subst_pending} ({s.sort} Renaming Renaming {s.sort}))",
+            # A function rather than a relation, because a `:merge` block may `set` a
+            # function and a relation is a constructor underneath; the rule below hands
+            # each row to `Equated`.
+            f"(function {s.shape_equal} ({s.sort} Renaming {s.sort}) Unit :no-merge)",
             "",
             f'(set (SlottedNodeLayout "{s.var}" 1) ())',
             f"(set ({s.class_slots} ({s.var} 0)) (map-of 0 0))",
             "",
-            # Orient equations toward the smaller leader.
+            # Orient equations toward the smaller leader, spelled on the two classes' slot
+            # sets. An entry on a slot a class has made redundant says nothing, and left in
+            # it makes one edge many rows and one symmetry many loops, which every closure
+            # rule then multiplies.
             f"""(rule (({s.equated} a m b)
        (!= a b)
-       (= a (ordering-max a b)))
-      (({s.renames} a m b)) :ruleset slotted)""",
+       (= a (ordering-max a b))
+       (= csa ({s.class_slots} a))
+       (= csb ({s.class_slots} b)))
+      (({s.renames} a (compose csa (compose m csb)) b)) :ruleset slotted)""",
             "",
             f"""(rule (({s.equated} a m b)
        (!= a b)
-       (= b (ordering-max a b)))
-      (({s.renames} b (inverse m) a)) :ruleset slotted)""",
+       (= b (ordering-max a b))
+       (= csa ({s.class_slots} a))
+       (= csb ({s.class_slots} b)))
+      (({s.renames} b (compose csb (compose (inverse m) csa)) a)) :ruleset slotted)""",
             "",
-            f"""(rule (({s.equated} a m a))
-      (({s.renames} a m a)) :ruleset slotted)""",
+            f"""(rule (({s.equated} a m a)
+       (= cs ({s.class_slots} a)))
+      (({s.renames} a (compose cs (compose m cs)) a)) :ruleset slotted)""",
+            "",
+            # Every class with a slot set has its identity loop, so a query can reach it.
+            f"""(rule ((= cs ({s.class_slots} c)))
+      (({s.renames} c cs c)) :ruleset slotted)""",
             "",
             # Remove an edge whose leader changed after a native union.
             f"""(rule (({s.renames} f m l)
@@ -863,10 +845,18 @@ def carrier_core(symbols):
                   (bool= e1 e3))))
       (({s.equated} e1 (compose m12 m23) e3)) :ruleset slotted)""",
             "",
+            # Only over edges already spelled on their classes' slots: an edge a narrowing
+            # has outdated belongs to the restatement rule below, and two deleting rules
+            # must not choose differently between an edge and its restatement.
             f"""(rule (({s.renames} a m1 b)
        ({s.renames} a m2 c)
        (!= a c)
        (!= a b)
+       (= csa ({s.class_slots} a))
+       (= csb ({s.class_slots} b))
+       (= csc ({s.class_slots} c))
+       (= m1 (compose csa (compose m1 csb)))
+       (= m2 (compose csa (compose m2 csc)))
        (= (ordering-max b c) b)
        (guard (or (bool-!= b c)
                   (and (bool= b c)
@@ -875,14 +865,15 @@ def carrier_core(symbols):
       ((delete ({s.renames} a m1 b))
        ({s.equated} b (compose (inverse m1) m2) c)) :ruleset slotted)""",
             "",
-            # Keep one canonical idempotent self-loop.
-            f"""(rule (({s.renames} a m1 a)
-       ({s.renames} a m a)
-       (= m (compose m m))
-       (= m2 (compose m (compose m1 m)))
-       (!= m1 m2))
-      ((delete ({s.renames} a m1 a))
-       ({s.renames} a m2 a)) :ruleset slotted)""",
+            # A renaming outlives a narrowing of its classes' slots: restate it on what
+            # they have now.
+            f"""(rule (({s.renames} f m l)
+       (= csf ({s.class_slots} f))
+       (= csl ({s.class_slots} l))
+       (= m2 (compose csf (compose m csl)))
+       (!= m m2))
+      ((delete ({s.renames} f m l))
+       ({s.renames} f m2 l)) :ruleset slotted)""",
             "",
             # Store every variable as a renamed invocation of slot zero.
             f"""(rule ((= e ({s.var} v))
@@ -900,6 +891,11 @@ def carrier_core(symbols):
        (= m (compose m1 (inverse m2)))
        (= (compose m m) m))
       ((union a b)) :ruleset slotted)""",
+            "",
+            # Two classes met on one shape (C14): the shape index's merge block wrote the
+            # equation here, and it enters the class relation like any other.
+            f"""(rule (({s.shape_equal} a m b))
+      (({s.equated} a m b)) :ruleset slotted)""",
             "",
             # Move a primitive substitution result back into the root frame.
             f"""(rule (({s.subst_pending} root q mr r)
@@ -940,6 +936,8 @@ def prelude():
             "",
             ";; Every way a match's slots may be merged, and the indices to read one at.",
             "(sort Frames (Vec Frame))",
+            ";; A node's edges in canonical spelling, and the renaming back to its own names.",
+            "(sort Renamings (Vec Renaming))",
             "(relation Idx (i64))",
             *(f"(Idx {i})" for i in range(NAMING_INDICES)),
         ]

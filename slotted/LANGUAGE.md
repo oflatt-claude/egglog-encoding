@@ -293,7 +293,7 @@ language and the compiler rejects them rather than passing them through — writ
 three things — a variable, a term to build, or `subst` — and its conclusion is always that
 the two sides are equal. egglog's other actions have no spelling here: `set` and `delete`
 would have to name one row of a class that spans several, and `subsume` interacts with the
-alpha-finder retiring rows. `slotted/ENCODING.md` C12 sets out the three
+shape index retiring rows. `slotted/ENCODING.md` C12 sets out the three
 right-hand sides and what each compiles to.
 
 ## Running

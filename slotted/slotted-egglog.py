@@ -145,7 +145,8 @@ class Source:
         # generated the same way however many sorts a program has.
         reserved = {
             "Renaming",
-            "Namings",
+            "Frames",
+            "Renamings",
             "Idx",
             "slotted",
             "SlottedNodeLayout",
@@ -160,6 +161,7 @@ class Source:
                     names.equated,
                     names.class_slots,
                     names.subst_pending,
+                    names.shape_equal,
                 )
             )
         collision = next((sort for sort in self.sorts if sort in reserved), None)
@@ -540,10 +542,10 @@ def compile_source(src, own_only=False):
             fn, rs = f"_leader{extracts}", f"_extract{extracts}"
             sort = src.sort_of_form(form[1])
             symbols = src.carriers[sort]
-            # `:merge new` rather than no merge: a term reaches its leader by every
-            # renaming in the orbit, so the rule fires once per row and sets the same
-            # leader each time.
-            _emit(out, keep, f"(function {fn} () {sort} :merge new)")
+            # A term reaches its leader by every renaming in the orbit, and reaches itself
+            # by its self-loops, so the rule fires once per row; the leader is the least
+            # value reached, since orientation makes the smaller value the leader.
+            _emit(out, keep, f"(function {fn} () {sort} :merge (ordering-min old new))")
             _emit(out, keep, f"(ruleset {rs})")
             _emit(
                 out,

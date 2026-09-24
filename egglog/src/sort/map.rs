@@ -54,6 +54,26 @@ pub(crate) fn slot_maps(
         .collect()
 }
 
+/// The canonical spelling of a node's edges: its slots renumbered `0, 1, 2…` in order
+/// of first occurrence, scanning the edges in order and each edge by child slot. Returns
+/// the renumbered edges followed by the renaming from those numbers back to the node's
+/// own names. Two nodes are equal up to a renaming of their slots exactly when their
+/// shapes agree.
+pub(crate) fn shape(edges: &[BTreeMap<i64, i64>]) -> Vec<BTreeMap<i64, i64>> {
+    let mut number: BTreeMap<i64, i64> = BTreeMap::new();
+    let mut out: Vec<BTreeMap<i64, i64>> = Vec::with_capacity(edges.len() + 1);
+    for edge in edges {
+        let mut spelled = BTreeMap::new();
+        for (&child_slot, &node_slot) in edge {
+            let next = number.len() as i64;
+            spelled.insert(child_slot, *number.entry(node_slot).or_insert(next));
+        }
+        out.push(spelled);
+    }
+    out.push(number.into_iter().map(|(slot, n)| (n, slot)).collect());
+    out
+}
+
 /// A solver's slot maps registered as renamings, in order, for a vector of them.
 pub(crate) fn register_renamings(
     state: &mut PureState<'_, '_>,
@@ -947,5 +967,44 @@ mod naming_tests {
         // the same node slot forced onto two different pattern slots
         let args = vec![avoid, domain, m(&[(0, 0), (1, 1)]), m(&[(0, 5), (1, 5)])];
         assert!(find_mappings_total(&args, 64).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::shape;
+    use std::collections::BTreeMap;
+
+    fn m(pairs: &[(i64, i64)]) -> BTreeMap<i64, i64> {
+        pairs.iter().copied().collect()
+    }
+
+    #[test]
+    fn renamed_nodes_share_a_shape_and_back_undoes_it() {
+        let a = shape(&[m(&[(0, 5)]), m(&[(0, 3)])]);
+        let b = shape(&[m(&[(0, 1)]), m(&[(0, 2)])]);
+        assert_eq!(a[..2], b[..2]);
+        assert_eq!(a[0], m(&[(0, 0)]));
+        assert_eq!(a[1], m(&[(0, 1)]));
+        assert_eq!(a[2], m(&[(0, 5), (1, 3)]));
+        assert_eq!(b[2], m(&[(0, 1), (1, 2)]));
+    }
+
+    #[test]
+    fn a_shared_slot_is_a_different_node() {
+        let same = shape(&[m(&[(0, 5)]), m(&[(0, 5)])]);
+        let apart = shape(&[m(&[(0, 5)]), m(&[(0, 3)])]);
+        assert_eq!(same[1], m(&[(0, 0)]));
+        assert_ne!(same[..2], apart[..2]);
+    }
+
+    #[test]
+    fn private_slots_of_one_column_may_be_permuted() {
+        let xy = shape(&[m(&[(0, 0), (1, 1)]), m(&[(0, 2), (1, 3)])]);
+        let yx = shape(&[m(&[(0, 0), (1, 1)]), m(&[(0, 3), (1, 2)])]);
+        assert_eq!(xy[..2], yx[..2]);
+        let shared_xy = shape(&[m(&[(0, 0)]), m(&[(0, 0), (1, 1)])]);
+        let shared_yx = shape(&[m(&[(0, 0)]), m(&[(0, 1), (1, 0)])]);
+        assert_ne!(shared_xy[..2], shared_yx[..2]);
     }
 }
