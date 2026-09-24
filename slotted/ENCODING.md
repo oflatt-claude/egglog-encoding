@@ -109,7 +109,7 @@ what the self-loops hold, and two rules keep the two in step.
 
 ## The rules, once per sort
 
-Sixteen rules and one fact, none of which mentions a constructor.
+Seventeen rules and one fact, none of which mentions a constructor.
 
 **Orienting `Equated`.** The larger value is the follower, so a leader is the least
 member of its component. An equation of a class with itself is a self-loop as it
@@ -188,6 +188,16 @@ differently between an edge and its restatement.
                   (and (bool= b c) (bool-!= m1 m2) (bool= (ordering-max m1 m2) m1)))))
       ((delete (RenamesToLeader a m1 b))
        (Equated b (compose (inverse m1) m2) c)) :ruleset slotted)
+```
+
+**A follower keeps no symmetries.** Every rule that reads a group reads it off a class
+a row or a child column names, and those are leaders, so a loop on a value that has a
+leader is a copy nothing reads. One is derived per member per group element, which is
+most of the edge relation.
+
+```
+(rule ((RenamesToLeader f g f) (RenamesToLeader f m l) (!= f l))
+      ((delete (RenamesToLeader f g f))) :ruleset slotted)
 ```
 
 **A renaming outlives a narrowing.** `ClassSlots` only ever shrinks, and an edge
@@ -541,8 +551,10 @@ The primitives:
 ## The compiled rules
 
 What `slotted-encoder.py` emits for `sum-fact-3`, with the `_0` that says which
-sort's tables these are dropped from the table names. Names in quotes are the rule's
-own variables and literals, so a frame is keyed by the words the rule was written in.
+sort's tables these are dropped from the table names, and with the right-hand side
+written in the frame's own slots; the spelling it is actually emitted in is one
+optimization away, below. Names in quotes are the rule's own variables and literals,
+so a frame is keyed by the words the rule was written in.
 
 One rewrite becomes a relation and three rules. egglog joins a body's table atoms
 first and runs its primitives afterwards, once per matched row; had the index relation
@@ -606,6 +618,30 @@ it (C13).
       ((delete (_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)))
       :ruleset slotted-apply :name "sum-fact-3/drain")
 ```
+
+**Building canonically.** The action above says what the rule means, and every node in
+it is spelled in the frame's own slots. A node below the root is emitted differently:
+its edges go through `shape` first, so it is written in the canonical numbering and not
+in this rule's (C16).
+
+```
+(let shape_sum (shape (ren m "R") (ren m "$x") (ren m "$y") (ren m "e2")))
+(let built_sum (Sum (vec-get shape_sum 0) cls_R (vec-get shape_sum 1) (Var 0)
+                    (vec-get shape_sum 2) (Var 0) (vec-get shape_sum 3) cls_e2))
+(let built_sum_slots (node-slots m (names "R") (names "$x" "$y" "e2") (names "$x" "$y")))
+;; the frame's names for those slots, read off the canonical ones; `compose` drops a
+;; canonical slot the node binds
+(let built_sum_edge (compose built_sum_slots (vec-get shape_sum 4)))
+(let built_sing (Sing (ren m "e1") cls_e1 built_sum_edge built_sum))
+```
+
+Two rules that build one node in two frames then write one row and reach one egglog
+value. Spelled in each rule's own slots they are two values denoting one class, and
+the machinery has to find them equal, migrate the rows of one into the other, point
+every parent at the survivor and close the edges that all of that adds. That cascade
+runs per built node. The root keeps the frame's spelling, since the action unions it
+with the root's class and an invocation there must be at the identity (C11), and
+`union` disposes of it at once.
 
 **When the rules run.** A user step is `(seq (run) (run slotted-apply) (saturate (run
 slotted)))`: the matching rules, then the acting and draining rules, then the machinery
@@ -707,6 +743,13 @@ function's merge block states the equation between their classes; a class meetin
 itself there gains a symmetry. Of two rows of one class with one shape, the greater
 reading is deleted. This is the reference's shape hashcons: `weak_shape` over
 `get_group_compatible_variants`.
+
+**C16. A built node below the root is spelled canonically.** Its edges go through
+`shape` and its edge into its parent is the renaming back to the frame, narrowed to the
+slots the node leaves free. This is the one place the encoding writes something other
+than what the rule says, and it changes no answer: the node is the same node, spelled
+in the numbering every frame agrees on, so two rules that build it write one row and
+reach one value. The root keeps the frame's spelling (C11).
 
 **C15. A renaming is spelled on its classes' slots.** Every `RenamesToLeader` row's
 renaming has its domain within the leader's class slots and its image within the

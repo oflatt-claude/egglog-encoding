@@ -400,35 +400,6 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
         Ok(())
     }
 
-    /// Call `f` on every [`Enode`] of every constructor, once per row.
-    /// [`Enode::name`] says which constructor each row came from.
-    ///
-    /// Each table is scanned once, so a caller that wants the e-nodes of many classes
-    /// should use this and bucket by [`Enode::eclass`] rather than calling
-    /// [`Read::eclass_enodes`] per class.
-    fn all_enodes(&self, mut f: impl FnMut(Enode<'_>)) -> Result<(), Error> {
-        for (name, _size) in self.table_sizes() {
-            let action = lookup_action(self.registry(), name)?;
-            if action.kind() != TableKind::Constructor {
-                continue;
-            }
-            action.for_each_while(self.es(), |row| {
-                let (eclass, children) = row
-                    .vals
-                    .split_last()
-                    .expect("constructor row has at least an eclass column");
-                f(Enode {
-                    name,
-                    children,
-                    eclass: *eclass,
-                    subsumed: row.subsumed,
-                });
-                true
-            });
-        }
-        Ok(())
-    }
-
     /// Call `f` on every [`Enode`] of `eclass`, across every constructor.
     /// [`Enode::name`] says which one each row came from. To stop early, use
     /// [`Read::eclass_enodes_while`].

@@ -413,13 +413,13 @@ def declare_shape_table(name, sig, symbols=None):
 
 
 def strong_shape(sig, edges, symbols):
-    """`(strong-shape (vec-of edge...) (vec-of group...))`: a row spelled the way every
-    reading of its children agrees on, and the renaming back to its own names. A binder
-    column's child is the variable class, whose group holds the identity alone, so every
-    column is read the same way."""
+    """`(node-shape (vec-of edge...) (vec-of group...))`: a row spelled the way every
+    reading of its children agrees on, the renaming back to its own names, and then the
+    symmetries the row gives its class. A binder column's child is the variable class,
+    whose group holds the identity alone, so every column is read the same way."""
     _, _, kids, _ = cols_of(sig)
     groups = " ".join(f"({symbols.group} {k})" for k in kids)
-    return f"(strong-shape (vec-of {' '.join(edges)}) (vec-of {groups}))"
+    return f"(node-shape (vec-of {' '.join(edges)}) (vec-of {groups}))"
 
 
 def shapeof_table(name):
@@ -477,27 +477,26 @@ def shape_index(name, sig, symbols=None):
     """Every row into the index, spelled the way every reading of its children agrees
     on, and what the row says about its own class's symmetries.
 
-    `strong-shape` takes each child's group and returns the least reading, so two nodes
-    that agree only after permuting a child's slots arrive at one key and the merge
-    block states the equation between their classes. `node-symmetries` returns the
-    renamings of the row's own slots that leave it the same node read another way,
+    `node-shape` takes each child's group and walks the readings once: the least one is
+    the key, so two nodes that agree only after permuting a child's slots arrive at one
+    key and the merge block states the equation between their classes; and a reading
+    that spells the row the way it already spells itself is a symmetry of its class,
     which is how a child's symmetry becomes its parent's. Together they are the
-    reference's shape hashcons and `determine_self_symmetries` (C14); one join serves
-    both, since both read the same groups.
+    reference's shape hashcons and `determine_self_symmetries` (C14), and one walk
+    serves both.
     """
     symbols = _symbols(symbols)
     _, edges, kids, _ = cols_of(sig)
     named = [f"g{i + 1}" for i in range(len(kids))]
     bound = "\n       ".join(f"(= {named[i]} ({symbols.group} {k}))" for i, k in enumerate(kids))
-    args = f"(vec-of {' '.join(edges)}) (vec-of {' '.join(named)})"
     canon = [f"(vec-get sh {i})" for i in range(len(edges))]
     key = pattern(shape_table(name), sig, edges=canon)
     return f"""\
 (rule ((= c {pattern(name, sig)})
        {bound}
-       (= sh (strong-shape {args})))
+       (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)}))))
       ((set {key} (values c (vec-get sh {len(edges)})))
-       (set ({symbols.group} c) (node-symmetries {args}))) :ruleset slotted)
+       (set ({symbols.group} c) (symmetries-of sh {len(edges) + 1}))) :ruleset slotted)
 """
 
 
@@ -903,6 +902,15 @@ def carrier_core(symbols):
                        (bool= (ordering-max m1 m2) m1)))))
       ((delete ({s.renames} a m1 b))
        ({s.equated} b (compose (inverse m1) m2) c)) :ruleset slotted)""",
+            "",
+            # A follower's symmetries are its leader's, conjugated, and every rule that
+            # reads a group reads it on the class a row or a child column names, which is
+            # a leader. So a loop on a value that has a leader is a copy no one reads,
+            # and there is one per member per group element.
+            f"""(rule (({s.renames} f g f)
+       ({s.renames} f m l)
+       (!= f l))
+      ((delete ({s.renames} f g f))) :ruleset slotted)""",
             "",
             # A renaming outlives a narrowing of its classes' slots: restate it on what
             # they have now.
@@ -1921,7 +1929,16 @@ class Query:
 
 
 def compile_query(
-    lang, atoms, conds=(), diseq=(), same=(), fresh=(), bugs=frozenset(), var_prefix="", refine=True, anchor=None
+    lang,
+    atoms,
+    conds=(),
+    diseq=(),
+    same=(),
+    fresh=(),
+    bugs=frozenset(),
+    var_prefix="",
+    refine=True,
+    anchor=None,
 ):
     """Compile a flattened multipattern into the facts that match it, as FRAMES.
 
@@ -2038,9 +2055,9 @@ def compile_query(
                 reached.append((k[1], cv, kid_sort, j))
                 bindings.append(f"(leaf {e})")
         body.append(f"(= {rv} {node_expr(op, edges, cols, pays, pay_name)})")
-        for t, cv, kid_sort, j in reached:
+        for term, cv, kid_sort, j in reached:
             table = lang.symbols_for(kid_sort).renames
-            body.append(f"({table} {lang.enc(t, kid_sort)} {named(f'leafren{idx}_{j}')} {cv})")
+            body.append(f"({table} {lang.enc(term, kid_sort)} {named(f'leafren{idx}_{j}')} {cv})")
         body.extend(syms)
         # the atom's label: the root's name, and `r2`, `r3` for further nodes of r's class
         rooted[aroot] = rooted.get(aroot, 0) + 1
@@ -2121,14 +2138,21 @@ def compile_query(
 def build_rhs(lang, term, expected_sort, q):
     """Build an RHS bottom-up in the frame's slots: one `let` per node, and one for its
     slot set (C11). A node's slots are its named columns' through `node-slots`, plus a
-    built child's, with the binders' slots taken out of what they cover."""
+    built child's, with the binders' slots taken out of what they cover.
+
+    A node BELOW the root is spelled canonically (C16): its edges go through `shape`,
+    so a node another rule already built in another frame is the same row and the same
+    value, rather than a second value the machinery has to discover and empty. Its edge
+    into its parent is then the renaming back to the frame, narrowed to the slots the
+    node leaves free. The root keeps the frame's own spelling, since the action unions
+    it with the root's class and an invocation there must be at the identity."""
     lets = []
 
     def quoted(names):
         text = " ".join(f'"{n}"' for n in names)
         return f" {text}" if text else ""
 
-    def go(t, sort):
+    def go(t, sort, root=False):
         if t[0] == "pv":
             actual = q.pvar_sorts[t[1]]
             if actual != sort:
@@ -2148,9 +2172,14 @@ def build_rhs(lang, term, expected_sort, q):
             return map_of(lang.edge(t)), lang.enc(t, sort), ("slots", "(map-empty)")
         kids = [go(arg, child_sort) for arg, child_sort in zip(args, op.kid_sorts, strict=True)]
         value = q.new(f"built_{op.name.lower()}")
-        lets.append(
-            f"(let {value} {node_expr(op, [e for e, _, _ in kids], [c for _, c, _ in kids], pays, q.pay_name)})"
-        )
+        edges = [e for e, _, _ in kids]
+        back = None
+        if not root:
+            sh = q.new(f"shape_{op.name.lower()}")
+            lets.append(f"(let {sh} (shape {' '.join(edges)}))")
+            back = f"(vec-get {sh} {len(edges)})"
+            edges = [f"(vec-get {sh} {i})" for i in range(len(edges))]
+        lets.append(f"(let {value} {node_expr(op, edges, [c for _, c, _ in kids], pays, q.pay_name)})")
         bound = [args[i][1] for i in op.binders]
         uncovered, covered, nested = [], [], []
         for i, (_e, _c, tag) in enumerate(kids):
@@ -2166,9 +2195,15 @@ def build_rhs(lang, term, expected_sort, q):
             slots = f"(map-union {slots} {n})"
         sv = f"{value}_slots"
         lets.append(f"(let {sv} {slots})")
-        return sv, value, ("slots", sv)
+        if back is None:
+            return sv, value, ("slots", sv)
+        # the frame's names for the slots the node leaves free, read off its canonical
+        # ones: `compose` drops a canonical slot the node binds
+        ev = f"{value}_edge"
+        lets.append(f"(let {ev} (compose {sv} {back}))")
+        return ev, value, ("slots", sv)
 
-    edge, cls, _ = go(term, expected_sort)
+    edge, cls, _ = go(term, expected_sort, root=True)
     return lets, edge, cls
 
 

@@ -74,58 +74,50 @@ pub(crate) fn shape(edges: &[BTreeMap<i64, i64>]) -> Vec<BTreeMap<i64, i64>> {
     out
 }
 
-/// The least [`shape`] of a node over the readings its children's symmetries allow.
+/// A node's canonical spelling and the symmetries it gives its class, from one walk of
+/// the readings its children's symmetries allow.
 ///
-/// `groups[i]` are the symmetries of the class at column `i`: permutations of that
-/// class's slots, of which only those whose domain and image are exactly the column's
-/// edge domain are readings of this node. Composing the edge with one spells the same
-/// node another way, so the least shape over the product is a spelling every reading
-/// agrees on, and two nodes equal up to their children's symmetries have equal strong
-/// shapes. Returns the chosen shape's edges followed by the renaming back to the
-/// node's own names, as [`shape`] does; a renaming that is not such a permutation is
-/// ignored, so a stale symmetry cannot change the answer.
-pub(crate) fn strong_shape(
-    edges: &[BTreeMap<i64, i64>],
-    groups: &[Vec<BTreeMap<i64, i64>>],
-) -> Vec<BTreeMap<i64, i64>> {
-    readings(edges, groups)
-        .map(|variant| shape(&variant))
-        .min_by(|a, b| a[..edges.len()].cmp(&b[..edges.len()]))
-        .unwrap_or_else(|| shape(edges))
-}
-
-/// The symmetries a node gives its class: the renamings of its own slots under which
-/// it is the same node read through its children's symmetries.
-///
-/// A reading that spells the node the same way up to a renaming of the node's slots
-/// says the class equals itself under that renaming. `groups[i]` is the symmetry group
-/// of the class at column `i`, read as [`strong_shape`] reads it. The identity is
-/// left out, having nothing to say.
-pub(crate) fn node_symmetries(
+/// Returns the canonical edges, then the renaming from that spelling back to the node's
+/// own names, then one renaming per symmetry. A reading composes each column's edge
+/// with a symmetry of that column's class; only a renaming that permutes the column's
+/// own slots is one, so a stale symmetry is ignored. The least reading is the spelling
+/// every reading agrees on, so two nodes equal up to their children's symmetries have
+/// equal canonical edges. A reading that spells the node the way it already spells
+/// itself says the class equals itself under the renaming between them, which is the
+/// reference's `weak_shape` over `get_group_compatible_variants` and its
+/// `determine_self_symmetries` in one pass.
+pub(crate) fn node_shape(
     edges: &[BTreeMap<i64, i64>],
     groups: &[Vec<BTreeMap<i64, i64>>],
 ) -> Vec<BTreeMap<i64, i64>> {
     let own = shape(edges);
-    let (canonical, back) = own.split_at(edges.len());
-    let back = &back[0];
-    let mut out: Vec<BTreeMap<i64, i64>> = Vec::new();
+    let (own_canonical, own_back) = own.split_at(edges.len());
+    let mut best: Option<Vec<BTreeMap<i64, i64>>> = None;
+    let mut symmetries: Vec<BTreeMap<i64, i64>> = Vec::new();
     for variant in readings(edges, groups) {
         let spelled = shape(&variant);
-        if spelled[..edges.len()] != *canonical {
-            continue;
+        if spelled[..edges.len()] == *own_canonical {
+            // variant = b . canonical and the node = own_back . canonical, so
+            // b . own_back^-1 renames the node's slots onto themselves
+            let symmetry: BTreeMap<i64, i64> = own_back[0]
+                .iter()
+                .filter_map(|(n, &slot)| spelled[edges.len()].get(n).map(|&image| (slot, image)))
+                .collect();
+            if symmetry.iter().any(|(from, to)| from != to) {
+                symmetries.push(symmetry);
+            }
         }
-        // variant = b_v . canonical and edges = back . canonical, so b_v . back^-1
-        // renames the node's slots onto themselves
-        let symmetry: BTreeMap<i64, i64> = back
-            .iter()
-            .filter_map(|(n, &slot)| spelled[edges.len()].get(n).map(|&image| (slot, image)))
-            .collect();
-        if symmetry.iter().any(|(from, to)| from != to) {
-            out.push(symmetry);
+        if best
+            .as_ref()
+            .is_none_or(|b| spelled[..edges.len()] < b[..edges.len()])
+        {
+            best = Some(spelled);
         }
     }
-    out.sort();
-    out.dedup();
+    symmetries.sort();
+    symmetries.dedup();
+    let mut out = best.unwrap_or(own);
+    out.append(&mut symmetries);
     out
 }
 

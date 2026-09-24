@@ -48,6 +48,7 @@ use super::*;
 use crate::exec_state::RegistrySealed;
 use egglog_bridge::{TableAction, TableKind};
 use hashbrown::HashMap;
+use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The name of the primitive, as written in an egglog program.
@@ -365,19 +366,24 @@ fn collect_terms(
     layouts: &Layouts,
     class_slots: &str,
 ) -> Result<Terms, String> {
-    // Every row, bucketed by the class that holds it: the walk below asks for one
-    // class at a time, and each such ask would otherwise read every constructor table
-    // again.
-    let mut rows: HashMap<Value, Vec<(String, Vec<Value>)>> = HashMap::new();
-    state
-        .all_enodes(|enode| {
-            if !enode.subsumed {
-                rows.entry(enode.eclass)
-                    .or_default()
-                    .push((enode.name.to_owned(), enode.children.to_vec()));
-            }
-        })
-        .map_err(|err| format!("reading the e-nodes: {err}"))?;
+    // Every node row, bucketed by the class that holds it: the walk below asks for one
+    // class at a time, and each such ask would otherwise read every table again. Only
+    // the constructors the layout metadata names are read -- a relation is a
+    // constructor too, so the machinery's own tables would otherwise be scanned with
+    // them -- and only the rows the walk reaches are parsed.
+    let names: Vec<&String> = layouts.constructors.keys().collect();
+    let mut rows: HashMap<Value, Vec<(usize, SmallVec<[Value; 8]>)>> = HashMap::new();
+    for (id, name) in names.iter().enumerate() {
+        state
+            .constructor_enodes(name, |enode| {
+                if !enode.subsumed {
+                    rows.entry(enode.eclass)
+                        .or_default()
+                        .push((id, SmallVec::from_slice(enode.children)));
+                }
+            })
+            .map_err(|err| format!("reading the e-nodes of {name}: {err}"))?;
+    }
 
     let mut nodes: HashMap<Value, Vec<Node>> = HashMap::new();
     let mut public: HashMap<Value, BTreeSet<Slot>> = HashMap::new();
@@ -400,7 +406,7 @@ fn collect_terms(
             .map(Vec::as_slice)
             .unwrap_or_default()
             .iter()
-            .map(|(ctor, children)| parse_node(state, layouts, var, ctor.clone(), children))
+            .map(|(ctor, children)| parse_node(state, layouts, var, names[*ctor], children))
             .collect::<Result<_, _>>()?;
         stack.extend(parsed.iter().flat_map(Node::children));
         nodes.insert(eclass, parsed);
@@ -600,12 +606,12 @@ fn parse_node(
     state: &FullState<'_, '_>,
     layouts: &Layouts,
     var: Value,
-    ctor: String,
+    ctor: &str,
     children: &[Value],
 ) -> Result<Node, String> {
     let layout = layouts
         .constructors
-        .get(&ctor)
+        .get(ctor)
         .ok_or_else(|| format!("reachable constructor {ctor} has no {NODE_LAYOUT} row"))?;
     if layout.arity != children.len() {
         return Err(format!(
@@ -650,7 +656,7 @@ fn parse_node(
     }
 
     Ok(Node {
-        ctor,
+        ctor: ctor.to_owned(),
         args: children.to_vec(),
         edges,
         binders,
