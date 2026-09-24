@@ -162,6 +162,7 @@ class Source:
                     names.class_slots,
                     names.subst_pending,
                     names.shape_equal,
+                    names.invocation,
                 )
             )
         collision = next((sort for sort in self.sorts if sort in reserved), None)

@@ -31,6 +31,7 @@ class CarrierSymbols:
     class_slots: str
     subst_pending: str
     shape_equal: str
+    invocation: str
 
     @classmethod
     def create(cls, sort, index):
@@ -42,6 +43,7 @@ class CarrierSymbols:
             f"ClassSlots_{index}",
             f"SubstPending_{index}",
             f"ShapeEqual_{index}",
+            f"Invocation_{index}",
         )
 
 
@@ -408,26 +410,51 @@ def declare_shape_table(name, sig, symbols=None):
     )
 
 
-def shape_dedup(name, sig, symbols=None):
-    """One row per shape per class: of two rows of one class with the same children and
-    the same weak shape, the one with the greater renaming back to the class goes.
+def shapeof_table(name):
+    """The function holding each row's shape, so rows can be joined on it."""
+    return f"_shapeof_{name}"
 
-    They are one node under two readings, and the reading the index's merge block
-    already recorded as a symmetry is what a pattern reads the survivor through. The
-    alpha-finder used to do this deletion pairwise with a solve; here the join is on the
-    class and children and the comparison is of canonical spellings (C14)."""
+
+def declare_shapeof_table(name, sig, symbols=None):
+    """`(function _shapeof_F (row...) (s1 ... back))`: a row's canonical edges and the
+    renaming back to its own names, as columns, so two rows of one class with one shape
+    meet in a hash join rather than in a join over every two rows with the same
+    children (C14). A row's shape depends on its edges alone, so an entry outlives its
+    row harmlessly and a rebuild never changes its value."""
+    symbols = _symbols(symbols)
+    _, edges, _, _ = cols_of(sig)
+    cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
+    outs = " ".join(["Renaming"] * (len(edges) + 1))
+    news = " ".join(f"new{i}" for i in range(len(edges) + 1))
+    return f"(function {shapeof_table(name)} ({cols}) ({outs}) :merge (values {news}))\n"
+
+
+def shape_dedup(name, sig, symbols=None):
+    """One row per shape per class: of two live rows of one class with the same children
+    and the same shape, the one whose renaming back to the class is the greater goes.
+
+    The reading it stood for is a symmetry the shape index has recorded, and a pattern
+    reads the survivor through the class's self-loops. Every row's shape is computed
+    once into `_shapeof_F`, and the two rows are joined on equal shape columns, so the
+    work is linear in duplicates rather than quadratic in rows sharing children (C14).
+    Only live rows take part, which is what keeps this sound across unions and
+    migrations."""
     _, edges, _, _ = cols_of(sig)
     other = [f"n{i + 1}" for i in range(len(edges))]
-    same = "\n       ".join(f"(= (vec-get sh {i}) (vec-get th {i}))" for i in range(len(edges)))
+    ss = [f"s{i + 1}" for i in range(len(edges))]
     k = len(edges)
+    columns = " ".join(f"(vec-get sh {i})" for i in range(k + 1))
     return f"""\
 (rule ((= c {pattern(name, sig)})
+       (= sh (shape {" ".join(edges)})))
+      ((set {pattern(shapeof_table(name), sig)} (values {columns}))) :ruleset slotted)
+
+(rule ((= c {pattern(name, sig)})
+       (= (values {" ".join(ss)} b1) {pattern(shapeof_table(name), sig)})
        (= c {pattern(name, sig, edges=other)})
-       (= sh (shape {" ".join(edges)}))
-       (= th (shape {" ".join(other)}))
-       {same}
-       (!= (vec-get sh {k}) (vec-get th {k}))
-       (= (vec-get sh {k}) (ordering-max (vec-get sh {k}) (vec-get th {k}))))
+       (= (values {" ".join(ss)} b2) {pattern(shapeof_table(name), sig, edges=other)})
+       (!= b1 b2)
+       (= b1 (ordering-max b1 b2)))
       ((delete {pattern(name, sig)})) :ruleset slotted)
 """
 
@@ -710,7 +737,8 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
             symbols,
         )
         out += [
-            ";; one row per shape per class: a second spelling is a recorded symmetry",
+            ";; one row per shape per class: rows meet on equal shape columns, the greater reading goes",
+            declare_shapeof_table(name, sig, symbols),
             shape_dedup(name, sig, symbols),
         ]
         out += [";; migration: move a follower's node into the leader's frame", migration(name, sig, symbols)]
@@ -793,6 +821,9 @@ def carrier_core(symbols):
             # function and a relation is a constructor underneath; the rule below hands
             # each row to `Equated`.
             f"(function {s.shape_equal} ({s.sort} Renaming {s.sort}) Unit :no-merge)",
+            # The name of an invocation: a leader and a reading of its slots. Two values
+            # set under one name are one invocation, and the merge makes them one value.
+            f"(function {s.invocation} ({s.sort} Renaming) {s.sort} :merge ((union old new) old))",
             "",
             f'(set (SlottedNodeLayout "{s.var}" 1) ())',
             f"(set ({s.class_slots} ({s.var} 0)) (map-of 0 0))",
@@ -883,14 +914,13 @@ def carrier_core(symbols):
             "",
             f"({s.renames} ({s.var} 0) (map-insert (map-empty) 0 0) ({s.var} 0))",
             "",
-            # Native-union two values that denote the same invocation.
-            f"""(rule (({s.renames} a m1_o c)
-       ({s.renames} b m2 c)
-       ({s.renames} c sym c)
-       (= m1 (compose m1_o sym))
-       (= m (compose m1 (inverse m2)))
-       (= (compose m m) m))
-      ((union a b)) :ruleset slotted)""",
+            # One egglog value per invocation: every member registers under the name of
+            # each of its readings of the leader, one per symmetry, and the name's merge
+            # unions members that share one. Keyed, so this costs one `set` per edge per
+            # group element rather than a join over every pair of members.
+            f"""(rule (({s.renames} a m c)
+       ({s.renames} c sym c))
+      ((set ({s.invocation} c (compose m sym)) a)) :ruleset slotted)""",
             "",
             # Two classes met on one shape (C14): the shape index's merge block wrote the
             # equation here, and it enters the class relation like any other.
