@@ -365,6 +365,20 @@ fn collect_terms(
     layouts: &Layouts,
     class_slots: &str,
 ) -> Result<Terms, String> {
+    // Every row, bucketed by the class that holds it: the walk below asks for one
+    // class at a time, and each such ask would otherwise read every constructor table
+    // again.
+    let mut rows: HashMap<Value, Vec<(String, Vec<Value>)>> = HashMap::new();
+    state
+        .all_enodes(|enode| {
+            if !enode.subsumed {
+                rows.entry(enode.eclass)
+                    .or_default()
+                    .push((enode.name.to_owned(), enode.children.to_vec()));
+            }
+        })
+        .map_err(|err| format!("reading the e-nodes: {err}"))?;
+
     let mut nodes: HashMap<Value, Vec<Node>> = HashMap::new();
     let mut public: HashMap<Value, BTreeSet<Slot>> = HashMap::new();
     let mut stack = vec![root];
@@ -381,17 +395,12 @@ fn collect_terms(
                 .map(|frame| frame.keys().copied().collect())
                 .unwrap_or_default(),
         );
-        let mut rows: Vec<(String, Vec<Value>)> = Vec::new();
-        state
-            .eclass_enodes(eclass, |enode| {
-                if !enode.subsumed {
-                    rows.push((enode.name.to_owned(), enode.children.to_vec()));
-                }
-            })
-            .map_err(|err| format!("reading the e-nodes of {eclass:?}: {err}"))?;
         let parsed: Vec<Node> = rows
-            .into_iter()
-            .map(|(ctor, children)| parse_node(state, layouts, var, ctor, &children))
+            .get(&eclass)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .map(|(ctor, children)| parse_node(state, layouts, var, ctor.clone(), children))
             .collect::<Result<_, _>>()?;
         stack.extend(parsed.iter().flat_map(Node::children));
         nodes.insert(eclass, parsed);
