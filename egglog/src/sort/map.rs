@@ -74,6 +74,97 @@ pub(crate) fn shape(edges: &[BTreeMap<i64, i64>]) -> Vec<BTreeMap<i64, i64>> {
     out
 }
 
+/// The least [`shape`] of a node over the readings its children's symmetries allow.
+///
+/// `groups[i]` are the symmetries of the class at column `i`: permutations of that
+/// class's slots, of which only those whose domain and image are exactly the column's
+/// edge domain are readings of this node. Composing the edge with one spells the same
+/// node another way, so the least shape over the product is a spelling every reading
+/// agrees on, and two nodes equal up to their children's symmetries have equal strong
+/// shapes. Returns the chosen shape's edges followed by the renaming back to the
+/// node's own names, as [`shape`] does; a renaming that is not such a permutation is
+/// ignored, so a stale symmetry cannot change the answer.
+pub(crate) fn strong_shape(
+    edges: &[BTreeMap<i64, i64>],
+    groups: &[Vec<BTreeMap<i64, i64>>],
+) -> Vec<BTreeMap<i64, i64>> {
+    readings(edges, groups)
+        .map(|variant| shape(&variant))
+        .min_by(|a, b| a[..edges.len()].cmp(&b[..edges.len()]))
+        .unwrap_or_else(|| shape(edges))
+}
+
+/// The symmetries a node gives its class: the renamings of its own slots under which
+/// it is the same node read through its children's symmetries.
+///
+/// A reading that spells the node the same way up to a renaming of the node's slots
+/// says the class equals itself under that renaming. `groups[i]` is the symmetry group
+/// of the class at column `i`, read as [`strong_shape`] reads it. The identity is
+/// left out, having nothing to say.
+pub(crate) fn node_symmetries(
+    edges: &[BTreeMap<i64, i64>],
+    groups: &[Vec<BTreeMap<i64, i64>>],
+) -> Vec<BTreeMap<i64, i64>> {
+    let own = shape(edges);
+    let (canonical, back) = own.split_at(edges.len());
+    let back = &back[0];
+    let mut out: Vec<BTreeMap<i64, i64>> = Vec::new();
+    for variant in readings(edges, groups) {
+        let spelled = shape(&variant);
+        if spelled[..edges.len()] != *canonical {
+            continue;
+        }
+        // variant = b_v . canonical and edges = back . canonical, so b_v . back^-1
+        // renames the node's slots onto themselves
+        let symmetry: BTreeMap<i64, i64> = back
+            .iter()
+            .filter_map(|(n, &slot)| spelled[edges.len()].get(n).map(|&image| (slot, image)))
+            .collect();
+        if symmetry.iter().any(|(from, to)| from != to) {
+            out.push(symmetry);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Each column's edge, and the edge through every symmetry of its child's class: the
+/// readings of a node that spell the same invocation. A renaming that does not permute
+/// the column's own slots is not one of them, so a stale symmetry is ignored.
+fn readings(
+    edges: &[BTreeMap<i64, i64>],
+    groups: &[Vec<BTreeMap<i64, i64>>],
+) -> impl Iterator<Item = Vec<BTreeMap<i64, i64>>> {
+    let columns: Vec<Vec<BTreeMap<i64, i64>>> = edges
+        .iter()
+        .enumerate()
+        .map(|(i, edge)| {
+            let domain: BTreeSet<i64> = edge.keys().copied().collect();
+            let mut out = vec![edge.clone()];
+            for g in groups.get(i).map(Vec::as_slice).unwrap_or_default() {
+                if g.keys().copied().collect::<BTreeSet<_>>() == domain
+                    && g.values().copied().collect::<BTreeSet<_>>() == domain
+                {
+                    out.push(g.iter().map(|(&s, &t)| (s, edge[&t])).collect());
+                }
+            }
+            out.sort();
+            out.dedup();
+            out
+        })
+        .collect();
+    let total: usize = columns.iter().map(Vec::len).product();
+    (0..total).map(move |mut n| {
+        let mut variant = Vec::with_capacity(columns.len());
+        for column in &columns {
+            variant.push(column[n % column.len()].clone());
+            n /= column.len();
+        }
+        variant
+    })
+}
+
 /// A solver's slot maps registered as renamings, in order, for a vector of them.
 pub(crate) fn register_renamings(
     state: &mut PureState<'_, '_>,

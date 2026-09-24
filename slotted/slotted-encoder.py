@@ -32,6 +32,7 @@ class CarrierSymbols:
     subst_pending: str
     shape_equal: str
     invocation: str
+    group: str
 
     @classmethod
     def create(cls, sort, index):
@@ -44,6 +45,7 @@ class CarrierSymbols:
             f"SubstPending_{index}",
             f"ShapeEqual_{index}",
             f"Invocation_{index}",
+            f"Group_{index}",
         )
 
 
@@ -410,6 +412,16 @@ def declare_shape_table(name, sig, symbols=None):
     )
 
 
+def strong_shape(sig, edges, symbols):
+    """`(strong-shape (vec-of edge...) (vec-of group...))`: a row spelled the way every
+    reading of its children agrees on, and the renaming back to its own names. A binder
+    column's child is the variable class, whose group holds the identity alone, so every
+    column is read the same way."""
+    _, _, kids, _ = cols_of(sig)
+    groups = " ".join(f"({symbols.group} {k})" for k in kids)
+    return f"(strong-shape (vec-of {' '.join(edges)}) (vec-of {groups}))"
+
+
 def shapeof_table(name):
     """The function holding each row's shape, so rows can be joined on it."""
     return f"_shapeof_{name}"
@@ -434,7 +446,9 @@ def shape_dedup(name, sig, symbols=None):
     and the same shape, the one whose renaming back to the class is the greater goes.
 
     The reading it stood for is a symmetry the shape index has recorded, and a pattern
-    reads the survivor through the class's self-loops. Every row's shape is computed
+    reads the survivor through the class's self-loops. Two rows that agree only after
+    permuting a child's slots are two spellings the e-graph keeps, as the reference
+    does: the index identifies them, this rule does not remove either. Every row's shape is computed
     once into `_shapeof_F`, and the two rows are joined on equal shape columns, so the
     work is linear in duplicates rather than quadratic in rows sharing children (C14).
     Only live rows take part, which is what keeps this sound across unions and
@@ -459,33 +473,31 @@ def shape_dedup(name, sig, symbols=None):
 """
 
 
-def shape_index(name, sig, bound=(), exempt=(), head=None, symbols=None):
-    """Every row of `F`, under every symmetric reading of its children, into the index.
+def shape_index(name, sig, symbols=None):
+    """Every row into the index, spelled the way every reading of its children agrees
+    on, and what the row says about its own class's symmetries.
 
-    `(shape ...)` spells the edges canonically and returns the renaming back; a child's
-    symmetry `g` composed onto its edge is the same node read another way, so a node
-    and its symmetric variants land on the same keys and a class meeting itself there
-    gains the symmetry. This is the reference's shape hashcons, `weak_shape` over
-    `get_group_compatible_variants`. `bound`, `head` and `exempt` mean what they do in
-    `child_update`: a binder column is spelled as stored, since a bound name has no
-    other spelling.
+    `strong-shape` takes each child's group and returns the least reading, so two nodes
+    that agree only after permuting a child's slots arrive at one key and the merge
+    block states the equation between their classes. `node-symmetries` returns the
+    renamings of the row's own slots that leave it the same node read another way,
+    which is how a child's symmetry becomes its parent's. Together they are the
+    reference's shape hashcons and `determine_self_symmetries` (C14); one join serves
+    both, since both read the same groups.
     """
     symbols = _symbols(symbols)
-    payloads, edges, kids, _ = cols_of(sig)
-    syms = [f"g{i + 1}" for i in range(len(kids))]
-    pays = [f'"{head}"'] if head is not None else None
-    loops = "\n       ".join(
-        f"({symbols.renames} {kids[i]} {syms[i]} {kids[i]})" for i in range(len(kids)) if i not in bound
-    )
-    spelled = " ".join(e if i in bound else f"(compose {e} {syms[i]})" for i, e in enumerate(edges))
-    not_binder = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
+    _, edges, kids, _ = cols_of(sig)
+    named = [f"g{i + 1}" for i in range(len(kids))]
+    bound = "\n       ".join(f"(= {named[i]} ({symbols.group} {k}))" for i, k in enumerate(kids))
+    args = f"(vec-of {' '.join(edges)}) (vec-of {' '.join(named)})"
     canon = [f"(vec-get sh {i})" for i in range(len(edges))]
-    key = pattern(shape_table(name), sig, edges=canon, payloads=pays)
+    key = pattern(shape_table(name), sig, edges=canon)
     return f"""\
-(rule ((= c {pattern(name, sig, payloads=pays)}){not_binder}
-       {loops}
-       (= sh (shape {spelled})))
-      ((set {key} (values c (vec-get sh {len(edges)})))) :ruleset slotted)
+(rule ((= c {pattern(name, sig)})
+       {bound}
+       (= sh (strong-shape {args})))
+      ((set {key} (values c (vec-get sh {len(edges)})))
+       (set ({symbols.group} c) (node-symmetries {args}))) :ruleset slotted)
 """
 
 
@@ -721,21 +733,14 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
         if not kids:
             continue  # nothing below touches a child
         kid_cols = [c for c in sig if c in SLOTTED]
-        structural = tuple(i for i, c in enumerate(kid_cols) if c is BINDER)
-        # a head-pinned binder always covers the first slotted column
         out += [
             ";; the class index of this constructor's shapes: rows meeting on a key are one node up to renaming (C14)",
             declare_shape_table(name, sig, symbols),
         ]
-        out += binder_variants(
-            shape_index,
-            name,
-            sig,
-            ";; every row, under every symmetric reading of its children, into the index",
-            structural,
-            heads,
-            symbols,
-        )
+        out += [
+            ";; every row into the index, and what it says about its class's symmetries",
+            shape_index(name, sig, symbols),
+        ]
         out += [
             ";; one row per shape per class: rows meet on equal shape columns, the greater reading goes",
             declare_shapeof_table(name, sig, symbols),
@@ -824,6 +829,9 @@ def carrier_core(symbols):
             # The name of an invocation: a leader and a reading of its slots. Two values
             # set under one name are one invocation, and the merge makes them one value.
             f"(function {s.invocation} ({s.sort} Renaming) {s.sort} :merge ((union old new) old))",
+            # A class's symmetry group, as a set, so a node is spelled once over all the
+            # readings its children allow rather than once per reading (C14).
+            f"(function {s.group} ({s.sort}) Groups :merge (set-union old new))",
             "",
             f'(set (SlottedNodeLayout "{s.var}" 1) ())',
             f"(set ({s.class_slots} ({s.var} 0)) (map-of 0 0))",
@@ -922,6 +930,17 @@ def carrier_core(symbols):
        ({s.renames} c sym c))
       ((set ({s.invocation} c (compose m sym)) a)) :ruleset slotted)""",
             "",
+            # Every self-loop is an element of the class's group, and every element of
+            # the group is a self-loop. A node states its symmetries as a whole set, so
+            # this is where they become the rows a query and the closure rules read.
+            f"""(rule (({s.renames} c g c))
+      ((set ({s.group} c) (set-of g))) :ruleset slotted)""",
+            "",
+            f"""(rule ((Idx i)
+       (= s ({s.group} c))
+       (= g (set-get s i)))
+      (({s.equated} c g c)) :ruleset slotted)""",
+            "",
             # Two classes met on one shape (C14): the shape index's merge block wrote the
             # equation here, and it enters the class relation like any other.
             f"""(rule (({s.shape_equal} a m b))
@@ -966,7 +985,11 @@ def prelude():
             "",
             ";; Every way a match's slots may be merged, and the indices to read one at.",
             "(sort Frames (Vec Frame))",
+            ";; A class's symmetries, and one such group per child column of a node.",
+            "(sort Groups (Set Renaming))",
+            "(sort GroupList (Vec Groups))",
             ";; A node's edges in canonical spelling, and the renaming back to its own names.",
+            ";; Declared after `GroupList`, which is where `strong-shape` reads its groups.",
             "(sort Renamings (Vec Renaming))",
             "(relation Idx (i64))",
             *(f"(Idx {i})" for i in range(NAMING_INDICES)),

@@ -206,6 +206,47 @@ impl ContainerSort for VecSort {
                 let data = register_renamings(&mut state, find_mappings_total(&maps, FIND_MAPPINGS_CAP));
                 Some(VecContainer { do_rebuild: false, data })
             }});
+            // `(strong-shape (vec-of e1 ...) (vec-of g1 ...))`: the same, over the readings
+            // the children's symmetry groups allow; see `strong_shape`. The groups are a
+            // `Vec` of `Set`s of renamings, which has to be declared before this sort.
+            let group_vecs: Vec<ArcSort> = eg
+                .type_info
+                .get_arcsorts_by(|f| f.value_type() == Some(TypeId::of::<VecContainer>()))
+                .into_iter()
+                .filter(|v| {
+                    let inner = &v.inner_sorts()[0];
+                    inner.value_type() == Some(TypeId::of::<SetContainer>())
+                        && inner
+                            .inner_sorts()
+                            .first()
+                            .is_some_and(|e| e.name() == self.element.name())
+                })
+                .collect();
+            for groups in group_vecs {
+                // `(node-symmetries (vec-of e1 ...) (vec-of g1 ...))`: the symmetries the
+                // node gives its class, as a set to union into the class's group.
+                let set = groups.inner_sorts()[0].clone();
+                add_primitive!(eg, "node-symmetries" = {self.clone(): VecSort} |es: @VecContainer (arc.clone()), gs: @VecContainer (groups.clone())| -?> @SetContainer (set.clone()) {{
+                    let edges = slot_maps(&state, es.data.iter().copied())?;
+                    let mut groups = Vec::with_capacity(gs.data.len());
+                    for value in gs.data.iter().copied() {
+                        let set = state.container_values().get_val::<SetContainer>(value)?.data.clone();
+                        groups.push(slot_maps(&state, set)?);
+                    }
+                    let data = register_renamings(&mut state, node_symmetries(&edges, &groups));
+                    Some(SetContainer { do_rebuild: false, data: data.into_iter().collect() })
+                }});
+                add_primitive!(eg, "strong-shape" = {self.clone(): VecSort} |es: @VecContainer (arc.clone()), gs: @VecContainer (groups.clone())| -?> @VecContainer (arc.clone()) {{
+                    let edges = slot_maps(&state, es.data.iter().copied())?;
+                    let mut groups = Vec::with_capacity(gs.data.len());
+                    for value in gs.data.iter().copied() {
+                        let set = state.container_values().get_val::<SetContainer>(value)?.data.clone();
+                        groups.push(slot_maps(&state, set)?);
+                    }
+                    let data = register_renamings(&mut state, strong_shape(&edges, &groups));
+                    Some(VecContainer { do_rebuild: false, data })
+                }});
+            }
             // `(shape e1 e2 ...)`: the edges in canonical spelling, then the renaming from
             // that spelling back to the node's names; see `shape`.
             add_primitive!(eg, "shape" = {self.clone(): VecSort} [xs: # (self.element())] -?> @VecContainer (arc) {{

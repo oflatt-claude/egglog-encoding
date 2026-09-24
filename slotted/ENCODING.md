@@ -57,6 +57,7 @@ in front of its own variables.
 (relation SubstPending (Math Renaming Renaming Math))
 (function ShapeEqual (Math Renaming Math) Unit :no-merge)
 (function Invocation (Math Renaming) Math :merge ((union old new) old))
+(function Group (Math) Groups :merge (set-union old new))
 ```
 
 **`Renaming`** is a partial injection on slots, spelled as a map from `i64` to
@@ -102,9 +103,13 @@ it from a merge block, which may `set` a function but not insert into a relation
 class registers under the names of its readings, and the function's merge unions two
 members that share one, which is how one invocation stays one egglog value.
 
+**`Group c`** is the class's symmetry group as a set, which is how a node is spelled
+once over every reading its children allow rather than once per reading (C14). It holds
+what the self-loops hold, and two rules keep the two in step.
+
 ## The rules, once per sort
 
-Fourteen rules and one fact, none of which mentions a constructor.
+Sixteen rules and one fact, none of which mentions a constructor.
 
 **Orienting `Equated`.** The larger value is the follower, so a leader is the least
 member of its component. An equation of a class with itself is a self-loop as it
@@ -244,6 +249,17 @@ relation like any other equation.
       ((Equated a m b)) :ruleset slotted)
 ```
 
+**The group and the self-loops.** Each is derived from the other: a loop is an element
+of the group, and an element of the group is a loop. Rules read the loops; the shape
+primitives read the group.
+
+```
+(rule ((RenamesToLeader c g c))
+      ((set (Group c) (set-of g))) :ruleset slotted)
+(rule ((Idx i) (= s (Group c)) (= g (set-get s i)))
+      ((Equated c g c)) :ruleset slotted)
+```
+
 # Per-constructor machinery
 
 A child column expands to a renaming column and a class column, so
@@ -281,18 +297,24 @@ the reference's hashcons on shapes: one lookup per row.
           (values old0 old1)))
 
 (rule ((= c (Add m1 c1 m2 c2))
-       (RenamesToLeader c1 g1 c1)
-       (RenamesToLeader c2 g2 c2)
-       (= sh (shape (compose m1 g1) (compose m2 g2))))
-      ((set (_shape_Add (vec-get sh 0) c1 (vec-get sh 1) c2) (values c (vec-get sh 2)))) :ruleset slotted)
+       (= g1 (Group c1)) (= g2 (Group c2))
+       (= sh (strong-shape (vec-of m1 m2) (vec-of g1 g2))))
+      ((set (_shape_Add (vec-get sh 0) c1 (vec-get sh 1) c2) (values c (vec-get sh 2)))
+       (set (Group c) (node-symmetries (vec-of m1 m2) (vec-of g1 g2)))) :ruleset slotted)
 ```
 
-The `RenamesToLeader c g c` atoms are the children's *symmetries*: a row is entered
-under every symmetric reading of its children, so two nodes that agree only after
-permuting a child's slots meet on a key as well, and a class meeting itself there under
-two renamings gains the symmetry between them. A row costs one insertion per reading.
-`ShapeEqual` is a function rather than a relation because a merge block may `set` a
-function, and one rule per sort hands its rows to `Equated`.
+`strong-shape` takes each child's group and spells the node the way every reading of
+those children agrees on, so two nodes that agree only after permuting a child's slots
+arrive at one key. A row costs one insertion, whatever the groups hold. `ShapeEqual` is
+a function rather than a relation because a merge block may `set` a function, and one
+rule per sort hands its rows to `Equated`.
+
+The rule's second action is what a node says about its *own* class: a reading that
+spells the node the same way up to a renaming of the node's own slots says the class
+equals itself under that renaming. `node-symmetries` returns those renamings as a set,
+unioned into the group, which is how a child's symmetry becomes its parent's. This is
+the reference's `determine_self_symmetries`, and it shares the rule's join because it
+reads the same groups.
 
 **One row per shape per class.** The index says which rows are one node; it removes
 none. A class can still hold two rows of one shape under two readings: the same node
@@ -378,8 +400,8 @@ that slot away, so the class does not depend on what it binds.
       ((Equated (Lam mvar (Var 0) m2 c2) (inverse (map-remove (inverse ml) v)) l)) :ruleset slotted)
 ```
 
-In the constructor's own block the binder column joins no symmetry row in the shape
-index, since the variable class has none to offer, and its
+In the constructor's own block the binder column needs no special case in the shape
+index, since the variable class's group holds the identity alone, and its
 child-update also requires `(map-get (compose m1 m) 0)` to exist: a bound name may be
 renamed but not lost.
 

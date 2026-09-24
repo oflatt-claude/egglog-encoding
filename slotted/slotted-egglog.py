@@ -146,6 +146,8 @@ class Source:
         reserved = {
             "Renaming",
             "Frames",
+            "Groups",
+            "GroupList",
             "Renamings",
             "Idx",
             "slotted",
@@ -163,6 +165,7 @@ class Source:
                     names.subst_pending,
                     names.shape_equal,
                     names.invocation,
+                    names.group,
                 )
             )
         collision = next((sort for sort in self.sorts if sort in reserved), None)
