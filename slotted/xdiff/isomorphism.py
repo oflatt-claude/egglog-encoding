@@ -19,8 +19,8 @@ away:
 * **A class's symmetry group is not in its node set.** A commutative class holds *one*
   node and a swap; a class without the swap holds the same one node. Comparing node sets
   alone cannot tell them apart, so the group is compared too -- recovered from the
-  reference with `eq` on two invocations, and from the encoding as the idempotent-free
-  self-loops `(RenamesToLeader c p c)` whose `p` permutes the class's slots.
+  reference with `eq` on two invocations, and from the encoding as the rows of
+  `(Symmetry c p)` whose `p` permutes the class's slots.
 * **A node is only defined up to those groups.** `k($0,$1)` and `k($1,$0)` are the same
   node of a commutative class, and the two sides need not store the same representative.
   So node equality quantifies over the parent's group and each child's group -- the
@@ -223,6 +223,10 @@ def read_json_graph(doc):
             slots_of[value] = slots
         elif op == SYM.renames and len(kids) == 3:
             loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[2])))
+        elif op == SYM.symmetry and len(kids) == 2:
+            # a symmetry is a renaming of a class onto ITSELF, so it reads here as the
+            # self-loop the rest of this function is written against
+            loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[0])))
         elif op == SYM.var:
             leaf_rows["var"] += 1
             if len(kids) != 1:
@@ -446,16 +450,16 @@ def build_encoding_graph(doc):
         if set(sym) == set(sym.values()) == set(g.slots[rep]):
             g.group[rep].add(frozenset(sym.items()))
         else:
-            issues.append(f"{a}: framed self-loop is not a permutation of {sorted(g.slots[rep])}")
+            issues.append(f"{a}: framed symmetry is not a permutation of {sorted(g.slots[rep])}")
 
-    # Matching consumes the ACTUAL self-loop facts, so do not repair a missing group
+    # Matching consumes the ACTUAL `Symmetry` rows, so do not repair a missing group
     # element in the reader. Require those rows to contain the identity and already be
     # closed, then require every non-self relation to be path-consistent modulo that
     # recorded group.
     for rep, perms in g.group.items():
         identity = frozenset((s, s) for s in g.slots[rep])
         if identity not in perms:
-            issues.append(f"{rep}: no identity RenamesToLeader self-loop")
+            issues.append(f"{rep}: no identity Symmetry row")
         closure = set(perms) | {identity}
         changed = True
         while changed:

@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer {
@@ -238,6 +238,74 @@ impl ContainerSort for SetSort {
         add_primitive_with_validator!(eg, "set-union"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.extend(ys.data);                  xs }}, set_union_validator);
         add_primitive_with_validator!(eg, "set-diff"       = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }}, set_diff_validator);
         add_primitive_with_validator!(eg, "set-intersect"  = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }}, set_intersect_validator);
+
+        // A set of renamings is a symmetry group of a slotted class -- the reference's
+        // `Group` -- every renaming of the class's own slots the class is equal to
+        // itself under. The encoding keeps each class's group as one such value and
+        // derives an index of its elements from it; these two keep the value itself
+        // well-formed, which its `set-union` merge alone cannot, since a merge only
+        // ever grows.
+        if let Some(map) = crate::prelude::container_sort_of::<MapSort>(&self.element)
+            && map.key().name() == "i64"
+            && map.key().name() == map.value().name()
+        {
+            let renaming = self.element.clone();
+            // `(group-restrict s cs)`: every element spelled on the slots `cs`, the
+            // identity renaming on the class's current slot set: `cs ∘ g ∘ cs`. A class
+            // that drops a slot restates its group with this, so no element names a
+            // slot the class no longer has.
+            add_primitive!(eg, "group-restrict" = {self.clone(): SetSort} |s: @SetContainer (arc.clone()), cs: @MapContainer (renaming.clone())| -?> @SetContainer (arc.clone()) {{
+                let restricted: Vec<BTreeMap<Value, Value>> = {
+                    let cv = state.container_values();
+                    s.data
+                        .iter()
+                        .map(|v| {
+                            let g = &cv.get_val::<MapContainer>(*v)?.data;
+                            Some(compose(&cs.data, &compose(g, &cs.data)))
+                        })
+                        .collect::<Option<Vec<_>>>()?
+                };
+                let data: BTreeSet<Value> = restricted
+                    .into_iter()
+                    .map(|m| state.register_container::<MapContainer>(MapContainer::renaming(m)))
+                    .collect();
+                Some(SetContainer { do_rebuild: false, data })
+            }});
+            // `(group-close s)`: the closure under composition, the group the elements
+            // generate. Elements are permutations of a finite slot set, so composing
+            // reaches every inverse on its own.
+            add_primitive!(eg, "group-close" = {self.clone(): SetSort} |s: @SetContainer (arc.clone())| -?> @SetContainer (arc.clone()) {{
+                let mut known: Vec<BTreeMap<Value, Value>> = {
+                    let cv = state.container_values();
+                    s.data
+                        .iter()
+                        .map(|v| Some(cv.get_val::<MapContainer>(*v)?.data.clone()))
+                        .collect::<Option<Vec<_>>>()?
+                };
+                let mut seen: BTreeSet<BTreeMap<Value, Value>> = known.iter().cloned().collect();
+                let mut frontier: Vec<usize> = (0..known.len()).collect();
+                while !frontier.is_empty() {
+                    let mut fresh = Vec::new();
+                    for &i in &frontier {
+                        for j in 0..known.len() {
+                            for m in [compose(&known[i], &known[j]), compose(&known[j], &known[i])] {
+                                if seen.insert(m.clone()) {
+                                    fresh.push(m);
+                                }
+                            }
+                        }
+                    }
+                    let start = known.len();
+                    known.extend(fresh);
+                    frontier = (start..known.len()).collect();
+                }
+                let data: BTreeSet<Value> = known
+                    .into_iter()
+                    .map(|m| state.register_container::<MapContainer>(MapContainer::renaming(m)))
+                    .collect();
+                Some(SetContainer { do_rebuild: false, data })
+            }});
+        }
     }
 
     fn reconstruct_termdag(

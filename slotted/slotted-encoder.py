@@ -32,6 +32,7 @@ class CarrierSymbols:
     subst_pending: str
     shape_equal: str
     invocation: str
+    symmetry: str
     group: str
 
     @classmethod
@@ -45,7 +46,8 @@ class CarrierSymbols:
             f"SubstPending_{index}",
             f"ShapeEqual_{index}",
             f"Invocation_{index}",
-            f"Group_{index}",
+            f"Symmetry_{index}",
+            f"EclassGroup_{index}",
         )
 
 
@@ -484,6 +486,17 @@ def shape_index(name, sig, symbols=None):
     which is how a child's symmetry becomes its parent's. Together they are the
     reference's shape hashcons and `determine_self_symmetries` (C14), and one walk
     serves both.
+
+    Two rules rather than one, because the two writes wait for different things. The
+    index write goes in as soon as the row and its children's groups are known. The
+    symmetry write also waits for the class's slots, because the symmetries are spelled
+    on them before they enter the group: a row may carry a slot its class has dropped,
+    and a symmetry over such a slot is what the group's own normalisation would strip
+    again -- written as it stands, every re-firing would grow the group and the
+    normalisation shrink it, and around a cycle of classes that never settles. Every
+    writer of the group writes restricted. The index write must not wait with it: made
+    to, it loses an identification on the BATAX-12 workload (one class more than the
+    reference), so the walk is done twice.
     """
     symbols = _symbols(symbols)
     _, edges, kids, _ = cols_of(sig)
@@ -495,8 +508,12 @@ def shape_index(name, sig, symbols=None):
 (rule ((= c {pattern(name, sig)})
        {bound}
        (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)}))))
-      ((set {key} (values c (vec-get sh {len(edges)})))
-       (set ({symbols.group} c) (symmetries-of sh {len(edges) + 1}))) :ruleset slotted)
+      ((set {key} (values c (vec-get sh {len(edges)})))) :ruleset slotted)
+(rule ((= c {pattern(name, sig)})
+       {bound}
+       (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)})))
+       (= cs ({symbols.class_slots} c)))
+      ((set ({symbols.group} c) (group-restrict (symmetries-of sh {len(edges) + 1}) cs))) :ruleset slotted)
 """
 
 
@@ -562,8 +579,14 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, symbols
     spans several values and `RenamesToLeader` holds both directions between them, so
     without an orientation the child pointer follows an edge one way, is rewritten back
     the next round, and the node row is deleted and rebuilt forever. `ordering-min` is
-    the direction the single-parent rule already establishes. When the class is unchanged
-    the atom holds trivially, so the self-symmetry case below is unaffected.
+    the direction the single-parent rule already establishes.
+
+    The child's own identity row is in the relation too, and the rule wants it: composing
+    with it narrows an edge that still names a slot the child has since dropped. Any
+    OTHER row from the child to itself is refused. A symmetry is not a row of this
+    relation, but egglog's own `union` can make one by identifying the two ends of an
+    edge, and rewriting a node through a symmetry of its child yields a row per group
+    element and no fixpoint.
     """
     symbols = _symbols(symbols)
     payloads, edges, kids, _ = cols_of(sig)
@@ -578,7 +601,9 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, symbols
 (rule (({symbols.renames} {kids[pos]} m c')
        (= node {pattern(name, sig, payloads=pays)}){conds}
        (= {kids[pos]} (ordering-max {kids[pos]} c'))    ; toward the leader only
-       ; if the class is unchanged then m must be idempotent: no self-symmetries
+       ; a row from the child to itself must be idempotent: a native union can turn an
+       ; edge into one, and composing a node's edge with a symmetry of its child would
+       ; rewrite the node once per group element and never settle
        (guard (or (bool-!= {kids[pos]} c') (bool= (compose m m) m)))
        ; and the new node must differ from the old one
        (guard (or (bool-!= {kids[pos]} c')
@@ -812,11 +837,14 @@ def carrier_core(symbols):
     return "\n".join(
         [
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
-            f";;; carrier {s.sort}: {s.renames}, {s.equated}, {s.class_slots}",
+            f";;; carrier {s.sort}: {s.renames}, {s.symmetry}, {s.equated}, {s.class_slots}",
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
             "",
             f"(sort {s.sort})",
             f"(constructor {s.var} (i64) {s.sort})",
+            # A follower's slots renamed onto its leader's, one row per follower, plus
+            # the identity on every leader so a query may ask for a class's leader
+            # without knowing whether it has one.
             f"(relation {s.renames} ({s.sort} Renaming {s.sort}))",
             f"(relation {s.equated} ({s.sort} Renaming {s.sort}))",
             f"(function {s.class_slots} ({s.sort}) Renaming :merge (map-intersect old new))",
@@ -828,9 +856,15 @@ def carrier_core(symbols):
             # The name of an invocation: a leader and a reading of its slots. Two values
             # set under one name are one invocation, and the merge makes them one value.
             f"(function {s.invocation} ({s.sort} Renaming) {s.sort} :merge ((union old new) old))",
-            # A class's symmetry group, as a set, so a node is spelled once over all the
-            # readings its children allow rather than once per reading (C14).
-            f"(function {s.group} ({s.sort}) Groups :merge (set-union old new))",
+            # A class's symmetry group -- the renamings of its own slots it is equal
+            # under -- as one value. Every rule that learns a symmetry writes it here,
+            # and `node-shape` takes it whole to spell a node once over every reading
+            # its children allow rather than once per reading (C14).
+            f"(function {s.group} ({s.sort}) Group :merge (set-union old new))",
+            # A materialized index of that group: one row per element, which is what a
+            # query joins to read a class under every spelling of one invocation (C5).
+            # Nothing writes it but the two view rules at the end of this core.
+            f"(relation {s.symmetry} ({s.sort} Renaming))",
             "",
             f'(set (SlottedNodeLayout "{s.var}" 1) ())',
             f"(set ({s.class_slots} ({s.var} 0)) (map-of 0 0))",
@@ -853,13 +887,28 @@ def carrier_core(symbols):
        (= csb ({s.class_slots} b)))
       (({s.renames} b (compose csb (compose (inverse m) csa)) a)) :ruleset slotted)""",
             "",
+            # A class equal to itself under `m` is a symmetry, spelled on the slots the
+            # class has now: an entry on a slot it has made redundant says nothing.
             f"""(rule (({s.equated} a m a)
        (= cs ({s.class_slots} a)))
-      (({s.renames} a (compose cs (compose m cs)) a)) :ruleset slotted)""",
+      ((set ({s.group} a) (set-of (compose cs (compose m cs))))) :ruleset slotted)""",
             "",
-            # Every class with a slot set has its identity loop, so a query can reach it.
+            # Every class with a slot set renames to itself by the identity, and has it
+            # as the unit of its group.
             f"""(rule ((= cs ({s.class_slots} c)))
-      (({s.renames} c cs c)) :ruleset slotted)""",
+      (({s.renames} c cs c)
+       (set ({s.group} c) (set-of cs))) :ruleset slotted)""",
+            "",
+            # And the identity is the ONLY row a class has to itself. egglog's own `union`
+            # can identify the two ends of an edge, which leaves one that is not; what it
+            # says is that the class is equal to itself under that renaming, so it is a
+            # symmetry and belongs in the group. Moving it is what lets every rule below
+            # read this relation as followers-and-identities.
+            f"""(rule (({s.renames} c m c)
+       (= cs ({s.class_slots} c))
+       (!= m cs))
+      ((set ({s.group} c) (set-of (compose cs (compose m cs))))
+       (delete ({s.renames} c m c))) :ruleset slotted)""",
             "",
             # Remove an edge whose leader changed after a native union.
             f"""(rule (({s.renames} f m l)
@@ -875,12 +924,27 @@ def carrier_core(symbols):
       ((set ({s.class_slots} a) (map-image (compose m slots))))
       :ruleset slotted)""",
             "",
-            # Close paths and reconcile competing leaders.
+            # A class's slots are closed under its symmetries: if `c = g*c` and `g` sends
+            # a slot the class has to one it does not, the two cannot be told apart, so
+            # both are redundant. Taking the image in either direction is what settles
+            # `f($0,$1) = f($1,$2)` on the empty slot set.
+            f"""(rule (({s.symmetry} c g) (= slots ({s.class_slots} c)))
+      ((set ({s.class_slots} c) (map-image (compose g slots))))
+      :ruleset slotted)""",
+            f"""(rule (({s.symmetry} c g)
+       (= gi (inverse g))
+       (= slots ({s.class_slots} c)))
+      ((set ({s.class_slots} c) (map-image (compose gi slots))))
+      :ruleset slotted)""",
+            "",
+            # Close paths and reconcile competing leaders. The only row from a class to
+            # itself is its identity, and a path through one restates the path it came
+            # from, so the middle of a path is never its own end. Composing an edge with
+            # a symmetry belongs to the invocation rule below, which keys the result
+            # rather than storing it as another edge.
             f"""(rule (({s.renames} e1 m12 e2)
        ({s.renames} e2 m23 e3)
-       (guard (or (bool-!= e2 e3)
-                  (bool= (compose m23 m23) m23)
-                  (bool= e1 e3))))
+       (!= e2 e3))
       (({s.equated} e1 (compose m12 m23) e3)) :ruleset slotted)""",
             "",
             # Only over edges already spelled on their classes' slots: an edge a narrowing
@@ -905,12 +969,37 @@ def carrier_core(symbols):
             "",
             # A follower's symmetries are its leader's, conjugated, and every rule that
             # reads a group reads it on the class a row or a child column names, which is
-            # a leader. So a loop on a value that has a leader is a copy no one reads,
-            # and there is one per member per group element.
+            # a leader. So a group on a value that has a leader is a copy no one reads,
+            # and it is emptied; its index rows go with it through the view rules below.
+            # Emptied rather than deleted, because the view can only follow a set that
+            # is there to compare against.
+            f"""(rule ((= s ({s.group} f))
+       (> (set-length s) 0)
+       ({s.renames} f m l)
+       (!= f l))
+      ((delete ({s.group} f))
+       (set ({s.group} f) (set-empty))) :ruleset slotted)""",
+            "",
+            # And its identity row, which the rule above leaves behind.
             f"""(rule (({s.renames} f g f)
        ({s.renames} f m l)
        (!= f l))
       ((delete ({s.renames} f g f))) :ruleset slotted)""",
+            "",
+            # A group is spelled on its class's slots and closed under composition, and
+            # one rule keeps it so. A symmetry outlives a narrowing of the slots: left as
+            # it was it would rename a slot the class no longer has, and every rule
+            # reading the group would carry that slot back in. And two nodes of one
+            # class each state their own symmetries, so the class's group is the one
+            # they generate. Whole-set, because the merge only ever unions: shrinking is
+            # a delete and a set, and two rules shrinking one set in one iteration would
+            # lose an edit or undo each other.
+            f"""(rule ((= s ({s.group} c))
+       (= cs ({s.class_slots} c))
+       (= s2 (group-close (group-restrict s cs)))
+       (!= s s2))
+      ((delete ({s.group} c))
+       (set ({s.group} c) s2)) :ruleset slotted)""",
             "",
             # A renaming outlives a narrowing of its classes' slots: restate it on what
             # they have now.
@@ -929,25 +1018,33 @@ def carrier_core(symbols):
        (delete ({s.var} v))) :ruleset slotted)""",
             "",
             f"({s.renames} ({s.var} 0) (map-insert (map-empty) 0 0) ({s.var} 0))",
+            f"(set ({s.group} ({s.var} 0)) (set-of (map-insert (map-empty) 0 0)))",
             "",
             # One egglog value per invocation: every member registers under the name of
             # each of its readings of the leader, one per symmetry, and the name's merge
             # unions members that share one. Keyed, so this costs one `set` per edge per
             # group element rather than a join over every pair of members.
             f"""(rule (({s.renames} a m c)
-       ({s.renames} c sym c))
+       ({s.symmetry} c sym))
       ((set ({s.invocation} c (compose m sym)) a)) :ruleset slotted)""",
             "",
-            # Every self-loop is an element of the class's group, and every element of
-            # the group is a self-loop. A node states its symmetries as a whole set, so
-            # this is where they become the rows a query and the closure rules read.
-            f"""(rule (({s.renames} c g c))
-      ((set ({s.group} c) (set-of g))) :ruleset slotted)""",
-            "",
-            f"""(rule ((Idx i)
+            # The index of the group: a row for every element, and none for anything
+            # else. These are the relation's only writers, so once the ruleset settles
+            # it says exactly what the group says. A group past the last index would be
+            # indexed in part, which the guard refuses outright.
+            f"""(rule ((GroupIdx i)
        (= s ({s.group} c))
        (= g (set-get s i)))
-      (({s.equated} c g c)) :ruleset slotted)""",
+      (({s.symmetry} c g)) :ruleset slotted)""",
+            "",
+            f"""(rule (({s.symmetry} c g)
+       (= s ({s.group} c))
+       (set-not-contains s g))
+      ((delete ({s.symmetry} c g))) :ruleset slotted)""",
+            "",
+            f"""(rule ((= s ({s.group} c))
+       (> (set-length s) {GROUP_INDICES}))
+      ((panic "a symmetry group has more elements than GroupIdx indexes")) :ruleset slotted)""",
             "",
             # Two classes met on one shape (C14): the shape index's merge block wrote the
             # equation here, and it enters the class relation like any other.
@@ -979,6 +1076,11 @@ CARRIER_SORT = "U"
 
 NAMING_INDICES = 64
 
+#: How many elements of a class's group the index rules read. The largest group the
+#: paper's workloads build is 288 elements (TTM's second phase); a class past this
+#: many stops the program rather than match under part of its group.
+GROUP_INDICES = 512
+
 
 def prelude():
     """The declarations no sort owns: renamings, refinement lists, and their indices.
@@ -993,11 +1095,15 @@ def prelude():
             "",
             ";; Every way a match's slots may be merged, and the indices to read one at.",
             "(sort Frames (Vec Frame))",
-            ";; A class's symmetries, and one such group per child column of a node.",
-            "(sort Groups (Set Renaming))",
-            "(sort GroupList (Vec Groups))",
+            ";; A class's symmetry group: the renamings of its slots it is equal under.",
+            "(sort Group (Set Renaming))",
+            ";; One group per child column of a node.",
+            "(sort Groups (Vec Group))",
+            ";; The indices a group's element index is read at.",
+            "(relation GroupIdx (i64))",
+            *(f"(GroupIdx {i})" for i in range(GROUP_INDICES)),
             ";; A node's edges in canonical spelling, and the renaming back to its own names.",
-            ";; Declared after `GroupList`, which is where `strong-shape` reads its groups.",
+            ";; Declared after `Groups`, which is where `node-shape` reads its groups.",
             "(sort Renamings (Vec Renaming))",
             "(relation Idx (i64))",
             *(f"(Idx {i})" for i in range(NAMING_INDICES)),
@@ -1999,9 +2105,9 @@ def compile_query(
 
     def symmetry(pv, syms):
         """A symmetry row for a repeated occurrence, so the match ranges over the group (C5)."""
-        table = lang.symbols_for(pvar_sorts[pv]).renames
+        table = lang.symbols_for(pvar_sorts[pv]).symmetry
         sv = named(f"sym_{label(pv)}")
-        syms.append(f"({table} {cls_of[pv]} {sv} {cls_of[pv]})")
+        syms.append(f"({table} {cls_of[pv]} {sv})")
         return " " + sv
 
     for idx, atom in enumerate(atoms):

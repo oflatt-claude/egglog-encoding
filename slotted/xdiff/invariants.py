@@ -78,7 +78,7 @@ def node_rules():
                 continue
             out.append(
                 f"(rule ((= n {pat})\n"
-                f"       ({X.SYM.renames} {kids[i]} s {kids[i]})\n"
+                f"       ({X.SYM.symmetry} {kids[i]} s)\n"
                 f"       (= s (compose s s))\n"
                 f"       (< (map-length s) (map-length {edges[i]})))\n"
                 f'      ((WideEdge "{name} child {i + 1}" {edges[i]} {kids[i]} s)) :ruleset obs)'

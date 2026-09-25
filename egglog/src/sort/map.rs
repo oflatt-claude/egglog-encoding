@@ -244,7 +244,10 @@ fn normalize_map_term(termdag: &mut TermDag, args: &[TermId]) -> Option<TermId> 
 /// `a ∘ b`, the map sending `x` to `a[b[x]]`: `b` applies first. Undefined
 /// wherever either step is, so the result is keyed on
 /// `{x ∈ dom(b) | b[x] ∈ dom(a)}`.
-fn compose(a: &BTreeMap<Value, Value>, b: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+pub(crate) fn compose(
+    a: &BTreeMap<Value, Value>,
+    b: &BTreeMap<Value, Value>,
+) -> BTreeMap<Value, Value> {
     b.iter()
         .filter_map(|(x, y)| a.get(y).map(|z| (*x, *z)))
         .collect()

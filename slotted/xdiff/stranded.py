@@ -1,14 +1,14 @@
 """Does a stranded node carry anything no visible node carries?
 
-A class holding a node but no `RenamesToLeader V s V` self-loop is invisible to
-every compiled rule, since they all join that self-loop to reach the class's
-symmetries. Whether that costs anything depends on whether some *visible* node is
-alpha-equivalent to the stranded one -- same operator, same children, edges equal
-up to one injective renaming of the node's own slots.
+A class holding a node but no `Symmetry V s` row is invisible to every compiled
+rule, since they all join that row to reach the class's symmetries. Whether that
+costs anything depends on whether some *visible* node is alpha-equivalent to the
+stranded one -- same operator, same children, edges equal up to one injective
+renaming of the node's own slots.
 
 This decides that question by pairing each invisible row against every visible one
 and searching for such a renaming. An empty report means the invariant holds on
-this case: every fact on a self-loop-less class is also on a self-looped one.
+this case: every fact on a symmetry-less class is also on one with symmetries.
 
 The observer rules are built from `slotted/languages/toy.egg`, the language the harness
 runs. Written over `App{n}` -- the string-headed constructors, which no generated case
@@ -52,7 +52,7 @@ def _observer():
     ]
     for name, sig in BINARY.items():
         pat = enc.pattern(name, sig)
-        out.append(f'(rule ((= V {pat}) ({X.SYM.renames} V s V)) ((WithSym "{name}" m1 c1 m2 c2)))')
+        out.append(f'(rule ((= V {pat}) ({X.SYM.symmetry} V s)) ((WithSym "{name}" m1 c1 m2 c2)))')
         out.append(f'(rule ((= V {pat})) ((NoSym "{name}" m1 c1 m2 c2)))')
     sizes = "\n".join(f"(print-size {n})" for n in BINARY)
     return "\n".join(

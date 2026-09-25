@@ -146,8 +146,9 @@ class Source:
         reserved = {
             "Renaming",
             "Frames",
+            "Group",
             "Groups",
-            "GroupList",
+            "GroupIdx",
             "Renamings",
             "Idx",
             "slotted",
@@ -165,6 +166,7 @@ class Source:
                     names.subst_pending,
                     names.shape_equal,
                     names.invocation,
+                    names.symmetry,
                     names.group,
                 )
             )
@@ -1041,11 +1043,10 @@ def compile_check(src, form):
         if kind in ("=", "!="):
             # UP TO A SYMMETRY of the class, which is not a weakening: a class equal to
             # its own slot-swap is reached by both renamings, so the two name one
-            # invocation. `(RenamesToLeader c g c)` is exactly the group, and every
-            # class has the identity in it, so a class without symmetries compares its
-            # renamings as they stand.
-            table = src.carriers[sort].renames
-            facts.append(f"({table} {a.cls} _gsym {a.cls})")
+            # invocation. Every class has the identity in its group, so a class without
+            # symmetries compares its renamings as they stand.
+            table = src.carriers[sort].symmetry
+            facts.append(f"({table} {a.cls} _gsym)")
             facts.append(f"(= {a.mp} (compose {b.mp} _gsym))")
         return claimed(body, facts, negative=kind.endswith("!="))
     if kind in ("holds", "not-holds"):

@@ -276,10 +276,10 @@ def rhs_text(t):
 # domain is exactly its child's slot set -- the reference asserts it outright, in
 # `check_internal_applied_id`. The encoding does not enforce it, and `X1` reaches a
 # state that breaks it; that is recorded here so a *new* violation still fails.
-# An idempotent self-loop on the child is a partial identity, so the child's live
+# An idempotent symmetry of the child is a partial identity, so the child's live
 # slots are inside its domain: one with fewer keys than the edge proves the edge names
 # slots the child does not have. Only narrower witnesses are used, which is what makes
-# this immune to the too-wide self-loops of open question 2.
+# this immune to the too-wide symmetries of open question 2.
 INVARIANT_OBS = """
 (ruleset inv)
 (relation WideEdge (String Renaming U Renaming))
@@ -294,7 +294,7 @@ def _invariant_rules():
         for i in range(1, n + 1):
             out.append(
                 f"(rule ((= v (App{n} f {cols}))\n"
-                f"       ({SYM.renames} c{i} s c{i})\n"
+                f"       ({SYM.symmetry} c{i} s)\n"
                 f"       (= s (compose s s))\n"
                 f"       (< (map-length s) (map-length m{i})))\n"
                 f"      ((WideEdge f m{i} c{i} s)) :ruleset inv)"
@@ -1150,8 +1150,8 @@ def curated():
     )
 
     # ---- symmetries ----------------------------------------------------------
-    # The encoding keeps a class's symmetries as self-loops in RenamesToLeader,
-    # and a repeated variable is checked by computing the symmetry it would need
+    # The encoding keeps a class's symmetries as rows of `Symmetry`, and a
+    # repeated variable is checked by computing the symmetry it would need
     # and looking it up. That only works if the stored set is CLOSED, not just a
     # set of generators: a lookup for a composite element has to succeed.
     #
@@ -1184,13 +1184,13 @@ def curated():
     )
 
     # S2 -- symmetry and redundancy at once. A redundant slot is recorded as a
-    # *partial* self-loop, so the self-loops are not a group but an inverse
-    # monoid. The worry is a computed symmetry that came out short (composition
-    # truncates) matching one of those partial maps and being accepted wrongly.
+    # *partial* symmetry, so the rows are not a group but an inverse monoid. The
+    # worry is a computed symmetry that came out short (composition truncates)
+    # matching one of those partial maps and being accepted wrongly.
     # `a` keeps two live slots with a swap between them, and a third slot that a
     # union has made redundant. The parent holds `a` at the identity beside `a`
     # under the swap, so the match needs the real symmetry while a partial
-    # self-loop is also present to be confused with it.
+    # symmetry is also present to be confused with it.
     Ar = ("k", ("g", V0, V1), V2)
     Arsw = ("k", ("g", V1, V0), V2)
     cs.append(
