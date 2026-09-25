@@ -11,7 +11,7 @@ Egglog has no notion of a slot, so the encoding puts one in: a child column
 becomes *two* columns, a renaming and a class, and a handful of relations track
 which invocation of a class a value stands for. Everything is ordinary egglog —
 the compiler emits it, nothing in the Rust is slotted-aware beyond a few
-primitives on renamings.
+primitives on renamings and on frames.
 
 `slotted/LANGUAGE.md` is the source language a person writes. This file is the
 level below it: what that language compiles *to*, and why each table exists.
@@ -28,7 +28,17 @@ The running example is:
 ```
 
 Run `python3 slotted/slotted-egglog.py FILE.egg --desugar` on any program to see
-its full encoding; every listing below is real output, with comments trimmed.
+its full encoding; every listing below is real output, with comments trimmed, except
+the one listing that Part II says it splits.
+
+**How to read this document.** Part I is the encoding, plainly: the tables, the rules
+that make them a slotted e-graph, and how a rewrite is matched and applied. Everything
+in Part I is correct on its own — strip the rest from a generated program and the
+tests pass — and it is what to read to understand *what* the encoding says. Part II is
+what the generator emits on top of it and why: each addition is a cost the plain
+encoding pays, the rule or table that removes it, and what it changed. The contract at
+the end numbers what a compiled rule asserts, clause by clause, and is what the code
+cites.
 
 # The idea in one paragraph
 
@@ -41,7 +51,9 @@ by the *same* renaming, up to a **symmetry** — a renaming of a class's slots t
 class is equal to itself under, which is what makes a commutative node one node
 and not two.
 
-# Tables, once per sort
+# Part I. The plain encoding
+
+## Tables, once per sort
 
 Everything in this section is emitted once per equality sort the program declares,
 with the sort's position as a suffix: a program with two slotted sorts gets
@@ -124,7 +136,8 @@ ruleset settles the index says exactly what the group says.
 
 ## The rules, once per sort
 
-Twenty-three rules and two facts, none of which mentions a constructor.
+Twenty-one rules and two facts, none of which mentions a constructor. Part II adds
+four more.
 
 **Orienting `Equated`.** The larger value is the follower, so a leader is the least
 member of its component. An equation of a class with *itself* is a symmetry rather than
@@ -225,20 +238,6 @@ differently between an edge and its restatement.
        (Equated b (compose (inverse m1) m2) c)) :ruleset slotted)
 ```
 
-**A follower keeps no symmetries.** Every rule that reads a group reads it off a class
-a row or a child column names, and those are leaders, so a group on a value that has a
-leader is a copy nothing reads. It is emptied, and its index rows go with it through the
-view rules below — emptied rather than deleted, because the view can only follow a set
-that is there to compare against. Its identity edge goes too.
-
-```
-(rule ((= s (EclassGroup f)) (> (set-length s) 0) (RenamesToLeader f m l) (!= f l))
-      ((delete (EclassGroup f))
-       (set (EclassGroup f) (set-empty))) :ruleset slotted)
-(rule ((RenamesToLeader f g f) (RenamesToLeader f m l) (!= f l))
-      ((delete (RenamesToLeader f g f))) :ruleset slotted)
-```
-
 **A renaming outlives a narrowing.** `ClassSlots` only ever shrinks, and an edge
 oriented before a class dropped a slot still names it. The edge is restated on what the
 classes have now; this is the one rule that deletes an edge without a leader having
@@ -289,12 +288,12 @@ identity as a fact.
 under `Invocation c (compose m sym)` for every symmetry `sym` of `c`, and two members
 that register under one name are unioned by the function's merge. This is where "the
 same class by the same renaming" becomes egglog equality, and why a claim's `=`
-compares renamings up to a symmetry. Nothing else depends on it, since rows live
-on leaders and parents are rewritten to leaders; what it keeps small is the graph. A
-built node whose class already existed is a value of its own until it is identified
-with the member it duplicates, and every such value carries an edge and slots that
-every rule over the graph then reads. The cost is one `set` per edge per element of the
-leader's group.
+compares renamings up to a symmetry: a `check` compares the classes two terms reach
+with egglog's `=`, which is only right once equal invocations are one value. It also
+keeps the graph small — a built node whose class already existed is a value of its own
+until it is identified with the member it duplicates, and every such value carries an
+edge and slots that every rule over the graph then reads. The cost is one `set` per
+edge per element of the leader's group.
 
 ```
 (rule ((RenamesToLeader a m c)
@@ -335,7 +334,7 @@ program instead.
       ((panic "a symmetry group has more elements than GroupIdx indexes")) :ruleset slotted)
 ```
 
-# Per-constructor machinery
+## Per-constructor machinery
 
 A child column expands to a renaming column and a class column, so
 `(constructor Add (Math Math) Math)` becomes:
@@ -346,8 +345,8 @@ A child column expands to a renaming column and a class column, so
 
 and `(Add $0 $1)` is stored as
 `(Add (map-of 0 0) (Var 0) (map-of 0 1) (Var 0))`. Each constructor then gets one
-block of rules: class slots, the shape index and its deletion, migration, and one
-child-update per child column.
+block of rules: class slots, the shape index, migration, and one child-update per child
+column.
 
 **Class slots**, an upper bound the merge narrows:
 
@@ -402,33 +401,6 @@ settles. The index write must not wait for the slots — made to, it loses an
 identification on the BATAX-12 workload — so the two writes are two rules and the walk
 runs twice.
 
-**One row per shape per class.** The index says which rows are one node; it removes
-none. A class can still hold two rows of one shape under two readings: the same node
-built twice in different frames, or a node and its image under a symmetry of a child.
-One row is enough. The merge block has already recorded the symmetry between the two
-readings, and a pattern reaches the other reading through the class's group (C5).
-So every row writes its shape into `_shapeof_Add`, canonical edges and reading as
-columns, and where two rows of one class have the same children and the same canonical
-edges, the one whose reading is the greater is deleted. Both rows are matched as rows,
-so the rule only ever compares nodes that exist.
-
-```
-(function _shapeof_Add (Renaming Math Renaming Math) (Renaming Renaming Renaming)
-  :merge (values new0 new1 new2))
-
-(rule ((= c (Add m1 c1 m2 c2))
-       (= sh (shape m1 m2)))
-      ((set (_shapeof_Add m1 c1 m2 c2) (values (vec-get sh 0) (vec-get sh 1) (vec-get sh 2)))) :ruleset slotted)
-
-(rule ((= c (Add m1 c1 m2 c2))
-       (= (values s1 s2 b1) (_shapeof_Add m1 c1 m2 c2))
-       (= c (Add n1 c1 n2 c2))
-       (= (values s1 s2 b2) (_shapeof_Add n1 c1 n2 c2))
-       (!= b1 b2)
-       (= b1 (ordering-max b1 b2)))
-      ((delete (Add m1 c1 m2 c2))) :ruleset slotted)
-```
-
 **Migration** rebuilds a follower's node in the leader's slot names and unions it into
 the leader. `R` takes the node's slots to the leader's, agreeing with the edge where
 the leader has the slot and minting a name where the class has dropped it. After this
@@ -469,10 +441,12 @@ such rule per child column; the one for the second column is the same with `m2` 
        (delete (Add m1 c1 m2 c2))) :ruleset slotted)
 ```
 
-Because the index's deletion and migration delete rows, a class keeps one row per
-shape — which is why a claim about a term matches it rather than spelling it out. A term the e-graph holds need not have a row under the spelling you wrote.
+Migration deletes rows, so a class need not have a row under the spelling you wrote —
+which is why a claim about a term matches it rather than spelling it out. In the plain
+encoding a class can still hold several rows of one node under several readings; Part
+II keeps one.
 
-# Binders
+## Binders
 
 `:binder i` marks a child column whose slot the node binds. The bound slot is
 stored as an edge `0 -> s` to `(Var 0)` like any other, so a binder is not a
@@ -498,7 +472,7 @@ renamed but not lost.
 When a bound slot collides with a free one the machinery renames the bound one
 first, to a slot the node does not use, which keeps it alpha-renameable.
 
-# Matching
+## Matching
 
 egglog finds the e-nodes a rule's left-hand side matches; what the match says about
 **slots** is a set of constraints on those nodes, checked by a handful of primitives
@@ -515,7 +489,7 @@ inside the same query. This section walks one rule through, the SDQL library's
 `Sum` binds `$x` and `$y` over its body (its `:binder 1 2` columns), so the rule pulls a
 singleton's key out of a sum when the key does not mention the bound variables.
 
-## Flattening
+### Flattening
 
 egglog matches one e-node per atom, so the left-hand side becomes depth-1 atoms, one
 per constructor, every child a pattern variable or a slot literal. The flattener names
@@ -534,7 +508,7 @@ row pattern with a variable per column: `cls_p` and `cls_t1` for the two classes
 edge is a renaming from the child class's slots to the node's; a binder column's edge
 sends `0` to the bound slot.
 
-## Occurrences
+### Occurrences
 
 The matched `Sum` node has slots numbered however the e-graph stores them, the matched
 `Sing` node has its own numbering, and so does every class a variable is bound to. The
@@ -583,7 +557,7 @@ The second block is the interesting one: the `Sum` atom put `Node(_p,1)` with
 parent's edge with the child's own slot. That is the reference matcher's `unify`,
 and it needs no order: the join takes the union of the equations and re-closes.
 
-## The frame
+### The frame
 
 A **frame** is the closure of these equations. Its **blocks** are the pattern's
 slots: two occurrences in one block are one slot, and the blocks are numbered
@@ -628,32 +602,24 @@ The primitives:
 | `(ren m "v")` | `v`'s renaming into the pattern's slots; a literal comes back as `{0 -> slot}` |
 | `(node-slots m uncovered covered bound)` | a built node's free slots from its named columns; `(without m slots bound)` for a built child under a binder |
 
-## The compiled rules
+### The compiled rule, plainly
 
-What `slotted-encoder.py` emits for `sum-fact-3`, with the `_0` that says which
-sort's tables these are dropped from the table names, and with the right-hand side
-written in the frame's own slots; the spelling it is actually emitted in is one
-optimization away, below. Names in quotes are the rule's own variables and literals,
-so a frame is keyed by the words the rule was written in.
-
-One rewrite becomes a relation and three rules. egglog joins a body's table atoms
-first and runs its primitives afterwards, once per matched row; had the index relation
-`Idx` been in the same body as the frame primitives, every frame would have been built
-once per index. So the first rule finds a match and stores its refinements; the second,
-in the `slotted-apply` ruleset, joins the stored row with `Idx`, reads one refinement,
-checks the conditions and acts; and the third deletes the row once that phase has read
-it (C13).
+What a rewrite means as one egglog rule, for `sum-fact-3`, with the `_0` that says
+which sort's tables these are dropped from the table names. Names in quotes are the
+rule's own variables and literals, so a frame is keyed by the words the rule was
+written in. This is the one listing the generator does not emit as it stands: Part II
+splits it in two at the point where the match is stored, and spells the right-hand
+side's inner node canonically. Folding the emitted rules back into this one and
+running the tests gives the same answers.
 
 ```
-(relation _matched_sum-fact-3 (Frames U U U U U))
-
 (rule (;; egglog's own match of the two atoms, one row pattern each: an ordinary
        ;; column is an edge and a class, a binder column an edge and the variable
        ;; class (Var 0)
        (= cls_p (Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1))
        (= cls_t1 (Sing e1_e1 cls_e1 e1_e2 cls_e2))
        ;; _t1 is bound by the first atom and read again by the second, so the second
-       ;; reading may differ by a symmetry of its class; one row per group element (C5)
+       ;; reading may differ by a symmetry of its class: one row per group element (C5)
        (Symmetry cls_t1 sym_t1)
        ;; what each atom's columns say about slots: each binding names the column's
        ;; variable or literal, its edge, and the exact slots of its class (C2, C4, C7)
@@ -669,11 +635,7 @@ it (C13).
        (= f (frame-join atom_p atom_t1))
        ;; spelled in the root's class slots, then every consistent merging of what the
        ;; pattern left open, the frame itself first (C8)
-       (= refined (refinements (anchor f "_p"))))
-      ;; the match, stored: its refinements and every class the action will read (C13)
-      ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)) :name "sum-fact-3")
-
-(rule ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)
+       (= refined (refinements (anchor f "_p")))
        ;; one refinement per index; `vec-get` is partial past the last (C8)
        (Idx choice)
        (= m (vec-get refined choice))
@@ -690,6 +652,140 @@ it (C13).
        (let built_sing_slots (map-union (node-slots m (names "e1") (names) (names)) built_sum_slots))
        ;; anchored at _p the root's renaming is the identity, so the equation the rule
        ;; means is egglog's own union (C11)
+       (union built_sing cls_p)) :name "sum-fact-3")
+```
+
+A right-hand side that is a bare variable is not a union: its renaming need not be the
+identity, so the rule states `(Equated cls_root (ren m "a") cls_a)` and the machinery
+orients it. A right-hand side that is a call, `(subst body $x t)`, is answered by the
+`slotted-subst` primitives, which copy one representative of the body and return an
+invocation that `SubstPending` carries back into the root's frame (C12).
+
+### When the rules run
+
+A user step is `(seq (run) (saturate (run slotted)))`: the rules, then the machinery to
+a fixed point, so a step means one round of every rule against a settled graph. Part
+II puts one more ruleset in between.
+
+# Part II. What the generator adds, and why
+
+Each of these is a cost the plain encoding pays, measured on the paper's SDQL
+workloads, and the table or rule that removes it. None changes an answer: the tests
+pass with every one of them stripped from a generated program, only slower — and the
+first one is what a redundancy-heavy test needs to finish at all.
+
+## One row per shape per class
+
+The index says which rows are one node; it removes none. A class can still hold two
+rows of one shape under two readings: the same node built twice in different frames,
+or a node and its image under a symmetry of a child. Every such row is matched, indexed
+and migrated again, and on `redundancy-tests.egg` the plain encoding does not finish.
+One row is enough. The merge block has already recorded the symmetry between the two
+readings, and a pattern reaches the other reading through the class's group (C5).
+So every row writes its shape into `_shapeof_Add`, canonical edges and reading as
+columns, and where two rows of one class have the same children and the same canonical
+edges, the one whose reading is the greater is deleted. Both rows are matched as rows,
+so the rule only ever compares nodes that exist.
+
+```
+(function _shapeof_Add (Renaming Math Renaming Math) (Renaming Renaming Renaming)
+  :merge (values new0 new1 new2))
+
+(rule ((= c (Add m1 c1 m2 c2))
+       (= sh (shape m1 m2)))
+      ((set (_shapeof_Add m1 c1 m2 c2) (values (vec-get sh 0) (vec-get sh 1) (vec-get sh 2)))) :ruleset slotted)
+
+(rule ((= c (Add m1 c1 m2 c2))
+       (= (values s1 s2 b1) (_shapeof_Add m1 c1 m2 c2))
+       (= c (Add n1 c1 n2 c2))
+       (= (values s1 s2 b2) (_shapeof_Add n1 c1 n2 c2))
+       (!= b1 b2)
+       (= b1 (ordering-max b1 b2)))
+      ((delete (Add m1 c1 m2 c2))) :ruleset slotted)
+```
+
+## One reading per coset of the pinned slots
+
+A nested pattern reads a class through one column of a parent row, and in Part I its
+atom ranges over the class's whole group: one row of `Symmetry` per element. On the
+TTM workload's second phase that gave `let-binop3` 166,415 distinct matches at the
+fixed point where the reference matcher makes some 14,000 over its whole run, and
+`sum-merge` ran the frame primitives on 150,944 candidates to keep 188.
+
+Two readings that agree on the slots the parent's *other* columns pin, and differ only
+on the rest, spell the parent row the same way up to a renaming of the parent's own
+slots — a symmetry of the parent's class, which the shape rule derives from that very
+row — so what the rule builds from one of them differs from the other's by that
+symmetry, and one of each coset suffices. Quotienting the readings this way took
+`let-binop3` to 15,513 and the workload from 67 s to 23 s; the matrix-multiplication
+workload went from 18.7 s to 9.1 s. This is the reference matcher's
+`get_group_compatible_weak_variants`, which enumerates a node's variants modulo its weak
+shape.
+
+`group-coset-reps` picks the least element per way the group acts on the pinned slots.
+The readings live in `CosetReps`, keyed by the class and the pinned slots, with
+`Reading` as their index kept by two view rules like the group's; a class has few
+distinct keys, however many rows read it. Each row records the key its columns give, in
+`_pinned_Add`, so a matching rule that holds the parent row looks the key up and joins
+the readings on it exactly — egglog cannot join on a value a primitive computes inside
+the same rule, and keying the readings by row instead multiplied the index's work by
+the number of rows. One rule per child column that is not a binder; a binder column's
+child is the variable class, which no atom reads, though its edge pins its slot.
+
+```
+(function CosetReps (Math Renaming) Group :merge new)
+(relation Reading (Math Renaming Renaming))
+(function _pinned_Add (Renaming Math Renaming Math i64) Renaming :merge new)
+
+(rule ((= row (Add m1 c1 m2 c2))
+       (= grp (EclassGroup c1))
+       (= pinned (map-domain (compose (map-image m2) m1))))
+      ((set (_pinned_Add m1 c1 m2 c2 1) pinned)
+       (set (CosetReps c1 pinned) (group-coset-reps grp pinned))) :ruleset slotted)
+(rule ((GroupIdx i) (= s (CosetReps c pinned)) (= g (set-get s i)))
+      ((Reading c pinned g)) :ruleset slotted)
+(rule ((Reading c pinned g) (= s (CosetReps c pinned)) (set-not-contains s g))
+      ((delete (Reading c pinned g))) :ruleset slotted)
+```
+
+In the compiled rule the `Symmetry` join of a nested root becomes a lookup and a join:
+
+```
+       (= pinned_t1 (_pinned_Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1 4))
+       (Reading cls_t1 pinned_t1 sym_t1)
+```
+
+A repeated occurrence that is not a nested root — a pattern variable written twice —
+still joins `Symmetry`, the whole group.
+
+## Store the match before acting
+
+egglog joins a body's table atoms first and runs its primitives afterwards, once per
+matched row. The plain rule joins `Idx` beside the frame primitives, so every frame is
+built once per index: sixty-four times. So the generator emits one relation and three
+rules per rewrite: the first finds a match and stores its refinements and the classes
+the action reads; the second, in the `slotted-apply` ruleset, joins the stored row
+with `Idx`, reads one refinement, checks the conditions and acts; and the third deletes
+the row once that phase has read it (C13). On the matrix-multiplication workload's
+first phase this took the run from 1.16 s to 0.18 s with one thread, the user rules'
+apply time, where `--timing-summary` books the primitives, falling from 820 ms to
+about 20 ms.
+
+```
+(relation _matched_sum-fact-3 (Frames U U U U U))
+
+(rule ((= cls_p (Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1))
+       ...
+       (= refined (refinements (anchor f "_p"))))
+      ;; the match, stored: its refinements and every class the action will read (C13)
+      ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)) :name "sum-fact-3")
+
+(rule ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)
+       (Idx choice)
+       (= m (vec-get refined choice))
+       (not-free m "$x" (names "e1"))
+       (not-free m "$y" (names "e1")))
+      (...the right-hand side, as below...
        (union built_sing cls_p))
       :ruleset slotted-apply :name "sum-fact-3/apply")
 
@@ -699,10 +795,25 @@ it (C13).
       :ruleset slotted-apply :name "sum-fact-3/drain")
 ```
 
-**Building canonically.** The action above says what the rule means, and every node in
-it is spelled in the frame's own slots. A node below the root is emitted differently:
-its edges go through `shape` first, so it is written in the canonical numbering and not
-in this rule's (C16).
+A user step becomes `(seq (run) (run slotted-apply) (saturate (run slotted)))`. egglog
+finds every match of a ruleset before it applies any action, so the drain never hides
+a row from the acting rule, and a row is gone after one phase whether or not a
+refinement passed the conditions; a match that recurs after the machinery has changed
+its nodes is found afresh.
+
+## Build below the root canonically
+
+The plain action spells every node it builds in the frame's own slots. Two rules that
+build one node in two frames then write two rows and reach two egglog values denoting
+one class, and the machinery has to find them equal, migrate the rows of one into the
+other, point every parent at the survivor and close the edges that all of that adds.
+That cascade runs per built node; removing it made the second-phase workloads three
+times faster. So a node below the root is emitted with its edges through `shape`
+first, in the canonical numbering and not in this rule's, and its edge into its parent
+is the renaming back to the frame, narrowed to the slots the node leaves free (C16).
+The root keeps the frame's spelling, since the action unions it with the root's class
+and an invocation there must be at the identity (C11), and `union` disposes of it at
+once.
 
 ```
 (let shape_sum (shape (ren m "R") (ren m "$x") (ren m "$y") (ren m "e2")))
@@ -715,25 +826,44 @@ in this rule's (C16).
 (let built_sing (Sing (ren m "e1") cls_e1 built_sum_edge built_sum))
 ```
 
-Two rules that build one node in two frames then write one row and reach one egglog
-value. Spelled in each rule's own slots they are two values denoting one class, and
-the machinery has to find them equal, migrate the rows of one into the other, point
-every parent at the survivor and close the edges that all of that adds. That cascade
-runs per built node. The root keeps the frame's spelling, since the action unions it
-with the root's class and an invocation there must be at the identity (C11), and
-`union` disposes of it at once.
+## A follower keeps nothing
 
-**When the rules run.** A user step is `(seq (run) (run slotted-apply) (saturate (run
-slotted)))`: the matching rules, then the acting and draining rules, then the machinery
-to a fixed point. egglog finds every match of a ruleset before it applies any action,
-so the drain never hides a row from the acting rule, and a row is gone after one phase
-whether or not a refinement passed the conditions; a match that recurs after the
-machinery has changed its nodes is found afresh. On the SDQL matrix-multiplication
-benchmark this took the run from 1.16 s to 0.18 s with one thread, the user rules'
-apply time, where `--timing-summary` books the primitives, falling from 820 ms to
-about 20 ms.
+Every rule that reads a group reads it off a class a row or a child column names, and
+those are leaders, so a group on a value that has a leader is a copy nothing reads —
+one row of it per member per group element, which was most of the edge relation. It is
+emptied, and its index rows go with it through the view rules; emptied rather than
+deleted, because the view can only follow a set that is there to compare against. Its
+identity edge goes too.
 
-## The contract
+```
+(rule ((= s (EclassGroup f)) (> (set-length s) 0) (RenamesToLeader f m l) (!= f l))
+      ((delete (EclassGroup f))
+       (set (EclassGroup f) (set-empty))) :ruleset slotted)
+(rule ((RenamesToLeader f g f) (RenamesToLeader f m l) (!= f l))
+      ((delete (RenamesToLeader f g f))) :ruleset slotted)
+```
+
+## Inside the primitives
+
+Three of the primitives do more than their signature says, for the same reason.
+
+`node-shape` walks the product of the children's groups once and returns the canonical
+edges, the renaming back, and the node's own symmetries together, where two walks —
+one for the key, one for the symmetries — used to cost twice.
+
+`group-coset-reps` chooses the least element of each coset, so the reading a rule sees
+does not depend on the order egglog stored the group in.
+
+`slotted-subst` copies one representative of the body — the smallest term, and among
+equal sizes the least canonical spelling, so every run copies the same one — and that
+choice depends only on the constructor tables. Within one rule-application phase every
+insert is staged, so the tables' versions hold still across all the calls of that
+phase: the primitive keeps every class's parsed nodes and its chosen term per version,
+and a memo of results shared by its class half and its frame half, which the rule calls
+with the same arguments. A call then walks only its own term. This took beta from
+1.2 ms a call to 0.13 ms.
+
+# The contract
 
 What a compiled rule asserts, clause by clause; `compile_query` and
 `compile_rule` in `slotted-encoder.py` name these where they emit them, and
@@ -762,8 +892,13 @@ slots and no others; a node may carry a slot its class has made redundant, and t
 slot is the node's alone.
 
 **C5. Repeated occurrences are compared up to symmetry.** A further occurrence of a
-bound variable joins its own symmetry row `(Symmetry cls_x sym_x)` and hands `sym_x` to
-its binding; one row per group element, so the match quantifies over the group.
+bound variable joins a symmetry row and hands `sym_x` to its binding, so the match
+quantifies over the group. The root of a nested atom — a flattener temp, met once as a
+column of its parent — looks up the slots the parent's other columns pin in
+`_pinned_F` and joins `(Reading cls_x pinned sym_x)`: one row per coset of those slots,
+since readings that differ elsewhere are related by a symmetry of the parent's class the
+shape index derives. Any other repeated occurrence joins `(Symmetry cls_x sym_x)`, one
+row per group element.
 
 **C6. Where two atoms agree on a variable, their occurrences are one.** The join
 identifies `Node(a, e(t))` and `Node(b, e'(t))` through `Var(v, t)`, which is the
@@ -845,6 +980,7 @@ reach one value. The root keeps the frame's spelling (C11).
 | `slotted/LANGUAGE.md` | the source language: every form and why it exists |
 | `slotted/slotted-egglog.py` | the compiler — a program in that language to egglog |
 | `slotted/slotted-encoder.py` | the encoding itself: the tables above, and rule compilation |
+| `egglog/src/sort/frame.rs` | the frame and its primitives; `map.rs`, `set.rs` and `vec.rs` hold the renaming, group and shape primitives; `slotted_subst.rs` the substitution |
 | `slotted/tests/` | tests written in the source language |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
@@ -853,4 +989,4 @@ reach one value. The root keeps the frame's spelling (C11).
 
 Nothing here is hand-maintained egglog: the machinery is generated from the
 constructors a program declares, so a worked example is a program you run
-through the compiler rather than a file that can drift from it.
+through `--desugar`, not a file to keep in step by hand.

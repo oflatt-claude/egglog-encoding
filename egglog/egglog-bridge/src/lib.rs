@@ -1944,6 +1944,13 @@ impl TableAction {
 
     /// Like [`TableAction::for_each`], but stops as soon as `f`
     /// returns `false`.
+    /// The version of the table this action reads. Two reads at one version see the
+    /// same rows, so a caller may keep what it derived from a scan across calls;
+    /// within one rule-application phase every insert is staged, so it holds still.
+    pub fn version(&self, state: &ExecutionState) -> core_relations::TableVersion {
+        state.get_table(self.table).version()
+    }
+
     pub fn for_each_while(&self, state: &ExecutionState, mut f: impl FnMut(ScanEntry<'_>) -> bool) {
         let schema_math = self.table_math;
         let imp = state.get_table(self.table);

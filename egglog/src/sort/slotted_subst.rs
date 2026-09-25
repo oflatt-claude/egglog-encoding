@@ -45,11 +45,37 @@
 //! onto another member of `body`'s class.
 
 use super::*;
-use crate::exec_state::RegistrySealed;
+use crate::exec_state::{Internal, RegistrySealed, lookup_action};
+use core_relations::TableVersion;
 use egglog_bridge::{TableAction, TableKind};
 use hashbrown::HashMap;
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
+
+/// Every node row of the language's constructors, bucketed by the class that holds it:
+/// constructor index into the cache's `names`, then the row's columns.
+type Rows = HashMap<Value, Vec<(usize, SmallVec<[Value; 8]>)>>;
+
+/// What one call of the primitive is a function of, besides the tables.
+type ResultKey = (Value, Slot, Value, Value, Value, String);
+
+/// What the primitive keeps between calls, valid while the constructor tables are at
+/// the versions recorded. Within one rule-application phase every insert is staged,
+/// so the versions hold still across all the calls of that phase: one scan serves
+/// them all, and the class half and the frame half of one substitution, called with
+/// the same arguments, compute it once.
+pub(crate) struct SubstCache {
+    versions: Vec<TableVersion>,
+    names: Vec<String>,
+    var: Value,
+    class_slots: String,
+    /// Every class's parsed nodes and the one rooting its smallest term.
+    terms: Terms,
+    /// Every slot any edge names, which a fresh name must avoid.
+    slots_used: BTreeSet<Slot>,
+    results: HashMap<ResultKey, Option<(Value, Ren)>>,
+}
 
 /// The name of the primitive, as written in an egglog program.
 pub const SLOTTED_SUBST: &str = "slotted-subst";
@@ -181,14 +207,12 @@ fn substitute(
     state: &mut FullState<'_, '_>,
     body: Value,
     x: Slot,
-    var: Value,
     t_ren: &Ren,
     t: Value,
-    class_slots: &str,
+    cache: &SubstCache,
 ) -> Result<Option<(Value, Ren)>, String> {
-    let layouts = Layouts::load(state, class_slots)?;
-    let terms = collect_terms(state, body, var, &layouts, class_slots)?;
-    if !terms.best.contains_key(&body) {
+    let class_slots = cache.class_slots.as_str();
+    if !cache.terms.best.contains_key(&body) {
         return Ok(None);
     }
 
@@ -203,21 +227,15 @@ fn substitute(
         ));
     }
 
-    let mut used = BTreeSet::from([x]);
+    let mut used = cache.slots_used.clone();
+    used.insert(x);
     used.extend(frame.keys().chain(frame.values()).copied());
     used.extend(t_ren.keys().chain(t_ren.values()).copied());
-    for nodes in terms.nodes.values() {
-        for node in nodes {
-            for edge in &node.edges {
-                used.extend(edge.ren.keys().chain(edge.ren.values()).copied());
-            }
-        }
-    }
 
     let mut rebuild = Rebuild {
-        terms,
+        terms: &cache.terms,
         x,
-        var,
+        var: cache.var,
         t_ren: t_ren.clone(),
         t,
         memo: HashMap::new(),
@@ -227,8 +245,8 @@ fn substitute(
     Ok(rebuild.go(state, body, frame))
 }
 
-struct Rebuild {
-    terms: Terms,
+struct Rebuild<'t> {
+    terms: &'t Terms,
     x: Slot,
     var: Value,
     t_ren: Ren,
@@ -238,7 +256,7 @@ struct Rebuild {
     class_slots: String,
 }
 
-impl Rebuild {
+impl Rebuild<'_> {
     /// Substitute inside `c`, whose slots `m` carries into `body`'s frame.
     /// Returns the resulting class and the renaming carrying its slots into
     /// that same frame.
@@ -359,20 +377,19 @@ fn intern(state: &mut FullState<'_, '_>, ren: &Ren) -> Value {
 // One `eclass_enodes` call per reachable class, and that scans every
 // constructor table: an output-column index, or one grouped pass over every
 // table, would replace this loop without changing the result.
-fn collect_terms(
+/// Every class's nodes, parsed, and the one rooting its smallest term, for the
+/// whole e-graph at once. Only the constructors the layout metadata names are read --
+/// a relation is a constructor too, so the machinery's own tables would otherwise be
+/// scanned with them. Built once per version of the tables, so the calls of one phase
+/// share it, and each of them walks only its own term.
+fn build_terms(
     state: &FullState<'_, '_>,
-    root: Value,
-    var: Value,
     layouts: &Layouts,
+    var: Value,
     class_slots: &str,
-) -> Result<Terms, String> {
-    // Every node row, bucketed by the class that holds it: the walk below asks for one
-    // class at a time, and each such ask would otherwise read every table again. Only
-    // the constructors the layout metadata names are read -- a relation is a
-    // constructor too, so the machinery's own tables would otherwise be scanned with
-    // them -- and only the rows the walk reaches are parsed.
-    let names: Vec<&String> = layouts.constructors.keys().collect();
-    let mut rows: HashMap<Value, Vec<(usize, SmallVec<[Value; 8]>)>> = HashMap::new();
+    names: &[String],
+) -> Result<(Terms, BTreeSet<Slot>), String> {
+    let mut rows: Rows = HashMap::new();
     for (id, name) in names.iter().enumerate() {
         state
             .constructor_enodes(name, |enode| {
@@ -384,38 +401,40 @@ fn collect_terms(
             })
             .map_err(|err| format!("reading the e-nodes of {name}: {err}"))?;
     }
-
     let mut nodes: HashMap<Value, Vec<Node>> = HashMap::new();
     let mut public: HashMap<Value, BTreeSet<Slot>> = HashMap::new();
-    let mut stack = vec![root];
-    while let Some(eclass) = stack.pop() {
-        if nodes.contains_key(&eclass) {
-            continue;
-        }
+    let mut slots_used = BTreeSet::new();
+    for (eclass, parsed_rows) in &rows {
         // The class's public frame tells a name that is the class's slot from one
         // private to a node -- a binder's, or a redundant slot's -- when the two share
         // a number.
         public.insert(
-            eclass,
-            class_slots_if_present(state, class_slots, eclass)?
+            *eclass,
+            class_slots_if_present(state, class_slots, *eclass)?
                 .map(|frame| frame.keys().copied().collect())
                 .unwrap_or_default(),
         );
-        let parsed: Vec<Node> = rows
-            .get(&eclass)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
+        // A row that does not parse as a term of this carrier -- another sort's, with
+        // its own variable class -- is no term here, and no walk reaches it.
+        let parsed: Vec<Node> = parsed_rows
             .iter()
-            .map(|(ctor, children)| parse_node(state, layouts, var, names[*ctor], children))
-            .collect::<Result<_, _>>()?;
-        stack.extend(parsed.iter().flat_map(Node::children));
-        nodes.insert(eclass, parsed);
+            .filter_map(|(ctor, children)| {
+                parse_node(state, layouts, var, &names[*ctor], children)
+                    .map_err(|err| {
+                        log::debug!("{SLOTTED_SUBST}: skipping a row of {}: {err}", names[*ctor])
+                    })
+                    .ok()
+            })
+            .collect();
+        for node in &parsed {
+            for edge in &node.edges {
+                slots_used.extend(edge.ren.keys().chain(edge.ren.values()).copied());
+            }
+        }
+        nodes.insert(*eclass, parsed);
     }
-
-    Ok(Terms {
-        best: cheapest(&nodes, &public),
-        nodes,
-    })
+    let best = cheapest(&nodes, &public);
+    Ok((Terms { nodes, best }, slots_used))
 }
 
 /// The e-node rooting each class's smallest term, by term size, and among equal
@@ -1008,6 +1027,8 @@ pub(crate) struct SlottedSubst {
     pub(crate) renaming: ArcSort,
     /// The sort of a slot name: the renaming sort's key sort, `i64`.
     pub(crate) slot: ArcSort,
+    /// The scan and the results kept between calls, shared by the two halves.
+    pub(crate) cache: Arc<Mutex<Option<SubstCache>>>,
 }
 
 impl Primitive for SlottedSubst {
@@ -1067,14 +1088,67 @@ impl FullPrim for SlottedSubst {
                 )
             })
             .collect();
-        let (class, frame) = match substitute(&mut state, body, x, var, &t_ren, t, &class_slots) {
-            Ok(Some(result)) => result,
-            Ok(None) => return None,
+        let layouts = match Layouts::load(&state, &class_slots) {
+            Ok(layouts) => layouts,
             Err(err) => {
                 log::error!("{}: {err}", self.name());
                 return None;
             }
         };
+        let mut names: Vec<String> = layouts.constructors.keys().cloned().collect();
+        names.sort();
+        let mut versions = Vec::with_capacity(names.len());
+        for name in &names {
+            match lookup_action(state.registry(), name) {
+                Ok(action) => versions.push(action.version(state.es())),
+                Err(err) => {
+                    log::error!("{}: {err}", self.name());
+                    return None;
+                }
+            }
+        }
+        let mut guard = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let stale = !matches!(&*guard, Some(cache)
+            if cache.versions == versions && cache.names == names && cache.var == var && cache.class_slots == class_slots);
+        if stale {
+            let (terms, slots_used) = match build_terms(&state, &layouts, var, &class_slots, &names)
+            {
+                Ok(built) => built,
+                Err(err) => {
+                    log::error!("{}: {err}", self.name());
+                    return None;
+                }
+            };
+            *guard = Some(SubstCache {
+                versions,
+                names,
+                var,
+                class_slots: class_slots.clone(),
+                terms,
+                slots_used,
+                results: HashMap::new(),
+            });
+        }
+        let cache = guard.as_mut().expect("the cache was just filled");
+        let key: ResultKey = (body, x, var, args[3], t, class_slots);
+        let result = match cache.results.get(&key) {
+            Some(result) => result.clone(),
+            None => {
+                let result = match substitute(&mut state, body, x, &t_ren, t, cache) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        log::error!("{}: {err}", self.name());
+                        return None;
+                    }
+                };
+                cache.results.insert(key, result.clone());
+                result
+            }
+        };
+        let (class, frame) = result?;
         Some(match self.half {
             Half::Class => class,
             Half::Frame => intern(&mut state, &frame),

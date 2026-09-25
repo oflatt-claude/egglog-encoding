@@ -24,6 +24,8 @@ Usage:
     python3 slotted/eval.py sdql --kernel batax --phase 2nd --rules 12
                                                     the suite's goal-directed BATAX subset
     python3 slotted/eval.py --side encoding,ref-nested --counts --jsonl eval.jsonl
+    python3 slotted/eval.py sdql --phase 1st --html eval.html   the table as a page too
+    python3 slotted/eval.py --from eval.jsonl                    the table again, from the record
 
 Budgets default to the paper's: 6 iterations for the array goal, and for SDQL the
 artifact runner's per-workload limit (13 for BATAX's first phase, 12 for its second, 30
@@ -31,9 +33,13 @@ for the rest); `--rounds` overrides them all. `--timeout` defaults to the artifa
 300 s per run. Both binaries are built in release first, the oracle without the crate's
 `checks` feature, since the differential harness uses debug, checked builds and those
 numbers mean nothing; `--no-build` skips that when they are known current. Each
-reference row says which oracle answered. Rows go to a Markdown table on stdout and,
-with `--jsonl`, one JSON object per row appended to a file, which is what a graph should
-be drawn from.
+reference row says which oracle answered. The table on stdout has one row per workload and
+one column per side, holding that side's seconds when it reached the goal and what
+happened otherwise; `--long` gives one row per run with every field instead, `--html`
+writes the table as a page too, and `--jsonl` appends one JSON object per run to a file,
+which is what a graph should be drawn from. `--from FILE` prints the table from such a
+file without running anything, the latest record per workload and side, so collection
+and reporting are separate steps.
 """
 
 import argparse
@@ -98,6 +104,31 @@ class Row:
         d["xmulti"] = str(XMULTI.relative_to(ROOT))
         d["date"] = datetime.datetime.now().isoformat(timespec="seconds")
         return d
+
+    @classmethod
+    def from_dict(cls, d):
+        """A row back from its `--jsonl` record."""
+        row = cls(d["study"], d["case"], d["side"], d["rounds"], d.get("rules"))
+        for field in ("goal", "saturated", "seconds", "classes", "nodes", "checks"):
+            setattr(row, field, d.get(field, getattr(row, field)))
+        row.paper = tuple(d["paper"]) if d.get("paper") is not None else None
+        return row
+
+
+def load_rows(path):
+    """Every run recorded in a `--jsonl` file, the latest per workload and side kept,
+    in the order they first appeared."""
+    latest, order = {}, []
+    with path.open() as f:
+        for line in f:
+            if not line.strip():
+                continue
+            row = Row.from_dict(json.loads(line))
+            key = (row.study, row.case, row.rounds, row.rules, row.side)
+            if key not in latest:
+                order.append(key)
+            latest[key] = row
+    return [latest[key] for key in order]
 
 
 # ------------------------------------------------------------------ the reference
@@ -276,37 +307,88 @@ def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
 
 
 # ------------------------------------------------------------------------- output
-def markdown(rows):
-    head = [
-        "study",
-        "case",
-        "side",
-        "rounds",
-        "goal",
-        "saturated",
-        "seconds",
-        "classes",
-        "nodes",
-        "paper (iters, nodes, classes, sat.)",
-    ]
-    out = ["| " + " | ".join(head) + " |", "|" + "|".join(" --- " for _ in head) + "|"]
+LONG_HEAD = (
+    "study",
+    "case",
+    "side",
+    "rounds",
+    "goal",
+    "saturated",
+    "seconds",
+    "classes",
+    "nodes",
+    "paper (iters, nodes, classes, sat.)",
+)
+
+
+def paper_cell(r):
+    return "" if r.paper is None else f"{r.paper[0]}, {r.paper[1]:,}, {r.paper[2]:,}, {'yes' if r.paper[3] else 'no'}"
+
+
+def long_cells(r):
+    """One row's cells, as text, in `LONG_HEAD` order: the record of one run."""
+    secs = "" if r.seconds is None else f"{r.seconds:.1f}"
+    side = r.side if r.checks is None else f"{r.side} (checks {r.checks})"
+    counts = [str(r.classes or ""), str(r.nodes or "")]
+    return [r.study, r.case, side, str(r.rounds), r.goal, r.saturated, secs, *counts, paper_cell(r)]
+
+
+def timing_cell(r):
+    """How one side did on one workload: its seconds when it reached the goal, and
+    otherwise what happened, with the seconds it spent; counts follow when asked for."""
+    secs = "" if r.seconds is None else f"{r.seconds:.1f}"
+    cell = secs if r.goal == "yes" else (f"{r.goal} ({secs})" if secs and r.goal in ("no", "error") else r.goal)
+    if r.classes is not None:
+        cell += f" [{r.classes}/{r.nodes}]"
+    return cell
+
+
+def pivot(rows, sides):
+    """One row per workload, one column per side, holding that side's timing."""
+    labels = {}
     for r in rows:
-        secs = "" if r.seconds is None else f"{r.seconds:.1f}"
-        side = r.side if r.checks is None else f"{r.side} (checks {r.checks})"
-        cells = [
-            r.study,
-            r.case,
-            side,
-            str(r.rounds),
-            r.goal,
-            r.saturated,
-            secs,
-            str(r.classes or ""),
-            str(r.nodes or ""),
-            "" if r.paper is None else f"{r.paper[0]}, {r.paper[1]:,}, {r.paper[2]:,}, {'yes' if r.paper[3] else 'no'}",
-        ]
-        out.append("| " + " | ".join(cells) + " |")
-    return "\n".join(out)
+        labels.setdefault(r.side, set()).add("" if r.checks is None else f" (checks {r.checks})")
+    columns = [s + ("".join(labels[s]) if s in labels and len(labels[s]) == 1 else "") for s in sides]
+    head = ["study", "case", "rounds", *columns, "paper (iters, nodes, classes, sat.)"]
+    by_case, order = {}, []
+    for r in rows:
+        key = (r.study, r.case, r.rounds)
+        if key not in by_case:
+            by_case[key] = {"paper": paper_cell(r)}
+            order.append(key)
+        by_case[key][r.side] = timing_cell(r)
+    table = []
+    for study, case, rounds in order:
+        got = by_case[(study, case, rounds)]
+        table.append([study, case, str(rounds), *(got.get(s, "") for s in sides), got["paper"]])
+    return head, table
+
+
+def markdown(head, table):
+    """A Markdown table with its columns padded, so it also reads aligned in a terminal."""
+    table = [list(head)] + table
+    widths = [max(len(row[i]) for row in table) for i in range(len(head))]
+
+    def line(cells):
+        return "| " + " | ".join(c.ljust(w) for c, w in zip(cells, widths, strict=True)) + " |"
+
+    rule = "|" + "|".join("-" * (w + 2) for w in widths) + "|"
+    return "\n".join([line(table[0]), rule] + [line(c) for c in table[1:]])
+
+
+def html(head, table):
+    """The same table as a standalone page."""
+    import html as h
+
+    head_cells = "".join(f"<th>{h.escape(c)}</th>" for c in head)
+    body = "\n".join("<tr>" + "".join(f"<td>{h.escape(c)}</td>" for c in cells) + "</tr>" for cells in table)
+    return (
+        "<!doctype html><meta charset=utf-8><title>slotted eval</title>"
+        "<style>body{font:14px system-ui,sans-serif;margin:2em}table{border-collapse:collapse}"
+        "th,td{border:1px solid #bbb;padding:4px 10px;text-align:left;white-space:nowrap}"
+        "th{background:#eee}tr:nth-child(even){background:#f7f7f7}</style>"
+        f"<table><thead><tr>{head_cells}</tr></thead><tbody>\n{body}\n</tbody></table>\n"
+    )
 
 
 def main():
@@ -331,6 +413,9 @@ def main():
     ap.add_argument("--counts", action="store_true", help="also count the final e-graph's classes and nodes")
     ap.add_argument("--timeout", type=int, default=300, help="seconds per run; the artifact's own budget")
     ap.add_argument("--jsonl", type=Path, help="append one JSON object per row here")
+    ap.add_argument("--from", dest="report", type=Path, help="print the table from this JSONL instead of running")
+    ap.add_argument("--html", type=Path, help="also write the table as an HTML page here")
+    ap.add_argument("--long", action="store_true", help="one row per run with every field, instead of the timing pivot")
     ap.add_argument("--no-build", action="store_true", help="skip `cargo build`; the binaries are known current")
     args = ap.parse_args()
 
@@ -338,6 +423,31 @@ def main():
     bad = [s for s in sides if s not in SIDES]
     if bad:
         ap.error(f"unknown side {bad}; choose from {SIDES}")
+
+    if args.report:
+        # reporting alone: the rows come from an earlier run's record
+        rows = [r for r in load_rows(args.report) if r.side in sides]
+        if args.study != "all":
+            rows = [r for r in rows if r.study == args.study]
+        if args.side == "all":
+            sides = tuple(s for s in SIDES if any(r.side == s for r in rows))
+    else:
+        rows = collect(args, sides, ap)
+
+    head, table = (LONG_HEAD, [long_cells(r) for r in rows]) if args.long else pivot(rows, sides)
+    print(markdown(head, table))
+    if args.html:
+        args.html.write_text(html(head, table))
+        print(f"wrote {args.html}", file=sys.stderr)
+    if args.jsonl and not args.report:
+        with args.jsonl.open("a") as f:
+            for r in rows:
+                f.write(json.dumps(r.as_dict()) + "\n")
+    return 0 if all(r.goal == "yes" for r in rows) else 1
+
+
+def collect(args, sides, ap):
+    """Build both sides and run the requested workloads: the rows a report is made of."""
     if not args.no_build:
         build()
     for tool in (EGGLOG, XMULTI):
@@ -353,13 +463,7 @@ def main():
         if args.rules == 12 and workloads != [("batax", "2nd")]:
             ap.error("--rules 12 is the suite's BATAX second-phase subset: use --kernel batax --phase 2nd")
         rows += list(sdql_rows(workloads, args.rules, args.rounds, sides, args.counts, args.timeout))
-
-    print(markdown(rows))
-    if args.jsonl:
-        with args.jsonl.open("a") as f:
-            for r in rows:
-                f.write(json.dumps(r.as_dict()) + "\n")
-    return 0 if all(r.goal == "yes" for r in rows) else 1
+    return rows
 
 
 if __name__ == "__main__":

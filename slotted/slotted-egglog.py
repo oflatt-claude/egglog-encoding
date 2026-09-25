@@ -168,6 +168,8 @@ class Source:
                     names.invocation,
                     names.symmetry,
                     names.group,
+                    names.coset_reps,
+                    names.reading,
                 )
             )
         collision = next((sort for sort in self.sorts if sort in reserved), None)

@@ -34,6 +34,8 @@ class CarrierSymbols:
     invocation: str
     symmetry: str
     group: str
+    coset_reps: str
+    reading: str
 
     @classmethod
     def create(cls, sort, index):
@@ -48,6 +50,8 @@ class CarrierSymbols:
             f"Invocation_{index}",
             f"Symmetry_{index}",
             f"EclassGroup_{index}",
+            f"CosetReps_{index}",
+            f"Reading_{index}",
         )
 
 
@@ -475,6 +479,53 @@ def shape_dedup(name, sig, symbols=None):
 """
 
 
+def pinned_table(name):
+    """The function holding, per row and child column, the slots the row's other
+    columns pin -- the key under which the column's class keeps its readings."""
+    return f"_pinned_{name}"
+
+
+def declare_pinned_table(name, sig, symbols=None):
+    """`(function _pinned_F (row... i64) Renaming)`: a matching rule that holds the
+    parent row looks its key up here and joins the readings on it exactly."""
+    symbols = _symbols(symbols)
+    cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
+    return f"(function {pinned_table(name)} ({cols} i64) Renaming :merge new)\n"
+
+
+def coset_readings(name, sig, symbols=None):
+    """One rule per child column: the slots this row's other columns pin, and the
+    readings a pattern needs of the column's class, one per coset of them (C5).
+
+    A nested atom reads its class through one column of the parent row. Two readings
+    that agree on the slots the parent's other columns pin, and differ only on the rest,
+    give right-hand sides that differ by a renaming of the parent's own slots -- a
+    symmetry of the parent's class, since the row reads the same either way, and one the
+    shape index derives from the row itself. So the match needs one reading per way the
+    group acts on the pinned slots, and the rest would only rebuild what that symmetry
+    already says. This is the reference matcher's `get_group_compatible_weak_variants`:
+    variants of a node modulo its weak shape. A binder column's child is the variable
+    class, which no atom reads, so it gets no rule, but its edge pins its slot."""
+    symbols = _symbols(symbols)
+    _, edges, kids, _ = cols_of(sig)
+    kid_cols = [c for c in sig if c in SLOTTED]
+    row = pattern(name, sig)
+    cols = row[len(name) + 2 : -1]
+    out = []
+    for j, (e, k) in enumerate(zip(edges, kids, strict=True)):
+        if kid_cols[j] is BINDER:
+            continue
+        pinned_node = fold("map-union", [f"(map-image {o})" for i, o in enumerate(edges) if i != j], "(map-empty)")
+        out.append(f"""\
+(rule ((= row {row})
+       (= grp ({symbols.group} {k}))
+       (= pinned (map-domain (compose {pinned_node} {e}))))
+      ((set ({pinned_table(name)} {cols} {j + 1}) pinned)
+       (set ({symbols.coset_reps} {k} pinned) (group-coset-reps grp pinned))) :ruleset slotted)
+""")
+    return "\n".join(out)
+
+
 def shape_index(name, sig, symbols=None):
     """Every row into the index, spelled the way every reading of its children agrees
     on, and what the row says about its own class's symmetries.
@@ -770,6 +821,11 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
             declare_shapeof_table(name, sig, symbols),
             shape_dedup(name, sig, symbols),
         ]
+        out += [
+            ";; the readings a pattern needs of each child: one per coset of the slots the other columns pin (C5)",
+            declare_pinned_table(name, sig, symbols),
+            coset_readings(name, sig, symbols),
+        ]
         out += [";; migration: move a follower's node into the leader's frame", migration(name, sig, symbols)]
         for pos in range(len(kids)):
             if kid_cols[pos] is BINDER:
@@ -865,6 +921,16 @@ def carrier_core(symbols):
             # query joins to read a class under every spelling of one invocation (C5).
             # Nothing writes it but the two view rules at the end of this core.
             f"(relation {s.symmetry} ({s.sort} Renaming))",
+            # The readings a pattern needs of a class it reaches through one column of
+            # a parent row: one group element per way the group acts on the slots the
+            # parent's OTHER columns pin, given as an identity renaming (C5). Readings
+            # that differ only on the other slots are related by a symmetry of the
+            # parent's class, which the shape index derives, so one of each suffices.
+            # Keyed by the class and the pinned slots; the per-constructor rules fill
+            # it, and give each row the key its columns need.
+            f"(function {s.coset_reps} ({s.sort} Renaming) Group :merge new)",
+            # Its index, one row per representative, which is what a matching rule joins.
+            f"(relation {s.reading} ({s.sort} Renaming Renaming))",
             "",
             f'(set (SlottedNodeLayout "{s.var}" 1) ())',
             f"(set ({s.class_slots} ({s.var} 0)) (map-of 0 0))",
@@ -1041,6 +1107,17 @@ def carrier_core(symbols):
        (= s ({s.group} c))
        (set-not-contains s g))
       ((delete ({s.symmetry} c g))) :ruleset slotted)""",
+            "",
+            # The index of the readings, kept the same way.
+            f"""(rule ((GroupIdx i)
+       (= s ({s.coset_reps} c pinned))
+       (= g (set-get s i)))
+      (({s.reading} c pinned g)) :ruleset slotted)""",
+            "",
+            f"""(rule (({s.reading} c pinned g)
+       (= s ({s.coset_reps} c pinned))
+       (set-not-contains s g))
+      ((delete ({s.reading} c pinned g))) :ruleset slotted)""",
             "",
             f"""(rule ((= s ({s.group} c))
        (> (set-length s) {GROUP_INDICES}))
@@ -2103,11 +2180,23 @@ def compile_query(
     frame_bugs = sorted(b for b in bugs if b in FRAME_BUGS)  # committed by every atom
     rooted = {}  # how many atoms each variable has rooted: three atoms on one class are three nodes
 
-    def symmetry(pv, syms):
-        """A symmetry row for a repeated occurrence, so the match ranges over the group (C5)."""
-        table = lang.symbols_for(pvar_sorts[pv]).symmetry
+    parent_col = {}  # a variable first met as a child: the parent's constructor, its columns, and the column index
+
+    def symmetry(pv, syms, root=False):
+        """A symmetry row for a repeated occurrence, so the match ranges over the group (C5).
+
+        The root of a nested atom -- a flattener temp, met once as a column of its
+        parent -- ranges over one reading per coset of the slots the parent's other
+        columns pin, read off `Reading`; anything else ranges over the whole group."""
+        names = lang.symbols_for(pvar_sorts[pv])
         sv = named(f"sym_{label(pv)}")
-        syms.append(f"({table} {cls_of[pv]} {sv})")
+        if root and pv in parent_col and fname(pv).startswith("_t"):
+            opname, node_cols, j = parent_col[pv]
+            pinned = named(f"pinned_{label(pv)}")
+            syms.append(f"(= {pinned} ({pinned_table(opname)} {node_cols} {j}))")
+            syms.append(f"({names.reading} {cls_of[pv]} {pinned} {sv})")
+        else:
+            syms.append(f"({names.symmetry} {cls_of[pv]} {sv})")
         return " " + sv
 
     for idx, atom in enumerate(atoms):
@@ -2135,7 +2224,7 @@ def compile_query(
         again = aroot in seen and "no-symmetry" not in bugs
         if frame_bugs:
             bindings.append(f"(bugs{quoted(frame_bugs)})")
-        bindings.append(f'(root "{fname(aroot)}" {root_slots}{symmetry(aroot, syms) if again else ""})')
+        bindings.append(f'(root "{fname(aroot)}" {root_slots}{symmetry(aroot, syms, root=True) if again else ""})')
         seen.add(aroot)
         for j, (k, kid_sort, e) in enumerate(zip(kids, op.kid_sorts, edges, strict=True)):
             if k[0] == "pv":
@@ -2160,7 +2249,11 @@ def compile_query(
                 cols.append(cv)
                 reached.append((k[1], cv, kid_sort, j))
                 bindings.append(f"(leaf {e})")
-        body.append(f"(= {rv} {node_expr(op, edges, cols, pays, pay_name)})")
+        node = node_expr(op, edges, cols, pays, pay_name)
+        body.append(f"(= {rv} {node})")
+        for j, k in enumerate(kids):
+            if k[0] == "pv":
+                parent_col.setdefault(k[1], (opname, node[len(opname) + 2 : -1], j + 1))
         for term, cv, kid_sort, j in reached:
             table = lang.symbols_for(kid_sort).renames
             body.append(f"({table} {lang.enc(term, kid_sort)} {named(f'leafren{idx}_{j}')} {cv})")

@@ -391,7 +391,22 @@ fn main() {
         .collect();
     if !nested.is_empty() {
         let mut saturated = false;
-        for _ in 0..spec.rounds {
+        // `XMULTI_DEBUG=1` counts each nested rule's matches per round, the way the
+        // multipattern loop below reports its own, so the two matchers and the
+        // encoding can be compared on match counts.
+        let debug_nested: Vec<(usize, Pattern<L>)> = if std::env::var("XMULTI_DEBUG").is_ok() {
+            spec.rules
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| Some((i, Pattern::parse(r.nested_lhs.as_ref()?).ok()?)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for round in 0..spec.rounds {
+            for (i, pat) in &debug_nested {
+                eprintln!("round {round} nested-rule {i}: {} match(es)", ematch_all(&eg, pat).len());
+            }
             if !apply_rewrites(&mut eg, &nested) {
                 saturated = true;
                 break;

@@ -305,6 +305,34 @@ impl ContainerSort for SetSort {
                     .collect();
                 Some(SetContainer { do_rebuild: false, data })
             }});
+            // `(group-coset-reps s pinned)`: one element per way the group can act on
+            // the slots `pinned` (an identity renaming on a subset of the class's
+            // slots): of the elements that agree on those slots, the least. A pattern
+            // that reads a class through a column whose parent pins only `pinned`
+            // needs one reading per coset; readings that differ elsewhere are related
+            // by a symmetry of the parent's class, which the shape index derives.
+            add_primitive!(eg, "group-coset-reps" = {self.clone(): SetSort} |s: @SetContainer (arc.clone()), pinned: @MapContainer (renaming.clone())| -?> @SetContainer (arc.clone()) {{
+                let mut least: BTreeMap<BTreeMap<i64, i64>, (BTreeMap<i64, i64>, Value)> = BTreeMap::new();
+                {
+                    let (bv, cv) = (state.base_values(), state.container_values());
+                    let pinned = slot_map(bv, &pinned.data);
+                    for v in s.data.iter().copied() {
+                        let g = slot_map(bv, &cv.get_val::<MapContainer>(v)?.data);
+                        let on_pinned: BTreeMap<i64, i64> = g
+                            .iter()
+                            .filter(|(k, _)| pinned.contains_key(k))
+                            .map(|(k, x)| (*k, *x))
+                            .collect();
+                        match least.get(&on_pinned) {
+                            Some((best, _)) if *best <= g => {}
+                            _ => {
+                                least.insert(on_pinned, (g, v));
+                            }
+                        }
+                    }
+                }
+                Some(SetContainer { do_rebuild: false, data: least.into_values().map(|(_, v)| v).collect() })
+            }});
         }
     }
 

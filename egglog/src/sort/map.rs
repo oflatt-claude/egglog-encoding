@@ -777,6 +777,9 @@ impl ContainerSort for MapSort {
                 // `FullPrim`: see `crate::sort::slotted_subst`. Its result is an
                 // invocation, so it takes two names to read one -- the class and
                 // the renaming placing it in `body`'s frame.
+                // The two halves are called with the same arguments in one action, so
+                // they share what one call computes.
+                let cache = std::sync::Arc::new(std::sync::Mutex::new(None));
                 for half in [
                     crate::sort::slotted_subst::Half::Class,
                     crate::sort::slotted_subst::Half::Frame,
@@ -786,6 +789,7 @@ impl ContainerSort for MapSort {
                             half,
                             renaming: arc.clone(),
                             slot: self.key.clone(),
+                            cache: cache.clone(),
                         },
                         None,
                     );

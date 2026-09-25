@@ -601,7 +601,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 }
 
-fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
+pub(crate) fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
     registry.lookup_table(name).cloned().ok_or_else(|| {
         ApiError::MissingTable {
             name: name.to_string(),
