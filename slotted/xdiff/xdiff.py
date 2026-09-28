@@ -282,6 +282,8 @@ def rhs_text(t):
 # this immune to the too-wide symmetries of open question 2.
 INVARIANT_OBS = """
 (ruleset inv)
+(relation ObsSym (U Renaming))
+(rule ((GroupIdx i) (= s (EclassGroup_0 c)) (= g (set-get s i))) ((ObsSym c g)) :ruleset inv)
 (relation WideEdge (String Renaming U Renaming))
 (relation NotInjective (Renaming))
 """
@@ -294,7 +296,7 @@ def _invariant_rules():
         for i in range(1, n + 1):
             out.append(
                 f"(rule ((= v (App{n} f {cols}))\n"
-                f"       ({SYM.symmetry} c{i} s)\n"
+                f"       (ObsSym c{i} s)\n"
                 f"       (= s (compose s s))\n"
                 f"       (< (map-length s) (map-length m{i})))\n"
                 f"      ((WideEdge f m{i} c{i} s)) :ruleset inv)"
@@ -307,7 +309,7 @@ def _invariant_rules():
     out.append(
         f"(rule (({SYM.renames} a m b) (!= (map-length m) (map-length (map-image m)))) ((NotInjective m)) :ruleset inv)"
     )
-    out += ["(run inv 1)", "(print-size WideEdge)", "(print-size NotInjective)"]
+    out += ["(run inv 2)", "(print-size WideEdge)", "(print-size NotInjective)"]
     return "\n".join(out)
 
 

@@ -32,7 +32,6 @@ class CarrierSymbols:
     subst_pending: str
     shape_equal: str
     invocation: str
-    symmetry: str
     group: str
     coset_reps: str
     reading: str
@@ -48,7 +47,6 @@ class CarrierSymbols:
             f"SubstPending_{index}",
             f"ShapeEqual_{index}",
             f"Invocation_{index}",
-            f"Symmetry_{index}",
             f"EclassGroup_{index}",
             f"CosetReps_{index}",
             f"Reading_{index}",
@@ -292,7 +290,7 @@ def layout(name, sig, heads=()):
     Column indices are zero-based indices into the encoded constructor inputs, after
     every slotted source column has expanded to ``Renaming <carrier>``.
     """
-    physical, edges, payloads = 0, [], []
+    physical, edges, payloads, sorts = 0, [], [], []
     child_positions = []
     for col in sig:
         if col in SLOTTED:
@@ -301,10 +299,15 @@ def layout(name, sig, heads=()):
             physical += 2
         else:
             payloads.append(physical)
+            sorts.append(col)
             physical += 1
 
     out = [f'(set (SlottedNodeLayout "{name}" {physical}) ())']
     out += [f'(set (SlottedEdgeLayout "{name}" {edge}) ())' for edge in edges]
+    # a payload's sort, so the substitution spells it as its value when it ranks terms
+    out += [
+        f'(set (SlottedPayloadLayout "{name}" {col} "{sort}") ())' for col, sort in zip(payloads, sorts, strict=True)
+    ]
 
     bound = [i for i, col in enumerate(child_positions) if col is BINDER]
     if bound:
@@ -434,11 +437,12 @@ def shapeof_table(name):
 
 
 def declare_shapeof_table(name, sig, symbols=None):
-    """`(function _shapeof_F (row...) (s1 ... back))`: a row's canonical edges and the
+    """`(function _shapeof_F (row...) (s1 ... back))`: a row's canonical edges -- the
+    least spelling over its children's groups, what `shape_index` walks -- and the
     renaming back to its own names, as columns, so two rows of one class with one shape
     meet in a hash join rather than in a join over every two rows with the same
-    children (C14). A row's shape depends on its edges alone, so an entry outlives its
-    row harmlessly and a rebuild never changes its value."""
+    children (C14). A row's shape depends on its edges and its children's groups
+    alone, so an entry outlives its row harmlessly, and a group that grows rewrites it."""
     symbols = _symbols(symbols)
     _, edges, _, _ = cols_of(sig)
     cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
@@ -449,32 +453,30 @@ def declare_shapeof_table(name, sig, symbols=None):
 
 def shape_dedup(name, sig, symbols=None):
     """One row per shape per class: of two live rows of one class with the same children
-    and the same shape, the one whose renaming back to the class is the greater goes.
+    and the same shape, the one whose edges are the greater goes.
 
-    The reading it stood for is a symmetry the shape index has recorded, and a pattern
-    reads the survivor through the class's self-loops. Two rows that agree only after
-    permuting a child's slots are two spellings the e-graph keeps, as the reference
-    does: the index identifies them, this rule does not remove either. Every row's shape is computed
-    once into `_shapeof_F`, and the two rows are joined on equal shape columns, so the
-    work is linear in duplicates rather than quadratic in rows sharing children (C14).
-    Only live rows take part, which is what keeps this sound across unions and
-    migrations."""
+    The two are one node: the same node built twice in different frames, or a node
+    and its image under a symmetry of a child -- two spellings the reference's hashcons
+    folds into one row, and so does this. The reading the deleted row stood for is a
+    symmetry the shape index has recorded, and a pattern reads the survivor through the
+    class's self-loops and its children's groups (C5). `shape_index` computes every
+    row's shape once into `_shapeof_F`, and the two rows are joined on equal shape
+    columns, so the work is linear in duplicates rather than quadratic in rows sharing
+    children (C14). The rows are compared whole, as vectors of their edges, so of any
+    two exactly one goes. Only live rows take part, which is what keeps this sound
+    across unions and migrations."""
     _, edges, _, _ = cols_of(sig)
     other = [f"n{i + 1}" for i in range(len(edges))]
     ss = [f"s{i + 1}" for i in range(len(edges))]
-    k = len(edges)
-    columns = " ".join(f"(vec-get sh {i})" for i in range(k + 1))
     return f"""\
-(rule ((= c {pattern(name, sig)})
-       (= sh (shape {" ".join(edges)})))
-      ((set {pattern(shapeof_table(name), sig)} (values {columns}))) :ruleset slotted)
-
 (rule ((= c {pattern(name, sig)})
        (= (values {" ".join(ss)} b1) {pattern(shapeof_table(name), sig)})
        (= c {pattern(name, sig, edges=other)})
        (= (values {" ".join(ss)} b2) {pattern(shapeof_table(name), sig, edges=other)})
-       (!= b1 b2)
-       (= b1 (ordering-max b1 b2)))
+       (= v1 (vec-of {" ".join(edges)}))
+       (= v2 (vec-of {" ".join(other)}))
+       (!= v1 v2)
+       (= v1 (ordering-max v1 v2)))
       ((delete {pattern(name, sig)})) :ruleset slotted)
 """
 
@@ -526,6 +528,19 @@ def coset_readings(name, sig, symbols=None):
     return "\n".join(out)
 
 
+def syms_table(name):
+    """The function holding, per row, the symmetries its shape walk found."""
+    return f"_syms_{name}"
+
+
+def declare_syms_table(name, sig, symbols=None):
+    """`(function _syms_F (row...) Group)`: what the index rule's walk said about the
+    row's own class, kept so the symmetry rule reads it rather than walking again."""
+    symbols = _symbols(symbols)
+    cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
+    return f"(function {syms_table(name)} ({cols}) Group :merge new)\n"
+
+
 def shape_index(name, sig, symbols=None):
     """Every row into the index, spelled the way every reading of its children agrees
     on, and what the row says about its own class's symmetries.
@@ -539,15 +554,16 @@ def shape_index(name, sig, symbols=None):
     serves both.
 
     Two rules rather than one, because the two writes wait for different things. The
-    index write goes in as soon as the row and its children's groups are known. The
-    symmetry write also waits for the class's slots, because the symmetries are spelled
-    on them before they enter the group: a row may carry a slot its class has dropped,
-    and a symmetry over such a slot is what the group's own normalisation would strip
-    again -- written as it stands, every re-firing would grow the group and the
-    normalisation shrink it, and around a cycle of classes that never settles. Every
-    writer of the group writes restricted. The index write must not wait with it: made
-    to, it loses an identification on the BATAX-12 workload (one class more than the
-    reference), so the walk is done twice.
+    index write goes in as soon as the row and its children's groups are known, and
+    keeps what the walk said about the row's own class in `_syms_F`. The symmetry write
+    also waits for the class's slots, because the symmetries are spelled on them before
+    they enter the group: a row may carry a slot its class has dropped, and a symmetry
+    over such a slot is what the group's own normalisation would strip again -- written
+    as it stands, every re-firing would grow the group and the normalisation shrink it,
+    and around a cycle of classes that never settles. Every writer of the group writes
+    restricted. The index write must not wait with it: made to, it loses an
+    identification on the BATAX-12 workload (one class more than the reference). So the
+    second rule reads the kept symmetries rather than walking again.
     """
     symbols = _symbols(symbols)
     _, edges, kids, _ = cols_of(sig)
@@ -555,16 +571,20 @@ def shape_index(name, sig, symbols=None):
     bound = "\n       ".join(f"(= {named[i]} ({symbols.group} {k}))" for i, k in enumerate(kids))
     canon = [f"(vec-get sh {i})" for i in range(len(edges))]
     key = pattern(shape_table(name), sig, edges=canon)
+    row = pattern(name, sig)
+    cols = row[len(name) + 2 : -1]
+    shapeof = " ".join(f"(vec-get sh {i})" for i in range(len(edges) + 1))
     return f"""\
-(rule ((= c {pattern(name, sig)})
+(rule ((= c {row})
        {bound}
        (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)}))))
-      ((set {key} (values c (vec-get sh {len(edges)})))) :ruleset slotted)
-(rule ((= c {pattern(name, sig)})
-       {bound}
-       (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)})))
+      ((set {key} (values c (vec-get sh {len(edges)})))
+       (set {pattern(shapeof_table(name), sig)} (values {shapeof}))
+       (set ({syms_table(name)} {cols}) (symmetries-of sh {len(edges) + 1}))) :ruleset slotted)
+(rule ((= c {row})
+       (= syms ({syms_table(name)} {cols}))
        (= cs ({symbols.class_slots} c)))
-      ((set ({symbols.group} c) (group-restrict (symmetries-of sh {len(edges) + 1}) cs))) :ruleset slotted)
+      ((set ({symbols.group} c) (group-restrict syms cs))) :ruleset slotted)
 """
 
 
@@ -813,12 +833,13 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
             declare_shape_table(name, sig, symbols),
         ]
         out += [
-            ";; every row into the index, and what it says about its class's symmetries",
+            ";; every row into the index, its shape for the dedup, and what it says about its class's symmetries",
+            declare_syms_table(name, sig, symbols),
+            declare_shapeof_table(name, sig, symbols),
             shape_index(name, sig, symbols),
         ]
         out += [
-            ";; one row per shape per class: rows meet on equal shape columns, the greater reading goes",
-            declare_shapeof_table(name, sig, symbols),
+            ";; one row per shape per class: rows meet on equal shape columns, the greater goes",
             shape_dedup(name, sig, symbols),
         ]
         out += [
@@ -893,7 +914,7 @@ def carrier_core(symbols):
     return "\n".join(
         [
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
-            f";;; carrier {s.sort}: {s.renames}, {s.symmetry}, {s.equated}, {s.class_slots}",
+            f";;; carrier {s.sort}: {s.renames}, {s.group}, {s.equated}, {s.class_slots}",
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
             "",
             f"(sort {s.sort})",
@@ -917,10 +938,6 @@ def carrier_core(symbols):
             # and `node-shape` takes it whole to spell a node once over every reading
             # its children allow rather than once per reading (C14).
             f"(function {s.group} ({s.sort}) Group :merge (set-union old new))",
-            # A materialized index of that group: one row per element, which is what a
-            # query joins to read a class under every spelling of one invocation (C5).
-            # Nothing writes it but the two view rules at the end of this core.
-            f"(relation {s.symmetry} ({s.sort} Renaming))",
             # The readings a pattern needs of a class it reaches through one column of
             # a parent row: one group element per way the group acts on the slots the
             # parent's OTHER columns pin, given as an identity renaming (C5). Readings
@@ -993,14 +1010,10 @@ def carrier_core(symbols):
             # A class's slots are closed under its symmetries: if `c = g*c` and `g` sends
             # a slot the class has to one it does not, the two cannot be told apart, so
             # both are redundant. Taking the image in either direction is what settles
-            # `f($0,$1) = f($1,$2)` on the empty slot set.
-            f"""(rule (({s.symmetry} c g) (= slots ({s.class_slots} c)))
-      ((set ({s.class_slots} c) (map-image (compose g slots))))
-      :ruleset slotted)""",
-            f"""(rule (({s.symmetry} c g)
-       (= gi (inverse g))
-       (= slots ({s.class_slots} c)))
-      ((set ({s.class_slots} c) (map-image (compose gi slots))))
+            # `f($0,$1) = f($1,$2)` on the empty slot set. One firing per group and slot
+            # set, over the whole group; the merge intersects.
+            f"""(rule ((= grp ({s.group} c)) (= slots ({s.class_slots} c)))
+      ((set ({s.class_slots} c) (group-slot-closure grp slots)))
       :ruleset slotted)""",
             "",
             # Close paths and reconcile competing leaders. The only row from a class to
@@ -1086,29 +1099,19 @@ def carrier_core(symbols):
             f"({s.renames} ({s.var} 0) (map-insert (map-empty) 0 0) ({s.var} 0))",
             f"(set ({s.group} ({s.var} 0)) (set-of (map-insert (map-empty) 0 0)))",
             "",
-            # One egglog value per invocation: every member registers under the name of
-            # each of its readings of the leader, one per symmetry, and the name's merge
-            # unions members that share one. Keyed, so this costs one `set` per edge per
-            # group element rather than a join over every pair of members.
+            # One egglog value per invocation: every member registers under the canonical
+            # name of its reading of the leader -- the least renaming in its coset of the
+            # group -- and the name's merge unions members that share one. One `set` per
+            # edge, whatever the group holds.
             f"""(rule (({s.renames} a m c)
-       ({s.symmetry} c sym))
-      ((set ({s.invocation} c (compose m sym)) a)) :ruleset slotted)""",
+       (= grp ({s.group} c))
+       (= name (coset-min m grp)))
+      ((set ({s.invocation} c name) a)) :ruleset slotted)""",
             "",
-            # The index of the group: a row for every element, and none for anything
+            # The index of the readings: a row for every element, and none for anything
             # else. These are the relation's only writers, so once the ruleset settles
-            # it says exactly what the group says. A group past the last index would be
+            # it says exactly what the set says. A set past the last index would be
             # indexed in part, which the guard refuses outright.
-            f"""(rule ((GroupIdx i)
-       (= s ({s.group} c))
-       (= g (set-get s i)))
-      (({s.symmetry} c g)) :ruleset slotted)""",
-            "",
-            f"""(rule (({s.symmetry} c g)
-       (= s ({s.group} c))
-       (set-not-contains s g))
-      ((delete ({s.symmetry} c g))) :ruleset slotted)""",
-            "",
-            # The index of the readings, kept the same way.
             f"""(rule ((GroupIdx i)
        (= s ({s.coset_reps} c pinned))
        (= g (set-get s i)))
@@ -1119,9 +1122,19 @@ def carrier_core(symbols):
        (set-not-contains s g))
       ((delete ({s.reading} c pinned g))) :ruleset slotted)""",
             "",
-            f"""(rule ((= s ({s.group} c))
+            # Repair: the representatives are a function of the group as it stands. A
+            # row whose class id was merged into another's carries a value written under
+            # an older group, and `:merge new` keeps whichever of the two rows egglog
+            # took as newer -- so a stored value that disagrees with the group is rewritten.
+            f"""(rule ((= s ({s.coset_reps} c pinned))
+       (= grp ({s.group} c))
+       (= fresh (group-coset-reps grp pinned))
+       (!= s fresh))
+      ((set ({s.coset_reps} c pinned) fresh)) :ruleset slotted)""",
+            "",
+            f"""(rule ((= s ({s.coset_reps} c pinned))
        (> (set-length s) {GROUP_INDICES}))
-      ((panic "a symmetry group has more elements than GroupIdx indexes")) :ruleset slotted)""",
+      ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted)""",
             "",
             # Two classes met on one shape (C14): the shape index's merge block wrote the
             # equation here, and it enters the class relation like any other.
@@ -1202,6 +1215,7 @@ def multi_sort_core(carriers):
             "(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)",
             "(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)",
             "(function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)",
+            "(function SlottedPayloadLayout (String i64 String) Unit :no-merge :internal-hidden)",
             "",
         ]
     )
@@ -2182,22 +2196,30 @@ def compile_query(
 
     parent_col = {}  # a variable first met as a child: the parent's constructor, its columns, and the column index
 
-    def symmetry(pv, syms, root=False):
-        """A symmetry row for a repeated occurrence, so the match ranges over the group (C5).
+    groups = {}  # a class's group, looked up once, for every further occurrence of its variable
+
+    def occurrence(pv, syms, root=False):
+        """What follows a repeated occurrence's binding, so the match quantifies over the
+        class's group (C5).
 
         The root of a nested atom -- a flattener temp, met once as a column of its
         parent -- ranges over one reading per coset of the slots the parent's other
-        columns pin, read off `Reading`; anything else ranges over the whole group."""
+        columns pin, read off `Reading`, one query row each. Any other further
+        occurrence hands its binding the class's whole group, and the frame decides
+        the reading in `refinements`, once the rest of the pattern has pinned both
+        occurrences' slots: usually one element fits, or none."""
         names = lang.symbols_for(pvar_sorts[pv])
-        sv = named(f"sym_{label(pv)}")
-        if root and pv in parent_col and fname(pv).startswith("_t"):
+        if root and pv in parent_col and fname(pv).startswith("_"):
+            sv = named(f"sym_{label(pv)}")
             opname, node_cols, j = parent_col[pv]
             pinned = named(f"pinned_{label(pv)}")
             syms.append(f"(= {pinned} ({pinned_table(opname)} {node_cols} {j}))")
             syms.append(f"({names.reading} {cls_of[pv]} {pinned} {sv})")
-        else:
-            syms.append(f"({names.symmetry} {cls_of[pv]} {sv})")
-        return " " + sv
+            return " " + sv
+        if pv not in groups:
+            groups[pv] = named(f"grp_{label(pv)}")
+            syms.append(f"(= {groups[pv]} ({names.group} {cls_of[pv]}))")
+        return " " + groups[pv]
 
     for idx, atom in enumerate(atoms):
         aroot, opname, kids = atom[0], atom[1], atom[2]
@@ -2224,7 +2246,7 @@ def compile_query(
         again = aroot in seen and "no-symmetry" not in bugs
         if frame_bugs:
             bindings.append(f"(bugs{quoted(frame_bugs)})")
-        bindings.append(f'(root "{fname(aroot)}" {root_slots}{symmetry(aroot, syms, root=True) if again else ""})')
+        bindings.append(f'(root "{fname(aroot)}" {root_slots}{occurrence(aroot, syms, root=True) if again else ""})')
         seen.add(aroot)
         for j, (k, kid_sort, e) in enumerate(zip(kids, op.kid_sorts, edges, strict=True)):
             if k[0] == "pv":
@@ -2238,7 +2260,7 @@ def compile_query(
                     else f"({lang.symbols_for(kid_sort).class_slots} {cls_of[k[1]]})"
                 )
                 again = k[1] in seen and "no-symmetry" not in bugs
-                bindings.append(f'(child "{fname(k[1])}" {e} {slots}{symmetry(k[1], syms) if again else ""})')
+                bindings.append(f'(child "{fname(k[1])}" {e} {slots}{occurrence(k[1], syms) if again else ""})')
                 seen.add(k[1])
             elif k[0] == "sl":
                 cols.append(f"({lang.symbols_for(kid_sort).var} 0)")

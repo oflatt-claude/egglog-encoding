@@ -333,6 +333,73 @@ impl ContainerSort for SetSort {
                 }
                 Some(SetContainer { do_rebuild: false, data: least.into_values().map(|(_, v)| v).collect() })
             }});
+            // `(coset-min m s)`: the least of `m ∘ g` over the group's elements `g`. Two
+            // renamings of one class's slots name the same invocation exactly when they
+            // differ by a symmetry, so this is the invocation's canonical name: one key
+            // per edge, where naming it under every element costs one per group element.
+            add_primitive!(eg, "coset-min" = {self.clone(): SetSort} |m: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> @MapContainer (renaming.clone()) {{
+                let least: Option<(BTreeMap<i64, i64>, BTreeMap<Value, Value>)> = {
+                    let (bv, cv) = (state.base_values(), state.container_values());
+                    let mut least: Option<(BTreeMap<i64, i64>, BTreeMap<Value, Value>)> = None;
+                    for v in s.data.iter().copied() {
+                        let g = &cv.get_val::<MapContainer>(v)?.data;
+                        let named = compose(&m.data, g);
+                        let key = slot_map(bv, &named);
+                        if least.as_ref().is_none_or(|(best, _)| key < *best) {
+                            least = Some((key, named));
+                        }
+                    }
+                    least
+                };
+                let (_, named) = least?;
+                Some(MapContainer::renaming(named))
+            }});
+            // `(root "p" cs grp)` and `(child "v" e cs grp)`: a binding whose reading of
+            // its class is any element of the group, decided by the frame once the rest
+            // of the pattern has pinned what it can (C5); see `Frame::refinements`.
+            add_primitive!(eg, "root" = {self.clone(): SetSort} |v: S, cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
+                let group = slot_maps(&state, grp.data.iter().copied())?;
+                let class_slots = slot_map(state.base_values(), &cs.data);
+                Some(Bd::new(Binding::Root { var: v.as_str().to_owned(), class_slots, sym: None, group: Some(std::sync::Arc::new(group)) }))
+            }});
+            add_primitive!(eg, "child" = {self.clone(): SetSort} |v: S, e: @MapContainer (renaming.clone()), cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
+                let group = slot_maps(&state, grp.data.iter().copied())?;
+                let bv = state.base_values();
+                Some(Bd::new(Binding::Child { var: v.as_str().to_owned(), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: None, group: Some(std::sync::Arc::new(group)) }))
+            }});
+            // `(coset-same m1 m2 s)`: do the two renamings name one invocation, that is,
+            // differ by an element of the group: `m1 = m2 ∘ g` for some `g`. A fact, so a
+            // rule or a claim can require it of two occurrences of one variable.
+            add_primitive!(eg, "coset-same" = {self.clone(): SetSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> () {{
+                let cv = state.container_values();
+                let mut found = false;
+                for v in s.data.iter().copied() {
+                    let g = &cv.get_val::<MapContainer>(v)?.data;
+                    if compose(&m2.data, g) == m1.data {
+                        found = true;
+                        break;
+                    }
+                }
+                found.then_some(())
+            }});
+            // `(group-slot-closure s slots)`: the slots, an identity renaming, that every
+            // element of the group carries onto slots the class has, in both directions.
+            // If `c = g * c` and `g` sends a slot the class has to one it does not, the
+            // two cannot be told apart, so both are redundant.
+            add_primitive!(eg, "group-slot-closure" = {self.clone(): SetSort} |s: @SetContainer (arc.clone()), slots: @MapContainer (renaming.clone())| -?> @MapContainer (renaming.clone()) {{
+                let mut kept: BTreeSet<Value> = slots.data.keys().copied().collect();
+                {
+                    let cv = state.container_values();
+                    for v in s.data.iter().copied() {
+                        let g = &cv.get_val::<MapContainer>(v)?.data;
+                        let forward: BTreeSet<Value> = compose(g, &slots.data).values().copied().collect();
+                        let inverse: BTreeMap<Value, Value> = g.iter().map(|(k, v)| (*v, *k)).collect();
+                        let backward: BTreeSet<Value> = compose(&inverse, &slots.data).values().copied().collect();
+                        kept.retain(|x| forward.contains(x) && backward.contains(x));
+                    }
+                }
+                Some(MapContainer::renaming(kept.into_iter().map(|x| (x, x)).collect()))
+            }});
         }
     }
 

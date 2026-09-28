@@ -30,3 +30,6 @@ sat-*.egg
 nc-*.egg
 xdiff-big.log
 mut-*.log
+
+# slotted/eval.py records every run here; append-only, never committed
+eval.jsonl

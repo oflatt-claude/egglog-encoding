@@ -6,8 +6,9 @@ repository carries: the S4.1 functional array language, rewriting (A) into (B) w
 extra function parameters, and the S4.2 SDQL compiler, whose ten Table 1 workloads --
 five kernels, two compiler phases each -- `slotted/paper_fixtures.py` carries from the
 artifact. This runs each on up to three SIDES and reports the paper's criterion -- was
-the target reached within the iteration budget -- with the time it took and, on
-request, the size of the e-graph it built beside Table 1's:
+the target reached within the iteration budget -- with the time it took, the size of
+the e-graph it built beside Table 1's, whether it had settled, and how the encoding's
+graph compares with each reference side's:
 
     encoding    the egglog slotted encoding, `slotted/slotted-encoder.py`
     ref-multi   the reference crate through `MultiPattern`, the pattern language the
@@ -23,9 +24,11 @@ Usage:
     python3 slotted/eval.py sdql --kernel ttm mmm --phase 1st
     python3 slotted/eval.py sdql --kernel batax --phase 2nd --rules 12
                                                     the suite's goal-directed BATAX subset
-    python3 slotted/eval.py --side encoding,ref-nested --counts --jsonl eval.jsonl
+    python3 slotted/eval.py --side encoding,ref-nested --no-counts   timings alone
+    python3 slotted/eval.py sdql --kernel ttm --phase 2nd --group-cap 12 --timeout 1200
+                                                    TTM's second phase, dumped and compared
     python3 slotted/eval.py sdql --phase 1st --html eval.html   the table as a page too
-    python3 slotted/eval.py --from eval.jsonl                    the table again, from the record
+    python3 slotted/eval.py --from                               the table again, from the record
 
 Budgets default to the paper's: 6 iterations for the array goal, and for SDQL the
 artifact runner's per-workload limit (13 for BATAX's first phase, 12 for its second, 30
@@ -35,10 +38,26 @@ for the rest); `--rounds` overrides them all. `--timeout` defaults to the artifa
 numbers mean nothing; `--no-build` skips that when they are known current. Each
 reference row says which oracle answered. The table on stdout has one row per workload and
 one column per side, holding that side's seconds when it reached the goal and what
-happened otherwise; `--long` gives one row per run with every field instead, `--html`
-writes the table as a page too, and `--jsonl` appends one JSON object per run to a file,
-which is what a graph should be drawn from. `--from FILE` prints the table from such a
-file without running anything, the latest record per workload and side, so collection
+happened otherwise, then `[classes/nodes, sat. yes|no]`: the final e-graph's size, and
+whether one more round would have changed it -- the reference stops early and reports
+that itself, the encoding runs its budget and is then asked, under `push`/`pop`, whether
+a further round adds anything. A `vs ref-*` column says how the encoding's final graph
+compares with that reference side's: `isomorphic` when `slotted/xdiff/isomorphism.py`
+finds a witness; else `same partition` when every reference node's term, added to the
+encoding's finished graph, lands where the reference's equivalence says
+(`slotted/xdiff/partition.py`); else `split k, merged m` -- k reference classes the
+encoding keeps apart, m it puts together. The side to match is `ref-multi`, and the
+oracle substitutes as the encoding does so that the two can build the same rows
+(`slotted/ENCODING.md`, *Against the reference*); `isomorphic` is the expected verdict,
+and `same partition` on a large graph may only mean the checker's search gave up. The
+comparison needs the oracle's dump, whose symmetry-group enumeration `--group-cap`
+bounds; `--no-counts` skips counts, settling and comparison for timings alone. `--long` gives one row per run
+with every field instead, and `--html` writes the table as a page too. Every run is also
+appended as one JSON object to
+`eval.jsonl` at the repository root (`--jsonl` chooses another file), which is what a
+graph should be drawn from; `--from [FILE]` prints the table from that record without
+running anything -- the latest batch, that is the last invocation's rows, or with
+`--merged` the latest entry per workload and side across every batch -- so collection
 and reporting are separate steps.
 """
 
@@ -48,6 +67,7 @@ import datetime
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -58,6 +78,7 @@ sys.path.insert(0, str(ROOT / "slotted"))
 sys.path.insert(0, str(ROOT / "slotted" / "xdiff"))
 
 import isomorphism as ISO  # noqa: E402
+import partition as PT  # noqa: E402
 import xarray as XA  # noqa: E402
 
 sc = __import__("slotted-egglog")
@@ -70,11 +91,21 @@ _spec.loader.exec_module(cps)
 
 SIDES = ("encoding", "ref-multi", "ref-nested")
 SCRATCH = ROOT / "target" / "slotted"
+#: Where every run is recorded unless `--jsonl` says otherwise: append-only, ignored by git.
+REPORT = ROOT / "eval.jsonl"
 
 
 #: Release builds of both sides: egglog, and the reference through `xmulti` without the
 #: crate's `checks` feature, the way the paper's experiments ran it.
 EGGLOG = ROOT / "target" / "release" / "egglog"
+#: `--group-cap`: how many live slots the oracle enumerates a symmetry group over when it
+#: dumps its graph; past it the dump, and so the counts and the comparison, are unavailable.
+#: The oracle's own default is 6, which stops at every second-phase SDQL graph; 10 covers
+#: all but TTM's, whose 12-slot classes take the oracle minutes to enumerate.
+GROUP_CAP = 10
+#: Up to this many reference classes a comparison looks for an isomorphism witness;
+#: larger graphs are decided by the probes (`same rows`).
+WITNESS_CLASSES = 40
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "release" / "xmulti"
 BUILDS = (
     ("cargo", "build", "--release", "--bin", "egglog"),
@@ -97,12 +128,18 @@ class Row:
         self.classes, self.nodes = None, None
         self.checks = None  # the oracle's `CONFIG checks=` answer, for reference sides
         self.paper = None  # Table 1's slotted row for this workload, when it has one
+        #: encoding side: per reference side, how its final graph compares (`compare`)
+        self.vs_ref = {}
+        # not recorded: a reference side's dump, the encoding side's graph, for `compare`
+        self.dump, self.graph = None, None
 
-    def as_dict(self):
+    def as_dict(self, batch):
         d = dict(vars(self))
+        d.pop("dump"), d.pop("graph")
         d["egglog"] = str(EGGLOG.relative_to(ROOT))
         d["xmulti"] = str(XMULTI.relative_to(ROOT))
         d["date"] = datetime.datetime.now().isoformat(timespec="seconds")
+        d["batch"] = batch  # one invocation of this script: what a report shows by default
         return d
 
     @classmethod
@@ -112,33 +149,47 @@ class Row:
         for field in ("goal", "saturated", "seconds", "classes", "nodes", "checks"):
             setattr(row, field, d.get(field, getattr(row, field)))
         row.paper = tuple(d["paper"]) if d.get("paper") is not None else None
+        row.vs_ref = d.get("vs_ref", {})
         return row
 
 
-def load_rows(path):
-    """Every run recorded in a `--jsonl` file, the latest per workload and side kept,
-    in the order they first appeared."""
-    latest, order = {}, []
+def load_rows(path, merged):
+    """The runs a record holds: the latest batch -- one invocation of this script --
+    or, `merged`, the latest entry per workload and side across every batch, in the
+    order they first appeared. A record older than batches is one batch of its own."""
+    records = []
     with path.open() as f:
         for line in f:
-            if not line.strip():
-                continue
-            row = Row.from_dict(json.loads(line))
-            key = (row.study, row.case, row.rounds, row.rules, row.side)
-            if key not in latest:
-                order.append(key)
-            latest[key] = row
-    return [latest[key] for key in order]
+            if line.strip():
+                records.append(json.loads(line))
+    if not records:
+        return [], None
+    if not merged:
+        batch = records[-1].get("batch")
+        records = [d for d in records if d.get("batch") == batch]
+    latest, order = {}, []
+    for d in records:
+        row = Row.from_dict(d)
+        key = (row.study, row.case, row.rounds, row.rules, row.side)
+        if key not in latest:
+            order.append(key)
+        latest[key] = row
+    return [latest[key] for key in order], (None if merged else records[-1].get("date"))
 
 
 # ------------------------------------------------------------------ the reference
+def oracle_env():
+    """The oracle's environment: its group enumeration cap, `--group-cap`."""
+    return {**os.environ, "XMULTI_GROUP_SLOT_CAP": str(GROUP_CAP)}
+
+
 def run_reference(spec, row, timeout, counts):
-    """One `xmulti` run: the GOAL line is the criterion, the dump gives the counts."""
-    if counts:
-        spec += "dump\n"
+    """One timed `xmulti` run, whose GOAL line is the criterion; with `counts`, a second,
+    untimed run that also dumps the graph, since enumerating the symmetry groups for the
+    dump can cost more than the run."""
     t0 = time.time()
     try:
-        r = subprocess.run([str(XMULTI)], input=spec, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([str(XMULTI)], input=spec, capture_output=True, text=True, timeout=timeout, env=oracle_env())
     except subprocess.TimeoutExpired:
         row.goal, row.seconds = "timeout", time.time() - t0
         return
@@ -151,9 +202,30 @@ def run_reference(spec, row, timeout, counts):
     row.saturated = next((ln.split()[1] for ln in lines if ln.startswith("SATURATED ")), "?")
     row.checks = next((ln.split("=", 1)[1] for ln in lines if ln.startswith("CONFIG checks=")), None)
     if counts:
-        # a symmetry group too large to enumerate leaves the counts unknown
+        try:
+            r = subprocess.run(
+                [str(XMULTI)], input=spec + "dump\n", capture_output=True, text=True, timeout=timeout, env=oracle_env()
+            )
+        except subprocess.TimeoutExpired:
+            return
+        # a symmetry group too large to enumerate (`--group-cap`) leaves the counts unknown
         with contextlib.suppress(ValueError):
-            row.classes, row.nodes = ISO.parse_reference(r.stdout).summary()
+            g = ISO.parse_reference(r.stdout)
+            if g.ids():
+                row.classes, row.nodes = g.summary()
+                row.dump = r.stdout
+
+
+def ctor_lines(lang):
+    """`ctor <tag> <Name>` lines: what the encoding calls each of the oracle's constructors,
+    so the oracle's substitution snapshot breaks ties by the same spelling."""
+    out = []
+    for op in {id(op): op for op in lang.ops.values()}.values():
+        if op.ref:
+            out.append(f"ctor {op.ref} {op.ctor}")
+        else:
+            out.append(f"ctor {'symbol' if 'String' in op.sig else 'number'} {op.ctor}")
+    return sorted(out)
 
 
 def rule_lines(lang, rules_path, selected, nested):
@@ -197,12 +269,56 @@ def run_egglog(program, name, row, timeout, goal_of):
     row.goal = goal_of(r)
 
 
+def one_more_round(program):
+    """The program's last user-rule schedule, cut to one round.
+
+    A step of the encoding is `(repeat n (seq (run) ...))` around the machinery's
+    saturation; the same block with `n` set to 1 is one further step, which is how a
+    run is asked whether it had settled. `None` when the program has no such step.
+    """
+    block, at = None, program.find("(run-schedule")
+    while at >= 0:
+        depth, end = 0, at
+        for end in range(at, len(program)):
+            depth += program[end] == "("
+            depth -= program[end] == ")"
+            if depth == 0:
+                break
+        if "(repeat " in program[at : end + 1]:
+            block = program[at : end + 1]
+        at = program.find("(run-schedule", end)
+    return re.sub(r"\(repeat \d+ ", "(repeat 1 ", block, count=1) if block else None
+
+
+def saturation_probe(program):
+    """The program with one more round run under `push`/`pop`: the e-graph the run
+    serializes is still the run's own, and the two `print-size` listings around the extra
+    round say whether it changed anything -- the reference's own notion of having
+    saturated, a round that applies nothing new."""
+    extra = one_more_round(program)
+    if extra is None:
+        return program
+    return program + "\n".join(["(print-size)", "(push)", extra, "(print-size)", "(pop)", ""])
+
+
+def saturated(stdout):
+    """Whether the two `print-size` listings agree, ignoring the rules' own match stores,
+    which `slotted-apply` empties as it acts on them."""
+    sizes = [(name, int(n)) for name, n in re.findall(r"\((\S+) (\d+)\)", stdout) if not name.startswith("_matched_")]
+    if not sizes or len(sizes) % 2:
+        return "?"
+    half = len(sizes) // 2
+    return "yes" if sizes[:half] == sizes[half:] else "no"
+
+
 def encoding_counts(program, name, lang, row, timeout):
-    """Classes and nodes of the encoding's final graph, read as the isomorphism checker reads it."""
+    """Classes and nodes of the encoding's final graph, read as the isomorphism checker
+    reads it, whether one more round would have changed it, and the graph itself for
+    `compare`."""
     SCRATCH.mkdir(parents=True, exist_ok=True)
     path = SCRATCH / f"eval-{name}-{os.getpid()}-counts.egg"
     jpath = path.with_suffix(".json")
-    path.write_text(program)
+    path.write_text(saturation_probe(program))
     try:
         r = subprocess.run(
             [str(EGGLOG), "--to-json", *ISO.SERIALIZE_LIMITS, str(path)],
@@ -213,10 +329,18 @@ def encoding_counts(program, name, lang, row, timeout):
         )
         if r.returncode != 0 or ISO.incomplete_serialization(r.stderr) or not jpath.exists():
             return
+        row.saturated = saturated(r.stdout)
         ISO.use_language(lang)
         g, issues = ISO.build_encoding_graph(json.loads(jpath.read_text()))
-        if not issues:
-            row.classes, row.nodes = g.summary()
+        if issues:
+            return
+        # the reference's node forms: a binder's bound slot as a slot literal
+        var_class = next((c for c in g.ids() if any(n[0] == "var" for n in g.nodes[c])), None)
+        g, unfaithful = ISO.to_reference_shape(g, var_class)
+        if unfaithful:
+            return
+        row.classes, row.nodes = g.summary()
+        row.graph = g
     except (subprocess.TimeoutExpired, Exception):  # noqa: BLE001 -- counts are best effort
         return
     finally:
@@ -224,13 +348,60 @@ def encoding_counts(program, name, lang, row, timeout):
         jpath.unlink(missing_ok=True)
 
 
+def compare(rows, program, lang, renames, sort, declared, timeout):
+    """How the encoding's final graph compares with each reference side's, on one workload.
+
+    Isomorphic when the checker finds a witness. Otherwise the partition question of
+    `partition.py`: every reference node's term is added to the encoding's finished
+    graph (`program` is the run that made it) and the two equivalences are compared.
+    """
+    enc = next((r for r in rows if r.side == "encoding"), None)
+    if enc is None or enc.graph is None:
+        return
+    for ref_row in (r for r in rows if r.side != "encoding"):
+        if ref_row.dump is None:
+            enc.vs_ref[ref_row.side] = "no reference dump"
+            continue
+        ref = ISO.parse_reference(ref_row.dump)
+        # a witness search on a small graph; past that the probes decide, since the
+        # search's node matching enumerates symmetry variants and does not scale
+        iso = None
+        if len(ref.ids()) <= WITNESS_CLASSES:
+            cap, ISO.SEARCH_CAP = ISO.SEARCH_CAP, min(ISO.SEARCH_CAP, 5_000)
+            try:
+                iso, _ = ISO.find_isomorphism(ref, enc.graph)
+            finally:
+                ISO.SEARCH_CAP = cap
+        if iso and not ISO.verify(ref, enc.graph, iso[0], iso[1]):
+            enc.vs_ref[ref_row.side] = "isomorphic"
+            continue
+        terms = PT.reference_terms(ref, lang)
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        path = SCRATCH / f"eval-{enc.case}-{os.getpid()}-{ref_row.side}-probes.egg"
+        path.write_text(program + "\n".join(PT.probe_lines(terms, lang, renames, sort, declared)) + "\n")
+        try:
+            r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, cwd=ROOT, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            enc.vs_ref[ref_row.side] = "probes timed out"
+            continue
+        finally:
+            path.unlink(missing_ok=True)
+        if r.returncode != 0:
+            enc.vs_ref[ref_row.side] = "probes failed"
+            continue
+        enc.vs_ref[ref_row.side] = PT.verdict(
+            PT.partition(terms, r.stdout), PT.rows_added(r.stdout, lang), enc.nodes == ref.summary()[1]
+        )
+
+
 # ------------------------------------------------------------------ the array study
 def array_rows(params, rounds, sides, counts, timeout):
     for n in params:
         case = XA.goal_cases([n], rounds=rounds)[0]
         a, b = case.probes
-        head = [f"rounds {rounds}", f"term {XA.sexpr(a)}"]
+        head = [f"rounds {rounds}", *ctor_lines(XA.LANG), f"term {XA.sexpr(a)}"]
         goal = [f"goal {XA.sexpr(b)}"]
+        group, bare_program = [], None
         for side in sides:
             row = Row("array", case.name, side, rounds)
             if side == "ref-multi":
@@ -251,9 +422,12 @@ def array_rows(params, rounds, sides, counts, timeout):
                 run_egglog(prog, case.name, row, timeout, goal_of)
                 if counts:
                     bare = XA.Case(case.name, case.terms, case.rules, [], rounds=rounds)
-                    prog = XA.egg_program(bare, mult=1).replace("(print-function SameClass 100000)", "")
-                    encoding_counts(prog, case.name, XA.LANG, row, timeout)
-            yield row
+                    bare_program = XA.egg_program(bare, mult=1).replace("(print-function SameClass 100000)", "")
+                    encoding_counts(bare_program, case.name, XA.LANG, row, timeout)
+            group.append(row)
+        if counts and bare_program is not None:
+            compare(group, bare_program, XA.LANG, XA.SYM.renames, "U", True, timeout)
+        yield from group
 
 
 # ------------------------------------------------------------------- the SDQL study
@@ -284,9 +458,10 @@ def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
         start, target = pf.workload_text(kernel, phase, source, lang)
         budget = rounds or pf.iteration_limit(kernel, phase)
         selected = cps.SELECTED_RULES if rules == 12 else None
-        head = [f"rounds {budget}", f"term {start}"]
+        head = [f"rounds {budget}", *ctor_lines(lang), f"term {start}"]
         goal = [f"goal {target}"]
         name = f"{kernel}_{phase}-{rules}rules"
+        group, bare_program = [], None
         for side in sides:
             row = Row("sdql", name, side, budget, rules)
             row.paper = pf.TABLE1[(kernel, phase)]
@@ -302,8 +477,13 @@ def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
 
                 run_egglog(sdql_program(kernel, phase, rules, budget, True), name, row, timeout, goal_of)
                 if counts:
-                    encoding_counts(sdql_program(kernel, phase, rules, budget, False), name, lang, row, timeout)
-            yield row
+                    bare_program = sdql_program(kernel, phase, rules, budget, False)
+                    encoding_counts(bare_program, name, lang, row, timeout)
+            group.append(row)
+        if counts and bare_program is not None:
+            carrier = re.search(r"\(relation (RenamesToLeader_\d+) \((\w+) Renaming \w+\)\)", bare_program)
+            compare(group, bare_program, lang, carrier.group(1), carrier.group(2), False, timeout)
+        yield from group
 
 
 # ------------------------------------------------------------------------- output
@@ -317,6 +497,7 @@ LONG_HEAD = (
     "seconds",
     "classes",
     "nodes",
+    "vs reference",
     "paper (iters, nodes, classes, sat.)",
 )
 
@@ -330,7 +511,11 @@ def long_cells(r):
     secs = "" if r.seconds is None else f"{r.seconds:.1f}"
     side = r.side if r.checks is None else f"{r.side} (checks {r.checks})"
     counts = [str(r.classes or ""), str(r.nodes or "")]
-    return [r.study, r.case, side, str(r.rounds), r.goal, r.saturated, secs, *counts, paper_cell(r)]
+    return [r.study, r.case, side, str(r.rounds), r.goal, r.saturated, secs, *counts, vs_cell(r), paper_cell(r)]
+
+
+def vs_cell(r):
+    return "; ".join(f"{side}: {verdict}" for side, verdict in r.vs_ref.items())
 
 
 def timing_cell(r):
@@ -339,7 +524,7 @@ def timing_cell(r):
     secs = "" if r.seconds is None else f"{r.seconds:.1f}"
     cell = secs if r.goal == "yes" else (f"{r.goal} ({secs})" if secs and r.goal in ("no", "error") else r.goal)
     if r.classes is not None:
-        cell += f" [{r.classes}/{r.nodes}]"
+        cell += f" [{r.classes}/{r.nodes}" + (f", sat. {r.saturated}" if r.saturated != "?" else "") + "]"
     return cell
 
 
@@ -349,7 +534,9 @@ def pivot(rows, sides):
     for r in rows:
         labels.setdefault(r.side, set()).add("" if r.checks is None else f" (checks {r.checks})")
     columns = [s + ("".join(labels[s]) if s in labels and len(labels[s]) == 1 else "") for s in sides]
-    head = ["study", "case", "rounds", *columns, "paper (iters, nodes, classes, sat.)"]
+    # the encoding's graph against each reference side it was compared with
+    compared = [s for s in sides if any(s in r.vs_ref for r in rows)]
+    head = ["study", "case", "rounds", *columns, *(f"vs {s}" for s in compared), "paper (iters, nodes, classes, sat.)"]
     by_case, order = {}, []
     for r in rows:
         key = (r.study, r.case, r.rounds)
@@ -357,10 +544,13 @@ def pivot(rows, sides):
             by_case[key] = {"paper": paper_cell(r)}
             order.append(key)
         by_case[key][r.side] = timing_cell(r)
+        for s, verdict in r.vs_ref.items():
+            by_case[key][f"vs {s}"] = verdict
     table = []
     for study, case, rounds in order:
         got = by_case[(study, case, rounds)]
-        table.append([study, case, str(rounds), *(got.get(s, "") for s in sides), got["paper"]])
+        cells = [got.get(s, "") for s in sides] + [got.get(f"vs {s}", "") for s in compared]
+        table.append([study, case, str(rounds), *cells, got["paper"]])
     return head, table
 
 
@@ -392,6 +582,7 @@ def html(head, table):
 
 
 def main():
+    global GROUP_CAP
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql"))
     ap.add_argument("--side", default="all", help="comma-separated subset of encoding,ref-multi,ref-nested")
@@ -410,15 +601,41 @@ def main():
         choices=(12, 44),
         help="sdql: the full set, or the suite's goal-directed BATAX second-phase subset",
     )
-    ap.add_argument("--counts", action="store_true", help="also count the final e-graph's classes and nodes")
+    ap.add_argument(
+        "--counts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="count the final e-graphs' classes and nodes, whether the encoding had settled, and compare"
+        " the encoding's graph with each reference side's (isomorphic, same partition, or split/merged)",
+    )
+    ap.add_argument(
+        "--group-cap",
+        type=int,
+        default=GROUP_CAP,
+        help="live slots the oracle enumerates a symmetry group over when dumping; TTM's second phase"
+        " needs 12, which takes the oracle minutes (default %(default)s)",
+    )
     ap.add_argument("--timeout", type=int, default=300, help="seconds per run; the artifact's own budget")
-    ap.add_argument("--jsonl", type=Path, help="append one JSON object per row here")
-    ap.add_argument("--from", dest="report", type=Path, help="print the table from this JSONL instead of running")
+    ap.add_argument(
+        "--jsonl", type=Path, default=REPORT, help=f"record one JSON object per run here (default {REPORT.name})"
+    )
+    ap.add_argument(
+        "--from",
+        dest="report",
+        type=Path,
+        nargs="?",
+        const=REPORT,
+        help=f"print the table from a record instead of running (default {REPORT.name})",
+    )
     ap.add_argument("--html", type=Path, help="also write the table as an HTML page here")
     ap.add_argument("--long", action="store_true", help="one row per run with every field, instead of the timing pivot")
+    ap.add_argument(
+        "--merged", action="store_true", help="with --from: the latest entry per workload and side across every batch"
+    )
     ap.add_argument("--no-build", action="store_true", help="skip `cargo build`; the binaries are known current")
     args = ap.parse_args()
 
+    GROUP_CAP = args.group_cap
     sides = SIDES if args.side == "all" else tuple(s.strip() for s in args.side.split(","))
     bad = [s for s in sides if s not in SIDES]
     if bad:
@@ -426,7 +643,10 @@ def main():
 
     if args.report:
         # reporting alone: the rows come from an earlier run's record
-        rows = [r for r in load_rows(args.report) if r.side in sides]
+        rows, when = load_rows(args.report, args.merged)
+        rows = [r for r in rows if r.side in sides]
+        shown = "every batch, latest entries" if args.merged else f"the batch of {when}"
+        print(f"{args.report}: {shown}", file=sys.stderr)
         if args.study != "all":
             rows = [r for r in rows if r.study == args.study]
         if args.side == "all":
@@ -439,10 +659,12 @@ def main():
     if args.html:
         args.html.write_text(html(head, table))
         print(f"wrote {args.html}", file=sys.stderr)
-    if args.jsonl and not args.report:
+    if not args.report:
+        # one id per invocation: the clock alone can name two quick runs alike
+        batch = f"{datetime.datetime.now().isoformat(timespec='microseconds')}-{os.getpid()}"
         with args.jsonl.open("a") as f:
             for r in rows:
-                f.write(json.dumps(r.as_dict()) + "\n")
+                f.write(json.dumps(r.as_dict(batch)) + "\n")
     return 0 if all(r.goal == "yes" for r in rows) else 1
 
 

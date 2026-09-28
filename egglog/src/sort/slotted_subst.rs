@@ -97,6 +97,9 @@ const VAR_SLOT: Slot = 0;
 const NODE_LAYOUT: &str = "SlottedNodeLayout";
 const EDGE_LAYOUT: &str = "SlottedEdgeLayout";
 const BINDER_LAYOUT: &str = "SlottedBinderLayout";
+/// Optional: `(ctor, column, sort)` for payload columns, so a payload is spelt as its
+/// value rather than as an internal id when the smallest term is chosen.
+const PAYLOAD_LAYOUT: &str = "SlottedPayloadLayout";
 const CLASS_SLOTS: &str = "ClassSlots";
 
 /// One child edge, at its physical renaming column in the constructor.
@@ -121,6 +124,8 @@ struct Node {
     args: Vec<Value>,
     edges: Vec<Edge>,
     binders: Vec<Binder>,
+    /// per column, a payload's value as text, where the metadata says its sort
+    payload_text: Vec<Option<String>>,
 }
 
 impl Node {
@@ -144,6 +149,8 @@ struct Layout {
     arity: usize,
     edges: Vec<usize>,
     binders: Vec<BinderLayout>,
+    /// payload columns whose sort the metadata names: `i64` or `String`
+    payloads: BTreeMap<usize, String>,
 }
 
 #[derive(Default)]
@@ -433,7 +440,7 @@ fn build_terms(
         }
         nodes.insert(*eclass, parsed);
     }
-    let best = cheapest(&nodes, &public);
+    let best = cheapest(&nodes, &public, var);
     Ok((Terms { nodes, best }, slots_used))
 }
 
@@ -454,6 +461,7 @@ fn build_terms(
 fn cheapest(
     nodes: &HashMap<Value, Vec<Node>>,
     public: &HashMap<Value, BTreeSet<Slot>>,
+    var: Value,
 ) -> HashMap<Value, usize> {
     let mut order: Vec<Value> = nodes.keys().copied().collect();
     order.sort_unstable();
@@ -494,7 +502,11 @@ fn cheapest(
             if size(node, &cost) != Some(class_size) {
                 continue;
             }
-            let tpl = template(node, &templates, public.get(&eclass).unwrap_or(&no_public));
+            let tpl = if eclass == var {
+                var_template(node)
+            } else {
+                template(node, &templates, public.get(&eclass).unwrap_or(&no_public))
+            };
             let key = spelling(&tpl);
             if chosen.as_ref().is_none_or(|(least, _, _)| key < *least) {
                 chosen = Some((key, index, tpl));
@@ -591,11 +603,26 @@ fn template(
         } else if node.edges.iter().any(|edge| edge.col + 1 == col) {
             continue; // the child column of an edge, spelt with its renaming
         } else {
-            out.push(Tok::Text(format!("{:?},", node.args[col])));
+            match &node.payload_text[col] {
+                Some(text) => out.push(Tok::Text(format!("{text},"))),
+                None => out.push(Tok::Text(format!("{:?},", node.args[col]))),
+            }
         }
     }
     out.push(Tok::Text(")".to_owned()));
     out
+}
+
+/// The variable class's own spelling: its one slot, public, so a parent's spelling
+/// says which of its slots each variable occurrence names.
+fn var_template(node: &Node) -> Vec<Tok> {
+    vec![
+        Tok::Text(node.ctor.clone()),
+        Tok::Text("(".to_owned()),
+        Tok::Public(VAR_SLOT),
+        Tok::Text(",".to_owned()),
+        Tok::Text(")".to_owned()),
+    ]
 }
 
 /// A template as text, every slot numbered by first occurrence -- so alpha-equivalent
@@ -674,11 +701,19 @@ fn parse_node(
         });
     }
 
+    let payload_text = (0..children.len())
+        .map(|col| match layout.payloads.get(&col).map(String::as_str) {
+            Some("i64") => Some(state.value_to_base::<i64>(children[col]).to_string()),
+            Some("String") => Some(state.value_to_base::<S>(children[col]).into_inner()),
+            _ => None,
+        })
+        .collect();
     Ok(Node {
         ctor: ctor.to_owned(),
         args: children.to_vec(),
         edges,
         binders,
+        payload_text,
     })
 }
 
@@ -909,6 +944,7 @@ impl Layouts {
                     arity,
                     edges: Vec::new(),
                     binders: Vec::new(),
+                    payloads: BTreeMap::new(),
                 },
             );
             if previous.is_some() {
@@ -938,6 +974,21 @@ impl Layouts {
         }
 
         Self::load_binders(state, string, integer, &mut layouts)?;
+        // a program without the payload table spells payloads by their ids: older
+        // preludes, and the tests' own
+        if live_action(state, PAYLOAD_LAYOUT).is_ok() {
+            for row in metadata_rows(state, PAYLOAD_LAYOUT, &[string, integer, string])? {
+                let ctor = state.value_to_base::<S>(row[0]).into_inner();
+                let col = index(
+                    state.value_to_base::<i64>(row[1]),
+                    &format!("{PAYLOAD_LAYOUT} column for {ctor}"),
+                )?;
+                let sort = state.value_to_base::<S>(row[2]).into_inner();
+                if let Some(layout) = layouts.constructors.get_mut(&ctor) {
+                    layout.payloads.insert(col, sort);
+                }
+            }
+        }
         for (ctor, layout) in &mut layouts.constructors {
             layout.edges.sort_unstable();
             layout

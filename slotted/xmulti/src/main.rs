@@ -41,7 +41,8 @@
 //!   so they cannot collide; `xdiff/xsdql.py` prefixes every one.
 
 use slotted_egraphs::*;
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
 
 define_language! {
@@ -122,6 +123,16 @@ type G = EGraph<L>;
 
 const GROUP_SLOT_CAP: usize = 6;
 
+/// The cap, or what `XMULTI_GROUP_SLOT_CAP` raises it to for a one-off dump of a
+/// graph with wider classes; enumerating a class's symmetries costs its width's
+/// factorial `eq` tests, so ten is already seconds per class.
+fn group_slot_cap() -> usize {
+    std::env::var("XMULTI_GROUP_SLOT_CAP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(GROUP_SLOT_CAP)
+}
+
 /// A side condition on a match: is the slot among the variable's slots?
 ///
 /// `want` says whether the slot should appear in the slots of *any* listed
@@ -162,6 +173,10 @@ struct Spec {
     probes: Vec<String>,
     goals: Vec<String>,
     rounds: usize,
+    /// `ctor <tag> <Name>`: what the encoding calls the constructor behind a tag, for
+    /// the substitution snapshot's tie-break (`symbol` and `number` name the payload
+    /// leaves). Without it a variant's own name stands in.
+    ctors: HashMap<String, String>,
 }
 
 fn parse_spec(src: &str) -> Spec {
@@ -173,6 +188,7 @@ fn parse_spec(src: &str) -> Spec {
         probes: vec![],
         goals: vec![],
         rounds: 10,
+        ctors: HashMap::new(),
     };
     for line in src.lines() {
         let line = line.trim();
@@ -184,6 +200,10 @@ fn parse_spec(src: &str) -> Spec {
         match kind {
             "dump" => s.dump = true,
             "term" => s.terms.push(rest.to_string()),
+            "ctor" => {
+                let (tag, name) = rest.split_once(char::is_whitespace).expect("ctor <tag> <Name>");
+                s.ctors.insert(tag.to_string(), name.trim().to_string());
+            }
             "probe" => s.probes.push(rest.to_string()),
             "goal" => s.goals.push(rest.to_string()),
             "rounds" => s.rounds = rest.parse().unwrap(),
@@ -291,6 +311,246 @@ fn split_two_sexprs(s: &str) -> (String, String) {
     panic!("cannot split two s-exprs from {s:?}");
 }
 
+// ------------------------------------------------------------ substitution snapshot
+//
+// The encoding computes every substitution of a round from the e-graph as the round
+// began (its `beta/apply` rule runs in one apply phase, whose reads are the phase's
+// snapshot), into the smallest term of the body's class, ties broken by a canonical
+// spelling of the term (`slotted_subst.rs`, `cheapest`). The crate's substitution
+// methods read the e-graph at application time, after the round's earlier unions,
+// and its syntactic method takes the node a class was created with -- history the
+// encoding cannot replay. `SnapshotSubst` does what the encoding does, so that the
+// two sides build the same terms and the final graphs can be the same.
+
+thread_local! {
+    static SNAPSHOT: RefCell<Option<Snapshot>> = const { RefCell::new(None) };
+    static CTORS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+}
+
+/// One piece of a term's spelling, as `slotted_subst.rs` spells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Tok {
+    Text(String),
+    /// a slot of the class, by its name there; a parent carries it through its edge
+    Public(Slot),
+    /// a slot internal to the term -- bound, or private to one node
+    Inner(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum InnerKey {
+    Bound(Slot),
+    Private(Slot),
+    ChildInner(usize, usize),
+}
+
+/// The chosen node per class, in the class's own slot names.
+struct Snapshot {
+    best: HashMap<Id, L>,
+}
+
+fn ast_size(node: &L, cost: &HashMap<Id, u64>) -> Option<u64> {
+    node.applied_id_occurrences()
+        .iter()
+        .try_fold(1u64, |total, child| Some(total.saturating_add(*cost.get(&child.id)?)))
+}
+
+/// What the encoding calls this node's constructor.
+fn ctor_name(node: &L, syntax: &[SyntaxElem]) -> String {
+    let tag = match node {
+        L::Symbol(_) => "symbol".to_string(),
+        L::Number(_) => "number".to_string(),
+        _ => match &syntax[0] {
+            SyntaxElem::String(tag) => tag.clone(),
+            _ => panic!("a tagged node starts with its tag"),
+        },
+    };
+    CTORS.with(|c| c.borrow().get(&tag).cloned().unwrap_or(tag))
+}
+
+/// A node's term, spelt from its children's templates, with slots classified in the
+/// node's frame: a bound slot, a slot of the class, or one private to the node.
+fn template(node: &L, public: &SmallHashSet<Slot>, templates: &HashMap<Id, Vec<Tok>>) -> Vec<Tok> {
+    let syntax = node.to_syntax();
+    let mut inner: BTreeMap<InnerKey, usize> = BTreeMap::new();
+    let intern = |key: InnerKey, inner: &mut BTreeMap<InnerKey, usize>| {
+        let next = inner.len();
+        Tok::Inner(*inner.entry(key).or_insert(next))
+    };
+    let mut out = vec![Tok::Text(ctor_name(node, &syntax)), Tok::Text("(".to_owned())];
+    let columns: Vec<&SyntaxElem> = match node {
+        L::Symbol(_) | L::Number(_) => syntax.iter().collect(),
+        _ => syntax.iter().skip(1).collect(),
+    };
+    // a slot the node names outright -- `var`'s -- is an occurrence like a child's;
+    // the others are the node's binders
+    let direct: BTreeSet<Slot> = node.public_slot_occurrences().into_iter().collect();
+    let bound: BTreeSet<Slot> = columns
+        .iter()
+        .filter_map(|e| match e {
+            SyntaxElem::Slot(s) if !direct.contains(s) => Some(*s),
+            _ => None,
+        })
+        .collect();
+    for (col, elem) in columns.iter().enumerate() {
+        match elem {
+            SyntaxElem::Slot(s) if direct.contains(s) => {
+                out.push(if public.contains(s) {
+                    Tok::Public(*s)
+                } else {
+                    intern(InnerKey::Private(*s), &mut inner)
+                });
+            }
+            SyntaxElem::Slot(s) => {
+                out.push(Tok::Text("bind".to_owned()));
+                out.push(intern(InnerKey::Bound(*s), &mut inner));
+            }
+            SyntaxElem::AppliedId(child) => {
+                let tpl = templates
+                    .get(&child.id)
+                    .expect("a smallest node's children are spelt before it");
+                for tok in tpl {
+                    out.push(match tok {
+                        Tok::Text(text) => Tok::Text(text.clone()),
+                        Tok::Inner(j) => intern(InnerKey::ChildInner(col, *j), &mut inner),
+                        Tok::Public(slot) => {
+                            let name = child.m[*slot];
+                            if bound.contains(&name) {
+                                intern(InnerKey::Bound(name), &mut inner)
+                            } else if public.contains(&name) {
+                                Tok::Public(name)
+                            } else {
+                                intern(InnerKey::Private(name), &mut inner)
+                            }
+                        }
+                    });
+                }
+            }
+            SyntaxElem::String(payload) => out.push(Tok::Text(format!("{payload},"))),
+        }
+        if !matches!(elem, SyntaxElem::String(_)) {
+            out.push(Tok::Text(",".to_owned()));
+        }
+    }
+    out.push(Tok::Text(")".to_owned()));
+    out
+}
+
+/// A template as text, every slot numbered by first occurrence.
+fn spelling(template: &[Tok]) -> String {
+    let mut public: BTreeMap<Slot, usize> = BTreeMap::new();
+    let mut inner: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut out = String::new();
+    for tok in template {
+        match tok {
+            Tok::Text(text) => out.push_str(text),
+            Tok::Public(slot) => {
+                let next = public.len();
+                out.push_str(&format!("p{}", public.entry(*slot).or_insert(next)));
+            }
+            Tok::Inner(index) => {
+                let next = inner.len();
+                out.push_str(&format!("i{}", inner.entry(*index).or_insert(next)));
+            }
+        }
+    }
+    out
+}
+
+impl Snapshot {
+    /// The smallest term of every class, as the e-graph stands now.
+    fn take(eg: &G) {
+        let ids = eg.ids();
+        let nodes: HashMap<Id, Vec<L>> = ids
+            .iter()
+            .map(|id| {
+                let mut ns: Vec<L> = eg.enodes(*id).into_iter().collect();
+                ns.sort_by_key(|n| format!("{n:?}"));
+                (*id, ns)
+            })
+            .collect();
+        let mut cost: HashMap<Id, u64> = HashMap::new();
+        loop {
+            let mut changed = false;
+            for id in &ids {
+                for node in &nodes[id] {
+                    let Some(total) = ast_size(node, &cost) else {
+                        continue;
+                    };
+                    if cost.get(id).is_none_or(|prev| total < *prev) {
+                        cost.insert(*id, total);
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut by_size: Vec<(u64, Id)> = cost.iter().map(|(id, c)| (*c, *id)).collect();
+        by_size.sort();
+        let mut templates: HashMap<Id, Vec<Tok>> = HashMap::new();
+        let mut best: HashMap<Id, L> = HashMap::new();
+        for (class_size, id) in by_size {
+            let public = eg.slots(id);
+            let mut chosen: Option<(String, L, Vec<Tok>)> = None;
+            for node in &nodes[&id] {
+                if ast_size(node, &cost) != Some(class_size) {
+                    continue;
+                }
+                let tpl = template(node, &public, &templates);
+                let key = spelling(&tpl);
+                if chosen.as_ref().is_none_or(|(least, _, _)| key < *least) {
+                    chosen = Some((key, node.clone(), tpl));
+                }
+            }
+            let (_, node, tpl) = chosen.expect("a class with a size has a node of that size");
+            best.insert(id, node);
+            templates.insert(id, tpl);
+        }
+        SNAPSHOT.with(|s| *s.borrow_mut() = Some(Snapshot { best }));
+    }
+
+    /// The chosen term under an invocation, its private slots fresh.
+    fn term(&self, i: &AppliedId) -> Option<RecExpr<L>> {
+        let node = self.best.get(&i.id)?;
+        let node = node.apply_slotmap_fresh(&i.m);
+        let mut children = Vec::new();
+        for child in node.applied_id_occurrences() {
+            children.push(self.term(&child)?);
+        }
+        Some(RecExpr { node, children })
+    }
+}
+
+/// `re[x := t]`, added node by node: the crate's own `do_term_subst`.
+fn term_subst(eg: &mut G, re: &RecExpr<L>, x: &AppliedId, t: &AppliedId) -> AppliedId {
+    let mut node = re.node.clone();
+    let children: Vec<AppliedId> = re.children.iter().map(|c| term_subst(eg, c, x, t)).collect();
+    for (slot, child) in node.applied_id_occurrences_mut().into_iter().zip(children) {
+        *slot = child;
+    }
+    let app_id = eg.add_syn(node);
+    if app_id == *x { t.clone() } else { app_id }
+}
+
+struct SnapshotSubst;
+
+impl SubstMethod<L, ()> for SnapshotSubst {
+    fn new_boxed() -> Box<dyn SubstMethod<L, ()>> {
+        Box::new(SnapshotSubst)
+    }
+
+    fn subst(&mut self, b: AppliedId, x: AppliedId, t: AppliedId, eg: &mut G) -> AppliedId {
+        let term = SNAPSHOT.with(|s| s.borrow().as_ref().and_then(|snap| snap.term(&b)));
+        match term {
+            Some(term) => term_subst(eg, &term, &x, &t),
+            // a class the round created, or no round yet: the crate's own choice
+            None => SynExprSubst::new_boxed().subst(b, x, t, eg),
+        }
+    }
+}
+
 /// Does the match satisfy the condition?
 fn holds(c: &Cond, subst: &Subst) -> bool {
     let found = c
@@ -331,7 +591,18 @@ fn main() {
         }
     );
 
-    let mut eg = G::default();
+    // Substitution: `snapshot` (the default) substitutes into the smallest term of
+    // the class as the e-graph stood when the round began, ties broken by a canonical
+    // spelling -- the encoding's own choice, made at the same moment, so the two build
+    // the same terms. `XMULTI_SUBST=syntactic` is the crate's default, the node each
+    // class was created with, read at application time; `extraction` the crate's
+    // smallest-term method, also at application time.
+    CTORS.with(|c| *c.borrow_mut() = spec.ctors.clone());
+    let mut eg = match std::env::var("XMULTI_SUBST").as_deref() {
+        Ok("syntactic") => G::default(),
+        Ok("extraction") => G::with_subst_method::<ExtractionSubst>(()),
+        _ => G::with_subst_method::<SnapshotSubst>(()),
+    };
     let term_ids: Vec<AppliedId> = spec.terms.iter().map(|t| add(&mut eg, t)).collect();
     for (a, b) in &spec.unions {
         let x = add(&mut eg, a);
@@ -404,8 +675,18 @@ fn main() {
             Vec::new()
         };
         for round in 0..spec.rounds {
+            Snapshot::take(&eg);
             for (i, pat) in &debug_nested {
-                eprintln!("round {round} nested-rule {i}: {} match(es)", ematch_all(&eg, pat).len());
+                let found = ematch_all(&eg, pat);
+                eprintln!("round {round} nested-rule {i}: {} match(es)", found.len());
+                // `XMULTI_DEBUG_RULE=<i>` also prints that rule's substitutions.
+                if std::env::var("XMULTI_DEBUG_RULE").ok().as_deref() == Some(i.to_string().as_str()) {
+                    for subst in &found {
+                        let mut entries: Vec<_> = subst.iter().collect();
+                        entries.sort_by(|a, b| a.0.cmp(b.0));
+                        eprintln!("  subst {entries:?}");
+                    }
+                }
             }
             if !apply_rewrites(&mut eg, &nested) {
                 saturated = true;
@@ -420,6 +701,7 @@ fn main() {
         let trace = std::env::var("XMULTI_TRACE").is_ok();
         let mut saturated = false;
         for round in 0..spec.rounds {
+            Snapshot::take(&eg);
             let before = eg.progress();
             // Match every rule against the same e-graph, then apply: a rule set is
             // one step of all rules, not a sequence of separate runs.
@@ -527,47 +809,56 @@ fn main() {
 fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
     let mut slots: Vec<Slot> = eg.slots(id).iter().copied().collect();
     slots.sort_by_key(|s| s.to_string());
-    if slots.len() > GROUP_SLOT_CAP {
+    if slots.len() > group_slot_cap() {
         return Err(slots.len());
     }
     let ident = SlotMap::identity(&slots.iter().copied().collect());
     let mut out = Vec::new();
-    for perm in permutations(&slots) {
+    let x = AppliedId::new(id, ident);
+    // one permutation at a time (Heap's algorithm), so a wide class costs its
+    // factorial in `eq` tests but not in memory
+    let mut perm = slots.clone();
+    let n = perm.len();
+    let mut c = vec![0usize; n];
+    let mut try_perm = |perm: &[Slot]| {
         let mut m = SlotMap::new();
-        for (a, b) in slots.iter().zip(&perm) {
+        for (a, b) in slots.iter().zip(perm) {
             m.insert(*a, *b);
         }
-        let x = AppliedId::new(id, ident.clone());
-        let y = AppliedId::new(id, m.clone());
+        let y = AppliedId::new(id, m);
         if eg.eq(&x, &y) {
             let mut parts: Vec<String> = slots
                 .iter()
-                .zip(&perm)
+                .zip(perm)
                 .map(|(a, b)| format!("{a}>{b}"))
                 .collect();
             parts.sort();
             out.push(parts.join("|"));
         }
+    };
+    try_perm(&perm);
+    let mut i = 0;
+    while i < n {
+        if c[i] < i {
+            if i % 2 == 0 {
+                perm.swap(0, i);
+            } else {
+                perm.swap(c[i], i);
+            }
+            try_perm(&perm);
+            c[i] += 1;
+            i = 0;
+        } else {
+            c[i] = 0;
+            i += 1;
+        }
+    }
+    {
     }
     out.sort();
     Ok(out)
 }
 
-fn permutations(xs: &[Slot]) -> Vec<Vec<Slot>> {
-    if xs.is_empty() {
-        return vec![vec![]];
-    }
-    let mut out = Vec::new();
-    for i in 0..xs.len() {
-        let mut rest = xs.to_vec();
-        let head = rest.remove(i);
-        for mut p in permutations(&rest) {
-            p.insert(0, head);
-            out.push(p);
-        }
-    }
-    out
-}
 
 /// Every class and node, in a form the encoding side can be compared against.
 ///
@@ -584,9 +875,9 @@ fn dump_structured(eg: &G) -> Result<(), String> {
     // smaller graph.  The caller turns this into a documented nonzero outcome.
     for id in &ids {
         let width = eg.slots(*id).len();
-        if width > GROUP_SLOT_CAP {
+        if width > group_slot_cap() {
             return Err(format!(
-                "class {id:?} has {width} live slots; symmetry enumeration is capped at {GROUP_SLOT_CAP}"
+                "class {id:?} has {width} live slots; symmetry enumeration is capped at {}", group_slot_cap()
             ));
         }
     }

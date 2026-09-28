@@ -72,7 +72,6 @@ in front of its own variables.
 (function ShapeEqual (Math Renaming Math) Unit :no-merge)
 (function Invocation (Math Renaming) Math :merge ((union old new) old))
 (function EclassGroup (Math) Group :merge (set-union old new))
-(relation Symmetry (Math Renaming))
 ```
 
 **`Renaming`** is a partial injection on slots, spelled as a map from `i64` to
@@ -91,7 +90,7 @@ A class is a connected component of this relation, and its leader is the
 component's canonical member. Every value also renames to *itself* by the
 identity, so a query can ask for a value's leader without knowing whether it has
 one. Those identity rows are the only ones with `f` and `l` the same value: a
-class's symmetries are not edges of this relation, they are rows of `Symmetry`.
+class's symmetries are not edges of this relation, they are the group.
 
 **`Equated`** holds the same fact with no orientation chosen. Orientation is a
 function of value order, so a row oriented before a merge can be backwards after
@@ -127,17 +126,14 @@ element up directly, so it has to be there. Every rule that learns a symmetry wr
 here, and the shape primitives take the value whole, to spell a node once over every
 reading its children allow rather than once per reading (C14). `Group` is the sort, the
 reference's data structure of the same name; `EclassGroup` is the class's field of it.
-
-**`Symmetry c p`** is a materialized index of that group: one row per element. A query
-cannot take a set apart, so a rule that ranges over the group one element at a time —
-matching (C5), the invocation rule, the closure of a class's slots — joins these rows.
-Nothing writes them but the two view rules at the end of this section, so once the
-ruleset settles the index says exactly what the group says.
+Every rule that needs the group takes it whole: a query cannot take a set apart, so the
+primitives that consume one — `coset-min`, `group-slot-closure`, `coset-same`, and the
+frame's own bindings — do the walking.
 
 ## The rules, once per sort
 
-Twenty-one rules and two facts, none of which mentions a constructor. Part II adds
-four more.
+Seventeen rules and two facts, none of which mentions a constructor. Part II adds
+five more.
 
 **Orienting `Equated`.** The larger value is the follower, so a leader is the least
 member of its component. An equation of a class with *itself* is a symmetry rather than
@@ -194,14 +190,14 @@ component settles on the slots every member has.
 
 **A class's slots are closed under its symmetries.** If `c = g * c` and `g` sends a slot
 the class has to one it does not, the two cannot be told apart, so both are redundant.
-Taking the image in either direction is what settles `f($0,$1) = f($1,$2)` on the empty
-slot set: no slot survives being renamed to its successor forever.
+`group-slot-closure` keeps the slots every element carries onto slots the class has, in
+either direction, and the merge intersects; re-firing as the slots narrow is what
+settles `f($0,$1) = f($1,$2)` on the empty slot set: no slot survives being renamed to
+its successor forever.
 
 ```
-(rule ((Symmetry c g) (= slots (ClassSlots c)))
-      ((set (ClassSlots c) (map-image (compose g slots)))) :ruleset slotted)
-(rule ((Symmetry c g) (= gi (inverse g)) (= slots (ClassSlots c)))
-      ((set (ClassSlots c) (map-image (compose gi slots)))) :ruleset slotted)
+(rule ((= grp (EclassGroup c)) (= slots (ClassSlots c)))
+      ((set (ClassSlots c) (group-slot-closure grp slots))) :ruleset slotted)
 ```
 
 **Transitivity.** Two edges compose into an equation. The middle of a path is never its
@@ -284,21 +280,24 @@ identity as a fact.
 (set (EclassGroup (Var 0)) (set-of (map-insert (map-empty) 0 0)))
 ```
 
-**The same invocation is one value.** A member reaching leader `c` by `m` registers
-under `Invocation c (compose m sym)` for every symmetry `sym` of `c`, and two members
-that register under one name are unioned by the function's merge. This is where "the
-same class by the same renaming" becomes egglog equality, and why a claim's `=`
-compares renamings up to a symmetry: a `check` compares the classes two terms reach
-with egglog's `=`, which is only right once equal invocations are one value. It also
-keeps the graph small — a built node whose class already existed is a value of its own
-until it is identified with the member it duplicates, and every such value carries an
-edge and slots that every rule over the graph then reads. The cost is one `set` per
-edge per element of the leader's group.
+**The same invocation is one value.** Two renamings of a leader's slots name one
+invocation exactly when they differ by a symmetry, so the invocation has a canonical
+name: the least of `m ∘ g` over the group, which `coset-min` picks. A member reaching
+leader `c` by `m` registers under that name, and two members that register under one
+name are unioned by the function's merge. This is where "the same class by the same
+renaming" becomes egglog equality, and why a claim's `=` compares renamings up to a
+symmetry: a `check` compares the classes two terms reach with egglog's `=`, which is
+only right once equal invocations are one value. It also keeps the graph small — a
+built node whose class already existed is a value of its own until it is identified
+with the member it duplicates, and every such value carries an edge and slots that
+every rule over the graph then reads. The cost is one `set` per edge, whatever the
+group holds; a follower whose group has been emptied has no name yet and waits.
 
 ```
 (rule ((RenamesToLeader a m c)
-       (Symmetry c sym))
-      ((set (Invocation c (compose m sym)) a)) :ruleset slotted)
+       (= grp (EclassGroup c))
+       (= name (coset-min m grp)))
+      ((set (Invocation c name) a)) :ruleset slotted)
 ```
 
 **A substitution's answer.** Once the class the primitive built has its slot set, the
@@ -316,22 +315,6 @@ relation like any other equation.
 ```
 (rule ((ShapeEqual a m b))
       ((Equated a m b)) :ruleset slotted)
-```
-
-**The index of the group.** A row for every element of the set, and none for anything
-else: an element is read out by its position through `GroupIdx`, and a row whose element
-the set no longer holds is deleted. These are the relation's only writers. `GroupIdx`
-has 512 entries, above the largest group the paper's workloads build (288, in TTM's
-second phase); a group past it would be indexed in part, so a third rule stops the
-program instead.
-
-```
-(rule ((GroupIdx i) (= s (EclassGroup c)) (= g (set-get s i)))
-      ((Symmetry c g)) :ruleset slotted)
-(rule ((Symmetry c g) (= s (EclassGroup c)) (set-not-contains s g))
-      ((delete (Symmetry c g))) :ruleset slotted)
-(rule ((= s (EclassGroup c)) (> (set-length s) 512))
-      ((panic "a symmetry group has more elements than GroupIdx indexes")) :ruleset slotted)
 ```
 
 ## Per-constructor machinery
@@ -369,16 +352,17 @@ the reference's hashcons on shapes: one lookup per row.
 (function _shape_Add (Renaming Math Renaming Math) (Math Renaming)
   :merge ((set (ShapeEqual old0 (compose old1 (inverse new1)) new0) ())
           (values old0 old1)))
+(function _syms_Add (Renaming Math Renaming Math) Group :merge new)
 
 (rule ((= c (Add m1 c1 m2 c2))
        (= g1 (EclassGroup c1)) (= g2 (EclassGroup c2))
        (= sh (node-shape (vec-of m1 m2) (vec-of g1 g2))))
-      ((set (_shape_Add (vec-get sh 0) c1 (vec-get sh 1) c2) (values c (vec-get sh 2)))) :ruleset slotted)
+      ((set (_shape_Add (vec-get sh 0) c1 (vec-get sh 1) c2) (values c (vec-get sh 2)))
+       (set (_syms_Add m1 c1 m2 c2) (symmetries-of sh 3))) :ruleset slotted)
 (rule ((= c (Add m1 c1 m2 c2))
-       (= g1 (EclassGroup c1)) (= g2 (EclassGroup c2))
-       (= sh (node-shape (vec-of m1 m2) (vec-of g1 g2)))
+       (= syms (_syms_Add m1 c1 m2 c2))
        (= cs (ClassSlots c)))
-      ((set (EclassGroup c) (group-restrict (symmetries-of sh 3) cs))) :ruleset slotted)
+      ((set (EclassGroup c) (group-restrict syms cs))) :ruleset slotted)
 ```
 
 `node-shape` takes each child's group and walks the readings those groups allow, once.
@@ -392,14 +376,15 @@ function, and one rule per sort hands its rows to `Equated`.
 The tail is what a node says about its *own* class: a reading that spells the node the
 same way up to a renaming of the node's own slots says the class equals itself under
 that renaming, which is how a child's symmetry becomes its parent's. That is the
-reference's `determine_self_symmetries`. It is a second rule because it waits for one
-more thing: the class's slots, on which the symmetries are spelled before they enter
-the group (C15). A row may carry a slot its class has dropped, and a symmetry over it
-is what the group's normalisation strips; written unrestricted, every re-firing would
-add it and the normalisation remove it, and around a cycle of classes that never
+reference's `determine_self_symmetries`. The index rule keeps it, per row, in
+`_syms_Add`, and a second rule carries it into the group, because that write waits for
+one more thing: the class's slots, on which the symmetries are spelled before they
+enter the group (C15). A row may carry a slot its class has dropped, and a symmetry
+over it is what the group's normalisation strips; written unrestricted, every re-firing
+would add it and the normalisation remove it, and around a cycle of classes that never
 settles. The index write must not wait for the slots — made to, it loses an
-identification on the BATAX-12 workload — so the two writes are two rules and the walk
-runs twice.
+identification on the BATAX-12 workload — so the two writes are two rules, and the
+walk runs once.
 
 **Migration** rebuilds a follower's node in the leader's slot names and unions it into
 the leader. `R` takes the node's slots to the leader's, agreeing with the edge where
@@ -588,14 +573,14 @@ The primitives:
 
 | primitive | what it says |
 | --- | --- |
-| `(root "p" cs [sym])` | the atom's node is an invocation of `p`'s class, whose exact slots are `cs`; through the symmetry `sym` if `p` was matched before |
-| `(child "v" e cs [sym])` | the column with edge `e` carries `v`: `Node(a, e(t)) = Var(v, t)` for each class slot `t` |
+| `(root "p" cs [sym\|grp])` | the atom's node is an invocation of `p`'s class, whose exact slots are `cs`; through the symmetry `sym`, or through some element of the group `grp` that `refinements` decides, if `p` was matched before |
+| `(child "v" e cs [sym\|grp])` | the column with edge `e` carries `v`: `Node(a, e(t)) = Var(v, t)` for each class slot `t`, through `sym` or an element of `grp` likewise |
 | `(lit "$x" e)`, `(bound "$x" e)` | the column is the literal `$x`: `Node(a, e(0)) = Lit("$x")`; `bound` is a binder column, whose literal is node data and not carried into refinement |
 | `(leaf e)` | a payload leaf reached through its own class: node slots, nothing more |
 | `(atom "a" binding...)` | one atom's constraints, closed; fails if its own columns break a clique |
 | `(frame-join f g)` | both frames' constraints, closed; fails where a clique breaks. Associative and commutative |
 | `(anchor f "p")` | the frame spelled in `p`'s slot names: the rule's root, so its renaming is the identity and the action is egglog's `union` |
-| `(refinements f)` | every consistent merging of the blocks refinement may touch, as a `Vec` of frames with `f` itself first; `vec-get` reads one and is partial past the last |
+| `(refinements f)` | every consistent way to decide the readings left to the frame, and then to merge the blocks refinement may touch, as a `Vec` of frames; `vec-get` reads one and is partial past the last |
 | `(mint f (names "$z"...))` | fresh slots for a right-hand side, apart from everything named |
 | `(free m "$x" (names v...))`, `(not-free ...)` | is the literal's slot in one of the variables' images |
 | `(same m "a" "b")`, `(bool-same ...)` | the two variables are one invocation |
@@ -619,22 +604,23 @@ running the tests gives the same answers.
        (= cls_p (Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1))
        (= cls_t1 (Sing e1_e1 cls_e1 e1_e2 cls_e2))
        ;; _t1 is bound by the first atom and read again by the second, so the second
-       ;; reading may differ by a symmetry of its class: one row per group element (C5)
-       (Symmetry cls_t1 sym_t1)
+       ;; reading may differ by a symmetry of its class: the whole group goes to the
+       ;; binding, and the frame decides the element (C5)
+       (= grp_t1 (EclassGroup cls_t1))
        ;; what each atom's columns say about slots: each binding names the column's
        ;; variable or literal, its edge, and the exact slots of its class (C2, C4, C7)
        (= atom_p (atom "_p" (root "_p" (ClassSlots cls_p))
                             (child "R" e0_R (ClassSlots cls_R))
                             (bound "$x" e0_lit_x) (bound "$y" e0_lit_y)
                             (child "_t1" e0_t1 (ClassSlots cls_t1))))
-       (= atom_t1 (atom "_t1" (root "_t1" (ClassSlots cls_t1) sym_t1)
+       (= atom_t1 (atom "_t1" (root "_t1" (ClassSlots cls_t1) grp_t1)
                               (child "e1" e1_e1 (ClassSlots cls_e1))
                               (child "e2" e1_e2 (ClassSlots cls_e2))))
        ;; the two joined: where they share _t1 the occurrences are identified (C6);
        ;; nothing here if a clique breaks
        (= f (frame-join atom_p atom_t1))
-       ;; spelled in the root's class slots, then every consistent merging of what the
-       ;; pattern left open, the frame itself first (C8)
+       ;; spelled in the root's class slots, then every reading of _t1 the rest of the
+       ;; frame allows and every consistent merging of what the pattern left open (C8)
        (= refined (refinements (anchor f "_p")))
        ;; one refinement per index; `vec-get` is partial past the last (C8)
        (Idx choice)
@@ -677,40 +663,45 @@ first one is what a redundancy-heavy test needs to finish at all.
 ## One row per shape per class
 
 The index says which rows are one node; it removes none. A class can still hold two
-rows of one shape under two readings: the same node built twice in different frames,
+rows of one node under two readings: the same node built twice in different frames,
 or a node and its image under a symmetry of a child. Every such row is matched, indexed
 and migrated again, and on `redundancy-tests.egg` the plain encoding does not finish.
-One row is enough. The merge block has already recorded the symmetry between the two
-readings, and a pattern reaches the other reading through the class's group (C5).
-So every row writes its shape into `_shapeof_Add`, canonical edges and reading as
-columns, and where two rows of one class have the same children and the same canonical
-edges, the one whose reading is the greater is deleted. Both rows are matched as rows,
-so the rule only ever compares nodes that exist.
+One row is enough, and one is what the reference's hashcons keeps. The merge block has
+already recorded the symmetry between the two readings, and a pattern reaches the
+other reading through the class's group and its children's (C5). So the shape walk
+writes every row's shape into `_shapeof_Add` -- the least spelling of its edges over
+its children's groups, and the renaming back to the row's own names, as columns -- and
+where two live rows of one class have the same children and the same shape, the one
+whose edges, as a vector, are the greater is deleted. Both rows are matched as rows,
+so the rule only ever compares nodes that exist, and comparing the rows whole is what
+makes exactly one of any two go.
 
 ```
 (function _shapeof_Add (Renaming Math Renaming Math) (Renaming Renaming Renaming)
   :merge (values new0 new1 new2))
 
-(rule ((= c (Add m1 c1 m2 c2))
-       (= sh (shape m1 m2)))
-      ((set (_shapeof_Add m1 c1 m2 c2) (values (vec-get sh 0) (vec-get sh 1) (vec-get sh 2)))) :ruleset slotted)
+;; written by the shape walk of the index rule, from the same `node-shape`
+       (set (_shapeof_Add m1 c1 m2 c2) (values (vec-get sh 0) (vec-get sh 1) (vec-get sh 2)))
 
 (rule ((= c (Add m1 c1 m2 c2))
        (= (values s1 s2 b1) (_shapeof_Add m1 c1 m2 c2))
        (= c (Add n1 c1 n2 c2))
        (= (values s1 s2 b2) (_shapeof_Add n1 c1 n2 c2))
-       (!= b1 b2)
-       (= b1 (ordering-max b1 b2)))
+       (= v1 (vec-of m1 m2))
+       (= v2 (vec-of n1 n2))
+       (!= v1 v2)
+       (= v1 (ordering-max v1 v2)))
       ((delete (Add m1 c1 m2 c2))) :ruleset slotted)
 ```
 
 ## One reading per coset of the pinned slots
 
-A nested pattern reads a class through one column of a parent row, and in Part I its
-atom ranges over the class's whole group: one row of `Symmetry` per element. On the
-TTM workload's second phase that gave `let-binop3` 166,415 distinct matches at the
-fixed point where the reference matcher makes some 14,000 over its whole run, and
-`sum-merge` ran the frame primitives on 150,944 candidates to keep 188.
+A nested pattern reads a class through one column of a parent row, and in Part I the
+frame decides its reading among the class's whole group, one refinement per element
+that fits. When the whole group was enumerated as query rows, the TTM workload's
+second phase gave `let-binop3` 166,415 distinct matches at the fixed point where the
+reference matcher makes some 14,000 over its whole run, and `sum-merge` ran the frame
+primitives on 150,944 candidates to keep 188.
 
 Two readings that agree on the slots the parent's *other* columns pin, and differ only
 on the rest, spell the parent row the same way up to a renaming of the parent's own
@@ -724,13 +715,16 @@ shape.
 
 `group-coset-reps` picks the least element per way the group acts on the pinned slots.
 The readings live in `CosetReps`, keyed by the class and the pinned slots, with
-`Reading` as their index kept by two view rules like the group's; a class has few
-distinct keys, however many rows read it. Each row records the key its columns give, in
-`_pinned_Add`, so a matching rule that holds the parent row looks the key up and joins
-the readings on it exactly — egglog cannot join on a value a primitive computes inside
-the same rule, and keying the readings by row instead multiplied the index's work by
-the number of rows. One rule per child column that is not a binder; a binder column's
-child is the variable class, which no atom reads, though its edge pins its slot.
+`Reading` as their index: a row per element, read out by its position through
+`GroupIdx`, deleted when the set no longer holds it, and refused outright past
+`GroupIdx`'s 512 entries; a class has few distinct keys, however many rows read it.
+Each row records the key its columns give, in `_pinned_Add`, so a matching rule that
+holds the parent row looks the key up and joins the readings on it exactly — egglog
+cannot join on a value a primitive computes inside the same rule, and keying the
+readings by row instead multiplied the index's work by the number of rows. One rule per
+child column that is not a binder; a binder column's child is the variable class, which
+no atom reads, though its edge pins its slot. A claim's subterms are read the same way,
+parent first.
 
 ```
 (function CosetReps (Math Renaming) Group :merge new)
@@ -746,17 +740,32 @@ child is the variable class, which no atom reads, though its edge pins its slot.
       ((Reading c pinned g)) :ruleset slotted)
 (rule ((Reading c pinned g) (= s (CosetReps c pinned)) (set-not-contains s g))
       ((delete (Reading c pinned g))) :ruleset slotted)
+(rule ((= s (CosetReps c pinned)) (= grp (EclassGroup c))
+       (= fresh (group-coset-reps grp pinned)) (!= s fresh))
+      ((set (CosetReps c pinned) fresh)) :ruleset slotted)
+(rule ((= s (CosetReps c pinned)) (> (set-length s) 512))
+      ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted)
 ```
 
-In the compiled rule the `Symmetry` join of a nested root becomes a lookup and a join:
+The repair rule is there because `:merge new` is not a function of the state: when
+egglog merges two class ids, two `CosetReps` rows fall onto one key and whichever
+egglog took as the newer survives, which can be the one written under the smaller
+group -- a reading missing, a claim that cannot find a row that is there
+(`binder-tests.egg`). A stored set that disagrees with the group as it stands is
+rewritten, and the correct value is a fixed point.
+
+In the compiled rule the nested root's group becomes a lookup, a join, and one reading
+handed to the binding:
 
 ```
        (= pinned_t1 (_pinned_Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1 4))
        (Reading cls_t1 pinned_t1 sym_t1)
+       (= atom_t1 (atom "_t1" (root "_t1" (ClassSlots cls_t1) sym_t1) ...))
 ```
 
 A repeated occurrence that is not a nested root — a pattern variable written twice —
-still joins `Symmetry`, the whole group.
+keeps the whole group in its binding: the rest of the pattern pins both occurrences'
+slots, so the frame finds the one element that fits, or none, at no cost to the join.
 
 ## Store the match before acting
 
@@ -848,8 +857,8 @@ identity edge goes too.
 Three of the primitives do more than their signature says, for the same reason.
 
 `node-shape` walks the product of the children's groups once and returns the canonical
-edges, the renaming back, and the node's own symmetries together, where two walks —
-one for the key, one for the symmetries — used to cost twice.
+edges, the renaming back, and the node's own symmetries together, so the key and the
+symmetries cost one walk, with `_syms_F` carrying the tail to the rule that waits.
 
 `group-coset-reps` chooses the least element of each coset, so the reading a rule sees
 does not depend on the order egglog stored the group in.
@@ -889,16 +898,20 @@ checks that.
 **C4. A variable's renaming is no wider than its class.** Every binding carries the
 class's exact slots, `(ClassSlots cls)`, and the frame's occurrences of `v` are those
 slots and no others; a node may carry a slot its class has made redundant, and that
-slot is the node's alone.
+slot is the node's alone -- an occurrence like any other, which a variable bound
+through it may meet again elsewhere (*Against the reference*, below).
 
 **C5. Repeated occurrences are compared up to symmetry.** A further occurrence of a
-bound variable joins a symmetry row and hands `sym_x` to its binding, so the match
+bound variable is read through some element of its class's group, so the match
 quantifies over the group. The root of a nested atom — a flattener temp, met once as a
 column of its parent — looks up the slots the parent's other columns pin in
-`_pinned_F` and joins `(Reading cls_x pinned sym_x)`: one row per coset of those slots,
-since readings that differ elsewhere are related by a symmetry of the parent's class the
-shape index derives. Any other repeated occurrence joins `(Symmetry cls_x sym_x)`, one
-row per group element.
+`_pinned_F`, joins `(Reading cls_x pinned sym_x)`, one row per coset of those slots,
+since readings that differ elsewhere are related by a symmetry of the parent's class
+the shape index derives, and hands `sym_x` to its binding. Any other repeated
+occurrence hands its binding the whole group, `(EclassGroup cls_x)`, and
+`refinements` decides the element once the rest of the frame has pinned both
+occurrences' slots. A claim compares the two terms' renamings up to the root class's
+group with `coset-same`.
 
 **C6. Where two atoms agree on a variable, their occurrences are one.** The join
 identifies `Node(a, e(t))` and `Node(b, e'(t))` through `Var(v, t)`, which is the
@@ -972,6 +985,58 @@ slots the node leaves free. This is the one place the encoding writes something 
 than what the rule says, and it changes no answer: the node is the same node, spelled
 in the numbering every frame agrees on, so two rules that build it write one row and
 reach one value. The root keeps the frame's spelling (C11).
+
+# Against the reference
+
+The side to match is the reference crate's multipattern matcher, `ref-multi` -- the
+pattern language the encoding implements -- and the goal is the same e-graph: the same
+classes, with the same rows in each. `slotted/eval.py` compares the encoding's final
+graph with each reference side's on every workload and says `isomorphic`, `same
+partition`, or `split k, merged m`; `slotted/xdiff/partition.py` is the partition
+question, every reference node's term added to the finished graph. Three things had to
+be made the same, each established on a minimal case the harness keeps:
+
+- *Substitution picks the same term.* `beta` substitutes into one term of the body's
+  class, and which term decides which rows the graph holds from then on. The encoding
+  takes the smallest term, ties broken by a canonical spelling (`slotted_subst.rs`,
+  `cheapest`), from the e-graph as the round began, since `beta/apply` runs in one
+  apply phase whose reads are that snapshot. The crate's own methods read the graph at
+  application time, after the round's earlier unions, and its default takes the node a
+  class was created with -- history the encoding cannot replay. So the oracle harness
+  substitutes as the encoding does: `slotted/xmulti`'s `SnapshotSubst` takes the
+  smallest term per class at each round's start, the same tie-break over the same
+  constructor names (`ctor` lines in the spec, from `eval.py`), and is the harness's
+  default (`XMULTI_SUBST=syntactic` restores the crate's). It costs the oracle nothing
+  measurable. Without it, ΣMMM's second phase ended with 71 classes against the
+  reference's 75, eight reference classes split; with it the partitions agree.
+- *One row per node.* The shape walk folds a row and its image under a symmetry of a
+  child (*One row per shape per class*), as the reference's hashcons does. Before, the
+  encoding kept both -- an extra `sum` row per such reading on MMM's first phase -- and
+  `cheapest` could pick a spelling the reference never holds.
+- *A redundant slot unifies, on both sides.* `let x = var(r) in var(a)` sits in the
+  class of `var(a)` carrying `r`, which its class does not. The frame reads the slot as
+  an occurrence like any other (C4), so on `binop f (var a) (var b)` the pattern
+  `(Binop f (Let e1 $x e2) (Let e1 $x e3))` finds `e1` with the two lets' redundant
+  slots read as one -- soundly, since the class's meaning does not depend on the slot.
+  The multipattern matcher's `unify` and `final_refine` do the same. The crate's nested
+  matcher, the one the paper's experiments ran, gives such a slot a fresh name on every
+  use and finds no `e1`, which is why `ref-nested` holds fewer `sdql-let` rows than
+  either; `SLOTTED_RIGID_REDUNDANT=1` in the environment makes the frame refuse what it
+  refuses, for a diagnosis, and is not the default.
+
+With the three in place, ΣMMM's and MMM's first phases are isomorphic to `ref-multi`,
+witnessed, and their second phases hold the same classes and the same rows: `same
+rows` in the report, which `partition.py` decides without a witness search -- the
+partitions agree, every reference node is already a row of the encoding's graph in
+some reading (the probes add no constructor row), and the row counts are equal, so
+each class holds the reference's rows and no others. TTM's second phase is open:
+`ref-multi` does not finish it within the artifact's 300 s, `ref-nested` ends with 196
+classes to the encoding's 205, and the encoding has settled by then.
+
+**Rounds.** The evaluation runs the paper's budget on every side; the reference stops
+early when a round applies nothing new and reports that, and the encoding is asked
+after its budget whether one more round would change anything. All ten SDQL workloads
+settle on every side within the budget.
 
 # Where the pieces live
 

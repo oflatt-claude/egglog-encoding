@@ -20,7 +20,7 @@ away:
   node and a swap; a class without the swap holds the same one node. Comparing node sets
   alone cannot tell them apart, so the group is compared too -- recovered from the
   reference with `eq` on two invocations, and from the encoding as the rows of
-  `(Symmetry c p)` whose `p` permutes the class's slots.
+  `EclassGroup c` whose elements permute the class's slots.
 * **A node is only defined up to those groups.** `k($0,$1)` and `k($1,$0)` are the same
   node of a commutative class, and the two sides need not store the same representative.
   So node equality quantifies over the parent's group and each child's group -- the
@@ -199,6 +199,12 @@ def read_json_graph(doc):
             if len(set(maps[n["eclass"]].values())) != len(maps[n["eclass"]]):
                 issues.append(f"non-injective renaming in {n['eclass']}")
 
+    # a group's contents, from the `set-of` node in its class: its elements are renamings
+    sets = {}
+    for n in nodes.values():
+        if n.get("op") == "set-of" and n["eclass"].startswith("Group-"):
+            sets[n["eclass"]] = list(n.get("children", []))
+
     def as_renaming(node_id):
         cid = cls(node_id)
         if cid not in maps:
@@ -223,10 +229,12 @@ def read_json_graph(doc):
             slots_of[value] = slots
         elif op == SYM.renames and len(kids) == 3:
             loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[2])))
-        elif op == SYM.symmetry and len(kids) == 2:
-            # a symmetry is a renaming of a class onto ITSELF, so it reads here as the
-            # self-loop the rest of this function is written against
-            loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[0])))
+        elif op == SYM.group and len(kids) == 1:
+            # a symmetry is a renaming of a class onto ITSELF, so each element of the
+            # class's group reads here as the self-loop the rest of this function is
+            # written against; a follower's group is empty
+            for element in sets.get(n["eclass"], []):
+                loops.append((cls(kids[0]), as_renaming(element), cls(kids[0])))
         elif op == SYM.var:
             leaf_rows["var"] += 1
             if len(kids) != 1:
@@ -452,14 +460,14 @@ def build_encoding_graph(doc):
         else:
             issues.append(f"{a}: framed symmetry is not a permutation of {sorted(g.slots[rep])}")
 
-    # Matching consumes the ACTUAL `Symmetry` rows, so do not repair a missing group
+    # Matching consumes the ACTUAL group value, so do not repair a missing group
     # element in the reader. Require those rows to contain the identity and already be
     # closed, then require every non-self relation to be path-consistent modulo that
     # recorded group.
     for rep, perms in g.group.items():
         identity = frozenset((s, s) for s in g.slots[rep])
         if identity not in perms:
-            issues.append(f"{rep}: no identity Symmetry row")
+            issues.append(f"{rep}: no identity in the group")
         closure = set(perms) | {identity}
         changed = True
         while changed:
@@ -718,6 +726,54 @@ def match_nodes(src, dst, src_slots, dst_slots, pmap, cmap, smap, dst_groups):
 
 
 # --------------------------------------------------------------- the refinement
+def slot_colors(g, col, rounds=3):
+    """A color per (class, slot) from how the class's nodes use the slot: the op and
+    column of each occurrence, the child's class color, and the child's own color for
+    the slot it sends there, refined a few rounds. Invariant under renaming, so a slot
+    bijection between two classes need only pair slots of one color."""
+    sc = {(c, s): () for c in g.ids() for s in g.slots[c]}
+    for _ in range(rounds):
+        nxt = {}
+        for c in g.ids():
+            for s in g.slots[c]:
+                sig = []
+                for op, elems in g.nodes[c]:
+                    for k, e in enumerate(elems):
+                        if e[0] == "slot":
+                            if e[1] == s:
+                                sig.append((op, k, "direct"))
+                        else:
+                            for cs, ps in e[2]:
+                                if ps == s:
+                                    sig.append((op, k, col[e[1]], sc.get((e[1], cs), "private")))
+                nxt[(c, s)] = (sc[(c, s)], tuple(sorted(sig, key=repr)))
+        # a class's rows are kept once per symmetry, so a slot and its images under the
+        # group must share a color: the color of the orbit
+        sc = {}
+        for c in g.ids():
+            for s in g.slots[c]:
+                orbit = {dict(p).get(s, s) for p in g.group[c]} | {s}
+                sc[(c, s)] = tuple(sorted((nxt[(c, t)] for t in orbit if (c, t) in nxt), key=repr))
+    return sc
+
+
+def depths(g):
+    """How far each class is from a leaf: the order in which children are placed before
+    their parents, so a class's nodes are checked as soon as it is placed."""
+    d = {c: None for c in g.ids()}
+    changed = True
+    while changed:
+        changed = False
+        for c in g.ids():
+            for _, elems in g.nodes[c]:
+                kids = [e[1] for e in elems if e[0] == "child"]
+                if all(d[k] is not None for k in kids if k != c):
+                    val = 1 + max((d[k] for k in kids if k != c), default=0)
+                    if d[c] is None or val < d[c]:
+                        d[c], changed = val, True
+    return {c: (v if v is not None else 10**6) for c, v in d.items()}
+
+
 def colors(g, rounds=6):
     col = {
         c: (len(g.slots[c]), len(g.group[c]), tuple(sorted((n[0], tuple(e[0] for e in n[1])) for n in g.nodes[c])))
@@ -752,15 +808,32 @@ def find_isomorphism(ga, gb):
         return None, f"refinement colors differ ({len(only_a)} class shapes unmatched)"
 
     cand = {a: [b for b in gb.ids() if cb[b] == ca[a]] for a in ga.ids()}
-    order = sorted(ga.ids(), key=lambda a: len(cand[a]))
+    # children before parents, the least ambiguous first: a class placed after its
+    # children has its nodes checked at once, and a wrong choice is undone early
+    da = depths(ga)
+    order = sorted(ga.ids(), key=lambda a: (da[a], len(cand[a])))
+    sca, scb = slot_colors(ga, ca), slot_colors(gb, cb)
     budget = [SEARCH_CAP]
 
     def slot_bijections(a, b):
+        """Bijections pairing slots of one color, with the group carried across."""
         sa, sb = ga.slots[a], gb.slots[b]
         if len(sa) != len(sb):
             return
-        for perm in itertools.permutations(sb):
-            m = dict(zip(sa, perm, strict=True))
+        by_color_a, by_color_b = {}, {}
+        for s in sa:
+            by_color_a.setdefault(sca[(a, s)], []).append(s)
+        for s in sb:
+            by_color_b.setdefault(scb[(b, s)], []).append(s)
+        if sorted(map(repr, by_color_a)) != sorted(map(repr, by_color_b)) or any(
+            len(by_color_a[k]) != len(by_color_b[k]) for k in by_color_a
+        ):
+            return
+        keys = list(by_color_a)
+        for perms in itertools.product(*(itertools.permutations(by_color_b[k]) for k in keys)):
+            m = {}
+            for k, perm in zip(keys, perms, strict=True):
+                m.update(zip(by_color_a[k], perm, strict=True))
             # the group has to correspond too, not just the slot count
             mapped = {frozenset((m[x], m[y]) for x, y in p) for p in ga.group[a]}
             if mapped == gb.group[b]:

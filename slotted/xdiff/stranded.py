@@ -1,6 +1,6 @@
 """Does a stranded node carry anything no visible node carries?
 
-A class holding a node but no `Symmetry V s` row is invisible to every compiled
+A class holding a node but no element in its group is invisible to every compiled
 rule, since they all join that row to reach the class's symmetries. Whether that
 costs anything depends on whether some *visible* node is alpha-equivalent to the
 stranded one -- same operator, same children, edges equal up to one injective
@@ -47,12 +47,14 @@ if _uncovered:
 
 def _observer():
     out = [
+        "(relation ObsSym (U Renaming))",
+        "(rule ((GroupIdx i) (= s (EclassGroup_0 c)) (= g (set-get s i))) ((ObsSym c g)))",
         "(relation WithSym (String Renaming U Renaming U))",
         "(relation NoSym (String Renaming U Renaming U))",
     ]
     for name, sig in BINARY.items():
         pat = enc.pattern(name, sig)
-        out.append(f'(rule ((= V {pat}) ({X.SYM.symmetry} V s)) ((WithSym "{name}" m1 c1 m2 c2)))')
+        out.append(f'(rule ((= V {pat}) (ObsSym V s)) ((WithSym "{name}" m1 c1 m2 c2)))')
         out.append(f'(rule ((= V {pat})) ((NoSym "{name}" m1 c1 m2 c2)))')
     sizes = "\n".join(f"(print-size {n})" for n in BINARY)
     return "\n".join(

@@ -34,6 +34,10 @@ OBS_TEMPLATE = """
 ;; observation behind.
 (ruleset obs)
 
+;; the group's elements as rows, which the observers below join one at a time
+(relation ObsSym (U Renaming))
+(rule ((GroupIdx i) (= s (EclassGroup_0 c)) (= g (set-get s i))) ((ObsSym c g)) :ruleset obs)
+
 ;; a stored renaming that is not injective
 (relation NotInjective (Renaming))
 (rule (({X.SYM.renames} a m b) (!= (map-length m) (map-length (map-image m))))
@@ -43,7 +47,7 @@ OBS_TEMPLATE = """
 (relation WideEdge (String Renaming U Renaming))
 <<NODE RULES>>
 
-(run obs 1)
+(run obs 2)
 (print-size NotInjective)
 (print-function WideEdge 200)
 """
@@ -78,7 +82,7 @@ def node_rules():
                 continue
             out.append(
                 f"(rule ((= n {pat})\n"
-                f"       ({X.SYM.symmetry} {kids[i]} s)\n"
+                f"       (ObsSym {kids[i]} s)\n"
                 f"       (= s (compose s s))\n"
                 f"       (< (map-length s) (map-length {edges[i]})))\n"
                 f'      ((WideEdge "{name} child {i + 1}" {edges[i]} {kids[i]} s)) :ruleset obs)'

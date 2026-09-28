@@ -224,16 +224,20 @@ fn a_redundant_node_slot_survives_the_frame_change() -> Result<(), Error> {
 (let $body (H (map-of 0 5) $c (map-of 0 6) (Var 0)))
 (run-schedule (saturate (run slots)))
 (let $out (slotted-subst $body 5 (Var 0) (map-empty) (Null)))
-(check (= x (H (map-empty) (Null) (map-of 0 7) (Var 0))))
+;; the slot survives under some name -- the result is spelt canonically, as the
+;; reference's fresh names are arbitrary too -- and is not dropped
+(check (= x (H (map-empty) (Null) m (Var 0))) (= (map-length m) 1))
 (fail (check (= x (H (map-empty) (Null) (map-empty) (Var 0)))))
 ",
     )?;
     // The result keeps the redundant slot, so the outer edge names it.
     egraph.parse_and_run_program(
         None,
-        "(check (= $out (H (map-of 7 7)
-                          (H (map-empty) (Null) (map-of 0 7) (Var 0))
-                          (map-of 0 6) (Var 0))))",
+        "(check (= $out (H outer
+                          (H (map-empty) (Null) inner (Var 0))
+                          (map-of 0 6) (Var 0)))
+                (= (map-length outer) 1)
+                (= (map-length inner) 1))",
     )?;
     Ok(())
 }

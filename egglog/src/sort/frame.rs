@@ -33,6 +33,7 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 type Slots = BTreeMap<i64, i64>;
 
@@ -65,6 +66,9 @@ pub enum Binding {
         var: String,
         class_slots: Slots,
         sym: Option<Slots>,
+        /// the class's symmetry group, when the reading is the frame's to decide;
+        /// shared, since a frame carries it through every step of its resolution
+        group: Option<Arc<Vec<Slots>>>,
     },
     /// a child column carrying a variable by an edge
     Child {
@@ -72,6 +76,7 @@ pub enum Binding {
         edge: Slots,
         class_slots: Slots,
         sym: Option<Slots>,
+        group: Option<Arc<Vec<Slots>>>,
     },
     /// a slot literal; `carried` when the column is an ordinary one, whose slot
     /// refinement may merge
@@ -94,6 +99,20 @@ pub struct Names(pub Vec<String>);
 
 pub type Ns = Boxed<Names>;
 
+/// A binding whose reading of its class is still open: the column's node slots meet
+/// the variable's class slots through some element of the class's group, and which
+/// one is settled by `refinements`, once the rest of the frame has pinned what it can
+/// (C5). A further occurrence of a variable is bound this way, so the match quantifies
+/// over the group without the query enumerating it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Pending {
+    atom: String,
+    var: String,
+    /// class slot -> node slot; the identity on the class slots for a root
+    edge: Slots,
+    group: Arc<Vec<Slots>>,
+}
+
 /// The constraints a match has placed on slots so far, closed.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Frame {
@@ -111,12 +130,25 @@ pub struct Frame {
     /// the variable whose class slots name the pattern's slots: a block holding
     /// `Var(anchor, t)` is slot `t`, the rest take the smallest free numbers
     anchor: Option<String>,
+    /// bindings whose reading is still open, resolved by `refinements`
+    pending: Vec<Pending>,
+    /// node occurrences of slots the node's class does not have, under `rigid_redundant`
+    rigid: BTreeSet<Occ>,
 }
 
 pub type Fr = Boxed<Frame>;
 
 /// How many refinements are enumerated at most; index 0 is always the identity.
 pub const REFINE_CAP: usize = 64;
+
+/// EXPERIMENT (`SLOTTED_RIGID_REDUNDANT` set): a slot a node carries that its class
+/// does not is a fresh constant of that node alone, as the reference's `enodes_applied`
+/// makes it -- it never becomes one slot with another atom's slot or a literal, and
+/// refinement leaves it alone. Off, it is a slot like any other (C4).
+pub fn rigid_redundant() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SLOTTED_RIGID_REDUNDANT").is_some())
+}
 
 impl Frame {
     /// One atom's constraints: its label, exactly one `Root` among the bindings, and
@@ -128,10 +160,11 @@ impl Frame {
                 var,
                 class_slots,
                 sym,
-            } => Some((var, class_slots, sym)),
+                group,
+            } => Some((var, class_slots, sym, group)),
             _ => None,
         });
-        let (root_var, root_slots, root_sym) = roots.next()?;
+        let (root_var, root_slots, root_sym, root_group) = roots.next()?;
         if roots.next().is_some() {
             return None;
         }
@@ -149,16 +182,29 @@ impl Frame {
         let mut occs: BTreeSet<Occ> = BTreeSet::new();
         let mut class_slots: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
         let mut literals: BTreeMap<String, bool> = BTreeMap::new();
+        let mut pending: Vec<Pending> = Vec::new();
+        let mut bound_slots: BTreeSet<i64> = BTreeSet::new();
 
         // the root: the node is an invocation of the variable's class
         let cs: BTreeSet<i64> = root_slots.keys().copied().collect();
-        for &s in &cs {
-            let t = match root_sym {
-                Some(sym) => *sym.get(&s)?,
-                None => s,
-            };
-            occs.insert(Occ::Var(root_var.clone(), t));
-            eqs.push((Occ::Node(atom.clone(), s), Occ::Var(root_var.clone(), t)));
+        if let Some(group) = root_group {
+            // through some element of the class's group: decided later
+            occs.extend(cs.iter().map(|&s| Occ::Var(root_var.clone(), s)));
+            pending.push(Pending {
+                atom: atom.clone(),
+                var: root_var.clone(),
+                edge: cs.iter().map(|&s| (s, s)).collect(),
+                group: group.clone(),
+            });
+        } else {
+            for &s in &cs {
+                let t = match root_sym {
+                    Some(sym) => *sym.get(&s)?,
+                    None => s,
+                };
+                occs.insert(Occ::Var(root_var.clone(), t));
+                eqs.push((Occ::Node(atom.clone(), s), Occ::Var(root_var.clone(), t)));
+            }
         }
         node_slots.extend(cs.iter().copied());
         class_slots.insert(root_var.clone(), cs);
@@ -171,10 +217,23 @@ impl Frame {
                     edge,
                     class_slots: cls,
                     sym,
+                    group,
                 } => {
                     let cs: BTreeSet<i64> = cls.keys().copied().collect();
                     node_slots.extend(edge.values().copied());
+                    if let Some(group) = group {
+                        occs.extend(cs.iter().map(|&t| Occ::Var(var.clone(), t)));
+                        pending.push(Pending {
+                            atom: atom.clone(),
+                            var: var.clone(),
+                            edge: edge.clone(),
+                            group: group.clone(),
+                        });
+                    }
                     for &t in &cs {
+                        if group.is_some() {
+                            break;
+                        }
                         let u = match sym {
                             Some(sym) => *sym.get(&t)?,
                             None => t,
@@ -198,6 +257,9 @@ impl Frame {
                     carried,
                 } => {
                     let s = *edge.get(&0)?;
+                    if !carried {
+                        bound_slots.insert(s);
+                    }
                     node_slots.extend(edge.values().copied());
                     occs.insert(Occ::Lit(name.clone()));
                     eqs.push((Occ::Node(atom.clone(), s), Occ::Lit(name.clone())));
@@ -209,6 +271,16 @@ impl Frame {
             }
         }
         occs.extend(node_slots.iter().map(|&s| Occ::Node(atom.clone(), s)));
+        let root_cs: BTreeSet<i64> = root_slots.keys().copied().collect();
+        let rigid: BTreeSet<Occ> = if rigid_redundant() {
+            node_slots
+                .iter()
+                .filter(|s| !root_cs.contains(s) && !bound_slots.contains(s))
+                .map(|&s| Occ::Node(atom.clone(), s))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
 
         let frame = Frame {
             blocks: close(occs, &eqs),
@@ -216,6 +288,8 @@ impl Frame {
             literals,
             bugs,
             anchor: None,
+            pending,
+            rigid,
         };
         frame.consistent().then_some(frame)
     }
@@ -249,8 +323,99 @@ impl Frame {
             literals,
             bugs: self.bugs.union(&other.bugs).cloned().collect(),
             anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
+            pending: self.pending.iter().chain(&other.pending).cloned().collect(),
+            rigid: self.rigid.union(&other.rigid).cloned().collect(),
         };
         frame.consistent().then_some(frame)
+    }
+
+    /// How many of a pending reading's node slots the frame has already tied to a name
+    /// of the pattern's own: a literal, or a slot of the anchor's class.
+    fn pinned(&self, p: &Pending) -> usize {
+        p.edge
+            .values()
+            .filter(|&&s| {
+                self.block_of(&Occ::Node(p.atom.clone(), s))
+                    .is_some_and(|i| {
+                        self.blocks[i].iter().any(|o| match o {
+                            Occ::Lit(_) => true,
+                            Occ::Var(v, _) => self.anchor.as_deref() == Some(v.as_str()),
+                            Occ::Node(..) => false,
+                        })
+                    })
+            })
+            .count()
+    }
+
+    /// This frame with more equations, re-closed, and the given readings still open;
+    /// `None` when a clique breaks.
+    fn with(&self, extra: &[(Occ, Occ)], pending: Vec<Pending>) -> Option<Frame> {
+        let mut occs: BTreeSet<Occ> = BTreeSet::new();
+        let mut eqs: Vec<(Occ, Occ)> = Vec::new();
+        for block in &self.blocks {
+            occs.extend(block.iter().cloned());
+            for pair in block.windows(2) {
+                eqs.push((pair[0].clone(), pair[1].clone()));
+            }
+        }
+        for (a, b) in extra {
+            occs.insert(a.clone());
+            occs.insert(b.clone());
+            eqs.push((a.clone(), b.clone()));
+        }
+        let frame = Frame {
+            blocks: close(occs, &eqs),
+            pending,
+            ..self.clone()
+        };
+        frame.consistent().then_some(frame)
+    }
+
+    /// Every way to decide the open readings that keeps the frame consistent, each
+    /// once. The rest of the frame usually pins the slots on both sides, so one
+    /// element of the group fits, or none.
+    fn resolved(&self) -> Vec<Frame> {
+        if self.pending.is_empty() {
+            return vec![self.clone()];
+        }
+        // the reading the rest of the frame constrains most goes first, so that the
+        // elements it rules out are never multiplied by the others' -- a claim spells
+        // its root's slots as literals, a rule anchors them, and each decided reading
+        // pins the ones below it
+        let pick = (0..self.pending.len())
+            .max_by_key(|&i| self.pinned(&self.pending[i]))
+            .expect("at least one pending reading");
+        let first = &self.pending[pick];
+        let rest: Vec<Pending> = self
+            .pending
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != pick)
+            .map(|(_, p)| p.clone())
+            .collect();
+        let mut out = Vec::new();
+        let mut seen: BTreeSet<Vec<Vec<Occ>>> = BTreeSet::new();
+        'elements: for g in first.group.iter() {
+            let mut eqs = Vec::with_capacity(first.edge.len());
+            for (t, s) in &first.edge {
+                let Some(u) = g.get(t) else {
+                    continue 'elements;
+                };
+                eqs.push((
+                    Occ::Node(first.atom.clone(), *s),
+                    Occ::Var(first.var.clone(), *u),
+                ));
+            }
+            let Some(next) = self.with(&eqs, rest.clone()) else {
+                continue;
+            };
+            for frame in next.resolved() {
+                if seen.insert(frame.blocks.clone()) {
+                    out.push(frame);
+                }
+            }
+        }
+        out
     }
 
     /// The frame spelled in this variable's slot names.
@@ -304,7 +469,25 @@ impl Frame {
                 .iter()
                 .enumerate()
                 .all(|(i, o)| block[i + 1..].iter().all(|p| !self.violated(o, p)))
+                && self.rigid_ok(block)
         })
+    }
+
+    /// Under `rigid_redundant`: a block holding a rigid occurrence of atom `a` holds no
+    /// literal and no node occurrence of another atom.
+    fn rigid_ok(&self, block: &[Occ]) -> bool {
+        let Some(Occ::Node(a, _)) = block.iter().find(|o| self.rigid.contains(o)) else {
+            return true;
+        };
+        block.iter().all(|o| match o {
+            Occ::Node(b, _) => b == a,
+            Occ::Lit(_) => false,
+            Occ::Var(..) => true,
+        })
+    }
+
+    fn has_rigid(&self, block: &[Occ]) -> bool {
+        block.iter().any(|o| self.rigid.contains(o))
     }
 
     /// `apart`, less the cliques a bug switches off.
@@ -411,6 +594,9 @@ impl Frame {
     /// Whether refinement may merge this block: one a variable or a carried literal
     /// reaches. A redundant node slot or a binder's own slot stays as it is.
     fn carried(&self, block: &[Occ]) -> bool {
+        if self.has_rigid(block) {
+            return false;
+        }
         block.iter().any(|o| match o {
             Occ::Var(..) => true,
             Occ::Lit(x) => self.literals.get(x).copied().unwrap_or(false),
@@ -434,15 +620,24 @@ impl Frame {
         out
     }
 
-    /// Every consistent way to merge the blocks refinement may touch, the identity
-    /// first, at most `cap` of them. This is the reference's `final_refine`.
+    /// Every consistent way to decide the open readings and then to merge the blocks
+    /// refinement may touch, each reading's unmerged frame before its mergings, at
+    /// most `cap` of them. This is the reference's `final_refine`.
     pub fn refinements(&self, cap: usize) -> Vec<Frame> {
-        let mut out = vec![self.clone()];
-        if self.has_bug("no-refine") {
-            return out;
+        let mut out = Vec::new();
+        let mut seen: BTreeSet<Vec<Vec<Occ>>> = BTreeSet::new();
+        for frame in self.resolved() {
+            if out.len() >= cap {
+                break;
+            }
+            if !seen.insert(frame.blocks.clone()) {
+                continue;
+            }
+            out.push(frame.clone());
+            if !frame.has_bug("no-refine") {
+                frame.walk(cap, &mut seen, &mut out);
+            }
         }
-        let mut seen: BTreeSet<Vec<Vec<Occ>>> = BTreeSet::from([self.blocks.clone()]);
-        self.walk(cap, &mut seen, &mut out);
         out
     }
 
@@ -530,6 +725,9 @@ impl fmt::Display for Frame {
             for o in block {
                 write!(f, " {o}")?;
             }
+        }
+        for p in &self.pending {
+            write!(f, "; ?{}~{}/{}", p.atom, p.var, p.group.len())?;
         }
         write!(f, "}}")
     }
@@ -733,6 +931,7 @@ mod tests {
             var: v.into(),
             class_slots: ident(cs),
             sym: None,
+            group: None,
         }
     }
 
@@ -742,6 +941,7 @@ mod tests {
             edge: m(edge),
             class_slots: ident(cs),
             sym: None,
+            group: None,
         }
     }
 
@@ -820,6 +1020,7 @@ mod tests {
                     edge: m(&[(0, 1), (1, 0)]),
                     class_slots: ident(&[0, 1]),
                     sym: Some(m(&[(0, 1), (1, 0)])),
+                    group: None,
                 },
             ],
         );

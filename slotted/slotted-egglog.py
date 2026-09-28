@@ -166,7 +166,6 @@ class Source:
                     names.subst_pending,
                     names.shape_equal,
                     names.invocation,
-                    names.symmetry,
                     names.group,
                     names.coset_reps,
                     names.reading,
@@ -428,8 +427,13 @@ class Source:
         """A ground term as the egglog expression for its value."""
         t = self.term(form, column, expected_sort=expected_sort)
         if t[0] == "var":
+            # the variable class under the renaming `0 -> s`, spelled as its own node with
+            # that slot: the machinery identifies it with the class through the renaming.
+            # Spelled as the class itself, `(Var 0)`, a union or check against it would
+            # identify the class with the other side under the IDENTITY, making every
+            # slot the two sides do not share redundant -- every variable one variable.
             sort = expected_sort or self.sole_sort(f"bare top-level slot {form!r} has no equality sort")
-            return f"({self.carriers[sort].var} 0)"
+            return f"({self.carriers[sort].var} {t[1]})"
         return self.lang.enc(t, expected_sort)
 
     def sort_of_form(self, form, expected=None, ground=True):
@@ -986,8 +990,10 @@ def claim_query(src, forms, sort):
         root, atoms = enc.flatten(src.lang, pattern, root=f"?_c{i}", tmp=f"?_c{i}t")
         query = enc.compile_query(
             src.lang,
-            # child first is only a hint to the join tree; the frame has no order
-            list(reversed(atoms)),
+            # parent first, as a rule's atoms are written: a subterm's atom is then a
+            # nested root, read through one reading per coset of the slots its parent's
+            # other columns pin (C5), rather than through the whole group
+            enc.connected_order(src.lang, atoms, first=next(k for k, a in enumerate(atoms) if a[0] == root)),
             # The claim is compiled beside the program's own `let`s, where egglog
             # refuses a pattern variable that shadows a global, so every name this
             # invents wears the `_` prefix the compiler already reserves.
@@ -1047,9 +1053,9 @@ def compile_check(src, form):
             # its own slot-swap is reached by both renamings, so the two name one
             # invocation. Every class has the identity in its group, so a class without
             # symmetries compares its renamings as they stand.
-            table = src.carriers[sort].symmetry
-            facts.append(f"({table} {a.cls} _gsym)")
-            facts.append(f"(= {a.mp} (compose {b.mp} _gsym))")
+            group = src.carriers[sort].group
+            facts.append(f"(= _grp ({group} {a.cls}))")
+            facts.append(f"(coset-same {a.mp} {b.mp} _grp)")
         return claimed(body, facts, negative=kind.endswith("!="))
     if kind in ("holds", "not-holds"):
         # "this class contains an application of this operator", which is what a rule
