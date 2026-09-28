@@ -718,6 +718,10 @@ The readings live in `CosetReps`, keyed by the class and the pinned slots, with
 `Reading` as their index: a row per element, read out by its position through
 `GroupIdx`, deleted when the set no longer holds it, and refused outright past
 `GroupIdx`'s 512 entries; a class has few distinct keys, however many rows read it.
+The index join is in two tiers: the first eight positions are joined with every set,
+and the positions past them only with the sets a `BigReading` row says reach them --
+filtering the sets by length inside the join itself cost a fifth of MMM's second
+phase, most of it in iterations where nothing matched.
 Each row records the key its columns give, in `_pinned_Add`, so a matching rule that
 holds the parent row looks the key up and joins the readings on it exactly — egglog
 cannot join on a value a primitive computes inside the same rule, and keying the

@@ -34,6 +34,7 @@ class CarrierSymbols:
     invocation: str
     group: str
     coset_reps: str
+    big_reading: str
     reading: str
 
     @classmethod
@@ -49,6 +50,7 @@ class CarrierSymbols:
             f"Invocation_{index}",
             f"EclassGroup_{index}",
             f"CosetReps_{index}",
+            f"BigReading_{index}",
             f"Reading_{index}",
         )
 
@@ -946,6 +948,7 @@ def carrier_core(symbols):
             # Keyed by the class and the pinned slots; the per-constructor rules fill
             # it, and give each row the key its columns need.
             f"(function {s.coset_reps} ({s.sort} Renaming) Group :merge new)",
+            f"(relation {s.big_reading} ({s.sort} Renaming))",
             # Its index, one row per representative, which is what a matching rule joins.
             f"(relation {s.reading} ({s.sort} Renaming Renaming))",
             "",
@@ -1111,9 +1114,24 @@ def carrier_core(symbols):
             # The index of the readings: a row for every element, and none for anything
             # else. These are the relation's only writers, so once the ruleset settles
             # it says exactly what the set says. A set past the last index would be
-            # indexed in part, which the guard refuses outright.
-            f"""(rule ((GroupIdx i)
+            # indexed in part, which the guard refuses outright. Two tiers, because the
+            # join tries every index against every set: most sets hold a few elements,
+            # so the first few indices are joined with every set and the rest only with
+            # the sets that reach them (20% of MMM's second phase went to the one-tier
+            # join).
+            f"""(rule ((GroupIdxSmall i)
        (= s ({s.coset_reps} c pinned))
+       (= g (set-get s i)))
+      (({s.reading} c pinned g)) :ruleset slotted)""",
+            "",
+            f"""(rule ((= s ({s.coset_reps} c pinned))
+       (> (set-length s) {GROUP_INDICES_SMALL}))
+      (({s.big_reading} c pinned)) :ruleset slotted)""",
+            "",
+            f"""(rule (({s.big_reading} c pinned)
+       (= s ({s.coset_reps} c pinned))
+       (GroupIdx i)
+       (>= i {GROUP_INDICES_SMALL})
        (= g (set-get s i)))
       (({s.reading} c pinned g)) :ruleset slotted)""",
             "",
@@ -1171,6 +1189,9 @@ NAMING_INDICES = 64
 #: many stops the program rather than match under part of its group.
 GROUP_INDICES = 512
 
+#: The indices joined with every reading set; past them only sets that reach them.
+GROUP_INDICES_SMALL = 8
+
 
 def prelude():
     """The declarations no sort owns: renamings, refinement lists, and their indices.
@@ -1192,6 +1213,8 @@ def prelude():
             ";; The indices a group's element index is read at.",
             "(relation GroupIdx (i64))",
             *(f"(GroupIdx {i})" for i in range(GROUP_INDICES)),
+            "(relation GroupIdxSmall (i64))",
+            *(f"(GroupIdxSmall {i})" for i in range(GROUP_INDICES_SMALL)),
             ";; A node's edges in canonical spelling, and the renaming back to its own names.",
             ";; Declared after `Groups`, which is where `node-shape` reads its groups.",
             "(sort Renamings (Vec Renaming))",

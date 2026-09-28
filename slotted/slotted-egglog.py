@@ -149,6 +149,7 @@ class Source:
             "Group",
             "Groups",
             "GroupIdx",
+            "GroupIdxSmall",
             "Renamings",
             "Idx",
             "slotted",
@@ -168,6 +169,7 @@ class Source:
                     names.invocation,
                     names.group,
                     names.coset_reps,
+                    names.big_reading,
                     names.reading,
                 )
             )
