@@ -655,19 +655,26 @@ machinery is one ruleset and `MACHINERY` is `(saturate (run slotted))`. Part II 
 one more ruleset in between, and splits the machinery into phases:
 
 ```
-(seq (saturate (seq (saturate (run slotted)) (run slotted-shape)))
+(seq (saturate (seq (saturate (run slotted))
+                    (saturate (run slotted-migrate))
+                    (saturate (run slotted-group))
+                    (run slotted-shape)))
      (saturate (run slotted-read)))
 ```
 
-`slotted-shape` holds the shape walks and the row dedup; `slotted-read` the coset
-readings and their index. A shape walk enumerates its children's groups and a
-reading a class's own, so both wait until the core -- leaders, migration, slot sets,
-the groups' closure -- has settled: the walks once per settled state in an outer
-loop, the readings once at the very end, since nothing in the core reads them and a
-matching rule only runs after. Run on every group change instead, MMM's second phase
-walked each `Binop` row thirteen times over and recomputed its readings as often;
-phased, it runs a quarter faster and TTM's second phase 30%. The dedup has to share
-the walk's phase, and *One row per shape per class* says why.
+`slotted` is the core: leaders, slot sets, the closure of the edges. `slotted-migrate`
+moves rows and parents onto leaders; `slotted-group` derives each class's group from
+its rows' symmetries and closes and restricts it; `slotted-shape` holds the shape
+walks and the row dedup; `slotted-read` the coset readings and their index. Each phase
+reads what the ones before it settle -- a migration reads leaders, a group reads the
+rows where they now live, a shape walk enumerates its children's groups, a reading a
+class's own -- so each waits for the ones before it: the walks once per settled state
+in an outer loop, the readings once at the very end, since nothing in the core reads
+them and a matching rule only runs after. Run together instead, MMM's second phase
+walked each `Binop` row thirteen times over, migrated rows twice that then moved
+again, and rebuilt groups that a pending migration was about to change; phased, it
+runs a third faster and TTM's second phase 40%. The dedup has to share the walk's
+phase, and *One row per shape per class* says why.
 
 # Part II. What the generator adds, and why
 

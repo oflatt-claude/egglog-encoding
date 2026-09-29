@@ -733,7 +733,7 @@ def slot_colors(g, col, rounds=3):
     bijection between two classes need only pair slots of one color."""
     sc = {(c, s): () for c in g.ids() for s in g.slots[c]}
     for _ in range(rounds):
-        nxt = {}
+        raw = {}
         for c in g.ids():
             for s in g.slots[c]:
                 sig = []
@@ -746,14 +746,17 @@ def slot_colors(g, col, rounds=3):
                             for cs, ps in e[2]:
                                 if ps == s:
                                     sig.append((op, k, col[e[1]], sc.get((e[1], cs), "private")))
-                nxt[(c, s)] = (sc[(c, s)], tuple(sorted(sig, key=repr)))
-        # a class's rows are kept once per symmetry, so a slot and its images under the
-        # group must share a color: the color of the orbit
-        sc = {}
+                raw[(c, s)] = sig
+        # a class's rows are kept once per symmetry, and which image of a row is kept
+        # can differ between two graphs: an occurrence of `s` in one is an occurrence of
+        # `g(s)` in the other. So a slot's own occurrences are not invariant, only the
+        # orbit's together are, and every slot of an orbit gets that one color.
+        prev, sc = sc, {}
         for c in g.ids():
             for s in g.slots[c]:
                 orbit = {dict(p).get(s, s) for p in g.group[c]} | {s}
-                sc[(c, s)] = tuple(sorted((nxt[(c, t)] for t in orbit if (c, t) in nxt), key=repr))
+                occurrences = (e for t in sorted(orbit, key=repr) for e in raw[(c, t)])
+                sc[(c, s)] = (prev[(c, s)], tuple(sorted(occurrences, key=repr)))
     return sc
 
 

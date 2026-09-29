@@ -14,7 +14,7 @@
 (let $n1 (N (map-of 0 0 1 1) (C (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)) (map-of 0 0 1 1) (C (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0))))
 (let $n2 (N (map-of 0 0 1 1) (C (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)) (map-of 0 0 1 1) (C (map-of 0 1) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0))))
 (let $n3 (N (map-of 0 0 1 1) (C (map-of 0 1) (SlottedVar_0 0) (map-of 0 0) (SlottedVar_0 0)) (map-of 0 0 1 1) (C (map-of 0 0) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0))))
-(run-schedule (seq (saturate (seq (saturate (run slotted)) (run slotted-shape))) (saturate (run slotted-read))))
+(run-schedule (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))))
 (check (= _c0cls_c0 (I _c0e0_c0t1 _c0cls_c0t1 _c0e0_leaf1 _c0leaf0_1))
        (RenamesToLeader_0 (Null) _c0leafren0_1 _c0leaf0_1)
        (= _c0atom_c0 (atom "_c0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (child "_c0t1" _c0e0_c0t1 (ClassSlots_0 _c0cls_c0t1)) (leaf _c0e0_leaf1)))

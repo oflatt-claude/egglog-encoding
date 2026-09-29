@@ -11,7 +11,7 @@
 (union $m7 $zero)
 (let $m9 (Mul (map-of 0 9) (SlottedVar_0 0) (map-empty) (Null)))
 (let $m97 (Mul (map-of 0 9) (SlottedVar_0 0) (map-of 0 7) (SlottedVar_0 0)))
-(run-schedule (seq (saturate (seq (saturate (run slotted)) (run slotted-shape))) (saturate (run slotted-read))))
+(run-schedule (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))))
 (check (= _c0cls_c0 (Mul _c0e0_lit_9 (SlottedVar_0 0) _c0e0_leaf1 _c0leaf0_1))
        (RenamesToLeader_0 (Null) _c0leafren0_1 _c0leaf0_1)
        (= _c0atom_c0 (atom "_c0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (lit "$9" _c0e0_lit_9) (leaf _c0e0_leaf1)))

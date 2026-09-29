@@ -13,7 +13,7 @@
 (union $f01 $g0)
 (let $g5 (G (map-of 0 5) (SlottedVar_0 0) (map-empty) (Null)))
 (let $f78 (F (map-of 0 7) (SlottedVar_0 0) (map-of 0 8) (SlottedVar_0 0)))
-(run-schedule (seq (saturate (seq (saturate (run slotted)) (run slotted-shape))) (saturate (run slotted-read))))
+(run-schedule (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))))
 (check (= _c0cls_c0 (G _c0e0_lit_0 (SlottedVar_0 0) _c0e0_leaf1 _c0leaf0_1))
        (RenamesToLeader_0 (Null) _c0leafren0_1 _c0leaf0_1)
        (= _c0atom_c0 (atom "_c0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (lit "$0" _c0e0_lit_0) (leaf _c0e0_leaf1)))

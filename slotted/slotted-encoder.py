@@ -593,7 +593,7 @@ def shape_index(name, sig, symbols=None):
 (rule ((= c {row})
        (= syms ({syms_table(name)} {cols}))
        (= cs ({symbols.class_slots} c)))
-      ((set ({symbols.group} c) (group-restrict syms cs))) :ruleset slotted)
+      ((set ({symbols.group} c) (group-restrict syms cs))) :ruleset slotted-group)
 """
 
 
@@ -637,7 +637,7 @@ def migration(name, sig, symbols=None):
        (= e2 (ordering-max e1 e2))       ; toward the leader only
        {pulled})
       ((union e1 {pattern(name, sig, edges=ns)})
-       (delete {pattern(name, sig)})))
+       (delete {pattern(name, sig)})) :ruleset slotted-migrate)
 """
 
 
@@ -689,7 +689,7 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, symbols
        (guard (or (bool-!= {kids[pos]} c')
                   (bool-!= (compose {edges[pos]} m) {edges[pos]}))))
       ((union node {pattern(name, sig, edges=new_e, kids=new_k, payloads=pays)})
-       (delete {pattern(name, sig, payloads=pays)})))
+       (delete {pattern(name, sig, payloads=pays)})) :ruleset slotted-migrate)
 """
 
 
@@ -1088,7 +1088,7 @@ def carrier_core(symbols):
        (= s2 (group-close (group-restrict s cs)))
        (!= s s2))
       ((delete ({s.group} c))
-       (set ({s.group} c) s2)) :ruleset slotted)""",
+       (set ({s.group} c) s2)) :ruleset slotted-group)""",
             "",
             # A renaming outlives a narrowing of its classes' slots: restate it on what
             # they have now.
@@ -1196,13 +1196,19 @@ NAMING_INDICES = 64
 #: many stops the program rather than match under part of its group.
 GROUP_INDICES = 512
 
-#: How the machinery saturates. The shape walk of a row enumerates its children's
-#: groups, and the coset readings enumerate a class's own, so both are run only once
-#: the rest -- leaders, migration, slot sets, the groups' closure -- has settled: the
-#: walks in an outer loop with the core, the readings once at the end, since nothing
-#: in the core reads them. Run on every group change instead, MMM's second phase
-#: walked each `Binop` row thirteen times over.
-MACHINERY_SCHEDULE = "(seq (saturate (seq (saturate (run slotted)) (run slotted-shape))) (saturate (run slotted-read)))"
+#: How the machinery saturates. Each phase reads what the ones before it settle: the
+#: core (leaders, slot sets, the edges' closure), then the migration of rows onto
+#: their leaders, then the groups from the rows' symmetries, then the shape walks,
+#: which enumerate the children's groups, and last the coset readings, which
+#: enumerate a class's own and which nothing in the core reads. So each runs only
+#: once the ones before it are done: the walks in an outer loop with the core, the
+#: readings once at the end. Run together instead, MMM's second phase walked each
+#: `Binop` row thirteen times over and migrated rows that then moved again.
+MACHINERY_SCHEDULE = (
+    "(seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate))"
+    " (saturate (run slotted-group)) (run slotted-shape)))"
+    " (saturate (run slotted-read)))"
+)
 
 
 def machinery_schedule():
@@ -1261,6 +1267,10 @@ def multi_sort_core(carriers):
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
             "",
             "(ruleset slotted)",
+            ";; rows moved into their leaders' frames: once the leaders have settled",
+            "(ruleset slotted-migrate)",
+            ";; the groups from the rows' symmetries, closed and restricted, settled on their own",
+            "(ruleset slotted-group)",
             ";; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`",
             "(ruleset slotted-shape)",
             ";; the readings a pattern joins: derived once the groups have settled",
