@@ -409,10 +409,7 @@ def schedule(steps):
     is the shape egglog's proof encoding uses for its own maintenance rulesets, where
     `instrument_schedule` wraps every user run as `(seq <run> <rebuild>)`.
     """
-    return (
-        f"(run-schedule (saturate (run slotted))\n"
-        f"              (repeat {steps} (seq (run) (run slotted-apply) (saturate (run slotted)))))"
-    )
+    return slotenc.round_schedule(steps)
 
 
 def egg_program(case, rules=None, mult=3):
@@ -458,7 +455,7 @@ def egg_program(case, rules=None, mult=3):
     # names, and a reference round would look worth two of them.
     for i, _ in enumerate(case.probes):
         out.append(f"(ProbeId _p{i} {i})")
-    out.append("(run-schedule (saturate (run slotted)) (saturate (run probes)))")
+    out.append(f"(run-schedule {slotenc.MACHINERY_SCHEDULE} (saturate (run probes)))")
     out.append("(print-function SameClass 100000)")
     return "\n".join(out) + "\n"
 

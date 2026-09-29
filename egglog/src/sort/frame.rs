@@ -31,6 +31,7 @@
 //! merged, which is the reference's `final_refine`.
 
 use super::*;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
@@ -506,28 +507,54 @@ impl Frame {
             .position(|c| c.binary_search(occ).is_ok())
     }
 
+    /// The block of the variable occurrence `name:t`, without spelling it out.
+    fn block_of_var(&self, name: &str, t: i64) -> Option<usize> {
+        self.blocks.iter().position(|c| {
+            c.binary_search_by(|o| match o {
+                Occ::Node(..) => Ordering::Less,
+                Occ::Lit(_) => Ordering::Greater,
+                Occ::Var(v, s) => (v.as_str(), *s).cmp(&(name, t)),
+            })
+            .is_ok()
+        })
+    }
+
+    /// The block of the literal `name`, without spelling it out.
+    fn block_of_lit(&self, name: &str) -> Option<usize> {
+        self.blocks.iter().position(|c| {
+            c.binary_search_by(|o| match o {
+                Occ::Lit(x) => x.as_str().cmp(name),
+                _ => Ordering::Less,
+            })
+            .is_ok()
+        })
+    }
+
     /// The pattern slot an occurrence names.
+    #[cfg(test)]
     fn slot(&self, occ: &Occ) -> Option<i64> {
         self.block_of(occ).map(|i| self.numbering()[i])
     }
 
-    /// A variable's renaming into the pattern's slots, or a literal's `{0 -> slot}`.
+    /// A variable's renaming into the pattern's slots, or a literal's `{0 -> slot}`:
+    /// the numbering is computed once for the call, not once per slot.
     pub fn ren(&self, name: &str) -> Option<Slots> {
+        let numbers = self.numbering();
         if name.starts_with('$') {
             if !self.literals.contains_key(name) {
                 return None;
             }
-            return Some(Slots::from([(0, self.slot(&Occ::Lit(name.to_owned()))?)]));
+            return Some(Slots::from([(0, numbers[self.block_of_lit(name)?])]));
         }
         let cs = self.class_slots.get(name)?;
         cs.iter()
-            .map(|&t| Some((t, self.slot(&Occ::Var(name.to_owned(), t))?)))
+            .map(|&t| Some((t, numbers[self.block_of_var(name, t)?])))
             .collect()
     }
 
     /// Does the literal's slot lie in any of these variables' images?
     pub fn is_free(&self, lit: &str, vars: &[String]) -> Option<bool> {
-        let i = self.block_of(&Occ::Lit(lit.to_owned()))?;
+        let i = self.block_of_lit(lit)?;
         for v in vars {
             self.class_slots.get(v)?;
         }
@@ -561,8 +588,9 @@ impl Frame {
     /// binder that binds them.
     pub fn without(&self, slots: &Slots, bound: &[String]) -> Option<Slots> {
         let mut out = slots.clone();
+        let numbers = self.numbering();
         for x in bound {
-            out.remove(&self.slot(&Occ::Lit(x.clone()))?);
+            out.remove(&numbers[self.block_of_lit(x)?]);
         }
         Some(out)
     }
@@ -584,8 +612,9 @@ impl Frame {
         for v in covered {
             inner.extend(self.ren(v)?.values().copied());
         }
+        let numbers = self.numbering();
         for x in bound {
-            inner.remove(&self.slot(&Occ::Lit(x.clone()))?);
+            inner.remove(&numbers[self.block_of_lit(x)?]);
         }
         slots.extend(inner);
         Some(slots.into_iter().map(|s| (s, s)).collect())

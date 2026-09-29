@@ -1,11 +1,14 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MapContainer {
     do_rebuild_keys: bool,
     do_rebuild_vals: bool,
-    pub data: BTreeMap<Value, Value>,
+    /// behind an `Arc`, so that a primitive taking the container by value -- every
+    /// `@MapContainer` argument is fetched by clone -- copies a pointer, not a map
+    pub data: Arc<BTreeMap<Value, Value>>,
 }
 
 impl MapContainer {
@@ -15,7 +18,7 @@ impl MapContainer {
         MapContainer {
             do_rebuild_keys: false,
             do_rebuild_vals: false,
-            data,
+            data: Arc::new(data),
         }
     }
 
@@ -175,18 +178,19 @@ impl ContainerValue for MapContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn ValueRebuilder) -> bool {
         let mut changed = false;
         if self.do_rebuild_keys {
-            self.data = self
-                .data
-                .iter()
-                .map(|(old, v)| {
-                    let new = rebuilder.rebuild_val(*old);
-                    changed |= *old != new;
-                    (new, *v)
-                })
-                .collect();
+            self.data = Arc::new(
+                self.data
+                    .iter()
+                    .map(|(old, v)| {
+                        let new = rebuilder.rebuild_val(*old);
+                        changed |= *old != new;
+                        (new, *v)
+                    })
+                    .collect(),
+            );
         }
         if self.do_rebuild_vals {
-            for old in self.data.values_mut() {
+            for old in Arc::make_mut(&mut self.data).values_mut() {
                 let new = rebuilder.rebuild_val(*old);
                 changed |= *old != new;
                 *old = new;
@@ -666,7 +670,7 @@ impl ContainerSort for MapSort {
         add_primitive_with_validator!(eg, "map-empty" = {self.clone(): MapSort} || -> @MapContainer (arc) { MapContainer {
             do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
             do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),
-            data: BTreeMap::new()
+            data: Arc::new(BTreeMap::new())
         } }, map_empty_validator);
 
         // `map-of` is the flat constructor used as the canonical term form. It
@@ -683,15 +687,15 @@ impl ContainerSort for MapSort {
         );
 
         add_primitive_with_validator!(eg, "map-get"    = |    xs: @MapContainer (arc), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() }, map_get_validator);
-        add_primitive_with_validator!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ xs.data.insert(x, y); xs }}, map_insert_validator);
-        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ xs.data.remove(&x);   xs }});
+        add_primitive_with_validator!(eg, "map-insert" = |mut xs: @MapContainer (arc), x: # (self.key()), y: # (self.value())| -> @MapContainer (arc) {{ Arc::make_mut(&mut xs.data).insert(x, y); xs }}, map_insert_validator);
+        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (arc), x: # (self.key())                     | -> @MapContainer (arc) {{ Arc::make_mut(&mut xs.data).remove(&x);   xs }});
 
         add_primitive_with_validator!(eg, "map-length"       = |xs: @MapContainer (arc)| -> i64 { xs.data.len() as i64 }, map_length_validator);
         add_primitive_with_validator!(eg, "map-contains"     = |xs: @MapContainer (arc), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) }, map_contains_validator);
         add_primitive_with_validator!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
 
-        add_primitive!(eg, "map-union" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: map_union(&xs.data, &ys.data)?, ..xs }) });
-        add_primitive!(eg, "map-intersect" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: map_intersect(&xs.data, &ys.data), ..xs } });
+        add_primitive!(eg, "map-union" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(map_union(&xs.data, &ys.data)?), ..xs }) });
+        add_primitive!(eg, "map-intersect" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_intersect(&xs.data, &ys.data)), ..xs } });
 
         // `map-contains` is a fact, so it cannot be combined with `or`/`and`; this
         // is the same test as a value, for use inside a `guard`.
@@ -702,18 +706,18 @@ impl ContainerSort for MapSort {
         // inverts. `find-mapping` solves for the renaming carrying one tuple of
         // edges onto another; it is variadic, taking the two tuples flat.
         if self.key.name() == self.value.name() {
-            add_primitive!(eg, "compose" = |a: @MapContainer (arc), b: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: compose(&a.data, &b.data), ..b } });
-            add_primitive!(eg, "compose-total" = |a: @MapContainer (arc), b: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: compose_total(&a.data, &b.data)?, ..b }) });
-            add_primitive!(eg, "inverse"     = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: inverse(&a.data)?, ..a }) });
-            add_primitive!(eg, "map-inverse" = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: inverse(&a.data)?, ..a }) });
-            add_primitive!(eg, "map-image"   = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: map_image(&a.data), ..a } });
-            add_primitive!(eg, "map-domain"  = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: map_domain(&a.data), ..a } });
+            add_primitive!(eg, "compose" = |a: @MapContainer (arc), b: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(compose(&a.data, &b.data)), ..b } });
+            add_primitive!(eg, "compose-total" = |a: @MapContainer (arc), b: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(compose_total(&a.data, &b.data)?), ..b }) });
+            add_primitive!(eg, "inverse"     = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(inverse(&a.data)?), ..a }) });
+            add_primitive!(eg, "map-inverse" = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(inverse(&a.data)?), ..a }) });
+            add_primitive!(eg, "map-image"   = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_image(&a.data)), ..a } });
+            add_primitive!(eg, "map-domain"  = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_domain(&a.data)), ..a } });
             add_primitive!(eg, "find-mapping" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
-                let maps: Vec<BTreeMap<Value, Value>> = xs.map(|m| m.data).collect();
+                let maps: Vec<BTreeMap<Value, Value>> = xs.map(|m| (*m.data).clone()).collect();
                 Some(MapContainer {
                     do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
                     do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),
-                    data: find_mapping(&maps)?,
+                    data: Arc::new(find_mapping(&maps)?),
                 })
             }});
 
@@ -859,7 +863,7 @@ impl PurePrim for MapOf {
         let mc = MapContainer {
             do_rebuild_keys: self.key.is_eq_sort() || self.key.is_eq_container_sort(),
             do_rebuild_vals: self.value.is_eq_sort() || self.value.is_eq_container_sort(),
-            data,
+            data: Arc::new(data),
         };
         Some(state.register_container(mc))
     }

@@ -1,10 +1,13 @@
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer {
     pub do_rebuild: bool,
-    pub data: BTreeSet<Value>,
+    /// behind an `Arc`, so that a primitive taking the container by value copies a
+    /// pointer, not a set (a class's symmetry group can hold hundreds of elements)
+    pub data: Arc<BTreeSet<Value>>,
 }
 
 impl ContainerValue for SetContainer {
@@ -12,7 +15,7 @@ impl ContainerValue for SetContainer {
         if self.do_rebuild {
             let mut xs: Vec<_> = self.data.iter().copied().collect();
             let changed = rebuilder.rebuild_slice(&mut xs);
-            self.data = xs.into_iter().collect();
+            self.data = Arc::new(xs.into_iter().collect());
             changed
         } else {
             false
@@ -218,26 +221,26 @@ impl ContainerSort for SetSort {
 
         add_primitive_with_validator!(eg, "set-empty" = {self.clone(): SetSort} |                      | -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
-            data: BTreeSet::new()
+            data: Arc::new(BTreeSet::new())
         } }, set_empty_validator);
         add_primitive_with_validator!(eg, "set-of"    = {self.clone(): SetSort} [xs: # (self.element())] -> @SetContainer (arc) { SetContainer {
             do_rebuild: self.ctx.is_eq_container_sort(),
-            data: xs.collect()
+            data: Arc::new(xs.collect())
         } }, set_of_validator);
 
         // No validator: `set-get` indexes the runtime `BTreeSet<Value>` order,
         // which terms cannot reproduce, so it is unsupported in proof mode.
         add_primitive!(eg, "set-get" = |xs: @SetContainer (arc), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
-        add_primitive_with_validator!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.insert( x); xs }}, set_insert_validator);
-        add_primitive_with_validator!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ xs.data.remove(&x); xs }}, set_remove_validator);
+        add_primitive_with_validator!(eg, "set-insert" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ Arc::make_mut(&mut xs.data).insert(x); xs }}, set_insert_validator);
+        add_primitive_with_validator!(eg, "set-remove" = |mut xs: @SetContainer (arc), x: # (self.element())| -> @SetContainer (arc) {{ Arc::make_mut(&mut xs.data).remove(&x); xs }}, set_remove_validator);
 
         add_primitive_with_validator!(eg, "set-length"       = |xs: @SetContainer (arc)| -> i64 { xs.data.len() as i64 }, set_length_validator);
         add_primitive_with_validator!(eg, "set-contains"     = |xs: @SetContainer (arc), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) }, set_contains_validator);
         add_primitive_with_validator!(eg, "set-not-contains" = |xs: @SetContainer (arc), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) }, set_not_contains_validator);
 
-        add_primitive_with_validator!(eg, "set-union"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.extend(ys.data);                  xs }}, set_union_validator);
-        add_primitive_with_validator!(eg, "set-diff"       = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }}, set_diff_validator);
-        add_primitive_with_validator!(eg, "set-intersect"  = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }}, set_intersect_validator);
+        add_primitive_with_validator!(eg, "set-union"      = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ Arc::make_mut(&mut xs.data).extend(ys.data.iter().copied()); xs }}, set_union_validator);
+        add_primitive_with_validator!(eg, "set-diff"       = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ Arc::make_mut(&mut xs.data).retain(|k| !ys.data.contains(k)); xs }}, set_diff_validator);
+        add_primitive_with_validator!(eg, "set-intersect"  = |mut xs: @SetContainer (arc), ys: @SetContainer (arc)| -> @SetContainer (arc) {{ Arc::make_mut(&mut xs.data).retain(|k| ys.data.contains(k)); xs }}, set_intersect_validator);
 
         // A set of renamings is a symmetry group of a slotted class -- the reference's
         // `Group` -- every renaming of the class's own slots the class is equal to
@@ -269,7 +272,7 @@ impl ContainerSort for SetSort {
                     .into_iter()
                     .map(|m| state.register_container::<MapContainer>(MapContainer::renaming(m)))
                     .collect();
-                Some(SetContainer { do_rebuild: false, data })
+                Some(SetContainer { do_rebuild: false, data: Arc::new(data) })
             }});
             // `(group-close s)`: the closure under composition, the group the elements
             // generate. Elements are permutations of a finite slot set, so composing
@@ -279,7 +282,7 @@ impl ContainerSort for SetSort {
                     let cv = state.container_values();
                     s.data
                         .iter()
-                        .map(|v| Some(cv.get_val::<MapContainer>(*v)?.data.clone()))
+                        .map(|v| Some((*cv.get_val::<MapContainer>(*v)?.data).clone()))
                         .collect::<Option<Vec<_>>>()?
                 };
                 let mut seen: BTreeSet<BTreeMap<Value, Value>> = known.iter().cloned().collect();
@@ -303,7 +306,7 @@ impl ContainerSort for SetSort {
                     .into_iter()
                     .map(|m| state.register_container::<MapContainer>(MapContainer::renaming(m)))
                     .collect();
-                Some(SetContainer { do_rebuild: false, data })
+                Some(SetContainer { do_rebuild: false, data: Arc::new(data) })
             }});
             // `(group-coset-reps s pinned)`: one element per way the group can act on
             // the slots `pinned` (an identity renaming on a subset of the class's
@@ -331,7 +334,7 @@ impl ContainerSort for SetSort {
                         }
                     }
                 }
-                Some(SetContainer { do_rebuild: false, data: least.into_values().map(|(_, v)| v).collect() })
+                Some(SetContainer { do_rebuild: false, data: Arc::new(least.into_values().map(|(_, v)| v).collect()) })
             }});
             // `(coset-min m s)`: the least of `m ∘ g` over the group's elements `g`. Two
             // renamings of one class's slots name the same invocation exactly when they
@@ -375,7 +378,7 @@ impl ContainerSort for SetSort {
                 let mut found = false;
                 for v in s.data.iter().copied() {
                     let g = &cv.get_val::<MapContainer>(v)?.data;
-                    if compose(&m2.data, g) == m1.data {
+                    if compose(&m2.data, g) == *m1.data {
                         found = true;
                         break;
                     }

@@ -24,7 +24,12 @@ both are reported, and a change on either side shows.
 """
 
 import re
+import sys
 from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+slotenc = __import__("slotted-encoder")
 
 INF = 10**9
 
@@ -140,7 +145,7 @@ def probe_lines(terms, lang, renames, sort="U", declared=False):
     for i in range(len(terms)):
         out.append(f"(ProbeId _probe{i} {i})")
     out += [
-        "(run-schedule (saturate (run slotted)) (saturate (run probe)))",
+        f"(run-schedule {slotenc.MACHINERY_SCHEDULE} (saturate (run probe)))",
         "(print-size)",
         "(print-function SameClass 1000000)",
     ]

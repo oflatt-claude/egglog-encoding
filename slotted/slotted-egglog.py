@@ -616,11 +616,8 @@ def schedule(steps, rules):
     With no rules there is nothing to interleave, so one saturation is the whole run.
     """
     if not rules or steps == 0:
-        return "(run-schedule (saturate (run slotted)))"
-    return (
-        f"(run-schedule (saturate (run slotted))\n"
-        f"              (repeat {steps} (seq (run) (run slotted-apply) (saturate (run slotted)))))"
-    )
+        return enc.machinery_schedule()
+    return enc.round_schedule(steps)
 
 
 KEYWORDS = (":name", ":when", ":ruleset", ":lead", ":fresh")

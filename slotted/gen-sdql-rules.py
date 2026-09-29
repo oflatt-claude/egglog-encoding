@@ -86,8 +86,9 @@ HEADER = """\
 ;;; These are USER rules, so they go in their own ruleset and the machinery is
 ;;; saturated between finite steps of them:
 ;;;
-;;;     (run-schedule (saturate (run slotted))
-;;;                   (repeat N (seq (run sdql 1) (run slotted-apply) (saturate (run slotted)))))
+;;;     (run-schedule MACHINERY
+;;;                   (repeat N (seq (run sdql 1) (run slotted-apply) MACHINERY)))
+;;;     where MACHINERY is `slotted-encoder.py`'s `MACHINERY_SCHEDULE`, the phased saturation
 ;;;
 ;;; `slotted/tests/sdql-rewrites.egg` is what checks them -- written in the slotted
 ;;; language over the same rules, and compiled at test time.

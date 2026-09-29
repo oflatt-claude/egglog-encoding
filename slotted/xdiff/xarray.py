@@ -163,10 +163,7 @@ class Case:
 
 
 def schedule(steps):
-    return (
-        f"(run-schedule (saturate (run slotted))\n"
-        f"              (repeat {steps} (seq (run) (run slotted-apply) (saturate (run slotted)))))"
-    )
+    return slotenc.round_schedule(steps)
 
 
 def egg_program(case, atom_order=None, mult=3, defer_probes=False):
@@ -203,7 +200,7 @@ def egg_program(case, atom_order=None, mult=3, defer_probes=False):
     # Do not give the encoding a second user-rule budget after installing probes.
     # The reference runs exactly `rounds * mult`; only invariant maintenance and the
     # observational rule remain here.
-    out.append("(run-schedule (saturate (run slotted)) (saturate (run probe)))")
+    out.append(f"(run-schedule {slotenc.MACHINERY_SCHEDULE} (saturate (run probe)))")
     out.append("(print-function SameClass 100000)")
     return "\n".join(out) + "\n"
 
@@ -1024,7 +1021,7 @@ def emit_egg():
 
 (let $B (App (map-empty) (Sym "f1") (map-of 0 0) (Var 0)))
 (let $L (Let (map-of 0 0) (Var 0) (map-of 0 0) $B (map-of 0 0) (Var 0)))
-(run-schedule (saturate (run slotted)))
+(run-schedule {slotenc.MACHINERY_SCHEDULE})
 
 ;; the value's occurrence keeps the slot free, so the class has exactly one
 (check (= ({SYM.class_slots} $L) (map-of 0 0)))
@@ -1034,7 +1031,7 @@ def emit_egg():
 ;; the edge to $L must cover its slot now that it has one
 (let $a0 (App (map-of 0 0) $L (map-of 0 0) (Var 0)))
 (let $a1 (App (map-of 0 0) $L (map-of 0 1) (Var 0)))
-(run-schedule (saturate (run slotted)))
+(run-schedule {slotenc.MACHINERY_SCHEDULE})
 (fail (check ({SYM.renames} $a0 m1 l) ({SYM.renames} $a1 m2 l)))
 
 (pop)

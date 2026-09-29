@@ -466,7 +466,14 @@ def shape_dedup(name, sig, symbols=None):
     columns, so the work is linear in duplicates rather than quadratic in rows sharing
     children (C14). The rows are compared whole, as vectors of their edges, so of any
     two exactly one goes. Only live rows take part, which is what keeps this sound
-    across unions and migrations."""
+    across unions and migrations.
+
+    In the shape phase with the index rule, and it must be: `_shapeof_F` is keyed by
+    a row's columns, so an entry outlives its row, and a row built again in another
+    class -- `F(13,12)` re-made inside the class of `F(12,13)` after `comm` -- would be
+    deleted on the old entry before the index had seen it in its new class, and the
+    symmetry it states with it. In one phase the two fire on one snapshot: the index
+    records the equation as the duplicate goes."""
     _, edges, _, _ = cols_of(sig)
     other = [f"n{i + 1}" for i in range(len(edges))]
     ss = [f"s{i + 1}" for i in range(len(edges))]
@@ -479,7 +486,7 @@ def shape_dedup(name, sig, symbols=None):
        (= v2 (vec-of {" ".join(other)}))
        (!= v1 v2)
        (= v1 (ordering-max v1 v2)))
-      ((delete {pattern(name, sig)})) :ruleset slotted)
+      ((delete {pattern(name, sig)})) :ruleset slotted-shape)
 """
 
 
@@ -525,7 +532,7 @@ def coset_readings(name, sig, symbols=None):
        (= grp ({symbols.group} {k}))
        (= pinned (map-domain (compose {pinned_node} {e}))))
       ((set ({pinned_table(name)} {cols} {j + 1}) pinned)
-       (set ({symbols.coset_reps} {k} pinned) (group-coset-reps grp pinned))) :ruleset slotted)
+       (set ({symbols.coset_reps} {k} pinned) (group-coset-reps grp pinned))) :ruleset slotted-read)
 """)
     return "\n".join(out)
 
@@ -582,7 +589,7 @@ def shape_index(name, sig, symbols=None):
        (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)}))))
       ((set {key} (values c (vec-get sh {len(edges)})))
        (set {pattern(shapeof_table(name), sig)} (values {shapeof}))
-       (set ({syms_table(name)} {cols}) (symmetries-of sh {len(edges) + 1}))) :ruleset slotted)
+       (set ({syms_table(name)} {cols}) (symmetries-of sh {len(edges) + 1}))) :ruleset slotted-shape)
 (rule ((= c {row})
        (= syms ({syms_table(name)} {cols}))
        (= cs ({symbols.class_slots} c)))
@@ -1122,23 +1129,23 @@ def carrier_core(symbols):
             f"""(rule ((GroupIdxSmall i)
        (= s ({s.coset_reps} c pinned))
        (= g (set-get s i)))
-      (({s.reading} c pinned g)) :ruleset slotted)""",
+      (({s.reading} c pinned g)) :ruleset slotted-read)""",
             "",
             f"""(rule ((= s ({s.coset_reps} c pinned))
        (> (set-length s) {GROUP_INDICES_SMALL}))
-      (({s.big_reading} c pinned)) :ruleset slotted)""",
+      (({s.big_reading} c pinned)) :ruleset slotted-read)""",
             "",
             f"""(rule (({s.big_reading} c pinned)
        (= s ({s.coset_reps} c pinned))
        (GroupIdx i)
        (>= i {GROUP_INDICES_SMALL})
        (= g (set-get s i)))
-      (({s.reading} c pinned g)) :ruleset slotted)""",
+      (({s.reading} c pinned g)) :ruleset slotted-read)""",
             "",
             f"""(rule (({s.reading} c pinned g)
        (= s ({s.coset_reps} c pinned))
        (set-not-contains s g))
-      ((delete ({s.reading} c pinned g))) :ruleset slotted)""",
+      ((delete ({s.reading} c pinned g))) :ruleset slotted-read)""",
             "",
             # Repair: the representatives are a function of the group as it stands. A
             # row whose class id was merged into another's carries a value written under
@@ -1148,11 +1155,11 @@ def carrier_core(symbols):
        (= grp ({s.group} c))
        (= fresh (group-coset-reps grp pinned))
        (!= s fresh))
-      ((set ({s.coset_reps} c pinned) fresh)) :ruleset slotted)""",
+      ((set ({s.coset_reps} c pinned) fresh)) :ruleset slotted-read)""",
             "",
             f"""(rule ((= s ({s.coset_reps} c pinned))
        (> (set-length s) {GROUP_INDICES}))
-      ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted)""",
+      ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted-read)""",
             "",
             # Two classes met on one shape (C14): the shape index's merge block wrote the
             # equation here, and it enters the class relation like any other.
@@ -1188,6 +1195,27 @@ NAMING_INDICES = 64
 #: paper's workloads build is 288 elements (TTM's second phase); a class past this
 #: many stops the program rather than match under part of its group.
 GROUP_INDICES = 512
+
+#: How the machinery saturates. The shape walk of a row enumerates its children's
+#: groups, and the coset readings enumerate a class's own, so both are run only once
+#: the rest -- leaders, migration, slot sets, the groups' closure -- has settled: the
+#: walks in an outer loop with the core, the readings once at the end, since nothing
+#: in the core reads them. Run on every group change instead, MMM's second phase
+#: walked each `Binop` row thirteen times over.
+MACHINERY_SCHEDULE = "(seq (saturate (seq (saturate (run slotted)) (run slotted-shape))) (saturate (run slotted-read)))"
+
+
+def machinery_schedule():
+    """The machinery alone, saturated: what a program with no user rules runs."""
+    return f"(run-schedule {MACHINERY_SCHEDULE})"
+
+
+def round_schedule(steps, user="(run)"):
+    """`steps` rounds of the user rules -- `user` is how one step of them is run --
+    each followed by the stored matches' actions and the machinery."""
+    step = f"(seq {user} (run slotted-apply) {MACHINERY_SCHEDULE})"
+    return f"(run-schedule {MACHINERY_SCHEDULE}\n              (repeat {steps} {step}))"
+
 
 #: The indices joined with every reading set; past them only sets that reach them.
 GROUP_INDICES_SMALL = 8
@@ -1233,6 +1261,10 @@ def multi_sort_core(carriers):
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
             "",
             "(ruleset slotted)",
+            ";; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`",
+            "(ruleset slotted-shape)",
+            ";; the readings a pattern joins: derived once the groups have settled",
+            "(ruleset slotted-read)",
             "(ruleset slotted-apply)",
             "",
             "(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)",

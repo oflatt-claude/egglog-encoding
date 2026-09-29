@@ -231,7 +231,7 @@ impl ContainerSort for VecSort {
                     let mut groups = Vec::with_capacity(gs.data.len());
                     for value in gs.data.iter().copied() {
                         let set = state.container_values().get_val::<SetContainer>(value)?.data.clone();
-                        groups.push(slot_maps(&state, set)?);
+                        groups.push(slot_maps(&state, set.iter().copied())?);
                     }
                     let data = register_renamings(&mut state, node_shape(&edges, &groups));
                     Some(VecContainer { do_rebuild: false, data })
@@ -239,7 +239,7 @@ impl ContainerSort for VecSort {
                 // the symmetries `node-shape` put after its first `n` entries
                 add_primitive!(eg, "symmetries-of" = {self.clone(): VecSort} |xs: @VecContainer (arc.clone()), n: i64| -?> @SetContainer (set.clone()) {{
                     let n = usize::try_from(n).ok()?;
-                    Some(SetContainer { do_rebuild: false, data: xs.data.get(n..)?.iter().copied().collect() })
+                    Some(SetContainer { do_rebuild: false, data: std::sync::Arc::new(xs.data.get(n..)?.iter().copied().collect()) })
                 }});
             }
             // `(shape e1 e2 ...)`: the edges in canonical spelling, then the renaming from

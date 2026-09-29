@@ -13,7 +13,7 @@
 (let $h21 (H (map-of 0 2) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 (union $f12 $g21)
 (union $g12 $h12)
-(run-schedule (saturate (run slotted)))
+(run-schedule (seq (saturate (seq (saturate (run slotted)) (run slotted-shape))) (saturate (run slotted-read))))
 (check (= _c0cls_c0 (F _c0e0_lit_1 (SlottedVar_0 0) _c0e0_lit_2 (SlottedVar_0 0)))
        (= _c0atom_c0 (atom "_c0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (lit "$1" _c0e0_lit_1) (lit "$2" _c0e0_lit_2)))
        (= _c0m _c0atom_c0)

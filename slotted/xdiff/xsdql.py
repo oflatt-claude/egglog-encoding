@@ -408,10 +408,7 @@ class Case:
 
 
 def schedule(steps):
-    return (
-        f"(run-schedule (saturate (run slotted))\n"
-        f"              (repeat {steps} (seq (run sdql) (run slotted-apply) (saturate (run slotted)))))"
-    )
+    return slotenc.round_schedule(steps, "(run sdql)")
 
 
 def egg_program(case, with_rule=True, mult=3):
@@ -442,7 +439,7 @@ def egg_program(case, with_rule=True, mult=3):
         out.append(f"(ProbeId _p{i} {i})")
     # The reference gets exactly `rounds * mult` user-rule rounds.  Probe
     # installation must not silently give the encoding that budget a second time.
-    out.append("(run-schedule (saturate (run slotted)))")
+    out.append(slotenc.machinery_schedule())
     out.append("(run-schedule (saturate (run probe)))")
     out.append("(print-function SameClass 100000)")
     return "\n".join(out) + "\n"
