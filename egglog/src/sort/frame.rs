@@ -34,19 +34,89 @@ use super::*;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 type Slots = BTreeMap<i64, i64>;
+
+/// A name in a pattern: an atom's label, a variable, or a slot literal. Interned, so
+/// a frame copies, compares and hashes a word where it would hold a string; the text
+/// is kept for display. The word is a hash of the text with the literal marker in its
+/// top bit, so the order of names -- and with it the numbering of a frame's blocks --
+/// depends on the names alone, not on the order they were first seen in.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Name(u64);
+
+static NAMES: OnceLock<RwLock<HashMap<u64, &'static str>>> = OnceLock::new();
+
+impl Name {
+    pub fn new(text: &str) -> Name {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in text.bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        let id = (h >> 1) | (u64::from(text.starts_with('$')) << 63);
+        let table = NAMES.get_or_init(Default::default);
+        if let Some(known) = table.read().unwrap_or_else(|e| e.into_inner()).get(&id) {
+            assert!(
+                *known == text,
+                "name hash collision: {known:?} and {text:?}"
+            );
+            return Name(id);
+        }
+        table
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(id)
+            .or_insert_with(|| Box::leak(text.to_owned().into_boxed_str()));
+        Name(id)
+    }
+
+    /// A slot literal (`$x`), as opposed to a variable or a label.
+    pub fn is_literal(self) -> bool {
+        self.0 >> 63 == 1
+    }
+
+    pub fn as_str(self) -> &'static str {
+        NAMES
+            .get()
+            .and_then(|t| {
+                t.read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&self.0)
+                    .copied()
+            })
+            .unwrap_or("?")
+    }
+}
+
+impl From<&str> for Name {
+    fn from(text: &str) -> Name {
+        Name::new(text)
+    }
+}
+
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl fmt::Debug for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
 
 /// Where a slot shows up in a match.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Occ {
     /// slot `s` of the e-node matched at the atom with this label
-    Node(String, i64),
+    Node(Name, i64),
     /// slot `t` of the class this variable is bound to
-    Var(String, i64),
+    Var(Name, i64),
     /// a literal the pattern wrote, or a slot the right-hand side minted
-    Lit(String),
+    Lit(Name),
 }
 
 impl fmt::Display for Occ {
@@ -64,7 +134,7 @@ impl fmt::Display for Occ {
 pub enum Binding {
     /// the atom's node is an invocation of this variable's class
     Root {
-        var: String,
+        var: Name,
         class_slots: Slots,
         sym: Option<Slots>,
         /// the class's symmetry group, when the reading is the frame's to decide;
@@ -73,7 +143,7 @@ pub enum Binding {
     },
     /// a child column carrying a variable by an edge
     Child {
-        var: String,
+        var: Name,
         edge: Slots,
         class_slots: Slots,
         sym: Option<Slots>,
@@ -82,7 +152,7 @@ pub enum Binding {
     /// a slot literal; `carried` when the column is an ordinary one, whose slot
     /// refinement may merge
     Lit {
-        name: String,
+        name: Name,
         edge: Slots,
         carried: bool,
     },
@@ -96,7 +166,7 @@ pub type Bd = Boxed<Binding>;
 
 /// A list of pattern variables and literals, by name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub struct Names(pub Vec<String>);
+pub struct Names(pub Vec<Name>);
 
 pub type Ns = Boxed<Names>;
 
@@ -107,8 +177,8 @@ pub type Ns = Boxed<Names>;
 /// over the group without the query enumerating it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Pending {
-    atom: String,
-    var: String,
+    atom: Name,
+    var: Name,
     /// class slot -> node slot; the identity on the class slots for a root
     edge: Slots,
     group: Arc<Vec<Slots>>,
@@ -123,14 +193,14 @@ pub struct Frame {
     /// cliques are not stored: `apart` reads them off the occurrences.
     blocks: Vec<Vec<Occ>>,
     /// per variable, the slots of its class: the domain of its renaming
-    class_slots: BTreeMap<String, BTreeSet<i64>>,
+    class_slots: BTreeMap<Name, BTreeSet<i64>>,
     /// every literal, and whether refinement may merge a placeholder into its block
-    literals: BTreeMap<String, bool>,
+    literals: BTreeMap<Name, bool>,
     /// deliberate violations of the contract, for mutation testing
     bugs: BTreeSet<String>,
     /// the variable whose class slots name the pattern's slots: a block holding
     /// `Var(anchor, t)` is slot `t`, the rest take the smallest free numbers
-    anchor: Option<String>,
+    anchor: Option<Name>,
     /// bindings whose reading is still open, resolved by `refinements`
     pending: Vec<Pending>,
     /// node occurrences of slots the node's class does not have, under `rigid_redundant`
@@ -169,7 +239,7 @@ impl Frame {
         if roots.next().is_some() {
             return None;
         }
-        let atom = label.to_owned();
+        let atom = Name::new(label);
         let bugs: BTreeSet<String> = bindings
             .iter()
             .filter_map(|b| match b {
@@ -181,8 +251,8 @@ impl Frame {
         let mut node_slots: BTreeSet<i64> = BTreeSet::new();
         let mut eqs: Vec<(Occ, Occ)> = Vec::new();
         let mut occs: BTreeSet<Occ> = BTreeSet::new();
-        let mut class_slots: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
-        let mut literals: BTreeMap<String, bool> = BTreeMap::new();
+        let mut class_slots: BTreeMap<Name, BTreeSet<i64>> = BTreeMap::new();
+        let mut literals: BTreeMap<Name, bool> = BTreeMap::new();
         let mut pending: Vec<Pending> = Vec::new();
         let mut bound_slots: BTreeSet<i64> = BTreeSet::new();
 
@@ -190,10 +260,10 @@ impl Frame {
         let cs: BTreeSet<i64> = root_slots.keys().copied().collect();
         if let Some(group) = root_group {
             // through some element of the class's group: decided later
-            occs.extend(cs.iter().map(|&s| Occ::Var(root_var.clone(), s)));
+            occs.extend(cs.iter().map(|&s| Occ::Var(*root_var, s)));
             pending.push(Pending {
-                atom: atom.clone(),
-                var: root_var.clone(),
+                atom,
+                var: *root_var,
                 edge: cs.iter().map(|&s| (s, s)).collect(),
                 group: group.clone(),
             });
@@ -203,12 +273,12 @@ impl Frame {
                     Some(sym) => *sym.get(&s)?,
                     None => s,
                 };
-                occs.insert(Occ::Var(root_var.clone(), t));
-                eqs.push((Occ::Node(atom.clone(), s), Occ::Var(root_var.clone(), t)));
+                occs.insert(Occ::Var(*root_var, t));
+                eqs.push((Occ::Node(atom, s), Occ::Var(*root_var, t)));
             }
         }
         node_slots.extend(cs.iter().copied());
-        class_slots.insert(root_var.clone(), cs);
+        class_slots.insert(*root_var, cs);
 
         for b in bindings {
             match b {
@@ -223,10 +293,10 @@ impl Frame {
                     let cs: BTreeSet<i64> = cls.keys().copied().collect();
                     node_slots.extend(edge.values().copied());
                     if let Some(group) = group {
-                        occs.extend(cs.iter().map(|&t| Occ::Var(var.clone(), t)));
+                        occs.extend(cs.iter().map(|&t| Occ::Var(*var, t)));
                         pending.push(Pending {
-                            atom: atom.clone(),
-                            var: var.clone(),
+                            atom,
+                            var: *var,
                             edge: edge.clone(),
                             group: group.clone(),
                         });
@@ -241,12 +311,12 @@ impl Frame {
                         };
                         // every class slot is an occurrence, so a variable's renaming is
                         // total on its class: a slot no edge reaches is a mint of its own
-                        occs.insert(Occ::Var(var.clone(), u));
+                        occs.insert(Occ::Var(*var, u));
                         if let Some(&s) = edge.get(&t) {
-                            eqs.push((Occ::Node(atom.clone(), s), Occ::Var(var.clone(), u)));
+                            eqs.push((Occ::Node(atom, s), Occ::Var(*var, u)));
                         }
                     }
-                    if let Some(prev) = class_slots.insert(var.clone(), cs.clone())
+                    if let Some(prev) = class_slots.insert(*var, cs.clone())
                         && prev != cs
                     {
                         return None;
@@ -262,22 +332,22 @@ impl Frame {
                         bound_slots.insert(s);
                     }
                     node_slots.extend(edge.values().copied());
-                    occs.insert(Occ::Lit(name.clone()));
-                    eqs.push((Occ::Node(atom.clone(), s), Occ::Lit(name.clone())));
-                    let entry = literals.entry(name.clone()).or_insert(false);
+                    occs.insert(Occ::Lit(*name));
+                    eqs.push((Occ::Node(atom, s), Occ::Lit(*name)));
+                    let entry = literals.entry(*name).or_insert(false);
                     *entry |= carried;
                 }
                 Binding::Leaf { edge } => node_slots.extend(edge.values().copied()),
                 Binding::Bugs(_) => {}
             }
         }
-        occs.extend(node_slots.iter().map(|&s| Occ::Node(atom.clone(), s)));
+        occs.extend(node_slots.iter().map(|&s| Occ::Node(atom, s)));
         let root_cs: BTreeSet<i64> = root_slots.keys().copied().collect();
         let rigid: BTreeSet<Occ> = if rigid_redundant() {
             node_slots
                 .iter()
                 .filter(|s| !root_cs.contains(s) && !bound_slots.contains(s))
-                .map(|&s| Occ::Node(atom.clone(), s))
+                .map(|&s| Occ::Node(atom, s))
                 .collect()
         } else {
             BTreeSet::new()
@@ -308,7 +378,7 @@ impl Frame {
         }
         let mut class_slots = self.class_slots.clone();
         for (v, cs) in &other.class_slots {
-            if let Some(prev) = class_slots.insert(v.clone(), cs.clone())
+            if let Some(prev) = class_slots.insert(*v, cs.clone())
                 && prev != *cs
             {
                 return None;
@@ -316,14 +386,14 @@ impl Frame {
         }
         let mut literals = self.literals.clone();
         for (x, carried) in &other.literals {
-            *literals.entry(x.clone()).or_insert(false) |= carried;
+            *literals.entry(*x).or_insert(false) |= carried;
         }
         let frame = Frame {
             blocks: close(occs, &eqs),
             class_slots,
             literals,
             bugs: self.bugs.union(&other.bugs).cloned().collect(),
-            anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
+            anchor: self.anchor.or(other.anchor),
             pending: self.pending.iter().chain(&other.pending).cloned().collect(),
             rigid: self.rigid.union(&other.rigid).cloned().collect(),
         };
@@ -336,14 +406,13 @@ impl Frame {
         p.edge
             .values()
             .filter(|&&s| {
-                self.block_of(&Occ::Node(p.atom.clone(), s))
-                    .is_some_and(|i| {
-                        self.blocks[i].iter().any(|o| match o {
-                            Occ::Lit(_) => true,
-                            Occ::Var(v, _) => self.anchor.as_deref() == Some(v.as_str()),
-                            Occ::Node(..) => false,
-                        })
+                self.block_of(&Occ::Node(p.atom, s)).is_some_and(|i| {
+                    self.blocks[i].iter().any(|o| match o {
+                        Occ::Lit(_) => true,
+                        Occ::Var(v, _) => self.anchor == Some(*v),
+                        Occ::Node(..) => false,
                     })
+                })
             })
             .count()
     }
@@ -402,10 +471,7 @@ impl Frame {
                 let Some(u) = g.get(t) else {
                     continue 'elements;
                 };
-                eqs.push((
-                    Occ::Node(first.atom.clone(), *s),
-                    Occ::Var(first.var.clone(), *u),
-                ));
+                eqs.push((Occ::Node(first.atom, *s), Occ::Var(first.var, *u)));
             }
             let Some(next) = self.with(&eqs, rest.clone()) else {
                 continue;
@@ -421,9 +487,10 @@ impl Frame {
 
     /// The frame spelled in this variable's slot names.
     pub fn anchored(&self, var: &str) -> Option<Frame> {
-        self.class_slots.get(var)?;
+        let var = Name::new(var);
+        self.class_slots.get(&var)?;
         Some(Frame {
-            anchor: Some(var.to_owned()),
+            anchor: Some(var),
             ..self.clone()
         })
     }
@@ -508,22 +575,22 @@ impl Frame {
     }
 
     /// The block of the variable occurrence `name:t`, without spelling it out.
-    fn block_of_var(&self, name: &str, t: i64) -> Option<usize> {
+    fn block_of_var(&self, name: Name, t: i64) -> Option<usize> {
         self.blocks.iter().position(|c| {
             c.binary_search_by(|o| match o {
                 Occ::Node(..) => Ordering::Less,
                 Occ::Lit(_) => Ordering::Greater,
-                Occ::Var(v, s) => (v.as_str(), *s).cmp(&(name, t)),
+                Occ::Var(v, s) => (*v, *s).cmp(&(name, t)),
             })
             .is_ok()
         })
     }
 
     /// The block of the literal `name`, without spelling it out.
-    fn block_of_lit(&self, name: &str) -> Option<usize> {
+    fn block_of_lit(&self, name: Name) -> Option<usize> {
         self.blocks.iter().position(|c| {
             c.binary_search_by(|o| match o {
-                Occ::Lit(x) => x.as_str().cmp(name),
+                Occ::Lit(x) => x.cmp(&name),
                 _ => Ordering::Less,
             })
             .is_ok()
@@ -539,29 +606,33 @@ impl Frame {
     /// A variable's renaming into the pattern's slots, or a literal's `{0 -> slot}`:
     /// the numbering is computed once for the call, not once per slot.
     pub fn ren(&self, name: &str) -> Option<Slots> {
+        self.renaming(Name::new(name))
+    }
+
+    fn renaming(&self, name: Name) -> Option<Slots> {
         let numbers = self.numbering();
-        if name.starts_with('$') {
-            if !self.literals.contains_key(name) {
+        if name.is_literal() {
+            if !self.literals.contains_key(&name) {
                 return None;
             }
             return Some(Slots::from([(0, numbers[self.block_of_lit(name)?])]));
         }
-        let cs = self.class_slots.get(name)?;
+        let cs = self.class_slots.get(&name)?;
         cs.iter()
             .map(|&t| Some((t, numbers[self.block_of_var(name, t)?])))
             .collect()
     }
 
     /// Does the literal's slot lie in any of these variables' images?
-    pub fn is_free(&self, lit: &str, vars: &[String]) -> Option<bool> {
-        let i = self.block_of_lit(lit)?;
+    pub fn is_free(&self, lit: &str, vars: &[Name]) -> Option<bool> {
+        let i = self.block_of_lit(Name::new(lit))?;
         for v in vars {
             self.class_slots.get(v)?;
         }
         Some(
             self.blocks[i]
                 .iter()
-                .any(|o| matches!(o, Occ::Var(v, _) if vars.iter().any(|w| w == v))),
+                .any(|o| matches!(o, Occ::Var(v, _) if vars.contains(v))),
         )
     }
 
@@ -571,14 +642,14 @@ impl Frame {
     }
 
     /// Fresh slots for a right-hand side, apart from everything the match named.
-    pub fn mint(&self, names: &[String]) -> Option<Frame> {
+    pub fn mint(&self, names: &[Name]) -> Option<Frame> {
         let mut out = self.clone();
-        for name in names {
-            if !name.starts_with('$') || out.literals.contains_key(name) {
+        for &name in names {
+            if !name.is_literal() || out.literals.contains_key(&name) {
                 return None;
             }
-            out.literals.insert(name.clone(), false);
-            out.blocks.push(vec![Occ::Lit(name.clone())]);
+            out.literals.insert(name, false);
+            out.blocks.push(vec![Occ::Lit(name)]);
         }
         out.blocks.sort();
         Some(out)
@@ -586,10 +657,10 @@ impl Frame {
 
     /// A slot set with these literals' slots taken out: a built child's slots under a
     /// binder that binds them.
-    pub fn without(&self, slots: &Slots, bound: &[String]) -> Option<Slots> {
+    pub fn without(&self, slots: &Slots, bound: &[Name]) -> Option<Slots> {
         let mut out = slots.clone();
         let numbers = self.numbering();
-        for x in bound {
+        for &x in bound {
             out.remove(&numbers[self.block_of_lit(x)?]);
         }
         Some(out)
@@ -600,20 +671,20 @@ impl Frame {
     /// literals' slots taken out. As an identity renaming.
     pub fn node_slots(
         &self,
-        uncovered: &[String],
-        covered: &[String],
-        bound: &[String],
+        uncovered: &[Name],
+        covered: &[Name],
+        bound: &[Name],
     ) -> Option<Slots> {
         let mut slots: BTreeSet<i64> = BTreeSet::new();
-        for v in uncovered {
-            slots.extend(self.ren(v)?.values().copied());
+        for &v in uncovered {
+            slots.extend(self.renaming(v)?.values().copied());
         }
         let mut inner: BTreeSet<i64> = BTreeSet::new();
-        for v in covered {
-            inner.extend(self.ren(v)?.values().copied());
+        for &v in covered {
+            inner.extend(self.renaming(v)?.values().copied());
         }
         let numbers = self.numbering();
-        for x in bound {
+        for &x in bound {
             inner.remove(&numbers[self.block_of_lit(x)?]);
         }
         slots.extend(inner);
@@ -762,10 +833,6 @@ impl fmt::Display for Frame {
     }
 }
 
-fn strings(names: &Names) -> &[String] {
-    &names.0
-}
-
 #[derive(Debug)]
 pub struct FrameSort;
 
@@ -795,13 +862,13 @@ impl BaseSort for FrameSort {
         // both frames' constraints, closed; fails where a clique breaks
         add_primitive!(eg, "frame-join" = |a: Fr, b: Fr| -?> Fr { a.join(&b).map(Fr::new) });
         // conditions, read after refinement
-        add_primitive!(eg, "free"     = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), strings(&vs)).filter(|b| *b).map(|_| ()) });
-        add_primitive!(eg, "not-free" = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), strings(&vs)).filter(|b| !*b).map(|_| ()) });
+        add_primitive!(eg, "free"     = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), &vs.0.0).filter(|b| *b).map(|_| ()) });
+        add_primitive!(eg, "not-free" = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), &vs.0.0).filter(|b| !*b).map(|_| ()) });
         // two variables are the same invocation
         add_primitive!(eg, "same"      = |f: Fr, a: S, b: S| -?> () { f.same(a.as_str(), b.as_str()).filter(|b| *b).map(|_| ()) });
         add_primitive!(eg, "bool-same" = |f: Fr, a: S, b: S| -?> bool { f.same(a.as_str(), b.as_str()) });
         // right-hand-side slots the pattern never pinned
-        add_primitive!(eg, "mint" = |f: Fr, xs: Ns| -?> Fr { f.mint(strings(&xs)).map(Fr::new) });
+        add_primitive!(eg, "mint" = |f: Fr, xs: Ns| -?> Fr { f.mint(&xs.0.0).map(Fr::new) });
         // the frame spelled in a variable's slot names -- the rule's root, so that its
         // renaming is the identity
         add_primitive!(eg, "anchor" = |f: Fr, v: S| -?> Fr { f.anchored(v.as_str()).map(Fr::new) });
@@ -929,7 +996,7 @@ impl BaseSort for NamesSort {
 
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
-        add_primitive!(eg, "names" = [xs: S] -> Ns { Ns::new(Names(xs.map(|s| s.as_str().to_owned()).collect())) });
+        add_primitive!(eg, "names" = [xs: S] -> Ns { Ns::new(Names(xs.map(|s| Name::new(s.as_str())).collect())) });
     }
 
     fn reconstruct_termdag(
@@ -939,7 +1006,8 @@ impl BaseSort for NamesSort {
         termdag: &mut TermDag,
     ) -> TermId {
         let names = base_values.unwrap::<Ns>(value);
-        termdag.lit(Literal::String(names.0.0.join(" ")))
+        let text: Vec<&str> = names.0.0.iter().map(|n| n.as_str()).collect();
+        termdag.lit(Literal::String(text.join(" ")))
     }
 }
 

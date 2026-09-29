@@ -363,12 +363,12 @@ impl ContainerSort for SetSort {
             add_primitive!(eg, "root" = {self.clone(): SetSort} |v: S, cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
                 let group = slot_maps(&state, grp.data.iter().copied())?;
                 let class_slots = slot_map(state.base_values(), &cs.data);
-                Some(Bd::new(Binding::Root { var: v.as_str().to_owned(), class_slots, sym: None, group: Some(std::sync::Arc::new(group)) }))
+                Some(Bd::new(Binding::Root { var: Name::new(v.as_str()), class_slots, sym: None, group: Some(std::sync::Arc::new(group)) }))
             }});
             add_primitive!(eg, "child" = {self.clone(): SetSort} |v: S, e: @MapContainer (renaming.clone()), cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
                 let group = slot_maps(&state, grp.data.iter().copied())?;
                 let bv = state.base_values();
-                Some(Bd::new(Binding::Child { var: v.as_str().to_owned(), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: None, group: Some(std::sync::Arc::new(group)) }))
+                Some(Bd::new(Binding::Child { var: Name::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: None, group: Some(std::sync::Arc::new(group)) }))
             }});
             // `(coset-same m1 m2 s)`: do the two renamings name one invocation, that is,
             // differ by an element of the group: `m1 = m2 ∘ g` for some `g`. A fact, so a

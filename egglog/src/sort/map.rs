@@ -728,25 +728,25 @@ impl ContainerSort for MapSort {
                 // e-nodes and hand renamings back: the bindings an `atom` is made of,
                 // a variable's renaming out of a frame, and a built node's slot set.
                 add_primitive!(eg, "root" = |v: S, cs: @MapContainer (arc)| -> Bd {
-                    Bd::new(Binding::Root { var: v.as_str().to_owned(), class_slots: slot_map(state.base_values(), &cs.data), sym: None, group: None })
+                    Bd::new(Binding::Root { var: Name::new(v.as_str()), class_slots: slot_map(state.base_values(), &cs.data), sym: None, group: None })
                 });
                 add_primitive!(eg, "root" = |v: S, cs: @MapContainer (arc), sym: @MapContainer (arc)| -> Bd {{
                     let bv = state.base_values();
-                    Bd::new(Binding::Root { var: v.as_str().to_owned(), class_slots: slot_map(bv, &cs.data), sym: Some(slot_map(bv, &sym.data)), group: None })
+                    Bd::new(Binding::Root { var: Name::new(v.as_str()), class_slots: slot_map(bv, &cs.data), sym: Some(slot_map(bv, &sym.data)), group: None })
                 }});
                 add_primitive!(eg, "child" = |v: S, e: @MapContainer (arc), cs: @MapContainer (arc)| -> Bd {{
                     let bv = state.base_values();
-                    Bd::new(Binding::Child { var: v.as_str().to_owned(), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: None, group: None })
+                    Bd::new(Binding::Child { var: Name::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: None, group: None })
                 }});
                 add_primitive!(eg, "child" = |v: S, e: @MapContainer (arc), cs: @MapContainer (arc), sym: @MapContainer (arc)| -> Bd {{
                     let bv = state.base_values();
-                    Bd::new(Binding::Child { var: v.as_str().to_owned(), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: Some(slot_map(bv, &sym.data)), group: None })
+                    Bd::new(Binding::Child { var: Name::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_map(bv, &cs.data), sym: Some(slot_map(bv, &sym.data)), group: None })
                 }});
                 add_primitive!(eg, "lit" = |x: S, e: @MapContainer (arc)| -> Bd {
-                    Bd::new(Binding::Lit { name: x.as_str().to_owned(), edge: slot_map(state.base_values(), &e.data), carried: true })
+                    Bd::new(Binding::Lit { name: Name::new(x.as_str()), edge: slot_map(state.base_values(), &e.data), carried: true })
                 });
                 add_primitive!(eg, "bound" = |x: S, e: @MapContainer (arc)| -> Bd {
-                    Bd::new(Binding::Lit { name: x.as_str().to_owned(), edge: slot_map(state.base_values(), &e.data), carried: false })
+                    Bd::new(Binding::Lit { name: Name::new(x.as_str()), edge: slot_map(state.base_values(), &e.data), carried: false })
                 });
                 add_primitive!(eg, "leaf" = |e: @MapContainer (arc)| -> Bd {
                     Bd::new(Binding::Leaf { edge: slot_map(state.base_values(), &e.data) })
