@@ -423,16 +423,6 @@ def declare_shape_table(name, sig, symbols=None):
     )
 
 
-def strong_shape(sig, edges, symbols):
-    """`(node-shape (vec-of edge...) (vec-of group...))`: a row spelled the way every
-    reading of its children agrees on, the renaming back to its own names, and then the
-    symmetries the row gives its class. A binder column's child is the variable class,
-    whose group holds the identity alone, so every column is read the same way."""
-    _, _, kids, _ = cols_of(sig)
-    groups = " ".join(f"({symbols.group} {k})" for k in kids)
-    return f"(node-shape (vec-of {' '.join(edges)}) (vec-of {groups}))"
-
-
 def shapeof_table(name):
     """The function holding each row's shape, so rows can be joined on it."""
     return f"_shapeof_{name}"
@@ -2216,9 +2206,9 @@ def compile_query(
     def named(base):
         """An egglog variable named for what it holds, suffixed only if the name is taken."""
         name = f"{var_prefix}{base}"
-        if name in used:
+        while name in used:
             uid[0] += 1
-            name = f"{name}_{uid[0]}"
+            name = f"{var_prefix}{base}_{uid[0]}"
         used.add(name)
         return name
 
@@ -2255,7 +2245,6 @@ def compile_query(
     literals = set()
     atom_vars = []
     frame_bugs = sorted(b for b in bugs if b in FRAME_BUGS)  # committed by every atom
-    rooted = {}  # how many atoms each variable has rooted: three atoms on one class are three nodes
 
     parent_col = {}  # a variable first met as a child: the parent's constructor, its columns, and the column index
 
@@ -2343,10 +2332,9 @@ def compile_query(
             table = lang.symbols_for(kid_sort).renames
             body.append(f"({table} {lang.enc(term, kid_sort)} {named(f'leafren{idx}_{j}')} {cv})")
         body.extend(syms)
-        # the atom's label: the root's name, and `r2`, `r3` for further nodes of r's class
-        rooted[aroot] = rooted.get(aroot, 0) + 1
-        atom_label = fname(aroot) + (str(rooted[aroot]) if rooted[aroot] > 1 else "")
-        av = named(f"atom_{label(aroot)}" + (str(rooted[aroot]) if rooted[aroot] > 1 else ""))
+        # Atom identity is independent of every user variable's spelling.
+        atom_label = f"@atom:{idx}"
+        av = named(f"atom_{idx}")
         body.append(f'(= {av} (atom "{atom_label}" {" ".join(bindings)}))')
         atom_vars.append(av)
     binding[0] = False

@@ -34,61 +34,83 @@ use super::*;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::Arc;
 
-type Slots = BTreeMap<i64, i64>;
+/// A spelling with a deterministic ordering key. The key preserves canonical
+/// numbering across processes, but identity also compares the complete text:
+/// hash collisions cannot identify different variables. Clones share ownership
+/// of the text without a global interner, lock, or permanently leaked strings.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Name {
+    order: u64,
+    text: Arc<str>,
+}
 
-/// A name in a pattern: an atom's label, a variable, or a slot literal. Interned, so
-/// a frame copies, compares and hashes a word where it would hold a string; the text
-/// is kept for display. The word is a hash of the text with the literal marker in its
-/// top bit, so the order of names -- and with it the numbering of a frame's blocks --
-/// depends on the names alone, not on the order they were first seen in.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Name(u64);
-
-static NAMES: OnceLock<RwLock<HashMap<u64, &'static str>>> = OnceLock::new();
+impl std::hash::Hash for Name {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.order.hash(state);
+    }
+}
 
 impl Name {
-    pub fn new(text: &str) -> Name {
+    pub fn new(text: &str) -> Self {
         let mut h: u64 = 0xcbf29ce484222325;
         for b in text.bytes() {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x100000001b3);
         }
-        let id = (h >> 1) | (u64::from(text.starts_with('$')) << 63);
-        let table = NAMES.get_or_init(Default::default);
-        if let Some(known) = table.read().unwrap_or_else(|e| e.into_inner()).get(&id) {
-            assert!(
-                *known == text,
-                "name hash collision: {known:?} and {text:?}"
-            );
-            return Name(id);
+        Self {
+            order: (h >> 1) | (u64::from(text.starts_with('$')) << 63),
+            text: Arc::from(text),
         }
-        table
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .entry(id)
-            .or_insert_with(|| Box::leak(text.to_owned().into_boxed_str()));
-        Name(id)
     }
 
-    /// A slot literal (`$x`), as opposed to a variable or a label.
-    pub fn is_literal(self) -> bool {
-        self.0 >> 63 == 1
+    pub fn is_literal(&self) -> bool {
+        self.text.starts_with('$')
     }
-
-    pub fn as_str(self) -> &'static str {
-        NAMES
-            .get()
-            .and_then(|t| {
-                t.read()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(&self.0)
-                    .copied()
-            })
-            .unwrap_or("?")
+    pub fn as_str(&self) -> &str {
+        &self.text
     }
 }
+
+/// Atom labels and class variables inhabit different identity domains.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AtomId(Name);
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PVarId(Name);
+
+macro_rules! name_id {
+    ($ty:ident) => {
+        impl $ty {
+            pub fn new(text: &str) -> Self {
+                Self(Name::new(text))
+            }
+        }
+        impl From<&str> for $ty {
+            fn from(text: &str) -> Self {
+                Self::new(text)
+            }
+        }
+        impl std::ops::Deref for $ty {
+            type Target = Name;
+            fn deref(&self) -> &Name {
+                &self.0
+            }
+        }
+        impl std::borrow::Borrow<Name> for $ty {
+            fn borrow(&self) -> &Name {
+                &self.0
+            }
+        }
+        impl fmt::Display for $ty {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.0, f)
+            }
+        }
+    };
+}
+name_id!(AtomId);
+name_id!(PVarId);
 
 impl From<&str> for Name {
     fn from(text: &str) -> Name {
@@ -112,9 +134,9 @@ impl fmt::Debug for Name {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Occ {
     /// slot `s` of the e-node matched at the atom with this label
-    Node(Name, i64),
+    Node(AtomId, i64),
     /// slot `t` of the class this variable is bound to
-    Var(Name, i64),
+    Var(PVarId, i64),
     /// a literal the pattern wrote, or a slot the right-hand side minted
     Lit(Name),
 }
@@ -129,35 +151,49 @@ impl fmt::Display for Occ {
     }
 }
 
+/// How an occurrence reads its class's slots.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Reading {
+    Identity,
+    Fixed(Renaming),
+    Group(Arc<Vec<Renaming>>),
+}
+
+impl Reading {
+    fn slot(&self, slot: i64) -> Option<i64> {
+        match self {
+            Self::Identity => Some(slot),
+            Self::Fixed(renaming) => renaming.get(&slot).copied(),
+            Self::Group(_) => unreachable!("group readings are resolved by the frame"),
+        }
+    }
+}
+
 /// One column of an atom, as the pattern reads it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Binding {
     /// the atom's node is an invocation of this variable's class
     Root {
-        var: Name,
-        class_slots: Slots,
-        sym: Option<Slots>,
-        /// the class's symmetry group, when the reading is the frame's to decide;
-        /// shared, since a frame carries it through every step of its resolution
-        group: Option<Arc<Vec<Slots>>>,
+        var: PVarId,
+        class_slots: SlotSet,
+        reading: Reading,
     },
     /// a child column carrying a variable by an edge
     Child {
-        var: Name,
-        edge: Slots,
-        class_slots: Slots,
-        sym: Option<Slots>,
-        group: Option<Arc<Vec<Slots>>>,
+        var: PVarId,
+        edge: Renaming,
+        class_slots: SlotSet,
+        reading: Reading,
     },
     /// a slot literal; `carried` when the column is an ordinary one, whose slot
     /// refinement may merge
     Lit {
         name: Name,
-        edge: Slots,
+        edge: Renaming,
         carried: bool,
     },
     /// a payload leaf reached through its own class: it names node slots, nothing more
-    Leaf { edge: Slots },
+    Leaf { edge: Renaming },
     /// contract violations to commit on purpose, for mutation testing
     Bugs(BTreeSet<String>),
 }
@@ -177,11 +213,11 @@ pub type Ns = Boxed<Names>;
 /// over the group without the query enumerating it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Pending {
-    atom: Name,
-    var: Name,
+    atom: AtomId,
+    var: PVarId,
     /// class slot -> node slot; the identity on the class slots for a root
-    edge: Slots,
-    group: Arc<Vec<Slots>>,
+    edge: Renaming,
+    group: Arc<Vec<Renaming>>,
 }
 
 /// The constraints a match has placed on slots so far, closed.
@@ -193,14 +229,14 @@ pub struct Frame {
     /// cliques are not stored: `apart` reads them off the occurrences.
     blocks: Vec<Vec<Occ>>,
     /// per variable, the slots of its class: the domain of its renaming
-    class_slots: BTreeMap<Name, BTreeSet<i64>>,
+    class_slots: BTreeMap<PVarId, SlotSet>,
     /// every literal, and whether refinement may merge a placeholder into its block
     literals: BTreeMap<Name, bool>,
     /// deliberate violations of the contract, for mutation testing
     bugs: BTreeSet<String>,
     /// the variable whose class slots name the pattern's slots: a block holding
     /// `Var(anchor, t)` is slot `t`, the rest take the smallest free numbers
-    anchor: Option<Name>,
+    anchor: Option<PVarId>,
     /// bindings whose reading is still open, resolved by `refinements`
     pending: Vec<Pending>,
     /// node occurrences of slots the node's class does not have, under `rigid_redundant`
@@ -227,16 +263,15 @@ impl Frame {
             Binding::Root {
                 var,
                 class_slots,
-                sym,
-                group,
-            } => Some((var, class_slots, sym, group)),
+                reading,
+            } => Some((var, class_slots, reading)),
             _ => None,
         });
-        let (root_var, root_slots, root_sym, root_group) = roots.next()?;
+        let (root_var, root_slots, root_reading) = roots.next()?;
         if roots.next().is_some() {
             return None;
         }
-        let atom = Name::new(label);
+        let atom = AtomId::new(label);
         let bugs: BTreeSet<String> = bindings
             .iter()
             .filter_map(|b| match b {
@@ -248,34 +283,31 @@ impl Frame {
         let mut node_slots: BTreeSet<i64> = BTreeSet::new();
         let mut eqs: Vec<(Occ, Occ)> = Vec::new();
         let mut occs: BTreeSet<Occ> = BTreeSet::new();
-        let mut class_slots: BTreeMap<Name, BTreeSet<i64>> = BTreeMap::new();
+        let mut class_slots: BTreeMap<PVarId, SlotSet> = BTreeMap::new();
         let mut literals: BTreeMap<Name, bool> = BTreeMap::new();
         let mut pending: Vec<Pending> = Vec::new();
         let mut bound_slots: BTreeSet<i64> = BTreeSet::new();
 
         // the root: the node is an invocation of the variable's class
-        let cs: BTreeSet<i64> = root_slots.keys().copied().collect();
-        if let Some(group) = root_group {
+        let cs = root_slots.clone();
+        if let Reading::Group(group) = root_reading {
             // through some element of the class's group: decided later
-            occs.extend(cs.iter().map(|&s| Occ::Var(*root_var, s)));
+            occs.extend(cs.iter().map(|&s| Occ::Var(root_var.clone(), s)));
             pending.push(Pending {
-                atom,
-                var: *root_var,
+                atom: atom.clone(),
+                var: root_var.clone(),
                 edge: cs.iter().map(|&s| (s, s)).collect(),
                 group: group.clone(),
             });
         } else {
-            for &s in &cs {
-                let t = match root_sym {
-                    Some(sym) => *sym.get(&s)?,
-                    None => s,
-                };
-                occs.insert(Occ::Var(*root_var, t));
-                eqs.push((Occ::Node(atom, s), Occ::Var(*root_var, t)));
+            for &s in cs.iter() {
+                let t = root_reading.slot(s)?;
+                occs.insert(Occ::Var(root_var.clone(), t));
+                eqs.push((Occ::Node(atom.clone(), s), Occ::Var(root_var.clone(), t)));
             }
         }
         node_slots.extend(cs.iter().copied());
-        class_slots.insert(*root_var, cs);
+        class_slots.insert(root_var.clone(), cs);
 
         for b in bindings {
             match b {
@@ -284,36 +316,32 @@ impl Frame {
                     var,
                     edge,
                     class_slots: cls,
-                    sym,
-                    group,
+                    reading,
                 } => {
-                    let cs: BTreeSet<i64> = cls.keys().copied().collect();
+                    let cs = cls.clone();
                     node_slots.extend(edge.values().copied());
-                    if let Some(group) = group {
-                        occs.extend(cs.iter().map(|&t| Occ::Var(*var, t)));
+                    if let Reading::Group(group) = reading {
+                        occs.extend(cs.iter().map(|&t| Occ::Var(var.clone(), t)));
                         pending.push(Pending {
-                            atom,
-                            var: *var,
+                            atom: atom.clone(),
+                            var: var.clone(),
                             edge: edge.clone(),
                             group: group.clone(),
                         });
                     }
-                    for &t in &cs {
-                        if group.is_some() {
+                    for &t in cs.iter() {
+                        if matches!(reading, Reading::Group(_)) {
                             break;
                         }
-                        let u = match sym {
-                            Some(sym) => *sym.get(&t)?,
-                            None => t,
-                        };
+                        let u = reading.slot(t)?;
                         // every class slot is an occurrence, so a variable's renaming is
                         // total on its class: a slot no edge reaches is a mint of its own
-                        occs.insert(Occ::Var(*var, u));
+                        occs.insert(Occ::Var(var.clone(), u));
                         if let Some(&s) = edge.get(&t) {
-                            eqs.push((Occ::Node(atom, s), Occ::Var(*var, u)));
+                            eqs.push((Occ::Node(atom.clone(), s), Occ::Var(var.clone(), u)));
                         }
                     }
-                    if let Some(prev) = class_slots.insert(*var, cs.clone())
+                    if let Some(prev) = class_slots.insert(var.clone(), cs.clone())
                         && prev != cs
                     {
                         return None;
@@ -329,22 +357,22 @@ impl Frame {
                         bound_slots.insert(s);
                     }
                     node_slots.extend(edge.values().copied());
-                    occs.insert(Occ::Lit(*name));
-                    eqs.push((Occ::Node(atom, s), Occ::Lit(*name)));
-                    let entry = literals.entry(*name).or_insert(false);
+                    occs.insert(Occ::Lit(name.clone()));
+                    eqs.push((Occ::Node(atom.clone(), s), Occ::Lit(name.clone())));
+                    let entry = literals.entry(name.clone()).or_insert(false);
                     *entry |= carried;
                 }
                 Binding::Leaf { edge } => node_slots.extend(edge.values().copied()),
                 Binding::Bugs(_) => {}
             }
         }
-        occs.extend(node_slots.iter().map(|&s| Occ::Node(atom, s)));
-        let root_cs: BTreeSet<i64> = root_slots.keys().copied().collect();
+        occs.extend(node_slots.iter().map(|&s| Occ::Node(atom.clone(), s)));
+        let root_cs = root_slots;
         let rigid: BTreeSet<Occ> = if rigid_redundant() {
             node_slots
                 .iter()
                 .filter(|s| !root_cs.contains(s) && !bound_slots.contains(s))
-                .map(|&s| Occ::Node(atom, s))
+                .map(|&s| Occ::Node(atom.clone(), s))
                 .collect()
         } else {
             BTreeSet::new()
@@ -375,7 +403,7 @@ impl Frame {
         }
         let mut class_slots = self.class_slots.clone();
         for (v, cs) in &other.class_slots {
-            if let Some(prev) = class_slots.insert(*v, cs.clone())
+            if let Some(prev) = class_slots.insert(v.clone(), cs.clone())
                 && prev != *cs
             {
                 return None;
@@ -383,14 +411,14 @@ impl Frame {
         }
         let mut literals = self.literals.clone();
         for (x, carried) in &other.literals {
-            *literals.entry(*x).or_insert(false) |= carried;
+            *literals.entry(x.clone()).or_insert(false) |= carried;
         }
         let frame = Frame {
             blocks: close(occs, &eqs),
             class_slots,
             literals,
             bugs: self.bugs.union(&other.bugs).cloned().collect(),
-            anchor: self.anchor.or(other.anchor),
+            anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
             pending: self.pending.iter().chain(&other.pending).cloned().collect(),
             rigid: self.rigid.union(&other.rigid).cloned().collect(),
         };
@@ -403,13 +431,14 @@ impl Frame {
         p.edge
             .values()
             .filter(|&&s| {
-                self.block_of(&Occ::Node(p.atom, s)).is_some_and(|i| {
-                    self.blocks[i].iter().any(|o| match o {
-                        Occ::Lit(_) => true,
-                        Occ::Var(v, _) => self.anchor == Some(*v),
-                        Occ::Node(..) => false,
+                self.block_of(&Occ::Node(p.atom.clone(), s))
+                    .is_some_and(|i| {
+                        self.blocks[i].iter().any(|o| match o {
+                            Occ::Lit(_) => true,
+                            Occ::Var(v, _) => self.anchor.as_ref() == Some(v),
+                            Occ::Node(..) => false,
+                        })
                     })
-                })
             })
             .count()
     }
@@ -468,7 +497,10 @@ impl Frame {
                 let Some(u) = g.get(t) else {
                     continue 'elements;
                 };
-                eqs.push((Occ::Node(first.atom, *s), Occ::Var(first.var, *u)));
+                eqs.push((
+                    Occ::Node(first.atom.clone(), *s),
+                    Occ::Var(first.var.clone(), *u),
+                ));
             }
             let Some(next) = self.with(&eqs, rest.clone()) else {
                 continue;
@@ -484,7 +516,7 @@ impl Frame {
 
     /// The frame spelled in this variable's slot names.
     pub fn anchored(&self, var: &str) -> Option<Frame> {
-        let var = Name::new(var);
+        let var = PVarId::new(var);
         self.class_slots.get(&var)?;
         Some(Frame {
             anchor: Some(var),
@@ -572,22 +604,22 @@ impl Frame {
     }
 
     /// The block of the variable occurrence `name:t`, without spelling it out.
-    fn block_of_var(&self, name: Name, t: i64) -> Option<usize> {
+    fn block_of_var(&self, name: &Name, t: i64) -> Option<usize> {
         self.blocks.iter().position(|c| {
             c.binary_search_by(|o| match o {
                 Occ::Node(..) => Ordering::Less,
                 Occ::Lit(_) => Ordering::Greater,
-                Occ::Var(v, s) => (*v, *s).cmp(&(name, t)),
+                Occ::Var(v, s) => (&v.0, *s).cmp(&(name, t)),
             })
             .is_ok()
         })
     }
 
     /// The block of the literal `name`, without spelling it out.
-    fn block_of_lit(&self, name: Name) -> Option<usize> {
+    fn block_of_lit(&self, name: &Name) -> Option<usize> {
         self.blocks.iter().position(|c| {
             c.binary_search_by(|o| match o {
-                Occ::Lit(x) => x.cmp(&name),
+                Occ::Lit(x) => x.cmp(name),
                 _ => Ordering::Less,
             })
             .is_ok()
@@ -602,19 +634,19 @@ impl Frame {
 
     /// A variable's renaming into the pattern's slots, or a literal's `{0 -> slot}`:
     /// the numbering is computed once for the call, not once per slot.
-    pub fn ren(&self, name: &str) -> Option<Slots> {
-        self.renaming(Name::new(name))
+    pub fn ren(&self, name: &str) -> Option<Renaming> {
+        self.renaming(&Name::new(name))
     }
 
-    fn renaming(&self, name: Name) -> Option<Slots> {
+    fn renaming(&self, name: &Name) -> Option<Renaming> {
         let numbers = self.numbering();
         if name.is_literal() {
-            if !self.literals.contains_key(&name) {
+            if !self.literals.contains_key(name) {
                 return None;
             }
-            return Some(Slots::from([(0, numbers[self.block_of_lit(name)?])]));
+            return Some(Renaming::from([(0, numbers[self.block_of_lit(name)?])]));
         }
-        let cs = self.class_slots.get(&name)?;
+        let cs = self.class_slots.get(name)?;
         cs.iter()
             .map(|&t| Some((t, numbers[self.block_of_var(name, t)?])))
             .collect()
@@ -622,7 +654,7 @@ impl Frame {
 
     /// Does the literal's slot lie in any of these variables' images?
     pub fn is_free(&self, lit: &str, vars: &[Name]) -> Option<bool> {
-        let i = self.block_of_lit(Name::new(lit))?;
+        let i = self.block_of_lit(&Name::new(lit))?;
         for v in vars {
             self.class_slots.get(v)?;
         }
@@ -641,12 +673,12 @@ impl Frame {
     /// Fresh slots for a right-hand side, apart from everything the match named.
     pub fn mint(&self, names: &[Name]) -> Option<Frame> {
         let mut out = self.clone();
-        for &name in names {
-            if !name.is_literal() || out.literals.contains_key(&name) {
+        for name in names {
+            if !name.is_literal() || out.literals.contains_key(name) {
                 return None;
             }
-            out.literals.insert(name, false);
-            out.blocks.push(vec![Occ::Lit(name)]);
+            out.literals.insert(name.clone(), false);
+            out.blocks.push(vec![Occ::Lit(name.clone())]);
         }
         out.blocks.sort();
         Some(out)
@@ -654,10 +686,10 @@ impl Frame {
 
     /// A slot set with these literals' slots taken out: a built child's slots under a
     /// binder that binds them.
-    pub fn without(&self, slots: &Slots, bound: &[Name]) -> Option<Slots> {
+    pub fn without(&self, slots: &Renaming, bound: &[Name]) -> Option<Renaming> {
         let mut out = slots.clone();
         let numbers = self.numbering();
-        for &x in bound {
+        for x in bound {
             out.remove(&numbers[self.block_of_lit(x)?]);
         }
         Some(out)
@@ -671,17 +703,17 @@ impl Frame {
         uncovered: &[Name],
         covered: &[Name],
         bound: &[Name],
-    ) -> Option<Slots> {
+    ) -> Option<Renaming> {
         let mut slots: BTreeSet<i64> = BTreeSet::new();
-        for &v in uncovered {
+        for v in uncovered {
             slots.extend(self.renaming(v)?.values().copied());
         }
         let mut inner: BTreeSet<i64> = BTreeSet::new();
-        for &v in covered {
+        for v in covered {
             inner.extend(self.renaming(v)?.values().copied());
         }
         let numbers = self.numbering();
-        for &x in bound {
+        for x in bound {
             inner.remove(&numbers[self.block_of_lit(x)?]);
         }
         slots.extend(inner);
@@ -1003,20 +1035,36 @@ impl BaseSort for NamesSort {
 mod tests {
     use super::*;
 
-    fn m(pairs: &[(i64, i64)]) -> Slots {
+    #[test]
+    fn name_hash_collisions_do_not_identify_spellings() {
+        let a = Name {
+            order: 7,
+            text: Arc::from("a"),
+        };
+        let b = Name {
+            order: 7,
+            text: Arc::from("b"),
+        };
+        assert_ne!(a, b);
+        assert!(a < b);
+        let distinct: hashbrown::HashSet<Name> = [a, b].into_iter().collect();
+        assert_eq!(distinct.len(), 2);
+        assert_eq!(Name::new("repeat"), Name::new("repeat"));
+    }
+
+    fn m(pairs: &[(i64, i64)]) -> Renaming {
         pairs.iter().copied().collect()
     }
 
-    fn ident(slots: &[i64]) -> Slots {
-        slots.iter().map(|&s| (s, s)).collect()
+    fn ident(slots: &[i64]) -> SlotSet {
+        slots.iter().copied().collect()
     }
 
     fn root(v: &str, cs: &[i64]) -> Binding {
         Binding::Root {
             var: v.into(),
             class_slots: ident(cs),
-            sym: None,
-            group: None,
+            reading: Reading::Identity,
         }
     }
 
@@ -1025,8 +1073,7 @@ mod tests {
             var: v.into(),
             edge: m(edge),
             class_slots: ident(cs),
-            sym: None,
-            group: None,
+            reading: Reading::Identity,
         }
     }
 
@@ -1104,8 +1151,7 @@ mod tests {
                     var: "a".into(),
                     edge: m(&[(0, 1), (1, 0)]),
                     class_slots: ident(&[0, 1]),
-                    sym: Some(m(&[(0, 1), (1, 0)])),
-                    group: None,
+                    reading: Reading::Fixed(m(&[(0, 1), (1, 0)])),
                 },
             ],
         );

@@ -378,3 +378,62 @@ fn slotted_subst_frame_places_the_result_in_the_bodys_frame() -> Result<(), Erro
     )?;
     Ok(())
 }
+
+/// A cache warmed in a discarded branch must not supply that branch's term.
+#[test]
+fn substitution_after_pop_uses_restored_database() -> Result<(), Error> {
+    egraph(
+        r#"
+(push)
+(let $body (Lbl "left" (map-of 0 0) (Var 0)))
+(run-schedule (saturate (run slots)))
+(let $warm (slotted-subst $body 7 (Var 0) (map-empty) (Null)))
+(pop)
+(let $body (Lbl "right" (map-of 0 0) (Var 0)))
+(run-schedule (saturate (run slots)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
+(check (= $out (Lbl "right" (map-empty) (Null))))
+"#,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn substitution_after_clone_uses_its_own_database() -> Result<(), Error> {
+    let mut original = egraph("")?;
+    let mut cloned = original.clone();
+    cloned.parse_and_run_program(
+        None,
+        r#"
+(let $body (Lbl "left" (map-of 0 0) (Var 0)))
+(run-schedule (saturate (run slots)))
+(let $warm (slotted-subst $body 7 (Var 0) (map-empty) (Null)))
+"#,
+    )?;
+    original.parse_and_run_program(
+        None,
+        r#"
+(let $body (Lbl "right" (map-of 0 0) (Var 0)))
+(run-schedule (saturate (run slots)))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
+(check (= $out (Lbl "right" (map-empty) (Null))))
+"#,
+    )?;
+    Ok(())
+}
+
+#[test]
+fn substitution_observes_class_slots_without_constructor_changes() -> Result<(), Error> {
+    egraph(
+        r#"
+(let $body (H (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
+(run-schedule (saturate (run slots)))
+(let $before (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null)))
+(check (= $before (map-of 1 1 2 2)))
+(set (ClassSlots $body) (map-empty))
+(let $after (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null)))
+(check (= $after (map-empty)))
+"#,
+    )?;
+    Ok(())
+}

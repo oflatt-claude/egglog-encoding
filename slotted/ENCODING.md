@@ -563,7 +563,7 @@ so no two may share a block:
 
 A frame is **consistent** when no clique is broken; `atom` and `frame-join` return
 nothing otherwise, so a reading that identifies two slots of one node simply fails to
-join. The cliques are not stored: `sort/frame.rs` in the egglog crate reads them off
+join. The cliques are not stored: `sort/slotted/frame.rs` in the egglog crate reads them off
 the occurrences (`apart`). The reference matcher keeps the same information as pairwise
 disequality constraints. In the match above every block holds a slot of the root
 node, so the node clique pins all four and `refinements` holds the frame alone; C8
@@ -1040,9 +1040,13 @@ be made the same, each established on a minimal case the harness keeps:
 
 - *Substitution picks the same term.* `beta` substitutes into one term of the body's
   class, and which term decides which rows the graph holds from then on. The encoding
-  takes the smallest term, ties broken by a canonical spelling (`slotted_subst.rs`,
+  takes the smallest term, ties broken by a canonical spelling (`sort/slotted/subst.rs`,
   `cheapest`), from the e-graph as the round began, since `beta/apply` runs in one
-  apply phase whose reads are that snapshot. The crate's own methods read the graph at
+  apply phase whose reads are that snapshot. The parsed terms and substitution results
+  belong to that execution state and are shared by its workers and the two result
+  primitives. A new phase starts with an empty cache, including after `push`/`pop`
+  or an e-graph clone; constructor, class-slot, and layout changes are all observed.
+  The crate's own methods read the graph at
   application time, after the round's earlier unions, and its default takes the node a
   class was created with -- history the encoding cannot replay. So the oracle harness
   substitutes as the encoding does: `slotted/xmulti`'s `SnapshotSubst` takes the
@@ -1086,7 +1090,7 @@ or graph equality.
 | `slotted/LANGUAGE.md` | the source language: every form and why it exists |
 | `slotted/slotted-egglog.py` | the compiler — a program in that language to egglog |
 | `slotted/slotted-encoder.py` | the encoding itself: the tables above, and rule compilation |
-| `egglog/src/sort/frame.rs` | the frame and its primitives; `map.rs`, `set.rs` and `vec.rs` hold the renaming, group and shape primitives; `slotted_subst.rs` the substitution |
+| `egglog/src/sort/slotted/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
 | `slotted/tests/` | tests written in the source language |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |

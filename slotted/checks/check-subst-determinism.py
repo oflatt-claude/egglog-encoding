@@ -7,10 +7,9 @@ the table scan happened to yield first -- because egglog's own processing order 
 between processes, and two runs that substituted different representatives would build
 different e-graphs from then on. This runs one program that once did exactly that, MMM's
 second-phase input under the thirteen rules of `slotted/tests/sdql-paper-mmm.egg`, several
-times at two round counts, and requires the final class and node counts to agree.
+times at two round counts, requiring equal counts and a verified isomorphism.
 """
 
-import collections
 import json
 import pathlib
 import subprocess
@@ -46,7 +45,48 @@ def program(rounds):
     return compiled
 
 
+def compare_graphs(first, graph, issues):
+    """Reject unreadable graphs, unequal counts, and missing/invalid witnesses."""
+    if issues:
+        return f"unreadable graph: {issues[:2]}"
+    if first is None:
+        return None
+    if first.summary() != graph.summary():
+        return f"class/node counts differ: {first.summary()} vs {graph.summary()}"
+    try:
+        witness, why = ISO.find_isomorphism(first, graph)
+        if witness is None:
+            return f"no isomorphism: {why}"
+        bad = ISO.verify(first, graph, *witness)
+        return f"invalid isomorphism: {bad}" if bad is not None else None
+    except ISO.IsomorphismLimit as exc:
+        return f"isomorphism inconclusive: {exc}"
+
+
+def selftest():
+    """The determinism gate must fail closed, even when counts agree."""
+    from unittest.mock import patch
+
+    def graph(op, cid):
+        g = ISO.Graph()
+        g.add_class(cid, [])
+        g.nodes[cid] = [(op, ())]
+        g.close_groups()
+        return g
+
+    first, renamed, different = graph("left", "a"), graph("left", "b"), graph("right", "b")
+    assert compare_graphs(None, first, ["reader error"]) is not None
+    assert compare_graphs(first, first, ["reader error"]) is not None
+    assert compare_graphs(first, different, []) is not None
+    assert compare_graphs(first, renamed, []) is None
+    with patch.object(ISO, "find_isomorphism", side_effect=ISO.IsomorphismLimit("test bound")):
+        assert compare_graphs(first, renamed, []) is not None
+    with patch.object(ISO, "verify", return_value="test invalid witness"):
+        assert compare_graphs(first, renamed, []) is not None
+
+
 def main():
+    selftest()
     if not EGGLOG.is_file():
         print(f"FAIL: {EGGLOG.relative_to(ROOT)} not built")
         return 1
@@ -56,7 +96,7 @@ def main():
     for rounds in ROUNDS:
         compiled = program(rounds)
         json_path = compiled.with_suffix(".json")
-        seen = collections.Counter()
+        first = None
         for _ in range(RUNS):
             json_path.unlink(missing_ok=True)
             run = subprocess.run(
@@ -71,16 +111,19 @@ def main():
                 bad.append(f"{rounds} rounds: run failed: {detail[:120]}")
                 break
             graph, issues = ISO.build_encoding_graph(json.loads(json_path.read_text()))
-            seen[str(graph.summary()) if not issues else f"issues: {issues[:2]}"] += 1
-        if len(seen) > 1:
-            bad.append(f"{rounds} rounds: {len(seen)} different e-graphs over {RUNS} runs: {dict(seen)}")
+            issue = compare_graphs(first, graph, issues)
+            if issue is not None:
+                bad.append(f"{rounds} rounds: {issue}")
+                break
+            if first is None:
+                first = graph
         compiled.unlink(missing_ok=True)
         json_path.unlink(missing_ok=True)
     if bad:
         for line in bad:
             print("FAIL:", line)
         return 1
-    print(f"OK: {len(ROUNDS)}/{len(ROUNDS)} round counts build one e-graph over {RUNS} runs each")
+    print(f"OK: {len(ROUNDS)}/{len(ROUNDS)} round counts match counts and verified isomorphism over {RUNS} runs each")
     return 0
 
 

@@ -45,36 +45,62 @@
 //! onto another member of `body`'s class.
 
 use super::*;
-use crate::exec_state::{Internal, RegistrySealed, lookup_action};
-use core_relations::TableVersion;
+use crate::exec_state::{Internal, RegistrySealed};
 use egglog_bridge::{TableAction, TableKind};
 use hashbrown::HashMap;
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 /// Every node row of the language's constructors, bucketed by the class that holds it:
-/// constructor index into the cache's `names`, then the row's columns.
+/// constructor index into the scan's `names`, then the row's columns.
 type Rows = HashMap<Value, Vec<(usize, SmallVec<[Value; 8]>)>>;
 
-/// What one call of the primitive is a function of, besides the tables.
-type ResultKey = (Value, Slot, Value, Value, Value, String);
-
-/// What the primitive keeps between calls, valid while the constructor tables are at
-/// the versions recorded. Within one rule-application phase every insert is staged,
-/// so the versions hold still across all the calls of that phase: one scan serves
-/// them all, and the class half and the frame half of one substitution, called with
-/// the same arguments, compute it once.
-pub(crate) struct SubstCache {
-    versions: Vec<TableVersion>,
-    names: Vec<String>,
+/// Inputs that distinguish carriers and their renaming representation.
+#[derive(Hash, PartialEq, Eq)]
+struct CarrierKey {
+    renaming_sort: String,
     var: Value,
     class_slots: String,
-    /// Every class's parsed nodes and the one rooting its smallest term.
+}
+
+/// Inputs to one substitution within a carrier's immutable snapshot.
+#[derive(Hash, PartialEq, Eq)]
+struct ResultKey {
+    body: Value,
+    slot: Slot,
+    replacement_frame: Value,
+    replacement: Value,
+}
+
+/// Owned by the execution state, never by a primitive or an EGraph snapshot.
+/// All workers and both result halves share it until staged writes are merged.
+#[derive(Default)]
+struct Substitutions(Mutex<HashMap<CarrierKey, SubstSnapshot>>);
+
+/// Validated and extracted once per carrier in a rule-application phase.
+struct SubstSnapshot {
+    var: Value,
+    class_slots: String,
     terms: Terms,
-    /// Every slot any edge names, which a fresh name must avoid.
     slots_used: BTreeSet<Slot>,
-    results: HashMap<ResultKey, Option<(Value, Ren)>>,
+    results: HashMap<ResultKey, Option<(Value, Renaming)>>,
+}
+
+impl SubstSnapshot {
+    fn load(state: &FullState<'_, '_>, var: Value, class_slots: String) -> Result<Self, String> {
+        let layouts = Layouts::load(state, &class_slots)?;
+        let mut names: Vec<String> = layouts.constructors.keys().cloned().collect();
+        names.sort();
+        let (terms, slots_used) = build_terms(state, &layouts, var, &class_slots, &names)?;
+        Ok(Self {
+            var,
+            class_slots,
+            terms,
+            slots_used,
+            results: HashMap::new(),
+        })
+    }
 }
 
 /// The name of the primitive, as written in an egglog program.
@@ -85,9 +111,6 @@ pub const SLOTTED_SUBST_FRAME: &str = "slotted-subst-frame";
 
 /// A slot name, as a renaming spells it.
 type Slot = i64;
-
-/// A renaming: a partial injection on slot names.
-type Ren = BTreeMap<Slot, Slot>;
 
 /// The slot the primitive's contract fixes for `var`: the variable class is
 /// `(Var 0)`, so "the variable at slot `s`" is `var` reached by an edge
@@ -106,7 +129,7 @@ const CLASS_SLOTS: &str = "ClassSlots";
 #[derive(Clone, Debug)]
 struct Edge {
     col: usize,
-    ren: Ren,
+    ren: Renaming,
     child: Value,
 }
 
@@ -171,16 +194,14 @@ struct Terms {
 /// not cover.
 ///
 /// The identity renaming on `m`'s image.
-fn image(m: &Ren) -> Ren {
+fn image(m: &Renaming) -> Renaming {
     m.values().map(|v| (*v, *v)).collect()
 }
 
 /// Deterministic alpha-fresh names for one primitive invocation.
 ///
-/// Both result halves perform the rebuild independently, so freshness cannot use a
-/// global counter: the class-producing and frame-producing calls must choose the same
-/// names. The smallest nonnegative name absent from the extracted term, its ambient
-/// frames, and the replacement is stable across both calls.
+/// The smallest nonnegative name absent from the extracted term, its ambient
+/// frames, and the replacement is independent of process and table iteration order.
 struct Fresh {
     used: BTreeSet<Slot>,
     next: Slot,
@@ -214,10 +235,10 @@ fn substitute(
     state: &mut FullState<'_, '_>,
     body: Value,
     x: Slot,
-    t_ren: &Ren,
+    t_ren: &Renaming,
     t: Value,
-    cache: &SubstCache,
-) -> Result<Option<(Value, Ren)>, String> {
+    cache: &SubstSnapshot,
+) -> Result<Option<(Value, Renaming)>, String> {
     let class_slots = cache.class_slots.as_str();
     if !cache.terms.best.contains_key(&body) {
         return Ok(None);
@@ -256,9 +277,9 @@ struct Rebuild<'t> {
     terms: &'t Terms,
     x: Slot,
     var: Value,
-    t_ren: Ren,
+    t_ren: Renaming,
     t: Value,
-    memo: HashMap<(Value, Ren), (Value, Ren)>,
+    memo: HashMap<(Value, Renaming), (Value, Renaming)>,
     fresh: Fresh,
     class_slots: String,
 }
@@ -267,7 +288,12 @@ impl Rebuild<'_> {
     /// Substitute inside `c`, whose slots `m` carries into `body`'s frame.
     /// Returns the resulting class and the renaming carrying its slots into
     /// that same frame.
-    fn go(&mut self, state: &mut FullState<'_, '_>, c: Value, m: Ren) -> Option<(Value, Ren)> {
+    fn go(
+        &mut self,
+        state: &mut FullState<'_, '_>,
+        c: Value,
+        m: Renaming,
+    ) -> Option<(Value, Renaming)> {
         // Slot `x` is not among the slots this subterm can name, so no
         // occurrence of the substituted variable is under it.
         if !m.values().any(|slot| *slot == self.x) {
@@ -284,7 +310,7 @@ impl Rebuild<'_> {
         // recursion terminates even where the e-graph is cyclic.
         let node = self.terms.nodes[&c][*self.terms.best.get(&c)?].clone();
         let mut args = node.args.clone();
-        let mut slots = Ren::new();
+        let mut slots = Renaming::new();
 
         // Binder markers are data, not AST children. Give every active binder a
         // fresh private name, and apply that alpha-renaming only to the edge it
@@ -294,7 +320,7 @@ impl Rebuild<'_> {
             let marker = node.edges.iter().find(|edge| edge.col == binder.marker)?;
             let old = *marker.ren.get(&VAR_SLOT)?;
             let fresh = self.fresh.take()?;
-            let marker_ren = BTreeMap::from([(VAR_SLOT, fresh)]);
+            let marker_ren = Renaming::from([(VAR_SLOT, fresh)]);
             args[binder.marker] = intern(state, &marker_ren);
             args[binder.marker + 1] = self.var;
             refreshed.push((*binder, old, fresh));
@@ -317,7 +343,7 @@ impl Rebuild<'_> {
                 continue;
             }
 
-            let mut child_frame = Ren::new();
+            let mut child_frame = Renaming::new();
             for (from, to) in &edge.ren {
                 let bound = refreshed
                     .iter()
@@ -367,7 +393,7 @@ impl Rebuild<'_> {
 }
 
 /// Intern a renaming as a `Renaming` value.
-fn intern(state: &mut FullState<'_, '_>, ren: &Ren) -> Value {
+fn intern(state: &mut FullState<'_, '_>, ren: &Renaming) -> Value {
     let data: BTreeMap<Value, Value> = ren
         .iter()
         .map(|(k, v)| {
@@ -380,15 +406,9 @@ fn intern(state: &mut FullState<'_, '_>, ren: &Ren) -> Value {
     state.container_to_value(MapContainer::renaming(data))
 }
 
-/// The e-nodes reachable from `root`, and each class's smallest-term choice.
-// One `eclass_enodes` call per reachable class, and that scans every
-// constructor table: an output-column index, or one grouped pass over every
-// table, would replace this loop without changing the result.
-/// Every class's nodes, parsed, and the one rooting its smallest term, for the
-/// whole e-graph at once. Only the constructors the layout metadata names are read --
-/// a relation is a constructor too, so the machinery's own tables would otherwise be
-/// scanned with them. Built once per version of the tables, so the calls of one phase
-/// share it, and each of them walks only its own term.
+/// Every class's parsed nodes and smallest-term choice in this execution's snapshot.
+/// Scan each declared constructor once. ClassSlots distinguishes public slots from
+/// private binder/redundant slots; layout metadata identifies physical columns.
 fn build_terms(
     state: &FullState<'_, '_>,
     layouts: &Layouts,
@@ -717,14 +737,14 @@ fn parse_node(
     })
 }
 
-fn decode_renaming(state: &FullState<'_, '_>, value: Value) -> Result<Ren, String> {
+fn decode_renaming(state: &FullState<'_, '_>, value: Value) -> Result<Renaming, String> {
     let map = state
         .value_to_container::<MapContainer>(value)
         .ok_or_else(|| format!("metadata marks {value:?} as a Renaming, but it is not a Map"))?;
     if map.rebuilds_contents() {
         return Err("a slotted edge Renaming may contain only base slot values".to_owned());
     }
-    let ren: Ren = map
+    let ren: Renaming = map
         .data
         .iter()
         .map(|(k, v)| {
@@ -743,18 +763,15 @@ fn decode_renaming(state: &FullState<'_, '_>, value: Value) -> Result<Ren, Strin
 }
 
 fn live_action(state: &FullState<'_, '_>, name: &str) -> Result<TableAction, String> {
-    if !state
-        .table_sizes()
-        .into_iter()
-        .any(|(candidate, _)| candidate == name)
-    {
-        return Err(format!("required table {name} is not live"));
-    }
-    state
+    let action = state
         .registry()
         .lookup_table(name)
         .cloned()
-        .ok_or_else(|| format!("required table {name} is not registered"))
+        .ok_or_else(|| format!("required table {name} is not registered"))?;
+    if !action.is_live(state.es(), name) {
+        return Err(format!("required table {name} is not live"));
+    }
+    Ok(action)
 }
 
 fn metadata_rows(
@@ -793,7 +810,7 @@ fn class_slots_if_present(
     state: &FullState<'_, '_>,
     class_slots: &str,
     class: Value,
-) -> Result<Option<Ren>, String> {
+) -> Result<Option<Renaming>, String> {
     let Some(value) = state
         .lookup(class_slots, RawValues(vec![class]))
         .map_err(|err| format!("reading {class_slots} for {class:?}: {err}"))?
@@ -1059,8 +1076,8 @@ impl Layouts {
 /// A substitution's result is an invocation, and a primitive returns one value,
 /// so it takes two calls to read one. `slotted-subst` gives the class and
 /// `slotted-subst-frame` the renaming; called with the same arguments they
-/// describe the same result, and the pair is what the caller wants. The work is
-/// repeated, so prefer one call each rather than either in a loop.
+/// describe the same result. Both calls share extraction and rebuilding through
+/// the execution state's cache.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Half {
     /// The result class.
@@ -1078,8 +1095,6 @@ pub(crate) struct SlottedSubst {
     pub(crate) renaming: ArcSort,
     /// The sort of a slot name: the renaming sort's key sort, `i64`.
     pub(crate) slot: ArcSort,
-    /// The scan and the results kept between calls, shared by the two halves.
-    pub(crate) cache: Arc<Mutex<Option<SubstCache>>>,
 }
 
 impl Primitive for SlottedSubst {
@@ -1122,7 +1137,7 @@ impl FullPrim for SlottedSubst {
         let x = state.value_to_base::<i64>(x);
         // Cloned out so the container registry is not still borrowed when the
         // rebuild interns new renamings.
-        let t_ren: Ren = state
+        let t_ren: Renaming = state
             .value_to_container::<MapContainer>(t_ren)
             .unwrap_or_else(|| {
                 panic!(
@@ -1139,52 +1154,34 @@ impl FullPrim for SlottedSubst {
                 )
             })
             .collect();
-        let layouts = match Layouts::load(&state, &class_slots) {
-            Ok(layouts) => layouts,
-            Err(err) => {
-                log::error!("{}: {err}", self.name());
-                return None;
-            }
-        };
-        let mut names: Vec<String> = layouts.constructors.keys().cloned().collect();
-        names.sort();
-        let mut versions = Vec::with_capacity(names.len());
-        for name in &names {
-            match lookup_action(state.registry(), name) {
-                Ok(action) => versions.push(action.version(state.es())),
-                Err(err) => {
-                    log::error!("{}: {err}", self.name());
-                    return None;
-                }
-            }
-        }
-        let mut guard = self
-            .cache
+        let substitutions = state.es().execution_cache::<Substitutions>();
+        let mut guard = substitutions
+            .0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let stale = !matches!(&*guard, Some(cache)
-            if cache.versions == versions && cache.names == names && cache.var == var && cache.class_slots == class_slots);
-        if stale {
-            let (terms, slots_used) = match build_terms(&state, &layouts, var, &class_slots, &names)
-            {
-                Ok(built) => built,
-                Err(err) => {
-                    log::error!("{}: {err}", self.name());
-                    return None;
+        let carrier = CarrierKey {
+            renaming_sort: self.renaming.name().to_owned(),
+            var,
+            class_slots: class_slots.clone(),
+        };
+        let cache = match guard.entry(carrier) {
+            hashbrown::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            hashbrown::hash_map::Entry::Vacant(entry) => {
+                match SubstSnapshot::load(&state, var, class_slots) {
+                    Ok(snapshot) => entry.insert(snapshot),
+                    Err(err) => {
+                        log::error!("{}: {err}", self.name());
+                        return None;
+                    }
                 }
-            };
-            *guard = Some(SubstCache {
-                versions,
-                names,
-                var,
-                class_slots: class_slots.clone(),
-                terms,
-                slots_used,
-                results: HashMap::new(),
-            });
-        }
-        let cache = guard.as_mut().expect("the cache was just filled");
-        let key: ResultKey = (body, x, var, args[3], t, class_slots);
+            }
+        };
+        let key = ResultKey {
+            body,
+            slot: x,
+            replacement_frame: args[3],
+            replacement: t,
+        };
         let result = match cache.results.get(&key) {
             Some(result) => result.clone(),
             None => {
