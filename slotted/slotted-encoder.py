@@ -1176,20 +1176,8 @@ def carrier_core(symbols):
     )
 
 
-#: How many refinement indices a compiled rule may read. `vec-get` is PARTIAL past the
-#: last refinement, so a rule joining `Idx` against it stops on its own: seeding
-#: more than a rule needs costs join attempts, and seeding fewer loses the answers past
-#: the last one. Index 0 is the identity, so running out degrades to not refining --
-#: matches are missed, never invented.
-#:
-#: Sixty-four because eight was measured to be too few. Eight was kept for a while
-#: because raising it changed no answer on the corpus known then; a symmetry-heavy sweep
-#: reached past it, and `XDIFF_SYM=0.95 isomorphism.py fuzz 1200 101` holds a case whose
-#: class count is 9 against the reference's 6 at eight indices and 8 at sixty-four.
 #: The sort name the generated single-carrier files encode over.
 CARRIER_SORT = "U"
-
-NAMING_INDICES = 64
 
 #: How many elements of a class's group the index rules read. The largest group the
 #: paper's workloads build is 288 elements (TTM's second phase); a class past this
@@ -1219,7 +1207,7 @@ def machinery_schedule():
 def round_schedule(steps, user="(run)"):
     """`steps` rounds of the user rules -- `user` is how one step of them is run --
     each followed by the stored matches' actions and the machinery."""
-    step = f"(seq {user} (run slotted-apply) {MACHINERY_SCHEDULE})"
+    step = f"(seq {user} (saturate (run slotted-refine)) (run slotted-apply) {MACHINERY_SCHEDULE})"
     return f"(run-schedule {MACHINERY_SCHEDULE}\n              (repeat {steps} {step}))"
 
 
@@ -1252,8 +1240,18 @@ def prelude():
             ";; A node's edges in canonical spelling, and the renaming back to its own names.",
             ";; Declared after `Groups`, which is where `node-shape` reads its groups.",
             "(sort Renamings (Vec Renaming))",
+            ";; Grow indices to cover every stored match before the apply phase.",
+            "(ruleset slotted-refine)",
+            "(function RefinementCount () i64 :merge (max old new))",
+            "(set (RefinementCount) 0)",
             "(relation Idx (i64))",
-            *(f"(Idx {i})" for i in range(NAMING_INDICES)),
+            "(Idx 0)",
+            # Binary-tree expansion covers [0, count) in logarithmically many rounds.
+            *(
+                f"(rule ((Idx _i) (= _next (+ (* _i 2) {offset})) (< _next (RefinementCount)))"
+                " ((Idx _next)) :ruleset slotted-refine)"
+                for offset in (1, 2)
+            ),
         ]
     )
 
@@ -2521,7 +2519,8 @@ def compile_rule(
     refinements in a relation of its own; a second rule in the `slotted-apply`
     ruleset joins that relation with `Idx`, reads one refinement, checks the
     conditions and acts; and a third, in the same ruleset, deletes the row. The
-    schedule runs the two rulesets in turn within one step.
+    schedule grows `Idx` to the largest stored vector's length before applying any
+    matches, so every refinement acts within that same user step.
 
     A right-hand-side slot the pattern never pins is FRESH BY DEFINITION, so it is
     inferred rather than declared -- the reference mints one on the spot
@@ -2595,7 +2594,12 @@ def compile_rule(
     return "\n".join(
         [
             f"(relation {relation} ({' '.join(sorts)}))",
-            rule(body[: q.split], [row], in_ruleset, f':name "{name}"' if name else None),
+            rule(
+                body[: q.split],
+                [row, f"(set (RefinementCount) (vec-length {q.refined}))"],
+                in_ruleset,
+                f':name "{name}"' if name else None,
+            ),
             rule(
                 [row, *body[q.split :]],
                 act,

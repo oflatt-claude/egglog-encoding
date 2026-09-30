@@ -181,7 +181,7 @@
        (coset-same (compose (map-of (map-get (ren _c0m "$2") 0) 2 (map-get (ren _c0m "$3") 0) 3 (map-get (ren _c0m "$4") 0) 4 (map-get (ren _c0m "$7") 0) 7 (map-get (ren _c0m "$8") 0) 8) (ren _c0m "_c0")) (compose (map-of (map-get (ren _c1m "$2") 0) 2 (map-get (ren _c1m "$3") 0) 3 (map-get (ren _c1m "$4") 0) 4 (map-get (ren _c1m "$5") 0) 5 (map-get (ren _c1m "$7") 0) 7 (map-get (ren _c1m "$8") 0) 8) (ren _c1m "_c1")) _grp)))
 (print-size)
 (run-schedule (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read)))
-              (repeat 2 (seq (run) (run slotted-apply) (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))))))
+              (repeat 2 (seq (run) (saturate (run slotted-refine)) (run slotted-apply) (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))))))
 (check (= _c0cls_c0 (Lambda _c0e0_lit__b1 (SlottedVar_0 0) _c0e0_c0t1 _c0cls_c0t1))
        (= _c0atom_c0 (atom "_c0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (bound "$_b1" _c0e0_lit__b1) (child "_c0t1" _c0e0_c0t1 (ClassSlots_0 _c0cls_c0t1))))
        (= _c0cls_c0t1 (Lambda _c0e1_lit__b2 (SlottedVar_0 0) _c0e1_c0t2 _c0cls_c0t2))

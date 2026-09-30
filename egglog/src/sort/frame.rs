@@ -209,9 +209,6 @@ pub struct Frame {
 
 pub type Fr = Boxed<Frame>;
 
-/// How many refinements are enumerated at most; index 0 is always the identity.
-pub const REFINE_CAP: usize = 64;
-
 /// EXPERIMENT (`SLOTTED_RIGID_REDUNDANT` set): a slot a node carries that its class
 /// does not is a fresh constant of that node alone, as the reference's `enodes_applied`
 /// makes it -- it never becomes one slot with another atom's slot or a literal, and
@@ -721,30 +718,24 @@ impl Frame {
     }
 
     /// Every consistent way to decide the open readings and then to merge the blocks
-    /// refinement may touch, each reading's unmerged frame before its mergings, at
-    /// most `cap` of them. This is the reference's `final_refine`.
-    pub fn refinements(&self, cap: usize) -> Vec<Frame> {
+    /// refinement may touch, each reading's unmerged frame before its mergings.
+    /// This is the reference's `final_refine`; no valid alternatives are discarded.
+    pub fn refinements(&self) -> Vec<Frame> {
         let mut out = Vec::new();
         let mut seen: BTreeSet<Vec<Vec<Occ>>> = BTreeSet::new();
         for frame in self.resolved() {
-            if out.len() >= cap {
-                break;
-            }
             if !seen.insert(frame.blocks.clone()) {
                 continue;
             }
             out.push(frame.clone());
             if !frame.has_bug("no-refine") {
-                frame.walk(cap, &mut seen, &mut out);
+                frame.walk(&mut seen, &mut out);
             }
         }
         out
     }
 
-    fn walk(&self, cap: usize, seen: &mut BTreeSet<Vec<Vec<Occ>>>, out: &mut Vec<Frame>) {
-        if out.len() >= cap {
-            return;
-        }
+    fn walk(&self, seen: &mut BTreeSet<Vec<Vec<Occ>>>, out: &mut Vec<Frame>) {
         let cands: Vec<usize> = (0..self.blocks.len())
             .filter(|&i| self.carried(&self.blocks[i]))
             .collect();
@@ -758,10 +749,7 @@ impl Frame {
                     continue;
                 }
                 out.push(next.clone());
-                next.walk(cap, seen, out);
-                if out.len() >= cap {
-                    return;
-                }
+                next.walk(seen, out);
             }
         }
     }
@@ -1141,11 +1129,7 @@ mod tests {
         )
         .unwrap();
         // refinement never merges them either
-        assert!(
-            g.refinements(REFINE_CAP)
-                .iter()
-                .all(|r| r.ren("$x") != r.ren("$y"))
-        );
+        assert!(g.refinements().iter().all(|r| r.ren("$x") != r.ren("$y")));
     }
 
     #[test]
@@ -1161,7 +1145,7 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(f.refinements(REFINE_CAP).len(), 1);
+        assert_eq!(f.refinements().len(), 1);
         // a redundant class slot of `a` that no edge reaches is a placeholder, and a
         // second such placeholder on `b` may be identified with it
         let g = Frame::atom(
@@ -1173,7 +1157,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let alts = g.refinements(REFINE_CAP);
+        let alts = g.refinements();
         assert_eq!(alts[0], g, "the identity comes first");
         assert!(
             alts.iter()
@@ -1184,6 +1168,32 @@ mod tests {
             alts.iter()
                 .all(|r| r.ren("a").unwrap()[&5] != r.ren("a").unwrap()[&0]),
             "one node's slots stay apart"
+        );
+    }
+
+    #[test]
+    fn refinement_enumerates_all_six_slot_partitions() {
+        // Six independent one-slot components have Bell(6) = 203 refinements.
+        // A fixed prefix (formerly 64) silently loses distinct matches.
+        let mut frame = Frame::default();
+        let names: Vec<_> = (0..6).map(|i| format!("p{i}")).collect();
+        for name in &names {
+            frame = frame
+                .join(&Frame::atom(name, &[root(name, &[0])]).unwrap())
+                .unwrap();
+        }
+        let refinements = frame.refinements();
+        assert_eq!(refinements[0], frame, "the identity comes first");
+        let partitions: BTreeSet<Vec<i64>> = refinements
+            .iter()
+            .map(|r| names.iter().map(|v| r.ren(v).unwrap()[&0]).collect())
+            .collect();
+        assert_eq!(refinements.len(), 203);
+        assert_eq!(partitions.len(), 203, "every refinement is distinct");
+        assert!(
+            partitions
+                .iter()
+                .any(|p| p[..5].iter().all(|s| *s == p[0]) && p[5] != p[0])
         );
     }
 
@@ -1221,7 +1231,7 @@ mod tests {
         .unwrap();
         let f = add.join(&mul).unwrap().join(&pair).unwrap();
         assert!(
-            f.refinements(REFINE_CAP)
+            f.refinements()
                 .iter()
                 .any(|r| r.is_free("$x", &["a2".into()]) == Some(true))
         );

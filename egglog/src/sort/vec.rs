@@ -256,7 +256,7 @@ impl ContainerSort for VecSort {
             add_primitive!(eg, "refinements" = {self.clone(): VecSort} |f: crate::sort::Fr| -> @VecContainer (arc) { VecContainer {
                 do_rebuild: false,
                 data: f
-                    .refinements(crate::sort::REFINE_CAP)
+                    .refinements()
                     .into_iter()
                     .map(|g| state.base_values().get::<crate::sort::Fr>(crate::sort::Fr::new(g)))
                     .collect(),

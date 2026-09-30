@@ -43,13 +43,17 @@ whether one more round would have changed it -- the reference stops early and re
 that itself, the encoding runs its budget and is then asked, under `push`/`pop`, whether
 a further round adds anything. A `vs ref-*` column says how the encoding's final graph
 compares with that reference side's: `isomorphic` when `slotted/xdiff/isomorphism.py`
-finds a witness; else `same partition` when every reference node's term, added to the
-encoding's finished graph, lands where the reference's equivalence says
-(`slotted/xdiff/partition.py`); else `split k, merged m` -- k reference classes the
-encoding keeps apart, m it puts together. The side to match is `ref-multi`, and the
+finds and verifies a witness; `different` when exact comparison rejects the graphs;
+or `inconclusive` when a graph is unavailable or comparison exceeds a work limit.
+Equal probe partitions or row counts do not establish graph equality. The side to
+match is `ref-multi`, and the
 oracle substitutes as the encoding does so that the two can build the same rows
-(`slotted/ENCODING.md`, *Against the reference*); `isomorphic` is the expected verdict,
-and `same partition` on a large graph may only mean the checker's search gave up. The
+(`slotted/ENCODING.md`, *Against the reference*); `isomorphic` is the expected verdict.
+With counts enabled, a run comparing encoding with `ref-multi` exits successfully
+only if all goals succeed, both class and node counts agree, and every workload has
+that verified verdict. Counts are checked separately before witness search and remain
+in the report even when search is inconclusive. `ref-nested`
+remains a diagnostic comparison. The
 comparison needs the oracle's dump, whose symmetry-group enumeration `--group-cap`
 bounds; `--no-counts` skips counts, settling and comparison for timings alone. `--long` gives one row per run
 with every field instead, and `--html` writes the table as a page too. Every run is also
@@ -78,7 +82,6 @@ sys.path.insert(0, str(ROOT / "slotted"))
 sys.path.insert(0, str(ROOT / "slotted" / "xdiff"))
 
 import isomorphism as ISO  # noqa: E402
-import partition as PT  # noqa: E402
 import xarray as XA  # noqa: E402
 
 sc = __import__("slotted-egglog")
@@ -103,9 +106,6 @@ EGGLOG = ROOT / "target" / "release" / "egglog"
 #: The oracle's own default is 6, which stops at every second-phase SDQL graph; 10 covers
 #: all but TTM's, whose 12-slot classes take the oracle minutes to enumerate.
 GROUP_CAP = 10
-#: Up to this many reference classes a comparison looks for an isomorphism witness;
-#: larger graphs are decided by the probes (`same rows`).
-WITNESS_CLASSES = 40
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "release" / "xmulti"
 BUILDS = (
     ("cargo", "build", "--release", "--bin", "egglog"),
@@ -149,7 +149,10 @@ class Row:
         for field in ("goal", "saturated", "seconds", "classes", "nodes", "checks"):
             setattr(row, field, d.get(field, getattr(row, field)))
         row.paper = tuple(d["paper"]) if d.get("paper") is not None else None
-        row.vs_ref = d.get("vs_ref", {})
+        row.vs_ref = {
+            side: "inconclusive: legacy same rows (no witness)" if verdict == "same rows" else verdict
+            for side, verdict in d.get("vs_ref", {}).items()
+        }
         return row
 
 
@@ -348,50 +351,58 @@ def encoding_counts(program, name, lang, row, timeout):
         jpath.unlink(missing_ok=True)
 
 
-def compare(rows, program, lang, renames, sort, declared, timeout):
-    """How the encoding's final graph compares with each reference side's, on one workload.
+def compare_counts(enc, ref):
+    """A cheap check of the reported sizes, independent of witness search/verification."""
+    missing = False
+    for name in ("classes", "nodes"):
+        a, b = getattr(enc, name), getattr(ref, name)
+        if a is None or b is None:
+            missing = True
+        elif a != b:
+            return f"different: {name} {a} vs {b} (encoding vs reference)"
+    return "inconclusive: counts unavailable" if missing else "same counts"
 
-    Isomorphic when the checker finds a witness. Otherwise the partition question of
-    `partition.py`: every reference node's term is added to the encoding's finished
-    graph (`program` is the run that made it) and the two equivalences are compared.
+
+def compare(rows):
+    """Compare complete graphs, preserving differences and resource limits.
+
+    Only a verified class/slot/group/node witness establishes graph equality.
+    Probe partitions and row counts cannot replace that obligation.
     """
     enc = next((r for r in rows if r.side == "encoding"), None)
-    if enc is None or enc.graph is None:
+    if enc is None:
         return
     for ref_row in (r for r in rows if r.side != "encoding"):
+        counts = compare_counts(enc, ref_row)
+        if counts != "same counts":
+            enc.vs_ref[ref_row.side] = counts
+            continue
+        if enc.graph is None:
+            enc.vs_ref[ref_row.side] = "inconclusive: no encoding graph"
+            continue
         if ref_row.dump is None:
-            enc.vs_ref[ref_row.side] = "no reference dump"
+            enc.vs_ref[ref_row.side] = "inconclusive: no reference dump"
             continue
-        ref = ISO.parse_reference(ref_row.dump)
-        # a witness search on a small graph; past that the probes decide, since the
-        # search's node matching enumerates symmetry variants and does not scale
-        iso = None
-        if len(ref.ids()) <= WITNESS_CLASSES:
-            cap, ISO.SEARCH_CAP = ISO.SEARCH_CAP, min(ISO.SEARCH_CAP, 5_000)
-            try:
-                iso, _ = ISO.find_isomorphism(ref, enc.graph)
-            finally:
-                ISO.SEARCH_CAP = cap
-        if iso and not ISO.verify(ref, enc.graph, iso[0], iso[1]):
-            enc.vs_ref[ref_row.side] = "isomorphic"
-            continue
-        terms = PT.reference_terms(ref, lang)
-        SCRATCH.mkdir(parents=True, exist_ok=True)
-        path = SCRATCH / f"eval-{enc.case}-{os.getpid()}-{ref_row.side}-probes.egg"
-        path.write_text(program + "\n".join(PT.probe_lines(terms, lang, renames, sort, declared)) + "\n")
         try:
-            r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, cwd=ROOT, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            enc.vs_ref[ref_row.side] = "probes timed out"
+            ref = ISO.parse_reference(ref_row.dump)
+        except ValueError as exc:
+            enc.vs_ref[ref_row.side] = f"inconclusive: reference dump unreadable ({exc})"
             continue
+        cap, ISO.SEARCH_CAP = ISO.SEARCH_CAP, min(ISO.SEARCH_CAP, 5_000)
+        try:
+            iso, why = ISO.find_isomorphism(ref, enc.graph)
+            if iso is not None:
+                bad = ISO.verify(ref, enc.graph, *iso)
+                verdict = "isomorphic" if bad is None else f"inconclusive: witness rejected ({bad})"
+            elif why and why.endswith("-- inconclusive"):
+                verdict = "inconclusive: " + why.removesuffix(" -- inconclusive")
+            else:
+                verdict = f"different: {why}"
+        except (ISO.IsomorphismLimit, RecursionError) as exc:
+            verdict = f"inconclusive: {exc}"
         finally:
-            path.unlink(missing_ok=True)
-        if r.returncode != 0:
-            enc.vs_ref[ref_row.side] = "probes failed"
-            continue
-        enc.vs_ref[ref_row.side] = PT.verdict(
-            PT.partition(terms, r.stdout), PT.rows_added(r.stdout, lang), enc.nodes == ref.summary()[1]
-        )
+            ISO.SEARCH_CAP = cap
+        enc.vs_ref[ref_row.side] = verdict
 
 
 # ------------------------------------------------------------------ the array study
@@ -426,7 +437,7 @@ def array_rows(params, rounds, sides, counts, timeout):
                     encoding_counts(bare_program, case.name, XA.LANG, row, timeout)
             group.append(row)
         if counts and bare_program is not None:
-            compare(group, bare_program, XA.LANG, XA.SYM.renames, "U", True, timeout)
+            compare(group)
         yield from group
 
 
@@ -481,8 +492,7 @@ def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
                     encoding_counts(bare_program, name, lang, row, timeout)
             group.append(row)
         if counts and bare_program is not None:
-            carrier = re.search(r"\(relation (RenamesToLeader_\d+) \((\w+) Renaming \w+\)\)", bare_program)
-            compare(group, bare_program, lang, carrier.group(1), carrier.group(2), False, timeout)
+            compare(group)
         yield from group
 
 
@@ -606,7 +616,8 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="count the final e-graphs' classes and nodes, whether the encoding had settled, and compare"
-        " the encoding's graph with each reference side's (isomorphic, same partition, or split/merged)",
+        " the encoding's graph with each reference side's (isomorphic, different, or inconclusive);"
+        " require verified equality to ref-multi when both sides are selected",
     )
     ap.add_argument(
         "--group-cap",
@@ -665,7 +676,30 @@ def main():
         with args.jsonl.open("a") as f:
             for r in rows:
                 f.write(json.dumps(r.as_dict(batch)) + "\n")
-    return 0 if all(r.goal == "yes" for r in rows) else 1
+    return 0 if successful(rows, sides, args.counts) else 1
+
+
+def successful(rows, sides, counts):
+    """Goals must succeed; MultiPattern comparison needs equal counts and a certificate.
+
+    The nested matcher is a diagnostic, not the correctness oracle. Explicit
+    `--no-counts` runs check goals alone; missing or legacy comparison verdicts do
+    not satisfy a requested graph comparison.
+    """
+    if not rows or any(r.goal != "yes" for r in rows):
+        return False
+    if not counts or not {"encoding", "ref-multi"}.issubset(sides):
+        return True
+    groups = {}
+    for row in rows:
+        groups.setdefault((row.study, row.case, row.rounds, row.rules), {})[row.side] = row
+    return all(
+        "encoding" in group
+        and "ref-multi" in group
+        and compare_counts(group["encoding"], group["ref-multi"]) == "same counts"
+        and group["encoding"].vs_ref.get("ref-multi") == "isomorphic"
+        for group in groups.values()
+    )
 
 
 def collect(args, sides, ap):

@@ -152,6 +152,8 @@ class Source:
             "GroupIdxSmall",
             "Renamings",
             "Idx",
+            "RefinementCount",
+            "slotted-refine",
             "slotted",
             "SlottedNodeLayout",
             "SlottedEdgeLayout",

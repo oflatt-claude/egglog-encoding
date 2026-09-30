@@ -652,7 +652,7 @@ invocation that `SubstPending` carries back into the root's frame (C12).
 A user step is `(seq (run) MACHINERY)`: the rules, then the machinery to a fixed
 point, so a step means one round of every rule against a settled graph. In Part I the
 machinery is one ruleset and `MACHINERY` is `(saturate (run slotted))`. Part II puts
-one more ruleset in between, and splits the machinery into phases:
+refinement-index generation and the apply ruleset in between, and splits the machinery into phases:
 
 ```
 (seq (saturate (seq (saturate (run slotted))
@@ -798,7 +798,7 @@ slots, so the frame finds the one element that fits, or none, at no cost to the 
 
 egglog joins a body's table atoms first and runs its primitives afterwards, once per
 matched row. The plain rule joins `Idx` beside the frame primitives, so every frame is
-built once per index: sixty-four times. So the generator emits one relation and three
+built once per index. So the generator emits one relation and three
 rules per rewrite: the first finds a match and stores its refinements and the classes
 the action reads; the second, in the `slotted-apply` ruleset, joins the stored row
 with `Idx`, reads one refinement, checks the conditions and acts; and the third deletes
@@ -807,6 +807,12 @@ first phase this took the run from 1.16 s to 0.18 s with one thread, the user ru
 apply time, where `--timing-summary` books the primitives, falling from 820 ms to
 about 20 ms.
 
+The first rule also updates `RefinementCount`, the maximum length of the stored
+refinement vectors. Before the apply phase, `slotted-refine` grows `Idx` to cover
+that length. Starting at zero, each index offers children `2*i+1` and `2*i+2` below
+the limit, so index generation takes logarithmically many rounds. Neither frame
+enumeration nor index consumption has a fixed alternative limit.
+
 ```
 (relation _matched_sum-fact-3 (Frames U U U U U))
 
@@ -814,7 +820,8 @@ about 20 ms.
        ...
        (= refined (refinements (anchor f "_p"))))
       ;; the match, stored: its refinements and every class the action will read (C13)
-      ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)) :name "sum-fact-3")
+      ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)
+       (set (RefinementCount) (vec-length refined))) :name "sum-fact-3")
 
 (rule ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)
        (Idx choice)
@@ -831,7 +838,7 @@ about 20 ms.
       :ruleset slotted-apply :name "sum-fact-3/drain")
 ```
 
-A user step becomes `(seq (run) (run slotted-apply) MACHINERY)`, where `MACHINERY`
+A user step becomes `(seq (run) (saturate (run slotted-refine)) (run slotted-apply) MACHINERY)`, where `MACHINERY`
 is the phased saturation of *When the rules run*. egglog
 finds every match of a ruleset before it applies any action, so the drain never hides
 a row from the acting rule, and a row is gone after one phase whether or not a
@@ -953,9 +960,9 @@ literal is the bound slot (`bound`), and only a literal may stand there.
 **C8. Placeholders are refined last.** `refinements` enumerates every consistent way
 to merge the blocks a variable or a carried literal reaches -- never two literals, never
 two slots of one node or class -- as a `Vec` with the frame itself first, and the rule
-reads one per `(Idx choice)` with `vec-get`, which is partial past the last. Running
-out of indices loses matches and never invents one. This is the reference's
-`final_refine`.
+reads one per `(Idx choice)` with `vec-get`, which is partial past the last.
+`slotted-refine` generates every required index before any match is applied, so
+all alternatives act within the same user round. This is the reference's `final_refine`.
 
 **C9. Conditions are read after refinement.** `free` and `not-free` are facts over the
 refined frame. A matched binder's slot may be read as any name, a free variable's
@@ -987,8 +994,8 @@ primitives would build the frame once per index. Instead the matching rule store
 match, its refinements and the classes the action reads, in a relation of its own, and
 a rule in the `slotted-apply` ruleset joins that row with `Idx`, reads one refinement,
 checks the conditions and acts, and a third rule in that ruleset deletes the row. The
-schedule runs the two rulesets in turn within one step, so a step still means one round
-of every rule.
+schedule completes refinement-index generation between matching and applying, so a
+step still means one round of every rule, with every stored alternative consumed.
 
 **C14. Nodes are indexed by shape.** Every row of a constructor is entered, under
 every symmetric reading of its children, into a function keyed by its shape -- the row
@@ -1018,10 +1025,17 @@ reach one value. The root keeps the frame's spelling (C11).
 
 The side to match is the reference crate's multipattern matcher, `ref-multi` -- the
 pattern language the encoding implements -- and the goal is the same e-graph: the same
-classes, with the same rows in each. `slotted/eval.py` compares the encoding's final
-graph with each reference side's on every workload and says `isomorphic`, `same
-partition`, or `split k, merged m`; `slotted/xdiff/partition.py` is the partition
-question, every reference node's term added to the finished graph. Three things had to
+classes, slots, groups, and nodes up to a verified isomorphism. `slotted/eval.py`
+compares the final graphs and says `isomorphic`, `different`, or `inconclusive`.
+It attempts witness search on every available graph pair, using compact interned
+class and slot signatures and explicit search/node-variant work limits. Counts and
+probe partitions cannot override an exact rejection or establish equality. With
+counts enabled, class and node counts are also checked separately before witness
+search. They remain visible even if search is inconclusive, and a count mismatch
+rejects the comparison without trusting the isomorphism checker. Missing counts or
+unverified `ref-multi` comparisons fail the command when both encoding and
+`ref-multi` are selected; loading a saved report also requires equal counts as well
+as a verified verdict. Three things had to
 be made the same, each established on a minimal case the harness keeps:
 
 - *Substitution picks the same term.* `beta` substitutes into one term of the body's
@@ -1052,19 +1066,18 @@ be made the same, each established on a minimal case the harness keeps:
   either; `SLOTTED_RIGID_REDUNDANT=1` in the environment makes the frame refuse what it
   refuses, for a diagnosis, and is not the default.
 
-With the three in place, ΣMMM's and MMM's first phases are isomorphic to `ref-multi`,
-witnessed, and their second phases hold the same classes and the same rows: `same
-rows` in the report, which `partition.py` decides without a witness search -- the
-partitions agree, every reference node is already a row of the encoding's graph in
-some reading (the probes add no constructor row), and the row counts are equal, so
-each class holds the reference's rows and no others. TTM's second phase is open:
+With the three in place, ΣMMM's and MMM's first and second phases have verified
+isomorphism witnesses against `ref-multi`. The former `same rows` label was only a
+probe/count diagnostic and could miss different symmetry groups; old records with
+that label are displayed as inconclusive. TTM's second phase is open:
 `ref-multi` does not finish it within the artifact's 300 s, `ref-nested` ends with 196
 classes to the encoding's 205, and the encoding has settled by then.
 
 **Rounds.** The evaluation runs the paper's budget on every side; the reference stops
 early when a round applies nothing new and reports that, and the encoding is asked
-after its budget whether one more round would change anything. All ten SDQL workloads
-settle on every side within the budget.
+after its budget whether one more round changes table cardinalities. A timeout or
+missing graph leaves equivalence inconclusive; it is never evidence of saturation
+or graph equality.
 
 # Where the pieces live
 

@@ -726,12 +726,22 @@ def match_nodes(src, dst, src_slots, dst_slots, pmap, cmap, smap, dst_groups):
 
 
 # --------------------------------------------------------------- the refinement
-def slot_colors(g, col, rounds=3):
+def intern_color(palette, signature):
+    """An exact, compact label; paired graphs share the same palette.
+
+    Keeping the previous signature itself grows exponentially on cyclic graphs.
+    Interning avoids that expansion without relying on digest collision assumptions.
+    """
+    return palette.setdefault(signature, len(palette) + 1)
+
+
+def slot_colors(g, col, rounds=3, palette=None):
     """A color per (class, slot) from how the class's nodes use the slot: the op and
     column of each occurrence, the child's class color, and the child's own color for
     the slot it sends there, refined a few rounds. Invariant under renaming, so a slot
     bijection between two classes need only pair slots of one color."""
-    sc = {(c, s): () for c in g.ids() for s in g.slots[c]}
+    palette = {} if palette is None else palette
+    sc = {(c, s): 0 for c in g.ids() for s in g.slots[c]}
     for _ in range(rounds):
         raw = {}
         for c in g.ids():
@@ -756,7 +766,7 @@ def slot_colors(g, col, rounds=3):
             for s in g.slots[c]:
                 orbit = {dict(p).get(s, s) for p in g.group[c]} | {s}
                 occurrences = (e for t in sorted(orbit, key=repr) for e in raw[(c, t)])
-                sc[(c, s)] = (prev[(c, s)], tuple(sorted(occurrences, key=repr)))
+                sc[(c, s)] = intern_color(palette, (prev[(c, s)], tuple(sorted(occurrences, key=repr))))
     return sc
 
 
@@ -777,9 +787,13 @@ def depths(g):
     return {c: (v if v is not None else 10**6) for c, v in d.items()}
 
 
-def colors(g, rounds=6):
+def colors(g, rounds=6, palette=None):
+    palette = {} if palette is None else palette
     col = {
-        c: (len(g.slots[c]), len(g.group[c]), tuple(sorted((n[0], tuple(e[0] for e in n[1])) for n in g.nodes[c])))
+        c: intern_color(
+            palette,
+            (len(g.slots[c]), len(g.group[c]), tuple(sorted((n[0], tuple(e[0] for e in n[1])) for n in g.nodes[c]))),
+        )
         for c in g.ids()
     }
     for _ in range(rounds):
@@ -788,7 +802,7 @@ def colors(g, rounds=6):
             sig = []
             for op, elems in g.nodes[c]:
                 sig.append((op, tuple(e[0] if e[0] == "slot" else col[e[1]] for e in elems)))
-            nxt[c] = (col[c], tuple(sorted(sig)))
+            nxt[c] = intern_color(palette, (col[c], tuple(sorted(sig))))
         if all(
             len({nxt[a] for a in g.ids() if col[a] == col[c]}) == len({col[a] for a in g.ids() if col[a] == col[c]})
             for c in g.ids()
@@ -803,7 +817,8 @@ def find_isomorphism(ga, gb):
     """A (class bijection, per-class slot bijection) pair, or a reason there is none."""
     if len(ga.ids()) != len(gb.ids()):
         return None, (f"class count {len(ga.ids())} vs {len(gb.ids())}")
-    ca, cb = colors(ga), colors(gb)
+    palette = {}
+    ca, cb = colors(ga, palette=palette), colors(gb, palette=palette)
     from collections import Counter
 
     if Counter(ca.values()) != Counter(cb.values()):
@@ -815,7 +830,8 @@ def find_isomorphism(ga, gb):
     # children has its nodes checked at once, and a wrong choice is undone early
     da = depths(ga)
     order = sorted(ga.ids(), key=lambda a: (da[a], len(cand[a])))
-    sca, scb = slot_colors(ga, ca), slot_colors(gb, cb)
+    slot_palette = {}
+    sca, scb = slot_colors(ga, ca, palette=slot_palette), slot_colors(gb, cb, palette=slot_palette)
     budget = [SEARCH_CAP]
 
     def slot_bijections(a, b):
@@ -873,6 +889,8 @@ def find_isomorphism(ga, gb):
             return (dict(phi), dict(sig)), None
     except IsomorphismLimit as exc:
         return None, str(exc)
+    except RecursionError:
+        return None, "recursion limit reached -- inconclusive"
     if budget[0] <= 0:
         return None, f"search cap ({SEARCH_CAP}) reached -- inconclusive"
     return None, "no isomorphism exists (search exhausted)"

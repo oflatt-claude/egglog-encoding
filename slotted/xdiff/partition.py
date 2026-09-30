@@ -2,11 +2,9 @@
 """Does the encoding partition the reference's terms the way the reference does?
 
 `isomorphism.py` asks for the whole graph -- every class's slots, group and nodes, with
-a witness -- and that fails as soon as the two sides keep different NODES for the same
-classes, which the encoding does in two known ways: a slot a node carries that its class
-does not unifies with another occurrence, where the reference gives it a fresh name and
-finds no match; and a node row is kept once per reading of a symmetric child through a
-bound slot, where the reference keeps one. Neither changes which terms are equal.
+a verified witness. This diagnostic compares only class membership for selected
+terms. It does not check equality of their renamed invocations or the classes' groups;
+even matching partitions and node counts cannot establish graph equality.
 
 This asks the weaker question that still matters. For every node of every reference
 class, the term through that node -- its children spelled by their smallest terms -- is
@@ -14,9 +12,9 @@ added to the encoding's FINISHED graph with the machinery alone, and the encodin
 equivalence over those terms is compared with the reference's:
 
 - a reference class whose probes land in several encoding classes is SPLIT: the
-  encoding did not identify terms the reference did;
+  encoding places those probes in different classes;
 - an encoding class hit by probes of several reference classes MERGED them: the
-  encoding identified terms the reference did not.
+  encoding places those probes in the same class.
 
 Neither says which side is right -- a split is a derivation the reference found and
 the encoding did not, or one the reference cannot make, and a merge the converse -- so
@@ -197,11 +195,9 @@ def partition(terms, stdout):
 def verdict(p, added=None, same_size=False):
     """One phrase for a report cell.
 
-    `same rows`: the partitions agree, every reference node is already a row of the
-    encoding's graph in some reading, and the two graphs have the same number of rows
-    -- so each class holds the reference's rows and no others: the same e-graph, found
-    without a witness search.
+    Even equal row counts with no new probe rows do not check slot bijections or
+    symmetry groups. This diagnostic never establishes graph equality.
     """
     if not p["split"] and not p["merged"]:
-        return "same rows" if added == 0 and same_size else "same partition"
+        return "same partition (graph equality unverified)"
     return f"split {len(p['split'])}, merged {len(p['merged'])}"
