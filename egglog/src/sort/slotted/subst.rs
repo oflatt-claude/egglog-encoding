@@ -15,8 +15,11 @@
 //! # One term, not a sub-e-graph
 //!
 //! This extracts a single smallest term rooted at `body`, substitutes in that
-//! term, and adds the result back — matching the reference implementation's
-//! `ExtractionSubst`. It is deliberately not a copy of the whole reachable
+//! term, and adds the result back. Like the reference library's optional
+//! `ExtractionSubst`, it minimizes tree size; the round snapshot and deterministic
+//! spelling tie-break are matched by the harness's `SnapshotSubst`. The paper's
+//! SDQL artifact instead uses the library's default syntactic representative.
+//! It is deliberately not a copy of the whole reachable
 //! sub-e-graph: the classes the substitution does not touch are shared with the
 //! original, and a class where `x` cannot occur is returned untouched.
 //!
@@ -48,9 +51,13 @@ use super::*;
 use crate::exec_state::{Internal, RegistrySealed};
 use egglog_bridge::{TableAction, TableKind};
 use hashbrown::HashMap;
+use num::BigUint;
 use smallvec::SmallVec;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
+
+mod template;
+use template::{Name, Template};
 
 /// Every node row of the language's constructors, bucketed by the class that holds it:
 /// constructor index into the scan's `names`, then the row's columns.
@@ -473,7 +480,7 @@ fn build_terms(
 /// can hold an e-node that refers back to itself, and only a cost that has to come from
 /// somewhere rules those out. Then classes are visited by increasing size, so a node's
 /// children are decided before it, and among a class's smallest nodes the least
-/// `spelling` wins: a rendering of the whole term with slots numbered by first
+/// spelling wins: a rendering of the whole term with slots numbered by first
 /// occurrence, so the e-graph's own slot names do not enter. Two candidates that
 /// still tie are the same term up to a permutation of the class's frame -- a symmetry
 /// the class records -- and the first in table order is kept. A class with no finite
@@ -486,13 +493,17 @@ fn cheapest(
     let mut order: Vec<Value> = nodes.keys().copied().collect();
     order.sort_unstable();
 
-    let size = |node: &Node, cost: &HashMap<Value, u64>| -> Option<u64> {
-        node.children().try_fold(1u64, |total, child| {
-            Some(total.saturating_add(*cost.get(&child)?))
-        })
+    // Shared trees can exceed machine-sized costs with only a few dozen nodes.
+    // Exact addition keeps every parent strictly more expensive than its children,
+    // which excludes cyclic candidates and orders template construction.
+    let size = |node: &Node, cost: &HashMap<Value, BigUint>| -> Option<BigUint> {
+        node.children()
+            .try_fold(BigUint::from(1u8), |total, child| {
+                Some(total + cost.get(&child)?)
+            })
     };
 
-    let mut cost: HashMap<Value, u64> = HashMap::new();
+    let mut cost: HashMap<Value, BigUint> = HashMap::new();
     loop {
         let mut changed = false;
         for eclass in &order {
@@ -511,44 +522,34 @@ fn cheapest(
         }
     }
 
-    let mut by_size: Vec<(u64, Value)> = cost.iter().map(|(c, k)| (*k, *c)).collect();
+    let mut by_size: Vec<(&BigUint, Value)> = cost.iter().map(|(c, k)| (k, *c)).collect();
     by_size.sort_unstable();
     let no_public = BTreeSet::new();
-    let mut templates: HashMap<Value, Vec<Tok>> = HashMap::new();
+    let mut templates: HashMap<Value, Arc<Template>> = HashMap::new();
     let mut best: HashMap<Value, usize> = HashMap::new();
     for (class_size, eclass) in by_size {
-        let mut chosen: Option<(String, usize, Vec<Tok>)> = None;
+        let mut chosen: Option<(usize, Arc<Template>)> = None;
         for (index, node) in nodes[&eclass].iter().enumerate() {
-            if size(node, &cost) != Some(class_size) {
+            if size(node, &cost).as_ref() != Some(class_size) {
                 continue;
             }
-            let tpl = if eclass == var {
+            let tpl = Arc::new(if eclass == var {
                 var_template(node)
             } else {
                 template(node, &templates, public.get(&eclass).unwrap_or(&no_public))
-            };
-            let key = spelling(&tpl);
-            if chosen.as_ref().is_none_or(|(least, _, _)| key < *least) {
-                chosen = Some((key, index, tpl));
+            });
+            if chosen
+                .as_ref()
+                .is_none_or(|(_, least)| tpl.compare(least).is_lt())
+            {
+                chosen = Some((index, tpl));
             }
         }
-        let (_, index, tpl) = chosen.expect("a class with a size has a node of that size");
+        let (index, tpl) = chosen.expect("a class with a size has a node of that size");
         best.insert(eclass, index);
         templates.insert(eclass, tpl);
     }
     best
-}
-
-/// One piece of a term's spelling.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Tok {
-    Text(String),
-    /// A slot of the class's public frame, by its name there. A parent carries it
-    /// through its edge; `spelling` numbers it by first occurrence.
-    Public(Slot),
-    /// A slot internal to the term -- a binder's, or private to one node -- numbered
-    /// within the template by first occurrence.
-    Inner(usize),
 }
 
 /// What an internal slot of a node's term is, so equal ones get one number.
@@ -558,8 +559,6 @@ enum InnerKey {
     Bound(usize),
     /// A name in the node's frame that is neither public nor a covering binder's.
     Private(Slot),
-    /// A child's own internal slot, by the edge column and the child's number for it.
-    ChildInner(usize, usize),
     /// A child's public slot the edge at this column does not carry.
     Uncovered(usize, Slot),
 }
@@ -569,13 +568,12 @@ enum InnerKey {
 /// told apart by the column.
 fn template(
     node: &Node,
-    templates: &HashMap<Value, Vec<Tok>>,
+    templates: &HashMap<Value, Arc<Template>>,
     public: &BTreeSet<Slot>,
-) -> Vec<Tok> {
-    let mut inner: BTreeMap<InnerKey, usize> = BTreeMap::new();
-    let intern = |key: InnerKey, inner: &mut BTreeMap<InnerKey, usize>| {
-        let next = inner.len();
-        Tok::Inner(*inner.entry(key).or_insert(next))
+) -> Template {
+    let mut inner: BTreeMap<InnerKey, Name> = BTreeMap::new();
+    let intern = |key: InnerKey, inner: &mut BTreeMap<InnerKey, Name>, out: &mut Template| {
+        *inner.entry(key).or_insert_with(|| out.fresh_inner())
     };
     let bound_name = |binder: &Binder| {
         node.edges
@@ -584,86 +582,69 @@ fn template(
             .and_then(|edge| edge.ren.get(&VAR_SLOT).copied())
     };
     // a name in the node's frame, as seen from the edge at `col`
-    let classify = |name: Slot, col: usize, inner: &mut BTreeMap<InnerKey, usize>| {
-        if let Some(binder) = node
-            .binders
-            .iter()
-            .find(|binder| binder.covered == col && bound_name(binder) == Some(name))
-        {
-            intern(InnerKey::Bound(binder.marker), inner)
-        } else if public.contains(&name) {
-            Tok::Public(name)
-        } else {
-            intern(InnerKey::Private(name), inner)
-        }
-    };
+    let classify =
+        |name: Slot, col: usize, inner: &mut BTreeMap<InnerKey, Name>, out: &mut Template| {
+            if let Some(binder) = node
+                .binders
+                .iter()
+                .find(|binder| binder.covered == col && bound_name(binder) == Some(name))
+            {
+                intern(InnerKey::Bound(binder.marker), inner, out)
+            } else if public.contains(&name) {
+                Name::Public(name)
+            } else {
+                intern(InnerKey::Private(name), inner, out)
+            }
+        };
 
-    let mut out = vec![Tok::Text(node.ctor.clone()), Tok::Text("(".to_owned())];
+    let mut out = Template::default();
+    out.text(&node.ctor);
+    out.text("(");
     for col in 0..node.args.len() {
         if let Some(edge) = node.edges.iter().find(|edge| edge.col == col) {
             if let Some(binder) = node.binders.iter().find(|binder| binder.marker == col) {
-                out.push(Tok::Text("bind".to_owned()));
-                out.push(intern(InnerKey::Bound(binder.marker), &mut inner));
+                out.text("bind");
+                let name = intern(InnerKey::Bound(binder.marker), &mut inner, &mut out);
+                out.slot(name);
             } else {
                 let child = templates
                     .get(&edge.child)
                     .expect("a smallest node's children are spelt before it");
-                for tok in child {
-                    out.push(match tok {
-                        Tok::Text(text) => Tok::Text(text.clone()),
-                        Tok::Inner(j) => intern(InnerKey::ChildInner(col, *j), &mut inner),
-                        Tok::Public(slot) => match edge.ren.get(slot) {
-                            Some(name) => classify(*name, col, &mut inner),
-                            None => intern(InnerKey::Uncovered(col, *slot), &mut inner),
-                        },
-                    });
-                }
+                let names = child
+                    .public
+                    .iter()
+                    .map(|slot| {
+                        let name = match edge.ren.get(slot) {
+                            Some(name) => classify(*name, col, &mut inner, &mut out),
+                            None => intern(InnerKey::Uncovered(col, *slot), &mut inner, &mut out),
+                        };
+                        (*slot, name)
+                    })
+                    .collect();
+                out.child(Arc::clone(child), names);
             }
-            out.push(Tok::Text(",".to_owned()));
+            out.text(",");
         } else if node.edges.iter().any(|edge| edge.col + 1 == col) {
             continue; // the child column of an edge, spelt with its renaming
         } else {
             match &node.payload_text[col] {
-                Some(text) => out.push(Tok::Text(format!("{text},"))),
-                None => out.push(Tok::Text(format!("{:?},", node.args[col]))),
+                Some(text) => out.text(format!("{text},")),
+                None => out.text(format!("{:?},", node.args[col])),
             }
         }
     }
-    out.push(Tok::Text(")".to_owned()));
+    out.text(")");
     out
 }
 
 /// The variable class's own spelling: its one slot, public, so a parent's spelling
 /// says which of its slots each variable occurrence names.
-fn var_template(node: &Node) -> Vec<Tok> {
-    vec![
-        Tok::Text(node.ctor.clone()),
-        Tok::Text("(".to_owned()),
-        Tok::Public(VAR_SLOT),
-        Tok::Text(",".to_owned()),
-        Tok::Text(")".to_owned()),
-    ]
-}
-
-/// A template as text, every slot numbered by first occurrence -- so alpha-equivalent
-/// spellings coincide and the e-graph's slot names play no part.
-fn spelling(template: &[Tok]) -> String {
-    let mut public: BTreeMap<Slot, usize> = BTreeMap::new();
-    let mut inner: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut out = String::new();
-    for tok in template {
-        match tok {
-            Tok::Text(text) => out.push_str(text),
-            Tok::Public(slot) => {
-                let next = public.len();
-                out.push_str(&format!("p{}", public.entry(*slot).or_insert(next)));
-            }
-            Tok::Inner(index) => {
-                let next = inner.len();
-                out.push_str(&format!("i{}", inner.entry(*index).or_insert(next)));
-            }
-        }
-    }
+fn var_template(node: &Node) -> Template {
+    let mut out = Template::default();
+    out.text(&node.ctor);
+    out.text("(");
+    out.slot(Name::Public(VAR_SLOT));
+    out.text(",)");
     out
 }
 

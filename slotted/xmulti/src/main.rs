@@ -40,6 +40,7 @@
 //!   `Symbol("null")`. A generator that needs payload symbols should spell them
 //!   so they cannot collide; `xdiff/xsdql.py` prefixes every one.
 
+use num_bigint::BigUint;
 use slotted_egraphs::*;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -201,7 +202,9 @@ fn parse_spec(src: &str) -> Spec {
             "dump" => s.dump = true,
             "term" => s.terms.push(rest.to_string()),
             "ctor" => {
-                let (tag, name) = rest.split_once(char::is_whitespace).expect("ctor <tag> <Name>");
+                let (tag, name) = rest
+                    .split_once(char::is_whitespace)
+                    .expect("ctor <tag> <Name>");
                 s.ctors.insert(tag.to_string(), name.trim().to_string());
             }
             "probe" => s.probes.push(rest.to_string()),
@@ -316,7 +319,7 @@ fn split_two_sexprs(s: &str) -> (String, String) {
 // The encoding computes every substitution of a round from the e-graph as the round
 // began (its `beta/apply` rule runs in one apply phase, whose reads are the phase's
 // snapshot), into the smallest term of the body's class, ties broken by a canonical
-// spelling of the term (`slotted_subst.rs`, `cheapest`). The crate's substitution
+// spelling of the term (`sort/slotted/subst.rs`, `cheapest`). The crate's substitution
 // methods read the e-graph at application time, after the round's earlier unions,
 // and its syntactic method takes the node a class was created with -- history the
 // encoding cannot replay. `SnapshotSubst` does what the encoding does, so that the
@@ -327,7 +330,7 @@ thread_local! {
     static CTORS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
 }
 
-/// One piece of a term's spelling, as `slotted_subst.rs` spells it.
+/// One piece of a term's spelling, as `sort/slotted/subst.rs` spells it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Tok {
     Text(String),
@@ -349,10 +352,12 @@ struct Snapshot {
     best: HashMap<Id, L>,
 }
 
-fn ast_size(node: &L, cost: &HashMap<Id, u64>) -> Option<u64> {
+fn ast_size(node: &L, cost: &HashMap<Id, BigUint>) -> Option<BigUint> {
     node.applied_id_occurrences()
         .iter()
-        .try_fold(1u64, |total, child| Some(total.saturating_add(*cost.get(&child.id)?)))
+        .try_fold(BigUint::from(1u8), |total, child| {
+            Some(total + cost.get(&child.id)?)
+        })
 }
 
 /// What the encoding calls this node's constructor.
@@ -377,7 +382,10 @@ fn template(node: &L, public: &SmallHashSet<Slot>, templates: &HashMap<Id, Vec<T
         let next = inner.len();
         Tok::Inner(*inner.entry(key).or_insert(next))
     };
-    let mut out = vec![Tok::Text(ctor_name(node, &syntax)), Tok::Text("(".to_owned())];
+    let mut out = vec![
+        Tok::Text(ctor_name(node, &syntax)),
+        Tok::Text("(".to_owned()),
+    ];
     let columns: Vec<&SyntaxElem> = match node {
         L::Symbol(_) | L::Number(_) => syntax.iter().collect(),
         _ => syntax.iter().skip(1).collect(),
@@ -469,7 +477,7 @@ impl Snapshot {
                 (*id, ns)
             })
             .collect();
-        let mut cost: HashMap<Id, u64> = HashMap::new();
+        let mut cost: HashMap<Id, BigUint> = HashMap::new();
         loop {
             let mut changed = false;
             for id in &ids {
@@ -487,7 +495,7 @@ impl Snapshot {
                 break;
             }
         }
-        let mut by_size: Vec<(u64, Id)> = cost.iter().map(|(id, c)| (*c, *id)).collect();
+        let mut by_size: Vec<(&BigUint, Id)> = cost.iter().map(|(id, c)| (c, *id)).collect();
         by_size.sort();
         let mut templates: HashMap<Id, Vec<Tok>> = HashMap::new();
         let mut best: HashMap<Id, L> = HashMap::new();
@@ -495,7 +503,7 @@ impl Snapshot {
             let public = eg.slots(id);
             let mut chosen: Option<(String, L, Vec<Tok>)> = None;
             for node in &nodes[&id] {
-                if ast_size(node, &cost) != Some(class_size) {
+                if ast_size(node, &cost).as_ref() != Some(class_size) {
                     continue;
                 }
                 let tpl = template(node, &public, &templates);
@@ -526,12 +534,20 @@ impl Snapshot {
 /// `re[x := t]`, added node by node: the crate's own `do_term_subst`.
 fn term_subst(eg: &mut G, re: &RecExpr<L>, x: &AppliedId, t: &AppliedId) -> AppliedId {
     let mut node = re.node.clone();
-    let children: Vec<AppliedId> = re.children.iter().map(|c| term_subst(eg, c, x, t)).collect();
+    let children: Vec<AppliedId> = re
+        .children
+        .iter()
+        .map(|c| term_subst(eg, c, x, t))
+        .collect();
     for (slot, child) in node.applied_id_occurrences_mut().into_iter().zip(children) {
         *slot = child;
     }
     let app_id = eg.add_syn(node);
-    if app_id == *x { t.clone() } else { app_id }
+    if app_id == *x {
+        t.clone()
+    } else {
+        app_id
+    }
 }
 
 struct SnapshotSubst;
@@ -598,11 +614,14 @@ fn main() {
     // class was created with, read at application time; `extraction` the crate's
     // smallest-term method, also at application time.
     CTORS.with(|c| *c.borrow_mut() = spec.ctors.clone());
-    let mut eg = match std::env::var("XMULTI_SUBST").as_deref() {
-        Ok("syntactic") => G::default(),
-        Ok("extraction") => G::with_subst_method::<ExtractionSubst>(()),
-        _ => G::with_subst_method::<SnapshotSubst>(()),
+    let substitution = std::env::var("XMULTI_SUBST").unwrap_or_else(|_| "snapshot".to_owned());
+    let mut eg = match substitution.as_str() {
+        "syntactic" => G::default(),
+        "extraction" => G::with_subst_method::<ExtractionSubst>(()),
+        "snapshot" => G::with_subst_method::<SnapshotSubst>(()),
+        _ => panic!("unknown XMULTI_SUBST: {substitution}"),
     };
+    println!("CONFIG substitution={substitution}");
     let term_ids: Vec<AppliedId> = spec.terms.iter().map(|t| add(&mut eg, t)).collect();
     for (a, b) in &spec.unions {
         let x = add(&mut eg, a);
@@ -675,12 +694,16 @@ fn main() {
             Vec::new()
         };
         for round in 0..spec.rounds {
-            Snapshot::take(&eg);
+            if substitution == "snapshot" {
+                Snapshot::take(&eg);
+            }
             for (i, pat) in &debug_nested {
                 let found = ematch_all(&eg, pat);
                 eprintln!("round {round} nested-rule {i}: {} match(es)", found.len());
                 // `XMULTI_DEBUG_RULE=<i>` also prints that rule's substitutions.
-                if std::env::var("XMULTI_DEBUG_RULE").ok().as_deref() == Some(i.to_string().as_str()) {
+                if std::env::var("XMULTI_DEBUG_RULE").ok().as_deref()
+                    == Some(i.to_string().as_str())
+                {
                     for subst in &found {
                         let mut entries: Vec<_> = subst.iter().collect();
                         entries.sort_by(|a, b| a.0.cmp(b.0));
@@ -701,7 +724,9 @@ fn main() {
         let trace = std::env::var("XMULTI_TRACE").is_ok();
         let mut saturated = false;
         for round in 0..spec.rounds {
-            Snapshot::take(&eg);
+            if substitution == "snapshot" {
+                Snapshot::take(&eg);
+            }
             let before = eg.progress();
             // Match every rule against the same e-graph, then apply: a rule set is
             // one step of all rules, not a sequence of separate runs.
@@ -853,12 +878,9 @@ fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
             i += 1;
         }
     }
-    {
-    }
     out.sort();
     Ok(out)
 }
-
 
 /// Every class and node, in a form the encoding side can be compared against.
 ///
@@ -877,7 +899,8 @@ fn dump_structured(eg: &G) -> Result<(), String> {
         let width = eg.slots(*id).len();
         if width > group_slot_cap() {
             return Err(format!(
-                "class {id:?} has {width} live slots; symmetry enumeration is capped at {}", group_slot_cap()
+                "class {id:?} has {width} live slots; symmetry enumeration is capped at {}",
+                group_slot_cap()
             ));
         }
     }
@@ -965,6 +988,17 @@ fn partition(eg: &G, probes: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_cost_strictly_increases_beyond_machine_sizes() {
+        let mut eg = G::default();
+        let child = add(&mut eg, "(null)");
+        let node = L::F(child.clone(), child.clone());
+        let large = BigUint::from(1u8) << 130usize;
+        let cost = HashMap::from([(child.id, large.clone())]);
+        assert_eq!(ast_size(&node, &cost), Some(&large + &large + 1u8));
+        assert!(ast_size(&node, &cost).unwrap() > large);
+    }
 
     #[test]
     fn oversized_group_is_an_explicit_limit() {

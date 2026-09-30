@@ -239,20 +239,9 @@ pub struct Frame {
     anchor: Option<PVarId>,
     /// bindings whose reading is still open, resolved by `refinements`
     pending: Vec<Pending>,
-    /// node occurrences of slots the node's class does not have, under `rigid_redundant`
-    rigid: BTreeSet<Occ>,
 }
 
 pub type Fr = Boxed<Frame>;
-
-/// EXPERIMENT (`SLOTTED_RIGID_REDUNDANT` set): a slot a node carries that its class
-/// does not is a fresh constant of that node alone, as the reference's `enodes_applied`
-/// makes it -- it never becomes one slot with another atom's slot or a literal, and
-/// refinement leaves it alone. Off, it is a slot like any other (C4).
-pub fn rigid_redundant() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("SLOTTED_RIGID_REDUNDANT").is_some())
-}
 
 impl Frame {
     /// One atom's constraints: its label, exactly one `Root` among the bindings, and
@@ -286,7 +275,6 @@ impl Frame {
         let mut class_slots: BTreeMap<PVarId, SlotSet> = BTreeMap::new();
         let mut literals: BTreeMap<Name, bool> = BTreeMap::new();
         let mut pending: Vec<Pending> = Vec::new();
-        let mut bound_slots: BTreeSet<i64> = BTreeSet::new();
 
         // the root: the node is an invocation of the variable's class
         let cs = root_slots.clone();
@@ -353,9 +341,6 @@ impl Frame {
                     carried,
                 } => {
                     let s = *edge.get(&0)?;
-                    if !carried {
-                        bound_slots.insert(s);
-                    }
                     node_slots.extend(edge.values().copied());
                     occs.insert(Occ::Lit(name.clone()));
                     eqs.push((Occ::Node(atom.clone(), s), Occ::Lit(name.clone())));
@@ -367,17 +352,6 @@ impl Frame {
             }
         }
         occs.extend(node_slots.iter().map(|&s| Occ::Node(atom.clone(), s)));
-        let root_cs = root_slots;
-        let rigid: BTreeSet<Occ> = if rigid_redundant() {
-            node_slots
-                .iter()
-                .filter(|s| !root_cs.contains(s) && !bound_slots.contains(s))
-                .map(|&s| Occ::Node(atom.clone(), s))
-                .collect()
-        } else {
-            BTreeSet::new()
-        };
-
         let frame = Frame {
             blocks: close(occs, &eqs),
             class_slots,
@@ -385,7 +359,6 @@ impl Frame {
             bugs,
             anchor: None,
             pending,
-            rigid,
         };
         frame.consistent().then_some(frame)
     }
@@ -420,7 +393,6 @@ impl Frame {
             bugs: self.bugs.union(&other.bugs).cloned().collect(),
             anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
             pending: self.pending.iter().chain(&other.pending).cloned().collect(),
-            rigid: self.rigid.union(&other.rigid).cloned().collect(),
         };
         frame.consistent().then_some(frame)
     }
@@ -566,25 +538,7 @@ impl Frame {
                 .iter()
                 .enumerate()
                 .all(|(i, o)| block[i + 1..].iter().all(|p| !self.violated(o, p)))
-                && self.rigid_ok(block)
         })
-    }
-
-    /// Under `rigid_redundant`: a block holding a rigid occurrence of atom `a` holds no
-    /// literal and no node occurrence of another atom.
-    fn rigid_ok(&self, block: &[Occ]) -> bool {
-        let Some(Occ::Node(a, _)) = block.iter().find(|o| self.rigid.contains(o)) else {
-            return true;
-        };
-        block.iter().all(|o| match o {
-            Occ::Node(b, _) => b == a,
-            Occ::Lit(_) => false,
-            Occ::Var(..) => true,
-        })
-    }
-
-    fn has_rigid(&self, block: &[Occ]) -> bool {
-        block.iter().any(|o| self.rigid.contains(o))
     }
 
     /// `apart`, less the cliques a bug switches off.
@@ -723,9 +677,6 @@ impl Frame {
     /// Whether refinement may merge this block: one a variable or a carried literal
     /// reaches. A redundant node slot or a binder's own slot stays as it is.
     fn carried(&self, block: &[Occ]) -> bool {
-        if self.has_rigid(block) {
-            return false;
-        }
         block.iter().any(|o| match o {
             Occ::Var(..) => true,
             Occ::Lit(x) => self.literals.get(x).copied().unwrap_or(false),

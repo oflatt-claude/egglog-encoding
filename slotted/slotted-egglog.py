@@ -19,6 +19,7 @@ Usage:
 
 import argparse
 import collections
+import copy
 import pathlib
 import re
 import subprocess
@@ -140,41 +141,17 @@ class Source:
         if len(set(self.sorts)) != len(self.sorts):
             raise SystemExit(f"{path.name}: an equality sort is declared more than once")
         carriers = enc.carrier_symbols(self.carrier_sorts())
-        # The machinery declares these whatever a program does, so a program that names
-        # one of them declares it twice. Checked for every program: the machinery is
-        # generated the same way however many sorts a program has.
+        self.carriers = carriers
+        # Derive reserved names from the declarations we actually emit. New layout
+        # tables, phase rulesets, and per-carrier functions cannot drift out of a
+        # second, manually maintained name list.
         reserved = {
-            "Renaming",
-            "Frames",
-            "Group",
-            "Groups",
-            "GroupIdx",
-            "GroupIdxSmall",
-            "Renamings",
-            "Idx",
-            "RefinementCount",
-            "slotted-refine",
-            "slotted",
-            "SlottedNodeLayout",
-            "SlottedEdgeLayout",
-            "SlottedBinderLayout",
+            form[1]
+            for form in parse(self.core())
+            if isinstance(form, list)
+            and form[0] in ("sort", "constructor", "function", "relation", "ruleset")
+            and not (form[0] == "sort" and len(form) == 2 and form[1] in carriers)
         }
-        for names in carriers.values():
-            reserved.update(
-                (
-                    names.var,
-                    names.renames,
-                    names.equated,
-                    names.class_slots,
-                    names.subst_pending,
-                    names.shape_equal,
-                    names.invocation,
-                    names.group,
-                    names.coset_reps,
-                    names.big_reading,
-                    names.reading,
-                )
-            )
         collision = next((sort for sort in self.sorts if sort in reserved), None)
         if collision is None:
             collision = next((form[1] for form in self._ctors if form[1] in reserved), None)
@@ -202,8 +179,6 @@ class Source:
                     f"{path.name}: constructor {name} produces {output} but has a slotted child of sort "
                     f"{foreign[0]}; cross-sort slotted children are not supported yet"
                 )
-            if name in {names.var for names in carriers.values()}:
-                raise SystemExit(f"{path.name}: constructor {name!r} is reserved by the slotted encoding")
             self.spec[name] = sig
             self.output_sorts[name] = output
             self.child_sorts[name] = children
@@ -212,7 +187,6 @@ class Source:
                 f"{path.name}: no constructors declared. Write `(datatype U (Succ U) ...)`, "
                 "or a `(sort U)` and its `(constructor ...)` lines."
             )
-        self.carriers = carriers
         self.lang = Terms(
             {
                 c: enc.Op(
@@ -466,6 +440,11 @@ def compile_source(src, own_only=False):
     both are already snapshotted by the generator that emits them. What is left is the
     forms this test wrote, which is the part no other snapshot covers.
     """
+    # Parsed declarations are shared; bindings and scopes belong to this compilation.
+    # In particular, emitting a snapshot after a full program must start before any
+    # of that program's globals, just as the first compilation did.
+    src = copy.copy(src)
+    src.lang = Terms(src.lang.ops, src.carriers)
     out = [
         f";;; COMPILED from {src.relpath} by slotted/slotted-egglog.py.",
         ";;;",

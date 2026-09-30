@@ -1,19 +1,24 @@
 //! Finite symmetry-group operations, independent of egglog's value registry.
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 
 type Map<T> = BTreeMap<T, T>;
 
 use crate::sort::map::compose;
 
-pub(super) fn restrict<T: Copy + Ord>(group: &[Map<T>], slots: &Map<T>) -> Vec<Map<T>> {
+pub(super) fn restrict<T: Copy + Ord>(
+    group: &[impl Borrow<Map<T>>],
+    slots: &Map<T>,
+) -> Vec<Map<T>> {
     group
         .iter()
-        .map(|g| compose(slots, &compose(g, slots)))
+        .map(|g| compose(slots, &compose(g.borrow(), slots)))
         .collect()
 }
 
 /// Close a set of finite permutations under composition.
-pub(super) fn close<T: Copy + Ord>(mut known: Vec<Map<T>>) -> Vec<Map<T>> {
+pub(super) fn close<T: Copy + Ord>(group: &[impl Borrow<Map<T>>]) -> Vec<Map<T>> {
+    let mut known: Vec<Map<T>> = group.iter().map(|g| g.borrow().clone()).collect();
     let mut seen: BTreeSet<Map<T>> = known.iter().cloned().collect();
     let mut frontier: Vec<usize> = (0..known.len()).collect();
     while !frontier.is_empty() {
@@ -36,16 +41,20 @@ pub(super) fn close<T: Copy + Ord>(mut known: Vec<Map<T>>) -> Vec<Map<T>> {
 
 /// Least representative for each action on the pinned slots. The indices retain
 /// the caller's already interned values; ordering is by actual slot numbers.
-pub(super) fn coset_reps<T: Copy + Ord>(group: &[Map<T>], pinned: &Map<T>) -> Vec<usize> {
+pub(super) fn coset_reps<T: Copy + Ord>(
+    group: &[impl Borrow<Map<T>>],
+    pinned: &Map<T>,
+) -> Vec<usize> {
     let mut least: BTreeMap<Map<T>, usize> = BTreeMap::new();
     for (i, g) in group.iter().enumerate() {
+        let g = g.borrow();
         let key = g
             .iter()
             .filter(|(k, _)| pinned.contains_key(k))
             .map(|(k, v)| (*k, *v))
             .collect();
         match least.get(&key) {
-            Some(&j) if group[j] <= *g => {}
+            Some(&j) if group[j].borrow() <= g => {}
             _ => {
                 least.insert(key, i);
             }
@@ -54,17 +63,25 @@ pub(super) fn coset_reps<T: Copy + Ord>(group: &[Map<T>], pinned: &Map<T>) -> Ve
     least.into_values().collect()
 }
 
-pub(super) fn coset_min<T: Copy + Ord>(map: &Map<T>, group: &[Map<T>]) -> Option<Map<T>> {
-    group.iter().map(|g| compose(map, g)).min()
+pub(super) fn coset_min<T: Copy + Ord>(
+    map: &Map<T>,
+    group: &[impl Borrow<Map<T>>],
+) -> Option<Map<T>> {
+    group.iter().map(|g| compose(map, g.borrow())).min()
 }
 
-pub(super) fn coset_same<T: Copy + Ord>(a: &Map<T>, b: &Map<T>, group: &[Map<T>]) -> bool {
-    group.iter().any(|g| compose(b, g) == *a)
+pub(super) fn coset_same<T: Copy + Ord>(
+    a: &Map<T>,
+    b: &Map<T>,
+    group: &[impl Borrow<Map<T>>],
+) -> bool {
+    group.iter().any(|g| compose(b, g.borrow()) == *a)
 }
 
-pub(super) fn slot_closure<T: Copy + Ord>(group: &[Map<T>], slots: &Map<T>) -> Map<T> {
+pub(super) fn slot_closure<T: Copy + Ord>(group: &[impl Borrow<Map<T>>], slots: &Map<T>) -> Map<T> {
     let mut kept: BTreeSet<T> = slots.keys().copied().collect();
     for g in group {
+        let g = g.borrow();
         let forward: BTreeSet<T> = compose(g, slots).values().copied().collect();
         let inverse: Map<T> = g.iter().map(|(k, v)| (*v, *k)).collect();
         let backward: BTreeSet<T> = compose(&inverse, slots).values().copied().collect();
@@ -80,11 +97,11 @@ mod tests {
     #[test]
     fn closure_generates_identity_and_inverse() {
         let cycle = Map::from([(0, 1), (1, 2), (2, 0)]);
-        let group = close(vec![cycle.clone()]);
+        let group = close(std::slice::from_ref(&cycle));
         assert_eq!(group.len(), 3);
         assert!(group.contains(&Map::from([(0, 0), (1, 1), (2, 2)])));
         assert!(group.contains(&Map::from([(0, 2), (1, 0), (2, 1)])));
-        assert_eq!(close(group.clone()).len(), 3);
+        assert_eq!(close(&group).len(), 3);
         assert!(coset_same(&cycle, &group[1], &group));
         assert_eq!(coset_min(&cycle, &group), group.iter().min().cloned());
     }

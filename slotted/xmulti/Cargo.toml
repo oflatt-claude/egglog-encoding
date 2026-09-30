@@ -9,6 +9,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+num-bigint = "0.4"
 # Pinned to a REV rather than a local path, so a runner with no checkout of the
 # reference can build this and the differential half can run in CI.
 #
@@ -38,4 +39,3 @@ slotted-egraphs = { git = "https://github.com/memoryleak47/slotted-egraphs.git",
 # `make slotted-eval` does. The binary says which it is on its `CONFIG` line.
 default = ["checks"]
 checks = ["slotted-egraphs/checks"]
-

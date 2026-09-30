@@ -55,10 +55,14 @@ pub(crate) fn register_renamings(
 fn value_maps(
     state: &PureState<'_, '_>,
     values: impl IntoIterator<Item = Value>,
-) -> Option<Vec<BTreeMap<Value, Value>>> {
+) -> Option<Vec<Arc<BTreeMap<Value, Value>>>> {
     values
         .into_iter()
-        .map(|v| Some((*state.container_values().get_val::<MapContainer>(v)?.data).clone()))
+        .map(|v| {
+            Some(Arc::clone(
+                &state.container_values().get_val::<MapContainer>(v)?.data,
+            ))
+        })
         .collect()
 }
 
@@ -148,19 +152,19 @@ pub(super) fn register_set(eg: &mut EGraph, set: &SetSort, arc: ArcSort, renamin
     }});
     add_primitive!(eg, "group-close" = {set.clone(): SetSort} |s: @SetContainer (arc.clone())| -?> @SetContainer (arc.clone()) {{
         let maps = value_maps(&state, s.data.iter().copied())?;
-        Some(intern_group(&mut state, group::close(maps)))
+        Some(intern_group(&mut state, group::close(&maps)))
     }});
     add_primitive!(eg, "group-coset-reps" = {set.clone(): SetSort} |s: @SetContainer (arc.clone()), pinned: @MapContainer (renaming.clone())| -?> @SetContainer (arc.clone()) {{
         let values: Vec<Value> = s.data.iter().copied().collect();
         let maps = slot_maps(&state, values.iter().copied())?;
         let pinned = slot_map(state.base_values(), &pinned.data);
-        let data = group::coset_reps(&maps.into_iter().map(|m| m.0).collect::<Vec<_>>(), &pinned).into_iter().map(|i| values[i]).collect();
+        let data = group::coset_reps(&maps, &pinned).into_iter().map(|i| values[i]).collect();
         Some(SetContainer { do_rebuild: false, data: Arc::new(data) })
     }});
     add_primitive!(eg, "coset-min" = {set.clone(): SetSort} |m: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> @MapContainer (renaming.clone()) {{
         let maps = slot_maps(&state, s.data.iter().copied())?;
         let m = slot_map(state.base_values(), &m.data);
-        let least = group::coset_min(&m, &maps.into_iter().map(|m| m.0).collect::<Vec<_>>())?;
+        let least = group::coset_min(&m, &maps)?;
         Some(MapContainer::renaming(value_map(state.base_values(), least)))
     }});
     // `(root "p" cs grp)` and `(child "v" e cs grp)`: a binding whose reading of

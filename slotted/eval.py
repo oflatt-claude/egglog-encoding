@@ -15,7 +15,7 @@ graph compares with each reference side's:
                 encoding implements and the harness's oracle
     ref-nested  the reference crate through nested `Rewrite`/`ematch_all`, the matcher
                 the paper's own experiments ran; incomplete on redundant slots, so it
-                can reach less than `ref-multi`
+                can reach less than `ref-multi`; uses the artifact's syntactic substitution
 
 Usage:
     python3 slotted/eval.py                         both studies, every side, paper budgets
@@ -36,9 +36,13 @@ for the rest); `--rounds` overrides them all. `--timeout` defaults to the artifa
 300 s per run. Both binaries are built in release first, the oracle without the crate's
 `checks` feature, since the differential harness uses debug, checked builds and those
 numbers mean nothing; `--no-build` skips that when they are known current. Each
-reference row says which oracle answered. The table on stdout has one row per workload and
-one column per side, holding that side's seconds when it reached the goal and what
-happened otherwise, then `[classes/nodes, sat. yes|no]`: the final e-graph's size, and
+reference row says which oracle answered. A compact summary groups systems under each
+workload, following the layout of the paper's Table 1. It shows the round budget,
+goal outcome, elapsed seconds, nodes, classes, and saturation. These are this run's
+measurements; the budget is not the paper's completed iteration count. The full
+table follows, with one row per workload,
+with separate columns per side for goal outcome, elapsed seconds, and graph
+`classes/nodes, sat. yes|no`: the final e-graph's size, and
 whether one more round would have changed it -- the reference stops early and reports
 that itself, the encoding runs its budget and is then asked, under `push`/`pop`, whether
 a further round adds anything. A `vs ref-*` column says how the encoding's final graph
@@ -53,20 +57,26 @@ With counts enabled, a run comparing encoding with `ref-multi` exits successfull
 only if all goals succeed, both class and node counts agree, and every workload has
 that verified verdict. Counts are checked separately before witness search and remain
 in the report even when search is inconclusive. `ref-nested`
-remains a diagnostic comparison. The
+uses the artifact's original `SynExprSubst`, without the correctness oracle's snapshot
+or tie-breaking overhead, and remains a diagnostic comparison. Each reference row
+records its substitution policy. Each side's goal is checked independently; a nested
+failure does not imply an encoding failure. Elapsed time measures the whole run,
+including unsuccessful runs, and is not time to a successful goal. The
 comparison needs the oracle's dump, whose symmetry-group enumeration `--group-cap`
 bounds; `--no-counts` skips counts, settling and comparison for timings alone. `--long` gives one row per run
-with every field instead, and `--html` writes the table as a page too. Every run is also
+with every field in the full table; the summary stays the same. `--html` writes both
+tables as a page too. Every run is also
 appended as one JSON object to
 `eval.jsonl` at the repository root (`--jsonl` chooses another file), which is what a
 graph should be drawn from; `--from [FILE]` prints the table from that record without
 running anything -- the latest batch, that is the last invocation's rows, or with
 `--merged` the latest entry per workload and side across every batch -- so collection
-and reporting are separate steps.
+and reporting are separate steps. A comparison records both observation IDs; replacing
+either side makes that comparison inconclusive until the selected pair is checked.
+Report JSONL is a disposable cache. Older schemas must be recomputed into a fresh path.
 """
 
 import argparse
-import contextlib
 import datetime
 import importlib.util
 import json
@@ -75,6 +85,8 @@ import re
 import subprocess
 import sys
 import time
+import uuid
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +108,7 @@ SIDES = ("encoding", "ref-multi", "ref-nested")
 SCRATCH = ROOT / "target" / "slotted"
 #: Where every run is recorded unless `--jsonl` says otherwise: append-only, ignored by git.
 REPORT = ROOT / "eval.jsonl"
+REPORT_SCHEMA = 2
 
 
 #: Release builds of both sides: egglog, and the reference through `xmulti` without the
@@ -121,21 +134,48 @@ def build():
             sys.exit(f"eval.py: `{' '.join(cmd)}` failed")
 
 
+@dataclass(frozen=True)
+class Comparison:
+    """A verdict about exactly two observations, including inconclusive outcomes."""
+
+    encoding: str
+    reference: str
+    verdict: str
+
+
 class Row:
     def __init__(self, study, case, side, rounds, rules=None):
         self.study, self.case, self.side, self.rounds, self.rules = study, case, side, rounds, rules
+        self.observation = uuid.uuid4().hex
         self.goal, self.saturated, self.seconds = "?", "?", None
         self.classes, self.nodes = None, None
         self.checks = None  # the oracle's `CONFIG checks=` answer, for reference sides
+        self.substitution = None  # the oracle's `CONFIG substitution=` answer
         self.paper = None  # Table 1's slotted row for this workload, when it has one
         #: encoding side: per reference side, how its final graph compares (`compare`)
         self.vs_ref = {}
         # not recorded: a reference side's dump, the encoding side's graph, for `compare`
         self.dump, self.graph = None, None
+        self.graph_issue = None
+
+    def workload(self):
+        return self.study, self.case, self.rounds, self.rules
+
+    def verdict(self, reference):
+        if reference is None:
+            return "inconclusive: reference observation unavailable"
+        comparison = self.vs_ref.get(reference.side)
+        if comparison is None:
+            return "inconclusive: observations have not been compared"
+        if (comparison.encoding, comparison.reference) != (self.observation, reference.observation):
+            return "inconclusive: selected observations have not been compared"
+        return comparison.verdict
 
     def as_dict(self, batch):
         d = dict(vars(self))
         d.pop("dump"), d.pop("graph")
+        d["schema"] = REPORT_SCHEMA
+        d["vs_ref"] = {side: asdict(comparison) for side, comparison in self.vs_ref.items()}
         d["egglog"] = str(EGGLOG.relative_to(ROOT))
         d["xmulti"] = str(XMULTI.relative_to(ROOT))
         d["date"] = datetime.datetime.now().isoformat(timespec="seconds")
@@ -145,21 +185,30 @@ class Row:
     @classmethod
     def from_dict(cls, d):
         """A row back from its `--jsonl` record."""
+        if d.get("schema") != REPORT_SCHEMA:
+            raise SystemExit("eval.py: report cache schema changed; recompute into a fresh --jsonl path")
         row = cls(d["study"], d["case"], d["side"], d["rounds"], d.get("rules"))
-        for field in ("goal", "saturated", "seconds", "classes", "nodes", "checks"):
-            setattr(row, field, d.get(field, getattr(row, field)))
+        for field in (
+            "observation",
+            "goal",
+            "saturated",
+            "seconds",
+            "classes",
+            "nodes",
+            "checks",
+            "substitution",
+            "graph_issue",
+        ):
+            setattr(row, field, d[field])
         row.paper = tuple(d["paper"]) if d.get("paper") is not None else None
-        row.vs_ref = {
-            side: "inconclusive: legacy same rows (no witness)" if verdict == "same rows" else verdict
-            for side, verdict in d.get("vs_ref", {}).items()
-        }
+        row.vs_ref = {side: Comparison(**comparison) for side, comparison in d["vs_ref"].items()}
         return row
 
 
 def load_rows(path, merged):
     """The runs a record holds: the latest batch -- one invocation of this script --
     or, `merged`, the latest entry per workload and side across every batch, in the
-    order they first appeared. A record older than batches is one batch of its own."""
+    order they first appeared. Comparisons belong to their original observations."""
     records = []
     with path.open() as f:
         for line in f:
@@ -173,50 +222,76 @@ def load_rows(path, merged):
     latest, order = {}, []
     for d in records:
         row = Row.from_dict(d)
-        key = (row.study, row.case, row.rounds, row.rules, row.side)
+        key = (*row.workload(), row.side)
         if key not in latest:
             order.append(key)
         latest[key] = row
+    for row in latest.values():
+        for side, comparison in row.vs_ref.items():
+            reference = latest.get((*row.workload(), side))
+            row.vs_ref[side] = replace(comparison, verdict=row.verdict(reference))
     return [latest[key] for key in order], (None if merged else records[-1].get("date"))
 
 
 # ------------------------------------------------------------------ the reference
-def oracle_env():
-    """The oracle's environment: its group enumeration cap, `--group-cap`."""
-    return {**os.environ, "XMULTI_GROUP_SLOT_CAP": str(GROUP_CAP)}
+def oracle_env(side):
+    """Choose the comparison's policy explicitly, overriding ambient XMULTI_SUBST."""
+    return {
+        **os.environ,
+        "XMULTI_GROUP_SLOT_CAP": str(GROUP_CAP),
+        "XMULTI_SUBST": "syntactic" if side == "ref-nested" else "snapshot",
+    }
 
 
 def run_reference(spec, row, timeout, counts):
     """One timed `xmulti` run, whose GOAL line is the criterion; with `counts`, a second,
     untimed run that also dumps the graph, since enumerating the symmetry groups for the
     dump can cost more than the run."""
+    env = oracle_env(row.side)
+    row.substitution = env["XMULTI_SUBST"]
     t0 = time.time()
     try:
-        r = subprocess.run([str(XMULTI)], input=spec, capture_output=True, text=True, timeout=timeout, env=oracle_env())
+        r = subprocess.run([str(XMULTI)], input=spec, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         row.goal, row.seconds = "timeout", time.time() - t0
+        if counts:
+            row.graph_issue = "reference timed run exceeded timeout"
         return
     row.seconds = time.time() - t0
     lines = r.stdout.splitlines()
     if r.returncode != 0 and "REFERENCE_LIMIT:" not in r.stderr:
         row.goal = "error: " + ((r.stderr.strip().splitlines() or ["?"])[-1])[:80]
+        row.graph_issue = row.goal
         return
     row.goal = next((ln.split()[1] for ln in lines if ln.startswith("GOAL ")), "?")
     row.saturated = next((ln.split()[1] for ln in lines if ln.startswith("SATURATED ")), "?")
     row.checks = next((ln.split("=", 1)[1] for ln in lines if ln.startswith("CONFIG checks=")), None)
+    reported_subst = next((ln.split("=", 1)[1] for ln in lines if ln.startswith("CONFIG substitution=")), None)
+    if reported_subst != row.substitution:
+        row.goal = "error: reference substitution policy missing or unexpected; rebuild xmulti"
+        row.graph_issue = row.goal
+        return
     if counts:
         try:
             r = subprocess.run(
-                [str(XMULTI)], input=spec + "dump\n", capture_output=True, text=True, timeout=timeout, env=oracle_env()
+                [str(XMULTI)], input=spec + "dump\n", capture_output=True, text=True, timeout=timeout, env=env
             )
         except subprocess.TimeoutExpired:
+            row.graph_issue = "reference graph dump exceeded timeout"
             return
-        # a symmetry group too large to enumerate (`--group-cap`) leaves the counts unknown
-        with contextlib.suppress(ValueError):
+        if r.returncode != 0:
+            row.graph_issue = "reference graph dump failed: " + (r.stderr.strip() or f"exit {r.returncode}")
+            return
+        try:
             g = ISO.parse_reference(r.stdout)
-            if g.ids():
-                row.classes, row.nodes = g.summary()
-                row.dump = r.stdout
+        except ValueError as exc:
+            row.graph_issue = f"reference graph unreadable: {exc}"
+            return
+        if not g.ids():
+            row.graph_issue = "reference graph dump is empty"
+            return
+        row.classes, row.nodes = g.summary()
+        row.dump = r.stdout
 
 
 def ctor_lines(lang):
@@ -330,22 +405,33 @@ def encoding_counts(program, name, lang, row, timeout):
             cwd=ROOT,
             timeout=timeout,
         )
-        if r.returncode != 0 or ISO.incomplete_serialization(r.stderr) or not jpath.exists():
+        if r.returncode != 0:
+            row.graph_issue = "encoding graph dump failed: " + (r.stderr.strip() or f"exit {r.returncode}")
+            return
+        if ISO.incomplete_serialization(r.stderr):
+            row.graph_issue = "encoding graph serialization was truncated"
+            return
+        if not jpath.exists():
+            row.graph_issue = "encoding graph dump was not written"
             return
         row.saturated = saturated(r.stdout)
         ISO.use_language(lang)
         g, issues = ISO.build_encoding_graph(json.loads(jpath.read_text()))
         if issues:
+            row.graph_issue = "encoding graph unreadable: " + "; ".join(map(str, issues))
             return
         # the reference's node forms: a binder's bound slot as a slot literal
         var_class = next((c for c in g.ids() if any(n[0] == "var" for n in g.nodes[c])), None)
         g, unfaithful = ISO.to_reference_shape(g, var_class)
         if unfaithful:
+            row.graph_issue = "encoding graph cannot be converted faithfully: " + str(unfaithful)
             return
         row.classes, row.nodes = g.summary()
         row.graph = g
-    except (subprocess.TimeoutExpired, Exception):  # noqa: BLE001 -- counts are best effort
-        return
+    except subprocess.TimeoutExpired:
+        row.graph_issue = "encoding graph dump exceeded timeout"
+    except (json.JSONDecodeError, ISO.IsomorphismLimit) as exc:
+        row.graph_issue = f"encoding graph unavailable: {exc}"
     finally:
         path.unlink(missing_ok=True)
         jpath.unlink(missing_ok=True)
@@ -373,36 +459,35 @@ def compare(rows):
     if enc is None:
         return
     for ref_row in (r for r in rows if r.side != "encoding"):
-        counts = compare_counts(enc, ref_row)
-        if counts != "same counts":
-            enc.vs_ref[ref_row.side] = counts
-            continue
-        if enc.graph is None:
-            enc.vs_ref[ref_row.side] = "inconclusive: no encoding graph"
-            continue
-        if ref_row.dump is None:
-            enc.vs_ref[ref_row.side] = "inconclusive: no reference dump"
-            continue
-        try:
-            ref = ISO.parse_reference(ref_row.dump)
-        except ValueError as exc:
-            enc.vs_ref[ref_row.side] = f"inconclusive: reference dump unreadable ({exc})"
-            continue
-        cap, ISO.SEARCH_CAP = ISO.SEARCH_CAP, min(ISO.SEARCH_CAP, 5_000)
-        try:
-            iso, why = ISO.find_isomorphism(ref, enc.graph)
-            if iso is not None:
-                bad = ISO.verify(ref, enc.graph, *iso)
-                verdict = "isomorphic" if bad is None else f"inconclusive: witness rejected ({bad})"
-            elif why and why.endswith("-- inconclusive"):
-                verdict = "inconclusive: " + why.removesuffix(" -- inconclusive")
-            else:
-                verdict = f"different: {why}"
-        except (ISO.IsomorphismLimit, RecursionError) as exc:
-            verdict = f"inconclusive: {exc}"
-        finally:
-            ISO.SEARCH_CAP = cap
-        enc.vs_ref[ref_row.side] = verdict
+        enc.vs_ref[ref_row.side] = Comparison(enc.observation, ref_row.observation, compare_graphs(enc, ref_row))
+
+
+def compare_graphs(enc, reference):
+    counts = compare_counts(enc, reference)
+    if counts != "same counts":
+        issues = [r.graph_issue for r in (enc, reference) if r.graph_issue]
+        return counts + ("; " + "; ".join(issues) if issues else "")
+    if enc.graph is None:
+        return "inconclusive: no encoding graph"
+    if reference.dump is None:
+        return "inconclusive: no reference dump"
+    try:
+        ref = ISO.parse_reference(reference.dump)
+    except ValueError as exc:
+        return f"inconclusive: reference dump unreadable ({exc})"
+    cap, ISO.SEARCH_CAP = ISO.SEARCH_CAP, min(ISO.SEARCH_CAP, 5_000)
+    try:
+        iso, why = ISO.find_isomorphism(ref, enc.graph)
+        if iso is not None:
+            bad = ISO.verify(ref, enc.graph, *iso)
+            return "isomorphic" if bad is None else f"inconclusive: witness rejected ({bad})"
+        if why and why.endswith("-- inconclusive"):
+            return "inconclusive: " + why.removesuffix(" -- inconclusive")
+        return f"different: {why}"
+    except (ISO.IsomorphismLimit, RecursionError) as exc:
+        return f"inconclusive: {exc}"
+    finally:
+        ISO.SEARCH_CAP = cap
 
 
 # ------------------------------------------------------------------ the array study
@@ -502,13 +587,20 @@ LONG_HEAD = (
     "case",
     "side",
     "rounds",
+    "rules",
     "goal",
     "saturated",
     "seconds",
     "classes",
     "nodes",
     "vs reference",
+    "graph issue",
     "paper (iters, nodes, classes, sat.)",
+)
+SUMMARY_NOTE = (
+    "Budget is the round limit; elapsed time includes unsuccessful runs. "
+    "SDQL uses 44 rules unless noted. — means unavailable. "
+    "Reference settings and correctness comparisons are in the full report."
 )
 
 
@@ -518,50 +610,127 @@ def paper_cell(r):
 
 def long_cells(r):
     """One row's cells, as text, in `LONG_HEAD` order: the record of one run."""
-    secs = "" if r.seconds is None else f"{r.seconds:.1f}"
-    side = r.side if r.checks is None else f"{r.side} (checks {r.checks})"
-    counts = [str(r.classes or ""), str(r.nodes or "")]
-    return [r.study, r.case, side, str(r.rounds), r.goal, r.saturated, secs, *counts, vs_cell(r), paper_cell(r)]
+    side = r.side + reference_label(r)
+    counts = ["" if n is None else str(n) for n in (r.classes, r.nodes)]
+    return [
+        r.study,
+        r.case,
+        side,
+        str(r.rounds),
+        str(r.rules or ""),
+        r.goal,
+        r.saturated,
+        seconds_cell(r),
+        *counts,
+        vs_cell(r),
+        r.graph_issue or "",
+        paper_cell(r),
+    ]
 
 
 def vs_cell(r):
-    return "; ".join(f"{side}: {verdict}" for side, verdict in r.vs_ref.items())
+    return "; ".join(f"{side}: {comparison.verdict}" for side, comparison in r.vs_ref.items())
 
 
-def timing_cell(r):
-    """How one side did on one workload: its seconds when it reached the goal, and
-    otherwise what happened, with the seconds it spent; counts follow when asked for."""
-    secs = "" if r.seconds is None else f"{r.seconds:.1f}"
-    cell = secs if r.goal == "yes" else (f"{r.goal} ({secs})" if secs and r.goal in ("no", "error") else r.goal)
+def seconds_cell(r):
+    return "" if r.seconds is None else f"{r.seconds:.1f}"
+
+
+def graph_cell(r):
+    """The final graph's size and saturation status, independent of goal outcome."""
     if r.classes is not None:
-        cell += f" [{r.classes}/{r.nodes}" + (f", sat. {r.saturated}" if r.saturated != "?" else "") + "]"
-    return cell
+        return f"{r.classes}/{r.nodes}" + (f", sat. {r.saturated}" if r.saturated != "?" else "")
+    return f"counts unavailable: {r.graph_issue}" if r.graph_issue else ""
+
+
+def reference_label(*rows):
+    labels = []
+    for field, label in (("checks", "checks"), ("substitution", "subst")):
+        values = {getattr(row, field) for row in rows}
+        known = sorted(v for v in values if v is not None)
+        if known:
+            detail = "/".join(known)
+            if None in values:
+                detail += "/unknown"
+            labels.append(f"{label} {detail}")
+    return f" ({', '.join(labels)})" if labels else ""
 
 
 def pivot(rows, sides):
-    """One row per workload, one column per side, holding that side's timing."""
-    labels = {}
-    for r in rows:
-        labels.setdefault(r.side, set()).add("" if r.checks is None else f" (checks {r.checks})")
-    columns = [s + ("".join(labels[s]) if s in labels and len(labels[s]) == 1 else "") for s in sides]
+    """One row per workload, with each side's goal, elapsed time, and graph separate."""
+    columns = []
+    for side in sides:
+        label = reference_label(*(r for r in rows if r.side == side))
+        columns.extend((f"{side} goal{label}", f"{side} elapsed (s)", f"{side} graph (classes/nodes, sat.)"))
     # the encoding's graph against each reference side it was compared with
     compared = [s for s in sides if any(s in r.vs_ref for r in rows)]
-    head = ["study", "case", "rounds", *columns, *(f"vs {s}" for s in compared), "paper (iters, nodes, classes, sat.)"]
+    head = [
+        "study",
+        "case",
+        "rounds",
+        "rules",
+        *columns,
+        *(f"vs {s}" for s in compared),
+        "paper (iters, nodes, classes, sat.)",
+    ]
     by_case, order = {}, []
     for r in rows:
-        key = (r.study, r.case, r.rounds)
+        key = r.workload()
         if key not in by_case:
             by_case[key] = {"paper": paper_cell(r)}
             order.append(key)
-        by_case[key][r.side] = timing_cell(r)
-        for s, verdict in r.vs_ref.items():
-            by_case[key][f"vs {s}"] = verdict
+        by_case[key][r.side] = [r.goal, seconds_cell(r), graph_cell(r)]
+        for s, comparison in r.vs_ref.items():
+            by_case[key][f"vs {s}"] = comparison.verdict
     table = []
-    for study, case, rounds in order:
-        got = by_case[(study, case, rounds)]
-        cells = [got.get(s, "") for s in sides] + [got.get(f"vs {s}", "") for s in compared]
-        table.append([study, case, str(rounds), *cells, got["paper"]])
+    for study, case, rounds, rules in order:
+        got = by_case[(study, case, rounds, rules)]
+        cells = [cell for s in sides for cell in got.get(s, ["", "", ""])]
+        cells += [got.get(f"vs {s}", "") for s in compared]
+        table.append([study, case, str(rounds), str(rules or ""), *cells, got["paper"]])
     return head, table
+
+
+def workload_label(study, case, rules):
+    """Short paper names for known workloads, retaining custom workload identities."""
+    if study == "sdql":
+        for kernel, phase in pf.WORKLOADS:
+            if case == f"{kernel}_{phase}-{rules}rules":
+                name = "ΣMMM" if kernel == "mmm_sum" else kernel.upper()
+                suffix = f", {rules} rules" if rules != 44 else ""
+                return f"{name} ({phase}{suffix})"
+    if study == "array" and (match := re.fullmatch(r"goal-2d-4f-N(\d+)", case)):
+        return f"Array N={match[1]}"
+    suffix = f" ({rules} rules)" if rules is not None else ""
+    return f"{study}: {case}{suffix}"
+
+
+def summary(rows, sides):
+    """Table 1's grouped system rows, with independently measured goals and timings."""
+    head = ("Workload", "System", "Budget", "Goal", "Elapsed (s)", "Nodes", "Classes", "Sat.")
+    groups = {}
+    for row in rows:
+        groups.setdefault(row.workload(), {})[row.side] = row
+    table = []
+    for (study, case, rounds, rules), group in groups.items():
+        label = workload_label(study, case, rules)
+        for i, side in enumerate(sides):
+            row = group.get(side)
+            cells = [label if i == 0 else "", side, str(rounds)]
+            if row is None:
+                cells += ["missing", "—", "—", "—", "—"]
+            else:
+                goal = "error" if row.goal.startswith("error") else row.goal
+                cells += [goal, seconds_cell(row) or "—"]
+                cells += ["—" if n is None else f"{n:,}" for n in (row.nodes, row.classes)]
+                cells += ["—" if row.saturated == "?" else row.saturated]
+            table.append(cells)
+    return head, table
+
+
+def report_sections(rows, sides, long=False):
+    full = (LONG_HEAD, [long_cells(r) for r in rows]) if long else pivot(rows, sides)
+    return [("Summary", SUMMARY_NOTE, *summary(rows, sides)), ("Full report", "", *full)]
 
 
 def markdown(head, table):
@@ -576,18 +745,38 @@ def markdown(head, table):
     return "\n".join([line(table[0]), rule] + [line(c) for c in table[1:]])
 
 
-def html(head, table):
-    """The same table as a standalone page."""
+def html(sections):
+    """The summary and full table as a standalone page."""
     import html as h
 
-    head_cells = "".join(f"<th>{h.escape(c)}</th>" for c in head)
-    body = "\n".join("<tr>" + "".join(f"<td>{h.escape(c)}</td>" for c in cells) + "</tr>" for cells in table)
+    contents = []
+    for title, note, head, table in sections:
+        head_cells = "".join(f"<th>{h.escape(c)}</th>" for c in head)
+        body = []
+        for cells in table:
+            row_class = ' class="group"' if cells[0] else ""
+            body.append(f"<tr{row_class}>" + "".join(f"<td>{h.escape(c)}</td>" for c in cells) + "</tr>")
+        contents.append(
+            f"<section><h2>{h.escape(title)}</h2><div class=scroll>"
+            f"<table><thead><tr>{head_cells}</tr></thead><tbody>\n"
+            + "\n".join(body)
+            + "\n</tbody></table></div>"
+            + (f"<p>{h.escape(note)}</p>" if note else "")
+            + "</section>"
+        )
     return (
-        "<!doctype html><meta charset=utf-8><title>slotted eval</title>"
+        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'>"
+        "<title>slotted eval</title>"
         "<style>body{font:14px system-ui,sans-serif;margin:2em}table{border-collapse:collapse}"
+        "section{margin-bottom:2.5em}.scroll{overflow-x:auto}p{max-width:85ch;color:#555;line-height:1.5}"
         "th,td{border:1px solid #bbb;padding:4px 10px;text-align:left;white-space:nowrap}"
-        "th{background:#eee}tr:nth-child(even){background:#f7f7f7}</style>"
-        f"<table><thead><tr>{head_cells}</tr></thead><tbody>\n{body}\n</tbody></table>\n"
+        "th{background:#eee}tr:nth-child(even){background:#f7f7f7}"
+        "section:first-of-type th,section:first-of-type td{border:0;padding:6px 12px}"
+        "section:first-of-type tr{background:none}"
+        "section:first-of-type th{background:none;border-bottom:2px solid #777}"
+        "section:first-of-type tr.group td{border-top:1px solid #ccc}"
+        "section:first-of-type td:nth-child(n+3){text-align:right;font-variant-numeric:tabular-nums}"
+        "</style>\n" + "\n".join(contents) + "\n"
     )
 
 
@@ -665,10 +854,15 @@ def main():
     else:
         rows = collect(args, sides, ap)
 
-    head, table = (LONG_HEAD, [long_cells(r) for r in rows]) if args.long else pivot(rows, sides)
-    print(markdown(head, table))
+    sections = report_sections(rows, sides, args.long)
+    print(
+        "\n\n".join(
+            f"## {title}\n\n{markdown(head, table)}" + (f"\n\n{note}" if note else "")
+            for title, note, head, table in sections
+        )
+    )
     if args.html:
-        args.html.write_text(html(head, table))
+        args.html.write_text(html(sections))
         print(f"wrote {args.html}", file=sys.stderr)
     if not args.report:
         # one id per invocation: the clock alone can name two quick runs alike
@@ -683,8 +877,8 @@ def successful(rows, sides, counts):
     """Goals must succeed; MultiPattern comparison needs equal counts and a certificate.
 
     The nested matcher is a diagnostic, not the correctness oracle. Explicit
-    `--no-counts` runs check goals alone; missing or legacy comparison verdicts do
-    not satisfy a requested graph comparison.
+    `--no-counts` runs check goals alone; missing verdicts or evidence about other
+    observations do not satisfy a requested graph comparison.
     """
     if not rows or any(r.goal != "yes" for r in rows):
         return False
@@ -692,12 +886,12 @@ def successful(rows, sides, counts):
         return True
     groups = {}
     for row in rows:
-        groups.setdefault((row.study, row.case, row.rounds, row.rules), {})[row.side] = row
+        groups.setdefault(row.workload(), {})[row.side] = row
     return all(
         "encoding" in group
         and "ref-multi" in group
         and compare_counts(group["encoding"], group["ref-multi"]) == "same counts"
-        and group["encoding"].vs_ref.get("ref-multi") == "isomorphic"
+        and group["encoding"].verdict(group["ref-multi"]) == "isomorphic"
         for group in groups.values()
     )
 

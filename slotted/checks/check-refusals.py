@@ -145,6 +145,16 @@ CASES = [
         "(sort A)\n(constructor A0 () A)\n(constructor A0 () A)\n",
         "constructor 'A0' is declared more than once",
     ),
+    (
+        "a payload-layout name collision",
+        "(sort U)\n(constructor SlottedPayloadLayout () U)\n",
+        "reserved by the multi-sort",
+    ),
+    (
+        "a machinery phase ruleset collision",
+        LANG + "(ruleset slotted-group)\n",
+        "reserved by the multi-sort",
+    ),
     ("a program that declares nothing", "(run 1)\n", "no equality sort is declared"),
     (
         "a pattern variable in a binder column",

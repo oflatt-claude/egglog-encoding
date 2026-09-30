@@ -900,12 +900,23 @@ does not depend on the order egglog stored the group in.
 
 `slotted-subst` copies one representative of the body — the smallest term, and among
 equal sizes the least canonical spelling, so every run copies the same one — and that
-choice depends only on the constructor tables. Within one rule-application phase every
-insert is staged, so the tables' versions hold still across all the calls of that
-phase: the primitive keeps every class's parsed nodes and its chosen term per version,
-and a memo of results shared by its class half and its frame half, which the rule calls
-with the same arguments. A call then walks only its own term. This took beta from
-1.2 ms a call to 0.13 ms.
+choice reads the constructor tables, class slots, and layout metadata. Within one
+rule-application phase every insert is staged: the execution state owns the parsed
+nodes, chosen terms, and memo of results shared by the class and frame primitives.
+A call then walks only its own term.
+
+The extraction cost is tree size, counting each child occurrence with exact integer
+arithmetic on both sides. This keeps a parent's cost strictly above its children's,
+even when a compact shared graph represents a tree larger than a machine integer.
+Tie-breaking
+templates share their children rather than copying their expanded token sequences.
+Each edge carries its public-slot renaming. Every active traversal occurrence owns a
+local namespace for its internal slots; no space or integer range is reserved for
+all the private slots in the expanded tree. A lazy byte iterator numbers slots by first occurrence and compares
+the same canonical spelling as before, stopping at the first difference; a class with
+one smallest candidate needs no spelling comparison. Sharing changes storage, not
+the extraction objective or tie-break. The multipattern reference keeps its independent,
+expanded-template implementation to check that the optimized encoding agrees.
 
 # The contract
 
@@ -1035,7 +1046,24 @@ search. They remain visible even if search is inconclusive, and a count mismatch
 rejects the comparison without trusting the isomorphism checker. Missing counts or
 unverified `ref-multi` comparisons fail the command when both encoding and
 `ref-multi` are selected; loading a saved report also requires equal counts as well
-as a verified verdict. Three things had to
+as a verified verdict. Each comparison records the encoding and reference observation
+IDs. A merged report replacing either observation marks the old comparison inconclusive;
+it cannot reuse an earlier witness verdict just because the counts still match. Workload
+identity includes the rule count. Graph collection records why counts are unavailable,
+including timeouts and symmetry-enumeration limits; unexpected reader errors propagate.
+The JSONL is a versioned disposable cache, and old schemas require recomputation.
+Goal outcome, elapsed seconds, and graph size have separate columns. Each side's
+goal is checked independently, and any unsuccessful goal fails the command even
+when the graphs are isomorphic. The nested matcher can miss a goal that the encoding
+reaches; agreement with it is not required for correctness. Elapsed seconds measure
+the whole run, including unsuccessful runs, rather than time to a successful goal.
+Both Markdown and HTML reports start with a compact table in the paper's Table 1
+layout: systems grouped under each workload, with budget, goal, elapsed seconds,
+nodes, classes, and saturation. Budget means the configured round limit, not the
+number of completed iterations. The full diagnostic table follows; `--long` changes
+only that full table. Both views use the same observations and preserve failed goals
+and missing results.
+Three things had to
 be made the same, each established on a minimal case the harness keeps:
 
 - *Substitution picks the same term.* `beta` substitutes into one term of the body's
@@ -1052,8 +1080,8 @@ be made the same, each established on a minimal case the harness keeps:
   substitutes as the encoding does: `slotted/xmulti`'s `SnapshotSubst` takes the
   smallest term per class at each round's start, the same tie-break over the same
   constructor names (`ctor` lines in the spec, from `eval.py`), and is the harness's
-  default (`XMULTI_SUBST=syntactic` restores the crate's). It costs the oracle nothing
-  measurable. Without it, ΣMMM's second phase ended with 71 classes against the
+  default (`XMULTI_SUBST=syntactic` restores the crate's). Without it, ΣMMM's second
+  phase ended with 71 classes against the
   reference's 75, eight reference classes split; with it the partitions agree.
 - *One row per node.* The shape walk folds a row and its image under a symmetry of a
   child (*One row per shape per class*), as the reference's hashcons does. Before, the
@@ -1067,15 +1095,35 @@ be made the same, each established on a minimal case the harness keeps:
   The multipattern matcher's `unify` and `final_refine` do the same. The crate's nested
   matcher, the one the paper's experiments ran, gives such a slot a fresh name on every
   use and finds no `e1`, which is why `ref-nested` holds fewer `sdql-let` rows than
-  either; `SLOTTED_RIGID_REDUNDANT=1` in the environment makes the frame refuse what it
-  refuses, for a diagnosis, and is not the default.
+  either. The encoding follows MultiPattern's treatment of redundant slots.
 
 With the three in place, ΣMMM's and MMM's first and second phases have verified
 isomorphism witnesses against `ref-multi`. The former `same rows` label was only a
-probe/count diagnostic and could miss different symmetry groups; old records with
-that label are displayed as inconclusive. TTM's second phase is open:
-`ref-multi` does not finish it within the artifact's 300 s, `ref-nested` ends with 196
-classes to the encoding's 205, and the encoding has settled by then.
+probe/count diagnostic and could miss different symmetry groups; those records must
+be recomputed. TTM's second phase remains unverified:
+`ref-multi` did not finish it within the artifact's 300 s in the recorded evaluation.
+
+**The nested performance baseline.** `eval.py` explicitly selects `snapshot` for
+`ref-multi` and `syntactic` for `ref-nested`, overriding ambient `XMULTI_SUBST` on
+both the timed and counting runs. The binary reports the selected policy and each
+evaluation row records it. Syntactic substitution does not build our extraction
+snapshots. Nested results are diagnostic; their counts and graph are not expected
+to match the encoding, since both the matcher and substitution policy differ.
+
+This follows the artifact at commit `83f2e5b`: the
+[SDQL beta rule](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/sdql/slotted/src/rewrite.rs)
+uses direct term substitution, and its `EGraph::new()` selects
+[`SynExprSubst`](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/sdql/slotted/slotted-egraphs/src/egraph/mod.rs).
+That method reconstructs the stored syntactic term; the library also offers
+`ExtractionSubst`, which chooses a smallest AST, but the SDQL runner does not select
+it. The SDQL runner separately extracts the final optimized program with `SdqlCost`.
+The paper's egg/SDQL baseline uses
+[`BetaExtractApplier`](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/sdql/baseline/src/sdqlsubstitute.rs)
+on cached `beta_extract` expressions, so that side does use extraction-based substitution.
+The array experiment uses explicit let-rewriting instead of direct substitution,
+as stated in the paper's footnote 4. We retain the pinned modern reference revision
+for both matchers, so this baseline reproduces the substitution choice, not the
+entire historical implementation.
 
 **Rounds.** The evaluation runs the paper's budget on every side; the reference stops
 early when a round applies nothing new and reports that, and the encoding is asked

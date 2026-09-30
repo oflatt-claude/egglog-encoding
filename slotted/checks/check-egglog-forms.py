@@ -19,10 +19,13 @@ comparisons -- and the actions `set`/`delete`/`subsume`, which need `rule`.
 
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TMP = ROOT / "target" / "slotted" / "forms.egg"
+sys.path.insert(0, str(ROOT / "slotted"))
+sc = __import__("slotted-egglog")
 
 L = "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n"
 
@@ -94,6 +97,7 @@ def verdict_of(program):
 
 def main():
     TMP.parent.mkdir(parents=True, exist_ok=True)
+    repeatable_compilation()
     bad = []
     for want, what, program in PROBES:
         got, detail = verdict_of(program)
@@ -106,6 +110,46 @@ def main():
     n_ok = sum(1 for w, _, _ in PROBES if w == "ok")
     print(f"\n{len(PROBES) - len(bad)}/{len(PROBES)} egglog forms behave as recorded ({n_ok} accepted)")
     return 1 if bad else 0
+
+
+def repeatable_compilation():
+    program = (
+        L
+        + """
+(push)
+(let y (Nil))
+(pop)
+(rewrite (Add x y) (Add y x))
+(let x (Nil))
+(let seed (Add (N 1) (N 2)))
+(run 1)
+(check (= seed (Add (N 2) (N 1))))
+"""
+    )
+    with tempfile.TemporaryDirectory(prefix="slotted-compile-") as tmp:
+        path = Path(tmp) / "source.egg"
+        path.write_text(program)
+        src = sc.Source(path)
+        full = sc.compile_source(src)
+        own = sc.compile_source(src, own_only=True)
+        assert full == sc.compile_source(src)
+        assert own == sc.compile_source(sc.Source(path), own_only=True)
+        assert not src.lang.bound
+        compiled = path.with_name("compiled.egg")
+        compiled.write_text(full)
+        run = subprocess.run([ROOT / "target/debug/egglog", compiled], capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0, run.stderr
+        # This CLI path emits a snapshot and runs the full program in one invocation.
+        snapshot = path.with_name("snapshot.egg")
+        run = subprocess.run(
+            [sys.executable, ROOT / "slotted/slotted-egglog.py", path, "--own-only", "--run", "-o", snapshot],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert snapshot.read_text() == own
+    print("  ok       repeated compilation and CLI snapshots preserve source scopes")
 
 
 if __name__ == "__main__":

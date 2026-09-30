@@ -390,7 +390,7 @@ impl ContainerSort for MapSort {
             add_primitive!(eg, "map-image"   = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_image(&a.data)), ..a } });
             add_primitive!(eg, "map-domain"  = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_domain(&a.data)), ..a } });
             add_primitive!(eg, "find-mapping" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
-                let maps: Vec<BTreeMap<Value, Value>> = xs.map(|m| (*m.data).clone()).collect();
+                let maps: Vec<_> = xs.map(|m| m.data).collect();
                 Some(MapContainer {
                     do_rebuild_keys: self.ctx.key.is_eq_sort() || self.ctx.key.is_eq_container_sort(),
                     do_rebuild_vals: self.ctx.value.is_eq_sort() || self.ctx.value.is_eq_container_sort(),

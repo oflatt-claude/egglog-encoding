@@ -437,3 +437,47 @@ fn substitution_observes_class_slots_without_constructor_changes() -> Result<(),
     )?;
     Ok(())
 }
+
+#[test]
+fn shared_closed_terms_do_not_reserve_expanded_private_slot_ranges() -> Result<(), Error> {
+    let mut program = "(let $n0 (Lam (map-of 0 0) (Var 0) (map-of 0 0) (Var 0)))\n".to_owned();
+    for i in 1..=130 {
+        let prev = i - 1;
+        program.push_str(&format!(
+            "(let $n{i} (H (map-empty) $n{prev} (map-empty) $n{prev}))\n"
+        ));
+    }
+    program.push_str(
+        "(run-schedule (saturate (run slots)))\n\
+         (let $out (slotted-subst $n130 0 (Var 0) (map-empty) (Null)))\n\
+         (check (= $out $n130))\n",
+    );
+    egraph(&program)?;
+    Ok(())
+}
+
+#[test]
+fn exact_tree_cost_excludes_cycles_above_machine_sizes() -> Result<(), Error> {
+    let mut program = "(let $n0 (Var 0))\n".to_owned();
+    for i in 1..=130 {
+        let prev = i - 1;
+        program.push_str(&format!(
+            "(let $n{i} (H (map-of 0 0) $n{prev} (map-of 0 0) $n{prev}))\n"
+        ));
+    }
+    program.push_str(
+        "(union $n130 (H (map-of 0 0) $n130 (map-of 0 0) $n130))\n\
+         (run-schedule (saturate (run slots)))\n\
+         (let $out (slotted-subst $n130 0 (Var 0) (map-empty) (Null)))\n\
+         (let $want0 (Null))\n",
+    );
+    for i in 1..=130 {
+        let prev = i - 1;
+        program.push_str(&format!(
+            "(let $want{i} (H (map-empty) $want{prev} (map-empty) $want{prev}))\n"
+        ));
+    }
+    program.push_str("(check (= $out $want130))\n");
+    egraph(&program)?;
+    Ok(())
+}
