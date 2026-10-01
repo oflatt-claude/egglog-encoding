@@ -36,7 +36,7 @@ OBS_TEMPLATE = """
 
 ;; the group's elements as rows, which the observers below join one at a time
 (relation ObsSym (U Renaming))
-(rule ((GroupIdx i) (= s (EclassGroup_0 c)) (= g (set-get s i))) ((ObsSym c g)) :ruleset obs)
+(rule ((RenamesToLeader_0 c g c)) ((ObsSym c g)) :ruleset obs)
 
 ;; a stored renaming that is not injective
 (relation NotInjective (Renaming))

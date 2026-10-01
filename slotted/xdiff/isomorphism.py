@@ -20,7 +20,7 @@ away:
   node and a swap; a class without the swap holds the same one node. Comparing node sets
   alone cannot tell them apart, so the group is compared too -- recovered from the
   reference with `eq` on two invocations, and from the encoding as the rows of
-  `EclassGroup c` whose elements permute the class's slots.
+  self-edges `RenamesToLeader c g c` whose maps permute the class's slots.
 * **A node is only defined up to those groups.** `k($0,$1)` and `k($1,$0)` are the same
   node of a commutative class, and the two sides need not store the same representative.
   So node equality quantifies over the parent's group and each child's group -- the
@@ -191,7 +191,8 @@ def read_json_graph(doc):
             slots_of[value] = slots
         elif op == SYM.renames and len(kids) == 3:
             loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[2])))
-        elif op == SYM.group and len(kids) == 1:
+        elif op == "EclassGroup_0" and len(kids) == 1:
+            # Also accept the optimized encoding for direct branch comparisons.
             # a symmetry is a renaming of a class onto ITSELF, so each element of the
             # class's group reads here as the self-loop the rest of this function is
             # written against; a follower's group is empty
@@ -422,7 +423,7 @@ def build_encoding_graph(doc):
         else:
             issues.append(f"{a}: framed symmetry is not a permutation of {sorted(g.slots[rep])}")
 
-    # Matching consumes the ACTUAL group value, so do not repair a missing group
+    # Matching consumes the ACTUAL symmetry rows, so do not repair a missing group
     # element in the reader. Require those rows to contain the identity and already be
     # closed, then require every non-self relation to be path-consistent modulo that
     # recorded group.

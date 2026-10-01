@@ -152,7 +152,7 @@ CASES = [
     ),
     (
         "a machinery phase ruleset collision",
-        LANG + "(ruleset slotted-group)\n",
+        LANG + "(ruleset slotted-refine)\n",
         "reserved by the multi-sort",
     ),
     ("a program that declares nothing", "(run 1)\n", "no equality sort is declared"),
