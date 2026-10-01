@@ -237,7 +237,26 @@ pub struct Frame {
     pending: Vec<Pending>,
 }
 
-pub type Fr = Boxed<Frame>;
+/// Interned frames are immutable. Primitive reads share them instead of cloning
+/// their partitions and slot maps; frame transformations still return owned frames.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Fr(Arc<Frame>);
+
+impl Fr {
+    pub fn new(frame: Frame) -> Self {
+        Self(Arc::new(frame))
+    }
+}
+
+impl std::ops::Deref for Fr {
+    type Target = Frame;
+
+    fn deref(&self) -> &Frame {
+        &self.0
+    }
+}
+
+impl crate::core_relations::BaseValue for Fr {}
 
 impl Frame {
     /// One atom's constraints: its label, exactly one `Root` among the bindings, and

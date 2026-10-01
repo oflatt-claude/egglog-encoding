@@ -135,6 +135,7 @@ def check_snapshots():
 # revision of `slotted-egraphs`; `--no-oracle` still permits offline encoding-only runs
 # when that revision is not already in Cargo's cache.
 CHECKS = [
+    ("shape-cache", ("slotted/checks/check-shape-cache.py",), starts_ok, False, False),
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
     # First: the machinery under `target/` is build output, and five tests include it.
     (

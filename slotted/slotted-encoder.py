@@ -405,23 +405,29 @@ def declare_shape_table(name, sig, symbols=None):
 
 
 def shapeof_table(name):
-    """The function holding each row's shape, so rows can be joined on it."""
+    """The function memoizing shapes and symmetries for a constructor's edges."""
     return f"_shapeof_{name}"
 
 
-def declare_shapeof_table(name, sig, symbols=None):
-    """`(function _shapeof_F (row...) (s1 ... back))`: a row's canonical edges -- the
-    least spelling over its children's groups, what `shape_index` walks -- and the
-    renaming back to its own names, as columns, so two rows of one class with one shape
-    meet in a hash join rather than in a join over every two rows with the same
-    children (C14). A row's shape depends on its edges and its children's groups
-    alone, so an entry outlives its row harmlessly, and a group that grows rewrites it."""
-    symbols = _symbols(symbols)
+def shapeof_call(name, edges, groups):
+    """Only immutable inputs: class ids and payloads do not affect `node-shape`."""
+    args = " ".join(f"{edge} {group}" for edge, group in zip(edges, groups, strict=True))
+    return f"({shapeof_table(name)} {args})"
+
+
+def declare_shapeof_table(name, sig):
+    """Canonical edges, the renaming back, and symmetries, memoized by edges/groups.
+
+    Keying by a row's child classes made this cache mutable: a native union could
+    merge an obsolete entry over a current one after the producer had already run.
+    Immutable group values distinguish those computations, and excluding class ids
+    prevents rebuilding from merging their cache entries. The flat shape outputs
+    let deduplication join on equal shapes (C14).
+    """
     _, edges, _, _ = cols_of(sig)
-    cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
-    outs = " ".join(["Renaming"] * (len(edges) + 1))
-    news = " ".join(f"new{i}" for i in range(len(edges) + 1))
-    return f"(function {shapeof_table(name)} ({cols}) ({outs}) :merge (values {news}))\n"
+    cols = " ".join(["Renaming Group"] * len(edges))
+    outs = " ".join(["Renaming"] * (len(edges) + 1) + ["Group"])
+    return f"(function {shapeof_table(name)} ({cols}) ({outs}) :no-merge)\n"
 
 
 def shape_dedup(name, sig, symbols=None):
@@ -439,20 +445,24 @@ def shape_dedup(name, sig, symbols=None):
     two exactly one goes. Only live rows take part, which is what keeps this sound
     across unions and migrations.
 
-    In the shape phase with the index rule, and it must be: `_shapeof_F` is keyed by
-    a row's columns, so an entry outlives its row, and a row built again in another
-    class -- `F(13,12)` re-made inside the class of `F(12,13)` after `comm` -- would be
+    In the shape phase with the index rule, and it must be: a cache entry outlives
+    its row, and a row built again in another class -- `F(13,12)` re-made inside the
+    class of `F(12,13)` after `comm` -- would be
     deleted on the old entry before the index had seen it in its new class, and the
     symmetry it states with it. In one phase the two fire on one snapshot: the index
     records the equation as the duplicate goes."""
-    _, edges, _, _ = cols_of(sig)
+    symbols = _symbols(symbols)
+    _, edges, kids, _ = cols_of(sig)
+    groups = [f"g{i + 1}" for i in range(len(kids))]
+    bound = "\n       ".join(f"(= {g} ({symbols.group} {k}))" for g, k in zip(groups, kids, strict=True))
     other = [f"n{i + 1}" for i in range(len(edges))]
     ss = [f"s{i + 1}" for i in range(len(edges))]
     return f"""\
 (rule ((= c {pattern(name, sig)})
-       (= (values {" ".join(ss)} b1) {pattern(shapeof_table(name), sig)})
+       {bound}
+       (= (values {" ".join(ss)} b1 syms1) {shapeof_call(name, edges, groups)})
        (= c {pattern(name, sig, edges=other)})
-       (= (values {" ".join(ss)} b2) {pattern(shapeof_table(name), sig, edges=other)})
+       (= (values {" ".join(ss)} b2 syms2) {shapeof_call(name, other, groups)})
        (= v1 (vec-of {" ".join(edges)}))
        (= v2 (vec-of {" ".join(other)}))
        (!= v1 v2)
@@ -508,19 +518,6 @@ def coset_readings(name, sig, symbols=None):
     return "\n".join(out)
 
 
-def syms_table(name):
-    """The function holding, per row, the symmetries its shape walk found."""
-    return f"_syms_{name}"
-
-
-def declare_syms_table(name, sig, symbols=None):
-    """`(function _syms_F (row...) Group)`: what the index rule's walk said about the
-    row's own class, kept so the symmetry rule reads it rather than walking again."""
-    symbols = _symbols(symbols)
-    cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
-    return f"(function {syms_table(name)} ({cols}) Group :merge new)\n"
-
-
 def shape_index(name, sig, symbols=None):
     """Every row into the index, spelled the way every reading of its children agrees
     on, and what the row says about its own class's symmetries.
@@ -535,7 +532,7 @@ def shape_index(name, sig, symbols=None):
 
     Two rules rather than one, because the two writes wait for different things. The
     index write goes in as soon as the row and its children's groups are known, and
-    keeps what the walk said about the row's own class in `_syms_F`. The symmetry write
+    keeps the walk's shapes and symmetries in `_shapeof_F`. The symmetry write
     also waits for the class's slots, because the symmetries are spelled on them before
     they enter the group: a row may carry a slot its class has dropped, and a symmetry
     over such a slot is what the group's own normalisation would strip again -- written
@@ -552,17 +549,18 @@ def shape_index(name, sig, symbols=None):
     canon = [f"(vec-get sh {i})" for i in range(len(edges))]
     key = pattern(shape_table(name), sig, edges=canon)
     row = pattern(name, sig)
-    cols = row[len(name) + 2 : -1]
+    cached = shapeof_call(name, edges, named)
     shapeof = " ".join(f"(vec-get sh {i})" for i in range(len(edges) + 1))
+    outputs = " ".join(f"s{i + 1}" for i in range(len(edges)))
     return f"""\
 (rule ((= c {row})
        {bound}
        (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)}))))
       ((set {key} (values c (vec-get sh {len(edges)})))
-       (set {pattern(shapeof_table(name), sig)} (values {shapeof}))
-       (set ({syms_table(name)} {cols}) (symmetries-of sh {len(edges) + 1}))) :ruleset slotted-shape)
+       (set {cached} (values {shapeof} (symmetries-of sh {len(edges) + 1})))) :ruleset slotted-shape)
 (rule ((= c {row})
-       (= syms ({syms_table(name)} {cols}))
+       {bound}
+       (= (values {outputs} back syms) {cached})
        (= cs ({symbols.class_slots} c)))
       ((set ({symbols.group} c) (group-restrict syms cs))) :ruleset slotted-group)
 """
@@ -753,8 +751,7 @@ def emit(language, sort="U", symbols=None):
         ]
         out += [
             ";; every row into the index, its shape for the dedup, and what it says about its class's symmetries",
-            declare_syms_table(name, sig, symbols),
-            declare_shapeof_table(name, sig, symbols),
+            declare_shapeof_table(name, sig),
             shape_index(name, sig, symbols),
         ]
         out += [

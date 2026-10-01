@@ -432,15 +432,19 @@ the reference's hashcons on shapes: one lookup per row.
 (function _shape_Add (Renaming Math Renaming Math) (Math Renaming)
   :merge ((set (ShapeEqual old0 (compose old1 (inverse new1)) new0) ())
           (values old0 old1)))
-(function _syms_Add (Renaming Math Renaming Math) Group :merge new)
+(function _shapeof_Add (Renaming Group Renaming Group)
+  (Renaming Renaming Renaming Group) :no-merge)
 
 (rule ((= c (Add m1 c1 m2 c2))
        (= g1 (EclassGroup c1)) (= g2 (EclassGroup c2))
        (= sh (node-shape (vec-of m1 m2) (vec-of g1 g2))))
       ((set (_shape_Add (vec-get sh 0) c1 (vec-get sh 1) c2) (values c (vec-get sh 2)))
-       (set (_syms_Add m1 c1 m2 c2) (symmetries-of sh 3))) :ruleset slotted)
+       (set (_shapeof_Add m1 g1 m2 g2)
+            (values (vec-get sh 0) (vec-get sh 1) (vec-get sh 2)
+                    (symmetries-of sh 3)))) :ruleset slotted)
 (rule ((= c (Add m1 c1 m2 c2))
-       (= syms (_syms_Add m1 c1 m2 c2))
+       (= g1 (EclassGroup c1)) (= g2 (EclassGroup c2))
+       (= (values s1 s2 back syms) (_shapeof_Add m1 g1 m2 g2))
        (= cs (ClassSlots c)))
       ((set (EclassGroup c) (group-restrict syms cs))) :ruleset slotted)
 ```
@@ -456,8 +460,8 @@ function, and one rule per sort hands its rows to `Equated`.
 The tail is what a node says about its *own* class: a reading that spells the node the
 same way up to a renaming of the node's own slots says the class equals itself under
 that renaming, which is how a child's symmetry becomes its parent's. That is the
-reference's `determine_self_symmetries`. The index rule keeps it, per row, in
-`_syms_Add`, and a second rule carries it into the group, because that write waits for
+reference's `determine_self_symmetries`. The index rule caches it with the shape in
+`_shapeof_Add`, and a second rule carries it into the group, because that write waits for
 one more thing: the class's slots, on which the symmetries are spelled before they
 enter the group (C15). A row may carry a slot its class has dropped, and a symmetry
 over it is what the group's normalisation strips; written unrestricted, every re-firing
@@ -777,30 +781,37 @@ and migrated again; this caused the version without deduplication to stall on
 One row is enough, and one is what the reference's hashcons keeps. The merge block has
 already recorded the symmetry between the two readings, and a pattern reaches the
 other reading through the class's group and its children's (C5). So the shape walk
-writes every row's shape into `_shapeof_Add` -- the least spelling of its edges over
-its children's groups, and the renaming back to the row's own names, as columns -- and
+writes the shape into `_shapeof_Add` -- the least spelling of its edges over
+its children's groups, the renaming back, and the node's symmetries, as columns -- and
 where two live rows of one class have the same children and the same shape, the one
 whose edges, as a vector, are the greater is deleted. Both rows are matched as rows,
 so the rule only ever compares nodes that exist, and comparing the rows whole is what
 makes exactly one of any two go.
 
 ```
-(function _shapeof_Add (Renaming Math Renaming Math) (Renaming Renaming Renaming)
-  :merge (values new0 new1 new2))
+(function _shapeof_Add (Renaming Group Renaming Group)
+  (Renaming Renaming Renaming Group) :no-merge)
 
 ;; written by the shape walk of the index rule, from the same `node-shape`
-       (set (_shapeof_Add m1 c1 m2 c2) (values (vec-get sh 0) (vec-get sh 1) (vec-get sh 2)))
+       (set (_shapeof_Add m1 g1 m2 g2)
+            (values (vec-get sh 0) (vec-get sh 1) (vec-get sh 2) (symmetries-of sh 3)))
 
 (rule ((= c (Add m1 c1 m2 c2))
-       (= (values s1 s2 b1) (_shapeof_Add m1 c1 m2 c2))
+       (= g1 (EclassGroup c1)) (= g2 (EclassGroup c2))
+       (= (values s1 s2 b1 syms1) (_shapeof_Add m1 g1 m2 g2))
        (= c (Add n1 c1 n2 c2))
-       (= (values s1 s2 b2) (_shapeof_Add n1 c1 n2 c2))
+       (= (values s1 s2 b2 syms2) (_shapeof_Add n1 g1 n2 g2))
        (= v1 (vec-of m1 m2))
        (= v2 (vec-of n1 n2))
        (!= v1 v2)
        (= v1 (ordering-max v1 v2)))
       ((delete (Add m1 c1 m2 c2))) :ruleset slotted)
 ```
+
+The cache key contains the computation's immutable inputs: edge maps and group
+values. A changed child group selects a different entry. Child class ids are absent,
+so a native union cannot merge an obsolete cached result over a current one. The
+symmetry rule and deduplication both read the entry for the current child groups.
 
 ## One reading per coset of the pinned slots
 
@@ -978,7 +989,11 @@ Three of the primitives do more than their signature says, for the same reason.
 
 `node-shape` walks the product of the children's groups once and returns the canonical
 edges, the renaming back, and the node's own symmetries together, so the key and the
-symmetries cost one walk, with `_syms_F` carrying the tail to the rule that waits.
+symmetries cost one walk, with `_shapeof_F` carrying both to their consumers.
+
+Interned frames share immutable storage, so reading a frame in a primitive does
+not copy its partition or slot maps. `vec-get` and `vec-length` borrow the vector's
+storage as well; selecting one refinement does not copy all its siblings.
 
 `group-coset-reps` chooses the least element of each coset, so the reading a rule sees
 does not depend on the order egglog stored the group in.
