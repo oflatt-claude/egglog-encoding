@@ -68,6 +68,19 @@ def complete_refinement():
     assert enc.graph.summary() == (77, 280) == (ref.classes, ref.nodes)
 
 
+def retained_symmetries():
+    """Deleting follower self-edges beside native unions could erase a leader's identity.
+
+    Four rounds of the second Sigma-MMM phase expose this, without the full
+    workload's runtime. Reading the graph checks the recorded group's identity
+    and closure before comparing counts and a witness against the reference.
+    """
+    enc, ref = E.sdql_rows([("mmm_sum", "2nd")], 44, 4, ("encoding", "ref-multi"), True, 60)
+    assert enc.graph is not None and ref.graph is not None, (enc.graph_issue, ref.graph_issue)
+    assert (enc.classes, enc.nodes) == (ref.classes, ref.nodes)
+    assert enc.verdict(ref) == "isomorphic", enc.vs_ref
+
+
 def verdicts():
     # Same class/node counts on both sides; only the symmetry group differs.
     # Exercise both sides of the former 40-class cutoff.
@@ -441,8 +454,9 @@ def main():
     summary_reporting()
     zero_round_budget()
     complete_refinement()
+    retained_symmetries()
     exit_status(*verdicts())
-    print("OK: complete refinement, separate count checks, exact graph verdicts, and evaluation exit statuses")
+    print("OK: complete refinement, retained symmetries, count checks, graph verdicts, and evaluation exit statuses")
 
 
 if __name__ == "__main__":

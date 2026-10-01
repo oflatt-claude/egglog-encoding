@@ -97,10 +97,12 @@ If a follower has two leaders, `R(a,m,b)` and `R(a,n,c)`, maintenance derives
 `Equated(b,inverse(m) ∘ n,c)` and removes the greater competing edge. These deletions
 operate only on maps already restricted to current support.
 
-A follower's self-symmetry `g` is transported to its leader along `m` by conjugation,
-`inverse(m) ∘ g ∘ m`, before the follower's self-edge is removed. Leaders retain
-identity and symmetry rows; composition closes their groups. No whole-group value
-or separate group index is involved.
+Composing a follower's self-symmetry `g` with its edge `m` to a leader, then
+reconciling that edge with `m`, transports the symmetry to the leader by conjugation.
+Followers retain their self-edges. Deleting them in the same phase as native unions
+can delete a leader's symmetry after the two values become equal; semi-naive
+evaluation need not rederive it. Composition closes the symmetry rows under
+composition. No whole-group value or separate group index is involved.
 
 Two egglog values can be unioned when they denote the same invocation:
 
@@ -333,8 +335,9 @@ python3 slotted/eval.py array --params 0 --side encoding,ref-multi \
 mutation tests of the graph checker, curated differential comparisons, and generated
 cases. The corpus covers symmetry, redundancy, binder collisions, transitive
 renamings, complete refinement, substitution, and the array and SDQL languages.
-`spot-check.py` independently counts live constructor rows and class leaders for
-Array N=0 and reports one process timing per side. It imports no eval or graph
+`spot-check.py` runs Array N=0, independently counting live constructor rows for
+nodes and subtracting follower values from `ClassSlots` entries for classes. It
+reports one process timing per side. It imports no eval or graph
 comparison helpers.
 
 `eval.py` supports the paper's full array and SDQL workloads on this branch.

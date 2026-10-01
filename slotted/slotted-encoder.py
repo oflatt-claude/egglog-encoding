@@ -638,11 +638,6 @@ def carrier_core(s):
       (({s.equated} b (compose (inverse m) n) c)
        (delete ({s.renames} a m b))) :ruleset slotted)
 
-;; Move a follower's symmetries to its leader before removing its self-edges.
-(rule (({s.renames} f g f) ({s.renames} f m l) (!= f l))
-      (({s.equated} l (compose (inverse m) (compose g m)) l)
-       (delete ({s.renames} f g f))) :ruleset slotted)
-
 ;; Normalize old edges and symmetries after either endpoint loses slots.
 (rule (({s.renames} a m b)
        (= sa ({s.class_slots} a)) (= sb ({s.class_slots} b))

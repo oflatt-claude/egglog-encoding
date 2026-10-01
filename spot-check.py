@@ -99,15 +99,17 @@ rhs _p (lam $in (app (app map ?f) (app (app map (lam $x ?gx)) (var $in))))
 cond notin $x f
 """  # noqa: E501
 
-# Maintenance leaves one live constructor row per node, and each RenamesToLeader
-# target is a slotted-class leader. Count those directly, without JSON decoding or
-# isomorphism. Include Var, and exclude all auxiliary tables from the node count.
+# Maintenance leaves one live constructor row per node. A slotted class may have
+# several native values: subtract values with a smaller leader from ClassSlots.
+# This also works when followers retain self-edges. Include Var in the node count.
 COUNTS = """
 (ruleset spot-count)
-(relation SpotClass (U))
-(rule ((RenamesToLeader_0 a m leader)) ((SpotClass leader)) :ruleset spot-count)
+(relation SpotFollower (U))
+(rule ((RenamesToLeader_0 a m leader) (!= a leader) (= a (ordering-max a leader)))
+      ((SpotFollower a)) :ruleset spot-count)
 (run spot-count 1)
-(print-size SpotClass)
+(print-size ClassSlots_0)
+(print-size SpotFollower)
 (print-size SlottedVar_0)
 (print-size Lam)
 (print-size App)
@@ -152,8 +154,8 @@ def main() -> None:
         ref, ref_seconds = run([str(ROOT / "slotted/xmulti/target/release/xmulti")], REFERENCE)
 
     counts = [int(line) for line in enc.splitlines() if line.strip().isdigit()]
-    assert len(counts) == 7, enc
-    enc_sizes = counts[0], sum(counts[1:])
+    assert len(counts) == 8, enc
+    enc_sizes = counts[0] - counts[1], sum(counts[2:])
     assert "CONFIG checks=off" in ref and "CONFIG substitution=snapshot" in ref, ref
     [sizes] = [line.split()[1:] for line in ref.splitlines() if line.startswith("SIZES ")]
     ref_sizes = tuple(map(int, sizes))
