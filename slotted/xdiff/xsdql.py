@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """Differential tester for the reference `sdql` language and its rewrite rules.
 
-The 44-rule SDQL port had no external validation: every other differential check
-in `slotted/` runs on the toy language or on the paper's array
-language, and the SDQL rules were only ever self-checked against
-`slotted/tests/sdql-rewrites.egg`. This compares them against the reference
-`slotted-egraphs` implementation, the same way `xarray.py` does for the array
-language.
+Compares the 44-rule SDQL library against the reference `slotted-egraphs`
+implementation, the same way `xarray.py` does for the array language.
 
 The two sides:
 
@@ -14,9 +10,8 @@ The two sides:
               `slotted-egraphs/benches/sdql.rs`, flattened into the same
               `MultiPattern` atoms as the encoding. Nested `ematch_all` is a
               different pattern language and is not used as an oracle here.
-  encoding    the compiled rule LIFTED VERBATIM out of
-              `gen-sdql-rules.py` by its `:name`, so what runs is the
-              generated artifact and not a re-derivation of it.
+  encoding    the selected rewrite from `languages/sdql-rules.egg`, compiled
+              directly by the source compiler used for slotted programs.
 
 `beta` is compiled too. Its right-hand side becomes `slotted-subst` plus the frame
 plumbing needed to return an invocation rather than only an e-class. Capture,
@@ -35,7 +30,6 @@ Usage:
 """
 
 import functools
-import importlib.util
 import os
 import subprocess
 import sys
@@ -49,13 +43,6 @@ SYM = slotenc.carrier_symbols(("U",))["U"]
 
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
-# The generated encoding rules. Lifted by `:name`, never rewritten.
-#: the compiled sdql rules, from the generator rather than a build artifact
-_gen_spec = importlib.util.spec_from_file_location("gsr", ROOT / "slotted" / "gen-sdql-rules.py")
-gsr = importlib.util.module_from_spec(_gen_spec)
-_gen_spec.loader.exec_module(gsr)
-# `target/slotted/slotted-lang-sdql.egg` is the SDQL language plus the machinery it includes.
-#: the sdql language's machinery, compiled rather than read from `target/`
 MACHINERY = machinery("sdql")
 
 # The source-level regression fixtures.  Python supplies the differential-test
@@ -76,8 +63,8 @@ BINDER_FIXTURE = ROOT / "slotted" / "tests" / "sdql-binders.egg"
 #
 # The encoding of one is NOT written here: `slotted-encoder.py` owns `slots` /
 # `edge` / `enc` / `sexpr` / `shift`, and the columns it walks are read off
-# `slotted/languages/sdql.egg` -- the same file `gen-sdql-rules.py`
-# compiles the rules against. So a term cannot come to disagree with the rule that
+# `slotted/languages/sdql.egg`, which also declares the rules
+# compiler's constructors. So a term cannot come to disagree with the rule that
 # has to match it about a node's arity, its payload columns, or which of its
 # children it binds: `sum`, `merge` and `let` bind their columns 1&2, 2&3&4 and 1
 # because that file's `:binder` says they do, and nothing here restates it.
@@ -311,26 +298,17 @@ def _rule_from_parts(src, parts):
     return Rule(parts["name"], lhs, rhs, conds=parts["conds"], atoms=atoms)
 
 
-#: The rules, read from `slotted/languages/sdql.egg` -- the same file `gen-sdql-rules.py`
-#: compiles -- with each side rendered in the oracle's syntax. The cases below ask for
-#: one by name.
-def _load_rules():
-    src = sc.Source(SDQL_SRC_RULES)
-    out = {}
-    for form in sc.parse(SDQL_SRC_RULES.read_text()):
-        if not (isinstance(form, list) and form and form[0] == "rewrite"):
-            continue
-        r = sc.rewrite_parts(src, form)
-        out[r["name"]] = _rule_from_parts(src, r)
-    return out
+#: Source rewrites shared by the encoding and the reference rule translation.
+SOURCE = sc.Source(SDQL_SRC_RULES)
+SOURCE_RULES = {
+    sc.rule_name(SOURCE, form): form for form in sc.parse(SDQL_SRC_RULES.read_text()) if form[:1] == ["rewrite"]
+}
 
-
-RULES = _load_rules()
+RULES = {name: _rule_from_parts(SOURCE, sc.rewrite_parts(SOURCE, form)) for name, form in SOURCE_RULES.items()}
 
 # The substitution cases below use the runnable fixture's beta definition on the
-# reference side.  The encoding side still lifts the production generated rule by
-# name; this exact check makes a drift between those two sources explicit rather than
-# relying on three examples to happen to distinguish it.
+# reference side. The encoding compiles the corresponding library rule. This
+# exact check catches drift between the two sources.
 _beta_src, _beta_parts = _fixture_rewrites(BETA_FIXTURE, "beta")
 BETA_RULE = _rule_from_parts(_beta_src, _beta_parts["beta"])
 if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
@@ -339,16 +317,8 @@ if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
 
 @functools.cache
 def egg_rule(name):
-    """The compiled text for the rule of that name, lifted out of the generated file:
-    the relation its matches wait in and the two rules that fill and drain it (C13),
-    exactly as `gen-sdql-rules.py` wrote them under the rule's `;; name` line."""
-    text = gsr.compiled_rules()[0]
-    marker = f"\n;; {name}\n"
-    i = text.find(marker)
-    if i < 0:
-        raise KeyError(f"no compiled rule named {name!r} among the generated sdql rules")
-    j = text.find("\n;; ", i + len(marker))
-    return text[i + len(marker) : j if j >= 0 else len(text)].strip()
+    """Compile the selected source rewrite into the harness's `sdql` ruleset."""
+    return sc.compile_rewrite(SOURCE, SOURCE_RULES[name], ruleset="sdql").strip()
 
 
 # ---------------------------------------------------------------------- the cases

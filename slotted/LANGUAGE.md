@@ -51,8 +51,8 @@ slotted child. Programs may have several independent carriers, either as separat
 Each carrier gets its own variable constructor and its own
 `RenamesToLeader_N`, `Equated_N`, `ClassSlots_N`, and `SubstPending_N` tables;
 `Renaming`, `Namings`, `Idx`, layout metadata, and the `slotted` schedule are shared.
-The suffix is the carrier's zero-based declaration order. A one-carrier program keeps
-the historical unsuffixed table names and encoding behavior.
+The suffix is the carrier's zero-based declaration order. A one-carrier program uses
+suffix `_0`, so adding another carrier does not rename its existing tables.
 
 For now every constructor is homogeneous: all its slotted children must have the same
 carrier as its result. Thus `(constructor App (Expr Expr) Expr)` is supported, while

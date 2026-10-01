@@ -132,7 +132,7 @@ impl fmt::Debug for Name {
 
 /// Where a slot shows up in a match.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Occ {
+enum Occ {
     /// slot `s` of the e-node matched at the atom with this label
     Node(AtomId, i64),
     /// slot `t` of the class this variable is bound to
@@ -194,8 +194,6 @@ pub enum Binding {
     },
     /// a payload leaf reached through its own class: it names node slots, nothing more
     Leaf { edge: Renaming },
-    /// contract violations to commit on purpose, for mutation testing
-    Bugs(BTreeSet<String>),
 }
 
 pub type Bd = Boxed<Binding>;
@@ -212,7 +210,7 @@ pub type Ns = Boxed<Names>;
 /// (C5). A further occurrence of a variable is bound this way, so the match quantifies
 /// over the group without the query enumerating it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Pending {
+struct Pending {
     atom: AtomId,
     var: PVarId,
     /// class slot -> node slot; the identity on the class slots for a root
@@ -232,8 +230,6 @@ pub struct Frame {
     class_slots: BTreeMap<PVarId, SlotSet>,
     /// every literal, and whether refinement may merge a placeholder into its block
     literals: BTreeMap<Name, bool>,
-    /// deliberate violations of the contract, for mutation testing
-    bugs: BTreeSet<String>,
     /// the variable whose class slots name the pattern's slots: a block holding
     /// `Var(anchor, t)` is slot `t`, the rest take the smallest free numbers
     anchor: Option<PVarId>,
@@ -261,14 +257,6 @@ impl Frame {
             return None;
         }
         let atom = AtomId::new(label);
-        let bugs: BTreeSet<String> = bindings
-            .iter()
-            .filter_map(|b| match b {
-                Binding::Bugs(bugs) => Some(bugs.iter().cloned()),
-                _ => None,
-            })
-            .flatten()
-            .collect();
         let mut node_slots: BTreeSet<i64> = BTreeSet::new();
         let mut eqs: Vec<(Occ, Occ)> = Vec::new();
         let mut occs: BTreeSet<Occ> = BTreeSet::new();
@@ -348,7 +336,6 @@ impl Frame {
                     *entry |= carried;
                 }
                 Binding::Leaf { edge } => node_slots.extend(edge.values().copied()),
-                Binding::Bugs(_) => {}
             }
         }
         occs.extend(node_slots.iter().map(|&s| Occ::Node(atom.clone(), s)));
@@ -356,7 +343,6 @@ impl Frame {
             blocks: close(occs, &eqs),
             class_slots,
             literals,
-            bugs,
             anchor: None,
             pending,
         };
@@ -390,7 +376,6 @@ impl Frame {
             blocks: close(occs, &eqs),
             class_slots,
             literals,
-            bugs: self.bugs.union(&other.bugs).cloned().collect(),
             anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
             pending: self.pending.iter().chain(&other.pending).cloned().collect(),
         };
@@ -527,27 +512,14 @@ impl Frame {
             .collect()
     }
 
-    fn has_bug(&self, bug: &str) -> bool {
-        self.bugs.contains(bug)
-    }
-
     /// No clique has two members in one block.
     fn consistent(&self) -> bool {
         self.blocks.iter().all(|block| {
             block
                 .iter()
                 .enumerate()
-                .all(|(i, o)| block[i + 1..].iter().all(|p| !self.violated(o, p)))
+                .all(|(i, o)| block[i + 1..].iter().all(|p| !apart(o, p)))
         })
-    }
-
-    /// `apart`, less the cliques a bug switches off.
-    fn violated(&self, o: &Occ, p: &Occ) -> bool {
-        let bug = match (o, p) {
-            (Occ::Lit(_), Occ::Lit(_)) => "literals-alias",
-            _ => "no-cliques",
-        };
-        apart(o, p) && !self.has_bug(bug)
     }
 
     /// The block an occurrence lies in.
@@ -711,9 +683,7 @@ impl Frame {
                 continue;
             }
             out.push(frame.clone());
-            if !frame.has_bug("no-refine") {
-                frame.walk(&mut seen, &mut out);
-            }
+            frame.walk(&mut seen, &mut out);
         }
         out
     }
@@ -818,8 +788,6 @@ impl BaseSort for FrameSort {
     fn register_primitives(&self, eg: &mut EGraph) {
         // a frame with no constraints
         add_primitive!(eg, "frame" = | | -> Fr { Fr::new(Frame::default()) });
-        // contract violations an atom commits on purpose, for mutation testing
-        add_primitive!(eg, "bugs" = [xs: S] -> Bd { Bd::new(Binding::Bugs(xs.map(|s| s.as_str().to_owned()).collect())) });
         // one atom's constraints: `(atom "label" binding...)`, the label first because the
         // macro's varargs are of one sort
         eg.add_pure_primitive(

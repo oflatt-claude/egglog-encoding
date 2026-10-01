@@ -9,9 +9,8 @@ So each mutation below removes exactly one join from one rule and names the clai
 must then break. A mutation the file still passes is a claim that is not testing what
 its comment says.
 
-This is the .egg corpus's counterpart to `xdiff/mutations.py`, which puts past bugs back
-into the compiler and requires the curated cases to notice. Same idea, different subject:
-here the rules are mutated and the file's own claims are what must notice.
+The mutations change source rules in temporary files; the compiler and Rust
+primitives always run their normal implementations.
 
     python3 slotted/checks/check-multipattern-teeth.py
 """

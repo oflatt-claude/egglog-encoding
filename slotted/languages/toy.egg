@@ -7,8 +7,8 @@
 ;;; Nothing here means anything. `xdiff.py` compares the encoding against the reference
 ;;; over generated terms, and a neutral language is the point: seven arity-2 operators
 ;;; with no rewrite rules and no algebra, so a disagreement is about the ENCODING and
-;;; never about a rule being wrong. `Lam` is the one binder, and `Null` comes from
-;;; the machinery along with `Var`.
+;;; never about a rule being wrong. `Lam` is the one binder; the compiler supplies
+;;; the variable constructor.
 ;;;
 ;;; `sub2` exists because `sub` is a reference tag in more than one of the oracle's
 ;;; languages; see `toy.ref`.
@@ -32,6 +32,5 @@
 ;;; `Number(u32)` in `xmulti` -- so it is asked the same question.
 (constructor Num (i64) U)                        ; Number(u32)               a payload
 
-;;; Declared for the record, the way `lambda.egg` declares its leaves: `Null` already
-;;; exists in the hand-written half of the machinery, so `emit` skips its rules.
+;;; The nullary constructor supplies a closed term for the generated cases.
 (constructor Null () U)

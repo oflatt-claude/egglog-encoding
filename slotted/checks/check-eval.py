@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regressions for complete refinement and trustworthy evaluation verdicts."""
 
+import argparse
 import json
 import os
 import subprocess
@@ -12,7 +13,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
 import eval as E  # noqa: E402
-import partition as PT  # noqa: E402
+import eval_report as R  # noqa: E402
 import xdiff as X  # noqa: E402
 
 
@@ -20,7 +21,7 @@ def graphs(name, program, spec):
     enc, ref = (E.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
     E.encoding_counts(program, name, X.LANG, enc, 60)
     E.run_reference(spec, ref, 60, True)
-    assert enc.graph is not None and ref.dump is not None, (name, enc.as_dict("test"), ref.as_dict("test"))
+    assert enc.graph is not None and ref.graph is not None, (name, enc.as_dict("test"), ref.as_dict("test"))
     E.compare([enc, ref])
     return enc, ref
 
@@ -81,9 +82,9 @@ def verdicts():
         E.compare([enc, ref])
     assert enc.verdict(ref).startswith("inconclusive:"), enc.vs_ref
     assert E.compare_counts(enc, ref) == "same counts"
-    assert f"{enc.classes}/{enc.nodes}" in E.graph_cell(enc)
+    assert f"{enc.classes}/{enc.nodes}" in R.graph_cell(enc)
 
-    witness, why = E.ISO.find_isomorphism(E.ISO.parse_reference(ref.dump), enc.graph)
+    witness, why = E.ISO.find_isomorphism(ref.graph, enc.graph)
     assert witness is not None, why
     # Even a broken checker that always accepts must not override the simple counts.
     for side in (enc, ref):
@@ -106,15 +107,12 @@ def verdicts():
         E.compare([enc, ref])
     assert enc.verdict(ref).startswith("inconclusive: witness rejected"), enc.vs_ref
 
-    saved = ref.dump
-    for unavailable in (None, "CLASS c SLOTS x\nGROUP c ?\n"):
-        ref.dump = unavailable
+    with patch.object(ref, "graph", None):
         E.compare([enc, ref])
-        assert enc.verdict(ref).startswith("inconclusive:"), enc.vs_ref
-    ref.dump, enc.graph = saved, None
+        assert enc.verdict(ref) == "inconclusive: no reference graph"
+    enc.graph = None
     E.compare([enc, ref])
     assert enc.verdict(ref) == "inconclusive: no encoding graph"
-    assert PT.verdict({"split": {}, "merged": {}}, 0, True) == "same partition (graph equality unverified)"
     return enc, ref
 
 
@@ -184,7 +182,7 @@ def goal_reporting():
     nested.seconds = 1.2
     for outcome in ("no", "timeout", "error"):
         nested.goal = outcome
-        head, table = E.pivot([enc, nested], E.SIDES)
+        head, table = R.pivot([enc, nested], E.SIDES)
         cells = dict(zip(head, table[0], strict=True))
         enc_goal = next(k for k in head if k.startswith("encoding goal"))
         nested_goal = next(k for k in head if k.startswith("ref-nested goal"))
@@ -192,11 +190,11 @@ def goal_reporting():
         assert cells["encoding elapsed (s)"] == "2.3"
         assert cells["ref-nested elapsed (s)"] == "1.2"
         assert cells["ref-multi goal"] == cells["ref-multi elapsed (s)"] == ""
-        assert E.graph_cell(nested) in table[0]
+        assert R.graph_cell(nested) in table[0]
         assert not E.successful([enc, nested], ("encoding", "ref-nested"), True)
-        for rendered in (E.markdown(head, table), E.html([("Full report", "", head, table)])):
+        for rendered in (R.markdown(head, table), R.html([("Full report", "", head, table)])):
             assert "elapsed (s)" in rendered and "no (1.2)" not in rendered
-        long = dict(zip(E.LONG_HEAD, E.long_cells(nested), strict=True))
+        long = dict(zip(R.LONG_HEAD, R.long_cells(nested), strict=True))
         assert long["goal"] == outcome and long["seconds"] == "1.2"
 
 
@@ -205,7 +203,7 @@ def summary_reporting():
     enc.goal, enc.seconds, enc.nodes, enc.classes, enc.saturated = "yes", 1.2, 1_234, 56, "yes"
     nested = E.Row("sdql", enc.case, "ref-nested", 30, 44)
     nested.goal, nested.seconds = "no", 0.5
-    head, table = E.summary([nested, enc], E.SIDES)
+    head, table = R.summary([nested, enc], E.SIDES)
     cells = [dict(zip(head, row, strict=True)) for row in table]
     assert [row["System"] for row in cells] == list(E.SIDES)
     assert [row["Goal"] for row in cells] == ["yes", "missing", "no"]
@@ -219,7 +217,7 @@ def summary_reporting():
     for goal in ("timeout", "error: detailed diagnostic", "?"):
         nested.goal = goal
         nested.seconds, nested.nodes, nested.classes = None, None, 0
-        head, table = E.summary([nested], ("ref-nested",))
+        head, table = R.summary([nested], ("ref-nested",))
         cells = dict(zip(head, table[0], strict=True))
         assert cells["Goal"] == ("error" if goal.startswith("error") else goal)
         assert cells["Elapsed (s)"] == cells["Nodes"] == "—" and cells["Classes"] == "0"
@@ -231,7 +229,7 @@ def summary_reporting():
     array = E.Row("array", "goal-2d-4f-N3", "encoding", 6)
     custom = E.Row("custom", "<case&>", "encoding", 1, 7)
     rows = [enc, nested, small, full, longer, array, custom]
-    head, table = E.summary(rows, ("encoding",))
+    head, table = R.summary(rows, ("encoding",))
     labels = [row[0] for row in table]
     assert labels == [
         "MMM (1st)",
@@ -247,7 +245,7 @@ def summary_reporting():
         path, page = Path(tmp) / "report.jsonl", Path(tmp) / "report.html"
         record = "".join(json.dumps(row.as_dict("summary")) + "\n" for row in rows)
         path.write_text(record)
-        summary = E.markdown(*E.summary(rows, E.SIDES))
+        summary = R.markdown(*R.summary(rows, E.SIDES))
         for long in (False, True):
             result = subprocess.run(
                 [
@@ -268,8 +266,8 @@ def summary_reporting():
             assert result.returncode == 1, result.stderr
             assert result.stdout.startswith("## Summary\n\n" + summary)
             assert result.stdout.count("## Full report") == 1
-            full_table = (E.LONG_HEAD, [E.long_cells(r) for r in rows]) if long else E.pivot(rows, E.SIDES)
-            assert E.markdown(*full_table) in result.stdout
+            full_table = (R.LONG_HEAD, [R.long_cells(r) for r in rows]) if long else R.pivot(rows, E.SIDES)
+            assert R.markdown(*full_table) in result.stdout
             markup = page.read_text()
             assert markup.count("<table>") == 2
             assert "<h2>Summary</h2>" in markup and "<h2>Full report</h2>" in markup
@@ -296,8 +294,8 @@ rule
             E.run_reference(spec, row, 30, True)
         assert row.goal == "yes", row.as_dict("test")
         assert row.substitution == policy
-        assert f"CONFIG substitution={policy}" in row.dump
-        graph = E.ISO.parse_reference(row.dump)
+        graph = row.graph
+        assert graph is not None, row.graph_issue
         assert (row.classes, row.nodes) == graph.summary()
         # Both the timed and counting runs chose the intended substituted node.
         other = "f" if op == "g" else "g"
@@ -308,11 +306,11 @@ rule
             for tag, elems in nodes
             if elems == (("child", null, ()), ("child", null, ()))
         }
-        assert op in substituted and other not in substituted, row.dump
+        assert op in substituted and other not in substituted, graph.nodes
         loaded = E.Row.from_dict(row.as_dict("test"))
         assert loaded.substitution == policy
-        assert f"subst {policy}" in E.long_cells(loaded)[2]
-        assert f"subst {policy}" in E.pivot([loaded], (side,))[0][4]
+        assert f"subst {policy}" in R.long_cells(loaded)[2]
+        assert f"subst {policy}" in R.pivot([loaded], (side,))[0][4]
 
 
 def merged_observations():
@@ -364,7 +362,7 @@ def merged_observations():
     full = E.Row("sdql", "batax", "ref-multi", 12, 44)
     small.checks, full.checks = "off", None
     small.substitution = full.substitution = "snapshot"
-    head, table = E.pivot([small, full], ("ref-multi",))
+    head, table = R.pivot([small, full], ("ref-multi",))
     assert len(table) == 2 and {row[3] for row in table} == {"12", "44"}
     assert "subst snapshot" in head[4] and "checks off/unknown" in head[4]
 
@@ -379,7 +377,7 @@ def graph_failure_reasons():
             E.encoding_counts("", "timeout", X.LANG, failed, 1)
         assert "exceeded timeout" in failed.graph_issue
         assert E.Row.from_dict(failed.as_dict("test")).graph_issue == failed.graph_issue
-        assert failed.graph_issue in E.graph_cell(failed)
+        assert failed.graph_issue in R.graph_cell(failed)
 
         def dump(args, **_kwargs):
             Path(args[-1]).with_suffix(".json").write_text("{}")
@@ -397,15 +395,39 @@ def graph_failure_reasons():
                 raise AssertionError("a programming error was silently swallowed")
         assert not list(Path(tmp).iterdir())
 
-    reference = E.Row("regression", "diagnostics", "ref-multi", 1)
     timed = subprocess.CompletedProcess([], 0, "GOAL yes\nCONFIG substitution=snapshot\n", "")
-    limited = subprocess.CompletedProcess([], 1, "", "REFERENCE_LIMIT: symmetry enumeration is capped")
-    with patch.object(E.subprocess, "run", side_effect=[timed, limited]):
-        E.run_reference("", reference, 1, True)
-    assert reference.goal == "yes" and "symmetry enumeration" in reference.graph_issue
-    failed = row()
-    E.compare([failed, reference])
-    assert "symmetry enumeration" in failed.verdict(reference)
+    for code, stdout, stderr, reason in (
+        (1, "", "REFERENCE_LIMIT: symmetry enumeration is capped", "symmetry enumeration"),
+        (0, "CLASS c SLOTS x\nGROUP c ?\n", "", "reference graph unreadable"),
+        (0, "", "", "reference graph dump is empty"),
+    ):
+        reference = E.Row("regression", "diagnostics", "ref-multi", 1)
+        dump = subprocess.CompletedProcess([], code, stdout, stderr)
+        with patch.object(E.subprocess, "run", side_effect=[timed, dump]):
+            E.run_reference("", reference, 1, True)
+        assert reference.goal == "yes" and reason in reference.graph_issue
+        assert reference.graph is None and reference.classes is None and reference.nodes is None
+        failed = row()
+        E.compare([failed, reference])
+        assert reason in failed.verdict(reference)
+
+
+def zero_round_budget():
+    """An explicit zero must not silently run the paper's default budget."""
+    args = argparse.Namespace(
+        no_build=True,
+        study="all",
+        params=[0],
+        kernel=["mmm"],
+        phase=["1st"],
+        rules=44,
+        rounds=0,
+        counts=False,
+        timeout=30,
+    )
+    rows = E.collect(args, ("ref-multi",), argparse.ArgumentParser())
+    assert len(rows) == 2
+    assert all(row.rounds == 0 and row.goal == "no" for row in rows), [vars(row) for row in rows]
 
 
 def main():
@@ -417,6 +439,7 @@ def main():
     graph_failure_reasons()
     goal_reporting()
     summary_reporting()
+    zero_round_budget()
     complete_refinement()
     exit_status(*verdicts())
     print("OK: complete refinement, separate count checks, exact graph verdicts, and evaluation exit statuses")

@@ -8,10 +8,8 @@
 ;;; `slotted/tests/sdql-paper/` and by `slotted/eval.py`, with
 ;;; `slotted/checks/check-paper-sdql.py` pinning their provenance.  Written at the slotted level, a rule says
 ;;; what it rewrites and nothing about renamings -- `slotted/slotted-egglog.py` turns
-;;; it into egglog, and
-;;; `slotted/gen-sdql-rules.py` compiles these same rules into
-;;; `gen-sdql-rules.py` for the .egg tests and the differential
-;;; harness. Both read THIS file, so they cannot disagree.
+;;; it into egglog for both the source tests and the differential harness.
+;;; The rules live in `slotted/languages/sdql-rules.egg`.
 ;;;
 ;;; THE COUNT. The later bench DEFINES 46 rules and RUNS 44; this file carries those
 ;;; 44, and `slotted/checks/check-reference-rules.py` compares their normalised LHS, RHS, and
@@ -23,10 +21,6 @@
 ;;; never reached -- the second is even marked `#[allow(unused)]` -- so carrying either
 ;;; would DIVERGE from the reference rather than match it. Both are expressible here if
 ;;; the reference ever starts running them.
-;;;
-;;; `check-front-ends.py` is the cross-check that remains: `sdql-sum-sing.egg` writes
-;;; `sum-sing` by hand in the slotted language, and its compiled form has to match the
-;;; one generated from the copy here.
 ;;;
 ;;; Each `Bind<>` layer in the reference becomes one extra child column here, named by
 ;;; `:binder` and placed where the reference's surface syntax puts it:

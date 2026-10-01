@@ -1,9 +1,8 @@
 ;;; The `sdql` rewrite rules, checked -- at the level they are written.
 ;;;
 ;;; `(include "slotted/languages/sdql-rules.egg")` brings the language and all 44 rules, so this
-;;; file adds only terms and claims. `gen-sdql-rules.py` compiles the same rules into
-;;; `gen-sdql-rules.py`, and `check-front-ends.py` holds
-;;; the two together, so pinning behaviour here pins that file's behaviour too.
+;;; file adds only terms and claims. The differential harness compiles selected
+;;; rewrites directly from the same source.
 ;;;
 ;;; The step counts are deliberately small. The rules are not confluent --
 ;;; `get-to-sum` and `sum-to-get` alone loop -- so a section that needs N steps asks
@@ -165,9 +164,7 @@
 ;;; The hard case: `$x` is a binder of two independently-renamed atoms, so the two
 ;;; bound slots have to be forced onto one pattern slot. Neither atom's bound slot is
 ;;; reachable through its root's edge -- a `let`'s class does not have it -- so the
-;;; first atom to carry it MINTS a name, and the second is only made to agree because
-;;; the literal is passed INTO `find-mapping-total`. Checking it afterwards is too
-;;; late, and `SDQL_BUGS=slot-late` is that mutant: it loses this match.
+;;; frame must identify the two binder occurrences through the shared literal.
 ;;;
 ;;; Only `let-binop4` can put a `let` in a `binop`'s class here, so a `Let` sharing
 ;;; the root's class is the rule having fired. `xsdql.py` checks the same query against

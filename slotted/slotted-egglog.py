@@ -633,7 +633,7 @@ def keywords(src, rest):
     return out
 
 
-def compile_rewrite(src, form, bugs=frozenset(), ruleset=None, name=None, **kw):
+def compile_rewrite(src, form, ruleset=None):
     """`(rewrite lhs rhs [:name n] [:when c] [:lead N] [:fresh $s...])`.
 
     `:lead` names the atom the query starts from, counting over the flattened pattern.
@@ -646,8 +646,7 @@ def compile_rewrite(src, form, bugs=frozenset(), ruleset=None, name=None, **kw):
     `:fresh` names the slots the right-hand side binds that the pattern never mentions,
     so the compiler mints them against everything the match already used.
 
-    `ruleset` and `name` override the form's own `:ruleset` and `:name`, for a
-    generator that places the rules itself.
+    `ruleset` overrides the form's own ruleset for a differential harness.
     """
     parts = rewrite_parts(src, form)
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
@@ -656,7 +655,7 @@ def compile_rewrite(src, form, bugs=frozenset(), ruleset=None, name=None, **kw):
     # egglog reports a rule by its `:name` and takes it as a string literal. It panics
     # on a name already live in the scope, so reuse is only legal once a `(pop)` has
     # removed the earlier rule.
-    name = name or parts["name"]
+    name = parts["name"]
     lhs, rhs = parts["lhs"], parts["rhs"]
     # A pattern has to be a CALL. A bare variable on the left matches every class, so the
     # rule says nothing, and egglog rejects it too. Without this, `flatten` indexes
@@ -689,16 +688,12 @@ def compile_rewrite(src, form, bugs=frozenset(), ruleset=None, name=None, **kw):
         diseq=diseq,
         same=same,
         fresh=fresh,
-        bugs=bugs,
         name=name,
         ruleset=ruleset,
         # `slotted-subst` extracts a term and adds the result back, so it both reads
         # and writes tables: callable from the head of a `:naive` rule, not a seminaive
         # one.
         naive=uses_subst(rhs),
-        # whatever else a caller pins, so a generator that already committed its
-        # output keeps emitting the same text
-        **kw,
     )
 
 

@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
 """A pattern is a conjunction, so the order its atoms are written in cannot matter.
 
-The reference satisfies that by construction -- `multi_ematch` keeps a slot flexible
-and lets `unify` merge it later -- so the order an atom list is given in is invisible
-to it. The encoding compiles a pattern into a CHAIN: one atom leads, fixing
-slots(pattern), and each later atom's frame is solved against what the prefix already
-named. A slot no earlier atom constrains is MINTED, and the mint is a commitment that
-cannot be revisited, so a badly ordered chain loses matches. `connected_order` exists
-to avoid that and requires every atom after the first to share a pattern variable with
-the prefix.
-
-That requirement is necessary and NOT SUFFICIENT, which is what this measures. A shared
-variable bound to a class with no slots -- `null`, or any leaf whose class is slotless
--- carries no slot constraint, so the atom is connected on paper and unconstrained in
-fact. Its slots get minted, and a later atom naming the same slot disagrees.
+The reference combines matches through `unify`; the encoding joins frames and
+then refines the remaining slot placeholders. Both should give the same graph
+regardless of atom order. The compiler's preferred connected order is a query
+ordering convention, not a correctness requirement.
 
 Two reasons this check is worth having beside the differential one:
 

@@ -61,44 +61,6 @@ UNSATURATED = []
 SERIALIZE_LIMITS = ["--max-functions", "1000000", "--max-calls-per-function", "1000000"]
 
 
-# --------------------------------------------------------------- s-expressions
-def parse_sexpr(s, i=0):
-    """Parse one s-expression, returning (tree, next index). Atoms stay strings."""
-    while i < len(s) and s[i].isspace():
-        i += 1
-    if s[i] == "(":
-        i += 1
-        out = []
-        while True:
-            while i < len(s) and s[i].isspace():
-                i += 1
-            if s[i] == ")":
-                return tuple(out), i + 1
-            child, i = parse_sexpr(s, i)
-            out.append(child)
-    if s[i] == '"':
-        j = s.index('"', i + 1)
-        return s[i : j + 1], j + 1
-    j = i
-    while j < len(s) and not s[j].isspace() and s[j] not in "()":
-        j += 1
-    return s[i:j], j
-
-
-def unparse(t):
-    if isinstance(t, str):
-        return t
-    return "(" + " ".join(unparse(k) for k in t) + ")"
-
-
-def as_map(t):
-    """`(map-of 0 1 2 3)` / `(map-empty)` -> {0: 1, 2: 3}."""
-    if isinstance(t, str) or t[0] == "map-empty":
-        return {}
-    xs = [int(v) for v in t[1:]]
-    return dict(zip(xs[0::2], xs[1::2], strict=False))
-
-
 # ------------------------------------------------------------------ the graphs
 class Graph:
     """Classes, each with slots, a symmetry group, and a set of nodes.

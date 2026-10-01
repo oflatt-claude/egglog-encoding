@@ -157,17 +157,6 @@ def signature(cols, binders, sorts=("U",), name="constructor"):
     return sig
 
 
-def read_language_form(form, sorts=("U",)):
-    """One parsed `(constructor Name (U U) U :binder 0)` as `{name: signature}`.
-
-    The list form, for a test that declares its language inline rather than pointing
-    at a file. Same syntax, same meaning.
-    """
-    assert form[0] == "constructor" and isinstance(form[2], list), form
-    name, cols = form[1], form[2]
-    return {name: signature(cols, constructor_options(name, form[4:]), sorts, name)}
-
-
 def read_typed_language_form(form, sorts=("U",)):
     """One constructor declaration with the sort information the generic recipe erases.
 
@@ -280,14 +269,13 @@ def declare(name, sig, sort="U"):
     return f"(constructor {name} ({cols}) {sort})\n"
 
 
-def layout(name, sig, heads=()):
+def layout(name, sig):
     """Runtime layout metadata for ``slotted-subst``.
 
     The primitive cannot distinguish an equality-sort column from a container by
     looking at egglog's erased ``Id`` column type.  The compiler therefore records
-    every physical edge column explicitly.  Binder rows additionally say which edge
-    is the marker, which later edge it covers, and (for the generic string-headed
-    encoding) the payload value that activates the binder.
+    every physical edge column explicitly. Binder rows say which edge is the marker
+    and which later edge it covers.
 
     Column indices are zero-based indices into the encoded constructor inputs, after
     every slotted source column has expanded to ``Renaming <carrier>``.
@@ -316,13 +304,6 @@ def layout(name, sig, heads=()):
         covered = max(bound) + 1
         out += [f'(set (SlottedBinderLayout "{name}" {edges[pos]} {edges[covered]} -1 "") ())' for pos in bound]
 
-    if heads:
-        assert payloads, f"{name}: a string-headed binder needs a payload discriminator"
-        assert len(edges) >= 2, f"{name}: a binder needs a covered child"
-        discriminator = payloads[0]
-        out += [
-            f'(set (SlottedBinderLayout "{name}" {edges[0]} {edges[1]} {discriminator} "{head}") ())' for head in heads
-        ]
     return out
 
 
@@ -631,7 +612,7 @@ def migration(name, sig, symbols=None):
 """
 
 
-def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, symbols=None):
+def child_update(name, sig, pos, bound_name=False, symbols=None):
     """Replace child `pos` with its more canonical `m*c'`.
 
     One rule per child position, canonicalising that child to the class's representative:
@@ -640,10 +621,6 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, symbols
     `bound_name` says this column holds a name the node binds rather than a child it uses,
     and adds the one condition that makes the rewrite safe there: the bound slot must
     survive the composition. See `BOUND_NAME_KEPT`.
-
-    `head` pins the operator string and `exempt` rules operator strings out, both for the
-    string-headed encoding, where one constructor serves every operator of an arity and
-    so a column is a bound name or not depending on the row's payload.
 
     Only ever toward the leader, for the same reason migration needs it: a slotted class
     spans several values and `RenamesToLeader` holds both directions between them, so
@@ -659,17 +636,14 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, symbols
     element and no fixpoint.
     """
     symbols = _symbols(symbols)
-    payloads, edges, kids, _ = cols_of(sig)
+    _, edges, kids, _ = cols_of(sig)
     new_e, new_k = list(edges), list(kids)
     new_e[pos] = f"(compose {edges[pos]} m)"
     new_k[pos] = "c'"
-    pays = [f'"{head}"'] if head is not None else None
-    conds = "".join(f'\n       (!= {payloads[0]} "{h}")' for h in exempt)
-    if bound_name:
-        conds += BOUND_NAME_KEPT.format(i=pos, edge=new_e[pos])
+    conds = BOUND_NAME_KEPT.format(i=pos, edge=new_e[pos]) if bound_name else ""
     return f"""\
 (rule (({symbols.renames} {kids[pos]} m c')
-       (= node {pattern(name, sig, payloads=pays)}){conds}
+       (= node {pattern(name, sig)}){conds}
        (= {kids[pos]} (ordering-max {kids[pos]} c'))    ; toward the leader only
        ; a row from the child to itself must be idempotent: a native union can turn an
        ; edge into one, and composing a node's edge with a symmetry of its child would
@@ -678,19 +652,17 @@ def child_update(name, sig, pos, exempt=(), head=None, bound_name=False, symbols
        ; and the new node must differ from the old one
        (guard (or (bool-!= {kids[pos]} c')
                   (bool-!= (compose {edges[pos]} m) {edges[pos]}))))
-      ((union node {pattern(name, sig, edges=new_e, kids=new_k, payloads=pays)})
-       (delete {pattern(name, sig, payloads=pays)})) :ruleset slotted-migrate)
+      ((union node {pattern(name, sig, edges=new_e, kids=new_k)})
+       (delete {pattern(name, sig)})) :ruleset slotted-migrate)
 """
 
 
-def binder(name, sig, positions, head=None, symbols=None):
+def binder(name, sig, positions, symbols=None):
     """Take a bound slot out of the node's class's slot set, where it is bound.
 
     A bound slot rides in its child's edge, so it is a slot of the *node* but must
     not be one of the class: removing it from the edge to the leader is what makes
-    two spellings of the same binder alpha-equivalent. `head` pins the operator
-    string for the generic encoding, where the operator is a payload rather than
-    the constructor.
+    two spellings of the same binder alpha-equivalent.
 
     A binder covers ONE column -- the one right after the binder slots, which is
     what `Bind<T>` wrapping a single child means -- so the slot is removed only
@@ -705,8 +677,7 @@ def binder(name, sig, positions, head=None, symbols=None):
     e, k = list(edges), list(kids)
     for n, pos in enumerate(positions):
         e[pos], k[pos] = f"mvar{n}", f"({symbols.var} 0)"
-    payloads = [f'"{head}"'] if head is not None else None
-    node = pattern(name, sig, edges=e, kids=k, payloads=payloads)
+    node = pattern(name, sig, edges=e, kids=k)
 
     covered = max(positions) + 1
     assert covered < len(kids), f"{name}: a binder must cover a following column"
@@ -734,7 +705,7 @@ def binder(name, sig, positions, head=None, symbols=None):
             fresh_e = list(e)
             fresh_e[pos] = f"(map-of 0 w{n})"
             fresh_e[covered] = f"(compose (map-insert (map-image {edges[covered]}) v{n} w{n}) {edges[covered]})"
-            renamed = pattern(name, sig, edges=fresh_e, kids=k, payloads=payloads)
+            renamed = pattern(name, sig, edges=fresh_e, kids=k)
             rules.append(f"""\
 (rule ((= node {node})
        (= v{n} (map-get mvar{n} 0))
@@ -755,72 +726,21 @@ def banner(text):
     return [bar, f";;; {text}", bar, ""]
 
 
-def binder_variants(emit_rule, name, sig, comment, bound, heads, symbols=None):
-    """`emit_rule` for the ordinary case, plus a head-pinned copy per string-headed binder.
+def emit(language, sort="U", symbols=None):
+    """Constructor maintenance rules for one language: `{constructor: signature}`.
 
-    `bound` are the columns that are binder columns structurally, and `heads` the operator
-    strings whose first slotted column is a bound name -- which only the string-headed
-    encoding has, since there one constructor serves every operator. Each returned rule is
-    preceded by its comment.
-    """
-    which = ", ".join(str(i + 1) for i in bound)
-    note = f", leaving child {which} alone -- a bound name has no other spelling" if bound else ""
-    out = [comment + note, emit_rule(name, sig, bound=bound, exempt=heads, symbols=symbols)]
-    pinned = tuple(sorted({*bound, 0}))
-    for head in heads:
-        out += [
-            f"{comment}, for `{head}`, whose child 1 is a bound name",
-            emit_rule(name, sig, bound=pinned, head=head, symbols=symbols),
-        ]
-    return out
-
-
-def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
-    """All the rules for one language: `{constructor: signature}`.
-
-    `binders` pins binders by operator string, for the generic encoding where the
-    operator is a payload rather than the constructor. A `BINDER` column declares
-    one structurally and needs no entry.
-
-    `provided` names constructors the machinery a language file includes already
-    declares -- `CORE`, and whatever constructors that file holds. Re-declaring one is a
-    duplicate binding, so its signature must match and then its rules are already there
-    too.
-
-    `omit` names constructors written out by hand in the file this output includes,
-    so emitting them would be a duplicate binding too. Binders over them are left
-    out with them.
-
-    TWO RULES TREAT A BINDER COLUMN DIFFERENTLY -- the shape index and child-update --
-    because a bound name is not a child. `BOUND_NAME_KEPT` above says what goes wrong
-    when they do not, and which answer each one needs.
-
-    Where the binder is declared by the head string rather than the signature -- the
-    string-headed encoding, where one constructor serves every operator of an arity -- the
-    same column is a bound name in some rows and a child in others, so each of the two
-    is emitted twice: once with those heads ruled out, once with the head pinned. A
-    structurally declared binder needs only the second.
+    A BINDER column holds a bound name rather than an ordinary child. Its update
+    must preserve that name; the binder rules remove it from the class's free slots.
     """
     symbols = _symbols(symbols)
     out = []
     for name, sig in language.items():
-        if name in omit:
-            out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)} -- hand-written in egraph-encoding-11.egg")
-            continue
-        if provided and name in provided:
-            if provided[name] != sig:
-                raise SystemExit(f"{name} clashes with the machinery at a different signature")
-            out += banner(
-                f"{name} :: {' '.join(shape_of(c) for c in sig)} -- declared by the machinery this file includes"
-            )
-            continue
         _, edges, kids, _ = cols_of(sig)
         out += banner(f"{name} :: {' '.join(shape_of(c) for c in sig)}")
-        heads = [head for head, ctor in binders if ctor == name]
         out += [
             declare(name, sig, sort),
             ";; complete physical layout for the substitution primitive",
-            *layout(name, sig, heads),
+            *layout(name, sig),
             ";; an upper bound on the class's slots; the merge narrows it",
             class_slots(name, sig, symbols),
         ]
@@ -854,22 +774,16 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
                     child_update(name, sig, pos, bound_name=True, symbols=symbols),
                 ]
                 continue
-            exempt = heads if pos == 0 else ()
             out += [
                 f";; child-update, child {pos + 1}",
-                child_update(name, sig, pos, exempt=exempt, symbols=symbols),
+                child_update(name, sig, pos, symbols=symbols),
             ]
-            for head in exempt:
-                out += [
-                    f";; child-update, child {pos + 1} of `{head}` -- a bound name there",
-                    child_update(name, sig, pos, head=head, bound_name=True, symbols=symbols),
-                ]
 
     binder_rules = []
     for name, sig in language.items():
         kid_cols = [c for c in sig if c in SLOTTED]
         bound = [i for i, c in enumerate(kid_cols) if c is BINDER]
-        if bound and name not in omit:
+        if bound:
             which = ", ".join(str(i + 1) for i in bound)
             binder_rules.append(
                 (
@@ -877,15 +791,6 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
                     binder(name, sig, bound, symbols=symbols),
                 )
             )
-    for head, name in binders:
-        if name in omit:
-            continue
-        binder_rules.append(
-            (
-                f";; `{head}` binds its first child's slot",
-                binder(name, language[name], [0], head=head, symbols=symbols),
-            )
-        )
     if binder_rules:
         out += banner("binders")
         for comment, rule in binder_rules:
@@ -895,11 +800,6 @@ def emit(language, binders=(), provided=None, omit=(), sort="U", symbols=None):
 
 #: The right-hand side head that is a call rather than a node.
 SUBST = "subst"
-
-#: The contract violations the frame primitives can be asked to commit, for mutation
-#: testing; the compiler-side ones (`wide-kids`, `no-symmetry`, `no-guard`, `unordered`)
-#: are read by the emitter.
-FRAME_BUGS = ("no-cliques", "literals-alias", "no-refine")
 
 
 # The constructor-independent half of the node machinery. Hand-written in
@@ -1543,13 +1443,6 @@ class TermLang:
         self.carriers = carriers or carrier_symbols(declared or ("U",))
         self.default_sort = next(iter(self.carriers))
 
-    @classmethod
-    def from_language(cls, language):
-        """One `Op` per constructor of a `read_language` signature table -- the shape
-        the reference crate's `define_language!` produces, with no head to indirect
-        through, so the operator IS the constructor."""
-        return cls({name: Op(name, name, sig, ref=name) for name, sig in language.items()})
-
     def __getitem__(self, name):
         return self.ops[name]
 
@@ -1767,35 +1660,20 @@ class TermLang:
 def pvars_of(atom):
     """An atom's pattern variables -- its root and every `pv` child.
 
-    A slot literal is not one: its constraint is an equality on a single slot, applied
-    after the atom's renaming is solved, so it does not help pin that renaming down
-    and does not count as connectivity.
+    This ordering helper counts shared class variables. Slot-literal constraints
+    are joined by the frame independently of that ordering.
     """
     return {atom[0]} | {c[1] for c in atom[2] if c[0] == "pv"}
 
 
-def connected_order(lang, atoms, first=None, bugs=frozenset()):
-    """Reorder so every atom after the first shares a variable with the prefix.
+def connected_order(lang, atoms, first=None):
+    """Prefer connected atoms and parent/child links for stable, readable output.
 
-    Required, not an optimisation. An atom sharing nothing has no constraint on its
-    `mp`, so every slot it needs is *minted* -- and the mint is a commitment the
-    encoding cannot revisit. If a later atom then shows that a minted slot is really
-    one the pattern already named, the two disagree and `find-mapping` fails, losing a
-    match the reference finds. The reference's `multi_ematch` does not have this
-    problem: it keeps such a slot flexible and lets `unify` merge it later.
-
-    `first` names the atom to lead with. `None` takes the first that is not a binder:
-    the leading atom fixes slots(pattern), those are the pattern's *free* slots, and a
-    binder's bound slot is not free -- which follows from what the terms mean rather
-    than from a measurement, so no case observes it and there is no mutation for it.
-    Callers that lead deliberately pass an index: to check that the answer does not
-    depend on which atom leads, or because their rules are mostly rooted at a binder
-    and taking the root first pins each bound slot off its own edge instead of minting
-    a name for it.
+    Frame joins do not depend on atom order. Keep this ordering convention because
+    it also affects query planning and the generated variable names. `first` pins
+    the leading atom; the default prefers a non-binder.
     """
     atoms = list(atoms)
-    if "unordered" in bugs:
-        return atoms
     if first is None:
         first = next((j for j, a in enumerate(atoms) if not lang[a[1]].binders), 0)
 
@@ -1808,15 +1686,7 @@ def connected_order(lang, atoms, first=None, bugs=frozenset()):
     roots = {atoms[first][0]}
     kids = kids_of(atoms[first])
     while rest:
-        # A PARENT/CHILD link first, and a sibling one only if there is none. Sharing a
-        # variable is necessary and not sufficient: where the shared variable is a CHILD
-        # of both atoms, the constraint reaches only that child's slots and the rest of
-        # the new atom's frame is minted -- and a mint is a commitment. Where it is one
-        # atom's ROOT and the other's child, the share is a stored EDGE, which relates
-        # the two frames whole.
-        #
-        # `K2` is the case: of the six orders of its three atoms, the two that left the
-        # parent atom last lost a match and the other four did not.
+        # Prefer a parent/child link, then any shared variable, then a disconnected atom.
         i = next(
             (j for j, a in enumerate(rest) if a[0] in kids or kids_of(a) & roots),
             None,
@@ -2185,7 +2055,6 @@ def compile_query(
     diseq=(),
     same=(),
     fresh=(),
-    bugs=frozenset(),
     var_prefix="",
     refine=True,
     anchor=None,
@@ -2244,7 +2113,6 @@ def compile_query(
     seen = set()  # pattern variables an earlier occurrence bound: later ones join a symmetry
     literals = set()
     atom_vars = []
-    frame_bugs = sorted(b for b in bugs if b in FRAME_BUGS)  # committed by every atom
 
     parent_col = {}  # a variable first met as a child: the parent's constructor, its columns, and the column index
 
@@ -2295,9 +2163,7 @@ def compile_query(
         syms, bindings, cols, reached = [], [], [], []
 
         root_slots = f"({lang.symbols_for(pvar_sorts[aroot]).class_slots} {rv})"
-        again = aroot in seen and "no-symmetry" not in bugs
-        if frame_bugs:
-            bindings.append(f"(bugs{quoted(frame_bugs)})")
+        again = aroot in seen
         bindings.append(f'(root "{fname(aroot)}" {root_slots}{occurrence(aroot, syms, root=True) if again else ""})')
         seen.add(aroot)
         for j, (k, kid_sort, e) in enumerate(zip(kids, op.kid_sorts, edges, strict=True)):
@@ -2306,12 +2172,8 @@ def compile_query(
                     cls_of[k[1]] = named(f"cls_{label(k[1])}")
                 cols.append(cls_of[k[1]])
                 # the class's exact slots, so the renaming is no wider than the class (C4)
-                slots = (
-                    f"(map-domain {e})"
-                    if "wide-kids" in bugs
-                    else f"({lang.symbols_for(kid_sort).class_slots} {cls_of[k[1]]})"
-                )
-                again = k[1] in seen and "no-symmetry" not in bugs
+                slots = f"({lang.symbols_for(kid_sort).class_slots} {cls_of[k[1]]})"
+                again = k[1] in seen
                 bindings.append(f'(child "{fname(k[1])}" {e} {slots}{occurrence(k[1], syms) if again else ""})')
                 seen.add(k[1])
             elif k[0] == "sl":
@@ -2378,8 +2240,6 @@ def compile_query(
     slot_of = {lit: f'(map-get (ren {m} "{lit}") 0)' for lit in sorted(literals | set(fresh))}
 
     for want, slot, pvars in conds:
-        if "no-guard" in bugs:
-            continue
         body.append(f'({"free" if want else "not-free"} {m} "{slot}" (names{quoted(fname(v) for v in pvars)}))')
     for a, b in same:
         body.append(f'(same {m} "{fname(a)}" "{fname(b)}")')
@@ -2492,7 +2352,6 @@ def compile_rule(
     diseq=(),
     same=(),
     fresh=(),
-    bugs=frozenset(),
     refine=True,
     name=None,
     ruleset=None,
@@ -2525,7 +2384,6 @@ def compile_rule(
         diseq=diseq,
         same=same,
         fresh=set(fresh) | (slot_literals(action) - pinned_slots(atoms)),
-        bugs=bugs,
         refine=refine,
         anchor=action[1],
     )

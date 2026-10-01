@@ -169,16 +169,8 @@ CHECKS = [
         False,
         False,
     ),
-    (
-        "front-ends",
-        ("slotted/checks/check-front-ends.py",),
-        ratio(r"OK: (\d+)/(\d+) rules compile the same", 1),
-        False,
-        False,
-    ),
-    # The .egg corpus's counterpart to `xdiff/mutations.py`: each mutation drops one
-    # join from a multipattern rule, and a claim must break. Guards the failing halves
-    # of `multipattern.egg` against quietly going vacuous.
+    # Each mutation drops one join from a source multipattern rule; a claim must
+    # break. Guards the failing halves of `multipattern.egg` against going vacuous.
     (
         "multipattern-teeth",
         ("slotted/checks/check-multipattern-teeth.py",),
@@ -295,18 +287,6 @@ CHECKS = [
         none_of(r"^(?P<seen>\d+) cases checked, \d+ stranded rows, (?P<bad>\d+) carrying", 44),
         False,
         False,
-    ),
-    (
-        "mutations",
-        ("slotted/xdiff/mutations.py",),
-        # 3, not 4: `unordered` stopped discriminating once a rule tried every naming
-        # an atom's renaming could take, so a bad atom order does not lose matches.
-        # That property is measured directly by
-        # `order-independence.py` instead, and a mutation that catches nothing is not
-        # kept as decoration -- `mutations.py`'s own header says so.
-        ratio(r"(\d+)/(\d+) mutations still caught", 3),
-        False,
-        True,
     ),
     (
         "iso-selftest",

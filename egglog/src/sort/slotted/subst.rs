@@ -197,9 +197,6 @@ struct Terms {
     best: HashMap<Value, usize>,
 }
 
-/// `edge` carried into the frame `m` names, leaving alone the slots `m` does
-/// not cover.
-///
 /// The identity renaming on `m`'s image.
 fn image(m: &Renaming) -> Renaming {
     m.values().map(|v| (*v, *v)).collect()

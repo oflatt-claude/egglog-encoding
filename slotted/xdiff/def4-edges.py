@@ -13,9 +13,6 @@ the edge's domain with the class's slots.
 This is also the precondition the compiled action depends on. An action reads renamings off
 a matched node, and narrowing them by `ClassSlots` is a no-op exactly when those renamings
 already have the child's slots for their domain -- which is what this checks. That is why
-`XDIFF_BUGS=wide-kids` no longer discriminates: not luck, but a property checked here. If
-this ever reports a violation, that mutation becomes live again.
-
 A BINDER COLUMN IS EXEMPT, and is checked against its own invariant instead. What sits
 there is a name the node binds, not a use of its child, so its domain is always the one
 slot `0` however few slots the variable class has left -- which is exactly the point:

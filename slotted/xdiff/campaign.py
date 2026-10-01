@@ -3,44 +3,10 @@
 
 The harness keeps its CI sweep deliberately small; this command is for wider manual
 campaigns. The executable and reference revision come from the current checkout and
-`slotted/xmulti/Cargo.toml` respectively. Do not treat the historical measurements
-below as current results.
+`slotted/xmulti/Cargo.toml` respectively. Each worker reports its own failures.
 
-HISTORICAL RESULT (24000 cases, 48 seeds, `iso` mode).
-
-Against the then-current upstream b90adca oracle with `final_refine`:
-
-    23707/24000 isomorphic -- 278 divergences
-
-      202  the encoding built FEWER nodes: a rule fired on the reference, not on us
-       39  same counts, the SHAPE differs: slot sets or symmetry groups
-       27  same nodes, the encoding has MORE classes: a union we did not make
-       10  the encoding built MORE nodes: a rule fired on us, not on the reference
-
-    229 of the 278 were classified as encoding-side at the time. Against the previous
-    oracle -- PR #45 before
-    `final_refine` landed -- the same 24000 cases gave 23976/24000 and 17 divergences,
-    12 of them ours. Nothing in the encoding changed between those two numbers. The
-    oracle got sharper and revealed a gap that was always there, so the jump from 12 to
-    229 is the SIZE of the gap rather than a regression.
-
-    These were not 278 independent bugs. The investigation led to connected atom
-    ordering and the current final `refine` step. This paragraph is the
-    before-measurement, not a statement that the current compiler still has that gap.
-
-    The 39 shape-only divergences are the family the symmetry-generating unions
-    exposed; before those existed the corpus had only identity groups and could not
-    state such a case at all.
-
-    Also measured, and NOT a divergence: ten cases died with egglog's "Rule ... was
-    already present". The generator draws each rule independently and two can compile
-    to the same text. Deduping them in `egg_program` fixed it; they had been counted as
-    disagreements.
-
-WHY THE SEED RANGE MATTERS. Cases are `(seed, index)` and the generator is
-deterministic, so a divergence is quotable and re-runnable -- `isomorphism.py fuzz 4
-1061` is the whole reproduction of one. Changing `rand_case` renumbers everything,
-which is why nothing here records an index as if it were a name.
+Cases are identified by `(seed, index)`. Keep both when recording a failing case;
+changing the generator changes those identities.
 
     python3 slotted/xdiff/campaign.py [mode] [--cases N] [--seeds K] [--jobs J]
 
@@ -55,12 +21,6 @@ and has lambda bodies use their binders:
     XDIFF_DEPTH=3 XDIFF_DUP=0.4 XDIFF_SHARE=0.7 XDIFF_LAM=0.55 XDIFF_USEBIND=0.6 \
     python3 slotted/xdiff/campaign.py iso --cases 300 --seeds 8
 
-That is the ground the unify shapes `UN1` and `UN2` live on, which the default knobs
-cannot build at all. Measured on 2026-09-20: the pattern half of the shape appears in
-about one generated rule in 300, the whole shape with a matching term in about one in
-700, and 2400 cases were not enough for the sweep to catch `no-unify` on its own, so
-those cases stay curated. The same 2400 cases did surface `LIT1`, so the ground earns
-an occasional run.
 """
 
 import argparse

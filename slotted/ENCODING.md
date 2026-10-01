@@ -2,16 +2,17 @@ Encodes a slotted e-graph — one where a class carries named slots and nodes ar
 
 # Overview
 
-A slotted e-graph, from Schneider et al., *Slotted E-Graphs* (PLDI 2025), gives every e-class a set of **slots** and lets a
+A slotted e-graph, from Schneider et al., [*Slotted E-Graphs* (PLDI 2025)](https://michel-steuwer.github.io/files/publications/2025/PLDI-2025.pdf), gives every e-class a set of **slots** and lets a
 node reach a child under a **renaming** of them. That is what makes
 `(lam $0 $0)` and `(lam $1 $1)` one class rather than two, without a separate
 alpha-equivalence pass.
 
 Egglog has no notion of a slot, so the encoding puts one in: a child column
 becomes *two* columns, a renaming and a class, and a handful of relations track
-which invocation of a class a value stands for. Everything is ordinary egglog —
-the compiler emits it, nothing in the Rust is slotted-aware beyond a few
-primitives on renamings and on frames.
+which invocation of a class a value stands for. The graph representation and
+maintenance are ordinary egglog tables and rules. Rust primitives implement
+renaming and group operations, the frame constraint solver used in matching, and
+extraction-based substitution.
 
 `slotted/LANGUAGE.md` is the source language a person writes. This file is the
 level below it: what that language compiles *to*, and why each table exists.
@@ -28,37 +29,115 @@ The running example is:
 ```
 
 Run `python3 slotted/slotted-egglog.py FILE.egg --desugar` on any program to see
-its full encoding; every listing below is real output, with comments trimmed, except
-the one listing that Part II says it splits.
+its full encoding. The listings below are explanatory fragments: names and schedules
+are shortened, and the matching example combines stages that the compiler emits
+separately. They are not a standalone program or byte-for-byte compiler snapshots.
 
-**How to read this document.** Part I is the encoding, plainly: the tables, the rules
-that make them a slotted e-graph, and how a rewrite is matched and applied. Everything
-in Part I is correct on its own — strip the rest from a generated program and the
-tests pass — and it is what to read to understand *what* the encoding says. Part II is
-what the generator emits on top of it and why: each addition is a cost the plain
-encoding pays, the rule or table that removes it, and what it changed. The contract at
-the end numbers what a compiled rule asserts, clause by clause, and is what the code
-cites.
+**How to read this document.** This is an implementation guide. Part I explains the
+representation, maintenance, and matching; it already uses the current shape index,
+stored groups, and canonical invocation keys. Part II explains further implementation
+choices and their costs. The core explanation below distinguishes the semantic
+obligations from those implementation choices.
+The contract at the end numbers the requirements the code cites. There is currently
+no separately executable, unoptimized version checked by the suite; deleting Part II
+from generated output is not a supported way to obtain one.
 
 # The idea in one paragraph
 
-A slotted class is **not** one egglog value. It is a set of values — one per
-*invocation*, that is, per way of naming the class's slots — related by
-`RenamesToLeader` and *not* by egglog's `union`. One invocation is the leader;
-the rest are deleted once they are known to be renamings of it. So "are these
-two terms equal?" is not egglog's `=`: it asks whether the two reach the leader
-by the *same* renaming, up to a **symmetry** — a renaming of a class's slots the
-class is equal to itself under, which is what makes a commutative node one node
-and not two.
+A slotted class may have several egglog values representing materialized
+*invocations*: ways of naming its slots. `RenamesToLeader` connects them to a
+leader. Nodes move to the leader; follower values remain usable through that
+relation. Equality of invocations requires a common leader and renamings that
+agree up to a **symmetry** of its slots. Maintenance uses egglog's `union` to
+deduplicate invocations equal in that sense; having the same leader alone is
+insufficient. A user equation introduces a new equality in a specified slot frame.
 
-# Part I. The plain encoding
+# The core encoding
+
+Consider one carrier and a binary constructor. Write `F(m, a, n, b)` for a node
+whose children are the invocations `m * a` and `n * b`. Define `S(c)` as the class's
+public slots, `G(c)` as its symmetries, and `R(a, r, b)` as `a = r * b`, with `r`
+mapping from `b`'s slots to `a`'s. These are mathematical names for the information.
+Symmetries can be enumerated as relation rows `Sym(c, g)`; storing a whole group
+in one value is an implementation choice.
+
+The encoding has five parts:
+
+1. **Representation and equality.** Separate node-local slots from `S(c)`. A child
+   edge is injective and has exactly its child's public slots as its domain. Two
+   invocations reaching leader `c` by `m` and `n` are equal when
+   `m = n ∘ g` for some `g ∈ G(c)`. Sharing `c` alone does not establish equality.
+2. **Congruence modulo renaming.** Compare two rows with the same constructor and
+   canonical children. For rows `a = F(m1,c1,m2,c2)` and
+   `b = F(n1,c1,n2,c2)`, enumerate `g1 ∈ G(c1)` and `g2 ∈ G(c2)` and solve for an
+   injective node renaming `r` satisfying `r ∘ n1 = m1 ∘ g1` and
+   `r ∘ n2 = m2 ∘ g2`. A solution establishes `a = r * b`; comparing a row with
+   itself can discover a symmetry. This pairwise rule explains the operation that
+   the current `node-shape` and shape index accelerate.
+3. **Maintenance.** Compose renaming paths, reconcile competing leaders, transport
+   and intersect class slots, and close symmetries under composition on the surviving
+   slots. Migrate nodes to leaders and update child edges. Migration needs a total
+   extension of the inverse leader renaming over the node's slots: assign fresh
+   names to slots the class has made redundant. Simply composing with a partial
+   inverse can erase node data.
+4. **Binders.** A binder removes its name from the public slots contributed by its
+   covered child, leaving other children alone. A bound name colliding with a free
+   name elsewhere in the node must first be refreshed. These scope rules belong in
+   the core explanation.
+5. **Matching and rewriting.** Join depth-1 node matches, equate their slot
+   occurrences through shared pattern variables, and enforce distinctness within
+   each node, class, and set of distinct literals. Account for repeated variables
+   modulo symmetry and enumerate all consistent refinements of the placeholders
+   reached by pattern variables or carried literals. Then check freshness conditions
+   and build the right-hand side in the root's frame. Refinement is needed to match
+   the reference multipattern matcher; eager fresh naming or the nested matcher is
+   not a substitute for it.
+
+At a maintenance fixed point, leader components decode to slotted classes, `S` and
+`G` to their slot sets and groups, and constructor rows to nodes modulo renaming and
+child symmetries.
+Raw egglog values and rows are not themselves the slotted class and node counts.
+A correctness argument must establish that maintenance enforces these invariants
+without introducing unintended equalities, and that a compiled rewrite produces
+the intended matches and unions. Differential tests provide evidence for the
+implementation, not a proof of this correspondence.
+
+The distinction between the required operations and their implementation is:
+
+| Required operation | Implementation choice to explain separately |
+| --- | --- |
+| Congruence modulo renaming and child symmetry | Canonical shapes, `_shape_F` hashcons, and sharing the shape/symmetry walk |
+| Symmetry closure and equality of invocations | `EclassGroup` values and the `Invocation` index keyed by `coset-min` |
+| Complete matching modulo symmetries | Coset representatives on pinned slots and cached reading indexes |
+| Apply every match refinement in a user round | Stored match relations, dynamic refinement indexes, and staged application |
+| Represent newly built nodes in the correct frame | Canonical construction below the root and removal of duplicate physical rows |
+| Restore maintenance invariants between user rounds | Phased schedules and removal of unused follower state |
+| Substitute into a selected representative term | Cached extraction and results, shared templates, and lazy comparison |
+
+Substitution's representative-selection policy belongs in the specification when
+comparing final graphs: choosing a different representative can build a different
+graph. Optimizations must preserve selection over the decoded nodes, not merely
+preserve the set of represented equalities. The storage of the selected tree as
+shared templates is an optimization.
+The current multipattern comparison deliberately aligns representative selection on
+both sides; the nested comparison uses the reference's syntactic policy. See
+*Against the reference* for that distinction and the paper artifact's policies.
+
+This is a semantic overview of the current encoding. It retains slot restriction,
+fresh extension during migration, binder scope, symmetry-aware matching, and complete
+refinement; these are correctness requirements, not optional optimizations. It is
+not a separately executable baseline: the present suite validates the current
+compiler and primitives, including their optimizations.
+
+# Part I. Representation, maintenance, and matching
 
 ## Tables, once per sort
 
 Everything in this section is emitted once per equality sort the program declares,
 with the sort's position as a suffix: a program with two slotted sorts gets
-`RenamesToLeader_0` and `RenamesToLeader_1`, and the two share nothing but the
-`Renaming` sort. The listings below drop that suffix, and the `_` the generator puts
+`RenamesToLeader_0` and `RenamesToLeader_1`. Their class tables are separate; support
+sorts, layout metadata, refinement indexes, and schedules are shared. The listings
+below drop that suffix, and the `_` the generator puts
 in front of its own variables.
 
 ```
@@ -87,10 +166,11 @@ the value. Its class slots are seeded outright:
 
 **`RenamesToLeader f m l`** reads `f = m * l`: `m` carries `l`'s slots to `f`'s.
 A class is a connected component of this relation, and its leader is the
-component's canonical member. Every value also renames to *itself* by the
-identity, so a query can ask for a value's leader without knowing whether it has
-one. Those identity rows are the only ones with `f` and `l` the same value: a
-class's symmetries are not edges of this relation, they are the group.
+component's canonical member. Maintenance seeds an identity row for each value;
+the follower cleanup removes it once a distinct leader is known. At a maintenance
+fixed point, self-edges are identities and symmetries live in `EclassGroup`.
+Native egglog unions can temporarily turn a nonidentity edge into a self-edge;
+maintenance transfers that information into the group.
 
 **`Equated`** holds the same fact with no orientation chosen. Orientation is a
 function of value order, so a row oriented before a merge can be backwards after
@@ -101,10 +181,10 @@ does not converge — transitivity keeps re-deriving the backwards row.
 **`ClassSlots c`** is the slots the class actually depends on, as an identity
 renaming. It is held directly rather than read off the group, because it is
 what every renaming is spelled on (C15), so it has to come first. Its merge is
-`map-intersect`, so it only ever shrinks — which is what makes
-a slot **redundant**: union two invocations that disagree on a slot and the
-class stops depending on it. A slotless class has one invocation, so all its
-spellings are the same term.
+`map-intersect`, so it only ever shrinks. Equating `f($x,$y)` with `g($x)` makes
+`$y` **redundant**: the class no longer depends on it even though an `f` node may
+still carry it. Equating `f($x,$y)` with `f($y,$x)` can instead add a symmetry
+without dropping either slot. A slotless class has one invocation.
 
 **`SubstPending root q mr r`** is a substitution's answer on its way back: `r` is the
 class the primitive built and `mr` its renaming, and `q` carries `r`'s slot names into
@@ -126,9 +206,9 @@ element up directly, so it has to be there. Every rule that learns a symmetry wr
 here, and the shape primitives take the value whole, to spell a node once over every
 reading its children allow rather than once per reading (C14). `Group` is the sort, the
 reference's data structure of the same name; `EclassGroup` is the class's field of it.
-Every rule that needs the group takes it whole: a query cannot take a set apart, so the
-primitives that consume one — `coset-min`, `group-slot-closure`, `coset-same`, and the
-frame's own bindings — do the walking.
+Rules access group elements through primitives or indexed views, rather than a
+direct set-membership join. Primitives such as `coset-min`, `group-slot-closure`,
+`coset-same`, and the frame's own bindings walk the group internally.
 
 ## The rules, once per sort
 
@@ -152,10 +232,10 @@ many rows, which every closure rule below then multiplies.
       ((set (EclassGroup a) (set-of (compose cs (compose m cs))))) :ruleset slotted)
 ```
 
-**Every class renames to itself by the identity**, which is both the reflexive row of
-the edge relation and the unit of the group. And the identity is the *only* row a class
-has to itself. egglog's own `union` can identify the two ends of an edge and leave one
-that is not; what such a row says is that the class is equal to itself under that
+**Seeding identities and moving self-edges into the group.** The identity is both the
+reflexive row of the edge relation and the unit of the group. At a maintenance fixed
+point a remaining self-edge is an identity. egglog's own `union` can identify the two
+ends of an edge and leave one that is not; what such a row says is that the class is equal to itself under that
 renaming, so it is a symmetry and is moved into the group. That is what lets every rule
 below read this relation as followers and identities.
 
@@ -269,8 +349,8 @@ or, under the union, undo each other forever.
 ```
 
 **One variable class.** `(Var v)` with `v` other than 0 is restated as `(Var 0)` under
-`{0 -> v}` and deleted. The variable class holds no constructor node, so it gets its
-identity as a fact.
+`{0 -> v}` and deleted. `Var` is handled separately from the user constructors, so
+its identity is seeded as a fact.
 
 ```
 (rule ((= e (Var v)) (!= v 0))
@@ -427,9 +507,9 @@ such rule per child column; the one for the second column is the same with `m2` 
 ```
 
 Migration deletes rows, so a class need not have a row under the spelling you wrote —
-which is why a claim about a term matches it rather than spelling it out. In the plain
-encoding a class can still hold several rows of one node under several readings; Part
-II keeps one.
+which is why a claim about a term matches it rather than spelling it out. Without
+the row-deduplication rule a class can still hold several readings of one node;
+Part II explains how the current implementation keeps one.
 
 ## Binders
 
@@ -592,10 +672,11 @@ The primitives:
 What a rewrite means as one egglog rule, for `sum-fact-3`, with the `_0` that says
 which sort's tables these are dropped from the table names. Names in quotes are the
 rule's own variables and literals, so a frame is keyed by the words the rule was
-written in. This is the one listing the generator does not emit as it stands: Part II
-splits it in two at the point where the match is stored, and spells the right-hand
-side's inner node canonically. Folding the emitted rules back into this one and
-running the tests gives the same answers.
+written in. This schematic rule explains the match and action together. The compiler
+emits separate matching, application, and draining rules, with refinement-index
+generation between the first two stages, and constructs inner nodes canonically.
+The listing assumes `Idx` covers every refinement; it does not itself implement
+that schedule. Part II gives the emitted arrangement.
 
 ```
 (rule (;; egglog's own match of the two atoms, one row pattern each: an ordinary
@@ -650,9 +731,10 @@ invocation that `SubstPending` carries back into the root's frame (C12).
 ### When the rules run
 
 A user step is `(seq (run) MACHINERY)`: the rules, then the machinery to a fixed
-point, so a step means one round of every rule against a settled graph. In Part I the
-machinery is one ruleset and `MACHINERY` is `(saturate (run slotted))`. Part II puts
-refinement-index generation and the apply ruleset in between, and splits the machinery into phases:
+point, so a step means one round of every rule against a settled graph. The listings
+above abbreviate maintenance into one `slotted` ruleset. The compiler separates
+matching from application, generates every needed refinement index between them,
+and phases maintenance as follows:
 
 ```
 (seq (saturate (seq (saturate (run slotted))
@@ -678,17 +760,20 @@ phase, and *One row per shape per class* says why.
 
 # Part II. What the generator adds, and why
 
-Each of these is a cost the plain encoding pays, measured on the paper's SDQL
-workloads, and the table or rule that removes it. None changes an answer: the tests
-pass with every one of them stripped from a generated program, only slower — and the
-first one is what a redundancy-heavy test needs to finish at all.
+These choices reduce repeated work and duplicate storage. They are intended to
+preserve the decoded graph and the specified matching and substitution policies.
+The suite checks the resulting implementation against the multipattern reference;
+it does not run a version with all these choices removed. Timings quoted in this
+section are historical development measurements, not a reproducible ablation table
+for the current revision.
 
 ## One row per shape per class
 
 The index says which rows are one node; it removes none. A class can still hold two
 rows of one node under two readings: the same node built twice in different frames,
 or a node and its image under a symmetry of a child. Every such row is matched, indexed
-and migrated again, and on `redundancy-tests.egg` the plain encoding does not finish.
+and migrated again; this caused the version without deduplication to stall on
+`redundancy-tests.egg` during development.
 One row is enough, and one is what the reference's hashcons keeps. The merge block has
 already recorded the symmetry between the two readings, and a pattern reaches the
 other reading through the class's group and its children's (C5). So the shape walk
@@ -921,13 +1006,14 @@ expanded-template implementation to check that the optimized encoding agrees.
 # The contract
 
 What a compiled rule asserts, clause by clause; `compile_query` and
-`compile_rule` in `slotted-encoder.py` name these where they emit them, and
-`mutations.py` breaks one at a time and requires the curated corpus to notice.
+`compile_rule` in `slotted-encoder.py` name these where they emit them. The curated
+regressions and differential comparisons exercise these requirements.
 
 **C1. A pattern variable is an invocation.** `x` is a class `cls_x` and a renaming
 `(ren m "x")` of that class's slots into the pattern's. Two occurrences agree when
 they reach one class by renamings that differ at most by a symmetry of it
-(Definition 6); equal renamings alone is too weak, equal classes alone is wrong.
+(Definition 6). Requiring identical renamings misses symmetric matches; comparing
+classes alone accepts invocations that may name different slots.
 
 **C2. Atoms, and the frame.** The left-hand side is flattened into depth-1 atoms,
 one per e-node, every child a variable or a literal. Each atom's columns are one
@@ -1008,13 +1094,13 @@ checks the conditions and acts, and a third rule in that ruleset deletes the row
 schedule completes refinement-index generation between matching and applying, so a
 step still means one round of every rule, with every stored alternative consumed.
 
-**C14. Nodes are indexed by shape.** Every row of a constructor is entered, under
-every symmetric reading of its children, into a function keyed by its shape -- the row
-with its slots renumbered by first occurrence -- and holding one class with that node
-and the renaming into it. Two rows meeting on a key are one node up to renaming, and the
-function's merge block states the equation between their classes; a class meeting
-itself there gains a symmetry. Of two rows of one class with one shape, the greater
-reading is deleted. This is the reference's shape hashcons: `weak_shape` over
+**C14. Nodes are indexed by shape.** `node-shape` considers the symmetric readings
+of a row's children and selects one canonical shape. The row is inserted once into
+the shape index, together with its class and the renaming from the shape into that
+class. A collision states an equation between the classes. The same shape walk also
+finds self-symmetries, which enter the class's group after restriction to its slots.
+Of two rows of one class with one shape, the greater reading is deleted. This
+implements the reference's shape hashcons using `weak_shape` over
 `get_group_compatible_variants`.
 
 **C15. A renaming is spelled on its classes' slots.** Every `RenamesToLeader` row's
@@ -1143,7 +1229,9 @@ or graph equality.
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
 | `slotted/paper_fixtures.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
-| `slotted/eval.py` | the paper's two case studies -- the array goal and all ten SDQL workloads -- on the encoding and on the reference through both of its matchers; `make slotted-eval` |
+| `slotted/eval.py` | collection and correctness checks for the paper's two case studies; `make slotted-eval` |
+| `slotted/eval_report.py` | observation records, cache loading, and the summary/full tables; launches no benchmarks |
+| `spot-check.py` | independent Array N=0 spot check: explicit reference multipatterns, direct live-row/leader counts, one timed run per side; imports no eval or differential-checking scripts |
 
 Nothing here is hand-maintained egglog: the machinery is generated from the
 constructors a program declares, so a worked example is a program you run

@@ -20,6 +20,7 @@
 //! probe  <sexpr>              term to include in the reported partition
 //! goal   <sexpr>              test whether a term is equivalent to the first `term`
 //! rounds <n>                  rounds to run, each applying every rule once (default 10)
+//! sizes                       print live class/node counts without a graph dump
 //! ```
 //!
 //! Two limits of that language, both about payload leaves:
@@ -166,6 +167,7 @@ struct Spec {
     /// Print a structured dump of every class and node after saturating, so the two
     /// sides can be compared on more than the probe partition.
     dump: bool,
+    sizes: bool,
     terms: Vec<String>,
     unions: Vec<(String, String)>,
     /// A `rule` line starts a new one; with none, the first `atom` opens one, so a
@@ -183,6 +185,7 @@ struct Spec {
 fn parse_spec(src: &str) -> Spec {
     let mut s = Spec {
         dump: false,
+        sizes: false,
         terms: vec![],
         unions: vec![],
         rules: vec![],
@@ -200,6 +203,7 @@ fn parse_spec(src: &str) -> Spec {
         let rest = rest.trim();
         match kind {
             "dump" => s.dump = true,
+            "sizes" => s.sizes = true,
             "term" => s.terms.push(rest.to_string()),
             "ctor" => {
                 let (tag, name) = rest
@@ -812,6 +816,11 @@ fn main() {
         println!("GOAL {}", if reached { "yes" } else { "no" });
     }
 
+    if spec.sizes {
+        let ids = eg.ids();
+        let nodes: usize = ids.iter().map(|id| eg.enodes(*id).len()).sum();
+        println!("SIZES {} {}", ids.len(), nodes);
+    }
     if spec.dump {
         if let Err(message) = dump_structured(&eg) {
             eprintln!("REFERENCE_LIMIT: {message}");

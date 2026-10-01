@@ -98,11 +98,6 @@ EXPECTED_MISSING = {
 }
 
 
-def our_names(path):
-    # egglog spells a rule name as a string literal; the bare form is still accepted
-    return set(re.findall(r":name\s+\"?([\w-]+)\"?", path.read_text()))
-
-
 def their_names(path):
     """The rules the reference RUNS, not the ones it merely defines.
 

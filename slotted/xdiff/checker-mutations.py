@@ -2,9 +2,8 @@
 """Is the isomorphism checker actually discriminating, or does it just say yes?
 
 Every other check in this tree rests on `isomorphism.py`: "N/N isomorphic" is only
-worth as much as the checker's willingness to say no. `mutations.py` mutates the
-COMPILER and asks whether the corpus notices; nothing mutated the CHECKER. `selftest`
-does, with three hand-built graphs.
+worth as much as the checker's willingness to say no. Its `selftest` covers
+hand-built graphs; this check exercises graphs produced by real programs.
 
 So: take real graphs, damage one copy, and require the checker to reject it. A
 perturbation the checker accepts is a blind spot, and the ones here are chosen to be

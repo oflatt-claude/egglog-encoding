@@ -55,24 +55,6 @@ PERM_CAP = 4
 # timeout is reported as its own category rather than stalling the sweep.
 RUN_TIMEOUT = 25
 
-# Past bugs, re-introducible so the corpus can be checked for still catching
-# them. A bug nothing fails under is a bug that could come back unnoticed.
-#   XDIFF_BUGS=no-cliques      a frame may identify two slots of one e-node or class
-#   XDIFF_BUGS=literals-alias  two different slot literals may come out as one slot
-#   XDIFF_BUGS=no-refine       only the identity refinement is offered
-#   XDIFF_BUGS=no-symmetry     a repeated variable is not compared up to its class's symmetry
-#   XDIFF_BUGS=no-guard        the rule's side conditions are dropped
-#   XDIFF_BUGS=wide-kids       a variable's renaming is read off the edge, not narrowed to its class
-#   XDIFF_BUGS=unordered       atoms compiled in the order written
-#
-# `mutations.py` asserts that each of these still breaks the corpus by a recorded amount, so
-# a mutation that stops discriminating is a failure rather than a quiet gap. Two were removed
-# once they stopped: `wide-kids` (only the root narrowed to its class's slots), whose property
-# `def4-edges.py` checks directly, and `binder-1st` (a binder allowed to fix the pattern's
-# slot space), which violates a definition rather than an observable.
-BUGS = {b for b in os.environ.get("XDIFF_BUGS", "").split(",") if b}
-
-
 # How often a generated subterm is a binder. Raise it to search binder-heavy
 # ground: XDIFF_LAM=0.55
 LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
@@ -272,73 +254,6 @@ def rhs_text(t):
     return slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, t))
 
 
-# Cases with an accepted invariant violation, and how many. Def. 4 says an edge's
-# domain is exactly its child's slot set -- the reference asserts it outright, in
-# `check_internal_applied_id`. The encoding does not enforce it, and `X1` reaches a
-# state that breaks it; that is recorded here so a *new* violation still fails.
-# An idempotent symmetry of the child is a partial identity, so the child's live
-# slots are inside its domain: one with fewer keys than the edge proves the edge names
-# slots the child does not have. Only narrower witnesses are used, which is what makes
-# this immune to the too-wide symmetries of open question 2.
-INVARIANT_OBS = """
-(ruleset inv)
-(relation ObsSym (U Renaming))
-(rule ((GroupIdx i) (= s (EclassGroup_0 c)) (= g (set-get s i))) ((ObsSym c g)) :ruleset inv)
-(relation WideEdge (String Renaming U Renaming))
-(relation NotInjective (Renaming))
-"""
-
-
-def _invariant_rules():
-    out = [INVARIANT_OBS]
-    for n in (2, 3, 4):
-        cols = " ".join(f"m{i} c{i}" for i in range(1, n + 1))
-        for i in range(1, n + 1):
-            out.append(
-                f"(rule ((= v (App{n} f {cols}))\n"
-                f"       (ObsSym c{i} s)\n"
-                f"       (= s (compose s s))\n"
-                f"       (< (map-length s) (map-length m{i})))\n"
-                f"      ((WideEdge f m{i} c{i} s)) :ruleset inv)"
-            )
-            out.append(
-                f"(rule ((= v (App{n} f {cols}))\n"
-                f"       (!= (map-length m{i}) (map-length (map-image m{i}))))\n"
-                f"      ((NotInjective m{i})) :ruleset inv)"
-            )
-    out.append(
-        f"(rule (({SYM.renames} a m b) (!= (map-length m) (map-length (map-image m)))) ((NotInjective m)) :ruleset inv)"
-    )
-    out += ["(run inv 2)", "(print-size WideEdge)", "(print-size NotInjective)"]
-    return "\n".join(out)
-
-
-def check_invariants(case):
-    """Wide edges and non-injective renamings, observed after a user step.
-
-    The observers run in their own ruleset so they see a snapshot rather than a history: a
-    relation keeps an observation after the row that caused it is deleted.
-
-    One extra user step runs first, *without* the machinery saturation that normally
-    follows it. Saturating the invariant rules repairs a malformed edge, so observing after
-    that would report a clean state whatever the action wrote. The contract being checked is
-    the stronger one: an action must not write an edge that breaks Def. 4, even transiently.
-    """
-    prog = egg_program(case).replace("(print-function SameClass 100000)", "(run-schedule (run))\n" + _invariant_rules())
-    path = ROOT / f"xdiff-inv-{os.getpid()}.egg"
-    path.write_text(prog)
-    try:
-        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
-    except subprocess.TimeoutExpired:
-        return None
-    finally:
-        path.unlink(missing_ok=True)
-    if r.returncode != 0:
-        return None
-    nums = [int(x.strip()) for x in r.stdout.splitlines() if x.strip().isdigit()]
-    return tuple(nums[-2:]) if len(nums) >= 2 else None
-
-
 def check_encodable(case):
     """Reject a case the encoding cannot represent faithfully.
 
@@ -386,7 +301,7 @@ def compile_rule(atoms, action, conds=()):
 
     The flat form builds one depth-1 node over bound variables.
     """
-    atoms = slotenc.connected_order(LANG, [(r, o, [_child(c1), _child(c2)]) for r, o, c1, c2 in atoms], bugs=BUGS)
+    atoms = slotenc.connected_order(LANG, [(r, o, [_child(c1), _child(c2)]) for r, o, c1, c2 in atoms])
     if len(action) == 2:
         root, rhs = action
         act = ("build", root, slotenc.rhs_of(LANG, rhs))
@@ -395,7 +310,7 @@ def compile_rule(atoms, action, conds=()):
     else:
         root, op, a, b = action
         act = ("row", root, op, [a, b])
-    return slotenc.compile_rule(LANG, atoms, act, conds=conds, bugs=BUGS)
+    return slotenc.compile_rule(LANG, atoms, act, conds=conds)
 
 
 # -------------------------------------------------------------- egg generation
@@ -631,17 +546,7 @@ def check_case(case, verbose=False, stats=None):
     if ys == "OK" and yv != ev:
         fails.append(f"{case.name}: ENCODING is not slot-renaming invariant\n    as written {ev}\n    slots +40  {yv}")
 
-    # 6. the encoding's own well-formedness: an edge's domain is its child's slot
-    # set (Def. 4), and a stored renaming is injective. Neither is visible in a
-    # partition, so agreeing with the reference does not imply either.
-    got = check_invariants(case)
-    if got is not None:
-        wide, noninj = got
-        allowed = 0
-        if wide > allowed:
-            fails.append(f"{case.name}: INVARIANT wide edges {wide}, expected at most {allowed}")
-        if noninj:
-            fails.append(f"{case.name}: INVARIANT non-injective renamings {noninj}")
+    # Raw-row invariants are checked by invariants.py and def4-edges.py.
 
     if verbose and not fails:
         print(f"  ok  {case.name}  {rv}")
@@ -1646,7 +1551,7 @@ def curated():
     # match. The frame's node clique refuses it the same way. The `f` class is slotless
     # so that nothing else notices: with the clique dropped the identified slots are
     # redundant in `r`, the action goes through, and `(h a a)` joins `r`'s class --
-    # `no-cliques` in `mutations.py` is this case firing.
+    # which this case must reject.
     cs.append(
         Case(
             "CLQ1-one-variable-two-node-slots",
@@ -1671,7 +1576,7 @@ def curated():
     # to read `$s1` off the slot the shared body had already pinned; the rule fired,
     # unioned the variable class with a slotless term, and every variable became one.
     # The frame's literal clique states that a rule's different literals are different
-    # slots; `literals-alias` in `mutations.py` is this case failing again. With ONE literal in
+    # slots. With ONE literal in
     # both binders the two sides always agreed: that spelling names both bound slots.
     cs.append(
         Case(
@@ -2088,7 +1993,6 @@ def main():
         "nondeterminism": ["nondeterministic"],
         "order dependence": ["order dependent"],
         "slot-renaming": ["not slot-renaming invariant"],
-        "encoding invariant": ["INVARIANT"],
         "MATCHING mismatch": ["MISMATCH vs reference"],
     }
     counts = {k: 0 for k in cats}

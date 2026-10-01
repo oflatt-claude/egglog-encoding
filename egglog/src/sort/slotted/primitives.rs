@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 /// A renaming's entries as slot numbers, which is what the solvers in this file
 /// work on.
-pub(crate) fn slot_map(bv: &BaseValues, m: &BTreeMap<Value, Value>) -> Renaming {
+fn slot_map(bv: &BaseValues, m: &BTreeMap<Value, Value>) -> Renaming {
     m.iter()
         .map(|(k, v)| (bv.unwrap::<i64>(*k), bv.unwrap::<i64>(*v)))
         .collect()
@@ -16,10 +16,7 @@ fn slot_set(bv: &BaseValues, m: &BTreeMap<Value, Value>) -> Option<SlotSet> {
 }
 
 /// A solver's answer back as a renaming's entries.
-pub(crate) fn value_map(
-    bv: &BaseValues,
-    m: impl IntoIterator<Item = (i64, i64)>,
-) -> BTreeMap<Value, Value> {
+fn value_map(bv: &BaseValues, m: impl IntoIterator<Item = (i64, i64)>) -> BTreeMap<Value, Value> {
     m.into_iter()
         .map(|(k, v)| (bv.get::<i64>(k), bv.get::<i64>(v)))
         .collect()
@@ -27,7 +24,7 @@ pub(crate) fn value_map(
 
 /// The renamings a sequence of values names, as slot maps; `None` if one of them
 /// is not a map.
-pub(crate) fn slot_maps(
+fn slot_maps(
     state: &PureState<'_, '_>,
     values: impl IntoIterator<Item = Value>,
 ) -> Option<Vec<Renaming>> {
@@ -39,16 +36,15 @@ pub(crate) fn slot_maps(
 }
 
 /// A solver's slot maps registered as renamings, in order, for a vector of them.
-pub(crate) fn register_renamings(
+fn register_renamings(
     state: &mut PureState<'_, '_>,
     maps: impl IntoIterator<Item = Renaming>,
 ) -> Vec<Value> {
-    let bv = state.base_values();
-    let renamings: Vec<BTreeMap<Value, Value>> =
-        maps.into_iter().map(|m| value_map(bv, m)).collect();
-    renamings
-        .into_iter()
-        .map(|n| state.register_container::<MapContainer>(MapContainer::renaming(n)))
+    maps.into_iter()
+        .map(|m| {
+            let data = value_map(state.base_values(), m);
+            state.register_container(MapContainer::renaming(data))
+        })
         .collect()
 }
 
@@ -229,12 +225,12 @@ pub(super) fn register_symmetries(eg: &mut EGraph, vec: &VecSort, arc: ArcSort, 
 
 #[rustfmt::skip]
 pub(super) fn register_frame_vec(eg: &mut EGraph, vec: &VecSort, arc: ArcSort) {
-    add_primitive!(eg, "refinements" = {vec.clone(): VecSort} |f: crate::sort::Fr| -> @VecContainer (arc) { VecContainer {
+    add_primitive!(eg, "refinements" = {vec.clone(): VecSort} |f: Fr| -> @VecContainer (arc) { VecContainer {
         do_rebuild: false,
         data: f
             .refinements()
             .into_iter()
-            .map(|g| state.base_values().get::<crate::sort::Fr>(crate::sort::Fr::new(g)))
+            .map(|g| state.base_values().get::<Fr>(Fr::new(g)))
             .collect(),
     } });
 }
