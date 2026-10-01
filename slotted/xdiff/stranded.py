@@ -48,7 +48,7 @@ if _uncovered:
 def _observer():
     out = [
         "(relation ObsSym (U Renaming))",
-        "(rule ((GroupIdx i) (= s (EclassGroup_0 c)) (= g (set-get s i))) ((ObsSym c g)))",
+        "(rule ((RenamesToLeader_0 c g c)) ((ObsSym c g)))",
         "(relation WithSym (String Renaming U Renaming U))",
         "(relation NoSym (String Renaming U Renaming U))",
     ]

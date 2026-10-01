@@ -965,9 +965,8 @@ def claim_query(src, forms, sort):
         root, atoms = enc.flatten(src.lang, pattern, root=f"?_c{i}", tmp=f"?_c{i}t")
         query = enc.compile_query(
             src.lang,
-            # parent first, as a rule's atoms are written: a subterm's atom is then a
-            # nested root, read through one reading per coset of the slots its parent's
-            # other columns pin (C5), rather than through the whole group
+            # Parent first, as a rule's atoms are written. Repeated occurrences
+            # quantify over the class's symmetry rows (C5).
             enc.connected_order(src.lang, atoms, first=next(k for k, a in enumerate(atoms) if a[0] == root)),
             # The claim is compiled beside the program's own `let`s, where egglog
             # refuses a pattern variable that shadows a global, so every name this
@@ -1028,9 +1027,9 @@ def compile_check(src, form):
             # its own slot-swap is reached by both renamings, so the two name one
             # invocation. Every class has the identity in its group, so a class without
             # symmetries compares its renamings as they stand.
-            group = src.carriers[sort].group
-            facts.append(f"(= _grp ({group} {a.cls}))")
-            facts.append(f"(coset-same {a.mp} {b.mp} _grp)")
+            renames = src.carriers[sort].renames
+            facts.append(f"({renames} {a.cls} _sym {a.cls})")
+            facts.append(f"(= {a.mp} (compose {b.mp} _sym))")
         return claimed(body, facts, negative=kind.endswith("!="))
     if kind in ("holds", "not-holds"):
         # "this class contains an application of this operator", which is what a rule
