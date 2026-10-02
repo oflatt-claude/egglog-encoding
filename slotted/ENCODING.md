@@ -707,8 +707,9 @@ that schedule. Part II gives the emitted arrangement.
        ;; spelled in the root's class slots, then every reading of _t1 the rest of the
        ;; frame allows and every consistent merging of what the pattern left open (C8)
        (= refined (refinements (anchor f "_p")))
+       (= refined_len (vec-length refined))
        ;; one refinement per index; `vec-get` is partial past the last (C8)
-       (Idx choice)
+       (Idx refined_len choice)
        (= m (vec-get refined choice))
        ;; the side conditions, read off the refined frame (C9)
        (not-free m "$x" (names "e1"))
@@ -822,8 +823,8 @@ second phase gave `let-binop3` 166,415 distinct matches at the fixed point where
 reference matcher makes some 14,000 over its whole run, and `sum-merge` ran the frame
 primitives on 150,944 candidates to keep 188.
 
-Two readings that agree on the slots the parent's *other* columns pin, and differ only
-on the rest, spell the parent row the same way up to a renaming of the parent's own
+Two readings whose inverses agree on the slots the parent's *other* columns pin,
+and differ only on the rest, spell the parent row the same way up to a renaming of the parent's own
 slots — a symmetry of the parent's class, which the shape rule derives from that very
 row — so what the rule builds from one of them differs from the other's by that
 symmetry, and one of each coset suffices. Quotienting the readings this way took
@@ -832,7 +833,11 @@ workload went from 18.7 s to 9.1 s. This is the reference matcher's
 `get_group_compatible_weak_variants`, which enumerates a node's variants modulo its weak
 shape.
 
-`group-coset-reps` picks the least element per way the group acts on the pinned slots.
+`group-coset-reps` picks the least element per inverse action on the pinned slots.
+A reading maps the nested node's slots into the frame shared with its parent, so
+the parent's other columns pin images of that permutation. Grouping by its forward
+action instead can omit matches: in the symmetric group on three slots, three
+representatives with distinct `g(0)` need not have distinct `g⁻¹(0)`.
 The readings live in `CosetReps`, keyed by the class and the pinned slots, with
 `Reading` as their index: a row per element, read out by its position through
 `GroupIdx`, deleted when the set no longer holds it, and refused outright past
@@ -903,24 +908,29 @@ first phase this took the run from 1.16 s to 0.18 s with one thread, the user ru
 apply time, where `--timing-summary` books the primitives, falling from 820 ms to
 about 20 ms.
 
-The first rule also updates `RefinementCount`, the maximum length of the stored
-refinement vectors. Before the apply phase, `slotted-refine` grows `Idx` to cover
-that length. Starting at zero, each index offers children `2*i+1` and `2*i+2` below
-the limit, so index generation takes logarithmically many rounds. Neither frame
-enumeration nor index consumption has a fixed alternative limit.
+The first rule seeds `Idx(length, 0)` for each nonempty refinement vector. Before
+the apply phase, `slotted-refine` fills the indices for each length: each index
+offers children `2*i+1` and `2*i+2` below that length. Equal lengths share their
+indices. Index generation takes logarithmically many rounds, and a short vector
+never scans indices belonging only to longer vectors. Neither frame enumeration
+nor index consumption has a fixed alternative limit.
+The stored match includes the length as a column, so this restriction is a table
+join rather than a primitive filter applied after joining all lengths.
 
 ```
-(relation _matched_sum-fact-3 (Frames U U U U U))
+(relation _matched_sum-fact-3 (Frames i64 U U U U U))
 
 (rule ((= cls_p (Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1))
        ...
-       (= refined (refinements (anchor f "_p"))))
+       (= refined (refinements (anchor f "_p")))
+       (= refined_len (vec-length refined))
+       (> refined_len 0))
       ;; the match, stored: its refinements and every class the action will read (C13)
-      ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)
-       (set (RefinementCount) (vec-length refined))) :name "sum-fact-3")
+      ((_matched_sum-fact-3 refined refined_len cls_p cls_R cls_t1 cls_e1 cls_e2)
+       (Idx refined_len 0)) :name "sum-fact-3")
 
-(rule ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)
-       (Idx choice)
+(rule ((_matched_sum-fact-3 refined refined_len cls_p cls_R cls_t1 cls_e1 cls_e2)
+       (Idx refined_len choice)
        (= m (vec-get refined choice))
        (not-free m "$x" (names "e1"))
        (not-free m "$y" (names "e1")))
@@ -929,8 +939,8 @@ enumeration nor index consumption has a fixed alternative limit.
       :ruleset slotted-apply :name "sum-fact-3/apply")
 
 ;; the stored match is spent, whether or not a refinement passed the conditions
-(rule ((_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2))
-      ((delete (_matched_sum-fact-3 refined cls_p cls_R cls_t1 cls_e1 cls_e2)))
+(rule ((_matched_sum-fact-3 refined refined_len cls_p cls_R cls_t1 cls_e1 cls_e2))
+      ((delete (_matched_sum-fact-3 refined refined_len cls_p cls_R cls_t1 cls_e1 cls_e2)))
       :ruleset slotted-apply :name "sum-fact-3/drain")
 ```
 
@@ -940,6 +950,11 @@ finds every match of a ruleset before it applies any action, so the drain never 
 a row from the acting rule, and a row is gone after one phase whether or not a
 refinement passed the conditions; a match that recurs after the machinery has changed
 its nodes is found afresh.
+
+Substitution also depends on the body's extracted representative, which can improve
+without changing the matched `Let` row. Both its match-producing rule and its apply
+rule use `:naive`, so each user round revisits those matches even when their explicit
+query inputs are unchanged.
 
 ## Build below the root canonically
 
@@ -1072,7 +1087,7 @@ literal is the bound slot (`bound`), and only a literal may stand there.
 **C8. Placeholders are refined last.** `refinements` enumerates every consistent way
 to merge the blocks a variable or a carried literal reaches -- never two literals, never
 two slots of one node or class -- as a `Vec` with the frame itself first, and the rule
-reads one per `(Idx choice)` with `vec-get`, which is partial past the last.
+reads one per `(Idx refined_len choice)` with `vec-get`.
 `slotted-refine` generates every required index before any match is applied, so
 all alternatives act within the same user round. This is the reference's `final_refine`.
 

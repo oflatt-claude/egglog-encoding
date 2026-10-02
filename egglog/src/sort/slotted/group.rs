@@ -39,8 +39,10 @@ pub(super) fn close<T: Copy + Ord>(group: &[impl Borrow<Map<T>>]) -> Vec<Map<T>>
     known
 }
 
-/// Least representative for each action on the pinned slots. The indices retain
-/// the caller's already interned values; ordering is by actual slot numbers.
+/// Least representative for each inverse action on the pinned slots. A reading
+/// maps a nested node's slots into its parent's frame, so the parent pins images,
+/// not inputs, of that permutation. The indices retain the caller's already
+/// interned values; ordering is by actual slot numbers.
 pub(super) fn coset_reps<T: Copy + Ord>(
     group: &[impl Borrow<Map<T>>],
     pinned: &Map<T>,
@@ -50,8 +52,8 @@ pub(super) fn coset_reps<T: Copy + Ord>(
         let g = g.borrow();
         let key = g
             .iter()
-            .filter(|(k, _)| pinned.contains_key(k))
-            .map(|(k, v)| (*k, *v))
+            .filter(|(_, v)| pinned.contains_key(v))
+            .map(|(k, v)| (*v, *k))
             .collect();
         match least.get(&key) {
             Some(&j) if group[j].borrow() <= g => {}
@@ -116,5 +118,25 @@ mod tests {
         let slots = Map::from([(0, 0), (1, 1)]);
         assert_eq!(slot_closure(&group, &slots), Map::from([(0, 0)]));
         assert_eq!(restrict(&group, &slots), vec![Map::from([(0, 0)]), slots]);
+    }
+
+    #[test]
+    fn readings_cover_every_preimage_of_a_pinned_slot() {
+        let group = close(&[
+            Map::from([(0, 1), (1, 0), (2, 2)]),
+            Map::from([(0, 1), (1, 2), (2, 0)]),
+        ]);
+        assert_eq!(group.len(), 6);
+        // For S3, grouping by g(0) selects two readings with the same g^-1(0)
+        // and loses the match that puts the third node slot at the parent's 0.
+        for pinned in 0..3 {
+            let reps = coset_reps(&group, &Map::from([(pinned, pinned)]));
+            assert_eq!(reps.len(), 3);
+            let preimages: BTreeSet<_> = reps
+                .iter()
+                .map(|&i| *group[i].iter().find(|(_, v)| **v == pinned).unwrap().0)
+                .collect();
+            assert_eq!(preimages, BTreeSet::from([0, 1, 2]));
+        }
     }
 }

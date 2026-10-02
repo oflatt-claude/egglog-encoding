@@ -1127,16 +1127,13 @@ def prelude():
             ";; A node's edges in canonical spelling, and the renaming back to its own names.",
             ";; Declared after `Groups`, which is where `node-shape` reads its groups.",
             "(sort Renamings (Vec Renaming))",
-            ";; Grow indices to cover every stored match before the apply phase.",
+            ";; Valid indices for each refinement-vector length, shared by equal lengths.",
             "(ruleset slotted-refine)",
-            "(function RefinementCount () i64 :merge (max old new))",
-            "(set (RefinementCount) 0)",
-            "(relation Idx (i64))",
-            "(Idx 0)",
+            "(relation Idx (i64 i64))",
             # Binary-tree expansion covers [0, count) in logarithmically many rounds.
             *(
-                f"(rule ((Idx _i) (= _next (+ (* _i 2) {offset})) (< _next (RefinementCount)))"
-                " ((Idx _next)) :ruleset slotted-refine)"
+                f"(rule ((Idx _len _i) (= _next (+ (* _i 2) {offset})) (< _next _len))"
+                " ((Idx _len _next)) :ruleset slotted-refine)"
                 for offset in (1, 2)
             ),
         ]
@@ -2008,9 +2005,10 @@ class Query:
     `new` and `pay_name` continue the query's own name supplies, so whatever is
     appended cannot collide with a name the pattern already used.
 
-    `split`, `refined` and `pays` are for a rule that stores its matches (C13):
+    `split`, `refined`, `refined_len` and `pays` are for a rule that stores its matches (C13):
     `body[:split]` finds a match and binds `refined` to its refinements, `body[split:]`
-    reads one refinement out and checks the conditions, and `pays` maps each payload
+    reads one refinement out and checks the conditions. `refined_len` lets the apply
+    rule join directly on the vector's length, and `pays` maps each payload
     variable the atoms bind to its sort. `split` is `None` when nothing is refined.
     """
 
@@ -2027,6 +2025,7 @@ class Query:
         fname=None,
         split=None,
         refined=None,
+        refined_len=None,
         pays=None,
     ):
         self.body = body
@@ -2042,6 +2041,7 @@ class Query:
         self.fname = fname
         self.split = split
         self.refined = refined
+        self.refined_len = refined_len
         self.pays = pays or {}
 
 
@@ -2207,7 +2207,7 @@ def compile_query(
         body.append(f"(= {cls_of[a]} {cls_of[b]})")
 
     # the frame: every atom's constraints, joined
-    refined = split = None
+    refined = refined_len = split = None
     if not atom_vars:
         frame = "(frame)"
     else:
@@ -2223,9 +2223,12 @@ def compile_query(
         frame = f'(anchor {frame} "{fname(anchor)}")'
     if refine and atoms:
         refined, choice = named("refined"), named("choice")
+        refined_len = named("refined_len")
         body.append(f"(= {refined} (refinements {frame}))")
+        body.append(f"(= {refined_len} (vec-length {refined}))")
+        body.append(f"(> {refined_len} 0)")
         split = len(body)
-        body.append(f"(Idx {choice})")
+        body.append(f"(Idx {refined_len} {choice})")
         frame = f"(vec-get {refined} {choice})"
     fresh = sorted(set(fresh))
     if fresh:
@@ -2260,6 +2263,7 @@ def compile_query(
         fname=fname,
         split=split,
         refined=refined,
+        refined_len=refined_len,
         pays=pay_sorts,
     )
 
@@ -2363,8 +2367,9 @@ def compile_rule(
     refinements in a relation of its own; a second rule in the `slotted-apply`
     ruleset joins that relation with `Idx`, reads one refinement, checks the
     conditions and acts; and a third, in the same ruleset, deletes the row. The
-    schedule grows `Idx` to the largest stored vector's length before applying any
-    matches, so every refinement acts within that same user step.
+    schedule grows `Idx` separately for each vector length before applying any
+    matches. Every refinement acts within that same user step, without scanning
+    indices from longer vectors for a short one.
 
     A right-hand-side slot the pattern never pins is FRESH BY DEFINITION, so it is
     inferred rather than declared -- the reference mints one on the spot
@@ -2372,7 +2377,9 @@ def compile_rule(
     explicit `fresh` is still honoured and adds nothing an inferred set does not hold.
 
     `name` and `ruleset` are the rule's; `naive` marks an action that reads and writes
-    tables, which egglog allows only in a `:naive` rule.
+    tables, which egglog allows only in a `:naive` rule. Its match-producing rule
+    must also run naively: the action can change when an unmatched table changes
+    (for substitution, when the body gains a better extracted term).
     """
     q = compile_query(
         lang,
@@ -2430,8 +2437,8 @@ def compile_rule(
     if q.split is None:
         return rule(body, act, ":naive" if naive else None, in_ruleset, f':name "{name}"' if name else None)
     # C13: one row per match, its refinements and the classes the action reads
-    columns = [q.refined, *cls_of.values(), *sorted(q.pays)]
-    sorts = ["Frames", *(pvar_sorts[v] for v in cls_of), *(q.pays[v] for v in sorted(q.pays))]
+    columns = [q.refined, q.refined_len, *cls_of.values(), *sorted(q.pays)]
+    sorts = ["Frames", "i64", *(pvar_sorts[v] for v in cls_of), *(q.pays[v] for v in sorted(q.pays))]
     relation = match_relation(name, [*body[: q.split], *act])
     row = f"({relation} {' '.join(columns)})"
     return "\n".join(
@@ -2439,7 +2446,8 @@ def compile_rule(
             f"(relation {relation} ({' '.join(sorts)}))",
             rule(
                 body[: q.split],
-                [row, f"(set (RefinementCount) (vec-length {q.refined}))"],
+                [row, f"(Idx {q.refined_len} 0)"],
+                ":naive" if naive else None,
                 in_ruleset,
                 f':name "{name}"' if name else None,
             ),

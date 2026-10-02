@@ -17,13 +17,55 @@ import eval_report as R  # noqa: E402
 import xdiff as X  # noqa: E402
 
 
-def graphs(name, program, spec):
+def graphs(name, program, spec, lang=X.LANG):
     enc, ref = (E.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
-    E.encoding_counts(program, name, X.LANG, enc, 60)
+    E.encoding_counts(program, name, lang, enc, 60)
     E.run_reference(spec, ref, 60, True)
     assert enc.graph is not None and ref.graph is not None, (name, enc.as_dict("test"), ref.as_dict("test"))
     E.compare([enc, ref])
     return enc, ref
+
+
+def source_graphs(name, rounds):
+    """Compare a small SDQL fixture's start, unions, rewrites, and final goal."""
+    path = ROOT / "slotted" / "tests" / f"{name}.egg"
+    src = E.sc.Source(path)
+    lang = E.pf.reference_language()
+    forms = E.sc.parse(path.read_text())
+    start = next(f[2] for f in forms if f[:2] == ["let", "start"])
+    target = next(f[1][2] for f in forms if f[0] == "check")
+    spec = (
+        "\n".join(
+            [
+                f"rounds {rounds}",
+                *E.ctor_lines(lang),
+                f"term {lang.sexpr(src.term(start, ground=True))}",
+                "term (var $0)",
+                *(
+                    "union " + " ".join(lang.sexpr(src.term(t, ground=True)) for t in f[1:])
+                    for f in forms
+                    if f[0] == "union"
+                ),
+                *E.rule_lines(lang, path, None, False),
+                f"goal {lang.sexpr(src.term(target, ground=True))}",
+            ]
+        )
+        + "\n"
+    )
+    return graphs(name, E.sc.compile_source(src), spec, lang)
+
+
+def substitution_refresh():
+    enc, ref = source_graphs("subst-refresh", 2)
+    assert ref.goal == "yes", ref.goal
+    assert enc.graph.summary() == (5, 8) == (ref.classes, ref.nodes)
+    assert enc.verdict(ref) == "isomorphic", enc.vs_ref
+
+
+def coset_direction():
+    enc, ref = source_graphs("coset-direction", 1)
+    assert ref.goal == "yes", ref.goal
+    assert enc.verdict(ref) == "isomorphic", enc.vs_ref
 
 
 def symmetry_case(depth, swapped):
@@ -440,6 +482,8 @@ def main():
     goal_reporting()
     summary_reporting()
     zero_round_budget()
+    substitution_refresh()
+    coset_direction()
     complete_refinement()
     exit_status(*verdicts())
     print("OK: complete refinement, separate count checks, exact graph verdicts, and evaluation exit statuses")
