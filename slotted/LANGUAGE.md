@@ -9,6 +9,14 @@ python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg
 python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg --desugar   # see the egglog
 ```
 
+`--nested-compat` restricts rewrite matching to the reference nested matcher's
+aliasing policy. It keeps the outer class's slots and each nested node's fresh
+slots pairwise distinct, while preserving sharing already present in child edges.
+The default implements the more complete multipattern matcher. Compatibility mode
+accepts a single nested left-hand pattern and rejects additional equality side
+patterns; checks keep their ordinary semantics. See [ENCODING.md](ENCODING.md#against-the-reference)
+for the exact graph comparisons and substitution policy used by `eval.py`.
+
 The additions exist because a slotted term is not an egglog value. A term denotes a
 class **together with** a renaming — an *invocation* — and egglog has no notion of
 that. Everything below is either a way to write such a term, or a way to ask a question
@@ -520,6 +528,7 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | --- | --- |
 | `slotted/tests/` | programs in this language that ASK something: terms, and claims about them. Run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
+| `slotted/tests/nested/` | fixtures whose assertions require `--nested-compat`; the test runner supplies the flag |
 | `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/eval.py` runs in full |
 | `slotted/tests/unsupported/` | originals written with constructs the language refuses, kept beside their runnable translations; skipped by the runner |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |

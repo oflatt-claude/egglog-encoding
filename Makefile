@@ -79,6 +79,7 @@ proof-tests:
 slotted-check:
 	cargo build
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
+	cargo test --manifest-path slotted/xmulti/Cargo.toml
 	python3 slotted/checks/check-slotted.py
 
 # The offline half of the above. The rest compares against `xmulti`, whose separately

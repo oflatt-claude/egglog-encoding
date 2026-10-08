@@ -3,6 +3,7 @@
 
     python3 slotted/eval.py array --params 0
     python3 slotted/eval.py sdql --kernel mmm --phase 1st
+    python3 slotted/eval.py --nested-compat --side encoding,ref-nested
     python3 slotted/eval.py --from /tmp/eval.jsonl --html /tmp/eval.html
 
 Per side, one timed process checks the goal; a separate untimed process collects
@@ -10,9 +11,11 @@ counts and the final graph without inserting the target. Encoding/ref-multi
 comparisons require equal class/node counts AND a verified isomorphism. Missing
 or bounded-out evidence is inconclusive and fails the correctness gate.
 
-ref-multi uses matching snapshot substitution. ref-nested uses the artifact's
-syntactic substitution and is diagnostic only. Every selected side must reach
-its goal. --no-counts explicitly opts into goal/timing checks alone.
+By default ref-multi uses matching snapshot substitution, while ref-nested uses
+the artifact's syntactic substitution and is diagnostic only. --nested-compat
+restricts encoding aliasing, uses snapshot substitution on both references, and
+requires equality to ref-nested instead. Every selected side must reach its goal.
+--no-counts explicitly opts into goal/timing checks alone.
 
 Defaults: release builds, 300 seconds per process, the paper's round budgets.
 Records are appended to eval.jsonl; use --jsonl for a separate cache. --from
@@ -56,9 +59,9 @@ REPORT = ROOT / "eval.jsonl"
 #: crate's `checks` feature, the way the paper's experiments ran it.
 EGGLOG = ROOT / "target" / "release" / "egglog"
 #: `--group-cap`: how many live slots the oracle enumerates a symmetry group over when it
-#: dumps its graph; past it the dump, and so the counts and the comparison, are unavailable.
-#: The oracle's own default is 6, which stops at every second-phase SDQL graph; 10 covers
-#: all but TTM's, whose 12-slot classes take the oracle minutes to enumerate.
+#: dumps its graph; past it the exact comparison is unavailable, but direct counts remain.
+#: The oracle's own default is 6. Larger SDQL graphs exceed even 10; raising the
+#: cap has factorial cost, so keep counts available independently of that limit.
 GROUP_CAP = 10
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "release" / "xmulti"
 BUILDS = (
@@ -76,12 +79,12 @@ def build():
 
 
 # ------------------------------------------------------------------ the reference
-def oracle_env(side):
+def oracle_env(side, nested_compat=False):
     """Choose the comparison's policy explicitly, overriding ambient XMULTI_SUBST."""
     return {
         **os.environ,
         "XMULTI_GROUP_SLOT_CAP": str(GROUP_CAP),
-        "XMULTI_SUBST": "syntactic" if side == "ref-nested" else "snapshot",
+        "XMULTI_SUBST": "syntactic" if side == "ref-nested" and not nested_compat else "snapshot",
     }
 
 
@@ -89,7 +92,7 @@ def run_reference(spec, row, timeout, counts):
     """One timed `xmulti` run, whose GOAL line is the criterion; with `counts`, a second,
     untimed run that also dumps the graph, since enumerating the symmetry groups for the
     dump can cost more than the run."""
-    env = oracle_env(row.side)
+    env = oracle_env(row.side, row.nested_compat)
     row.substitution = env["XMULTI_SUBST"]
     t0 = time.perf_counter()
     try:
@@ -116,11 +119,13 @@ def run_reference(spec, row, timeout, counts):
     if counts:
         try:
             r = subprocess.run(
-                [str(XMULTI)], input=spec + "dump\n", capture_output=True, text=True, timeout=timeout, env=env
+                [str(XMULTI)], input=spec + "sizes\ndump\n", capture_output=True, text=True, timeout=timeout, env=env
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            reference_sizes((exc.stdout or b"").decode(), row)
             row.graph_issue = "reference graph dump exceeded timeout"
             return
+        reference_sizes(r.stdout, row)
         if r.returncode != 0:
             row.graph_issue = "reference graph dump failed: " + (r.stderr.strip() or f"exit {r.returncode}")
             return
@@ -132,8 +137,18 @@ def run_reference(spec, row, timeout, counts):
         if not g.ids():
             row.graph_issue = "reference graph dump is empty"
             return
-        row.classes, row.nodes = g.summary()
+        if (row.classes, row.nodes) != g.summary():
+            row.graph_issue = "reference direct sizes disagree with graph dump"
+            return
         row.graph = g
+
+
+def reference_sizes(stdout, row):
+    """Keep cheap direct counts even when enumerating symmetry groups fails."""
+    for line in stdout.splitlines():
+        if line.startswith("SIZES "):
+            row.classes, row.nodes = map(int, line.split()[1:])
+            return
 
 
 def ctor_lines(lang):
@@ -312,7 +327,7 @@ def compare_graphs(enc, reference):
     if enc.graph is None:
         return "inconclusive: no encoding graph"
     if reference.graph is None:
-        return "inconclusive: no reference graph"
+        return "inconclusive: no reference graph" + (f"; {reference.graph_issue}" if reference.graph_issue else "")
     cap, ISO.SEARCH_CAP = ISO.SEARCH_CAP, min(ISO.SEARCH_CAP, 5_000)
     try:
         iso, why = ISO.find_isomorphism(reference.graph, enc.graph)
@@ -329,7 +344,7 @@ def compare_graphs(enc, reference):
 
 
 # ------------------------------------------------------------------ the array study
-def array_rows(params, rounds, sides, counts, timeout):
+def array_rows(params, rounds, sides, counts, timeout, nested_compat=False):
     for n in params:
         case = XA.goal_cases([n], rounds=rounds)[0]
         a, b = case.probes
@@ -337,7 +352,7 @@ def array_rows(params, rounds, sides, counts, timeout):
         goal = [f"goal {XA.sexpr(b)}"]
         group, bare_program = [], None
         for side in sides:
-            row = Row("array", case.name, side, rounds)
+            row = Row("array", case.name, side, rounds, nested_compat=nested_compat)
             if side == "ref-multi":
                 lines = [ln for r in case.rules for ln in r.spec_lines()]
                 run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts)
@@ -345,7 +360,7 @@ def array_rows(params, rounds, sides, counts, timeout):
                 lines = rule_lines(XA.LANG, XA.ARRAY_SRC_RULES, None, nested=True)
                 run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts)
             else:
-                prog = XA.egg_program(case, mult=1, defer_probes=True)
+                prog = XA.egg_program(case, mult=1, defer_probes=True, nested_compat=nested_compat)
                 probes = len(case.probes)
 
                 def goal_of(r, k=probes):
@@ -356,7 +371,9 @@ def array_rows(params, rounds, sides, counts, timeout):
                 run_egglog(prog, case.name, row, timeout, goal_of)
                 if counts:
                     bare = XA.Case(case.name, case.terms, case.rules, [], rounds=rounds)
-                    bare_program = XA.egg_program(bare, mult=1).replace("(print-function SameClass 100000)", "")
+                    bare_program = XA.egg_program(bare, mult=1, nested_compat=nested_compat).replace(
+                        "(print-function SameClass 100000)", ""
+                    )
                     encoding_counts(bare_program, case.name, XA.LANG, row, timeout)
             group.append(row)
         if counts and bare_program is not None:
@@ -365,7 +382,7 @@ def array_rows(params, rounds, sides, counts, timeout):
 
 
 # ------------------------------------------------------------------- the SDQL study
-def sdql_program(kernel, phase, rules, rounds, with_target):
+def sdql_program(kernel, phase, rules, rounds, with_target, nested_compat=False):
     """One workload as a slotted source: the full library by include, or BATAX's own 12."""
     if rules == 12:
         # the goal-directed test, its own rules and schedule; only its terms are reused
@@ -380,12 +397,12 @@ def sdql_program(kernel, phase, rules, rounds, with_target):
     path = SCRATCH / f"eval-{kernel}_{phase}-{rules}-{'goal' if with_target else 'counts'}-{os.getpid()}.egg"
     path.write_text("\n".join(sc.render(f) for f in forms) + "\n")
     try:
-        return sc.compile_source(sc.Source(path))
+        return sc.compile_source(sc.Source(path), nested_compat=nested_compat)
     finally:
         path.unlink(missing_ok=True)
 
 
-def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
+def sdql_rows(workloads, rules, rounds, sides, counts, timeout, nested_compat=False):
     lang = pf.reference_language()
     source = sc.Source(pf.RULES)
     for kernel, phase in workloads:
@@ -402,7 +419,7 @@ def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
         name = f"{kernel}_{phase}-{rules}rules"
         group, bare_program = [], None
         for side in sides:
-            row = Row("sdql", name, side, budget, rules)
+            row = Row("sdql", name, side, budget, rules, nested_compat=nested_compat)
             row.paper = pf.TABLE1[(kernel, phase)]
             if side.startswith("ref-"):
                 lines = rule_lines(lang, pf.RULES, selected, nested=(side == "ref-nested"))
@@ -414,9 +431,9 @@ def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
                         return "yes"
                     return "no" if "(check" in r.stderr else "error"
 
-                run_egglog(sdql_program(kernel, phase, rules, budget, True), name, row, timeout, goal_of)
+                run_egglog(sdql_program(kernel, phase, rules, budget, True, nested_compat), name, row, timeout, goal_of)
                 if counts:
-                    bare_program = sdql_program(kernel, phase, rules, budget, False)
+                    bare_program = sdql_program(kernel, phase, rules, budget, False, nested_compat)
                     encoding_counts(bare_program, name, lang, row, timeout)
             group.append(row)
         if counts and bare_program is not None:
@@ -429,6 +446,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql"))
     ap.add_argument("--side", default="all", help="comma-separated subset of encoding,ref-multi,ref-nested")
+    ap.add_argument(
+        "--nested-compat",
+        action="store_true",
+        help="limit encoding aliasing and require equality to ref-nested, using snapshot substitution on both sides",
+    )
     ap.add_argument("--params", type=int, nargs="*", default=[0, 1, 2], help="array: extra function parameters")
     ap.add_argument(
         "--rounds", type=int, default=None, help="iterations; default 6 for array, the artifact's limit for sdql"
@@ -450,14 +472,14 @@ def main():
         default=True,
         help="count the final e-graphs' classes and nodes, whether the encoding had settled, and compare"
         " the encoding's graph with each reference side's (isomorphic, different, or inconclusive);"
-        " require verified equality to ref-multi when both sides are selected",
+        " require verified equality to ref-multi, or ref-nested with --nested-compat, when both sides are selected",
     )
     ap.add_argument(
         "--group-cap",
         type=int,
         default=GROUP_CAP,
-        help="live slots the oracle enumerates a symmetry group over when dumping; TTM's second phase"
-        " needs 12, which takes the oracle minutes (default %(default)s)",
+        help="maximum live slots the oracle enumerates a symmetry group over when dumping;"
+        " raising this limit has factorial cost (default %(default)s)",
     )
     ap.add_argument("--timeout", type=int, default=300, help="seconds per run; the artifact's own budget")
     ap.add_argument(
@@ -523,26 +545,24 @@ def main():
 
 
 def successful(rows, sides, counts):
-    """Goals must succeed; MultiPattern comparison needs equal counts and a certificate.
-
-    The nested matcher is a diagnostic, not the correctness oracle. Explicit
-    `--no-counts` runs check goals alone; missing verdicts or evidence about other
-    observations do not satisfy a requested graph comparison.
-    """
+    """Goals must succeed; the mode's reference requires counts and a certificate."""
     if not rows or any(r.goal != "yes" for r in rows):
         return False
-    if not counts or not {"encoding", "ref-multi"}.issubset(sides):
+    if not counts or "encoding" not in sides:
         return True
     groups = {}
     for row in rows:
         groups.setdefault(row.workload(), {})[row.side] = row
-    return all(
-        "encoding" in group
-        and "ref-multi" in group
-        and compare_counts(group["encoding"], group["ref-multi"]) == "same counts"
-        and group["encoding"].verdict(group["ref-multi"]) == "isomorphic"
-        for group in groups.values()
-    )
+    for workload, group in groups.items():
+        reference = "ref-nested" if workload[-1] else "ref-multi"
+        if reference not in sides:
+            continue
+        if "encoding" not in group or reference not in group:
+            return False
+        enc, ref = group["encoding"], group[reference]
+        if compare_counts(enc, ref) != "same counts" or enc.verdict(ref) != "isomorphic":
+            return False
+    return True
 
 
 def collect(args, sides, ap):
@@ -557,13 +577,22 @@ def collect(args, sides, ap):
     rows = []
     if args.study in ("all", "array"):
         rows += list(
-            array_rows(args.params, 6 if args.rounds is None else args.rounds, sides, args.counts, args.timeout)
+            array_rows(
+                args.params,
+                6 if args.rounds is None else args.rounds,
+                sides,
+                args.counts,
+                args.timeout,
+                args.nested_compat,
+            )
         )
     if args.study in ("all", "sdql"):
         workloads = [w for w in pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
         if args.rules == 12 and workloads != [("batax", "2nd")]:
             ap.error("--rules 12 is the suite's BATAX second-phase subset: use --kernel batax --phase 2nd")
-        rows += list(sdql_rows(workloads, args.rules, args.rounds, sides, args.counts, args.timeout))
+        rows += list(
+            sdql_rows(workloads, args.rules, args.rounds, sides, args.counts, args.timeout, args.nested_compat)
+        )
     return rows
 
 

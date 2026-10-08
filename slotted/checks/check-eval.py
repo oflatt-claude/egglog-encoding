@@ -326,12 +326,13 @@ term (app (lam $0 (g (var $0) (null))) (null))
 union (g (var $0) (null)) (f (var $0) (null))
 rule
 """
-    for side, lhs, policy, op in (
-        ("ref-nested", "nested (app (lam $x ?body) ?t)", "syntactic", "g"),
-        ("ref-multi", "atom root app lam t\natom lam lam $x body", "snapshot", "f"),
+    for side, lhs, policy, op, compat in (
+        ("ref-nested", "nested (app (lam $x ?body) ?t)", "syntactic", "g", False),
+        ("ref-nested", "nested (app (lam $x ?body) ?t)", "snapshot", "f", True),
+        ("ref-multi", "atom root app lam t\natom lam lam $x body", "snapshot", "f", False),
     ):
         spec = head + lhs + f"\nrhs root ?body[(var $x) := ?t]\ngoal ({op} (null) (null))\n"
-        row = E.Row("regression", "substitution-policy", side, 1)
+        row = E.Row("regression", "substitution-policy", side, 1, nested_compat=compat)
         with patch.dict(os.environ, {"XMULTI_SUBST": "invalid-ambient-policy"}):
             E.run_reference(spec, row, 30, True)
         assert row.goal == "yes", row.as_dict("test")
@@ -453,6 +454,60 @@ def graph_failure_reasons():
         E.compare([failed, reference])
         assert reason in failed.verdict(reference)
 
+    # Direct sizes survive the dump's symmetry cap or a timeout after SIZES.
+    for dump in (
+        subprocess.CompletedProcess([], 2, "SIZES 10 20\n", "REFERENCE_LIMIT: symmetry cap"),
+        subprocess.TimeoutExpired("xmulti", 1, output=b"SIZES 10 20\n"),
+    ):
+        reference = E.Row("regression", "diagnostics", "ref-nested", 1, nested_compat=True)
+        with patch.object(E.subprocess, "run", side_effect=[timed, dump]):
+            E.run_reference("", reference, 1, True)
+        assert (reference.classes, reference.nodes) == (10, 20)
+        assert reference.graph is None and reference.graph_issue
+        failed = row()
+        failed.classes, failed.nodes = 10, 20
+        failed.graph = object()
+        E.compare([failed, reference])
+        assert failed.verdict(reference).startswith("inconclusive: no reference graph")
+
+
+def nested_comparison_policy():
+    enc, ref = (
+        E.Row("regression", "nested-policy", side, 1, nested_compat=True) for side in ("encoding", "ref-nested")
+    )
+    for row in (enc, ref):
+        row.goal, row.classes, row.nodes = "yes", 1, 1
+    sides = ("encoding", "ref-nested")
+    with tempfile.TemporaryDirectory(prefix="slotted-nested-gate-") as tmp:
+        path = Path(tmp) / "rows.jsonl"
+        for verdict in ("isomorphic", "different: node sets", "inconclusive: cap", None):
+            enc.vs_ref = {} if verdict is None else {ref.side: E.Comparison(enc.observation, ref.observation, verdict)}
+            assert E.successful([enc, ref], sides, True) == (verdict == "isomorphic")
+            assert E.successful([enc, ref], sides, False)
+            path.write_text("".join(json.dumps(r.as_dict("test")) + "\n" for r in (enc, ref)))
+            result = subprocess.run(
+                [sys.executable, E.__file__, "--from", path, "--side", ",".join(sides)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert result.returncode == (0 if verdict == "isomorphic" else 1), result.stderr
+    enc.vs_ref = {ref.side: E.Comparison(enc.observation, ref.observation, "isomorphic")}
+    assert not E.successful([enc], sides, True)
+    with patch.object(ref, "nodes", 2):
+        assert not E.successful([enc, ref], sides, True)
+
+    # A full-matching observation cannot replace a compatibility observation.
+    full = E.Row("regression", enc.case, "encoding", 1)
+    with tempfile.TemporaryDirectory(prefix="slotted-nested-report-") as tmp:
+        path = Path(tmp) / "rows.jsonl"
+        path.write_text("".join(json.dumps(r.as_dict("test")) + "\n" for r in (enc, ref, full)))
+        loaded, _ = E.load_rows(path, merged=True)
+        assert len(loaded) == 3 and loaded[0].verdict(loaded[1]) == "isomorphic"
+        for long in (False, True):
+            sections = R.report_sections(loaded, sides, long)
+            assert all("nested compatibility" in R.markdown(head, table) for _, _, head, table in sections)
+
 
 def zero_round_budget():
     """An explicit zero must not silently run the paper's default budget."""
@@ -466,6 +521,7 @@ def zero_round_budget():
         rounds=0,
         counts=False,
         timeout=30,
+        nested_compat=False,
     )
     rows = E.collect(args, ("ref-multi",), argparse.ArgumentParser())
     assert len(rows) == 2
@@ -477,6 +533,7 @@ def main():
     E.EGGLOG = ROOT / "target" / "debug" / "egglog"
     E.XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
     substitution_policies()
+    nested_comparison_policy()
     merged_observations()
     graph_failure_reasons()
     goal_reporting()

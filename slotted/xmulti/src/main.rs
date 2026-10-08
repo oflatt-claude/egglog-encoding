@@ -526,7 +526,9 @@ impl Snapshot {
     /// The chosen term under an invocation, its private slots fresh.
     fn term(&self, i: &AppliedId) -> Option<RecExpr<L>> {
         let node = self.best.get(&i.id)?;
-        let node = node.apply_slotmap_fresh(&i.m);
+        // The invocation can name a slot that the stored node binds. Rename
+        // bound occurrences first so applying its free-slot map cannot capture.
+        let node = node.refresh_private().apply_slotmap_fresh(&i.m);
         let mut children = Vec::new();
         for child in node.applied_id_occurrences() {
             children.push(self.term(&child)?);
@@ -997,6 +999,28 @@ fn partition(eg: &G, probes: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_invocation_cannot_capture_a_free_slot() {
+        let mut eg = G::default();
+        let root = add(&mut eg, "(lam $bound (f (var $bound) (var $free)))");
+        Snapshot::take(&eg);
+        SNAPSHOT.with(|s| {
+            let s = s.borrow();
+            let snapshot = s.as_ref().unwrap();
+            let node = &snapshot.best[&root.id];
+            let bound = *node.private_slots().iter().next().unwrap();
+            let free = *eg.slots(root.id).iter().next().unwrap();
+            let mut map = SlotMap::new();
+            map.insert(free, bound);
+            let invocation = AppliedId::new(root.id, map);
+            let term = snapshot.term(&invocation).unwrap();
+            let result = eg.add_expr(term);
+            assert_eq!(result.slots(), [bound].into_iter().collect());
+            assert!(eg.eq(&result, &invocation));
+            eg.check();
+        });
+    }
 
     #[test]
     fn tree_cost_strictly_increases_beyond_machine_sizes() {

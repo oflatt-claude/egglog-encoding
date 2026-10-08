@@ -2055,6 +2055,7 @@ def compile_query(
     var_prefix="",
     refine=True,
     anchor=None,
+    nested_compat=False,
 ):
     """Compile a flattened multipattern into the facts that match it, as FRAMES.
 
@@ -2194,7 +2195,8 @@ def compile_query(
         # Atom identity is independent of every user variable's spelling.
         atom_label = f"@atom:{idx}"
         av = named(f"atom_{idx}")
-        body.append(f'(= {av} (atom "{atom_label}" {" ".join(bindings)}))')
+        primitive = "nested-atom" if nested_compat else "atom"
+        body.append(f'(= {av} ({primitive} "{atom_label}" {" ".join(bindings)}))')
         atom_vars.append(av)
     binding[0] = False
 
@@ -2357,6 +2359,7 @@ def compile_rule(
     name=None,
     ruleset=None,
     naive=False,
+    nested_compat=False,
 ):
     """Compile a flattened multipattern and its action into egglog rules.
 
@@ -2390,6 +2393,7 @@ def compile_rule(
         fresh=set(fresh) | (slot_literals(action) - pinned_slots(atoms)),
         refine=refine,
         anchor=action[1],
+        nested_compat=nested_compat,
     )
     body, cls_of, mp_of, slot_of = q.body, q.cls_of, q.mp_of, q.slot_of
     pvar_sorts, new = q.pvar_sorts, q.new

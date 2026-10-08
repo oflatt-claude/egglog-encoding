@@ -25,6 +25,8 @@ SRC_DIR = ROOT / "slotted" / "tests"
 SNAPSHOTS = SRC_DIR / "snapshots"
 # Originals written against constructs the language refuses; see the README there.
 UNSUPPORTED = SRC_DIR / "unsupported"
+# These fixtures expect the reference nested matcher's restricted aliasing.
+NESTED = SRC_DIR / "nested"
 COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 
 
@@ -97,6 +99,8 @@ def main():
     bad = []
     for src in srcs:
         cmd = [sys.executable, str(COMPILE), str(src), "--run"]
+        if NESTED in src.parents:
+            cmd.append("--nested-compat")
         # A library's rules are already snapshotted by the generator that emits them
         # into `target/slotted/`, so snapshotting its compiled program too
         # would commit the same language rules twice.

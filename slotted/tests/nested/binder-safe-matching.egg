@@ -1,3 +1,5 @@
+; Run with --nested-compat: this expects the nested matcher's aliasing policy.
+; Under full multipattern matching the rule needs an explicit not-free guard.
 (sort U)
 
 ; (Sum $i ?b) means sum i=0..10 of ?b

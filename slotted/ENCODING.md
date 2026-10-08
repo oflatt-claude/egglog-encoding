@@ -119,8 +119,8 @@ comparing final graphs: choosing a different representative can build a differen
 graph. Optimizations must preserve selection over the decoded nodes, not merely
 preserve the set of represented equalities. The storage of the selected tree as
 shared templates is an optimization.
-The current multipattern comparison deliberately aligns representative selection on
-both sides; the nested comparison uses the reference's syntactic policy. See
+Correctness comparisons deliberately align representative selection on both sides;
+the separate nested performance baseline uses the reference's syntactic policy. See
 *Against the reference* for that distinction and the paper artifact's policies.
 
 This is a semantic overview of the current encoding. It retains slot restriction,
@@ -662,6 +662,7 @@ The primitives:
 | `(lit "$x" e)`, `(bound "$x" e)` | the column is the literal `$x`: `Node(a, e(0)) = Lit("$x")`; `bound` is a binder column, whose literal is node data and not carried into refinement |
 | `(leaf e)` | a payload leaf reached through its own class: node slots, nothing more |
 | `(atom "a" binding...)` | one atom's constraints, closed; fails if its own columns break a clique |
+| `(nested-atom "a" binding...)` | the same constraints, plus this node's fresh slots in the nested compatibility clique described below |
 | `(frame-join f g)` | both frames' constraints, closed; fails where a clique breaks. Associative and commutative |
 | `(anchor f "p")` | the frame spelled in `p`'s slot names: the rule's root, so its renaming is the identity and the action is egglog's `union` |
 | `(refinements f)` | every consistent way to decide the readings left to the frame, and then to merge the blocks refinement may touch, as a `Vec` of frames; `vec-get` reads one and is partial past the last |
@@ -1150,8 +1151,9 @@ reach one value. The root keeps the frame's spelling (C11).
 
 # Against the reference
 
-The side to match is the reference crate's multipattern matcher, `ref-multi` -- the
-pattern language the encoding implements -- and the goal is the same e-graph: the same
+By default the encoding matches the reference crate's multipattern matcher,
+`ref-multi`. With `--nested-compat`, it instead restricts aliasing to match
+`ref-nested`. In both comparisons the goal is the same e-graph: the same
 classes, slots, groups, and nodes up to a verified isomorphism. `slotted/eval.py`
 compares the final graphs and says `isomorphic`, `different`, or `inconclusive`.
 It attempts witness search on every available graph pair, using compact interned
@@ -1160,18 +1162,21 @@ probe partitions cannot override an exact rejection or establish equality. With
 counts enabled, class and node counts are also checked separately before witness
 search. They remain visible even if search is inconclusive, and a count mismatch
 rejects the comparison without trusting the isomorphism checker. Missing counts or
-unverified `ref-multi` comparisons fail the command when both encoding and
-`ref-multi` are selected; loading a saved report also requires equal counts as well
+unverified comparisons to the mode's reference fail the command when both sides
+are selected; loading a saved report also requires equal counts as well
 as a verified verdict. Each comparison records the encoding and reference observation
 IDs. A merged report replacing either observation marks the old comparison inconclusive;
 it cannot reuse an earlier witness verdict just because the counts still match. Workload
-identity includes the rule count. Graph collection records why counts are unavailable,
-including timeouts and symmetry-enumeration limits; unexpected reader errors propagate.
+identity includes the rule count and compatibility mode. Reference class/node counts
+are collected directly before dumping the graph and checked against the parsed dump.
+They remain available if symmetry enumeration exceeds its cap or timeout. Graph
+collection records why evidence is unavailable; unexpected reader errors propagate.
 The JSONL is a versioned disposable cache, and old schemas require recomputation.
 Goal outcome, elapsed seconds, and graph size have separate columns. Each side's
 goal is checked independently, and any unsuccessful goal fails the command even
-when the graphs are isomorphic. The nested matcher can miss a goal that the encoding
-reaches; agreement with it is not required for correctness. Elapsed seconds measure
+when the graphs are isomorphic. Without compatibility mode, the nested matcher can
+miss a goal that the encoding reaches, and graph agreement with it is not required.
+Elapsed seconds measure
 the whole run, including unsuccessful runs, rather than time to a successful goal.
 Both Markdown and HTML reports start with a compact table in the paper's Table 1
 layout: systems grouped under each workload, with budget, goal, elapsed seconds,
@@ -1196,7 +1201,10 @@ be made the same, each established on a minimal case the harness keeps:
   substitutes as the encoding does: `slotted/xmulti`'s `SnapshotSubst` takes the
   smallest term per class at each round's start, the same tie-break over the same
   constructor names (`ctor` lines in the spec, from `eval.py`), and is the harness's
-  default (`XMULTI_SUBST=syntactic` restores the crate's). Without it, ΣMMM's second
+  default (`XMULTI_SUBST=syntactic` restores the crate's). Reconstructing that term
+  freshens each node's bound occurrences before applying its free-slot renaming,
+  so a stored binder name cannot capture an invocation's free slot.
+  Without matching selection, ΣMMM's second
   phase ended with 71 classes against the
   reference's 75, eight reference classes split; with it the partitions agree.
 - *One row per node.* The shape walk folds a row and its image under a symmetry of a
@@ -1223,7 +1231,7 @@ be recomputed. TTM's second phase remains unverified:
 `ref-multi` and `syntactic` for `ref-nested`, overriding ambient `XMULTI_SUBST` on
 both the timed and counting runs. The binary reports the selected policy and each
 evaluation row records it. Syntactic substitution does not build our extraction
-snapshots. Nested results are diagnostic; their counts and graph are not expected
+snapshots. Without `--nested-compat`, nested results are diagnostic; their counts and graph are not expected
 to match the encoding, since both the matcher and substitution policy differ.
 
 This follows the artifact at commit `83f2e5b`: the
@@ -1240,6 +1248,40 @@ The array experiment uses explicit let-rewriting instead of direct substitution,
 as stated in the paper's footnote 4. We retain the pinned modern reference revision
 for both matchers, so this baseline reproduces the substitution choice, not the
 entire historical implementation.
+
+**Nested compatibility.** To compare exact graphs with the nested matcher, run:
+
+```sh
+python3 slotted/eval.py --nested-compat --side encoding,ref-nested --jsonl /tmp/nested-eval.jsonl
+```
+
+The compiler emits `nested-atom` instead of `atom` for rewrite patterns. This adds
+one match-wide disequality clique whose members are the outer class's live slots
+and every matched node's slots outside that node's class slot set. These are the
+origins of the concrete names the nested matcher assigns: it preserves the outer
+invocation and freshens each entered node's redundant and bound slots. Child edges
+transport names already in that clique; they do not introduce another member for
+the same name. Pattern literals retain their ordinary distinctness constraint and
+can name one of these slots.
+
+Every join, symmetry resolution, and refinement must respect the extra clique.
+Thus the mode prevents new aliases both when joining repeated pattern variables
+or literals and when enumerating optional refinements. Merely disabling final
+refinement would still permit aliases forced during a join. Sharing already present
+in a stored edge remains valid. The mode supports a single nested left-hand pattern;
+additional equality side patterns are rejected. Conditions still apply, and
+observational checks retain ordinary matching semantics.
+
+Compatibility evaluation uses the same snapshot substitution on both sides, so
+representative selection does not confound the matcher comparison. Its rows are
+labelled `[nested compatibility]`, and its correctness gate requires equal counts
+and verified isomorphism against `ref-nested`. The original unrestricted encoding
+and `ref-multi` comparison remain the default. If all three sides are selected in
+compatibility mode, `ref-multi` is diagnostic: its additional matches can produce
+a different graph. No mode accepts an inconclusive isomorphism as agreement.
+The registered `nested-compatibility` check covers optional and forced aliases,
+sibling matches, bound slots, stored sharing, and class symmetries against both
+reference matchers.
 
 **Rounds.** The evaluation runs the paper's budget on every side; the reference stops
 early when a round applies nothing new and reports that, and the encoding is asked

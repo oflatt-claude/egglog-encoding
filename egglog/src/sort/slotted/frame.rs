@@ -224,7 +224,7 @@ pub struct Frame {
     /// the partition of every occurrence named so far into the pattern's slots: two
     /// occurrences in one block are one slot, and `numbering` gives each block its
     /// number. Each block sorted, the blocks sorted by their least member. The
-    /// cliques are not stored: `apart` reads them off the occurrences.
+    /// ordinary cliques are implicit: `apart` reads them off the occurrences.
     blocks: Vec<Vec<Occ>>,
     /// per variable, the slots of its class: the domain of its renaming
     class_slots: BTreeMap<PVarId, SlotSet>,
@@ -235,6 +235,9 @@ pub struct Frame {
     anchor: Option<PVarId>,
     /// bindings whose reading is still open, resolved by `refinements`
     pending: Vec<Pending>,
+    /// Nested matching keeps the outer class's slots and each node's fresh
+    /// redundant slots distinct, even across atoms. None enables full aliasing.
+    rigid: Option<BTreeSet<Occ>>,
 }
 
 /// Interned frames are immutable. Primitive reads share them instead of cloning
@@ -263,6 +266,17 @@ impl Frame {
     /// every other binding a column of that node. `None` when the columns already
     /// contradict each other.
     pub fn atom(label: &str, bindings: &[Binding]) -> Option<Frame> {
+        Self::atom_impl(label, bindings, false)
+    }
+
+    /// An atom of a single nested pattern, with its freshly introduced slots
+    /// added to the match-wide disequality clique. Anchor at the pattern's root
+    /// before refinement to add the outer class's slots to that same clique.
+    pub fn nested_atom(label: &str, bindings: &[Binding]) -> Option<Frame> {
+        Self::atom_impl(label, bindings, true)
+    }
+
+    fn atom_impl(label: &str, bindings: &[Binding], nested: bool) -> Option<Frame> {
         let mut roots = bindings.iter().filter_map(|b| match b {
             Binding::Root {
                 var,
@@ -358,12 +372,21 @@ impl Frame {
             }
         }
         occs.extend(node_slots.iter().map(|&s| Occ::Node(atom.clone(), s)));
+        // enodes_applied preserves the invocation's live slots, but freshly
+        // renames every other slot each time a nested node is entered.
+        let rigid = nested.then(|| {
+            node_slots
+                .difference(root_slots)
+                .map(|&s| Occ::Node(atom.clone(), s))
+                .collect()
+        });
         let frame = Frame {
             blocks: close(occs, &eqs),
             class_slots,
             literals,
             anchor: None,
             pending,
+            rigid,
         };
         frame.consistent().then_some(frame)
     }
@@ -397,6 +420,17 @@ impl Frame {
             literals,
             anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
             pending: self.pending.iter().chain(&other.pending).cloned().collect(),
+            rigid: match (&self.rigid, &other.rigid) {
+                (None, None) => None,
+                _ => Some(
+                    self.rigid
+                        .iter()
+                        .chain(&other.rigid)
+                        .flatten()
+                        .cloned()
+                        .collect(),
+                ),
+            },
         };
         frame.consistent().then_some(frame)
     }
@@ -493,11 +527,18 @@ impl Frame {
     /// The frame spelled in this variable's slot names.
     pub fn anchored(&self, var: &str) -> Option<Frame> {
         let var = PVarId::new(var);
-        self.class_slots.get(&var)?;
-        Some(Frame {
-            anchor: Some(var),
+        let slots = self.class_slots.get(&var)?;
+        let mut frame = Frame {
+            anchor: Some(var.clone()),
             ..self.clone()
-        })
+        };
+        if let Some(rigid) = &mut frame.rigid {
+            rigid.extend(slots.iter().map(|&s| Occ::Var(var.clone(), s)));
+            if !frame.consistent() {
+                return None;
+            }
+        }
+        Some(frame)
     }
 
     /// Each block's slot number: the anchor's class slot where the block holds one,
@@ -534,10 +575,13 @@ impl Frame {
     /// No clique has two members in one block.
     fn consistent(&self) -> bool {
         self.blocks.iter().all(|block| {
-            block
-                .iter()
-                .enumerate()
-                .all(|(i, o)| block[i + 1..].iter().all(|p| !apart(o, p)))
+            self.rigid
+                .as_ref()
+                .is_none_or(|rigid| block.iter().filter(|o| rigid.contains(o)).take(2).count() < 2)
+                && block
+                    .iter()
+                    .enumerate()
+                    .all(|(i, o)| block[i + 1..].iter().all(|p| !apart(o, p)))
         })
     }
 
@@ -678,6 +722,12 @@ impl Frame {
     /// May these two blocks become one? Not when a clique has a member in each.
     fn mergeable(&self, i: usize, j: usize) -> bool {
         let (a, b) = (&self.blocks[i], &self.blocks[j]);
+        if let Some(rigid) = &self.rigid
+            && a.iter().any(|o| rigid.contains(o))
+            && b.iter().any(|o| rigid.contains(o))
+        {
+            return false;
+        }
         !a.iter().any(|o| b.iter().any(|p| apart(o, p)))
     }
 
@@ -809,14 +859,17 @@ impl BaseSort for FrameSort {
         add_primitive!(eg, "frame" = | | -> Fr { Fr::new(Frame::default()) });
         // one atom's constraints: `(atom "label" binding...)`, the label first because the
         // macro's varargs are of one sort
-        eg.add_pure_primitive(
-            AtomPrim {
-                string: eg.type_info.get_sort_by_name("String").expect("String sort").clone(),
-                binding: eg.type_info.get_sort_by_name("Binding").expect("Binding sort").clone(),
-                frame: eg.type_info.get_sort_by_name("Frame").expect("Frame sort").clone(),
-            },
-            None,
-        );
+        for nested in [false, true] {
+            eg.add_pure_primitive(
+                AtomPrim {
+                    nested,
+                    string: eg.type_info.get_sort_by_name("String").expect("String sort").clone(),
+                    binding: eg.type_info.get_sort_by_name("Binding").expect("Binding sort").clone(),
+                    frame: eg.type_info.get_sort_by_name("Frame").expect("Frame sort").clone(),
+                },
+                None,
+            );
+        }
         // both frames' constraints, closed; fails where a clique breaks
         add_primitive!(eg, "frame-join" = |a: Fr, b: Fr| -?> Fr { a.join(&b).map(Fr::new) });
         // conditions, read after refinement
@@ -846,6 +899,7 @@ impl BaseSort for FrameSort {
 /// `(atom "label" binding...)`: one atom's constraints as a frame.
 #[derive(Debug, Clone)]
 struct AtomPrim {
+    nested: bool,
     string: ArcSort,
     binding: ArcSort,
     frame: ArcSort,
@@ -853,11 +907,12 @@ struct AtomPrim {
 
 impl Primitive for AtomPrim {
     fn name(&self) -> &str {
-        "atom"
+        if self.nested { "nested-atom" } else { "atom" }
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         Box::new(AtomTypeConstraint {
+            name: self.name().to_owned(),
             string: self.string.clone(),
             binding: self.binding.clone(),
             frame: self.frame.clone(),
@@ -872,12 +927,17 @@ impl PurePrim for AtomPrim {
         let (label, rest) = args.split_first()?;
         let label = bv.unwrap::<S>(*label).0;
         let bindings: Vec<Binding> = rest.iter().map(|v| bv.unwrap::<Bd>(*v).0).collect();
-        let frame = Frame::atom(&label, &bindings)?;
+        let frame = if self.nested {
+            Frame::nested_atom(&label, &bindings)
+        } else {
+            Frame::atom(&label, &bindings)
+        }?;
         Some(bv.get::<Fr>(Fr::new(frame)))
     }
 }
 
 struct AtomTypeConstraint {
+    name: String,
     string: ArcSort,
     binding: ArcSort,
     frame: ArcSort,
@@ -895,7 +955,7 @@ impl TypeConstraint for AtomTypeConstraint {
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         span: self.span.clone(),
-                        head: "atom".to_owned(),
+                        head: self.name.clone(),
                         args: arguments.to_vec(),
                     },
                     expected: 2,
@@ -1152,6 +1212,70 @@ mod tests {
             alts.iter()
                 .all(|r| r.ren("a").unwrap()[&5] != r.ren("a").unwrap()[&0]),
             "one node's slots stay apart"
+        );
+    }
+
+    #[test]
+    fn nested_matching_keeps_fresh_slots_apart_from_outer_slots() {
+        let outer = [root("p", &[0]), child("t", &[], &[])];
+        let inner = [root("t", &[]), child("a", &[(0, 3)], &[0])];
+        let full = Frame::atom("outer", &outer)
+            .unwrap()
+            .join(&Frame::atom("inner", &inner).unwrap())
+            .unwrap()
+            .anchored("p")
+            .unwrap();
+        assert_eq!(full.refinements().len(), 2);
+        let a = Frame::nested_atom("outer", &outer).unwrap();
+        let b = Frame::nested_atom("inner", &inner).unwrap();
+        let nested = a.join(&b).unwrap().anchored("p").unwrap();
+        assert_eq!(nested, b.join(&a).unwrap().anchored("p").unwrap());
+        assert_eq!(nested.refinements().len(), 1);
+        assert_ne!(nested.ren("p").unwrap()[&0], nested.ren("a").unwrap()[&0]);
+    }
+
+    #[test]
+    fn nested_matching_rejects_aliasing_forced_by_a_repeated_literal() {
+        let outer = [root("p", &[0]), child("t", &[], &[]), lit("$x", &[(0, 0)])];
+        let inner = [root("t", &[]), lit("$x", &[(0, 3)])];
+        assert!(
+            Frame::atom("outer", &outer)
+                .unwrap()
+                .join(&Frame::atom("inner", &inner).unwrap())
+                .unwrap()
+                .anchored("p")
+                .is_some()
+        );
+        assert!(
+            Frame::nested_atom("outer", &outer)
+                .unwrap()
+                .join(&Frame::nested_atom("inner", &inner).unwrap())
+                .unwrap()
+                .anchored("p")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn nested_matching_preserves_sharing_already_in_an_edge() {
+        let a = Frame::nested_atom(
+            "outer",
+            &[
+                root("p", &[0]),
+                child("t", &[(5, 0)], &[5]),
+                lit("$x", &[(0, 0)]),
+            ],
+        )
+        .unwrap();
+        let b = Frame::nested_atom("inner", &[root("t", &[5]), lit("$x", &[(0, 5)])]).unwrap();
+        assert_eq!(
+            a.join(&b)
+                .unwrap()
+                .anchored("p")
+                .unwrap()
+                .refinements()
+                .len(),
+            1
         );
     }
 

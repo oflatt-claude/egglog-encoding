@@ -433,7 +433,7 @@ class Source:
         return sort, terms
 
 
-def compile_source(src, own_only=False):
+def compile_source(src, own_only=False, *, nested_compat=False):
     """The whole program, or -- for a snapshot -- only what this file contributes.
 
     `own_only` drops the machinery and anything an included library brought, because
@@ -517,7 +517,7 @@ def compile_source(src, own_only=False):
             sort, _terms = src.common_sort((a, b), "union")
             _emit(out, keep, f"(union {src.encode(a, expected_sort=sort)} {src.encode(b, expected_sort=sort)})")
         elif head == "rewrite":
-            _emit(out, keep, compile_rewrite(src, form))
+            _emit(out, keep, compile_rewrite(src, form, nested_compat=nested_compat))
             rules += 1
         elif head == "run":
             _emit(out, keep, schedule(int(form[1]), rules))
@@ -633,7 +633,7 @@ def keywords(src, rest):
     return out
 
 
-def compile_rewrite(src, form, ruleset=None):
+def compile_rewrite(src, form, ruleset=None, *, nested_compat=False):
     """`(rewrite lhs rhs [:name n] [:when c] [:lead N] [:fresh $s...])`.
 
     `:lead` names the atom the query starts from, counting over the flattened pattern.
@@ -667,6 +667,8 @@ def compile_rewrite(src, form, ruleset=None):
             "a bare variable there matches everything"
         )
     root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
+    if nested_compat and parts["equalities"]:
+        raise SystemExit("--nested-compat requires a single nested pattern; side patterns are unsupported")
     # each `:when (= v <call>)` is another rooted pattern; `tmp` is per-equality so the
     # names `flatten` invents for nested sub-terms cannot collide between them
     for i, (var, pat) in enumerate(parts["equalities"]):
@@ -694,6 +696,7 @@ def compile_rewrite(src, form, ruleset=None):
         # and writes tables: callable from the head of a `:naive` rule, not a seminaive
         # one.
         naive=uses_subst(rhs),
+        nested_compat=nested_compat,
     )
 
 
@@ -1110,6 +1113,11 @@ def main():
     )
     ap.add_argument("src", type=pathlib.Path, help="a program in the slotted language")
     ap.add_argument(
+        "--nested-compat",
+        action="store_true",
+        help="keep non-pattern slots distinct as in the reference nested matcher",
+    )
+    ap.add_argument(
         "--desugar",
         action="store_true",
         help="write the compiled egglog program instead of running it",
@@ -1128,14 +1136,14 @@ def main():
     args = ap.parse_args()
 
     src = Source(args.src)
-    text = compile_source(src)
+    text = compile_source(src, nested_compat=args.nested_compat)
 
     # Writing the program out and running it are INDEPENDENT. They used not to be:
     # `-o` and `--own-only` implied `--desugar` and returned, so `--run -o snap.egg`
     # wrote the snapshot and reported success without running anything -- which is how
     # `run-slotted-tests.py --emit` came to report every test as passing.
     if args.desugar or args.out is not None or args.own_only:
-        out = compile_source(src, own_only=args.own_only) if args.own_only else text
+        out = compile_source(src, own_only=args.own_only, nested_compat=args.nested_compat) if args.own_only else text
         if args.out:
             args.out.write_text(out)
         else:

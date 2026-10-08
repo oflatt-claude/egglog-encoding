@@ -112,7 +112,7 @@ class Rule:
         return out
 
 
-def compile_array_rule(rule, atom_order=None):
+def compile_array_rule(rule, atom_order=None, *, nested_compat=False):
     """One array rule, through the encoder, which is the recipe in
     `slotted/ENCODING.md`.
 
@@ -127,6 +127,7 @@ def compile_array_rule(rule, atom_order=None):
         ("build", rule.rhs_root, rule.rhs),
         conds=rule.conds,
         fresh=rule.fresh,
+        nested_compat=nested_compat,
     )
 
 
@@ -165,7 +166,7 @@ def schedule(steps):
     return slotenc.round_schedule(steps)
 
 
-def egg_program(case, atom_order=None, mult=3, defer_probes=False):
+def egg_program(case, atom_order=None, mult=3, defer_probes=False, *, nested_compat=False):
     out = [
         MACHINERY,
         "(ruleset probe)",
@@ -177,7 +178,7 @@ def egg_program(case, atom_order=None, mult=3, defer_probes=False):
     ]
     for r in case.rules:
         out.append(f";; {r.name}")
-        out.append(compile_array_rule(r, atom_order))
+        out.append(compile_array_rule(r, atom_order, nested_compat=nested_compat))
     for i, t in enumerate(case.terms):
         out.append(f"(let _t{i} {enc(t)})")
     for i, (a, b) in enumerate(case.unions):

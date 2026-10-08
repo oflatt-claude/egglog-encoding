@@ -25,11 +25,11 @@ num-bigint = "0.4"
 # outside the binder owes a `not-free` guard (`capture_guards` in the encoder), which
 # both sides evaluate. The oracle is not asked to be stricter than that.
 #
-# All registered differential and isomorphism checks use `MultiPattern`: that is the
-# pattern language the encoding implements. The helper binary retains a dormant
-# `nested` directive for the unregistered matcher-comparison diagnostic, but
-# `ematch_all` is not used as ground truth. The `checks` feature and explicit
-# `eg.check()` calls make malformed reference state a hard failure.
+# Differential checks use `MultiPattern` for the full encoding and `ematch_all`
+# for its optional nested compatibility mode. Both use matching snapshot
+# substitution. The separate nested performance baseline keeps the artifact's
+# syntactic substitution. The `checks` feature and explicit `eg.check()` calls
+# make malformed reference state a hard failure.
 slotted-egraphs = { git = "https://github.com/memoryleak47/slotted-egraphs.git", rev = "48cefee5503822224257e4f2e81681fef212ae89" }
 
 [features]

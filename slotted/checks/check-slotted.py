@@ -137,6 +137,7 @@ def check_snapshots():
 CHECKS = [
     ("shape-cache", ("slotted/checks/check-shape-cache.py",), starts_ok, False, False),
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
+    ("nested-compatibility", ("slotted/checks/check-nested.py",), starts_ok, False, True),
     # First: the machinery under `target/` is build output, and five tests include it.
     (
         "slotted-tests",
