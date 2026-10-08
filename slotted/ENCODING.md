@@ -815,6 +815,17 @@ values. A changed child group selects a different entry. Child class ids are abs
 so a native union cannot merge an obsolete cached result over a current one. The
 symmetry rule and deduplication both read the entry for the current child groups.
 
+## Generate group closure from a small subset
+
+`group-close` returns every element of the generated group. Internally it selects
+generators incrementally: skip an input map already in the closure, otherwise add
+it and extend the known maps by the selected generators until no new map appears.
+When a new generator is added, revisit the old maps too. Composing on one side
+suffices because every generated map is a finite nonempty product of generators;
+this also preserves closure for partial maps during slot restriction. This avoids
+composing every pair of elements when maintenance receives an already closed group.
+The stored group, matching rules, and representation remain the same.
+
 ## One reading per coset of the pinned slots
 
 A nested pattern reads a class through one column of a parent row, and in Part I the

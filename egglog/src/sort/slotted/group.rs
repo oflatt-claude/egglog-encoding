@@ -16,25 +16,33 @@ pub(super) fn restrict<T: Copy + Ord>(
         .collect()
 }
 
-/// Close a set of finite permutations under composition.
+/// Close finite slot maps under composition, including partial maps during restriction.
 pub(super) fn close<T: Copy + Ord>(group: &[impl Borrow<Map<T>>]) -> Vec<Map<T>> {
-    let mut known: Vec<Map<T>> = group.iter().map(|g| g.borrow().clone()).collect();
-    let mut seen: BTreeSet<Map<T>> = known.iter().cloned().collect();
-    let mut frontier: Vec<usize> = (0..known.len()).collect();
-    while !frontier.is_empty() {
-        let mut fresh = Vec::new();
-        for &i in &frontier {
-            for j in 0..known.len() {
-                for m in [compose(&known[i], &known[j]), compose(&known[j], &known[i])] {
-                    if seen.insert(m.clone()) {
-                        fresh.push(m);
-                    }
+    let mut known = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut generators = Vec::new();
+    for generator in group {
+        let generator = generator.borrow();
+        if !seen.insert(generator.clone()) {
+            continue;
+        }
+        generators.push(generator);
+        known.push(generator.clone());
+        // Every generated map is a nonempty word in the generators. Extending
+        // words on one side suffices, including for partial maps during slot
+        // restriction. Revisit old words when adding a new generator; any input
+        // already generated can be skipped. In particular, an already closed
+        // group needs only a small generating subset, not all pairs of elements.
+        let mut next = 0;
+        while next < known.len() {
+            for generator in &generators {
+                let m = compose(&known[next], generator);
+                if seen.insert(m.clone()) {
+                    known.push(m);
                 }
             }
+            next += 1;
         }
-        let start = known.len();
-        known.extend(fresh);
-        frontier = (start..known.len()).collect();
     }
     known
 }
@@ -95,6 +103,55 @@ pub(super) fn slot_closure<T: Copy + Ord>(group: &[impl Borrow<Map<T>>], slots: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closure_preserves_all_products_of_partial_bijections() {
+        // Restriction can temporarily produce partial maps. Check every subset
+        // of the seven partial bijections on two slots against all-pairs closure.
+        let maps = [
+            Map::new(),
+            Map::from([(0, 0)]),
+            Map::from([(0, 1)]),
+            Map::from([(1, 0)]),
+            Map::from([(1, 1)]),
+            Map::from([(0, 0), (1, 1)]),
+            Map::from([(0, 1), (1, 0)]),
+        ];
+        for mask in 0..1 << maps.len() {
+            let mut input: Vec<_> = maps
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, m)| m.clone())
+                .collect();
+            let mut expected: BTreeSet<_> = input.iter().cloned().collect();
+            loop {
+                let before = expected.clone();
+                for a in &before {
+                    for b in &before {
+                        expected.insert(compose(a, b));
+                    }
+                }
+                if expected == before {
+                    break;
+                }
+            }
+            assert_eq!(close(&input).into_iter().collect::<BTreeSet<_>>(), expected);
+            input.reverse();
+            input.extend(input.clone());
+            assert_eq!(close(&input).into_iter().collect::<BTreeSet<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn closure_of_noncommuting_generators_and_their_full_group_agree() {
+        let cycle = Map::from([(0, 1), (1, 2), (2, 3), (3, 4), (4, 0)]);
+        let swap = Map::from([(0, 1), (1, 0), (2, 2), (3, 3), (4, 4)]);
+        let group: BTreeSet<_> = close(&[cycle, swap]).into_iter().collect();
+        assert_eq!(group.len(), 120);
+        let elements: Vec<_> = group.iter().rev().collect();
+        assert_eq!(close(&elements).into_iter().collect::<BTreeSet<_>>(), group);
+    }
 
     #[test]
     fn closure_generates_identity_and_inverse() {
