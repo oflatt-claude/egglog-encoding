@@ -4,8 +4,9 @@ use super::*;
 mod frame;
 mod group;
 mod primitives;
-mod renaming;
+pub(crate) mod renaming;
 mod subst;
+pub(crate) mod terms;
 mod types;
 pub use types::{Renaming, SlotSet};
 

@@ -12,3 +12,4 @@ pub(crate) mod proof_head;
 pub(crate) mod proof_normal_form;
 pub(crate) mod proof_simplification;
 pub(crate) mod proof_tests;
+pub mod slotted;

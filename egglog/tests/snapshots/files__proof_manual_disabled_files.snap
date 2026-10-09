@@ -2,6 +2,8 @@
 source: egglog/tests/files.rs
 expression: "snapshot.join(\"\\n\")"
 ---
+delete-then-set.egg: the encoding defers a head's `delete` past its `set` of the same key, so the set merges with the old value instead of replacing it
 eggcc-2mm.egg: the full benchmark exceeds the routine proof harness resource budget; the bounded eggcc-2mm-pass1 fixture covers this workload in proof benchmarks
+renaming-primitives.egg: a check against a container built in the check, `(map-of 5 5 7 7)`, gives the container a Fiat existence proof that proof checking rejects as not established by globals
 subsume-relation.egg: proof-testing rewrites a check on a subsumed relation row into a prove query that no longer matches
 subsume.egg: proof-testing rewrites a check on a subsumed expression into a prove query that no longer matches

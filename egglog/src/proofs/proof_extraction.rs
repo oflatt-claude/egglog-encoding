@@ -162,8 +162,13 @@ impl ProofInstrumentor<'_> {
             panic!("Existence proof should be valid before simplification: {e}");
         }
 
-        // simplify the proof
-        let simplified_proof = proof_store.simplify(extra_rule_removed);
+        // simplify the proof; the slotted translation reads the existence rule's
+        // premises as they are, so it keeps the proof unsimplified
+        let simplified_proof = if self.egraph.proof_state.slotted.is_some() {
+            extra_rule_removed
+        } else {
+            proof_store.simplify(extra_rule_removed)
+        };
 
         // Check the proof after simplification
         if self.egraph.proof_state.verify_proofs {

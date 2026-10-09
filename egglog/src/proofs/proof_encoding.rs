@@ -210,6 +210,9 @@ pub(crate) struct EncodingState {
     /// whole-database baseline) instead of `:unsafe-seminaive`, so tests can
     /// assert the two produce the same database.
     pub force_proof_naive: bool,
+    /// Slotted proof mode: the recorded slotted source program, and the
+    /// translation and check run on every `prove`.
+    pub slotted: Option<Box<crate::proofs::slotted::SlottedProofState>>,
 }
 
 impl EncodingState {
@@ -227,6 +230,7 @@ impl EncodingState {
             proof_testing: false,
             verify_proofs: true,
             force_proof_naive: false,
+            slotted: None,
         }
     }
 }

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Internal result of canonicalizing a node. Only the primitive boundary flattens
 /// this into the legacy vector representation.
 #[derive(Debug)]
-pub(super) struct NodeShape {
+pub(crate) struct NodeShape {
     pub edges: Vec<Renaming>,
     pub back: Renaming,
     pub symmetries: Vec<Renaming>,
@@ -26,7 +26,7 @@ impl NodeShape {
 /// of first occurrence, scanning the edges in order and each edge by child slot.
 /// Records the renumbered edges and the renaming back to the node's own names. Two nodes are equal up to a renaming of their slots exactly when their
 /// shapes agree.
-pub(super) fn shape(edges: &[Renaming]) -> NodeShape {
+pub(crate) fn shape(edges: &[Renaming]) -> NodeShape {
     let mut number: BTreeMap<i64, i64> = BTreeMap::new();
     let mut out: Vec<Renaming> = Vec::with_capacity(edges.len() + 1);
     for edge in edges {
@@ -56,7 +56,7 @@ pub(super) fn shape(edges: &[Renaming]) -> NodeShape {
 /// itself says the class equals itself under the renaming between them, which is the
 /// reference's `weak_shape` over `get_group_compatible_variants` and its
 /// `determine_self_symmetries` in one pass.
-pub(super) fn node_shape(edges: &[Renaming], groups: &[Vec<Renaming>]) -> NodeShape {
+pub(crate) fn node_shape(edges: &[Renaming], groups: &[Vec<Renaming>]) -> NodeShape {
     let own = shape(edges);
     let mut best: Option<NodeShape> = None;
     let mut symmetries: Vec<Renaming> = Vec::new();

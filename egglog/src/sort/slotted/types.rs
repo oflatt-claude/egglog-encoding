@@ -1,11 +1,12 @@
 //! Domain types used by matching and substitution. Egglog represents both kinds
 //! of values as maps; the algorithms distinguish them here.
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
 /// A partial mapping of slot names. Edges decoded from external data must also
 /// pass the caller's injectivity check; temporary mappings are built internally.
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Renaming(pub(super) BTreeMap<i64, i64>);
 
 impl Renaming {
@@ -71,7 +72,7 @@ impl<'a> IntoIterator for &'a Renaming {
 }
 
 /// Public class slots, distinct from an edge's renaming of those slots.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SlotSet(BTreeSet<i64>);
 
 impl SlotSet {

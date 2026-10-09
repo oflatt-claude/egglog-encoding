@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests slotted-check slotted-campaign slotted-eval slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-proof-tests slotted-check slotted-campaign slotted-eval slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -69,6 +69,14 @@ rust-doc-links:
 # This is a name-filtered subset of rust-test, useful for proof iteration.
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
+
+# Every slotted test with a positive claim, compiled in the proof profile and run
+# under `egglog --slotted-proofs`: each claim's egglog proof is translated to a
+# slotted proof and checked against the source program. Sources that use `subst`
+# are skipped (no proof translation yet).
+slotted-proof-tests:
+	cargo build -p egglog --bin egglog
+	python3 slotted/run-slotted-tests.py --slotted-proofs
 
 # The slotted-e-graph encoding: the tests written in the slotted language and the
 # ones written against the encoding, the snapshots of what the compiler and the
