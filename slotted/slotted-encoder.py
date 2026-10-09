@@ -949,17 +949,24 @@ def carrier_core(symbols):
             # and it is emptied; its index rows go with it through the view rules below.
             # Emptied rather than deleted, because the view can only follow a set that
             # is there to compare against.
+            # Both follower-cleanup rules must check the edge's current direction:
+            # a native union can make f smaller than l. The obsolete-edge rule
+            # removes that edge in this same batch; it must not also erase the new
+            # leader's group or identity. Their seed rules may have no new input
+            # to restore them.
             f"""(rule ((= s ({s.group} f))
        (> (set-length s) 0)
        ({s.renames} f m l)
-       (!= f l))
+       (!= f l)
+       (= f (ordering-max f l)))
       ((delete ({s.group} f))
        (set ({s.group} f) (set-empty))) :ruleset slotted)""",
             "",
             # And its identity row, which the rule above leaves behind.
             f"""(rule (({s.renames} f g f)
        ({s.renames} f m l)
-       (!= f l))
+       (!= f l)
+       (= f (ordering-max f l)))
       ((delete ({s.renames} f g f))) :ruleset slotted)""",
             "",
             # A group is spelled on its class's slots and closed under composition, and

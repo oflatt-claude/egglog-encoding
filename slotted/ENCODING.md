@@ -1002,11 +1002,19 @@ emptied, and its index rows go with it through the view rules; emptied rather th
 deleted, because the view can only follow a set that is there to compare against. Its
 identity edge goes too.
 
+Both deletions require the edge to point toward a smaller value. A native union can
+reverse an existing edge, making its source the new leader. The rule that removes
+obsolete edges runs in the same batch as these rules, so they must check the direction
+themselves. Otherwise they erase the new leader's identity or symmetries; unchanged
+slot sets and equations need not re-fire to restore them.
+
 ```
-(rule ((= s (EclassGroup f)) (> (set-length s) 0) (RenamesToLeader f m l) (!= f l))
+(rule ((= s (EclassGroup f)) (> (set-length s) 0) (RenamesToLeader f m l)
+       (!= f l) (= f (ordering-max f l)))
       ((delete (EclassGroup f))
        (set (EclassGroup f) (set-empty))) :ruleset slotted)
-(rule ((RenamesToLeader f g f) (RenamesToLeader f m l) (!= f l))
+(rule ((RenamesToLeader f g f) (RenamesToLeader f m l)
+       (!= f l) (= f (ordering-max f l)))
       ((delete (RenamesToLeader f g f))) :ruleset slotted)
 ```
 
