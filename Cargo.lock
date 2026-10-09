@@ -595,6 +595,7 @@ dependencies = [
  "ordered-float",
  "rayon",
  "rustc-hash",
+ "serde",
  "serde_json",
  "serial_test",
  "smallvec",

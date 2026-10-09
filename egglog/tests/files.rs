@@ -15,12 +15,20 @@ const MANUAL_PROOF_DISABLED_FILES: &[ManualProofDisable] = &[
         reason: "the full benchmark exceeds the routine proof harness resource budget; the bounded eggcc-2mm-pass1 fixture covers this workload in proof benchmarks",
     },
     ManualProofDisable {
+        file: "renaming-primitives.egg",
+        reason: "a check against a container built in the check, `(map-of 5 5 7 7)`, gives the container a Fiat existence proof that proof checking rejects as not established by globals",
+    },
+    ManualProofDisable {
         file: "subsume.egg",
         reason: "proof-testing rewrites a check on a subsumed expression into a prove query that no longer matches",
     },
     ManualProofDisable {
         file: "subsume-relation.egg",
         reason: "proof-testing rewrites a check on a subsumed relation row into a prove query that no longer matches",
+    },
+    ManualProofDisable {
+        file: "delete-then-set.egg",
+        reason: "the encoding defers a head's `delete` past its `set` of the same key, so the set merges with the old value instead of replacing it",
     },
 ];
 

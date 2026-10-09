@@ -19,12 +19,41 @@ BINDER = object()  # a slotted child that also binds its slot
 
 SLOTTED = (CHILD, BINDER)
 
+#: The compilation profile. `PROOFS` selects the proof-compatible profile: the same
+#: encoding spelled without the features egglog's term/proof encoding rejects (tuple
+#: outputs, `:merge` action blocks, eq-sort `:no-merge` functions), plus the hidden
+#: source-metadata tables a proof translator reads. `PROVE_CLAIMS` says whether a
+#: positive `=`/`renaming-=` claim is a `(prove ...)` -- which plain egglog refuses
+#: outside proof mode -- or stays a `(check ...)`; `configure` sets both.
+PROOFS = False
+PROVE_CLAIMS = False
+
+
+def configure(proofs=False, prove_claims=None):
+    """Select the compilation profile for everything generated after this call.
+
+    `prove_claims` defaults to `proofs`; a caller running the proof profile on the
+    native backend passes `False` to keep every claim a `check`.
+    """
+    global PROOFS, PROVE_CLAIMS
+    PROOFS = bool(proofs)
+    PROVE_CLAIMS = PROOFS if prove_claims is None else bool(prove_claims)
+
+
+def rule_name(kind, *parts):
+    """`:name "slotted/<kind>/<part>..."`: the stable name of one generated machinery
+    rule, unique across carriers and constructors. A core rule's part is its carrier's
+    index; a per-constructor rule's is the constructor, then a child position where one
+    rule exists per column."""
+    return ':name "' + "/".join(("slotted", kind, *(str(p) for p in parts))) + '"'
+
 
 @dataclass(frozen=True)
 class CarrierSymbols:
     """Generated constructor and relation names for one equality sort."""
 
     sort: str
+    index: int
     var: str
     renames: str
     equated: str
@@ -33,14 +62,16 @@ class CarrierSymbols:
     shape_equal: str
     invocation: str
     group: str
+    group_replace: str
     coset_reps: str
     big_reading: str
     reading: str
 
     @classmethod
-    def create(cls, sort, index):
+    def create(cls, sort, index=0):
         return cls(
             sort,
+            index,
             f"SlottedVar_{index}",
             f"RenamesToLeader_{index}",
             f"Equated_{index}",
@@ -49,6 +80,7 @@ class CarrierSymbols:
             f"ShapeEqual_{index}",
             f"Invocation_{index}",
             f"EclassGroup_{index}",
+            f"GroupReplace_{index}",
             f"CosetReps_{index}",
             f"BigReading_{index}",
             f"Reading_{index}",
@@ -378,13 +410,23 @@ def class_slots(name, sig, symbols=None):
     slots = fold("map-union", [f"(map-image {m})" for m in edges], "(map-empty)")
     return f"""\
 (rule ((= e1 {pattern(name, sig)}))
-      ((set ({symbols.class_slots} e1) {slots})))
+      ((set ({symbols.class_slots} e1) {slots})) {rule_name("class-slots", name)})
 """
 
 
 def shape_table(name):
     """The function indexing a constructor's rows by shape; `_` is the compiler's prefix."""
     return f"_shape_{name}"
+
+
+def shape_class_table(name):
+    """The proof profile's shape index, split by column: the class under a key."""
+    return f"_shape_class_{name}"
+
+
+def shape_back_table(name):
+    """... and the renaming from the shape's names into that class's."""
+    return f"_shape_back_{name}"
 
 
 def declare_shape_table(name, sig, symbols=None):
@@ -394,9 +436,18 @@ def declare_shape_table(name, sig, symbols=None):
     the shape's names to that class's. A second class arriving at the key is that node
     under another renaming, and the merge block states the equation between the two.
     The first arrival stays the representative; a later one that names a class the
-    representative does not is related to it by the edge, never replaced."""
+    representative does not is related to it by the edge, never replaced.
+
+    The proof profile has neither tuple outputs nor merge blocks, so the index is two
+    `:merge old` functions under one key, `_shape_class_F` and `_shape_back_F`, and
+    `shape_collision` states the equation a merge block would have."""
     symbols = _symbols(symbols)
     cols = " ".join(f"Renaming {symbols.sort}" if c in SLOTTED else c for c in sig)
+    if PROOFS:
+        return (
+            f"(function {shape_class_table(name)} ({cols}) {symbols.sort} :merge old)\n"
+            f"(function {shape_back_table(name)} ({cols}) Renaming :merge old)\n"
+        )
     return (
         f"(function {shape_table(name)} ({cols}) ({symbols.sort} Renaming)\n"
         f"  :merge ((set ({symbols.shape_equal} old0 (compose old1 (inverse new1)) new0) ())\n"
@@ -409,10 +460,21 @@ def shapeof_table(name):
     return f"_shapeof_{name}"
 
 
-def shapeof_call(name, edges, groups):
+def shapeof_edges_table(name):
+    """The proof profile's memo of the canonical edges and the renaming back, as one
+    `Renamings` vector `[s1 .. sn, back]`."""
+    return f"_shapeof_edges_{name}"
+
+
+def shapeof_syms_table(name):
+    """... and of the node's own symmetries, as one `Group`."""
+    return f"_shapeof_syms_{name}"
+
+
+def shapeof_call(name, edges, groups, table=None):
     """Only immutable inputs: class ids and payloads do not affect `node-shape`."""
     args = " ".join(f"{edge} {group}" for edge, group in zip(edges, groups, strict=True))
-    return f"({shapeof_table(name)} {args})"
+    return f"({table or shapeof_table(name)} {args})"
 
 
 def declare_shapeof_table(name, sig):
@@ -423,9 +485,17 @@ def declare_shapeof_table(name, sig):
     Immutable group values distinguish those computations, and excluding class ids
     prevents rebuilding from merging their cache entries. The flat shape outputs
     let deduplication join on equal shapes (C14).
+
+    The proof profile cannot declare a tuple output, so it keeps the same memo in two
+    functions: the edges and the renaming back as one vector, and the symmetries.
     """
     _, edges, _, _ = cols_of(sig)
     cols = " ".join(["Renaming Group"] * len(edges))
+    if PROOFS:
+        return (
+            f"(function {shapeof_edges_table(name)} ({cols}) Renamings :no-merge)\n"
+            f"(function {shapeof_syms_table(name)} ({cols}) Group :no-merge)\n"
+        )
     outs = " ".join(["Renaming"] * (len(edges) + 1) + ["Group"])
     return f"(function {shapeof_table(name)} ({cols}) ({outs}) :no-merge)\n"
 
@@ -457,17 +527,36 @@ def shape_dedup(name, sig, symbols=None):
     bound = "\n       ".join(f"(= {g} ({symbols.group} {k}))" for g, k in zip(groups, kids, strict=True))
     other = [f"n{i + 1}" for i in range(len(edges))]
     ss = [f"s{i + 1}" for i in range(len(edges))]
+    act = f"(delete {pattern(name, sig)})"
+    if PROOFS:
+        # the memo is one vector, so equal shapes are compared element by element; and
+        # the symmetry between the two readings is stated here, since `shape_collision`
+        # runs a step behind the index write and may never see the deleted row
+        table = shapeof_edges_table(name)
+        same_shape = "\n       ".join(f"(= (vec-get sh1 {i}) (vec-get sh2 {i}))" for i in range(len(edges)))
+        shapes = (
+            f"(= sh1 {shapeof_call(name, edges, groups, table)})\n"
+            f"       (= c {pattern(name, sig, edges=other)})\n"
+            f"       (= sh2 {shapeof_call(name, other, groups, table)})\n"
+            f"       {same_shape}"
+        )
+        b1, b2 = f"(vec-get sh1 {len(edges)})", f"(vec-get sh2 {len(edges)})"
+        act = f"(set ({symbols.shape_equal} c (compose {b1} (inverse {b2})) c) ())\n       {act}"
+    else:
+        shapes = (
+            f"(= (values {' '.join(ss)} b1 syms1) {shapeof_call(name, edges, groups)})\n"
+            f"       (= c {pattern(name, sig, edges=other)})\n"
+            f"       (= (values {' '.join(ss)} b2 syms2) {shapeof_call(name, other, groups)})"
+        )
     return f"""\
 (rule ((= c {pattern(name, sig)})
        {bound}
-       (= (values {" ".join(ss)} b1 syms1) {shapeof_call(name, edges, groups)})
-       (= c {pattern(name, sig, edges=other)})
-       (= (values {" ".join(ss)} b2 syms2) {shapeof_call(name, other, groups)})
+       {shapes}
        (= v1 (vec-of {" ".join(edges)}))
        (= v2 (vec-of {" ".join(other)}))
        (!= v1 v2)
        (= v1 (ordering-max v1 v2)))
-      ((delete {pattern(name, sig)})) :ruleset slotted-shape)
+      ({act}) :ruleset slotted-shape {rule_name("shape-dedup", name)})
 """
 
 
@@ -513,7 +602,8 @@ def coset_readings(name, sig, symbols=None):
        (= grp ({symbols.group} {k}))
        (= pinned (map-domain (compose {pinned_node} {e}))))
       ((set ({pinned_table(name)} {cols} {j + 1}) pinned)
-       (set ({symbols.coset_reps} {k} pinned) (group-coset-reps grp pinned))) :ruleset slotted-read)
+       (set ({symbols.coset_reps} {k} pinned) (group-coset-reps grp pinned))) :ruleset slotted-read \
+{rule_name("coset-readings", name, j)})
 """)
     return "\n".join(out)
 
@@ -547,22 +637,76 @@ def shape_index(name, sig, symbols=None):
     named = [f"g{i + 1}" for i in range(len(kids))]
     bound = "\n       ".join(f"(= {named[i]} ({symbols.group} {k}))" for i, k in enumerate(kids))
     canon = [f"(vec-get sh {i})" for i in range(len(edges))]
-    key = pattern(shape_table(name), sig, edges=canon)
     row = pattern(name, sig)
-    cached = shapeof_call(name, edges, named)
     shapeof = " ".join(f"(vec-get sh {i})" for i in range(len(edges) + 1))
+    index_name, symmetry_name = rule_name("shape-index", name), rule_name("node-symmetry", name)
+    if PROOFS:
+        # The same two writes, one function per column: the index as class and
+        # renaming under one key, the memo as the edge vector and the symmetries.
+        class_key = pattern(shape_class_table(name), sig, edges=canon)
+        back_key = pattern(shape_back_table(name), sig, edges=canon)
+        cached_edges = shapeof_call(name, edges, named, shapeof_edges_table(name))
+        cached_syms = shapeof_call(name, edges, named, shapeof_syms_table(name))
+        return f"""\
+(rule ((= c {row})
+       {bound}
+       (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)}))))
+      ((set {class_key} c)
+       (set {back_key} (vec-get sh {len(edges)}))
+       (set {cached_edges} (vec-of {shapeof}))
+       (set {cached_syms} (symmetries-of sh {len(edges) + 1}))) :ruleset slotted-shape {index_name})
+(rule ((= c {row})
+       {bound}
+       (= syms {cached_syms})
+       (= cs ({symbols.class_slots} c)))
+      ((set ({symbols.group} c) (group-restrict syms cs))) :ruleset slotted-group {symmetry_name})
+"""
+    key = pattern(shape_table(name), sig, edges=canon)
+    cached = shapeof_call(name, edges, named)
     outputs = " ".join(f"s{i + 1}" for i in range(len(edges)))
     return f"""\
 (rule ((= c {row})
        {bound}
        (= sh (node-shape (vec-of {" ".join(edges)}) (vec-of {" ".join(named)}))))
       ((set {key} (values c (vec-get sh {len(edges)})))
-       (set {cached} (values {shapeof} (symmetries-of sh {len(edges) + 1})))) :ruleset slotted-shape)
+       (set {cached} (values {shapeof} (symmetries-of sh {len(edges) + 1})))) :ruleset slotted-shape {index_name})
 (rule ((= c {row})
        {bound}
        (= (values {outputs} back syms) {cached})
        (= cs ({symbols.class_slots} c)))
-      ((set ({symbols.group} c) (group-restrict syms cs))) :ruleset slotted-group)
+      ((set ({symbols.group} c) (group-restrict syms cs))) :ruleset slotted-group {symmetry_name})
+"""
+
+
+def shape_collision(name, sig, symbols=None):
+    """The proof profile's stand-in for the shape index's merge block (C14).
+
+    A row whose class and renaming back are not the pair stored under its shape key is
+    that node under another renaming of the stored class: `c = back * K` and
+    `c0 = back0 * K` for the key `K`, so `c = (back . back0^-1) * c0`, which is what
+    the merge block stated as it kept the first arrival -- a symmetry of `c` when the
+    class is the same and only the renaming differs. Stated here as a `ShapeEqual` row
+    from the query -- the row, its memoized shape, and the two functions under that
+    key -- in the shape phase beside the index rule, one run after the index write it
+    reads. A row the dedup folds in that run is one this never sees, so the
+    proof-profile dedup states the symmetry between the two rows it compares."""
+    symbols = _symbols(symbols)
+    _, edges, kids, _ = cols_of(sig)
+    named = [f"g{i + 1}" for i in range(len(kids))]
+    bound = "\n       ".join(f"(= {named[i]} ({symbols.group} {k}))" for i, k in enumerate(kids))
+    ss = [f"s{i + 1}" for i in range(len(edges))]
+    unpacked = "\n       ".join(f"(= {s} (vec-get sh {i}))" for i, s in enumerate(ss))
+    return f"""\
+(rule ((= c {pattern(name, sig)})
+       {bound}
+       (= sh {shapeof_call(name, edges, named, shapeof_edges_table(name))})
+       {unpacked}
+       (= back (vec-get sh {len(edges)}))
+       (= c0 {pattern(shape_class_table(name), sig, edges=ss)})
+       (= back0 {pattern(shape_back_table(name), sig, edges=ss)})
+       (guard (or (bool-!= c c0) (bool-!= back back0))))
+      ((set ({symbols.shape_equal} c (compose back (inverse back0)) c0) ())) :ruleset slotted-shape \
+{rule_name("shape-collision", name)})
 """
 
 
@@ -606,7 +750,7 @@ def migration(name, sig, symbols=None):
        (= e2 (ordering-max e1 e2))       ; toward the leader only
        {pulled})
       ((union e1 {pattern(name, sig, edges=ns)})
-       (delete {pattern(name, sig)})) :ruleset slotted-migrate)
+       (delete {pattern(name, sig)})) :ruleset slotted-migrate {rule_name("migration", name)})
 """
 
 
@@ -651,7 +795,7 @@ def child_update(name, sig, pos, bound_name=False, symbols=None):
        (guard (or (bool-!= {kids[pos]} c')
                   (bool-!= (compose {edges[pos]} m) {edges[pos]}))))
       ((union node {pattern(name, sig, edges=new_e, kids=new_k)})
-       (delete {pattern(name, sig)})) :ruleset slotted-migrate)
+       (delete {pattern(name, sig)})) :ruleset slotted-migrate {rule_name("child-update", name, pos)})
 """
 
 
@@ -687,7 +831,7 @@ def binder(name, sig, positions, symbols=None):
         rules.append(f"""\
 (rule (({symbols.renames} {node} ml l)
        (= v{n} (map-get mvar{n} 0)){free_elsewhere})
-      (({symbols.equated} {node} (inverse (map-remove (inverse ml) v{n})) l)))
+      (({symbols.equated} {node} (inverse (map-remove (inverse ml) v{n})) l)) {rule_name("binder-strip", name, pos)})
 """)
 
         # A collision with an uncovered column blocks the strip above, which would
@@ -713,7 +857,7 @@ def binder(name, sig, positions, symbols=None):
        (= fresh{n} (find-mapping-total used (map-of 0 0) (map-empty) (map-empty)))
        (= w{n} (map-get fresh{n} 0)))
       ((union node {renamed})
-       (delete {node})))
+       (delete {node})) {rule_name("binder-refresh", name, pos, u)})
 """)
     return "\n".join(rules)
 
@@ -754,6 +898,11 @@ def emit(language, sort="U", symbols=None):
             declare_shapeof_table(name, sig),
             shape_index(name, sig, symbols),
         ]
+        if PROOFS:
+            out += [
+                ";; two classes under one shape key are one node up to renaming: the merge block's equation as a rule",
+                shape_collision(name, sig, symbols),
+            ]
         out += [
             ";; one row per shape per class: rows meet on equal shape columns, the greater goes",
             shape_dedup(name, sig, symbols),
@@ -807,6 +956,13 @@ SUBST = "subst"
 def carrier_core(symbols):
     """Constructor-independent rules for one carrier."""
     s = symbols
+
+    def named(kind):
+        return rule_name(kind, s.index)
+
+    # how a member registers under its invocation's name: a relation row in the
+    # proof profile, a `set` the function's merge block unions on otherwise
+    register = f"({s.invocation} c name a)" if PROOFS else f"(set ({s.invocation} c name) a)"
     return "\n".join(
         [
             ";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;",
@@ -828,20 +984,35 @@ def carrier_core(symbols):
             f"(function {s.shape_equal} ({s.sort} Renaming {s.sort}) Unit :no-merge)",
             # The name of an invocation: a leader and a reading of its slots. Two values
             # set under one name are one invocation, and the merge makes them one value.
-            f"(function {s.invocation} ({s.sort} Renaming) {s.sort} :merge ((union old new) old))",
+            # The proof profile has no merge blocks, so there the name is a relation's
+            # key and a rule unions two members registered under one name.
+            (
+                f"(relation {s.invocation} ({s.sort} Renaming {s.sort}))"
+                if PROOFS
+                else f"(function {s.invocation} ({s.sort} Renaming) {s.sort} :merge ((union old new) old))"
+            ),
             # A class's symmetry group -- the renamings of its own slots it is equal
             # under -- as one value. Every rule that learns a symmetry writes it here,
             # and `node-shape` takes it whole to spell a node once over every reading
             # its children allow rather than once per reading (C14).
             f"(function {s.group} ({s.sort}) Group :merge (set-union old new))",
+            # A group that has to SHRINK -- respelled on narrower slots, or emptied on a
+            # follower -- is staged here by a `slotted-shrink`/`slotted-empty` rule that
+            # deletes the live row, and `slotted-restore` writes it back one run later.
+            # Deleting and setting one key in one head is not the same thing under the
+            # term/proof encoding, which defers the delete past the set's merge
+            # (egglog/tests/delete-then-set.egg), so the two steps are two runs.
+            f"(function {s.group_replace} ({s.sort}) Group :merge new)",
             # The readings a pattern needs of a class it reaches through one column of
             # a parent row: one group element per way the group acts on the slots the
             # parent's OTHER columns pin, given as an identity renaming (C5). Readings
             # that differ only on the other slots are related by a symmetry of the
             # parent's class, which the shape index derives, so one of each suffices.
             # Keyed by the class and the pinned slots; the per-constructor rules fill
-            # it, and give each row the key its columns need.
-            f"(function {s.coset_reps} ({s.sort} Renaming) Group :merge new)",
+            # it, and give each row the key its columns need. A vector sorted by
+            # content, not a set, so an index into it means the same in every run
+            # and in a proof.
+            f"(function {s.coset_reps} ({s.sort} Renaming) Renamings :merge new)",
             f"(relation {s.big_reading} ({s.sort} Renaming))",
             # Its index, one row per representative, which is what a matching rule joins.
             f"(relation {s.reading} ({s.sort} Renaming Renaming))",
@@ -858,26 +1029,26 @@ def carrier_core(symbols):
        (= a (ordering-max a b))
        (= csa ({s.class_slots} a))
        (= csb ({s.class_slots} b)))
-      (({s.renames} a (compose csa (compose m csb)) b)) :ruleset slotted)""",
+      (({s.renames} a (compose csa (compose m csb)) b)) :ruleset slotted {named("orient-max")})""",
             "",
             f"""(rule (({s.equated} a m b)
        (!= a b)
        (= b (ordering-max a b))
        (= csa ({s.class_slots} a))
        (= csb ({s.class_slots} b)))
-      (({s.renames} b (compose csb (compose (inverse m) csa)) a)) :ruleset slotted)""",
+      (({s.renames} b (compose csb (compose (inverse m) csa)) a)) :ruleset slotted {named("orient-min")})""",
             "",
             # A class equal to itself under `m` is a symmetry, spelled on the slots the
             # class has now: an entry on a slot it has made redundant says nothing.
             f"""(rule (({s.equated} a m a)
        (= cs ({s.class_slots} a)))
-      ((set ({s.group} a) (set-of (compose cs (compose m cs))))) :ruleset slotted)""",
+      ((set ({s.group} a) (set-of (compose cs (compose m cs))))) :ruleset slotted {named("self-symmetry")})""",
             "",
             # Every class with a slot set renames to itself by the identity, and has it
             # as the unit of its group.
             f"""(rule ((= cs ({s.class_slots} c)))
       (({s.renames} c cs c)
-       (set ({s.group} c) (set-of cs))) :ruleset slotted)""",
+       (set ({s.group} c) (set-of cs))) :ruleset slotted {named("seed-identity")})""",
             "",
             # And the identity is the ONLY row a class has to itself. egglog's own `union`
             # can identify the two ends of an edge, which leaves one that is not; what it
@@ -888,21 +1059,21 @@ def carrier_core(symbols):
        (= cs ({s.class_slots} c))
        (!= m cs))
       ((set ({s.group} c) (set-of (compose cs (compose m cs))))
-       (delete ({s.renames} c m c))) :ruleset slotted)""",
+       (delete ({s.renames} c m c))) :ruleset slotted {named("self-edge-symmetry")})""",
             "",
             # Remove an edge whose leader changed after a native union.
             f"""(rule (({s.renames} f m l)
        (!= f l)
        (= l (ordering-max f l)))
-      ((delete ({s.renames} f m l))) :ruleset slotted)""",
+      ((delete ({s.renames} f m l))) :ruleset slotted {named("drop-stale-edge")})""",
             "",
             # Transport the exact class-slot set in either direction.
             f"""(rule (({s.renames} a m b) (= slots ({s.class_slots} a)))
       ((set ({s.class_slots} b) (map-image (compose (inverse m) slots))))
-      :ruleset slotted)""",
+      :ruleset slotted {named("transport-down")})""",
             f"""(rule (({s.renames} a m b) (= slots ({s.class_slots} b)))
       ((set ({s.class_slots} a) (map-image (compose m slots))))
-      :ruleset slotted)""",
+      :ruleset slotted {named("transport-up")})""",
             "",
             # A class's slots are closed under its symmetries: if `c = g*c` and `g` sends
             # a slot the class has to one it does not, the two cannot be told apart, so
@@ -911,7 +1082,7 @@ def carrier_core(symbols):
             # set, over the whole group; the merge intersects.
             f"""(rule ((= grp ({s.group} c)) (= slots ({s.class_slots} c)))
       ((set ({s.class_slots} c) (group-slot-closure grp slots)))
-      :ruleset slotted)""",
+      :ruleset slotted {named("slot-closure")})""",
             "",
             # Close paths and reconcile competing leaders. The only row from a class to
             # itself is its identity, and a path through one restates the path it came
@@ -921,7 +1092,7 @@ def carrier_core(symbols):
             f"""(rule (({s.renames} e1 m12 e2)
        ({s.renames} e2 m23 e3)
        (!= e2 e3))
-      (({s.equated} e1 (compose m12 m23) e3)) :ruleset slotted)""",
+      (({s.equated} e1 (compose m12 m23) e3)) :ruleset slotted {named("transitivity")})""",
             "",
             # Only over edges already spelled on their classes' slots: an edge a narrowing
             # has outdated belongs to the restatement rule below, and two deleting rules
@@ -941,26 +1112,27 @@ def carrier_core(symbols):
                        (bool-!= m1 m2)
                        (bool= (ordering-max m1 m2) m1)))))
       ((delete ({s.renames} a m1 b))
-       ({s.equated} b (compose (inverse m1) m2) c)) :ruleset slotted)""",
+       ({s.equated} b (compose (inverse m1) m2) c)) :ruleset slotted {named("one-leader")})""",
             "",
             # A follower's symmetries are its leader's, conjugated, and every rule that
             # reads a group reads it on the class a row or a child column names, which is
             # a leader. So a group on a value that has a leader is a copy no one reads,
             # and it is emptied; its index rows go with it through the view rules below.
             # Emptied rather than deleted, because the view can only follow a set that
-            # is there to compare against.
+            # is there to compare against. The delete and the empty set are two runs
+            # apart (see `GroupReplace`), in phases of their own after the core settles.
             f"""(rule ((= s ({s.group} f))
        (> (set-length s) 0)
        ({s.renames} f m l)
        (!= f l))
       ((delete ({s.group} f))
-       (set ({s.group} f) (set-empty))) :ruleset slotted)""",
+       (set ({s.group_replace} f) (set-empty))) :ruleset slotted-empty {named("group-empty")})""",
             "",
             # And its identity row, which the rule above leaves behind.
             f"""(rule (({s.renames} f g f)
        ({s.renames} f m l)
        (!= f l))
-      ((delete ({s.renames} f g f))) :ruleset slotted)""",
+      ((delete ({s.renames} f g f))) :ruleset slotted {named("drop-follower-identity")})""",
             "",
             # A group is spelled on its class's slots and closed under composition, and
             # one rule keeps it so. A symmetry outlives a narrowing of the slots: left as
@@ -969,13 +1141,20 @@ def carrier_core(symbols):
             # class each state their own symmetries, so the class's group is the one
             # they generate. Whole-set, because the merge only ever unions: shrinking is
             # a delete and a set, and two rules shrinking one set in one iteration would
-            # lose an edit or undo each other.
+            # lose an edit or undo each other. The delete runs alone, once the group
+            # phase has settled, and the restore one run later, so no other rule's
+            # write to the key can land between the two and be lost.
             f"""(rule ((= s ({s.group} c))
        (= cs ({s.class_slots} c))
        (= s2 (group-close (group-restrict s cs)))
        (!= s s2))
       ((delete ({s.group} c))
-       (set ({s.group} c) s2)) :ruleset slotted-group)""",
+       (set ({s.group_replace} c) s2)) :ruleset slotted-shrink {named("group-shrink")})""",
+            "",
+            # The staged group written back onto the key the shrink deleted.
+            f"""(rule ((= s2 ({s.group_replace} c)))
+      ((set ({s.group} c) s2)
+       (delete ({s.group_replace} c))) :ruleset slotted-restore {named("group-restore")})""",
             "",
             # A renaming outlives a narrowing of its classes' slots: restate it on what
             # they have now.
@@ -985,13 +1164,13 @@ def carrier_core(symbols):
        (= m2 (compose csf (compose m csl)))
        (!= m m2))
       ((delete ({s.renames} f m l))
-       ({s.renames} f m2 l)) :ruleset slotted)""",
+       ({s.renames} f m2 l)) :ruleset slotted {named("restate-edge")})""",
             "",
             # Store every variable as a renamed invocation of slot zero.
             f"""(rule ((= e ({s.var} v))
        (!= v 0))
       (({s.equated} e (map-insert (map-empty) 0 v) ({s.var} 0))
-       (delete ({s.var} v))) :ruleset slotted)""",
+       (delete ({s.var} v))) :ruleset slotted {named("var-normalize")})""",
             "",
             f"({s.renames} ({s.var} 0) (map-insert (map-empty) 0 0) ({s.var} 0))",
             f"(set ({s.group} ({s.var} 0)) (set-of (map-insert (map-empty) 0 0)))",
@@ -1003,8 +1182,21 @@ def carrier_core(symbols):
             f"""(rule (({s.renames} a m c)
        (= grp ({s.group} c))
        (= name (coset-min m grp)))
-      ((set ({s.invocation} c name) a)) :ruleset slotted)""",
+      ({register}) :ruleset slotted {named("invocation")})""",
             "",
+            # The proof profile's spelling of the merge: two members under one name are
+            # one value.
+            *(
+                [
+                    f"""(rule (({s.invocation} c name a)
+       ({s.invocation} c name b)
+       (!= a b))
+      ((union a b)) :ruleset slotted {named("invocation-merge")})""",
+                    "",
+                ]
+                if PROOFS
+                else []
+            ),
             # The index of the readings: a row for every element, and none for anything
             # else. These are the relation's only writers, so once the ruleset settles
             # it says exactly what the set says. A set past the last index would be
@@ -1015,24 +1207,24 @@ def carrier_core(symbols):
             # join).
             f"""(rule ((GroupIdxSmall i)
        (= s ({s.coset_reps} c pinned))
-       (= g (set-get s i)))
-      (({s.reading} c pinned g)) :ruleset slotted-read)""",
+       (= g (vec-get s i)))
+      (({s.reading} c pinned g)) :ruleset slotted-read {named("reading-small")})""",
             "",
             f"""(rule ((= s ({s.coset_reps} c pinned))
-       (> (set-length s) {GROUP_INDICES_SMALL}))
-      (({s.big_reading} c pinned)) :ruleset slotted-read)""",
+       (> (vec-length s) {GROUP_INDICES_SMALL}))
+      (({s.big_reading} c pinned)) :ruleset slotted-read {named("reading-big-mark")})""",
             "",
             f"""(rule (({s.big_reading} c pinned)
        (= s ({s.coset_reps} c pinned))
        (GroupIdx i)
        (>= i {GROUP_INDICES_SMALL})
-       (= g (set-get s i)))
-      (({s.reading} c pinned g)) :ruleset slotted-read)""",
+       (= g (vec-get s i)))
+      (({s.reading} c pinned g)) :ruleset slotted-read {named("reading-big")})""",
             "",
             f"""(rule (({s.reading} c pinned g)
        (= s ({s.coset_reps} c pinned))
-       (set-not-contains s g))
-      ((delete ({s.reading} c pinned g))) :ruleset slotted-read)""",
+       (vec-not-contains s g))
+      ((delete ({s.reading} c pinned g))) :ruleset slotted-read {named("reading-cleanup")})""",
             "",
             # Repair: the representatives are a function of the group as it stands. A
             # row whose class id was merged into another's carries a value written under
@@ -1042,22 +1234,22 @@ def carrier_core(symbols):
        (= grp ({s.group} c))
        (= fresh (group-coset-reps grp pinned))
        (!= s fresh))
-      ((set ({s.coset_reps} c pinned) fresh)) :ruleset slotted-read)""",
+      ((set ({s.coset_reps} c pinned) fresh)) :ruleset slotted-read {named("coset-repair")})""",
             "",
             f"""(rule ((= s ({s.coset_reps} c pinned))
-       (> (set-length s) {GROUP_INDICES}))
-      ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted-read)""",
+       (> (vec-length s) {GROUP_INDICES}))
+      ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted-read {named("coset-panic")})""",
             "",
             # Two classes met on one shape (C14): the shape index's merge block wrote the
             # equation here, and it enters the class relation like any other.
             f"""(rule (({s.shape_equal} a m b))
-      (({s.equated} a m b)) :ruleset slotted)""",
+      (({s.equated} a m b)) :ruleset slotted {named("shape-equal")})""",
             "",
             # Move a primitive substitution result back into the root frame.
             f"""(rule (({s.subst_pending} root q mr r)
        (= cs ({s.class_slots} r)))
       (({s.equated} root (compose q (compose mr cs)) r))
-      :ruleset slotted)""",
+      :ruleset slotted {named("subst-answer")})""",
             "",
         ]
     )
@@ -1080,8 +1272,10 @@ GROUP_INDICES = 512
 #: readings once at the end. Run together instead, MMM's second phase walked each
 #: `Binop` row thirteen times over and migrated rows that then moved again.
 MACHINERY_SCHEDULE = (
-    "(seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate))"
-    " (saturate (run slotted-group)) (run slotted-shape)))"
+    "(seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore)))"
+    " (saturate (run slotted-migrate))"
+    " (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore)))"
+    " (run slotted-shape)))"
     " (saturate (run slotted-read)))"
 )
 
@@ -1133,11 +1327,36 @@ def prelude():
             # Binary-tree expansion covers [0, count) in logarithmically many rounds.
             *(
                 f"(rule ((Idx _len _i) (= _next (+ (* _i 2) {offset})) (< _next _len))"
-                " ((Idx _len _next)) :ruleset slotted-refine)"
+                f" ((Idx _len _next)) :ruleset slotted-refine {rule_name('refine-index', offset)})"
                 for offset in (1, 2)
             ),
         ]
     )
+
+
+#: The hidden tables the proof profile records a program's SOURCE in, for a proof
+#: translator to read back: declared beside the layout tables and filled by the
+#: compiler. `slotted/ENCODING.md`, *The proof profile*, gives each row's convention.
+SOURCE_METADATA = (
+    ";; the proof profile's source metadata; see ENCODING.md, *The proof profile*",
+    "(function SlottedCarrier (String i64) Unit :no-merge :internal-hidden)",
+    "(function SlottedRuleSource (String String) Unit :no-merge :internal-hidden)",
+    "(function SlottedLetSource (String String) Unit :no-merge :internal-hidden)",
+    "(function SlottedUnionSource (String String) Unit :no-merge :internal-hidden)",
+    "(function SlottedClaimSource (i64 String String String) Unit :no-merge :internal-hidden)",
+)
+
+
+def egglog_string(text):
+    """`text` as an egglog string literal."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def metadata_row(table, *keys):
+    """`(set (Table key...) ())`: one row of a source-metadata table. A string key is
+    spelled as a literal; anything else as it is."""
+    spelled = " ".join(egglog_string(k) if isinstance(k, str) else str(k) for k in keys)
+    return f"(set ({table} {spelled}) ())"
 
 
 def multi_sort_core(carriers):
@@ -1151,8 +1370,13 @@ def multi_sort_core(carriers):
             "(ruleset slotted)",
             ";; rows moved into their leaders' frames: once the leaders have settled",
             "(ruleset slotted-migrate)",
+            ";; a follower's group emptied: its delete, then its restore, once the core settles",
+            "(ruleset slotted-empty)",
             ";; the groups from the rows' symmetries, closed and restricted, settled on their own",
             "(ruleset slotted-group)",
+            ";; a group respelled on narrower slots: its delete, then its restore, once the groups settle",
+            "(ruleset slotted-shrink)",
+            "(ruleset slotted-restore)",
             ";; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`",
             "(ruleset slotted-shape)",
             ";; the readings a pattern joins: derived once the groups have settled",
@@ -1163,6 +1387,15 @@ def multi_sort_core(carriers):
             "(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)",
             "(function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)",
             "(function SlottedPayloadLayout (String i64 String) Unit :no-merge :internal-hidden)",
+            *(
+                [
+                    "",
+                    *SOURCE_METADATA,
+                    *(metadata_row("SlottedCarrier", s.sort, s.index) for s in carriers.values()),
+                ]
+                if PROOFS
+                else []
+            ),
             "",
         ]
     )
@@ -2444,6 +2677,9 @@ def compile_rule(
     columns = [q.refined, q.refined_len, *cls_of.values(), *sorted(q.pays)]
     sorts = ["Frames", "i64", *(pvar_sorts[v] for v in cls_of), *(q.pays[v] for v in sorted(q.pays))]
     relation = match_relation(name, [*body[: q.split], *act])
+    # an unnamed rule is named after its match relation, so egglog and the proof
+    # translator can refer to it the way the source metadata does
+    name = name or relation
     row = f"({relation} {' '.join(columns)})"
     return "\n".join(
         [

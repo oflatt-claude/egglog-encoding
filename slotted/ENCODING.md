@@ -195,7 +195,10 @@ it from a merge block, which may `set` a function but not insert into a relation
 
 **`Invocation c m`** names the invocation "`c` read through `m`". Every member of a
 class registers under the names of its readings, and the function's merge unions two
-members that share one, which is how one invocation stays one egglog value.
+members that share one, which is how one invocation stays one egglog value. (The
+proof profile, which has no merge blocks, keeps the same table as a relation
+`(Invocation c m a)` and a rule that unions two members under one name; see *The
+proof profile*.)
 
 **`EclassGroup c`** is the class's symmetry group as one value: the renamings `p` of
 its own slots under which `c` is equal to itself. That is how the example's `union`
@@ -212,7 +215,7 @@ direct set-membership join. Primitives such as `coset-min`, `group-slot-closure`
 
 ## The rules, once per sort
 
-Seventeen rules and two facts, none of which mentions a constructor. Part II adds
+Eighteen rules and two facts, none of which mentions a constructor. Part II adds
 five more.
 
 **Orienting `Equated`.** The larger value is the follower, so a leader is the least
@@ -337,15 +340,25 @@ class's group is the one those generate; `group-close` takes the closure. Storin
 closure rather than generators is what lets a match look up the element it needs in one
 join. The rule is whole-set because the function's merge only ever unions: shrinking is
 a delete and a set, and two rules shrinking one set in one iteration would lose an edit
-or, under the union, undo each other forever.
+or, under the union, undo each other forever. The delete and the set are two rules a
+run apart: the first deletes the live row and stages the new set in `GroupReplace`, the
+second writes it back. Deleting and setting one key in one head means "replace" to
+egglog, which applies the removal before the insert, but not to the term/proof encoding,
+which defers the delete past the set's merge (`egglog/tests/delete-then-set.egg`), so
+the two steps are two runs and the shrink runs alone, once the group phase has settled,
+where no other rule's write to the key can land between them.
 
 ```
+(function GroupReplace (Math) Group :merge new)
 (rule ((= s (EclassGroup c))
        (= cs (ClassSlots c))
        (= s2 (group-close (group-restrict s cs)))
        (!= s s2))
       ((delete (EclassGroup c))
-       (set (EclassGroup c) s2)) :ruleset slotted)
+       (set (GroupReplace c) s2)) :ruleset slotted-shrink)
+(rule ((= s2 (GroupReplace c)))
+      ((set (EclassGroup c) s2)
+       (delete (GroupReplace c))) :ruleset slotted-restore)
 ```
 
 **One variable class.** `(Var v)` with `v` other than 0 is restated as `(Var 0)` under
@@ -455,7 +468,12 @@ renaming per symmetry the node gives its class; `symmetries-of` reads that tail.
 canonical edges are the key, so two nodes that agree only after permuting a child's
 slots arrive at one key. A row costs one insertion, whatever the groups hold.
 `ShapeEqual` is a function rather than a relation because a merge block may `set` a
-function, and one rule per sort hands its rows to `Equated`.
+function, and one rule per sort hands its rows to `Equated`. The proof profile has
+neither tuple outputs nor merge blocks: there the index is two `:merge old` functions
+under the same key, `_shape_class_F` and `_shape_back_F`, the memo is
+`_shapeof_edges_F` (the vector `[s1 .. sn, back]`) and `_shapeof_syms_F`, and a
+`shape-collision` rule in the shape phase states the `ShapeEqual` row for a row whose
+class is not the one stored under its key (*The proof profile*).
 
 The tail is what a node says about its *own* class: a reading that spells the node the
 same way up to a renaming of the node's own slots says the class equals itself under
@@ -743,16 +761,23 @@ matching from application, generates every needed refinement index between them,
 and phases maintenance as follows:
 
 ```
-(seq (saturate (seq (saturate (run slotted))
+(seq (saturate (seq (saturate (seq (saturate (run slotted))
+                                   (run slotted-empty)
+                                   (run slotted-restore)))
                     (saturate (run slotted-migrate))
-                    (saturate (run slotted-group))
+                    (saturate (seq (saturate (run slotted-group))
+                                   (run slotted-shrink)
+                                   (run slotted-restore)))
                     (run slotted-shape)))
      (saturate (run slotted-read)))
 ```
 
 `slotted` is the core: leaders, slot sets, the closure of the edges. `slotted-migrate`
 moves rows and parents onto leaders; `slotted-group` derives each class's group from
-its rows' symmetries and closes and restricts it; `slotted-shape` holds the shape
+its rows' symmetries and closes it; `slotted-shrink` restricts a group to narrowed
+slots and `slotted-empty` empties a follower's, each deleting the row and staging its
+replacement for `slotted-restore` to write back one run later, once the phase before
+it has settled (*A group is spelled on its class's slots*); `slotted-shape` holds the shape
 walks and the row dedup; `slotted-read` the coset readings and their index. Each phase
 reads what the ones before it settle -- a migration reads leaders, a group reads the
 rows where they now live, a shape walk enumerates its children's groups, a reading a
@@ -814,6 +839,11 @@ The cache key contains the computation's immutable inputs: edge maps and group
 values. A changed child group selects a different entry. Child class ids are absent,
 so a native union cannot merge an obsolete cached result over a current one. The
 symmetry rule and deduplication both read the entry for the current child groups.
+Under the proof profile the memo is two single-output functions, and the dedup rule
+compares the two rows' shape vectors element by element with `vec-get` instead of
+joining on shape columns; the rows it deletes are the same, and it states the symmetry
+between the two readings itself, since the merge block that recorded it is a rule
+there that runs a step behind (*The proof profile*).
 
 ## Generate group closure from a small subset
 
@@ -867,7 +897,7 @@ no atom reads, though its edge pins its slot. A claim's subterms are read the sa
 parent first.
 
 ```
-(function CosetReps (Math Renaming) Group :merge new)
+(function CosetReps (Math Renaming) Renamings :merge new)
 (relation Reading (Math Renaming Renaming))
 (function _pinned_Add (Renaming Math Renaming Math i64) Renaming :merge new)
 
@@ -876,16 +906,20 @@ parent first.
        (= pinned (map-domain (compose (map-image m2) m1))))
       ((set (_pinned_Add m1 c1 m2 c2 1) pinned)
        (set (CosetReps c1 pinned) (group-coset-reps grp pinned))) :ruleset slotted)
-(rule ((GroupIdx i) (= s (CosetReps c pinned)) (= g (set-get s i)))
+(rule ((GroupIdx i) (= s (CosetReps c pinned)) (= g (vec-get s i)))
       ((Reading c pinned g)) :ruleset slotted)
-(rule ((Reading c pinned g) (= s (CosetReps c pinned)) (set-not-contains s g))
+(rule ((Reading c pinned g) (= s (CosetReps c pinned)) (vec-not-contains s g))
       ((delete (Reading c pinned g))) :ruleset slotted)
 (rule ((= s (CosetReps c pinned)) (= grp (EclassGroup c))
        (= fresh (group-coset-reps grp pinned)) (!= s fresh))
       ((set (CosetReps c pinned) fresh)) :ruleset slotted)
-(rule ((= s (CosetReps c pinned)) (> (set-length s) 512))
+(rule ((= s (CosetReps c pinned)) (> (vec-length s) 512))
       ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted)
 ```
+
+`group-coset-reps` returns the representatives as a vector sorted by content rather
+than as a set, so the index a `Reading` row was read at means the same in every run,
+which a proof citing that row needs.
 
 The repair rule is there because `:merge new` is not a function of the state: when
 egglog merges two class ids, two `CosetReps` rows fall onto one key and whichever
@@ -999,13 +1033,15 @@ Every rule that reads a group reads it off a class a row or a child column names
 those are leaders, so a group on a value that has a leader is a copy nothing reads —
 one row of it per member per group element, which was most of the edge relation. It is
 emptied, and its index rows go with it through the view rules; emptied rather than
-deleted, because the view can only follow a set that is there to compare against. Its
+deleted, because the view can only follow a set that is there to compare against. The
+delete and the empty set are two runs apart through `GroupReplace`, for the reason the
+group's shrink rule gives, in a phase of their own once the core has settled. Its
 identity edge goes too.
 
 ```
 (rule ((= s (EclassGroup f)) (> (set-length s) 0) (RenamesToLeader f m l) (!= f l))
       ((delete (EclassGroup f))
-       (set (EclassGroup f) (set-empty))) :ruleset slotted)
+       (set (GroupReplace f) (set-empty))) :ruleset slotted-empty)
 (rule ((RenamesToLeader f g f) (RenamesToLeader f m l) (!= f l))
       ((delete (RenamesToLeader f g f))) :ruleset slotted)
 ```
@@ -1044,6 +1080,89 @@ the same canonical spelling as before, stopping at the first difference; a class
 one smallest candidate needs no spelling comparison. Sharing changes storage, not
 the extraction objective or tie-break. The multipattern reference keeps its independent,
 expanded-template implementation to check that the optimized encoding agrees.
+
+# The proof profile
+
+`slotted-egglog.py --proofs` compiles the same encoding in a second profile, meant
+for egglog's term/proof encoding (`egglog/src/proofs/proof_encoding_helpers.rs`,
+`command_supports_proof_encoding`) and for a proof translator that has to map a
+generated rule or a proved fact back to the slotted source. The decoded graph is the
+one above; what changes is spelling. `run-slotted-tests.py --proofs` runs the suite
+under it natively, with the claims as checks; `run-slotted-tests.py
+--slotted-proofs` (`make slotted-proof-tests`) proves them under `egglog
+--slotted-proofs`, where the translator (`egglog/src/proofs/slotted/`) turns each
+egglog proof into a proof over the source terms and checks it -- the format and
+the translation are described in `slotted/PROOFS.md`.
+
+**Rule names, in both profiles.** Every generated machinery rule carries a stable
+`:name`, unique across carriers and constructors, so a proof can cite the rule it
+used: a core rule is `slotted/<kind>/<carrier index>` -- `orient-max`, `orient-min`,
+`self-symmetry`, `seed-identity`, `self-edge-symmetry`, `drop-stale-edge`,
+`transport-down`, `transport-up`, `slot-closure`, `transitivity`, `one-leader`,
+`drop-follower-identity`, `group-empty`, `group-shrink`, `group-restore`,
+`restate-edge`, `var-normalize`, `invocation`, `invocation-merge` (proof profile
+only), `reading-small`, `reading-big-mark`, `reading-big`, `reading-cleanup`,
+`coset-repair`, `coset-panic`, `shape-equal`, `subst-answer`, in the order the core
+lists them -- and a per-constructor rule is `slotted/<kind>/<Ctor>`: `class-slots`,
+`shape-index`, `node-symmetry`, `shape-collision` (proof profile only),
+`shape-dedup`, `migration`, with a zero-based child position appended where there is
+one rule per column: `coset-readings/<Ctor>/<child>`, `child-update/<Ctor>/<child>`,
+`binder-strip/<Ctor>/<bound child>`, and `binder-refresh/<Ctor>/<bound
+child>/<uncovered child>`. The refinement-index rules are `slotted/refine-index/1`
+and `/2`, and the one-off rule an `(extract ...)` declares is
+`slotted/extract/<n>`. A user rule keeps its own name, with `/apply` and `/drain`
+on its two companions.
+
+**What the proof profile avoids**, and how each table is respelled:
+
+- *No tuple outputs.* `_shape_F` becomes `_shape_class_F (key...) <sort> :merge old`
+  and `_shape_back_F (key...) Renaming :merge old`, both set by the index rule;
+  `_shapeof_F` becomes `_shapeof_edges_F (...) Renamings :no-merge`, holding
+  `[s1 .. sn, back]`, and `_shapeof_syms_F (...) Group :no-merge`.
+- *No `:merge` action blocks.* The collision a merge block stated is a rule,
+  `shape-collision`, in the shape phase: a row `c` whose memoized shape finds a
+  stored pair `(c0, back0)` under its key other than its own `(c, back)` states
+  `(ShapeEqual c (compose back (inverse back0)) c0)` -- a symmetry of `c` when only
+  the renaming differs -- one run after the index write it reads. Since the dedup
+  can fold a row in that run, before the collision rule sees it, the profile's dedup
+  also states the symmetry between the two rows it compares as it deletes one.
+  `Invocation` becomes `(relation Invocation_N (<sort> Renaming <sort>))`, written
+  `(Invocation c name a)`, and `invocation-merge` unions two members under one name.
+- *No eq-sort `:no-merge` functions.* None remain: the `:no-merge` tables are
+  `Unit`- or container-valued, and the extract helper `_leaderN` has its
+  `(ordering-min old new)` merge in both profiles.
+- *Claims.* A positive `=` or `renaming-=` claim compiles to `(prove <facts>)` over
+  exactly the facts its `check` would have, so proof mode extracts a proof of it;
+  `fail`-wrapped, `!=`, `slots` and `holds` claims stay as they are. Plain egglog
+  refuses `prove` outside proof mode, so `--proofs-as-checks` keeps every claim a
+  `check`, and the test runner diffs the two spellings to see that they differ in that
+  keyword alone.
+
+**Source metadata.** Five hidden `Unit` functions, declared beside the layout tables
+and filled by the compiler, carry the source a translator needs:
+
+| row | holds |
+| --- | --- |
+| `(SlottedCarrier "Sort" n)` | the equality sort with carrier index `n`, the suffix of its tables |
+| `(SlottedRuleSource "name" "(rewrite LHS RHS :when (...) :name \"name\")")` | a rewrite's canonical source under its rule name |
+| `(SlottedLetSource "x" "(Mul $7 (Null))")` | a global and the term text it was bound to |
+| `(SlottedUnionSource "a" "b")` | the two terms of a top-level `union`, as written |
+| `(SlottedClaimSource i "=" "a" "b")` | the `i`-th claim, its kind and its two terms; emitted immediately before that claim's `prove` |
+
+The conventions: a term or pattern is the source form re-rendered with single
+spaces, comments dropped, and a pattern variable's `?` sigil removed, so a variable
+reads as the compiled rule's frame names it (the strings in `(ren m "x")`); slot
+literals stay `$x`, payload literals and globals stay as written, and a global inside a
+term or a union is its name, which `SlottedLetSource` resolves. A rewrite's text has
+`:when` only when it has facts and `:name` only when it is named, and its facts are
+the compiler's reading of them, grouped as `rewrite_parts` keeps them: the `(= v
+<call>)` patterns -- a bare call fact as `(= _factN <call>)` and a call inside a
+condition as `(= _condN <call>)`, the names the frame uses -- then `(= x y)`, then
+`(!= x y)`, then `free`/`not-free`. An unnamed rewrite is keyed by the relation its
+matches wait in, `_matched_<hash>`. A union whose text pair repeats gets ` #2`,
+` #3`, ... appended to its first string so each union keeps a row. A claim's index
+counts every `check` and `fail` in the program, in order, so it is the claim's position
+whether or not its neighbours are proved.
 
 # The contract
 

@@ -15,6 +15,9 @@ Usage:
     ./slotted-egglog.py SRC.egg              run it
     ./slotted-egglog.py SRC.egg --desugar    write the compiled program to stdout
     ./slotted-egglog.py SRC.egg -o OUT.egg   ... or to a file
+    ./slotted-egglog.py SRC.egg --proofs     the proof-compatible profile (ENCODING.md,
+                                             *The proof profile*); add --proofs-as-checks
+                                             to run it on the native backend
 """
 
 import argparse
@@ -59,6 +62,15 @@ def parse(text):
 def render(form):
     """A parsed form back as text, unchanged."""
     return "(" + " ".join(render(x) for x in form) + ")" if isinstance(form, list) else form
+
+
+def source_text(form):
+    """A form as the proof profile's metadata spells it: `render`, with a pattern
+    variable's `?` sigil dropped so it reads as the compiled rule's frame names it.
+    A slot `$x`, a global, a payload literal and a keyword are as written."""
+    if isinstance(form, list):
+        return "(" + " ".join(source_text(x) for x in form) + ")"
+    return form[1:] if form.startswith("?") and len(form) > 1 else form
 
 
 class Terms(enc.TermLang):
@@ -471,6 +483,8 @@ def compile_source(src, own_only=False, *, nested_compat=False):
     rules = 0
     scopes = []  # globals saved by each open `push`, restored by its `pop`
     extracts = 0
+    claims = 0  # every `check` and `fail`, in order: a claim's index in the metadata
+    unions = collections.Counter()  # text pairs seen, to number a repeated union's row
     for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
         mine = origin == src.path
@@ -508,6 +522,8 @@ def compile_source(src, own_only=False, *, nested_compat=False):
                 )
             _emit(out, keep, f"(let ${name} {src.encode(body)})")
             src.lang.bound[name] = src.term(body)
+            if enc.PROOFS:
+                _emit(out, keep, enc.metadata_row("SlottedLetSource", name, source_text(body)))
         elif head == "union":
             # Asserting an equation between two terms rather than deriving it. The
             # machinery takes it from there: a union between invocations with
@@ -516,9 +532,22 @@ def compile_source(src, own_only=False, *, nested_compat=False):
             _, a, b = form
             sort, _terms = src.common_sort((a, b), "union")
             _emit(out, keep, f"(union {src.encode(a, expected_sort=sort)} {src.encode(b, expected_sort=sort)})")
+            if enc.PROOFS:
+                # the terms as written, a global by its name; a repeated pair is
+                # numbered so that each union keeps a row of its own
+                pair = (source_text(a), source_text(b))
+                unions[pair] += 1
+                suffix = f" #{unions[pair]}" if unions[pair] > 1 else ""
+                _emit(out, keep, enc.metadata_row("SlottedUnionSource", pair[0] + suffix, pair[1]))
         elif head == "rewrite":
             _emit(out, keep, compile_rewrite(src, form, nested_compat=nested_compat))
             rules += 1
+            if enc.PROOFS:
+                _emit(
+                    out,
+                    keep,
+                    enc.metadata_row("SlottedRuleSource", *source_rewrite(src, form, nested_compat=nested_compat)),
+                )
         elif head == "run":
             _emit(out, keep, schedule(int(form[1]), rules))
         elif head == "extract":
@@ -546,12 +575,13 @@ def compile_source(src, own_only=False, *, nested_compat=False):
                 out,
                 keep,
                 f"(rule (({symbols.renames} {src.encode(form[1], expected_sort=sort)} _m _l)) "
-                f"((set ({fn}) _l)) :ruleset {rs})",
+                f"((set ({fn}) _l)) :ruleset {rs} {enc.rule_name('extract', extracts)})",
             )
             _emit(out, keep, f"(run-schedule (saturate (run {rs})))")
             _emit(out, keep, f"(extract ({fn}))")
         elif head in ("check", "fail"):
-            _emit(out, keep, compile_check(src, form))
+            _emit(out, keep, compile_check(src, form, claims))
+            claims += 1
         elif head in ("rule", "birewrite"):
             # `rewrite` is the only rule form here, and passing either of these through
             # is worse than rejecting it. At the slotted level neither can typecheck --
@@ -844,6 +874,33 @@ def rule_name(src, form):
     return rewrite_parts(src, form)["name"]
 
 
+def source_rewrite(src, form, *, nested_compat=False):
+    """A rewrite's `SlottedRuleSource` row: the rule's name and its canonical source.
+
+    The source is `(rewrite LHS RHS :when (FACTS) :name "N")`, each part only when the
+    rule has it, and the facts as `rewrite_parts` reads them -- a call in a condition
+    or a bare call fact is the `(= _condN <call>)` / `(= _factN <call>)` equality the
+    compiler makes of it, so every name in the text is one the frame knows. The facts
+    are grouped: the `=` patterns, then `(= x y)`, then `(!= x y)`, then the
+    `free`/`not-free` conditions. A pattern variable loses its `?`; everything else is
+    as written. An unnamed rule is keyed by the relation its matches wait in.
+    """
+    parts = rewrite_parts(src, form)
+    facts = [f"(= {var} {source_text(pat)})" for var, pat in parts["equalities"]]
+    facts += [f"(= {a} {b})" for a, b in parts["same"]]
+    facts += [f"(!= {a} {b})" for a, b in parts["diseq"]]
+    facts += [f"({'free' if want else 'not-free'} {slot} {' '.join(names)})" for want, slot, names in parts["conds"]]
+    text = f"(rewrite {source_text(parts['lhs'])} {source_text(parts['rhs'])}"
+    if facts:
+        text += f" :when ({' '.join(facts)})"
+    if parts["name"] is not None:
+        text += f' :name "{parts["name"]}"'
+    key = parts["name"]
+    if key is None:
+        key = re.search(r"\(relation (_matched_\S+) ", compile_rewrite(src, form, nested_compat=nested_compat)).group(1)
+    return key, text + ")"
+
+
 #: A claim's term, once matched: the class it landed in and the renaming that places
 #: that class's slots in the claim's own slot space.
 Matched = collections.namedtuple("Matched", "cls mp")
@@ -989,11 +1046,16 @@ def claim_query(src, forms, sort):
     return body, matched
 
 
-def compile_check(src, form):
+def compile_check(src, form, index=0):
     """A claim about slotted classes, not about egglog values.
 
     Every claim that names a term is one query: the facts that match the terms,
     followed by the facts that state the claim over what they matched.
+
+    `index` is the claim's position among the program's claims, which the proof
+    profile records beside a positive `=` or `renaming-=` claim: that claim is a
+    `(prove ...)` over the check's facts, so that egglog's proof mode extracts a proof
+    of it, and the row before it says which claim the proof is of.
     """
     negated = form[0] == "fail"
     if negated:
@@ -1008,8 +1070,15 @@ def compile_check(src, form):
         One fact per line, as a rule's query is written: a claim is a query now, and
         a snapshot of one is only readable if it reads like the rules beside it.
         """
-        text = "(check " + "\n       ".join(list(body) + facts) + ")"
-        return f"(fail {text})" if negative != negated else text
+        proved = kind in ("=", "renaming-=") and not negative and not negated
+        head = "prove" if proved and enc.PROVE_CLAIMS else "check"
+        text = f"({head} " + "\n       ".join(list(body) + facts) + ")"
+        if negative != negated:
+            return f"(fail {text})"
+        if proved and enc.PROOFS:
+            row = enc.metadata_row("SlottedClaimSource", index, kind, source_text(args[0]), source_text(args[1]))
+            return f"{row}\n{text}"
+        return text
 
     if kind in ("=", "!=", "renaming-=", "renaming-!="):
         # ONE renaming, not two. Two terms are equal when they are the same
@@ -1133,7 +1202,29 @@ def main():
         action="store_true",
         help="run it (the default; accepted so older invocations keep working)",
     )
+    ap.add_argument(
+        "--proofs",
+        action="store_true",
+        help=(
+            "the proof-compatible profile: no tuple outputs, merge blocks or eq-sort "
+            ":no-merge functions, hidden source-metadata tables, and a positive `=` or "
+            "`renaming-=` claim as a `(prove ...)`"
+        ),
+    )
+    ap.add_argument(
+        "--proofs-as-checks",
+        action="store_true",
+        help="with --proofs: keep every claim a `(check ...)`, which plain egglog can run",
+    )
+    ap.add_argument(
+        "--show-proofs",
+        action="store_true",
+        help="with --proofs: print each claim's slotted proof instead of just counting them",
+    )
     args = ap.parse_args()
+    if args.proofs_as_checks and not args.proofs:
+        ap.error("--proofs-as-checks needs --proofs")
+    enc.configure(proofs=args.proofs, prove_claims=args.proofs and not args.proofs_as_checks)
 
     src = Source(args.src)
     text = compile_source(src, nested_compat=args.nested_compat)
@@ -1156,8 +1247,20 @@ def main():
     with tempfile.NamedTemporaryFile("w", suffix=".egg", delete=False) as f:
         f.write(text)
         path = f.name
+    # The prove profile needs the slotted proof pipeline, which translates each
+    # egglog proof to a slotted proof and checks it against the source program.
+    proving = args.proofs and not args.proofs_as_checks
+    if proving and "slotted-subst-frame" in text:
+        # `subst` has no proof translation: its rows carry no equality the checker reads
+        print(f"skip {args.src.name}: uses subst, which has no proof translation")
+        return 0
+    flags = ["--slotted-proofs"] if proving else []
     r = subprocess.run(
-        [str(ROOT / "target" / "debug" / "egglog"), path], capture_output=True, text=True, cwd=ROOT, timeout=1800
+        [str(ROOT / "target" / "debug" / "egglog"), *flags, path],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        timeout=1800,
     )
     if r.returncode != 0:
         err = [line for line in r.stderr.splitlines() if "ERROR" in line]
@@ -1166,6 +1269,11 @@ def main():
         print(f"     compiled program kept at {path}")
         return 1
     pathlib.Path(path).unlink(missing_ok=True)
+    if proving and not args.show_proofs:
+        # the proofs are the point, but long: say how many checked
+        proved = text.count("\n(prove ")
+        print(f"ok   {args.src.name}   {tally(src)}, {proved} claim{'s' if proved != 1 else ''} proved")
+        return 0
     if r.stdout.strip():
         # whatever the program itself asked for -- `extract`, `sizes`
         sys.stdout.write(r.stdout)

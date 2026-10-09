@@ -7,6 +7,7 @@ A file here is an egglog program with a few additions. Run one directly:
 ```
 python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg
 python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg --desugar   # see the egglog
+python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg --desugar --proofs
 ```
 
 `--nested-compat` restricts rewrite matching to the reference nested matcher's
@@ -16,6 +17,17 @@ The default implements the more complete multipattern matcher. Compatibility mod
 accepts a single nested left-hand pattern and rejects additional equality side
 patterns; checks keep their ordinary semantics. See [ENCODING.md](ENCODING.md#against-the-reference)
 for the exact graph comparisons and substitution policy used by `eval.py`.
+
+`--proofs` selects the proof-compatible profile: the same program compiled without the
+features egglog's term/proof encoding refuses, with every generated rule named, each
+positive `=` or `renaming-=` claim as a `(prove ...)`, and hidden tables recording the
+source each rule, global, union and claim came from. Plain egglog refuses `prove`
+outside proof mode, so `--proofs --proofs-as-checks` runs that profile natively with
+its claims as checks; `slotted/run-slotted-tests.py --proofs` runs the suite that way.
+Under `egglog --slotted-proofs` the claims are proved, and each proof is translated
+to a proof over the source terms and checked (`--slotted-proofs` on the test runner,
+`make slotted-proof-tests`; `slotted/PROOFS.md` has the format). `slotted/ENCODING.md`,
+*The proof profile*, has the rule names and the metadata conventions.
 
 The additions exist because a slotted term is not an egglog value. A term denotes a
 class **together with** a renaming — an *invocation* — and egglog has no notion of

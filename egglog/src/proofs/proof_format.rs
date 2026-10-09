@@ -710,6 +710,11 @@ impl ProofStore {
         &self.id_to_proof[proof_id]
     }
 
+    /// Every proof in the store, by id.
+    pub fn proofs(&self) -> impl Iterator<Item = (ProofId, &Proof)> {
+        self.id_to_proof.iter()
+    }
+
     /// Add a proof, sharing one node per distinct `key`. The e-graph
     /// hash-conses its own proof rows, so the proofs conversion rebuilds in their
     /// place must be shared too — otherwise a subproof reached along several paths

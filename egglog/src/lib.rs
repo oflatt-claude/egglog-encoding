@@ -64,6 +64,7 @@ pub use proofs::proof_encoding_helpers::{
 /// Read-only proof reconstruction API.
 pub mod proof {
     pub use crate::proofs::proof_format::{Justification, Proof, ProofId, ProofStore, Proposition};
+    pub use crate::proofs::slotted;
 }
 use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
@@ -158,6 +159,8 @@ pub enum CommandOutput {
         proof_store: ProofStore,
         proof_id: ProofId,
     },
+    /// A checked proof of a slotted claim over surface terms, as text.
+    SlottedProof(String),
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
@@ -183,7 +186,9 @@ impl CommandOutput {
         outputs
             .iter()
             .filter_map(|output| match output {
-                CommandOutput::ProveExists { .. } => Some(output.to_string()),
+                CommandOutput::ProveExists { .. } | CommandOutput::SlottedProof(_) => {
+                    Some(output.to_string())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -206,7 +211,11 @@ impl CommandOutput {
                     Some(format!("(extraction-costs {cost})\n"))
                 }
                 CommandOutput::ExtractVariants(..) => None,
-                CommandOutput::ProveExists { .. } if !include_proofs => None,
+                CommandOutput::ProveExists { .. } | CommandOutput::SlottedProof(_)
+                    if !include_proofs =>
+                {
+                    None
+                }
                 other => Some(other.to_string()),
             })
             .collect::<Vec<_>>()
@@ -249,6 +258,7 @@ impl std::fmt::Display for CommandOutput {
                 proof_store,
                 proof_id,
             } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
+            CommandOutput::SlottedProof(text) => write!(f, "{text}"),
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{run_report}")
             }
@@ -525,14 +535,31 @@ impl EGraph {
             }
         );
 
-        add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
+        // The runtime compares e-graph value ids, which a term cannot
+        // reproduce: these validators decide by `TermId` instead. That only
+        // makes programs using the three primitives loadable under the proof
+        // encoding. An orientation fact re-evaluated by the egglog proof
+        // checker may disagree with the runtime's choice, and `value-eq` on an
+        // eq-sort compares terms, not classes; consumers that need checked
+        // orientation (the slotted proof pipeline has its own checker) must not
+        // rely on these.
+        add_primitive_with_validator!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
+        }, |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [a, b] = args else { return None };
+            (a == b).then(|| termdag.lit(Literal::Unit))
         });
-        add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
+        add_primitive_with_validator!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
             if a < b { a } else { b }
+        }, |_: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [a, b] = args else { return None };
+            Some(if a < b { *a } else { *b })
         });
-        add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
+        add_primitive_with_validator!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
             if a > b { a } else { b }
+        }, |_: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+            let [a, b] = args else { return None };
+            Some(if a > b { *a } else { *b })
         });
 
         // Orientation helpers for the proof-encoding UF/view merges; see
@@ -667,6 +694,18 @@ impl EGraph {
             self = self.with_term_encoding_enabled();
         }
         self.proof_state.proofs_enabled = true;
+        self
+    }
+
+    /// Enable slotted proof mode: the compiler's source metadata is recorded and
+    /// every `prove` is translated to a slotted proof and checked
+    /// (`slotted/PROOFS.md`). Implies proofs.
+    pub fn with_slotted_proofs(mut self) -> Self {
+        self = self.with_proofs_enabled();
+        // The slotted checker is the arbiter; the egglog-level checker does not
+        // accept every container the encoding mints in rule heads.
+        self.proof_state.verify_proofs = false;
+        self.proof_state.slotted = Some(Box::default());
         self
     }
 
@@ -2276,6 +2315,12 @@ impl EGraph {
                             span: span.clone(),
                             error,
                         })?;
+                if let Some(slotted) = self.proof_state.slotted.as_mut() {
+                    let text = slotted
+                        .prove(&proof_store, proof_id)
+                        .map_err(Error::SlottedProof)?;
+                    return Ok(vec![CommandOutput::SlottedProof(text)]);
+                }
                 return Ok(vec![CommandOutput::ProveExists {
                     proof_store,
                     proof_id,
@@ -2729,6 +2774,17 @@ impl EGraph {
                     desugared.extend(resolved.resolved);
                     desugared_before_proofs.extend(resolved.resolved_before_proofs);
                 } else {
+                    if let Some(slotted) = self.proof_state.slotted.as_mut() {
+                        match &command {
+                            Command::Action(ast::GenericAction::Set(_, head, args, _)) => {
+                                slotted
+                                    .record(head, args)
+                                    .map_err(|e| Error::SlottedProof(e.to_string()))?;
+                            }
+                            Command::Prove(_, facts) => slotted.record_prove(facts.clone()),
+                            _ => {}
+                        }
+                    }
                     let resolved = self.resolve_command(command)?;
                     if run_commands && self.are_proofs_enabled() {
                         self.proof_check_program
@@ -3803,6 +3859,8 @@ pub enum Error {
         "This backend requires term encoding. Build the e-graph with `EGraph::with_backend(..).with_term_encoding()`."
     )]
     BackendRequiresTermEncoding,
+    #[error("slotted proof: {0}")]
+    SlottedProof(String),
     #[error("{0}\nTried to pop too much")]
     Pop(Span),
     #[error("{0}\nCommand should have failed.")]

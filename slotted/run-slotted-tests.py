@@ -12,6 +12,10 @@ Usage:
     ./run-slotted-tests.py --emit     also write each test's own compiled forms to
                                       slotted/tests/snapshots/, so a change in the
                                       encoder shows up as a diff
+    ./run-slotted-tests.py --proofs   compile each under the proof-compatible profile
+                                      and run it natively, every claim kept a check;
+                                      the `prove` spelling is compiled too and must
+                                      differ from what ran only in that keyword
 """
 
 import argparse
@@ -78,11 +82,54 @@ def slotted_sources():
     return [q for q in files if is_source(q)]
 
 
+def proof_spelling_drift(src):
+    """Why the proof profile's two spellings of `src` differ beyond `prove`/`check`.
+
+    `--proofs` alone writes `(prove ...)` for a positive `=`/`renaming-=` claim, which
+    the native run cannot execute; `--proofs-as-checks` is what ran. The two compiled
+    programs are diffed with every `(prove` read as `(check`, so a run of the second
+    vouches for the first unless they drift elsewhere. Returns the reason, or None.
+    """
+    texts = []
+    for extra in ((), ("--proofs-as-checks",)):
+        cmd = [sys.executable, str(COMPILE), str(src), "--desugar", "--proofs", *extra]
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
+        if r.returncode != 0:
+            return f"compiling with --proofs {' '.join(extra)} failed: {r.stderr.strip()[:120]}"
+        texts.append(r.stdout)
+    proved, checked = texts
+    if proved.replace("(prove ", "(check ") != checked:
+        return "the `prove` and `check` spellings of the proof profile differ beyond that keyword"
+    # a top-level positive `=` claim is what becomes a `prove`, so a source with one
+    # and a compiled program without any is a claim that lost its proof
+    if re.search(r"^\(check \((renaming-)?= ", src.read_text(), re.M) and "(prove " not in proved:
+        return "a positive `=` claim did not compile to a `prove`"
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-k", metavar="SUBSTRING")
     ap.add_argument("--emit", action="store_true", help="also write the snapshots")
+    ap.add_argument(
+        "--proofs",
+        action="store_true",
+        help="the proof-compatible profile, run natively with its claims as checks",
+    )
+    ap.add_argument(
+        "--slotted-proofs",
+        action="store_true",
+        help=(
+            "the proof-compatible profile under `egglog --slotted-proofs`: every positive "
+            "claim is proved, translated to a slotted proof and checked (sources that use "
+            "`subst` are skipped: it has no proof translation yet)"
+        ),
+    )
     args = ap.parse_args()
+    if (args.proofs or args.slotted_proofs) and args.emit:
+        ap.error("the committed snapshots are the default profile; --emit does not take --proofs")
+    if args.proofs and args.slotted_proofs:
+        ap.error("--proofs runs the claims as checks; --slotted-proofs proves them")
 
     srcs = [p for p in slotted_sources() if not args.k or args.k in p.name]
     if not srcs:
@@ -97,6 +144,7 @@ def main():
         SNAPSHOTS.mkdir(exist_ok=True)
 
     bad = []
+    skipped = []
     for src in srcs:
         cmd = [sys.executable, str(COMPILE), str(src), "--run"]
         if NESTED in src.parents:
@@ -109,16 +157,30 @@ def main():
             # the generators that emit them, so a test's snapshot is its own compiled
             # terms, rules and claims -- the part nothing else covers.
             cmd += ["--own-only", "-o", str(SNAPSHOTS / src.name)]
+        if args.proofs:
+            # Plain egglog refuses `(prove ...)` outside proof mode, so the profile runs
+            # with its claims as checks; `proof_spelling_drift` holds it to the one
+            # difference that is meant.
+            cmd += ["--proofs", "--proofs-as-checks"]
+        if args.slotted_proofs:
+            cmd += ["--proofs"]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
         line = (r.stdout.strip().splitlines() or [""])[0]
+        if line.startswith("skip "):
+            # the compiler declined: a `subst` source under --slotted-proofs
+            skipped.append(src.name)
+        drift = proof_spelling_drift(src) if args.proofs and r.returncode == 0 else None
+        if drift:
+            line = f"FAIL {src.name}: {drift}"
         print(f"  {line or r.stderr.strip()[:160]}")
-        if r.returncode != 0:
+        if r.returncode != 0 or drift:
             bad.append(src.name)
 
-    tests = [p for p in srcs if p.name not in libs]
+    tests = [p for p in srcs if p.name not in libs and p.name not in skipped]
     print(
         f"\n{len(tests) - len([b for b in bad if b not in libs])}/{len(tests)} slotted tests pass"
         + (f", {len(libs)} rule librar{'y loads' if len(libs) == 1 else 'ies load'}" if libs else "")
+        + (f", {len(skipped)} skipped" if skipped else "")
         + (f"   FAILED: {', '.join(bad)}" if bad else "")
     )
     return 1 if bad else 0
