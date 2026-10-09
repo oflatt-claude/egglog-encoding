@@ -1162,9 +1162,9 @@ reach one value. The root keeps the frame's spelling (C11).
 
 # Against the reference
 
-By default the encoding matches the reference crate's multipattern matcher,
-`ref-multi`. With `--nested-compat`, it instead restricts aliasing to match
-`ref-nested`. In both comparisons the goal is the same e-graph: the same
+The unrestricted `encoding` matches the reference crate's multipattern matcher,
+`ref-multi`. The `encoding-no-aliasing` variant restricts aliasing to match
+`ref-nested-snapshot`. In both comparisons the goal is the same e-graph: the same
 classes, slots, groups, and nodes up to a verified isomorphism. `slotted/eval.py`
 compares the final graphs and says `isomorphic`, `different`, or `inconclusive`.
 It attempts witness search on every available graph pair, using compact interned
@@ -1173,20 +1173,21 @@ probe partitions cannot override an exact rejection or establish equality. With
 counts enabled, class and node counts are also checked separately before witness
 search. They remain visible even if search is inconclusive, and a count mismatch
 rejects the comparison without trusting the isomorphism checker. Missing counts or
-unverified comparisons to the mode's reference fail the command when both sides
+unverified comparisons to an encoding's paired reference fail the command when both sides
 are selected; loading a saved report also requires equal counts as well
 as a verified verdict. Each comparison records the encoding and reference observation
 IDs. A merged report replacing either observation marks the old comparison inconclusive;
 it cannot reuse an earlier witness verdict just because the counts still match. Workload
-identity includes the rule count and compatibility mode. Reference class/node counts
+identity includes the rule count; each encoding and reference variant has its own
+system identity. Reference class/node counts
 are collected directly before dumping the graph and checked against the parsed dump.
 They remain available if symmetry enumeration exceeds its cap or timeout. Graph
 collection records why evidence is unavailable; unexpected reader errors propagate.
 The JSONL is a versioned disposable cache, and old schemas require recomputation.
 Goal outcome, elapsed seconds, and graph size have separate columns. Each side's
 goal is checked independently, and any unsuccessful goal fails the command even
-when the graphs are isomorphic. Without compatibility mode, the nested matcher can
-miss a goal that the encoding reaches, and graph agreement with it is not required.
+when the graphs are isomorphic. The original nested baseline can miss a goal that
+the encoding reaches, and graph agreement with that baseline is not required.
 Elapsed seconds measure
 the whole run, including unsuccessful runs, rather than time to a successful goal.
 Both Markdown and HTML reports start with a compact table in the paper's Table 1
@@ -1194,7 +1195,10 @@ layout: systems grouped under each workload, with budget, goal, elapsed seconds,
 nodes, classes, and saturation. Budget means the configured round limit, not the
 number of completed iterations. The full diagnostic table follows; `--long` changes
 only that full table. Both views use the same observations and preserve failed goals
-and missing results.
+and missing results. Each workload groups five systems: `encoding`,
+`encoding-no-aliasing`, `ref-multi`, `ref-nested-snapshot`, and `ref-nested`.
+The two encoding variants have separate timings and comparison certificates;
+neither can overwrite the other's result when cached runs are merged.
 Three things had to
 be made the same, each established on a minimal case the harness keeps:
 
@@ -1239,10 +1243,10 @@ be recomputed. TTM's second phase remains unverified:
 `ref-multi` did not finish it within the artifact's 300 s in the recorded evaluation.
 
 **The nested performance baseline.** `eval.py` explicitly selects `snapshot` for
-`ref-multi` and `syntactic` for `ref-nested`, overriding ambient `XMULTI_SUBST` on
+`ref-multi` and `ref-nested-snapshot`, and `syntactic` for `ref-nested`, overriding ambient `XMULTI_SUBST` on
 both the timed and counting runs. The binary reports the selected policy and each
 evaluation row records it. Syntactic substitution does not build our extraction
-snapshots. Without `--nested-compat`, nested results are diagnostic; their counts and graph are not expected
+snapshots. The `ref-nested` results are diagnostic; their counts and graph are not expected
 to match the encoding, since both the matcher and substitution policy differ.
 
 This follows the artifact at commit `83f2e5b`: the
@@ -1263,7 +1267,7 @@ entire historical implementation.
 **Nested compatibility.** To compare exact graphs with the nested matcher, run:
 
 ```sh
-python3 slotted/eval.py --nested-compat --side encoding,ref-nested --jsonl /tmp/nested-eval.jsonl
+python3 slotted/eval.py --side encoding-no-aliasing,ref-nested-snapshot --jsonl /tmp/nested-eval.jsonl
 ```
 
 The compiler emits `nested-atom` instead of `atom` for rewrite patterns. This adds
@@ -1284,12 +1288,16 @@ additional equality side patterns are rejected. Conditions still apply, and
 observational checks retain ordinary matching semantics.
 
 Compatibility evaluation uses the same snapshot substitution on both sides, so
-representative selection does not confound the matcher comparison. Its rows are
-labelled `[nested compatibility]`, and its correctness gate requires equal counts
-and verified isomorphism against `ref-nested`. The original unrestricted encoding
-and `ref-multi` comparison remain the default. If all three sides are selected in
-compatibility mode, `ref-multi` is diagnostic: its additional matches can produce
-a different graph. No mode accepts an inconclusive isomorphism as agreement.
+representative selection does not confound the matcher comparison. The
+`encoding-no-aliasing` row requires equal counts and verified isomorphism against
+`ref-nested-snapshot`. The unrestricted `encoding` row requires the same evidence
+against `ref-multi`. A default invocation runs all five systems together, checking
+both pairs independently. Other cross-comparisons are diagnostic: different aliasing
+or substitution policies can produce different graphs. No pair accepts an
+inconclusive isomorphism as agreement. The evaluator's `--nested-compat` flag remains
+a shorthand that replaces selected `encoding` and `ref-nested` sides with
+`encoding-no-aliasing` and `ref-nested-snapshot`, respectively. The compiler's
+`--nested-compat` flag continues to control how individual programs are compiled.
 The registered `nested-compatibility` check covers optional and forced aliases,
 sibling matches, bound slots, stored sharing, and class symmetries against both
 reference matchers.

@@ -12,7 +12,10 @@ from dataclasses import asdict, dataclass, replace
 
 import paper_fixtures as pf
 
-REPORT_SCHEMA = 3
+REPORT_SCHEMA = 4
+
+SIDES = ("encoding", "encoding-no-aliasing", "ref-multi", "ref-nested-snapshot", "ref-nested")
+EXACT_PAIRS = {"encoding": "ref-multi", "encoding-no-aliasing": "ref-nested-snapshot"}
 
 
 @dataclass(frozen=True)
@@ -25,9 +28,8 @@ class Comparison:
 
 
 class Row:
-    def __init__(self, study, case, side, rounds, rules=None, *, nested_compat=False):
+    def __init__(self, study, case, side, rounds, rules=None):
         self.study, self.case, self.side, self.rounds, self.rules = study, case, side, rounds, rules
-        self.nested_compat = nested_compat
         self.observation = uuid.uuid4().hex
         self.goal, self.saturated, self.seconds = "?", "?", None
         self.classes, self.nodes = None, None
@@ -40,7 +42,7 @@ class Row:
         self.graph_issue = None
 
     def workload(self):
-        return self.study, self.case, self.rounds, self.rules, self.nested_compat
+        return self.study, self.case, self.rounds, self.rules
 
     def verdict(self, reference):
         if reference is None:
@@ -68,7 +70,7 @@ class Row:
         """A row back from its `--jsonl` record."""
         if d.get("schema") != REPORT_SCHEMA:
             raise SystemExit("eval.py: report cache schema changed; recompute into a fresh --jsonl path")
-        row = cls(d["study"], d["case"], d["side"], d["rounds"], d.get("rules"), nested_compat=d["nested_compat"])
+        row = cls(d["study"], d["case"], d["side"], d["rounds"], d.get("rules"))
         for field in (
             "observation",
             "goal",
@@ -133,6 +135,9 @@ LONG_HEAD = (
 SUMMARY_NOTE = (
     "Budget is the round limit; elapsed time includes unsuccessful runs. "
     "SDQL uses 44 rules unless noted. — means unavailable. "
+    "encoding-no-aliasing restricts matching to the nested matcher's aliasing policy. "
+    "ref-nested uses the paper's syntactic substitution; the other systems use snapshot substitution. "
+    "Exact comparisons pair encoding with ref-multi, and encoding-no-aliasing with ref-nested-snapshot. "
     "Reference settings and correctness comparisons are in the full report."
 )
 
@@ -147,7 +152,7 @@ def long_cells(r):
     counts = ["" if n is None else str(n) for n in (r.classes, r.nodes)]
     return [
         r.study,
-        r.case + (" [nested compatibility]" if r.nested_compat else ""),
+        r.case,
         side,
         str(r.rounds),
         str(r.rules or ""),
@@ -166,7 +171,7 @@ def vs_cell(r):
 
 
 def seconds_cell(r):
-    return "" if r.seconds is None else f"{r.seconds:.1f}"
+    return "" if r.seconds is None else f"{r.seconds:.3g}"
 
 
 def graph_cell(r):
@@ -196,14 +201,14 @@ def pivot(rows, sides):
         label = reference_label(*(r for r in rows if r.side == side))
         columns.extend((f"{side} goal{label}", f"{side} elapsed (s)", f"{side} graph (classes/nodes, sat.)"))
     # the encoding's graph against each reference side it was compared with
-    compared = [s for s in sides if any(s in r.vs_ref for r in rows)]
+    compared = [(e, s) for e in sides for s in sides if any(r.side == e and s in r.vs_ref for r in rows)]
     head = [
         "study",
         "case",
         "rounds",
         "rules",
         *columns,
-        *(f"vs {s}" for s in compared),
+        *(f"{e} vs {s}" for e, s in compared),
         "paper (iters, nodes, classes, sat.)",
     ]
     by_case, order = {}, []
@@ -214,14 +219,13 @@ def pivot(rows, sides):
             order.append(key)
         by_case[key][r.side] = [r.goal, seconds_cell(r), graph_cell(r)]
         for s, comparison in r.vs_ref.items():
-            by_case[key][f"vs {s}"] = comparison.verdict
+            by_case[key][f"{r.side} vs {s}"] = comparison.verdict
     table = []
-    for study, case, rounds, rules, nested_compat in order:
-        got = by_case[(study, case, rounds, rules, nested_compat)]
+    for study, case, rounds, rules in order:
+        got = by_case[(study, case, rounds, rules)]
         cells = [cell for s in sides for cell in got.get(s, ["", "", ""])]
-        cells += [got.get(f"vs {s}", "") for s in compared]
-        label = case + (" [nested compatibility]" if nested_compat else "")
-        table.append([study, label, str(rounds), str(rules or ""), *cells, got["paper"]])
+        cells += [got.get(f"{e} vs {s}", "") for e, s in compared]
+        table.append([study, case, str(rounds), str(rules or ""), *cells, got["paper"]])
     return head, table
 
 
@@ -246,8 +250,8 @@ def summary(rows, sides):
     for row in rows:
         groups.setdefault(row.workload(), {})[row.side] = row
     table = []
-    for (study, case, rounds, rules, nested_compat), group in groups.items():
-        label = workload_label(study, case, rules) + (" [nested compatibility]" if nested_compat else "")
+    for (study, case, rounds, rules), group in groups.items():
+        label = workload_label(study, case, rules)
         for i, side in enumerate(sides):
             row = group.get(side)
             cells = [label if i == 0 else "", side, str(rounds)]

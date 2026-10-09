@@ -3,7 +3,7 @@
 
     python3 slotted/eval.py array --params 0
     python3 slotted/eval.py sdql --kernel mmm --phase 1st
-    python3 slotted/eval.py --nested-compat --side encoding,ref-nested
+    python3 slotted/eval.py --side encoding-no-aliasing,ref-nested-snapshot
     python3 slotted/eval.py --from /tmp/eval.jsonl --html /tmp/eval.html
 
 Per side, one timed process checks the goal; a separate untimed process collects
@@ -11,10 +11,10 @@ counts and the final graph without inserting the target. Encoding/ref-multi
 comparisons require equal class/node counts AND a verified isomorphism. Missing
 or bounded-out evidence is inconclusive and fails the correctness gate.
 
-By default ref-multi uses matching snapshot substitution, while ref-nested uses
-the artifact's syntactic substitution and is diagnostic only. --nested-compat
-restricts encoding aliasing, uses snapshot substitution on both references, and
-requires equality to ref-nested instead. Every selected side must reach its goal.
+Both encodings run alongside the references by default. encoding-no-aliasing
+restricts aliasing and requires equality to ref-nested-snapshot. Both exact pairs
+use matching snapshot substitution. ref-nested retains the artifact's syntactic
+substitution as a diagnostic baseline. Every selected side must reach its goal.
 --no-counts explicitly opts into goal/timing checks alone.
 
 Defaults: release builds, 300 seconds per process, the paper's round budgets.
@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT / "slotted" / "xdiff"))
 
 import isomorphism as ISO  # noqa: E402
 import xarray as XA  # noqa: E402
-from eval_report import Comparison, Row, html, load_rows, markdown, report_sections  # noqa: E402
+from eval_report import EXACT_PAIRS, SIDES, Comparison, Row, html, load_rows, markdown, report_sections  # noqa: E402
 
 sc = __import__("slotted-egglog")
 slotenc = __import__("slotted-encoder")
@@ -49,7 +49,6 @@ pf = __import__("paper_fixtures")
 
 BATAX_SUBSET = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
 
-SIDES = ("encoding", "ref-multi", "ref-nested")
 SCRATCH = ROOT / "target" / "slotted"
 #: Where every run is recorded unless `--jsonl` says otherwise: append-only, ignored by git.
 REPORT = ROOT / "eval.jsonl"
@@ -79,12 +78,12 @@ def build():
 
 
 # ------------------------------------------------------------------ the reference
-def oracle_env(side, nested_compat=False):
+def oracle_env(side):
     """Choose the comparison's policy explicitly, overriding ambient XMULTI_SUBST."""
     return {
         **os.environ,
         "XMULTI_GROUP_SLOT_CAP": str(GROUP_CAP),
-        "XMULTI_SUBST": "syntactic" if side == "ref-nested" and not nested_compat else "snapshot",
+        "XMULTI_SUBST": "syntactic" if side == "ref-nested" else "snapshot",
     }
 
 
@@ -92,7 +91,7 @@ def run_reference(spec, row, timeout, counts):
     """One timed `xmulti` run, whose GOAL line is the criterion; with `counts`, a second,
     untimed run that also dumps the graph, since enumerating the symmetry groups for the
     dump can cost more than the run."""
-    env = oracle_env(row.side, row.nested_compat)
+    env = oracle_env(row.side)
     row.substitution = env["XMULTI_SUBST"]
     t0 = time.perf_counter()
     try:
@@ -312,11 +311,9 @@ def compare(rows):
     Only a verified class/slot/group/node witness establishes graph equality.
     Probe partitions and row counts cannot replace that obligation.
     """
-    enc = next((r for r in rows if r.side == "encoding"), None)
-    if enc is None:
-        return
-    for ref_row in (r for r in rows if r.side != "encoding"):
-        enc.vs_ref[ref_row.side] = Comparison(enc.observation, ref_row.observation, compare_graphs(enc, ref_row))
+    for enc in (r for r in rows if r.side in EXACT_PAIRS):
+        for ref_row in (r for r in rows if r.side.startswith("ref-")):
+            enc.vs_ref[ref_row.side] = Comparison(enc.observation, ref_row.observation, compare_graphs(enc, ref_row))
 
 
 def compare_graphs(enc, reference):
@@ -344,7 +341,7 @@ def compare_graphs(enc, reference):
 
 
 # ------------------------------------------------------------------ the array study
-def array_rows(params, rounds, sides, counts, timeout, nested_compat=False):
+def array_rows(params, rounds, sides, counts, timeout):
     for n in params:
         case = XA.goal_cases([n], rounds=rounds)[0]
         a, b = case.probes
@@ -352,11 +349,12 @@ def array_rows(params, rounds, sides, counts, timeout, nested_compat=False):
         goal = [f"goal {XA.sexpr(b)}"]
         group, bare_program = [], None
         for side in sides:
-            row = Row("array", case.name, side, rounds, nested_compat=nested_compat)
+            row = Row("array", case.name, side, rounds)
+            nested_compat = side == "encoding-no-aliasing"
             if side == "ref-multi":
                 lines = [ln for r in case.rules for ln in r.spec_lines()]
                 run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts)
-            elif side == "ref-nested":
+            elif side.startswith("ref-nested"):
                 lines = rule_lines(XA.LANG, XA.ARRAY_SRC_RULES, None, nested=True)
                 run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts)
             else:
@@ -402,7 +400,7 @@ def sdql_program(kernel, phase, rules, rounds, with_target, nested_compat=False)
         path.unlink(missing_ok=True)
 
 
-def sdql_rows(workloads, rules, rounds, sides, counts, timeout, nested_compat=False):
+def sdql_rows(workloads, rules, rounds, sides, counts, timeout):
     lang = pf.reference_language()
     source = sc.Source(pf.RULES)
     for kernel, phase in workloads:
@@ -419,10 +417,11 @@ def sdql_rows(workloads, rules, rounds, sides, counts, timeout, nested_compat=Fa
         name = f"{kernel}_{phase}-{rules}rules"
         group, bare_program = [], None
         for side in sides:
-            row = Row("sdql", name, side, budget, rules, nested_compat=nested_compat)
+            row = Row("sdql", name, side, budget, rules)
+            nested_compat = side == "encoding-no-aliasing"
             row.paper = pf.TABLE1[(kernel, phase)]
             if side.startswith("ref-"):
-                lines = rule_lines(lang, pf.RULES, selected, nested=(side == "ref-nested"))
+                lines = rule_lines(lang, pf.RULES, selected, nested=side.startswith("ref-nested"))
                 run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts)
             else:
 
@@ -445,11 +444,11 @@ def main():
     global GROUP_CAP
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql"))
-    ap.add_argument("--side", default="all", help="comma-separated subset of encoding,ref-multi,ref-nested")
+    ap.add_argument("--side", default="all", help="comma-separated subset of " + ",".join(SIDES))
     ap.add_argument(
         "--nested-compat",
         action="store_true",
-        help="limit encoding aliasing and require equality to ref-nested, using snapshot substitution on both sides",
+        help="shorthand: select encoding-no-aliasing instead of encoding and ref-nested-snapshot instead of ref-nested",
     )
     ap.add_argument("--params", type=int, nargs="*", default=[0, 1, 2], help="array: extra function parameters")
     ap.add_argument(
@@ -472,7 +471,8 @@ def main():
         default=True,
         help="count the final e-graphs' classes and nodes, whether the encoding had settled, and compare"
         " the encoding's graph with each reference side's (isomorphic, different, or inconclusive);"
-        " require verified equality to ref-multi, or ref-nested with --nested-compat, when both sides are selected",
+        " require verified equality for encoding/ref-multi and encoding-no-aliasing/ref-nested-snapshot"
+        " when both sides of a pair are selected",
     )
     ap.add_argument(
         "--group-cap",
@@ -506,6 +506,9 @@ def main():
     bad = [s for s in sides if s not in SIDES]
     if bad:
         ap.error(f"unknown side {bad}; choose from {SIDES}")
+    if args.nested_compat:
+        aliases = {"encoding": "encoding-no-aliasing", "ref-nested": "ref-nested-snapshot"}
+        sides = tuple(dict.fromkeys(aliases.get(s, s) for s in sides))
 
     if args.report:
         # reporting alone: the rows come from an earlier run's record
@@ -516,7 +519,7 @@ def main():
         if args.study != "all":
             rows = [r for r in rows if r.study == args.study]
         if args.side == "all":
-            sides = tuple(s for s in SIDES if any(r.side == s for r in rows))
+            sides = tuple(s for s in sides if any(r.side == s for r in rows))
     else:
         rows = collect(args, sides, ap)
 
@@ -545,23 +548,23 @@ def main():
 
 
 def successful(rows, sides, counts):
-    """Goals must succeed; the mode's reference requires counts and a certificate."""
+    """Goals must succeed; each selected exact pair requires counts and a certificate."""
     if not rows or any(r.goal != "yes" for r in rows):
         return False
-    if not counts or "encoding" not in sides:
-        return True
     groups = {}
     for row in rows:
         groups.setdefault(row.workload(), {})[row.side] = row
-    for workload, group in groups.items():
-        reference = "ref-nested" if workload[-1] else "ref-multi"
-        if reference not in sides:
-            continue
-        if "encoding" not in group or reference not in group:
-            return False
-        enc, ref = group["encoding"], group[reference]
-        if compare_counts(enc, ref) != "same counts" or enc.verdict(ref) != "isomorphic":
-            return False
+    if any(not set(sides).issubset(group) for group in groups.values()):
+        return False
+    if not counts:
+        return True
+    for group in groups.values():
+        for encoding, reference in EXACT_PAIRS.items():
+            if encoding not in sides or reference not in sides:
+                continue
+            enc, ref = group[encoding], group[reference]
+            if compare_counts(enc, ref) != "same counts" or enc.verdict(ref) != "isomorphic":
+                return False
     return True
 
 
@@ -583,16 +586,13 @@ def collect(args, sides, ap):
                 sides,
                 args.counts,
                 args.timeout,
-                args.nested_compat,
             )
         )
     if args.study in ("all", "sdql"):
         workloads = [w for w in pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
         if args.rules == 12 and workloads != [("batax", "2nd")]:
             ap.error("--rules 12 is the suite's BATAX second-phase subset: use --kernel batax --phase 2nd")
-        rows += list(
-            sdql_rows(workloads, args.rules, args.rounds, sides, args.counts, args.timeout, args.nested_compat)
-        )
+        rows += list(sdql_rows(workloads, args.rules, args.rounds, sides, args.counts, args.timeout))
     return rows
 
 

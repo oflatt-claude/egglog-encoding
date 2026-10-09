@@ -98,8 +98,10 @@ def main():
                 ]
                 spec = "\n".join(head + E.rule_lines(X.LANG, path, None, nested=compat)) + "\n"
                 enc, ref = (
-                    E.Row("regression", name, side, 1, nested_compat=compat)
-                    for side in ("encoding", "ref-nested" if compat else "ref-multi")
+                    E.Row("regression", name, side, 1)
+                    for side in (
+                        ("encoding-no-aliasing", "ref-nested-snapshot") if compat else ("encoding", "ref-multi")
+                    )
                 )
                 program = E.sc.compile_source(src, nested_compat=compat)
                 E.encoding_counts(program, name, X.LANG, enc, 30)
