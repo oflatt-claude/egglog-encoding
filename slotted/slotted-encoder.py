@@ -23,8 +23,8 @@ SLOTTED = (CHILD, BINDER)
 #: encoding spelled without the features egglog's term/proof encoding rejects (tuple
 #: outputs, `:merge` action blocks, eq-sort `:no-merge` functions), plus the hidden
 #: source-metadata tables a proof translator reads. `PROVE_CLAIMS` says whether a
-#: positive `=`/`renaming-=` claim is a `(prove ...)` -- which plain egglog refuses
-#: outside proof mode -- or stays a `(check ...)`; `configure` sets both.
+#: positive `=`/`renaming-=` claim is a `(prove-slotted ...)` -- which plain egglog
+#: refuses outside proof mode -- or stays a `(check ...)`; `configure` sets both.
 PROOFS = False
 PROVE_CLAIMS = False
 
@@ -1342,8 +1342,7 @@ SOURCE_METADATA = (
     "(function SlottedCarrier (String i64) Unit :no-merge :internal-hidden)",
     "(function SlottedRuleSource (String String) Unit :no-merge :internal-hidden)",
     "(function SlottedLetSource (String String) Unit :no-merge :internal-hidden)",
-    "(function SlottedUnionSource (String String) Unit :no-merge :internal-hidden)",
-    "(function SlottedClaimSource (i64 String String String) Unit :no-merge :internal-hidden)",
+    "(function SlottedUnionSource (String String String) Unit :no-merge :internal-hidden)",
 )
 
 

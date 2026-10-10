@@ -1,0 +1,11 @@
+;; A class with a symmetry and a redundant slot: the claim needs both the
+;; symmetry `coset-same` chose and a certificate that the third slot is redundant.
+(datatype U (F U U U))
+(let a (F $0 $1 $2))
+(union a (F $1 $0 $2))
+(union a (F $0 $1 $3))
+(run 2)
+(check (= a (F $1 $0 $2)))
+(check (= a (F $1 $0 $7)))
+(check (= a (F $0 $1 $9)))
+(check (!= a (F $1 $2 $0)))

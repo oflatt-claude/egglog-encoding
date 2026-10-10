@@ -1131,14 +1131,19 @@ on its two companions.
 - *No eq-sort `:no-merge` functions.* None remain: the `:no-merge` tables are
   `Unit`- or container-valued, and the extract helper `_leaderN` has its
   `(ordering-min old new)` merge in both profiles.
-- *Claims.* A positive `=` or `renaming-=` claim compiles to `(prove <facts>)` over
-  exactly the facts its `check` would have, so proof mode extracts a proof of it;
-  `fail`-wrapped, `!=`, `slots` and `holds` claims stay as they are. Plain egglog
-  refuses `prove` outside proof mode, so `--proofs-as-checks` keeps every claim a
-  `check`, and the test runner diffs the two spellings to see that they differ in that
-  keyword alone.
+- *Claims.* A positive `=` or `renaming-=` claim compiles to `(prove-slotted <claim>
+  <facts>)` over exactly the facts its `check` would have, so proof mode extracts a
+  proof of them; the claim, `(= U ("a" _c0cls_c0) ("b" _c1cls_c1))`, is the carrier
+  sort and the two source terms as written, each with the fact variable that holds
+  the class it matched (a bare slot's side binds `(= _cNcls (SlottedVar_N 0))` for
+  the purpose), and is what
+  egglog translates the proof to and checks it against (`PROOFS.md`). `fail`-wrapped,
+  `!=`, `slots` and `holds` claims stay as they are. Plain egglog refuses
+  `prove-slotted` outside proof mode, so `--proofs-as-checks` keeps every claim a
+  `check`, and the test runner diffs the two spellings to see that they differ in the
+  claim header alone.
 
-**Source metadata.** Five hidden `Unit` functions, declared beside the layout tables
+**Source metadata.** Four hidden `Unit` functions, declared beside the layout tables
 and filled by the compiler, carry the source a translator needs:
 
 | row | holds |
@@ -1146,8 +1151,7 @@ and filled by the compiler, carry the source a translator needs:
 | `(SlottedCarrier "Sort" n)` | the equality sort with carrier index `n`, the suffix of its tables |
 | `(SlottedRuleSource "name" "(rewrite LHS RHS :when (...) :name \"name\")")` | a rewrite's canonical source under its rule name |
 | `(SlottedLetSource "x" "(Mul $7 (Null))")` | a global and the term text it was bound to |
-| `(SlottedUnionSource "a" "b")` | the two terms of a top-level `union`, as written |
-| `(SlottedClaimSource i "=" "a" "b")` | the `i`-th claim, its kind and its two terms; emitted immediately before that claim's `prove` |
+| `(SlottedUnionSource "a" "b" "U")` | the two terms of a top-level `union`, as written, and their carrier sort |
 
 The conventions: a term or pattern is the source form re-rendered with single
 spaces, comments dropped, and a pattern variable's `?` sigil removed, so a variable
@@ -1160,9 +1164,8 @@ the compiler's reading of them, grouped as `rewrite_parts` keeps them: the `(= v
 condition as `(= _condN <call>)`, the names the frame uses -- then `(= x y)`, then
 `(!= x y)`, then `free`/`not-free`. An unnamed rewrite is keyed by the relation its
 matches wait in, `_matched_<hash>`. A union whose text pair repeats gets ` #2`,
-` #3`, ... appended to its first string so each union keeps a row. A claim's index
-counts every `check` and `fail` in the program, in order, so it is the claim's position
-whether or not its neighbours are proved.
+` #3`, ... appended to its first string so each union keeps a row. A claim's terms
+follow the same conventions inside its `prove-slotted` header.
 
 # The contract
 

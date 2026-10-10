@@ -22,6 +22,20 @@ pub enum ColumnKind {
 pub struct Constructor {
     pub name: String,
     pub columns: Vec<ColumnKind>,
+    /// The sort of each column: a carrier sort for a child or binder column, the
+    /// payload's sort otherwise.
+    pub sorts: Vec<String>,
+    /// The carrier sort the constructor builds.
+    pub output: String,
+}
+
+/// A top-level `(union a b)`, with the carrier sort the compiler gave it: two bare
+/// slots carry no sort of their own.
+#[derive(Clone, Debug)]
+pub struct Union {
+    pub lhs: TermId,
+    pub rhs: TermId,
+    pub sort: String,
 }
 
 /// A rewrite's right-hand side: a term to build, or one of its variables.
@@ -33,10 +47,10 @@ pub enum Rhs {
 
 #[derive(Clone, Debug)]
 pub enum Condition {
-    /// `(free $x v)`
-    Free { slot: String, var: String },
-    /// `(not-free $x v)`
-    NotFree { slot: String, var: String },
+    /// `(free $x v ...)`: the slot is free in each of the variables.
+    Free { slot: String, vars: Vec<String> },
+    /// `(not-free $x v ...)`: the slot is free in none of the variables.
+    NotFree { slot: String, vars: Vec<String> },
     /// `(= v call)`: another pattern, joined on its variables.
     Eq { var: String, call: TermId },
     /// `(!= a b)`
@@ -59,10 +73,12 @@ pub enum ClaimKind {
     RenamingEq,
 }
 
+/// A `prove-slotted`'s claim over source terms.
 #[derive(Clone, Debug)]
 pub struct Claim {
-    pub index: i64,
     pub kind: ClaimKind,
+    /// The carrier sort the two terms belong to.
+    pub sort: String,
     pub lhs: TermId,
     pub rhs: TermId,
 }
@@ -73,8 +89,7 @@ pub struct SlottedProgram {
     pub rewrites: HashMap<String, Rewrite>,
     /// Globals, with their terms resolved: a global's term never mentions a global.
     pub lets: IndexMap<String, TermId>,
-    pub unions: Vec<(TermId, TermId)>,
-    pub claims: Vec<Claim>,
+    pub unions: Vec<Union>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,15 +103,53 @@ impl std::fmt::Display for SourceError {
 
 impl std::error::Error for SourceError {}
 
+/// The carrier sort of a program that has only one, as the convenience
+/// constructors below assume.
+pub const SINGLE_SORT: &str = "U";
+
 impl SlottedProgram {
+    /// A constructor of a program with the single carrier sort [`SINGLE_SORT`]; a
+    /// payload column gets the sort `payload`.
     pub fn add_constructor(&mut self, name: &str, columns: Vec<ColumnKind>) {
+        let columns = columns
+            .into_iter()
+            .map(|c| {
+                let sort = match c {
+                    ColumnKind::Child | ColumnKind::Binder => SINGLE_SORT,
+                    ColumnKind::Payload => "payload",
+                };
+                (c, sort.to_string())
+            })
+            .collect();
+        self.add_sorted_constructor(name, SINGLE_SORT, columns);
+    }
+
+    /// A constructor building `output`, each column with its kind and sort.
+    pub fn add_sorted_constructor(
+        &mut self,
+        name: &str,
+        output: &str,
+        columns: Vec<(ColumnKind, String)>,
+    ) {
+        let (columns, sorts) = columns.into_iter().unzip();
         self.constructors.insert(
             name.to_string(),
             Constructor {
                 name: name.to_string(),
                 columns,
+                sorts,
+                output: output.to_string(),
             },
         );
+    }
+
+    /// The carrier sort a term names by its head constructor. A bare slot or a
+    /// literal names none.
+    pub fn sort_of(&self, dag: &TermDag, term: TermId) -> Option<String> {
+        match dag.get(term) {
+            Term::App(head, _) => self.constructors.get(head).map(|c| c.output.clone()),
+            _ => None,
+        }
     }
 
     pub fn add_let(
@@ -127,23 +180,29 @@ impl SlottedProgram {
         dag: &mut TermDag,
         lhs: &str,
         rhs: &str,
+        sort: &str,
     ) -> Result<(), SourceError> {
         let lhs = self.ground_term(dag, &parse_sexp(Self::strip_union_suffix(lhs))?)?;
         let lhs = self.refresh_binders(dag, lhs);
         let rhs = self.ground_term(dag, &parse_sexp(rhs)?)?;
         let rhs = self.refresh_binders(dag, rhs);
-        self.unions.push((lhs, rhs));
+        self.unions.push(Union {
+            lhs,
+            rhs,
+            sort: sort.to_string(),
+        });
         Ok(())
     }
 
-    pub fn add_claim(
-        &mut self,
+    /// A claim's two terms, read against the program's globals.
+    pub fn claim(
+        &self,
         dag: &mut TermDag,
-        index: i64,
         kind: &str,
+        sort: &str,
         lhs: &str,
         rhs: &str,
-    ) -> Result<(), SourceError> {
+    ) -> Result<Claim, SourceError> {
         let kind = match kind {
             "=" => ClaimKind::Eq,
             "renaming-=" => ClaimKind::RenamingEq,
@@ -151,13 +210,12 @@ impl SlottedProgram {
         };
         let lhs = self.ground_term(dag, &parse_sexp(lhs)?)?;
         let rhs = self.ground_term(dag, &parse_sexp(rhs)?)?;
-        self.claims.push(Claim {
-            index,
+        Ok(Claim {
             kind,
+            sort: sort.to_string(),
             lhs,
             rhs,
-        });
-        Ok(())
+        })
     }
 
     /// `(rewrite LHS RHS :name "n" :when (facts...))`, recorded under `name`
@@ -250,18 +308,29 @@ impl SlottedProgram {
             return Err(SourceError(format!("malformed :when fact {fact}")));
         };
         match items.as_slice() {
-            [h, slot, var] if matches!(h.atom(), Some("free" | "not-free")) => {
+            [h, slot, vars @ ..] if matches!(h.atom(), Some("free" | "not-free")) => {
                 let slot = slot.atom().filter(|s| s.starts_with('$')).ok_or_else(|| {
                     SourceError(format!("{} needs a slot literal", h.atom().unwrap()))
                 })?;
-                let var = var.atom().ok_or_else(|| {
-                    SourceError(format!("{} needs a variable", h.atom().unwrap()))
-                })?;
-                let (slot, var) = (slot.to_string(), strip_sigil(var).to_string());
+                if vars.is_empty() {
+                    return Err(SourceError(format!(
+                        "{} needs a variable",
+                        h.atom().unwrap()
+                    )));
+                }
+                let vars = vars
+                    .iter()
+                    .map(|v| {
+                        v.atom().map(|v| strip_sigil(v).to_string()).ok_or_else(|| {
+                            SourceError(format!("{} needs a variable", h.atom().unwrap()))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let slot = slot.to_string();
                 Ok(if h.atom() == Some("free") {
-                    Condition::Free { slot, var }
+                    Condition::Free { slot, vars }
                 } else {
-                    Condition::NotFree { slot, var }
+                    Condition::NotFree { slot, vars }
                 })
             }
             [h, var, call] if h.atom() == Some("=") => {
@@ -449,7 +518,7 @@ impl SlottedProgram {
                     .lets
                     .values()
                     .copied()
-                    .chain(self.unions.iter().flat_map(|(a, b)| [*a, *b]));
+                    .chain(self.unions.iter().flat_map(|u| [u.lhs, u.rhs]));
                 let mut seen = HashSet::default();
                 let mut stack: Vec<TermId> = roots.collect();
                 while let Some(t) = stack.pop() {
@@ -476,7 +545,7 @@ impl SlottedProgram {
             .lets
             .values()
             .copied()
-            .chain(self.unions.iter().flat_map(|(a, b)| [*a, *b]))
+            .chain(self.unions.iter().flat_map(|u| [u.lhs, u.rhs]))
             .collect();
         while let Some(t) = stack.pop() {
             if !seen.insert(t) {
@@ -491,9 +560,15 @@ impl SlottedProgram {
     }
 
     pub fn is_union(&self, lhs: TermId, rhs: TermId) -> bool {
+        self.union_sort(lhs, rhs).is_some()
+    }
+
+    /// The sort of the source union between the two terms, in either direction.
+    pub fn union_sort(&self, lhs: TermId, rhs: TermId) -> Option<&str> {
         self.unions
             .iter()
-            .any(|&(a, b)| (a, b) == (lhs, rhs) || (a, b) == (rhs, lhs))
+            .find(|u| (u.lhs, u.rhs) == (lhs, rhs) || (u.lhs, u.rhs) == (rhs, lhs))
+            .map(|u| u.sort.as_str())
     }
 }
 
@@ -680,9 +755,9 @@ mod tests {
         program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
         program.add_let(&mut dag, "m7", "(Mul $7 (Null))").unwrap();
         program.add_let(&mut dag, "zero", "(Null)").unwrap();
-        program.add_union(&mut dag, "m7", "zero").unwrap();
-        program
-            .add_claim(&mut dag, 0, "=", "(Mul $9 (Null))", "zero")
+        program.add_union(&mut dag, "m7", "zero", "U").unwrap();
+        let claim = program
+            .claim(&mut dag, "=", "U", "(Mul $9 (Null))", "zero")
             .unwrap();
         let name = program
             .add_rewrite(
@@ -695,15 +770,26 @@ mod tests {
         assert_eq!(dag.to_string(eta.lhs), "(Lam $x (App f $x))");
         assert!(matches!(&eta.rhs, Rhs::Var(v) if v == "f"));
         assert!(
-            matches!(&eta.conditions[0], Condition::NotFree { slot, var } if slot == "$x" && var == "f")
+            matches!(&eta.conditions[0], Condition::NotFree { slot, vars } if slot == "$x" && vars == &["f".to_string()])
         );
-        let (a, b) = program.unions[0];
+        // a condition names as many variables as it likes
+        program
+            .add_rewrite(
+                &mut dag,
+                r#"(rewrite (App (Lam $z x) y) (App x y) :name "two" :when ((not-free $z x y)))"#,
+            )
+            .unwrap();
+        assert!(
+            matches!(&program.rewrites["two"].conditions[0], Condition::NotFree { vars, .. } if vars == &["x".to_string(), "y".to_string()])
+        );
+        let Union { lhs: a, rhs: b, .. } = program.unions[0].clone();
+        assert_eq!(program.unions[0].sort, "U");
         assert_eq!(dag.to_string(a), "(Mul $7 (Null))");
         assert_eq!(dag.to_string(b), "(Null)");
         assert!(program.is_union(b, a));
         assert!(program.is_built(&dag, a));
-        assert_eq!(program.claims[0].kind, ClaimKind::Eq);
-        assert_eq!(dag.to_string(program.claims[0].lhs), "(Mul $9 (Null))");
+        assert_eq!(claim.kind, ClaimKind::Eq);
+        assert_eq!(dag.to_string(claim.lhs), "(Mul $9 (Null))");
     }
 
     #[test]

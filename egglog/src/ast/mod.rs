@@ -82,6 +82,38 @@ pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 /// TODO: The name "NCommand" used to denote normalized command, but this
 /// meaning is obsolete. A future PR should rename this type to something
 /// like "DCommand".
+/// The surface claim a `prove-slotted` proves, for the slotted proof pipeline
+/// (`slotted/PROOFS.md`): `(kind sort (lhs lhs_class) (rhs rhs_class))`, the
+/// carrier sort, the two terms as the slotted source spells them and, for each,
+/// the query variable of the command's facts that holds the encoded class the
+/// term matched.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct SlottedClaim {
+    /// `=` or `renaming-=`.
+    pub kind: String,
+    /// The carrier sort both terms belong to.
+    pub sort: String,
+    pub lhs: String,
+    pub lhs_class: String,
+    pub rhs: String,
+    pub rhs_class: String,
+}
+
+impl Display for SlottedClaim {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "({} {} ({} {}) ({} {}))",
+            self.kind,
+            self.sort,
+            Literal::String(self.lhs.clone()),
+            self.lhs_class,
+            Literal::String(self.rhs.clone()),
+            self.rhs_class
+        )
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum GenericNCommand<Head, Leaf>
 where
@@ -143,7 +175,7 @@ where
         Option<String>,
         PrintFunctionMode,
     ),
-    ProveExists(Span, Head),
+    ProveExists(Span, Head, Option<SlottedClaim>),
     PrintSize(Span, Option<String>),
     Output {
         span: Span,
@@ -251,8 +283,8 @@ where
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span.clone(), name.clone(), *n, file.clone(), *mode)
             }
-            GenericNCommand::ProveExists(span, constructor) => {
-                GenericCommand::ProveExists(span.clone(), constructor.clone())
+            GenericNCommand::ProveExists(span, constructor, claim) => {
+                GenericCommand::ProveExists(span.clone(), constructor.clone(), claim.clone())
             }
             GenericNCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span.clone(), name.clone())
@@ -389,8 +421,8 @@ where
             GenericNCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericNCommand::PrintFunction(span, name, n, file, mode)
             }
-            GenericNCommand::ProveExists(span, constructor) => {
-                GenericNCommand::ProveExists(span, constructor)
+            GenericNCommand::ProveExists(span, constructor, claim) => {
+                GenericNCommand::ProveExists(span, constructor, claim)
             }
             GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
             GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
@@ -1041,7 +1073,10 @@ where
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     Prove(Span, Vec<GenericFact<Head, Leaf>>),
-    ProveExists(Span, Head),
+    /// `prove` with the slotted claim the facts encode: its proof is translated to a
+    /// slotted proof and checked (`slotted/PROOFS.md`).
+    ProveSlotted(Span, SlottedClaim, Vec<GenericFact<Head, Leaf>>),
+    ProveExists(Span, Head, Option<SlottedClaim>),
     /// Print out rows of a given function, extracting each of the elements of the function.
     /// Example:
     ///
@@ -1290,9 +1325,13 @@ where
                     write!(f, "(prove {})", ListDisplay(facts, " "))
                 }
             }
-            GenericCommand::ProveExists(_span, constructor) => {
-                write!(f, "(prove-exists {constructor})")
+            GenericCommand::ProveSlotted(_span, claim, facts) => {
+                write!(f, "(prove-slotted {claim} {})", ListDisplay(facts, "\n"))
             }
+            GenericCommand::ProveExists(_span, constructor, claim) => match claim {
+                Some(claim) => write!(f, "(prove-exists {constructor} {claim})"),
+                None => write!(f, "(prove-exists {constructor})"),
+            },
             GenericCommand::Push(n) => write!(f, "(push {n})"),
             GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
             GenericCommand::PrintFunction(_span, name, n, file, mode) => {
@@ -2138,8 +2177,11 @@ where
             }
             GenericCommand::Check(span, facts) => GenericCommand::Check(span, facts),
             GenericCommand::Prove(span, facts) => GenericCommand::Prove(span, facts),
-            GenericCommand::ProveExists(span, constructor) => {
-                GenericCommand::ProveExists(span, constructor)
+            GenericCommand::ProveSlotted(span, claim, facts) => {
+                GenericCommand::ProveSlotted(span, claim, facts)
+            }
+            GenericCommand::ProveExists(span, constructor, claim) => {
+                GenericCommand::ProveExists(span, constructor, claim)
             }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
@@ -2245,6 +2287,11 @@ where
             ),
             GenericCommand::Prove(span, facts) => GenericCommand::Prove(
                 span,
+                facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
+            ),
+            GenericCommand::ProveSlotted(span, claim, facts) => GenericCommand::ProveSlotted(
+                span,
+                claim,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
             GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
@@ -2413,8 +2460,16 @@ where
                     .map(|fact| fact.map_symbols(head, leaf))
                     .collect(),
             ),
-            GenericCommand::ProveExists(span, constructor) => {
-                GenericCommand::ProveExists(span, head(constructor))
+            GenericCommand::ProveSlotted(span, claim, facts) => GenericCommand::ProveSlotted(
+                span,
+                claim,
+                facts
+                    .into_iter()
+                    .map(|fact| fact.map_symbols(head, leaf))
+                    .collect(),
+            ),
+            GenericCommand::ProveExists(span, constructor, claim) => {
+                GenericCommand::ProveExists(span, head(constructor), claim)
             }
             GenericCommand::PrintFunction(span, name, n, file, mode) => {
                 GenericCommand::PrintFunction(span, name, n, file, mode)

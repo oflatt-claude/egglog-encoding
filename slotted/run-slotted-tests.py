@@ -14,7 +14,7 @@ Usage:
                                       encoder shows up as a diff
     ./run-slotted-tests.py --proofs   compile each under the proof-compatible profile
                                       and run it natively, every claim kept a check;
-                                      the `prove` spelling is compiled too and must
+                                      the `prove-slotted` spelling is compiled too and must
                                       differ from what ran only in that keyword
 """
 
@@ -83,12 +83,13 @@ def slotted_sources():
 
 
 def proof_spelling_drift(src):
-    """Why the proof profile's two spellings of `src` differ beyond `prove`/`check`.
+    """Why the proof profile's two spellings of `src` differ beyond `prove-slotted`/`check`.
 
-    `--proofs` alone writes `(prove ...)` for a positive `=`/`renaming-=` claim, which
-    the native run cannot execute; `--proofs-as-checks` is what ran. The two compiled
-    programs are diffed with every `(prove` read as `(check`, so a run of the second
-    vouches for the first unless they drift elsewhere. Returns the reason, or None.
+    `--proofs` alone writes `(prove-slotted <claim> ...)` for a positive
+    `=`/`renaming-=` claim, which the native run cannot execute; `--proofs-as-checks`
+    is what ran. The two compiled programs are diffed with every `(prove-slotted
+    <claim>` read as `(check`, so a run of the second vouches for the first unless
+    they drift elsewhere. Returns the reason, or None.
     """
     texts = []
     for extra in ((), ("--proofs-as-checks",)):
@@ -98,12 +99,13 @@ def proof_spelling_drift(src):
             return f"compiling with --proofs {' '.join(extra)} failed: {r.stderr.strip()[:120]}"
         texts.append(r.stdout)
     proved, checked = texts
-    if proved.replace("(prove ", "(check ") != checked:
-        return "the `prove` and `check` spellings of the proof profile differ beyond that keyword"
-    # a top-level positive `=` claim is what becomes a `prove`, so a source with one
-    # and a compiled program without any is a claim that lost its proof
-    if re.search(r"^\(check \((renaming-)?= ", src.read_text(), re.M) and "(prove " not in proved:
-        return "a positive `=` claim did not compile to a `prove`"
+    # the claim header is one line: the facts start on the next
+    if re.sub(r"^\(prove-slotted \(.*\)\n\s+", "(check ", proved, flags=re.M) != checked:
+        return "the `prove-slotted` and `check` spellings of the proof profile differ beyond the claim"
+    # a top-level positive `=` claim is what becomes a `prove-slotted`, so a source
+    # with one and a compiled program without any is a claim that lost its proof
+    if re.search(r"^\(check \((renaming-)?= ", src.read_text(), re.M) and "(prove-slotted " not in proved:
+        return "a positive `=` claim did not compile to a `prove-slotted`"
     return None
 
 
@@ -158,7 +160,7 @@ def main():
             # terms, rules and claims -- the part nothing else covers.
             cmd += ["--own-only", "-o", str(SNAPSHOTS / src.name)]
         if args.proofs:
-            # Plain egglog refuses `(prove ...)` outside proof mode, so the profile runs
+            # Plain egglog refuses `(prove-slotted ...)` outside proof mode, so the profile runs
             # with its claims as checks; `proof_spelling_drift` holds it to the one
             # difference that is meant.
             cmd += ["--proofs", "--proofs-as-checks"]

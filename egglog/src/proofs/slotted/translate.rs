@@ -13,7 +13,7 @@ use super::format::{SlottedJustification, SlottedProofId, SlottedProofStore, Slo
 use super::pipeline::Carriers;
 use super::source::{Claim, ColumnKind, Condition, Rhs, SlottedProgram};
 use super::terms::{Renaming, all_slots, rename, slot_term};
-use crate::ast::{Fact, GenericExpr, GenericFact};
+
 use crate::proofs::proof_format::{Justification, ProofId, ProofStore};
 use crate::sort::slotted::frame_from_term;
 use crate::sort::slotted::renaming::shape;
@@ -26,8 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 type R<T> = Result<T, String>;
 
 /// Translate the egglog proof `root`, which proves the encoded form of `claim`,
-/// into a slotted proof of the claim over `dag`, the program's term dag. `facts`
-/// are the `prove` command's facts, which the existence proof's premises follow.
+/// into a slotted proof of the claim over `dag`, the program's term dag.
+/// `classes` names the `prove-slotted`'s variables holding the encoded class
+/// each side matched, which the existence rule's substitution resolves.
 pub fn translate(
     program: &SlottedProgram,
     dag: TermDag,
@@ -35,7 +36,7 @@ pub fn translate(
     egg: &ProofStore,
     root: ProofId,
     claim: &Claim,
-    facts: &[Fact],
+    classes: [&str; 2],
 ) -> R<(SlottedProofStore, SlottedProofId)> {
     let mut tr = Translator {
         program,
@@ -54,7 +55,7 @@ pub fn translate(
         cert_stack: Default::default(),
         fresh: -1,
     };
-    let id = tr.claim(root, claim, facts)?;
+    let id = tr.claim(root, claim, classes)?;
     Ok((tr.out, id))
 }
 
@@ -74,7 +75,7 @@ struct Translator<'a> {
     /// reflexivity follows.
     known: HashMap<TermId, SlottedProofId>,
     /// A node spelled with canonical edges, shared by every row that has that shape.
-    shape_terms: HashMap<(String, Vec<SlotMap>, Vec<TermId>), TermId>,
+    shape_terms: HashMap<(String, Vec<SlotMap>, Vec<TermId>, Vec<TermId>), TermId>,
     /// While a rule firing is translated: each pattern variable's class, read off
     /// the column of the matched row where it first occurs.
     var_classes: HashMap<String, TermId>,
@@ -133,13 +134,21 @@ fn row_kind(head: &str) -> RowKind {
     }
 }
 
-/// `slotted/<kind>/...` -> `<kind>`; a user rule `name/apply` -> `apply`.
-fn rule_kind(name: &str) -> (&str, &str) {
+/// What a compiled rule is: a user rewrite's own rule `name` or its `name/apply`,
+/// found by the program's rewrites, or else the machinery's `slotted/<kind>/...`.
+/// A user rewrite named `slotted/custom` is still the user's.
+fn rule_kind<'n>(program: &SlottedProgram, name: &'n str) -> (&'n str, &'n str) {
+    if let Some(user) = name.strip_suffix("/apply")
+        && program.rewrites.contains_key(user)
+    {
+        return (user, "apply");
+    }
+    if program.rewrites.contains_key(name) {
+        return (name, "");
+    }
     if let Some(rest) = name.strip_prefix("slotted/") {
         let kind = rest.split('/').next().unwrap_or(rest);
         ("slotted", kind)
-    } else if let Some(user) = name.strip_suffix("/apply") {
-        (user, "apply")
     } else {
         (name, "")
     }
@@ -207,23 +216,16 @@ impl<'a> Translator<'a> {
     // ----- decoding -----------------------------------------------------------
 
     /// The permutation completing an edge: a slot of the child outside the edge's
-    /// domain keeps its name unless the edge already uses that name, in which case
-    /// it gets a fresh one. Keeping names makes a top-level term decode to the
-    /// term the program wrote.
+    /// domain -- bound, or one the child's class does not depend on -- gets a
+    /// fresh name, so that it collides with nothing the parent names.
     fn complete(&mut self, m: &SlotMap, child: TermId) -> Renaming {
         let slots = all_slots(&self.out.term_dag, child);
-        let free = self.program.free_slots(&self.out.term_dag, child);
         let mut entries: Vec<(i64, i64)> = m.iter().map(|(k, v)| (*k, *v)).collect();
-        let mut taken: BTreeSet<i64> = m.values().copied().collect();
         for s in slots {
-            if m.contains_key(&s) {
-                continue;
+            if !m.contains_key(&s) {
+                let f = self.fresh();
+                entries.push((s, f));
             }
-            // a slot outside the edge's domain -- bound, or one the child's class
-            // does not depend on -- is named apart on every occurrence
-            let _ = (&free, &mut taken);
-            let f = self.fresh();
-            entries.push((s, f));
         }
         Renaming::completing(entries).expect("an edge's renaming is injective")
     }
@@ -709,7 +711,7 @@ impl<'a> Translator<'a> {
         lhs: TermId,
         rhs: TermId,
     ) -> R<SlottedProofId> {
-        let (owner, kind) = rule_kind(name);
+        let (owner, kind) = rule_kind(self.program, name);
         match (owner, kind) {
             ("slotted", "orient-max") => self.eq(prems[0]),
             ("slotted", "orient-min") => {
@@ -933,9 +935,10 @@ impl<'a> Translator<'a> {
             .get(&head)
             .ok_or("unknown constructor")?
             .clone();
-        // the edges and classes of the slotted columns
+        // the edges and classes of the slotted columns, and the payloads
         let mut edges: Vec<SlotMap> = vec![];
         let mut classes: Vec<TermId> = vec![];
+        let mut payloads: Vec<TermId> = vec![];
         let mut i = 0;
         for col in &ctor.columns {
             match col {
@@ -944,7 +947,10 @@ impl<'a> Translator<'a> {
                     classes.push(args[i + 1]);
                     i += 2;
                 }
-                ColumnKind::Payload => i += 1,
+                ColumnKind::Payload => {
+                    payloads.push(args[i]);
+                    i += 1;
+                }
             }
         }
         let group_values: Vec<Vec<SlotMap>> = groups
@@ -984,7 +990,12 @@ impl<'a> Translator<'a> {
             p = self.note(p);
         }
         // the shape node: canonical edges over the same children
-        let key = (head.clone(), canonical_edges.clone(), classes.clone());
+        let key = (
+            head.clone(),
+            canonical_edges.clone(),
+            classes.clone(),
+            payloads,
+        );
         let node = if let Some(&n) = self.shape_terms.get(&key) {
             n
         } else {
@@ -1096,7 +1107,7 @@ impl<'a> Translator<'a> {
                 name,
                 premise_proofs,
                 substitution,
-            } if rule_kind(name).1 == "shape-index" => {
+            } if rule_kind(self.program, name).1 == "shape-index" => {
                 let row_eq = self.eq(premise_proofs[0])?;
                 let row = self.egg.get(premise_proofs[0]).rhs();
                 let n = self.slotted_columns(row)?;
@@ -1168,7 +1179,7 @@ impl<'a> Translator<'a> {
                 let name = name.clone();
                 let prems = premise_proofs.clone();
                 let subst = substitution.clone();
-                match rule_kind(&name).1 {
+                match rule_kind(self.program, &name).1 {
                     "seed-identity" => Err(format!("{} is not the identity", slot_map_string(g))),
                     "self-symmetry" | "self-edge-symmetry" => {
                         let p = self.eq(prems[0])?;
@@ -1201,7 +1212,7 @@ impl<'a> Translator<'a> {
                         else {
                             return Err("group-restore without a shrink".into());
                         };
-                        if rule_kind(shrink).1 == "group-empty" {
+                        if rule_kind(self.program, shrink).1 == "group-empty" {
                             return Err("an emptied group has no elements".into());
                         }
                         let source = shrink_prems[0];
@@ -1314,7 +1325,7 @@ impl<'a> Translator<'a> {
                 name,
                 premise_proofs: prems,
                 ..
-            } => match rule_kind(&name).1 {
+            } => match rule_kind(self.program, &name).1 {
                 "self-symmetry" | "self-edge-symmetry" => {
                     let p = self.eq(prems[0])?;
                     Ok(vec![p])
@@ -1625,16 +1636,31 @@ impl<'a> Translator<'a> {
                 let cls_v = match self.var_classes.get(var).copied() {
                     Some(c) => c,
                     None => {
-                        let head = match self.out.term_dag.get(*call) {
-                            Term::App(h, _) => h.clone(),
-                            _ => return Err(format!("condition on {var} is not a call")),
+                        // the premise row of the call's constructor whose columns
+                        // agree with what the match bound: its payloads and the
+                        // classes of the variables already placed
+                        let Term::App(head, kids) = self.out.term_dag.get(*call).clone() else {
+                            return Err(format!("condition on {var} is not a call"));
+                        };
+                        let columns = self
+                            .program
+                            .constructors
+                            .get(&head)
+                            .ok_or_else(|| format!("unknown constructor {head}"))?
+                            .columns
+                            .clone();
+                        let cond_ctx = ExpandCtx {
+                            names: self.atom_names(*call, var, &format!("_{var}_t")),
+                            ..ctx.clone()
                         };
                         let c = match_prems
                             .iter()
                             .map(|q| self.egg.get(*q))
                             .find(|pr| {
-                                self.app(pr.rhs()).is_some_and(|(h, _)| h == head)
-                                    && self.is_carrier_term(pr.lhs())
+                                self.app(pr.rhs()).is_some_and(|(h, a)| {
+                                    h == head
+                                        && self.columns_match(a, &columns, &kids, &[], &cond_ctx)
+                                }) && self.is_carrier_term(pr.lhs())
                             })
                             .map(|pr| pr.lhs())
                             .ok_or_else(|| format!("no row for the condition on {var}"))?;
@@ -2446,7 +2472,7 @@ impl<'a> Translator<'a> {
                 name,
                 ..
             } => {
-                let kind = rule_kind(name).1;
+                let kind = rule_kind(self.program, name).1;
                 match kind {
                     "reading-small" | "reading-big" => self.group_row_behind(
                         *premise_proofs
@@ -2538,7 +2564,29 @@ impl<'a> Translator<'a> {
                     i += 2;
                 }
                 ColumnKind::Binder => i += 2,
-                ColumnKind::Payload => i += 1,
+                ColumnKind::Payload => {
+                    // a literal must be the row's value; a payload variable the
+                    // substitution binds must be bound to it
+                    let Some(&value) = args.get(i) else {
+                        return false;
+                    };
+                    match self.out.term_dag.get(kids[j]) {
+                        Term::Lit(l) => {
+                            if !matches!(self.egg().get(value), Term::Lit(m) if m == l) {
+                                return false;
+                            }
+                        }
+                        Term::Var(v) => {
+                            if let Some(&want) = ctx.subst.get(v)
+                                && want != value
+                            {
+                                return false;
+                            }
+                        }
+                        Term::App(..) => {}
+                    }
+                    i += 1;
+                }
             }
         }
         true
@@ -2625,7 +2673,7 @@ impl<'a> Translator<'a> {
                 name,
                 premise_proofs: prems,
                 substitution: subst,
-            } => match rule_kind(&name).1 {
+            } => match rule_kind(self.program, &name).1 {
                 "class-slots" => {
                     // the class is the row, `c = M·row`: a slot the row's content does
                     // not mention is redundant outright; otherwise s is not a node slot
@@ -3362,7 +3410,7 @@ impl<'a> Translator<'a> {
 
     // ----- the claim ----------------------------------------------------------------
 
-    fn claim(&mut self, root: ProofId, claim: &Claim, facts: &[Fact]) -> R<SlottedProofId> {
+    fn claim(&mut self, root: ProofId, claim: &Claim, classes: [&str; 2]) -> R<SlottedProofId> {
         let proof = self.egg.get(root).clone();
         // an existence rule with one premise is replaced by that premise
         let (premise_proofs, substitution) = match proof.justification().clone() {
@@ -3373,66 +3421,37 @@ impl<'a> Translator<'a> {
             } => (premise_proofs, substitution),
             _ => (vec![root], IndexMap::default()),
         };
-        // The class equality fact names the two sides' class variables. The
-        // premises are found by what they prove, since proof normal form adds
-        // facts of its own.
-        // Either side may be a bare slot, whose class is the variable class term.
-        let mut class_eq: Option<(String, Option<String>)> = None;
-        for fact in facts {
-            if let GenericFact::Eq(_, GenericExpr::Var(_, a), rhs) = fact
-                && a.contains("cls")
-            {
-                match rhs {
-                    GenericExpr::Var(_, b) if b.contains("cls") => {
-                        class_eq = Some((a.clone(), Some(b.clone())))
-                    }
-                    GenericExpr::Call(_, head, _) if self.carriers.is_var_constructor(head) => {
-                        class_eq = Some((a.clone(), None))
-                    }
-                    _ => {}
-                }
+        // the encoded class each side matched, from the command's class variables
+        let cls_a = self.sub(&substitution, classes[0])?;
+        let cls_b = self.sub(&substitution, classes[1])?;
+        let bare = |this: &Self, t: TermId| super::terms::slot_of(&this.out.term_dag, t).is_some();
+        if bare(self, claim.lhs) && bare(self, claim.rhs) {
+            // both sides are bare slots: one class, the variable's
+            if cls_a != cls_b {
+                return Err("two bare slots with different classes".into());
             }
+            let t = self.dec(cls_a)?;
+            let r = self.reflexive(t)?;
+            let src_a = self
+                .program
+                .refresh_binders(&mut self.out.term_dag, claim.lhs);
+            let src_b = self
+                .program
+                .refresh_binders(&mut self.out.term_dag, claim.rhs);
+            let pa = self.align(r, src_a)?; // $0 = ·src_a
+            let pb = self.align(r, src_b)?; // $0 = ·src_b
+            let sa = self.out.sym(pa);
+            let result = self.trans(sa, pb)?;
+            return self.finish_claim(
+                result,
+                pb,
+                claim,
+                cls_a,
+                &premise_proofs,
+                &substitution,
+                &HashMap::default(),
+            );
         }
-        let var_class = premise_proofs
-            .iter()
-            .map(|p| self.egg.get(*p).lhs())
-            .find(|t| {
-                self.app(*t)
-                    .is_some_and(|(h, _)| self.carriers.is_var_constructor(h))
-            });
-        let (cls_a_var, cls_b_var) = match class_eq {
-            Some(pair) => pair,
-            None => {
-                // both sides are bare slots: one class, the variable's
-                let v = var_class.ok_or("the claim has no class equality")?;
-                let t = self.dec(v)?;
-                let r = self.reflexive(t)?;
-                let src_a = self
-                    .program
-                    .refresh_binders(&mut self.out.term_dag, claim.lhs);
-                let src_b = self
-                    .program
-                    .refresh_binders(&mut self.out.term_dag, claim.rhs);
-                let pa = self.align(r, src_a)?; // $0 = ·src_a
-                let pb = self.align(r, src_b)?; // $0 = ·src_b
-                let sa = self.out.sym(pa);
-                let result = self.trans(sa, pb)?;
-                return self.finish_claim(
-                    result,
-                    pb,
-                    claim,
-                    v,
-                    &premise_proofs,
-                    &substitution,
-                    &HashMap::default(),
-                );
-            }
-        };
-        let cls_a = self.sub(&substitution, &cls_a_var)?;
-        let cls_b = match cls_b_var {
-            Some(v) => self.sub(&substitution, &v)?,
-            None => var_class.ok_or("the claim's bare slot has no class")?,
-        };
         let side = |this: &Self, i: usize, pattern: TermId| ExpandCtx {
             prems: premise_proofs.clone(),
             subst: substitution.clone(),
@@ -3561,6 +3580,14 @@ impl<'a> Translator<'a> {
                     let left = self.trans(left, s)?;
                     let r = self.trans(left, right)?;
                     let r = self.fix_redundant(r, pb, src_b, &free)?;
+                    // a redundant slot the symmetry exposed, as on the main path
+                    let r = match self.fit_content(r, src_b, occ_b) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            log::debug!("content fit after the symmetry failed: {e}");
+                            r
+                        }
+                    };
                     let prop = self.out.normalize(self.out.proposition(r).clone());
                     if !prop.renaming.moves_any(&free) || !prop.renaming.moves_any(&free_a) {
                         return Ok(r);

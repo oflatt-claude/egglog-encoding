@@ -444,6 +444,23 @@ impl Default for EGraph {
     }
 }
 
+/// How two literal terms compare as values, which is how the runtime's
+/// `ordering-min`/`ordering-max` compare them; `None` unless both are literals
+/// of one kind.
+fn literal_order(termdag: &TermDag, a: TermId, b: TermId) -> Option<std::cmp::Ordering> {
+    let (Term::Lit(x), Term::Lit(y)) = (termdag.get(a), termdag.get(b)) else {
+        return None;
+    };
+    match (x, y) {
+        (Literal::Int(x), Literal::Int(y)) => Some(x.cmp(y)),
+        (Literal::Float(x), Literal::Float(y)) => Some(x.cmp(y)),
+        (Literal::String(x), Literal::String(y)) => Some(x.cmp(y)),
+        (Literal::Bool(x), Literal::Bool(y)) => Some(x.cmp(y)),
+        (Literal::Unit, Literal::Unit) => Some(std::cmp::Ordering::Equal),
+        _ => None,
+    }
+}
+
 impl EGraph {
     /// Construct an `EGraph` backed by the given [`Backend`] implementation.
     ///
@@ -535,14 +552,15 @@ impl EGraph {
             }
         );
 
-        // The runtime compares e-graph value ids, which a term cannot
-        // reproduce: these validators decide by `TermId` instead. That only
-        // makes programs using the three primitives loadable under the proof
-        // encoding. An orientation fact re-evaluated by the egglog proof
-        // checker may disagree with the runtime's choice, and `value-eq` on an
-        // eq-sort compares terms, not classes; consumers that need checked
-        // orientation (the slotted proof pipeline has its own checker) must not
-        // rely on these.
+        // `value-eq` holds of two equal terms; two different terms may still be
+        // one e-graph value, which a term cannot see, so the validator is sound
+        // and not complete. `ordering-min`/`ordering-max` compare e-graph value
+        // ids, which only a literal's term reproduces: on literals the
+        // validators compare the values, on anything else they decline, and a
+        // proof whose orientation they cannot check fails verification rather
+        // than passing by the accident of term order. The slotted proof
+        // pipeline, whose orientation steps are on classes, has a checker of its
+        // own and does not verify egglog proofs.
         add_primitive_with_validator!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         }, |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
@@ -551,15 +569,17 @@ impl EGraph {
         });
         add_primitive_with_validator!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
             if a < b { a } else { b }
-        }, |_: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+        }, |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
             let [a, b] = args else { return None };
-            Some(if a < b { *a } else { *b })
+            let less = literal_order(termdag, *a, *b)?.is_lt();
+            Some(if less { *a } else { *b })
         });
         add_primitive_with_validator!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
             if a > b { a } else { b }
-        }, |_: &mut TermDag, args: &[TermId]| -> Option<TermId> {
+        }, |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
             let [a, b] = args else { return None };
-            Some(if a > b { *a } else { *b })
+            let greater = literal_order(termdag, *a, *b)?.is_gt();
+            Some(if greater { *a } else { *b })
         });
 
         // Orientation helpers for the proof-encoding UF/view merges; see
@@ -698,8 +718,8 @@ impl EGraph {
     }
 
     /// Enable slotted proof mode: the compiler's source metadata is recorded and
-    /// every `prove` is translated to a slotted proof and checked
-    /// (`slotted/PROOFS.md`). Implies proofs.
+    /// every `prove-slotted` has its proof translated to a slotted proof of its
+    /// claim and checked (`slotted/PROOFS.md`). Implies proofs.
     pub fn with_slotted_proofs(mut self) -> Self {
         self = self.with_proofs_enabled();
         // The slotted checker is the arbiter; the egglog-level checker does not
@@ -2306,7 +2326,7 @@ impl EGraph {
                 return command.update(self, &exprs);
             }
 
-            ResolvedNCommand::ProveExists(span, resolved_call) => {
+            ResolvedNCommand::ProveExists(span, resolved_call, claim) => {
                 let mut instrument = ProofInstrumentor::new(self);
                 let (proof_store, proof_id) =
                     instrument
@@ -2315,9 +2335,14 @@ impl EGraph {
                             span: span.clone(),
                             error,
                         })?;
-                if let Some(slotted) = self.proof_state.slotted.as_mut() {
+                if let Some(claim) = claim {
+                    let slotted = self.proof_state.slotted.as_mut().ok_or_else(|| {
+                        Error::SlottedProof(
+                            "`prove-slotted` needs slotted proof mode (`--slotted-proofs`)".into(),
+                        )
+                    })?;
                     let text = slotted
-                        .prove(&proof_store, proof_id)
+                        .prove(&proof_store, proof_id, &claim)
                         .map_err(Error::SlottedProof)?;
                     return Ok(vec![CommandOutput::SlottedProof(text)]);
                 }
@@ -2781,7 +2806,9 @@ impl EGraph {
                                     .record(head, args)
                                     .map_err(|e| Error::SlottedProof(e.to_string()))?;
                             }
-                            Command::Prove(_, facts) => slotted.record_prove(facts.clone()),
+                            Command::Constructor { name, schema, .. } => {
+                                slotted.record_constructor(name, &schema.input, &schema.outputs);
+                            }
                             _ => {}
                         }
                     }

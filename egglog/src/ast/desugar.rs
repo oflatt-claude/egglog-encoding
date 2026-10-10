@@ -194,7 +194,7 @@ pub(crate) fn desugar_command(
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::Check(span, facts) => {
             if proof_testing {
-                desugar_prove(parser, span.clone(), facts.clone())
+                desugar_prove(parser, span.clone(), facts.clone(), None)
             } else {
                 vec![NCommand::Check(span, facts)]
             }
@@ -227,9 +227,12 @@ pub(crate) fn desugar_command(
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
         }
-        Command::Prove(span, query) => desugar_prove(parser, span, query),
-        Command::ProveExists(span, constructor) => {
-            vec![NCommand::ProveExists(span, constructor)]
+        Command::Prove(span, query) => desugar_prove(parser, span, query, None),
+        Command::ProveSlotted(span, claim, query) => {
+            desugar_prove(parser, span, query, Some(claim))
+        }
+        Command::ProveExists(span, constructor, claim) => {
+            vec![NCommand::ProveExists(span, constructor, claim)]
         }
     };
 
@@ -250,8 +253,15 @@ pub(crate) fn desugar_command(
 /// (prove-exists ExistsConstructor)
 /// ```
 /// This creates a fresh constructor that can only be created if the query holds.
-/// Then `prove-exists` extracts a proof that the constructor exists.
-fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NCommand> {
+/// Then `prove-exists` extracts a proof that the constructor exists. A
+/// `prove-slotted` desugars the same way, with its claim carried to the
+/// `prove-exists`, which translates and checks the proof as a slotted proof.
+fn desugar_prove(
+    parser: &mut Parser,
+    span: Span,
+    query: Vec<Fact>,
+    claim: Option<SlottedClaim>,
+) -> Vec<NCommand> {
     let fresh_sort = parser.symbol_gen.fresh("ExistsSort");
     let constructor_name = parser.symbol_gen.fresh("ExistsConstructor");
     let ruleset = parser.symbol_gen.fresh("exists");
@@ -304,7 +314,7 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             },
         )),
         // get a proof for the constructor
-        NCommand::ProveExists(span, constructor_name),
+        NCommand::ProveExists(span, constructor_name, claim),
     ]
 }
 

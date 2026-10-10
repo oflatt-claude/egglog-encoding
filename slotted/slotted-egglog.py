@@ -483,7 +483,6 @@ def compile_source(src, own_only=False, *, nested_compat=False):
     rules = 0
     scopes = []  # globals saved by each open `push`, restored by its `pop`
     extracts = 0
-    claims = 0  # every `check` and `fail`, in order: a claim's index in the metadata
     unions = collections.Counter()  # text pairs seen, to number a repeated union's row
     for form, origin in src.body:
         head = form[0] if isinstance(form, list) else form
@@ -538,7 +537,7 @@ def compile_source(src, own_only=False, *, nested_compat=False):
                 pair = (source_text(a), source_text(b))
                 unions[pair] += 1
                 suffix = f" #{unions[pair]}" if unions[pair] > 1 else ""
-                _emit(out, keep, enc.metadata_row("SlottedUnionSource", pair[0] + suffix, pair[1]))
+                _emit(out, keep, enc.metadata_row("SlottedUnionSource", pair[0] + suffix, pair[1], sort))
         elif head == "rewrite":
             _emit(out, keep, compile_rewrite(src, form, nested_compat=nested_compat))
             rules += 1
@@ -580,8 +579,7 @@ def compile_source(src, own_only=False, *, nested_compat=False):
             _emit(out, keep, f"(run-schedule (saturate (run {rs})))")
             _emit(out, keep, f"(extract ({fn}))")
         elif head in ("check", "fail"):
-            _emit(out, keep, compile_check(src, form, claims))
-            claims += 1
+            _emit(out, keep, compile_check(src, form))
         elif head in ("rule", "birewrite"):
             # `rewrite` is the only rule form here, and passing either of these through
             # is worse than rejecting it. At the slotted level neither can typecheck --
@@ -1005,7 +1003,8 @@ def claim_query(src, forms, sort):
     placeholder for `refine` to merge and no action for `anchor` to spell.
 
     A bare slot is not a node: it is the variable class under a renaming, so it needs
-    no pattern at all -- `$k` is `(Var 0)` with its one slot sent to k.
+    no pattern at all -- `$k` is `(Var 0)` with its one slot sent to k. Its class is
+    still bound to a variable, so that every side of a claim has one to name.
     """
     body, matched = [], []
     symbols = src.carriers[sort]
@@ -1018,7 +1017,8 @@ def claim_query(src, forms, sort):
         if ground[0] == src.lang.VAR:
             # narrowed like any other match: a program that equates two slots leaves
             # even the variable class without one
-            cls = f"({symbols.var} 0)"
+            cls = f"_c{i}cls"
+            body.append(f"(= {cls} ({symbols.var} 0))")
             matched.append(Matched(cls, f"(compose (map-of 0 {ground[1]}) ({symbols.class_slots} {cls}))"))
             continue
         pattern = rename_bound_slots(src.lang, as_pattern(src.lang, ground))
@@ -1046,16 +1046,17 @@ def claim_query(src, forms, sort):
     return body, matched
 
 
-def compile_check(src, form, index=0):
+def compile_check(src, form):
     """A claim about slotted classes, not about egglog values.
 
     Every claim that names a term is one query: the facts that match the terms,
     followed by the facts that state the claim over what they matched.
 
-    `index` is the claim's position among the program's claims, which the proof
-    profile records beside a positive `=` or `renaming-=` claim: that claim is a
-    `(prove ...)` over the check's facts, so that egglog's proof mode extracts a proof
-    of it, and the row before it says which claim the proof is of.
+    In the proof profile a positive `=` or `renaming-=` claim is a `(prove-slotted
+    <claim> ...)` over the check's facts: egglog's proof mode extracts a proof of the
+    facts, and the claim -- the two source terms, each with the fact variable that
+    holds the class it matched -- says what that proof is translated to and checked
+    against (`PROOFS.md`).
     """
     negated = form[0] == "fail"
     if negated:
@@ -1064,20 +1065,22 @@ def compile_check(src, form, index=0):
     claim = form[1]
     kind, args = claim[0], claim[1:]
 
-    def claimed(body, facts, negative=False):
+    def claimed(body, facts, negative=False, sort=None, classes=None):
         """The claim as a command: `(check ...)`, or `(fail (check ...))` once.
 
         One fact per line, as a rule's query is written: a claim is a query now, and
-        a snapshot of one is only readable if it reads like the rules beside it.
+        a snapshot of one is only readable if it reads like the rules beside it. A
+        proved claim's header line carries the claim itself: its carrier `sort`, and
+        each term with the fact variable holding the class it matched (`classes`).
         """
         proved = kind in ("=", "renaming-=") and not negative and not negated
-        head = "prove" if proved and enc.PROVE_CLAIMS else "check"
-        text = f"({head} " + "\n       ".join(list(body) + facts) + ")"
+        lines = "\n       ".join(list(body) + facts)
+        if proved and enc.PROVE_CLAIMS:
+            sides = " ".join(f"({enc.egglog_string(source_text(t))} {c})" for t, c in zip(args, classes, strict=True))
+            return f"(prove-slotted ({kind} {sort} {sides})\n       {lines})"
+        text = f"(check {lines})"
         if negative != negated:
             return f"(fail {text})"
-        if proved and enc.PROOFS:
-            row = enc.metadata_row("SlottedClaimSource", index, kind, source_text(args[0]), source_text(args[1]))
-            return f"{row}\n{text}"
         return text
 
     if kind in ("=", "!=", "renaming-=", "renaming-!="):
@@ -1103,7 +1106,7 @@ def compile_check(src, form, index=0):
             group = src.carriers[sort].group
             facts.append(f"(= _grp ({group} {a.cls}))")
             facts.append(f"(coset-same {a.mp} {b.mp} _grp)")
-        return claimed(body, facts, negative=kind.endswith("!="))
+        return claimed(body, facts, negative=kind.endswith("!="), sort=sort, classes=(a.cls, b.cls))
     if kind in ("holds", "not-holds"):
         # "this class contains an application of this operator", which is what a rule
         # having fired looks like when the built term is not worth writing out -- or,
@@ -1208,7 +1211,7 @@ def main():
         help=(
             "the proof-compatible profile: no tuple outputs, merge blocks or eq-sort "
             ":no-merge functions, hidden source-metadata tables, and a positive `=` or "
-            "`renaming-=` claim as a `(prove ...)`"
+            "`renaming-=` claim as a `(prove-slotted ...)`"
         ),
     )
     ap.add_argument(
@@ -1271,7 +1274,7 @@ def main():
     pathlib.Path(path).unlink(missing_ok=True)
     if proving and not args.show_proofs:
         # the proofs are the point, but long: say how many checked
-        proved = text.count("\n(prove ")
+        proved = text.count("\n(prove-slotted ")
         print(f"ok   {args.src.name}   {tally(src)}, {proved} claim{'s' if proved != 1 else ''} proved")
         return 0
     if r.stdout.strip():

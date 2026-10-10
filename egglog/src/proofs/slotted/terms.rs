@@ -43,11 +43,20 @@ impl Renaming {
     /// routing the orphaned target back to it. `None` if the entries are not
     /// injective.
     pub fn completing(entries: impl IntoIterator<Item = (i64, i64)>) -> Option<Self> {
-        let mut map: BTreeMap<i64, i64> = entries.into_iter().filter(|(k, v)| k != v).collect();
-        let targets: BTreeSet<i64> = map.values().copied().collect();
-        if targets.len() != map.len() {
+        // the whole injection is validated first, fixed points included:
+        // `0 -> 0, 1 -> 0` is not one, and dropping the fixed point would hide that
+        let mut all: BTreeMap<i64, i64> = BTreeMap::new();
+        for (k, v) in entries {
+            if all.insert(k, v).is_some_and(|old| old != v) {
+                return None;
+            }
+        }
+        let targets: BTreeSet<i64> = all.values().copied().collect();
+        if targets.len() != all.len() {
             return None;
         }
+        let mut map: BTreeMap<i64, i64> = all.into_iter().filter(|(k, v)| k != v).collect();
+        let targets: BTreeSet<i64> = map.values().copied().collect();
         // Walk each chain `a -> b -> ... -> z` whose end `z` is not a key and whose
         // start `a` is not a value; closing it with `z -> a` makes a cycle.
         let starts: Vec<i64> = map
@@ -327,5 +336,12 @@ mod tests {
         assert!(is_subterm(&dag, null, t));
         let missing = HashMap::from_iter([("x".to_string(), null)]);
         assert_eq!(instantiate(&mut dag, pat, &missing), Err("$x".to_string()));
+    }
+    #[test]
+    fn completing_validates_the_whole_injection() {
+        assert!(Renaming::completing([(0, 0), (1, 0)]).is_none());
+        assert!(Renaming::completing([(0, 1), (0, 2)]).is_none());
+        let m = Renaming::completing([(0, 1), (1, 2)]).unwrap();
+        assert_eq!((m.apply(0), m.apply(1), m.apply(2)), (1, 2, 0));
     }
 }

@@ -1,11 +1,12 @@
 //! Runs the slotted proof pipeline inside an e-graph: records the source
-//! metadata the compiler publishes as the program runs, and on each `prove`
-//! translates the egglog proof to a slotted proof and checks it.
+//! metadata the compiler publishes as the program runs, and on each
+//! `prove-slotted` translates the egglog proof to a slotted proof of the
+//! command's claim and checks it.
 
 use super::checker::check_claim;
 use super::source::{ColumnKind, SlottedProgram, SourceError};
 use super::translate::translate;
-use crate::ast::{Expr, Fact, Literal};
+use crate::ast::{Expr, Literal, SlottedClaim};
 use crate::proofs::proof_format::{ProofId, ProofStore};
 use crate::util::HashMap;
 use crate::{GenericExpr, TermDag};
@@ -15,9 +16,8 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug)]
 enum Source {
     Let(String, String),
-    Union(String, String),
+    Union(String, String, String),
     Rule(String, String),
-    Claim(i64, String, String, String),
 }
 
 /// The physical layout the compiler publishes for a constructor, before it is
@@ -38,14 +38,13 @@ pub struct Carriers {
 }
 
 impl Carriers {
-    /// The variable constructor of a carrier: `(SlottedVar_N 0)` is slot `$0`.
-    pub fn var_constructor(index: i64) -> String {
-        format!("SlottedVar_{index}")
-    }
-
+    /// Is this the variable constructor of a registered carrier? A user
+    /// constructor that happens to be spelled `SlottedVar_7` is not one unless
+    /// carrier 7 exists.
     pub fn is_var_constructor(&self, head: &str) -> bool {
         head.strip_prefix("SlottedVar_")
-            .is_some_and(|n| n.parse::<i64>().is_ok())
+            .and_then(|n| n.parse::<i64>().ok())
+            .is_some_and(|n| self.index.values().any(|&i| i == n))
     }
 }
 
@@ -53,12 +52,10 @@ impl Carriers {
 pub struct SlottedProofState {
     carriers: Carriers,
     layouts: HashMap<String, RawLayout>,
+    /// Each declared constructor's input and output sorts, as the encoded
+    /// program declares them: a child column is a `Renaming` and then its sort.
+    signatures: HashMap<String, (Vec<String>, String)>,
     sources: Vec<Source>,
-    /// The claim the next `prove` is about: the last one recorded.
-    current_claim: Option<i64>,
-    /// The facts of the `prove` being run, in order: the existence rule's
-    /// premises line up with them.
-    claim_facts: Vec<Fact>,
 }
 
 const METADATA_TABLES: &[&str] = &[
@@ -70,7 +67,6 @@ const METADATA_TABLES: &[&str] = &[
     "SlottedRuleSource",
     "SlottedLetSource",
     "SlottedUnionSource",
-    "SlottedClaimSource",
 ];
 
 fn lit_string(e: &Expr) -> Option<String> {
@@ -119,24 +115,18 @@ impl SlottedProofState {
             }
             "SlottedRuleSource" => self.sources.push(Source::Rule(s(0)?, s(1)?)),
             "SlottedLetSource" => self.sources.push(Source::Let(s(0)?, s(1)?)),
-            "SlottedUnionSource" => self.sources.push(Source::Union(s(0)?, s(1)?)),
-            "SlottedClaimSource" => {
-                let index = n(0)?;
-                self.sources.push(Source::Claim(index, s(1)?, s(2)?, s(3)?));
-                self.current_claim = Some(index);
-            }
+            "SlottedUnionSource" => self.sources.push(Source::Union(s(0)?, s(1)?, s(2)?)),
             _ => unreachable!(),
         }
         Ok(true)
     }
 
-    /// Remember the facts of the `prove` about to run.
-    pub fn record_prove(&mut self, facts: Vec<Fact>) {
-        self.claim_facts = facts;
-    }
-
-    pub fn carriers(&self) -> &Carriers {
-        &self.carriers
+    /// Record a constructor declaration: the sorts its columns and output have.
+    pub fn record_constructor(&mut self, name: &str, inputs: &[String], outputs: &[String]) {
+        if let [output] = outputs {
+            self.signatures
+                .insert(name.to_string(), (inputs.to_vec(), output.clone()));
+        }
     }
 
     /// The source program as recorded so far, over a fresh term dag.
@@ -150,18 +140,33 @@ impl SlottedProofState {
             let arity = layout
                 .arity
                 .ok_or_else(|| SourceError(format!("constructor {name} has no node layout")))?;
+            let (inputs, output) = self
+                .signatures
+                .get(name)
+                .ok_or_else(|| SourceError(format!("constructor {name} was never declared")))?;
+            if inputs.len() != arity {
+                return Err(SourceError(format!(
+                    "constructor {name} is declared with {} columns, its layout has {arity}",
+                    inputs.len()
+                )));
+            }
             let mut columns = vec![];
             let mut i = 0;
             while i < arity {
                 if layout.edges.contains(&i) {
-                    columns.push(if layout.binders.contains(&i) {
+                    let kind = if layout.binders.contains(&i) {
                         ColumnKind::Binder
                     } else {
                         ColumnKind::Child
-                    });
+                    };
+                    // the edge's renaming, then the child's sort
+                    let sort = inputs.get(i + 1).cloned().ok_or_else(|| {
+                        SourceError(format!("constructor {name}: edge {i} has no class column"))
+                    })?;
+                    columns.push((kind, sort));
                     i += 2;
                 } else if layout.payloads.contains(&i) {
-                    columns.push(ColumnKind::Payload);
+                    columns.push((ColumnKind::Payload, inputs[i].clone()));
                     i += 1;
                 } else {
                     return Err(SourceError(format!(
@@ -169,38 +174,34 @@ impl SlottedProofState {
                     )));
                 }
             }
-            program.add_constructor(name, columns);
+            program.add_sorted_constructor(name, output, columns);
         }
         for source in &self.sources {
             match source {
                 Source::Let(name, text) => program.add_let(&mut dag, name, text)?,
-                Source::Union(a, b) => program.add_union(&mut dag, a, b)?,
+                Source::Union(a, b, sort) => program.add_union(&mut dag, a, b, sort)?,
                 Source::Rule(name, text) => {
                     program.add_named_rewrite(&mut dag, Some(name), text)?;
-                }
-                Source::Claim(index, kind, a, b) => {
-                    program.add_claim(&mut dag, *index, kind, a, b)?
                 }
             }
         }
         Ok((program, dag))
     }
 
-    /// Translate the egglog proof of the current claim and check it. Returns the
-    /// slotted proof's text.
-    pub fn prove(&mut self, egg: &ProofStore, root: ProofId) -> Result<String, String> {
-        let index = self
-            .current_claim
-            .ok_or_else(|| "a prove ran before any claim was recorded".to_string())?;
-        let (program, dag) = self.program().map_err(|e| e.to_string())?;
-        let claim = program
-            .claims
-            .iter()
-            .find(|c| c.index == index)
-            .cloned()
-            .ok_or_else(|| format!("claim {index} was not recorded"))?;
+    /// Translate the egglog proof `root` of a `prove-slotted` to a slotted proof
+    /// of its claim and check it. Returns the slotted proof's text.
+    pub fn prove(
+        &self,
+        egg: &ProofStore,
+        root: ProofId,
+        claim: &SlottedClaim,
+    ) -> Result<String, String> {
+        let (program, mut dag) = self.program().map_err(|e| e.to_string())?;
+        let source = program
+            .claim(&mut dag, &claim.kind, &claim.sort, &claim.lhs, &claim.rhs)
+            .map_err(|e| format!("claim {claim}: {e}"))?;
         log::debug!(
-            "egglog proof of claim {index}:\n{}",
+            "egglog proof of claim {claim}:\n{}",
             egg.proof_to_string(root)
         );
         let translated = translate(
@@ -209,12 +210,12 @@ impl SlottedProofState {
             &self.carriers,
             egg,
             root,
-            &claim,
-            &self.claim_facts,
+            &source,
+            [&claim.lhs_class, &claim.rhs_class],
         )
-        .map_err(|e| format!("claim {index}: {e}"))?;
+        .map_err(|e| format!("claim {claim}: {e}"))?;
         let (mut store, proof) = translated;
-        check_claim(&mut store, &program, &claim, proof).map_err(|e| {
+        check_claim(&mut store, &program, &source, proof).map_err(|e| {
             format!(
                 "the translated proof does not check: {e}\n{}",
                 store.proof_to_string(proof)

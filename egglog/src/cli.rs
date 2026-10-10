@@ -86,8 +86,9 @@ struct Args {
     /// Extract proofs for all `check` statements without verifying them
     #[clap(long, conflicts_with_all = ["proofs", "proof_testing"])]
     proof_extraction: bool,
-    /// Proofs for a slotted-encoded program: translate every `prove` to a proof
-    /// over the slotted source terms and check it (`slotted/PROOFS.md`)
+    /// Proofs for a slotted-encoded program: translate every `prove-slotted` to a
+    /// proof of its claim over the slotted source terms and check it
+    /// (`slotted/PROOFS.md`)
     #[clap(long)]
     slotted_proofs: bool,
 }

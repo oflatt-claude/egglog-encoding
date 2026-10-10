@@ -89,6 +89,7 @@ slotted-check:
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	cargo test --manifest-path slotted/xmulti/Cargo.toml
 	python3 slotted/checks/check-slotted.py
+	python3 slotted/run-slotted-tests.py --slotted-proofs
 
 # The offline half of the above. The rest compares against `xmulti`, whose separately
 # locked Cargo workspace fetches the pinned `slotted-egraphs` reference revision; use
@@ -114,6 +115,7 @@ slotted-eval:
 slotted-check-no-oracle:
 	cargo build
 	python3 slotted/checks/check-slotted.py --no-oracle
+	python3 slotted/run-slotted-tests.py --slotted-proofs
 
 # Use a disposable report path, keeping the default report cache untouched.
 benchmark-smoke:

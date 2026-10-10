@@ -71,6 +71,7 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "fail",
     "begin",
     "prove",
+    "prove-slotted",
     "prove-exists",
     // actions
     "let",
@@ -889,12 +890,31 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::parse_fact)?,
             )],
+            "prove-slotted" => match tail {
+                [claim, facts @ ..] => vec![Command::ProveSlotted(
+                    span,
+                    self.parse_slotted_claim(claim)?,
+                    map_fallible(facts, self, Self::parse_fact)?,
+                )],
+                _ => {
+                    return error!(
+                        span,
+                        "usage: (prove-slotted (<kind> <sort> (<term> <class>) (<term> <class>)) <fact>*)"
+                    );
+                }
+            },
             "prove-exists" => match tail {
                 [constructor] => vec![Command::ProveExists(
                     span,
                     constructor.expect_atom("constructor name")?,
+                    None,
                 )],
-                _ => return error!(span, "usage: (prove-exists <constructor>)"),
+                [constructor, claim] => vec![Command::ProveExists(
+                    span,
+                    constructor.expect_atom("constructor name")?,
+                    Some(self.parse_slotted_claim(claim)?),
+                )],
+                _ => return error!(span, "usage: (prove-exists <constructor> <slotted claim>?)"),
             },
             "push" => match tail {
                 [] => vec![Command::Push(1)],
@@ -1169,6 +1189,42 @@ impl Parser {
                 _ => return error!(span, "usage: (panic <string>)"),
             },
             _ => vec![Action::Expr(span, self.parse_expr(sexp)?)],
+        })
+    }
+
+    /// `(<kind> <sort> (<term> <class>) (<term> <class>))`: a slotted claim, its
+    /// carrier sort, its two source terms as string literals and the fact
+    /// variables holding their classes.
+    fn parse_slotted_claim(&mut self, sexp: &Sexp) -> Result<SlottedClaim, ParseError> {
+        let (kind, tail, span) = sexp.expect_call("slotted claim")?;
+        if kind != "=" && kind != "renaming-=" {
+            return error!(span, "a slotted claim is `=` or `renaming-=`, not {kind}");
+        }
+        let [sort, lhs, rhs] = tail else {
+            return error!(
+                span,
+                "usage: (<kind> <sort> (<term> <class>) (<term> <class>))"
+            );
+        };
+        let sort = sort.expect_atom("the claim's sort")?;
+        let side = |sexp: &Sexp| -> Result<(String, String), ParseError> {
+            match sexp.expect_list("a claim side (<term> <class>)")? {
+                [term, class] => Ok((
+                    term.expect_string("the claim's term")?,
+                    class.expect_atom("the class variable")?,
+                )),
+                _ => error!(sexp.span(), "usage: (<term> <class>)"),
+            }
+        };
+        let (lhs, lhs_class) = side(lhs)?;
+        let (rhs, rhs_class) = side(rhs)?;
+        Ok(SlottedClaim {
+            kind,
+            sort,
+            lhs,
+            lhs_class,
+            rhs,
+            rhs_class,
         })
     }
 

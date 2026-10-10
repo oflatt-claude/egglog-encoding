@@ -20,9 +20,9 @@ for the exact graph comparisons and substitution policy used by `eval.py`.
 
 `--proofs` selects the proof-compatible profile: the same program compiled without the
 features egglog's term/proof encoding refuses, with every generated rule named, each
-positive `=` or `renaming-=` claim as a `(prove ...)`, and hidden tables recording the
-source each rule, global, union and claim came from. Plain egglog refuses `prove`
-outside proof mode, so `--proofs --proofs-as-checks` runs that profile natively with
+positive `=` or `renaming-=` claim as a `(prove-slotted ...)` carrying the claim, and
+hidden tables recording the source each rule, global and union came from. Plain egglog
+refuses `prove-slotted` outside proof mode, so `--proofs --proofs-as-checks` runs that profile natively with
 its claims as checks; `slotted/run-slotted-tests.py --proofs` runs the suite that way.
 Under `egglog --slotted-proofs` the claims are proved, and each proof is translated
 to a proof over the source terms and checked (`--slotted-proofs` on the test runner,
