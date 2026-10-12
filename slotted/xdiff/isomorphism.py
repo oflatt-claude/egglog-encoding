@@ -315,6 +315,38 @@ def invert_map(m):
     return inv if len(inv) == len(m) else None
 
 
+def is_closed_group(perms, identity):
+    """Check a set of permutations of one slot set without repairing missing elements.
+
+    Grow a subgroup using a new generator only when it is not already generated.
+    Every product must be recorded in `perms`; after all generators are processed,
+    the generated subgroup equals `perms`. This is exact: a finite set of permutations
+    containing the identity and closed under composition is a group.
+
+    Each new generator at least doubles the subgroup, so valid groups need at most
+    log2(|perms|) generators instead of checking all |perms| squared pairs.
+    The caller has already checked that each element permutes the same slot set.
+    """
+    if identity not in perms:
+        return False
+    generated = {identity}
+    generators = []
+    for perm in perms:
+        if perm in generated:
+            continue
+        generators.append(dict(perm))
+        pending = list(generated)
+        for current in pending:
+            for generator in generators:
+                product = frozenset((a, generator[b]) for a, b in current)
+                if product not in perms:
+                    return False
+                if product not in generated:
+                    generated.add(product)
+                    pending.append(product)
+    return True
+
+
 def build_encoding_graph(doc, lang=X.LANG):
     """One class per *slotted* class, merging the `U` values that make one up.
 
@@ -351,6 +383,9 @@ def build_encoding_graph(doc, lang=X.LANG):
     members = {}
     for v in values:
         members.setdefault(find(v), []).append(v)
+    edges_by_component = {root: [] for root in members}
+    for a, m, b in linked:
+        edges_by_component[find(a)].append((a, m, b))
 
     issues += [f"{v}: no ClassSlots row" for v in sorted(values) if v not in slots_of]
     issues += validate_encoding_rows(slots_of, rows, leaf, lambda a, b: find(a) == find(b))
@@ -371,8 +406,9 @@ def build_encoding_graph(doc, lang=X.LANG):
         for v in group:
             rep_of[v] = rep
         frame[rep] = {s: s for s in slots_of.get(rep, ())}
-        edges = [(a, m, b) for a, m, b in linked if find(a) == root]
-        for _ in range(len(group) + 1):
+        edges = edges_by_component[root]
+        while True:
+            placed = len(frame)
             for a, m, b in edges:
                 if b in frame and a not in frame:
                     frame[a] = compose_maps(m, frame[b])
@@ -380,6 +416,8 @@ def build_encoding_graph(doc, lang=X.LANG):
                     inv = invert_map(m)
                     if inv is not None:
                         frame[b] = compose_maps(inv, frame[a])
+            if len(frame) == placed:
+                break
         # Where two paths disagree they differ by a symmetry of the class, and either is a
         # valid choice of frame; the group comparison accounts for it.
 
@@ -428,19 +466,7 @@ def build_encoding_graph(doc, lang=X.LANG):
         identity = frozenset((s, s) for s in g.slots[rep])
         if identity not in perms:
             issues.append(f"{rep}: no identity in the group")
-        closure = set(perms) | {identity}
-        changed = True
-        while changed:
-            changed = False
-            current = list(closure)
-            for p in current:
-                pd = dict(p)
-                for q in current:
-                    composed = frozenset(compose_maps(pd, dict(q)).items())
-                    if composed not in closure:
-                        closure.add(composed)
-                        changed = True
-        if closure != perms:
+        if not is_closed_group(perms, identity):
             issues.append(f"{rep}: self-loop permutations are not a closed group")
 
     for a, m, b in linked:
@@ -1222,6 +1248,33 @@ def selftest():
             f"{'' if got else '  (' + (why or '') + ')'}"
         )
 
+    # Independent oracle: exhaustive pairwise composition of tuple permutations.
+    # Include every subset through S3, larger closed groups, and deletions from them.
+    # In particular, supplying generators without their products must be rejected.
+    group_checks = []
+    for degree in range(6):
+        symmetric = list(itertools.permutations(range(degree)))
+        if degree <= 3:
+            subsets = [set(s) for n in range(len(symmetric) + 1) for s in itertools.combinations(symmetric, n)]
+        else:
+            full = set(symmetric)
+            subsets = [full, *(full - {p} for p in symmetric)]
+        # Nonconsecutive slot names ensure this is not tied to dense integer slots.
+        labels = tuple(f"slot-{7 * i + 3}" for i in range(degree))
+        identity = frozenset((s, s) for s in labels)
+        for subset in subsets:
+            expected = tuple(range(degree)) in subset and all(
+                tuple(p[q[i]] for i in range(degree)) in subset for p in subset for q in subset
+            )
+            perms = {frozenset((labels[i], labels[j]) for i, j in enumerate(p)) for p in subset}
+            group_checks.append(is_closed_group(perms, identity) == expected)
+    groups_ok = all(group_checks)
+    bad += not groups_ok
+    print(
+        f"  {'ok  ' if groups_ok else 'FAIL'} group closure agrees with pairwise oracle: "
+        f"{sum(group_checks)}/{len(group_checks)}"
+    )
+
     lam, fop = X.LANG["lam"], X.LANG["f"]
     slots = {"var": (), "body": ()}
     valid = ("lam", [("child", "var", {0: 7}), ("child", "body", {})], "lc", lam)
@@ -1309,6 +1362,28 @@ def selftest():
     seeded.update(inconsistent_cycle["nodes"])
     inconsistent_cycle = {"nodes": seeded}
 
+    def group_doc(perms):
+        doc = null_doc()
+        nodes = doc["nodes"]
+        nodes["a"] = {"op": "opaque-a", "eclass": "U-a", "children": []}
+        for i in range(3):
+            nodes[f"slot{i}"] = {"op": str(i), "eclass": f"i64-{i}", "children": []}
+        nodes["aid"] = {
+            "op": "map-of",
+            "eclass": "Renaming-aid",
+            "children": [f"slot{i}" for i in range(3) for _ in range(2)],
+        }
+        nodes["csa"] = {"op": SYM.class_slots, "eclass": "Renaming-aid", "children": ["a"]}
+        for j, p in enumerate(perms):
+            nodes[f"p{j}"] = {
+                "op": "map-of",
+                "eclass": f"Renaming-p{j}",
+                "children": [f"slot{k}" for i, v in enumerate(p) for k in (i, v)],
+            }
+        nodes["group"] = {"op": "set-of", "eclass": "Group-a", "children": [f"p{j}" for j in range(len(perms))]}
+        nodes["ga"] = {"op": SYM.group, "eclass": "Group-a", "children": ["a"]}
+        return doc
+
     def noninjective_link(reverse=False):
         doc = null_doc()
         doc["nodes"].update(
@@ -1347,6 +1422,10 @@ def selftest():
         ("inconsistent RTL cycle", True, inconsistent_cycle),
         ("noninjective RTL forward", True, noninjective_link()),
         ("noninjective RTL reverse", True, noninjective_link(reverse=True)),
+        ("complete C3 group", False, group_doc([(0, 1, 2), (1, 2, 0), (2, 0, 1)])),
+        ("group missing product", True, group_doc([(0, 1, 2), (1, 2, 0)])),
+        ("group missing identity", True, group_doc([(1, 2, 0), (2, 0, 1)])),
+        ("group missing all elements", True, group_doc([])),
     ]
     var_one = null_doc()
     var_one["nodes"]["i1"] = {"op": "1", "eclass": "i64-1", "children": []}
@@ -1362,6 +1441,45 @@ def selftest():
         ok = bool(issues) == want_bad
         bad += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} full reader {name:20} rejected={bool(issues)}, expected={want_bad}")
+
+    # Links deliberately arrive out of traversal order, so assigning frames needs
+    # multiple passes. Both link directions must give the same representative frame,
+    # and the unrelated Null component must remain separate.
+    for reverse in (False, True):
+        doc = null_doc()
+        nodes = doc["nodes"]
+        for name, slot in (("a", 7), ("b", 11), ("c", 13)):
+            nodes[name] = {"op": f"opaque-{name}", "eclass": f"U-{name}", "children": []}
+            nodes[f"i-{name}"] = {"op": str(slot), "eclass": f"i64-{slot}", "children": []}
+            nodes[f"m-{name}"] = {
+                "op": "map-of",
+                "eclass": f"Renaming-{name}-id",
+                "children": [f"i-{name}", f"i-{name}"],
+            }
+            nodes[f"cs-{name}"] = {
+                "op": SYM.class_slots,
+                "eclass": f"Renaming-{name}-id",
+                "children": [name],
+            }
+        for a, b in (("b", "c"), ("c", "v"), ("a", "b")):
+            if reverse:
+                a, b = b, a
+            key = f"{a}-{b}"
+            nodes[f"m-{key}"] = {
+                "op": "map-of",
+                "eclass": f"Renaming-{key}",
+                "children": ["i0" if c == "v" else f"i-{c}" for c in (b, a)],
+            }
+            nodes[key] = {"op": SYM.renames, "eclass": f"Unit-{key}", "children": [a, f"m-{key}", b]}
+        graph, issues = build_encoding_graph(doc)
+        ok = (
+            not issues
+            and graph.slots == {"U-a": (7,), "U-n": ()}
+            and graph.group == {"U-a": {frozenset({(7, 7)})}, "U-n": {frozenset()}}
+            and graph.nodes == {"U-a": [("var", (("slot", 7),))], "U-n": [("null", ())]}
+        )
+        bad += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} full reader out-of-order links, reversed={reverse}")
 
     seen_multipliers = []
 
@@ -1398,7 +1516,7 @@ def selftest():
     bad += not warning_ok
     print(f"  {'ok  ' if warning_ok else 'FAIL'} serialization warnings detected={len(warnings)}, expected=2")
 
-    total = len(cases) + len(matcher_cases) + len(reader_cases) + len(full_reader_cases) + 4
+    total = len(cases) + len(matcher_cases) + len(reader_cases) + len(full_reader_cases) + 7
     print(f"\n{total - bad}/{total} self-tests pass")
     return 1 if bad else 0
 

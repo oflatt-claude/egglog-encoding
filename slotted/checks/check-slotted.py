@@ -294,7 +294,7 @@ CHECKS = [
     (
         "iso-selftest",
         ("slotted/xdiff/isomorphism.py", "selftest"),
-        ratio(r"(\d+)/(\d+) self-tests pass", 26),
+        ratio(r"(\d+)/(\d+) self-tests pass", 33),
         False,
         True,
     ),
