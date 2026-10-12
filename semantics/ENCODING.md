@@ -135,6 +135,13 @@ The new pass currently has kernel-checked proofs of:
   closure or implicit re-keying, including during queries, merges, and saturation.
 - `sourceMatch_of_encodedQuery`: sound view entries turn a flattened query match into
   an existing source query match, preserving the values needed by its rule head.
+- `execM_encode_inv` and `execM_encode_mergeShape`: successful compiled execution
+  preserves database well-formedness, a faithful live index, and the single-output
+  declaration shapes.
+- `mergeSaturateF_soundTerms` and `maintenance_soundTerms`: table merges and all
+  generated rebuilding rules preserve source justifications of retained entries.
+- `termsBuild_of_programStep`: constructor-source executions satisfy the value
+  invariant required by query readback, without the old restrictions on write actions.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view

@@ -6310,4 +6310,73 @@ theorem execM_contained {p : Program} (hns : p.NoSaturate)
         by simp [FDatabase.toDatabase_empty, Database.empty]⟩, ho⟩)
     hp h
 
+/-- A prelude command: a declaration or a rule, the two that write no data. -/
+def Cmd.DeclOrRule : Cmd → Prop
+  | .decl _ _ => True
+  | .rule _ => True
+  | _ => False
+
+/-- **`FDatabase.Inv` is vacuous at empty data**, whatever the signature and rules are. -/
+theorem FDatabase.Inv.of_empty_data {d : FDatabase} (ht : d.terms = []) (hr : d.rows = [])
+    (he : d.eqs = []) (hv : d.env = []) : d.Inv where
+  wf := by
+    have hterms : ∀ t, t ∉ d.toDatabase.terms := by
+      intro t hmem
+      rw [FDatabase.toDatabase_terms, ht] at hmem
+      exact absurd hmem (by simp)
+    exact ⟨fun t hmem => absurd hmem (hterms t), fun t hmem => absurd hmem (hterms t),
+      fun b hb => absurd (by rw [FDatabase.toDatabase_env, hv] at hb; exact hb) (by simp),
+      by
+        intro q hq _
+        rcases FDatabase.mem_toDatabase_eqs.mp hq with ⟨hqe, -⟩ | ⟨hqm, -, -⟩
+        · exact hqe
+        · rw [he] at hqm; exact absurd hqm (by simp)⟩
+  eqs := by intro p hp; rw [he] at hp; exact absurd hp (by simp)
+  index := ⟨fun r hrm => absurd (by rw [hr] at hrm; exact hrm) (by simp),
+    fun r hrm => absurd (by rw [hr] at hrm; exact hrm) (by simp),
+    fun r hrm => absurd (by rw [hr] at hrm; exact hrm) (by simp)⟩
+
+/-- A declaration or a rule writes no data. -/
+theorem execCmdM_data_of_declOrRule {d d' : FDatabase} {c : Cmd} (hc : c.DeclOrRule)
+    (hs : d.execCmdM c = some d') :
+    d'.terms = d.terms ∧ d'.rows = d.rows ∧ d'.eqs = d.eqs ∧ d'.env = d.env := by
+  cases c with
+  | decl f dc =>
+    rw [FDatabase.execCmdM, Option.some.injEq] at hs
+    exact ⟨by rw [← hs], by rw [← hs], by rw [← hs], by rw [← hs]⟩
+  | rule r =>
+    rw [FDatabase.execCmdM, Option.some.injEq] at hs
+    exact ⟨by rw [← hs], by rw [← hs], by rw [← hs], by rw [← hs]⟩
+  | action a => exact (hc : False).elim
+  | run R => exact (hc : False).elim
+  | saturate R => exact (hc : False).elim
+
+theorem execProgramM_data_of_declOrRule {p : Program} (hp : ∀ c ∈ p, c.DeclOrRule) :
+    ∀ {d d' : FDatabase}, d.execProgramM p = some d' →
+      d'.terms = d.terms ∧ d'.rows = d.rows ∧ d'.eqs = d.eqs ∧ d'.env = d.env := by
+  induction p with
+  | nil =>
+    intro d d' hs
+    rw [FDatabase.execProgramM, Option.some.injEq] at hs
+    exact ⟨by rw [← hs], by rw [← hs], by rw [← hs], by rw [← hs]⟩
+  | cons c cs ih =>
+    intro d d' hs
+    rw [FDatabase.execProgramM] at hs
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+    obtain ⟨t₁, r₁, e₁, v₁⟩ := execCmdM_data_of_declOrRule (hp c List.mem_cons_self) h₁
+    obtain ⟨t₂, r₂, e₂, v₂⟩ := ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc')) h₂
+    exact ⟨t₂.trans t₁, r₂.trans r₁, e₂.trans e₁, v₂.trans v₁⟩
+
+theorem FDatabase.execProgramM_append {p q : Program} : ∀ {d D : FDatabase},
+    d.execProgramM (p ++ q) = some D →
+      ∃ m, d.execProgramM p = some m ∧ m.execProgramM q = some D := by
+  induction p with
+  | nil => intro d D h; exact ⟨d, rfl, h⟩
+  | cons c cs ih =>
+    intro d D h
+    rw [List.cons_append, FDatabase.execProgramM] at h
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨m, hm, hmD⟩ := ih h₂
+    exact ⟨m, by rw [FDatabase.execProgramM, h₁, Option.bind_some]; exact hm, hmD⟩
+
 end Egglog

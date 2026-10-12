@@ -1,0 +1,267 @@
+import EgglogSemantics.Proofs.NoUnions
+
+/-! Complete entry atoms: evaluation, indexed matching, and single-atom rule heads. -/
+
+namespace Egglog
+
+/-- Replacing one operand replaces one value: what a column rule's key expression is. -/
+theorem Expr.evalList_set {sig : Signature} {ρ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      ∀ (i : Nat) {e : Expr} {t : Term}, e.eval sig ρ = some t →
+        Expr.evalList sig (es.set i e) ρ = some (ts.set i t)
+  | [], _, h, _, _, _, _ => by
+      rw [Expr.evalList, Option.some.injEq] at h
+      cases h
+      simp
+  | a :: as, _, h, 0, e, t, he => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      rw [List.set_cons_zero, List.set_cons_zero, Expr.evalList, he, Option.bind_some, hus]
+      rfl
+  | a :: as, _, h, i + 1, e, t, he => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      rw [List.set_cons_succ, List.set_cons_succ, Expr.evalList, hu, Option.bind_some,
+        Expr.evalList_set hus i he]
+      rfl
+
+/-- The value at one position is that operand's. -/
+theorem Expr.getElem?_of_evalList {sig : Signature} {ρ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
+      ∀ (i : Nat) {e : Expr}, es[i]? = some e →
+        ∃ t, ts[i]? = some t ∧ e.eval sig ρ = some t
+  | [], _, _, i, _, hi => by simp at hi
+  | e :: es, _, h, 0, e', hi => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      obtain rfl : e = e' := by simpa using hi
+      exact ⟨u, by simp, hu⟩
+  | e :: es, _, h, i + 1, e', hi => by
+      rw [Expr.evalList] at h
+      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
+      obtain ⟨t, ht, hev⟩ := Expr.getElem?_of_evalList hus i (by simpa using hi)
+      exact ⟨t, by simpa using ht, hev⟩
+
+/-- A one-element operand list. -/
+theorem Expr.evalList_singleton {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e] σ = some ts) : ∃ t, e.eval sig σ = some t ∧ ts = [t] := by
+  rw [Expr.evalList] at h
+  obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
+  rw [Expr.evalList, Option.map_some, Option.some.injEq] at h
+  exact ⟨t, ht, h.symm⟩
+
+/-- Evaluate a pair of operands. -/
+theorem Expr.evalList_pair {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
+    (h : Expr.evalList sig [e₁, e₂] σ = some ts) :
+    ∃ t₁ t₂, e₁.eval sig σ = some t₁ ∧ e₂.eval sig σ = some t₂ ∧ ts = [t₁, t₂] := by
+  rw [Expr.evalList] at h
+  obtain ⟨t₁, ht₁, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
+  obtain ⟨t₂, ht₂, rfl⟩ := Expr.evalList_singleton hus
+  exact ⟨t₁, t₂, ht₁, ht₂, rfl⟩
+
+/-- **What one entry atom records**: its evaluated key and output columns
+the operands evaluated to in the state the action ran in. `addRow` is `addTerm` on the entry
+term, so this is also the read-back of the *entry term* and of all of its subterms. -/
+theorem execAction_entry {d e : FDatabase} {f : FnName} {args out : List Expr}
+    (hp : Prim.ofName f = none)
+    (h : execAction d (.expr (.app f (args ++ out))) = some e) :
+    ∃ as vs, Expr.evalList d.sig args d.env = some as ∧
+      Expr.evalList d.sig out d.env = some vs ∧ e = d.addAtom (.app f (as ++ vs)) := by
+  obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
+  simp only [Expr.evalAtom, hp] at ht
+  split at ht
+  · obtain ⟨cols, hc, rfl⟩ := Option.map_eq_some_iff.mp ht
+    rw [Expr.evalList_append_map] at hc
+    obtain ⟨as, ha, hc⟩ := Option.bind_eq_some_iff.mp hc
+    obtain ⟨vs, hv, rfl⟩ := Option.map_eq_some_iff.mp hc
+    exact ⟨as, vs, ha, hv, rfl⟩
+  · simp at ht
+
+/-- At a diagonal database, every successful atom instance is a recorded term. -/
+theorem mem_terms_of_patternHolds_expr {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    {e : Expr} {σ : Env} (h : patternHolds d (.expr e) σ = true) :
+    ∃ t, e.evalAtom d.sig σ = some t ∧ t ∈ d.terms := by
+  cases he : e.entry d.sig with
+  | none =>
+    cases hv : e.evalAtom d.sig σ with
+    | none => simp [patternHolds, he, hv] at h
+    | some t =>
+      simp only [patternHolds, he, hv, decide_eq_true_eq] at h
+      obtain ⟨w, hw, hc⟩ := h
+      have ht : w = t := diag_closureF
+        (fun q hq => hr q (by simpa only [FDatabase.addTerm_eqs] using hq)) hc
+      exact ⟨t, rfl, ht ▸ hw⟩
+  | some entry =>
+    obtain ⟨f, keys, vals⟩ := entry
+    cases hv : Expr.evalList d.sig vals σ with
+    | none => simp [patternHolds, he, hv] at h
+    | some us =>
+      cases hk : Expr.evalList d.sig keys σ with
+      | none => simp [patternHolds, he, hv, hk] at h
+      | some ts =>
+        simp only [patternHolds, he, hv, hk, List.any_eq_true,
+          Bool.and_eq_true_iff, decide_eq_true_eq] at h
+        obtain ⟨r, hm, ⟨⟨hfn, ha⟩, ho⟩⟩ := h
+        have hcl : ∀ p ∈ ((d.addTerms ts).addTerms us).closureF, p.1 = p.2 :=
+          fun p hp => diag_closureF (fun q hq => hr q (by simpa using hq)) hp
+        obtain rfl : ts = r.args := eq_of_congrKeys hcl ha
+        obtain rfl : us = r.out := eq_of_congrKeys hcl ho
+        obtain ⟨dc, hd, hmg, -, -⟩ := Expr.entry_some he
+        refine ⟨.app f (r.args ++ r.out), Expr.evalAtom_entry he hk hv, ?_⟩
+        have hm' := mem_terms_of_indexOk hr hidx hm (by
+          rw [hfn, Signature.mergeOf, hd, Option.bind_some]
+          exact Option.isSome_iff_ne_none.mp hmg)
+        simpa only [hfn] using hm'
+
+/-- Read an atom's columns at any chosen syntactic split. The split need not be its index key. -/
+theorem mem_terms_of_patternHolds_entry {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    {vs as : List Expr} {f : FnName} {σ : Env} (hp : Prim.ofName f = none)
+    (h : patternHolds d (.expr (.app f (as ++ vs))) σ = true) :
+    ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
+      Expr.evalList d.sig vs σ = some us ∧
+      Term.app f (ts ++ us) ∈ d.terms := by
+  obtain ⟨t, hev, hm⟩ := mem_terms_of_patternHolds_expr hr hidx h
+  obtain ⟨cols, hcols, rfl⟩ := Expr.evalAtom_app_inv hp hev
+  obtain ⟨ts, us, hts, hus, rfl⟩ := Expr.evalList_append hcols
+  exact ⟨ts, us, hts, hus, hm⟩
+
+/-! ##### The substitution a pattern was checked at, and the one the head runs under -/
+
+/-- A binding a restricted substitution answers with is one the full substitution answers
+with, the globals shadowing both alike. -/
+theorem lookup_append_of_refines {env ρ σ : Env} (hr : Env.Refines ρ σ) {v : Var} {t : Term}
+    (h : Env.lookup v (env ++ ρ) = some t) : Env.lookup v (env ++ σ) = some t := by
+  by_cases hv : v ∈ Env.dom env
+  · rw [Env.lookup_append_of_mem hv]
+    rw [Env.lookup_append_of_mem hv] at h
+    exact h
+  · rw [Env.lookup_append_of_not_mem hv]
+    rw [Env.lookup_append_of_not_mem hv] at h
+    exact hr (v, t) (Env.mem_of_lookup h)
+
+mutual
+
+/-- **An evaluation survives un-restricting the substitution.** `Expr.eval` reads the
+environment only through `Env.lookup`, so what the pattern's own restriction pinned down the
+whole match pins down too — which is what lets a query atom's reading be used at the
+environment the *head* runs in. -/
+theorem Expr.eval_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refines ρ σ) :
+    ∀ (e : Expr) {t : Term}, e.eval sig (env ++ ρ) = some t → e.eval sig (env ++ σ) = some t
+  | .lit _, _, h => h
+  | .var _, _, h => by
+      rw [Expr.eval] at h ⊢
+      exact lookup_append_of_refines hr h
+  | .app f args, _, h => by
+      cases hp : Prim.ofName f with
+      | some p =>
+        simp only [Expr.eval, hp] at h ⊢
+        obtain ⟨ts, hts, hap⟩ := Option.bind_eq_some_iff.mp h
+        rw [Expr.evalList_of_refines hr args hts]
+        exact hap
+      | none =>
+        simp only [Expr.eval, hp] at h ⊢
+        by_cases hct : sig.IsCtor f
+        · rw [if_pos hct] at h ⊢
+          obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
+          rw [Expr.evalList_of_refines hr args hts]
+          exact congrArg some hap
+        · rw [if_neg hct] at h
+          exact absurd h (by simp)
+
+@[inherit_doc Expr.eval_of_refines]
+theorem Expr.evalList_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refines ρ σ) :
+    ∀ (es : List Expr) {ts : List Term},
+      Expr.evalList sig es (env ++ ρ) = some ts → Expr.evalList sig es (env ++ σ) = some ts
+  | [], _, h => h
+  | e :: es, _, h => by
+      rw [Expr.evalList] at h ⊢
+      obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨ts, hts, hcons⟩ := Option.map_eq_some_iff.mp hrest
+      rw [Expr.eval_of_refines hr e ht, Expr.evalList_of_refines hr es hts]
+      exact congrArg some hcons
+
+end
+
+/-- Every pattern of a matched query holds, at its own restriction of the substitution. -/
+theorem patternHolds_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
+    (h : σ ∈ matchQuery d q) {p : Pattern} (hp : p ∈ q) :
+    patternHolds d p (Env.canon (p.freeVars []) σ) = true := by
+  rw [matchQuery, List.mem_filter] at h
+  exact List.all_eq_true.mp h.2 p hp
+
+/-- **A matched query's row atom, read at the substitution its head runs under.** -/
+theorem mem_terms_of_mem_matchQuery_entry {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    {q : Query} {σ : Env} (hσ : σ ∈ matchQuery d q) {vs as : List Expr} {f : FnName}
+    (hn : Prim.ofName f = none) (hp : Pattern.expr (.app f (as ++ vs)) ∈ q) :
+    ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
+      Expr.evalList d.sig vs σ = some us ∧
+      Term.app f (ts ++ us) ∈ d.terms := by
+  obtain ⟨ts, us, ha, hv, hmem⟩ :=
+    mem_terms_of_patternHolds_entry hr hidx hn (patternHolds_of_mem_matchQuery hσ hp)
+  exact ⟨ts, us, Expr.evalList_of_refines (env := []) Env.refines_canon as ha,
+    Expr.evalList_of_refines (env := []) Env.refines_canon vs hv, hmem⟩
+
+/-! ##### The one `set` a maintenance head is -/
+
+/-- **A block that is one `set`, read back.** The environment and rule list come back from the
+pre-state, so what the firing contributes to `terms` is exactly the entry the `set` recorded.
+
+The reading is at `σ ++ d.env`, which is where `execLocalActions` runs a head: the match's own
+bindings win, and `Expr.eval_append_env` is what carries a matched atom's value into it. -/
+theorem execLocalActions_entry {d d' : FDatabase} {g : FnName} {args out : List Expr} {σ : Env}
+    (hp : Prim.ofName g = none)
+    (h : execLocalActions d [.expr (.app g (args ++ out))] σ = some d') :
+    ∃ es vs, Expr.evalList d.sig args (σ ++ d.env) = some es ∧
+      Expr.evalList d.sig out (σ ++ d.env) = some vs ∧
+      ∀ t ∈ d'.terms, t ∈ (FDatabase.addRow g es vs d).terms := by
+  rw [execLocalActions] at h
+  obtain ⟨e, he, rfl⟩ := Option.map_eq_some_iff.mp h
+  rw [execActions] at he
+  obtain ⟨e₁, he₁, he₂⟩ := Option.bind_eq_some_iff.mp he
+  rw [execActions, Option.some.injEq] at he₂
+  subst he₂
+  obtain ⟨es, vs, hes, hvs, rfl⟩ := execAction_entry hp he₁
+  exact ⟨es, vs, hes, hvs, fun t ht => ht⟩
+
+/-- One column of the right-hand list moved along a congruence. What the rebuild's column
+rules do to a key, pointwise. -/
+theorem CongList.setAt {db : Database} {as cs : List Term} {c x : Term} (i : Nat)
+    (h : CongList db as cs) (hget : cs[i]? = some c) (hcx : Cong db c x) :
+    CongList db as (cs.set i x) := by
+  rw [CongList.forall₂] at h ⊢
+  induction i generalizing as cs with
+  | zero =>
+    cases h with
+    | nil => simp at hget
+    | cons hab hl =>
+      obtain rfl : _ = c := by simpa using hget
+      simpa using List.Forall₂.cons (hab.trans hcx) hl
+  | succ n ih =>
+    cases h with
+    | nil => simp at hget
+    | cons hab hl => simpa using List.Forall₂.cons hab (ih hl (by simpa using hget))
+
+/-- A member of a list one position was replaced in is a member or the replacement. -/
+theorem mem_or_eq_of_mem_set {α : Type _} {l : List α} {i : Nat} {b a : α}
+    (h : a ∈ l.set i b) : a ∈ l ∨ a = b := by
+  induction l generalizing i with
+  | nil => simp at h
+  | cons c cs ih =>
+    cases i with
+    | zero =>
+      rw [List.set_cons_zero, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact Or.inr rfl
+      · exact Or.inl (List.mem_cons_of_mem _ h)
+    | succ j =>
+      rw [List.set_cons_succ, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact Or.inl List.mem_cons_self
+      · exact (ih h).imp (List.mem_cons_of_mem _) id
+
+end Egglog

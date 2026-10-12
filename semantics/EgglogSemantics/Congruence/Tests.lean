@@ -3,6 +3,10 @@ import EgglogSemantics.Congruence.Flatten
 import EgglogSemantics.Congruence.Relational
 import EgglogSemantics.Congruence.State
 import EgglogSemantics.Congruence.UnionFind
+import EgglogSemantics.Congruence.Execution
+import EgglogSemantics.Congruence.Merge
+import EgglogSemantics.Congruence.Maintenance
+import EgglogSemantics.Congruence.SourceState
 
 /-! Executable regressions for rebuilding, existence, and ordered query flattening. -/
 

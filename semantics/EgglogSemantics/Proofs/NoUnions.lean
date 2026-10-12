@@ -310,4 +310,83 @@ theorem execM_noUnions {p : Program} (hu : Program.UnionFree p) {d : FDatabase}
     (h : execM p = some d) : d.NoUnions :=
   execProgramM_noUnions hu empty_noUnions h
 
+/-- **Congruent key tuples are equal, against a diagonal closure.** Stated at the closure and
+not at a state, because `FDatabase.mergeRound` compares against the closure of its
+**pre-pass** state while the accumulator has moved on. -/
+theorem eq_of_congrKeys {cl : Finset (Term × Term)} (hcl : ∀ p ∈ cl, p.1 = p.2) :
+    ∀ {as bs : List Term}, FDatabase.congrKeys cl as bs = true → as = bs := by
+  intro as
+  induction as with
+  | nil =>
+    intro bs h
+    have hlen := (Bool.and_eq_true_iff.mp h).1
+    have h0 : (0 : Nat) = bs.length := by simpa using hlen
+    exact (List.eq_nil_of_length_eq_zero h0.symm).symm
+  | cons a as ih =>
+    intro bs h
+    obtain ⟨hlen, hall⟩ := Bool.and_eq_true_iff.mp h
+    match bs with
+    | [] => simp at hlen
+    | b :: bs' =>
+      have hlen' : (as.length == bs'.length) = true := by simpa using hlen
+      have hall' := List.all_eq_true.mp hall
+      have hab : (a, b) ∈ cl := by
+        have hq := hall' (a, b) (by rw [List.zip_cons_cons]; exact List.mem_cons_self)
+        simpa using hq
+      have hrest : FDatabase.congrKeys cl as bs' = true :=
+        Bool.and_eq_true_iff.mpr ⟨hlen', List.all_eq_true.mpr (fun q hq =>
+          hall' q (by rw [List.zip_cons_cons]; exact List.mem_cons_of_mem _ hq))⟩
+      have heq : a = b := hcl (a, b) hab
+      rw [heq, ih hrest]
+
+/-- A term the list held it still holds. -/
+theorem FDatabase.mem_addTerm_of_mem {d : FDatabase} {t s : Term} (hs : s ∈ d.terms) :
+    s ∈ (d.addTerm t).terms := by
+  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
+  exact Or.inr hs
+
+/-- Subterm closure survives an `addTerm`: what the list records is closed under subterms
+already. -/
+theorem FDatabase.SubtermClosed.addTerm {d : FDatabase} (h : d.SubtermClosed) (t : Term) :
+    (d.addTerm t).SubtermClosed := by
+  intro u hu s hs
+  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append] at hu ⊢
+  rcases hu with hu | hu
+  · exact Or.inl ((Term.mem_subtermList t).mpr
+      (((Term.mem_subtermList u).mp hs).trans ((Term.mem_subtermList t).mp hu)))
+  · exact Or.inr (h u hu s hs)
+
+theorem FDatabase.SubtermClosed.addRow {d : FDatabase} (h : d.SubtermClosed) (g : FnName)
+    (as vs : List Term) : (FDatabase.addRow g as vs d).SubtermClosed :=
+  h.addTerm (.app g (as ++ vs))
+
+/-- A column of a term the list holds is a term the list holds. -/
+theorem FDatabase.mem_terms_of_column {d : FDatabase} (hsc : d.SubtermClosed) {g : FnName}
+    {cols : List Term} (hmem : Term.app g cols ∈ d.terms) {c : Term} (hc : c ∈ cols) :
+    c ∈ d.terms :=
+  hsc _ hmem c ((Term.mem_subtermList _).mpr
+    (Term.arg_subterms hc (Term.self_mem_subterms c)))
+
+/-- An indexed function row has a recorded entry at exactly its keys when
+built-in equality is diagonal. -/
+theorem mem_terms_of_indexOk {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
+    {r : Row} (hm : r ∈ d.rows) (hmg : d.sig.mergeOf r.fn ≠ none) :
+    Term.app r.fn (r.args ++ r.out) ∈ d.terms := by
+  obtain ⟨bs, hcl, hmem⟩ := hidx.entry r hm hmg
+  obtain rfl : r.args = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
+  rw [FDatabase.toDatabase_terms] at hmem
+  exact hmem
+
+/-- A state that asserts nothing asserts nothing non-reflexive. -/
+theorem FDatabase.NoUnions.eqsRefl {d : FDatabase} (h : d.NoUnions) : d.EqsRefl := by
+  intro p hp
+  rw [h.eqs] at hp
+  exact absurd hp (by simp)
+
+/-- **The closure of a state that asserts nothing is the diagonal.** -/
+theorem diag_closureF {d : FDatabase} (hr : d.EqsRefl) {p : Term × Term}
+    (hp : p ∈ d.closureF) : p.1 = p.2 :=
+  Cong.eq_of_eqsRefl hr.toDatabase (FDatabase.mem_closureF_iff.mp (by
+    rw [show (p.1, p.2) = p from rfl]; exact hp))
+
 end Egglog

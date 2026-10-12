@@ -1,5 +1,5 @@
 import EgglogSemantics.Encoding.Encode
-import EgglogSemantics.Proofs.NoUnions
+import EgglogSemantics.Proofs.Entries
 
 /-!
 # The encoding correspondence: the claim, the decision procedure, and what they cost
@@ -2068,18 +2068,6 @@ theorem execProgramM_rules_mono {p : Program} :
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
     exact ih h₂ r (execCmdM_rules_mono h₁ r hr)
 
-theorem execProgramM_append {p q : Program} : ∀ {d D : FDatabase},
-    d.execProgramM (p ++ q) = some D →
-      ∃ m, d.execProgramM p = some m ∧ m.execProgramM q = some D := by
-  induction p with
-  | nil => intro d D h; exact ⟨d, rfl, h⟩
-  | cons c cs ih =>
-    intro d D h
-    rw [List.cons_append, FDatabase.execProgramM] at h
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨m, hm, hmD⟩ := ih h₂
-    exact ⟨m, by rw [FDatabase.execProgramM, h₁, Option.bind_some]; exact hm, hmD⟩
-
 @[simp] theorem addAtom_sig {d : FDatabase} {t : Term} : (d.addAtom t).sig = d.sig := rfl
 @[simp] theorem addAtom_env {d : FDatabase} {t : Term} : (d.addAtom t).env = d.env := rfl
 @[simp] theorem addAtom_eqs {d : FDatabase} {t : Term} : (d.addAtom t).eqs = d.eqs := rfl
@@ -2141,24 +2129,6 @@ theorem encodeBuildArgs_isAtomWrite : ∀ (es : List Expr) (n : Nat),
       · exact encodeBuildArgs_isAtomWrite es _ a h
 end
 
-/-- **What one entry atom records**: its evaluated key and output columns
-the operands evaluated to in the state the action ran in. `addRow` is `addTerm` on the entry
-term, so this is also the read-back of the *entry term* and of all of its subterms. -/
-theorem execAction_entry {d e : FDatabase} {f : FnName} {args out : List Expr}
-    (hp : Prim.ofName f = none)
-    (h : execAction d (.expr (.app f (args ++ out))) = some e) :
-    ∃ as vs, Expr.evalList d.sig args d.env = some as ∧
-      Expr.evalList d.sig out d.env = some vs ∧ e = d.addAtom (.app f (as ++ vs)) := by
-  obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
-  simp only [Expr.evalAtom, hp] at ht
-  split at ht
-  · obtain ⟨cols, hc, rfl⟩ := Option.map_eq_some_iff.mp ht
-    rw [Expr.evalList_append_map] at hc
-    obtain ⟨as, ha, hc⟩ := Option.bind_eq_some_iff.mp hc
-    obtain ⟨vs, hv, rfl⟩ := Option.map_eq_some_iff.mp hc
-    exact ⟨as, vs, ha, hv, rfl⟩
-  · simp at ht
-
 /-- An atom write leaves the environment alone. -/
 theorem execAction_env_of_isAtomWrite {d e : FDatabase} : ∀ {a : Action}, a.IsAtomWrite →
     execAction d a = some e → e.env = d.env := fun {_} _ h => FDatabase.execAction_env h
@@ -2191,24 +2161,6 @@ theorem execActions_append {as bs : List Action} : ∀ {d e : FDatabase},
       rw [List.cons_append, execActions, hv, Option.bind_some] at h
       obtain ⟨m, hm, hme⟩ := ih h
       exact ⟨m, by rw [execActions, hv, Option.bind_some]; exact hm, hme⟩
-
-/-- A one-element operand list. -/
-theorem Expr.evalList_singleton {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
-    (h : Expr.evalList sig [e] σ = some ts) : ∃ t, e.eval sig σ = some t ∧ ts = [t] := by
-  rw [Expr.evalList] at h
-  obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
-  rw [Expr.evalList, Option.map_some, Option.some.injEq] at h
-  exact ⟨t, ht, h.symm⟩
-
-/-- A two-element operand list: a view row's value tuple. -/
-theorem Expr.evalList_pair {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
-    (h : Expr.evalList sig [e₁, e₂] σ = some ts) :
-    ∃ t₁ t₂, e₁.eval sig σ = some t₁ ∧ e₂.eval sig σ = some t₂ ∧ ts = [t₁, t₂] := by
-  rw [Expr.evalList] at h
-  obtain ⟨t₁, ht₁, h⟩ := Option.bind_eq_some_iff.mp h
-  obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
-  obtain ⟨t₂, ht₂, rfl⟩ := Expr.evalList_singleton hus
-  exact ⟨t₁, t₂, ht₁, ht₂, rfl⟩
 
 /-- **The two rows one `encodeBuild` application writes**: the view row `@fView(is) ↦ (v, pf)`
 and the term-relation row `@fTerm(is, v)`, at the key tuple `is` the arguments evaluated to and
@@ -5237,13 +5189,6 @@ at the very instances the strong ones fail on — and `ncTgt_viewsCover` is the 
 holding *derivably*, out of `ncTgt_viewLeaderRows` and `ncTgt_viewRepr_total` rather than by
 hand, which is what says the leader tuple answers every instance and not just this one. -/
 
-/-- `viewName` is injective, which is what lets an entry term name its constructor. -/
-theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by
-  have h2 := congrArg String.toList h
-  rw [viewName, viewName, String.toList_append, String.toList_append, String.toList_append,
-    String.toList_append] at h2
-  exact String.toList_inj.mp (List.append_cancel_left (List.append_cancel_right h2))
-
 /-- **A view is never a term relation**, whatever the two constructors: the two suffixes
 differ in their last character. Needed wherever a term-relation row is as wide as a view
 entry, which it is at every constructor of positive arity — a nullary one's row has a single
@@ -5252,14 +5197,6 @@ theorem viewName_ne_termName {f g : FnName} : viewName f ≠ termName g := by
   intro h
   have h2 := congrArg (fun s => (String.toList s).reverse) h
   simp [viewName, termName, String.toList_append, List.reverse_append] at h2
-
-/-- **A view is never the union-find table**, whatever the constructor: the two names differ
-in their last character. The `@UF` row is as wide as a nullary view entry plus a column, so
-nothing about lengths excludes it. -/
-theorem viewName_ne_ufName {f : FnName} : viewName f ≠ ufName := by
-  intro h
-  have h2 := congrArg (fun s => (String.toList s).reverse) h
-  simp [viewName, ufName, String.toList_append, List.reverse_append] at h2
 
 /-- **A term relation is never the union-find table**, by the last character. -/
 theorem termName_ne_ufName {f : FnName} : termName f ≠ ufName := by
@@ -6173,24 +6110,6 @@ invented class is congruent *there* — but then the two halves of `encode_corre
 relations over different sources. The correspondence instead requires both endpoints
 to belong to the original source's terms. -/
 
-/-- One column of the right-hand list moved along a congruence. What the rebuild's column
-rules do to a key, pointwise. -/
-theorem CongList.setAt {db : Database} {as cs : List Term} {c x : Term} (i : Nat)
-    (h : CongList db as cs) (hget : cs[i]? = some c) (hcx : Cong db c x) :
-    CongList db as (cs.set i x) := by
-  rw [CongList.forall₂] at h ⊢
-  induction i generalizing as cs with
-  | zero =>
-    cases h with
-    | nil => simp at hget
-    | cons hab hl =>
-      obtain rfl : _ = c := by simpa using hget
-      simpa using List.Forall₂.cons (hab.trans hcx) hl
-  | succ n ih =>
-    cases h with
-    | nil => simp at hget
-    | cons hab hl => simpa using List.Forall₂.cons hab (ih hl (by simpa using hget))
-
 /-- **What one view entry claims about the source**: `f` applied to *some* source term list
 that reads the key `cs` is congruent to the entry's e-class column `e`.
 
@@ -6898,41 +6817,6 @@ theorem execM_encode_mergeShape {P : Program} {tgt : FDatabase}
 congruent keys are equal keys and the two entry terms a firing combines are entries at one
 key — which is exactly `cong_of_entrySound_collide`'s hypothesis. -/
 
-/-- **The closure of a state that asserts nothing is the diagonal.** -/
-theorem diag_closureF {d : FDatabase} (hr : d.EqsRefl) {p : Term × Term}
-    (hp : p ∈ d.closureF) : p.1 = p.2 :=
-  Cong.eq_of_eqsRefl hr.toDatabase (FDatabase.mem_closureF_iff.mp (by
-    rw [show (p.1, p.2) = p from rfl]; exact hp))
-
-/-- **Congruent key tuples are equal, against a diagonal closure.** Stated at the closure and
-not at a state, because `FDatabase.mergeRound` compares against the closure of its
-**pre-pass** state while the accumulator has moved on. -/
-theorem eq_of_congrKeys {cl : Finset (Term × Term)} (hcl : ∀ p ∈ cl, p.1 = p.2) :
-    ∀ {as bs : List Term}, FDatabase.congrKeys cl as bs = true → as = bs := by
-  intro as
-  induction as with
-  | nil =>
-    intro bs h
-    have hlen := (Bool.and_eq_true_iff.mp h).1
-    have h0 : (0 : Nat) = bs.length := by simpa using hlen
-    exact (List.eq_nil_of_length_eq_zero h0.symm).symm
-  | cons a as ih =>
-    intro bs h
-    obtain ⟨hlen, hall⟩ := Bool.and_eq_true_iff.mp h
-    match bs with
-    | [] => simp at hlen
-    | b :: bs' =>
-      have hlen' : (as.length == bs'.length) = true := by simpa using hlen
-      have hall' := List.all_eq_true.mp hall
-      have hab : (a, b) ∈ cl := by
-        have hq := hall' (a, b) (by rw [List.zip_cons_cons]; exact List.mem_cons_self)
-        simpa using hq
-      have hrest : FDatabase.congrKeys cl as bs' = true :=
-        Bool.and_eq_true_iff.mpr ⟨hlen', List.all_eq_true.mpr (fun q hq =>
-          hall' q (by rw [List.zip_cons_cons]; exact List.mem_cons_of_mem _ hq))⟩
-      have heq : a = b := hcl (a, b) hab
-      rw [heq, ih hrest]
-
 /-! ##### What a merge firing writes
 
 `FDatabase.mergeRound` is a rebuild and then a fold of `FDatabase.mergeOneWith` over row
@@ -7072,48 +6956,6 @@ are the declaration's (`FDatabase.IndexOk.width`). -/
 theorem FDatabase.SoundTerms.mono_terms {src : Database} {d e : FDatabase}
     (ht : ∀ t ∈ e.terms, t ∈ d.terms) (h : d.SoundTerms src) : e.SoundTerms src :=
   ⟨fun f cs x pf hm => h.1 f cs x pf (ht _ hm), fun x p pf hm => h.2 x p pf (ht _ hm)⟩
-
-/-- A term the list held it still holds. -/
-theorem FDatabase.mem_addTerm_of_mem {d : FDatabase} {t s : Term} (hs : s ∈ d.terms) :
-    s ∈ (d.addTerm t).terms := by
-  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
-  exact Or.inr hs
-
-/-- Subterm closure survives an `addTerm`: what the list records is closed under subterms
-already. -/
-theorem FDatabase.SubtermClosed.addTerm {d : FDatabase} (h : d.SubtermClosed) (t : Term) :
-    (d.addTerm t).SubtermClosed := by
-  intro u hu s hs
-  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append] at hu ⊢
-  rcases hu with hu | hu
-  · exact Or.inl ((Term.mem_subtermList t).mpr
-      (((Term.mem_subtermList u).mp hs).trans ((Term.mem_subtermList t).mp hu)))
-  · exact Or.inr (h u hu s hs)
-
-@[inherit_doc FDatabase.SubtermClosed.addTerm]
-theorem FDatabase.SubtermClosed.addRow {d : FDatabase} (h : d.SubtermClosed) (g : FnName)
-    (as vs : List Term) : (FDatabase.addRow g as vs d).SubtermClosed :=
-  h.addTerm (.app g (as ++ vs))
-
-/-- A column of a term the list holds is a term the list holds. -/
-theorem FDatabase.mem_terms_of_column {d : FDatabase} (hsc : d.SubtermClosed) {g : FnName}
-    {cols : List Term} (hmem : Term.app g cols ∈ d.terms) {c : Term} (hc : c ∈ cols) :
-    c ∈ d.terms :=
-  hsc _ hmem c ((Term.mem_subtermList _).mpr
-    (Term.arg_subterms hc (Term.self_mem_subterms c)))
-
-/-- **A row is an entry term**, where the state asserts nothing: `FDatabase.IndexOk.entry`
-reads the key up to a congruence that is the identity there. This is the direction soundness
-needs, and the one `cxTgt_not_indexCurrent` does *not* refute — its converse
-`FDatabase.IndexCurrent` is what that refutes, which is why this residue and
-`execM_viewJoined` are separate holes. -/
-theorem mem_terms_of_indexOk {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
-    {r : Row} (hm : r ∈ d.rows) (hmg : d.sig.mergeOf r.fn ≠ none) :
-    Term.app r.fn (r.args ++ r.out) ∈ d.terms := by
-  obtain ⟨bs, hcl, hmem⟩ := hidx.entry r hm hmg
-  obtain rfl : r.args = bs := CongList.eq_of_eqsRefl hr.toDatabase hcl
-  rw [FDatabase.toDatabase_terms] at hmem
-  exact hmem
 
 /-- **A row's key columns are terms the state holds**, so the closure records each of them
 reflexively. This is the side condition `row_unique_of_settled` and `ufRowsForest_of_settled`
@@ -7575,12 +7417,6 @@ accumulator. `FDatabase.Inv.mergeRound_of_legalMerges` is what re-establishes
 `FDatabase.IndexOk` at each step and `Signature.MergesLegal` is what it costs;
 `Proofs/Counterexamples.lean`'s `cexSig_not_mergesLegal` is that hypothesis being load-bearing
 rather than decorative. -/
-
-/-- A state that asserts nothing asserts nothing non-reflexive. -/
-theorem FDatabase.NoUnions.eqsRefl {d : FDatabase} (h : d.NoUnions) : d.EqsRefl := by
-  intro p hp
-  rw [h.eqs] at hp
-  exact absurd hp (by simp)
 
 /-- **One merge firing, at whichever orientation `mergeOneWith` chose.** -/
 theorem mergeOneWith_soundTerms {src : Database} {cl : Finset (Term × Term)}
@@ -11212,151 +11048,6 @@ theorem rulesEncodedOk_encodeCmds {P : Program} : ∀ (p : Program), (∀ c ∈ 
       · exact rulesEncodedOk_encodeCmds cs
           (fun x hx => hp x (List.mem_cons_of_mem c hx)) _ _ _ c' h
 
-/-- At a diagonal database, every successful atom instance is a recorded term. -/
-theorem mem_terms_of_patternHolds_expr {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
-    {e : Expr} {σ : Env} (h : patternHolds d (.expr e) σ = true) :
-    ∃ t, e.evalAtom d.sig σ = some t ∧ t ∈ d.terms := by
-  cases he : e.entry d.sig with
-  | none =>
-    cases hv : e.evalAtom d.sig σ with
-    | none => simp [patternHolds, he, hv] at h
-    | some t =>
-      simp only [patternHolds, he, hv, decide_eq_true_eq] at h
-      obtain ⟨w, hw, hc⟩ := h
-      have ht : w = t := diag_closureF
-        (fun q hq => hr q (by simpa only [FDatabase.addTerm_eqs] using hq)) hc
-      exact ⟨t, rfl, ht ▸ hw⟩
-  | some entry =>
-    obtain ⟨f, keys, vals⟩ := entry
-    cases hv : Expr.evalList d.sig vals σ with
-    | none => simp [patternHolds, he, hv] at h
-    | some us =>
-      cases hk : Expr.evalList d.sig keys σ with
-      | none => simp [patternHolds, he, hv, hk] at h
-      | some ts =>
-        simp only [patternHolds, he, hv, hk, List.any_eq_true,
-          Bool.and_eq_true_iff, decide_eq_true_eq] at h
-        obtain ⟨r, hm, ⟨⟨hfn, ha⟩, ho⟩⟩ := h
-        have hcl : ∀ p ∈ ((d.addTerms ts).addTerms us).closureF, p.1 = p.2 :=
-          fun p hp => diag_closureF (fun q hq => hr q (by simpa using hq)) hp
-        obtain rfl : ts = r.args := eq_of_congrKeys hcl ha
-        obtain rfl : us = r.out := eq_of_congrKeys hcl ho
-        obtain ⟨dc, hd, hmg, -, -⟩ := Expr.entry_some he
-        refine ⟨.app f (r.args ++ r.out), Expr.evalAtom_entry he hk hv, ?_⟩
-        have hm' := mem_terms_of_indexOk hr hidx hm (by
-          rw [hfn, Signature.mergeOf, hd, Option.bind_some]
-          exact Option.isSome_iff_ne_none.mp hmg)
-        simpa only [hfn] using hm'
-
-/-- Read an atom's columns at any chosen syntactic split. The split need not be its index key. -/
-theorem mem_terms_of_patternHolds_entry {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
-    {vs as : List Expr} {f : FnName} {σ : Env} (hp : Prim.ofName f = none)
-    (h : patternHolds d (.expr (.app f (as ++ vs))) σ = true) :
-    ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
-      Expr.evalList d.sig vs σ = some us ∧
-      Term.app f (ts ++ us) ∈ d.terms := by
-  obtain ⟨t, hev, hm⟩ := mem_terms_of_patternHolds_expr hr hidx h
-  obtain ⟨cols, hcols, rfl⟩ := Expr.evalAtom_app_inv hp hev
-  obtain ⟨ts, us, hts, hus, rfl⟩ := Expr.evalList_append hcols
-  exact ⟨ts, us, hts, hus, hm⟩
-
-/-! ##### The substitution a pattern was checked at, and the one the head runs under -/
-
-/-- A binding a restricted substitution answers with is one the full substitution answers
-with, the globals shadowing both alike. -/
-theorem lookup_append_of_refines {env ρ σ : Env} (hr : Env.Refines ρ σ) {v : Var} {t : Term}
-    (h : Env.lookup v (env ++ ρ) = some t) : Env.lookup v (env ++ σ) = some t := by
-  by_cases hv : v ∈ Env.dom env
-  · rw [Env.lookup_append_of_mem hv]
-    rw [Env.lookup_append_of_mem hv] at h
-    exact h
-  · rw [Env.lookup_append_of_not_mem hv]
-    rw [Env.lookup_append_of_not_mem hv] at h
-    exact hr (v, t) (Env.mem_of_lookup h)
-
-mutual
-
-/-- **An evaluation survives un-restricting the substitution.** `Expr.eval` reads the
-environment only through `Env.lookup`, so what the pattern's own restriction pinned down the
-whole match pins down too — which is what lets a query atom's reading be used at the
-environment the *head* runs in. -/
-theorem Expr.eval_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refines ρ σ) :
-    ∀ (e : Expr) {t : Term}, e.eval sig (env ++ ρ) = some t → e.eval sig (env ++ σ) = some t
-  | .lit _, _, h => h
-  | .var _, _, h => by
-      rw [Expr.eval] at h ⊢
-      exact lookup_append_of_refines hr h
-  | .app f args, _, h => by
-      cases hp : Prim.ofName f with
-      | some p =>
-        simp only [Expr.eval, hp] at h ⊢
-        obtain ⟨ts, hts, hap⟩ := Option.bind_eq_some_iff.mp h
-        rw [Expr.evalList_of_refines hr args hts]
-        exact hap
-      | none =>
-        simp only [Expr.eval, hp] at h ⊢
-        by_cases hct : sig.IsCtor f
-        · rw [if_pos hct] at h ⊢
-          obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
-          rw [Expr.evalList_of_refines hr args hts]
-          exact congrArg some hap
-        · rw [if_neg hct] at h
-          exact absurd h (by simp)
-
-@[inherit_doc Expr.eval_of_refines]
-theorem Expr.evalList_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refines ρ σ) :
-    ∀ (es : List Expr) {ts : List Term},
-      Expr.evalList sig es (env ++ ρ) = some ts → Expr.evalList sig es (env ++ σ) = some ts
-  | [], _, h => h
-  | e :: es, _, h => by
-      rw [Expr.evalList] at h ⊢
-      obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨ts, hts, hcons⟩ := Option.map_eq_some_iff.mp hrest
-      rw [Expr.eval_of_refines hr e ht, Expr.evalList_of_refines hr es hts]
-      exact congrArg some hcons
-
-end
-
-/-- Every pattern of a matched query holds, at its own restriction of the substitution. -/
-theorem patternHolds_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
-    (h : σ ∈ matchQuery d q) {p : Pattern} (hp : p ∈ q) :
-    patternHolds d p (Env.canon (p.freeVars []) σ) = true := by
-  rw [matchQuery, List.mem_filter] at h
-  exact List.all_eq_true.mp h.2 p hp
-
-/-- **A matched query's row atom, read at the substitution its head runs under.** -/
-theorem mem_terms_of_mem_matchQuery_entry {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
-    {q : Query} {σ : Env} (hσ : σ ∈ matchQuery d q) {vs as : List Expr} {f : FnName}
-    (hn : Prim.ofName f = none) (hp : Pattern.expr (.app f (as ++ vs)) ∈ q) :
-    ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
-      Expr.evalList d.sig vs σ = some us ∧
-      Term.app f (ts ++ us) ∈ d.terms := by
-  obtain ⟨ts, us, ha, hv, hmem⟩ :=
-    mem_terms_of_patternHolds_entry hr hidx hn (patternHolds_of_mem_matchQuery hσ hp)
-  exact ⟨ts, us, Expr.evalList_of_refines (env := []) Env.refines_canon as ha,
-    Expr.evalList_of_refines (env := []) Env.refines_canon vs hv, hmem⟩
-
-/-! ##### The one `set` a maintenance head is -/
-
-/-- **A block that is one `set`, read back.** The environment and rule list come back from the
-pre-state, so what the firing contributes to `terms` is exactly the entry the `set` recorded.
-
-The reading is at `σ ++ d.env`, which is where `execLocalActions` runs a head: the match's own
-bindings win, and `Expr.eval_append_env` is what carries a matched atom's value into it. -/
-theorem execLocalActions_entry {d d' : FDatabase} {g : FnName} {args out : List Expr} {σ : Env}
-    (hp : Prim.ofName g = none) (h : execLocalActions d [.expr (.app g (args ++ out))] σ = some d') :
-    ∃ es vs, Expr.evalList d.sig args (σ ++ d.env) = some es ∧
-      Expr.evalList d.sig out (σ ++ d.env) = some vs ∧
-      ∀ t ∈ d'.terms, t ∈ (FDatabase.addRow g es vs d).terms := by
-  rw [execLocalActions] at h
-  obtain ⟨e, he, rfl⟩ := Option.map_eq_some_iff.mp h
-  rw [execActions] at he
-  obtain ⟨e₁, he₁, he₂⟩ := Option.bind_eq_some_iff.mp he
-  rw [execActions, Option.some.injEq] at he₂
-  subst he₂
-  obtain ⟨es, vs, hes, hvs, rfl⟩ := execAction_entry hp he₁
-  exact ⟨es, vs, hes, hvs, fun t ht => ht⟩
-
 /-! ##### The proof shells a maintenance head mints -/
 
 /-- **A view is never a congruence head**, whatever the constructor and whatever the arity:
@@ -11422,48 +11113,6 @@ theorem Expr.exists_of_mem_evalList {sig : Signature} {ρ : Env} :
       · exact ⟨e, List.mem_cons_self, hu⟩
       · obtain ⟨e', he', hev⟩ := Expr.exists_of_mem_evalList hus t ht'
         exact ⟨e', List.mem_cons_of_mem _ he', hev⟩
-
-/-- The value at one position is that operand's. -/
-theorem Expr.getElem?_of_evalList {sig : Signature} {ρ : Env} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
-      ∀ (i : Nat) {e : Expr}, es[i]? = some e →
-        ∃ t, ts[i]? = some t ∧ e.eval sig ρ = some t
-  | [], _, _, i, _, hi => by simp at hi
-  | e :: es, _, h, 0, e', hi => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      obtain rfl : e = e' := by simpa using hi
-      exact ⟨u, by simp, hu⟩
-  | e :: es, _, h, i + 1, e', hi => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      obtain ⟨t, ht, hev⟩ := Expr.getElem?_of_evalList hus i (by simpa using hi)
-      exact ⟨t, by simpa using ht, hev⟩
-
-/-- Replacing one operand replaces one value: what a column rule's key expression is. -/
-theorem Expr.evalList_set {sig : Signature} {ρ : Env} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
-      ∀ (i : Nat) {e : Expr} {t : Term}, e.eval sig ρ = some t →
-        Expr.evalList sig (es.set i e) ρ = some (ts.set i t)
-  | [], _, h, _, _, _, _ => by
-      rw [Expr.evalList, Option.some.injEq] at h
-      cases h
-      simp
-  | a :: as, _, h, 0, e, t, he => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      rw [List.set_cons_zero, List.set_cons_zero, Expr.evalList, he, Option.bind_some, hus]
-      rfl
-  | a :: as, _, h, i + 1, e, t, he => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      rw [List.set_cons_succ, List.set_cons_succ, Expr.evalList, hu, Option.bind_some,
-        Expr.evalList_set hus i he]
-      rfl
 
 /-- A singleton operand list. -/
 theorem Expr.evalList_single {sig : Signature} {ρ : Env} {e : Expr} {ts : List Term}
@@ -11604,24 +11253,6 @@ theorem entryShaped_mem_of_evalList {d : FDatabase} {sig : Signature} {ρ : Env}
 end
 
 /-! ##### Two more list facts -/
-
-/-- A member of a list one position was replaced in is a member or the replacement. -/
-theorem mem_or_eq_of_mem_set {α : Type _} {l : List α} {i : Nat} {b a : α}
-    (h : a ∈ l.set i b) : a ∈ l ∨ a = b := by
-  induction l generalizing i with
-  | nil => simp at h
-  | cons c cs ih =>
-    cases i with
-    | zero =>
-      rw [List.set_cons_zero, List.mem_cons] at h
-      rcases h with rfl | h
-      · exact Or.inr rfl
-      · exact Or.inl (List.mem_cons_of_mem _ h)
-    | succ j =>
-      rw [List.set_cons_succ, List.mem_cons] at h
-      rcases h with rfl | h
-      · exact Or.inl List.mem_cons_self
-      · exact (ih h).imp (List.mem_cons_of_mem _) id
 
 /-! ##### The three families, one firing each
 

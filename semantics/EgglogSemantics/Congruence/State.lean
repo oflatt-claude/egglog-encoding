@@ -8,6 +8,10 @@ def SoundTerms (d : FDatabase) (src : Database) : Prop :=
   (∀ f cs e, Term.app (viewName f) (cs ++ [e]) ∈ d.terms → EntrySound src f cs e) ∧
   (∀ t p, Term.app ufName [t, p] ∈ d.terms → Cong src t p)
 
+theorem SoundTerms.mono_terms {src : Database} {d e : FDatabase}
+    (ht : ∀ t ∈ e.terms, t ∈ d.terms) (h : SoundTerms d src) : SoundTerms e src :=
+  ⟨fun f cs x hm => h.1 f cs x (ht _ hm), fun x p hm => h.2 x p (ht _ hm)⟩
+
 theorem viewsSound_of_soundTerms {src : Database} {d : FDatabase} (hr : d.EqsRefl)
     (h : SoundTerms d src) :
     ViewsSound d.toDatabase src ∧ EdgesSound d.toDatabase src := by
@@ -68,6 +72,12 @@ theorem SoundTerms.addRow {src : Database} {d : FDatabase} {g : FnName}
       Cong src x p) :
     SoundTerms (d.addRow g as vs) src := h.addTerm hv hu
 
+theorem SoundTerms.addTerm_of_mem {src : Database} {d : FDatabase}
+    (hsc : d.SubtermClosed) (h : SoundTerms d src) {t : Term} (ht : t ∈ d.terms) :
+    SoundTerms (d.addTerm t) src :=
+  h.addTerm (fun f cs e hm => h.1 f cs e (hsc t ht _ hm))
+    (fun a b hm => h.2 a b (hsc t ht _ hm))
+
 theorem SoundTerms.union {src : Database} {d₁ d₂ : FDatabase}
     (h₁ : SoundTerms d₁ src) (h₂ : SoundTerms d₂ src) : SoundTerms (d₁.union d₂) src := by
   constructor
@@ -126,5 +136,42 @@ theorem not_entryShaped_of_ne {g : FnName} (hv : ∀ f, g ≠ viewName f) (hu : 
   rintro (⟨f, cs, e, h⟩ | ⟨x, p, h⟩)
   · exact hv f (Term.app.inj h).1
   · exact hu (Term.app.inj h).1
+
+/-- Writing an already justified edge cannot introduce an unjustified entry through
+its children: both columns and all their subterms were already held. -/
+theorem SoundTerms.addUF {src : Database} {d : FDatabase} (hsc : d.SubtermClosed)
+    (h : SoundTerms d src) {a b : Term} (ha : a ∈ d.terms) (hb : b ∈ d.terms)
+    (hc : Cong src a b) : SoundTerms (d.addAtom (.app ufName [a, b])) src := by
+  apply SoundTerms.mono_terms (d := d.addTerm (.app ufName [a, b])) (fun _ ht => ht)
+  refine h.addTerm_top (fun s hs hn _ => ?_) (fun f cs e he => ?_) (fun x p he => ?_)
+  · have hcol : ∀ c ∈ [a, b], c ∈ d.terms := by
+      intro c hc
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl <;> assumption
+    exact FDatabase.subterms_of_columns hsc hcol s hs hn
+  · exact False.elim (viewName_ne_ufName (Term.app.inj he).1.symm)
+  · have hab : a = x ∧ b = p := by simpa using (Term.app.inj he).2
+    simpa [← hab.1, ← hab.2] using hc
+
+theorem SoundTerms.addView {src : Database} {d : FDatabase} (hsc : d.SubtermClosed)
+    (h : SoundTerms d src) {f : FnName} {cs : List Term} {e : Term}
+    (hcs : ∀ c ∈ cs, c ∈ d.terms) (he : e ∈ d.terms) (hs : EntrySound src f cs e) :
+    SoundTerms (d.addAtom (.app (viewName f) (cs ++ [e]))) src := by
+  apply SoundTerms.mono_terms
+    (d := d.addTerm (.app (viewName f) (cs ++ [e]))) (fun _ ht => ht)
+  refine h.addTerm_top (fun s ht hn _ => ?_) (fun g ks out ht => ?_) (fun x p ht => ?_)
+  · apply FDatabase.subterms_of_columns hsc (cols := cs ++ [e]) _ s ht hn
+    intro c hc
+    rcases List.mem_append.mp hc with hc | hc
+    · exact hcs c hc
+    · obtain rfl := List.mem_singleton.mp hc
+      exact he
+  · obtain ⟨hname, hcols⟩ := Term.app.inj ht
+    obtain rfl := viewName_inj hname
+    obtain ⟨hkeys, hout⟩ := List.append_inj' hcols rfl
+    have hv : e = out := by simpa using hout
+    rw [← hkeys, ← hv]
+    exact hs
+  · exact False.elim (viewName_ne_ufName (Term.app.inj ht).1)
 
 end Egglog.Congruence
