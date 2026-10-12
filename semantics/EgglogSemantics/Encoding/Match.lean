@@ -119,10 +119,6 @@ reading of a pattern is stuck unless the pattern's heads build. Under
 `Program.EncodeDomain` they do — `noPrim` and `ctorsOnly` — and this is that as a property
 of the state, which is the form the correspondence can use. -/
 
-/-- **Every application the source holds is a declared constructor's, applied.** -/
-def Database.TermsBuild (src : Database) : Prop :=
-  ∀ f as, Term.app f as ∈ src.terms → Prim.ofName f = none ∧ src.sig.IsCtor f
-
 /-! ### The correspondence, at one pattern expression
 
 **The core.** No `encode`, no `execM`, no `Matches` on the target: three named properties of

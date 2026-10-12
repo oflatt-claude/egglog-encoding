@@ -1,5 +1,8 @@
-import EgglogSemantics.Congruence.Correspond
+import EgglogSemantics.Congruence.Match
 import EgglogSemantics.Congruence.Flatten
+import EgglogSemantics.Congruence.Relational
+import EgglogSemantics.Congruence.State
+import EgglogSemantics.Congruence.UnionFind
 
 /-! Executable regressions for rebuilding, existence, and ordered query flattening. -/
 
@@ -36,6 +39,19 @@ private def missingPremise : Program :=
 #guard (execM (encode missingPremise)).isSome
 #guard !(runSameClass (encode missingPremise) (term "A") (term "B"))
 #guard !(runSameClass (encode missingPremise) (term "Missing") (term "Missing"))
+
+-- The target also executes with structural equality alone. Both the positive rebuild
+-- case and the absent-premise counterexample are checked through that runtime.
+#guard (Relational.exec (encode nestedUnion) (encode_unionFree nestedUnion)).any fun d =>
+  sameClassF d (.app "F" [term "A"]) (.app "F" [term "B"])
+#guard (Relational.exec (encode missingPremise) (encode_unionFree missingPremise)).any fun d =>
+  !sameClassF d (term "A") (term "B") && !sameClassF d (term "Missing") (term "Missing")
+
+-- Structural reflexivity cannot supply a nonexistent premise.
+#guard !Relational.patternHolds FDatabase.empty
+  (.eq (.var "x") (.var "x")) [("x", term "Missing")]
+#guard Relational.patternHolds (FDatabase.empty.addTerm (term "A"))
+  (.eq (.var "x") (.var "x")) [("x", term "A")]
 
 private def orderedQuery : Query :=
   [.eq (.app "F" [.app "G" [.var "x"], .app "G" [.var "x"]])

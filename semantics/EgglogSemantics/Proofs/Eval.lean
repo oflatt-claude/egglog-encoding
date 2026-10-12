@@ -919,4 +919,21 @@ theorem evalLocalActions_declaredTerms {db db' : Database} (hwf : db.WF)
   exact evalActions_declaredTerms (hwf.appendEnv hσ)
     (by intro g cs hm; rw [Database.terms_setEnv] at hm; exact hdt g cs hm) hw hsl hv g cs hmem
 
+/-- Evaluating a concatenation evaluates each part. -/
+theorem Expr.evalList_append {sig : Signature} {σ : Env} :
+    ∀ {es fs : List Expr} {ts : List Term}, Expr.evalList sig (es ++ fs) σ = some ts →
+      ∃ as bs, Expr.evalList sig es σ = some as ∧ Expr.evalList sig fs σ = some bs ∧
+        ts = as ++ bs := by
+  intro es
+  induction es with
+  | nil => intro fs ts h; exact ⟨[], ts, rfl, h, rfl⟩
+  | cons e es ih =>
+    intro fs ts h
+    rw [List.cons_append, Expr.evalList] at h
+    obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
+    obtain ⟨as, bs, has, hbs, rfl⟩ := ih hus
+    exact ⟨t :: as, bs, by rw [Expr.evalList, ht, Option.bind_some, has, Option.map_some],
+      hbs, rfl⟩
+
 end Egglog

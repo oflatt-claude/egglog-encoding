@@ -3102,6 +3102,12 @@ private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
 private def encodeLine (fuel : Nat) (c : String × Program) : String :=
   s!"{c.1}: {(Egglog.encodeCompare fuel c.2).render}"
 
+/-- Run the target with structural equality and the corpus's saturation fuel. -/
+private def relationalExecAt (fuel : Nat) (d : FDatabase) : Program → Option FDatabase
+  | [] => some d
+  | .saturate R :: cs => (Relational.runSaturate R fuel d).bind fun e => relationalExecAt fuel e cs
+  | c :: cs => (Relational.execCmd d c).bind fun e => relationalExecAt fuel e cs
+
 /-- Compare the new pass against source congruence and the old encoder's data columns.
 The legacy proof checker is deliberately not a correctness oracle. -/
 private def congruenceCheck (fuel : Nat) (p : Program) : List String := Id.run do
@@ -3120,6 +3126,11 @@ private def congruenceCheck (fuel : Nat) (p : Program) : List String := Id.run d
   match execAt fuel FDatabase.empty p, execAt fuel FDatabase.empty q,
       execAt fuel FDatabase.empty (Egglog.encode p) with
   | some src, some tgt, some legacy =>
+    match relationalExecAt fuel FDatabase.empty q with
+    | none => errors := errors ++ ["relational target stuck or exhausted fuel"]
+    | some plain =>
+      if !plain.sameData tgt then
+        errors := errors ++ ["target depends on implicit equality reasoning"]
     if !tgt.eqsReflB || !tgt.subtermClosedB then
       errors := errors ++ ["target violates reader assumptions"]
     let cl := src.closureF

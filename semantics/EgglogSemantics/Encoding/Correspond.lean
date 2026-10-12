@@ -343,21 +343,7 @@ both are decided at the witness at the end of this file.
 -/
 
 namespace Egglog
-theorem Prim.ofName_of_atPrefix {f : FnName} (h : "@".isPrefixOf f = true) :
-    Prim.ofName f = none := by
-  unfold Prim.ofName
-  split <;> simp_all [show "@".isPrefixOf "ordering-gt" = false from by decide +kernel,
-    show "@".isPrefixOf "min" = false from by decide +kernel,
-    show "@".isPrefixOf "max" = false from by decide +kernel,
-    show "@".isPrefixOf "if" = false from by decide +kernel]
 
-@[simp] theorem prim_viewName (f : FnName) : Prim.ofName (viewName f) = none :=
-  Prim.ofName_of_atPrefix (by
-    simp [viewName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
-
-@[simp] theorem prim_termName (f : FnName) : Prim.ofName (termName f) = none :=
-  Prim.ofName_of_atPrefix (by
-    simp [termName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
 
 @[simp] theorem prim_ufName : Prim.ofName ufName = none := by decide
 
@@ -2205,23 +2191,6 @@ theorem execActions_append {as bs : List Action} : ∀ {d e : FDatabase},
       rw [List.cons_append, execActions, hv, Option.bind_some] at h
       obtain ⟨m, hm, hme⟩ := ih h
       exact ⟨m, by rw [execActions, hv, Option.bind_some]; exact hm, hme⟩
-
-/-- Evaluating a concatenation evaluates each part. -/
-theorem Expr.evalList_append {sig : Signature} {σ : Env} :
-    ∀ {es fs : List Expr} {ts : List Term}, Expr.evalList sig (es ++ fs) σ = some ts →
-      ∃ as bs, Expr.evalList sig es σ = some as ∧ Expr.evalList sig fs σ = some bs ∧
-        ts = as ++ bs := by
-  intro es
-  induction es with
-  | nil => intro fs ts h; exact ⟨[], ts, rfl, h, rfl⟩
-  | cons e es ih =>
-    intro fs ts h
-    rw [List.cons_append, Expr.evalList] at h
-    obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
-    obtain ⟨as, bs, has, hbs, rfl⟩ := ih hus
-    exact ⟨t :: as, bs, by rw [Expr.evalList, ht, Option.bind_some, has, Option.map_some],
-      hbs, rfl⟩
 
 /-- A one-element operand list. -/
 theorem Expr.evalList_singleton {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}

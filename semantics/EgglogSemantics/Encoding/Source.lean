@@ -1317,4 +1317,8 @@ theorem Program.EncodeDomain.unionLegal_of_mem {P : Program} (h : P.EncodeDomain
     simp only [Cmd.litFreeB, List.all_eq_true] at hb
     exact hb a ha
 
+/-- **Every application the source holds is a declared constructor's, applied.** -/
+def Database.TermsBuild (src : Database) : Prop :=
+  ∀ f as, Term.app f as ∈ src.terms → Prim.ofName f = none ∧ src.sig.IsCtor f
+
 end Egglog

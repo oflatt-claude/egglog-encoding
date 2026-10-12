@@ -1,5 +1,65 @@
 # Encoding passes
 
+## Agreed plan and scope
+
+This is the working plan for PR #58. The implementation order is:
+
+1. **Port completeness to the congruence pass.** Establish the execution invariants
+   needed for source/target correspondence, retaining the current constructor-only
+   source fragment (`Program.EncodeDomain`). The paper's completeness theorem ends
+   here. The compiled target uses functions, but extending the theorem to arbitrary
+   source merge functions is deferred.
+2. **Implement a sound source proof checker.** Check explicit propositions against
+   the original program. `Fiat` must be justified by original globals; it cannot
+   introduce an arbitrary constructor or discharge an unproved rule premise.
+   Congruence must preserve evidence that the enclosing application exists. Prove
+   that accepted certificates imply their source propositions, including existence.
+3. **Add a separate provenance pass.** Instrument the congruence-compiled program
+   like Datalog provenance, extended to function entries and merges. Record evidence
+   for global entries, rule firings, and merge-derived entries. Rule-created terms
+   must have rule evidence, and merge-created entries must retain the evidence for
+   both inputs and the merge computation. Do not hide these cases behind `Fiat`.
+4. **Lift certificates back to the original program.** Recognize generated rebuilding
+   rules by their origin tags and UF operations by the generated table name.
+   Translate their justifications into source reflexivity, symmetry, transitivity,
+   and anchored congruence, as appropriate. View collisions also require a source
+   justification. For source rules, recover premises by walking the original query
+   in exactly the compiler's recursive order, unflattening nested applications with
+   congruence. Both algorithms receive the original query; there is no saved
+   flattening tree. Validate that all generated names and maintenance rules have
+   disappeared from the resulting source justification.
+5. **Validate the whole pipeline.** Check the *same lifted certificates* with both
+   Lean and Rust checkers. Running Rust's own encoder on the same inputs is useful
+   comparison evidence, but does not establish this interoperability. Include
+   negative tests for invented globals, missing existence premises, malformed rule
+   substitutions, and incorrect equality endpoints, alongside positive tests for
+   nested queries, repeated applications, rebuilding, UF chains, and function
+   merges. Run the complete Lean, Python, and Rust validation suites.
+
+The two compiler passes have separate responsibilities: congruence compilation
+encodes rebuilding, union find, and query flattening without proof annotations;
+provenance records how its resulting entries were derived. Proof lifting is a third
+algorithm that interprets that provenance against the original source program.
+The congruence output must contain no built-in unions and must execute without
+implicit congruence or other equality axioms. Structural identity and existence
+tests remain available. Provenance and lifting need soundness and validation;
+they do not need their own completeness theorem for the paper.
+
+This refactor targets the Lean model and encoding. Existing Rust certificate
+formats and the Rust checker provide the interoperability target; rewriting the
+Rust parser or runtime is outside the agreed scope. Source syntax has no lets,
+and function entries use full table atoms such as `(LowerBound expr bound)` in
+queries and evaluation. Function entries are not nested term values or union
+operands. The constructor-only theorem scope does not remove functions from the
+target or from provenance.
+
+Stop and discuss an actual design blocker rather than weakening a theorem,
+accepting unjustified proof premises, or silently broadening the source fragment.
+Update the status below as each obligation is discharged. Intermediate commits
+and pushes to the PR are authorized, including before the proofs are complete.
+
+## Current implementation
+
 The Lean refactor separates congruence compilation, provenance instrumentation, and proof
 resugaring. The congruence pass is implemented in
 [Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean). The latter two passes are
@@ -35,6 +95,13 @@ propagation, or the particular constructor child being re-keyed. Copies in anoth
 ruleset retain the same tag. `tableRole` recognizes UF and source-constructor views.
 These tags are for later resugaring and do not affect execution.
 
+The output has no built-in `union` in commands, rule heads, or merge bodies. It also
+needs no equality axioms from the target runtime. `Relational.exec` uses structural
+identity and stored-value existence for matching and function-key collisions, and omits
+implicit congruence rebuilding. `encode_relational` proves that this execution produces
+exactly the same result as the general interpreter. Source equality is represented by
+ordinary UF and view entries; target `(= x y)` is just an identity test with existence.
+
 ## Query traversal
 
 Flattening visits conjuncts left to right. Within an application it recursively visits
@@ -62,7 +129,12 @@ The new pass currently has kernel-checked proofs of:
 - `encode_unionFree`: commands, rule heads, and merge bodies contain no built-in unions.
 - `encodeQuery_flat` and `encodeQueryExpr_next`: flattened atoms contain only leaf
   columns, and each application occurrence consumes exactly one fresh id.
-- `execM_encode_eqsRefl`: successful target execution leaves built-in equality diagonal.
+- `execM_encode_eqsRefl` and `encode_cong_iff`: built-in equality is exactly structural
+  identity on stored terms.
+- `encode_relational`: the target executes with the same result using no congruence
+  closure or implicit re-keying, including during queries, merges, and saturation.
+- `sourceMatch_of_encodedQuery`: sound view entries turn a flattened query match into
+  an existing source query match, preserving the values needed by its rule head.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
