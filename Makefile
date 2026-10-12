@@ -1,7 +1,7 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
 	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
-	lean-check lean-difftest \
+	lean-check lean-difftest lean-congruence-test \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -109,159 +109,19 @@ nightly-local: nightly-uv nightly-rustup
 
 # The Lean formalization in semantics/. Kept out of `check` so the Rust and Python
 # suites do not depend on a Lean toolchain; `elan` and a Mathlib cache are needed,
-# see semantics/README.md. `lake build` only warns on a `sorry`, so the sources are
-# grepped for one as well. The second grep drops backtick-quoted prose: two module
-# docstrings discuss `sorry`, and without it the target can never pass.
-# M11's correspondence statement is **proved**, both halves: `EgglogSemantics/Encoding/`
-# carries exactly LEAN_OPEN_SORRIES of them, which is now zero, and `#print axioms` on
-# `encode_corresponds`, `encode_corresponds_forward` and `encode_corresponds_complete` reports
-# `[propext, Classical.choice, Quot.sound]` (`semantics/ENCODING.md`). Both halves are proved
-# from properties of the state `execM` returned (`cong_sameClass_of_state`,
-# `sameClass_cong_of_state`), and the last open obligation was the command induction's
-# rule-firing case (`unionsJoined_fire`) — its `Cmd.run` half at `unionsFire_run` and its
-# `Cmd.saturate` half at `unionsFire_saturate`, which reads the source's rounds at the middle
-# of the target's own saturate block and transports the conclusion up by containment. The
-# action read-back is
-# proved (`holdsBuild_of_execProgramM`, `viewRepr_self_of_execProgramM`) and so is the
-# induction over `encode P`'s commands built on it (`UnionsInv`, `unionsInv_execM`), which
-# closes `execM_unionsJoined` and supplies the totality `Database.ViewsCover` needs. The two
-# clauses the factorisation used to run through are **refuted** and kept as records:
-# `Database.ReadsSelf` and `Database.ViewsProduct`, by `ncTgt_not_readsSelf` and
-# `ncTgt_not_viewsProduct` — a source rule fires once per member of a premise's congruence class
-# while the encoded rule reads rows that sit at the union-find leader. Each is now stated at what
-# its consumers spend instead: `Database.ViewsCover.shared` at one *shared* id tuple and
-# `Database.UnionsJoined` at the endpoints' *ids*, both holding at the counterexample's own state
-# (`ncTgt_shared_FB`, `ncTgt_unionsJoined`), as does `Database.UnionsRead` and the correspondence
-# itself, which is why `correspond` still agrees on all 87 in-domain cases. And the coverage
-# clause is now *derived*: the tuple it answers with is always the union-find leader's, so
-# `Database.ViewsCover.of_viewLeaderRows` gets it from a row-transport clause plus totality, with
-# `ncTgt_viewsCover` running that reduction at the very state the product form fails at. What is
-# left: `unionsJoined_fire` is a target firing behind a source firing — the one command case the
-# read-back does not reach, and it carries both of the induction's data clauses. It is the
-# **forward** half's. The reading it fires on is now supplied rather than owed: `RowRepr` is the
-# reading through live rows, `encStep_exists_rowRepr` turns the induction's `ViewRepr` into one
-# at the pointwise `@UF` row root, and `encStep_rowMech` discharges the four row clauses
-# `UnionsFire` takes — `RowRepr` in both directions, `FDatabase.RowJoined`, and the `:merge` a
-# live view row's name carries (`encStep_mergeOf_of_row`) — at the state the *next* encoded
-# block runs at (`EncReached`, `EncStep`), which is where `execM_rebuildClosed` could not be
-# asked. And the residue's own clause list was **too short**, twice: `unionsFire_false` and
-# `unionsFire_false_encodeSig` refute the statement that stood there (kept as `UnionsFireWeak`,
-# with `unionsFire_of_weak` recording that it is the stronger claim), because nothing in it made
-# the encoded head evaluate and nothing constrained the rules the source holds. Five clauses
-# answer them — the target's signature declaring every source constructor and `@Fiat`, the
-# `@Rule_i` of the index `hrules` names (`RuleNameMech`), the source rules' queries being ones the
-# flattening handles (`Database.QueriesIn`, a source-run invariant), `FDatabase.RowColumnsValued`
-# and `FDatabase.NoAtEnv` — all discharged from `EncStep`, with `cxfTgt_not_sigMono` and
-# `cxpSrc_not_queriesEncodable` naming the clause each witness now violates. The `sorry` is an
-# open obligation again rather than a false one.
-# **And the re-keying walk step 4 wants is threaded rather than owed.** `viewRow_of_rowReachList`
-# rests on three *inductive invariants* of the encoded run — `FDatabase.ViewRowsRootedAll`,
-# `FDatabase.ViewRowsColumnClosedAll` and `FDatabase.UFRootsUnique` — and an invariant is not a
-# fact a state exhibits: each is established by a block induction from the prelude's empty row
-# list. So they ride in `Egglog.RowMech` and `encStep_viewRowsRootedAll`,
-# `encStep_viewRowsColumnClosedAll`, `encStep_ufRootsUnique` discharge them at `EncStep`,
-# program-free because `encStep_ctorsIn_of_row` reads the restriction the induction carries off
-# the row itself; `viewRow_of_rowReachList_all` is the walk at that form. The question that had
-# to be settled first is whether the guard survives, since `unionsJoined_fire_satisfiable` is
-# witnessed at a target `execActions` **hand-built**: it does — all three hold at `rbTgtR`,
-# decidably, off `rbTgtR_no_uf_row`. Twenty-two conjuncts now, seventeen with content: the three
-# hold *degenerately* there, for the one arithmetic reason that makes `Database.UnionsJoined` and
-# `FDatabase.RowJoined.edge` vacuous too — `rbProgram` asserts nothing, so the state's union-find
-# is empty — and `ncTgt_viewRowsRootedAll` and `ncTgt_ufRootsUnique_instance` are the two of them
-# with content, at a state holding a live `@UF` row. Column closure now has content too, at a
-# third hand-built state: `ccTgt` builds over the union's *member*, so a live view row is still
-# keyed on the moved endpoint, `ccTgt_columnClosed_instance` is the satisfied premise beside the
-# row the closure delivers, `ccStale_columnRule_fires` is the firing that writes it, and
-# `ccStale_not_viewRowsColumnClosedAll` is the clause **false** one firing earlier — so it is a
-# constraint on a state rather than a shape every state has. Nothing is weakened for any of it.
-# That same state refutes the **fourth** fact step 4's global-reading head was named as wanting:
-# `FDatabase.ViewRowsNamedUF`, a live view row's value column being `FDatabase.UFRowReach`-
-# reachable from the term that names it, holds with content at `ncTgt`
-# (`ncTgt_viewRowsNamedUF`) and fails at `ccTgt` on the row a **column** rule writes
-# (`ccTgt_not_viewRowsNamedUF`) — re-keying leaves the value column alone, so the row is named
-# by a term the target does not hold (`ccTgt_not_mem_FA`) and no `@UF` row can leave it.
-# **And that refutation is what closed the item, locally.** The row a global-reading head keys
-# is one *this very firing* wrote, whose value column **is** its naming term, so no walk is
-# needed: `viewRepr_of_evalPair` reads a head expression back at the key tuple it was written
-# at, by induction, with its only content the two environments' agreement — the query
-# variables from step 1's reading, a head `let` from the same reading, and a **global** from
-# `UnionsInv.envReadsAt`, which is *not* `Database.ReadsSelf` (refuted at a term a firing
-# built) but the clause the command induction already carries and proves, a global's value
-# being a term a top-level block built. `encodeBuild`'s naming expression being the source
-# expression (`encodeBuild_fst`) is what makes each application pay for itself. The walk stays
-# as `Database.RebuildClosed`'s `edged`/`column` mechanism and step 4 no longer spends it.
-# **And the `.eq` case's clause is threaded.**
-# `Database.LitGlobalsHeld` — every literal a global is bound to is a term the target holds —
-# is what `hgl` needs where `Pattern.Grounded.eqLit` cannot empty it, and
-# `eqLit_of_litGlobalsHeld` is the reduction through `Pattern.Grounded` at the rule's own text.
-# `litGlobalsHeld_witness` gives it content: `glProgram` is one `(let $g 5)`, in the domain, and
-# `execM (encode glProgram)` **holds** `5` where `litBuildProgram`'s bare `.expr (.lit 5)` holds
-# nothing — which is why the clause is about `sd.env` and not about `sd.terms`. It rides in
-# `Egglog.RowMech` with the rest and `encStep_litGlobalsHeld` discharges it, out of
-# `EncStep.envEq` (the two environments are the same list) and the target's own
-# `Database.WF.envInTerms` — so it needed no new block induction. And with it the `.eq` case is
-# **discharged** rather than threaded: `Database.EqLitGlobals` is the source-run half — a
-# bare-literal `.eq` a *stored* query carries names a global, since `Pattern.Grounded` excludes
-# the shape from a rule's text and `evalTopAction` refuses a later `let` that would rebind
-# (`cmdStep_eqLitGlobals`) — and `eqLit_of_substGlobals` spends the two together at the query
-# `hrules` names, which is `patternRowRead_of_matches`' `hgl` answered from the residue's own
-# clauses. Twenty-six conjuncts at the witness now, nineteen with content: the `.eq` case's two
-# clauses are vacuous at `rbTgtR` (its one global is bound to an application and its rule's
-# query carries no equality), with `litGlobalsHeld_witness` and `eqLitGlobals_witness` their
-# content instances, and the two clauses step 4's read-back spends are not vacuous
-# (`rbTgtR_envReadsAt`, `rbTgtR_viewRepr_of_rowRepr` at `td`).
-# **And the outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no
-# merge phase, so `cmdStep_run_eq` makes the post-state the *function* `RunRules R sd` and its
-# `Database.sUnion` splits `eqs` and `terms` per firing (`eqs_cases_of_cmdStep_run`,
-# `terms_cases_of_cmdStep_run`); `contained_of_run_block` carries the clauses held at `td` up to
-# `td'`, and `unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus
-# one obligation per firing. What is left of the `Cmd.run` half is two items of *glue* inside
-# that obligation, neither of them a fact about the encoding: step 2's identity between the
-# stored query and `Query.substGlobals G` of it, and the head's key columns as target terms at
-# a **global** position. `unionsJoined_fire`'s own docstring names both.
-# The forward half of `Encoding/Match.lean` is now written too: `mem_matchQuery_encodeQuery`
-# turns a source reading of a query into a substitution the *emitted* query matches at, over
-# `encodeQuery`'s flattening (`RowRead`, an id per subterm position through live rows) and its
-# fresh-variable supply (`FreshEnv` plus `freshVar_inj` and the `@` prefix), with
-# `ncTgt_mirror` running it at the instance. The reading it consumes is supplied: the three facts
-# it wanted — one id per source term, one id per congruence class, and a reading total on a
-# pattern instance and not only on a source term — are `FDatabase.RowJoined` beside the `RowRepr`
-# clauses, all derived from `EncStep`. The *firing* it consumes is scaffolded too:
-# `execLocalActions_isSome_of_builds` is `FDatabase`'s counterpart of
-# `evalActions_isSome_of_builds`, and `exists_execLocalActions_encodeRule_head` runs the block
-# `encodeRule` emits — `Actions.Builds` is false of an *encoded* head, `if` and `ordering-gt`
-# being primitives, so what runs it is the source head read at the target's signature, spending
-# `@Fiat` and `@Rule_i`. What step 3 owed source-side is carried: the source rule's *head* being
-# scoped and building are clauses of `UnionsFire` now, discharged by `headsScoped_of_prefixStep`
-# and `headsBuild_of_programStep`. The run-wide index argument it used to
-# sit beside is closed: `execM_rebuildClosed` is `Database.ViewJoined` per mechanism (the e-class
-# rule, the column rules, the `@UF` edge a collision writes), proved outright — its four
-# `Signature.IsCtor`
-# carries off `encodePrelude`'s own proof vocabulary (`encodeSig_isCtor_symName` and
-# companions) and its literal clause off the completeness half (`execM_ufLitsIsolated`).
-#
-# **The completeness half is closed.** `execM_soundTerms` is proved and so is
-# `encode_corresponds_complete`, the half `encode_corresponds` states over the source's own
-# e-nodes. It took one further domain clause, `EncodeDomain.headsScoped`: `encodeBuild` emits no
-# action at all for a leaf, so a rule head that builds a bare variable the query does not bind
-# stops the source block there while the encoded block runs on and asserts an equation the source
-# never derives (`bare_build_invents_equality`, at a program every other clause admits). The
-# clause is faithfulness, not a narrowing — egglog raises `TypeError::Unbound` for exactly this
-# in `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census is 87 of 183.
-# Everything else the half needed — the per-command induction, the merge phase, the firing fold,
-# the maintenance families, the head obligation `encodedHeadSound` — was already proved. The
-# rule-head match correspondence of `Encoding/Match.lean` is proved outright, encoder read-back
-# included, and so is the rule-head build case it feeds (`entrySound_headBuild`). Everywhere
-# outside `Encoding/` a `sorry` is a regression, and a new one inside it changes the count.
-LEAN_OPEN_SORRIES = 0
-LEAN_OPEN_SORRY_DIR = semantics/EgglogSemantics/Encoding
-
+# see semantics/README.md. `lake build` only warns on a proof hole, so the sources
+# are grepped as well, excluding backtick-quoted prose.
+# Both the congruence pass and the retained legacy theorems must build without proof
+# holes. The native corpus gate checks the new pass against source equalities and
+# projected legacy rows; see semantics/ENCODING.md for the theorem port's status.
 lean-check:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build
-	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`' | \
-		grep -v '^$(LEAN_OPEN_SORRY_DIR)/'
-	test "$$(grep -rnw --include='*.lean' sorry $(LEAN_OPEN_SORRY_DIR) | \
-		grep -cv '`sorry`')" -eq $(LEAN_OPEN_SORRIES)
+	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`'
+	$(MAKE) lean-congruence-test
+
+lean-congruence-test:
+	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
+	cd semantics && .lake/build/bin/difftest congruence 64
 
 # Differentially test the Lean semantics against egglog: for each generated program, the
 # Lean interpreter's per-constructor row counts against egglog's `(print-size)`. Needs a

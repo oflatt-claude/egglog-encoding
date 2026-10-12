@@ -19,16 +19,21 @@ expressions or used as equality or union operands. Merge bodies can perform acti
 well as return values. The [merge semantics](MERGE.md) guide explains how this relates to the interpreter's row index,
 its refinement contracts, and the limits of the model.
 
-## Proof encoding
+## Encoding passes
 
-The encoder transforms constructor programs into explicit view and union-find tables,
-with a proof attached to each recorded equality. `encode_corresponds` proves that source
-congruence agrees with the encoded target's equivalence on source terms, under
-`Program.EncodeDomain` and successful executions. The library permits no `sorry`.
+The congruence compiler translates constructor programs into explicit union-find and view
+tables. It handles query flattening and rebuilding, with one id output per table and no
+proof annotations. Provenance instrumentation and proof resugaring will be separate passes.
 
-The [encoding guide](ENCODING.md) describes the transformation and the theorem's hypotheses.
-The [checker guide](CHECKER.md) describes the separate executable proof checker. General
-checker soundness and acceptance of every generated proof remain unproved.
+The executable reader and the abstract correspondence reductions have been proved for
+this pass. The full execution-invariant proof is still being ported from the old combined
+encoder, whose data correspondence theorem remains checked. The old proof checker has a
+known existence defect and must not be used as a proof-validity oracle. The library
+permits no `sorry`.
+
+The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
+and source restrictions. The [checker guide](CHECKER.md) explains the legacy defect and
+the planned certificate boundary.
 
 ## Layout
 
@@ -37,15 +42,16 @@ checker soundness and acceptance of every generated proof remain unproved.
 | `EgglogSemantics/Spec/` | Syntax, databases, congruence, evaluation, matching, relational steps, scope |
 | `EgglogSemantics/Impl/` | Finite reference interpreters and front-end checks |
 | `EgglogSemantics/Proofs/` | Interpreter refinement, preservation, totality, and counterexamples |
-| `EgglogSemantics/Encoding/` | Encoder, checker, correspondence, matching, and completeness proofs |
+| `EgglogSemantics/Congruence/` | Congruence compiler, table reader, correspondence reductions, and regressions |
+| `EgglogSemantics/Encoding/` | Shared source analysis and the legacy combined encoder and proofs |
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
 
 Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),
 [Eval.lean](EgglogSemantics/Spec/Eval.lean), and
 [Step.lean](EgglogSemantics/Spec/Step.lean), then read
-[Encode.lean](EgglogSemantics/Encoding/Encode.lean) and the final theorems in
-[Complete.lean](EgglogSemantics/Encoding/Complete.lean).
+[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean) and
+[Congruence/Correspond.lean](EgglogSemantics/Congruence/Correspond.lean).
 
 ## Validation
 
@@ -53,7 +59,7 @@ From the workspace root:
 
 ```sh
 make check                 # Python and Rust formatting, checks, and tests
-make lean-check            # full Lean build and zero-sorry audit
+make lean-check            # Lean build, proof-hole audit, and congruence corpus gate
 cargo build --release -p egglog
 make lean-difftest          # compare Lean and egglog per-function row counts
 ```
@@ -62,8 +68,9 @@ Additional executable probes, from `semantics/`:
 
 ```sh
 lake build difftest
-.lake/build/bin/difftest correspond 64
-.lake/build/bin/difftest check 64
+.lake/build/bin/difftest congruence 64
+.lake/build/bin/difftest correspond 64  # legacy data correspondence
+.lake/build/bin/difftest check 64       # legacy checker diagnostic, known unsound
 ```
 
 The toolchain is pinned in [lean-toolchain](lean-toolchain), and Mathlib in

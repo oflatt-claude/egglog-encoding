@@ -1,53 +1,21 @@
 import EgglogSemantics.Encoding.Encode
 
 /-!
-# The proof checker
+# Legacy proof checker (known unsound)
 
-`CHECKER.md`'s constructor-only fragment: five justifications, `Bool`-valued, reading the
-**source** program and nothing else — no database, no e-graph, no rows.
+This executable checker is retained as a regression reference during the pass split.
+It must not be used as a proof-validity oracle. `reflProps` accepts an arbitrary supplied
+constructor term as existing, which lets a fabricated `@Fiat` premise trigger a source
+rule whose query was never satisfied. Endpoint membership in `Sound` does not justify
+these intermediate premises. See `CHECKER.md` for the concrete counterexample.
 
-The checker reads each rule as written and flattens its query independently of the encoder.
-`DiffTest.lean`'s `premiseCount_eq_ruleProofArity` checks that both flattenings agree.
-Top-level actions are closed; rule heads evaluate under a fixed query substitution.
+The old encoder also emits `@Fiat` for rule-created terms, omitting their actual rule
+justifications. This causes both rejected generated proofs and false acceptances. The
+replacement pipeline will instrument provenance, resugar explicit claims against the
+original query, and validate the same certificate with the Lean and Rust checkers.
 
-A proof is an ordinary `Term`:
-
-```
-@Fiat                   arity 0   a top-level action asserted it, or it is reflexive
-@Sym     (p)            arity 1
-@Trans   (p, q)         arity 2
-@Congr_k (p₁ … p_k)     arity k   congruence at a k-ary constructor, one proof per child
-@Rule_i  (p₁ … p_n)     arity n   rule i fired, one proof per premise
-```
-
-Two of the five are **families indexed at the name**, `@Congr_k` and `@Rule_i`, because the
-modelled language fixes one arity per name; `Encode.lean`'s "Proof terms" says why.
-
-It carries no proposition; the row it sits in does, so `Checks P pf a b` is asked with both
-endpoints. `Trans`'s middle term and `Rule_i`'s substitution are the two things neither the
-node nor the claim supplies, and `Proof.props` is what recovers them: it computes the
-finite set of propositions a proof admits under an optional constraint on each endpoint,
-which is `checkFactMatchesProposition` and `computeRuleSubstitution` run as one pass.
-
-**`n` is the query's flattened length**, one premise per application and not per source
-pattern, which is the form egglog's checker reads the program in — "The query in proof
-normal form" below.
-
-**Incompleteness, exactly.** `props` needs an endpoint to synthesise a `@Congr_k` — the node
-names no head — so a `@Congr_k` standing as a rule premise whose body fact has neither side
-ground under the substitution built so far is rejected. A body fact reading a merge
-function's row is rejected for the same reason, `Expr.eval` having no case for one. A bare
-`@Fiat` premise at a body fact with both endpoints free is confined to `C.eqs`, the
-*top-level* actions, so it cannot anchor at a term that exists only because an earlier rule
-fired — the residue "`@Fiat` at a rule-created term" measures and bounds below. These
-refusals limit completeness; `Proof.Sound` states the separate, unproved soundness contract.
-
-**A merge needs no justification of its own.** A collision keeps the proof carried by
-whichever side's value survives and composes the displaced edge as
-`(@Trans (@Sym hi_pf) lo_pf)` (`Encode.lean`'s `mergeResult`), so both settled rows carry a
-proof of what they claim, built from `@Sym` and `@Trans` alone. `MergeFn` — the justification
-that would need this checker to re-run a `:merge` body — is therefore never reached.
-`difftest check` still counts `merge-displaced` apart from proofs that justify nothing.
+The code below still interprets the old endpoint-free `@Fiat`, `@Sym`, `@Trans`,
+`@Congr_k`, and `@Rule_i` terms. It is independent of the new congruence pass.
 -/
 
 namespace Egglog
@@ -273,15 +241,9 @@ def endsOk (ma mb : Option Term) (p : Term × Term) : Bool :=
   (match ma with | some a => decide (p.1 = a) | none => true) &&
   (match mb with | some b => decide (p.2 = b) | none => true)
 
-/-- The reflexive proposition a `@Fiat` admits at the endpoints given, which is `Fiat`'s
-other disjunct: `lhs == rhs && reflexive_value_term lhs`, no program consulted
-(`CHECKER.md`, "Context and vocabulary"). Every term in the constructor fragment is a
-value term; `Sound`'s `a ∈ db.terms` supplies the existence condition.
-
-It is what the encoding leans on: a build writes its view entry `f(c…) = f(c…)` under
-`@Fiat` **whatever context it is in** (`Encode.lean`, `encodeBuild`), so a term a rule head
-constructs has no top-level action to point at. With both endpoints free every term is
-admitted, so nothing is offered there — the same incompleteness `@Congr_k` has. -/
+/-- Legacy permissive reflexivity. This is unsound for intermediate constructor premises:
+it supplies no evidence that the term was built. Rust's `reflexive_value_term` only permits
+primitive values and recursively justified value constructors, not eq-sort constructors. -/
 def reflProps : Option Term → Option Term → List (Term × Term)
   | some a, some b => if a = b then [(a, a)] else []
   | some a, none => [(a, a)]
@@ -400,26 +362,12 @@ def ChecksAt (C : Ctx) (pf : Term) (a b : Term) : Bool :=
 /-- **`pf` justifies `a = b` in the source program `P`.** -/
 def Checks (P : Program) (pf : Term) (a b : Term) : Bool := ChecksAt (ctxOf P) pf a b
 
-/-! ### Soundness
+/-! ### Intended soundness contract
 
-Stated, not proved. `Cong.le` is the induction it would go by; each case names what the
-checker does not itself witness.
-
-* `Fiat` reads the top-level actions of `P`, so their equalities have to be in `db.eqs` —
-  `ProgramStep Database.empty P db`. Its other disjunct, `reflProps`, needs nothing of `P`
-  and is discharged by `Sound`'s `a ∈ db.terms`.
-* `Rule_i` checks that the head derives the claim under a substitution its premises admit.
-  Deriving it is not asserting it: the rule has to have fired, which is `RunSaturated`. The
-  premises give `Cong db` on each fact of the **normal form**, and recovering the source
-  query's facts from those is the extra step the flattening adds: `f(c…) = x` at every
-  application composes back by `Cong.congr`. `Cong.mem_of` turns each into the witness
-  `Matches` wants; `ValidEnv`'s `Perm` clause is the remaining gap.
-* `Congr_k` at `f(as) = f(bs)` needs both applications present, which `Cong.congr` demands and
-  a k-ary node does not witness — hence the endpoint hypotheses, from which `WF.subtermClosed`
-  reaches the children. `Trans`'s middle term has no such source.
-
-Without `RunSaturated` the statement is false: a program whose rule is never `run` reaches
-states in which the head's equalities are absent and `Checks` still accepts the `@Rule_i`. -/
+The current implementation does not satisfy this contract. Even at a saturated source
+state, a `@Rule_i` can use `reflProps` to invent the existence of a missing constructor
+premise. Requiring the final endpoints to belong to the source does not repair that gap.
+-/
 /-- **Checker soundness at `db`**: every claim the checker accepts is derivable there. -/
 def Sound (P : Program) (db : Database) : Prop :=
   ∀ pf a b, a ∈ db.terms → b ∈ db.terms → Checks P pf a b = true → Cong db a b

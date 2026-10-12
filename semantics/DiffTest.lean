@@ -1,3 +1,4 @@
+import EgglogSemantics.Congruence.Tests
 import EgglogSemantics.Encoding.Complete
 import EgglogSemantics.Encoding.Correspond
 import EgglogSemantics.Encoding.Encode
@@ -3101,6 +3102,68 @@ private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
 private def encodeLine (fuel : Nat) (c : String × Program) : String :=
   s!"{c.1}: {(Egglog.encodeCompare fuel c.2).render}"
 
+/-- Compare the new pass against source congruence and the old encoder's data columns.
+The legacy proof checker is deliberately not a correctness oracle. -/
+private def congruenceCheck (fuel : Nat) (p : Program) : List String := Id.run do
+  let compiled := Congruence.compile p
+  let q : Program := compiled.map Congruence.Command.command
+  let mut errors : List String := []
+  if !q.arityErrors.isEmpty then errors := errors ++ ["invalid target column counts"]
+  if !q.illegalReads.isEmpty then errors := errors ++ ["illegal target function lookup"]
+  if !q.arityConflicts.isEmpty then errors := errors ++ ["conflicting target arities"]
+  -- Every emitted rule has an origin; no non-rule carries a rule origin.
+  if !(compiled.all fun c => match c.command, c.ruleOrigin with
+      | .rule _, some _ => true
+      | .rule _, none => false
+      | _, none => true
+      | _, some _ => false) then errors := errors ++ ["missing or misplaced rule origin"]
+  match execAt fuel FDatabase.empty p, execAt fuel FDatabase.empty q,
+      execAt fuel FDatabase.empty (Egglog.encode p) with
+  | some src, some tgt, some legacy =>
+    if !tgt.eqsReflB || !tgt.subtermClosedB then
+      errors := errors ++ ["target violates reader assumptions"]
+    let cl := src.closureF
+    let readings := src.terms.map fun t => (t, Congruence.viewReprsF tgt t)
+    if readings.any (fun (a, ids) => readings.any fun (b, js) =>
+        decide ((a, b) ∈ cl) != ids.any js.contains) then
+      errors := errors ++ ["source equality mismatch"]
+    let proofNames := (proofDecls p).filterMap fun c => match c with
+      | .decl f _ => some f | _ => none
+    let legacyRows := legacy.rows.filterMap fun r =>
+      if proofNames.contains r.fn || p.ctors.any (fun fk => termName fk.1 == r.fn) then none
+      else
+        let out := if (Congruence.tableRole p r.fn).isSome then r.out.take 1 else r.out
+        some { r with out }
+    if !(legacyRows.all tgt.rows.contains && tgt.rows.all legacyRows.contains) then
+      errors := errors ++ ["projected live rows differ from legacy encoder"]
+  | none, _, _ => errors := errors ++ ["source stuck or exhausted fuel"]
+  | _, none, _ => errors := errors ++ ["congruence target stuck or exhausted fuel"]
+  | _, _, none => errors := errors ++ ["legacy target stuck or exhausted fuel"]
+  return errors
+
+private def runCongruenceChecks (fuel : Nat) (names : List String) : IO UInt32 := do
+  let available := allCases ++ probeCases
+  let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
+  unless unknown.isEmpty do
+    IO.eprintln s!"unknown cases: {String.intercalate ", " unknown}"
+    return 1
+  let cases := if names.isEmpty then allCases else available.filter fun c => names.contains c.1
+  let mut tested := 0
+  let mut failed := 0
+  let mut skipped := 0
+  for (name, p₀) in cases do
+    let p := p₀.declared
+    if !p.encodeDomainB then
+      skipped := skipped + 1
+      continue
+    tested := tested + 1
+    let errors := congruenceCheck fuel p
+    unless errors.isEmpty do
+      failed := failed + 1
+      IO.println s!"FAIL {name}: {String.intercalate "; " errors}"
+  IO.println s!"congruence: {tested} tested, {failed} failures, {skipped} outside domain"
+  return if failed == 0 && tested > 0 then 0 else 1
+
 /-- `difftest <dir> curated` writes the curated cases, `difftest <dir> merge` the curated
 `:merge` ones; `difftest <dir> seed <n>` writes one random constructor case named
 `rand-<n>` and `difftest <dir> mergeseed <n>` one random `:merge` case named `mrand-<n>`.
@@ -3129,6 +3192,10 @@ program the e-matcher cannot finish costs one budget rather than the run. These 
 and never invoke egglog; the comparison is between the model and itself. -/
 def main (args : List String) : IO UInt32 := do
   match args with
+  | "congruence" :: fuel :: names =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n => runCongruenceChecks n names
   | ["encode-domain"] =>
     let inDom := allCases.filter fun c => (c.2.declared).encodeDomainB
     IO.println s!"{inDom.length} of {allCases.length} cases are in encode's domain"
@@ -3317,6 +3384,7 @@ def main (args : List String) : IO UInt32 := do
   | _ =>
     IO.eprintln "usage: difftest <dir> curated | merge | seed <n> | mergeseed <n>"
     IO.eprintln "       difftest encode-domain | encode-cost | encode-selftest"
+    IO.eprintln "       difftest congruence <fuel> [case…]"
     IO.eprintln "       difftest encode <fuel> [case…] | check <fuel> [case…]"
     IO.eprintln "       difftest correspond <fuel> [case…] | correspond-selftest"
     IO.eprintln "       difftest correspond-alt flat|rows|no-uf|no-view <fuel> [case…]"

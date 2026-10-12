@@ -1,67 +1,62 @@
-# Proof checker
+# Legacy proof checker
 
-[Checker.lean](EgglogSemantics/Encoding/Checker.lean) defines
-`Proof.Checks P pf a b : Bool`. It checks the claim `a = b` using a proof term and the
-source program. Its inputs contain no target database or union-find tables.
+[Checker.lean](EgglogSemantics/Encoding/Checker.lean) implements the old
+`Proof.Checks P pf a b : Bool`. **It is known to be unsound** and is retained only as a
+reference during the split into congruence compilation, provenance, and resugaring.
+It is not a correctness oracle for the new congruence pass.
 
-## Context and vocabulary
+## The existence defect
 
-`Proof.ctxOf` reads declarations, equations produced by top-level actions, and rules in
-program order. `procActions` evaluates a rule head under one fixed query substitution and
-collects its equations, including reflexive equations for built subterms.
+The old encoder writes `@Fiat` in every newly built view row, including constructions
+inside rule heads. That omits the rule justification establishing the term's existence.
+The old checker compounds this by allowing `@Fiat` to justify arbitrary supplied
+constructor reflexivities.
 
-The encoding uses five justification kinds:
+For example, build `A` and `B`, declare but never build `Missing`, and saturate this rule:
 
-| Proof term | Meaning |
-| --- | --- |
-| `@Fiat` | An equation from top-level actions, or a reflexive claim |
-| `@Sym p` | Reverse the claim justified by `p` |
-| `@Trans p q` | Compose claims with a shared middle term |
-| `@Congr_k p₁ … pₖ` | Congruence at a constructor, with one proof per child |
-| `@Rule_i p₁ … pₙ` | Rule `i` derives the claim from the supplied premises |
+```text
+(rule ((Missing)) ((union (A) (B))))
+```
 
-A proof node contains no endpoints. `Proof.props` reconstructs the finite set of claims
-it can justify under the endpoint constraints supplied by the caller. In particular,
-transitivity must recover its middle term, and a rule proof must recover a substitution
-whose head produces the claimed equation.
+The source cannot fire the rule. Nevertheless, the legacy checker accepts
+`(@Rule_0 (@Fiat))` as a proof of `A = B`: its `Fiat` premise invents the existence of
+`Missing`. Requiring the final endpoints to exist does not justify intermediate terms.
+The new congruence compiler's regression tests verify that this program keeps `A` and
+`B` distinct and does not represent `Missing`.
 
-`Proof.flatQuery` independently flattens the source query into one premise per application.
-Consequently, a nested pattern can need several premise proofs. Equality constraints
-joining the flattened ids need no additional proof argument.
-`DiffTest.lean`'s `premiseCount_eq_ruleProofArity` checks agreement with the encoder's
-premise count.
+There is also missing provenance in generated proofs: with both endpoints free, a
+`Fiat` premise can only select from top-level equations, so it cannot recover a term
+created by an earlier rule. This explains the rejected `both-2` and `rand-43` proofs.
+Those rejections are not merely a less powerful checker; the encoder omitted necessary
+construction justifications.
 
-The target's merge bodies use symmetry and transitivity to justify displaced union-find
-edges. They do not need a separate merge justification in this constructor fragment.
+## Legacy representation
 
-## Proof status and limitations
+Nodes are ordinary constructor terms `@Fiat`, `@Sym`, `@Trans`, `@Congr_k`, and `@Rule_i`.
+They contain no explicit claim. `Proof.props` guesses claims and substitutions from the
+endpoints available to the caller. The checker independently flattens queries to match
+this old format. Premises reading source merge-function entries are unsupported.
 
-`Proof.Sound P db` states that every accepted claim whose endpoints belong to `db.terms`
-is derivable by `Cong db`. `Proof.SoundAt P` asks for this at well-formed states reached
-by `P` in which every ruleset is saturated. These are definitions of the intended
-contract; general checker soundness is not proved. Saturation is necessary because the
-checker can accept a rule justification without a corresponding `run` in the source.
+`Proof.Sound` and `Proof.SoundAt` describe the intended soundness contract. They are
+unproved, and the current implementation does not satisfy the contract. The separate
+`Egglog.encode_corresponds` theorem proves only data correspondence and does not depend
+on this checker.
 
-The executable checker also has known incompleteness:
+## Replacement and Rust compatibility
 
-- A congruence premise needs an endpoint from which to recover its constructor. With
-  neither endpoint grounded, the checker cannot synthesize the claim.
-- A `@Fiat` premise with both endpoints free can only draw on top-level equations. It
-  cannot discover a term created by an earlier rule firing. This accounts for the
-  rejected `both-2` and `rand-43` cases in `difftest check 64`.
-- Premises that read merge-function rows are unsupported by the checker's expression
-  evaluator; those source programs are outside `Program.EncodeDomain`.
+The new congruence pass emits no certificates. The planned generic instrumentation pass
+will record actual globals, rule firings, and merge derivations. Resugaring will reconstruct
+source-level certificates with explicit claims, substitutions, and existence evidence,
+following the same recursive order as query flattening.
 
-[Checker.lean](EgglogSemantics/Encoding/Checker.lean) contains acceptance and rejection
-guards. `difftest check 64` probes proofs recorded in encoded rows; it is a diagnostic
-sweep, not an all-passing correctness gate. See the [README](README.md#validation) for
-build and run commands.
+Rust's [proof checker](../egglog/src/proofs/proof_checker.rs) does not permit arbitrary
+eq-sort constructor reflexivity as `Fiat`. Its primitive-value reflexivity case is
+restricted, and its [proof format](../egglog/src/proofs/proof_format.rs) carries explicit
+propositions and anchored congruence. Rule-created constructions have rule provenance.
 
-## Relation to Rust proof checking
+Compatibility will require checking the same resugared certificate in Lean and Rust.
+Running their separate encoders on the same program does not establish that property.
+Neither the new instrumentation pass nor that shared-certificate bridge is implemented yet.
 
-Rust extracts table data, parses its raw proof representation, and converts it before
-checking. The relevant implementation is in
-[proof_format.rs](../egglog/src/proofs/proof_format.rs) and
-[proof_checker.rs](../egglog/src/proofs/proof_checker.rs). The Lean checker directly
-interprets the ordinary proof terms emitted by the Lean encoder. It does not verify
-Rust's extraction, packed skeletons, rule-link conversion, or proof simplification.
+`difftest check 64` still runs the legacy diagnostic; it is not an all-passing validation
+gate. See the [encoding guide](ENCODING.md) for the new pass's validation and proof status.

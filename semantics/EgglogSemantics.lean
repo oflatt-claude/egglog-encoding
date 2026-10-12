@@ -5,7 +5,10 @@ import EgglogSemantics.Proofs.Merge
 import EgglogSemantics.Tests.Egg
 import EgglogSemantics.Tests.Examples
 
--- Proof encoding, executable checking, and the correspondence theorem.
+-- Congruence compilation and its data-only correspondence reductions.
+import EgglogSemantics.Congruence.Tests
+
+-- Legacy proof encoding: retained during the correspondence theorem port.
 import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Encoding.Checker
 import EgglogSemantics.Encoding.Correspond
