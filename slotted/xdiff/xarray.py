@@ -938,14 +938,12 @@ def main():
         # sets and symmetry groups.
         import isomorphism as I
 
-        I.EGG_PROGRAM = egg_program
-        I.use_language(LANG)
         cases = per_rule_cases() + unbound_cases()
         if len(args) > 1:
             cases = [c for c in cases if c.name.startswith(args[1])]
         tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
         for c in cases:
-            verdict, detail = I.check(c)
+            verdict, detail = I.check(c, lang=LANG, egg_program=egg_program)
             tally[verdict] += 1
             print(f"  {verdict:4} {c.name:36} {detail}", flush=True)
         print(

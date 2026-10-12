@@ -53,9 +53,6 @@ class IsomorphismLimit(RuntimeError):
     """The exact comparison exceeded a declared work bound."""
 
 
-#: cases compared at a database fixpoint because the rules never stop firing
-UNSATURATED = []
-
 #: Raise egglog's serialization limits, which default to 40 and silently truncate -- see
 #: `_dump`. Well past anything a generated case reaches, while still bounding the dump.
 SERIALIZE_LIMITS = ["--max-functions", "1000000", "--max-calls-per-function", "1000000"]
@@ -133,7 +130,7 @@ def parse_reference(out):
     return g
 
 
-def read_json_graph(doc):
+def read_json_graph(doc, lang=X.LANG):
     """The encoding's tables, out of egglog's serialized e-graph.
 
     Every row is a node with an `op`, the `eclass` it belongs to, and `children` naming other
@@ -142,6 +139,7 @@ def read_json_graph(doc):
     tables. Renamings come back as `map-of` nodes over `i64` nodes, so their contents are
     readable too.
     """
+    node_ops = {op.ctor: op for op in lang.ops.values()}
     nodes = doc.get("nodes", {})
 
     def cls(node_id):
@@ -218,7 +216,7 @@ def read_json_graph(doc):
             if "null" in leaf and leaf["null"] != n["eclass"]:
                 issues.append("Null rows occur in more than one U e-class")
             leaf["null"] = n["eclass"]
-        elif op in NODE_OPS:
+        elif op in node_ops:
             payloads, elems, i = [], [], 0
             while i < len(kids):
                 if is_renaming(kids[i]) and i + 1 < len(kids):
@@ -232,7 +230,7 @@ def read_json_graph(doc):
             # because that is the spelling the REFERENCE writes and these two names are
             # about to be compared: sdql's symbols are `sym:mult` there and `mult` here,
             # and without the prefix two identical graphs refine to different colours.
-            o = NODE_OPS[op]
+            o = node_ops[op]
             name = o.ref_prefix + "/".join(payloads) if payloads else (o.ref or o.ctor)
             rows.append((name, elems, n["eclass"], o))
     # `Var` is seeded by the carrier's own machinery, so a graph always has exactly one.
@@ -317,7 +315,7 @@ def invert_map(m):
     return inv if len(inv) == len(m) else None
 
 
-def build_encoding_graph(doc):
+def build_encoding_graph(doc, lang=X.LANG):
     """One class per *slotted* class, merging the `U` values that make one up.
 
     Membership is a connected component of *any* `RenamesToLeader` link, partial ones
@@ -331,7 +329,7 @@ def build_encoding_graph(doc):
     truncates at 40 rows, links go missing, components split, and the leftovers look
     exactly like classes the encoding failed to merge.
     """
-    slots_of, loops, rows, leaf, issues = read_json_graph(doc)
+    slots_of, loops, rows, leaf, issues = read_json_graph(doc, lang)
     values = set(slots_of) | {c for _, _, c, _ in rows} | {leaf[k] for k in ("var", "null") if k in leaf}
     for a, _m, b in loops:
         values |= {a, b}
@@ -486,33 +484,7 @@ def build_encoding_graph(doc):
 
 
 # ------------------------------------------------------- the encoding's own ops
-#: The node constructors to read, mapped to the operator each belongs to, and the
-#: BINDER rows mapped to what the reference calls them. Both are read off a language
-#: rather than written here, so there is no list of constructor names to go stale. A
-#: binder's bound slot rides in child column 0 as an edge to the var class, where the
-#: reference has a `Bind`, i.e. a slot literal in that position.
-NODE_OPS: dict = {}
-ENC_BINDERS: dict = {}
-
-
-def use_language(lang):
-    """Read the two tables above off a `TermLang`.
-
-    An operator with `ref is None` is a payload leaf, whose rows name themselves by
-    their payload; anything else names itself by its tag, because a per-constructor
-    language calls a row by its CONSTRUCTOR while the reference calls it by the tag.
-    """
-    global NODE_OPS, ENC_BINDERS
-    NODE_OPS = {op.ctor: op for op in lang.ops.values()}
-    # keyed by the row NAME `read_json_graph` gives a node of this operator, and
-    # holding the operator itself because the rewrite needs its binder POSITIONS
-    ENC_BINDERS = {op.ref or op.ctor: op for op in lang.ops.values() if op.binders}
-
-
-use_language(X.LANG)  # the toy language; `xarray.py` passes its own
-
-
-def to_reference_shape(g, var_class=None):
+def to_reference_shape(g, var_class=None, *, lang=X.LANG):
     """Rewrite the encoding's node forms into the reference's.
 
     Two things are spelled differently by construction, and both are documented
@@ -526,6 +498,7 @@ def to_reference_shape(g, var_class=None):
         assumed.
       * a child edge is a dict here and a sorted pair tuple there.
     """
+    binders = {op.ref or op.ctor: op for op in lang.ops.values() if op.binders}
     out = Graph()
     for cid in g.ids():
         out.add_class(cid, g.slots[cid])
@@ -534,7 +507,7 @@ def to_reference_shape(g, var_class=None):
     unfaithful = []
     for cid in g.ids():
         for op, elems in g.nodes[cid]:
-            binder_op = ENC_BINDERS.get(op)
+            binder_op = binders.get(op)
             if binder_op is not None:
                 elems = list(elems)
                 for i in binder_op.binders:
@@ -775,7 +748,7 @@ def colors(g, rounds=6, palette=None):
 
 
 # ---------------------------------------------------------------- the isomorphism
-def find_isomorphism(ga, gb):
+def find_isomorphism(ga, gb, *, search_cap=SEARCH_CAP):
     """A (class bijection, per-class slot bijection) pair, or a reason there is none."""
     if len(ga.ids()) != len(gb.ids()):
         return None, (f"class count {len(ga.ids())} vs {len(gb.ids())}")
@@ -794,7 +767,7 @@ def find_isomorphism(ga, gb):
     order = sorted(ga.ids(), key=lambda a: (da[a], len(cand[a])))
     slot_palette = {}
     sca, scb = slot_colors(ga, ca, palette=slot_palette), slot_colors(gb, cb, palette=slot_palette)
-    budget = [SEARCH_CAP]
+    budget = [search_cap]
 
     def slot_bijections(a, b):
         """Bijections pairing slots of one color, with the group carried across."""
@@ -854,7 +827,7 @@ def find_isomorphism(ga, gb):
     except RecursionError:
         return None, "recursion limit reached -- inconclusive"
     if budget[0] <= 0:
-        return None, f"search cap ({SEARCH_CAP}) reached -- inconclusive"
+        return None, f"search cap ({search_cap}) reached -- inconclusive"
     return None, "no isomorphism exists (search exhausted)"
 
 
@@ -892,11 +865,6 @@ def verify(ga, gb, phi, sig):
 #: `(Null)` is NOT seeded. It is an ordinary constructor of the language under test, and
 #: neither side has a class for it unless a term built one.
 SEED = "term (var $0)\n"
-
-#: How the encoding's program is built. `xarray.py` swaps in the array language's
-#: builder so the same isomorphism check can be run on its cases; the signature is
-#: `(case, mult)`.
-EGG_PROGRAM = None
 
 
 def reference_graph(case, mult=3):
@@ -962,7 +930,7 @@ def incomplete_serialization(stderr):
     return [line.strip() for line in stderr.splitlines() if re.search(r"\b(?:Omitted|Truncated):", line)]
 
 
-def _dump(case, mult, timeout):
+def _dump(case, mult, timeout, *, lang=X.LANG, egg_program=X.egg_program):
     """The encoding's graph, from egglog's serialized e-graph.
 
     `--to-json` writes `<input>.json` and names a class `{sort}-{canonical value}`, an
@@ -978,7 +946,7 @@ def _dump(case, mult, timeout):
     incomplete serialization as `Omitted:` or `Truncated:` on stderr, even on exit zero;
     those diagnostics are therefore part of the reader's validity check.
     """
-    prog = (EGG_PROGRAM or X.egg_program)(case, mult=mult)
+    prog = egg_program(case, mult=mult)
     prog = prog.replace("(print-function SameClass 100000)", "")
     p = X.ROOT / f"xdiff-tmp-iso-{os.getpid()}-{mult}.egg"
     j = p.with_suffix(".json")
@@ -1004,7 +972,7 @@ def _dump(case, mult, timeout):
             return None, ("unreadable", f"incomplete encoding serialization: {incomplete[:2]}")
         if not j.exists():
             return None, "encoding produced no serialized e-graph"
-        g, issues = build_encoding_graph(json.loads(j.read_text()))
+        g, issues = build_encoding_graph(json.loads(j.read_text()), lang)
     finally:
         j.unlink(missing_ok=True)
     if issues:
@@ -1016,13 +984,13 @@ def _dump(case, mult, timeout):
     for cid in g.ids():
         if any(n[0] == "var" for n in g.nodes[cid]):
             leaf["var"] = cid
-    g, unfaithful = to_reference_shape(g, leaf.get("var"))
+    g, unfaithful = to_reference_shape(g, leaf.get("var"), lang=lang)
     if unfaithful:
         return None, f"binder position is not the variable class: {unfaithful[:2]}"
     return g, None
 
 
-def encoding_graph(case):
+def encoding_graph(case, *, lang=X.LANG, egg_program=X.egg_program):
     """The encoding's final graph, at the strongest fixpoint available to it.
 
     The harness's schedule saturates the `slotted` invariants between user-rule steps and
@@ -1031,30 +999,38 @@ def encoding_graph(case):
     instead, established by two different step counts producing the same graph -- the same
     standard the partition comparison uses -- and reported separately.
     """
-    g, err = _dump(case, 3, timeout=60)
+    g, err = _dump(case, 3, timeout=60, lang=lang, egg_program=egg_program)
     if err != "timeout":
         return g, err, 3
-    a, e1 = _dump(case, 6, timeout=180)
+    a, e1 = _dump(case, 6, timeout=180, lang=lang, egg_program=egg_program)
     if e1:
         err = ("limit", "encoding too slow to settle") if e1 == "timeout" else e1
         return None, err, 6
-    b, e2 = _dump(case, 12, timeout=180)
+    b, e2 = _dump(case, 12, timeout=180, lang=lang, egg_program=egg_program)
     if e2:
         err = e2 if e2 != "timeout" else ("limit", "encoding too slow to settle")
         return None, err, 12
     if canonical(a) != canonical(b):
         return None, "encoding has not settled: doubling the rounds changes the graph", 12
-    UNSATURATED.append(case.name)
     return a, None, 6
 
 
-def check(case, encoding_builder=None, reference_builder=None):
+def check(
+    case,
+    encoding_builder=None,
+    reference_builder=None,
+    *,
+    lang=X.LANG,
+    egg_program=X.egg_program,
+    search_cap=SEARCH_CAP,
+):
     # Only a reference that ERRORS is skipped. One that has not settled is compared
     # anyway, at the same fixed number of rounds the encoding gets steps -- see
     # `reference_graph`.
-    encoding_builder = encoding_builder or encoding_graph
     reference_builder = reference_builder or reference_graph
-    enc, err, mult = encoding_builder(case)
+    enc, err, mult = (
+        encoding_builder(case) if encoding_builder else encoding_graph(case, lang=lang, egg_program=egg_program)
+    )
     if isinstance(err, tuple):
         return err[0], err[1]
     if err:
@@ -1068,7 +1044,7 @@ def check(case, encoding_builder=None, reference_builder=None):
         # could make the suite green by removing precisely the difficult cases.
         unavailable = err == "reference timeout" or err.startswith("reference dump unavailable:")
         return ("limit" if unavailable else "unreadable"), err
-    iso, why = find_isomorphism(ref, enc)
+    iso, why = find_isomorphism(ref, enc, search_cap=search_cap)
     if iso is None:
         if why and why.endswith("-- inconclusive"):
             return "limit", why
@@ -1404,12 +1380,7 @@ def selftest():
         f"reference multipliers={seen_multipliers}, expected=[6]"
     )
 
-    old_search_cap = globals()["SEARCH_CAP"]
-    globals()["SEARCH_CAP"] = 0
-    try:
-        verdict, detail = check(object(), fake_encoding, fake_reference)
-    finally:
-        globals()["SEARCH_CAP"] = old_search_cap
+    verdict, detail = check(object(), fake_encoding, fake_reference, search_cap=0)
     cap_ok = verdict == "limit" and detail.endswith("-- inconclusive")
     bad += not cap_ok
     print(f"  {'ok  ' if cap_ok else 'FAIL'} search-cap verdict verdict={verdict}, expected=limit")
@@ -1540,8 +1511,16 @@ def main():
 
     tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
     totals = [0, 0, 0]
+    unsaturated = []
+
+    def tracked_encoding(case):
+        result = encoding_graph(case)
+        if result[1] is None and result[2] != 3:
+            unsaturated.append(case.name)
+        return result
+
     for c in cases:
-        verdict, detail = check(c)
+        verdict, detail = check(c, encoding_builder=tracked_encoding)
         tally[verdict] += 1
         if verdict == "ok":
             totals = [a + b for a, b in zip(totals, detail, strict=True)]
@@ -1563,11 +1542,11 @@ def main():
         f" of {len(cases)} generated)"
     )
     print(f"matched {totals[0]} e-classes, {totals[1]} e-nodes, {totals[2]} symmetries")
-    if UNSATURATED:
+    if unsaturated:
         print(
-            f"{len(UNSATURATED)} compared at a database fixpoint, not a rule "
-            f"fixpoint: {', '.join(UNSATURATED[:6])}"
-            f"{' ...' if len(UNSATURATED) > 6 else ''}"
+            f"{len(unsaturated)} compared at a database fixpoint, not a rule "
+            f"fixpoint: {', '.join(unsaturated[:6])}"
+            f"{' ...' if len(unsaturated) > 6 else ''}"
         )
     return 1 if tally["FAIL"] or tally["unreadable"] else 0
 

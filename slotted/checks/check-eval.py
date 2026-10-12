@@ -16,11 +16,16 @@ import eval as E  # noqa: E402
 import eval_report as R  # noqa: E402
 import xdiff as X  # noqa: E402
 
+CHECK_CONFIG = E.Config(
+    egglog=ROOT / "target" / "debug" / "egglog",
+    xmulti=ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti",
+)
+
 
 def graphs(name, program, spec, lang=X.LANG):
     enc, ref = (E.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
-    E.encoding_counts(program, name, lang, enc, 60)
-    E.run_reference(spec, ref, 60, True)
+    E.encoding_counts(program, name, lang, enc, 60, config=CHECK_CONFIG)
+    E.run_reference(spec, ref, 60, True, config=CHECK_CONFIG)
     assert enc.graph is not None and ref.graph is not None, (name, enc.as_dict("test"), ref.as_dict("test"))
     E.compare([enc, ref])
     return enc, ref
@@ -120,8 +125,7 @@ def verdicts():
 
     enc, ref = symmetry_case(41, False)
     assert enc.classes > 40 and enc.verdict(ref) == "isomorphic", enc.vs_ref
-    with patch.object(E.ISO, "SEARCH_CAP", 0):
-        E.compare([enc, ref])
+    E.compare([enc, ref], search_cap=0)
     assert enc.verdict(ref).startswith("inconclusive:"), enc.vs_ref
     assert E.compare_counts(enc, ref) == "same counts"
     assert f"{enc.classes}/{enc.nodes}" in R.graph_cell(enc)
@@ -212,7 +216,7 @@ def exit_status(enc, ref):
 def goal_reporting():
     # A short budget actually misses the goal on all sides. Equal graphs
     # alone must not turn this into a successful benchmark.
-    rows = list(E.array_rows([0], 1, E.SIDES, True, 30))
+    rows = list(E.array_rows([0], 1, E.SIDES, True, 30, config=CHECK_CONFIG))
     assert all(r.goal == "no" for r in rows), [r.as_dict("test") for r in rows]
     by_side = {r.side: r for r in rows}
     assert set(by_side) == set(E.SIDES)
@@ -337,7 +341,7 @@ rule
         spec = head + lhs + f"\nrhs root ?body[(var $x) := ?t]\ngoal ({op} (null) (null))\n"
         row = E.Row("regression", "substitution-policy", side, 1)
         with patch.dict(os.environ, {"XMULTI_SUBST": "invalid-ambient-policy"}):
-            E.run_reference(spec, row, 30, True)
+            E.run_reference(spec, row, 30, True, config=CHECK_CONFIG)
         assert row.goal == "yes", row.as_dict("test")
         assert row.substitution == policy
         graph = row.graph
@@ -518,7 +522,7 @@ def nested_comparison_policy():
 
 
 def combined_comparisons():
-    rows = list(E.sdql_rows([("mmm_sum", "1st")], 44, None, E.SIDES, True, 30))
+    rows = list(E.sdql_rows([("mmm_sum", "1st")], 44, None, E.SIDES, True, 30, config=CHECK_CONFIG))
     assert E.successful(rows, E.SIDES, True), [r.as_dict("test") for r in rows]
     by_side = {r.side: r for r in rows}
     for missing in E.SIDES:
@@ -580,16 +584,73 @@ def zero_round_budget():
         rounds=0,
         counts=False,
         timeout=30,
+        jobs=1,
     )
-    rows = E.collect(args, ("ref-multi",), argparse.ArgumentParser())
+    rows = E.collect(args, ("ref-multi",), argparse.ArgumentParser(), config=CHECK_CONFIG)
     assert len(rows) == 2
     assert all(row.rounds == 0 and row.goal == "no" for row in rows), [vars(row) for row in rows]
 
 
+def parallel_collection():
+    """Spawned workers preserve both languages' counts, verdicts, and configuration."""
+    args = argparse.Namespace(
+        no_build=True,
+        study="all",
+        params=[0],
+        kernel=["mmm_sum"],
+        phase=["1st"],
+        rules=44,
+        rounds=2,
+        counts=True,
+        timeout=60,
+        jobs=1,
+    )
+
+    def evidence(rows):
+        return [
+            (
+                r.workload(),
+                r.side,
+                r.goal,
+                r.classes,
+                r.nodes,
+                r.saturated,
+                r.substitution,
+                r.graph_issue,
+                [(side, c.verdict) for side, c in r.vs_ref.items()],
+            )
+            for r in rows
+        ]
+
+    serial = E.collect(args, E.SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
+    args.jobs = 2
+    parallel = E.collect(args, E.SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
+    # The small round budget misses the array goal, even though its graphs agree.
+    assert not E.successful(serial, E.SIDES, True) and not E.successful(parallel, E.SIDES, True)
+    assert evidence(serial) == evidence(parallel)
+    assert all(r.graph is None for r in parallel)
+    loaded = [R.Row.from_dict(r.as_dict("parallel")) for r in parallel]
+    assert all(r.jobs == 2 for r in loaded)
+    assert not E.successful(loaded, E.SIDES, True)
+    sections = R.report_sections(loaded, E.SIDES)
+    assert "contention" in sections[0][1]
+    assert all("jobs 2" in row[1] for row in sections[0][3])
+
+    # The child must receive CLI configuration, not its freshly imported defaults.
+    args.study = "array"
+    sides = ("encoding-no-aliasing", "ref-nested-snapshot")
+    limited = E.collect(
+        args, sides, argparse.ArgumentParser(), config=E.Config(CHECK_CONFIG.egglog, CHECK_CONFIG.xmulti, group_cap=0)
+    )
+    enc, ref = limited
+    assert enc.goal == ref.goal == "no"
+    assert E.compare_counts(enc, ref) == "same counts"
+    assert ref.graph_issue and "REFERENCE_LIMIT" in ref.graph_issue
+    assert enc.verdict(ref).startswith("inconclusive:")
+    assert not E.successful(limited, sides, True)
+
+
 def main():
-    # The suite builds these checked debug binaries; performance eval uses release.
-    E.EGGLOG = ROOT / "target" / "debug" / "egglog"
-    E.XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
     substitution_policies()
     nested_comparison_policy()
     combined_comparisons()
@@ -598,6 +659,7 @@ def main():
     goal_reporting()
     summary_reporting()
     zero_round_budget()
+    parallel_collection()
     substitution_refresh()
     coset_direction()
     complete_refinement()

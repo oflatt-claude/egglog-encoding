@@ -91,7 +91,7 @@ def main():
         print(f"FAIL: {EGGLOG.relative_to(ROOT)} not built")
         return 1
     decls = pf.RULES.with_name("sdql.egg")
-    ISO.use_language(slotenc.language(decls, decls.with_suffix(".ref")))
+    lang = slotenc.language(decls, decls.with_suffix(".ref"))
     bad = []
     for rounds in ROUNDS:
         compiled = program(rounds)
@@ -110,7 +110,7 @@ def main():
                 detail = (run.stderr.strip().splitlines() or [f"exit {run.returncode}"])[-1]
                 bad.append(f"{rounds} rounds: run failed: {detail[:120]}")
                 break
-            graph, issues = ISO.build_encoding_graph(json.loads(json_path.read_text()))
+            graph, issues = ISO.build_encoding_graph(json.loads(json_path.read_text()), lang)
             issue = compare_graphs(first, graph, issues)
             if issue is not None:
                 bad.append(f"{rounds} rounds: {issue}")

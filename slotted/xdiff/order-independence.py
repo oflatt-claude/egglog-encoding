@@ -35,11 +35,7 @@ MAX_ORDERS = 6
 
 def graph_for(case, rules):
     """The encoding's final graph with `rules` in the order given."""
-    I.EGG_PROGRAM = lambda c, mult: X.egg_program(c, rules, mult)
-    try:
-        return I.encoding_graph(case)
-    finally:
-        I.EGG_PROGRAM = None
+    return I.encoding_graph(case, egg_program=lambda c, mult: X.egg_program(c, rules, mult))
 
 
 def check(case):

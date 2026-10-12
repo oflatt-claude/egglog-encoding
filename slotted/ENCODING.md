@@ -1207,6 +1207,24 @@ and missing results. Each workload groups five systems: `encoding`,
 `encoding-no-aliasing`, `ref-multi`, `ref-nested-snapshot`, and `ref-nested`.
 The two encoding variants have separate timings and comparison certificates;
 neither can overwrite the other's result when cached runs are merged.
+Collection progress goes to stderr: one dot per completed workload/system sample
+in the printed system order, including unsuccessful samples. A phase lasting more
+than five seconds identifies the system and whether it is checking the goal,
+collecting or validating the graph, or comparing isomorphism. The final collection
+duration includes builds and correctness checks; the table's timings cover only
+the individual goal runs.
+Execution is serial by default. `python3 slotted/eval.py --jobs 4` runs up to four
+workloads concurrently, each in a separate process with its own checker state and
+scratch files. A worker runs all selected systems and all correctness checks for
+its workload; the final table retains the serial workload order. Parallel progress
+dots follow completion order, and slow-phase messages identify the workload and
+system. The worker limit is recorded in each observation and shown in saved reports.
+Parallel timings include contention for CPU and memory; use `--jobs 1` for serial
+performance measurements. The limit controls concurrent workloads, not CPU affinity.
+`--timeout` applies separately to each benchmark and graph-dump subprocess. Python
+graph validation and isomorphism have no wall-clock timeout (isomorphism uses
+search/work bounds instead), so the whole evaluation can take longer than the sum
+of the reported goal timings.
 Three things had to
 be made the same, each established on a minimal case the harness keeps:
 

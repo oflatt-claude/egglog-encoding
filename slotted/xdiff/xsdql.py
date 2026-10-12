@@ -1100,9 +1100,6 @@ def run_iso(args):
     """
     import isomorphism as I
 
-    I.EGG_PROGRAM = egg_program
-    I.use_language(LANG)
-
     cases_ = [c for c in cases() if not args or c.name.startswith(args[0])]
     tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
     diverging = []
@@ -1110,7 +1107,7 @@ def run_iso(args):
         if c.ref_want is not None:
             diverging.append(c.name)
             continue
-        verdict, detail = I.check(c)
+        verdict, detail = I.check(c, lang=LANG, egg_program=egg_program)
         tally[verdict] += 1
         print(f"  {verdict:4} {c.name:24} {detail}", flush=True)
     n = sum(tally.values())
