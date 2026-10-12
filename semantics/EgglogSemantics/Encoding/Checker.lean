@@ -6,11 +6,9 @@ import EgglogSemantics.Encoding.Encode
 `CHECKER.md`'s constructor-only fragment: five justifications, `Bool`-valued, reading the
 **source** program and nothing else — no database, no e-graph, no rows.
 
-The one thing it takes from `Encoding/Encode.lean` is `Rule.substGlobals`: a rule's query is
-read through the globals *before* it is flattened, because that is the query the encoder
-flattened and `@Rule_i`'s premise count is that query's. Everything else here is a mirror of
-the encoder rather than a call into it, and `DiffTest.lean`'s `premiseCount_eq_ruleProofArity`
-is what keeps the mirror honest.
+The checker reads each rule as written and flattens its query independently of the encoder.
+`DiffTest.lean`'s `premiseCount_eq_ruleProofArity` checks that both flattenings agree.
+Top-level actions are closed; rule heads evaluate under a fixed query substitution.
 
 A proof is an ordinary `Term`:
 
@@ -43,14 +41,6 @@ function's row is rejected for the same reason, `Expr.eval` having no case for o
 *top-level* actions, so it cannot anchor at a term that exists only because an earlier rule
 fired — the residue "`@Fiat` at a rule-created term" measures and bounds below. All three
 are refusals, so the checker stays sound; `Proof.Sound` is the statement that says so.
-
-**The environment order is `evalLocalActions`'.** A rule's query is matched with the globals
-*out of scope* (`Spec/Match.lean`'s `ValidSubst`, "free against the empty environment") and
-its head is run with them behind the match bindings (`σ ++ db.env`). `props`' `@Rule_i` case
-is that, seeding `ruleSubsts` at `[]` and evaluating the head at `σ ++ C.env`. Reversing the
-two — globals in front — makes a top-level `let` recapture a name a rule declared earlier
-matches on, which is the shape `DiffTest.lean`'s `glob-late-eq` draws; it cost 28 of the
-`difftest check 64` corpus's rows.
 
 **A merge needs no justification of its own.** A collision keeps the proof carried by
 whichever side's value survives and composes the displaced edge as
@@ -92,82 +82,59 @@ def ruleIndex (f : FnName) : Option Nat := familyIndex rulePrefix f
 
 /-! ### What the checker reads out of the program -/
 
-/-- The source program as the checker sees it: declarations, the globals and equalities the
-top-level actions assert, and the rules in program order. -/
+/-- The source declarations, asserted equalities, and rules in program order. -/
 structure Ctx where
   sig : Signature
-  /-- Globals bound by a top-level `let`, innermost first. -/
-  env : Env
-  /-- The equalities the top-level actions assert. -/
   eqs : List (Term × Term)
-  /-- The rules in program order, each with its **query read through the globals** — the rule
-  as `Encode.lean`'s `Rule.substGlobals` handed it to `encodeRule`, so the premise count and
-  the substitution the checker builds are the encoded rule's own. `@Rule_i` indexes this. -/
   rules : List Rule
-  /-- The globals in scope, as `Cmd.globalBind` accumulates them. -/
-  globals : List (Var × Expr)
 
 /-- One reflexive equality per subterm, which is what building a term asserts. -/
 def reflEqs (t : Term) : List (Term × Term) := t.subtermList.map fun s => (s, s)
 
 /-- `Spec/Eval.lean`'s `evalAction` with the asserted equalities as the accumulator:
 `union` contributes its pair both ways, everything built contributes `reflEqs`. -/
-def procAction (sig : Signature) (σ : Env) : Action → Option (Env × List (Term × Term))
-  | .expr e => (e.eval sig σ).map fun t => (σ, reflEqs t)
-  | .letBind v e => (e.eval sig σ).map fun t => ((v, t) :: σ, reflEqs t)
+def procAction (sig : Signature) (σ : Env) : Action → Option (List (Term × Term))
+  | .expr e => (e.eval sig σ).map fun t => reflEqs t
   | .union e₁ e₂ =>
       (e₁.eval sig σ).bind fun t₁ => (e₂.eval sig σ).bind fun t₂ =>
         if t₁.isLit || t₂.isLit then none
-        else some (σ, (t₁, t₂) :: (t₂, t₁) :: (reflEqs t₁ ++ reflEqs t₂))
+        else some ((t₁, t₂) :: (t₂, t₁) :: (reflEqs t₁ ++ reflEqs t₂))
   | .set f args out =>
       (Expr.evalList sig args σ).bind fun as =>
-        (Expr.evalList sig out σ).map fun vs => (σ, reflEqs (.app f (as ++ vs)))
+        (Expr.evalList sig out σ).map fun vs => reflEqs (.app f (as ++ vs))
 
-/-- `procAction` in order, threading the environment. -/
-def procActions (sig : Signature) (σ : Env) : List Action → Option (Env × List (Term × Term))
-  | [] => some (σ, [])
+/-- Evaluate every action in the same query substitution. -/
+def procActions (sig : Signature) (σ : Env) : List Action → Option (List (Term × Term))
+  | [] => some []
   | a :: as => (procAction sig σ a).bind fun r =>
-      (procActions sig r.1 as).map fun r' => (r'.1, r.2 ++ r'.2)
+      (procActions sig σ as).map fun r' => r ++ r'
 
 /-- The equalities a rule head derives under `σ`. -/
 def headEqs (sig : Signature) (as : List Action) (σ : Env) : List (Term × Term) :=
-  ((procActions sig σ as).map Prod.snd).getD []
+  (procActions sig σ as).getD []
 
 def Ctx.empty : Ctx :=
-  { sig := fun _ => none, env := [], eqs := [], rules := [], globals := [] }
+  { sig := fun _ => none, eqs := [], rules := [] }
 
-/-- One command. An action that does not evaluate contributes nothing: the program is stuck
-there, so no state is reachable. -/
-def Ctx.step (P : Program) (C : Ctx) : Cmd → Ctx
+/-- Top-level expressions are closed. Rule variables are bound only when a proof is checked. -/
+def Ctx.step (C : Ctx) : Cmd → Ctx
   | .decl f d => { C with sig := Function.update C.sig f (some d) }
-  | .rule r => { C with rules := C.rules ++ [r.substGlobals C.globals] }
+  | .rule r => { C with rules := C.rules ++ [r] }
   | .action a =>
-      match procAction C.sig C.env a with
-      | some (σ, es) =>
-          { sig := C.sig
-            env := σ
-            eqs := C.eqs ++ es
-            rules := C.rules
-            globals := Cmd.globalBind P (.action a) C.globals }
+      match procAction C.sig [] a with
+      | some es => { C with eqs := C.eqs ++ es }
       | none => C
   | .run _ => C
   | .saturate _ => C
 
-def ctxOf (P : Program) : Ctx := P.foldl (Ctx.step P) Ctx.empty
+def ctxOf (P : Program) : Ctx := P.foldl Ctx.step Ctx.empty
 
 /-! ### Matching a body fact against a premise's proposition -/
 
 mutual
 
-/-- Match `e` against the ground term `t`, extending `σ`. `σ` holds the rule's **own** match
-bindings and nothing else: the query is matched against the empty environment
-(`Spec/Match.lean`'s `ValidSubst`, "free against the empty environment"), because a global
-the rule was declared under was resolved into the query when the rule was registered and a
-name that was not a global then never becomes one for that rule. Order within `σ` is
-immaterial — a name already bound is never rebound, only compared — so a new binding is
-appended. The globals go *behind* `σ` when the head runs (`props`, `@Rule_i`), which is
-`evalLocalActions`' `σ ++ db.env`: a match variable shadows a global of the same name, so a
-`let` reached after the rule was declared does not recapture it. -/
+/-- Match `e` against the ground term `t`, extending the rule's query substitution.
+A name already bound is compared with its existing value; new bindings are appended. -/
 def unifyExpr (sig : Signature) : Expr → Term → Env → Option Env
   | .lit l, .lit l', σ => if l = l' then some σ else none
   | .lit _, .app _ _, _ => none
@@ -375,10 +342,8 @@ def props (C : Ctx) : Term → Option Term → Option Term → List (Term × Ter
               | none => []
               | some r =>
                   if ps.length = premiseCount r then
-                    -- `evalLocalActions`' environment: the match bindings, then the globals
-                    -- behind them. Matching itself sees no globals at all.
                     (ruleSubsts C ps (flatQuery r.query 0).1 [[]]).flatMap fun σ =>
-                      (headEqs C.sig r.actions (σ ++ C.env)).filter (endsOk ma mb)
+                      (headEqs C.sig r.actions σ).filter (endsOk ma mb)
                   else []
   termination_by pf => size pf
   decreasing_by all_goals (simp [size, sizeL]; try omega)
@@ -651,45 +616,17 @@ ahead of everything. -/
 #guard !Checks chain (pRule 0 [pSym pFiat, pFiat]) tA tB
 #guard !Checks chain (pRule 0 []) tA tB
 
-/-! ### A `let` reached after the rule was declared
+/-! ### Query variables remain local to the rule -/
+private def localRule : Rule :=
+  ⟨[.expr (.app "F" [.var "x"])], [.union (.app "F" [.var "x"]) eB], ""⟩
 
-The environment order, both halves of it. A rule declared *before* a top-level `let` on `$g`
-keeps `$g` as a match variable — `Rule.substGlobals` had no binding for it — and
-`evalLocalActions` puts the match bindings **before** the globals, so the head reads the
-match variable too and the later `let` recaptures nothing. A rule declared *after* has the
-global already resolved into its query, so it fires at the global's value alone. The two
-programs below differ only in where the `let` sits. `DiffTest.lean`'s `glob-late-eq` and
-`glob-late-head` are this shape run against the binary. -/
-private def globRule : Rule :=
-  ⟨[.expr (.app "F" [.var "$g"])], [.union (.app "F" [.var "$g"]) eB], ""⟩
+private def localProgram : Program :=
+  [.decl "A" (cnst 0), .decl "B" (cnst 0), .decl "C" (cnst 0), .decl "F" (cnst 1),
+   .rule localRule, .action (.expr (.app "F" [eA])), .action (.expr eC), .run ""]
 
-private def globDecls : Program :=
-  [.decl "A" (cnst 0), .decl "B" (cnst 0), .decl "C" (cnst 0), .decl "F" (cnst 1)]
-
-private def globTail : Program :=
-  [.action (.expr (.app "F" [eA])), .action (.expr eB), .action (.union eC eA), .run ""]
-
-private def lateLet : Program :=
-  globDecls ++ [.rule globRule, .action (.letBind "$g" eC)] ++ globTail
-
-private def earlyLet : Program :=
-  globDecls ++ [.action (.letBind "$g" eC), .rule globRule] ++ globTail
-
-/-! The stored queries differ, and the arity with them: `lateLet`'s reads one application
-and `earlyLet`'s reads two, because the resolved `(C)` is itself an application to flatten.
-That is `Rule.substGlobals` at the declaration and not at the firing. -/
-#guard (ctxOf lateLet).rules.map premiseCount = [1]
-#guard (ctxOf earlyLet).rules.map premiseCount = [2]
-
-/-! `$g` is a match variable in `lateLet`, in the query and in the head alike: the rule fires
-at `(F (A))` and derives `(F (A)) = (B)`, not the global's `(F (C)) = (B)`. -/
-#guard Checks lateLet (pRule 0 [pFiat]) (tF tA) tB
-#guard !Checks lateLet (pRule 0 [pFiat]) (tF tC) tB
-
-/-! Declared after the `let`, `$g` is gone from the query — `Rule.substGlobals` put `(C)`
-there — and the firing is the global's alone. -/
-#guard !Checks earlyLet (pRule 0 [pFiat, pFiat]) (tF tA) tB
-#guard Checks earlyLet (pRule 0 [pFiat, pFiat]) (tF tC) tB
+#guard (ctxOf localProgram).rules.map premiseCount = [1]
+#guard Checks localProgram (pRule 0 [pFiat]) (tF tA) tB
+#guard !Checks localProgram (pRule 0 [pFiat]) (tF tC) tB
 
 /-! ### `@Fiat` at a rule-created term, which is the residue
 

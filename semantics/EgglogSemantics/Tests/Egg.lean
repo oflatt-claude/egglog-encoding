@@ -62,7 +62,6 @@ def Pattern.toEgg : Pattern → String
 
 def Action.toEgg : Action → String
   | .expr e => e.toEgg
-  | .letBind v e => "(let " ++ v ++ " " ++ e.toEgg ++ ")"
   | .union e₁ e₂ => "(union " ++ e₁.toEgg ++ " " ++ e₂.toEgg ++ ")"
   | .set f args out =>
       "(set (" ++ f ++ Expr.toEggArgs args ++ ") " ++ Expr.valuesToEgg out ++ ")"
@@ -86,7 +85,7 @@ The block form is `:merge (<action>* <result>)` — the actions and the result a
 `egglog/tests/merge-action-block.egg`). The parse is disambiguated by whether the first
 element is itself a list, which is why an empty body has to emit the bare result: an
 expression always has an atom head, so `:merge (min old new)` reads as a result and
-`:merge ((let s …) s)` as a block. -/
+`:merge ((set (Log) (min old new)) (min old new))` as a block. -/
 def MergeSpec.toEgg : MergeSpec → String
   | .noMerge => " :no-merge"
   | .merge [] res => " :merge " ++ MergeSpec.resultToEgg res
@@ -166,7 +165,6 @@ def Pattern.fnArities : Pattern → List (FnName × Nat)
 
 def Action.fnArities : Action → List (FnName × Nat)
   | .expr e => e.fnArities
-  | .letBind _ e => e.fnArities
   | .union e₁ e₂ => e₁.fnArities ++ e₂.fnArities
   | .set f args out => (f, args.length) :: Expr.fnAritiesL args ++ Expr.fnAritiesL out
 

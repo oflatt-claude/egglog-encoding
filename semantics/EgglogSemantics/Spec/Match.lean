@@ -57,9 +57,9 @@ def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
 holds. The **witness** `w` is drawn from the *original* terms: without one, the reflexive
 equation `withOperands` adds for the instance would match everything.
 
-`σ` is the **whole** environment a pattern is read in: the globals a rule's query mentions
-were resolved into it when the rule was registered (`Spec/Step.lean`'s `cmdEffect`), so the
-firing state's own environment says nothing about a query and is not consulted. -/
+`σ` is the whole evaluation environment for the query. Rule registration stores the query
+as written, and a match supplies all of its variables. The database's ambient environment
+is not consulted. -/
 inductive Matches (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
       w ∈ db.terms → e.eval db.sig σ = some t → CongOn db [t] w t →
@@ -79,11 +79,8 @@ inductive Matches (db : Database) : Pattern → Env → Prop where
       CongOn db [.app f (ts ++ us)] w (.app f (ts ++ us)) →
       Matches db (.values vs f as) σ
 
-/-- The substitutions one query pattern admits: `σ` binds exactly the pattern's free
-variables, and the pattern matches under it. **Free against the empty environment**: every
-variable a stored rule's query still carries is a match variable, because a global was
-resolved into the rule when it was registered and a name that was not a global then never
-becomes one for that rule. -/
+/-- A substitution binds exactly the pattern's variables and makes the pattern match.
+Every query variable is local to the match. -/
 def ValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
   ValidEnv (p.freeVars []) db σ ∧ Matches db p σ
 

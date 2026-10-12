@@ -65,7 +65,6 @@ def Pattern.arityOk : Pattern → Signature → Bool
 no entry needs no case here, `Action.SetLegal` already rejects it. -/
 def Action.arityOk : Action → Signature → Bool
   | .expr e, sig => e.arityOk sig
-  | .letBind _ e, sig => e.arityOk sig
   | .union e₁ e₂, sig => e₁.arityOk sig && e₂.arityOk sig
   | .set f args out, sig =>
       (match sig f with
@@ -169,7 +168,6 @@ end
 /-- An action, in every expression position egglog's check walks. -/
 def Action.noLookup : Action → Signature → Bool
   | .expr e, sig => e.noLookup sig
-  | .letBind _ e, sig => e.noLookup sig
   | .union e₁ e₂, sig => e₁.noLookup sig && e₂.noLookup sig
   | .set _ args out, sig => Expr.noLookupList args sig && Expr.noLookupList out sig
 

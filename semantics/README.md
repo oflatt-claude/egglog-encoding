@@ -1,112 +1,89 @@
 # EgglogSemantics
 
-A Lean 4 model of egglog's semantics, ported from the Redex model in
-[egglog PR #324](https://github.com/egraphs-good/egglog/pull/324). The goal is to model
-egglog as cleanly as possible for a paper, and then prove things about an implementation.
-Proving things about egglog's proof encoding is the eventual payoff, and is **parked**.
+A Lean 4 model of egglog's semantics and proof encoding, originally ported from the
+Redex model in [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324).
+The reference interpreter targets the extended egglog implementation in this workspace,
+including multi-output functions and action blocks inside `:merge` bodies.
 
-**Which egglog.** This models egglog *as extended in this repo*, not a released one. Two
-extensions are load-bearing and are part of what the paper discusses:
+## Let-free language
 
-| extension | upstream `egraphs-good/egglog` | here |
-| --- | --- | --- |
-| multi-output columns — `(function Pair (Math) (i64 i64) …)` | `parse error: expected output sort` | accepted |
-| `set` inside a `:merge` body — `:merge (<action>* <result>)` | `:merge` takes a single expression | accepted |
+The Lean syntax has three actions: build an expression, union two expressions, and set a
+function row. There are no global or local `let` bindings. Rule variables come from the
+query; merge bodies use their declared old/new parameters. Reusing an expression means
+writing it again, or matching its value in a rule query.
 
-Checked against upstream `c92a910` (v2.0.0). The second is why M9 makes a merge a *step
-relation on databases* rather than a function combining two values — a body that writes
-entries cannot be modelled as a fold. `make lean-difftest`'s oracle is this repo's binary,
-so it validates against the extended language.
+Rules are registered exactly as written. Action blocks do not extend their evaluation
+environment, and commands preserve the ambient environment. A program starting at the
+empty database therefore finishes with an empty environment. `Database.env` remains the
+context used to evaluate a query substitution or merge parameters, rather than a store
+of global bindings. The proof checker likewise processes a head under one fixed query
+substitution and has no global-binding context.
 
-**Picking this up?** Start with [`PLAN.md`](PLAN.md), "Current priority" — what we are
-working on now, what is parked, the two interpreter contracts, and how to check a change.
+Generic substitution helpers remain in the encoding proofs. `EncStep.subst_empty` proves
+that actual encoded executions carry the empty substitution throughout; no command updates it.
 
-The rest of `PLAN.md` has what the port changes and why, and the milestones.
-[`MERGE.md`](MERGE.md) is the `:merge` design (M9). Two files are parked with M11:
-[`ENCODING.md`](ENCODING.md), what was learned from the encoding's theorems before they were
-deleted, and [`CHECKER.md`](CHECKER.md), what a Lean model of egglog's proof checker would cost.
+This restriction applies to the Lean model, encoding, checker, and differential-test
+programs. The Rust parser and runtime retain their existing syntax.
 
-Two things worth knowing before reading any of it.
+## Proofs and encoding
 
-**`Spec/` is frozen** at 8 files and ~975 lines. `Impl/` is ported against it, difftest is green,
-the whole library builds and **`Spec/`, `Impl/` and `Proofs/` carry no `sorry`**. What is open
-there is coverage rather than proof: `PLAN.md`, "What is covered, and what is not", has the one
-combination — a `union` together with a `:merge` function — that neither top-level theorem
-reaches, and which difftest exercises. The two `sorry`s in the library are both in parked M11's
-`Encoding/Correspond.lean`, one per named property of the state `execM` returned that
-`encode_corresponds`'s **forward** half is reduced to; `make lean-check` pins their number and
-their directory. The completeness half is proved — `Encoding/Complete.lean`'s
-`encode_corresponds_complete`, `sorryAx`-free — which is what took the count from three to
-two.
+`Encoding/Encode.lean` transforms constructor programs into explicit view tables and a
+union-find table. Each recorded equality carries a proof. Generated ids are structural
+terms; generated variable names and rule-proof constructor names have separate counters.
+The encoding inserts rebuild work after writes and into source saturation loops.
 
-**`Spec/` is append-only and `Impl/` is not.** Nothing is ever removed from `Database.eqs`,
-where a function's whole table lives as terms; `Impl/` keeps a `Row` index it re-keys and
-deletes from, because egglog does. So the contract between them is a **containment**, not an
-equality — except on the constructor fragment, where the merge phase is the identity and
-`exec_programStep` still holds.
+`Encoding/Complete.lean` proves `encode_corresponds`: source congruence agrees with the
+encoded target's `SameClass` relation under `Program.EncodeDomain` and successful source
+and target executions. The domain restricts the source to constructors, reserves generated
+names, and checks arities, query shape, declaration order, and head scope. The library's
+`make lean-check` target permits no `sorry`.
+
+The executable proof checker is separate. Its `SoundAt` predicate states the intended
+checker contract; defining that predicate does not prove general checker soundness.
+The checker tests and `difftest check` exercise the implemented proof vocabulary and
+report unsupported proof shapes.
 
 ## Layout
 
-The tree separates *what is being claimed* from *why it holds*, so the first can be
-read closely and the second skimmed.
-
-| | contents |
+| Directory | Contents |
 | --- | --- |
-| `EgglogSemantics/Spec/` | the semantics — what an egglog program means |
-| `EgglogSemantics/Impl/` | the reference implementation, which computes it |
-| `EgglogSemantics/Proofs/` | everything proved about the two, one file per subject |
-| `EgglogSemantics/Tests/` | example programs as proofs and `#guard`s, and the `.egg` emitter |
-| `EgglogSemantics/Encoding/` | **parked M11** — the encoder `encode`, the proof checker, and `Correspond.lean`: the correspondence `difftest correspond` measures, the decision procedure proved equal to it, and the vacuity results. Its original theorems were deleted; [`ENCODING.md`](ENCODING.md) is what survives them |
+| `EgglogSemantics/Spec/` | Syntax, databases, congruence, evaluation, matching, relational steps, scope |
+| `EgglogSemantics/Impl/` | Finite reference interpreters and front-end checks |
+| `EgglogSemantics/Proofs/` | Interpreter refinement, preservation, totality, and counterexamples |
+| `EgglogSemantics/Encoding/` | Encoder, checker, correspondence, matching, and completeness proofs |
+| `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
+| `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
 
-`Spec/` and `Impl/` are **definitions**, with what the language forces inlined rather than
-named: `decreasing_by` on `Impl/Closure.lean`'s `closure`, decidability instances. Two
-deliberate exceptions, both about the same thing — that a term is present exactly when it is
-self-equal. `Spec/Congruence.lean`'s `eqsInTerms_free` is one line and is what lets
-`Database.WF` drop a field. `Impl/Interp.lean`'s `toDatabase_*` and `EqsInTerms` lemmas are
-the bridge from the interpreter's term list to the diagonal of `Database.eqs`, which every
-refinement theorem reads through; they sit beside `toDatabase` because they are what makes
-it the right denotation, not a step in a proof.
+Read `Spec/Syntax.lean`, `Eval.lean`, and `Step.lean` first, then the definitions in
+`Encoding/Encode.lean` and the final theorems in `Encoding/Complete.lean`.
 
-Reading order for `Spec/`: `Syntax` → `Term` → `Database` → `Congruence` → `Eval` →
-`Match` → `Step`, with `Scope` (the front end's static checks) hanging off `Term`. The
-split that matters is `Eval` versus `Step`: `Eval` is `Option`-valued and says what a
-command computes, `Step` is `Prop`-valued and relational, because merge closure and rule
-firing are order- and choice-dependent. Neither has a duplicate on the other side.
-`Impl/` has `Closure` and `Interp`, with `Merge` adding only M9's merge phase and `Check`
-the two front-end checks that are `Bool` rather than `Prop`.
+The specification only adds equations. The merge interpreter maintains a row index that
+can replace entries, so its general refinement contract is containment (`execM_contained`).
+The constructor-only interpreter has the stronger `exec_programStep` contract.
 
-Each `Proofs/X.lean` is about `Spec/X.lean` or `Impl/X.lean`. Two are not:
-`Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` hold compiling witnesses that
-particular statements are **false**, so a refuted statement cannot quietly come back.
-`Proofs/Interp.lean` holds `exec_programStep`, the biconditional that ties spec and
-implementation together.
+`PLAN.md`, `MERGE.md`, `ENCODING.md`, and `CHECKER.md` retain design history, including
+refuted candidate invariants. Their historical descriptions of global lets and parked
+proof obligations predate the current model; use the Lean declarations for current contracts.
 
-## Building
+## Validation
+
+From the workspace root:
 
 ```sh
-lake exe cache get     # prebuilt Mathlib binaries
-lake build
+make check                 # Python and Rust formatting, checks, and tests
+make lean-check            # full Lean build and zero-sorry audit
+cargo build --release -p egglog
+make lean-difftest          # compare Lean and egglog per-function row counts
 ```
 
-or, from the workspace root:
+Additional executable probes, from `semantics/`:
 
-- `make lean-check` — builds, and fails on any `sorry` outside `Encoding/Correspond.lean`
-  *and* on any change to the four that file is allowed. It passes over the whole library,
-  `Proofs/Counterexamples.lean` and `Proofs/Lattice.lean` included, so any hit is a regression.
-- `make lean-difftest` — runs the interpreter and egglog on the same generated programs and
-  compares per-function row counts, for the constructor fragment and for M9's `:merge`
-  functions. 183 cases, all passing. Needs a release `egglog` binary. It reaches the
-  interpreter without going through `Proofs/`, which is why it stays runnable during the
-  port.
+```sh
+lake build difftest
+.lake/build/bin/difftest correspond 64
+.lake/build/bin/difftest check 64
+```
 
-Requires [`elan`](https://github.com/leanprover/elan); the toolchain is pinned in
-`lean-toolchain` and Mathlib in `lakefile.toml` / `lake-manifest.json`.
-
-## Editing with Claude Code
-
-The workspace `.mcp.json` declares a [`lean-lsp-mcp`](https://pypi.org/project/lean-lsp-mcp/)
-server pointed at this directory, which gives per-declaration diagnostics without a full
-`lake build`, and `lean_verify` for auditing a theorem's axioms — a stronger `sorry` check
-than grepping, since it traces into Mathlib. It needs `uvx` and `elan` on `PATH`, and the
-server caches imports: after editing a file's *dependency*, rebuild through the server
-rather than the shell or its answers go stale.
+The toolchain is pinned in `lean-toolchain`, and Mathlib in `lakefile.toml` and
+`lake-manifest.json`. Install `elan`, then run `lake exe cache get` from this directory
+when setting up a fresh checkout.

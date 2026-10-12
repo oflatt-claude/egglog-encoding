@@ -4,8 +4,7 @@ import EgglogSemantics.Spec.Term
 /-!
 # The database
 
-The global state: the equalities the program has asserted, the global bindings, the rules,
-and the declarations. There is no separate term set — the equation `t = t` records that `t`
+The state: the asserted equalities, evaluation context, rules, and declarations. There is no separate term set — the equation `t = t` records that `t`
 was built, and `Database.terms` is the terms that are self-equal. It is the *endpoints* of
 `eqs`, not its diagonal: asserting `1 = 2` alone holds both, by `symm` and `trans`. The two
 coincide exactly under `WF.eqsRefl`, which is what that field is for. A function's table
@@ -64,7 +63,8 @@ structure Database where
   /-- The *asserted* equalities: `union`s, and a reflexive `t = t` per term built. Not
   closed under congruence, and never shrinks. -/
   eqs : Set (Term × Term)
-  /-- Global bindings, extended by a top-level `let`. -/
+  /-- The evaluation context, installed temporarily for a rule or merge firing.
+  Commands preserve it; a program starting at `empty` leaves it empty. -/
   env : Env
   /-- The rules, run by `Cmd.run`. -/
   rules : Set Rule

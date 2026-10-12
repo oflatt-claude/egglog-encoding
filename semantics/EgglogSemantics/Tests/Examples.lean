@@ -44,17 +44,14 @@ application besides. -/
 example : ¬ WellScoped [.action (.expr (.var "v1"))] := by
   simp [WellScoped, Action.Scoped, Expr.Scoped]
 
-/-- `(let v1 2)` then `(cwrap v1)`: a top-level `let` is in scope for a later command. -/
-example : WellScoped
-    [.action (.letBind "v1" (eNum 2)), .action (.expr (.app "cwrap" [.var "v1"]))] := by
-  simp [WellScoped, Action.Scoped, Expr.Scoped, Expr.IsApp, Cmd.bind, Action.bind, eNum]
+/-- Reusing a value writes the expression at each use. -/
+example : WellScoped [.action (.expr (.app "cwrap" [eNum 2]))] := by
+  simp [WellScoped, Action.Scoped, Expr.Scoped, Expr.IsApp, eNum]
 
-/-- The same program with a bare `v1` as the second action is rejected. `v1` is in scope,
-but egglog has no such action — `parse error: expected command` at top level and
-`parse error: expected action` in a rule head — so `Action.Scoped` requires an
-application. -/
-example : ¬ WellScoped [.action (.letBind "v1" (eNum 2)), .action (.expr (.var "v1"))] := by
-  simp [WellScoped, Action.Scoped, Expr.IsApp]
+/-- Building a term does not bind a variable for a later command. -/
+example : ¬ WellScoped
+    [.action (.expr (.app "cwrap" [eNum 2])), .action (.expr (.app "cwrap" [.var "v1"]))] := by
+  simp [WellScoped, Action.Scoped, Expr.Scoped, Expr.IsApp, eNum]
 
 /-- Likewise for a query fact, where egglog answers `parse error: expected fact`. -/
 example : ¬ Rule.Scoped ⟨[.expr (.var "a")], [], ""⟩ [] := by
@@ -227,25 +224,25 @@ example : ValidEnv ["v1"]
 
 /-! ### Running a program of actions
 
-`(let v (b 1))`, `(union (b 1) (b 1))`, `(union v (d))` gives four reflexive equations —
+`(b 1)`, `(union (b 1) (b 1))`, `(union (b 1) (d))` gives three reflexive equations —
 the terms `{(b 1), 1, (d)}` — and the one asserted equation `(b 1) = (d)`, from which the
 closure derives `(d) = (b 1)`. The self-union contributes only the term: the equation it
 asserts is the reflexive one recording `(b 1)`.
 
 Neither operand of either `union` is a literal, and neither may be: `(union 7 7)` and
-`(union v 4)` are both stuck, because egglog rejects a `union` on a primitive sort and
+`(union (b 1) 4)` are both stuck, because egglog rejects a `union` on a primitive sort and
 `evalAction` follows it. -/
 
 private def b1 : Term := .app "b" [num 1]
 
 private def actionsProgram : Program :=
   [.decl "b" (ctorDecl 1), .decl "d" (ctorDecl 0),
-   .action (.letBind "v" (.app "b" [eNum 1])),
+   .action (.expr (.app "b" [eNum 1])),
    .action (.union (.app "b" [eNum 1]) (.app "b" [eNum 1])),
-   .action (.union (.var "v") (.app "d" []))]
+   .action (.union (.app "b" [eNum 1]) (.app "d" []))]
 
 example : WellScoped actionsProgram := by
-  simp [WellScoped, actionsProgram, Action.Scoped, Expr.Scoped, Cmd.bind, Action.bind, eNum]
+  simp [WellScoped, actionsProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, eNum]
 
 /-- `(union 7 7)` gets stuck, in any state: `evalAction` refuses a literal operand. -/
 example {db : Database} : evalAction db (.union (eNum 7) (eNum 7)) = none := by
@@ -254,7 +251,7 @@ example {db : Database} : evalAction db (.union (eNum 7) (eNum 7)) = none := by
 example : ∃ db, ProgramStep Database.empty actionsProgram db ∧
     db.terms = {b1, num 1, cnst "d"} ∧
     db.eqs = {(b1, b1), (num 1, num 1), (cnst "d", cnst "d"), (b1, cnst "d")} ∧
-    Env.lookup "v" db.env = some b1 ∧
+    db.env = [] ∧
     Cong db (cnst "d") b1 := by
   refine ⟨_, .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
     (.cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩ .nil)))), ?_, ?_, rfl, ?_⟩
@@ -283,8 +280,7 @@ private def ruleProgram : Program :=
    .rule swapRule, .run ""]
 
 example : WellScoped ruleProgram := by
-  simp [WellScoped, ruleProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, Cmd.bind,
-    Action.bind, Pattern.Scoped, Query.bind, Pattern.vars, swapRule, eNum]
+  simp [WellScoped, ruleProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, Pattern.Scoped, Query.bind, Pattern.vars, swapRule, eNum]
 
 /-- The database just before the `(run)`: `(Add 1 2)` with its children — three reflexive
 equations, one per subterm built — plus the rule. -/
@@ -477,7 +473,7 @@ private def accepts (d : FnDecl) (cs : List Cmd) : Bool := (prog d cs).arityOk e
 #guard accepts one [.action (.set "Dist" [A] [eNum 3])]
 #guard accepts one [.rule ⟨[.expr (.app "Dist" [.var "k"])], [], ""⟩]
 #guard accepts one [.rule ⟨[.eq (eNum 3) (.app "Dist" [.var "k"])], [], ""⟩]
-#guard accepts one [.action (.letBind "x" (.app "Dist" [A]))]
+#guard accepts one [.action (.expr (.app "Dist" [A]))]
 
 /- "Arity mismatch, expected 1 args: (Dist @A @A1)" — too many key columns. -/
 #guard !accepts one [.action (.set "Dist" [A, A] [eNum 3])]
@@ -505,7 +501,7 @@ recognized only for a tuple output. -/
 
 /- "Arity mismatch, expected 2 args: (Dist @A2)" — a tuple-output function cannot be
 evaluated as an expression: only one output variable is appended. -/
-#guard !accepts two [.action (.letBind "x" (.app "Dist" [A]))]
+#guard !accepts two [.action (.expr (.app "Dist" [A]))]
 
 /- "Arity mismatch, expected 2 args: (Dist k)" — nor read as a bare query fact, for the
 same reason. A read of any width is `Pattern.values`. -/

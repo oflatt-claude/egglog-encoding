@@ -59,53 +59,34 @@ private def assocRule : Rule where
                      (add (.var "a") (add (.var "b") (.var "c")))]
   ruleset := ""
 
-/-! #### Reading a global from inside a query
 
-The `glob-*` family. A `let` binds `$g` to a term, a rule's **query** mentions `$g`, and a
-`union` moves the class of that term. These are the cases that caught the defect
-`Rule.substGlobals` fixes: the encoding used to leave `$g` in the emitted query, read off the
-target environment, so the source asked "is some term congruent to `Wrapper($g)` held?" while
-the target asked "is there a live `@FViewWrapper` row **keyed at** `$g`?". The rebuild's column
-rules move a key column to its `@UF` *leader*, so they carry rows **towards** the leader and
-never back; when `$g` was bound to the loser of a `union` and nothing was ever built at that
-key, the two questions parted company — six of these eight cases reported LOST. The encoder now
-reads a query's global through the global's own **definition** (`Encode.lean`, "Globals"), so
-the flattening lands on that definition's current e-class and all eight agree.
-
-`Term.blt` orders applications by arity, then by name, then lexicographically, so `(Aa)` is
-below `(Zz)` and below any application of positive arity; `mergeResult` keeps `ordering-min`,
-so `(Aa)` is the leader in every union below. `Cc`, `Hit` and `Mark` are named apart from the
-rest of the corpus so a case's counts read on their own. -/
-
-/-- The global under one constructor: the smallest shape that reads `$g` from a query. -/
-private def wrapGlobRule : Rule where
-  query := [.expr (.app "Wrapper" [.var "$g"])]
+private def wrapAtRule (key : Expr) : Rule where
+  query := [.expr (.app "Wrapper" [key])]
   actions := [.expr (C "Hit")]
   ruleset := ""
 
-/-- The same query with the global **in the head too**, so the row the firing writes says
-which reading of `$g` the query used. -/
-private def wrapGlobHeadRule : Rule where
-  query := [.expr (.app "Wrapper" [.var "$g"])]
-  actions := [.expr (.app "Hit" [.var "$g"])]
+
+private def wrapHeadRule : Rule where
+  query := [.expr (.app "Wrapper" [.var "x"])]
+  actions := [.expr (.app "Hit" [.var "x"])]
   ruleset := ""
 
 /-- The same query with a `union` head, so what a failure to fire costs is an *equality*
 between two terms both databases hold rather than an e-node. -/
-private def wrapGlobUnionRule : Rule where
-  query := [.expr (.app "Wrapper" [.var "$g"])]
-  actions := [.union (.app "Wrapper" [.var "$g"]) (C "Hit")]
+private def wrapUnionAtRule (key : Expr) : Rule where
+  query := [.expr (.app "Wrapper" [key])]
+  actions := [.union (.app "Wrapper" [key]) (C "Hit")]
   ruleset := ""
 
-/-- The global as one key column of two, with the other bound by the match. -/
-private def addGlobRule : Rule where
-  query := [.expr (add (.var "$g") (.var "b"))]
+
+private def addAtRule (key : Expr) : Rule where
+  query := [.expr (add (key) (.var "b"))]
   actions := [.expr (.app "Mark" [.var "b"])]
   ruleset := ""
 
-/-- The global two constructors down, so the atom that reads it is not the outermost. -/
-private def wrapWrapGlobRule : Rule where
-  query := [.expr (.app "Wrapper" [.app "Wrapper" [.var "$g"]])]
+
+private def nestedAtRule (key : Expr) : Rule where
+  query := [.expr (.app "Wrapper" [.app "Wrapper" [key]])]
   actions := [.expr (C "Hit")]
   ruleset := ""
 
@@ -150,46 +131,33 @@ private def mmUnionRule : Rule where
   actions := [.union (C "Zz") (C "Aa")]
   ruleset := ""
 
-/-! #### A `let` reached after the rule was declared
 
-The `glob-late-*` family: `glob-lost`'s shape with the **rule declared first**, so `$g` is an
-ordinary match variable and stays one. `Spec/Step.lean`'s `cmdEffect` resolves the globals then
-in scope into the rule it registers, which is what `remove_globals` does and where it does it,
-so all three of the binary, the specification and the encoding read the query the same way. -/
-
-/-- The global's key is never built and nothing is unioned: the query fires only if `$g` is
-free. The measurement that says the reading is the binary's. -/
-private def globLateFreshCase : Program :=
-  [.rule wrapGlobRule,
-   .action (.letBind "$g" (C "Zz")),
+private def variableFreshCase : Program :=
+  [.rule (wrapAtRule (.var "x")),
+   .action (.expr (C "Zz")),
    .action (.expr (.app "Wrapper" [C "Bb"])),
    .run ""]
 
-/-- The argument is congruent to the global, so the frozen query matches too and only the
-encoding can lose the firing. -/
-private def globLateCase : Program :=
-  [.rule wrapGlobRule,
-   .action (.letBind "$g" (C "Zz")),
+
+private def variableCase : Program :=
+  [.rule (wrapAtRule (.var "x")),
+   .action (.expr (C "Zz")),
    .action (.expr (.app "Wrapper" [C "Aa"])),
    .action (.union (C "Zz") (C "Aa")),
    .run ""]
 
-/-- **The head reads the same name**, so the firing says *which* reading won rather than only
-whether one happened: with `$g` an ordinary match variable the head builds `(Hit (Bb))`, and
-with `$g` recaptured as the global it would build `(Hit (Zz))`. `./target/release/egglog`
-prints `(Hit (Bb))`. This is also the measurement that fixes `evalLocalActions`' environment
-order — `σ` before the globals, so a match variable is not shadowed by a later `let`. -/
-private def globLateHeadCase : Program :=
-  [.rule wrapGlobHeadRule,
-   .action (.letBind "$g" (C "Zz")),
+
+private def variableHeadCase : Program :=
+  [.rule wrapHeadRule,
+   .action (.expr (C "Zz")),
    .action (.expr (.app "Wrapper" [C "Bb"])),
    .run ""]
 
 /-- The same with a `union` head, so what a missing firing costs is an **equality** between
 two terms both databases hold — the shape `Database.UnionsJoined` is stated in. -/
-private def globLateEqCase : Program :=
-  [.rule wrapGlobUnionRule,
-   .action (.letBind "$g" (C "Zz")),
+private def variableEqCase : Program :=
+  [.rule (wrapUnionAtRule (.var "x")),
+   .action (.expr (C "Zz")),
    .action (.expr (.app "Wrapper" [C "Aa"])),
    .action (.expr (C "Hit")),
    .action (.union (C "Zz") (C "Aa")),
@@ -199,8 +167,8 @@ private def curated : List (String × Program) :=
   [ ("actions",
       [.action (.expr (add (C "One") (C "Two"))),
        .action (.union (C "One") (C "One")),
-       .action (.letBind "$g" (add (C "Two") (C "Three"))),
-       .action (.expr (.app "Wrapper" [.var "$g"]))]),
+       .action (.expr (add (C "Two") (C "Three"))),
+       .action (.expr (.app "Wrapper" [add (C "Two") (C "Three")]))]),
     ("swap-1", [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run ""]),
     ("swap-2", [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run "", .run ""]),
     ("wrapper-1",
@@ -221,61 +189,55 @@ private def curated : List (String × Program) :=
       [.action (.expr (add (add (C "One") (C "Two")) (C "Three"))),
        .rule assocRule, .rule commuteRule, .run "", .run ""]),
     ("seed-2", [.rule ⟨[], [.expr (add (C "One") (C "Two"))], ""⟩, .run "", .run ""]),
-    -- `$g` is the union's loser and nothing was ever built at that key: the source matches
     -- through congruence, the target has no row to read.
-    ("glob-lost",
-      [.action (.letBind "$g" (C "Zz")),
+    ("ground-lost",
+      [.action (.expr (C "Zz")),
        .action (.expr (.app "Wrapper" [C "Aa"])),
        .action (.union (C "Zz") (C "Aa")),
-       .rule wrapGlobRule, .run ""]),
+       .rule (wrapAtRule (C "Zz")), .run ""]),
     -- The same, with the `union` after a run the rule already sat through.
-    ("glob-lost-after",
-      [.action (.letBind "$g" (C "Zz")),
+    ("ground-lost-after",
+      [.action (.expr (C "Zz")),
        .action (.expr (.app "Wrapper" [C "Aa"])),
-       .rule wrapGlobRule, .run "",
+       .rule (wrapAtRule (C "Zz")), .run "",
        .action (.union (C "Zz") (C "Aa")), .run ""]),
     -- The head is a `union` and both its terms are built up front, so what a missing firing
     -- costs is an equality between two terms both sides hold.
-    ("glob-lost-eq",
-      [.action (.letBind "$g" (C "Zz")),
+    ("ground-lost-eq",
+      [.action (.expr (C "Zz")),
        .action (.expr (.app "Wrapper" [C "Aa"])),
        .action (.expr (C "Hit")),
        .action (.union (C "Zz") (C "Aa")),
-       .rule wrapGlobUnionRule, .run ""]),
-    -- The global as one of two key columns.
-    ("glob-lost-add",
-      [.action (.letBind "$g" (C "Zz")),
+       .rule (wrapUnionAtRule (C "Zz")), .run ""]),
+    ("ground-lost-add",
+      [.action (.expr (C "Zz")),
        .action (.expr (add (C "Aa") (C "Cc"))),
        .action (.union (C "Zz") (C "Aa")),
-       .rule addGlobRule, .run ""]),
-    -- The global under two constructors.
-    ("glob-lost-nested",
-      [.action (.letBind "$g" (C "Zz")),
+       .rule (addAtRule (C "Zz")), .run ""]),
+    ("ground-lost-nested",
+      [.action (.expr (C "Zz")),
        .action (.expr (.app "Wrapper" [.app "Wrapper" [C "Aa"]])),
        .action (.union (C "Zz") (C "Aa")),
-       .rule wrapWrapGlobRule, .run ""]),
-    -- The global bound to an application rather than a nullary constructor, which loses to a
+       .rule (nestedAtRule (C "Zz")), .run ""]),
     -- nullary partner because `Term.blt` compares arity first.
-    ("glob-lost-app",
-      [.action (.letBind "$g" (add (C "Zz") (C "Cc"))),
+    ("ground-lost-app",
+      [.action (.expr (add (C "Zz") (C "Cc"))),
        .action (.expr (.app "Wrapper" [C "Aa"])),
        .action (.union (add (C "Zz") (C "Cc")) (C "Aa")),
-       .rule wrapGlobRule, .run ""]),
-    -- The control: the same union, but a row *was* built at the global's key, and a re-keyed
+       .rule (wrapAtRule (add (C "Zz") (C "Cc"))), .run ""]),
     -- row is an extra row rather than a moved one, so the original survives.
-    ("glob-keyed",
-      [.action (.letBind "$g" (C "Zz")),
+    ("ground-keyed",
+      [.action (.expr (C "Zz")),
        .action (.expr (.app "Wrapper" [C "Zz"])),
        .action (.expr (.app "Wrapper" [C "Aa"])),
        .action (.union (C "Zz") (C "Aa")),
-       .rule wrapGlobRule, .run ""]),
-    -- The other control: the global is the union's *winner*, which is the direction the
+       .rule (wrapAtRule (C "Zz")), .run ""]),
     -- rebuild's column rules carry rows in.
-    ("glob-leader",
-      [.action (.letBind "$g" (C "Aa")),
+    ("ground-leader",
+      [.action (.expr (C "Aa")),
        .action (.expr (.app "Wrapper" [C "Zz"])),
        .action (.union (C "Zz") (C "Aa")),
-       .rule wrapGlobRule, .run ""]),
+       .rule (wrapAtRule (C "Aa")), .run ""]),
     -- A source `saturate`: the `union` lands in round 1 and the rule that needs it fires in
     -- round 2, so the rebuild has to run *between* the rounds.
     ("sat-hit",
@@ -295,38 +257,24 @@ private def curated : List (String × Program) :=
     ("sat-wrapper",
       [.action (.expr (.app "Wrapper" [add (C "One") (C "Two")])),
        .rule commuteRule, .rule detectRule, .saturate ""]),
-    -- A `saturate` over a query that reads a global, with the `union` arriving after the
-    -- rule was registered: `glob-lost-after`'s shape on the saturating schedule.
-    ("sat-glob",
-      [.action (.letBind "$g" (C "Zz")),
+    -- rule was registered: `ground-lost-after`'s shape on the saturating schedule.
+    ("sat-ground",
+      [.action (.expr (C "Zz")),
        .action (.expr (.app "Wrapper" [C "Aa"])),
-       .rule wrapGlobRule,
+       .rule (wrapAtRule (C "Zz")),
        .action (.union (C "Zz") (C "Aa")), .saturate ""]),
     -- A `run` and a `saturate` in one program, so the maintenance rules the encoding joins
     -- to the unnamed ruleset fire in a plain round too.
     ("sat-after-run",
       [.action (.expr (add (C "One") (C "Two"))),
        .rule swapRule, .rule commuteRule, .run "", .saturate ""]),
-    -- **The rule is declared before the `let`.** egglog resolves variables one command at a
-    -- time (`egglog/src/lib.rs:2615-2617`), and `remove_globals` rewrites only a reference
-    -- already marked `is_global_ref` (`egglog/src/ast/remove_globals.rs:183-238`), so a rule
-    -- read before the `let` keeps `$g` as an ordinary match variable forever. The later `let`
-    -- is still legal: `check_shadowing` checks a rule's pattern names in a *clone* of the
-    -- accumulated names (`egglog/src/ast/check_shadowing.rs:60-66`), so they never reach the
-    -- table the `let` is checked against. Here the only `Wrapper` in the program holds a term
-    -- unrelated to the global and nothing is unioned, so a query frozen at `(Wrapper (Zz))`
-    -- cannot match and a query with `$g` free fires: the binary reports `Hit` 1.
-    ("glob-late-fresh", globLateFreshCase),
-    -- The same arrival order with the global in the **head** as well, so the row the firing
-    -- writes names the term the query bound `$g` to: the binary prints `(Hit (Bb))`, which is
-    -- the match variable's value and not the global's.
-    ("glob-late-head", globLateHeadCase),
-    -- The same arrival order where the argument *is* congruent to the global, so both
+    ("variable-fresh", variableFreshCase),
+    ("variable-head", variableHeadCase),
     -- readings of the query match and only the *encoding* can lose the firing.
-    ("glob-late", globLateCase),
+    ("variable", variableCase),
     -- The same with a `union` head, so what a missing firing costs is an equality between two
     -- terms both databases hold — the shape `Database.UnionsJoined` is stated in.
-    ("glob-late-eq", globLateEqCase) ]
+    ("variable-eq", variableEqCase) ]
 
 /-! **The emitted egglog is unchanged by rulesets.** Every case here names the *unnamed*
 ruleset, which a rule joins by writing no `:ruleset` and which `(run 1)` runs, so
@@ -538,21 +486,10 @@ private def genProgram (s : Nat) : Program :=
   let sat := match wantSat, genCollapseRules g₂ with
     | 0, some rs => rs.map Cmd.rule ++ [Cmd.saturate collapseRuleset]
     | _, _ => []
-  -- **Sometimes a top-level `let` on a name the rules already matched**, placed *after* the
-  -- rules and before the rounds. `genPattern` abstracts subterms to `a` and `b`, so `a` is a
-  -- query variable of a rule already registered, and a `let` on it is the `glob-late-*`
-  -- shape at every seed that draws it: egglog resolves a rule's variables when it reads the
-  -- rule (`egglog/src/lib.rs:2615-2617`) and `check_shadowing` checks a rule's pattern names
-  -- in a clone (`check_shadowing.rs:60-66`), so the name stays a match variable and the `let`
-  -- is still legal. `g₁` is ground, so the `let` evaluates whatever else the seed drew.
-  let (wantLet, _) := pick 3 s
-  let lateLet := match wantLet with
-    | 0 => [Cmd.action (.letBind "a" g₁)]
-    | _ => []
   -- The model keeps rules in a `Set` and so ignores a repeat; egglog panics on one.
   -- Compare the rendered form, there being no decidable equality on `Rule`.
   let rules := if r₁.toEgg = r₂.toEgg then [Cmd.rule r₁] else [Cmd.rule r₁, Cmd.rule r₂]
-  [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ sat ++ rules ++ lateLet
+  [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ sat ++ rules
     ++ List.replicate (rounds + 1) (Cmd.run "")
 
 /-! ### `:merge` cases (M9)
@@ -594,22 +531,12 @@ private def distMax (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
     merge := some (.merge [] [.app "max" [.var "old", .var "new"]]) }
 
-/-- The same join, written as egglog's **action block** — `let`-bind the combined value,
-then return it.
 
-Worth a case of its own because the emitter's block branch had never been exercised: all
-seven original merge cases are `:merge (min old new)`, which takes the expression branch.
-The block branch emitted two nested lists where egglog wants the actions and the result as
-siblings, so every program using it was a parse error.
-
-This is the only *non-writing* body shape. Writing ones — `set` and `union` — are the
-`merge-body-*` cases below, and the reason they were once excluded ("a row collides with
-itself and both orders fire") does not hold: `mergeRound` skips `r₁ == r₂`, and after
-`(r₁, r₂)` fires, `r₁` is gone and `mergeOneWith`'s `rows.contains` test drops the
-reversed pair. -/
+/-- A let-free block with an observable execution marker and a primitive result. -/
 private def distBlock (n : Nat) (op : FnName) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.letBind "s" (.app op [.var "old", .var "new"])] [.var "s"]) }
+    merge := some (.merge [.union (C "Tick") (C "Tick")]
+      [.app op [.var "old", .var "new"]]) }
 
 /-- `:merge old` / `:merge new`, the two merges no commutative one can distinguish. `old`
 is the value already in the table and `new` the one being inserted — which row that is, at
@@ -794,38 +721,7 @@ and computing `max` for `min` gives `Hit 0, Miss 1`. -/
 /-- Seeds a term the rule-head case's query can match. -/
 private def seedF : Cmd := .action (.expr (.app "F" [C "A"]))
 
-/-! ### `:merge` bodies that write
 
-`MERGE.md` drew the fragment boundary at "bodies stay `let`-only", on the grounds that a
-body which `set`s a side table would fire on self-collisions and in both orders and so
-inflate that table's count. Neither happens: `mergeRound` skips `r₁ == r₂`, and after the
-pair `(r₁, r₂)` fires, `r₁` is gone from the accumulator, so `mergeOneWith`'s
-`rows.contains` test drops the reversed pair. What was left behind by the boundary is the
-shape the whole proof encoding is built on — egglog's union-find `:merge`, which writes.
-egglog typechecks a body under `Context::Write`, so `set` and `union` are both legal there,
-and both were checked against the release binary before being generated.
-
-**What the oracle sees**, per body action:
-
-* a `set` into `Log` at the key `(L)` — `L` and `Log` are used *nowhere else in the
-  program*, so both row counts are 0 if the body never ran and 1 if it did. That alone
-  separates "runs the body" from "ignores it". `Hit`/`Miss` then read `Log`'s value, which
-  is `old` or `new` according to the body, so the pair also reports which of the two
-  colliding rows the model called which — the `old`/`new` bug, now inside a body.
-* a `union (U) (V)` — `W` is seeded at both, so `W`'s count is 2 if the body never ran and
-  1 if it did. This is the union-find merge in miniature: the body's whole effect is an
-  equality, and an equality is exactly what a row count can see.
-
-`merge-body-inert` is the negative control: the same declaration with no collision ever
-reached, where `L`, `Log` and `W` must report the body *not* having run. Without it a model
-that ran the body unconditionally would pass every other case in this family.
-
-**A collision that leaves every value column unchanged runs no block at all**, on either
-side: egglog's `MergeFn` treats it as no conflict and `Impl/Merge.lean`'s `noConflict` now
-does the same. The five `merge-body-noop-*` cases below are that behaviour and its edges —
-they were a recorded divergence until the model grew the skip, and they are the reason the
-rest of this family keeps its two colliding values *distinct*: a case that means to observe
-a body running has to give the body something to resolve. -/
 /-- The side table a body writes into. `min` rather than `old`/`new` on purpose: a case
 with several collisions logs several values, and the count of collisions is the one thing
 the two engines are not obliged to agree on, so the *combination* has to be
@@ -845,12 +741,11 @@ private def distUnion (n : Nat) (kept : String) : FnDecl :=
   { arity := n, outArity := 1,
     merge := some (.merge [.union (C "U") (C "V")] [.var kept]) }
 
-/-- A two-action body: `let` the combined value, log it, return it. Exercises the block
-form at more than one action, and the `let`-bound variable as a `set`'s value. -/
-private def distLetLog (n : Nat) : FnDecl :=
+
+private def distInlineLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.letBind "s" (.app "min" [.var "old", .var "new"]),
-                           .set "Log" [C "L"] [.var "s"]] [.var "s"]) }
+    merge := some (.merge [.set "Log" [C "L"] [.app "min" [.var "old", .var "new"]]]
+                         [.app "min" [.var "old", .var "new"]]) }
 
 /-- Seeds `W` at both operands of a body's `union`, so that `W`'s row count falls from 2 to
 1 exactly when the body runs. -/
@@ -1153,13 +1048,11 @@ private def curatedMerge : List (String × Program) :=
        .action (.set "Dist" [C "K"] [.app "min" [.app "max" [num 5, num 3], num 4]]),
        .rule (readInto "Hit" "Dist" [C "K"] 4), .rule (readInto "Miss" "Dist" [C "K"] 5),
        .run ""]),
-    -- A primitive under a top-level `let`, so the value reaches the row through the global
-    -- environment rather than directly. The `$` prefix is egglog's convention for a global
     -- and avoids its "Global `g` should start with `$`" warning.
-    ("prim-let",
+    ("prim-repeat",
       [.decl "Dist" (dist 1),
-       .action (.letBind "$g" (.app "min" [num 7, num 2])),
-       .action (.set "Dist" [C "K"] [.var "$g"]),
+       .action (.expr (.app "min" [num 7, num 2])),
+       .action (.set "Dist" [C "K"] [.app "min" [num 7, num 2]]),
        .rule (readInto "Hit" "Dist" [C "K"] 2), .rule (readInto "Miss" "Dist" [C "K"] 7),
        .run ""]),
     -- A primitive in a **rule head**, which is the position `Rule.noLookup` polices and so
@@ -1186,10 +1079,8 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
        .rule (readInto "Hit" "Log" [C "L"] 3), .rule (readInto "Miss" "Log" [C "L"] 5),
        .rule (readInto "Won" "Dist" [C "K"] 5), .run ""]),
-    -- A two-action body: `let`, then `set` the bound variable, then return it. Exercises
-    -- the block renderer past one action and a `let`-bound value flowing into a `set`.
-    ("merge-body-let-set",
-      [.decl "Log" logDecl, .decl "Dist" (distLetLog 1),
+    ("merge-body-inline-set",
+      [.decl "Log" logDecl, .decl "Dist" (distInlineLog 1),
        mset "Dist" [C "K"] 5, mset "Dist" [C "K"] 3,
        .rule (readInto "Hit" "Log" [C "L"] 3), .rule (readInto "Miss" "Log" [C "L"] 5),
        .rule (readInto "Won" "Dist" [C "K"] 3), .run ""]),
@@ -1351,136 +1242,6 @@ private def curatedMerge : List (String × Program) :=
        .rule (readIntoAt "Miss" "Dist" [gg (.app "H" [C "A"]) (C "B")] 4 [C "A"]),
        .run ""]) ]
 
-/-! ### Random `:merge` cases
-
-The curated merge cases are only as good as whoever picked them — the caveat the
-constructor cases carried until they were randomized, and the same fix. These draw a
-merge function's arity and its merge spec from the same seeded stream, write rows at
-generated keys, and union constructors underneath those keys, which is what makes keys
-collide and so what the counts actually discriminate on.
-
-The fragment stays the one `MERGE.md` describes, and both narrowings are justified by the
-model rather than by convenience:
-
-* **Every drawn merge is idempotent** (`min`, `max`, `old`, `new`, one combiner per value
-  column). A non-idempotent one diverges under our over-approximating reads *by design* — a
-  row collides with itself, so `:merge (+ old new)` derives `2v`, `3v`, … — so a difference
-  would be the design showing, not a bug. Being non-*commutative* is no such excuse, and
-  `old`/`new` are drawn: a commutative merge cannot tell which colliding row the model
-  calls `old`.
-* **Merge functions are written and never read** by a *body*, since a body atom reading one
-  binds any recorded output where egglog binds the current one. Reading one from a rule
-  body is ordinary egglog and `genMergeReadRule` does it.
-
-`MERGE.md`'s third narrowing, "bodies are `let`-only", is **gone**, from the model and now
-from the draw as well. A body that `set`s a side table does not fire on self-collisions
-(`mergeRound` skips `r₁ == r₂`) and does not fire in both orders (once `(r₁, r₂)` has
-fired, `r₁` is gone and `mergeOneWith`'s `rows.contains` test drops `(r₂, r₁)`).
-`genMergeSpec` draws `set`, `union` and `let`/`set` bodies, and `genMergeProgram` declares
-the side table and seeds the equality's operands, so that a body which runs is visible in a
-row count; `genMergeSpec` carries the observability argument for each shape.
-
-**Eq-sorted merge *output* columns stay out, and not by choice.** `FnDecl` carries no sorts
-at all and `Tests/Egg.lean`'s `FnDecl.toEgg` renders `i64` per output column, so there is
-nothing to draw — it is a missing feature of the fragment rather than a narrowing of it.
-Keys are eq-sorted, as the curated cases already are.
-
-**Divergences this family found.** Each turned up on widening the draw and was minimized by
-hand against the release binary. Items 1 to 4 are fixed, drawn again, and pinned by a
-curated case above, so a regression now fails the suite rather than waiting for the next
-widening. **Item 5 is open**, and `mrand-28` is red on it.
-
-1. **A read atom's operands were not interned before the congruence test** — *fixed*, and
-   pinned by the three `read-unbuilt-key*` cases above. `patternHolds` computed
-   `cl := d.closureF` in its `.values` case where its `.expr` and `.eq` cases close over
-   the extended database, so a key expression the program never built was in no congruence
-   class and matched nothing:
-   ```
-   (set (Dist (G (B) (A))) 4) (union (A) (B))
-   (rule ((= o (Dist (G (A) (B))))) ((Hit (A))))
-   ```
-   egglog flattens the fact to `G(a, b, x), Dist(x, o)` and matches through congruence,
-   answering `Hit 1`; the model answered `Hit 0`. Reachable from `genMergeReadRule`'s
-   free-key draw, which is how it turned up. Both `Spec/` and `Impl/` were wrong here, and
-   in the same place: `Matches.values` compared the evaluated operands with `CongList
-   db`, and `Cong db` relates only terms `db` holds, so the specification could not admit
-   the match either.
-2. **`old`/`new` at a rebuild collision followed insertion age here and key canonicity
-   there** — *fixed*, and pinned by the six `canon-*` cases above. `mergeOneWith` took the
-   row that was inserted earlier as `old`; egglog takes the row whose key is *already
-   canonical* as `old` and the row re-inserted because its key moved as `new`, falling back
-   on age only when no key moved or when no row holds the canonical key. The two agree
-   whenever the younger row sits at the younger key, which every curated case did, and
-   disagree otherwise:
-   ```
-   (function Dist (Math) i64 :merge new)
-   (A) (set (Dist (K)) 3) (set (Dist (A)) 2) (union (A) (K))
-   ```
-   egglog keeps `3` — the earlier write, at the older key — and the model kept `2`.
-   Reachable from `genKeys`: nothing stops a drawn key from being built before the row
-   written at it. `Impl/Merge.lean`'s `canonTerm` is the fix and `MERGE.md`'s "`old` is the
-   row at the canonical key" is the evidence, including what it still does not model.
-3. **egglog resolved a body's nested call with the enclosing column's `old`** — *fixed in
-   the Rust* (issue #59), and pinned by `merge-body-noop-partial` above.
-   `ResolvedMergeFn::run` carried a shortcut returning `cur` whenever the column's own old
-   and new values agreed (egraphs-good/egglog#287), and `run` runs at *every* node of a
-   merge expression — including the `(L)` inside a body's `(set (Log (L)) old0)`, whose
-   sort has nothing to do with the column's. At a collision agreeing on column 0 the
-   shortcut handed that column's `i64` back as `(L)`'s e-class id, and the `Log` row was
-   keyed on a class no term had:
-   ```
-   (function Log (Math) i64 :merge new)
-   (function Dist (Math) (i64 i64) :merge ((set (Log (L)) old0) (values new0 new1)))
-   (set (Dist (X)) (values 2 1)) (set (Dist (Y)) (values 2 5)) (union (X) (Y)) (run 1)
-   ```
-   `run_result` is the fix: the shortcut now applies once per value column's *result*
-   expression and never to a nested call. Upstream has the same defect and returns a wrong
-   `i64` from it (egraphs-good/egglog#987); only a `:merge` action block lets a nested call
-   carry an eq-sort, which is what made it a dangling class here. Reachable the moment a
-   writing body is drawn, which is the first of the two reasons `genMergeSpec` did not draw
-   one.
-4. **A value-preserving collision at congruent keys** — *fixed*, and pinned by the four
-   `merge-body-noop-*` cases above. egglog skips a `:merge` **action block** outright when
-   the collision leaves every value column unchanged (`egglog-bridge/src/lib.rs`, `MergeFn`'s
-   `unchanged_width`), comparing the two rows' *values* and saying nothing about their keys,
-   where `mergeRound` skipped an identical *row*. Two rows at congruent but unequal keys
-   holding the same value were therefore a no-op collision there and a firing pair here:
-   ```
-   (function Log (Math) i64 :merge new)
-   (function Dist (Math) i64 :merge ((set (Log (L)) old) new))
-   (set (Dist (X)) 2) (set (Dist (Y)) 2) (union (X) (Y)) (run 1)
-   ```
-   egglog answered `L 0, Log 0` and the model `L 1, Log 1`; a `union` body answered `W 2`
-   there and `W 1` here. `Impl/Merge.lean`'s `noConflict` is the fix — `mergeOneOriented`
-   declines when the body is non-empty and `r₁.out == r₂.out`. Reachable from `genKeys` and
-   `genMergeRule` the moment a writing body is drawn, which was the second reason; both
-   reasons are gone and `genMergeSpec` draws writing bodies now.
-5. **Which colliding row is resident, when a class is built up by *successive* unions** —
-   **open**, and the reason `mrand-28` is red. `mergeOneWith` falls back on insertion age
-   whenever neither colliding key is canonical, on the reading that egglog re-inserts both
-   rows and stages them in table order. egglog does that only when both keys move in *one*
-   rebuild. A key unioned into the class by an **earlier** command has already been
-   rewritten to the canonical key, so its row is the resident one — `cur`, hence `old` —
-   however recently it was written:
-   ```
-   (function Dist (Math) i64 :merge new)
-   (A) (set (Dist (B)) 1) (set (Dist (C)) 2) (union (C) (A)) (union (B) (A))
-   ```
-   `A` is canonical, `C`'s row is rewritten onto it by the first union, and `B`'s row is
-   merged onto that by the second, so egglog keeps `1` — the *older* row's value, under
-   `:merge new` — where the model keeps `2`. Swapping the two `union` commands makes the two
-   agree, and `:merge old` mirrors it exactly, so the trigger is "the younger row's key is
-   canonicalized first" and nothing else. `canon-none-old` and `canon-none-new` are the
-   shape where the two readings agree, and they agree only because the older row's key
-   happens to be unioned first.
-
-   `MERGE.md` records the residual — "when neither colliding key is canonical, egglog's
-   survivor sits at the canonical key and this model's sits at the older row's key" — but
-   calls it invisible "until a row appears at that third key later". It is not: a
-   non-commutative merge and two `union` commands suffice, with no third row anywhere. The
-   model cannot currently state the fix either, since it never re-keys a row and so has
-   nowhere to record that one of the pair *reached* the canonical key first. Reachable from
-   `genMergeProgram`'s column-wise key unions, which is how it turned up. -/
 
 /-- The value-column variables a `:merge` body sees at column `i` of a width-`w` output.
 `mergeEnv` binds egglog's unindexed `old`/`new` at one value column and `old0`/`new0`/…
@@ -1507,53 +1268,17 @@ private def genCombiners (w : Nat) : Nat → Nat → List Expr × Nat
     let (es, s) := genCombiners w k s
     (e :: es, s)
 
-/-- A merge specification for a width-`w` output: one combiner per value column, under a
-body that is empty half the time and **writes** in three draws of eight.
 
-**The combiners** are `old`, `new`, `min` and `max`, drawn per column. `old` and `new` are
-the two **non-commutative** merges, and they are here because a commutative one cannot see
-which of the colliding rows the model calls `old`. The model had them backwards — `:merge
-old` returned what `:merge new` should — and 122 green cases said nothing, because every
-merge they drew was `min` or `max`. They are still joins in the sense that matters here
-(`merge v v = v`, so a pass settles), and they are exactly as deterministic in egglog as
-`min` is: `old` is the value already in the table and `new` the one being inserted. Drawing
-each column independently is what makes `mergeEnvIdx`'s indexing load-bearing above width
-one — a body reading `old0` where the column is `old1` computes a different tuple, and the
-guarded reads stop firing.
-
-**The bodies**, and what a row count sees of each:
-
-* `(set (Log (L)) …)` — `L` and `Log` occur nowhere else in a generated program, so both
-  counts are 0 if the body never ran and 1 if it did, which separates "runs the body" from
-  "ignores it" with no rule at all. `genMergeProgram`'s `Kept`/`Lost` rules then read
-  `Log`'s value against the two colliding column-0 values, so the pair also reports *which*
-  of the two rows the model called `old` from inside a body. This draw is also what puts
-  **two** merge functions in one program, the second written from the first's body.
-* `(union (U) (V))` — `genMergeProgram` seeds `W` at both operands, so `W` is 2 if the body
-  never ran and 1 if it did. The body's whole effect is an equality, and an equality is
-  exactly what a row count can see. This is egglog's union-find `:merge` in miniature.
-* a `let` and a `set` of the bound variable, which is the block form past one action and a
-  `let`-bound value flowing into both a `set` and the result tuple.
-
-The `let`-only draw writes nothing, and it takes egglog's no-op skip unobservably: its
-result is `min v v = v` either way.
-
-**Why a writing body could not be drawn before**, and it was never a fragment question:
-two successive divergences, both recorded above. egglog keyed the side table's row on a
-dangling e-class whenever the collision left the body's column unchanged (3), and once the
-Rust was fixed the model fired the body at congruent-but-unequal keys holding the same
-value, where egglog skips (4). A writing body is precisely the observer for both, which is
-why widening the draw is what found them. -/
 private def genMergeSpec (w : Nat) (s : Nat) : MergeSpec × Nat :=
   let (res, s) := genCombiners w w s
   let (logged, s) := genCombiner w 0 s
   let (shape, s) := pick 8 s
   match shape with
-  | 4 => (.merge [.letBind "s" logged] (.var "s" :: res.tail), s)
+  | 4 => (.merge [.union (C "U") (C "U")] (logged :: res.tail), s)
   | 5 => (.merge [.set "Log" [C "L"] [logged]] res, s)
   | 6 => (.merge [.union (C "U") (C "V")] res, s)
-  | 7 => (.merge [.letBind "s" logged, .set "Log" [C "L"] [.var "s"]]
-            (.var "s" :: res.tail), s)
+  | 7 => (.merge [.set "Log" [C "L"] [logged]]
+            (logged :: res.tail), s)
   | _ => (.merge [] res, s)
 
 /-- Whether a drawn body writes the side table, which the program then has to declare —
@@ -1939,74 +1664,6 @@ private def litMixCase : Program :=
   [.action (.expr (add (.lit (.int 1)) (C "One"))),
    .action (.union (.lit (.int 1)) (add (.lit (.int 1)) (C "One")))]
 
-/-! #### Shadowing a global
-
-The two shapes that a top-level `let` binding a name the program already binds costs the
-encoder, and that `Spec/Eval.lean`'s `evalTopAction` now refuses. Both are **in**
-`Program.EncodeDomain` — shadowing is a `Spec/` condition, not a domain clause — and both are
-excluded from `encode_corresponds` by `hsrc` alone: a shadowing program has no `ProgramStep`
-(`Egglog.letNames_nodup_of_programStep`), and the interpreter agrees by getting stuck at the
-second `let`.
-
-They are probes rather than corpus cases because **nothing this file emits may be a program
-egglog rejects** (`writeCase`, whose fifth guard is now `Program.shadowedGlobals`): egglog
-answers "Shadowing is not allowed" and a rejected case is a missing one, not a failing one.
-
-What each is for. `shadowGlobCase` is `glob-lost`'s shape with the `let` doubled:
-`Cmd.globalBind`'s once-only guard declines `$g`, `Rule.substGlobals` therefore leaves the
-query keyed at the frozen environment term, and the source derives a `(Hit)` the target's
-`@HitView` does not — one against zero. `shadowInheritCase` is the second, subtler shape: `$a`
-is doubly bound and declined, so `(Wrapper $a)` is not closed when `$b`'s own `let` is reached
-and the *closedness* guard declines `$b` too, a global only one `let` binds. Excluding the
-first excludes the second, which is why one condition covers both. -/
-private def shadowGlobCase : Program :=
-  [.action (.letBind "$g" (C "Yy")),
-   .action (.letBind "$g" (C "Yy")),
-   .action (.expr (.app "Wrapper" [C "Aa"])),
-   .action (.union (C "Yy") (C "Aa")),
-   .rule wrapGlobRule, .run ""]
-
-/-- `shadowInheritCase`'s rule: the query reads the global that inherits the defect. -/
-private def wrapGlobBRule : Rule where
-  query := [.expr (.app "Wrapper" [.var "$b"])]
-  actions := [.expr (C "Hit")]
-  ruleset := ""
-
-@[inherit_doc shadowGlobCase]
-private def shadowInheritCase : Program :=
-  [.action (.letBind "$a" (C "Yy")),
-   .action (.letBind "$a" (C "Yy")),
-   .action (.letBind "$b" (.app "Wrapper" [.var "$a"])),
-   .action (.expr (.app "Wrapper" [.app "Wrapper" [C "Aa"]])),
-   .action (.union (C "Yy") (C "Aa")),
-   .rule wrapGlobBRule, .run ""]
-
-/-! #### A `let` reached after the rule was declared, and its control
-
-The `glob-late-*` family is defined above and **run against the binary** as corpus cases. A rule
-declared before the `let` keeps `$g` as an ordinary match variable: egglog resolves variables
-one command at a time (`egglog/src/lib.rs:2615-2617`), `remove_globals` rewrites only a
-reference already marked `is_global_ref` (`egglog/src/ast/remove_globals.rs:183-238`,
-`expr.rs:70-75`), and `check_shadowing` checks a rule's pattern names in a *clone* of the
-accumulated names (`egglog/src/ast/check_shadowing.rs:60-66`) so the later `let` is still legal.
-`Spec/Step.lean`'s `cmdEffect` resolves the globals then in scope into the rule it registers,
-and `encodeCmds` threads the same substitution left to right through `Cmd.globalBind`, so
-specification and encoding are keyed the same way by construction rather than by arrival order.
-
-The control below stays a probe: what the encoding loses on either arrival order is measured
-against the model's own source run, by
-`difftest correspond 64 glob-late glob-late-eq glob-early-eq`. -/
-
-/-- The control: `globLateEqCase`'s commands with the `let` moved back in front of the rule, so
-the same query is keyed at the global instead of at a match variable. -/
-private def globEarlyEqCase : Program :=
-  [.action (.letBind "$g" (C "Zz")),
-   .rule wrapGlobUnionRule,
-   .action (.expr (.app "Wrapper" [C "Aa"])),
-   .action (.expr (C "Hit")),
-   .action (.union (C "Zz") (C "Aa")),
-   .run ""]
-
 /-- The probes, reachable from `difftest encode <fuel> <name>` by name. The `-run` variants
 append one empty round, which is what makes `encode` emit a `Cmd.saturate rebuildRuleset` and
 so the only way to ask whether the rebuild repairs the gap `upCase` shows. They are out of
@@ -2019,9 +1676,7 @@ private def probeCases : List (String × Program) :=
    ("chain", chainCase), ("chain-run", chainCase ++ [.run ""]),
    ("chain-down", chainDownCase), ("depth", depthCase),
    ("tower", towerCase), ("order", orderCase), ("round", roundCase),
-   ("lit-union", litUnionCase), ("lit-mix", litMixCase),
-   ("shadow-glob", shadowGlobCase), ("shadow-inherit", shadowInheritCase),
-   ("glob-early-eq", globEarlyEqCase)]
+   ("lit-union", litUnionCase), ("lit-mix", litMixCase)]
 
 namespace Egglog
 /-! ### The proof encoding, by tuple count
@@ -2089,7 +1744,7 @@ per read from multiplying the whole search rather than its own atom's block. It 
 enough on its own — 12 of 70 at a 60 s budget — and "Joining over the row index" is what
 followed it. **63 of the 70 in-domain cases the corpus then had finish** at 60 s and 65 at
 300 s, all reporting `AGREE`, against 58 and 64 *before* the proof column: the enumerator now
-more than pays for the column it was struggling under. The eleven `glob-*` cases added since
+more than pays for the column it was struggling under. The eleven `ground-*` cases added since
 run in half a second between them.
 
 Nothing regressed — every case that finished under the older enumerators is faster,
@@ -2286,64 +1941,6 @@ def stuckAt (fuel : Nat) (d : FDatabase) (i : Nat) : Program → Option (Nat × 
       | some d' => stuckAt fuel d' (i + 1) cs
 
 
-/-- The names more than one top-level `let` binds. egglog rejects such a program outright:
-`remove_globals` turns a top-level `let` into a function declaration and `Names::check`
-answers `Error::Shadowing` — "Shadowing is not allowed" — on a name it has already seen
-(`egglog/src/ast/check_shadowing.rs:49-50`, `:11-12`). `Spec/Eval.lean`'s `evalTopAction` is
-the model's own refusal, so such a program has no `ProgramStep` either. -/
-def Program.shadowedGlobals (p : Program) : List Var :=
-  (p.letNames.filter fun v => 1 < p.letNames.count v).dedup
-
-/-! Both are in `encode`'s domain — the nine clauses say nothing about shadowing — and both
-are what `writeCase`'s new guard refuses to emit. -/
-set_option linter.hashCommand false in
-#guard (shadowGlobCase.declared).encodeDomainB && (shadowInheritCase.declared).encodeDomainB
-set_option linter.hashCommand false in
-#guard (shadowGlobCase.declared).shadowedGlobals = ["$g"]
-set_option linter.hashCommand false in
-#guard (shadowInheritCase.declared).shadowedGlobals = ["$a"]
-
-/-! The three `glob-late` probes are in `encode`'s domain too, and none of them shadows — so
-`Program.EncodeDomain` and `Egglog.letNames_nodup_of_programStep` both admit them and `hsrc`
-does not exclude them. What separates `glob-late-eq` from `glob-early-eq` is the arrival order
-of the `let` and the `rule`, and — since `Spec/Step.lean` resolves a rule's globals when it
-registers the rule — nothing else at all: both agree with the binary and both agree with their
-own encoding. -/
-set_option linter.hashCommand false in
-#guard (globLateCase.declared).encodeDomainB && (globLateEqCase.declared).encodeDomainB
-  && (globEarlyEqCase.declared).encodeDomainB
-set_option linter.hashCommand false in
-#guard (globLateCase.declared).shadowedGlobals = []
-  && (globLateEqCase.declared).shadowedGlobals = []
-  && (globEarlyEqCase.declared).shadowedGlobals = []
-
-/-! And both are excluded by `hsrc`: the run stops at the second `let`, which is the
-command the interpreter names. -/
-set_option linter.hashCommand false in
-#guard (stuckAt runFuel FDatabase.empty 0 shadowGlobCase.declared).map (fun c => c.2.toEgg)
-  = some "(let $g (Yy))"
-set_option linter.hashCommand false in
-#guard (stuckAt runFuel FDatabase.empty 0 shadowInheritCase.declared).map (fun c => c.2.toEgg)
-  = some "(let $a (Yy))"
-
-/-- **The first counterexample is out of the theorem's reach**, by `hsrc` and nothing else:
-`Egglog.letNames_nodup_of_programStep` says a program the source ran binds no name twice. -/
-theorem shadowGlobCase_not_programStep :
-    ¬ ∃ D, ProgramStep Database.empty shadowGlobCase.declared D := by
-  rintro ⟨D, h⟩
-  exact absurd (Egglog.letNames_nodup_of_programStep h).1 (by decide)
-
-@[inherit_doc shadowGlobCase_not_programStep]
-theorem shadowInheritCase_not_programStep :
-    ¬ ∃ D, ProgramStep Database.empty shadowInheritCase.declared D := by
-  rintro ⟨D, h⟩
-  exact absurd (Egglog.letNames_nodup_of_programStep h).1 (by decide)
-
-/-- The exponent the e-matcher runs at: the most free variables any one rule's query has.
-`matchQuery` assigns a query's free variables all at once from `valueTerms`, so a case costs
-`|valueTerms| ^ this`, and encoding multiplies it — one view read per subterm binds an id
-variable for each. An upper bound, since a global would already be bound; it is a cost proxy
-and nothing reads it but the report. -/
 def Program.widestRule (p : Program) : Nat :=
   (p.filterMap fun c => match c with
     | .rule r => some (Query.freeVars r.query []).length
@@ -2443,64 +2040,6 @@ def EncOutcome.render (o : EncOutcome) : String :=
       String.intercalate " "
         (rows.map fun r => s!"{r.1}:{r.2.1}/{r.2.2.1}/{r.2.2.2}")
 
-/-! #### The proofs the encoding writes, checked
-
-`Encoding/Checker.lean` reads the **source** program and nothing else; the encoded run is
-what writes the proofs. This runs one against the other — `difftest check <fuel> [case…]`.
-
-The two were written in parallel and disagreed in three places, every one of them with the
-checker on the wrong side of a shape the encoder had measured its way to: `@Congr` at one
-name where the encoding writes the family `@Congr_k`, `@Rule_i` counting source patterns
-where the encoding counts view reads, and `@Fiat` reading only the top-level actions. The
-first two are visible on the syntax, and the theorems below are what keeps them fixed; the
-third took running this to see, and is the last paragraph here.
-
-**What a merge records.** A collision keeps the proof carried by whichever side's value
-survives (`Encode.lean`'s `mergeResult`, `lo_pf`) and proves the displaced edge with
-`@Trans (@Sym hi_pf) lo_pf` — egglog's `ordered_union_merge`, with `identityVals := some 1`
-keeping the rebuild terminating under it. So a merge-created equality is justified rather
-than refused. `merge-displaced` counts what is left: a proof the checker can ground only at
-a term the source names, reported against a row whose claim sits at a rule-created one. The
-report counts those apart from proofs that justify nothing.
-
-**Measured.** `difftest check 64`, the 87 in-domain corpus cases:
-**818 of 828 recorded equalities check, 6 are merge-displaced, and 4 are
-unjustified**: `both-2` (17/4/2) and `rand-43` (22/2/2) reject and every other case is clean.
-A failing case prints `REJECT` rather than `CHECKS`, so an aggregate has to count both lines
-— 85 `CHECKS` and 2 `REJECT` here.
-
-The checker reads a rule's query through `Rule.substGlobals` before flattening it, and runs
-its head with the globals *behind* the match bindings, because that is what the encoder
-flattened and what `evalLocalActions` runs. Without the first, `@Rule_i`'s premise count
-would disagree with `proofDecls`' declaration wherever a query names a global, and
-`glob-lost-eq` — the one `glob-*` case whose head derives an equality — would reject on all
-four of its rows. Without the second, a top-level `let` recaptures a name a rule declared
-earlier matches on: that cost 28 rows and four extra `REJECT` cases — `glob-late-eq` (2),
-`rand-35` (2), `rand-51` (13) and `rand-59` (11) — because `genProgram` draws a late `let` on
-`a`, a name the rules it already registered match on, one seed in three.
-`Encoding/Checker.lean`'s `lateLet`/`earlyLet` witnesses pin both halves.
-
-Both remaining rows-per-case are the one mechanism, and it is the checker's and not the
-encoder's: `props` seeds a `@Rule_i` node's `@Fiat` premise from the source's top-level
-actions, so a term existing only because an earlier rule fired cannot anchor one. Measured,
-`@Rule_1 (@Fiat)` yields four propositions at a top-level term, two one step off it, and none
-at a rule-created one; naming the creating firing in the premise instead makes each of the
-four rows check. `Encoding/Checker.lean`'s "`@Fiat` at a rule-created term" bounds it, with
-both corpus rows spelled out. `difftest correspond 64` reports **0 LOST and 0 INVENTED** on
-`both-2` and `rand-43`, so the encoding itself agrees.
-
-Checking is not what costs: `check 64 union` is 0.22 s where `encode 64 union` is 0.32 s, and
-the difference is the source run `encodeCompare` does and this does not — reading and
-checking every proof is inside the noise of producing them.
-
-**What running it found** was a third disagreement, and this was the only thing that could:
-`@Fiat` reads the top-level actions of the source, but `encodeBuild` writes its view entry
-`f(c…) = f(c…)` under `@Fiat` *whatever context the build is in*, so a term a **rule head**
-constructs has no action to point at. egglog's `Fiat` has the other disjunct for exactly
-this — `lhs == rhs && reflexive_value_term lhs` (`CHECKER.md`, "Node kinds") — and the
-checker did not. It accounted for every rejection in the first sweep and nothing else did:
-`seed-2` checked 0 of 3, `swap-1` 3 of 4, and both are 3 of 3 and 4 of 4 with
-`Proof.reflProps` in. A corpus of *top-level* builds could not have seen it. -/
 
 /-! ##### The two flattenings agree
 
@@ -3420,110 +2959,6 @@ def correspondSelfTests : List (String × (Unit → Bool)) :=
       | some r => r.viaUF.length == 1 && r.lost.length == 1
       | none => false) ]
 
-/-! #### What the sweep reports
-
-`difftest correspond 64` over the 87 in-domain cases, and the same command naming the twenty
-probes, which it sweeps only when they are named. Nothing is capped — the widest pool is 170
-terms, and 90 among the probes — no `@UF` walk hits its bound, no `@UF` cycle
-exists, no target equation is asserted, and the leader reading, the joinability reading and
-`sameClassF` agree on every pair.
-
-**No INVENTED and no LOST anywhere.** All 87 cases agree: every equality the source derives,
-the encoding reproduces, and it reproduces no other. Over the corpus that is 953 pairs both
-sides say yes to, 228 of them between *distinct* terms; the counts below are the corpus's too.
-Sixteen of the twenty probes agree on the same terms; the other four are `execAction` refusing
-the program, so there is no run to sweep.
-
-**The `sat-*` family is what the column last caught.** A source `Cmd.saturate` used to get the
-block `[.saturate R, .saturate @rebuild]`, so the target rebuilt once, after `R` had already
-settled, and a rule of a later round read an earlier round's rows un-re-keyed. `sat-hit` lost
-the source's `(Hit)` outright. `allMaintenanceRules` is the fix — the maintenance rules join
-each ruleset a source `Cmd.saturate` names, which is egglog's `(saturate (seq (run R)
-<rebuild>))` (`egglog/src/proofs/proof_encoding.rs:1969`, `:1978-1980`) in a language with no
-schedule nesting. Backing it out reports **13 LOST across 13 cases**: the three `sat-*` ones
-that derive an equality, and all ten generated cases whose `genCollapseRules` tail runs one.
-
-**The `glob-*` family is what it caught before that.** Six of the eight lost 7 equalities
-between them, all by one mechanism: a `let` binds a global, a rule's **query** reads it, and a
-`union` makes the bound term the *loser*. The encoding left the global in the emitted query, so
-the target asked for a live `@FView` row **keyed at** the bound term — and `rebuildRules`'
-column rule carries rows towards a `@UF` leader and never back, so no row is ever keyed at the
-loser unless a build wrote one. `glob-keyed` and `glob-leader` were the two controls that
-agreed. `Encode.lean`'s `Rule.substGlobals` is the fix — a query's global is read through the
-global's own definition, so the flattening lands on that definition's current e-class — and the
-column is 0 again.
-
-**And it is the stated relation that is being measured.** `link-diff` is 0 on every case:
-the sweep's verdict and `Encoding/Correspond.lean`'s `sameClassF` — which `sameClassF_iff`
-proves equal to `Encode.lean`'s `SameClass` — never disagree, so "87 agreeing" is a
-measurement of `Cong src a b ↔ SameClass tgt a b` and not of a near neighbour of it. That
-theorem is `encode_corresponds`, and this is the evidence for it; what the sweep cannot
-supply is the *hypothesis* it is stated under, for which see `encode_corresponds_witness`.
-
-**The literal clause.** `ViewRepr` gives an e-class to every literal, held or not, so the
-sweep is exact only while every literal in `src.terms ++ tgt.terms` is one the source holds —
-which is what makes the term relation a relation (`termDecl`, `outArity 0`). Dropping the
-membership premise did not move that condition: the universe is the *union*, so a literal the
-sweep can see and the source does not hold is a literal the target contributed either way.
-While the term relation carried a `unitE` output column,
-`.lit (.int 0)`, every in-domain case reported `0 = 0` as invented, and the `lit-zero` probe
-— which builds `(Add 0 1)` — was green by collision rather than by correspondence. The
-`lit` and `lit-zero` probes are kept as the regression test for that.
-
-**The union-find does no work.** 300 of the 315 `@UF` entries the corpus writes move, 58 of
-the 87 cases write at least one, and `CorrReport.viaUF` is 0 in every case: no pair is joined
-by a `@UF` step. The `no-uf` reading — every edge dropped — reproduces the verdict exactly,
-case for case, because the rebuild has already re-keyed each view's e-class column onto the
-common leader. The `rows` reading reproduces it too, so this is not an artefact of `Out`
-reading a term set that never shrinks.
-
-**And the programs written to break that.** The union-find probes above — chains built in
-each direction, endpoints at different depths, a three-level tower, a leader `ordering-min`
-puts below its class, unions a rule makes across rounds — add 83 more moving entries and
-report `via-uf` 0 on every one; so do 129 further draws of the random generator
-(`difftest correspond-seed 64 61 200`, which reports only the cases with a disagreement or a
-`via-uf`, and abandons 10 of the 139 at its 30 s per-case budget — a saturating draw runs
-rounds until its ruleset settles, and the sweep is `|pool|²` on top of that).
-`difftest correspond-dump 64 chain` is the state behind that zero: the raw chain
-`D → C`, `C → B`, `B → A` really is in `@UF`, and
-`@DView()` carries four entries — `(D)`, `(C)`, `(B)`, `(A)` — because the e-class rebuild
-rule re-`set`s the view at each parent in turn. `D`'s `ViewRepr` set already contains the
-leader, so there is nothing for a walk to find.
-
-**Where the work went.** `difftest correspond-norebuild 64` runs the same encodings with
-every `Cmd.saturate rebuildRuleset` dropped. There the views are never re-keyed: 20 of the
-87 cases DIFFER, 133 equalities come back LOST, and 88 pairs are joined by a `@UF` step. The
-`chain` probe, named to the same command, adds six of its own, and the walk from `D` to `A` is
-three edges there because path compression never ran either. That is the measurement that says
-the union-find is redundant *because of the rebuild*, and not because `SameClass` never needed
-it.
-
-**One shape the union-find would still be needed for, and it is not a program.** A literal
-has no view entry, so nothing re-keys it and a `union` between two literals would leave the
-`@UF` edge as the only record of their equality. `execAction` refuses a `union` with a
-literal operand outright, so `Cong src` never relates a literal to anything but itself and no
-`@UF` key is ever a literal; the `lit-union` and `lit-mix` probes are that refusal, run.
-
-**The inductive reading is load-bearing.** The `flat` reading — a view entry keyed by an
-application's children as written — loses 109 equalities across 8 cases, `both-2` and
-`rand-43` among them, and finds only 146 of the 228 off-diagonal ones. A rule head builds over
-the ids its query bound, so a source term a head produced keys no entry under its own
-children.
-
-**What a green LOST column does not establish.** 31 of the 87 in-domain cases derive no
-equality between distinct terms at all and another 33 derive exactly one, so for 70 of the 87
-the whole left-to-right test is the e-node diagonal and at most two pairs off it; three cases
-carry 107 of the 228. The claim is tested at depth on very few programs — which is how the
-`glob-*` defect survived a corpus of 70 cases with a green column,
-and the reason a hazard named in a docstring is worth a case rather than an argument.
-
-**And what no column of it establishes.** The sweep runs `execM`, and `execM` is not
-`ProgramStep`. `Spec/Step.lean` now reads `identityVals`, so the specification *can* reach a
-state like these — `Encoding/Correspond.lean`'s `satProgram_programStep` is a compiled
-`ProgramStep` for an encoded program — but the states are not the same one: `execM`'s
-enumerator is stricter than `ValidEnv` and its merge pass fires a strict subset of
-`MergeStep`, so every number here is a statement about the reference implementation's target
-and not about the state a `ProgramStep` picks. -/
 
 /-! #### What the harness pins
 
@@ -3660,31 +3095,7 @@ end Egglog
 
 /-! ### Entry point -/
 
-/-- Write one case, refusing outright to emit a program egglog would reject.
 
-**The constructors are declared first** (`Program.declared`). Declaration is required, so a
-program that applies an undeclared name gets stuck in `Expr.eval`; the generators below
-write uses and not declarations, exactly as the `datatype` header this file emits is read
-off the uses, so the declarations are derived here rather than threaded through every
-generator. They render as nothing on the egglog side — a constructor declaration is the
-header — so the two engines see the same file they always did.
-
-A rejected program is not a failing case but a missing one, and a generator that quietly
-stops producing runnable programs is the failure this whole file is written against — so
-each check is an abort, not a skip. Three rules, all raised by egglog's typechecker before
-the offending command runs:
-
-* `set`'s: `(set (f args…) v)` is legal only on a declared function, and is a type error on
-  a constructor or a relation (`Program.illegalSets`);
-* every use of a declared function has its declared key and value column counts
-  (`Program.arityErrors`, over `Impl/Check.lean`'s `Cmd.arityOk`);
-* nothing reads a row except a `Pattern.values` atom (`Program.illegalReads`, over
-  `Cmd.noLookup`) — egglog rejects this in a rule head, and the model everywhere;
-* no name is used at two key arities, which the emitted `datatype` header cannot express
-  (`Program.arityConflicts`);
-* no two top-level `let`s bind the same name (`Program.shadowedGlobals`) — egglog answers
-  "Shadowing is not allowed", and `Spec/Eval.lean`'s `evalTopAction` refuses it too, so such a
-  program has no `ProgramStep` and nothing to compare. -/
 private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
   let p := p₀.declared
   unless p.illegalSets.isEmpty do
@@ -3702,10 +3113,6 @@ private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
     throw <| IO.userError
       s!"difftest: {name} uses {p.arityConflicts} at more than one arity, which egglog \
          rejects with \"Function already bound\""
-  unless p.shadowedGlobals.isEmpty do
-    throw <| IO.userError
-      s!"difftest: {name} binds {p.shadowedGlobals} with more than one top-level let, \
-         which egglog rejects with \"Shadowing is not allowed\""
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 

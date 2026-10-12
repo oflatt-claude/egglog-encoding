@@ -27,7 +27,6 @@ theorem Actions.SetLegal.of_allConstructors {as : List Action} {sig sig' : Signa
     cases a with
     | set f args out => exact (Action.SetLegal.elim (args := args) (out := out) hsig h.1).elim
     | expr _ => trivial
-    | letBind _ _ => trivial
     | union _ _ => trivial
 
 theorem Rule.SetLegal.of_allConstructors {r : Rule} {sig sig' : Signature}
@@ -69,7 +68,6 @@ theorem Action.Declared.mono {a : Action} {sig sig' : Signature} (hs : sig'.Exte
     (h : a.Declared sig) : a.Declared sig' := by
   cases a with
   | expr e => exact Expr.Declared.mono hs h
-  | letBind v e => exact Expr.Declared.mono hs h
   | union e₁ e₂ => exact ⟨Expr.Declared.mono hs h.1, Expr.Declared.mono hs h.2⟩
   | set f args out =>
     exact ⟨hs f h.1, fun e he => Expr.Declared.mono hs (h.2.1 e he),
@@ -387,7 +385,7 @@ into a fact about the deterministic effect and `MergeClosure`'s own. -/
 theorem cmdEffect_sig {db d : Database} {c : Cmd} (h : cmdEffect db c = some d) :
     d.sig = c.sigBind db.sig := by
   cases c with
-  | action a => simp only [cmdEffect] at h; exact evalAction_sig (evalAction_of_top h)
+  | action a => simp only [cmdEffect] at h; exact evalAction_sig (h)
   | rule r => simp only [cmdEffect, Option.some.injEq] at h; subst h; rfl
   | run R => simp only [cmdEffect, Option.some.injEq] at h; subst h; rfl
   | saturate R => exact absurd h (by simp [cmdEffect])
@@ -396,7 +394,7 @@ theorem cmdEffect_sig {db d : Database} {c : Cmd} (h : cmdEffect db c = some d) 
 theorem cmdEffect_wf {db d : Database} (hw : db.WF) {c : Cmd}
     (h : cmdEffect db c = some d) : d.WF := by
   cases c with
-  | action a => simp only [cmdEffect] at h; exact evalAction_wf hw (evalAction_of_top h)
+  | action a => simp only [cmdEffect] at h; exact evalAction_wf hw (h)
   | rule r => simp only [cmdEffect, Option.some.injEq] at h; subst h; exact hw.congr rfl rfl
   | run R => simp only [cmdEffect, Option.some.injEq] at h; subst h; exact RunRules.wf hw
   | saturate R => exact absurd h (by simp [cmdEffect])
@@ -457,6 +455,36 @@ theorem cmdReach_det {db e₁ e₂ : Database} (hsig : db.sig.AllConstructors) {
 
 The step relations are the semantics, so what is proved about them here is what a program
 run leaves. -/
+/-- Rule rounds preserve the surrounding evaluation context. -/
+theorem RunStep.env {R : RulesetName} {db db' : Database} (h : RunStep R db db') :
+    db'.env = db.env := (MergeClosure.envRules h).1
+
+/-- Repeated rule rounds preserve the surrounding evaluation context. -/
+theorem RunReach.env {R : RulesetName} {db db' : Database}
+    (h : Relation.ReflTransGen (RunStep R) db db') : db'.env = db.env := by
+  induction h with
+  | refl => rfl
+  | tail _ hs ih => exact hs.env.trans ih
+
+/-- No command introduces persistent variable bindings. -/
+theorem CmdStep.env {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
+    db'.env = db.env := by
+  obtain ⟨d, he, hm⟩ := h
+  refine (MergeClosure.envRules hm).1.trans ?_
+  cases c with
+  | action a => exact evalAction_env he
+  | saturate R => exact RunReach.env (show SaturateReach R db d from he).1
+  | rule r => cases Option.some.inj he; rfl
+  | run R => cases Option.some.inj he; rfl
+  | decl f dc => cases Option.some.inj he; rfl
+
+/-- A program keeps its initial context; in particular, an ordinary run leaves it empty. -/
+theorem ProgramStep.env {db db' : Database} {p : Program} (h : ProgramStep db p db') :
+    db'.env = db.env := by
+  induction h with
+  | nil => rfl
+  | cons hc _ ih => exact ih.trans hc.env
+
 theorem CmdStep.sig {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db'.sig = c.sigBind db.sig := by
   obtain ⟨d, hreach, hcl⟩ := h
@@ -510,7 +538,6 @@ theorem evalAction_setRules (db : Database) (R : Set Rule) (a : Action) :
       = (evalAction db a).map fun d => { d with rules := R } := by
   cases a with
   | expr e => cases h : e.eval db.sig db.env <;> simp [evalAction, h, Database.addTerm]
-  | letBind v e => cases h : e.eval db.sig db.env <;> simp [evalAction, h, Database.addTerm]
   | union e₁ e₂ =>
       cases h₁ : e₁.eval db.sig db.env with
       | none => simp [evalAction, h₁]
@@ -576,10 +603,10 @@ old effect: every state it adds is one the *preceding* merge phase already reach
 theorem ruleStep_iff {db db' : Database} {r : Rule} :
     CmdStep db (.rule r) db' ↔
       ∃ d, MergeClosure db d ∧
-        db' = { d with rules := insert (r.resolveGlobals db.env) db.rules } := by
+        db' = { d with rules := insert r db.rules } := by
   simpa [CmdStep, cmdReach, cmdEffect] using
     mergeClosure_setRules (db := db) (db' := db')
-      (R := insert (r.resolveGlobals db.env) db.rules)
+      (R := insert r db.rules)
 
 /-! #### The invariant `.decl` carries: the declared name occurs nowhere
 
@@ -743,15 +770,6 @@ theorem evalAction_avoids {f : FnName} {db d : Database} {a : Action}
       rw [evalAction] at h
       obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
       exact ⟨avoids_addTerm hav.terms (eval_avoids hf hav.env e t ht), hav.env⟩
-  | letBind v e =>
-      rw [evalAction] at h
-      obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
-      have hat := eval_avoids hf hav.env e t ht
-      refine Database.Avoids.congr (d₁ := db.addTerm t) rfl (fun b hb => ?_)
-        ⟨avoids_addTerm hav.terms hat, hav.env⟩
-      rcases List.mem_cons.mp hb with rfl | hb
-      · exact hat
-      · exact hav.env b hb
   | union e₁ e₂ =>
       rw [evalAction] at h
       obtain ⟨t₁, h₁, h⟩ := Option.bind_eq_some_iff.mp h
@@ -873,9 +891,6 @@ theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : A
       = (evalAction db a).map fun d => { d with sig := sig' } := by
   cases a with
   | expr e =>
-      have he := eval_update hf hag e hd db.env
-      cases h : e.eval db.sig db.env <;> simp [evalAction, ← he, h, Database.addTerm]
-  | letBind v e =>
       have he := eval_update hf hag e hd db.env
       cases h : e.eval db.sig db.env <;> simp [evalAction, ← he, h, Database.addTerm]
   | union e₁ e₂ =>

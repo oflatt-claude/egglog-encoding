@@ -1,5 +1,10 @@
 # M11, the proof encoding — parked
 
+> Historical design notes. The current Lean model has no global or local let bindings,
+> rules are registered without global resolution, and `encode_corresponds` is proved.
+> See [README.md](README.md) and the Lean declarations for the current contracts.
+
+
 `Encoding/Encode.lean` defines the encoding. Its *original* theorems and their vacuity
 witnesses are **deleted**; this file is what survives of them, and it exists so the design is
 not re-attempted with the same defects.

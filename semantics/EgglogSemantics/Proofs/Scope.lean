@@ -2,17 +2,6 @@ import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Step
 
 namespace Egglog
-/-- The scope after a sequence of actions. The induction invariant of
-`evalActions_isSome_of_scoped`, and not a static check, so it is here and not in `Spec/`. -/
-def Actions.bind : List Action → Scope → Scope
-  | [], Γ => Γ
-  | a :: as, Γ => Actions.bind as (a.bind Γ)
-
-/-- The scope after a program, as `Actions.bind`. -/
-def Program.bind : Program → Scope → Scope
-  | [], Γ => Γ
-  | c :: cs, Γ => Program.bind cs (c.bind Γ)
-
 /-- The scope describes the environment's domain exactly. This is the induction invariant
 `programStep_of_scoped` carries across a run. -/
 def Scope.Models (Γ : Scope) (σ : Env) : Prop := ∀ v, v ∈ Γ ↔ v ∈ Env.dom σ
@@ -39,17 +28,11 @@ theorem Expr.not_isLit_of_isApp {sig : Signature} {e : Expr} {σ : Env} {t : Ter
 /-! ### Actions do not get stuck -/
 theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {a : Action} (h : a.Scoped Γ) (he : a.Evaluable db.sig) :
-    ∃ db', evalAction db a = some db' ∧ (a.bind Γ).Models db'.env := by
+    ∃ db', evalAction db a = some db' ∧ Γ.Models db'.env := by
   cases a with
   | expr e =>
     obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm h.2 he
     exact ⟨db.addTerm t, by simp [evalAction, ht], hm⟩
-  | letBind v e =>
-    obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm h he
-    refine ⟨{ db.addTerm t with env := (v, t) :: db.env }, by simp [evalAction, ht], ?_⟩
-    intro w
-    simp only [Action.bind, List.mem_cons, Env.dom_cons]
-    exact or_congr_right (hm w)
   | union e₁ e₂ =>
     obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1.2
     obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2.2
@@ -72,11 +55,11 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
         obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
         exact he.2 e hmem g hge)
     refine ⟨db.addTerm (.app f (as ++ vs)), by simp [evalAction, has, hvs], ?_⟩
-    simpa [Action.bind] using hm
+    simpa [] using hm
 
 theorem evalActions_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {as : List Action} (h : Actions.Scoped as Γ) (he : Actions.Evaluable as db.sig) :
-    ∃ db', evalActions db as = some db' ∧ (Actions.bind as Γ).Models db'.env := by
+    ∃ db', evalActions db as = some db' ∧ Γ.Models db'.env := by
   induction as generalizing db Γ with
   | nil => exact ⟨db, rfl, hm⟩
   | cons a as ih =>
@@ -118,19 +101,14 @@ theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
 `Cmd.sigBind` is what the signature half of the invariant is: a command leaves the
 signature `Program.Evaluable` checks the rest of the program against. -/
 theorem cmdStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
-    {c : Cmd} (hns : c.NoSaturate) (h : c.Scoped Γ) (he : c.Evaluable db.sig)
-    (hsh : c.NoShadow Γ) :
-    ∃ db', CmdStep db c db' ∧ (c.bind Γ).Models db'.env ∧
+    {c : Cmd} (hns : c.NoSaturate) (h : c.Scoped Γ) (he : c.Evaluable db.sig) :
+    ∃ db', CmdStep db c db' ∧ Γ.Models db'.env ∧
       db'.sig = c.sigBind db.sig := by
   cases c with
   | action a =>
     obtain ⟨db', hv, hm'⟩ := evalAction_isSome_of_scoped hm h he
-    have htop : evalTopAction db a = some db' := by
+    have htop : evalAction db a = some db' := by
       cases a with
-      | letBind v e =>
-        rw [evalTopAction_letBind_of_fresh
-          (Env.lookup_eq_none_iff.mpr fun hc => hsh ((hm v).mpr hc))]
-        exact hv
       | _ => exact hv
     exact ⟨db', ⟨db', htop, Relation.ReflTransGen.refl⟩, hm', evalAction_sig hv⟩
   | rule r => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
@@ -140,16 +118,15 @@ theorem cmdStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
 
 theorem programStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {p : Program} (hns : p.NoSaturate) (h : Program.Scoped p Γ)
-    (he : Program.Evaluable p db.sig) (hsh : Program.NoShadow p Γ) :
-    ∃ db', ProgramStep db p db' ∧ (Program.bind p Γ).Models db'.env := by
+    (he : Program.Evaluable p db.sig) :
+    ∃ db', ProgramStep db p db' ∧ Γ.Models db'.env := by
   induction p generalizing db Γ with
   | nil => exact ⟨db, .nil, hm⟩
   | cons c cs ih =>
     obtain ⟨db₁, h₁, hm₁, hs₁⟩ :=
-      cmdStep_of_scoped hm (hns c List.mem_cons_self) h.1 he.1 hsh.1
+      cmdStep_of_scoped hm (hns c List.mem_cons_self) h.1 he.1
     obtain ⟨db₂, h₂, hm₂⟩ :=
       ih hm₁ (fun c' hc' => hns c' (List.mem_cons_of_mem c hc')) h.2 (by rw [hs₁]; exact he.2)
-        hsh.2
     exact ⟨db₂, .cons h₁ h₂, hm₂⟩
 
 /-- A program whose variables are bound and whose applications all build runs to
@@ -168,15 +145,12 @@ anywhere in `MergeClosure`. On the constructor fragment there is nothing to stop
 fixpoint, and `(rule () ((f (g x))))` under a saturating run has none. Scope and
 evaluability are properties of the syntax and cannot see that, so the totality theorem is
 for the fragment whose round counts are written down.
-
-`hsh` is not removable either: a top-level `let` on a name an earlier one bound is stuck
-(`evalTopAction`), which is egglog's "Shadowing is not allowed" and is a property of the
-syntax that `WellScoped` does not see — `Action.bind` lets a `let` shadow. -/
+ -/
 theorem programStep_isSome {p : Program} (hns : p.NoSaturate) (h : WellScoped p)
-    (he : p.Evaluable Database.empty.sig) (hsh : NoShadowing p) :
+    (he : p.Evaluable Database.empty.sig) :
     ∃ db, ProgramStep Database.empty p db := by
   obtain ⟨db, hdb, _⟩ := programStep_of_scoped
-    (db := Database.empty) Scope.Models.empty hns h he hsh
+    (db := Database.empty) Scope.Models.empty hns h he
   exact ⟨db, hdb⟩
 
 end Egglog

@@ -229,7 +229,6 @@ theorem currentOfLattice_false : ¬ CurrentOfLattice := by
       "f" [] [tA] _ _ rfl dA_row
   exact hcur.2 _ hcur.1
 
-
 /-! ## Counterexample B — `le` is a genuine partial order and the statement still fails
 
 `(function f () i64 :merge (min old new))` is the shape `tests/interval.egg` uses, and
@@ -379,7 +378,6 @@ theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   · exact ⟨Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two ha2⟩),
       Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two hb2⟩)⟩
 
-
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
@@ -409,7 +407,7 @@ theorem pB_reaches_entryB {db : Database}
   obtain ⟨_, h3, hnil⟩ := h.cons_inv
   cases hnil.nil_inv
   obtain ⟨_, hact, hcl⟩ := h3
-  simp only [cmdReach, cmdEffect, evalTopAction_set, evalAction, Option.bind_eq_some_iff,
+  simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
   obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
   rw [show eB = Expr.app "b" [] from rfl] at hout
@@ -430,7 +428,6 @@ theorem currentOfLattice_false_partialOrder : ¬ CurrentOfLattice := by
     H pB dB leB execM_pB leB_anti dB_join "f" [] [tA] _ _ dB_mergeOf dB_rowA
   have hbad := hcur.2 [tB] ⟨[], .nil, pB_reaches_entryB hstep⟩
   rcases hbad with h | ⟨_, _, h, _⟩ | ⟨⟨_, h⟩, _⟩ <;> simp [tA, tB] at h
-
 
 /-! ## Counterexample C — the merge is total, `le` is reflexive, and transitivity is the
 gap
@@ -580,7 +577,6 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   · exact ⟨Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩),
       Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩)⟩
 
-
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
@@ -605,7 +601,7 @@ theorem pC_reaches_entryA {db : Database}
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, h2, r2⟩ := h.cons_inv
   obtain ⟨_, hact, hcl⟩ := h2
-  simp only [cmdReach, cmdEffect, evalTopAction_set, evalAction, Option.bind_eq_some_iff,
+  simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
   obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
   rw [show eA = Expr.app "a" [] from rfl] at hout
@@ -625,7 +621,6 @@ theorem currentOfLattice_false_total : ¬ CurrentOfLattice := by
   obtain ⟨db, hstep, hcur⟩ :=
     H pC dC leC execM_pC leC_anti dC_join "f" [] vsC _ _ dC_mergeOf dC_row
   exact not_leC_of_okA dC_okA (hcur.2 [tA] ⟨[], .nil, pC_reaches_entryA hstep⟩)
-
 
 /-! ## Neither B nor C blames the specification's over-approximation
 
@@ -665,7 +660,6 @@ theorem dC_out_a : dC.toDatabase.Out "f" [] [tA] :=
 /-- **Refutation C, with the specification removed.** -/
 theorem dC_not_current : ¬ dC.toDatabase.Current leC "f" [] vsC :=
   fun hcur => not_leC_of_okA dC_okA (hcur.2 [tA] dC_out_a)
-
 
 /-! ## The three programs satisfy the side conditions the refinement chain imposes
 
@@ -817,7 +811,6 @@ The one-line observation that drives Counterexample A. -/
 theorem current_forces_refl {db : Database} {le : List Term → List Term → Prop}
     {f : FnName} {as vs : List Term} (h : db.Current le f as vs) : le vs vs :=
   h.2 vs h.1
-
 
 /-! ## Diagnosis
 

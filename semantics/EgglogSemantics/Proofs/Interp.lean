@@ -654,10 +654,10 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.EqsInTerms)
         Env.lookup_eq_none_iff.mpr fun hc => hv (hpdom ▸ hc)]
 
 /-! ### Refinement: actions -/
-/-- What one action produces, per case. Every fact below about `execAction` is a four-way
+/-- What one action produces, per case. Every fact below about `execAction` is a three-way
 `rcases` on this rather than a repeat of the case analysis. -/
 theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a = some d') :
-    (∃ t, d' = d.addTerm t) ∨ (∃ v t, d' = { d.addTerm t with env := (v, t) :: d.env }) ∨
+    (∃ t, d' = d.addTerm t) ∨
       (∃ t₁ t₂, ¬ (t₁.isLit ∨ t₂.isLit) ∧ d' = d.addEq t₁ t₂) ∨
       (∃ f as vs, d' = d.addRow f as vs) := by
   cases a with
@@ -667,12 +667,6 @@ theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a =
     | some t =>
       simp only [execAction, hv, Option.map_some, Option.some.injEq] at h
       exact Or.inl ⟨t, h.symm⟩
-  | letBind v e =>
-    cases hv : e.eval d.sig d.env with
-    | none => simp [execAction, hv] at h
-    | some t =>
-      simp only [execAction, hv, Option.map_some, Option.some.injEq] at h
-      exact Or.inr (Or.inl ⟨v, t, h.symm⟩)
   | union e₁ e₂ =>
     cases hv₁ : e₁.eval d.sig d.env with
     | none => simp [execAction, hv₁] at h
@@ -685,7 +679,7 @@ theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a =
         · simp at h
         · rename_i hlit
           simp only [Option.some.injEq] at h
-          exact Or.inr (Or.inr (Or.inl ⟨t₁, t₂, by simpa using hlit, h.symm⟩))
+          exact Or.inr (Or.inl ⟨t₁, t₂, by simpa using hlit, h.symm⟩)
   | set f args out =>
     cases hv₁ : Expr.evalList d.sig args d.env with
     | none => simp [execAction, hv₁] at h
@@ -695,20 +689,19 @@ theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a =
       | some vs =>
         simp only [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
-        exact Or.inr (Or.inr (Or.inr ⟨f, as, vs, h.symm⟩))
+        exact Or.inr (Or.inr ⟨f, as, vs, h.symm⟩)
 
 theorem execAction_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {a : Action}
     (h : execAction d a = some d') : d'.EqsInTerms := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
     ⟨f, as, vs, rfl⟩
   · exact he.addTerm t
-  · exact (he.addTerm t).setEnv _
   · exact he.addEq t₁ t₂
   · exact he.addRow f as vs
 
 theorem execAction_rules {d d' : FDatabase} {a : Action} (h : execAction d a = some d') :
     d'.rules = d.rules := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨v, t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
     ⟨f, as, vs, rfl⟩ <;>
     rfl
 
@@ -732,14 +725,28 @@ theorem execLocalActions_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {as :
     rw [execLocalActions, hv, Option.map_some, Option.some.injEq] at h
     exact h ▸ (execActions_eqsInTerms (he.setEnv _) hv).restore
 
+/-- Executing an action cannot change its evaluation context. -/
+theorem FDatabase.execAction_env {d d' : FDatabase} {a : Action}
+    (h : execAction d a = some d') : d'.env = d.env := by
+  cases a with
+  | expr e =>
+      obtain ⟨t, _, rfl⟩ := Option.map_eq_some_iff.mp h
+      rfl
+  | union e₁ e₂ =>
+      obtain ⟨t₁, _, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨t₂, _, h⟩ := Option.bind_eq_some_iff.mp h
+      split at h
+      · simp at h
+      · cases Option.some.inj h; rfl
+  | set f args out =>
+      obtain ⟨as, _, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨vs, _, rfl⟩ := Option.map_eq_some_iff.mp h
+      rfl
+
 theorem execAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
     (execAction d a).map FDatabase.toDatabase = evalAction d.toDatabase a := by
   cases a with
   | expr e =>
-    cases hv : e.eval d.sig d.env with
-    | none => simp [execAction, evalAction, hv]
-    | some t => simp [execAction, evalAction, hv, FDatabase.toDatabase_addTerm he]
-  | letBind v e =>
     cases hv : e.eval d.sig d.env with
     | none => simp [execAction, evalAction, hv]
     | some t => simp [execAction, evalAction, hv, FDatabase.toDatabase_addTerm he]
@@ -761,20 +768,14 @@ theorem execAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
       | none => simp [execAction, evalAction, hv₁, hv₂]
       | some vs => simp [execAction, evalAction, hv₁, hv₂, FDatabase.toDatabase_addRow he]
 
-/-- **The interpreter's top-level action is the specification's.** The freshness guard reads
-the same environment on both sides. -/
-theorem execTopAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
-    (execTopAction d a).map FDatabase.toDatabase = evalTopAction d.toDatabase a := by
-  cases a with
-  | letBind v e =>
-      have henv : d.toDatabase.env = d.env := rfl
-      rw [execTopAction, evalTopAction, henv]
-      split
-      · simp
-      · exact execAction_toDatabase he
-  | expr e => exact execAction_toDatabase (a := .expr e) he
-  | union e₁ e₂ => exact execAction_toDatabase (a := .union e₁ e₂) he
-  | set f args out => exact execAction_toDatabase (a := .set f args out) he
+/-- Action blocks preserve the evaluation environment. -/
+theorem FDatabase.execActions_env {as : List Action} {d d' : FDatabase}
+    (h : execActions d as = some d') : d'.env = d.env := by
+  induction as generalizing d with
+  | nil => cases Option.some.inj h; rfl
+  | cons a as ih =>
+      obtain ⟨m, ha, hs⟩ := Option.bind_eq_some_iff.mp h
+      exact (ih hs).trans (FDatabase.execAction_env ha)
 
 theorem execActions_toDatabase {as : List Action} : ∀ {d : FDatabase}, d.EqsInTerms →
     (execActions d as).map FDatabase.toDatabase = evalActions d.toDatabase as := by
@@ -1249,9 +1250,9 @@ theorem execCmd_toDatabase {d : FDatabase} (he : d.EqsInTerms) (hsig : d.sig.All
     {c : Cmd} (hns : c.NoSaturate) :
     (execCmd d c).map FDatabase.toDatabase = cmdEffect d.toDatabase c := by
   cases c with
-  | action a => exact execTopAction_toDatabase he
+  | action a => exact execAction_toDatabase he
   | rule r =>
-    rw [show execCmd d (.rule r) = some { d with rules := r.resolveGlobals d.env :: d.rules } from rfl,
+    rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
       Option.map_some, FDatabase.toDatabase_consRule]
     rfl
   | run R =>
@@ -1279,9 +1280,9 @@ theorem execCmd_cmdReach {d d' : FDatabase} (he : d.EqsInTerms)
 theorem execCmd_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {c : Cmd}
     (h : execCmd d c = some d') : d'.EqsInTerms := by
   cases c with
-  | action a => exact execAction_eqsInTerms he (execAction_of_top h)
+  | action a => exact execAction_eqsInTerms he (h)
   | rule r =>
-    rw [show execCmd d (.rule r) = some { d with rules := r.resolveGlobals d.env :: d.rules } from rfl,
+    rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
       Option.some.injEq] at h
     exact h ▸ he.consRule r
   | run R =>

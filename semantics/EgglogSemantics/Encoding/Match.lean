@@ -1,130 +1,5 @@
 import EgglogSemantics.Encoding.Correspond
 
-/-!
-# The rule-head match correspondence
-
-`Encoding/Correspond.lean` reduces both halves of `encode_corresponds` to properties of the
-state `execM` returned, and both residues then ask the same question about a *rule*: the
-encoded rule fired, so what did the source rule do? Everything a head writes — a build or a
-`union` inside `r.actions` — needs a source-side hypothesis, and the only place one can come
-from is the query. This file is that step.
-
-## What is stated, and why in this shape
-
-The correspondence is a property of the **two states**, not of `execM`, the same discipline
-`cong_sameClass_of_state` and `sameClass_cong_of_state` follow. Nothing below mentions
-`encode` except the two lemmas that *establish* its hypotheses, and those are named and kept
-apart.
-
-The target-side hypothesis is `QueryRead`: the ids the flattened query bound, read off
-`Database.Out` rather than off `Matches`. `out_of_matches_values` is what turns one encoded
-view read into one `Database.Out`, and it needs `Database.Diag` — which is the *already
-established* fact that `encode` emits no `union`, so `Cong tgt` is equality and a read is a
-lookup. `patternReads_of_encodeQuery` is that hypothesis established from the encoder itself,
-so `exists_validQuerySubst_of_encodeQuery` consumes a match of the *emitted* query and nothing
-hand-written. `encodeQuery` **flattens**, so one source pattern becomes several reads and
-`@Rule_i`'s premise count is the read count; `QueryRead` is indexed by the *source*
-expression and mirrors that flattening as a recursion, which is what makes the
-correspondence one-pattern-to-one-derivation rather than one-atom-to-one-atom.
-
-The source-side conclusion is `ValidQuerySubst src r.query τ` together with
-`Env.lookup v (τ ++ src.env) = some (g v)` for the query's variables: the head needs to know
-*which* source terms fired it, not only that something did.
-
-## The two facts it rests on, both already in hand
-
-* **`Database.ViewsSound`** (`Encoding/Correspond.lean`) is the whole of what the target
-  contributes. `EntrySound`'s existential is exactly the source argument list a view read's
-  key stands for, so a view read hands back a source application the source holds.
-* **View tables are not functional**, and this never asks them to be: `Database.Out` is read
-  existentially and `EntrySound` is stated per entry, so two entries at one key are two
-  hypotheses rather than a contradiction.
-
-## The head build, and why it is not obstructed
-
-`encodeBuild` mints the skolem over its arguments' **ids**, so the entry a head writes is keyed
-and valued at ids. `mem_terms_of_entrySound_skolem` is what that costs, compiled:
-`Database.ViewsSound` at a freshly built entry is *equivalent* to the minted id being a source
-term. Read off the key that is the fact `encode_corresponds_invents_enode` refutes, and the
-head-build case looks obstructed.
-
-It is not, because **which source terms the correspondence delivers is a choice**. A variable at
-a key column is read back by `Database.ViewsSound` as a source term *congruent* to the id, and
-both endpoints of a congruence are present — so the id is itself a term the source holds, and
-the reading may be taken to be the ids. `exists_validQuerySubst_at_ids` is that reading;
-`Matches` is congruence-closed, so nothing about the source match is lost. Then the source's own
-head evaluation is the same expression at the same values — `encodeBuild_fst` says the naming
-expression *is* the source expression, `Expr.eval_transport` says the two signatures and
-environments agree where a head reads — so it builds the very term the target's skolem names.
-`entrySound_headBuild` and `cong_headUnion` are the two head writers, and what they owe is only
-`hfired`: the source rule fired, and holds what its own head built. That is `RunRules`' fixpoint
-and belongs to `execM_viewsSound`.
-
-What the head's path costs is `Database.GlobalsAgree` where the plain correspondence asks only
-`Database.GlobalsRead`: a source global and the target's reading of it must be the *same* term,
-not merely congruent ones, which is what the encoding gives (`encodeBuild_fst` again, at a
-top-level `let`).
-
-## Globals in the query, and why nothing here sees one
-
-A rule *head* reads a global off the environment on both sides, which is what the two clauses
-above are for. A rule **query** does not: `Encoding/Encode.lean`'s `Rule.substGlobals` replaces
-a global by its (closed) definition before `encodeQuery` ever sees the rule, so what is
-flattened has no global in it and everything below is about an ordinary query. The
-substitution costs nothing on the source side, and there is no transfer lemma for it:
-`Spec/Step.lean` stores a rule `Rule.resolveGlobals`'d at the environment standing when it is
-declared, and `Rule.resolveGlobals_eq_substGlobals` — under `Database.GlobalsInline` and
-`Database.GlobalsCover` — says that is the *same* query, so a source match of the stored query
-already is one of the substituted one. `Pattern.NoValues` and `Query.VarsKeyed` survive the
-substitution (`Query.noValues_substGlobals`, `Query.VarsKeyed.substGlobals`), so the text
-conditions this file consumes hold of it too. `Pattern.Grounded` does not survive and is not
-asked for: the substitution writes a literal-valued global's *value* into the query, and
-`Pattern.GroundedAt` is what the reading actually needs.
-
-## And what it is false for
-
-`encodePattern` emits **no atom** for a source pattern whose expression is a bare literal or
-a bare variable — `encodeQueryExpr` flattens an application and returns a leaf unchanged. A
-dropped constraint is a rule the target fires and the source does not, and
-`encodeQuery_drops_literal_pattern` is that refuted: at `satProgram`'s own source state, the
-source query `[(1)]` matches under no substitution while its encoding, the empty query,
-matches under the empty one. `Pattern.Grounded` is the side condition that excludes it, and
-`Query.VarsKeyed` is its counterpart for the bare-*variable* half. Both are restrictions on
-the *source program's text*, and both are now clauses of **`Program.EncodeDomain`**
-(`EncodeDomain.queryEncodable`), so the program the refutation is about is outside the
-encoder's declared domain rather than inside it — `litProgram_not_encodeDomain`.
-
-## Where it is checked
-
-`Encoding/Correspond.lean`'s discipline: every hypothesis is discharged at a state some
-program *reaches*, and the premise it guards is checked inhabited there.
-`exists_validQuerySubst_witness` does that at `satProgram`, whose one constructor is
-**nullary** — so `congUp_of_queryRead`'s application case runs at an empty argument list,
-there is no key column anywhere, and `Query.VarsKeyed` is vacuous.
-`exists_validQuerySubst_composed_witness` is the case the correspondence was written for: a
-**unary** constructor, a rule whose query is `((F x))`, both runs stepped, and `VarsKeyed`
-non-vacuous. It runs the whole path, `encodeQuery`'s own output included — the encoded query's
-match is `wTarget_validQuerySubst`, and `patternReads_of_encodeQuery` is what turns it into the
-reading. `Database.GlobalsRead` is the one clause no pair reached here makes non-vacuous, and
-`globalsRead_nonvacuous` — with `globalsAgree_nonvacuous` for the strengthening — is that clause
-at a state binding a global. `entrySound_headBuild_witness` is the head-build case run at the
-same pair, at the view entry that run really wrote.
-
-`uProgram`, at the end, is the pair the head's *`union`* case needs: a rule head that unions
-two distinct nullary constructors, so that `cong_headUnion` is discharged where the source
-state is **not** diagonal — which `cong_headUnion_witness` cannot check and which is the whole
-of what that lemma is for. Its target-side run stops one command short of `encode`'s output,
-and `uTgt_saturate_infinite` is the compiled reason: `encode`'s rebuild has **no fixpoint**
-after a `union` between distinct built terms, so `ProgramStep Database.empty (encode P) tgt`
-— satisfiable at a program that only builds (`satProgram_programStep`) — is satisfiable at no
-program that asserts an equation. `Database.UnionsJoined` and `Database.ViewLeader`, which is
-what `Encoding/Complete.lean` now reduces `execM_unionsRead` to, are witnessed there too:
-`uTgt_not_unionsRead` is the obligation failing before the rebuild's one firing,
-`uTgt_not_viewLeader` is which of the two properties fails there, and
-`uRebuilt_unionsJoined`/`uRebuilt_viewLeader` are both holding after it — the second with all
-three of its clauses non-vacuous, which no other state in the tree makes them.
--/
-
 namespace Egglog
 
 /-! ### What the flattened query read
@@ -510,10 +385,6 @@ theorem exists_source_of_patternArgVar {src d : Database} (hs : d.ViewsSound src
   | expr hr => exact exists_source_of_argVar hs hr hv
   | eq h₁ h₂ => exact hv.elim (exists_source_of_argVar hs h₁) (exists_source_of_argVar hs h₂)
 
-/-- **A source global reads as an id congruent to the term it binds.** A source `let` becomes
-a `let` of the built term's *id* in the target, so a query variable the source's own
-environment binds is read from the target's environment rather than from the substitution.
-The one clause of the correspondence that is about the two environments. -/
 def Database.GlobalsRead (src : Database) (ρ : Env) : Prop :=
   ∀ v t i, Env.lookup v src.env = some t → Env.lookup v ρ = some i → Cong src t i
 
@@ -983,28 +854,6 @@ theorem Program.EncodeDomain.queryEncodable_of_mem {P : Program} (h : P.EncodeDo
   ⟨fun p hp => ((h.queryEncodable _ hr).1 p hp).1,
     fun p hp => ((h.queryEncodable _ hr).1 p hp).2, (h.queryEncodable _ hr).2⟩
 
-/-! ### The source reading at the ids themselves
-
-`exists_sourceReading` picks *some* source term per query variable. A rule **head** cannot use
-just any: `encodeBuild` mints its skolem over the ids the query bound, so the entry a head
-writes is valued at `f` applied to those ids, and `mem_terms_of_entrySound_skolem` says
-`Database.ViewsSound` there is *equivalent* to that application being a source term. Reading the
-variables back as arbitrary congruent terms leaves exactly the gap
-`encode_corresponds_invents_enode` refutes, read at a key column.
-
-**The gap closes because the reading may be chosen to be the ids.** A variable at a key column
-is read back by `Database.ViewsSound`, which hands out a source argument list *congruent* to the
-key — and a congruence's endpoints are both present, so the id is itself a term the source
-holds. `Matches` is congruence-closed (that is the whole of `CongUp`), so the source query
-matches at the ids just as it matches at any other reading, and then the source's own head
-evaluation builds the very term the target's head did. Nothing about `encode` is used; what
-replaces `Database.GlobalsRead` is the stronger `Database.GlobalsAgree`, and the encoder
-supplies it because a source `let` becomes a `let` of the *same* expression
-(`encodeBuild_fst`). -/
-
-/-- **The target's environment binds every source global to the same term.** Stronger than
-`Database.GlobalsRead`, which allows a congruent one, and what the encoding gives: a source
-`let` becomes `.letBind v (encodeBuild e n).1` and that expression *is* `e`. -/
 def Database.GlobalsAgree (src : Database) (ρ : Env) : Prop :=
   ∀ v t, Env.lookup v src.env = some t → Env.lookup v ρ = some t
 
@@ -1382,7 +1231,7 @@ source-side counterpart of `satProgram_programStep`. -/
 theorem satProgramStep_src : ProgramStep Database.empty satProgram satSrcD := by
   refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨satSrcD, ?_, .refl⟩ .nil)
   change cmdEffect _ (.action (.expr (.app "A" []))) = some satSrcD
-  simp only [cmdEffect, evalTopAction_expr, evalAction, Expr.eval, Expr.evalList, satSrcD]
+  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, satSrcD]
   rfl
 
 private theorem satSrcBase_wf : ({ Database.empty with sig := satSrcSig } : Database).WF where
@@ -1567,7 +1416,7 @@ theorem wProgramStep_src : ProgramStep Database.empty wProgram wSrcD := by
   refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
     (.cons ⟨_, rfl, .refl⟩ (.cons ⟨wSrcD, ?_, .refl⟩ .nil)))
   change cmdEffect _ (.action (.expr (.app "F" [.app "A" []]))) = some wSrcD
-  simp only [cmdEffect, evalTopAction_expr, evalAction, Expr.eval, Expr.evalList, wSrcD]
+  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, wSrcD]
   rfl
 
 private theorem wSrcBase_wf : wSrcBase.WF where
@@ -2229,7 +2078,7 @@ theorem uProgramStep_src : ProgramStep Database.empty uProgram uSrcD := by
   refine .cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩
     (.cons ⟨_, rfl, .refl⟩ (.cons ⟨uSrcD, ?_, .refl⟩ .nil)))
   change cmdEffect _ (.action (.union (.app "A" []) (.app "B" []))) = some uSrcD
-  simp only [cmdEffect, evalTopAction_union, evalAction, Expr.eval, Expr.evalList, uSrcD,
+  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, uSrcD,
     uA, uB]
   rfl
 
@@ -2674,7 +2523,7 @@ theorem uTgt_not_unionsRead : ¬ uTgt.UnionsRead uSrcD := by
   · rcases uTgt_viewRepr h₂ with ⟨h₂', -⟩ | ⟨-, h₂'⟩
     · exact uA_ne_uB h₂'.symm
     · exact uA_ne_uB (h₁'.symm.trans h₂')
-  · exact uA_ne_uB h₁' 
+  · exact uA_ne_uB h₁'
 
 /-- `(@Trans @Fiat @Fiat)`: the row's own proof composed with the edge's. -/
 def uTransE : Term := .app transName [.app fiatName [], .app fiatName []]

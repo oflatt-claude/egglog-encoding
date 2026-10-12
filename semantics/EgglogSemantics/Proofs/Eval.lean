@@ -510,8 +510,6 @@ three-way `rcases` on this rather than a repeat of the case analysis. -/
 theorem evalAction_eq_some {db db' : Database} {a : Action}
     (h : evalAction db a = some db') :
     (∃ e t, a = .expr e ∧ e.eval db.sig db.env = some t ∧ db' = db.addTerm t) ∨
-      (∃ v e t, a = .letBind v e ∧ e.eval db.sig db.env = some t ∧
-        db' = { db.addTerm t with env := (v, t) :: db.env }) ∨
       (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.sig db.env = some t₁ ∧
         e₂.eval db.sig db.env = some t₂ ∧ ¬ (t₁.isLit ∨ t₂.isLit) ∧ db' = db.addEq t₁ t₂) ∨
       (∃ f args out as vs, a = .set f args out ∧ Expr.evalList db.sig args db.env = some as ∧
@@ -524,12 +522,6 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
     | some t =>
       simp only [evalAction, hv, Option.map_some, Option.some.injEq] at h
       exact Or.inl ⟨e, t, rfl, hv, h.symm⟩
-  | letBind v e =>
-    cases hv : e.eval db.sig db.env with
-    | none => simp [evalAction, hv] at h
-    | some t =>
-      simp only [evalAction, hv, Option.map_some, Option.some.injEq] at h
-      exact Or.inr (Or.inl ⟨v, e, t, rfl, hv, h.symm⟩)
   | union e₁ e₂ =>
     cases hv₁ : e₁.eval db.sig db.env with
     | none => simp [evalAction, hv₁] at h
@@ -542,8 +534,8 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
         · simp at h
         · rename_i hlit
           simp only [Option.some.injEq] at h
-          exact Or.inr (Or.inr (Or.inl ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, by
-            simpa using hlit, h.symm⟩))
+          exact Or.inr (Or.inl ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, by
+            simpa using hlit, h.symm⟩)
   | set f args out =>
     cases hv₁ : Expr.evalList db.sig args db.env with
     | none => simp [evalAction, hv₁] at h
@@ -553,37 +545,51 @@ theorem evalAction_eq_some {db db' : Database} {a : Action}
       | some vs =>
         simp only [evalAction, hv₁, hv₂, Option.bind_some, Option.map_some,
           Option.some.injEq] at h
-        exact Or.inr (Or.inr (Or.inr ⟨f, args, out, as, vs, rfl, hv₁, hv₂, h.symm⟩))
+        exact Or.inr (Or.inr ⟨f, args, out, as, vs, rfl, hv₁, hv₂, h.symm⟩)
 
 theorem evalAction_contained {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db.Contained db' := by
-  rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, -, rfl⟩ | ⟨f, _, _, as, vs, -, -, -, rfl⟩
+  rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ |
+    ⟨_, _, t₁, t₂, -, -, -, -, rfl⟩ |
+    ⟨f, _, _, as, vs, -, -, -, rfl⟩
   · exact .addTerm t db
-  · exact ⟨Set.subset_union_left⟩
   · exact .addEq t₁ t₂ db
   · exact .addTerm _ db
 
 theorem evalAction_rules {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.rules = db.rules := by
-  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨_, _, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
+  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
+    ⟨_, _, _, _, -, -, -, -, rfl⟩ |
+    ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
 
 /-- No action touches the signature; only `Cmd.decl` writes it. -/
 theorem evalAction_sig {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.sig = db.sig := by
-  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨_, _, _, -, -, rfl⟩ |
+  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
+    ⟨_, _, _, _, -, -, -, -, rfl⟩ |
+    ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
+
+/-- Actions read their substitution and never extend it. -/
+theorem evalAction_env {db db' : Database} {a : Action}
+    (h : evalAction db a = some db') : db'.env = db.env := by
+  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
     ⟨_, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
+
+/-- Every action in a block uses the same substitution. -/
+theorem evalActions_env {db db' : Database} {as : List Action}
+    (h : evalActions db as = some db') : db'.env = db.env := by
+  induction as generalizing db with
+  | nil => cases Option.some.inj h; rfl
+  | cons a as ih =>
+      obtain ⟨d, ha, has⟩ := Option.bind_eq_some_iff.mp h
+      exact (ih has).trans (evalAction_env ha)
 
 theorem evalAction_wf {db db' : Database} (hw : db.WF) {a : Action}
     (h : evalAction db a = some db') : db'.WF := by
-  rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, hlit, rfl⟩ | ⟨f, _, _, as, vs, -, -, -, rfl⟩
+  rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ |
+    ⟨_, _, t₁, t₂, -, -, -, hlit, rfl⟩ |
+    ⟨f, _, _, as, vs, -, -, -, rfl⟩
   · exact hw.addTerm t
-  · refine (hw.addTerm t).setEnv fun b hb => ?_
-    rcases List.mem_cons.mp hb with rfl | hb
-    · exact db.mem_addTerm t
-    · exact (hw.addTerm t).envInTerms b hb
   · exact hw.addEq t₁ t₂ fun hl => absurd hl hlit
   · exact hw.addTerm _
 
@@ -646,12 +652,10 @@ theorem evalAction_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.Dec
     {a : Action} (hw : a.WidthOk db.sig) (hsl : a.SetLegal db.sig)
     (h : evalAction db a = some db') : db'.DeclaredTerms := by
   have henv := Database.env_declaredTerm hwf hdt
-  rcases evalAction_eq_some h with ⟨e, t, rfl, ht, rfl⟩ | ⟨v, e, t, rfl, ht, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, has, hvs, rfl⟩
+  rcases evalAction_eq_some h with ⟨e, t, rfl, ht, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ |
+    ⟨f, args, out, as, vs, rfl, has, hvs, rfl⟩
   · exact Database.declaredTerms_addTerm hdt (Expr.eval_declaredTerm henv hw ht)
-  · intro g bs hmem
-    rw [Database.terms_setEnv] at hmem
-    exact Database.declaredTerms_addTerm hdt (Expr.eval_declaredTerm henv hw ht) g bs hmem
   · exact Database.declaredTerms_addEq hdt (Expr.eval_declaredTerm henv hw.1 ht₁)
       (Expr.eval_declaredTerm henv hw.2 ht₂)
   · obtain ⟨d, hd⟩ : ∃ d, db.sig f = some d := by
@@ -700,13 +704,6 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
     cases e.eval d₁.sig d₁.env with
     | none => exact .none
     | some t => exact .some (h.addTerm t)
-  | letBind v e =>
-    simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e]
-    cases e.eval d₁.sig d₁.env with
-    | none => exact .none
-    | some t =>
-      refine .some ⟨h.sig, (h.addTerm t).eqs, h.rules, fun w => ?_⟩
-      by_cases hw : w = v <;> simp [hw, h.env w]
   | union e₁ e₂ =>
     simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e₁,
       ← Expr.eval_agree (sig := d₁.sig) h.env e₂]

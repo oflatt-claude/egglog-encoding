@@ -85,9 +85,7 @@ end
 
 mutual
 
-/-- **The expression that rebuilds `t`.** A ground term read back as syntax, which is what a
-global's *value* looks like once it has been resolved into a rule
-(`Spec/Step.lean`'s `Rule.resolveGlobals`). -/
+/-- The expression that rebuilds a ground term. -/
 def toExpr : Term → Expr
   | .lit l => .lit l
   | .app f args => .app f (toExprList args)

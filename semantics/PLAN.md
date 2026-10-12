@@ -1,5 +1,10 @@
 # A Lean 4 model of egglog's semantics
 
+> Historical design notes. The current Lean model has no global or local let bindings,
+> rules are registered without global resolution, and `encode_corresponds` is proved.
+> See [README.md](README.md) and the Lean declarations for the current contracts.
+
+
 ## Context
 
 egglog's proof encoding (`egglog/src/proofs/`, designed in

@@ -8,7 +8,7 @@ Seven checks: `Scoped` — every variable used is bound; `Evaluable` — every a
 declared constructor; `UnionLegal` — no `union` operand is a literal; `SetLegal` — no `set`
 writes a constructor; `WidthOk` — every application carries its declaration's column counts;
 `DeclsFresh` — no name is declared twice; `MergeDeclared` — every name a `:merge` applies is
-declared or a primitive. `Scoped` threads a `Scope`, extended by a `let` and by a query;
+declared or a primitive. `Scoped` checks each block in a fixed `Scope`; queries bind their pattern variables;
 `UnionLegal` reads no context; the other five thread a `Signature`, moved only by `Cmd.sigBind`.
 -/
 
@@ -39,27 +39,16 @@ def Pattern.Scoped : Pattern → Prop
 restriction on a bare `expr`. -/
 def Action.Scoped : Action → Scope → Prop
   | .expr e, Γ => e.IsApp ∧ e.Scoped Γ
-  | .letBind _ e, Γ => e.Scoped Γ
   | .union e₁ e₂, Γ => e₁.Scoped Γ ∧ e₂.Scoped Γ
   | .set _ args out, Γ => (∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ
-
-/-- The scope after an action: only a `let` extends it, and it may shadow. -/
-def Action.bind : Action → Scope → Scope
-  | .letBind v _, Γ => v :: Γ
-  | _, Γ => Γ
 
 /-- The scope a query's patterns bind. -/
 def Query.bind (q : Query) (Γ : Scope) : Scope := Γ ∪ Query.vars q
 
-/-- The scope after a command: only a top-level `let` extends it. -/
-def Cmd.bind : Cmd → Scope → Scope
-  | .action a, Γ => a.bind Γ
-  | _, Γ => Γ
-
-/-- Each action in the scope the earlier ones leave. -/
+/-- Every action in the same scope. -/
 @[simp] def Actions.Scoped : List Action → Scope → Prop
   | [], _ => True
-  | a :: as, Γ => a.Scoped Γ ∧ Actions.Scoped as (a.bind Γ)
+  | a :: as, Γ => a.Scoped Γ ∧ Actions.Scoped as Γ
 
 /-- Its facts, then its head in the scope the query binds. -/
 @[simp] def Rule.Scoped (r : Rule) (Γ : Scope) : Prop :=
@@ -75,41 +64,13 @@ def Cmd.bind : Cmd → Scope → Scope
   | .saturate _, _ => True
   | .decl _ _, _ => True
 
-/-- Each command in the scope the earlier ones leave. -/
+/-- Every command in the same initial scope. -/
 @[simp] def Program.Scoped : Program → Scope → Prop
   | [], _ => True
-  | c :: cs, Γ => c.Scoped Γ ∧ Program.Scoped cs (c.bind Γ)
+  | c :: cs, Γ => c.Scoped Γ ∧ Program.Scoped cs Γ
 
 /-- A program with no free variables: `Program.Scoped` from the empty scope. -/
 def WellScoped (p : Program) : Prop := Program.Scoped p []
-
-/-! ### Shadowing
-
-A top-level `let` **declares a global**, and a global's name must be new. `Action.bind` lets a
-rule-local `let` shadow; at the top level it may not, and that is a well-formedness condition
-on the program text like the ones above.
-
-egglog runs the same check: `remove_globals` turns a top-level `let` into a function
-declaration, and `Names::check_shadowing` puts that declaration through `Names::check`
-(`egglog/src/ast/check_shadowing.rs:49-50`), which answers `Error::Shadowing` — "Shadowing is
-not allowed" — on a name it has already seen (`:11-12`).
-
-Unlike the checks above this one is also **enforced by the run**: `Spec/Eval.lean`'s
-`evalTopAction` is stuck at a top-level `let` whose name the environment already holds, so a
-shadowing program has no `ProgramStep` at all and a theorem about a run gets the condition
-for free rather than asking for it. -/
-@[simp] def Cmd.NoShadow : Cmd → Scope → Prop
-  | .action (.letBind v _), Γ => v ∉ Γ
-  | _, _ => True
-
-/-- Each command in the scope the earlier ones leave. -/
-@[simp] def Program.NoShadow : Program → Scope → Prop
-  | [], _ => True
-  | c :: cs, Γ => c.NoShadow Γ ∧ Program.NoShadow cs (c.bind Γ)
-
-/-- A program in which no top-level `let` rebinds: `Program.NoShadow` from the empty
-scope. -/
-def NoShadowing (p : Program) : Prop := Program.NoShadow p []
 
 /-! ### Evaluability
 
@@ -133,7 +94,6 @@ since a query binds one under a literal argument, so no check reading the expres
 admits it. -/
 def Action.Evaluable : Action → Signature → Prop
   | .expr e, sig => e.Evaluable sig
-  | .letBind _ e, sig => e.Evaluable sig
   | .union e₁ e₂, sig => (e₁.IsApp ∧ e₁.Evaluable sig) ∧ e₂.IsApp ∧ e₂.Evaluable sig
   | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
 
@@ -251,7 +211,6 @@ end
 entry it records is `FnDecl.entryWidth` wide. -/
 def Action.WidthOk : Action → Signature → Prop
   | .expr e, sig => e.WidthOk sig
-  | .letBind _ e, sig => e.WidthOk sig
   | .union e₁ e₂, sig => e₁.WidthOk sig ∧ e₂.WidthOk sig
   | .set f args out, sig =>
       (∀ d, sig f = some d → args.length = d.arity ∧ out.length = d.outArity) ∧
@@ -317,7 +276,6 @@ def Expr.Declared (e : Expr) (sig : Signature) : Prop :=
 /-- A `set` head must be declared outright: a primitive has no table. -/
 def Action.Declared : Action → Signature → Prop
   | .expr e, sig => e.Declared sig
-  | .letBind _ e, sig => e.Declared sig
   | .union e₁ e₂, sig => e₁.Declared sig ∧ e₂.Declared sig
   | .set f args out, sig =>
       sig f ≠ none ∧ (∀ e ∈ args, e.Declared sig) ∧ ∀ e ∈ out, e.Declared sig
@@ -427,7 +385,6 @@ def Pattern.OrderingFree : Pattern → Prop
 
 def Action.OrderingFree : Action → Prop
   | .expr e => e.OrderingFree
-  | .letBind _ e => e.OrderingFree
   | .union e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
   | .set _ args out => Expr.OrderingFreeList args ∧ Expr.OrderingFreeList out
 

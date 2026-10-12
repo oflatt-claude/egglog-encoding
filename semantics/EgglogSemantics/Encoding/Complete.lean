@@ -22,7 +22,6 @@ stay in `Encoding/Correspond.lean`, which is what keeps `DiffTest.lean`'s import
 
 namespace Egglog
 
-
 /-! ## The firing fold, restricted to the ruleset a round fires
 
 `FDatabase.FiringsSound` quantifies over **every** rule the state holds, and a round runs
@@ -118,7 +117,6 @@ theorem runSaturateM_closed {R : RulesetName} {Φ : FDatabase → Prop}
       · rw [Option.some.injEq] at hrest; exact hrest ▸ hd
       · exact runSaturateM_closed hstep n (hstep hd hx) hrest
 
-
 /-! ## The match, read back at a diagonal target
 
 `validQuerySubst_of_mem_matchQuery` needs `Signature.AllConstructors`, which is exactly what
@@ -197,7 +195,6 @@ theorem validQuerySubst_of_mem_matchQuery_diag {d : FDatabase} (he : d.EqsInTerm
   rw [Env.dom_canon_of_subset (Query.freeVars_subset hp) hdom]
   exact hvp
 
-
 /-! ## What the induction carries at a target state
 
 `FDatabase.SoundTerms` is not a property a single command can be checked against: the head
@@ -235,77 +232,6 @@ argument that needs the second one. -/
 def FDatabase.RulesHeld (d : FDatabase) (P : Program) : Prop :=
   ∀ r ∈ allMaintenanceRules P, r ∈ d.rules
 
-/-- A `set` binds nothing, which is what the encoded blocks of a build are. -/
-theorem Action.NoAtLet.of_isSet {a : Action} (h : a.IsSet) : a.NoAtLet := by
-  cases a with
-  | set f args out => trivial
-  | expr e => exact (h : False).elim
-  | letBind v e => exact (h : False).elim
-  | union e₁ e₂ => exact (h : False).elim
-
-/-- **No block an encoded action emits binds a generated variable.** The only `letBind`
-`encodeAction` emits is the source `let`'s own binder, kept unchanged
-(`encodeAction_letBind_actions`); every other action a build or a head emits is a `set`. -/
-theorem noAtLet_encodeAction {P : Program} (hdom : P.EncodeDomain) {a : Action}
-    (hc : Cmd.action a ∈ P) (n : Nat) : ∀ b ∈ (encodeAction fiatE a n).1, b.NoAtLet := by
-  intro b hb
-  cases a with
-  | expr e =>
-      rw [encodeAction_expr_actions] at hb
-      exact Action.NoAtLet.of_isSet (encodeBuild_isSet e n b hb)
-  | letBind v e =>
-      rw [encodeAction_letBind_actions] at hb
-      rcases List.mem_append.mp hb with h | h
-      · exact Action.NoAtLet.of_isSet (encodeBuild_isSet e n b h)
-      · obtain rfl : b = Action.letBind v (encodeBuild e n).1 := by simpa using h
-        refine hdom.noAt v ?_
-        rw [Program.names]
-        refine List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ?_)))
-        rw [Program.vars, List.mem_dedup]
-        exact List.mem_flatMap.mpr
-          ⟨Cmd.action (.letBind v e), hc, by simp [Cmd.vars, Action.vars]⟩
-  | union e₁ e₂ =>
-      rw [encodeAction_union_actions] at hb
-      rcases List.mem_append.mp hb with h | h
-      · rcases List.mem_append.mp h with h' | h'
-        · exact Action.NoAtLet.of_isSet (encodeBuild_isSet e₁ n b h')
-        · exact Action.NoAtLet.of_isSet (encodeBuild_isSet e₂ _ b h')
-      · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-        rcases h with rfl; trivial
-  | set f args out =>
-      rw [encodeAction_set_actions] at hb
-      rcases List.mem_append.mp hb with h | h
-      · rcases List.mem_append.mp h with h' | h'
-        · exact Action.NoAtLet.of_isSet (encodeBuildArgs_isSet args n b h')
-        · exact Action.NoAtLet.of_isSet (encodeBuildArgs_isSet out _ b h')
-      · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-        rcases h with rfl; trivial
-
-@[inherit_doc noAtLet_encodeAction]
-theorem noAtLet_encodeCmd {P : Program} (hdom : P.EncodeDomain) (G : List (Var × Expr))
-    (c : Cmd) (hc : c ∈ P) (n i : Nat) :
-    ∀ c' ∈ (encodeCmd G c n i).1, c'.NoAtLet := by
-  intro c' hc'
-  cases c with
-  | action a =>
-      rw [encodeCmd_action_fst] at hc'
-      rcases List.mem_append.mp hc' with h | h
-      · obtain ⟨b, hb, rfl⟩ := List.mem_map.mp h
-        exact noAtLet_encodeAction hdom hc n b hb
-      · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-        rcases h with rfl; trivial
-  | rule r =>
-      rw [encodeCmd_rule_fst] at hc'
-      simp only [List.mem_cons, List.not_mem_nil, or_false] at hc'
-      rcases hc' with rfl; trivial
-  | run R =>
-      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hc'
-      rcases hc' with rfl | rfl <;> trivial
-  | saturate R =>
-      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hc'
-      rcases hc' with rfl | rfl <;> trivial
-  | decl f dc => simp [encodeCmd] at hc'
-
 namespace FDatabase
 
 /-- **And every `Cmd.rule` of the block registers its rule.** With
@@ -327,25 +253,15 @@ theorem execProgramM_mem_rules {p : Program}
     · refine execProgramM_rules_mono h₂ r ?_
       rw [FDatabase.execCmdM, Option.some.injEq] at h₁
       rw [← h₁]
-      show r ∈ r.resolveGlobals d.env :: d.rules
-      rw [henv, Rule.resolveGlobals_nil]
+      show r ∈ r :: d.rules
       exact List.mem_cons_self
     · exact ih (fun c' hc' => hna c' (List.mem_cons_of_mem c hc')) henv₁ h₂ r hr'
 
-@[inherit_doc execCmdM_noAtEnv]
-theorem execProgramM_noAtEnv {p : Program} (hp : ∀ c ∈ p, c.NoAtLet) :
-    ∀ {d D : FDatabase}, d.NoAtEnv → d.execProgramM p = some D → D.NoAtEnv := by
-  induction p with
-  | nil =>
-    intro d D h hs
-    rw [FDatabase.execProgramM, Option.some.injEq] at hs
-    exact hs ▸ h
-  | cons c cs ih =>
-    intro d D h hs
-    rw [FDatabase.execProgramM] at hs
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact ih (fun c' hc' => hp c' (List.mem_cons_of_mem c hc'))
-      (execCmdM_noAtEnv (hp c List.mem_cons_self) h h₁) h₂
+/-- Program execution preserves the names in the evaluation environment. -/
+theorem execProgramM_noAtEnv {p : Program} {d D : FDatabase}
+    (h : d.NoAtEnv) (hs : d.execProgramM p = some D) : D.NoAtEnv := by
+  rw [FDatabase.NoAtEnv, FDatabase.execProgramM_env hs]
+  exact h
 
 end FDatabase
 
@@ -395,7 +311,7 @@ read-back already supplies at each command it emits; `hwl` is the one legality c
 signature has to be checked for. -/
 theorem execCmdM {d d' : FDatabase} {c : Cmd} (h : d.EncBase P sg)
     (hro : Cmd.RulesEncodedOk P c) (huf : c.UnionFree) (hnd : c.NoDecl)
-    (hwl : c.WriteLegal sg) (hlet : c.NoAtLet) (hs : d.execCmdM c = some d') :
+    (hwl : c.WriteLegal sg) (hs : d.execCmdM c = some d') :
     d'.EncBase P sg where
   sig := (execCmdM_sig_of_noDecl hs hnd).trans h.sig
   rules := FDatabase.execCmdM_rulesEncoded hro h.noAtEnv h.rules hs
@@ -409,14 +325,14 @@ theorem execCmdM {d d' : FDatabase} {c : Cmd} (h : d.EncBase P sg)
     exact FDatabase.execCmdM_rulesLegal (by rw [h.sig]; exact hwl)
       (by cases c with | decl f dc => exact (hnd : False).elim | _ => trivial) h.wl' hs
   held := fun r hr => FDatabase.execCmdM_rules_mono hs r (h.held r hr)
-  noAtEnv := FDatabase.execCmdM_noAtEnv hlet h.noAtEnv hs
+  noAtEnv := FDatabase.execCmdM_noAtEnv h.noAtEnv hs
 
 /-- **A block of them.** -/
 theorem execProgramM {P : Program} {sg : Signature} {p : Program}
     (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c)
     (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal sg)
-    (hlet : ∀ c ∈ p, c.NoAtLet) :
+     :
     ∀ {d D : FDatabase}, d.EncBase P sg → d.execProgramM p = some D → D.EncBase P sg := by
   induction p with
   | nil =>
@@ -431,9 +347,8 @@ theorem execProgramM {P : Program} {sg : Signature} {p : Program}
       (fun c' hc' => huf c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
-      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
       (h.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
-        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self)
         h₁) h₂
 
 end FDatabase.EncBase
@@ -444,12 +359,7 @@ invariant itself, at the source state the *reading* happens at. -/
 structure FDatabase.EncOk (d : FDatabase) (P : Program) (sg : Signature) (sd : Database) :
     Prop where
   base : d.EncBase P sg
-  /-- **The two environments are the same.** A top-level `let` binds `v` to the value of `e` on
-  the source side and to the value of `(encodeBuild e n).1` on the target's, and that expression
-  *is* `e` (`encodeBuild_fst`) — so the encoded block binds the same name to the same term, and
-  nothing else on either side touches the environment. Stated as an equality rather than as
-  `Database.GlobalsAgree` because the converse inclusion is what says a rule the target
-  registers has nothing left to resolve. -/
+
   env : d.env = sd.env
   sound : d.SoundTerms sd
   /-- **And every encoded source rule the target holds is one the source already holds.**
@@ -462,7 +372,7 @@ structure FDatabase.EncOk (d : FDatabase) (P : Program) (sg : Signature) (sd : D
   srcRules : ∀ r ∈ d.rules,
     (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat),
         Cmd.rule s ∈ P ∧ s.substGlobals G ∈ sd.rules ∧
-        sd.GlobalsInline G ∧ P.GlobalsOnce G ∧ r = (encodeRule i (s.substGlobals G) n).1) ∨
+        sd.GlobalsInline G ∧ r = (encodeRule i (s.substGlobals G) n).1) ∨
       r ∈ allMaintenanceRules P
 
 namespace FDatabase.EncOk
@@ -485,9 +395,9 @@ theorem FDatabase.EncOk.mono_src {d : FDatabase} {P : Program} {sg : Signature}
   sound := h.sound.mono_src heq
   srcRules := fun r hr =>
     (h.srcRules r hr).imp
-      (fun ⟨s, G, i, n, hm, hs, hg, hgo, he⟩ =>
+      (fun ⟨s, G, i, n, hm, hs, hg, he⟩ =>
         ⟨s, G, i, n, hm, hrules _ hs,
-          hg.mono_ctor hsig (fun v t hv => by rw [henv]; exact hv), hgo, he⟩) id
+          hg.mono_ctor hsig (fun v t hv => by rw [henv]; exact hv), he⟩) id
 
 /-- A substitution extends the target environment on the right, so the globals still agree. -/
 theorem Database.GlobalsAgree.append {sd : Database} {ρ σ : Env} (h : sd.GlobalsAgree ρ) :
@@ -495,7 +405,6 @@ theorem Database.GlobalsAgree.append {sd : Database} {ρ σ : Env} (h : sd.Globa
   intro v t hv
   rw [Env.lookup_append_of_mem (Env.mem_dom_of_mem (Env.mem_of_lookup (h v t hv)))]
   exact h v t hv
-
 
 /-! ## The two obligations one aligned command leaves
 
@@ -519,8 +428,7 @@ def EncodedHeadSound (P : Program) (sg : Signature) : Prop :=
     ∀ {d : FDatabase}, d.EncOk P sg sd →
     ∀ (s : Rule) (G : List (Var × Expr)) (i n : Nat), Cmd.rule s ∈ P →
       s.substGlobals G ∈ sd.rules →
-      s.ruleset = R → sd.GlobalsInline G → P.GlobalsOnce G →
-      (encodeRule i (s.substGlobals G) n).1 ∈ d.rules →
+      s.ruleset = R → sd.GlobalsInline G → (encodeRule i (s.substGlobals G) n).1 ∈ d.rules →
     ∀ σ ∈ matchQuery d (encodeRule i (s.substGlobals G) n).1.query, ∀ e : FDatabase,
       execLocalActions d (encodeRule i (s.substGlobals G) n).1.actions σ = some e →
         e.SoundTerms sd'
@@ -574,7 +482,6 @@ theorem firingsSoundIn_rebuild {P : Program} (hdom : P.EncodeDomain) {sg : Signa
   · exact maintenance_soundTerms (mem_maintenanceRules_of_mem_all hmaint) hok.base.eqsRefl
       hok.base.inv.index hok.base.subtermClosed hok.sound hσ he
 
-
 /-! ## The environment along a source run
 
 `FDatabase.EncOk.glob` compares the two environments, so every command that is not a
@@ -606,137 +513,14 @@ theorem cmdStep_env_of_noAction {sd sd' : Database} {c : Cmd} (hc : ∀ a, c ≠
     replace hreach : cmdEffect sd (.decl f dc) = some d := hreach
     rw [cmdEffect, Option.some.injEq] at hreach; exact hreach ▸ rfl
 
-/-! ### What the substitution's names are, and that the source's environment settles them
-
-`Cmd.globalBind` adds a name only when the whole program binds it **once**, so a name the
-substitution carries cannot be rebound later — which is what keeps `Database.GlobalsInline`
-true as the source run goes on. The fact that pays for it is that a name the source's
-environment binds is one some earlier top-level `let` bound. -/
-
-/-- **Only a top-level `let` puts a name in the source's environment.** -/
-theorem mem_letNames_of_lookup_env : ∀ {p : Program} {db sd : Database} {v : Var},
-    ProgramStep db p sd → (Env.lookup v sd.env).isSome →
-    v ∈ Program.letNames p ∨ (Env.lookup v db.env).isSome := by
-  intro p db sd v h
-  induction h with
-  | nil => exact fun hlk => Or.inr hlk
-  | @cons db₀ d sd' c cs hstep _ ih =>
-      intro hlk
-      have hsub : v ∈ Program.letNames cs → v ∈ Program.letNames (c :: cs) := by
-        intro hm
-        cases c <;> simp_all [Program.letNames]
-      rcases ih hlk with hm | hd
-      · exact Or.inl (hsub hm)
-      cases hc : c with
-      | action a =>
-          subst hc
-          obtain ⟨d₀, hreach, hcl⟩ := hstep
-          have hev : evalAction db₀ a = some d₀ := evalAction_of_top hreach
-          have henv : d.env = d₀.env := (MergeClosure.envRules hcl).1
-          cases a with
-          | letBind w e =>
-              rw [evalAction] at hev
-              obtain ⟨t, -, hd0⟩ := Option.map_eq_some_iff.mp hev
-              by_cases hvw : v = w
-              · exact Or.inl (by subst hvw; simp [Program.letNames])
-              · refine Or.inr ?_
-                rw [henv, ← hd0] at hd
-                simpa [Env.lookup, hvw] using hd
-          | expr e =>
-              rw [evalAction] at hev
-              obtain ⟨t, -, hd0⟩ := Option.map_eq_some_iff.mp hev
-              exact Or.inr (by rw [henv, ← hd0] at hd; exact hd)
-          | union e₁ e₂ =>
-              refine Or.inr ?_
-              rw [henv] at hd
-              rw [evalAction] at hev
-              obtain ⟨t₁, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-              obtain ⟨t₂, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-              by_cases hl : t₁.isLit || t₂.isLit
-              · rw [if_pos hl] at hev; exact absurd hev (by simp)
-              · rw [if_neg hl, Option.some.injEq] at hev
-                rw [← hev] at hd
-                exact hd
-          | set f args out =>
-              refine Or.inr ?_
-              rw [henv] at hd
-              rw [evalAction] at hev
-              obtain ⟨as, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-              obtain ⟨vs, -, hd0⟩ := Option.map_eq_some_iff.mp hev
-              rw [← hd0] at hd
-              exact hd
-      | rule r =>
-          exact Or.inr (by
-            rw [cmdStep_env_of_noAction (by intro a h'; exact absurd h' (by simp))
-              (hc ▸ hstep)] at hd
-            exact hd)
-      | run R =>
-          exact Or.inr (by
-            rw [cmdStep_env_of_noAction (by intro a h'; exact absurd h' (by simp))
-              (hc ▸ hstep)] at hd
-            exact hd)
-      | saturate R =>
-          exact Or.inr (by
-            rw [cmdStep_env_of_noAction (by intro a h'; exact absurd h' (by simp))
-              (hc ▸ hstep)] at hd
-            exact hd)
-      | decl f dc =>
-          exact Or.inr (by
-            rw [cmdStep_env_of_noAction (by intro a h'; exact absurd h' (by simp))
-              (hc ▸ hstep)] at hd
-            exact hd)
-
-theorem Program.letNames_cons_action_letBind (v : Var) (e : Expr) (q : Program) :
-    Program.letNames (Cmd.action (.letBind v e) :: q) = v :: Program.letNames q := rfl
-
-theorem Program.letNames_append (p q : Program) :
-    Program.letNames (p ++ q) = Program.letNames p ++ Program.letNames q := by
-  rw [Program.letNames, Program.letNames, Program.letNames, List.filterMap_append]
-
-/-! ### The shadowing restriction, read off a source run
-
-`Spec/Eval.lean`'s `evalTopAction` is stuck at a top-level `let` whose name the environment
-already holds, so a program that binds a name twice has **no `ProgramStep`** — and a theorem
-whose hypothesis is a source run gets `Cmd.globalBind`'s "exactly once" guard for free rather
-than asking for it. -/
-
-/-- **A top-level `let` that ran found its name free.** `evalTopAction`'s guard, read back off
-a `CmdStep`. -/
-theorem cmdStep_letBind_fresh {sd sd' : Database} {v : Var} {e : Expr}
-    (h : CmdStep sd (.action (.letBind v e)) sd') : Env.lookup v sd.env = none := by
-  obtain ⟨d, hreach, -⟩ := h
-  have htop : evalTopAction sd (.letBind v e) = some d := hreach
-  rw [evalTopAction] at htop
-  split at htop
-  · exact absurd htop (by simp)
-  · rename_i hne; exact Option.not_isSome_iff_eq_none.mp hne
-
-/-- **A top-level `let` that ran left its name bound.** -/
-theorem cmdStep_letBind_bound {sd sd' : Database} {v : Var} {e : Expr}
-    (h : CmdStep sd (.action (.letBind v e)) sd') : (Env.lookup v sd'.env).isSome := by
-  obtain ⟨d, hreach, hcl⟩ := h
-  have hev : evalAction sd (.letBind v e) = some d := evalAction_of_top hreach
-  rw [evalAction] at hev
-  obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hev
-  rw [(MergeClosure.envRules hcl).1]
-  simp [Env.lookup]
-
-/-- **The environment only grows along a command.** Only a top-level `let` writes it, and it
-writes by prepending; the merge phase fixes it (`MergeClosure.envRules`). -/
 theorem cmdStep_lookup_mono {sd sd' : Database} {c : Cmd} (h : CmdStep sd c sd') {v : Var}
     (hv : (Env.lookup v sd.env).isSome) : (Env.lookup v sd'.env).isSome := by
   obtain ⟨d, hreach, hcl⟩ := h
   rw [(MergeClosure.envRules hcl).1]
   cases c with
   | action a =>
-      have hev : evalAction sd a = some d := evalAction_of_top hreach
+      have hev : evalAction sd a = some d := hreach
       cases a with
-      | letBind w e =>
-          rw [evalAction] at hev
-          obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hev
-          by_cases hvw : v = w
-          · simp [Env.lookup, hvw]
-          · simpa [Env.lookup, hvw] using hv
       | expr e =>
           rw [evalAction] at hev
           obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp hev
@@ -772,83 +556,6 @@ theorem programStep_lookup_mono {p : Program} {sd sd' : Database} (h : ProgramSt
   | nil => exact hv
   | cons hstep _ ih => exact ih (cmdStep_lookup_mono hstep hv)
 
-/-- **A source run binds every name its top-level `let`s name.** The converse of
-`mem_letNames_of_lookup_env`. -/
-theorem lookup_env_of_mem_letNames : ∀ {p : Program} {sd sd' : Database} {v : Var},
-    ProgramStep sd p sd' → v ∈ Program.letNames p → (Env.lookup v sd'.env).isSome := by
-  intro p sd sd' v h
-  induction h with
-  | nil => intro hm; exact absurd hm (by simp [Program.letNames])
-  | @cons sd₀ d sd₁ c cs hstep hrest ih =>
-      intro hm
-      cases c with
-      | action a =>
-          cases a with
-          | letBind w e =>
-              rw [Program.letNames_cons_action_letBind, List.mem_cons] at hm
-              rcases hm with rfl | hm
-              · exact programStep_lookup_mono hrest (cmdStep_letBind_bound hstep)
-              · exact ih hm
-          | _ => exact ih (by simpa [Program.letNames] using hm)
-      | _ => exact ih (by simpa [Program.letNames] using hm)
-
-/-- **A program that runs binds no name twice.** `evalTopAction`'s guard, as a property of the
-program text: the second `let` would find the first one's name in the environment and stop
-there, so `hsrc` alone rules the program out. This is egglog's "Shadowing is not allowed"
-(`egglog/src/ast/check_shadowing.rs:11-12`, reached from the `Function` case at `:49-50`, which
-is where `remove_globals` sends a top-level `let`).
-
-What it buys is `Cmd.globalBind`'s first guard: `P.letNames.count v = 1` at every top-level
-`let` of a program the source ran, so the encoder substitutes **every** global rather than
-leaving the declined ones frozen in the query. -/
-theorem letNames_nodup_of_programStep : ∀ {p : Program} {sd sd' : Database},
-    ProgramStep sd p sd' →
-    (Program.letNames p).Nodup ∧ ∀ v ∈ Program.letNames p, Env.lookup v sd.env = none := by
-  intro p sd sd' h
-  induction h with
-  | nil => exact ⟨by simp [Program.letNames], by simp [Program.letNames]⟩
-  | @cons sd₀ d sd₁ c cs hstep hrest ih =>
-      cases c with
-      | action a =>
-          cases a with
-          | letBind w e =>
-              have hfresh : Env.lookup w sd₀.env = none := cmdStep_letBind_fresh hstep
-              have hbound : (Env.lookup w d.env).isSome := cmdStep_letBind_bound hstep
-              have hnot : w ∉ Program.letNames cs := fun hc => by
-                rw [ih.2 w hc] at hbound; exact absurd hbound (by simp)
-              refine ⟨?_, ?_⟩
-              · rw [Program.letNames_cons_action_letBind]
-                exact List.nodup_cons.mpr ⟨hnot, ih.1⟩
-              · intro u hu
-                rw [Program.letNames_cons_action_letBind, List.mem_cons] at hu
-                rcases hu with rfl | hu
-                · exact hfresh
-                · by_contra hc
-                  obtain ⟨t, ht⟩ := Option.ne_none_iff_exists'.mp hc
-                  exact absurd (cmdStep_lookup_mono hstep (v := u) (by rw [ht]; rfl))
-                    (by rw [ih.2 u hu]; simp)
-              | _ =>
-                  refine ⟨by simpa [Program.letNames] using ih.1, fun u hu => ?_⟩
-                  have hu' : u ∈ Program.letNames cs := by simpa [Program.letNames] using hu
-                  by_contra hc
-                  obtain ⟨t, ht⟩ := Option.ne_none_iff_exists'.mp hc
-                  exact absurd (cmdStep_lookup_mono hstep (v := u) (by rw [ht]; rfl))
-                    (by rw [ih.2 u hu']; simp)
-      | _ =>
-          refine ⟨by simpa [Program.letNames] using ih.1, fun u hu => ?_⟩
-          have hu' : u ∈ Program.letNames cs := by simpa [Program.letNames] using hu
-          by_contra hc
-          obtain ⟨t, ht⟩ := Option.ne_none_iff_exists'.mp hc
-          exact absurd (cmdStep_lookup_mono hstep (v := u) (by rw [ht]; rfl))
-            (by rw [ih.2 u hu']; simp)
-
-/-- `Cmd.globalBind`'s **first guard, discharged from the run**: a program the source ran
-binds each of its top-level `let` names exactly once. -/
-theorem letNames_count_of_programStep {p : Program} {sd sd' : Database}
-    (h : ProgramStep sd p sd') {v : Var} (hv : v ∈ Program.letNames p) :
-    (Program.letNames p).count v = 1 :=
-  List.count_eq_one_of_mem (letNames_nodup_of_programStep h).1 hv
-
 /-- Rounds of a ruleset do not move the signature. -/
 theorem runStepReach_sig {R : RulesetName} {sd d : Database}
     (h : Relation.ReflTransGen (RunStep R) sd d) : d.sig = sd.sig := by
@@ -864,7 +571,7 @@ theorem cmdStep_sig_eq_of_noDecl {sd sd' : Database} {c : Cmd}
   cases c with
   | decl f dc => exact absurd rfl (hc f dc)
   | action a =>
-      replace hreach : evalAction sd a = some d := evalAction_of_top hreach
+      replace hreach : evalAction sd a = some d := hreach
       exact evalAction_sig hreach
   | saturate R =>
       replace hreach : SaturateReach R sd d := hreach
@@ -875,28 +582,6 @@ theorem cmdStep_sig_eq_of_noDecl {sd sd' : Database} {c : Cmd}
   | run R =>
       replace hreach : cmdEffect sd (.run R) = some d := hreach
       rw [cmdEffect, Option.some.injEq] at hreach; exact hreach ▸ rfl
-
-/-- **A name the substitution carries is not the one a later `let` binds.** Two occurrences —
-the one the source's environment already has, and this command's — against the guard's
-"exactly once". -/
-theorem lookupG_eq_none_of_letBind {P pre q : Program} {v : Var} {e : Expr}
-    {sd : Database} {G : List (Var × Expr)}
-    (hP : P = pre ++ Cmd.action (.letBind v e) :: q)
-    (hpre : ProgramStep Database.empty pre sd) (hgi : sd.GlobalsInline G)
-    (honce : P.GlobalsOnce G) : Expr.lookupG v G = none := by
-  by_contra hcon
-  obtain ⟨e', he'⟩ := Option.ne_none_iff_exists'.mp hcon
-  obtain ⟨-, -, t, -, hlk⟩ := hgi v e' he'
-  have hmem : v ∈ Program.letNames pre :=
-    (mem_letNames_of_lookup_env hpre (by rw [hlk]; rfl)).resolve_right
-      (by simp [Database.empty])
-  have h1 : 0 < (Program.letNames pre).count v := List.count_pos_iff.mpr hmem
-  have hcount : 2 ≤ P.letNames.count v := by
-    rw [hP, Program.letNames_append, Program.letNames_cons_action_letBind, List.count_append,
-      List.count_cons_self]
-    omega
-  have := honce v hcon
-  omega
 
 /-- Rounds of a ruleset do not move the rule set either. -/
 theorem runStepReach_rules {R : RulesetName} {sd d : Database}
@@ -909,7 +594,7 @@ theorem runStepReach_rules {R : RulesetName} {sd d : Database}
 
 /-- **Rules only ever grow along a command**, and only `Cmd.rule` adds one. -/
 theorem cmdStep_rule_mem {sd sd' : Database} {r : Rule} (h : CmdStep sd (.rule r) sd') :
-    r.resolveGlobals sd.env ∈ sd'.rules := by
+    r ∈ sd'.rules := by
   obtain ⟨d, hreach, hcl⟩ := h
   replace hreach : cmdEffect sd (.rule r) = some d := hreach
   rw [cmdEffect, Option.some.injEq] at hreach
@@ -925,7 +610,7 @@ theorem cmdStep_rules_subset {sd sd' : Database} {c : Cmd} (h : CmdStep sd c sd'
   rw [hd]
   cases c with
   | action a =>
-      have hv : evalAction sd a = some d := evalAction_of_top hreach
+      have hv : evalAction sd a = some d := hreach
       rw [evalAction_rules hv]; exact hr
   | rule r' =>
       replace hreach : cmdEffect sd (.rule r') = some d := hreach
@@ -977,8 +662,8 @@ theorem FDatabase.EncOk.runRoundM {P : Program} {sg : Signature}
     rcases hc with rfl | rfl <;> intro a h <;> exact absurd h (by simp)
   have hfire : d.FiringsSoundIn R sd' := by
     intro r hr hrs σ hσ e' he'
-    rcases hok.srcRules r hr with ⟨s, G, i, n, hmem, hsr, hgi, hgo, rfl⟩ | hmaint
-    · exact hhead hP hpre hc hstep hok s G i n hmem hsr hrs hgi hgo hr σ hσ e' he'
+    rcases hok.srcRules r hr with ⟨s, G, i, n, hmem, hsr, hgi, rfl⟩ | hmaint
+    · exact hhead hP hpre hc hstep hok s G i n hmem hsr hrs hgi hr σ hσ e' he'
     · exact maintenance_soundTerms (mem_maintenanceRules_of_mem_all hmaint) hok.base.eqsRefl
         hok.base.inv.index hok.base.subtermClosed
         (hok.sound.mono_src (CmdStep.contained hstep).eqs) hσ he'
@@ -997,11 +682,11 @@ theorem FDatabase.EncOk.runRoundM {P : Program} {sg : Signature}
     have hnd : ∀ (f : FnName) (dd : FnDecl), c ≠ Cmd.decl f dd := by
       rcases hc with rfl | rfl <;> intro f dd hcon <;> exact absurd hcon (by simp)
     exact (hok.srcRules r (hrules ▸ hr)).imp
-      (fun ⟨s, G, i, n, hm, hs, hgi, hgo, he⟩ =>
+      (fun ⟨s, G, i, n, hm, hs, hgi, he⟩ =>
         ⟨s, G, i, n, hm, cmdStep_rules_subset hstep _ hs,
           hgi.of_eq (cmdStep_sig_eq_of_noDecl hnd hstep)
             (cmdStep_env_of_noAction hna hstep),
-          hgo, he⟩) id
+          he⟩) id
 
 /-- **A rebuild round.** No source rule joins `@rebuild`, so every firing is a maintenance
 firing and the source state does not move. -/
@@ -1051,8 +736,6 @@ theorem FDatabase.EncOk.saturate_src {P : Program} {sg : Signature}
     runFuel (hok.step_src (by intro a h; exact absurd h (by simp))
       (by rw [cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep]
           exact fun _ h => h) hstep) hrun
-
-
 
 /-! ## One aligned command, and the induction over the run
 
@@ -1111,146 +794,31 @@ theorem Expr.evalList_inlineGlobals {sd : Database} {G : List (Var × Expr)}
 
 end
 
-/-- **A top-level action keeps `Database.GlobalsInline` at the globals already carried.** The
-`let` case is the only one with content, and `lookupG_eq_none_of_letBind` is what pays it: the
-name this `let` binds is not one the substitution carries, because the program binds a carried
-name once and the source's environment already holds it. -/
+/-- An action preserves every interpretation of a closed substitution. -/
 theorem globalsInline_action {P pre q : Program} {a : Action} {sd sd' : Database}
-    {G : List (Var × Expr)} (hP : P = pre ++ Cmd.action a :: q)
-    (hpre : ProgramStep Database.empty pre sd) (hstep : CmdStep sd (.action a) sd')
-    (hgi : sd.GlobalsInline G) (honce : P.GlobalsOnce G) : sd'.GlobalsInline G := by
-  have hsig : sd'.sig = sd.sig :=
-    cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep
-  obtain ⟨d₀, hreach, hcl⟩ := hstep
-  have hev : evalAction sd a = some d₀ := evalAction_of_top hreach
-  have henv : sd'.env = d₀.env := (MergeClosure.envRules hcl).1
-  cases a with
-  | expr e =>
-      rw [evalAction] at hev
-      obtain ⟨t, -, hd0⟩ := Option.map_eq_some_iff.mp hev
-      exact hgi.of_eq hsig (by rw [henv, ← hd0]; rfl)
-  | union e₁ e₂ =>
-      refine hgi.of_eq hsig ?_
-      rw [evalAction] at hev
-      obtain ⟨t₁, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-      obtain ⟨t₂, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-      by_cases hl : t₁.isLit || t₂.isLit
-      · rw [if_pos hl] at hev; exact absurd hev (by simp)
-      · rw [if_neg hl, Option.some.injEq] at hev
-        rw [henv, ← hev]; rfl
-  | set f args out =>
-      refine hgi.of_eq hsig ?_
-      rw [evalAction] at hev
-      obtain ⟨as, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-      obtain ⟨vs, -, hd0⟩ := Option.map_eq_some_iff.mp hev
-      rw [henv, ← hd0]; rfl
-  | letBind v e =>
-      rw [evalAction] at hev
-      obtain ⟨t, ht, hd0⟩ := Option.map_eq_some_iff.mp hev
-      have hnone : Expr.lookupG v G = none := lookupG_eq_none_of_letBind hP hpre hgi honce
-      have henv' : sd'.env = (v, t) :: sd.env := by rw [henv, ← hd0]
-      intro w e' hw
-      have hwv : w ≠ v := by
-        intro hcon; rw [hcon, hnone] at hw; exact absurd hw (by simp)
-      obtain ⟨hcl', hnp', t', hev', hbind'⟩ := hgi w e' hw
-      exact ⟨hcl', hnp', t', by rw [hsig]; exact hev',
-        by rw [henv']; simpa [Env.lookup, hwv] using hbind'⟩
+    (_ : P = pre ++ .action a :: q) (_ : ProgramStep Database.empty pre sd)
+    (hstep : CmdStep sd (.action a) sd') {G : List (Var × Expr)}
+    (hgi : sd.GlobalsInline G) : sd'.GlobalsInline G :=
+  hgi.of_eq (cmdStep_sig_eq_of_noDecl (by simp) hstep) hstep.env
 
-/-- **The two clauses survive one source command**, at the globals `Cmd.globalBind` leaves.
-
-The `let` case is the only one with content, and its two halves are the two guards: the name is
-bound once in `P`, so no name already carried is the one this `let` moves
-(`lookupG_eq_none_of_letBind`), and the stored definition is closed, so it means at the new
-state what it meant at the old. -/
+/-- A constructor declaration can extend the signature; all other commands leave it alone.
+The evaluation context stays fixed in every case. -/
 theorem globalsInline_step {P : Program} (hdom : P.EncodeDomain) {pre q : Program} {c : Cmd}
-    (hP : P = pre ++ c :: q) {sd sd' : Database} (hstate : sd.CtorState)
-    (hpre : ProgramStep Database.empty pre sd) (hstep : CmdStep sd c sd')
-    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) (honce : P.GlobalsOnce G) :
-    sd'.GlobalsInline (c.globalBind P G) ∧ P.GlobalsOnce (c.globalBind P G) := by
-  have hcP : c ∈ P := by rw [hP]; exact List.mem_append_right _ List.mem_cons_self
-  cases hc : c with
+    (hP : P = pre ++ c :: q) {sd sd' : Database} (_ : sd.CtorState)
+    (_ : ProgramStep Database.empty pre sd) (hstep : CmdStep sd c sd')
+    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) : sd'.GlobalsInline G := by
+  cases c with
   | decl f dc =>
-      subst hc
-      obtain ⟨-, henv, -⟩ := cmdStep_decl_fields hstate.sig (hdom.ctorsOnly _ hcP) hstep
-      refine ⟨?_, honce⟩
-      refine hgi.mono_ctor ?_ (fun v t hv => by rw [henv]; exact hv)
+      refine hgi.mono_ctor ?_ (fun v t hv => by rw [hstep.env]; exact hv)
       intro g hg
       obtain ⟨d, hd, hm⟩ := hg
-      obtain ⟨d₀, hreach, hcl⟩ := hstep
-      have hd0 : some { sd with sig := Function.update sd.sig f (some dc) } = some d₀ := hreach
-      have hsig' : sd'.sig = Function.update sd.sig f (some dc) := by
-        rw [MergeClosure.sig hcl, ← Option.some.inj hd0]
+      have hsig' : sd'.sig = Function.update sd.sig f (some dc) := hstep.sig
       by_cases hgf : g = f
       · subst hgf
-        exact ⟨dc, by rw [hsig', Function.update_self], (hdom.ctorsOnly _ hcP : dc.merge = none)⟩
+        refine ⟨dc, by rw [hsig', Function.update_self], ?_⟩
+        exact hdom.ctorsOnly _ (by rw [hP]; exact List.mem_append_right _ List.mem_cons_self)
       · exact ⟨d, by rw [hsig', Function.update_of_ne hgf]; exact hd, hm⟩
-  | rule r =>
-      subst hc
-      refine ⟨hgi.of_eq (cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep)
-        (cmdStep_env_of_noAction (by intro a h; exact absurd h (by simp)) hstep), honce⟩
-  | run R =>
-      subst hc
-      refine ⟨hgi.of_eq (cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep)
-        (cmdStep_env_of_noAction (by intro a h; exact absurd h (by simp)) hstep), honce⟩
-  | saturate R =>
-      subst hc
-      refine ⟨hgi.of_eq (cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep)
-        (cmdStep_env_of_noAction (by intro a h; exact absurd h (by simp)) hstep), honce⟩
-  | action a =>
-      subst hc
-      have hkeep : sd'.GlobalsInline G := globalsInline_action hP hpre hstep hgi honce
-      have hsig : sd'.sig = sd.sig :=
-        cmdStep_sig_eq_of_noDecl (by intro f d h; exact absurd h (by simp)) hstep
-      obtain ⟨d₀, hreach, hcl⟩ := hstep
-      have hev : evalAction sd a = some d₀ := evalAction_of_top hreach
-      have henv : sd'.env = d₀.env := (MergeClosure.envRules hcl).1
-      cases a with
-      | expr e => exact ⟨hkeep, honce⟩
-      | union e₁ e₂ => exact ⟨hkeep, honce⟩
-      | set f args out => exact ⟨hkeep, honce⟩
-      | letBind v e =>
-          rw [evalAction] at hev
-          obtain ⟨t, ht, hd0⟩ := Option.map_eq_some_iff.mp hev
-          have henv' : sd'.env = (v, t) :: sd.env := by rw [henv, ← hd0]
-          rw [Cmd.globalBind]
-          have hnp : ∀ fk ∈ (e.inlineGlobals G).ctors, Prim.ofName fk.1 = none := by
-            refine ctors_inlineGlobals_noPrim
-              (fun u e'' hu fk hfk => (hgi u e'' hu).2.1 fk hfk) e ?_
-            intro fk hfk
-            refine hdom.noPrim fk (List.mem_dedup.mpr (List.mem_flatMap.mpr
-              ⟨Cmd.action (.letBind v e), ?_, ?_⟩))
-            · rw [hP]; exact List.mem_append_right _ List.mem_cons_self
-            · rw [Cmd.ctors, Action.ctors]; exact hfk
-          by_cases hg : P.letNames.count v = 1 ∧ (e.inlineGlobals G).vars = []
-          · rw [if_pos hg]
-            refine ⟨?_, ?_⟩
-            · intro w e' hw
-              rw [Expr.lookupG] at hw
-              by_cases hwv : w = v
-              · subst hwv
-                rw [if_pos rfl, Option.some.injEq] at hw
-                subst hw
-                refine ⟨hg.2, hnp, t, ?_, by rw [henv']; simp [Env.lookup]⟩
-                rw [hsig, ← Expr.eval_of_vars_nil hg.2 sd.env, Expr.eval_inlineGlobals hgi e]
-                exact ht
-              · rw [if_neg hwv] at hw
-                exact hkeep w e' hw
-            · intro w hw
-              rw [Expr.lookupG] at hw
-              by_cases hwv : w = v
-              · subst hwv; exact hg.1
-              · rw [if_neg hwv] at hw; exact honce w hw
-          · rw [if_neg hg]
-            exact ⟨hkeep, honce⟩
-
-/-! ### The substitution declines nothing
-
-`Cmd.globalBind`'s two guards are the reason a global can stay frozen in an encoded query, and
-with shadowing out of the model neither ever fires along a source run. The first is
-`letNames_nodup_of_programStep`. The second — the stored definition is closed — follows from
-the first, because `Expr.inlineGlobals` closes an expression exactly when the substitution
-already defines every variable it names, and a `let` that *evaluated* names only variables the
-environment binds. -/
+  | _ => exact hgi.of_eq (cmdStep_sig_eq_of_noDecl (by simp) hstep) hstep.env
 
 mutual
 
@@ -1291,8 +859,6 @@ end
 
 mutual
 
-/-- **Inlining closes an expression the substitution defines every variable of.** This is
-`Cmd.globalBind`'s second guard, and the hypothesis is its first guard's consequence. -/
 theorem Expr.vars_inlineGlobals_nil {G : List (Var × Expr)} (hcl : Expr.ClosedG G) :
     ∀ {e : Expr}, (∀ w ∈ e.vars, Expr.lookupG w G ≠ none) → (e.inlineGlobals G).vars = []
   | .lit _, _ => rfl
@@ -1320,110 +886,12 @@ theorem Expr.varsList_inlineGlobalsList_nil {G : List (Var × Expr)} (hcl : Expr
 
 end
 
-/-- **The clause survives one source command, and the `let` case is where it pays.** Both of
-`Cmd.globalBind`'s guards pass there: the first because a program the source ran binds no name
-twice (`letNames_nodup_of_programStep`, which is `hnodup`), the second because the `let`
-evaluated, so every variable of its definition is one the environment binds and `hcov` carries
-into `G`. -/
 theorem globalsCover_step {P : Program} {pre q : Program} {c : Cmd}
-    (hP : P = pre ++ c :: q) {sd sd' : Database} (hstep : CmdStep sd c sd')
-    (hnodup : (Program.letNames P).Nodup)
-    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) (hcov : sd.GlobalsCover G) :
-    sd'.GlobalsCover (c.globalBind P G) := by
-  obtain ⟨d₀, hreach, hcl⟩ := hstep
-  have henv : sd'.env = d₀.env := (MergeClosure.envRules hcl).1
-  cases hc : c with
-  | rule r =>
-      subst hc
-      replace hreach : cmdEffect sd (.rule r) = some d₀ := hreach
-      rw [cmdEffect, Option.some.injEq] at hreach
-      intro u hu; exact hcov u (by rw [henv, ← hreach] at hu; exact hu)
-  | run R =>
-      subst hc
-      replace hreach : cmdEffect sd (.run R) = some d₀ := hreach
-      rw [cmdEffect, Option.some.injEq] at hreach
-      intro u hu; exact hcov u (by rw [henv, ← hreach] at hu; exact hu)
-  | decl f dc =>
-      subst hc
-      replace hreach : cmdEffect sd (.decl f dc) = some d₀ := hreach
-      rw [cmdEffect, Option.some.injEq] at hreach
-      intro u hu; exact hcov u (by rw [henv, ← hreach] at hu; exact hu)
-  | saturate R =>
-      subst hc
-      have : d₀.env = sd.env := runStepReach_env (show SaturateReach R sd d₀ from hreach).1
-      intro u hu; exact hcov u (by rw [henv, this] at hu; exact hu)
-  | action a =>
-      subst hc
-      have hev : evalAction sd a = some d₀ := evalAction_of_top hreach
-      cases a with
-      | expr e =>
-          rw [evalAction] at hev
-          obtain ⟨t, -, hd0⟩ := Option.map_eq_some_iff.mp hev
-          intro u hu; exact hcov u (by rw [henv, ← hd0] at hu; exact hu)
-      | union e₁ e₂ =>
-          rw [evalAction] at hev
-          obtain ⟨t₁, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-          obtain ⟨t₂, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-          by_cases hl : t₁.isLit || t₂.isLit
-          · rw [if_pos hl] at hev; exact absurd hev (by simp)
-          · rw [if_neg hl, Option.some.injEq] at hev
-            intro u hu; exact hcov u (by rw [henv, ← hev] at hu; exact hu)
-      | set f args out =>
-          rw [evalAction] at hev
-          obtain ⟨as, -, hev⟩ := Option.bind_eq_some_iff.mp hev
-          obtain ⟨vs, -, hd0⟩ := Option.map_eq_some_iff.mp hev
-          intro u hu; exact hcov u (by rw [henv, ← hd0] at hu; exact hu)
-      | letBind v e =>
-          rw [evalAction] at hev
-          obtain ⟨t, ht, hd0⟩ := Option.map_eq_some_iff.mp hev
-          have henv' : sd'.env = (v, t) :: sd.env := by rw [henv, ← hd0]
-          have hmem : v ∈ Program.letNames P := by
-            rw [hP, Program.letNames_append, Program.letNames_cons_action_letBind]
-            exact List.mem_append_right _ List.mem_cons_self
-          have hg1 : (Program.letNames P).count v = 1 :=
-            List.count_eq_one_of_mem hnodup hmem
-          have hg2 : (e.inlineGlobals G).vars = [] :=
-            Expr.vars_inlineGlobals_nil (fun w e' hw => (hgi w e' hw).1)
-              (fun w hw => hcov w (Expr.lookup_isSome_of_eval ht w hw))
-          have hgb : Cmd.globalBind P (.action (.letBind v e)) G
-              = (v, e.inlineGlobals G) :: G := by
-            rw [Cmd.globalBind, if_pos ⟨hg1, hg2⟩]
-          rw [Database.GlobalsCover, hgb]
-          intro u hu
-          rw [henv'] at hu
-          rw [Expr.lookupG]
-          by_cases huv : u = v
-          · rw [if_pos huv]; simp
-          · rw [if_neg huv]
-            exact hcov u (by simpa [Env.lookup, huv] using hu)
-
-/-- **The globals already carried survive one source command**, which is the half of
-`globalsInline_step` `Egglog.GlobalsMech` spends: `Egglog.UnionsInv.rules` names the `G` a
-rule was *encoded* through, and that one is fixed where `Cmd.globalBind`'s is still growing.
-
-The `.action` case is `globalsInline_action`; the other four move neither the environment nor
-what the signature builds, so `Cmd.globalBind` leaves `G` where it was. -/
-theorem globalsInline_keep {P : Program} (hdom : P.EncodeDomain) {pre q : Program} {c : Cmd}
-    (hP : P = pre ++ c :: q) {sd sd' : Database} (hstate : sd.CtorState)
-    (hpre : ProgramStep Database.empty pre sd) (hstep : CmdStep sd c sd')
-    {G : List (Var × Expr)} (hgi : sd.GlobalsInline G) (honce : P.GlobalsOnce G) :
-    sd'.GlobalsInline G := by
-  cases hc : c with
-  | action a =>
-      subst hc
-      exact globalsInline_action hP hpre hstep hgi honce
-  | decl f dc =>
-      subst hc
-      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
-  | rule r =>
-      subst hc
-      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
-  | run R =>
-      subst hc
-      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
-  | saturate R =>
-      subst hc
-      exact (globalsInline_step hdom hP hstate hpre hstep hgi honce).1
+    (_ : P = pre ++ c :: q) {sd sd' : Database} (hstep : CmdStep sd c sd')
+    {G : List (Var × Expr)} (_ : sd.GlobalsInline G) (hcov : sd.GlobalsCover G) :
+    sd'.GlobalsCover G := by
+  intro v hv
+  exact hcov v (by rw [hstep.env] at hv; exact hv)
 
 /-- **One aligned command.** The five cases of `encodeCmd`, each carrying
 `FDatabase.EncOk` from the source command's pre-state to its post-state. -/
@@ -1432,7 +900,7 @@ theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Sign
     (hwlP : EncodedWriteLegal P sg) {pre q : Program} {c : Cmd} (hP : P = pre ++ c :: q)
     {sd sd' : Database} (hpre : ProgramStep Database.empty pre sd)
     (hstep : CmdStep sd c sd') {G : List (Var × Expr)} {n i : Nat} {d D : FDatabase}
-    (hgi : sd.GlobalsInline G) (honce : P.GlobalsOnce G) (hcov : sd.GlobalsCover G)
+    (hgi : sd.GlobalsInline G) (hcov : sd.GlobalsCover G)
     (hok : d.EncOk P sg sd)
     (hrun : d.execProgramM (encodeCmd G c n i).1 = some D) : D.EncOk P sg sd' := by
   have hcP : c ∈ P := by rw [hP]; exact List.mem_append_right _ List.mem_cons_self
@@ -1441,7 +909,7 @@ theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Sign
     fun hmem hro hb hs =>
       hb.execCmdM hro (encodeCmd_unionFree G c n i _ hmem)
         (noDecl_encodeCmd G c n i _ hmem)
-        (hwlP c hcP G n i _ hmem) (noAtLet_encodeCmd hdom G c hcP n i _ hmem) hs
+        (hwlP c hcP G n i _ hmem) hs
   cases hc : c with
   | decl f dc =>
     subst hc
@@ -1470,42 +938,28 @@ theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Sign
     have hmem : Cmd.rule r ∈ P := by rw [hP]; exact List.mem_append_right _ List.mem_cons_self
     have hmem' : Cmd.rule (encodeRule i (r.substGlobals G) n).1
         ∈ (encodeCmd G (Cmd.rule r) n i).1 := List.mem_cons_self
-    -- the target registers the encoder's own output: there is nothing left in an encoded
-    -- rule for `FDatabase.execCmdM`'s own resolution to replace
-    have hres : ((encodeRule i (r.substGlobals G) n).1).resolveGlobals d.env
-        = (encodeRule i (r.substGlobals G) n).1 :=
-      Rule.resolveGlobals_encodeRule hgi.closed
-        (fun b hb => hok.base.noAtEnv b hb)
-        (fun v hv => by
-          rw [hok.env]
-          cases hE : Env.lookup v sd.env with
-          | none => rfl
-          | some t => exact absurd hv (hcov v (by rw [hE]; rfl)))
-        r i n
     have hb : D.EncBase P sg :=
       hbase hmem' (Or.inl ⟨r, G, i, n, [], hmem, (Rule.resolveGlobals_nil _).symm⟩)
         hok.base hs
     obtain rfl : D
-        = { d with rules := ((encodeRule i (r.substGlobals G) n).1).resolveGlobals d.env
-            :: d.rules } := by
+        = { d with rules := (encodeRule i (r.substGlobals G) n).1 :: d.rules } := by
       rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs.symm
     have hsigeq : sd'.sig = sd.sig :=
       cmdStep_sig_eq_of_noDecl (by intro f dd h; exact absurd h (by simp)) hstep
     have henveq : sd'.env = sd.env :=
       cmdStep_env_of_noAction (by intro a h; exact absurd h (by simp)) hstep
     have hsrcnew : (r.substGlobals G) ∈ sd'.rules := by
-      have h := cmdStep_rule_mem hstep (r := r)
-      rwa [Rule.resolveGlobals_eq_substGlobals hgi hcov] at h
+      rw [Rule.substGlobals_eq_of_empty_env hgi hpre.env]
+      exact cmdStep_rule_mem hstep
     refine ⟨hb, by rw [henveq]; exact hok.env,
       hok.sound.mono_src (CmdStep.contained hstep).eqs, ?_⟩
     intro r' hr'
     rcases List.mem_cons.mp hr' with rfl | hr''
-    · rw [hres]
-      exact Or.inl ⟨r, G, i, n, hmem, hsrcnew, hgi.of_eq hsigeq henveq, honce, rfl⟩
+    · exact Or.inl ⟨r, G, i, n, hmem, hsrcnew, hgi.of_eq hsigeq henveq, rfl⟩
     · exact (hok.srcRules r' hr'').imp
-        (fun ⟨s, H, j, m, hm, hs', hgi', hgo', he⟩ =>
+        (fun ⟨s, H, j, m, hm, hs', hgi', he⟩ =>
           ⟨s, H, j, m, hm, cmdStep_rules_subset hstep _ hs',
-            hgi'.of_eq hsigeq henveq, hgo', he⟩) id
+            hgi'.of_eq hsigeq henveq, he⟩) id
   | run R =>
     subst hc
     have hrun' : d.execProgramM [Cmd.run R, Cmd.saturate rebuildRuleset] = some D := hrun
@@ -1524,7 +978,7 @@ theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Sign
         [Cmd.saturate rebuildRuleset]) = some D := hrun
     obtain ⟨D₁, hblock, hafter⟩ := FDatabase.execProgramM_append hrun'
     have hb₁ : D₁.EncBase P sg := by
-      refine FDatabase.EncBase.execProgramM (P := P) (sg := sg) ?_ ?_ ?_ ?_ ?_ hok.base hblock
+      refine FDatabase.EncBase.execProgramM (P := P) (sg := sg) ?_ ?_ ?_ ?_ hok.base hblock
       all_goals
         intro c' hc'
         obtain ⟨b, hb, rfl⟩ := List.mem_map.mp hc'
@@ -1534,7 +988,6 @@ theorem FDatabase.EncOk.stepCmd {P : Program} (hdom : P.EncodeDomain) {sg : Sign
       · exact encodeCmd_unionFree G (Cmd.action a) n i _ hmem
       · exact noDecl_encodeCmd G (Cmd.action a) n i _ hmem
       · exact hwlP (Cmd.action a) hcP G n i _ hmem
-      · exact noAtLet_encodeCmd hdom G (Cmd.action a) hcP n i _ hmem
     exact (hact hP hpre hstep hok hblock hb₁).saturate_rebuild hdom (execProgramM_single hafter)
 
 /-- **The per-command induction.** `FDatabase.EncOk` at the state the target run has reached
@@ -1549,36 +1002,34 @@ source only at the end, by `FDatabase.SoundTerms.mono_src`.
 The globals the encoder carries are threaded alongside, and `globalsInline_step` is what keeps
 their two clauses true as the source run goes on. -/
 theorem FDatabase.EncOk.stepCmds {P : Program} (hdom : P.EncodeDomain) {sg : Signature}
-    (hnodup : (Program.letNames P).Nodup)
     (hhead : EncodedHeadSound P sg) (hact : EncodedActionSound P sg)
     (hwlP : EncodedWriteLegal P sg) :
     ∀ (p pre : Program), P = pre ++ p →
       ∀ {sd src : Database}, ProgramStep Database.empty pre sd → ProgramStep sd p src →
       ∀ (G : List (Var × Expr)) (n i : Nat) {d D : FDatabase},
-        sd.GlobalsInline G → P.GlobalsOnce G → sd.GlobalsCover G → d.EncOk P sg sd →
+        sd.GlobalsInline G → sd.GlobalsCover G → d.EncOk P sg sd →
         d.execProgramM (encodeCmds P G p n i).1 = some D → D.EncOk P sg src := by
   intro p
   induction p with
   | nil =>
-    intro pre _ sd src _ hsrc G n i d D _ _ _ hok hrun
+    intro pre _ sd src _ hsrc G n i d D _ _ hok hrun
     obtain rfl : sd = src := ProgramStep.nil_inv hsrc
     have hnil : d.execProgramM ([] : Program) = some D := hrun
     rw [FDatabase.execProgramM, Option.some.injEq] at hnil
     exact hnil ▸ hok
   | cons c cs ih =>
-    intro pre hP sd src hpre hsrc G n i d D hgi honce hcov hok hrun
+    intro pre hP sd src hpre hsrc G n i d D hgi hcov hok hrun
     obtain ⟨sd', hstep, hrest⟩ := ProgramStep.cons_inv hsrc
     rw [encodeCmds_cons_fst] at hrun
     obtain ⟨d₁, hblock, hafter⟩ := FDatabase.execProgramM_append hrun
     have hstate : sd.CtorState :=
       hpre.ctorState Database.CtorState.empty
         (fun c' hc' => hdom.ctorsOnly c' (by rw [hP]; exact List.mem_append_left _ hc'))
-    obtain ⟨hgi', honce'⟩ := globalsInline_step hdom hP hstate hpre hstep hgi honce
+    have hgi' := globalsInline_step hdom hP hstate hpre hstep hgi
     exact ih (pre ++ [c]) (by rw [List.append_assoc]; exact hP)
-      (hpre.append (ProgramStep.cons hstep ProgramStep.nil)) hrest _ _ _ hgi' honce'
-      (globalsCover_step hP hstep hnodup hgi hcov)
-      (hok.stepCmd hdom hhead hact hwlP hP hpre hstep hgi honce hcov hblock) hafter
-
+      (hpre.append (ProgramStep.cons hstep ProgramStep.nil)) hrest _ _ _ hgi'
+      (globalsCover_step hP hstep hgi hcov)
+      (hok.stepCmd hdom hhead hact hwlP hP hpre hstep hgi hcov hblock) hafter
 
 /-! ## The prelude, and the base case
 
@@ -1630,15 +1081,6 @@ theorem declOrRule_encodePrelude (P : Program) : ∀ c ∈ encodePrelude P, c.De
         rcases h₄ with rfl | rfl | rfl <;> trivial
   · obtain ⟨r, -, rfl⟩ := List.mem_map.mp h
     trivial
-
-/-- The prelude declares and registers rules, and neither binds. -/
-theorem NoAtLet.of_declOrRule {c : Cmd} (h : c.DeclOrRule) : c.NoAtLet := by
-  cases c with
-  | decl f dc => trivial
-  | rule r => trivial
-  | action a => exact (h : False).elim
-  | run R => exact (h : False).elim
-  | saturate R => exact (h : False).elim
 
 /-- Every rule a prelude command registers is a maintenance rule. -/
 theorem mem_maintenanceRules_of_encodePrelude {P : Program} {r : Rule}
@@ -1749,7 +1191,6 @@ theorem execProgramM_rules_of_noRule {p : Program}
     | action a =>
       rw [FDatabase.execCmdM] at h₁
       obtain ⟨d₀, ha, hm⟩ := Option.bind_eq_some_iff.mp h₁
-      replace ha := execAction_of_top ha
       rw [(FDatabase.mergeSaturateF_fields hm).2.2, FDatabase.execAction_rules ha] at hc
       exact hc
     | run R => rw [(FDatabase.runRoundM_fields h₁).2.2] at hc; exact hc
@@ -1777,10 +1218,9 @@ theorem execProgramM_rules_of_declOrRule {p : Program}
       | rule s =>
         rw [FDatabase.execCmdM, Option.some.injEq] at h₁
         rcases List.mem_cons.mp
-          (show r ∈ s.resolveGlobals d.env :: d.rules by rw [← h₁] at hc; exact hc)
+          (show r ∈ s :: d.rules by rw [← h₁] at hc; exact hc)
           with rfl | h
-        · rw [henv, Rule.resolveGlobals_nil]
-          exact Or.inl List.mem_cons_self
+        · exact Or.inl List.mem_cons_self
         · exact Or.inr h
       | decl f dc =>
         rw [FDatabase.execCmdM, Option.some.injEq] at h₁
@@ -1788,7 +1228,6 @@ theorem execProgramM_rules_of_declOrRule {p : Program}
       | action a =>
         rw [FDatabase.execCmdM] at h₁
         obtain ⟨d₀, ha, hm⟩ := Option.bind_eq_some_iff.mp h₁
-        replace ha := execAction_of_top ha
         rw [(FDatabase.mergeSaturateF_fields hm).2.2, FDatabase.execAction_rules ha] at hc
         exact Or.inr hc
       | run R =>
@@ -1799,7 +1238,6 @@ theorem execProgramM_rules_of_declOrRule {p : Program}
         rw [FDatabase.execCmdM] at h₁
         rw [(FDatabase.runSaturateM_fields runFuel h₁).2.2] at hc
         exact Or.inr hc
-
 
 /-- **The signature `encodePrelude` installs.** `encodeCmds` emits no declaration
 (`noDecl_encodeCmd`), so this is the signature of *every* state the aligned run passes
@@ -1835,7 +1273,6 @@ theorem preludeState_encOk {P : Program} {d₀ : FDatabase}
       execProgramM_noUnions (Program.unionFree_of_mem (encodePrelude_unionFree P))
         empty_noUnions hprel, ?_, ?_, ?_⟩, ?_, ?_, ?_⟩
   · exact FDatabase.execProgramM_rulesEncoded (rulesEncodedOk_encodePrelude P)
-      (fun c hc => NoAtLet.of_declOrRule (declOrRule_encodePrelude P c hc))
       (by intro b hb; exact absurd hb (by simp [FDatabase.empty]))
       (fun r hr => absurd hr (by simp [FDatabase.empty])) hprel
   · rw [← hsig]
@@ -1974,10 +1411,9 @@ theorem execM_soundTerms_of_obligations {P : Program} (hdom : P.EncodeDomain)
     {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src := by
   rw [execM, encode] at htgt
   obtain ⟨d₀, hprel, hcmds⟩ := FDatabase.execProgramM_append htgt
-  exact (FDatabase.EncOk.stepCmds hdom (letNames_nodup_of_programStep hsrc).1
+  exact (FDatabase.EncOk.stepCmds hdom
     hhead hact hwlP P [] rfl ProgramStep.nil hsrc [] 0 0
     (by intro v e he; exact absurd he (by simp [Expr.lookupG]))
-    (by intro v he; exact absurd he (by simp [Expr.lookupG]))
     Database.globalsCover_empty
     (preludeState_encOk (encodeSig_mergesLegal hdom) hmaint hprel) hcmds).sound
 
@@ -2102,8 +1538,6 @@ theorem Program.EncodeDomain.aritiesAgree' {P : Program} (h : P.EncodeDomain) :
   have := eq_of_length_le_one hlen fk (List.mem_filter.mpr ⟨hfa, by simp⟩)
     gl (List.mem_filter.mpr ⟨hga, by simp [hname]⟩)
   rw [this]
-
-
 
 /-! ## The prelude's table triples, read back
 
@@ -2271,7 +1705,6 @@ theorem encodeSig_tables {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesA
         (fun gl hgl hg => (hag (f, k) h gl hgl hg.symm).symm)
         (fun gl hgl => noAt_of_mem_ctors hdom hgl) _).2
 
-
 /-! ## `EncodedWriteLegal` and its maintenance counterpart, under the missing clause
 
 Every `set` the encoding emits writes `@UF` or a view, at the widths the prelude declared —
@@ -2347,12 +1780,9 @@ encoded. -/
 theorem writeLegal_encodeAction {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
     (pf : Expr) : ∀ (a : Action) (m : Nat), a.NoSet → (∀ fk ∈ a.ctors, fk ∈ P.ctors) →
       Actions.WriteLegal (encodeAction pf a m).1 (encodeSig P) := by
-  rintro (e | ⟨v, e⟩ | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) m hns hc
+  rintro (e | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) m hns hc
   · rw [encodeAction_expr_actions]
     exact writeLegal_encodeBuild hdom hag e m hc
-  · rw [encodeAction_letBind_actions]
-    exact Actions.WriteLegal.append (writeLegal_encodeBuild hdom hag e m hc)
-      (writeLegal_of_noSet trivial)
   · rw [encodeAction_union_actions]
     refine Actions.WriteLegal.append (Actions.WriteLegal.append
       (writeLegal_encodeBuild hdom hag e₁ m
@@ -2448,24 +1878,6 @@ theorem maintenance_writeLegal {P : Program} (hdom : P.EncodeDomain) (hag : P.Ar
       exact writeLegal_set hview (by simp [viewDecl])
         (by simp [rebuildVars, viewDecl]) rfl
 
-
-/-- **The residue, reduced to two firings and one missing clause.**
-
-`execM_soundTerms_of_obligations` with its two legality conditions discharged, so what is
-left of the completeness half is exactly:
-
-* `EncodedHeadSound` — one firing of one encoded **source rule**, which is
-  `entrySound_headBuild_post` and `cong_headUnion_post` at the writes `encodeActions` emits,
-  with `Rule.HeadScoped` and `hlet` the two conditions still to be arranged;
-* `EncodedActionSound` — one **top-level** action's block, which is `entrySound_build` and
-  `cong_of_eqs` at the same writes, over the source's own `evalAction`. **Proved** below,
-  as `encodedActionSound`; `execM_soundTerms_of_head` is this theorem with it discharged;
-* `Program.AritiesAgree` — a clause `Program.EncodeDomain` does not have, whose necessity
-  `adProgram_not_maintenance_writeLegal` records.
-
-Everything else — the per-command induction, the merge phase, the firing fold, the three
-maintenance families, the rebuild rounds, the saturating case and both legality
-conditions — is proved, and this theorem is `sorryAx`-free. -/
 theorem execM_soundTerms_of_firings {P : Program} (hdom : P.EncodeDomain)
     (hag : P.AritiesAgree) (hhead : EncodedHeadSound P (encodeSig P))
     (hact : EncodedActionSound P (encodeSig P))
@@ -2473,7 +1885,6 @@ theorem execM_soundTerms_of_firings {P : Program} (hdom : P.EncodeDomain)
     {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
   execM_soundTerms_of_obligations hdom hhead hact (encodedWriteLegal hdom hag)
     (maintenance_writeLegal hdom hag) hsrc htgt
-
 
 /-! ## A block of `set`s, against the invariant
 
@@ -2582,7 +1993,6 @@ theorem mem_encodeBuildArgs_actions : ∀ (es : List Expr) (m : Nat),
         exact ⟨g, gargs, by rw [Expr.appsList]; exact List.mem_append_right _ hga, hb'⟩
 
 end
-
 
 mutual
 
@@ -2695,7 +2105,6 @@ theorem encodeBuild_writesJustified {src : Database} (hw : src.WF) {d₀ : FData
       exact entrySound_build hw (hheld f args hfa fis hfis)
     · exact absurd (Term.app.inj hq).1 viewName_ne_ufName
 
-
 /-! ### What the source's own evaluation delivers
 
 A top-level action's block is justified against the source's `evalAction`, and three facts
@@ -2804,7 +2213,6 @@ theorem exists_subterm_of_mem_appsList {sig : Signature} {ρ : Env} :
 
 end
 
-
 mutual
 
 /-- A name an expression applies is one `Expr.ctors` records, at that occurrence's arity. -/
@@ -2890,7 +2298,6 @@ theorem execProgramM_sets_soundTerms {P : Program} {sg : Signature} {src : Datab
     have h₂c : d.execCmdM (Cmd.action b) = some d₂ := h₂
     rw [FDatabase.execCmdM] at h₂
     obtain ⟨d₁, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₂
-    replace hact := execAction_of_top hact
     have hbset : b.IsSet := hset b List.mem_cons_self
     have hwlb : b.WriteLegal d.sig := by
       rw [hb.sig]; exact ⟨(hwl b List.mem_cons_self).1.1, (hwl b List.mem_cons_self).2.1⟩
@@ -2911,8 +2318,8 @@ theorem execProgramM_sets_soundTerms {P : Program} {sg : Signature} {src : Datab
     have hb₂ : d₂.EncBase P sg :=
       hb.execCmdM (c := Cmd.action b) trivial (huf b List.mem_cons_self) trivial
         ⟨(hwl b List.mem_cons_self).1.1, (hwl b List.mem_cons_self).2.1⟩
-        (Action.NoAtLet.of_isSet hbset) h₂c
-    have henv₂ : d₂.env = d.env := FDatabase.execCmdM_env h₂c hbset
+         h₂c
+    have henv₂ : d₂.env = d.env := FDatabase.execCmdM_env h₂c
     have hsig₂ : d₂.sig = d.sig :=
       FDatabase.execCmdM_sig_of_noDecl (c := Cmd.action b) h₂c trivial
     have hmono₂ : ∀ t ∈ d.terms, t ∈ d₂.terms := FDatabase.execCmdM_terms h₂c
@@ -2923,7 +2330,6 @@ theorem execProgramM_sets_soundTerms {P : Program} {sg : Signature} {src : Datab
         (hjust.mono (fun x hx => List.mem_cons_of_mem _ hx)) hb₂
         (hsig₂.trans hsig) (henv₂.trans henv) (fun t ht => hmono₂ t (hmono t ht)) hs₂ hrest
     exact ⟨hbD, hsD, henvD.trans henv₂, fun t ht => hmonoD t (hmono₂ t ht)⟩
-
 
 /-- A source name is no entry head: it is not in the generated namespace. -/
 theorem notEntryHead_of_mem_ctors {P : Program} (hdom : P.EncodeDomain) {fk : FnName × Nat}
@@ -2987,16 +2393,6 @@ theorem eval_target_of_source {P : Program} (hdom : P.EncodeDomain) {sd : Databa
   exact Option.some.inj (hsrc.symm.trans
     (Expr.eval_transport e (fun g hg _ => hctor g hg) hlk htgt))
 
-
-/-! ### The top-level action case, discharged
-
-`encodeAction` has three shapes to answer for at top level — a build, a build with a `let`
-after it, and two builds with an `@UF` edge after them. A source `set` is out of the fragment
-(`EncodeDomain.setLegal` under `ctorsOnly`). The build's own writes are
-`encodeBuild_writesJustified`; the `let` writes a term whose entry-shaped subterms the block
-already recorded, and re-establishes the globals; the edge is `cong_of_eqs` at the pair the
-source's own `union` asserted, in whichever order `ordering-max` picked. -/
-
 /-- One action of an encoded block, on its own. -/
 private theorem writeLegal_singleton {sg : Signature} : ∀ (bs : List Action),
     Actions.WriteLegal bs sg → ∀ x ∈ bs, Actions.WriteLegal [x] sg
@@ -3030,8 +2426,7 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
   have hDsrc : ∀ r ∈ D.rules,
       (∃ (s : Rule) (G : List (Var × Expr)) (i n : Nat),
           Cmd.rule s ∈ P ∧ s.substGlobals G ∈ sd'.rules ∧
-          sd'.GlobalsInline G ∧ P.GlobalsOnce G ∧
-          r = (encodeRule i (s.substGlobals G) n).1) ∨
+          sd'.GlobalsInline G ∧ r = (encodeRule i (s.substGlobals G) n).1) ∨
         r ∈ allMaintenanceRules P := by
     intro r hr
     have hnr : Cmd.rule r ∉ (encodeAction fiatE a n).1.map Cmd.action := by
@@ -3042,12 +2437,13 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
       (fun c hc r' hcr => by
         obtain ⟨b, -, rfl⟩ := List.mem_map.mp hc
         exact absurd hcr (by simp)) hblock r hr) with
-      ⟨s, G, i, m, hm, hs, hgi, hgo, he⟩ | hmaint
+      ⟨s, G, i, m, hm, hs, hgi, he⟩ | hmaint
     · exact Or.inl ⟨s, G, i, m, hm, cmdStep_rules_subset hstep _ hs,
-        globalsInline_action hP hpre hstep hgi hgo, hgo, he⟩
+        globalsInline_action hP hpre hstep hgi, he⟩
     · exact Or.inr hmaint
-  rcases evalAction_eq_some hev with ⟨e, t, rfl, hsrcev, hsd'⟩ | ⟨v, e, t, rfl, hsrcev, hsd'⟩ |
-      ⟨e₁, e₂, t₁, t₂, rfl, hsrc₁, hsrc₂, -, hsd'⟩ | ⟨f, args, out, as, vs, rfl, -, -, -⟩
+  rcases evalAction_eq_some hev with ⟨e, t, rfl, hsrcev, hsd'⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, hsrc₁, hsrc₂, -, hsd'⟩ |
+    ⟨f, args, out, as, vs, rfl, -, -, -⟩
   · -- `.expr e`
     obtain ⟨hne, hprim⟩ := head_conditions_of_ctors hdom hctors
     have hmemt : t ∈ sd'.terms := by
@@ -3060,59 +2456,6 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
     refine ⟨hbD, ?_, hsD, hDsrc⟩
     rw [henvD, hok.env, hsd']
     rfl
-  · -- `.letBind v e`
-    obtain ⟨hne, hprim⟩ := head_conditions_of_ctors hdom hctors
-    have hmemt : t ∈ sd'.terms := by
-      rw [hsd', Database.terms_setEnvRules, Database.addTerm_terms]
-      exact Or.inr (Term.self_mem_subterms t)
-    have hjust := encodeBuild_writesJustified hwf' hsc henvm e n hne hprim
-      (held_of_evalAction hdom hwf' e (fun v _ u hu => hok.glob v u hu) hctors hsrcev hmemt)
-    have hsplit : ((encodeAction fiatE (Action.letBind v e) n).1).map Cmd.action
-        = ((encodeBuild e n).2.1).map Cmd.action ++ [Cmd.action (.letBind v e)] := by
-      rw [encodeAction_letBind_actions, encodeBuild_fst, List.map_append, List.map_cons,
-        List.map_nil]
-    rw [hsplit] at hblock
-    obtain ⟨D₁, hb₁, hafter⟩ := FDatabase.execProgramM_append hblock
-    obtain ⟨hbD₁, hsD₁, henvD₁, hmonoD₁⟩ :=
-      execProgramM_sets_soundTerms (encodeBuild e n).2.1 (encodeBuild_isSet e n)
-        (fun b hb => hufb b (by rw [encodeAction_letBind_actions]; exact List.mem_append_left _ hb))
-        (fun b hb => hwlb b (by
-          rw [encodeAction_letBind_actions]; exact List.mem_append_left _ hb))
-        hjust hok.base rfl rfl (fun _ ht => ht) hsound' hb₁
-    have hlast : D₁.execCmdM (Cmd.action (.letBind v e)) = some D := execProgramM_single hafter
-    rw [FDatabase.execCmdM] at hlast
-    obtain ⟨D₂, hact, hmerge⟩ := Option.bind_eq_some_iff.mp hlast
-    replace hact := execAction_of_top hact
-    obtain ⟨t', htgtev, hD₂⟩ : ∃ t', e.eval D₁.sig D₁.env = some t' ∧
-        D₂ = { D₁.addTerm t' with env := (v, t') :: D₁.env } := by
-      rw [execAction] at hact
-      obtain ⟨t', ht', hD₂'⟩ := Option.map_eq_some_iff.mp hact
-      exact ⟨t', ht', hD₂'.symm⟩
-    obtain rfl : t = t' := eval_target_of_source hdom e
-      (fun w _ u hu => by rw [henvD₁]; exact hok.glob w u hu) hctors hsrcev htgtev
-    have hent : ∀ s ∈ t.subtermList, s.EntryShaped → s ∈ D₁.terms :=
-      entryShaped_mem_of_eval e hne (fun w _ u hu =>
-        entryShaped_mem_of_held hbD₁.subtermClosed (FDatabase.mem_toDatabase_terms.mp
-          (hbD₁.inv.wf.envInTerms (w, u) (Env.mem_of_lookup hu)))) htgtev
-    have hs₂ : D₂.SoundTerms sd' := by
-      rw [hD₂]
-      refine FDatabase.SoundTerms.mono_terms (fun x hx => hx)
-        (hsD₁.addTerm (fun g cs x pf hm => ?_) (fun x p pf hm => ?_))
-      · exact hsD₁.1 g cs x pf (hent _ hm (Or.inl ⟨g, cs, x, pf, rfl⟩))
-      · exact hsD₁.2 x p pf (hent _ hm (Or.inr ⟨x, p, pf, rfl⟩))
-    have hinv₂ : D₂.Inv :=
-      hbD₁.inv.execAction (a := Action.letBind v e)
-        (by rw [hbD₁.sig]; exact ⟨trivial, trivial⟩) hact
-    have hsig₂ : D₂.sig = encodeSig P := by
-      rw [FDatabase.execAction_sig hact]; exact hbD₁.sig
-    have hsD : D.SoundTerms sd' :=
-      mergeSaturateF_soundTerms mergeFuel (by rw [hsig₂]; exact hbD₁.shape)
-        (by rw [hsig₂]; exact hbD₁.merges) hinv₂
-        (execAction_noUnions (a := Action.letBind v e) trivial hbD₁.nounions hact) hs₂ hmerge
-    refine ⟨hbD, ?_, hsD, hDsrc⟩
-    rw [(FDatabase.mergeSaturateF_fields hmerge).2.1, hD₂]
-    change ((v, t) :: D₁.env) = sd'.env
-    rw [henvD₁, hok.env, hsd']
   · -- `.union e₁ e₂`
     have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
       fun fk hfk => hctors fk (by rw [Action.ctors]; exact List.mem_append_left _ hfk)
@@ -3199,30 +2542,11 @@ theorem encodedActionSound {P : Program} (hdom : P.EncodeDomain) (hag : P.Aritie
   · -- a source `set` is out of the fragment
     exact absurd (hnoset _ hcP) (fun h => (h : False))
 
-
-/-- **The residue, reduced to one firing and one missing clause.**
-
-`execM_soundTerms_of_firings` with `EncodedActionSound` discharged, so what is left of the
-completeness half is:
-
-* `EncodedHeadSound` — one firing of one encoded **source rule**, which is
-  `entrySound_headBuild_post` and `cong_headUnion_post` at the writes `encodeActions` emits.
-  The block read-back it needs is here already (`encodeBuild_writesJustified`,
-  `execActions_soundTerms_of_sets`) and so is the substitution
-  (`validQuerySubst_of_mem_matchQuery_diag`); what is missing is the source-side reading at
-  a rule's *nested* applications — `entrySound_headBuild_post` fixes the reading τ per
-  application and a head's subapplications have to share it — together with `Rule.HeadScoped`
-  and `hlet`.
-* `Program.AritiesAgree` — a clause `Program.EncodeDomain` does not have, whose necessity
-  `adProgram_not_maintenance_writeLegal` records.
-
-Everything else is proved. -/
 theorem execM_soundTerms_of_head {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
     (hhead : EncodedHeadSound P (encodeSig P))
     {src : Database} (hsrc : ProgramStep Database.empty P src)
     {tgt : FDatabase} (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
   execM_soundTerms_of_firings hdom hag hhead (encodedActionSound hdom hag) hsrc htgt
-
 
 /-- **`FDatabase.EncOk` is inhabited**, at the state the prelude of any in-domain program
 whose arities agree leaves. Both legality conditions are discharged here, so this asks
@@ -3274,7 +2598,7 @@ theorem FDatabase.EncBase.runSaturateM_ufRowsDescend {P : Program} {sg : Signatu
     ?_ n ⟨hb, hdes⟩ hrun).2
   intro x y hx hstep
   have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
-  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial trivial hstep', ?_⟩
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep', ?_⟩
   refine runRoundM_ufRowsDescend (by rw [hx.1.sig]; exact hx.1.shape)
     (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl' ?_ hx.2 hstep
   exact firingsUFDescend_of_rulesEncoded hx.1.rules hx.1.eqsRefl
@@ -3293,7 +2617,6 @@ theorem FDatabase.EncBase.execCmdM_ufRowsDescend {P : Program} {sg : Signature}
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    replace h₁ := execAction_of_top h₁
     refine mergeSaturateF_ufRowsDescend mergeFuel ?_ ?_ ?_ ?_
       (execAction_ufRowsDescend hok hdes h₁) h₂
     · rw [FDatabase.execAction_sig h₁, hb.sig]; exact hb.shape
@@ -3317,7 +2640,7 @@ theorem FDatabase.EncBase.execProgramM_ufRowsDescend {P : Program} {sg : Signatu
     (hufsg : sg.mergeOf ufName ≠ none) {p : Program}
     (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal sg) (hok : ∀ c ∈ p, c.UFWriteOk)
-    (hlet : ∀ c ∈ p, c.NoAtLet) :
+     :
     ∀ {d D : FDatabase}, d.EncBase P sg → d.UFRowsDescend → d.execProgramM p = some D →
       D.UFRowsDescend := by
   induction p with
@@ -3334,9 +2657,8 @@ theorem FDatabase.EncBase.execProgramM_ufRowsDescend {P : Program} {sg : Signatu
       (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
-      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
       (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
-        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self) h₁)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
       (hb.execCmdM_ufRowsDescend hufsg (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
         (hwl c List.mem_cons_self) (hok c List.mem_cons_self) hdes h₁) h₂
 
@@ -3402,15 +2724,13 @@ theorem execM_encode_ufRowsDescend {P : Program} (hdom : P.EncodeDomain) (hag : 
     exact absurd hmem (by simp)
   refine FDatabase.EncBase.execProgramM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
     (rulesEncodedOk_encodeCmds P (fun _ hc => hc) [] 0 0) (encodeCmds_unionFree P [] P 0 0)
-    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ hdes₀ hcmds
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_)  hb₀ hdes₀ hcmds
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact noDecl_encodeCmd H c₀ m j c hmem
   · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact encodedWriteLegal hdom hag c₀ hc₀ H m j c hmem
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact ufWriteOk_encodeCmd H c₀ m j c hmem
-  · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
-    exact noAtLet_encodeCmd hdom H c₀ hc₀ m j c hmem
 
 /-- **Descent with the arity clause spelled out.** `Program.EncodeDomain` implies it
 (`Program.EncodeDomain.aritiesAgree'`); it is named here for the same reason the completeness
@@ -3426,7 +2746,6 @@ theorem execM_exists_ufRowRoot {P : Program} (hdom : P.EncodeDomain) {tgt : FDat
     (htgt : execM (encode P) = some tgt) (a : Term) :
     ∃ r, tgt.UFRowReach a r ∧ tgt.UFRowRoot r :=
   FDatabase.exists_ufRowRoot (execM_ufRowsDescend hdom htgt) a
-
 
 /-! ## The forest, run-wide
 
@@ -3470,7 +2789,7 @@ theorem FDatabase.EncBase.runSaturateM_ufRowsForest {P : Program} {sg : Signatur
   intro x y hx hstep
   have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
   have hby : y.EncBase P sg :=
-    hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial trivial hstep'
+    hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep'
   have hdesy : y.UFRowsDescend := by
     refine runRoundM_ufRowsDescend (by rw [hx.1.sig]; exact hx.1.shape)
       (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl' ?_ hx.2.1 hstep
@@ -3486,13 +2805,12 @@ theorem FDatabase.EncBase.execCmdM_ufRowsForest {P : Program} {sg : Signature}
     (hufsg : sg ufName = some ufDecl) (hsy : sg.IsCtor symName) (htr : sg.IsCtor transName)
     {d d' : FDatabase} {c : Cmd} (hb : d.EncBase P sg)
     (huf : c.UnionFree) (hnd : c.NoDecl) (hwl : c.WriteLegal sg) (hok : c.UFWriteOk)
-    (hlet : c.NoAtLet)
     (hdes : d.UFRowsDescend) (hfor : d.UFRowsForest) (hs : d.execCmdM c = some d') :
     d'.UFRowsForest := by
   have hufsgne : sg.mergeOf ufName ≠ none := by
     rw [Signature.mergeOf, hufsg]; simp [ufDecl]
   have hbd' : ∀ (hro : Cmd.RulesEncodedOk P c), d'.EncBase P sg := fun hro =>
-    hb.execCmdM hro huf hnd hwl hlet hs
+    hb.execCmdM hro huf hnd hwl hs
   have hdes' : d'.UFRowsDescend :=
     hb.execCmdM_ufRowsDescend hufsgne huf hnd hwl hok hdes hs
   cases c with
@@ -3521,7 +2839,7 @@ theorem FDatabase.EncBase.execProgramM_ufRowsForest {P : Program} {sg : Signatur
     {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c)
     (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal sg) (hok : ∀ c ∈ p, c.UFWriteOk)
-    (hlet : ∀ c ∈ p, c.NoAtLet) :
+     :
     ∀ {d D : FDatabase}, d.EncBase P sg → d.UFRowsDescend → d.UFRowsForest →
       d.execProgramM p = some D → D.UFRowsForest := by
   have hufsgne : sg.mergeOf ufName ≠ none := by
@@ -3540,14 +2858,13 @@ theorem FDatabase.EncBase.execProgramM_ufRowsForest {P : Program} {sg : Signatur
       (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
-      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
       (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
-        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self) h₁)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
       (hb.execCmdM_ufRowsDescend hufsgne (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
         (hwl c List.mem_cons_self) (hok c List.mem_cons_self) hdes h₁)
       (hb.execCmdM_ufRowsForest hufsg hsy htr (huf c List.mem_cons_self)
         (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hok c List.mem_cons_self)
-        (hlet c List.mem_cons_self) hdes hfor h₁) h₂
+        hdes hfor h₁) h₂
 
 /-- **`FDatabase.UFRowsForest` at the state `execM` returned.** Together with
 `execM_ufRowsDescend` this is both hypotheses of the rebuild residue's forest argument, so
@@ -3571,15 +2888,13 @@ theorem execM_encode_ufRowsForest {P : Program} (hdom : P.EncodeDomain) (hag : P
     exact absurd hmem (by simp)
   refine FDatabase.EncBase.execProgramM_ufRowsForest (encodeSig_ufName hdom) hsy htr
     (rulesEncodedOk_encodeCmds P (fun _ hc => hc) [] 0 0) (encodeCmds_unionFree P [] P 0 0)
-    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ hdes₀ hfor₀ hcmds
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_)  hb₀ hdes₀ hfor₀ hcmds
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact noDecl_encodeCmd H c₀ m j c hmem
   · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact encodedWriteLegal hdom hag c₀ hc₀ H m j c hmem
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact ufWriteOk_encodeCmd H c₀ m j c hmem
-  · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
-    exact noAtLet_encodeCmd hdom H c₀ hc₀ m j c hmem
 
 /-- **Every id of an encoded target has a unique `@UF` row root.** `exists_ufRowRoot` and
 `ufRowRoot_unique` at `execM_ufRowsDescend` and `execM_encode_ufRowsForest`: the two hypotheses
@@ -3809,15 +3124,11 @@ theorem evalAction_termsBuild {db db' : Database} (hw : db.WF) (h : db.TermsBuil
     {a : Action} (hns : a.NoSet) (hv : evalAction db a = some db') : db'.TermsBuild := by
   have hlk := h.lookup hw
   have hbase : ∀ t ∈ db.terms, Term.CtorApps db.sig t := fun t ht => h.term hw ht
-  rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ | ⟨v, e, t, rfl, he, rfl⟩ |
-      ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, -, -, -⟩
+  rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩ |
+    ⟨f, args, out, as, vs, rfl, -, -, -⟩
   · refine Database.termsBuild_of_terms fun s hs => ?_
     rw [Database.addTerm_terms] at hs
-    rcases hs with hs' | hs'
-    · exact hbase s hs'
-    · exact fun g gs hg => Expr.eval_ctorApps hlk e he g gs (Term.subterms_subset_of_mem hs' hg)
-  · refine Database.termsBuild_of_terms fun s hs => ?_
-    rw [Database.terms_setEnv, Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
     · exact hbase s hs'
     · exact fun g gs hg => Expr.eval_ctorApps hlk e he g gs (Term.subterms_subset_of_mem hs' hg)
@@ -3891,17 +3202,17 @@ theorem cmdStep_termsBuilds {db db' : Database} (hc : db.CtorState) (h : db.Term
   obtain ⟨d, hreach, hcl⟩ := hstep
   cases c with
   | action a =>
-      have hv : evalAction db a = some d := evalAction_of_top hreach
+      have hv : evalAction db a = some d := hreach
       obtain rfl : db' = d :=
         hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
       exact ⟨evalAction_termsBuild hc.wf h.terms hns hv,
         by rw [evalAction_rules hv]; exact h.heads⟩
   | rule r =>
-      have hv : some { db with rules := insert (r.resolveGlobals db.env) db.rules } = some d :=
+      have hv : some { db with rules := insert r db.rules } = some d :=
         hreach
-      obtain rfl : d = { db with rules := insert (r.resolveGlobals db.env) db.rules } :=
+      obtain rfl : d = { db with rules := insert r db.rules } :=
         (Option.some.inj hv).symm
-      obtain rfl : db' = { db with rules := insert (r.resolveGlobals db.env) db.rules } :=
+      obtain rfl : db' = { db with rules := insert r db.rules } :=
         hcl.eq_of_allConstructors hc.sig
       refine ⟨fun f q ht => h.terms f q (Database.terms_setRules ▸ ht), ?_⟩
       intro r' hr'
@@ -3955,22 +3266,6 @@ theorem termsBuild_of_programStep {P : Program} (hdom : P.EncodeDomain) {p q : P
       (by rw [hP]; exact List.mem_append_left _ hc))
     (fun c hc => hdom.ctorsOnly c (by rw [hP]; exact List.mem_append_left _ hc)) hstep).terms
 
-/-! ## One rule head, on both sides at once
-
-`encodeActions` maps a source head action to a block of `set`s — plus, for a `let`, the same
-`let` — so the encoded head is not one `execActions` of `set`s but a **chain** of chunks, one
-per source action, and the `let`s move the environment inside it. The two lemmas below run the
-two blocks in lockstep, one source action at a time, and that is what carries the shared `let`
-prefix: the source's `let` binds `v` to the value of `e` and the encoded one to the value of
-`(encodeBuild e m).1`, which *is* `e` (`encodeBuild_fst`), so the two environments extend by
-the same binding and the link between them survives the step.
-
-Nothing here is `hlet`. `mem_terms_of_headBuild`'s `hlet` exists because that lemma reads the
-head at the block's **initial** environment and an action after a `letBind` runs at an extended
-one; here each action is read at the environment it actually ran under. What replaces it is
-`Actions.Scoped` — `Rule.HeadScoped` — which says the scope the link is carried on covers what
-each action reads. -/
-
 /-- A rule's justification is no entry head, so the proof column it writes costs the invariant
 nothing. Mirrors `viewName_ne_congrName`: the fixed part of `@Rule_i` carries no `'w'`, and
 `Nat.isDigit_of_mem_toDigits` says the index carries none either. -/
@@ -4000,7 +3295,6 @@ theorem ufName_ne_ruleName {i : Nat} : ufName ≠ ruleName i := by
 @[inherit_doc viewName_ne_ruleName]
 theorem notEntryHead_ruleName {i : Nat} : NotEntryHead (ruleName i) :=
   ⟨fun _ h => viewName_ne_ruleName h.symm, fun h => ufName_ne_ruleName h.symm⟩
-
 
 /-! ### The justification a firing writes is `@Rule_i` over variables
 
@@ -4127,15 +3421,16 @@ theorem headAction_step {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAg
     (hs₁ : evalAction ss a = some ss₁)
     (hterms₁ : ∀ t ∈ ss₁.terms, t ∈ sd'.terms) (heqs₁ : ∀ p ∈ ss₁.eqs, p ∈ sd'.eqs)
     (h₁ : execActions dk (encodeAction pf a m).1 = some dk₁) :
-    dk₁.SoundTerms sd' ∧ ∀ v ∈ a.bind Γ, Env.lookup v dk₁.env = Env.lookup v ss₁.env := by
+    dk₁.SoundTerms sd' ∧ ∀ v ∈ Γ, Env.lookup v dk₁.env = Env.lookup v ss₁.env := by
   have hsc : dk.SubtermClosed := FDatabase.SubtermClosed.of_wf hinv.wf
   have henvm : ∀ b ∈ dk.env, b.2 ∈ dk.terms := fun b hb =>
     FDatabase.mem_toDatabase_terms.mp (hinv.wf.envInTerms b hb)
   have hbind : ∀ (w : Var), ∀ u, Env.lookup w dk.env = some u →
       ∀ x ∈ u.subtermList, x.EntryShaped → x ∈ dk.terms :=
     fun w u hu => entryShaped_mem_of_held hsc (henvm (w, u) (Env.mem_of_lookup hu))
-  rcases evalAction_eq_some hs₁ with ⟨e, t, rfl, hev, rfl⟩ | ⟨v, e, t, rfl, hev, rfl⟩ |
-      ⟨e₁, e₂, t₁, t₂, rfl, hev₁, hev₂, -, rfl⟩ | ⟨f, args, out, cs, vs, rfl, -, -, -⟩
+  rcases evalAction_eq_some hs₁ with ⟨e, t, rfl, hev, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, hev₁, hev₂, -, rfl⟩ |
+    ⟨f, args, out, cs, vs, rfl, -, -, -⟩
   · -- `.expr e`: the build's own block, all `set`s
     have hce : ∀ fk ∈ e.ctors, fk ∈ P.ctors := hca
     obtain ⟨hne, hprim⟩ := head_conditions_of_ctors hdom hce
@@ -4152,61 +3447,6 @@ theorem headAction_step {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAg
       hjust rfl rfl (fun _ ht => ht) hsound hblock, fun w hw => ?_⟩
     rw [execActions_env_of_isSet (encodeBuild_isSet e m) hblock]
     exact hlink w hw
-  · -- `.letBind v e`: the block, then the same `let` on both sides
-    have hce : ∀ fk ∈ e.ctors, fk ∈ P.ctors := hca
-    obtain ⟨hne, hprim⟩ := head_conditions_of_ctors hdom hce
-    have hglob : ∀ w ∈ e.vars, ∀ u, Env.lookup w ss.env = some u →
-        Env.lookup w dk.env = some u := fun w hw u hu => by rw [hlink w (hsca w hw)]; exact hu
-    have hmemt : t ∈ sd'.terms := by
-      refine hterms₁ t ?_
-      rw [Database.terms_setEnv, Database.addTerm_terms]
-      exact Or.inr (Term.self_mem_subterms t)
-    have hjust := encodeBuild_writesJustified hwf' hsc henvm e m hne hprim
-      (held_of_evalAction hdom hwf' e hglob hce hev hmemt)
-    rw [encodeAction_letBind_actions, encodeBuild_fst] at h₁
-    obtain ⟨dkA, hA, hB⟩ := execActions_append h₁
-    have hsA : dkA.SoundTerms sd' :=
-      execActions_soundTerms_of_sets (encodeBuild e m).2.1 (encodeBuild_isSet e m)
-        hjust rfl rfl (fun _ ht => ht) hsound hA
-    have henvA : dkA.env = dk.env := execActions_env_of_isSet (encodeBuild_isSet e m) hA
-    have hsigA : dkA.sig = dk.sig := FDatabase.execActions_sig hA
-    have hwlA : Actions.WriteLegal (encodeBuild e m).2.1 dk.sig := by
-      rw [hsig]; exact writeLegal_encodeBuild hdom hag e m hce
-    have hinvA : dkA.Inv := FDatabase.Inv.execActions hinv hwlA hA
-    have hlast : execAction dkA (Action.letBind v e) = some dk₁ := by
-      rw [execActions] at hB
-      obtain ⟨d₂, hd₂, hrest⟩ := Option.bind_eq_some_iff.mp hB
-      rw [execActions, Option.some.injEq] at hrest
-      exact hrest ▸ hd₂
-    obtain ⟨t', htgtev, hdk₁⟩ : ∃ t', e.eval dkA.sig dkA.env = some t' ∧
-        dk₁ = { dkA.addTerm t' with env := (v, t') :: dkA.env } := by
-      rw [execAction] at hlast
-      obtain ⟨t', ht', h'⟩ := Option.map_eq_some_iff.mp hlast
-      exact ⟨t', ht', h'.symm⟩
-    obtain rfl : t = t' :=
-      eval_target_of_source hdom e (fun w hw u hu => by rw [henvA]; exact hglob w hw u hu)
-        hce hev htgtev
-    have hentA : ∀ x ∈ t.subtermList, x.EntryShaped → x ∈ dkA.terms :=
-      entryShaped_mem_of_eval e hne (fun w _ u hu =>
-        entryShaped_mem_of_held (FDatabase.SubtermClosed.of_wf hinvA.wf)
-          (FDatabase.mem_toDatabase_terms.mp
-            (hinvA.wf.envInTerms (w, u) (Env.mem_of_lookup hu)))) htgtev
-    refine ⟨?_, fun w hw => ?_⟩
-    · rw [hdk₁]
-      refine FDatabase.SoundTerms.mono_terms (fun x hx => hx)
-        (hsA.addTerm (fun g cs y pfx hm => ?_) (fun y z pfx hm => ?_))
-      · exact hsA.1 g cs y pfx (hentA _ hm (Or.inl ⟨g, cs, y, pfx, rfl⟩))
-      · exact hsA.2 y z pfx (hentA _ hm (Or.inr ⟨y, z, pfx, rfl⟩))
-    · rw [hdk₁]
-      change Env.lookup w ((v, t) :: dkA.env) = Env.lookup w ((v, t) :: ss.env)
-      rw [Env.lookup_cons, Env.lookup_cons, henvA]
-      by_cases hwv : w = v
-      · rw [if_pos hwv, if_pos hwv]
-      · rw [if_neg hwv, if_neg hwv]
-        refine hlink w ?_
-        have : w ∈ Action.bind (Action.letBind v e) Γ := hw
-        rw [Action.bind, List.mem_cons] at this
-        exact this.resolve_left hwv
   · -- `.union e₁ e₂`: two blocks and one `@UF` edge
     have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
       fun fk hfk => hca fk (by rw [Action.ctors]; exact List.mem_append_left _ hfk)
@@ -4325,25 +3565,13 @@ theorem headActions_soundTerms {P : Program} (hdom : P.EncodeDomain) (hag : P.Ar
     obtain ⟨hsound₁, hlink₁⟩ := headAction_step hdom hag hwf' hpfne hca hnsa hscoped.1 hlink
       hsig hinv hsound hs₁ (fun t ht => hterms t (hcont.terms ht))
       (fun q hq => heqs q (hcont.eqs hq)) h₁
-    refine ih (a.bind Γ) (encodeAction pf a m).2
+    refine ih Γ (encodeAction pf a m).2
       (fun b hb => hctors b (List.mem_cons_of_mem _ hb))
       (fun b hb => hns b (List.mem_cons_of_mem _ hb)) hscoped.2 hlink₁ ?_ ?_ hsound₁ hs₂
       hterms heqs h₂
     · rw [FDatabase.execActions_sig h₁]; exact hsig
     · exact FDatabase.Inv.execActions hinv
         (by rw [hsig]; exact writeLegal_encodeAction hdom hag pf a m hnsa hca) h₁
-
-
-
-/-! ### `EncodedHeadSound`, discharged
-
-The four things it needed. `Rule.HeadScoped` is a **case split** and not an assumption: the
-scoped branch is the lemmas above, and where the source head is not scoped the encoded head is
-stuck too, so that firing writes on neither side. `hlet` is gone — `headActions_soundTerms`
-reads each action at the environment it ran under. `Database.TermsBuild` is the source-run
-invariant proved above. And the reading `τ` is taken **once**, before the induction, so a
-head's nested applications all read at the same one; `held_of_evalAction` composed with
-`exists_subterm_of_mem_apps` is what answers a subapplication there. -/
 
 /-- The static facts a source rule of an in-domain program has at a state its prefix
 reaches. -/
@@ -4366,7 +3594,7 @@ is not derivable from one: `bare_build_invents_equality` below refutes
 `encode_corresponds_complete` itself at a program the domain admits and this excludes. -/
 theorem encodedHeadSound {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesAgree)
     (hhs : P.HeadsScoped) : EncodedHeadSound P (encodeSig P) := by
-  intro pre q hP sd sd' hpre R c hc hstep d hok s G i n hmem hsrule hrs hgi hgo hrd σ hσ e he
+  intro pre q hP sd sd' hpre R c hc hstep d hok s G i n hmem hsrule hrs hgi hrd σ hσ e he
   have hstate : sd.CtorState :=
     hpre.ctorState Database.CtorState.empty
       fun c' hc' => hdom.ctorsOnly c' (by rw [hP]; exact List.mem_append_left _ hc')
@@ -4469,7 +3697,6 @@ theorem encodedHeadSound {P : Program} (hdom : P.EncodeDomain) (hag : P.AritiesA
   rw [← hee]
   exact hgoal
 
-
 /-! ## What the head obligation closes
 
 `execM_soundTerms_of_head` with `EncodedHeadSound` discharged is the whole of the
@@ -4549,251 +3776,6 @@ theorem encode_corresponds_complete_of_scoped_witness {tgt : FDatabase}
   encode_corresponds_complete_of_scoped ncProgram_encodeDomain ncProgram_headsScoped
     ncProgram_programStep htgt ha hb h
 
-/-- **The completeness half's invariant. Proved.**
-
-`Program.EncodeDomain` carries `headsScoped`, so this is `execM_soundTerms_of_scoped` at
-`hdom.headsScoped` and there is no residue left. Everything this file proves is spent there.
-
-**It was false, three times over, and the domain excludes all three.** A source rule head that
-gets *stuck* contributes nothing — `RuleResults` asks `evalLocalActions` for a `some` — and its
-encoding's head, which is `.set`s, writes anyway. `Encoding/Correspond.lean`'s
-`execM_soundTerms_false` is a head applying a constructor nobody declared, its
-`encode_corresponds_unions_literals` is a head unioning two literals, and its
-`bare_build_invents_equality` is a head *building* a variable nothing binds — which
-`encodeBuild` emits no action at all for, so the encoded block skips it and runs on where the
-source block stops. The last two refute not this residue but `encode_corresponds_complete`
-**itself**, at a pair of terms the source holds and the two membership hypotheses are
-satisfied at. So `EncodeDomain.noLitUnion`, `EncodeDomain.headsDeclared` and
-`EncodeDomain.headsScoped` are load-bearing for the conclusion and not only for the proof, and
-everything below is stated under them.
-
-`Database.ViewsSound` and `Database.EdgesSound` at the state `execM` returned, in the term-list
-form the run can carry (`viewsSound_of_soundTerms` is the step back). Every *per-entry*
-obligation is discharged, one per writer `encode` emits — `entrySound_build`,
-`EntrySound.eclass`, `EntrySound.column`, `EntrySound.select`, `cong_of_entrySound_collide`,
-`cong_of_eqs`, `cong_of_pathCompress` here, and `entrySound_headBuild`/`cong_headUnion` in
-`Encoding/Match.lean` for the two writers a rule head has — so what is missing is the
-*induction that applies them*, and what that still needs.
-
-* **The interpreter's writers, enumerated. The merge phase and the rule-firing fold are both
-  done; the source rule's *head* is not.** `unionsInv_step`'s five closed cases only ever need
-  the terms a block of `set`s wrote,
-  which `holdsBuild_of_execProgramM` reads back off `execActions`. This invariant owes *every*
-  term the run adds, and every command `encodeCmd` emits for a writing source command ends in
-  `Cmd.saturate rebuildRuleset` — so no case closes without "every term `execRunRules` and
-  `FDatabase.mergeRound` add is one of these `set`s'". What the fold has to compose was already
-  settled: `FDatabase.SoundTerms.addTerm`, `.addRow` and `.union` are the three writers of
-  `terms` there are, `FDatabase.empty_soundTerms` is the base case, and
-  `FDatabase.SoundTerms.mono_src` carries a clause proved at a command's pre-state onto the
-  source the whole run finishes at.
-
-  **The double fold over row pairs is now proved**: `mergeSaturateF_soundTerms`, out of
-  `mergeRound_soundTerms` and `mergeOneOriented_soundTerms`, and it asks nothing of a merge
-  firing beyond the state. The two obstacles that stood in front of it are gone.
-  `Signature.MergeShape` is the sig-shape invariant — only `@UF` and the views carry a
-  `:merge`, both carry `mergeBody`, and both are two columns wide — and
-  `execM_encode_mergeShape` establishes it at the target, out of the prelude's declarations
-  and the fact that `encodeCmds` emits none. `eq_of_congrKeys` is the other: a pass compares
-  keys against a **diagonal** closure, so congruent keys are equal keys, which is what makes
-  the two colliding rows two entries at *one* key and hence
-  `cong_of_entrySound_collide`/`EntrySound.select`'s hypothesis. The body itself is read back
-  by `execActions_mergeBody_inv` and `evalList_mergeResult_inv`, whose content is that each of
-  the four selectors answers with one of the two columns it chose between
-  (`mergeSelector_cases`) — which is all either write needs, and is why the tie-break never
-  enters. The two rows are turned into entry terms by `mem_terms_of_indexOk`, which is
-  `FDatabase.IndexOk.entry` read at a diagonal state. `cxPre_mergeOneOriented_writes` is the
-  firing happening at a state a program reaches, writing an edge the state did not hold.
-
-  **The fold over rule firings is now proved too, and so are the three maintenance
-  families.** `execRunRules` is a fold of `fireRule` over the ruleset's rules and `fireRule` a
-  fold of `fireInto` over the matches, *all read off the round's pre-state* — so what a round
-  owes is one obligation per firing at that one state, which is `FDatabase.FiringsSound`, and
-  `fireInto_soundTerms`, `fireRule_soundTerms`, `execRunRules_soundTerms` and
-  `runRoundM_soundTerms` are the fold and the merge phase after it. The **rule invariant** it
-  needed is `execM_encode_rules`: every rule a target holds is `(encodeRule i s n).1` for a
-  source rule `s` of `P`, or one of `maintenanceRules P` (`Rule.EncodedIn`,
-  `FDatabase.RulesEncoded`), established at the prelude and carried because `encodeCmd` emits a
-  rule only for a source `.rule` — `mergeShapeOk_encodePrelude`'s shape one level up. And the
-  **maintenance side of the split is discharged**: `maintenance_soundTerms`, out of
-  `pathCompressRule_soundTerms` (`cong_of_pathCompress`), `eclassRule_soundTerms`
-  (`EntrySound.eclass`) and `columnRule_soundTerms` (`EntrySound.column`). Three things paid
-  for those. `mem_terms_of_patternHolds_values` reads a matched row atom back as an entry term
-  at **either** of `patternHolds`' branches — the index one through
-  `FDatabase.IndexOk.entry`, the constructor one off `terms` — so the two never have to be told
-  apart. `Expr.eval_of_refines` moves a reading from the substitution the *pattern* was checked
-  at (`Env.canon` of the pattern's own free variables) to the one the *head* runs under.
-  And `entryShaped_mem_of_eval` is what makes a minted proof column cost nothing: no head the
-  encoding applies inside a proof is a view or `@UF` — `viewName_ne_congrName` is the last
-  separation that was missing, and `Nat.isDigit_of_mem_toDigits` is what pays for it — while a
-  *primitive* answers with a literal or with one of its own operands (`prim_apply_cases`), so
-  the clause under a proof node is answered by the columns the match bound.
-
-  **`firingsSound_of_rulesEncoded` is the factorisation those leave, and the per-command
-  induction over it is now proved.** `FDatabase.EncOk.stepCmds` is the alignment
-  `encodeCmds` sets up, carried command by command: `FDatabase.EncOk` bundles the structural
-  invariants the fold and the merge phase want with the two source-relative clauses, stated
-  at the **contemporaneous** source state, and `FDatabase.SoundTerms.mono_src` reaches the
-  run's final source only at the last step. `FDatabase.EncBase.execCmdM` is the structural
-  half through one command — `FDatabase.Inv.execCmdM`, `execCmdM_noUnions`,
-  `FDatabase.execCmdM_mergeShape` and `FDatabase.execCmdM_rulesEncoded` composed — and
-  `preludeState_encOk` is the base case, free because `encodePrelude` is declarations and
-  rules and so leaves the data empty (`FDatabase.Inv.of_empty_data`).
-
-  **The `.saturate` case is closed too, and by two separate mechanisms.** A round of
-  `@rebuild` fires **no** source rule: `encodeRule` keeps a source rule's own ruleset and
-  `EncodeDomain.noAt` keeps every source name out of the generated namespace
-  (`ruleset_ne_rebuild`), so `FDatabase.FiringsSoundIn` — `FiringsSound` restricted to the
-  rules a round actually runs — is what those rounds need, and `maintenance_soundTerms` is
-  the whole of their discharge (`firingsSoundIn_rebuild`, `runRoundM_soundTerms_in`). A
-  saturating run of the **source's** ruleset needs the head obligation at every round it
-  passes through, not only the first, and gets it because the source's own post-state is a
-  `RunRules` fixpoint (`RunSaturated`) and so steps to itself: `cmdStep_saturate_iff` turns
-  that into a `CmdStep sd' (.saturate R) sd'`, and every target round then reads and
-  concludes there (`FDatabase.EncOk.saturate_src`). `runSaturateM_closed` is the iteration.
-
-  **`EncodedHeadSound` is discharged too, and the clause it wanted is the domain's.**
-  `execM_soundTerms_of_obligations` is the reduction and it is `sorryAx`-free;
-  `execM_soundTerms_of_head` is it with the two legality conditions
-  (`encodedWriteLegal`, `maintenance_writeLegal`) and the top-level action case
-  (`encodedActionSound`) all discharged; `encodedHeadSound` is the head case, under
-  `Program.HeadsScoped`. Neither clause it asked for is missing now: `Program.AritiesAgree` is
-  `EncodeDomain.aritiesAgree` over `Program.arityConflicts`, and `Program.HeadsScoped` is
-  `EncodeDomain.headsScoped`. Neither follows from the others —
-  `adProgram_not_maintenance_writeLegal` and `bare_build_invents_equality` are the two
-  necessities, each at a program every *other* clause admits.
-* **The row-to-entry direction, which is the one that is *not* refuted, and it is proved.** A
-  rule fires off `d.rows` (`patternHolds`), and turning a matched row into a `Database.Out` is
-  `FDatabase.IndexOk.entry` — a row is an entry term. That is the direction soundness needs,
-  and `mem_terms_of_patternHolds_values` is it.
-  `FDatabase.IndexCurrent` is its converse, and `cxTgt_not_indexCurrent` refutes *that*; so the
-  refutation that blocks `execM_viewJoined` does not block this residue, which is why the
-  two are separate holes. `patternHolds_values_of_mem_rows` is the *converse* of the reading —
-  a row makes its own atom hold, at the values its own columns are — and it is what says the
-  three families are not vacuous: `cxRb_mem_matchQuery` is a maintenance rule's query really
-  matching at a state two `set`s leave, **proved rather than decided**, since `matchQuery`
-  computes a closure and `closureF` does not reduce in the kernel. `cxRb_eclassRule_writes` is
-  the head writing an entry the state did not hold — it is `cxPre`'s third `set`, so the
-  merge-phase witness above is the state this firing produced — and
-  `cxRb_eclassRule_soundTerms` is every hypothesis of `eclassRule_soundTerms` holding together
-  there, over a source (`cxRbSrc`) that really derives the equation the matched edge carries.
-* **`hfired` was where the falsity was, and it is now discharged.**
-  `entrySound_headBuild` and `cong_headUnion` ask that the *source* rule fired at the
-  substitution the correspondence returns, and `RuleResults` makes a firing a valid
-  substitution **plus a block that evaluates**. `exists_validQuerySubst_of_encodeQuery`
-  delivers the substitution and nothing more; a valid substitution is therefore *not* a
-  firing, and the two refutations above are exactly the gap. Three parts, all three **proved**,
-  and `mem_terms_of_headBuild_of_domain`/`mem_eqs_of_headUnion_of_domain` are the two shapes
-  composed:
-  * *A firing's writes reach the post-state.* `mem_terms_of_ruleFired` and
-    `mem_eqs_of_ruleFired`, off `runRules_eqs_subset_of_cmdStep`. `RunRules` is a
-    `Database.sUnion` over the results and `MergeClosure` only grows `eqs`.
-  * *Two states, not one.* `Database.ViewsSound` is available at the round's **pre**-state,
-    which is the state the encoded rule read its rows off; the term the source's firing builds
-    lands in the **post**-state. `FDatabase.SoundTerms.mono_src` does not bridge that — it
-    moves a clause along `src.eqs ⊆ src'.eqs`, and `Term.app f is ∈ sd.terms` is not a clause
-    at `sd` at all. `entrySound_headBuild_post` and `cong_headUnion_post` are the
-    two-source forms — the reading at `sd`, the conclusion at `sd'` — and the old names are
-    their `src' := src` instances.
-  * *The block evaluates at all*, which is what the two domain clauses buy.
-    `evalLocalActions_isSome_of_builds` is the fold: `headsDeclared` gives every applied name a
-    source constructor (`Actions.Builds.of_declared`, carried on the state as
-    `Database.HeadsBuild`), and `noLitUnion` gives `evalAction`'s own `union` check
-    (`Actions.UnionRunnable`, whose two arms are the clause's two disjuncts). The second arm is
-    the one that is not syntactic — `Spec/Scope.lean`'s `Action.Evaluable` asks a `union`
-    operand to be an *application*, and a lit-free program's **variable** operand is not one —
-    so it is carried as the source-run invariant `Database.NoLits`, whose data clause
-    `Database.LitFree` says no term the source holds is a literal.
-    `exists_step_of_mem_evalActions` is the environment part the old text called for: an action
-    after a `letBind` runs at `τ ++ src.env` extended by the block's own binders, and where the
-    head mentions none of them (`hlet`) the extension drops out by `Expr.eval_agreeOn`, which is
-    the shape `hfired` is stated in.
-
-  **Two conditions on the firing were named here, and both are settled.** `Rule.HeadScoped` —
-  every head variable is the query's, a global, or the block's own `let` — was recorded as
-  costing nothing, on the reading that an unbound head variable sticks the **encoded** head
-  too. That reading is wrong at a *leaf*, which is `bareProgram`, so it is a real condition and
-  it is a domain clause: `EncodeDomain.headsScoped` on the program's text,
-  `Program.HeadsScoped.headScoped` for the state form the proof spends. `hlet` is gone
-  outright: `headActions_soundTerms` runs the two blocks in lockstep, so each action is read at
-  the environment it actually ran under and the `let` prefix is shared by construction.
-
-  `EncodedHeadSound` is proved from those at the substitution
-  `validQuerySubst_of_mem_matchQuery_diag` delivers — `validQuerySubst_of_mem_matchQuery`
-  with `Signature.AllConstructors`, which no encoded target has, traded for
-  `FDatabase.EqsRefl` and `FDatabase.IndexOk`, which every one of them has.
-
-  It is the mirror of `unionsJoined_fire`, a source firing behind the target's where that one
-  needs a target firing behind the source's; what it is no longer is open.
-
-**The two legality conditions are `EncodedWriteLegal` and its maintenance counterpart, and
-the domain clause they need is `EncodeDomain.aritiesAgree`.** `Program.AritiesAgree` is the
-form they consume: `Program.ctors` is read off the syntax, one `(name, arity)` pair per
-application and per declaration, so a program applying one name at two arities gets two table
-triples and the later declaration wins — and the losing arity's rebuild rules then `set` a
-view at the wrong key width, which is what `Actions.SetWidthOk` forbids and
-`FDatabase.Inv.execCmdM` asks of every rule the state holds, fired or not.
-`Program.EncodeDomain.aritiesAgree'` is the bridge. The third condition,
-`Signature.MergesLegal` at the encoded signature, **is** a consequence and is proved:
-`encodeSig_mergesLegal`, out of `encodeSig_mergeShape` and `encodeSig_ufName`.
-
-**No fixpoint is needed on the target.** `FDatabase.RoundClosed` was named as this residue's
-third missing piece; it is not one. Soundness is indifferent to under-firing — `execM_contained`
-says the encoded round fires a subset, and a subset of justified writes is justified — so what
-this needs is the *containment*, not the fixpoint. The fixpoint is what `execM_viewJoined`
-and `unionsJoined_fire` want, where a firing has to be shown to have *happened*.
-
-**The rule head is closed, and was the case worth doubting.** `encodeBuild` mints its skolem
-over the arguments' *ids*, so `mem_terms_of_entrySound_skolem` makes the head's obligation
-equivalent to the minted id being a source term — which, read off the key, is the fact
-`encode_corresponds_invents_enode` refutes. It is not needed: the source reading the
-correspondence delivers is a *choice*, and taking it to be the ids themselves is legitimate
-because `Database.ViewsSound` reads a key column back as something congruent to the id and both
-endpoints of a congruence are present. `Encoding/Match.lean`'s `exists_validQuerySubst_at_ids`
-is that reading, `Expr.eval_transport` is why the source's head evaluation then gives the same
-term rather than a congruent one, and `entrySound_headBuild` is the case — with `hfired` as its
-only residue. `entrySound_headBuild_witness` is all of its hypotheses holding together at
-`wProgram`, at the view entry that run really wrote.
-
-**`addTerm` records every subterm**, so the induction also owes that no *id* and no *proof*
-term is view- or `@UF`-shaped. **That obligation now collapses**, and no syntactic invariant on
-ids is needed for it: `FDatabase.SoundTerms.addTerm_top` asks it only at the *written* term,
-because a recorded subterm the state already holds is discharged by `FDatabase.SoundTerms`
-itself (`FDatabase.subterms_of_columns`, at a subterm-closed state) and the shells a writer
-mints around held terms are of neither shape (`Term.EntryShaped`, `not_entryShaped_of_ne`,
-`not_entryShaped_of_length`, and `entryShaped_mem_of_transSym` for the one proof node a merge
-body mints). The name separations `viewName_inj`, `viewName_ne_ufName`,
-`viewName_ne_termName` and `viewName_ne_transName` are what pay for the shells, and
-`Program.EncodeDomain.noAt` is still what keeps a source constructor out of the generated
-namespace where a *head*'s skolem has to be told apart from an entry.
-
-At a program with no rule the hypothesis is the source's own `evalAction`, and
-`satTarget_viewsSound` is that case discharged; `ncTgt_soundTerms` is both clauses at a state
-an encoded program reaches with a rule, a non-leader firing and a real `@UF` edge.
-
-**Nothing is left.** `encodedHeadSound` is the head obligation discharged and every one of
-the four things it needed is done. `hlet` is gone: `headActions_soundTerms` runs the two blocks
-in lockstep, one source action at a time, so each action is read at the environment it actually
-ran under and the `let` prefix is shared by construction rather than excluded.
-`Database.TermsBuild` is `termsBuild_of_programStep`, an induction through `evalAction`,
-`RunRules` and `ProgramStep`. The reading τ is taken **once**, before that induction, so a
-head's nested applications all read at the same one, and `held_of_evalAction` composed with
-`exists_subterm_of_mem_apps` answers a subapplication there. And `Rule.HeadScoped` is not a
-case split but a hypothesis, because the statement is false without it — which is why it is a
-domain clause and not a lemma.
-
-**The clause is faithfulness, not a narrowing.** egglog rejects a rule head that reads an
-unbound variable outright: `to_core_actions`, the lowering for *actions*, resolves a
-`GenericExpr::Var` only when `ctx.binding` holds it or it is a global, and raises
-`TypeError::Unbound` otherwise (`egglog/src/core.rs:663-670`) — the same shape the clause has.
-The census was unmoved when it was added: 70 of 166 in domain, as before it.
-
-**Neither the bundle nor the reduction is vacuous.** `wPreludeState_encOk` is
-`FDatabase.EncOk` at the state `encode wProgram`'s prelude really leaves — the prelude is
-declarations and rules, so it reduces in the kernel — `adProgram_not_maintenance_writeLegal`
-is `EncodeDomain.aritiesAgree`'s necessity and `bare_build_invents_equality` is
-`EncodeDomain.headsScoped`'s, each at a program every *other* clause admits, and
-`execM_soundTerms_witness` is every hypothesis of this theorem holding together at a program
-whose rule really fires. -/
 theorem execM_soundTerms {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) : tgt.SoundTerms src :=
@@ -4889,7 +3871,6 @@ theorem encode_corresponds_complete_witness {tgt : FDatabase}
     encode_corresponds_complete ncProgram_encodeDomain ncProgram_programStep htgt
       ncSrc_mem_FA' ncSrc_mem_FB' hsame,
     ncTgt_sameClass_FA_FB, hsame⟩
-
 
 /-! ## The bridge, run-wide
 
@@ -5011,15 +3992,6 @@ theorem encodeAction_entrySafe {P : Program} (hdom : P.EncodeDomain) {pf : Expr}
     intro b hb
     exact encodeBuild_entrySafe (head_conditions_of_ctors hdom hctors).1 m b
       (encodeAction_expr_actions .. ▸ hb)
-  | letBind v e =>
-    intro b hb
-    have hne : ∀ g ∈ e.fns, NotEntryHead g := (head_conditions_of_ctors hdom hctors).1
-    rw [encodeAction_letBind_actions] at hb
-    rcases List.mem_append.mp hb with h | h
-    · exact encodeBuild_entrySafe hne m b h
-    · obtain rfl : b = Action.letBind v (encodeBuild e m).1 := by simpa using h
-      rw [encodeBuild_fst]
-      exact hne
   | union e₁ e₂ =>
     intro b hb
     have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
@@ -5156,7 +4128,7 @@ theorem FDatabase.EncBase.runSaturateM_entryRowsUF {P : Program} (hdom : P.Encod
     (Φ := fun x => x.EncBase P (encodeSig P) ∧ x.EntryRowsUF) ?_ n ⟨hb, h⟩ hrun).2
   intro x y hx hstep
   have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
-  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial trivial hstep', ?_⟩
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep', ?_⟩
   exact runRoundM_entryRowsUF (by rw [hx.1.sig]; exact hx.1.shape)
     (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl'
     (FDatabase.EncBase.firingsEntryRows hdom hx.1 hx.2) hx.2 hstep
@@ -5172,7 +4144,6 @@ theorem FDatabase.EncBase.execCmdM_entryRowsUF {P : Program} (hdom : P.EncodeDom
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    replace h₁ := execAction_of_top h₁
     have hsig₁ : d₁.sig = d.sig := FDatabase.execAction_sig h₁
     refine mergeSaturateF_entryRowsUF mergeFuel ?_ ?_ ?_ ?_
       (execAction_entryRowsUF hshape hb.inv hok (by rw [hb.sig]; exact hwl) h h₁) h₂
@@ -5182,7 +4153,7 @@ theorem FDatabase.EncBase.execCmdM_entryRowsUF {P : Program} (hdom : P.EncodeDom
     · exact execAction_noUnions huf hb.nounions h₁
   | rule r =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
-    exact hs ▸ h.setEnvRules d.env (r.resolveGlobals d.env :: d.rules)
+    exact hs ▸ h.setEnvRules d.env (r :: d.rules)
   | run R =>
     rw [FDatabase.execCmdM] at hs
     exact runRoundM_entryRowsUF hshape (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions
@@ -5197,7 +4168,7 @@ theorem FDatabase.EncBase.execProgramM_entryRowsUF {P : Program} (hdom : P.Encod
     {p : Program} (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c)
     (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
-    (hok : ∀ c ∈ p, c.EntryWriteOk) (hlet : ∀ c ∈ p, c.NoAtLet) :
+    (hok : ∀ c ∈ p, c.EntryWriteOk) :
     ∀ {d D : FDatabase}, d.EncBase P (encodeSig P) → d.EntryRowsUF →
       d.execProgramM p = some D → D.EntryRowsUF := by
   induction p with
@@ -5214,9 +4185,8 @@ theorem FDatabase.EncBase.execProgramM_entryRowsUF {P : Program} (hdom : P.Encod
       (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
-      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
       (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
-        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self) h₁)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
       (hb.execCmdM_entryRowsUF hdom (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
         (hwl c List.mem_cons_self) (hok c List.mem_cons_self) h h₁) h₂
 
@@ -5242,15 +4212,13 @@ theorem execM_encode_entryRowsUF {P : Program} (hdom : P.EncodeDomain) (hag : P.
     exact absurd hmem (by simp)
   refine FDatabase.EncBase.execProgramM_entryRowsUF hdom
     (rulesEncodedOk_encodeCmds P (fun _ hc => hc) [] 0 0) (encodeCmds_unionFree P [] P 0 0)
-    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ h₀ hcmds
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_)  hb₀ h₀ hcmds
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact noDecl_encodeCmd H c₀ m j c hmem
   · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact encodedWriteLegal hdom hag c₀ hc₀ H m j c hmem
   · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact entryWriteOk_encodeCmd hdom H c₀ hc₀ m j c hmem
-  · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
-    exact noAtLet_encodeCmd hdom H c₀ hc₀ m j c hmem
 
 /-- **The bridge, with the arity clause read off the domain.** -/
 theorem execM_entryRowsUF {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
@@ -5267,7 +4235,6 @@ theorem execM_entryRow_of_out {P : Program} (hdom : P.EncodeDomain) {tgt : FData
     (hlen : as.length = dc.arity) (ho : tgt.toDatabase.Out f as [x, pf]) :
     ∃ v lo, (⟨f, as, [v, lo]⟩ : Row) ∈ tgt.rows ∧ tgt.toDatabase.UFReach x v :=
   (execM_entryRowsUF hdom htgt).out (execM_encode_eqsRefl htgt) hdc hm hlen ho
-
 
 /-! ## The fixpoint's roots, reduced to the firing
 
@@ -5379,10 +4346,6 @@ theorem not_mem_rebuildVarNames {v : Var} {c : Char} (hv : v.toList = ['@', c]) 
   rw [hv] at h2
   exact hc (List.cons.inj (List.cons.inj h2).2).1
 
-
-
-
-
 theorem Env.dom_zip_subset : ∀ (vs : List Var) (as : List Term), Env.dom (vs.zip as) ⊆ vs
   | [], _ => by simp [Env.dom]
   | _ :: _, [] => by simp [Env.dom]
@@ -5408,8 +4371,6 @@ theorem Env.lookup_zip : ∀ (vs : List Var) (as : List Term), vs.length = as.le
       simp only [List.getElem_cons_succ]
       rw [Env.lookup_cons, if_neg hne]
       exact Env.lookup_zip vs as (by simpa using hlen) hnd.2 i hi hi'
-
-
 
 /-- **A list of variables evaluates to what the environment binds them to.** -/
 theorem Expr.evalList_map_var {sig : Signature} : ∀ (vs : List Var) (as : List Term) (ρ : Env),
@@ -5467,8 +4428,6 @@ theorem mem_matchQuery_of_lookup {d : FDatabase} {q : Query} {τ : Env}
     rw [Env.canon_canon (Query.freeVars_subset hpq) (Query.freeVars_nodup q [])]
     exact hp p hpq
 
-
-
 set_option maxRecDepth 100000 in
 /-- **Non-vacuous**, at the state the one-off instance matches at: `cxRb` is `cxPre` without the
 third `set`, and every column its two rows record is a value the enumerator would assign. -/
@@ -5496,8 +4455,6 @@ theorem lookup_env_canon {d : FDatabase} (_hnoat : d.NoAtEnv) {vars : List Var}
 theorem mem_addRow_rows_self {d : FDatabase} {g : FnName} {as vs : List Term} :
     (⟨g, as, vs⟩ : Row) ∈ (FDatabase.addRow g as vs d).rows := by
   simp [FDatabase.addRow, List.mem_dedup]
-
-
 
 /-- The substitution the e-class rule matches at a view row and the `@UF` row above it. -/
 def eclassSubst (k : Nat) (as : List Term) (e pf x q : Term) : Env :=
@@ -5541,8 +4498,6 @@ theorem lookup_eclassSubst_q : Env.lookup "@q" (eclassSubst k as e pf x q) = som
 
 end
 
-
-
 theorem lookup_env_eq_none {d : FDatabase} (hnoat : d.NoAtEnv) {v : Var}
     (hat : "@".isPrefixOf v = true) : Env.lookup v d.env = none :=
   Env.lookup_eq_none_iff.mpr fun hc => by
@@ -5573,7 +4528,7 @@ theorem mem_freeVars_eclassRule {f : FnName} {k : Nat} {v : Var}
   rcases hp2 with rfl | rfl
   · rw [rebuildVars_eq_map] at hv
     rcases freeVars_values_subset (vs := ["@e", "@p"]) hv with h' | h'
-    · rcases List.mem_cons.mp h' with rfl | h'' 
+    · rcases List.mem_cons.mp h' with rfl | h''
       · exact Or.inl rfl
       · exact Or.inr (Or.inl (by simpa using h''))
     · exact Or.inr (Or.inr (Or.inr (Or.inr h')))
@@ -5582,9 +4537,6 @@ theorem mem_freeVars_eclassRule {f : FnName} {k : Nat} {v : Var}
       · exact Or.inr (Or.inr (Or.inl rfl))
       · exact Or.inr (Or.inr (Or.inr (Or.inl (by simpa using h''))))
     · exact Or.inl (by simpa using h')
-
-
-
 
 theorem Expr.evalList_pair_var {sig : Signature} {v w : Var} {a b : Term} {ρ : Env}
     (hv : Env.lookup v ρ = some a) (hw : Env.lookup w ρ = some b) :
@@ -5615,7 +4567,6 @@ theorem eval_transE {sig : Signature} (htr : sig.IsCtor transName) {ρ : Env} {a
   rw [show Prim.ofName transName = none from rfl]
   rw [if_pos htr]
   rfl
-
 
 theorem atPrefix_of_eclass_var {v : Var} {k : Nat}
     (h : v = "@e" ∨ v = "@p" ∨ v = "@x" ∨ v = "@q" ∨ v ∈ rebuildVarNames k) :
@@ -5992,7 +4943,6 @@ theorem eval_columnProof {sig : Signature} {k i : Nat} {pf q : Term} {ρ : Env}
     Expr.evalList]
   rfl
 
-
 /-- **A column rebuild rule fires**, at a view row and the `@UF` row above its column `i`:
 the row it writes carries the same e-class column, the key with column `i` moved to the edge's
 far end, and the congruence proof of the move. Sibling of `eclassRule_fires`. -/
@@ -6230,7 +5180,6 @@ theorem no_ufRowEdge_of_rowsClosed {P : Program} {d d' : FDatabase} {R : Ruleset
   · rw [Term.blt_asymm x e hxe] at hlt
     exact absurd hlt (by simp)
 
-
 /-! ## The columns a row records, run-wide
 
 `FDatabase.RowColumnsValued` is the fourth cost of the e-class rule's firing and the one
@@ -6421,8 +5370,6 @@ theorem FDatabase.Valued.union {d₁ d₂ : FDatabase} (h₁ : d₁.Valued) (h�
     · exact hsig ▸ h₂.terms t ht'
   env := h₁.env
 
-/-- **One action.** `expr`, `letBind` and `union` record evaluated terms; the `set` records the
-entry term for the columns it evaluated. -/
 theorem execAction_valued {d d' : FDatabase} {a : Action} (h : d.Valued)
     (hrun : execAction d a = some d') : d'.Valued := by
   cases a with
@@ -6430,14 +5377,6 @@ theorem execAction_valued {d d' : FDatabase} {a : Action} (h : d.Valued)
     simp only [execAction, Option.map_eq_some_iff] at hrun
     obtain ⟨t, ht, rfl⟩ := hrun
     exact h.addTerm (isValue_of_eval h.env e ht).2
-  | letBind v e =>
-    simp only [execAction, Option.map_eq_some_iff] at hrun
-    obtain ⟨t, ht, rfl⟩ := hrun
-    have hv := isValue_of_eval h.env e ht
-    refine ⟨(h.addTerm hv.2).terms, fun b hb => ?_⟩
-    rcases List.mem_cons.mp hb with rfl | hb'
-    · exact hv
-    · exact h.env b hb'
   | union e₁ e₂ =>
     simp only [execAction] at hrun
     obtain ⟨t₁, ht₁, hrun⟩ := Option.bind_eq_some_iff.mp hrun
@@ -6678,7 +5617,7 @@ theorem FDatabase.EncBase.runSaturateM_valued {P : Program} {R : RulesetName} :
     (Φ := fun x => x.EncBase P (encodeSig P) ∧ x.Valued) ?_ n ⟨hb, h⟩ hrun).2
   intro x y hx hstep
   have hstep' : x.execCmdM (Cmd.run R) = some y := hstep
-  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial trivial hstep', ?_⟩
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep', ?_⟩
   exact runRoundM_valued (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl'
     hx.2 hstep
 
@@ -6691,7 +5630,6 @@ theorem FDatabase.EncBase.execCmdM_valued {P : Program} {d d' : FDatabase} {c : 
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    replace h₁ := execAction_of_top h₁
     have hsig₁ : d₁.sig = d.sig := FDatabase.execAction_sig h₁
     refine mergeSaturateF_valued mergeFuel ?_ ?_ ?_ (execAction_valued h h₁) h₂
     · rw [hsig₁, hb.sig]; exact hb.merges
@@ -6699,7 +5637,7 @@ theorem FDatabase.EncBase.execCmdM_valued {P : Program} {d d' : FDatabase} {c : 
     · exact execAction_noUnions huf hb.nounions h₁
   | rule r =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
-    exact hs ▸ h.setRules (r.resolveGlobals d.env :: d.rules)
+    exact hs ▸ h.setRules (r :: d.rules)
   | run R =>
     rw [FDatabase.execCmdM] at hs
     exact runRoundM_valued (by rw [hb.sig]; exact hb.merges) hb.inv hb.nounions hb.wl' h hs
@@ -6712,7 +5650,7 @@ theorem FDatabase.EncBase.execCmdM_valued {P : Program} {d d' : FDatabase} {c : 
 theorem FDatabase.EncBase.execProgramM_valued {P : Program} {p : Program}
     (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
-    (hlet : ∀ c ∈ p, c.NoAtLet) :
+     :
     ∀ {d D : FDatabase}, d.EncBase P (encodeSig P) → d.Valued →
       d.execProgramM p = some D → D.Valued := by
   induction p with
@@ -6728,9 +5666,8 @@ theorem FDatabase.EncBase.execProgramM_valued {P : Program} {p : Program}
       (fun c' hc' => huf c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hnd c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
-      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
       (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
-        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self) h₁)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
       (hb.execCmdM_valued (huf c List.mem_cons_self) (hnd c List.mem_cons_self)
         (hwl c List.mem_cons_self) h h₁) h₂
 
@@ -6750,13 +5687,11 @@ theorem execM_encode_valued {P : Program} (hdom : P.EncodeDomain) (hag : P.Ariti
       exact absurd hb (by simp)
   refine FDatabase.EncBase.execProgramM_valued
     (rulesEncodedOk_encodeCmds P (fun _ hc => hc) [] 0 0) (encodeCmds_unionFree P [] P 0 0)
-    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ h₀ hcmds
+    (fun c hc => ?_) (fun c hc => ?_)  hb₀ h₀ hcmds
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact noDecl_encodeCmd H c₀ m j c hmem
   · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact encodedWriteLegal hdom hag c₀ hc₀ H m j c hmem
-  · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
-    exact noAtLet_encodeCmd hdom H c₀ hc₀ m j c hmem
 
 /-- **`FDatabase.EncBase` at the state `execM` returned**, which is the prelude's instance
 carried along `encodeCmds` by `FDatabase.EncBase.execProgramM`. -/
@@ -6767,13 +5702,11 @@ theorem execM_encode_encBase {P : Program} (hdom : P.EncodeDomain) (hag : P.Arit
   have hb₀ : d₀.EncBase P (encodeSig P) := (encOk_preludeState hdom hag hprel).base
   refine FDatabase.EncBase.execProgramM
     (rulesEncodedOk_encodeCmds P (fun _ hc => hc) [] 0 0) (encodeCmds_unionFree P [] P 0 0)
-    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) hb₀ hcmds
+    (fun c hc => ?_) (fun c hc => ?_)  hb₀ hcmds
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact noDecl_encodeCmd H c₀ m j c hmem
   · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact encodedWriteLegal hdom hag c₀ hc₀ H m j c hmem
-  · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
-    exact noAtLet_encodeCmd hdom H c₀ hc₀ m j c hmem
 
 /-- **The fourth cost of the e-class rule's firing, discharged run-wide**: every column an
 `execM` target's rows record is a term `matchQuery` will assign, so a rebuild rule can re-read
@@ -6785,9 +5718,6 @@ theorem execM_rowColumnsValued {P : Program} (hdom : P.EncodeDomain) {tgt : FDat
   have hb := execM_encode_encBase hdom hdom.aritiesAgree' htgt
   (execM_encode_valued hdom hdom.aritiesAgree' htgt).rowColumnsValued hb.eqsRefl
     hb.subtermClosed hb.inv.index
-
-
-
 
 /-! ## Descent over entry terms, run-wide
 
@@ -6880,11 +5810,6 @@ theorem execAction_ufTermsDescend {d e : FDatabase} {a : Action} (hinv : d.Inv)
     simp only [execAction, Option.map_eq_some_iff] at hs
     obtain ⟨t, ht, rfl⟩ := hs
     exact h.addTerm' (entryShaped_mem_of_eval e₀ hentry (fun w _ => hbind w) ht)
-  | letBind v e₀ =>
-    simp only [execAction, Option.map_eq_some_iff] at hs
-    obtain ⟨t, ht, rfl⟩ := hs
-    exact (h.addTerm' (entryShaped_mem_of_eval e₀ hentry (fun w _ => hbind w) ht)).of_terms_sub
-      (fun _ ht' => ht')
   | union e₁ e₂ =>
     simp only [execAction] at hs
     obtain ⟨t₁, ht₁, hs⟩ := Option.bind_eq_some_iff.mp hs
@@ -6948,7 +5873,6 @@ theorem execLocalActions_ufTermsDescend {d e : FDatabase} {as : List Action} {σ
       rwa [FDatabase.mem_toDatabase_terms] at h'
   exact (execActions_ufTermsDescend as hsafe hentry (d := { d with env := σ ++ d.env })
     hinv' hwl (h.of_terms_sub fun _ ht => ht) hm).of_terms_sub fun _ ht => ht
-
 
 /-- **The bindings a firing reads**, at the environment a rule head runs in. -/
 theorem entryShaped_bind_of_match {d : FDatabase} (hinv : d.Inv) {σ : Env}
@@ -7101,7 +6025,6 @@ theorem execRunRules_ufTermsDescend {R : RulesetName} {d : FDatabase}
     (hfire : d.FiringsUFTermsDescend) (h : d.UFTermsDescend) :
     (execRunRules R d).UFTermsDescend :=
   foldl_fireRule_ufTermsDescend hfire _ (fun _ hr => List.mem_of_mem_filter hr) h
-
 
 /-- **One `addTerm`, checked at the recorded term's top.** `FDatabase.addRow` mints its entry
 term this way, and so does the survivor of a merge firing. -/
@@ -7309,7 +6232,6 @@ theorem runRoundM_ufTermsDescend {R : RulesetName} {d e : FDatabase}
   · exact hinv.execRunRules hwl
   · exact execRunRules_noUnions hn
 
-
 /-- **Rounds of one ruleset descend over entry terms**, given the bundle at each round's own
 start. `FDatabase.UFRowsDescend` rides along because `pathCompressRule` reads rows. -/
 theorem FDatabase.EncBase.runSaturateM_ufTermsDescend {P : Program} (hdom : P.EncodeDomain)
@@ -7326,7 +6248,7 @@ theorem FDatabase.EncBase.runSaturateM_ufTermsDescend {P : Program} (hdom : P.En
     rw [hx.1.sig]; exact encodeSig_mergeOf_ufName hdom
   have hfireR : x.FiringsUFDescend :=
     firingsUFDescend_of_rulesEncoded hx.1.rules hx.1.eqsRefl hmg hx.2.1
-  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial trivial hstep',
+  refine ⟨hx.1.execCmdM (c := Cmd.run R) trivial trivial trivial trivial hstep',
     runRoundM_ufRowsDescend (by rw [hx.1.sig]; exact hx.1.shape)
       (by rw [hx.1.sig]; exact hx.1.merges) hx.1.inv hx.1.nounions hx.1.wl' hfireR hx.2.1 hstep,
     ?_⟩
@@ -7350,7 +6272,6 @@ theorem FDatabase.EncBase.execCmdM_ufTermsDescend {P : Program} (hdom : P.Encode
   | action a =>
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    replace h₁ := execAction_of_top h₁
     refine mergeSaturateF_ufTermsDescend mergeFuel ?_ ?_ ?_ ?_
       (execAction_ufRowsDescend hok hdes h₁)
       (execAction_ufTermsDescend hb.inv hok hent h h₁) h₂
@@ -7377,7 +6298,7 @@ theorem FDatabase.EncBase.execProgramM_ufTermsDescend {P : Program} (hdom : P.En
     (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
     (hok : ∀ c ∈ p, c.UFWriteOk) (hent : ∀ c ∈ p, c.EntryWriteOk)
-    (hlet : ∀ c ∈ p, c.NoAtLet) :
+     :
     ∀ {d D : FDatabase}, d.EncBase P (encodeSig P) → d.UFRowsDescend → d.UFTermsDescend →
       d.execProgramM p = some D → D.UFTermsDescend := by
   induction p with
@@ -7395,9 +6316,8 @@ theorem FDatabase.EncBase.execProgramM_ufTermsDescend {P : Program} (hdom : P.En
       (fun c' hc' => hwl c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hok c' (List.mem_cons_of_mem c hc'))
       (fun c' hc' => hent c' (List.mem_cons_of_mem c hc'))
-      (fun c' hc' => hlet c' (List.mem_cons_of_mem c hc'))
       (hb.execCmdM (hro c List.mem_cons_self) (huf c List.mem_cons_self)
-        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hlet c List.mem_cons_self) h₁)
+        (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) h₁)
       (hb.execCmdM_ufRowsDescend (encodeSig_mergeOf_ufName hdom) (huf c List.mem_cons_self)
         (hnd c List.mem_cons_self) (hwl c List.mem_cons_self) (hok c List.mem_cons_self)
         hdes h₁)
@@ -7431,7 +6351,7 @@ theorem execM_encode_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) (hag :
     exact absurd hmem (by simp)
   refine FDatabase.EncBase.execProgramM_ufTermsDescend hdom
     (rulesEncodedOk_encodeCmds P (fun _ hc => hc) [] 0 0) (encodeCmds_unionFree P [] P 0 0)
-    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_)
+    (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_) (fun c hc => ?_)
     hb₀ hdes₀ h₀ hcmds
   · obtain ⟨c₀, -, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact noDecl_encodeCmd H c₀ m j c hmem
@@ -7441,8 +6361,6 @@ theorem execM_encode_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) (hag :
     exact ufWriteOk_encodeCmd H c₀ m j c hmem
   · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
     exact entryWriteOk_encodeCmd hdom H c₀ hc₀ m j c hmem
-  · obtain ⟨c₀, hc₀, H, m, j, hmem⟩ := mem_encodeCmd_of_mem_encodeCmds P (fun _ h => h) [] 0 0 c hc
-    exact noAtLet_encodeCmd hdom H c₀ hc₀ m j c hmem
 
 /-- **Entry-term descent, with the arity clause read off the domain.** -/
 theorem execM_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) {tgt : FDatabase}
@@ -7610,13 +6528,13 @@ theorem FDatabase.RebuildBase.rowColumnsValued {d : FDatabase} {P : Program}
 theorem FDatabase.RebuildBase.execProgramM {P : Program} (hdom : P.EncodeDomain) {p : Program}
     (hro : ∀ c ∈ p, Cmd.RulesEncodedOk P c) (huf : ∀ c ∈ p, c.UnionFree)
     (hnd : ∀ c ∈ p, c.NoDecl) (hwl : ∀ c ∈ p, c.WriteLegal (encodeSig P))
-    (hok : ∀ c ∈ p, c.UFWriteOk) (hlet : ∀ c ∈ p, c.NoAtLet)
+    (hok : ∀ c ∈ p, c.UFWriteOk)
     {d D : FDatabase} (h : d.RebuildBase P) (hs : d.execProgramM p = some D) :
     D.RebuildBase P where
-  base := FDatabase.EncBase.execProgramM hro huf hnd hwl hlet h.base hs
-  valued := FDatabase.EncBase.execProgramM_valued hro huf hnd hwl hlet h.base h.valued hs
+  base := FDatabase.EncBase.execProgramM hro huf hnd hwl h.base hs
+  valued := FDatabase.EncBase.execProgramM_valued hro huf hnd hwl h.base h.valued hs
   descend := FDatabase.EncBase.execProgramM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
-    hro huf hnd hwl hok hlet h.base h.descend hs
+    hro huf hnd hwl hok h.base h.descend hs
 
 /-- **The bundle across any part of one source command's block.** Stated over a sublist so
 that the action case, whose block is a run of `Cmd.action`s followed by the rebuild, can use
@@ -7631,7 +6549,7 @@ theorem rebuildBase_encodeCmd {P : Program} (hdom : P.EncodeDomain) {c : Cmd} (h
     (fun c' hc' => noDecl_encodeCmd G c n i c' (hq c' hc'))
     (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' c hc G n i c' (hq c' hc'))
     (fun c' hc' => ufWriteOk_encodeCmd G c n i c' (hq c' hc'))
-    (fun c' hc' => noAtLet_encodeCmd hdom G c hc n i c' (hq c' hc')) h hs
+     h hs
 
 /-- **And the middle of a `Cmd.saturate`'s block keeps the bundle.** The same three fields at
 a saturating run rather than at a whole block, which is what `Egglog.EncReached.satMid` takes:
@@ -7641,7 +6559,7 @@ theorem rebuildBase_saturateMid {P : Program} (hdom : P.EncodeDomain) {R : Rules
     {d D : FDatabase} (h : d.RebuildBase P)
     (hs : d.execCmdM (Cmd.saturate R) = some D) : D.RebuildBase P := by
   have hs' : d.runSaturateM R runFuel = some D := hs
-  exact ⟨h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs,
+  exact ⟨h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial hs,
     FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs',
     h.base.execCmdM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
       (c := Cmd.saturate R) trivial trivial trivial trivial h.descend hs⟩
@@ -7657,7 +6575,7 @@ theorem viewRowsRooted_of_runSaturateM {P : Program} {R : RulesetName} (hdom : P
     (hs : d.execCmdM (Cmd.saturate R) = some e) : e.ViewRowsRooted P := by
   have hs' : d.runSaturateM R runFuel = some e := hs
   have hbe : e.EncBase P (encodeSig P) :=
-    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs
+    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial hs
   have hve : e.Valued := FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs'
   have hdese : e.UFRowsDescend :=
     h.base.execCmdM_ufRowsDescend (encodeSig_mergeOf_ufName hdom)
@@ -7767,8 +6685,6 @@ theorem execM_viewRowsRooted {P : Program} (hdom : P.EncodeDomain)
     exact absurd hrow (by simp)
   exact viewRowsRooted_encodeCmds hdom hsy htr P (fun _ hc => hc) [] 0 0 h₀ hr₀ hcmds
 
-
-
 /-! ## The merge fixpoint at a view key, run-wide
 
 `FDatabase.row_unique_of_settled` is what identifies two rows one view key carries, and it reads
@@ -7805,7 +6721,7 @@ theorem viewRowUnique_of_runSaturateM {P : Program} {R : RulesetName} (hdom : P.
     (hs : d.execCmdM (Cmd.saturate R) = some e) : e.ViewRowUnique P := by
   have hs' : d.runSaturateM R runFuel = some e := hs
   have hb : e.EncBase P (encodeSig P) :=
-    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs
+    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial hs
   intro f k hfk as vs ws h₁ h₂
   have hsigd : e.sig = encodeSig P := hb.sig
   have hdecl : (encodeSig P) (viewName f) = some (viewDecl k) :=
@@ -8001,7 +6917,6 @@ theorem viewRowsColumnClosed_of_roundFixed {P : Program} {d : FDatabase} {R : Ru
     hcarry (viewName f) (as.set i x) e (columnProof k i pf q) hfired
   exact ⟨v, lo, hv, hreach⟩
 
-
 /-- **One `Cmd.saturate rebuildRuleset` delivers the column closure.** -/
 theorem viewRowsColumnClosed_of_runSaturateM {P : Program} {R : RulesetName}
     (hdom : P.EncodeDomain) (hR : P.MaintenanceRuleset R)
@@ -8012,7 +6927,7 @@ theorem viewRowsColumnClosed_of_runSaturateM {P : Program} {R : RulesetName}
     (hs : d.execCmdM (Cmd.saturate R) = some e) : e.ViewRowsColumnClosed P := by
   have hs' : d.runSaturateM R runFuel = some e := hs
   have hbe : e.EncBase P (encodeSig P) :=
-    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial trivial hs
+    h.base.execCmdM (c := Cmd.saturate R) trivial trivial trivial trivial hs
   have hve : e.Valued := FDatabase.EncBase.runSaturateM_valued runFuel h.base h.valued hs'
   exact viewRowsColumnClosed_of_roundFixed hdom hR hbe htr hsy hfi hcg
     (hve.rowColumnsValued hbe.eqsRefl hbe.subtermClosed hbe.inv.index)
@@ -8310,7 +7225,6 @@ theorem execM_viewRow_of_rowReachList {P : Program} (hdom : P.EncodeDomain)
     (execM_viewRowsRooted hdom hsy htr htgt) (execM_ufRootsUnique hdom hsy htr htgt)
     hfk hrow hlen hj
 
-
 /-- **Non-vacuous at the rule**: `columnRule` is the rule `rebuildRules` emits, spelled out at
 `Encoding/Match.lean`'s witness constructor. -/
 theorem columnRule_eq_wRebuildFCol : columnRule "F" 1 0 = wRebuildFCol := rfl
@@ -8371,9 +7285,9 @@ theorem cmdStep_union_notLit {sd sd' : Database} {e₁ e₂ : Expr}
       t₁.isLit = false ∧ t₂.isLit = false := by
   obtain ⟨m, hreach, -⟩ := hstep
   have hd : evalAction sd (Action.union e₁ e₂) = some m := hreach
-  rcases evalAction_eq_some hd with ⟨e, t, hc, -, -⟩ | ⟨v, e, t, hc, -, -⟩ |
-    ⟨f₁, f₂, t₁, t₂, hc, h₁, h₂, hnl, -⟩ | ⟨f, args, out, as, vs, hc, -, -, -⟩
-  · exact absurd hc (by simp)
+  rcases evalAction_eq_some hd with ⟨e, t, hc, -, -⟩ |
+    ⟨f₁, f₂, t₁, t₂, hc, h₁, h₂, hnl, -⟩ |
+    ⟨f, args, out, as, vs, hc, -, -, -⟩
   · exact absurd hc (by simp)
   · obtain ⟨rfl, rfl⟩ : e₁ = f₁ ∧ e₂ = f₂ := by
       constructor <;> [exact (Action.union.inj hc).1; exact (Action.union.inj hc).2]
@@ -8410,7 +7324,6 @@ theorem FDatabase.UFLitsIsolated.ufRowRoot {d : FDatabase} (h : d.UFLitsIsolated
   have hterm : Term.app ufName ([Term.lit l] ++ [b, pf]) ∈ d.terms :=
     mem_terms_of_indexOk hr hidx (r := ⟨ufName, [Term.lit l], [b, pf]⟩) hmem hmg
   exact hedge.2 (h l b pf (by simpa using hterm))
-
 
 /-! ## A view head the target holds is a source constructor
 
@@ -8515,7 +7428,7 @@ theorem uSrcBase_cmdStep_union :
     CmdStep uSrcBase (Cmd.action (Action.union (.app "A" []) (.app "B" []))) uSrcD := by
   refine ⟨uSrcD, ?_, .refl⟩
   change cmdEffect _ (.action (.union (.app "A" []) (.app "B" []))) = some uSrcD
-  simp only [cmdEffect, evalTopAction_union, evalAction, Expr.eval, Expr.evalList, uSrcD,
+  simp only [cmdEffect, evalAction, Expr.eval, Expr.evalList, uSrcD,
     uA, uB]
   rfl
 
@@ -9211,7 +8124,6 @@ is neutral on a constructor signature. -/
 theorem rbSrcR_cmdStep_run :
     CmdStep rbSrcR (.run rbRuleset) (RunRules rbRuleset rbSrcR) := ⟨_, rfl, .refl⟩
 
-/-- The two ends of the environment clause: the target's is the one a top-level `let` left. -/
 theorem rbTgtR_env : rbTgtR.env = rbSrcR.env := rfl
 
 /-- `Database.WF` and `Signature.AllConstructors` are blind to the rules
@@ -9261,11 +8173,6 @@ theorem rbRule_substGlobals :
 theorem rbSrcR_globalsInline : rbSrcR.GlobalsInline [("x", Expr.app "A" [])] :=
   rbSrc_globalsInline
 
-/-- **The rules clause, with content**: the target holds `rbRule`'s encoding, its signature
-declares the proof head `ruleProofDecls` emitted for it, and the substitution it was encoded
-through is the one `rbProgram`'s own top-level `let` freezes — `x` bound to the closed
-definition `(A)`, so neither the `Database.GlobalsInline` conjunct riding in this clause nor
-the stored-rule identity `rbRule_substGlobals` beside it is at the empty substitution. -/
 theorem rbSrcR_hrules : ∀ r ∈ rbSrcR.rules,
     ∃ G i n, (encodeRule i (r.substGlobals G) n).1 ∈ rbTgtR.rules ∧
       rbTgtR.sig.IsCtor (ruleName i) ∧ rbSrcR.GlobalsInline G ∧ r.substGlobals G = r := by
@@ -9383,8 +8290,6 @@ theorem rbTgtR_mergeOf_of_row {f : FnName} {es : List Term} {e pf : Term}
     (rbTgtR.sig.mergeOf (viewName f)).isSome = true :=
   mergeOf_of_row_of_outNonempty rbTgtR_rowMerges hrow
 
-/-- **The source head is scoped where it runs**: `?y` is the query's own variable, and the
-scope it is read against is the one the top-level `let` left. -/
 theorem rbRule_headScoped :
     Actions.Scoped rbRule.actions (Query.bind rbRule.query (Env.dom rbSrcR.env)) := by
   simp [rbRule, Env.dom, Action.Scoped, Expr.IsApp, Expr.Scoped, Expr.vars,
@@ -9612,107 +8517,6 @@ theorem rmBadState_not_rowMechAt : ¬ rmBadState.RowMechAt := by
       FDatabase).sig = (fun _ => none) from rfl, Signature.mergeOf] at h0
   simp at h0
 
-/-- **`unionsJoined_fire`'s hypotheses are simultaneously satisfiable**, so the residue is not
-vacuous — `ENCODING.md`'s failure, twice.
-
-Twenty-nine conjuncts: the twenty-eight `Egglog.UnionsFire` takes, in the order it takes them,
-and `rbSrcR_globalsInline` beside them. Twenty-one have content here; the eight that do not are
-`Database.UnionsJoined`, `FDatabase.RowJoined`'s `edge`, the three threaded row invariants, the
-`.eq` case's two clauses and the middle-state bundle, each of them for a reason recorded below
-and each with content at another witness.
-
-**The middle-state conjunct is guarded on the command**, and this witness's command is a
-`Cmd.run` — so `FDatabase.RowMechAt` is asked of nothing here. It is a constraint and not a
-shape (`rmBadState_not_rowMechAt`, at a state holding a live view row whose function carries no
-`:merge`), and where it has content is `encStep_encRow_saturateMid`: the middle of a
-`Cmd.saturate R` block is rebuilt because `allMaintenanceRules` joins the maintenance rules to
-`R` as well, which `viewRowsRooted_of_runSaturateM` at `R` is. Four of its five fields hold
-here anyway — `rbTgtR_viewRepr_of_rowRepr`, `rbTgtR_rowJoined`, `rbTgtR_rowColumnsValued` and
-`rbTgtR_mergeOf_of_row` — and the fifth is `rbTgtR_exists_rowRepr` restricted to the source's
-own terms.
-
-**The round has content.** The source holds `rbRule` and the target its encoding, and both
-fire: `rbTgtR_mem_matchQuery` is the substitution the emitted entry atom admits,
-`rbTgtR_encRule_fired` the head evaluating at it, `rbTgtR_encRule_fires` the row the round's
-post-state records, and `rbTgtR_run` the whole block — round, merge phase and trailing rebuild
-— reducing.
-
-**So the six clauses about rules have content**, which is what this witness is for.
-`rbSrcR_hrules` names the encoding the target really holds, at the index `ruleProofDecls`
-declares `@Rule_0` for, and at the substitution `rbProgram`'s own top-level `let` freezes, so
-the `Database.GlobalsInline` conjunct riding in it is not the empty substitution;
-`rbSrcR_queriesEncodable` is the source query's encodability at a query with one atom, one
-variable at `W`'s key column and no primitive among its names; `rbSrcR_headsScoped` and
-`rbSrcR_headsBuild` are the head's scope and its evaluability, the second read at the
-*target's* signature; and the two clauses about the rule's **text** land on real syntax rather
-than on an empty quantifier — `rbSrcR_noAtQuery` at the query variable `y` the atom is keyed on,
-`rbSrcR_noSet` at the one build the head runs. The globals clause is still carried a second time
-(`rbSrcR_globalsInline`) rather than left to `hrules` alone; `unionsFire_false_globals` is the
-residue without it.
-
-**The clauses about names and rows are not degenerate.** `rbTgtR_sig_mono` carries both of
-`rbSrcR`'s constructors, `A` and the *unary* `W`, onto the skolems `encodePrelude` declared —
-which is exactly the clause `cxfTgt` withdraws — and `rbTgtR_isCtor_fiatName` is the head's own
-proof. `rbTgtR_rowColumnsValued` is decided against the seven rows the state really holds, and
-`rbTgtR_noAtEnv` against the environment a top-level `let` really left: `x`, not the empty
-list. `rbTgtR_rowMerges`' two `@fView` rows take its **first** arm — the prelude's `:merge` and
-the two output columns a view row has, one of them at positive arity — so
-`rbTgtR_mergeOf_of_row` is the `:merge` carry with content and not the empty-output escape.
-`rbTgtR_readsAt` and `rbTgtR_exists_rowRepr` read both of `rbSrcR`'s terms through entries and
-through live rows, the second at positive arity over the first's, `rbTgtR_rowJoined`'s `fn` is
-pinned by the two view rows the state really holds, and `rbTgtR_viewRepr_of_rowRepr` is the way
-back at every row it holds.
-
-**The three clauses step 4's own read-back spends have content.** The `td`-level
-`Egglog.RowRepr`-to-`Egglog.ViewRepr` reading is `rbTgtR_viewRepr_of_rowRepr` again — at `td`
-this time, which is where `viewRepr_of_evalPair` reads a query variable's id — and
-`rbTgtR_envReadsAt` is the environment clause at the `(A)` a top-level `let` bound and
-`rbProgram`'s own first build wrote, which is what a **global-reading head** spends and what
-`Database.ReadsSelf` is not (`ncTgt_not_readsSelf` is at a term a *firing* built).
-The `.eq` case's two clauses are the ones **vacuous** here, and for two different reasons:
-`rbEnv` binds `x` to an application, so no global is bound to a literal
-(`rbSrcR_litGlobalsHeld`), and `rbRule`'s query is one `.expr` atom, so it carries no equality
-at all (`rbSrcR_eqLitGlobals`). Both have content elsewhere — `litGlobalsHeld_witness` at
-`glProgram`'s one `(let $g 5)`, in the domain, whose encoded run holds `5` where
-`litBuildProgram`'s bare build holds nothing (`litBuild_not_litsHeld`), and
-`eqLitGlobals_witness` at the rule whose *stored* query `Rule.resolveGlobals` really does turn
-into `(= 5 5)`.
-
-**And the three threaded invariants hold here, which is what lets them be clauses at all.**
-`FDatabase.ViewRowsRootedAll`, `FDatabase.ViewRowsColumnClosedAll` and
-`FDatabase.UFRootsUnique` are inductive invariants of the encoded run rather than facts a state
-exhibits, so adding them to a residue witnessed at a *hand-built* target risks making the
-witness false rather than merely thin. It does not: `rbTgtR_viewRowsRootedAll`,
-`rbTgtR_viewRowsColumnClosedAll` and `rbTgtR_ufRootsUnique` are all three at `rbTgtR`, decided
-off `rbTgtR_no_uf_row` — the state holds no `@UF` row and, by `rbState2_no_out_uf`, no `@UF`
-entry. They therefore hold **degenerately**, for the same arithmetic reason the two clauses
-below are vacuous, and the content they do have is elsewhere: `ncTgt_viewRowsRootedAll` is
-rootedness at a state with a live `@UF` row and `ncTgt_ufRootsUnique_instance` is root
-uniqueness at a non-reflexive reachability. Column closure has content at neither
-(`ncTgt_no_view_key_B`) and at `ccTgt` (`ccTgt_columnClosed_instance`), where the premise is
-satisfied and `ccStale_not_viewRowsColumnClosedAll` is the clause failing one firing earlier;
-no clause is weakened to give any of the three content.
-
-**Two clauses stay vacuous, and the obstruction is arithmetic rather than logical.**
-`Database.UnionsJoined` and `FDatabase.RowJoined.edge` both need a source `union`, and
-`rbProgram` asserts nothing, so there is no `@UF` entry to follow (`rbSrc_diag`,
-`rbState2_no_out_uf`). Both hold with content at `ncTgt` — `ncTgt_unionsJoined`, and
-`ncTgt_rowJoined_edge`, where `(B)` reads to `(B)` and to `(A)` through entries while both read
-to `(A)` alone through live **rows** — and `ncRule`'s encoding fires there too
-(`ncTgt_encRule_fires`). What `ncTgt` cannot supply is *this* theorem's second conjunct.
-`edge` holds there only because the rebuild re-keyed the displaced view row onto the leader,
-and the proof terms that re-keying writes put **seven** terms in `FDatabase.valueTerms`, so the
-encoded query's three variables enumerate 7³ candidates with one congruence closure each:
-measured, the kernel passes 10 GB on that enumeration alone without finishing, against 3³ = 27
-here. So the two clauses are exhibited at a state whose *round* the kernel cannot reduce and
-the round is exhibited at a state with no `union`; neither clause is known to fail anywhere,
-and no clause is weakened to keep them.
-
-`difftest correspond`'s **LOST** column — `Cong src a b` without `SameClass tgt a b`, swept
-with the diagonal included over the 87 in-domain cases, rules and runs among them — is 0,
-which is the `reads` clause measured: every source term has *some* id in the target. Asking
-for that id to be the term itself is the stronger claim the counterexample refutes
-(`Database.ReadsSelf`, `ncTgt_not_readsSelf`), and this clause does not ask it. -/
 theorem unionsJoined_fire_satisfiable :
     CmdStep rbSrcR (.run rbRuleset) (RunRules rbRuleset rbSrcR) ∧
       rbTgtR.execProgramM [Cmd.run rbRuleset, Cmd.saturate rebuildRuleset] = some rbTgtR ∧
@@ -9848,8 +8652,6 @@ theorem freshVar_inj {i j : Nat} (h : freshVar i = freshVar j) : i = j := by
   have h2 : (freshVar i).toList = (freshVar j).toList := by rw [h]
   rw [freshVar, freshVar, String.toList_append, String.toList_append] at h2
   exact toString_nat_inj (String.toList_inj.mp (List.append_cancel_left h2))
-
-
 
 /-- A binding of an environment with distinct keys is the one `lookup` finds. -/
 theorem Env.lookup_of_mem_nodup : ∀ {σ : Env} {b : Var × Term}, b ∈ σ →
@@ -10627,24 +9429,6 @@ def Pattern.fns : Pattern → List FnName
   | .eq e₁ e₂ => e₁.fns ∪ e₂.fns
   | .values vs _ as => Expr.fnsList vs ∪ Expr.fnsList as
 
-/-! #### What the `.eq` atom's membership is short of
-
-`PatternRowRead.eq` carries `i ∈ d.terms`, and it has to: `matchQuery` decides an emitted `.eq`
-atom against `FDatabase.closureF`, whose candidate universe is `terms`, so an id outside the
-list is one no comparison holds at. The two lemmas below are the halves of that obligation that
-are **theorems**, and what is left of it is exactly the third case.
-
-**The unrestricted reading of it is false**, and by design rather than by defect:
-`litBuild_not_litsHeld` is an in-domain program whose source holds `5` and whose encoded run
-holds no term at all, because `encodeBuild` emits no action for a bare leaf and `ViewRepr.lit`
-therefore carries no membership premise. So `Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms` is
-not a clause `Egglog.RowMech` can carry, and step 1's residue is the **bare-literal side of a
-`.eq`** and not an arbitrary literal: `Pattern.Grounded` excludes that shape from the program's
-text, `Pattern.GroundedAt` is what survives `Rule.resolveGlobals`, and what the surviving case
-needs is that a literal-valued *global*'s value is a term the target holds — which the encoded
-`let` records (`encodeAction` emits `.letBind v (.lit l)` and `FDatabase.addTerm` inserts it),
-and which is therefore a clause about `sd.env` rather than about `sd.terms`. -/
-
 /-- **An id a `RowRepr` gives for an application is a term the target holds.**
 `FDatabase.RowColumnsValued` — already a clause of `Egglog.UnionsFire` — puts the row's value
 column in `FDatabase.valueTerms`, hence in `terms`. -/
@@ -10683,28 +9467,6 @@ theorem Pattern.Grounded.eqLit {d : FDatabase} : ∀ {p : Pattern}, p.Grounded �
       · exact absurd hp.2 (h l)
   | .expr _, _, _, hp => by simp at hp
   | .values _ _ _, _, _, hp => by simp at hp
-
-/-! ##### And the instance that survives it, at the clause that pays for it
-
-`Pattern.Grounded.eqLit` empties `hgl` on the program's **text**, and `Cmd.QueryEncodable` is
-where the program pays for it: `Pattern.Grounded` at an `.eq` asks one side not to be a bare
-literal, so no rule the source *reads* has the shape `hgl` names. The one shape left is the one
-`Rule.resolveGlobals` **creates** — a query side that was a variable, at a global the
-environment binds to a literal — and there the target does hold the literal, because
-`encodeAction` emits `.letBind v (.lit l)` for it and `execAction`'s `letBind` case is
-`FDatabase.addTerm`.
-
-So the clause is about `sd.env`, and `Database.LitGlobalsHeld` is it: every literal a global is
-bound to is a term the target holds. Not about `sd.terms`, which is **refuted**
-(`litBuild_not_litsHeld`), and the two are not the same claim — a bare `.expr (.lit l)` build
-puts the literal in `sd.terms` and emits no action at all, while a `let` on the same literal
-emits the binder and inserts it.
-
-**The reduction is proved here and the clause is not threaded yet.** `eqLit_of_litGlobalsHeld`
-is `hgl` discharged from it at a stored rule, over `Pattern.Grounded` at the rule's own text,
-and `litGlobalsHeld_witness` is the clause with content at a program in the domain — so what is
-left of this item is the run-wide induction that carries it, in the shape
-`encStep_viewRowsRootedAll` and its siblings have, and not the choice of clause. -/
 
 /-- **A resolved expression is a bare literal only through a literal-valued global**, away from
 a text that was that literal already: `Expr.resolveGlobals` is the identity on a literal, maps
@@ -10750,95 +9512,6 @@ theorem eqLit_of_litGlobalsHeld {sd : Database} {td : FDatabase} {r : Rule}
       · obtain ⟨v, hv⟩ := exists_lit_global_of_resolveGlobals heq.2 hne
         exact hlit v l hv
 
-/-! ##### The clause with content
-
-One top-level `let` on a literal, and nothing else. `litBuildProgram`'s sibling: the same
-literal, reached by the binder instead of by a bare build, which is the whole of the difference
-`Database.LitGlobalsHeld` turns on. -/
-
-/-- `(let $g 5)`, and its constructor-free program. -/
-def glProgram : Program := [.action (.letBind "g" (.lit (.int 5)))]
-
-/-- **And it is in the domain**, `litBuildProgram_encodeDomain`'s clauses at the binder. -/
-theorem glProgram_encodeDomain : glProgram.EncodeDomain where
-  ctorsOnly := by
-    intro c hc
-    simp only [glProgram, List.mem_singleton] at hc
-    subst hc
-    trivial
-  setLegal := by decide
-  noPrim := by simp [glProgram, Program.ctors, Cmd.ctors, Action.ctors, Expr.ctors]
-  noAt := by decide +kernel
-  queryEncodable := by simp [glProgram, Cmd.QueryEncodable]
-  noLitUnion := Or.inl (by decide)
-  headsDeclared := by decide
-  aritiesAgree := by decide
-  headsScoped := by decide
-
-/-- The state the one binder reaches: the literal, and the global bound to it. -/
-def glSrc : Database :=
-  { Database.empty.addTerm (.lit (.int 5)) with env := [("g", Term.lit (.int 5))] }
-
-theorem glProgram_programStep : ProgramStep Database.empty glProgram glSrc :=
-  .cons ⟨glSrc, rfl, .refl⟩ .nil
-
-/-- The state `encode glProgram` runs to, computed. -/
-def glTgt : FDatabase := (execM (encode glProgram)).getD FDatabase.empty
-
-theorem glTgt_execM : execM (encode glProgram) = some glTgt := by
-  obtain ⟨d, hd⟩ : ∃ d, execM (encode glProgram) = some d :=
-    Option.isSome_iff_exists.mp (by decide)
-  rw [hd, glTgt, hd]
-  rfl
-
-/-- **The clause holds with content here**, and this is what separates it from the `sd.terms`
-form: the source's environment binds `$g` to `5`, the encoded block emits `.letBind "g" (.lit
-5)` — `encodeBuild` returns a leaf unchanged and adds no action — and `execAction`'s `letBind`
-case is `FDatabase.addTerm`, so the target holds `5`. `litBuild_not_litsHeld` is the same
-literal at the same domain with a bare build instead, where the target holds nothing. -/
-theorem litGlobalsHeld_witness :
-    Env.lookup "g" glSrc.env = some (Term.lit (.int 5)) ∧
-      Term.lit (.int 5) ∈ glTgt.terms ∧ glSrc.LitGlobalsHeld glTgt := by
-  have hmem : Term.lit (.int 5) ∈ glTgt.terms := by decide
-  refine ⟨rfl, hmem, fun v l hv => ?_⟩
-  obtain rfl : l = Lit.int 5 := by
-    have h : Env.lookup v [("g", Term.lit (Lit.int 5))] = some (Term.lit l) := hv
-    simp only [Env.lookup_cons, Env.lookup_nil] at h
-    split at h
-    · exact (by simpa using h : Lit.int 5 = l).symm
-    · exact absurd h (by simp)
-  exact hmem
-
-/-- **And the pattern the resolution creates is the one `hgl` names**, at this very
-environment: a query side that was a variable comes out a bare literal on both sides, which is
-the instance `Pattern.Grounded` cannot empty and `eqLit_of_litGlobalsHeld` answers. -/
-theorem glSrc_resolveGlobals_eqLit :
-    Pattern.resolveGlobals glSrc.env (Pattern.eq (Expr.var "g") (Expr.var "g"))
-      = Pattern.eq (Expr.lit (.int 5)) (Expr.lit (.int 5)) ∧
-    (Pattern.eq (Expr.var "g") (Expr.var "g")).Grounded :=
-  ⟨rfl, Or.inl (by simp)⟩
-
-/-- The same pattern as a rule, so the clause about *stored* queries has something to say. -/
-def glEqRule : Rule :=
-  { query := [Pattern.eq (Expr.var "g") (Expr.var "g")], actions := [], ruleset := "r" }
-
-/-- **`Database.EqLitGlobals` with content**, at the state `glProgram` reaches with `glEqRule`
-registered: the rule's *stored* query really is `(= 5 5)` — the shape `Pattern.Grounded`
-excludes from any rule's text and only `Rule.resolveGlobals` creates — and the clause names the
-global `$g` it resolved through, which `litGlobalsHeld_witness` then answers for. Vacuous at
-`rbTgtR`, whose rule's query carries no equality (`rbSrcR_eqLitGlobals`). -/
-theorem eqLitGlobals_witness :
-    (glEqRule.resolveGlobals glSrc.env).query
-        = [Pattern.eq (Expr.lit (.int 5)) (Expr.lit (.int 5))] ∧
-      ({ glSrc with rules := {glEqRule.resolveGlobals glSrc.env} } : Database).EqLitGlobals := by
-  refine ⟨rfl, fun r hr p hp l hpl => ?_⟩
-  obtain rfl : r = glEqRule.resolveGlobals glSrc.env := hr
-  have hp' : p ∈ [Pattern.eq (Expr.lit (Lit.int 5)) (Expr.lit (Lit.int 5))] := hp
-  obtain rfl : p = Pattern.eq (Expr.lit (Lit.int 5)) (Expr.lit (Lit.int 5)) := by simpa using hp'
-  refine ⟨"g", ?_⟩
-  rw [Pattern.eq.injEq, Expr.lit.injEq] at hpl
-  obtain ⟨rfl, -⟩ := hpl
-  rfl
 /-- **A source match is a target reading**, given the reading of the environment it evaluated
 in. Gaps (1), (2) and (3) of the residue below at one pattern: the instance need not be a
 source term (`exists_rowRepr_congOn`), a variable gets one id (`FDatabase.RowJoined.fn`,
@@ -10891,7 +9564,6 @@ theorem patternRowRead_of_matches {sd : Database} {td : FDatabase} {σ ρt : Env
                 (hcv _ hrow _ (List.mem_append_right _ List.mem_cons_self))
           | lit => exact hgl _ rfl
   | values _ _ _ _ => exact hnv.elim
-
 
 /-! #### And the head, at the target's signature
 
@@ -11413,7 +10085,6 @@ theorem unionsFire_false_encodeSig : ¬ UnionsFireWeak := by
   obtain ⟨e, he⟩ := hreads _ cxpSrc'_mem_H
   exact cxpTgt_no_viewRepr e he
 
-
 /-! ##### And the clause that kills the second one
 
 The target here is the encoder's own signature on the nose, so every clause about names holds
@@ -11450,35 +10121,6 @@ theorem cxpTgt_name_clauses :
     have hdc' : cxfSrcSig f = some dc := hdc
     rw [hnone] at hdc'
     exact absurd hdc' (by simp)
-
-
-/-! #### The globals the encoded rule was compiled through
-
-**A fourth refutation, and the clause it evades is the one about `G`.** The three above all
-turned on a *name*: a skolem the target's signature withheld, a primitive the source's query
-applied, a rebuild the encoder did not emit between a saturation's rounds. This one turns on
-the **substitution** `Egglog.UnionsFire`'s `hrules` clause names.
-
-`UnionsInv.rules` says the target holds `encodeRule i (r.substGlobals G) n` for *some* `G`, and
-`Rule.substGlobals` rewrites the rule's **query**. With nothing said about `G`, that `G` may
-inline a variable the source rule's own query binds — so the encoded query binds it no longer,
-the encoded head reads a name no substitution the enumerator offers assigns, `Expr.eval` is
-`none` there, `execLocalActions` propagates it and `fireInto` returns the accumulator. Exactly
-the shape `unionsFire_false` had, one clause further in: this witness's target signature is the
-encoder's own with `@Rule_0` added, its source rules are encodable, its rows are the ones a
-real encoded run wrote, and it still writes nothing.
-
-`Database.GlobalsInline` is the missing clause and it is not a new obligation:
-`Cmd.globalBind`'s two guards are exactly it, `globalsInline_step` carries it along the source
-run, `encStep_globals` reads it off the chain, and `FDatabase.EncOk.srcRules` already carried
-it on the soundness side. `Egglog.GlobalsMech` is how it reaches the residue —
-`Egglog.UnionsInv.rules` carries it beside `Program.GlobalsOnce`, which is what a later `let`
-cannot invalidate — and `encStep_globalsMech` is the discharge.
-
-The witness reuses `rbState2`, the state `unionsJoined_fire_satisfiable`'s own `rbTgtR` is
-built from, so the arithmetic is the same and the *only* difference is the rule: `rbSrc` with
-one rule added, and the target with that rule's encoding through a bad `G`. Everything below is
-compiled. -/
 
 /-- **The clause set the refutation below kills**: `Egglog.UnionsFire` with the
 `Database.GlobalsInline` conjunct of its `hrules` clause dropped, and the derived `:merge`
@@ -11522,9 +10164,6 @@ def gxRule : Rule :=
     actions := [Action.union (.var "y") (.app "W" [.var "y"])],
     ruleset := rbRuleset }
 
-/-- **The globals list that breaks it**: it inlines the rule's own query variable. Nothing in
-`Egglog.UnionsFireAnyG` says a `G` is one `Cmd.globalBind` produced, and this one is not —
-`rbProgram` binds `x`, not `y`. -/
 def gxG : List (Var × Expr) := [("y", .app "A" [])]
 
 /-- The encoded rule, at the counters a first rule gets. Its query reads `@AView` and `@WView`
@@ -12636,7 +11275,7 @@ theorem ruleNamesDeclared_of_mem {P : Program} {sg : Signature} :
       Program.RuleNamesDeclared sg p i
   | _, [], _, _ => trivial
   | G, c :: cs, i, h => by
-      refine ⟨?_, ruleNamesDeclared_of_mem (c.globalBind P G) cs (c.ruleStep i)
+      refine ⟨?_, ruleNamesDeclared_of_mem G cs (c.ruleStep i)
         (fun j dc hj => h j dc (by rw [ruleProofDecls]; exact List.mem_append_right _ hj))⟩
       intro r hr
       subst hr
@@ -12774,12 +11413,11 @@ theorem encReached_ufRowsForest {P : Program} (hdom : P.EncodeDomain)
       (fun c' hc' => noDecl_encodeCmd _ _ _ _ c' hc')
       (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' _ hc _ _ _ c' hc')
       (fun c' hc' => ufWriteOk_encodeCmd _ _ _ _ c' hc')
-      (fun c' hc' => noAtLet_encodeCmd hdom _ _ hc _ _ c' hc')
       (encReached_rebuildBase hdom hr).base (encReached_rebuildBase hdom hr).descend ih hb
   | @satMid _ _ R hr _ hs ih =>
     exact FDatabase.EncBase.execCmdM_ufRowsForest (encodeSig_ufName hdom) hsy htr
       (encReached_rebuildBase hdom hr).base (c := Cmd.saturate R)
-      trivial trivial trivial trivial trivial
+      trivial trivial trivial trivial
       (encReached_rebuildBase hdom hr).descend ih hs
 
 /-- **The bridge at every reached state.** -/
@@ -12798,7 +11436,6 @@ theorem encReached_entryRowsUF {P : Program} (hdom : P.EncodeDomain) {d : FDatab
       (fun c' hc' => noDecl_encodeCmd _ _ _ _ c' hc')
       (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' _ hc _ _ _ c' hc')
       (fun c' hc' => entryWriteOk_encodeCmd hdom _ _ hc _ _ c' hc')
-      (fun c' hc' => noAtLet_encodeCmd hdom _ _ hc _ _ c' hc')
       (encReached_rebuildBase hdom hr).base ih hb
   | @satMid _ _ R hr _ hs ih =>
     exact FDatabase.EncBase.execCmdM_entryRowsUF hdom (encReached_rebuildBase hdom hr).base
@@ -12821,7 +11458,6 @@ theorem encReached_ufTermsDescend {P : Program} (hdom : P.EncodeDomain) {d : FDa
       (fun c' hc' => encodedWriteLegal hdom hdom.aritiesAgree' _ hc _ _ _ c' hc')
       (fun c' hc' => ufWriteOk_encodeCmd _ _ _ _ c' hc')
       (fun c' hc' => entryWriteOk_encodeCmd hdom _ _ hc _ _ c' hc')
-      (fun c' hc' => noAtLet_encodeCmd hdom _ _ hc _ _ c' hc')
       (encReached_rebuildBase hdom hr).base (encReached_rebuildBase hdom hr).descend ih hb
   | @satMid _ _ R hr _ hs ih =>
     exact FDatabase.EncBase.execCmdM_ufTermsDescend hdom (encReached_rebuildBase hdom hr).base
@@ -13193,9 +11829,8 @@ theorem cmdStep_queriesIn {P : Program} (hdom : P.EncodeDomain) {db db' : Databa
       rw [hrules] at hs
       rcases Set.mem_insert_iff.mp hs with rfl | hs'
       · obtain ⟨hqe, hk⟩ := hdom.queryEncodable _ hc
-        refine ⟨⟨⟨Query.noValues_resolveGlobals (fun p hp => (hqe p hp).2),
-          Query.VarsKeyed.resolveGlobals hk⟩, ?_⟩, ?_, ?_⟩
-        · refine Query.ctors_resolveGlobals_noPrim hwf htb (fun p hp fk hk' => ?_)
+        refine ⟨⟨⟨(fun p hp => (hqe p hp).2), hk⟩, ?_⟩, ?_, ?_⟩
+        · intro p hp fk hk'
           refine hdom.noPrim fk (mem_program_ctors hc ?_)
           rw [Cmd.ctors]
           exact List.mem_append_left _ (List.mem_flatMap.mpr ⟨p, hp, hk'⟩)
@@ -13204,12 +11839,12 @@ theorem cmdStep_queriesIn {P : Program} (hdom : P.EncodeDomain) {db db' : Databa
           rw [Program.names]
           refine List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ?_)))
           rw [Program.vars, List.mem_dedup]
-          refine List.mem_flatMap.mpr ⟨Cmd.rule r, hc, ?_⟩
+          refine List.mem_flatMap.mpr ⟨Cmd.rule s, hc, ?_⟩
           rw [Cmd.vars]
           exact List.mem_union_iff.mpr
-            (Or.inl (Query.mem_vars_of_mem_vars_resolveGlobals hv))
+            (Or.inl hv)
         · exact ((Program.setLegal_iff_noSet (fun _ => rfl) hdom.ctorsOnly).mp
-            hdom.setLegal (Cmd.rule r) hc : Cmd.NoSet (Cmd.rule r))
+            hdom.setLegal (Cmd.rule s) hc : Cmd.NoSet (Cmd.rule s))
       · exact h s hs'
   | run R => intro r hr; exact h r (by rw [cmdStep_rules_of_run hstep] at hr; exact hr)
   | saturate R => intro r hr; exact h r (by rw [cmdStep_rules_of_saturate hstep] at hr; exact hr)
@@ -13280,96 +11915,25 @@ theorem sigIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
     (fun r hr => absurd hr (by simp [Database.empty]))
     (fun f hf => absurd hf (by simp [Database.empty, Signature.IsCtor])) hstep).2
 
-/-! #### And the third: the `.eq` case's own source-run invariant
-
-`Database.LitGlobalsHeld` answers for a literal a *global* is bound to. What says the
-bare-literal `.eq` a **stored** query carries is such a global is a fact about the source run:
-`Cmd.QueryEncodable`'s `Pattern.Grounded` excludes that shape from a rule's own *text*, so a
-stored query has it only where `Rule.resolveGlobals` wrote a literal-valued global's value into
-both sides. A later top-level `let` cannot invalidate it, because `evalTopAction` refuses one
-that rebinds — egglog's own "Shadowing is not allowed" — so the binding the invariant names is
-still the one a later state reads.
-
-`eqLit_of_substGlobals` is the two clauses spent together, at the query the *target* holds:
-`hgl` for `Egglog.patternRowRead_of_matches`, discharged from `Egglog.UnionsFire`'s own clause
-set. -/
-
-/-- **A top-level action ran as a top-level action.** `cmdStep_action_eq` with the shadowing
-guard kept, which is the whole of what the invariant below needs at a `let`. -/
-theorem cmdStep_topAction_eq {sd sd' : Database} {a : Action} (hsig : sd.sig.AllConstructors)
-    (h : CmdStep sd (.action a) sd') : evalTopAction sd a = some sd' := by
-  obtain ⟨d, hreach, hcl⟩ := h
-  have htop : evalTopAction sd a = some d := hreach
-  have hd : evalAction sd a = some d := evalAction_of_top htop
-  have heq : sd' = d := MergeClosure.eq_of_allConstructors (db := d)
-    (by rw [evalAction_sig hd]; exact hsig) hcl
-  rw [heq]
-  exact htop
-
-/-- **A binding a top-level action found survives it.** Only a `let` extends the environment
-and only at a name nothing bound (`evalTopAction`), so no lookup is rerouted. -/
-theorem evalTopAction_lookup_mono {db db' : Database} {a : Action}
-    (htop : evalTopAction db a = some db') {v : Var} {t : Term}
-    (hlk : Env.lookup v db.env = some t) : Env.lookup v db'.env = some t := by
-  have hev : evalAction db a = some db' := evalAction_of_top htop
-  rcases evalAction_eq_some hev with ⟨_, _, -, -, rfl⟩ | ⟨w, e, tS, rfl, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
-  · exact hlk
-  · rw [evalTopAction] at htop
-    split at htop
-    · exact absurd htop (by simp)
-    · rename_i hfresh
-      have hnone : Env.lookup w db.env = none :=
-        Option.not_isSome_iff_eq_none.mp (by simpa using hfresh)
-      have hne : ¬ (v = w) := fun hvw => by rw [hvw, hnone] at hlk; simp at hlk
-      show Env.lookup v ((w, tS) :: db.env) = some t
-      rw [Env.lookup_cons, if_neg hne]
-      exact hlk
-  · exact hlk
-  · exact hlk
-
-/-- **A bare-literal `.eq` in a stored query names a literal-valued global**, on the rule's own
-text: `Pattern.Grounded` makes one side a non-literal and `exists_lit_global_of_resolveGlobals`
-names the global that side resolved through. -/
-theorem exists_lit_global_of_resolveGlobals_query {sd : Database} {r : Rule}
-    (hg : ∀ p ∈ r.query, p.Grounded)
-    {p : Pattern} (hp : p ∈ (r.resolveGlobals sd.env).query) (l : Lit)
-    (heq : p = Pattern.eq (Expr.lit l) (Expr.lit l)) :
-    ∃ v, Env.lookup v sd.env = some (Term.lit l) := by
-  rw [Rule.resolveGlobals_query, Query.resolveGlobals, List.mem_map] at hp
-  obtain ⟨p₀, hp₀, rfl⟩ := hp
-  have hgp := hg p₀ hp₀
-  cases p₀ with
-  | expr e => rw [Pattern.resolveGlobals] at heq; exact absurd heq (by simp)
-  | values vs f as => rw [Pattern.resolveGlobals] at heq; exact absurd heq (by simp)
-  | eq e₁ e₂ =>
-      rw [Pattern.resolveGlobals, Pattern.eq.injEq] at heq
-      rcases hgp with hne | hne
-      · exact exists_lit_global_of_resolveGlobals heq.1 hne
-      · exact exists_lit_global_of_resolveGlobals heq.2 hne
-
-/-- **One command keeps it.** Only `Cmd.rule` extends `rules`, and its rule is the program's
-own; every other command leaves the environment binding what it bound
-(`evalTopAction_lookup_mono` at a top-level action, and the field equations elsewhere). -/
 theorem cmdStep_eqLitGlobals {P : Program} (hdom : P.EncodeDomain) {db db' : Database}
     (hsig : db.sig.AllConstructors) (h : db.EqLitGlobals) {c : Cmd} (hc : c ∈ P)
     (hstep : CmdStep db c db') : db'.EqLitGlobals := by
   cases c with
   | action a =>
-      have htop : evalTopAction db a = some db' := cmdStep_topAction_eq hsig hstep
-      have hrules : db'.rules = db.rules := evalAction_rules (evalAction_of_top htop)
+      have htop : evalAction db a = some db' := cmdStep_action_eq hsig hstep
+      have hrules : db'.rules = db.rules := evalAction_rules (htop)
       intro r hr p hp l hpl
       obtain ⟨v, hv⟩ := h r (by rw [hrules] at hr; exact hr) p hp l hpl
-      exact ⟨v, evalTopAction_lookup_mono htop hv⟩
+      exact ⟨v, by rw [evalAction_env htop]; exact hv⟩
   | rule r =>
       obtain ⟨-, henv, hrules⟩ := cmdStep_rule_fields hsig hstep
       intro s hs p hp l hpl
       rw [hrules] at hs
       rcases Set.mem_insert_iff.mp hs with rfl | hs'
       · obtain ⟨hqe, -⟩ := hdom.queryEncodable _ hc
-        obtain ⟨v, hv⟩ :=
-          exists_lit_global_of_resolveGlobals_query (fun q hq => (hqe q hq).1) hp l hpl
-        exact ⟨v, by rw [henv]; exact hv⟩
+        have hg := (hqe p hp).1
+        rw [hpl] at hg
+        simp [Pattern.Grounded] at hg
       · obtain ⟨v, hv⟩ := h s hs' p hp l hpl
         exact ⟨v, by rw [henv]; exact hv⟩
   | run R =>
@@ -13580,26 +12144,13 @@ theorem Rule.HeadScoped.mono_env {db db' : Database}
       rw [Query.bind, List.mem_union_iff] at hv ⊢
       exact hv.imp (hsub v) id) h
 
-/-- **A registered rule's head is scoped where the state stores it.** The rule the state
-holds is the declared one with its query resolved, and a variable the resolution removed is
-one the environment binds. -/
-theorem Rule.headScoped_resolveGlobals {db : Database} {s : Rule}
-    (h : Actions.Scoped s.actions (Query.vars s.query)) :
-    (s.resolveGlobals db.env).HeadScoped db := by
-  refine Actions.Scoped.mono s.actions (fun v hv => ?_) h
-  rw [Rule.resolveGlobals_query, Query.bind, List.mem_union_iff]
-  exact (Query.mem_vars_resolveGlobals db.env hv).symm
-
 /-- **A top-level action only extends the environment.** -/
 theorem evalAction_env_dom {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : ∀ v ∈ Env.dom db.env, v ∈ Env.dom db'.env := by
-  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ | ⟨w, _, t, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩
+  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
+    ⟨_, _, _, _, -, -, -, -, rfl⟩ |
+    ⟨_, _, _, _, _, -, -, -, rfl⟩
   · exact fun v hv => hv
-  · intro v hv
-    change v ∈ Env.dom ((w, t) :: db.env)
-    rw [Env.dom, List.map_cons]
-    exact List.mem_cons_of_mem _ (by rw [Env.dom] at hv; exact hv)
   · exact fun v hv => hv
   · exact fun v hv => hv
 
@@ -13618,8 +12169,7 @@ theorem cmdStep_headsScoped {P : Program} (hhs : P.HeadsScoped) {db db' : Databa
       intro r hr
       rw [hrules] at hr
       rcases Set.mem_insert_iff.mp hr with rfl | hr'
-      · exact (Rule.headScoped_resolveGlobals (hhs _ hc)).mono_env
-          (fun v hv => by rw [henv]; exact hv)
+      · exact hhs.headScoped hc db'
       · exact (h r hr').mono_env (fun v hv => by rw [henv]; exact hv)
   | run R =>
       intro r hr
@@ -13658,74 +12208,33 @@ theorem EncStep.mem {P pre suf : Program} {sd : Database} {d : FDatabase}
     {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) : ∀ c ∈ pre, c ∈ P :=
   fun _ hc => by rw [h.program]; exact List.mem_append_left _ hc
 
-/-- **The globals the chain carries are the ones the substitution may be read through**: both
-clauses, at every state of the chain, by `globalsInline_step` one block at a time. -/
-theorem encStep_globals {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
+/-- The encoder's substitution is empty throughout every reachable execution.
+No command can introduce a binding. -/
+theorem EncStep.subst_empty {P pre suf : Program} {sd : Database} {d : FDatabase}
+    {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) : G = [] := by
+  induction h with
+  | prelude _ => rfl
+  | block _ _ _ ih => exact ih
+
+/-- The empty substitution has no interpretation obligations. -/
+theorem encStep_globals {P : Program} (_hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
-    sd.GlobalsInline G ∧ P.GlobalsOnce G := by
-  induction h with
-  | prelude _ =>
-      exact ⟨by intro v e he; exact absurd he (by simp [Expr.lookupG]),
-        by intro v he; exact absurd he (by simp [Expr.lookupG])⟩
-  | @block pre' suf' sd₀ sd₁ d₀ D₀ c G' n i hs hstep _ ih =>
-      exact globalsInline_step hdom hs.program
-        (hs.src.ctorState Database.CtorState.empty
-          (fun c' hc' => hdom.ctorsOnly c' (by rw [hs.program]; exact List.mem_append_left _ hc')))
-        hs.src hstep ih.1 ih.2
+    sd.GlobalsInline G := by
+  rw [h.subst_empty]
+  intro v e he
+  simp [Expr.lookupG] at he
 
-/-- **The chain's substitution covers every global the source run has bound**, by
-`globalsCover_step` one block at a time from the empty substitution the prelude starts with.
+/-- The source starts empty and commands preserve its environment. -/
+theorem encStep_globalsCover {P : Program} (_hdom : P.EncodeDomain) {pre suf : Program}
+    {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
+    sd.GlobalsCover G := by
+  intro v hv
+  have he := h.src.env
+  simp [he, Database.empty, Env.lookup] at hv
 
-`hnodup` is what the theorem's own `hsrc` supplies (`letNames_nodup_of_programStep`), so this
-costs no new hypothesis anywhere. -/
-theorem encStep_globalsCover {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program} {sd : Database} {d : FDatabase}
-    {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) : sd.GlobalsCover G := by
-  induction h with
-  | prelude _ => exact Database.globalsCover_empty
-  | @block pre' suf' sd₀ sd₁ d₀ D₀ c G' n i hs hstep _ ih =>
-      exact globalsCover_step hs.program hstep hnodup (encStep_globals hdom hs).1 ih
-
-/-- **The encoder freezes no global.** At a top-level `let` the chain has reached, both of
-`Cmd.globalBind`'s guards pass — the first because the program the source ran binds no name
-twice, the second because the `let` evaluated and `encStep_globalsCover` carries its variables
-— so the name joins the substitution and `Rule.substGlobals` reads every later query's use of
-it through its definition.
-
-What survives in a substituted query is therefore only a global whose definition is a
-**literal**: `Expr.substGlobals` replaces `.var v` exactly when the definition is an
-application, and a definition that is not one is a literal (`Database.GlobalsInline` makes them
-closed, so a bare variable is impossible). That is the case `Expr.substGlobals`' own docstring
-keeps deliberately — a literal's class never moves, so the frozen reading is already right. -/
-theorem globalBind_letBind_of_encStep {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program} {v : Var} {e : Expr}
-    {sd sd' : Database} {d : FDatabase} {G : List (Var × Expr)}
-    (h : EncStep P pre (.action (.letBind v e) :: suf) sd d G)
-    (hstep : CmdStep sd (.action (.letBind v e)) sd') :
-    Cmd.globalBind P (.action (.letBind v e)) G = (v, e.inlineGlobals G) :: G := by
-  obtain ⟨d₀, hreach, -⟩ := hstep
-  have hev : evalAction sd (.letBind v e) = some d₀ := evalAction_of_top hreach
-  rw [evalAction] at hev
-  obtain ⟨t, ht, -⟩ := Option.map_eq_some_iff.mp hev
-  have hmem : v ∈ Program.letNames P := by
-    rw [h.program, Program.letNames_append, Program.letNames_cons_action_letBind]
-    exact List.mem_append_right _ List.mem_cons_self
-  have hgi := (encStep_globals hdom h).1
-  exact if_pos ⟨List.count_eq_one_of_mem hnodup hmem,
-    Expr.vars_inlineGlobals_nil (fun w e' hw => (hgi w e' hw).1)
-      (fun w hw => encStep_globalsCover hdom hnodup h w
-        (Expr.lookup_isSome_of_eval ht w hw))⟩
-
-/-- **`Egglog.GlobalsMech`, discharged.** The two facts the residue's `hrules` clause needs
-about the globals a rule was encoded through: the chain's own are `Database.GlobalsInline` and
-`Program.GlobalsOnce` (`encStep_globals`), and a `G` already carried keeps both across one
-source command (`globalsInline_keep`). `unionsFire_false_globals` is the residue without
-them. -/
-theorem encStep_globalsMech {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) : GlobalsMech P :=
-  ⟨fun h => ⟨(encStep_globals hdom h).1, (encStep_globals hdom h).2,
-      encStep_globalsCover hdom hnodup h⟩,
-    fun hP hpre hstate hstep hgi hgo => globalsInline_keep hdom hP hstate hpre hstep hgi hgo⟩
+theorem encStep_globalsMech {P : Program} (hdom : P.EncodeDomain) : GlobalsMech P :=
+  ⟨fun h => ⟨encStep_globals hdom h, encStep_globalsCover hdom h⟩,
+    fun hP hpre hstate hstep hgi => globalsInline_step hdom hP hstate hpre hstep hgi ⟩
 
 /-! #### The literal residue, dissolved
 
@@ -13762,87 +12271,51 @@ theorem lit_of_globalsInline_of_substGlobals {sd : Database} {G : List (Var × E
   subst hkeep
   exact absurd hcl (by simp [Expr.vars])
 
-/-! #### `Database.GlobalsCover` at the substitution a rule was encoded through
-
-`encStep_globalsCover` proves it of the `G` the chain carries, and that is where it is spent:
-the `G` a rule was encoded **through** is frozen at the command `encodeCmds` reached the rule
-at, and coverage *there* is what makes `Rule.resolveGlobals_eq_substGlobals` identify the rule
-the source stores with the rule the encoder encodes
-(`FDatabase.EncOk.stepCmd`'s `.rule` case). A later `let` extends the environment without
-extending that `G`, and it does not have to: the rule was already resolved.
-
-**What that repaired, measured.** `DiffTest.lean`'s `glob-late-eq` is `glob-lost-eq` with the
-rule declared **before** the `let`:
-
-```
-(rule ((Wrapper $g)) ((union (Wrapper $g) (Hit))))
-(let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
-```
-
-It used to report **2 LOST** — the encoder froze `$g` at the environment term while the
-specification recaptured it at firing time — and `glob-late` reported 1. Both now **agree**
-(`difftest correspond 64`, 87 agreeing, 0 LOST), because `Spec/Step.lean`'s `cmdEffect`
-resolves the globals then in scope into a rule when it registers it and `encodeCmds` threads
-`Cmd.globalBind` through the same command: specification and encoding are keyed the same way by
-construction rather than by arrival order.
-
-**And that is what egglog does.** `check_shadowing.rs` walks the command stream in order and
-`NormRule` checks a rule's pattern names in a *clone* of the accumulated names
-(`check_shadowing.rs:60-66`), so a rule processed before the `let` keeps `$g` as an ordinary
-pattern variable and `remove_globals` never rewrites it (`remove_globals.rs:183-238`); egglog's
-rule fires on **every** `Wrapper`. `glob-late-fresh` and `glob-late-head` are that measured
-against the binary — `Hit 1` and `(Hit (Bb))` — and both are corpus cases now. -/
-
 /-- **The completeness half's invariant at every state of the chain**, source and target
 together. -/
-theorem encStep_encOk {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_encOk {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
     d.EncOk P (encodeSig P) sd := by
   induction h with
   | prelude hprel => exact encOk_preludeState hdom hdom.aritiesAgree' hprel
   | @block pre' suf' sd₀ sd₁ d₀ D₀ c G' n i hs hstep hb ih =>
-    obtain ⟨hgi, hgo⟩ := encStep_globals hdom hs
+    have hgi := encStep_globals hdom hs
     exact ih.stepCmd hdom (encodedHeadSound hdom hdom.aritiesAgree' hdom.headsScoped)
       (encodedActionSound hdom hdom.aritiesAgree')
-      (encodedWriteLegal hdom hdom.aritiesAgree') hs.program hs.src hstep hgi hgo
-      (encStep_globalsCover hdom hnodup hs) hb
+      (encodedWriteLegal hdom hdom.aritiesAgree') hs.program hs.src hstep hgi
+      (encStep_globalsCover hdom hs) hb
 
 @[inherit_doc encStep_encOk]
-theorem encStep_soundTerms {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_soundTerms {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) : d.SoundTerms sd :=
-  (encStep_encOk hdom hnodup h).sound
+  (encStep_encOk hdom h).sound
 
 /-- **A view entry names a source constructor at its own key width**, at a state the run passes
 through. -/
-theorem encStep_ctorsIn {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_ctorsIn {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G)
     {f : FnName} {es : List Term} {e pf : Term}
     (hmem : Term.app (viewName f) (es ++ [e, pf]) ∈ d.terms) : (f, es.length) ∈ P.ctors := by
-  obtain ⟨as, hasrc, hcl, -⟩ := (encStep_soundTerms hdom hnodup h).1 f es e pf hmem
+  obtain ⟨as, hasrc, hcl, -⟩ := (encStep_soundTerms hdom h).1 f es e pf hmem
   rw [← hcl.length_eq]
   exact ctorsIn_of_prefixStep hdom h.mem h.src f as hasrc
 
 /-- **No `@UF` entry is keyed on a literal it does not equal**, at a state the run passes
 through. -/
-theorem encStep_ufLitsIsolated {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_ufLitsIsolated {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) : d.UFLitsIsolated := by
   intro l b pf hmem
-  exact (((encStep_soundTerms hdom hnodup h).2 _ _ _ hmem).eq_of_isLit
+  exact (((encStep_soundTerms hdom h).2 _ _ _ hmem).eq_of_isLit
     (h.src.wf Database.WF.empty).litsIsolated (Or.inl rfl)).symm
 
 /-- **And so a literal is its own `@UF` row root there.** -/
-theorem encStep_ufLitRoots {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_ufLitRoots {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) (l : Lit) :
     d.UFRowRoot (Term.lit l) :=
-  (encStep_ufLitsIsolated hdom hnodup h).ufRowRoot (encReached_eqsRefl hdom h.reached)
+  (encStep_ufLitsIsolated hdom h).ufRowRoot (encReached_eqsRefl hdom h.reached)
     (encReached_encBase hdom h.reached).inv.index
     (by rw [(encReached_encBase hdom h.reached).sig]; exact encodeSig_mergeOf_ufName hdom) l
 
@@ -13872,13 +12345,11 @@ structure EncRow (P : Program) (d : FDatabase) : Prop where
     Term.app (viewName f) (es ++ [e, pf]) ∈ d.terms → (f, es.length) ∈ P.ctors
 
 @[inherit_doc EncRow]
-theorem EncStep.encRow {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem EncStep.encRow {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) : EncRow P d :=
-  ⟨h.reached, encStep_ufLitRoots hdom hnodup h,
-    fun _ _ _ _ hmem => encStep_ctorsIn hdom hnodup h hmem⟩
-
+  ⟨h.reached, encStep_ufLitRoots hdom h,
+    fun _ _ _ _ hmem => encStep_ctorsIn hdom h hmem⟩
 
 /-- **The bundle at the middle of a `Cmd.saturate R` block** — the `R`-round fixpoint, one
 command short of the block's trailing rebuild, and the state
@@ -13888,8 +12359,7 @@ command short of the block's trailing rebuild, and the state
 from `FDatabase.EncOk.saturate_src`: a saturating source ruleset's post-state is a `RunRules`
 fixpoint and so steps to *itself*, which is what makes the target's middle state aligned with
 it and its terms sound there. -/
-theorem encStep_encRow_saturateMid {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program} {sd sd' : Database}
+theorem encStep_encRow_saturateMid {P : Program} (hdom : P.EncodeDomain) {pre suf : Program} {sd sd' : Database}
     {d tm : FDatabase} {G : List (Var × Expr)} {R : RulesetName}
     (h : EncStep P pre (Cmd.saturate R :: suf) sd d G)
     (hstep : CmdStep sd (Cmd.saturate R) sd')
@@ -13906,7 +12376,7 @@ theorem encStep_encRow_saturateMid {P : Program} (hdom : P.EncodeDomain)
       exact hcmem
   have hok : tm.EncOk P (encodeSig P) sd' :=
     FDatabase.EncOk.saturate_src (encodedHeadSound hdom hdom.aritiesAgree' hdom.headsScoped)
-      h.program h.src hstep (encStep_encOk hdom hnodup h) hs
+      h.program h.src hstep (encStep_encOk hdom h) hs
   have hreached : EncReached P tm := .satMid h.reached hcmem hs
   refine ⟨hreached, fun l => ?_, fun f es e pf hmem => ?_⟩
   · refine (?_ : tm.UFLitsIsolated).ufRowRoot (encReached_eqsRefl hdom hreached)
@@ -14003,12 +12473,11 @@ theorem encReached_mergeOf_of_row {P : Program} (hdom : P.EncodeDomain) {d : FDa
   · rfl
 
 @[inherit_doc encRow_exists_rowRepr]
-theorem encStep_exists_rowRepr {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_exists_rowRepr {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t e : Term}
     (hv : ViewRepr d.toDatabase t e) : ∃ r, RowRepr d t r :=
-  encRow_exists_rowRepr hdom (h.encRow hdom hnodup) hv
+  encRow_exists_rowRepr hdom (h.encRow hdom) hv
 
 /-- **A run's own states are chain states**, source and target advancing together. -/
 theorem encStep_encodeCmds {P : Program} :
@@ -14053,7 +12522,7 @@ theorem execM_exists_rowRepr {P : Program} {src : Database} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) {t e : Term} (hv : ViewRepr tgt.toDatabase t e) :
     ∃ r, RowRepr tgt t r :=
   let ⟨_, h⟩ := execM_encStep hsrc htgt
-  encStep_exists_rowRepr hdom (letNames_nodup_of_programStep hsrc).1 h hv
+  encStep_exists_rowRepr hdom h hv
 
 /-! ### And the reading is a function, because the state is rooted
 
@@ -14075,12 +12544,11 @@ entries and to `(A)` alone through rows. -/
 turns the row into its entry term — `ctor` forces the row's function to carry a `:merge`, since
 its output columns are not empty, and `entry` then reads the entry off `terms` — and
 `encStep_ctorsIn` is the source-side half at that entry. -/
-theorem encStep_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_ctorsIn_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G)
     {f : FnName} {es : List Term} {e pf : Term}
     (hrow : (⟨viewName f, es, [e, pf]⟩ : Row) ∈ d.rows) : (f, es.length) ∈ P.ctors :=
-  encRow_ctorsIn_of_row hdom (h.encRow hdom hnodup) hrow
+  encRow_ctorsIn_of_row hdom (h.encRow hdom) hrow
 
 /-- **The `:merge` carry, at a state the run passes through.** A live view row's function is a
 merge function, because its output columns are not empty and `FDatabase.IndexOk.ctor` would
@@ -14095,69 +12563,63 @@ theorem encStep_mergeOf_of_row {P : Program} (hdom : P.EncodeDomain) {pre suf : 
 /-- **Every id the reading produces is an `@UF` row root**, which is the whole of what
 rootedness buys: `FDatabase.ViewRowsRooted` at an application and `encStep_ufLitRoots` at a
 literal. -/
-theorem encStep_rowRepr_root {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_rowRepr_root {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t r : Term}
     (hr : RowRepr d t r) : d.UFRowRoot r := by
   cases hr with
-  | lit => exact encStep_ufLitRoots hdom hnodup h _
+  | lit => exact encStep_ufLitRoots hdom h _
   | app _ hrow =>
       exact encReached_viewRowsRooted hdom (encodeSig_isCtor_symName P)
-        (encodeSig_isCtor_transName P) h.reached _ _ (encStep_ctorsIn_of_row hdom hnodup h hrow)
+        (encodeSig_isCtor_transName P) h.reached _ _ (encStep_ctorsIn_of_row hdom h hrow)
         _ _ _ hrow
 
 /-- **One term, one id**, at a state the run passes through: `rowRepr_unique` at the merge
 fixpoint's own view-key clause. -/
-theorem encStep_rowRepr_fn {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_rowRepr_fn {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t r s : Term}
     (h₁ : RowRepr d t r) (h₂ : RowRepr d t s) : r = s :=
-  encRow_rowRepr_fn hdom (h.encRow hdom hnodup) h₁ h₂
+  encRow_rowRepr_fn hdom (h.encRow hdom) h₁ h₂
 
 /-- **The reading is the root of any id the entries record**, which is `RowRepr` and `ViewRepr`
 identified: `encReached_rowRepr_of_viewRepr` answers the entry at the root, and the reading is a
 function, so the two answers are the same term. -/
-theorem encStep_rowRepr_eq_root {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_rowRepr_eq_root {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) {t e r ρ : Term}
     (hv : ViewRepr d.toDatabase t e) (hr : RowRepr d t r)
     (hρ : d.UFRowReach e ρ) (hρr : d.UFRowRoot ρ) : ρ = r :=
-  encRow_rowRepr_eq_root hdom (h.encRow hdom hnodup) hv hr hρ hρr
+  encRow_rowRepr_eq_root hdom (h.encRow hdom) hv hr hρ hρr
 
 /-- **The derived clause, discharged.** `fn` is `rowRepr_unique` at
 `FDatabase.ViewRowUnique`; `edge` is the root argument — each side's reading is the root of the
 id its entry recorded, and an `@UF` entry edge puts the two ids in one component, whose root is
 unique. Neither clause is `Database.ViewLeader`, which the same states refute. -/
-theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_rowJoined {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)}
     (h : EncStep P pre suf sd d G) : d.RowJoined :=
-  encRow_rowJoined hdom (h.encRow hdom hnodup)
+  encRow_rowJoined hdom (h.encRow hdom)
 
 /-- **Rootedness, program-free, at a state the run passes through.** The block induction
 carries the restricted form (`encReached_viewRowsRooted`) and `encStep_ctorsIn_of_row` reads the
 restriction off the row itself, so nothing is lost by dropping it. -/
-theorem encStep_viewRowsRootedAll {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_viewRowsRootedAll {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
     d.ViewRowsRootedAll :=
   fun f as e pf hrow =>
     encReached_viewRowsRooted hdom (encodeSig_isCtor_symName P) (encodeSig_isCtor_transName P)
-      h.reached f as.length (encStep_ctorsIn_of_row hdom hnodup h hrow) as e pf hrow
+      h.reached f as.length (encStep_ctorsIn_of_row hdom h hrow) as e pf hrow
 
 /-- **The column rules' closure, program-free, at a state the run passes through.** -/
-theorem encStep_viewRowsColumnClosedAll {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) {pre suf : Program}
+theorem encStep_viewRowsColumnClosedAll {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     {sd : Database} {d : FDatabase} {G : List (Var × Expr)} (h : EncStep P pre suf sd d G) :
     d.ViewRowsColumnClosedAll :=
   fun f as e pf hrow =>
     encReached_viewRowsColumnClosed hdom (encodeSig_isCtor_transName P)
       (encodeSig_isCtor_symName P) (encodeSig_isCtor_fiatName P)
       (fun _ _ hgk hk => encodeSig_isCtor_congrName hgk hk) h.reached f as.length
-      (encStep_ctorsIn_of_row hdom hnodup h hrow) as e pf hrow
+      (encStep_ctorsIn_of_row hdom h hrow) as e pf hrow
 
 /-- **Roots are unique per class, at a state the run passes through.** -/
 theorem encStep_ufRootsUnique {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
@@ -14174,7 +12636,7 @@ theorem EncStep.envEq {P : Program} (hdom : P.EncodeDomain) {pre suf : Program}
     (h : EncStep P pre suf sd d G) : d.env = sd.env := by
   induction h with
   | prelude hprel =>
-      rw [FDatabase.execProgramM_env (actionsAreSets_encodePrelude P) hprel]; rfl
+      rw [FDatabase.execProgramM_env hprel]; rfl
   | @block pre' suf' sd₀ sd₁ d₀ D₀ c G' n i hs hstep hb ih =>
       exact envAligned_step hdom
         (by rw [hs.program]; exact List.mem_append_right _ List.mem_cons_self)
@@ -14225,12 +12687,11 @@ mechanism had to be restated one block short of the end; `EncStep` is that resta
 `encReached_*` family is the block inductions consuming it. Nothing was added to `UnionsFire`
 that a firing cannot be handed — `unionsJoined_fire_satisfiable` carries every clause at the
 witness state, and all but the two that need a source `union` non-vacuously. -/
-theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
-    (hnodup : (Program.letNames P).Nodup) : RowMech P :=
-  fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom hnodup h hv,
+theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain) : RowMech P :=
+  fun h => ⟨fun _ _ hv => encStep_exists_rowRepr hdom h hv,
     fun _ _ hr =>
       ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom h.reached).inv.index hr,
-    encStep_rowJoined hdom hnodup h,
+    encStep_rowJoined hdom h,
     (fun f hf => by
       obtain ⟨k, hk⟩ := sigIn_of_prefixStep hdom h.mem h.src f hf
       rw [(encReached_encBase hdom h.reached).sig]
@@ -14249,8 +12710,8 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
           rw [(encReached_encBase hdom h.reached).sig]
           exact encodeSig_isCtor_of_mem_ctors (fk := (f, k)) hdom hk)
         (headsBuild_of_programStep hdom h.program h.src r hr),
-    encStep_viewRowsRootedAll hdom hnodup h,
-    encStep_viewRowsColumnClosedAll hdom hnodup h,
+    encStep_viewRowsRootedAll hdom h,
+    encStep_viewRowsColumnClosedAll hdom h,
     encStep_ufRootsUnique hdom h,
     encStep_litGlobalsHeld hdom h,
     eqLitGlobals_of_prefixStep hdom h.mem h.src,
@@ -14259,7 +12720,7 @@ theorem encStep_rowMech {P : Program} (hdom : P.EncodeDomain)
     by
       intro R q sd' tm hsuf hstep hs
       subst hsuf
-      have hrow := encStep_encRow_saturateMid hdom hnodup h hstep hs
+      have hrow := encStep_encRow_saturateMid hdom h hstep hs
       exact ⟨fun _ _ hv => encRow_exists_rowRepr hdom hrow hv,
         fun _ _ hr =>
           ViewRepr.of_rowRepr_of_indexOk (encReached_encBase hdom hrow.reached).inv.index hr,
@@ -14878,12 +13339,6 @@ theorem out_uf_of_execAction {tk tk₁ : FDatabase} {D : Database} {e₁ e₂ pf
       subst hk; subst hm
       exact Or.inl ⟨pf, hout⟩
 
-/-- **One source head action and its encoded block, in lockstep.** The three shapes a
-`Action.NoSet` head has, and in each the source's writes are read back at `td'` off the block's
-own rows: a build's `Database.HoldsBuild`, and a `union`'s `set` on `@UF`.
-
-`hlink` comes out extended at a `let`, which is the whole reason the two blocks are run
-together rather than separately. -/
 theorem headAction_viewRepr_step {td' : FDatabase} {pfe : Expr} {a : Action} {m : Nat}
     {ss ss₁ : Database} {tk tk₁ : FDatabase}
     (hns : a.NoSet) (hprim : ∀ e ∈ a.buildExprs, ∀ g ∈ e.fns, Prim.ofName g = none)
@@ -14903,8 +13358,9 @@ theorem headAction_viewRepr_step {td' : FDatabase} {pfe : Expr} {a : Action} {m 
   have hvarAll : ∀ (v : Var) (t : Term), Env.lookup v ss.env = some t →
       ∀ s ∈ t.subterms, ∃ x, ViewRepr td'.toDatabase s x :=
     fun v t hv s hs => hreads s (hwf.subtermClosed t (henvT (v, t) (Env.mem_of_lookup hv)) hs)
-  rcases evalAction_eq_some hsrc with ⟨e, t, rfl, hts, rfl⟩ | ⟨v, e, t, rfl, hts, rfl⟩ |
-      ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ | ⟨_, _, _, _, _, rfl, -, -, -⟩
+  rcases evalAction_eq_some hsrc with ⟨e, t, rfl, hts, rfl⟩ |
+    ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ |
+    ⟨_, _, _, _, _, rfl, -, -, -⟩
   · -- a build
     rw [encodeAction_expr_actions] at htgt
     have hpr : ∀ g ∈ e.fns, Prim.ofName g = none :=
@@ -14926,60 +13382,6 @@ theorem headAction_viewRepr_step {td' : FDatabase} {pfe : Expr} {a : Action} {m 
       exact hlink w u j hu (by rw [henv₁] at hj; exact hj)
     · intro b hb
       exact Database.addTerm_terms ▸ Or.inl (henvT b hb)
-  · -- a head `let`
-    rw [encodeAction_letBind_actions, encodeBuild_fst] at htgt
-    obtain ⟨tka, h1, h2⟩ := execActions_append htgt
-    have hmono_a : ∀ x ∈ tka.terms, x ∈ td'.toDatabase.terms :=
-      fun x hx => hmono x ((FDatabase.execActions_lists h2).1 x hx)
-    have hsig_a : tka.sig = tk.sig := FDatabase.execActions_sig h1
-    have henv_a : tka.env = tk.env := execActions_env_of_isSet (encodeBuild_isSet e m) h1
-    have hpr : ∀ g ∈ e.fns, Prim.ofName g = none :=
-      hprim e (by rw [Action.buildExprs]; exact List.mem_cons_self)
-    have hT := holdsOut_of_execActions_encodeBuild e m h1 hmono_a
-    have hall : ∀ s ∈ t.subterms, ∃ x, ViewRepr td'.toDatabase s x :=
-      viewReprAll_of_evalSrc hlink hvarAll e hpr hT hts
-    -- the target's own binder
-    rw [execActions] at h2
-    obtain ⟨tj, hact, hrest⟩ := Option.bind_eq_some_iff.mp h2
-    rw [execActions, Option.some.injEq] at hrest
-    subst hrest
-    simp only [execAction, Option.map_eq_some_iff] at hact
-    obtain ⟨i, hi, rfl⟩ := hact
-    have hi' : e.eval tk.sig tk.env = some i := by rw [← hsig_a, ← henv_a]; exact hi
-    have hvr : ViewRepr td'.toDatabase t i :=
-      viewRepr_of_evalPair hlink e hpr (out_of_holdsOut hT) hts hi'
-    refine ⟨?_, ?_, ?_, ?_⟩
-    · intro s hs
-      rcases Database.addTerm_terms ▸ Database.terms_setEnv ▸ hs with hs' | hs'
-      · exact hreads s hs'
-      · exact hall s hs'
-    · intro x y hxy hne
-      rcases eq_of_mem_addTerm_eqs (hxy : (x, y) ∈ (ss.addTerm t).eqs) with h | h
-      · exact hjoin x y h hne
-      · exact absurd h hne
-    · intro w u j hu hj
-      have hu' : Env.lookup w ((v, t) :: ss.env) = some u := hu
-      have hj' : Env.lookup w ((v, i) :: tka.env) = some j := hj
-      rw [Env.lookup_cons] at hu' hj'
-      by_cases hw : w = v
-      · rw [if_pos hw] at hu' hj'
-        obtain rfl : u = t := (Option.some.inj hu').symm
-        obtain rfl : j = i := (Option.some.inj hj').symm
-        exact hvr
-      · rw [if_neg hw] at hu' hj'
-        exact hlink w u j hu' (by rw [henv_a] at hj'; exact hj')
-    · intro b hb
-      have hb' : b ∈ (v, t) :: ss.env := hb
-      have hgrow : ∀ u ∈ ss.terms,
-          u ∈ ({ ss.addTerm t with env := (v, t) :: ss.env } : Database).terms := by
-        intro u hu
-        rw [Database.terms_setEnv, Database.addTerm_terms]
-        exact Or.inl hu
-      rcases List.mem_cons.mp hb' with rfl | hb''
-      · change (v, t).2 ∈ _
-        rw [Database.terms_setEnv]
-        exact Database.mem_addTerm t ss
-      · exact hgrow b.2 (henvT b hb'')
   · -- a `union`
     rw [encodeAction_union_actions, encodeBuild_fst, encodeBuild_fst] at htgt
     obtain ⟨tk₂, h12, h3⟩ := execActions_append htgt
@@ -15092,10 +13494,6 @@ theorem noPrim_buildExprs_of_action_builds {sig : Signature} {a : Action}
     (h : a.Builds sig) : ∀ e ∈ a.buildExprs, ∀ g ∈ e.fns, Prim.ofName g = none := by
   cases a with
   | expr e' =>
-      intro e he g hg
-      obtain rfl : e = e' := by simpa [Action.buildExprs] using he
-      exact (h g hg).1
-  | letBind _ e' =>
       intro e he g hg
       obtain rfl : e = e' := by simpa [Action.buildExprs] using he
       exact (h g hg).1
@@ -15327,7 +13725,6 @@ theorem unionsFire_run {R : RulesetName} {sd sd' : Database} {td td' : FDatabase
       unionsFire_firing hrun henv hstate hfiat hrules hqe hcv hno hreads hjoin hrow hrj hmg
         hsc hb hback henvReads hlit heqlit hnoAtQuery hnoSet hr hR hq hev
 
-
 /-! ### The `Cmd.saturate` half, by containment
 
 A source `Cmd.saturate R` reaches an **iterate** of `RunRules R` (`RunReach.iterate`), so the
@@ -15510,706 +13907,6 @@ theorem unionsFire_saturate {R : RulesetName} {sd sd' : Database} {td td' : FDat
   rw [← hk]
   exact ⟨hjK.mono hcontT, fun t ht => (hrK t ht).imp fun _ he => ViewRepr.mono hcontT he⟩
 
-/-- **The command induction's rule-firing case. Closed** — both halves, after four
-refutations and their repairs and one specification fix, and the last `sorry` in this
-development with it.
-
-Its statement, its five closed siblings and the four refutations that fixed its hypotheses are
-in `Encoding/Correspond.lean` (`Egglog.UnionsFire`, `unionsInv_step`, `unionsFireClaim_false`)
-and above in this file (`Egglog.UnionsFireWeak`, `unionsFire_false`,
-`unionsFire_false_encodeSig`, `Egglog.UnionsFireAnyG`, `unionsFire_false_globals`). What is
-recorded here is what the route through this file settles, and — kept as the record of what was
-tried — what two earlier framings of the `Cmd.saturate` half did not.
-
-**The fourth refutation is the most recent, and it is what the `Cmd.run` case ran into.** The
-assembly below reaches step 2 — "move to `s.substGlobals G`" — and there discovers that nothing
-in the clause set said which `G` that is. The identity that lines the source's stored query up
-with the encoder's, `Rule.resolveGlobals_eq_substGlobals`, is stated under
-`Database.GlobalsInline` and `Database.GlobalsCover`, and `hrules` did not carry the first:
-`unionsFire_false_globals` runs a source rule whose query is keyed at `y` and whose
-encoding went through `gxG = [("y", (A))]`, so the encoded query binds `y` nowhere, the encoded
-head — `encodeBuild` keeps a source variable as itself — reads it anyway, `Expr.eval` is `none`,
-and `fireInto` returns the accumulator while the source's own firing asserts
-`(A) = (W (A))`. Every other clause holds at that witness: its target is `rbState2` with the
-encoded rule installed and `@Rule_0` declared, so its rows are ones a real encoded run wrote,
-its signature is the encoder's own, and its source rule's query is one the flattening handles.
-`gxSrc_not_globalsInline` is the clause it violates.
-
-**The repair is `Database.GlobalsInline` in `hrules`, and it is derived rather than assumed.**
-`Cmd.globalBind`'s two guards are exactly that clause, `globalsInline_step` carries it along the
-source run, `encStep_globals` reads it off the chain and `globalsInline_keep` moves an
-already-frozen `G` across one more source command; `Egglog.GlobalsMech` is the pair and
-`encStep_globalsMech` the discharge. `Egglog.UnionsInv.rules` carries `Program.GlobalsOnce`
-beside it — a fact about the program *text*, which is what a later `let` cannot invalidate —
-and only the `GlobalsInline` half reaches this `Prop`, since that is what a firing reads.
-`unionsJoined_fire_satisfiable` survives it and carries a conjunct of its own
-(`rbSrcR_globalsInline`, at the substitution `rbProgram`'s own `let` freezes) beside the
-`hrules` conjunct it also rides in, which is stated at that same substitution.
-
-**The route is the enumerator's own, and no general converse is wanted.**
-`execRunRules_RunRules` needs `Signature.AllConstructors`, which an encoded target fails at
-`@UF` and at every view, so the two matchers do not coincide here and a `Spec/Match.lean`-level
-converse would not close this. It is also not needed. `mem_matchQuery_of_rows` is the enumerator
-lower bound directly, over `mem_matchQuery_of_lookup` and `patternHolds_values_of_mem_rows`, and
-it asks the closure for reflexive pairs only. `ncTgt_encRule_fires` is the whole chain — rows,
-`patternHolds`, `matchQuery`, the block evaluating (`ncTgt_encRule_fired`), the head's row in
-the round's post-state — run at a **source** rule's encoding, at the state where
-`Database.ReadsSelf` is refuted (`ncTgt_not_readsSelf`) and `Database.UnionsJoined` holds
-(`ncTgt_unionsJoined`). Proved, not decided: `closureF` does not reduce in the kernel.
-
-**And the enumerator's under-firing is not the obstruction.** The specification fires once per
-*member* of a premise's congruence class and the enumerator once per row; the substitution
-wanted is the row's. In the target rule the source's own variables *are* id variables —
-`encodeQueryExpr` returns a source variable unchanged as the expression naming its e-class — so
-what the match wants is an id per source variable and the read's own two columns per generated
-pair. `ncIdSubst` is that substitution at the instance: the source rule fired at `x := (B)` and
-the encoded one at the id `(A)`, because `mergeResult` keeps `ordering-min` and the `@FView` row
-sits at the leader.
-
-**The `rows` reading is no longer missing.** `UnionsInv.readsAt` is a `terms` fact — `ViewRepr`
-ends in `Database.Out` — while every atom above wants a live row, and `RowRepr` is that reading.
-It is not the same claim at the same ids: `FDatabase.EntryRowsUF` (proved, `execM_entryRowsUF`)
-answers an entry with a row whose e-class column is only `Database.UFReach`-reachable from the
-entry's, and a parent read is keyed on its children's columns **on the nose** — there is no
-slack, because an encoded target asserts nothing (`execM_encode_eqsRefl`) and so `patternHolds`'
-congruence is the identity.
-
-**It is the same claim at the pointwise `@UF` row root, and that was the choice of tuple.**
-`encReached_viewRow_at_root` answers the entry with a live row whose e-class column *is* the
-root of the id the entry recorded; `encReached_exists_rootList` names each key column's root;
-and `encReached_viewRow_of_rowReachList` walks the whole key onto that rooted tuple in one go,
-at the very e-class column the row started with. The child column is a root because it is the
-*value* column of a live view row, which is the instance `FDatabase.ViewRowsRooted` supplies —
-and the one an arbitrary reading does not, which is what made this a choice rather than a
-lemma. `encReached_rowRepr_of_viewRepr` is the induction and `encStep_exists_rowRepr` the form
-this residue is handed.
-
-**Stated one block short of the run's end, which is where the firing happens.**
-`execM_rebuildClosed` is the obvious supplier and does not typecheck here: it takes
-`execM (encode P) = some tgt` and `UnionsFire` quantifies over the state the *next* encoded
-block starts at. That is the hazard `unionsFireClaim_false` already recorded — a clause at a
-state the encoded rule does not run at — so the mechanism was restated at the state that does
-run it rather than the hypothesis being bent to reach it. `EncReached` is the target-side
-provenance, one whole `encodeCmd` block at a time (whole, because `FDatabase.ViewRowsRooted` is
-established by the `Cmd.saturate rebuildRuleset` a block ends with and is false in the middle of
-one); `EncStep` is the same chain with the source run alongside, which is what pays the two
-clauses `EncReached` does not carry — a literal's rootness (`encStep_ufLitRoots`) and a view
-entry's key width (`encStep_ctorsIn`), both through `FDatabase.SoundTerms`. `encStep_rowMech`
-is `RowMech` discharged, and `unionsInv_step` spends it.
-
-**The provenance itself is not a hypothesis of `UnionsFire`, and must not become one.**
-`unionsJoined_fire_satisfiable` exhibits the hypotheses at `rbTgtR`, a state written by
-`execActions` rather than by `encode`, and the kernel cannot run an encoded program — so
-`EncReached rbProgram rbTgtR` is not available and an `EncReached` hypothesis would empty the
-non-vacuity check. What `UnionsFire` takes is therefore the two *derived* clauses, `RowRepr`
-at `td` and the read-back at `td'`, both of which the witness state really satisfies
-(`rbTgtR_exists_rowRepr`, `rbTgtR_viewRepr_of_rowRepr`) and at positive arity.
-
-**The forward query mirror is written.** `mem_matchQuery_encodeQuery` turns a source reading of
-a query — one `PatternRowRead` per pattern — into a substitution the *emitted* query matches at,
-over both features of `encodeQuery`. The **flattening**: `RowRead` carries an id per subterm
-position through live rows, so the reading binds the generated variables as well as the
-source's. The **fresh-variable supply**: `FreshEnv` numbers a block's generated bindings inside
-its own stretch of the counter, so two blocks' domains are disjoint (`freshVar_inj`) and their
-concatenation binds each of them; non-collision with the source's own variables is the `@`
-prefix (`atPrefix_freshVar` against `FDatabase.NoAtEnv`), which is why the source bindings can
-sit in front of the generated ones and neither shadow the other. `ncTgt_mirror` runs it at the
-instance, and lands on the substitution `ncTgt_mem_matchQuery` exhibits by hand.
-
-**The reading is written, and the three things it wanted are a derived clause.**
-`FDatabase.RowJoined` is that clause — `fn`, the reading is a function; `edge`, an `@UF` edge
-between two entry readings collapses the two row readings — threaded through `RowMech` and
-`unionsInv_step` and discharged at `EncStep` by `encStep_rowJoined`, in the shape `RowMech`
-already had and not as provenance, which would have emptied `unionsJoined_fire_satisfiable`.
-It answers all three:
-
-* **One id per source term** is `fn`, off `FDatabase.ViewRowUnique` (`encReached_viewRowUnique`)
-  and a parent read being keyed on its children's columns on the nose (`rowRepr_unique`).
-* **One id per congruence class** is `rowRepr_congOn`: the reading is constant on a `CongOn`
-  class, by induction over `Cong` with `Database.UnionsJoined`'s edge between the two *ids*
-  turned into one reading by `edge`, `rowReprList_congr` at `Cong.congr`, and
-  `Conservativity.mem_addTerms_eqs` making `withOperands` contribute only the diagonal.
-* **The pattern instance, not only a source term** is `exists_rowRepr_congOn`: the reading is
-  total on the class of any source term, so a `Matches` witness carries its instance.
-
-`patternRowRead_of_matches` is the three assembled at one pattern, over `rowRead_of_rowRepr`,
-which is `RowRepr` re-indexed on the shape of the pattern. `Prim.ofName f = none` is a
-hypothesis there and not a conclusion — `Prim.apply`'s `if-then-else` returns an operand, so
-nothing about an evaluation's *result* rules the primitive branch out — and
-`EncodeDomain.noPrim` is where a source query's names pay it.
-
-**`Database.ViewLeader` is not what closed it, and could not have been.** It is the same claim
-through entry **terms**, and it is false in general at states this development reaches
-(`chainD_not_viewLeader`): an entry a merge displaced is never removed, so `Database.Out` keeps
-reading it, and at `chainD` the ids ascend with upper bounds everywhere and no top. Through
-live **rows** the displaced row is *gone*, and a state an encoded block runs at is rooted — a
-live view row's e-class column has no outgoing `@UF` row (`encReached_viewRowsRooted`), a view
-key carries at most one row, and entry-level `@UF` reachability lands on one row root
-(`encReached_ufRowRoot_of_ufReach`). So the upper bound is a representative here and is not one
-there; `uTgt_not_viewLeader` against `uRebuilt_viewLeader` is the same bracket one rebuild
-firing apart, and `ncTgt_rowJoined_edge` is the instance: `(B)` reads to `(B)` and to `(A)`
-through entries, to `(A)` alone through rows.
-
-**What the reading owed was `hglob`, and the encoder is what paid it.** `matchQuery` reads a
-variable a *global* binds off `d.env`, so `mem_matchQuery_encodeQuery` asks the target reading
-of such a variable to be the bound value itself — `RowRepr td s s`, where
-`UnionsInv.envReadsAt` supplies only `ViewRepr td s s`. The two part company exactly when a
-later `union` moves the let-bound term's row off it: `mergeResult` keeps `ordering-min`, so
-`(let x (A))` followed by a `union` with a `Term.blt`-smaller partner leaves `x` bound to a term
-no live row is keyed at. That was a **defect in `encode`**, and it was measured:
-`DiffTest.lean`'s eight `glob-*` cases are all in `encode`'s domain and all pass against real
-egglog, and `difftest correspond 64` reported **7 LOST across 6 of them** where the whole corpus
-reported 0. `glob-lost` is the minimal one, five commands:
-
-```
-(let $g (Zz))  (Wrapper (Aa))  (union (Zz) (Aa))  (rule ((Wrapper $g)) ((Hit)))  (run 1)
-```
-
-`Term.blt` orders applications by arity, then by name, so `(Aa)` is the `ordering-min` and
-`(Zz)` is the union's loser. The source fires: `patternHolds` closes the instance
-`(Wrapper (Zz))` into `d`'s congruence and finds `(Wrapper (Aa))`, which is what egglog does
-too. The target could not: its one `@WrapperView` row was `((Aa)) ↦ (Wrapper (Aa))`, the
-emitted atom was `(= (values @v0 @v1) (@WrapperView $g))` at a frozen `$g = (Zz)`, and
-`rebuildRules`' column rule joins `@UF[@ci] ↦ (@x, @q)` and writes `@x` *into* the column, so
-rows travel **towards** a leader and never back from one. `glob-keyed` and `glob-leader` were
-the two controls that agreed throughout — a global whose key a build did write, and a global
-bound to the union's *winner*.
-
-**The fix is `Rule.substGlobals`**, and it is what egglog does by another route: a query that
-names a global is encoded as if the source had written the global's *definition* out, so the
-flattening reads the definition's own views and lands on its **current** e-class exactly as an
-ordinary query does. egglog gets the same effect from a per-global table — `remove_globals`
-desugars `(let $g e)` into a nullary function plus `(set ($g) e)` and rewrites a rule that reads
-`$g` into one that joins on `($g)` — and under `--proofs` that table's value follows the
-union-find forward (`proof_encoding.rs`'s `is_encoded_global`,
-`proof_encoding_rebuild.rs:91-94`). Reading the definition instead reaches the same class
-through the tables the `let`'s own build already wrote. `difftest correspond 64` now reports
-**0 LOST**, with all eight `glob-*` cases agreeing.
-
-So `hglob` is no longer the obstruction it was. What the residue would still have to prove at a
-`Cmd.run` is `UnionsFire` itself: the rule the target holds is `encodeRule i (s.substGlobals G) n`
-— `UnionsInv.rules` now says so — so the reading a firing has to mirror is the *substituted*
-query's, `mem_matchQuery_encodeQuery` at `Query.substGlobals G s.query`, whose globals are
-already flattened away and whose remaining variables the three clauses above answer for.
-
-**`UnionsFire` was false, and the writer was `Cmd.saturate`.** `encodeCmd` gave a source
-`.saturate R` the block `[.saturate R, .saturate rebuildRuleset]`, so the rebuild ran **once,
-after the whole saturation**, and the target's second round of `R` read the first round's rows
-un-re-keyed. The specification has no rebuild to miss — `Matches` closes over `Cong`, which
-reads `eqs` — so its round 2 saw round 1's `union` and the target's did not. Five commands, all
-of them in `encode`'s domain, and `DiffTest.lean`'s `sat-hit`:
-
-```
-(Wrapper (Zz))  (Aa)
-(rule ((Aa)) ((union (Zz) (Aa))))
-(rule ((Wrapper (Aa))) ((Hit)))
-(run-schedule (saturate (run)))
-```
-
-Round 1 fires the first rule on both sides; round 2 fires the second on the source alone, over
-the congruence `(Zz) = (Aa)` round 1 asserted, and builds `(Hit)`. In the target the union is an
-`@UF` edge — `Term.blt` makes `(Aa)` the `ordering-min` — while `@WrapperView` still sat at the
-key `[(Zz)]`, and the emitted atom for `(Wrapper (Aa))` asks for the key `[(Aa)]`. Nothing
-joined them until the trailing `Cmd.saturate rebuildRuleset`, which is after `R` has saturated.
-**Measured**: `exec P` held one `Hit` term and `execM (encode P)` held **no** `@HitView` entry
-term at all, where the same program with the `saturate` replaced by two `Cmd.run`s **agreed** —
-each round getting its own rebuild is what made the `run` form right. So
-`encode_corresponds_forward` was false there too, at `a = b = (Hit)`, and this `sorry` was a
-false obligation rather than an open one.
-
-**The repair is in `Encoding/Encode.lean`, and it is what egglog does.** egglog instruments a
-schedule node at a time: its `Run` case becomes `(seq <run> <rebuild>)`
-(`egglog/src/proofs/proof_encoding.rs:1969`) and its `Saturate` case recurses *into* the loop
-body (`:1978-1980`), so `(run-schedule (saturate R))` is instrumented to
-`(saturate (seq (run R) <rebuild>))` — a rebuild after **every** iteration, which
-`RUST_LOG=debug` prints as the schedule the loop runs. `Cmd` has no schedule nesting, so
-`allMaintenanceRules` joins the maintenance rules to each ruleset a source `Cmd.saturate` names
-as well as to `rebuildRuleset`; a round of `R` then re-keys the views the previous round moved,
-and a fixpoint of the union of the two rulesets is a fixpoint of each. `sat-hit` now agrees —
-one source `Hit`, one target `@HitView` — as do the four other `sat-*` cases, and
-`difftest correspond 64` reports 0 LOST over 87 in-domain cases. **That writer is fixed, and the
-obligation is false anyway** — for two reasons that have nothing to do with `Cmd.saturate` and
-that the `Cmd.run` half fails at too: `unionsFire_false` and `unionsFire_false_encodeSig` above.
-
-**What the corpus used to miss.** No case used a *source* `Cmd.saturate`: the only
-`Cmd.saturate` in an encoded program was the encoder's own `rebuildRuleset` one, every curated
-case ran its ruleset with `Cmd.run`, and both generators emitted
-`List.replicate (rounds + 1) (Cmd.run "")`. `difftest correspond 64` agreeing on all 78
-in-domain cases therefore measured the `Cmd.run` half and said nothing about the other. The
-`sat-*` family and `genProgram`'s `genCollapseRules` tail are what close that: five curated
-cases and, at the default 60 seeds, ten generated ones now run a source `saturate`, and with
-the repair backed out the sweep reports 13 LOST across those 13 cases.
-
-**That refutation was measured and not proved**, which is why no `unionsFire_false` ever stood
-beside `unionsFireClaim_false`, and why the corpus is where the repair is checked. Refuting a
-firing needs the enumerator's *completeness* at an encoded target — no substitution matches, so
-nothing is written — and that is `execRunRules_RunRules`, which wants
-`Signature.AllConstructors` and is unavailable at a target whose `@UF` and every `@fView` carry
-`:merge`. The kernel cannot run the encoded program either.
-
-**A valid substitution is still not a firing, and that is what refuted this.** `RuleResults` is
-a substitution *and* a block that evaluates, which is the falsity
-`mem_terms_of_ruleFired`/`mem_eqs_of_ruleFired` already cost once. `ncTgt_encRule_fired` is that
-half exhibited on the target side, and `mem_rows_execRunRules` is where the head's writes are
-read back. On the target the same gap was a *hole in the statement*: `Expr.eval` returns `none`
-at a name the signature does not make a constructor, `execLocalActions` propagates it, and
-`fireInto` answers a stuck firing by returning the accumulator unchanged — so `unionsFire_false`
-runs the encoded rule at a `td` whose signature withholds the head's skolem and the round writes
-nothing. `unionsFire_false_encodeSig` is the same conclusion at `encodeSig` itself, over a
-source query that applies a primitive, so the second missing clause is on the **source** side
-and no target-side provenance reaches it.
-
-**What the repair is, and it is now in the statement.** Five derived clauses, à la carte and
-threaded the way `Egglog.RowMech` is — never as provenance, which
-`unionsJoined_fire_satisfiable` would not survive:
-
-* the target's signature, in the form `∀ f, sd.sig.IsCtor f → td.sig.IsCtor f` and
-  `td.sig.IsCtor fiatName`. `FDatabase.EncBase`'s `sig` clause is where an encoded run has
-  them, `encodeSig_isCtor_of_mem_ctors` and `encodeSig_isCtor_fiatName` are the two readings,
-  and `sigIn_of_prefixStep` carries the source signature onto `Program.ctors`. Both are
-  decidable at `rbState2` (`rbState2_sig_mono`, `rbState2_isCtor_fiatName`), at a source
-  constructor of positive arity;
-* `td.sig.IsCtor (ruleName i)` **at the index `hrules` names**, bundled into `hrules` because
-  `ruleProofDecls` declares only the indices the encoder's own numbering reaches and
-  `encodeRule` is a function of an arbitrary one. `Egglog.RuleNameMech` is how the numbering is
-  threaded — `Program.RuleNamesDeclared` walks the program with `Cmd.ruleStep`, which
-  `encodeCmd_ruleStep` says is `encodeCmds`' own counter — and `ruleNamesDeclared_encodeSig`
-  reads it off `ruleProofDecls`;
-* `FDatabase.RowColumnsValued` at `td`, which `mem_matchQuery_of_rows` and
-  `mem_matchQuery_encodeQuery` both take: `matchQuery` draws its candidates from
-  `FDatabase.valueTerms`, so a row column outside it is a row no substitution can name.
-  `encReached_rowColumnsValued` is the discharge;
-* `FDatabase.NoAtEnv` at `td`, with `hnoAtVar` at the target reading's own variables: a
-  generated variable must not collide with a source one, which is what keeps
-  `exists_freshEnv_encodeQuery`'s block disjoint from `ρt`. `FDatabase.EncBase.noAtEnv` is the
-  discharge; the old `hglob` beside it is gone, because `matchQuery` no longer reads the
-  environment at all;
-* the source rules' encodability — `Pattern.NoValues` and `Query.VarsKeyed` and
-  `∀ fk ∈ p.ctors, Prim.ofName fk.1 = none` at every pattern of every rule `sd.rules` holds,
-  which `patternRowRead_of_matches` takes and which `Program.EncodeDomain.queryEncodable` and
-  `noPrim` pay for at the program — *through the resolution a registration performs*, since a
-  stored rule's query is `Rule.resolveGlobals`'d (`Query.noValues_resolveGlobals`,
-  `Query.VarsKeyed.resolveGlobals`, `Query.ctors_resolveGlobals_noPrim`); `Pattern.Grounded` is
-  not among them, because the resolution writes a literal-valued global's value into the query
-  and `Pattern.GroundedAt` is what the reading actually needs. This one is a **source-run**
-  invariant, since `UnionsFire` is given no program: `Database.QueriesIn` is the property and
-  `queriesIn_of_prefixStep` the
-  induction, over the commands the chain has already run.
-
-**Both refutations are accounted for, each by a different clause.** `cxfTgt_not_sigMono` is
-the first witness failing the signature clause, with every other new clause holding at it
-(`cxfSrc_queriesEncodable`, `cxfTgt_other_clauses`); `cxpSrc_not_queriesEncodable` is the
-second failing the source-rules clause, with every clause about names holding at its target
-(`cxpTgt_name_clauses`). `unionsFire_of_weak` is the implication that says what they refute —
-`Egglog.UnionsFireWeak` — is strictly the stronger claim.
-
-**What the repair lands.** Step 2 of the assembly — move the source firing to the query the
-encoder flattened — is no longer a transfer at all, and no `Matches.to_substGlobals` is needed:
-a rule is stored `Rule.resolveGlobals`'d at the environment standing when it is declared, so
-`Query.substGlobals G` has nothing left to rewrite in the query the state holds. `hrules`
-carries that identity as a conjunct rather than deriving it —
-`Rule.resolveGlobals_eq_substGlobals` needs `Database.GlobalsCover` at the environment the
-rule was *registered* at, which no later state remembers — and `unionsInv_step` discharges it
-where the rule is registered, by `Rule.substGlobals_idem`. So the source firing's own
-`ValidQuerySubst` is already at the right query.
-
-**Step 1 goes through at the rule's own query, and one of its two extra facts is now a
-clause.** Reading a firing's substitution forward through live rows is
-`patternRowRead_of_matches` at every pattern of `r.query`, at the reading `Env.mapVals` puts on
-`τ` off the row-reading clause and `ValidQuerySubst.mem_terms`; it is proved from the clauses
-above **plus two facts about `td`**. The first is that a live `@fView` row's name carries a
-`:merge`, which `RowRead.app` carries as data and `rowRead_of_rowRepr` therefore asks for: that
-is now a clause, derived off `FDatabase.IndexOk.ctor` alone — a merge-free row's output columns
-are empty and a view row's are `[e, pf]` — and discharged by `encStep_mergeOf_of_row`, in the
-shape `Egglog.RowMech` already had rather than as provenance.
-
-**The second is false as it reads, and so is the literal residue that was named as its
-replacement.** "Every id the reading gives is a term the target holds",
-`∀ t x, RowRepr td t x → x ∈ td.terms`, would put *every literal* in `td.terms`: `RowRepr.lit`
-is `RowRepr d (.lit l) (.lit l)` for an arbitrary `l`, with no premise at all. Its
-**application** half is a theorem and wants no clause — `mem_terms_of_rowRepr_app`: a
-`RowRepr.app` names a live view row `⟨viewName f, es, [r, pf]⟩` and `FDatabase.RowColumnsValued`
-— already a clause here — puts that row's value column in `td.valueTerms`, hence in
-`td.terms` (`FDatabase.mem_terms_of_mem_valueTerms`).
-
-**And `Term.lit l ∈ sd.terms → Term.lit l ∈ td.terms` is false too, which is measured.**
-`litBuild_not_litsHeld`: `litBuildProgram` is one `.action (.expr (.lit 5))`, it is **in the
-domain** (`litBuildProgram_encodeDomain`), its source holds `5`, and
-`execM (encode litBuildProgram)` holds **no term at all** — `encodeBuild` emits no action for a
-bare leaf. That is by design and not a defect: `ViewRepr.lit` carries no membership premise for
-exactly this reason, and `litBuild_forward` is the correspondence holding there. So no
-`Egglog.RowMech`-shaped clause can carry it, and the run-wide induction that was named here
-would have had nothing to prove.
-
-**What step 1's `.eq` case actually owes is one shape of pattern, and it is now the only
-thing.** `patternRowRead_of_matches` no longer takes the false clause: the `.eq` membership is
-split by the case the *reading* is in — `FDatabase.RowColumnsValued` where a side reads a row,
-the target reading's own value where a side is a variable (`mem_terms_of_rowRead`, and
-`mem_matchQuery_encodeQuery` asks for that value to be a `FDatabase.valueTerms` member anyway),
-and `hgl` where **both** sides are a bare literal of the same value. `Pattern.Grounded.eqLit`
-is `hgl` discharged on the program's text, so the surviving instance is the one
-`Rule.resolveGlobals` creates out of a *literal-valued global* — and there the target does hold
-the literal, because `encodeAction` emits `.letBind v (.lit l)` and `FDatabase.addTerm` inserts
-it. So the residue is a clause about `sd.env`, not about `sd.terms`.
-
-**And it is now the clause and not a guess.** `Database.LitGlobalsHeld` is it — every literal a
-global is bound to is a term the target holds — and `eqLit_of_litGlobalsHeld` is the reduction:
-`Pattern.Grounded` at the *rule's own text* is what `Cmd.QueryEncodable` pays for and what makes
-one side of the surviving `.eq` a variable, `exists_lit_global_of_resolveGlobals` names the
-global that side resolves through, and the clause answers for it. `litGlobalsHeld_witness` is
-the clause with content at a program in the domain — `glProgram` is one `(let $g 5)`, its
-source binds `$g` to `5` and `execM (encode glProgram)` **holds** `5`, where
-`litBuildProgram`'s bare `.expr (.lit 5)` holds nothing — and
-`glSrc_resolveGlobals_eqLit` is the pattern the resolution creates at that very environment.
-What is left of this item is the run-wide induction that carries the clause, in the shape
-`encStep_viewRowsRootedAll` and its siblings have, and not the choice of clause.
-
-**Step 3 has scaffolding now, and it spends the signature clauses.** The encoded rule has to
-**fire**: `execLocalActions td (encodeRule i (r.substGlobals G) n).1.actions τ = some _` at the
-substitution `mem_matchQuery_encodeQuery` returns. Three lemmas, in that order:
-
-* `FDatabase`'s counterpart of `evalActions_isSome_of_builds` —
-  `execActions_isSome_of_builds` and `execLocalActions_isSome_of_builds`, moved along
-  `execActions_toDatabase`, since `execAction` mirrors `evalAction` case for case. That is the
-  fold, and it was simply unwritten.
-* **`Actions.Builds` of an *encoded* head is false, and could not be otherwise.** An encoded
-  `union` is `(set @UF (ordering-max x y) (ordering-min x y, pf))`, and `if` and `ordering-gt`
-  are **primitives**, which `Expr.Evaluable` excludes by name; so the fold above is not what
-  runs an encoded block. What is `Actions.Builds` is the **source** head read at the *target's*
-  signature, and `exists_execActions_encodeBuild`/`exists_execActions_encodeAction`/
-  `exists_execActions_encodeActions` lift that, case by case, to the block `encodeAction`
-  emits — with `eval_ifGt` running the two bundled choices, which are total on their operands.
-* `exists_execLocalActions_encodeRule_head` is the two assembled at `encodeRule`, and it is
-  where the signature clauses are **spent**: `td.sig.IsCtor fiatName` on the proof column of
-  every build's view row (`eval_fiatE`), and `td.sig.IsCtor (ruleName i)` — the conjunct
-  bundled into `hrules` — on the justification a `union` or a `set` head writes, which applies
-  that one name over the emitted query's proof *variables* and nothing else
-  (`queryProofs_var`, `prim_ofName_ruleName`). Nothing is asked of a `set`'s own function name,
-  which is never evaluated.
-
-**What step 3 owed source-side is now carried, as two derived clauses.**
-`Actions.Scoped r.actions Γ` at the scope the substitution models, and
-`Actions.Builds r.actions td.sig` — the source rule's *head* being scoped and building, where
-the clause `UnionsFire` already had is about its *query*. Both are source-run invariants of
-exactly the shape the query clause is, both are now clauses of `Egglog.UnionsFire` in the
-`Egglog.RowMech` shape, and `encStep_rowMech` discharges them: `Database.HeadsScoped` with
-`headsScoped_of_prefixStep` is the first — over `Program.HeadsScoped`, which is
-`EncodeDomain.headsScoped`, and `Rule.headScoped_resolveGlobals`, since a variable
-`Rule.resolveGlobals` removed from a query is a global the environment binds
-(`Query.mem_vars_resolveGlobals`) — and `Database.HeadsBuild` with
-`headsBuild_of_programStep` is the second, read at `td.sig` through
-`Actions.Builds.mono_sig` and the signature clause. `rbSrcR_headsScoped` and
-`rbSrcR_headsBuild` are them in `unionsJoined_fire_satisfiable`, at the rule its witness
-registers and whose encoding its round fires, and `ncRule_headScoped`/`ncRule_builds` are the
-same two at the rule whose source firing the encoding cannot perform.
-
-Step 4 — the head's writes read back as `ViewRepr td'` — rides on
-`execActions_encodeBuild_app` and `holdsBuild_of_execActions`, which are proved, and on the
-**transport** above, which is: `contained_of_fired_run_block` carries a firing's writes through
-the round's fold, the round's own merge phase and the block's trailing `Cmd.saturate
-rebuildRuleset`, and `viewRepr_of_holdsBuild_fired_run_block` and `out_of_fired_run_block` are
-the build head's view row and the `union` head's `@UF` edge read back at `td'` off it. What that
-transport does *not* do is the two things below.
-
-**The shape that refuted it is gone.** It was a global `Cmd.globalBind` did *not* freeze, which
-by its two guards was one a top-level `let` binds twice (the open-definition guard only ever
-failed by cascading from such a name). `hglob` asks the target reading of that variable to be
-its own value, so `patternRowRead_of_matches` would need `RowRepr td t t`, and that was
-**false** at states an encoded run reaches. Measured, on
-
-```
-(let $g (Zz))  (let $g (Yy))  (F (Yy))  (Aa)  (union (Yy) (Aa))
-(rule ((F $g)) ((Hit)))  (run 1)
-```
-
-whose `execM (encode P)` holds `@YyView[] ↦ ((Aa), …)`, so `(Yy)` read through rows to `(Aa)`
-and not to itself. **That program no longer runs.** `Spec/Eval.lean`'s `evalTopAction` refuses a
-top-level `let` that rebinds — egglog's own "Shadowing is not allowed"
-(`egglog/src/ast/check_shadowing.rs:11-12`, `:49-50`) — so it has no `ProgramStep` and `hsrc`
-excludes it, with no tenth `Program.EncodeDomain` clause and no second reading.
-`letNames_nodup_of_programStep` is that as a fact about the program text, and
-`globalBind_letBind_of_encStep` is what it buys: at every top-level `let` the chain reaches,
-**both** guards pass, so no global is left frozen.
-
-**And `hglob` itself is gone.** `matchQuery` used to read `d.env ++ σ`, so a source variable a
-global bound was read off the environment rather than off the substitution and the target's
-reading had to agree with it there. `Spec/Match.lean`'s `ValidSubst` now takes a query's free
-variables against the **empty** environment and `Matches` reads the substitution alone, because
-the globals a rule's query mentioned were resolved into it when the rule was declared — so a
-stored query names no global and the clause has nothing to answer for
-(`mem_matchQuery_encodeQuery`). What survives of the same fact is `Pattern.GroundedAt`, and
-`Database.GlobalsInline` pays it.
-
-**And the fifth defect — the one that was a defect and not a missing clause — is repaired.**
-It was `Database.GlobalsCover` — every global the
-environment binds is one the substitution defines — at the `G` a rule was encoded **through**,
-frozen at the command `encodeCmds` reached the rule at. A top-level `let` *after* that command
-extends the environment without extending it, and `Spec/Match.lean`'s `ValidSubst` used to take
-`Pattern.freeVars p db.env` at the state the round runs at, so the source **recaptured** the
-rule's own query variable while the encoded query stayed keyed at the frozen environment term.
-
-**Measured**, `DiffTest.lean`'s `glob-late-eq`:
-
-```
-(rule ((Wrapper $g)) ((union (Wrapper $g) (Hit))))
-(let $g (Zz))  (Wrapper (Aa))  (Hit)  (union (Zz) (Aa))  (run 1)
-```
-
-reported **2 LOST** — `(Wrapper (Zz)) = (Hit)` and `(Hit) = (Wrapper (Aa))` — and `glob-late`,
-the `.expr (Hit)` head, reported 1. Both **agree** now, and so does every other case:
-`difftest correspond 64` is 87 agreeing, 0 LOST. `Spec/Step.lean`'s `cmdEffect` resolves the
-globals then in scope into a rule when it registers it, which is `remove_globals`' own step at
-`remove_globals`' own point (`egglog/src/lib.rs:2615-2617`,
-`egglog/src/ast/remove_globals.rs:183-238`), and `encodeCmds` threads `Cmd.globalBind` through
-the same command — so `Rule.resolveGlobals_eq_substGlobals` makes the source's stored query and
-the encoder's flattened query the *same* query, and coverage is spent where the rule is
-registered rather than at the round. `glob-late-fresh` and `glob-late-head` are the same
-arrival order measured against the binary — `Hit 1` and `(Hit (Bb))` — and both are corpus
-cases. **No measured counterexample stands under this `sorry` any more**: what is left is the
-structural item below.
-
-**What is left under this `sorry`.** Step 4's transport is landed
-(`contained_of_fired_run_block` and the two read-backs above), the head-block decomposition is
-landed too, and what remains of step 4 is one item, and then the assembly.
-
-* **The head-block decomposition is written.** `holdsBuild_of_execActions` takes the block one
-  head *action* emits, `execActions d (encodeBuild e m).2.1 = some d'`, and what a firing hands
-  over is `execLocalActions td (encodeRule i r n).1.actions τ`, the whole head under
-  `(@Rule_i p…)`. `holdsBuild_of_execLocalActions_encodeRule` splits the second into the first
-  — `exists_execActions_encodeAction_of_encodeActions` once per source action over
-  `encodeActions_cons_actions` and `execActions_append`, then
-  `exists_execActions_encodeBuild_of_encodeAction` once per build inside it — with the
-  environment each build ran at named: the firing's own `τ ++ td.env` extended by a prefix
-  whose domain is the head's `let`s (`execActions_env_encodeAction`, since the only `letBind`
-  an encoded block emits is the source `let`'s own binder and it comes last). That is the
-  mirror of `exists_execActions_encodeActions` run in the reading direction, and
-  `exists_step_of_mem_evalActions`/`headActions_soundTerms` are the same induction on the
-  source and the soundness sides.
-* **A head that reads a global — closed, and *locally*.** `Rule.resolveGlobals` leaves a
-  rule's *head* alone, so such a head evaluates the global to the source term
-  `td.env = sd.env` binds and keys its view row **there** rather than at an id of it. What is
-  asked of that position is therefore `ViewRepr td' u u` **for a value the environment binds**,
-  and that is not `Database.ReadsSelf`: the refutation `ncTgt_not_readsSelf` is at a term a
-  rule *firing* built, and a global's value is a term a **top-level block built**, whose
-  read-back at every subterm is `viewReprAll_self_of_execProgramM`. That is
-  `Egglog.UnionsInv.envReadsAt` — a clause the command induction already carries and proves
-  — and it is now a clause of `Egglog.UnionsFire` (`rbTgtR_envReadsAt` is it with content at
-  the witness, at the `(A)` `rbProgram`'s own first build wrote).
-
-  `viewRepr_of_evalPair` is the whole read-back at that clause: an induction over the head
-  expression whose only content is `hlink`, the two environments' agreement — one `ViewRepr`
-  per variable — with the query variables answered by step 1's reading, a global by
-  `envReadsAt`, and a head `let` by the same reading one build earlier. **Every application
-  pays for itself**, because `encodeBuild`'s naming expression *is* the source expression
-  (`encodeBuild_fst`): the target's value for `.app f args` is `.app f is` over the argument
-  values, and the row `encodeBuild` emitted for it is keyed at exactly the `is` the induction
-  has just read the arguments onto. No `FDatabase.UFRowReach` chain is walked and no run-wide
-  invariant is spent — which is the sense in which the refuted fact was "true of a row a build
-  wrote": its value column is its naming term, and nothing has moved it yet.
-
-  So the walk below is **not** what closes this item, and the paragraphs that follow are kept
-  as the record of the route that was tried.
-
-  **And the two firing lemmas were not where its provenance lived.** They take three fields of
-  `FDatabase.EncBase` and no more — `sig` (as `d.sig.IsCtor transName` and companions), `held`
-  (as `eclassRule f k ∈ d.rules` / `columnRule f k i ∈ d.rules`) and `noAtEnv` — with
-  `eclassRule_fires_of_encBase` and `columnRule_fires_of_encBase` the check that the weakening
-  is a weakening; `rules`, `shape`, `merges`, `inv`, `nounions` and `wl` a firing never reads.
-  Two of the three are `Egglog.UnionsFire` clauses already (`td.NoAtEnv`, and the signature
-  clause for `@Fiat`), and the third is `Egglog.RowMech`-shaped.
-
-  What the walk *does* rest on is three **inductive invariants** of the encoded run, and they
-  are a different thing from a bundle of facts: `FDatabase.ViewRowsRooted`,
-  `FDatabase.ViewRowsColumnClosed` and `FDatabase.UFRootsUnique`. None is a fact a state
-  exhibits — each is established by a walk from the prelude's **empty** row list
-  (`viewRowsRooted_encodeCmds`, `viewRowsColumnClosed_encodeCmds`) — so none is derivable at a
-  `td` the way the `Egglog.RowMech` clauses are; the weakening above does not do it and could
-  not. **They are threaded now**, in the program-free form the residue can be handed:
-  `FDatabase.ViewRowsRootedAll` and `FDatabase.ViewRowsColumnClosedAll` drop the restriction to
-  a program's own constructors, which `encStep_ctorsIn_of_row` reads back off the row itself, so
-  `Egglog.RowMech` carries all three and `encStep_viewRowsRootedAll`,
-  `encStep_viewRowsColumnClosedAll` and `encStep_ufRootsUnique` discharge them at
-  `Egglog.EncStep`. `viewRow_of_rowReachList_all` is the walk at that form.
-
-  **The guard survived it**, which was the risk: the three are true at `rbTgtR`, the hand-built
-  target `unionsJoined_fire_satisfiable` is witnessed at, so the extra conjuncts make the
-  witness thinner and not false. `rbTgtR_no_uf_row` is the whole reason and it is the same
-  arithmetic that makes conjuncts 12 and 14's `edge` vacuous — `rbProgram` asserts nothing, so
-  the state's union-find is empty. `ncTgt_viewRowsRootedAll` and
-  `ncTgt_ufRootsUnique_instance` are the two of them with content, at a state that holds a live
-  `@UF` row, and `ccTgt_columnClosed_instance` is the third at a state where a **column** rule
-  fired rather than the e-class rule — with `ccStale_not_viewRowsColumnClosedAll` the same
-  clause **false** one firing earlier, so it is a constraint and not a shape.
-
-  **The walk's premise was the gap, and the fact named for it is false — which is what
-  localized the item.** `viewRow_of_rowReachList_all` wants one `FDatabase.UFRowReach` chain
-  per key position out of the tuple the head's own row sits at, and what a head that reads a
-  global hands over is a *source term* per position. The fact named for that link was
-  `FDatabase.ViewRowsNamedUF` — a live view row's **value** column is
-  `FDatabase.UFRowReach`-reachable from the term that names it, which at a nullary position is
-  exactly the chain `Egglog.RowRepr td' u x` would have to supply. **It is not vacuous and it is
-  refuted**: `ncTgt_viewRowsNamedUF` is it holding with content, at `@BView() ↦ ((A), …)` named
-  by `(B)` one real `@UF` row from its value column, and `ccTgt_not_viewRowsNamedUF` is it
-  failing on the row a **column** rule writes. `columnRule` re-keys a row and leaves its value
-  column alone, so `@FView((A)) ↦ ((F (B)), …)` is named by `(F (A))` — a term the target does
-  not hold at all (`ccTgt_not_mem_FA`), so no `@UF` row can leave it — and the row is the
-  interpreter's own round's (`ccStale_columnRule_fires`).
-
-  The refutation is what said the row in question is one **this very firing** wrote, whose
-  value column *is* its naming term: `viewRepr_of_evalPair` above reads it back at the key
-  tuple it was written at, and no run-wide invariant is needed for (i) at all. The walk stays
-  where it is — it is `Database.RebuildClosed`'s `edged`/`column` mechanism, and the three
-  invariants remain `Egglog.RowMech` clauses — but step 4 no longer spends it.
-  `FDatabase.EntryRowsUF` is a different shape again: it runs from an entry term's value column
-  to a live row's at the **same** key, which is what `encReached_viewRow_at_root` spends.
-
-**The outer assembly is landed.** A `Cmd.run` at a `Database.CtorState` source has no merge
-phase — `MergeClosure.eq_of_allConstructors` — so `cmdStep_run_eq` makes the post-state the
-*function* `RunRules R sd`, whose `Database.sUnion` splits `eqs` and `terms` into the
-pre-state's and one firing's (`eqs_cases_of_cmdStep_run`, `terms_cases_of_cmdStep_run`, the
-converses of `mem_eqs_of_ruleFired` and `mem_terms_of_ruleFired`). `contained_of_run_block`
-carries the two clauses the residue holds at `td` up to `td'`, and
-`unionsFire_conclusion_of_run` is the whole `Cmd.run` conclusion out of them plus **one
-obligation per firing** — which is exactly what steps 1-4 are about.
-
-**What is left of the `Cmd.run` half, precisely.** Step 4's global-reading head is closed
-(`viewRepr_of_evalPair`), and so is step 1's `.eq` case: `eqLit_of_substGlobals` answers `hgl`
-at the patterns of `Query.substGlobals G r.query` — the query `hrules` names — from
-`Egglog.UnionsFire`'s own clause set and with no appeal to the program's text. Four cases, and
-every one lands on a global the environment binds: a side `Expr.substGlobals` rewrote is one
-`Database.GlobalsInline` binds to that very literal (`exists_lit_global_of_substGlobals`), and
-a side that was the bare literal on both already is `Database.EqLitGlobals`' own instance — the
-source-run invariant that says such a side exists only where `Rule.resolveGlobals` created it,
-since `Cmd.QueryEncodable`'s `Pattern.Grounded` excludes the shape from a rule's text and
-`evalTopAction` refuses a later `let` that would rebind the global (`cmdStep_eqLitGlobals`,
-`eqLitGlobals_of_prefixStep`). `Database.LitGlobalsHeld` then answers for the literal itself.
-
-**Both items of glue are closed, and neither cost a fact about the encoding.**
-
-* **Step 2's query identity, at the rule the state stores — a clause, and not a derivation.**
-  `Rule.resolveGlobals_eq_substGlobals` is stated under `Database.GlobalsCover`, which
-  `Egglog.UnionsFire` does not carry and *cannot* derive: `Database.GlobalsInline G` gives
-  `dom G ⊆ dom sd.env` and nothing in the other direction, and the coverage that matters is at
-  the environment the rule was **registered** at, which no later state remembers. What the
-  reading actually needs is weaker and is about the *stored* rule alone —
-  `Query.substGlobals G r.query = r.query` — so that is the conjunct `hrules` now carries,
-  beside the `Database.GlobalsInline G` it already had. `unionsInv_step` discharges it where the
-  rule is registered and nowhere else: `Rule.resolveGlobals_eq_substGlobals` there (under the
-  `Database.GlobalsCover` `encStep_globalsCover` supplies at that very command) followed by
-  `Rule.substGlobals_idem` — resolving an already-resolved rule changes nothing, because the
-  definitions `G` carries are closed. Every later command carries the pair unchanged, and
-  `rbRule_substGlobals` is the conjunct at `unionsJoined_fire_satisfiable`'s own witness, at
-  the **non-empty** `G` `rbProgram`'s top-level `let` freezes.
-* **The head's key columns as target terms — derivable, and no clause.**
-  `∀ b ∈ sd.env, b.2 ∈ td.terms` is not needed at all: `execActions_encodeBuild_app` already
-  proves every subterm of the view row term is in the block's post-state, and
-  `holdsBuild_of_execActions` was simply discarding it. `Database.HoldsBuild.keys` carries it
-  now, so `viewRepr_of_holdsBuild_fired_run_block` has lost its `hval` hypothesis and
-  `Database.out_self`'s key obligation is paid by the row's own build. `Egglog.UnionsInv.envReadsAt`
-  would not have done it — `ViewRepr` at an application ends in a `Database.Out` on the *view
-  row* term, and getting the key back out of that wants `Database.WF.subtermClosed` at `td`,
-  which is not a clause either.
-
-**And the `Cmd.run` half is landed**, at `unionsFire_run`: `unionsFire_conclusion_of_run` plus
-`unionsFire_firing` once per firing, with steps 1-4 assembled as
-`exists_mem_matchQuery_encodeQuery_of_validQuerySubst` (the reading, at the emitted query),
-`exists_fired_encodeRule` (the firing), `contained_of_fired_run_block` (the transport) and
-`headActions_viewRepr` (the head, in lockstep with the source's own block). Three pieces were
-missing and are written: `mem_vars_encodeQuery_of_argVar`, which is `mem_vars_encodeQuery` in
-the direction `Query.VarsKeyed` makes true — a source query variable sits at a key column, so
-the flattening keeps it — and with it `mem_valueTerms_idSubst`, the reading's own values being
-`FDatabase.valueTerms` members *by position* rather than by the refuted
-`∀ t x, RowRepr td t x → x ∈ td.terms`; `viewReprAll_of_evalSrc`, which reads back every
-**subterm** of what a head expression built (at a leaf the target's evaluation is not what
-answers — a variable's value is a source term the reads clause covers, a literal is its own
-id); and `headActions_viewRepr`, the lockstep, which is where a head `let` gets its `hlink`.
-
-**The two source-run clauses are threaded, and both carry content.** Each is a *source-run*
-invariant of exactly the shape `Database.QueriesIn` is — paid by a domain clause the encoder
-already has — and each is refutation-shaped rather than idle:
-
-* **the source query's variables are outside the generated namespace**
-  (`Program.EncodeDomain.noAt`). `freshVar 0` is `@v0`, so a query `(F @v0)` flattens to the
-  single atom `(@FView (@v0) (@v0) (@v1))` — the read's e-class column *is* the source variable
-  — and the encoded rule then matches only an `F`-entry whose id equals its key while the
-  source rule matches every entry. `FDatabase.NoAtEnv` is about the environment and says
-  nothing about a rule's variables; `mem_matchQuery_encodeQuery`'s `hnoAtVar` is where it is
-  spent, keeping `exists_freshEnv_encodeQuery`'s block disjoint from the reading.
-* **no `set` in a source head** (`Program.EncodeDomain.setLegal`, as `Program.noSet` through
-  `Program.setLegal_iff_noSet` at a constructor signature). A source `set f args out` builds
-  the term `f(as ++ vs)`, while `encodeAction` emits `(set @fView es (xs ++ [pf]))` — a row of
-  key width `|as|`, where `ViewRepr` at the source's term wants a view entry of key width
-  `|as| + |vs|`. So the reads clause fails at that term whenever `vs` is non-empty.
-  `Actions.Builds` admits a `set` head and says nothing about it.
-
-Both ride in `Database.QueriesIn`, which now carries four facts about a stored rule rather than
-two, so `queriesIn_of_prefixStep` pays them where it pays the other two and
-`Egglog.RowMech` carries them to the firing (`encStep_rowMech`, `unionsInv_step`). Neither is
-vacuous at the witness: `rbSrcR_noAtQuery` is the first at `rbRule`'s own query variable `y`
-and `rbSrcR_noSet` the second at its one head action, so `unionsJoined_fire_satisfiable` is
-twenty-nine conjuncts with twenty-one carrying content. `Egglog.UnionsFireWeak` and
-`Egglog.UnionsFireAnyG` drop them along with the rest, so the three refutations are untouched.
-
-**So the `Cmd.run` case of this theorem is discharged in place**, by `unionsFire_run` and
-nothing else, and the `Cmd.saturate` case — a `Cmd.saturate`'s post-state is an *iterate* of
-`RunRules` (`RunReach.iterate`) rather than one application — is `unionsFire_saturate`.
-
-**What closed the `Cmd.saturate` half is containment, not alignment.** The conclusion is
-monotone in the target (`Database.UnionsJoined.mono`, `ViewRepr.mono`), so the source's rounds
-never have to be lined up with the target's saturation: it is enough to name one target state
-that every source round can be read at and that the block's post-state contains. That state is
-the block's **middle**, `td.execCmdM (Cmd.saturate R)`, and it works because of three facts.
-
-* **A firing there lands there.** `FDatabase.runSaturateM_roundClosed` and
-  `runSaturateM_eqsRoundClosed` are the round fixpoint read on `terms` and `eqs` — the only two
-  fields `Database.Contained` and `FDatabase.toDatabase` look at — so an encoded `R`-rule
-  firing at the middle state writes nothing the middle state does not already hold. Those two
-  containments are the *whole* of what the target's program was ever spent on, which is why
-  `unionsFire_firing_at` takes them as hypotheses and `unionsFire_firing` is the `Cmd.run`
-  block's instance of the same lemma.
-* **The middle state is rebuilt.** `allMaintenanceRules` joins the maintenance rules to every
-  ruleset a source `Cmd.saturate` names, so the fixpoint of the `R`-round is a fixpoint of the
-  rebuild round too. `no_ufRowEdge_of_rowsClosed` and `viewRowsColumnClosed_of_roundFixed` are
-  stated at any such ruleset now (`Program.MaintenanceRuleset`), `Egglog.EncReached.satMid` is
-  the block induction there, and `encStep_encRow_saturateMid` is `FDatabase.RowMechAt` at it —
-  the one clause this half added to the residue.
-* **And `terms`/`eqs` is what the trailing rebuild carries**, which is exactly the field
-  `contained_of_fired_run_block` already ran on: a round *deletes* rows in its merge phase, so
-  nothing here reads `td'.rows`.
-
-**The two framings that failed are kept as the record.** Neither is a defect of the encoding;
-both are ways of asking the wrong question.
-
-**The fixpoint framing does not reach it.** The idea is that the conclusion
-names `td'`, and `FDatabase.runSaturateM_roundFixed` says a saturating run returns a state a
-further round leaves alone — so if the `Cmd.run` argument could be applied *at* the fixpoint,
-the intermediate states would only ever be a source of `Database.Contained`. The question is
-then whether an encoded `R`-rule firing *at* `td'` writes into `td'`, precisely
-`td'.runRoundM R = some td'`. **Two things stand in the way, and they are the same
-`Cmd.saturate rebuildRuleset` the block ends with.**
-
-* `td'` is the fixpoint of the **rebuild** round, not of `R`. The `R`-round fixpoint is the
-  block's *middle* state, one command earlier.
-* Identifying the two — the trailing rebuild returning its own input — is
-  `FDatabase.sameData tdmid (tdmid.runRoundM rebuildRuleset)`, a **list**-level equality, and
-  it would have to come from `tdmid.runRoundM R = some tdmid` by a step that is not available:
-  that a fixpoint of a *larger* ruleset's round is a fixpoint of a smaller one's. A round
-  deletes rows in its merge phase, so that is not monotonicity, and it is not needed — the
-  route above never claims it. **What the argument actually needs is the middle state itself**,
-  and the reason it used to look unreachable was `Egglog.EncReached` being whole blocks: at the
-  time, `FDatabase.ViewRowsRooted` was thought false in the middle of every block. It is false
-  in the middle of a `Cmd.run`'s and of a `Cmd.action`'s; it is **true** in the middle of a
-  `Cmd.saturate`'s, for the maintenance-copy reason above, and `EncReached.satMid` is that
-  correction.
-
-**And the naive round induction fails the same way.** Fixing the target at `td'` and
-inducting on the source rounds `s_j = (RunRules R)^[j] sd` works clause by clause — the two
-data clauses at `(s_j, td')` are the induction hypothesis, `s_j.rules = sd.rules` and
-`s_j.env = sd.env` carry the rule and environment clauses (`runRules_iterate_fields`), and
-every target-side clause at `td'` is `Egglog.RowMech` at `.block` — up to the one step above:
-the firing at `td'` has nowhere to land. Moving the target from `td'` to the block's middle
-state is the whole of the difference, and it costs one containment in each direction rather
-than a per-round form of any block invariant. -/
 theorem unionsJoined_fire : UnionsFire := by
   intro R c sd sd' td td' hc hstep hrun henv hstate _ hfiat hrules hqe hcv hno hreads hjoin
     hrow hrj hmg hsc hb _ _ _ _ hback henvReads hlit heqlit hnoAtQuery hnoSet hmid
@@ -16588,8 +14285,8 @@ theorem execM_viewsCover {P : Program} {src : Database} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.ViewsCover src :=
   Database.ViewsCover.of_viewJoined (execM_viewJoined hdom hsrc htgt)
     (unionsInv_execM unionsJoined_fire hdom
-      (encStep_rowMech hdom (letNames_nodup_of_programStep hsrc).1)
-      (encStep_globalsMech hdom (letNames_nodup_of_programStep hsrc).1)
+      (encStep_rowMech hdom)
+      (encStep_globalsMech hdom)
       (encReached_ruleNameMech hdom) hsrc htgt).reads
 
 @[inherit_doc execM_viewsCover]
@@ -16610,8 +14307,8 @@ theorem execM_unionsRead {P : Program} {src : Database} {tgt : FDatabase}
     (htgt : execM (encode P) = some tgt) : tgt.toDatabase.UnionsRead src :=
   unionsRead_of_viewJoined (execM_viewJoined hdom hsrc htgt)
     (execM_unionsJoined unionsJoined_fire hdom
-      (encStep_rowMech hdom (letNames_nodup_of_programStep hsrc).1)
-      (encStep_globalsMech hdom (letNames_nodup_of_programStep hsrc).1)
+      (encStep_rowMech hdom)
+      (encStep_globalsMech hdom)
       (encReached_ruleNameMech hdom) hsrc htgt)
 
 /-- **Obligation `assert`, at the encoding**, split by writer. `Database.addTerm` writes a
@@ -16648,7 +14345,6 @@ theorem encode_congr {P : Program} {src : Database} {tgt : FDatabase} (hdom : P.
     SameClass tgt.toDatabase (.app f as) (.app f bs) :=
   sameClass_congr_of_shared (execM_viewsCover hdom hsrc htgt) ha hl
 
-
 /-- **No equality is lost**: assembled from the three obligations, with `symm` free. Proved
 outright — `execM_unionsRead` was the last consumer of an open residue, and
 `unionsJoined_fire` answers it. -/
@@ -16659,36 +14355,11 @@ theorem encode_corresponds_forward {P : Program} {src : Database} {tgt : FDataba
   cong_sameClass ⟨encode_assert hdom hsrc htgt, encode_trans hdom hsrc htgt,
     encode_congr hdom hsrc htgt⟩ h
 
-/-- **The correspondence, at iff strength and with no `sorry` under it.** The encoding
-provably neither loses an equality nor invents one: `#print axioms` reports
-`[propext, Classical.choice, Quot.sound]` for this theorem, for `encode_corresponds_forward`
-and for `encode_corresponds_complete`. `unionsJoined_fire` was the last open obligation and
-`unionsFire_saturate` closed it.
-
-`difftest correspond 64` runs exactly this claim over the 87
-in-domain cases — and over the twenty probes when they are named — through `sameClassF` and
-`closureF`, and reports 87 agreeing, 0 LOST, 0 INVENTED and `link-diff` 0 — the last is what
-says the swept relation is this one.
-
-**The eight `glob-*` cases are the ones that measure the globals.** A `let`-bound global read
-from a rule's **query**, and a `union` that makes the bound term the loser: the encoding used to
-ask for a live `@FView` row keyed at a term the rebuild's column rules only ever carry rows
-*away* from, and six of them reported 7 LOST — this theorem's own conclusion failing at an
-`execM` run. `Rule.substGlobals` is the repair (`unionsJoined_fire`'s `hglob` paragraph), and
-all eight agree now, the `glob-keyed` and `glob-leader` controls included.
-
-`EncodeDomain` is still needed: outside it `encode` is not defined for the program at all —
-a `:merge` declaration has no table triple to emit, and a source name in the generated
-namespace collides with one. `Rebuilt` is *not* a hypothesis: it is a postcondition of the
-specification's rebuild command (`cmdStep_rebuilt`), and the hypothesis here names an
-`execM` target, so what both halves lean on is the interpreter's own `mergeSaturateF`
-fixpoint instead.
-
-**Stated at the source's e-nodes**, which is where the encoding is faithful and where the
-corpus sweep measures it. The two membership hypotheses cost the forward direction nothing —
-`Cong src a b` implies both — and the backward direction cannot do without them:
-`encode_corresponds_invents_enode` refutes the unrestricted `iff` at the witness program
-`Encoding/Correspond.lean` keeps for it. -/
+/-- Source congruence agrees with the encoded target's equivalence on source e-nodes.
+The domain supplies constructor, naming, arity, query, and head-scope conditions. The
+source starts empty, and successful target execution includes the required rebuilds.
+Membership is necessary for the reverse implication: the target can contain generated
+terms that were never source e-nodes. -/
 theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
     (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
     (htgt : execM (encode P) = some tgt) (a b : Term) (ha : a ∈ src.terms)

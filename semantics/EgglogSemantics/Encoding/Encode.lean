@@ -1,3 +1,4 @@
+import EgglogSemantics.Encoding.Subst
 import EgglogSemantics.Proofs.Step
 import EgglogSemantics.Tests.Egg
 
@@ -8,11 +9,9 @@ M11. `encode : Program → Program` rewrites a source program so that built-in
 congruence disappears and every equality is an entry some rule wrote. Designed in
 `egglog/src/proofs/proof_encoding.md` and implemented in `egglog/src/proofs/`.
 
-**Parked.** The encoder below is all that survives: the theorems it was written for are
-deleted, and `ENCODING.md` records what they said and the two defects that sank them.
-
-The fragment is `PLAN.md`'s: **constructors only, no containers, no delete/subsume,
-no schedules**. `Program.EncodeDomain` states it.
+`Encoding/Complete.lean` proves the correspondence theorem for `Program.EncodeDomain`.
+The source fragment has constructors, queries, builds, unions, and runs, with no let
+bindings, containers, deletion, subsumption, or nested schedules.
 
 ## What the encoding does
 
@@ -320,7 +319,6 @@ def Pattern.ctors : Pattern → List (FnName × Nat)
 /-- `Expr.ctors` over an action. A `set`'s own function counts: it names a view. -/
 def Action.ctors : Action → List (FnName × Nat)
   | .expr e => e.ctors
-  | .letBind _ e => e.ctors
   | .union e₁ e₂ => e₁.ctors ++ e₂.ctors
   | .set f args out => (f, args.length) :: (Expr.ctorsList args ++ Expr.ctorsList out)
 
@@ -336,40 +334,6 @@ def Cmd.ctors : Cmd → List (FnName × Nat)
 entry. -/
 def Program.ctors (P : Program) : List (FnName × Nat) := (P.flatMap Cmd.ctors).dedup
 
-/-! ### Globals
-
-**What a top-level `let` is, and why a query cannot read one off the environment.**
-
-egglog desugars `(let $g e)` into a nullary function plus a `set` —
-`(function $g () T :no-merge :unextractable :internal-let)` then `(set ($g) e)`
-(`egglog/src/ast/remove_globals.rs:92-129`, confirmed with `egglog --mode desugar`) — and then
-rewrites every rule that *reads* `$g` into one that **joins** on that function:
-`(rule ((Wrapper $g)) …)` becomes `(rule ((Wrapper ($g))) …)`, one atom more
-(`remove_globals.rs:183-238`, and the design at `:34-44`). Under `--proofs` the function is
-`:internal-let`, so `output_is_eclass` holds of it and its view takes the **congruence** merge
-and the e-class rebuild (`proof_encoding.rs:724-733`, `proof_encoding_rebuild.rs:91-94`). The
-point of all of it is that the global's stored value **follows the union-find forward**, and
-nothing stays keyed at the term the `let` froze.
-
-Here the same effect is had without a table: the encoder carries each global's **definition**,
-already closed, and a query that names the global is encoded as if the source had written that
-definition out. The read is then the ordinary flattening — one view atom per subterm of the
-definition — and it lands on the definition's *current* e-class for exactly the reason an
-ordinary query does, because the rebuild keeps those views canonical. What egglog gets from a
-per-global table, this gets from the tables the `let`'s own build already wrote.
-
-**Only a top-level `let` is a global.** egglog leaves a rule-local and a block-local `let`
-local (`remove_globals.rs:132-137`), and only later reads are rewritten — a rule declared
-*before* the `let` keeps its `$g` as an ordinary pattern variable there, which is why the scope
-is threaded along the program (`Cmd.globalBind`) rather than read off the whole of it.
-
-**A rule head is not rewritten**, where egglog's is. egglog has no binding left to read, so a
-head naming `$g` must go through the query; here the `Action.letBind` the encoded block keeps
-binds the head to the very term the *source* head reads from its own environment, and the entry
-that head writes is then carried to the leader by the rebuild's column rules — the direction
-that works. The direction that does not is a **query** keyed at a frozen non-leader, and that
-is the one the substitution below removes. -/
-
 /-- The first definition `G` gives `v`, if any. Innermost first, as `Env.lookup` is, so a
 `let` that rebinds a name shadows the earlier one on both sides. -/
 def Expr.lookupG (v : Var) : List (Var × Expr) → Option Expr
@@ -378,10 +342,6 @@ def Expr.lookupG (v : Var) : List (Var × Expr) → Option Expr
 
 mutual
 
-/-- **Inline every global**, used to close a `let`'s expression before it is stored. The
-definitions in `G` are already closed, so one pass suffices and no recursion into the
-substituted expression is needed. Closure is what makes a stored definition immune to a later
-`let` rebinding a name it mentions. -/
 def Expr.inlineGlobals (G : List (Var × Expr)) : Expr → Expr
   | .lit l => .lit l
   | .var v => (Expr.lookupG v G).getD (.var v)
@@ -435,18 +395,6 @@ end
 
 mutual
 
-/-- **Inline every global a query names**, which is the substitution a query takes. The
-definitions are closed, so one pass suffices; it is `Expr.inlineGlobals` at a query rather than
-at a `let`, and the two agree because `Cmd.globalBind` closes what it stores.
-
-A definition that is not an application is a **literal**, and substituting it turns
-`.expr (.var $g)` into a bare-literal pattern — the shape `Pattern.Grounded` excludes and
-`encodeQueryExpr` emits no atom for. That is paid rather than avoided: `Pattern.GroundedAt` is
-the semantic clause the correspondence actually needs, and a substituted literal satisfies it
-because the source's own environment binds the global to that very term
-(`Database.GlobalsInline.groundedAt_substGlobals`). Declining the substitution instead would
-make the substituted query differ from `Spec/Step.lean`'s `Rule.resolveGlobals`, which is what
-pairs a stored source rule with its program text. -/
 def Expr.substGlobals (G : List (Var × Expr)) : Expr → Expr
   | .lit l => .lit l
   | .var v => (Expr.lookupG v G).getD (.var v)
@@ -484,52 +432,10 @@ def Rule.substGlobals (G : List (Var × Expr)) (r : Rule) : Rule :=
 @[simp] theorem Rule.substGlobals_ruleset (G : List (Var × Expr)) (r : Rule) :
     (r.substGlobals G).ruleset = r.ruleset := rfl
 
-/-- The names a top-level `let` binds, with repeats: `Program.letNames` counted at `v` is how
-many times `v` is bound. -/
-def Program.letNames (P : Program) : List Var :=
-  P.filterMap fun c => match c with | .action (.letBind v _) => some v | _ => none
-
-/-- **The globals in scope after a command**, over the program `P` the command belongs to.
-
-A top-level `let` adds its name bound to its own expression with the earlier globals inlined,
-under two guards. **Neither ever fires along a run** — `globalBind_letBind_of_encStep` proves
-both pass at every top-level `let` an `EncStep` chain reaches — and that is what
-`Database.GlobalsCover` records and `Rule.resolveGlobals_eq_substGlobals` spends: the encoder
-substitutes every global the source's environment binds, so the query it flattens is the query
-`Spec/Step.lean` resolved into the rule when it registered it.
-
-* **`P` binds the name exactly once.** `Spec/Eval.lean`'s `evalTopAction` refuses a top-level
-  `let` that rebinds — egglog's own "Shadowing is not allowed" (`check_shadowing.rs`) — so a
-  program that rebinds has no `ProgramStep` at all, and `letNames_nodup_of_programStep` is that
-  as a fact about the text. The guard is kept because `Cmd.globalBind` is a function of the
-  program and not of a run.
-* **The inlined expression is closed.** That is what makes a stored definition mean the same
-  thing at every later state; it holds whenever the `let`'s own free variables are globals
-  already stored, which is whenever the source's `let` evaluates at all
-  (`Expr.vars_inlineGlobals_nil` at `Database.GlobalsCover`). -/
-def Cmd.globalBind (P : Program) : Cmd → List (Var × Expr) → List (Var × Expr)
-  | .action (.letBind v e), G =>
-      if P.letNames.count v = 1 ∧ (e.inlineGlobals G).vars = [] then
-        (v, e.inlineGlobals G) :: G
-      else G
-  | _, G => G
-
 /-- Every definition the substitution carries is closed. -/
 def Expr.ClosedG (G : List (Var × Expr)) : Prop :=
   ∀ v e, Expr.lookupG v G = some e → e.vars = []
 
-/-- **The names the substitution carries are ones the program binds once.**
-`Cmd.globalBind`'s first guard, as a property of the pair `(P, G)` — about the program text
-alone, so it moves along the source run untouched. -/
-def Program.GlobalsOnce (P : Program) (G : List (Var × Expr)) : Prop :=
-  ∀ v, Expr.lookupG v G ≠ none → P.letNames.count v = 1
-
-/-- **The environment realizes the substitution.** Every definition the encoder carries is
-closed and evaluates to the term the source's own environment binds the name to.
-
-Closedness is what makes it survive: a stored definition means the same thing at every later
-state, whatever a later `let` rebinds. `Cmd.globalBind` is what establishes it, and its two
-guards are exactly this clause's two conjuncts. -/
 def Database.GlobalsInline (src : Database) (G : List (Var × Expr)) : Prop :=
   ∀ v e, Expr.lookupG v G = some e →
     e.vars = [] ∧ (∀ fk ∈ e.ctors, Prim.ofName fk.1 = none) ∧
@@ -557,9 +463,6 @@ theorem Database.GlobalsInline.of_eq {src src' : Database} {G : List (Var × Exp
     src'.GlobalsInline G :=
   h.mono_src (fun _ _ he => by rw [hsig]; exact he) (fun _ _ hv => by rw [henv]; exact hv)
 
-/-- **The substitution defines every global the run has bound.** The invariant that says
-`Cmd.globalBind` declined nothing, and the other half of what makes the encoder's substitution
-and `Spec/Step.lean`'s `Rule.resolveGlobals` the same step. -/
 def Database.GlobalsCover (sd : Database) (G : List (Var × Expr)) : Prop :=
   ∀ v, (Env.lookup v sd.env).isSome → Expr.lookupG v G ≠ none
 
@@ -694,6 +597,14 @@ theorem Rule.resolveGlobals_eq_substGlobals {src : Database} {G : List (Var × E
     (hgi : src.GlobalsInline G) (hcov : src.GlobalsCover G) (r : Rule) :
     r.resolveGlobals src.env = r.substGlobals G := by
   rw [Rule.resolveGlobals, Rule.substGlobals, Query.resolveGlobals_eq_substGlobals hgi hcov]
+
+/-- A substitution interpreted by an empty context cannot replace a query variable. -/
+theorem Rule.substGlobals_eq_of_empty_env {src : Database} {G : List (Var × Expr)}
+    (hgi : src.GlobalsInline G) (henv : src.env = []) (r : Rule) : r.substGlobals G = r := by
+  have hc : src.GlobalsCover G := by
+    intro v hv
+    simp [henv, Env.lookup] at hv
+  rw [← Rule.resolveGlobals_eq_substGlobals hgi hc, henv, Rule.resolveGlobals_nil]
 
 /-! #### And resolving an already-resolved rule changes nothing
 
@@ -1046,8 +957,6 @@ a `union` contributes its pair *both ways* to the propositions of the action it 
 so the edge is justified whichever endpoint `ordering-max` picks. -/
 def encodeAction (pf : Expr) : Action → Nat → List Action × Nat
   | .expr e, n => match encodeBuild e n with | (_, as, n₁) => (as, n₁)
-  | .letBind v e, n =>
-      match encodeBuild e n with | (x, as, n₁) => (as ++ [.letBind v x], n₁)
   | .union e₁ e₂, n =>
       match encodeBuild e₁ n with
       | (x₁, as₁, n₁) =>
@@ -1261,7 +1170,7 @@ Walks the **program** rather than `Program.srcRules`, because the arity is read 
 def ruleProofDecls (P : Program) : List (Var × Expr) → Program → Nat → Program
   | _, [], _ => []
   | G, c :: cs, i =>
-      c.proofDeclOf G i ++ ruleProofDecls P (c.globalBind P G) cs (c.ruleStep i)
+      c.proofDeclOf G i ++ ruleProofDecls P G cs (c.ruleStep i)
 
 /-- The proof vocabulary: three fixed heads and the two arity-indexed families.
 
@@ -1317,13 +1226,13 @@ def encodeCmd (G : List (Var × Expr)) : Cmd → Nat → Nat → Program × Nat 
   | .saturate R, n, i => ([.saturate R, .saturate rebuildRuleset], n, i)
   | .decl _ _, n, i => ([], n, i)
 
-/-- `encodeCmd` over a program, carrying the globals a top-level `let` adds. -/
+/-- `encodeCmd` over a program, threading generated-variable and rule counters. -/
 def encodeCmds (P : Program) : List (Var × Expr) → Program → Nat → Nat → Program × Nat × Nat
   | _, [], n, i => ([], n, i)
   | G, c :: cs, n, i =>
       match encodeCmd G c n i with
       | (p, n₁, i₁) =>
-          match encodeCmds P (c.globalBind P G) cs n₁ i₁ with
+          match encodeCmds P G cs n₁ i₁ with
           | (p', n₂, i₂) => (p ++ p', n₂, i₂)
 
 /-- **The encoding.** -/
@@ -1482,10 +1391,6 @@ end
 theorem encodeAction_expr_actions (pf : Expr) (e : Expr) (n : Nat) :
     (encodeAction pf (.expr e) n).1 = (encodeBuild e n).2.1 := rfl
 
-theorem encodeAction_letBind_actions (pf : Expr) (v : Var) (e : Expr) (n : Nat) :
-    (encodeAction pf (.letBind v e) n).1
-      = (encodeBuild e n).2.1 ++ [.letBind v (encodeBuild e n).1] := rfl
-
 theorem encodeAction_union_actions (pf : Expr) (e₁ e₂ : Expr) (n : Nat) :
     (encodeAction pf (.union e₁ e₂) n).1
       = (encodeBuild e₁ n).2.1 ++ (encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1 ++
@@ -1506,13 +1411,8 @@ theorem encodeActions_cons_actions (pf : Expr) (a : Action) (as : List Action) (
 /-- **A source `union` becomes a `set`.** This is the case the whole statement rests on. -/
 theorem encodeAction_unionFree (pf : Expr) : ∀ (a : Action) (n : Nat),
     ∀ b ∈ (encodeAction pf a n).1, b.UnionFree := by
-  rintro (e | ⟨v, e⟩ | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n b hb
+  rintro (e | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n b hb
   · exact encodeBuild_unionFree e n b (encodeAction_expr_actions .. ▸ hb)
-  · rw [encodeAction_letBind_actions] at hb
-    rcases List.mem_append.mp hb with h | h
-    · exact encodeBuild_unionFree e n b h
-    · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-      rcases h with rfl; trivial
   · rw [encodeAction_union_actions] at hb
     rcases List.mem_append.mp hb with h | h
     · rcases List.mem_append.mp h with h' | h'
@@ -1651,7 +1551,7 @@ theorem encodeCmds_cons_fst (P : Program) (G : List (Var × Expr)) (c : Cmd) (cs
     (n i : Nat) :
     (encodeCmds P G (c :: cs) n i).1
       = (encodeCmd G c n i).1 ++
-        (encodeCmds P (c.globalBind P G) cs (encodeCmd G c n i).2.1
+        (encodeCmds P G cs (encodeCmd G c n i).2.1
           (encodeCmd G c n i).2.2).1 := rfl
 
 /-- Every command the encoding of one source command emits is union-free. -/
@@ -1782,7 +1682,6 @@ def Pattern.varsOf : Pattern → List Var := Pattern.vars
 /-- The variables an action mentions, binders included. -/
 def Action.vars : Action → List Var
   | .expr e => e.vars
-  | .letBind v e => v :: e.vars
   | .union e₁ e₂ => e₁.vars ∪ e₂.vars
   | .set _ args out => Expr.varsList args ∪ Expr.varsList out
 
@@ -1872,27 +1771,7 @@ def Pattern.ArgVar (v : Var) : Pattern → Prop
   | .eq e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
   | .values vs _ as => Expr.ArgVarList v vs ∨ Expr.ArgVarList v as
 
-/-- **Every variable the query mentions sits at a key column.** The condition under which the
-source-side reading of a query variable exists: a variable at a key column is read back by
-`Database.ViewsSound`, and one at no key column — a whole pattern, or a whole side of an
-equality — is read back by nothing.
-
-Stronger than `exists_sourceReading` strictly needs: a variable the source's own environment
-binds is read back from `Database.GlobalsRead` instead, and needs no key column. Stated this
-way because the weaker condition would have to ask which variables a top-level `let` binds,
-and this one is a property of the query alone. -/
 def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
-
-/-! #### The substitution keeps all three
-
-`Rule.substGlobals` is what the encoder actually flattens, so the three conditions have to hold
-of the substituted query. They do, and the only thing needed is that the definitions the
-substitution carries are **closed**, which `Cmd.globalBind`'s second guard is.
-
-`Pattern.Grounded` is the one that does not survive as text: substituting a literal-valued
-global turns `.expr (.var $g)` into a bare literal pattern, the very shape `Grounded` excludes.
-`Pattern.GroundedAt` is what survives, and `Database.GlobalsInline` is what pays it — the
-source's environment binds `$g` to that literal, so the source **holds** it. -/
 
 theorem Expr.substGlobalsList_eq_map (G : List (Var × Expr)) :
     ∀ es : List Expr, Expr.substGlobalsList G es = es.map (Expr.substGlobals G)
@@ -2265,8 +2144,6 @@ end
 
 mutual
 
-/-- **The two substitutions are the same rewriting.** `Expr.substGlobals` is
-`Expr.inlineGlobals` at a query rather than at a `let`. -/
 theorem Expr.substGlobals_eq_inlineGlobals (G : List (Var × Expr)) :
     ∀ e : Expr, Expr.substGlobals G e = Expr.inlineGlobals G e
   | .lit _ => rfl
@@ -2491,7 +2368,6 @@ literal in a query builds nothing, and a variable is only ever bound to a term t
 holds. -/
 def Action.litFreeB : Action → Bool
   | .expr e => e.litFreeB
-  | .letBind _ e => e.litFreeB
   | .union e₁ e₂ => e₁.litFreeB && e₂.litFreeB
   | .set _ args out => Expr.litFreeListB args && Expr.litFreeListB out
 
@@ -2569,7 +2445,6 @@ instance Expr.decidableDeclared (e : Expr) (sig : Signature) : Decidable (e.Decl
 instance Action.decidableDeclared : ∀ (a : Action) (sig : Signature),
     Decidable (a.Declared sig)
   | .expr e, sig => inferInstanceAs (Decidable (e.Declared sig))
-  | .letBind _ e, sig => inferInstanceAs (Decidable (e.Declared sig))
   | .union e₁ e₂, sig => inferInstanceAs (Decidable (e₁.Declared sig ∧ e₂.Declared sig))
   | .set f args out, sig =>
       inferInstanceAs (Decidable (sig f ≠ none ∧ (∀ e ∈ args, e.Declared sig) ∧
@@ -2598,7 +2473,6 @@ instance Program.decidableHeadsDeclared : ∀ (P : Program) (sig : Signature),
 instance Action.decidableSetLegal : ∀ (a : Action) (sig : Signature),
     Decidable (a.SetLegal sig)
   | .expr _, _ => .isTrue trivial
-  | .letBind _ _, _ => .isTrue trivial
   | .union _ _, _ => .isTrue trivial
   | .set f _ _, sig => inferInstanceAs (Decidable (sig.mergeOf f ≠ none))
 
@@ -2651,7 +2525,6 @@ instance Expr.decidableScoped (e : Expr) (Γ : Scope) : Decidable (e.Scoped Γ) 
 
 instance Action.decidableScoped : ∀ (a : Action) (Γ : Scope), Decidable (a.Scoped Γ)
   | .expr e, Γ => inferInstanceAs (Decidable (e.IsApp ∧ e.Scoped Γ))
-  | .letBind _ e, Γ => inferInstanceAs (Decidable (e.Scoped Γ))
   | .union e₁ e₂, Γ => inferInstanceAs (Decidable (e₁.Scoped Γ ∧ e₂.Scoped Γ))
   | .set _ args out, Γ =>
       inferInstanceAs (Decidable ((∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ))
@@ -2660,7 +2533,7 @@ instance Actions.decidableScoped : ∀ (as : List Action) (Γ : Scope),
     Decidable (Actions.Scoped as Γ)
   | [], _ => .isTrue trivial
   | a :: as, Γ => @instDecidableAnd _ _ (Action.decidableScoped a Γ)
-      (Actions.decidableScoped as (a.bind Γ))
+      (Actions.decidableScoped as Γ)
 
 instance Cmd.decidableHeadScoped : ∀ c : Cmd, Decidable c.HeadScoped
   | .rule r => inferInstanceAs (Decidable (Actions.Scoped r.actions (Query.vars r.query)))
@@ -2780,7 +2653,6 @@ theorem Action.UnionLegal.of_litFreeB {a : Action} (h : a.litFreeB = true) : a.U
       · rw [hl] at h; simp [Expr.litFreeB] at h
       · rw [hl] at h; simp [Expr.litFreeB] at h
   | expr _ => trivial
-  | letBind _ _ => trivial
   | set _ _ _ => trivial
 
 @[inherit_doc Action.UnionLegal.of_unionFree]

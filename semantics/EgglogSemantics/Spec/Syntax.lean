@@ -10,13 +10,13 @@ Decl    = (datatype ...) | (constructor ...) | (function ... :merge ...)
 Rule    = (rule Query Actions :ruleset R)
 Query   = (Pattern ...)
 Pattern = expr | (= expr expr) | (= (values expr ...) (f expr ...))
-Action  = expr | (let var expr) | (union expr expr) | (set (f expr ...) expr ...)
+Action  = expr | (union expr expr) | (set (f expr ...) expr ...)
 expr    = number | var | (f expr ...)
 ```
 -/
 
 namespace Egglog
-/-- A variable, global or rule-local. -/
+/-- A variable bound by a query or a merge parameter. -/
 abbrev Var := String
 
 /-- The name of a constructor or function. -/
@@ -46,10 +46,9 @@ inductive Pattern where
 /-- A rule's query, matched conjunctively. -/
 abbrev Query := List Pattern
 
-/-- An action: build a term, bind a variable, assert an equality, or record an entry. -/
+/-- An action: build a term, assert an equality, or record an entry. -/
 inductive Action where
   | expr : Expr → Action
-  | letBind : Var → Expr → Action
   | union : Expr → Expr → Action
   /-- `(set (f args…) out…)`: record `f args… ↦ out…`, one output expression per value
   column. -/

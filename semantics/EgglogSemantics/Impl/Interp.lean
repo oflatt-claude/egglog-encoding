@@ -470,10 +470,6 @@ def matchQueryWith (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : Li
   (assignments d.valueTerms (Query.freeVars q [])).filter fun σ =>
     q.all fun p => patternHoldsWith cl d p (Env.canon (p.freeVars []) σ)
 
-/-- **The fast path.** `matchQuery` with one congruence closure per query instead of one
-per candidate. Taking `cl` through `matchQueryWith`'s parameter rather than a `let` is what
-keeps it shared: a `let` used once inside the filter's closure is one the compiler may
-inline back into it. -/
 def matchQueryFast (d : FDatabase) (q : Query) : List Env :=
   matchQueryWith d.closureF d q
 
@@ -1211,31 +1207,11 @@ caller of `matchQuery` gets. -/
 /-- `evalAction`, computed. -/
 def execAction (d : FDatabase) : Action → Option FDatabase
   | .expr e => (e.eval d.sig d.env).map fun t => d.addTerm t
-  | .letBind v e => (e.eval d.sig d.env).map fun t =>
-      { d.addTerm t with env := (v, t) :: d.env }
   | .union e₁ e₂ =>
       (e₁.eval d.sig d.env).bind fun t₁ => (e₂.eval d.sig d.env).bind fun t₂ =>
         if t₁.isLit || t₂.isLit then none else some (d.addEq t₁ t₂)
   | .set f args out => (Expr.evalList d.sig args d.env).bind fun as =>
       (Expr.evalList d.sig out d.env).map fun vs => d.addRow f as vs
-
-/-- `evalTopAction`, computed: a top-level `let` may not rebind a name the environment
-already holds. -/
-def execTopAction (d : FDatabase) : Action → Option FDatabase
-  | .letBind v e =>
-      if (Env.lookup v d.env).isSome then none else execAction d (.letBind v e)
-  | a => execAction d a
-
-/-- A top-level action that ran is an action that ran. -/
-theorem execAction_of_top {d d' : FDatabase} {a : Action}
-    (h : execTopAction d a = some d') : execAction d a = some d' := by
-  cases a with
-  | letBind v e =>
-      rw [execTopAction] at h
-      split at h
-      · exact absurd h (by simp)
-      · exact h
-  | _ => exact h
 
 /-- `evalActions`, computed. -/
 def execActions (d : FDatabase) : List Action → Option FDatabase
@@ -1354,8 +1330,8 @@ def runFuel : Nat := 64
 
 /-- `CmdStep`, computed. -/
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
-  | .action a => execTopAction d a
-  | .rule r => some { d with rules := r.resolveGlobals d.env :: d.rules }
+  | .action a => execAction d a
+  | .rule r => some { d with rules := r :: d.rules }
   | .run R => some (execRunRules R d)
   | .saturate R => d.runSaturateF R runFuel
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }

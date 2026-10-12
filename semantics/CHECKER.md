@@ -1,5 +1,10 @@
 # M11: the proof checker — a record, not a work queue
 
+> Historical design notes. The current Lean model has no global or local let bindings,
+> rules are registered without global resolution, and `encode_corresponds` is proved.
+> See [README.md](README.md) and the Lean declarations for the current contracts.
+
+
 **M11 is parked** (`PLAN.md`, "Current priority"): the encoding is downstream of a model we trust
 and we do not have one yet. This records what was learned from reading `egglog/src/proofs/` at
 `3364576`, from `--proofs` runs on constructor-only programs, and from building `Encoding/Encode.lean`.
