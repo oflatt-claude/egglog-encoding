@@ -6,7 +6,7 @@ import EgglogSemantics.Spec.Scope
 # Emitting egglog source
 
 Renders a `Program` as a `.egg` file so that the same program can be run by the Rust
-implementation and the results compared (`PLAN.md`, "Differential testing"). The oracle
+implementation and the results compared by `DiffTest.lean`. The oracle
 is `(print-size)`, which prints one row count per function — the same quantity
 `FDatabase.rowCount` computes and `egglog/tests/files.rs` snapshots.
 

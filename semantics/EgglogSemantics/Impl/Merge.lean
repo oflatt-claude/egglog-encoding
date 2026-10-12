@@ -35,10 +35,9 @@ rows it merged — `mergeSaturateF` has the argument.
 What no longer differs is **evaluation, e-matching or actions**: with reading confined to
 the query, `Expr.eval` takes a signature and resolves primitives, so `Impl/Interp.lean`'s
 `execAction`, `execActions` and `patternHolds` serve a `:merge` program unchanged and this
-file adds only the merge phase and the round that runs it. The one place the interpreter
-still chooses is `patternHolds`' row scan, which sees a superseded output where egglog
-sees only the current one — `MERGE.md`, "What the widening and the composed interpreter
-found", has the repro.
+file adds only the merge phase and the round that runs it. For merge functions,
+`patternHolds` scans the current row index; the specification permits any recorded
+output. See `MERGE.md`, "The executable row index".
 
 The congruence closure is *unchanged*, and needs no argument to stay so: `Cong` reads
 `eqs` and no row at all, so `closureF` decides it whatever the index holds.
@@ -168,11 +167,10 @@ row, which is what `mergeOneWith` arranges when either row is. When *neither* is
 third, older term in the class carries the canonical key and egglog re-inserts both rows
 under it — egglog's survivor sits at a key no row here has, and this writes at `r₂`'s
 instead. `Database.Out` reads a row from every congruent key, so nothing is lost until a
-row appears at that third key later, which is the residual `MERGE.md` records.
+row appears at that third key later and affects the collision order.
 
-**A collision that changes no value column runs no body.** `noConflict` is that test, and
-`MERGE.md`'s "A collision that changes nothing runs no body" is the evidence. The firing
-reduces to dropping `r₁`, which is what egglog's insert does with the row it did not have
+**A collision that changes no counted value column runs no body.** `noConflict` is
+that test. The firing reduces to dropping `r₁`, which is what egglog's insert does with the row it did not have
 to merge. -/
 def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Option FDatabase :=
@@ -232,7 +230,7 @@ list position is fixed when the term is *first* added, which matches egglog for 
 built by actions and by rule heads in the order the interpreter runs them, but a round
 that fires several rules is free to build terms in another order than egglog's; and
 `ordering-gt` continues to compare by the structural `Term.blt`, since a `Prim` has no
-database to consult. `MERGE.md` records both. -/
+database to consult. See `MERGE.md`, "The executable row index". -/
 /-- Whether `t` is the canonical member of its congruence class — no congruent term was
 created before it — which is what makes egglog's rebuild leave a row keyed on `t` alone.
 
@@ -423,7 +421,7 @@ the one of the three that is about *fidelity* rather than about cost: over-firin
 observable, since a body writes.
 
 **Self-collisions are skipped.** `MergeStep` has no `a ≠ b` guard, on purpose: without it
-the spec would *under*-approximate egglog (`MERGE.md`, "No guard on the collision"). An
+the spec would *under*-approximate egglog for non-idempotent merges. An
 interpreter is under no such obligation — firing fewer steps still lands on a reachable
 state — and egglog merges a retained row against an incoming staged one, so it never
 self-merges either. What they produce is a row `Cong` already derives, so nothing is
@@ -513,9 +511,8 @@ single pass leaves `k` rows at a key class as `k - 1` when three or more collide
 value read would see the survivors. Deleting the combined rows is what makes it converge —
 the pair that fired is gone, so a pass strictly shrinks the class until one row is left.
 
-Returning `none` rather than a prefix is what keeps this outside `MERGE.md`'s objection to
-fuel ("returns a wrong answer where *no answer* is correct"): a merge that really does
-diverge makes `execM` `none`, which the difftest prints as `STUCK` and reports as a
+Fuel exhaustion returns `none` rather than a partially settled result: a merge that
+diverges makes `execM` `none`, which the difftest prints as `STUCK` and reports as a
 mismatch, rather than silently presenting a half-merged state as the answer. -/
 def FDatabase.mergeSaturateF : Nat → FDatabase → Option FDatabase
   | 0, d => if d.settled then some d else none

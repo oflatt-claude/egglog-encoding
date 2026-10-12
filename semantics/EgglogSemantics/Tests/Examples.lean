@@ -15,8 +15,8 @@ terms back off the diagonal. So every hand-built database below carries one refl
 equation per term it holds — that is what makes it a state a program could have reached,
 and it is exactly `Database.WF.eqsRefl`.
 
-Checks about what a `run` does *not* produce need `ValidSubst` inversion, which is
-`PLAN.md`'s M8; the `run` example below is the forward direction only. Randomly
+Checks about what a `run` does *not* produce need `ValidSubst` inversion;
+the `run` example below is the forward direction only. Randomly
 generated programs, checked against the real egglog binary, are `DiffTest.lean`.
 -/
 
@@ -264,7 +264,7 @@ example : ∃ db, ProgramStep Database.empty actionsProgram db ∧
 `(Add 1 2)`, `(rule ((Add a b)) ((Add b a)))`, `(run)` produces `(Add 2 1)`.
 Only the forward direction is shown: the substitution `a ↦ 1, b ↦ 2` satisfies the
 query and its actions build `(Add 2 1)`. That nothing *else* is produced needs
-`ValidSubst` inversion (`PLAN.md`, M8). -/
+`ValidSubst` inversion. -/
 
 private def add12 : Term := .app "Add" [num 1, num 2]
 
@@ -631,7 +631,7 @@ end Reading
 
 /-! ## A saturating run, executed
 
-`ENCODING.md` finding 1 was that appending `(run)`s cannot make the encoding's rebuild
+A fixed number of appended `(run)`s cannot make the encoding's rebuild
 schedule saturate, because the number of rounds needed grows with the data. Here is a
 ruleset with exactly that property — the transitive closure of an entry table, which is the
 shape the rebuild rules have — and the demonstration that `Cmd.run` does not reach its

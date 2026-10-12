@@ -2911,7 +2911,7 @@ theorem execM_ufRowRoot_unique {P : Program} (hdom : P.EncodeDomain)
 
 /-! ### And at a program, concretely
 
-`ENCODING.md`'s discipline for the bundle the induction carries: `wProgram` is
+The induction bundle holds at a concrete program: `wProgram` is
 `Encoding/Match.lean`'s witness program, its prelude **runs in the kernel** — it is
 declarations and rules, so none of the irreducible machinery is reached — and the state it
 leaves satisfies every field. -/
@@ -2935,9 +2935,8 @@ theorem wPreludeState_encOk :
 
 /-! ### The clause is needed, at a program every *other* clause admits
 
-`ENCODING.md`'s discipline for a clause as much as for a lemma: a condition that nothing
-violates is not a condition. `adProgram` is two commands, it satisfies every other clause of
-`Program.EncodeDomain`, and it applies `F` at **two** arities — the declaration's nullary one
+`adProgram` witnesses the need for arity agreement. It has two commands, satisfies every
+other clause of `Program.EncodeDomain`, and applies `F` at **two** arities — the declaration's nullary one
 and the unary one its own action uses. `Program.ctors` records both, `encodePrelude` emits two
 table triples for `F`, and the later one wins: `@FView` ends up declared **nullary** while the
 rebuild rules of the unary entry key it at one column. `Actions.SetWidthOk` refuses that, and
@@ -3735,8 +3734,8 @@ theorem encode_corresponds_complete_of_scoped {P : Program} (hdom : P.EncodeDoma
 
 /-! ### And the clause is not vacuous
 
-`ENCODING.md`'s discipline at a hypothesis as much as at a lemma: `Program.HeadsScoped` has to
-hold of a program with a rule that really fires, or `EncodeDomain.headsScoped` would empty the
+`Program.HeadsScoped` has to hold of a program with a rule that really fires,
+or `EncodeDomain.headsScoped` would empty the
 domain of the cases the statement is about. `ncProgram` is the one the forward half's two
 refuted clauses are pinned at — a unary constructor, a `union` between two nullary ones, and a
 rule that fires once per class member — and `vuProgram` is the `union`-head one, whose head
@@ -3809,8 +3808,7 @@ theorem encode_corresponds_complete {P : Program} {src : Database} {tgt : FDatab
 
 /-! ### Both halves, at a program that exercises them
 
-`ENCODING.md`'s discipline for a conclusion as much as for a hypothesis: the two theorems
-above are conditionals, so each is exhibited at a program whose rule really fires, at a pair
+The two theorems above are exhibited at a program whose rule really fires, at a pair
 of source e-nodes the two sides really relate. `ncProgram` is that program — its source run is
 compiled (`ncProgram_programStep`) and only the encoded run is a hypothesis, for the reason
 every other target-side witness here takes one, since `execM` on an encoded program does not
@@ -3823,7 +3821,7 @@ theorem execM_soundTerms_witness {tgt : FDatabase}
 
 /-! ### The two proof heads are really declared
 
-`ENCODING.md`'s discipline at a hypothesis: `execM_encode_ufRowsForest` carries `hsy` and `htr`
+`execM_encode_ufRowsForest` carries `hsy` and `htr`
 for the reason `mergeOneWith_isSome_of_collide` does — a signature that does not declare `@Sym`
 and `@Trans` leaves every collision standing at what would otherwise be a fixpoint, and the
 forest is then false. They are not vacuous: the prelude of any in-domain program declares both,
@@ -8064,8 +8062,7 @@ theorem ncTgt_encRule_fires :
 
 /-! ### `unionsJoined_fire`'s hypotheses, satisfied together
 
-`ENCODING.md`'s discipline at the *witness* as much as at the lemma. Six of
-`Egglog.UnionsFire`'s clauses quantify over `sd.rules`, so a witness whose source
+Six of `Egglog.UnionsFire`'s clauses quantify over `sd.rules`, so a witness whose source
 holds no rule satisfies them by holding nothing, which shows nothing about their
 satisfiability together with the rest — and the same witness's round then fires nothing on
 either side. `rbSrcR`/`rbTgtR` fix both: `rbSrc` and `rbState2`, the states `rbProgram` and

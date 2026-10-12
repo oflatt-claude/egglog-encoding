@@ -7,7 +7,7 @@ import EgglogSemantics.Spec.Step
 `Spec/Step.lean`'s `RunRules` is a function but not a computation: it unions over a set
 of substitutions carved out by a predicate. This runs the constructor fragment computably,
 so programs can actually be executed — which is what makes the model testable against the
-Rust (`PLAN.md`, "Differential testing"). `Proofs/Interp.lean`'s `exec_programStep` is the
+Rust implementation through `DiffTest.lean`. `Proofs/Interp.lean`'s `exec_programStep` is the
 equation between the two, in both directions.
 
 `FDatabase`'s components are `List`s, not `Finset`s, for one blunt reason:

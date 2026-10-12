@@ -122,7 +122,7 @@ def Action.Evaluable : Action → Signature → Prop
 egglog rejects a `union` on a sort that is not an eq sort statically (`constraint.rs:697-701`
 against `typechecking.rs:966-969`, and `core.rs:514` of the lowering) where `Spec/Eval.lean`'s
 `evalAction` only gets stuck on it. The typed rule needs base sorts, which this model does not
-have (`PLAN.md:86`), so this is its syntactic half: an operand is not a literal *expression*.
+have, so this is its syntactic half: an operand is not a literal *expression*.
 `Action.Evaluable` asks the stronger `Expr.IsApp` of one and its docstring records the same gap,
 so the reach this adds is a `:merge` body, which no `Evaluable` walks into. -/
 

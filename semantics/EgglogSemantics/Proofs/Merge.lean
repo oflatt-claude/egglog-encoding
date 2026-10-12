@@ -779,9 +779,8 @@ theorem MergeStep.self_id {db d : Database} {f : FnName} {dc : FnDecl} {as a : L
 
 /-! ### The observable value
 
-Constraint (3)'s second half. `PLAN.md` proposes a merge-fold and asks for it to be
-well defined; `Current` is that value defined as a maximum instead, which needs only
-antisymmetry. It is not what `Expr.eval` reads. -/
+`Current` defines the observable value as a greatest recorded output under a supplied
+order. Uniqueness needs only antisymmetry. It is not what `Expr.eval` reads. -/
 /-- The value a *join* merge settles on at the class of `as`: the `le`-greatest
 recorded output.
 
@@ -794,14 +793,12 @@ A maximum rather than a fold, because a greatest element is unique from antisymm
 alone (`current_unique`) where a fold over a set needs commutativity and associativity
 first. `le` is a parameter rather than an instance because the order is per function —
 one `Term` type carries every sort — and it orders whole rows, since a multi-column merge
-can settle its columns jointly. See `MERGE.md`, "Why a maximum and not a fold". -/
+can settle its columns jointly. -/
 def Database.Current (db : Database) (le : List Term → List Term → Prop) (f : FnName)
     (as : List Term) (vs : List Term) : Prop :=
   db.Out f as vs ∧ ∀ ws, db.Out f as ws → le ws vs
 
-/-- The observable value is unique. This is "the fold is well defined", with a fold's
-commutativity and associativity obligations replaced by antisymmetry of the order —
-see `MERGE.md`, "Why a maximum and not a fold". -/
+/-- The greatest recorded output is unique under an antisymmetric order. -/
 theorem Database.current_unique {db : Database} {le : List Term → List Term → Prop}
     (hanti : ∀ x y, le x y → le y x → x = y) {f : FnName} {as v w : List Term}
     (hv : db.Current le f as v) (hw : db.Current le f as w) : v = w :=

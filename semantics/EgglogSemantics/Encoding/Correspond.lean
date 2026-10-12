@@ -583,9 +583,9 @@ theorem sameClassF_iff {d : FDatabase} (hsc : d.SubtermClosed) (hr : d.EqsRefl)
 
 /-! ### The proof column and `MergeSaturated`
 
-`ENCODING.md`'s finding 1 was that no state `encode` ran to satisfied `Rebuilt`, and
-`Cmd.saturate rebuildRuleset` was the repair. The proof column (`@UF(t) ↦ (p, pf)`) landed
-after it and reopened the hole one level down, and this section is what closed it again.
+A saturating rebuild must ignore changes to the proof column (`@UF(t) ↦ (p, pf)`)
+when deciding whether a collision changes a row. This section checks that
+`identityVals := some 1` makes `MergeSaturated` satisfiable at reachable states.
 
 The mechanism was `Spec/Step.lean`'s own reading of a collision. **Every entry collides with
 itself**, and the shared `:merge` body writes, for the colliding pair, the edge
@@ -901,9 +901,8 @@ theorem satProgram_programStep_view :
 
 /-! ### The statement
 
-**The target is the interpreter's, not the specification's.** Two reasons now, and neither is
-the one `ENCODING.md` records. `ProgramStep Database.empty (encode P) tgt` is satisfiable at a
-program that only builds (`satProgram_programStep`) and is **not decidable**; and at a program
+**The target is the interpreter's.** `ProgramStep Database.empty (encode P) tgt` is
+satisfiable at a program that only builds (`satProgram_programStep`) and is **not decidable**; and at a program
 that asserts an equation between distinct terms — which is every program this half's `union`
 clause is about — it is not satisfiable either, because `encode`'s rebuild has no fixpoint there
 (`Encoding/Match.lean`'s `uTgt_saturate_infinite`). The interpreter's `execM` reaches its target
@@ -977,8 +976,8 @@ witness program*. `difftest correspond-dump 64 union` prints, for `witnessProgra
 ```
 
 and both are in `terms`: `mergeOneOriented` overwrites the resident *row* and `addTerm`s the
-combined entry, and nothing is ever removed from `terms` (`MERGE.md`, "Constraint (3):
-monotonicity"). So `ViewRepr tgt (Two)` holds of `(One)` and of `(Two)` alike.
+combined entry, and nothing is ever removed from `terms` (`MERGE.md`, "The executable row
+index"). So `ViewRepr tgt (Two)` holds of `(One)` and of `(Two)` alike.
 
 `MergeSaturated` is not available at such a state either, which is why neither it nor
 `Rebuilt` appears below: the displaced entry still *collides* with the survivor —
@@ -1796,7 +1795,7 @@ ViewRepr d t t` nor a *direct* edge between the two endpoints is available: a ru
 are not the terms the source's own firing built.
 
 Stated at *source* equations, so it quantifies over no stale view row a rebuild displaced —
-`Database.Out` reads every row `terms` ever held (`MERGE.md`, "Constraint (3): monotonicity"),
+`Database.Out` reads every row `terms` ever held (`MERGE.md`, "The executable row index"),
 and the fixpoint the interpreter reaches is a fixpoint over its *current* tables.
 
 The disjunction is which endpoint `encodeAction`'s `@UF (ordering-max x₁ x₂) ↦
@@ -2574,9 +2573,8 @@ theorem viewRepr_self_of_execProgramM (e : Expr) (n : Nat) {d D : FDatabase} {p 
 
 /-! #### The read-back is not vacuous
 
-`ENCODING.md`'s discipline again: a lemma whose premise nothing satisfies proves nothing. Here
-is the read-back run, at the signature `encode satProgram`'s prelude installs plus a unary `W`'s
-table triple. Two builds, and the second's operand is a **variable** — so the `hvar` hypothesis
+Here is a concrete read-back run, at the signature `encode satProgram`'s prelude installs
+plus a unary `W`'s table triple. Two builds, and the second's operand is a **variable** — so the `hvar` hypothesis
 of `viewRepr_self_of_execActions` is discharged non-vacuously, by the first build's own reading,
 which is exactly the shape the missing command induction has to carry. -/
 
@@ -2682,8 +2680,7 @@ block is the reading. Two of the three are *derived* below —
   term having an id (`Database.ViewsCover.of_viewLeaderRows`).
 * `Database.UnionsRead` — `reprs` of `(One)` and of `(Two)` share `(One)`.
 
-So none of the three is a hypothesis nothing reachable satisfies, which is the failure
-`ENCODING.md` records twice.
+All three hypotheses are therefore satisfiable at reachable states.
 
 What all three need is an invariant carried through `FDatabase.execProgramM` that reads the
 encoded program's *own* commands — the two `set`s per build, the `@UF` edge per `union`, and the
@@ -6192,8 +6189,8 @@ what the statement below is restricted to — `a ∈ src.terms` and `b ∈ src.t
 The other repair, not taken: conclude `CongOn src [a, b] a b` instead of `Cong src a b`.
 `withOperands` records the missing e-node and adds no equation between distinct terms, so the
 invented class is congruent *there* — but then the two halves of `encode_corresponds` are
-relations over different sources, and `ENCODING.md` records why `CongOn` is too weak to state
-this correspondence over. -/
+relations over different sources. The correspondence instead requires both endpoints
+to belong to the original source's terms. -/
 
 /-- One column of the right-hand list moved along a congruence. What the rebuild's column
 rules do to a key, pointwise. -/
@@ -6326,7 +6323,7 @@ theorem not_sameClass_lit_app {src d : Database} (hw : src.WF) (hs : d.ViewsSoun
 `Cong src` does not move when the target does — so preservation under a writer is one
 obligation about the one entry the writer adds, and an entry once justified stays justified.
 That is also why `mergeResult`'s choice operator costs nothing here: the refutation
-`ENCODING.md` records (`Falsity.Choice.transport_recorded_false`) is about relating two
+`Falsity.Choice.transport_recorded_false` is about relating two
 *target* states, and this invariant relates a target to a fixed source, so whichever of two
 colliding rows survives is justified against the same source. `EntrySound.select` is that,
 stated.
@@ -9335,8 +9332,7 @@ end FDatabase
 
 /-! ###### The firing is real
 
-`ENCODING.md`'s discipline: a lemma about a step nothing takes proves nothing. `cxPre` is the
-state three `set`s leave — a view entry, the `union`'s `@UF` edge, and the entry the e-class
+`cxPre` witnesses a reachable collision. It is the state three `set`s leave — a view entry, the `union`'s `@UF` edge, and the entry the e-class
 rebuild rule re-keyed onto `(A)` — and its two `@BView` rows collide at the one (empty) key.
 That collision is the firing `mergeOneOriented_soundTerms` is about, `cxTgt` is what the pass
 around it produced, and the `@UF` edge below is what the body wrote. -/
@@ -11010,7 +11006,7 @@ theorem mem_eqs_of_headUnion_of_domain {P : Program} (hdom : P.EncodeDomain)
 
 /-! ##### Both shapes, at firings that fire
 
-`ENCODING.md`'s discipline. A `hfired` nothing satisfies would discharge
+A `hfired` nothing satisfies would discharge
 `entrySound_headBuild` and `cong_headUnion` for free, so each of the two is run at a source
 state a program reaches, at a substitution the query really admits, and against a conclusion
 the **pre**-state does not already hold.
@@ -12842,9 +12838,8 @@ theorem runRoundM_ufRowsDescend {R : RulesetName} {d e : FDatabase}
 
 /-! ###### The maintenance firing is real
 
-`ENCODING.md`'s discipline, at the hypothesis that could have made all three families vacuous:
-`hσ` asks the encoded query to have *matched*, and `matchQuery` is exactly what the kernel
-cannot run — `closureF` is well-founded-recursive and so irreducible, the same limit every
+Each of the three families needs a concrete matching witness: `hσ` asks the encoded query
+to have *matched*, and `matchQuery` is exactly what the kernel cannot run — `closureF` is well-founded-recursive and so irreducible, the same limit every
 other target-side witness here works around. So the match is **proved** rather than decided,
 through `patternHolds_values_of_mem_rows`: a row of a `:merge` function makes its own atom
 hold, at the values its own columns are, and the only closure facts needed are reflexive ones.
@@ -14215,12 +14210,9 @@ end FDatabase
 
 /-! ### The witness
 
-`ENCODING.md`: two of thirteen previous M11 statements were vacuous and nobody noticed,
-because they carried `sorry`. So before the `sorry`s above are allowed to stand, here is a
-program whose three hypotheses hold **together**, and a pair of term pairs at which both
-sides of the conclusion are non-trivial — one both say yes to, one both say no to. An `iff`
-between two relations that are always false is true and worthless; `agree-true` is the same
-measurement over the whole corpus, and it is 778.
+This program satisfies the three hypotheses together and exercises both outcomes of the
+conclusion: a pair both relations hold of, and a pair neither holds of.
+`difftest correspond` measures the same agreement over the corpus.
 
 The two runs cannot be `#guard`s: an encoded action is followed by a saturating rebuild, and
 running one during elaboration took `lake build difftest` past fifteen minutes. So the

@@ -5,43 +5,28 @@ Redex model in [egglog PR #324](https://github.com/egraphs-good/egglog/pull/324)
 The reference interpreter targets the extended egglog implementation in this workspace,
 including multi-output functions and action blocks inside `:merge` bodies.
 
-## Let-free language
+## Language and semantics
 
-The Lean syntax has three actions: build an expression, union two expressions, and set a
-function row. There are no global or local `let` bindings. Rule variables come from the
-query; merge bodies use their declared old/new parameters. Reusing an expression means
-writing it again, or matching its value in a rule query.
+Programs declare functions and rules, build expressions, union expressions, set function
+rows, and run or saturate named rulesets. Rule variables come from the query; merge bodies
+use their old/new parameters. Actions evaluate in a fixed environment.
 
-Rules are registered exactly as written. Action blocks do not extend their evaluation
-environment, and commands preserve the ambient environment. A program starting at the
-empty database therefore finishes with an empty environment. `Database.env` remains the
-context used to evaluate a query substitution or merge parameters, rather than a store
-of global bindings. The proof checker likewise processes a head under one fixed query
-substitution and has no global-binding context.
+The specification records equations and derives congruence over the terms they mention.
+Constructors build terms; other functions store key/value entries that rules read through
+query atoms. Merge bodies can perform actions as well as return values. The
+[merge semantics](MERGE.md) guide explains how this relates to the interpreter's row index,
+its refinement contracts, and the limits of the model.
 
-Generic substitution helpers remain in the encoding proofs. `EncStep.subst_empty` proves
-that actual encoded executions carry the empty substitution throughout; no command updates it.
+## Proof encoding
 
-This restriction applies to the Lean model, encoding, checker, and differential-test
-programs. The Rust parser and runtime retain their existing syntax.
+The encoder transforms constructor programs into explicit view and union-find tables,
+with a proof attached to each recorded equality. `encode_corresponds` proves that source
+congruence agrees with the encoded target's equivalence on source terms, under
+`Program.EncodeDomain` and successful executions. The library permits no `sorry`.
 
-## Proofs and encoding
-
-`Encoding/Encode.lean` transforms constructor programs into explicit view tables and a
-union-find table. Each recorded equality carries a proof. Generated ids are structural
-terms; generated variable names and rule-proof constructor names have separate counters.
-The encoding inserts rebuild work after writes and into source saturation loops.
-
-`Encoding/Complete.lean` proves `encode_corresponds`: source congruence agrees with the
-encoded target's `SameClass` relation under `Program.EncodeDomain` and successful source
-and target executions. The domain restricts the source to constructors, reserves generated
-names, and checks arities, query shape, declaration order, and head scope. The library's
-`make lean-check` target permits no `sorry`.
-
-The executable proof checker is separate. Its `SoundAt` predicate states the intended
-checker contract; defining that predicate does not prove general checker soundness.
-The checker tests and `difftest check` exercise the implemented proof vocabulary and
-report unsupported proof shapes.
+The [encoding guide](ENCODING.md) describes the transformation and the theorem's hypotheses.
+The [checker guide](CHECKER.md) describes the separate executable proof checker. General
+checker soundness and acceptance of every generated proof remain unproved.
 
 ## Layout
 
@@ -54,16 +39,11 @@ report unsupported proof shapes.
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
 
-Read `Spec/Syntax.lean`, `Eval.lean`, and `Step.lean` first, then the definitions in
-`Encoding/Encode.lean` and the final theorems in `Encoding/Complete.lean`.
-
-The specification only adds equations. The merge interpreter maintains a row index that
-can replace entries, so its general refinement contract is containment (`execM_contained`).
-The constructor-only interpreter has the stronger `exec_programStep` contract.
-
-`PLAN.md`, `MERGE.md`, `ENCODING.md`, and `CHECKER.md` retain design history, including
-refuted candidate invariants. Their historical descriptions of global lets and parked
-proof obligations predate the current model; use the Lean declarations for current contracts.
+Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),
+[Eval.lean](EgglogSemantics/Spec/Eval.lean), and
+[Step.lean](EgglogSemantics/Spec/Step.lean), then read
+[Encode.lean](EgglogSemantics/Encoding/Encode.lean) and the final theorems in
+[Complete.lean](EgglogSemantics/Encoding/Complete.lean).
 
 ## Validation
 
@@ -84,6 +64,6 @@ lake build difftest
 .lake/build/bin/difftest check 64
 ```
 
-The toolchain is pinned in `lean-toolchain`, and Mathlib in `lakefile.toml` and
-`lake-manifest.json`. Install `elan`, then run `lake exe cache get` from this directory
-when setting up a fresh checkout.
+The toolchain is pinned in [lean-toolchain](lean-toolchain), and Mathlib in
+[lakefile.toml](lakefile.toml) and [lake-manifest.json](lake-manifest.json). Install `elan`,
+then run `lake exe cache get` from this directory when setting up a fresh checkout.

@@ -39,8 +39,8 @@ ground under the substitution built so far is rejected. A body fact reading a me
 function's row is rejected for the same reason, `Expr.eval` having no case for one. A bare
 `@Fiat` premise at a body fact with both endpoints free is confined to `C.eqs`, the
 *top-level* actions, so it cannot anchor at a term that exists only because an earlier rule
-fired — the residue "`@Fiat` at a rule-created term" measures and bounds below. All three
-are refusals, so the checker stays sound; `Proof.Sound` is the statement that says so.
+fired — the residue "`@Fiat` at a rule-created term" measures and bounds below. These
+refusals limit completeness; `Proof.Sound` states the separate, unproved soundness contract.
 
 **A merge needs no justification of its own.** A collision keeps the proof carried by
 whichever side's value survives and composes the displaced edge as
@@ -280,8 +280,8 @@ def endsOk (ma mb : Option Term) (p : Term × Term) : Bool :=
 
 /-- The reflexive proposition a `@Fiat` admits at the endpoints given, which is `Fiat`'s
 other disjunct: `lhs == rhs && reflexive_value_term lhs`, no program consulted
-(`CHECKER.md`, "Node kinds"). The predicate is what the constructor fragment drops — every
-term in it is a value term — and `Sound`'s `a ∈ db.terms` is what discharges the claim.
+(`CHECKER.md`, "Context and vocabulary"). Every term in the constructor fragment is a
+value term; `Sound`'s `a ∈ db.terms` supplies the existence condition.
 
 It is what the encoding leans on: a build writes its view entry `f(c…) = f(c…)` under
 `@Fiat` **whatever context it is in** (`Encode.lean`, `encodeBuild`), so a term a rule head

@@ -5,71 +5,22 @@ import EgglogSemantics.Tests.Egg
 /-!
 # The proof encoding, as a program transformation
 
-M11. `encode : Program → Program` rewrites a source program so that built-in
-congruence disappears and every equality is an entry some rule wrote. Designed in
-`egglog/src/proofs/proof_encoding.md` and implemented in `egglog/src/proofs/`.
+`encode : Program → Program` translates constructor programs into view and union-find
+entries that carry proofs. `Encoding/Complete.lean` proves `encode_corresponds` under
+`Program.EncodeDomain`; `ENCODING.md` describes the transformation and its contract.
 
-`Encoding/Complete.lean` proves the correspondence theorem for `Program.EncodeDomain`.
-The source fragment has constructors, queries, builds, unions, and runs, with no let
-bindings, containers, deletion, subsumption, or nested schedules.
+For each source constructor `f`, the target declares `@fView` and `@fTerm`, alongside
+one shared `@UF`. Structural terms serve as ids. Source unions become `@UF` writes,
+and view collisions compose proofs and link the displaced id to the surviving one.
+`encode_unionFree` proves that the target uses no built-in unions.
 
-## What the encoding does
+`encodeCmd` schedules a saturating rebuild after actions and runs. Maintenance rules
+also join each source saturation ruleset, so rebuilding participates in its rounds.
+Only the id column determines whether `@UF` and view collisions change a row;
+`identityVals := some 1` excludes the proof column from that test.
 
-Three tables per source constructor `f`, plus one union-find for the (single) sort:
-
-| target table | shape | role |
-| --- | --- | --- |
-| `@UF` | `(t) ↦ (parent, proof)` | `t`'s parent, identity on miss |
-| `@fView` | `(children) ↦ (eclass, proof)` | the functional dependency; `:merge` *is* congruence |
-| `@fTerm` | `(children, id) ↦ ()` | every application ever built; write-only |
-
-`@UF` and `@fView` share one `:merge` body — keep the smaller side and `set` the
-larger's `@UF` edge to it — so a view collision on congruent children unions the two
-e-classes and no congruence rule is needed. Both are `.merge` functions, so the encoded
-program has **no** constructor table at all: it asserts no equation but the reflexive one
-`addTerm` records, so `Cong` on the target is the identity relation on the terms it holds
-and congruence there is entirely simulated.
-
-**Every equality the encoding records carries its proof**, in the second value column of
-the row that records it. "Proof terms" below is the vocabulary and the reading.
-
-## One deviation forced by the modelled language
-
-**No disequality.** `Pattern` has no `!=`, so the `(!= b c)` guards on path compression
-and on the rebuild rule are dropped, and a re-firing re-`set`s a row the table already
-holds. `viewDecl` and `ufDecl` declare `identityVals := some 1`, which keeps a row that
-differs only in its proof column from counting as a change; that is what stops the
-re-firing from becoming a fresh collision.
-
-**One flat rebuild ruleset.** The maintenance rules join `rebuildRuleset` and every encoded
-run is followed by `Cmd.saturate rebuildRuleset`. egglog nests three rulesets in a
-`run-schedule`; one flat ruleset run to a fixpoint is exactly as strong, since a fixpoint of
-a union of rulesets is a fixpoint of each. `Rebuilt` is that command's postcondition
-(`saturateReach_rebuilt`), and it is satisfiable: `Spec/Step.lean`'s `MergeConflict` reads
-`identityVals`, so the proof column is outside the change test on the specification side too
-and a self-collision at `@UF` or a view is not a step. `ENCODING.md`, finding 3, was that it
-*was not*, before that repair; `Encoding/Correspond.lean`'s `satProgram_programStep` is the
-satisfiability that replaced the refutation.
-
-## Fresh ids
-
-`get-fresh!` has no counterpart in the source semantics, and it cannot be added to the
-target *configuration* either: `Database` is fixed, and no `Expr` in the fragment can
-depend on a counter. Freshness is instead **structural** — the id minted for `f` over
-already-canonical children `cs` is the term `.app f cs`, a skolem id. This is what a
-Datalog encoding of `get-fresh!` always does, and it is what the term relation's
-`f(children, id)` entry records anyway.
-
-Two consequences, both recorded in `CHECKER.md`:
-
-* Source terms and target ids inhabit one type, so the simulation theorem can compare
-  them directly instead of carrying a source-to-target correspondence relation.
-* egglog mints a *new* id per construction and lets the view merge dedup them; here the
-  second construction of one shape reuses the id, so the merge does not fire. The
-  induced equivalence is the same; the entry counts are not.
-
-The id supply that remains is over *variable names*, `@v0`, `@v1`, …, threaded through
-`encode` at encode time — egglog's `@pv0`, `@pv1`, ….
+The model follows `egglog/src/proofs/proof_encoding.rs`, with structural ids, ordinary
+proof terms, and a flat rebuild ruleset. It has no disequality guard or nested schedules.
 -/
 
 namespace Egglog
@@ -131,7 +82,7 @@ where egglog's view runs the other way (`proof_encoding.md`, "Union-find"). This
 simplification over egglog, whose proof nodes carry propositions, and it is available
 because the proof is stored *in the table*.
 
-Five heads, which is the subset `CHECKER.md` measured on the constructor-only fragment:
+Five justification kinds, interpreted by `Encoding/Checker.lean`:
 
 | head | arity | reading |
 | --- | --- | --- |
@@ -879,28 +830,9 @@ def ruleProofArity (r : Rule) : Nat := (queryProofs (encodeQuery r.query 0).1).l
 
 /-! ### Building a term
 
-`proof_encoding.md`, "Building a term": mint an id, write the term-relation entry, intern
-the application into its view, and read back the view's e-class. A parent is built over
-its children's canonical ids, which is what keeps views canonical.
-
-egglog interns with `set-if-empty-<View>!`, which returns the *existing* e-class when
-the shape was already there and **discards** the id it just minted. There is no such
-action here, so the encoding `set`s and then reads the view back. The difference is one
-extra union: where egglog drops the minted id, the plain `set` collides with the
-existing entry and the view's `:merge` unions the two. Both terms denote the same
-application, so the equalities are the same and only the entry count differs.
-
-**The read-back is a shape egglog rejects, and this is the reason `set-if-empty` exists.**
-`(let x (@fView c…))` in a rule head is a lookup, and
-`check_no_function_lookups_in_actions` refuses one: "Value lookup of non-constructor
-function function in rule is disallowed". egglog gets around it by registering
-`set-if-empty-<View>!` as a **primitive** (`src/proofs/proof_fresh.rs`), and
-`expr_has_function_lookup` flags only `ResolvedCall::Func`. So `encode` as written emits
-rule heads the real system would refuse, and `Impl/Check.lean`'s `Program.noLookup` is the
-transcribed check that rejects them. The fix is the same one egglog made — a `Prim`-style
-get-or-insert, which is a write and not a read — and it is M11 work, so it is recorded
-here rather than done. Nothing downstream depends on the read-back stepping — the
-theorems that would have are deleted (`ENCODING.md`). -/
+`encodeBuild` writes a term-relation entry and a reflexive view entry for each application.
+The structural term itself is the returned id; actions perform no view lookup. Rebuilding
+propagates ids through the views when their children acquire different leaders. -/
 mutual
 
 /-- Build `e` in the target. Returns the expression naming `e`'s e-class, the actions
@@ -995,8 +927,7 @@ def encodeRule (i : Nat) (r : Rule) (n : Nat) : Rule × Nat :=
 walked. egglog guards it with `(!= b c)`; without disequality the unguarded rule
 additionally re-`set`s edges it already holds, whose proof column the merge then settles.
 
-This is the one site that writes a bare `@Trans`, which is what `--proofs` on a
-constructor-only program emits too (`CHECKER.md`, "The minimal subset"). -/
+The composed proof justifies the edge from `a` through `b` to `c`. -/
 def pathCompressRule : Rule :=
   { query := [.values [.var "@b", .var "@p"] ufName [.var "@a"],
               .values [.var "@c", .var "@q"] ufName [.var "@b"]],
@@ -1606,9 +1537,8 @@ theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) := by
 
 /-! ### The source programs `encode` is defined for
 
-`PLAN.md`'s fragment. `MERGE.md`, "Restrictions on `encode`'s domain", records the one
-restriction that is permanent rather than a gap: egglog refuses to encode a function
-with a `:merge` action block. -/
+`Program.EncodeDomain` below specifies the constructor fragment and the naming, query,
+arity, and head-legality conditions used by the correspondence theorem. -/
 /-- No `set` action. `Action.set` is what a `:merge` function and an encoded rule head
 need; the constructor fragment has neither. **Not a domain clause**: under
 `EncodeDomain.ctorsOnly` a `set` could only name a constructor or an undeclared function,
@@ -2685,11 +2615,10 @@ encoded program's tables are `.merge` functions and it asserts no equation but t
 reflexive one `addTerm` records, so `Cong` on the target is the identity relation on the
 terms it holds. Equality on the target side is *only* what `@UF` and the views record.
 
-Source-side equality is `Spec/Congruence.lean`'s `CongOn`, not `Cong`: the rebuild re-keys
-a view entry to its children's leaders, so the encoded database ends up holding entries
-about applications the source never built — `@AddView [1,1] ↦ Add[1,2]` after `(Add 1 2)`
-and `(union 1 2)`. Those entries are still *true*, but only in that sense. `ENCODING.md`
-records why `CongOn` is nevertheless too weak to state a theorem over unmodified. -/
+Rebuilding re-keys a view entry to its children's leaders, so the encoded database can
+hold entries about applications the source never built. Such an entry does not establish
+that both endpoints existed in the source. `encode_corresponds` therefore requires
+membership in `src.terms` before comparing this reading with source `Cong`. -/
 /-- A union-find edge that moves. The `:merge` writes `@UF (ordering-max p p) ↦
 (ordering-min p p, _)` on a self-collision, so reflexive self-loops are ordinary entries and
 a leader is "no edge that moves" rather than "no entry".
@@ -2702,7 +2631,7 @@ def UFEdge (d : Database) (t p : Term) : Prop :=
 /-- `l` is `t`'s representative: reachable along edges, and itself at the end of one.
 
 A relation rather than a function because `Database.Out` reads *any* recorded output —
-the model keeps the entries a merge displaces (`MERGE.md`, "Constraint (3): monotonicity"),
+the model keeps the entries a merge displaces (`MERGE.md`, "The executable row index"),
 so a term can have several recorded parents, every one genuinely equal to it. -/
 def UFLeader (d : Database) (t l : Term) : Prop :=
   Relation.ReflTransGen (UFEdge d) t l ∧ ∀ p, ¬ UFEdge d l p
@@ -2783,24 +2712,11 @@ theorem SameClass.out_of_lit_app {d : Database} {l : Lit} {f : FnName} {as : Lis
   cases h₂ with | app hl ho => exact ⟨_, _, hl, ho⟩
 
 /-- The rebuild schedule has run out: no maintenance rule adds anything, and no merge
-step changes anything. It is the hypothesis the completeness half of simulation needs —
-until the views are re-keyed to leaders, a collision that congruence would find has not yet
-happened.
+step changes anything. `encode` schedules `Cmd.saturate rebuildRuleset`, and
+`saturateReach_rebuilt` derives this condition from its post-state.
 
-`ENCODING.md`, finding 1, was that no state `encode` ran to satisfied this, because
-`Cmd.run` carried no ruleset and the number of rounds needed to re-key grows with term
-depth. `encode` now emits `Cmd.saturate rebuildRuleset` after every run, and
-`saturateReach_rebuilt` below is that repair: this is that command's *postcondition*.
-
-**A second reason it was unsatisfiable, since removed.** The proof column landed after that
-repair. `MergeSaturated`, the second conjunct, asks that no collision change anything, and
-every entry collides with itself: `mergeBody` writes `@UF(v) ↦ (v, @Trans (@Sym pf) pf)` for
-the colliding pair, a term one composition larger than the proof it started from, so a
-`Rebuilt` state had to hold the whole tower and no state with finitely many terms does. What
-closed it is `Spec/Step.lean`'s `MergeConflict`: a self-collision at a table declaring
-`identityVals := some 1` moves no counted column, so it is not a `MergeStep` and there is no
-tower. `Encoding/Correspond.lean`'s `refutationState_mergeSaturated` and
-`satProgram_programStep` are the two readings of that. -/
+`identityVals := some 1` prevents proof-only changes from making saturation impossible.
+`Encoding/Correspond.lean`'s `satProgram_programStep` provides a reachable witness. -/
 def Rebuilt (P : Program) (d : Database) : Prop :=
   (∀ r ∈ maintenanceRules P, ∀ d' ∈ RuleResults d r, Database.Contained d' d) ∧
     MergeSaturated d

@@ -4,7 +4,7 @@ import EgglogSemantics.Spec.Match
 # Substitution helpers
 
 Ground-term substitution into expressions and queries. These are proof-level operations;
-rule registration in the let-free semantics stores the rule unchanged.
+semantic rule registration stores the rule unchanged.
 -/
 
 namespace Egglog

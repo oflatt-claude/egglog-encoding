@@ -508,7 +508,7 @@ being inserted. Leaving them out left every merge in the suite commutative, whic
 exactly why the model could bind the two colliding rows the wrong way round and stay
 122-for-122 green. `genMergeSpec` draws them now; the `old-*`/`new-*` cases below pin the
 four shapes that caught the outright swap, and the `canon-*` cases the six that caught
-*which* row the binding reads — `MERGE.md`, "`old` is the row at the canonical key".
+*which* row the binding reads — `MERGE.md`, "The executable row index".
 
 No `:merge` **body** reads a table. An atom there would bind its variable to *any* recorded
 output, where egglog binds the current one, so the model would fire more and build more;
@@ -532,7 +532,7 @@ private def distMax (n : Nat) : FnDecl :=
     merge := some (.merge [] [.app "max" [.var "old", .var "new"]]) }
 
 
-/-- A let-free block with an observable execution marker and a primitive result. -/
+/-- A block with an observable execution marker and a primitive result. -/
 private def distBlock (n : Nat) (op : FnName) : FnDecl :=
   { arity := n, outArity := 1,
     merge := some (.merge [.union (C "Tick") (C "Tick")]
@@ -598,11 +598,9 @@ private def pset (f : FnName) (args : List Expr) (v w : Int) : Cmd :=
 being the literals written. Whether the rule fired is therefore visible in `Hit`'s row
 count, which is what makes the value columns observable through `(print-size)`.
 
-The keys are kept distinct so no merge ever fires on the guarded row. That is deliberate
-and it is the fragment boundary `MERGE.md` draws: this model keeps every superseded output
-where egglog deletes it, so after a collision a guard on the *pre-merge* value fires here
-and not there. `MERGE.md`, "What the widening and the composed interpreter found", has the
-minimal repro. -/
+The keys are kept distinct so no merge fires on the guarded row. These cases isolate
+reading two columns from collision behavior; the `tuple-read` cases below separately
+check that the executable index removes superseded outputs. -/
 private def readPair : Rule where
   query := [.values [num 3, num 4] "Dist" [.var "k"]]
   actions := [.expr (.app "Hit" [.var "k"])]
@@ -610,10 +608,9 @@ private def readPair : Rule where
 
 /-! ### Reading a `:merge` function from a rule body
 
-`MERGE.md` calls this the difftest fragment's boundary: every merge case so far *writes*
-`Dist` and queries only constructors, so the read path — `Matches.values`, reachable
-through `execM` — had **no coverage at all**. That is the shape of the `min`/`max` bug: a
-path the suite exercised zero times while the pass count said everything was fine.
+These cases read `Dist` through `Pattern.values` and `execM`, covering the path that
+constructor-only queries do not exercise. Guarding on the returned values also detects
+a merge that computes the wrong result without changing the number of rows.
 
 Reading an analysis function in a rule body is ordinary egglog. Three shapes, all checked
 against the binary:
@@ -872,9 +869,8 @@ private def curatedMerge : List (String × Program) :=
     ("read-stale",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
        .rule (readValue 5), .run ""]),
-    -- **The acceptance test, two columns.** The repro that was recorded in `MERGE.md` as
-    -- a known divergence: egglog says `Hit 0`, and an append-only implementation says
-    -- `Hit 1` because the superseded row is still readable.
+    -- **The acceptance test, two columns.** egglog says `Hit 0`; an index that keeps
+    -- superseded rows says `Hit 1` because the old row is still readable.
     ("tuple-stale",
       [.decl "Dist" (distPair 1), pset "Dist" [C "A"] 5 1, pset "Dist" [C "A"] 3 7,
        .rule readStale, .run ""]),
@@ -1375,11 +1371,7 @@ private def witnessRule (key : List Expr) (vals : List Int) : Rule where
 either a fresh variable (existence) or the literal the program wrote (the value). Its head
 builds a `Hit`, so whether and how often it fired is visible in `(print-size)`.
 
-This is the path `MERGE.md` called the fragment boundary — "merge functions are written
-and never read" — and leaving it there meant the read path, reachable through `execM` from
-`ValidSubst`, had **no** coverage. Reading an analysis function in a rule body is ordinary
-egglog, so there was no reason for the boundary except that nothing had run the merge
-implementation.
+This exercises reads of merge outputs, which constructor-only queries do not cover.
 
 `key` and `val` are a key the program actually writes and the value it writes there, and
 the draw prefers them to freshly generated ones — the same correction `genPattern` needed
@@ -2971,9 +2963,8 @@ set_option linter.hashCommand false in
 set_option linter.hashCommand false in
 #guard (allCases.filter fun c => (c.2.declared).encodeDomainB).length = 87
 
-/-! And they are out for the one reason `MERGE.md` calls permanent rather than a gap: every
-one of the 96 declares a `:merge` function, so it is `EncodeDomain.ctorsOnly` that fails and
-not a generated-name clash or a shadowed primitive.
+/-! Every one of the 96 out-of-domain cases declares a `:merge` function, so it is
+`EncodeDomain.ctorsOnly` that fails and not a generated-name clash or a shadowed primitive.
 
 That is also what says the four newest clauses — `EncodeDomain.queryEncodable`,
 `noLitUnion`, `headsDeclared` and `headsScoped` — **cost the corpus nothing**: the count was 70

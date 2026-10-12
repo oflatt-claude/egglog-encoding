@@ -11,7 +11,7 @@ set_option maxRecDepth 100000
 refinement chain wants a completeness companion: the interpreter keeps the `le`-greatest
 recorded output at each key class rather than merely some subset. `Database.Current`
 (`Proofs/Merge.lean`) is that notion for a merge that is a join, and **no theorem says the
-interpreter computes it** — see `PLAN.md`, "The two contracts".
+interpreter computes it** — see `MERGE.md`, "Interpreter contracts".
 
 `CurrentOfLattice` below is that companion in its naive shape: `execM_contained`'s
 premises, plus antisymmetry of `le` and "the merged value is above both operands". Three

@@ -6,7 +6,7 @@ import EgglogSemantics.Spec.Congruence
 
 `Cong` is a predicate, so nothing in the semantics computes it. This computes it for a
 finite, subterm-closed term set, which is what an executable interpreter needs
-(`PLAN.md`, M10) and what lets a ported test case be discharged by `decide` rather than
+and what lets a ported test case be discharged by `decide` rather than
 by a hand-built derivation.
 
 Deliberately the *obvious* algorithm rather than the efficient one: iterate a

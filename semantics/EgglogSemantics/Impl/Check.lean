@@ -26,8 +26,9 @@ per value column, and a constructor has exactly one value column.
 A name with no entry has no declared column counts, so nothing here constrains it. That a
 program must *have* declared what it applies is `Program.Evaluable`'s business.
 
-`PLAN.md`, "Arity checking", is the derivation from egglog's single lowered-atom equation,
-what it deliberately leaves out, and the one place this is stricter than egglog.
+For `set` and row atoms, the model also checks the key/output split, rather than only
+the total column count. This is stricter than egglog when columns of the same sort can
+move across that split. Primitive arities are not checked here.
 -/
 
 mutual
@@ -142,10 +143,9 @@ What it buys is the thing the whole relational layer was paying for: with nothin
 read but a query atom, `Expr.eval` needs no `lookup` constructor, is deterministic, and
 consults the database only for its signature.
 
-`Rule.noLookup`'s action half is egglog's own `check_no_function_lookups_in_actions` and
-everything else is ours. `PLAN.md`, "Reading is a query atom", lists the three positions
-egglog allows a read and this does not, and what the restriction already caught in
-`Encoding/Encode.lean`.
+`Rule.noLookup`'s action half corresponds to egglog's `check_no_function_lookups_in_actions`.
+The model applies the restriction to every expression position, including top-level actions
+and merge bodies, so evaluation never needs a table lookup.
 -/
 
 mutual
