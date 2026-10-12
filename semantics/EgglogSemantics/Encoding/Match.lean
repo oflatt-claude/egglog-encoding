@@ -513,15 +513,11 @@ entry term, congruence is equality there, so the entry term is one the target ho
 terms, which `Database.Out`'s reflexive `CongList` needs. -/
 theorem out_of_matches_values {d : Database} (hd : d.Diag)
     (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) {vs as : List Expr} {f : FnName} {σ : Env}
-    (h : Matches d (.values vs f as) σ) :
+    (h : Matches d (.expr (.app f (as ++ vs))) σ) :
     ∃ ts us, Expr.evalList d.sig as (σ) = some ts ∧
       Expr.evalList d.sig vs (σ) = some us ∧
       Term.app f (ts ++ us) ∈ d.terms ∧ d.Out f ts us := by
   cases h with
-  | @values vs f as σ us ts w hw hts hus hc =>
-    obtain rfl : w = Term.app f (ts ++ us) := congOn_eq_of_diag hd hc
-    refine ⟨ts, us, hts, hus, hw, ts, CongList.refl fun a ha => ?_, hw⟩
-    exact hsc _ hw (Term.arg_subterms (List.mem_append_left _ ha) (Term.self_mem_subterms a))
 
 /-! ### Reading the encoded query back off the encoder
 
@@ -552,9 +548,8 @@ expressions and binding both value columns. -/
 theorem encodeQueryExpr_app_atoms {f : FnName} {args : List Expr} {n : Nat} :
     (encodeQueryExpr (.app f args) n).2.1 =
       (encodeQueryArgs args n).2.1 ++
-        [.values [.var (freshVar (encodeQueryArgs args n).2.2),
-            .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
-          (viewName f) (encodeQueryArgs args n).1] := rfl
+        [.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++ [.var (freshVar (encodeQueryArgs args n).2.2),
+            .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]))] := rfl
 
 @[inherit_doc encodeQueryExpr_app_expr]
 theorem encodeQueryArgs_cons_exprs {e : Expr} {es : List Expr} {n : Nat} :
@@ -644,11 +639,8 @@ theorem lookup_isSome_of_argVar {d : Database} {σ : Env} {v : Var} :
   | .app f args, n, hm, hv => by
     rw [encodeQueryExpr_app_atoms] at hm
     rcases hv with hv | hv
-    · cases hm (.values [.var (freshVar (encodeQueryArgs args n).2.2),
-          .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
-          (viewName f) (encodeQueryArgs args n).1) (by simp) with
-      | values _ hts _ _ =>
-        exact Expr.lookup_isSome_of_mem_evalList hts (mem_encodeQueryArgs_of_mem hv)
+    · cases hm (.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++ [.var (freshVar (encodeQueryArgs args n).2.2),
+          .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]))) (by simp) with
     · exact lookup_isSome_of_argVarList args n
         (fun a ha => hm a (List.mem_append.mpr (Or.inl ha))) hv
 
@@ -680,7 +672,6 @@ theorem lookup_isSome_of_patternArgVar {d : Database} {σ : Env} {v : Var} :
         (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl ha))))) hv
     · exact lookup_isSome_of_argVar e₂ (encodeQueryExpr e₁ n).2.2
         (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ha))))) hv
-  | .values _ _ _, _, hnv, _, _ => absurd hnv id
 
 /-- **The naming expression evaluates.** An application's is the e-class variable its own read
 binds, a literal's is itself — and a bare *variable*'s is the variable, which no emitted atom
@@ -694,11 +685,8 @@ theorem exists_eval_encodeQueryExpr {d : Database} {σ : Env} :
   | .app f args, n, hm, _ => by
     rw [encodeQueryExpr_app_atoms] at hm
     rw [encodeQueryExpr_app_expr, Expr.eval_var]
-    cases hm (.values [.var (freshVar (encodeQueryArgs args n).2.2),
-        .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
-        (viewName f) (encodeQueryArgs args n).1) (by simp) with
-    | values _ _ hus _ =>
-      exact Option.isSome_iff_exists.mp (Expr.lookup_isSome_of_mem_evalList hus (by simp))
+    cases hm (.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++ [.var (freshVar (encodeQueryArgs args n).2.2),
+        .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]))) (by simp) with
 
 /-- A read binds two value columns, so its match pins a two-element list: the e-class and the
 premise proof, in that order. -/
@@ -736,10 +724,8 @@ theorem queryRead_of_matches {d : Database} (hd : d.Diag)
     rw [encodeQueryExpr_app_atoms] at hm
     rw [encodeQueryExpr_app_expr, Expr.eval_var] at hi
     obtain ⟨ts, us, hts, hus, -, ho⟩ :=
-      out_of_matches_values hd hsc (hm (.values
-        [.var (freshVar (encodeQueryArgs args n).2.2),
-          .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
-        (viewName f) (encodeQueryArgs args n).1) (by simp))
+      out_of_matches_values hd hsc (hm (.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++ [.var (freshVar (encodeQueryArgs args n).2.2),
+          .var (freshVar ((encodeQueryArgs args n).2.2 + 1))]))) (by simp))
     obtain ⟨a, b, ha, -, rfl⟩ := evalList_two_vars hus
     obtain rfl : a = i := Option.some.inj (ha.symm.trans hi)
     exact .app (queryReadList_of_matches hd hsc args n
@@ -797,7 +783,6 @@ theorem patternRead_of_matches {d : Database} (hd : d.Diag)
         (queryRead_of_matches hd hsc e₂ (encodeQueryExpr e₁ n).2.2
           (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ha)))))
           he₂)
-  | .values _ _ _, _, hnv, _, _ => absurd hnv id
 
 /-- **A matched encoded query is a `PatternRead` of the source query it came from.** The
 target-side hypothesis of the correspondence, established from the encoder.
@@ -1280,9 +1265,9 @@ theorem satTarget_subtermClosed : ∀ t ∈ satTarget.terms, t.subterms ⊆ satT
 /-- **A view read really matches there**, so `out_of_matches_values` is not carried by an
 empty premise: `satRebuildRule`'s own first atom, at the entry the build wrote. -/
 theorem satTarget_matches_view :
-    Matches satTarget (.values [.var "@e", .var "@p"] (viewName "A") [])
+    Matches satTarget (.expr (.app (viewName "A") [.var "@e", .var "@p"]))
       [("@e", .app "A" []), ("@p", .app fiatName [])] :=
-  .values satTarget_mem_view rfl rfl (Database.mem_addTerm _ _)
+  .expr (.app rfl (rfl ++ satTarget_mem_view)) (Database.mem_addTerm _ _)
 
 /-- **And `out_of_matches_values` reads it back as a lookup**, at the entry the build wrote. -/
 theorem satTarget_out_view : satTarget.Out (viewName "A") [] [.app "A" [], .app fiatName []] := by
@@ -1486,23 +1471,22 @@ private theorem wSig_merge {f : FnName} {decl : FnDecl} {body : List Action} {re
 
 /-- `F`'s e-class rebuild rule: `@FView(@c0) ↦ (@e, @p)` follows `@e`'s union-find edge. -/
 def wRebuildFEclass : Rule :=
-  { query := [.values [.var "@e", .var "@p"] (viewName "F") [.var "@c0"],
-              .values [.var "@x", .var "@q"] ufName [.var "@e"]],
-    actions := [.set (viewName "F") [.var "@c0"] [.var "@x", transE (.var "@p") (.var "@q")]],
+  { query := [.expr (.app (viewName "F") [.var "@c0", .var "@e", .var "@p"]),
+              .expr (.app ufName [.var "@e", .var "@x", .var "@q"])],
+    actions := [.expr (.app (viewName "F") [.var "@c0", .var "@x", transE (.var "@p") (.var "@q")])],
     ruleset := rebuildRuleset }
 
 /-- `F`'s **column** rebuild rule, the one a nullary constructor has no counterpart for: the
 key's single column follows its edge, and the entry keeps its e-class. -/
 def wRebuildFCol : Rule :=
-  { query := [.values [.var "@e", .var "@p"] (viewName "F") [.var "@c0"],
-              .values [.var "@x", .var "@q"] ufName [.var "@c0"]],
-    actions := [.set (viewName "F") [.var "@x"]
-      [.var "@e", transE (symE (congrE [.var "@q"])) (.var "@p")]],
+  { query := [.expr (.app (viewName "F") [.var "@c0", .var "@e", .var "@p"]),
+              .expr (.app ufName [.var "@c0", .var "@x", .var "@q"])],
+    actions := [.expr (.app (viewName "F") [.var "@x", .var "@e", transE (symE (congrE [.var "@q"])) (.var "@p")])],
     ruleset := rebuildRuleset }
 
 /-- The source rule's encoding: one view read, keyed on the query variable. -/
 def wEncRule : Rule :=
-  { query := [.values [.var "@v0", .var "@v1"] (viewName "F") [.var "x"]],
+  { query := [.expr (.app (viewName "F") [.var "x", .var "@v0", .var "@v1"])],
     actions := [], ruleset := "" }
 
 /-- After the prelude and the encoded rule: twelve declarations and five rules. `A`'s rebuild
@@ -1609,15 +1593,13 @@ theorem wTarget_mergeSaturated : MergeSaturated wTarget := by
 /-- No `@UF` read matches: a `Pattern.values` match needs the entry term itself, and on a
 diagonal state `withOperands` cannot supply one. -/
 theorem wTarget_not_matches_uf {vs as : List Expr} {σ : Env} :
-    ¬ Matches wTarget (.values vs ufName as) σ := by
+    ¬ Matches wTarget (.expr (.app ufName (as ++ vs))) σ := by
   intro h
   cases h with
-  | values hw _ _ hcong =>
-    exact absurd (congOn_eq_of_diag wTarget_diag hcong ▸ hw) (wTarget_no_uf _)
 
 private theorem wTarget_not_forall₂ : ∀ {q : Query} {σs : List Env},
     List.Forall₂ (ValidSubst wTarget) q σs →
-    ∀ {vs as : List Expr}, Pattern.values vs ufName as ∈ q → False
+    ∀ {vs as : List Expr}, Pattern.expr (.app ufName (as ++ vs)) ∈ q → False
   | _, _, .nil, _, _, h => absurd h (by simp)
   | _ :: _, _, .cons hp hrest, _, _, h => by
     rcases List.mem_cons.mp h with rfl | h'
@@ -1669,10 +1651,10 @@ def wEncodedPrelude : Program :=
 
 /-- **And what the one source action becomes**: four `set`s and the rebuild. -/
 def wEncodedActions : Program :=
-  [.action (.set (termName "A") [.app "A" []] []),
-   .action (.set (viewName "A") [] [.app "A" [], fiatE]),
-   .action (.set (termName "F") [.app "A" [], .app "F" [.app "A" []]] []),
-   .action (.set (viewName "F") [.app "A" []] [.app "F" [.app "A" []], fiatE]),
+  [.action (.expr (.app (termName "A") [.app "A" []])),
+   .action (.expr (.app (viewName "A") [.app "A" [], fiatE])),
+   .action (.expr (.app (termName "F") [.app "A" [], .app "F" [.app "A" []]])),
+   .action (.expr (.app (viewName "F") [.app "A" [], .app "F" [.app "A" []], fiatE])),
    .saturate rebuildRuleset]
 
 /-- The twenty-two commands, as `satEncoded` is. -/
@@ -1772,9 +1754,9 @@ theorem wTarget_subtermClosed : ∀ t ∈ wTarget.terms, t.subterms ⊆ wTarget.
 /-- **The view read matches, with a variable in its key column.** `wEncRule`'s own atom, at
 the entry the build wrote: the key is `x`, and the substitution binds it to `(A)`. -/
 theorem wTarget_matches_view :
-    Matches wTarget (.values [.var "@e", .var "@p"] (viewName "F") [.var "x"])
+    Matches wTarget (.expr (.app (viewName "F") [.var "x", .var "@e", .var "@p"]))
       [("x", .app "A" []), ("@e", .app "F" [.app "A" []]), ("@p", .app fiatName [])] :=
-  .values wTarget_mem_view rfl rfl (Database.mem_addTerm _ _)
+  .expr (.app rfl (rfl ++ wTarget_mem_view)) (Database.mem_addTerm _ _)
 
 /-- **And `out_of_matches_values` reads it back as a lookup.** -/
 theorem wTarget_out_view :
@@ -1833,8 +1815,8 @@ private theorem wTarget_mem_of_sub {t : Term} (h : t ∈ wFViewE.subterms) :
 
 /-- The one emitted atom matches, at the one entry the build wrote. -/
 theorem wTarget_validSubst :
-    ValidSubst wTarget (.values [.var "@v0", .var "@v1"] (viewName "F") [.var "x"]) wSubst := by
-  refine ⟨⟨List.Perm.refl _, ?_⟩, .values wTarget_mem_view rfl rfl (Database.mem_addTerm _ _)⟩
+    ValidSubst wTarget (.expr (.app (viewName "F") [.var "x", .var "@v0", .var "@v1"])) wSubst := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .expr (.app rfl (rfl ++ wTarget_mem_view)) (Database.mem_addTerm _ _)⟩
   intro b hb
   simp only [wSubst, List.mem_cons, List.not_mem_nil, or_false] at hb
   rcases hb with rfl | rfl | rfl <;>
@@ -2134,20 +2116,20 @@ def uMinE : Expr := minE (.app "A" []) (.app "B" [])
 /-- `B`'s e-class rebuild rule, `satRebuildRule` at the other constructor. This is the rule
 that fires here and does not fire at `wProgram`: its `@UF` premise has a row to read. -/
 def uRebuildB : Rule :=
-  { query := [.values [.var "@e", .var "@p"] (viewName "B") [],
-              .values [.var "@x", .var "@q"] ufName [.var "@e"]],
-    actions := [.set (viewName "B") [] [.var "@x", transE (.var "@p") (.var "@q")]],
+  { query := [.expr (.app (viewName "B") [.var "@e", .var "@p"]),
+              .expr (.app ufName [.var "@e", .var "@x", .var "@q"])],
+    actions := [.expr (.app (viewName "B") [.var "@x", transE (.var "@p") (.var "@q")])],
     ruleset := rebuildRuleset }
 
 /-- The source rule's encoding: one view read, and a head that `set`s the `@UF` edge under
 the firing's own `@Rule_0` justification. -/
 def uEncRule : Rule :=
-  { query := [.values [.var "@v0", .var "@v1"] (viewName "A") []],
-    actions := [.set (termName "A") [.app "A" []] [],
-                .set (viewName "A") [] [.app "A" [], fiatE],
-                .set (termName "B") [.app "B" []] [],
-                .set (viewName "B") [] [.app "B" [], fiatE],
-                .set ufName [uMaxE] [uMinE, ruleE 0 [.var "@v1"]]],
+  { query := [.expr (.app (viewName "A") [.var "@v0", .var "@v1"])],
+    actions := [.expr (.app (termName "A") [.app "A" []]),
+                .expr (.app (viewName "A") [.app "A" [], fiatE]),
+                .expr (.app (termName "B") [.app "B" []]),
+                .expr (.app (viewName "B") [.app "B" [], fiatE]),
+                .expr (.app ufName [uMaxE, uMinE, ruleE 0 [.var "@v1"]])],
     ruleset := "" }
 
 /-- **The prelude `encode uProgram` emits**: eleven declarations — the three fixed proof
@@ -2167,11 +2149,11 @@ def uEncodedPrelude : Program :=
 the `@UF` edge. `wEncodedActions`' counterpart minus its last command, which is the one no
 state satisfies. -/
 def uEncodedSets : Program :=
-  [.action (.set (termName "A") [.app "A" []] []),
-   .action (.set (viewName "A") [] [.app "A" [], fiatE]),
-   .action (.set (termName "B") [.app "B" []] []),
-   .action (.set (viewName "B") [] [.app "B" [], fiatE]),
-   .action (.set ufName [uMaxE] [uMinE, fiatE])]
+  [.action (.expr (.app (termName "A") [.app "A" []])),
+   .action (.expr (.app (viewName "A") [.app "A" [], fiatE])),
+   .action (.expr (.app (termName "B") [.app "B" []])),
+   .action (.expr (.app (viewName "B") [.app "B" [], fiatE])),
+   .action (.expr (.app ufName [uMaxE, uMinE, fiatE]))]
 
 /-- The twenty commands the run below steps, as `satEncoded` and `wEncoded` are stepped. -/
 def uEncodedPrefix : Program := uEncodedPrelude ++ uEncodedSets
@@ -2403,8 +2385,8 @@ def uSubst : Env := [("@v0", uA), ("@v1", .app fiatName [])]
 
 /-- The one emitted atom matches, at `(A)`'s view row. -/
 theorem uTgt_validSubst :
-    ValidSubst uTgt (.values [.var "@v0", .var "@v1"] (viewName "A") []) uSubst := by
-  refine ⟨⟨List.Perm.refl _, ?_⟩, .values uTgt_mem_viewA rfl rfl (Database.mem_addTerm _ _)⟩
+    ValidSubst uTgt (.expr (.app (viewName "A") [.var "@v0", .var "@v1"])) uSubst := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .expr (.app rfl (rfl ++ uTgt_mem_viewA)) (Database.mem_addTerm _ _)⟩
   intro b hb
   simp only [uSubst, List.mem_cons, List.not_mem_nil, or_false] at hb
   rcases hb with rfl | rfl
@@ -2901,8 +2883,8 @@ def uRSubst2 : Env := [("@x", uA), ("@q", .app fiatName []), ("@e", uB)]
 @[inherit_doc uRSubst1] def uRSubst : Env := uRSubst1 ++ uRSubst2
 
 theorem uTgt_validSubst_view :
-    ValidSubst uTgt (.values [.var "@e", .var "@p"] (viewName "B") []) uRSubst1 := by
-  refine ⟨⟨List.Perm.refl _, ?_⟩, .values uTgt_mem_viewB rfl rfl (Database.mem_addTerm _ _)⟩
+    ValidSubst uTgt (.expr (.app (viewName "B") [.var "@e", .var "@p"])) uRSubst1 := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .expr (.app rfl (rfl ++ uTgt_mem_viewB)) (Database.mem_addTerm _ _)⟩
   intro b hb
   simp only [uRSubst1, List.mem_cons, List.not_mem_nil, or_false] at hb
   rcases hb with rfl | rfl
@@ -2910,8 +2892,8 @@ theorem uTgt_validSubst_view :
   · exact uTgt_mem_fiat
 
 theorem uTgt_validSubst_uf :
-    ValidSubst uTgt (.values [.var "@x", .var "@q"] ufName [.var "@e"]) uRSubst2 := by
-  refine ⟨⟨List.Perm.refl _, ?_⟩, .values uTgt_mem_uf rfl rfl (Database.mem_addTerm _ _)⟩
+    ValidSubst uTgt (.expr (.app ufName [.var "@e", .var "@x", .var "@q"])) uRSubst2 := by
+  refine ⟨⟨List.Perm.refl _, ?_⟩, .expr (.app rfl (rfl ++ uTgt_mem_uf)) (Database.mem_addTerm _ _)⟩
   intro b hb
   simp only [uRSubst2, List.mem_cons, List.not_mem_nil, or_false] at hb
   rcases hb with rfl | rfl | rfl
@@ -3012,9 +2994,9 @@ theorem uf_row_succ {d : Database} (hrun : RunRules rebuildRuleset d = d)
   have hev : Term.app (viewName "B") [uA, .app transName [.app fiatName [], q]] ∈
       Database.terms ⟨uSig, deqs, [], drules⟩ := by
     have hσ₁ : ValidSubst ⟨uSig, deqs, [], drules⟩
-        (.values [.var "@e", .var "@p"] (viewName "B") []) uRSubst1 := by
+        (.expr (.app (viewName "B") [.var "@e", .var "@p"])) uRSubst1 := by
       refine ⟨⟨List.Perm.refl _, ?_⟩,
-        .values (ts := []) (us := [uB, .app fiatName []]) hstale rfl rfl
+        .expr (.app (us := [uB, .app fiatName []]) (hstale ++ (ts := []))) rfl rfl
           (Database.mem_addTerm _ _)⟩
       intro b hb
       simp only [uRSubst1, List.mem_cons, List.not_mem_nil, or_false] at hb
@@ -3022,10 +3004,10 @@ theorem uf_row_succ {d : Database} (hrun : RunRules rebuildRuleset d = d)
       · exact hB
       · exact hfiat
     have hσ₂ : ValidSubst ⟨uSig, deqs, [], drules⟩
-        (.values [.var "@x", .var "@q"] ufName [.var "@e"])
+        (.expr (.app ufName [.var "@e", .var "@x", .var "@q"]))
         [("@x", uA), ("@q", q), ("@e", uB)] := by
       refine ⟨⟨List.Perm.refl _, ?_⟩,
-        .values (ts := [uB]) (us := [uA, q]) hq rfl rfl (Database.mem_addTerm _ _)⟩
+        .expr (.app (us := [uA, q]) (hq ++ (ts := [uB]))) rfl rfl (Database.mem_addTerm _ _)⟩
       intro b hb
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
       rcases hb with rfl | rfl | rfl

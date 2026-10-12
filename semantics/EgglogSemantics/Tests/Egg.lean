@@ -54,24 +54,26 @@ def Expr.valuesToEgg : List Expr → String
 width: `(= v (f a…))` at one value column and `(= (values v…) (f a…))` at more, since
 `values` is not a function name and egglog answers "Unbound function values" if the tuple
 form is used on a one-column function. -/
-def Pattern.toEgg : Pattern → String
-  | .expr e => e.toEgg
+def Pattern.toEgg (sig : Signature) : Pattern → String
+  | .expr e => match e.entry sig with
+    | none => e.toEgg
+    | some (f, keys, vals) =>
+        "(= " ++ Expr.valuesToEgg vals ++ " " ++ (Expr.app f keys).toEgg ++ ")"
   | .eq e₁ e₂ => "(= " ++ e₁.toEgg ++ " " ++ e₂.toEgg ++ ")"
-  | .values vs f as =>
-      "(= " ++ Expr.valuesToEgg vs ++ " (" ++ f ++ Expr.toEggArgs as ++ "))"
 
-def Action.toEgg : Action → String
-  | .expr e => e.toEgg
+def Action.toEgg (sig : Signature) : Action → String
+  | .expr e => match e.entry sig with
+    | none => e.toEgg
+    | some (f, keys, vals) =>
+        "(set " ++ (Expr.app f keys).toEgg ++ " " ++ Expr.valuesToEgg vals ++ ")"
   | .union e₁ e₂ => "(union " ++ e₁.toEgg ++ " " ++ e₂.toEgg ++ ")"
-  | .set f args out =>
-      "(set (" ++ f ++ Expr.toEggArgs args ++ ") " ++ Expr.valuesToEgg out ++ ")"
 
 /-- `:ruleset` is emitted only for a named ruleset: egglog's unnamed one is what a rule with
 no `:ruleset` joins, so the empty name renders as nothing and the existing cases are
 unchanged. -/
-def Rule.toEgg (r : Rule) : String :=
-  "(rule (" ++ String.intercalate " " (r.query.map Pattern.toEgg) ++ ") ("
-    ++ String.intercalate " " (r.actions.map Action.toEgg) ++ ")"
+def Rule.toEgg (sig : Signature) (r : Rule) : String :=
+  "(rule (" ++ String.intercalate " " (r.query.map (Pattern.toEgg sig)) ++ ") ("
+    ++ String.intercalate " " (r.actions.map (Action.toEgg sig)) ++ ")"
     ++ (if r.ruleset = "" then "" else " :ruleset " ++ r.ruleset) ++ ")"
 
 /-- The merged value, in egglog's tuple notation. Shared with `Action.set`. -/
@@ -86,11 +88,11 @@ The block form is `:merge (<action>* <result>)` — the actions and the result a
 element is itself a list, which is why an empty body has to emit the bare result: an
 expression always has an atom head, so `:merge (min old new)` reads as a result and
 `:merge ((set (Log) (min old new)) (min old new))` as a block. -/
-def MergeSpec.toEgg : MergeSpec → String
+def MergeSpec.toEgg (sig : Signature) : MergeSpec → String
   | .noMerge => " :no-merge"
   | .merge [] res => " :merge " ++ MergeSpec.resultToEgg res
   | .merge body res =>
-      " :merge (" ++ String.intercalate " " (body.map Action.toEgg) ++ " "
+      " :merge (" ++ String.intercalate " " (body.map (Action.toEgg sig)) ++ " "
         ++ MergeSpec.resultToEgg res ++ ")"
 
 /-- A `:merge` function's declaration.
@@ -109,25 +111,25 @@ of the way.
 A multi-column output is a parenthesized sort list, `(i64 i64)`, as
 `egglog/tests/tuple-output.egg` writes it. egglog accepts `(i64)` for one column too,
 but the bare form is what every existing case renders and is left alone. -/
-def FnDecl.toEgg (f : FnName) (d : FnDecl) (m : MergeSpec) : String :=
+def FnDecl.toEgg (sig : Signature) (f : FnName) (d : FnDecl) (m : MergeSpec) : String :=
   let out := match d.outArity with
     | 1 => "i64"
     | _ => "(" ++ String.intercalate " " (List.replicate d.outArity "i64") ++ ")"
   "(function " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
-    ++ ") " ++ out ++ m.toEgg ++ ")"
+    ++ ") " ++ out ++ m.toEgg sig ++ ")"
 
 /-- A command as egglog source. A run of the *unnamed* ruleset is `(run 1)`, which is what
 egglog's bare form means (`egglog/src/ast/parse.rs:834-864`); a named one carries its name.
 A constructor declaration is folded into the `datatype` header and produces nothing; a
 `:merge` declaration is its own command. -/
-def Cmd.toEgg : Cmd → String
-  | .action a => a.toEgg
-  | .rule r => r.toEgg
+def Cmd.toEgg (sig : Signature) : Cmd → String
+  | .action a => a.toEgg sig
+  | .rule r => r.toEgg sig
   | .run R => if R = "" then "(run 1)" else "(run " ++ R ++ " 1)"
   | .saturate R => "(run-schedule (saturate " ++ (if R = "" then "(run)" else R) ++ "))"
   | .decl f d => match d.merge with
     | none => ""
-    | some m => FnDecl.toEgg f d m
+    | some m => FnDecl.toEgg ((Cmd.decl f d).sigBind sig) f d m
 
 /-! ### Collecting the signature
 
@@ -161,12 +163,10 @@ end
 def Pattern.fnArities : Pattern → List (FnName × Nat)
   | .expr e => e.fnArities
   | .eq e₁ e₂ => e₁.fnArities ++ e₂.fnArities
-  | .values vs f as => (f, as.length) :: Expr.fnAritiesL vs ++ Expr.fnAritiesL as
 
 def Action.fnArities : Action → List (FnName × Nat)
   | .expr e => e.fnArities
   | .union e₁ e₂ => e₁.fnArities ++ e₂.fnArities
-  | .set f args out => (f, args.length) :: Expr.fnAritiesL args ++ Expr.fnAritiesL out
 
 /-- The names a merge specification applies. A `:merge` body is an expression position like
 any other, so a constructor mentioned *only* there — `(set (Log (A)) old)` — still has to
@@ -181,7 +181,7 @@ def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .rule r => (r.query.flatMap Pattern.fnArities) ++ (r.actions.flatMap Action.fnArities)
   | .run _ => []
   | .saturate _ => []
-  | .decl f d => (f, d.arity) :: (d.merge.map MergeSpec.fnArities).getD []
+  | .decl f d => (f, d.entryWidth) :: (d.merge.map MergeSpec.fnArities).getD []
 
 /-- Every function the program uses, with its arity, deduplicated — **primitives
 excluded**. A primitive is not a function of the program's signature: egglog has already
@@ -223,42 +223,6 @@ def Program.ctorDecls (p : Program) : Program :=
 and emits. -/
 def Program.declared (p : Program) : Program := p.ctorDecls ++ p
 
-/-! ### Which `set`s egglog will accept
-
-`(set (f args…) v)` is legal only when `f` is a **function** — declared with `:merge` or
-`:no-merge`. On a constructor it is a *type* error, raised while the command is
-constraint-solved and so before that command or any later one runs
-(`egglog/src/constraint.rs:862`, `TypeError::SetConstructorDisallowed`):
-
-```
-Cannot set constructor Wrap. Use `union` instead or declare Wrap as a function.
-```
-
-A `relation` is a constructor for this purpose and gives the same message. Checked here
-rather than trusted, because a generator that grows a `set` action would otherwise start
-emitting programs egglog throws out wholesale — the failure mode that once cost 34 of 60
-random cases when the fragment allowed bare variables. -/
-
-def Action.setTargets : Action → List FnName
-  | .set f _ _ => [f]
-  | _ => []
-
-def MergeSpec.setTargets : MergeSpec → List FnName
-  | .merge body _ => body.flatMap Action.setTargets
-  | _ => []
-
-def Cmd.setTargets : Cmd → List FnName
-  | .action a => a.setTargets
-  | .rule r => r.actions.flatMap Action.setTargets
-  | .run _ => []
-  | .saturate _ => []
-  | .decl _ d => (d.merge.map MergeSpec.setTargets).getD []
-
-/-- The names the program `set`s that egglog would refuse: everything not declared as a
-merge function. Empty is the only acceptable value for a case the difftest emits. -/
-def Program.illegalSets (p : Program) : List FnName :=
-  (p.flatMap Cmd.setTargets).dedup.filter (· ∉ p.mergeNames)
-
 /-! ### Which arities egglog will accept
 
 Two halves, because the model declares only its `:merge` functions.
@@ -275,7 +239,7 @@ a name used at two arities emits two entries and egglog answers "Function alread
 def Program.arityErrorsFrom : Program → Signature → List String
   | [], _ => []
   | c :: cs, sig =>
-      (if c.arityOk sig then [] else [c.toEgg]) ++ Program.arityErrorsFrom cs (c.sigBind sig)
+      (if c.arityOk sig then [] else [c.toEgg sig]) ++ Program.arityErrorsFrom cs (c.sigBind sig)
 
 /-- The commands whose column counts egglog's typechecker would reject, rendered. Empty is
 the only acceptable value for a case the difftest emits. -/
@@ -292,7 +256,7 @@ share one definition. -/
 def Program.illegalReadsFrom : Program → Signature → List String
   | [], _ => []
   | c :: cs, sig =>
-      (if c.noLookup sig then [] else [c.toEgg])
+      (if c.noLookup sig then [] else [c.toEgg sig])
         ++ Program.illegalReadsFrom cs (c.sigBind sig)
 
 /-- The commands containing a read that is not a `Pattern.values` atom, rendered. Empty is
@@ -330,11 +294,16 @@ def Program.rulesetDecls (p : Program) : List String :=
     | .saturate R => some R
     | _ => none).filter (· ≠ "")).dedup.map fun R => "(ruleset " ++ R ++ ")"
 
+/-- Render commands against the signatures they execute under. -/
+def Program.commandsToEgg : Program → Signature → List String
+  | [], _ => []
+  | c :: cs, sig => c.toEgg sig :: Program.commandsToEgg cs (c.sigBind sig)
+
 /-- The program as a complete `.egg` file, ending in the `(print-size)` that the
 comparison reads. -/
 def Program.toEgg (p : Program) : String :=
   String.intercalate "\n"
-    (p.eggHeader :: p.rulesetDecls ++ (p.map Cmd.toEgg).filter (· ≠ "")
+    (p.eggHeader :: p.rulesetDecls ++ (p.commandsToEgg (fun _ => none)).filter (· ≠ "")
       ++ ["(print-size)", ""])
 
 /-- The row counts the interpreter predicts, one `name count` line per constructor, for

@@ -441,52 +441,17 @@ theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
     (hv : ValidEnv (p.freeVars []) d.toDatabase σ) :
     patternHolds d p σ = true ↔ ValidSubst d.toDatabase p σ := by
   cases p with
-  | values vs f as =>
-    have hm : (d.sig.mergeOf f).isSome = false := by rw [hsig f]; rfl
-    cases hev₁ : Expr.evalList d.sig vs (σ) with
-    | none =>
-      simp only [patternHolds, hev₁, Bool.false_eq_true, false_iff]
-      intro h
-      cases h.2 with
-      | values _ _ hus _ =>
-        rw [FDatabase.toDatabase_sig, hev₁] at hus
-        simp at hus
-    | some us =>
-      cases hev₂ : Expr.evalList d.sig as (σ) with
-      | none =>
-        simp only [patternHolds, hev₁, hev₂, Bool.false_eq_true, false_iff]
-        intro h
-        cases h.2 with
-        | values _ hts _ _ =>
-          rw [FDatabase.toDatabase_sig, hev₂] at hts
-          simp at hts
-      | some ts =>
-        simp only [patternHolds, hev₁, hev₂, hm, Bool.false_eq_true, if_false,
-          decide_eq_true_eq]
-        constructor
-        · rintro ⟨w, hwm, hcl⟩
-          exact ⟨hv, .values (FDatabase.mem_toDatabase_terms.mpr hwm) hev₂ hev₁
-            (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm he).mp hcl))⟩
-        · intro h
-          cases h.2 with
-          | values hwm hts hus hc =>
-            rw [FDatabase.toDatabase_sig, hev₂] at hts
-            rw [FDatabase.toDatabase_sig, hev₁] at hus
-            cases hts
-            cases hus
-            exact ⟨_, FDatabase.mem_toDatabase_terms.mp hwm,
-              (FDatabase.mem_closureF_addTerm he).mpr (congOn_singleton.mp hc)⟩
   | expr e =>
-    cases hev : e.eval d.sig (σ) with
+    cases hev : e.evalAtom d.sig (σ) with
     | none =>
-      simp only [patternHolds, hev, Bool.false_eq_true, false_iff]
+      simp only [patternHolds, Expr.entry_none_of_allConstructors hsig, hev, Bool.false_eq_true, false_iff]
       intro h
       cases h.2 with
       | expr _ hee _ =>
         rw [FDatabase.toDatabase_sig, hev] at hee
         simp at hee
     | some t =>
-      simp only [patternHolds, hev, decide_eq_true_eq]
+      simp only [patternHolds, Expr.entry_none_of_allConstructors hsig, hev, decide_eq_true_eq]
       constructor
       · rintro ⟨w, hwm, hcl⟩
         exact ⟨hv, .expr (FDatabase.mem_toDatabase_terms.mpr hwm) hev (congOn_singleton.mpr
@@ -501,7 +466,7 @@ theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
   | eq e₁ e₂ =>
     cases hev₁ : e₁.eval d.sig (σ) with
     | none =>
-      simp only [patternHolds, hev₁, Bool.false_eq_true, false_iff]
+      simp only [patternHolds, Expr.entry_none_of_allConstructors hsig, hev₁, Bool.false_eq_true, false_iff]
       intro h
       cases h.2 with
       | eq _ he₁ _ _ _ =>
@@ -510,14 +475,14 @@ theorem patternHolds_iff {d : FDatabase} (he : d.EqsInTerms)
     | some t₁ =>
       cases hev₂ : e₂.eval d.sig (σ) with
       | none =>
-        simp only [patternHolds, hev₁, hev₂, Bool.false_eq_true, false_iff]
+        simp only [patternHolds, Expr.entry_none_of_allConstructors hsig, hev₁, hev₂, Bool.false_eq_true, false_iff]
         intro h
         cases h.2 with
         | eq _ _ he₂ _ _ =>
           rw [FDatabase.toDatabase_sig, hev₂] at he₂
           simp at he₂
       | some t₂ =>
-        simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq]
+        simp only [patternHolds, Expr.entry_none_of_allConstructors hsig, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq]
         constructor
         · rintro ⟨heq, w, hwm, hcl⟩
           exact ⟨hv, .eq (FDatabase.mem_toDatabase_terms.mpr hwm) hev₁ hev₂
@@ -657,12 +622,11 @@ theorem mem_matchQuery_of_validQuerySubst {d : FDatabase} (he : d.EqsInTerms)
 /-- What one action produces, per case. Every fact below about `execAction` is a three-way
 `rcases` on this rather than a repeat of the case analysis. -/
 theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a = some d') :
-    (∃ t, d' = d.addTerm t) ∨
-      (∃ t₁ t₂, ¬ (t₁.isLit ∨ t₂.isLit) ∧ d' = d.addEq t₁ t₂) ∨
-      (∃ f as vs, d' = d.addRow f as vs) := by
+    (∃ t, d' = d.addAtom t) ∨
+      (∃ t₁ t₂, ¬ (t₁.isLit ∨ t₂.isLit) ∧ d' = d.addEq t₁ t₂) := by
   cases a with
   | expr e =>
-    cases hv : e.eval d.sig d.env with
+    cases hv : e.evalAtom d.sig d.env with
     | none => simp [execAction, hv] at h
     | some t =>
       simp only [execAction, hv, Option.map_some, Option.some.injEq] at h
@@ -679,30 +643,17 @@ theorem execAction_eq_some {d d' : FDatabase} {a : Action} (h : execAction d a =
         · simp at h
         · rename_i hlit
           simp only [Option.some.injEq] at h
-          exact Or.inr (Or.inl ⟨t₁, t₂, by simpa using hlit, h.symm⟩)
-  | set f args out =>
-    cases hv₁ : Expr.evalList d.sig args d.env with
-    | none => simp [execAction, hv₁] at h
-    | some as =>
-      cases hv₂ : Expr.evalList d.sig out d.env with
-      | none => simp [execAction, hv₁, hv₂] at h
-      | some vs =>
-        simp only [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
-          Option.some.injEq] at h
-        exact Or.inr (Or.inr ⟨f, as, vs, h.symm⟩)
+          exact Or.inr ⟨t₁, t₂, by simpa using hlit, h.symm⟩
 
 theorem execAction_eqsInTerms {d d' : FDatabase} (he : d.EqsInTerms) {a : Action}
     (h : execAction d a = some d') : d'.EqsInTerms := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
-    ⟨f, as, vs, rfl⟩
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩
   · exact he.addTerm t
   · exact he.addEq t₁ t₂
-  · exact he.addRow f as vs
 
 theorem execAction_rules {d d' : FDatabase} {a : Action} (h : execAction d a = some d') :
     d'.rules = d.rules := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
-    ⟨f, as, vs, rfl⟩ <;>
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ <;>
     rfl
 
 theorem execActions_eqsInTerms {as : List Action} : ∀ {d d' : FDatabase}, d.EqsInTerms →
@@ -738,18 +689,19 @@ theorem FDatabase.execAction_env {d d' : FDatabase} {a : Action}
       split at h
       · simp at h
       · cases Option.some.inj h; rfl
-  | set f args out =>
-      obtain ⟨as, _, h⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨vs, _, rfl⟩ := Option.map_eq_some_iff.mp h
-      rfl
+
+@[simp] theorem FDatabase.toDatabase_addAtom {d : FDatabase} (he : d.EqsInTerms) (t : Term) :
+    (d.addAtom t).toDatabase = d.toDatabase.addTerm t := by
+  change (d.addTerm t).toDatabase = _
+  exact FDatabase.toDatabase_addTerm he
 
 theorem execAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
     (execAction d a).map FDatabase.toDatabase = evalAction d.toDatabase a := by
   cases a with
   | expr e =>
-    cases hv : e.eval d.sig d.env with
+    cases hv : e.evalAtom d.sig d.env with
     | none => simp [execAction, evalAction, hv]
-    | some t => simp [execAction, evalAction, hv, FDatabase.toDatabase_addTerm he]
+    | some t => simp [execAction, evalAction, hv, FDatabase.toDatabase_addAtom he]
   | union e₁ e₂ =>
     cases hv₁ : e₁.eval d.sig d.env with
     | none => simp [execAction, evalAction, hv₁]
@@ -760,13 +712,6 @@ theorem execAction_toDatabase {d : FDatabase} (he : d.EqsInTerms) {a : Action} :
         by_cases hlit : t₁.isLit ∨ t₂.isLit
         · simp [execAction, evalAction, hv₁, hv₂, hlit]
         · simp [execAction, evalAction, hv₁, hv₂, hlit, FDatabase.toDatabase_addEq he]
-  | set f args out =>
-    cases hv₁ : Expr.evalList d.sig args d.env with
-    | none => simp [execAction, evalAction, hv₁]
-    | some as =>
-      cases hv₂ : Expr.evalList d.sig out d.env with
-      | none => simp [execAction, evalAction, hv₁, hv₂]
-      | some vs => simp [execAction, evalAction, hv₁, hv₂, FDatabase.toDatabase_addRow he]
 
 /-- Action blocks preserve the evaluation environment. -/
 theorem FDatabase.execActions_env {as : List Action} {d d' : FDatabase}

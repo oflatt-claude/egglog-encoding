@@ -30,7 +30,6 @@ end
 def Pattern.freeVars : Pattern → Env → List Var
   | .expr e, σ => e.freeVars σ
   | .eq e₁ e₂, σ => e₁.freeVars σ ∪ e₂.freeVars σ
-  | .values vs _ as, σ => Expr.freeVarsList vs σ ∪ Expr.freeVarsList as σ
 
 namespace Env
 /-- Append, requiring the two to agree wherever both bind. The result may bind a variable
@@ -62,22 +61,13 @@ as written, and a match supplies all of its variables. The database's ambient en
 is not consulted. -/
 inductive Matches (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
-      w ∈ db.terms → e.eval db.sig σ = some t → CongOn db [t] w t →
+      w ∈ db.terms → e.evalAtom db.sig σ = some t → CongOn db [t] w t →
       Matches db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       w ∈ db.terms →
       e₁.eval db.sig σ = some t₁ → e₂.eval db.sig σ = some t₂ →
       CongOn db [t₁, t₂] w t₁ → CongOn db [t₁, t₂] t₁ t₂ →
       Matches db (.eq e₁ e₂) σ
-  /-- The entry atom: `f`'s entry at a key class congruent to `as`, with value columns
-  congruent to `vs`, whose instance is the term `f(as…, vs…)`. **The only read.** -/
-  | values {vs : List Expr} {f : FnName} {as : List Expr} {σ : Env}
-      {us ts : List Term} {w : Term} :
-      w ∈ db.terms →
-      Expr.evalList db.sig as σ = some ts →
-      Expr.evalList db.sig vs σ = some us →
-      CongOn db [.app f (ts ++ us)] w (.app f (ts ++ us)) →
-      Matches db (.values vs f as) σ
 
 /-- A substitution binds exactly the pattern's variables and makes the pattern match.
 Every query variable is local to the match. -/

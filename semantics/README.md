@@ -7,20 +7,26 @@ including multi-output functions and action blocks inside `:merge` bodies.
 
 ## Language and semantics
 
-Programs declare functions and rules, build expressions, union expressions, set function
-rows, and run or saturate named rulesets. Rule variables come from the query; merge bodies
+Programs declare functions and rules, assert expressions and function rows, union values,
+and run or saturate named rulesets. Rule variables come from the query; merge bodies
 use their old/new parameters. Actions evaluate in a fixed environment.
 
 The specification records equations and derives congruence over the terms they mention.
-Constructors build terms; other functions store key/value entries that rules read through
-query atoms. Merge bodies can perform actions as well as return values. The
+Constructors build values; other functions store key/value entries. A complete atom such as
+`(LowerBound expr bound)` reads an entry in a query and records one in an action. The
+declaration determines the key/output split. Entries cannot be nested inside value
+expressions or used as equality or union operands. Merge bodies can perform actions as well as return values. The
 [merge semantics](MERGE.md) guide explains how this relates to the interpreter's row index,
 its refinement contracts, and the limits of the model.
 
 ## Proof encoding
 
 The encoder transforms constructor programs into explicit view and union-find tables,
-with a proof attached to each recorded equality. `encode_corresponds` proves that source
+with a proof attached to each recorded equality. The current entry-syntax refactor builds
+the specification, interpreter, encoder, checker, and example tests. The encoding proof
+port is in progress; the full Lean build currently fails.
+
+Before this refactor, `encode_corresponds` proved that source
 congruence agrees with the encoded target's equivalence on source terms, under
 `Program.EncodeDomain` and successful executions. The library permits no `sorry`.
 

@@ -205,7 +205,8 @@ example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
   ⟨⟨by simp [Pattern.freeVars, eNum], by simp⟩,
     .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
       (.assert (by simp [preWrapped]))
-      (by rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
+      (by apply Expr.evalAtom_of_eval
+          rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
             (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
           rfl)
       (congOn_singleton.mpr (Cong.congr
@@ -470,34 +471,34 @@ private def accepts (d : FnDecl) (cs : List Cmd) : Bool := (prog d cs).arityOk e
 
 /-! ### One value column -/
 
-#guard accepts one [.action (.set "Dist" [A] [eNum 3])]
-#guard accepts one [.rule ⟨[.expr (.app "Dist" [.var "k"])], [], ""⟩]
+#guard accepts one [.action (.expr (.app "Dist" [A, eNum 3]))]
+#guard !accepts one [.rule ⟨[.expr (.app "Dist" [.var "k"])], [], ""⟩]
 #guard accepts one [.rule ⟨[.eq (eNum 3) (.app "Dist" [.var "k"])], [], ""⟩]
-#guard accepts one [.action (.expr (.app "Dist" [A]))]
+#guard !accepts one [.action (.expr (.app "Dist" [A]))]
 
 /- "Arity mismatch, expected 1 args: (Dist @A @A1)" — too many key columns. -/
-#guard !accepts one [.action (.set "Dist" [A, A] [eNum 3])]
+#guard !accepts one [.action (.expr (.app "Dist" [A, A, eNum 3]))]
 
 /- "Arity mismatch, expected 1 args: (Dist @A 3)" — `(set (Dist (A)) (values 3 4))`
 flattens to three columns where the table has two. -/
-#guard !accepts one [.action (.set "Dist" [A] [eNum 3, eNum 4])]
+#guard !accepts one [.action (.expr (.app "Dist" [A, eNum 3, eNum 4]))]
 
 /- The row atom at one value column, which is how a single-column read is written since
 `Expr.eval` does not look up. `Tests/Egg.lean` renders it `(= v (Dist k))`: writing
 `(= (values v) (Dist k))` instead is "Unbound function values", because `values` is
 recognized only for a tuple output. -/
-#guard accepts one [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], [], ""⟩]
+#guard accepts one [.rule ⟨[.expr (.app "Dist" [.var "k", .var "v"])], [], ""⟩]
 
 /- "Arity mismatch, expected 1 args: (Dist a b)" — in a query fact too. -/
-#guard !accepts one [.rule ⟨[.expr (.app "Dist" [.var "a", .var "b"])], [], ""⟩]
+#guard !accepts one [.rule ⟨[.expr (.app "Dist" [.var "a", .var "b", .var "c"])], [], ""⟩]
 
 /-! ### Two value columns -/
 
-#guard accepts two [.action (.set "Dist" [A] [eNum 3, eNum 4])]
-#guard accepts two [.rule ⟨[.values [.var "v", .var "w"] "Dist" [.var "k"]], [], ""⟩]
+#guard accepts two [.action (.expr (.app "Dist" [A, eNum 3, eNum 4]))]
+#guard accepts two [.rule ⟨[.expr (.app "Dist" [.var "k", .var "v", .var "w"])], [], ""⟩]
 
 /- "Arity mismatch, expected 2 args: (Dist @A)" — a bare value on a two-column table. -/
-#guard !accepts two [.action (.set "Dist" [A] [eNum 3])]
+#guard !accepts two [.action (.expr (.app "Dist" [A, eNum 3]))]
 
 /- "Arity mismatch, expected 2 args: (Dist @A2)" — a tuple-output function cannot be
 evaluated as an expression: only one output variable is appended. -/
@@ -509,7 +510,7 @@ same reason. A read of any width is `Pattern.values`. -/
 
 /- "Arity mismatch, expected 2 args: (Dist k v)" — the destructure binds every value
 column or none. -/
-#guard !accepts two [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]], [], ""⟩]
+#guard !accepts two [.rule ⟨[.expr (.app "Dist" [.var "k", .var "v"])], [], ""⟩]
 
 /-! ### The declaration itself -/
 
@@ -528,12 +529,12 @@ constructors, relations, or view tables)." -/
 /- A merge body is checked against the signature the declaration itself installs, so it
 may write the function's own table — `(function Dist (Math) i64 :merge ((set (Dist (A)) 1)
 (min old new)))` runs. A forward reference is instead "Unbound function". -/
-#guard accepts { one with merge := some (.merge [.set "Dist" [A] [eNum 1]] [eNum 0]) } []
+#guard accepts { one with merge := some (.merge [.expr (.app "Dist" [A, eNum 1])] [eNum 0]) } []
 
 /- …and its arity is checked there too: "Arity mismatch, expected 1 args:
 (Dist @A @A1)". -/
 #guard !accepts
-  { one with merge := some (.merge [.set "Dist" [A, A] [eNum 1]] [eNum 0]) } []
+  { one with merge := some (.merge [.expr (.app "Dist" [A, A, eNum 1])] [eNum 0]) } []
 
 /-! ### Undeclared names are unconstrained
 
@@ -581,16 +582,16 @@ private def ok (cs : List Cmd) : Bool := (decls ++ cs).noLookup emptySig
 /-! ### A rule head — egglog rejects these too -/
 
 /- "Value lookup of non-constructor function function in rule is disallowed." -/
-#guard !ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]],
-                   [.set "Copy" [.var "k"] [.app "Dist" [.var "k"]]], ""⟩]
+#guard !ok [.rule ⟨[.expr (.app "Dist" [.var "k", .var "v"])],
+                   [.expr (.app "Copy" [.var "k", .app "Dist" [.var "k"]])], ""⟩]
 
 /- The same read nested inside a constructor application, and inside a `union`. -/
 #guard !ok [.rule ⟨[], [.expr (.app "F" [.app "Dist" [A]])], ""⟩]
 #guard !ok [.rule ⟨[], [.union (.app "Dist" [A]) A], ""⟩]
 
 /- The query binds the value and the head only writes: this is the shape egglog wants. -/
-#guard ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"]],
-                  [.set "Copy" [.var "k"] [.var "v"]], ""⟩]
+#guard ok [.rule ⟨[.expr (.app "Dist" [.var "k", .var "v"])],
+                  [.expr (.app "Copy" [.var "k", .var "v"])], ""⟩]
 
 /-! ### Positions where egglog is more permissive
 
@@ -598,7 +599,7 @@ Each of the three runs in the binary and is rejected here, which is what confine
 to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 
 /- A top-level action. `(set (Copy (A)) (Dist (A)))` copies the value in egglog. -/
-#guard !ok [.action (.set "Copy" [A] [.app "Dist" [A]])]
+#guard !ok [.action (.expr (.app "Copy" [A, .app "Dist" [A]]))]
 
 /- A `:merge` body, typechecked under `Context::Write`, which never runs the check.
 `(function Dist (Math) i64 :merge (max old (Zero)))` reads `Zero` and panics with
@@ -612,7 +613,7 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 /- A read nested in a query fact. egglog flattens `(F (Dist k))` into the two atoms
 `Dist(k, v), F(v, o)`; this model has no flattening pass, so it must be written flat. -/
 #guard !ok [.rule ⟨[.expr (.app "F" [.app "Dist" [.var "k"]])], [], ""⟩]
-#guard ok [.rule ⟨[.values [.var "v"] "Dist" [.var "k"], .expr (.app "F" [.var "v"])], [], ""⟩]
+#guard ok [.rule ⟨[.expr (.app "Dist" [.var "k", .var "v"]), .expr (.app "F" [.var "v"])], [], ""⟩]
 
 /-! ### What still passes
 
@@ -624,7 +625,7 @@ body computing `(min old new)` is fine, and a body writing its own table is a wr
 #guard Program.noLookup
   [.decl "A" (ctorDecl 0),
    .decl "Dist" { arity := 1, outArity := 1,
-                  merge := some (.merge [.set "Dist" [A] [.lit (.int 1)]]
+                  merge := some (.merge [.expr (.app "Dist" [A, .lit (.int 1)])]
                     [.app "min" [.var "old", .var "new"]]) }] emptySig
 
 end Reading
@@ -658,15 +659,15 @@ private def edgeDecl : FnDecl :=
 /-- Transitive closure: `E(a,b)` and `E(b,c)` give `E(a,c)`. Over a path of `n` edges this
 needs `⌈log₂ n⌉` rounds, and that count is a function of the data, not of the program. -/
 private def trans : Rule where
-  query := [.values [one] "E" [.var "a", .var "b"],
-            .values [one] "E" [.var "b", .var "c"]]
-  actions := [.set "E" [.var "a", .var "c"] [one]]
+  query := [.expr (.app "E" [.var "a", .var "b", one]),
+            .expr (.app "E" [.var "b", .var "c", one])]
+  actions := [.expr (.app "E" [.var "a", .var "c", one])]
   ruleset := "@tc"
 
 /-- Declarations, the path `N0 → N1 → N2 → N3`, the rule, then whatever `cs` runs. -/
 private def path (cs : Program) : Program :=
   [.decl "N" (ctorDecl 1), .decl "E" edgeDecl] ++
-  ((List.range 3).map fun i => Cmd.action (.set "E" [N i, N (i + 1)] [one])) ++
+  ((List.range 3).map fun i => Cmd.action (.expr (.app "E" [N i, N (i + 1), one]))) ++
   [.rule trans] ++ cs
 
 /-- Key classes of `E`: three to start with, six at the transitive closure. -/
@@ -690,5 +691,52 @@ That is what keeps the encoding's maintenance rules out of the source program's 
 #guard edges (path [.run ""]) = some 3
 
 end Saturating
+
+/-! ## Complete entry atoms
+
+A function application includes its key and output columns in both a query and an action.
+Only complete atoms may use table heads; all columns and union operands are values.
+-/
+namespace EntryAtoms
+set_option linter.hashCommand false
+
+private def sig : Signature := fun f =>
+  if f = "LowerBound" then some
+    { arity := 1, outArity := 1, merge := some (.merge [] [.var "old"]) }
+  else if f = "Wrap" then some (ctorDecl 1)
+  else if f = "Expr" ∨ f = "Bound" then some (ctorDecl 0)
+  else none
+
+private def entry : Expr := .app "LowerBound" [.app "Expr" [], .app "Bound" []]
+
+#guard entry.atomArityOk sig && entry.atomNoLookup sig
+#guard !(.app "LowerBound" [.app "Expr" []] : Expr).atomArityOk sig
+#guard !(.app "LowerBound" [.app "Expr" [], .app "Bound" [], .app "Bound" []] : Expr).atomArityOk sig
+#guard !(Action.union entry (.app "Expr" [])).noLookup sig
+#guard !(Pattern.eq entry entry).noLookup sig
+#guard !(Action.expr (.app "Wrap" [entry])).noLookup sig
+#guard !(Action.expr (.app "LowerBound" [entry, .app "Bound" []])).noLookup sig
+#guard entry.eval sig [] = none
+#guard entry.evalAtom sig [] = some (.app "LowerBound" [.app "Expr" [], .app "Bound" []])
+
+private def initial : FDatabase := { FDatabase.empty with sig := sig }
+private def written : FDatabase := (execAction initial (.expr entry)).getD initial
+
+#guard (execAction initial (.expr entry)).isSome
+#guard written.rows.contains ⟨"LowerBound", [.app "Expr" []], [.app "Bound" []]⟩
+#guard patternHolds written (.expr (.app "LowerBound" [.var "e", .var "b"]))
+  [("e", .app "Expr" []), ("b", .app "Bound" [])]
+#guard !patternHolds initial (.expr entry) []
+#guard !patternHolds initial (.eq (.app "Expr" []) (.app "Expr" [])) []
+#guard !written.valueTerms.contains (.app "LowerBound" [.app "Expr" [], .app "Bound" []])
+
+private def copyRule : Rule :=
+  ⟨[.expr (.app "LowerBound" [.var "e", .var "b"])],
+    [.expr (.app "Wrap" [.var "b"])], ""⟩
+
+#guard (execRunRules "" { written with rules := [copyRule] }).terms.contains
+  (.app "Wrap" [.app "Bound" []])
+
+end EntryAtoms
 
 end Egglog.Examples

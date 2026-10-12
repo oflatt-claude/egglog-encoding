@@ -1249,9 +1249,6 @@ theorem ValidSubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂) (hsig 
   | eq hw he₁ he₂ hc₁ hc₂ =>
     exact .eq (hc.terms hw) (by rw [← hsig]; exact he₁)
       (by rw [← hsig]; exact he₂) (congOn_mono hc hc₁) (congOn_mono hc hc₂)
-  | values hw ht hu hcong =>
-    exact .values (hc.terms hw) (by rw [← hsig]; exact ht)
-      (by rw [← hsig]; exact hu) (congOn_mono hc hcong)
 
 theorem ValidQuerySubst.mono {d₁ d₂ : Database} (hc : d₁.Contained d₂)
     (hsig : d₁.sig = d₂.sig) (henv : d₂.env = d₁.env) {q : Query} {σ : Env}
@@ -1358,8 +1355,7 @@ theorem evalAction_mono {db D d : Database} (hc : db.Contained D)
     ∃ D', evalAction D a = some D' ∧ d.Contained D' ∧ d.sig = D'.sig ∧
       d.env = D'.env := by
   rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hlit, rfl⟩ |
-    ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hlit, rfl⟩
   · refine ⟨D.addTerm t, ?_, hc.addTerm_mono t, ?_, ?_⟩
     · simp [evalAction, ← hsig, ← henv, hv]
     · simpa using hsig
@@ -1367,10 +1363,6 @@ theorem evalAction_mono {db D d : Database} (hc : db.Contained D)
   · refine ⟨D.addEq t₁ t₂, ?_, hc.addEq_mono t₁ t₂, ?_, ?_⟩
     · simp only [not_or, Bool.not_eq_true] at hlit
       simp [evalAction, ← hsig, ← henv, hv₁, hv₂, hlit.1, hlit.2]
-    · simpa using hsig
-    · simpa using henv
-  · refine ⟨D.addTerm (.app f (as ++ vs)), ?_, hc.addTerm_mono _, ?_, ?_⟩
-    · simp [evalAction, ← hsig, ← henv, hv₁, hv₂]
     · simpa using hsig
     · simpa using henv
 
@@ -1403,8 +1395,7 @@ theorem evalAction_mono_recorded {db D d : Database} (hc : db.Recorded D)
     ∃ D', evalAction D a = some D' ∧ d.Recorded D' ∧ d.sig = D'.sig ∧
       d.env = D'.env := by
   rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hlit, rfl⟩ |
-    ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hlit, rfl⟩
   · refine ⟨D.addTerm t, ?_, hc.addTerm_mono t, ?_, ?_⟩
     · simp [evalAction, ← hsig, ← henv, hv]
     · simpa using hsig
@@ -1412,10 +1403,6 @@ theorem evalAction_mono_recorded {db D d : Database} (hc : db.Recorded D)
   · refine ⟨D.addEq t₁ t₂, ?_, hc.addEq_mono t₁ t₂, ?_, ?_⟩
     · simp only [not_or, Bool.not_eq_true] at hlit
       simp [evalAction, ← hsig, ← henv, hv₁, hv₂, hlit.1, hlit.2]
-    · simpa using hsig
-    · simpa using henv
-  · refine ⟨D.addTerm (.app f (as ++ vs)), ?_, hc.addTerm_mono _, ?_, ?_⟩
-    · simp [evalAction, ← hsig, ← henv, hv₁, hv₂]
     · simpa using hsig
     · simpa using henv
 
@@ -1585,8 +1572,6 @@ undeclared `f` satisfies it vacuously and stops satisfying it the moment `f` is 
 which would make `Action.WriteLegal.update` false. The interpreter's chain needs a check
 that survives a declaration, so it carries only the clause it spends. -/
 def Action.SetWidthOk : Action → Signature → Prop
-  | .set f args out, sig =>
-      ∀ dc, sig f = some dc → args.length = dc.arity ∧ out.length = dc.outArity
   | _, _ => True
 
 @[simp] def Actions.SetWidthOk : List Action → Signature → Prop
@@ -1817,13 +1802,39 @@ theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : L
     · exact hw dc hdc
     · exact hbase.index.width r hr' dc hdc hm
 
+theorem FDatabase.Inv.addAtom {d : FDatabase} (h : d.Inv) (t : Term) : (d.addAtom t).Inv := by
+  cases t with
+  | lit l => simpa [FDatabase.addAtom, FDatabase.entryRowList, FDatabase.addTerm] using h.addTerm (.lit l)
+  | app f cols =>
+    cases hd : d.sig f with
+    | none => simpa [FDatabase.addAtom, FDatabase.entryRowList, hd, FDatabase.addTerm] using h.addTerm (.app f cols)
+    | some dc =>
+      by_cases hc : dc.merge.isSome && cols.length == dc.entryWidth
+      · have hm : dc.merge.isSome = true := ((Bool.and_eq_true _ _).mp hc).1
+        have hw : cols.length = dc.arity + dc.outArity := by
+          have := ((Bool.and_eq_true _ _).mp hc).2
+          have hn : dc.merge.isNone = false := by
+            cases hh : dc.merge <;> simp_all
+          simpa [FnDecl.entryWidth, hn] using this
+        have heq : d.addAtom (.app f cols) = d.addRow f (cols.take dc.arity) (cols.drop dc.arity) := by
+          simp [FDatabase.addAtom, FDatabase.entryRowList, hd, hc, FDatabase.addRow]
+        rw [heq]
+        apply h.addRow
+        · simp [Signature.mergeOf, hd, Option.isSome_iff_ne_none.mp hm]
+        · intro dc' hd'
+          rw [hd] at hd'
+          cases Option.some.inj hd'
+          simp only [List.length_take, List.length_drop]
+          omega
+      · simpa [FDatabase.addAtom, FDatabase.entryRowList, hd, hc, FDatabase.addTerm] using h.addTerm (.app f cols)
+
 theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
     (hlegal : a.WriteLegal d.sig) (hs : execAction d a = some d') : d'.Inv := by
   match a with
   | .expr e =>
     simp only [Egglog.execAction, Option.map_eq_some_iff] at hs
     obtain ⟨t, -, rfl⟩ := hs
-    exact h.addTerm t
+    exact h.addAtom t
   | .union e₁ e₂ =>
     simp only [Egglog.execAction, Option.bind_eq_some_iff] at hs
     obtain ⟨t₁, -, t₂, -, hs⟩ := hs
@@ -1832,12 +1843,6 @@ theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
     · rename_i hlit
       simp only [Option.some.injEq] at hs
       exact hs ▸ h.addEq t₁ t₂ (by simp_all)
-  | .set f args out =>
-    simp only [Egglog.execAction, Option.bind_eq_some_iff, Option.map_eq_some_iff] at hs
-    obtain ⟨ts, hts, vs, hvs, rfl⟩ := hs
-    refine h.addRow hlegal.1 fun dc hdc => ?_
-    obtain ⟨h₁, h₂⟩ := hlegal.2 dc hdc
-    exact ⟨(Expr.evalList_length hts).trans h₁, (Expr.evalList_length hvs).trans h₂⟩
 
 /-! #### Actions
 
@@ -1908,39 +1913,29 @@ theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Patte
     (hs : patternHolds d p σ = true) : ValidSubst d.toDatabase p σ := by
   cases p with
   | expr e =>
-    rw [patternHolds] at hs
-    split at hs
-    · exact absurd hs (by simp)
-    · next t hev =>
-      rw [decide_eq_true_eq] at hs
-      obtain ⟨w, hwm, hcl⟩ := hs
-      exact ⟨hv, .expr (FDatabase.mem_toDatabase_terms.mpr hwm) hev
-        (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm h.eqs).mp hcl))⟩
-  | eq e₁ e₂ =>
-    rw [patternHolds] at hs
-    split at hs
-    · next t₁ t₂ hev₁ hev₂ =>
-      rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hs
-      obtain ⟨heq, w, hwm, hcl⟩ := hs
-      exact ⟨hv, .eq (FDatabase.mem_toDatabase_terms.mpr hwm) hev₁ hev₂
-        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.eqs).mp hcl))
-        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.eqs).mp heq))⟩
-    · exact absurd hs (by simp)
-  | values vs f as =>
-    rw [patternHolds] at hs
-    split at hs
-    · next us ts hu ht =>
-      -- The interpreter splits on the head: a constructor's entry is its own application
-      -- and is tested as a term, a merge function's is looked up in the index.
+    cases he : e.entry d.sig with
+    | none =>
+      simp only [patternHolds, he] at hs
+      cases hev : e.evalAtom d.sig σ with
+      | none => simp [hev] at hs
+      | some t =>
+        simp only [hev, decide_eq_true_eq] at hs
+        obtain ⟨w, hwm, hcl⟩ := hs
+        exact ⟨hv, .expr (FDatabase.mem_toDatabase_terms.mpr hwm) hev
+          (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm h.eqs).mp hcl))⟩
+    | some entry =>
+      obtain ⟨f, as, vs⟩ := entry
+      simp only [patternHolds, he] at hs
       split at hs
-      · next hm =>
+      · next us ts hu ht =>
         rw [List.any_eq_true] at hs
         obtain ⟨r, hr, hcond⟩ := hs
         rw [Bool.and_eq_true, Bool.and_eq_true, decide_eq_true_eq] at hcond
         obtain ⟨⟨hfn, hkey⟩, hval⟩ := hcond
         subst hfn
         have hne : d.sig.mergeOf r.fn ≠ none := by
-          intro hz; rw [hz] at hm; simp at hm
+          obtain ⟨dc, hdc, hm, _, _⟩ := Expr.entry_some he
+          simp [Signature.mergeOf, hdc, Option.isSome_iff_ne_none.mp hm]
         have hkeyC : CongListOn d.toDatabase [Term.app r.fn (ts ++ us)] ts r.args :=
           CongList.mono Database.addTerms_contained_withOperands
             ((FDatabase.congrTuple_addTerms_iff h.eqs).mp hkey)
@@ -1953,13 +1948,19 @@ theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Patte
         obtain ⟨bs, hbs, hmem⟩ := h.index.entry r hr hne
         have hbsC : CongListOn d.toDatabase [Term.app r.fn (ts ++ us)] r.args bs :=
           CongList.mono (Database.Contained.addTerms _ _) hbs
-        refine ⟨hv, .values hmem ht hu (Cong.congr ?_ hop ?_)⟩
+        refine ⟨hv, .expr hmem (Expr.evalAtom_entry he ht hu) (Cong.congr ?_ hop ?_)⟩
         · exact Cong.mono (Database.Contained.addTerms _ _) hmem
         · exact CongList.append (hkeyC.trans hbsC).symm hvalC.symm
-      · rw [decide_eq_true_eq] at hs
-        obtain ⟨w, hwm, hcl⟩ := hs
-        exact ⟨hv, .values (FDatabase.mem_toDatabase_terms.mpr hwm) ht hu
-          (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm h.eqs).mp hcl))⟩
+      · simp at hs
+  | eq e₁ e₂ =>
+    rw [patternHolds] at hs
+    split at hs
+    · next t₁ t₂ hev₁ hev₂ =>
+      rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hs
+      obtain ⟨heq, w, hwm, hcl⟩ := hs
+      exact ⟨hv, .eq (FDatabase.mem_toDatabase_terms.mpr hwm) hev₁ hev₂
+        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.eqs).mp hcl))
+        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.eqs).mp heq))⟩
     · exact absurd hs (by simp)
 
 /-- **Every substitution the enumerator produces is, up to `Env.Agree`, one
@@ -2100,19 +2101,17 @@ theorem contained_addTerm {d : FDatabase} {t : Term} :
 /-- The action interpreter only adds, at the list level. -/
 theorem execAction_lists {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     (∀ t ∈ d.terms, t ∈ e.terms) ∧ (∀ p ∈ d.eqs, p ∈ e.eqs) := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
-    ⟨f, as, vs, rfl⟩ <;>
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ <;>
     exact ⟨fun x hx => by
-        simp [FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hx],
+        simp [FDatabase.addAtom, FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hx],
       fun q hq => by
-        simp [FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hq]⟩
+        simp [FDatabase.addAtom, FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hq]⟩
 
 theorem execAction_rows {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     ∀ r ∈ d.rows, r ∈ e.rows := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ |
-    ⟨f, as, vs, rfl⟩ <;>
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ <;>
     intro r hr <;>
-    simp [FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hr]
+    simp [FDatabase.addAtom, FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hr]
 
 theorem execActions_lists {as : List Action} : ∀ {d e : FDatabase},
     execActions d as = some e →
@@ -2142,7 +2141,7 @@ theorem execAction_sig {d e : FDatabase} {a : Action} (h : execAction d a = some
     e.sig = d.sig := by
   cases a with
   | expr e₀ =>
-    cases hv : Expr.eval d.sig e₀ d.env with
+    cases hv : Expr.evalAtom d.sig e₀ d.env with
     | none => rw [execAction, hv] at h; simp at h
     | some t =>
       rw [execAction, hv, Option.map_some, Option.some.injEq] at h
@@ -2159,16 +2158,6 @@ theorem execAction_sig {d e : FDatabase} {a : Action} (h : execAction d a = some
         · simp at h
         · simp only [Option.some.injEq] at h
           exact h ▸ rfl
-  | set f args out =>
-    cases hv₁ : Expr.evalList d.sig args d.env with
-    | none => rw [execAction, hv₁] at h; simp at h
-    | some ts =>
-      cases hv₂ : Expr.evalList d.sig out d.env with
-      | none => rw [execAction, hv₁, hv₂] at h; simp at h
-      | some vs =>
-        rw [execAction, hv₁, hv₂, Option.bind_some, Option.map_some,
-          Option.some.injEq] at h
-        exact h ▸ addRow_sig
 
 theorem execActions_contained {d e : FDatabase} {as : List Action}
     (h : execActions d as = some e) : d.toDatabase.Contained e.toDatabase :=
@@ -3339,12 +3328,8 @@ theorem Expr.eval_orderingFree {sig : Signature} {σ : Env}
 theorem evalAction_envOrderingFree {A e : Database}
     (hn : ∀ b ∈ A.env, Term.OrderingFree b.2) {a : Action} (h : evalAction A a = some e) :
     ∀ b ∈ e.env, Term.OrderingFree b.2 := by
-  rcases evalAction_eq_some h with
-    ⟨e', t, -, -, rfl⟩ | ⟨e₁, e₂, t₁, t₂, -, -, -, -, rfl⟩ |
-    ⟨f, args, out, as, vs, -, -, -, rfl⟩
-  · exact hn
-  · exact hn
-  · exact hn
+  rw [evalAction_env h]
+  exact hn
 
 /-- The ordering-free arm's state-level reading. Three fields and no clause about `eqs`: the
 condition is about *positions* — where a choice primitive may be applied — so nothing has to
@@ -3429,12 +3414,6 @@ theorem evalAction_diag {db db' : Database} {a : Action} (hu : a.UnionFree)
     obtain ⟨t, -, rfl⟩ := h
     exact hd.addTerm t
   | union e₁ e₂ => exact absurd hu id
-  | set f args out =>
-    rw [evalAction, Option.bind_eq_some_iff] at h
-    obtain ⟨as, -, h⟩ := h
-    rw [Option.map_eq_some_iff] at h
-    obtain ⟨vs, -, rfl⟩ := h
-    exact hd.addTerm _
 
 theorem evalActions_diag {db db' : Database} {as : List Action} (hu : Actions.UnionFree as)
     (hd : db.Diag) (h : evalActions db as = some db') : db'.Diag := by
@@ -3742,6 +3721,33 @@ theorem evalList_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {
 
 end
 
+theorem evalAtom_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ σ' : Env}
+    (henv : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
+      ∃ t', Env.lookup v σ' = some t' ∧ Owes E t t')
+    {e : Expr} (hof : Expr.OrderingFree e) {t : Term} (he : e.evalAtom sig σ = some t) :
+    ∃ t', e.evalAtom sig σ' = some t' ∧ Owes E t t' := by
+  cases e with
+  | lit l => exact eval_owes (sig := sig) hlit henv hof he
+  | var v => exact eval_owes (sig := sig) hlit henv hof he
+  | app f args =>
+    have hargs : Expr.OrderingFreeList args := fun g hg => hof g (by simp [Expr.fns, hg])
+    cases hp : Prim.ofName f with
+    | some p =>
+      simp only [Expr.evalAtom, hp] at he ⊢
+      obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp he
+      obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
+      obtain ⟨t', happ', ho⟩ :=
+        prim_apply_owes hlit (prim_ne_orderingGt hp (hof f (by simp [Expr.fns]))) hall happ
+      exact ⟨t', by simp [hts', happ'], ho⟩
+    | none =>
+      simp only [Expr.evalAtom, hp] at he ⊢
+      split at he
+      · rename_i hd
+        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
+        obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
+        exact ⟨.app f ts', by simp [hd, hts'], Owes.app hall⟩
+      · simp at he
+
 /-- `Database.Recorded` after adding a term on each side, where the recorder's term is one
 the recorder **owes** rather than the same one. This is `Recorded.addTerm_congr` with the
 value columns free to move as well as the key. -/
@@ -3809,9 +3815,8 @@ theorem evalAction_owes {A C d : Database} (hf : StateOwes A C) (hwf : C.WF)
     ∃ d', evalAction C a = some d' ∧ StateOwes d d' := by
   have hlit := hwf.litsIsolated
   rcases evalAction_eq_some h with ⟨e, t, rfl, hv, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hnl, rfl⟩ |
-    ⟨f, args, out, as, vs, rfl, hv₁, hv₂, rfl⟩
-  · obtain ⟨t', hv', ho⟩ := eval_owes hlit hf.env hof (hf.sig ▸ hv)
+    ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, hnl, rfl⟩
+  · obtain ⟨t', hv', ho⟩ := evalAtom_owes hlit hf.env hof (hf.sig ▸ hv)
     refine ⟨C.addTerm t', by simp [evalAction, hv'], ?_⟩
     exact ⟨recorded_addTerm_owes hf.recorded hwf ho, hf.sig,
       hf.env.mono (Database.Contained.addTerm t' C)⟩
@@ -3853,11 +3858,7 @@ theorem evalAction_owes {A C d : Database} (hf : StateOwes A C) (hwf : C.WF)
             (hsub (Or.inr rfl))).1)
     · obtain ⟨q, hq, hc₁, hc₂⟩ := hstep.eqs p hp
       exact ⟨q, Set.mem_insert_of_mem _ hq, congOn_mono hins hc₁, congOn_mono hins hc₂⟩
-  · obtain ⟨as', hv₁', ho₁⟩ := evalList_owes hlit hf.env hof.1 (hf.sig ▸ hv₁)
-    obtain ⟨vs', hv₂', ho₂⟩ := evalList_owes hlit hf.env hof.2 (hf.sig ▸ hv₂)
-    refine ⟨C.addTerm (.app f (as' ++ vs')), by simp [evalAction, hv₁', hv₂'], ?_⟩
-    exact ⟨recorded_addTerm_owes hf.recorded hwf (owes_append ho₁ ho₂), hf.sig,
-      hf.env.mono (Database.Contained.addTerm _ C)⟩
+
 
 /-- **A whole ordering-free action block transports along `StateOwes`.** -/
 theorem evalActions_owes {A C d : Database} (hf : StateOwes A C) (hwf : C.WF)
@@ -4187,7 +4188,7 @@ theorem matches_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : 
     (henv : EnvOwes C σ σ') (h : Matches A p σ) : Matches C p σ' := by
   cases h with
   | @expr e _ w t hw he hcong =>
-    obtain ⟨t', he', ho⟩ := eval_owes hwfC.litsIsolated henv hof (hsig ▸ he)
+    obtain ⟨t', he', ho⟩ := evalAtom_owes hwfC.litsIsolated henv hof (hsig ▸ he)
     obtain ⟨u, hu, hou⟩ := recorded_owes hc hwfA hw
     exact .expr hu he'
       (cong_instance hc hwfA hwfC (List.Forall₂.cons ho .nil) hou hu (by simp) ho hcong)
@@ -4204,13 +4205,6 @@ theorem matches_owes {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC : 
     refine .eq hu he₁' he₂' (Cong.mono ⟨withOperands_mono_list (by simp)⟩ hk₁) ?_
     exact (Cong.mono ⟨withOperands_mono_list (by simp)⟩ hk₁).symm.trans
       (Cong.mono ⟨withOperands_mono_list (by simp)⟩ hk₂)
-  | @values vs f as _ us ts w hw hts hus hcw =>
-    obtain ⟨ts', hts', hots⟩ := evalList_owes hwfC.litsIsolated henv hof.2 (hsig ▸ hts)
-    obtain ⟨us', hus', hous⟩ := evalList_owes hwfC.litsIsolated henv hof.1 (hsig ▸ hus)
-    obtain ⟨u, hu, hou⟩ := recorded_owes hc hwfA hw
-    have hox : Owes C (.app f (ts ++ us)) (.app f (ts' ++ us')) := owes_append hots hous
-    exact .values hu hts' hus'
-      (cong_instance hc hwfA hwfC (List.Forall₂.cons hox .nil) hou hu (by simp) hox hcw)
 
 /-! ### The witness function and the query join -/
 
@@ -5355,13 +5349,6 @@ theorem Action.SetLegal.update {a : Action} {sig : Signature} {f : FnName} {dc :
   cases a with
   | expr _ => trivial
   | union _ _ => trivial
-  | set g _ _ =>
-    have hg : g ≠ f := by
-      rintro rfl
-      exact h (Signature.mergeOf_of_none hf)
-    change Signature.mergeOf (Function.update sig f (some dc)) g ≠ none
-    rw [Signature.mergeOf_update_of_ne hg]
-    exact h
 
 theorem Actions.SetLegal.update {as : List Action} {sig : Signature} {f : FnName}
     {dc : FnDecl} (hf : sig f = none) (h : Actions.SetLegal as sig) :
@@ -5379,14 +5366,6 @@ theorem Action.WriteLegal.update {a : Action} {sig : Signature} {f : FnName} {dc
   cases a with
   | expr _ => trivial
   | union _ _ => trivial
-  | set g args out =>
-    intro dc' hdc'
-    have hg : g ≠ f := by
-      rintro rfl
-      exact h.1 (Signature.mergeOf_of_none hf)
-    refine h.2 dc' ?_
-    have hx : Function.update sig f (some dc) g = some dc' := hdc'
-    rwa [Function.update_of_ne hg] at hx
 
 theorem Actions.WriteLegal.update {as : List Action} {sig : Signature} {f : FnName}
     {dc : FnDecl} (hf : sig f = none) (h : Actions.WriteLegal as sig) :
@@ -5682,11 +5661,6 @@ theorem execAction_rules {d e : FDatabase} {a : Action} (h : execAction d a = so
     · simp at h''
     · simp only [Option.some.injEq] at h''
       exact h'' ▸ rfl
-  | set f args out =>
-    rw [execAction] at h
-    obtain ⟨ts, -, h'⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp h'
-    exact addRow_rules
 
 theorem execActions_rules {d e : FDatabase} {as : List Action}
     (h : execActions d as = some e) : e.rules = d.rules := by
@@ -5947,24 +5921,8 @@ a search of `d.terms` or — at a merge function's entry atom — of `d.rows`, s
 settles all three. -/
 theorem patternHolds_eq_false_of_empty {d : FDatabase} (ht : d.terms = [])
     (hr : d.rows = []) (p : Pattern) (σ : Env) : patternHolds d p σ = false := by
-  cases p with
-  | values vs f as =>
-    rw [patternHolds]
-    split
-    · split
-      · rw [hr]; simp
-      · rw [ht]; simp
-    · rfl
-  | expr e =>
-    rw [patternHolds]
-    split
-    · rfl
-    · rw [ht]; simp
-  | eq e₁ e₂ =>
-    rw [patternHolds]
-    split
-    · rw [ht]; simp
-    · rfl
+  cases p <;> simp only [patternHolds]
+  all_goals split <;> (try split) <;> simp_all
 
 @[inherit_doc patternHolds_eq_false_of_empty]
 theorem matchQuery_eq_nil_of_empty {d : FDatabase} (ht : d.terms = []) (hr : d.rows = [])

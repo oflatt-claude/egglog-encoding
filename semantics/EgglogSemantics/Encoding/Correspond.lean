@@ -344,6 +344,25 @@ both are decided at the witness at the end of this file.
 -/
 
 namespace Egglog
+theorem Prim.ofName_of_atPrefix {f : FnName} (h : "@".isPrefixOf f = true) :
+    Prim.ofName f = none := by
+  unfold Prim.ofName
+  split <;> simp_all [show "@".isPrefixOf "ordering-gt" = false from by decide +kernel,
+    show "@".isPrefixOf "min" = false from by decide +kernel,
+    show "@".isPrefixOf "max" = false from by decide +kernel,
+    show "@".isPrefixOf "if" = false from by decide +kernel]
+
+@[simp] theorem prim_viewName (f : FnName) : Prim.ofName (viewName f) = none :=
+  Prim.ofName_of_atPrefix (by
+    simp [viewName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
+
+@[simp] theorem prim_termName (f : FnName) : Prim.ofName (termName f) = none :=
+  Prim.ofName_of_atPrefix (by
+    simp [termName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
+
+@[simp] theorem prim_ufName : Prim.ofName ufName = none := by decide
+
+
 
 /-! ### Where `Cong` is the identity
 
@@ -732,9 +751,9 @@ private theorem satSig_merge {f : FnName} {decl : FnDecl} {body : List Action} {
 union-find edge. A nullary constructor has no child column, so `rebuildRules` emits no
 other. -/
 def satRebuildRule : Rule :=
-  { query := [.values [.var "@e", .var "@p"] (viewName "A") [],
-              .values [.var "@x", .var "@q"] ufName [.var "@e"]],
-    actions := [.set (viewName "A") [] [.var "@x", transE (.var "@p") (.var "@q")]],
+  { query := [.expr (.app (viewName "A") [.var "@e", .var "@p"]),
+              .expr (.app ufName [.var "@e", .var "@x", .var "@q"])],
+    actions := [.expr (.app (viewName "A") [.var "@x", transE (.var "@p") (.var "@q")])],
     ruleset := rebuildRuleset }
 
 /-- After the prelude: the seven declarations and the two maintenance rules. -/
@@ -815,16 +834,17 @@ theorem satTarget_mergeSaturated : MergeSaturated satTarget := by
 witness has to be a term the state already holds, and on a diagonal state `withOperands`
 cannot supply one. -/
 theorem satTarget_not_matches_uf {vs as : List Expr} {σ : Env} :
-    ¬ Matches satTarget (.values vs ufName as) σ := by
+    ¬ Matches satTarget (.expr (.app ufName (as ++ vs))) σ := by
   intro h
   cases h with
-  | values hw _ _ hcong =>
+  | expr hw he hcong =>
+    obtain ⟨cols, _, rfl⟩ := Expr.evalAtom_app_inv (by decide : Prim.ofName ufName = none) he
     exact absurd (congOn_eq_of_diag satTarget_diag hcong ▸ hw) (satTarget_no_uf _)
 
 /-- A query with a `@UF` read in it admits no substitution here. -/
 private theorem satTarget_not_forall₂ : ∀ {q : Query} {σs : List Env},
     List.Forall₂ (ValidSubst satTarget) q σs →
-    ∀ {vs as : List Expr}, Pattern.values vs ufName as ∈ q → False
+    ∀ {vs as : List Expr}, Pattern.expr (.app ufName (as ++ vs)) ∈ q → False
   | _, _, .nil, _, _, h => absurd h (by simp)
   | _ :: _, _, .cons hp hrest, _, _, h => by
     rcases List.mem_cons.mp h with rfl | h'
@@ -866,8 +886,8 @@ def satEncoded : Program :=
    .decl ufName ufDecl, .decl "A" (skolemDecl 0), .decl (viewName "A") (viewDecl 0),
    .decl (termName "A") (termDecl 0),
    .rule pathCompressRule, .rule satRebuildRule,
-   .action (.set (termName "A") [.app "A" []] []),
-   .action (.set (viewName "A") [] [.app "A" [], fiatE]),
+   .action (.expr (.app (termName "A") [.app "A" []])),
+   .action (.expr (.app (viewName "A") [.app "A" [], fiatE])),
    .saturate rebuildRuleset]
 
 theorem satEncoded_eq : encode satProgram = satEncoded := rfl
@@ -2130,6 +2150,10 @@ theorem execProgramM_append {p q : Program} : ∀ {d D : FDatabase},
     obtain ⟨m, hm, hmD⟩ := ih h₂
     exact ⟨m, by rw [FDatabase.execProgramM, h₁, Option.bind_some]; exact hm, hmD⟩
 
+@[simp] theorem addAtom_sig {d : FDatabase} {t : Term} : (d.addAtom t).sig = d.sig := rfl
+@[simp] theorem addAtom_env {d : FDatabase} {t : Term} : (d.addAtom t).env = d.env := rfl
+@[simp] theorem addAtom_eqs {d : FDatabase} {t : Term} : (d.addAtom t).eqs = d.eqs := rfl
+
 @[simp] theorem addRow_env {d : FDatabase} {f : FnName} {as vs : List Term} :
     (FDatabase.addRow f as vs d).env = d.env := rfl
 
@@ -2159,7 +2183,7 @@ end
 
 /-- A `set` and nothing else, which is all a build emits. -/
 def Action.IsSet : Action → Prop
-  | .set _ _ _ => True
+  | .expr _ => True
   | _ => False
 
 mutual
@@ -2190,21 +2214,24 @@ end
 /-- **What one `set` records**: the row `FDatabase.addRow` writes, at the key and value tuples
 the operands evaluated to in the state the action ran in. `addRow` is `addTerm` on the entry
 term, so this is also the read-back of the *entry term* and of all of its subterms. -/
-theorem execAction_set {d e : FDatabase} {f : FnName} {args out : List Expr}
-    (h : execAction d (.set f args out) = some e) :
+theorem execAction_entry {d e : FDatabase} {f : FnName} {args out : List Expr}
+    (hp : Prim.ofName f = none)
+    (h : execAction d (.expr (.app f (args ++ out))) = some e) :
     ∃ as vs, Expr.evalList d.sig args d.env = some as ∧
-      Expr.evalList d.sig out d.env = some vs ∧ e = FDatabase.addRow f as vs d := by
-  simp only [execAction] at h
-  obtain ⟨as, has, h⟩ := Option.bind_eq_some_iff.mp h
-  obtain ⟨vs, hvs, rfl⟩ := Option.map_eq_some_iff.mp h
-  exact ⟨as, vs, has, hvs, rfl⟩
+      Expr.evalList d.sig out d.env = some vs ∧ e = d.addAtom (.app f (as ++ vs)) := by
+  obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
+  simp only [Expr.evalAtom, hp] at ht
+  split at ht
+  · obtain ⟨cols, hc, rfl⟩ := Option.map_eq_some_iff.mp ht
+    rw [Expr.evalList_append_map] at hc
+    obtain ⟨as, ha, hc⟩ := Option.bind_eq_some_iff.mp hc
+    obtain ⟨vs, hv, rfl⟩ := Option.map_eq_some_iff.mp hc
+    exact ⟨as, vs, ha, hv, rfl⟩
+  · simp at ht
 
 /-- A `set` leaves the environment alone. -/
 theorem execAction_env_of_isSet {d e : FDatabase} : ∀ {a : Action}, a.IsSet →
-    execAction d a = some e → e.env = d.env
-  | .set _ _ _, _, h => by
-      obtain ⟨-, -, -, -, rfl⟩ := execAction_set h
-      rfl
+    execAction d a = some e → e.env = d.env := fun {_} _ h => FDatabase.execAction_env h
 
 /-- A block of `set`s leaves the environment alone. -/
 theorem execActions_env_of_isSet {as : List Action} (ha : ∀ a ∈ as, a.IsSet) :
@@ -2331,11 +2358,11 @@ theorem execActions_encodeBuild_app {f : FnName} {args : List Expr} {n : Nat}
   rw [execActions] at htail₂
   obtain ⟨d₃, h₂', htail₃⟩ := Option.bind_eq_some_iff.mp htail₂
   rw [execActions, Option.some.injEq] at htail₃
-  have h₂ : execAction d₂ (.set (viewName f) args [.app f args, fiatE]) = some d' :=
+  have h₂ : execAction d₂ (.expr (.app (viewName f) (args ++ [.app f args, fiatE]))) = some d' :=
     h₂'.trans (congrArg some htail₃)
-  obtain ⟨ks, kvs, hks, hkvs, rfl⟩ := execAction_set h₁
-  obtain ⟨is, vs, his, hvs, rfl⟩ := execAction_set h₂
-  simp only [FDatabase.addRow_sig, FDatabase.addRow_env, hsig₁, henv₁] at hks hkvs his hvs
+  obtain ⟨ks, kvs, hks, hkvs, rfl⟩ := execAction_entry (f := termName f) (args := args ++ [.app f args]) (out := []) (by simp) h₁
+  obtain ⟨is, vs, his, hvs, rfl⟩ := execAction_entry (f := viewName f) (args := args) (out := [.app f args, fiatE]) (by simp) h₂
+  simp only [FDatabase.addAtom_sig, FDatabase.addAtom_env, hsig₁, henv₁] at hks hkvs his hvs
   obtain ⟨v, pf, hv, -, rfl⟩ := Expr.evalList_pair hvs
   obtain ⟨is₀, vs₀, his₀, hvs₀, rfl⟩ := Expr.evalList_append hks
   obtain ⟨v₀, hv₀, rfl⟩ := Expr.evalList_singleton hvs₀
@@ -2493,21 +2520,18 @@ theorem execActions_parallel {as : List Action} (hs : ∀ a ∈ as, a.IsSet) :
     exact ⟨d₁, rfl, h ▸ hmem⟩
   | cons a as ih =>
     intro d₁ d₂ e₂ hsig henv hmem h
-    match a, hs a List.mem_cons_self with
-    | .set f args out, _ =>
-      rw [execActions] at h
+    cases a with
+    | union _ _ => exact (hs _ List.mem_cons_self).elim
+    | expr e =>
       obtain ⟨m₂, hm₂, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨ks, vs, hks, hvs, rfl⟩ := execAction_set hm₂
-      rw [hsig, henv] at hks hvs
-      have hm₁ : execAction d₁ (.set f args out) = some (FDatabase.addRow f ks vs d₁) := by
-        simp only [execAction, hks, hvs, Option.bind_some, Option.map_some]
+      obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp hm₂
+      rw [hsig, henv] at ht
+      have hm₁ : execAction d₁ (.expr e) = some (d₁.addAtom t) := by simp [execAction, ht]
       obtain ⟨e₁, he₁, hmem₁⟩ :=
         ih (fun b hb => hs b (List.mem_cons_of_mem _ hb))
-          (d₁ := FDatabase.addRow f ks vs d₁) (d₂ := FDatabase.addRow f ks vs d₂)
-          (by simp only [FDatabase.addRow_sig]; exact hsig)
-          (by simp only [FDatabase.addRow_env]; exact henv)
-          (fun t ht => FDatabase.mem_addRow_terms.mpr
-            ((FDatabase.mem_addRow_terms.mp ht).imp id (hmem t))) hrest
+          (d₁ := d₁.addAtom t) (d₂ := d₂.addAtom t) hsig henv
+          (fun u hu => FDatabase.mem_addTerm_terms.mpr
+            ((FDatabase.mem_addTerm_terms.mp hu).imp id (hmem u))) hrest
       exact ⟨e₁, by rw [execActions, hm₁, Option.bind_some]; exact he₁, hmem₁⟩
 
 /-- **A block of top-level `set` commands runs the block.** `execCmdM` follows each action with a
@@ -3211,14 +3235,14 @@ each is; the disjunction below is that choice. The proof column is existential �
 justification the edge carries is not what being an edge means. -/
 theorem out_uf_of_execProgramM {td D : FDatabase} {e₁ e₂ : Expr} {t₁ t₂ : Term} {p : Program}
     (hrun : td.execProgramM
-      (Cmd.action (.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]) :: p) = some D)
+      (Cmd.action (.expr (.app ufName [maxE e₁ e₂, minE e₁ e₂, fiatE])) :: p) = some D)
     (h₁ : e₁.eval td.sig td.env = some t₁) (h₂ : e₂.eval td.sig td.env = some t₂) :
     (∃ pf, D.toDatabase.Out ufName [t₁] [t₂, pf]) ∨
       (∃ pf, D.toDatabase.Out ufName [t₂] [t₁, pf]) := by
   rw [FDatabase.execProgramM, FDatabase.execCmdM] at hrun
   obtain ⟨td₃, hcmd, hafter⟩ := Option.bind_eq_some_iff.mp hrun
   obtain ⟨m, hact, hmerge⟩ := Option.bind_eq_some_iff.mp hcmd
-  obtain ⟨ks, vs, hks, hvs, rfl⟩ := execAction_set hact
+  obtain ⟨ks, vs, hks, hvs, rfl⟩ := execAction_entry (f := ufName) (args := [maxE e₁ e₂]) (out := [minE e₁ e₂, fiatE]) (by simp) hact
   obtain ⟨kv, hkv, rfl⟩ := Expr.evalList_singleton hks
   obtain ⟨mv, pf, hmv, -, rfl⟩ := Expr.evalList_pair hvs
   have hmem : ∀ s ∈ (Term.app ufName ([kv] ++ [mv, pf])).subterms, s ∈ D.toDatabase.terms := by
@@ -3888,7 +3912,6 @@ action evaluates builds, and nothing is asked about literals. -/
 def Action.Builds : Action → Signature → Prop
   | .expr e, sig => e.Evaluable sig
   | .union e₁ e₂, sig => e₁.Evaluable sig ∧ e₂.Evaluable sig
-  | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
 
 @[simp] def Actions.Builds : List Action → Signature → Prop
   | [], _ => True
@@ -3910,9 +3933,6 @@ theorem Action.Builds.mono_sig {sig sig' : Signature}
   | expr e => exact Expr.Evaluable.mono_sig hsub h
   | union e₁ e₂ =>
       exact ⟨Expr.Evaluable.mono_sig hsub h.1, Expr.Evaluable.mono_sig hsub h.2⟩
-  | set f args out =>
-      exact ⟨fun e he => Expr.Evaluable.mono_sig hsub (h.1 e he),
-        fun e he => Expr.Evaluable.mono_sig hsub (h.2 e he)⟩
 
 @[inherit_doc Expr.Evaluable.mono_sig]
 theorem Actions.Builds.mono_sig {sig sig' : Signature}
@@ -4190,8 +4210,9 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
   | action a =>
       have hev : evalAction sd a = some sd' := cmdStep_action_eq hinv.state.sig hstep
       rcases evalAction_eq_some hev with
-        ⟨e, tS, rfl, htS, rfl⟩ | ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ | ⟨f, args, out, as, vs, rfl, -, -, -⟩
-      · -- a top-level build: `addTerm` writes only reflexive equations, so `joined` is
+        ⟨e, tS, rfl, htS, rfl⟩ | ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩
+      · rw [Expr.evalAtom_eq_eval hinv.state.sig] at htS
+         -- a top-level build: `addTerm` writes only reflexive equations, so `joined` is
         -- untouched — which is the weakened clause's first dividend — and `reads` is the
         -- block's own read-back, at every subterm `addTerm` recorded.
         have hprim : ∀ g ∈ e.fns, Prim.ofName g = none :=
@@ -4225,12 +4246,10 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           noPrim_of_mem_ctors hQ (fun p hp => mem_program_ctors hc (List.mem_append_right _ hp))
         have hb1 : (encodeAction fiatE (Action.union e₁ e₂) n).1
             = (encodeBuild e₁ n).2.1 ++ (encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1
-              ++ [Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]] := by
+              ++ [Action.expr (.app ufName [maxE e₁ e₂, minE e₁ e₂, fiatE])] := by
           change (encodeBuild e₁ n).2.1 ++ (encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1
-            ++ [Action.set ufName
-                [maxE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1]
-                [minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1,
-                 fiatE]] = _
+            ++ [Action.expr (.app ufName [maxE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1, minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1,
+                 fiatE])] = _
           rw [encodeBuild_fst, encodeBuild_fst]
         have hsetsA : ∀ b ∈ (encodeAction fiatE (Action.union e₁ e₂) n).1, b.IsSet := by
           rw [hb1]
@@ -4239,13 +4258,13 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           · rcases List.mem_append.mp hb' with hb'' | hb''
             · exact encodeBuild_isSet e₁ n b hb''
             · exact encodeBuild_isSet e₂ _ b hb''
-          · obtain rfl : b = Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE] := by
+          · obtain rfl : b = Action.expr (.app ufName [maxE e₁ e₂, minE e₁ e₂, fiatE]) := by
               simpa using hb'
             trivial
         have hblk : (encodeCmd G (Cmd.action (Action.union e₁ e₂)) n i).1
             = (encodeBuild e₁ n).2.1.map Cmd.action
               ++ ((encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1.map Cmd.action
-                ++ [Cmd.action (Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]),
+                ++ [Cmd.action (Action.expr (.app ufName [maxE e₁ e₂, minE e₁ e₂, fiatE])),
                     Cmd.saturate rebuildRuleset]) := by
           change (encodeAction fiatE (Action.union e₁ e₂) n).1.map Cmd.action
             ++ [Cmd.saturate rebuildRuleset] = _
@@ -4254,7 +4273,7 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
         have htS2 : e₂.eval sd.sig td.env = some t₂ := by rw [hinv.env]; exact ht₂
         have hrun₁ : td.execProgramM ((encodeBuild e₁ n).2.1.map Cmd.action
             ++ ((encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1.map Cmd.action
-              ++ [Cmd.action (Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]),
+              ++ [Cmd.action (Action.expr (.app ufName [maxE e₁ e₂, minE e₁ e₂, fiatE])),
                   Cmd.saturate rebuildRuleset])) = some td' := by
           rw [← hblk]; exact hblock
         obtain ⟨tT₁, htT₁⟩ := exists_eval_of_execProgramM_encodeBuild e₁ n hrun₁
@@ -4272,7 +4291,7 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
           FDatabase.execProgramM_env hb₁
         have hrun₂ : td₁.execProgramM
             ((encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1.map Cmd.action
-              ++ [Cmd.action (Action.set ufName [maxE e₁ e₂] [minE e₁ e₂, fiatE]),
+              ++ [Cmd.action (Action.expr (.app ufName [maxE e₁ e₂, minE e₁ e₂, fiatE])),
                   Cmd.saturate rebuildRuleset]) = some td' := hrest₁
         have htS2' : e₂.eval sd.sig td₁.env = some t₂ := by rw [henv₁]; exact htS2
         obtain ⟨tT₂, htT₂⟩ := exists_eval_of_execProgramM_encodeBuild e₂ _ hrun₂
@@ -4315,7 +4334,6 @@ theorem unionsInv_step (hfire : UnionsFire) {Q : Program} (hQ : Q.EncodeDomain)
             · exact ⟨t, hall₁ t ht''⟩
           · exact ⟨t, hall₂ t ht'⟩
         · exact hkeepR
-      · exact (show False from hQ.noSet _ hc).elim
 
 /-! ##### Every command
 
@@ -6526,13 +6544,8 @@ theorem execAction_noUnions {d d' : FDatabase} {a : Action} (hu : a.UnionFree)
   cases a with
   | expr e =>
       obtain ⟨t, -, rfl⟩ := Option.map_eq_some_iff.mp h
-      exact ⟨by rw [FDatabase.addTerm_eqs]; exact hn.eqs, hn.sig, hn.rules⟩
+      exact ⟨hn.eqs, hn.sig, hn.rules⟩
   | union e₁ e₂ => exact absurd hu (by simp [Action.UnionFree])
-  | set f args out =>
-      rw [execAction] at h
-      obtain ⟨as, -, h⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp h
-      exact ⟨by rw [FDatabase.addRow_eqs]; exact hn.eqs, hn.sig, hn.rules⟩
 
 @[inherit_doc execAction_noUnions]
 theorem execActions_noUnions : ∀ {as : List Action} {d d' : FDatabase},
@@ -7300,12 +7313,13 @@ theorem execActions_mergeBody_inv {m m' : FDatabase} {o0 o1 n0 n1 : Term}
     (h : execActions m mergeBody = some m') :
     ∃ mx mn a b : Term, (mx = o0 ∨ mx = n0) ∧ (mn = o0 ∨ mn = n0) ∧
       (a = o1 ∨ a = n1) ∧ (b = o1 ∨ b = n1) ∧
-      m' = m.addRow ufName [mx] [mn, .app transName [.app symName [a], b]] := by
+      m' = m.addAtom (.app ufName [mx, mn, .app transName [.app symName [a], b]]) := by
   rw [mergeBody, execActions] at h
   obtain ⟨m₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
   rw [execActions, Option.some.injEq] at h₂
   subst h₂
-  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set h₁
+  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_entry (f := ufName) (args := [maxE (.var "old0") (.var "new0")])
+    (out := [minE (.var "old0") (.var "new0"), transE (symE hiPfE) loPfE]) (by simp) h₁
   rw [henv] at has hvs
   obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_singleton has
   obtain ⟨mn, pf, hmn, hpf, rfl⟩ := Expr.evalList_pair hvs
@@ -7645,13 +7659,14 @@ the two it chose between; this says *which*, which is what a reachability claim 
 theorem execActions_mergeBody_eq {m m' : FDatabase} {o0 o1 n0 n1 : Term}
     (henv : m.env = mergeEnv [o0, o1] [n0, n1])
     (h : execActions m mergeBody = some m') :
-    ∃ pf, m' = FDatabase.addRow ufName [if Term.blt n0 o0 then o0 else n0]
-      [if Term.blt n0 o0 then n0 else o0, pf] m := by
+    ∃ pf, m' = FDatabase.addAtom (.app ufName [if Term.blt n0 o0 then o0 else n0,
+      if Term.blt n0 o0 then n0 else o0, pf]) m := by
   rw [mergeBody, execActions] at h
   obtain ⟨m₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
   rw [execActions, Option.some.injEq] at h₂
   subst h₂
-  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set h₁
+  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_entry (f := ufName) (args := [maxE (.var "old0") (.var "new0")])
+    (out := [minE (.var "old0") (.var "new0"), transE (symE hiPfE) loPfE]) (by simp) h₁
   rw [henv] at has hvs
   obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_singleton has
   obtain ⟨mn, pf, hmn, -, rfl⟩ := Expr.evalList_pair hvs
@@ -7679,9 +7694,9 @@ theorem mergeBody_result_paired {m m' : FDatabase} {o0 o1 n0 n1 : Term} {vs : Li
     (hbody : execActions m mergeBody = some m')
     (hres : Expr.evalList m'.sig mergeResult m'.env = some vs) :
     ∃ mx mn pf lo, ((mx = o0 ∧ mn = n0) ∨ (mx = n0 ∧ mn = o0)) ∧ vs = [mn, lo] ∧
-      m' = FDatabase.addRow ufName [mx] [mn, pf] m := by
+      m' = FDatabase.addAtom (.app ufName [mx, mn, pf]) m := by
   obtain ⟨pf, rfl⟩ := execActions_mergeBody_eq henv hbody
-  rw [FDatabase.addRow_env, henv] at hres
+  rw [FDatabase.addAtom_env, henv] at hres
   obtain ⟨lo, rfl⟩ := evalList_mergeResult_eq hres
   by_cases hb : Term.blt n0 o0
   · exact ⟨o0, n0, pf, lo, Or.inl ⟨rfl, rfl⟩, by simp [hb], by simp [hb]⟩
@@ -8331,9 +8346,9 @@ theorem eval_mergeEnv_mergePf {sig : Signature} {o0 o1 n0 n1 : Term}
 /-- **`mergeBody` runs.** -/
 theorem execActions_mergeBody_isSome {m : FDatabase} {o0 o1 n0 n1 : Term}
     (henv : m.env = mergeEnv [o0, o1] [n0, n1]) (hsy : m.sig.IsCtor symName)
-    (htr : m.sig.IsCtor transName) : (execActions m mergeBody).isSome = true := by
+    (htr : m.sig.IsCtor transName) (huf : (m.sig ufName).isSome = true) : (execActions m mergeBody).isSome = true := by
   rw [mergeBody, execActions, execAction, henv]
-  simp only [Expr.evalList, eval_mergeEnv_maxE, eval_mergeEnv_minE,
+  simp only [Expr.evalAtom, prim_ufName, huf, if_true, Expr.evalList, eval_mergeEnv_maxE, eval_mergeEnv_minE,
     eval_mergeEnv_mergePf hsy htr, Option.map_some, Option.bind_some, execActions]
   rfl
 
@@ -9623,15 +9638,27 @@ theorem Database.LitFree.lookup {db : Database} (hw : db.WF) (h : db.LitFree) :
 
 /-- **A literal-free action keeps the state literal-free.** Every writer is an `addTerm` or
 an `addEq` of a value `Expr.eval_litFree` covers. -/
+theorem Expr.evalAtom_litFree {sig : Signature} {σ : Env}
+    (hσ : ∀ v t, Env.lookup v σ = some t → Term.LitFree t)
+    (e : Expr) {t : Term} (hl : e.litFreeB = true)
+    (hf : ∀ f ∈ e.fns, Prim.ofName f = none) (he : e.evalAtom sig σ = some t) :
+    Term.LitFree t := by
+  cases e with
+  | lit _ => simp [Expr.litFreeB] at hl
+  | var v => exact hσ v t he
+  | app f args =>
+    obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv (hf f (by simp [Expr.fns])) he
+    exact Term.litFree_app.mpr (Expr.evalList_litFree hσ args hl
+      (fun g hg => hf g (by simp [Expr.fns, hg])) hts)
+
 theorem evalAction_litFree {db db' : Database} (hw : db.WF) (h : db.LitFree)
     {a : Action} (hl : a.litFreeB = true) (hp : ∀ fk ∈ a.ctors, Prim.ofName fk.1 = none)
     (hv : evalAction db a = some db') : db'.LitFree := by
   have hlk := h.lookup hw
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩ |
-    ⟨f, args, out, as, vs, rfl, ha, hb, rfl⟩
+    ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
   · have ht : Term.LitFree t :=
-      Expr.eval_litFree hlk e hl (noPrim_fns hp) he
+      Expr.evalAtom_litFree hlk e hl (noPrim_fns hp) he
     intro s hs
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
@@ -9651,21 +9678,6 @@ theorem evalAction_litFree {db db' : Database} (hw : db.WF) (h : db.LitFree)
       · exact h s hs''
       · exact ht₁ s hs''
     · exact ht₂ s hs'
-  · rw [Action.litFreeB, Bool.and_eq_true] at hl
-    have hp₁ : ∀ fk ∈ Expr.ctorsList args, Prim.ofName fk.1 = none :=
-      fun fk hk => hp fk (List.mem_cons_of_mem _ (List.mem_append_left _ hk))
-    have hp₂ : ∀ fk ∈ Expr.ctorsList out, Prim.ofName fk.1 = none :=
-      fun fk hk => hp fk (List.mem_cons_of_mem _ (List.mem_append_right _ hk))
-    have hall : ∀ u ∈ as ++ vs, Term.LitFree u := by
-      intro u hu
-      rcases List.mem_append.mp hu with hu' | hu'
-      · exact Expr.evalList_litFree hlk args hl.1 (noPrim_fnsList hp₁) ha u hu'
-      · exact Expr.evalList_litFree hlk out hl.2 (noPrim_fnsList hp₂) hb u hu'
-    intro s hs
-    rw [Database.addTerm_terms] at hs
-    rcases hs with hs' | hs'
-    · exact h s hs'
-    · exact Term.litFree_app.mpr hall s hs'
 
 /-- What one action must be for `evalAction` to keep the state literal-free: no literal in
 the expressions it evaluates, and no applied name a primitive — `ordering-gt` returns a
@@ -9933,6 +9945,23 @@ theorem Cmd.CtorsIn.of_domain {P : Program} (hdom : P.EncodeDomain) {c : Cmd} (h
 /-- **An action keeps it.** Every writer is an `addTerm` or an `addEq` of a value
 `Expr.eval_ctorsIn` covers; the `set` case records `Term.app f (as ++ vs)`, whose head is the
 one `Action.ctors` puts first. -/
+theorem Expr.evalAtom_ctorsIn {P : Program} {sig : Signature} {σ : Env}
+    (hσ : ∀ v t, Env.lookup v σ = some t → Term.CtorsIn P t)
+    (e : Expr) {t : Term} (hc : ∀ fk ∈ e.ctors, fk ∈ P.ctors)
+    (hf : ∀ f ∈ e.fns, Prim.ofName f = none) (he : e.evalAtom sig σ = some t) :
+    Term.CtorsIn P t := by
+  cases e with
+  | lit _ => cases Option.some.inj he; exact Term.ctorsIn_lit
+  | var v => exact hσ v t he
+  | app f args =>
+    obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv (hf f (by simp [Expr.fns])) he
+    refine Term.ctorsIn_app.mpr ⟨?_, ?_⟩
+    · rw [Expr.evalList_length hts]
+      exact hc _ (by rw [Expr.ctors]; exact List.mem_cons_self)
+    · exact Expr.evalList_ctorsIn hσ args
+        (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hk))
+        (fun g hg => hf g (by simp [Expr.fns, hg])) hts
+
 theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : db.CtorsIn P)
     {a : Action} (ha : a.CtorsIn P) (hv : evalAction db a = some db') : db'.CtorsIn P := by
   have hlk := h.lookup hw
@@ -9941,9 +9970,8 @@ theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : d
       ∀ f as, Term.app f as ∈ t.subterms → (f, as.length) ∈ P.ctors := fun ht f as hs =>
     ht f as hs
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩ |
-    ⟨f, args, out, as, vs, rfl, hax, hbx, rfl⟩
-  · have ht : Term.CtorsIn P t := Expr.eval_ctorsIn hlk e hc (noPrim_fns hp) he
+    ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
+  · have ht : Term.CtorsIn P t := Expr.evalAtom_ctorsIn hlk e hc (noPrim_fns hp) he
     intro g bs hs
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
@@ -9966,7 +9994,6 @@ theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : d
       · exact h g bs hs''
       · exact hcin ht₁ g bs hs''
     · exact hcin ht₂ g bs hs'
-  · exact (hns : False).elim
 
 theorem evalActions_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : db.CtorsIn P)
     {as : List Action} (hl : ∀ a ∈ as, a.CtorsIn P)
@@ -10116,7 +10143,7 @@ theorem evalAction_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Models
   cases a with
   | expr e =>
       obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb
-      exact ⟨db.addTerm t, by simp [evalAction, ht], hm⟩
+      exact ⟨db.addTerm t, by simp [evalAction, Expr.evalAtom_of_eval ht], hm⟩
   | union e₁ e₂ =>
       obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm hsc.1 hb.1
       obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb.2
@@ -10134,23 +10161,6 @@ theorem evalAction_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Models
         have hn₂ : ¬ t₂.isLit :=
           Expr.eval_litFree hlk e₂ hl.2 (noPrim_fns hp₂) ht₂ t₂ (Term.self_mem_subterms t₂)
         exact ⟨db.addEq t₁ t₂, by simp [evalAction, ht₁, ht₂, hn₁, hn₂], hm⟩
-  | set f args out =>
-      obtain ⟨cs, hcs⟩ := Expr.evalList_isSome args
-        (fun v hv => by
-          obtain ⟨e, hmem, hve⟩ := Expr.mem_varsList hv
-          exact (hm v).mp (hsc.1 e hmem v hve))
-        (fun g hg => by
-          obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
-          exact hb.1 e hmem g hge)
-      obtain ⟨vs, hvs⟩ := Expr.evalList_isSome out
-        (fun v hv => by
-          obtain ⟨e, hmem, hve⟩ := Expr.mem_varsList hv
-          exact (hm v).mp (hsc.2 e hmem v hve))
-        (fun g hg => by
-          obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
-          exact hb.2 e hmem g hge)
-      refine ⟨db.addTerm (.app f (cs ++ vs)), by simp [evalAction, hcs, hvs], ?_⟩
-      simpa [] using hm
 
 /-- **The block does not get stuck.** The fold, with `Actions.UnionRunnable` as the
 invariant: the union-free arm shrinks with the list, and the literal-free arm is carried by
@@ -10333,11 +10343,11 @@ theorem exists_execActions_encodeBuild : ∀ (e : Expr) (n : Nat) {d : FDatabase
       have hkey : Expr.evalList d₁.sig (args ++ [.app f args]) d₁.env = some (is ++ [t]) :=
         Expr.evalList_append_eq his₁
           (by simp only [Expr.evalList, hev₁, Option.bind_some, Option.map_some])
-      have hstep₁ : execAction d₁ (.set (termName f) (args ++ [.app f args]) [])
+      have hstep₁ : execAction d₁ (.expr (.app (termName f) (args ++ [.app f args])))
           = some (d₁.addRow (termName f) (is ++ [t]) []) := by
         simp only [execAction, hkey, Option.bind_some, Expr.evalList, Option.map_some]
       have hstep₂ : execAction (d₁.addRow (termName f) (is ++ [t]) [])
-            (.set (viewName f) args [.app f args, fiatE])
+            (.expr (.app (viewName f) (args ++ [.app f args, fiatE])))
           = some ((d₁.addRow (termName f) (is ++ [t]) []).addRow (viewName f) is
               [t, Term.app fiatName []]) := by
         simp only [execAction, FDatabase.addRow_sig, FDatabase.addRow_env, his₁,
@@ -10373,7 +10383,6 @@ theorem Expr.Scoped.actionBind {e : Expr} {Γ : Scope} (h : e.Scoped Γ) :
     ∀ a : Action, e.Scoped Γ
   | .expr _ => h
   | .union _ _ => h
-  | .set _ _ _ => h
 
 /-- **One encoded head action's block runs.** Four cases, and each of them is the source
 action's own expressions evaluating plus one name: a build's view row carries `@Fiat`
@@ -10387,7 +10396,7 @@ theorem exists_execActions_encodeAction {pfe : Expr} :
       a.Scoped Γ → a.Builds d.sig →
         ∃ d', execActions d (encodeAction pfe a n).1 = some d' ∧
           d'.sig = d.sig ∧ Γ.Models d'.env := by
-  rintro (e | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n d Γ hm hfiat hpfs hpfb hsc hb
+  rintro (e | ⟨e₁, e₂⟩) n d Γ hm hfiat hpfs hpfb hsc hb
   · obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb
     obtain ⟨d', hd', henv⟩ := exists_execActions_encodeBuild e n hfiat ht
     exact ⟨d', by rw [encodeAction_expr_actions]; exact hd', FDatabase.execActions_sig hd',
@@ -10416,39 +10425,6 @@ theorem exists_execActions_encodeAction {pfe : Expr} :
     simp only [execActions, execAction, maxE, minE, Expr.evalList,
       eval_ifGt h₁' h₂' h₁' h₂', eval_ifGt h₁' h₂' h₂' h₁', hpv',
       Option.bind_some, Option.map_some]
-  · obtain ⟨as, has⟩ := Expr.evalList_isSome args
-      (fun w hw => by
-        obtain ⟨e, hmem, hwe⟩ := Expr.mem_varsList hw
-        exact (hm w).mp (hsc.1 e hmem w hwe))
-      (fun g hg => by
-        obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
-        exact hb.1 e hmem g hge)
-    obtain ⟨vs, hvs⟩ := Expr.evalList_isSome out
-      (fun w hw => by
-        obtain ⟨e, hmem, hwe⟩ := Expr.mem_varsList hw
-        exact (hm w).mp (hsc.2 e hmem w hwe))
-      (fun g hg => by
-        obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
-        exact hb.2 e hmem g hge)
-    obtain ⟨pv, hpv⟩ := Expr.eval_isSome_of_scoped hm hpfs hpfb
-    obtain ⟨d₁, hd₁, henv₁⟩ := exists_execActionsArgs_encodeBuildArgs args n hfiat has
-    have hsig₁ : d₁.sig = d.sig := FDatabase.execActions_sig hd₁
-    obtain ⟨d₂, hd₂, henv₂⟩ := exists_execActionsArgs_encodeBuildArgs out
-      (encodeBuildArgs args n).2.2 (by rw [hsig₁]; exact hfiat)
-      (by rw [hsig₁, henv₁]; exact hvs)
-    have hsig₂ : d₂.sig = d.sig := (FDatabase.execActions_sig hd₂).trans hsig₁
-    have henv₂' : d₂.env = d.env := henv₂.trans henv₁
-    have has' : Expr.evalList d₂.sig args d₂.env = some as := by
-      rw [hsig₂, henv₂']; exact has
-    have hout' : Expr.evalList d₂.sig (out ++ [pfe]) d₂.env = some (vs ++ [pv]) :=
-      Expr.evalList_append_eq (by rw [hsig₂, henv₂']; exact hvs)
-        (by simp only [Expr.evalList, hsig₂, henv₂', hpv, Option.bind_some, Option.map_some])
-    refine ⟨d₂.addRow (viewName f) as (vs ++ [pv]), ?_,
-      by rw [FDatabase.addRow_sig]; exact hsig₂,
-      by simpa only [FDatabase.addRow_env, henv₂'] using hm⟩
-    simp only [encodeAction_set_actions, encodeBuildArgs_fst]
-    refine execActions_append_eq (execActions_append_eq hd₁ hd₂) ?_
-    simp only [execActions, execAction, has', hout', Option.bind_some, Option.map_some]
 
 theorem exists_execActions_encodeActions {pfe : Expr} :
     ∀ (as : List Action) (n : Nat) {d : FDatabase} {Γ : Scope},
@@ -10526,7 +10502,6 @@ theorem exists_execActions_encodeAction_of_encodeActions {pfe : Expr} :
 def Action.buildExprs : Action → List Expr
   | .expr e => [e]
   | .union e₁ e₂ => [e₁, e₂]
-  | .set _ args out => args ++ out
 
 /-- **One build inside a list of them.** `encodeBuildArgs` is a fold of `encodeBuild`, so each
 element's block ran at the *list's* own environment: the blocks before it are all `set`s. -/
@@ -10554,7 +10529,7 @@ theorem exists_execActions_encodeBuild_of_encodeAction {pfe : Expr} :
       execActions d (encodeAction pfe a n).1 = some d' →
       ∀ e ∈ a.buildExprs, ∃ (m : Nat) (dk dk' : FDatabase), dk.sig = d.sig ∧ dk.env = d.env ∧
         execActions dk (encodeBuild e m).2.1 = some dk' ∧ ∀ t ∈ dk'.terms, t ∈ d'.terms := by
-  rintro (e | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n d d' h e' he'
+  rintro (e | ⟨e₁, e₂⟩) n d d' h e' he'
   · obtain rfl : e' = e := by simpa [Action.buildExprs] using he'
     exact ⟨n, d, d', rfl, rfl, encodeAction_expr_actions .. ▸ h, fun t ht => ht⟩
   · rw [encodeAction_union_actions] at h
@@ -10567,20 +10542,6 @@ theorem exists_execActions_encodeBuild_of_encodeAction {pfe : Expr} :
         fun t ht => hmono₂ t ((FDatabase.execActions_lists h₂).1 t ht)⟩
     · exact ⟨_, d₁, d₂, FDatabase.execActions_sig h₁,
         execActions_env_of_isSet (encodeBuild_isSet e₁ n) h₁, h₂, hmono₂⟩
-  · rw [encodeAction_set_actions] at h
-    obtain ⟨d₂, h₁₂, h₃⟩ := execActions_append h
-    obtain ⟨d₁, h₁, h₂⟩ := execActions_append h₁₂
-    have hmono₂ : ∀ t ∈ d₂.terms, t ∈ d'.terms := (FDatabase.execActions_lists h₃).1
-    rcases List.mem_append.mp (show e' ∈ args ++ out from he') with hin | hin
-    · obtain ⟨m, dk, dk', hsig, henv, hstep, hmono⟩ :=
-        exists_execActions_encodeBuild_of_encodeBuildArgs args n h₁ e' hin
-      exact ⟨m, dk, dk', hsig, henv, hstep,
-        fun t ht => hmono₂ t ((FDatabase.execActions_lists h₂).1 t (hmono t ht))⟩
-    · obtain ⟨m, dk, dk', hsig, henv, hstep, hmono⟩ :=
-        exists_execActions_encodeBuild_of_encodeBuildArgs out _ h₂ e' hin
-      exact ⟨m, dk, dk', hsig.trans (FDatabase.execActions_sig h₁),
-        henv.trans (execActions_env_of_isSet (encodeBuildArgs_isSet args n) h₁), hstep,
-        fun t ht => hmono₂ t (hmono t ht)⟩
 
 theorem holdsBuild_of_execLocalActions_encodeRule {i n : Nat} {r : Rule} {τ : Env}
     {td dF : FDatabase} (hrun : execLocalActions td (encodeRule i r n).1.actions τ = some dF)
@@ -10623,9 +10584,6 @@ theorem Action.Scoped.mono {a : Action} {Γ Γ' : Scope} (hsub : ∀ v ∈ Γ, v
   cases a with
   | expr e => exact ⟨h.1, Expr.Scoped.mono hsub h.2⟩
   | union e₁ e₂ => exact ⟨Expr.Scoped.mono hsub h.1, Expr.Scoped.mono hsub h.2⟩
-  | set f args out =>
-      exact ⟨fun e he => Expr.Scoped.mono hsub (h.1 e he),
-        fun e he => Expr.Scoped.mono hsub (h.2 e he)⟩
 
 @[inherit_doc Expr.Scoped.mono]
 theorem Actions.Scoped.mono : ∀ (as : List Action) {Γ Γ' : Scope}, (∀ v ∈ Γ, v ∈ Γ') →
@@ -10639,7 +10597,6 @@ theorem Actions.Scoped.mono : ∀ (as : List Action) {Γ Γ' : Scope}, (∀ v �
     cases a with
     | expr e => exact hsub
     | union e₁ e₂ => exact hsub
-    | set f args out => exact hsub
 
 /-- And it gives `Rule.HeadScoped` at any state, since a state's globals only widen the
 scope. -/
@@ -10689,12 +10646,10 @@ theorem mem_terms_of_headBuild {R : RulesetName} {c : Cmd} {sd sd' : Database}
   have heval : (Expr.app f args).eval e.sig e.env = some (.app f is) := by
     rw [hsig, henv]; exact hval
   rcases evalAction_eq_some hs with ⟨g, t, hg, hev, rfl⟩ |
-    ⟨g₁, g₂, t₁, t₂, hg, -, -, -, -⟩ |
-    ⟨g, cs, out, as, vs, hg, -, -, -⟩
+    ⟨g₁, g₂, t₁, t₂, hg, -, -, -, -⟩
   · obtain rfl : g = Expr.app f args := by injection hg with h; exact h.symm
-    obtain rfl : t = Term.app f is := Option.some.inj (hev.symm.trans heval)
+    obtain rfl : t = Term.app f is := Option.some.inj (hev.symm.trans (Expr.evalAtom_of_eval heval))
     exact hterms _ (Database.mem_addTerm _ _)
-  · exact absurd hg (by simp)
   · exact absurd hg (by simp)
 
 theorem mem_eqs_of_headUnion {R : RulesetName} {c : Cmd} {sd sd' : Database}
@@ -10711,8 +10666,7 @@ theorem mem_eqs_of_headUnion {R : RulesetName} {c : Cmd} {sd sd' : Database}
   have he₁ : e₁.eval e.sig e.env = some t₁ := by rw [hsig, henv]; exact hv₁
   have he₂ : e₂.eval e.sig e.env = some t₂ := by rw [hsig, henv]; exact hv₂
   rcases evalAction_eq_some hs with ⟨g, t, hg, -, -⟩ |
-    ⟨g₁, g₂, u₁, u₂, hg, hu₁, hu₂, -, rfl⟩ |
-    ⟨g, cs, out, as, vs, hg, -, -, -⟩
+    ⟨g₁, g₂, u₁, u₂, hg, hu₁, hu₂, -, rfl⟩
   · exact absurd hg (by simp)
   · obtain ⟨rfl, rfl⟩ : g₁ = e₁ ∧ g₂ = e₂ := by
       injection hg with h₁ h₂
@@ -10720,7 +10674,6 @@ theorem mem_eqs_of_headUnion {R : RulesetName} {c : Cmd} {sd sd' : Database}
     obtain rfl : u₁ = t₁ := Option.some.inj (hu₁.symm.trans he₁)
     obtain rfl : u₂ = t₂ := Option.some.inj (hu₂.symm.trans he₂)
     exact heqs _ (by rw [Database.addEq_eqs]; exact Set.mem_insert _ _)
-  · exact absurd hg (by simp)
 
 /-! ##### The two domain clauses, as the block's hypotheses
 
@@ -10766,15 +10719,6 @@ theorem Action.Builds.of_declared {sig : Signature} (hac : sig.AllConstructors) 
           (noPrim_fns fun fk hk => hp fk (List.mem_append_left _ hk)) h.1,
         Expr.Evaluable.of_declared hac
           (noPrim_fns fun fk hk => hp fk (List.mem_append_right _ hk)) h.2⟩
-  | set f args out =>
-      refine ⟨fun e he => Expr.Evaluable.of_declared hac (fun g hg => ?_) (h.2.1 e he),
-        fun e he => Expr.Evaluable.of_declared hac (fun g hg => ?_) (h.2.2 e he)⟩
-      · obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg
-        exact hp (g, k) (List.mem_cons_of_mem _
-          (List.mem_append_left _ (Expr.mem_ctorsList he hk)))
-      · obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg
-        exact hp (g, k) (List.mem_cons_of_mem _
-          (List.mem_append_right _ (Expr.mem_ctorsList he hk)))
 
 @[inherit_doc Expr.Evaluable.of_declared]
 theorem Actions.Builds.of_declared {sig : Signature} (hac : sig.AllConstructors) :
@@ -10824,9 +10768,6 @@ theorem Action.Builds.update {sig : Signature} {f : FnName} {d : FnDecl}
   cases a with
   | expr e => exact Expr.Evaluable.update hd h
   | union e₁ e₂ => exact ⟨Expr.Evaluable.update hd h.1, Expr.Evaluable.update hd h.2⟩
-  | set g args out =>
-      exact ⟨fun e he => Expr.Evaluable.update hd (h.1 e he),
-        fun e he => Expr.Evaluable.update hd (h.2 e he)⟩
 
 theorem Actions.Builds.update {sig : Signature} {f : FnName} {d : FnDecl} (hd : d.merge = none) :
     ∀ {as : List Action}, Actions.Builds as sig →
@@ -11502,7 +11443,7 @@ theorem rulesEncodedOk_encodeCmds {P : Program} : ∀ (p : Program), (∀ c ∈ 
 /-- **A matched row atom's instance is a term the state holds.** -/
 theorem mem_terms_of_patternHolds_values {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
     {vs as : List Expr} {f : FnName} {σ : Env}
-    (h : patternHolds d (.values vs f as) σ = true) :
+    (h : patternHolds d (.expr (.app f (as ++ vs))) σ = true) :
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
       Expr.evalList d.sig vs σ = some us ∧
       Term.app f (ts ++ us) ∈ d.terms := by
@@ -11604,7 +11545,7 @@ theorem patternHolds_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
 /-- **A matched query's row atom, read at the substitution its head runs under.** -/
 theorem mem_terms_of_mem_matchQuery_values {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
     {q : Query} {σ : Env} (hσ : σ ∈ matchQuery d q) {vs as : List Expr} {f : FnName}
-    (hp : Pattern.values vs f as ∈ q) :
+    (hp : Pattern.expr (.app f (as ++ vs)) ∈ q) :
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
       Expr.evalList d.sig vs σ = some us ∧
       Term.app f (ts ++ us) ∈ d.terms := by
@@ -11621,7 +11562,7 @@ pre-state, so what the firing contributes to `terms` is exactly the entry the `s
 The reading is at `σ ++ d.env`, which is where `execLocalActions` runs a head: the match's own
 bindings win, and `Expr.eval_append_env` is what carries a matched atom's value into it. -/
 theorem execLocalActions_set {d d' : FDatabase} {g : FnName} {args out : List Expr} {σ : Env}
-    (h : execLocalActions d [.set g args out] σ = some d') :
+    (h : execLocalActions d [.expr (.app g (args ++ out))] σ = some d') :
     ∃ es vs, Expr.evalList d.sig args (σ ++ d.env) = some es ∧
       Expr.evalList d.sig out (σ ++ d.env) = some vs ∧
       ∀ t ∈ d'.terms, t ∈ (FDatabase.addRow g es vs d).terms := by
@@ -11970,10 +11911,10 @@ theorem eclassRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f 
     {cs : List Expr}
     (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed) (h : d.SoundTerms src)
     (hσ : σ ∈ matchQuery d
-      [Pattern.values [.var "@e", .var "@p"] (viewName f) cs,
-       Pattern.values [.var "@x", .var "@q"] ufName [.var "@e"]])
+      [Pattern.expr (.app (viewName f) (cs ++ [.var "@e", .var "@p"])),
+       Pattern.expr (.app ufName [.var "@e", .var "@x", .var "@q"])])
     (hf : execLocalActions d
-      [Action.set (viewName f) cs [.var "@x", transE (.var "@p") (.var "@q")]] σ = some d') :
+      [Action.expr (.app (viewName f) (cs ++ [.var "@x", transE (.var "@p") (.var "@q")]))] σ = some d') :
     d'.SoundTerms src := by
   obtain ⟨ts, us, hats, hvus, hmv⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
     (vs := [Expr.var "@e", Expr.var "@p"]) (f := viewName f) (as := cs) (by simp)
@@ -12029,11 +11970,10 @@ theorem columnRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f 
     {k i : Nat} {cs : List Expr} {cv : Var} (hcv : cs[i]? = some (.var cv))
     (hr : d.EqsRefl) (hidx : d.IndexOk) (hsc : d.SubtermClosed) (h : d.SoundTerms src)
     (hσ : σ ∈ matchQuery d
-      [Pattern.values [.var "@e", .var "@p"] (viewName f) cs,
-       Pattern.values [.var "@x", .var "@q"] ufName [.var cv]])
+      [Pattern.expr (.app (viewName f) (cs ++ [.var "@e", .var "@p"])),
+       Pattern.expr (.app ufName [.var cv, .var "@x", .var "@q"])])
     (hf : execLocalActions d
-      [Action.set (viewName f) (cs.set i (.var "@x"))
-        [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]] σ = some d') :
+      [Action.expr (.app (viewName f) ((cs.set i (.var "@x")) ++ [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]))] σ = some d') :
     d'.SoundTerms src := by
   obtain ⟨ts, us, hats, hvus, hmv⟩ := mem_terms_of_mem_matchQuery_values hr hidx hσ
     (vs := [Expr.var "@e", Expr.var "@p"]) (f := viewName f) (as := cs) (by simp)
@@ -12382,7 +12322,6 @@ theorem minE_le_maxE {sig : Signature} {σ : Env} {x y : Expr} {mx mn : Term}
 and `mergeBody` emit — cannot fail it. Every other action writes at another key or writes no
 row at all. -/
 def Action.UFWriteSafe : Action → Prop
-  | .set f as vs => f ≠ ufName ∨ ∃ x y pf, as = [maxE x y] ∧ vs = [minE x y, pf]
   | _ => True
 
 /-- **One action.** -/
@@ -12400,17 +12339,6 @@ theorem execAction_ufRowsDescend {d e : FDatabase} {a : Action} (hsafe : a.UFWri
       · exact absurd hs (by simp)
       · rw [Option.some.injEq] at hs
         exact hs ▸ h.addEq t₁ t₂
-  | set f args out =>
-      obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set hs
-      refine h.addRow fun a₀ b₀ pf hf ha hv => ?_
-      rcases (hsafe : f ≠ ufName ∨ ∃ x y pf, args = [maxE x y] ∧ out = [minE x y, pf]) with
-        hne | ⟨x, y, pfe, rfl, rfl⟩
-      · exact absurd hf hne
-      · obtain ⟨mx, hmx, rfl⟩ := Expr.evalList_singleton has
-        obtain ⟨mn, pv, hmn, -, rfl⟩ := Expr.evalList_pair hvs
-        obtain rfl : mx = a₀ := (List.cons.inj ha).1
-        obtain rfl : mn = b₀ := (List.cons.inj hv).1
-        exact minE_le_maxE hmx hmn
 
 /-- **A block of them.** -/
 theorem execActions_ufRowsDescend : ∀ {as : List Action} {d e : FDatabase},
@@ -12444,7 +12372,7 @@ branch taken was the row branch. -/
 `mem_terms_of_patternHolds_values`. -/
 theorem mem_rows_of_patternHolds_values {d : FDatabase} (hr : d.EqsRefl)
     {vs as : List Expr} {f : FnName} {σ : Env} (hmg : d.sig.mergeOf f ≠ none)
-    (h : patternHolds d (.values vs f as) σ = true) :
+    (h : patternHolds d (.expr (.app f (as ++ vs))) σ = true) :
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
       Expr.evalList d.sig vs σ = some us ∧ (⟨f, ts, us⟩ : Row) ∈ d.rows := by
   have hmg' : (d.sig.mergeOf f).isSome = true := Option.isSome_iff_ne_none.mpr hmg
@@ -12470,7 +12398,7 @@ theorem mem_rows_of_patternHolds_values {d : FDatabase} (hr : d.EqsRefl)
 @[inherit_doc mem_rows_of_patternHolds_values]
 theorem mem_rows_of_mem_matchQuery_values {d : FDatabase} (hr : d.EqsRefl)
     {q : Query} {σ : Env} (hσ : σ ∈ matchQuery d q) {vs as : List Expr} {f : FnName}
-    (hmg : d.sig.mergeOf f ≠ none) (hp : Pattern.values vs f as ∈ q) :
+    (hmg : d.sig.mergeOf f ≠ none) (hp : Pattern.expr (.app f (as ++ vs)) ∈ q) :
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
       Expr.evalList d.sig vs σ = some us ∧ (⟨f, ts, us⟩ : Row) ∈ d.rows := by
   obtain ⟨ts, us, ha, hv, hmem⟩ :=
@@ -12508,15 +12436,15 @@ theorem pathCompressRule_ufRowsDescend {d e : FDatabase} {σ : Env} (hr : d.EqsR
     · exact Or.inr hba'
     · exact Or.inr (Term.blt_trans _ _ _ hcb' hba')
   have hact : pathCompressRule.actions
-      = [Action.set ufName [Expr.var "@a"]
-          [Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")]] := rfl
+      = [Action.expr (.app ufName [Expr.var "@a", Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")])] := rfl
   rw [hact, execLocalActions] at hf
   obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp hf
   rw [execActions] at hm
   obtain ⟨m₁, hm₁', hm₂'⟩ := Option.bind_eq_some_iff.mp hm
   rw [execActions, Option.some.injEq] at hm₂'
   subst hm₂'
-  obtain ⟨es, vsh, hes, hvsh, rfl⟩ := execAction_set hm₁'
+  obtain ⟨es, vsh, hes, hvsh, rfl⟩ := execAction_entry (f := ufName) (args := [.var "@a"])
+    (out := [.var "@c", transE (.var "@p") (.var "@q")]) (by simp) hm₁'
   obtain ⟨va', hla', rfl⟩ := Expr.evalList_singleton hes
   obtain rfl : va = va' := Option.some.inj ((Expr.eval_append_env _ hla).symm.trans hla')
   obtain ⟨vc', pf, hlc', -, rfl⟩ := Expr.evalList_pair hvsh
@@ -12589,7 +12517,7 @@ end
 /-- **The `union` head is the one `set` at `@UF`**, and it is the shape that descends. -/
 theorem encodeAction_ufWriteSafe (pf : Expr) : ∀ (a : Action) (n : Nat),
     ∀ b ∈ (encodeAction pf a n).1, b.UFWriteSafe := by
-  rintro (e | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n b hb
+  rintro (e | ⟨e₁, e₂⟩) n b hb
   · exact encodeBuild_ufWriteSafe e n b (encodeAction_expr_actions .. ▸ hb)
   · rw [encodeAction_union_actions] at hb
     rcases List.mem_append.mp hb with h | h
@@ -12599,14 +12527,6 @@ theorem encodeAction_ufWriteSafe (pf : Expr) : ∀ (a : Action) (n : Nat),
     · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
       rcases h with rfl
       exact Or.inr ⟨_, _, pf, rfl, rfl⟩
-  · rw [encodeAction_set_actions] at hb
-    rcases List.mem_append.mp hb with h | h
-    · rcases List.mem_append.mp h with h' | h'
-      · exact encodeBuildArgs_ufWriteSafe args n b h'
-      · exact encodeBuildArgs_ufWriteSafe out _ b h'
-    · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-      rcases h with rfl
-      exact Or.inl viewName_ne_ufName
 
 @[inherit_doc encodeAction_ufWriteSafe]
 theorem encodeActions_ufWriteSafe (pf : Expr) : ∀ (as : List Action) (n : Nat),
@@ -12858,7 +12778,7 @@ theorem patternHolds_values_of_mem_rows {d : FDatabase} {vs as : List Expr} {f :
     (hats : Expr.evalList d.sig as σ = some ts)
     (hvus : Expr.evalList d.sig vs σ = some us)
     (hrow : (⟨f, ts, us⟩ : Row) ∈ d.rows) (hcol : ∀ c ∈ ts ++ us, c ∈ d.terms) :
-    patternHolds d (.values vs f as) σ = true := by
+    patternHolds d (.expr (.app f (as ++ vs))) σ = true := by
   have hrefl : ∀ c ∈ ts ++ us, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF := by
     intro c hc
     exact FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl,
@@ -12885,12 +12805,12 @@ def cxRb : FDatabase :=
 
 /-- `rebuildRules "B" 0`'s e-class rule, query and head. -/
 def cxRbQuery : Query :=
-  [Pattern.values [.var "@e", .var "@p"] (viewName "B") [],
-   Pattern.values [.var "@x", .var "@q"] ufName [.var "@e"]]
+  [Pattern.expr (.app (viewName "B") [.var "@e", .var "@p"]),
+   Pattern.expr (.app ufName [.var "@e", .var "@x", .var "@q"])]
 
 @[inherit_doc cxRbQuery]
 def cxRbActions : List Action :=
-  [Action.set (viewName "B") [] [.var "@x", transE (.var "@p") (.var "@q")]]
+  [Action.expr (.app (viewName "B") [.var "@x", transE (.var "@p") (.var "@q")])]
 
 /-- The match, in the order `Query.freeVars` produces it. -/
 def cxRbSubst : Env := [("@p", cxFiat), ("@x", cxA), ("@q", cxFiat), ("@e", cxB)]
@@ -12901,8 +12821,8 @@ theorem cxRb_mem_matchQuery : cxRbSubst ∈ matchQuery cxRb cxRbQuery := by
   rw [matchQuery, List.mem_filter]
   refine ⟨mem_assignments.mpr ⟨by decide, by decide⟩, List.all_eq_true.mpr ?_⟩
   intro p hp
-  have hp2 : p = Pattern.values [.var "@e", .var "@p"] (viewName "B") [] ∨
-      p = Pattern.values [.var "@x", .var "@q"] ufName [.var "@e"] := by
+  have hp2 : p = Pattern.expr (.app (viewName "B") [.var "@e", .var "@p"]) ∨
+      p = Pattern.expr (.app ufName [.var "@e", .var "@x", .var "@q"]) := by
     simpa [cxRbQuery] using hp
   rcases hp2 with rfl | rfl
   · exact patternHolds_values_of_mem_rows (ts := []) (us := [cxB, cxFiat])
@@ -13229,9 +13149,6 @@ theorem mem_rows_execAction {m m' : FDatabase} {a : Action} (h : execAction m a 
     · rw [Option.some.injEq] at h
       subst h
       exact FDatabase.mem_addTerm_rows.mpr (Or.inr (FDatabase.mem_addTerm_rows.mpr (Or.inr hr)))
-  | set f args out =>
-    obtain ⟨as, vs, -, -, rfl⟩ := execAction_set h
-    exact mem_addRow_rows hr
 
 @[inherit_doc mem_rows_execAction]
 theorem mem_rows_execActions : ∀ (bs : List Action) {m m' : FDatabase},
@@ -13732,8 +13649,6 @@ way. -/
 def Action.EntrySafe : Action → Prop
   | .expr e => ∀ g ∈ e.fns, NotEntryHead g
   | .union e₁ e₂ => (∀ g ∈ e₁.fns, NotEntryHead g) ∧ (∀ g ∈ e₂.fns, NotEntryHead g)
-  | .set _ args out =>
-      (∀ g ∈ Expr.fnsList args, NotEntryHead g) ∧ (∀ g ∈ Expr.fnsList out, NotEntryHead g)
 
 /-- The heads an operand list applies are the heads its operands apply. -/
 theorem notEntryHead_fnsList : ∀ {es : List Expr},
@@ -13805,14 +13720,6 @@ theorem execAction_entryRowsUF {d d' : FDatabase} {a : Action}
         (fun _ hp => List.mem_dedup.mpr (List.mem_cons_of_mem _ hp))
         (FDatabase.RowsCarryUF.of_subset fun _ hrw => hrw)
         (fun _ _ _ _ _ _ _ _ _ _ hmem => Or.inl hmem)
-  | set f args out =>
-    obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set hrun
-    refine h.addRow hshape (fun dc hdc => ?_) (fun c hc => ?_)
-    · rw [Expr.evalList_length has]
-      exact (hwl.2 dc hdc).1
-    · rcases List.mem_append.mp hc with hc' | hc'
-      · exact entryShaped_mem_of_evalList args hsafe.1 (fun w _ => hbind w) has c hc'
-      · exact entryShaped_mem_of_evalList out hsafe.2 (fun w _ => hbind w) hvs c hc'
 
 /-- **A block of them.** -/
 theorem execActions_entryRowsUF : ∀ (as : List Action), (∀ a ∈ as, a.EntrySafe) →
@@ -13967,8 +13874,7 @@ theorem maintenance_entrySafe {P : Program} {r : Rule} (hmem : r ∈ maintenance
   rw [maintenanceRules, List.mem_cons] at hmem
   rcases hmem with rfl | hmem
   · intro a ha
-    obtain rfl : a = Action.set ufName [Expr.var "@a"]
-        [Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")] := by
+    obtain rfl : a = Action.expr (.app ufName [Expr.var "@a", Expr.var "@c", transE (Expr.var "@p") (Expr.var "@q")]) := by
       simpa [pathCompressRule] using ha
     exact ⟨hvarlist _ (by intro e he; exact ⟨_, by simpa using he⟩),
       entrySafe_maintenance_out₁⟩
@@ -13977,13 +13883,10 @@ theorem maintenance_entrySafe {P : Program} {r : Rule} (hmem : r ∈ maintenance
     simp only [List.mem_cons, List.mem_map, List.mem_range] at hmem
     rcases hmem with rfl | ⟨i, hi, rfl⟩
     · intro a ha
-      obtain rfl : a = Action.set (viewName fk.1) (rebuildVars fk.2)
-          [Expr.var "@x", transE (Expr.var "@p") (Expr.var "@q")] := by simpa using ha
+      obtain rfl : a = Action.expr (.app (viewName fk.1) ((rebuildVars fk.2) ++ [Expr.var "@x", transE (Expr.var "@p") (Expr.var "@q")])) := by simpa using ha
       exact ⟨hvarlist _ (hrb fk.2), entrySafe_maintenance_out₁⟩
     · intro a ha
-      obtain rfl : a = Action.set (viewName fk.1)
-          ((rebuildVars fk.2).set i (Expr.var "@x"))
-          [Expr.var "@e", transE (symE (congrE (congrChildren fk.2 i))) (Expr.var "@p")] := by
+      obtain rfl : a = Action.expr (.app (viewName fk.1) (((rebuildVars fk.2).set i (Expr.var "@x")) ++ [Expr.var "@e", transE (symE (congrE (congrChildren fk.2 i))) (Expr.var "@p")])) := by
         simpa using ha
       refine ⟨hvarlist _ (fun e he => ?_), ?_⟩
       · rcases mem_or_eq_of_mem_set he with he' | rfl
@@ -14652,8 +14555,7 @@ theorem blt_lit_two_one : Term.blt (Term.lit (.int 2)) (Term.lit (.int 1)) = fal
 
 /-- **The one `@UF` write the program encodes to**, ahead of the trailing rebuild. -/
 theorem ltuProgram_encodeCmds : (encodeCmds ltuProgram [] ltuProgram 0 0).1 =
-    [Cmd.action (.set ufName [maxE (.lit (.int 1)) (.lit (.int 2))]
-        [minE (.lit (.int 1)) (.lit (.int 2)), fiatE]),
+    [Cmd.action (.expr (.app ufName [maxE (.lit (.int 1)) (.lit (.int 2)), minE (.lit (.int 1)) (.lit (.int 2)), fiatE])),
      Cmd.saturate rebuildRuleset] := rfl
 
 /-- **And the entry it leaves in the target**, proved rather than assumed: the `set` runs on
@@ -14669,7 +14571,8 @@ theorem execM_encode_ltu_uf {e : FDatabase} (htgt : execM (encode ltuProgram) = 
   obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hcmds
   rw [FDatabase.execCmdM] at h₁
   obtain ⟨d₂, ha, hm⟩ := Option.bind_eq_some_iff.mp h₁
-  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_set (ha)
+  obtain ⟨as, vs, has, hvs, rfl⟩ := execAction_entry (f := ufName) (args := [maxE (.lit (.int 1)) (.lit (.int 2))])
+    (out := [minE (.lit (.int 1)) (.lit (.int 2)), fiatE]) (by simp) ha
   have hl1 : (Expr.lit (.int 1)).eval d₀.sig d₀.env = some (Term.lit (.int 1)) := rfl
   have hl2 : (Expr.lit (.int 2)).eval d₀.sig d₀.env = some (Term.lit (.int 2)) := rfl
   have hmax : (maxE (.lit (.int 1)) (.lit (.int 2))).eval d₀.sig d₀.env

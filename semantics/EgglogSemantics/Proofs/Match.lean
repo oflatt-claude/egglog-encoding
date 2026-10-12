@@ -14,6 +14,12 @@ theorem List.Forall₂.exists_left {α β : Type*} {R : α → β → Prop} {as 
 
 namespace Egglog
 namespace Expr
+@[simp] theorem mem_varsList_append {v : Var} (as bs : List Expr) :
+    v ∈ Expr.varsList (as ++ bs) ↔ v ∈ Expr.varsList as ∨ v ∈ Expr.varsList bs := by
+  induction as with
+  | nil => simp [Expr.varsList]
+  | cons e es ih => simp [Expr.varsList, ih, or_assoc]
+
 @[simp] theorem freeVars_lit {l : Lit} {σ : Env} : (Expr.lit l).freeVars σ = [] := rfl
 
 @[simp] theorem freeVars_var {v : Var} {σ : Env} :
@@ -89,10 +95,6 @@ theorem Pattern.mem_freeVars {σ : Env} {v : Var} (p : Pattern) :
     rw [Pattern.freeVars, Pattern.vars, List.mem_union_iff, List.mem_union_iff,
       Expr.mem_freeVars e₁, Expr.mem_freeVars e₂]
     tauto
-  | values vs _ as =>
-    rw [Pattern.freeVars, Pattern.vars, List.mem_union_iff, List.mem_union_iff,
-      Expr.mem_freeVarsList vs, Expr.mem_freeVarsList as]
-    tauto
 
 /-- A free variable is by definition unbound, so a substitution over an expression's
 free variables has a domain disjoint from the environment's. That is why appending
@@ -129,7 +131,6 @@ theorem Pattern.freeVars_nodup (p : Pattern) (σ : Env) : (p.freeVars σ).Nodup 
   cases p with
   | expr e => exact e.freeVars_nodup σ
   | eq _ e₂ => exact List.Nodup.union _ (e₂.freeVars_nodup σ)
-  | values _ _ as => exact List.Nodup.union _ (Expr.freeVarsList_nodup as σ)
 
 namespace Env
 /-- The union binds exactly what its operands bind: `Union2` appends, and only
@@ -361,11 +362,9 @@ theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
     fun es => Expr.evalList_agree hag.symm es
   refine ⟨⟨hperm, hterms⟩, ?_⟩
   cases h.2 with
-  | expr hwm he hc => exact .expr hwm (by rw [hev]; exact he) hc
+  | expr hwm he hc => exact .expr hwm (by rw [Expr.evalAtom_agree hag.symm]; exact he) hc
   | eq hwm he₁ he₂ hc₁ hc₂ =>
     exact .eq hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
-  | values hwm hts hus hc =>
-    exact .values hwm (by rw [hevl]; exact hts) (by rw [hevl]; exact hus) hc
 
 /-- **Matching transfers along agreement on the pattern's own variables.** `Matches` reads
 the environment only through the `Expr.eval` of the pattern's expressions, so `Expr.vars` is
@@ -380,7 +379,7 @@ theorem Matches.of_agreeOn {db : Database} {p : Pattern} {σ σ' : Env} (h : Mat
     Matches db p σ' := by
   cases h with
   | @expr e _ w t hwm he hc =>
-    exact .expr hwm (by rw [Expr.eval_agreeOn e fun v hv => (hag v hv).symm]; exact he) hc
+    exact .expr hwm (by rw [Expr.evalAtom_agreeOn e fun v hv => (hag v hv).symm]; exact he) hc
   | @eq e₁ e₂ _ w t₁ t₂ hwm he₁ he₂ hc₁ hc₂ =>
     refine .eq hwm ?_ ?_ hc₁ hc₂
     · rw [Expr.eval_agreeOn e₁ fun v hv =>
@@ -389,14 +388,6 @@ theorem Matches.of_agreeOn {db : Database} {p : Pattern} {σ σ' : Env} (h : Mat
     · rw [Expr.eval_agreeOn e₂ fun v hv =>
         (hag v (List.mem_union_iff.mpr (Or.inr hv))).symm]
       exact he₂
-  | @values vs f as _ us ts w hwm hts hus hc =>
-    refine .values hwm ?_ ?_ hc
-    · rw [Expr.evalList_agreeOn as fun v hv =>
-        (hag v (List.mem_union_iff.mpr (Or.inr hv))).symm]
-      exact hts
-    · rw [Expr.evalList_agreeOn vs fun v hv =>
-        (hag v (List.mem_union_iff.mpr (Or.inl hv))).symm]
-      exact hus
 
 namespace ValidQuerySubst
 variable {db : Database} {q : Query} {σ : Env}

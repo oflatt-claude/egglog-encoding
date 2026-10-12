@@ -191,8 +191,7 @@ end
 /-- The body both `:merge`s run: the larger e-class gets a union-find edge to the smaller,
 proved by `@Trans (@Sym hi_pf) lo_pf` — `mx = key` joined to `key = mn`. -/
 def mergeBody : List Action :=
-  [.set ufName [maxE (.var "old0") (.var "new0")]
-    [minE (.var "old0") (.var "new0"), transE (symE hiPfE) loPfE]]
+  [.expr (.app ufName [maxE (.var "old0") (.var "new0"), minE (.var "old0") (.var "new0"), transE (symE hiPfE) loPfE])]
 
 /-- The values both `:merge`s settle on: the smaller e-class, and the proof paired with it
 — egglog's `lo_pf` (`ordered_union_merge`, `proof_encoding.rs:634-660`).
@@ -265,13 +264,11 @@ end
 def Pattern.ctors : Pattern → List (FnName × Nat)
   | .expr e => e.ctors
   | .eq e₁ e₂ => e₁.ctors ++ e₂.ctors
-  | .values vs _ as => Expr.ctorsList vs ++ Expr.ctorsList as
 
 /-- `Expr.ctors` over an action. A `set`'s own function counts: it names a view. -/
 def Action.ctors : Action → List (FnName × Nat)
   | .expr e => e.ctors
   | .union e₁ e₂ => e₁.ctors ++ e₂.ctors
-  | .set f args out => (f, args.length) :: (Expr.ctorsList args ++ Expr.ctorsList out)
 
 /-- `Expr.ctors` over a command. A declaration counts even if nothing applies it. -/
 def Cmd.ctors : Cmd → List (FnName × Nat)
@@ -362,8 +359,6 @@ end
 def Pattern.substGlobals (G : List (Var × Expr)) : Pattern → Pattern
   | .expr e => .expr (e.substGlobals G)
   | .eq e₁ e₂ => .eq (e₁.substGlobals G) (e₂.substGlobals G)
-  | .values vs f as =>
-      .values (Expr.substGlobalsList G vs) f (Expr.substGlobalsList G as)
 
 /-- `Pattern.substGlobals` over a query. -/
 def Query.substGlobals (G : List (Var × Expr)) (q : Query) : Query :=
@@ -531,10 +526,6 @@ theorem Pattern.resolveGlobals_eq_substGlobals {src : Database} {G : List (Var �
       rw [Pattern.resolveGlobals, Pattern.substGlobals,
         Expr.resolveGlobals_eq_substGlobals hgi hcov e₁,
         Expr.resolveGlobals_eq_substGlobals hgi hcov e₂]
-  | .values vs f as => by
-      rw [Pattern.resolveGlobals, Pattern.substGlobals,
-        Expr.resolveGlobalsList_eq_substGlobalsList hgi hcov vs,
-        Expr.resolveGlobalsList_eq_substGlobalsList hgi hcov as]
 
 @[inherit_doc Expr.resolveGlobals_eq_substGlobals]
 theorem Query.resolveGlobals_eq_substGlobals {src : Database} {G : List (Var × Expr)}
@@ -600,12 +591,6 @@ theorem Pattern.resolveGlobals_eq_self {σ : Env} :
           (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))),
         Expr.resolveGlobals_eq_self e₂
           (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv)))]
-  | .values vs f as, h => by
-      rw [Pattern.resolveGlobals,
-        Expr.resolveGlobalsList_eq_self vs
-          (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inl hv))),
-        Expr.resolveGlobalsList_eq_self as
-          (fun v hv => h v (by rw [Pattern.vars]; exact List.mem_union_iff.mpr (Or.inr hv)))]
 
 @[inherit_doc Expr.resolveGlobals_eq_self]
 theorem Query.resolveGlobals_eq_self {σ : Env} (q : Query)
@@ -643,7 +628,7 @@ def encodeQueryExpr : Expr → Nat → Expr × List Pattern × Nat
       match encodeQueryArgs args n with
       | (es, ps, n₁) =>
           (.var (freshVar n₁),
-           ps ++ [.values [.var (freshVar n₁), .var (freshVar (n₁ + 1))] (viewName f) es],
+           ps ++ [.expr (.app (viewName f) (es ++ [.var (freshVar n₁), .var (freshVar (n₁ + 1))]))],
            n₁ + 2)
 
 /-- `encodeQueryExpr` over an argument list. -/
@@ -660,7 +645,6 @@ end
 /-- Encode one source pattern. `.expr e` is "`e` is present", which the reads already
 say; `.eq` adds the id equality. -/
 def encodePattern : Pattern → Nat → List Pattern × Nat
-  | .values vs f as, n => ([.values vs f as], n)
   | .expr e, n => match encodeQueryExpr e n with | (_, ps, n₁) => (ps, n₁)
   | .eq e₁ e₂, n =>
       match encodeQueryExpr e₁ n with
@@ -722,12 +706,10 @@ theorem mem_vars_encodeQueryExpr : ∀ (e : Expr) (n : Nat) {v : Var},
       rcases h with h | h
       · rcases Query.mem_vars_append.mp h with h' | h'
         · exact mem_vars_encodeQueryArgs args n (Or.inl h')
-        · have h'' : v ∈ Query.vars [Pattern.values
-              [Expr.var (freshVar (encodeQueryArgs args n).2.2),
-               Expr.var (freshVar ((encodeQueryArgs args n).2.2 + 1))]
-              (viewName f) (encodeQueryArgs args n).1] := h'
+        · have h'' : v ∈ Query.vars [Pattern.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++ [Expr.var (freshVar (encodeQueryArgs args n).2.2),
+               Expr.var (freshVar ((encodeQueryArgs args n).2.2 + 1))]))] := h'
           rw [Query.vars, Query.vars, Pattern.vars] at h''
-          rcases (by simpa using h'' :
+          rcases (by simpa [Expr.vars, Expr.varsList, or_comm] using h'' :
               (v = freshVar (encodeQueryArgs args n).2.2 ∨
                   v = freshVar ((encodeQueryArgs args n).2.2 + 1)) ∨
                 v ∈ Expr.varsList (encodeQueryArgs args n).1) with hk | hk
@@ -772,11 +754,6 @@ end
 @[inherit_doc atPrefix_freshVar]
 theorem mem_vars_encodePattern : ∀ (p : Pattern) (n : Nat) {v : Var},
     v ∈ Query.vars (encodePattern p n).1 → "@".isPrefixOf v = true ∨ v ∈ p.vars
-  | .values vs f as, n, v, h => by
-      refine Or.inr ?_
-      have h' : v ∈ Query.vars [Pattern.values vs f as] := h
-      rw [Query.vars, Query.vars] at h'
-      simpa using h'
   | .expr e, n, v, h => mem_vars_encodeQueryExpr e n (Or.inl h)
   | .eq e₁ e₂, n, v, h => by
       rw [encodePattern] at h
@@ -789,7 +766,7 @@ theorem mem_vars_encodePattern : ∀ (p : Pattern) (n : Nat) {v : Var},
       · have h'' : v ∈ Query.vars [Pattern.eq (encodeQueryExpr e₁ n).1
             (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1] := h'
         rw [Query.vars, Query.vars, Pattern.vars] at h''
-        rcases (by simpa using h'' :
+        rcases (by simpa [Expr.vars, Expr.varsList, or_comm] using h'' :
             v ∈ (encodeQueryExpr e₁ n).1.vars ∨
               v ∈ (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1.vars) with hk | hk
         · exact (mem_vars_encodeQueryExpr e₁ n (Or.inr hk)).imp id fun hv =>
@@ -820,7 +797,9 @@ sound because a two-column read atom in an encoded query is one this file wrote:
 `Program.EncodeDomain` the source has no `Pattern.values` at all. -/
 def queryProofs (q : Query) : List Expr :=
   q.filterMap fun p => match p with
-    | .values [_, pf] _ _ => some pf
+    | .expr (.app _ cols) => match cols.getLast? with
+      | some (.var v) => some (.var v)
+      | _ => none
     | _ => none
 
 /-- `@Rule_i`'s arity: how many premises rule `r`'s encoded query reads. Independent of the
@@ -857,8 +836,8 @@ def encodeBuild : Expr → Nat → Expr × List Action × Nat
       match encodeBuildArgs args n with
       | (es, as, n₁) =>
           (.app f es,
-           as ++ [.set (termName f) (es ++ [.app f es]) [],
-                  .set (viewName f) es [.app f es, fiatE]],
+           as ++ [.expr (.app (termName f) (es ++ [.app f es])),
+                  .expr (.app (viewName f) (es ++ [.app f es, fiatE]))],
            n₁)
 
 /-- `encodeBuild` over an argument list. -/
@@ -894,12 +873,7 @@ def encodeAction (pf : Expr) : Action → Nat → List Action × Nat
       | (x₁, as₁, n₁) =>
           match encodeBuild e₂ n₁ with
           | (x₂, as₂, n₂) =>
-              (as₁ ++ as₂ ++ [.set ufName [maxE x₁ x₂] [minE x₁ x₂, pf]], n₂)
-  | .set f args out, n =>
-      match encodeBuildArgs args n with
-      | (es, as, n₁) =>
-          match encodeBuildArgs out n₁ with
-          | (xs, as', n₂) => (as ++ as' ++ [.set (viewName f) es (xs ++ [pf])], n₂)
+              (as₁ ++ as₂ ++ [.expr (.app ufName [maxE x₁ x₂, minE x₁ x₂, pf])], n₂)
 
 /-- `encodeAction` over an action list, all under one justification. -/
 def encodeActions (pf : Expr) : List Action → Nat → List Action × Nat
@@ -929,9 +903,9 @@ additionally re-`set`s edges it already holds, whose proof column the merge then
 
 The composed proof justifies the edge from `a` through `b` to `c`. -/
 def pathCompressRule : Rule :=
-  { query := [.values [.var "@b", .var "@p"] ufName [.var "@a"],
-              .values [.var "@c", .var "@q"] ufName [.var "@b"]],
-    actions := [.set ufName [.var "@a"] [.var "@c", transE (.var "@p") (.var "@q")]],
+  { query := [.expr (.app ufName [.var "@a", .var "@b", .var "@p"]),
+              .expr (.app ufName [.var "@b", .var "@c", .var "@q"])],
+    actions := [.expr (.app ufName [.var "@a", .var "@c", transE (.var "@p") (.var "@q")])],
     ruleset := rebuildRuleset }
 
 /-- `@c0 … @c(k-1)`, a rebuild rule's column variables. -/
@@ -965,15 +939,14 @@ f(c…) = @x`; moving column `i` composes a congruence step on the right, `(@Tra
 terms". -/
 def rebuildRules (f : FnName) (k : Nat) : List Rule :=
   let cs := rebuildVars k
-  let view : Pattern := .values [.var "@e", .var "@p"] (viewName f) cs
+  let view : Pattern := .expr (.app (viewName f) (cs ++ [.var "@e", .var "@p"]))
   let eclassRule : Rule :=
-    { query := [view, .values [.var "@x", .var "@q"] ufName [.var "@e"]],
-      actions := [.set (viewName f) cs [.var "@x", transE (.var "@p") (.var "@q")]],
+    { query := [view, .expr (.app ufName [.var "@e", .var "@x", .var "@q"])],
+      actions := [.expr (.app (viewName f) (cs ++ [.var "@x", transE (.var "@p") (.var "@q")]))],
       ruleset := rebuildRuleset }
   eclassRule :: (List.range k).map fun i =>
-    { query := [view, .values [.var "@x", .var "@q"] ufName [.var ("@c" ++ toString i)]],
-      actions := [.set (viewName f) (cs.set i (.var "@x"))
-        [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]],
+    { query := [view, .expr (.app ufName [.var ("@c" ++ toString i), .var "@x", .var "@q"])],
+      actions := [.expr (.app (viewName f) ((cs.set i (.var "@x")) ++ [.var "@e", transE (symE (congrE (congrChildren k i))) (.var "@p")]))],
       ruleset := rebuildRuleset }
 
 /-- The maintenance rules as they join `rebuildRuleset`. `Rebuilt` is stated over it. -/
@@ -1003,13 +976,13 @@ theorem atPrefix_of_mem_vars_maintenanceRules {P : Program} {m : Rule}
   rcases hm with rfl | hm
   · intro v hv
     have hv' : v = "@p" ∨ v = "@a" ∨ v = "@c" ∨ v = "@q" ∨ v = "@b" := by
-      simpa [pathCompressRule, Query.vars, Pattern.vars, Expr.varsList, Expr.vars] using hv
+      simpa [pathCompressRule, Query.vars, Pattern.vars, Expr.varsList, Expr.vars, or_left_comm, or_assoc, or_comm] using hv
     rcases hv' with rfl | rfl | rfl | rfl | rfl <;> decide +kernel
   · obtain ⟨fk, -, hm'⟩ := List.mem_flatMap.mp hm
     have hq : ∃ X : Expr,
         (X = Expr.var "@e" ∨ ∃ i : Nat, X = Expr.var ("@c" ++ toString i)) ∧
-        m.query = [.values [.var "@e", .var "@p"] (viewName fk.1) (rebuildVars fk.2),
-                   .values [.var "@x", .var "@q"] ufName [X]] := by
+        m.query = [.expr (.app (viewName fk.1) ((rebuildVars fk.2) ++ [.var "@e", .var "@p"])),
+                   .expr (.app ufName [X, .var "@x", .var "@q"])] := by
       rw [rebuildRules, List.mem_cons] at hm'
       rcases hm' with rfl | hm''
       · exact ⟨.var "@e", Or.inl rfl, rfl⟩
@@ -1020,7 +993,7 @@ theorem atPrefix_of_mem_vars_maintenanceRules {P : Program} {m : Rule}
     rw [hqe] at hv
     have hv' : (v = "@e" ∨ v = "@p") ∨ v ∈ Expr.varsList (rebuildVars fk.2) ∨
         (v = "@x" ∨ v = "@q") ∨ v ∈ X.vars := by
-      simpa [Query.vars, Pattern.vars, Expr.varsList, Expr.vars, or_assoc] using hv
+      simpa [Query.vars, Pattern.vars, Expr.varsList, Expr.vars, or_left_comm, or_assoc, or_comm] using hv
     rcases hv' with (rfl | rfl) | hc | (rfl | rfl) | hx
     · decide +kernel
     · decide +kernel
@@ -1222,10 +1195,8 @@ theorem unionFree_decl_noMerge {f : FnName} {d : FnDecl} (h : d.merge = some .no
 theorem encodeBuild_app_actions (f : FnName) (args : List Expr) (n : Nat) :
     (encodeBuild (.app f args) n).2.1
       = (encodeBuildArgs args n).2.1 ++
-        [.set (termName f)
-            ((encodeBuildArgs args n).1 ++ [.app f (encodeBuildArgs args n).1]) [],
-         .set (viewName f) (encodeBuildArgs args n).1
-            [.app f (encodeBuildArgs args n).1, fiatE]] := rfl
+        [.expr (.app (termName f) ((encodeBuildArgs args n).1 ++ [.app f (encodeBuildArgs args n).1])),
+         .expr (.app (viewName f) ((encodeBuildArgs args n).1 ++ [.app f (encodeBuildArgs args n).1, fiatE]))] := rfl
 
 theorem encodeBuildArgs_cons_actions (e : Expr) (es : List Expr) (n : Nat) :
     (encodeBuildArgs (e :: es) n).2.1
@@ -1287,8 +1258,8 @@ a read-back consumes. -/
 theorem encodeBuild_app_actions_eq (f : FnName) (args : List Expr) (n : Nat) :
     (encodeBuild (.app f args) n).2.1
       = (encodeBuildArgs args n).2.1 ++
-        [.set (termName f) (args ++ [.app f args]) [],
-         .set (viewName f) args [.app f args, fiatE]] := by
+        [.expr (.app (termName f) (args ++ [.app f args])),
+         .expr (.app (viewName f) (args ++ [.app f args, fiatE]))] := by
   rw [encodeBuild_app_actions, encodeBuildArgs_fst]
 
 mutual
@@ -1325,15 +1296,7 @@ theorem encodeAction_expr_actions (pf : Expr) (e : Expr) (n : Nat) :
 theorem encodeAction_union_actions (pf : Expr) (e₁ e₂ : Expr) (n : Nat) :
     (encodeAction pf (.union e₁ e₂) n).1
       = (encodeBuild e₁ n).2.1 ++ (encodeBuild e₂ (encodeBuild e₁ n).2.2).2.1 ++
-        [.set ufName [maxE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1]
-          [minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1, pf]] := rfl
-
-theorem encodeAction_set_actions (pf : Expr) (f : FnName) (args out : List Expr) (n : Nat) :
-    (encodeAction pf (.set f args out) n).1
-      = (encodeBuildArgs args n).2.1 ++
-        (encodeBuildArgs out (encodeBuildArgs args n).2.2).2.1 ++
-        [.set (viewName f) (encodeBuildArgs args n).1
-          ((encodeBuildArgs out (encodeBuildArgs args n).2.2).1 ++ [pf])] := rfl
+        [.expr (.app ufName [maxE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1, minE (encodeBuild e₁ n).1 (encodeBuild e₂ (encodeBuild e₁ n).2.2).1, pf])] := rfl
 
 theorem encodeActions_cons_actions (pf : Expr) (a : Action) (as : List Action) (n : Nat) :
     (encodeActions pf (a :: as) n).1
@@ -1342,7 +1305,7 @@ theorem encodeActions_cons_actions (pf : Expr) (a : Action) (as : List Action) (
 /-- **A source `union` becomes a `set`.** This is the case the whole statement rests on. -/
 theorem encodeAction_unionFree (pf : Expr) : ∀ (a : Action) (n : Nat),
     ∀ b ∈ (encodeAction pf a n).1, b.UnionFree := by
-  rintro (e | ⟨e₁, e₂⟩ | ⟨f, args, out⟩) n b hb
+  rintro (e | ⟨e₁, e₂⟩) n b hb
   · exact encodeBuild_unionFree e n b (encodeAction_expr_actions .. ▸ hb)
   · rw [encodeAction_union_actions] at hb
     rcases List.mem_append.mp hb with h | h
@@ -1351,13 +1314,7 @@ theorem encodeAction_unionFree (pf : Expr) : ∀ (a : Action) (n : Nat),
       · exact encodeBuild_unionFree e₂ _ b h'
     · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
       rcases h with rfl; trivial
-  · rw [encodeAction_set_actions] at hb
-    rcases List.mem_append.mp hb with h | h
-    · rcases List.mem_append.mp h with h' | h'
-      · exact encodeBuildArgs_unionFree args n b h'
-      · exact encodeBuildArgs_unionFree out _ b h'
-    · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-      rcases h with rfl; trivial
+
 
 @[inherit_doc encodeAction_unionFree]
 theorem encodeActions_unionFree (pf : Expr) : ∀ (as : List Action) (n : Nat),
@@ -1546,7 +1503,6 @@ which is exactly what `Spec/Scope.lean`'s `Action.SetLegal` refuses. So the doma
 `Program.SetLegal` and `Program.setLegal_iff_noSet` records that the two are one
 condition. -/
 def Action.NoSet : Action → Prop
-  | .set _ _ _ => False
   | _ => True
 
 /-- No entry atom. `Pattern.values` reads an entry of a non-constructor function, which
@@ -1555,7 +1511,6 @@ restriction rather than a limitation, and it is why `encodePattern` leaves the c
 instead of encoding it. The encoding's *own* queries are all entry atoms; this constrains
 the source, and `EncodeDomain.queryEncodable` is where it is asked. -/
 def Pattern.NoValues : Pattern → Prop
-  | .values _ _ _ => False
   | _ => True
 
 /-- `Action.NoSet` at every action a command runs. -/
@@ -1613,7 +1568,6 @@ def Pattern.varsOf : Pattern → List Var := Pattern.vars
 def Action.vars : Action → List Var
   | .expr e => e.vars
   | .union e₁ e₂ => e₁.vars ∪ e₂.vars
-  | .set _ args out => Expr.varsList args ∪ Expr.varsList out
 
 /-- `Action.vars` over a command. -/
 def Cmd.vars : Cmd → List Var
@@ -1656,7 +1610,6 @@ and `encodePattern` emits no atom that would say it did. -/
 def Pattern.Grounded : Pattern → Prop
   | .expr e => ∀ l, e ≠ .lit l
   | .eq e₁ e₂ => (∀ l, e₁ ≠ .lit l) ∨ (∀ l, e₂ ≠ .lit l)
-  | .values _ _ _ => True
 
 /-- **The witness position exists at this source state.** `Pattern.Grounded` says the pattern
 is not a bare literal, which is one way to have a witness; a bare literal the source **holds**
@@ -1670,14 +1623,12 @@ def Pattern.GroundedAt (src : Database) : Pattern → Prop
   | .expr e => ∀ l, e = .lit l → Term.lit l ∈ src.terms
   | .eq e₁ e₂ => (∀ l, e₁ = .lit l → Term.lit l ∈ src.terms) ∨
       (∀ l, e₂ = .lit l → Term.lit l ∈ src.terms)
-  | .values _ _ _ => True
 
 @[inherit_doc Pattern.GroundedAt]
 theorem Pattern.Grounded.groundedAt {src : Database} :
     ∀ {p : Pattern}, p.Grounded → p.GroundedAt src
   | .expr _, h => fun l he => absurd he (h l)
   | .eq _ _, h => h.imp (fun h₁ l he => absurd he (h₁ l)) (fun h₂ l he => absurd he (h₂ l))
-  | .values _ _ _, _ => trivial
 
 mutual
 
@@ -1699,7 +1650,6 @@ end
 def Pattern.ArgVar (v : Var) : Pattern → Prop
   | .expr e => Expr.ArgVar v e
   | .eq e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
-  | .values vs _ as => Expr.ArgVarList v vs ∨ Expr.ArgVarList v as
 
 def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
 
@@ -1739,14 +1689,12 @@ theorem Database.GlobalsInline.groundedAt_substGlobals {src : Database} {G : Lis
   | .expr _, h => Expr.mem_terms_of_substGlobals_lit hw hG h
   | .eq _ _, h => h.imp (Expr.mem_terms_of_substGlobals_lit hw hG)
       (Expr.mem_terms_of_substGlobals_lit hw hG)
-  | .values _ _ _, _ => trivial
 
 /-- The substitution moves nothing between the three pattern shapes. -/
 theorem Pattern.NoValues.substGlobals {G : List (Var × Expr)} :
     ∀ {p : Pattern}, p.NoValues → (p.substGlobals G).NoValues
   | .expr _, _ => trivial
   | .eq _ _, _ => trivial
-  | .values _ _ _, h => h
 
 mutual
 
@@ -1847,8 +1795,6 @@ theorem Pattern.ArgVar.substGlobals {G : List (Var × Expr)} {v : Var}
     ∀ {p : Pattern}, Pattern.ArgVar v p → Pattern.ArgVar v (p.substGlobals G)
   | .expr _, h => Expr.ArgVar.substGlobals hv h
   | .eq _ _, h => h.imp (Expr.ArgVar.substGlobals hv) (Expr.ArgVar.substGlobals hv)
-  | .values _ _ _, h =>
-      h.imp (Expr.ArgVarList.substGlobals hv) (Expr.ArgVarList.substGlobals hv)
 
 /-- `Pattern.NoValues.substGlobals` over a query. -/
 theorem Query.noValues_substGlobals {G : List (Var × Expr)} {q : Query}
@@ -1886,12 +1832,6 @@ theorem Query.lookupG_ne_none_of_not_mem_vars_substGlobals {G : List (Var × Exp
       rcases List.mem_union_iff.mp hvp with h | h
       · exact List.mem_union_iff.mpr (Or.inl (Expr.mem_vars_substGlobals_of_keep hcl hkeep e₁ h))
       · exact List.mem_union_iff.mpr (Or.inr (Expr.mem_vars_substGlobals_of_keep hcl hkeep e₂ h))
-  | values vs f as =>
-      rcases List.mem_union_iff.mp hvp with h | h
-      · exact List.mem_union_iff.mpr
-          (Or.inl (Expr.mem_varsList_substGlobals_of_keep hcl hkeep vs h))
-      · exact List.mem_union_iff.mpr
-          (Or.inr (Expr.mem_varsList_substGlobals_of_keep hcl hkeep as h))
 
 /-- **Every variable of the substituted query still sits at a key column.** -/
 theorem Query.VarsKeyed.substGlobals {G : List (Var × Expr)} (hcl : Expr.ClosedG G) {q : Query}
@@ -1908,12 +1848,6 @@ theorem Query.VarsKeyed.substGlobals {G : List (Var × Expr)} (hcl : Expr.Closed
         · obtain ⟨hv', hs⟩ := Expr.mem_vars_substGlobals hcl e₁ h'
           exact ⟨List.mem_union_iff.mpr (Or.inl hv'), hs⟩
         · obtain ⟨hv', hs⟩ := Expr.mem_vars_substGlobals hcl e₂ h'
-          exact ⟨List.mem_union_iff.mpr (Or.inr hv'), hs⟩
-    | values vs f as =>
-        rcases List.mem_union_iff.mp hvp with h' | h'
-        · obtain ⟨hv', hs⟩ := Expr.mem_varsList_substGlobals hcl vs h'
-          exact ⟨List.mem_union_iff.mpr (Or.inl hv'), hs⟩
-        · obtain ⟨hv', hs⟩ := Expr.mem_varsList_substGlobals hcl as h'
           exact ⟨List.mem_union_iff.mpr (Or.inr hv'), hs⟩
   obtain ⟨p₀, hp₀, ha⟩ := h v (Query.mem_vars.mpr ⟨p, hp, hkeep.1⟩)
   exact ⟨p₀.substGlobals G, List.mem_map_of_mem hp₀, Pattern.ArgVar.substGlobals hkeep.2 ha⟩
@@ -1973,16 +1907,6 @@ theorem Query.lookupG_eq_none_of_mem_vars_substGlobals {G : List (Var × Expr)}
       rcases List.mem_union_iff.mp hvp with h' | h'
       · exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl h'
       · exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl h'
-  | values vs f as =>
-      rcases List.mem_union_iff.mp hvp with h' | h'
-      · obtain ⟨e, he, hv⟩ := Expr.mem_varsList
-          (by rw [Expr.substGlobalsList_eq_map] at h'; exact h')
-        obtain ⟨e₀, -, rfl⟩ := List.mem_map.mp he
-        exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl hv
-      · obtain ⟨e, he, hv⟩ := Expr.mem_varsList
-          (by rw [Expr.substGlobalsList_eq_map] at h'; exact h')
-        obtain ⟨e₀, -, rfl⟩ := List.mem_map.mp he
-        exact Expr.lookupG_eq_none_of_mem_vars_substGlobals hcl hv
 
 /-- **Substituting twice is substituting once**: the definitions are closed, so nothing a
 first pass wrote can be rewritten by a second. -/
@@ -2017,8 +1941,6 @@ theorem Query.substGlobals_idem {G : List (Var × Expr)} (hcl : Expr.ClosedG G) 
   cases p with
   | expr e => rw [Function.comp_apply, Pattern.substGlobals, Pattern.substGlobals, hE]
   | eq e₁ e₂ => rw [Function.comp_apply, Pattern.substGlobals, Pattern.substGlobals, hE, hE]
-  | values vs f as =>
-      rw [Function.comp_apply, Pattern.substGlobals, Pattern.substGlobals, hL, hL]
 
 @[inherit_doc Query.substGlobals_idem]
 theorem Rule.substGlobals_idem {G : List (Var × Expr)} (hcl : Expr.ClosedG G) (r : Rule) :
@@ -2119,12 +2041,6 @@ theorem Pattern.ctors_substGlobals_noPrim {G : List (Var × Expr)}
       · rw [Expr.substGlobals_eq_inlineGlobals] at hfk'
         exact ctors_inlineGlobals_noPrim hG e₂
           (fun gk hgk => h gk (List.mem_append_right _ hgk)) fk hfk'
-  | values vs f as =>
-      rw [Pattern.substGlobals, Pattern.ctors] at hfk
-      rw [Pattern.ctors] at h
-      rcases List.mem_append.mp hfk with hfk' | hfk'
-      · exact hL vs (fun gk hgk => h gk (List.mem_append_left _ hgk)) fk hfk'
-      · exact hL as (fun gk hgk => h gk (List.mem_append_right _ hgk)) fk hfk'
 
 /-! #### The resolution is the substitution at the environment's own definitions
 
@@ -2205,10 +2121,6 @@ theorem Pattern.resolveGlobals_eq_substGlobals_toG (σ : Env) :
   | .eq e₁ e₂ => by
       rw [Pattern.resolveGlobals, Pattern.substGlobals,
         Expr.resolveGlobals_eq_substGlobals_toG, Expr.resolveGlobals_eq_substGlobals_toG]
-  | .values vs f as => by
-      rw [Pattern.resolveGlobals, Pattern.substGlobals,
-        Expr.resolveGlobalsList_eq_substGlobalsList_toG,
-        Expr.resolveGlobalsList_eq_substGlobalsList_toG]
 
 @[inherit_doc Env.toG]
 theorem Query.resolveGlobals_eq_substGlobals_toG (σ : Env) (q : Query) :
@@ -2299,7 +2211,6 @@ holds. -/
 def Action.litFreeB : Action → Bool
   | .expr e => e.litFreeB
   | .union e₁ e₂ => e₁.litFreeB && e₂.litFreeB
-  | .set _ args out => Expr.litFreeListB args && Expr.litFreeListB out
 
 /-- `Action.litFreeB` at every action a command runs. -/
 def Cmd.litFreeB : Cmd → Bool
@@ -2376,9 +2287,6 @@ instance Action.decidableDeclared : ∀ (a : Action) (sig : Signature),
     Decidable (a.Declared sig)
   | .expr e, sig => inferInstanceAs (Decidable (e.Declared sig))
   | .union e₁ e₂, sig => inferInstanceAs (Decidable (e₁.Declared sig ∧ e₂.Declared sig))
-  | .set f args out, sig =>
-      inferInstanceAs (Decidable (sig f ≠ none ∧ (∀ e ∈ args, e.Declared sig) ∧
-        ∀ e ∈ out, e.Declared sig))
 
 instance Actions.decidableDeclared : ∀ (as : List Action) (sig : Signature),
     Decidable (Actions.Declared as sig)
@@ -2404,7 +2312,6 @@ instance Action.decidableSetLegal : ∀ (a : Action) (sig : Signature),
     Decidable (a.SetLegal sig)
   | .expr _, _ => .isTrue trivial
   | .union _ _, _ => .isTrue trivial
-  | .set f _ _, sig => inferInstanceAs (Decidable (sig.mergeOf f ≠ none))
 
 instance Actions.decidableSetLegal : ∀ (as : List Action) (sig : Signature),
     Decidable (Actions.SetLegal as sig)
@@ -2456,8 +2363,6 @@ instance Expr.decidableScoped (e : Expr) (Γ : Scope) : Decidable (e.Scoped Γ) 
 instance Action.decidableScoped : ∀ (a : Action) (Γ : Scope), Decidable (a.Scoped Γ)
   | .expr e, Γ => inferInstanceAs (Decidable (e.IsApp ∧ e.Scoped Γ))
   | .union e₁ e₂, Γ => inferInstanceAs (Decidable (e₁.Scoped Γ ∧ e₂.Scoped Γ))
-  | .set _ args out, Γ =>
-      inferInstanceAs (Decidable ((∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ))
 
 instance Actions.decidableScoped : ∀ (as : List Action) (Γ : Scope),
     Decidable (Actions.Scoped as Γ)
@@ -2583,7 +2488,6 @@ theorem Action.UnionLegal.of_litFreeB {a : Action} (h : a.litFreeB = true) : a.U
       · rw [hl] at h; simp [Expr.litFreeB] at h
       · rw [hl] at h; simp [Expr.litFreeB] at h
   | expr _ => trivial
-  | set _ _ _ => trivial
 
 @[inherit_doc Action.UnionLegal.of_unionFree]
 theorem Actions.UnionLegal.of_mem : ∀ {as : List Action}, (∀ a ∈ as, a.UnionLegal) →

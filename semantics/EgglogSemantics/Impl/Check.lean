@@ -3,32 +3,18 @@ import EgglogSemantics.Spec.Scope
 /-!
 # The front end's static checks
 
-Two checks a real egglog front end runs before a program means anything, transcribed from
-`constraint.rs` and `typechecking.rs`. They are here rather than in `Spec/` because they
-say what egglog *rejects*, not what a program *means*: nothing in the semantics consumes
-them, and their consumers are the differential test (`DiffTest.lean`'s `writeCase`,
-`Tests/Egg.lean`, `Tests/Examples.lean`) plus the counterexamples that show they are not
-redundant with `Spec/Scope.lean`'s `SetLegal`.
-
-Both are `Bool`, unlike `Scoped` and `SetLegal`, so that the difftest's check and the
-statement a proof would use are the same definition rather than two that can drift.
+Arity and value-position checks for the model's atom syntax. These executable checks
+are consumed by the differential tests and examples. Function entries occupy complete
+query or action atoms; constructors and primitives occupy value positions.
 -/
 
 namespace Egglog
 /-! ### Arity
 
-egglog fixes a function's column counts when it is declared and checks every use against
-them: an expression or a query fact appends one fresh output variable, so it needs
-`outArity f = 1`; a `set` appends its value list; the row atom `Pattern.values` appends
-the values it reads. A declaration is checked too — a `:merge` result has one expression
-per value column, and a constructor has exactly one value column.
-
-A name with no entry has no declared column counts, so nothing here constrains it. That a
-program must *have* declared what it applies is `Program.Evaluable`'s business.
-
-For `set` and row atoms, the model also checks the key/output split, rather than only
-the total column count. This is stricter than egglog when columns of the same sort can
-move across that split. Primitive arities are not checked here.
+Declarations fix column counts. Constructor applications use their argument count;
+function entry atoms use all key and output columns. Nested expressions and equality
+or union operands are values. A merge result has one expression per output column.
+Primitive arities are checked by evaluation.
 -/
 
 mutual
@@ -50,31 +36,25 @@ def Expr.arityOkList : List Expr → Signature → Bool
 
 end
 
-/-- A query fact. `.expr` and `.eq` hold ordinary expressions, which egglog lowers with a
-single fresh output variable; the row atom names a declared function and its two column
-counts directly. -/
-def Pattern.arityOk : Pattern → Signature → Bool
-  | .expr e, sig => e.arityOk sig
-  | .eq e₁ e₂, sig => e₁.arityOk sig && e₂.arityOk sig
-  | .values vs f as, sig =>
-      (match sig f with
-       | none => false
-       | some d => as.length == d.arity && as.length + vs.length == d.entryWidth)
-        && Expr.arityOkList vs sig && Expr.arityOkList as sig
-
-/-- An action. A `set`'s key and value counts are checked together; a `set` on a name with
-no entry needs no case here, `Action.SetLegal` already rejects it. -/
-def Action.arityOk : Action → Signature → Bool
-  | .expr e, sig => e.arityOk sig
-  | .union e₁ e₂, sig => e₁.arityOk sig && e₂.arityOk sig
-  | .set f args out, sig =>
+/-- Complete atoms use all table columns; their children are value expressions. -/
+def Expr.atomArityOk : Expr → Signature → Bool
+  | .app f cols, sig =>
       (match sig f with
        | none => true
-       | some d => args.length == d.arity && out.length == d.outArity)
-        && Expr.arityOkList args sig && Expr.arityOkList out sig
+       | some d => cols.length == d.entryWidth) && Expr.arityOkList cols sig
+  | _, _ => true
 
-/-- Every action in the list. Like `Actions.SetLegal`, no threading: no action changes the
-signature. -/
+/-- A complete atom or an equality between values. -/
+def Pattern.arityOk : Pattern → Signature → Bool
+  | .expr e, sig => e.atomArityOk sig
+  | .eq e₁ e₂, sig => e₁.arityOk sig && e₂.arityOk sig
+
+/-- A complete atom or a union between values. -/
+def Action.arityOk : Action → Signature → Bool
+  | .expr e, sig => e.atomArityOk sig
+  | .union e₁ e₂, sig => e₁.arityOk sig && e₂.arityOk sig
+
+/-- Every action in the list. Actions do not change the signature. -/
 def Actions.arityOk (as : List Action) (sig : Signature) : Bool :=
   as.all (Action.arityOk · sig)
 
@@ -118,34 +98,11 @@ def Program.ArityOk (p : Program) (sig : Signature) : Prop := p.arityOk sig = tr
 empty scope. -/
 def WellArity (p : Program) : Prop := Program.ArityOk p (fun _ => none)
 
-/-! ### Reading in an action
+/-! ### Value positions
 
-**All reading happens in the query; all writing happens in the actions.** An application
-of a non-constructor is a *lookup* — it reads a recorded row rather than building a term —
-and this section says no expression anywhere in a program contains one. The single place
-a program may read is then the query atom `Pattern.values`, whose function name is not an
-expression position at all.
-
-A lookup is an application of a declared merge function. A **primitive** needs a case of
-its own: egglog resolves one out of a table that is already populated, so it is never
-declared, and `Signature.IsCtor` — which requires declaration — would otherwise reject
-`(min old new)`. This is `Expr.eval`'s own order, primitives first.
-
-An **undeclared** name fails this check too, which is a second thing it now says: it is not
-a read, it is a name that means nothing. `Spec/Scope.lean`'s `Evaluable` rejects it for the
-same reason.
-
-`Spec/Scope.lean`'s `Evaluable` is the semantics-side half of this: it constrains only
-the positions `Expr.eval` reaches, and it also excludes primitives, which this check
-deliberately admits.
-
-What it buys is the thing the whole relational layer was paying for: with nothing able to
-read but a query atom, `Expr.eval` needs no `lookup` constructor, is deterministic, and
-consults the database only for its signature.
-
-`Rule.noLookup`'s action half corresponds to egglog's `check_no_function_lookups_in_actions`.
-The model applies the restriction to every expression position, including top-level actions
-and merge bodies, so evaluation never needs a table lookup.
+Entries are permitted only as complete atoms. Atom columns, equality and union operands,
+and merge results contain constructor or primitive applications. Evaluation therefore
+never performs a table lookup inside a value expression. Undeclared names are rejected.
 -/
 
 mutual
@@ -165,11 +122,16 @@ def Expr.noLookupList : List Expr → Signature → Bool
 
 end
 
+/-- A table application is an atom only at the root. Its columns are values. -/
+def Expr.atomNoLookup : Expr → Signature → Bool
+  | .app f cols, sig =>
+      ((Prim.ofName f).isSome || (sig f).isSome) && Expr.noLookupList cols sig
+  | _, _ => true
+
 /-- An action, in every expression position egglog's check walks. -/
 def Action.noLookup : Action → Signature → Bool
-  | .expr e, sig => e.noLookup sig
+  | .expr e, sig => e.atomNoLookup sig
   | .union e₁ e₂, sig => e₁.noLookup sig && e₂.noLookup sig
-  | .set _ args out, sig => Expr.noLookupList args sig && Expr.noLookupList out sig
 
 /-- Every action in the list. No threading: no action changes the signature. -/
 def Actions.noLookup (as : List Action) (sig : Signature) : Bool :=
@@ -180,22 +142,16 @@ def MergeSpec.noLookup : MergeSpec → Signature → Bool
   | .noMerge, _ => true
   | .merge body res, sig => Actions.noLookup body sig && res.all (Expr.noLookup · sig)
 
-/-- A query fact. `.values` is the read, so only its *operands* are checked; `.expr` and
-`.eq` are evaluated, so they must name constructors throughout. -/
+/-- Entries are complete query atoms; equality compares values. -/
 def Pattern.noLookup : Pattern → Signature → Bool
-  | .expr e, sig => e.noLookup sig
+  | .expr e, sig => e.atomNoLookup sig
   | .eq e₁ e₂, sig => e₁.noLookup sig && e₂.noLookup sig
-  | .values vs _ as, sig => Expr.noLookupList vs sig && Expr.noLookupList as sig
 
-/-- A rule's query and head. The head half is exactly
-`check_no_function_lookups_in_actions`; the query half is this model's, and says a read is
-an atom rather than something nested inside an expression egglog would flatten. -/
+/-- The query and actions use the same restrictions on value positions. -/
 def Rule.noLookup (r : Rule) (sig : Signature) : Bool :=
   r.query.all (Pattern.noLookup · sig) && Actions.noLookup r.actions sig
 
-/-- A command. A declaration's merge body sees the signature the declaration installs, as
-in `Cmd.arityOk`, so a body may `set` its own table — a write — while reading it is a
-lookup like any other. -/
+/-- A declaration's merge body sees the declaration itself, so it can write its own table. -/
 def Cmd.noLookup : Cmd → Signature → Bool
   | .action a, sig => a.noLookup sig
   | .rule r, sig => r.noLookup sig
@@ -214,10 +170,7 @@ def Program.noLookup : Program → Signature → Bool
 /-- `Program.noLookup` as a proposition, to sit beside `Program.SetLegal`. -/
 def Program.NoLookup (p : Program) (sig : Signature) : Prop := p.noLookup sig = true
 
-/-- The read check from the empty signature: every read is a `Pattern.values` atom. What a
-front end demands in full is `WellArity p` and `ReadsAreAtoms p` together with
-`Spec/Scope.lean`'s four: `WellScoped p`, `p.Evaluable sig`, `p.SetLegal sig` and
-`p.DeclsFresh sig`. -/
+/-- The value-position check from the empty signature. -/
 def ReadsAreAtoms (p : Program) : Prop := Program.NoLookup p (fun _ => none)
 
 end Egglog

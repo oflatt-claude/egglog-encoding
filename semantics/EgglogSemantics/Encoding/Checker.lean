@@ -94,14 +94,11 @@ def reflEqs (t : Term) : List (Term × Term) := t.subtermList.map fun s => (s, s
 /-- `Spec/Eval.lean`'s `evalAction` with the asserted equalities as the accumulator:
 `union` contributes its pair both ways, everything built contributes `reflEqs`. -/
 def procAction (sig : Signature) (σ : Env) : Action → Option (List (Term × Term))
-  | .expr e => (e.eval sig σ).map fun t => reflEqs t
+  | .expr e => (e.evalAtom sig σ).map fun t => reflEqs t
   | .union e₁ e₂ =>
       (e₁.eval sig σ).bind fun t₁ => (e₂.eval sig σ).bind fun t₂ =>
         if t₁.isLit || t₂.isLit then none
         else some ((t₁, t₂) :: (t₂, t₁) :: (reflEqs t₁ ++ reflEqs t₂))
-  | .set f args out =>
-      (Expr.evalList sig args σ).bind fun as =>
-        (Expr.evalList sig out σ).map fun vs => reflEqs (.app f (as ++ vs))
 
 /-- Evaluate every action in the same query substitution. -/
 def procActions (sig : Signature) (σ : Env) : List Action → Option (List (Term × Term))
@@ -162,7 +159,6 @@ state a reflexive one. -/
 def factProp : Pattern → Expr × Expr
   | .expr e => (e, e)
   | .eq e₁ e₂ => (e₁, e₂)
-  | .values vs f as => (.app f (as ++ vs), .app f (as ++ vs))
 
 /-- Extend `σ` so that `pr` is what the body fact `q` states. -/
 def unifyFact (sig : Signature) (q : Pattern) (σ : Env) (pr : Term × Term) : Option Env :=
@@ -225,7 +221,6 @@ end
 through, and stands for a premise proof exactly when `queryProofs` reads one off it — a
 two-column read. Under `Program.EncodeDomain` the source has none. -/
 def flatPattern : Pattern → Nat → NormalQuery × Nat
-  | .values vs f as, n => ([(.values vs f as, vs.length == 2)], n)
   | .expr e, n => match flatExpr e n with | (_, qs, n₁) => (qs, n₁)
   | .eq e₁ e₂, n =>
       match flatExpr e₁ n with

@@ -9,8 +9,8 @@ Cmd     = Action | Rule | (run R) | (saturate R) | Decl
 Decl    = (datatype ...) | (constructor ...) | (function ... :merge ...)
 Rule    = (rule Query Actions :ruleset R)
 Query   = (Pattern ...)
-Pattern = expr | (= expr expr) | (= (values expr ...) (f expr ...))
-Action  = expr | (union expr expr) | (set (f expr ...) expr ...)
+Pattern = expr | (= expr expr)
+Action  = expr | (union expr expr)
 expr    = number | var | (f expr ...)
 ```
 -/
@@ -39,9 +39,6 @@ entry to read. -/
 inductive Pattern where
   | expr : Expr → Pattern
   | eq : Expr → Expr → Pattern
-  /-- `f(a…, v…)`: read `f`'s entry at the key `a…` and bind its value columns `v…`.
-  **The only read in the language.** -/
-  | values : List Expr → FnName → List Expr → Pattern
 
 /-- A rule's query, matched conjunctively. -/
 abbrev Query := List Pattern
@@ -50,9 +47,6 @@ abbrev Query := List Pattern
 inductive Action where
   | expr : Expr → Action
   | union : Expr → Expr → Action
-  /-- `(set (f args…) out…)`: record `f args… ↦ out…`, one output expression per value
-  column. -/
-  | set : FnName → List Expr → List Expr → Action
 
 /-- A ruleset name. A rule joins one with `:ruleset <name>`, and a run names the one it
 fires. egglog's *unnamed* ruleset is the empty name: that is what a rule with no
@@ -147,7 +141,6 @@ end
 def Pattern.vars : Pattern → List Var
   | .expr e => e.vars
   | .eq e₁ e₂ => e₁.vars ∪ e₂.vars
-  | .values vs _ as => Expr.varsList vs ∪ Expr.varsList as
 
 def Query.vars : Query → List Var
   | [] => []

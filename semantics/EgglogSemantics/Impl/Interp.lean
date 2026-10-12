@@ -162,6 +162,23 @@ def addRow (f : FnName) (as vs : List Term) (d : FDatabase) : FDatabase :=
   let d := d.addTerm (.app f (as ++ vs))
   { d with rows := (⟨f, as, vs⟩ :: d.rows).dedup }
 
+/-- The row indexed by a complete table-entry term. Only a declared table with its full
+column width has an entry row; constructors are indexed by `ctorRowList`. -/
+def entryRowList (sig : Signature) : Term → List Row
+  | .lit _ => []
+  | .app f cols =>
+      match sig f with
+      | some dc =>
+          if dc.merge.isSome && cols.length == dc.entryWidth then
+            [⟨f, cols.take dc.arity, cols.drop dc.arity⟩]
+          else []
+      | none => []
+
+/-- Record an atom and index its root if it is a complete table entry. -/
+def addAtom (t : Term) (d : FDatabase) : FDatabase :=
+  let e := d.addTerm t
+  { e with rows := (entryRowList d.sig t ++ e.rows).dedup }
+
 /-- Assert `a = b`, inserting both terms. -/
 def addEq (a b : Term) (d : FDatabase) : FDatabase :=
   { (d.addTerm a).addTerm b with eqs := ((a, b) :: d.eqs).dedup }
@@ -289,25 +306,22 @@ where the term admits every split — would answer a different question.
 It compares with `closureF`, which computes exactly the specification's `Cong`. -/
 def patternHolds (d : FDatabase) (p : Pattern) (σ : Env) : Bool :=
   match p with
-  | .values vs f as =>
-    match Expr.evalList d.sig vs (σ), Expr.evalList d.sig as (σ) with
-    | some us, some ts =>
-      if (d.sig.mergeOf f).isSome then
+  | .expr e =>
+    match e.entry d.sig with
+    | some (f, keys, vals) =>
+      match Expr.evalList d.sig vals σ, Expr.evalList d.sig keys σ with
+      | some us, some ts =>
         let cl := ((d.addTerms ts).addTerms us).closureF
         d.rows.any fun r =>
           decide (r.fn = f) && FDatabase.congrTuple cl ts r.args
             && FDatabase.congrTuple cl us r.out
-      else
-        let t := Term.app f (ts ++ us)
+      | _, _ => false
+    | none =>
+      match e.evalAtom d.sig σ with
+      | none => false
+      | some t =>
         let cl := (d.addTerm t).closureF
         decide (∃ w ∈ d.terms, (w, t) ∈ cl)
-    | _, _ => false
-  | .expr e =>
-    match e.eval d.sig (σ) with
-    | none => false
-    | some t =>
-      let cl := (d.addTerm t).closureF
-      decide (∃ w ∈ d.terms, (w, t) ∈ cl)
   | .eq e₁ e₂ =>
     match e₁.eval d.sig (σ), e₂.eval d.sig (σ) with
     | some t₁, some t₂ =>
@@ -406,25 +420,22 @@ theorem FDatabase.closureWith_eq (d : FDatabase) (ts : List Term) :
 def patternHoldsWith (cl : Finset (Term × Term)) (d : FDatabase) (p : Pattern) (σ : Env) :
     Bool :=
   match p with
-  | .values vs f as =>
-    match Expr.evalList d.sig vs (σ), Expr.evalList d.sig as (σ) with
-    | some us, some ts =>
-      if (d.sig.mergeOf f).isSome then
+  | .expr e =>
+    match e.entry d.sig with
+    | some (f, keys, vals) =>
+      match Expr.evalList d.sig vals σ, Expr.evalList d.sig keys σ with
+      | some us, some ts =>
         let cl' := d.closureWith cl (ts ++ us)
         d.rows.any fun r =>
           decide (r.fn = f) && FDatabase.congrTuple cl' ts r.args
             && FDatabase.congrTuple cl' us r.out
-      else
-        let t := Term.app f (ts ++ us)
+      | _, _ => false
+    | none =>
+      match e.evalAtom d.sig σ with
+      | none => false
+      | some t =>
         let cl' := d.closureWith cl [t]
         decide (∃ w ∈ d.terms, (w, t) ∈ cl')
-    | _, _ => false
-  | .expr e =>
-    match e.eval d.sig (σ) with
-    | none => false
-    | some t =>
-      let cl' := d.closureWith cl [t]
-      decide (∃ w ∈ d.terms, (w, t) ∈ cl')
   | .eq e₁ e₂ =>
     match e₁.eval d.sig (σ), e₂.eval d.sig (σ) with
     | some t₁, some t₂ =>
@@ -446,9 +457,14 @@ theorem patternHoldsWith_eq (d : FDatabase) (p : Pattern) (σ : Env) :
     FDatabase.closureWith_eq d [t₁, t₂]
   cases p with
   | expr e =>
-    cases he : e.eval d.sig (σ) with
-    | none => simp only [patternHoldsWith, patternHolds, he]
-    | some t => simp only [patternHoldsWith, patternHolds, he, h1]
+    cases he : e.entry d.sig with
+    | none =>
+      cases hv : e.evalAtom d.sig σ <;> simp only [patternHoldsWith, patternHolds, he, hv, h1]
+    | some row =>
+      obtain ⟨f, keys, vals⟩ := row
+      cases hv : Expr.evalList d.sig vals σ <;>
+        cases hk : Expr.evalList d.sig keys σ <;>
+          simp only [patternHoldsWith, patternHolds, he, hv, hk, h2]
   | eq e₁ e₂ =>
     cases he₁ : e₁.eval d.sig (σ) with
     | none => simp only [patternHoldsWith, patternHolds, he₁]
@@ -456,14 +472,6 @@ theorem patternHoldsWith_eq (d : FDatabase) (p : Pattern) (σ : Env) :
       cases he₂ : e₂.eval d.sig (σ) with
       | none => simp only [patternHoldsWith, patternHolds, he₁, he₂]
       | some t₂ => simp only [patternHoldsWith, patternHolds, he₁, he₂, h3]
-  | values vs f as =>
-    cases hv : Expr.evalList d.sig vs (σ) with
-    | none => simp only [patternHoldsWith, patternHolds, hv]
-    | some us =>
-      cases ha : Expr.evalList d.sig as (σ) with
-      | none => simp only [patternHoldsWith, patternHolds, hv, ha]
-      | some ts =>
-        simp only [patternHoldsWith, patternHolds, hv, ha, h1, h2]
 
 /-- `matchQuery` with the closure computed once, as a parameter. -/
 def matchQueryWith (cl : Finset (Term × Term)) (d : FDatabase) (q : Query) : List Env :=
@@ -699,8 +707,11 @@ term the database does not hold, which is exactly when `closureWith` would move 
 out from under the comparison. -/
 def joinPlan (cl : Finset (Term × Term)) (d : FDatabase) (pre : Env) (v : Var) :
     Pattern → Option JoinAtom
-  | .values vs f as =>
-      let vars := (Pattern.values vs f as).freeVars []
+  | .expr e =>
+    match e.entry d.sig with
+    | none => none
+    | some (f, as, vs) =>
+      let vars := (Pattern.expr e).freeVars []
       if (d.sig.mergeOf f).isSome && joinDrivable as && joinDrivable vs
           && decide (v ∈ vars) then
         let ρ := Env.canon vars pre
@@ -988,18 +999,19 @@ private theorem joinConsistent_of_congrTuple {cl : Finset (Term × Term)} {d : F
     · exact htail.2
 
 /-- What `joinPlan` promises when it produces an atom. -/
-private theorem joinPlan_values {cl : Finset (Term × Term)} {d : FDatabase} {pre : Env}
-    {v : Var} {vs as : List Expr} {f : FnName} {a : JoinAtom}
-    (h : joinPlan cl d pre v (.values vs f as) = some a) :
+private theorem joinPlan_entry {cl : Finset (Term × Term)} {d : FDatabase} {pre : Env}
+    {v : Var} {e : Expr} {vs as : List Expr} {f : FnName} {a : JoinAtom}
+    (he : e.entry d.sig = some (f, as, vs))
+    (h : joinPlan cl d pre v (.expr e) = some a) :
     joinDrivable as = true ∧ joinDrivable vs = true ∧
-      a.vars = (Pattern.values vs f as).freeVars [] ∧ a.keys = as ∧ a.outs = vs ∧
+      a.vars = (Pattern.expr e).freeVars [] ∧ a.keys = as ∧ a.outs = vs ∧
       d.holdsAll ((joinKnown (Env.canon a.vars pre) as).filterMap id) = true ∧
       d.holdsAll ((joinKnown (Env.canon a.vars pre) vs).filterMap id) = true ∧
       ∀ r ∈ d.rows, r.fn = f →
         joinConsistent cl (joinKnown (Env.canon a.vars pre) as) r.args = true →
         joinConsistent cl (joinKnown (Env.canon a.vars pre) vs) r.out = true →
         r ∈ a.rows := by
-  simp only [joinPlan] at h
+  simp only [joinPlan, he] at h
   split at h
   · rename_i hg
     split at h
@@ -1020,15 +1032,15 @@ private theorem joinPlan_values {cl : Finset (Term × Term)} {d : FDatabase} {pr
   · simp at h
 
 /-- What `patternHoldsWith` promises at a **merge function's** entry atom. -/
-private theorem patternHoldsWith_values {cl : Finset (Term × Term)} {d : FDatabase}
-    {vs as : List Expr} {f : FnName} {σ : Env} (hm : (d.sig.mergeOf f).isSome = true)
-    (h : patternHoldsWith cl d (.values vs f as) σ = true) :
+private theorem patternHoldsWith_entry {cl : Finset (Term × Term)} {d : FDatabase}
+    {e : Expr} {vs as : List Expr} {f : FnName} {σ : Env} (he : e.entry d.sig = some (f, as, vs))
+    (h : patternHoldsWith cl d (.expr e) σ = true) :
     ∃ us ks, Expr.evalList d.sig vs (σ) = some us ∧
       Expr.evalList d.sig as (σ) = some ks ∧
       ∃ r ∈ d.rows, r.fn = f ∧
         FDatabase.congrTuple (d.closureWith cl (ks ++ us)) ks r.args = true ∧
         FDatabase.congrTuple (d.closureWith cl (ks ++ us)) us r.out = true := by
-  simp only [patternHoldsWith] at h
+  simp only [patternHoldsWith, he] at h
   cases hv : Expr.evalList d.sig vs (σ) with
   | none => rw [hv] at h; simp at h
   | some us =>
@@ -1036,7 +1048,7 @@ private theorem patternHoldsWith_values {cl : Finset (Term × Term)} {d : FDatab
     | none => rw [hv, ha] at h; simp at h
     | some ks =>
       rw [hv, ha] at h
-      simp only [hm, if_pos, List.any_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
+      simp only [List.any_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
       obtain ⟨r, hr, ⟨hf, h1⟩, h2⟩ := h
       exact ⟨us, ks, rfl, rfl, r, hr, hf, h1, h2⟩
 
@@ -1057,69 +1069,67 @@ theorem joinCands_mem {cl : Finset (Term × Term)} {d : FDatabase} {q : Query} {
     obtain ⟨p, hp, hpa⟩ := List.mem_filterMap.mp ha'
     have hph := List.all_eq_true.mp hall p hp
     match p, hpa, hph with
-    | .expr _, hpa, _ => simp [joinPlan] at hpa
     | .eq _ _, hpa, _ => simp [joinPlan] at hpa
-    | .values vs f as, hpa, hph =>
-      obtain ⟨hda, hdv, hav, hak, hao, hka, hkv, hrow⟩ := joinPlan_values hpa
-      have hm : (d.sig.mergeOf f).isSome = true := by
-        simp only [joinPlan] at hpa
-        split at hpa
-        · rename_i hg; simp only [Bool.and_eq_true] at hg; exact hg.1.1.1
-        · simp at hpa
-      obtain ⟨us, ks, hev, hek, r, hr, hrf, hcm1, hcm2⟩ := patternHoldsWith_values hm hph
-      -- the three environments: the node's, the candidate's, and the full substitution's
-      set vars := (Pattern.values vs f as).freeVars [] with hvars
-      set ρ₀ := Env.canon vars pre with hρ₀
-      set ρ₁ := Env.canon vars (pre ++ [(v, t)]) with hρ₁
-      set ρ₂ := Env.canon vars (pre ++ [(v, t)] ++ σ) with hρ₂
-      have mono₀ : ∀ w y, Env.lookup w ρ₀ = some y → Env.lookup w ρ₂ = some y := by
-        rw [hρ₀, hρ₂]
-        exact lookup_canon_mono (E := [])
-          fun w y hw => lookup_append_some (lookup_append_some hw)
-      have mono₁ : ∀ w y, Env.lookup w ρ₁ = some y → Env.lookup w ρ₂ = some y := by
-        rw [hρ₁, hρ₂]
-        exact lookup_canon_mono (E := []) fun w y hw => lookup_append_some hw
-      have hnew : ∀ w y, Env.lookup w ρ₀ = none → Env.lookup w ρ₂ = some y →
-          d.holdsAll [y] = true := by
-        intro w y h0 h2
-        rw [hρ₀, Env.lookup_canon_eq] at h0
-        rw [hρ₂, Env.lookup_canon_eq] at h2
-        by_cases hmv : w ∈ vars
-        · rw [if_pos hmv] at h0 h2
-          rw [List.append_assoc, lookup_append_none h0, List.singleton_append,
-            Env.lookup] at h2
-          by_cases hwv : w = v
-          · rw [if_pos hwv, Option.some.injEq] at h2
-            subst h2; exact hheld hb t htm
-          · rw [if_neg hwv] at h2
-            exact hheld hb y (hσ (w, y) (mem_of_lookup h2))
-        · rw [if_neg hmv] at h2; simp at h2
-      -- every operand's value is held, so the atom's closure is the one the filter used
-      have hks : ∀ x ∈ ks, d.holdsAll [x] = true := by
-        rw [hav] at hka
-        exact joinKnown_holds mono₀ hnew hda hek hka
-      have hus : ∀ x ∈ us, d.holdsAll [x] = true := by
-        rw [hav] at hkv
-        exact joinKnown_holds mono₀ hnew hdv hev hkv
-      have hcl : d.closureWith cl (ks ++ us) = cl := by
-        rw [FDatabase.closureWith, if_pos]
-        refine holdsAll_of_forall fun x hx => ?_
-        rcases List.mem_append.mp hx with hx | hx
-        · exact hks x hx
-        · exact hus x hx
-      rw [hcl] at hcm1 hcm2
-      -- the row survives the prefix, so it is one of the atom's, and it admits `t`
-      have hin : r ∈ a.rows := by
-        refine hrow r hr hrf ?_ ?_
-        · rw [hav]
-          exact joinConsistent_of_congrTuple mono₀ hda hek hcm1
-        · rw [hav]
-          exact joinConsistent_of_congrTuple mono₀ hdv hev hcm2
-      refine List.any_eq_true.mpr ⟨r, hin, ?_⟩
-      rw [hak, hao, hav]
-      refine Bool.and_eq_true .. ▸ ⟨?_, ?_⟩
-      · exact joinConsistent_of_congrTuple mono₁ hda hek hcm1
-      · exact joinConsistent_of_congrTuple mono₁ hdv hev hcm2
+    | .expr e, hpa, hph =>
+      cases he : e.entry d.sig with
+      | none => simp [joinPlan, he] at hpa
+      | some entry =>
+        obtain ⟨f, as, vs⟩ := entry
+        obtain ⟨hda, hdv, hav, hak, hao, hka, hkv, hrow⟩ := joinPlan_entry he hpa
+        obtain ⟨us, ks, hev, hek, r, hr, hrf, hcm1, hcm2⟩ := patternHoldsWith_entry he hph
+        -- the three environments: the node's, the candidate's, and the full substitution's
+        set vars := (Pattern.expr e).freeVars [] with hvars
+        set ρ₀ := Env.canon vars pre with hρ₀
+        set ρ₁ := Env.canon vars (pre ++ [(v, t)]) with hρ₁
+        set ρ₂ := Env.canon vars (pre ++ [(v, t)] ++ σ) with hρ₂
+        have mono₀ : ∀ w y, Env.lookup w ρ₀ = some y → Env.lookup w ρ₂ = some y := by
+          rw [hρ₀, hρ₂]
+          exact lookup_canon_mono (E := [])
+            fun w y hw => lookup_append_some (lookup_append_some hw)
+        have mono₁ : ∀ w y, Env.lookup w ρ₁ = some y → Env.lookup w ρ₂ = some y := by
+          rw [hρ₁, hρ₂]
+          exact lookup_canon_mono (E := []) fun w y hw => lookup_append_some hw
+        have hnew : ∀ w y, Env.lookup w ρ₀ = none → Env.lookup w ρ₂ = some y →
+            d.holdsAll [y] = true := by
+          intro w y h0 h2
+          rw [hρ₀, Env.lookup_canon_eq] at h0
+          rw [hρ₂, Env.lookup_canon_eq] at h2
+          by_cases hmv : w ∈ vars
+          · rw [if_pos hmv] at h0 h2
+            rw [List.append_assoc, lookup_append_none h0, List.singleton_append,
+              Env.lookup] at h2
+            by_cases hwv : w = v
+            · rw [if_pos hwv, Option.some.injEq] at h2
+              subst h2; exact hheld hb t htm
+            · rw [if_neg hwv] at h2
+              exact hheld hb y (hσ (w, y) (mem_of_lookup h2))
+          · rw [if_neg hmv] at h2; simp at h2
+        -- every operand's value is held, so the atom's closure is the one the filter used
+        have hks : ∀ x ∈ ks, d.holdsAll [x] = true := by
+          rw [hav] at hka
+          exact joinKnown_holds mono₀ hnew hda hek hka
+        have hus : ∀ x ∈ us, d.holdsAll [x] = true := by
+          rw [hav] at hkv
+          exact joinKnown_holds mono₀ hnew hdv hev hkv
+        have hcl : d.closureWith cl (ks ++ us) = cl := by
+          rw [FDatabase.closureWith, if_pos]
+          refine holdsAll_of_forall fun x hx => ?_
+          rcases List.mem_append.mp hx with hx | hx
+          · exact hks x hx
+          · exact hus x hx
+        rw [hcl] at hcm1 hcm2
+        -- the row survives the prefix, so it is one of the atom's, and it admits `t`
+        have hin : r ∈ a.rows := by
+          refine hrow r hr hrf ?_ ?_
+          · rw [hav]
+            exact joinConsistent_of_congrTuple mono₀ hda hek hcm1
+          · rw [hav]
+            exact joinConsistent_of_congrTuple mono₀ hdv hev hcm2
+        refine List.any_eq_true.mpr ⟨r, hin, ?_⟩
+        rw [hak, hao, hav]
+        refine Bool.and_eq_true .. ▸ ⟨?_, ?_⟩
+        · exact joinConsistent_of_congrTuple mono₁ hda hek hcm1
+        · exact joinConsistent_of_congrTuple mono₁ hdv hev hcm2
   · exact htm
 
 /-- `filter` past a `flatMap` that is empty wherever the filter rejects. -/
@@ -1206,12 +1216,10 @@ caller of `matchQuery` gets. -/
 /-! ### Running -/
 /-- `evalAction`, computed. -/
 def execAction (d : FDatabase) : Action → Option FDatabase
-  | .expr e => (e.eval d.sig d.env).map fun t => d.addTerm t
+  | .expr e => (e.evalAtom d.sig d.env).map fun t => d.addAtom t
   | .union e₁ e₂ =>
       (e₁.eval d.sig d.env).bind fun t₁ => (e₂.eval d.sig d.env).bind fun t₂ =>
         if t₁.isLit || t₂.isLit then none else some (d.addEq t₁ t₂)
-  | .set f args out => (Expr.evalList d.sig args d.env).bind fun as =>
-      (Expr.evalList d.sig out d.env).map fun vs => d.addRow f as vs
 
 /-- `evalActions`, computed. -/
 def execActions (d : FDatabase) : List Action → Option FDatabase

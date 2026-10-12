@@ -181,7 +181,7 @@ def stuckDecl : FnDecl :=
     merge := some (.merge [] [.app "min" [.lit (.int 1), eA]]) }
 
 /-- `(function f () i64 :merge (min 1 (a)))  (set (f) (a))`. -/
-def pA : Program := ctorHeader ++ [.decl "f" stuckDecl, .action (.set "f" [] [eA])]
+def pA : Program := ctorHeader ++ [.decl "f" stuckDecl, .action (.expr (.app "f" [eA]))]
 
 def dA : FDatabase := (execM pA).getD FDatabase.empty
 
@@ -313,7 +313,7 @@ def minDecl : FnDecl :=
 /-- `(function f () i64 :merge (min old new))  (set (f) (a))  (set (f) (b))`. -/
 def pB : Program :=
   ctorHeader ++
-    [.decl "f" minDecl, .action (.set "f" [] [eA]), .action (.set "f" [] [eB])]
+    [.decl "f" minDecl, .action (.expr (.app "f" [eA])), .action (.expr (.app "f" [eB]))]
 
 def dB : FDatabase := (execM pB).getD FDatabase.empty
 
@@ -486,8 +486,8 @@ def cDecl : FnDecl :=
 /-- Three `set`s at one key class, so the merge phase runs a chain of two collisions. -/
 def pC : Program :=
   ctorHeader ++
-    [.decl "f" cDecl, .action (.set "f" [] [eA]), .action (.set "f" [] [eB]),
-     .action (.set "f" [] [eD])]
+    [.decl "f" cDecl, .action (.expr (.app "f" [eA])), .action (.expr (.app "f" [eB])),
+     .action (.expr (.app "f" [eD]))]
 
 def dC : FDatabase := (execM pC).getD FDatabase.empty
 
@@ -748,9 +748,9 @@ theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName} {res₀ 
     (hwidth : res₀.length = dc.outArity)
     (harity : dc.arity = 0) (hout : dc.outArity = 1)
     (hsig : d.sig = Function.update baseSig f (some dc))
-    (hstep : d.execCmdM (Cmd.action (.set f [] [e])) = some d')
+    (hstep : d.execCmdM (Cmd.action (.expr (.app f [e]))) = some d')
     (htail : d'.ProgramLegal rest) :
-    d.ProgramLegal (Cmd.action (.set f [] [e]) :: rest) := by
+    d.ProgramLegal (Cmd.action (.expr (.app f [e])) :: rest) := by
   refine ⟨⟨?_, ?_⟩, trivial, ?_, ?_⟩
   · change Signature.mergeOf d.sig f ≠ none
     rw [hsig, mergeOf_update_self hdc]

@@ -133,7 +133,7 @@ def hDecl : FnDecl :=
 def sigH : Signature := Function.update (fun _ => none) "h" (some hDecl)
 
 /-- `(set (h) (values 1 2))` — a two-column write to a one-column function. -/
-def actTuple : Action := .set "h" [] [.lit (.int 1), .lit (.int 2)]
+def actTuple : Action := .expr (.app "h" [.lit (.int 1), .lit (.int 2)])
 
 /-- `SetLegal`, the only condition a `set` carried before the width checks, holds of it. -/
 theorem actTuple_legal : actTuple.SetLegal sigH := by
@@ -171,7 +171,7 @@ entry term, which is all `ctor` then asks for. -/
 
 /-- `(function f () i64 :merge ((set (F) 3)) old)`. `F` is declared nowhere, so its row is
 read by `IndexOk.ctor` — the clause that requires no value column. -/
-def cexDecl : FnDecl := ⟨0, 1, some (.merge [.set "F" [] [.lit (.int 3)]] [.var "old"]), none⟩
+def cexDecl : FnDecl := ⟨0, 1, some (.merge [.expr (.app "F" [.lit (.int 3)])] [.var "old"]), none⟩
 
 /-- After `(function f () i64 :merge …)`. -/
 def cexSig : FDatabase :=
@@ -202,7 +202,7 @@ theorem cexD_mergeRound_badRow :
 /-- **The hypothesis is what makes the state legal.** `f`'s body `set`s `F`, which has no
 `:merge`, so `Actions.WriteLegal` fails on it. -/
 theorem cexSig_not_mergesLegal : ¬ Signature.MergesLegal cexSig.sig := fun h =>
-  (h "f" cexDecl [.set "F" [] [.lit (.int 3)]] [.var "old"] rfl rfl).1.1.1 rfl
+  (h "f" cexDecl [.expr (.app "F" [.lit (.int 3)])] [.var "old"] rfl rfl).1.1.1 rfl
 
 /-- **`FDatabase.Inv.mergeRound_of_legalMerges` without `Signature.MergesLegal` is false.**
 A merge pass takes a database satisfying `Inv` to one that does not. -/
@@ -328,7 +328,7 @@ is isolated as the one thing that fails. -/
 
 /-- `(function f () i64 :merge 7) (set (f) 0)`. -/
 def mergeDeclProgram : Program :=
-  [ .decl "f" fDecl, .action (.set "f" [] [.lit (.int 0)]) ]
+  [ .decl "f" fDecl, .action (.expr (.app "f" [.lit (.int 0)])) ]
 
 /-- After the declaration. -/
 def mergeSig : Database :=
@@ -345,7 +345,7 @@ def mergeCollideDb : Database :=
     env := mergeSetDb.env, rules := mergeSetDb.rules }
 
 theorem mergeDecl_eval :
-    evalAction mergeSig (.set "f" [] [.lit (.int 0)]) = some mergeSetDb := rfl
+    evalAction mergeSig (.expr (.app "f" [.lit (.int 0)])) = some mergeSetDb := rfl
 
 theorem mergeSetDb_mem : Term.app "f" [Term.lit (.int 0)] ∈ mergeSetDb.terms :=
   Database.mem_addTerm _ _
@@ -447,7 +447,7 @@ the claim reduces to `(c) ≠ (d)`. It is not stated here for that reason. -/
 and its two `set`s are the one thing `Program.SetLegal` forbids. -/
 def setCtorProgram : Program :=
   [ .decl "c" (ctorDecl 0), .decl "d" (ctorDecl 0), .decl "f" (ctorDecl 0),
-    .action (.set "f" [] [.app "c" []]), .action (.set "f" [] [.app "d" []]) ]
+    .action (.expr (.app "f" [.app "c" []])), .action (.expr (.app "f" [.app "d" []])) ]
 
 def cTerm : Term := .app "c" []
 def dTerm : Term := .app "d" []
@@ -467,10 +467,10 @@ wide where the declaration allows none. -/
 def setCtorDb : Database := setCtorDb₁.addTerm (.app "f" [dTerm])
 
 theorem setCtor_eval₁ :
-    evalAction setCtorSig (.set "f" [] [.app "c" []]) = some setCtorDb₁ := rfl
+    evalAction setCtorSig (.expr (.app "f" [.app "c" []])) = some setCtorDb₁ := rfl
 
 theorem setCtor_eval₂ :
-    evalAction setCtorDb₁ (.set "f" [] [.app "d" []]) = some setCtorDb := rfl
+    evalAction setCtorDb₁ (.expr (.app "f" [.app "d" []])) = some setCtorDb := rfl
 
 /-- **The state is reachable.** No merge phase does anything — every declaration is a
 constructor — so each command is its own step. -/
@@ -530,12 +530,12 @@ def staleDecl : FnDecl := ⟨0, 1, some (.merge [] [.var "new"]), none⟩
 /-- `(rule ((= 0 (M))) ((f)))`. Its head names `f`, which nothing has declared; only a
 `set` is constrained by `Action.SetLegal`, so the rule is still legal, and it is
 `Program.Evaluable` that rejects it. -/
-def staleRule : Rule := ⟨[.values [.lit (.int 0)] "M" []], [.expr (.app "f" [])], ""⟩
+def staleRule : Rule := ⟨[.expr (.app "M" [.lit (.int 0)])], [.expr (.app "f" [])], ""⟩
 
 def staleProgram : Program :=
   [ .decl "M" staleDecl,
-    .action (.set "M" [] [.lit (.int 0)]),
-    .action (.set "M" [] [.lit (.int 1)]),
+    .action (.expr (.app "M" [.lit (.int 0)])),
+    .action (.expr (.app "M" [.lit (.int 1)])),
     .rule staleRule,
     .run "" ]
 
@@ -1272,7 +1272,6 @@ theorem not_matches_empty {p : Pattern} {σ : Env} : ¬ Matches Database.empty p
   cases h with
   | expr hw _ _ => exact not_cong_of_no_eqs rfl hw
   | eq hw _ _ _ _ => exact not_cong_of_no_eqs rfl hw
-  | values hw _ _ _ => exact not_cong_of_no_eqs rfl hw
 
 /-- **`Database.Recorded` still says something.** `withOperands` makes both sides of `p`
 self-equal, but the witness `q` has to be one of `d₂`'s own equations. -/

@@ -553,7 +553,7 @@ private def distNoMerge (n : Nat) : FnDecl :=
 private def num (n : Int) : Expr := .lit (.int n)
 
 private def mset (f : FnName) (args : List Expr) (v : Int) : Cmd :=
-  .action (.set f args [num v])
+  .action (.expr (.app f (args ++ [num v])))
 
 /-- The binary constructor `commuteDist` matches on, as an expression: the key of a
 `:merge` row is a term like any other, and these are the cases whose keys are compound. -/
@@ -563,7 +563,7 @@ private def gg (a b : Expr) : Expr := .app "G" [a, b]
 head as well as from a top-level action. -/
 private def commuteDist : Rule where
   query := [.expr (.app "G" [.var "a", .var "b"])]
-  actions := [.set "Dist" [.var "b", .var "a"] [num 9]]
+  actions := [.expr (.app "Dist" [.var "b", .var "a", num 9])]
   ruleset := ""
 
 /-! ### Multi-column outputs
@@ -592,7 +592,7 @@ private def distPair (n : Nat) : FnDecl :=
                               .app "max" [.var "old1", .var "new1"]]) }
 
 private def pset (f : FnName) (args : List Expr) (v w : Int) : Cmd :=
-  .action (.set f args [num v, num w])
+  .action (.expr (.app f (args ++ [num v, num w])))
 
 /-- Reads a two-column row and builds a term from its *key*, gated on both value columns
 being the literals written. Whether the rule fired is therefore visible in `Hit`'s row
@@ -602,7 +602,7 @@ The keys are kept distinct so no merge fires on the guarded row. These cases iso
 reading two columns from collision behavior; the `tuple-read` cases below separately
 check that the executable index removes superseded outputs. -/
 private def readPair : Rule where
-  query := [.values [num 3, num 4] "Dist" [.var "k"]]
+  query := [.expr (.app "Dist" [.var "k", num 3, num 4])]
   actions := [.expr (.app "Hit" [.var "k"])]
   ruleset := ""
 
@@ -628,13 +628,13 @@ All three are `Pattern.values`, which is the model's only read (`Spec/Scope.lean
 /-- Existence: fires once per key class holding a row. The output variable is bound and
 unused, which is what a bare `(Dist k)` compiles to. -/
 private def readExists : Rule where
-  query := [.values [.var "o"] "Dist" [.var "k"]]
+  query := [.expr (.app "Dist" [.var "k", .var "o"])]
   actions := [.expr (.app "Hit" [.var "k"])]
   ruleset := ""
 
 /-- The value: fires only where the recorded output is `v`. -/
 private def readValue (v : Int) : Rule where
-  query := [.values [num v] "Dist" [.var "k"]]
+  query := [.expr (.app "Dist" [.var "k", num v])]
   actions := [.expr (.app "Hit" [.var "k"])]
   ruleset := ""
 
@@ -648,7 +648,7 @@ private def distPickPair (n : Nat) (which : String) : FnDecl :=
 
 /-- The two-column acceptance test's rule: guarded on the *pre-merge* value tuple. -/
 private def readStale : Rule where
-  query := [.values [num 5, num 1] "Dist" [.var "k"]]
+  query := [.expr (.app "Dist" [.var "k", num 5, num 1])]
   actions := [.expr (.app "Hit" [.var "k"])]
   ruleset := ""
 
@@ -656,8 +656,8 @@ private def readStale : Rule where
 `v` and the head only writes, which is the only shape egglog accepts for a rule and the
 only shape the model accepts anywhere. -/
 private def copyDist : Rule where
-  query := [.values [.var "v"] "Dist" [.var "k"]]
-  actions := [.set "Copy" [.var "k"] [.var "v"]]
+  query := [.expr (.app "Dist" [.var "k", .var "v"])]
+  actions := [.expr (.app "Copy" [.var "k", .var "v"])]
   ruleset := ""
 
 /-! ### Making a value observable through a row count
@@ -680,7 +680,7 @@ expression, and building it in the head would create the very term whose absence
 is about — `read-unbuilt-key` reads at a key the program never built. -/
 private def readIntoAt (hit f : FnName) (key : List Expr) (v : Int) (mark : List Expr) :
     Rule where
-  query := [.values [num v] f key]
+  query := [.expr (.app f (key ++ [num v]))]
   actions := [.expr (.app hit mark)]
   ruleset := ""
 
@@ -691,7 +691,7 @@ private def readInto (hit f : FnName) (key : List Expr) (v : Int) : Rule :=
 
 /-- `readInto` at a multi-column output. -/
 private def readIntoW (hit f : FnName) (key : List Expr) (vs : List Int) : Rule where
-  query := [.values (vs.map num) f key]
+  query := [.expr (.app f (key ++ (vs.map num)))]
   actions := [.expr (.app hit key)]
   ruleset := ""
 
@@ -730,7 +730,7 @@ private def logDecl : FnDecl :=
 /-- A merge that logs one of the colliding values into `Log` and returns the other. -/
 private def distLog (n : Nat) (logged kept : String) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.set "Log" [C "L"] [.var logged]] [.var kept]) }
+    merge := some (.merge [.expr (.app "Log" [C "L", .var logged])] [.var kept]) }
 
 /-- A merge whose body is `(union (U) (V))` — the body's entire effect is an equality, as
 in a union-find's. -/
@@ -741,7 +741,7 @@ private def distUnion (n : Nat) (kept : String) : FnDecl :=
 
 private def distInlineLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.set "Log" [C "L"] [.app "min" [.var "old", .var "new"]]]
+    merge := some (.merge [.expr (.app "Log" [C "L", .app "min" [.var "old", .var "new"]])]
                          [.app "min" [.var "old", .var "new"]]) }
 
 /-- Seeds `W` at both operands of a body's `union`, so that `W`'s row count falls from 2 to
@@ -754,7 +754,7 @@ column unchanged and moves the other. The skip is all-or-nothing over the whole 
 tuple, so this body must still run; a model that skipped per column would report `L 0`. -/
 private def distPairLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 2,
-    merge := some (.merge [.set "Log" [C "L"] [.var "old0"]] [.var "new0", .var "new1"]) }
+    merge := some (.merge [.expr (.app "Log" [C "L", .var "old0"])] [.var "new0", .var "new1"]) }
 
 /-! ### Widths and arities the suite never drew
 
@@ -784,7 +784,7 @@ private def distTriple (n : Nat) : FnDecl :=
                               .var "old2"]) }
 
 private def tset (f : FnName) (args : List Expr) (vs : List Int) : Cmd :=
-  .action (.set f args (vs.map num))
+  .action (.expr (.app f (args ++ (vs.map num))))
 
 private def curatedMerge : List (String × Program) :=
   [ -- One key, three writes: min wins, and the table still holds one row.
@@ -922,11 +922,11 @@ private def curatedMerge : List (String × Program) :=
     -- sees it only under `:merge new`. `Hit` is 0 in the `old` case, in both engines.
     ("old-rule",
       [.decl "Dist" (distPick 1 "old"), mset "Dist" [C "A"] 4,
-       .rule ⟨[.expr (C "A")], [.set "Dist" [C "A"] [num 9]], ""⟩,
+       .rule ⟨[.expr (C "A")], [.expr (.app "Dist" [C "A", num 9])], ""⟩,
        .rule (readValue 9), .run "", .run ""]),
     ("new-rule",
       [.decl "Dist" (distPick 1 "new"), mset "Dist" [C "A"] 4,
-       .rule ⟨[.expr (C "A")], [.set "Dist" [C "A"] [num 9]], ""⟩,
+       .rule ⟨[.expr (C "A")], [.expr (.app "Dist" [C "A", num 9])], ""⟩,
        .rule (readValue 9), .run "", .run ""]),
     -- Three rows in one key class, reached by two unions. This is the shape that says the
     -- survivor of a collision keeps the *older* row's place: merge the first two and the
@@ -1026,14 +1026,14 @@ private def curatedMerge : List (String × Program) :=
     -- stuck gives `0, 0` and computing `max` gives `0, 1`.
     ("prim-set-min",
       [.decl "Dist" (dist 1),
-       .action (.set "Dist" [C "K"] [.app "min" [num 5, num 3]]),
+       .action (.expr (.app "Dist" [C "K", .app "min" [num 5, num 3]])),
        .rule (readInto "Hit" "Dist" [C "K"] 3), .rule (readInto "Miss" "Dist" [C "K"] 5),
        .run ""]),
     -- The same with `max`, so the two markers swap: a model computing `min` for `max`
     -- is caught here even though it passes `prim-set-min`.
     ("prim-set-max",
       [.decl "Dist" (dist 1),
-       .action (.set "Dist" [C "K"] [.app "max" [num 5, num 3]]),
+       .action (.expr (.app "Dist" [C "K", .app "max" [num 5, num 3]])),
        .rule (readInto "Hit" "Dist" [C "K"] 5), .rule (readInto "Miss" "Dist" [C "K"] 3),
        .run ""]),
     -- Nested: `(min (max 5 3) 4)` is `4`, so the operand list itself has to be evaluated
@@ -1041,14 +1041,14 @@ private def curatedMerge : List (String × Program) :=
     -- an unevaluated inner application would have left.
     ("prim-nested",
       [.decl "Dist" (dist 1),
-       .action (.set "Dist" [C "K"] [.app "min" [.app "max" [num 5, num 3], num 4]]),
+       .action (.expr (.app "Dist" [C "K", .app "min" [.app "max" [num 5, num 3], num 4]])),
        .rule (readInto "Hit" "Dist" [C "K"] 4), .rule (readInto "Miss" "Dist" [C "K"] 5),
        .run ""]),
     -- and avoids its "Global `g` should start with `$`" warning.
     ("prim-repeat",
       [.decl "Dist" (dist 1),
        .action (.expr (.app "min" [num 7, num 2])),
-       .action (.set "Dist" [C "K"] [.app "min" [num 7, num 2]]),
+       .action (.expr (.app "Dist" [C "K", .app "min" [num 7, num 2]])),
        .rule (readInto "Hit" "Dist" [C "K"] 2), .rule (readInto "Miss" "Dist" [C "K"] 7),
        .run ""]),
     -- A primitive in a **rule head**, which is the position `Rule.noLookup` polices and so
@@ -1057,7 +1057,7 @@ private def curatedMerge : List (String × Program) :=
     ("prim-rule-head",
       [.decl "Dist" (dist 1), seedF,
        .rule ⟨[.expr (.app "F" [.var "a"])],
-              [.set "Dist" [.var "a"] [.app "max" [num 5, num 3]]], ""⟩,
+              [.expr (.app "Dist" [.var "a", .app "max" [num 5, num 3]])], ""⟩,
        .rule (readInto "Hit" "Dist" [C "A"] 5), .rule (readInto "Miss" "Dist" [C "A"] 3),
        .run "", .run ""]),
     -- **A `:merge` body that writes.** The body logs `old` into a side table and returns
@@ -1211,7 +1211,7 @@ private def curatedMerge : List (String × Program) :=
     -- and answered `Hit 0`.
     ("read-unbuilt-key",
       [.decl "Dist" (dist 1),
-       .action (.set "Dist" [gg (C "B") (C "A")] [num 4]),
+       .action (.expr (.app "Dist" [gg (C "B") (C "A"), num 4])),
        .action (.union (C "A") (C "B")),
        .rule (readIntoAt "Hit" "Dist" [gg (C "A") (C "B")] 4 [C "A"]),
        .rule (readIntoAt "Miss" "Dist" [gg (C "C") (C "A")] 4 [C "A"]), .run ""]),
@@ -1220,7 +1220,7 @@ private def curatedMerge : List (String × Program) :=
     -- one — `(A)` for `(C)`, which no `union` relates — so it must not fire.
     ("read-unbuilt-key-deep",
       [.decl "Dist" (dist 1),
-       .action (.set "Dist" [gg (gg (C "B") (C "A")) (C "C")] [num 4]),
+       .action (.expr (.app "Dist" [gg (gg (C "B") (C "A")) (C "C"), num 4])),
        .action (.union (C "A") (C "B")),
        .rule (readIntoAt "Hit" "Dist" [gg (gg (C "A") (C "B")) (C "C")] 4 [C "A"]),
        .rule (readIntoAt "Miss" "Dist" [gg (gg (C "A") (C "B")) (C "A")] 4 [C "A"]),
@@ -1232,7 +1232,7 @@ private def curatedMerge : List (String × Program) :=
     -- row cannot stand in for one the database has to hold.
     ("read-unbuilt-key-nonode",
       [.decl "Dist" (dist 1),
-       .action (.set "Dist" [gg (C "B") (C "A")] [num 4]),
+       .action (.expr (.app "Dist" [gg (C "B") (C "A"), num 4])),
        .action (.union (C "A") (C "B")),
        .rule (readIntoAt "Hit" "Dist" [gg (C "A") (C "B")] 4 [C "A"]),
        .rule (readIntoAt "Miss" "Dist" [gg (.app "H" [C "A"]) (C "B")] 4 [C "A"]),
@@ -1271,15 +1271,15 @@ private def genMergeSpec (w : Nat) (s : Nat) : MergeSpec × Nat :=
   let (shape, s) := pick 8 s
   match shape with
   | 4 => (.merge [.union (C "U") (C "U")] (logged :: res.tail), s)
-  | 5 => (.merge [.set "Log" [C "L"] [logged]] res, s)
+  | 5 => (.merge [.expr (.app "Log" [C "L", logged])] res, s)
   | 6 => (.merge [.union (C "U") (C "V")] res, s)
-  | 7 => (.merge [.set "Log" [C "L"] [logged]]
+  | 7 => (.merge [.expr (.app "Log" [C "L", logged])]
             (logged :: res.tail), s)
   | _ => (.merge [] res, s)
 
 /-- Whether a drawn body writes the side table, which the program then has to declare —
 `writeCase`'s `illegalSets` guard is what an omission would trip. -/
-private def specSetsLog (m : MergeSpec) : Bool := m.setTargets.contains "Log"
+private def specSetsLog (m : MergeSpec) : Bool := m.fnArities.any (fun fa => fa.1 == "Log")
 
 /-- Whether a drawn body asserts an equality, which only `seedW` makes observable. -/
 private def specUnions : MergeSpec → Bool
@@ -1345,7 +1345,7 @@ private def genMergeRule (arity w : Nat) (src : Expr) (s : Nat) : Rule × Nat :=
   let (p, s) := genPattern ["a", "b"] src s
   let (ks, s) := genKeysOver p.vars arity s
   let (vs, s) := genValues w s
-  (⟨[.expr p], [.set "Dist" ks (vs.map Prod.fst)], ""⟩, s)
+  (⟨[.expr p], [.expr (.app "Dist" (ks ++ (vs.map Prod.fst)))], ""⟩, s)
 
 /-- Reads back the value tuple the program wrote *first*, at the key it wrote it at, and
 builds `Won` if it is still there.
@@ -1363,7 +1363,7 @@ primitive the model built instead of computing moves it too.
 
 The query is ground, so it costs one substitution and no enumeration. -/
 private def witnessRule (key : List Expr) (vals : List Int) : Rule where
-  query := [.values (vals.map num) "Dist" key]
+  query := [.expr (.app "Dist" (key ++ (vals.map num)))]
   actions := [.expr (.app "Won" key)]
   ruleset := ""
 
@@ -1398,7 +1398,7 @@ private def genMergeReadRule (arity w : Nat) (src : Expr) (key : List Expr)
   let (shape, s) := pick 2 s
   let cols : List Expr :=
     if shape = 0 then .var "o" :: (vs.map num).tail else vs.map num
-  (⟨[.expr p, .values cols "Dist" ks], [.expr (.app "Hit" [p])], ""⟩, s)
+  (⟨[.expr p, .expr (.app "Dist" (ks ++ cols))], [.expr (.app "Hit" [p])], ""⟩, s)
 
 /-- One random `:merge` case.
 
@@ -1468,9 +1468,9 @@ private def genMergeProgram (s : Nat) : Program :=
     ++ [ .decl "Dist" { arity := arity, outArity := width, merge := some spec } ]
     ++ (if specUnions spec then seedW else [])
     ++ [ .action (.expr g),
-         .action (.set "Dist" k₁ (v₁.map Prod.fst)),
-         .action (.set "Dist" k₂ (v₂.map Prod.fst)),
-         .action (.set "Dist" k₃ (v₃.map Prod.fst)) ]
+         .action (.expr (.app "Dist" (k₁ ++ (v₁.map Prod.fst)))),
+         .action (.expr (.app "Dist" (k₂ ++ (v₂.map Prod.fst)))),
+         .action (.expr (.app "Dist" (k₃ ++ (v₃.map Prod.fst)))) ]
     ++ unions
     ++ [ .rule r, .rule rr, .rule (witnessRule k₁ (v₁.map Prod.snd)) ]
     ++ logReads
@@ -1767,7 +1767,6 @@ theorem Cmd.ctorDeclB_iff (c : Cmd) : c.ctorDeclB = true ↔ c.CtorDecl := by
 
 /-- `Pattern.NoValues`, computed. -/
 def Pattern.noValuesB : Pattern → Bool
-  | .values _ _ _ => false
   | _ => true
 
 theorem Pattern.noValuesB_iff (p : Pattern) : p.noValuesB = true ↔ p.NoValues := by
@@ -1785,7 +1784,6 @@ theorem Expr.isLitB_eq_false_iff (e : Expr) : e.isLitB = false ↔ ∀ l, e ≠ 
 def Pattern.groundedB : Pattern → Bool
   | .expr e => !e.isLitB
   | .eq e₁ e₂ => !e₁.isLitB || !e₂.isLitB
-  | .values _ _ _ => true
 
 theorem Pattern.groundedB_iff (p : Pattern) : p.groundedB = true ↔ p.Grounded := by
   cases p <;>
@@ -1844,7 +1842,6 @@ end
 def Pattern.argVarB (v : Var) : Pattern → Bool
   | .expr e => e.argVarB v
   | .eq e₁ e₂ => e₁.argVarB v || e₂.argVarB v
-  | .values vs _ as => Expr.argVarListB v vs || Expr.argVarListB v as
 
 theorem Pattern.argVarB_iff (v : Var) (p : Pattern) :
     p.argVarB v = true ↔ Pattern.ArgVar v p := by
@@ -2101,9 +2098,6 @@ theorem flatPattern_agrees (p : Pattern) (n : Nat) :
       = (queryProofs (encodePattern p n).1).length ∧
     (Proof.flatPattern p n).2 = (encodePattern p n).2 := by
   match p with
-  | .values vs f as =>
-    rcases vs with _ | ⟨a, _ | ⟨b, _ | ⟨c, r⟩⟩⟩ <;>
-      simp [Proof.flatPattern, encodePattern, queryProofs]
   | .expr e =>
     obtain ⟨_, h2, h3⟩ := flatExpr_agrees e n
     rcases hf : Proof.flatExpr e n with ⟨x, qs, n₁⟩
@@ -3009,7 +3003,6 @@ program saturates a ruleset once per action, and doing that during elaboration m
 set_option linter.hashCommand false in
 #guard (encode buildCase.declared).illegalReads.isEmpty
 set_option linter.hashCommand false in
-#guard (encode buildCase.declared).illegalSets.isEmpty
 set_option linter.hashCommand false in
 #guard (encode buildCase.declared).arityErrors.isEmpty
 set_option linter.hashCommand false in
@@ -3089,10 +3082,6 @@ end Egglog
 
 private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
   let p := p₀.declared
-  unless p.illegalSets.isEmpty do
-    throw <| IO.userError
-      s!"difftest: {name} sets {p.illegalSets}, which egglog rejects: only a function \
-         declared with :merge or :no-merge may be set"
   unless p.arityErrors.isEmpty do
     throw <| IO.userError
       s!"difftest: {name} has commands whose column counts egglog rejects: {p.arityErrors}"

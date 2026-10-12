@@ -7,13 +7,6 @@ namespace Egglog
 
 `Action.SetLegal` is egglog's own restriction on `set`: on an all-constructors signature it
 admits nothing at all, so that fragment is exactly the fragment with no `set`. -/
-/-- **No `set` is legal on an all-constructors signature.** `SetLegal` asks for a
-non-constructor and there is none, so every `set` case below is impossible rather
-than merely well behaved. -/
-theorem Action.SetLegal.elim {sig : Signature} (hsig : sig.AllConstructors) {f : FnName}
-    {args out : List Expr} (h : (Action.set f args out).SetLegal sig) : False :=
-  h (hsig f)
-
 /-- `SetLegal` does not care *which* all-constructors signature it is read against,
 because under one there is no legal `set` to disagree about. This is what lets a `decl`
 change the signature without invalidating the rules the database already holds. -/
@@ -25,7 +18,6 @@ theorem Actions.SetLegal.of_allConstructors {as : List Action} {sig sig' : Signa
   | cons a as ih =>
     refine ⟨?_, ih h.2⟩
     cases a with
-    | set f args out => exact (Action.SetLegal.elim (args := args) (out := out) hsig h.1).elim
     | expr _ => trivial
     | union _ _ => trivial
 
@@ -69,9 +61,6 @@ theorem Action.Declared.mono {a : Action} {sig sig' : Signature} (hs : sig'.Exte
   cases a with
   | expr e => exact Expr.Declared.mono hs h
   | union e₁ e₂ => exact ⟨Expr.Declared.mono hs h.1, Expr.Declared.mono hs h.2⟩
-  | set f args out =>
-    exact ⟨hs f h.1, fun e he => Expr.Declared.mono hs (h.2.1 e he),
-      fun e he => Expr.Declared.mono hs (h.2.2 e he)⟩
 
 theorem Actions.Declared.mono : ∀ {as : List Action} {sig sig' : Signature},
     sig'.Extends sig → Actions.Declared as sig → Actions.Declared as sig'
@@ -537,7 +526,7 @@ theorem evalAction_setRules (db : Database) (R : Set Rule) (a : Action) :
     evalAction { db with rules := R } a
       = (evalAction db a).map fun d => { d with rules := R } := by
   cases a with
-  | expr e => cases h : e.eval db.sig db.env <;> simp [evalAction, h, Database.addTerm]
+  | expr e => cases h : e.evalAtom db.sig db.env <;> simp [evalAction, h, Database.addTerm]
   | union e₁ e₂ =>
       cases h₁ : e₁.eval db.sig db.env with
       | none => simp [evalAction, h₁]
@@ -547,10 +536,6 @@ theorem evalAction_setRules (db : Database) (R : Set Rule) (a : Action) :
           | some t₂ =>
               simp only [evalAction, h₁, h₂, Option.bind_some]
               split <;> simp [Database.addEq, Database.addTerm]
-  | set f args out =>
-      cases h₁ : Expr.evalList db.sig args db.env <;>
-        cases h₂ : Expr.evalList db.sig out db.env <;>
-          simp [evalAction, h₁, h₂, Database.addTerm]
 
 theorem evalActions_setRules (R : Set Rule) : ∀ (db : Database) (as : List Action),
     evalActions { db with rules := R } as
@@ -762,6 +747,31 @@ theorem eval_avoids {sig : Signature} {f : FnName} {σ : Env} (hf : sig f = none
             · exact evalList_avoids args ts ih hts _ ha hm
           · rw [if_neg hc] at h; exact absurd h (by simp)
 
+theorem evalAtom_avoids {sig : Signature} {f : FnName} {σ : Env} (hf : sig f = none)
+    (hσ : ∀ b ∈ σ, ¬ Term.Mentions f b.2) (e : Expr) (t : Term)
+    (h : e.evalAtom sig σ = some t) : ¬ Term.Mentions f t := by
+  cases e with
+  | lit l => exact eval_avoids hf hσ (.lit l) t h
+  | var v => exact eval_avoids hf hσ (.var v) t h
+  | app g args =>
+    simp only [Expr.evalAtom] at h
+    have hargs := evalList_avoids args (sig := sig) (σ := σ) (f := f)
+    cases hp : Prim.ofName g with
+    | some p =>
+      simp only [hp] at h
+      obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp h
+      exact prim_avoids (hargs ts (fun a _ => eval_avoids hf hσ a) hts) happ
+    | none =>
+      simp only [hp] at h
+      split at h
+      · rename_i hg
+        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
+        intro hm
+        rcases Term.mentions_app hm with rfl | ⟨a, ha, hm⟩
+        · simp [hf] at hg
+        · exact hargs ts (fun a _ => eval_avoids hf hσ a) hts a ha hm
+      · simp at h
+
 theorem evalAction_avoids {f : FnName} {db d : Database} {a : Action}
     (hf : db.sig f = none) (hd : a.Declared db.sig) (hav : db.Avoids f)
     (h : evalAction db a = some d) : d.Avoids f := by
@@ -769,7 +779,7 @@ theorem evalAction_avoids {f : FnName} {db d : Database} {a : Action}
   | expr e =>
       rw [evalAction] at h
       obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
-      exact ⟨avoids_addTerm hav.terms (eval_avoids hf hav.env e t ht), hav.env⟩
+      exact ⟨avoids_addTerm hav.terms (evalAtom_avoids hf hav.env e t ht), hav.env⟩
   | union e₁ e₂ =>
       rw [evalAction] at h
       obtain ⟨t₁, h₁, h⟩ := Option.bind_eq_some_iff.mp h
@@ -779,18 +789,6 @@ theorem evalAction_avoids {f : FnName} {db d : Database} {a : Action}
       · obtain rfl := Option.some.inj h
         exact ⟨avoids_addEq hav.terms (eval_avoids hf hav.env e₁ t₁ h₁)
           (eval_avoids hf hav.env e₂ t₂ h₂), hav.env⟩
-  | set g args out =>
-      rw [evalAction] at h
-      obtain ⟨as, h₁, h⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨vs, h₂, rfl⟩ := Option.map_eq_some_iff.mp h
-      refine ⟨avoids_addTerm hav.terms fun hmen => ?_, hav.env⟩
-      rcases Term.mentions_app hmen with rfl | ⟨x, hx, hm⟩
-      · exact hd.1 hf
-      · rcases List.mem_append.mp hx with hmem | hmem
-        · exact evalList_avoids args as
-            (fun a _ t ht => eval_avoids hf hav.env a t ht) h₁ _ hmem hm
-        · exact evalList_avoids out vs
-            (fun a _ t ht => eval_avoids hf hav.env a t ht) h₂ _ hmem hm
 
 theorem evalActions_avoids {f : FnName} :
     ∀ (as : List Action) (db d : Database), db.sig f = none → Actions.Declared as db.sig →
@@ -885,14 +883,35 @@ theorem eval_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
           · rw [if_pos hc, if_pos (hiff.mp hc)]
           · rw [if_neg hc, if_neg fun h => hc (hiff.mpr h)]
 
+theorem evalAtom_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
+    (hag : ∀ g, g ≠ f → sig g = sig' g) (e : Expr) (hd : e.Declared sig) (σ : Env) :
+    e.evalAtom sig σ = e.evalAtom sig' σ := by
+  cases e with
+  | lit _ => rfl
+  | var _ => rfl
+  | app g args =>
+    have hargs : ∀ a ∈ args, a.Declared sig := fun a ha x hx =>
+      hd x (by rw [Expr.fns]; exact List.mem_cons_of_mem _ (Expr.fns_subset_fnsList ha hx))
+    have hl := evalList_update args (fun a ha => eval_update hf hag a (hargs a ha) σ)
+    simp only [Expr.evalAtom, hl]
+    cases hp : Prim.ofName g with
+    | some p => rfl
+    | none =>
+      have hgf : g ≠ f := by
+        rintro rfl
+        rcases hd g (by rw [Expr.fns]; exact List.mem_cons_self ..) with h | h
+        · exact h hp
+        · exact h hf
+      rw [hag g hgf]
+
 theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : Action}
     (hf : db.sig f = none) (hag : ∀ g, g ≠ f → db.sig g = sig' g) (hd : a.Declared db.sig) :
     evalAction { db with sig := sig' } a
       = (evalAction db a).map fun d => { d with sig := sig' } := by
   cases a with
   | expr e =>
-      have he := eval_update hf hag e hd db.env
-      cases h : e.eval db.sig db.env <;> simp [evalAction, ← he, h, Database.addTerm]
+      have he := evalAtom_update hf hag e hd db.env
+      cases h : e.evalAtom db.sig db.env <;> simp [evalAction, ← he, h, Database.addTerm]
   | union e₁ e₂ =>
       have h₁ := eval_update hf hag e₁ hd.1 db.env
       have h₂ := eval_update hf hag e₂ hd.2 db.env
@@ -904,14 +923,6 @@ theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : A
           | some t₂ =>
               simp only [evalAction, ← h₁, ← h₂, hc₁, hc₂, Option.bind_some]
               split <;> simp [Database.addEq, Database.addTerm]
-  | set g args out =>
-      have h₁ := evalList_update (sig := db.sig) (sig' := sig') (σ := db.env) args
-        fun a ha => eval_update hf hag a (hd.2.1 a ha) db.env
-      have h₂ := evalList_update (sig := db.sig) (sig' := sig') (σ := db.env) out
-        fun a ha => eval_update hf hag a (hd.2.2 a ha) db.env
-      cases hc₁ : Expr.evalList db.sig args db.env <;>
-        cases hc₂ : Expr.evalList db.sig out db.env <;>
-          simp [evalAction, ← h₁, ← h₂, hc₁, hc₂, Database.addTerm]
 
 theorem evalActions_update {f : FnName} {sig' : Signature} :
     ∀ (as : List Action) (db : Database), db.sig f = none →

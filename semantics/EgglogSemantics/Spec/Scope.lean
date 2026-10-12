@@ -33,14 +33,12 @@ to scope, and what it binds is `Query.bind`. A `.values` head is unconstrained. 
 def Pattern.Scoped : Pattern → Prop
   | .expr e => e.IsApp
   | .eq _ _ => True
-  | .values _ _ _ => True
 
 /-- An action scopes when each expression it evaluates does, plus the application
 restriction on a bare `expr`. -/
 def Action.Scoped : Action → Scope → Prop
   | .expr e, Γ => e.IsApp ∧ e.Scoped Γ
   | .union e₁ e₂, Γ => e₁.Scoped Γ ∧ e₂.Scoped Γ
-  | .set _ args out, Γ => (∀ e ∈ args, e.Scoped Γ) ∧ ∀ e ∈ out, e.Scoped Γ
 
 /-- The scope a query's patterns bind. -/
 def Query.bind (q : Query) (Γ : Scope) : Scope := Γ ∪ Query.vars q
@@ -95,7 +93,6 @@ admits it. -/
 def Action.Evaluable : Action → Signature → Prop
   | .expr e, sig => e.Evaluable sig
   | .union e₁ e₂, sig => (e₁.IsApp ∧ e₁.Evaluable sig) ∧ e₂.IsApp ∧ e₂.Evaluable sig
-  | .set _ args out, sig => (∀ e ∈ args, e.Evaluable sig) ∧ ∀ e ∈ out, e.Evaluable sig
 
 @[simp] def Actions.Evaluable : List Action → Signature → Prop
   | [], _ => True
@@ -159,7 +156,6 @@ This decides *which* width an entry is held to; `Action.WidthOk` supplies the co
 counts, and only the two together keep every entry the width `FnDecl.entryWidth` gives
 it. Alone, this says nothing about an entry no `set` wrote. -/
 def Action.SetLegal : Action → Signature → Prop
-  | .set f _ _, sig => sig.mergeOf f ≠ none
   | _, _ => True
 
 @[simp] def Actions.SetLegal : List Action → Signature → Prop
@@ -207,14 +203,17 @@ def Expr.WidthOkList : List Expr → Signature → Prop
 
 end
 
+/-- A complete atom uses the entry width at its root and value widths in its columns. -/
+def Expr.AtomWidthOk : Expr → Signature → Prop
+  | .app f cols, sig =>
+      (∀ d, sig f = some d → cols.length = d.entryWidth) ∧ Expr.WidthOkList cols sig
+  | _, _ => True
+
 /-- `Action.SetLegal`'s companion: a `set` fills the declared key and value columns, so the
 entry it records is `FnDecl.entryWidth` wide. -/
 def Action.WidthOk : Action → Signature → Prop
-  | .expr e, sig => e.WidthOk sig
+  | .expr e, sig => e.AtomWidthOk sig
   | .union e₁ e₂, sig => e₁.WidthOk sig ∧ e₂.WidthOk sig
-  | .set f args out, sig =>
-      (∀ d, sig f = some d → args.length = d.arity ∧ out.length = d.outArity) ∧
-        Expr.WidthOkList args sig ∧ Expr.WidthOkList out sig
 
 @[simp] def Actions.WidthOk : List Action → Signature → Prop
   | [], _ => True
@@ -277,8 +276,6 @@ def Expr.Declared (e : Expr) (sig : Signature) : Prop :=
 def Action.Declared : Action → Signature → Prop
   | .expr e, sig => e.Declared sig
   | .union e₁ e₂, sig => e₁.Declared sig ∧ e₂.Declared sig
-  | .set f args out, sig =>
-      sig f ≠ none ∧ (∀ e ∈ args, e.Declared sig) ∧ ∀ e ∈ out, e.Declared sig
 
 @[simp] def Actions.Declared : List Action → Signature → Prop
   | [], _ => True
@@ -381,12 +378,10 @@ def Expr.OrderingFreeList (es : List Expr) : Prop :=
 def Pattern.OrderingFree : Pattern → Prop
   | .expr e => e.OrderingFree
   | .eq e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
-  | .values vs _ as => Expr.OrderingFreeList vs ∧ Expr.OrderingFreeList as
 
 def Action.OrderingFree : Action → Prop
   | .expr e => e.OrderingFree
   | .union e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
-  | .set _ args out => Expr.OrderingFreeList args ∧ Expr.OrderingFreeList out
 
 @[simp] def Actions.OrderingFree : List Action → Prop
   | [] => True

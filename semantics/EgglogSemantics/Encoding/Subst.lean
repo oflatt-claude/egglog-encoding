@@ -56,8 +56,6 @@ theorem Expr.resolveGlobals_var (σ : Env) (v : Var) :
 def Pattern.resolveGlobals (σ : Env) : Pattern → Pattern
   | .expr e => .expr (e.resolveGlobals σ)
   | .eq e₁ e₂ => .eq (e₁.resolveGlobals σ) (e₂.resolveGlobals σ)
-  | .values vs f as =>
-      .values (Expr.resolveGlobalsList σ vs) f (Expr.resolveGlobalsList σ as)
 
 /-- `Pattern.resolveGlobals` over a query. -/
 def Query.resolveGlobals (σ : Env) (q : Query) : Query := q.map (Pattern.resolveGlobals σ)
@@ -94,7 +92,6 @@ def Rule.resolveGlobals (σ : Env) (r : Rule) : Rule :=
     cases p with
     | expr e => rw [Pattern.resolveGlobals, hE]
     | eq e₁ e₂ => rw [Pattern.resolveGlobals, hE, hE]
-    | values vs f as => rw [Pattern.resolveGlobals, hL, hL]
   rw [Query.resolveGlobals]
   induction q with
   | nil => rfl
@@ -170,9 +167,6 @@ theorem Pattern.resolveGlobals_resolveGlobals (σ₀ σ₁ : Env) (p : Pattern) 
       Expr.resolveGlobals_resolveGlobals]
   | eq e₁ e₂ => rw [Pattern.resolveGlobals, Pattern.resolveGlobals, Pattern.resolveGlobals,
       Expr.resolveGlobals_resolveGlobals, Expr.resolveGlobals_resolveGlobals]
-  | values vs f as => rw [Pattern.resolveGlobals, Pattern.resolveGlobals,
-      Pattern.resolveGlobals, Expr.resolveGlobalsList_resolveGlobalsList,
-      Expr.resolveGlobalsList_resolveGlobalsList]
 
 @[inherit_doc Expr.resolveGlobals_resolveGlobals]
 theorem Query.resolveGlobals_resolveGlobals (σ₀ σ₁ : Env) (q : Query) :

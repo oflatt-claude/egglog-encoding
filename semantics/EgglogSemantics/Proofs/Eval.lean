@@ -499,81 +499,206 @@ theorem Expr.evalList_append_env {sig : Signature} {σ τ : Env} :
 
 end
 
+/-! ### Complete atoms -/
+
+namespace Expr
+
+theorem entry_none_of_allConstructors {sig : Signature} (hs : sig.AllConstructors)
+    (e : Expr) : e.entry sig = none := by
+  cases e with
+  | lit _ => rfl
+  | var _ => rfl
+  | app f cols =>
+    cases hd : sig f with
+    | none => simp [Expr.entry, hd]
+    | some d =>
+      have hm : d.merge = none := by simpa [Signature.mergeOf, hd] using hs f
+      simp [Expr.entry, hd, hm]
+
+@[simp] theorem evalAtom_lit {sig : Signature} {l : Lit} {σ : Env} :
+    (Expr.lit l).evalAtom sig σ = some (.lit l) := rfl
+
+@[simp] theorem evalAtom_var {sig : Signature} {v : Var} {σ : Env} :
+    (Expr.var v).evalAtom sig σ = Env.lookup v σ := rfl
+
+@[simp] theorem evalAtom_app_decl {sig : Signature} {f : FnName} {cols : List Expr}
+    {d : FnDecl} {σ : Env} (hp : Prim.ofName f = none) (hd : sig f = some d) :
+    (Expr.app f cols).evalAtom sig σ = (Expr.evalList sig cols σ).map (Term.app f) := by
+  simp [Expr.evalAtom, hp, hd]
+
+@[simp] theorem evalList_append_map {sig : Signature} {σ : Env} (as bs : List Expr) :
+    Expr.evalList sig (as ++ bs) σ = (Expr.evalList sig as σ).bind fun ts =>
+      (Expr.evalList sig bs σ).map (ts ++ ·) := by
+  induction as with
+  | nil => simp [Expr.evalList]
+  | cons a as ih =>
+    simp only [List.cons_append, Expr.evalList, ih]
+    cases a.eval sig σ <;> cases Expr.evalList sig as σ <;> simp [Function.comp_def]
+
+/-- Recover the table declaration and the full column list of an entry atom. -/
+theorem entry_some {sig : Signature} {e : Expr} {f : FnName} {keys vals : List Expr}
+    (h : e.entry sig = some (f, keys, vals)) :
+    ∃ d, sig f = some d ∧ d.merge.isSome = true ∧ Prim.ofName f = none ∧
+      e = .app f (keys ++ vals) := by
+  cases e with
+  | lit _ => simp [Expr.entry] at h
+  | var _ => simp [Expr.entry] at h
+  | app g cols =>
+    cases hp : Prim.ofName g with
+    | some p => simp [Expr.entry, hp] at h
+    | none =>
+      cases hd : sig g with
+      | none => simp [Expr.entry, hp, hd] at h
+      | some d =>
+        simp only [Expr.entry, hp, Option.isSome_none, Bool.false_eq_true, if_false,
+          hd, Option.bind_some] at h
+        split at h
+        · rename_i hm
+          cases Option.some.inj h
+          exact ⟨d, hd, hm, hp, by rw [List.take_append_drop]⟩
+        · simp at h
+
+theorem evalAtom_entry {sig : Signature} {e : Expr} {f : FnName} {keys vals : List Expr}
+    {σ : Env} {ts us : List Term} (he : e.entry sig = some (f, keys, vals))
+    (hk : Expr.evalList sig keys σ = some ts) (hv : Expr.evalList sig vals σ = some us) :
+    e.evalAtom sig σ = some (.app f (ts ++ us)) := by
+  obtain ⟨d, hd, _, hp, rfl⟩ := entry_some he
+  simp [evalAtom_app_decl hp hd, hk, hv]
+
+theorem evalAtom_app_inv {sig : Signature} {f : FnName} {cols : List Expr}
+    {σ : Env} {t : Term} (hp : Prim.ofName f = none)
+    (h : (Expr.app f cols).evalAtom sig σ = some t) :
+    ∃ ts, Expr.evalList sig cols σ = some ts ∧ t = .app f ts := by
+  simp only [Expr.evalAtom, hp] at h
+  split at h
+  · obtain ⟨ts, hs, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact ⟨ts, hs, rfl⟩
+  · simp at h
+
+/-- Value evaluation is the restriction of atom evaluation to value expressions. -/
+theorem evalAtom_of_eval {sig : Signature} {e : Expr} {σ : Env} {t : Term}
+    (h : e.eval sig σ = some t) : e.evalAtom sig σ = some t := by
+  cases e with
+  | lit _ => exact h
+  | var _ => exact h
+  | app f cols =>
+    cases hp : Prim.ofName f with
+    | some p => simpa [Expr.evalAtom, Expr.eval, hp] using h
+    | none =>
+      by_cases hc : sig.IsCtor f
+      · obtain ⟨d, hd, hm⟩ := hc
+        simpa [Expr.evalAtom, Expr.eval, hp, hd, Signature.IsCtor, hm] using h
+      · simp [Expr.eval, hp, hc] at h
+
+/-- In a constructor-only signature the two evaluators coincide. -/
+theorem evalAtom_eq_eval {sig : Signature} (hs : sig.AllConstructors) (e : Expr) (σ : Env) :
+    e.evalAtom sig σ = e.eval sig σ := by
+  cases e with
+  | lit _ => rfl
+  | var _ => rfl
+  | app f cols =>
+    cases hp : Prim.ofName f with
+    | some p => simp [Expr.evalAtom, Expr.eval, hp]
+    | none =>
+      cases hd : sig f with
+      | none => simp [Expr.evalAtom, Expr.eval, hp, hd, Signature.IsCtor]
+      | some d =>
+        have hm : d.merge = none := by simpa [Signature.mergeOf, hd] using hs f
+        simp [Expr.evalAtom, Expr.eval, hp, hd, Signature.IsCtor, hm]
+
+theorem evalAtom_agree {sig : Signature} {σ τ : Env} (h : Env.Agree σ τ) (e : Expr) :
+    e.evalAtom sig σ = e.evalAtom sig τ := by
+  cases e with
+  | lit _ => rfl
+  | var v => exact h v
+  | app f cols => simp only [Expr.evalAtom, Expr.evalList_agree h cols]
+
+theorem evalAtom_agreeOn {sig : Signature} {σ τ : Env} (e : Expr)
+    (h : ∀ v ∈ e.vars, Env.lookup v σ = Env.lookup v τ) :
+    e.evalAtom sig σ = e.evalAtom sig τ := by
+  cases e with
+  | lit _ => rfl
+  | var v => exact h v (by simp)
+  | app f cols => simp only [Expr.evalAtom, Expr.evalList_agreeOn cols (by simpa using h)]
+
+/-- Atom evaluation respects the declaration's full entry width. -/
+theorem evalAtom_declaredTerm {sig : Signature} {σ : Env}
+    (hσ : ∀ b ∈ σ, Term.DeclaredTerm sig b.2) {e : Expr} {t : Term}
+    (hw : e.AtomWidthOk sig) (hs : e.evalAtom sig σ = some t) : Term.DeclaredTerm sig t := by
+  cases e with
+  | lit l =>
+    cases Option.some.inj hs
+    exact Term.declaredTerm_lit
+  | var v => exact hσ (v, t) (Env.mem_of_lookup hs)
+  | app f cols =>
+    cases hp : Prim.ofName f with
+    | some p =>
+      simp only [Expr.evalAtom, hp] at hs
+      obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp hs
+      exact Prim.apply_declaredTerm (Expr.evalList_declaredTerm hσ hw.2 hts) happ
+    | none =>
+      cases hd : sig f with
+      | none => simp [Expr.evalAtom, hp, hd] at hs
+      | some d =>
+        rw [evalAtom_app_decl hp hd] at hs
+        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp hs
+        intro g bs hsub
+        rw [Term.subterms_app] at hsub
+        rcases Set.mem_insert_iff.mp hsub with heq | hmem
+        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+          exact ⟨d, hd, (Expr.evalList_length hts).trans (hw.1 d hd)⟩
+        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+          exact Expr.evalList_declaredTerm hσ hw.2 hts x hx g bs hxs
+
+end Expr
+
 @[simp] theorem evalActions_nil {db : Database} : evalActions db [] = some db := rfl
 
 @[simp] theorem evalActions_cons {db : Database} {a : Action} {as : List Action} :
     evalActions db (a :: as) = (evalAction db a).bind fun db' => evalActions db' as := rfl
 
 /-! ### Actions only add -/
-/-- What an action produces, per case. Every fact below about `evalAction` is a
-three-way `rcases` on this rather than a repeat of the case analysis. -/
+/-- What an action records: an expression's term, or a union of two values. -/
 theorem evalAction_eq_some {db db' : Database} {a : Action}
     (h : evalAction db a = some db') :
-    (∃ e t, a = .expr e ∧ e.eval db.sig db.env = some t ∧ db' = db.addTerm t) ∨
+    (∃ e t, a = .expr e ∧ e.evalAtom db.sig db.env = some t ∧ db' = db.addTerm t) ∨
       (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.sig db.env = some t₁ ∧
-        e₂.eval db.sig db.env = some t₂ ∧ ¬ (t₁.isLit ∨ t₂.isLit) ∧ db' = db.addEq t₁ t₂) ∨
-      (∃ f args out as vs, a = .set f args out ∧ Expr.evalList db.sig args db.env = some as ∧
-        Expr.evalList db.sig out db.env = some vs ∧
-        db' = db.addTerm (.app f (as ++ vs))) := by
+        e₂.eval db.sig db.env = some t₂ ∧ ¬ (t₁.isLit ∨ t₂.isLit) ∧ db' = db.addEq t₁ t₂) := by
   cases a with
   | expr e =>
-    cases hv : e.eval db.sig db.env with
-    | none => simp [evalAction, hv] at h
-    | some t =>
-      simp only [evalAction, hv, Option.map_some, Option.some.injEq] at h
-      exact Or.inl ⟨e, t, rfl, hv, h.symm⟩
+    obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
+    exact Or.inl ⟨e, t, rfl, ht, rfl⟩
   | union e₁ e₂ =>
-    cases hv₁ : e₁.eval db.sig db.env with
-    | none => simp [evalAction, hv₁] at h
-    | some t₁ =>
-      cases hv₂ : e₂.eval db.sig db.env with
-      | none => simp [evalAction, hv₁, hv₂] at h
-      | some t₂ =>
-        simp only [evalAction, hv₁, hv₂, Option.bind_some] at h
-        split at h
-        · simp at h
-        · rename_i hlit
-          simp only [Option.some.injEq] at h
-          exact Or.inr (Or.inl ⟨e₁, e₂, t₁, t₂, rfl, hv₁, hv₂, by
-            simpa using hlit, h.symm⟩)
-  | set f args out =>
-    cases hv₁ : Expr.evalList db.sig args db.env with
-    | none => simp [evalAction, hv₁] at h
-    | some as =>
-      cases hv₂ : Expr.evalList db.sig out db.env with
-      | none => simp [evalAction, hv₁, hv₂] at h
-      | some vs =>
-        simp only [evalAction, hv₁, hv₂, Option.bind_some, Option.map_some,
-          Option.some.injEq] at h
-        exact Or.inr (Or.inr ⟨f, args, out, as, vs, rfl, hv₁, hv₂, h.symm⟩)
+    obtain ⟨t₁, h₁, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨t₂, h₂, h⟩ := Option.bind_eq_some_iff.mp h
+    split at h
+    · simp at h
+    · next hl =>
+      cases Option.some.inj h
+      exact Or.inr ⟨e₁, e₂, t₁, t₂, rfl, h₁, h₂, by simpa using hl, rfl⟩
 
 theorem evalAction_contained {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db.Contained db' := by
-  rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, -, rfl⟩ |
-    ⟨f, _, _, as, vs, -, -, -, rfl⟩
+  rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ | ⟨_, _, t₁, t₂, -, -, -, -, rfl⟩
   · exact .addTerm t db
   · exact .addEq t₁ t₂ db
-  · exact .addTerm _ db
 
 theorem evalAction_rules {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.rules = db.rules := by
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, -, rfl⟩ |
-    ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
+    ⟨_, _, _, _, -, -, -, -, rfl⟩ <;> rfl
 
 /-- No action touches the signature; only `Cmd.decl` writes it. -/
 theorem evalAction_sig {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.sig = db.sig := by
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, -, rfl⟩ |
-    ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
+    ⟨_, _, _, _, -, -, -, -, rfl⟩ <;> rfl
 
 /-- Actions read their substitution and never extend it. -/
 theorem evalAction_env {db db' : Database} {a : Action}
     (h : evalAction db a = some db') : db'.env = db.env := by
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, _, -, -, -, rfl⟩ <;> rfl
+    ⟨_, _, _, _, -, -, -, -, rfl⟩ <;> rfl
 
 /-- Every action in a block uses the same substitution. -/
 theorem evalActions_env {db db' : Database} {as : List Action}
@@ -587,11 +712,9 @@ theorem evalActions_env {db db' : Database} {as : List Action}
 theorem evalAction_wf {db db' : Database} (hw : db.WF) {a : Action}
     (h : evalAction db a = some db') : db'.WF := by
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ |
-    ⟨_, _, t₁, t₂, -, -, -, hlit, rfl⟩ |
-    ⟨f, _, _, as, vs, -, -, -, rfl⟩
+    ⟨_, _, t₁, t₂, -, -, -, hlit, rfl⟩
   · exact hw.addTerm t
   · exact hw.addEq t₁ t₂ fun hl => absurd hl hlit
-  · exact hw.addTerm _
 
 theorem evalActions_contained {db db' : Database} {as : List Action}
     (h : evalActions db as = some db') : db.Contained db' := by
@@ -649,34 +772,14 @@ function and `arity` alone for a constructor. `Proofs/Counterexamples.lean`'s
 
 /-- **`DeclaredTerms` is preserved by an action.** -/
 theorem evalAction_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    {a : Action} (hw : a.WidthOk db.sig) (hsl : a.SetLegal db.sig)
+    {a : Action} (hw : a.WidthOk db.sig) (_hsl : a.SetLegal db.sig)
     (h : evalAction db a = some db') : db'.DeclaredTerms := by
   have henv := Database.env_declaredTerm hwf hdt
   rcases evalAction_eq_some h with ⟨e, t, rfl, ht, rfl⟩ |
-    ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩ |
-    ⟨f, args, out, as, vs, rfl, has, hvs, rfl⟩
-  · exact Database.declaredTerms_addTerm hdt (Expr.eval_declaredTerm henv hw ht)
+    ⟨e₁, e₂, t₁, t₂, rfl, ht₁, ht₂, -, rfl⟩
+  · exact Database.declaredTerms_addTerm hdt (Expr.evalAtom_declaredTerm henv hw ht)
   · exact Database.declaredTerms_addEq hdt (Expr.eval_declaredTerm henv hw.1 ht₁)
       (Expr.eval_declaredTerm henv hw.2 ht₂)
-  · obtain ⟨d, hd⟩ : ∃ d, db.sig f = some d := by
-      cases hdf : db.sig f with
-      | none => exact absurd (by simp [Signature.mergeOf, hdf]) hsl
-      | some d => exact ⟨d, rfl⟩
-    have hdm : d.merge ≠ none := fun hne => hsl (by simp [Signature.mergeOf, hd, hne])
-    obtain ⟨hka, hkv⟩ := hw.1 d hd
-    refine Database.declaredTerms_addTerm hdt ?_
-    intro g bs hsub
-    rw [Term.subterms_app] at hsub
-    rcases Set.mem_insert_iff.mp hsub with heq | hmem
-    · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
-      refine ⟨d, hd, ?_⟩
-      rw [List.length_append, (Expr.evalList_length has).trans hka,
-        (Expr.evalList_length hvs).trans hkv, FnDecl.entryWidth, if_neg]
-      simpa using hdm
-    · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
-      rcases List.mem_append.mp hx with hx | hx
-      · exact Expr.evalList_declaredTerm henv hw.2.1 has x hx g bs hxs
-      · exact Expr.evalList_declaredTerm henv hw.2.2 hvs x hx g bs hxs
 
 theorem evalActions_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
     {as : List Action} (hw : Actions.WidthOk as db.sig) (hsl : Actions.SetLegal as db.sig)
@@ -700,8 +803,8 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
     Option.Rel Database.EnvAgree (evalAction d₁ a) (evalAction d₂ a) := by
   cases a with
   | expr e =>
-    simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e]
-    cases e.eval d₁.sig d₁.env with
+    simp only [evalAction, ← h.sig, ← Expr.evalAtom_agree (sig := d₁.sig) h.env e]
+    cases e.evalAtom d₁.sig d₁.env with
     | none => exact .none
     | some t => exact .some (h.addTerm t)
   | union e₁ e₂ =>
@@ -719,15 +822,6 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
         · simp only [if_neg hlit]
           exact .some ⟨h.sig,
             by simp only [Database.addEq_eqs, ((h.addTerm t₁).addTerm t₂).eqs], h.rules, h.env⟩
-  | set f args out =>
-    simp only [evalAction, ← h.sig, ← Expr.evalList_agree (sig := d₁.sig) h.env args,
-      ← Expr.evalList_agree (sig := d₁.sig) h.env out]
-    cases Expr.evalList d₁.sig args d₁.env with
-    | none => exact .none
-    | some as =>
-      cases Expr.evalList d₁.sig out d₁.env with
-      | none => exact .none
-      | some vs => exact .some (h.addTerm _)
 
 theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as : List Action) :
     Option.Rel Database.EnvAgree (evalActions d₁ as) (evalActions d₂ as) := by

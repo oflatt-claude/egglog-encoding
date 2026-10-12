@@ -32,30 +32,13 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
   cases a with
   | expr e =>
     obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm h.2 he
-    exact ⟨db.addTerm t, by simp [evalAction, ht], hm⟩
+    exact ⟨db.addTerm t, by simp [evalAction, Expr.evalAtom_of_eval ht], hm⟩
   | union e₁ e₂ =>
     obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1.2
     obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2.2
     have hl₁ := Expr.not_isLit_of_isApp he.1.1 he.1.2 ht₁
     have hl₂ := Expr.not_isLit_of_isApp he.2.1 he.2.2 ht₂
     exact ⟨db.addEq t₁ t₂, by simp [evalAction, ht₁, ht₂, hl₁, hl₂], hm⟩
-  | set f args out =>
-    obtain ⟨as, has⟩ := Expr.evalList_isSome args
-      (fun v hv => by
-        obtain ⟨e, hmem, hve⟩ := Expr.mem_varsList hv
-        exact (hm v).mp (h.1 e hmem v hve))
-      (fun g hg => by
-        obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
-        exact he.1 e hmem g hge)
-    obtain ⟨vs, hvs⟩ := Expr.evalList_isSome out
-      (fun v hv => by
-        obtain ⟨e, hmem, hve⟩ := Expr.mem_varsList hv
-        exact (hm v).mp (h.2 e hmem v hve))
-      (fun g hg => by
-        obtain ⟨e, hmem, hge⟩ := Expr.mem_fnsList hg
-        exact he.2 e hmem g hge)
-    refine ⟨db.addTerm (.app f (as ++ vs)), by simp [evalAction, has, hvs], ?_⟩
-    simpa [] using hm
 
 theorem evalActions_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {as : List Action} (h : Actions.Scoped as Γ) (he : Actions.Evaluable as db.sig) :
