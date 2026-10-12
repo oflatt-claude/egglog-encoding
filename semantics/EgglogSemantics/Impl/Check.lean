@@ -85,13 +85,12 @@ def Cmd.arityOk : Cmd → Signature → Bool
   | .saturate _, _ => true
   | .decl f d, sig => d.arityOk ((Cmd.decl f d).sigBind sig)
 
-/-- `Program.SetLegal`'s shape: each command against the signature the earlier ones
-leave. -/
+/-- Each command is checked against the signature the earlier commands leave. -/
 def Program.arityOk : Program → Signature → Bool
   | [], _ => true
   | c :: cs, sig => c.arityOk sig && Program.arityOk cs (c.sigBind sig)
 
-/-- `Program.arityOk` as a proposition, to sit beside `Program.SetLegal`. -/
+/-- The executable arity check as a proposition. -/
 def Program.ArityOk (p : Program) (sig : Signature) : Prop := p.arityOk sig = true
 
 /-- The arity check from the empty signature, as `WellScoped` is the scope check from the
@@ -167,7 +166,7 @@ def Program.noLookup : Program → Signature → Bool
   | [], _ => true
   | c :: cs, sig => c.noLookup sig && Program.noLookup cs (c.sigBind sig)
 
-/-- `Program.noLookup` as a proposition, to sit beside `Program.SetLegal`. -/
+/-- The executable value-position check as a proposition. -/
 def Program.NoLookup (p : Program) (sig : Signature) : Prop := p.noLookup sig = true
 
 /-- The value-position check from the empty signature. -/

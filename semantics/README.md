@@ -15,18 +15,14 @@ The specification records equations and derives congruence over the terms they m
 Constructors build values; other functions store key/value entries. A complete atom such as
 `(LowerBound expr bound)` reads an entry in a query and records one in an action. The
 declaration determines the key/output split. Entries cannot be nested inside value
-expressions or used as equality or union operands. Merge bodies can perform actions as well as return values. The
-[merge semantics](MERGE.md) guide explains how this relates to the interpreter's row index,
+expressions or used as equality or union operands. Merge bodies can perform actions as
+well as return values. The [merge semantics](MERGE.md) guide explains how this relates to the interpreter's row index,
 its refinement contracts, and the limits of the model.
 
 ## Proof encoding
 
 The encoder transforms constructor programs into explicit view and union-find tables,
-with a proof attached to each recorded equality. The current entry-syntax refactor builds
-the specification, interpreter, encoder, checker, and example tests. The encoding proof
-port is in progress; the full Lean build currently fails.
-
-Before this refactor, `encode_corresponds` proved that source
+with a proof attached to each recorded equality. `encode_corresponds` proves that source
 congruence agrees with the encoded target's equivalence on source terms, under
 `Program.EncodeDomain` and successful executions. The library permits no `sorry`.
 

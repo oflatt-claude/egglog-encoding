@@ -85,13 +85,19 @@ primitive, so evaluating `e` cannot get stuck on it. -/
 def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
   ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f
 
+/-- A complete atom has a declared nonprimitive head and value-producing columns. -/
+def Expr.AtomEvaluable : Expr → Signature → Prop
+  | .app f cols, sig => Prim.ofName f = none ∧ (sig f).isSome = true ∧
+      ∀ g ∈ Expr.fnsList cols, Prim.ofName g = none ∧ sig.IsCtor g
+  | e, sig => e.Evaluable sig
+
 /-- `Action.Scoped`'s companion: every expression the action evaluates builds, and a
 `union` operand is an application — the strongest sound stand-in for egglog's eq-sort
 requirement, which `evalAction` refuses dynamically. A variable operand may hold a literal,
 since a query binds one under a literal argument, so no check reading the expression alone
 admits it. -/
 def Action.Evaluable : Action → Signature → Prop
-  | .expr e, sig => e.Evaluable sig
+  | .expr e, sig => e.AtomEvaluable sig
   | .union e₁ e₂, sig => (e₁.IsApp ∧ e₁.Evaluable sig) ∧ e₂.IsApp ∧ e₂.Evaluable sig
 
 @[simp] def Actions.Evaluable : List Action → Signature → Prop
@@ -149,12 +155,11 @@ def Action.UnionLegal : Action → Prop
   | [] => True
   | c :: cs => c.UnionLegal ∧ Program.UnionLegal cs
 
-/-! ### `set` legality -/
+/-! ### Structural action legality -/
 
-/-- `(set (f …) …)` is legal only when `f` is a declared `:merge` or `:no-merge` function.
-This decides *which* width an entry is held to; `Action.WidthOk` supplies the column
-counts, and only the two together keep every entry the width `FnDecl.entryWidth` gives
-it. Alone, this says nothing about an entry no `set` wrote. -/
+/-- Compatibility predicate for the former dedicated write action. Complete atoms need
+no separate action-shape restriction. Declaration and value-position checks are provided
+by `AtomEvaluable` and `Impl/Check.lean`; column counts are checked by `WidthOk`. -/
 def Action.SetLegal : Action → Signature → Prop
   | _, _ => True
 
@@ -178,12 +183,9 @@ def Action.SetLegal : Action → Signature → Prop
 
 /-! ### Column widths
 
-egglog fixes a function's column counts at its declaration and checks every use against
-them: `constraint.rs`'s `get_atom_application_constraints`, raised as `TypeError::Arity` by
-the same pass, on the same node, that raises `SetConstructorDisallowed`. So it belongs
-beside `SetLegal` rather than inside `Evaluable`, which structurally could not say it —
-`Evaluable` quantifies over `Expr.fns`, a list of *names* that has lost the application
-structure. -/
+A complete atom carries every declared column; its children, and equality or union
+operands, use value-expression widths. Evaluability and widths are separate because
+`Expr.Evaluable` records names rather than application argument counts. -/
 
 mutual
 
@@ -209,8 +211,7 @@ def Expr.AtomWidthOk : Expr → Signature → Prop
       (∀ d, sig f = some d → cols.length = d.entryWidth) ∧ Expr.WidthOkList cols sig
   | _, _ => True
 
-/-- `Action.SetLegal`'s companion: a `set` fills the declared key and value columns, so the
-entry it records is `FnDecl.entryWidth` wide. -/
+/-- Complete atoms have their declared entry width; union operands use value widths. -/
 def Action.WidthOk : Action → Signature → Prop
   | .expr e, sig => e.AtomWidthOk sig
   | .union e₁ e₂, sig => e₁.WidthOk sig ∧ e₂.WidthOk sig

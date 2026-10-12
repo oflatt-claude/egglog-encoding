@@ -488,7 +488,8 @@ private def genProgram (s : Nat) : Program :=
     | _, _ => []
   -- The model keeps rules in a `Set` and so ignores a repeat; egglog panics on one.
   -- Compare the rendered form, there being no decidable equality on `Rule`.
-  let rules := if r₁.toEgg = r₂.toEgg then [Cmd.rule r₁] else [Cmd.rule r₁, Cmd.rule r₂]
+  let rules := if r₁.toEgg (fun _ => none) = r₂.toEgg (fun _ => none) then
+      [Cmd.rule r₁] else [Cmd.rule r₁, Cmd.rule r₂]
   [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ sat ++ rules
     ++ List.replicate (rounds + 1) (Cmd.run "")
 
@@ -2021,9 +2022,9 @@ def EncOutcome.render (o : EncOutcome) : String :=
   match o with
   | .outOfDomain => "out-of-domain"
   | .sourceStuck none => "source-stuck (no command)"
-  | .sourceStuck (some (i, c)) => s!"source-stuck at #{i} {c.toEgg}"
+  | .sourceStuck (some (i, c)) => s!"source-stuck at #{i} {c.toEgg (fun _ => none)}"
   | .encodedStuck none => "encoded-stuck (no command)"
-  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg}"
+  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg (fun _ => none)}"
   | .counts rows =>
     (if o.agrees then "AGREE  " else "DIFFER ") ++
       String.intercalate " "
@@ -2271,7 +2272,7 @@ def CheckOutcome.render (o : CheckOutcome) : String :=
   match o with
   | .outOfDomain => "out-of-domain"
   | .encodedStuck none => "encoded-stuck (no command)"
-  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg}"
+  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg (fun _ => none)}"
   | .verdicts vs =>
     let nc := (vs.filter fun p => p.1.isChecks).length
     let nd := (vs.filter fun p => p.1.isDisplaced).length
@@ -2738,9 +2739,9 @@ def CorrOutcome.render (o : CorrOutcome) : String :=
   match o with
   | .outOfDomain => "out-of-domain"
   | .sourceStuck none => "source-stuck (no command)"
-  | .sourceStuck (some (i, c)) => s!"source-stuck at #{i} {c.toEgg}"
+  | .sourceStuck (some (i, c)) => s!"source-stuck at #{i} {c.toEgg (fun _ => none)}"
   | .encodedStuck none => "encoded-stuck (no command)"
-  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg}"
+  | .encodedStuck (some (i, c)) => s!"encoded-stuck at #{i} {c.toEgg (fun _ => none)}"
   | .report r =>
     (if r.lost.isEmpty && r.invented.isEmpty then "AGREE  " else "DIFFER ")
       ++ s!"terms={r.swept}/{r.pool} (src {r.srcTerms}, tgt {r.tgtTerms}) \

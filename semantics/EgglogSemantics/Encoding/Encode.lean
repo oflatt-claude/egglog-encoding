@@ -616,7 +616,7 @@ mutual
 /-- Flatten `e` into view reads. Returns the expression naming `e`'s e-class, the reads,
 and the next variable number.
 
-A view read is a `Pattern.values` atom, which is what egglog lowers `(= e (@fView c…))` to
+A view read is a function-entry atoms atom, which is what egglog lowers `(= e (@fView c…))` to
 and the only form the model admits: `Expr.eval` does not read, so a non-constructor
 application is not an expression here. It binds **both** value columns — a read that fixed
 the proof column to anything but a fresh variable would match only the rows carrying that
@@ -794,7 +794,7 @@ in query order. This is `@Rule_i`'s argument list, and its length is `@Rule_i`'s
 
 Read back off the emitted query rather than threaded out of `encodeQueryExpr`, which is
 sound because a two-column read atom in an encoded query is one this file wrote: under
-`Program.EncodeDomain` the source has no `Pattern.values` at all. -/
+`Program.EncodeDomain` the source has no function-entry atoms at all. -/
 def queryProofs (q : Query) : List Expr :=
   q.filterMap fun p => match p with
     | .expr (.app _ cols) => match cols.getLast? with
@@ -1496,20 +1496,13 @@ theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) := by
 
 `Program.EncodeDomain` below specifies the constructor fragment and the naming, query,
 arity, and head-legality conditions used by the correspondence theorem. -/
-/-- No `set` action. `Action.set` is what a `:merge` function and an encoded rule head
-need; the constructor fragment has neither. **Not a domain clause**: under
-`EncodeDomain.ctorsOnly` a `set` could only name a constructor or an undeclared function,
-which is exactly what `Spec/Scope.lean`'s `Action.SetLegal` refuses. So the domain states
-`Program.SetLegal` and `Program.setLegal_iff_noSet` records that the two are one
-condition. -/
+/-- Compatibility marker for proofs over the former action syntax. Every current action
+satisfies it; the source fragment is constrained by constructor declarations and evaluability. -/
 def Action.NoSet : Action → Prop
   | _ => True
 
-/-- No entry atom. `Pattern.values` reads an entry of a non-constructor function, which
-the constructor fragment has none of — so like `Action.NoSet` this is a fragment
-restriction rather than a limitation, and it is why `encodePattern` leaves the case alone
-instead of encoding it. The encoding's *own* queries are all entry atoms; this constrains
-the source, and `EncodeDomain.queryEncodable` is where it is asked. -/
+/-- Compatibility marker for the former separate entry-pattern constructor. Complete
+atoms share the expression case, so this imposes no restriction on current patterns. -/
 def Pattern.NoValues : Pattern → Prop
   | _ => True
 
@@ -1533,8 +1526,7 @@ theorem Signature.allConstructors_sigBind {sig : Signature} (hsig : sig.AllConst
         exact hsig g
   | _ => exact hsig
 
-/-- `Action.SetLegal` at a state that declares constructors only **is** `Action.NoSet`: a
-`set` head has to be a `:merge` or `:no-merge` function, and there are none. -/
+/-- The two automatic structural predicates agree. -/
 theorem Cmd.setLegal_iff_noSet {sig : Signature} (hsig : sig.AllConstructors) (c : Cmd) :
     c.SetLegal sig ↔ c.NoSet := by
   have hact : ∀ a : Action, a.SetLegal sig ↔ a.NoSet := by
@@ -1547,10 +1539,7 @@ theorem Cmd.setLegal_iff_noSet {sig : Signature} (hsig : sig.AllConstructors) (c
     | cons a as ih => simp [hact a, ih]
   cases c <;> simp [Cmd.NoSet, hact, hacts]
 
-/-- **`Spec/Scope.lean`'s `set` legality *is* the domain's "no `set` anywhere".** The
-equivalence the `setLegal` clause is stated on: one direction is that a non-`set` action is
-vacuously legal, the other that `Program.CtorDecls` leaves no merge function for a `set` to
-name. -/
+/-- The compatibility equivalence over a program. Both structural checks are automatic. -/
 theorem Program.setLegal_iff_noSet : ∀ {P : Program} {sig : Signature}, sig.AllConstructors →
     P.CtorDecls → (Program.SetLegal P sig ↔ ∀ c ∈ P, c.NoSet)
   | [], _, _, _ => by simp
@@ -2380,21 +2369,14 @@ instance Cmd.decidableHeadScoped : ∀ c : Cmd, Decidable c.HeadScoped
 instance Program.decidableHeadsScoped (P : Program) : Decidable P.HeadsScoped :=
   inferInstanceAs (Decidable (∀ c ∈ P, c.HeadScoped))
 
-/-- **Legality plus the encoding-specific residue.** Three clauses are `Spec`'s own static
-checks — `Program.CtorDecls`, `Program.SetLegal`, and `Action.Declared` threaded along
-`Cmd.sigBind` — and six are conditions only the encoding needs: no source name may shadow a
-primitive or sit in the generated namespace, the query flattening has to be total, no name may
-be applied at two arities, and a rule head has to be one the source can run (`noLitUnion` and
-`headsScoped`). -/
+/-- Constructor programs supported by the correspondence theorem: declarations, names,
+queries, arities, and rule heads satisfy the conditions recorded below. -/
 structure Program.EncodeDomain (P : Program) : Prop where
   /-- Every declared function is a constructor: `Spec/Syntax.lean`'s own
   `Program.CtorDecls`, which is what `exec_programStep` asks for. -/
   ctorsOnly : P.CtorDecls
-  /-- No `set` writes a table. Stated as `Spec/Scope.lean`'s `Action.SetLegal` threaded along
-  `Cmd.sigBind`, which under `ctorsOnly` is exactly "no `set` anywhere"
-  (`Program.setLegal_iff_noSet`): a `set` head must be a `:merge` or `:no-merge` function and
-  a constructor-only program declares none. `Action.set` is what a `:merge` function and an
-  encoded rule head need, and the constructor fragment has neither. -/
+  /-- Automatic structural check retained by the proof interfaces. It adds no restriction
+  beyond the current action syntax. -/
   setLegal : Program.SetLegal P (fun _ => none)
   /-- No source function shadows a primitive, so every application builds. Not implied by
   `Program.Evaluable`, which says nothing of a **query** pattern's names; `P.ctors` reads
@@ -2417,8 +2399,7 @@ structure Program.EncodeDomain (P : Program) : Prop where
   constraint — which every target matches where the source pattern matches nothing
   (`encodeQuery_drops_literal_pattern`) — and `.expr (.var v)` leaves its variable bound by
   nothing, where the source rule's `ValidEnv` must bind it to a term the source holds.
-  `Pattern.Grounded` excludes the first and `Query.VarsKeyed` the second, and
-  `Pattern.NoValues` excludes the entry atom the fragment has no table for.
+  `Pattern.Grounded` excludes the first and `Query.VarsKeyed` the second.
   A condition on the source text that no other clause implies —
   `Encoding/Match.lean`'s `litProgram` is the program it excludes, and
   `litProgram_not_encodeDomain` is that recorded — and it costs the corpus nothing: all
@@ -2444,11 +2425,9 @@ structure Program.EncodeDomain (P : Program) : Prop where
   program with a conflict is one egglog rejects and one the emitter cannot even write down.
 
   It is a **faithfulness** clause rather than a narrowing, and it costs the corpus nothing —
-  the census is 70 with it as it was without. What needs it is `Actions.WriteLegal` at the
-  maintenance rules: `Program.ctors` is read off the *syntax*, so a name at two arities gets
+  the census is 70 with it as it was without. The generated maintenance rules need consistent table declarations: `Program.ctors` is read off the *syntax*, so a name at two arities gets
   two table triples and the later declaration wins, and the losing arity's rebuild rules then
-  `set` a view at the wrong key width (`Program.AritiesAgree`,
-  `adProgram_not_maintenance_writeLegal`). -/
+  write a view at the wrong key width (`Program.AritiesAgree`). -/
   aritiesAgree : P.arityConflicts = []
   /-- **Every variable a rule head reads is one its own query binds.**
   `Program.HeadsScoped`, over `Spec/Scope.lean`'s `Actions.Scoped`.

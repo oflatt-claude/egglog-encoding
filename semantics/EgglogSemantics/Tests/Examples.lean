@@ -82,7 +82,7 @@ example : WellScoped minProgram := by
   simp [WellScoped, minProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, eNum]
 
 example : ¬ Program.Evaluable minProgram noSig := by
-  simp [minProgram, Program.Evaluable, Cmd.Evaluable, Action.Evaluable, Expr.Evaluable,
+  simp [minProgram, Program.Evaluable, Cmd.Evaluable, Action.Evaluable, Expr.AtomEvaluable, Expr.Evaluable,
     Expr.fns, Expr.fnsList, Prim.ofName, eNum]
 
 /-! ### Congruence

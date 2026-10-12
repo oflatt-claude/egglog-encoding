@@ -14,19 +14,16 @@ What each section refutes:
 
 * `claim1` — there is no unconditional `FDatabase.Inv.decl`, so `FDatabase.Unused` is what
   that lemma and `FDatabase.ProgramLegal` have to carry.
-* `actTuple_*` — `Action.SetLegal` bounds a write's *head*, not its width;
-  `Action.WidthOk` and `Impl/Check.lean`'s `arityOk` are what bound the width.
-* `mergeRound_inv_false` — `FDatabase.Inv.mergeRound_of_legalMerges` needs
-  `Signature.MergesLegal`; a merge body is an arbitrary action block and `Program.SetLegal`
-  says nothing about one.
+* `actTuple_*` — both width checks reject an entry atom with too many columns.
+* `undeclared_atom_stuck` — an undeclared atom cannot write a row.
 * `patternHolds_validSubst_false`, `matchQuery_validQuerySubst_false` — the two matching
   statements are false without the `ValidEnv` hypothesis and the `Env.Agree` conclusion
   they now carry.
 * `exec_programStep_needs_ctorDecls` — **the one `exec_programStep` and `execM_reachable`
   cite.** With a `:merge` declared, the merge phase after an action gives the specification
   two reachable states where the interpreter returns one.
-* `setCtor_not_declaredTerms` — `Program.SetLegal` is not implied by `Program.CtorDecls`
-  and `Program.WidthOk`, and it is what keeps `Database.DeclaredTerms`.
+* `badCtor_not_declaredTerms` — ill-sized constructor applications violate declared-term
+  invariants, and the width checks reject them.
 * `staleProgram_*` — `Program.Evaluable` is what rejects a rule head naming an undeclared
   function, and the row that head used to write is no longer reachable.
 * `decl_enables_merge` — `Spec/Scope.lean`'s `MergeDeclared` is what makes the merge phase
@@ -118,13 +115,10 @@ theorem claim1 : ∃ (d : FDatabase) (f : FnName) (dc : FnDecl) (d' : FDatabase)
       (by rw [dG'_mergeOf]; simp)).2
     simp [fDecl] at hw⟩
 
-/-! ## `SetLegal` does not bound a write's width
+/-! ## Complete atoms have the declared column count
 
-`Action.SetLegal` constrains only a function's merge kind, so it admits a `set` whose value
-list is the wrong width for the declaration. `FnDecl.outArity` is what records the width;
-`Spec/Scope.lean`'s `Action.WidthOk` and `Impl/Check.lean`'s `arityOk` are what read it.
-The two say the same thing on a `set`, and both are exhibited: the spec-side check and the
-front-end one reject the write, and `SetLegal` does not. -/
+`FnDecl.outArity` records the number of output columns. `Action.WidthOk` and the
+executable `arityOk` check reject atoms whose full column count is wrong. -/
 
 /-- `(function h () i64 :merge 9)`. -/
 def hDecl : FnDecl :=
@@ -132,20 +126,14 @@ def hDecl : FnDecl :=
 
 def sigH : Signature := Function.update (fun _ => none) "h" (some hDecl)
 
-/-- `(set (h) (values 1 2))` — a two-column write to a one-column function. -/
+/-- `(h 1 2)` — a two-column write to a one-column function. -/
 def actTuple : Action := .expr (.app "h" [.lit (.int 1), .lit (.int 2)])
-
-/-- `SetLegal`, the only condition a `set` carried before the width checks, holds of it. -/
-theorem actTuple_legal : actTuple.SetLegal sigH := by
-  change Signature.mergeOf sigH "h" ≠ none
-  rw [show sigH.mergeOf "h" = some (.merge [] [.lit (.int 9)]) from rfl]
-  simp
 
 /-- The spec-side check that rejects it. -/
 theorem actTuple_not_widthOk : ¬ actTuple.WidthOk sigH := by
   intro h
-  have := (h.1 hDecl rfl).2
-  simp [hDecl] at this
+  have := h.1 hDecl rfl
+  simp [hDecl, FnDecl.entryWidth] at this
 
 /-- The two-column write egglog's typechecker rejects: "Arity mismatch, expected 1 args". -/
 theorem actTuple_not_arityOk : actTuple.arityOk sigH = false := rfl
@@ -156,61 +144,13 @@ theorem claim3Program_not_arityOk :
     Program.arityOk [.decl "h" hDecl, .action actTuple,
       .action (.expr (.app "h" []))] (fun _ => none) = false := rfl
 
-/-! ## `mergeRound` needs `Signature.MergesLegal`
+/-! ## Undeclared atom heads do not write rows
 
-A merge body is an arbitrary `List Action` carrying no `Action.SetLegal` obligation —
-`Cmd.SetLegal (.decl _ _)` is `True`, so `Program.SetLegal` says nothing about one — and
-`FDatabase.IndexOk` is where that bites. `Signature.MergesLegal` is the repair, and
-`FDatabase.Inv.mergeRound_of_legalMerges` is what spends it. This is the witness that it
-cannot be dropped.
+The old unchecked-write counterexample disappeared with complete atoms: evaluation fails
+before an undeclared head can insert an invalid row. -/
 
-The field that breaks is **`IndexOk.ctor`**, and the value column is what breaks it: a
-body's `(set (F) 3)` on a name with no `:merge` writes a row whose `out` is `[3]`, where
-`ctor` requires `[]`. A body writing `(set (F))` would be harmless — `addRow` records the
-entry term, which is all `ctor` then asks for. -/
-
-/-- `(function f () i64 :merge ((set (F) 3)) old)`. `F` is declared nowhere, so its row is
-read by `IndexOk.ctor` — the clause that requires no value column. -/
-def cexDecl : FnDecl := ⟨0, 1, some (.merge [.expr (.app "F" [.lit (.int 3)])] [.var "old"]), none⟩
-
-/-- After `(function f () i64 :merge …)`. -/
-def cexSig : FDatabase :=
-  { FDatabase.empty with
-    sig := Function.update FDatabase.empty.sig "f" (some cexDecl) }
-
-/-- Two entries of `f` at the empty key, recording `1` and `2`. Built through the
-interpreter's own writers, so its `Inv` is `FDatabase.Inv.addRow`'s rather than
-hand-rolled — the counterexample is a state the interpreter actually reaches. -/
-def cexD : FDatabase :=
-  (cexSig.addRow "f" [] [.lit (.int 1)]).addRow "f" [] [.lit (.int 2)]
-
-theorem cexSig_inv : cexSig.Inv :=
-  FDatabase.Inv.empty.decl (dc := cexDecl) (by simp [FDatabase.empty])
-    (by simp [FDatabase.empty])
-
-theorem cexD_inv : cexD.Inv :=
-  (cexSig_inv.addRow (by rw [show cexSig.sig.mergeOf "f" = some _ from rfl]; simp)
-      (fun dc hdc => by obtain rfl : cexDecl = dc := Option.some.inj hdc; exact ⟨rfl, rfl⟩)).addRow
-    (by rw [show (cexSig.addRow "f" [] [Term.lit (.int 1)]).sig.mergeOf "f" = some _ from rfl]
-        simp)
-    (fun dc hdc => by obtain rfl : cexDecl = dc := Option.some.inj hdc; exact ⟨rfl, rfl⟩)
-
-/-- The row the merge body plants: a value column on a name with no `:merge`. -/
-theorem cexD_mergeRound_badRow :
-    (⟨"F", [], [.lit (.int 3)]⟩ : Row) ∈ cexD.mergeRound.rows := by decide
-
-/-- **The hypothesis is what makes the state legal.** `f`'s body `set`s `F`, which has no
-`:merge`, so `Actions.WriteLegal` fails on it. -/
-theorem cexSig_not_mergesLegal : ¬ Signature.MergesLegal cexSig.sig := fun h =>
-  (h "f" cexDecl [.expr (.app "F" [.lit (.int 3)])] [.var "old"] rfl rfl).1.1.1 rfl
-
-/-- **`FDatabase.Inv.mergeRound_of_legalMerges` without `Signature.MergesLegal` is false.**
-A merge pass takes a database satisfying `Inv` to one that does not. -/
-theorem mergeRound_inv_false : ∃ d : FDatabase, d.Inv ∧ ¬ d.mergeRound.Inv := by
-  refine ⟨cexD, cexD_inv, fun h => ?_⟩
-  have hsig : cexD.mergeRound.sig = cexD.sig := FDatabase.mergeRound_confined.2.2.1
-  have hm : cexD.mergeRound.sig.mergeOf "F" = none := by rw [hsig]; rfl
-  exact absurd (h.index.ctor _ cexD_mergeRound_badRow hm).1 (by simp)
+theorem undeclared_atom_stuck :
+    execAction FDatabase.empty (.expr (.app "F" [.lit (.int 3)])) = none := rfl
 
 /-! ## The two matching statements
 
@@ -238,7 +178,7 @@ theorem t0_cong : (t0, t0) ∈ (dEx.addTerm t0).closureF :=
 /-- The pattern `0` matches under a substitution binding `x`, which the pattern does not
 mention: `patternHolds` reads `σ` only through `d.env ++ σ`. -/
 theorem holds_lit : patternHolds dEx (.expr (.lit (.int 0))) [("x", t0)] = true := by
-  simp only [patternHolds, Expr.eval, decide_eq_true_eq]
+  simp only [patternHolds, Expr.entry, Expr.evalAtom, Expr.eval, decide_eq_true_eq]
   exact ⟨t0, t0_mem, t0_cong⟩
 
 /-- **`FDatabase.patternHolds_validSubst` is false without `ValidEnv`.**
@@ -393,26 +333,24 @@ theorem mergeDeclProgram_checks :
       mergeDeclProgram.DeclsFresh Database.empty.sig ∧
       mergeDeclProgram.MergeDeclared Database.empty.sig ∧
       WellArity mergeDeclProgram ∧ ReadsAreAtoms mergeDeclProgram := by
-  refine ⟨⟨trivial, ⟨by simp [Expr.Scoped], by simp [Expr.Scoped, Expr.vars]⟩, trivial⟩,
-    ⟨trivial, ⟨by simp [Expr.Evaluable], by simp [Expr.Evaluable, Expr.fns]⟩, trivial⟩,
-    ⟨trivial, ?_, trivial⟩,
-    ⟨?_, ?_, trivial⟩, ⟨rfl, trivial, trivial⟩, ⟨?_, trivial, trivial⟩, rfl, rfl⟩
-  · change Signature.mergeOf (Function.update Database.empty.sig "f" (some fDecl)) "f" ≠ none
-    rw [show Signature.mergeOf (Function.update Database.empty.sig "f" (some fDecl)) "f"
-      = some (.merge [] [.lit (.int 7)]) from rfl]
-    simp
-  · intro ms hms
-    rw [show fDecl.merge = some (MergeSpec.merge [] [.lit (.int 7)]) from rfl,
-      Option.mem_def, Option.some.injEq] at hms
-    subst hms
-    exact ⟨rfl, trivial, ⟨trivial, trivial⟩⟩
-  · refine ⟨fun dc hdc => ?_, trivial, ⟨trivial, trivial⟩⟩
-    obtain rfl : fDecl = dc := Option.some.inj hdc
-    exact ⟨rfl, rfl⟩
-  · intro ms hms
-    rw [show fDecl.merge = some (MergeSpec.merge [] [.lit (.int 7)]) from rfl,
-      Option.mem_def, Option.some.injEq] at hms
-    subst hms
+  refine ⟨?_, ?_, by simp [mergeDeclProgram, Action.SetLegal], ?_,
+    ⟨rfl, trivial, trivial⟩, ?_, rfl, rfl⟩
+  · simp [WellScoped, mergeDeclProgram, Action.Scoped, Expr.Scoped, Expr.IsApp,
+      Expr.vars, Expr.varsList]
+  · simp [mergeDeclProgram, Action.Evaluable, Expr.AtomEvaluable, Expr.fnsList,
+      Expr.fns, Prim.ofName, Cmd.sigBind, Database.empty]
+  · refine ⟨?_, ?_, trivial⟩
+    · intro ms hms
+      have heq : .merge [] [.lit (.int 7)] = ms := by simpa [fDecl] using hms
+      subst ms
+      exact ⟨rfl, trivial, trivial, trivial⟩
+    · refine ⟨fun dc hdc => ?_, trivial, trivial⟩
+      obtain rfl : fDecl = dc := Option.some.inj hdc
+      rfl
+  · refine ⟨?_, trivial, trivial⟩
+    intro ms hms
+    have heq : .merge [] [.lit (.int 7)] = ms := by simpa [fDecl] using hms
+    subst ms
     exact ⟨trivial, by simp [Expr.Declared, Expr.fns]⟩
 
 /-- The one check that rejects it. -/
@@ -431,90 +369,74 @@ theorem exec_programStep_needs_ctorDecls :
     (((h mergeDeclProgram mergeSetDb).mpr mergeDecl_reaches_set).symm.trans
       ((h mergeDeclProgram mergeCollideDb).mpr mergeDecl_reaches_collide)))
 
-/-! ## `Program.SetLegal` is what keeps `Database.DeclaredTerms`
+/-! ## Constructor applications must have their declared width
 
-A `set` on a *constructor* writes an entry term of the wrong width: a constructor's
-`FnDecl.entryWidth` is its `arity` alone, and a `set` appends the value columns anyway. The
-program below declares nothing but constructors and passes `Program.WidthOk` — the width
-check reads the `set`'s own column counts, which agree with the declaration — so neither
-`Program.CtorDecls` nor `Program.WidthOk` catches it. `Program.SetLegal` does.
+A nullary constructor applied to one child records an ill-sized term if the static checks
+are bypassed. Both the proposition-valued and executable width checks reject it. -/
 
-**Not a functional-dependency witness.** `¬ Cong setCtorDb (c) (d)` holds and says nothing:
-every equation this state asserts is reflexive, and on such a state `Cong` *is* equality, so
-the claim reduces to `(c) ≠ (d)`. It is not stated here for that reason. -/
-
-/-- `(datatype S (c) (d) (f)) (set (f) (c)) (set (f) (d))`. Declares only constructors,
-and its two `set`s are the one thing `Program.SetLegal` forbids. -/
-def setCtorProgram : Program :=
+/-- Two malformed applications of the nullary constructor `f`. -/
+def badCtorProgram : Program :=
   [ .decl "c" (ctorDecl 0), .decl "d" (ctorDecl 0), .decl "f" (ctorDecl 0),
     .action (.expr (.app "f" [.app "c" []])), .action (.expr (.app "f" [.app "d" []])) ]
 
 def cTerm : Term := .app "c" []
 def dTerm : Term := .app "d" []
 
-def setCtorSig₁ : Database :=
+def badCtorSig₁ : Database :=
   { Database.empty with sig := Function.update Database.empty.sig "c" (some (ctorDecl 0)) }
-def setCtorSig₂ : Database :=
-  { setCtorSig₁ with sig := Function.update setCtorSig₁.sig "d" (some (ctorDecl 0)) }
-def setCtorSig : Database :=
-  { setCtorSig₂ with sig := Function.update setCtorSig₂.sig "f" (some (ctorDecl 0)) }
+def badCtorSig₂ : Database :=
+  { badCtorSig₁ with sig := Function.update badCtorSig₁.sig "d" (some (ctorDecl 0)) }
+def badCtorSig : Database :=
+  { badCtorSig₂ with sig := Function.update badCtorSig₂.sig "f" (some (ctorDecl 0)) }
 
 /-- After `(set (f) (c))`. -/
-def setCtorDb₁ : Database := setCtorSig.addTerm (.app "f" [cTerm])
+def badCtorDb₁ : Database := badCtorSig.addTerm (.app "f" [cTerm])
 
 /-- After `(set (f) (d))`: two entry terms of the nullary constructor `f`, each one child
 wide where the declaration allows none. -/
-def setCtorDb : Database := setCtorDb₁.addTerm (.app "f" [dTerm])
+def badCtorDb : Database := badCtorDb₁.addTerm (.app "f" [dTerm])
 
-theorem setCtor_eval₁ :
-    evalAction setCtorSig (.expr (.app "f" [.app "c" []])) = some setCtorDb₁ := rfl
+theorem badCtor_eval₁ :
+    evalAction badCtorSig (.expr (.app "f" [.app "c" []])) = some badCtorDb₁ := rfl
 
-theorem setCtor_eval₂ :
-    evalAction setCtorDb₁ (.expr (.app "f" [.app "d" []])) = some setCtorDb := rfl
+theorem badCtor_eval₂ :
+    evalAction badCtorDb₁ (.expr (.app "f" [.app "d" []])) = some badCtorDb := rfl
 
 /-- **The state is reachable.** No merge phase does anything — every declaration is a
 constructor — so each command is its own step. -/
-theorem setCtor_programStep : ProgramStep Database.empty setCtorProgram setCtorDb :=
-  .cons ⟨setCtorSig₁, rfl, .refl⟩ (.cons ⟨setCtorSig₂, rfl, .refl⟩
-    (.cons ⟨setCtorSig, rfl, .refl⟩
-      (.cons ⟨setCtorDb₁, setCtor_eval₁, .refl⟩
-        (.cons ⟨setCtorDb, setCtor_eval₂, .refl⟩ .nil))))
+theorem badCtor_programStep : ProgramStep Database.empty badCtorProgram badCtorDb :=
+  .cons ⟨badCtorSig₁, rfl, .refl⟩ (.cons ⟨badCtorSig₂, rfl, .refl⟩
+    (.cons ⟨badCtorSig, rfl, .refl⟩
+      (.cons ⟨badCtorDb₁, badCtor_eval₁, .refl⟩
+        (.cons ⟨badCtorDb, badCtor_eval₂, .refl⟩ .nil))))
 
-theorem setCtor_mem : Term.app "f" [cTerm] ∈ setCtorDb.terms := by
-  rw [show setCtorDb = setCtorDb₁.addTerm (.app "f" [dTerm]) from rfl,
+theorem badCtor_mem : Term.app "f" [cTerm] ∈ badCtorDb.terms := by
+  rw [show badCtorDb = badCtorDb₁.addTerm (.app "f" [dTerm]) from rfl,
     Database.addTerm_terms]
   exact Or.inl (Database.mem_addTerm _ _)
 
 /-- **`Database.DeclaredTerms` fails at a state the program reaches.** `f` is declared with
 no argument column, and the `set` wrote an entry term with one. -/
-theorem setCtor_not_declaredTerms : ¬ setCtorDb.DeclaredTerms := by
+theorem badCtor_not_declaredTerms : ¬ badCtorDb.DeclaredTerms := by
   intro h
-  obtain ⟨dc, hdc, hlen⟩ := h "f" [cTerm] setCtor_mem
-  rw [show setCtorDb.sig = setCtorSig.sig from rfl,
-    show setCtorSig.sig "f" = some (ctorDecl 0) from rfl, Option.some.injEq] at hdc
+  obtain ⟨dc, hdc, hlen⟩ := h "f" [cTerm] badCtor_mem
+  rw [show badCtorDb.sig = badCtorSig.sig from rfl,
+    show badCtorSig.sig "f" = some (ctorDecl 0) from rfl, Option.some.injEq] at hdc
   subst hdc
   simp [FnDecl.entryWidth, ctorDecl] at hlen
 
-theorem setCtorProgram_ctorDecls : setCtorProgram.CtorDecls := by
+theorem badCtorProgram_ctorDecls : badCtorProgram.CtorDecls := by
   intro c hc
-  simp only [setCtorProgram, List.mem_cons, List.not_mem_nil, or_false] at hc
+  simp only [badCtorProgram, List.mem_cons, List.not_mem_nil, or_false] at hc
   rcases hc with rfl | rfl | rfl | rfl | rfl <;> trivial
 
-/-- The width check does *not* reject it: a `set` fills the declared key and value columns,
-and it is the constructor's own `entryWidth` that the entry term then overshoots. -/
-theorem setCtorProgram_widthOk : setCtorProgram.WidthOk Database.empty.sig := by
-  have hdc : ∀ (sig : Signature) (g : FnName), sig g = some (ctorDecl 0) →
-      ∀ dc, sig g = some dc → dc = ctorDecl 0 := by
-    intro sig g hg dc h; exact Option.some.inj (hg.symm.trans h) |>.symm
-  refine ⟨by simp [ctorDecl], by simp [ctorDecl], by simp [ctorDecl], ?_, ?_, trivial⟩ <;>
-    exact ⟨fun dc h => by obtain rfl := hdc _ _ rfl dc h; exact ⟨rfl, rfl⟩, trivial,
-      ⟨⟨fun dc h => by obtain rfl := hdc _ _ rfl dc h; rfl, trivial⟩, trivial⟩⟩
+/-- Constructor applications are checked at their argument arity. -/
+theorem badCtorProgram_not_widthOk : ¬ badCtorProgram.WidthOk Database.empty.sig := by
+  rintro ⟨_, _, _, hs, _⟩
+  have h := hs.1 (ctorDecl 0) rfl
+  simp [FnDecl.entryWidth, ctorDecl] at h
 
-/-- The one check that rejects it. -/
-theorem setCtorProgram_not_setLegal :
-    ¬ setCtorProgram.SetLegal Database.empty.sig := by
-  rintro ⟨-, -, -, hs, -⟩
-  exact hs (by decide)
+theorem badCtorProgram_not_arityOk : Program.arityOk badCtorProgram Database.empty.sig = false := rfl
 
 /-! ## The rule head that names nothing
 
@@ -544,13 +466,6 @@ def staleSig : Signature := Function.update (fun _ => none) "M" (some staleDecl)
 theorem staleSig_mergeOf :
     Signature.mergeOf staleSig "M" = some (.merge [] [.var "new"]) := rfl
 
-/-- The program passes the head condition the refinement chain carries. -/
-theorem staleProgram_setLegal : Program.SetLegal staleProgram (fun _ => none) := by
-  refine ⟨trivial, ?_, ?_, ⟨trivial, trivial⟩, trivial, trivial⟩ <;>
-    · change Signature.mergeOf staleSig "M" ≠ none
-      rw [staleSig_mergeOf]
-      simp
-
 /-- …and the merge-body condition it carries. -/
 theorem staleProgram_mergesLegal : Signature.MergesLegal staleSig := by
   intro g dc body res hg hm
@@ -568,9 +483,9 @@ theorem staleProgram_mergesLegal : Signature.MergesLegal staleSig := by
 /-- **The static check rejects it.** `Program.Evaluable` asks that every applied name be a
 declared constructor, and `staleRule`'s head applies `f`. -/
 theorem staleProgram_not_evaluable : ¬ Program.Evaluable staleProgram (fun _ => none) := by
-  rintro ⟨-, -, -, hrule, -, -⟩
-  exact Signature.not_isCtor_of_none (show staleSig "f" = none from rfl)
-    (hrule.1 "f" (by simp [Expr.fns, Expr.fnsList])).2
+  rintro ⟨_, _, _, hrule, _, _⟩
+  have h : (staleSig "f").isSome = true := hrule.1.2.1
+  exact Bool.noConfusion h
 
 /-- **And the head is stuck wherever the program can get to.** At every state
 `staleProgram` reaches, `f` is still undeclared, so the rule's head evaluates under no

@@ -14,6 +14,16 @@ theorem Expr.eval_isSome_of_scoped {sig : Signature} {e : Expr} {Γ : Scope} {σ
     ∃ t, e.eval sig σ = some t :=
   e.eval_isSome (fun v hv => (hm v).mp (h v hv)) he
 
+theorem Expr.evalAtom_isSome_of_scoped {sig : Signature} {e : Expr} {Γ : Scope} {σ : Env}
+    (hm : Γ.Models σ) (h : e.Scoped Γ) (he : e.AtomEvaluable sig) :
+    ∃ t, e.evalAtom sig σ = some t := by
+  cases e with
+  | lit l => exact ⟨.lit l, rfl⟩
+  | var v => exact Expr.eval_isSome_of_scoped hm h he
+  | app f cols =>
+    obtain ⟨ts, hts⟩ := Expr.evalList_isSome cols (fun v hv => (hm v).mp (h v hv)) he.2.2
+    exact ⟨.app f ts, by simp [Expr.evalAtom, he.1, he.2.1, hts]⟩
+
 /-- An `Evaluable` application builds, so its value is not a literal. This is what
 `Action.Evaluable` asks of a `union` operand, and what `evalAction`'s check then needs. -/
 theorem Expr.not_isLit_of_isApp {sig : Signature} {e : Expr} {σ : Env} {t : Term}
@@ -31,8 +41,8 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
     ∃ db', evalAction db a = some db' ∧ Γ.Models db'.env := by
   cases a with
   | expr e =>
-    obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm h.2 he
-    exact ⟨db.addTerm t, by simp [evalAction, Expr.evalAtom_of_eval ht], hm⟩
+    obtain ⟨t, ht⟩ := Expr.evalAtom_isSome_of_scoped hm h.2 he
+    exact ⟨db.addTerm t, by simp [evalAction, ht], hm⟩
   | union e₁ e₂ =>
     obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1.2
     obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2.2
@@ -127,8 +137,7 @@ anywhere in `MergeClosure`. On the constructor fragment there is nothing to stop
 `hns` is not removable: a `Cmd.saturate` reaches a state only if its ruleset *has* a
 fixpoint, and `(rule () ((f (g x))))` under a saturating run has none. Scope and
 evaluability are properties of the syntax and cannot see that, so the totality theorem is
-for the fragment whose round counts are written down.
- -/
+for the fragment whose round counts are written down. -/
 theorem programStep_isSome {p : Program} (hns : p.NoSaturate) (h : WellScoped p)
     (he : p.Evaluable Database.empty.sig) :
     ∃ db, ProgramStep Database.empty p db := by

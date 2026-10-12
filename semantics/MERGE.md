@@ -12,18 +12,25 @@ A constructor's entry is the term `f(args)`. A merge function's entry is
 records equations, and `Database.terms` consists of the terms related to themselves by
 `Cong`. Building an entry records it and its subterms through reflexive equations.
 
-Expressions evaluate constructors and primitives under a signature and environment.
-A merge-function read is a query atom, `Pattern.values`; it cannot occur inside an action
-expression. `Database.Out` permits any recorded output at a congruent key. Since the
-specification keeps old entries, this need not be the implementation's current output.
+Value expressions evaluate constructors, primitives, and variables under a signature and
+environment. A complete atom such as `(LowerBound expr bound)` reads a function row in a
+query and records one in an action. Its declaration determines where the key columns end
+and the output columns begin. Entry atoms cannot be children of value expressions or
+operands of equality and union.
+
+`Database.Out` permits any recorded output at a congruent key. Since the specification
+keeps old entries, this need not be the implementation's current output. Equality patterns
+retain a held witness congruent to both evaluated sides: `(= term term)` succeeds only
+when that class exists in the database.
 
 The model has integer and Boolean literals but no general sort system. Static scope,
 declaration, union, and write checks live in [Scope.lean](EgglogSemantics/Spec/Scope.lean).
 The executable `arityOk` and `noLookup` checks in
 [Check.lean](EgglogSemantics/Impl/Check.lean) are used before differential-test emission.
-Arity checking enforces the declared key/output split, which is stronger than checking
-only the total column count. These checks are separate from the step relation and from
-the narrower write-width conditions used in the merge refinement proof.
+Arity checking requires an entry atom's full column count to match the declaration.
+Nested expressions use constructor arities and must evaluate as values. These checks are
+separate from the step relation; the interpreter indexes an entry only when its columns
+have the declared width.
 
 ## Collisions and command steps
 

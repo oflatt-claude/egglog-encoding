@@ -43,15 +43,14 @@ def Expr.toEggArgs : List Expr → String
 end
 
 /-- One expression per value column, written as egglog's tuple form `(values e₀ e₁ …)`
-when there is more than one and bare when there is exactly one. `Spec/Syntax.lean` takes
-the list the tuple denotes, in `Action.set`, `MergeSpec.merge` and `Pattern.values`; this
-is where the two notations meet. -/
+when there is more than one and bare when there is exactly one. Complete atoms store
+these columns after their keys; the emitter translates them to Rust egglog syntax. -/
 def Expr.valuesToEgg : List Expr → String
   | [e] => e.toEgg
   | res => "(values " ++ String.intercalate " " (res.map Expr.toEgg) ++ ")"
 
-/-- A query fact. `Pattern.values` is egglog's row atom, whose surface form depends on the
-width: `(= v (f a…))` at one value column and `(= (values v…) (f a…))` at more, since
+/-- A query fact. A complete table atom is emitted using Rust egglog's lookup syntax,
+whose surface form depends on the output width: `(= v (f a…))` at one value column and `(= (values v…) (f a…))` at more, since
 `values` is not a function name and egglog answers "Unbound function values" if the tuple
 form is used on a one-column function. -/
 def Pattern.toEgg (sig : Signature) : Pattern → String
@@ -76,7 +75,7 @@ def Rule.toEgg (sig : Signature) (r : Rule) : String :=
     ++ String.intercalate " " (r.actions.map (Action.toEgg sig)) ++ ")"
     ++ (if r.ruleset = "" then "" else " :ruleset " ++ r.ruleset) ++ ")"
 
-/-- The merged value, in egglog's tuple notation. Shared with `Action.set`. -/
+/-- The merged value, in egglog's tuple notation. Also used when emitting entry writes. -/
 abbrev MergeSpec.resultToEgg : List Expr → String := Expr.valuesToEgg
 
 /-- A merge specification as egglog source. `.noMerge` is `:no-merge`; a constructor has

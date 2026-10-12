@@ -12,14 +12,15 @@ one shared union-find table:
 
 | Table | Shape | Meaning |
 | --- | --- | --- |
-| `@UF` | `t ↦ (parent, proof)` | An edge proving `t = parent` |
-| `@fView` | `children ↦ (id, proof)` | An entry proving `f(children) = id` |
-| `@fTerm` | `(children, id) ↦ ()` | A record of a built application; the encoder never reads it |
+| `@UF` | `(@UF t parent proof)` | An edge proving `t = parent` |
+| `@fView` | `(@fView children… id proof)` | An entry proving `f(children) = id` |
+| `@fTerm` | `(@fTerm children… id)` | A record of a built application; the encoder never reads it |
 
 Ids are structural terms: building `f` over children `cs` uses `.app f cs` as its id.
 `encodeBuild` returns that expression and writes the term and view entries. It performs
 no table lookup in an action. Rule queries read view entries and bind their id and proof
-columns; `encodeQuery` flattens nested applications into those reads.
+columns; `encodeQuery` flattens nested applications into those reads. Both reads and writes
+use complete atoms, with outputs following the keys.
 
 A source `union` writes an explicit `@UF` edge. Both `@UF` and the views have merge bodies
 that retain the smaller id and write the displaced id's edge to it. The surviving row
@@ -64,8 +65,8 @@ views; the relation itself performs no union-find walk.
 [Correspond.lean](EgglogSemantics/Encoding/Correspond.lean) provides `sameClassF` and
 proves that this executable decision procedure agrees with the relation.
 
-`Program.EncodeDomain` requires constructor declarations, legal writes (hence no source
-`set`), no primitive applications or generated `@` names, compatible function arities,
+`Program.EncodeDomain` requires constructor declarations, no primitive applications or
+generated `@` names, compatible function arities,
 queries supported by the flattening, and declared and query-scoped rule heads. Its
 `noLitUnion` condition prevents union operands from evaluating to literals.
 The declaration's fields in `Encode.lean` give the exact restrictions.

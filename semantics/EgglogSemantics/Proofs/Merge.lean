@@ -1552,25 +1552,13 @@ theorem Database.out_self {db : Database} {f : FnName} {as vs : List Term}
     (hmem : Term.app f (as ++ vs) ∈ db.terms) (hargs : ∀ a ∈ as, a ∈ db.terms) :
     db.Out f as vs := ⟨as, CongList.refl hargs, hmem⟩
 
-/-! ### The column widths
+/-! ### Row widths
 
-`Action.SetLegal` asks that a `set`'s head be a merge function and says nothing about how
-many columns it writes. `MergeStep.collide` carries two `arity` premises — without them the
-key/value split `key = []` fires every entry of `f` against every other — so the widths have
-to come from somewhere, and the only place they can come from is the front end.
-`Impl/Check.lean`'s `arityOk` is where egglog checks them.
-
-**This is a hypothesis the refinement chain did not carry before**, because before the split
-there was nothing to split: a row was `⟨f, as, vs⟩` and `MergeStep` read the two halves off
-it. It is threaded as `Action.SetWidthOk`, bundled with `Action.SetLegal` into
-`Action.WriteLegal`, and it is what `FDatabase.IndexOk.width` records.
-
-It is the `set` clause of `Spec/Scope.lean`'s `Action.WidthOk` and **not** that check:
-`Action.WidthOk` also constrains every application inside an *expression*, and that half is
-not preserved by `Function.update` at a fresh name — an action applying an as-yet
-undeclared `f` satisfies it vacuously and stops satisfying it the moment `f` is declared,
-which would make `Action.WriteLegal.update` false. The interpreter's chain needs a check
-that survives a declaration, so it carries only the clause it spends. -/
+`FDatabase.addAtom` indexes an entry only at its declared width. The former dedicated
+write-action checks below are consequently automatic; they remain compatibility
+predicates in the refinement interfaces. The substantive width invariant is
+`FDatabase.IndexOk.width`, and merge results still require the declared output count
+through `Signature.MergesLegal`. -/
 def Action.SetWidthOk : Action → Signature → Prop
   | _, _ => True
 
@@ -1578,8 +1566,7 @@ def Action.SetWidthOk : Action → Signature → Prop
   | [], _ => True
   | a :: as, sig => a.SetWidthOk sig ∧ Actions.SetWidthOk as sig
 
-/-- `Action.SetLegal` and `Action.SetWidthOk` together: a `set` writes a merge function's
-table, at that declaration's column widths. -/
+/-- The two automatic structural write predicates used by the refinement interfaces. -/
 def Action.WriteLegal (a : Action) (sig : Signature) : Prop :=
   a.SetLegal sig ∧ a.SetWidthOk sig
 

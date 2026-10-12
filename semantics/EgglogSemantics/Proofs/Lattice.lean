@@ -409,10 +409,10 @@ theorem pB_reaches_entryB {db : Database}
   obtain ⟨_, hact, hcl⟩ := h3
   simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
-  obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
-  rw [show eB = Expr.app "b" [] from rfl] at hout
-  rw [mevalList_nil hargs,
-    mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hout] at hcl
+  obtain ⟨t, ht, rfl⟩ := hact
+  obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv (show Prim.ofName "f" = none from rfl) ht
+  rw [show eB = Expr.app "b" [] from rfl] at hts
+  rw [mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hts] at hcl
   exact (MergeClosure.contained hcl).terms (Database.mem_addTerm _ _)
 
 set_option maxHeartbeats 2000000 in
@@ -603,10 +603,10 @@ theorem pC_reaches_entryA {db : Database}
   obtain ⟨_, hact, hcl⟩ := h2
   simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
-  obtain ⟨as, hargs, vs, hout, rfl⟩ := hact
-  rw [show eA = Expr.app "a" [] from rfl] at hout
-  rw [mevalList_nil hargs,
-    mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hout] at hcl
+  obtain ⟨t, ht, rfl⟩ := hact
+  obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv (show Prim.ofName "f" = none from rfl) ht
+  rw [show eA = Expr.app "a" [] from rfl] at hts
+  rw [mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hts] at hcl
   exact (ProgramStep.contained r2).terms
     ((MergeClosure.contained hcl).terms (Database.mem_addTerm _ _))
 
@@ -751,15 +751,7 @@ theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName} {res₀ 
     (hstep : d.execCmdM (Cmd.action (.expr (.app f [e]))) = some d')
     (htail : d'.ProgramLegal rest) :
     d.ProgramLegal (Cmd.action (.expr (.app f [e])) :: rest) := by
-  refine ⟨⟨?_, ?_⟩, trivial, ?_, ?_⟩
-  · change Signature.mergeOf d.sig f ≠ none
-    rw [hsig, mergeOf_update_self hdc]
-    simp
-  · change ∀ dc', d.sig f = some dc' → _ ∧ _
-    intro dc' hdc'
-    rw [hsig, Function.update_self, Option.some.injEq] at hdc'
-    subst hdc'
-    exact ⟨harity.symm, hout.symm⟩
+  refine ⟨⟨trivial, trivial⟩, trivial, ?_, ?_⟩
   · change Signature.MergesLegal d.sig
     rw [hsig]
     exact mergesLegal_update baseSig_allConstructors hdc hwidth

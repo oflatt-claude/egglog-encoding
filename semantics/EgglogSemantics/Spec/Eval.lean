@@ -3,13 +3,11 @@ import EgglogSemantics.Spec.Congruence
 /-!
 # Evaluating expressions and actions
 
-An expression denotes a ground term; an action turns a database into a database. This file
-is `Option`-valued: what a command computes, deterministically. The nondeterminism —
-merge closure, rule firing — is `Spec/Step.lean`. Evaluation is partial in five ways, all
-`none`: an unbound variable, an **undeclared** name, a declared merge function — which is a
-*lookup*, and so the query atom `Pattern.values` rather than an expression — a
-primitive given operands of the wrong sort, and a `union` on a literal. Actions only ever
-add equations.
+Value expressions build ground terms; complete atoms may also describe function entries.
+Actions add equations to the database. Evaluation returns `none` for unbound variables,
+undeclared heads, table applications in value positions, invalid primitive operands, and
+unions on literals. Atom columns use value evaluation. Rule firing and merge closure
+are specified separately in `Spec/Step.lean`.
 -/
 
 namespace Egglog
