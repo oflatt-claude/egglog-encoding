@@ -1198,14 +1198,16 @@ when the graphs are isomorphic. The original nested baseline can miss a goal tha
 the encoding reaches, and graph agreement with that baseline is not required.
 Elapsed seconds measure
 the whole run, including unsuccessful runs, rather than time to a successful goal.
-Both Markdown and HTML reports start with a timing matrix: one row per benchmark,
-with columns for `encoding`, `encoding-no-aliasing`, `ref-multi`, and `ref-nested`.
+Both Markdown and HTML reports start with two timing tables, each with one row per
+benchmark: `egglog` versus `ref-multi`, then `egglog-no-aliasing` versus `ref-nested`.
+The tables label the encoding as `egglog`; CLI selectors and cache identities remain
+`encoding` and `encoding-no-aliasing`.
 Cells contain elapsed seconds, including unsuccessful runs; missing times are marked
 with a dash. `ref-nested-snapshot` still runs for correctness and appears in the full
 diagnostic table, alongside goals, round budgets, counts, and saturation. Its timing
 is never used in place of the syntactic `ref-nested` baseline. Benchmarks with multiple
 round budgets get distinct row labels. `--long` changes only the full diagnostic table.
-An error banner immediately after the summary lists missed goals, missing results,
+An error banner immediately after the timing tables lists missed goals, missing results,
 count mismatches, and unsuccessful or inconclusive required isomorphism comparisons.
 The same checks determine the nonzero exit status, including when loading saved
 results. An explicit `--no-counts` report states that count/isomorphism checks are disabled;

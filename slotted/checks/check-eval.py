@@ -238,10 +238,10 @@ def goal_reporting():
         nested.goal = outcome
         head, table = R.pivot([enc, nested], E.SIDES)
         cells = dict(zip(head, table[0], strict=True))
-        enc_goal = next(k for k in head if k.startswith("encoding goal"))
+        enc_goal = next(k for k in head if k.startswith("egglog goal"))
         nested_goal = next(k for k in head if k.startswith("ref-nested goal"))
         assert cells[enc_goal] == "yes" and cells[nested_goal] == outcome
-        assert cells["encoding elapsed (s)"] == "2.3"
+        assert cells["egglog elapsed (s)"] == "2.3"
         assert cells["ref-nested elapsed (s)"] == "1.2"
         assert cells["ref-multi goal"] == cells["ref-multi elapsed (s)"] == ""
         assert R.graph_cell(nested) in table[0]
@@ -259,9 +259,12 @@ def summary_reporting():
     nested.goal, nested.seconds = "no", 0.5
     snapshot = E.Row("sdql", enc.case, "ref-nested-snapshot", 30, 44)
     snapshot.goal, snapshot.seconds = "yes", 9.9
-    head, table = R.summary([nested, enc, snapshot], E.SIDES)
-    assert head == ("Benchmark", "encoding", "encoding-no-aliasing", "ref-multi", "ref-nested")
-    assert table == [["MMM (1st)", "1.2", "—", "—", "0.5"]]
+    head, table = R.summary([nested, enc, snapshot], ("encoding", "ref-multi"))
+    assert head == ("Benchmark", "egglog", "ref-multi")
+    assert table == [["MMM (1st)", "1.2", "—"]]
+    head, table = R.summary([nested, enc, snapshot], ("encoding-no-aliasing", "ref-nested"))
+    assert head == ("Benchmark", "egglog-no-aliasing", "ref-nested")
+    assert table == [["MMM (1st)", "—", "0.5"]]
     # The snapshot timing must never be relabelled as the syntactic baseline.
     assert R.summary([snapshot], E.SIDES)[1][0][-1] == "—"
 
@@ -297,7 +300,8 @@ def summary_reporting():
         path, page = Path(tmp) / "report.jsonl", Path(tmp) / "report.html"
         record = "".join(json.dumps(row.as_dict("summary")) + "\n" for row in rows)
         path.write_text(record)
-        summary = R.markdown(*R.summary(rows, E.SIDES), right_align=True)
+        summary = R.markdown(*R.summary(rows, ("encoding", "ref-multi")), right_align=True)
+        nested_summary = R.markdown(*R.summary(rows, ("encoding-no-aliasing", "ref-nested")), right_align=True)
         for long in (False, True):
             result = subprocess.run(
                 [
@@ -316,16 +320,19 @@ def summary_reporting():
                 timeout=30,
             )
             assert result.returncode == 1, result.stderr
-            assert result.stdout.startswith("## Summary\n\n" + summary)
+            assert result.stdout.startswith("## Multipattern matching\n\n" + summary)
+            assert "## Nested matching\n\n" + nested_summary in result.stdout
             assert result.stdout.count("## Full report") == 1
             assert result.stdout.count(R.ERROR_TITLE) == 1
+            assert result.stdout.index("## Nested matching") < result.stdout.index(R.ERROR_TITLE)
             assert result.stdout.index(R.ERROR_TITLE) < result.stdout.index("## Full report")
             assert "goal not reached" in result.stdout.split(R.ERROR_TITLE)[1]
             full_table = (R.LONG_HEAD, [R.long_cells(r) for r in rows]) if long else R.pivot(rows, E.SIDES)
             assert R.markdown(*full_table) in result.stdout
             markup = page.read_text()
-            assert markup.count("<table>") == 2
-            assert "<h2>Summary</h2>" in markup and "<h2>Full report</h2>" in markup
+            assert markup.count("<table>") == 3
+            assert markup.count('class="summary"') == 2
+            assert "<h2>Nested matching</h2>" in markup and "<h2>Full report</h2>" in markup
             assert 'role="alert"' in markup and f"<h2>{R.ERROR_TITLE}</h2>" in markup
             assert markup.index('role="alert"') < markup.index("<h2>Full report</h2>")
             assert "&lt;case&amp;&gt;" in markup and "<case&>" not in markup
@@ -539,11 +546,14 @@ def nested_comparison_policy():
         assert len(loaded) == 3 and loaded[0].verdict(loaded[1]) == "isomorphic"
         for long in (False, True):
             sections = R.report_sections(loaded, E.SIDES, long)
-            assert all("encoding-no-aliasing" in R.markdown(head, table) for _, _, head, table in sections)
+            assert sections[0][2] == ("Benchmark", "egglog", "ref-multi")
+            assert sections[1][2] == ("Benchmark", "egglog-no-aliasing", "ref-nested")
+            assert "egglog-no-aliasing" in R.markdown(*sections[-1][2:])
+            assert "encoding" not in R.markdown(*sections[-1][2:])
         head, table = R.pivot(loaded, E.SIDES)
         assert len(table) == 1
         cells = dict(zip(head, table[0], strict=True))
-        assert cells["encoding-no-aliasing vs ref-nested-snapshot"] == "isomorphic"
+        assert cells["egglog-no-aliasing vs ref-nested-snapshot"] == "isomorphic"
         assert len(R.summary(loaded, E.SIDES)[1]) == 1
 
 
@@ -560,7 +570,7 @@ def combined_comparisons():
     cells = dict(zip(head, table[0], strict=True))
     for encoding, reference in E.EXACT_PAIRS.items():
         enc, ref = by_side[encoding], by_side[reference]
-        assert cells[f"{encoding} vs {reference}"] == "isomorphic"
+        assert cells[f"{R.side_label(encoding)} vs {reference}"] == "isomorphic"
         # The other encoding's successful comparison cannot mask this one's failure.
         for verdict in ("different: node sets", "inconclusive: cap"):
             comparison = E.Comparison(enc.observation, ref.observation, verdict)
@@ -571,7 +581,7 @@ def combined_comparisons():
                     f"ΣMMM (1st) [{enc.rounds} rounds]: {encoding} vs {reference}: {verdict}"
                 ]
                 head, table = R.pivot(rows, E.SIDES)
-                assert dict(zip(head, table[0], strict=True))[f"{encoding} vs {reference}"] == verdict
+                assert dict(zip(head, table[0], strict=True))[f"{R.side_label(encoding)} vs {reference}"] == verdict
         with patch.object(enc, "observation", "new-run"):
             assert not E.successful(rows, E.SIDES, True)
             assert "selected observations have not been compared" in E.failures(rows, E.SIDES, True)[0]
@@ -594,7 +604,7 @@ def combined_comparisons():
                 timeout=30,
             )
             assert result.returncode == 0, (result.stdout, result.stderr)
-            assert "encoding-no-aliasing" in result.stdout and "ref-nested-snapshot" in result.stdout
+            assert "egglog-no-aliasing" in result.stdout and "ref-nested-snapshot" in result.stdout
 
         newer = E.Row.from_dict(by_side["encoding"].as_dict("newer"))
         newer.observation = "different-encoding-run"
@@ -669,9 +679,10 @@ def parallel_collection():
     assert all(r.jobs == 2 for r in loaded)
     assert not E.successful(loaded, E.SIDES, True)
     sections = R.report_sections(loaded, E.SIDES)
-    assert "contention" in sections[0][1]
-    assert "worker limits are in the full report" in sections[0][1]
-    assert len(sections[0][3]) == 2 and all(len(row) == 5 for row in sections[0][3])
+    notes = " ".join(note for _, note, _, _ in sections)
+    assert "contention" in notes and "worker limits are in the full report" in notes
+    for _, _, head, table in sections[:2]:
+        assert len(head) == 3 and len(table) == 2 and all(len(row) == 3 for row in table)
 
     # The child must receive CLI configuration, not its freshly imported defaults.
     args.study = "array"

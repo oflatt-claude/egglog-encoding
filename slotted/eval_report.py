@@ -21,6 +21,11 @@ SIDES = ("encoding", "encoding-no-aliasing", "ref-multi", "ref-nested-snapshot",
 EXACT_PAIRS = {"encoding": "ref-multi", "encoding-no-aliasing": "ref-nested-snapshot"}
 
 
+def side_label(side):
+    """Display names; CLI selectors and cached treatment identities stay stable."""
+    return {"encoding": "egglog", "encoding-no-aliasing": "egglog-no-aliasing"}.get(side, side)
+
+
 def quiet_progress(row, phase):
     """Library callers collect observations without displaying CLI progress."""
 
@@ -220,7 +225,7 @@ def paper_cell(r):
 
 def long_cells(r):
     """One row's cells, as text, in `LONG_HEAD` order: the record of one run."""
-    side = r.side + reference_label(r)
+    side = side_label(r.side) + reference_label(r)
     counts = ["" if n is None else str(n) for n in (r.classes, r.nodes)]
     return [
         r.study,
@@ -240,7 +245,7 @@ def long_cells(r):
 
 
 def vs_cell(r):
-    return "; ".join(f"{side}: {comparison.verdict}" for side, comparison in r.vs_ref.items())
+    return "; ".join(f"{side_label(side)}: {comparison.verdict}" for side, comparison in r.vs_ref.items())
 
 
 def seconds_cell(r):
@@ -274,7 +279,8 @@ def pivot(rows, sides):
     columns = []
     for side in sides:
         label = reference_label(*(r for r in rows if r.side == side))
-        columns.extend((f"{side} goal{label}", f"{side} elapsed (s)", f"{side} graph (classes/nodes, sat.)"))
+        name = side_label(side)
+        columns.extend((f"{name} goal{label}", f"{name} elapsed (s)", f"{name} graph (classes/nodes, sat.)"))
     # the encoding's graph against each reference side it was compared with
     compared = [(e, s) for e in sides for s in sides if any(r.side == e and s in r.vs_ref for r in rows)]
     head = [
@@ -283,7 +289,7 @@ def pivot(rows, sides):
         "rounds",
         "rules",
         *columns,
-        *(f"{e} vs {s}" for e, s in compared),
+        *(f"{side_label(e)} vs {side_label(s)}" for e, s in compared),
         "paper (iters, nodes, classes, sat.)",
     ]
     by_case, order = {}, []
@@ -321,7 +327,7 @@ def workload_label(study, case, rules):
 def summary(rows, sides):
     """One benchmark per row, one timing per treatment; keep snapshot timings diagnostic."""
     shown = tuple(side for side in sides if side != "ref-nested-snapshot")
-    head = ("Benchmark", *shown)
+    head = ("Benchmark", *(side_label(side) for side in shown))
     groups = {}
     for row in rows:
         groups.setdefault(row.workload(), {})[row.side] = row
@@ -340,7 +346,7 @@ def report_sections(rows, sides, long=False, *, counts=True):
     note = SUMMARY_NOTE
     note += (
         " Checks require equal class/node counts and verified isomorphism for "
-        "encoding ↔ ref-multi and encoding-no-aliasing ↔ ref-nested-snapshot (when both selected)."
+        "egglog ↔ ref-multi and egglog-no-aliasing ↔ ref-nested-snapshot (when both selected)."
         if counts
         else " Class/node counts and isomorphism checks are disabled (--no-counts)."
     )
@@ -349,7 +355,19 @@ def report_sections(rows, sides, long=False, *, counts=True):
             " Includes parallel timings with CPU and memory contention; worker limits are in the full report. "
             "Use --jobs 1 for serial timings."
         )
-    return [("Summary", note, *summary(rows, sides)), ("Full report", "", *full)]
+    pairs = (
+        ("Multipattern matching", ("encoding", "ref-multi")),
+        ("Nested matching", ("encoding-no-aliasing", "ref-nested")),
+    )
+    sections = []
+    for title, pair in pairs:
+        shown = tuple(side for side in pair if side in sides)
+        if shown:
+            sections.append((title, "", *summary(rows, shown)))
+    if sections:
+        title, _, head, table = sections[-1]
+        sections[-1] = title, note, head, table
+    return [*sections, ("Full report", "" if sections else note, *full)]
 
 
 def markdown(head, table, *, right_align=False):
@@ -374,11 +392,12 @@ def markdown(head, table, *, right_align=False):
 def markdown_report(sections, errors=()):
     blocks = []
     for title, note, head, table in sections:
-        blocks.append(
-            f"## {title}\n\n{markdown(head, table, right_align=title == 'Summary')}" + (f"\n\n{note}" if note else "")
-        )
-        if title == "Summary" and errors:
+        if title == "Full report" and errors:
             blocks.append(f"## {ERROR_TITLE}\n\n" + "\n".join(f"- {error}" for error in errors))
+        blocks.append(
+            f"## {title}\n\n{markdown(head, table, right_align=title != 'Full report')}"
+            + (f"\n\n{note}" if note else "")
+        )
     return "\n\n".join(blocks)
 
 
@@ -388,25 +407,26 @@ def html(sections, errors=()):
 
     contents = []
     for title, note, head, table in sections:
+        if title == "Full report" and errors:
+            contents.append(
+                f'<aside class="errors" role="alert"><h2>{ERROR_TITLE}</h2><ul>'
+                + "".join(f"<li>{h.escape(error)}</li>" for error in errors)
+                + "</ul></aside>"
+            )
         head_cells = "".join(f"<th>{h.escape(c)}</th>" for c in head)
         body = []
         for cells in table:
             row_class = ' class="group"' if cells[0] else ""
             body.append(f"<tr{row_class}>" + "".join(f"<td>{h.escape(c)}</td>" for c in cells) + "</tr>")
+        section_class = ' class="summary"' if title != "Full report" else ""
         contents.append(
-            f"<section><h2>{h.escape(title)}</h2><div class=scroll>"
+            f"<section{section_class}><h2>{h.escape(title)}</h2><div class=scroll>"
             f"<table><thead><tr>{head_cells}</tr></thead><tbody>\n"
             + "\n".join(body)
             + "\n</tbody></table></div>"
             + (f"<p>{h.escape(note)}</p>" if note else "")
             + "</section>"
         )
-        if title == "Summary" and errors:
-            contents.append(
-                f'<aside class="errors" role="alert"><h2>{ERROR_TITLE}</h2><ul>'
-                + "".join(f"<li>{h.escape(error)}</li>" for error in errors)
-                + "</ul></aside>"
-            )
     return (
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'>"
         "<title>slotted eval</title>"
@@ -414,12 +434,12 @@ def html(sections, errors=()):
         "section{margin-bottom:2.5em}.scroll{overflow-x:auto}p{max-width:85ch;color:#555;line-height:1.5}"
         "th,td{border:1px solid #bbb;padding:4px 10px;text-align:left;white-space:nowrap}"
         "th{background:#eee}tr:nth-child(even){background:#f7f7f7}"
-        "section:first-of-type th,section:first-of-type td{border:0;padding:6px 12px}"
-        "section:first-of-type tr{background:none}"
-        "section:first-of-type th{background:none;border-bottom:2px solid #777}"
-        "section:first-of-type tr.group td{border-top:1px solid #ccc}"
-        "section:first-of-type th:nth-child(n+2),section:first-of-type td:nth-child(n+2){text-align:right}"
-        "section:first-of-type td{font-variant-numeric:tabular-nums}"
+        ".summary th,.summary td{border:0;padding:6px 12px}"
+        ".summary tr{background:none}"
+        ".summary th{background:none;border-bottom:2px solid #777}"
+        ".summary tr.group td{border-top:1px solid #ccc}"
+        ".summary th:nth-child(n+2),.summary td:nth-child(n+2){text-align:right}"
+        ".summary td{font-variant-numeric:tabular-nums}"
         ".errors{border:3px solid #b91c1c;background:#fef2f2;color:#7f1d1d;padding:1em 1.5em;margin:1.5em 0}"
         ".errors h2{margin-top:0}.errors li{margin:.5em 0;overflow-wrap:anywhere}"
         "</style>\n" + "\n".join(contents) + "\n"
