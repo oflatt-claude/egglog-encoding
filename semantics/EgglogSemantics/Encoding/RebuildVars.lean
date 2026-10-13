@@ -27,14 +27,6 @@ theorem getElem_rebuildVarNames {k i : Nat} (hi : i < k) :
     (rebuildVarNames k)[i]'(by rw [length_rebuildVarNames]; exact hi) = "@c" ++ toString i := by
   simp [rebuildVarNames]
 
-theorem atPrefix_rebuildVarNames {k : Nat} {v : Var} (h : v ∈ rebuildVarNames k) :
-    "@".isPrefixOf v = true := by
-  rw [rebuildVarNames, List.mem_map] at h
-  obtain ⟨i, -, rfl⟩ := h
-  rw [String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
-    show ("@c").toList = ['@', 'c'] from by decide]
-  exact ⟨'c' :: (toString i).toList, rfl⟩
-
 theorem not_mem_rebuildVarNames {v : Var} {c : Char} (hv : v.toList = ['@', c]) (hc : c ≠ 'c')
     (k : Nat) : v ∉ rebuildVarNames k := by
   intro h

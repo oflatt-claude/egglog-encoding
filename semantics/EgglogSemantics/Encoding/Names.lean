@@ -23,10 +23,6 @@ def rebuildRuleset : RulesetName := "@rebuild"
 /-- The view table for source constructor `f`; its key is the tuple of child ids. -/
 def viewName (f : FnName) : FnName := "@" ++ f ++ "View"
 
-/-- The legacy encoder's construction-history relation. The congruence pass does not
-emit this table. -/
-def termName (f : FnName) : FnName := "@" ++ f ++ "Term"
-
 /-- The `n`th generated variable. -/
 def freshVar (n : Nat) : Var := "@v" ++ toString n
 
@@ -56,10 +52,6 @@ theorem Prim.ofName_of_atPrefix {f : FnName} (h : "@".isPrefixOf f = true) :
   Prim.ofName_of_atPrefix (by
     simp [viewName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
 
-@[simp] theorem prim_termName (f : FnName) : Prim.ofName (termName f) = none :=
-  Prim.ofName_of_atPrefix (by
-    simp [termName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
-
 /-- View names identify their source constructors uniquely. -/
 theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by
   have h2 := congrArg String.toList h
@@ -78,6 +70,5 @@ theorem atPrefix_freshVar (n : Nat) : "@".isPrefixOf (freshVar n) = true := by
   rw [freshVar, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
     show ("@v").toList = ['@', 'v'] from by decide]
   exact ⟨'v' :: (toString n).toList, rfl⟩
-
 
 end Egglog

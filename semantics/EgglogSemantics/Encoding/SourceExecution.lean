@@ -42,7 +42,6 @@ theorem mem_program_ctors {Q : Program} {c : Cmd} (hc : c ∈ Q) {p : FnName × 
   rw [Program.ctors, List.mem_dedup, List.mem_flatMap]
   exact ⟨c, hc, hp⟩
 
-
 /-- Every expression builds constructor values. Union operands may be variables;
 the surrounding state supplies their nonliteral property. -/
 def Action.Builds : Action → Signature → Prop
@@ -53,39 +52,10 @@ def Action.Builds : Action → Signature → Prop
   | [], _ => True
   | a :: as, sig => a.Builds sig ∧ Actions.Builds as sig
 
-/-- **Evaluability follows the signature up.** `Expr.Evaluable` reads `Signature.IsCtor` and
-nothing else, so a target signature declaring every constructor the source's does carries the
-source head's own condition across — which is what `Egglog.UnionsFire`'s signature clause is
-spent on. -/
-theorem Expr.Evaluable.mono_sig {sig sig' : Signature}
-    (hsub : ∀ f, sig.IsCtor f → sig'.IsCtor f) {e : Expr} (h : e.Evaluable sig) :
-    e.Evaluable sig' := fun f hf => ⟨(h f hf).1, hsub f (h f hf).2⟩
-
-@[inherit_doc Expr.Evaluable.mono_sig]
-theorem Action.Builds.mono_sig {sig sig' : Signature}
-    (hsub : ∀ f, sig.IsCtor f → sig'.IsCtor f) {a : Action} (h : a.Builds sig) :
-    a.Builds sig' := by
-  cases a with
-  | expr e => exact Expr.Evaluable.mono_sig hsub h
-  | union e₁ e₂ =>
-      exact ⟨Expr.Evaluable.mono_sig hsub h.1, Expr.Evaluable.mono_sig hsub h.2⟩
-
-@[inherit_doc Expr.Evaluable.mono_sig]
-theorem Actions.Builds.mono_sig {sig sig' : Signature}
-    (hsub : ∀ f, sig.IsCtor f → sig'.IsCtor f) :
-    ∀ {as : List Action}, Actions.Builds as sig → Actions.Builds as sig'
-  | [], _ => trivial
-  | _ :: _, h => ⟨Action.Builds.mono_sig hsub h.1, Actions.Builds.mono_sig hsub h.2⟩
-
-
 /-! ##### Literal-free terms and states -/
 
 /-- No literal occurs in `t`. -/
 def Term.LitFree (t : Term) : Prop := ∀ s ∈ t.subterms, ¬ s.isLit
-
-theorem Term.not_litFree_lit {l : Lit} : ¬ Term.LitFree (.lit l) := by
-  intro h
-  exact h _ (Term.self_mem_subterms _) rfl
 
 theorem Term.litFree_app {f : FnName} {args : List Term} :
     Term.LitFree (.app f args) ↔ ∀ a ∈ args, Term.LitFree a := by
@@ -160,13 +130,6 @@ end
 theorem noPrim_fns {e : Expr} (hp : ∀ fk ∈ e.ctors, Prim.ofName fk.1 = none) :
     ∀ f ∈ e.fns, Prim.ofName f = none := fun f hf =>
   let ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hf
-  hp (f, k) hk
-
-@[inherit_doc noPrim_fns]
-theorem noPrim_fnsList {es : List Expr}
-    (hp : ∀ fk ∈ Expr.ctorsList es, Prim.ofName fk.1 = none) :
-    ∀ f ∈ Expr.fnsList es, Prim.ofName f = none := fun f hf =>
-  let ⟨k, hk⟩ := Expr.exists_ctorList_of_mem_fnsList hf
   hp (f, k) hk
 
 /-! ##### One action keeps the state literal-free -/
@@ -344,7 +307,6 @@ theorem programStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLit
         (fun c' hc' => hn c' (List.mem_cons_of_mem c hc'))
         (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
 
-
 /-- **The `union` check, as the block needs it**: either the block asserts no equation, or
 the state holds no literal and the block evaluates none. The two arms of
 `Program.EncodeDomain.noLitUnion`, and both survive one action — which is what lets the fold
@@ -418,18 +380,6 @@ theorem evalLocalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.
         · exact Or.inl huf
         · exact Or.inr ⟨fun t ht => hlf t (Database.terms_setEnv ▸ ht), hnl⟩)
   exact ⟨d, hd, by simp [evalLocalActions, hd]⟩
-
-
-/-- An expression's own `Expr.ctors` are among the list's. -/
-theorem Expr.mem_ctorsList {es : List Expr} {e : Expr} (he : e ∈ es) {p : FnName × Nat}
-    (hp : p ∈ e.ctors) : p ∈ Expr.ctorsList es := by
-  induction es with
-  | nil => simp at he
-  | cons x xs ih =>
-      rw [Expr.ctorsList]
-      rcases List.mem_cons.mp he with rfl | he'
-      · exact List.mem_append_left _ hp
-      · exact List.mem_append_right _ (ih he')
 
 /-- **A declared name that is no primitive is a constructor**, on a constructor-only
 signature. This is the whole of what `headsDeclared` buys `Expr.eval`. -/
@@ -630,7 +580,6 @@ theorem headsBuild_of_programStep {P : Program} (hdom : P.EncodeDomain) {p q : P
   exact Program.HeadRuns.of_headsDeclared hdom.headsDeclared
     fun c hc fk hk => hdom.noPrim fk (mem_program_ctors hc hk)
 
-
 /-- `Expr.Scoped` in the scope. -/
 theorem Expr.Scoped.mono {e : Expr} {Γ Γ' : Scope} (hsub : ∀ v ∈ Γ, v ∈ Γ')
     (h : e.Scoped Γ) : e.Scoped Γ' := fun v hv => hsub v (h v hv)
@@ -651,7 +600,6 @@ theorem Actions.Scoped.mono : ∀ (as : List Action) {Γ Γ' : Scope}, (∀ v �
   | cons a as ih =>
     intro Γ Γ' hsub h
     exact ⟨Action.Scoped.mono hsub h.1, ih hsub h.2⟩
-
 
 /-- An environment models its own domain. -/
 theorem Scope.Models.dom (σ : Env) : Scope.Models (Env.dom σ) σ := fun _ => Iff.rfl

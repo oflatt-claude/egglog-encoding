@@ -280,12 +280,6 @@ theorem programStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState
         (fun c' hc' => hn c' (List.mem_cons_of_mem c hc'))
         (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
 
-/-- **Every application a source run holds is one the program makes.** -/
-theorem ctorsIn_of_programStep {P : Program} (hdom : P.EncodeDomain) {sd : Database}
-    (hstep : ProgramStep Database.empty P sd) : sd.CtorsIn P :=
-  (programStep_ctorsIn Database.CtorState.empty Database.empty_ctorsInState
-    (fun _ hc => Cmd.CtorsIn.of_domain hdom hc) hdom.ctorsOnly hstep).terms
-
 /-- Every constructor in a reached source prefix occurs in the whole program at that arity. -/
 theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
     (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
