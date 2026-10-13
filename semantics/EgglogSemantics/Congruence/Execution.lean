@@ -5,7 +5,7 @@ all later merge results have the declared width. -/
 
 namespace Egglog.Congruence
 
-private theorem actions_writeLegal (as : List Action) (sig : Signature) :
+theorem actions_writeLegal (as : List Action) (sig : Signature) :
     Actions.WriteLegal as sig := by
   induction as with
   | nil => exact ⟨trivial, trivial⟩

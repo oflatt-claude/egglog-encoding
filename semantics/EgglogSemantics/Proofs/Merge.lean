@@ -5572,32 +5572,32 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
 
 /-- Anything true of `d` and preserved by one rule firing is true of a whole round's rule
 phase. The three folds of `execRunRules`, factored out. -/
-theorem execRunRules_induction {R : RulesetName} {d : FDatabase} {P : FDatabase → Prop}
+theorem execRunRules_induction_ruleset {R : RulesetName} {d : FDatabase} {P : FDatabase → Prop}
     (hinit : P d)
-    (hstep : ∀ (acc e : FDatabase) (r : Rule) (σ : Env), P acc → r ∈ d.rules →
+    (hstep : ∀ (acc e : FDatabase) (r : Rule) (σ : Env), P acc → r ∈ d.rules → r.ruleset = R →
       σ ∈ matchQuery d r.query →
       execActions { d with env := σ ++ d.env } r.actions = some e →
       P (acc.union { e with env := d.env, rules := d.rules })) :
     P (execRunRules R d) := by
-  have hone : ∀ (r : Rule), r ∈ d.rules → ∀ (σ : Env), σ ∈ matchQuery d r.query →
+  have hone : ∀ (r : Rule), r ∈ d.rules → r.ruleset = R → ∀ (σ : Env), σ ∈ matchQuery d r.query →
       ∀ acc : FDatabase, P acc → P (fireInto d r acc σ) := by
-    intro r hr σ hσ acc hacc
+    intro r hr hR σ hσ acc hacc
     rw [fireInto, execLocalActions]
     cases hv : execActions { d with env := σ ++ d.env } r.actions with
     | none => simpa using hacc
-    | some e => simpa using hstep acc e r σ hacc hr hσ hv
-  have hinner : ∀ (r : Rule), r ∈ d.rules → ∀ (σs : List Env),
+    | some e => simpa using hstep acc e r σ hacc hr hR hσ hv
+  have hinner : ∀ (r : Rule), r ∈ d.rules → r.ruleset = R → ∀ (σs : List Env),
       (∀ σ ∈ σs, σ ∈ matchQuery d r.query) → ∀ acc : FDatabase, P acc →
       P (σs.foldl (fireInto d r) acc) := by
-    intro r hr σs
+    intro r hr hR σs
     induction σs with
     | nil => intro _ acc hacc; exact hacc
     | cons σ σs ih =>
       intro hall acc hacc
       rw [List.foldl_cons]
       exact ih (fun τ hτ => hall τ (List.mem_cons_of_mem _ hτ)) _
-        (hone r hr σ (hall σ List.mem_cons_self) acc hacc)
-  have houter : ∀ (l : List Rule), (∀ r ∈ l, r ∈ d.rules) → ∀ acc : FDatabase, P acc →
+        (hone r hr hR σ (hall σ List.mem_cons_self) acc hacc)
+  have houter : ∀ (l : List Rule), (∀ r ∈ l, r ∈ d.rules ∧ r.ruleset = R) → ∀ acc : FDatabase, P acc →
       P (l.foldl (fireRule d) acc) := by
     intro l
     induction l with
@@ -5607,9 +5607,19 @@ theorem execRunRules_induction {R : RulesetName} {d : FDatabase} {P : FDatabase 
       rw [List.foldl_cons]
       refine ih (fun r' hr' => hall r' (List.mem_cons_of_mem _ hr')) _ ?_
       rw [fireRule]
-      exact hinner r (hall r List.mem_cons_self) _ (fun _ hσ => hσ) acc hacc
+      exact hinner r (hall r List.mem_cons_self).1 (hall r List.mem_cons_self).2 _ (fun _ hσ => hσ) acc hacc
   rw [execRunRules]
-  exact houter _ (fun _ hr => (mem_rules_filter.mp hr).1) d hinit
+  exact houter _ (fun _ hr => mem_rules_filter.mp hr) d hinit
+
+/-- The ruleset-independent form of the rule-phase induction principle. -/
+theorem execRunRules_induction {R : RulesetName} {d : FDatabase} {P : FDatabase → Prop}
+    (hinit : P d)
+    (hstep : ∀ (acc e : FDatabase) (r : Rule) (σ : Env), P acc → r ∈ d.rules →
+      σ ∈ matchQuery d r.query →
+      execActions { d with env := σ ++ d.env } r.actions = some e →
+      P (acc.union { e with env := d.env, rules := d.rules })) :
+    P (execRunRules R d) :=
+  execRunRules_induction_ruleset hinit fun acc e r σ hacc hr _ => hstep acc e r σ hacc hr
 
 /-- A round's rule phase leaves `sig`, `env` and `rules` alone: every firing is unioned
 into the accumulator, and a union takes those three fields from the left. -/
@@ -5875,6 +5885,19 @@ theorem runSaturateM_settled {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase}
       obtain rfl : d = e := hxe
       exact ⟨x, hx, hsd⟩
     · rw [if_neg hsd] at hxe; exact ih hxe
+
+/-- A successful saturation has also completed its merge phase. -/
+theorem runSaturateM_mergeSettled {R : RulesetName} {n : Nat} {d e : FDatabase}
+    (run : d.runSaturateM R n = some e) : e.settled = true := by
+  obtain ⟨m, hm, heq⟩ := runSaturateM_settled n run
+  have hf := runRoundM_fields hm
+  have hs := mergeSaturateF_settled mergeFuel hm
+  have he : e = m := by
+    simp only [FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at heq
+    cases e
+    cases m
+    simp_all
+  exact he ▸ hs
 
 /-- **The invariant a saturating run leaves**: every term one more round of `R` would derive
 is already held.

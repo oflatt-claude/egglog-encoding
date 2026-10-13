@@ -206,6 +206,11 @@ The new pass currently has kernel-checked proofs of:
   source values because variables read rebuilt ids; recursive view readings connect them.
   These witnesses survive merging through retained terms, without assuming that the target
   stores every original source term as an id.
+- `RunState.round`, `RunState.saturate`, and `RunState.rebuilt`: merge phases and rule
+  rounds compose the historical invariants, and actual maintenance saturation establishes
+  `Rebuilt`. Generated maintenance rules discharge preservation directly. Source-rule
+  preservation still needs composition with the corresponding source round or saturation;
+  the program-wide theorem is not yet assembled.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
