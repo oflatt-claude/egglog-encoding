@@ -1,4 +1,5 @@
 import EgglogSemantics.Congruence.Tests
+import EgglogSemantics.Provenance.Extract
 import EgglogSemantics.Encoding.Complete
 import EgglogSemantics.Encoding.Correspond
 import EgglogSemantics.Encoding.Encode
@@ -2952,6 +2953,51 @@ private def runCongruenceChecks (fuel : Nat) (names : List String) : IO UInt32 :
   IO.println s!"congruence: {tested} tested, {failed} failures, {skipped} outside domain"
   return if failed == 0 && tested > 0 then 0 else 1
 
+private def provenanceCheck (fuel : Nat) (p : Program) : List String := Id.run do
+  let q := Congruence.encode p
+  let some C := SourceProof.contextOf q | return ["invalid congruence program"]
+  let some encoded := Provenance.encode q | return ["provenance pass rejected input"]
+  let some original := relationalExecAt fuel FDatabase.empty q |
+    return ["congruence program stuck or exhausted fuel"]
+  let some annotated := relationalExecAt fuel FDatabase.empty encoded |
+    return ["instrumented program stuck or exhausted fuel"]
+  let mut errors : List String := []
+  if !Provenance.unionFree encoded then errors := errors ++ ["provenance introduced union"]
+  let rows := annotated.rows.filterMap (Provenance.eraseRow C.sig)
+  if rows.toFinset != original.rows.toFinset then
+    errors := errors ++ ["projected live rows differ"]
+  let terms := annotated.terms.filterMap (Provenance.eraseFact C.sig)
+  if terms.toFinset != original.terms.toFinset then
+    errors := errors ++ ["projected retained facts differ"]
+  let proofs := Provenance.retainedRows C.sig annotated.terms
+  let bad := proofs.filter fun r => (Provenance.extractRow q r).isNone
+  if !bad.isEmpty then
+    errors := errors ++ [s!"{bad.length}/{proofs.length} retained proofs failed"]
+  return errors
+
+private def runProvenanceChecks (fuel : Nat) (names : List String) : IO UInt32 := do
+  let available := allCases ++ probeCases
+  let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
+  unless unknown.isEmpty do
+    IO.eprintln s!"unknown cases: {String.intercalate ", " unknown}"
+    return 1
+  let cases := if names.isEmpty then allCases else available.filter fun c => names.contains c.1
+  let mut tested := 0
+  let mut failed := 0
+  let mut skipped := 0
+  for (name, p₀) in cases do
+    let p := p₀.declared
+    if !p.encodeDomainB then
+      skipped := skipped + 1
+      continue
+    tested := tested + 1
+    let errors := provenanceCheck fuel p
+    unless errors.isEmpty do
+      failed := failed + 1
+      IO.println s!"FAIL {name}: {String.intercalate "; " errors}"
+  IO.println s!"provenance: {tested} tested, {failed} failures, {skipped} outside domain"
+  return if failed == 0 && tested > 0 then 0 else 1
+
 /-- `difftest <dir> curated` writes the curated cases, `difftest <dir> merge` the curated
 `:merge` ones; `difftest <dir> seed <n>` writes one random constructor case named
 `rand-<n>` and `difftest <dir> mergeseed <n>` one random `:merge` case named `mrand-<n>`.
@@ -2980,6 +3026,10 @@ program the e-matcher cannot finish costs one budget rather than the run. These 
 and never invoke egglog; the comparison is between the model and itself. -/
 def main (args : List String) : IO UInt32 := do
   match args with
+  | "provenance" :: fuel :: names =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n => runProvenanceChecks n names
   | "congruence" :: fuel :: names =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
@@ -3173,6 +3223,7 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln "usage: difftest <dir> curated | merge | seed <n> | mergeseed <n>"
     IO.eprintln "       difftest encode-domain | encode-cost | encode-selftest"
     IO.eprintln "       difftest congruence <fuel> [case…]"
+    IO.eprintln "       difftest provenance <fuel> [case…]"
     IO.eprintln "       difftest encode <fuel> [case…] | check <fuel> [case…]"
     IO.eprintln "       difftest correspond <fuel> [case…] | correspond-selftest"
     IO.eprintln "       difftest correspond-alt flat|rows|no-uf|no-view <fuel> [case…]"

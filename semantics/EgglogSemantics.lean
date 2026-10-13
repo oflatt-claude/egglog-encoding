@@ -12,6 +12,9 @@ import EgglogSemantics.Congruence.Tests
 import EgglogSemantics.SourceProof.Counterexamples
 import EgglogSemantics.SourceProof.Tests
 
+-- Function provenance and checking against the relational program.
+import EgglogSemantics.Provenance.Tests
+
 -- Legacy combined encoding, retained for differential comparison.
 import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Encoding.Checker

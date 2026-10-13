@@ -63,8 +63,9 @@ and pushes to the PR are authorized, including before the proofs are complete.
 
 The Lean refactor separates congruence compilation, provenance instrumentation, and proof
 resugaring. The congruence pass is implemented in
-[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean). The latter two passes are
-not implemented yet. The old combined encoder remains as a comparison reference; its
+[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean), and provenance in
+[Provenance/Encode.lean](EgglogSemantics/Provenance/Encode.lean). Resugaring is not
+implemented yet. The old combined encoder remains as a comparison reference; its
 proof annotations have known correctness defects.
 
 ## Congruence compilation
@@ -123,6 +124,31 @@ For example, `(= (F (G x)) (H x))` becomes:
 Resugaring will receive the original query and repeat this traversal while consuming
 premise proofs in order. No separate tree describing flattening is stored.
 
+## Provenance instrumentation
+
+`Provenance.encode` adds one proof output to each function. Proof constructors identify
+the exact global command, rule action, or merge computation. Rule proofs carry the
+substitution and ordered premises; merge proofs carry both input proofs. Their claims
+are recovered by evaluating the original action or merge, without guessing endpoints.
+
+The pass accepts flat table queries and equality tests whose variables and existence
+witnesses come from table premises. This covers the congruence compiler's output;
+unanchored equality-only queries, constructor writes, and `:no-merge` declarations
+are outside its input fragment. Function bodies and results may use primitives and
+multiple output columns. Generated names use the reserved `@prov:` prefix.
+
+Only original data columns determine merge conflicts. This also suppresses collisions
+between distinct proofs of identical rows. If a merge result equals an input's data,
+it retains that input's proof; a new result records both inputs. Body facts always
+record the merge justification. Proof metadata therefore cannot trigger a data merge
+or cause an otherwise stable rule to accumulate longer resident proofs.
+
+Extraction produces a shared certificate with explicit facts, then checks it against
+the uninstrumented relational program. Equality premises use checked subterms of table
+facts as existence witnesses; no auxiliary existence relation is needed. These are
+intermediate certificates. Source resugaring must still eliminate the generated tables
+and translate rebuilding, UF merges, and subterm evidence into source proofs.
+
 ## Proof status
 
 The congruence pass has kernel-checked proofs for:
@@ -160,7 +186,13 @@ Termination is not asserted.
 source existence witnesses for every subterm. For endpoints held by the source,
 acceptance implies its original `Cong` relation. The source state must be reached by
 the original program, well formed, and saturated for every ruleset. No proof is accepted
-by assuming an unproved intermediate term exists. Steps 3–5 remain.
+by assuming an unproved intermediate term exists.
+
+**Step 3 is implemented.** [Provenance/Soundness.lean](EgglogSemantics/Provenance/Soundness.lean)
+proves that every accepted relational fact exists in a well-formed, reached state
+saturated for the original relational program's rules and merges. The corpus gate
+checks data preservation and every retained function entry's extracted certificate.
+Steps 4–5 remain: source resugaring and checking identical certificates in Lean and Rust.
 
 Source merge proofs are deferred: equality can produce another spelling of one
 stored function row without establishing a second input to its merge body. The
@@ -192,8 +224,8 @@ Successful execution is assumed; termination is not proved.
 
 ## Validation
 
-`make lean-check` builds the library, audits for proof holes, and runs the congruence
-corpus gate. The gate compares every pair of held source terms against the new reading
+`make lean-check` builds the library, audits for proof holes, and runs both encoding
+corpus gates. The congruence gate compares every pair of held source terms against its reading
 and compares all live data rows against the legacy encoder after dropping proof columns,
 proof constructors, and history relations. Failures, stuck executions, and insufficient
 fuel fail the command. Out-of-domain cases are counted separately.
@@ -204,6 +236,7 @@ From `semantics/`:
 lake build difftest
 .lake/build/bin/difftest congruence 64
 .lake/build/bin/difftest congruence 64 both-2 rand-43 sat-hit
+.lake/build/bin/difftest provenance 64
 ```
 
 Executable regressions also check recursive traversal order, origin tags, rebuilding

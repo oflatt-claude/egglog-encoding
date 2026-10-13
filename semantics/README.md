@@ -23,17 +23,18 @@ its refinement contracts, and the limits of the model.
 
 The congruence compiler translates constructor programs into explicit union-find and view
 tables. It handles query flattening and rebuilding, with one id output per table and no
-proof annotations. Provenance instrumentation and proof resugaring will be separate passes.
+proof annotations. A separate provenance pass adds proof columns for globals, rule firings,
+and function merges. Proof resugaring back to the source program remains to be implemented.
 
 The congruence pass has a proved end-to-end correspondence theorem for the constructor
-source fragment, including execution without implicit target equality reasoning. Provenance
-and proof lifting remain to be implemented. The replacement source checker has proved
-soundness and existence support for constructor programs. The legacy checker is unsound.
+source fragment, including execution without implicit target equality reasoning. Both the
+constructor source checker and relational provenance checker have proved soundness and
+existence support. The legacy checker is unsound.
 The library permits no `sorry`.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
 and source restrictions. The [checker guide](CHECKER.md) explains the legacy defect and
-the planned certificate boundary.
+the certificate boundaries.
 
 ## Layout
 
@@ -44,6 +45,7 @@ the planned certificate boundary.
 | `EgglogSemantics/Proofs/` | Interpreter refinement, preservation, totality, and counterexamples |
 | `EgglogSemantics/Congruence/` | Congruence compiler, completeness proof, and regressions |
 | `EgglogSemantics/SourceProof/` | Source certificate checker, soundness, and regressions |
+| `EgglogSemantics/Provenance/` | Function provenance instrumentation, extraction, checker, and soundness |
 | `EgglogSemantics/Encoding/` | Shared source analysis and the legacy combined encoder and proofs |
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
@@ -60,7 +62,7 @@ From the workspace root:
 
 ```sh
 make check                 # Python and Rust formatting, checks, and tests
-make lean-check            # Lean build, proof-hole audit, and congruence corpus gate
+make lean-check            # Lean build, proof-hole audit, and both encoding corpus gates
 cargo build --release -p egglog
 make lean-difftest          # compare Lean and egglog per-function row counts
 ```
@@ -70,6 +72,7 @@ Additional executable probes, from `semantics/`:
 ```sh
 lake build difftest
 .lake/build/bin/difftest congruence 64
+.lake/build/bin/difftest provenance 64
 .lake/build/bin/difftest correspond 64  # legacy data correspondence
 .lake/build/bin/difftest check 64       # legacy checker diagnostic, known unsound
 ```

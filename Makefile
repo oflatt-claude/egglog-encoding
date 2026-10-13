@@ -1,7 +1,7 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
 	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
-	lean-check lean-difftest lean-congruence-test \
+	lean-check lean-difftest lean-congruence-test lean-provenance-test \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -111,17 +111,22 @@ nightly-local: nightly-uv nightly-rustup
 # suites do not depend on a Lean toolchain; `elan` and a Mathlib cache are needed,
 # see semantics/README.md. `lake build` only warns on a proof hole, so the sources
 # are grepped as well, excluding backtick-quoted prose.
-# Both the congruence pass and the retained legacy theorems must build without proof
-# holes. The native corpus gate checks the new pass against source equalities and
-# projected legacy rows; see semantics/ENCODING.md for the theorem port's status.
+# All current and retained legacy theorems must build without proof holes. The native
+# corpus gates check congruence correspondence, provenance data preservation, and
+# extracted certificates; see semantics/ENCODING.md for the remaining work.
 lean-check:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build
 	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`'
 	$(MAKE) lean-congruence-test
+	$(MAKE) lean-provenance-test
 
 lean-congruence-test:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
 	cd semantics && .lake/build/bin/difftest congruence 64
+
+lean-provenance-test:
+	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
+	cd semantics && .lake/build/bin/difftest provenance 64
 
 # Differentially test the Lean semantics against egglog: for each generated program, the
 # Lean interpreter's per-constructor row counts against egglog's `(print-size)`. Needs a

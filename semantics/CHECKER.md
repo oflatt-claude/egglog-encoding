@@ -3,7 +3,7 @@
 [SourceProof.check](EgglogSemantics/SourceProof/Checker.lean) validates certificates with
 explicit claims and references to earlier nodes. It accepts constructor programs without
 primitive applications. Function declarations and merge justifications are rejected;
-functions will be handled in the separate relational provenance checker.
+functions are handled in the separate relational provenance checker.
 
 `Fiat` facts come only from original global actions. A rule proof identifies the original
 command and supplies an exact substitution and one proof per original query conjunct, in
@@ -20,6 +20,19 @@ is saturated for every ruleset. They do not assume validity of intermediate clai
 The [regressions](EgglogSemantics/SourceProof/Tests.lean) cover missing existence,
 rule-created terms, nested queries, premise ordering, malformed substitutions, invalid
 references, and anchored congruence. Rust interoperability remains a separate obligation.
+
+## Relational provenance
+
+[Provenance.check](EgglogSemantics/Provenance/Checker.lean) checks facts against the
+uninstrumented relational program. It accepts original globals, rule consequences,
+merge bodies and results, and subterms of established facts. It has no equality axioms.
+Merge inputs must name established entries at the same structural key, with conflicting
+output columns according to the original declaration.
+
+[Provenance.check_sound](EgglogSemantics/Provenance/Soundness.lean) proves membership
+in any well-formed, reached state saturated for the program's rules and merges. Extraction
+decodes generated proof constructors into these explicit certificates and checks them.
+This intermediate certificate still mentions generated tables; it is not a source proof.
 
 ## Legacy checker
 
@@ -67,8 +80,8 @@ on this checker.
 
 ## Replacement and Rust compatibility
 
-The new congruence pass emits no certificates. The planned generic instrumentation pass
-will record actual globals, rule firings, and merge derivations. Resugaring will reconstruct
+The new congruence pass emits no certificates. The separate instrumentation pass
+records actual globals, rule firings, and merge derivations. Resugaring will reconstruct
 source-level certificates with explicit claims, substitutions, and existence evidence,
 following the same recursive order as query flattening.
 
@@ -79,7 +92,7 @@ propositions and anchored congruence. Rule-created constructions have rule prove
 
 Compatibility will require checking the same resugared certificate in Lean and Rust.
 Running their separate encoders on the same program does not establish that property.
-Neither the new instrumentation pass nor that shared-certificate bridge is implemented yet.
+Resugaring and the shared-certificate bridge are not implemented yet.
 
 ## Source merge inputs
 
