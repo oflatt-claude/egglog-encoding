@@ -181,7 +181,7 @@ def actionExprs : Action → List Expr
   | .expr e => [e]
   | .union a b => [a, b]
 
-private theorem eval_order_ids {sig : Signature} {ρ : Env} {a b : Expr} {ta tb : Term}
+theorem eval_order_ids {sig : Signature} {ρ : Env} {a b : Expr} {ta tb : Term}
     (ha : a.eval sig ρ = some ta) (hb : b.eval sig ρ = some tb) :
     (maxE a b).eval sig ρ = some (upperId ta tb) ∧
       (minE a b).eval sig ρ = some (lowerId ta tb) := by

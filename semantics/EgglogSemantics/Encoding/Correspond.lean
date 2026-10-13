@@ -9029,43 +9029,6 @@ row carries as its proof column (`td.sig.IsCtor fiatName`), and `@Rule_i`, the j
 `hrules`). Nothing else is asked of the target — a `set`'s own function name is never
 evaluated — and nothing at all is asked of the source beyond its own head evaluating. -/
 
-/-- Evaluating a concatenation, in the direction that *builds* one. `Expr.evalList_append` is
-the elimination. -/
-theorem Expr.evalList_append_eq {sig : Signature} {σ : Env} :
-    ∀ {es fs : List Expr} {as bs : List Term},
-      Expr.evalList sig es σ = some as → Expr.evalList sig fs σ = some bs →
-        Expr.evalList sig (es ++ fs) σ = some (as ++ bs) := by
-  intro es
-  induction es with
-  | nil =>
-      intro fs as bs h₁ h₂
-      obtain rfl : as = [] := (Option.some.inj h₁).symm
-      simpa using h₂
-  | cons e es ih =>
-      intro fs as bs h₁ h₂
-      rw [Expr.evalList] at h₁
-      obtain ⟨t, ht, h₁⟩ := Option.bind_eq_some_iff.mp h₁
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h₁
-      simp only [List.cons_append, Expr.evalList, ht, Option.bind_some, ih hus h₂,
-        Option.map_some]
-
-/-- Running a concatenation of action blocks, in the direction that *builds* one.
-`execActions_append` is the elimination. -/
-theorem execActions_append_eq {as bs : List Action} : ∀ {d m e : FDatabase},
-    execActions d as = some m → execActions m bs = some e →
-      execActions d (as ++ bs) = some e := by
-  induction as with
-  | nil =>
-      intro d m e h₁ h₂
-      obtain rfl : d = m := Option.some.inj h₁
-      simpa using h₂
-  | cons a as ih =>
-      intro d m e h₁ h₂
-      rw [execActions] at h₁
-      obtain ⟨d₁, hd₁, h₁⟩ := Option.bind_eq_some_iff.mp h₁
-      rw [List.cons_append, execActions, hd₁, Option.bind_some]
-      exact ih h₁ h₂
-
 /-- The arguments of an application that evaluated, evaluated. Both branches of `Expr.eval`
 run the operands first, so this needs nothing about the head name. -/
 theorem Expr.evalList_of_eval_app {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}

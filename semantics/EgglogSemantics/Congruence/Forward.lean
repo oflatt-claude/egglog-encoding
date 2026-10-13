@@ -291,15 +291,15 @@ theorem mem_vars_encodeQuery_of_argVar : ∀ (q : Query) (n : Nat) {v : Var} {p 
 
 /-- Forward query completeness at a rebuilt target: the executable flattened query
 matches, and its substitution retains canonical readings of the original source values. -/
-theorem encodedQuery_match_of_source {P : Program} {d : FDatabase} {src : Database}
+theorem encodedQuery_match_of_source {P : Program} {d : FDatabase} {src querySrc : Database}
     (h : Rebuilt d) (htables : RebuildTables P d) (hs : SoundTerms d src)
     (hb : src.TermsBuild) (hctors : src.CtorsIn P)
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF)
-    (hcs : src.sig.AllConstructors) (hun : UnionsRead d.toDatabase src)
-    (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d.toDatabase t e) {σ : Env} {q : Query}
+    (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d.toDatabase querySrc)
+    (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e) {σ : Env} {q : Query}
     (hp : ∀ p ∈ q, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) (hk : Query.VarsKeyed q)
     (hg : ∀ p ∈ q, p.Grounded) (hn : ∀ v ∈ Query.vars q, ¬ "@".isPrefixOf v = true)
-    (hm : ValidQuerySubst src q σ) (n : Nat) :
+    (hm : ValidQuerySubst querySrc q σ) (n : Nat) :
     ∃ ρ, ρ ∈ matchQuery d (encodeQuery q n).1 ∧ Env.CanonicalReads d σ ρ := by
   obtain ⟨ρ₀, hρ₀, hdom, hreads, hv⟩ :=
     exists_live_query h htables hs hb hctors hc hw hcs hun hex hp hk hm

@@ -37,12 +37,12 @@ variable (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF)
 include h htables hs hb hctors hc hw
 
 /-- A single function on source values keeps repeated query variables consistent. -/
-theorem exists_canonical_env {σ : Env} (hv : ∀ b ∈ σ, b.2 ∈ src.terms)
-    (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d.toDatabase t e) :
+theorem exists_canonical_env {querySrc : Database} {σ : Env} (hv : ∀ b ∈ σ, b.2 ∈ querySrc.terms)
+    (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e) :
     ∃ ρ, Env.CanonicalReads d σ ρ ∧ Env.dom ρ = Env.dom σ := by
   classical
-  let w : Term → Term := fun t => if ht : t ∈ src.terms then h.root (hex t ht).choose else t
-  have hread : ∀ t ∈ src.terms, ViewRepr d.toDatabase t (w t) ∧ UFRowRoot d (w t) := by
+  let w : Term → Term := fun t => if ht : t ∈ querySrc.terms then h.root (hex t ht).choose else t
+  have hread : ∀ t ∈ querySrc.terms, ViewRepr d.toDatabase t (w t) ∧ UFRowRoot d (w t) := by
     intro t ht
     simp only [w, dif_pos ht]
     exact ⟨h.normalize_view htables hs hb hctors hc hw t (hex t ht).choose_spec,
@@ -61,10 +61,10 @@ that syntax at the consistent target substitution. -/
 theorem liveQueryRead_of_eval_view {P : Program} {d : FDatabase} {src : Database}
     (h : Rebuilt d) (htables : RebuildTables P d) (hs : SoundTerms d src)
     (hb : src.TermsBuild) (hctors : src.CtorsIn P)
-    (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF) {σ ρ : Env}
+    (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF) {sig : Signature} {σ ρ : Env}
     (hρ : Env.CanonicalReads d σ ρ) :
     ∀ (e : Expr) {t i : Term}, (∀ f ∈ e.fns, Prim.ofName f = none) →
-      e.eval src.sig σ = some t → ViewRepr d.toDatabase t i →
+      e.eval sig σ = some t → ViewRepr d.toDatabase t i →
       LiveQueryRead d ρ e (h.root i)
   | .lit l, _, _, _, he, hv => by
       obtain rfl := Option.some.inj he
@@ -98,10 +98,10 @@ theorem liveQueryRead_of_eval_view {P : Program} {d : FDatabase} {src : Database
 theorem liveQueryReadList_of_eval_view {P : Program} {d : FDatabase} {src : Database}
     (h : Rebuilt d) (htables : RebuildTables P d) (hs : SoundTerms d src)
     (hb : src.TermsBuild) (hctors : src.CtorsIn P)
-    (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF) {σ ρ : Env}
+    (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF) {sig : Signature} {σ ρ : Env}
     (hρ : Env.CanonicalReads d σ ρ) :
     ∀ (es : List Expr) {ts is : List Term}, (∀ f ∈ Expr.fnsList es, Prim.ofName f = none) →
-      Expr.evalList src.sig es σ = some ts → ViewReprList d.toDatabase ts is →
+      Expr.evalList sig es σ = some ts → ViewReprList d.toDatabase ts is →
       LiveQueryReadList d ρ es (is.map h.root)
   | [], _, _, _, he, hv => by
       obtain rfl := Option.some.inj he
@@ -127,14 +127,14 @@ inductive LivePatternRead (d : FDatabase) (ρ : Env) : Pattern → Prop where
       LiveQueryRead d ρ a i → LiveQueryRead d ρ b i → LivePatternRead d ρ (.eq a b)
 
 /-- Original source matches produce live query readings at the consistent substitution. -/
-theorem livePatternRead_of_matches {P : Program} {d : FDatabase} {src : Database}
+theorem livePatternRead_of_matches {P : Program} {d : FDatabase} {src querySrc : Database}
     (h : Rebuilt d) (htables : RebuildTables P d) (hs : SoundTerms d src)
     (hb : src.TermsBuild) (hctors : src.CtorsIn P)
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF)
-    (hcs : src.sig.AllConstructors) (hun : UnionsRead d.toDatabase src)
-    (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d.toDatabase t e) {σ ρ : Env}
+    (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d.toDatabase querySrc)
+    (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e) {σ ρ : Env}
     (hρ : Env.CanonicalReads d σ ρ) {p : Pattern}
-    (hp : ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) (hm : Matches src p σ) :
+    (hp : ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) (hm : Matches querySrc p σ) :
     LivePatternRead d ρ p := by
   cases p with
   | expr e =>
@@ -206,14 +206,14 @@ theorem LiveQueryRead.output_value {d : FDatabase} {ρ : Env} {e : Expr} {i : Te
 
 /-- A complete source match has a consistent target substitution whose values can be
 assigned by the executable matcher and whose original patterns read through live rows. -/
-theorem exists_live_query {P : Program} {d : FDatabase} {src : Database}
+theorem exists_live_query {P : Program} {d : FDatabase} {src querySrc : Database}
     (h : Rebuilt d) (htables : RebuildTables P d) (hs : SoundTerms d src)
     (hb : src.TermsBuild) (hctors : src.CtorsIn P)
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF)
-    (hcs : src.sig.AllConstructors) (hun : UnionsRead d.toDatabase src)
-    (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d.toDatabase t e) {σ : Env} {q : Query}
+    (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d.toDatabase querySrc)
+    (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e) {σ : Env} {q : Query}
     (hp : ∀ p ∈ q, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) (hk : Query.VarsKeyed q)
-    (hm : ValidQuerySubst src q σ) :
+    (hm : ValidQuerySubst querySrc q σ) :
     ∃ ρ, Env.CanonicalReads d σ ρ ∧ Env.dom ρ = Env.dom σ ∧
       (∀ p ∈ q, LivePatternRead d ρ p) ∧
       (∀ v j, Env.lookup v ρ = some j → j ∈ d.valueTerms) := by

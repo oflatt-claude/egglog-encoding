@@ -79,13 +79,13 @@ theorem canonicalEq_of_sameClass {a b : Term} (hab : SameClass d.toDatabase a b)
 
 /-- Adding query operands introduces only reflexive assertions. Thus source congruence
 still preserves canonical target readings at these temporary terms. -/
-theorem canonicalEq_of_congOn (hun : UnionsRead d.toDatabase src)
-    {ts : List Term} {a b : Term} (hab : CongOn src ts a b) : CanonicalEq h a b := by
+theorem canonicalEq_of_congOn {querySrc : Database} (hun : UnionsRead d.toDatabase querySrc)
+    {ts : List Term} {a b : Term} (hab : CongOn querySrc ts a b) : CanonicalEq h a b := by
   refine Cong.le (R := CanonicalEq h) ?_ (fun _ _ => CanonicalEq.symm)
     (fun _ _ _ => CanonicalEq.trans)
     (fun _ _ _ _ _ hl => canonicalEq_congr h htables hs hb hctors hc hw hl) hab
   intro x y hxy
-  rcases Conservativity.mem_addTerms_eqs ts src (x, y) hxy with hxy | hxy
+  rcases Conservativity.mem_addTerms_eqs ts querySrc (x, y) hxy with hxy | hxy
   · by_cases heq : x = y
     · subst y; exact .refl h x
     · exact canonicalEq_of_sameClass h htables hs hb hctors hc hw (hun x y hxy heq)
@@ -94,17 +94,18 @@ theorem canonicalEq_of_congOn (hun : UnionsRead d.toDatabase src)
 
 /-- The existence witness in a source match supplies the reading of its queried operand.
 Congruence transports that witness; it does not create existence on its own. -/
-theorem view_of_congOn (hun : UnionsRead d.toDatabase src) {ts : List Term} {a b e : Term}
-    (hab : CongOn src ts a b) (ha : ViewRepr d.toDatabase a e) :
+theorem view_of_congOn {querySrc : Database} (hun : UnionsRead d.toDatabase querySrc)
+    {ts : List Term} {a b e : Term}
+    (hab : CongOn querySrc ts a b) (ha : ViewRepr d.toDatabase a e) :
     ViewRepr d.toDatabase b (h.root e) :=
   (canonicalEq_of_congOn h htables hs hb hctors hc hw hun hab e).mp
     (h.normalize_view htables hs hb hctors hc hw a ha)
 
 /-- A source expression match yields a represented instance using its held witness. -/
-theorem view_of_matches_expr (hun : UnionsRead d.toDatabase src)
-    (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d.toDatabase t e)
-    {e : Expr} {σ : Env} (hm : Matches src (.expr e) σ) :
-    ∃ t i, e.evalAtom src.sig σ = some t ∧ ViewRepr d.toDatabase t (h.root i) := by
+theorem view_of_matches_expr {querySrc : Database} (hun : UnionsRead d.toDatabase querySrc)
+    (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e)
+    {e : Expr} {σ : Env} (hm : Matches querySrc (.expr e) σ) :
+    ∃ t i, e.evalAtom querySrc.sig σ = some t ∧ ViewRepr d.toDatabase t (h.root i) := by
   cases hm with
   | expr hwit he hcng =>
       obtain ⟨i, hi⟩ := hex _ hwit
@@ -112,10 +113,10 @@ theorem view_of_matches_expr (hun : UnionsRead d.toDatabase src)
 
 /-- Both equality operands read to the same canonical id, justified by the original
 match's existence witness and its two source congruence proofs. -/
-theorem views_of_matches_eq (hun : UnionsRead d.toDatabase src)
-    (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d.toDatabase t e)
-    {a b : Expr} {σ : Env} (hm : Matches src (.eq a b) σ) :
-    ∃ ta tb i, a.eval src.sig σ = some ta ∧ b.eval src.sig σ = some tb ∧
+theorem views_of_matches_eq {querySrc : Database} (hun : UnionsRead d.toDatabase querySrc)
+    (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e)
+    {a b : Expr} {σ : Env} (hm : Matches querySrc (.eq a b) σ) :
+    ∃ ta tb i, a.eval querySrc.sig σ = some ta ∧ b.eval querySrc.sig σ = some tb ∧
       ViewRepr d.toDatabase ta (h.root i) ∧ ViewRepr d.toDatabase tb (h.root i) := by
   cases hm with
   | eq hwit ha hb' hwa hab =>

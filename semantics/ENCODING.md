@@ -198,7 +198,14 @@ The new pass currently has kernel-checked proofs of:
   original bound values. Generated bindings follow the compiler's recursive order with
   disjoint counter ranges; groundedness supplies the equality atom's held-value witness.
   Fresh-environment lemmas are shared with the legacy proof. No saved flattening tree is
-  introduced.
+  introduced. The source state being matched can be earlier than the source state that
+  justifies target entries, which allows its use during saturation.
+- `encodeActions_reads` and `encodedRule_firing_reads`: a source action block or rule firing
+  has an actual successful compiled execution, preserving readings of all its source terms
+  and explicit entries for its source unions. Target head ids may differ structurally from
+  source values because variables read rebuilt ids; recursive view readings connect them.
+  These witnesses survive merging through retained terms, without assuming that the target
+  stores every original source term as an id.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
