@@ -443,4 +443,41 @@ theorem congrKeys_self {cl : Finset (Term × Term)} {as : List Term}
   rw [show q = (q.1, q.1) from Prod.ext rfl heq.symm]
   exact h q.1 hmem
 
+/-- Evaluated columns record a complete atom at a declared nonprimitive head. -/
+theorem execAction_atom_of_eval {d : FDatabase} {f : FnName} {cols : List Expr}
+    {ts : List Term} (hp : Prim.ofName f = none) (hd : (d.sig f).isSome = true)
+    (hev : Expr.evalList d.sig cols d.env = some ts) :
+    execAction d (.expr (.app f cols)) = some (d.addAtom (.app f ts)) := by
+  simp only [execAction, Expr.evalAtom, hp, hd, if_true, hev, Option.map_some]
+
+/-- **A row of a `:merge` function makes its own atom hold**, at the values its columns are.
+The converse of `mem_terms_of_patternHolds_entry`, and what says that lemma — and the three
+families over it — is not vacuous. The only closure facts it needs are reflexive, so nothing
+here asks the kernel for a congruence closure. -/
+theorem patternHolds_entry_of_mem_rows {d : FDatabase} {vs as : List Expr} {f : FnName}
+    {σ : Env} {ts us : List Term} (he : (Expr.app f (as ++ vs)).entry d.sig = some (f, as, vs))
+    (hats : Expr.evalList d.sig as σ = some ts)
+    (hvus : Expr.evalList d.sig vs σ = some us)
+    (hrow : (⟨f, ts, us⟩ : Row) ∈ d.rows) (hcol : ∀ c ∈ ts ++ us, c ∈ d.terms) :
+    patternHolds d (.expr (.app f (as ++ vs))) σ = true := by
+  have hrefl : ∀ c ∈ ts ++ us, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF := by
+    intro c hc
+    exact FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl,
+      FDatabase.mem_addTerms_terms (FDatabase.mem_addTerms_terms (hcol c hc))⟩))
+  have hct : ∀ (xs : List Term),
+      (∀ c ∈ xs, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF) →
+      FDatabase.congrTuple ((d.addTerms ts).addTerms us).closureF xs xs = true := by
+    intro xs hxs
+    refine Bool.and_eq_true_iff.mpr ⟨by simp, List.all_eq_true.mpr (fun q hq => ?_)⟩
+    obtain ⟨a, b⟩ := q
+    obtain ⟨heq, hmem⟩ := mem_zip_self hq
+    simp only at heq hmem
+    subst heq
+    simpa using hxs a hmem
+  simp only [patternHolds, he, hvus, hats, List.any_eq_true]
+  refine ⟨⟨f, ts, us⟩, hrow, Bool.and_eq_true_iff.mpr
+    ⟨Bool.and_eq_true_iff.mpr ⟨by simp, ?_⟩, ?_⟩⟩
+  · exact hct ts (fun c hc => hrefl c (List.mem_append_left _ hc))
+  · exact hct us (fun c hc => hrefl c (List.mem_append_right _ hc))
+
 end Egglog

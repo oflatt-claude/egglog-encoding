@@ -171,6 +171,14 @@ The new pass currently has kernel-checked proofs of:
   collision; the same argument covers UF and views. `mergeSaturateF_unique_root` and
   `mergeSaturateF_joined_root` then give unique live roots and identify the roots at both
   ends of each retained UF path after a merge phase.
+- `eclassRule_fires` and `childRule_fires`: live input rows produce actual executable
+  matches and successful local firings of the generated rebuilding rules. Source entry
+  soundness supplies their matchable value columns. The matcher and environment lemmas
+  are shared with the legacy proof rather than copied into the new pass.
+- `Rebuilt.view_root` and `Rebuilt.keys_paths`: at a rebuilding fixed point satisfying
+  the data invariants, every live view output is a UF root, and key columns can follow
+  arbitrary live UF paths while retaining that output. These use the actual firings,
+  the retained-entry/live-row bridge, and uniqueness of settled table rows.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
@@ -178,7 +186,7 @@ The new pass currently has kernel-checked proofs of:
 
 The execution proof establishing those invariants for `Congruence.encode` is **not yet
 ported**. Thus the new pass does not yet have an end-to-end completeness theorem.
-The next obligations establish rebuilt view coverage and assemble the invariants across
+The next obligations connect rebuilt rows to view coverage and assemble the invariants across
 corresponding program executions, including forward matching of flattened queries.
 The paper's completeness theorem will stop at this pass; later instrumentation and
 resugaring still require soundness.

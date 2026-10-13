@@ -1,3 +1,4 @@
+import EgglogSemantics.Encoding.RebuildVars
 import EgglogSemantics.Encoding.Match
 import EgglogSemantics.Encoding.SourceArity
 import EgglogSemantics.Proofs.Signature
@@ -3853,130 +3854,8 @@ whose key pattern repeated a variable would match only the rows whose two column
 of that kind. It is not carried by `FDatabase.EncBase`; `execM_rowColumnsValued`, two blocks
 below, is it run-wide. -/
 
-theorem toString_nat_inj {i j : Nat} (h : toString i = toString j) : i = j := by
-  have hd : Nat.toDigits 10 i = Nat.toDigits 10 j := by
-    rw [← Nat.toList_repr, ← Nat.toList_repr, ← Nat.toString_eq_repr, ← Nat.toString_eq_repr, h]
-  have hi := Nat.ofDigitChars_toDigits (b := 10) (n := i) (by decide) (by decide)
-  rw [hd, Nat.ofDigitChars_toDigits (by decide) (by decide)] at hi
-  exact hi.symm
-
-def rebuildVarNames (k : Nat) : List Var := (List.range k).map fun i => "@c" ++ toString i
-
 theorem rebuildVars_eq_map (k : Nat) : rebuildVars k = (rebuildVarNames k).map Expr.var := by
   rw [rebuildVars, rebuildVarNames, List.map_map]; rfl
-
-theorem length_rebuildVarNames (k : Nat) : (rebuildVarNames k).length = k := by
-  simp [rebuildVarNames]
-
-theorem rebuildVarNames_nodup (k : Nat) : (rebuildVarNames k).Nodup := by
-  refine (List.nodup_map_iff_inj_on List.nodup_range).mpr fun i _ j _ h => ?_
-  have h2 : ("@c" ++ toString i).toList = ("@c" ++ toString j).toList := by rw [h]
-  rw [String.toList_append, String.toList_append] at h2
-  exact toString_nat_inj (String.toList_inj.mp (List.append_cancel_left h2))
-
-theorem getElem_rebuildVarNames {k i : Nat} (hi : i < k) :
-    (rebuildVarNames k)[i]'(by rw [length_rebuildVarNames]; exact hi) = "@c" ++ toString i := by
-  simp [rebuildVarNames]
-
-theorem atPrefix_rebuildVarNames {k : Nat} {v : Var} (h : v ∈ rebuildVarNames k) :
-    "@".isPrefixOf v = true := by
-  rw [rebuildVarNames, List.mem_map] at h
-  obtain ⟨i, -, rfl⟩ := h
-  rw [String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
-    show ("@c").toList = ['@', 'c'] from by decide]
-  exact ⟨'c' :: (toString i).toList, rfl⟩
-
-theorem not_mem_rebuildVarNames {v : Var} {c : Char} (hv : v.toList = ['@', c]) (hc : c ≠ 'c')
-    (k : Nat) : v ∉ rebuildVarNames k := by
-  intro h
-  rw [rebuildVarNames, List.mem_map] at h
-  obtain ⟨i, -, heq⟩ := h
-  have h2 : v.toList = ['@', 'c'] ++ (toString i).toList := by
-    rw [← heq, String.toList_append, show ("@c").toList = ['@', 'c'] from by decide]
-  rw [hv] at h2
-  exact hc (List.cons.inj (List.cons.inj h2).2).1
-
-theorem Env.dom_zip_subset : ∀ (vs : List Var) (as : List Term), Env.dom (vs.zip as) ⊆ vs
-  | [], _ => by simp [Env.dom]
-  | _ :: _, [] => by simp [Env.dom]
-  | v :: vs, a :: as => by
-      intro w hw
-      rw [List.zip_cons_cons, Env.dom_cons, List.mem_cons] at hw
-      rcases hw with rfl | hw
-      · exact List.mem_cons_self
-      · exact List.mem_cons_of_mem _ (Env.dom_zip_subset vs as hw)
-
-theorem Env.lookup_zip : ∀ (vs : List Var) (as : List Term), vs.length = as.length →
-    vs.Nodup → ∀ (i : Nat) (hi : i < vs.length) (hi' : i < as.length),
-      Env.lookup vs[i] (vs.zip as) = some as[i]
-  | [], [], _, _, i, hi, _ => by simp at hi
-  | v :: vs, a :: as, hlen, hnd, 0, _, _ => by
-      rw [List.zip_cons_cons, Env.lookup_cons]
-      simp
-  | v :: vs, a :: as, hlen, hnd, i + 1, hi, hi' => by
-      rw [List.nodup_cons] at hnd
-      simp only [List.length_cons, Nat.add_lt_add_iff_right] at hi hi'
-      have hne : vs[i] ≠ v := fun hc => hnd.1 (hc ▸ List.getElem_mem hi)
-      rw [List.zip_cons_cons]
-      simp only [List.getElem_cons_succ]
-      rw [Env.lookup_cons, if_neg hne]
-      exact Env.lookup_zip vs as (by simpa using hlen) hnd.2 i hi hi'
-
-/-- **A list of variables evaluates to what the environment binds them to.** -/
-theorem Expr.evalList_map_var {sig : Signature} : ∀ (vs : List Var) (as : List Term) (ρ : Env),
-    vs.length = as.length →
-    (∀ (i : Nat) (hi : i < vs.length) (hi' : i < as.length), Env.lookup vs[i] ρ = some as[i]) →
-    Expr.evalList sig (vs.map Expr.var) ρ = some as
-  | [], [], _, _, _ => rfl
-  | [], _ :: _, _, hlen, _ => by simp at hlen
-  | _ :: _, [], _, hlen, _ => by simp at hlen
-  | v :: vs, a :: as, ρ, hlen, h => by
-      have h0 : Env.lookup v ρ = some a := h 0 (by simp) (by simp)
-      have hrest : Expr.evalList sig (vs.map Expr.var) ρ = some as :=
-        Expr.evalList_map_var vs as ρ (by simpa using hlen)
-          (fun i hi hi' => h (i + 1) (by simpa using hi) (by simpa using hi'))
-      rw [List.map_cons, Expr.evalList, Expr.eval, h0, Option.bind_some, hrest]
-      rfl
-
-/-- Every free variable of a list of variable atoms is one of them. -/
-theorem Expr.freeVarsList_map_var_subset : ∀ (vs : List Var) (σ : Env),
-    Expr.freeVarsList (vs.map Expr.var) σ ⊆ vs
-  | [], _ => by simp
-  | v :: vs, σ => by
-      intro w hw
-      rw [List.map_cons, Expr.freeVarsList, List.mem_union_iff] at hw
-      rcases hw with hw | hw
-      · rw [Expr.freeVars] at hw
-        split at hw
-        · exact absurd hw (by simp)
-        · rw [List.mem_singleton] at hw; exact hw ▸ List.mem_cons_self
-      · exact List.mem_cons_of_mem _ (Expr.freeVarsList_map_var_subset vs σ hw)
-
-/-- And one the environment does not bind is free. -/
-theorem Expr.mem_freeVarsList_map_var : ∀ (vs : List Var) (σ : Env) {v : Var}, v ∈ vs →
-    Env.lookup v σ = none → v ∈ Expr.freeVarsList (vs.map Expr.var) σ
-  | [], _, _, hv, _ => by simp at hv
-  | w :: vs, σ, v, hv, hn => by
-      rw [List.map_cons, Expr.freeVarsList, List.mem_union_iff]
-      rcases List.mem_cons.mp hv with rfl | hv'
-      · exact Or.inl (by rw [Expr.freeVars, hn]; simp)
-      · exact Or.inr (Expr.mem_freeVarsList_map_var vs σ hv' hn)
-
-/-- **`matchQuery` completeness, in general form.** A substitution the enumerator will offer is
-`Env.canon`-shaped at `Query.freeVars`' own order and drawn from `FDatabase.valueTerms`; the
-per-atom check then reads it restricted to that atom, and the two restrictions compose. -/
-theorem mem_matchQuery_of_lookup {d : FDatabase} {q : Query} {τ : Env}
-    (hdef : ∀ v ∈ Query.freeVars q [], (Env.lookup v τ).isSome = true)
-    (hval : ∀ v ∈ Query.freeVars q [], ∀ t, Env.lookup v τ = some t → t ∈ d.valueTerms)
-    (hp : ∀ p ∈ q, patternHolds d p (Env.canon (p.freeVars []) τ) = true) :
-    Env.canon (Query.freeVars q []) τ ∈ matchQuery d q := by
-  rw [matchQuery, List.mem_filter]
-  refine ⟨mem_assignments.mpr ⟨Env.dom_canon hdef, fun b hb => ?_⟩, List.all_eq_true.mpr ?_⟩
-  · obtain ⟨hmem, hlk⟩ := Env.mem_canon hb
-    exact hval b.1 hmem b.2 hlk
-  · intro p hpq
-    rw [Env.canon_canon (Query.freeVars_subset hpq) (Query.freeVars_nodup q [])]
-    exact hp p hpq
 
 set_option maxRecDepth 100000 in
 /-- **Non-vacuous**, at the state the one-off instance matches at: `cxRb` is `cxPre` without the
@@ -8542,43 +8421,6 @@ restriction. All three come off `EncAtom`: the evaluations it carries bind the v
 row columns are `FDatabase.RowColumnsValued`, and `Env.canon` is invisible to an atom because a
 variable it drops is one the environment already binds. -/
 
-mutual
-
-/-- **A variable of an expression that evaluates is bound.** `Expr.lookup_isSome_of_mem_evalList`
-at every variable rather than only at a top-level one. -/
-theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
-    ∀ {e : Expr} {t : Term}, Expr.eval sig e ρ = some t → v ∈ e.vars →
-      (Env.lookup v ρ).isSome
-  | .lit _, _, _, hv => by simp [Expr.vars] at hv
-  | .var w, _, he, hv => by
-      obtain rfl : v = w := by simpa [Expr.vars] using hv
-      rw [Expr.eval_var] at he; rw [he]; rfl
-  | .app f args, t, he, hv => by
-      rw [Expr.vars] at hv
-      have hl : ∃ ts, Expr.evalList sig args ρ = some ts := by
-        rw [Expr.eval] at he
-        split at he
-        · obtain ⟨ts, hts, -⟩ := Option.bind_eq_some_iff.mp he; exact ⟨ts, hts⟩
-        · split at he
-          · obtain ⟨ts, hts, -⟩ := Option.map_eq_some_iff.mp he; exact ⟨ts, hts⟩
-          · exact absurd he (by simp)
-      obtain ⟨ts, hts⟩ := hl
-      exact Expr.lookup_isSome_of_mem_varsList hts hv
-
-@[inherit_doc Expr.lookup_isSome_of_mem_vars]
-theorem Expr.lookup_isSome_of_mem_varsList {sig : Signature} {ρ : Env} {v : Var} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
-      v ∈ Expr.varsList es → (Env.lookup v ρ).isSome
-  | [], _, _, hv => by simp [Expr.varsList] at hv
-  | e :: es, _, he, hv => by
-      rw [Expr.evalList_cons, Option.bind_eq_some_iff] at he
-      obtain ⟨t, ht, he'⟩ := he
-      obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp he'
-      rw [Expr.varsList, List.mem_union_iff] at hv
-      exact hv.elim (fun h => Expr.lookup_isSome_of_mem_vars ht h)
-        (fun h => Expr.lookup_isSome_of_mem_varsList hus h)
-
-end
 
 mutual
 

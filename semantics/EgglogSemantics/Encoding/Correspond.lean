@@ -9434,12 +9434,6 @@ theorem eval_fiatE {sig : Signature} {σ : Env} (hfi : sig.IsCtor fiatName) :
     Expr.eval sig fiatE σ = some (Term.app fiatName []) := by
   rw [fiatE, Expr.eval_app_ctor (show Prim.ofName fiatName = none from rfl) hfi]; rfl
 
-/-- Evaluated columns record a complete atom at a declared nonprimitive head. -/
-theorem execAction_atom_of_eval {d : FDatabase} {f : FnName} {cols : List Expr}
-    {ts : List Term} (hp : Prim.ofName f = none) (hd : (d.sig f).isSome = true)
-    (hev : Expr.evalList d.sig cols d.env = some ts) :
-    execAction d (.expr (.app f cols)) = some (d.addAtom (.app f ts)) := by
-  simp only [execAction, Expr.evalAtom, hp, hd, if_true, hev, Option.map_some]
 
 mutual
 
@@ -11519,36 +11513,6 @@ The state is `cxPre` **without its third `set`** — and that third `set` *is* t
 e-class rule at the nullary `B` reads `@BView() ↦ ((B), @Fiat)` and the edge
 `@UF((B)) ↦ ((A), @Fiat)`, and re-keys the entry onto `(A)` with the composed proof. So the
 merge-phase witness `cxPre` above is the state this firing produced. -/
-
-/-- **A row of a `:merge` function makes its own atom hold**, at the values its columns are.
-The converse of `mem_terms_of_patternHolds_entry`, and what says that lemma — and the three
-families over it — is not vacuous. The only closure facts it needs are reflexive, so nothing
-here asks the kernel for a congruence closure. -/
-theorem patternHolds_entry_of_mem_rows {d : FDatabase} {vs as : List Expr} {f : FnName}
-    {σ : Env} {ts us : List Term} (he : (Expr.app f (as ++ vs)).entry d.sig = some (f, as, vs))
-    (hats : Expr.evalList d.sig as σ = some ts)
-    (hvus : Expr.evalList d.sig vs σ = some us)
-    (hrow : (⟨f, ts, us⟩ : Row) ∈ d.rows) (hcol : ∀ c ∈ ts ++ us, c ∈ d.terms) :
-    patternHolds d (.expr (.app f (as ++ vs))) σ = true := by
-  have hrefl : ∀ c ∈ ts ++ us, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF := by
-    intro c hc
-    exact FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl,
-      FDatabase.mem_addTerms_terms (FDatabase.mem_addTerms_terms (hcol c hc))⟩))
-  have hct : ∀ (xs : List Term),
-      (∀ c ∈ xs, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF) →
-      FDatabase.congrTuple ((d.addTerms ts).addTerms us).closureF xs xs = true := by
-    intro xs hxs
-    refine Bool.and_eq_true_iff.mpr ⟨by simp, List.all_eq_true.mpr (fun q hq => ?_)⟩
-    obtain ⟨a, b⟩ := q
-    obtain ⟨heq, hmem⟩ := mem_zip_self hq
-    simp only at heq hmem
-    subst heq
-    simpa using hxs a hmem
-  simp only [patternHolds, he, hvus, hats, List.any_eq_true]
-  refine ⟨⟨f, ts, us⟩, hrow, Bool.and_eq_true_iff.mpr
-    ⟨Bool.and_eq_true_iff.mpr ⟨by simp, ?_⟩, ?_⟩⟩
-  · exact hct ts (fun c hc => hrefl c (List.mem_append_left _ hc))
-  · exact hct us (fun c hc => hrefl c (List.mem_append_right _ hc))
 
 /-- The state `cxPre`'s first two `set`s leave: `(B)`'s view entry and the `union`'s edge. -/
 def cxRb : FDatabase :=
