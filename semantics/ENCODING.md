@@ -62,11 +62,11 @@ and pushes to the PR are authorized, including before the proofs are complete.
 ## Current implementation
 
 The Lean refactor separates congruence compilation, provenance instrumentation, and proof
-resugaring. The congruence pass is implemented in
-[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean), and provenance in
-[Provenance/Encode.lean](EgglogSemantics/Provenance/Encode.lean). Resugaring is not
-implemented yet. The old combined encoder remains as a comparison reference; its
-proof annotations have known correctness defects.
+lifting. The congruence pass is implemented in
+[Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean), provenance in
+[Provenance/Encode.lean](EgglogSemantics/Provenance/Encode.lean), and lifting in
+[Resugar/Lift.lean](EgglogSemantics/Resugar/Lift.lean). The old combined encoder remains
+as a comparison reference; its proof annotations have known correctness defects.
 
 ## Congruence compilation
 
@@ -146,8 +146,35 @@ or cause an otherwise stable rule to accumulate longer resident proofs.
 Extraction produces a shared certificate with explicit facts, then checks it against
 the uninstrumented relational program. Equality premises use checked subterms of table
 facts as existence witnesses; no auxiliary existence relation is needed. These are
-intermediate certificates. Source resugaring must still eliminate the generated tables
-and translate rebuilding, UF merges, and subterm evidence into source proofs.
+intermediate certificates, which lifting translates into source proofs.
+
+## Proof lifting
+
+`Resugar.lift` checks a relational certificate against the compiled program, then
+rebuilds it node by node as a source certificate. A view row `(@fView cs… id)` becomes
+the claim `id = f(cs…)`, a UF row an equality, and a value its reflexivity. Global rows
+become `fiat` nodes. Generated rules are recognized by their origin tags: path
+compression is transitivity, output propagation symmetry and transitivity, and child
+re-keying anchored congruence. A UF or view collision joins its two inputs the same way.
+A source rule firing names the original command, restricts the substitution to the
+original query's variables, and recovers its premises by walking the original query in
+the compiler's order ([Resugar/Query.lean](EgglogSemantics/Resugar/Query.lean)),
+consuming one flattened premise per application and equality and rebuilding nested
+patterns with congruence. A subterm's existence comes from the derivation that introduced
+it, never from a new `fiat`.
+
+Each node is validated by `SourceProof.checkNode` as it is added, and the result is
+checked again by `SourceProof.check`. `lift_sound` therefore inherits the source
+checker's soundness: a lifted claim whose endpoints the source holds is a source
+congruence.
+
+`Resugar.Export` writes certificates as JSON with the program as `.egg` source, and
+[proof_certificate.rs](../egglog/src/proofs/proof_certificate.rs) replays them through
+Rust egglog's proof checker. The fixtures in
+[Resugar/Fixtures.lean](EgglogSemantics/Resugar/Fixtures.lean) pair lifted certificates
+with hand-written certificates that both checkers must reject; their export is committed
+as `egglog/tests/lean-certificates.json`, and `make lean-certificate-test` also exports
+and checks the whole corpus.
 
 ## Proof status
 
@@ -192,7 +219,12 @@ by assuming an unproved intermediate term exists.
 proves that every accepted relational fact exists in a well-formed, reached state
 saturated for the original relational program's rules and merges. The corpus gate
 checks data preservation and every retained function entry's extracted certificate.
-Steps 4–5 remain: source resugaring and checking identical certificates in Lean and Rust.
+
+**Steps 4 and 5 are implemented.** [Resugar/Soundness.lean](EgglogSemantics/Resugar/Soundness.lean)
+proves `lift_sound` for lifted certificates. Every retained row of every in-domain corpus
+program lifts to a certificate the source checker accepts, and Rust egglog's checker
+accepts the same certificates and rejects the same hand-written counterexamples
+(`make lean-certificate-test`).
 
 Source merge proofs are deferred: equality can produce another spelling of one
 stored function row without establishing a second input to its merge body. The
@@ -224,11 +256,14 @@ Successful execution is assumed; termination is not proved.
 
 ## Validation
 
-`make lean-check` builds the library, audits for proof holes, and runs both encoding
-corpus gates. The congruence gate compares every pair of held source terms against its reading
-and compares all live data rows against the legacy encoder after dropping proof columns,
-proof constructors, and history relations. Failures, stuck executions, and insufficient
-fuel fail the command. Out-of-domain cases are counted separately.
+`make lean-check` builds the library, audits for proof holes, and runs the corpus gates.
+The congruence gate compares every pair of held source terms against its reading and
+compares all live data rows against the legacy encoder after dropping proof columns,
+proof constructors, and history relations. The provenance gate checks data preservation
+and every retained row's extracted certificate. The resugar gate lifts those certificates
+and checks them against the original source program, and the certificate gate exports the
+same certificates and checks them with Rust egglog. Failures, stuck executions, and
+insufficient fuel fail the command. Out-of-domain cases are counted separately.
 
 From `semantics/`:
 
@@ -237,6 +272,8 @@ lake build difftest
 .lake/build/bin/difftest congruence 64
 .lake/build/bin/difftest congruence 64 both-2 rand-43 sat-hit
 .lake/build/bin/difftest provenance 64
+.lake/build/bin/difftest resugar 64
+.lake/build/bin/difftest export-certificates 64 /tmp/certificates.json
 ```
 
 Executable regressions also check recursive traversal order, origin tags, rebuilding

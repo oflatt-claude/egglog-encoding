@@ -19,7 +19,8 @@ is saturated for every ruleset. They do not assume validity of intermediate clai
 
 The [regressions](EgglogSemantics/SourceProof/Tests.lean) cover missing existence,
 rule-created terms, nested queries, premise ordering, malformed substitutions, invalid
-references, and anchored congruence. Rust interoperability remains a separate obligation.
+references, and anchored congruence. The [fixtures](EgglogSemantics/Resugar/Fixtures.lean)
+hold the certificates that the Lean and Rust checkers must judge alike.
 
 ## Relational provenance
 
@@ -81,18 +82,22 @@ on this checker.
 ## Replacement and Rust compatibility
 
 The new congruence pass emits no certificates. The separate instrumentation pass
-records actual globals, rule firings, and merge derivations. Resugaring will reconstruct
-source-level certificates with explicit claims, substitutions, and existence evidence,
-following the same recursive order as query flattening.
+records actual globals, rule firings, and merge derivations, and
+[lifting](EgglogSemantics/Resugar/Lift.lean) reconstructs source-level certificates with
+explicit claims, substitutions, and existence evidence, following the same recursive
+order as query flattening.
 
 Rust's [proof checker](../egglog/src/proofs/proof_checker.rs) does not permit arbitrary
 eq-sort constructor reflexivity as `Fiat`. Its primitive-value reflexivity case is
 restricted, and its [proof format](../egglog/src/proofs/proof_format.rs) carries explicit
 propositions and anchored congruence. Rule-created constructions have rule provenance.
 
-Compatibility will require checking the same resugared certificate in Lean and Rust.
-Running their separate encoders on the same program does not establish that property.
-Resugaring and the shared-certificate bridge are not implemented yet.
+The same lifted certificates are checked in Lean and Rust: `Resugar.Export` writes them
+as JSON and [proof_certificate.rs](../egglog/src/proofs/proof_certificate.rs) replays
+them through Rust's checker. Running the two encoders separately on the same program
+would not establish that property. Rust's checker validates a proof by its references,
+so the bridge itself rejects a certificate whose node refers to a later node, as the Lean
+checker does.
 
 ## Source merge inputs
 

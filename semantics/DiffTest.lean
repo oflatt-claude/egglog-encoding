@@ -1,5 +1,6 @@
 import EgglogSemantics.Congruence.Tests
 import EgglogSemantics.Provenance.Extract
+import EgglogSemantics.Resugar.Export
 import EgglogSemantics.Encoding.Complete
 import EgglogSemantics.Encoding.Correspond
 import EgglogSemantics.Encoding.Encode
@@ -2953,7 +2954,7 @@ private def runCongruenceChecks (fuel : Nat) (names : List String) : IO UInt32 :
   IO.println s!"congruence: {tested} tested, {failed} failures, {skipped} outside domain"
   return if failed == 0 && tested > 0 then 0 else 1
 
-private def provenanceCheck (fuel : Nat) (p : Program) : List String := Id.run do
+private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : List String := Id.run do
   let q := Congruence.encode p
   let some C := SourceProof.contextOf q | return ["invalid congruence program"]
   let some encoded := Provenance.encode q | return ["provenance pass rejected input"]
@@ -2970,12 +2971,14 @@ private def provenanceCheck (fuel : Nat) (p : Program) : List String := Id.run d
   if terms.toFinset != original.terms.toFinset then
     errors := errors ++ ["projected retained facts differ"]
   let proofs := Provenance.retainedRows C.sig annotated.terms
-  let bad := proofs.filter fun r => (Provenance.extractRow q r).isNone
+  let bad := proofs.filter fun r =>
+    if liftProofs then (Resugar.extractRow p r).isNone else (Provenance.extractRow q r).isNone
   if !bad.isEmpty then
     errors := errors ++ [s!"{bad.length}/{proofs.length} retained proofs failed"]
   return errors
 
-private def runProvenanceChecks (fuel : Nat) (names : List String) : IO UInt32 := do
+private def runProvenanceChecks (fuel : Nat) (names : List String)
+    (liftProofs : Bool := false) : IO UInt32 := do
   let available := allCases ++ probeCases
   let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
   unless unknown.isEmpty do
@@ -2991,12 +2994,41 @@ private def runProvenanceChecks (fuel : Nat) (names : List String) : IO UInt32 :
       skipped := skipped + 1
       continue
     tested := tested + 1
-    let errors := provenanceCheck fuel p
+    let errors := provenanceCheck fuel p liftProofs
     unless errors.isEmpty do
       failed := failed + 1
       IO.println s!"FAIL {name}: {String.intercalate "; " errors}"
-  IO.println s!"provenance: {tested} tested, {failed} failures, {skipped} outside domain"
+  let label := if liftProofs then "resugar" else "provenance"
+  IO.println s!"{label}: {tested} tested, {failed} failures, {skipped} outside domain"
   return if failed == 0 && tested > 0 then 0 else 1
+
+/-- Write the curated fixtures and every in-domain case's lifted certificates as one JSON
+array, for `egglog/tests/lean_certificates.rs`. The fixtures alone go to `path` when
+`fixturesOnly` is set. -/
+private def exportCertificates (fuel : Nat) (path : String) (names : List String)
+    (fixturesOnly : Bool) : IO UInt32 := do
+  let some fixtures := Resugar.Export.fixtures |
+    IO.eprintln "difftest: a fixture program does not lift"; return 1
+  let mut cases := fixtures
+  unless fixturesOnly do
+    let available := allCases ++ probeCases
+    let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
+    unless unknown.isEmpty do
+      IO.eprintln s!"unknown cases: {String.intercalate ", " unknown}"
+      return 1
+    let selected := if names.isEmpty then allCases else available.filter fun c => names.contains c.1
+    for (name, p₀) in selected do
+      let p := p₀.declared
+      if !p.encodeDomainB then continue
+      let some cs := Resugar.certificates (relationalExecAt fuel FDatabase.empty) p |
+        IO.eprintln s!"difftest: {name} does not lift"; return 1
+      let some json := Resugar.Export.caseJson name p cs |
+        IO.eprintln s!"difftest: {name} is outside the source checker's fragment"; return 1
+      cases := cases ++ [json]
+  let json := Lean.Json.arr cases.toArray
+  IO.FS.writeFile path ((if fixturesOnly then json.pretty else json.compress) ++ "\n")
+  IO.println s!"wrote {cases.length} cases to {path}"
+  return 0
 
 /-- `difftest <dir> curated` writes the curated cases, `difftest <dir> merge` the curated
 `:merge` ones; `difftest <dir> seed <n>` writes one random constructor case named
@@ -3026,6 +3058,15 @@ program the e-matcher cannot finish costs one budget rather than the run. These 
 and never invoke egglog; the comparison is between the model and itself. -/
 def main (args : List String) : IO UInt32 := do
   match args with
+  | "resugar" :: fuel :: names =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n => runProvenanceChecks n names true
+  | ["export-fixtures", path] => exportCertificates 0 path [] true
+  | "export-certificates" :: fuel :: path :: names =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n => exportCertificates n path names false
   | "provenance" :: fuel :: names =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
@@ -3224,6 +3265,9 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln "       difftest encode-domain | encode-cost | encode-selftest"
     IO.eprintln "       difftest congruence <fuel> [case…]"
     IO.eprintln "       difftest provenance <fuel> [case…]"
+    IO.eprintln "       difftest resugar <fuel> [case…]"
+    IO.eprintln "       difftest export-fixtures <path>"
+    IO.eprintln "       difftest export-certificates <fuel> <path> [case…]"
     IO.eprintln "       difftest encode <fuel> [case…] | check <fuel> [case…]"
     IO.eprintln "       difftest correspond <fuel> [case…] | correspond-selftest"
     IO.eprintln "       difftest correspond-alt flat|rows|no-uf|no-view <fuel> [case…]"

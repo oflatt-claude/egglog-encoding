@@ -1,8 +1,8 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
 	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
-	lean-check lean-difftest lean-congruence-test lean-provenance-test \
-	update-snapshots format \
+	lean-check lean-difftest lean-congruence-test lean-provenance-test lean-resugar-test \
+	lean-certificate-test lean-update-fixtures update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
 
@@ -21,6 +21,9 @@ CARGO_HOME_DIR ?= $(HOME)/.cargo
 
 # elan installs here by default and is not on PATH in a non-login shell.
 LEAN_BIN_DIR ?= $(HOME)/.elan/bin
+
+# Where lean-certificate-test writes the Lean model's lifted certificates.
+LEAN_CERTIFICATES ?= /tmp/egglog-lean-certificates.json
 
 # Full validation is hygiene followed by tests.
 check: nits test
@@ -112,13 +115,15 @@ nightly-local: nightly-uv nightly-rustup
 # see semantics/README.md. `lake build` only warns on a proof hole, so the sources
 # are grepped as well, excluding backtick-quoted prose.
 # All current and retained legacy theorems must build without proof holes. The native
-# corpus gates check congruence correspondence, provenance data preservation, and
-# extracted certificates; see semantics/ENCODING.md for the remaining work.
+# corpus gates check congruence correspondence, provenance data preservation, extracted
+# certificates, and lifted source certificates, which Rust egglog then checks too.
 lean-check:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build
 	! grep -rnw --include='*.lean' sorry semantics/EgglogSemantics | grep -v '`sorry`'
 	$(MAKE) lean-congruence-test
 	$(MAKE) lean-provenance-test
+	$(MAKE) lean-resugar-test
+	$(MAKE) lean-certificate-test
 
 lean-congruence-test:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
@@ -127,6 +132,23 @@ lean-congruence-test:
 lean-provenance-test:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
 	cd semantics && .lake/build/bin/difftest provenance 64
+
+lean-resugar-test:
+	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
+	cd semantics && .lake/build/bin/difftest resugar 64
+
+# The same lifted certificates, checked by Rust egglog: the committed fixture must
+# match a fresh export, then the whole corpus is exported and checked.
+lean-certificate-test:
+	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
+	cd semantics && .lake/build/bin/difftest export-fixtures "$(LEAN_CERTIFICATES)"
+	cmp "$(LEAN_CERTIFICATES)" egglog/tests/lean-certificates.json
+	cd semantics && .lake/build/bin/difftest export-certificates 64 "$(LEAN_CERTIFICATES)"
+	EGGLOG_LEAN_CERTIFICATES="$(LEAN_CERTIFICATES)" cargo test -p egglog --test lean_certificates
+
+lean-update-fixtures:
+	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
+	cd semantics && .lake/build/bin/difftest export-fixtures ../egglog/tests/lean-certificates.json
 
 # Differentially test the Lean semantics against egglog: for each generated program, the
 # Lean interpreter's per-constructor row counts against egglog's `(print-size)`. Needs a

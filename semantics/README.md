@@ -24,7 +24,8 @@ its refinement contracts, and the limits of the model.
 The congruence compiler translates constructor programs into explicit union-find and view
 tables. It handles query flattening and rebuilding, with one id output per table and no
 proof annotations. A separate provenance pass adds proof columns for globals, rule firings,
-and function merges. Proof resugaring back to the source program remains to be implemented.
+and function merges, and proof lifting turns its certificates into source certificates
+that both the Lean and Rust checkers accept.
 
 The congruence pass has a proved end-to-end correspondence theorem for the constructor
 source fragment, including execution without implicit target equality reasoning. Both the
@@ -46,6 +47,7 @@ the certificate boundaries.
 | `EgglogSemantics/Congruence/` | Congruence compiler, completeness proof, and regressions |
 | `EgglogSemantics/SourceProof/` | Source certificate checker, soundness, and regressions |
 | `EgglogSemantics/Provenance/` | Function provenance instrumentation, extraction, checker, and soundness |
+| `EgglogSemantics/Resugar/` | Proof lifting to source certificates, soundness, fixtures, and JSON export |
 | `EgglogSemantics/Encoding/` | Shared source analysis and the legacy combined encoder and proofs |
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
@@ -62,7 +64,7 @@ From the workspace root:
 
 ```sh
 make check                 # Python and Rust formatting, checks, and tests
-make lean-check            # Lean build, proof-hole audit, and both encoding corpus gates
+make lean-check            # Lean build, proof-hole audit, corpus gates, Rust certificate check
 cargo build --release -p egglog
 make lean-difftest          # compare Lean and egglog per-function row counts
 ```
@@ -73,6 +75,7 @@ Additional executable probes, from `semantics/`:
 lake build difftest
 .lake/build/bin/difftest congruence 64
 .lake/build/bin/difftest provenance 64
+.lake/build/bin/difftest resugar 64
 .lake/build/bin/difftest correspond 64  # legacy data correspondence
 .lake/build/bin/difftest check 64       # legacy checker diagnostic, known unsound
 ```
