@@ -10,6 +10,7 @@ import re
 import sys
 import threading
 import uuid
+from collections import Counter
 from dataclasses import asdict, dataclass, replace
 
 import paper_fixtures as pf
@@ -206,13 +207,11 @@ LONG_HEAD = (
     "paper (iters, nodes, classes, sat.)",
 )
 SUMMARY_NOTE = (
-    "Budget is the round limit; elapsed time includes unsuccessful runs. "
-    "SDQL uses 44 rules unless noted. — means unavailable. "
-    "encoding-no-aliasing restricts matching to the nested matcher's aliasing policy. "
-    "ref-nested uses the paper's syntactic substitution; the other systems use snapshot substitution. "
-    "Exact comparisons pair encoding with ref-multi, and encoding-no-aliasing with ref-nested-snapshot. "
-    "Reference settings and correctness comparisons are in the full report."
+    "Seconds, including unsuccessful runs; — means unavailable. "
+    "SDQL uses 44 rules unless noted. ref-nested uses syntactic substitution. "
+    "Budgets, graph sizes, and snapshot-reference timings are in the full report."
 )
+ERROR_TITLE = "ERROR: evaluation checks failed"
 
 
 def paper_cell(r):
@@ -320,53 +319,70 @@ def workload_label(study, case, rules):
 
 
 def summary(rows, sides):
-    """Table 1's grouped system rows, with independently measured goals and timings."""
-    head = ("Workload", "System", "Budget", "Goal", "Elapsed (s)", "Nodes", "Classes", "Sat.")
+    """One benchmark per row, one timing per treatment; keep snapshot timings diagnostic."""
+    shown = tuple(side for side in sides if side != "ref-nested-snapshot")
+    head = ("Benchmark", *shown)
     groups = {}
     for row in rows:
         groups.setdefault(row.workload(), {})[row.side] = row
+    labels = Counter(workload_label(study, case, rules) for study, case, _rounds, rules in groups)
     table = []
     for (study, case, rounds, rules), group in groups.items():
         label = workload_label(study, case, rules)
-        for i, side in enumerate(sides):
-            row = group.get(side)
-            system = f"{side} (jobs {row.jobs})" if row is not None and row.jobs > 1 else side
-            cells = [label if i == 0 else "", system, str(rounds)]
-            if row is None:
-                cells += ["missing", "—", "—", "—", "—"]
-            else:
-                goal = "error" if row.goal.startswith("error") else row.goal
-                cells += [goal, seconds_cell(row) or "—"]
-                cells += ["—" if n is None else f"{n:,}" for n in (row.nodes, row.classes)]
-                cells += ["—" if row.saturated == "?" else row.saturated]
-            table.append(cells)
+        if labels[label] > 1:
+            label += f" [{rounds} rounds]"
+        table.append([label, *(seconds_cell(group[side]) or "—" if side in group else "—" for side in shown)])
     return head, table
 
 
-def report_sections(rows, sides, long=False):
+def report_sections(rows, sides, long=False, *, counts=True):
     full = (LONG_HEAD, [long_cells(r) for r in rows]) if long else pivot(rows, sides)
     note = SUMMARY_NOTE
+    note += (
+        " Checks require equal class/node counts and verified isomorphism for "
+        "encoding ↔ ref-multi and encoding-no-aliasing ↔ ref-nested-snapshot (when both selected)."
+        if counts
+        else " Class/node counts and isomorphism checks are disabled (--no-counts)."
+    )
     if any(row.jobs > 1 for row in rows):
         note += (
-            " Jobs is the parallel worker limit; unlabeled systems ran serially. "
-            "Parallel elapsed times can include CPU and memory contention; use --jobs 1 for serial timings."
+            " Includes parallel timings with CPU and memory contention; worker limits are in the full report. "
+            "Use --jobs 1 for serial timings."
         )
     return [("Summary", note, *summary(rows, sides)), ("Full report", "", *full)]
 
 
-def markdown(head, table):
+def markdown(head, table, *, right_align=False):
     """A Markdown table with its columns padded, so it also reads aligned in a terminal."""
     table = [list(head)] + table
     widths = [max(len(row[i]) for row in table) for i in range(len(head))]
 
     def line(cells):
-        return "| " + " | ".join(c.ljust(w) for c, w in zip(cells, widths, strict=True)) + " |"
+        return (
+            "| "
+            + " | ".join(
+                c.rjust(w) if right_align and i else c.ljust(w)
+                for i, (c, w) in enumerate(zip(cells, widths, strict=True))
+            )
+            + " |"
+        )
 
-    rule = "|" + "|".join("-" * (w + 2) for w in widths) + "|"
+    rule = "|" + "|".join("-" * (w + 1) + (":" if right_align and i else "-") for i, w in enumerate(widths)) + "|"
     return "\n".join([line(table[0]), rule] + [line(c) for c in table[1:]])
 
 
-def html(sections):
+def markdown_report(sections, errors=()):
+    blocks = []
+    for title, note, head, table in sections:
+        blocks.append(
+            f"## {title}\n\n{markdown(head, table, right_align=title == 'Summary')}" + (f"\n\n{note}" if note else "")
+        )
+        if title == "Summary" and errors:
+            blocks.append(f"## {ERROR_TITLE}\n\n" + "\n".join(f"- {error}" for error in errors))
+    return "\n\n".join(blocks)
+
+
+def html(sections, errors=()):
     """The summary and full table as a standalone page."""
     import html as h
 
@@ -385,6 +401,12 @@ def html(sections):
             + (f"<p>{h.escape(note)}</p>" if note else "")
             + "</section>"
         )
+        if title == "Summary" and errors:
+            contents.append(
+                f'<aside class="errors" role="alert"><h2>{ERROR_TITLE}</h2><ul>'
+                + "".join(f"<li>{h.escape(error)}</li>" for error in errors)
+                + "</ul></aside>"
+            )
     return (
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'>"
         "<title>slotted eval</title>"
@@ -396,6 +418,9 @@ def html(sections):
         "section:first-of-type tr{background:none}"
         "section:first-of-type th{background:none;border-bottom:2px solid #777}"
         "section:first-of-type tr.group td{border-top:1px solid #ccc}"
-        "section:first-of-type td:nth-child(n+3){text-align:right;font-variant-numeric:tabular-nums}"
+        "section:first-of-type th:nth-child(n+2),section:first-of-type td:nth-child(n+2){text-align:right}"
+        "section:first-of-type td{font-variant-numeric:tabular-nums}"
+        ".errors{border:3px solid #b91c1c;background:#fef2f2;color:#7f1d1d;padding:1em 1.5em;margin:1.5em 0}"
+        ".errors h2{margin-top:0}.errors li{margin:.5em 0;overflow-wrap:anywhere}"
         "</style>\n" + "\n".join(contents) + "\n"
     )

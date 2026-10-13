@@ -1198,13 +1198,18 @@ when the graphs are isomorphic. The original nested baseline can miss a goal tha
 the encoding reaches, and graph agreement with that baseline is not required.
 Elapsed seconds measure
 the whole run, including unsuccessful runs, rather than time to a successful goal.
-Both Markdown and HTML reports start with a compact table in the paper's Table 1
-layout: systems grouped under each workload, with budget, goal, elapsed seconds,
-nodes, classes, and saturation. Budget means the configured round limit, not the
-number of completed iterations. The full diagnostic table follows; `--long` changes
-only that full table. Both views use the same observations and preserve failed goals
-and missing results. Each workload groups five systems: `encoding`,
-`encoding-no-aliasing`, `ref-multi`, `ref-nested-snapshot`, and `ref-nested`.
+Both Markdown and HTML reports start with a timing matrix: one row per benchmark,
+with columns for `encoding`, `encoding-no-aliasing`, `ref-multi`, and `ref-nested`.
+Cells contain elapsed seconds, including unsuccessful runs; missing times are marked
+with a dash. `ref-nested-snapshot` still runs for correctness and appears in the full
+diagnostic table, alongside goals, round budgets, counts, and saturation. Its timing
+is never used in place of the syntactic `ref-nested` baseline. Benchmarks with multiple
+round budgets get distinct row labels. `--long` changes only the full diagnostic table.
+An error banner immediately after the summary lists missed goals, missing results,
+count mismatches, and unsuccessful or inconclusive required isomorphism comparisons.
+The same checks determine the nonzero exit status, including when loading saved
+results. An explicit `--no-counts` report states that count/isomorphism checks are disabled;
+goals are still required. Both views use the same observations.
 The two encoding variants have separate timings and comparison certificates;
 neither can overwrite the other's result when cached runs are merged.
 Collection progress goes to stderr: one dot per completed workload/system sample

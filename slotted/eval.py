@@ -55,9 +55,10 @@ from eval_report import (  # noqa: E402
     Row,
     html,
     load_rows,
-    markdown,
+    markdown_report,
     quiet_progress,
     report_sections,
+    workload_label,
 )
 
 sc = __import__("slotted-egglog")
@@ -589,15 +590,11 @@ def main():
     else:
         rows = collect(args, sides, ap, config=config)
 
-    sections = report_sections(rows, sides, args.long)
-    print(
-        "\n\n".join(
-            f"## {title}\n\n{markdown(head, table)}" + (f"\n\n{note}" if note else "")
-            for title, note, head, table in sections
-        )
-    )
+    errors = failures(rows, sides, args.counts)
+    sections = report_sections(rows, sides, args.long, counts=args.counts)
+    print(markdown_report(sections, errors))
     if args.html:
-        args.html.write_text(html(sections))
+        args.html.write_text(html(sections, errors))
         print(f"wrote {args.html}", file=sys.stderr)
     if not args.report:
         # one id per invocation: the clock alone can name two quick runs alike
@@ -610,28 +607,48 @@ def main():
                     )
                     + "\n"
                 )
-    return 0 if successful(rows, sides, args.counts) else 1
+    return 1 if errors else 0
 
 
 def successful(rows, sides, counts):
     """Goals must succeed; each selected exact pair requires counts and a certificate."""
-    if not rows or any(r.goal != "yes" for r in rows):
-        return False
+    return not failures(rows, sides, counts)
+
+
+def failures(rows, sides, counts):
+    """The error banner and exit status use the same correctness gate."""
+    if not rows:
+        return ["No benchmark results."]
+    errors = []
     groups = {}
     for row in rows:
         groups.setdefault(row.workload(), {})[row.side] = row
-    if any(not set(sides).issubset(group) for group in groups.values()):
-        return False
-    if not counts:
-        return True
-    for group in groups.values():
+        if row.goal != "yes":
+            label = workload_label(row.study, row.case, row.rules)
+            errors.append(f"{label} [{row.rounds} rounds] / {row.side}: goal not reached ({row.goal}).")
+    for (study, case, rounds, rules), group in groups.items():
+        label = f"{workload_label(study, case, rules)} [{rounds} rounds]"
+        missing = [side for side in sides if side not in group]
+        if missing:
+            errors.append(f"{label}: missing results for {', '.join(missing)}.")
+        if not counts:
+            continue
         for encoding, reference in EXACT_PAIRS.items():
             if encoding not in sides or reference not in sides:
                 continue
+            if encoding not in group or reference not in group:
+                continue
             enc, ref = group[encoding], group[reference]
-            if compare_counts(enc, ref) != "same counts" or enc.verdict(ref) != "isomorphic":
-                return False
-    return True
+            reasons = []
+            count_verdict, graph_verdict = compare_counts(enc, ref), enc.verdict(ref)
+            # Graph verdicts can already carry the count failure plus its cause.
+            if count_verdict != "same counts" and not graph_verdict.startswith(count_verdict):
+                reasons.append(count_verdict)
+            if graph_verdict != "isomorphic":
+                reasons.append(graph_verdict)
+            if reasons:
+                errors.append(f"{label}: {encoding} vs {reference}: {'; '.join(reasons)}")
+    return errors
 
 
 def collect_workload(task, args, sides, config, progress):

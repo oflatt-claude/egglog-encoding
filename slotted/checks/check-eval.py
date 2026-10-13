@@ -183,6 +183,9 @@ def exit_status(enc, ref):
                 timeout=30,
             )
             assert result.returncode == (0 if verdict == "isomorphic" else 1), (verdict, result.stderr)
+            assert (R.ERROR_TITLE in result.stdout) == (verdict != "isomorphic")
+            if verdict != "isomorphic":
+                assert "encoding vs ref-multi" in result.stdout.split(R.ERROR_TITLE)[1]
         # Loading a report also checks counts, even if its stored verdict is positive.
         enc.vs_ref = {"ref-multi": E.Comparison(enc.observation, ref.observation, "isomorphic")}
         for side in (enc, ref):
@@ -206,6 +209,8 @@ def exit_status(enc, ref):
                             timeout=30,
                         )
                         assert result.returncode == 1, (name, value, result.stdout, result.stderr)
+                        banner = result.stdout.split(R.ERROR_TITLE)[1].split("## Full report")[0]
+                        assert ("counts unavailable" if value is None else f"different: {name}") in banner
     enc.vs_ref = {"ref-multi": E.Comparison(enc.observation, ref.observation, "isomorphic")}
     for enc_goal, ref_goal in (("yes", "no"), ("no", "yes"), ("no", "no")):
         enc.goal, ref.goal = enc_goal, ref_goal
@@ -252,24 +257,22 @@ def summary_reporting():
     enc.goal, enc.seconds, enc.nodes, enc.classes, enc.saturated = "yes", 1.2, 1_234, 56, "yes"
     nested = E.Row("sdql", enc.case, "ref-nested", 30, 44)
     nested.goal, nested.seconds = "no", 0.5
-    head, table = R.summary([nested, enc], E.SIDES)
-    cells = [dict(zip(head, row, strict=True)) for row in table]
-    assert [row["System"] for row in cells] == list(E.SIDES)
-    assert [row["Goal"] for row in cells] == ["yes", "missing", "missing", "missing", "no"]
-    assert [row["Elapsed (s)"] for row in cells] == ["1.2", "—", "—", "—", "0.5"]
-    assert cells[0]["Nodes"] == "1,234" and cells[0]["Classes"] == "56"
-    assert all(row["Budget"] == "30" for row in cells)
-    assert cells[0]["Workload"] == "MMM (1st)" and not cells[1]["Workload"]
-    assert cells[-1]["Nodes"] == cells[-1]["Sat."] == "—"
+    snapshot = E.Row("sdql", enc.case, "ref-nested-snapshot", 30, 44)
+    snapshot.goal, snapshot.seconds = "yes", 9.9
+    head, table = R.summary([nested, enc, snapshot], E.SIDES)
+    assert head == ("Benchmark", "encoding", "encoding-no-aliasing", "ref-multi", "ref-nested")
+    assert table == [["MMM (1st)", "1.2", "—", "—", "0.5"]]
+    # The snapshot timing must never be relabelled as the syntactic baseline.
+    assert R.summary([snapshot], E.SIDES)[1][0][-1] == "—"
 
     # Missing/failed measurements stay explicit, including in a timing-only run.
     for goal in ("timeout", "error: detailed diagnostic", "?"):
         nested.goal = goal
         nested.seconds, nested.nodes, nested.classes = None, None, 0
         head, table = R.summary([nested], ("ref-nested",))
-        cells = dict(zip(head, table[0], strict=True))
-        assert cells["Goal"] == ("error" if goal.startswith("error") else goal)
-        assert cells["Elapsed (s)"] == cells["Nodes"] == "—" and cells["Classes"] == "0"
+        assert table == [["MMM (1st)", "—"]]
+        errors = E.failures([nested], ("ref-nested",), False)
+        assert len(errors) == 1 and f"goal not reached ({goal})" in errors[0]
 
     # Different round budgets and rule subsets cannot collapse into one group.
     small = E.Row("sdql", "batax_2nd-12rules", "encoding", 12, 12)
@@ -277,24 +280,24 @@ def summary_reporting():
     longer = E.Row("sdql", full.case, "encoding", 30, 44)
     array = E.Row("array", "goal-2d-4f-N3", "encoding", 6)
     custom = E.Row("custom", "<case&>", "encoding", 1, 7)
-    rows = [enc, nested, small, full, longer, array, custom]
+    rows = [enc, nested, snapshot, small, full, longer, array, custom]
     head, table = R.summary(rows, ("encoding",))
     labels = [row[0] for row in table]
     assert labels == [
         "MMM (1st)",
         "BATAX (2nd, 12 rules)",
-        "BATAX (2nd)",
-        "BATAX (2nd)",
+        "BATAX (2nd) [12 rounds]",
+        "BATAX (2nd) [30 rounds]",
         "Array N=3",
         "custom: <case&> (7 rules)",
     ]
-    assert [row[2] for row in table[2:4]] == ["12", "30"]
+    assert all(len(row) == 2 for row in table)
 
     with tempfile.TemporaryDirectory(prefix="slotted-eval-summary-") as tmp:
         path, page = Path(tmp) / "report.jsonl", Path(tmp) / "report.html"
         record = "".join(json.dumps(row.as_dict("summary")) + "\n" for row in rows)
         path.write_text(record)
-        summary = R.markdown(*R.summary(rows, E.SIDES))
+        summary = R.markdown(*R.summary(rows, E.SIDES), right_align=True)
         for long in (False, True):
             result = subprocess.run(
                 [
@@ -315,13 +318,33 @@ def summary_reporting():
             assert result.returncode == 1, result.stderr
             assert result.stdout.startswith("## Summary\n\n" + summary)
             assert result.stdout.count("## Full report") == 1
+            assert result.stdout.count(R.ERROR_TITLE) == 1
+            assert result.stdout.index(R.ERROR_TITLE) < result.stdout.index("## Full report")
+            assert "goal not reached" in result.stdout.split(R.ERROR_TITLE)[1]
             full_table = (R.LONG_HEAD, [R.long_cells(r) for r in rows]) if long else R.pivot(rows, E.SIDES)
             assert R.markdown(*full_table) in result.stdout
             markup = page.read_text()
             assert markup.count("<table>") == 2
             assert "<h2>Summary</h2>" in markup and "<h2>Full report</h2>" in markup
+            assert 'role="alert"' in markup and f"<h2>{R.ERROR_TITLE}</h2>" in markup
+            assert markup.index('role="alert"') < markup.index("<h2>Full report</h2>")
             assert "&lt;case&amp;&gt;" in markup and "<case&>" not in markup
             assert path.read_text() == record
+
+        # An explicit timing-only report says that checks were disabled and succeeds
+        # without a certificate. The same cached rows fail under default checking.
+        for row in (enc, snapshot):
+            row.goal = "yes"
+        enc.side = "encoding-no-aliasing"
+        path.write_text("".join(json.dumps(row.as_dict("unchecked")) + "\n" for row in (enc, snapshot)))
+        result = subprocess.run(
+            [sys.executable, E.__file__, "--from", path, "--no-counts"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "checks are disabled (--no-counts)" in result.stdout and R.ERROR_TITLE not in result.stdout
 
 
 def substitution_policies():
@@ -499,6 +522,9 @@ def nested_comparison_policy():
                 timeout=30,
             )
             assert result.returncode == (0 if verdict == "isomorphic" else 1), result.stderr
+            assert (R.ERROR_TITLE in result.stdout) == (verdict != "isomorphic")
+            if verdict != "isomorphic":
+                assert "encoding-no-aliasing vs ref-nested-snapshot" in result.stdout.split(R.ERROR_TITLE)[1]
     enc.vs_ref = {ref.side: E.Comparison(enc.observation, ref.observation, "isomorphic")}
     assert not E.successful([enc], sides, True)
     with patch.object(ref, "nodes", 2):
@@ -518,7 +544,7 @@ def nested_comparison_policy():
         assert len(table) == 1
         cells = dict(zip(head, table[0], strict=True))
         assert cells["encoding-no-aliasing vs ref-nested-snapshot"] == "isomorphic"
-        assert len(R.summary(loaded, E.SIDES)[1]) == len(E.SIDES)
+        assert len(R.summary(loaded, E.SIDES)[1]) == 1
 
 
 def combined_comparisons():
@@ -541,10 +567,20 @@ def combined_comparisons():
             with patch.dict(enc.vs_ref, {reference: comparison}):
                 assert not E.successful(rows, E.SIDES, True)
                 assert E.successful(rows, E.SIDES, False)
+                assert E.failures(rows, E.SIDES, True) == [
+                    f"ΣMMM (1st) [{enc.rounds} rounds]: {encoding} vs {reference}: {verdict}"
+                ]
                 head, table = R.pivot(rows, E.SIDES)
                 assert dict(zip(head, table[0], strict=True))[f"{encoding} vs {reference}"] == verdict
         with patch.object(enc, "observation", "new-run"):
             assert not E.successful(rows, E.SIDES, True)
+            assert "selected observations have not been compared" in E.failures(rows, E.SIDES, True)[0]
+
+    # Syntactic nested graphs remain diagnostic; their differences do not fail an
+    # otherwise valid report or masquerade as failure of the required snapshot pair.
+    enc, ref = by_side["encoding-no-aliasing"], by_side["ref-nested"]
+    with patch.dict(enc.vs_ref, {ref.side: E.Comparison(enc.observation, ref.observation, "different: node sets")}):
+        assert not E.failures(rows, E.SIDES, True)
 
     with tempfile.TemporaryDirectory(prefix="slotted-combined-report-") as tmp:
         path = Path(tmp) / "rows.jsonl"
@@ -634,7 +670,8 @@ def parallel_collection():
     assert not E.successful(loaded, E.SIDES, True)
     sections = R.report_sections(loaded, E.SIDES)
     assert "contention" in sections[0][1]
-    assert all("jobs 2" in row[1] for row in sections[0][3])
+    assert "worker limits are in the full report" in sections[0][1]
+    assert len(sections[0][3]) == 2 and all(len(row) == 5 for row in sections[0][3])
 
     # The child must receive CLI configuration, not its freshly imported defaults.
     args.study = "array"
