@@ -208,9 +208,16 @@ The new pass currently has kernel-checked proofs of:
   stores every original source term as an id.
 - `RunState.round`, `RunState.saturate`, and `RunState.rebuilt`: merge phases and rule
   rounds compose the historical invariants, and actual maintenance saturation establishes
-  `Rebuilt`. Generated maintenance rules discharge preservation directly. Source-rule
-  preservation still needs composition with the corresponding source round or saturation;
-  the program-wide theorem is not yet assembled.
+  `Rebuilt`. Generated maintenance rules discharge preservation directly.
+- `rulesEncoded_of_prefix` and `RulesEncoded.rebuild_closed`: actual prefix executions
+  retain exactly the source and maintenance rules, and closure under a source saturation
+  ruleset also closes rebuilding through the generated copies with identical queries and
+  heads. Source rules cannot enter the reserved rebuilding ruleset.
+- `round_simulation` and `saturation_simulation`: aligned source and compiled runs preserve
+  both sound historical entries and readings of source terms and unions. The saturation
+  proof justifies target rounds in the final saturated source state, then inducts over
+  source rounds into the rebuilt target fixed point. Initial-state and top-level command
+  composition remain to be assembled into the program-wide theorem.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view

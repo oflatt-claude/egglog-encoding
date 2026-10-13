@@ -1,4 +1,5 @@
 import EgglogSemantics.Encoding.Source
+import EgglogSemantics.Encoding.Names
 import EgglogSemantics.Proofs.Scope
 
 /-! Execution properties of the constructor source fragment. Scoped rule heads use
@@ -654,5 +655,18 @@ theorem Actions.Scoped.mono : ∀ (as : List Action) {Γ Γ' : Scope}, (∀ v �
 
 /-- An environment models its own domain. -/
 theorem Scope.Models.dom (σ : Env) : Scope.Models (Env.dom σ) σ := fun _ => Iff.rfl
+
+/-- A source rule's ruleset is a source name, so it is not `@rebuild`. -/
+theorem ruleset_ne_rebuild {P : Program} (hdom : P.EncodeDomain) {s : Rule}
+    (hs : Cmd.rule s ∈ P) : s.ruleset ≠ rebuildRuleset := by
+  intro hc
+  refine hdom.noAt s.ruleset ?_ ?_
+  · rw [Program.names]
+    refine List.mem_append.mpr (Or.inr ?_)
+    rw [Program.rulesets, List.mem_dedup]
+    exact List.mem_flatMap.mpr ⟨Cmd.rule s, hs, by simp [Cmd.rulesets]⟩
+  · -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
+    rw [hc]
+    exact (by decide +kernel : "@".isPrefixOf rebuildRuleset = true)
 
 end Egglog

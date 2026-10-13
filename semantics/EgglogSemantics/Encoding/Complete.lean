@@ -384,19 +384,6 @@ source name — ruleset names included — out of the generated namespace, so a
 `FDatabase.FiringsSoundIn` the right hypothesis for those rounds and
 `maintenance_soundTerms` the whole of their discharge. -/
 
-/-- A source rule's ruleset is a source name, so it is not `@rebuild`. -/
-theorem ruleset_ne_rebuild {P : Program} (hdom : P.EncodeDomain) {s : Rule}
-    (hs : Cmd.rule s ∈ P) : s.ruleset ≠ rebuildRuleset := by
-  intro hc
-  refine hdom.noAt s.ruleset ?_ ?_
-  · rw [Program.names]
-    refine List.mem_append.mpr (Or.inr ?_)
-    rw [Program.rulesets, List.mem_dedup]
-    exact List.mem_flatMap.mpr ⟨Cmd.rule s, hs, by simp [Cmd.rulesets]⟩
-  · -- `String.isPrefixOf` does not reduce under `decide`'s evaluator; the kernel's does.
-    rw [hc]
-    exact (by decide +kernel : "@".isPrefixOf rebuildRuleset = true)
-
 /-- **A rebuild round's firings are all maintenance firings.** -/
 theorem firingsSoundIn_rebuild {P : Program} (hdom : P.EncodeDomain) {sg : Signature}
     {sd : Database} {d : FDatabase} (hok : d.EncOk P sg sd) :
