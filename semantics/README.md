@@ -25,9 +25,9 @@ The congruence compiler translates constructor programs into explicit union-find
 tables. It handles query flattening and rebuilding, with one id output per table and no
 proof annotations. Provenance instrumentation and proof resugaring will be separate passes.
 
-The executable reader and the abstract correspondence reductions have been proved for
-this pass. The full execution-invariant proof is still being ported from the old combined
-encoder, whose data correspondence theorem remains checked. The old proof checker has a
+Query matching, rebuilding invariants, and round and saturation simulation are proved.
+Initial-state and command composition remain for the end-to-end completeness theorem.
+The legacy encoder’s data correspondence theorem remains checked. The old proof checker has a
 known existence defect and must not be used as a proof-validity oracle. The library
 permits no `sorry`.
 

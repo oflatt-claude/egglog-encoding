@@ -571,37 +571,14 @@ private def localProgram : Program :=
 #guard Checks localProgram (pRule 0 [pFiat]) (tF tA) tB
 #guard !Checks localProgram (pRule 0 [pFiat]) (tF tC) tB
 
-/-! ### `@Fiat` at a rule-created term, which is the residue
+/-! ### Missing construction provenance
 
-`props` at `@Fiat` yields `C.eqs` — the *top-level* actions — plus reflexivity, and
-reflexivity needs an endpoint to be read off (`reflProps`). A premise sitting at a query
-fact neither side of which `σ` grounds is asked with **both** endpoints free, so `@Fiat`
-offers it `C.eqs` and nothing else. `encodeBuild`, meanwhile, writes a view entry under
-`@Fiat` whatever context the build is in, so a row a **rule head** created carries a bare
-`@Fiat` there. Those two meet exactly where a rule must anchor its premise at a term that
-exists only because an earlier rule fired: the checker refuses, and it is the checker's
-incompleteness rather than the encoder's mistake.
+The legacy encoder uses `@Fiat` for rule-created terms, omitting the creating firing.
+With both endpoints free, the checker cannot recover those terms from globals. Supplying
+the creating rule proof repairs these examples (`both-2` and `rand-43`). Allowing arbitrary
+constructor reflexivity instead is unsound; see `CHECKER.md`.
 
-It is the *bare* `@Fiat` that fails, and only it: a premise naming the firing that created
-the row checks, because `headEqs` contributes `reflEqs` over **every subterm** of what the
-head builds. That is what bounds the residue rather than leaving it open.
-
-**Measured**, and it is the whole of what `difftest check 64` still refuses: **4 rows of 828,
-on 2 of the 87 in-domain cases** — `both-2` (2 of 23) and `rand-43` (2 of 26). Each is one
-`@Rule_i` node whose `@Fiat` premise stands for a row a rule head built, and each checks
-once that premise names the creating firing. In `both-2` the claim
-`(Add (One) (Add (Three) (Two))) = (Add (One) (Add (Two) (Three)))` needs the commute rule
-anchored at `(Add (Two) (Three))`, which only the assoc rule's head builds:
-`@Trans (@Sym (@Congr_2 (@Fiat) (@Rule_1 (@Fiat)))) (@Fiat)` is refused and
-`@Trans (@Sym (@Congr_2 (@Fiat) (@Rule_1 (@Rule_0 (@Fiat) (@Fiat))))) (@Fiat)` is accepted.
-In `rand-43` the claim `(F (F (F (F (A))))) = (F (F (A)))` needs an anchor at
-`(G (F (F (A))) (B))`, which only rule 0's head builds, and
-`@Trans (@Sym (@Rule_1 (@Rule_1 (@Rule_0 (@Fiat))))) (@Rule_1 (@Rule_1 (@Fiat)))` is accepted
-where the emitted proof's bare `@Fiat` is not. Closing it would mean seeding `@Fiat` with the
-terms a rule head can build, which is a fixpoint over the rules and not a read of the program.
-
-Below, rule 0 turns `(G x y)` into `(F (G y x))`, so `(G (B) (A))` is built as a *subterm*
-and is the endpoint of no asserted equality; rule 1 then has to match it. -/
+Here rule 0 builds `(G (B) (A))` as a subterm, and rule 1 needs evidence of its existence. -/
 private def eG (x y : Expr) : Expr := .app "G" [x, y]
 private def tG2 (x y : Term) : Term := .app "G" [x, y]
 

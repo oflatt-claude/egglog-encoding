@@ -124,117 +124,28 @@ premise proofs in order. No separate tree describing flattening is stored.
 
 ## Proof status
 
-The new pass currently has kernel-checked proofs of:
+The congruence pass has kernel-checked proofs for:
 
-- `encode_unionFree`: commands, rule heads, and merge bodies contain no built-in unions.
-- `encodeQuery_flat` and `encodeQueryExpr_next`: flattened atoms contain only leaf
-  columns, and each application occurrence consumes exactly one fresh id.
-- `execM_encode_eqsRefl` and `encode_cong_iff`: built-in equality is exactly structural
-  identity on stored terms.
-- `encode_relational`: the target executes with the same result using no congruence
-  closure or implicit re-keying, including during queries, merges, and saturation.
-- `sourceMatch_of_encodedQuery`: sound view entries turn a flattened query match into
-  an existing source query match, preserving the values needed by its rule head.
-- `execM_encode_inv` and `execM_encode_mergeShape`: successful compiled execution
-  preserves database well-formedness, a faithful live index, and the single-output
-  declaration shapes.
-- `mergeSaturateF_soundTerms` and `maintenance_soundTerms`: table merges and all
-  generated rebuilding rules preserve source justifications of retained entries.
-- `termsBuild_of_programStep`: constructor-source executions satisfy the value
-  invariant required by query readback, without the old restrictions on write actions.
-- `encodeActions_soundTerms`: compiled source builds and unions write only entries
-  justified by the corresponding source action block's result. Source values cannot
-  hide generated entries inside their children (`sourceSafe_of_programStep`).
-- `encodedRule_firing_of_programStep`: an actual compiled rule firing yields an original
-  source match and a successful source firing that justifies its retained entries.
-  The source domain supplies head scoping, declarations, and union legality; current
-  target invariants and the fixed compiled signature remain explicit premises. Constructor
-  coverage follows from the original source prefix and the prelude declarations.
-- `mergeSaturateF_entryRowsUF`, `encodeActions_entryRowsUF`, and
-  `maintenance_entryRowsUF`: table merges, compiled source actions, and generated
-  rebuilding rules preserve the connection from retained entries to live rows. An
-  entry's old output reaches its live output through recorded UF edges. The rule-firing
-  theorem carries this invariant too. The build induction is shared with entry soundness.
-- `execM_encode_sig`, `encodeSig_ufName`, and `encodeSig_tables`: successful execution
-  retains the prelude's exact UF, view, and structural-constructor declarations. Source
-  name separation and arity consistency prevent shadowing.
-- `ufRowRoot_of_ufReach`: a retained UF path preserves the root found in live rows,
-  given the entry-to-row bridge, descending edges, and a functional live UF graph.
-  `ufRowsForest_of_settled` now supplies the forest property after merging; assembly
-  of these invariants across the full execution remains work.
-- `mergeSaturateF_ufTermsDescend`, `encodeActions_ufTermsDescend`, and
-  `maintenance_ufTermsDescend`: table merges, compiled source action blocks, and all
-  rebuilding rules preserve descending historical UF edges. Rule-firing readback
-  carries this property alongside sound entries and the retained-entry/live-row bridge.
-- `tableRows_unique_of_settled`: every merging table has one live output per structural
-  key at a merge fixed point. A finite weight on table rows strictly decreases at every
-  collision; the same argument covers UF and views. `mergeSaturateF_unique_root` and
-  `mergeSaturateF_joined_root` then give unique live roots and identify the roots at both
-  ends of each retained UF path after a merge phase.
-- `eclassRule_fires` and `childRule_fires`: live input rows produce actual executable
-  matches and successful local firings of the generated rebuilding rules. Source entry
-  soundness supplies their matchable value columns. The matcher and environment lemmas
-  are shared with the legacy proof rather than copied into the new pass.
-- `Rebuilt.view_root` and `Rebuilt.keys_paths`: at a rebuilding fixed point satisfying
-  the data invariants, every live view output is a UF root, and key columns can follow
-  arbitrary live UF paths while retaining that output. These use the actual firings,
-  the retained-entry/live-row bridge, and uniqueness of settled table rows.
-- `execM_encode_rebuildTables`: successful compiled execution retains every constructor's
-  view declaration and generated rebuilding rules. Shared rule-store lemmas characterize
-  registrations exactly; source constructor/arity preservation is shared with the legacy
-  proof and no longer carries an obsolete `NoSet` condition.
-- `Rebuilt.viewLeader` and `Rebuilt.viewsCover`: recursive readings normalize to live rows,
-  two readings of a term have the same UF root, and one reading per held source term gives
-  coverage at common child ids. `Rebuilt.corresponds` reduces the remaining command
-  simulation to those source-existence witnesses and represented source unions, alongside
-  the data invariants. It is still a conditional theorem, not a completed execution proof.
-- `canonicalEq_of_congOn` and `exists_live_query`: source congruence transports canonical
-  readings through temporary query operands using the original match's existence witness.
-  A full source match supplies one consistent target substitution and live rows for every
-  original pattern; keyed-variable occurrences show that all substituted values are in the
-  executable matcher's value domain.
-- `encodedQuery_match_of_source`: an original source match at a rebuilt target produces
-  an actual executable match of the flattened query, preserving canonical readings of all
-  original bound values. Generated bindings follow the compiler's recursive order with
-  disjoint counter ranges; groundedness supplies the equality atom's held-value witness.
-  Fresh-environment lemmas are shared with the legacy proof. No saved flattening tree is
-  introduced. The source state being matched can be earlier than the source state that
-  justifies target entries, which allows its use during saturation.
-- `encodeActions_reads` and `encodedRule_firing_reads`: a source action block or rule firing
-  has an actual successful compiled execution, preserving readings of all its source terms
-  and explicit entries for its source unions. Target head ids may differ structurally from
-  source values because variables read rebuilt ids; recursive view readings connect them.
-  These witnesses survive merging through retained terms, without assuming that the target
-  stores every original source term as an id.
-- `RunState.round`, `RunState.saturate`, and `RunState.rebuilt`: merge phases and rule
-  rounds compose the historical invariants, and actual maintenance saturation establishes
-  `Rebuilt`. Generated maintenance rules discharge preservation directly.
-- `rulesEncoded_of_prefix` and `RulesEncoded.rebuild_closed`: actual prefix executions
-  retain exactly the source and maintenance rules, and closure under a source saturation
-  ruleset also closes rebuilding through the generated copies with identical queries and
-  heads. Source rules cannot enter the reserved rebuilding ruleset.
-- `round_simulation` and `saturation_simulation`: aligned source and compiled runs preserve
-  both sound historical entries and readings of source terms and unions. The saturation
-  proof justifies target rounds in the final saturated source state, then inducts over
-  source rounds into the rebuilt target fixed point. Initial-state and top-level command
-  composition remain to be assembled into the program-wide theorem.
-- `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
-  subterm-closure and diagonal-equality hypotheses.
-- `corresponds_of_invariants`: source congruence agrees with the target reading when view
-  leaders, view coverage, recorded source unions, and view-entry soundness hold.
+- Union-free output and equivalence with execution using structural identity only
+  (`encode_unionFree`, `encode_relational`).
+- Query flattening and matching in both directions (`sourceMatch_of_encodedQuery`,
+  `encodedQuery_match_of_source`).
+- Preservation of sound entries, descending UF edges, and the connection between
+  retained entries and live rows through source actions, merges, and maintenance.
+- Unique roots and normalized view readings at rebuilding fixed points
+  (`Rebuilt.viewLeader`, `Rebuilt.viewsCover`).
+- Source rule firings, aligned rounds, and saturation (`encodedRule_firing_reads`,
+  `round_simulation`, `saturation_simulation`).
+- The executable reader and correspondence under explicit state invariants
+  (`sameClassF_iff`, `Rebuilt.corresponds`).
 
-The execution proof establishing those invariants for `Congruence.encode` is **not yet
-ported**. Thus the new pass does not yet have an end-to-end completeness theorem.
-The remaining obligations assemble the invariants across corresponding program executions,
-preserving source-existence readings and represented source unions.
-The paper's completeness theorem will stop at this pass; later instrumentation and
-resugaring still require soundness.
+**Remaining in step 1:** initialize these invariants and compose top-level commands
+into the end-to-end completeness theorem. Steps 2–5 have not started.
 
-The shared source restrictions are `Program.EncodeDomain` in
-[Source.lean](EgglogSemantics/Encoding/Source.lean): constructor declarations, no primitive
+The theorem retains `Program.EncodeDomain`: constructor declarations, no primitive
 or generated source names, consistent arities, supported queries, scoped and declared
-heads, and no literal unions. This does not cover arbitrary source merge functions.
-The semantic language itself supports function entries, including the generated tables.
+heads, and no literal unions. Arbitrary source merge functions remain outside its scope.
+See [Source.lean](EgglogSemantics/Encoding/Source.lean) for the exact conditions.
 
 ## Legacy theorem and checker
 

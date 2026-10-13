@@ -5,344 +5,14 @@ import EgglogSemantics.Encoding.SourceCtors
 import EgglogSemantics.Proofs.Rules
 
 /-!
-# The encoding correspondence: the claim, the decision procedure, and what they cost
+# Legacy encoding correspondence
 
-`Encoding/Encode.lean` reads the target with `ViewRepr` and `SameClass`. `DiffTest.lean`
-sweeps every pair of terms of every in-domain case for
+The executable reader `sameClassF` decides `SameClass`. The correspondence reductions
+use view coverage, joined ids, represented source unions, and sound entries. This module
+proves their preservation lemmas and includes counterexamples to stronger statements.
 
-```
-Cong src a b  ↔  SameClass tgt a b
-```
-
-and reports agreement. This file is what makes those two the *same* claim: `sameClassF`
-decides `SameClass` over an `FDatabase`, `sameClassF_iff` proves it, and `mem_closureF_iff`
-(`Proofs/Interp.lean`) already does the source side. Without the two of them the sweep is
-evidence about a different predicate than the theorem mentions.
-
-## The two hypotheses the decision procedure needs
-
-`sameClassF` reads the view tables the way `difftest` does, and that reading is exact only
-under two conditions on the target — one per direction of the iff.
-
-* **`SubtermClosed`**, for `sameClassF → SameClass`. `Database.Out` asks that the key
-  columns be terms the database holds, which is subterm closure at the entry term. It is
-  `Database.WF`'s own clause, and decidable, so a self-test can report it at the state it
-  swept.
-* **`EqsRefl`**, for `SameClass → sameClassF`. `Database.Out` reads the key up to
-  congruence and the procedure reads it up to equality; the two agree exactly where the
-  target asserts no equation but a reflexive one. At an `execM` target this is now a
-  **theorem** — `execM_encode_eqsRefl`, out of `execM_noUnions`: `encode` emits no
-  `Action.union` anywhere (a source `union` becomes a `set` of a `@UF` edge) and
-  `FDatabase.addEq` is the interpreter's only writer of `eqs`. `difftest correspond`'s
-  `tgt-eqs` column is the same quantity measured, 0 on every case.
-
-Neither is an artefact: both are properties of the state the encoded program runs to, and
-both are decided at the witness at the end of this file.
-
-## What is proved, and what is not
-
-* **Proved**, no `sorry`: `sameClassF_iff` and `mem_viewReprsF_iff`, both directions;
-  `cong_sameClass`, which reduces the forward half to three obligations with `symm`
-  discharged; `witnessProgram_encodeDomain` and `encode_corresponds_witness`.
-* **Proved, and the forward half's whole argument**: `cong_sameClass_of_state`. The three
-  obligations `cong_sameClass` leaves hold at *any* target with three named properties —
-  `Database.ViewLeader`, `Database.ViewsCover` and `Database.UnionsRead` — over any source
-  with `Database.WF`, and the four reductions that make it up (`trans_of_viewLeader`,
-  `sameClass_congr_of_shared`, `viewRepr_total`, `sameClass_self_of_viewsCover`) are proved
-  outright. So the forward half is one lemma from done, and that lemma is "the state `execM`
-  returned has the three properties". Each of the two clause-shaped properties is stated at
-  exactly what its consumers spend — `ViewsCover.shared` at *one* shared id tuple and not the
-  product (`ncTgt_not_viewsProduct` is the product refuted), `UnionsJoined` at the endpoints'
-  *ids* and not at the endpoints (`ncTgt_not_readsSelf` is the difference), and the rebuild's
-  edge-following in `ViewLeader.ufClosed` where both halves of it are needed at once.
-  `Encoding/Match.lean`'s `uRebuilt_cong_sameClass` runs the whole argument at a state with a
-  real `union`, with all three properties discharged there and no clause vacuous.
-* **Proved, and it is where the weakened coverage clause pays**:
-  `Database.ViewsCover.of_viewLeaderRows`. The tuple `ViewsCover.shared` answers with is the
-  *leader* tuple, always — so the clause follows from two things and nothing else: an id for
-  the source's own term, and a row at the leader tuple (`Database.ViewLeaderRows`' `rowLead`,
-  the rebuild's **column** rules where `ViewLeader.ufClosed` is its e-class rule). No index
-  argument beyond the one `ViewLeader` already needs, and the transport that puts a
-  pointwise-congruent argument list on the same tuple is `viewReprList_map_lead_of_forall₂`,
-  proved. `ncTgt_viewsCover` runs the reduction at the state that refutes
-  `Database.ViewsProduct` — positive arity, the key `((B))` moved to `((A))` — which is what
-  says the leader tuple generalises the instance `ncTgt_shared_FB` answers by hand.
-* **Proved, and the completeness half's whole argument**: `sameClass_cong_of_state`, the
-  same shape. `SameClass d a b → Cong src a b` holds at any target with *one* named property
-  — `Database.ViewsSound`, that every view entry claims only what the source derives — over
-  any source with `Database.WF`, at the source's own e-nodes. The reduction is
-  `sameClass_cong_of_justified` (three lines: `SameClass` is flat) plus `cong_of_viewRepr`,
-  and the per-writer obligations `ViewsSound`'s preservation leaves are each discharged
-  outright: `entrySound_build`, `EntrySound.eclass`, `EntrySound.column`,
-  `EntrySound.select`, `cong_of_entrySound_collide`, `cong_of_eqs`, `cong_of_pathCompress`.
-* **Proved, and what says the specification's own target is reachable**:
-  `not_mergeConflict_self`, `refutationState_mergeSaturated`, and
-  `satProgram_programStep` — a compiled `ProgramStep Database.empty (encode P) tgt` for a
-  `P` that builds a term. Each of the three is the negation of a lemma that stood here
-  before `Spec/Step.lean` read `identityVals`, and that refutation is why the statement
-  below reads `execM`; the reason it still does is a different one.
-  `satTarget_viewLeader`, `satTarget_viewsSound` and `refutationState_edgesSound` are the
-  same discipline applied to the new residues: each discharged at a state a program reaches,
-  non-vacuously.
-* **Proved, and the shared crux of both residues**: the rule-head match correspondence, in
-  `Encoding/Match.lean`, and now with nothing left over.
-  `exists_validQuerySubst_of_patternReads` is the property of the two states,
-  `patternReads_of_encodeQuery` reads the encoded query back off `encodeQuery` to establish
-  its premise, and `encodeQuery_drops_literal_pattern` is the compiled refutation of the two
-  side conditions' necessity.
-* **Proved, and the case the completeness half was expected to founder on**: a rule *head*'s
-  build. `exists_validQuerySubst_at_ids` pins the source reading to the ids the target read
-  rather than to arbitrary congruent terms, which is what makes the source's own head
-  evaluation build the very term `encodeBuild`'s skolem names — so the head owes only its
-  firing (`entrySound_headBuild`, `cong_headUnion`), and not the fact
-  `encode_corresponds_invents_enode` refutes at a key column.
-* **Proved, and the shared crux of the command induction's five closed cases**: the
-  **action read-back**.
-  `holdsBuild_of_execActions` reads both rows a build's `set`s wrote off the block that ran
-  them, `viewRepr_self_of_execActions` assembles them into the reading a `SameClass` is two
-  of, and `holdsBuild_of_execProgramM`/`viewRepr_self_of_execProgramM` are the same where the
-  block is the *top-level* `Cmd.action`s `encodeCmd` emits. `FDatabase.execProgramM_terms` is
-  what carries the rows to the end of the run, and it is the only form the read-back can take:
-  the row a rebuild displaced is gone, the entry term is not.
-* **Proved, and what joins the read-back's blocks**: the **command induction**, and it is
-  where the weakening pays. `UnionsInv` is the invariant it carries — `Database.UnionsJoined`
-  at **`td`, the state the next encoded block runs at**, every source term having an id there,
-  every global binding's value reading to itself there, every source rule having its encoding
-  in that state's ruleset, `td` being contained in the state the whole run finishes at, the two
-  environments coinciding, and the source staying in the constructor fragment —
-  and `unionsInv_step` carries it across a source command in five of its six cases: `.decl`,
-  `.rule`, a top-level build (whose `joined` clause is trivial, `addTerm` writing only
-  reflexive equations, and whose `reads` clause is the block's own read-back), a top-level
-  `let` (whose `hvar` obligation the invariant supplies, `UnionsInv.hvar`) and a top-level
-  `union` (whose edge `out_uf_of_execProgramM` reads back off the emitted `set`, between ids
-  the same block's builds made). Its sixth case is `Egglog.UnionsFire`, stated here and
-  **threaded as a hypothesis** through `unionsInv_step`, `unionsInv_of_programStep`,
-  `unionsInv_execM` and `execM_unionsJoined`, because what answers it is below
-  `Encoding/Match.lean`: `Encoding/Complete.lean`'s `unionsJoined_fire` is where it is
-  discharged. `unionsInv_execM` runs the induction from
-  the empty source database and the state the prelude leaves, and `execM_unionsJoined` is its
-  data clause. Three lemmas make it go through and each is worth naming:
-  `Expr.eval_sigIndep` — two successful evaluations in one environment agree, whatever the two
-  signatures — `encodeBuild_fst`, and `viewReprAll_self_of_execProgramM`, the read-back
-  strengthened to every *subterm*, which is what `Database.addTerm` records. And it is not
-  vacuous: `rbState2_unionsInv` is the invariant at a source state a program reaches
-  (`rbProgram_programStep`) with a non-empty environment, `rbState2_unionsInv_hvar` is the
-  `hvar` composition read off it, `unionsJoined_fire_satisfiable` is the residue's
-  hypotheses holding together, and `uRebuilt_unionsJoined` is the data clause at a source with
-  a real equation.
-
-  **The environment clause is no longer part of that residue.** `envAligned_step` and
-  `execM_env` prove it standalone — the same six commands, carrying `Database.CtorState` and
-  nothing about equalities — so a consumer that needs only the alignment (the literal-value
-  clause of `execM_rebuildClosed`) no longer waits on `unionsJoined_fire`. `unionsInv_step`
-  discharges its own `env` field with it, which is what says the two proofs are one.
-
-  **The invariant this replaces was false, twice over.** It asked every source *term* to read
-  to itself (`Database.ReadsSelf`, kept as the record) and every source equation to have a
-  direct `@UF` edge between its two endpoints; both fail at `ncTgt`, so its rule-firing case
-  was refuted rather than open. `Database.UnionsJoined.of_readsSelf` is the proof that what is
-  carried now is weaker than what was carried then. Then the *weakened* form was false for a
-  second, unrelated reason — it stated every clause at the run's **final** state, so nothing
-  it said constrained the state the encoded rule has to run at, not even that state's ruleset.
-  `UnionsInvD` is that version kept as the record, `unionsFireClaim_false` refutes it, and
-  `UnionsInv.old` is the check that the present one implies it. Then the residue's own clause
-  list was too short, twice: it said nothing about `td.sig`, so an encoded head could fail to
-  evaluate and the round write nothing, and nothing about the rules `sd` holds, so a source
-  query could apply a primitive the flattening has no table for.
-  `Encoding/Complete.lean`'s `UnionsFireWeak` is that clause set kept as the record,
-  `unionsFire_false` and `unionsFire_false_encodeSig` refute it, `unionsFire_of_weak` is the
-  check that it is the stronger claim, and `cxfTgt_not_sigMono`/`cxpSrc_not_queriesEncodable`
-  name the clause each witness violates.
-* **Proved, and the rebuild fixpoint the residues were waiting for**:
-  `FDatabase.RoundClosed` (`Proofs/Merge.lean`). `runSaturateM` returns only from the branch
-  that tested `sameData`, so a successful `Cmd.saturate R` leaves a state where **one more
-  round of `R` derives no new term**; `roundClosed_of_execProgramM` locates one at the end of
-  every block `encodeCmd` emits for a writing command. It is the only fixpoint available —
-  `execM_contained` says the enumerator under-fires, so `RunSaturated`, and `Rebuilt` with it,
-  is not a consequence — and it is a `terms` fact, because a round adds terms and *deletes*
-  rows, so the sandwich that closes over the first does not close over the second. The
-  **rows** are settled all the same, and by the test rather than by the sandwich:
-  `FDatabase.RowsClosed` and `rowsClosed_of_execProgramM` read the other conjunct of
-  `FDatabase.sameData`, which pins a further round's row list *equal* to the pre-state's.
-* **Refuted, and it is why the fixpoint closes neither target-side residue**:
-  `FDatabase.IndexCurrent`,
-  the converse of `FDatabase.IndexOk.entry` — every entry term still current in the index.
-  `cxTgt_not_indexCurrent` refutes it at a state built by the interpreter's own writers at the
-  encoding's own declarations, where a source `union` collides two e-classes at one view key,
-  `mergeOneOriented` deletes the displaced row, and `Database.Out` still reads its entry term.
-  A rebuild rule's *conclusion* is a `terms` fact the fixpoint supplies; its *premise* is a
-  `rows` fact only this would, so `IndexOk` needs a companion rather than a fourth field, and
-  the companion is false. What survives is the same claim **up to the union-find**, and
-  `cxTgt_currentUF` is that at the refuting state itself: the entry's own value columns are in
-  no row any more, and the row the merge kept sits at the `@UF` parent of the e-class column it
-  displaced. That weakened claim is what `execM_rebuildClosed` is left waiting on, and it is
-  still a `rows` fact wanted from a `terms` fact — which is why it is the *bridge* and not the
-  residue's statement that carries the gap now.
-* **Refuted, and it is what the fixpoint was being sought for**: `Database.ReadsSelf` and
-  `Database.ViewsProduct`, the two over-strong clauses this file used to factor the forward half
-  through. `ncTgt_not_readsSelf` and `ncTgt_not_viewsProduct` are a compiled source state a
-  program reaches, paired with the state the encoded program runs to, at which both **fail**. A
-  source rule fires once per *member* of a premise's congruence class (`ValidEnv` binds any held
-  term, `Matches` reads up to congruence) while the encoded rule reads `d.rows`, and the rows sit
-  at the union-find leader — so a source term a firing built over a non-leader member has no view
-  entry carrying it in an e-class column. `encode_readsSelf_false` and
-  `encode_viewsProduct_false` are the same two with the encoded run as a hypothesis, in
-  `encode_corresponds_witness`'s discipline. What survives is `Database.UnionsRead`
-  (`ncTgt_unionsRead`) and the correspondence at the pair the clauses fail on
-  (`ncSrc_cong_FA_FB`, `ncTgt_sameClass_FA_FB`) — which is why `difftest correspond` still
-  agreed on every in-domain case the corpus then had: the sweep measures the conclusion, and it
-  was the *factorisation* that was false. (The corpus now has cases where the conclusion itself
-  fails, and they are a different defect — see `unionsJoined_fire`'s `hglob` paragraph.)
-
-* **Weakened, and the strong form kept with a separation against it**:
-  `Database.ViewLeaderRows`. Its four clauses were assembled before that lesson and are
-  over-strong in the same way: every consumer spends them through the *choice function* `lead`,
-  and only ever to name one id it then hands to `hmem`. `Database.ViewJoined` is the three
-  things actually spent — `ids` for `SameClass.trans_of_viewJoined`, `ufJoin` for
-  `unionsRead_of_viewJoined`, `rowShared` for `Database.ViewsCover.of_viewJoined` — each an
-  **upper bound** in `Database.Absorbs` rather than a representative.
-  `Database.ViewLeaderRows.toViewJoined` is the check that this is a weakening, and `chainD` is
-  the check that it is a *strict* one: an ascending chain of ids with upper bounds everywhere
-  and no top, at which `chainD_viewJoined` holds and `chainD_not_viewLeader` fails. What that
-  buys is a whole mechanism — `pathCompressRule` was in that residue only to make
-  `lead` a function — and the diagonal instance of `rowShared`, which is all `viewRepr_total`
-  spends, is now answered by the row already in hand rather than by the column rules.
-  `uTgt_not_viewJoined` is the weakened clause still **failing** one rebuild firing early, at
-  the state `uTgt_not_viewLeader` fails at, so the weakening is not into vacuity.
-
-  **So the clauses are now stated at what their consumers spend**, each derived from the
-  consumer and not guessed: `Database.ViewsCover.shared` at *one* id tuple shared by both
-  argument lists, which is all `sameClass_congr_of_shared` reads and, at the diagonal, all
-  `viewRepr_total` reads; `Database.UnionsJoined` at the endpoints' *ids* with the `@UF` edge
-  between those, which is all `unionsRead_of_unionsJoined` reads once the edge-following is
-  `Database.ViewLeader.ufClosed`. Both hold at the counterexample's own state —
-  `ncTgt_shared_FB`, `ncTgt_unionsJoined` — and `Database.ViewsCover.of_viewsProduct` is the
-  proof that the first really is weaker than what it replaced.
-* **Measured, and now exact**: the kernel cannot run an encoded program because
-  `Impl/Closure.lean`'s `closure` is well-founded-recursive, so `FDatabase.closureF` is
-  *irreducible* and `patternHolds` gets stuck rather than slow. `unseal Egglog.closure` makes it
-  reduce and one `FDatabase.mergeRound` on a sixteen-term state then runs past ten minutes,
-  against 0.2 s compiled. Witnesses on the target side are therefore built from
-  `FDatabase.addRow`/`addTerm` (the `cexD` idiom) or take the run as a hypothesis; witnesses on
-  the *source* side run in the kernel outright (`ncSrc_exec`).
-* **Proved, and the last to close** — two *mechanisms* rather than three clauses, which is
-  what the factorisation above bought, and both of them answered now
-  (`Encoding/Complete.lean`'s `unionsJoined_fire` is the second, and
-  `Encoding/Complete.lean`'s `execM_rebuildClosed` the first). What follows is the record of
-  what each of them cost. `execM_rebuildClosed` is the whole of the run-wide
-  **index** argument, now stated per rule rather than per clause: `Database.RebuildClosed` is
-  `rebuildRules`' e-class rule (`eclass`), its column rules (`column`) and the `@UF` edge a
-  collision writes (`edged`), and `Database.RebuildClosed.toViewJoined` is what `execM_viewJoined`
-  now is. `pathCompressRule` is no longer part of it — it was carried solely to make
-  `lead` a *function*, and no consumer spends that. Each clause concludes a common
-  `Database.Lands` and not absorption along the edge it is handed:
-  `Database.RebuildClosedStrong` is the form that did, `cxStale_not_rebuildClosedStrong`
-  refutes it at two `union`s in one block, and `Database.RebuildClosed.of_strong` is the check
-  that the weakening is one. `edged` and `column` land on a **root** of it
-  (`Database.LandsRoot`), at a rootness the state supplies, because the rules move a row only
-  toward roots; `Database.RebuildClosed.of_strong_ufRoot` is the same check with that root
-  named. Its **forest** obligation is now discharged outright:
-  `execM_ufRowsDescend` is every live `@UF` row running `ordering-max ↦ ordering-min`,
-  `execM_encode_ufRowsForest` is one outgoing edge per key, and `execM_ufRowRoot_unique` is the
-  two together — every id of an encoded target reaches a unique `@UF` row root. So is its
-  **bridge**: `Encoding/Complete.lean`'s `execM_entryRowsUF` is every merge-function entry term
-  of an encoded target having a live row at its own key whose e-class column the union-find
-  reaches from the entry's — `FDatabase.IndexCurrent` weakened by exactly what
-  `cxTgt_not_indexCurrent` refutes, `cxTgt_currentUF` being the compiled instance. What is left
-  of the residue is the **fixpoint's roots**, and `no_ufRowEdge_of_rowsClosed` is that with the
-  e-class rule's own firing *discharged* (`eclassRule_fires`, over `mem_matchQuery_of_lookup`):
-  the merge phase's survival fact (`mergeSaturateF_rowsDescendCarry`) and `row_unique_of_settled`
-  do the rest, and its fourth hypothesis is discharged too: `matchQuery` assigns out of
-  `FDatabase.valueTerms`, so a rule re-reads only a row whose columns are of that kind, and
-  `execM_rowColumnsValued` is that run-wide — a `Term.app` reaches `terms` only through
-  `Expr.eval`, whose application case demands `Signature.IsCtor`. What is left of that residue
-  is the **assembly**: the bridge reaches a landing site through `Database.UFReach`, over `@UF`
-  *entry* terms, and the forest is stated over `@UF` **rows**, so nothing yet identifies the
-  root a reader lands on with the root the union-find walks to. `Egglog.UnionsFire` is the
-  whole of a **target firing behind a source firing** — the one command case the read-back does
-  not reach — and it now carries both of the command induction's data clauses, `joined` and
-  `reads`, because a rule head builds as well as unions and one firing answers both. It is
-  stated here and answered in `Encoding/Complete.lean` (`unionsJoined_fire`), where the row
-  lemmas it runs on live; the route is `mem_matchQuery_of_rows` and `ncTgt_encRule_fires` is it
-  end to end at a source rule's encoding, and what is left of it is a **`rows` reading** of
-  every source term (`RowRepr`), which re-couples with `execM_rebuildClosed`'s column rules.
-  `Encoding/Complete.lean`'s `execM_soundTerms` is the completeness half — it is stated there
-  and not here because it consumes `Encoding/Match.lean`'s two head writers, which are
-  downstream — and the state's own equations are no longer part of it: `execM_encode_eqsRefl`
-  makes the target's `Cong` the identity, so `Database.ViewsSound` and `Database.EdgesSound`
-  there are two clauses about the **term list** (`viewsSound_of_soundTerms` is the step back,
-  `soundTerms_of_viewsSound` the step out), which is the form that is monotone along a run and
-  so the form an induction can carry. The *source* firing behind the target's is proved —
-  `mem_terms_of_headBuild_of_domain` and `mem_eqs_of_headUnion_of_domain` are `hfired`'s two
-  shapes, out of `EncodeDomain.headsDeclared` and `EncodeDomain.noLitUnion` — and so is the
-  **merge phase**: `mergeSaturateF_soundTerms` is every term a merge pass adds, justified,
-  which is half the writer enumeration and the half the two named obstacles stood in front of
-  (`Signature.MergeShape` for the body's shape, `eq_of_congrKeys` for the keys being equal
-  rather than merely congruent). The fold over **rule firings** is now proved too —
-  `execRunRules_soundTerms` through `fireRule_soundTerms` and `fireInto_soundTerms`, and
-  `runRoundM_soundTerms` with the merge phase after it — as is the **rule invariant** it needed
-  (`FDatabase.execProgramM_rulesEncoded`, `mergeShapeOk_encodePrelude`'s shape one level up:
-  every rule a target holds is an `encodeRule` of a source rule or one of `maintenanceRules`)
-  and the three
-  **maintenance families** the invariant splits off (`maintenance_soundTerms`, out of
-  `pathCompressRule_soundTerms`, `eclassRule_soundTerms` and `columnRule_soundTerms`).
-  `firingsSound_of_rulesEncoded` is the factorisation those leave, and both halves of it are
-  now proved: `FDatabase.EncOk.stepCmds` is the per-command induction that aligns the source
-  run with the target's, and `encodedHeadSound` is one firing of one **encoded source rule** —
-  under `Program.HeadsScoped`, which is `EncodeDomain.headsScoped`.
-  `bare_build_invents_equality` below is why that had to become a clause, and
-  `Encoding/Complete.lean`'s `execM_soundTerms` is proved with it. No target fixpoint enters,
-  since soundness is indifferent to the under-firing `execM_contained` records.
-  `ncTgt_soundTerms` is both clauses at the state the two refuted forward clauses fail at, with
-  a real `@UF` edge and positive arity. `execM_unionsJoined` is assembled from them here, and
-  `Encoding/Complete.lean`'s `execM_viewsCover`, `execM_viewsCover_shared` and
-  `execM_unionsRead` from those and the residue. `Encoding/Match.lean`'s
-  `uRebuilt_unionsJoined`, `uRebuilt_viewLeaderRows`,
-  `uRebuilt_viewJoined` and `uRebuilt_viewsCover` are the properties at a state a program
-  reaches, with `uRebuilt_cong_sameClass` running the forward half there; `uTgt_not_unionsRead`,
-  `uTgt_not_viewLeader` and `uTgt_not_viewJoined` are the conclusion and the responsible clause
-  — strong form and weak — failing one rebuild firing earlier; `ncTgt_viewLeaderRows` is the
-  fourth clause at positive arity, where the three earlier witnesses have only the empty key.
-  `Encoding/Complete.lean`'s `encode_assert`, `encode_trans`, `encode_congr`,
-  `encode_corresponds_forward` and `encode_corresponds` are assembled from them and carry
-  `sorryAx` through them — they are stated there and not here because
-  `execM_rebuildClosed` is, and `execM_rebuildClosed` is stated there because its proof reads
-  the bridge, the forest and the fixpoint's roots.
-  `Encoding/Complete.lean`'s `encode_corresponds_complete` does **not**: the completeness half
-  is proved.
-* **Refuted without a clause, and the clause is now the domain's.**
-  `bare_build_invents_equality`: `encodeBuild` emits **no action** for a leaf, so a rule head
-  that builds a bare variable the query does not bind stops the *source* block there and the
-  encoded block skips it and runs on — a third shape of stuck head beside `noLitUnion`'s and
-  `headsDeclared`'s. At `bareProgram` the source relates `(A)` and `(B)` in no way and the
-  encoded run puts them in one class, so `encode_corresponds_complete` is false there, at a
-  pair of source e-nodes. `EncodeDomain.headsScoped` is the clause that excludes it,
-  `bareProgram_not_headsScoped` is that program failing it and
-  `bareProgram_encodeDomain_but_headsScoped` is every other clause holding, so the clause is
-  the only thing between the domain and the refutation. It is faithfulness rather than a
-  narrowing — egglog raises `TypeError::Unbound` for an action's unbound variable in
-  `to_core_actions` (`egglog/src/core.rs:663-670`) — and the census was unmoved when it was
-  added, at 70 of 166.
-* **Refuted, and it was the *reading* that was wrong**: two of those clauses were once false
-  at `litBuildProgram`, one `.action (.expr (.lit 5))`, whose build emits no action at all, and
-  `Program.EncodeDomain.noBareBuild` was the repair. The defect was `ViewRepr`'s literal clause
-  asking the target to hold the literal, where the encoding mints no e-node for one. The
-  premise is gone and the domain clause with it;
-  `litBuild_viewsCover`/`litBuild_unionsJoined`/`litBuild_forward` are the two once-false
-  statements holding at that program, now in the domain (`litBuildProgram_encodeDomain`) and
-  both vacuous in their clause, `uRebuilt`'s three being where they are not. What
-  keeps the reading exact is `ViewRepr.eq_of_lit`: a literal's only id is itself, so distinct
-  literals are never in one class (`SameClass.eq_of_lit`) and `not_sameClass_lit_app` rules out
-  the view row a literal would need to join an application.
-* **Refuted, and recorded so it is not tried again**: the view's *functional dependency*,
-  which is the obvious reduction of `trans` and is false at the witness program. The section
-  "What the three obligations reduce to" has the state that refutes it, and the same state
-  refutes `MergeSaturated` at an `execM` target.
-* **Refuted, and it moved the statement**: the *unrestricted* completeness half.
-  `encode_corresponds_invents_enode` is a compiled refutation of
-  `SameClass tgt a b → Cong src a b` at `witnessProgram`, whose rebuild gives `(Add One One)`
-  an e-class the source has no e-node for. Both halves are now stated at the source's own
-  e-nodes, which costs the forward half nothing and is what the corpus sweep measures.
+`Encoding/Complete.lean` assembles the program-wide data correspondence theorem.
+It does not establish correctness of proof annotations; see `CHECKER.md`.
 -/
 
 namespace Egglog
@@ -911,39 +581,12 @@ theorem cong_sameClass {src tgt : Database} (h : CongObligations src tgt) {a b :
     (hc : Cong src a b) : SameClass tgt a b :=
   Cong.le h.assert (fun _ _ hab => hab.symm) h.trans h.congr hc
 
-/-! #### What the three obligations reduce to
+/-! #### State invariants
 
-Each of the three is a *reduction* plus one property of the state `execM` returned. The
-reductions are proved below; the properties are the residue, one `sorry` each, and each is
-stated as a fact about a `Database` rather than as a restatement of the obligation, so what
-is missing is visible and each is checkable at a concrete state.
-
-**`Database.Out` is not functional at a view key, and the obligations must not be reduced to
-saying it is.** The natural reading of `trans` — two entries at one key have collided, the
-`:merge` resolved them, so their e-class columns coincide — is *refuted at this file's own
-witness program*. `difftest correspond-dump 64 union` prints, for `witnessProgram`,
-
-```
-  view @TwoView() ↦ (One)
-  view @TwoView() ↦ (Two)
-```
-
-and both are in `terms`: `mergeOneOriented` overwrites the resident *row* and `addTerm`s the
-combined entry, and nothing is ever removed from `terms` (`MERGE.md`, "The executable row
-index"). So `ViewRepr tgt (Two)` holds of `(One)` and of `(Two)` alike.
-
-`MergeSaturated` is not available at such a state either, which is why neither it nor
-`Rebuilt` appears below: the displaced entry still *collides* with the survivor —
-`identityVals := some 1` counts the e-class column and `[(Two)] ≠ [(One)]`, so
-`MergeConflict` holds — and a `MergeStep` fires at a collision the interpreter had already
-settled by deleting the row.
-
-What *is* true there is the next thing down: two ids one source term reads are
-`@UF`-connected, so they share a leader. `correspond-dump 64 union`'s `leaders` column is a
-single term for each of the four source terms, and `difftest correspond`'s **`leader-diff`**
-column is the corpus-wide measurement of the same thing — the pairs on which joining at a
-*leader* and joining at any shared node disagree, 0 on every case. `Database.ViewLeader` is
-that. -/
+The forward reductions use view leaders, view coverage, and represented unions.
+Retained entries at one key can have different outputs even after merging; only the
+live index is functional. Thus `Database.Out` needs UF reachability to connect old
+outputs to their common root. `Encoding/Complete.lean` proves the execution invariants. -/
 
 /-- **A leader for the view reading.** `lead` picks, per id, one that every source term
 reading that id also reads; two ids one source term reads have the same `lead`; and an id and
@@ -1853,30 +1496,11 @@ theorem cong_sameClass_of_joined {src d : Database} (hw : src.WF) (hj : d.ViewJo
      fun _ _ _ => SameClass.trans_of_viewJoined hj,
      fun _ _ _ ha _ hl => sameClass_congr_of_shared hcov ha hl⟩ h
 
-/-! ### The action read-back
+/-! ### Readings after compiled actions
 
-`encodeBuild` emits two `set`s per application — the term-relation row and the view row — and
-every residue below needs to know they *ran*. This section is that read-back, in four steps and
-with no `execM` and no `encode` beyond `encodeBuild`:
-
-* **terms persist.** `FDatabase.execProgramM_terms` and the chain under it. This is the one
-  thing the read-back must not overstate: `mergeOneOriented` overwrites the resident *row* and
-  `addTerm`s the survivor, and `Impl/` never removes a term (`mergeOneOriented_confined`,
-  `mergeRound_confined`), so "the `set` ran" survives as *the entry term is still held* and not
-  as "the row is still current", which is false.
-* **the rows.** `holdsBuild_of_execActions`: after a build's block, every application the built
-  expression applies has both of its rows, keyed on the arguments' values.
-* **the reading.** `viewRepr_self_of_execActions`: those rows, assembled into
-  `ViewRepr d t t` — what a top-level build's own operand needs and what a `SameClass` is two
-  of.
-* **at a run of commands.** `holdsBuild_of_execProgramM` and
-  `viewRepr_self_of_execProgramM`: the same, where the block is the *top-level* `Cmd.action`s
-  `encodeCmd` emits, each with its own merge phase. A rule head needs no bridge —
-  `execLocalActions` *is* `execActions`.
-
-`Encoding/Match.lean`'s head-build case consumes the second and third directly; what neither
-reaches is the induction over `encode P`'s commands that says every source term came from a
-block the run passed, which is what the residues below are still missing. -/
+Each legacy build writes a construction-history entry and a view entry. The following
+lemmas recover those entries and their recursive readings after action blocks and
+top-level commands. Merging may replace live rows but retains the recorded entries. -/
 
 /-! #### Terms persist -/
 
@@ -2349,59 +1973,14 @@ theorem rbLitState_lit :
       ((FDatabase.eqsReflB_iff _).mp rfl) _ _).mpr h
     exact absurd this (by decide)⟩
 
-/-! #### The three properties
+/-! #### Forward correspondence invariants
 
-Each is a property of the state `execM` returned rather than a restatement of an obligation,
-and each holds at `witnessProgram`, the program the vacuity witness at the end of this file is
-stated over; `difftest correspond-dump 64 union` prints the state and its `reprs`/`leaders`
-block is the reading. Two of the three are *derived* below —
-`Database.ViewsCover.of_viewLeaderRows` and `unionsRead_of_unionsJoined` — so what carries a
-`sorry` is not three properties but two mechanisms.
+`ViewLeader` connects readings to common roots; `ViewsCover` supplies shared view keys;
+`UnionsRead` represents source equations. `UnionsInv` carries source readings and recorded
+unions through commands. `Encoding/Complete.lean` supplies the rule-firing case and
+assembles the execution theorem.
 
-* `Database.ViewLeader` — `leaders` is a single term for every source term: `(One)` for
-  `(One)` and for `(Two)`, `(Add (One) (Two))` for both `Add`s. `difftest correspond`'s
-  `leader-diff` column is the same reading over the whole corpus, and it is 0.
-* `Database.ViewsCover` — every pointwise-equal pair of argument lists reads to one of the
-  three `@AddView` keys, which are the product of the two children's `reprs`; the clause asks
-  for one such key and not for the product, and the source holds no literal. It is *derived*
-  from the first, strengthened by `rowLead` to `Database.ViewLeaderRows`, plus every source
-  term having an id (`Database.ViewsCover.of_viewLeaderRows`).
-* `Database.UnionsRead` — `reprs` of `(One)` and of `(Two)` share `(One)`.
-
-All three hypotheses are therefore satisfiable at reachable states.
-
-What all three need is an invariant carried through `FDatabase.execProgramM` that reads the
-encoded program's *own* commands — the two `set`s per build, the `@UF` edge per `union`, and the
-`Cmd.saturate rebuildRuleset` after each. The nearest thing the library has is
-`execM_contained`, and it does not reach: it is proved under `Program.NoSaturate`, and `encode`
-emits a `Cmd.saturate` after every command that writes.
-
-**What the two sections below supply, and what is left.** The action read-back is proved: at a
-block of a build's own commands, both of its rows are entry terms of whatever the run finishes
-at (`holdsBuild_of_execProgramM`), and they assemble into the reading
-(`viewRepr_self_of_execProgramM`). The **command induction** is proved on top of it, save one
-case: `UnionsInv` is its invariant, `unionsInv_execM` runs it over `encode P`, and both of its
-data clauses come out of it — `execM_unionsJoined`, `Database.UnionsRead`'s one write clause,
-and the totality `Database.ViewsCover` is derived from. Both of the two things that make the
-induction more than bookkeeping are handled there:
-
-* a source term reached through a **variable** needs the earlier `let`'s own read-back, which is
-  the `hvar` hypothesis of `viewRepr_self_of_execActions`; the invariant's `env` and `envReads`
-  clauses together supply it (`UnionsInv.hvar`);
-* an equation asserted by a **rule firing**'s head needs the source's firing to have a target
-  firing behind it, which is the *opposite* direction from
-  `exists_validQuerySubst_of_encodeQuery`. This is the case that does not close, and the reason
-  is one step below the firing: `matchQuery` reads the *index* at a `.merge` function, and the
-  read-back gives entry terms. `unionsJoined_fire` is it, alone.
-
-What the induction no longer carries is every source *term* reading to itself
-(`Database.ReadsSelf`), which is false at a firing over a non-leader class member and is what
-made its predecessor unsound rather than incomplete.
-
-**Two of these statements were once false**, at a program the domain admitted, and the state
-that showed it is below — now with the sign reversed: `ViewRepr`'s literal clause carries no
-membership premise, so the bare-literal build is in the domain and both statements hold there
-(`litBuild_viewsCover`, `litBuild_unionsJoined`). -/
+Readings need not map a source term to itself: rule variables may read a rebuilt id. -/
 
 /-! #### The bare leaf, admitted
 

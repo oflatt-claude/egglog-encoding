@@ -384,19 +384,10 @@ theorem exists_source_of_patternArgVar {src d : Database} (hs : d.ViewsSound src
 def Database.GlobalsRead (src : Database) (ρ : Env) : Prop :=
   ∀ v t i, Env.lookup v src.env = some t → Env.lookup v ρ = some i → Cong src t i
 
-/-! ### The globals are gone before the query is read
+/-! ### Source environments
 
-`Spec/Step.lean` resolves the globals then in scope into a rule's query when the rule is
-**declared**, and `Encoding/Encode.lean`'s `Rule.substGlobals` is that same step on the
-encoder's own record of them (`Rule.resolveGlobals_eq_substGlobals`). So the query a state
-holds and the query the encoder flattened are the *same* query, and no transfer between them
-is needed: what used to be `Matches.of_substGlobals` and its converse is now an identity.
-
-What survives is one semantic residue. `Expr.substGlobals` writes a literal-valued global's
-definition into the query, and a bare-literal pattern is the one shape `Matches`' witness
-clause cannot answer from the reading alone. `Pattern.GroundedAt` is that clause and
-`Database.GlobalsInline` pays it: the source's environment binds the name to the literal, so
-`Database.WF` holds it. -/
+Closed expressions evaluate independently of the environment. The following lemmas
+reconstruct source bindings for variables read from compiled query keys. -/
 
 /-- A closed expression's value does not depend on the environment. -/
 theorem Expr.eval_of_vars_nil {sig : Signature} {e : Expr} (h : e.vars = []) (σ : Env) :

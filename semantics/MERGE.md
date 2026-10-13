@@ -44,8 +44,8 @@ merges bind `old0`, `new0`, and so on. The ambient environment is restored after
 `identityVals` takes precedence; otherwise an action block compares all output columns.
 Equal compared prefixes skip the body. A single-expression merge has no default skip,
 since a merge such as `(+ old new)` can change a value even when its inputs are equal.
-The [encoding](ENCODING.md#rebuilding) uses this mechanism to exclude its proof column
-from change detection.
+The legacy encoder excludes its proof column this way; the new congruence tables
+have a single output and compare it directly.
 
 `MergeClosure` permits any finite sequence of merge steps. Every command ends in a merge
 phase, including a declaration, a rule registration, and a top-level action. A `run`
@@ -93,7 +93,7 @@ congruence diagonal; the ordering-free arm permits unions while excluding the
 
 `NoSaturate` is required by this refinement proof: an interpreter fixpoint need not be a
 specification fixpoint when the specification permits more matches. The
-[encoding correspondence theorem](ENCODING.md#correspondence-theorem) separately handles
+[encoding correspondence theorem](ENCODING.md#legacy-theorem-and-checker) separately handles
 successful saturating target executions.
 
 There is also no general theorem that the interpreter computes the greatest recorded

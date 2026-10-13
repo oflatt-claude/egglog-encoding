@@ -2,59 +2,19 @@ import EgglogSemantics.Impl.Interp
 import EgglogSemantics.Spec.Step
 
 /-!
-# An executable interpreter for the M9 semantics
+# Interpreter with function merges
 
-`Impl/Interp.lean` runs the constructor-only fragment. This runs `Spec/Step.lean`, so
-that `:merge` programs can be differentially tested against egglog — which is the only
-check that M9's design matches the real system rather than matching itself.
+`execM` extends the constructor interpreter with a live row index and merge saturation.
+It shares value evaluation, matching, and actions with `Impl/Interp.lean`. Queries read
+current rows; the specification permits any retained entry.
 
-`execM` at the bottom is the composed entry point, and it is what
-`Program.expectedSizes` runs. Until it existed, `Impl/Interp.lean`'s `exec` was — and
-that evaluates with `Expr.eval` and never calls `mergeRound`, so everything in this file
-except `keyRowCount` had **no differential coverage at all**. A passing suite said nothing
-about the merge implementation.
-
-Two things differ from `Impl/Interp.lean`, both forced by the spec being *relational*.
-
-**The refinement weakens to reachability.** `exec_programStep` says the constructor
-interpreter reaches exactly the states the spec does, in both directions. Here the spec
-admits several, so only one direction survives: the interpreter's result is one the spec
-reaches. `Proofs/Merge.lean`'s `execM_contained` states what is available instead, and it
-is confined to `Program.NoSaturate` — `execRunRules_contained` is a *containment*, so the
-interpreter settling does not witness a specification fixpoint, and that is what a
-`Cmd.saturate` would need.
-
-**The merge phase is a pass iterated to a fixpoint.** `mergeRound` is one pass — a rebuild, then
-each collision among the pre-pass rows fired once, structurally terminating — and `execCmdM` runs
-`mergeSaturateF` over it, as `merge_all` does. A single pass would also be sound, since `CmdStep`
-ends in a `MergeClosure` with no `MergeSaturated` requirement and a prefix of the closure is a
-reachable state; it is not *enough*, because a rule can read a value and one pass leaves three
-colliding entries at a key class as two. Saturating terminates only because the pass deletes the
-rows it merged — `mergeSaturateF` has the argument.
-
-What no longer differs is **evaluation, e-matching or actions**: with reading confined to
-the query, `Expr.eval` takes a signature and resolves primitives, so `Impl/Interp.lean`'s
-`execAction`, `execActions` and `patternHolds` serve a `:merge` program unchanged and this
-file adds only the merge phase and the round that runs it. For merge functions,
-`patternHolds` scans the current row index; the specification permits any recorded
-output. See `MERGE.md`, "The executable row index".
-
-The congruence closure is *unchanged*, and needs no argument to stay so: `Cong` reads
-`eqs` and no row at all, so `closureF` decides it whatever the index holds.
-The functional dependency a constructor's table has is `Cong.congr` itself, a rule of the
-relation, since a constructor's entry is its own application.
-
-Entry terms do enter the closure, and inertly. A merge function's entry `f(a…, v…)` is
-never a *subterm* of anything — `Expr.eval` builds no application of a merge function, so
-every key and value column is a constructor term — so the pairs it adds relate entry terms
-to entry terms and can never propagate down to a key. `congrKeys`, `canonTerm` and
-`canonOf` therefore see exactly what they saw when entries were rows and nothing else.
+`Proofs/Merge.lean` proves containment in a reachable specification state under its
+legality and fragment assumptions. See `MERGE.md` for the contract and limitations.
 -/
 
 namespace Egglog
 namespace FDatabase
-/-- Whether two key tuples are congruent. `Impl/Interp.lean`'s `congrTuple`, which the
-row atom `Pattern.values` also uses. -/
+/-- Whether corresponding key columns are congruent. -/
 abbrev congrKeys : Finset (Term × Term) → List Term → List Term → Bool :=
   FDatabase.congrTuple
 
@@ -358,21 +318,9 @@ def FDatabase.swapForCanon (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r�
       && FDatabase.canonKey cl d.terms r₁.args && !FDatabase.canonKey cl d.terms r₂.args
   | _ => false
 
-/-- One `:merge` firing on a named pair of rows, if it applies, with `old` and `new`
-bound the way egglog binds them.
-
-`mergeOneOriented` does the work on a pair whose second element is the row already in
-the table. This picks that pair. If exactly one of the two keys is canonical, its row is
-the resident one and so is `old`, whichever was written first. Otherwise — the keys are
-equal, or neither is canonical — the argument order decides, and `mergeRound` passes the
-older row second, which is egglog's tie-break: rows it re-inserts arrive in table order,
-so the oldest is the one the rest are merged onto.
-
-Both orders are `MergeStep.collide` premises, so either choice refines the spec
-(`Proofs/Merge.lean`, `mergeOneWith_mergeStep`); this is the one that agrees with the
-binary. Getting it wrong is invisible to a commutative merge, which is why the suite
-stayed green through two different wrong answers — first `old` and `new` swapped
-outright, then bound by insertion age. `DiffTest.lean`'s `canon-*` cases pin it. -/
+/-- Merge a pair with the canonical-key row as resident (`old`). If neither or both
+keys are canonical, the second row is resident. `mergeRound` supplies the older row
+second, breaking ties by insertion order. The `canon-*` tests cover this choice. -/
 def FDatabase.mergeOneWith (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Option FDatabase :=
   if FDatabase.swapForCanon cl d r₁ r₂ then d.mergeOneOriented cl r₂ r₁

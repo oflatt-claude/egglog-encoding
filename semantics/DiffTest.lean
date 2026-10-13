@@ -6,27 +6,14 @@ import EgglogSemantics.Encoding.Checker
 import EgglogSemantics.Tests.Egg
 
 /-!
-# Differential test case generator
+# Differential tests
 
-Writes one `.egg` file and one `.expected` file per case. `scripts/difftest.sh` runs
-egglog on the former and diffs its `(print-size)` output against the latter.
+Curated and seeded programs cover constructors and merge functions. Each invocation
+writes a `.egg` program and expected row counts; `scripts/difftest.sh` runs egglog with
+a per-case timeout. Emission checks reject unsupported programs.
 
-Two kinds of case, over two fragments. The **curated** ones are hand-written, so they are
-only as good as whoever picked them. The **random** ones are generated from a seed by a
-fixed linear congruential stream, which is what removes that selection bias. Each kind
-covers both the constructor fragment and M9's `:merge` functions.
-
-One invocation writes one case, so that a generated program which happens to blow up
-cannot take the rest of the run down with it; the script applies a timeout per case.
-
-Cases use nullary constructors rather than literals, since egglog's `i64` is a distinct
-primitive sort while `Term.lit` shares a sort with applications here (see `Egg.lean`).
-
-**Nothing here may emit a program egglog rejects.** A rejected program is not a failing
-case but a missing one, and a generator quietly producing unrunnable programs is the
-failure mode this file is written against — it once cost 34 of 60 random cases, when the
-fragment still allowed bare variables. `writeCase` checks the one rule the generator could
-plausibly break, `set`'s.
+Nullary constructors stand in for literals where Rust requires distinct sorts.
+Additional modes test congruence compilation and the legacy encoder and checker.
 -/
 
 open Egglog
@@ -443,30 +430,9 @@ join reaches a fixpoint whatever the seed — which is why the `saturate` runs t
 seed's own. -/
 private def collapseRuleset : RulesetName := "collapse"
 
-/-- The two rules the generated `saturate` runs, read off `src`'s **root**.
-
-Deterministic where `genPattern` is not: its coin flips abstract a subterm one time in
-three, so drawing a two-variable pattern from it happened in none of the 60 seeds.
-Replacing the root's first argument column outright binds a variable every time. **One**
-variable, because the enumerator is `|terms| ^ |vars|` and a second one took a seed past the
-harness's per-case budget.
-
-The first rule merges what it matched with `(Sat)` and builds nothing; the second matches
-`(Sat)` in the same column and builds `(Hit)`. So the second can only fire once the first
-has, which is a **later round reading an earlier round's equality** — the whole of what a
-source `saturate` has to get right — and the ruleset still saturates whatever the seed:
-between them they add two nullary terms and then only equations over a term set that never
-grows again.
-
-`(Sat)` is a constant of its own rather than one the seed already uses, and the saturation
-runs **before** the seed's own rules are registered. Both are for cost, not sensitivity:
-merging into `(A)`, or saturating after the rules had grown the term set, collapses the whole
-program into one class, and a saturation composes a `@Trans` per rebuild round over view
-entries nothing removes — `difftest check` was then walking proof towers over 180 target
-terms where 46 s used to cover the whole corpus.
-
-`none` at a leaf: a nullary constructor has no argument column, so there is nothing to
-match with. -/
+/-- Generate a terminating saturation test from the root's first argument.
+The first rule unions a match with `(Sat)`; the second builds `(Hit)` using that equality
+in a later round. A single variable bounds enumeration cost. Leaves return `none`. -/
 private def genCollapseRules : Expr → Option (List Rule)
   | .app f (_ :: args) =>
     some [⟨[.expr (.app f (.var "a" :: args))], [.union (.var "a") (C "Sat")], collapseRuleset⟩,
@@ -494,36 +460,12 @@ private def genProgram (s : Nat) : Program :=
   [.action (.expr g₁), .action (.expr g₂), .action (.expr g₃)] ++ sat ++ rules
     ++ List.replicate (rounds + 1) (Cmd.run "")
 
-/-! ### `:merge` cases (M9)
+/-! ### Merge cases
 
-The first empirical check on M9. Every merge here is **idempotent**, and that is the only
-exclusion the model justifies: `MergeStep` has no `a ≠ b` guard, so a row collides with
-itself, and `:merge (+ old new)` therefore derives `2v`, `3v`, … forever where egglog with
-a single `set` merges nothing. Such a program's egglog result is insertion-order-dependent
-and there is no fixpoint to compare against, so a difference there would be this model's
-design showing rather than a real bug.
-
-**Non-commutative is not the same as non-idempotent**, and `:merge old` and `:merge new`
-were wrongly excluded on that reading. They are idempotent, and unlike `+` they are
-completely determined in egglog — `old` is the value already in the table, `new` the one
-being inserted. Leaving them out left every merge in the suite commutative, which is
-exactly why the model could bind the two colliding rows the wrong way round and stay
-122-for-122 green. `genMergeSpec` draws them now; the `old-*`/`new-*` cases below pin the
-four shapes that caught the outright swap, and the `canon-*` cases the six that caught
-*which* row the binding reads — `MERGE.md`, "The executable row index".
-
-No `:merge` **body** reads a table. An atom there would bind its variable to *any* recorded
-output, where egglog binds the current one, so the model would fire more and build more;
-`Impl/Check.lean`'s "Reading in an action" rejects it statically. A body may still *write*
-one, which is the `merge-body-*` family, and a rule body may read one, which is the
-`read-*` family below.
-
-`min-rebuild` is the case that matters: unioning the keys makes two `Dist` rows collide,
-so egglog's table drops from two rows to one. It is the shape of
-`egglog/tests/merge-during-rebuild.egg`, with nullary constructors in place of `(Node
-i64)`. Row counts see it because they count *key classes*, which is also why the
-interpreter need not saturate merges to predict them.
--/
+Idempotent merges avoid unbounded derivations from self-collisions in the specification.
+The `old-*`, `new-*`, and `canon-*` cases test noncommutative merges and resident-row
+selection. Merge bodies write entries; queries read them. `min-rebuild` tests a union
+of keys that makes two rows collide. See `MERGE.md` for the model's limits. -/
 
 private def dist (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
@@ -1673,87 +1615,14 @@ private def probeCases : List (String × Program) :=
    ("lit-union", litUnionCase), ("lit-mix", litMixCase)]
 
 namespace Egglog
-/-! ### The proof encoding, by tuple count
+/-! ### Legacy encoding counts
 
-`Encoding/Encode.lean`'s `encode` is parked M11 material and nothing had ever run it on a
-program. This runs it over the corpus above and compares the encoded database's tuple counts
-against the source run's.
+Compare source `keyRowCount` with `viewClassCount`, which reads view keys through the
+explicit UF table. Target built-in congruence is structural identity. `viewEntryCount`
+also reports retained keys, including stale keys left by rebuilding.
 
-It is a **self-consistency** check inside the model and deliberately not one against the
-binary. egglog mints a fresh id per construction and lets the view merge dedup them, where
-the ids here are structural, so against egglog "the induced equivalence is the same; the
-entry counts are not" (`Encode.lean`, "Fresh ids"). Against our own source run they should
-be.
-
-#### Which two numbers
-
-The source side is `Impl/Merge.lean`'s `keyRowCount f`: one class per congruence class of
-`f`'s key tuples, which is `(print-size)`'s quantity and the one the whole difftest is
-stated in. `Impl/Interp.lean`'s `rowCount` agrees with it on a constructor, so the source
-side could use either; `keyRowCount` is chosen because it reads the same index the target
-side has to.
-
-The target side is `@fView`, and *neither* count is right there unadjusted:
-
-* `rowCount (viewName f)` reads applications out of `terms`. `@fView` is a `.merge`
-  function, so its entry term is `@fView(children…, eclass)` and this would count classes of
-  the key-and-value pair; and `terms` never shrinks, so it would also count every entry a
-  merge or a rebuild has since superseded. Its own docstring says "Constructors only".
-* `keyRowCount (viewName f)` reads the index, which is the right table and the right
-  key/value split — but it quotients by `closureF`, and on an encoded program `closureF` is
-  the **identity**. `encodeAction` turns a source `union` into `.set @UF …`, so the encoded
-  program contains no `Action.union` at all, `eqs` stays empty, and the congruence closure
-  collapses to the diagonal. Quotienting by it quotients by nothing.
-
-That is not a defect in `keyRowCount`; it is the encoding working. Equality on the target is
-*only* what `@UF` and the views record (`Encode.lean`, "Reading the target"), so the
-equivalence to quotient `@fView`'s keys by is the union-find's, not `Cong`. `viewClassCount`
-below is `keyRowCount`'s shape with `closureF` replaced by that — a computable
-`ViewReprList` composed with the union-find walk, which is the correspondence the sweep
-decides with.
-
-`viewEntryCount` — the raw `keyRowCount (viewName f)` — is reported beside it, because the
-gap between the two is a documented property of this encoder rather than noise: the rebuild
-rules re-key an entry by *adding* one at the leader's key and there is no `delete` to remove
-the stale one, so "a half-rewritten entry is an extra entry rather than a lost one"
-(`rebuildRules`). The class count is the claim; the entry count is the price.
-
-The two numbers really do come apart, and the guards below pin the smallest case where they
-do: `unionCase` is one source key class, one view class and **three** view entries. A harness
-that had reached for `keyRowCount` on both sides would have reported a mismatch there and
-been wrong about it.
-
-#### What is actually runnable
-
-Encoding a query multiplies the e-matcher's exponent: one view read per subterm, each
-binding an id variable **and a proof variable**, so `Program.widestRule` goes from 0–3 across
-the in-domain corpus to 5–23, and `matchQuery` is `|valueTerms| ^ that`. `difftest
-encode-cost` prints both exponents per case, which is the number to look at before waiting on
-one — though it is only half the answer, since `|valueTerms|` varies as much as the exponent
-does, and the proof column moves that too: a proof node is an ordinary constructor term, so
-every proof the rebuild composes joins the candidate universe.
-
-`Impl/Interp.lean`'s "Pruning the candidate cross product" is what keeps the second variable
-per read from multiplying the whole search rather than its own atom's block. It was not
-enough on its own — 12 of 70 at a 60 s budget — and "Joining over the row index" is what
-followed it. **63 of the 70 in-domain cases the corpus then had finish** at 60 s and 65 at
-300 s, all reporting `AGREE`, against 58 and 64 *before* the proof column: the enumerator now
-more than pays for the column it was struggling under. The eleven `ground-*` cases added since
-run in half a second between them.
-
-Nothing regressed — every case that finished under the older enumerators is faster,
-`union` 6 min 5 s → 1.3 s and `actions` 253 s → 1.1 s.
-
-Where it goes is measured, and it is e-matching and not the merge phase: on `unionCase`'s
-last rebuild the round costs 207 s, of which the congruence closure is 106 ms, one merge
-pass 1 ms and the whole merge saturation 322 ms. The rest is `execRunRules`. Two things
-multiply there and neither is the encoder's shape: the view read's proof variable adds a
-`|valueTerms|` factor **inside its own atom's block**, which pruning cannot remove because
-the atom is not decided until its last column is bound; and every proof the rebuild composes
-is an ordinary constructor term, so it joins `valueTerms` and raises the base. What that
-needs is the enumeration replaced by a join over the index — bind a value column *from the
-rows* rather than guess it — which pruning approximates and does not replace.
--/
+For example, `unionCase` has one source key class and one view class but three view
+entries. These are model consistency checks, not Rust certificate validation. -/
 
 /-! #### `encode`'s domain, decided
 
@@ -2288,73 +2157,23 @@ def CheckOutcome.render (o : CheckOutcome) : String :=
             {vs.length - nc - nd} unjustified of {vs.length}"
       ++ String.join bad
 
-/-! #### The correspondence, executable
+/-! #### Executable correspondence
 
-The claim a simulation theorem would state, run rather than assumed. For a source program
-`P`, with `src` the database its run leaves and `tgt` the database the run of `encode P`
-leaves, every pair of terms should satisfy
+Compare source `Cong` with target `SameClass` on unordered term pairs, including the
+diagonal. `LOST` counts source equalities missing from the target; `INVENTED` counts
+target equalities absent from the source. The diagonal checks term existence.
 
-```
-Cong src a b  ↔  SameClass tgt a b
-```
+The primary reading uses retained entries. Diagnostics compare it with live rows and
+`sameClassF`, and count uses of UF edges and non-reflexive target equations. -/
 
-with `SameClass` as `Encode.lean` reads it: a view entry per subterm, on ids the children's
-own views returned. The two halves fail differently and are counted apart.
-
-**The sweep decides with the union-find and reports where that differs from the stated
-relation.** `Encode.lean`'s `SameClass` is flat — one id both terms read to —
-`Encoding/Correspond.lean`'s `sameClassF` decides *that* relation and `sameClassF_iff`
-proves the two equal, and `CorrReport.linkDiff` counts the pairs on which the swept reading
-and `sameClassF` disagree. It is 0 on every case, which is what carries this sweep's verdict
-to the theorem the sweep is about. The walk is kept in the sweep because dropping it would
-make `via-uf` unmeasurable, and `via-uf` is the evidence that the flat reading is the right
-one.
-
-* **LOST** is `Cong src a b` without `SameClass tgt a b` — an equality the encoding dropped.
-* **INVENTED** is `SameClass tgt a b` without `Cong src a b` — one it made up.
-
-`a` and `b` range over `src.terms ++ tgt.terms`, unordered pairs with the diagonal included.
-Both relations are symmetric — `Cong` by `Cong.symm`, `SameClass` by construction — so the
-unordered sweep decides the ordered claim.
-
-**The diagonal is the e-node correspondence.** `Database.terms` is `{t | Cong db t t}`, so
-`Cong src a a ↔ SameClass tgt a a` says `a` is a source e-node exactly when the target gives
-it an e-class. The encoding's own terms — proof nodes, `@fView` and `@UF` entry terms — are
-in the universe for that reason: both sides have to be false on every one of them.
-
-**The tables are read out of `terms`, not out of `rows`.** `Database.Out` is a term-set
-query and the index is derived, so a row a merge displaced is still an entry term and `Out`
-still reads it. Every disagreement is re-tested against the index reading (`corrReadRows`)
-and the report says how many survive it.
-
-**Target-side congruence is identity.** `encode` emits no `union`, so the target asserts no
-equation but the reflexive one `addTerm` records, and `Cong tgt` is the identity on the terms
-it holds. The readings below use that; `CorrReport.tgtEqs` counts the equations that would
-invalidate it, and is expected to be zero.
-
-**A green sweep is a claim about one reading**, so `corrReading` names three others and the
-report says how much work each part of `SameClass` did: `CorrReport.agreeTrue` is how many
-pairs both sides said *yes* to, without which agreement is all double negation, and
-`CorrReport.viaUF` is how many of those needed a `@UF` step at all.
--/
-
-/-- The per-case wall-clock budget `difftest correspond-seed` runs a seed under, in
-milliseconds. A case that outruns it is **abandoned and reported** rather than waited on: the
-sweep runs an encoded program, whose e-matcher is `|valueTerms| ^ |vars|`, and one seed in
-`[200, 600)` held a run for about forty minutes with nothing to show for it. Neither a fuel
-nor a round count bounds that — the blow-up is inside one command's e-matching — so the
-budget is enforced where it can be, on a child process.
-
-Forty seconds is `scripts/difftest.sh`'s per-case timeout; this is a little under it, so a
-sweep of a hundred seeds costs at most an hour of budget in the worst case. -/
+/-- Per-seed timeout in milliseconds, enforced in a child process because matching
+within a single command can exceed the round-fuel budget. -/
 def corrSeedBudgetMs : Nat := 30000
 
 /-- How often the parent looks at a child it is timing. -/
 def corrSeedPollMs : Nat := 20
 
-/-- The most terms one case sweeps. Beyond it the sweep runs on a prefix of the universe and
-the report says so, since a silent truncation reads as a clean case. No case in the corpus
-or among the probes comes near it; the widest is 170 terms, and 90 among the probes. -/
+/-- Maximum terms per sweep. Reports explicitly flag truncation. -/
 def corrCap : Nat := 512
 
 /-- How many disagreements of each kind a case prints before it says how many it dropped. -/
@@ -3010,16 +2829,9 @@ set_option linter.hashCommand false in
 set_option linter.hashCommand false in
 #guard (encode buildCase.declared).arityConflicts.isEmpty
 
-/-! **The class count is the claim; the entry count is the price.** `unionCase` builds
-`Add(One, Two)` and `Add(Two, One)` and unions the leaves, so the source has one key class.
-The encoded view holds three entries — the two the builds wrote, `[One, Two]` and
-`[Two, One]`, and the `[One, One]` the rebuild re-keyed them both onto — and there is no
-`delete` to retire the two stale ones, so `viewEntryCount` is 3 where `viewClassCount` is 1.
-This is the smallest case where the two target-side numbers come apart, and it is the whole
-reason the harness reports both. -/
-/-- The checks that have to **run** a program. Compile-time `#guard`s cannot carry these:
-each encoded action is followed by a saturating rebuild, so elaborating them ran the
-e-matcher tens of times. `difftest encode-selftest` executes them and reports failures. -/
+/-! `unionCase` has one key class and three retained view keys: the two original keys
+and their rebuilt key. This checks why the report separates class and entry counts. -/
+/-- Runtime encoding regressions, executed by `difftest encode-selftest`. -/
 def encodeSelfTests : List (String × (Unit → Bool)) :=
   [ ("encode buildCase runs", fun _ => (execM (encode buildCase.declared)).isSome),
     ("encode buildCase never sticks", fun _ =>
@@ -3029,48 +2841,13 @@ def encodeSelfTests : List (String × (Unit → Bool)) :=
     ("unionCase agrees on classes", fun _ => (encodeCompare runFuel unionCase).agrees),
     ("unionCase entries exceed classes", fun _ =>
       !(encodeCompare runFuel unionCase).entriesAgree),
-    -- The regression test for the rebuild-after-action fix: the congruence a top-level
-    -- `union` creates has to travel up a level, and did not until `encodeCmd` emitted a
-    -- rebuild after an action. `upCase` is the same shape at binary `Add` and is what stood
-    -- here, reporting `DIFFER Wrapper:1/2/2` before the fix. **The proof column retired
-    -- it**: 1.1 s before, about 1 h 50 m after, which was the whole of this selftest's two
-    -- hours — the enumerator costs `|valueTerms| ^ |vars|` and a binary view's rebuild rule
-    -- has one variable more than a unary one. `upThinCase` is that unary shape, `AGREE
-    -- H:1/1/2 F:1/1/2 A:1/1/1 B:1/1/1` in 98 s, and it fails the same way for the same
-    -- reason. The swap takes the whole list to 7 min 3 s, which is a gate again.
+    -- Unary fixture keeps the rebuild regression inexpensive.
     ("upThinCase agrees on classes", fun _ => (encodeCompare runFuel upThinCase).agrees) ]
 
-/-! **The negative control, and a defect it exposes.** Put `unionCase`'s two applications
-under a `Wrapper` and the congruence has to travel up a level: the source says one `Wrapper`
-key class, the encoding says two. The two `Add` ids are unioned only when the rebuild
-re-keys both view entries onto the leaders and the merge collides them — and `encodeCmd`
-emits `Cmd.saturate rebuildRuleset` **only after a `run` or a `saturate`**, so a source
-program made of top-level actions gets no rebuild at all and the target simulates no
-congruence above the columns a `union` names directly.
+/-! `upThinCase` checks that rebuilding after a top-level union propagates equality
+to enclosing applications. Its runtime regression is in `encodeSelfTests`. -/
 
-That is a defect in `encode` rather than in the correspondence, and it is not an artefact of
-the skolem ids: egglog's `set-if-empty` would mint the same two distinct ids for the two
-`Add` shapes, so the two `Wrapper` entries sit at distinct keys under either reading. The
-source's congruence is a closure and holds the moment the `union` lands; the target's is a
-ruleset, and `execCmdM` runs a merge phase after every top-level action but nothing runs the
-rebuild.
-
-**One empty round repaired it**, which is what said the rebuild was the missing piece and
-nothing else was: the `up-thin-run` probe is `upThinCase ++ [.run ""]`, whose source counts
-are unchanged and whose encoded counts then agreed. **`encodeCmd` now emits
-`Cmd.saturate rebuildRuleset` after a top-level action too**, which is where egglog puts it
-— after every command but a function, rule or sort declaration. `upThinCase` is kept as the
-regression test for that, in `encodeSelfTests` rather than as a `#guard`, because running
-the rebuild after each action costs a saturation per action.
-
-It is also what makes the corpus result readable: the curated `actions` case was action-only
-too, and agreed only because the congruence it asserts is `One = One`. Every other in-domain
-case ends in a `run` or a `saturate`, so every other one got a rebuild even before the fix —
-which is why the corpus could not see this and a probe was needed. -/
-
-/-! And `actions` is the only in-domain case the gap can reach, because it is the only one
-with **no round at all** in it — neither a `run` nor a `saturate`, each of which is followed
-by a rebuild — so the corpus cannot see this defect and a probe was needed. -/
+/-! Guard the corpus count of action-only programs. -/
 set_option linter.hashCommand false in
 #guard ((allCases.filter fun c => (c.2.declared).encodeDomainB).filter fun c =>
     !c.2.any fun cmd => match cmd with
