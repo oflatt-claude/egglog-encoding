@@ -114,7 +114,7 @@ nightly-local: nightly-uv nightly-rustup
 # suites do not depend on a Lean toolchain; `elan` and a Mathlib cache are needed,
 # see semantics/README.md. `lake build` only warns on a proof hole, so the sources
 # are grepped as well, excluding backtick-quoted prose.
-# All current and retained legacy theorems must build without proof holes. The native
+# Every theorem must build without proof holes. The native
 # corpus gates check congruence correspondence, provenance data preservation, extracted
 # certificates, and lifted source certificates, which Rust egglog then checks too.
 lean-check:

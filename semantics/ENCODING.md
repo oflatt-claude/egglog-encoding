@@ -65,8 +65,7 @@ The Lean refactor separates congruence compilation, provenance instrumentation, 
 lifting. The congruence pass is implemented in
 [Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean), provenance in
 [Provenance/Encode.lean](EgglogSemantics/Provenance/Encode.lean), and lifting in
-[Resugar/Lift.lean](EgglogSemantics/Resugar/Lift.lean). The old combined encoder remains
-as a comparison reference; its proof annotations have known correctness defects.
+[Resugar/Lift.lean](EgglogSemantics/Resugar/Lift.lean).
 
 ## Congruence compilation
 
@@ -144,9 +143,10 @@ record the merge justification. Proof metadata therefore cannot trigger a data m
 or cause an otherwise stable rule to accumulate longer resident proofs.
 
 Extraction produces a shared certificate with explicit facts, then checks it against
-the uninstrumented relational program. Equality premises use checked subterms of table
-facts as existence witnesses; no auxiliary existence relation is needed. These are
-intermediate certificates, which lifting translates into source proofs.
+the uninstrumented relational program, which has no `union`. Equality premises use
+checked subterms of table facts as existence witnesses; no auxiliary existence relation
+is needed. These are intermediate certificates, which lifting translates into source
+proofs checked against the original program.
 
 ## Proof lifting
 
@@ -236,30 +236,12 @@ or generated source names, consistent arities, supported queries, scoped and dec
 heads, and no literal unions. Arbitrary source merge functions remain outside its scope.
 See [Source.lean](EgglogSemantics/Encoding/Source.lean) for the exact conditions.
 
-## Legacy theorem and checker
-
-[Encoding/Complete.lean](EgglogSemantics/Encoding/Complete.lean) retains the proved
-`Egglog.encode_corresponds` theorem for the old, proof-carrying `Egglog.encode`:
-
-```lean
-theorem encode_corresponds {P : Program} {src : Database} {tgt : FDatabase}
-    (hdom : P.EncodeDomain) (hsrc : ProgramStep Database.empty P src)
-    (htgt : execM (encode P) = some tgt) (a b : Term) (ha : a ∈ src.terms)
-    (hb : b ∈ src.terms) :
-    Cong src a b ↔ SameClass tgt.toDatabase a b
-```
-
-This theorem concerns data correspondence and never interprets proof annotations. It
-remains valid despite the [legacy checker's unsoundness](CHECKER.md). Both endpoints must
-exist in the source; generated view keys need not correspond to existing source terms.
-Successful execution is assumed; termination is not proved.
-
 ## Validation
 
 `make lean-check` builds the library, audits for proof holes, and runs the corpus gates.
-The congruence gate compares every pair of held source terms against its reading and
-compares all live data rows against the legacy encoder after dropping proof columns,
-proof constructors, and history relations. The provenance gate checks data preservation
+The congruence gate compares every pair of held source terms against the compiled
+program's reading, and checks that execution with and without equality reasoning agrees.
+The provenance gate checks data preservation
 and every retained row's extracted certificate. The resugar gate lifts those certificates
 and checks them against the original source program, and the certificate gate exports the
 same certificates and checks them with Rust egglog. Failures, stuck executions, and

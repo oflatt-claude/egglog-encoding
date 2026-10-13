@@ -1,6 +1,6 @@
 import EgglogSemantics.Impl.Check
 import EgglogSemantics.Proofs.Merge
-import EgglogSemantics.Encoding.Encode
+import EgglogSemantics.Congruence.Encode
 
 /-!
 # Machine-checked falsity witnesses
@@ -30,7 +30,7 @@ What each section refutes:
   after a `.decl` neutral; without it a declaration *enables* a merge step.
 * `transport_recorded_false`, `transport_recorded_false'` — **what `hcond` on
   `MergeStep.transport_recorded` and `MergeClosure.transport_recorded` buys.** At
-  `Encoding/Encode.lean`'s own `mergeBody`, with `A.Recorded C`, one signature and both states
+  `Congruence/Encode.lean`'s own `mergeBody`, with `A.Recorded C`, one signature and both states
   well formed, the union-find edge the specification writes is congruent to nothing the
   implementation's state can write. Adding `C.WF` does not rescue it. `recorded_iff_subset`
   beside them is the positive companion: on a diagonal recorder the refutation has no room.
@@ -652,29 +652,29 @@ theorem db₀_not_sigMergeDeclared : ¬ SigMergeDeclared db₀.sig := by
 
 `Proofs/Merge.lean`'s `MergeStep.transport_recorded` and `MergeClosure.transport_recorded`
 carry `hcond : C.Diag ∨ Signature.OrderingFree C.sig`. This section refutes the statement
-without it, at the encoding's own `:merge` — `Encoding/Encode.lean`'s `mergeBody` and
-`mergeResult`, one `viewDecl`.
+without it, at the congruence pass's own `:merge` — `Congruence/Encode.lean`'s `mergeBody`
+and `mergeResult`, one `tableDecl 1`.
 
-`A` holds the view entries `@fView(k) ↦ (p, @Fiat)` and `@fView(k) ↦ (r, @Fiat)`; `C` holds
-the same with the first re-keyed to the congruent `s`, and asserts `p = s`. With `p < r < s`
-in `Term.blt`, `A`'s collision keeps `p` and writes `@UF(r) ↦ (p, _)`, while `C`'s two
-entries are `s` and `r` — `viewDecl`'s `:internal-identity-vals 1` rules the two
-self-collisions out — so the only collision it can run writes `@UF(s) ↦ (r, _)`, whichever
-way round the pair is taken. That is not
-congruent to `@UF(r) ↦ (p, _)`: that needs `r ≈ p`, and a `MergeStep` asserts no equation —
-`.set` is `Database.addTerm`, which records reflexive pairs only — so nothing in either state
+`A` holds the view entries `@fView(k) ↦ p` and `@fView(k) ↦ r`; `C` holds the same with the
+first re-keyed to the congruent `s`, and asserts `p = s`. With `p < r < s` in `Term.blt`,
+`A`'s collision keeps `p` and writes `@UF(r) ↦ p`, while `C`'s two entries are `s` and `r` —
+the identity test on the one output column rules the two self-collisions out — so the only
+collision it can run writes `@UF(s) ↦ r`, whichever way round the pair is taken. That is not
+congruent to `@UF(r) ↦ p`: that needs `r ≈ p`, and a `MergeStep` asserts no equation — a
+write is `Database.addTerm`, which records reflexive pairs only — so nothing in either state
 relates them.
 
 `ufPhi` is what separates them: it reads a `@UF` row's columns through a colouring of nullary
 heads that gives `p` and `s` one colour and `r` another, and it is an invariant of any
 congruence whose asserted pairs are colour-balanced.
 
-`recorded_iff_subset` is the positive companion, and the reason the hypothesis is cheap on an
-encoded program: `encode` emits no `union` (`encode_unionFree`), so every state it reaches is
-`Database.Diag` and there `Recorded` is containment. -/
+`recorded_iff_subset` is the positive companion, and the reason the hypothesis is cheap on a
+compiled program: `Congruence.encode` emits no `union` (`Congruence.encode_unionFree`), so
+every state it reaches is `Database.Diag` and there `Recorded` is containment. -/
 namespace Choice
 
 open Conservativity
+open Congruence (mergeBody mergeResult tableDecl)
 
 /-! ### Reading off a small database -/
 
@@ -733,34 +733,24 @@ def P1 : Term := .app "p" []
 def R : Term := .app "r" []
 def S : Term := .app "s" []
 
-/-- `(@Fiat)`, the proof both view entries carry. -/
-def F : Term := .app fiatName []
+/-- A view entry `@fView(k) ↦ x`. -/
+def vrow (x : Term) : Term := .app V [K, x]
 
-/-- A view entry `@fView(k) ↦ (x, @Fiat)`. -/
-def vrow (x : Term) : Term := .app V [K, x, F]
+/-- A union-find edge `@UF(x) ↦ y`. -/
+def ufrow (x y : Term) : Term := .app ufName [x, y]
 
-/-- A union-find edge `@UF(x) ↦ (y, pf)`. -/
-def ufrow (x y pf : Term) : Term := .app ufName [x, y, pf]
-
-/-- `(@Trans (@Sym @Fiat) @Fiat)`, the proof `mergeBody` composes here: both value columns
-carry `@Fiat`, so both selectors return it whichever way the order falls. -/
-def PF : Term := .app transName [.app symName [F], F]
-
-/-- One view, the union-find, and the three proof heads `mergeBody` applies. -/
+/-- One view and the union-find. -/
 def sg : Signature := fun f =>
-  if f = V then some (viewDecl 1)
-  else if f = ufName then some ufDecl
-  else if f = symName then some (proofDecl 1)
-  else if f = transName then some (proofDecl 2)
-  else if f = fiatName then some (proofDecl 0)
+  if f = V then some (tableDecl 1)
+  else if f = ufName then some (tableDecl 1)
   else none
 
-theorem sg_V : sg V = some (viewDecl 1) := rfl
+theorem sg_V : sg V = some (tableDecl 1) := rfl
 
 /-- The specification's state: two entries of the view on one key. -/
 def A : Database where
   sig := sg
-  eqs := {(vrow P1, vrow P1), (vrow R, vrow R), (K, K), (P1, P1), (R, R), (F, F)}
+  eqs := {(vrow P1, vrow P1), (vrow R, vrow R), (K, K), (P1, P1), (R, R)}
   env := []
   rules := ∅
 
@@ -768,55 +758,53 @@ def A : Database where
 the congruent `s`. -/
 def C : Database where
   sig := sg
-  eqs := {(vrow S, vrow S), (vrow R, vrow R), (K, K), (P1, P1), (S, S), (R, R), (F, F), (P1, S)}
+  eqs := {(vrow S, vrow S), (vrow R, vrow R), (K, K), (P1, P1), (S, S), (R, R), (P1, S)}
   env := []
   rules := ∅
 
-def SA : Set Term := {vrow P1, vrow R, K, P1, R, F}
-def SC : Set Term := {vrow S, vrow R, K, P1, S, R, F}
+def SA : Set Term := {vrow P1, vrow R, K, P1, R}
+def SC : Set Term := {vrow S, vrow R, K, P1, S, R}
 
 theorem A_wf : A.WF := by
   refine wf_of (SS := SA) rfl ?_ ?_ ?_ ?_
-  · rintro p (rfl | rfl | rfl | rfl | rfl | rfl) <;> constructor <;> simp [SA]
-  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl)
+  · rintro p (rfl | rfl | rfl | rfl | rfl) <;> constructor <;> simp [SA]
+  · rintro t (rfl | rfl | rfl | rfl | rfl)
     exacts [Or.inl rfl, Or.inr (Or.inl rfl), Or.inr (Or.inr (Or.inl rfl)),
-      Or.inr (Or.inr (Or.inr (Or.inl rfl))), Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl)))),
-      Or.inr (Or.inr (Or.inr (Or.inr (Or.inr rfl))))]
-  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl) s hs
+      Or.inr (Or.inr (Or.inr (Or.inl rfl))), Or.inr (Or.inr (Or.inr (Or.inr rfl)))]
+  · rintro t (rfl | rfl | rfl | rfl | rfl) s hs
     · rcases subterms_app_mem hs with rfl | ⟨a, ha, hs'⟩
       · simp [SA, vrow]
       · simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
-        rcases ha with rfl | rfl | rfl <;> rw [subterms_nullary hs'] <;>
-          simp [SA, vrow, K, P1, R, F]
+        rcases ha with rfl | rfl <;> rw [subterms_nullary hs'] <;>
+          simp [SA, vrow, K, P1, R]
     · rcases subterms_app_mem hs with rfl | ⟨a, ha, hs'⟩
       · simp [SA, vrow]
       · simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
-        rcases ha with rfl | rfl | rfl <;> rw [subterms_nullary hs'] <;>
-          simp [SA, vrow, K, P1, R, F]
-    all_goals (rw [subterms_nullary hs]; simp [SA, vrow, K, P1, R, F])
-  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl) <;> rfl
+        rcases ha with rfl | rfl <;> rw [subterms_nullary hs'] <;>
+          simp [SA, vrow, K, P1, R]
+    all_goals (rw [subterms_nullary hs]; simp [SA, vrow, K, P1, R])
+  · rintro t (rfl | rfl | rfl | rfl | rfl) <;> rfl
 
 theorem C_wf : C.WF := by
   refine wf_of (SS := SC) rfl ?_ ?_ ?_ ?_
-  · rintro p (rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl) <;> constructor <;> simp [SC]
-  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl | rfl)
+  · rintro p (rfl | rfl | rfl | rfl | rfl | rfl | rfl) <;> constructor <;> simp [SC]
+  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl)
     exacts [Or.inl rfl, Or.inr (Or.inl rfl), Or.inr (Or.inr (Or.inl rfl)),
       Or.inr (Or.inr (Or.inr (Or.inl rfl))), Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl)))),
-      Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl))))),
-      Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl))))))]
-  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl | rfl) s hs
+      Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl)))))]
+  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl) s hs
     · rcases subterms_app_mem hs with rfl | ⟨a, ha, hs'⟩
       · simp [SC, vrow]
       · simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
-        rcases ha with rfl | rfl | rfl <;> rw [subterms_nullary hs'] <;>
-          simp [SC, vrow, K, P1, S, R, F]
+        rcases ha with rfl | rfl <;> rw [subterms_nullary hs'] <;>
+          simp [SC, vrow, K, P1, S, R]
     · rcases subterms_app_mem hs with rfl | ⟨a, ha, hs'⟩
       · simp [SC, vrow]
       · simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
-        rcases ha with rfl | rfl | rfl <;> rw [subterms_nullary hs'] <;>
-          simp [SC, vrow, K, P1, S, R, F]
-    all_goals (rw [subterms_nullary hs]; simp [SC, vrow, K, P1, S, R, F])
-  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl | rfl) <;> rfl
+        rcases ha with rfl | rfl <;> rw [subterms_nullary hs'] <;>
+          simp [SC, vrow, K, P1, S, R]
+    all_goals (rw [subterms_nullary hs]; simp [SC, vrow, K, P1, S, R])
+  · rintro t (rfl | rfl | rfl | rfl | rfl | rfl) <;> rfl
 
 /-! ### `A.Recorded C` -/
 
@@ -830,23 +818,20 @@ theorem C_K : ((K, K) : Term × Term) ∈ C.eqs := Or.inr (Or.inr (Or.inl rfl))
 theorem C_P1 : ((P1, P1) : Term × Term) ∈ C.eqs := Or.inr (Or.inr (Or.inr (Or.inl rfl)))
 theorem C_R : ((R, R) : Term × Term) ∈ C.eqs :=
   Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl)))))
-theorem C_F : ((F, F) : Term × Term) ∈ C.eqs :=
-  Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl rfl))))))
 theorem C_P1S : ((P1, S) : Term × Term) ∈ C.eqs :=
-  Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr rfl))))))
+  Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inr rfl)))))
 
-/-- The one interesting clause of `A.Recorded C`: `C` holds `@fView(k) ↦ (s, @Fiat)` where `A`
-holds `@fView(k) ↦ (p, @Fiat)`, and the two are congruent because `C` asserts `p = s`. -/
+/-- The one interesting clause of `A.Recorded C`: `C` holds `@fView(k) ↦ s` where `A` holds
+`@fView(k) ↦ p`, and the two are congruent because `C` asserts `p = s`. -/
 theorem cong_vP1_vS {ts : List Term} (h : vrow P1 ∈ ts) : CongOn C ts (vrow P1) (vrow S) :=
   Cong.congr (Cong.assert (refl_mem_addTerms (Term.IsSubterm.refl (vrow P1)) ts C h))
     (Cong.assert (eqs_subset_addTerms ts C C_vS))
     (.cons (Cong.assert (eqs_subset_addTerms ts C C_K))
-      (.cons (Cong.assert (eqs_subset_addTerms ts C C_P1S))
-        (.cons (Cong.assert (eqs_subset_addTerms ts C C_F)) .nil)))
+      (.cons (Cong.assert (eqs_subset_addTerms ts C C_P1S)) .nil))
 
 theorem A_rec_C : A.Recorded C := by
   refine ⟨fun p hp => ?_⟩
-  rcases hp with rfl | rfl | rfl | rfl | rfl | rfl
+  rcases hp with rfl | rfl | rfl | rfl | rfl
   · exact ⟨(vrow S, vrow S), C_vS, cong_vP1_vS (by simp), cong_vP1_vS (by simp)⟩
   · exact ⟨(vrow R, vrow R), C_vR, Cong.assert (eqs_subset_addTerms _ C C_vR),
       Cong.assert (eqs_subset_addTerms _ C C_vR)⟩
@@ -856,37 +841,35 @@ theorem A_rec_C : A.Recorded C := by
       Cong.assert (eqs_subset_addTerms _ C C_P1)⟩
   · exact ⟨(R, R), C_R, Cong.assert (eqs_subset_addTerms _ C C_R),
       Cong.assert (eqs_subset_addTerms _ C C_R)⟩
-  · exact ⟨(F, F), C_F, Cong.assert (eqs_subset_addTerms _ C C_F),
-      Cong.assert (eqs_subset_addTerms _ C C_F)⟩
 
 /-! ### The specification's merge step
 
-`mergeEnv [p, @Fiat] [r, @Fiat]` binds `old0 := p`, `new0 := r`; `p < r`, so `mergeBody`
-writes `@UF(r) ↦ (p, PF)` and `mergeResult` settles on `p`. -/
+`mergeEnv [p] [r]` binds `old := p`, `new := r`; `p < r`, so `mergeBody` writes
+`@UF(r) ↦ p` and `mergeResult` settles on `p`. -/
 
 def dA : Database :=
-  ({ A with env := mergeEnv [P1, F] [R, F] } : Database).addTerm (ufrow R P1 PF)
+  ({ A with env := mergeEnv [P1] [R] } : Database).addTerm (ufrow R P1)
 
 def B : Database := { dA.addTerm (vrow P1) with env := A.env, rules := A.rules }
 
-theorem evalA : evalActions ({ A with env := mergeEnv [P1, F] [R, F] } : Database) mergeBody
+theorem evalA : evalActions ({ A with env := mergeEnv [P1] [R] } : Database) mergeBody
     = some dA := rfl
 
-theorem resA : Expr.evalList dA.sig mergeResult dA.env = some [P1, F] := rfl
+theorem resA : Expr.evalList dA.sig mergeResult dA.env = some [P1] := rfl
 
-/-- The collision conflicts: `viewDecl` counts one value column, and the two entries hold
-distinct e-classes there. -/
-theorem conflict_P1_R : MergeConflict (viewDecl 1) mergeBody [P1, F] [R, F] := by
-  simp [MergeConflict, FnDecl.unchangedWidth, viewDecl, P1, R]
+/-- The collision conflicts: the table counts its one value column, and the two entries
+hold distinct e-classes there. -/
+theorem conflict_P1_R : MergeConflict (tableDecl 1) mergeBody [P1] [R] := by
+  simp [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody, P1, R]
 
 theorem stepA : MergeStep A B :=
-  MergeStep.collide (f := V) (decl := viewDecl 1) (as := [K]) (bs := [K]) (a := [P1, F])
-    (b := [R, F]) sg_V rfl conflict_P1_R rfl rfl (Cong.assert A_vP1) (Cong.assert A_vR)
+  MergeStep.collide (f := V) (decl := tableDecl 1) (as := [K]) (bs := [K]) (a := [P1])
+    (b := [R]) sg_V rfl conflict_P1_R rfl rfl (Cong.assert A_vP1) (Cong.assert A_vR)
     (.cons (Cong.assert A_K) .nil) evalA resA
 
 /-- The edge the specification wrote. -/
-theorem B_uf : ((ufrow R P1 PF, ufrow R P1 PF) : Term × Term) ∈ B.eqs :=
-  Or.inl (Or.inr ⟨ufrow R P1 PF, Term.IsSubterm.refl _, rfl⟩)
+theorem B_uf : ((ufrow R P1, ufrow R P1) : Term × Term) ∈ B.eqs :=
+  Or.inl (Or.inr ⟨ufrow R P1, Term.IsSubterm.refl _, rfl⟩)
 
 /-! ### The invariant
 
@@ -917,7 +900,7 @@ theorem ufPhi_app (f : FnName) (as : List Term) :
       = if f = ufName then 1 + (as.map cc).foldl (fun acc n => acc * 10 + n) 0 else 0 := rfl
 
 theorem ufPhi_ne_of_head {f : FnName} (h : f ≠ ufName) (as : List Term) :
-    ufPhi (.app f as) ≠ 211 := by
+    ufPhi (.app f as) ≠ 22 := by
   rw [ufPhi_app, if_neg h]; decide
 
 theorem cong_phi {E : Database}
@@ -949,16 +932,16 @@ theorem congOn_phi {E : Database}
     exacts [h p hp', ⟨by rw [hp'], by rw [hp']⟩]) hc).1
 
 /-- No subterm is a `@UF` row from `r`'s colour to `p`'s. -/
-def Safe (t : Term) : Prop := ∀ s ∈ t.subterms, ufPhi s ≠ 211
+def Safe (t : Term) : Prop := ∀ s ∈ t.subterms, ufPhi s ≠ 22
 
-theorem safe_app {f : FnName} {as : List Term} (h : ufPhi (.app f as) ≠ 211)
+theorem safe_app {f : FnName} {as : List Term} (h : ufPhi (.app f as) ≠ 22)
     (ha : ∀ a ∈ as, Safe a) : Safe (.app f as) := by
   intro s hs
   rcases subterms_app_mem hs with rfl | ⟨a, hmem, hsub⟩
   · exact h
   · exact ha a hmem s hsub
 
-theorem safe_nullary {f : FnName} (h : ufPhi (.app f []) ≠ 211) : Safe (.app f []) :=
+theorem safe_nullary {f : FnName} (h : ufPhi (.app f []) ≠ 22) : Safe (.app f []) :=
   safe_app h (by simp)
 
 theorem safe_ite (c : Bool) {a b : Term} (ha : Safe a) (hb : Safe b) :
@@ -970,12 +953,11 @@ theorem safe_ite (c : Bool) {a b : Term} (ha : Safe a) (hb : Safe b) :
 theorem safe_K : Safe K := safe_nullary (by decide)
 theorem safe_R : Safe R := safe_nullary (by decide)
 theorem safe_S : Safe S := safe_nullary (by decide)
-theorem safe_F : Safe F := safe_nullary (by decide)
 
 /-- The invariant on a state: colour-balanced equations, none of them a `@UF` row from `r`'s
 colour to `p`'s. -/
 def PhiInv (D : Database) : Prop :=
-  ∀ p ∈ D.eqs, (ufPhi p.1 = ufPhi p.2 ∧ cc p.1 = cc p.2) ∧ ufPhi p.1 ≠ 211
+  ∀ p ∈ D.eqs, (ufPhi p.1 = ufPhi p.2 ∧ cc p.1 = cc p.2) ∧ ufPhi p.1 ≠ 22
 
 theorem PhiInv.addTerm {db : Database} (h : PhiInv db) {t : Term} (ht : Safe t) :
     PhiInv (db.addTerm t) := by
@@ -984,36 +966,34 @@ theorem PhiInv.addTerm {db : Database} (h : PhiInv db) {t : Term} (ht : Safe t) 
   · exact ⟨⟨rfl, rfl⟩, ht s hs⟩
 
 theorem C_phiInv : PhiInv C := by
-  rintro p (rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl) <;>
+  rintro p (rfl | rfl | rfl | rfl | rfl | rfl | rfl) <;>
     exact ⟨⟨by decide, by decide⟩, by decide⟩
 
 /-- The colour of the edge the specification wrote. -/
-theorem phi_target : ufPhi (ufrow R P1 PF) = 211 := by decide
+theorem phi_target : ufPhi (ufrow R P1) = 22 := by decide
 
 /-! ### Every state one merge step of `C` reaches -/
 
 theorem C_sub : ∀ p ∈ C.eqs, p.1 ∈ SC ∧ p.2 ∈ SC := by
-  rintro p (rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl) <;> constructor <;> simp [SC]
+  rintro p (rfl | rfl | rfl | rfl | rfl | rfl | rfl) <;> constructor <;> simp [SC]
 
 theorem C_terms_sub : ∀ t ∈ C.terms, t ∈ SC := fun _ ht => (cong_mem_of_eqs_mem C_sub ht).1
 
 /-- Only the view and the union-find have a `:merge` body to run. -/
 theorem sg_merge {f : FnName} {decl : FnDecl} (hd : sg f = some decl)
-    (hm : decl.merge ≠ none) : f = V ∨ f = ufName := by
+    (_hm : decl.merge ≠ none) : f = V ∨ f = ufName := by
   simp only [sg] at hd
-  split_ifs at hd with h1 h2 h3 h4 h5 <;>
-    first
-      | exact Or.inl h1
-      | exact Or.inr h2
-      | (exact absurd (by rw [← Option.some.inj hd]; rfl) hm)
+  split_ifs at hd with h1 h2
+  · exact Or.inl h1
+  · exact Or.inr h2
 
 /-- `C` has no `@UF` entry, so no `@UF` collision. -/
 theorem no_uf_entry (ts : List Term) (h : Term.app ufName ts ∈ C.terms) : False := by
-  rcases C_terms_sub _ h with h' | h' | h' | h' | h' | h' | h' <;>
+  rcases C_terms_sub _ h with h' | h' | h' | h' | h' | h' <;>
     exact head_ne (by decide) h'
 
-theorem split_one {as a : List Term} {x y z : Term} (hlen : as.length = 1)
-    (h : as ++ a = [x, y, z]) : as = [x] ∧ a = [y, z] := by
+theorem split_one {as a : List Term} {x y : Term} (hlen : as.length = 1)
+    (h : as ++ a = [x, y]) : as = [x] ∧ a = [y] := by
   match as, hlen with
   | [u], _ =>
     rw [List.cons_append, List.nil_append, List.cons.injEq] at h
@@ -1021,73 +1001,57 @@ theorem split_one {as a : List Term} {x y z : Term} (hlen : as.length = 1)
 
 /-- A collision on the view forces the key and pins the e-class to `s` or `r`. -/
 theorem view_entry {as a : List Term} (hlen : as.length = 1)
-    (h : Term.app V (as ++ a) ∈ C.terms) : as = [K] ∧ (a = [S, F] ∨ a = [R, F]) := by
-  rcases C_terms_sub _ h with h' | h' | h' | h' | h' | h' | h'
-  · have hv : as ++ a = [K, S, F] := by
+    (h : Term.app V (as ++ a) ∈ C.terms) : as = [K] ∧ (a = [S] ∨ a = [R]) := by
+  rcases C_terms_sub _ h with h' | h' | h' | h' | h' | h'
+  · have hv : as ++ a = [K, S] := by
       simp only [vrow, Term.app.injEq] at h'; exact h'.2
     exact ⟨(split_one hlen hv).1, Or.inl (split_one hlen hv).2⟩
-  · have hv : as ++ a = [K, R, F] := by
+  · have hv : as ++ a = [K, R] := by
       simp only [vrow, Term.app.injEq] at h'; exact h'.2
     exact ⟨(split_one hlen hv).1, Or.inr (split_one hlen hv).2⟩
   all_goals exact absurd h' (head_ne (by decide))
 
 /-! What one collision of `C` computes. `ordering-gt` is strict, so a tie takes the `else`
-branch; both proof selectors return `@Fiat` either way. -/
+branch. -/
 
 def mxT (x y : Term) : Term := if Term.blt y x then x else y
 def mnT (x y : Term) : Term := if Term.blt y x then y else x
-def hiP (x y : Term) : Term := if Term.blt y x then F else F
-def loP (x y : Term) : Term := if Term.blt x y then F else F
-def pfC (x y : Term) : Term := .app transName [.app symName [hiP x y], loP x y]
 
 /-- The state `mergeBody` reaches from `C` on a collision whose e-classes are `x` and `y`. -/
 def dC (x y : Term) : Database :=
-  ({ C with env := mergeEnv [x, F] [y, F] } : Database).addTerm
-    (ufrow (mxT x y) (mnT x y) (pfC x y))
+  ({ C with env := mergeEnv [x] [y] } : Database).addTerm (ufrow (mxT x y) (mnT x y))
 
-/-- The values `mergeResult` settles on there. -/
-def vsC (x y : Term) : List Term := [mnT x y, loP x y]
+/-- The value `mergeResult` settles on there. -/
+def vsC (x y : Term) : List Term := [mnT x y]
 
 theorem evalC (x y : Term) :
-    evalActions ({ C with env := mergeEnv [x, F] [y, F] } : Database) mergeBody
+    evalActions ({ C with env := mergeEnv [x] [y] } : Database) mergeBody
       = some (dC x y) := rfl
 
 theorem resC (x y : Term) :
     Expr.evalList (dC x y).sig mergeResult (dC x y).env = some (vsC x y) := rfl
 
-theorem safe_pfC (x y : Term) : Safe (pfC x y) := by
-  refine safe_app (ufPhi_ne_of_head (by decide) _) ?_
-  intro a ha
-  simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
-  rcases ha with rfl | rfl
-  · refine safe_app (ufPhi_ne_of_head (by decide) _) ?_
-    intro b hb
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at hb
-    rcases hb with rfl
-    exact safe_ite _ safe_F safe_F
-  · exact safe_ite _ safe_F safe_F
-
-/-- The row a collision of `C` writes is coloured `111`, `121` or `221`, never `211`: that
-would need a key in `r`'s class and an e-class in `p`'s, which is the choice the
-specification made. -/
+/-- The row a collision of `C` writes is coloured `12`, `13` or `23`, never `22`: that would
+need a key in `r`'s class and an e-class in `p`'s, which is the choice the specification
+made. -/
 theorem step_phiInv {x y : Term} (hx : x = S ∨ x = R) (hy : y = S ∨ y = R) :
     PhiInv ((dC x y).addTerm (.app V ([K] ++ vsC x y))) := by
   have hsx : Safe x := by rcases hx with rfl | rfl; exacts [safe_S, safe_R]
   have hsy : Safe y := by rcases hy with rfl | rfl; exacts [safe_S, safe_R]
   refine (C_phiInv.addTerm ?_).addTerm ?_
-  · change Safe (Term.app ufName [mxT x y, mnT x y, pfC x y])
+  · change Safe (Term.app ufName [mxT x y, mnT x y])
     refine safe_app ?_ ?_
     · rcases hx with rfl | rfl <;> rcases hy with rfl | rfl <;> decide
     · intro a ha
       simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
-      rcases ha with rfl | rfl | rfl
-      exacts [safe_ite _ hsx hsy, safe_ite _ hsy hsx, safe_pfC x y]
+      rcases ha with rfl | rfl
+      exacts [safe_ite _ hsx hsy, safe_ite _ hsy hsx]
   · refine safe_app (ufPhi_ne_of_head (by decide) _) ?_
     intro a ha
     simp only [vsC, List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil,
       or_false] at ha
-    rcases ha with rfl | rfl | rfl
-    exacts [safe_K, safe_ite _ hsy hsx, safe_ite _ safe_F safe_F]
+    rcases ha with rfl | rfl
+    exacts [safe_K, safe_ite _ hsy hsx]
 
 /-- Every state one merge step of `C` reaches satisfies the invariant. -/
 theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by
@@ -1096,17 +1060,17 @@ theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by
       hres =>
     have hm : decl.merge ≠ none := by rw [hmerge]; simp
     rcases sg_merge hdecl hm with rfl | rfl
-    · have hdc : decl = viewDecl 1 := (Option.some.inj (sg_V.symm.trans hdecl)).symm
+    · have hdc : decl = tableDecl 1 := (Option.some.inj (sg_V.symm.trans hdecl)).symm
       subst hdc
       obtain ⟨rfl, rfl⟩ : body = mergeBody ∧ res = mergeResult := by
-        simp only [viewDecl, Option.some.injEq, MergeSpec.merge.injEq] at hmerge
+        simp only [tableDecl, Option.some.injEq, MergeSpec.merge.injEq] at hmerge
         exact ⟨hmerge.1.symm, hmerge.2.symm⟩
       obtain ⟨rfl, ha⟩ := view_entry hla hra
       obtain ⟨rfl, hb⟩ := view_entry hlb hrb
-      obtain ⟨x, hxa, hx⟩ : ∃ x, a = [x, F] ∧ (x = S ∨ x = R) := by
+      obtain ⟨x, hxa, hx⟩ : ∃ x, a = [x] ∧ (x = S ∨ x = R) := by
         rcases ha with rfl | rfl
         exacts [⟨S, rfl, Or.inl rfl⟩, ⟨R, rfl, Or.inr rfl⟩]
-      obtain ⟨y, hyb, hy⟩ : ∃ y, b = [y, F] ∧ (y = S ∨ y = R) := by
+      obtain ⟨y, hyb, hy⟩ : ∃ y, b = [y] ∧ (y = S ∨ y = R) := by
         rcases hb with rfl | rfl
         exacts [⟨S, rfl, Or.inl rfl⟩, ⟨R, rfl, Or.inr rfl⟩]
       subst hxa; subst hyb
@@ -1119,28 +1083,28 @@ theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by
 
 /-- The collision conflicts on `C`'s side too: `s` and `r` are distinct e-classes. The two
 self-collisions do **not** — `not_mergeConflict_self` — so this is the only pair left. -/
-theorem conflict_S_R : MergeConflict (viewDecl 1) mergeBody [S, F] [R, F] := by
-  simp [MergeConflict, FnDecl.unchangedWidth, viewDecl, S, R]
+theorem conflict_S_R : MergeConflict (tableDecl 1) mergeBody [S] [R] := by
+  simp [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody, S, R]
 
 /-- `C` does step, so `C_step_phiInv` says something: the entry at `s` collides with the
 entry at `r`. -/
 theorem C_steps : ∃ D, MergeStep C D :=
-  ⟨_, MergeStep.collide (f := V) (decl := viewDecl 1) (as := [K]) (bs := [K]) (a := [S, F])
-    (b := [R, F]) sg_V rfl conflict_S_R rfl rfl (Cong.assert C_vS) (Cong.assert C_vR)
+  ⟨_, MergeStep.collide (f := V) (decl := tableDecl 1) (as := [K]) (bs := [K]) (a := [S])
+    (b := [R]) sg_V rfl conflict_S_R rfl rfl (Cong.assert C_vS) (Cong.assert C_vR)
     (.cons (Cong.assert C_K) .nil) (evalC S R) (resC S R)⟩
 
 /-! ### The verdict -/
 
-/-- **`MergeStep.transport_recorded` is false without `hcond`**, at the encoding's own
-`:merge` body. -/
+/-- **`MergeStep.transport_recorded` is false without `hcond`**, at the congruence pass's
+own `:merge` body. -/
 theorem transport_recorded_false :
     ¬ (∀ {A' C' B' : Database}, A'.Recorded C' → A'.sig = C'.sig → A'.WF → MergeStep A' B' →
         ∃ D, MergeStep C' D ∧ B'.Recorded D ∧ B'.sig = D.sig) := by
   intro h
   obtain ⟨D, hstep, hrec, -⟩ := h A_rec_C rfl A_wf stepA
-  obtain ⟨q, hq, hc, -⟩ := hrec.eqs (ufrow R P1 PF, ufrow R P1 PF) B_uf
+  obtain ⟨q, hq, hc, -⟩ := hrec.eqs (ufrow R P1, ufrow R P1) B_uf
   have hinv := C_step_phiInv hstep
-  have heq : ufPhi (ufrow R P1 PF) = ufPhi q.1 := congOn_phi (fun p hp => (hinv p hp).1) hc
+  have heq : ufPhi (ufrow R P1) = ufPhi q.1 := congOn_phi (fun p hp => (hinv p hp).1) hc
   rw [phi_target] at heq
   exact (hinv q hq).2 heq.symm
 
@@ -1151,14 +1115,15 @@ theorem transport_recorded_false' :
         MergeStep A' B' → ∃ D, MergeStep C' D ∧ B'.Recorded D ∧ B'.sig = D.sig) := by
   intro h
   obtain ⟨D, hstep, hrec, -⟩ := h A_rec_C rfl A_wf C_wf stepA
-  obtain ⟨q, hq, hc, -⟩ := hrec.eqs (ufrow R P1 PF, ufrow R P1 PF) B_uf
+  obtain ⟨q, hq, hc, -⟩ := hrec.eqs (ufrow R P1, ufrow R P1) B_uf
   have hinv := C_step_phiInv hstep
-  have heq : ufPhi (ufrow R P1 PF) = ufPhi q.1 := congOn_phi (fun p hp => (hinv p hp).1) hc
+  have heq : ufPhi (ufrow R P1) = ufPhi q.1 := congOn_phi (fun p hp => (hinv p hp).1) hc
   rw [phi_target] at heq
   exact (hinv q hq).2 heq.symm
 
 /-- **On a diagonal recorder `Recorded` is containment**, which is where the refutation
-cannot reach: that is every state an encoded program reaches, by `encode_unionFree`. -/
+cannot reach: that is every state a compiled program reaches, by
+`Congruence.encode_unionFree`. -/
 theorem recorded_iff_subset {d₁ d₂ : Database} (h : d₂.Diag) :
     d₁.Recorded d₂ ↔ d₁.eqs ⊆ d₂.eqs :=
   ⟨fun hr => (hr.contained_of_diag h).eqs, fun hs => Database.Recorded.of_contained ⟨hs⟩⟩

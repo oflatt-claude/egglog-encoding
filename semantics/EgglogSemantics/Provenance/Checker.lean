@@ -106,6 +106,9 @@ def checkNodes (P : Program) (C : SourceProof.Context) : List Term → List Node
         checkNodes P C (prior ++ [n.fact]) ns
       else none
 
+/-- Check a certificate about the compiled relational program, which has no `union`.
+This is an intermediate step: source certificates are checked by `SourceProof.check`
+against the original program, unions included. -/
 def check (P : Program) (cert : Certificate) : Option Term := do
   if !unionFree P then none else do
     let C ← SourceProof.contextOf P

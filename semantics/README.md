@@ -30,12 +30,11 @@ that both the Lean and Rust checkers accept.
 The congruence pass has a proved end-to-end correspondence theorem for the constructor
 source fragment, including execution without implicit target equality reasoning. Both the
 constructor source checker and relational provenance checker have proved soundness and
-existence support. The legacy checker is unsound.
-The library permits no `sorry`.
+existence support. The library permits no `sorry`.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
-and source restrictions. The [checker guide](CHECKER.md) explains the legacy defect and
-the certificate boundaries.
+and source restrictions. The [checker guide](CHECKER.md) explains the certificate
+boundaries.
 
 ## Layout
 
@@ -48,7 +47,7 @@ the certificate boundaries.
 | `EgglogSemantics/SourceProof/` | Source certificate checker, soundness, and regressions |
 | `EgglogSemantics/Provenance/` | Function provenance instrumentation, extraction, checker, and soundness |
 | `EgglogSemantics/Resugar/` | Proof lifting to source certificates, soundness, fixtures, and JSON export |
-| `EgglogSemantics/Encoding/` | Shared source analysis and the legacy combined encoder and proofs |
+| `EgglogSemantics/Encoding/` | Source-fragment analysis and generated names shared by the compiler and its proofs |
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
 
@@ -76,8 +75,6 @@ lake build difftest
 .lake/build/bin/difftest congruence 64
 .lake/build/bin/difftest provenance 64
 .lake/build/bin/difftest resugar 64
-.lake/build/bin/difftest correspond 64  # legacy data correspondence
-.lake/build/bin/difftest check 64       # legacy checker diagnostic, known unsound
 ```
 
 The toolchain is pinned in [lean-toolchain](lean-toolchain), and Mathlib in

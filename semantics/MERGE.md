@@ -44,8 +44,7 @@ merges bind `old0`, `new0`, and so on. The ambient environment is restored after
 `identityVals` takes precedence; otherwise an action block compares all output columns.
 Equal compared prefixes skip the body. A single-expression merge has no default skip,
 since a merge such as `(+ old new)` can change a value even when its inputs are equal.
-The legacy encoder excludes its proof column this way; the new congruence tables
-have a single output and compare it directly.
+The congruence tables have a single output column and compare it directly.
 
 `MergeClosure` permits any finite sequence of merge steps. Every command ends in a merge
 phase, including a declaration, a rule registration, and a top-level action. A `run`
