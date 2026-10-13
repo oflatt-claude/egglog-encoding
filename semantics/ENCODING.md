@@ -152,13 +152,15 @@ Cong src a b ↔ SameClass target.toDatabase a b
 Its premises are `P.EncodeDomain`, a source execution from empty, successful compiled
 execution, and membership of both endpoints in the source. `encode_corresponds_relational`
 gives the same theorem for execution using structural matching and table operations only.
-Termination is not asserted. Steps 2–5 remain.
+Termination is not asserted.
 
-Step 2 has an explicit certificate format and proved foundations in
-[SourceProof/](EgglogSemantics/SourceProof/). `fiat_sound` proves that every accepted
-global fact follows from an actual execution of the original program. `Claim.Supported`
-requires source existence witnesses for every subterm; symmetry, transitivity, and
-anchored congruence preserve it. The complete certificate checker is not yet proved.
+**Step 2 is complete for the agreed constructor source fragment.**
+[SourceProof/Soundness.lean](EgglogSemantics/SourceProof/Soundness.lean) proves
+`check_supported` and `check_sound` for the executable checker. Accepted claims have
+source existence witnesses for every subterm. For endpoints held by the source,
+acceptance implies its original `Cong` relation. The source state must be reached by
+the original program, well formed, and saturated for every ruleset. No proof is accepted
+by assuming an unproved intermediate term exists. Steps 3–5 remain.
 
 Source merge proofs are deferred: equality can produce another spelling of one
 stored function row without establishing a second input to its merge body. The

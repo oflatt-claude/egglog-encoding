@@ -1,10 +1,25 @@
 # Proof checkers
 
-The replacement's [format and semantic foundations](EgglogSemantics/SourceProof/)
-are in progress. `Fiat` facts are collected only from original global actions;
-failed global evaluation rejects the context. `fiat_sound` proves these facts against
-source execution, including programs with functions. `Claim.Supported` tracks source
-existence witnesses through equality reasoning. Full certificate soundness is pending.
+[SourceProof.check](EgglogSemantics/SourceProof/Checker.lean) validates certificates with
+explicit claims and references to earlier nodes. It accepts constructor programs without
+primitive applications. Function declarations and merge justifications are rejected;
+functions will be handled in the separate relational provenance checker.
+
+`Fiat` facts come only from original global actions. A rule proof identifies the original
+command and supplies an exact substitution and one proof per original query conjunct, in
+order. The checker does not flatten the query. Congruence requires a base proof for the
+enclosing application and a proof for the replaced child. Invalid references, substitutions,
+endpoints, and head conclusions are rejected.
+
+[Soundness.lean](EgglogSemantics/SourceProof/Soundness.lean) proves `check_supported`:
+every accepted claim retains source existence witnesses for all its subterms. Its
+`check_sound` corollary gives `Cong db lhs rhs` when both endpoints are held by `db`.
+Both theorems assume that `db` is reached by the original program, is well formed, and
+is saturated for every ruleset. They do not assume validity of intermediate claims.
+
+The [regressions](EgglogSemantics/SourceProof/Tests.lean) cover missing existence,
+rule-created terms, nested queries, premise ordering, malformed substitutions, invalid
+references, and anchored congruence. Rust interoperability remains a separate obligation.
 
 ## Legacy checker
 

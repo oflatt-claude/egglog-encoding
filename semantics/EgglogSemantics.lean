@@ -8,8 +8,9 @@ import EgglogSemantics.Tests.Examples
 -- Congruence compilation and its data-only correspondence reductions.
 import EgglogSemantics.Congruence.Tests
 
--- Source certificate format and proved global/existence support.
+-- Source proof checking and existence soundness.
 import EgglogSemantics.SourceProof.Counterexamples
+import EgglogSemantics.SourceProof.Tests
 
 -- Legacy combined encoding, retained for differential comparison.
 import EgglogSemantics.Encoding.Encode

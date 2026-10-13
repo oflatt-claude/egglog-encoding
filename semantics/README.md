@@ -27,9 +27,9 @@ proof annotations. Provenance instrumentation and proof resugaring will be separ
 
 The congruence pass has a proved end-to-end correspondence theorem for the constructor
 source fragment, including execution without implicit target equality reasoning. Provenance
-and proof lifting remain to be implemented. The replacement checker has proved global
-and existence-support foundations; full certificate soundness is pending. The legacy
-checker is unsound. The library permits no `sorry`.
+and proof lifting remain to be implemented. The replacement source checker has proved
+soundness and existence support for constructor programs. The legacy checker is unsound.
+The library permits no `sorry`.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
 and source restrictions. The [checker guide](CHECKER.md) explains the legacy defect and
@@ -43,7 +43,7 @@ the planned certificate boundary.
 | `EgglogSemantics/Impl/` | Finite reference interpreters and front-end checks |
 | `EgglogSemantics/Proofs/` | Interpreter refinement, preservation, totality, and counterexamples |
 | `EgglogSemantics/Congruence/` | Congruence compiler, completeness proof, and regressions |
-| `EgglogSemantics/SourceProof/` | Certificate format, global facts, and existence support |
+| `EgglogSemantics/SourceProof/` | Source certificate checker, soundness, and regressions |
 | `EgglogSemantics/Encoding/` | Shared source analysis and the legacy combined encoder and proofs |
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
