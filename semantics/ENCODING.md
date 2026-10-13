@@ -136,11 +136,13 @@ The congruence pass has kernel-checked proofs for:
   (`Rebuilt.viewLeader`, `Rebuilt.viewsCover`).
 - Source rule firings, aligned rounds, and saturation (`encodedRule_firing_reads`,
   `round_simulation`, `saturation_simulation`).
+- Prelude initialization and global actions with interleaved merges and rebuilding
+  (`prelude_state`, `global_cmd_simulation`).
 - The executable reader and correspondence under explicit state invariants
   (`sameClassF_iff`, `Rebuilt.corresponds`).
 
-**Remaining in step 1:** initialize these invariants and compose top-level commands
-into the end-to-end completeness theorem. Steps 2–5 have not started.
+**Remaining in step 1:** compose top-level commands into the end-to-end completeness
+theorem. Steps 2–5 have not started.
 
 The theorem retains `Program.EncodeDomain`: constructor declarations, no primitive
 or generated source names, consistent arities, supported queries, scoped and declared

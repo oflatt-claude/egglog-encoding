@@ -138,4 +138,14 @@ theorem MergeShape.mergesLegal {sig : Signature} (h : MergeShape sig) :
   obtain ⟨-, rfl, rfl, ho, -, -⟩ := h f dc hdc body res hm
   exact ⟨⟨⟨trivial, trivial⟩, ⟨trivial, trivial⟩⟩, ho.symm⟩
 
+/-- Every generated merge body records a UF entry without asserting a built-in union. -/
+theorem MergeShape.unionFree {sig : Signature} (h : MergeShape sig) : sig.UnionFree := by
+  intro f dc hd ms hm
+  cases ms with
+  | noMerge => trivial
+  | merge body res =>
+      have hb := (h f dc hd body res hm).2.1
+      rw [hb]
+      exact ⟨trivial, trivial⟩
+
 end Egglog.Congruence

@@ -11,7 +11,7 @@ namespace Egglog.Congruence
 mutual
 
 /-- **An evaluation transports along `Signature.IsCtor` at the names it applies.** -/
-private theorem eval_transport {s₁ s₂ : Signature} :
+theorem eval_transport {s₁ s₂ : Signature} :
     ∀ (e : Expr) {ρ₁ ρ₂ : Env} {t : Term}, (∀ f ∈ e.fns, s₁.IsCtor f → s₂.IsCtor f) →
       (∀ v ∈ e.vars, Env.lookup v ρ₁ = Env.lookup v ρ₂) → e.eval s₁ ρ₁ = some t →
       e.eval s₂ ρ₂ = some t
@@ -42,7 +42,7 @@ private theorem eval_transport {s₁ s₂ : Signature} :
           exact absurd h (by simp)
 
 @[inherit_doc eval_transport]
-private theorem evalList_transport {s₁ s₂ : Signature} :
+theorem evalList_transport {s₁ s₂ : Signature} :
     ∀ (es : List Expr) {ρ₁ ρ₂ : Env} {ts : List Term},
       (∀ f ∈ Expr.fnsList es, s₁.IsCtor f → s₂.IsCtor f) →
       (∀ v ∈ Expr.varsList es, Env.lookup v ρ₁ = Env.lookup v ρ₂) →

@@ -1537,11 +1537,6 @@ def Expr.appsList : List Expr → List (FnName × List Expr)
   | e :: es => e.apps ++ Expr.appsList es
 end
 
-/-- A complete nonprimitive atom, which is all a build emits. -/
-def Action.IsAtomWrite : Action → Prop
-  | .expr (.app f _) => Prim.ofName f = none
-  | _ => False
-
 mutual
 
 theorem encodeBuild_isAtomWrite : ∀ (e : Expr) (n : Nat), ∀ a ∈ (encodeBuild e n).2.1, a.IsAtomWrite
@@ -1791,63 +1786,6 @@ theorem viewReprList_self_of_execActions : ∀ (es : List Expr) (n : Nat) {d d' 
 end
 
 /-! #### From an action block to a run of top-level commands -/
-
-/-- **Two runs of the same block of `set`s agree on what they write.** `Expr.eval` reads the
-signature and the environment and nothing else, so the run from a *smaller* state — same
-signature, same environment, fewer terms — succeeds wherever the larger one does and writes the
-same entry terms. This is what lets a block's own `execActions` run stand in for `execProgramM`
-over the block's `Cmd.action`s, where each command is followed by its own merge phase. -/
-theorem execActions_parallel {as : List Action} (hs : ∀ a ∈ as, a.IsAtomWrite) :
-    ∀ {d₁ d₂ e₂ : FDatabase}, d₂.sig = d₁.sig → d₂.env = d₁.env →
-      (∀ t ∈ d₁.terms, t ∈ d₂.terms) → execActions d₂ as = some e₂ →
-      ∃ e₁, execActions d₁ as = some e₁ ∧ (∀ t ∈ e₁.terms, t ∈ e₂.terms) := by
-  induction as with
-  | nil =>
-    intro d₁ d₂ e₂ _ _ hmem h
-    rw [execActions, Option.some.injEq] at h
-    exact ⟨d₁, rfl, h ▸ hmem⟩
-  | cons a as ih =>
-    intro d₁ d₂ e₂ hsig henv hmem h
-    cases a with
-    | union _ _ => exact (hs _ List.mem_cons_self).elim
-    | expr e =>
-      obtain ⟨m₂, hm₂, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp hm₂
-      rw [hsig, henv] at ht
-      have hm₁ : execAction d₁ (.expr e) = some (d₁.addAtom t) := by simp [execAction, ht]
-      obtain ⟨e₁, he₁, hmem₁⟩ :=
-        ih (fun b hb => hs b (List.mem_cons_of_mem _ hb))
-          (d₁ := d₁.addAtom t) (d₂ := d₂.addAtom t) hsig henv
-          (fun u hu => FDatabase.mem_addTerm_terms.mpr
-            ((FDatabase.mem_addTerm_terms.mp hu).imp id (hmem u))) hrest
-      exact ⟨e₁, by rw [execActions, hm₁, Option.bind_some]; exact he₁, hmem₁⟩
-
-/-- **A block of top-level `set` commands runs the block.** `execCmdM` follows each action with a
-merge phase, which adds terms and moves neither the signature nor the environment
-(`FDatabase.mergeSaturateF_terms`, `mergeSaturateF_fields`), so `execActions_parallel` carries
-the block's own `execActions` run along it. -/
-theorem exists_execActions_of_execProgramM {as : List Action} (hs : ∀ a ∈ as, a.IsAtomWrite) :
-    ∀ {d D : FDatabase}, d.execProgramM (as.map Cmd.action) = some D →
-      ∃ e, execActions d as = some e ∧ (∀ t ∈ e.terms, t ∈ D.terms) := by
-  induction as with
-  | nil =>
-    intro d D h
-    rw [List.map_nil, FDatabase.execProgramM, Option.some.injEq] at h
-    exact ⟨d, rfl, h ▸ fun _ ht => ht⟩
-  | cons a as ih =>
-    intro d D h
-    rw [List.map_cons, FDatabase.execProgramM] at h
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
-    rw [FDatabase.execCmdM] at h₁
-    obtain ⟨d₀, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₁
-    replace hact : execAction d a = some d₀ := hact
-    obtain ⟨e₁, he₁, hmem₁⟩ := ih (fun b hb => hs b (List.mem_cons_of_mem _ hb)) h₂
-    obtain ⟨hsig, henv, -⟩ := FDatabase.mergeSaturateF_fields hmerge
-    obtain ⟨e₀, he₀, hmem₀⟩ :=
-      execActions_parallel (fun b hb => hs b (List.mem_cons_of_mem _ hb))
-        (d₁ := d₀) (d₂ := d₁) hsig henv (FDatabase.mergeSaturateF_terms hmerge) he₁
-    exact ⟨e₀, by rw [execActions, hact, Option.bind_some]; exact he₀,
-      fun t ht => hmem₁ t (hmem₀ t ht)⟩
 
 /-- **The action read-back at a run of top-level commands.** The build's `set`s are the block's
 own `Cmd.action`s, `p` is everything the run does after them, and the rows are in the state it
@@ -2221,18 +2159,6 @@ def Cmd.NoDecl : Cmd → Prop
 
 namespace FDatabase
 
-/-- A command whose actions are all `set`s leaves the environment alone. -/
-theorem execCmdM_env {d d' : FDatabase} {c : Cmd}
-    (hs : d.execCmdM c = some d') : d'.env = d.env := by
-  cases c with
-  | action a =>
-      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-      exact (mergeSaturateF_fields h₂).2.1.trans (FDatabase.execAction_env h₁)
-  | rule r => cases Option.some.inj hs; rfl
-  | run R => exact (runRoundM_fields hs).2.1
-  | saturate R => exact (runSaturateM_fields runFuel hs).2.1
-  | decl f dc => cases Option.some.inj hs; rfl
-
 /-- A command that is not a declaration leaves the signature alone. -/
 theorem execCmdM_sig_of_noDecl {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d')
     (hc : c.NoDecl) : d'.sig = d.sig := by
@@ -2240,15 +2166,6 @@ theorem execCmdM_sig_of_noDecl {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c =
   cases c with
   | decl f dc => exact (hc : False).elim
   | _ => rfl
-
-/-- Executing a program preserves its initial environment. -/
-theorem execProgramM_env {p : Program} {d D : FDatabase}
-    (h : d.execProgramM p = some D) : D.env = d.env := by
-  induction p generalizing d with
-  | nil => cases Option.some.inj h; rfl
-  | cons c cs ih =>
-      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
-      exact (ih h₂).trans (execCmdM_env h₁)
 
 @[inherit_doc execCmdM_sig_of_noDecl]
 theorem execProgramM_sig_of_noDecl {p : Program} (hp : ∀ c ∈ p, c.NoDecl) :

@@ -25,8 +25,8 @@ The congruence compiler translates constructor programs into explicit union-find
 tables. It handles query flattening and rebuilding, with one id output per table and no
 proof annotations. Provenance instrumentation and proof resugaring will be separate passes.
 
-Query matching, rebuilding invariants, and round and saturation simulation are proved.
-Initial-state and command composition remain for the end-to-end completeness theorem.
+Query matching, initialization, global actions, and round and saturation simulation are
+proved. Command composition remains for the end-to-end completeness theorem.
 The legacy encoder’s data correspondence theorem remains checked. The old proof checker has a
 known existence defect and must not be used as a proof-validity oracle. The library
 permits no `sorry`.

@@ -147,4 +147,85 @@ theorem runSaturateM_toDatabase_contained {R : RulesetName} {n : Nat} {d e : FDa
     (run : d.runSaturateM R n = some e) : d.toDatabase.Contained e.toDatabase :=
   toDatabase_contained_of_lists (runSaturateM_terms n run) (runSaturateM_eqs n run)
 
+/-- Every command preserves its input environment. -/
+theorem execCmdM_env {d d' : FDatabase} {c : Cmd}
+    (hs : d.execCmdM c = some d') : d'.env = d.env := by
+  cases c with
+  | action a =>
+      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
+      exact (mergeSaturateF_fields h₂).2.1.trans (FDatabase.execAction_env h₁)
+  | rule r => cases Option.some.inj hs; rfl
+  | run R => exact (runRoundM_fields hs).2.1
+  | saturate R => exact (runSaturateM_fields runFuel hs).2.1
+  | decl f dc => cases Option.some.inj hs; rfl
+
+/-- Executing a program preserves its initial environment. -/
+theorem execProgramM_env {p : Program} {d D : FDatabase}
+    (h : d.execProgramM p = some D) : D.env = d.env := by
+  induction p generalizing d with
+  | nil => cases Option.some.inj h; rfl
+  | cons c cs ih =>
+      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+      exact (ih h₂).trans (execCmdM_env h₁)
+
 end Egglog.FDatabase
+
+namespace Egglog
+
+/-- A complete nonprimitive atom, which is all a build emits. -/
+def Action.IsAtomWrite : Action → Prop
+  | .expr (.app f _) => Prim.ofName f = none
+  | _ => False
+
+/-- Atom writes evaluate identically under equal signatures and environments. -/
+theorem execActions_parallel {as : List Action} (hs : ∀ a ∈ as, a.IsAtomWrite) :
+    ∀ {d₁ d₂ e₂ : FDatabase}, d₂.sig = d₁.sig → d₂.env = d₁.env →
+      (∀ t ∈ d₁.terms, t ∈ d₂.terms) → execActions d₂ as = some e₂ →
+      ∃ e₁, execActions d₁ as = some e₁ ∧ (∀ t ∈ e₁.terms, t ∈ e₂.terms) := by
+  induction as with
+  | nil =>
+    intro d₁ d₂ e₂ _ _ hmem h
+    rw [execActions, Option.some.injEq] at h
+    exact ⟨d₁, rfl, h ▸ hmem⟩
+  | cons a as ih =>
+    intro d₁ d₂ e₂ hsig henv hmem h
+    cases a with
+    | union _ _ => exact (hs _ List.mem_cons_self).elim
+    | expr e =>
+      obtain ⟨m₂, hm₂, hrest⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp hm₂
+      rw [hsig, henv] at ht
+      have hm₁ : execAction d₁ (.expr e) = some (d₁.addAtom t) := by simp [execAction, ht]
+      obtain ⟨e₁, he₁, hmem₁⟩ :=
+        ih (fun b hb => hs b (List.mem_cons_of_mem _ hb))
+          (d₁ := d₁.addAtom t) (d₂ := d₂.addAtom t) hsig henv
+          (fun u hu => FDatabase.mem_addTerm_terms.mpr
+            ((FDatabase.mem_addTerm_terms.mp hu).imp id (hmem u))) hrest
+      exact ⟨e₁, by rw [execActions, hm₁, Option.bind_some]; exact he₁, hmem₁⟩
+
+/-- Retained writes of a block survive interleaved top-level merge phases. -/
+theorem exists_execActions_of_execProgramM {as : List Action} (hs : ∀ a ∈ as, a.IsAtomWrite) :
+    ∀ {d D : FDatabase}, d.execProgramM (as.map Cmd.action) = some D →
+      ∃ e, execActions d as = some e ∧ (∀ t ∈ e.terms, t ∈ D.terms) := by
+  induction as with
+  | nil =>
+    intro d D h
+    rw [List.map_nil, FDatabase.execProgramM, Option.some.injEq] at h
+    exact ⟨d, rfl, h ▸ fun _ ht => ht⟩
+  | cons a as ih =>
+    intro d D h
+    rw [List.map_cons, FDatabase.execProgramM] at h
+    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
+    rw [FDatabase.execCmdM] at h₁
+    obtain ⟨d₀, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₁
+    replace hact : execAction d a = some d₀ := hact
+    obtain ⟨e₁, he₁, hmem₁⟩ := ih (fun b hb => hs b (List.mem_cons_of_mem _ hb)) h₂
+    obtain ⟨hsig, henv, -⟩ := FDatabase.mergeSaturateF_fields hmerge
+    obtain ⟨e₀, he₀, hmem₀⟩ :=
+      execActions_parallel (fun b hb => hs b (List.mem_cons_of_mem _ hb))
+        (d₁ := d₀) (d₂ := d₁) hsig henv (FDatabase.mergeSaturateF_terms hmerge) he₁
+    exact ⟨e₀, by rw [execActions, hact, Option.bind_some]; exact he₀,
+      fun t ht => hmem₁ t (hmem₀ t ht)⟩
+
+
+end Egglog

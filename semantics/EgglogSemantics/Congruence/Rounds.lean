@@ -8,7 +8,7 @@ import EgglogSemantics.Congruence.Head
 
 namespace Egglog.Congruence
 
-private theorem actionExprs_ctors {a : Action} {e : Expr} (he : e ∈ actionExprs a)
+theorem actionExprs_ctors {a : Action} {e : Expr} (he : e ∈ actionExprs a)
     {fk : FnName × Nat} (hk : fk ∈ e.ctors) : fk ∈ a.ctors := by
   cases a with
   | expr x => obtain rfl := List.mem_singleton.mp he; exact hk

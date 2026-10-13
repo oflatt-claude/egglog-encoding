@@ -11,6 +11,8 @@ import EgglogSemantics.Congruence.MaintenanceDescent
 import EgglogSemantics.Congruence.ForwardHead
 import EgglogSemantics.Congruence.RunState
 import EgglogSemantics.Congruence.Rounds
+import EgglogSemantics.Congruence.Prelude
+import EgglogSemantics.Congruence.Globals
 
 /-! Executable regressions for rebuilding, existence, and ordered query flattening. -/
 
