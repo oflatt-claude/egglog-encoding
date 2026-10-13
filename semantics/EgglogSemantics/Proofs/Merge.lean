@@ -5372,21 +5372,20 @@ The transport lemmas above additionally read `env` and `rules`, and the same is 
 `execRunRules`, so both folds are factored into an induction principle and instantiated
 twice — once for the fields, once for `Inv`. -/
 
-/-- Anything true of `d`, preserved by the rebuild and by one `mergeOneWith` firing, is
-true after a whole pass. The rebuild and the two folds of `mergeRound`, factored out. -/
-theorem mergeRound_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
+/-- Induction over a merge round, retaining its guard against merging a row with itself. -/
+theorem mergeRound_induction_ne {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
     (hreb : P (FDatabase.rebuild d.closureF d))
-    (hstep : ∀ x y : FDatabase, ∀ r₁ r₂ : Row, P x →
+    (hstep : ∀ x y : FDatabase, ∀ r₁ r₂ : Row, r₁ ≠ r₂ → P x →
       FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y → P y) :
     P d.mergeRound := by
-  have hstep' : ∀ (x : FDatabase) (r₁ r₂ : Row), P x →
+  have hstep' : ∀ (x : FDatabase) (r₁ r₂ : Row), r₁ ≠ r₂ → P x →
       P (match FDatabase.mergeOneWith d.closureF x r₁ r₂ with
          | some y => y
          | none => x) := by
-    intro x r₁ r₂ hx
+    intro x r₁ r₂ hne hx
     cases hy : FDatabase.mergeOneWith d.closureF x r₁ r₂ with
     | none => simpa [hy] using hx
-    | some y => simpa [hy] using hstep x y r₁ r₂ hx hy
+    | some y => simpa [hy] using hstep x y r₁ r₂ hne hx hy
   have hfold : ∀ (l : List Row) (r₁ : Row) (x : FDatabase), P x →
       P (l.foldl (fun acc' r₂ =>
           if r₁ == r₂ then acc'
@@ -5401,7 +5400,7 @@ theorem mergeRound_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P
       refine ih r₁ _ ?_
       by_cases hbe : r₁ == r₂
       · simpa [hbe] using hx
-      · simpa [hbe] using hstep' x r₁ r₂ hx
+      · exact by simpa [hbe] using hstep' x r₁ r₂ (by simpa using hbe) hx
   have houter : ∀ (m l : List Row) (x : FDatabase), P x →
       P (l.foldl (fun acc r₁ =>
           m.foldl (fun acc' r₂ =>
@@ -5417,6 +5416,15 @@ theorem mergeRound_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P
   split
   · exact hinit
   · exact houter _ _ _ hreb
+
+/-- Anything true of `d`, preserved by the rebuild and by one `mergeOneWith` firing, is
+true after a whole pass. The rebuild and the two folds of `mergeRound`, factored out. -/
+theorem mergeRound_induction {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
+    (hreb : P (FDatabase.rebuild d.closureF d))
+    (hstep : ∀ x y : FDatabase, ∀ r₁ r₂ : Row, P x →
+      FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y → P y) :
+    P d.mergeRound :=
+  mergeRound_induction_ne hinit hreb (fun x y r₁ r₂ _ hx hxy => hstep x y r₁ r₂ hx hxy)
 
 /-- A firing restores the caller's environment and rule list. -/
 theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}

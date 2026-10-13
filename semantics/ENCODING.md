@@ -149,6 +149,11 @@ The new pass currently has kernel-checked proofs of:
   source match and a successful source firing that justifies its retained entries.
   The source domain supplies head scoping, declarations, and union legality; current
   target invariants and constructor-signature coverage remain explicit premises.
+- `mergeSaturateF_entryRowsUF`, `encodeActions_entryRowsUF`, and
+  `maintenance_entryRowsUF`: table merges, compiled source actions, and generated
+  rebuilding rules preserve the connection from retained entries to live rows. An
+  entry's old output reaches its live output through recorded UF edges. The rule-firing
+  theorem carries this invariant too. The build induction is shared with entry soundness.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
@@ -156,8 +161,8 @@ The new pass currently has kernel-checked proofs of:
 
 The execution proof establishing those invariants for `Congruence.encode` is **not yet
 ported**. Thus the new pass does not yet have an end-to-end completeness theorem.
-The next obligations connect retained historical entries to live rows and their UF
-roots, and assemble the invariants across corresponding program executions.
+The next obligations connect historical UF edges to live roots, establish rebuilt
+view coverage, and assemble the invariants across corresponding program executions.
 The paper's completeness theorem will stop at this pass; later instrumentation and
 resugaring still require soundness.
 

@@ -2184,22 +2184,6 @@ theorem Database.HoldsBuild.monoF {d₁ d₂ : FDatabase} (h : ∀ t ∈ d₁.te
   hb.mono fun t ht => FDatabase.mem_toDatabase_terms.mpr
     (h t (FDatabase.mem_toDatabase_terms.mp ht))
 
-/-- Indexing a complete entry agrees with inserting its declared key and output tuple. -/
-theorem FDatabase.addAtom_eq_addRow {d : FDatabase} {f : FnName} {dc : FnDecl}
-    {as vs : List Term} (hd : d.sig f = some dc) (hm : dc.merge.isSome = true)
-    (ha : as.length = dc.arity) (hv : vs.length = dc.outArity) :
-    d.addAtom (.app f (as ++ vs)) = d.addRow f as vs := by
-  have hw : (as ++ vs).length = dc.entryWidth := by
-    have hn : dc.merge ≠ none := by intro hn; simp [hn] at hm
-    simp [FnDecl.entryWidth, hn, List.length_append, ha, hv]
-  simp [FDatabase.addAtom, FDatabase.entryRowList, hd, hm, hw,
-    FDatabase.addRow, ← ha]
-
-/-- Atom insertion preserves existing rows. -/
-theorem mem_addAtom_rows {d : FDatabase} {t : Term} {r : Row}
-    (h : r ∈ d.rows) : r ∈ (d.addAtom t).rows := by
-  simp [FDatabase.addAtom, FDatabase.addTerm, h]
-
 /-- **One application's build, read back.** The block splits into the arguments' builds and the
 two `set`s, and this is what the second half writes: the term row `@fTerm(is, v)` and the view
 row `@fView(is) ↦ (v, pf)`, keyed on the arguments' values `is` and valued at whatever the
@@ -11990,31 +11974,6 @@ theorem mem_rows_execActions : ∀ (bs : List Action) {m m' : FDatabase},
       obtain ⟨m₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
       exact mem_rows_execActions bs h₂ r (mem_rows_execAction h₁ hr)
 
-/-- **A row a firing neither displaced nor rewrote is a row of its result.** The skip branch
-filters `r₁` out and moves nothing else; the body branch filters `r₁` and rewrites `r₂`. -/
-theorem mem_rows_of_mergeOneOriented {cl : Finset (Term × Term)} {d e : FDatabase}
-    {r₁ r₂ r : Row} (hfire : d.mergeOneOriented cl r₁ r₂ = some e) (hm : r ∈ d.rows)
-    (h₁ : r ≠ r₁) (h₂ : r ≠ r₂) : r ∈ e.rows := by
-  rw [FDatabase.mergeOneOriented] at hfire
-  split at hfire
-  next body res hms =>
-    split at hfire
-    next hg =>
-      split at hfire
-      next =>
-        rw [Option.some.injEq] at hfire
-        subst hfire
-        exact List.mem_filter.mpr ⟨hm, by simpa using h₁⟩
-      next =>
-        obtain ⟨m, hmb, hfire⟩ := Option.bind_eq_some_iff.mp hfire
-        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
-        subst he
-        refine List.mem_map.mpr ⟨r, List.mem_filter.mpr
-          ⟨FDatabase.mem_addTerm_rows.mpr (Or.inr ?_), by simpa using h₁⟩, by simp [h₂]⟩
-        exact mem_rows_execActions body hmb r hm
-    next => exact absurd hfire (by simp)
-  next => exact absurd hfire (by simp)
-
 /-- **Rows carry across one merge firing.** The row the firing keeps at the colliding key
 answers for both rows it combined (`mergeOneOriented_survivorUF`); every other row is one it
 left alone. -/
@@ -12200,53 +12159,6 @@ theorem mergeOneWith_entryRowsUF {cl : Finset (Term × Term)} {d e : FDatabase} 
   rcases FDatabase.mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he
   · exact mergeOneOriented_entryRowsUF hshape hr hsc hidx hcl (Ne.symm hne) h (he ▸ hm)
   · exact mergeOneOriented_entryRowsUF hshape hr hsc hidx hcl hne h (he ▸ hm)
-
-/-- **`FDatabase.mergeRound_induction` with the pass's own guard kept.** The fold skips a row
-against itself, and `mergeOneOriented_survivorUF` needs that: a firing at `r₁ = r₂` drops the
-row and leaves nothing at its key. -/
-theorem FDatabase.mergeRound_induction_ne {d : FDatabase} {P : FDatabase → Prop} (hinit : P d)
-    (hreb : P (FDatabase.rebuild d.closureF d))
-    (hstep : ∀ x y : FDatabase, ∀ r₁ r₂ : Row, r₁ ≠ r₂ → P x →
-      FDatabase.mergeOneWith d.closureF x r₁ r₂ = some y → P y) :
-    P d.mergeRound := by
-  have hstep' : ∀ (x : FDatabase) (r₁ r₂ : Row), r₁ ≠ r₂ → P x →
-      P (match FDatabase.mergeOneWith d.closureF x r₁ r₂ with
-         | some y => y
-         | none => x) := by
-    intro x r₁ r₂ hne hx
-    cases hy : FDatabase.mergeOneWith d.closureF x r₁ r₂ with
-    | none => simpa [hy] using hx
-    | some y => simpa [hy] using hstep x y r₁ r₂ hne hx hy
-  have hfold : ∀ (l : List Row) (r₁ : Row) (x : FDatabase), P x →
-      P (l.foldl (fun acc' r₂ =>
-          if r₁ == r₂ then acc'
-          else match FDatabase.mergeOneWith d.closureF acc' r₁ r₂ with
-            | some acc'' => acc''
-            | none => acc') x) := by
-    intro l
-    induction l with
-    | nil => intro _ x hx; exact hx
-    | cons r₂ l ih =>
-      intro r₁ x hx
-      refine ih r₁ _ ?_
-      by_cases hbe : r₁ == r₂
-      · simpa [hbe] using hx
-      · exact by simpa [hbe] using hstep' x r₁ r₂ (by simpa using hbe) hx
-  have houter : ∀ (m l : List Row) (x : FDatabase), P x →
-      P (l.foldl (fun acc r₁ =>
-          m.foldl (fun acc' r₂ =>
-            if r₁ == r₂ then acc'
-            else match FDatabase.mergeOneWith d.closureF acc' r₁ r₂ with
-              | some acc'' => acc''
-              | none => acc') acc) x) := by
-    intro m l
-    induction l with
-    | nil => intro _ hx; exact hx
-    | cons r₁ l ih => intro x hx; exact ih _ (hfold m r₁ x hx)
-  unfold FDatabase.mergeRound
-  split
-  · exact hinit
-  · exact houter _ _ _ hreb
 
 /-- **A merge pass keeps the bridge.** At a diagonal closure the rebuild moves nothing
 (`rebuild_diag`), so the pass fires on the rows it started with and every firing is

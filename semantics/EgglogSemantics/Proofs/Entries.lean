@@ -347,4 +347,46 @@ theorem execActions_append {as bs : List Action} : ∀ {d e : FDatabase},
       exact ⟨m, by rw [execActions, hv, Option.bind_some]; exact hm, hme⟩
 
 
+/-- Indexing a complete entry agrees with inserting its declared key and output tuple. -/
+theorem FDatabase.addAtom_eq_addRow {d : FDatabase} {f : FnName} {dc : FnDecl}
+    {as vs : List Term} (hd : d.sig f = some dc) (hm : dc.merge.isSome = true)
+    (ha : as.length = dc.arity) (hv : vs.length = dc.outArity) :
+    d.addAtom (.app f (as ++ vs)) = d.addRow f as vs := by
+  have hw : (as ++ vs).length = dc.entryWidth := by
+    have hn : dc.merge ≠ none := by intro hn; simp [hn] at hm
+    simp [FnDecl.entryWidth, hn, List.length_append, ha, hv]
+  simp [FDatabase.addAtom, FDatabase.entryRowList, hd, hm, hw,
+    FDatabase.addRow, ← ha]
+
+/-- Atom insertion preserves existing rows. -/
+theorem mem_addAtom_rows {d : FDatabase} {t : Term} {r : Row}
+    (h : r ∈ d.rows) : r ∈ (d.addAtom t).rows := by
+  simp [FDatabase.addAtom, FDatabase.addTerm, h]
+
+/-- **A row a firing neither displaced nor rewrote is a row of its result.** The skip branch
+filters `r₁` out and moves nothing else; the body branch filters `r₁` and rewrites `r₂`. -/
+theorem mem_rows_of_mergeOneOriented {cl : Finset (Term × Term)} {d e : FDatabase}
+    {r₁ r₂ r : Row} (hfire : d.mergeOneOriented cl r₁ r₂ = some e) (hm : r ∈ d.rows)
+    (h₁ : r ≠ r₁) (h₂ : r ≠ r₂) : r ∈ e.rows := by
+  rw [FDatabase.mergeOneOriented] at hfire
+  split at hfire
+  next body res hms =>
+    split at hfire
+    next hg =>
+      split at hfire
+      next =>
+        rw [Option.some.injEq] at hfire
+        subst hfire
+        exact List.mem_filter.mpr ⟨hm, by simpa using h₁⟩
+      next =>
+        obtain ⟨m, hmb, hfire⟩ := Option.bind_eq_some_iff.mp hfire
+        obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
+        subst he
+        refine List.mem_map.mpr ⟨r, List.mem_filter.mpr
+          ⟨FDatabase.mem_addTerm_rows.mpr (Or.inr ?_), by simpa using h₁⟩, by simp [h₂]⟩
+        exact FDatabase.execActions_rows hmb r hm
+    next => exact absurd hfire (by simp)
+  next => exact absurd hfire (by simp)
+
+
 end Egglog

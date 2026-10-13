@@ -107,7 +107,8 @@ theorem encodedRule_firing_sound {src : Database} {d d' : FDatabase} {r : Rule} 
     (hmatch : σ ∈ matchQuery d (encodeRule r).query)
     (hfire : execLocalActions d (encodeRule r).actions σ = some d') :
     ∃ τ, ValidQuerySubst src r.query τ ∧ ∀ post,
-      evalLocalActions src r.actions τ = some post → SourceSafe post → SoundTerms d' post := by
+      evalLocalActions src r.actions τ = some post → SourceSafe post →
+        SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') := by
   obtain ⟨σ', hσ', hagree⟩ := validQuerySubst_of_mem_matchQuery_diag he hr hi hmatch
   obtain ⟨τ, hτ, heval⟩ := sourceMatch_evaluations hb
     (viewsSound_of_soundTerms hr hs).1 hr.toDatabase
@@ -122,13 +123,19 @@ theorem encodedRule_firing_sound {src : Database} {d d' : FDatabase} {r : Rule} 
       { src with env := τ ++ src.env } :=
     SoundTerms.mono_src (src := src) (src' := { src with env := τ ++ src.env })
       (Set.Subset.refl _) hs
-  have hsound := encodeActions_soundTerms (hw.appendEnv hτ.mem_terms)
-    hsafe' hcs hp (fun a ha e hem => ?_) hsenv hsp htp
-  · exact SoundTerms.mono_src (src := sp)
-      (src' := { sp with env := src.env, rules := src.rules }) (Set.Subset.refl _) hsound
-  · change e.eval d.sig (σ ++ d.env) = e.eval src.sig (τ ++ src.env)
+  have hvalues : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a,
+      e.eval d.sig (σ ++ d.env) = e.eval src.sig (τ ++ src.env) := by
+    intro a ha e hem
     rw [← Expr.eval_agree (hagree.append_right d.env) e]
     exact heval e (hf a ha e hem) (hv a ha e hem)
+  have hsound := encodeActions_soundTerms (hw.appendEnv hτ.mem_terms)
+    hsafe' hcs hp hvalues hsenv hsp htp
+  refine ⟨SoundTerms.mono_src (src := sp)
+    (src' := { sp with env := src.env, rules := src.rules }) (Set.Subset.refl _) hsound, ?_⟩
+  intro hshape hhistory
+  exact encodeActions_entryRowsUF (d := { d with env := σ ++ d.env }) (d' := tp)
+    (hw.appendEnv hτ.mem_terms)
+    hsafe' hcs hp hvalues hshape hhistory hsp htp
 
 private theorem builds_exprs {sig : Signature} {as : List Action}
     (h : Actions.Builds as sig) : ∀ a ∈ as, ∀ e ∈ actionExprs a, e.Evaluable sig := by
@@ -175,7 +182,7 @@ theorem encodedRule_firing {src : Database} {d d' : FDatabase} {r : Rule} {σ : 
     (hmatch : σ ∈ matchQuery d (encodeRule r).query)
     (hfire : execLocalActions d (encodeRule r).actions σ = some d') :
     ∃ τ post, ValidQuerySubst src r.query τ ∧ evalLocalActions src r.actions τ = some post ∧
-      SoundTerms d' post := by
+      SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') := by
   have hbexpr := builds_exprs hbuild
   obtain ⟨τ, hτ, hsound⟩ := encodedRule_firing_sound hw hb hcs hr he hi hsc hs hg hk
     (fun a ha e hem f hfm => (hbexpr a ha e hem f hfm).1)
@@ -203,7 +210,7 @@ theorem encodedRule_firing_of_programStep {P pre rest : Program} (hdom : P.Encod
     (hmatch : σ ∈ matchQuery d (encodeRule r).query)
     (hfire : execLocalActions d (encodeRule r).actions σ = some d') :
     ∃ τ post, ValidQuerySubst src r.query τ ∧ evalLocalActions src r.actions τ = some post ∧
-      SoundTerms d' post := by
+      SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') := by
   have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => by
     rw [hP]; exact List.mem_append_left _ hc
   have hcs := hpre.ctorState Database.CtorState.empty
