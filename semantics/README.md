@@ -42,20 +42,20 @@ boundaries.
 | --- | --- |
 | `EgglogSemantics/Spec/` | Syntax, databases, congruence, evaluation, matching, relational steps, scope |
 | `EgglogSemantics/Impl/` | Finite reference interpreters and front-end checks |
-| `EgglogSemantics/Proofs/` | Interpreter refinement, preservation, totality, and counterexamples |
-| `EgglogSemantics/Congruence/` | Congruence compiler, completeness proof, and regressions |
-| `EgglogSemantics/SourceProof/` | Source proof checker, soundness, and regressions |
-| `EgglogSemantics/Provenance/` | Function provenance instrumentation, extraction, checker, and soundness |
-| `EgglogSemantics/Resugar/` | Proof lifting to source proofs, soundness, fixtures, and JSON export |
-| `EgglogSemantics/Encoding/` | Source-fragment analysis and generated names shared by the compiler and its proofs |
-| `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
+| `EgglogSemantics/Source/` | The source fragment the compiler accepts, and the generated names |
+| `EgglogSemantics/Congruence/` | Congruence compiler and relational execution |
+| `EgglogSemantics/SourceProof/` | Source proof format and checker |
+| `EgglogSemantics/Provenance/` | Function provenance instrumentation, proof format, checker, and extraction |
+| `EgglogSemantics/Resugar/` | Proof lifting to source proofs, fixtures, and JSON export |
+| `EgglogSemantics/Proofs/` | Every theorem: interpreter refinement, the completeness proof, checker soundness, lifting soundness, counterexamples |
+| `EgglogSemantics/Tests/` | Executable regressions, `.egg` parsing and emission, and proof rendering |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
 
 Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),
 [Eval.lean](EgglogSemantics/Spec/Eval.lean), and
 [Step.lean](EgglogSemantics/Spec/Step.lean), then read
 [Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean) and
-[Congruence/Complete.lean](EgglogSemantics/Congruence/Complete.lean).
+[Congruence/Complete.lean](EgglogSemantics/Proofs/Congruence/Complete.lean).
 
 ## Validation
 

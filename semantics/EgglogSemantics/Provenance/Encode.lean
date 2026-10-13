@@ -1,5 +1,5 @@
 import EgglogSemantics.Provenance.Checker
-import EgglogSemantics.Encoding.Names
+import EgglogSemantics.Source.Names
 
 namespace Egglog.Provenance
 

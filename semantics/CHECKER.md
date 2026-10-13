@@ -13,13 +13,13 @@ order. The checker does not flatten the query. Congruence requires a base proof 
 enclosing application and a proof for the replaced child. Invalid substitutions,
 endpoints, and head conclusions are rejected.
 
-[Soundness.lean](EgglogSemantics/SourceProof/Soundness.lean) proves `check_supported`:
+[Soundness.lean](EgglogSemantics/Proofs/SourceProof/Soundness.lean) proves `check_supported`:
 every accepted claim retains source existence witnesses for all its subterms. Its
 `check_sound` corollary gives `Cong db lhs rhs` when both endpoints are held by `db`.
 Both theorems assume that `db` is reached by the original program, is well formed, and
 is saturated for every ruleset. They do not assume validity of intermediate claims.
 
-The [regressions](EgglogSemantics/SourceProof/Tests.lean) cover missing existence,
+The [regressions](EgglogSemantics/Tests/SourceProof.lean) cover missing existence,
 rule-created terms, nested queries, premise ordering, malformed substitutions, wrong
 claims, and anchored congruence. The [fixtures](EgglogSemantics/Resugar/Fixtures.lean)
 hold the proofs that the Lean and Rust checkers must judge alike.
@@ -50,7 +50,7 @@ merge bodies and results, and subterms of established facts. It has no equality 
 Merge inputs must be established entries at the same structural key, with conflicting
 output columns according to the original declaration.
 
-[Provenance.check_sound](EgglogSemantics/Provenance/Soundness.lean) proves membership
+[Provenance.check_sound](EgglogSemantics/Proofs/Provenance/Soundness.lean) proves membership
 in any well-formed, reached state saturated for the program's rules and merges. Extraction
 decodes generated proof constructors into these trees and checks them. This intermediate
 proof still mentions generated tables; it is not a source proof.
@@ -85,7 +85,7 @@ Anchored congruence can nevertheless derive `Table(A) = Table(B)`, and symmetry 
 transitivity give reflexivity for `Table(B)`. A merge justification taking `Table(A)` and
 `Table(B)` as its inputs would run the body and incorrectly conclude `A = C`.
 
-The [merge-input regression](EgglogSemantics/SourceProof/Counterexamples.lean) reproduces
+The [merge-input regression](EgglogSemantics/Proofs/SourceProof/Counterexamples.lean) reproduces
 this mismatch. The source checker therefore accepts constructor-only programs and has no
 merge justification; source merge-input evidence is deferred. Functions remain necessary
 in the relational provenance pass, whose input program has no implicit equality reasoning.

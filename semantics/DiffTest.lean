@@ -1,4 +1,4 @@
-import EgglogSemantics.Congruence.Tests
+import EgglogSemantics.Tests.Congruence
 import EgglogSemantics.Provenance.Extract
 import EgglogSemantics.Resugar.Export
 import EgglogSemantics.Tests.Egg

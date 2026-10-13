@@ -145,7 +145,7 @@ end
 /-- The primitives this fragment has. A primitive is applied as `Expr.app` of a reserved
 name, not by a constructor of its own. `ordering-gt` and `if` give the congruence
 compiler's leader choice: egglog's `ordering-min` and `ordering-max` are `if`s over
-`ordering-gt` (`Encoding/Names.lean`), and every generated table merges with them
+`ordering-gt` (`Source/Names.lean`), and every generated table merges with them
 (`Congruence/Encode.lean`). `min` and `max` are the `i64` operations source `:merge`
 functions use. -/
 inductive Prim where

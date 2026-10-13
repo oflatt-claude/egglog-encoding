@@ -1,5 +1,5 @@
-import EgglogSemantics.Encoding.Source
-import EgglogSemantics.Encoding.Names
+import EgglogSemantics.Source.Domain
+import EgglogSemantics.Source.Names
 
 /-!
 # Congruence compilation

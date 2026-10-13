@@ -196,7 +196,7 @@ The congruence pass has kernel-checked proofs for:
 - The executable reader and correspondence under explicit state invariants
   (`sameClassF_iff`, `Rebuilt.corresponds`).
 
-**Step 1 is complete.** [Complete.lean](EgglogSemantics/Congruence/Complete.lean) proves
+**Step 1 is complete.** [Complete.lean](EgglogSemantics/Proofs/Congruence/Complete.lean) proves
 `Egglog.Congruence.encode_corresponds`:
 
 ```lean
@@ -209,19 +209,19 @@ gives the same theorem for execution using structural matching and table operati
 Termination is not asserted.
 
 **Step 2 is complete for the agreed constructor source fragment.**
-[SourceProof/Soundness.lean](EgglogSemantics/SourceProof/Soundness.lean) proves
+[SourceProof/Soundness.lean](EgglogSemantics/Proofs/SourceProof/Soundness.lean) proves
 `check_supported` and `check_sound` for the executable checker. Accepted claims have
 source existence witnesses for every subterm. For endpoints held by the source,
 acceptance implies its original `Cong` relation. The source state must be reached by
 the original program, well formed, and saturated for every ruleset. No proof is accepted
 by assuming an unproved intermediate term exists.
 
-**Step 3 is implemented.** [Provenance/Soundness.lean](EgglogSemantics/Provenance/Soundness.lean)
+**Step 3 is implemented.** [Provenance/Soundness.lean](EgglogSemantics/Proofs/Provenance/Soundness.lean)
 proves that every accepted relational fact exists in a well-formed, reached state
 saturated for the original relational program's rules and merges. The corpus gate
 checks data preservation and every retained function entry's extracted proof.
 
-**Steps 4 and 5 are implemented.** [Resugar/Soundness.lean](EgglogSemantics/Resugar/Soundness.lean)
+**Steps 4 and 5 are implemented.** [Resugar/Soundness.lean](EgglogSemantics/Proofs/Resugar/Soundness.lean)
 proves `lift_sound` for lifted proofs. Every retained row of every in-domain corpus
 program lifts to a proof the source checker accepts, and Rust egglog's checker accepts
 the same proofs and rejects the same hand-written counterexamples
@@ -237,7 +237,7 @@ or generated source names, consistent arities, supported queries, scoped and dec
 heads, and no literal unions. A query fact is an application, as in egglog's syntax; a
 bare variable or literal fact is outside the domain and the source checker's fragment.
 Arbitrary source merge functions remain outside its scope.
-See [Source.lean](EgglogSemantics/Encoding/Source.lean) for the exact conditions.
+See [Source.lean](EgglogSemantics/Source/Domain.lean) for the exact conditions.
 
 ## Validation
 
