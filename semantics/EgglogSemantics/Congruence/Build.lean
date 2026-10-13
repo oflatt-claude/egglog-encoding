@@ -1,6 +1,7 @@
 import EgglogSemantics.Congruence.History
 import EgglogSemantics.Congruence.SourceState
 import EgglogSemantics.Proofs.Entries
+import EgglogSemantics.Proofs.Signature
 
 /-! Source actions justify each compiled view and union-find write. Source values
 contain no generated entries, so their children need no instrumentation invariant. -/
@@ -21,44 +22,21 @@ theorem sourceSafe_of_names {src : Database} (hb : src.TermsBuild)
   · obtain ⟨dc, hdc, -⟩ := (hb _ _ ht).2
     exact hn _ dc hdc (by decide +kernel)
 
-private theorem programStep_sourceNames {src src' : Database} {P : Program}
-    (hn : ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f)
-    (hp : ∀ c ∈ P, ∀ f dc, c = .decl f dc → ¬ "@".isPrefixOf f)
-    (run : ProgramStep src P src') :
-    ∀ f dc, src'.sig f = some dc → ¬ "@".isPrefixOf f := by
-  induction run with
-  | nil => exact hn
-  | @cons db d d' c cs hc _ ih =>
-      apply ih _ (fun c' hm => hp c' (List.mem_cons_of_mem c hm))
-      intro f dc hf
-      rw [hc.sig] at hf
-      cases c with
-      | decl g decl =>
-          by_cases hfg : f = g
-          · subst f
-            exact hp (.decl g decl) List.mem_cons_self g decl rfl
-          · rw [Cmd.sigBind, Function.update_of_ne hfg] at hf
-            exact hn f dc hf
-      | action a => exact hn f dc hf
-      | rule r => exact hn f dc hf
-      | run R => exact hn f dc hf
-      | saturate R => exact hn f dc hf
-
 /-- A source execution cannot declare names from the generated namespace. -/
 theorem sourceNames_of_programStep {P p : Program} {src : Database}
     (hdom : P.EncodeDomain) (hp : ∀ c ∈ p, c ∈ P)
     (run : ProgramStep Database.empty p src) :
     ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f := by
-  apply programStep_sourceNames (fun _ _ h => by cases h) _ run
-  intro c hc f dc he
-  subst c
-  apply hdom.noAt f
-  apply List.mem_append_left
-  apply List.mem_append_left
-  apply List.mem_map.mpr
-  refine ⟨(f, dc.arity), ?_, rfl⟩
-  exact List.mem_dedup.mpr (List.mem_flatMap.mpr
-    ⟨.decl f dc, hp _ hc, by simp [Cmd.ctors]⟩)
+  intro f dc hf
+  rcases run.declared hf with he | hc
+  · cases he
+  · apply hdom.noAt f
+    apply List.mem_append_left
+    apply List.mem_append_left
+    apply List.mem_map.mpr
+    refine ⟨(f, dc.arity), ?_, rfl⟩
+    exact List.mem_dedup.mpr (List.mem_flatMap.mpr
+      ⟨.decl f dc, hp _ hc, by simp [Cmd.ctors]⟩)
 
 /-- Reserved-name separation follows from the original program, including at prefixes. -/
 theorem sourceSafe_of_programStep {P p : Program} {src : Database}
@@ -213,8 +191,8 @@ private theorem eval_order_ids {sig : Signature} {ρ : Env} {a b : Expr} {ta tb 
 /-- A compiled union builds its operands, then writes their justified oriented edge. -/
 theorem encodeUnion_preserves {src : Database} (hw : src.WF)
     {Φ : FDatabase → Prop} (hview : ViewWritesPreserve src Φ)
-    (huf : ∀ {d : FDatabase} {a b : Term}, Cong src a b → Φ d →
-      Φ (d.addAtom (.app ufName [a, b])))
+    (huf : ∀ {d : FDatabase} {a b : Term}, Cong src a b →
+      (b = a ∨ Term.blt b a = true) → Φ d → Φ (d.addAtom (.app ufName [a, b])))
     {d d' : FDatabase} {a b : Expr} {ta tb : Term}
     (hpa : ∀ f ∈ a.fns, Prim.ofName f = none)
     (hpb : ∀ f ∈ b.fns, Prim.ofName f = none)
@@ -243,7 +221,7 @@ theorem encodeUnion_preserves {src : Database} (hw : src.WF)
   obtain ⟨v, hvv, rfl⟩ := Expr.evalList_singleton hv
   obtain rfl : upperId ta tb = k := Option.some.inj (ha'.symm.trans hkv)
   obtain rfl : lowerId ta tb = v := Option.some.inj (hb''.symm.trans hvv)
-  apply huf ?_ hm
+  apply huf ?_ (lowerId_le_upperId ta tb) hm
   rcases ids_paired ta tb with ⟨hu, hl⟩ | ⟨hu, hl⟩
   · simpa [hu, hl] using hc
   · simpa [hu, hl] using hc.symm
@@ -258,7 +236,7 @@ theorem encodeUnion_soundTerms {src : Database} (hw : src.WF) (hs : SourceSafe s
     (run : execActions d (encodeAction (.union a b)) = some d') : SoundTerms d' src :=
   encodeUnion_preserves hw (Φ := fun d => SoundTerms d src)
     (fun ht h => h.addView_source hw hs ht)
-    (fun hc h => h.addUF_source hw hs hc) hpa hpb ha hb hc h run
+    (fun hc _ h => h.addUF_source hw hs hc) hpa hpb ha hb hc h run
 
 /-- One source action and its compiled writes add only facts justified by the source
 post-state. The evaluation premise concerns only expressions the action actually uses. -/
@@ -344,7 +322,7 @@ theorem encodeUnion_entryRowsUF {src : Database} (hw : src.WF) (hs : SourceSafe 
   refine (encodeUnion_preserves hw (Φ := fun d => MergeShape d.sig ∧ EntryRowsUF d)
     (viewWrites_entryRowsUF hw hs) ?_
     hpa hpb ha hb hc ⟨hshape, h⟩ run).2
-  intro d a b hc h
+  intro d a b hc _ h
   refine ⟨h.1, h.2.addAtom_source hw hs h.1 ?_⟩
   intro t ht
   simp only [List.mem_cons, List.not_mem_nil, or_false] at ht

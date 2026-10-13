@@ -389,4 +389,38 @@ theorem mem_rows_of_mergeOneOriented {cl : Finset (Term × Term)} {d e : FDataba
   next => exact absurd hfire (by simp)
 
 
+namespace FDatabase
+
+/-- Whether `t` applies a head to a first argument at or below `a`. The entry-side counterpart
+of `FDatabase.rowKeyLe`, and it needs no name test: what the measure counts is bounded above by
+the `@UF` entry at the key, and every other term it counts it counts on both sides. -/
+def firstArgLe (a : Term) (t : Term) : Bool :=
+  match t with
+  | .app _ (k :: _) => Term.blt k a || k == a
+  | _ => false
+
+/-- The filter only grows as its bound does. -/
+theorem firstArgLe_mono {a b : Term} (hba : Term.blt b a = true) {t : Term}
+    (h : firstArgLe b t = true) : firstArgLe a t = true := by
+  cases t with
+  | lit l => exact absurd h (by simp [firstArgLe])
+  | app f args =>
+      cases args with
+      | nil => exact absurd h (by simp [firstArgLe])
+      | cons k ks =>
+          simp only [firstArgLe, Bool.or_eq_true, beq_iff_eq] at h ⊢
+          rcases h with hkb | rfl
+          · exact Or.inl (Term.blt_trans k b a hkb hba)
+          · exact Or.inl hba
+
+@[inherit_doc firstArgLe_mono]
+theorem filter_firstArgLe_le {d : FDatabase} {a b : Term}
+    (h : b = a ∨ Term.blt b a = true) :
+    (d.terms.filter (firstArgLe b)).length ≤ (d.terms.filter (firstArgLe a)).length := by
+  rcases h with rfl | hlt
+  · exact le_refl _
+  · exact (List.monotone_filter_right _ fun t ht => firstArgLe_mono hlt ht).length_le
+
+end FDatabase
+
 end Egglog

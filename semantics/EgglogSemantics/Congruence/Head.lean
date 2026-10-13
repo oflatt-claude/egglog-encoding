@@ -1,5 +1,6 @@
 import EgglogSemantics.Congruence.Match
-import EgglogSemantics.Congruence.Build
+import EgglogSemantics.Congruence.BuildDescent
+import EgglogSemantics.Congruence.Declared
 import EgglogSemantics.Encoding.SourceExecution
 
 /-! A compiled rule firing reads a source match and writes only facts justified by
@@ -108,7 +109,8 @@ theorem encodedRule_firing_sound {src : Database} {d d' : FDatabase} {r : Rule} 
     (hfire : execLocalActions d (encodeRule r).actions σ = some d') :
     ∃ τ, ValidQuerySubst src r.query τ ∧ ∀ post,
       evalLocalActions src r.actions τ = some post → SourceSafe post →
-        SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') := by
+        SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') ∧
+      (UFTermsDescend d → UFTermsDescend d') := by
   obtain ⟨σ', hσ', hagree⟩ := validQuerySubst_of_mem_matchQuery_diag he hr hi hmatch
   obtain ⟨τ, hτ, heval⟩ := sourceMatch_evaluations hb
     (viewsSound_of_soundTerms hr hs).1 hr.toDatabase
@@ -132,10 +134,13 @@ theorem encodedRule_firing_sound {src : Database} {d d' : FDatabase} {r : Rule} 
     hsafe' hcs hp hvalues hsenv hsp htp
   refine ⟨SoundTerms.mono_src (src := sp)
     (src' := { sp with env := src.env, rules := src.rules }) (Set.Subset.refl _) hsound, ?_⟩
-  intro hshape hhistory
-  exact encodeActions_entryRowsUF (d := { d with env := σ ++ d.env }) (d' := tp)
-    (hw.appendEnv hτ.mem_terms)
-    hsafe' hcs hp hvalues hshape hhistory hsp htp
+  constructor
+  · intro hshape hhistory
+    exact encodeActions_entryRowsUF (d := { d with env := σ ++ d.env }) (d' := tp)
+      (hw.appendEnv hτ.mem_terms) hsafe' hcs hp hvalues hshape hhistory hsp htp
+  · intro hdes
+    exact encodeActions_ufTermsDescend (d := { d with env := σ ++ d.env }) (d' := tp)
+      (hw.appendEnv hτ.mem_terms) hsafe' hcs hp hvalues hdes hsp htp
 
 private theorem builds_exprs {sig : Signature} {as : List Action}
     (h : Actions.Builds as sig) : ∀ a ∈ as, ∀ e ∈ actionExprs a, e.Evaluable sig := by
@@ -182,7 +187,8 @@ theorem encodedRule_firing {src : Database} {d d' : FDatabase} {r : Rule} {σ : 
     (hmatch : σ ∈ matchQuery d (encodeRule r).query)
     (hfire : execLocalActions d (encodeRule r).actions σ = some d') :
     ∃ τ post, ValidQuerySubst src r.query τ ∧ evalLocalActions src r.actions τ = some post ∧
-      SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') := by
+      SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') ∧
+      (UFTermsDescend d → UFTermsDescend d') := by
   have hbexpr := builds_exprs hbuild
   obtain ⟨τ, hτ, hsound⟩ := encodedRule_firing_sound hw hb hcs hr he hi hsc hs hg hk
     (fun a ha e hem f hfm => (hbexpr a ha e hem f hfm).1)
@@ -201,16 +207,17 @@ theorem encodedRule_firing {src : Database} {d d' : FDatabase} {r : Rule} {σ : 
   exact hnames f dc hf
 
 /-- At a source prefix, all head-side obligations come from the agreed source domain.
-Only the current target's execution invariants and constructor declarations remain. -/
+The prelude signature supplies constructor coverage; only target execution invariants remain. -/
 theorem encodedRule_firing_of_programStep {P pre rest : Program} (hdom : P.EncodeDomain)
     (hP : P = pre ++ rest) {src : Database} (hpre : ProgramStep Database.empty pre src)
     {r : Rule} (hmem : Cmd.rule r ∈ P) (hrule : r ∈ src.rules)
     {d d' : FDatabase} {σ : Env} (hi : d.Inv) (hn : d.NoUnions) (hs : SoundTerms d src)
-    (hctor : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f)
+    (hsig : d.sig = encodeSig P)
     (hmatch : σ ∈ matchQuery d (encodeRule r).query)
     (hfire : execLocalActions d (encodeRule r).actions σ = some d') :
     ∃ τ post, ValidQuerySubst src r.query τ ∧ evalLocalActions src r.actions τ = some post ∧
-      SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') := by
+      SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') ∧
+      (UFTermsDescend d → UFTermsDescend d') := by
   have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => by
     rw [hP]; exact List.mem_append_left _ hc
   have hcs := hpre.ctorState Database.CtorState.empty
@@ -226,6 +233,7 @@ theorem encodedRule_firing_of_programStep {P pre rest : Program} (hdom : P.Encod
     (sourceNames_of_programStep hdom hsub hpre) hn.eqsRefl hi.eqs hi.index
     (Egglog.FDatabase.SubtermClosed.of_wf hi.wf) hs
     (fun p hp => ((hdom.queryEncodable _ hmem).1 p hp).1)
-    (hdom.queryEncodable _ hmem).2 (hdom.headsScoped _ hmem) hbuild hrun hctor hmatch hfire
+    (hdom.queryEncodable _ hmem).2 (hdom.headsScoped _ hmem) hbuild hrun
+    (sourceConstructors_of_programStep hdom hsub hpre hsig) hmatch hfire
 
 end Egglog.Congruence

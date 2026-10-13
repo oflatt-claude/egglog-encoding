@@ -15,6 +15,17 @@ theorem ids_paired (old new : Term) :
     (upperId old new = new ∧ lowerId old new = old) := by
   by_cases h : Term.blt new old <;> simp [upperId, lowerId, h]
 
+/-- The generated edge points from the larger id to the smaller one. -/
+theorem lowerId_le_upperId (old new : Term) :
+    lowerId old new = upperId old new ∨ Term.blt (lowerId old new) (upperId old new) = true := by
+  unfold lowerId upperId
+  by_cases h : Term.blt new old = true
+  · simp [h]
+  · simp only [if_neg h]
+    rcases eq_or_ne old new with he | hn
+    · exact Or.inl he
+    · exact Or.inr ((Term.blt_total old new hn).resolve_right h)
+
 theorem eval_merge_max {sig : Signature} {old new : Term} :
     (maxE (.var "old") (.var "new")).eval sig (mergeEnv [old] [new]) =
       some (upperId old new) := by

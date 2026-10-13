@@ -148,12 +148,23 @@ The new pass currently has kernel-checked proofs of:
 - `encodedRule_firing_of_programStep`: an actual compiled rule firing yields an original
   source match and a successful source firing that justifies its retained entries.
   The source domain supplies head scoping, declarations, and union legality; current
-  target invariants and constructor-signature coverage remain explicit premises.
+  target invariants and the fixed compiled signature remain explicit premises. Constructor
+  coverage follows from the original source prefix and the prelude declarations.
 - `mergeSaturateF_entryRowsUF`, `encodeActions_entryRowsUF`, and
   `maintenance_entryRowsUF`: table merges, compiled source actions, and generated
   rebuilding rules preserve the connection from retained entries to live rows. An
   entry's old output reaches its live output through recorded UF edges. The rule-firing
   theorem carries this invariant too. The build induction is shared with entry soundness.
+- `execM_encode_sig`, `encodeSig_ufName`, and `encodeSig_tables`: successful execution
+  retains the prelude's exact UF, view, and structural-constructor declarations. Source
+  name separation and arity consistency prevent shadowing.
+- `ufRowRoot_of_ufReach`: a retained UF path preserves the root found in live rows,
+  given the entry-to-row bridge, descending edges, and a functional live UF graph.
+  The forest invariant and assembly of execution invariants remain work.
+- `mergeSaturateF_ufTermsDescend`, `encodeActions_ufTermsDescend`, and
+  `maintenance_ufTermsDescend`: table merges, compiled source action blocks, and all
+  rebuilding rules preserve descending historical UF edges. Rule-firing readback
+  carries this property alongside sound entries and the retained-entry/live-row bridge.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view

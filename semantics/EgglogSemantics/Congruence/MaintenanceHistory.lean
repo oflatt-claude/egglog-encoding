@@ -5,7 +5,7 @@ between retained entries and live rows without any source-program assumptions. -
 
 namespace Egglog.Congruence
 
-private theorem evalList_vars_held {d : FDatabase} (hw : d.Inv) :
+theorem evalList_vars_held {d : FDatabase} (hw : d.Inv) :
     ∀ (cols : List Expr) {ts : List Term},
       (∀ c ∈ cols, ∃ v, c = Expr.var v) → Expr.evalList d.sig cols d.env = some ts →
       ∀ t ∈ ts, t ∈ d.terms
@@ -37,9 +37,11 @@ theorem execLocalActions_vars_entryRowsUF {d d' : FDatabase} {q : Query} {σ : E
   exact h.addAtom hshape fun s hs hn _ =>
     FDatabase.subterms_of_columns hsc (by simpa using hcols) s hs hn
 
-private def VariableHead (r : Rule) : Prop :=
+/-- Maintenance either compresses UF paths or writes another table over held variables. -/
+def MaintenanceHead (r : Rule) : Prop :=
   ∃ f cols, r.actions = [.expr (.app f cols)] ∧ Prim.ofName f = none ∧
-    ∀ c ∈ cols, ∃ v, c = Expr.var v
+    (∀ c ∈ cols, ∃ v, c = Expr.var v) ∧
+    (f ≠ ufName ∨ r.query = pathCompressRule.query ∧ r.actions = pathCompressRule.actions)
 
 private theorem rebuildVars_areVars (k : Nat) :
     ∀ c ∈ rebuildVars k, ∃ v, c = Expr.var v := by
@@ -47,16 +49,16 @@ private theorem rebuildVars_areVars (k : Nat) :
   obtain ⟨i, _, rfl⟩ := List.mem_map.mp hc
   exact ⟨_, rfl⟩
 
-private theorem eclass_variableHead (f : FnName) (k : Nat) : VariableHead (eclassRule f k) := by
-  refine ⟨viewName f, _, rfl, prim_viewName f, ?_⟩
+private theorem eclass_headShape (f : FnName) (k : Nat) : MaintenanceHead (eclassRule f k) := by
+  refine ⟨viewName f, _, rfl, prim_viewName f, ?_, Or.inl viewName_ne_ufName⟩
   intro c hc
   rcases List.mem_append.mp hc with hc | hc
   · exact rebuildVars_areVars k c hc
   · obtain rfl := List.mem_singleton.mp hc; exact ⟨_, rfl⟩
 
-private theorem child_variableHead (f : FnName) (k i : Nat) :
-    VariableHead (childRule f k i) := by
-  refine ⟨viewName f, _, rfl, prim_viewName f, ?_⟩
+private theorem child_headShape (f : FnName) (k i : Nat) :
+    MaintenanceHead (childRule f k i) := by
+  refine ⟨viewName f, _, rfl, prim_viewName f, ?_, Or.inl viewName_ne_ufName⟩
   intro c hc
   rcases List.mem_append.mp hc with hc | hc
   · rcases mem_or_eq_of_mem_set hc with hc | rfl
@@ -64,34 +66,34 @@ private theorem child_variableHead (f : FnName) (k i : Nat) :
     · exact ⟨_, rfl⟩
   · obtain rfl := List.mem_singleton.mp hc; exact ⟨_, rfl⟩
 
-private theorem maintenanceRules_variableHead (P : Program) :
-    ∀ c ∈ maintenanceRules P, ∀ r, c.command = .rule r → VariableHead r := by
+private theorem maintenanceRules_headShape (P : Program) :
+    ∀ c ∈ maintenanceRules P, ∀ r, c.command = .rule r → MaintenanceHead r := by
   intro c hc r hr
   simp only [maintenanceRules, List.mem_cons, List.mem_flatMap] at hc
   rcases hc with rfl | ⟨⟨f, k⟩, _, hc⟩
   · obtain rfl : pathCompressRule = r := Cmd.rule.inj hr
-    refine ⟨ufName, _, rfl, rfl, ?_⟩
+    refine ⟨ufName, _, rfl, rfl, ?_, Or.inr ⟨rfl, rfl⟩⟩
     intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
     rcases hc with rfl | rfl <;> exact ⟨_, rfl⟩
   · simp only [rebuildRules, List.mem_cons, List.mem_map] at hc
     rcases hc with rfl | ⟨i, _, rfl⟩
     · obtain rfl : eclassRule f k = r := Cmd.rule.inj hr
-      exact eclass_variableHead f k
+      exact eclass_headShape f k
     · obtain rfl : childRule f k i = r := Cmd.rule.inj hr
-      exact child_variableHead f k i
+      exact child_headShape f k i
 
-private theorem maintenance_variableHead {P : Program} {c : Command}
-    (hc : c ∈ allMaintenanceRules P) {r : Rule} (hr : c.command = .rule r) : VariableHead r := by
+theorem maintenance_headShape {P : Program} {c : Command}
+    (hc : c ∈ allMaintenanceRules P) {r : Rule} (hr : c.command = .rule r) : MaintenanceHead r := by
   simp only [allMaintenanceRules, List.mem_append, List.mem_flatMap, List.mem_map] at hc
   rcases hc with hc | ⟨R, _, c, hc, rfl⟩
-  · exact maintenanceRules_variableHead P c hc r hr
+  · exact maintenanceRules_headShape P c hc r hr
   · unfold inRuleset at hr
     split at hr
     next s hs =>
       obtain rfl : { s with ruleset := R } = r := Cmd.rule.inj hr
-      exact maintenanceRules_variableHead P c hc s hs
-    next => exact maintenanceRules_variableHead P c hc r hr
+      exact maintenanceRules_headShape P c hc s hs
+    next => exact maintenanceRules_headShape P c hc r hr
 
 /-- Every generated rebuilding rule preserves the bridge, including ruleset copies. -/
 theorem maintenance_entryRowsUF {P : Program} {c : Command}
@@ -99,7 +101,7 @@ theorem maintenance_entryRowsUF {P : Program} {c : Command}
     {d d' : FDatabase} {σ : Env} (hi : d.Inv) (hshape : MergeShape d.sig) (h : EntryRowsUF d)
     (hσ : σ ∈ matchQuery d r.query) (run : execLocalActions d r.actions σ = some d') :
     EntryRowsUF d' := by
-  obtain ⟨f, cols, ha, hp, hv⟩ := maintenance_variableHead hc hr
+  obtain ⟨f, cols, ha, hp, hv, _⟩ := maintenance_headShape hc hr
   rw [ha] at run
   exact execLocalActions_vars_entryRowsUF hp hv hi hshape h hσ run
 

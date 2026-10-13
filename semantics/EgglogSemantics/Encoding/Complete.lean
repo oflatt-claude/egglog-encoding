@@ -1,4 +1,6 @@
 import EgglogSemantics.Encoding.Match
+import EgglogSemantics.Encoding.SourceArity
+import EgglogSemantics.Proofs.Signature
 
 /-!
 # The completeness half, assembled
@@ -1104,20 +1106,6 @@ through, which is what lets the two legality conditions below be stated once. -/
 def encodeSig (P : Program) : Signature :=
   (encodePrelude P).foldl (fun sig c => c.sigBind sig) (fun _ => none)
 
-theorem FDatabase.execProgramM_sig {p : Program} : ∀ {d d' : FDatabase},
-    d.execProgramM p = some d' → d'.sig = p.foldl (fun sig c => c.sigBind sig) d.sig := by
-  induction p with
-  | nil =>
-    intro d d' hs
-    rw [FDatabase.execProgramM, Option.some.injEq] at hs
-    exact hs ▸ rfl
-  | cons c cs ih =>
-    intro d d' hs
-    rw [FDatabase.execProgramM] at hs
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    rw [ih h₂, execCmdM_sig h₁]
-    rfl
-
 /-- **The base case.** Everything but the two legality conditions is free at the state the
 prelude leaves: it holds no term, no row and no equation, and the source has not run. -/
 theorem preludeState_encOk {P : Program} {d₀ : FDatabase}
@@ -1269,128 +1257,6 @@ theorem execM_soundTerms_of_obligations {P : Program} (hdom : P.EncodeDomain)
     Database.globalsCover_empty
     (preludeState_encOk (encodeSig_mergesLegal hdom) hmaint hprel) hcmds).sound
 
-/-- **A clause `Program.EncodeDomain` does not have, and the two legality obligations need.**
-
-`Program.ctors` is read off the *syntax* — `Expr.ctors` records `(f, args.length)` at every
-application and `Cmd.ctors` records `(f, dc.arity)` at every declaration — so a program that
-applies one name at two arities contributes two entries, `encodePrelude` emits **two** table
-triples for it, and the later declaration wins. The rebuild rules of the losing arity then
-`set` a view at the wrong key width, which is exactly what `Actions.SetWidthOk` forbids and
-`FDatabase.IndexOk.width` records.
-
-Nothing in `Program.EncodeDomain` excludes it: `Expr.Evaluable` quantifies over
-`Expr.fns`, a list of *names* that has lost the argument counts, and `Spec/Scope.lean`'s
-`Action.WidthOk` — which does say it — is not among the clauses. `EncodeDomain.headsDeclared`
-asks that a head's names be declared, not that they be applied at their declared arity.
-
-**Reported, not added.** It is decidable, it costs the corpus nothing — every generated case
-applies each name at its declared arity — and it is what `execM_soundTerms` still needs. It
-may also be weakenable: the losing arity's rebuild rules can never *match*, since
-`patternHolds` compares key tuples of different lengths, so the rows a run actually writes
-are all of the surviving width; what fails is `Actions.WriteLegal`, which
-`FDatabase.Inv.execCmdM` asks of every rule the state holds whether it fires or not. -/
-def Program.AritiesAgree (P : Program) : Prop :=
-  ∀ fk ∈ P.ctors, ∀ gl ∈ P.ctors, fk.1 = gl.1 → fk.2 = gl.2
-
-/-! ### The clause, and the notion the tree already had
-
-`Program.EncodeDomain.aritiesAgree` is stated over `Tests/Egg.lean`'s
-`Program.arityConflicts` — the notion `Impl/Check.lean` and `Encoding/Encode.lean` already
-cite as egglog's "Function already bound" — and `Program.AritiesAgree` is the form the
-legality proofs consume, over `Program.ctors`. The two are the same list read two ways:
-`Expr.ctors` *is* `Expr.fnArities`, and `Cmd.ctors` is contained in `Cmd.fnArities` at every
-command (a function-entry atoms head and a `:merge` body are the two entries only the latter
-records, and the domain has neither). `EncodeDomain.noPrim` is what pays for the primitive
-filter. -/
-
-mutual
-
-/-- The two readings of an expression's applied names are one. -/
-theorem Expr.ctors_eq_fnArities : ∀ (e : Expr), e.ctors = e.fnArities
-  | .lit _ => rfl
-  | .var _ => rfl
-  | .app f args => by
-      rw [Expr.ctors, Expr.fnArities, Expr.ctorsList_eq_fnAritiesL args]
-
-@[inherit_doc Expr.ctors_eq_fnArities]
-theorem Expr.ctorsList_eq_fnAritiesL : ∀ (es : List Expr),
-    Expr.ctorsList es = Expr.fnAritiesL es
-  | [] => rfl
-  | e :: es => by
-      rw [Expr.ctorsList, Expr.fnAritiesL, Expr.ctors_eq_fnArities e,
-        Expr.ctorsList_eq_fnAritiesL es]
-
-end
-
-@[inherit_doc Expr.ctors_eq_fnArities]
-theorem Action.ctors_eq_fnArities (a : Action) : a.ctors = a.fnArities := by
-  cases a <;>
-    simp [Action.ctors, Action.fnArities, Expr.ctors_eq_fnArities,
-      Expr.ctorsList_eq_fnAritiesL]
-
-/-- A read's own head is the one entry `Program.ctors` does not record and `fnArities`
-does. -/
-theorem Pattern.mem_fnArities_of_mem_ctors {p : Pattern} {fk : FnName × Nat}
-    (h : fk ∈ p.ctors) : fk ∈ p.fnArities := by
-  cases p <;>
-    simp only [Pattern.ctors, Pattern.fnArities, Expr.ctors_eq_fnArities,
-      Expr.ctorsList_eq_fnAritiesL, List.cons_append, List.mem_cons, List.mem_append] at h ⊢ <;>
-    tauto
-
-@[inherit_doc Pattern.mem_fnArities_of_mem_ctors]
-theorem Cmd.mem_fnArities_of_mem_ctors {c : Cmd} {fk : FnName × Nat}
-    (hc : c.CtorDecl) (h : fk ∈ c.ctors) : fk ∈ c.fnArities := by
-  cases c with
-  | action a => rw [Cmd.ctors, Action.ctors_eq_fnArities] at h; exact h
-  | rule r =>
-      rw [Cmd.ctors] at h
-      rw [Cmd.fnArities]
-      rcases List.mem_append.mp h with h' | h'
-      · obtain ⟨p, hp, hf⟩ := List.mem_flatMap.mp h'
-        exact List.mem_append_left _
-          (List.mem_flatMap.mpr ⟨p, hp, Pattern.mem_fnArities_of_mem_ctors hf⟩)
-      · obtain ⟨a, ha, hf⟩ := List.mem_flatMap.mp h'
-        exact List.mem_append_right _
-          (List.mem_flatMap.mpr ⟨a, ha, Action.ctors_eq_fnArities a ▸ hf⟩)
-  | run R => exact absurd h (by simp [Cmd.ctors])
-  | saturate R => exact absurd h (by simp [Cmd.ctors])
-  | decl f dc =>
-      rw [Cmd.ctors] at h
-      obtain rfl : fk = (f, dc.arity) := by simpa using h
-      change dc.merge = none at hc
-      simp [Cmd.fnArities, FnDecl.entryWidth, hc]
-
-/-- A list of at most one element has at most one element. -/
-private theorem eq_of_length_le_one {α : Type} {l : List α} (h : l.length ≤ 1) :
-    ∀ a ∈ l, ∀ b ∈ l, a = b := by
-  match l with
-  | [] => intro a ha; exact absurd ha (by simp)
-  | [x] => intro a ha b hb; rw [List.mem_singleton] at ha hb; rw [ha, hb]
-  | x :: y :: t => exact absurd h (by simp)
-
-/-- **The domain's clause, in the form the legality proofs consume.** -/
-theorem Program.EncodeDomain.aritiesAgree' {P : Program} (h : P.EncodeDomain) :
-    P.AritiesAgree := by
-  have hsub : ∀ fk ∈ P.ctors, fk ∈ P.fnArities := by
-    intro fk hfk
-    obtain ⟨c, hc, hfc⟩ := List.mem_flatMap.mp (List.mem_dedup.mp hfk)
-    refine List.mem_dedup.mpr (List.mem_filter.mpr ⟨List.mem_flatMap.mpr
-      ⟨c, hc, Cmd.mem_fnArities_of_mem_ctors (h.ctorsOnly c hc) hfc⟩, ?_⟩)
-    rw [h.noPrim fk hfk]; rfl
-  intro fk hfk gl hgl hname
-  by_contra hne
-  have hfa : fk ∈ P.fnArities := hsub fk hfk
-  have hga : gl ∈ P.fnArities := hsub gl hgl
-  have hlen : (P.fnArities.filter fun fa => fa.1 == fk.1).length ≤ 1 := by
-    by_contra hc
-    refine absurd h.aritiesAgree (fun hz => ?_)
-    rw [Program.arityConflicts, List.dedup_eq_nil, List.filter_eq_nil_iff] at hz
-    exact absurd (hz fk.1 (List.mem_map_of_mem hfa)) (by simpa using Nat.lt_of_not_le hc)
-  refine hne ?_
-  have := eq_of_length_le_one hlen fk (List.mem_filter.mpr ⟨hfa, by simp⟩)
-    gl (List.mem_filter.mpr ⟨hga, by simp [hname]⟩)
-  rw [this]
-
 /-! ## The prelude's table triples, read back
 
 `FDatabase.Inv.execCmdM` asks `Actions.WriteLegal` of every rule the state holds, so the
@@ -1522,14 +1388,6 @@ theorem foldl_ctorTriples_found : ∀ (l : List (FnName × Nat)) {f : FnName} {k
       · rw [foldl_ctorTriple_term (f, k) (hat _ List.mem_cons_self), if_pos rfl]
     · exact ih hm' (fun x hx => hag x (List.mem_cons_of_mem gl hx))
         (fun x hx => hat x (List.mem_cons_of_mem gl hx)) _
-
-/-- A source name is not in the generated namespace. -/
-theorem noAt_of_mem_ctors {P : Program} (hdom : P.EncodeDomain) {fk : FnName × Nat}
-    (h : fk ∈ P.ctors) : ¬ "@".isPrefixOf fk.1 :=
-  hdom.noAt fk.1 (by
-    rw [Program.names]
-    exact List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl
-      (List.mem_map.mpr ⟨fk, h, rfl⟩)))))
 
 /-- **The view and term declarations the prelude installs**, at each entry of
 `Program.ctors`. `Program.AritiesAgree` is what makes the answer that entry's own arity: a
