@@ -6,7 +6,7 @@ import EgglogSemantics.Congruence.UnionFind
 import EgglogSemantics.Congruence.Execution
 import EgglogSemantics.Congruence.Merge
 import EgglogSemantics.Congruence.Maintenance
-import EgglogSemantics.Congruence.SourceState
+import EgglogSemantics.Congruence.Head
 
 /-! Executable regressions for rebuilding, existence, and ordered query flattening. -/
 

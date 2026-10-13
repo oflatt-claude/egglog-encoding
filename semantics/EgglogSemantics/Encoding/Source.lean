@@ -1203,10 +1203,8 @@ instance Program.decidableSetLegal : ∀ (P : Program) (sig : Signature),
 
 /-! #### The head-scope check, and deciding it
 
-`Spec/Scope.lean`'s `Actions.Scoped` at a rule's own query variables. The scope grows along
-the block, so a head may read what an earlier `let` of the same block bound; what it may not
-read is a variable nothing binds. `Rule.HeadScoped` (`Encoding/Correspond.lean`) is the same
-notion at a source *state*, which also admits a global. -/
+`Spec/Scope.lean`'s `Actions.Scoped` at a rule's own query variables. Every action in
+the head uses the same query substitution; actions do not introduce bindings. -/
 
 /-- **Every variable a rule head reads is one the rule's own query binds.**
 `Actions.Scoped`'s own `Expr.IsApp` at a bare build is part of it.

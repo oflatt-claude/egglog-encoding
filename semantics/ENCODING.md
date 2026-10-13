@@ -142,6 +142,13 @@ The new pass currently has kernel-checked proofs of:
   generated rebuilding rules preserve source justifications of retained entries.
 - `termsBuild_of_programStep`: constructor-source executions satisfy the value
   invariant required by query readback, without the old restrictions on write actions.
+- `encodeActions_soundTerms`: compiled source builds and unions write only entries
+  justified by the corresponding source action block's result. Source values cannot
+  hide generated entries inside their children (`sourceSafe_of_programStep`).
+- `encodedRule_firing_of_programStep`: an actual compiled rule firing yields an original
+  source match and a successful source firing that justifies its retained entries.
+  The source domain supplies head scoping, declarations, and union legality; current
+  target invariants and constructor-signature coverage remain explicit premises.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
@@ -149,6 +156,8 @@ The new pass currently has kernel-checked proofs of:
 
 The execution proof establishing those invariants for `Congruence.encode` is **not yet
 ported**. Thus the new pass does not yet have an end-to-end completeness theorem.
+The next obligations connect retained historical entries to live rows and their UF
+roots, and assemble the invariants across corresponding program executions.
 The paper's completeness theorem will stop at this pass; later instrumentation and
 resugaring still require soundness.
 

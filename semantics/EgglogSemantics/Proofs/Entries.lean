@@ -264,4 +264,87 @@ theorem mem_or_eq_of_mem_set {α : Type _} {l : List α} {i : Nat} {b a : α}
       · exact Or.inl List.mem_cons_self
       · exact (ih h).imp (List.mem_cons_of_mem _) id
 
+/-! ## The match, read back at a diagonal target
+
+`validQuerySubst_of_mem_matchQuery` needs `Signature.AllConstructors`, which is exactly what
+an encoded target does not have: `@UF` and every `@fView` carry a `:merge`. The clause that
+needs it is `patternHolds`' **read** branch, and at a target whose `Cong` is the identity
+that branch is `mem_terms_of_patternHolds_entry` — a matched row is an entry term. So the
+same repackaging goes through with `FDatabase.EqsRefl` and `FDatabase.IndexOk` in place of
+the signature condition, which is what the encoded target has. -/
+
+/-- `withOperands` records the operand, so it is congruent to itself there whether or not
+the state held it. -/
+theorem congOn_self {db : Database} (t : Term) : CongOn db [t] t t :=
+  Cong.assert (by
+    simp only [Database.withOperands, Database.addTerms, List.foldl_cons,
+      List.foldl_nil, Database.addTerm, Set.mem_union, Set.mem_setOf_eq]
+    exact Or.inr ⟨t, Term.self_mem_subterms t, rfl⟩)
+
+/-- **`patternHolds` is `Matches`, at a diagonal state whose index is faithful.**
+`patternHolds_iff` with `Signature.AllConstructors` traded for the two invariants an encoded
+target has; only the read branch differs, and there it is `mem_terms_of_patternHolds_entry`. -/
+theorem matches_of_patternHolds {d : FDatabase} (he : d.EqsInTerms) (hr : d.EqsRefl)
+    (hidx : d.IndexOk) {p : Pattern} {σ : Env} (h : patternHolds d p σ = true) :
+    Matches d.toDatabase p σ := by
+  cases p with
+  | expr e =>
+    obtain ⟨t, hev, hm⟩ := mem_terms_of_patternHolds_expr hr hidx h
+    exact .expr (FDatabase.mem_toDatabase_terms.mpr hm) hev (congOn_self t)
+  | eq e₁ e₂ =>
+    cases hev₁ : e₁.eval d.sig σ with
+    | none => rw [patternHolds, hev₁] at h; simp at h
+    | some t₁ =>
+      cases hev₂ : e₂.eval d.sig σ with
+      | none => rw [patternHolds, hev₁, hev₂] at h; simp at h
+      | some t₂ =>
+        simp only [patternHolds, hev₁, hev₂, Bool.and_eq_true, decide_eq_true_eq] at h
+        obtain ⟨heq, w, hwm, hcl⟩ := h
+        exact .eq (FDatabase.mem_toDatabase_terms.mpr hwm)
+          (by rw [FDatabase.toDatabase_sig]; exact hev₁)
+          (by rw [FDatabase.toDatabase_sig]; exact hev₂)
+          (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ he).mp hcl))
+          (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ he).mp heq))
+
+/-- **A substitution the enumerator produced is one the specification admits**, at a
+diagonal target with a faithful index. `validQuerySubst_of_mem_matchQuery` with its
+signature hypothesis replaced; the repackaging from one restricted substitution to the
+specification's `Env.UnionAll` of per-pattern ones is the same. -/
+theorem validQuerySubst_of_mem_matchQuery_diag {d : FDatabase} (he : d.EqsInTerms)
+    (hr : d.EqsRefl) (hidx : d.IndexOk) {q : Query} {σ : Env} (h : σ ∈ matchQuery d q) :
+    ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
+  simp only [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true] at h
+  obtain ⟨⟨hdom, hval⟩, hall⟩ := h
+  obtain ⟨τ, hu, hrf⟩ := Env.exists_unionAll (σ := σ)
+    (q.map fun p => Env.canon (p.freeVars []) σ) (by
+      intro ρ hρ
+      obtain ⟨p, -, rfl⟩ := List.mem_map.mp hρ
+      exact Env.refines_canon)
+  refine ⟨τ, ⟨_, List.forall₂_map_self (fun p hp =>
+    ⟨validEnv_canon hp hdom hval, matches_of_patternHolds he hr hidx (hall p hp)⟩), hu⟩,
+    Env.agree_of_refines hrf ?_⟩
+  intro v hv
+  rw [hdom] at hv
+  obtain ⟨p, hp, hvp⟩ := Query.mem_freeVars.mp hv
+  refine hu.mem_dom_iff.mpr ⟨Env.canon (p.freeVars []) σ, List.mem_map_of_mem hp, ?_⟩
+  rw [Env.dom_canon_of_subset (Query.freeVars_subset hp) hdom]
+  exact hvp
+
+
+/-- Split execution of consecutive action blocks at their intermediate state. -/
+theorem execActions_append {as bs : List Action} : ∀ {d e : FDatabase},
+    execActions d (as ++ bs) = some e →
+      ∃ m, execActions d as = some m ∧ execActions m bs = some e := by
+  induction as with
+  | nil => intro d e h; exact ⟨d, rfl, h⟩
+  | cons a as ih =>
+    intro d e h
+    cases hv : execAction d a with
+    | none => rw [List.cons_append, execActions, hv] at h; simp at h
+    | some d' =>
+      rw [List.cons_append, execActions, hv, Option.bind_some] at h
+      obtain ⟨m, hm, hme⟩ := ih h
+      exact ⟨m, by rw [execActions, hv, Option.bind_some]; exact hm, hme⟩
+
+
 end Egglog
