@@ -143,9 +143,11 @@ end
 
 /-! ### Primitives -/
 /-- The primitives this fragment has. A primitive is applied as `Expr.app` of a reserved
-name, not by a constructor of its own. egglog's `ordering-min`, `ordering-max`,
-`proof-of-min` and `proof-of-max` are `if`s over `ordering-gt`, spelled out in
-`Encoding/Encode.lean`. -/
+name, not by a constructor of its own. `ordering-gt` and `if` give the congruence
+compiler's leader choice: egglog's `ordering-min` and `ordering-max` are `if`s over
+`ordering-gt` (`Encoding/Names.lean`), and every generated table merges with them
+(`Congruence/Encode.lean`). `min` and `max` are the `i64` operations source `:merge`
+functions use. -/
 inductive Prim where
   /-- egglog's value ordering as a `bool`: `(ordering-gt s t)` is `t < s`
   (`egglog/src/lib.rs:530-535`). **Strict**, so a tie is `false` and every `if` over it
