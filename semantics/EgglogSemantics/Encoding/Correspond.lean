@@ -8261,26 +8261,6 @@ theorem mergeOneWith_ufMeasure {cl : Finset (Term × Term)} {d e : FDatabase} {r
     exact ⟨h1, fun hp => h2 (hsame.trans hp), fun hp => h3 (hsame.trans hp)⟩
   · exact mergeOneOriented_ufMeasure hshape huf hidx hcl hmg hcols hmx (he ▸ hm)
 
-/-- A pair of a list zipped with itself is diagonal. -/
-private theorem mem_zip_self {α : Type _} : ∀ {xs : List α} {q : α × α},
-    q ∈ xs.zip xs → q.1 = q.2 ∧ q.1 ∈ xs
-  | [], _, h => by simp at h
-  | x :: xs, q, h => by
-      rw [List.zip_cons_cons, List.mem_cons] at h
-      rcases h with rfl | h
-      · exact ⟨rfl, List.mem_cons_self⟩
-      · exact ⟨(mem_zip_self h).1, List.mem_cons_of_mem _ (mem_zip_self h).2⟩
-
-/-- A key tuple is congruent to itself as soon as the closure records its columns. -/
-theorem congrKeys_self {cl : Finset (Term × Term)} {as : List Term}
-    (h : ∀ a ∈ as, (a, a) ∈ cl) : FDatabase.congrKeys cl as as = true := by
-  simp only [FDatabase.congrKeys, FDatabase.congrTuple, beq_self_eq_true, Bool.true_and,
-    List.all_eq_true, decide_eq_true_eq]
-  intro q hq
-  obtain ⟨heq, hmem⟩ := mem_zip_self hq
-  rw [show q = (q.1, q.1) from Prod.ext rfl heq.symm]
-  exact h q.1 hmem
-
 /-- **A collision at one key fires.** `swapForCanon` declines to orient a pair at equal keys,
 so the pair reaches `mergeOneOriented` in the order it was given; the collision that runs no
 body drops the arriving row outright, and the one that runs `mergeBody` runs it because the
@@ -8331,27 +8311,6 @@ theorem mergeOneWith_isSome_of_collide {cl : Finset (Term × Term)} {d : FDataba
     simp
 
 namespace FDatabase
-
-/-- **`FDatabase.mergeSaturateF` returns a state a further pass leaves alone**, which is the
-branch condition it returned from. -/
-theorem mergeSaturateF_settled : ∀ (n : Nat) {d e : FDatabase},
-    FDatabase.mergeSaturateF n d = some e → e.settled = true
-  | 0, d, e, h => by
-      rw [FDatabase.mergeSaturateF] at h
-      split at h
-      · next hs => rw [Option.some.injEq] at h; exact h ▸ hs
-      · exact absurd h (by simp)
-  | n + 1, d, e, h => by
-      rw [FDatabase.mergeSaturateF] at h
-      split at h
-      · next hs => rw [Option.some.injEq] at h; exact h ▸ hs
-      · exact mergeSaturateF_settled n h
-
-/-- The row list a settled state's next pass leaves. -/
-theorem settled_rows {d : FDatabase} (h : d.settled = true) :
-    d.mergeRound.rows = d.rows := by
-  simp only [FDatabase.settled, FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at h
-  exact h.1.2
 
 /-- **A diagonal closure canonicalises nothing.** -/
 theorem canonOf_diag {cl : Finset (Term × Term)} (hcl : ∀ p ∈ cl, p.1 = p.2)

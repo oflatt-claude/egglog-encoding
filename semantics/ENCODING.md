@@ -160,11 +160,17 @@ The new pass currently has kernel-checked proofs of:
   name separation and arity consistency prevent shadowing.
 - `ufRowRoot_of_ufReach`: a retained UF path preserves the root found in live rows,
   given the entry-to-row bridge, descending edges, and a functional live UF graph.
-  The forest invariant and assembly of execution invariants remain work.
+  `ufRowsForest_of_settled` now supplies the forest property after merging; assembly
+  of these invariants across the full execution remains work.
 - `mergeSaturateF_ufTermsDescend`, `encodeActions_ufTermsDescend`, and
   `maintenance_ufTermsDescend`: table merges, compiled source action blocks, and all
   rebuilding rules preserve descending historical UF edges. Rule-firing readback
   carries this property alongside sound entries and the retained-entry/live-row bridge.
+- `tableRows_unique_of_settled`: every merging table has one live output per structural
+  key at a merge fixed point. A finite weight on table rows strictly decreases at every
+  collision; the same argument covers UF and views. `mergeSaturateF_unique_root` and
+  `mergeSaturateF_joined_root` then give unique live roots and identify the roots at both
+  ends of each retained UF path after a merge phase.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
@@ -172,8 +178,8 @@ The new pass currently has kernel-checked proofs of:
 
 The execution proof establishing those invariants for `Congruence.encode` is **not yet
 ported**. Thus the new pass does not yet have an end-to-end completeness theorem.
-The next obligations connect historical UF edges to live roots, establish rebuilt
-view coverage, and assemble the invariants across corresponding program executions.
+The next obligations establish rebuilt view coverage and assemble the invariants across
+corresponding program executions, including forward matching of flattened queries.
 The paper's completeness theorem will stop at this pass; later instrumentation and
 resugaring still require soundness.
 

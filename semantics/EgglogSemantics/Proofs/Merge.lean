@@ -5483,6 +5483,27 @@ theorem mergeSaturateF_fields {n : Nat} : ∀ {d e : FDatabase},
       exact ⟨h₁.trans mergeRound_confined.2.2.1, h₂.trans mergeRound_envRules.1,
         h₃.trans mergeRound_envRules.2⟩
 
+/-- **`FDatabase.mergeSaturateF` returns a state a further pass leaves alone**, which is the
+branch condition it returned from. -/
+theorem mergeSaturateF_settled : ∀ (n : Nat) {d e : FDatabase},
+    FDatabase.mergeSaturateF n d = some e → e.settled = true
+  | 0, d, e, h => by
+      rw [FDatabase.mergeSaturateF] at h
+      split at h
+      · next hs => rw [Option.some.injEq] at h; exact h ▸ hs
+      · exact absurd h (by simp)
+  | n + 1, d, e, h => by
+      rw [FDatabase.mergeSaturateF] at h
+      split at h
+      · next hs => rw [Option.some.injEq] at h; exact h ▸ hs
+      · exact mergeSaturateF_settled n h
+
+/-- The row list a settled state's next pass leaves. -/
+theorem settled_rows {d : FDatabase} (h : d.settled = true) :
+    d.mergeRound.rows = d.rows := by
+  simp only [FDatabase.settled, FDatabase.sameData, Bool.and_eq_true, beq_iff_eq] at h
+  exact h.1.2
+
 /-- `Inv.mergeRound_of_legalMerges` run to a fixpoint. `mergeRound_confined` is what keeps
 `hlegal` — a statement about the pre-phase signature — applicable at the next round. -/
 theorem Inv.mergeSaturateF {n : Nat} : ∀ {d e : FDatabase}, d.Inv →

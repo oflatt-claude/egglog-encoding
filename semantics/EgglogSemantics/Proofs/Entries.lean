@@ -423,4 +423,24 @@ theorem filter_firstArgLe_le {d : FDatabase} {a b : Term}
 
 end FDatabase
 
+/-- A pair of a list zipped with itself is diagonal. -/
+theorem mem_zip_self {α : Type _} : ∀ {xs : List α} {q : α × α},
+    q ∈ xs.zip xs → q.1 = q.2 ∧ q.1 ∈ xs
+  | [], _, h => by simp at h
+  | x :: xs, q, h => by
+      rw [List.zip_cons_cons, List.mem_cons] at h
+      rcases h with rfl | h
+      · exact ⟨rfl, List.mem_cons_self⟩
+      · exact ⟨(mem_zip_self h).1, List.mem_cons_of_mem _ (mem_zip_self h).2⟩
+
+/-- A key tuple is congruent to itself as soon as the closure records its columns. -/
+theorem congrKeys_self {cl : Finset (Term × Term)} {as : List Term}
+    (h : ∀ a ∈ as, (a, a) ∈ cl) : FDatabase.congrKeys cl as as = true := by
+  simp only [FDatabase.congrKeys, FDatabase.congrTuple, beq_self_eq_true, Bool.true_and,
+    List.all_eq_true, decide_eq_true_eq]
+  intro q hq
+  obtain ⟨heq, hmem⟩ := mem_zip_self hq
+  rw [show q = (q.1, q.1) from Prod.ext rfl heq.symm]
+  exact h q.1 hmem
+
 end Egglog
