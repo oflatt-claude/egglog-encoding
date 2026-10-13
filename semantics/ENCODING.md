@@ -188,6 +188,12 @@ The new pass currently has kernel-checked proofs of:
   coverage at common child ids. `Rebuilt.corresponds` reduces the remaining command
   simulation to those source-existence witnesses and represented source unions, alongside
   the data invariants. It is still a conditional theorem, not a completed execution proof.
+- `canonicalEq_of_congOn` and `exists_live_query`: source congruence transports canonical
+  readings through temporary query operands using the original match's existence witness.
+  A full source match supplies one consistent target substitution and live rows for every
+  original pattern; keyed-variable occurrences show that all substituted values are in the
+  executable matcher's value domain. The remaining query step constructs the generated
+  variable bindings in the compiler's traversal order.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
