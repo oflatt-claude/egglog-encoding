@@ -19,7 +19,6 @@ def validates (P : Program) : Bool := (certificates P).any fun cs =>
   cs.all fun c => (SourceProof.check P c).isSome && sourceNames c
 
 #guard lifted.all fun np => validates np.2
-#guard validates bareVariable
 #guard (certificates nestedUnion).any fun cs => cs.any fun c => c.nodes.any fun n =>
   match n.reason with | .congr _ _ _ => true | _ => false
 #guard (certificates ruleChain).any fun cs => cs.all fun c => c.nodes.all fun n =>

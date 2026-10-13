@@ -108,10 +108,11 @@ private def functions : Program := declarations ++
 
 #guard !sourceOk functions
 #guard !(check functions ⟨[fiat (.app "Table" [a])], 0⟩).isSome
-#guard !(check globals ⟨[fiat a, fiat b,
-  ⟨⟨a, b⟩, .merge "A" 0 1⟩], 2⟩).isSome
 #guard !sourceOk (declarations ++
   [.rule ⟨[.expr (.app "ordering-gt" [.var "x", .var "y"])], [], "R"⟩])
+-- A bare variable or literal is not a query fact, as in egglog.
+#guard !sourceOk (declarations ++ [.rule ⟨[.expr (.var "x")], [], "R"⟩])
+#guard !sourceOk (declarations ++ [.rule ⟨[.expr (.lit (.int 3))], [], "R"⟩])
 #guard (contextOf (globals ++ [.decl "A" (ctor 0)])).isNone
 #guard (contextOf (declarations ++ [.action (.expr (.var "unbound"))])).isNone
 

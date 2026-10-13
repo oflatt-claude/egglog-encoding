@@ -70,7 +70,6 @@ theorem checkReason_supported {P : Program} {C : Context} {db : Database}
           exact ruleFacts_supported hs hw hC hclosed hr (sourceOk_rule hok hr)
             (fun c hc => hp c (lookupClaims_subset hcs hc)) hfs n.claim hc
       | action _ | run _ | saturate _ | decl _ _ => simp at h
-  | merge f i j => simp [checkReason, hn] at h
 
 theorem checkNodes_supported {P : Program} {C : Context} {db : Database}
     (hs : ProgramStep Database.empty P db) (hw : db.WF) (hC : C.Sound db)

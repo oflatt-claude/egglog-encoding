@@ -5,8 +5,10 @@ namespace Egglog.SourceProof
 
 def exprOk (e : Expr) : Bool := e.fns.all fun f => (Prim.ofName f).isNone
 
+/-- A query fact is an application, as in egglog; an equality compares value expressions. -/
 def patternOk : Pattern → Bool
-  | .expr e => exprOk e
+  | .expr (.app f args) => exprOk (.app f args)
+  | .expr _ => false
   | .eq a b => exprOk a && exprOk b
 
 def actionOk : Action → Bool
@@ -64,8 +66,7 @@ def checkReason (P : Program) (C : Context) (prior : List Claim) (n : Node) : Bo
       let .rule r ← P[i]? | none
       let premises ← ps.mapM fun j => prior[j]?
       let fs ← ruleFacts C r σ premises
-      some (decide (n.claim ∈ fs))
-  | .merge _ _ _ => some false).getD false
+      some (decide (n.claim ∈ fs))).getD false
 
 def checkNode (P : Program) (C : Context) (prior : List Claim) (n : Node) : Bool :=
   atomOk C.sig n.claim.lhs && atomOk C.sig n.claim.rhs &&

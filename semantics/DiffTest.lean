@@ -1619,12 +1619,16 @@ def Cmd.ctorDeclB : Cmd → Bool
 theorem Cmd.ctorDeclB_iff (c : Cmd) : c.ctorDeclB = true ↔ c.CtorDecl := by
   cases c <;> simp [Cmd.ctorDeclB, Cmd.CtorDecl, Option.isNone_iff_eq_none]
 
-/-- `Pattern.NoValues`, computed. -/
-def Pattern.noValuesB : Pattern → Bool
-  | _ => true
+/-- `Pattern.Scoped`, computed: a fact is an application. -/
+def Pattern.scopedB : Pattern → Bool
+  | .expr (.app _ _) => true
+  | .expr _ => false
+  | .eq _ _ => true
 
-theorem Pattern.noValuesB_iff (p : Pattern) : p.noValuesB = true ↔ p.NoValues := by
-  cases p <;> simp [Pattern.noValuesB, Pattern.NoValues]
+theorem Pattern.scopedB_iff (p : Pattern) : p.scopedB = true ↔ p.Scoped := by
+  cases p with
+  | expr e => cases e <;> simp [Pattern.scopedB, Pattern.Scoped, Expr.IsApp]
+  | eq _ _ => simp [Pattern.scopedB, Pattern.Scoped]
 
 /-- A bare literal, computed. -/
 def Expr.isLitB : Expr → Bool
@@ -1713,13 +1717,13 @@ theorem Query.varsKeyedB_iff (q : Query) : q.varsKeyedB = true ↔ Query.VarsKey
 /-- `Cmd.QueryEncodable`, computed. -/
 def Cmd.queryEncodableB : Cmd → Bool
   | .rule r =>
-      r.query.all (fun p => p.groundedB && p.noValuesB) && Query.varsKeyedB r.query
+      r.query.all (fun p => p.groundedB && p.scopedB) && Query.varsKeyedB r.query
   | _ => true
 
 theorem Cmd.queryEncodableB_iff (c : Cmd) : c.queryEncodableB = true ↔ c.QueryEncodable := by
   cases c <;>
     simp [Cmd.queryEncodableB, Cmd.QueryEncodable, List.all_eq_true, Pattern.groundedB_iff,
-      Pattern.noValuesB_iff, Query.varsKeyedB_iff]
+      Pattern.scopedB_iff, Query.varsKeyedB_iff]
 
 /-- `Program.EncodeDomain`, computed. `EncodeDomain.setLegal`, `EncodeDomain.headsDeclared`
 and `EncodeDomain.headsScoped` are `Spec/Scope.lean` checks with `Decidable` instances, so

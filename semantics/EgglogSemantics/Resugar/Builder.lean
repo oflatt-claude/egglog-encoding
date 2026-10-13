@@ -71,7 +71,6 @@ def support (P : Program) (C : Context) :
         | .symm j => support P C fuel b j t
         | .trans j k | .congr j _ k =>
           support P C fuel b j t <|> support P C fuel b k t
-        | .merge _ _ _ => none
 
 def witness (P : Program) (C : Context) (b : Builder) (t : Term) :
     List Nat → Option (Nat × Builder)

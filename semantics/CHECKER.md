@@ -3,8 +3,9 @@
 [SourceProof.check](EgglogSemantics/SourceProof/Checker.lean) validates certificates
 against the original program, unions included, with explicit claims and references to
 earlier nodes. It is the checker that corresponds to Rust's. It accepts constructor
-programs without primitive applications. Function declarations are rejected; functions
-are handled in the separate relational provenance checker.
+programs without primitive applications whose query facts are applications, as in
+egglog. Function declarations are rejected; functions are handled in the separate
+relational provenance checker.
 
 `Fiat` facts come only from original global actions. A rule proof identifies the original
 command and supplies an exact substitution and one proof per original query conjunct, in

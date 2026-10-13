@@ -35,8 +35,6 @@ def reason : SourceProof.Reason → Json
   | .rule i σ ps => Json.mkObj [("kind", "rule"), ("rule", ruleName i),
       ("subst", .arr (σ.map fun bnd => .arr #[toJson bnd.1, term bnd.2]).toArray),
       ("premises", toJson ps)]
-  | .merge f i j => Json.mkObj [("kind", "merge"), ("function", f),
-      ("old", toJson i), ("new", toJson j)]
 
 def node (n : SourceProof.Node) : Json := Json.mkObj
   [("lhs", term n.claim.lhs), ("rhs", term n.claim.rhs), ("reason", reason n.reason)]

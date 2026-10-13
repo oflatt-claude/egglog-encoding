@@ -10,7 +10,10 @@ theorem exprOk_orderingFree {e : Expr} (h : exprOk e = true) : e.OrderingFree :=
 
 theorem patternOk_orderingFree {p : Pattern} (h : patternOk p = true) : p.OrderingFree := by
   cases p with
-  | expr e => exact exprOk_orderingFree h
+  | expr e =>
+      cases e with
+      | lit _ | var _ => simp [patternOk] at h
+      | app f args => exact exprOk_orderingFree h
   | eq a b =>
       simp only [patternOk, Bool.and_eq_true_iff] at h
       exact ⟨exprOk_orderingFree h.1, exprOk_orderingFree h.2⟩

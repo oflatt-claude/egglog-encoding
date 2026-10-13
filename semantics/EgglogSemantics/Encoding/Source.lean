@@ -102,11 +102,6 @@ def Program.saturateRulesets (P : Program) : List RulesetName :=
 `Program.EncodeDomain` below specifies the constructor fragment and the naming, query,
 arity, and head-legality conditions used by the correspondence theorem. -/
 
-/-- Compatibility marker for the former separate entry-pattern constructor. Complete
-atoms share the expression case, so this imposes no restriction on current patterns. -/
-def Pattern.NoValues : Pattern → Prop
-  | _ => True
-
 /-- The variables an action mentions, binders included. -/
 def Action.vars : Action → List Var
   | .expr e => e.vars
@@ -196,11 +191,12 @@ def Pattern.ArgVar (v : Var) : Pattern → Prop
 
 def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
 
-/-- **The queries the flattening handles.** `Pattern.Grounded` and `Pattern.NoValues` at
-every pattern of a rule's query, and `Query.VarsKeyed` at the query. Vacuous at every other
-command, which is the only place a query can occur. -/
+/-- **The queries the flattening handles.** Every pattern of a rule's query is
+`Pattern.Grounded` and `Pattern.Scoped` — no bare literal, and a fact is an application, as
+in egglog — and the query is `Query.VarsKeyed`. Vacuous at every other command, which is
+the only place a query can occur. -/
 def Cmd.QueryEncodable : Cmd → Prop
-  | .rule r => (∀ p ∈ r.query, p.Grounded ∧ p.NoValues) ∧ Query.VarsKeyed r.query
+  | .rule r => (∀ p ∈ r.query, p.Grounded ∧ p.Scoped) ∧ Query.VarsKeyed r.query
   | _ => True
 
 /-! ### The heads the source cannot run

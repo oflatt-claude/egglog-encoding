@@ -30,13 +30,6 @@ def equalityQuery : Program :=
    .rule ⟨[.eq (.app "F" [.var "x"]) (.app "G" [.var "y"])],
      [.union (.var "x") (.var "y")], "R"⟩, .saturate "R"]
 
-def bareVariable : Program :=
-  [.decl "A" (ctor 0), .decl "F" (ctor 1), .decl "G" (ctor 1),
-   .action (.expr (.app "F" [atom "A"])),
-   .rule ⟨[.expr (.var "x"), .eq (.var "x") (.var "x"),
-     .expr (.app "F" [.var "x"])], [.expr (.app "G" [.var "x"])], "R"⟩,
-   .saturate "R"]
-
 def ruleChain : Program :=
   [.decl "A" (ctor 0), .decl "F" (ctor 1), .decl "G" (ctor 1),
    .rule ⟨[], [.expr (.app "F" [atom "A"])], "R"⟩,
@@ -54,8 +47,7 @@ def supportCase : Program :=
    .action (.expr (.app "F" [atom "A"])),
    .rule ⟨[], [.union (atom "A") (.app "G" [atom "B"])], "R"⟩]
 
-/-- Programs whose every retained row lifts to an accepted source certificate. Rust
-egglog does not parse a bare variable as a query fact, so `bareVariable` is not here. -/
+/-- Programs whose every retained row lifts to an accepted source certificate. -/
 def lifted : List (String × Program) :=
   [("nested-union", nestedUnion), ("nested-query", nestedQuery),
    ("equality-query", equalityQuery), ("rule-chain", ruleChain),

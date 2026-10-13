@@ -233,7 +233,9 @@ affect the constructor-only completeness theorem or the relational provenance pa
 
 The theorem retains `Program.EncodeDomain`: constructor declarations, no primitive
 or generated source names, consistent arities, supported queries, scoped and declared
-heads, and no literal unions. Arbitrary source merge functions remain outside its scope.
+heads, and no literal unions. A query fact is an application, as in egglog's syntax; a
+bare variable or literal fact is outside the domain and the source checker's fragment.
+Arbitrary source merge functions remain outside its scope.
 See [Source.lean](EgglogSemantics/Encoding/Source.lean) for the exact conditions.
 
 ## Validation

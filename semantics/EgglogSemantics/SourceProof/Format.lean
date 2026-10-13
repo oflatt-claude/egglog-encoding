@@ -14,7 +14,6 @@ inductive Reason where
   | trans (left right : Nat)
   | congr (base childIndex child : Nat)
   | rule (command : Nat) (subst : Env) (premises : List Nat)
-  | merge (function : FnName) (old new : Nat)
 
 structure Node where
   claim : Claim
