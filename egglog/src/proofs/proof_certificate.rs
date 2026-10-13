@@ -1,10 +1,10 @@
 //! Checking certificates produced outside this crate against a source program.
 //!
 //! The Lean model in `semantics/` lifts the provenance of its compiled programs back
-//! to source-level certificates: an ordered list of nodes, each stating an equality
-//! and justifying it by nodes before it. [`check_certificates`] replays every node
-//! through this crate's proof checker, so one certificate is judged by both
-//! implementations.
+//! to source-level proof trees, and exports each as a certificate: the tree's nodes
+//! in postorder with shared subtrees, each stating an equality and justifying it by
+//! nodes before it. [`check_certificates`] replays every node through this crate's
+//! proof checker, so one proof is judged by both implementations.
 
 use crate::{
     EGraph, TermDag, TermId,

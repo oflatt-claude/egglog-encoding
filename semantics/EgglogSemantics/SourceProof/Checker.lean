@@ -45,43 +45,45 @@ def ruleFacts (C : Context) (r : Rule) (σ : Env)
     actionsFacts C.sig σ r.actions
   else none
 
-def checkReason (P : Program) (C : Context) (prior : List Claim) (n : Node) : Bool :=
-  (match n.reason with
-  | .fiat => some (decide (n.claim ∈ C.globals))
-  | .symm i => do
-      let p ← prior[i]?
-      some (n.claim == (⟨p.rhs, p.lhs⟩ : Claim))
-  | .trans i j => do
-      let p ← prior[i]?
-      let q ← prior[j]?
-      some (p.rhs == q.lhs && n.claim == (⟨p.lhs, q.rhs⟩ : Claim))
-  | .congr i k j => do
-      let p ← prior[i]?
-      let q ← prior[j]?
-      let .app f args := p.rhs | none
-      let t ← args[k]?
-      some (t == q.lhs && valueOk C.sig q.lhs && valueOk C.sig q.rhs &&
-        n.claim == (⟨p.lhs, .app f (args.set k q.rhs)⟩ : Claim))
-  | .rule i σ ps => do
+/-- The root node, against the claims its subproofs state. -/
+def checkNode (P : Program) (C : Context) (pf : Proof) : Bool :=
+  atomOk C.sig pf.claim.lhs && atomOk C.sig pf.claim.rhs &&
+  match pf with
+  | .fiat c => decide (c ∈ C.globals)
+  | .symm c p => c == ⟨p.claim.rhs, p.claim.lhs⟩
+  | .trans c p q => p.claim.rhs == q.claim.lhs && c == ⟨p.claim.lhs, q.claim.rhs⟩
+  | .congr c p k q =>
+      match p.claim.rhs with
+      | .app f args =>
+          args[k]? == some q.claim.lhs && valueOk C.sig q.claim.lhs &&
+            valueOk C.sig q.claim.rhs &&
+            c == ⟨p.claim.lhs, .app f (args.set k q.claim.rhs)⟩
+      | .lit _ => false
+  | .rule c i σ ps => (do
       let .rule r ← P[i]? | none
-      let premises ← ps.mapM fun j => prior[j]?
-      let fs ← ruleFacts C r σ premises
-      some (decide (n.claim ∈ fs))).getD false
+      let fs ← ruleFacts C r σ (ps.map Proof.claim)
+      some (decide (c ∈ fs))).getD false
 
-def checkNode (P : Program) (C : Context) (prior : List Claim) (n : Node) : Bool :=
-  atomOk C.sig n.claim.lhs && atomOk C.sig n.claim.rhs &&
-    checkReason P C prior n
+mutual
 
-def checkNodes (P : Program) (C : Context) : List Claim → List Node → Option (List Claim)
-  | prior, [] => some prior
-  | prior, n :: ns =>
-      if checkNode P C prior n then checkNodes P C (prior ++ [n.claim]) ns else none
+/-- Every node is valid. -/
+def valid (P : Program) (C : Context) : Proof → Bool
+  | .fiat c => checkNode P C (.fiat c)
+  | .symm c p => valid P C p && checkNode P C (.symm c p)
+  | .trans c p q => valid P C p && valid P C q && checkNode P C (.trans c p q)
+  | .congr c p k q => valid P C p && valid P C q && checkNode P C (.congr c p k q)
+  | .rule c i σ ps => allValid P C ps && checkNode P C (.rule c i σ ps)
 
-/-- Validate every node before returning the selected claim. -/
-def check (P : Program) (cert : Certificate) : Option Claim := do
+def allValid (P : Program) (C : Context) : List Proof → Bool
+  | [] => true
+  | p :: ps => valid P C p && allValid P C ps
+
+end
+
+/-- The claim of a proof whose every node is valid. -/
+def check (P : Program) (pf : Proof) : Option Claim := do
   if !sourceOk P then none else do
     let C ← contextOf P
-    let claims ← checkNodes P C [] cert.nodes
-    claims[cert.root]?
+    if valid P C pf then some pf.claim else none
 
 end Egglog.SourceProof

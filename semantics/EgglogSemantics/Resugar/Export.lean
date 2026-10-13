@@ -2,9 +2,10 @@ import EgglogSemantics.Resugar.Fixtures
 import EgglogSemantics.Tests.Egg
 import Lean.Data.Json
 
-/-! Source certificates as JSON, for checking the same certificate with Rust egglog.
-A case carries its program as `.egg` source, with every rule named `lean-rule-<index>`
-after its command index, and one object per certificate with the Lean verdict. -/
+/-! Source proofs as JSON, for checking the same proof with Rust egglog. A case carries its
+program as `.egg` source, with every rule named `lean-rule-<index>` after its command index,
+and one object per proof with the Lean verdict. A proof tree is written as its nodes in
+postorder, sharing repeated subtrees, so every reference is to an earlier node. -/
 
 namespace Egglog.Resugar.Export
 
@@ -26,22 +27,57 @@ end
 
 def ruleName (i : Nat) : String := "lean-rule-" ++ toString i
 
-def reason : SourceProof.Reason → Json
-  | .fiat => Json.mkObj [("kind", "fiat")]
-  | .symm i => Json.mkObj [("kind", "symm"), ("proof", toJson i)]
-  | .trans i j => Json.mkObj [("kind", "trans"), ("left", toJson i), ("right", toJson j)]
-  | .congr i k j => Json.mkObj [("kind", "congr"), ("base", toJson i),
-      ("index", toJson k), ("child", toJson j)]
-  | .rule i σ ps => Json.mkObj [("kind", "rule"), ("rule", ruleName i),
+structure Flat where
+  nodes : Array Json := #[]
+  shared : List (SourceProof.Proof × Nat) := []
+
+/-- The node's index, reusing an identical subtree already written. -/
+def emit (pf : SourceProof.Proof) (reason : Json) : StateM Flat Nat := do
+  let s ← get
+  match s.shared.find? (fun kv => kv.1 == pf) with
+  | some kv => pure kv.2
+  | none =>
+    let i := s.nodes.size
+    let n := Json.mkObj
+      [("lhs", term pf.claim.lhs), ("rhs", term pf.claim.rhs), ("reason", reason)]
+    set (⟨s.nodes.push n, (pf, i) :: s.shared⟩ : Flat)
+    pure i
+
+mutual
+
+def flatten : SourceProof.Proof → StateM Flat Nat
+  | p@(.fiat _) => emit p (Json.mkObj [("kind", "fiat")])
+  | p@(.symm _ q) => do
+    let i ← flatten q
+    emit p (Json.mkObj [("kind", "symm"), ("proof", toJson i)])
+  | p@(.trans _ q r) => do
+    let i ← flatten q
+    let j ← flatten r
+    emit p (Json.mkObj [("kind", "trans"), ("left", toJson i), ("right", toJson j)])
+  | p@(.congr _ q k r) => do
+    let i ← flatten q
+    let j ← flatten r
+    emit p (Json.mkObj [("kind", "congr"), ("base", toJson i), ("index", toJson k),
+      ("child", toJson j)])
+  | p@(.rule _ i σ qs) => do
+    let is ← flattenAll qs
+    emit p (Json.mkObj [("kind", "rule"), ("rule", ruleName i),
       ("subst", .arr (σ.map fun bnd => .arr #[toJson bnd.1, term bnd.2]).toArray),
-      ("premises", toJson ps)]
+      ("premises", toJson is)])
 
-def node (n : SourceProof.Node) : Json := Json.mkObj
-  [("lhs", term n.claim.lhs), ("rhs", term n.claim.rhs), ("reason", reason n.reason)]
+def flattenAll : List SourceProof.Proof → StateM Flat (List Nat)
+  | [] => pure []
+  | q :: qs => do
+    let i ← flatten q
+    let is ← flattenAll qs
+    pure (i :: is)
 
-def certificate (P : Program) (c : SourceProof.Certificate) : Json := Json.mkObj
-  [("nodes", .arr (c.nodes.map node).toArray), ("root", toJson c.root),
-   ("accepted", toJson (SourceProof.check P c).isSome)]
+end
+
+def certificate (P : Program) (pf : SourceProof.Proof) : Json :=
+  let (root, flat) := (flatten pf).run {}
+  Json.mkObj [("nodes", .arr flat.nodes), ("root", toJson root),
+    ("accepted", toJson (SourceProof.check P pf).isSome)]
 
 /-- The program as `.egg` source with rules named by command index. -/
 def program (P : Program) : Option String := do
@@ -57,7 +93,7 @@ def program (P : Program) : Option String := do
     some (String.intercalate "\n" (P.eggHeader :: P.rulesetDecls ++
       commands.filter (· != "")))
 
-def caseJson (name : String) (P : Program) (cs : List SourceProof.Certificate) :
+def caseJson (name : String) (P : Program) (cs : List SourceProof.Proof) :
     Option Json := do
   let source ← program P
   some (Json.mkObj [("case", name), ("program", source),

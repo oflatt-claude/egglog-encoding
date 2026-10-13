@@ -84,26 +84,24 @@ private def partialIdentity : Program :=
 private def bounds (a b : Int) : Term :=
   .app "Bounds" [term "Key", .lit (.int a), .lit (.int b)]
 
-private def inputs : List Node :=
-  [⟨bounds 2 3, .global 3⟩, ⟨bounds 4 6, .global 4⟩]
+private def old : Proof := .global (bounds 2 3) 3
+private def new : Proof := .global (bounds 4 6) 4
 
-#guard (check tables ⟨inputs ++ [⟨bounds 2 6, .merge "Bounds" 0 1⟩], 2⟩).isSome
-#guard (check tables ⟨inputs ++
-  [⟨.app "Audit" [.lit (.int 2), .lit (.int 4), .lit (.int 6)], .merge "Bounds" 0 1⟩], 2⟩).isSome
-#guard (check tables ⟨inputs ++ [⟨bounds 4 3, .merge "Bounds" 0 1⟩], 2⟩).isNone
-#guard (check tables ⟨inputs ++ [⟨bounds 2 6, .merge "Audit" 0 1⟩], 2⟩).isNone
-#guard (check tables ⟨inputs ++ [⟨bounds 2 6, .merge "Bounds" 0 0⟩], 2⟩).isNone
-#guard (check tables ⟨inputs ++ [⟨bounds 2 6, .merge "Bounds" 0 2⟩], 2⟩).isNone
+#guard (check tables (.merge (bounds 2 6) "Bounds" old new)).isSome
+#guard (check tables
+  (.merge (.app "Audit" [.lit (.int 2), .lit (.int 4), .lit (.int 6)]) "Bounds" old new)).isSome
+#guard (check tables (.merge (bounds 4 3) "Bounds" old new)).isNone
+#guard (check tables (.merge (bounds 2 6) "Audit" old new)).isNone
+#guard (check tables (.merge (bounds 2 6) "Bounds" old old)).isNone
 
 private def distinctKeys : Program :=
   [.decl "T" ⟨1, 1, some (.merge [] [.var "new"]), none⟩,
    .action (.expr (.app "T" [int 1, int 3])),
    .action (.expr (.app "T" [int 2, int 4]))]
 
-#guard (check distinctKeys ⟨[
-  ⟨.app "T" [.lit (.int 1), .lit (.int 3)], .global 1⟩,
-  ⟨.app "T" [.lit (.int 2), .lit (.int 4)], .global 2⟩,
-  ⟨.app "T" [.lit (.int 1), .lit (.int 4)], .merge "T" 0 1⟩], 2⟩).isNone
+#guard (check distinctKeys (.merge (.app "T" [.lit (.int 1), .lit (.int 4)]) "T"
+  (.global (.app "T" [.lit (.int 1), .lit (.int 3)]) 1)
+  (.global (.app "T" [.lit (.int 2), .lit (.int 4)]) 2))).isNone
 
 private def table (n : Int) : Term := .app "T" [.lit (.int n)]
 private def tProgram : Program :=
@@ -111,22 +109,19 @@ private def tProgram : Program :=
    .action (.expr (.app "T" [int 3])),
    .rule ⟨[.expr (.app "T" [.var "x"])], [.expr (.app "T" [int 2])], "R"⟩,
    .saturate "R"]
+private def stored : Proof := .global (table 3) 1
 
 #guard validates tProgram
-#guard check tProgram ⟨[⟨table 3, .global 1⟩], 0⟩ == some (table 3)
-#guard (check tProgram ⟨[⟨table 2, .global 1⟩], 0⟩).isNone
-#guard (check tProgram ⟨[⟨table 2, .global 2⟩], 0⟩).isNone
-#guard (check tProgram ⟨[⟨table 3, .subterm 0⟩], 0⟩).isNone
-#guard (check tProgram ⟨[⟨table 3, .global 1⟩, ⟨table 2, .global 1⟩], 0⟩).isNone
-#guard (check tProgram ⟨[⟨table 3, .global 1⟩], 1⟩).isNone
-#guard (check tProgram ⟨[⟨table 3, .global 1⟩,
-  ⟨table 2, .rule 2 [("x", .lit (.int 3))] [0]⟩], 1⟩).isSome
-#guard (check tProgram ⟨[⟨table 3, .global 1⟩,
-  ⟨table 2, .rule 2 [("x", .lit (.int 2))] [0]⟩], 1⟩).isNone
-#guard (check tProgram ⟨[⟨table 3, .global 1⟩,
-  ⟨table 2, .rule 2 [] [0]⟩], 1⟩).isNone
-#guard (check tProgram ⟨[⟨table 3, .global 1⟩,
-  ⟨table 2, .rule 2 [("x", .lit (.int 3))] []⟩], 1⟩).isNone
+#guard check tProgram stored == some (table 3)
+#guard (check tProgram (.global (table 2) 1)).isNone
+#guard (check tProgram (.global (table 2) 2)).isNone
+#guard (check tProgram (.subterm (table 2) stored)).isNone
+-- Every node is checked, not only the root.
+#guard (check tProgram (.subterm (table 3) (.global (table 2) 1))).isNone
+#guard (check tProgram (.rule (table 2) 2 [("x", .lit (.int 3))] [stored])).isSome
+#guard (check tProgram (.rule (table 2) 2 [("x", .lit (.int 2))] [stored])).isNone
+#guard (check tProgram (.rule (table 2) 2 [] [stored])).isNone
+#guard (check tProgram (.rule (table 2) 2 [("x", .lit (.int 3))] [])).isNone
 #guard (extract tProgram (.app (globalName 2) [])).isNone
 #guard (extract tProgram (.app (globalName 1) [term "Missing"])).isNone
 #guard (extract tProgram (.app subtermName [table 2, .app (globalName 1) []])).isNone

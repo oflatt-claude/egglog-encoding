@@ -24,7 +24,7 @@ its refinement contracts, and the limits of the model.
 The congruence compiler translates constructor programs into explicit union-find and view
 tables. It handles query flattening and rebuilding, with one id output per table and no
 proof annotations. A separate provenance pass adds proof columns for globals, rule firings,
-and function merges, and proof lifting turns its certificates into source certificates
+and function merges, and proof lifting turns its proofs into source proofs
 that both the Lean and Rust checkers accept.
 
 The congruence pass has a proved end-to-end correspondence theorem for the constructor
@@ -44,9 +44,9 @@ boundaries.
 | `EgglogSemantics/Impl/` | Finite reference interpreters and front-end checks |
 | `EgglogSemantics/Proofs/` | Interpreter refinement, preservation, totality, and counterexamples |
 | `EgglogSemantics/Congruence/` | Congruence compiler, completeness proof, and regressions |
-| `EgglogSemantics/SourceProof/` | Source certificate checker, soundness, and regressions |
+| `EgglogSemantics/SourceProof/` | Source proof checker, soundness, and regressions |
 | `EgglogSemantics/Provenance/` | Function provenance instrumentation, extraction, checker, and soundness |
-| `EgglogSemantics/Resugar/` | Proof lifting to source certificates, soundness, fixtures, and JSON export |
+| `EgglogSemantics/Resugar/` | Proof lifting to source proofs, soundness, fixtures, and JSON export |
 | `EgglogSemantics/Encoding/` | Source-fragment analysis and generated names shared by the compiler and its proofs |
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |

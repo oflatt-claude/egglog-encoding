@@ -1,16 +1,16 @@
 # Proof checkers
 
-[SourceProof.check](EgglogSemantics/SourceProof/Checker.lean) validates certificates
-against the original program, unions included, with explicit claims and references to
-earlier nodes. It is the checker that corresponds to Rust's. It accepts constructor
-programs without primitive applications whose query facts are applications, as in
-egglog. Function declarations are rejected; functions are handled in the separate
-relational provenance checker.
+[SourceProof.check](EgglogSemantics/SourceProof/Checker.lean) validates proof trees
+against the original program, unions included. Every node states its claim, and the
+checker validates each node against the claims of its subproofs. It is the checker that
+corresponds to Rust's. It accepts constructor programs without primitive applications
+whose query facts are applications, as in egglog. Function declarations are rejected;
+functions are handled in the separate relational provenance checker.
 
 `Fiat` facts come only from original global actions. A rule proof identifies the original
 command and supplies an exact substitution and one proof per original query conjunct, in
 order. The checker does not flatten the query. Congruence requires a base proof for the
-enclosing application and a proof for the replaced child. Invalid references, substitutions,
+enclosing application and a proof for the replaced child. Invalid substitutions,
 endpoints, and head conclusions are rejected.
 
 [Soundness.lean](EgglogSemantics/SourceProof/Soundness.lean) proves `check_supported`:
@@ -20,9 +20,9 @@ Both theorems assume that `db` is reached by the original program, is well forme
 is saturated for every ruleset. They do not assume validity of intermediate claims.
 
 The [regressions](EgglogSemantics/SourceProof/Tests.lean) cover missing existence,
-rule-created terms, nested queries, premise ordering, malformed substitutions, invalid
-references, and anchored congruence. The [fixtures](EgglogSemantics/Resugar/Fixtures.lean)
-hold the certificates that the Lean and Rust checkers must judge alike.
+rule-created terms, nested queries, premise ordering, malformed substitutions, wrong
+claims, and anchored congruence. The [fixtures](EgglogSemantics/Resugar/Fixtures.lean)
+hold the proofs that the Lean and Rust checkers must judge alike.
 
 ## Why `Fiat` is restricted
 
@@ -42,23 +42,23 @@ represent `Missing`.
 
 ## Relational provenance
 
-[Provenance.check](EgglogSemantics/Provenance/Checker.lean) checks facts against the
-uninstrumented relational program, which is the compiled program and therefore has no
-`union`. It is an intermediate step on the way to a source certificate, not the checker
-that corresponds to Rust's. It accepts original globals, rule consequences, merge bodies
-and results, and subterms of established facts. It has no equality axioms. Merge inputs
-must name established entries at the same structural key, with conflicting output
-columns according to the original declaration.
+[Provenance.check](EgglogSemantics/Provenance/Checker.lean) checks proof trees of facts
+against the uninstrumented relational program, which is the compiled program and
+therefore has no `union`. It is an intermediate step on the way to a source proof, not
+the checker that corresponds to Rust's. It accepts original globals, rule consequences,
+merge bodies and results, and subterms of established facts. It has no equality axioms.
+Merge inputs must be established entries at the same structural key, with conflicting
+output columns according to the original declaration.
 
 [Provenance.check_sound](EgglogSemantics/Provenance/Soundness.lean) proves membership
 in any well-formed, reached state saturated for the program's rules and merges. Extraction
-decodes generated proof constructors into these explicit certificates and checks them.
-This intermediate certificate still mentions generated tables; it is not a source proof.
+decodes generated proof constructors into these trees and checks them. This intermediate
+proof still mentions generated tables; it is not a source proof.
 
 ## Rust compatibility
 
 The instrumentation pass records actual globals, rule firings, and merge derivations, and
-[lifting](EgglogSemantics/Resugar/Lift.lean) reconstructs source-level certificates with
+[lifting](EgglogSemantics/Resugar/Lift.lean) reconstructs source-level proofs with
 explicit claims, substitutions, and existence evidence, following the same recursive
 order as query flattening.
 
@@ -67,12 +67,12 @@ eq-sort constructor reflexivity as `Fiat`. Its primitive-value reflexivity case 
 restricted, and its [proof format](../egglog/src/proofs/proof_format.rs) carries explicit
 propositions and anchored congruence. Rule-created constructions have rule provenance.
 
-The same lifted certificates are checked in Lean and Rust: `Resugar.Export` writes them
-as JSON and [proof_certificate.rs](../egglog/src/proofs/proof_certificate.rs) replays
-them through Rust's checker. Running the two encoders separately on the same program
-would not establish that property. Rust's checker validates a proof by its references,
-so the bridge itself rejects a certificate whose node refers to a later node, as the Lean
-checker does.
+The same lifted proofs are checked in Lean and Rust: `Resugar.Export` writes them as
+JSON certificates and [proof_certificate.rs](../egglog/src/proofs/proof_certificate.rs)
+replays them through Rust's checker. Running the two encoders separately on the same
+program would not establish that property. A certificate lists the tree's nodes in
+postorder with repeated subtrees shared, so every reference is to an earlier node; the
+bridge rejects any other reference, since Rust's checker follows references recursively.
 
 ## Source merge inputs
 

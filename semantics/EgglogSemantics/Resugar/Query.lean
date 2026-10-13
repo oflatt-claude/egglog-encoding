@@ -2,73 +2,65 @@ import EgglogSemantics.Resugar.Builder
 
 namespace Egglog.Resugar
 
-open SourceProof (Context)
+open SourceProof (Context Proof)
 
-structure QueryState where
-  builder : Builder
-  remaining : List Nat
-
-def replaceChildren (P : Program) (C : Context) (children : List Nat)
-    (parent : Nat) (b : Builder) : Option (Nat × Builder) :=
-  children.zipIdx.foldlM (fun state child =>
-    state.2.congr P C state.1 child.2 child.1) (parent, b)
+def replaceChildren (P : Program) (C : Context) (children : List Proof)
+    (parent : Proof) : Option Proof :=
+  children.zipIdx.foldlM (fun acc child => congr P C acc child.2 child.1) parent
 
 mutual
 
-/-- The compiler's left-to-right postorder, repeated on the original expression. -/
-def queryExpr (P : Program) (C : Context) (σ : Env) (allPremises : List Nat) :
-    Expr → QueryState → Option (Nat × QueryState)
-  | .app f args, state => do
-    let (children, next) ← queryArgs P C σ allPremises args state
-    let parent :: rest := next.remaining | none
-    let claim ← next.builder.claims[parent]?
-    let ids ← children.mapM fun i => (next.builder.claims[i]?).map SourceProof.Claim.lhs
-    if claim.rhs != .app f ids then none else do
-      let (result, b) ← replaceChildren P C children parent next.builder
-      some (result, ⟨b, rest⟩)
-  | e, state => do
+/-- The compiler's left-to-right postorder, repeated on the original expression. The
+unconsumed premise proofs are threaded through in that order. -/
+def queryExpr (P : Program) (C : Context) (σ : Env) (allPremises : List Proof) :
+    Expr → List Proof → Option (Proof × List Proof)
+  | .app f args, remaining => do
+    let (children, rest) ← queryArgs P C σ allPremises args remaining
+    let parent :: rest := rest | none
+    if parent.claim.rhs != .app f (children.map (·.claim.lhs)) then none else do
+      let result ← replaceChildren P C children parent
+      some (result, rest)
+  | e, remaining => do
     let t ← e.eval C.sig σ
-    let (i, b) ← witness P C state.builder t allPremises
-    some (i, { state with builder := b })
+    let p ← witness P C t allPremises
+    some (p, remaining)
 
-def queryArgs (P : Program) (C : Context) (σ : Env) (allPremises : List Nat) :
-    List Expr → QueryState → Option (List Nat × QueryState)
-  | [], state => some ([], state)
-  | e :: es, state => do
-    let (i, next) ← queryExpr P C σ allPremises e state
-    let (is, last) ← queryArgs P C σ allPremises es next
-    some (i :: is, last)
+def queryArgs (P : Program) (C : Context) (σ : Env) (allPremises : List Proof) :
+    List Expr → List Proof → Option (List Proof × List Proof)
+  | [], remaining => some ([], remaining)
+  | e :: es, remaining => do
+    let (p, next) ← queryExpr P C σ allPremises e remaining
+    let (ps, last) ← queryArgs P C σ allPremises es next
+    some (p :: ps, last)
 
 end
 
-def queryPattern (P : Program) (C : Context) (σ : Env) (allPremises : List Nat)
-    (p : Pattern) (state : QueryState) : Option (Nat × QueryState) := do
+def queryPattern (P : Program) (C : Context) (σ : Env) (allPremises : List Proof)
+    (p : Pattern) (remaining : List Proof) : Option (Proof × List Proof) := do
   match p with
-  | .expr e => queryExpr P C σ allPremises e state
+  | .expr e => queryExpr P C σ allPremises e remaining
   | .eq lhs rhs =>
-    let (i, next) ← queryExpr P C σ allPremises lhs state
-    let (j, last) ← queryExpr P C σ allPremises rhs next
-    let equality :: rest := last.remaining | none
-    let a ← last.builder.claims[i]?
-    let z ← last.builder.claims[j]?
-    let eq ← last.builder.claims[equality]?
-    if eq != (⟨a.lhs, z.lhs⟩ : SourceProof.Claim) then none else do
-      let (rev, b) ← last.builder.symm P C i
-      let (left, b) ← b.trans P C rev equality
-      let (result, b) ← b.trans P C left j
-      some (result, ⟨b, rest⟩)
+    let (a, next) ← queryExpr P C σ allPremises lhs remaining
+    let (z, last) ← queryExpr P C σ allPremises rhs next
+    let equality :: rest := last | none
+    if equality.claim != (⟨a.claim.lhs, z.claim.lhs⟩ : SourceProof.Claim) then none else do
+      let rev ← symm P C a
+      let left ← trans P C rev equality
+      let result ← trans P C left z
+      some (result, rest)
 
-def queryPatterns (P : Program) (C : Context) (σ : Env) (allPremises : List Nat) :
-    Query → QueryState → Option (List Nat × QueryState)
-  | [], state => some ([], state)
-  | p :: ps, state => do
-    let (i, next) ← queryPattern P C σ allPremises p state
-    let (is, last) ← queryPatterns P C σ allPremises ps next
-    some (i :: is, last)
+def queryPatterns (P : Program) (C : Context) (σ : Env) (allPremises : List Proof) :
+    Query → List Proof → Option (List Proof × List Proof)
+  | [], remaining => some ([], remaining)
+  | p :: ps, remaining => do
+    let (a, next) ← queryPattern P C σ allPremises p remaining
+    let (as, last) ← queryPatterns P C σ allPremises ps next
+    some (a :: as, last)
 
-def query (P : Program) (C : Context) (σ : Env) (q : Query) (premises : List Nat)
-    (b : Builder) : Option (List Nat × Builder) := do
-  let (ps, state) ← queryPatterns P C σ premises q ⟨b, premises⟩
-  if state.remaining.isEmpty then some (ps, state.builder) else none
+/-- One source premise proof per original query conjunct, consuming every lifted premise. -/
+def query (P : Program) (C : Context) (σ : Env) (q : Query) (premises : List Proof) :
+    Option (List Proof) := do
+  let (ps, remaining) ← queryPatterns P C σ premises q premises
+  if remaining.isEmpty then some ps else none
 
 end Egglog.Resugar

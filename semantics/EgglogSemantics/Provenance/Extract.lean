@@ -20,17 +20,9 @@ def proofKinds (P : Program) : List (FnName × ProofKind) :=
     | .rule r => r.actions.zipIdx.map fun aj => (ruleName ci.2 aj.2, .rule ci.2 aj.2)
     | _ => []
 
-structure Builder where
-  nodes : List Node := []
-  cache : List (Term × Nat) := []
-
-def Builder.facts (b : Builder) : List Term := b.nodes.map Node.fact
-
-def Builder.add (P : Program) (sig : Signature) (b : Builder) (pf : Term)
-    (fact : Term) (reason : Reason) : Option (Nat × Builder) := do
-  let node : Node := ⟨fact, reason⟩
-  if !SourceProof.atomOk sig fact || !checkReason P sig b.facts node then none else
-    some (b.nodes.length, ⟨b.nodes ++ [node], (pf, b.nodes.length) :: b.cache⟩)
+/-- Validate a node as it is decoded. -/
+def node (P : Program) (sig : Signature) (pf : Proof) : Option Proof :=
+  if SourceProof.atomOk sig pf.fact && checkReason P sig pf then some pf else none
 
 def actionRoot (sig : Signature) (σ : Env) : Action → Option Term
   | .expr e => e.evalAtom sig σ
@@ -45,65 +37,94 @@ def mergeBodyRoot (sig : Signature) (f : FnName) (j : Nat)
   let a ← body[j]?
   actionRoot sig (mergeEnv (oc.drop d.arity) (nc.drop d.arity)) a
 
-/-- Decode proof constructors against the uninstrumented program, sharing repeated nodes. -/
-def decode (P : Program) (sig : Signature) (kinds : List (FnName × ProofKind)) :
-    Nat → Term → Builder → Option (Nat × Builder)
-  | 0, _, _ => none
-  | fuel + 1, pf, b => do
-    if let some hit := b.cache.find? (fun kv => kv.1 == pf) then some (hit.2, b) else do
-      let .app f args := pf | none
-      let (_, kind) ← kinds.find? (fun kv => kv.1 == f)
-      match kind with
-      | .global i =>
-        if !args.isEmpty then none else do
-          let .action a ← P[i]? | none
-          let fact ← actionRoot sig [] a
-          b.add P sig pf fact (.global i)
-      | .rule i j => do
-        let .rule r ← P[i]? | none
-        if args.length != r.query.vars.length + r.query.length then none else do
-          let σ := r.query.vars.zip (args.take r.query.vars.length)
-          let (ps, b') ← (args.drop r.query.vars.length).foldlM
-            (fun (state : List Nat × Builder) p => do
-              let (id, next) ← decode P sig kinds fuel p state.2
-              some (state.1 ++ [id], next)) ([], b)
-          let a ← r.actions[j]?
-          let fact ← actionRoot sig σ a
-          b'.add P sig pf fact (.rule i σ ps)
-      | .body fn _ | .result fn => do
-        let [op, np] := args | none
-        let (oi, b') ← decode P sig kinds fuel op b
-        let (ni, b'') ← decode P sig kinds fuel np b'
-        let old ← b''.facts[oi]?
-        let new ← b''.facts[ni]?
-        let fs ← mergeFacts sig fn old new
-        let fact ← match kind with
-          | .body _ j => mergeBodyRoot sig fn j old new
-          | _ => some fs.result
-        b''.add P sig pf fact (.merge fn oi ni)
-      | .subterm => do
-        let [fact, parent] := args | none
-        let (i, b') ← decode P sig kinds fuel parent b
-        b'.add P sig pf fact (.subterm i)
+private theorem sizeOf_tail_le (ts : List Term) : sizeOf ts.tail ≤ sizeOf ts := by
+  cases ts with
+  | nil => simp
+  | cons t ts => simp only [List.tail_cons, List.cons.sizeOf_spec]; omega
 
-def extract (P : Program) (pf : Term) (fuel : Nat := 1024) : Option Certificate := do
+private theorem sizeOf_drop_le (n : Nat) (ts : List Term) : sizeOf (ts.drop n) ≤ sizeOf ts := by
+  induction ts generalizing n with
+  | nil => simp
+  | cons t ts ih =>
+    cases n with
+    | zero => simp
+    | succ n =>
+      have := ih n
+      simp only [List.drop_succ_cons, List.cons.sizeOf_spec]
+      omega
+
+mutual
+
+/-- Decode a proof constructor against the uninstrumented program. -/
+def decode (P : Program) (sig : Signature) (kinds : List (FnName × ProofKind)) :
+    Term → Option Proof
+  | .lit _ => none
+  | .app f args => do
+    let (_, kind) ← kinds.find? (fun kv => kv.1 == f)
+    match kind with
+    | .global i =>
+      if !args.isEmpty then none else do
+        let .action a ← P[i]? | none
+        let fact ← actionRoot sig [] a
+        node P sig (.global fact i)
+    | .rule i j => do
+      let .rule r ← P[i]? | none
+      let n := r.query.vars.length
+      if args.length != n + r.query.length then none else do
+        let σ := r.query.vars.zip (args.take n)
+        let ps ← decodeAll P sig kinds (args.drop n)
+        let a ← r.actions[j]?
+        let fact ← actionRoot sig σ a
+        node P sig (.rule fact i σ ps)
+    | .body fn j => do
+      let [old, new] ← decodeAll P sig kinds args | none
+      let fact ← mergeBodyRoot sig fn j old.fact new.fact
+      node P sig (.merge fact fn old new)
+    | .result fn => do
+      let [old, new] ← decodeAll P sig kinds args | none
+      let fs ← mergeFacts sig fn old.fact new.fact
+      node P sig (.merge fs.result fn old new)
+    | .subterm => do
+      let fact ← args[0]?
+      let [p] ← decodeAll P sig kinds args.tail | none
+      node P sig (.subterm fact p)
+termination_by t => sizeOf t
+decreasing_by all_goals
+  simp_wf
+  all_goals first
+    | omega
+    | exact Nat.lt_of_le_of_lt (sizeOf_drop_le _ _) (by omega)
+    | exact Nat.lt_of_le_of_lt (sizeOf_tail_le _) (by omega)
+
+def decodeAll (P : Program) (sig : Signature) (kinds : List (FnName × ProofKind)) :
+    List Term → Option (List Proof)
+  | [] => some []
+  | t :: ts => do
+    let p ← decode P sig kinds t
+    let ps ← decodeAll P sig kinds ts
+    some (p :: ps)
+termination_by ts => sizeOf ts
+decreasing_by all_goals (simp_wf; omega)
+
+end
+
+def extract (P : Program) (pf : Term) : Option Proof := do
   let C ← SourceProof.contextOf P
   if !programOk P C.sig then none else do
-    let (root, b) ← decode P C.sig (proofKinds P) fuel pf {}
-    let cert : Certificate := ⟨b.nodes, root⟩
-    if (check P cert).isSome then some cert else none
+    let p ← decode P C.sig (proofKinds P) pf
+    if (check P p).isSome then some p else none
 
 /-- The selected proof must establish exactly the row's original data columns. -/
-def extractRow (P : Program) (r : Row) (fuel : Nat := 1024) : Option Certificate := do
+def extractRow (P : Program) (r : Row) : Option Proof := do
   let C ← SourceProof.contextOf P
   let d ← C.sig r.fn
   if d.merge.isNone || r.args.length != d.arity || r.out.length != d.outArity + 1 then
     none
   else do
     let pf ← r.out[d.outArity]?
-    let cert ← extract P pf fuel
-    if check P cert == some (.app r.fn (r.args ++ r.out.take d.outArity)) then
-      some cert
+    let p ← extract P pf
+    if check P p == some (.app r.fn (r.args ++ r.out.take d.outArity)) then
+      some p
     else none
 
 def eraseRow (sig : Signature) (r : Row) : Option Row := do

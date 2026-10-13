@@ -3,8 +3,8 @@ import EgglogSemantics.SourceProof.Soundness
 
 namespace Egglog.Resugar
 
-theorem lift_checked {P : Program} {C : SourceProof.Context} {input : Provenance.Certificate}
-    {output : SourceProof.Certificate} {fact : Term} {claim : SourceProof.Claim}
+theorem lift_checked {P : Program} {C : SourceProof.Context} {input : Provenance.Proof}
+    {output : SourceProof.Proof} {fact : Term} {claim : SourceProof.Claim}
     (hC : SourceProof.contextOf P = some C)
     (hf : Provenance.check (Congruence.encode P) input = some fact)
     (hc : factClaim P C fact = some claim) (h : lift P input = some output) :
@@ -15,17 +15,16 @@ theorem lift_checked {P : Program} {C : SourceProof.Context} {input : Provenance
   · have hf' : Provenance.check ((Congruence.compile P).map Congruence.Command.command)
         input = some fact := hf
     simp only [hC, hf', hc, Option.bind_eq_bind, Option.bind_some] at h
-    obtain ⟨state, _, hstate⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨root, _, hroot⟩ := Option.bind_eq_some_iff.mp hstate
-    split at hroot
+    obtain ⟨result, _, hresult⟩ := Option.bind_eq_some_iff.mp h
+    split at hresult
     · rename_i hcheck
-      cases Option.some.inj hroot
+      cases Option.some.inj hresult
       simpa only [beq_iff_eq] using hcheck
     · contradiction
 
 /-- Lifting establishes the mapped claim against the original source program. -/
 theorem lift_supported {P : Program} {C : SourceProof.Context} {db : Database}
-    {input : Provenance.Certificate} {output : SourceProof.Certificate}
+    {input : Provenance.Proof} {output : SourceProof.Proof}
     {fact : Term} {claim : SourceProof.Claim}
     (hs : ProgramStep Database.empty P db) (hw : db.WF)
     (hclosed : ∀ R, RunSaturated R db)
@@ -36,7 +35,7 @@ theorem lift_supported {P : Program} {C : SourceProof.Context} {db : Database}
   SourceProof.check_supported hs hw hclosed (lift_checked hC hf hc h)
 
 theorem lift_sound {P : Program} {C : SourceProof.Context} {db : Database}
-    {input : Provenance.Certificate} {output : SourceProof.Certificate}
+    {input : Provenance.Proof} {output : SourceProof.Proof}
     {fact : Term} {claim : SourceProof.Claim}
     (hs : ProgramStep Database.empty P db) (hw : db.WF)
     (hclosed : ∀ R, RunSaturated R db)

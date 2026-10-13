@@ -73,46 +73,48 @@ def mergeFacts (sig : Signature) (f : FnName) (old new : Term) : Option MergeFac
     else none
   else none
 
-def checkReason (P : Program) (sig : Signature) (prior : List Term) (n : Node) : Bool :=
-  (match n.reason with
-  | .global i => do
+/-- The root node's justification, against the facts its subproofs state. -/
+def checkReason (P : Program) (sig : Signature) : Proof → Bool
+  | .global t i => (do
       let .action a ← P[i]? | none
       let facts ← actionFacts sig [] a
-      some (decide (n.fact ∈ facts))
-  | .rule i σ ps => do
+      some (decide (t ∈ facts))).getD false
+  | .rule t i σ ps => (do
       let .rule r ← P[i]? | none
-      let premises ← ps.mapM fun j => prior[j]?
-      let facts ← ruleFacts sig r σ premises
-      some (decide (n.fact ∈ facts))
-  | .merge f i j => do
-      let old ← prior[i]?
-      let new ← prior[j]?
-      let facts ← mergeFacts sig f old new
-      some (decide (n.fact ∈ facts.body ∨ n.fact ∈ facts.result.subtermList))
-  | .subterm i => do
-      let parent ← prior[i]?
-      some (decide (n.fact ∈ parent.subtermList))).getD false
+      let facts ← ruleFacts sig r σ (ps.map Proof.fact)
+      some (decide (t ∈ facts))).getD false
+  | .merge t f old new => (do
+      let facts ← mergeFacts sig f old.fact new.fact
+      some (decide (t ∈ facts.body ∨ t ∈ facts.result.subtermList))).getD false
+  | .subterm t parent => decide (t ∈ parent.fact.subtermList)
 
-def checkNode (P : Program) (C : SourceProof.Context) (prior : List Term) (n : Node) : Bool :=
-  SourceProof.atomOk C.sig n.fact && checkReason P C.sig prior n &&
-    match n.reason with
-    | .global _ => decide ((⟨n.fact, n.fact⟩ : SourceProof.Claim) ∈ C.globals)
+def checkNode (P : Program) (C : SourceProof.Context) (pf : Proof) : Bool :=
+  SourceProof.atomOk C.sig pf.fact && checkReason P C.sig pf &&
+    match pf with
+    | .global t _ => decide ((⟨t, t⟩ : SourceProof.Claim) ∈ C.globals)
     | _ => true
 
-def checkNodes (P : Program) (C : SourceProof.Context) : List Term → List Node → Option (List Term)
-  | prior, [] => some prior
-  | prior, n :: ns =>
-      if checkNode P C prior n then
-        checkNodes P C (prior ++ [n.fact]) ns
-      else none
+mutual
 
-/-- Check a certificate about the compiled relational program, which has no `union`.
-This is an intermediate step: source certificates are checked by `SourceProof.check`
-against the original program, unions included. -/
-def check (P : Program) (cert : Certificate) : Option Term := do
+/-- Every node is valid. -/
+def valid (P : Program) (C : SourceProof.Context) : Proof → Bool
+  | .global t i => checkNode P C (.global t i)
+  | .rule t i σ ps => allValid P C ps && checkNode P C (.rule t i σ ps)
+  | .merge t f p q => valid P C p && valid P C q && checkNode P C (.merge t f p q)
+  | .subterm t p => valid P C p && checkNode P C (.subterm t p)
+
+def allValid (P : Program) (C : SourceProof.Context) : List Proof → Bool
+  | [] => true
+  | p :: ps => valid P C p && allValid P C ps
+
+end
+
+/-- Check a proof about the compiled relational program, which has no `union`. This is an
+intermediate step: source proofs are checked by `SourceProof.check` against the original
+program, unions included. -/
+def check (P : Program) (pf : Proof) : Option Term := do
   if !unionFree P then none else do
     let C ← SourceProof.contextOf P
-    let facts ← checkNodes P C [] cert.nodes
-    facts[cert.root]?
+    if valid P C pf then some pf.fact else none
 
 end Egglog.Provenance

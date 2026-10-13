@@ -142,18 +142,18 @@ it retains that input's proof; a new result records both inputs. Body facts alwa
 record the merge justification. Proof metadata therefore cannot trigger a data merge
 or cause an otherwise stable rule to accumulate longer resident proofs.
 
-Extraction produces a shared certificate with explicit facts, then checks it against
-the uninstrumented relational program, which has no `union`. Equality premises use
-checked subterms of table facts as existence witnesses; no auxiliary existence relation
-is needed. These are intermediate certificates, which lifting translates into source
+Extraction decodes a proof constructor into a proof tree with explicit facts, then checks
+it against the uninstrumented relational program, which has no `union`. Equality premises
+use checked subterms of table facts as existence witnesses; no auxiliary existence
+relation is needed. These are intermediate proofs, which lifting translates into source
 proofs checked against the original program.
 
 ## Proof lifting
 
-`Resugar.lift` checks a relational certificate against the compiled program, then
-rebuilds it node by node as a source certificate. A view row `(@fView cs… id)` becomes
-the claim `id = f(cs…)`, a UF row an equality, and a value its reflexivity. Global rows
-become `fiat` nodes. Generated rules are recognized by their origin tags: path
+`Resugar.lift` checks a relational proof against the compiled program, then rebuilds it
+recursively as a source proof tree. A view row `(@fView cs… id)` becomes the claim
+`id = f(cs…)`, a UF row an equality, and a value its reflexivity. Global rows become
+`fiat` nodes. Generated rules are recognized by their origin tags: path
 compression is transitivity, output propagation symmetry and transitivity, and child
 re-keying anchored congruence. A UF or view collision joins its two inputs the same way.
 A source rule firing names the original command, restricts the substitution to the
@@ -163,18 +163,19 @@ consuming one flattened premise per application and equality and rebuilding nest
 patterns with congruence. A subterm's existence comes from the derivation that introduced
 it, never from a new `fiat`.
 
-Each node is validated by `SourceProof.checkNode` as it is added, and the result is
+Each node is validated by `SourceProof.checkNode` as it is built, and the result is
 checked again by `SourceProof.check`. `lift_sound` therefore inherits the source
 checker's soundness: a lifted claim whose endpoints the source holds is a source
 congruence.
 
-`Resugar.Export` writes certificates as JSON with the program as `.egg` source, and
+`Resugar.Export` writes proofs as JSON certificates with the program as `.egg` source,
+listing each tree's nodes in postorder with shared subtrees, and
 [proof_certificate.rs](../egglog/src/proofs/proof_certificate.rs) replays them through
 Rust egglog's proof checker. The fixtures in
-[Resugar/Fixtures.lean](EgglogSemantics/Resugar/Fixtures.lean) pair lifted certificates
-with hand-written certificates that both checkers must reject; their export is committed
-as `egglog/tests/lean-certificates.json`, and `make lean-certificate-test` also exports
-and checks the whole corpus.
+[Resugar/Fixtures.lean](EgglogSemantics/Resugar/Fixtures.lean) pair lifted proofs with
+hand-written proofs that both checkers must judge alike; their export is committed as
+`egglog/tests/lean-certificates.json`, and `make lean-certificate-test` also exports and
+checks the whole corpus.
 
 ## Proof status
 
@@ -218,12 +219,12 @@ by assuming an unproved intermediate term exists.
 **Step 3 is implemented.** [Provenance/Soundness.lean](EgglogSemantics/Provenance/Soundness.lean)
 proves that every accepted relational fact exists in a well-formed, reached state
 saturated for the original relational program's rules and merges. The corpus gate
-checks data preservation and every retained function entry's extracted certificate.
+checks data preservation and every retained function entry's extracted proof.
 
 **Steps 4 and 5 are implemented.** [Resugar/Soundness.lean](EgglogSemantics/Resugar/Soundness.lean)
-proves `lift_sound` for lifted certificates. Every retained row of every in-domain corpus
-program lifts to a certificate the source checker accepts, and Rust egglog's checker
-accepts the same certificates and rejects the same hand-written counterexamples
+proves `lift_sound` for lifted proofs. Every retained row of every in-domain corpus
+program lifts to a proof the source checker accepts, and Rust egglog's checker accepts
+the same proofs and rejects the same hand-written counterexamples
 (`make lean-certificate-test`).
 
 Source merge proofs are deferred: equality can produce another spelling of one
@@ -244,9 +245,9 @@ See [Source.lean](EgglogSemantics/Encoding/Source.lean) for the exact conditions
 The congruence gate compares every pair of held source terms against the compiled
 program's reading, and checks that execution with and without equality reasoning agrees.
 The provenance gate checks data preservation
-and every retained row's extracted certificate. The resugar gate lifts those certificates
-and checks them against the original source program, and the certificate gate exports the
-same certificates and checks them with Rust egglog. Failures, stuck executions, and
+and every retained row's extracted proof. The resugar gate lifts those proofs and checks
+them against the original source program, and the certificate gate exports the same
+proofs and checks them with Rust egglog. Failures, stuck executions, and
 insufficient fuel fail the command. Out-of-domain cases are counted separately.
 
 From `semantics/`:

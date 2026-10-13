@@ -1,8 +1,8 @@
 import EgglogSemantics.Resugar.Lift
 import EgglogSemantics.Congruence.Relational
 
-/-! Certificates the Lean and Rust source checkers must judge alike: lifted certificates
-for small programs, and hand-written certificates that the source checker rejects. -/
+/-! Proofs the Lean and Rust source checkers must judge alike: lifted proofs for small
+programs, and hand-written proofs with known verdicts. -/
 
 namespace Egglog.Resugar.Fixtures
 
@@ -47,7 +47,7 @@ def supportCase : Program :=
    .action (.expr (.app "F" [atom "A"])),
    .rule ⟨[], [.union (atom "A") (.app "G" [atom "B"])], "R"⟩]
 
-/-- Programs whose every retained row lifts to an accepted source certificate. -/
+/-- Programs whose every retained row lifts to an accepted source proof. -/
 def lifted : List (String × Program) :=
   [("nested-union", nestedUnion), ("nested-query", nestedQuery),
    ("equality-query", equalityQuery), ("rule-chain", ruleChain),
@@ -56,7 +56,7 @@ def lifted : List (String × Program) :=
 structure Fixture where
   name : String
   program : Program
-  certificates : List SourceProof.Certificate
+  certificates : List SourceProof.Proof
 
 private def a : Term := term "A"
 private def b : Term := term "B"
@@ -64,7 +64,7 @@ private def missing : Term := term "Missing"
 private def fa : Term := .app "F" [a]
 private def fb : Term := .app "F" [b]
 private def ga : Term := .app "G" [a]
-private def fiat (t : Term) : SourceProof.Node := ⟨⟨t, t⟩, .fiat⟩
+private def fiat (t : Term) : SourceProof.Proof := .fiat ⟨t, t⟩
 
 private def declarations : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "Missing" (ctor 0),
@@ -92,33 +92,28 @@ private def absentPremise : Program := declarations ++
   [.action (.expr a.toExpr), .action (.expr b.toExpr),
    .rule ⟨[.expr missing.toExpr], [.union a.toExpr b.toExpr], "R"⟩]
 
-private def one (name : String) (P : Program) (nodes : List SourceProof.Node) : Fixture :=
-  ⟨name, P, [⟨nodes, nodes.length - 1⟩]⟩
+private def one (name : String) (P : Program) (pf : SourceProof.Proof) : Fixture :=
+  ⟨name, P, [pf]⟩
 
-/-- Accepted hand-written certificates: ordered premises and a nested premise. -/
+/-- Accepted hand-written proofs: ordered premises and a nested premise. -/
 def accepted : List Fixture :=
-  [one "ordered-premises" ordered
-    [fiat fa, ⟨⟨a, b⟩, .fiat⟩, ⟨⟨ga, ga⟩, .rule 7 [("x", a)] [0, 1]⟩],
-   one "nested-premise" nested [fiat (.app "F" [fa]), ⟨⟨ga, ga⟩, .rule 6 [("x", a)] [0]⟩]]
+  [one "ordered-premises" ordered (.rule ⟨ga, ga⟩ 7 [("x", a)] [fiat fa, .fiat ⟨a, b⟩]),
+   one "nested-premise" nested (.rule ⟨ga, ga⟩ 6 [("x", a)] [fiat (.app "F" [fa])])]
 
-/-- Rejected hand-written certificates: invented globals, an absent premise, malformed
-substitutions, wrong premise order or count, wrong endpoints and conclusions, and a
-reference to a later node. -/
+/-- Rejected hand-written proofs: invented globals, an absent premise, malformed
+substitutions, wrong premise order or count, and wrong endpoints and conclusions. -/
 def rejected : List Fixture :=
-  [one "invented-global" create [fiat missing],
-   one "invented-application" create [fiat fb],
-   one "absent-premise" absentPremise [fiat missing, ⟨⟨a, b⟩, .rule 7 [] [0]⟩],
-   one "unbound-variable" create [fiat fa, ⟨⟨ga, ga⟩, .rule 7 [] [0]⟩],
-   one "wrong-binding" create [fiat fa, ⟨⟨ga, ga⟩, .rule 7 [("x", b)] [0]⟩],
-   one "missing-premise-proof" create [fiat fa, ⟨⟨ga, ga⟩, .rule 7 [("x", a)] []⟩],
-   one "premise-order" ordered
-     [fiat fa, ⟨⟨a, b⟩, .fiat⟩, ⟨⟨ga, ga⟩, .rule 7 [("x", a)] [1, 0]⟩],
-   one "wrong-conclusion" create [fiat fa, ⟨⟨a, b⟩, .rule 7 [("x", a)] [0]⟩],
-   one "transitivity-endpoints" create [fiat a, fiat b, ⟨⟨a, b⟩, .trans 0 1⟩],
-   one "congruence-child" create
-     [fiat fa, ⟨⟨b, a⟩, .fiat⟩, ⟨⟨fa, fb⟩, .congr 0 0 1⟩],
-   one "symmetry-claim" create [fiat fa, ⟨⟨a, a⟩, .symm 0⟩],
-   one "forward-reference" create [⟨⟨a, a⟩, .symm 1⟩, fiat a]]
+  [one "invented-global" create (fiat missing),
+   one "invented-application" create (fiat fb),
+   one "absent-premise" absentPremise (.rule ⟨a, b⟩ 7 [] [fiat missing]),
+   one "unbound-variable" create (.rule ⟨ga, ga⟩ 7 [] [fiat fa]),
+   one "wrong-binding" create (.rule ⟨ga, ga⟩ 7 [("x", b)] [fiat fa]),
+   one "missing-premise-proof" create (.rule ⟨ga, ga⟩ 7 [("x", a)] []),
+   one "premise-order" ordered (.rule ⟨ga, ga⟩ 7 [("x", a)] [.fiat ⟨a, b⟩, fiat fa]),
+   one "wrong-conclusion" create (.rule ⟨a, b⟩ 7 [("x", a)] [fiat fa]),
+   one "transitivity-endpoints" create (.trans ⟨a, b⟩ (fiat a) (fiat b)),
+   one "congruence-child" create (.congr ⟨fa, fb⟩ (fiat fa) 0 (.fiat ⟨b, a⟩)),
+   one "symmetry-claim" create (.symm ⟨a, a⟩ (fiat fa))]
 
 /-- Every fixture, with the lifted ones first. `none` if a program fails to lift. -/
 def all : Option (List Fixture) := do
