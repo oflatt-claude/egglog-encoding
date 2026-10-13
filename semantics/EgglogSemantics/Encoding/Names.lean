@@ -73,4 +73,11 @@ theorem viewName_ne_ufName {f : FnName} : viewName f ≠ ufName := by
   have h2 := congrArg (fun s => (String.toList s).reverse) h
   simp [viewName, ufName, String.toList_append, List.reverse_append] at h2
 
+/-- **A generated variable is in the generated namespace.** -/
+theorem atPrefix_freshVar (n : Nat) : "@".isPrefixOf (freshVar n) = true := by
+  rw [freshVar, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
+    show ("@v").toList = ['@', 'v'] from by decide]
+  exact ⟨'v' :: (toString n).toList, rfl⟩
+
+
 end Egglog

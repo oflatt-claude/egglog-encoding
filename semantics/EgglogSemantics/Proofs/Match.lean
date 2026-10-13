@@ -448,4 +448,16 @@ theorem nil_iff : ValidQuerySubst db [] σ ↔ σ = [] := by
     exact ⟨[], .nil, .nil⟩
 
 end ValidQuerySubst
+/-- `Query.vars` over a concatenation. -/
+theorem Query.mem_vars_append {v : Var} {q₁ q₂ : Query} :
+    v ∈ Query.vars (q₁ ++ q₂) ↔ v ∈ Query.vars q₁ ∨ v ∈ Query.vars q₂ := by
+  rw [Query.mem_vars, Query.mem_vars, Query.mem_vars]
+  constructor
+  · rintro ⟨p, hp, hvp⟩
+    exact (List.mem_append.mp hp).imp (fun h => ⟨p, h, hvp⟩) fun h => ⟨p, h, hvp⟩
+  · rintro (⟨p, hp, hvp⟩ | ⟨p, hp, hvp⟩)
+    · exact ⟨p, List.mem_append_left _ hp, hvp⟩
+    · exact ⟨p, List.mem_append_right _ hp, hvp⟩
+
+
 end Egglog

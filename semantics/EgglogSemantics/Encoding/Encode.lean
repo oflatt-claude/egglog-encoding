@@ -240,22 +240,6 @@ query already had. That is what says the target's stored rule is the encoder's o
 (`Spec/Step.lean`'s `cmdEffect`, mirrored), and at an encoded rule there is nothing left to
 resolve. -/
 
-/-- `Query.vars` over a concatenation. -/
-theorem Query.mem_vars_append {v : Var} {q₁ q₂ : Query} :
-    v ∈ Query.vars (q₁ ++ q₂) ↔ v ∈ Query.vars q₁ ∨ v ∈ Query.vars q₂ := by
-  rw [Query.mem_vars, Query.mem_vars, Query.mem_vars]
-  constructor
-  · rintro ⟨p, hp, hvp⟩
-    exact (List.mem_append.mp hp).imp (fun h => ⟨p, h, hvp⟩) fun h => ⟨p, h, hvp⟩
-  · rintro (⟨p, hp, hvp⟩ | ⟨p, hp, hvp⟩)
-    · exact ⟨p, List.mem_append_left _ hp, hvp⟩
-    · exact ⟨p, List.mem_append_right _ hp, hvp⟩
-
-/-- **A generated variable is in the generated namespace.** -/
-theorem atPrefix_freshVar (n : Nat) : "@".isPrefixOf (freshVar n) = true := by
-  rw [freshVar, String.isPrefixOf, String.startsWith_string_iff, String.toList_append,
-    show ("@v").toList = ['@', 'v'] from by decide]
-  exact ⟨'v' :: (toString n).toList, rfl⟩
 
 mutual
 

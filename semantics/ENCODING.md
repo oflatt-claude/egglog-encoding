@@ -192,8 +192,13 @@ The new pass currently has kernel-checked proofs of:
   readings through temporary query operands using the original match's existence witness.
   A full source match supplies one consistent target substitution and live rows for every
   original pattern; keyed-variable occurrences show that all substituted values are in the
-  executable matcher's value domain. The remaining query step constructs the generated
-  variable bindings in the compiler's traversal order.
+  executable matcher's value domain.
+- `encodedQuery_match_of_source`: an original source match at a rebuilt target produces
+  an actual executable match of the flattened query, preserving canonical readings of all
+  original bound values. Generated bindings follow the compiler's recursive order with
+  disjoint counter ranges; groundedness supplies the equality atom's held-value witness.
+  Fresh-environment lemmas are shared with the legacy proof. No saved flattening tree is
+  introduced.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
@@ -201,9 +206,8 @@ The new pass currently has kernel-checked proofs of:
 
 The execution proof establishing those invariants for `Congruence.encode` is **not yet
 ported**. Thus the new pass does not yet have an end-to-end completeness theorem.
-The next obligations establish forward matching of flattened queries and assemble the
-invariants across corresponding program executions, preserving source-existence readings
-and represented source unions.
+The remaining obligations assemble the invariants across corresponding program executions,
+preserving source-existence readings and represented source unions.
 The paper's completeness theorem will stop at this pass; later instrumentation and
 resugaring still require soundness.
 

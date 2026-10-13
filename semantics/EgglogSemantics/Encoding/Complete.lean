@@ -1,4 +1,4 @@
-import EgglogSemantics.Encoding.RebuildVars
+import EgglogSemantics.Encoding.FreshEnv
 import EgglogSemantics.Encoding.Match
 import EgglogSemantics.Encoding.SourceArity
 import EgglogSemantics.Proofs.Signature
@@ -8138,25 +8138,6 @@ theorem le_encodeQuery_next : ∀ (q : Query) (n : Nat), n ≤ (encodeQuery q n)
       rw [encodeQuery_cons_next]
       exact Nat.le_trans (le_encodePattern_next p n) (le_encodeQuery_next ps _)
 
-/-- **The supply is injective**, so two blocks numbered apart bind different variables.
-`toString_nat_inj` is the digits, and `String.append` cancels the `"@v"`. -/
-theorem freshVar_inj {i j : Nat} (h : freshVar i = freshVar j) : i = j := by
-  have h2 : (freshVar i).toList = (freshVar j).toList := by rw [h]
-  rw [freshVar, freshVar, String.toList_append, String.toList_append] at h2
-  exact toString_nat_inj (String.toList_inj.mp (List.append_cancel_left h2))
-
-/-- A binding of an environment with distinct keys is the one `lookup` finds. -/
-theorem Env.lookup_of_mem_nodup : ∀ {σ : Env} {b : Var × Term}, b ∈ σ →
-    (Env.dom σ).Nodup → Env.lookup b.1 σ = some b.2
-  | [], _, hb, _ => absurd hb (by simp)
-  | c :: cs, b, hb, hnd => by
-      rw [Env.dom_cons, List.nodup_cons] at hnd
-      rcases List.mem_cons.mp hb with rfl | hb'
-      · rw [Env.lookup_cons, if_pos rfl]
-      · have hne : b.1 ≠ c.1 := fun hc => hnd.1 (hc ▸ Env.mem_dom_of_mem hb')
-        rw [Env.lookup_cons, if_neg hne]
-        exact Env.lookup_of_mem_nodup hb' hnd.2
-
 /-- **What one emitted atom asks of a reading.** A view read wants a live row at the ids its
 key columns evaluate to; an id comparison wants **one** id, because an encoded target asserts
 nothing (`execM_encode_eqsRefl`) and there congruence is equality. `.expr` never occurs:
@@ -8232,49 +8213,6 @@ theorem RowReadList.evalList_src {sig : Signature} {d : FDatabase} {ρs ρt : En
 
 end
 
-/-- **The generated bindings one emitted block needs**: numbered inside the block's own stretch
-`[n, m)` of the counter, distinct, and drawn from where the enumerator assigns. The three
-clauses are what make the blocks compose — the range gives disjointness, `nodup` makes the
-concatenation bind each of them, and `valued` is `matchQuery`'s own universe. -/
-structure FreshEnv (d : FDatabase) (n m : Nat) (σ : Env) : Prop where
-  /-- Every key is a generated variable of this block's stretch. -/
-  fresh : ∀ b ∈ σ, ∃ k, n ≤ k ∧ k < m ∧ b.1 = freshVar k
-  /-- No key twice. -/
-  nodup : (Env.dom σ).Nodup
-  /-- Every value is one `matchQuery` assigns. -/
-  valued : ∀ b ∈ σ, b.2 ∈ d.valueTerms
-
-theorem FreshEnv.nil {d : FDatabase} {n m : Nat} : FreshEnv d n m [] :=
-  ⟨by simp, by simp [Env.dom], by simp⟩
-
-theorem FreshEnv.mono {d : FDatabase} {n m n' m' : Nat} {σ : Env} (h : FreshEnv d n m σ)
-    (hn : n' ≤ n) (hm : m ≤ m') : FreshEnv d n' m' σ :=
-  ⟨fun b hb => (h.fresh b hb).imp fun _ hk =>
-      ⟨Nat.le_trans hn hk.1, Nat.lt_of_lt_of_le hk.2.1 hm, hk.2.2⟩,
-    h.nodup, h.valued⟩
-
-/-- **Two adjacent blocks' bindings concatenate.** The `nodup` of the result is where
-`freshVar_inj` is spent: the left block's keys are numbered below `m` and the right block's at
-or above it, so no key of one is a key of the other. -/
-theorem FreshEnv.append {d : FDatabase} {n m k : Nat} {σ₁ σ₂ : Env}
-    (h₁ : FreshEnv d n m σ₁) (h₂ : FreshEnv d m k σ₂) (hnm : n ≤ m) (hmk : m ≤ k) :
-    FreshEnv d n k (σ₁ ++ σ₂) := by
-  refine ⟨fun b hb => ?_, ?_, fun b hb => ?_⟩
-  · rcases List.mem_append.mp hb with hb' | hb'
-    · exact (h₁.mono (Nat.le_refl n) hmk).fresh b hb'
-    · exact (h₂.mono hnm (Nat.le_refl k)).fresh b hb'
-  · rw [Env.dom, List.map_append]
-    refine List.Nodup.append h₁.nodup h₂.nodup ?_
-    intro v hv₁ hv₂
-    obtain ⟨b₁, hb₁, rfl⟩ := List.mem_map.mp hv₁
-    obtain ⟨b₂, hb₂, hb₂'⟩ := List.mem_map.mp hv₂
-    obtain ⟨k₁, -, hk₁, he₁⟩ := h₁.fresh b₁ hb₁
-    obtain ⟨k₂, hk₂, -, he₂⟩ := h₂.fresh b₂ hb₂
-    have : k₂ = k₁ := freshVar_inj (he₂.symm.trans (hb₂'.trans he₁))
-    omega
-  · rcases List.mem_append.mp hb with hb' | hb'
-    · exact h₁.valued b hb'
-    · exact h₂.valued b hb'
 
 mutual
 
