@@ -111,9 +111,11 @@ A multi-column output is a parenthesized sort list, `(i64 i64)`, as
 `egglog/tests/tuple-output.egg` writes it. egglog accepts `(i64)` for one column too,
 but the bare form is what every existing case renders and is left alone. -/
 def FnDecl.toEgg (sig : Signature) (f : FnName) (d : FnDecl) (m : MergeSpec) : String :=
+  -- A generated table's outputs are ids or proofs, which the untyped model shows as `Math`.
+  let sort := if "@".isPrefixOf f then "Math" else "i64"
   let out := match d.outArity with
-    | 1 => "i64"
-    | _ => "(" ++ String.intercalate " " (List.replicate d.outArity "i64") ++ ")"
+    | 1 => sort
+    | _ => "(" ++ String.intercalate " " (List.replicate d.outArity sort) ++ ")"
   "(function " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
     ++ ") " ++ out ++ m.toEgg sig ++ ")"
 
@@ -296,12 +298,15 @@ def Program.commandsToEgg : Program → Signature → List String
   | [], _ => []
   | c :: cs, sig => c.toEgg sig :: Program.commandsToEgg cs (c.sigBind sig)
 
+/-- The program as egglog source: the sort, the ruleset declarations, and the commands. -/
+def Program.render (p : Program) : String :=
+  String.intercalate "\n"
+    (p.eggHeader :: p.rulesetDecls ++ (p.commandsToEgg (fun _ => none)).filter (· ≠ ""))
+    ++ "\n"
+
 /-- The program as a complete `.egg` file, ending in the `(print-size)` that the
 comparison reads. -/
-def Program.toEgg (p : Program) : String :=
-  String.intercalate "\n"
-    (p.eggHeader :: p.rulesetDecls ++ (p.commandsToEgg (fun _ => none)).filter (· ≠ "")
-      ++ ["(print-size)", ""])
+def Program.toEgg (p : Program) : String := p.render ++ "(print-size)\n"
 
 /-- The row counts the interpreter predicts, one `name count` line per constructor, for
 diffing against egglog's `(print-size)`. `STUCK` if the program does not run, which for a

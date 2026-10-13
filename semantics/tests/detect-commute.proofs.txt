@@ -1,0 +1,273 @@
+(Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  congr 0
+  (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  trans
+    (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  symm
+      (Wrapper (Add (Two) (One))) = (Wrapper (Add (One) (Two)))  congr 0
+        (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+        (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+          (Add (One) (Two)) = (Add (One) (Two))  congr 1
+            (Add (One) (Two)) = (Add (One) (Two))  congr 0
+              (Add (One) (Two)) = (Add (One) (Two))  fiat
+              (One) = (One)  fiat
+            (Two) = (Two)  fiat
+    (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+  (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+    (Add (One) (Two)) = (Add (One) (Two))  congr 1
+      (Add (One) (Two)) = (Add (One) (Two))  congr 0
+        (Add (One) (Two)) = (Add (One) (Two))  fiat
+        (One) = (One)  fiat
+      (Two) = (Two)  fiat
+
+(Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  congr 0
+  (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  trans
+    (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  symm
+      (Wrapper (Add (Two) (One))) = (Wrapper (Add (One) (Two)))  congr 0
+        (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+        (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+          (Add (One) (Two)) = (Add (One) (Two))  congr 1
+            (Add (One) (Two)) = (Add (One) (Two))  congr 0
+              (Add (One) (Two)) = (Add (One) (Two))  fiat
+              (One) = (One)  fiat
+            (Two) = (Two)  fiat
+    (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+  (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+    (Add (One) (Two)) = (Add (One) (Two))  congr 1
+      (Add (One) (Two)) = (Add (One) (Two))  congr 0
+        (Add (One) (Two)) = (Add (One) (Two))  fiat
+        (One) = (One)  fiat
+      (Two) = (Two)  fiat
+
+(Wrapper (Add (Two) (One))) = (Wrapper (Add (One) (Two)))  symm
+  (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  trans
+    (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  symm
+      (Wrapper (Add (Two) (One))) = (Wrapper (Add (One) (Two)))  congr 0
+        (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+        (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+          (Add (One) (Two)) = (Add (One) (Two))  congr 1
+            (Add (One) (Two)) = (Add (One) (Two))  congr 0
+              (Add (One) (Two)) = (Add (One) (Two))  fiat
+              (One) = (One)  fiat
+            (Two) = (Two)  fiat
+    (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+
+(Success) = (Success)  rule 8 {}
+  (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  trans
+    (Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  trans
+      (Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  symm
+        (Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  congr 0
+          (Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  fiat
+          (Add (One) (Two)) = (Add (One) (Two))  congr 1
+            (Add (One) (Two)) = (Add (One) (Two))  congr 0
+              (Add (One) (Two)) = (Add (One) (Two))  fiat
+              (One) = (One)  fiat
+            (Two) = (Two)  fiat
+      (Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  fiat
+    (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  congr 0
+      (Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  fiat
+      (Add (One) (Two)) = (Add (Two) (One))  congr 1
+        (Add (One) (Two)) = (Add (Two) (One))  congr 0
+          (Add (One) (Two)) = (Add (Two) (One))  trans
+            (Add (One) (Two)) = (Add (Two) (One))  symm
+              (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+                (Add (One) (Two)) = (Add (One) (Two))  congr 1
+                  (Add (One) (Two)) = (Add (One) (Two))  congr 0
+                    (Add (One) (Two)) = (Add (One) (Two))  fiat
+                    (One) = (One)  fiat
+                  (Two) = (Two)  fiat
+            (Add (Two) (One)) = (Add (Two) (One))  fiat
+          (Two) = (Two)  fiat
+        (One) = (One)  fiat
+
+(Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (Two), b := (One)}
+  (Add (One) (Two)) = (Add (Two) (One))  congr 1
+    (Add (One) (Two)) = (Add (Two) (One))  congr 0
+      (Add (One) (Two)) = (Add (Two) (One))  trans
+        (Add (One) (Two)) = (Add (Two) (One))  symm
+          (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+            (Add (One) (Two)) = (Add (One) (Two))  congr 1
+              (Add (One) (Two)) = (Add (One) (Two))  congr 0
+                (Add (One) (Two)) = (Add (One) (Two))  fiat
+                (One) = (One)  fiat
+              (Two) = (Two)  fiat
+        (Add (Two) (One)) = (Add (Two) (One))  fiat
+      (Two) = (Two)  rule 7 {a := (One), b := (Two)}
+        (Add (One) (Two)) = (Add (One) (Two))  congr 1
+          (Add (One) (Two)) = (Add (One) (Two))  congr 0
+            (Add (One) (Two)) = (Add (One) (Two))  fiat
+            (One) = (One)  fiat
+          (Two) = (Two)  fiat
+    (One) = (One)  rule 7 {a := (One), b := (Two)}
+      (Add (One) (Two)) = (Add (One) (Two))  congr 1
+        (Add (One) (Two)) = (Add (One) (Two))  congr 0
+          (Add (One) (Two)) = (Add (One) (Two))  fiat
+          (One) = (One)  fiat
+        (Two) = (Two)  fiat
+
+(Add (One) (Two)) = (Add (One) (Two))  rule 7 {a := (Two), b := (One)}
+  (Add (One) (Two)) = (Add (Two) (One))  congr 1
+    (Add (One) (Two)) = (Add (Two) (One))  congr 0
+      (Add (One) (Two)) = (Add (Two) (One))  trans
+        (Add (One) (Two)) = (Add (Two) (One))  symm
+          (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+            (Add (One) (Two)) = (Add (One) (Two))  congr 1
+              (Add (One) (Two)) = (Add (One) (Two))  congr 0
+                (Add (One) (Two)) = (Add (One) (Two))  fiat
+                (One) = (One)  fiat
+              (Two) = (Two)  fiat
+        (Add (Two) (One)) = (Add (Two) (One))  fiat
+      (Two) = (Two)  rule 7 {a := (One), b := (Two)}
+        (Add (One) (Two)) = (Add (One) (Two))  congr 1
+          (Add (One) (Two)) = (Add (One) (Two))  congr 0
+            (Add (One) (Two)) = (Add (One) (Two))  fiat
+            (One) = (One)  fiat
+          (Two) = (Two)  fiat
+    (One) = (One)  rule 7 {a := (One), b := (Two)}
+      (Add (One) (Two)) = (Add (One) (Two))  congr 1
+        (Add (One) (Two)) = (Add (One) (Two))  congr 0
+          (Add (One) (Two)) = (Add (One) (Two))  fiat
+          (One) = (One)  fiat
+        (Two) = (Two)  fiat
+
+(Add (Two) (One)) = (Add (Two) (One))  rule 7 {a := (Two), b := (One)}
+  (Add (One) (Two)) = (Add (Two) (One))  congr 1
+    (Add (One) (Two)) = (Add (Two) (One))  congr 0
+      (Add (One) (Two)) = (Add (Two) (One))  trans
+        (Add (One) (Two)) = (Add (Two) (One))  symm
+          (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+            (Add (One) (Two)) = (Add (One) (Two))  congr 1
+              (Add (One) (Two)) = (Add (One) (Two))  congr 0
+                (Add (One) (Two)) = (Add (One) (Two))  fiat
+                (One) = (One)  fiat
+              (Two) = (Two)  fiat
+        (Add (Two) (One)) = (Add (Two) (One))  fiat
+      (Two) = (Two)  rule 7 {a := (One), b := (Two)}
+        (Add (One) (Two)) = (Add (One) (Two))  congr 1
+          (Add (One) (Two)) = (Add (One) (Two))  congr 0
+            (Add (One) (Two)) = (Add (One) (Two))  fiat
+            (One) = (One)  fiat
+          (Two) = (Two)  fiat
+    (One) = (One)  rule 7 {a := (One), b := (Two)}
+      (Add (One) (Two)) = (Add (One) (Two))  congr 1
+        (Add (One) (Two)) = (Add (One) (Two))  congr 0
+          (Add (One) (Two)) = (Add (One) (Two))  fiat
+          (One) = (One)  fiat
+        (Two) = (Two)  fiat
+
+(Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  trans
+  (Wrapper (Add (One) (Two))) = (Wrapper (Add (Two) (One)))  symm
+    (Wrapper (Add (Two) (One))) = (Wrapper (Add (One) (Two)))  congr 0
+      (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+      (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+        (Add (One) (Two)) = (Add (One) (Two))  congr 1
+          (Add (One) (Two)) = (Add (One) (Two))  congr 0
+            (Add (One) (Two)) = (Add (One) (Two))  fiat
+            (One) = (One)  fiat
+          (Two) = (Two)  fiat
+  (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+
+(Wrapper (Add (Two) (One))) = (Wrapper (Add (One) (Two)))  congr 0
+  (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+  (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+    (Add (One) (Two)) = (Add (One) (Two))  congr 1
+      (Add (One) (Two)) = (Add (One) (Two))  congr 0
+        (Add (One) (Two)) = (Add (One) (Two))  fiat
+        (One) = (One)  fiat
+      (Two) = (Two)  fiat
+
+(Add (Two) (One)) = (Add (One) (Two))  symm
+  (Add (One) (Two)) = (Add (Two) (One))  trans
+    (Add (One) (Two)) = (Add (Two) (One))  symm
+      (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+        (Add (One) (Two)) = (Add (One) (Two))  congr 1
+          (Add (One) (Two)) = (Add (One) (Two))  congr 0
+            (Add (One) (Two)) = (Add (One) (Two))  fiat
+            (One) = (One)  fiat
+          (Two) = (Two)  fiat
+    (Add (Two) (One)) = (Add (Two) (One))  fiat
+
+(Add (Two) (One)) = (Add (One) (Two))  symm
+  (Add (One) (Two)) = (Add (Two) (One))  trans
+    (Add (One) (Two)) = (Add (Two) (One))  symm
+      (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+        (Add (One) (Two)) = (Add (One) (Two))  congr 1
+          (Add (One) (Two)) = (Add (One) (Two))  congr 0
+            (Add (One) (Two)) = (Add (One) (Two))  fiat
+            (One) = (One)  fiat
+          (Two) = (Two)  fiat
+    (Add (Two) (One)) = (Add (Two) (One))  fiat
+
+(Add (One) (Two)) = (Add (Two) (One))  trans
+  (Add (One) (Two)) = (Add (Two) (One))  symm
+    (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+      (Add (One) (Two)) = (Add (One) (Two))  congr 1
+        (Add (One) (Two)) = (Add (One) (Two))  congr 0
+          (Add (One) (Two)) = (Add (One) (Two))  fiat
+          (One) = (One)  fiat
+        (Two) = (Two)  fiat
+  (Add (Two) (One)) = (Add (Two) (One))  fiat
+
+(Wrapper (Add (Two) (One))) = (Wrapper (Add (One) (Two)))  congr 0
+  (Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+  (Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+    (Add (One) (Two)) = (Add (One) (Two))  congr 1
+      (Add (One) (Two)) = (Add (One) (Two))  congr 0
+        (Add (One) (Two)) = (Add (One) (Two))  fiat
+        (One) = (One)  fiat
+      (Two) = (Two)  fiat
+
+(Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (Two), b := (One)}
+  (Add (Two) (One)) = (Add (Two) (One))  congr 1
+    (Add (Two) (One)) = (Add (Two) (One))  congr 0
+      (Add (Two) (One)) = (Add (Two) (One))  fiat
+      (Two) = (Two)  fiat
+    (One) = (One)  fiat
+
+(Add (One) (Two)) = (Add (One) (Two))  rule 7 {a := (Two), b := (One)}
+  (Add (Two) (One)) = (Add (Two) (One))  congr 1
+    (Add (Two) (One)) = (Add (Two) (One))  congr 0
+      (Add (Two) (One)) = (Add (Two) (One))  fiat
+      (Two) = (Two)  fiat
+    (One) = (One)  fiat
+
+(Add (Two) (One)) = (Add (Two) (One))  rule 7 {a := (Two), b := (One)}
+  (Add (Two) (One)) = (Add (Two) (One))  congr 1
+    (Add (Two) (One)) = (Add (Two) (One))  congr 0
+      (Add (Two) (One)) = (Add (Two) (One))  fiat
+      (Two) = (Two)  fiat
+    (One) = (One)  fiat
+
+(Add (Two) (One)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+  (Add (One) (Two)) = (Add (One) (Two))  congr 1
+    (Add (One) (Two)) = (Add (One) (Two))  congr 0
+      (Add (One) (Two)) = (Add (One) (Two))  fiat
+      (One) = (One)  fiat
+    (Two) = (Two)  fiat
+
+(Add (Two) (One)) = (Add (Two) (One))  rule 7 {a := (One), b := (Two)}
+  (Add (One) (Two)) = (Add (One) (Two))  congr 1
+    (Add (One) (Two)) = (Add (One) (Two))  congr 0
+      (Add (One) (Two)) = (Add (One) (Two))  fiat
+      (One) = (One)  fiat
+    (Two) = (Two)  fiat
+
+(Add (One) (Two)) = (Add (One) (Two))  rule 7 {a := (One), b := (Two)}
+  (Add (One) (Two)) = (Add (One) (Two))  congr 1
+    (Add (One) (Two)) = (Add (One) (Two))  congr 0
+      (Add (One) (Two)) = (Add (One) (Two))  fiat
+      (One) = (One)  fiat
+    (Two) = (Two)  fiat
+
+(Wrapper (Add (Two) (One))) = (Wrapper (Add (Two) (One)))  fiat
+
+(Add (Two) (One)) = (Add (Two) (One))  fiat
+
+(One) = (One)  fiat
+
+(Two) = (Two)  fiat
+
+(Wrapper (Add (One) (Two))) = (Wrapper (Add (One) (Two)))  fiat
+
+(Add (One) (Two)) = (Add (One) (Two))  fiat
+
+(Two) = (Two)  fiat
+
+(One) = (One)  fiat

@@ -1,0 +1,19 @@
+(H (A)) = (H (A))  rule 6 {x := (A)}
+  (G (A)) = (G (A))  congr 0
+    (G (A)) = (G (A))  rule 5 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+    (A) = (A)  rule 5 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+
+(G (A)) = (G (A))  rule 5 {x := (A)}
+  (F (A)) = (F (A))  congr 0
+    (F (A)) = (F (A))  fiat
+    (A) = (A)  fiat
+
+(F (A)) = (F (A))  fiat
+
+(A) = (A)  fiat

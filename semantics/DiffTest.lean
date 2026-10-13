@@ -2,6 +2,8 @@ import EgglogSemantics.Tests.Congruence
 import EgglogSemantics.Provenance.Extract
 import EgglogSemantics.Resugar.Export
 import EgglogSemantics.Tests.Egg
+import EgglogSemantics.Tests.Parse
+import EgglogSemantics.Tests.Render
 
 /-!
 # Differential tests
@@ -12,6 +14,8 @@ a per-case timeout. Emission checks reject unsupported programs.
 
 Nullary constructors stand in for literals where Rust requires distinct sorts.
 Additional modes run the congruence, provenance, and resugar gates and export certificates.
+The hand-written programs under `tests/` join every gate, and `difftest egg` snapshots
+their encodings and lifted proofs.
 -/
 
 open Egglog
@@ -1798,6 +1802,31 @@ private def writeCase (dir name : String) (p₀ : Program) : IO Unit := do
   IO.FS.writeFile s!"{dir}/{name}.egg" p.toEgg
   IO.FS.writeFile s!"{dir}/{name}.expected" p.expectedSizes
 
+/-! ### Egg files
+
+Hand-written programs under `tests/`, in egglog syntax. Each is a corpus case for every
+gate, and `difftest egg` snapshots its congruence encoding, its provenance encoding, and
+its lifted source proofs next to it. -/
+
+private def eggDir : System.FilePath := "tests"
+
+private def eggSnapshots : List String := ["congruence.egg", "provenance.egg", "proofs.txt"]
+
+/-- The `.egg` programs under `tests/`, by file stem, in name order. -/
+private def fileCases : IO (List (String × Program)) := do
+  if !(← eggDir.pathExists) then return []
+  let entries ← eggDir.readDir
+  let stems := entries.filterMap fun e =>
+    let name := e.fileName
+    if name.endsWith ".egg" && !(eggSnapshots.any fun s => name.endsWith ("." ++ s)) then
+      some (String.ofList (name.toList.take (name.length - 4)))
+    else none
+  (stems.qsort (fun a b => decide (a < b))).toList.mapM fun stem => do
+    let src ← IO.FS.readFile (eggDir / s!"{stem}.egg")
+    match Program.ofEgg src with
+    | .ok p => pure (stem, p)
+    | .error e => throw (IO.userError s!"tests/{stem}.egg: {e}")
+
 /-- Run the target with structural equality and the corpus's saturation fuel. -/
 private def relationalExecAt (fuel : Nat) (d : FDatabase) : Program → Option FDatabase
   | [] => some d
@@ -1838,12 +1867,13 @@ private def congruenceCheck (fuel : Nat) (p : Program) : List String := Id.run d
   return errors
 
 private def runCongruenceChecks (fuel : Nat) (names : List String) : IO UInt32 := do
-  let available := allCases ++ probeCases
+  let files ← fileCases
+  let available := allCases ++ files ++ probeCases
   let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
   unless unknown.isEmpty do
     IO.eprintln s!"unknown cases: {String.intercalate ", " unknown}"
     return 1
-  let cases := if names.isEmpty then allCases else available.filter fun c => names.contains c.1
+  let cases := if names.isEmpty then allCases ++ files else available.filter fun c => names.contains c.1
   let mut tested := 0
   let mut failed := 0
   let mut skipped := 0
@@ -1885,12 +1915,13 @@ private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : Lis
 
 private def runProvenanceChecks (fuel : Nat) (names : List String)
     (liftProofs : Bool := false) : IO UInt32 := do
-  let available := allCases ++ probeCases
+  let files ← fileCases
+  let available := allCases ++ files ++ probeCases
   let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
   unless unknown.isEmpty do
     IO.eprintln s!"unknown cases: {String.intercalate ", " unknown}"
     return 1
-  let cases := if names.isEmpty then allCases else available.filter fun c => names.contains c.1
+  let cases := if names.isEmpty then allCases ++ files else available.filter fun c => names.contains c.1
   let mut tested := 0
   let mut failed := 0
   let mut skipped := 0
@@ -1908,6 +1939,64 @@ private def runProvenanceChecks (fuel : Nat) (names : List String)
   IO.println s!"{label}: {tested} tested, {failed} failures, {skipped} outside domain"
   return if failed == 0 && tested > 0 then 0 else 1
 
+private def firstDifference (expected actual : String) : String :=
+  let es := expected.splitOn "\n"
+  let as := actual.splitOn "\n"
+  match (List.range (max es.length as.length)).find? fun i => es[i]? != as[i]? with
+  | some i =>
+    s!"line {i + 1}: expected `{(es[i]?).getD "<end>"}`, got `{(as[i]?).getD "<end>"}`"
+  | none => "identical"
+
+/-- Check the parser against the emitter on the whole corpus. -/
+private def parseRoundTrip : List String :=
+  allCases.filterMap fun c =>
+    let src := c.2.declared.toEgg
+    match Program.ofEgg src with
+    | .ok p => if p.toEgg == src then none else some c.1
+    | .error e => some s!"{c.1} ({e})"
+
+/-- Snapshot the encodings and lifted proofs of every program under `tests/`, or rewrite
+the snapshots when `update` is set, and run the corpus gates on each. -/
+private def runEggChecks (fuel : Nat) (update : Bool) (names : List String) : IO UInt32 := do
+  let files ← fileCases
+  let unknown := names.filter fun name => !(files.any fun c => c.1 == name)
+  unless unknown.isEmpty do
+    IO.eprintln s!"unknown cases: {String.intercalate ", " unknown}"
+    return 1
+  let selected := if names.isEmpty then files else files.filter fun c => names.contains c.1
+  let mut failed := 0
+  unless parseRoundTrip.isEmpty do
+    failed := failed + 1
+    IO.println s!"FAIL parse round trip: {String.intercalate ", " parseRoundTrip}"
+  for (name, p) in selected do
+    let mut errors : List String := []
+    if !p.encodeDomainB then errors := ["outside the correspondence domain"]
+    else
+      let congruence := Congruence.encode p
+      let snapshots : List (String × Option String) :=
+        [("congruence.egg", some congruence.render),
+         ("provenance.egg", (Provenance.encode congruence).map Program.render),
+         ("proofs.txt", (Resugar.certificates (relationalExecAt fuel FDatabase.empty) p).map
+           Resugar.renderProofs)]
+      for (suffix, text) in snapshots do
+        let path := eggDir / s!"{name}.{suffix}"
+        match text with
+        | none => errors := errors ++ [s!"{suffix} not produced"]
+        | some text =>
+          if update then IO.FS.writeFile path text
+          else if !(← path.pathExists) then errors := errors ++ [s!"{suffix} missing"]
+          else
+            let expected ← IO.FS.readFile path
+            if expected != text then
+              errors := errors ++ [s!"{suffix} differs, {firstDifference expected text}"]
+      errors := errors ++ congruenceCheck fuel p ++ provenanceCheck fuel p false ++
+        (provenanceCheck fuel p true).map ("lifting: " ++ ·)
+    unless errors.isEmpty do
+      failed := failed + 1
+      IO.println s!"FAIL {name}: {String.intercalate "; " errors}"
+  IO.println s!"egg: {selected.length} tested, {failed} failures"
+  return if failed == 0 && selected.length > 0 then 0 else 1
+
 /-- Write the curated fixtures and every in-domain case's lifted certificates as one JSON
 array, for `egglog/tests/lean_certificates.rs`. The fixtures alone go to `path` when
 `fixturesOnly` is set. -/
@@ -1917,12 +2006,13 @@ private def exportCertificates (fuel : Nat) (path : String) (names : List String
     IO.eprintln "difftest: a fixture program does not lift"; return 1
   let mut cases := fixtures
   unless fixturesOnly do
-    let available := allCases ++ probeCases
+    let files ← fileCases
+    let available := allCases ++ files ++ probeCases
     let unknown := names.filter fun name => !(available.any fun c => c.1 == name)
     unless unknown.isEmpty do
       IO.eprintln s!"unknown cases: {String.intercalate ", " unknown}"
       return 1
-    let selected := if names.isEmpty then allCases else available.filter fun c => names.contains c.1
+    let selected := if names.isEmpty then allCases ++ files else available.filter fun c => names.contains c.1
     for (name, p₀) in selected do
       let p := p₀.declared
       if !p.encodeDomainB then continue
@@ -1945,7 +2035,8 @@ anything shows up, and a single pooled number would hide it.
 
 `difftest encode-domain` prints how much of the corpus the correspondence domain covers.
 `difftest congruence`, `provenance` and `resugar` run the corpus gates at a saturation fuel,
-and `export-fixtures` and `export-certificates` write source certificates for Rust egglog.
+`egg` checks the snapshots under `tests/`, and `export-fixtures` and `export-certificates`
+write source certificates for Rust egglog.
 These write nothing and never invoke egglog; the comparison is between the model and
 itself. -/
 def main (args : List String) : IO UInt32 := do
@@ -1963,6 +2054,13 @@ def main (args : List String) : IO UInt32 := do
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
     | some n => runProvenanceChecks n names
+  | "egg" :: fuel :: rest =>
+    match fuel.toNat? with
+    | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
+    | some n =>
+      match rest with
+      | "update" :: names => runEggChecks n true names
+      | names => runEggChecks n false names
   | "congruence" :: fuel :: names =>
     match fuel.toNat? with
     | none => IO.eprintln s!"difftest: bad fuel {fuel}"; return 1
@@ -1974,8 +2072,9 @@ def main (args : List String) : IO UInt32 := do
     return 0
   | [dir, "curated"] =>
     IO.FS.createDirAll dir
-    for (name, p) in curated do writeCase dir name p
-    IO.println s!"wrote {curated.length} curated cases"
+    let files ← fileCases
+    for (name, p) in curated ++ files do writeCase dir name p
+    IO.println s!"wrote {curated.length + files.length} curated cases"
     return 0
   | [dir, "merge"] =>
     IO.FS.createDirAll dir
@@ -2002,6 +2101,7 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln "       difftest congruence <fuel> [case…]"
     IO.eprintln "       difftest provenance <fuel> [case…]"
     IO.eprintln "       difftest resugar <fuel> [case…]"
+    IO.eprintln "       difftest egg <fuel> [update] [case…]"
     IO.eprintln "       difftest export-fixtures <path>"
     IO.eprintln "       difftest export-certificates <fuel> <path> [case…]"
     return 1

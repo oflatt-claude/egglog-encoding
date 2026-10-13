@@ -49,6 +49,7 @@ boundaries.
 | `EgglogSemantics/Resugar/` | Proof lifting to source proofs, fixtures, and JSON export |
 | `EgglogSemantics/Proofs/` | Every theorem: interpreter refinement, the completeness proof, checker soundness, lifting soundness, counterexamples |
 | `EgglogSemantics/Tests/` | Executable regressions, `.egg` parsing and emission, and proof rendering |
+| `tests/` | Hand-written `.egg` programs with snapshots of their encodings and lifted proofs |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
 
 Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),

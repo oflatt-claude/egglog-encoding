@@ -1,0 +1,76 @@
+(G (A)) = (F (A))  symm
+  (F (A)) = (G (A))  trans
+    (F (A)) = (G (A))  symm
+      (G (A)) = (F (A))  rule 5 {x := (A)}
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  rule 4 {x := (A)}
+            (F (A)) = (F (A))  congr 0
+              (F (A)) = (F (A))  fiat
+              (A) = (A)  fiat
+          (A) = (A)  rule 4 {x := (A)}
+            (F (A)) = (F (A))  congr 0
+              (F (A)) = (F (A))  fiat
+              (A) = (A)  fiat
+    (G (A)) = (G (A))  rule 4 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+
+(F (A)) = (G (A))  trans
+  (F (A)) = (G (A))  symm
+    (G (A)) = (F (A))  rule 5 {x := (A)}
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  rule 4 {x := (A)}
+          (F (A)) = (F (A))  congr 0
+            (F (A)) = (F (A))  fiat
+            (A) = (A)  fiat
+        (A) = (A)  rule 4 {x := (A)}
+          (F (A)) = (F (A))  congr 0
+            (F (A)) = (F (A))  fiat
+            (A) = (A)  fiat
+  (G (A)) = (G (A))  rule 4 {x := (A)}
+    (F (A)) = (F (A))  congr 0
+      (F (A)) = (F (A))  fiat
+      (A) = (A)  fiat
+
+(G (A)) = (F (A))  rule 5 {x := (A)}
+  (G (A)) = (G (A))  congr 0
+    (G (A)) = (G (A))  rule 4 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+    (A) = (A)  rule 4 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+
+(F (A)) = (F (A))  rule 5 {x := (A)}
+  (G (A)) = (G (A))  congr 0
+    (G (A)) = (G (A))  rule 4 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+    (A) = (A)  rule 4 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+
+(G (A)) = (G (A))  rule 5 {x := (A)}
+  (G (A)) = (G (A))  congr 0
+    (G (A)) = (G (A))  rule 4 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+    (A) = (A)  rule 4 {x := (A)}
+      (F (A)) = (F (A))  congr 0
+        (F (A)) = (F (A))  fiat
+        (A) = (A)  fiat
+
+(G (A)) = (G (A))  rule 4 {x := (A)}
+  (F (A)) = (F (A))  congr 0
+    (F (A)) = (F (A))  fiat
+    (A) = (A)  fiat
+
+(F (A)) = (F (A))  fiat
+
+(A) = (A)  fiat

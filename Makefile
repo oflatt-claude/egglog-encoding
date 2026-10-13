@@ -2,7 +2,8 @@
 	check nits test python-check python-nits rust-check rust-nits \
 	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	lean-check lean-difftest lean-congruence-test lean-provenance-test lean-resugar-test \
-	lean-certificate-test lean-update-fixtures update-snapshots format \
+	lean-certificate-test lean-update-fixtures lean-egg-test lean-update-egg-snapshots \
+	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
 
@@ -123,6 +124,7 @@ lean-check:
 	$(MAKE) lean-congruence-test
 	$(MAKE) lean-provenance-test
 	$(MAKE) lean-resugar-test
+	$(MAKE) lean-egg-test
 	$(MAKE) lean-certificate-test
 
 lean-congruence-test:
@@ -136,6 +138,16 @@ lean-provenance-test:
 lean-resugar-test:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
 	cd semantics && .lake/build/bin/difftest resugar 64
+
+# The hand-written programs under semantics/tests: their encodings and lifted proofs must
+# match the committed snapshots, and they pass the corpus gates.
+lean-egg-test:
+	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
+	cd semantics && .lake/build/bin/difftest egg 64
+
+lean-update-egg-snapshots:
+	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
+	cd semantics && .lake/build/bin/difftest egg 64 update
 
 # The same lifted certificates, checked by Rust egglog: the committed fixture must
 # match a fresh export, then the whole corpus is exported and checked.

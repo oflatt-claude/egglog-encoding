@@ -250,6 +250,16 @@ them against the original source program, and the certificate gate exports the s
 proofs and checks them with Rust egglog. Failures, stuck executions, and
 insufficient fuel fail the command. Out-of-domain cases are counted separately.
 
+The corpus is the curated and generated programs in `DiffTest.lean` together with the
+hand-written `.egg` programs under [`tests/`](tests), which `Program.ofEgg` parses. The
+egg gate (`difftest egg`) checks each of those against its committed snapshots: the
+congruence encoding in `<name>.congruence.egg`, the provenance encoding in
+`<name>.provenance.egg`, and the lifted source proofs in `<name>.proofs.txt`.
+`make lean-update-egg-snapshots` rewrites them after an intended change. A program that
+unions a term with its own subterm does not saturate in the model, whose classes are sets
+of explicit spellings, so the hand-written programs evaluate into separate constructors
+instead.
+
 From `semantics/`:
 
 ```sh
@@ -258,6 +268,7 @@ lake build difftest
 .lake/build/bin/difftest congruence 64 both-2 rand-43 sat-hit
 .lake/build/bin/difftest provenance 64
 .lake/build/bin/difftest resugar 64
+.lake/build/bin/difftest egg 64
 .lake/build/bin/difftest export-certificates 64 /tmp/certificates.json
 ```
 

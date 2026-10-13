@@ -3,6 +3,8 @@ import EgglogSemantics.Proofs.Interp
 import EgglogSemantics.Proofs.Lattice
 import EgglogSemantics.Proofs.Merge
 import EgglogSemantics.Tests.Egg
+import EgglogSemantics.Tests.Parse
+import EgglogSemantics.Tests.Render
 import EgglogSemantics.Tests.Examples
 
 -- Congruence compilation and its data-only correspondence reductions.
