@@ -93,7 +93,7 @@ congruence diagonal; the ordering-free arm permits unions while excluding the
 
 `NoSaturate` is required by this refinement proof: an interpreter fixpoint need not be a
 specification fixpoint when the specification permits more matches. The
-[encoding correspondence theorem](ENCODING.md#legacy-theorem-and-checker) separately handles
+[encoding correspondence theorem](ENCODING.md#proof-status) separately handles
 successful saturating target executions.
 
 There is also no general theorem that the interpreter computes the greatest recorded

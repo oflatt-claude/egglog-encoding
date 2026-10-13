@@ -25,11 +25,10 @@ The congruence compiler translates constructor programs into explicit union-find
 tables. It handles query flattening and rebuilding, with one id output per table and no
 proof annotations. Provenance instrumentation and proof resugaring will be separate passes.
 
-Query matching, initialization, global actions, and round and saturation simulation are
-proved. Command composition remains for the end-to-end completeness theorem.
-The legacy encoder’s data correspondence theorem remains checked. The old proof checker has a
-known existence defect and must not be used as a proof-validity oracle. The library
-permits no `sorry`.
+The congruence pass has a proved end-to-end correspondence theorem for the constructor
+source fragment, including execution without implicit target equality reasoning. Provenance
+and proof lifting remain to be implemented. The legacy checker has a known existence
+defect and cannot establish proof validity. The library permits no `sorry`.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
 and source restrictions. The [checker guide](CHECKER.md) explains the legacy defect and
@@ -42,7 +41,7 @@ the planned certificate boundary.
 | `EgglogSemantics/Spec/` | Syntax, databases, congruence, evaluation, matching, relational steps, scope |
 | `EgglogSemantics/Impl/` | Finite reference interpreters and front-end checks |
 | `EgglogSemantics/Proofs/` | Interpreter refinement, preservation, totality, and counterexamples |
-| `EgglogSemantics/Congruence/` | Congruence compiler, table reader, correspondence reductions, and regressions |
+| `EgglogSemantics/Congruence/` | Congruence compiler, completeness proof, and regressions |
 | `EgglogSemantics/Encoding/` | Shared source analysis and the legacy combined encoder and proofs |
 | `EgglogSemantics/Tests/` | Kernel-checked examples, executable guards, and `.egg` emission |
 | `DiffTest.lean` | Curated and generated comparisons with egglog and encoding/checker probes |
@@ -51,7 +50,7 @@ Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),
 [Eval.lean](EgglogSemantics/Spec/Eval.lean), and
 [Step.lean](EgglogSemantics/Spec/Step.lean), then read
 [Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean) and
-[Congruence/Correspond.lean](EgglogSemantics/Congruence/Correspond.lean).
+[Congruence/Complete.lean](EgglogSemantics/Congruence/Complete.lean).
 
 ## Validation
 

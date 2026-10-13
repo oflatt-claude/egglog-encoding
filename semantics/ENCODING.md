@@ -63,8 +63,8 @@ and pushes to the PR are authorized, including before the proofs are complete.
 The Lean refactor separates congruence compilation, provenance instrumentation, and proof
 resugaring. The congruence pass is implemented in
 [Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean). The latter two passes are
-not implemented yet. The old combined encoder remains available while its execution
-invariants are ported; its proof annotations have known correctness defects.
+not implemented yet. The old combined encoder remains as a comparison reference; its
+proof annotations have known correctness defects.
 
 ## Congruence compilation
 
@@ -141,8 +141,17 @@ The congruence pass has kernel-checked proofs for:
 - The executable reader and correspondence under explicit state invariants
   (`sameClassF_iff`, `Rebuilt.corresponds`).
 
-**Remaining in step 1:** compose top-level commands into the end-to-end completeness
-theorem. Steps 2–5 have not started.
+**Step 1 is complete.** [Complete.lean](EgglogSemantics/Congruence/Complete.lean) proves
+`Egglog.Congruence.encode_corresponds`:
+
+```lean
+Cong src a b ↔ SameClass target.toDatabase a b
+```
+
+Its premises are `P.EncodeDomain`, a source execution from empty, successful compiled
+execution, and membership of both endpoints in the source. `encode_corresponds_relational`
+gives the same theorem for execution using structural matching and table operations only.
+Termination is not asserted. Steps 2–5 remain.
 
 The theorem retains `Program.EncodeDomain`: constructor declarations, no primitive
 or generated source names, consistent arities, supported queries, scoped and declared

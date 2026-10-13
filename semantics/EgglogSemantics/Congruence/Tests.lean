@@ -13,6 +13,7 @@ import EgglogSemantics.Congruence.RunState
 import EgglogSemantics.Congruence.Rounds
 import EgglogSemantics.Congruence.Prelude
 import EgglogSemantics.Congruence.Globals
+import EgglogSemantics.Congruence.Complete
 
 /-! Executable regressions for rebuilding, existence, and ordered query flattening. -/
 

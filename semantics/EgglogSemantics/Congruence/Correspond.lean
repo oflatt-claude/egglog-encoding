@@ -1,16 +1,10 @@
 import EgglogSemantics.Congruence.Properties
 
 /-!
-# Correspondence reductions for the congruence pass
+# Correspondence reductions
 
-These are the data-only reductions ported from the original correspondence proof to
-single-output tables. The forward direction needs view leaders, coverage at a shared
-child-id tuple, and the edges recording source unions. The reverse direction needs sound
-view entries. Neither direction mentions proof annotations or a proof checker.
-
-The execution invariants establishing these hypotheses for `execM (encode P)` still
-need to be ported. `corresponds_of_invariants` is deliberately conditional on them;
-it is not yet the end-to-end `encode_corresponds` theorem.
+View coverage, represented unions, and sound entries relate source congruence to the
+compiled table reading. `Complete.lean` establishes these invariants for full executions.
 -/
 
 namespace Egglog.Congruence
