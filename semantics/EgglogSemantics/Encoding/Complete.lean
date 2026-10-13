@@ -11185,16 +11185,6 @@ source constructor at its own key width — both go through `FDatabase.SoundTerm
 `FDatabase.EncOk.stepCmd` is what advances that in lockstep with the source. `EncStep` is that
 lockstep, and `EncStep.program` is exactly the `hP` the step lemma locates its command by. -/
 
-/-- **`Database.CtorsIn` off a prefix of the program**, which is `ctorsIn_of_programStep` with
-the run's own command list replaced by a sublist of it — `programStep_ctorsIn` was already
-stated that way. -/
-theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
-    (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
-    sd.CtorsIn P :=
-  (programStep_ctorsIn Database.CtorState.empty Database.empty_ctorsInState
-    (fun c hc => Cmd.CtorsIn.of_domain hdom (hsub c hc))
-    (fun c hc => hdom.ctorsOnly c (hsub c hc)) hstep).terms
-
 /-! #### Two source-run invariants the firing spends
 
 `Egglog.UnionsFire` is given no program, and some of what a firing needs are facts about the

@@ -179,6 +179,15 @@ The new pass currently has kernel-checked proofs of:
   the data invariants, every live view output is a UF root, and key columns can follow
   arbitrary live UF paths while retaining that output. These use the actual firings,
   the retained-entry/live-row bridge, and uniqueness of settled table rows.
+- `execM_encode_rebuildTables`: successful compiled execution retains every constructor's
+  view declaration and generated rebuilding rules. Shared rule-store lemmas characterize
+  registrations exactly; source constructor/arity preservation is shared with the legacy
+  proof and no longer carries an obsolete `NoSet` condition.
+- `Rebuilt.viewLeader` and `Rebuilt.viewsCover`: recursive readings normalize to live rows,
+  two readings of a term have the same UF root, and one reading per held source term gives
+  coverage at common child ids. `Rebuilt.corresponds` reduces the remaining command
+  simulation to those source-existence witnesses and represented source unions, alongside
+  the data invariants. It is still a conditional theorem, not a completed execution proof.
 - `sameClassF_iff`: the executable reader agrees with `SameClass`, under its explicit
   subterm-closure and diagonal-equality hypotheses.
 - `corresponds_of_invariants`: source congruence agrees with the target reading when view
@@ -186,8 +195,9 @@ The new pass currently has kernel-checked proofs of:
 
 The execution proof establishing those invariants for `Congruence.encode` is **not yet
 ported**. Thus the new pass does not yet have an end-to-end completeness theorem.
-The next obligations connect rebuilt rows to view coverage and assemble the invariants across
-corresponding program executions, including forward matching of flattened queries.
+The next obligations establish forward matching of flattened queries and assemble the
+invariants across corresponding program executions, preserving source-existence readings
+and represented source unions.
 The paper's completeness theorem will stop at this pass; later instrumentation and
 resugaring still require soundness.
 

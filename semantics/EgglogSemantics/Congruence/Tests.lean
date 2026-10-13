@@ -8,7 +8,7 @@ import EgglogSemantics.Congruence.Merge
 import EgglogSemantics.Congruence.Maintenance
 import EgglogSemantics.Congruence.Head
 import EgglogSemantics.Congruence.MaintenanceDescent
-import EgglogSemantics.Congruence.Rebuilt
+import EgglogSemantics.Congruence.Leaders
 
 /-! Executable regressions for rebuilding, existence, and ordered query flattening. -/
 
