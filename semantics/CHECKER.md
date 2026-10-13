@@ -1,4 +1,12 @@
-# Legacy proof checker
+# Proof checkers
+
+The replacement's [format and semantic foundations](EgglogSemantics/SourceProof/)
+are in progress. `Fiat` facts are collected only from original global actions;
+failed global evaluation rejects the context. `fiat_sound` proves these facts against
+source execution, including programs with functions. `Claim.Supported` tracks source
+existence witnesses through equality reasoning. Full certificate soundness is pending.
+
+## Legacy checker
 
 [Checker.lean](EgglogSemantics/Encoding/Checker.lean) implements the old
 `Proof.Checks P pf a b : Bool`. **It is known to be unsound** and is retained only as a
@@ -57,6 +65,22 @@ propositions and anchored congruence. Rule-created constructions have rule prove
 Compatibility will require checking the same resugared certificate in Lean and Rust.
 Running their separate encoders on the same program does not establish that property.
 Neither the new instrumentation pass nor that shared-certificate bridge is implemented yet.
+
+## Source merge inputs
+
+A merge proof cannot infer an actual collision from two congruent row spellings alone.
+For example, let `Table` have one output column and a merge body that unions `old` with
+`C`, returning `old`. Store only `Table(A)`, assert `A = B`, and build `C`. Source
+execution leaves `A` and `C` distinct: there is no conflicting second row.
+
+Anchored congruence can nevertheless derive `Table(A) = Table(B)`, and symmetry and
+transitivity give reflexivity for `Table(B)`. Passing `Table(A)` and `Table(B)` to a
+merge justification would run the body and incorrectly conclude `A = C`.
+
+The [merge-input regression](EgglogSemantics/SourceProof/Counterexamples.lean) reproduces
+this mismatch. The source checker will first accept constructor-only programs;
+source merge-input evidence is deferred. Functions remain necessary in the relational provenance pass,
+whose input program has no implicit equality reasoning. The source semantics are unchanged.
 
 `difftest check 64` still runs the legacy diagnostic; it is not an all-passing validation
 gate. See the [encoding guide](ENCODING.md) for the new pass's validation and proof status.

@@ -10,7 +10,8 @@ This is the working plan for PR #58. The implementation order is:
    here. The compiled target uses functions, but extending the theorem to arbitrary
    source merge functions is deferred.
 2. **Implement a sound source proof checker.** Check explicit propositions against
-   the original program. `Fiat` must be justified by original globals; it cannot
+   the original program, initially in the constructor-only source fragment.
+   `Fiat` must be justified by original globals; it cannot
    introduce an arbitrary constructor or discharge an unproved rule premise.
    Congruence must preserve evidence that the enclosing application exists. Prove
    that accepted certificates imply their source propositions, including existence.
@@ -152,6 +153,17 @@ Its premises are `P.EncodeDomain`, a source execution from empty, successful com
 execution, and membership of both endpoints in the source. `encode_corresponds_relational`
 gives the same theorem for execution using structural matching and table operations only.
 Termination is not asserted. Steps 2–5 remain.
+
+Step 2 has an explicit certificate format and proved foundations in
+[SourceProof/](EgglogSemantics/SourceProof/). `fiat_sound` proves that every accepted
+global fact follows from an actual execution of the original program. `Claim.Supported`
+requires source existence witnesses for every subterm; symmetry, transitivity, and
+anchored congruence preserve it. The complete certificate checker is not yet proved.
+
+Source merge proofs are deferred: equality can produce another spelling of one
+stored function row without establishing a second input to its merge body. The
+[checker guide](CHECKER.md#source-merge-inputs) records the counterexample. This does not
+affect the constructor-only completeness theorem or the relational provenance pass.
 
 The theorem retains `Program.EncodeDomain`: constructor declarations, no primitive
 or generated source names, consistent arities, supported queries, scoped and declared

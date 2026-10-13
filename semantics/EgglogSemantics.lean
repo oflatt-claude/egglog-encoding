@@ -8,7 +8,10 @@ import EgglogSemantics.Tests.Examples
 -- Congruence compilation and its data-only correspondence reductions.
 import EgglogSemantics.Congruence.Tests
 
--- Legacy proof encoding: retained during the correspondence theorem port.
+-- Source certificate format and proved global/existence support.
+import EgglogSemantics.SourceProof.Counterexamples
+
+-- Legacy combined encoding, retained for differential comparison.
 import EgglogSemantics.Encoding.Encode
 import EgglogSemantics.Encoding.Checker
 import EgglogSemantics.Encoding.Correspond
