@@ -6,7 +6,7 @@ import Batteries.Data.List.Basic
 ```
 Program = (Cmd ...)
 Cmd     = Action | Rule | (run R) | (saturate R) | Decl
-Decl    = (datatype ...) | (constructor ...) | (function ... :merge ...)
+Decl    = (constructor ...) | (function ... :merge ...)
 Rule    = (rule Query Actions :ruleset R)
 Query   = (Pattern ...)
 Pattern = expr | (= expr expr)

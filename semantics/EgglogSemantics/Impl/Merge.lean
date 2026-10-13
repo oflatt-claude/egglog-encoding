@@ -213,7 +213,8 @@ orient a collision between two rows the interpreter can see, and not enough when
 canonical key belongs to a third term carrying no row of its own:
 
 ```
-(datatype Math (A) (B) (C) (Kept) (Lost))
+(sort Math) (constructor A () Math) (constructor B () Math) (constructor C () Math)
+(constructor Kept () Math) (constructor Lost () Math)
 (function Dist (Math) i64 :merge new)
 (A) (set (Dist (B)) 1) (set (Dist (C)) 2) (union (C) (A)) (union (B) (A))
 (rule ((= 1 (Dist (A)))) ((Kept)))  (rule ((= 2 (Dist (A)))) ((Lost)))

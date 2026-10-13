@@ -56,7 +56,7 @@ whose merged value is the constant `7`. -/
 def fDecl : FnDecl :=
   { arity := 0, outArity := 1, merge := some (.merge [] [.lit (.int 7)]) }
 
-/-- `(datatype S (c))`, at `n` argument columns. Declaration is required, so every witness
+/-- `(constructor c (S…) S)` at `n` argument columns. Declaration is required, so every witness
 below that *builds* a term has to declare its constructor first. -/
 def ctorDecl (n : Nat) : FnDecl := { arity := n, outArity := 1, merge := none }
 

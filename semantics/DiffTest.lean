@@ -270,7 +270,10 @@ argued: the whole suite compares against egglog byte for byte. -/
 set_option linter.hashCommand false in
 #guard Program.toEgg (Program.declared
     [.action (.expr (add (C "One") (C "Two"))), .rule swapRule, .run "", .run ""])
-  = "(datatype Math (One) (Two) (Add Math Math))\n\
+  = "(sort Math)\n\
+     (constructor One () Math)\n\
+     (constructor Two () Math)\n\
+     (constructor Add (Math Math) Math)\n\
      (Add (One) (Two))\n\
      (rule ((Add a b)) ((Add b a)))\n\
      (run 1)\n\
@@ -641,10 +644,10 @@ private def readIntoW (hit f : FnName) (key : List Expr) (vs : List Int) : Rule 
 
 Every primitive application in the suite used to sit inside a `:merge` body, and that was
 not a choice about coverage — the emitter could not render one anywhere else. `fnArities`
-fed every applied name into the `datatype` header, so a program applying `min` in an action
-emitted `(datatype Math (min Math Math) …)` and egglog answered `Primitive min already
+declared every applied name as a constructor, so a program applying `min` in an action
+emitted `(constructor min (Math Math) Math)` and egglog answered `Primitive min already
 declared.` before running a line of it. None of `writeCase`'s four guards caught it, since
-none of them is about the header.
+none of them is about the declarations.
 
 With `Prim.ofName` filtered out of `fnArities` the whole position opens up, and it is
 ordinary egglog: `(set (Dist (K)) (min 5 3))` is an `i64` expression in a value column,

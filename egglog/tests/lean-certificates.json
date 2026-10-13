@@ -1,5 +1,5 @@
 [{"program":
-  "(datatype Math (F Math) (A) (B))\n(F (A))\n(F (B))\n(union (A) (B))",
+  "(sort Math)\n(constructor A () Math)\n(constructor B () Math)\n(constructor F (Math) Math)\n(F (A))\n(F (B))\n(union (A) (B))",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -117,7 +117,7 @@
     "accepted": true}],
   "case": "nested-union"},
  {"program":
-  "(datatype Math (A) (B) (F Math Math) (G Math) (H Math))\n(ruleset R)\n(F (G (B)) (G (B)))\n(union (A) (B))\n(rule ((F (G x) (G x))) ((H x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor G (Math) Math)\n(constructor F (Math Math) Math)\n(constructor H (Math) Math)\n(F (G (B)) (G (B)))\n(union (A) (B))\n(rule ((F (G x) (G x))) ((H x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 10,
     "nodes":
@@ -533,7 +533,7 @@
     "accepted": true}],
   "case": "nested-query"},
  {"program":
-  "(datatype Math (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(G (B))\n(union (F (A)) (G (B)))\n(rule ((= (F x) (G y))) ((union x y)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(G (B))\n(union (F (A)) (G (B)))\n(rule ((= (F x) (G y))) ((union x y)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 7,
     "nodes":
@@ -1092,7 +1092,7 @@
     "accepted": true}],
   "case": "equality-query"},
  {"program":
-  "(datatype Math (A) (F Math) (G Math))\n(ruleset R)\n(rule () ((F (A))) :name \"lean-rule-3\" :ruleset R)\n(rule ((F x)) ((G x)) :name \"lean-rule-4\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(rule () ((F (A))) :name \"lean-rule-3\" :ruleset R)\n(rule ((F x)) ((G x)) :name \"lean-rule-4\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 2,
     "nodes":
@@ -1128,7 +1128,7 @@
     "accepted": true}],
   "case": "rule-chain"},
  {"program":
-  "(datatype Math (Missing) (A) (B))\n(ruleset R)\n(A)\n(B)\n(rule ((Missing)) ((union (A) (B))) :name \"lean-rule-5\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(A)\n(B)\n(rule ((Missing)) ((union (A) (B))) :name \"lean-rule-5\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 0,
     "nodes": [{"rhs": ["B", []], "reason": {"kind": "fiat"}, "lhs": ["B", []]}],
@@ -1138,7 +1138,7 @@
     "accepted": true}],
   "case": "missing-premise"},
  {"program":
-  "(datatype Math (F Math) (A) (G Math) (B))\n(ruleset R)\n(F (A))\n(rule () ((union (A) (G (B)))) :name \"lean-rule-5\" :ruleset R)",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(rule () ((union (A) (G (B)))) :name \"lean-rule-5\" :ruleset R)",
   "certificates":
   [{"root": 0,
     "nodes":
@@ -1151,7 +1151,7 @@
     "accepted": true}],
   "case": "support"},
  {"program":
-  "(datatype Math (Missing) (A) (F Math) (B) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x) (= x (B))) ((G x)) :name \"lean-rule-7\" :ruleset R)",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x) (= x (B))) ((G x)) :name \"lean-rule-7\" :ruleset R)",
   "certificates":
   [{"root": 2,
     "nodes":
@@ -1169,7 +1169,7 @@
     "accepted": true}],
   "case": "ordered-premises"},
  {"program":
-  "(datatype Math (B) (Missing) (A) (F Math) (G Math))\n(ruleset R)\n(F (F (A)))\n(rule ((F (F x))) ((G x)) :name \"lean-rule-6\" :ruleset R)",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (F (A)))\n(rule ((F (F x))) ((G x)) :name \"lean-rule-6\" :ruleset R)",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -1186,7 +1186,7 @@
     "accepted": true}],
   "case": "nested-premise"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 0,
     "nodes":
@@ -1196,7 +1196,7 @@
     "accepted": false}],
   "case": "invented-global"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 0,
     "nodes":
@@ -1206,7 +1206,7 @@
     "accepted": false}],
   "case": "invented-application"},
  {"program":
-  "(datatype Math (F Math) (G Math) (Missing) (A) (B))\n(ruleset R)\n(A)\n(B)\n(rule ((Missing)) ((union (A) (B))) :name \"lean-rule-7\" :ruleset R)",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(A)\n(B)\n(rule ((Missing)) ((union (A) (B))) :name \"lean-rule-7\" :ruleset R)",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -1220,7 +1220,7 @@
     "accepted": false}],
   "case": "absent-premise"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -1234,7 +1234,7 @@
     "accepted": false}],
   "case": "unbound-variable"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -1251,7 +1251,7 @@
     "accepted": false}],
   "case": "wrong-binding"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -1268,7 +1268,7 @@
     "accepted": false}],
   "case": "missing-premise-proof"},
  {"program":
-  "(datatype Math (Missing) (A) (F Math) (B) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x) (= x (B))) ((G x)) :name \"lean-rule-7\" :ruleset R)",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x) (= x (B))) ((G x)) :name \"lean-rule-7\" :ruleset R)",
   "certificates":
   [{"root": 2,
     "nodes":
@@ -1286,7 +1286,7 @@
     "accepted": false}],
   "case": "premise-order"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -1303,7 +1303,7 @@
     "accepted": false}],
   "case": "wrong-conclusion"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 2,
     "nodes":
@@ -1315,7 +1315,7 @@
     "accepted": false}],
   "case": "transitivity-endpoints"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 2,
     "nodes":
@@ -1329,7 +1329,7 @@
     "accepted": false}],
   "case": "congruence-child"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 1,
     "nodes":
@@ -1342,7 +1342,7 @@
     "accepted": false}],
   "case": "symmetry-claim"},
  {"program":
-  "(datatype Math (Missing) (A) (B) (F Math) (G Math))\n(ruleset R)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
+  "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor B () Math)\n(constructor Missing () Math)\n(constructor F (Math) Math)\n(constructor G (Math) Math)\n(F (A))\n(union (A) (B))\n(rule ((F x)) ((G x)) :name \"lean-rule-7\" :ruleset R)\n(run-schedule (saturate R))",
   "certificates":
   [{"root": 1,
     "nodes":

@@ -94,7 +94,7 @@ it: `Expr.eval` has no rule for an undeclared name and `execM` would simply get 
 header below is shared by all three programs, which keeps one base signature for the
 lemmas that read one. -/
 
-/-- `(datatype S (a) (b) (d) (C S S))`, as four declarations. -/
+/-- The constructors `a`, `b`, `d` and `(C S S)`, as four declarations. -/
 def ctorDecl (n : Nat) : FnDecl := { arity := n, outArity := 1, merge := none }
 
 def ctorHeader : Program :=

@@ -31,7 +31,7 @@ private def eNum (n : Int) : Expr := .lit (.int n)
 /-- The empty signature. -/
 private abbrev noSig : Signature := fun _ => none
 
-/-- `(datatype S (c x…))` at `n` argument columns.
+/-- `(constructor c (S…) S)` at `n` argument columns.
 
 Declaration is required, so every program below that *builds* a term declares its
 constructors first, and every hand-built database declares the ones its terms use. -/
@@ -541,7 +541,7 @@ may write the function's own table — `(function Dist (Math) i64 :merge ((set (
 `Program.arityOk` reads `Signature` and nothing else, so a name with no entry has no
 declared column counts to disagree with and the check passes a name used at two arities.
 That a program must declare before it uses is `Program.Evaluable`'s business, not this
-one's; that the *emitted* `datatype` header cannot express two arities is
+one's; that the emitted `constructor` declarations cannot express two arities is
 `Tests/Egg.lean`'s `Program.arityConflicts`. -/
 #guard Program.arityOk [.action (.expr (.app "F" [A])), .action (.expr (.app "F" [A, A]))]
   emptySig

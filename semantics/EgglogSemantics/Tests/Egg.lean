@@ -119,29 +119,31 @@ def FnDecl.toEgg (sig : Signature) (f : FnName) (d : FnDecl) (m : MergeSpec) : S
 
 /-- A command as egglog source. A run of the *unnamed* ruleset is `(run 1)`, which is what
 egglog's bare form means (`egglog/src/ast/parse.rs:834-864`); a named one carries its name.
-A constructor declaration is folded into the `datatype` header and produces nothing; a
-`:merge` declaration is its own command. -/
+A constructor declaration is a `constructor` command and a `:merge` declaration a
+`function` command. -/
 def Cmd.toEgg (sig : Signature) : Cmd → String
   | .action a => a.toEgg sig
   | .rule r => r.toEgg sig
   | .run R => if R = "" then "(run 1)" else "(run " ++ R ++ " 1)"
   | .saturate R => "(run-schedule (saturate " ++ (if R = "" then "(run)" else R) ++ "))"
   | .decl f d => match d.merge with
-    | none => ""
+    | none => "(constructor " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
+        ++ ") Math)"
     | some m => FnDecl.toEgg ((Cmd.decl f d).sigBind sig) f d m
 
 /-! ### Collecting the signature
 
-The header has to declare every constructor, so the arities are read off the program's
-uses rather than from `Signature`. That is also where `Program.ctorDecls` gets the model
-side's declarations, so the two descriptions of a program's constructors cannot drift.
+Every constructor has to be declared before egglog runs the program, so the arities are
+read off the program's uses rather than from `Signature`. `Program.ctorDecls` turns them
+into the declarations the model evaluates against and `Cmd.toEgg` renders, so the two
+descriptions of a program's constructors cannot drift.
 
 Two names must be kept out of the result, and for opposite reasons. A **declared `:merge`
 function** has its own `function` command, and `Program.ctorArities` filters it. A
 **primitive** has no declaration at all: `min`, `max`, `ordering-gt` and `if` are resolved
 by `Prim.ofName` before the signature is consulted, and egglog resolves `min`/`max` out of a
-table that is already populated, so a `datatype` entry for one is rejected with `Primitive
-min already declared.` `Program.fnArities` filters all four, which also keeps them out of
+table that is already populated, so declaring one is rejected with `Primitive min already
+declared.` `Program.fnArities` filters all four, which also keeps them out of
 `Program.fnNames` — a primitive is not a table and `(print-size)` never reports one. No case
 this file generates applies the two choice primitives, which egglog does not have.
 -/
@@ -169,8 +171,7 @@ def Action.fnArities : Action → List (FnName × Nat)
 
 /-- The names a merge specification applies. A `:merge` body is an expression position like
 any other, so a constructor mentioned *only* there — `(set (Log (A)) old)` — still has to
-reach the `datatype` header, and the function it `set`s still has to be a name the emitter
-knows. -/
+be declared, and the function it `set`s still has to be a name the emitter knows. -/
 def MergeSpec.fnArities : MergeSpec → List (FnName × Nat)
   | .noMerge => []
   | .merge body res => body.flatMap Action.fnArities ++ Expr.fnAritiesL res
@@ -184,13 +185,13 @@ def Cmd.fnArities : Cmd → List (FnName × Nat)
 
 /-- Every function the program uses, with its arity, deduplicated — **primitives
 excluded**. A primitive is not a function of the program's signature: egglog has already
-declared it, so emitting a `datatype` entry for one is an error and `(print-size)` never
-reports a row count for one. -/
+declared it, so declaring one is an error and `(print-size)` never reports a row count for
+one. -/
 def Program.fnArities (p : Program) : List (FnName × Nat) :=
   ((p.flatMap Cmd.fnArities).filter fun fa => (Prim.ofName fa.1).isNone).dedup
 
-/-- The names the program declares as merge functions. These get their own `function`
-command and must be kept out of the `datatype`. -/
+/-- The names the program declares as merge functions. These are `function` commands, not
+constructors. -/
 def Program.mergeNames (p : Program) : List FnName :=
   p.filterMap fun c => match c with
     | .decl f d => if d.merge.isSome then some f else none
@@ -209,11 +210,10 @@ def Program.declaredNames (p : Program) : List FnName :=
 /-- A `(constructor …)` for every constructor the program applies and does not declare.
 
 **Declaration is required** (`Signature.IsCtor`), so a program that applies a name nobody
-declared gets stuck in `Expr.eval` and `execM` returns `none`. Generated programs are
-written against the `datatype` header — which this file reads off the *uses* — so the model
-side needs the same information as commands. This is that, and it is why the two sides
-still agree: a constructor declaration renders as nothing (`Cmd.toEgg`), being folded into
-the header the header check already emits. -/
+declared gets stuck in `Expr.eval` and `execM` returns `none`. Generated programs apply
+constructors without declaring them, so the declarations are read off the *uses*; the
+declared program is what the model evaluates and what `Cmd.toEgg` renders, so the two
+sides agree. -/
 def Program.ctorDecls (p : Program) : Program :=
   (p.ctorArities.filter fun fa => fa.1 ∉ p.declaredNames).map fun fa =>
     .decl fa.1 { arity := fa.2, outArity := 1, merge := none }
@@ -231,9 +231,9 @@ walks the program threading `Cmd.sigBind` and renders the commands that fail, so
 cannot drift the way `illegalSets` and `Action.SetLegal` can.
 
 For an *undeclared* one there is no declaration to check against, and the constraint comes
-from this file instead: `eggHeader` invents a `datatype` entry per `(name, arity)` pair, so
-a name used at two arities emits two entries and egglog answers "Function already bound
-{name}". -/
+from this file instead: `ctorDecls` invents a declaration per `(name, arity)` pair, so a
+name used at two arities emits two `constructor` commands and egglog answers "Function
+already bound {name}". -/
 
 def Program.arityErrorsFrom : Program → Signature → List String
   | [], _ => []
@@ -277,11 +277,9 @@ def Program.fnNames (p : Program) : List FnName := (p.fnArities.map Prod.fst).de
 
 /-! ### The file -/
 
-/-- The single-sort `datatype` declaration the untyped model needs. -/
-def Program.eggHeader (p : Program) : String :=
-  "(datatype Math " ++ String.intercalate " "
-    (p.ctorArities.map fun fa =>
-      "(" ++ fa.1 ++ String.join (List.replicate fa.2 " Math") ++ ")") ++ ")"
+/-- The single sort the untyped model needs. Constructors are declared by their commands,
+so the program must be `declared`. -/
+def Program.eggHeader (_ : Program) : String := "(sort Math)"
 
 /-- A `(ruleset <name>)` for every named ruleset the program mentions. egglog requires the
 declaration before a rule may join one or a schedule may run one; the unnamed ruleset is
