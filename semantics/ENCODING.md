@@ -168,11 +168,11 @@ WellFormed(P) ∧ Fragment(P)
 ```
 
 Both states are mathematical `Database` values. Neither `FDatabase` nor interpreter fuel
-appears in this statement. `PreservesObservations` names this **unproved obligation**;
-adding the definition does not establish it. The remaining proof work is abstract
-execution simulation and query correspondence at every check boundary. The internal
-state-reading definitions and correspondence lemmas have independent mathematical
-imports. The older `Complete.lean` proof remains available while that port proceeds.
+appears in this statement. `PreservesObservations` remains an **unproved Lean obligation**.
+The abstract rebuilding, query-correspondence, and observation-composition lemmas below
+are proved; the outstanding obligation is to establish their data and metadata invariants
+along every compiled prefix. The older executable `Complete.lean` theorem does not
+discharge that obligation.
 
 `Proofs/Result.lean` proves that successful results coincide with `ProgramStep`, that a
 failure is exactly a successful prefix followed by a false check, and that query
@@ -184,6 +184,135 @@ including exhausted fuel. Their regressions are sanity checks, not a replacement
 `PreservesTermination` is a separate stretch goal: a finite source evaluation implies
 some finite compiled evaluation. It is not a premise or a consequence of the required
 conditional observation theorem.
+
+### Correctness proof
+
+Write `C_P(A)` for the prelude of the **whole** program `P`, followed by the compiled
+commands of its prefix `A`. Using the whole prelude matters: its declarations and copies
+of maintenance rules depend on the complete program, including later saturation commands.
+The internal statement needed at each check is
+
+```text
+P = A; check q; B
+∅ ⊢ A ⇓ ok(S)       ∅ ⊢ C_P(A) ⇓ ok(T)
+──────────────────────────────────────────
+holds(S, q) iff holds(T, flatten(q)).
+```
+
+`CheckAgreement` in `Proofs/Congruence/Observation.lean` states exactly this property.
+`observations_of_checkAgreement` proves the final success/failure theorem from it. The
+prelude and the compiled blocks of non-check commands contain no checks, so a terminating
+execution of any such block must succeed. Align the two executions one source command
+at a time. At a check, query agreement implies that both pass or both fail. In the passing
+case the databases remain unchanged and induction continues. In the failing case both
+executions immediately return `checkFailed`; there is no premise about the remaining
+program. If both reach the end, both return `ok`. This argument uses only the two given
+finite executions. It does not construct a target execution or relate round counts.
+
+The data proof supplying `CheckAgreement` uses the following boundary relation. A reading
+`T ⊢ t ↝ i` is `ViewRepr T t i`: literals read as themselves; an application reads through
+the view of its constructor after recursively reading its children.
+
+- Every held source term has a target reading, and every nonreflexive asserted source
+  equation has readings of its two endpoints joined by a UF edge in either direction.
+- Every view row `View_f(cs, i)` has a held source witness `f(as)` with `as ≡_S cs` and
+  `f(as) ≡_S i`. Every UF row `UF(a, b)` satisfies `a ≡_S b`.
+- The target is rebuilt. Its equations are diagonal, its UF edges descend in the term
+  order, and its generated declarations and maintenance rules are present. Source rules
+  registered so far correspond exactly to their compiled rules.
+
+The first two clauses express completeness and soundness. They do not require the raw
+source and target term sets to be equal, or a particular choice of representative.
+
+**Rebuilding lemma.** A finite, well-formed target at a generated-rule and merge fixed
+point has canonical readings. A collision of two views at the same key joins their
+outputs: the merge body writes both outputs to their minimum. The same reasoning joins
+two outgoing UF edges. Path compression makes parent reachability transitive. Output
+propagation and child rules transport view rows along these parent paths. All of these
+facts follow from actual `RuleResults` and `MergeStep` instances; they are not additional
+rewrites in the semantics.
+
+Every id reaches a root. The proof uses the finite set of ids reachable in this database
+and strict descent of nontrivial UF edges; it does **not** assume that the structural
+order on all terms is well founded. Two reachable roots coincide because competing
+paths join. Normalize each view's keys and output to roots. Structural induction on a
+source term then shows that all its readings have the same root: corresponding child
+readings normalize to equal keys, and the parent outputs join at that key. UF soundness
+and literal isolation keep literal roots equal to their original literals.
+
+This lemma is proved in `AbstractMaintenance.lean` and `AbstractRebuild.lean`.
+`Proofs/Finite.lean` separately proves finiteness for every mathematical state reached
+from empty by a finite successful prefix, including finite saturation derivations. A
+round has finitely many matching substitutions because its rules, held terms, and query
+variable lists are finite. Finite actions, merges, and sequences preserve finiteness.
+
+**Query lemma.** At a boundary satisfying the relation, a source query has a complete
+match iff its flattening has a complete target match. In the forward direction, choose
+one canonical reading for each value of the source substitution. This single assignment
+is shared by every occurrence of every query variable. Congruence transports a held
+pattern witness to readings of the instantiated expressions. Even when matching
+temporarily introduces query operands, those operands introduce only reflexive equations;
+they cannot provide a new held witness. Traverse the original syntax in compiler order,
+bind the fresh variable for each application to its reading, and satisfy the emitted
+view atoms and equalities. Disjoint fresh-variable intervals and the reserved namespace
+make these bindings compatible across the whole conjunction.
+
+For the reverse direction, read the flattened view atoms back through the original
+syntax. Sound view rows supply source existence and congruence. Because each source
+variable occurs as a view key, its target value is a held source value; generated table
+terms cannot be substituted for source values. Restrict the resulting assignment to
+each pattern and join those substitutions. Groundedness preserves the existence
+requirement at equality patterns. This is the proved `Abstract.Rebuilt.queryHolds_iff`
+in `AbstractForward.lean`, using `AbstractQuery.lean`, `AbstractTransport.lean`, and
+the reverse matching proof in `Match.lean`.
+
+**Execution lemma (remaining Lean port).** The prelude establishes the boundary relation
+at empty source data, and paired successful executions of each source command and its
+compiled block preserve it. The mathematical argument is by command cases:
+
+- The prelude declares tables and registers maintenance rules without creating data.
+  Source declarations are already installed there. Fresh declarations, consistent arities,
+  and the reserved namespace give the required signatures without name collisions.
+  Rule registration installs exactly the corresponding compiled rule. At a rebuilt
+  boundary neither operation can add data through a further merge phase.
+- Building an application writes its children before its view, with the structural
+  application as its id. Induction on the expression gives readings for the source result
+  and all newly built subterms. A union additionally writes both endpoint ids to their
+  minimum, directly establishing the required joined readings. These rows are sound in
+  the source action's post-state.
+- A generated merge preserves soundness. Colliding views have source-congruent outputs
+  by anchored congruence on their held witnesses; colliding UF edges have source-congruent
+  outputs by transitivity. Their minimum is one of those outputs. Maintenance preserves
+  soundness by transitivity and replacement of congruent children. All phases retain old
+  rows, so existing readings and joined source equations persist. Minimum links descend,
+  and compression preserves descent. Thus arbitrary intervening merge choices are allowed.
+- For `run R`, use the query lemma in both directions on the pre-state. A compiled match
+  gives a source match at the same source-valued ids, so its whole head is justified by a
+  source firing in that round. Conversely, a source match gives a compiled match under
+  the common canonical assignment. Induction over the head's expressions and actions
+  represents every source contribution. Scoping, declared constructors, and the fragment's
+  literal-union restriction ensure these whole source heads evaluate successfully.
+  Unioning all contributions preserves both directions. Maintenance copies selected by
+  `R` add nothing to the already rebuilt pre-state; the trailing rebuild reestablishes
+  canonical readings after the new contributions.
+- For `saturate R`, compare fixed points rather than rounds. To prove soundness, fix the
+  final source state and induct over the given finite target derivation. Initial rows
+  remain justified there; a compiled firing reads back to a source firing whose results
+  are already included by the source fixed point. Merges and maintenance preserve those
+  justifications. To prove completeness, fix the final target state. Copies of all
+  maintenance rules in `R` make that state rebuilt. Induct over the given finite source
+  derivation: represented premises give a compiled firing, and the target fixed point
+  already contains its head. The query argument here is relative to the represented
+  source intermediate state; soundness may be justified in the larger final source state.
+  Thus different numbers of source and target rounds cause no problem. The trailing
+  dedicated rebuild preserves the established relation.
+- A successful check leaves both states unchanged. The query lemma also ensures that a
+  failing check fails on both sides, as used in the observation proof above.
+
+Induction over successful prefixes using this execution lemma establishes
+`CheckAgreement`, which the observation theorem turns into `PreservesObservations`.
+The execution lemma is the remaining formal obligation; the checked query and observation
+theorems must not be reported as a completed Lean proof of the compiler theorem.
 
 ## Query traversal
 

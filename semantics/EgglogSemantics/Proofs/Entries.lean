@@ -1,31 +1,9 @@
+import EgglogSemantics.Proofs.Bindings
 import EgglogSemantics.Proofs.NoUnions
 
 /-! Complete entry atoms: evaluation, indexed matching, and single-atom rule heads. -/
 
 namespace Egglog
-
-/-- Replacing one operand replaces one value: what a column rule's key expression is. -/
-theorem Expr.evalList_set {sig : Signature} {ρ : Env} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
-      ∀ (i : Nat) {e : Expr} {t : Term}, e.eval sig ρ = some t →
-        Expr.evalList sig (es.set i e) ρ = some (ts.set i t)
-  | [], _, h, _, _, _, _ => by
-      rw [Expr.evalList, Option.some.injEq] at h
-      cases h
-      simp
-  | a :: as, _, h, 0, e, t, he => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      rw [List.set_cons_zero, List.set_cons_zero, Expr.evalList, he, Option.bind_some, hus]
-      rfl
-  | a :: as, _, h, i + 1, e, t, he => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      rw [List.set_cons_succ, List.set_cons_succ, Expr.evalList, hu, Option.bind_some,
-        Expr.evalList_set hus i he]
-      rfl
 
 /-- The value at one position is that operand's. -/
 theorem Expr.getElem?_of_evalList {sig : Signature} {ρ : Env} :

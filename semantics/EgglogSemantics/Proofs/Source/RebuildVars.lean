@@ -1,5 +1,5 @@
 import EgglogSemantics.Source.Names
-import EgglogSemantics.Proofs.Assignments
+import EgglogSemantics.Proofs.Bindings
 
 /-! Distinct key variables shared by the rebuilding passes. -/
 

@@ -67,6 +67,27 @@ theorem Eval.append_of_failed {db : Database} {p : Program}
   | cons hc _ ih => exact .cons hc (ih hr)
   | fail hc => exact .fail hc
 
+/-- A terminating concatenation either failed in its prefix or reached its suffix through
+a successful prefix. This does not presume that the suffix terminates after a failure. -/
+theorem Eval.append_iff {db : Database} {p q : Program} {r : Result} :
+    Eval db (p ++ q) r ↔
+      (r = .checkFailed ∧ Eval db p .checkFailed) ∨
+      ∃ mid, ProgramStep db p mid ∧ Eval mid q r := by
+  constructor
+  · intro h
+    induction p generalizing db with
+    | nil => exact Or.inr ⟨db, .nil, h⟩
+    | cons c cs ih =>
+        cases h with
+        | cons hc ht =>
+            rcases ih ht with ⟨rfl, hf⟩ | ⟨mid, hp, hq⟩
+            · exact Or.inl ⟨rfl, .cons hc hf⟩
+            · exact Or.inr ⟨mid, .cons (CmdEval.ok_iff.mp hc) hp, hq⟩
+        | fail hc => exact Or.inl ⟨rfl, .fail hc⟩
+  · rintro (⟨rfl, hf⟩ | ⟨mid, hp, hq⟩)
+    · exact hf.append_of_failed q
+    · exact Eval.append_of_ok hp hq
+
 /-- Every failure has a successful prefix and a particular false check. The suffix is
 unrestricted, so it need not terminate or even have a successful execution. -/
 theorem Eval.failed_iff {db : Database} {p : Program} :
@@ -87,6 +108,24 @@ theorem Eval.failed_iff {db : Database} {p : Program} :
         | @checkFailed q hq => exact ⟨[], q, cs, db, rfl, .nil, hq⟩
   · rintro ⟨pre, q, post, mid, rfl, hp, hq⟩
     exact Eval.append_of_ok hp (.fail (.checkFailed hq))
+
+/-- Checks are the only semantic failure. A terminating block containing none succeeds. -/
+theorem Eval.ok_of_no_checks {db : Database} {p : Program} {r : Result}
+    (hp : ∀ q, Cmd.check q ∉ p) (h : Eval db p r) :
+    ∃ d, r = .ok d ∧ ProgramStep db p d := by
+  cases r with
+  | ok d => exact ⟨d, rfl, Eval.ok_iff.mp h⟩
+  | checkFailed =>
+      obtain ⟨pre, q, post, mid, rfl, _, _⟩ := Eval.failed_iff.mp h
+      exact (hp q (by simp)).elim
+
+theorem Eval.append_of_no_checks {db : Database} {p q : Program} {r : Result}
+    (hp : ∀ q, Cmd.check q ∉ p) (h : Eval db (p ++ q) r) :
+    ∃ mid, ProgramStep db p mid ∧ Eval mid q r := by
+  rcases Eval.append_iff.mp h with ⟨_, hf⟩ | hs
+  · obtain ⟨_, heq, _⟩ := hf.ok_of_no_checks hp
+    cases heq
+  · exact hs
 
 /-- An empty conjunction always passes, including in an empty database. -/
 theorem QueryHolds.nil (db : Database) : QueryHolds db [] :=

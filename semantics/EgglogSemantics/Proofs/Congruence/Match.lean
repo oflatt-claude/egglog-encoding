@@ -178,23 +178,21 @@ theorem Query.vars_nodup (q : Query) : (Query.vars q).Nodup := by
   | nil => simp [Query.vars]
   | cons p ps ih => exact List.Nodup.union _ ih
 
-theorem validQuerySubst_of_patternReads {src d : Database} (hb : src.TermsBuild)
-    (hs : ViewsSound d src) {q : Query} {g : Var → Term} {ρt : Env}
+/-- Join a family of matching patterns at one valued assignment. This construction is
+mathematical; it does not invoke the executable matcher. -/
+theorem validQuerySubst_of_assignment {src : Database} {q : Query} {g : Var → Term}
     (hgt : ∀ v ∈ Query.vars q, g v ∈ src.terms)
-    (hlink : ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i → Cong src (g v) i)
-    (hgr : ∀ p ∈ q, p.GroundedAt src) (hread : ∀ p ∈ q, PatternRead d ρt p) :
+    (hm : ∀ p ∈ q, Matches src p (sourceSubst [] g p)) :
     ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
       ∀ v ∈ Query.vars q, Env.lookup v τ = some (g v) := by
   have hmem : ∀ p ∈ q, ∀ v ∈ p.vars, v ∈ Query.vars q := fun p hp v hv =>
     Query.mem_vars.mpr ⟨p, hp, hv⟩
   have hvalid : ∀ p ∈ q, ValidSubst src p (sourceSubst [] g p) := by
     intro p hp
-    refine ⟨⟨by rw [dom_sourceSubst], ?_⟩, ?_⟩
-    · rintro b hb
-      obtain ⟨v, hv, rfl⟩ := List.mem_map.mp hb
-      exact hgt v (hmem p hp v (p.mem_freeVars.mp hv).1)
-    · refine matches_of_patternRead hb hs (hgr p hp) (hread p hp) fun v hv i hi => ?_
-      exact ⟨g v, lookup_nil_sourceSubst hv, hlink v (hmem p hp v hv) i hi⟩
+    refine ⟨⟨by rw [dom_sourceSubst], ?_⟩, hm p hp⟩
+    rintro b hb
+    obtain ⟨v, hv, rfl⟩ := List.mem_map.mp hb
+    exact hgt v (hmem p hp v (p.mem_freeVars.mp hv).1)
   have hnd : (Env.dom (Query.vars q |>.map fun v => (v, g v))).Nodup := by
     simpa [Env.dom, List.map_map, Function.comp_def] using Query.vars_nodup q
   have hrefines : ∀ ρ ∈ q.map (sourceSubst [] g),
@@ -219,6 +217,35 @@ theorem validQuerySubst_of_patternReads {src d : Database} (hb : src.TermsBuild)
   obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp hv
   exact hall _ (List.mem_map.mpr ⟨p, hp, rfl⟩) (v, g v)
     (List.mem_map.mpr ⟨v, p.mem_freeVars.mpr ⟨hvp, by simp [Env.dom]⟩, rfl⟩)
+
+theorem validQuerySubst_of_patternReads {src d : Database} (hb : src.TermsBuild)
+    (hs : ViewsSound d src) {q : Query} {g : Var → Term} {ρt : Env}
+    (hgt : ∀ v ∈ Query.vars q, g v ∈ src.terms)
+    (hlink : ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i → Cong src (g v) i)
+    (hgr : ∀ p ∈ q, p.GroundedAt src) (hread : ∀ p ∈ q, PatternRead d ρt p) :
+    ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
+      ∀ v ∈ Query.vars q, Env.lookup v τ = some (g v) := by
+  apply validQuerySubst_of_assignment hgt
+  intro p hp
+  refine matches_of_patternRead hb hs (hgr p hp) (hread p hp) fun v hv i hi => ?_
+  exact ⟨g v, lookup_nil_sourceSubst hv, hlink v (Query.mem_vars.mpr ⟨p, hp, hv⟩) i hi⟩
+
+/-- Restricting a common matching environment to each pattern supplies a valid query
+substitution with exactly the same values on the query's variables. -/
+theorem validQuerySubst_of_matches {d : Database} {q : Query} {ρ : Env}
+    (hv : ∀ v ∈ Query.vars q, ∃ t, Env.lookup v ρ = some t ∧ t ∈ d.terms)
+    (hm : ∀ p ∈ q, Matches d p ρ) :
+    ∃ σ, ValidQuerySubst d q σ ∧
+      ∀ v ∈ Query.vars q, Env.lookup v σ = Env.lookup v ρ := by
+  let g : Var → Term := fun v => (Env.lookup v ρ).getD (.lit (.int 0))
+  have hg : ∀ v ∈ Query.vars q, Env.lookup v ρ = some (g v) ∧ g v ∈ d.terms := by
+    intro v hvq
+    obtain ⟨t, ht, hmem⟩ := hv v hvq
+    simpa [g, ht] using hmem
+  obtain ⟨σ, hσ, _, hlookup⟩ := validQuerySubst_of_assignment (fun v hv => (hg v hv).2)
+    (fun p hp => (hm p hp).of_agreeOn fun v hv => by
+      rw [(hg v (Query.mem_vars.mpr ⟨p, hp, hv⟩)).1, lookup_nil_sourceSubst hv])
+  exact ⟨σ, hσ, fun v hv => (hlookup v hv).trans (hg v hv).1.symm⟩
 
 mutual
 

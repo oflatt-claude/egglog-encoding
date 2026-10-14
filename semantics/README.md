@@ -31,7 +31,10 @@ that both the Lean and Rust checkers accept.
 The congruence pass retains its proved correspondence theorem against an executable
 target. The paper theorem is being separated into a mathematical compiler-correctness
 obligation: terminating source and compiled evaluations agree on success or check failure.
-Termination preservation is a stretch goal; interpreter correctness is outside the paper. Both the
+The abstract rebuilding and query-agreement lemmas, and the reduction from check-boundary
+agreement to whole-program observations, are proved. Preservation of the representation
+invariants across mathematical executions remains to be ported. Termination preservation
+is a stretch goal; interpreter correctness is outside the paper. Both the
 constructor source checker and relational provenance checker have proved soundness and
 existence support. The library permits no `sorry`.
 
