@@ -811,24 +811,18 @@ that needs a length hypothesis on the list level — `bltList [] (b :: bs)` and
 `bltList (b :: bs) []` are both `false`. -/
 namespace Lit
 
-/-- Asymmetry, totality and transitivity of the base-value order, each a case analysis over
-the two constructors. `Term.blt`'s literal case is this one. -/
+/-- Asymmetry, totality and transitivity of the base-value order, each the integer law
+under `decide`. `Term.blt`'s literal case is this one. -/
 theorem blt_asymm {l m : Lit} (h : Lit.blt l m = true) : Lit.blt m l = false := by
-  cases l <;> cases m <;> simp_all [Lit.blt]
+  cases l; cases m; simp_all [Lit.blt]
   omega
 
 theorem blt_total {l m : Lit} (h : l ≠ m) : Lit.blt l m = true ∨ Lit.blt m l = true := by
-  cases l with
-  | int a => cases m with
-    | int b => simp_all [Lit.blt]
-    | bool _ => exact Or.inl rfl
-  | bool a => cases m with
-    | int _ => exact Or.inr rfl
-    | bool b => revert h; cases a <;> cases b <;> simp [Lit.blt]
+  cases l; cases m; simp_all [Lit.blt]
 
 theorem blt_trans {l m n : Lit} (h₁ : Lit.blt l m = true) (h₂ : Lit.blt m n = true) :
     Lit.blt l n = true := by
-  cases l <;> cases m <;> cases n <;> simp_all [Lit.blt]
+  cases l; cases m; cases n; simp_all [Lit.blt]
   omega
 
 end Lit
@@ -1121,16 +1115,9 @@ theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   cases c with
   | saturate R => exact RunReach.contained (show SaturateReach R db d from hreach).1
   | action a => exact evalAction_contained (hreach)
-  | rule r =>
-    replace hreach : cmdEffect db (.rule r) = some d := hreach
-    rw [cmdEffect, Option.some.injEq] at hreach; subst hreach; exact ⟨subset_rfl⟩
-  | run R =>
-    replace hreach : cmdEffect db (.run R) = some d := hreach
-    rw [cmdEffect, Option.some.injEq] at hreach
-    subst hreach; exact Database.Contained.sUnion _ _
-  | decl f dc =>
-    replace hreach : cmdEffect db (.decl f dc) = some d := hreach
-    rw [cmdEffect, Option.some.injEq] at hreach; subst hreach; exact ⟨subset_rfl⟩
+  | rule r => subst hreach; exact ⟨subset_rfl⟩
+  | run R => subst hreach; exact Database.Contained.sUnion _ _
+  | decl f dc => subst hreach; exact ⟨subset_rfl⟩
 
 theorem ProgramStep.contained {db db' : Database} {p : Program}
     (h : ProgramStep db p db') : db.Contained db' := by
@@ -1528,12 +1515,12 @@ def Action.SetWidthOk : Action → Signature → Prop
   | [], _ => True
   | a :: as, sig => a.SetWidthOk sig ∧ Actions.SetWidthOk as sig
 
-/-- The two automatic structural write predicates used by the refinement interfaces. -/
+/-- The automatic structural write predicate used by the refinement interfaces. -/
 def Action.WriteLegal (a : Action) (sig : Signature) : Prop :=
-  a.SetLegal sig ∧ a.SetWidthOk sig
+  a.SetWidthOk sig
 
 @[simp] def Actions.WriteLegal (as : List Action) (sig : Signature) : Prop :=
-  Actions.SetLegal as sig ∧ Actions.SetWidthOk as sig
+  Actions.SetWidthOk as sig
 
 @[simp] def Cmd.WriteLegal : Cmd → Signature → Prop
   | .action a, sig => a.WriteLegal sig
@@ -1543,10 +1530,10 @@ def Action.WriteLegal (a : Action) (sig : Signature) : Prop :=
   | .decl _ _, _ => True
 
 theorem Actions.WriteLegal.head {a : Action} {as : List Action} {sig : Signature}
-    (h : Actions.WriteLegal (a :: as) sig) : a.WriteLegal sig := ⟨h.1.1, h.2.1⟩
+    (h : Actions.WriteLegal (a :: as) sig) : a.WriteLegal sig := h.1
 
 theorem Actions.WriteLegal.tail {a : Action} {as : List Action} {sig : Signature}
-    (h : Actions.WriteLegal (a :: as) sig) : Actions.WriteLegal as sig := ⟨h.1.2, h.2.2⟩
+    (h : Actions.WriteLegal (a :: as) sig) : Actions.WriteLegal as sig := h.2
 
 /-- **The index is a faithful index of `terms`.**
 
@@ -1710,8 +1697,8 @@ theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) (a b : Term)
       fun r hr dc hdc hm => hbase.index.width r hr dc hdc hm⟩
     exact Database.Out.mono hcont (hbase.index.entry r hr hm)
 
-/-- `hf` is what keeps `ctor` true: a `set` on anything but a merge function would add a row
-whose `out` is not `[]`, which is exactly what `Action.SetLegal` rules out. `hw` is
+/-- `hf` is what keeps `ctor` true: a row on anything but a merge function would have an
+`out` that is not `[]`, which is exactly what `FDatabase.addAtom` never writes. `hw` is
 `Action.SetWidthOk`, and it is what `IndexOk.width` records. -/
 theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : List Term}
     (hf : d.sig.mergeOf f ≠ none)
@@ -1964,10 +1951,9 @@ are proved at the end of the file, under "Containment for a whole program", beca
 read the whole chain. What is worth reading here is their **side conditions**, which are
 this section's real output:
 
-* a merge body is an action block nothing type-checks — `Cmd.SetLegal (.decl _ _)` is
-  `True`, so `Program.SetLegal` says nothing about one, and without
-  `Signature.MergesLegal` the accumulator's `Inv` fails at the first body that writes an
-  illegal `set` or one of the wrong width;
+* a merge body is an action block no program-level check walks into, and without
+  `Signature.MergesLegal` the accumulator's `Inv` fails at the first body that writes a row
+  of the wrong width;
 * `FDatabase.Inv` does **not** survive an arbitrary declaration — declaring `g` `:merge`
   after `g ()` is already a term moves `g`'s rows from `IndexOk.ctor` to `IndexOk.entry`
   — so a declaration has to name something the state does not yet mention
@@ -2173,10 +2159,9 @@ theorem mem_mergeRows {rs : List Row} {r₁ r₂ r : Row} {vs : List Term}
 /-- **One merge firing removes nothing it must not.**
 
 The three prohibitions of the design, discharged: a merge deletes no term, no equality,
-and no row of a function that is not the `.merge` function being merged. The last covers
-both a constructor's rows, which `FDatabase.IndexOk.ctor` reads back as entry terms, and
-`.noMerge`, which is how the proof encoding declares its proof nodes, so deleting one
-would delete a proof.
+and no row of a function that is not the `.merge` function being merged. The last covers a
+constructor's rows, which `FDatabase.IndexOk.ctor` reads back as entry terms and which is
+how the proof encoding declares its proof nodes, so deleting one would delete a proof.
 
 The reason it holds is one line: the only rows dropped or overwritten are `r₁` and `r₂`
 themselves, whose function is `r₁.fn`, and the branch was taken only because
@@ -2191,7 +2176,6 @@ theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
   unfold FDatabase.mergeOneOriented at h
   match hm : d.sig.mergeOf r₁.fn with
   | none => rw [hm] at h; simp at h
-  | some .noMerge => rw [hm] at h; simp at h
   | some (.merge body res) =>
     rw [hm] at h
     simp only at h
@@ -2263,7 +2247,6 @@ theorem mergeOneOriented_closed {cl : Finset (Term × Term)} {d e : FDatabase} {
   unfold FDatabase.mergeOneOriented at h
   match hm : d.sig.mergeOf r₁.fn with
   | none => rw [hm] at h; simp at h
-  | some .noMerge => rw [hm] at h; simp at h
   | some (.merge body res) =>
     rw [hm] at h
     simp only at h
@@ -2728,11 +2711,10 @@ class anywhere. Every generated merge case satisfies it, results being `i64` lit
 
 /-! ### Well-formedness -/
 /-- Every declared `:merge` obeys the discipline every other action block obeys — its body
-writes only legal `set`s, at the declared column widths — and its result has one expression
-per value column.
+writes at the declared column widths — and its result has one expression per value column.
 
-`Cmd.SetLegal (.decl _ _)` is `True`, so `Program.SetLegal` says nothing about a merge body
-and this has to be carried separately. The `res.length` half is **new**: it is what
+No program-level check walks into a merge body, so this has to be carried separately. The
+`res.length` half is **new**: it is what
 `FDatabase.IndexOk.width` needs of the row a firing writes, which is `MergeStep.collide`'s
 `arity` premises reaching back into the declaration. -/
 def Signature.MergesLegal (sig : Signature) : Prop :=
@@ -2742,15 +2724,12 @@ def Signature.MergesLegal (sig : Signature) : Prop :=
 /-! #### The merge phase
 
 `mergeRound` does **not** preserve `Inv` unconditionally, and `FDatabase.IndexOk` is where
-it fails. A merge body is an arbitrary `List Action` carrying no `Action.SetLegal`
-obligation, so a `(set (F) …)` inside one, on a constructor `F`, writes a row whose `out`
-is not `[]` — which is exactly what `IndexOk.ctor` forbids. The widths fail the same way:
-nothing makes a body's `set` write the declared number of columns, which is what
+it fails. A merge body is an arbitrary `List Action` carrying no width obligation of its
+own: nothing makes a body's write carry the declared number of columns, which is what
 `IndexOk.width` records.
 
-`Signature.MergesLegal` is the repair, and it patches a gap in the specification:
-`Cmd.SetLegal (.decl _ _)` is `True`, so `Program.SetLegal` says nothing about a merge
-body. -/
+`Signature.MergesLegal` is the repair, and it patches a gap in the specification: no
+program-level check walks into a merge body. -/
 
 namespace FDatabase
 
@@ -2833,7 +2812,6 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
   unfold FDatabase.mergeOneOriented at hm
   match hmo : d.sig.mergeOf r₁.fn with
   | none => rw [hmo] at hm; simp at hm
-  | some .noMerge => rw [hmo] at hm; simp at hm
   | some (.merge body res) =>
     rw [hmo] at hm
     simp only at hm
@@ -3003,23 +2981,25 @@ theorem MergeClosure.wf {d₁ d₂ : Database} (hw : d₁.WF) (h : MergeClosure 
   | refl => exact hw
   | tail _ hstep ih => exact MergeStep.wf ih hstep
 
-/-- One command preserves `Database.WF`: `cmdEffect_wf` for the effect, `MergeClosure.wf`
-for the merge phase. -/
+/-- One command preserves `Database.WF`: `cmdReach_wf'` for what it reaches,
+`MergeClosure.wf` for the merge phase. -/
 theorem RunStep.wf {R : RulesetName} {db db' : Database} (hw : db.WF)
     (h : RunStep R db db') : db'.WF := MergeClosure.wf (RunRules.wf hw) h
 
-theorem cmdReach_wf {db d : Database} (hw : db.WF) {c : Cmd} (h : cmdReach db c d) :
+/-- `cmdReach_wf` for every command, a saturating run included: its rounds are `RunStep.wf`,
+which needs `MergeClosure.wf` and so lives here rather than in `Proofs/Step.lean`. -/
+theorem cmdReach_wf' {db d : Database} (hw : db.WF) {c : Cmd} (h : cmdReach db c d) :
     d.WF := by
   cases c with
   | saturate R =>
     exact RunReach.induction (P := Database.WF) (fun _ _ hp hs => hs.wf hp)
       (show SaturateReach R db d from h).1 hw
-  | _ => exact cmdEffect_wf hw h
+  | _ => exact cmdReach_wf hw (by trivial) h
 
 theorem CmdStep.wf {db db' : Database} (hw : db.WF) {c : Cmd} (h : CmdStep db c db') :
     db'.WF := by
   obtain ⟨d, hreach, hcl⟩ := h
-  exact MergeClosure.wf (cmdReach_wf hw hreach) hcl
+  exact MergeClosure.wf (cmdReach_wf' hw hreach) hcl
 
 /-- A whole run preserves `Database.WF`, `CmdStep.wf` per command. It is what pays for
 `Database.Recorded.trans`'s two `WF` premises where the refinement chain composes two
@@ -3036,10 +3016,9 @@ Every application a reachable state holds is a declared function's entry, `entry
 children wide. `Proofs/Eval.lean` carries the action half; what is left is the merge phase,
 the rule phase, and a declaration.
 
-Three front-end checks pay for it: `Program.WidthOk` for the terms a command builds,
-`Program.SetLegal` for the entries a `set` records, and `Program.DeclsFresh` for the
-signature a `.decl` writes. Two conditions no signature-level check can deliver are carried
-by `Database.RunLegal`. -/
+Two front-end checks pay for it: `Program.WidthOk` for the terms a command builds and
+`Program.DeclsFresh` for the signature a `.decl` writes. Two conditions no signature-level
+check can deliver are carried by `Database.RunLegal`. -/
 
 /-- Every declared `:merge`'s body and result pass the width check, read of a *signature*
 because a `MergeStep` reads the body it runs from one. `Signature.MergesLegal`'s width twin,
@@ -3048,12 +3027,11 @@ def Signature.MergesWidthOk (sig : Signature) : Prop :=
   ∀ g dc ms, sig g = some dc → dc.merge = some ms → MergeSpec.WidthOk ms dc.outArity sig
 
 /-- **`DeclaredTerms` is preserved by a merge firing**, under the two signature-level
-invariants and no premise on the firing itself. `MergesLegal` supplies the body's
-`Actions.SetLegal` and `MergesWidthOk` its `Actions.WidthOk`, which is what running the body
-needs; the combined entry is `arity + outArity` wide because `res` has one expression per
-value column. -/
+invariants and no premise on the firing itself. `MergesWidthOk` supplies the body's
+`Actions.WidthOk`, which is what running the body needs; the combined entry is
+`arity + outArity` wide because `res` has one expression per value column. -/
 theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    (hml : db.sig.MergesLegal) (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') :
+    (_hml : db.sig.MergesLegal) (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') :
     db'.DeclaredTerms := by
   cases h with
   | @collide d f decl as bs a b vs body res hd hmerge _ hasl _ hae hbe _ hbody hres =>
@@ -3066,11 +3044,10 @@ theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.Decl
   have hdt₀ : ({ db with env := mergeEnv a b } : Database).DeclaredTerms := by
     intro g cs hmem; rw [Database.terms_setEnv] at hmem; exact hdt g cs hmem
   have hspec := hmw f decl _ hd hmerge
-  have hlegal : Actions.SetLegal body db.sig := (hml f decl body res hd hmerge).1.1
   have hdsig : d.sig = db.sig :=
     evalActions_sig (db := { db with env := mergeEnv a b }) hbody
   have hdwf : d.WF := evalActions_wf hwf₀ hbody
-  have hddt : d.DeclaredTerms := evalActions_declaredTerms hwf₀ hdt₀ hspec.2.1 hlegal hbody
+  have hddt : d.DeclaredTerms := evalActions_declaredTerms hwf₀ hdt₀ hspec.2.1 hbody
   have hvsd : ∀ t ∈ vs, Term.DeclaredTerm db.sig t := by
     have := Expr.evalList_declaredTerm (Database.env_declaredTerm hdwf hddt)
       (sig := d.sig) (by rw [hdsig]; exact hspec.2.2) hres
@@ -3105,11 +3082,11 @@ theorem mergeClosure_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.D
     exact mergeStep_declaredTerms (MergeClosure.wf hwf hcl) ih
       (by rw [hsx]; exact hml) (by rw [hsx]; exact hmw) hstep
 
-/-- The rules the state holds obey the two checks `evalLocalActions_declaredTerms` asks of an
+/-- The rules the state holds obey the check `evalLocalActions_declaredTerms` asks of an
 action block. `RunRules` fires the rules in `db.rules`, which no signature-level check
 reaches. -/
 def Database.RulesOk (db : Database) : Prop :=
-  ∀ r ∈ db.rules, Actions.WidthOk r.actions db.sig ∧ Actions.SetLegal r.actions db.sig
+  ∀ r ∈ db.rules, Actions.WidthOk r.actions db.sig
 
 theorem runRules_declaredTerms {R : RulesetName} {db : Database} (hwf : db.WF)
     (hdt : db.DeclaredTerms)
@@ -3123,8 +3100,7 @@ theorem runRules_declaredTerms {R : RulesetName} {db : Database} (hwf : db.WF)
     have hes : e.sig = db.sig := evalLocalActions_sig hstep
     change ∃ x, db.sig g = some x ∧ cs.length = x.entryWidth
     rw [← hes]
-    exact evalLocalActions_declaredTerms hwf hdt hq.mem_terms (hr r hrmem).1 (hr r hrmem).2
-      hstep g cs hmem
+    exact evalLocalActions_declaredTerms hwf hdt hq.mem_terms (hr r hrmem) hstep g cs hmem
 
 /-- **A declaration preserves `DeclaredTerms` exactly when it is fresh**, and needs nothing
 else. A `DeclaredTerms` state holds no application of an undeclared name, so writing the
@@ -3139,25 +3115,6 @@ theorem decl_declaredTerms {db : Database} (hdt : db.DeclaredTerms) {f : FnName}
   refine ⟨d, ?_, hlen⟩
   change Function.update db.sig f (some dc) g = some d
   rw [Function.update_of_ne hgf]; exact hd
-
-theorem cmdEffect_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig) (hsl : c.SetLegal db.sig)
-    (hfresh : c.DeclFresh db.sig) (h : cmdEffect db c = some d) : d.DeclaredTerms := by
-  cases c with
-  | action a => exact evalAction_declaredTerms hwf hdt hw hsl (h)
-  | rule r =>
-    rw [cmdEffect, Option.some_inj] at h
-    subst h
-    intro g cs hmem
-    rw [Database.terms_setRules] at hmem
-    exact hdt g cs hmem
-  | run R =>
-    rw [cmdEffect, Option.some_inj] at h
-    subst h; exact runRules_declaredTerms hwf hdt hr
-  | saturate R => exact absurd h (by simp [cmdEffect])
-  | decl f dc =>
-    rw [cmdEffect, Option.some_inj] at h
-    subst h; exact decl_declaredTerms hdt hfresh
 
 /-- **A saturating run preserves `DeclaredTerms`.** Each round is `runRules_declaredTerms`
 then `mergeClosure_declaredTerms`; what makes the induction go through is that a round moves
@@ -3184,31 +3141,38 @@ theorem runReach_declaredTerms {R : RulesetName} {db d : Database} (hwf : db.WF)
     by rw [hstep.sig]; exact hxs, hyr⟩
 
 theorem cmdReach_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig) (hsl : c.SetLegal db.sig)
+    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig)
     (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
     (hmw : (c.sigBind db.sig).MergesWidthOk) (h : cmdReach db c d) : d.DeclaredTerms := by
   cases c with
+  | action a => exact evalAction_declaredTerms hwf hdt hw h
+  | rule r =>
+    subst h
+    intro g cs hmem
+    rw [Database.terms_setRules] at hmem
+    exact hdt g cs hmem
+  | run R => subst h; exact runRules_declaredTerms hwf hdt hr
   | saturate R =>
     exact runReach_declaredTerms hwf hdt hr hml hmw (show SaturateReach R db d from h).1
-  | _ => exact cmdEffect_declaredTerms hwf hdt hr hw hsl hfresh h
+  | decl f dc => subst h; exact decl_declaredTerms hdt hfresh
 
 /-- The two signature-level invariants are read at the signature the command *installs*, as
 `Cmd.WidthOk` and `Cmd.MergeDeclared` are: that is the signature the merge phase runs
 against. -/
 theorem cmdStep_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig) (hsl : c.SetLegal db.sig)
+    (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig)
     (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
     (hmw : (c.sigBind db.sig).MergesWidthOk) (h : CmdStep db c d) : d.DeclaredTerms := by
   obtain ⟨x, hx, hcl⟩ := h
   have hxs : x.sig = c.sigBind db.sig := cmdReach_sig hx
-  exact mergeClosure_declaredTerms (cmdReach_wf hwf hx)
-    (cmdReach_declaredTerms hwf hdt hr hw hsl hfresh hml hmw hx)
+  exact mergeClosure_declaredTerms (cmdReach_wf' hwf hx)
+    (cmdReach_declaredTerms hwf hdt hr hw hfresh hml hmw hx)
     (by rw [hxs]; exact hml) (by rw [hxs]; exact hmw) hcl
 
-/-- What `Program.WidthOk`, `Program.SetLegal` and `Program.DeclsFresh` cannot say, checked
-at the state each command actually runs in — the weakest place to check it, as
-`FDatabase.ProgramLegal` does. Two things: the rules the state holds pass the action-block
-checks, and the signature the command leaves has width-checked, `set`-legal `:merge` bodies.
+/-- What `Program.WidthOk` and `Program.DeclsFresh` cannot say, checked at the state each
+command actually runs in — the weakest place to check it, as `FDatabase.ProgramLegal` does.
+Two things: the rules the state holds pass the action-block check, and the signature the
+command leaves has width-checked `:merge` bodies.
 Neither is a condition on the program text — a rule outlives the signature it was added
 under, and `Cmd.WidthOk` reaches a `:merge` only at the declaration that installs it. -/
 def Database.RunLegal : Database → Program → Prop
@@ -3218,31 +3182,30 @@ def Database.RunLegal : Database → Program → Prop
         Signature.MergesWidthOk (c.sigBind db.sig) ∧
         ∀ d, CmdStep db c d → Database.RunLegal d cs
 
-/-- **A run preserves `DeclaredTerms`.** The three front-end checks thread through the
+/-- **A run preserves `DeclaredTerms`.** The two front-end checks thread through the
 induction on their own: each is read at the signature the earlier commands leave, which is
 the signature the run has reached by `CmdStep.sig`. -/
 theorem programStep_declaredTerms {db db' : Database} {p : Program}
     (h : ProgramStep db p db') :
-    db.WF → db.DeclaredTerms → Program.WidthOk p db.sig → Program.SetLegal p db.sig →
+    db.WF → db.DeclaredTerms → Program.WidthOk p db.sig →
       Program.DeclsFresh p db.sig → db.RunLegal p → db'.DeclaredTerms := by
   induction h with
-  | nil => exact fun _ hdt _ _ _ _ => hdt
+  | nil => exact fun _ hdt _ _ _ => hdt
   | @cons db x d' c cs hstep _ ih =>
-    intro hwf hdt hw hsl hfresh hl
+    intro hwf hdt hw hfresh hl
     have hxs : x.sig = c.sigBind db.sig := CmdStep.sig hstep
     exact ih (CmdStep.wf hwf hstep)
-      (cmdStep_declaredTerms hwf hdt hl.1 hw.1 hsl.1 hfresh.1 hl.2.1 hl.2.2.1 hstep)
-      (by rw [hxs]; exact hw.2) (by rw [hxs]; exact hsl.2) (by rw [hxs]; exact hfresh.2)
+      (cmdStep_declaredTerms hwf hdt hl.1 hw.1 hfresh.1 hl.2.1 hl.2.2.1 hstep)
+      (by rw [hxs]; exact hw.2) (by rw [hxs]; exact hfresh.2)
       (hl.2.2.2 x hstep)
 
 /-- **Every state a legal run reaches from `Database.empty` is `DeclaredTerms`.** -/
 theorem reachable_declaredTerms {p : Program} {db : Database}
     (hw : Program.WidthOk p Database.empty.sig)
-    (hsl : Program.SetLegal p Database.empty.sig)
     (hfresh : Program.DeclsFresh p Database.empty.sig)
     (hl : Database.empty.RunLegal p) (h : ProgramStep Database.empty p db) :
     db.DeclaredTerms :=
-  programStep_declaredTerms h Database.WF.empty Database.empty_declaredTerms hw hsl hfresh hl
+  programStep_declaredTerms h Database.WF.empty Database.empty_declaredTerms hw hfresh hl
 
 /-! ### Union-freedom, and where it puts `Recorded`
 
@@ -3282,7 +3245,7 @@ structure Database.NoUnions (db : Database) : Prop where
 
 /-! #### Ordering-freedom survives the globals a rule is resolved through
 
-`cmdEffect` stores `Rule.resolveGlobals`, which reads a global's *value* back into the query
+`cmdReach` stores `Rule.resolveGlobals`, which reads a global's *value* back into the query
 as syntax, so the stored query mentions the head of every term the environment binds. The
 syntax a term reads back as never applies `min`: `Term.toExpr` builds literals and
 applications only. `Database.NoOrdering.env` is that fact carried along the run. -/
@@ -3977,24 +3940,22 @@ theorem mergeEnvIdx_owes {C : Database} : ∀ {os os' ns ns' : List Term} (i : N
   | [], [], _, _, _, .nil, _ => envOwes_nil
   | _ :: _, _ :: _, [], [], _, .cons _ _, .nil => envOwes_nil
   | o :: os, o' :: os', n :: ns, n' :: ns', i, .cons ho hos, .cons hn hns => by
-      show EnvOwes C (("old" ++ toString i, o) :: ("new" ++ toString i, n) ::
+      change EnvOwes C (("old" ++ toString i, o) :: ("new" ++ toString i, n) ::
           mergeEnvIdx (i + 1) os ns)
         (("old" ++ toString i, o') :: ("new" ++ toString i, n') ::
           mergeEnvIdx (i + 1) os' ns')
       exact ((mergeEnvIdx_owes (i + 1) hos hns).cons _ hn).cons _ ho
 
-theorem mergeEnv_owes {C : Database} : ∀ {os os' ns ns' : List Term},
-    List.Forall₂ (Owes C) os os' → List.Forall₂ (Owes C) ns ns' →
-    EnvOwes C (mergeEnv os ns) (mergeEnv os' ns')
-  | [o], [o'], [n], [n'], .cons ho .nil, .cons hn .nil => by
-      show EnvOwes C [("old", o), ("new", n)] [("old", o'), ("new", n')]
-      exact ((envOwes_nil).cons "new" hn).cons "old" ho
-  | [], [], _, _, .nil, hn => mergeEnvIdx_owes 0 .nil hn
-  | _ :: _ :: _, _ :: _ :: _, _, _, .cons h₁ (.cons h₂ h₃), hn =>
-      mergeEnvIdx_owes 0 (.cons h₁ (.cons h₂ h₃)) hn
-  | [_], [_], [], [], .cons ho .nil, .nil => mergeEnvIdx_owes 0 (.cons ho .nil) .nil
-  | [_], [_], _ :: _ :: _, _ :: _ :: _, .cons ho .nil, .cons h₁ (.cons h₂ h₃) =>
-      mergeEnvIdx_owes 0 (.cons ho .nil) (.cons h₁ (.cons h₂ h₃))
+theorem mergeEnv_owes {C : Database} {os os' ns ns' : List Term}
+    (hos : List.Forall₂ (Owes C) os os') (hns : List.Forall₂ (Owes C) ns ns') :
+    EnvOwes C (mergeEnv os ns) (mergeEnv os' ns') := by
+  cases hos with
+  | nil => exact envOwes_nil
+  | cons ho hos =>
+    cases hns with
+    | nil => exact envOwes_nil
+    | cons hn hns =>
+      exact ((mergeEnvIdx_owes 0 (.cons ho hos) (.cons hn hns)).cons "new" hn).cons "old" ho
 
 theorem forall₂_mem_left {α β : Type} {R : α → β → Prop} : ∀ {as : List α} {bs : List β},
     List.Forall₂ R as bs → ∀ {a : α}, a ∈ as → ∃ b ∈ bs, R a b
@@ -4487,7 +4448,6 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
   unfold FDatabase.mergeOneOriented at hm
   match hmo : x.sig.mergeOf r₁.fn with
   | none => rw [hmo] at hm; simp at hm
-  | some .noMerge => rw [hmo] at hm; simp at hm
   | some (.merge body res) =>
     rw [hmo] at hm
     simp only at hm
@@ -4946,21 +4906,15 @@ theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.Un
       exact ⟨evalAction_diag hu hn.diag heff, by rw [evalAction_sig heff]; exact hn.sig,
         by rw [evalAction_rules heff]; exact hn.rules⟩
     | rule r =>
-      replace heff : cmdEffect A (.rule r) = some e := hreach
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       refine ⟨hn.diag, hn.sig, fun r' hr' => ?_⟩
       rcases hr' with rfl | hr'
       exacts [hu, hn.rules r' hr']
     | run R =>
-      replace heff : cmdEffect A (.run R) = some e := hreach
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       exact ⟨RunRules.diag hn, hn.sig, hn.rules⟩
     | decl f dc =>
-      replace heff : cmdEffect A (.decl f dc) = some e := hreach
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       refine ⟨hn.diag, fun g dc' hg => ?_, hn.rules⟩
       have hg' : Function.update A.sig f (some dc) g = some dc' := hg
       by_cases hgf : g = f
@@ -4975,8 +4929,8 @@ theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.Un
 /-- **One command preserves ordering-freedom, both clauses.** `.decl` is the only case that
 moves `sig` and `.rule` the only one that moves `rules`; the merge phase every command ends
 with moves neither, and a top-level action moves neither either. -/
-theorem cmdEffect_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
-    (hu : c.OrderingFree) (heff : cmdEffect A c = some e) : e.NoOrdering := by
+theorem cmdReach_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
+    (hu : c.OrderingFree) (hns : c.NoSaturate) (heff : cmdReach A c e) : e.NoOrdering := by
   cases c with
   | action a =>
     replace heff : evalAction A a = some e := heff
@@ -4984,18 +4938,15 @@ theorem cmdEffect_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
       by rw [evalAction_rules heff]; exact hn.rules,
       evalAction_envOrderingFree hn.env heff⟩
   | rule r =>
-    rw [cmdEffect, Option.some.injEq] at heff
     subst heff
     refine ⟨hn.sig, fun r' hr' => ?_, hn.env⟩
     rcases hr' with rfl | hr'
     exacts [hu, hn.rules r' hr']
   | run R =>
-    rw [cmdEffect, Option.some.injEq] at heff
     subst heff
     exact ⟨hn.sig, hn.rules, hn.env⟩
-  | saturate R => exact absurd heff (by simp [cmdEffect])
+  | saturate R => exact (hns : False).elim
   | decl f dc =>
-    rw [cmdEffect, Option.some.injEq] at heff
     subst heff
     refine ⟨fun g dc' hg => ?_, hn.rules, hn.env⟩
     have hg' : Function.update A.sig f (some dc) g = some dc' := hg
@@ -5014,7 +4965,7 @@ theorem CmdStep.noOrdering {A B : Database} (hn : A.NoOrdering) {c : Cmd}
       exact RunReach.induction (P := Database.NoOrdering)
         (fun _ _ hp hs => RunStep.noOrdering hs hp)
         (show SaturateReach R A e from hreach).1 hn
-    | _ => exact cmdEffect_noOrdering hn hu hreach
+    | _ => exact cmdReach_noOrdering hn hu (by trivial) hreach
   exact ⟨by rw [MergeClosure.sig hcl]; exact hE.sig,
     by rw [(MergeClosure.envRules hcl).2]; exact hE.rules,
     by rw [(MergeClosure.envRules hcl).1]; exact hE.env⟩
@@ -5071,26 +5022,22 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
     ∃ D, CmdStep C c D ∧ B.Contained D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
   obtain ⟨e, hreach, hcl⟩ := h
-  replace heff := cmdEffect_of_cmdReach hns hreach
-  have key : ∃ E, cmdEffect C c = some E ∧ e.Contained E ∧ e.sig = E.sig ∧ e.env = E.env ∧
+  have key : ∃ E, cmdReach C c E ∧ e.Contained E ∧ e.sig = E.sig ∧ e.env = E.env ∧
       e.rules = E.rules := by
     cases c with
     | action a =>
-      have htop : evalAction A a = some e := heff
-      replace heff : evalAction A a = some e := htop
+      have heff : evalAction A a = some e := hreach
       obtain ⟨E, hE, hcont, hs, he⟩ := evalAction_mono hc hsig henv heff
       exact ⟨E, hE, hcont, hs, he,
         by rw [evalAction_rules heff, evalAction_rules hE, hrules]⟩
     | rule r =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       exact ⟨_, rfl, ⟨hc.eqs⟩, hsig, henv, by
         change insert r A.rules
           = insert r C.rules
         rw [hrules]⟩
     | run R =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       refine ⟨_, rfl, RunRules.mono hc hsig henv hrules, ?_, ?_, ?_⟩
       · show (RunRules R A).sig = (RunRules R C).sig
         simp only [RunRules, Database.sUnion_sig]; exact hsig
@@ -5100,14 +5047,13 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
         simp only [RunRules, Database.sUnion_rules]; exact hrules
     | saturate R => exact (hns : False).elim
     | decl f dc =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       exact ⟨_, rfl, ⟨hc.eqs⟩, by
         change Function.update A.sig f (some dc) = Function.update C.sig f (some dc)
         rw [hsig], henv, hrules⟩
   obtain ⟨E, hE, hcont, hs, he, hr⟩ := key
   obtain ⟨D, hclD, hcontD, hsigD⟩ := MergeClosure.transport hcont hs hcl
-  exact ⟨D, ⟨E, cmdReach_of_cmdEffect hns hE, hclD⟩, hcontD, hsigD,
+  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
     by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
     by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
 
@@ -5198,28 +5144,24 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
       h.mono (hc.contained_of_diag hdiag) hsig henv hrules hns
     exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
   obtain ⟨e, hreach, hcl⟩ := h
-  replace heff := cmdEffect_of_cmdReach hns hreach
-  have key : ∃ E, cmdEffect C c = some E ∧ e.Recorded E ∧ e.sig = E.sig ∧ e.env = E.env ∧
+  have key : ∃ E, cmdReach C c E ∧ e.Recorded E ∧ e.sig = E.sig ∧ e.env = E.env ∧
       e.rules = E.rules ∧ E.WF ∧ e.WF := by
-    have hwfe : e.WF := cmdEffect_wf hwfA heff
+    have hwfe : e.WF := cmdReach_wf hwfA hns hreach
     cases c with
     | action a =>
-      have htop : evalAction A a = some e := heff
-      replace heff : evalAction A a = some e := htop
+      have heff : evalAction A a = some e := hreach
       obtain ⟨E, hE, hcont, hs, he⟩ := evalAction_mono_recorded hc hsig henv heff
       exact ⟨E, hE, hcont, hs, he,
         by rw [evalAction_rules heff, evalAction_rules hE, hrules],
         evalAction_wf hwfC hE, hwfe⟩
     | rule r =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       exact ⟨_, rfl, hc.setEnvRules _ _ _ _, hsig, henv, by
         change insert r A.rules
           = insert r C.rules
         rw [hrules], hwfC.congr rfl rfl, hwfe⟩
     | run R =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       refine ⟨_, rfl, RunRules.mono_recorded hc hwfA hwfC hsig henv hrules (Or.inr hno.rules),
         ?_, ?_, ?_, RunRules.wf hwfC, hwfe⟩
       · show (RunRules R A).sig = (RunRules R C).sig
@@ -5230,8 +5172,7 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
         simp only [RunRules, Database.sUnion_rules]; exact hrules
     | saturate R => exact (hns : False).elim
     | decl f dc =>
-      rw [cmdEffect, Option.some.injEq] at heff
-      subst heff
+      subst hreach
       refine ⟨_, rfl, ⟨fun p hp => ?_⟩, ?_, henv, hrules, hwfC.congr rfl rfl, hwfe⟩
       · obtain ⟨q, hq, hc₁, hc₂⟩ := hc.eqs p hp
         exact ⟨q, hq, congOn_setSig hc₁, congOn_setSig hc₂⟩
@@ -5240,8 +5181,8 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
   obtain ⟨E, hE, hcont, hs, he, hr, hwfE, hwfe⟩ := key
   obtain ⟨D, hclD, hcontD, hsigD⟩ :=
     MergeClosure.transport_recorded hcont hwfe hwfE hs
-      (Or.inr (cmdEffect_noOrdering hno hcof hE).sig) hcl
-  exact ⟨D, ⟨E, cmdReach_of_cmdEffect hns hE, hclD⟩, hcontD, hsigD,
+      (Or.inr (cmdReach_noOrdering hno hcof hns hE).sig) hcl
+  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
     by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
     by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
 
@@ -5299,29 +5240,11 @@ theorem Signature.mergeOf_of_none {sig : Signature} {f : FnName}
     (h : sig f = none) : Signature.mergeOf sig f = none := by
   rw [Signature.mergeOf, h]; rfl
 
-/-- Declaring a name the signature does not yet mention can only make a `set` *more*
-legal: `Action.SetLegal` asks for a merge specification and an undeclared name has none,
-so no legal `set` names `f`. -/
-theorem Action.SetLegal.update {a : Action} {sig : Signature} {f : FnName} {dc : FnDecl}
-    (hf : sig f = none) (h : a.SetLegal sig) :
-    a.SetLegal (Function.update sig f (some dc)) := by
-  cases a with
-  | expr _ => trivial
-  | union _ _ => trivial
-
-theorem Actions.SetLegal.update {as : List Action} {sig : Signature} {f : FnName}
-    {dc : FnDecl} (hf : sig f = none) (h : Actions.SetLegal as sig) :
-    Actions.SetLegal as (Function.update sig f (some dc)) := by
-  induction as with
-  | nil => trivial
-  | cons a as ih => exact ⟨Action.SetLegal.update hf h.1, ih h.2⟩
-
-/-- Declaring a fresh name cannot make a legal `set` illegal, nor its widths wrong: no
-legal `set` names `f`, since an undeclared name has no merge specification. -/
+/-- Declaring a fresh name cannot make a legal write's widths wrong: the predicate is
+structural and does not read the signature at all. -/
 theorem Action.WriteLegal.update {a : Action} {sig : Signature} {f : FnName} {dc : FnDecl}
-    (hf : sig f = none) (h : a.WriteLegal sig) :
+    (_hf : sig f = none) (_h : a.WriteLegal sig) :
     a.WriteLegal (Function.update sig f (some dc)) := by
-  refine ⟨Action.SetLegal.update hf h.1, ?_⟩
   cases a with
   | expr _ => trivial
   | union _ _ => trivial
@@ -5330,10 +5253,8 @@ theorem Actions.WriteLegal.update {as : List Action} {sig : Signature} {f : FnNa
     {dc : FnDecl} (hf : sig f = none) (h : Actions.WriteLegal as sig) :
     Actions.WriteLegal as (Function.update sig f (some dc)) := by
   induction as with
-  | nil => exact ⟨trivial, trivial⟩
-  | cons a as ih =>
-    exact ⟨⟨(Action.WriteLegal.update hf h.head).1, (ih h.tail).1⟩,
-      ⟨(Action.WriteLegal.update hf h.head).2, (ih h.tail).2⟩⟩
+  | nil => trivial
+  | cons a as ih => exact ⟨Action.WriteLegal.update hf h.head, ih h.tail⟩
 
 namespace FDatabase
 
@@ -5405,7 +5326,6 @@ theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}
   unfold FDatabase.mergeOneOriented at h
   match hmo : d.sig.mergeOf r₁.fn with
   | none => rw [hmo] at h; simp at h
-  | some .noMerge => rw [hmo] at h; simp at h
   | some (.merge body res) =>
     rw [hmo] at h
     simp only at h
@@ -6033,9 +5953,8 @@ theorem Inv.execCmdM {d d' : FDatabase} (h : d.Inv) {c : Cmd}
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     exact hs ▸ h.decl hunused.1 hunused.2
 
-/-- Rule-head legality is preserved: `.rule` installs a head `Cmd.SetLegal` has already
-checked, and `.decl` only ever declares a name no head can legally have `set`
-(`Actions.SetLegal.update`). -/
+/-- Rule-head legality is preserved: `.rule` installs a head `Cmd.WriteLegal` has already
+checked, and `.decl` only ever declares a fresh name (`Actions.WriteLegal.update`). -/
 theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
     (hlegal : c.WriteLegal d.sig) (hunused : c.DeclUnused d)
     (hrules : ∀ r ∈ d.rules, Actions.WriteLegal r.actions d.sig)
@@ -6054,7 +5973,7 @@ theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
     subst hs
     intro r' hr'
     rcases List.mem_cons.mp hr' with rfl | hr''
-    · exact ⟨hlegal.1, hlegal.2⟩
+    · exact hlegal
     · exact hrules r' hr''
   | run R =>
     rw [FDatabase.execCmdM] at hs
@@ -6177,7 +6096,7 @@ for the interpreter's, and before every command carried one this theorem was **f
 `.decl` land on the specification's state on the nose.
 
 `hlegal` and `hrules` are `Inv.execAction`'s and `Inv.execActions`'s premises; `hmerges`
-is what a merge body needs and `Program.SetLegal` does not supply; `hnu` and `hcu` are what
+is what a merge body needs and no program-level check supplies; `hnu` and `hcu` are what
 `MergeStep.transport_recorded` needs, since the merge phase is where the interpreter's
 re-keying has to be matched at a *congruent* key. -/
 theorem execCmdM_contained {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.NoSaturate)

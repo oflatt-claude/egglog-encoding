@@ -115,13 +115,9 @@ end Term
 
 `Expr.min` chooses by it; `Term.blt` is what it reads. -/
 
-/-- A total order on base values: integers by `<`, `false` below `true`, every integer below
-every boolean. -/
+/-- The order on base values: integers by `<`. -/
 def Lit.blt : Lit → Lit → Bool
   | .int m, .int n => decide (m < n)
-  | .bool a, .bool b => !a && b
-  | .int _, .bool _ => true
-  | .bool _, .int _ => false
 
 mutual
 

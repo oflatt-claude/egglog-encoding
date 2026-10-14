@@ -24,7 +24,7 @@ theorem sourceSafe_of_names {src : Database} (hb : src.TermsBuild)
 
 /-- A source execution cannot declare names from the generated namespace. -/
 theorem sourceNames_of_programStep {P p : Program} {src : Database}
-    (hdom : P.EncodeDomain) (hp : ∀ c ∈ p, c ∈ P)
+    (hdom : P.Fragment) (hp : ∀ c ∈ p, c ∈ P)
     (run : ProgramStep Database.empty p src) :
     ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f := by
   intro f dc hf
@@ -40,7 +40,7 @@ theorem sourceNames_of_programStep {P p : Program} {src : Database}
 
 /-- Reserved-name separation follows from the original program, including at prefixes. -/
 theorem sourceSafe_of_programStep {P p : Program} {src : Database}
-    (hdom : P.EncodeDomain) (hp : ∀ c ∈ p, c ∈ P)
+    (hdom : P.Fragment) (hp : ∀ c ∈ p, c ∈ P)
     (run : ProgramStep Database.empty p src) : SourceSafe src :=
   sourceSafe_of_names (termsBuild_of_programStep (fun c hc => hdom.ctorsOnly c (hp c hc)) run)
     (sourceNames_of_programStep hdom hp run)

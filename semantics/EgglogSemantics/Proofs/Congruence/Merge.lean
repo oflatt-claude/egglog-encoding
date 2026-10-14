@@ -83,10 +83,15 @@ theorem cong_lowerId_right {src : Database} {a b : Term} (h : Cong src a b) :
   · exact h.mem_of.2
   · exact h.symm
 
+/-- The one-column merge environment, including both names for its component. -/
+theorem mergeEnv_pair (old new : Term) :
+    mergeEnv [old] [new] =
+      [("old", old), ("new", new), ("old0", old), ("new0", new)] := rfl
+
 theorem eval_merge_min {sig : Signature} {old new : Term} :
     (Expr.min (.var "old") (.var "new")).eval sig (mergeEnv [old] [new]) =
       some (lowerId old new) := by
-  simp [Expr.eval, mergeEnv, Env.lookup, lowerId, Term.least]
+  simp [Expr.eval, mergeEnv_pair, Env.lookup, lowerId, Term.least]
 
 /-- The state the merge body leaves: both ids linked to the smaller one, the larger
 first. -/
@@ -189,8 +194,8 @@ theorem execActions_mergeBody {m : FDatabase} {old new : Term}
   have hsig : ∀ t, (m.addAtom t).sig = m.sig := fun _ => rfl
   have henv' : ∀ t, (m.addAtom t).env = m.env := fun _ => rfl
   by_cases huf : (m.sig ufName).isSome = true
-  · simp [mergeBody, execActions, execAction, Expr.evalAtom, huf, hsig, henv', henv, mergeEnv,
-      Env.lookup, lowerId, Term.least, mergeLinks]
+  · simp [mergeBody, execActions, execAction, Expr.evalAtom, huf, hsig, henv', henv,
+      mergeEnv_pair, Env.lookup, lowerId, Term.least, mergeLinks]
   · simp [mergeBody, execActions, execAction, Expr.evalAtom, huf]
 
 theorem execActions_mergeBody_inv {m m' : FDatabase} {old new : Term}
@@ -203,7 +208,7 @@ theorem execActions_mergeBody_inv {m m' : FDatabase} {old new : Term}
 
 theorem evalList_mergeResult {sig : Signature} {old new : Term} :
     Expr.evalList sig mergeResult (mergeEnv [old] [new]) = some [lowerId old new] := by
-  simp [mergeResult, Expr.evalList, Expr.eval, mergeEnv, Env.lookup, lowerId, Term.least]
+  simp [mergeResult, Expr.evalList, Expr.eval, mergeEnv_pair, Env.lookup, lowerId, Term.least]
 
 /-- Two colliding views justify equality of their output ids through existing source
 applications at congruent children. -/

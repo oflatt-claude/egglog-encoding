@@ -516,10 +516,6 @@ columns." -/
 constructors, relations, or view tables)." -/
 #guard !Program.arityOk [.decl "F" { arity := 1, outArity := 2, merge := none }] emptySig
 
-/- `:no-merge` has no result to check, and a tuple output is legal on one. -/
-#guard Program.arityOk
-  [.decl "F" { arity := 1, outArity := 2, merge := some .noMerge }] emptySig
-
 /- A merge body is checked against the signature the declaration itself installs, so it
 may write the function's own table — `(function Dist (Math) i64 :merge ((set (Dist (A)) 1)
 (min old new)))` runs. A forward reference is instead "Unbound function". -/

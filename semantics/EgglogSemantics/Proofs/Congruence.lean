@@ -2,6 +2,12 @@ import EgglogSemantics.Spec.Congruence
 import EgglogSemantics.Proofs.Database
 
 namespace Egglog
+/-- **Every equation `d₁` records `d₂` records up to congruence.** The witness `q` is one
+of `d₂`'s own equations, or the clause says nothing: `withOperands` alone makes `p` hold. -/
+structure Database.Recorded (d₁ d₂ : Database) : Prop where
+  eqs : ∀ p ∈ d₁.eqs, ∃ q ∈ d₂.eqs,
+    CongOn d₂ [p.1, p.2] p.1 q.1 ∧ CongOn d₂ [p.1, p.2] p.2 q.2
+
 /-- `CongList` is `List.Forall₂ (Cong db)`. Recursion over a mutual inductive has
 to go through `match`; the `induction` tactic does not support it. -/
 theorem CongList.toForall₂ {db : Database} {as bs : List Term} (h : CongList db as bs) :

@@ -37,10 +37,17 @@ theorem actionsFacts_sound {db : Database} {as : List Action} {fs : List Term}
     · exact (evalActions_contained hd₂).terms (hm₁ t ht)
     · exact hm₂ t ht
 
+/-- A fact premise is a complete atom, so it is matched by `Expr.evalAtom` rather than by
+the source checker's `Expr.eval`; an equality premise is the source checker's. -/
 theorem premiseMatches_sound {db : Database} {σ : Env} {p : Pattern} {t : Term}
     (ht : t ∈ db.terms) (h : premiseMatches db.sig σ p t = true) : Matches db p σ := by
-  apply SourceProof.premiseMatches_sound (c := ⟨t, t⟩) ht
-  cases p <;> simpa [premiseMatches, SourceProof.premiseMatches] using h
+  cases p with
+  | expr e =>
+    simp only [premiseMatches, beq_iff_eq] at h
+    exact .expr ht h (Cong.mono (Database.Contained.addTerms _ _) ht)
+  | eq a b =>
+    apply SourceProof.premiseMatches_sound (c := ⟨t, t⟩) ht
+    simpa [premiseMatches, SourceProof.premiseMatches] using h
 
 theorem premisesMatch_sound {db : Database} {σ : Env} {q : Query} {ts : List Term}
     (ht : ∀ t ∈ ts, t ∈ db.terms) (h : premisesMatch db.sig σ q ts = true) :
@@ -103,7 +110,6 @@ theorem mergeFacts_sound {db : Database} (hw : db.WF) (hclosed : MergeSaturated 
   | none => simp [hm] at hdecl
   | some ms =>
     cases ms with
-    | noMerge => simp [hm] at hdecl
     | merge body res =>
       simp only [hm] at hdecl
       cases old with

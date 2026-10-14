@@ -68,10 +68,4 @@ def Database.withOperands (db : Database) (ts : List Term) : Database := db.addT
 @[inherit_doc Database.withOperands] def CongOn
     (db : Database) (ts : List Term) (a b : Term) : Prop := Cong (db.withOperands ts) a b
 
-/-- **Every equation `d₁` records `d₂` records up to congruence.** The witness `q` is one
-of `d₂`'s own equations, or the clause says nothing: `withOperands` alone makes `p` hold. -/
-structure Database.Recorded (d₁ d₂ : Database) : Prop where
-  eqs : ∀ p ∈ d₁.eqs, ∃ q ∈ d₂.eqs,
-    CongOn d₂ [p.1, p.2] p.1 q.1 ∧ CongOn d₂ [p.1, p.2] p.2 q.2
-
 end Egglog

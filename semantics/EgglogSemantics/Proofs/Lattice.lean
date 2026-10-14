@@ -229,12 +229,7 @@ theorem lookup_x_mergeEnvIdx : ∀ (i : Nat) (os ns : List Term),
 
 /-- `mergeEnv` never binds `x`. -/
 theorem lookup_x_mergeEnv (a b : List Term) : Env.lookup "x" (mergeEnv a b) = none := by
-  match a, b with
-  | [], _ => exact lookup_x_mergeEnvIdx 0 _ _
-  | [_], [] => exact lookup_x_mergeEnvIdx 0 _ _
-  | [_], [_] => rfl
-  | [_], _ :: _ :: _ => exact lookup_x_mergeEnvIdx 0 _ _
-  | _ :: _ :: _, _ => exact lookup_x_mergeEnvIdx 0 _ _
+  cases a <;> cases b <;> simp [mergeEnv, Env.lookup, lookup_x_mergeEnvIdx]
 
 /-- The stuck merge, machine-checked: no `a`, `b`, `vs` satisfy `hjoin`'s premise. -/
 theorem dA_no_merge_value {a b vs : List Term} {body : List Action} {res : List Expr}
@@ -271,21 +266,22 @@ literal only dynamically — `evalAction` is stuck — so the collision is unres
 state holds **both** rows at the one key class.  `hjoin` says nothing about that, because
 it only constrains merges that *do* produce a value. -/
 
-/-- `mergeEnv` binds `old`/`new` only when both outputs are single columns; at any other
-shape either the environment does not bind `old` at all, or both sides have at least two
-columns.  This is the only fact about `mergeEnv` the join hypothesis needs, and it avoids
-reasoning about the indexed names `old0`, `new0`, … at an unbounded index. -/
+/-- `mergeEnv` binds `old`/`new` to the first column of each output when both have one, and
+binds nothing at all otherwise.  This is the only fact about `mergeEnv` the join hypothesis
+needs, and it avoids reasoning about the indexed names `old1`, `new1`, … of the later
+columns. -/
 theorem mergeEnv_cases (a b : List Term) :
-    (∃ x y, a = [x] ∧ b = [y]) ∨ Env.lookup "old" (mergeEnv a b) = none
-      ∨ (2 ≤ a.length ∧ 2 ≤ b.length) := by
+    (∃ x as y bs, a = x :: as ∧ b = y :: bs) ∨ Env.lookup "old" (mergeEnv a b) = none := by
   match a, b with
-  | [], _ => exact Or.inr (Or.inl rfl)
-  | [_], [] => exact Or.inr (Or.inl rfl)
-  | [x], [y] => exact Or.inl ⟨x, y, rfl, rfl⟩
-  | [_], _ :: _ :: _ => exact Or.inr (Or.inl rfl)
-  | _ :: _ :: _, [] => exact Or.inr (Or.inl rfl)
-  | _ :: _ :: _, [_] => exact Or.inr (Or.inl rfl)
-  | _ :: _ :: _, _ :: _ :: _ => exact Or.inr (Or.inr ⟨by simp, by simp⟩)
+  | [], _ => exact Or.inr rfl
+  | _ :: _, [] => exact Or.inr rfl
+  | x :: as, y :: bs => exact Or.inl ⟨x, as, y, bs, rfl, rfl⟩
+
+theorem mergeEnv_lookup_old (x y : Term) (as bs : List Term) :
+    Env.lookup "old" (mergeEnv (x :: as) (y :: bs)) = some x := rfl
+
+theorem mergeEnv_lookup_new (x y : Term) (as bs : List Term) :
+    Env.lookup "new" (mergeEnv (x :: as) (y :: bs)) = some y := rfl
 
 /-- `x` is a single column. -/
 def Sing (x : List Term) : Prop := ∃ t, x = [t]
@@ -300,6 +296,13 @@ def leB (x y : List Term) : Prop :=
   x = y ∨ (∃ s t : Term, x = [s] ∧ y = [t] ∧ Term.blt t s = true) ∨ (Sing y ∧ ¬ Sing x)
 
 theorem leB_refl (x : List Term) : leB x x := Or.inl rfl
+
+/-- Whatever is below a single column at a single column is below it at every width: a
+wider first argument falls under the third clause. -/
+theorem leB_cons {x t : Term} {as : List Term} (h : leB [x] [t]) : leB (x :: as) [t] := by
+  cases as with
+  | nil => exact h
+  | cons _ _ => exact Or.inr (Or.inr ⟨⟨t, rfl⟩, not_sing_of_two (by simp)⟩)
 
 theorem leB_trans (x y z : List Term) (h₁ : leB x y) (h₂ : leB y z) : leB x z := by
   rcases h₁ with rfl | ⟨s, t, hx, hy, hts⟩ | ⟨hy1, hx1⟩
@@ -410,16 +413,13 @@ theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   obtain ⟨x, y, hx, hy, rfl⟩ := meval_min hv
   have h1 : Env.lookup "old" (mergeEnv a b) = some x := by rw [← henv]; exact meval_var hx
   have h2 : Env.lookup "new" (mergeEnv a b) = some y := by rw [← henv]; exact meval_var hy
-  rcases mergeEnv_cases a b with ⟨x', y', rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
-  · rw [show mergeEnv [x'] [y'] = [("old", x'), ("new", y')] from rfl] at h1 h2
-    rw [show Env.lookup "old" [("old", x'), ("new", y')] = some x' from rfl] at h1
-    rw [show Env.lookup "new" [("old", x'), ("new", y')] = some y' from rfl] at h2
+  rcases mergeEnv_cases a b with ⟨x', as, y', bs, rfl, rfl⟩ | hnone
+  · rw [mergeEnv_lookup_old] at h1
+    rw [mergeEnv_lookup_new] at h2
     obtain rfl : x' = x := Option.some.inj h1
     obtain rfl : y' = y := Option.some.inj h2
-    exact leB_least x' y'
+    exact ⟨leB_cons (leB_least _ _).1, leB_cons (leB_least _ _).2⟩
   · rw [hnone] at h1; simp at h1
-  · exact ⟨Or.inr (Or.inr ⟨⟨_, rfl⟩, not_sing_of_two ha2⟩),
-      Or.inr (Or.inr ⟨⟨_, rfl⟩, not_sing_of_two hb2⟩)⟩
 
 set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -446,8 +446,7 @@ theorem pB_reaches_entry1 {db : Database}
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, h1, r1⟩ := h.cons_inv
   obtain ⟨_, hact, hcl⟩ := h1
-  simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
-    Option.map_eq_some_iff] at hact
+  simp only [cmdReach, evalAction, Option.map_eq_some_iff] at hact
   obtain ⟨t, ht, rfl⟩ := hact
   obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv ht
   rw [show e1 = Expr.lit (.int 1) from rfl] at hts
@@ -509,6 +508,13 @@ def leC (x y : List Term) : Prop :=
         ∨ (CApp y ∧ x.length ≠ 1)
 
 theorem leC_refl (x : List Term) : leC x x := Or.inl rfl
+
+/-- `leB_cons` for `leC`: a wider first argument falls under the third clause. -/
+theorem leC_cons {x p q : Term} {as : List Term} (h : leC [x] [.app "C" [p, q]]) :
+    leC (x :: as) [.app "C" [p, q]] := by
+  cases as with
+  | nil => exact h
+  | cons _ _ => exact Or.inr (Or.inr ⟨⟨p, q, rfl⟩, by simp⟩)
 
 theorem leC_anti (x y : List Term) (h₁ : leC x y) (h₂ : leC y x) : x = y := by
   rcases h₁ with rfl | ⟨p, q, hy, hx⟩ | ⟨⟨p, q, hy⟩, hxl⟩
@@ -612,17 +618,14 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
   have h1 : Env.lookup "old" (mergeEnv a b) = some _ := meval_var hva
   have h2 : Env.lookup "new" (mergeEnv a b) = some _ := meval_var hvb
-  rcases mergeEnv_cases a b with ⟨x, y, rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
-  · rw [show mergeEnv [x] [y] = [("old", x), ("new", y)] from rfl] at h1 h2
-    rw [show Env.lookup "old" [("old", x), ("new", y)] = some x from rfl] at h1
-    rw [show Env.lookup "new" [("old", x), ("new", y)] = some y from rfl] at h2
+  rcases mergeEnv_cases a b with ⟨x, as, y, bs, rfl, rfl⟩ | hnone
+  · rw [mergeEnv_lookup_old] at h1
+    rw [mergeEnv_lookup_new] at h2
     obtain rfl : x = _ := Option.some.inj h1
     obtain rfl : y = _ := Option.some.inj h2
-    exact ⟨Or.inr (Or.inl ⟨_, _, rfl, Or.inl rfl⟩),
-      Or.inr (Or.inl ⟨_, _, rfl, Or.inr rfl⟩)⟩
+    exact ⟨leC_cons (Or.inr (Or.inl ⟨_, _, rfl, Or.inl rfl⟩)),
+      leC_cons (Or.inr (Or.inl ⟨_, _, rfl, Or.inr rfl⟩))⟩
   · rw [hnone] at h1; simp at h1
-  · exact ⟨Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩),
-      Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩)⟩
 
 set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -648,8 +651,7 @@ theorem pC_reaches_entryA {db : Database}
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, h2, r2⟩ := h.cons_inv
   obtain ⟨_, hact, hcl⟩ := h2
-  simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
-    Option.map_eq_some_iff] at hact
+  simp only [cmdReach, evalAction, Option.map_eq_some_iff] at hact
   obtain ⟨t, ht, rfl⟩ := hact
   obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv ht
   rw [show eA = Expr.app "a" [] from rfl] at hts
@@ -730,12 +732,12 @@ theorem mergeOf_of_decl {sig : Signature} {g : FnName} {dc : FnDecl} {m : MergeS
 theorem mergesLegal_of_allConstructors {sig : Signature} (h : sig.AllConstructors) :
     Signature.MergesLegal sig := fun _ _ _ _ hd hm => (h.elim (mergeOf_of_decl hd hm)).elim
 
-/-- Every action is a legal write: the two structural predicates are automatic. -/
+/-- Every action is a legal write: the structural predicate is automatic. -/
 theorem actions_writeLegal (as : List Action) (sig : Signature) :
     Actions.WriteLegal as sig := by
   induction as with
-  | nil => exact ⟨trivial, trivial⟩
-  | cons a as ih => exact ⟨⟨trivial, ih.1⟩, ⟨trivial, ih.2⟩⟩
+  | nil => trivial
+  | cons a as ih => exact ⟨trivial, ih⟩
 
 /-- `hwidth` is `Signature.MergesLegal`'s second half: one result expression per value
 column.  All three merges above have a single value column, so it is `rfl` at each use. -/
@@ -806,7 +808,7 @@ theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName}
     (hstep : d.execCmdM (Cmd.action (.expr (.app f [e]))) = some d')
     (htail : d'.ProgramLegal rest) :
     d.ProgramLegal (Cmd.action (.expr (.app f [e])) :: rest) := by
-  refine ⟨⟨trivial, trivial⟩, trivial, ?_, ?_⟩
+  refine ⟨trivial, trivial, ?_, ?_⟩
   · change Signature.MergesLegal d.sig
     rw [hsig]
     exact mergesLegal_update baseSig_allConstructors hdc hwidth

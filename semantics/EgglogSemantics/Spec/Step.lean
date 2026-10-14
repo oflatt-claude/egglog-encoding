@@ -18,18 +18,20 @@ def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
 
 end Database
 /-! ### The merge step -/
-/-- The environment a `:merge` body runs in: the two colliding entries' outputs, every
-column bound, named `old<i>`/`new<i>` per value column, and nothing else. -/
+/-- egglog's indexed merge parameters, from column `i` on. -/
 def mergeEnvIdx : Nat → List Term → List Term → Env
   | _, [], _ => []
   | _, _, [] => []
   | i, o :: os, n :: ns =>
       ("old" ++ toString i, o) :: ("new" ++ toString i, n) :: mergeEnvIdx (i + 1) os ns
 
-/-- `mergeEnvIdx`, with the unindexed names `old`/`new` for a single value column. -/
+/-- The environment a `:merge` body runs in: the two colliding entries' outputs, column `i`
+as `old<i>`/`new<i>`, and the first column also as `old`/`new`. egglog binds the unindexed
+names for a single output and the indexed ones for several; binding both lets a column be
+appended without renaming a body. -/
 def mergeEnv : List Term → List Term → Env
-  | [o], [n] => [("old", o), ("new", n)]
-  | os, ns => mergeEnvIdx 0 os ns
+  | o :: os, n :: ns => ("old", o) :: ("new", n) :: mergeEnvIdx 0 (o :: os) (n :: ns)
+  | _, _ => []
 
 /-- How many leading value columns a collision must leave unchanged to count as no change
 at all (`egglog-bridge/src/lib.rs:1418`): the declared identity columns, or — for a `:merge`
@@ -73,14 +75,6 @@ def MergeClosure : Database → Database → Prop := Relation.ReflTransGen Merge
 conflicts with itself (`MergeConflict`), so at such a function a step always applies. -/
 def MergeSaturated (db : Database) : Prop := ∀ db', MergeStep db db' → db' = db
 
-/-- `:no-merge` is respected: no two entries of a `.noMerge` function collide on congruent
-keys with different outputs. The `arity` premises play the same role as in `MergeStep`. -/
-def Database.NoMergeOk (db : Database) : Prop :=
-  ∀ f decl as bs (a b : List Term), db.sig f = some decl → decl.merge = some .noMerge →
-    as.length = decl.arity → bs.length = decl.arity →
-    Term.app f (as ++ a) ∈ db.terms → Term.app f (bs ++ b) ∈ db.terms →
-    CongList db as bs → a = b
-
 /-! ### Running -/
 /-- The databases one rule contributes, one per substitution satisfying its query. -/
 def RuleResults (db : Database) (r : Rule) : Set Database :=
@@ -102,30 +96,20 @@ def RunSaturated (R : RulesetName) (d : Database) : Prop :=
   RunRules R d = d ∧ MergeSaturated d
 
 /-- `Cmd.saturate R` reaches `d`: rounds of `R` until it has saturated. A fixpoint
-condition rather than a `cmdEffect`, because no expression computes the round count — it
+condition rather than a function, because no expression computes the round count — it
 grows with the data. -/
 def SaturateReach (R : RulesetName) (db d : Database) : Prop :=
   Relation.ReflTransGen (RunStep R) db d ∧ RunSaturated R d
 
-/-- A command's effect before merging. Rules are registered as written; variable bindings
-are supplied when they fire. Saturation uses `cmdReach` because it may not terminate. -/
-def cmdEffect (db : Database) : Cmd → Option Database
-  | .action a => evalAction db a
-  | .rule r => some { db with rules := insert r db.rules }
-  | .run R => some (RunRules R db)
-  | .saturate _ => none
-  | .decl f d => some { db with sig := Function.update db.sig f (some d) }
-
-/-- Registering a rule does not instantiate its query. -/
-theorem cmdEffect_rule_of_env_nil {db : Database} (h : db.env = []) (r : Rule) :
-    cmdEffect db (.rule r) = some { db with rules := insert r db.rules } := by
-  rfl
-
-/-- What a command reaches before its merge phase. Every command but `Cmd.saturate` is a
-`cmdEffect`; that one is a fixpoint condition. -/
+/-- What a command reaches before its merge phase. Rules are registered as written; variable
+bindings are supplied when they fire. Saturation is a fixpoint condition rather than a
+function because it may not terminate. -/
 def cmdReach (db : Database) : Cmd → Database → Prop
-  | .saturate R => SaturateReach R db
-  | c => fun d => cmdEffect db c = some d
+  | .action a, d => evalAction db a = some d
+  | .rule r, d => d = { db with rules := insert r db.rules }
+  | .run R, d => d = RunRules R db
+  | .saturate R, d => SaturateReach R db d
+  | .decl f dc, d => d = { db with sig := Function.update db.sig f (some dc) }
 
 /-- Run one command: what it reaches, then a merge phase. Every command merges, so a
 top-level `set` is its own merge phase, and `run` is one round of rule firing followed by

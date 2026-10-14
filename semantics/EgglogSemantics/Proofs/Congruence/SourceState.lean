@@ -1,4 +1,4 @@
-import EgglogSemantics.Source.Domain
+import EgglogSemantics.Proofs.Source.Domain
 
 /-! Source terms remain constructor values throughout a constructor-only run. -/
 
@@ -156,13 +156,11 @@ theorem cmdStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.Terms
         hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
       exact evalAction_termsBuild hc.wf h hc.sig hv
   | rule r =>
-      have hv : some { db with rules := insert r db.rules } = some d := hreach
-      obtain rfl : d = { db with rules := insert r db.rules } := (Option.some.inj hv).symm
+      obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } := hcl.eq_of_allConstructors hc.sig
       exact fun f q ht => h f q (Database.terms_setRules ▸ ht)
   | run R =>
-      have hv : some (RunRules R db) = some d := hreach
-      obtain rfl : d = RunRules R db := (Option.some.inj hv).symm
+      obtain rfl : d = RunRules R db := hreach
       obtain rfl : db' = RunRules R db :=
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       exact termsBuild_runRules hc.wf h hc.sig
@@ -175,9 +173,7 @@ theorem cmdStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.Terms
       exact ⟨⟨RunRules.wf hx.1.wf, by rw [RunRules.sig]; exact hx.1.sig⟩,
         termsBuild_runRules hx.1.wf hx.2 hx.1.sig⟩
   | decl f dc =>
-      have hv : some { db with sig := Function.update db.sig f (some dc) } = some d := hreach
-      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } :=
-        (Option.some.inj hv).symm
+      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } := hreach
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       intro g q ht

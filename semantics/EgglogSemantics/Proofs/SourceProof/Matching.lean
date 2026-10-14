@@ -7,8 +7,8 @@ theorem premiseMatches_sound {db : Database} {σ : Env} {p : Pattern} {c : Claim
     (hc : c.Holds db) (h : premiseMatches db.sig σ p c = true) : Matches db p σ := by
   cases p with
   | expr e =>
-      simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h
-      exact .expr (eqsInTerms_free hc).1 h.1
+      simp only [premiseMatches, beq_iff_eq] at h
+      exact .expr (eqsInTerms_free hc).1 (Expr.evalAtom_of_eval h)
         (Cong.mono (Database.Contained.addTerms _ _) hc)
   | eq a b =>
       simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h

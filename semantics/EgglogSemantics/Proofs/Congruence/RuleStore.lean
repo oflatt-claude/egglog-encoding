@@ -64,7 +64,7 @@ theorem rulesEncoded_of_prefix {P pre : Program} {src : Database} {d e : FDataba
 
 /-- Every rule selected by a dedicated rebuilding phase comes from maintenance. -/
 theorem RulesEncoded.rebuild_only {P pre : Program} {src : Database} {d : FDatabase}
-    (h : RulesEncoded P src d) (hdom : P.EncodeDomain)
+    (h : RulesEncoded P src d) (hdom : P.Fragment)
     (hpre : ProgramStep Database.empty pre src) (hsub : ∀ c ∈ pre, c ∈ P) :
     ∀ r ∈ d.rules, r.ruleset = rebuildRuleset →
       ∃ c ∈ allMaintenanceRules P, c.command = .rule r := by
@@ -98,7 +98,7 @@ theorem maintenance_copy {P : Program} {c : Command} (hc : c ∈ allMaintenanceR
 /-- Being closed under a saturation ruleset also closes the dedicated rebuilding rules,
 because the prelude registered copies with the same queries and heads. -/
 theorem RulesEncoded.rebuild_closed {P pre : Program} {src : Database} {d : FDatabase}
-    (h : RulesEncoded P src d) (hdom : P.EncodeDomain)
+    (h : RulesEncoded P src d) (hdom : P.Fragment)
     (hpre : ProgramStep Database.empty pre src) (hsub : ∀ c ∈ pre, c ∈ P)
     {R : RulesetName} (hR : R ∈ P.saturateRulesets) (hclosed : d.RoundClosed R) :
     d.RoundClosed rebuildRuleset := by

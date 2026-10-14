@@ -1,5 +1,6 @@
 import EgglogSemantics.Congruence.Encode
 import EgglogSemantics.Proofs.NoUnions
+import EgglogSemantics.Proofs.Source.Domain
 
 /-!
 # Reading the congruence target

@@ -493,12 +493,6 @@ a collision a rebuild caused, is `Impl/Merge.lean`'s `swapForCanon`. -/
 private def distPick (n : Nat) (which : String) : FnDecl :=
   { arity := n, outArity := 1, merge := some (.merge [] [.var which]) }
 
-/-- `:no-merge`: a collision is an error rather than a resolution
-(egglog panics with "Illegal merge attempted for function Dist"), so a case using it must
-keep its keys distinct. Inert in the model, since `MergeStep` fires only on `.merge`. -/
-private def distNoMerge (n : Nat) : FnDecl :=
-  { arity := n, outArity := 1, merge := some .noMerge }
-
 private def num (n : Int) : Expr := .lit (.int n)
 
 private def mset (f : FnName) (args : List Expr) (v : Int) : Cmd :=
@@ -731,6 +725,16 @@ private def curatedMerge : List (String × Program) :=
     ("min-one",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
        mset "Dist" [C "A"] 7]),
+    -- First-column aliases must retain their meaning when rendered for Rust egglog.
+    ("scalar-indexed-alias",
+      [.decl "Dist" (distPick 1 "new0"), mset "Dist" [C "A"] 5,
+       mset "Dist" [C "A"] 3, .rule (readValue 3), .run ""]),
+    ("tuple-unindexed-alias",
+      [.decl "Log" (dist 1),
+       .decl "Dist" ⟨1, 2, some (.merge [.expr (.app "Log" [C "L", .var "old"])]
+         [.var "new", .var "new1"]), none⟩,
+       pset "Dist" [C "A"] 5 7, pset "Dist" [C "A"] 3 4,
+       .rule readPair, .rule (readInto "Logged" "Log" [C "L"] 5), .run ""]),
     -- Two distinct keys stay two rows.
     ("min-two",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "B"] 3]),
@@ -772,10 +776,6 @@ private def curatedMerge : List (String × Program) :=
       [.decl "Dist" (distBlock 2),
        mset "Dist" [C "X", C "Y"] 1, mset "Dist" [C "A", C "B"] 2,
        .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run ""]),
-    -- `:no-merge`, with keys kept distinct so no collision is ever attempted.
-    ("nomerge-two",
-      [.decl "Dist" (distNoMerge 2), .action (.expr (.app "F" [C "A"])),
-       mset "Dist" [C "A", C "B"] 1, mset "Dist" [C "B", C "A"] 2]),
     -- Two value columns, two distinct keys: the declaration, the `(values …)` merge and
     -- the two-column `set` all have to parse and typecheck for this to run at all.
     ("tuple-two",
@@ -825,11 +825,6 @@ private def curatedMerge : List (String × Program) :=
     ("read-value-congr",
       [.decl "Dist" (dist 1), mset "Dist" [C "X"] 3,
        .action (.expr (C "A")), .action (.union (C "A") (C "X")),
-       .rule (readValue 3), .run ""]),
-    -- Reading a `:no-merge` function. A row atom reads any declared function, so
-    -- `:no-merge` is readable too, and `nomerge-two` only ever writes one.
-    ("read-nomerge",
-      [.decl "Dist" (distNoMerge 1), mset "Dist" [C "A"] 3, mset "Dist" [C "B"] 5,
        .rule (readValue 3), .run ""]),
     -- Copying one merge function's value into another's row, which is what `read-copy`
     -- used to do from a top-level action. All reading happens in the query, so the read is
@@ -1165,9 +1160,8 @@ private def curatedMerge : List (String × Program) :=
        .run ""]) ]
 
 
-/-- The value-column variables a `:merge` body sees at column `i` of a width-`w` output.
-`mergeEnv` binds egglog's unindexed `old`/`new` at one value column and `old0`/`new0`/…
-above, so the naming is a function of the width rather than a choice. -/
+/-- Generate egglog's surface spelling for column `i` of a width-`w` output: unindexed
+at one value column and indexed above. The model also accepts first-column aliases. -/
 private def oldAt (w i : Nat) : Expr := .var (if w == 1 then "old" else "old" ++ toString i)
 
 /-- `oldAt`'s counterpart, the arriving row's column `i`. -/
@@ -1212,7 +1206,6 @@ private def specUnions : MergeSpec → Bool
   | .merge body _ => body.any fun a => match a with
     | .union _ _ => true
     | _ => false
-  | _ => false
 
 /-- One value column: a literal, or `min` applied to two of them in either order, together
 with the integer it denotes.
@@ -1590,154 +1583,8 @@ private def probeCases : List (String × Program) :=
    ("lit-union", litUnionCase), ("lit-mix", litMixCase)]
 
 namespace Egglog
-/-! ### The correspondence domain, decided
-
-`Program.EncodeDomain` as a `Bool`, with the equivalence proved, so that the corpus gates
-and the hypothesis the theorem carries cannot drift apart. -/
-/-- `Cmd.CtorDecl`, computed: `EncodeDomain.ctorsOnly` at one command. -/
-def Cmd.ctorDeclB : Cmd → Bool
-  | .decl _ d => d.merge.isNone
-  | _ => true
-
-theorem Cmd.ctorDeclB_iff (c : Cmd) : c.ctorDeclB = true ↔ c.CtorDecl := by
-  cases c <;> simp [Cmd.ctorDeclB, Cmd.CtorDecl, Option.isNone_iff_eq_none]
-
-/-- `Pattern.Scoped`, computed: a fact is an application. -/
-def Pattern.scopedB : Pattern → Bool
-  | .expr (.app _ _) => true
-  | .expr _ => false
-  | .eq _ _ => true
-
-theorem Pattern.scopedB_iff (p : Pattern) : p.scopedB = true ↔ p.Scoped := by
-  cases p with
-  | expr e => cases e <;> simp [Pattern.scopedB, Pattern.Scoped, Expr.IsApp]
-  | eq _ _ => simp [Pattern.scopedB, Pattern.Scoped]
-
-/-- A bare literal, computed. -/
-def Expr.isLitB : Expr → Bool
-  | .lit _ => true
-  | _ => false
-
-theorem Expr.isLitB_eq_false_iff (e : Expr) : e.isLitB = false ↔ ∀ l, e ≠ .lit l := by
-  cases e <;> simp [Expr.isLitB]
-
-/-- `Pattern.Grounded`, computed. -/
-def Pattern.groundedB : Pattern → Bool
-  | .expr e => !e.isLitB
-  | .eq e₁ e₂ => !e₁.isLitB || !e₂.isLitB
-
-theorem Pattern.groundedB_iff (p : Pattern) : p.groundedB = true ↔ p.Grounded := by
-  cases p <;>
-    simp [Pattern.groundedB, Pattern.Grounded, ← Expr.isLitB_eq_false_iff]
-
-/-- `Expr.var v ∈ args`, computed: `Expr` carries no `BEq`. -/
-def Expr.memVarB (v : Var) : List Expr → Bool
-  | [] => false
-  | .var w :: es => w == v || Expr.memVarB v es
-  | _ :: es => Expr.memVarB v es
-
-theorem Expr.memVarB_iff (v : Var) : ∀ args : List Expr,
-    Expr.memVarB v args = true ↔ Expr.var v ∈ args
-  | [] => by simp [Expr.memVarB]
-  | .lit _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
-  | .var w :: es => by
-      simp only [Expr.memVarB, Bool.or_eq_true, beq_iff_eq, List.mem_cons, Expr.var.injEq,
-        Expr.memVarB_iff v es]
-      exact or_congr_left eq_comm
-  | .app _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
-  | .min _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
-
-mutual
-
-/-- `Expr.ArgVar`, computed. -/
-def Expr.argVarB (v : Var) : Expr → Bool
-  | .lit _ => false
-  | .var _ => false
-  | .app _ args => Expr.memVarB v args || Expr.argVarListB v args
-  | .min a b => Expr.argVarB v a || Expr.argVarB v b
-
-/-- `Expr.ArgVarList`, computed. -/
-def Expr.argVarListB (v : Var) : List Expr → Bool
-  | [] => false
-  | e :: es => Expr.argVarB v e || Expr.argVarListB v es
-
-end
-
-mutual
-
-theorem Expr.argVarB_iff (v : Var) : ∀ e : Expr, Expr.argVarB v e = true ↔ Expr.ArgVar v e
-  | .lit _ => by simp [Expr.argVarB, Expr.ArgVar]
-  | .var _ => by simp [Expr.argVarB, Expr.ArgVar]
-  | .app _ args => by
-      simp only [Expr.argVarB, Expr.ArgVar, Bool.or_eq_true, Expr.memVarB_iff,
-        Expr.argVarListB_iff v args]
-  | .min a b => by
-      simp only [Expr.argVarB, Expr.ArgVar, Bool.or_eq_true, Expr.argVarB_iff v a,
-        Expr.argVarB_iff v b]
-
-theorem Expr.argVarListB_iff (v : Var) : ∀ es : List Expr,
-    Expr.argVarListB v es = true ↔ Expr.ArgVarList v es
-  | [] => by simp [Expr.argVarListB, Expr.ArgVarList]
-  | e :: es => by
-      simp only [Expr.argVarListB, Expr.ArgVarList, Bool.or_eq_true, Expr.argVarB_iff v e,
-        Expr.argVarListB_iff v es]
-
-end
-
-/-- `Pattern.ArgVar`, computed. -/
-def Pattern.argVarB (v : Var) : Pattern → Bool
-  | .expr e => e.argVarB v
-  | .eq e₁ e₂ => e₁.argVarB v || e₂.argVarB v
-
-theorem Pattern.argVarB_iff (v : Var) (p : Pattern) :
-    p.argVarB v = true ↔ Pattern.ArgVar v p := by
-  cases p <;>
-    simp [Pattern.argVarB, Pattern.ArgVar, Expr.argVarB_iff]
-
-/-- `Query.VarsKeyed`, computed. -/
-def Query.varsKeyedB (q : Query) : Bool :=
-  (Query.vars q).all fun v => q.any fun p => Pattern.argVarB v p
-
-theorem Query.varsKeyedB_iff (q : Query) : q.varsKeyedB = true ↔ Query.VarsKeyed q := by
-  simp [Query.varsKeyedB, Query.VarsKeyed, List.all_eq_true, List.any_eq_true,
-    Pattern.argVarB_iff]
-
-/-- `Cmd.QueryEncodable`, computed. -/
-def Cmd.queryEncodableB : Cmd → Bool
-  | .rule r =>
-      r.query.all (fun p => p.groundedB && p.scopedB) && Query.varsKeyedB r.query
-  | _ => true
-
-theorem Cmd.queryEncodableB_iff (c : Cmd) : c.queryEncodableB = true ↔ c.QueryEncodable := by
-  cases c <;>
-    simp [Cmd.queryEncodableB, Cmd.QueryEncodable, List.all_eq_true, Pattern.groundedB_iff,
-      Pattern.scopedB_iff, Query.varsKeyedB_iff]
-
-/-- `Program.EncodeDomain`, computed. `EncodeDomain.setLegal`, `EncodeDomain.headsDeclared`
-and `EncodeDomain.headsScoped` are `Spec/Scope.lean` checks with `Decidable` instances, so
-those three conjuncts are `decide` of the clause itself; `EncodeDomain.noLitUnion` is `Bool`
-at the source. -/
-def Program.encodeDomainB (p : Program) : Bool :=
-  p.all Cmd.ctorDeclB && decide (Program.SetLegal p (fun _ => none))
-    && decide (Program.OrderingFree p)
-    && p.names.all (fun n => !"@".isPrefixOf n)
-    && p.all Cmd.queryEncodableB
-    && (p.all Cmd.ruleUnionFreeB || p.all Cmd.litFreeB)
-    && decide (Program.HeadsDeclared p (fun _ => none))
-    && p.arityConflicts.isEmpty
-    && decide p.HeadsScoped
-
-/-- **The census below counts exactly `EncodeDomain`.** -/
-theorem Program.encodeDomainB_iff (p : Program) :
-    p.encodeDomainB = true ↔ p.EncodeDomain := by
-  simp only [Program.encodeDomainB, Bool.and_eq_true, Bool.or_eq_true, List.all_eq_true,
-    Cmd.ctorDeclB_iff, Cmd.queryEncodableB_iff,
-    Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq, decide_eq_true_eq,
-    List.isEmpty_iff]
-  exact ⟨fun h => ⟨h.1.1.1.1.1.1.1.1, h.1.1.1.1.1.1.1.2, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2,
-      h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noMin⟩, h.noAt⟩, h.queryEncodable⟩,
-      h.noLitUnion⟩, h.headsDeclared⟩, h.aritiesAgree⟩, h.headsScoped⟩⟩
+/-- The source fragment, decided. -/
+def Program.encodeDomainB (p : Program) : Bool := decide p.Fragment
 
 /-! #### Running the compiled program
 

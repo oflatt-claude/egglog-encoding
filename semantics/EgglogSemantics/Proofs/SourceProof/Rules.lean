@@ -3,48 +3,26 @@ import EgglogSemantics.Proofs.Rules
 
 namespace Egglog.SourceProof
 
-/-- `exprOk` is `Expr.OrderingFree` as a Boolean: both say no `min` occurs. -/
-theorem exprOk_orderingFree {e : Expr} (h : exprOk e = true) : e.OrderingFree := by
-  simpa [exprOk, Expr.OrderingFree] using h
+/-- `sourceOk` is `Program.Fragment`, decided. -/
+theorem sourceOk_fragment {P : Program} (h : sourceOk P = true) : P.Fragment :=
+  of_decide_eq_true h
 
-theorem patternOk_orderingFree {p : Pattern} (h : patternOk p = true) : p.OrderingFree := by
-  cases p with
-  | expr e =>
-      cases e with
-      | lit _ | var _ | min _ _ => simp [patternOk] at h
-      | app f args => exact exprOk_orderingFree h
-  | eq a b =>
-      simp only [patternOk, Bool.and_eq_true_iff] at h
-      exact ⟨exprOk_orderingFree h.1, exprOk_orderingFree h.2⟩
+/-- `Program.OrderingFree` at a member command. -/
+private theorem orderingFree_of_mem : ∀ {P : Program}, Program.OrderingFree P →
+    ∀ {c : Cmd}, c ∈ P → c.OrderingFree
+  | [], _, _, hc => absurd hc (by simp)
+  | _ :: _, h, _, hc => by
+      rcases List.mem_cons.mp hc with rfl | hc
+      · exact h.1
+      · exact orderingFree_of_mem h.2 hc
 
-theorem actionOk_orderingFree {a : Action} (h : actionOk a = true) : a.OrderingFree := by
-  cases a with
-  | expr e => exact exprOk_orderingFree h
-  | union a b =>
-      simp only [actionOk, Bool.and_eq_true_iff] at h
-      exact ⟨exprOk_orderingFree h.1, exprOk_orderingFree h.2⟩
-
-theorem actionsOk_orderingFree {as : List Action} (h : as.all actionOk = true) :
-    Actions.OrderingFree as := by
-  induction as with
-  | nil => trivial
-  | cons a as ih =>
-      simp only [List.all_cons, Bool.and_eq_true_iff] at h
-      exact ⟨actionOk_orderingFree h.1, ih h.2⟩
-
-theorem ruleOk_orderingFree {r : Rule} (h : ruleOk r = true) : r.OrderingFree := by
-  simp only [ruleOk, Bool.and_eq_true_iff] at h
-  exact ⟨fun p hp => patternOk_orderingFree (List.all_eq_true.mp h.1 p hp),
-    actionsOk_orderingFree h.2⟩
-
+/-- The fragment computes with no `min`, so neither does any of its rules. -/
 theorem sourceOk_rule {P : Program} (h : sourceOk P = true) {r : Rule}
     (hr : Cmd.rule r ∈ P) : r.OrderingFree :=
-  ruleOk_orderingFree (List.all_eq_true.mp h _ hr)
+  orderingFree_of_mem (sourceOk_fragment h).noMin hr
 
-theorem sourceOk_ctors {P : Program} (h : sourceOk P = true) : P.CtorDecls := by
-  intro c hc
-  have h := List.all_eq_true.mp h c hc
-  cases c <;> first | trivial | exact Option.isNone_iff_eq_none.mp h
+theorem sourceOk_ctors {P : Program} (h : sourceOk P = true) : P.CtorDecls :=
+  (sourceOk_fragment h).ctorsOnly
 
 /-- A checked head fact follows from a valid source rule firing, up to supported terms. -/
 theorem ruleFacts_supported {P : Program} {C : Context} {db : Database}

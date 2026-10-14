@@ -55,14 +55,14 @@ def queryOk (sig : Signature) (q : Query) : Bool := q.all fun p => match p with
   | .eq a b => leaf a && leaf b && ((witness q a).isSome || (witness q b).isSome)
   | _ => false
 
+/-- The variables a `:merge` body with `n` value columns may read: `mergeEnv`'s names. -/
 def mergeVars (n : Nat) : List Var :=
-  if n == 1 then ["old", "new"] else
-    (List.range n).flatMap fun i => ["old" ++ toString i, "new" ++ toString i]
+  if n == 0 then [] else
+    ["old", "new"] ++ (List.range n).flatMap fun i => ["old" ++ toString i, "new" ++ toString i]
 
 def programOk (P : Program) (sig : Signature) : Bool := P.all fun c => match c with
   | .decl f d => !namePrefix.isPrefixOf f && match d.merge with
     | none => true
-    | some .noMerge => false
     | some (.merge body res) =>
         body.all (tableActionOk sig (mergeVars d.outArity)) &&
           res.length == d.outArity && valueExprsOk sig (mergeVars d.outArity) res
@@ -94,45 +94,22 @@ def encodeRule (i : Nat) (r : Rule) : Option Rule := do
     actions := r.actions.zipIdx.map fun aj =>
       encodeAction (.app (ruleName i aj.2) payload) aj.1 }
 
-mutual
-
-def renameExpr (rename : Var → Var) : Expr → Expr
-  | .lit l => .lit l
-  | .var v => .var (rename v)
-  | .app f args => .app f (renameExprs rename args)
-  | .min a b => .min (renameExpr rename a) (renameExpr rename b)
-
-def renameExprs (rename : Var → Var) : List Expr → List Expr
-  | [] => []
-  | e :: es => renameExpr rename e :: renameExprs rename es
-
-end
-
-def renameAction (rename : Var → Var) : Action → Action
-  | .expr e => .expr (renameExpr rename e)
-  | .union a b => .union (renameExpr rename a) (renameExpr rename b)
-
-def renameMerge (n : Nat) (v : Var) : Var :=
-  if n == 1 && (v == "old" || v == "new") then v ++ "0" else v
-
-def mergeProof (n : Nat) (side : String) : Expr :=
-  .var (if n == 0 then side else side ++ toString n)
-
+/-- A merge function gains a proof column, bound as `mergeEnv`'s next parameter pair: every
+body action records both inputs' proofs, and the result column records them with the
+result. The identity columns stay the original value columns, so a collision that changes
+no data runs nothing, as before. -/
 def encodeDecl (f : FnName) (d : FnDecl) : FnDecl :=
   match d.merge with
   | some (.merge body res) =>
-    let old := mergeProof d.outArity "old"
-    let new := mergeProof d.outArity "new"
-    let rename := renameMerge d.outArity
-    let res' := renameExprs rename res
-    let pf := .app (resultName f) [old, new]
+    let old := Expr.var ("old" ++ toString d.outArity)
+    let new := Expr.var ("new" ++ toString d.outArity)
     { d with
       outArity := d.outArity + 1
       identityVals := some (min ((d.unchangedWidth body).getD d.outArity) d.outArity)
       merge := some (.merge
         (body.zipIdx.map fun aj =>
-          encodeAction (.app (bodyName f aj.2) [old, new]) (renameAction rename aj.1))
-        (res' ++ [pf])) }
+          encodeAction (.app (bodyName f aj.2) [old, new]) aj.1)
+        (res ++ [.app (resultName f) [old, new]])) }
   | _ => d
 
 def proofDecls (P : Program) : Program :=

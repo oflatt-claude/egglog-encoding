@@ -47,7 +47,7 @@ it stands (`noConflict`). Nothing else is ever removed:
 * **never a term and never an equality** — only `rows` is rewritten;
 * **never a constructor's row**, which the whole congruence argument rests on — the rewrite runs
   only inside the `.merge` branch and touches only `r₁` and `r₂`, whose function is that branch's;
-* **never a row of a `.noMerge` function** — same reason, and it matters: `:no-merge` is
+* **never a row of a constructor** — same reason, and it matters: a constructor is
   how the proof encoding declares its proof nodes (`… → Unit :no-merge`, deliberately so
   two structurally equal proofs are never merged), and deleting one would delete a proof.
 
@@ -109,8 +109,7 @@ order. `mergeOneWith` is what decides the orientation; nothing else should call 
 The signature is consulted *before* the congruence check, which is not cosmetic: the
 check computes `closureF`, and `mergeRound` calls this once per ordered pair of rows, so
 testing the cheap condition first is what keeps a constructor-only database from paying
-a closure per pair. Same result either way — a constructor or a `.noMerge` function has
-no body to run.
+a closure per pair. Same result either way — a constructor has no body to run.
 
 **The combined row takes `r₂`'s key and `r₂`'s slot**, and its entry term `f(r₂.args…,
 vs…)` joins `terms`, which is what `MergeStep` records and the only part of the firing the
@@ -257,8 +256,7 @@ through.
 **Constructor rows are left alone**: a constructor has no value column, so `ctorRowList` emits
 `⟨f, as, []⟩` and the term it indexes is the application `f(as)` itself. Re-keying one would put
 it out of step with that term while buying nothing — congruence never reads a row, and
-`Database.Out` reads a constructor's entry from every congruent key already. `.noMerge` rows are
-left alone too; a `:no-merge` collision is a program error, not a resolution. -/
+`Database.Out` reads a constructor's entry from every congruent key already. -/
 /-- The canonical member of `t`'s congruence class: the congruent term created *first*.
 
 `ts` is `FDatabase.terms`, whose *tail* is the oldest part — `addTerm` prepends what is

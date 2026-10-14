@@ -85,7 +85,7 @@ private theorem prelude_shape (P : Program) :
     exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl, rfl⟩
   · rcases hc with rfl | rfl
     · intro body res he
-      simp [skolemDecl] at he
+      simp [ctorDecl] at he
     · intro body res he
       obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
         simpa [tableDecl] using he
@@ -136,13 +136,12 @@ theorem MergeShape.mergesLegal {sig : Signature} (h : MergeShape sig) :
     Signature.MergesLegal sig := by
   intro f dc body res hdc hm
   obtain ⟨-, rfl, rfl, ho, -, -⟩ := h f dc hdc body res hm
-  exact ⟨⟨⟨trivial, trivial, trivial⟩, ⟨trivial, trivial, trivial⟩⟩, ho.symm⟩
+  exact ⟨⟨trivial, trivial, trivial⟩, ho.symm⟩
 
 /-- Every generated merge body records UF entries without asserting a built-in union. -/
 theorem MergeShape.unionFree {sig : Signature} (h : MergeShape sig) : sig.UnionFree := by
   intro f dc hd ms hm
   cases ms with
-  | noMerge => trivial
   | merge body res =>
       have hb := (h f dc hd body res hm).2.1
       rw [hb]

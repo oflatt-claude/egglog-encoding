@@ -43,7 +43,7 @@ theorem Simulation.state {P : Program} {src : Database} {d : FDatabase}
   ⟨h.rebuilt.inv, h.rebuilt.noUnions, h.rebuilt.shape, h.rebuilt.uf, h.sound,
     h.rebuilt.history, h.rebuilt.descend⟩
 
-theorem simulation_prelude {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+theorem simulation_prelude {P : Program} (hdom : P.Fragment) {d : FDatabase}
     (run : FDatabase.empty.execProgramM ((encodePrelude P).map Command.command) = some d) :
     Simulation P Database.empty d := by
   obtain ⟨hs, hr, hreads, ht, hstore, hsig⟩ := prelude_state hdom run
@@ -70,8 +70,8 @@ theorem source_setup_eqs {src post : Database} {c : Cmd} (hcs : src.sig.AllConst
   have heq := hmerge.eq_of_allConstructors (cmdReach_allConstructors hcs hdecl hm)
   rw [heq]
   cases c with
-  | decl f dc => cases Option.some.inj hm; rfl
-  | rule r => cases Option.some.inj hm; rfl
+  | decl f dc => subst hm; rfl
+  | rule r => subst hm; rfl
   | action _ | run _ | saturate _ => exact hc.elim
 
 /-- Source declarations require no target commands because the prelude declared all tables. -/
@@ -118,7 +118,7 @@ theorem Simulation.rule {P : Program} {src post : Database} {d e : FDatabase}
     (Egglog.FDatabase.toDatabase_contained_of_lists (fun _ ht => ht) (fun _ he => he))
 
 /-- A source round followed by target rebuilding preserves the command invariant. -/
-theorem Simulation.run {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem Simulation.run {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ Cmd.run R :: rest) {src post : Database}
     (hpre : ProgramStep Database.empty pre src) (hs : CmdStep src (.run R) post)
     {d e : FDatabase} (h : Simulation P src d) {i : Nat}
@@ -127,7 +127,7 @@ theorem Simulation.run {P pre rest : Program} (hdom : P.EncodeDomain)
   have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => hP ▸ List.mem_append_left _ hc
   have hstep : RunStep R src post := by
     obtain ⟨m, hm, hcl⟩ := hs
-    obtain rfl := Option.some.inj hm
+    obtain rfl := hm
     exact hcl
   obtain ⟨m, hm, hrb⟩ := Option.bind_eq_some_iff.mp run
   have hm' : d.runRoundM R = some m := hm
@@ -145,7 +145,7 @@ theorem Simulation.run {P pre rest : Program} (hdom : P.EncodeDomain)
     (hmreads.mono (Egglog.FDatabase.runSaturateM_toDatabase_contained hrb'))
 
 /-- Saturation is simulated against its final source state, then explicitly rebuilt. -/
-theorem Simulation.saturate {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem Simulation.saturate {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ Cmd.saturate R :: rest) {src post : Database}
     (hpre : ProgramStep Database.empty pre src) (hs : CmdStep src (.saturate R) post)
     {d e : FDatabase} (h : Simulation P src d) {i : Nat}
@@ -178,7 +178,7 @@ theorem Simulation.saturate {P pre rest : Program} (hdom : P.EncodeDomain)
     (hmreads.mono (Egglog.FDatabase.runSaturateM_toDatabase_contained hrb'))
 
 /-- Each original command preserves the simulation invariant. -/
-theorem Simulation.step {P pre rest : Program} (hdom : P.EncodeDomain) {c : Cmd}
+theorem Simulation.step {P pre rest : Program} (hdom : P.Fragment) {c : Cmd}
     (hP : P = pre ++ c :: rest) {src post : Database}
     (hpre : ProgramStep Database.empty pre src) (hs : CmdStep src c post)
     {d e : FDatabase} (h : Simulation P src d) {i : Nat}
@@ -199,7 +199,7 @@ theorem Simulation.step {P pre rest : Program} (hdom : P.EncodeDomain) {c : Cmd}
   | saturate R => exact Simulation.saturate hdom hP hpre hs h run
 
 /-- Compose command simulations along the original program. -/
-theorem Simulation.program {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem Simulation.program {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ rest) {src post : Database}
     (hpre : ProgramStep Database.empty pre src) (hs : ProgramStep src rest post)
     {d e : FDatabase} (h : Simulation P src d) {i : Nat}
@@ -222,7 +222,7 @@ theorem Simulation.program {P pre rest : Program} (hdom : P.EncodeDomain)
       exact ih hP' (hpre.append (.cons hcmd .nil)) hrest hmid he
 
 /-- Successful source and compiled executions satisfy the full simulation invariant. -/
-theorem execM_encode_simulation {P : Program} (hdom : P.EncodeDomain)
+theorem execM_encode_simulation {P : Program} (hdom : P.Fragment)
     {src : Database} (hsrc : ProgramStep Database.empty P src)
     {d : FDatabase} (run : execM (encode P) = some d) : Simulation P src d := by
   change FDatabase.empty.execProgramM _ = some d at run
@@ -232,7 +232,7 @@ theorem execM_encode_simulation {P : Program} (hdom : P.EncodeDomain)
     (simulation_prelude hdom hm) he
 
 /-- Source congruence agrees with the explicit table reading after congruence compilation. -/
-theorem encode_corresponds {P : Program} (hdom : P.EncodeDomain)
+theorem encode_corresponds {P : Program} (hdom : P.Fragment)
     {src : Database} (hsrc : ProgramStep Database.empty P src)
     {d : FDatabase} (run : execM (encode P) = some d)
     (a b : Term) (ha : a ∈ src.terms) (hb : b ∈ src.terms) :
@@ -247,7 +247,7 @@ theorem encode_corresponds {P : Program} (hdom : P.EncodeDomain)
     (unionsRead_of_unionsJoined hlead h.reads.unions) a b ha hb
 
 /-- Completeness with structural matching and table operations only in the target. -/
-theorem encode_corresponds_relational {P : Program} (hdom : P.EncodeDomain)
+theorem encode_corresponds_relational {P : Program} (hdom : P.Fragment)
     {src : Database} (hsrc : ProgramStep Database.empty P src)
     {d : FDatabase} (run : Relational.exec (encode P) (encode_unionFree P) = some d)
     (a b : Term) (ha : a ∈ src.terms) (hb : b ∈ src.terms) :

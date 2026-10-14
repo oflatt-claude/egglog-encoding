@@ -4,7 +4,7 @@ namespace Egglog.Congruence
 
 /-- The actual prelude starts the command simulation with empty source facts, settled
 rows, all rebuilding rules, and the fixed compiled signature. -/
-theorem prelude_state {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+theorem prelude_state {P : Program} (hdom : P.Fragment) {d : FDatabase}
     (run : FDatabase.empty.execProgramM ((encodePrelude P).map Command.command) = some d) :
     RunState Database.empty d ∧ Rebuilt d ∧ SourceReads d.toDatabase Database.empty ∧
       RebuildTables P d ∧ RulesEncoded P Database.empty d ∧ d.sig = encodeSig P := by

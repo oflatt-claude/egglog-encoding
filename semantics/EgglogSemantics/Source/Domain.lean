@@ -1,11 +1,13 @@
-import EgglogSemantics.Proofs.Step
-import EgglogSemantics.Tests.Egg
+import EgglogSemantics.Spec.Scope
+import EgglogSemantics.Spec.Eval
 
 /-!
-# Source-program analysis for the encoding passes
+# The source fragment
 
-Constructor discovery, source scoping, and the supported correspondence domain.
-This module does not import either program transformation or a proof checker.
+Constructor discovery, source scoping, and `Program.Fragment`: the one definition of the
+source programs the congruence pass compiles and the source proof checker accepts. Decided
+by `instDecidableFragment`, so a program is checked by `decide`. The theorems about these
+definitions are in `Proofs/Source/Domain.lean`.
 -/
 
 namespace Egglog
@@ -65,28 +67,6 @@ def Database.GlobalsInline (src : Database) (G : List (Var × Expr)) : Prop :=
   ∀ v e, Expr.lookupG v G = some e →
     e.vars = [] ∧ ∃ t, e.eval src.sig [] = some t ∧ Env.lookup v src.env = some t
 
-/-- The clause moves to a state that still builds what it built and still binds what it
-bound. -/
-theorem Database.GlobalsInline.mono_src {src src' : Database} {G : List (Var × Expr)}
-    (h : src.GlobalsInline G)
-    (hsig : ∀ (e : Expr) (t : Term), e.eval src.sig [] = some t → e.eval src'.sig [] = some t)
-    (henv : ∀ v t, Env.lookup v src.env = some t → Env.lookup v src'.env = some t) :
-    src'.GlobalsInline G := by
-  intro v e he
-  obtain ⟨hcl, t, hev, hlk⟩ := h v e he
-  exact ⟨hcl, t, hsig e t hev, henv v t hlk⟩
-
-/-- The static half of the clause, which is what the three text conditions need. -/
-theorem Database.GlobalsInline.closed {src : Database} {G : List (Var × Expr)}
-    (h : src.GlobalsInline G) : Expr.ClosedG G := fun v e he => (h v e he).1
-
-/-- The environment and the signature are both unmoved, which is the shape a run, a
-saturation and a rule declaration all have. -/
-theorem Database.GlobalsInline.of_eq {src src' : Database} {G : List (Var × Expr)}
-    (h : src.GlobalsInline G) (hsig : src'.sig = src.sig) (henv : src'.env = src.env) :
-    src'.GlobalsInline G :=
-  h.mono_src (fun _ _ he => by rw [hsig]; exact he) (fun _ _ hv => by rw [henv]; exact hv)
-
 /-! ### Queries
 
 A source pattern becomes one view read per subterm, joined on e-class variables — the
@@ -99,8 +79,8 @@ def Program.saturateRulesets (P : Program) : List RulesetName :=
 
 /-! ### The source programs `encode` is defined for
 
-`Program.EncodeDomain` below specifies the constructor fragment and the naming, query,
-arity, and head-legality conditions used by the correspondence theorem. -/
+`Program.Fragment` below specifies the constructor fragment and the naming, query, arity,
+and head-legality conditions used by the correspondence theorem. -/
 
 /-- The variables an action mentions, binders included. -/
 def Action.vars : Action → List Var
@@ -131,7 +111,7 @@ def Program.rulesets (P : Program) : List RulesetName := (P.flatMap Cmd.rulesets
 
 /-- **Every name the source text mentions**, of the three kinds the generated namespace has
 to stay clear of: a function name, a variable, a ruleset. One list because one condition is
-asked of all three (`EncodeDomain.noAt`). -/
+asked of all three (`Fragment.noAt`). -/
 def Program.names (P : Program) : List String :=
   P.ctors.map Prod.fst ++ P.vars ++ P.rulesets
 
@@ -140,7 +120,7 @@ def Program.names (P : Program) : List String :=
 `encodeQueryExpr` flattens an *application* and returns a leaf unchanged, so `encodePattern`
 emits **no atom** for a source pattern whose expression is a bare literal or a bare variable.
 Both are conditions on the source program's **text**, decidable, and both are folded into
-`Program.EncodeDomain` below; `Proofs/Congruence/Match.lean` is where each is consumed and where each
+`Program.Fragment` below; `Proofs/Congruence/Match.lean` is where each is consumed and where each
 is refuted. -/
 /-- **The pattern has a witness position.** `Matches` asks for a term the source *holds*
 congruent to the instance, and a bare literal has none: the source may never have built it,
@@ -156,17 +136,11 @@ literal-valued global's definition into the query, and the source's own environm
 name to that term.
 
 This is what the correspondence consumes; `Pattern.Grounded` is the text condition
-`Program.EncodeDomain` states and implies it. -/
+`Program.Fragment` states and implies it. -/
 def Pattern.GroundedAt (src : Database) : Pattern → Prop
   | .expr e => ∀ l, e = .lit l → Term.lit l ∈ src.terms
   | .eq e₁ e₂ => (∀ l, e₁ = .lit l → Term.lit l ∈ src.terms) ∨
       (∀ l, e₂ = .lit l → Term.lit l ∈ src.terms)
-
-@[inherit_doc Pattern.GroundedAt]
-theorem Pattern.Grounded.groundedAt {src : Database} :
-    ∀ {p : Pattern}, p.Grounded → p.GroundedAt src
-  | .expr _, h => fun l he => absurd he (h l)
-  | .eq _ _, h => h.imp (fun h₁ l he => absurd he (h₁ l)) (fun h₂ l he => absurd he (h₂ l))
 
 mutual
 
@@ -220,7 +194,7 @@ bare variable the query does not bind, which `encodeBuild` emits no action for a
   rather than only its residue: the bogus edge is what a rebuild column rule then re-keys a
   view entry along.
 * **An application of a name nobody declared.** `Expr.eval` needs `Signature.IsCtor`, so the
-  source head is stuck, while `encodePrelude` declares a skolem constructor for **every**
+  source head is stuck, while `encodePrelude` declares a structural constructor for **every**
   name `Program.ctors` reads off the uses — declared or not. `execM_soundTerms_false` is that
   program.
 
@@ -263,27 +237,12 @@ def Action.unionFreeB : Action → Bool
   | .union _ _ => false
   | _ => true
 
-theorem Action.unionFreeB_iff (a : Action) : a.unionFreeB = true ↔ a.UnionFree := by
-  cases a <;> simp [Action.unionFreeB, Action.UnionFree]
-
-theorem Actions.unionFreeB_iff : ∀ as : List Action,
-    as.all Action.unionFreeB = true ↔ Actions.UnionFree as
-  | [] => by simp
-  | a :: as => by
-      simp only [List.all_cons, Bool.and_eq_true, Actions.UnionFree, Action.unionFreeB_iff,
-        Actions.unionFreeB_iff as]
-
 /-- No **rule head** asserts a `union`. A top-level `union` needs no clause: on a literal it
 sticks the source run outright, and `ProgramStep` then has no state for the correspondence to
 be about — which is what `difftest`'s `litUnionCase` reports as `sourceStuck`. -/
 def Cmd.ruleUnionFreeB : Cmd → Bool
   | .rule r => r.actions.all Action.unionFreeB
   | _ => true
-
-@[inherit_doc Cmd.ruleUnionFreeB]
-theorem Cmd.ruleUnionFreeB_iff (r : Rule) :
-    (Cmd.rule r).ruleUnionFreeB = true ↔ r.UnionFree :=
-  Actions.unionFreeB_iff r.actions
 
 /-- `Spec/Scope.lean`'s `Action.Declared` at a rule's head, and nothing at any other
 command: a stuck **top-level** action drops `ProgramStep` and makes the claim vacuous, so
@@ -346,30 +305,6 @@ instance Program.decidableHeadsDeclared : ∀ (P : Program) (sig : Signature),
   | c :: cs, sig => @instDecidableAnd _ _ (Cmd.decidableHeadsDeclared c sig)
       (Program.decidableHeadsDeclared cs (c.sigBind sig))
 
-instance Action.decidableSetLegal : ∀ (a : Action) (sig : Signature),
-    Decidable (a.SetLegal sig)
-  | .expr _, _ => .isTrue trivial
-  | .union _ _, _ => .isTrue trivial
-
-instance Actions.decidableSetLegal : ∀ (as : List Action) (sig : Signature),
-    Decidable (Actions.SetLegal as sig)
-  | [], _ => .isTrue trivial
-  | a :: as, sig =>
-      @instDecidableAnd _ _ (Action.decidableSetLegal a sig) (Actions.decidableSetLegal as sig)
-
-instance Cmd.decidableSetLegal : ∀ (c : Cmd) (sig : Signature), Decidable (c.SetLegal sig)
-  | .action a, sig => inferInstanceAs (Decidable (a.SetLegal sig))
-  | .rule r, sig => inferInstanceAs (Decidable (Actions.SetLegal r.actions sig))
-  | .run _, _ => .isTrue trivial
-  | .saturate _, _ => .isTrue trivial
-  | .decl _ _, _ => .isTrue trivial
-
-instance Program.decidableSetLegal : ∀ (P : Program) (sig : Signature),
-    Decidable (Program.SetLegal P sig)
-  | [], _ => .isTrue trivial
-  | c :: cs, sig => @instDecidableAnd _ _ (Cmd.decidableSetLegal c sig)
-      (Program.decidableSetLegal cs (c.sigBind sig))
-
 /-! #### The head-scope check, and deciding it
 
 `Spec/Scope.lean`'s `Actions.Scoped` at a rule's own query variables. Every action in
@@ -417,14 +352,19 @@ instance Cmd.decidableHeadScoped : ∀ c : Cmd, Decidable c.HeadScoped
 instance Program.decidableHeadsScoped (P : Program) : Decidable P.HeadsScoped :=
   inferInstanceAs (Decidable (∀ c ∈ P, c.HeadScoped))
 
-/-- Constructor programs supported by the correspondence theorem: declarations, names,
-queries, arities, and rule heads satisfy the conditions recorded below. -/
-structure Program.EncodeDomain (P : Program) : Prop where
+/-- Every name is applied at one arity. -/
+def Program.AritiesAgree (P : Program) : Prop :=
+  ∀ p ∈ P.ctors, ∀ q ∈ P.ctors, p.1 = q.1 → p.2 = q.2
+
+instance (P : Program) : Decidable P.AritiesAgree :=
+  inferInstanceAs (Decidable (∀ p ∈ P.ctors, ∀ q ∈ P.ctors, p.1 = q.1 → p.2 = q.2))
+
+/-- **The source fragment**: the programs the congruence pass compiles, the completeness
+theorem is about, and the source proof checker accepts. Declarations, names, queries,
+arities, and rule heads satisfy the conditions recorded below. -/
+structure Program.Fragment (P : Program) : Prop where
   /-- The source declares only constructors. Generated target tables may be functions. -/
   ctorsOnly : P.CtorDecls
-  /-- Compatibility condition for the existing proof interfaces; automatic in the
-  current action syntax. -/
-  setLegal : Program.SetLegal P (fun _ => none)
   /-- The source never computes with `min`: every expression builds. -/
   noMin : Program.OrderingFree P
   /-- Source function, variable, and ruleset names cannot collide with generated names. -/
@@ -437,10 +377,127 @@ structure Program.EncodeDomain (P : Program) : Prop where
   /-- A source rule head applies only functions declared before the rule. -/
   headsDeclared : Program.HeadsDeclared P (fun _ => none)
   /-- Each source function has a unique arity. -/
-  aritiesAgree : P.arityConflicts = []
+  aritiesAgree : P.AritiesAgree
   /-- Every rule-head variable is query-bound, and a build action is an application.
   This excludes a bare unbound head that the compiler would otherwise silently erase. -/
   headsScoped : P.HeadsScoped
+
+/-! #### Deciding the fragment -/
+
+/-- `Cmd.CtorDecl`, computed. -/
+def Cmd.ctorDeclB : Cmd → Bool
+  | .decl _ d => d.merge.isNone
+  | _ => true
+
+instance (c : Cmd) : Decidable c.CtorDecl :=
+  decidable_of_iff (c.ctorDeclB = true) (by
+    cases c <;> simp [Cmd.ctorDeclB, Cmd.CtorDecl, Option.isNone_iff_eq_none])
+
+/-- A bare literal, computed. -/
+def Expr.isLitB : Expr → Bool
+  | .lit _ => true
+  | _ => false
+
+instance Expr.decidableIsLitFree (e : Expr) : Decidable (∀ l, e ≠ .lit l) :=
+  decidable_of_iff (e.isLitB = false) (by cases e <;> simp [Expr.isLitB])
+
+instance : ∀ p : Pattern, Decidable p.Grounded
+  | .expr e => inferInstanceAs (Decidable (∀ l, e ≠ .lit l))
+  | .eq e₁ e₂ => inferInstanceAs (Decidable ((∀ l, e₁ ≠ .lit l) ∨ ∀ l, e₂ ≠ .lit l))
+
+instance : ∀ p : Pattern, Decidable p.Scoped
+  | .expr e => inferInstanceAs (Decidable e.IsApp)
+  | .eq _ _ => .isTrue trivial
+
+/-- `Expr.var v ∈ args`, computed: `Expr` carries no `BEq`. -/
+def Expr.memVarB (v : Var) : List Expr → Bool
+  | [] => false
+  | .var w :: es => w == v || Expr.memVarB v es
+  | _ :: es => Expr.memVarB v es
+
+theorem Expr.memVarB_iff (v : Var) : ∀ args : List Expr,
+    Expr.memVarB v args = true ↔ Expr.var v ∈ args
+  | [] => by simp [Expr.memVarB]
+  | .lit _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
+  | .var w :: es => by
+      simp only [Expr.memVarB, Bool.or_eq_true, beq_iff_eq, List.mem_cons, Expr.var.injEq,
+        Expr.memVarB_iff v es]
+      exact or_congr_left eq_comm
+  | .app _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
+  | .min _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
+
+mutual
+
+/-- `Expr.ArgVar`, computed. -/
+def Expr.argVarB (v : Var) : Expr → Bool
+  | .lit _ => false
+  | .var _ => false
+  | .app _ args => Expr.memVarB v args || Expr.argVarListB v args
+  | .min a b => Expr.argVarB v a || Expr.argVarB v b
+
+/-- `Expr.ArgVarList`, computed. -/
+def Expr.argVarListB (v : Var) : List Expr → Bool
+  | [] => false
+  | e :: es => Expr.argVarB v e || Expr.argVarListB v es
+
+end
+
+mutual
+
+theorem Expr.argVarB_iff (v : Var) : ∀ e : Expr, Expr.argVarB v e = true ↔ Expr.ArgVar v e
+  | .lit _ => by simp [Expr.argVarB, Expr.ArgVar]
+  | .var _ => by simp [Expr.argVarB, Expr.ArgVar]
+  | .app _ args => by
+      simp only [Expr.argVarB, Expr.ArgVar, Bool.or_eq_true, Expr.memVarB_iff,
+        Expr.argVarListB_iff v args]
+  | .min a b => by
+      simp only [Expr.argVarB, Expr.ArgVar, Bool.or_eq_true, Expr.argVarB_iff v a,
+        Expr.argVarB_iff v b]
+
+theorem Expr.argVarListB_iff (v : Var) : ∀ es : List Expr,
+    Expr.argVarListB v es = true ↔ Expr.ArgVarList v es
+  | [] => by simp [Expr.argVarListB, Expr.ArgVarList]
+  | e :: es => by
+      simp only [Expr.argVarListB, Expr.ArgVarList, Bool.or_eq_true, Expr.argVarB_iff v e,
+        Expr.argVarListB_iff v es]
+
+end
+
+/-- `Pattern.ArgVar`, computed. -/
+def Pattern.argVarB (v : Var) : Pattern → Bool
+  | .expr e => e.argVarB v
+  | .eq e₁ e₂ => e₁.argVarB v || e₂.argVarB v
+
+theorem Pattern.argVarB_iff (v : Var) (p : Pattern) :
+    p.argVarB v = true ↔ Pattern.ArgVar v p := by
+  cases p <;> simp [Pattern.argVarB, Pattern.ArgVar, Expr.argVarB_iff]
+
+instance (v : Var) (p : Pattern) : Decidable (Pattern.ArgVar v p) :=
+  decidable_of_iff (p.argVarB v = true) (Pattern.argVarB_iff v p)
+
+instance (q : Query) : Decidable (Query.VarsKeyed q) :=
+  inferInstanceAs (Decidable (∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p))
+
+instance : ∀ c : Cmd, Decidable c.QueryEncodable
+  | .rule r => inferInstanceAs (Decidable ((∀ p ∈ r.query, p.Grounded ∧ p.Scoped) ∧
+      Query.VarsKeyed r.query))
+  | .action _ => .isTrue trivial
+  | .run _ => .isTrue trivial
+  | .saturate _ => .isTrue trivial
+  | .decl _ _ => .isTrue trivial
+
+instance (P : Program) : Decidable P.CtorDecls :=
+  inferInstanceAs (Decidable (∀ c ∈ P, c.CtorDecl))
+
+instance instDecidableFragment (P : Program) : Decidable P.Fragment :=
+  decidable_of_iff (P.CtorDecls ∧ Program.OrderingFree P ∧ (∀ n ∈ P.names, ¬ "@".isPrefixOf n) ∧
+      (∀ c ∈ P, c.QueryEncodable) ∧
+      ((∀ c ∈ P, c.ruleUnionFreeB = true) ∨ ∀ c ∈ P, c.litFreeB = true) ∧
+      Program.HeadsDeclared P (fun _ => none) ∧ P.AritiesAgree ∧ P.HeadsScoped)
+    ⟨fun h => ⟨h.1, h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2.1, h.2.2.2.2.2.1, h.2.2.2.2.2.2.1,
+        h.2.2.2.2.2.2.2⟩,
+      fun h => ⟨h.ctorsOnly, h.noMin, h.noAt, h.queryEncodable, h.noLitUnion, h.headsDeclared,
+        h.aritiesAgree, h.headsScoped⟩⟩
 
 /-- **Every application the source holds is a declared constructor's, applied.** -/
 def Database.TermsBuild (src : Database) : Prop :=

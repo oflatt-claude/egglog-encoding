@@ -49,17 +49,20 @@ private def missingPremise : Program :=
 
 #guard validates (Congruence.encode missingPremise)
 
-private def tables : Program :=
+private def tablesWith (firstOld firstNew : Var) : Program :=
   [.decl "Key" (ctor 0),
    .decl "Audit" ⟨2, 1, some (.merge [] [.var "old"]), none⟩,
    .decl "Bounds" ⟨1, 2, some (.merge
-     [.expr (.app "Audit" [.var "old0", .var "new0", .var "new1"])]
-     [.min (.var "old0") (.var "new0"),
+     [.expr (.app "Audit" [.var firstOld, .var firstNew, .var "new1"])]
+     [.min (.var firstOld) (.var firstNew),
       .min (.var "new1") (.var "old1")]), none⟩,
    .action (.expr (.app "Bounds" [atom "Key", int 2, int 3])),
    .action (.expr (.app "Bounds" [atom "Key", int 4, int 1]))]
 
+private def tables : Program := tablesWith "old0" "new0"
+
 #guard validates tables
+#guard validates (tablesWith "old" "new")
 
 -- Metadata-only collisions must not execute an otherwise unconditional merge.
 private def sameData : Program :=
@@ -80,6 +83,13 @@ private def partialIdentity : Program :=
    .action (.expr (.app "T" [int 1, int 3]))]
 
 #guard validates partialIdentity
+
+-- An over-wide identity prefix must not include the appended proof column.
+private def wideIdentity : Program :=
+  [.decl "T" ⟨0, 1, some (.merge [] [int 9]), some 2⟩,
+   .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
+
+#guard validates wideIdentity
 
 private def bounds (a b : Int) : Term :=
   .app "Bounds" [term "Key", .lit (.int a), .lit (.int b)]
@@ -130,7 +140,6 @@ private def stored : Proof := .global (table 3) 1
 -- Equality-only variables have no table evidence and are outside this pass's input fragment.
 #guard (encode [.rule ⟨[.eq (.var "x") (.var "x")], [], "R"⟩]).isNone
 #guard (encode [.decl (namePrefix ++ "user") (ctor 0)]).isNone
-#guard (encode [.decl "T" ⟨0, 1, some .noMerge, none⟩]).isNone
 #guard (encode nestedUnion).isNone
 
 end Egglog.Provenance.Tests

@@ -3,28 +3,6 @@ import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Match
 
 namespace Egglog
-/-! ### `set` legality
-
-`Action.SetLegal` is egglog's own restriction on `set`: on an all-constructors signature it
-admits nothing at all, so that fragment is exactly the fragment with no `set`. -/
-/-- `SetLegal` does not care *which* all-constructors signature it is read against,
-because under one there is no legal `set` to disagree about. This is what lets a `decl`
-change the signature without invalidating the rules the database already holds. -/
-theorem Actions.SetLegal.of_allConstructors {as : List Action} {sig sig' : Signature}
-    (hsig : sig.AllConstructors) (h : Actions.SetLegal as sig) :
-    Actions.SetLegal as sig' := by
-  induction as with
-  | nil => trivial
-  | cons a as ih =>
-    refine ⟨?_, ih h.2⟩
-    cases a with
-    | expr _ => trivial
-    | union _ _ => trivial
-
-theorem Rule.SetLegal.of_allConstructors {r : Rule} {sig sig' : Signature}
-    (hsig : sig.AllConstructors) (h : r.SetLegal sig) : r.SetLegal sig' :=
-  Actions.SetLegal.of_allConstructors hsig h
-
 /-! ### Declaredness, in a signature that grows
 
 `Cmd.sigBind` only ever writes a `some`, so every check reading `Expr.Declared` survives a
@@ -73,7 +51,6 @@ theorem MergeSpec.Declared.mono {ms : MergeSpec} {sig sig' : Signature}
   cases ms with
   | merge body res =>
     exact ⟨Actions.Declared.mono hs h.1, fun e he => Expr.Declared.mono hs (h.2 e he)⟩
-  | noMerge => trivial
 
 /-! ### The constructor fragment's state
 
@@ -178,13 +155,17 @@ theorem mem_mergeEnvIdx {i : Nat} {os ns : List Term} {p : Var × Term}
 @[inherit_doc mem_mergeEnvIdx]
 theorem mem_mergeEnv {os ns : List Term} {p : Var × Term} (h : p ∈ mergeEnv os ns) :
     p.2 ∈ os ∨ p.2 ∈ ns := by
-  unfold mergeEnv at h
-  split at h
-  · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
-    rcases h with rfl | rfl
-    · exact Or.inl (by simp)
-    · exact Or.inr (by simp)
-  · exact mem_mergeEnvIdx h
+  cases os with
+  | nil => simp [mergeEnv] at h
+  | cons o os =>
+    cases ns with
+    | nil => simp [mergeEnv] at h
+    | cons n ns =>
+      simp only [mergeEnv, List.mem_cons] at h
+      rcases h with rfl | rfl | h
+      · exact Or.inl (by simp)
+      · exact Or.inr (by simp)
+      · exact mem_mergeEnvIdx h
 
 /-- **A `:merge` expression with no `:internal-identity-vals` conflicts on every pair**: it
 has no action block, so `FnDecl.unchangedWidth` gives it no width and every collision
@@ -300,7 +281,7 @@ theorem runRules_eq_self_iff (R : RulesetName) (db : Database) :
 
 /-! ### A saturating run
 
-`Cmd.saturate` is a fixpoint condition rather than a `cmdEffect`, so the three facts every
+`Cmd.saturate` is a fixpoint condition rather than a function, so the three facts every
 command needs — the signature it leaves, the constructor fragment it keeps, and determinism
 there — are proved for its *rounds* instead. Each is an induction along
 `Relation.ReflTransGen (RunStep R)`. -/
@@ -367,59 +348,30 @@ theorem saturateReach_det {R : RulesetName} {db d₁ d₂ : Database}
     rw [Nat.add_comm, Function.iterate_add_apply, hk₂, Function.iterate_fixed h₂.2.1] at hk₁
     exact hk₁.symm
 
-/-! ### A command's effect
-
-`CmdStep` is `cmdEffect` followed by a merge phase, so every fact about a command splits
-into a fact about the deterministic effect and `MergeClosure`'s own. -/
-theorem cmdEffect_sig {db d : Database} {c : Cmd} (h : cmdEffect db c = some d) :
-    d.sig = c.sigBind db.sig := by
-  cases c with
-  | action a => simp only [cmdEffect] at h; exact evalAction_sig (h)
-  | rule r => simp only [cmdEffect, Option.some.injEq] at h; subst h; rfl
-  | run R => simp only [cmdEffect, Option.some.injEq] at h; subst h; rfl
-  | saturate R => exact absurd h (by simp [cmdEffect])
-  | decl f dc => simp only [cmdEffect, Option.some.injEq] at h; subst h; rfl
-
-theorem cmdEffect_wf {db d : Database} (hw : db.WF) {c : Cmd}
-    (h : cmdEffect db c = some d) : d.WF := by
-  cases c with
-  | action a => simp only [cmdEffect] at h; exact evalAction_wf hw (h)
-  | rule r => simp only [cmdEffect, Option.some.injEq] at h; subst h; exact hw.congr rfl rfl
-  | run R => simp only [cmdEffect, Option.some.injEq] at h; subst h; exact RunRules.wf hw
-  | saturate R => exact absurd h (by simp [cmdEffect])
-  | decl f dc =>
-    simp only [cmdEffect, Option.some.injEq] at h; subst h; exact hw.congr rfl rfl
-
-/-- The signature a command leaves is all-constructors provided the command declares a
-constructor. This is what makes the merge phase that *follows* the effect empty — including
-after a `.decl`, which is the case the uniform merge phase added. -/
-theorem cmdEffect_allConstructors {db d : Database} (hsig : db.sig.AllConstructors)
-    {c : Cmd} (hdecl : c.CtorDecl) (h : cmdEffect db c = some d) :
-    d.sig.AllConstructors := by
-  rw [cmdEffect_sig h]; exact hsig.sigBind hdecl
-
 /-! ### What a command reaches
 
-`cmdReach` is `cmdEffect` on four commands out of five and a fixpoint condition on
+`cmdReach` is a function's graph on four commands out of five and a fixpoint condition on
 `Cmd.saturate`. Absorbing the split here is what keeps it out of `CmdStep`'s proofs
 below. -/
-theorem cmdReach_of_cmdEffect {db d : Database} {c : Cmd} (hns : c.NoSaturate)
-    (h : cmdEffect db c = some d) : cmdReach db c d := by
-  cases c with
-  | saturate R => exact (hns : False).elim
-  | _ => exact h
-
-theorem cmdEffect_of_cmdReach {db d : Database} {c : Cmd} (hns : c.NoSaturate)
-    (h : cmdReach db c d) : cmdEffect db c = some d := by
-  cases c with
-  | saturate R => exact (hns : False).elim
-  | _ => exact h
-
 theorem cmdReach_sig {db d : Database} {c : Cmd} (h : cmdReach db c d) :
     d.sig = c.sigBind db.sig := by
   cases c with
+  | action a => exact evalAction_sig h
+  | rule r => subst h; rfl
+  | run R => subst h; rfl
   | saturate R => exact RunReach.sig (show SaturateReach R db d from h).1
-  | _ => exact cmdEffect_sig h
+  | decl f dc => subst h; rfl
+
+/-- Well-formedness through every command but a saturating run, whose rounds need
+`CtorState` (`cmdReach_ctorState`). -/
+theorem cmdReach_wf {db d : Database} (hw : db.WF) {c : Cmd} (hns : c.NoSaturate)
+    (h : cmdReach db c d) : d.WF := by
+  cases c with
+  | action a => exact evalAction_wf hw h
+  | rule r => subst h; exact hw.congr rfl rfl
+  | run R => subst h; exact RunRules.wf hw
+  | saturate R => exact (hns : False).elim
+  | decl f dc => subst h; exact hw.congr rfl rfl
 
 theorem cmdReach_allConstructors {db d : Database} (hsig : db.sig.AllConstructors)
     {c : Cmd} (hdecl : c.CtorDecl) (h : cmdReach db c d) : d.sig.AllConstructors := by
@@ -430,15 +382,16 @@ theorem cmdReach_ctorState {db d : Database} (h : db.CtorState) {c : Cmd}
   refine ⟨?_, cmdReach_allConstructors h.sig hdecl hr⟩
   cases c with
   | saturate R => exact (RunReach.ctorState h (show SaturateReach R db d from hr).1).wf
-  | _ => exact cmdEffect_wf h.wf hr
+  | _ => exact cmdReach_wf h.wf (by trivial) hr
 
-/-- What a command reaches is unique on the constructor fragment: `cmdEffect` is a
-function, and a saturating run's fixpoint is unique by `saturateReach_det`. -/
+/-- What a command reaches is unique on the constructor fragment: four commands are
+functions, and a saturating run's fixpoint is unique by `saturateReach_det`. -/
 theorem cmdReach_det {db e₁ e₂ : Database} (hsig : db.sig.AllConstructors) {c : Cmd}
     (h₁ : cmdReach db c e₁) (h₂ : cmdReach db c e₂) : e₁ = e₂ := by
   cases c with
   | saturate R => exact saturateReach_det hsig h₁ h₂
-  | _ => exact Option.some.inj ((show cmdEffect db _ = some e₁ from h₁).symm.trans h₂)
+  | action a => exact Option.some.inj (h₁.symm.trans h₂)
+  | rule _ | run _ | decl _ _ => exact h₁.trans h₂.symm
 
 /-! ### The step relations
 
@@ -463,9 +416,9 @@ theorem CmdStep.env {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   cases c with
   | action a => exact evalAction_env he
   | saturate R => exact RunReach.env (show SaturateReach R db d from he).1
-  | rule r => cases Option.some.inj he; rfl
-  | run R => cases Option.some.inj he; rfl
-  | decl f dc => cases Option.some.inj he; rfl
+  | rule r => subst he; rfl
+  | run R => subst he; rfl
+  | decl f dc => subst he; rfl
 
 /-- A program keeps its initial context; in particular, an ordinary run leaves it empty. -/
 theorem ProgramStep.env {db db' : Database} {p : Program} (h : ProgramStep db p db') :
@@ -589,7 +542,7 @@ theorem ruleStep_iff {db db' : Database} {r : Rule} :
     CmdStep db (.rule r) db' ↔
       ∃ d, MergeClosure db d ∧
         db' = { d with rules := insert r db.rules } := by
-  simpa [CmdStep, cmdReach, cmdEffect] using
+  simpa [CmdStep, cmdReach] using
     mergeClosure_setRules (db := db) (db' := db')
       (R := insert r db.rules)
 
@@ -1014,7 +967,7 @@ theorem declStep_iff {db db' : Database} {f : FnName} {fd : FnDecl} (hf : db.sig
     (hsmd : SigMergeDeclared db.sig) (hwf : db.WF) (hdt : db.DeclaredTerms) :
     CmdStep db (.decl f fd) db' ↔
       ∃ d, MergeClosure db d ∧ db' = { d with sig := Function.update db.sig f (some fd) } := by
-  simpa [CmdStep, cmdReach, cmdEffect] using
+  simpa [CmdStep, cmdReach] using
     mergeClosure_setSig (fd := fd) hf hsmd (avoids_of_declaredTerms hf hwf hdt)
 
 /-! #### `Program.MergeDeclared` supplies `declStep_iff`'s hypothesis -/
@@ -1097,7 +1050,7 @@ run be read backwards one command at a time, and it is what makes the interprete
 refinement an *equality* rather than a reachability statement. -/
 /-- One command has at most one result where no merge fires.
 
-`cmdEffect` is a function, so the two runs agree up to the merge phase and
+Every command but a saturation is a function, so the two runs agree up to the merge phase and
 `MergeClosure.eq_of_allConstructors` collapses that. `Cmd.CtorDecl` is needed because the
 merge phase now follows a `.decl` as well: declaring a `:merge` function is exactly how a
 run on an otherwise constructor-only state regains a choice. -/

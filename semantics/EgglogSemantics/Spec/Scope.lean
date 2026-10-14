@@ -4,12 +4,12 @@ import EgglogSemantics.Spec.Term
 /-!
 # The front end's static checks
 
-Seven checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is a
-declared constructor; `UnionLegal` — no `union` operand is a literal; `SetLegal` — no `set`
-writes a constructor; `WidthOk` — every application carries its declaration's column counts;
-`DeclsFresh` — no name is declared twice; `MergeDeclared` — every name a `:merge` applies is
-declared. `Scoped` checks each block in a fixed `Scope`; queries bind their pattern variables;
-`UnionLegal` reads no context; the other five thread a `Signature`, moved only by `Cmd.sigBind`.
+Six checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is a
+declared constructor; `UnionLegal` — no `union` operand is a literal; `WidthOk` — every
+application carries its declaration's column counts; `DeclsFresh` — no name is declared
+twice; `MergeDeclared` — every name a `:merge` applies is declared. `Scoped` checks each
+block in a fixed `Scope`; queries bind their pattern variables; `UnionLegal` reads no
+context; the other four thread a `Signature`, moved only by `Cmd.sigBind`.
 -/
 
 namespace Egglog
@@ -53,8 +53,8 @@ def Query.bind (q : Query) (Γ : Scope) : Scope := Γ ∪ Query.vars q
   (∀ p ∈ r.query, p.Scoped) ∧ Actions.Scoped r.actions (Query.bind r.query Γ)
 
 /-- A `:merge` body is walked into by `MergeDeclared` alone: it runs in the environment
-`mergeEnv` builds rather than in the ambient context, so `Scoped`, `Evaluable` and
-`SetLegal` all say nothing about one. -/
+`mergeEnv` builds rather than in the ambient context, so `Scoped` and `Evaluable` say
+nothing about one. -/
 @[simp] def Cmd.Scoped : Cmd → Scope → Prop
   | .action a, Γ => a.Scoped Γ
   | .rule r, Γ => r.Scoped Γ
@@ -137,10 +137,9 @@ def Action.UnionLegal : Action → Prop
   | [] => True
   | a :: as => a.UnionLegal ∧ Actions.UnionLegal as
 
-/-- `.noMerge` runs nothing, and `res` is evaluated rather than run. -/
+/-- `res` is evaluated rather than run. -/
 @[simp] def MergeSpec.UnionLegal : MergeSpec → Prop
   | .merge body _ => Actions.UnionLegal body
-  | .noMerge => True
 
 /-- Its actions, and its `:merge` bodies: a `union` runs in either. -/
 @[simp] def Cmd.UnionLegal : Cmd → Prop
@@ -153,32 +152,6 @@ def Action.UnionLegal : Action → Prop
 @[simp] def Program.UnionLegal : Program → Prop
   | [] => True
   | c :: cs => c.UnionLegal ∧ Program.UnionLegal cs
-
-/-! ### Structural action legality -/
-
-/-- Compatibility predicate for the former dedicated write action. Complete atoms need
-no separate action-shape restriction. Declaration and value-position checks are provided
-by `AtomEvaluable` and `Impl/Check.lean`; column counts are checked by `WidthOk`. -/
-def Action.SetLegal : Action → Signature → Prop
-  | _, _ => True
-
-@[simp] def Actions.SetLegal : List Action → Signature → Prop
-  | [], _ => True
-  | a :: as, sig => a.SetLegal sig ∧ Actions.SetLegal as sig
-
-@[simp] def Rule.SetLegal (r : Rule) (sig : Signature) : Prop :=
-  Actions.SetLegal r.actions sig
-
-@[simp] def Cmd.SetLegal : Cmd → Signature → Prop
-  | .action a, sig => a.SetLegal sig
-  | .rule r, sig => r.SetLegal sig
-  | .run _, _ => True
-  | .saturate _, _ => True
-  | .decl _ _, _ => True
-
-@[simp] def Program.SetLegal : Program → Signature → Prop
-  | [], _ => True
-  | c :: cs, sig => c.SetLegal sig ∧ Program.SetLegal cs (c.sigBind sig)
 
 /-! ### Column widths
 
@@ -231,7 +204,6 @@ This is the one check besides `MergeDeclared` that walks into a `:merge`, for th
 @[simp] def MergeSpec.WidthOk : MergeSpec → Nat → Signature → Prop
   | .merge body res, n, sig =>
       res.length = n ∧ Actions.WidthOk body sig ∧ Expr.WidthOkList res sig
-  | .noMerge, _, _ => True
 
 /-- Asked of the signature the declaration **installs**, as `Cmd.MergeDeclared` and unlike
 `Cmd.DeclFresh`, so a `:merge` may name the function it resolves. -/
@@ -242,7 +214,7 @@ This is the one check besides `MergeDeclared` that walks into a `:merge`, for th
   | .saturate _, _ => True
   | .decl f d, sig => ∀ ms ∈ d.merge, ms.WidthOk d.outArity ((Cmd.decl f d).sigBind sig)
 
-/-- Each command in the signature the earlier ones leave, as `Program.SetLegal`. -/
+/-- Check each command in the signature left by the earlier commands. -/
 @[simp] def Program.WidthOk : Program → Signature → Prop
   | [], _ => True
   | c :: cs, sig => c.WidthOk sig ∧ Program.WidthOk cs (c.sigBind sig)
@@ -283,10 +255,8 @@ def Action.Declared : Action → Signature → Prop
   | [], _ => True
   | a :: as, sig => a.Declared sig ∧ Actions.Declared as sig
 
-/-- `.noMerge` runs nothing. -/
 @[simp] def MergeSpec.Declared : MergeSpec → Signature → Prop
   | .merge body res, sig => Actions.Declared body sig ∧ ∀ e ∈ res, e.Declared sig
-  | .noMerge, _ => True
 
 /-- Asked of the signature the declaration **installs**, so a `:merge` may name the function
 it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
@@ -326,10 +296,9 @@ def Action.UnionFree : Action → Prop
 
 @[simp] def Rule.UnionFree (r : Rule) : Prop := Actions.UnionFree r.actions
 
-/-- `.noMerge` runs nothing, and `res` is evaluated rather than run. -/
+/-- `res` is evaluated rather than run. -/
 @[simp] def MergeSpec.UnionFree : MergeSpec → Prop
   | .merge body _ => Actions.UnionFree body
-  | .noMerge => True
 
 /-- A declaration is union-free when its `:merge` body is: the body is what a collision
 runs. -/
@@ -403,7 +372,7 @@ the substitution. -/
 @[simp] def Rule.OrderingFree (r : Rule) : Prop :=
   (∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions
 
-/-- `.noMerge` runs nothing; a `:merge` evaluates both its body and its result — and it
+/-- A `:merge` evaluates both its body and its result — and it
 *compares* the two colliding value tuples, which is the second instability here.
 `Spec/Step.lean`'s `MergeConflict` decides whether a collision fires by **identity** on
 those tuples, and identity is no more stable under congruence than `min` is: moved
@@ -413,7 +382,6 @@ survives the move — `FnDecl.unchangedWidth = none`, which is `body = []` with 
 every lattice in this development included; `FnDecl.OrderingFree` carries the other half. -/
 @[simp] def MergeSpec.OrderingFree : MergeSpec → Prop
   | .merge body res => body = [] ∧ Expr.OrderingFreeList res
-  | .noMerge => True
 
 @[inherit_doc MergeSpec.OrderingFree]
 def FnDecl.OrderingFree (d : FnDecl) : Prop :=
@@ -453,7 +421,6 @@ instance (r : Rule) : Decidable r.OrderingFree :=
 instance : ∀ ms : MergeSpec, Decidable ms.OrderingFree
   | .merge body res => decidable_of_iff (body.isEmpty = true ∧ Expr.OrderingFreeList res)
       (by simp [List.isEmpty_iff])
-  | .noMerge => inferInstanceAs (Decidable True)
 instance (d : FnDecl) : Decidable d.OrderingFree :=
   decidable_of_iff (d.identityVals = none ∧ ∀ ms ∈ d.merge.toList, ms.OrderingFree)
     (by unfold FnDecl.OrderingFree; rcases d.merge with _ | ms <;> simp)

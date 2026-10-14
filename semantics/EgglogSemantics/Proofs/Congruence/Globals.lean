@@ -245,7 +245,7 @@ theorem global_action_simulation {src post : Database} {d D : FDatabase} {a : Ac
 
 /-- The source fragment supplies global-write premises at an original program prefix. -/
 theorem global_action_simulation_of_programStep {P pre : Program}
-    (hdom : P.EncodeDomain) (hsub : ∀ c ∈ pre, c ∈ P)
+    (hdom : P.Fragment) (hsub : ∀ c ∈ pre, c ∈ P)
     {src post : Database} (hpre : ProgramStep Database.empty pre src)
     {a : Action} (ha : Cmd.action a ∈ P) (hs : CmdStep src (.action a) post)
     {d D : FDatabase} (h : RunState src d) (htables : RebuildTables P d)
@@ -290,7 +290,7 @@ theorem global_action_simulation_of_programStep {P pre : Program}
 
 /-- A compiled global action and its rebuild preserve source readings and establish closure. -/
 theorem global_cmd_simulation {P pre : Program}
-    (hdom : P.EncodeDomain) (hsub : ∀ c ∈ pre, c ∈ P)
+    (hdom : P.Fragment) (hsub : ∀ c ∈ pre, c ∈ P)
     {src post : Database} (hpre : ProgramStep Database.empty pre src)
     {a : Action} (ha : Cmd.action a ∈ P) (hs : CmdStep src (.action a) post)
     {d D : FDatabase} (h : RunState src d) (htables : RebuildTables P d)

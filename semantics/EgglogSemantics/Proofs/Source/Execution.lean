@@ -1,4 +1,4 @@
-import EgglogSemantics.Source.Domain
+import EgglogSemantics.Proofs.Source.Domain
 import EgglogSemantics.Source.Names
 import EgglogSemantics.Proofs.Scope
 
@@ -265,10 +265,7 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
       exact ⟨evalAction_litFree hc.wf h.terms hn hv,
         by rw [evalAction_rules hv]; exact h.heads⟩
   | rule r =>
-      have hv : some { db with rules := insert r db.rules } = some d :=
-        hreach
-      obtain rfl : d = { db with rules := insert r db.rules } :=
-        (Option.some.inj hv).symm
+      obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } :=
         hcl.eq_of_allConstructors hc.sig
       refine ⟨fun t ht => h.terms t (Database.terms_setRules ▸ ht), ?_⟩
@@ -277,8 +274,7 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
       · exact hn
       · exact h.heads r' hr''
   | run R =>
-      have hv : some (RunRules R db) = some d := hreach
-      obtain rfl : d = RunRules R db := (Option.some.inj hv).symm
+      obtain rfl : d = RunRules R db := hreach
       obtain rfl : db' = RunRules R db :=
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       exact h.runRules hc.wf
@@ -290,9 +286,7 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
       exact ⟨⟨RunRules.wf hx.1.wf, by rw [RunRules.sig]; exact hx.1.sig⟩,
         hx.2.runRules hx.1.wf⟩
   | decl f dc =>
-      have hv : some { db with sig := Function.update db.sig f (some dc) } = some d := hreach
-      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } :=
-        (Option.some.inj hv).symm
+      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } := hreach
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact ⟨fun t ht => h.terms t (Database.terms_setSig ▸ ht), h.heads⟩
@@ -313,7 +307,7 @@ theorem programStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLit
 
 /-- **The `union` check, as the block needs it**: either the block asserts no equation, or
 the state holds no literal and the block evaluates none. The two arms of
-`Program.EncodeDomain.noLitUnion`, and both survive one action — which is what lets the fold
+`Program.Fragment.noLitUnion`, and both survive one action — which is what lets the fold
 carry the disjunction rather than one arm at a time. -/
 def Actions.UnionRunnable (as : List Action) (db : Database) : Prop :=
   Actions.UnionFree as ∨ (db.LitFree ∧ ∀ a ∈ as, a.NoLits)
@@ -414,7 +408,7 @@ every rule the state holds has a head that builds at the state's own signature. 
 
 /-- What one source command must be for a rule it registers to have a runnable head:
 `Spec/Scope.lean`'s `Actions.Declared` at the signature standing when the rule is read.
-`EncodeDomain.headsDeclared` is exactly this. -/
+`Fragment.headsDeclared` is exactly this. -/
 def Cmd.HeadRuns (c : Cmd) (sig : Signature) : Prop := c.HeadsDeclared sig
 
 /-- `Cmd.HeadRuns` along the program, as `Program.HeadsDeclared` is. -/
@@ -464,10 +458,7 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
       rw [evalAction_sig hv]
       exact h r (by rw [← evalAction_rules hv]; exact hr)
   | rule r =>
-      have hv : some { db with rules := insert r db.rules } = some d :=
-        hreach
-      obtain rfl : d = { db with rules := insert r db.rules } :=
-        (Option.some.inj hv).symm
+      obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } :=
         hcl.eq_of_allConstructors hc.sig
       intro r' hr'
@@ -475,8 +466,7 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
       · exact Actions.Builds.of_declared hc.sig hrun
       · exact h r' hr''
   | run R =>
-      have hv : some (RunRules R db) = some d := hreach
-      obtain rfl : d = RunRules R db := (Option.some.inj hv).symm
+      obtain rfl : d = RunRules R db := hreach
       obtain rfl : db' = RunRules R db :=
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       intro r hr
@@ -492,9 +482,7 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
       rw [RunRules.sig]
       exact hx.2 r (by rw [RunRules, Database.sUnion_rules] at hr; exact hr)
   | decl f dc =>
-      have hv : some { db with sig := Function.update db.sig f (some dc) } = some d := hreach
-      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } :=
-        (Option.some.inj hv).symm
+      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } := hreach
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact fun r hr => Actions.Builds.update hdecl (h r hr)
@@ -514,7 +502,7 @@ theorem programStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.H
 /-! ##### The invariants, from the domain -/
 
 /-- **`Cmd.NoLits` from `noLitUnion`'s second arm.** -/
-theorem Cmd.NoLits.of_domain {P : Program} (_hdom : P.EncodeDomain)
+theorem Cmd.NoLits.of_domain {P : Program} (_hdom : P.Fragment)
     (hlit : ∀ c ∈ P, c.litFreeB = true) {c : Cmd} (hc : c ∈ P) : c.NoLits := by
   cases c with
   | action a => exact hlit _ hc
@@ -530,7 +518,7 @@ theorem Cmd.NoLits.of_domain {P : Program} (_hdom : P.EncodeDomain)
 /-- **`Database.NoLits` at every state the source run reaches**, under `noLitUnion`'s second
 arm. Applied to a *prefix* of the program it is the invariant at the state a firing command
 starts from. -/
-theorem noLits_of_programStep {P : Program} (hdom : P.EncodeDomain)
+theorem noLits_of_programStep {P : Program} (hdom : P.Fragment)
     (hlit : ∀ c ∈ P, c.litFreeB = true) {p : Program} (hp : ∀ c ∈ p, c ∈ P)
     {sd : Database} (hstep : ProgramStep Database.empty p sd) : sd.NoLits :=
   programStep_noLits Database.CtorState.empty Database.empty_noLits
@@ -551,7 +539,7 @@ theorem Program.HeadRuns.of_append : ∀ {p q : Program} {sig : Signature},
 
 /-- **`Database.HeadsBuild` at every state the source run reaches**, out of `headsDeclared`
 and `ctorsOnly`. -/
-theorem headsBuild_of_programStep {P : Program} (hdom : P.EncodeDomain) {p q : Program}
+theorem headsBuild_of_programStep {P : Program} (hdom : P.Fragment) {p q : Program}
     (hP : P = p ++ q) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
     sd.HeadsBuild := by
   refine programStep_headsBuild Database.CtorState.empty Database.empty_headsBuild
@@ -585,7 +573,7 @@ theorem Actions.Scoped.mono : ∀ (as : List Action) {Γ Γ' : Scope}, (∀ v �
 theorem Scope.Models.dom (σ : Env) : Scope.Models (Env.dom σ) σ := fun _ => Iff.rfl
 
 /-- A source rule's ruleset is a source name, so it is not `@rebuild`. -/
-theorem ruleset_ne_rebuild {P : Program} (hdom : P.EncodeDomain) {s : Rule}
+theorem ruleset_ne_rebuild {P : Program} (hdom : P.Fragment) {s : Rule}
     (hs : Cmd.rule s ∈ P) : s.ruleset ≠ rebuildRuleset := by
   intro hc
   refine hdom.noAt s.ruleset ?_ ?_

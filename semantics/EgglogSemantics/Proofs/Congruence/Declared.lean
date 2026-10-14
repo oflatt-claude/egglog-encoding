@@ -31,7 +31,7 @@ private theorem allMaintenance_rule (P : Program) :
 private theorem prelude_decl_iff {P : Program} {f : FnName} {dc : FnDecl} :
     Cmd.decl f dc ∈ (encodePrelude P).map Command.command ↔
       (f = ufName ∧ dc = tableDecl 1) ∨ ∃ g k, (g, k) ∈ P.ctors ∧
-        ((f = g ∧ dc = skolemDecl k) ∨ (f = viewName g ∧ dc = tableDecl k)) := by
+        ((f = g ∧ dc = ctorDecl k) ∨ (f = viewName g ∧ dc = tableDecl k)) := by
   constructor
   · intro h
     obtain ⟨c, hc, he⟩ := List.mem_map.mp h
@@ -50,25 +50,25 @@ private theorem prelude_decl_iff {P : Program} {f : FnName} {dc : FnDecl} :
     apply List.mem_map.mpr
     rcases h with ⟨rfl, rfl⟩ | ⟨g, k, hg, (⟨rfl, rfl⟩ | ⟨rfl, rfl⟩)⟩
     · exact ⟨_, List.mem_append_left _ List.mem_cons_self, rfl⟩
-    · refine ⟨⟨.decl f (skolemDecl k), none⟩,
+    · refine ⟨⟨.decl f (ctorDecl k), none⟩,
         List.mem_append_left _ (List.mem_cons_of_mem _ ?_), rfl⟩
       exact List.mem_flatMap.mpr ⟨(f, k), hg, List.mem_cons_self⟩
     · refine ⟨⟨.decl (viewName g) (tableDecl k), none⟩,
         List.mem_append_left _ (List.mem_cons_of_mem _ ?_), rfl⟩
       exact List.mem_flatMap.mpr ⟨(g, k), hg, by simp⟩
 
-private theorem source_ne_view {P : Program} (hdom : P.EncodeDomain)
+private theorem source_ne_view {P : Program} (hdom : P.Fragment)
     {f : FnName} {k : Nat} (hf : (f, k) ∈ P.ctors) (g : FnName) : f ≠ viewName g := by
   intro he
   exact noAt_of_mem_ctors hdom hf (he ▸ (by simp [viewName, String.isPrefixOf]))
 
-private theorem source_ne_uf {P : Program} (hdom : P.EncodeDomain)
+private theorem source_ne_uf {P : Program} (hdom : P.Fragment)
     {f : FnName} {k : Nat} (hf : (f, k) ∈ P.ctors) : f ≠ ufName := by
   intro he
   exact noAt_of_mem_ctors hdom hf (he ▸ (by decide +kernel : "@".isPrefixOf ufName = true))
 
 /-- The generated union-find declaration cannot be shadowed by source names or views. -/
-theorem encodeSig_ufName {P : Program} (hdom : P.EncodeDomain) :
+theorem encodeSig_ufName {P : Program} (hdom : P.Fragment) :
     encodeSig P ufName = some (tableDecl 1) := by
   apply foldl_sigBind_found _ (prelude_decl_iff.mpr (Or.inl ⟨rfl, rfl⟩))
   intro dc hd
@@ -78,9 +78,9 @@ theorem encodeSig_ufName {P : Program} (hdom : P.EncodeDomain) :
   · exact False.elim (viewName_ne_ufName he.symm)
 
 /-- Every source constructor keeps its structural id constructor and gains its view. -/
-theorem encodeSig_tables {P : Program} (hdom : P.EncodeDomain) {f : FnName} {k : Nat}
+theorem encodeSig_tables {P : Program} (hdom : P.Fragment) {f : FnName} {k : Nat}
     (hf : (f, k) ∈ P.ctors) :
-    encodeSig P f = some (skolemDecl k) ∧
+    encodeSig P f = some (ctorDecl k) ∧
       encodeSig P (viewName f) = some (tableDecl k) := by
   constructor
   · apply foldl_sigBind_found _
@@ -88,7 +88,7 @@ theorem encodeSig_tables {P : Program} (hdom : P.EncodeDomain) {f : FnName} {k :
     intro dc hd
     rcases prelude_decl_iff.mp hd with ⟨he, _⟩ | ⟨g, l, hg, (⟨he, hd⟩ | ⟨he, _⟩)⟩
     · exact False.elim (source_ne_uf hdom hf he)
-    · exact hd.trans (congrArg skolemDecl (hdom.aritiesAgree' (g, l) hg (f, k) hf he.symm))
+    · exact hd.trans (congrArg ctorDecl (hdom.aritiesAgree (g, l) hg (f, k) hf he.symm))
     · exact False.elim (source_ne_view hdom hf g he)
   · apply foldl_sigBind_found _
       (prelude_decl_iff.mpr (Or.inr ⟨f, k, hf, Or.inr ⟨rfl, rfl⟩⟩))
@@ -97,7 +97,7 @@ theorem encodeSig_tables {P : Program} (hdom : P.EncodeDomain) {f : FnName} {k :
     · exact False.elim (viewName_ne_ufName he)
     · exact False.elim (source_ne_view hdom hg f he.symm)
     · exact hd.trans
-        (congrArg tableDecl (hdom.aritiesAgree' (g, l) hg (f, k) hf (viewName_inj he).symm))
+        (congrArg tableDecl (hdom.aritiesAgree (g, l) hg (f, k) hf (viewName_inj he).symm))
 
 /-- All commands following the prelude preserve its signature. -/
 theorem execProgram_sig_of_noDecl {p : Program} (hp : ∀ c ∈ p, NoDecl c) :
@@ -121,7 +121,7 @@ theorem execM_encode_sig {P : Program} {d : FDatabase}
   exact Egglog.FDatabase.execProgramM_sig hm
 
 /-- Every constructor available in a source prefix has an id constructor in the target. -/
-theorem sourceConstructors_of_programStep {P p : Program} (hdom : P.EncodeDomain)
+theorem sourceConstructors_of_programStep {P p : Program} (hdom : P.Fragment)
     (hp : ∀ c ∈ p, c ∈ P) {src : Database} (hsrc : ProgramStep Database.empty p src)
     {sig : Signature} (hsig : sig = encodeSig P) :
     ∀ f, src.sig.IsCtor f → sig.IsCtor f := by
@@ -131,6 +131,6 @@ theorem sourceConstructors_of_programStep {P p : Program} (hdom : P.EncodeDomain
   · cases he
   · have hk : (f, dc.arity) ∈ P.ctors := List.mem_dedup.mpr
       (List.mem_flatMap.mpr ⟨.decl f dc, hp _ hc, by simp [Cmd.ctors]⟩)
-    exact ⟨skolemDecl dc.arity, hsig ▸ (encodeSig_tables hdom hk).1, rfl⟩
+    exact ⟨ctorDecl dc.arity, hsig ▸ (encodeSig_tables hdom hk).1, rfl⟩
 
 end Egglog.Congruence

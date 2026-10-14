@@ -21,7 +21,7 @@ theorem actionExprs_ctors {a : Action} {e : Expr} (he : e ∈ actionExprs a)
 /-- The agreed source domain supplies the syntactic and declaration premises for
 forward rule firing at any represented source prefix. -/
 theorem encodedRule_firing_reads_of_programStep {P pre : Program}
-    (hdom : P.EncodeDomain) (hsub : ∀ c ∈ pre, c ∈ P)
+    (hdom : P.Fragment) (hsub : ∀ c ∈ pre, c ∈ P)
     {src querySrc post : Database}
     (hpre : ProgramStep Database.empty pre src)
     (hqsig : querySrc.sig = src.sig) (hqenv : querySrc.env = [])
@@ -81,7 +81,7 @@ theorem SourceReads.runRules {d src : Database} {R : RulesetName} (h : SourceRea
 
 /-- A compiled fixed point represents every original source firing from the source
 facts it already represents. Rebuilding supplies the unflattened query's canonical ids. -/
-theorem SourceReads.round_of_closed {P pre : Program} (hdom : P.EncodeDomain)
+theorem SourceReads.round_of_closed {P pre : Program} (hdom : P.Fragment)
     (hsub : ∀ c ∈ pre, c ∈ P) {src querySrc : Database}
     (hpre : ProgramStep Database.empty pre src)
     (hqsig : querySrc.sig = src.sig) (hqenv : querySrc.env = [])
@@ -105,7 +105,7 @@ theorem SourceReads.round_of_closed {P pre : Program} (hdom : P.EncodeDomain)
 
 /-- A compiled fixed point contains every finite sequence of corresponding source rounds.
 The target may justify its entries using the final source state throughout this induction. -/
-theorem SourceReads.reach_of_closed {P pre : Program} (hdom : P.EncodeDomain)
+theorem SourceReads.reach_of_closed {P pre : Program} (hdom : P.Fragment)
     (hsub : ∀ c ∈ pre, c ∈ P) {src start post : Database}
     (hpre : ProgramStep Database.empty pre src)
     (hssig : start.sig = src.sig) (hsenv : start.env = [])
@@ -138,7 +138,7 @@ theorem RunState.mono_src {src src' : Database} {d : FDatabase} (h : RunState sr
 
 /-- Readback of one compiled source firing preserves its historical invariants and is
 sound in any source state containing that original firing's result. -/
-theorem RunState.source_firing {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem RunState.source_firing {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ rest) {src ref : Database}
     (hpre : ProgramStep Database.empty pre src) {d d' : FDatabase} (h : RunState src d)
     (hsig : d.sig = encodeSig P) {r : Rule} (hr : r ∈ src.rules)
@@ -155,7 +155,7 @@ theorem RunState.source_firing {P pre rest : Program} (hdom : P.EncodeDomain)
   exact ⟨hs.mono_src (hupper post ⟨τ, hτ, hp⟩).eqs, hh h.shape h.history, hd h.descend⟩
 
 /-- An aligned source round justifies every firing and merge in the compiled round. -/
-theorem RunState.source_round {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem RunState.source_round {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ rest) {src post : Database}
     (hpre : ProgramStep Database.empty pre src) {d e : FDatabase} (h : RunState src d)
     (hsig : d.sig = encodeSig P) (hrules : RulesEncoded P src d)
@@ -174,7 +174,7 @@ theorem RunState.source_round {P pre rest : Program} (hdom : P.EncodeDomain)
 
 /-- A saturated source state justifies all rounds of its compiled saturation, including
 source rules and the maintenance copies registered in that ruleset. -/
-theorem RunState.source_saturate {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem RunState.source_saturate {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ rest) {src : Database} (hpre : ProgramStep Database.empty pre src)
     {d e : FDatabase} (h : RunState src d) (hsig : d.sig = encodeSig P)
     (hrules : RulesEncoded P src d) {R : RulesetName} (hsat : RunSaturated R src)
@@ -188,7 +188,7 @@ theorem RunState.source_saturate {P pre rest : Program} (hdom : P.EncodeDomain)
 
 /-- Before the final dedicated rebuilding command, a successful compiled saturation
 already represents all source facts at its source fixed point. -/
-theorem saturation_simulation {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem saturation_simulation {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ rest) {src start : Database}
     (hpre : ProgramStep Database.empty pre src) {R : RulesetName}
     (hreach : SaturateReach R start src) (henv : start.env = [])
@@ -223,7 +223,7 @@ theorem saturation_simulation {P pre rest : Program} (hdom : P.EncodeDomain)
 
 /-- One executable target round represents every result of the corresponding source
 round, while retaining source justifications for all of its compiled entries. -/
-theorem round_simulation {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem round_simulation {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ rest) {src post : Database}
     (hpre : ProgramStep Database.empty pre src) {R : RulesetName}
     (hstep : RunStep R src post) {d e : FDatabase} (h : Rebuilt d)

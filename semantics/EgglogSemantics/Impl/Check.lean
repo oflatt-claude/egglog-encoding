@@ -63,10 +63,8 @@ def Actions.arityOk (as : List Action) (sig : Signature) : Bool :=
 def Rule.arityOk (r : Rule) (sig : Signature) : Bool :=
   r.query.all (Pattern.arityOk · sig) && Actions.arityOk r.actions sig
 
-/-- A merge specification, against the declaration's `outArity` value columns. `.noMerge`
-has no result to check. -/
+/-- A merge specification, against the declaration's `outArity` value columns. -/
 def MergeSpec.arityOk : MergeSpec → Nat → Signature → Bool
-  | .noMerge, _, _ => true
   | .merge body res, outArity, sig =>
       res.length == outArity && Actions.arityOk body sig && res.all (Expr.arityOk · sig)
 
@@ -137,9 +135,8 @@ def Action.noLookup : Action → Signature → Bool
 def Actions.noLookup (as : List Action) (sig : Signature) : Bool :=
   as.all (Action.noLookup · sig)
 
-/-- A `:merge` body and its result columns. `.noMerge` has no body. -/
+/-- A `:merge` body and its result columns. -/
 def MergeSpec.noLookup : MergeSpec → Signature → Bool
-  | .noMerge, _ => true
   | .merge body res, sig => Actions.noLookup body sig && res.all (Expr.noLookup · sig)
 
 /-- Entries are complete query atoms; equality compares values. -/

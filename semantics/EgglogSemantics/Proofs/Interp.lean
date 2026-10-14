@@ -1219,38 +1219,38 @@ theorem runSaturateF_saturateReach {R : RulesetName} {n : Nat} {d e : FDatabase}
     rules_execRunRules
 
 /-! ### Refinement: commands and programs -/
-/-- **The interpreter's command is the specification's `cmdEffect`**, on the four commands
-that have one. -/
+/-- **The interpreter's command is the specification's `cmdReach`**, on the four commands
+where that relation is the graph of a function. -/
 theorem execCmd_toDatabase {d : FDatabase} (he : d.Closed) (hsig : d.sig.AllConstructors)
-    {c : Cmd} (hns : c.NoSaturate) :
-    (execCmd d c).map FDatabase.toDatabase = cmdEffect d.toDatabase c := by
+    {c : Cmd} (hns : c.NoSaturate) {D : Database} :
+    (execCmd d c).map FDatabase.toDatabase = some D ↔ cmdReach d.toDatabase c D := by
   cases c with
-  | action a => exact execAction_toDatabase he
+  | action a =>
+    rw [show execCmd d (.action a) = execAction d a from rfl, execAction_toDatabase he]
+    exact Iff.rfl
   | rule r =>
     rw [show execCmd d (.rule r) = some { d with rules := r :: d.rules } from rfl,
-      Option.map_some, FDatabase.toDatabase_consRule]
-    rfl
+      Option.map_some, FDatabase.toDatabase_consRule, Option.some.injEq]
+    exact eq_comm
   | run R =>
     rw [show execCmd d (.run R) = some (execRunRules R d) from rfl, Option.map_some,
-      execRunRules_RunRules he hsig]
-    rfl
+      execRunRules_RunRules he hsig, Option.some.injEq]
+    exact eq_comm
   | saturate R => exact (hns : False).elim
-  | decl f dc => rfl
+  | decl f dc =>
+    rw [show execCmd d (.decl f dc) = some { d with sig := Function.update d.sig f (some dc) }
+        from rfl, Option.map_some, Option.some.injEq]
+    exact eq_comm
 
 /-- **The interpreter's command is one the specification reaches.** The uniform statement:
-`Cmd.saturate` has no `cmdEffect`, and `runSaturateF_saturateReach` is what stands in its
-place. -/
+`Cmd.saturate` is a fixpoint condition rather than a function, and
+`runSaturateF_saturateReach` is what stands in `execCmd_toDatabase`'s place there. -/
 theorem execCmd_cmdReach {d d' : FDatabase} (he : d.Closed)
     (hsig : d.sig.AllConstructors) {c : Cmd} (h : execCmd d c = some d') :
     cmdReach d.toDatabase c d'.toDatabase := by
-  have hgen : ∀ c : Cmd, c.NoSaturate → execCmd d c = some d' →
-      cmdReach d.toDatabase c d'.toDatabase := by
-    intro c hns hc
-    refine cmdReach_of_cmdEffect hns ?_
-    rw [← execCmd_toDatabase he hsig hns, hc, Option.map_some]
   cases c with
   | saturate R => exact runSaturateF_saturateReach he hsig h
-  | _ => exact hgen _ trivial h
+  | _ => exact (execCmd_toDatabase he hsig (by trivial)).mp (by rw [h, Option.map_some])
 
 theorem execCmd_closed {d d' : FDatabase} (he : d.Closed) {c : Cmd}
     (h : execCmd d c = some d') : d'.Closed := by
@@ -1302,8 +1302,8 @@ theorem execCmd_cmdStep {d : FDatabase} (he : d.Closed) (hsig : d.sig.AllConstru
     refine ⟨fun h => absurd h (by simp), fun hstep => ?_⟩
     obtain ⟨x, hreach, -⟩ := hstep
     have hns : c.NoSaturate := hs.resolve_right (by rw [hce]; simp)
-    have hx : (execCmd d c).map FDatabase.toDatabase = some x := by
-      rw [execCmd_toDatabase he hsig hns, cmdEffect_of_cmdReach hns hreach]
+    have hx : (execCmd d c).map FDatabase.toDatabase = some x :=
+      (execCmd_toDatabase he hsig hns).mpr hreach
     rw [hce] at hx; simp at hx
   | some d' =>
     have hstep : CmdStep d.toDatabase c d'.toDatabase :=

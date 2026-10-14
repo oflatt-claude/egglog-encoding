@@ -42,7 +42,7 @@ theorem prelude_registered {P : Program} {d : FDatabase}
   exact Or.inr (List.mem_map.mpr ⟨c, maintenance_mem_prelude hc, hr⟩)
 
 /-- The actual compiler prelude provides the full rebuilding interface. -/
-theorem rebuildTables_of_prelude {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+theorem rebuildTables_of_prelude {P : Program} (hdom : P.Fragment) {d : FDatabase}
     (run : FDatabase.empty.execProgramM ((encodePrelude P).map Command.command) = some d) :
     RebuildTables P d := by
   have hsig : d.sig = encodeSig P := Egglog.FDatabase.execProgramM_sig run
@@ -63,7 +63,7 @@ theorem RebuildTables.execProgram {P p : Program} {d e : FDatabase} (h : Rebuild
   · exact fun f k hk i hi => Egglog.FDatabase.execProgramM_rules_mono run _ (h.child f k hk i hi)
 
 /-- Every successful compiled execution retains the declarations and rebuilding rules. -/
-theorem execM_encode_rebuildTables {P : Program} (hdom : P.EncodeDomain) {d : FDatabase}
+theorem execM_encode_rebuildTables {P : Program} (hdom : P.Fragment) {d : FDatabase}
     (run : execM (encode P) = some d) : RebuildTables P d := by
   change FDatabase.empty.execProgramM _ = some d at run
   rw [encode, compile, List.map_append] at run

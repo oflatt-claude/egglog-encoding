@@ -6,7 +6,7 @@ This is the working plan for PR #58. The implementation order is:
 
 1. **Port completeness to the congruence pass.** Establish the execution invariants
    needed for source/target correspondence, retaining the current constructor-only
-   source fragment (`Program.EncodeDomain`). The paper's completeness theorem ends
+   source fragment (`Program.Fragment`). The paper's completeness theorem ends
    here. The compiled target uses functions, but extending the theorem to arbitrary
    source merge functions is deferred.
 2. **Implement a sound source proof checker.** Check explicit propositions against
@@ -132,10 +132,16 @@ the exact global command, rule action, or merge computation. Rule proofs carry t
 substitution and ordered premises; merge proofs carry both input proofs. Their claims
 are recovered by evaluating the original action or merge, without guessing endpoints.
 
+Appending a proof output preserves the original merge parameter bindings. The pass
+instruments actions and appends a result without renaming the original expressions; it
+uses the new component's indexed parameters for the two input proofs. Scalar and tuple
+parameter spellings are handled by the emitter;
+the [merge guide](MERGE.md#collisions-and-command-steps) gives the componentwise notation.
+
 The pass accepts flat table queries and equality tests whose variables and existence
 witnesses come from table premises. This covers the congruence compiler's output;
-unanchored equality-only queries, constructor writes, and `:no-merge` declarations
-are outside its input fragment. Function bodies and results may use `min` and
+unanchored equality-only queries and constructor writes are outside its input
+fragment. Function bodies and results may use `min` and
 multiple output columns. Generated names use the reserved `@prov:` prefix.
 
 Only original data columns determine merge conflicts. This also suppresses collisions
@@ -205,7 +211,7 @@ The congruence pass has kernel-checked proofs for:
 Cong src a b ↔ SameClass target.toDatabase a b
 ```
 
-Its premises are `P.EncodeDomain`, a source execution from empty, successful compiled
+Its premises are `P.Fragment`, a source execution from empty, successful compiled
 execution, and membership of both endpoints in the source. `encode_corresponds_relational`
 gives the same theorem for execution using structural matching and table operations only.
 Termination is not asserted.
@@ -234,11 +240,12 @@ stored function row without establishing a second input to its merge body. The
 [checker guide](CHECKER.md#source-merge-inputs) records the counterexample. This does not
 affect the constructor-only completeness theorem or the relational provenance pass.
 
-The theorem retains `Program.EncodeDomain`: constructor declarations, no `min` and no
-generated source names, consistent arities, supported queries, scoped and declared
-heads, and no literal unions. A query fact is an application, as in egglog's syntax; a
-bare variable or literal fact is outside the domain and the source checker's fragment.
-Arbitrary source merge functions remain outside its scope.
+The source fragment is defined once, as `Program.Fragment`: constructor declarations, no
+`min` and no generated source names, consistent arities, supported queries, scoped and
+declared heads, and no literal unions. A query fact is an application, as in egglog's
+syntax; a bare variable or literal fact is outside it. The completeness theorem assumes it
+and the source proof checker accepts only programs in it. Arbitrary source merge functions
+remain outside its scope.
 See [Source.lean](EgglogSemantics/Source/Domain.lean) for the exact conditions.
 
 ## Validation

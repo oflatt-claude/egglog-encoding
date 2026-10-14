@@ -78,8 +78,6 @@ namespace Parse
 open Sexp
 
 def expr : Sexp → Except String Expr
-  | .atom "true" => .ok (.lit (.bool true))
-  | .atom "false" => .ok (.lit (.bool false))
   | .atom s => .ok (match s.toInt? with | some n => .lit (.int n) | none => .var s)
   | .str s => .error s!"unexpected string \"{s}\""
   | .list [.atom "min", a, b] => do pure (.min (← expr a) (← expr b))
@@ -161,10 +159,9 @@ def decl (sig : Signature) (f : FnName) (ins : Sexp) (out : Sexp) (opts : List S
       .error s!"{f}: unsupported constructor option"
     else pure ⟨sorts.length, 1, none, none⟩
   else
-    let merge ← match opts.find? (·.1 == ":merge"), opts.find? (·.1 == ":no-merge") with
-      | some (_, some m), none => mergeSpec sig m
-      | none, some _ => pure .noMerge
-      | _, _ => .error s!"{f}: a function needs `:merge` or `:no-merge`"
+    let merge ← match opts.find? (·.1 == ":merge") with
+      | some (_, some m) => mergeSpec sig m
+      | _ => .error s!"{f}: a function needs `:merge`"
     pure ⟨sorts.length, columns out, some merge, none⟩
 
 def rule (sig : Signature) (query actions : Sexp) (opts : List Sexp) :

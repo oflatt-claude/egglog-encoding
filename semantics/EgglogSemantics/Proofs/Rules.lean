@@ -78,7 +78,6 @@ theorem mergeOneOriented_setRules (cl : Finset (Term × Term)) (d : FDatabase)
   | none => rfl
   | some ms =>
       cases ms with
-      | noMerge => rfl
       | merge body res =>
           dsimp only
           split
@@ -199,8 +198,7 @@ theorem runReach_rules {R : RulesetName} {db d : Database}
 theorem cmdStep_rules_of_run {sd sd' : Database} {R : RulesetName}
     (h : CmdStep sd (.run R) sd') : sd'.rules = sd.rules := by
   obtain ⟨d, hreach, hcl⟩ := h
-  have hd : some (RunRules R sd) = some d := hreach
-  rw [(MergeClosure.envRules hcl).2, ← Option.some.inj hd]
+  rw [(MergeClosure.envRules hcl).2, show d = RunRules R sd from hreach]
   rfl
 
 theorem cmdStep_rules_of_saturate {sd sd' : Database} {R : RulesetName}
@@ -215,13 +213,13 @@ theorem CmdStep.mem_rules_iff {src post : Database} {c : Cmd} (h : CmdStep src c
   cases c with
   | action a => rw [evalAction_rules hm]; simp
   | rule s =>
-      obtain rfl := Option.some.inj hm
+      subst hm
       simp [eq_comm, or_comm]
   | decl f dc =>
-      obtain rfl := Option.some.inj hm
+      subst hm
       simp
   | run R =>
-      obtain rfl := Option.some.inj hm
+      subst hm
       simp [RunRules, Database.sUnion_rules]
   | saturate R =>
       rw [runReach_rules (show SaturateReach R src mid from hm).1]

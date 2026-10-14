@@ -28,27 +28,32 @@ namespace Egglog
 
 mutual
 
-/-- An expression as egglog source. -/
-def Expr.toEgg : Expr → String
+/-- Render an expression with the chosen surface spelling of its variables. -/
+def Expr.toEggWith (name : Var → String) : Expr → String
   | .lit (.int n) => toString n
-  | .lit (.bool b) => toString b
-  | .var v => v
-  | .app f args => "(" ++ f ++ Expr.toEggArgs args ++ ")"
-  | .min a b => "(min " ++ a.toEgg ++ " " ++ b.toEgg ++ ")"
+  | .var v => name v
+  | .app f args => "(" ++ f ++ Expr.toEggArgsWith name args ++ ")"
+  | .min a b => "(min " ++ a.toEggWith name ++ " " ++ b.toEggWith name ++ ")"
 
-/-- `Expr.toEgg` over an argument list, each preceded by a space. -/
-def Expr.toEggArgs : List Expr → String
+/-- `Expr.toEggWith` over an argument list, each preceded by a space. -/
+def Expr.toEggArgsWith (name : Var → String) : List Expr → String
   | [] => ""
-  | e :: es => " " ++ e.toEgg ++ Expr.toEggArgs es
+  | e :: es => " " ++ e.toEggWith name ++ Expr.toEggArgsWith name es
 
 end
+
+/-- An expression as egglog source, preserving variable names. -/
+def Expr.toEgg (e : Expr) : String := e.toEggWith id
 
 /-- One expression per value column, written as egglog's tuple form `(values e₀ e₁ …)`
 when there is more than one and bare when there is exactly one. Complete atoms store
 these columns after their keys; the emitter translates them to Rust egglog syntax. -/
-def Expr.valuesToEgg : List Expr → String
-  | [e] => e.toEgg
-  | res => "(values " ++ String.intercalate " " (res.map Expr.toEgg) ++ ")"
+def Expr.valuesToEggWith (name : Var → String) : List Expr → String
+  | [e] => e.toEggWith name
+  | res => "(values " ++ String.intercalate " " (res.map (Expr.toEggWith name)) ++ ")"
+
+@[inherit_doc Expr.valuesToEggWith]
+def Expr.valuesToEgg (es : List Expr) : String := Expr.valuesToEggWith id es
 
 /-- A query fact. A complete table atom is emitted using Rust egglog's lookup syntax,
 whose surface form depends on the output width: `(= v (f a…))` at one value column and `(= (values v…) (f a…))` at more, since
@@ -61,12 +66,15 @@ def Pattern.toEgg (sig : Signature) : Pattern → String
         "(= " ++ Expr.valuesToEgg vals ++ " " ++ (Expr.app f keys).toEgg ++ ")"
   | .eq e₁ e₂ => "(= " ++ e₁.toEgg ++ " " ++ e₂.toEgg ++ ")"
 
-def Action.toEgg (sig : Signature) : Action → String
+def Action.toEggWith (sig : Signature) (name : Var → String) : Action → String
   | .expr e => match e.entry sig with
-    | none => e.toEgg
+    | none => e.toEggWith name
     | some (f, keys, vals) =>
-        "(set " ++ (Expr.app f keys).toEgg ++ " " ++ Expr.valuesToEgg vals ++ ")"
-  | .union e₁ e₂ => "(union " ++ e₁.toEgg ++ " " ++ e₂.toEgg ++ ")"
+        "(set " ++ (Expr.app f keys).toEggWith name ++ " " ++
+          Expr.valuesToEggWith name vals ++ ")"
+  | .union e₁ e₂ => "(union " ++ e₁.toEggWith name ++ " " ++ e₂.toEggWith name ++ ")"
+
+def Action.toEgg (sig : Signature) (a : Action) : String := a.toEggWith sig id
 
 /-- `:ruleset` is emitted only for a named ruleset: egglog's unnamed one is what a rule with
 no `:ruleset` joins, so the empty name renders as nothing and the existing cases are
@@ -76,11 +84,9 @@ def Rule.toEgg (sig : Signature) (r : Rule) : String :=
     ++ String.intercalate " " (r.actions.map (Action.toEgg sig)) ++ ")"
     ++ (if r.ruleset = "" then "" else " :ruleset " ++ r.ruleset) ++ ")"
 
-/-- The merged value, in egglog's tuple notation. Also used when emitting entry writes. -/
-abbrev MergeSpec.resultToEgg : List Expr → String := Expr.valuesToEgg
-
-/-- A merge specification as egglog source. `.noMerge` is `:no-merge`; a constructor has
-no merge specification and so never reaches here.
+/-- A merge specification as egglog source. A constructor has no merge specification and
+so never reaches here. The name map renders `mergeEnv`'s first-column aliases using
+egglog's scalar or tuple spelling, without changing the semantic program.
 
 The block form is `:merge (<action>* <result>)` — the actions and the result are
 *siblings* in one list, not two nested ones (`egglog/src/ast/parse.rs:531-569`, and
@@ -88,12 +94,18 @@ The block form is `:merge (<action>* <result>)` — the actions and the result a
 element is itself a list, which is why an empty body has to emit the bare result: an
 expression always has an atom head, so `:merge (min old new)` reads as a result and
 `:merge ((set (Log) (min old new)) (min old new))` as a block. -/
-def MergeSpec.toEgg (sig : Signature) : MergeSpec → String
-  | .noMerge => " :no-merge"
-  | .merge [] res => " :merge " ++ MergeSpec.resultToEgg res
+def MergeSpec.toEgg (sig : Signature) (name : Var → String) : MergeSpec → String
+  | .merge [] res => " :merge " ++ Expr.valuesToEggWith name res
   | .merge body res =>
-      " :merge (" ++ String.intercalate " " (body.map (Action.toEgg sig)) ++ " "
-        ++ MergeSpec.resultToEgg res ++ ")"
+      " :merge (" ++ String.intercalate " " (body.map (Action.toEggWith sig name)) ++ " "
+        ++ Expr.valuesToEggWith name res ++ ")"
+
+/-- egglog uses `old`/`new` for a scalar and `old0`/`new0` for the first tuple component. -/
+def mergeNameToEgg (width : Nat) (v : Var) : String :=
+  if width == 1 then
+    if v == "old0" then "old" else if v == "new0" then "new" else v
+  else
+    if v == "old" then "old0" else if v == "new" then "new0" else v
 
 /-- A `:merge` function's declaration.
 
@@ -117,7 +129,7 @@ def FnDecl.toEgg (sig : Signature) (f : FnName) (d : FnDecl) (m : MergeSpec) : S
     | 1 => sort
     | _ => "(" ++ String.intercalate " " (List.replicate d.outArity sort) ++ ")"
   "(function " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
-    ++ ") " ++ out ++ m.toEgg sig ++ ")"
+    ++ ") " ++ out ++ m.toEgg sig (mergeNameToEgg d.outArity) ++ ")"
 
 /-- A command as egglog source. A run of the *unnamed* ruleset is `(run 1)`, which is what
 egglog's bare form means (`egglog/src/ast/parse.rs:834-864`); a named one carries its name.
@@ -172,7 +184,6 @@ def Action.fnArities : Action → List (FnName × Nat)
 any other, so a constructor mentioned *only* there — `(set (Log (A)) old)` — still has to
 be declared, and the function it `set`s still has to be a name the emitter knows. -/
 def MergeSpec.fnArities : MergeSpec → List (FnName × Nat)
-  | .noMerge => []
   | .merge body res => body.flatMap Action.fnArities ++ Expr.fnAritiesL res
 
 def Cmd.fnArities : Cmd → List (FnName × Nat)
@@ -223,8 +234,7 @@ def Program.declared (p : Program) : Program := p.ctorDecls ++ p
 Two halves, because the model declares only its `:merge` functions.
 
 For a *declared* function, `Impl/Check.lean`'s `Cmd.arityOk` is the check — this only
-walks the program threading `Cmd.sigBind` and renders the commands that fail, so the two
-cannot drift the way `illegalSets` and `Action.SetLegal` can.
+walks the program threading `Cmd.sigBind` and renders the commands that fail.
 
 For an *undeclared* one there is no declaration to check against, and the constraint comes
 from this file instead: `ctorDecls` invents a declaration per `(name, arity)` pair, so a

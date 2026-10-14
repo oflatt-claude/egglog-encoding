@@ -109,7 +109,7 @@ def Cmd.CtorsIn : Cmd → Program → Prop
 
 /-- **Every command of the source program is one**, since its own `Cmd.ctors` are among the
 program's. -/
-theorem Cmd.CtorsIn.of_domain {P : Program} (_hdom : P.EncodeDomain) {c : Cmd} (hc : c ∈ P) :
+theorem Cmd.CtorsIn.of_domain {P : Program} (_hdom : P.Fragment) {c : Cmd} (hc : c ∈ P) :
     c.CtorsIn P := by
   cases c with
   | action a => exact fun fk hk => mem_program_ctors hc hk
@@ -231,10 +231,7 @@ theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
       exact ⟨evalAction_ctorsIn hc.wf h.terms hn hv,
         by rw [evalAction_rules hv]; exact h.heads⟩
   | rule r =>
-      have hv : some { db with rules := insert r db.rules } = some d :=
-        hreach
-      obtain rfl : d = { db with rules := insert r db.rules } :=
-        (Option.some.inj hv).symm
+      obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } :=
         hcl.eq_of_allConstructors hc.sig
       refine ⟨fun f as ht => h.terms f as (Database.terms_setRules ▸ ht), ?_⟩
@@ -243,8 +240,7 @@ theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
       · exact hn
       · exact h.heads r' hr''
   | run R =>
-      have hv : some (RunRules R db) = some d := hreach
-      obtain rfl : d = RunRules R db := (Option.some.inj hv).symm
+      obtain rfl : d = RunRules R db := hreach
       obtain rfl : db' = RunRules R db :=
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       exact h.runRules hc.wf
@@ -257,9 +253,7 @@ theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
       exact ⟨⟨RunRules.wf hx.1.wf, by rw [RunRules.sig]; exact hx.1.sig⟩,
         hx.2.runRules hx.1.wf⟩
   | decl f dc =>
-      have hv : some { db with sig := Function.update db.sig f (some dc) } = some d := hreach
-      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } :=
-        (Option.some.inj hv).symm
+      obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } := hreach
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact ⟨fun f' as ht => h.terms f' as (Database.terms_setSig ▸ ht), h.heads⟩
@@ -277,7 +271,7 @@ theorem programStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState
         (fun c' hc' => hdecl c' (List.mem_cons_of_mem c hc'))
 
 /-- Every constructor in a reached source prefix occurs in the whole program at that arity. -/
-theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.EncodeDomain) {p : Program}
+theorem ctorsIn_of_prefixStep {P : Program} (hdom : P.Fragment) {p : Program}
     (hsub : ∀ c ∈ p, c ∈ P) {sd : Database} (hstep : ProgramStep Database.empty p sd) :
     sd.CtorsIn P :=
   (programStep_ctorsIn Database.CtorState.empty Database.empty_ctorsInState

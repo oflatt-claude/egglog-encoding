@@ -1,32 +1,16 @@
 import EgglogSemantics.SourceProof.Evaluate
-import EgglogSemantics.Spec.Scope
+import EgglogSemantics.Source.Domain
 
 namespace Egglog.SourceProof
 
-def exprOk (e : Expr) : Bool := !e.hasMin
+/-- The checker accepts proofs about programs of the source fragment only. -/
+def sourceOk (P : Program) : Bool := decide P.Fragment
 
-/-- A query fact is an application, as in egglog; an equality compares value expressions. -/
-def patternOk : Pattern → Bool
-  | .expr (.app f args) => exprOk (.app f args)
-  | .expr _ => false
-  | .eq a b => exprOk a && exprOk b
-
-def actionOk : Action → Bool
-  | .expr e => exprOk e
-  | .union a b => exprOk a && exprOk b
-
-def ruleOk (r : Rule) : Bool := r.query.all patternOk && r.actions.all actionOk
-
-def sourceOk (P : Program) : Bool := P.all fun c => match c with
-  | .decl _ d => d.merge.isNone
-  | .rule r => ruleOk r
-  | .action a => actionOk a
-  | _ => true
-
+/-- A fact premise proves its instance equal to some held term; an equality premise proves
+its two sides equal. -/
 def premiseMatches (sig : Signature) (σ : Env) (p : Pattern) (c : Claim) : Bool :=
   match p with
-  | .expr e => e.evalAtom sig σ == some c.rhs &&
-      ((e.entry sig).isNone || c.lhs == c.rhs)
+  | .expr e => e.eval sig σ == some c.rhs
   | .eq a b => a.eval sig σ == some c.lhs && b.eval sig σ == some c.rhs
 
 def premisesMatch (sig : Signature) (σ : Env) : Query → List Claim → Bool

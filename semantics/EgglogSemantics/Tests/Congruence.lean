@@ -25,7 +25,7 @@ private def atom (f : FnName) : Expr := .app f []
 private def term (f : FnName) : Term := .app f []
 
 private def nestedUnion : Program :=
-  [.decl "A" (skolemDecl 0), .decl "B" (skolemDecl 0), .decl "F" (skolemDecl 1),
+  [.decl "A" (ctorDecl 0), .decl "B" (ctorDecl 0), .decl "F" (ctorDecl 1),
    .action (.expr (.app "F" [atom "A"])), .action (.expr (.app "F" [atom "B"])),
    .action (.union (atom "A") (atom "B"))]
 
@@ -41,7 +41,7 @@ private def runSameClass (P : Program) (a b : Term) : Bool :=
     | .saturate _ => false | _ => true) (.app "F" [term "A"]) (.app "F" [term "B"]))
 
 private def missingPremise : Program :=
-  [.decl "A" (skolemDecl 0), .decl "B" (skolemDecl 0), .decl "Missing" (skolemDecl 0),
+  [.decl "A" (ctorDecl 0), .decl "B" (ctorDecl 0), .decl "Missing" (ctorDecl 0),
    .action (.expr (atom "A")), .action (.expr (atom "B")),
    .rule ⟨[.expr (atom "Missing")], [.union (atom "A") (atom "B")], "R"⟩,
    .saturate "R"]

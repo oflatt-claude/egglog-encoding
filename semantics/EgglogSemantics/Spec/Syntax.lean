@@ -22,10 +22,9 @@ abbrev Var := String
 /-- The name of a constructor or function. -/
 abbrev FnName := String
 
-/-- A base value: egglog's `i64` and `bool` sorts (`egglog/src/sort/bool.rs`). -/
+/-- A base value: egglog's `i64`. -/
 inductive Lit where
   | int : Int → Lit
-  | bool : Bool → Lit
   deriving DecidableEq, Repr, Inhabited
 
 /-- An expression. Evaluated against an environment to build a `Term`. -/
@@ -68,10 +67,9 @@ structure Rule where
 
 /-- How two entries of a **merge function** colliding on one key combine: `merge body res`
 runs `body` once with the two outputs bound by `mergeEnv`, then evaluates `res`, one
-expression per value column; `noMerge` forbids a collision outright. -/
+expression per value column. -/
 inductive MergeSpec where
   | merge : List Action → List Expr → MergeSpec
-  | noMerge
 
 /-- A function declaration: a constructor when `merge = none`, a merge function when not. -/
 structure FnDecl where

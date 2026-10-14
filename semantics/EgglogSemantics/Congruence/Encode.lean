@@ -65,7 +65,7 @@ def tableDecl (arity : Nat) : FnDecl :=
   { arity, outArity := 1, merge := some (.merge mergeBody mergeResult) }
 
 /-- Structural ids use the source constructor and its original arity. -/
-def skolemDecl (arity : Nat) : FnDecl := { arity, outArity := 1, merge := none }
+def ctorDecl (arity : Nat) : FnDecl := { arity, outArity := 1, merge := none }
 
 mutual
 
@@ -197,7 +197,7 @@ needs no separate table: the view write already records its constructor id as a 
 def encodePrelude (P : Program) : List Command :=
   ⟨.decl ufName (tableDecl 1), none⟩ ::
     (P.ctors.flatMap fun fk =>
-      [⟨.decl fk.1 (skolemDecl fk.2), none⟩,
+      [⟨.decl fk.1 (ctorDecl fk.2), none⟩,
        ⟨.decl (viewName fk.1) (tableDecl fk.2), none⟩]) ++ allMaintenanceRules P
 
 /-- Rebuild after every source action or run. Source declarations are emitted once by

@@ -321,19 +321,17 @@ theorem mergeDecl_ne : mergeSetDb ≠ mergeCollideDb := by
   · simp [mergeSig, Database.mem_terms_iff, Database.empty] at hmem
   · simp at hmem
 
-/-- **The program passes every other check the front end runs.** Scope, evaluability, `set`
-legality, column widths, declaration freshness, `:merge` declaredness, and
-`Impl/Check.lean`'s two `Bool` checks. -/
+/-- **The program passes every other check the front end runs.** Scope, evaluability,
+column widths, declaration freshness, `:merge` declaredness, and `Impl/Check.lean`'s two
+`Bool` checks. -/
 theorem mergeDeclProgram_checks :
     WellScoped mergeDeclProgram ∧
       mergeDeclProgram.Evaluable Database.empty.sig ∧
-      mergeDeclProgram.SetLegal Database.empty.sig ∧
       mergeDeclProgram.WidthOk Database.empty.sig ∧
       mergeDeclProgram.DeclsFresh Database.empty.sig ∧
       mergeDeclProgram.MergeDeclared Database.empty.sig ∧
       WellArity mergeDeclProgram ∧ ReadsAreAtoms mergeDeclProgram := by
-  refine ⟨?_, ?_, by simp [mergeDeclProgram, Action.SetLegal], ?_,
-    ⟨rfl, trivial, trivial⟩, ?_, rfl, rfl⟩
+  refine ⟨?_, ?_, ?_, ⟨rfl, trivial, trivial⟩, ?_, rfl, rfl⟩
   · simp [WellScoped, mergeDeclProgram, Action.Scoped, Expr.Scoped, Expr.IsApp,
       Expr.vars, Expr.varsList]
   · simp [mergeDeclProgram, Action.Evaluable, Expr.AtomEvaluable, Expr.fnsList,
@@ -441,15 +439,15 @@ theorem badCtorProgram_not_arityOk : Program.arityOk badCtorProgram Database.emp
 
 `staleProgram`'s rule head applies `f`, which nothing declares. Declaration is required, so
 `Expr.eval` has no rule for `(f)`: the head gets stuck at every state the program reaches,
-the rule contributes nothing, and no term of `f` is ever built. The program *is*
-`Program.SetLegal` and its signature *is* `Signature.MergesLegal` — the two checks the
-refinement chain carries — so `Program.Evaluable` is isolated as what rejects it. -/
+the rule contributes nothing, and no term of `f` is ever built. Its signature *is*
+`Signature.MergesLegal` — the check the refinement chain carries — so `Program.Evaluable`
+is isolated as what rejects it. -/
 
 /-- `(function M () i64 :merge new)`. -/
 def staleDecl : FnDecl := ⟨0, 1, some (.merge [] [.var "new"]), none⟩
 
-/-- `(rule ((= 0 (M))) ((f)))`. Its head names `f`, which nothing has declared; only a
-`set` is constrained by `Action.SetLegal`, so the rule is still legal, and it is
+/-- `(rule ((= 0 (M))) ((f)))`. Its head names `f`, which nothing has declared; no
+structural check constrains a head, so the rule is still legal, and it is
 `Program.Evaluable` that rejects it. -/
 def staleRule : Rule := ⟨[.expr (.app "M" [.lit (.int 0)])], [.expr (.app "f" [])], ""⟩
 
@@ -475,7 +473,7 @@ theorem staleProgram_mergesLegal : Signature.MergesLegal staleSig := by
     rw [show staleDecl.merge = some (MergeSpec.merge [] [.var "new"]) from rfl,
       Option.some.injEq, MergeSpec.merge.injEq] at hm
     obtain ⟨rfl, rfl⟩ := hm
-    exact ⟨⟨trivial, trivial⟩, rfl⟩
+    exact ⟨trivial, rfl⟩
   · rw [staleSig, Function.update_of_ne hgM] at hg
     exact absurd hg (by simp)
 
@@ -529,7 +527,7 @@ def db₀ : Database where
 /-- What the old `CmdStep` at a `.decl` reached, and the whole of it. -/
 def db₁ : Database := { db₀ with sig := Function.update db₀.sig "f" (some (ctorDecl 0)) }
 
-theorem oldDecl : cmdEffect db₀ (.decl "f" (ctorDecl 0)) = some db₁ := rfl
+theorem oldDecl : cmdReach db₀ (.decl "f" (ctorDecl 0)) db₁ := rfl
 
 /-- `f` is fresh, so `Cmd.DeclFresh` admits `(constructor f)` here. -/
 theorem f_fresh : db₀.sig "f" = none := by simp [db₀]

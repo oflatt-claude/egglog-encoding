@@ -23,7 +23,7 @@ keeps old entries, this need not be the implementation's current output. Equalit
 retain a held witness congruent to both evaluated sides: `(= term term)` succeeds only
 when that class exists in the database.
 
-The model has integer and Boolean literals but no general sort system. Static scope,
+The model has integer literals but no general sort system. Static scope,
 declaration, union, and write checks live in [Scope.lean](EgglogSemantics/Spec/Scope.lean).
 The executable `arityOk` and `noLookup` checks in
 [Check.lean](EgglogSemantics/Impl/Check.lean) are used before differential-test emission.
@@ -37,8 +37,18 @@ have the declared width.
 `MergeStep.collide` takes two entries with congruent keys and conflicting outputs. It
 installs the `mergeEnv` parameters, runs the body actions, evaluates one result expression
 per output column, and records the resulting entry. Body actions can build terms, assert
-unions, or write other tables. Single-column merges bind `old` and `new`; multi-column
-merges bind `old0`, `new0`, and so on. The ambient environment is restored afterward.
+unions, or write other tables. Column `i` is bound as `old<i>` and `new<i>`; the first
+column also has the aliases `old` and `new`. Appending a provenance column therefore
+preserves every original binding. The emitter chooses egglog's unindexed names for a
+single output and indexed names for multiple outputs. The ambient environment is restored
+afterward.
+
+In mathematical notation, write an entry as `f(k̄; v̄)` and a merge environment as
+`[ō ↦ ā, n̄ ↦ b̄]`: two tuples of parameters bound componentwise to the colliding
+output tuples. The body returns a tuple of expressions; a scalar output is a singleton
+tuple. Provenance extends each output tuple with one proof component. The string spellings
+and first-component aliases implement these bindings and need not appear in the paper's
+merge rule.
 
 `FnDecl.unchangedWidth` determines which output columns count as a change. An explicit
 `identityVals` takes precedence; otherwise an action block compares all output columns.

@@ -8,12 +8,12 @@ namespace Egglog.Congruence
 theorem actions_writeLegal (as : List Action) (sig : Signature) :
     Actions.WriteLegal as sig := by
   induction as with
-  | nil => exact ⟨trivial, trivial⟩
-  | cons a as ih => exact ⟨⟨by cases a <;> trivial, ih.1⟩, ⟨trivial, ih.2⟩⟩
+  | nil => trivial
+  | cons a as ih => exact ⟨trivial, ih⟩
 
 private theorem cmd_writeLegal (c : Cmd) (sig : Signature) : c.WriteLegal sig := by
   cases c with
-  | action a => exact ⟨by cases a <;> trivial, trivial⟩
+  | action a => trivial
   | rule r => exact actions_writeLegal r.actions sig
   | _ => trivial
 

@@ -103,12 +103,6 @@ theorem eval_app_merge {sig : Signature} {f : FnName} {args : List Expr} {σ : E
     (Expr.app f args).eval sig σ = none :=
   eval_app_not_ctor (Signature.not_isCtor hc)
 
-/-- `eval_app_merge` for a `:no-merge` function, which is a lookup for the same reason. -/
-theorem eval_app_noMerge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    (hc : sig.mergeOf f = some MergeSpec.noMerge) :
-    (Expr.app f args).eval sig σ = none :=
-  eval_app_not_ctor (Signature.not_isCtor hc)
-
 /-- The undeclared case, spelled out: a name the signature does not mention builds
 nothing. -/
 theorem eval_app_undeclared {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
@@ -734,17 +728,13 @@ theorem evalActions_wf {db db' : Database} (hw : db.WF) {as : List Action}
 
 /-! ### Actions keep `DeclaredTerms`
 
-The two front-end checks that bear on what an action *writes*: `Action.WidthOk` for the
-terms it builds, `Action.SetLegal` for the entry a `set` records. `SetLegal` is load-bearing
-in the `set` case and not decoration — it is what turns `args.length = arity` and
-`out.length = outArity` into `FnDecl.entryWidth`, which is `arity + outArity` for a merge
-function and `arity` alone for a constructor. `Proofs/Counterexamples.lean`'s
-`setCtor_not_declaredTerms` is a `set` on a constructor that passes `WidthOk` and breaks
-`DeclaredTerms`. -/
+`Action.WidthOk` checks the complete atom an action records. Its declaration determines
+the column count: `arity + outArity` for a merge function and `arity` for a constructor.
+Evaluation checks that nested value expressions apply declared constructors. -/
 
 /-- **`DeclaredTerms` is preserved by an action.** -/
 theorem evalAction_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    {a : Action} (hw : a.WidthOk db.sig) (_hsl : a.SetLegal db.sig)
+    {a : Action} (hw : a.WidthOk db.sig)
     (h : evalAction db a = some db') : db'.DeclaredTerms := by
   have henv := Database.env_declaredTerm hwf hdt
   rcases evalAction_eq_some h with ⟨e, t, rfl, ht, rfl⟩ |
@@ -754,7 +744,7 @@ theorem evalAction_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.Dec
       (Expr.eval_declaredTerm henv hw.2 ht₂)
 
 theorem evalActions_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.DeclaredTerms)
-    {as : List Action} (hw : Actions.WidthOk as db.sig) (hsl : Actions.SetLegal as db.sig)
+    {as : List Action} (hw : Actions.WidthOk as db.sig)
     (h : evalActions db as = some db') : db'.DeclaredTerms := by
   induction as generalizing db with
   | nil => rw [evalActions_nil, Option.some_inj] at h; exact h ▸ hdt
@@ -762,8 +752,8 @@ theorem evalActions_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.De
     rw [evalActions_cons, Option.bind_eq_some_iff] at h
     obtain ⟨d, hd, hrest⟩ := h
     have hsig : d.sig = db.sig := evalAction_sig hd
-    exact ih (evalAction_wf hwf hd) (evalAction_declaredTerms hwf hdt hw.1 hsl.1 hd)
-      (by rw [hsig]; exact hw.2) (by rw [hsig]; exact hsl.2) hrest
+    exact ih (evalAction_wf hwf hd) (evalAction_declaredTerms hwf hdt hw.1 hd)
+      (by rw [hsig]; exact hw.2) hrest
 
 /-! ### Agreeing environments are interchangeable
 
@@ -883,13 +873,13 @@ substitution and the two checks `evalActions_declaredTerms` asks of the block. -
 theorem evalLocalActions_declaredTerms {db db' : Database} (hwf : db.WF)
     (hdt : db.DeclaredTerms) {as : List Action} {σ : Env}
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (hw : Actions.WidthOk as db.sig)
-    (hsl : Actions.SetLegal as db.sig) (h : evalLocalActions db as σ = some db') :
+    (h : evalLocalActions db as σ = some db') :
     db'.DeclaredTerms := by
   obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
   intro g cs hmem
   rw [Database.terms_setEnvRules] at hmem
   exact evalActions_declaredTerms (hwf.appendEnv hσ)
-    (by intro g cs hm; rw [Database.terms_setEnv] at hm; exact hdt g cs hm) hw hsl hv g cs hmem
+    (by intro g cs hm; rw [Database.terms_setEnv] at hm; exact hdt g cs hm) hw hv g cs hmem
 
 /-- Evaluating a concatenation evaluates each part. -/
 theorem Expr.evalList_append {sig : Signature} {σ : Env} :

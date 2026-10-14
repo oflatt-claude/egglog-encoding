@@ -82,7 +82,7 @@ private theorem prelude_unionFree (P : Program) :
   rcases hc with (rfl | ⟨⟨f, k⟩, _, hc⟩) | hc
   · exact tableDecl_unionFree 1
   · rcases hc with rfl | rfl
-    · simp [Cmd.UnionFree, FnDecl.UnionFree, skolemDecl]
+    · simp [Cmd.UnionFree, FnDecl.UnionFree, ctorDecl]
     · exact tableDecl_unionFree k
   · exact allMaintenance_unionFree P c hc
 

@@ -16,7 +16,6 @@ mutual
 /-- `["F", [args…]]` for an application; a literal is a tagged object. -/
 def term : Term → Json
   | .lit (.int n) => Json.mkObj [("int", toJson n)]
-  | .lit (.bool b) => Json.mkObj [("bool", toJson b)]
   | .app f args => .arr #[toJson f, .arr (terms args).toArray]
 
 def terms : List Term → List Json

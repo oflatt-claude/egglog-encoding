@@ -213,7 +213,7 @@ theorem encodedRule_firing {src : Database} {d d' : FDatabase} {r : Rule} {σ : 
 
 /-- At a source prefix, all head-side obligations come from the agreed source domain.
 The prelude signature supplies constructor coverage; only target execution invariants remain. -/
-theorem encodedRule_firing_of_programStep {P pre rest : Program} (hdom : P.EncodeDomain)
+theorem encodedRule_firing_of_programStep {P pre rest : Program} (hdom : P.Fragment)
     (hP : P = pre ++ rest) {src : Database} (hpre : ProgramStep Database.empty pre src)
     {r : Rule} (hmem : Cmd.rule r ∈ P) (hrule : r ∈ src.rules)
     {d d' : FDatabase} {σ : Env} (hi : d.Inv) (hn : d.NoUnions) (hs : SoundTerms d src)

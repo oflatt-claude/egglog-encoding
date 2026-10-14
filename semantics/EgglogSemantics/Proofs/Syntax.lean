@@ -25,7 +25,7 @@ theorem Signature.isCtor_of_decl {sig : Signature} {f : FnName} {d : FnDecl}
     (hd : sig f = some d) (hm : d.merge = none) : sig.IsCtor f := ⟨d, hd, hm⟩
 
 /-- Under `AllConstructors` nothing has a merge specification, so every premise naming
-one — a `MergeStep.collide`, a `NoMergeOk` obligation — is contradictory. -/
+one — a `MergeStep.collide`'s, say — is contradictory. -/
 theorem Signature.AllConstructors.elim {sig : Signature} (h : sig.AllConstructors)
     {f : FnName} {m : MergeSpec} (hm : sig.mergeOf f = some m) : False := by
   rw [h f] at hm; exact absurd hm (by simp)
