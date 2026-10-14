@@ -3,7 +3,7 @@
 [SourceProof.check](EgglogSemantics/SourceProof/Checker.lean) validates proof trees
 against the original program, unions included. Every node states its claim, and the
 checker validates each node against the claims of its subproofs. It is the checker that
-corresponds to Rust's. It accepts constructor programs without primitive applications
+corresponds to Rust's. It accepts constructor programs without `min`
 whose query facts are applications, as in egglog. Function declarations are rejected;
 functions are handled in the separate relational provenance checker.
 

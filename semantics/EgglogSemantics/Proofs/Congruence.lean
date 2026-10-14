@@ -161,7 +161,7 @@ theorem Cong.of_addTerm {db : Database} (hw : db.WF) {t : Term} (ht : t ∈ db.t
 `Database.LitsIsolated` constrains the *asserted* equations. That the derived ones are
 constrained too is one induction: `congr` relates applications, so it cannot reach a
 literal at all, and `symm`/`trans` carry the literal along. `evalAction`'s `union` check is
-what establishes the hypothesis; `Prim.apply` at `min`/`max` is what spends it. -/
+what establishes the hypothesis. -/
 
 /-- **A literal is congruent to nothing but itself.** -/
 theorem Cong.eq_of_isLit {db : Database} (hl : db.LitsIsolated) {a b : Term}
@@ -188,43 +188,6 @@ theorem CongList.eq_of_isLit {db : Database} (hl : db.LitsIsolated) :
   | a :: _, _, .cons hab hrest, hlit => by
     rw [Cong.eq_of_isLit hl hab (Or.inl (hlit a (by simp))),
       CongList.eq_of_isLit hl hrest fun x hx => hlit x (by simp [hx])]
-
-/-- `min` and `max` answer only on two literals. -/
-theorem Prim.isLit_of_apply : ∀ {p : Prim} {as : List Term} {t : Term},
-    p = .intMin ∨ p = .intMax → p.apply as = some t → ∀ a ∈ as, a.isLit
-  | _, [.lit _, .lit _], _, _, _ => by simp [Term.isLit]
-  | _, [], _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
-  | _, [_], _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
-  | _, .app _ _ :: _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
-  | _, _ :: .app _ _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
-  | _, _ :: _ :: _ :: _, _, hp, h => by rcases hp with rfl | rfl <;> simp [Prim.apply] at h
-
-/-- `if`'s operands, read off a successful application: a `bool` literal and two branches.
-Only the condition is examined, which is what makes `if` congruence-stable where
-`ordering-gt` is not. -/
-theorem Prim.if_apply_inv : ∀ {as : List Term} {t : Term},
-    Prim.ifThenElse.apply as = some t →
-      ∃ c a b, as = [.lit (.bool c), a, b] ∧ t = if c then a else b
-  | [.lit (.bool c), a, b], _, h => ⟨c, a, b, rfl, (Option.some.inj h).symm⟩
-  | [], _, h => by simp [Prim.apply] at h
-  | [_], _, h => by simp [Prim.apply] at h
-  | [_, _], _, h => by simp [Prim.apply] at h
-  | [.lit (.int _), _, _], _, h => by simp [Prim.apply] at h
-  | [.app _ _, _, _], _, h => by simp [Prim.apply] at h
-  | _ :: _ :: _ :: _ :: _, _, h => by simp [Prim.apply] at h
-
-/-- **`min` and `max` are congruence-stable.** They read a literal, and a literal is alone
-in its class, so operands congruent to ones they answer on *are* those operands.
-
-`ordering-gt` is excluded and cannot be included: it compares by `Term.blt`, a structural
-order, where egglog compares by e-class id, so `f 1 ≅ g 1` already sends it to a different
-boolean with no literal anywhere. `if` is stable too, but for the opposite reason — it
-returns an operand unexamined — so it is `Merge.lean`'s `prim_apply_owes` that carries
-it, over `Owes` rather than over equality. -/
-theorem Prim.apply_cong {db : Database} (hl : db.LitsIsolated) {p : Prim}
-    (hp : p = .intMin ∨ p = .intMax) {as bs : List Term} (hc : CongList db as bs)
-    {t : Term} (h : p.apply as = some t) : p.apply bs = some t := by
-  rwa [← CongList.eq_of_isLit hl hc (Prim.isLit_of_apply hp h)]
 
 namespace Cong
 variable {db : Database}

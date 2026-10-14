@@ -338,7 +338,7 @@ theorem mergeDeclProgram_checks :
   · simp [WellScoped, mergeDeclProgram, Action.Scoped, Expr.Scoped, Expr.IsApp,
       Expr.vars, Expr.varsList]
   · simp [mergeDeclProgram, Action.Evaluable, Expr.AtomEvaluable, Expr.fnsList,
-      Expr.fns, Prim.ofName, Cmd.sigBind, Database.empty]
+      Expr.fns, Cmd.sigBind, Database.empty]
   · refine ⟨?_, ?_, trivial⟩
     · intro ms hms
       have heq : .merge [] [.lit (.int 7)] = ms := by simpa [fDecl] using hms
@@ -484,7 +484,7 @@ theorem staleProgram_mergesLegal : Signature.MergesLegal staleSig := by
 declared constructor, and `staleRule`'s head applies `f`. -/
 theorem staleProgram_not_evaluable : ¬ Program.Evaluable staleProgram (fun _ => none) := by
   rintro ⟨_, _, _, hrule, _, _⟩
-  have h : (staleSig "f").isSome = true := hrule.1.2.1
+  have h : (staleSig "f").isSome = true := hrule.1.1
   exact Bool.noConfusion h
 
 /-- **And the head is stuck wherever the program can get to.** At every state
@@ -503,8 +503,7 @@ theorem staleProgram_head_stuck {C : Database}
     rw [h5.sig, h4.sig, h3.sig, h2.sig, h1.sig]
     rfl
   obtain rfl := h.nil_inv
-  exact ⟨hf, fun σ =>
-    Expr.eval_app_undeclared (show Prim.ofName "f" = none from rfl) hf⟩
+  exact ⟨hf, fun σ => Expr.eval_app_undeclared hf⟩
 
 /-! ## `MergeDeclared` is what makes a `.decl`'s merge phase neutral
 
@@ -604,7 +603,7 @@ theorem no_merge_before (x : Database) : ¬ MergeStep db₀ x := by
     obtain ⟨rfl, rfl⟩ := hmerge
     simp only [evalActions, Option.some.injEq] at heval
     subst heval
-    simp [Expr.evalList, Expr.eval, Prim.ofName, Signature.IsCtor, db₀] at hres
+    simp [Expr.evalList, Expr.eval, Signature.IsCtor, db₀] at hres
 
 /-- **The declaration enables a merge step**, so the merge phase `CmdStep` runs after a
 `.decl` reaches a database the effect alone does not. `f` fresh and the state well formed
@@ -617,7 +616,7 @@ theorem decl_enables_merge :
   have ht0 : Cong db₁ t0 t0 := Cong.assert (by simp [db₁, db₀])
   have hres : Expr.evalList db₁.sig [Expr.app "f" []] (mergeEnv [t0] [t0]) =
       some [Term.app "f" []] := by
-    simp [Expr.evalList, Expr.eval, Prim.ofName, hctor]
+    simp [Expr.evalList, Expr.eval, hctor]
   refine ⟨_, ⟨db₁, rfl, Relation.ReflTransGen.single (MergeStep.collide (f := "g")
     (d := { db₁ with env := mergeEnv [t0] [t0] }) (as := [t0]) (bs := [t0]) (a := [t0])
     (b := [t0]) hg rfl trivial rfl rfl hentry hentry
@@ -633,20 +632,17 @@ signature `f` is not already in, so no program the checks admit builds `db₀`. 
 theorem gdecl_not_mergeDeclared (sig : Signature) (h : sig "f" = none) :
     ¬ Cmd.MergeDeclared (.decl "g" gdecl) sig := by
   intro hc
-  rcases hc (.merge [] [.app "f" []]) rfl |>.2 (.app "f" []) (List.mem_cons_self ..) "f"
-    (by simp [Expr.fns, Expr.fnsList]) with hp | hs
-  · exact hp (by simp [Prim.ofName])
-  · exact hs (show Function.update sig "g" (some gdecl) "f" = none by
+  exact hc (.merge [] [.app "f" []]) rfl |>.2 (.app "f" []) (List.mem_cons_self ..) "f"
+    (by simp [Expr.fns, Expr.fnsList])
+    (show Function.update sig "g" (some gdecl) "f" = none by
       rw [Function.update_of_ne (by simp)]; exact h)
 
 /-- `Proofs/Step.lean`'s `declStep_iff` does not apply to `db₀`, and this is the hypothesis
 it fails. -/
 theorem db₀_not_sigMergeDeclared : ¬ SigMergeDeclared db₀.sig := by
   intro h
-  rcases (h "g" gdecl (.merge [] [.app "f" []]) (by simp [db₀]) rfl).2 (.app "f" [])
-    (List.mem_cons_self ..) "f" (by simp [Expr.fns, Expr.fnsList]) with hp | hs
-  · exact hp (by simp [Prim.ofName])
-  · exact hs (by simp [db₀])
+  exact (h "g" gdecl (.merge [] [.app "f" []]) (by simp [db₀]) rfl).2 (.app "f" [])
+    (List.mem_cons_self ..) "f" (by simp [Expr.fns, Expr.fnsList]) (by simp [db₀])
 
 /-! ## The two `Recorded` transports need their side condition
 
@@ -657,9 +653,10 @@ and `mergeResult`, one `tableDecl 1`.
 
 `A` holds the view entries `@fView(k) ↦ p` and `@fView(k) ↦ r`; `C` holds the same with the
 first re-keyed to the congruent `s`, and asserts `p = s`. With `p < r < s` in `Term.blt`,
-`A`'s collision keeps `p` and writes `@UF(r) ↦ p`, while `C`'s two entries are `s` and `r` —
-the identity test on the one output column rules the two self-collisions out — so the only
-collision it can run writes `@UF(s) ↦ r`, whichever way round the pair is taken. That is not
+`A`'s collision keeps `p` and writes `@UF(r) ↦ p` beside the self-loop `@UF(p) ↦ p`, while
+`C`'s two entries are `s` and `r` — the identity test on the one output column rules the two
+self-collisions out — so the only collision it can run writes `@UF(s) ↦ r` beside
+`@UF(r) ↦ r`, whichever way round the pair is taken. That is not
 congruent to `@UF(r) ↦ p`: that needs `r ≈ p`, and a `MergeStep` asserts no equation — a
 write is `Database.addTerm`, which records reflexive pairs only — so nothing in either state
 relates them.
@@ -845,10 +842,11 @@ theorem A_rec_C : A.Recorded C := by
 /-! ### The specification's merge step
 
 `mergeEnv [p] [r]` binds `old := p`, `new := r`; `p < r`, so `mergeBody` writes
-`@UF(r) ↦ p` and `mergeResult` settles on `p`. -/
+`@UF(p) ↦ p` and `@UF(r) ↦ p`, and `mergeResult` settles on `p`. -/
 
 def dA : Database :=
-  ({ A with env := mergeEnv [P1] [R] } : Database).addTerm (ufrow R P1)
+  (({ A with env := mergeEnv [P1] [R] } : Database).addTerm (ufrow P1 P1)).addTerm
+    (ufrow R P1)
 
 def B : Database := { dA.addTerm (vrow P1) with env := A.env, rules := A.rules }
 
@@ -944,11 +942,11 @@ theorem safe_app {f : FnName} {as : List Term} (h : ufPhi (.app f as) ≠ 22)
 theorem safe_nullary {f : FnName} (h : ufPhi (.app f []) ≠ 22) : Safe (.app f []) :=
   safe_app h (by simp)
 
-theorem safe_ite (c : Bool) {a b : Term} (ha : Safe a) (hb : Safe b) :
-    Safe (if c then a else b) := by
-  cases c
-  · simpa using hb
-  · simpa using ha
+theorem safe_least {a b : Term} (ha : Safe a) (hb : Safe b) : Safe (Term.least a b) := by
+  unfold Term.least
+  split
+  · exact hb
+  · exact ha
 
 theorem safe_K : Safe K := safe_nullary (by decide)
 theorem safe_R : Safe R := safe_nullary (by decide)
@@ -1011,18 +1009,16 @@ theorem view_entry {as a : List Term} (hlen : as.length = 1)
     exact ⟨(split_one hlen hv).1, Or.inr (split_one hlen hv).2⟩
   all_goals exact absurd h' (head_ne (by decide))
 
-/-! What one collision of `C` computes. `ordering-gt` is strict, so a tie takes the `else`
-branch. -/
-
-def mxT (x y : Term) : Term := if Term.blt y x then x else y
-def mnT (x y : Term) : Term := if Term.blt y x then y else x
+/-! What one collision of `C` computes: `min` keeps the smaller e-class, and both colliding
+e-classes are linked to it. -/
 
 /-- The state `mergeBody` reaches from `C` on a collision whose e-classes are `x` and `y`. -/
 def dC (x y : Term) : Database :=
-  ({ C with env := mergeEnv [x] [y] } : Database).addTerm (ufrow (mxT x y) (mnT x y))
+  (({ C with env := mergeEnv [x] [y] } : Database).addTerm
+    (ufrow x (Term.least x y))).addTerm (ufrow y (Term.least x y))
 
 /-- The value `mergeResult` settles on there. -/
-def vsC (x y : Term) : List Term := [mnT x y]
+def vsC (x y : Term) : List Term := [Term.least x y]
 
 theorem evalC (x y : Term) :
     evalActions ({ C with env := mergeEnv [x] [y] } : Database) mergeBody
@@ -1031,27 +1027,35 @@ theorem evalC (x y : Term) :
 theorem resC (x y : Term) :
     Expr.evalList (dC x y).sig mergeResult (dC x y).env = some (vsC x y) := rfl
 
-/-- The row a collision of `C` writes is coloured `12`, `13` or `23`, never `22`: that would
-need a key in `r`'s class and an e-class in `p`'s, which is the choice the specification
-made. -/
+/-- The rows a collision of `C` writes are coloured `12`, `13` or `23`, never `22`: that
+would need a key in `r`'s class and an e-class in `p`'s, which is the choice the
+specification made. -/
 theorem step_phiInv {x y : Term} (hx : x = S ∨ x = R) (hy : y = S ∨ y = R) :
     PhiInv ((dC x y).addTerm (.app V ([K] ++ vsC x y))) := by
   have hsx : Safe x := by rcases hx with rfl | rfl; exacts [safe_S, safe_R]
   have hsy : Safe y := by rcases hy with rfl | rfl; exacts [safe_S, safe_R]
-  refine (C_phiInv.addTerm ?_).addTerm ?_
-  · change Safe (Term.app ufName [mxT x y, mnT x y])
+  have hsl : Safe (Term.least x y) := safe_least hsx hsy
+  refine ((C_phiInv.addTerm ?_).addTerm ?_).addTerm ?_
+  · change Safe (Term.app ufName [x, Term.least x y])
     refine safe_app ?_ ?_
     · rcases hx with rfl | rfl <;> rcases hy with rfl | rfl <;> decide
     · intro a ha
       simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
       rcases ha with rfl | rfl
-      exacts [safe_ite _ hsx hsy, safe_ite _ hsy hsx]
+      exacts [hsx, hsl]
+  · change Safe (Term.app ufName [y, Term.least x y])
+    refine safe_app ?_ ?_
+    · rcases hx with rfl | rfl <;> rcases hy with rfl | rfl <;> decide
+    · intro a ha
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
+      rcases ha with rfl | rfl
+      exacts [hsy, hsl]
   · refine safe_app (ufPhi_ne_of_head (by decide) _) ?_
     intro a ha
     simp only [vsC, List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil,
       or_false] at ha
     rcases ha with rfl | rfl
-    exacts [safe_K, safe_ite _ hsy hsx]
+    exacts [safe_K, hsl]
 
 /-- Every state one merge step of `C` reaches satisfies the invariant. -/
 theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by

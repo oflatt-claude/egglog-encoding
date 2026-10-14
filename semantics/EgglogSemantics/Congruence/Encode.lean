@@ -50,14 +50,15 @@ def tableRole (P : Program) (f : FnName) : Option TableRole :=
   if f = ufName then some .unionFind else
     (P.ctors.find? fun fk => viewName fk.1 == f).map fun fk => .view fk.1
 
-/-- A collision retains the smaller id and links the displaced id to it. With one
-output column, `mergeEnv` supplies the ordinary `old` and `new` bindings. -/
+/-- A collision retains the smaller id and links both ids to it; for the smaller one that
+is a self-loop, which is not a union-find edge. With one output column, `mergeEnv`
+supplies the ordinary `old` and `new` bindings. -/
 def mergeBody : List Action :=
-  [.expr (.app ufName [maxE (.var "old") (.var "new"),
-    minE (.var "old") (.var "new")])]
+  [.expr (.app ufName [.var "old", .min (.var "old") (.var "new")]),
+   .expr (.app ufName [.var "new", .min (.var "old") (.var "new")])]
 
 /-- The sole output column of both generated function tables. -/
-def mergeResult : List Expr := [minE (.var "old") (.var "new")]
+def mergeResult : List Expr := [.min (.var "old") (.var "new")]
 
 /-- A generated function with one id column. All output columns determine change. -/
 def tableDecl (arity : Nat) : FnDecl :=
@@ -72,6 +73,7 @@ mutual
 def encodeQueryExpr : Expr → Nat → Expr × Query × Nat
   | .lit l, n => (.lit l, [], n)
   | .var v, n => (.var v, [], n)
+  | .min a b, n => (.min a b, [], n)
   | .app f args, n =>
       match encodeQueryArgs args n with
       | (es, ps, next) =>
@@ -113,6 +115,7 @@ mutual
 id, so no temporary variable or table lookup is needed in a head. -/
 def encodeBuild : Expr → List Action
   | .lit _ | .var _ => []
+  | .min a b => encodeBuild a ++ encodeBuild b
   | .app f args =>
       encodeBuildArgs args ++ [.expr (.app (viewName f) (args ++ [.app f args]))]
 
@@ -123,11 +126,11 @@ def encodeBuildArgs : List Expr → List Action
 
 end
 
-/-- A source union becomes an oriented union-find entry. -/
+/-- A source union links both ids to the smaller one. -/
 def encodeAction : Action → List Action
   | .expr e => encodeBuild e
   | .union a b => encodeBuild a ++ encodeBuild b ++
-      [.expr (.app ufName [maxE a b, minE a b])]
+      [.expr (.app ufName [a, .min a b]), .expr (.app ufName [b, .min a b])]
 
 /-- No justification argument is needed for compiling a head. -/
 def encodeActions (as : List Action) : List Action := as.flatMap encodeAction

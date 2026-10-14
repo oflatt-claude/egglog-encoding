@@ -13,10 +13,10 @@ theorem encodedRule_firing_reads {P : Program} {d : FDatabase} {src querySrc pos
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF)
     (hcs : querySrc.sig.AllConstructors) (hreads : SourceReads d.toDatabase querySrc)
     (henv : querySrc.env = []) {r : Rule} {σ : Env}
-    (hqp : ∀ p ∈ r.query, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none)
+    (hqp : ∀ p ∈ r.query, p.OrderingFree)
     (hqk : Query.VarsKeyed r.query) (hqg : ∀ p ∈ r.query, p.Grounded)
     (hqn : ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true)
-    (hp : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, e.OrderingFree)
     (hctor : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns,
       querySrc.sig.IsCtor f → d.sig.IsCtor f)
     (hd : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ fk ∈ e.ctors,

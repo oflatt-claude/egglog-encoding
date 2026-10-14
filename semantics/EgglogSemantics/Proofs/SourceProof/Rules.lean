@@ -3,16 +3,15 @@ import EgglogSemantics.Proofs.Rules
 
 namespace Egglog.SourceProof
 
+/-- `exprOk` is `Expr.OrderingFree` as a Boolean: both say no `min` occurs. -/
 theorem exprOk_orderingFree {e : Expr} (h : exprOk e = true) : e.OrderingFree := by
-  intro f hf
-  have hn : Prim.ofName f = none := Option.isNone_iff_eq_none.mp (List.all_eq_true.mp h f hf)
-  simp [hn]
+  simpa [exprOk, Expr.OrderingFree] using h
 
 theorem patternOk_orderingFree {p : Pattern} (h : patternOk p = true) : p.OrderingFree := by
   cases p with
   | expr e =>
       cases e with
-      | lit _ | var _ => simp [patternOk] at h
+      | lit _ | var _ | min _ _ => simp [patternOk] at h
       | app f args => exact exprOk_orderingFree h
   | eq a b =>
       simp only [patternOk, Bool.and_eq_true_iff] at h

@@ -189,8 +189,8 @@ Four shapes checked against the release binary, all with
 list position is fixed when the term is *first* added, which matches egglog for terms
 built by actions and by rule heads in the order the interpreter runs them, but a round
 that fires several rules is free to build terms in another order than egglog's; and
-`ordering-gt` continues to compare by the structural `Term.blt`, since a `Prim` has no
-database to consult. See `MERGE.md`, "The executable row index". -/
+`min` continues to compare by the structural `Term.blt`, which consults no database.
+See `MERGE.md`, "The executable row index". -/
 /-- Whether `t` is the canonical member of its congruence class — no congruent term was
 created before it — which is what makes egglog's rebuild leave a row keyed on `t` alone.
 
@@ -450,10 +450,10 @@ def FDatabase.mergeSaturate (d : FDatabase) (h : Acc FDatabase.MergeRel d) :
 /-- Merge saturation bounded by fuel that **fails** rather than returning a prefix.
 
 egglog's `merge_all` runs to a fixed point (`free_join/mod.rs:546-628`), so this is the
-faithful shape, and it is now *reachable*: while `min` and `max` were ordinary names a
+faithful shape, and it is now *reachable*: while `min` was an ordinary name a
 `:merge (min old new)` body built the term `min(5, 3)` rather than computing `3`, merging
 was non-idempotent by construction, `settled` was never reached, and each pass squared the
-row set. Making them `Prim`s fixed that.
+row set. Making `min` syntax that computes fixed that.
 
 This **is** what `execCmdM` runs, and it has to be, now that a rule can read a value: a
 single pass leaves `k` rows at a key class as `k - 1` when three or more collide, and a
@@ -502,7 +502,7 @@ implementation had **no** differential coverage at all: `mergeOne` and `mergeRou
 unreachable from `Program.expectedSizes`. `execM` is the composition that reaches them.
 
 Everything below the merge phase is `Impl/Interp.lean`'s, unchanged. `patternHolds`
-already resolves primitives in a row atom's operands, because `Expr.eval` does; and
+already resolves `min` in a row atom's operands, because `Expr.eval` does; and
 `execRunRules` already reads every rule off the pre-state, which is where the merge phase
 must *not* be — egglog defers it until every rule has been searched, so no rule sees
 another's merged value within a round. -/

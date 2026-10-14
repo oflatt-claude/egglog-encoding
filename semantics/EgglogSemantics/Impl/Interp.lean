@@ -669,6 +669,7 @@ def joinOperand (ρ : Env) : Expr → Option Term
   | .lit l => some (.lit l)
   | .var w => Env.lookup w ρ
   | .app _ _ => none
+  | .min _ _ => none
 
 /-- `joinOperand` over an atom's operand list. -/
 def joinKnown (ρ : Env) (es : List Expr) : List (Option Term) := es.map (joinOperand ρ)
@@ -677,7 +678,7 @@ def joinKnown (ρ : Env) (es : List Expr) : List (Option Term) := es.map (joinOp
 may never have built its value, and an atom whose instance the database does not hold is
 checked against a closure this filter does not have. -/
 def joinDrivable (es : List Expr) : Bool :=
-  es.all fun e => match e with | .app _ _ => false | _ => true
+  es.all fun e => match e with | .app _ _ => false | .min _ _ => false | _ => true
 
 /-- Whether a row is consistent with what the operands are known to be: at every determined
 operand, the row's column there is congruent to it. An undetermined operand says nothing,
@@ -916,6 +917,7 @@ private theorem joinKnown_holds {d : FDatabase} {ρ ρ' : Env}
     have hhead : d.holdsAll [y] = true := by
       match e with
       | .app _ _ => simp at hdr
+      | .min _ _ => simp at hdr
       | .lit l =>
         simp only [Expr.eval, Option.some.injEq] at hey
         subst hey
@@ -978,6 +980,7 @@ private theorem joinConsistent_of_congrTuple {cl : Finset (Term × Term)} {d : F
       intro s hs
       match e with
       | .app _ _ => simp [joinOperand] at hs
+      | .min _ _ => simp [joinOperand] at hs
       | .lit l =>
         simp only [joinOperand, Option.some.injEq] at hs
         simp only [Expr.eval, Option.some.injEq] at hey

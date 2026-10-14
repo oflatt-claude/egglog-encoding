@@ -113,15 +113,14 @@ theorem EntryRowsUF.union {d e : FDatabase} (hd : EntryRowsUF d) (he : EntryRows
       hreach.mono fun _ ht => Egglog.FDatabase.mem_terms_union.mpr (Or.inr ht)⟩
 
 /-- The exact single-output collision. Distinct rows at the same key must have distinct
-outputs, so the merge executes its UF write rather than taking the no-change branch. -/
+outputs, so the merge executes its UF writes rather than taking the no-change branch. -/
 theorem mergeOneOriented_single {d e : FDatabase} {cl : Finset (Term × Term)}
     {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hidx : d.IndexOk)
     (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂)
     (run : d.mergeOneOriented cl r₁ r₂ = some e) :
     ∃ old new, r₂.out = [old] ∧ r₁.out = [new] ∧ r₁.fn = r₂.fn ∧
       r₁.args = r₂.args ∧ r₁ ∈ d.rows ∧ r₂ ∈ d.rows ∧ d.sig.mergeOf r₁.fn ≠ none ∧
-      let m := ({ d with env := mergeEnv [old] [new] } : FDatabase).addAtom
-        (.app ufName [upperId old new, lowerId old new])
+      let m := mergeLinks ({ d with env := mergeEnv [old] [new] } : FDatabase) old new
       let m' := m.addTerm (.app r₂.fn (r₂.args ++ [lowerId old new]))
       e = { m' with
         rows := (m'.rows.filter fun r => r ≠ r₁).map (fun r =>
@@ -169,7 +168,8 @@ theorem mergeOneOriented_single {d e : FDatabase} {cl : Finset (Term × Term)}
     next => exact absurd run (by simp)
   next => exact absurd run (by simp)
 
-/-- Both displaced outputs reach the row that the collision leaves at their shared key. -/
+/-- Both displaced outputs reach the row that the collision leaves at their shared key:
+each is linked to the smaller id by its own recorded entry. -/
 theorem mergeOneOriented_survivorUF {d e : FDatabase} {cl : Finset (Term × Term)}
     {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hidx : d.IndexOk)
     (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂)
@@ -179,19 +179,15 @@ theorem mergeOneOriented_survivorUF {d e : FDatabase} {cl : Finset (Term × Term
       UFReach e old v ∧ UFReach e new v := by
   obtain ⟨old, new, hold, hnew, hfn, hargs, hm₁, hm₂, hmg, he⟩ :=
     mergeOneOriented_single hshape hidx hcl hne run
-  have hedge : UFStep e (upperId old new) (lowerId old new) := by
-    rw [he]
-    exact FDatabase.mem_addTerm_of_mem (Egglog.FDatabase.mem_addTerm_terms.mpr
-      (Or.inl ((Term.mem_subtermList _).mpr (Term.self_mem_subterms _))))
-  have hedge' : UFReach e (upperId old new) (lowerId old new) := .single hedge
+  have hlinks := mergeLinks_links ({ d with env := mergeEnv [old] [new] } : FDatabase) old new
   have hreach : UFReach e old (lowerId old new) ∧ UFReach e new (lowerId old new) := by
-    rcases ids_paired old new with ⟨hu, hl⟩ | ⟨hu, hl⟩
-    · exact ⟨by rw [hu] at hedge'; exact hedge', by rw [hl]; exact .refl⟩
-    · exact ⟨by rw [hl]; exact .refl, by rw [hu] at hedge'; exact hedge'⟩
+    rw [he]
+    exact ⟨.single (FDatabase.mem_addTerm_of_mem hlinks.1),
+      .single (FDatabase.mem_addTerm_of_mem hlinks.2)⟩
   refine ⟨old, new, lowerId old new, hold, hnew, hfn, hargs, ?_, hreach⟩
   rw [he]
   refine List.mem_map.mpr ⟨r₂, List.mem_filter.mpr ⟨?_, by simpa using hne.symm⟩, by simp⟩
-  exact Egglog.FDatabase.mem_addTerm_rows.mpr (Or.inr (mem_addAtom_rows hm₂))
+  exact Egglog.FDatabase.mem_addTerm_rows.mpr (Or.inr (mem_rows_of_mergeLinks hm₂))
 
 theorem mergeOneOriented_rowsCarryUF {cl : Finset (Term × Term)} {d e : FDatabase}
     {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hidx : d.IndexOk)
@@ -212,8 +208,8 @@ theorem mergeOneOriented_rowsCarryUF {cl : Finset (Term × Term)} {d e : FDataba
       exact ⟨v, by rw [hf, hc]; exact hrow, by rw [hx]; exact hov⟩
     · exact ⟨x, mem_rows_of_mergeOneOriented run hm h₁ h₂, .refl⟩
 
-/-- The survivor's term was already an input. The only potentially new entry is the UF
-edge; if its row coincides with a collided row, its term was already recorded as well. -/
+/-- The survivor's term was already an input. The only potentially new entries are the two
+UF links; if a link's row coincides with a collided row, its term was already recorded. -/
 theorem mergeOneOriented_newEntryRow {d e : FDatabase} {cl : Finset (Term × Term)}
     {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hr : d.EqsRefl) (hsc : d.SubtermClosed)
     (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂)
@@ -235,48 +231,60 @@ theorem mergeOneOriented_newEntryRow {d e : FDatabase} {cl : Finset (Term × Ter
     split
     · simpa only [hnew, hfn, hargs] using ht₁
     · simpa only [hold] using ht₂
-  have hcols : ∀ t ∈ [upperId old new, lowerId old new], t ∈ d.terms := by
-    intro t ht
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
-    rcases ht with rfl | rfl
-    · unfold upperId; split <;> assumption
-    · unfold lowerId; split <;> assumption
+  have hlow : lowerId old new ∈ d.terms := by unfold lowerId; split <;> assumption
   intro f dc hdc body res hmerge cs x hlen hmem
+  -- One link `(@uf a m)` with `a` held: either the sought entry was held, or it is this
+  -- link's own row, which the collision neither removes nor replaces.
+  have hlink : ∀ a ∈ [old, new], Term.app f (cs ++ [x]) ∈
+        (Term.app ufName [a, lowerId old new]).subtermList →
+      Term.app f (cs ++ [x]) ∈ d.terms ∨
+        ∃ v, (⟨f, cs, [v]⟩ : Row) ∈ e.rows ∧ UFReach e x v := by
+    intro a hamem hm
+    have ha : a ∈ d.terms := by
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hamem
+      rcases hamem with rfl | rfl <;> assumption
+    have hcols : ∀ t ∈ [a, lowerId old new], t ∈ d.terms := by
+      intro t ht
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
+      rcases ht with rfl | rfl <;> assumption
+    by_cases ht : Term.app f (cs ++ [x]) = Term.app ufName [a, lowerId old new]
+    · by_cases hheld : Term.app ufName [a, lowerId old new] ∈ d.terms
+      · exact Or.inl (ht ▸ hheld)
+      · obtain ⟨rfl, hcol⟩ := Term.app.inj ht
+        obtain ⟨rfl, hx⟩ := List.append_inj'
+          (show cs ++ [x] = [a] ++ [lowerId old new] from hcol) rfl
+        obtain rfl : x = lowerId old new := by simpa using hx
+        let u : Row := ⟨ufName, [a], [lowerId old new]⟩
+        have hu₁ : u ≠ r₁ := by
+          intro hu
+          apply hheld
+          have hterm := congrArg (fun r : Row => Term.app r.fn (r.args ++ r.out)) hu
+          exact hterm.symm ▸ ht₁
+        have hu₂ : u ≠ r₂ := by
+          intro hu
+          apply hheld
+          have hterm := congrArg (fun r : Row => Term.app r.fn (r.args ++ r.out)) hu
+          exact hterm.symm ▸ ht₂
+        refine Or.inr ⟨lowerId old new, ?_, .refl⟩
+        rw [he]
+        refine List.mem_map.mpr ⟨u, List.mem_filter.mpr ⟨?_, by simpa using hu₁⟩,
+          by simp [hu₂, u]⟩
+        apply Egglog.FDatabase.mem_addTerm_rows.mpr
+        apply Or.inr
+        have hrows := mergeLinks_rows (d := { d with env := mergeEnv [old] [new] })
+          hdc (by simp [hmerge]) (by simpa using hlen.symm)
+          (hshape _ dc hdc body res hmerge).2.2.2.1 old new
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hamem
+        rcases hamem with rfl | rfl
+        · exact hrows.1
+        · exact hrows.2
+    · exact Or.inl (FDatabase.subterms_of_columns hsc hcols _ hm ht)
   rw [he] at hmem
   rcases Egglog.FDatabase.mem_addTerm_terms.mp hmem with hm | hm
   · exact Or.inl (hsc _ hsurv _ hm)
-  · rcases Egglog.FDatabase.mem_addTerm_terms.mp hm with hm | hm
-    · by_cases ht : Term.app f (cs ++ [x]) =
-          Term.app ufName [upperId old new, lowerId old new]
-      · by_cases hheld : Term.app ufName [upperId old new, lowerId old new] ∈ d.terms
-        · exact Or.inl (ht ▸ hheld)
-        · obtain ⟨rfl, hcol⟩ := Term.app.inj ht
-          obtain ⟨rfl, hx⟩ := List.append_inj'
-            (show cs ++ [x] = [upperId old new] ++ [lowerId old new] from hcol) rfl
-          obtain rfl : x = lowerId old new := by simpa using hx
-          let u : Row := ⟨ufName, [upperId old new], [lowerId old new]⟩
-          have hu₁ : u ≠ r₁ := by
-            intro hu
-            apply hheld
-            have hterm := congrArg (fun r : Row => Term.app r.fn (r.args ++ r.out)) hu
-            exact hterm.symm ▸ ht₁
-          have hu₂ : u ≠ r₂ := by
-            intro hu
-            apply hheld
-            have hterm := congrArg (fun r : Row => Term.app r.fn (r.args ++ r.out)) hu
-            exact hterm.symm ▸ ht₂
-          refine Or.inr ⟨lowerId old new, ?_, .refl⟩
-          rw [he]
-          refine List.mem_map.mpr ⟨u, List.mem_filter.mpr ⟨?_, by simpa using hu₁⟩,
-            by simp [hu₂, u]⟩
-          apply Egglog.FDatabase.mem_addTerm_rows.mpr
-          apply Or.inr
-          have hatom := Egglog.FDatabase.addAtom_eq_addRow
-            (d := { d with env := mergeEnv [old] [new] })
-            (vs := [lowerId old new]) hdc (by simp [hmerge]) hlen
-            (by simp [(hshape _ dc hdc body res hmerge).2.2.2.1])
-          exact (congrArg FDatabase.rows hatom).symm ▸ (by simp [FDatabase.addRow, u])
-      · exact Or.inl (FDatabase.subterms_of_columns hsc hcols _ hm ht)
+  · rcases mem_terms_mergeLinks.mp hm with hm | hm | hm
+    · exact hlink new (by simp) hm
+    · exact hlink old (by simp) hm
     · exact Or.inl hm
 
 /-- Merging preserves the retained-entry/live-row bridge. -/

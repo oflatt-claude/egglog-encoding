@@ -1,7 +1,7 @@
 import EgglogSemantics.Spec.Syntax
 import EgglogSemantics.Spec.Term
 
-/-! Names and ordering expressions shared by the encoding passes. -/
+/-! Names shared by the encoding passes. -/
 
 namespace Egglog
 
@@ -25,32 +25,6 @@ def viewName (f : FnName) : FnName := "@" ++ f ++ "View"
 
 /-- The `n`th generated variable. -/
 def freshVar (n : Nat) : Var := "@v" ++ toString n
-
-/-! ### Ordering expressions -/
-
-/-- `(ordering-gt x y)`: egglog's value ordering, `y < x`. -/
-def gtE (x y : Expr) : Expr := .app "ordering-gt" [x, y]
-
-/-- `(if c a b)`: strict three-way selection. -/
-def ifE (c a b : Expr) : Expr := .app "if" [c, a, b]
-
-/-- `(ordering-max x y)`, egglog's tie-break: `x` when `x > y`, else `y`. -/
-def maxE (x y : Expr) : Expr := ifE (gtE x y) x y
-
-/-- `(ordering-min x y)`: `y` when `x > y`, else `x`. -/
-def minE (x y : Expr) : Expr := ifE (gtE x y) y x
-
-theorem Prim.ofName_of_atPrefix {f : FnName} (h : "@".isPrefixOf f = true) :
-    Prim.ofName f = none := by
-  unfold Prim.ofName
-  split <;> simp_all [show "@".isPrefixOf "ordering-gt" = false from by decide +kernel,
-    show "@".isPrefixOf "min" = false from by decide +kernel,
-    show "@".isPrefixOf "max" = false from by decide +kernel,
-    show "@".isPrefixOf "if" = false from by decide +kernel]
-
-@[simp] theorem prim_viewName (f : FnName) : Prim.ofName (viewName f) = none :=
-  Prim.ofName_of_atPrefix (by
-    simp [viewName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
 
 /-- View names identify their source constructors uniquely. -/
 theorem viewName_inj {f g : FnName} (h : viewName f = viewName g) : f = g := by

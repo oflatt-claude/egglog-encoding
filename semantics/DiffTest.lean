@@ -474,18 +474,18 @@ of keys that makes two rows collide. See `MERGE.md` for the model's limits. -/
 
 private def dist (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
+    merge := some (.merge [] [.min (.var "old") (.var "new")]) }
 
 private def distMax (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [] [.app "max" [.var "old", .var "new"]]) }
+    merge := some (.merge [] [.min (.var "new") (.var "old")]) }
 
 
 /-- A block with an observable execution marker and a primitive result. -/
-private def distBlock (n : Nat) (op : FnName) : FnDecl :=
+private def distBlock (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
     merge := some (.merge [.union (C "Tick") (C "Tick")]
-      [.app op [.var "old", .var "new"]]) }
+      [.min (.var "old") (.var "new")]) }
 
 /-- `:merge old` / `:merge new`, the two merges no commutative one can distinguish. `old`
 is the value already in the table and `new` the one being inserted — which row that is, at
@@ -537,8 +537,8 @@ does not have. -/
 `(function Dist (Math…) (i64 i64) :merge (values (min old0 new0) (max old1 new1)))`. -/
 private def distPair (n : Nat) : FnDecl :=
   { arity := n, outArity := 2,
-    merge := some (.merge [] [.app "min" [.var "old0", .var "new0"],
-                              .app "max" [.var "old1", .var "new1"]]) }
+    merge := some (.merge [] [.min (.var "old0") (.var "new0"),
+                              .min (.var "new1") (.var "old1")]) }
 
 private def pset (f : FnName) (args : List Expr) (v w : Int) : Cmd :=
   .action (.expr (.app f (args ++ [num v, num w])))
@@ -644,23 +644,14 @@ private def readIntoW (hit f : FnName) (key : List Expr) (vs : List Int) : Rule 
   actions := [.expr (.app hit key)]
   ruleset := ""
 
-/-! ### Primitives outside a `:merge` body
+/-! ### `min` outside a `:merge` body
 
-Every primitive application in the suite used to sit inside a `:merge` body, and that was
-not a choice about coverage — the emitter could not render one anywhere else. `fnArities`
-declared every applied name as a constructor, so a program applying `min` in an action
-emitted `(constructor min (Math Math) Math)` and egglog answered `Primitive min already
-declared.` before running a line of it. None of `writeCase`'s four guards caught it, since
-none of them is about the declarations.
+`(set (Dist (K)) (min 5 3))` is an `i64` expression in a value column, which is where
+`tests/interval.egg` puts one too.
 
-With `Prim.ofName` filtered out of `fnArities` the whole position opens up, and it is
-ordinary egglog: `(set (Dist (K)) (min 5 3))` is an `i64` expression in a value column,
-which is where `tests/interval.egg` puts one too.
-
-**What the oracle sees.** `min` and `max` are the one place the model *computes* rather
-than *builds* (`Prim.apply` against `Expr.eval`'s constructor case), so the three ways to
-get this wrong are to build the term `min(5, 3)`, to compute the wrong operation, or to
-compute nothing.
+**What the oracle sees.** `min` is the one place the model *computes* rather than
+*builds*, so the three ways to get this wrong are to build the term `min(5, 3)`, to compute
+the wrong value, or to compute nothing.
 Each case reads the answer back at a literal and builds `Hit`, and reads the operand that
 must have lost and builds `Miss`: building a term or getting stuck gives `Hit 0, Miss 0`,
 and computing `max` for `min` gives `Hit 0, Miss 1`. -/
@@ -674,7 +665,7 @@ the two engines are not obliged to agree on, so the *combination* has to be
 order-insensitive for the value read to mean anything. -/
 private def logDecl : FnDecl :=
   { arity := 1, outArity := 1,
-    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
+    merge := some (.merge [] [.min (.var "old") (.var "new")]) }
 
 /-- A merge that logs one of the colliding values into `Log` and returns the other. -/
 private def distLog (n : Nat) (logged kept : String) : FnDecl :=
@@ -690,8 +681,8 @@ private def distUnion (n : Nat) (kept : String) : FnDecl :=
 
 private def distInlineLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.expr (.app "Log" [C "L", .app "min" [.var "old", .var "new"]])]
-                         [.app "min" [.var "old", .var "new"]]) }
+    merge := some (.merge [.expr (.app "Log" [C "L", .min (.var "old") (.var "new")])]
+                         [.min (.var "old") (.var "new")]) }
 
 /-- Seeds `W` at both operands of a body's `union`, so that `W`'s row count falls from 2 to
 1 exactly when the body runs. -/
@@ -728,8 +719,8 @@ divergence (`Tests/Egg.lean`, `FnDecl.toEgg`). Missing feature, not untested pat
 is load-bearing. -/
 private def distTriple (n : Nat) : FnDecl :=
   { arity := n, outArity := 3,
-    merge := some (.merge [] [.app "min" [.var "old0", .var "new0"],
-                              .app "max" [.var "old1", .var "new1"],
+    merge := some (.merge [] [.min (.var "old0") (.var "new0"),
+                              .min (.var "new1") (.var "old1"),
                               .var "old2"]) }
 
 private def tset (f : FnName) (args : List Expr) (vs : List Int) : Cmd :=
@@ -774,11 +765,11 @@ private def curatedMerge : List (String × Program) :=
        mset "Dist" [C "A"] 1]),
     -- `min-one` with the merge written as an action block, which is a different parse.
     ("min-block",
-      [.decl "Dist" (distBlock 1 "min"), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
+      [.decl "Dist" (distBlock 1), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
        mset "Dist" [C "A"] 7]),
     -- An action block resolving a collision the keys only acquire through a union.
-    ("max-block-rebuild",
-      [.decl "Dist" (distBlock 2 "max"),
+    ("min-block-rebuild",
+      [.decl "Dist" (distBlock 2),
        mset "Dist" [C "X", C "Y"] 1, mset "Dist" [C "A", C "B"] 2,
        .action (.union (C "A") (C "X")), .action (.union (C "B") (C "Y")), .run ""]),
     -- `:no-merge`, with keys kept distinct so no collision is ever attempted.
@@ -970,44 +961,30 @@ private def curatedMerge : List (String × Program) :=
        .action (.union (C "B") (C "A")), .action (.union (C "C") (C "A")),
        .rule (readInto "Hit" "Dist" [C "A"] 1), .rule (readInto "Miss" "Dist" [C "A"] 2),
        .run ""]),
-    -- **Primitives outside a `:merge` body.** `min` in a top-level `set`'s value column.
-    -- `Hit 1, Miss 0` says the model computed `3`; building the term `min(5, 3)` or getting
-    -- stuck gives `0, 0` and computing `max` gives `0, 1`.
-    ("prim-set-min",
+    -- **`min` outside a `:merge` body**, in a top-level `set`'s value column.
+    -- `Hit 1, Miss 0` says the model computed `3`; building a term or getting stuck gives
+    -- `0, 0`.
+    ("min-set",
       [.decl "Dist" (dist 1),
-       .action (.expr (.app "Dist" [C "K", .app "min" [num 5, num 3]])),
+       .action (.expr (.app "Dist" [C "K", .min (num 5) (num 3)])),
        .rule (readInto "Hit" "Dist" [C "K"] 3), .rule (readInto "Miss" "Dist" [C "K"] 5),
        .run ""]),
-    -- The same with `max`, so the two markers swap: a model computing `min` for `max`
-    -- is caught here even though it passes `prim-set-min`.
-    ("prim-set-max",
+    -- Nested: `(min (min 5 3) 4)` is `3`, so the operand list itself has to be evaluated
+    -- before the outer `min` applies. `Miss` reads `4`, the value a wrong inner `min` would
+    -- leave.
+    ("min-nested",
       [.decl "Dist" (dist 1),
-       .action (.expr (.app "Dist" [C "K", .app "max" [num 5, num 3]])),
-       .rule (readInto "Hit" "Dist" [C "K"] 5), .rule (readInto "Miss" "Dist" [C "K"] 3),
+       .action (.expr (.app "Dist" [C "K", .min (.min (num 5) (num 3)) (num 4)])),
+       .rule (readInto "Hit" "Dist" [C "K"] 3), .rule (readInto "Miss" "Dist" [C "K"] 4),
        .run ""]),
-    -- Nested: `(min (max 5 3) 4)` is `4`, so the operand list itself has to be evaluated
-    -- through the argument list before the outer primitive applies. `Miss` reads `5`, the value
-    -- an unevaluated inner application would have left.
-    ("prim-nested",
-      [.decl "Dist" (dist 1),
-       .action (.expr (.app "Dist" [C "K", .app "min" [.app "max" [num 5, num 3], num 4]])),
-       .rule (readInto "Hit" "Dist" [C "K"] 4), .rule (readInto "Miss" "Dist" [C "K"] 5),
-       .run ""]),
-    -- and avoids its "Global `g` should start with `$`" warning.
-    ("prim-repeat",
-      [.decl "Dist" (dist 1),
-       .action (.expr (.app "min" [num 7, num 2])),
-       .action (.expr (.app "Dist" [C "K", .app "min" [num 7, num 2]])),
-       .rule (readInto "Hit" "Dist" [C "K"] 2), .rule (readInto "Miss" "Dist" [C "K"] 7),
-       .run ""]),
-    -- A primitive in a **rule head**, which is the position `Rule.noLookup` polices and so
-    -- the one most likely to be rejected by mistake. Two rounds: the first fires the write,
-    -- the second reads it back.
-    ("prim-rule-head",
+    -- A `min` in a **rule head**, which is the position `Rule.noLookup` polices and so the
+    -- one most likely to be rejected by mistake. Two rounds: the first fires the write, the
+    -- second reads it back.
+    ("min-rule-head",
       [.decl "Dist" (dist 1), seedF,
        .rule ⟨[.expr (.app "F" [.var "a"])],
-              [.expr (.app "Dist" [.var "a", .app "max" [num 5, num 3]])], ""⟩,
-       .rule (readInto "Hit" "Dist" [C "A"] 5), .rule (readInto "Miss" "Dist" [C "A"] 3),
+              [.expr (.app "Dist" [.var "a", .min (num 5) (num 3)])], ""⟩,
+       .rule (readInto "Hit" "Dist" [C "A"] 3), .rule (readInto "Miss" "Dist" [C "A"] 5),
        .run "", .run ""]),
     -- **A `:merge` body that writes.** The body logs `old` into a side table and returns
     -- `new`. `L 1` and `Log 1` say the body ran at all — both names occur nowhere else —
@@ -1202,7 +1179,7 @@ private def genCombiner (w i : Nat) (s : Nat) : Expr × Nat :=
   match j with
   | 0 => (oldAt w i, s)
   | 1 => (newAt w i, s)
-  | k => (.app (if k == 2 then "min" else "max") [oldAt w i, newAt w i], s)
+  | k => (if k == 2 then .min (oldAt w i) (newAt w i) else .min (newAt w i) (oldAt w i), s)
 
 /-- A combiner per value column of a width-`w` output — columns `w - k` through `w - 1`,
 so a call at `k = w` fills the whole tuple from column 0. -/
@@ -1237,17 +1214,16 @@ private def specUnions : MergeSpec → Bool
     | _ => false
   | _ => false
 
-/-- One value column: a literal, or `min`/`max` applied to two of them, together with the
-integer it denotes.
+/-- One value column: a literal, or `min` applied to two of them in either order, together
+with the integer it denotes.
 
-This is where the random stream gets a primitive **outside** a `:merge` body — a value
-column of a top-level `set` and of a rule head's, which is where `tests/interval.egg` puts
-one too. `min` and `max` are the one place the model *computes* rather than *builds*
-(`Prim.apply` against `Expr.eval`'s constructor case), and returning the denotation beside
-the expression is what makes that observable: `witnessRule` reads the row back at the
-literal the primitive must produce, so a model that built the term `min(5, 3)`, computed
-the other operation, or got stuck writes something the read cannot find and `Won` falls to
-0. Getting stuck is louder still — `expectedSizes` prints `STUCK`. -/
+This is where the random stream gets a `min` **outside** a `:merge` body — a value column
+of a top-level `set` and of a rule head's, which is where `tests/interval.egg` puts one
+too. `min` is the one place the model *computes* rather than *builds*, and returning the
+denotation beside the expression is what makes that observable: `witnessRule` reads the
+row back at the literal it must produce, so a model that built the term `min(5, 3)`,
+computed the wrong value, or got stuck writes something the read cannot find and `Won`
+falls to 0. Getting stuck is louder still — `expectedSizes` prints `STUCK`. -/
 private def genValue (s : Nat) : Expr × Int × Nat :=
   let (i, s) := pick 4 s
   let (a, s) := pick 9 s
@@ -1256,8 +1232,8 @@ private def genValue (s : Nat) : Expr × Int × Nat :=
   else
     let (b, s) := pick 9 s
     let y : Int := b
-    if i == 2 then (.app "min" [num x, num y], min x y, s)
-    else (.app "max" [num x, num y], max x y, s)
+    if i == 2 then (.min (num x) (num y), min x y, s)
+    else (.min (num y) (num x), min x y, s)
 
 /-- `n` value columns, each with the integer it denotes. -/
 private def genValues : Nat → Nat → List (Expr × Int) × Nat
@@ -1447,9 +1423,9 @@ private def allCases : List (String × Program) :=
 set_option linter.hashCommand false in
 #guard curated.length = 27
 set_option linter.hashCommand false in
-#guard curatedMerge.length = 66
+#guard curatedMerge.length = 64
 set_option linter.hashCommand false in
-#guard allCases.length = 183
+#guard allCases.length = 181
 
 /-! Three cases small enough to pin the encoding's behaviour at compile time. None has a
 rule, so none runs the enumerator, whose cost is `|terms| ^ |vars|`. -/
@@ -1669,6 +1645,7 @@ theorem Expr.memVarB_iff (v : Var) : ∀ args : List Expr,
         Expr.memVarB_iff v es]
       exact or_congr_left eq_comm
   | .app _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
+  | .min _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
 
 mutual
 
@@ -1677,6 +1654,7 @@ def Expr.argVarB (v : Var) : Expr → Bool
   | .lit _ => false
   | .var _ => false
   | .app _ args => Expr.memVarB v args || Expr.argVarListB v args
+  | .min a b => Expr.argVarB v a || Expr.argVarB v b
 
 /-- `Expr.ArgVarList`, computed. -/
 def Expr.argVarListB (v : Var) : List Expr → Bool
@@ -1693,6 +1671,9 @@ theorem Expr.argVarB_iff (v : Var) : ∀ e : Expr, Expr.argVarB v e = true ↔ E
   | .app _ args => by
       simp only [Expr.argVarB, Expr.ArgVar, Bool.or_eq_true, Expr.memVarB_iff,
         Expr.argVarListB_iff v args]
+  | .min a b => by
+      simp only [Expr.argVarB, Expr.ArgVar, Bool.or_eq_true, Expr.argVarB_iff v a,
+        Expr.argVarB_iff v b]
 
 theorem Expr.argVarListB_iff (v : Var) : ∀ es : List Expr,
     Expr.argVarListB v es = true ↔ Expr.ArgVarList v es
@@ -1711,7 +1692,7 @@ def Pattern.argVarB (v : Var) : Pattern → Bool
 theorem Pattern.argVarB_iff (v : Var) (p : Pattern) :
     p.argVarB v = true ↔ Pattern.ArgVar v p := by
   cases p <;>
-    simp [Pattern.argVarB, Pattern.ArgVar, Expr.argVarB_iff, Expr.argVarListB_iff]
+    simp [Pattern.argVarB, Pattern.ArgVar, Expr.argVarB_iff]
 
 /-- `Query.VarsKeyed`, computed. -/
 def Query.varsKeyedB (q : Query) : Bool :=
@@ -1738,7 +1719,7 @@ those three conjuncts are `decide` of the clause itself; `EncodeDomain.noLitUnio
 at the source. -/
 def Program.encodeDomainB (p : Program) : Bool :=
   p.all Cmd.ctorDeclB && decide (Program.SetLegal p (fun _ => none))
-    && p.ctors.all (fun fk => (Prim.ofName fk.1).isNone)
+    && decide (Program.OrderingFree p)
     && p.names.all (fun n => !"@".isPrefixOf n)
     && p.all Cmd.queryEncodableB
     && (p.all Cmd.ruleUnionFreeB || p.all Cmd.litFreeB)
@@ -1750,12 +1731,12 @@ def Program.encodeDomainB (p : Program) : Bool :=
 theorem Program.encodeDomainB_iff (p : Program) :
     p.encodeDomainB = true ↔ p.EncodeDomain := by
   simp only [Program.encodeDomainB, Bool.and_eq_true, Bool.or_eq_true, List.all_eq_true,
-    Cmd.ctorDeclB_iff, Cmd.queryEncodableB_iff, Option.isNone_iff_eq_none,
+    Cmd.ctorDeclB_iff, Cmd.queryEncodableB_iff,
     Bool.not_eq_eq_eq_not, Bool.not_true, Bool.eq_false_iff, ne_eq, decide_eq_true_eq,
     List.isEmpty_iff]
   exact ⟨fun h => ⟨h.1.1.1.1.1.1.1.1, h.1.1.1.1.1.1.1.2, h.1.1.1.1.1.1.2, h.1.1.1.1.1.2,
       h.1.1.1.1.2, h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩,
-    fun h => ⟨⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noPrim⟩, h.noAt⟩, h.queryEncodable⟩,
+    fun h => ⟨⟨⟨⟨⟨⟨⟨⟨h.ctorsOnly, h.setLegal⟩, h.noMin⟩, h.noAt⟩, h.queryEncodable⟩,
       h.noLitUnion⟩, h.headsDeclared⟩, h.aritiesAgree⟩, h.headsScoped⟩⟩
 
 /-! #### Running the compiled program
@@ -1903,9 +1884,12 @@ private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : Lis
   let rows := annotated.rows.filterMap (Provenance.eraseRow C.sig)
   if rows.toFinset != original.rows.toFinset then
     errors := errors ++ ["projected live rows differ"]
-  let terms := annotated.terms.filterMap (Provenance.eraseFact C.sig)
-  if terms.toFinset != original.terms.toFinset then
-    errors := errors ++ ["projected retained facts differ"]
+  -- The live rows are compared above. The term history also holds superseded rows, and
+  -- it is path-dependent once a merge can rewrite a row for its proof alone, so only the
+  -- values built are compared.
+  let values := annotated.terms.filter (SourceProof.valueOk C.sig)
+  if values.toFinset != (original.terms.filter (SourceProof.valueOk C.sig)).toFinset then
+    errors := errors ++ ["built values differ"]
   let proofs := Provenance.retainedRows C.sig annotated.terms
   let bad := proofs.filter fun r =>
     if liftProofs then (Resugar.extractRow p r).isNone else (Provenance.extractRow q r).isNone

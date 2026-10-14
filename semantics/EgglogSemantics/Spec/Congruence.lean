@@ -43,7 +43,7 @@ def Database.DeclaredTerms (db : Database) : Prop :=
 
 /-- No asserted equation puts a literal beside anything but itself: `evalAction` refuses a
 `union` on a literal and `addTerm` writes only reflexive pairs. `Cong.eq_of_isLit` reads it
-back as "a literal's class is a singleton", which is what makes `Prim.apply` stable. -/
+back as "a literal's class is a singleton", which is what makes `min` on literals stable. -/
 def Database.LitsIsolated (db : Database) : Prop :=
   ∀ p ∈ db.eqs, p.1.isLit ∨ p.2.isLit → p.1 = p.2
 

@@ -28,6 +28,9 @@ namespace Expr
 @[simp] theorem freeVars_app {f : FnName} {args : List Expr} {σ : Env} :
     (Expr.app f args).freeVars σ = Expr.freeVarsList args σ := rfl
 
+@[simp] theorem freeVars_min {a b : Expr} {σ : Env} :
+    (Expr.min a b).freeVars σ = a.freeVars σ ∪ b.freeVars σ := rfl
+
 @[simp] theorem freeVarsList_nil {σ : Env} : Expr.freeVarsList [] σ = [] := rfl
 
 @[simp] theorem freeVarsList_cons {e : Expr} {es : List Expr} {σ : Env} :
@@ -75,6 +78,10 @@ theorem Expr.mem_freeVars {σ : Env} {v : Var} (e : Expr) :
       subst h
       exact hw
   | .app _ args => exact Expr.mem_freeVarsList args
+  | .min a b =>
+    rw [Expr.freeVars_min, Expr.vars_min, List.mem_union_iff, List.mem_union_iff,
+      Expr.mem_freeVars a, Expr.mem_freeVars b]
+    tauto
 
 theorem Expr.mem_freeVarsList {σ : Env} {v : Var} (es : List Expr) :
     v ∈ Expr.freeVarsList es σ ↔ v ∈ Expr.varsList es ∧ v ∉ Env.dom σ := by
@@ -118,6 +125,7 @@ theorem Expr.freeVars_nodup (e : Expr) (σ : Env) : (e.freeVars σ).Nodup := by
     | none => rw [Expr.freeVars_var_of_none hlk]; simp
     | some t => rw [Expr.freeVars_var_of_some hlk]; simp
   | .app _ args => exact Expr.freeVarsList_nodup args σ
+  | .min a b => exact List.Nodup.union _ (Expr.freeVars_nodup b σ)
 
 theorem Expr.freeVarsList_nodup (es : List Expr) (σ : Env) :
     (Expr.freeVarsList es σ).Nodup := by

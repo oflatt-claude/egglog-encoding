@@ -22,7 +22,7 @@ theorem evalList_vars_held {d : FDatabase} (hw : d.Inv) :
 
 /-- A flat head using bound variables only adds an entry over already held columns. -/
 theorem execLocalActions_vars_entryRowsUF {d d' : FDatabase} {q : Query} {σ : Env}
-    {f : FnName} {cols : List Expr} (hp : Prim.ofName f = none)
+    {f : FnName} {cols : List Expr}
     (hv : ∀ c ∈ cols, ∃ v, c = Expr.var v)
     (hi : d.Inv) (hshape : MergeShape d.sig) (h : EntryRowsUF d)
     (hσ : σ ∈ matchQuery d q)
@@ -30,7 +30,7 @@ theorem execLocalActions_vars_entryRowsUF {d d' : FDatabase} {q : Query} {σ : E
   obtain ⟨m, hm, rfl⟩ := Option.map_eq_some_iff.mp run
   have hm' : execAction { d with env := σ ++ d.env } (.expr (.app f (cols ++ []))) =
       some m := by simpa [execActions] using hm
-  obtain ⟨ts, vs, hts, hvs, rfl⟩ := execAction_entry hp hm'
+  obtain ⟨ts, vs, hts, hvs, rfl⟩ := execAction_entry hm'
   obtain rfl : vs = [] := (Option.some.inj hvs).symm
   have hcols := evalList_vars_held (hi.setEnvMatch hσ) cols hv hts
   have hsc := Egglog.FDatabase.SubtermClosed.of_wf hi.wf
@@ -39,7 +39,7 @@ theorem execLocalActions_vars_entryRowsUF {d d' : FDatabase} {q : Query} {σ : E
 
 /-- Maintenance either compresses UF paths or writes another table over held variables. -/
 def MaintenanceHead (r : Rule) : Prop :=
-  ∃ f cols, r.actions = [.expr (.app f cols)] ∧ Prim.ofName f = none ∧
+  ∃ f cols, r.actions = [.expr (.app f cols)] ∧
     (∀ c ∈ cols, ∃ v, c = Expr.var v) ∧
     (f ≠ ufName ∨ r.query = pathCompressRule.query ∧ r.actions = pathCompressRule.actions)
 
@@ -50,7 +50,7 @@ private theorem rebuildVars_areVars (k : Nat) :
   exact ⟨_, rfl⟩
 
 private theorem eclass_headShape (f : FnName) (k : Nat) : MaintenanceHead (eclassRule f k) := by
-  refine ⟨viewName f, _, rfl, prim_viewName f, ?_, Or.inl viewName_ne_ufName⟩
+  refine ⟨viewName f, _, rfl, ?_, Or.inl viewName_ne_ufName⟩
   intro c hc
   rcases List.mem_append.mp hc with hc | hc
   · exact rebuildVars_areVars k c hc
@@ -58,7 +58,7 @@ private theorem eclass_headShape (f : FnName) (k : Nat) : MaintenanceHead (eclas
 
 private theorem child_headShape (f : FnName) (k i : Nat) :
     MaintenanceHead (childRule f k i) := by
-  refine ⟨viewName f, _, rfl, prim_viewName f, ?_, Or.inl viewName_ne_ufName⟩
+  refine ⟨viewName f, _, rfl, ?_, Or.inl viewName_ne_ufName⟩
   intro c hc
   rcases List.mem_append.mp hc with hc | hc
   · rcases mem_or_eq_of_mem_set hc with hc | rfl
@@ -72,7 +72,7 @@ private theorem maintenanceRules_headShape (P : Program) :
   simp only [maintenanceRules, List.mem_cons, List.mem_flatMap] at hc
   rcases hc with rfl | ⟨⟨f, k⟩, _, hc⟩
   · obtain rfl : pathCompressRule = r := Cmd.rule.inj hr
-    refine ⟨ufName, _, rfl, rfl, ?_, Or.inr ⟨rfl, rfl⟩⟩
+    refine ⟨ufName, _, rfl, ?_, Or.inr ⟨rfl, rfl⟩⟩
     intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
     rcases hc with rfl | rfl <;> exact ⟨_, rfl⟩
@@ -101,8 +101,8 @@ theorem maintenance_entryRowsUF {P : Program} {c : Command}
     {d d' : FDatabase} {σ : Env} (hi : d.Inv) (hshape : MergeShape d.sig) (h : EntryRowsUF d)
     (hσ : σ ∈ matchQuery d r.query) (run : execLocalActions d r.actions σ = some d') :
     EntryRowsUF d' := by
-  obtain ⟨f, cols, ha, hp, hv, _⟩ := maintenance_headShape hc hr
+  obtain ⟨f, cols, ha, hv, _⟩ := maintenance_headShape hc hr
   rw [ha] at run
-  exact execLocalActions_vars_entryRowsUF hp hv hi hshape h hσ run
+  exact execLocalActions_vars_entryRowsUF hv hi hshape h hσ run
 
 end Egglog.Congruence

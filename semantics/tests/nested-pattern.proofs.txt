@@ -1,4 +1,11 @@
-(H (A)) = (F (G (A)))  symm
+(F (G (A))) = (H (A))  trans
+  (F (G (A))) = (F (G (A)))  symm
+    (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
   (F (G (A))) = (H (A))  trans
     (F (G (A))) = (H (A))  symm
       (H (A)) = (F (G (A)))  rule 5 {x := (A)}
@@ -13,6 +20,207 @@
         (G (A)) = (G (A))  congr 0
           (G (A)) = (G (A))  fiat
           (A) = (A)  fiat
+
+(F (G (A))) = (F (G (A)))  trans
+  (F (G (A))) = (F (G (A)))  symm
+    (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+  (F (G (A))) = (F (G (A)))  fiat
+
+(H (A)) = (F (G (A)))  trans
+  (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+  (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+
+(F (G (A))) = (F (G (A)))  trans
+  (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+  (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+
+(F (G (A))) = (H (A))  trans
+  (F (G (A))) = (F (G (A)))  symm
+    (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+  (F (G (A))) = (H (A))  trans
+    (F (G (A))) = (H (A))  symm
+      (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
+    (H (A)) = (H (A))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+
+(H (A)) = (F (G (A)))  symm
+  (F (G (A))) = (H (A))  trans
+    (F (G (A))) = (F (G (A)))  symm
+      (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
+    (F (G (A))) = (H (A))  trans
+      (F (G (A))) = (H (A))  symm
+        (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+          (F (G (A))) = (F (G (A)))  congr 0
+            (F (G (A))) = (F (G (A)))  fiat
+            (G (A)) = (G (A))  congr 0
+              (G (A)) = (G (A))  fiat
+              (A) = (A)  fiat
+      (H (A)) = (H (A))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
+
+(F (G (A))) = (F (G (A)))  trans
+  (F (G (A))) = (H (A))  trans
+    (F (G (A))) = (F (G (A)))  symm
+      (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
+    (F (G (A))) = (H (A))  trans
+      (F (G (A))) = (H (A))  symm
+        (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+          (F (G (A))) = (F (G (A)))  congr 0
+            (F (G (A))) = (F (G (A)))  fiat
+            (G (A)) = (G (A))  congr 0
+              (G (A)) = (G (A))  fiat
+              (A) = (A)  fiat
+      (H (A)) = (H (A))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
+  (H (A)) = (F (G (A)))  symm
+    (F (G (A))) = (H (A))  trans
+      (F (G (A))) = (F (G (A)))  symm
+        (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+          (F (G (A))) = (F (G (A)))  congr 0
+            (F (G (A))) = (F (G (A)))  fiat
+            (G (A)) = (G (A))  congr 0
+              (G (A)) = (G (A))  fiat
+              (A) = (A)  fiat
+      (F (G (A))) = (H (A))  trans
+        (F (G (A))) = (H (A))  symm
+          (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+            (F (G (A))) = (F (G (A)))  congr 0
+              (F (G (A))) = (F (G (A)))  fiat
+              (G (A)) = (G (A))  congr 0
+                (G (A)) = (G (A))  fiat
+                (A) = (A)  fiat
+        (H (A)) = (H (A))  rule 5 {x := (A)}
+          (F (G (A))) = (F (G (A)))  congr 0
+            (F (G (A))) = (F (G (A)))  fiat
+            (G (A)) = (G (A))  congr 0
+              (G (A)) = (G (A))  fiat
+              (A) = (A)  fiat
+
+(F (G (A))) = (H (A))  trans
+  (F (G (A))) = (F (G (A)))  symm
+    (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+  (F (G (A))) = (H (A))  trans
+    (F (G (A))) = (H (A))  symm
+      (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
+    (H (A)) = (H (A))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+
+(F (G (A))) = (H (A))  trans
+  (F (G (A))) = (H (A))  symm
+    (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+  (H (A)) = (H (A))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+
+(F (G (A))) = (F (G (A)))  trans
+  (F (G (A))) = (H (A))  trans
+    (F (G (A))) = (H (A))  symm
+      (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
+    (H (A)) = (H (A))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+  (H (A)) = (F (G (A)))  symm
+    (F (G (A))) = (H (A))  trans
+      (F (G (A))) = (H (A))  symm
+        (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+          (F (G (A))) = (F (G (A)))  congr 0
+            (F (G (A))) = (F (G (A)))  fiat
+            (G (A)) = (G (A))  congr 0
+              (G (A)) = (G (A))  fiat
+              (A) = (A)  fiat
+      (H (A)) = (H (A))  rule 5 {x := (A)}
+        (F (G (A))) = (F (G (A)))  congr 0
+          (F (G (A))) = (F (G (A)))  fiat
+          (G (A)) = (G (A))  congr 0
+            (G (A)) = (G (A))  fiat
+            (A) = (A)  fiat
 
 (H (A)) = (F (G (A)))  symm
   (F (G (A))) = (H (A))  trans
@@ -45,7 +253,52 @@
         (G (A)) = (G (A))  fiat
         (A) = (A)  fiat
 
+(F (G (A))) = (F (G (A)))  trans
+  (F (G (A))) = (F (G (A)))  symm
+    (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+      (F (G (A))) = (F (G (A)))  congr 0
+        (F (G (A))) = (F (G (A)))  fiat
+        (G (A)) = (G (A))  congr 0
+          (G (A)) = (G (A))  fiat
+          (A) = (A)  fiat
+  (F (G (A))) = (F (G (A)))  fiat
+
+(H (A)) = (F (G (A)))  trans
+  (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+  (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+
+(F (G (A))) = (F (G (A)))  trans
+  (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+  (F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
+    (F (G (A))) = (F (G (A)))  congr 0
+      (F (G (A))) = (F (G (A)))  fiat
+      (G (A)) = (G (A))  congr 0
+        (G (A)) = (G (A))  fiat
+        (A) = (A)  fiat
+
 (H (A)) = (F (G (A)))  rule 5 {x := (A)}
+  (F (G (A))) = (F (G (A)))  congr 0
+    (F (G (A))) = (F (G (A)))  fiat
+    (G (A)) = (G (A))  congr 0
+      (G (A)) = (G (A))  fiat
+      (A) = (A)  fiat
+
+(F (G (A))) = (F (G (A)))  rule 5 {x := (A)}
   (F (G (A))) = (F (G (A)))  congr 0
     (F (G (A))) = (F (G (A)))  fiat
     (G (A)) = (G (A))  congr 0

@@ -7,7 +7,7 @@ mutual
 def valueOk (sig : Signature) : Term → Bool
   | .lit _ => true
   | .app f args => (sig f).any fun d =>
-      (Prim.ofName f).isNone && d.merge.isNone && args.length == d.arity &&
+      d.merge.isNone && args.length == d.arity &&
         valuesOk sig args
 
 def valuesOk (sig : Signature) : List Term → Bool
@@ -20,7 +20,7 @@ end
 def atomOk (sig : Signature) : Term → Bool
   | .lit _ => true
   | .app f args => (sig f).any fun d =>
-      (Prim.ofName f).isNone && args.length == d.entryWidth && valuesOk sig args
+      args.length == d.entryWidth && valuesOk sig args
 
 def reflClaims (t : Term) : List Claim :=
   t.subtermList.map fun s => ⟨s, s⟩
@@ -52,7 +52,7 @@ def Context.empty : Context := ⟨fun _ => none, []⟩
 
 def Context.step (C : Context) : Cmd → Option Context
   | .decl f d =>
-      if (C.sig f).isSome || (Prim.ofName f).isSome then none
+      if (C.sig f).isSome then none
       else some { C with sig := Function.update C.sig f (some d) }
   | .action a => (actionFacts C.sig [] a).map fun fs =>
       { C with globals := C.globals ++ fs }

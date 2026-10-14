@@ -11,7 +11,7 @@ Rule    = (rule Query Actions :ruleset R)
 Query   = (Pattern ...)
 Pattern = expr | (= expr expr)
 Action  = expr | (union expr expr)
-expr    = number | var | (f expr ...)
+expr    = number | var | (f expr ...) | (min expr expr)
 ```
 -/
 
@@ -33,6 +33,10 @@ inductive Expr where
   | lit : Lit → Expr
   | var : Var → Expr
   | app : FnName → List Expr → Expr
+  /-- The smaller of two values in the term order (`Term.least`), egglog's `ordering-min`.
+  The only computation in the fragment: `:merge` functions and the congruence compiler's
+  leader choice use it. -/
+  | min : Expr → Expr → Expr
 
 /-- One conjunct of a rule's query: a pattern to match, an equality constraint, or an
 entry to read. -/
@@ -117,6 +121,7 @@ def Expr.vars : Expr → List Var
   | .lit _ => []
   | .var v => [v]
   | .app _ args => Expr.varsList args
+  | .min a b => a.vars ∪ b.vars
 
 def Expr.varsList : List Expr → List Var
   | [] => []
@@ -131,6 +136,7 @@ def Expr.fns : Expr → List FnName
   | .lit _ => []
   | .var _ => []
   | .app f args => f :: Expr.fnsList args
+  | .min a b => a.fns ∪ b.fns
 
 def Expr.fnsList : List Expr → List FnName
   | [] => []

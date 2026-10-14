@@ -12,7 +12,7 @@ theorem source_mem_valueTerms {src : Database} {d : FDatabase} (hb : src.TermsBu
   cases t with
   | lit _ => rfl
   | app f as =>
-      obtain ⟨dc, hd, hm⟩ := hc f (hb f as hs).2
+      obtain ⟨dc, hd, hm⟩ := hc f (hb f as hs)
       simp [Signature.mergeOf, hd, hm]
 
 /-- Sound retained entries justify every live view column as an existing source value. -/

@@ -20,9 +20,10 @@ theorem Expr.evalAtom_isSome_of_scoped {sig : Signature} {e : Expr} {Γ : Scope}
   cases e with
   | lit l => exact ⟨.lit l, rfl⟩
   | var v => exact Expr.eval_isSome_of_scoped hm h he
+  | min a b => exact Expr.eval_isSome_of_scoped hm h he
   | app f cols =>
-    obtain ⟨ts, hts⟩ := Expr.evalList_isSome cols (fun v hv => (hm v).mp (h v hv)) he.2.2
-    exact ⟨.app f ts, by simp [Expr.evalAtom, he.1, he.2.1, hts]⟩
+    obtain ⟨ts, hts⟩ := Expr.evalList_isSome cols (fun v hv => (hm v).mp (h v hv)) he.2
+    exact ⟨.app f ts, by simp [Expr.evalAtom, he.1, hts]⟩
 
 /-- An `Evaluable` application builds, so its value is not a literal. This is what
 `Action.Evaluable` asks of a `union` operand, and what `evalAction`'s check then needs. -/
@@ -30,8 +31,8 @@ theorem Expr.not_isLit_of_isApp {sig : Signature} {e : Expr} {σ : Env} {t : Ter
     (ha : e.IsApp) (he : e.Evaluable sig) (h : e.eval sig σ = some t) : ¬ t.isLit := by
   match e with
   | .app f args =>
-    obtain ⟨hp, hc⟩ := he f (by simp [Expr.fns])
-    rw [Expr.eval_app_ctor hp hc] at h
+    have hc := he f (by simp [Expr.fns])
+    rw [Expr.eval_app_ctor hc] at h
     obtain ⟨_, -, rfl⟩ := Option.map_eq_some_iff.mp h
     simp [Term.isLit]
 

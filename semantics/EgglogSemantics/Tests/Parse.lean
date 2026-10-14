@@ -82,6 +82,7 @@ def expr : Sexp → Except String Expr
   | .atom "false" => .ok (.lit (.bool false))
   | .atom s => .ok (match s.toInt? with | some n => .lit (.int n) | none => .var s)
   | .str s => .error s!"unexpected string \"{s}\""
+  | .list [.atom "min", a, b] => do pure (.min (← expr a) (← expr b))
   | .list (.atom f :: args) => do pure (.app f (← args.mapM expr))
   | .list _ => .error "an application starts with a name"
 

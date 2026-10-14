@@ -83,7 +83,7 @@ theorem freshEnv_of_liveQueryRead {d : FDatabase} {ρ₀ : Env} :
           exact hc i (by simp)
       refine ⟨σ₀ ++ [(freshVar m, i)], ?_, fun ρ hσ hext => ?_⟩
       · change FreshEnv d n (m + 1) _
-        exact hf₀.append htail (by rw [encodeQueryArgs_next]; omega) (Nat.le_succ m)
+        exact hf₀.append htail (le_encodeQueryArgs_next args n) (Nat.le_succ m)
       · obtain ⟨hargs, hatoms⟩ := hp₀ ρ (fun b hb => hσ b (List.mem_append_left _ hb)) hext
         have him : Env.lookup (freshVar m) ρ = some i := hσ (freshVar m, i) (by simp)
         have hout : Expr.evalList d.sig [.var (freshVar m)] ρ = some [i] := by
@@ -93,7 +93,7 @@ theorem freshEnv_of_liveQueryRead {d : FDatabase} {ρ₀ : Env} :
         rcases List.mem_append.mp hp with hp | hp
         · exact hatoms p hp
         · obtain rfl := List.mem_singleton.mp hp
-          exact .entry (entryRead_table (prim_viewName f) hd (Expr.evalList_length hargs).symm
+          exact .entry (entryRead_table hd (Expr.evalList_length hargs).symm
             hargs hout hr hc)
 
 @[inherit_doc freshEnv_of_liveQueryRead]
@@ -110,8 +110,7 @@ theorem freshEnv_of_liveQueryReadList {d : FDatabase} {ρ₀ : Env} :
       obtain ⟨σ₂, hf₂, hp₂⟩ := freshEnv_of_liveQueryReadList hl (encodeQueryExpr e n).2.2
       refine ⟨σ₁ ++ σ₂, ?_, fun ρ hσ hext => ?_⟩
       · change FreshEnv d n (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.2 _
-        exact hf₁.append hf₂ (by simp only [encodeQueryExpr_next]; omega)
-          (by rw [encodeQueryArgs_next]; omega)
+        exact hf₁.append hf₂ (le_encodeQueryExpr_next e n) (le_encodeQueryArgs_next es _)
       · obtain ⟨he₁, ha₁⟩ := hp₁ ρ (fun b hb => hσ b (List.mem_append_left _ hb)) hext
         obtain ⟨he₂, ha₂⟩ := hp₂ ρ (fun b hb => hσ b (List.mem_append_right _ hb)) hext
         refine ⟨?_, fun p hp => ?_⟩
@@ -124,10 +123,10 @@ end
 
 theorem le_encodePattern_next (p : Pattern) (n : Nat) : n ≤ (encodePattern p n).2 := by
   cases p with
-  | expr e => change n ≤ (encodeQueryExpr e n).2.2; rw [encodeQueryExpr_next]; omega
+  | expr e => exact le_encodeQueryExpr_next e n
   | eq a b =>
       change n ≤ (encodeQueryExpr b (encodeQueryExpr a n).2.2).2.2
-      rw [encodeQueryExpr_next, encodeQueryExpr_next]; omega
+      exact (le_encodeQueryExpr_next a n).trans (le_encodeQueryExpr_next b _)
 
 theorem le_encodeQuery_next (q : Query) (n : Nat) : n ≤ (encodeQuery q n).2 := by
   induction q generalizing n with
@@ -153,8 +152,7 @@ theorem freshEnv_of_livePatternRead {d : FDatabase} {ρ₀ : Env}
         (hg.elim (ha.output_value hv) (hb.output_value hv))
       refine ⟨σ₁ ++ σ₂, ?_, fun ρ hσ hext p hp => ?_⟩
       · change FreshEnv d n (encodeQueryExpr b (encodeQueryExpr a n).2.2).2.2 _
-        exact hf₁.append hf₂ (by simp only [encodeQueryExpr_next]; omega)
-          (by simp only [encodeQueryExpr_next]; omega)
+        exact hf₁.append hf₂ (le_encodeQueryExpr_next a n) (le_encodeQueryExpr_next b _)
       · obtain ⟨he₁, ha₁⟩ := hp₁ ρ (fun b hb => hσ b (List.mem_append_left _ hb)) hext
         obtain ⟨he₂, ha₂⟩ := hp₂ ρ (fun b hb => hσ b (List.mem_append_right _ hb)) hext
         change p ∈ (_ ++ _) ++ [_] at hp
@@ -229,12 +227,14 @@ theorem mem_varsList_encodeQueryArgs_of_mem : ∀ (es : List Expr) (n : Nat) {v 
 
 mutual
 
-/-- **And so a variable at an argument position is one the emitted reads mention.** -/
+/-- **And so a variable at an argument position is one the emitted reads mention**, in an
+ordering-free expression: a `min` emits no read. -/
 theorem mem_vars_encodeQueryExpr_of_argVar : ∀ (e : Expr) (n : Nat) {v : Var},
-    Expr.ArgVar v e → v ∈ Query.vars (encodeQueryExpr e n).2.1
-  | .lit _, _, _, h => absurd h id
-  | .var _, _, _, h => absurd h id
-  | .app f args, n, v, h => by
+    e.OrderingFree → Expr.ArgVar v e → v ∈ Query.vars (encodeQueryExpr e n).2.1
+  | .lit _, _, _, _, h => absurd h id
+  | .var _, _, _, _, h => absurd h id
+  | .min _ _, _, _, hof, _ => (Expr.not_orderingFree_min hof).elim
+  | .app f args, n, v, hof, h => by
       have hsplit : (encodeQueryExpr (.app f args) n).2.1
           = (encodeQueryArgs args n).2.1
             ++ [Pattern.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++
@@ -244,28 +244,32 @@ theorem mem_vars_encodeQueryExpr_of_argVar : ∀ (e : Expr) (n : Nat) {v : Var},
       · refine Or.inr (Query.mem_vars.mpr ⟨_, List.mem_cons_self, ?_⟩)
         rw [Pattern.vars, Expr.vars, Expr.mem_varsList_append]
         exact Or.inl (mem_varsList_encodeQueryArgs_of_mem args n hv)
-      · exact Or.inl (mem_vars_encodeQueryArgs_of_argVarList args n hv)
+      · exact Or.inl (mem_vars_encodeQueryArgs_of_argVarList args n
+          (Expr.orderingFree_app hof) hv)
 
 @[inherit_doc mem_vars_encodeQueryExpr_of_argVar]
 theorem mem_vars_encodeQueryArgs_of_argVarList : ∀ (es : List Expr) (n : Nat) {v : Var},
-    Expr.ArgVarList v es → v ∈ Query.vars (encodeQueryArgs es n).2.1
-  | [], _, _, h => absurd h id
-  | e :: es, n, v, h => by
+    Expr.OrderingFreeList es → Expr.ArgVarList v es →
+      v ∈ Query.vars (encodeQueryArgs es n).2.1
+  | [], _, _, _, h => absurd h id
+  | e :: es, n, v, hof, h => by
       have hsplit : (encodeQueryArgs (e :: es) n).2.1
           = (encodeQueryExpr e n).2.1
             ++ (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.1 := rfl
       rw [hsplit, Query.mem_vars_append]
       rcases (h : Expr.ArgVar v e ∨ Expr.ArgVarList v es) with hv | hv
-      · exact Or.inl (mem_vars_encodeQueryExpr_of_argVar e n hv)
-      · exact Or.inr (mem_vars_encodeQueryArgs_of_argVarList es _ hv)
+      · exact Or.inl (mem_vars_encodeQueryExpr_of_argVar e n
+          (Expr.orderingFreeList_cons hof).1 hv)
+      · exact Or.inr (mem_vars_encodeQueryArgs_of_argVarList es _
+          (Expr.orderingFreeList_cons hof).2 hv)
 
 end
 
 @[inherit_doc mem_vars_encodeQueryExpr_of_argVar]
 theorem mem_vars_encodePattern_of_argVar : ∀ (p : Pattern) (n : Nat) {v : Var},
-    Pattern.ArgVar v p → v ∈ Query.vars (encodePattern p n).1
-  | .expr e, n, _, h => mem_vars_encodeQueryExpr_of_argVar e n h
-  | .eq e₁ e₂, n, v, h => by
+    p.OrderingFree → Pattern.ArgVar v p → v ∈ Query.vars (encodePattern p n).1
+  | .expr e, n, _, hof, h => mem_vars_encodeQueryExpr_of_argVar e n hof h
+  | .eq e₁ e₂, n, v, hof, h => by
       have hsplit : (encodePattern (.eq e₁ e₂) n).1
           = ((encodeQueryExpr e₁ n).2.1
               ++ (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).2.1)
@@ -274,20 +278,22 @@ theorem mem_vars_encodePattern_of_argVar : ∀ (p : Pattern) (n : Nat) {v : Var}
       rw [hsplit, Query.mem_vars_append]
       refine Or.inl (Query.mem_vars_append.mpr ?_)
       rcases (h : Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂) with hv | hv
-      · exact Or.inl (mem_vars_encodeQueryExpr_of_argVar e₁ n hv)
-      · exact Or.inr (mem_vars_encodeQueryExpr_of_argVar e₂ _ hv)
+      · exact Or.inl (mem_vars_encodeQueryExpr_of_argVar e₁ n hof.1 hv)
+      · exact Or.inr (mem_vars_encodeQueryExpr_of_argVar e₂ _ hof.2 hv)
 
 @[inherit_doc mem_vars_encodeQueryExpr_of_argVar]
 theorem mem_vars_encodeQuery_of_argVar : ∀ (q : Query) (n : Nat) {v : Var} {p : Pattern},
-    p ∈ q → Pattern.ArgVar v p → v ∈ Query.vars (encodeQuery q n).1
-  | [], _, _, _, hp, _ => absurd hp (by simp)
-  | p :: ps, n, _, p', hp, h => by
+    (∀ p ∈ q, p.OrderingFree) → p ∈ q → Pattern.ArgVar v p →
+      v ∈ Query.vars (encodeQuery q n).1
+  | [], _, _, _, _, hp, _ => absurd hp (by simp)
+  | p :: ps, n, _, p', hof, hp, h => by
       have hsplit : (encodeQuery (p :: ps) n).1
           = (encodePattern p n).1 ++ (encodeQuery ps (encodePattern p n).2).1 := rfl
       rw [hsplit, Query.mem_vars_append]
       rcases List.mem_cons.mp hp with rfl | hp'
-      · exact Or.inl (mem_vars_encodePattern_of_argVar p' n h)
-      · exact Or.inr (mem_vars_encodeQuery_of_argVar ps _ hp' h)
+      · exact Or.inl (mem_vars_encodePattern_of_argVar p' n (hof p' List.mem_cons_self) h)
+      · exact Or.inr (mem_vars_encodeQuery_of_argVar ps _
+          (fun p'' hp'' => hof p'' (List.mem_cons_of_mem _ hp'')) hp' h)
 
 /-- Forward query completeness at a rebuilt target: the executable flattened query
 matches, and its substitution retains canonical readings of the original source values. -/
@@ -297,12 +303,12 @@ theorem encodedQuery_match_of_source {P : Program} {d : FDatabase} {src querySrc
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF)
     (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d.toDatabase querySrc)
     (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e) {σ : Env} {q : Query}
-    (hp : ∀ p ∈ q, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) (hk : Query.VarsKeyed q)
+    (hof : ∀ p ∈ q, p.OrderingFree) (hk : Query.VarsKeyed q)
     (hg : ∀ p ∈ q, p.Grounded) (hn : ∀ v ∈ Query.vars q, ¬ "@".isPrefixOf v = true)
     (hm : ValidQuerySubst querySrc q σ) (n : Nat) :
     ∃ ρ, ρ ∈ matchQuery d (encodeQuery q n).1 ∧ Env.CanonicalReads d σ ρ := by
   obtain ⟨ρ₀, hρ₀, hdom, hreads, hv⟩ :=
-    exists_live_query h htables hs hb hctors hc hw hcs hun hex hp hk hm
+    exists_live_query h htables hs hb hctors hc hw hcs hun hex hof hk hm
   have hvars : ∀ v ∈ Env.dom σ, v ∈ Query.vars q := by
     intro v hv
     obtain ⟨p, hp, hfv⟩ := hm.mem_dom_iff.mp hv
@@ -314,7 +320,7 @@ theorem encodedQuery_match_of_source {P : Program} {d : FDatabase} {src querySrc
   refine ⟨_, hmatch, fun v t ht => ?_⟩
   obtain ⟨i, hi, hrep, hroot⟩ := hρ₀ v t ht
   obtain ⟨p, hp, harg⟩ := hk v (hvars v (Env.mem_dom_of_mem (Env.mem_of_lookup ht)))
-  have hvq := mem_vars_encodeQuery_of_argVar q n hp harg
+  have hvq := mem_vars_encodeQuery_of_argVar q n hof hp harg
   obtain ⟨p', hp', hvp'⟩ := Query.mem_vars.mp hvq
   have hvfree : v ∈ Query.freeVars (encodeQuery q n).1 [] :=
     Query.mem_freeVars.mpr ⟨p', hp', ((Pattern.mem_freeVars p').mpr ⟨hvp', by simp⟩)⟩

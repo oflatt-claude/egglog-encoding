@@ -54,16 +54,16 @@ private def tables : Program :=
    .decl "Audit" ⟨2, 1, some (.merge [] [.var "old"]), none⟩,
    .decl "Bounds" ⟨1, 2, some (.merge
      [.expr (.app "Audit" [.var "old0", .var "new0", .var "new1"])]
-     [.app "min" [.var "old0", .var "new0"],
-      .app "max" [.var "old1", .var "new1"]]), none⟩,
+     [.min (.var "old0") (.var "new0"),
+      .min (.var "new1") (.var "old1")]), none⟩,
    .action (.expr (.app "Bounds" [atom "Key", int 2, int 3])),
-   .action (.expr (.app "Bounds" [atom "Key", int 4, int 6]))]
+   .action (.expr (.app "Bounds" [atom "Key", int 4, int 1]))]
 
 #guard validates tables
 
 -- Metadata-only collisions must not execute an otherwise unconditional merge.
 private def sameData : Program :=
-  [.decl "T" ⟨0, 1, some (.merge [] [.app "max" [.var "old", int 9]]), none⟩,
+  [.decl "T" ⟨0, 1, some (.merge [] [.min (.var "old") (int 9)]), none⟩,
    .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
 
 #guard validates sameData
@@ -85,14 +85,14 @@ private def bounds (a b : Int) : Term :=
   .app "Bounds" [term "Key", .lit (.int a), .lit (.int b)]
 
 private def old : Proof := .global (bounds 2 3) 3
-private def new : Proof := .global (bounds 4 6) 4
+private def new : Proof := .global (bounds 4 1) 4
 
-#guard (check tables (.merge (bounds 2 6) "Bounds" old new)).isSome
+#guard (check tables (.merge (bounds 2 1) "Bounds" old new)).isSome
 #guard (check tables
-  (.merge (.app "Audit" [.lit (.int 2), .lit (.int 4), .lit (.int 6)]) "Bounds" old new)).isSome
+  (.merge (.app "Audit" [.lit (.int 2), .lit (.int 4), .lit (.int 1)]) "Bounds" old new)).isSome
 #guard (check tables (.merge (bounds 4 3) "Bounds" old new)).isNone
-#guard (check tables (.merge (bounds 2 6) "Audit" old new)).isNone
-#guard (check tables (.merge (bounds 2 6) "Bounds" old old)).isNone
+#guard (check tables (.merge (bounds 2 1) "Audit" old new)).isNone
+#guard (check tables (.merge (bounds 2 1) "Bounds" old old)).isNone
 
 private def distinctKeys : Program :=
   [.decl "T" ⟨1, 1, some (.merge [] [.var "new"]), none⟩,
@@ -105,7 +105,7 @@ private def distinctKeys : Program :=
 
 private def table (n : Int) : Term := .app "T" [.lit (.int n)]
 private def tProgram : Program :=
-  [.decl "T" ⟨0, 1, some (.merge [] [.app "min" [.var "old", .var "new"]]), none⟩,
+  [.decl "T" ⟨0, 1, some (.merge [] [.min (.var "old") (.var "new")]), none⟩,
    .action (.expr (.app "T" [int 3])),
    .rule ⟨[.expr (.app "T" [.var "x"])], [.expr (.app "T" [int 2])], "R"⟩,
    .saturate "R"]

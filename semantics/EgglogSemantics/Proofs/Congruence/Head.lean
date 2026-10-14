@@ -24,22 +24,26 @@ theorem eval_transport {s₁ s₂ : Signature} :
         fun g hg => hc g (by simp [Expr.fns, hg])
       have hvl : ∀ v ∈ Expr.varsList args, Env.lookup v _ = Env.lookup v _ :=
         fun w hw => hv w (by simpa [Expr.vars] using hw)
-      cases hp : Prim.ofName f with
-      | some p =>
-        simp only [Expr.eval, hp] at h ⊢
-        obtain ⟨ts, hts, hap⟩ := Option.bind_eq_some_iff.mp h
-        rw [evalList_transport args hfn hvl hts]
-        exact hap
-      | none =>
-        simp only [Expr.eval, hp] at h ⊢
-        by_cases hct : s₁.IsCtor f
-        · rw [if_pos hct] at h
-          obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
-          rw [if_pos (hc f (by simp [Expr.fns]) hct),
-            evalList_transport args hfn hvl hts]
-          exact congrArg some hap
-        · rw [if_neg hct] at h
-          exact absurd h (by simp)
+      simp only [Expr.eval] at h ⊢
+      by_cases hct : s₁.IsCtor f
+      · rw [if_pos hct] at h
+        obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
+        rw [if_pos (hc f (by simp [Expr.fns]) hct),
+          evalList_transport args hfn hvl hts]
+        exact congrArg some hap
+      · rw [if_neg hct] at h
+        exact absurd h (by simp)
+  | .min a b, _, _, _, hc, hv, h => by
+      rw [Expr.eval_min, Option.bind_eq_some_iff] at h
+      obtain ⟨x, hx, hmap⟩ := h
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+      rw [Expr.eval_min,
+        eval_transport a (fun g hg => hc g (by simp [Expr.fns, hg]))
+          (fun w hw => hv w (by simp [Expr.vars, hw])) hx,
+        Option.bind_some,
+        eval_transport b (fun g hg => hc g (by simp [Expr.fns, hg]))
+          (fun w hw => hv w (by simp [Expr.vars, hw])) hy,
+        Option.map_some]
 
 @[inherit_doc eval_transport]
 theorem evalList_transport {s₁ s₂ : Signature} :
@@ -65,14 +69,14 @@ source heads have no let-bound globals, only the query's variables need transpor
 theorem sourceMatch_evaluations {src tgt : Database} (hb : src.TermsBuild)
     (hs : ViewsSound tgt src) (hd : tgt.Diag)
     (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
-    (hg : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
+    (hof : ∀ p ∈ q, p.OrderingFree) (hg : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∃ τ, ValidQuerySubst src q τ ∧
       ∀ (e : Expr), (∀ f ∈ e.fns, tgt.sig.IsCtor f ↔ src.sig.IsCtor f) →
         (∀ v ∈ e.vars, v ∈ Query.vars q) →
         e.eval tgt.sig (σ ++ tgt.env) = e.eval src.sig (τ ++ src.env) := by
-  obtain ⟨τ, hτ, _, hlookup⟩ := sourceMatch_of_encodedQuery hb hs hd hsc hg hk h
-  have hread := patternReads_of_encodeQuery hd hsc hk h
+  obtain ⟨τ, hτ, _, hlookup⟩ := sourceMatch_of_encodedQuery hb hs hd hsc hof hg hk h
+  have hread := patternReads_of_encodeQuery hd hsc hof hk h
   have henv : ∀ v ∈ Query.vars q,
       Env.lookup v (σ ++ tgt.env) = Env.lookup v (τ ++ src.env) := by
     intro v hv
@@ -100,8 +104,9 @@ theorem encodedRule_firing_sound {src : Database} {d d' : FDatabase} {r : Rule} 
     (hw : src.WF) (hb : src.TermsBuild) (hcs : src.sig.AllConstructors)
     (hr : d.EqsRefl) (he : d.EqsInTerms) (hi : d.IndexOk) (hsc : d.SubtermClosed)
     (hs : SoundTerms d src)
+    (hof : ∀ p ∈ r.query, p.OrderingFree)
     (hg : ∀ p ∈ r.query, p.Grounded) (hk : Query.VarsKeyed r.query)
-    (hp : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, e.OrderingFree)
     (hf : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns,
       d.sig.IsCtor f ↔ src.sig.IsCtor f)
     (hv : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ v ∈ e.vars, v ∈ Query.vars r.query)
@@ -116,7 +121,7 @@ theorem encodedRule_firing_sound {src : Database} {d d' : FDatabase} {r : Rule} 
     (viewsSound_of_soundTerms hr hs).1 hr.toDatabase
     (fun t ht s hst => by
       rw [Egglog.FDatabase.toDatabase_terms] at ht ⊢
-      exact hsc t ht s ((Term.mem_subtermList t).mpr hst)) hg hk hσ'
+      exact hsc t ht s ((Term.mem_subtermList t).mpr hst)) hof hg hk hσ'
   refine ⟨τ, hτ, fun post hpost hsafe => ?_⟩
   obtain ⟨sp, hsp, rfl⟩ := Option.map_eq_some_iff.mp hpost
   obtain ⟨tp, htp, rfl⟩ := Option.map_eq_some_iff.mp hfire
@@ -179,7 +184,7 @@ theorem encodedRule_firing {src : Database} {d d' : FDatabase} {r : Rule} {σ : 
     (hw : src.WF) (hb : src.TermsBuild) (hcs : src.sig.AllConstructors)
     (hnames : ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f)
     (hr : d.EqsRefl) (he : d.EqsInTerms) (hi : d.IndexOk) (hsc : d.SubtermClosed)
-    (hs : SoundTerms d src)
+    (hs : SoundTerms d src) (hof : r.OrderingFree)
     (hg : ∀ p ∈ r.query, p.Grounded) (hk : Query.VarsKeyed r.query)
     (hscoped : Actions.Scoped r.actions (Query.vars r.query))
     (hbuild : Actions.Builds r.actions src.sig) (hrun : Actions.UnionRunnable r.actions src)
@@ -190,10 +195,10 @@ theorem encodedRule_firing {src : Database} {d d' : FDatabase} {r : Rule} {σ : 
       SoundTerms d' post ∧ (MergeShape d.sig → EntryRowsUF d → EntryRowsUF d') ∧
       (UFTermsDescend d → UFTermsDescend d') := by
   have hbexpr := builds_exprs hbuild
-  obtain ⟨τ, hτ, hsound⟩ := encodedRule_firing_sound hw hb hcs hr he hi hsc hs hg hk
-    (fun a ha e hem f hfm => (hbexpr a ha e hem f hfm).1)
+  obtain ⟨τ, hτ, hsound⟩ := encodedRule_firing_sound hw hb hcs hr he hi hsc hs hof.1 hg hk
+    (orderingFree_actionExprs hof.2)
     (fun a ha e hem f hfm =>
-      ⟨fun _ => (hbexpr a ha e hem f hfm).2,
+      ⟨fun _ => hbexpr a ha e hem f hfm,
         fun hf => hctor f hf⟩) (scoped_exprs hscoped) hmatch hfire
   have hscope : Actions.Scoped r.actions (Query.bind r.query (Env.dom src.env)) :=
     Actions.Scoped.mono r.actions
@@ -232,6 +237,7 @@ theorem encodedRule_firing_of_programStep {P pre rest : Program} (hdom : P.Encod
     (termsBuild_of_programStep (fun c hc => hdom.ctorsOnly c (hsub c hc)) hpre) hcs.sig
     (sourceNames_of_programStep hdom hsub hpre) hn.eqsRefl hi.eqs hi.index
     (Egglog.FDatabase.SubtermClosed.of_wf hi.wf) hs
+    (Program.OrderingFree.of_mem hdom.noMin hmem)
     (fun p hp => ((hdom.queryEncodable _ hmem).1 p hp).1)
     (hdom.queryEncodable _ hmem).2 (hdom.headsScoped _ hmem) hbuild hrun
     (sourceConstructors_of_programStep hdom hsub hpre hsig) hmatch hfire

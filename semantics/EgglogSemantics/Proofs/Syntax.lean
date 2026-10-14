@@ -35,14 +35,18 @@ namespace Expr
 of an application's argument list. `Term.recTerm`'s twin. -/
 @[elab_as_elim]
 theorem recExpr {motive : Expr → Prop} (lit : ∀ l, motive (.lit l)) (var : ∀ v, motive (.var v))
-    (app : ∀ f args, (∀ a ∈ args, motive a) → motive (.app f args)) (e : Expr) : motive e :=
+    (app : ∀ f args, (∀ a ∈ args, motive a) → motive (.app f args))
+    (min : ∀ a b, motive a → motive b → motive (.min a b)) (e : Expr) : motive e :=
   Expr.rec (motive_1 := motive) (motive_2 := fun args => ∀ a ∈ args, motive a) lit var
-    (fun f args ih => app f args ih) (fun a ha => by simp at ha)
+    (fun f args ih => app f args ih) (fun a b iha ihb => min a b iha ihb)
+    (fun a ha => by simp at ha)
     (fun _ _ iht ihts a ha => (List.mem_cons.mp ha).elim (fun h => h ▸ iht) (ihts a)) e
 
 @[simp] theorem vars_lit {l : Lit} : (Expr.lit l).vars = [] := rfl
 
 @[simp] theorem vars_var {v : Var} : (Expr.var v).vars = [v] := rfl
+
+@[simp] theorem vars_min {a b : Expr} : (Expr.min a b).vars = a.vars ∪ b.vars := rfl
 
 @[simp] theorem vars_app {f : FnName} {args : List Expr} :
     (Expr.app f args).vars = Expr.varsList args := rfl
@@ -67,6 +71,8 @@ theorem mem_varsList {v : Var} {es : List Expr} (h : v ∈ Expr.varsList es) :
 @[simp] theorem fns_lit {l : Lit} : (Expr.lit l).fns = [] := rfl
 
 @[simp] theorem fns_var {v : Var} : (Expr.var v).fns = [] := rfl
+
+@[simp] theorem fns_min {a b : Expr} : (Expr.min a b).fns = a.fns ∪ b.fns := rfl
 
 @[simp] theorem fns_app {f : FnName} {args : List Expr} :
     (Expr.app f args).fns = f :: Expr.fnsList args := rfl

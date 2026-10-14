@@ -7,7 +7,11 @@
     (F (B)) = (F (B))  fiat
   (B) = (A)  fiat
 
-(F (B)) = (F (A))  symm
+(F (A)) = (F (B))  trans
+  (F (A)) = (F (A))  symm
+    (F (A)) = (F (A))  congr 0
+      (F (A)) = (F (A))  fiat
+      (A) = (A)  fiat
   (F (A)) = (F (B))  trans
     (F (A)) = (F (B))  symm
       (F (B)) = (F (A))  congr 0
@@ -22,9 +26,94 @@
       (B) = (A)  fiat
   (F (B)) = (F (B))  fiat
 
+(F (A)) = (F (A))  trans
+  (F (A)) = (F (B))  trans
+    (F (A)) = (F (B))  symm
+      (F (B)) = (F (A))  congr 0
+        (F (B)) = (F (B))  fiat
+        (B) = (A)  fiat
+    (F (B)) = (F (B))  fiat
+  (F (B)) = (F (A))  symm
+    (F (A)) = (F (B))  trans
+      (F (A)) = (F (B))  symm
+        (F (B)) = (F (A))  congr 0
+          (F (B)) = (F (B))  fiat
+          (B) = (A)  fiat
+      (F (B)) = (F (B))  fiat
+
+(F (B)) = (F (A))  symm
+  (F (A)) = (F (B))  trans
+    (F (A)) = (F (B))  symm
+      (F (B)) = (F (A))  congr 0
+        (F (B)) = (F (B))  fiat
+        (B) = (A)  fiat
+    (F (B)) = (F (B))  fiat
+
+(A) = (B)  trans
+  (A) = (A)  symm
+    (A) = (A)  fiat
+  (A) = (B)  trans
+    (A) = (B)  symm
+      (B) = (A)  fiat
+    (B) = (B)  fiat
+
+(F (A)) = (F (B))  trans
+  (F (A)) = (F (B))  symm
+    (F (B)) = (F (A))  congr 0
+      (F (B)) = (F (B))  fiat
+      (B) = (A)  fiat
+  (F (B)) = (F (B))  fiat
+
+(F (A)) = (F (A))  trans
+  (F (A)) = (F (A))  symm
+    (F (A)) = (F (A))  congr 0
+      (F (A)) = (F (A))  fiat
+      (A) = (A)  fiat
+  (F (A)) = (F (A))  fiat
+
+(F (B)) = (F (A))  trans
+  (F (B)) = (F (A))  congr 0
+    (F (B)) = (F (B))  fiat
+    (B) = (A)  fiat
+  (F (A)) = (F (A))  congr 0
+    (F (A)) = (F (A))  fiat
+    (A) = (A)  fiat
+
+(F (A)) = (F (A))  trans
+  (F (A)) = (F (A))  congr 0
+    (F (A)) = (F (A))  fiat
+    (A) = (A)  fiat
+  (F (A)) = (F (A))  congr 0
+    (F (A)) = (F (A))  fiat
+    (A) = (A)  fiat
+
+(F (A)) = (F (A))  congr 0
+  (F (A)) = (F (A))  fiat
+  (A) = (A)  fiat
+
 (F (B)) = (F (A))  congr 0
   (F (B)) = (F (B))  fiat
   (B) = (A)  fiat
+
+(F (A)) = (F (A))  congr 0
+  (F (A)) = (F (A))  fiat
+  (A) = (A)  fiat
+
+(A) = (B)  trans
+  (A) = (B)  symm
+    (B) = (A)  fiat
+  (B) = (B)  fiat
+
+(A) = (A)  trans
+  (A) = (B)  trans
+    (A) = (B)  symm
+      (B) = (A)  fiat
+    (B) = (B)  fiat
+  (B) = (A)  symm
+    (A) = (B)  trans
+      (A) = (B)  symm
+        (B) = (A)  fiat
+      (B) = (B)  fiat
 
 (B) = (A)  symm
   (A) = (B)  trans
@@ -37,11 +126,30 @@
     (B) = (A)  fiat
   (B) = (B)  fiat
 
+(A) = (A)  trans
+  (A) = (A)  symm
+    (A) = (A)  fiat
+  (A) = (A)  fiat
+
 (F (B)) = (F (A))  congr 0
   (F (B)) = (F (B))  fiat
   (B) = (A)  fiat
 
+(F (A)) = (F (A))  congr 0
+  (F (A)) = (F (A))  fiat
+  (A) = (A)  fiat
+
+(B) = (A)  trans
+  (B) = (A)  fiat
+  (A) = (A)  fiat
+
+(A) = (A)  trans
+  (A) = (A)  fiat
+  (A) = (A)  fiat
+
 (B) = (A)  fiat
+
+(A) = (A)  fiat
 
 (B) = (B)  fiat
 

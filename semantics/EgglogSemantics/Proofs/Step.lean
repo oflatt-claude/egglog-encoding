@@ -54,7 +54,7 @@ theorem Signature.extends_sigBind (sig : Signature) (c : Cmd) :
 the rule to the state the rule fires at. -/
 theorem Expr.Declared.mono {e : Expr} {sig sig' : Signature} (hs : sig'.Extends sig)
     (h : e.Declared sig) : e.Declared sig' :=
-  fun f hf => (h f hf).imp id (hs f)
+  fun f hf => hs f (h f hf)
 
 theorem Action.Declared.mono {a : Action} {sig sig' : Signature} (hs : sig'.Extends sig)
     (h : a.Declared sig) : a.Declared sig' := by
@@ -677,23 +677,6 @@ theorem avoids_of_declaredTerms {f : FnName} {db : Database} (hf : db.sig f = no
 
 /-! #### Evaluation builds no term mentioning an undeclared name -/
 
-/-- A primitive returns an operand or a literal, so it builds no new head. -/
-theorem prim_result {p : Prim} {ts : List Term} {t : Term} (h : p.apply ts = some t) :
-    t ∈ ts ∨ ∃ l, t = Term.lit l := by
-  unfold Prim.apply at h
-  split at h <;> simp only [Option.some.injEq, reduceCtorEq] at h <;> subst h
-  · exact Or.inr ⟨_, rfl⟩
-  · exact Or.inl (by split <;> simp)
-  · exact Or.inr ⟨_, rfl⟩
-  · exact Or.inr ⟨_, rfl⟩
-
-theorem prim_avoids {f : FnName} {p : Prim} {ts : List Term} {t : Term}
-    (hts : ∀ s ∈ ts, ¬ Term.Mentions f s) (h : p.apply ts = some t) :
-    ¬ Term.Mentions f t := by
-  rcases prim_result h with hm | ⟨l, rfl⟩
-  · exact hts t hm
-  · exact Term.not_mentions_lit
-
 theorem evalList_avoids {sig : Signature} {f : FnName} {σ : Env} :
     ∀ (args : List Expr) (ts : List Term),
       (∀ a ∈ args, ∀ t, a.eval sig σ = some t → ¬ Term.Mentions f t) →
@@ -729,23 +712,24 @@ theorem eval_avoids {sig : Signature} {f : FnName} {σ : Env} (hf : sig f = none
   | app g args ih =>
       intro t h
       rw [Expr.eval] at h
-      cases hp : Prim.ofName g with
-      | some p =>
-          rw [hp] at h
-          obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp h
-          exact prim_avoids (evalList_avoids args ts ih hts) happ
-      | none =>
-          rw [hp] at h
-          by_cases hc : sig.IsCtor g
-          · rw [if_pos hc] at h
-            obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
-            intro hmen
-            rcases Term.mentions_app hmen with rfl | ⟨a, ha, hm⟩
-            · obtain ⟨d, hd, -⟩ := hc
-              rw [hf] at hd
-              exact absurd hd (by simp)
-            · exact evalList_avoids args ts ih hts _ ha hm
-          · rw [if_neg hc] at h; exact absurd h (by simp)
+      by_cases hc : sig.IsCtor g
+      · rw [if_pos hc] at h
+        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
+        intro hmen
+        rcases Term.mentions_app hmen with rfl | ⟨a, ha, hm⟩
+        · obtain ⟨d, hd, -⟩ := hc
+          rw [hf] at hd
+          exact absurd hd (by simp)
+        · exact evalList_avoids args ts ih hts _ ha hm
+      · rw [if_neg hc] at h; exact absurd h (by simp)
+  | min a b iha ihb =>
+      intro t h
+      rw [Expr.eval_min] at h
+      obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp h
+      rcases Term.least_eq_or x y with hl | hl <;> rw [hl]
+      · exact iha x hx
+      · exact ihb y hy
 
 theorem evalAtom_avoids {sig : Signature} {f : FnName} {σ : Env} (hf : sig f = none)
     (hσ : ∀ b ∈ σ, ¬ Term.Mentions f b.2) (e : Expr) (t : Term)
@@ -753,24 +737,18 @@ theorem evalAtom_avoids {sig : Signature} {f : FnName} {σ : Env} (hf : sig f = 
   cases e with
   | lit l => exact eval_avoids hf hσ (.lit l) t h
   | var v => exact eval_avoids hf hσ (.var v) t h
+  | min a b => exact eval_avoids hf hσ (.min a b) t h
   | app g args =>
     simp only [Expr.evalAtom] at h
     have hargs := evalList_avoids args (sig := sig) (σ := σ) (f := f)
-    cases hp : Prim.ofName g with
-    | some p =>
-      simp only [hp] at h
-      obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp h
-      exact prim_avoids (hargs ts (fun a _ => eval_avoids hf hσ a) hts) happ
-    | none =>
-      simp only [hp] at h
-      split at h
-      · rename_i hg
-        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
-        intro hm
-        rcases Term.mentions_app hm with rfl | ⟨a, ha, hm⟩
-        · simp [hf] at hg
-        · exact hargs ts (fun a _ => eval_avoids hf hσ a) hts a ha hm
-      · simp at h
+    split at h
+    · rename_i hg
+      obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
+      intro hm
+      rcases Term.mentions_app hm with rfl | ⟨a, ha, hm⟩
+      · simp [hf] at hg
+      · exact hargs ts (fun a _ => eval_avoids hf hσ a) hts a ha hm
+    · simp at h
 
 theorem evalAction_avoids {f : FnName} {db d : Database} {a : Action}
     (hf : db.sig f = none) (hd : a.Declared db.sig) (hav : db.Avoids f)
@@ -869,19 +847,19 @@ theorem eval_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
       have hlist : Expr.evalList sig args σ = Expr.evalList sig' args σ :=
         evalList_update args fun a ha => ih a ha (hargs a ha) σ
       rw [Expr.eval, Expr.eval, hlist]
-      cases hp : Prim.ofName g with
-      | some p => rfl
-      | none =>
-          have hgf : g ≠ f := by
-            rintro rfl
-            rcases hdec g (by rw [Expr.fns]; exact List.mem_cons_self ..) with h | h
-            · exact h hp
-            · exact h hf
-          have hiff : sig.IsCtor g ↔ sig'.IsCtor g := by
-            simp only [Signature.IsCtor, hag g hgf]
-          by_cases hc : sig.IsCtor g
-          · rw [if_pos hc, if_pos (hiff.mp hc)]
-          · rw [if_neg hc, if_neg fun h => hc (hiff.mpr h)]
+      have hgf : g ≠ f := by
+        rintro rfl
+        exact hdec g (by rw [Expr.fns]; exact List.mem_cons_self ..) hf
+      have hiff : sig.IsCtor g ↔ sig'.IsCtor g := by
+        simp only [Signature.IsCtor, hag g hgf]
+      by_cases hc : sig.IsCtor g
+      · rw [if_pos hc, if_pos (hiff.mp hc)]
+      · rw [if_neg hc, if_neg fun h => hc (hiff.mpr h)]
+  | min a b iha ihb =>
+      intro hdec σ
+      have ha : a.Declared sig := fun x hx => hdec x (by simp [hx])
+      have hb : b.Declared sig := fun x hx => hdec x (by simp [hx])
+      rw [Expr.eval_min, Expr.eval_min, iha ha σ, ihb hb σ]
 
 theorem evalAtom_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
     (hag : ∀ g, g ≠ f → sig g = sig' g) (e : Expr) (hd : e.Declared sig) (σ : Env) :
@@ -889,20 +867,16 @@ theorem evalAtom_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
   cases e with
   | lit _ => rfl
   | var _ => rfl
+  | min a b => exact eval_update hf hag (.min a b) hd σ
   | app g args =>
     have hargs : ∀ a ∈ args, a.Declared sig := fun a ha x hx =>
       hd x (by rw [Expr.fns]; exact List.mem_cons_of_mem _ (Expr.fns_subset_fnsList ha hx))
     have hl := evalList_update args (fun a ha => eval_update hf hag a (hargs a ha) σ)
     simp only [Expr.evalAtom, hl]
-    cases hp : Prim.ofName g with
-    | some p => rfl
-    | none =>
-      have hgf : g ≠ f := by
-        rintro rfl
-        rcases hd g (by rw [Expr.fns]; exact List.mem_cons_self ..) with h | h
-        · exact h hp
-        · exact h hf
-      rw [hag g hgf]
+    have hgf : g ≠ f := by
+      rintro rfl
+      exact hd g (by rw [Expr.fns]; exact List.mem_cons_self ..) hf
+    rw [hag g hgf]
 
 theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : Action}
     (hf : db.sig f = none) (hag : ∀ g, g ≠ f → db.sig g = sig' g) (hd : a.Declared db.sig) :

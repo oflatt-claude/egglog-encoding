@@ -110,7 +110,7 @@ end
 end Term
 /-! ### The term order
 
-`ordering-gt` is the primitive a `:merge` body compares with; `Term.blt` is what it reads. -/
+`Expr.min` chooses by it; `Term.blt` is what it reads. -/
 
 /-- A total order on base values: integers by `<`, `false` below `true`, every integer below
 every boolean. -/
@@ -141,41 +141,8 @@ def Term.bltList : List Term → List Term → Bool
 
 end
 
-/-! ### Primitives -/
-/-- The primitives this fragment has. A primitive is applied as `Expr.app` of a reserved
-name, not by a constructor of its own. `ordering-gt` and `if` give the congruence
-compiler's leader choice: egglog's `ordering-min` and `ordering-max` are `if`s over
-`ordering-gt` (`Source/Names.lean`), and every generated table merges with them
-(`Congruence/Encode.lean`). `min` and `max` are the `i64` operations source `:merge`
-functions use. -/
-inductive Prim where
-  /-- egglog's value ordering as a `bool`: `(ordering-gt s t)` is `t < s`
-  (`egglog/src/lib.rs:530-535`). **Strict**, so a tie is `false` and every `if` over it
-  takes its `else` branch. -/
-  | orderingGt
-  /-- `(if c a b)`: selection on a `bool`, between two values already computed. -/
-  | ifThenElse
-  /-- egglog's `i64` `min`. -/
-  | intMin
-  /-- egglog's `i64` `max`. -/
-  | intMax
-  deriving DecidableEq, Repr
-
-/-- The reserved names; a user function of the same name is shadowed. -/
-def Prim.ofName : FnName → Option Prim
-  | "ordering-gt" => some .orderingGt
-  | "if" => some .ifThenElse
-  | "min" => some .intMin
-  | "max" => some .intMax
-  | _ => none
-
-/-- A primitive's meaning. `none` for the wrong arity, for an `if` on a non-`bool`, and for
-`min`/`max` on a non-`i64`. -/
-def Prim.apply : Prim → List Term → Option Term
-  | .orderingGt, [s, t] => some (.lit (.bool (Term.blt t s)))
-  | .ifThenElse, [.lit (.bool c), a, b] => some (if c then a else b)
-  | .intMin, [.lit (.int m), .lit (.int n)] => some (.lit (.int (min m n)))
-  | .intMax, [.lit (.int m), .lit (.int n)] => some (.lit (.int (max m n)))
-  | _, _ => none
+/-- The smaller of two terms in `Term.blt`, egglog's `ordering-min`: the right operand when
+it is strictly below the left one, else the left. -/
+def Term.least (s t : Term) : Term := if Term.blt t s then t else s
 
 end Egglog

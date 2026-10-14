@@ -8,7 +8,7 @@ Seven checks: `Scoped` — every variable used is bound; `Evaluable` — every a
 declared constructor; `UnionLegal` — no `union` operand is a literal; `SetLegal` — no `set`
 writes a constructor; `WidthOk` — every application carries its declaration's column counts;
 `DeclsFresh` — no name is declared twice; `MergeDeclared` — every name a `:merge` applies is
-declared or a primitive. `Scoped` checks each block in a fixed `Scope`; queries bind their pattern variables;
+declared. `Scoped` checks each block in a fixed `Scope`; queries bind their pattern variables;
 `UnionLegal` reads no context; the other five thread a `Signature`, moved only by `Cmd.sigBind`.
 -/
 
@@ -80,15 +80,14 @@ def Cmd.sigBind : Cmd → Signature → Signature
   | .decl f d, sig => Function.update sig f (some d)
   | _, sig => sig
 
-/-- Every application in `e` **builds**: its head is a declared constructor and not a
-primitive, so evaluating `e` cannot get stuck on it. -/
+/-- Every application in `e` **builds**: its head is a declared constructor, so evaluating
+`e` cannot get stuck on it. -/
 def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
-  ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f
+  ∀ f ∈ e.fns, sig.IsCtor f
 
-/-- A complete atom has a declared nonprimitive head and value-producing columns. -/
+/-- A complete atom has a declared head and value-producing columns. -/
 def Expr.AtomEvaluable : Expr → Signature → Prop
-  | .app f cols, sig => Prim.ofName f = none ∧ (sig f).isSome = true ∧
-      ∀ g ∈ Expr.fnsList cols, Prim.ofName g = none ∧ sig.IsCtor g
+  | .app f cols, sig => (sig f).isSome = true ∧ ∀ g ∈ Expr.fnsList cols, sig.IsCtor g
   | e, sig => e.Evaluable sig
 
 /-- `Action.Scoped`'s companion: every expression the action evaluates builds, and a
@@ -197,6 +196,7 @@ def Expr.WidthOk : Expr → Signature → Prop
   | .var _, _ => True
   | .app f args, sig =>
       (∀ d, sig f = some d → args.length = d.arity) ∧ Expr.WidthOkList args sig
+  | .min a b, sig => Expr.WidthOk a sig ∧ Expr.WidthOk b sig
 
 /-- `Expr.WidthOk` over an argument list. -/
 def Expr.WidthOkList : List Expr → Signature → Prop
@@ -209,6 +209,7 @@ end
 def Expr.AtomWidthOk : Expr → Signature → Prop
   | .app f cols, sig =>
       (∀ d, sig f = some d → cols.length = d.entryWidth) ∧ Expr.WidthOkList cols sig
+  | .min a b, sig => Expr.WidthOk a sig ∧ Expr.WidthOk b sig
   | _, _ => True
 
 /-- Complete atoms have their declared entry width; union operands use value widths. -/
@@ -267,13 +268,13 @@ the check would read back `Function.update`'s own entry and always fail. -/
 /-! ### Declaredness of a `:merge`
 
 The one check that walks into a `:merge`. `Evaluable` is the wrong demand there: a merge
-body is where primitives are legal, and it may `set` another merge function. -/
+body may `set` another merge function. -/
 
-/-- Every name applied in `e` is a primitive or a declared function, of any kind. -/
+/-- Every name applied in `e` is a declared function, of any kind. -/
 def Expr.Declared (e : Expr) (sig : Signature) : Prop :=
-  ∀ f ∈ e.fns, Prim.ofName f ≠ none ∨ sig f ≠ none
+  ∀ f ∈ e.fns, sig f ≠ none
 
-/-- A `set` head must be declared outright: a primitive has no table. -/
+/-- A `set` head must be declared outright. -/
 def Action.Declared : Action → Signature → Prop
   | .expr e, sig => e.Declared sig
   | .union e₁ e₂, sig => e₁.Declared sig ∧ e₂.Declared sig
@@ -353,27 +354,36 @@ declared. -/
 
 /-! ### Ordering-freedom
 
-The second condition on *positions* rather than names, and the alternative to union-freedom:
-where a program may apply `ordering-gt`. It compares two terms by `Term.blt`, a structural
-order, where egglog compares by e-class id, so it is the one part of `Expr.eval` that is not
-stable under congruence — `union (f 1) (g 1)` sends `ordering-gt (f 1) (f 2)` and
-`ordering-gt (g 1) (f 2)` to different booleans. Excluding it excludes all four of egglog's
-bundled choices, which are `if`s over it. The other three primitives stay: `min`/`max`
-answer only on literals, and `Cong.eq_of_isLit` makes a literal's class a singleton, so
-congruent operands to them *are* those operands (`Prim.apply_cong`); `if` returns an operand
-unexamined, so congruent operands give a congruent answer.
+The other condition, and it is about where a program may apply `min`. It compares two terms
+by `Term.blt`, a structural order, where egglog compares by e-class id. It is therefore not
+stable under congruence: `union (f 1) (g 1)` lets `min (f 1) (f 2)` and `min (g 1) (f 2)`
+settle on incongruent terms. On literals it is stable, since `Cong.eq_of_isLit` makes a
+literal's class a singleton, but this untyped model cannot tell the two uses apart, so the
+condition excludes `min` outright.
 
 It walks into a rule — both its query, which evaluates its patterns, and its head — and
 into a `:merge`, since a body and its result are evaluated too. -/
 
-/-- No application in `e` names the choice primitive. -/
-def Expr.OrderingFree (e : Expr) : Prop :=
-  ∀ f ∈ e.fns, Prim.ofName f ≠ some .orderingGt
+mutual
 
-/-- `Expr.OrderingFree` over an argument list. Stated on `Expr.fnsList` rather than
-pointwise because that is what the evaluation induction reads. -/
-def Expr.OrderingFreeList (es : List Expr) : Prop :=
-  ∀ f ∈ Expr.fnsList es, Prim.ofName f ≠ some .orderingGt
+/-- Whether `min` occurs anywhere in `e`. -/
+def Expr.hasMin : Expr → Bool
+  | .lit _ => false
+  | .var _ => false
+  | .app _ args => Expr.hasMinList args
+  | .min _ _ => true
+
+def Expr.hasMinList : List Expr → Bool
+  | [] => false
+  | e :: es => e.hasMin || Expr.hasMinList es
+
+end
+
+/-- No `min` in `e`. -/
+def Expr.OrderingFree (e : Expr) : Prop := e.hasMin = false
+
+/-- `Expr.OrderingFree` over an argument list. -/
+def Expr.OrderingFreeList (es : List Expr) : Prop := Expr.hasMinList es = false
 
 /-- A query pattern is evaluated, so it carries the condition too. -/
 def Pattern.OrderingFree : Pattern → Prop
@@ -396,7 +406,7 @@ the substitution. -/
 /-- `.noMerge` runs nothing; a `:merge` evaluates both its body and its result — and it
 *compares* the two colliding value tuples, which is the second instability here.
 `Spec/Step.lean`'s `MergeConflict` decides whether a collision fires by **identity** on
-those tuples, and identity is no more stable under congruence than `ordering-gt` is: moved
+those tuples, and identity is no more stable under congruence than `min` is: moved
 to congruent values a firing can become a skip. Only a declaration that always conflicts
 survives the move — `FnDecl.unchangedWidth = none`, which is `body = []` with no
 `:internal-identity-vals`. Every `:merge` *expression* is that, `:merge (min old new)` and
@@ -425,5 +435,36 @@ def Signature.OrderingFree (sig : Signature) : Prop :=
 @[simp] def Program.OrderingFree : Program → Prop
   | [] => True
   | c :: cs => c.OrderingFree ∧ Program.OrderingFree cs
+
+instance (e : Expr) : Decidable e.OrderingFree := inferInstanceAs (Decidable (_ = false))
+instance (es : List Expr) : Decidable (Expr.OrderingFreeList es) :=
+  inferInstanceAs (Decidable (_ = false))
+instance : ∀ p : Pattern, Decidable p.OrderingFree
+  | .expr e => inferInstanceAs (Decidable e.OrderingFree)
+  | .eq a b => inferInstanceAs (Decidable (a.OrderingFree ∧ b.OrderingFree))
+instance : ∀ a : Action, Decidable a.OrderingFree
+  | .expr e => inferInstanceAs (Decidable e.OrderingFree)
+  | .union a b => inferInstanceAs (Decidable (a.OrderingFree ∧ b.OrderingFree))
+instance instDecidableActionsOrderingFree : ∀ as : List Action, Decidable (Actions.OrderingFree as)
+  | [] => inferInstanceAs (Decidable True)
+  | a :: as => @instDecidableAnd _ _ inferInstance (instDecidableActionsOrderingFree as)
+instance (r : Rule) : Decidable r.OrderingFree :=
+  inferInstanceAs (Decidable ((∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions))
+instance : ∀ ms : MergeSpec, Decidable ms.OrderingFree
+  | .merge body res => decidable_of_iff (body.isEmpty = true ∧ Expr.OrderingFreeList res)
+      (by simp [List.isEmpty_iff])
+  | .noMerge => inferInstanceAs (Decidable True)
+instance (d : FnDecl) : Decidable d.OrderingFree :=
+  decidable_of_iff (d.identityVals = none ∧ ∀ ms ∈ d.merge.toList, ms.OrderingFree)
+    (by unfold FnDecl.OrderingFree; rcases d.merge with _ | ms <;> simp)
+instance : ∀ c : Cmd, Decidable c.OrderingFree
+  | .action a => inferInstanceAs (Decidable a.OrderingFree)
+  | .rule r => inferInstanceAs (Decidable r.OrderingFree)
+  | .run _ => inferInstanceAs (Decidable True)
+  | .saturate _ => inferInstanceAs (Decidable True)
+  | .decl _ d => inferInstanceAs (Decidable d.OrderingFree)
+instance instDecidableProgramOrderingFree : ∀ P : Program, Decidable (Program.OrderingFree P)
+  | [] => inferInstanceAs (Decidable True)
+  | c :: cs => @instDecidableAnd _ _ inferInstance (instDecidableProgramOrderingFree cs)
 
 end Egglog

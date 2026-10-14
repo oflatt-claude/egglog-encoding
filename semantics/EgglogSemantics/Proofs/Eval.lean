@@ -62,6 +62,13 @@ theorem Database.mem_terms_of_arg {db : Database} (hwf : db.WF) {f : FnName}
   hwf.subtermClosed _ h
     (Term.mem_subterms.mpr (Term.IsSubterm.arg ht (Term.IsSubterm.refl t)))
 
+/-- `Term.least` answers with one of its operands. -/
+theorem Term.least_eq_or (s t : Term) : Term.least s t = s ∨ Term.least s t = t := by
+  unfold Term.least
+  split
+  · exact Or.inr rfl
+  · exact Or.inl rfl
+
 namespace Expr
 @[simp] theorem eval_lit {sig : Signature} {l : Lit} {σ : Env} :
     (Expr.lit l).eval sig σ = some (.lit l) := rfl
@@ -71,45 +78,43 @@ namespace Expr
 
 /-- The building case, which is the only one the constructor fragment ever takes. -/
 @[simp] theorem eval_app_ctor {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    (hp : Prim.ofName f = none) (hc : sig.IsCtor f) :
+    (hc : sig.IsCtor f) :
     (Expr.app f args).eval sig σ = (Expr.evalList sig args σ).map (Term.app f) := by
-  simp only [Expr.eval, hp, if_pos hc]
+  simp only [Expr.eval, if_pos hc]
 
-/-- The computing case. A reserved name shadows a user function, so this needs no
-condition on the signature. -/
-theorem eval_app_prim {sig : Signature} {f : FnName} {p : Prim} {args : List Expr}
-    {σ : Env} (hp : Prim.ofName f = some p) :
-    (Expr.app f args).eval sig σ = (Expr.evalList sig args σ).bind p.apply := by
-  simp only [Expr.eval, hp]
+/-- The choosing case: the smaller of the two operands in the term order. -/
+@[simp] theorem eval_min {sig : Signature} {a b : Expr} {σ : Env} :
+    (Expr.min a b).eval sig σ =
+      (a.eval sig σ).bind fun x => (b.eval sig σ).map (Term.least x) := rfl
 
-/-- **The stuck case**, all of it: anything that is neither a primitive nor a *declared*
-constructor has no rule. It covers the two lookups — a `:merge` and a `:no-merge` function
-— and, since declaration is required, the name nobody declared. -/
+/-- **The stuck case**, all of it: anything that is not a *declared* constructor has no
+rule. It covers the two lookups — a `:merge` and a `:no-merge` function — and, since
+declaration is required, the name nobody declared. -/
 theorem eval_app_not_ctor {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    (hp : Prim.ofName f = none) (hc : ¬ sig.IsCtor f) :
+    (hc : ¬ sig.IsCtor f) :
     (Expr.app f args).eval sig σ = none := by
-  simp only [Expr.eval, hp, if_neg hc]
+  simp only [Expr.eval, if_neg hc]
 
 /-- The reading case, which has no rule: an application of a merge function is a lookup,
 and `Impl/Check.lean`'s `noLookup` rejects one in every position this is called from. -/
 theorem eval_app_merge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    {body : List Action} {res : List Expr} (hp : Prim.ofName f = none)
+    {body : List Action} {res : List Expr}
     (hc : sig.mergeOf f = some (MergeSpec.merge body res)) :
     (Expr.app f args).eval sig σ = none :=
-  eval_app_not_ctor hp (Signature.not_isCtor hc)
+  eval_app_not_ctor (Signature.not_isCtor hc)
 
 /-- `eval_app_merge` for a `:no-merge` function, which is a lookup for the same reason. -/
 theorem eval_app_noMerge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    (hp : Prim.ofName f = none) (hc : sig.mergeOf f = some MergeSpec.noMerge) :
+    (hc : sig.mergeOf f = some MergeSpec.noMerge) :
     (Expr.app f args).eval sig σ = none :=
-  eval_app_not_ctor hp (Signature.not_isCtor hc)
+  eval_app_not_ctor (Signature.not_isCtor hc)
 
 /-- The undeclared case, spelled out: a name the signature does not mention builds
 nothing. -/
 theorem eval_app_undeclared {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
-    (hp : Prim.ofName f = none) (hc : sig f = none) :
+    (hc : sig f = none) :
     (Expr.app f args).eval sig σ = none :=
-  eval_app_not_ctor hp (Signature.not_isCtor_of_none hc)
+  eval_app_not_ctor (Signature.not_isCtor_of_none hc)
 
 @[simp] theorem evalList_nil {sig : Signature} {σ : Env} :
     Expr.evalList sig [] σ = some [] := rfl
@@ -166,30 +171,13 @@ theorem Term.ctorTerm_lit {sig : Signature} {l : Lit} : Term.CtorTerm sig (.lit 
   rw [Term.subterms_lit] at hsub
   exact absurd hsub (by simp)
 
-/-- A primitive returns one of its operands (`if`) or a fresh literal, so it cannot
-introduce a non-constructor application. -/
-theorem Prim.apply_ctorTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
-    (hts : ∀ t ∈ ts, Term.CtorTerm sig t) (h : p.apply ts = some v) :
-    Term.CtorTerm sig v := by
-  unfold Prim.apply at h
-  split at h
-  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
-  · simp only [Option.some_inj] at h
-    subst h
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
-  · simp only [Option.some_inj] at h; subst h; exact Term.ctorTerm_lit
-  · exact absurd h (by simp)
-
 mutual
 
 /-- **Evaluation only ever builds constructor terms.**
 
 Each branch that produces a term stays inside the constructor fragment: the building
-branch's head is a *declared* constructor by the guard the evaluator just tested, and a
-primitive returns an operand or a literal. Nothing reads a row, so no case has to place a
+branch's head is a *declared* constructor by the guard the evaluator just tested, and
+`min` returns one of its operands. Nothing reads a row, so no case has to place a
 recorded output back in `terms`. This is what `FDatabase.Inv.execAction` needs. -/
 theorem Expr.eval_ctorTerm {sig : Signature} {σ : Env}
     (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {e : Expr} {t : Term}
@@ -202,24 +190,25 @@ theorem Expr.eval_ctorTerm {sig : Signature} {σ : Env}
     rw [Expr.eval_var] at hs
     exact hσ (v, t) (Env.mem_of_lookup hs)
   | .app f args =>
-    cases hp : Prim.ofName f with
-    | some p =>
-      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at hs
-      obtain ⟨ts, hts, happ⟩ := hs
-      exact Prim.apply_ctorTerm (Expr.evalList_ctorTerm hσ hts) happ
-    | none =>
-      by_cases hu : sig.IsCtor f
-      · rw [Expr.eval_app_ctor hp hu, Option.map_eq_some_iff] at hs
-        obtain ⟨ts, hts, rfl⟩ := hs
-        have hts' := Expr.evalList_ctorTerm hσ hts
-        intro g bs hsub
-        rw [Term.subterms_app] at hsub
-        rcases Set.mem_insert_iff.mp hsub with heq | hmem
-        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
-          exact hu
-        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
-          exact hts' x hx g bs hxs
-      · rw [Expr.eval_app_not_ctor hp hu] at hs; exact absurd hs (by simp)
+    by_cases hu : sig.IsCtor f
+    · rw [Expr.eval_app_ctor hu, Option.map_eq_some_iff] at hs
+      obtain ⟨ts, hts, rfl⟩ := hs
+      have hts' := Expr.evalList_ctorTerm hσ hts
+      intro g bs hsub
+      rw [Term.subterms_app] at hsub
+      rcases Set.mem_insert_iff.mp hsub with heq | hmem
+      · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+        exact hu
+      · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+        exact hts' x hx g bs hxs
+    · rw [Expr.eval_app_not_ctor hu] at hs; exact absurd hs (by simp)
+  | .min a b =>
+    rw [Expr.eval_min, Option.bind_eq_some_iff] at hs
+    obtain ⟨x, hx, hmap⟩ := hs
+    obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+    rcases Term.least_eq_or x y with h | h <;> rw [h]
+    · exact Expr.eval_ctorTerm hσ hx
+    · exact Expr.eval_ctorTerm hσ hy
 
 theorem Expr.evalList_ctorTerm {sig : Signature} {σ : Env}
     (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {es : List Expr} {ts : List Term}
@@ -258,28 +247,11 @@ theorem Term.declaredTerm_lit {sig : Signature} {l : Lit} :
   rw [Term.subterms_lit] at hsub
   exact absurd hsub (by simp)
 
-/-- A primitive returns one of its operands (`if`) or a fresh literal, so it builds no
-application of its own. -/
-theorem Prim.apply_declaredTerm {sig : Signature} {p : Prim} {ts : List Term} {v : Term}
-    (hts : ∀ t ∈ ts, Term.DeclaredTerm sig t) (h : p.apply ts = some v) :
-    Term.DeclaredTerm sig v := by
-  unfold Prim.apply at h
-  split at h
-  · simp only [Option.some_inj] at h; subst h; exact Term.declaredTerm_lit
-  · simp only [Option.some_inj] at h
-    subst h
-    split
-    · exact hts _ (by simp)
-    · exact hts _ (by simp)
-  · simp only [Option.some_inj] at h; subst h; exact Term.declaredTerm_lit
-  · simp only [Option.some_inj] at h; subst h; exact Term.declaredTerm_lit
-  · exact absurd h (by simp)
-
 mutual
 
 /-- **A width-checked expression evaluates to a term of the declared width.** The building
 branch's head is a declared constructor, whose `entryWidth` is its `arity`, and `WidthOk`
-supplies the argument count; a primitive returns an operand or a literal. -/
+supplies the argument count; `min` returns one of its operands. -/
 theorem Expr.eval_declaredTerm {sig : Signature} {σ : Env}
     (hσ : ∀ b ∈ σ, Term.DeclaredTerm sig b.2) {e : Expr} {t : Term}
     (hw : e.WidthOk sig) (hs : e.eval sig σ = some t) : Term.DeclaredTerm sig t := by
@@ -291,27 +263,28 @@ theorem Expr.eval_declaredTerm {sig : Signature} {σ : Env}
     rw [Expr.eval_var] at hs
     exact hσ (v, t) (Env.mem_of_lookup hs)
   | .app f args =>
-    cases hp : Prim.ofName f with
-    | some p =>
-      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at hs
-      obtain ⟨ts, hts, happ⟩ := hs
-      exact Prim.apply_declaredTerm (Expr.evalList_declaredTerm hσ hw.2 hts) happ
-    | none =>
-      by_cases hu : sig.IsCtor f
-      · rw [Expr.eval_app_ctor hp hu, Option.map_eq_some_iff] at hs
-        obtain ⟨ts, hts, rfl⟩ := hs
-        have hts' := Expr.evalList_declaredTerm hσ hw.2 hts
-        obtain ⟨d, hd, hdm⟩ := hu
-        intro g bs hsub
-        rw [Term.subterms_app] at hsub
-        rcases Set.mem_insert_iff.mp hsub with heq | hmem
-        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
-          refine ⟨d, hd, ?_⟩
-          rw [Expr.evalList_length hts, hw.1 d hd, FnDecl.entryWidth, if_pos]
-          simp [hdm]
-        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
-          exact hts' x hx g bs hxs
-      · rw [Expr.eval_app_not_ctor hp hu] at hs; exact absurd hs (by simp)
+    by_cases hu : sig.IsCtor f
+    · rw [Expr.eval_app_ctor hu, Option.map_eq_some_iff] at hs
+      obtain ⟨ts, hts, rfl⟩ := hs
+      have hts' := Expr.evalList_declaredTerm hσ hw.2 hts
+      obtain ⟨d, hd, hdm⟩ := hu
+      intro g bs hsub
+      rw [Term.subterms_app] at hsub
+      rcases Set.mem_insert_iff.mp hsub with heq | hmem
+      · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+        refine ⟨d, hd, ?_⟩
+        rw [Expr.evalList_length hts, hw.1 d hd, FnDecl.entryWidth, if_pos]
+        simp [hdm]
+      · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+        exact hts' x hx g bs hxs
+    · rw [Expr.eval_app_not_ctor hu] at hs; exact absurd hs (by simp)
+  | .min a b =>
+    rw [Expr.eval_min, Option.bind_eq_some_iff] at hs
+    obtain ⟨x, hx, hmap⟩ := hs
+    obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+    rcases Term.least_eq_or x y with h | h <;> rw [h]
+    · exact Expr.eval_declaredTerm hσ hw.1 hx
+    · exact Expr.eval_declaredTerm hσ hw.2 hy
 
 theorem Expr.evalList_declaredTerm {sig : Signature} {σ : Env}
     (hσ : ∀ b ∈ σ, Term.DeclaredTerm sig b.2) {es : List Expr} {ts : List Term}
@@ -381,6 +354,7 @@ theorem Expr.eval_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree σ�
   | .lit _ => rfl
   | .var v => exact h v
   | .app f args => simp only [Expr.eval, Expr.evalList_agree h args]
+  | .min a b => simp only [Expr.eval, Expr.eval_agree h a, Expr.eval_agree h b]
 
 theorem Expr.evalList_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂)
     (es : List Expr) : Expr.evalList sig es σ₁ = Expr.evalList sig es σ₂ := by
@@ -407,6 +381,9 @@ theorem Expr.eval_agreeOn {sig : Signature} {σ₁ σ₂ : Env} (e : Expr)
   | .lit _ => rfl
   | .var v => exact h v (by simp)
   | .app f args => simp only [Expr.eval, Expr.evalList_agreeOn args (by simpa using h)]
+  | .min a b =>
+    simp only [Expr.eval, Expr.eval_agreeOn a (fun v hv => h v (by simp [hv])),
+      Expr.eval_agreeOn b (fun v hv => h v (by simp [hv]))]
 
 @[inherit_doc Expr.eval_agreeOn]
 theorem Expr.evalList_agreeOn {sig : Signature} {σ₁ σ₂ : Env} (es : List Expr)
@@ -423,12 +400,12 @@ end
 
 mutual
 
-/-- Evaluation gets stuck on an unbound variable, on a lookup and on a primitive; an
-expression with none of the three evaluates. The two conditions are exactly
-`Expr.Scoped` and `Expr.Evaluable` (`Spec/Scope.lean`). -/
+/-- Evaluation gets stuck on an unbound variable and on a lookup; an expression with
+neither evaluates. The two conditions are exactly `Expr.Scoped` and `Expr.Evaluable`
+(`Spec/Scope.lean`). -/
 theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
     (h : ∀ v ∈ e.vars, v ∈ Env.dom σ)
-    (hf : ∀ f ∈ e.fns, Prim.ofName f = none ∧ sig.IsCtor f) :
+    (hf : ∀ f ∈ e.fns, sig.IsCtor f) :
     ∃ t, e.eval sig σ = some t := by
   match e with
   | .lit l => exact ⟨.lit l, rfl⟩
@@ -437,14 +414,20 @@ theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
       (Env.lookup_isSome_iff_mem_dom.mpr (h v (by simp)))
     exact ⟨t, ht⟩
   | .app f args =>
-    obtain ⟨hp, hc⟩ := hf f (by simp)
+    have hc := hf f (by simp)
     obtain ⟨ts, hts⟩ := Expr.evalList_isSome args (by simpa using h)
       (fun g hg => hf g (by simp [hg]))
-    exact ⟨.app f ts, by rw [Expr.eval_app_ctor hp hc, hts, Option.map_some]⟩
+    exact ⟨.app f ts, by rw [Expr.eval_app_ctor hc, hts, Option.map_some]⟩
+  | .min a b =>
+    obtain ⟨x, hx⟩ := Expr.eval_isSome a (fun v hv => h v (by simp [hv]))
+      (fun g hg => hf g (by simp [hg]))
+    obtain ⟨y, hy⟩ := Expr.eval_isSome b (fun v hv => h v (by simp [hv]))
+      (fun g hg => hf g (by simp [hg]))
+    exact ⟨Term.least x y, by rw [Expr.eval_min, hx, Option.bind_some, hy, Option.map_some]⟩
 
 theorem Expr.evalList_isSome {sig : Signature} {σ : Env} (es : List Expr)
     (h : ∀ v ∈ Expr.varsList es, v ∈ Env.dom σ)
-    (hf : ∀ f ∈ Expr.fnsList es, Prim.ofName f = none ∧ sig.IsCtor f) :
+    (hf : ∀ f ∈ Expr.fnsList es, sig.IsCtor f) :
     ∃ ts, Expr.evalList sig es σ = some ts := by
   match es with
   | [] => exact ⟨[], rfl⟩
@@ -469,20 +452,19 @@ theorem Expr.eval_append_env {sig : Signature} {σ τ : Env} :
   | .lit _, _, h => h
   | .var v, _, h => by rw [Expr.eval] at h ⊢; exact Env.lookup_append_of_some h
   | .app f args, t, h => by
-      cases hp : Prim.ofName f with
-      | some pr =>
-          rw [Expr.eval, hp] at h ⊢
-          obtain ⟨ts, hts, hap⟩ := Option.bind_eq_some_iff.mp h
-          rw [Expr.evalList_append_env args hts]
-          exact hap
-      | none =>
-          by_cases hctor : sig.IsCtor f
-          · rw [Expr.eval_app_ctor hp hctor] at h ⊢
-            obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
-            rw [Expr.evalList_append_env args hts, Option.map_some]
-            exact congrArg some hap
-          · rw [Expr.eval, hp, if_neg hctor] at h
-            exact absurd h (by simp)
+      by_cases hctor : sig.IsCtor f
+      · rw [Expr.eval_app_ctor hctor] at h ⊢
+        obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
+        rw [Expr.evalList_append_env args hts, Option.map_some]
+        exact congrArg some hap
+      · rw [Expr.eval_app_not_ctor hctor] at h
+        exact absurd h (by simp)
+  | .min a b, t, h => by
+      rw [Expr.eval_min] at h ⊢
+      obtain ⟨x, hx, hmap⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+      rw [Expr.eval_append_env a hx, Option.bind_some, Expr.eval_append_env b hy,
+        Option.map_some]
 
 @[inherit_doc Expr.eval_append_env]
 theorem Expr.evalList_append_env {sig : Signature} {σ τ : Env} :
@@ -508,6 +490,7 @@ theorem entry_none_of_allConstructors {sig : Signature} (hs : sig.AllConstructor
   cases e with
   | lit _ => rfl
   | var _ => rfl
+  | min _ _ => rfl
   | app f cols =>
     cases hd : sig f with
     | none => simp [Expr.entry, hd]
@@ -522,9 +505,9 @@ theorem entry_none_of_allConstructors {sig : Signature} (hs : sig.AllConstructor
     (Expr.var v).evalAtom sig σ = Env.lookup v σ := rfl
 
 @[simp] theorem evalAtom_app_decl {sig : Signature} {f : FnName} {cols : List Expr}
-    {d : FnDecl} {σ : Env} (hp : Prim.ofName f = none) (hd : sig f = some d) :
+    {d : FnDecl} {σ : Env} (hd : sig f = some d) :
     (Expr.app f cols).evalAtom sig σ = (Expr.evalList sig cols σ).map (Term.app f) := by
-  simp [Expr.evalAtom, hp, hd]
+  simp [Expr.evalAtom, hd]
 
 @[simp] theorem evalList_append_map {sig : Signature} {σ : Env} (as bs : List Expr) :
     Expr.evalList sig (as ++ bs) σ = (Expr.evalList sig as σ).bind fun ts =>
@@ -538,38 +521,34 @@ theorem entry_none_of_allConstructors {sig : Signature} (hs : sig.AllConstructor
 /-- Recover the table declaration and the full column list of an entry atom. -/
 theorem entry_some {sig : Signature} {e : Expr} {f : FnName} {keys vals : List Expr}
     (h : e.entry sig = some (f, keys, vals)) :
-    ∃ d, sig f = some d ∧ d.merge.isSome = true ∧ Prim.ofName f = none ∧
-      e = .app f (keys ++ vals) := by
+    ∃ d, sig f = some d ∧ d.merge.isSome = true ∧ e = .app f (keys ++ vals) := by
   cases e with
   | lit _ => simp [Expr.entry] at h
   | var _ => simp [Expr.entry] at h
+  | min _ _ => simp [Expr.entry] at h
   | app g cols =>
-    cases hp : Prim.ofName g with
-    | some p => simp [Expr.entry, hp] at h
-    | none =>
-      cases hd : sig g with
-      | none => simp [Expr.entry, hp, hd] at h
-      | some d =>
-        simp only [Expr.entry, hp, Option.isSome_none, Bool.false_eq_true, if_false,
-          hd, Option.bind_some] at h
-        split at h
-        · rename_i hm
-          cases Option.some.inj h
-          exact ⟨d, hd, hm, hp, by rw [List.take_append_drop]⟩
-        · simp at h
+    cases hd : sig g with
+    | none => simp [Expr.entry, hd] at h
+    | some d =>
+      simp only [Expr.entry, hd, Option.bind_some] at h
+      split at h
+      · rename_i hm
+        cases Option.some.inj h
+        exact ⟨d, hd, hm, by rw [List.take_append_drop]⟩
+      · simp at h
 
 theorem evalAtom_entry {sig : Signature} {e : Expr} {f : FnName} {keys vals : List Expr}
     {σ : Env} {ts us : List Term} (he : e.entry sig = some (f, keys, vals))
     (hk : Expr.evalList sig keys σ = some ts) (hv : Expr.evalList sig vals σ = some us) :
     e.evalAtom sig σ = some (.app f (ts ++ us)) := by
-  obtain ⟨d, hd, _, hp, rfl⟩ := entry_some he
-  simp [evalAtom_app_decl hp hd, hk, hv]
+  obtain ⟨d, hd, _, rfl⟩ := entry_some he
+  simp [evalAtom_app_decl hd, hk, hv]
 
 theorem evalAtom_app_inv {sig : Signature} {f : FnName} {cols : List Expr}
-    {σ : Env} {t : Term} (hp : Prim.ofName f = none)
+    {σ : Env} {t : Term}
     (h : (Expr.app f cols).evalAtom sig σ = some t) :
     ∃ ts, Expr.evalList sig cols σ = some ts ∧ t = .app f ts := by
-  simp only [Expr.evalAtom, hp] at h
+  simp only [Expr.evalAtom] at h
   split at h
   · obtain ⟨ts, hs, rfl⟩ := Option.map_eq_some_iff.mp h
     exact ⟨ts, hs, rfl⟩
@@ -581,14 +560,12 @@ theorem evalAtom_of_eval {sig : Signature} {e : Expr} {σ : Env} {t : Term}
   cases e with
   | lit _ => exact h
   | var _ => exact h
+  | min _ _ => exact h
   | app f cols =>
-    cases hp : Prim.ofName f with
-    | some p => simpa [Expr.evalAtom, Expr.eval, hp] using h
-    | none =>
-      by_cases hc : sig.IsCtor f
-      · obtain ⟨d, hd, hm⟩ := hc
-        simpa [Expr.evalAtom, Expr.eval, hp, hd, Signature.IsCtor, hm] using h
-      · simp [Expr.eval, hp, hc] at h
+    by_cases hc : sig.IsCtor f
+    · obtain ⟨d, hd, hm⟩ := hc
+      simpa [Expr.evalAtom, Expr.eval, hd, Signature.IsCtor, hm] using h
+    · simp [Expr.eval, hc] at h
 
 /-- In a constructor-only signature the two evaluators coincide. -/
 theorem evalAtom_eq_eval {sig : Signature} (hs : sig.AllConstructors) (e : Expr) (σ : Env) :
@@ -596,15 +573,13 @@ theorem evalAtom_eq_eval {sig : Signature} (hs : sig.AllConstructors) (e : Expr)
   cases e with
   | lit _ => rfl
   | var _ => rfl
+  | min _ _ => rfl
   | app f cols =>
-    cases hp : Prim.ofName f with
-    | some p => simp [Expr.evalAtom, Expr.eval, hp]
-    | none =>
-      cases hd : sig f with
-      | none => simp [Expr.evalAtom, Expr.eval, hp, hd, Signature.IsCtor]
-      | some d =>
-        have hm : d.merge = none := by simpa [Signature.mergeOf, hd] using hs f
-        simp [Expr.evalAtom, Expr.eval, hp, hd, Signature.IsCtor, hm]
+    cases hd : sig f with
+    | none => simp [Expr.evalAtom, Expr.eval, hd, Signature.IsCtor]
+    | some d =>
+      have hm : d.merge = none := by simpa [Signature.mergeOf, hd] using hs f
+      simp [Expr.evalAtom, Expr.eval, hd, Signature.IsCtor, hm]
 
 theorem evalAtom_agree {sig : Signature} {σ τ : Env} (h : Env.Agree σ τ) (e : Expr) :
     e.evalAtom sig σ = e.evalAtom sig τ := by
@@ -612,6 +587,7 @@ theorem evalAtom_agree {sig : Signature} {σ τ : Env} (h : Env.Agree σ τ) (e 
   | lit _ => rfl
   | var v => exact h v
   | app f cols => simp only [Expr.evalAtom, Expr.evalList_agree h cols]
+  | min a b => exact Expr.eval_agree h (.min a b)
 
 theorem evalAtom_agreeOn {sig : Signature} {σ τ : Env} (e : Expr)
     (h : ∀ v ∈ e.vars, Env.lookup v σ = Env.lookup v τ) :
@@ -620,6 +596,7 @@ theorem evalAtom_agreeOn {sig : Signature} {σ τ : Env} (e : Expr)
   | lit _ => rfl
   | var v => exact h v (by simp)
   | app f cols => simp only [Expr.evalAtom, Expr.evalList_agreeOn cols (by simpa using h)]
+  | min a b => exact Expr.eval_agreeOn (.min a b) h
 
 /-- Atom evaluation respects the declaration's full entry width. -/
 theorem evalAtom_declaredTerm {sig : Signature} {σ : Env}
@@ -630,25 +607,20 @@ theorem evalAtom_declaredTerm {sig : Signature} {σ : Env}
     cases Option.some.inj hs
     exact Term.declaredTerm_lit
   | var v => exact hσ (v, t) (Env.mem_of_lookup hs)
+  | min a b => exact Expr.eval_declaredTerm hσ (show (Expr.min a b).WidthOk sig from hw) hs
   | app f cols =>
-    cases hp : Prim.ofName f with
-    | some p =>
-      simp only [Expr.evalAtom, hp] at hs
-      obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp hs
-      exact Prim.apply_declaredTerm (Expr.evalList_declaredTerm hσ hw.2 hts) happ
-    | none =>
-      cases hd : sig f with
-      | none => simp [Expr.evalAtom, hp, hd] at hs
-      | some d =>
-        rw [evalAtom_app_decl hp hd] at hs
-        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp hs
-        intro g bs hsub
-        rw [Term.subterms_app] at hsub
-        rcases Set.mem_insert_iff.mp hsub with heq | hmem
-        · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
-          exact ⟨d, hd, (Expr.evalList_length hts).trans (hw.1 d hd)⟩
-        · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
-          exact Expr.evalList_declaredTerm hσ hw.2 hts x hx g bs hxs
+    cases hd : sig f with
+    | none => simp [Expr.evalAtom, hd] at hs
+    | some d =>
+      rw [evalAtom_app_decl hd] at hs
+      obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp hs
+      intro g bs hsub
+      rw [Term.subterms_app] at hsub
+      rcases Set.mem_insert_iff.mp hsub with heq | hmem
+      · obtain ⟨rfl, rfl⟩ := Term.app.injEq .. ▸ heq
+        exact ⟨d, hd, (Expr.evalList_length hts).trans (hw.1 d hd)⟩
+      · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
+        exact Expr.evalList_declaredTerm hσ hw.2 hts x hx g bs hxs
 
 end Expr
 

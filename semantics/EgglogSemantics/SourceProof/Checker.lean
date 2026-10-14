@@ -3,7 +3,7 @@ import EgglogSemantics.Spec.Scope
 
 namespace Egglog.SourceProof
 
-def exprOk (e : Expr) : Bool := e.fns.all fun f => (Prim.ofName f).isNone
+def exprOk (e : Expr) : Bool := !e.hasMin
 
 /-- A query fact is an application, as in egglog; an equality compares value expressions. -/
 def patternOk : Pattern → Bool

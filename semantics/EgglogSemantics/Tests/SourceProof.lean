@@ -97,7 +97,7 @@ private def functions : Program := declarations ++
 #guard !sourceOk functions
 #guard rejects functions (fiat (.app "Table" [a]))
 #guard !sourceOk (declarations ++
-  [.rule ⟨[.expr (.app "ordering-gt" [.var "x", .var "y"])], [], "R"⟩])
+  [.rule ⟨[.expr (.app "F" [.min (.var "x") (.var "y")])], [], "R"⟩])
 -- A bare variable or literal is not a query fact, as in egglog.
 #guard !sourceOk (declarations ++ [.rule ⟨[.expr (.var "x")], [], "R"⟩])
 #guard !sourceOk (declarations ++ [.rule ⟨[.expr (.lit (.int 3))], [], "R"⟩])

@@ -4,21 +4,8 @@ import EgglogSemantics.Source.Domain
 
 namespace Egglog.Congruence
 
-private theorem prim_apply_cases {p : Prim} {ts : List Term} {t : Term} (h : p.apply ts = some t) :
-    (∃ l, t = Term.lit l) ∨ t ∈ ts := by
-  unfold Prim.apply at h
-  split at h
-  · exact Or.inl ⟨_, (Option.some.inj h).symm⟩
-  · rename_i c a b
-    rw [Option.some.injEq] at h
-    subst h
-    by_cases hc : c <;> simp [hc]
-  · exact Or.inl ⟨_, (Option.some.inj h).symm⟩
-  · exact Or.inl ⟨_, (Option.some.inj h).symm⟩
-  · exact absurd h (by simp)
-
 def ConstructorTerm (sig : Signature) (t : Term) : Prop :=
-  ∀ f as, Term.app f as ∈ t.subterms → Prim.ofName f = none ∧ sig.IsCtor f
+  ∀ f as, Term.app f as ∈ t.subterms → sig.IsCtor f
 
 theorem ConstructorTerm.lit {sig : Signature} {l : Lit} : ConstructorTerm sig (.lit l) := by
   intro f as h
@@ -26,13 +13,13 @@ theorem ConstructorTerm.lit {sig : Signature} {l : Lit} : ConstructorTerm sig (.
   exact absurd h (by simp)
 
 theorem constructorTerm_app {sig : Signature} {f : FnName} {args : List Term}
-    (hf : Prim.ofName f = none) (hc : sig.IsCtor f) (ha : ∀ a ∈ args, ConstructorTerm sig a) :
+    (hc : sig.IsCtor f) (ha : ∀ a ∈ args, ConstructorTerm sig a) :
     ConstructorTerm sig (.app f args) := by
   intro g as h
   rw [Term.subterms_app, Set.mem_insert_iff] at h
   rcases h with h | h
   · obtain ⟨rfl, -⟩ := Term.app.inj h
-    exact ⟨hf, hc⟩
+    exact hc
   · obtain ⟨a, ha', hs⟩ := by simpa using h
     exact ha a ha' g as hs
 
@@ -46,22 +33,20 @@ theorem eval_constructorTerm {sig : Signature} {ρ : Env}
       exact ConstructorTerm.lit
   | .var v, t, h => hρ v t h
   | .app f args, t, h => by
-      cases hp : Prim.ofName f with
-      | some p =>
-          rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at h
-          obtain ⟨ts, hts, hap⟩ := h
-          have hall := evalList_constructorTerm hρ args hts
-          rcases prim_apply_cases hap with ⟨l, rfl⟩ | hmem
-          · exact ConstructorTerm.lit
-          · exact hall t hmem
-      | none =>
-          have hct : sig.IsCtor f := by
-            by_contra hc
-            rw [Expr.eval_app_not_ctor hp hc] at h
-            exact absurd h (by simp)
-          rw [Expr.eval_app_ctor hp hct] at h
-          obtain ⟨is, his, rfl⟩ := Option.map_eq_some_iff.mp h
-          exact constructorTerm_app hp hct (evalList_constructorTerm hρ args his)
+      have hct : sig.IsCtor f := by
+        by_contra hc
+        rw [Expr.eval_app_not_ctor hc] at h
+        exact absurd h (by simp)
+      rw [Expr.eval_app_ctor hct] at h
+      obtain ⟨is, his, rfl⟩ := Option.map_eq_some_iff.mp h
+      exact constructorTerm_app hct (evalList_constructorTerm hρ args his)
+  | .min a b, t, h => by
+      rw [Expr.eval_min, Option.bind_eq_some_iff] at h
+      obtain ⟨x, hx, hmap⟩ := h
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+      rcases Term.least_eq_or x y with h | h <;> rw [h]
+      · exact eval_constructorTerm hρ a hx
+      · exact eval_constructorTerm hρ b hy
 
 theorem evalList_constructorTerm {sig : Signature} {ρ : Env}
     (hρ : ∀ v u, Env.lookup v ρ = some u → ConstructorTerm sig u) :
@@ -196,8 +181,7 @@ theorem cmdStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.Terms
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       intro g q ht
-      exact ⟨(h g q (Database.terms_setSig ▸ ht)).1,
-        Signature.IsCtor.update hdecl (h g q (Database.terms_setSig ▸ ht)).2⟩
+      exact Signature.IsCtor.update hdecl (h g q (Database.terms_setSig ▸ ht))
 
 theorem programStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.TermsBuild)
     {p : Program} (hdecl : p.CtorDecls) (hstep : ProgramStep db p db') : db'.TermsBuild := by

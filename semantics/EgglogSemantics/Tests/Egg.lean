@@ -34,6 +34,7 @@ def Expr.toEgg : Expr → String
   | .lit (.bool b) => toString b
   | .var v => v
   | .app f args => "(" ++ f ++ Expr.toEggArgs args ++ ")"
+  | .min a b => "(min " ++ a.toEgg ++ " " ++ b.toEgg ++ ")"
 
 /-- `Expr.toEgg` over an argument list, each preceded by a space. -/
 def Expr.toEggArgs : List Expr → String
@@ -99,10 +100,9 @@ def MergeSpec.toEgg (sig : Signature) : MergeSpec → String
 **Sorts finally bite** (M9): egglog typechecks a `(function …)`, so a merge function
 needs a real output sort. Keys are the one eq-sort `Math`; the output is `i64`, as
 `tests/interval.egg` and `tests/merge-during-rebuild.egg` do. An eq-sorted output would
-dodge the base sort, but then the leader choice has to render — and this model spells
-`ordering-min` as `(if (ordering-gt …) …)`, which egglog has under neither name. Even
-reaching for egglog's own `ordering-min`, `Term.blt` is *structural* where that is by
-insertion order, so the two would pick different representatives. Row counts are per key
+dodge the base sort, but then the leader choice has to render as egglog's `ordering-min`,
+and `Term.blt` is *structural* where that is by insertion order, so the two would pick
+different representatives. Row counts are per key
 class and would survive that; nothing else would. Keeping keys eq-sorted also keeps
 `Term.lit` out of constructor arguments, so this file's standing literal mismatch stays out
 of the way.
@@ -140,14 +140,10 @@ read off the program's uses rather than from `Signature`. `Program.ctorDecls` tu
 into the declarations the model evaluates against and `Cmd.toEgg` renders, so the two
 descriptions of a program's constructors cannot drift.
 
-Two names must be kept out of the result, and for opposite reasons. A **declared `:merge`
-function** has its own `function` command, and `Program.ctorArities` filters it. A
-**primitive** has no declaration at all: `min`, `max`, `ordering-gt` and `if` are resolved
-by `Prim.ofName` before the signature is consulted, and egglog resolves `min`/`max` out of a
-table that is already populated, so declaring one is rejected with `Primitive min already
-declared.` `Program.fnArities` filters all four, which also keeps them out of
-`Program.fnNames` — a primitive is not a table and `(print-size)` never reports one. No case
-this file generates applies the two choice primitives, which egglog does not have.
+A **declared `:merge` function** has its own `function` command, and `Program.ctorArities`
+filters it. `min` is syntax rather than a name, so it never reaches the declarations; it
+renders as egglog's `min`, which agrees with `Term.blt` on the `i64` value columns every
+emitted merge function has.
 -/
 
 mutual
@@ -156,6 +152,7 @@ def Expr.fnArities : Expr → List (FnName × Nat)
   | .lit _ => []
   | .var _ => []
   | .app f args => (f, args.length) :: Expr.fnAritiesL args
+  | .min a b => a.fnArities ++ b.fnArities
 
 def Expr.fnAritiesL : List Expr → List (FnName × Nat)
   | [] => []
@@ -185,12 +182,9 @@ def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .saturate _ => []
   | .decl f d => (f, d.entryWidth) :: (d.merge.map MergeSpec.fnArities).getD []
 
-/-- Every function the program uses, with its arity, deduplicated — **primitives
-excluded**. A primitive is not a function of the program's signature: egglog has already
-declared it, so declaring one is an error and `(print-size)` never reports a row count for
-one. -/
+/-- Every function the program uses, with its arity, deduplicated. -/
 def Program.fnArities (p : Program) : List (FnName × Nat) :=
-  ((p.flatMap Cmd.fnArities).filter fun fa => (Prim.ofName fa.1).isNone).dedup
+  (p.flatMap Cmd.fnArities).dedup
 
 /-- The names the program declares as merge functions. These are `function` commands, not
 constructors. -/

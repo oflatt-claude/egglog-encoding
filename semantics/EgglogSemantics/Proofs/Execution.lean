@@ -172,9 +172,9 @@ end Egglog.FDatabase
 
 namespace Egglog
 
-/-- A complete nonprimitive atom, which is all a build emits. -/
+/-- A complete atom, which is all a build emits. -/
 def Action.IsAtomWrite : Action → Prop
-  | .expr (.app f _) => Prim.ofName f = none
+  | .expr (.app _ _) => True
   | _ => False
 
 /-- Atom writes evaluate identically under equal signatures and environments. -/

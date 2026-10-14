@@ -61,21 +61,20 @@ mutual
 
 /-- Every atom emitted by a global build is justified by a subterm of the source result. -/
 theorem encodeBuild_sourceWrites {src : Database} (hw : src.WF) {sig : Signature} {ρ : Env} :
-    ∀ (e : Expr) {t : Term}, (∀ f ∈ e.fns, Prim.ofName f = none) →
+    ∀ (e : Expr) {t : Term}, e.OrderingFree →
       (∀ fk ∈ e.ctors, (sig (viewName fk.1)).isSome = true) →
       e.eval sig ρ = some t → t ∈ src.terms → SourceWrites src sig ρ (encodeBuild e)
   | .lit _, _, _, _, _, _ => by intro a ha; cases ha
   | .var _, _, _, _, _, _ => by intro a ha; cases ha
+  | .min _ _, _, hp, _, _, _ => (Expr.not_orderingFree_min hp).elim
   | .app f args, _, hp, hd, he, ht => by
-      have hpf := hp f (by simp [Expr.fns])
       have hctor : sig.IsCtor f := by
         by_contra hn
-        rw [Expr.eval_app_not_ctor hpf hn] at he
+        rw [Expr.eval_app_not_ctor hn] at he
         contradiction
-      rw [Expr.eval_app_ctor hpf hctor] at he
+      rw [Expr.eval_app_ctor hctor] at he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
-      have hl := encodeBuildArgs_sourceWrites hw args
-        (fun g hg => hp g (by simp [Expr.fns, hg]))
+      have hl := encodeBuildArgs_sourceWrites hw args (Expr.orderingFree_app hp)
         (fun fk hk => hd fk (List.mem_cons_of_mem _ hk)) hts
         (fun t ht' => hw.subtermClosed _ ht (Term.arg_subterms ht' (Term.self_mem_subterms t)))
       intro a ha
@@ -84,17 +83,17 @@ theorem encodeBuild_sourceWrites {src : Database} (hw : src.WF) {sig : Signature
       · obtain rfl := List.mem_singleton.mp ha
         refine ⟨_, .app (viewName f) (ts ++ [.app f ts]), rfl, ?_, .view ht⟩
         have hval : (Expr.app f args).eval sig ρ = some (.app f ts) := by
-          rw [Expr.eval_app_ctor hpf hctor, hts]; rfl
+          rw [Expr.eval_app_ctor hctor, hts]; rfl
         have hcols : Expr.evalList sig (args ++ [.app f args]) ρ =
             some (ts ++ [.app f ts]) := Expr.evalList_append_eq hts (by
           simp only [Expr.evalList, hval, Option.bind_some, Option.map_some])
-        simp only [Expr.evalAtom, prim_viewName, hd (f, args.length) List.mem_cons_self,
+        simp only [Expr.evalAtom, hd (f, args.length) List.mem_cons_self,
           if_true, hcols, Option.map_some]
 
 @[inherit_doc encodeBuild_sourceWrites]
 theorem encodeBuildArgs_sourceWrites {src : Database} (hw : src.WF)
     {sig : Signature} {ρ : Env} :
-    ∀ (es : List Expr) {ts : List Term}, (∀ f ∈ Expr.fnsList es, Prim.ofName f = none) →
+    ∀ (es : List Expr) {ts : List Term}, Expr.OrderingFreeList es →
       (∀ fk ∈ Expr.ctorsList es, (sig (viewName fk.1)).isSome = true) →
       Expr.evalList sig es ρ = some ts → (∀ t ∈ ts, t ∈ src.terms) →
       SourceWrites src sig ρ (encodeBuildArgs es)
@@ -102,11 +101,9 @@ theorem encodeBuildArgs_sourceWrites {src : Database} (hw : src.WF)
   | e :: es, _, hp, hd, he, ht => by
       obtain ⟨t, ht', he⟩ := Option.bind_eq_some_iff.mp he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
-      have hfirst := encodeBuild_sourceWrites hw e
-        (fun f hf => hp f (by simp [Expr.fnsList, hf]))
+      have hfirst := encodeBuild_sourceWrites hw e (Expr.orderingFreeList_cons hp).1
         (fun fk hk => hd fk (by simp [Expr.ctorsList, hk])) ht' (ht t List.mem_cons_self)
-      have hrest := encodeBuildArgs_sourceWrites hw es
-        (fun f hf => hp f (by simp [Expr.fnsList, hf]))
+      have hrest := encodeBuildArgs_sourceWrites hw es (Expr.orderingFreeList_cons hp).2
         (fun fk hk => hd fk (by simp [Expr.ctorsList, hk])) hts
         (fun t ht' => ht t (List.mem_cons_of_mem _ ht'))
       intro a ha
@@ -118,10 +115,10 @@ theorem SourceWrites.append {src : Database} {sig : Signature} {ρ : Env} {as bs
     (ha : SourceWrites src sig ρ as) (hb : SourceWrites src sig ρ bs) :
     SourceWrites src sig ρ (as ++ bs) := fun a h => (List.mem_append.mp h).elim (ha a) (hb a)
 
-/-- The oriented UF write and all operand builds come from the asserted source union. -/
+/-- Both UF links and all operand builds come from the asserted source union. -/
 theorem encodeUnion_sourceWrites {src : Database} (hw : src.WF) {sig : Signature} {ρ : Env}
     {a b : Expr} {ta tb : Term}
-    (hp : ∀ e ∈ [a, b], ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ [a, b], e.OrderingFree)
     (hd : ∀ e ∈ [a, b], ∀ fk ∈ e.ctors, (sig (viewName fk.1)).isSome = true)
     (huf : (sig ufName).isSome = true)
     (ha : a.eval sig ρ = some ta) (hb : b.eval sig ρ = some tb) (hc : Cong src ta tb) :
@@ -130,19 +127,22 @@ theorem encodeUnion_sourceWrites {src : Database} (hw : src.WF) {sig : Signature
     ((encodeBuild_sourceWrites hw a (hp a (by simp)) (hd a (by simp)) ha hc.mem_of.1).append
       (encodeBuild_sourceWrites hw b (hp b (by simp)) (hd b (by simp)) hb hc.mem_of.2))
   intro act hact
-  obtain rfl := List.mem_singleton.mp hact
-  have hvals := eval_order_ids ha hb
-  refine ⟨_, .app ufName [upperId ta tb, lowerId ta tb], rfl, ?_, .uf ?_ (lowerId_le_upperId ..)⟩
-  · simp only [Expr.evalAtom, show Prim.ofName ufName = none from rfl, huf, if_true,
-      Expr.evalList, hvals.1, hvals.2, Option.bind_some, Option.map_some]
-  · rcases ids_paired ta tb with ⟨hu, hl⟩ | ⟨hu, hl⟩
-    · simpa only [hu, hl] using hc
-    · simpa only [hu, hl] using hc.symm
+  have hmin := eval_min_ids ha hb
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hact
+  rcases hact with rfl | rfl
+  · refine ⟨_, .app ufName [ta, lowerId ta tb], rfl, ?_,
+      .uf (cong_lowerId_left hc) (lowerId_le_left ..)⟩
+    simp only [Expr.evalAtom, huf, if_true, Expr.evalList, ha, hmin, Option.bind_some,
+      Option.map_some]
+  · refine ⟨_, .app ufName [tb, lowerId ta tb], rfl, ?_,
+      .uf (cong_lowerId_right hc) (lowerId_le_right ..)⟩
+    simp only [Expr.evalAtom, huf, if_true, Expr.evalList, hb, hmin, Option.bind_some,
+      Option.map_some]
 
 /-- An original action's successful result justifies every atom of its compiled block. -/
 theorem encodeAction_sourceWrites {src post : Database} {sig : Signature} {ρ : Env}
     (hw : post.WF) (hcs : src.sig.AllConstructors) {a : Action}
-    (hp : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ actionExprs a, e.OrderingFree)
     (hd : ∀ e ∈ actionExprs a, ∀ fk ∈ e.ctors, (sig (viewName fk.1)).isSome = true)
     (huf : (sig ufName).isSome = true)
     (heval : ∀ e ∈ actionExprs a, ∀ t, e.eval src.sig src.env = some t → e.eval sig ρ = some t)
@@ -182,12 +182,16 @@ mutual
 
 theorem encodeBuild_isAtomWrite : ∀ (e : Expr), ∀ a ∈ encodeBuild e, a.IsAtomWrite
   | .lit _ | .var _ => by simp [encodeBuild]
+  | .min x y => by
+      intro a ha
+      exact (List.mem_append.mp ha).elim (encodeBuild_isAtomWrite x a)
+        (encodeBuild_isAtomWrite y a)
   | .app f args => by
       intro a ha
       rcases List.mem_append.mp ha with ha | ha
       · exact encodeBuildArgs_isAtomWrite args a ha
       · obtain rfl := List.mem_singleton.mp ha
-        exact prim_viewName f
+        trivial
 
 theorem encodeBuildArgs_isAtomWrite : ∀ (es : List Expr), ∀ a ∈ encodeBuildArgs es, a.IsAtomWrite
   | [] => by simp [encodeBuildArgs]
@@ -206,15 +210,15 @@ theorem encodeAction_isAtomWrite (act : Action) : ∀ a ∈ encodeAction act, a.
       rcases List.mem_append.mp ha with ha | ha
       · exact (List.mem_append.mp ha).elim (encodeBuild_isAtomWrite e a)
           (encodeBuild_isAtomWrite f a)
-      · obtain rfl := List.mem_singleton.mp ha
-        rfl
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at ha
+        rcases ha with rfl | rfl <;> trivial
 
 /-- Global commands preserve source facts and target invariants with a merge after each write. -/
 theorem global_action_simulation {src post : Database} {d D : FDatabase} {a : Action}
     (hw : post.WF) (hsafe : SourceSafe post) (hcs : src.sig.AllConstructors)
     (h : RunState src d) (hreads : SourceReads d.toDatabase src)
     (hρ : Env.Reads d.toDatabase src.env d.env)
-    (hp : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ actionExprs a, e.OrderingFree)
     (hc : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, src.sig.IsCtor f → d.sig.IsCtor f)
     (hd : ∀ e ∈ actionExprs a, ∀ fk ∈ e.ctors, (d.sig (viewName fk.1)).isSome = true)
     (heval : ∀ e ∈ actionExprs a, ∀ t,
@@ -272,8 +276,7 @@ theorem global_action_simulation_of_programStep {P pre : Program}
     (sourceSafe_of_programStep hdom hsub' hnext) hcs.sig h hreads ?_ ?_ ?_ ?_ ?_ hact run
   · intro v t hv
     simp [hsenv] at hv
-  · intro e he
-    exact noPrim_fns fun fk hk => hdom.noPrim fk (hhead e he fk hk)
+  · exact Action.orderingFree_exprs (Program.OrderingFree.of_mem hdom.noMin ha)
   · intro e he f hf
     exact hctor f
   · intro e he fk hk

@@ -5,7 +5,7 @@ import EgglogSemantics.Spec.Scope
 
 Arity and value-position checks for the model's atom syntax. These executable checks
 are consumed by the differential tests and examples. Function entries occupy complete
-query or action atoms; constructors and primitives occupy value positions.
+query or action atoms; constructors and `min` occupy value positions.
 -/
 
 namespace Egglog
@@ -14,7 +14,6 @@ namespace Egglog
 Declarations fix column counts. Constructor applications use their argument count;
 function entry atoms use all key and output columns. Nested expressions and equality
 or union operands are values. A merge result has one expression per output column.
-Primitive arities are checked by evaluation.
 -/
 
 mutual
@@ -28,6 +27,7 @@ def Expr.arityOk : Expr → Signature → Bool
       (match sig f with
        | none => true
        | some d => args.length == d.arity && d.outArity == 1) && Expr.arityOkList args sig
+  | .min a b, sig => Expr.arityOk a sig && Expr.arityOk b sig
 
 /-- `Expr.arityOk` over an argument list. -/
 def Expr.arityOkList : List Expr → Signature → Bool
@@ -42,6 +42,7 @@ def Expr.atomArityOk : Expr → Signature → Bool
       (match sig f with
        | none => true
        | some d => cols.length == d.entryWidth) && Expr.arityOkList cols sig
+  | .min a b, sig => Expr.arityOk a sig && Expr.arityOk b sig
   | _, _ => true
 
 /-- A complete atom or an equality between values. -/
@@ -100,19 +101,19 @@ def WellArity (p : Program) : Prop := Program.ArityOk p (fun _ => none)
 /-! ### Value positions
 
 Entries are permitted only as complete atoms. Atom columns, equality and union operands,
-and merge results contain constructor or primitive applications. Evaluation therefore
+and merge results contain constructor applications and `min`. Evaluation therefore
 never performs a table lookup inside a value expression. Undeclared names are rejected.
 -/
 
 mutual
 
 /-- No application inside `e` reads a row: every function it names is a declared
-constructor or a primitive. -/
+constructor. -/
 def Expr.noLookup : Expr → Signature → Bool
   | .lit _, _ => true
   | .var _, _ => true
-  | .app f args, sig =>
-      ((Prim.ofName f).isSome || decide (sig.IsCtor f)) && Expr.noLookupList args sig
+  | .app f args, sig => decide (sig.IsCtor f) && Expr.noLookupList args sig
+  | .min a b, sig => Expr.noLookup a sig && Expr.noLookup b sig
 
 /-- `Expr.noLookup` over an argument list. -/
 def Expr.noLookupList : List Expr → Signature → Bool
@@ -123,8 +124,8 @@ end
 
 /-- A table application is an atom only at the root. Its columns are values. -/
 def Expr.atomNoLookup : Expr → Signature → Bool
-  | .app f cols, sig =>
-      ((Prim.ofName f).isSome || (sig f).isSome) && Expr.noLookupList cols sig
+  | .app f cols, sig => (sig f).isSome && Expr.noLookupList cols sig
+  | .min a b, sig => Expr.noLookup a sig && Expr.noLookup b sig
   | _, _ => true
 
 /-- An action, in every expression position egglog's check walks. -/

@@ -102,12 +102,17 @@ theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
       have hl : ∃ ts, Expr.evalList sig args ρ = some ts := by
         rw [Expr.eval] at he
         split at he
-        · obtain ⟨ts, hts, -⟩ := Option.bind_eq_some_iff.mp he; exact ⟨ts, hts⟩
-        · split at he
-          · obtain ⟨ts, hts, -⟩ := Option.map_eq_some_iff.mp he; exact ⟨ts, hts⟩
-          · exact absurd he (by simp)
+        · obtain ⟨ts, hts, -⟩ := Option.map_eq_some_iff.mp he; exact ⟨ts, hts⟩
+        · exact absurd he (by simp)
       obtain ⟨ts, hts⟩ := hl
       exact Expr.lookup_isSome_of_mem_varsList hts hv
+  | .min a b, t, he, hv => by
+      rw [Expr.vars_min, List.mem_union_iff] at hv
+      rw [Expr.eval_min] at he
+      obtain ⟨x, hx, he'⟩ := Option.bind_eq_some_iff.mp he
+      obtain ⟨y, hy, -⟩ := Option.map_eq_some_iff.mp he'
+      exact hv.elim (fun h => Expr.lookup_isSome_of_mem_vars hx h)
+        (fun h => Expr.lookup_isSome_of_mem_vars hy h)
 
 @[inherit_doc Expr.lookup_isSome_of_mem_vars]
 theorem Expr.lookup_isSome_of_mem_varsList {sig : Signature} {ρ : Env} {v : Var} :
@@ -185,7 +190,7 @@ theorem Expr.evalList_canon_query {sig : Signature} {q : Query} {es : List Expr}
 
 /-- A declared, evaluated head atom has a successful local firing that records its term. -/
 theorem execLocalActions_atom_of_eval {d : FDatabase} {f : FnName} {cols : List Expr}
-    {ts : List Term} {σ : Env} (hp : Prim.ofName f = none) (hd : (d.sig f).isSome)
+    {ts : List Term} {σ : Env} (hd : (d.sig f).isSome)
     (he : Expr.evalList d.sig cols σ = some ts) :
     ∃ d', execLocalActions d [.expr (.app f cols)] σ = some d' ∧
       Term.app f ts ∈ d'.terms := by
@@ -193,7 +198,7 @@ theorem execLocalActions_atom_of_eval {d : FDatabase} {f : FnName} {cols : List 
     env := d.env, rules := d.rules }
   refine ⟨d', ?_, ?_⟩
   · simp only [execLocalActions, execActions,
-      execAction_atom_of_eval (d := { d with env := σ ++ d.env }) hp hd
+      execAction_atom_of_eval (d := { d with env := σ ++ d.env }) hd
         (Expr.evalList_append_env (τ := d.env) cols he), Option.bind_some,
       Option.map_some]
     rfl

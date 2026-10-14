@@ -16,10 +16,10 @@ theorem sourceSafe_of_names {src : Database} (hb : src.TermsBuild)
     (hn : ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f) : SourceSafe src := by
   intro t ht hs
   rcases hs with ⟨f, cs, e, rfl⟩ | ⟨a, b, rfl⟩
-  · obtain ⟨dc, hdc, -⟩ := (hb _ _ ht).2
+  · obtain ⟨dc, hdc, -⟩ := hb _ _ ht
     exact hn _ dc hdc (by
       simp [viewName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
-  · obtain ⟨dc, hdc, -⟩ := (hb _ _ ht).2
+  · obtain ⟨dc, hdc, -⟩ := hb _ _ ht
     exact hn _ dc hdc (by decide +kernel)
 
 /-- A source execution cannot declare names from the generated namespace. -/
@@ -110,34 +110,33 @@ mutual
 theorem encodeBuild_preserves {src : Database} (hw : src.WF)
     {Φ : FDatabase → Prop} (hwrite : ViewWritesPreserve src Φ) :
     ∀ (e : Expr) {d d' : FDatabase} {t : Term},
-      (∀ f ∈ e.fns, Prim.ofName f = none) →
+      e.OrderingFree →
       e.eval d.sig d.env = some t → t ∈ src.terms → Φ d →
       execActions d (encodeBuild e) = some d' → Φ d'
   | .lit _, _, _, _, _, _, _, h, run
   | .var _, _, _, _, _, _, _, h, run => by
       obtain rfl := Option.some.inj run
       exact h
+  | .min _ _, _, _, _, hp, _, _, _, _ => (Expr.not_orderingFree_min hp).elim
   | .app f args, d, d', t, hp, he, ht, h, run => by
-      have hpf := hp f (by simp [Expr.fns])
       have hctor : d.sig.IsCtor f := by
         by_contra hn
-        rw [Expr.eval_app_not_ctor hpf hn] at he
+        rw [Expr.eval_app_not_ctor hn] at he
         contradiction
-      rw [Expr.eval_app_ctor hpf hctor] at he
+      rw [Expr.eval_app_ctor hctor] at he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
       obtain ⟨m, hm, hr⟩ := execActions_append run
-      have hsound := encodeBuildArgs_preserves hw hwrite args
-        (fun g hg => hp g (by simp [Expr.fns, hg])) hts
+      have hsound := encodeBuildArgs_preserves hw hwrite args (Expr.orderingFree_app hp) hts
         (fun t ht' => hw.subtermClosed _ ht
           (Term.arg_subterms ht' (Term.self_mem_subterms t))) h hm
       have hsig := Egglog.FDatabase.execActions_sig hm
       have henv := Egglog.FDatabase.execActions_env hm
       have hts' : Expr.evalList m.sig args m.env = some ts := by rw [hsig, henv]; exact hts
       have he' : (Expr.app f args).eval m.sig m.env = some (.app f ts) := by
-        rw [hsig, henv, Expr.eval_app_ctor hpf hctor, hts]; rfl
+        rw [hsig, henv, Expr.eval_app_ctor hctor, hts]; rfl
       have ha : execAction m (.expr (.app (viewName f) (args ++ [.app f args]))) =
           some d' := by simpa [execActions] using hr
-      obtain ⟨ks, vs, hk, hv, rfl⟩ := execAction_entry (prim_viewName f) ha
+      obtain ⟨ks, vs, hk, hv, rfl⟩ := execAction_entry ha
       obtain rfl : ts = ks := Option.some.inj (hts'.symm.trans hk)
       obtain ⟨v, hval, rfl⟩ := Expr.evalList_singleton hv
       obtain rfl : Term.app f ts = v := Option.some.inj (he'.symm.trans hval)
@@ -147,7 +146,7 @@ theorem encodeBuild_preserves {src : Database} (hw : src.WF)
 theorem encodeBuildArgs_preserves {src : Database} (hw : src.WF)
     {Φ : FDatabase → Prop} (hwrite : ViewWritesPreserve src Φ) :
     ∀ (es : List Expr) {d d' : FDatabase} {ts : List Term},
-      (∀ f ∈ Expr.fnsList es, Prim.ofName f = none) →
+      Expr.OrderingFreeList es →
       Expr.evalList d.sig es d.env = some ts → (∀ t ∈ ts, t ∈ src.terms) →
       Φ d → execActions d (encodeBuildArgs es) = some d' → Φ d'
   | [], _, _, _, _, _, _, h, run => by
@@ -157,10 +156,9 @@ theorem encodeBuildArgs_preserves {src : Database} (hw : src.WF)
       obtain ⟨t, hev, hr⟩ := Option.bind_eq_some_iff.mp he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp hr
       obtain ⟨m, hm, hr⟩ := execActions_append run
-      have hsound := encodeBuild_preserves hw hwrite e
-        (fun f hf => hp f (by simp [Expr.fnsList, hf])) hev (ht t List.mem_cons_self) h hm
-      apply encodeBuildArgs_preserves hw hwrite es
-        (fun f hf => hp f (by simp [Expr.fnsList, hf])) _
+      have hsound := encodeBuild_preserves hw hwrite e (Expr.orderingFreeList_cons hp).1 hev
+        (ht t List.mem_cons_self) h hm
+      apply encodeBuildArgs_preserves hw hwrite es (Expr.orderingFreeList_cons hp).2 _
         (fun t ht' => ht t (List.mem_cons_of_mem _ ht')) hsound hr
       rw [Egglog.FDatabase.execActions_sig hm, Egglog.FDatabase.execActions_env hm]
       exact hts
@@ -170,7 +168,7 @@ end
 /-- Every write performed while building an existing source value is sound. -/
 theorem encodeBuild_soundTerms {src : Database} (hw : src.WF) (hs : SourceSafe src)
     (e : Expr) {d d' : FDatabase} {t : Term}
-    (hp : ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : e.OrderingFree)
     (he : e.eval d.sig d.env = some t) (ht : t ∈ src.terms) (h : SoundTerms d src)
     (run : execActions d (encodeBuild e) = some d') : SoundTerms d' src :=
   encodeBuild_preserves hw (Φ := fun d => SoundTerms d src)
@@ -181,21 +179,47 @@ def actionExprs : Action → List Expr
   | .expr e => [e]
   | .union a b => [a, b]
 
-theorem eval_order_ids {sig : Signature} {ρ : Env} {a b : Expr} {ta tb : Term}
-    (ha : a.eval sig ρ = some ta) (hb : b.eval sig ρ = some tb) :
-    (maxE a b).eval sig ρ = some (upperId ta tb) ∧
-      (minE a b).eval sig ρ = some (lowerId ta tb) := by
-  simp [maxE, minE, ifE, gtE, Expr.eval, Expr.evalList, Prim.ofName, Prim.apply,
-    ha, hb, upperId, lowerId]
+/-- `Action.OrderingFree`, at the expressions the action evaluates. -/
+theorem Action.orderingFree_exprs {a : Action} (h : a.OrderingFree) :
+    ∀ e ∈ actionExprs a, e.OrderingFree := by
+  cases a with
+  | expr x =>
+      intro e he
+      obtain rfl := List.mem_singleton.mp he
+      exact h
+  | union x y =>
+      intro e he
+      rcases List.mem_cons.mp he with rfl | he
+      · exact h.1
+      · obtain rfl := List.mem_singleton.mp he
+        exact h.2
 
-/-- A compiled union builds its operands, then writes their justified oriented edge. -/
+/-- `Actions.OrderingFree`, at the expressions the actions evaluate. -/
+theorem orderingFree_actionExprs {as : List Action} (h : Actions.OrderingFree as) :
+    ∀ a ∈ as, ∀ e ∈ actionExprs a, e.OrderingFree := by
+  induction as with
+  | nil => simp
+  | cons a as ih =>
+      intro b hb
+      rcases List.mem_cons.mp hb with rfl | hb
+      · exact Action.orderingFree_exprs h.1
+      · exact ih h.2 b hb
+
+/-- The compiled union's `min` column picks the smaller of the two ids. -/
+theorem eval_min_ids {sig : Signature} {ρ : Env} {a b : Expr} {ta tb : Term}
+    (ha : a.eval sig ρ = some ta) (hb : b.eval sig ρ = some tb) :
+    (Expr.min a b).eval sig ρ = some (lowerId ta tb) := by
+  rw [Expr.eval_min, ha, Option.bind_some, hb, Option.map_some]
+  rfl
+
+/-- A compiled union builds its operands, then links each of them to the smaller id;
+both writes are justified descending edges. -/
 theorem encodeUnion_preserves {src : Database} (hw : src.WF)
     {Φ : FDatabase → Prop} (hview : ViewWritesPreserve src Φ)
     (huf : ∀ {d : FDatabase} {a b : Term}, Cong src a b →
       (b = a ∨ Term.blt b a = true) → Φ d → Φ (d.addAtom (.app ufName [a, b])))
     {d d' : FDatabase} {a b : Expr} {ta tb : Term}
-    (hpa : ∀ f ∈ a.fns, Prim.ofName f = none)
-    (hpb : ∀ f ∈ b.fns, Prim.ofName f = none)
+    (hpa : a.OrderingFree) (hpb : b.OrderingFree)
     (ha : a.eval d.sig d.env = some ta) (hb : b.eval d.sig d.env = some tb)
     (hc : Cong src ta tb) (h : Φ d)
     (run : execActions d (encodeAction (.union a b)) = some d') : Φ d' := by
@@ -206,31 +230,37 @@ theorem encodeUnion_preserves {src : Database} (hw : src.WF)
     rw [Egglog.FDatabase.execActions_sig hleft, Egglog.FDatabase.execActions_env hleft]
     exact hb
   have hm := encodeBuild_preserves hw hview b hpb hb' hc.mem_of.2 hn hright
-  have hvals := eval_order_ids ha hb
-  have ha' : (maxE a b).eval m.sig m.env = some (upperId ta tb) := by
+  have ha' : a.eval m.sig m.env = some ta := by
     rw [Egglog.FDatabase.execActions_sig hbuild, Egglog.FDatabase.execActions_env hbuild]
-    exact hvals.1
-  have hb'' : (minE a b).eval m.sig m.env = some (lowerId ta tb) := by
+    exact ha
+  have hb'' : b.eval m.sig m.env = some tb := by
     rw [Egglog.FDatabase.execActions_sig hbuild, Egglog.FDatabase.execActions_env hbuild]
-    exact hvals.2
-  have hwrite' : execAction m (.expr (.app ufName ([maxE a b] ++ [minE a b]))) =
-      some d' := by simpa [execActions] using hwrite
-  obtain ⟨ks, vs, hk, hv, rfl⟩ := execAction_entry (show Prim.ofName ufName = none from rfl)
-    hwrite'
+    exact hb
+  have hmin : (Expr.min a b).eval m.sig m.env = some (lowerId ta tb) := eval_min_ids ha' hb''
+  change execActions m ([_] ++ [_]) = some d' at hwrite
+  obtain ⟨m₁, hw₁, hw₂⟩ := execActions_append hwrite
+  have hw₁' : execAction m (.expr (.app ufName ([a] ++ [.min a b]))) = some m₁ := by
+    simpa [execActions] using hw₁
+  obtain ⟨ks, vs, hk, hv, rfl⟩ := execAction_entry hw₁'
   obtain ⟨k, hkv, rfl⟩ := Expr.evalList_singleton hk
   obtain ⟨v, hvv, rfl⟩ := Expr.evalList_singleton hv
-  obtain rfl : upperId ta tb = k := Option.some.inj (ha'.symm.trans hkv)
-  obtain rfl : lowerId ta tb = v := Option.some.inj (hb''.symm.trans hvv)
-  apply huf ?_ (lowerId_le_upperId ta tb) hm
-  rcases ids_paired ta tb with ⟨hu, hl⟩ | ⟨hu, hl⟩
-  · simpa [hu, hl] using hc
-  · simpa [hu, hl] using hc.symm
+  obtain rfl : ta = k := Option.some.inj (ha'.symm.trans hkv)
+  obtain rfl : lowerId ta tb = v := Option.some.inj (hmin.symm.trans hvv)
+  have hm₁ := huf (cong_lowerId_left hc) (lowerId_le_left ta tb) hm
+  have hw₂' : execAction (m.addAtom (.app ufName [ta, lowerId ta tb]))
+      (.expr (.app ufName ([b] ++ [.min a b]))) = some d' := by
+    simpa [execActions] using hw₂
+  obtain ⟨ks, vs, hk, hv, rfl⟩ := execAction_entry hw₂'
+  obtain ⟨k, hkv, rfl⟩ := Expr.evalList_singleton hk
+  obtain ⟨v, hvv, rfl⟩ := Expr.evalList_singleton hv
+  obtain rfl : tb = k := Option.some.inj (hb''.symm.trans hkv)
+  obtain rfl : lowerId ta tb = v := Option.some.inj (hmin.symm.trans hvv)
+  exact huf (cong_lowerId_right hc) (lowerId_le_right ta tb) hm₁
 
-/-- A compiled union builds its operands, then writes their justified oriented edge. -/
+/-- A compiled union builds its operands, then writes their justified links. -/
 theorem encodeUnion_soundTerms {src : Database} (hw : src.WF) (hs : SourceSafe src)
     {d d' : FDatabase} {a b : Expr} {ta tb : Term}
-    (hpa : ∀ f ∈ a.fns, Prim.ofName f = none)
-    (hpb : ∀ f ∈ b.fns, Prim.ofName f = none)
+    (hpa : a.OrderingFree) (hpb : b.OrderingFree)
     (ha : a.eval d.sig d.env = some ta) (hb : b.eval d.sig d.env = some tb)
     (hc : Cong src ta tb) (h : SoundTerms d src)
     (run : execActions d (encodeAction (.union a b)) = some d') : SoundTerms d' src :=
@@ -242,7 +272,7 @@ theorem encodeUnion_soundTerms {src : Database} (hw : src.WF) (hs : SourceSafe s
 post-state. The evaluation premise concerns only expressions the action actually uses. -/
 theorem encodeAction_soundTerms {src post : Database} {d d' : FDatabase} {a : Action}
     (hw : post.WF) (hs : SourceSafe post) (hctors : src.sig.AllConstructors)
-    (hp : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ actionExprs a, e.OrderingFree)
     (heval : ∀ e ∈ actionExprs a, e.eval d.sig d.env = e.eval src.sig src.env)
     (h : SoundTerms d src) (hsrc : evalAction src a = some post)
     (htgt : execActions d (encodeAction a) = some d') : SoundTerms d' post := by
@@ -263,7 +293,7 @@ theorem encodeAction_soundTerms {src post : Database} {d d' : FDatabase} {a : Ac
 post-state supplies the existence and equality needed by its compiled writes. -/
 theorem encodeActions_soundTerms {src post : Database} {d d' : FDatabase} {as : List Action}
     (hw : src.WF) (hs : SourceSafe post) (hctors : src.sig.AllConstructors)
-    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, e.OrderingFree)
     (heval : ∀ a ∈ as, ∀ e ∈ actionExprs a,
       e.eval d.sig d.env = e.eval src.sig src.env)
     (h : SoundTerms d src) (hsrc : evalActions src as = some post)
@@ -305,7 +335,7 @@ private theorem viewWrites_entryRowsUF {src : Database} (hw : src.WF) (hs : Sour
 
 theorem encodeBuild_entryRowsUF {src : Database} (hw : src.WF) (hs : SourceSafe src)
     (e : Expr) {d d' : FDatabase} {t : Term}
-    (hp : ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : e.OrderingFree)
     (he : e.eval d.sig d.env = some t) (ht : t ∈ src.terms)
     (hshape : MergeShape d.sig) (h : EntryRowsUF d)
     (run : execActions d (encodeBuild e) = some d') : EntryRowsUF d' :=
@@ -314,8 +344,7 @@ theorem encodeBuild_entryRowsUF {src : Database} (hw : src.WF) (hs : SourceSafe 
 
 theorem encodeUnion_entryRowsUF {src : Database} (hw : src.WF) (hs : SourceSafe src)
     {d d' : FDatabase} {a b : Expr} {ta tb : Term}
-    (hpa : ∀ f ∈ a.fns, Prim.ofName f = none)
-    (hpb : ∀ f ∈ b.fns, Prim.ofName f = none)
+    (hpa : a.OrderingFree) (hpb : b.OrderingFree)
     (ha : a.eval d.sig d.env = some ta) (hb : b.eval d.sig d.env = some tb)
     (hc : Cong src ta tb) (hshape : MergeShape d.sig) (h : EntryRowsUF d)
     (run : execActions d (encodeAction (.union a b)) = some d') : EntryRowsUF d' := by
@@ -333,7 +362,7 @@ theorem encodeUnion_entryRowsUF {src : Database} (hw : src.WF) (hs : SourceSafe 
 /-- Source action execution supplies the columns for the retained-entry bridge. -/
 theorem encodeAction_entryRowsUF {src post : Database} {d d' : FDatabase} {a : Action}
     (hw : post.WF) (hs : SourceSafe post) (hctors : src.sig.AllConstructors)
-    (hp : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ actionExprs a, e.OrderingFree)
     (heval : ∀ e ∈ actionExprs a, e.eval d.sig d.env = e.eval src.sig src.env)
     (hshape : MergeShape d.sig) (h : EntryRowsUF d)
     (hsrc : evalAction src a = some post)
@@ -353,7 +382,7 @@ theorem encodeAction_entryRowsUF {src post : Database} {d d' : FDatabase} {a : A
 /-- The bridge survives a compiled source action block. -/
 theorem encodeActions_entryRowsUF {src post : Database} {d d' : FDatabase} {as : List Action}
     (hw : src.WF) (hs : SourceSafe post) (hctors : src.sig.AllConstructors)
-    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, e.OrderingFree)
     (heval : ∀ a ∈ as, ∀ e ∈ actionExprs a,
       e.eval d.sig d.env = e.eval src.sig src.env)
     (hshape : MergeShape d.sig) (h : EntryRowsUF d)

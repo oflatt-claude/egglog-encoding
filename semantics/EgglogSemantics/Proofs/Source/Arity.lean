@@ -15,9 +15,8 @@ def Program.AritiesAgree (P : Program) : Prop :=
 cite as egglog's "Function already bound" — and `Program.AritiesAgree` is the form the
 legality proofs consume, over `Program.ctors`. The two are the same list read two ways:
 `Expr.ctors` *is* `Expr.fnArities`, and `Cmd.ctors` is contained in `Cmd.fnArities` at every
-command (a function-entry atoms head and a `:merge` body are the two entries only the latter
-records, and the domain has neither). `EncodeDomain.noPrim` is what pays for the primitive
-filter. -/
+command (a function-entry atom's head and a `:merge` body are the two entries only the latter
+records, and the domain has neither). -/
 
 mutual
 
@@ -27,6 +26,8 @@ theorem Expr.ctors_eq_fnArities : ∀ (e : Expr), e.ctors = e.fnArities
   | .var _ => rfl
   | .app f args => by
       rw [Expr.ctors, Expr.fnArities, Expr.ctorsList_eq_fnAritiesL args]
+  | .min a b => by
+      rw [Expr.ctors, Expr.fnArities, Expr.ctors_eq_fnArities a, Expr.ctors_eq_fnArities b]
 
 @[inherit_doc Expr.ctors_eq_fnArities]
 theorem Expr.ctorsList_eq_fnAritiesL : ∀ (es : List Expr),
@@ -88,9 +89,8 @@ theorem Program.EncodeDomain.aritiesAgree' {P : Program} (h : P.EncodeDomain) :
   have hsub : ∀ fk ∈ P.ctors, fk ∈ P.fnArities := by
     intro fk hfk
     obtain ⟨c, hc, hfc⟩ := List.mem_flatMap.mp (List.mem_dedup.mp hfk)
-    refine List.mem_dedup.mpr (List.mem_filter.mpr ⟨List.mem_flatMap.mpr
-      ⟨c, hc, Cmd.mem_fnArities_of_mem_ctors (h.ctorsOnly c hc) hfc⟩, ?_⟩)
-    rw [h.noPrim fk hfk]; rfl
+    exact List.mem_dedup.mpr (List.mem_flatMap.mpr
+      ⟨c, hc, Cmd.mem_fnArities_of_mem_ctors (h.ctorsOnly c hc) hfc⟩)
   intro fk hfk gl hgl hname
   by_contra hne
   have hfa : fk ∈ P.fnArities := hsub fk hfk

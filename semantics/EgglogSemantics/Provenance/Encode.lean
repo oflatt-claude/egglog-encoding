@@ -1,5 +1,4 @@
 import EgglogSemantics.Provenance.Checker
-import EgglogSemantics.Source.Names
 
 namespace Egglog.Provenance
 
@@ -30,10 +29,8 @@ def valueExprOk (sig : Signature) (vars : List Var) : Expr → Bool
   | .var v => vars.contains v && !namePrefix.isPrefixOf v
   | .app f args =>
       !namePrefix.isPrefixOf f && valueExprsOk sig vars args &&
-        match Prim.ofName f with
-        | some .ifThenElse => args.length == 3
-        | some _ => args.length == 2
-        | none => (sig f).any fun d => d.merge.isNone && args.length == d.arity
+        (sig f).any fun d => d.merge.isNone && args.length == d.arity
+  | .min a b => valueExprOk sig vars a && valueExprOk sig vars b
 
 def valueExprsOk (sig : Signature) (vars : List Var) : List Expr → Bool
   | [] => true
@@ -103,6 +100,7 @@ def renameExpr (rename : Var → Var) : Expr → Expr
   | .lit l => .lit l
   | .var v => .var (rename v)
   | .app f args => .app f (renameExprs rename args)
+  | .min a b => .min (renameExpr rename a) (renameExpr rename b)
 
 def renameExprs (rename : Var → Var) : List Expr → List Expr
   | [] => []
@@ -120,15 +118,6 @@ def renameMerge (n : Nat) (v : Var) : Var :=
 def mergeProof (n : Nat) (side : String) : Expr :=
   .var (if n == 0 then side else side ++ toString n)
 
-/-- Structural equality expressed using the target's existing primitives. -/
-def equalE (a b yes no : Expr) : Expr :=
-  ifE (gtE a b) no (ifE (gtE b a) no yes)
-
-def sameValuesE : List Expr → List Expr → Expr → Expr → Expr
-  | [], [], yes, _ => yes
-  | a :: as, b :: bs, yes, no => equalE a b (sameValuesE as bs yes no) no
-  | _, _, _, no => no
-
 def encodeDecl (f : FnName) (d : FnDecl) : FnDecl :=
   match d.merge with
   | some (.merge body res) =>
@@ -136,10 +125,7 @@ def encodeDecl (f : FnName) (d : FnDecl) : FnDecl :=
     let new := mergeProof d.outArity "new"
     let rename := renameMerge d.outArity
     let res' := renameExprs rename res
-    let os := (List.range d.outArity).map fun i => .var ("old" ++ toString i)
-    let ns := (List.range d.outArity).map fun i => .var ("new" ++ toString i)
-    let pf := sameValuesE res' os old
-      (sameValuesE res' ns new (.app (resultName f) [old, new]))
+    let pf := .app (resultName f) [old, new]
     { d with
       outArity := d.outArity + 1
       identityVals := some (min ((d.unchangedWidth body).getD d.outArity) d.outArity)

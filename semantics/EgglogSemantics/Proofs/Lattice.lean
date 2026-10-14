@@ -54,13 +54,19 @@ theorem meval_var {sig : Signature} {σ : Env} {v : Var} {t : Term}
     (h : Expr.eval sig (.var v) σ = some t) : Env.lookup v σ = some t := h
 
 theorem meval_nullary {sig : Signature} {σ : Env} {f : FnName} {t : Term}
-    (hp : Prim.ofName f = none) (h : Expr.eval sig (.app f []) σ = some t) :
-    t = .app f [] := by
+    (h : Expr.eval sig (.app f []) σ = some t) : t = .app f [] := by
   by_cases hu : sig.IsCtor f
-  · rw [Expr.eval_app_ctor hp hu, Expr.evalList_nil, Option.map_some,
-      Option.some.injEq] at h
+  · rw [Expr.eval_app_ctor hu, Expr.evalList_nil, Option.map_some, Option.some.injEq] at h
     exact h.symm
-  · rw [Expr.eval_app_not_ctor hp hu] at h; simp at h
+  · rw [Expr.eval_app_not_ctor hu] at h; simp at h
+
+theorem meval_min {sig : Signature} {σ : Env} {a b : Expr} {t : Term}
+    (h : Expr.eval sig (.min a b) σ = some t) :
+    ∃ x y, Expr.eval sig a σ = some x ∧ Expr.eval sig b σ = some y ∧ t = Term.least x y := by
+  rw [Expr.eval_min, Option.bind_eq_some_iff] at h
+  obtain ⟨x, hx, h⟩ := h
+  obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp h
+  exact ⟨x, y, hx, hy, rfl⟩
 
 theorem mevalList_one {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
     (h : Expr.evalList sig [e] σ = some ts) :
@@ -80,12 +86,11 @@ theorem mevalList_two {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List
   exact ⟨u, v, heq.symm, hu, hv⟩
 
 theorem mevalList_single_nullary {sig : Signature} {σ : Env} {f : FnName} {vs : List Term}
-    (hp : Prim.ofName f = none) (h : Expr.evalList sig [.app f []] σ = some vs) :
-    vs = [.app f []] := by
+    (h : Expr.evalList sig [.app f []] σ = some vs) : vs = [.app f []] := by
   rw [Expr.evalList_cons, Option.bind_eq_some_iff] at h
   obtain ⟨t, ht, hrest⟩ := h
   obtain ⟨us, hus, heq⟩ := Option.map_eq_some_iff.mp hrest
-  rw [← heq, mevalList_nil hus, meval_nullary hp ht]
+  rw [← heq, mevalList_nil hus, meval_nullary ht]
 
 /-! ## The constructors the three programs build
 
@@ -173,14 +178,14 @@ computes `vs` from `a` and `b` then `vs` is above both" — so a merge whose bod
 computes anything satisfies `hjoin` vacuously, and `le := fun _ _ => False` then
 satisfies both hypotheses. -/
 
-/-- `(function f () i64 :merge (min 1 (a)))`.  The result column is stuck at *every*
-pair of operands: `min` is an `i64` primitive and `(a)` is a constructor term, so
-`Prim.apply` is `none` however the collision arose. -/
+/-- `(function f () i64 :merge (min 1 x))`.  The result column is stuck at *every* pair
+of operands: `x` is a variable `mergeEnv` never binds — it binds `old`/`new`, or the
+indexed `old<i>`/`new<i>` — so `Expr.eval` is `none` however the collision arose. -/
 def stuckDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := some (.merge [] [.app "min" [.lit (.int 1), eA]]) }
+    merge := some (.merge [] [.min (.lit (.int 1)) (.var "x")]) }
 
-/-- `(function f () i64 :merge (min 1 (a)))  (set (f) (a))`. -/
+/-- `(function f () i64 :merge (min 1 x))  (set (f) (a))`. -/
 def pA : Program := ctorHeader ++ [.decl "f" stuckDecl, .action (.expr (.app "f" [eA]))]
 
 def dA : FDatabase := (execM pA).getD FDatabase.empty
@@ -202,23 +207,48 @@ theorem dA_row : (Row.mk "f" [] [tA]) ∈ dA.rows := by decide
 
 theorem dA_mergeOf {g : FnName} {body : List Action} {res : List Expr}
     (h : dA.sig.mergeOf g = some (MergeSpec.merge body res)) :
-    res = [.app "min" [.lit (.int 1), eA]] :=
+    res = [.min (.lit (.int 1)) (.var "x")] :=
   (mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dA_sig ▸ h)).2
+
+/-- A one-letter name is none of `mergeEnvIdx`'s, which prefix `old`/`new` to an index. -/
+theorem x_ne_indexed {s : String} (hs : s.length = 3) (i : Nat) : "x" ≠ s ++ toString i := by
+  intro h
+  have hl := congrArg String.length h
+  rw [String.length_append, hs] at hl
+  have h1 : "x".length = 1 := rfl
+  omega
+
+theorem lookup_x_mergeEnvIdx : ∀ (i : Nat) (os ns : List Term),
+    Env.lookup "x" (mergeEnvIdx i os ns) = none
+  | _, [], _ => rfl
+  | _, _ :: _, [] => rfl
+  | i, _ :: os, _ :: ns => by
+      rw [mergeEnvIdx, Env.lookup_cons, if_neg (x_ne_indexed rfl i), Env.lookup_cons,
+        if_neg (x_ne_indexed rfl i)]
+      exact lookup_x_mergeEnvIdx (i + 1) os ns
+
+/-- `mergeEnv` never binds `x`. -/
+theorem lookup_x_mergeEnv (a b : List Term) : Env.lookup "x" (mergeEnv a b) = none := by
+  match a, b with
+  | [], _ => exact lookup_x_mergeEnvIdx 0 _ _
+  | [_], [] => exact lookup_x_mergeEnvIdx 0 _ _
+  | [_], [_] => rfl
+  | [_], _ :: _ :: _ => exact lookup_x_mergeEnvIdx 0 _ _
+  | _ :: _ :: _, _ => exact lookup_x_mergeEnvIdx 0 _ _
 
 /-- The stuck merge, machine-checked: no `a`, `b`, `vs` satisfy `hjoin`'s premise. -/
 theorem dA_no_merge_value {a b vs : List Term} {body : List Action} {res : List Expr}
-    (hres : res = [.app "min" [.lit (.int 1), eA]])
+    (hres : res = [.min (.lit (.int 1)) (.var "x")])
     (he : ∃ e, evalActions { dA.toDatabase with env := mergeEnv a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : False := by
-  obtain ⟨e, -, hev⟩ := he
+  obtain ⟨e, hbody, hev⟩ := he
   subst hres
   obtain ⟨t, rfl, hv⟩ := mevalList_one hev
-  rw [Expr.eval_app_prim (p := Prim.intMin) rfl, Option.bind_eq_some_iff] at hv
-  obtain ⟨ts, hts, happ⟩ := hv
-  obtain ⟨u, v, rfl, h1, h2⟩ := mevalList_two hts
-  rw [meval_lit h1, meval_nullary (show Prim.ofName "a" = none from rfl) h2,
-    show Prim.intMin.apply [Term.lit (Lit.int 1), Term.app "a" []] = none from rfl] at happ
-  simp at happ
+  obtain ⟨_, y, -, hy, -⟩ := meval_min hv
+  have henv : e.env = mergeEnv a b := evalActions_env hbody
+  have hx : Env.lookup "x" e.env = some y := meval_var hy
+  rw [henv, lookup_x_mergeEnv] at hx
+  exact absurd hx (by simp)
 
 /-- **Refutation A.** -/
 theorem currentOfLattice_false : ¬ CurrentOfLattice := by
@@ -232,19 +262,14 @@ theorem currentOfLattice_false : ¬ CurrentOfLattice := by
 /-! ## Counterexample B — `le` is a genuine partial order and the statement still fails
 
 `(function f () i64 :merge (min old new))` is the shape `tests/interval.egg` uses, and
-`min` really is a join for the order `leB` below (reflexive, transitive, antisymmetric).
-The program `set`s two *constructor* terms into it.  The model has no sort discipline —
-`Prim.apply` is `none` on a non-literal operand, which its own docstring records — so the
-collision is unresolvable, `mergeOneWith` returns `none`, the pass reports `settled`, and
-the interpreter's final state holds **both** rows at the one key class.  `hjoin` says
-nothing about that, because it only constrains merges that *do* produce a value. -/
-
-theorem prim_intMin_inv {t₁ t₂ v : Term} (h : Prim.intMin.apply [t₁, t₂] = some v) :
-    ∃ m n : Int, t₁ = .lit (.int m) ∧ t₂ = .lit (.int n) ∧ v = .lit (.int (min m n)) := by
-  match t₁, t₂, h with
-  | .lit (.int m), .lit (.int n), h => exact ⟨m, n, rfl, rfl, (Option.some.inj h).symm⟩
-  | .lit (.int _), .app _ _, h => simp [Prim.apply] at h
-  | .app _ _, _, h => simp [Prim.apply] at h
+`min` really is a join for the order `leB` below (reflexive, transitive, antisymmetric):
+the term order reversed on single columns, which on `i64` is numerically reversed.  The
+merge here runs the body `(union old new)` before that result, and the program `set`s two
+*literals* into it.  `union` wants an eq-sort, and the untyped model refuses one on a
+literal only dynamically — `evalAction` is stuck — so the collision is unresolvable:
+`mergeOneWith` returns `none`, the pass reports `settled`, and the interpreter's final
+state holds **both** rows at the one key class.  `hjoin` says nothing about that, because
+it only constrains merges that *do* produce a value. -/
 
 /-- `mergeEnv` binds `old`/`new` only when both outputs are single columns; at any other
 shape either the environment does not bind `old` at all, or both sides have at least two
@@ -262,58 +287,81 @@ theorem mergeEnv_cases (a b : List Term) :
   | _ :: _ :: _, [_] => exact Or.inr (Or.inl rfl)
   | _ :: _ :: _, _ :: _ :: _ => exact Or.inr (Or.inr ⟨by simp, by simp⟩)
 
-/-- `x` is a single `i64` column. -/
-def IntSing (x : List Term) : Prop := ∃ m : Int, x = [.lit (.int m)]
+/-- `x` is a single column. -/
+def Sing (x : List Term) : Prop := ∃ t, x = [t]
 
-theorem not_intSing_of_two {x : List Term} (h : 2 ≤ x.length) : ¬ IntSing x := by
-  rintro ⟨m, rfl⟩; simp at h
+theorem not_sing_of_two {x : List Term} (h : 2 ≤ x.length) : ¬ Sing x := by
+  rintro ⟨t, rfl⟩; simp at h
 
-/-- The order `min` is a join for: numerically reversed on single `i64` columns, with
-everything that is not a single `i64` column strictly below every one that is. -/
+/-- The order `min` is a join for: the term order reversed on single columns — numerically
+reversed on `i64` — with everything that is not a single column strictly below every one
+that is. -/
 def leB (x y : List Term) : Prop :=
-  x = y ∨ (∃ m n : Int, x = [.lit (.int m)] ∧ y = [.lit (.int n)] ∧ n ≤ m)
-        ∨ (IntSing y ∧ ¬ IntSing x)
+  x = y ∨ (∃ s t : Term, x = [s] ∧ y = [t] ∧ Term.blt t s = true) ∨ (Sing y ∧ ¬ Sing x)
 
 theorem leB_refl (x : List Term) : leB x x := Or.inl rfl
 
 theorem leB_trans (x y z : List Term) (h₁ : leB x y) (h₂ : leB y z) : leB x z := by
-  rcases h₁ with rfl | ⟨m, n, hx, hy, hmn⟩ | ⟨hy1, hx1⟩
+  rcases h₁ with rfl | ⟨s, t, hx, hy, hts⟩ | ⟨hy1, hx1⟩
   · exact h₂
-  · rcases h₂ with rfl | ⟨m', n', hy', hz', hmn'⟩ | ⟨_, hy2⟩
-    · exact Or.inr (Or.inl ⟨m, n, hx, hy, hmn⟩)
+  · rcases h₂ with rfl | ⟨s', t', hy', hz', hts'⟩ | ⟨_, hy2⟩
+    · exact Or.inr (Or.inl ⟨s, t, hx, hy, hts⟩)
     · rw [hy] at hy'
-      obtain rfl : n = m' := by injection (List.cons.inj hy').1 with h; injection h
-      exact Or.inr (Or.inl ⟨m, n', hx, hz', le_trans hmn' hmn⟩)
-    · exact absurd ⟨n, hy⟩ hy2
-  · rcases h₂ with rfl | ⟨m', n', hy', hz', _⟩ | ⟨hz2, hy2⟩
+      obtain rfl : t = s' := by simpa using hy'
+      exact Or.inr (Or.inl ⟨s, t', hx, hz', Term.blt_trans t' t s hts' hts⟩)
+    · exact absurd ⟨t, hy⟩ hy2
+  · rcases h₂ with rfl | ⟨s', t', hy', hz', _⟩ | ⟨hz2, hy2⟩
     · exact Or.inr (Or.inr ⟨hy1, hx1⟩)
-    · exact Or.inr (Or.inr ⟨⟨n', hz'⟩, hx1⟩)
+    · exact Or.inr (Or.inr ⟨⟨t', hz'⟩, hx1⟩)
     · exact absurd hy1 hy2
 
 theorem leB_anti (x y : List Term) (h₁ : leB x y) (h₂ : leB y x) : x = y := by
-  rcases h₁ with rfl | ⟨m, n, hx, hy, hmn⟩ | ⟨hy1, hx1⟩
+  rcases h₁ with rfl | ⟨s, t, hx, hy, hts⟩ | ⟨hy1, hx1⟩
   · rfl
-  · rcases h₂ with h | ⟨m', n', hy', hx', hmn'⟩ | ⟨hx2, hy2⟩
+  · rcases h₂ with h | ⟨s', t', hy', hx', hts'⟩ | ⟨hx2, hy2⟩
     · exact h.symm
     · rw [hx] at hx'; rw [hy] at hy'
-      obtain rfl : m = n' := by injection (List.cons.inj hx').1 with h; injection h
-      obtain rfl : n = m' := by injection (List.cons.inj hy').1 with h; injection h
-      rw [hx, hy, le_antisymm hmn hmn']
-    · exact absurd ⟨n, hy⟩ hy2
-  · rcases h₂ with h | ⟨_, n', hy', hx', _⟩ | ⟨hx2, _⟩
+      obtain rfl : s = t' := by simpa using hx'
+      obtain rfl : t = s' := by simpa using hy'
+      rw [Term.blt_asymm t s hts] at hts'
+      exact absurd hts' (by simp)
+    · exact absurd ⟨t, hy⟩ hy2
+  · rcases h₂ with h | ⟨_, t', hy', hx', _⟩ | ⟨hx2, _⟩
     · exact h.symm
-    · exact absurd ⟨n', hx'⟩ hx1
+    · exact absurd ⟨t', hx'⟩ hx1
     · exact absurd hx2 hx1
 
-/-- `(function f () i64 :merge (min old new))`. -/
+/-- **`min` is a join for `leB`** on single columns: the smaller term is above both. -/
+theorem leB_least (x y : Term) : leB [x] [Term.least x y] ∧ leB [y] [Term.least x y] := by
+  by_cases hyx : Term.blt y x = true
+  · have h : Term.least x y = y := by unfold Term.least; rw [if_pos hyx]
+    rw [h]
+    exact ⟨Or.inr (Or.inl ⟨x, y, rfl, rfl, hyx⟩), leB_refl _⟩
+  · have h : Term.least x y = x := by unfold Term.least; rw [if_neg hyx]
+    rw [h]
+    refine ⟨leB_refl _, ?_⟩
+    rcases eq_or_ne y x with rfl | hne
+    · exact leB_refl _
+    · rcases Term.blt_total y x hne with h' | h'
+      · exact absurd h' hyx
+      · exact Or.inr (Or.inl ⟨y, x, rfl, rfl, h'⟩)
+
+/-- `(function f () i64 :merge (min old new))`, with the body `(union old new)` run before
+the result. -/
 def minDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
+    merge := some (.merge [.union (.var "old") (.var "new")]
+      [.min (.var "old") (.var "new")]) }
 
-/-- `(function f () i64 :merge (min old new))  (set (f) (a))  (set (f) (b))`. -/
+def t1 : Term := .lit (.int 1)
+def t2 : Term := .lit (.int 2)
+def e1 : Expr := .lit (.int 1)
+def e2 : Expr := .lit (.int 2)
+
+/-- `(function f () i64 :merge (union old new) (min old new))  (set (f) 1)  (set (f) 2)`. -/
 def pB : Program :=
   ctorHeader ++
-    [.decl "f" minDecl, .action (.expr (.app "f" [eA])), .action (.expr (.app "f" [eB]))]
+    [.decl "f" minDecl, .action (.expr (.app "f" [e1])), .action (.expr (.app "f" [e2]))]
 
 def dB : FDatabase := (execM pB).getD FDatabase.empty
 
@@ -331,18 +379,19 @@ set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **The interpreter's final state holds both rows at the one key class.** -/
-theorem dB_rowA : (Row.mk "f" [] [tA]) ∈ dB.rows := by decide
+theorem dB_row1 : (Row.mk "f" [] [t1]) ∈ dB.rows := by decide
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
-theorem dB_rowB : (Row.mk "f" [] [tB]) ∈ dB.rows := by decide
+theorem dB_row2 : (Row.mk "f" [] [t2]) ∈ dB.rows := by decide
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_mergeOf : dB.sig.mergeOf "f" =
-    some (MergeSpec.merge [] [.app "min" [.var "old", .var "new"]]) := rfl
+    some (MergeSpec.merge [.union (.var "old") (.var "new")]
+      [.min (.var "old") (.var "new")]) := rfl
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -356,46 +405,38 @@ theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
     mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dB_sig ▸ hg)
   subst hbody; subst hres
   obtain ⟨e, hstep, hev⟩ := he
-  rw [evalActions_nil, Option.some.injEq] at hstep
-  subst hstep
+  have henv : e.env = mergeEnv a b := evalActions_env hstep
   obtain ⟨t, rfl, hv⟩ := mevalList_one hev
-  rw [Expr.eval_app_prim (p := Prim.intMin) rfl, Option.bind_eq_some_iff] at hv
-  obtain ⟨ts, hts, happ⟩ := hv
-  obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
-  have h1 : Env.lookup "old" (mergeEnv a b) = some _ := meval_var hva
-  have h2 : Env.lookup "new" (mergeEnv a b) = some _ := meval_var hvb
-  obtain ⟨m, n, ht1, ht2, rfl⟩ := prim_intMin_inv happ
-  rcases mergeEnv_cases a b with ⟨x, y, rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
-  · rw [show mergeEnv [x] [y] = [("old", x), ("new", y)] from rfl] at h1 h2
-    rw [show Env.lookup "old" [("old", x), ("new", y)] = some x from rfl] at h1
-    rw [show Env.lookup "new" [("old", x), ("new", y)] = some y from rfl] at h2
-    obtain rfl : x = _ := Option.some.inj h1
-    obtain rfl : y = _ := Option.some.inj h2
-    rw [ht1, ht2]
-    exact ⟨Or.inr (Or.inl ⟨m, min m n, rfl, rfl, min_le_left m n⟩),
-      Or.inr (Or.inl ⟨n, min m n, rfl, rfl, min_le_right m n⟩)⟩
+  obtain ⟨x, y, hx, hy, rfl⟩ := meval_min hv
+  have h1 : Env.lookup "old" (mergeEnv a b) = some x := by rw [← henv]; exact meval_var hx
+  have h2 : Env.lookup "new" (mergeEnv a b) = some y := by rw [← henv]; exact meval_var hy
+  rcases mergeEnv_cases a b with ⟨x', y', rfl, rfl⟩ | hnone | ⟨ha2, hb2⟩
+  · rw [show mergeEnv [x'] [y'] = [("old", x'), ("new", y')] from rfl] at h1 h2
+    rw [show Env.lookup "old" [("old", x'), ("new", y')] = some x' from rfl] at h1
+    rw [show Env.lookup "new" [("old", x'), ("new", y')] = some y' from rfl] at h2
+    obtain rfl : x' = x := Option.some.inj h1
+    obtain rfl : y' = y := Option.some.inj h2
+    exact leB_least x' y'
   · rw [hnone] at h1; simp at h1
-  · exact ⟨Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two ha2⟩),
-      Or.inr (Or.inr ⟨⟨min m n, rfl⟩, not_intSing_of_two hb2⟩)⟩
+  · exact ⟨Or.inr (Or.inr ⟨⟨_, rfl⟩, not_sing_of_two ha2⟩),
+      Or.inr (Or.inr ⟨⟨_, rfl⟩, not_sing_of_two hb2⟩)⟩
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
-/-- `hjoin` is **not** vacuous here: `min` really does merge two `i64` columns, and the
-value it produces is above both for `leB`. -/
+/-- `hjoin` is **not** vacuous here: on two constructor terms the body's `union` goes
+through, `min` chooses `(a)`, and that value is above both for `leB`. -/
 theorem dB_join_nonvacuous :
-    ∃ e, evalActions
-        { dB.toDatabase with env := mergeEnv [.lit (.int 1)] [.lit (.int 2)] } [] = some e ∧
-      Expr.evalList e.sig [.app "min" [.var "old", .var "new"]] e.env
-        = some [.lit (.int 1)] :=
+    ∃ e, evalActions { dB.toDatabase with env := mergeEnv [tA] [tB] }
+        [.union (.var "old") (.var "new")] = some e ∧
+      Expr.evalList e.sig [.min (.var "old") (.var "new")] e.env = some [tA] :=
   ⟨_, rfl, rfl⟩
 
-/-- **Every state the specification reaches on `pB` records the second value too.**
-The last command's `set` writes the entry term `f(b)` and `MergeClosure` never removes
-one. -/
-theorem pB_reaches_entryB {db : Database}
+/-- **Every state the specification reaches on `pB` records the first value too.**
+The first `set` writes the entry term `f(1)` and nothing ever removes one. -/
+theorem pB_reaches_entry1 {db : Database}
     (h : ProgramStep FDatabase.empty.toDatabase pB db) :
-    Term.app "f" [tB] ∈ db.terms := by
+    Term.app "f" [t1] ∈ db.terms := by
   rw [pB, ctorHeader, List.cons_append, List.cons_append, List.cons_append,
     List.cons_append, List.nil_append] at h
   obtain ⟨_, -, h⟩ := h.cons_inv
@@ -403,31 +444,38 @@ theorem pB_reaches_entryB {db : Database}
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, -, h⟩ := h.cons_inv
   obtain ⟨_, -, h⟩ := h.cons_inv
-  obtain ⟨_, -, h⟩ := h.cons_inv
-  obtain ⟨_, h3, hnil⟩ := h.cons_inv
-  cases hnil.nil_inv
-  obtain ⟨_, hact, hcl⟩ := h3
+  obtain ⟨_, h1, r1⟩ := h.cons_inv
+  obtain ⟨_, hact, hcl⟩ := h1
   simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
   obtain ⟨t, ht, rfl⟩ := hact
-  obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv (show Prim.ofName "f" = none from rfl) ht
-  rw [show eB = Expr.app "b" [] from rfl] at hts
-  rw [mevalList_single_nullary (show Prim.ofName "b" = none from rfl) hts] at hcl
-  exact (MergeClosure.contained hcl).terms (Database.mem_addTerm _ _)
+  obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv ht
+  rw [show e1 = Expr.lit (.int 1) from rfl] at hts
+  obtain ⟨u, rfl, hu⟩ := mevalList_one hts
+  obtain rfl := meval_lit hu
+  exact (ProgramStep.contained r1).terms
+    ((MergeClosure.contained hcl).terms (Database.mem_addTerm _ _))
+
+/-- `[2]` is not above `[1]`: the term order reversed puts `1` above `2`. -/
+theorem not_leB_t1_t2 : ¬ leB [t1] [t2] := by
+  rintro (h | ⟨s, t, hs, ht, hlt⟩ | ⟨-, hs⟩)
+  · simp [t1, t2] at h
+  · obtain rfl : s = t1 := by simpa using hs.symm
+    obtain rfl : t = t2 := by simpa using ht.symm
+    simp [t1, t2, Term.blt, Lit.blt] at hlt
+  · exact hs ⟨t1, rfl⟩
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **Refutation B.**  `leB` is reflexive, transitive and antisymmetric, `hjoin` holds
-non-vacuously, and the conclusion still fails: the interpreter's surviving row at the
-class holds `(a)`, the specification also records `(b)` there, and `leB [(b)] [(a)]` is
-false. -/
+non-vacuously, and the conclusion still fails: the interpreter keeps a row holding `2`,
+the specification also records `1` there, and `leB [1] [2]` is false. -/
 theorem currentOfLattice_false_partialOrder : ¬ CurrentOfLattice := by
   intro H
   obtain ⟨db, hstep, hcur⟩ :=
-    H pB dB leB execM_pB leB_anti dB_join "f" [] [tA] _ _ dB_mergeOf dB_rowA
-  have hbad := hcur.2 [tB] ⟨[], .nil, pB_reaches_entryB hstep⟩
-  rcases hbad with h | ⟨_, _, h, _⟩ | ⟨⟨_, h⟩, _⟩ <;> simp [tA, tB] at h
+    H pB dB leB execM_pB leB_anti dB_join "f" [] [t2] _ _ dB_mergeOf dB_row2
+  exact not_leB_t1_t2 (hcur.2 [t1] ⟨[], .nil, pB_reaches_entry1 hstep⟩)
 
 /-! ## Counterexample C — the merge is total, `le` is reflexive, and transitivity is the
 gap
@@ -558,8 +606,7 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   rw [evalActions_nil, Option.some.injEq] at hstep
   subst hstep
   obtain ⟨t, rfl, hv⟩ := mevalList_one hev
-  rw [Expr.eval_app_ctor (show Prim.ofName "C" = none from rfl)
-    (show Signature.IsCtor _ "C" from ⟨ctorDecl 2, rfl, rfl⟩),
+  rw [Expr.eval_app_ctor (show Signature.IsCtor _ "C" from ⟨ctorDecl 2, rfl, rfl⟩),
     Option.map_eq_some_iff] at hv
   obtain ⟨ts, hts, rfl⟩ := hv
   obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
@@ -604,9 +651,9 @@ theorem pC_reaches_entryA {db : Database}
   simp only [cmdReach, cmdEffect, evalAction, Option.bind_eq_some_iff,
     Option.map_eq_some_iff] at hact
   obtain ⟨t, ht, rfl⟩ := hact
-  obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv (show Prim.ofName "f" = none from rfl) ht
+  obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv ht
   rw [show eA = Expr.app "a" [] from rfl] at hts
-  rw [mevalList_single_nullary (show Prim.ofName "a" = none from rfl) hts] at hcl
+  rw [mevalList_single_nullary hts] at hcl
   exact (ProgramStep.contained r2).terms
     ((MergeClosure.contained hcl).terms (Database.mem_addTerm _ _))
 
@@ -637,16 +684,15 @@ artefacts of the specification reaching states the interpreter does not. -/
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
-theorem dB_out_b : dB.toDatabase.Out "f" [] [tB] :=
+theorem dB_out_1 : dB.toDatabase.Out "f" [] [t1] :=
   ⟨[], .nil, by
     rw [FDatabase.toDatabase_terms]
-    change Term.app "f" [tB] ∈ dB.terms
+    change Term.app "f" [t1] ∈ dB.terms
     decide⟩
 
 /-- **Refutation B, with the specification removed.** -/
-theorem dB_not_current : ¬ dB.toDatabase.Current leB "f" [] [tA] := by
-  intro hcur
-  rcases hcur.2 [tB] dB_out_b with h | ⟨_, _, h, _⟩ | ⟨⟨_, h⟩, _⟩ <;> simp [tA, tB] at h
+theorem dB_not_current : ¬ dB.toDatabase.Current leB "f" [] [t2] :=
+  fun hcur => not_leB_t1_t2 (hcur.2 [t1] dB_out_1)
 
 set_option maxHeartbeats 2000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -684,10 +730,18 @@ theorem mergeOf_of_decl {sig : Signature} {g : FnName} {dc : FnDecl} {m : MergeS
 theorem mergesLegal_of_allConstructors {sig : Signature} (h : sig.AllConstructors) :
     Signature.MergesLegal sig := fun _ _ _ _ hd hm => (h.elim (mergeOf_of_decl hd hm)).elim
 
+/-- Every action is a legal write: the two structural predicates are automatic. -/
+theorem actions_writeLegal (as : List Action) (sig : Signature) :
+    Actions.WriteLegal as sig := by
+  induction as with
+  | nil => exact ⟨trivial, trivial⟩
+  | cons a as ih => exact ⟨⟨trivial, ih.1⟩, ⟨trivial, ih.2⟩⟩
+
 /-- `hwidth` is `Signature.MergesLegal`'s second half: one result expression per value
 column.  All three merges above have a single value column, so it is `rfl` at each use. -/
 theorem mergesLegal_update {sig : Signature} (hsig : sig.AllConstructors) {dc : FnDecl}
-    {f : FnName} {res₀ : List Expr} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
+    {f : FnName} {body₀ : List Action} {res₀ : List Expr}
+    (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
     (hwidth : res₀.length = dc.outArity) :
     Signature.MergesLegal (Function.update sig f (some dc)) := by
   intro g dc' body res hd hm
@@ -697,7 +751,7 @@ theorem mergesLegal_update {sig : Signature} (hsig : sig.AllConstructors) {dc : 
     subst hd
     rw [hdc, Option.some.injEq, MergeSpec.merge.injEq] at hm
     obtain ⟨rfl, rfl⟩ := hm
-    exact ⟨⟨trivial, trivial⟩, hwidth⟩
+    exact ⟨actions_writeLegal _ _, hwidth⟩
   · rw [Function.update_of_ne hg] at hd
     exact (hsig.elim (mergeOf_of_decl hd hm)).elim
 
@@ -727,8 +781,8 @@ theorem legal_header {rest : Program} (htail : dHdr.ProgramLegal rest) :
         (legal_ctor_cons (allConstructors_update (allConstructors_update
           (allConstructors_update (fun _ => rfl) rfl) rfl) rfl) rfl rfl htail)))
 
-theorem legal_decl_cons {dc : FnDecl} {f : FnName} {res₀ : List Expr} {rest : Program}
-    {d' : FDatabase} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
+theorem legal_decl_cons {dc : FnDecl} {f : FnName} {body₀ : List Action} {res₀ : List Expr}
+    {rest : Program} {d' : FDatabase} (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
     (hwidth : res₀.length = dc.outArity)
     (hfresh : dHdr.sig f = none)
     (hstep : dHdr.execCmdM (Cmd.decl f dc) = some d')
@@ -743,8 +797,9 @@ theorem legal_decl_cons {dc : FnDecl} {f : FnName} {res₀ : List Expr} {rest : 
 /-- `harity` and `hout` discharge `Action.SetWidthOk`: the `set` fills exactly the
 declared key and value columns.  All three programs declare `f` nullary with one value
 column, which is what makes `(set (f) e)` the right shape. -/
-theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName} {res₀ : List Expr}
-    {e : Expr} {rest : Program} (hdc : dc.merge = some (MergeSpec.merge [] res₀))
+theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName}
+    {body₀ : List Action} {res₀ : List Expr} {e : Expr} {rest : Program}
+    (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
     (hwidth : res₀.length = dc.outArity)
     (harity : dc.arity = 0) (hout : dc.outArity = 1)
     (hsig : d.sig = Function.update baseSig f (some dc))
@@ -822,9 +877,10 @@ fourth is a consequence of `Database.Out` being term-based.
    `hjoin` is an implication and says nothing when `execActions`/`Expr.evalList` return
    `none`.  When they do, `mergeOneWith` returns `none`, `settled` is reached with two
    rows at one key class, and `Current` is unsatisfiable at either of them however good
-   `le` is.  Counterexample B, where `le` is a full partial order.  The trigger is
-   `Prim.apply`'s partiality — `min`/`max` are `i64` primitives and the model has no sort
-   discipline — but a merge body that gets stuck for any other reason does the same.
+   `le` is.  Counterexample B, where `le` is a full partial order.  The trigger is a
+   `union` on two literals — `union` wants an eq-sort, and the untyped model refuses one
+   only when the operands are values — but a merge body that gets stuck for any other
+   reason does the same.
 
 4. **The key width must be the declared one.**  `Database.Out` is term-based:
    `f(bs ++ vs) ∈ db.terms` with `bs` congruent to `as`, so the key/value split is fixed

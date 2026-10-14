@@ -70,20 +70,15 @@ example : Rule.Scoped
   simp [Rule.Scoped, Pattern.Scoped, Actions.Scoped, Action.Scoped, Expr.Scoped,
     Expr.IsApp, Query.bind, Pattern.vars, eNum]
 
-/-! ### Evaluability
+/-! ### Computing
 
-Scope and evaluability are separate judgments, and `(min 1 2)` is what separates them:
-a legal egglog action, well-scoped here, and not `Evaluable`, because this model has no
-sorts and so cannot tell it from the type error `(min (A) (B))`. -/
+`(min 1 2)` evaluates to `1`. `Expr.min` is the one expression that computes rather than
+builds: `Term.least` picks the smaller operand in the term order (`Term.blt`), which on two
+integers is the numeric minimum, so the operand order does not matter. -/
 
-private def minProgram : Program := [.action (.expr (.app "min" [eNum 1, eNum 2]))]
+example : (Expr.min (eNum 1) (eNum 2)).eval noSig [] = some (num 1) := by decide
 
-example : WellScoped minProgram := by
-  simp [WellScoped, minProgram, Action.Scoped, Expr.Scoped, Expr.IsApp, eNum]
-
-example : ¬ Program.Evaluable minProgram noSig := by
-  simp [minProgram, Program.Evaluable, Cmd.Evaluable, Action.Evaluable, Expr.AtomEvaluable, Expr.Evaluable,
-    Expr.fns, Expr.fnsList, Prim.ofName, eNum]
+example : (Expr.min (eNum 2) (eNum 1)).eval noSig [] = some (num 1) := by decide
 
 /-! ### Congruence
 
@@ -206,7 +201,7 @@ example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
     .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
       (.assert (by simp [preWrapped]))
       (by apply Expr.evalAtom_of_eval
-          rw [Expr.eval_app_ctor (show Prim.ofName "wrapper" = none from rfl)
+          rw [Expr.eval_app_ctor
             (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
           rfl)
       (congOn_singleton.mpr (Cong.congr
@@ -314,13 +309,12 @@ private theorem swap_matches :
   refine ⟨[[("a", num 1), ("b", num 2)]], .cons ?_ .nil, .single _⟩
   refine ⟨⟨?_, ?_⟩, Matches.expr (w := add12) (t := add12) (.assert ?_) ?_
     (congOn_singleton.mpr (.assert (Set.mem_union_left _ ?_)))⟩
-  · simp [Env.dom, Pattern.freeVars, preRun]
+  · simp [Env.dom, Pattern.freeVars]
   · intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
     rcases hc with rfl | rfl <;> exact .assert (by simp [preRun, num])
   · simp [preRun, add12]
-  · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, Prim.ofName,
-      Signature.IsCtor, ctorDecl]
+  · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, ctorDecl]
   · simp [preRun, add12]
 
 /-- Running that firing adds `(Add 2 1)` and its children — which is exactly what
@@ -566,7 +560,7 @@ private def emptySig : Signature := fun _ => none
 /- `(function Dist (Math) i64 :merge (min old new))` and a second like it. -/
 private def dist : FnDecl :=
   { arity := 1, outArity := 1,
-    merge := some (.merge [] [.app "min" [.var "old", .var "new"]]) }
+    merge := some (.merge [] [.min (.var "old") (.var "new")]) }
 
 /-- The constructors the cases below apply, declared: `noLookup` asks for a *declared*
 constructor or a primitive, so an undeclared name would be rejected for the wrong
@@ -602,12 +596,12 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 #guard !ok [.action (.expr (.app "Copy" [A, .app "Dist" [A]]))]
 
 /- A `:merge` body, typechecked under `Context::Write`, which never runs the check.
-`(function Dist (Math) i64 :merge (max old (Zero)))` reads `Zero` and panics with
+`(function Dist (Math) i64 :merge (min old (Zero)))` reads `Zero` and panics with
 "Lookup on Zero failed in the merge function for Dist" when the row is missing. -/
 #guard !Program.noLookup
   [.decl "Zero" { arity := 0, outArity := 1, merge := some (.merge [] [.lit (.int 0)]) },
    .decl "Dist" { arity := 1, outArity := 1,
-                  merge := some (.merge [] [.app "max" [.var "old", .app "Zero" []]]) }]
+                  merge := some (.merge [] [.min (.var "old") (.app "Zero" [])]) }]
   emptySig
 
 /- A read nested in a query fact. egglog flattens `(F (Dist k))` into the two atoms
@@ -617,16 +611,15 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 
 /-! ### What still passes
 
-A declared constructor, a primitive and a literal are not reads. The primitive has a case
-of its own — `Prim.ofName` is consulted first, exactly as `Expr.eval` does — so a merge
-body computing `(min old new)` is fine, and a body writing its own table is a write. -/
+A declared constructor, `min` and a literal are not reads, so a merge body computing
+`(min old new)` is fine, and a body writing its own table is a write. -/
 #guard ok [.action (.expr (.app "F" [A])), .action (.union A (.app "G" [A, A]))]
 #guard Program.noLookup decls emptySig
 #guard Program.noLookup
   [.decl "A" (ctorDecl 0),
    .decl "Dist" { arity := 1, outArity := 1,
                   merge := some (.merge [.expr (.app "Dist" [A, .lit (.int 1)])]
-                    [.app "min" [.var "old", .var "new"]]) }] emptySig
+                    [.min (.var "old") (.var "new")]) }] emptySig
 
 end Reading
 

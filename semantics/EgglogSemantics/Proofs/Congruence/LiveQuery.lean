@@ -63,7 +63,7 @@ theorem liveQueryRead_of_eval_view {P : Program} {d : FDatabase} {src : Database
     (hb : src.TermsBuild) (hctors : src.CtorsIn P)
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF) {sig : Signature} {σ ρ : Env}
     (hρ : Env.CanonicalReads d σ ρ) :
-    ∀ (e : Expr) {t i : Term}, (∀ f ∈ e.fns, Prim.ofName f = none) →
+    ∀ (e : Expr) {t i : Term}, e.OrderingFree →
       e.eval sig σ = some t → ViewRepr d.toDatabase t i →
       LiveQueryRead d ρ e (h.root i)
   | .lit l, _, _, _, he, hv => by
@@ -77,9 +77,9 @@ theorem liveQueryRead_of_eval_view {P : Program} {d : FDatabase} {src : Database
         have hh := h.unique_view htables hs hb hctors hc t hvj hv
         simpa only [h.root_eq hrj] using hh
       exact heq ▸ LiveQueryRead.var hj
+  | .min _ _, _, _, hp, _, _ => (Expr.not_orderingFree_min hp).elim
   | .app f args, t, i, hp, he, hv => by
-      have hpf := hp f (by simp [Expr.fns])
-      simp only [Expr.eval, hpf] at he
+      simp only [Expr.eval] at he
       split at he
       next hctor =>
         obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
@@ -89,7 +89,7 @@ theorem liveQueryRead_of_eval_view {P : Program} {d : FDatabase} {src : Database
             have hk := view_row_ctors h.inv h.noUnions hs hctors hr
             have hf := htables.view _ _ hk
             refine .app (liveQueryReadList_of_eval_view h htables hs hb hctors hc hw hρ args
-              (fun g hg => hp g (by simp [Expr.fns, hg])) hts hl) hf hr ?_
+              (Expr.orderingFree_app hp) hts hl) hf hr ?_
             exact viewRow_valueColumns h.noUnions.eqsRefl h.inv hs hb hc
               (by simp [Signature.mergeOf, hf, tableDecl]) hr
       next => cases he
@@ -100,7 +100,7 @@ theorem liveQueryReadList_of_eval_view {P : Program} {d : FDatabase} {src : Data
     (hb : src.TermsBuild) (hctors : src.CtorsIn P)
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF) {sig : Signature} {σ ρ : Env}
     (hρ : Env.CanonicalReads d σ ρ) :
-    ∀ (es : List Expr) {ts is : List Term}, (∀ f ∈ Expr.fnsList es, Prim.ofName f = none) →
+    ∀ (es : List Expr) {ts is : List Term}, Expr.OrderingFreeList es →
       Expr.evalList sig es σ = some ts → ViewReprList d.toDatabase ts is →
       LiveQueryReadList d ρ es (is.map h.root)
   | [], _, _, _, he, hv => by
@@ -113,9 +113,9 @@ theorem liveQueryReadList_of_eval_view {P : Program} {d : FDatabase} {src : Data
       cases hv with
       | cons hv hvs =>
           exact .cons (liveQueryRead_of_eval_view h htables hs hb hctors hc hw hρ e
-            (fun f hf => hp f (by simp [hf])) ht hv)
+            (Expr.orderingFreeList_cons hp).1 ht hv)
             (liveQueryReadList_of_eval_view h htables hs hb hctors hc hw hρ es
-              (fun f hf => hp f (by simp [hf])) hts hvs)
+              (Expr.orderingFreeList_cons hp).2 hts hvs)
 
 end
 
@@ -134,21 +134,18 @@ theorem livePatternRead_of_matches {P : Program} {d : FDatabase} {src querySrc :
     (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d.toDatabase querySrc)
     (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e) {σ ρ : Env}
     (hρ : Env.CanonicalReads d σ ρ) {p : Pattern}
-    (hp : ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) (hm : Matches querySrc p σ) :
+    (hp : p.OrderingFree) (hm : Matches querySrc p σ) :
     LivePatternRead d ρ p := by
   cases p with
   | expr e =>
       obtain ⟨t, i, he, hv⟩ := view_of_matches_expr h htables hs hb hctors hc hw hun hex hm
       rw [Expr.evalAtom_eq_eval hcs] at he
-      exact .expr (liveQueryRead_of_eval_view h htables hs hb hctors hc hw hρ e
-        (noPrim_fns hp) he hv)
+      exact .expr (liveQueryRead_of_eval_view h htables hs hb hctors hc hw hρ e hp he hv)
   | eq a b =>
       obtain ⟨ta, tb, i, ha, hb', hia, hib⟩ :=
         views_of_matches_eq h htables hs hb hctors hc hw hun hex hm
-      exact .eq (liveQueryRead_of_eval_view h htables hs hb hctors hc hw hρ a
-          (noPrim_fns fun fk hk => hp fk (List.mem_append_left _ hk)) ha hia)
-        (liveQueryRead_of_eval_view h htables hs hb hctors hc hw hρ b
-          (noPrim_fns fun fk hk => hp fk (List.mem_append_right _ hk)) hb' hib)
+      exact .eq (liveQueryRead_of_eval_view h htables hs hb hctors hc hw hρ a hp.1 ha hia)
+        (liveQueryRead_of_eval_view h htables hs hb hctors hc hw hρ b hp.2 hb' hib)
 
 mutual
 
@@ -212,7 +209,7 @@ theorem exists_live_query {P : Program} {d : FDatabase} {src querySrc : Database
     (hc : ∀ f, src.sig.IsCtor f → d.sig.IsCtor f) (hw : src.WF)
     (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d.toDatabase querySrc)
     (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d.toDatabase t e) {σ : Env} {q : Query}
-    (hp : ∀ p ∈ q, ∀ fk ∈ p.ctors, Prim.ofName fk.1 = none) (hk : Query.VarsKeyed q)
+    (hp : ∀ p ∈ q, p.OrderingFree) (hk : Query.VarsKeyed q)
     (hm : ValidQuerySubst querySrc q σ) :
     ∃ ρ, Env.CanonicalReads d σ ρ ∧ Env.dom ρ = Env.dom σ ∧
       (∀ p ∈ q, LivePatternRead d ρ p) ∧

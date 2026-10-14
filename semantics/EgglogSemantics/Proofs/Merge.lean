@@ -32,15 +32,12 @@ database does not hold cannot relate two terms it does. That is what proves
 under `WF`, which is where the two new `WF` premises on `trans` come from.
 
 Conservativity rescues neither transport, and the obstruction is the same both times: a
-run under a *congruent* environment does not record the run under the original.
-`min`/`max` matching on literals is fixed — `evalAction` refuses a `union` on a literal, so
-`Database.WF.litsIsolated` holds, `Cong.eq_of_isLit` makes a literal's class a singleton
-and `Prim.apply_cong` is the resulting stability. What is left is `ordering-gt`, which
-compares by `Term.blt`, a *structural* order, where egglog compares by e-class id. `union
-(f 1) (g 1)` sends `ordering-gt (f 1) (f 2)` and `ordering-gt (g 1) (f 2)` to different
-booleans, so the `if`s built over it — `ordering-min` and the rest — settle on incongruent
-terms, with no literal anywhere and every state well formed. No condition on the *database*
-repairs it. Two conditions on the *program* do, and each closes **both** transports:
+run under a *congruent* environment does not record the run under the original. The one
+computation in the fragment is `min`, which compares by `Term.blt`, a *structural* order,
+where egglog compares by e-class id. `union (f 1) (g 1)` lets `min (f 1) (f 2)` and `min
+(g 1) (f 2)` settle on incongruent terms, with no literal anywhere and every state well
+formed. No condition on the *database* repairs it. Two conditions on the *program* do, and
+each closes **both** transports:
 
 * **`Program.UnionFree`.** `Action.union` is the only action that asserts an equation
   between distinct terms, so a program with none reaches only states whose `eqs` are
@@ -60,11 +57,11 @@ repairs it. Two conditions on the *program* do, and each closes **both** transpo
 `MergeStep.transport_recorded` without either condition is not merely unproved but
 **false**, refuted at `Encoding/Encode.lean`'s own `:merge` body, and its statement carries
 the counterexample. Neither arm is vacuous, and between them they cover the encoding and
-the equational fragment: `encodeAction` turns a source `union` into `.set @UF [ordering-max
-x₁ x₂] [ordering-min x₁ x₂]`, so `encode` applies `ordering-gt` — which the second arm
-forbids — and emits no `Action.union` at all, which is the first arm; while a source
-program with `(union (add a b) (add b a))` and `min`/`max` merges is the second arm and not
-the first.
+the equational fragment: `encodeAction` turns a source `union x₁ x₂` into the `@UF` entries
+`(@uf x₁ (min x₁ x₂))` and `(@uf x₂ (min x₁ x₂))`, so `encode` applies `min` — which the
+second arm forbids — and emits no `Action.union` at all, which is the first arm; while a
+source program with `(union (add a b) (add b a))` and no `min` anywhere is the second arm
+and not the first.
 
 Also **false**, and so restated or deleted rather than left open:
 
@@ -1055,37 +1052,25 @@ theorem Term.bltList_trans (as bs cs : List Term) (h₁ : Term.bltList as bs = t
 
 end
 
-/-- `Term.blt` is a strict linear order. Needed for `ordering-gt` to be a deterministic
-choice, and for "keep the smaller side" to descend. -/
+/-- `Term.blt` is a strict linear order. Needed for `min` to be a deterministic choice, and
+for "keep the smaller side" to descend. -/
 theorem Term.blt_linear : (∀ s t : Term, Term.blt s t = true → Term.blt t s = false) ∧
     (∀ s t : Term, s ≠ t → Term.blt s t = true ∨ Term.blt t s = true) ∧
     (∀ s t u : Term, Term.blt s t = true → Term.blt t u = true → Term.blt s u = true) :=
   ⟨Term.blt_asymm, Term.blt_total, Term.blt_trans⟩
 
-/-! ### The four bundled choices, against what they replace
+/-! ### `min`, against what it replaces
 
-`Encoding/Encode.lean` spells egglog's `ordering-min`, `ordering-max`, `proof-of-min` and
-`proof-of-max` as one `if` over one `ordering-gt` each. The four lemmas below hold each
-expansion against the bundled semantics it replaced, **tie included**.
+`Term.least s t` is egglog's `ordering-min`: the right operand when it is strictly below the
+left one, else the left. Read the other way round — the left operand when it is strictly
+below the right one, else the right — it is the same choice, by `Term.blt_total`: the only
+inputs where the two readings could differ are the ones with neither term below the other,
+where totality says the two terms are equal. -/
 
-The two proof selectors agree *definitionally*: both read `Term.blt` of the same pair, and
-because `ordering-gt` is strict a tie is `false` and the `else` branch — the second proof —
-is taken, which is what egglog does (`proof_encoding_helpers.rs:1233-1283`, "a tie takes
-`bp`"). The two value selectors need `Term.blt_total`: they branch the other way round, and
-the only inputs where that shows are the ones with neither term below the other, where
-totality says the two terms are equal and both branches are the same term. -/
-
-/-- `ordering-gt` and then `if`, which is what each expansion evaluates to. -/
-def Prim.ifGt (x y a b : Term) : Option Term :=
-  (Prim.orderingGt.apply [x, y]).bind fun c => Prim.ifThenElse.apply [c, a, b]
-
-theorem Prim.ifGt_eq (x y a b : Term) :
-    Prim.ifGt x y a b = some (if Term.blt y x then a else b) := rfl
-
-/-- `(if (ordering-gt s t) t s)` is `ordering-min s t`. -/
-theorem Prim.ifGt_orderingMin (s t : Term) :
-    Prim.ifGt s t t s = some (if Term.blt s t then s else t) := by
-  rw [Prim.ifGt_eq, Option.some_inj]
+/-- `Term.least`, branching on the other comparison. -/
+theorem Term.least_eq_ite (s t : Term) :
+    Term.least s t = if Term.blt s t then s else t := by
+  unfold Term.least
   by_cases hst : Term.blt s t = true
   · rw [if_pos hst, if_neg (by rw [Term.blt_asymm s t hst]; simp)]
   · rw [if_neg hst]
@@ -1095,28 +1080,6 @@ theorem Prim.ifGt_orderingMin (s t : Term) :
       rcases eq_or_ne s t with rfl | hne
       · rfl
       · exact (Term.blt_total s t hne).elim (absurd · hst) (absurd · hts)
-
-/-- `(if (ordering-gt s t) s t)` is `ordering-max s t`. -/
-theorem Prim.ifGt_orderingMax (s t : Term) :
-    Prim.ifGt s t s t = some (if Term.blt s t then t else s) := by
-  rw [Prim.ifGt_eq, Option.some_inj]
-  by_cases hst : Term.blt s t = true
-  · rw [if_pos hst, if_neg (by rw [Term.blt_asymm s t hst]; simp)]
-  · rw [if_neg hst]
-    by_cases hts : Term.blt t s = true
-    · rw [if_pos hts]
-    · rw [if_neg hts]
-      rcases eq_or_ne s t with rfl | hne
-      · rfl
-      · exact (Term.blt_total s t hne).elim (absurd · hst) (absurd · hts)
-
-/-- `(if (ordering-gt b a) pa pb)` is `proof-of-min a pa b pb`: a tie takes `pb`. -/
-theorem Prim.ifGt_proofOfMin (a pa b pb : Term) :
-    Prim.ifGt b a pa pb = some (if Term.blt a b then pa else pb) := rfl
-
-/-- `(if (ordering-gt a b) pa pb)` is `proof-of-max a pa b pb`: a tie takes `pb` here too. -/
-theorem Prim.ifGt_proofOfMax (a pa b pb : Term) :
-    Prim.ifGt a b pa pb = some (if Term.blt b a then pa else pb) := rfl
 
 /-! ### Invariants over the step relation
 
@@ -1281,10 +1244,9 @@ answer is a single witness **function** `Term → Term` rather than a witness pe
 then equal terms get equal images and `Union2` still joins.
 
 *Costs a lemma that is false*: `RuleResults.mono_recorded`. It re-evaluates under the
-substitution, and `Expr.eval` is **not** congruence-stable at `ordering-gt`, which compares
-by `Term.blt`. It *is* stable at `min`/`max`, which answer only on literals
-(`Prim.apply_cong`), and at `if`, which returns an operand unexamined, so restricting the
-transported positions to ordering-free expressions is a fix — and it is a fix for
+substitution, and `Expr.eval` is **not** congruence-stable at `min`, which compares by
+`Term.blt`. Building is, so restricting the transported positions to ordering-free
+expressions is a fix — and it is a fix for
 `MergeStep.transport_recorded` too, whose body runs under a `mergeEnv` that `Recorded` may
 have moved: a moved environment is congruent, and congruent environments give congruent
 results.
@@ -1921,7 +1883,7 @@ theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Patte
         obtain ⟨⟨hfn, hkey⟩, hval⟩ := hcond
         subst hfn
         have hne : d.sig.mergeOf r.fn ≠ none := by
-          obtain ⟨dc, hdc, hm, _, _⟩ := Expr.entry_some he
+          obtain ⟨dc, hdc, hm, _⟩ := Expr.entry_some he
           simp [Signature.mergeOf, hdc, Option.isSome_iff_ne_none.mp hm]
         have hkeyC : CongListOn d.toDatabase [Term.app r.fn (ts ++ us)] ts r.args :=
           CongList.mono Database.addTerms_contained_withOperands
@@ -3177,8 +3139,8 @@ theorem reachable_declaredTerms {p : Program} {db : Database}
 
 The two transports below move a *specification* fact along `Database.Recorded`, and both
 are false in general for one reason: `Recorded` matches an equation only up to congruence,
-so the run on the right-hand side happens under a *congruent* environment, and
-`ordering-gt` compares by `Term.blt` rather than by e-class, so it is not stable there.
+so the run on the right-hand side happens under a *congruent* environment, and `min`
+compares by `Term.blt` rather than by e-class, so it is not stable there.
 
 One of the two things that buys them back is `Action.UnionFree`. A `union` is the only
 action that asserts an equation between distinct terms, so a program with none keeps every
@@ -3187,10 +3149,10 @@ state's `eqs` **diagonal**; on a diagonal state `Cong` is the identity, and
 already proved (`MergeStep.transport`, `MergeClosure.transport`). Nothing is congruent but
 equal, so no choice operator is ever asked to be stable.
 
-This is where `Encoding/Encode.lean` lives: `encodeAction` turns a source `union` into
-`.set @UF [ordering-max x₁ x₂] [ordering-min x₁ x₂]`, and both of those expand to an
-`ordering-gt`, so `encode` applies one inside a rule action and emits *no* `Action.union` at
-all. The other thing that buys them back — ordering-freedom, which covers the programs this
+This is where `Congruence/Encode.lean` lives: `encodeAction` turns a source `union x₁ x₂`
+into the `@UF` entries `(@uf x₁ (min x₁ x₂))` and `(@uf x₂ (min x₁ x₂))`, so `encode`
+applies `min` inside a rule action and emits *no* `Action.union` at all. The other thing
+that buys them back — ordering-freedom, which covers the programs this
 one excludes and vice versa — is the section "Ordering-freedom, and where it puts
 `Recorded`" below.
 
@@ -3212,105 +3174,46 @@ structure Database.NoUnions (db : Database) : Prop where
 /-! #### Ordering-freedom survives the globals a rule is resolved through
 
 `cmdEffect` stores `Rule.resolveGlobals`, which reads a global's *value* back into the query
-as syntax, so the stored query mentions the head of every term the environment binds. Those
-heads are never `ordering-gt`: `Expr.eval` consults `Prim.ofName` first, so a reserved name
-never reaches the constructor branch, and a primitive answers with a literal or with one of
-its own operands. `Database.NoOrdering.env` is that fact carried along the run. -/
+as syntax, so the stored query mentions the head of every term the environment binds. The
+syntax a term reads back as never applies `min`: `Term.toExpr` builds literals and
+applications only. `Database.NoOrdering.env` is that fact carried along the run. -/
 
 /-- Every application in the expression that rebuilds `t`. -/
 def Term.OrderingFree (t : Term) : Prop := Expr.OrderingFree t.toExpr
 
-theorem Term.orderingFree_lit (l : Lit) : Term.OrderingFree (.lit l) := by
-  intro f hf; simp at hf
+mutual
 
-theorem Term.orderingFree_app {f : FnName} {ts : List Term} (hf : Prim.ofName f = none)
-    (h : ∀ t ∈ ts, Term.OrderingFree t) : Term.OrderingFree (.app f ts) := by
-  intro g hg
-  rw [Term.toExpr_app, Expr.fns_app, List.mem_cons] at hg
-  rcases hg with rfl | hg
-  · rw [hf]; simp
-  · induction ts with
-    | nil => simp at hg
-    | cons t ts ih =>
-        rw [Term.toExprList_cons, Expr.fnsList_cons, List.mem_union_iff] at hg
-        rcases hg with hg | hg
-        · exact h t (by simp) g hg
-        · exact ih (fun x hx => h x (by simp [hx])) hg
+/-- The syntax a term reads back as applies no `min`. -/
+theorem Term.hasMin_toExpr : ∀ t : Term, t.toExpr.hasMin = false
+  | .lit _ => rfl
+  | .app f ts => by
+      rw [Term.toExpr_app, Expr.hasMin]
+      exact Term.hasMinList_toExprList ts
 
-/-- `Prim.apply` answers with a literal or with one of its own operands. -/
-theorem Prim.orderingFree_apply {p : Prim} {ts : List Term} {t : Term}
-    (h : ∀ u ∈ ts, Term.OrderingFree u) (ha : p.apply ts = some t) : Term.OrderingFree t := by
-  unfold Prim.apply at ha
-  split at ha
-  · exact Option.some.inj ha ▸ Term.orderingFree_lit _
-  · rename_i c a b
-    rw [Option.some.injEq] at ha
-    subst ha
-    split
-    · exact h a (by simp)
-    · exact h b (by simp)
-  · exact Option.some.inj ha ▸ Term.orderingFree_lit _
-  · exact Option.some.inj ha ▸ Term.orderingFree_lit _
-  · simp at ha
+theorem Term.hasMinList_toExprList : ∀ ts : List Term,
+    Expr.hasMinList (Term.toExprList ts) = false
+  | [] => rfl
+  | t :: ts => by
+      rw [Term.toExprList_cons, Expr.hasMinList, Term.hasMin_toExpr t,
+        Term.hasMinList_toExprList ts]
+      rfl
 
-/-- **The evaluator builds only ordering-free terms**, provided the environment holds only
-such terms. Nothing is asked of the expression: a reserved head is *applied*, never built. -/
+end
+
+/-- Every term is ordering-free: `Term.toExpr` never builds a `min`. -/
+theorem Term.orderingFree (t : Term) : Term.OrderingFree t := Term.hasMin_toExpr t
+
+theorem Term.orderingFree_lit (l : Lit) : Term.OrderingFree (.lit l) := Term.orderingFree _
+
+theorem Term.orderingFree_app {f : FnName} {ts : List Term} :
+    Term.OrderingFree (.app f ts) := Term.orderingFree _
+
+/-- **The evaluator builds only ordering-free terms.** Nothing is asked of the expression or
+of the environment: a term, read back as syntax, applies no `min`. -/
 theorem Expr.eval_orderingFree {sig : Signature} {σ : Env}
-    (hσ : ∀ b ∈ σ, Term.OrderingFree b.2) :
-    ∀ (e : Expr) (t : Term), e.eval sig σ = some t → Term.OrderingFree t := by
-  intro e
-  induction e using Expr.rec
-    (motive_2 := fun es => ∀ (ts : List Term),
-      Expr.evalList sig es σ = some ts → ∀ u ∈ ts, Term.OrderingFree u) with
-  | lit l =>
-      intro t h
-      rw [Expr.eval, Option.some.injEq] at h
-      exact h ▸ Term.orderingFree_lit l
-  | var v =>
-      intro t h
-      rw [Expr.eval] at h
-      exact hσ (v, t) (Env.mem_of_lookup h)
-  | app f args ih =>
-      intro t h
-      rw [Expr.eval] at h
-      cases hp : Prim.ofName f with
-      | some pr =>
-          rw [hp] at h
-          cases hl : Expr.evalList sig args σ with
-          | none => rw [hl] at h; simp at h
-          | some ts =>
-              rw [hl] at h
-              exact Prim.orderingFree_apply (ih ts hl) h
-      | none =>
-          rw [hp] at h
-          by_cases hc : sig.IsCtor f
-          · rw [if_pos hc] at h
-            cases hl : Expr.evalList sig args σ with
-            | none => rw [hl] at h; simp at h
-            | some ts =>
-                rw [hl, Option.map_some, Option.some.injEq] at h
-                exact h ▸ Term.orderingFree_app hp (ih ts hl)
-          · rw [if_neg hc] at h; simp at h
-  | nil =>
-      rename_i ts h u hu
-      rw [Expr.evalList, Option.some.injEq] at h
-      subst h
-      simp at hu
-  | cons e es ihe ihes =>
-      rename_i ts h u hu
-      rw [Expr.evalList] at h
-      cases he : e.eval sig σ with
-      | none => rw [he] at h; simp at h
-      | some t =>
-          rw [he, Option.bind_some] at h
-          cases hes : Expr.evalList sig es σ with
-          | none => rw [hes] at h; simp at h
-          | some us =>
-              rw [hes, Option.map_some, Option.some.injEq] at h
-              subst h
-              rcases List.mem_cons.mp hu with rfl | hu'
-              · exact ihe _ he
-              · exact ihes us hes u hu'
+    (_hσ : ∀ b ∈ σ, Term.OrderingFree b.2) :
+    ∀ (e : Expr) (t : Term), e.eval sig σ = some t → Term.OrderingFree t :=
+  fun _ t _ => Term.orderingFree t
 
 theorem evalAction_envOrderingFree {A e : Database}
     (hn : ∀ b ∈ A.env, Term.OrderingFree b.2) {a : Action} (h : evalAction A a = some e) :
@@ -3450,10 +3353,9 @@ The other condition that buys the two transports, and the one that admits `union
 
 `Recorded` matches an equation only up to congruence, so the run on the right-hand side
 happens under a *congruent* environment. Everything `Expr.eval` does is stable there except
-the one choice primitive: `ordering-gt` reads `Term.blt`. `min`/`max` are **not** a problem —
-`Database.WF.litsIsolated` and `Cong.eq_of_isLit` make a literal's class a singleton, so
-congruent operands to them *are* those operands (`Prim.apply_cong`); nor is `if`, which
-returns an operand unexamined (`prim_apply_owes`).
+the one computation: `min` reads `Term.blt`. (On literals it would be stable —
+`Database.WF.litsIsolated` and `Cong.eq_of_isLit` make a literal's class a singleton — but
+the untyped model cannot tell that use apart, so the condition excludes `min` outright.)
 
 So `Spec/Scope.lean`'s `Program.OrderingFree` is enough, and unlike `Program.UnionFree` it
 restricts no `union` at all. Four things carry it:
@@ -3594,11 +3496,6 @@ theorem litsIsolated_addTerms {db : Database} (h : db.LitsIsolated) (ts : List T
     (db.addTerms ts).LitsIsolated := fun p hp =>
   (mem_addTerms_eqs ts db p hp).elim (h p) (fun hq _ => hq)
 
-/-- The primitive an ordering-free position may not apply, read through the name table. -/
-theorem prim_ne_orderingGt {f : FnName} {p : Prim} (hp : Prim.ofName f = some p)
-    (hof : Prim.ofName f ≠ some .orderingGt) : p ≠ .orderingGt := by
-  rintro rfl; exact hof hp
-
 /-- A value the recorder owes and that is a **literal** it holds verbatim: a literal's
 class is a singleton, so the two values are equal. -/
 theorem owes_eq_of_isLit {E : Database} (hlit : E.LitsIsolated) : ∀ {ts ts' : List Term},
@@ -3619,41 +3516,25 @@ theorem owes_lit {E : Database} (hlit : E.LitsIsolated) {l : Lit} {x : Term}
   have h := owes_eq_of_isLit hlit (List.Forall₂.cons ho .nil) (by simp [Term.isLit])
   simpa using h.symm
 
-/-- **Every primitive but `ordering-gt` is congruence-stable**, and for two different
-reasons. `min`/`max` read only literals, and a literal's class is a singleton, so operands
-congruent to theirs *are* theirs. `if` reads only its condition — also a literal, so it
-moves unchanged — and returns a branch unexamined, so the recorder owes whichever branch is
-taken. That is why forbidding `ordering-gt` alone suffices: the four bundled choices are
-`if`s over it, and the `if` half of each was never the unstable half. -/
-theorem prim_apply_owes {E : Database} (hlit : E.LitsIsolated) {p : Prim}
-    (hp : p ≠ .orderingGt) {ts ts' : List Term} (hall : List.Forall₂ (Owes E) ts ts')
-    {t : Term} (h : p.apply ts = some t) : ∃ t', p.apply ts' = some t' ∧ Owes E t t' := by
-  cases p with
-  | orderingGt => exact absurd rfl hp
-  | intMin =>
-    rw [owes_eq_of_isLit hlit hall (Prim.isLit_of_apply (Or.inl rfl) h)] at h
-    exact ⟨t, h, Owes.refl⟩
-  | intMax =>
-    rw [owes_eq_of_isLit hlit hall (Prim.isLit_of_apply (Or.inr rfl) h)] at h
-    exact ⟨t, h, Owes.refl⟩
-  | ifThenElse =>
-    obtain ⟨c, a, b, rfl, rfl⟩ := Prim.if_apply_inv h
-    cases hall with | cons hx hall₁ =>
-    cases hall₁ with | cons ha hall₂ =>
-    cases hall₂ with | cons hb hall₃ =>
-    cases hall₃ with | nil =>
-    obtain rfl := owes_lit hlit hx
-    refine ⟨if c then _ else _, rfl, ?_⟩
-    cases c
-    · simpa using hb
-    · simpa using ha
+/-- `Expr.OrderingFree`, read off an application: its arguments are. -/
+theorem Expr.orderingFree_app {f : FnName} {args : List Expr}
+    (h : Expr.OrderingFree (.app f args)) : Expr.OrderingFreeList args := h
+
+/-- `Expr.OrderingFree`, read off a `min`: there is none. -/
+theorem Expr.not_orderingFree_min {a b : Expr} (h : Expr.OrderingFree (.min a b)) : False := by
+  simp [Expr.OrderingFree, Expr.hasMin] at h
+
+/-- `Expr.OrderingFreeList`, read off a cons. -/
+theorem Expr.orderingFreeList_cons {e : Expr} {es : List Expr}
+    (h : Expr.OrderingFreeList (e :: es)) : e.OrderingFree ∧ Expr.OrderingFreeList es := by
+  simpa [Expr.OrderingFreeList, Expr.OrderingFree, Expr.hasMinList] using h
 
 mutual
 
 /-- **Ordering-free evaluation is congruence-stable.** Under an environment whose values
 the recorder owes, the expression evaluates there too, and the recorder owes its value.
-Every primitive but `ordering-gt` survives (`prim_apply_owes`), and `ordering-gt` is what
-the hypothesis excludes. -/
+Building is stable, and `min` — the one computation, and the unstable one — is what the
+hypothesis excludes. -/
 theorem eval_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ σ' : Env}
     (henv : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
       ∃ t', Env.lookup v σ' = some t' ∧ Owes E t t')
@@ -3667,23 +3548,15 @@ theorem eval_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ �
     rw [Expr.eval_var] at he
     exact henv v t he
   | .app f args =>
-    have hargs : Expr.OrderingFreeList args := fun g hg => hof g (by simp [Expr.fns, hg])
-    cases hp : Prim.ofName f with
-    | some p =>
-      rw [Expr.eval_app_prim hp, Option.bind_eq_some_iff] at he
-      obtain ⟨ts, hts, happ⟩ := he
+    have hargs : Expr.OrderingFreeList args := Expr.orderingFree_app hof
+    by_cases hc : sig.IsCtor f
+    · rw [Expr.eval_app_ctor hc, Option.map_eq_some_iff] at he
+      obtain ⟨ts, hts, rfl⟩ := he
       obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
-      obtain ⟨t', happ', ho⟩ :=
-        prim_apply_owes hlit (prim_ne_orderingGt hp (hof f (by simp [Expr.fns]))) hall happ
-      exact ⟨t', by rw [Expr.eval_app_prim hp, hts', Option.bind_some, happ'], ho⟩
-    | none =>
-      by_cases hc : sig.IsCtor f
-      · rw [Expr.eval_app_ctor hp hc, Option.map_eq_some_iff] at he
-        obtain ⟨ts, hts, rfl⟩ := he
-        obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
-        exact ⟨.app f ts', by rw [Expr.eval_app_ctor hp hc, hts', Option.map_some],
-          Owes.app hall⟩
-      · rw [Expr.eval_app_not_ctor hp hc] at he; exact absurd he (by simp)
+      exact ⟨.app f ts', by rw [Expr.eval_app_ctor hc, hts', Option.map_some],
+        Owes.app hall⟩
+    · rw [Expr.eval_app_not_ctor hc] at he; exact absurd he (by simp)
+  | .min a b => exact (Expr.not_orderingFree_min hof).elim
 
 theorem evalList_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {σ σ' : Env}
     (henv : ∀ (v : Var) (t : Term), Env.lookup v σ = some t →
@@ -3699,10 +3572,8 @@ theorem evalList_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {
     rw [Expr.evalList_cons, Option.bind_eq_some_iff] at he
     obtain ⟨u, hu, hmap⟩ := he
     obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hmap
-    obtain ⟨u', hu', ho⟩ := eval_owes hlit henv
-      (fun g hg => hof g (List.mem_union_iff.mpr (Or.inl hg))) hu
-    obtain ⟨us', hus', hall⟩ := evalList_owes hlit henv
-      (fun g hg => hof g (List.mem_union_iff.mpr (Or.inr hg))) hus
+    obtain ⟨u', hu', ho⟩ := eval_owes hlit henv (Expr.orderingFreeList_cons hof).1 hu
+    obtain ⟨us', hus', hall⟩ := evalList_owes hlit henv (Expr.orderingFreeList_cons hof).2 hus
     exact ⟨u' :: us', by rw [Expr.evalList_cons, hu', Option.bind_some, hus', Option.map_some],
       .cons ho hall⟩
 
@@ -3716,24 +3587,16 @@ theorem evalAtom_owes {E : Database} (hlit : E.LitsIsolated) {sig : Signature} {
   cases e with
   | lit l => exact eval_owes (sig := sig) hlit henv hof he
   | var v => exact eval_owes (sig := sig) hlit henv hof he
+  | min a b => exact (Expr.not_orderingFree_min hof).elim
   | app f args =>
-    have hargs : Expr.OrderingFreeList args := fun g hg => hof g (by simp [Expr.fns, hg])
-    cases hp : Prim.ofName f with
-    | some p =>
-      simp only [Expr.evalAtom, hp] at he ⊢
-      obtain ⟨ts, hts, happ⟩ := Option.bind_eq_some_iff.mp he
+    have hargs : Expr.OrderingFreeList args := Expr.orderingFree_app hof
+    simp only [Expr.evalAtom] at he ⊢
+    split at he
+    · rename_i hd
+      obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
       obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
-      obtain ⟨t', happ', ho⟩ :=
-        prim_apply_owes hlit (prim_ne_orderingGt hp (hof f (by simp [Expr.fns]))) hall happ
-      exact ⟨t', by simp [hts', happ'], ho⟩
-    | none =>
-      simp only [Expr.evalAtom, hp] at he ⊢
-      split at he
-      · rename_i hd
-        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
-        obtain ⟨ts', hts', hall⟩ := evalList_owes hlit henv hargs hts
-        exact ⟨.app f ts', by simp [hd, hts'], Owes.app hall⟩
-      · simp at he
+      exact ⟨.app f ts', by simp [hd, hts'], Owes.app hall⟩
+    · simp at he
 
 /-- `Database.Recorded` after adding a term on each side, where the recorder's term is one
 the recorder **owes** rather than the same one. This is `Recorded.addTerm_congr` with the
@@ -4396,8 +4259,8 @@ end OrderingFree
 
 `hcond` is not bookkeeping: **without it the statement is false**, and not merely unproved.
 `Recorded` moves an entry's value columns as well as its key, so the body runs under a
-*congruent* `mergeEnv` on the `C` side, and the `ordering-gt` inside `ordering-min`/
-`ordering-max` is not stable there: the two runs settle on incongruent parents and the
+*congruent* `mergeEnv` on the `C` side, and the `min` that chooses the leader is not
+stable there: the two runs settle on incongruent parents and the
 union-find edge one writes is congruent to nothing the other can write. The counterexample
 is at the encoding's own `mergeBody`/`mergeResult` and one `viewDecl`, with `A.Recorded C`,
 both states well formed and one signature: `A` holds `@fView(k) ↦ p` alongside
@@ -4410,7 +4273,7 @@ Either arm of `hcond` does. Under `C.Diag` there is nothing left to prove:
 `Database.Recorded.contained_of_diag` turns `hc` into a `Database.Contained` and
 `MergeStep.transport` is the proved transport along that — `p` and `s` could not have been
 congruent there in the first place. Under `Signature.OrderingFree` the counterexample is
-excluded at its own primitive, and `MergeStep.transport_owes` is the proof: the moved
+excluded at its own `min`, and `MergeStep.transport_owes` is the proof: the moved
 environment is congruent, and ordering-free evaluation respects congruence, so the two runs
 land on congruent results. That the environment moves *before* any body expression runs is
 not an obstruction, since nothing about the moved values is read except through
@@ -5183,8 +5046,8 @@ both `Database.WF.subtermClosed` and `Database.WF.eqsRefl` are read to establish
 double. `ValidQuerySubst.mono_recorded` is false at the same `σ`, so the substitution the
 firing runs under has to be replaced by a congruent one — chosen once for the whole query,
 because `Env.UnionAll` makes the per-pattern choices agree — and then the head re-run under
-it; and `Expr.eval` is not congruence-stable at `ordering-gt`, so "a congruent environment
-gives a recording result" is itself **false** with `ordering-max` in the rule.
+it; and `Expr.eval` is not congruence-stable at `min`, so "a congruent environment gives a
+recording result" is itself **false** with a `min` in the rule.
 `Rule.OrderingFree` is exactly what closes the second gap, and `Env.mapVals` over the
 witness of `exists_witness` closes the first.
 
@@ -6317,16 +6180,13 @@ body. Then every state it reaches is diagonal, and there `Database.Recorded` and
 and no `encode` output — prelude, maintenance rule, merge body or encoded head — contains
 an `Action.union`.
 
-*Ordering-free* — no expression the program evaluates applies `ordering-gt`, in a rule's
-query or head, in a command, or in a `:merge` body or result. That one exclusion covers all
-four of egglog's bundled choices, which are `if`s over it. Then evaluation is
-congruence-stable (`eval_owes`), so a run under the congruent environment a `Recorded`
-witness supplies produces a congruent result, which is what recording asks for. This arm
-restricts **no** `union`: `(union (add a b) (add b a))` and every other equational program
-is covered, as is every `:merge` body built from `min`/`max` — those two are stable, since
-`Database.WF.litsIsolated` makes a literal's class a singleton, and every body built from
-`if`, which returns an operand unexamined. What it excludes is `Encoding/Encode.lean`, whose
-`encodeAction` emits `ordering-max`; that encoding is what the first arm is for.
+*Ordering-free* — no expression the program evaluates applies `min`, in a rule's query or
+head, in a command, or in a `:merge` body or result. Then evaluation is congruence-stable
+(`eval_owes`), so a run under the congruent environment a `Recorded` witness supplies
+produces a congruent result, which is what recording asks for. This arm restricts **no**
+`union`: `(union (add a b) (add b a))` and every other equational program without a `min`
+is covered. What it excludes is a `:merge (min old new)` and `Congruence/Encode.lean`, whose
+`mergeBody` chooses a leader with `min`; that encoding is what the first arm is for.
 
 See the section header above for why the contract is `Database.Recorded` rather than the
 equality `exec_programStep` enjoys, and `Spec/Merge.lean` for why it is that rather than

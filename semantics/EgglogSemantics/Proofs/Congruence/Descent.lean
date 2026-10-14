@@ -40,7 +40,33 @@ theorem UFTermsDescend.addAtom {d : FDatabase} (h : UFTermsDescend d)
   · exact hu a b he.symm
   · exact h a b (FDatabase.subterms_of_columns hsc hc _ hm he)
 
-/-- A collision only adds `max(old,new) → min(old,new)`; its survivor was already held. -/
+/-- Linking two held ids to the smaller one writes only descending edges. -/
+theorem UFTermsDescend.mergeLinks {d : FDatabase} (h : UFTermsDescend d)
+    (hsc : d.SubtermClosed) {old new : Term} (ho : old ∈ d.terms) (hn : new ∈ d.terms) :
+    UFTermsDescend (mergeLinks d old new) := by
+  have hl : lowerId old new ∈ d.terms := by
+    rcases lowerId_eq_or old new with heq | heq <;> rw [heq] <;> assumption
+  have h₁ : UFTermsDescend (d.addAtom (.app ufName [old, lowerId old new])) :=
+    h.addAtom hsc
+      (by
+        intro t ht
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
+        rcases ht with rfl | rfl <;> assumption)
+      (by
+        intro a b hab
+        obtain ⟨rfl, rfl⟩ : old = a ∧ lowerId old new = b := by simpa using hab
+        exact lowerId_le_left old new)
+  exact h₁.addAtom (hsc.addTerm _)
+    (by
+      intro t ht
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
+      rcases ht with rfl | rfl <;> exact Egglog.FDatabase.mem_addTerm_of_mem ‹_›)
+    (by
+      intro a b hab
+      obtain ⟨rfl, rfl⟩ : new = a ∧ lowerId old new = b := by simpa using hab
+      exact lowerId_le_right old new)
+
+/-- A collision only links `old` and `new` to `min(old,new)`; its survivor was already held. -/
 theorem mergeOneOriented_ufTermsDescend {cl : Finset (Term × Term)} {d e : FDatabase}
     {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hr : d.EqsRefl) (hsc : d.SubtermClosed)
     (hidx : d.IndexOk) (hcl : ∀ p ∈ cl, p.1 = p.2) (hne : r₁ ≠ r₂)
@@ -59,17 +85,7 @@ theorem mergeOneOriented_ufTermsDescend {cl : Finset (Term × Term)} {d e : FDat
     split
     · simpa only [hnew, hfn, hargs] using ht₁
     · simpa only [hold] using ht₂
-  have hc : ∀ t ∈ [upperId old new, lowerId old new], t ∈ d.terms := by
-    intro t ht
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at ht
-    rcases ht with rfl | rfl
-    · unfold upperId; split <;> assumption
-    · unfold lowerId; split <;> assumption
-  have hm : UFTermsDescend (d.addAtom (.app ufName [upperId old new, lowerId old new])) :=
-    h.addAtom hsc hc (by
-      intro a b hab
-      obtain ⟨rfl, rfl⟩ : upperId old new = a ∧ lowerId old new = b := by simpa using hab
-      exact lowerId_le_upperId old new)
+  have hm : UFTermsDescend (mergeLinks d old new) := h.mergeLinks hsc ho hn
   rw [he]
   exact hm.addTerm fun a b hab => h a b (hsc _ hs _ hab)
 

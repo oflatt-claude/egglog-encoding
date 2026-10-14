@@ -44,9 +44,7 @@ theorem encodedRule_firing_reads_of_programStep {P pre : Program}
     (sourceConstructors_of_programStep hdom hsub hpre hsig) (hpre.wf Database.WF.empty)
     (by rw [hqsig]; exact hcs.sig) hreads hqenv ?_ (hdom.queryEncodable _ hr).2
     (fun p hp => ((hdom.queryEncodable _ hr).1 p hp).1) ?_ ?_ ?_ ?_ hm hf
-  · intro p hp fk hk
-    exact hdom.noPrim fk (mem_program_ctors hr
-      (List.mem_append_left _ (List.mem_flatMap.mpr ⟨p, hp, hk⟩)))
+  · exact (Program.OrderingFree.of_mem hdom.noMin hr).1
   · intro v hv
     apply hdom.noAt v
     apply List.mem_append_left
@@ -54,8 +52,7 @@ theorem encodedRule_firing_reads_of_programStep {P pre : Program}
     apply List.mem_dedup.mpr
     apply List.mem_flatMap.mpr
     exact ⟨Cmd.rule r, hr, List.mem_union_iff.mpr (Or.inl hv)⟩
-  · intro a ha e he
-    exact noPrim_fns fun fk hk => hdom.noPrim fk (hhead a ha e he fk hk)
+  · exact orderingFree_actionExprs (Program.OrderingFree.of_mem hdom.noMin hr).2
   · intro _ _ _ _ f _ hctor
     exact sourceConstructors_of_programStep hdom hsub hpre hsig f (hqsig ▸ hctor)
   · intro a ha e he fk hk

@@ -73,17 +73,17 @@ theorem rebuildSubst_canon {d : FDatabase} {q : Query} {f : FnName} {a : Expr}
 
 /-- Exact table declarations determine the entry split without consulting any row. -/
 theorem entry_table {sig : Signature} {f : FnName} {k : Nat} {as vs : List Expr}
-    (hp : Prim.ofName f = none) (hd : sig f = some (tableDecl k)) (hlen : as.length = k) :
+    (hd : sig f = some (tableDecl k)) (hlen : as.length = k) :
     (Expr.app f (as ++ vs)).entry sig = some (f, as, vs) := by
-  simp [Expr.entry, hp, hd, tableDecl, ← hlen]
+  simp [Expr.entry, hd, tableDecl, ← hlen]
 
 theorem entryRead_table {d : FDatabase} {τ : Env} {f : FnName} {k : Nat}
-    {as vs : List Expr} {ts us : List Term} (hp : Prim.ofName f = none)
+    {as vs : List Expr} {ts us : List Term}
     (hd : d.sig f = some (tableDecl k)) (hlen : as.length = k)
     (ha : Expr.evalList d.sig as τ = some ts) (hv : Expr.evalList d.sig vs τ = some us)
     (hr : (⟨f, ts, us⟩ : Row) ∈ d.rows) (hc : ∀ c ∈ ts ++ us, c ∈ d.valueTerms) :
     EntryRead d τ (.expr (.app f (as ++ vs))) :=
-  ⟨f, as, vs, ts, us, rfl, entry_table hp hd hlen, ha, hv, hr,
+  ⟨f, as, vs, ts, us, rfl, entry_table hd hlen, ha, hv, hr,
     fun c hm => Egglog.FDatabase.mem_terms_of_mem_valueTerms (hc c hm)⟩
 
 /-- The output-propagation query matches its two actual input rows. -/
@@ -99,14 +99,14 @@ theorem eclassRule_match {d : FDatabase} {f : FnName} {cs : List Term} {e x : Te
   intro p hp
   simp only [eclassRule, List.mem_cons, List.not_mem_nil, or_false] at hp
   rcases hp with rfl | rfl
-  · apply entryRead_table (prim_viewName f) hf (by simp [rebuildVars])
+  · apply entryRead_table hf (by simp [rebuildVars])
       (eval_rebuildVars cs e x)
       (by simp [Expr.evalList, Expr.eval]) hr
     intro t ht
     rcases List.mem_append.mp ht with ht | ht
     · exact hc t ht
     · exact List.mem_singleton.mp ht ▸ he
-  · apply entryRead_table (as := [.var "@e"]) (by decide) hu rfl
+  · apply entryRead_table (as := [.var "@e"]) hu rfl
       (by simp [Expr.evalList, Expr.eval]) (by simp [Expr.evalList, Expr.eval]) hurow
     simp only [List.cons_append, List.nil_append, List.mem_cons, List.not_mem_nil, or_false]
     intro t ht
@@ -132,7 +132,7 @@ theorem eclassRule_fires {d : FDatabase} {f : FnName} {cs : List Term} {e x : Te
       = some (cs ++ [x]) := by
     rw [Expr.evalList_append_map, hks]
     simp [Expr.evalList, Expr.eval, hxs]
-  obtain ⟨d', hd', ht⟩ := execLocalActions_atom_of_eval (prim_viewName f) (by simp [hf]) hev
+  obtain ⟨d', hd', ht⟩ := execLocalActions_atom_of_eval (f := viewName f) (by simp [hf]) hev
   exact ⟨σ, d', eclassRule_match hf hu hr hurow hc he hx, hd', ht⟩
 
 /-- Re-keying a child likewise matches a view row and that child's live parent edge. -/
@@ -149,13 +149,13 @@ theorem childRule_match {d : FDatabase} {f : FnName} {cs : List Term} {e x : Ter
   intro p hp
   simp only [childRule, List.mem_cons, List.not_mem_nil, or_false] at hp
   rcases hp with rfl | rfl
-  · apply entryRead_table (prim_viewName f) hf (by simp [rebuildVars])
+  · apply entryRead_table hf (by simp [rebuildVars])
       (eval_rebuildVars cs e x) (by simp [Expr.evalList, Expr.eval]) hr
     intro t ht
     rcases List.mem_append.mp ht with ht | ht
     · exact hc t ht
     · exact List.mem_singleton.mp ht ▸ he
-  · apply entryRead_table (as := [.var ("@c" ++ toString i)]) (by decide) hu rfl
+  · apply entryRead_table (as := [.var ("@c" ++ toString i)]) hu rfl
       (by simp only [Expr.evalList, Expr.eval, rebuildSubst_key i hi,
         Option.bind_some, Option.map_some])
       (by simp [Expr.evalList, Expr.eval]) hurow
@@ -188,7 +188,7 @@ theorem childRule_fires {d : FDatabase} {f : FnName} {cs : List Term} {e x : Ter
     rw [Expr.evalList_append_map,
       Expr.evalList_set hks i (show Expr.eval d.sig (.var "@x") σ = some x from hxs)]
     simp [Expr.evalList, Expr.eval, hes]
-  obtain ⟨d', hd', ht⟩ := execLocalActions_atom_of_eval (prim_viewName f) (by simp [hf]) hev
+  obtain ⟨d', hd', ht⟩ := execLocalActions_atom_of_eval (f := viewName f) (by simp [hf]) hev
   exact ⟨σ, d', childRule_match hi hf hu hr hurow hc he hx, hd', ht⟩
 
 end Egglog.Congruence

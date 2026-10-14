@@ -29,32 +29,57 @@ theorem termRank_lt {ts : List Term} {a b : Term} (ha : a ∈ ts)
 theorem termRank_le_length (ts : List Term) (a : Term) : termRank ts a ≤ ts.length :=
   List.length_filter_le _ _
 
-/-- Removing a positive-weight row and inserting a lighter row strictly decreases weight.
-If the inserted row is already present, removing the old row is sufficient. -/
-theorem sum_lt_of_erase_insert {α : Type} [DecidableEq α] (w : α → Nat)
-    {s t : Finset α} {r u : α} (hr : r ∈ s) (hpos : 0 < w r)
-    (ht : t ⊆ insert u (s.erase r))
-    (hu : u ∈ s.erase r ∨ w u < w r) :
+/-- Removing a row and inserting two rows strictly decreases weight when either the first
+inserted row is already present and the second is lighter than the removed one, or the two
+together are lighter than it. -/
+theorem sum_lt_of_erase_insert₂ {α : Type} [DecidableEq α] (w : α → Nat)
+    {s t : Finset α} {r u v : α} (hr : r ∈ s)
+    (ht : t ⊆ insert v (insert u (s.erase r)))
+    (huv : (u ∈ s.erase r ∧ w v < w r) ∨ w u + w v < w r) :
     ∑ x ∈ t, w x < ∑ x ∈ s, w x := by
   have hsum : (∑ x ∈ s.erase r, w x) + w r = ∑ x ∈ s, w x :=
     Finset.sum_erase_add _ _ hr
-  have ht' : (∑ x ∈ t, w x) ≤ ∑ x ∈ insert u (s.erase r), w x :=
+  have ht' : (∑ x ∈ t, w x) ≤ ∑ x ∈ insert v (insert u (s.erase r)), w x :=
     Finset.sum_le_sum_of_subset ht
-  by_cases hm : u ∈ s.erase r
-  · rw [Finset.insert_eq_of_mem hm] at ht'
+  have hv' : (∑ x ∈ insert v (insert u (s.erase r)), w x) ≤
+      w v + ∑ x ∈ insert u (s.erase r), w x := by
+    by_cases hv : v ∈ insert u (s.erase r)
+    · rw [Finset.insert_eq_of_mem hv]; omega
+    · rw [Finset.sum_insert hv]
+  rcases huv with ⟨hu, hlt⟩ | hlt
+  · rw [Finset.insert_eq_of_mem hu] at hv' ht'
     omega
-  · rw [Finset.sum_insert hm] at ht'
-    have hlt := hu.resolve_left hm
+  · have hu' : (∑ x ∈ insert u (s.erase r), w x) ≤ w u + ∑ x ∈ s.erase r, w x := by
+      by_cases hu : u ∈ s.erase r
+      · rw [Finset.insert_eq_of_mem hu]; omega
+      · rw [Finset.sum_insert hu]
     omega
 
-/-- UF keys use their structural rank. Other merging tables outweigh every UF key. -/
+/-- Two rows below a rank together weigh less than one row at it. -/
+private theorem two_pow_lt {a b n : Nat} (ha : a < n) (hb : b < n) :
+    3 ^ (a + 1) + 3 ^ (b + 1) < 3 ^ (n + 1) := by
+  have h1 : 3 ^ (a + 1) ≤ 3 ^ n := Nat.pow_le_pow_right (by decide) ha
+  have h2 : 3 ^ (b + 1) ≤ 3 ^ n := Nat.pow_le_pow_right (by decide) hb
+  have h3 : 0 < 3 ^ n := Nat.pow_pos (by decide)
+  rw [pow_succ]
+  omega
+
+private theorem pow_succ_lt {a n : Nat} (ha : a < n) : 3 ^ (a + 1) < 3 ^ (n + 1) := by
+  have h1 : 3 ^ (a + 1) ≤ 3 ^ n := Nat.pow_le_pow_right (by decide) ha
+  have h3 : 0 < 3 ^ n := Nat.pow_pos (by decide)
+  rw [pow_succ]
+  omega
+
+/-- UF keys use their structural rank, exponentially: a collision writes two links below
+the key it rewrites, and together they must weigh less than the row they replace. Other
+merging tables outweigh every UF key. -/
 def rowWeight (ts : List Term) (sig : Signature) (r : Row) : Nat :=
   if sig.mergeOf r.fn = none then 0 else
     if r.fn = ufName then
       match r.args with
-      | [a] => termRank ts a + 1
+      | [a] => 3 ^ (termRank ts a + 1)
       | _ => 0
-    else ts.length + 2
+    else 3 ^ (ts.length + 2)
 
 /-- Only merging rows participate in the measure; constructor-index rows weigh zero. -/
 def tableRows (d : FDatabase) : Finset Row :=
@@ -77,7 +102,8 @@ noncomputable def rowsWeight (ts : List Term) (d : FDatabase) : Nat :=
   · rintro ⟨hr, hm⟩
     exact ⟨Or.inr hr, hm⟩
 
-/-- A collision can leave its survivor and the new UF edge, plus untouched old table rows. -/
+/-- A collision can leave its survivor and the two new UF links, plus untouched old table
+rows. -/
 theorem mergeOneOriented_tableRows {cl : Finset (Term × Term)} {d e : FDatabase}
     {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hidx : d.IndexOk)
     (huf : d.sig ufName = some (tableDecl 1))
@@ -88,7 +114,8 @@ theorem mergeOneOriented_tableRows {cl : Finset (Term × Term)} {d e : FDatabase
       ∀ r ∈ tableRows e,
         (r ∈ tableRows d ∧ r ≠ r₁ ∧ r ≠ r₂) ∨
         r = ⟨r₂.fn, r₂.args, [lowerId old new]⟩ ∨
-        r = ⟨ufName, [upperId old new], [lowerId old new]⟩ := by
+        r = ⟨ufName, [old], [lowerId old new]⟩ ∨
+        r = ⟨ufName, [new], [lowerId old new]⟩ := by
   obtain ⟨old, new, hold, hnew, hfn, hargs, hm₁, hm₂, hmg, he⟩ :=
     mergeOneOriented_single hshape hidx hcl hne run
   refine ⟨old, new, hold, hnew, hfn, hargs, mem_tableRows.mpr ⟨hm₁, hmg⟩,
@@ -105,19 +132,11 @@ theorem mergeOneOriented_tableRows {cl : Finset (Term × Term)} {d e : FDatabase
     have hmr' : d.sig.mergeOf s.fn ≠ none := hmr
     rcases Egglog.FDatabase.mem_addTerm_rows.mp hs with hs | hs
     · exact (hmr' (Egglog.FDatabase.mem_ctorRowList hs).2.1).elim
-    · have hatom := Egglog.FDatabase.addAtom_eq_addRow
-        (d := { d with env := mergeEnv [old] [new] })
-        (as := [upperId old new]) (vs := [lowerId old new]) huf
-        (by simp [tableDecl]) rfl rfl
-      change s ∈ (({ d with env := mergeEnv [old] [new] } : FDatabase).addAtom
-        (.app ufName ([upperId old new] ++ [lowerId old new]))).rows at hs
-      rw [hatom] at hs
-      simp only [Egglog.FDatabase.addRow, List.mem_dedup, List.mem_cons] at hs
-      rcases hs with hs | hs
-      · exact Or.inr (Or.inr hs)
-      · rcases Egglog.FDatabase.mem_addTerm_rows.mp hs with hs | hs
-        · exact (hmr' (Egglog.FDatabase.mem_ctorRowList hs).2.1).elim
-        · exact Or.inl ⟨mem_tableRows.mpr ⟨hs, hmr'⟩, hsr₁, hs₂⟩
+    · rcases mem_rows_mergeLinks (d := { d with env := mergeEnv [old] [new] }) huf
+          (by simp [tableDecl]) rfl rfl hs hmr' with hs | hs | hs
+      · exact Or.inr (Or.inr (Or.inl hs))
+      · exact Or.inr (Or.inr (Or.inr hs))
+      · exact Or.inl ⟨mem_tableRows.mpr ⟨hs, hmr'⟩, hsr₁, hs₂⟩
 
 /-- Table columns stay inside one fixed finite store throughout a merge pass. -/
 def TableColumnsIn (ts : List Term) (d : FDatabase) : Prop :=
@@ -140,17 +159,20 @@ theorem mergeOneOriented_tableColumnsIn {ts : List Term} {cl : Finset (Term × T
   have ho : old ∈ ts := h r₂ hm₂ old (by rw [hold]; simp)
   have hn : new ∈ ts := h r₁ hm₁ new (by rw [hnew]; simp)
   have hl : lowerId old new ∈ ts := by unfold lowerId; split <;> assumption
-  have hu : upperId old new ∈ ts := by unfold upperId; split <;> assumption
   intro r hr t ht
-  rcases hrows r hr with ⟨hm, _, _⟩ | rfl | rfl
+  rcases hrows r hr with ⟨hm, _, _⟩ | rfl | rfl | rfl
   · exact h r hm t ht
   · rcases List.mem_append.mp ht with ht | ht
     · exact h r₂ hm₂ t (List.mem_append_left _ ht)
     · exact List.mem_singleton.mp ht ▸ hl
   · simp only [List.singleton_append, List.mem_cons, List.not_mem_nil, or_false] at ht
     rcases ht with rfl | rfl <;> assumption
+  · simp only [List.singleton_append, List.mem_cons, List.not_mem_nil, or_false] at ht
+    rcases ht with rfl | rfl <;> assumption
 
-/-- Every successful collision strictly decreases the total weight of live table rows. -/
+/-- Every successful collision strictly decreases the total weight of live table rows: the
+link from the larger id either already exists or ranks below the rewritten key, and the
+self-loop at the smaller id ranks below both. -/
 theorem mergeOneOriented_weight_lt {ts : List Term} {cl : Finset (Term × Term)}
     {d e : FDatabase} {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hidx : d.IndexOk)
     (huf : d.sig ufName = some (tableDecl 1)) (hdes : UFRowsDescend d)
@@ -161,10 +183,15 @@ theorem mergeOneOriented_weight_lt {ts : List Term} {cl : Finset (Term × Term)}
   let lo : Row := ⟨r₂.fn, r₂.args, [lowerId old new]⟩
   let hi : Row := ⟨r₂.fn, r₂.args, [upperId old new]⟩
   let u : Row := ⟨ufName, [upperId old new], [lowerId old new]⟩
+  let s : Row := ⟨ufName, [lowerId old new], [lowerId old new]⟩
   have he₁ : r₁ = ⟨r₂.fn, r₂.args, [new]⟩ := by
     cases r₁; cases r₂; simp_all
   have he₂ : r₂ = ⟨r₂.fn, r₂.args, [old]⟩ := by
     cases r₂; simp_all
+  have hon : old ≠ new := by
+    intro h
+    apply hne
+    rw [he₁, he₂, h]
   have hpairs : (hi = r₁ ∧ lo = r₂) ∨ (hi = r₂ ∧ lo = r₁) := by
     rcases ids_paired old new with ⟨hu, hl⟩ | ⟨hu, hl⟩
     · exact Or.inr ⟨by simpa [hi, hu] using he₂.symm, by simpa [lo, hl] using he₁.symm⟩
@@ -176,50 +203,68 @@ theorem mergeOneOriented_weight_lt {ts : List Term} {cl : Finset (Term × Term)}
     rcases hpairs with ⟨hh, hl⟩ | ⟨hh, hl⟩
     · exact hne (hh.symm.trans (h.symm.trans hl))
     · exact hne (hl.symm.trans (h.trans hh))
-  have hsub : tableRows e ⊆ insert u ((tableRows d).erase hi) := by
+  have hlink : ∀ r : Row, r = ⟨ufName, [old], [lowerId old new]⟩ ∨
+      r = ⟨ufName, [new], [lowerId old new]⟩ → r = u ∨ r = s := by
+    intro r hr
+    rcases ids_paired old new with ⟨hu, hl⟩ | ⟨hu, hl⟩
+    · rcases hr with rfl | rfl
+      · exact Or.inl (by simp [u, hu])
+      · exact Or.inr (by simp [s, hl])
+    · rcases hr with rfl | rfl
+      · exact Or.inr (by simp [s, hl])
+      · exact Or.inl (by simp [u, hu])
+  have hsub : tableRows e ⊆ insert s (insert u ((tableRows d).erase hi)) := by
     intro r hr
     rcases hrows r hr with ⟨hm, hn₁, hn₂⟩ | hr | hr
     · apply Finset.mem_insert_of_mem
+      apply Finset.mem_insert_of_mem
       apply Finset.mem_erase.mpr
       exact ⟨hpairs.elim (fun h => h.1 ▸ hn₁) (fun h => h.1 ▸ hn₂), hm⟩
-    · exact Finset.mem_insert_of_mem (Finset.mem_erase.mpr ⟨hr ▸ hlh, hr ▸ hlo⟩)
-    · exact Finset.mem_insert.mpr (Or.inl hr)
+    · exact Finset.mem_insert_of_mem
+        (Finset.mem_insert_of_mem (Finset.mem_erase.mpr ⟨hr ▸ hlh, hr ▸ hlo⟩))
+    · rcases hlink r hr with rfl | rfl
+      · exact Finset.mem_insert_of_mem (Finset.mem_insert_self _ _)
+      · exact Finset.mem_insert_self _ _
   have hum : d.sig.mergeOf ufName ≠ none := by simp [Signature.mergeOf, huf, tableDecl]
   have him : d.sig.mergeOf hi.fn ≠ none := (mem_tableRows.mp hhi).2
-  have huweight : rowWeight ts d.sig u = termRank ts (upperId old new) + 1 := by
+  have huweight : rowWeight ts d.sig u = 3 ^ (termRank ts (upperId old new) + 1) := by
     simp [rowWeight, u, hum]
-  have hpos : 0 < rowWeight ts d.sig hi := by
+  have hsweight : rowWeight ts d.sig s = 3 ^ (termRank ts (lowerId old new) + 1) := by
+    simp [rowWeight, s, hum]
+  have hlts : lowerId old new ∈ ts := hcols lo hlo _ (by simp [lo])
+  have huts : upperId old new ∈ ts := hcols hi hhi _ (by simp [hi])
+  have hrank : termRank ts (lowerId old new) < termRank ts (upperId old new) :=
+    termRank_lt hlts (lowerId_lt_upperId hon)
+  have hbound : (u ∈ (tableRows d).erase hi ∧ rowWeight ts d.sig s < rowWeight ts d.sig hi) ∨
+      rowWeight ts d.sig u + rowWeight ts d.sig s < rowWeight ts d.sig hi := by
     by_cases hf : r₂.fn = ufName
     · have hk := (hidx.width hi (mem_tableRows.mp hhi).1 (tableDecl 1)
         (by simpa [hi, hf] using huf) him).1
       obtain ⟨k, hk⟩ := List.length_eq_one_iff.mp hk
       change r₂.args = [k] at hk
-      simp [rowWeight, hi, hf, hk, hum]
-    · simp [rowWeight, him, hi, hf]
-  have hbound : u ∈ (tableRows d).erase hi ∨ rowWeight ts d.sig u < rowWeight ts d.sig hi := by
-    by_cases hf : r₂.fn = ufName
-    · have hk := (hidx.width hi (mem_tableRows.mp hhi).1 (tableDecl 1)
-        (by simpa [hi, hf] using huf) him).1
-      obtain ⟨k, hk⟩ := List.length_eq_one_iff.mp hk
-      change r₂.args = [k] at hk
+      have hhiweight : rowWeight ts d.sig hi = 3 ^ (termRank ts k + 1) := by
+        simp [rowWeight, hi, hf, hk, hum]
       have hedge : (⟨ufName, [k], [upperId old new]⟩ : Row) ∈ d.rows := by
         simpa [hi, hf, hk] using (mem_tableRows.mp hhi).1
       rcases ufRowsDescend_iff.mp hdes k (upperId old new) hedge with hu | hu
       · have heq : u = lo := by simp [u, lo, hf, hk, hu]
-        exact Or.inl (Finset.mem_erase.mpr ⟨heq ▸ hlh, heq ▸ hlo⟩)
-      · have hut : upperId old new ∈ ts := hcols hi hhi _ (by simp [hi])
-        have hlt := termRank_lt hut hu
+        refine Or.inl ⟨Finset.mem_erase.mpr ⟨heq ▸ hlh, heq ▸ hlo⟩, ?_⟩
+        rw [hsweight, hhiweight, ← hu]
+        exact pow_succ_lt hrank
+      · have hrank' : termRank ts (upperId old new) < termRank ts k := termRank_lt huts hu
         right
-        simpa [rowWeight, him, hi, hf, hk, huweight, u, hum] using Nat.add_lt_add_right hlt 1
+        rw [huweight, hsweight, hhiweight]
+        exact two_pow_lt hrank' (hrank.trans hrank')
     · right
-      rw [huweight]
-      have hle := termRank_le_length ts (upperId old new)
-      simp only [rowWeight, him, ↓reduceIte, hi, hf]
-      omega
+      have hhiweight : rowWeight ts d.sig hi = 3 ^ (ts.length + 2) := by
+        simp [rowWeight, him, hi, hf]
+      rw [huweight, hsweight, hhiweight]
+      exact two_pow_lt (Nat.lt_succ_of_le (termRank_le_length ts _))
+        (Nat.lt_succ_of_le (termRank_le_length ts _))
   have hsig := (Egglog.FDatabase.mergeOneOriented_confined run).2.2.1
   change (∑ r ∈ tableRows e, rowWeight ts e.sig r) < _
   rw [hsig]
-  exact sum_lt_of_erase_insert _ hhi hpos hsub hbound
+  exact sum_lt_of_erase_insert₂ _ hhi hsub hbound
 
 /-- Folding steps which either leave the state alone or decrease its weight. -/
 theorem foldl_preserves_or_decreases {α β : Type} {P : α → Prop} {m : α → Nat}

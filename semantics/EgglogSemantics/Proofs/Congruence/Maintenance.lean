@@ -11,12 +11,12 @@ theorem pathCompressRule_soundTerms {src : Database} {d d' : FDatabase} {σ : En
     (hσ : σ ∈ matchQuery d pathCompressRule.query)
     (hf : execLocalActions d pathCompressRule.actions σ = some d') : SoundTerms d' src := by
   obtain ⟨ts₁, us₁, ha₁, hv₁, hm₁⟩ := mem_terms_of_mem_matchQuery_entry hr hidx hσ
-    (vs := [Expr.var "@b"]) (f := ufName) (as := [Expr.var "@a"]) rfl
+    (vs := [Expr.var "@b"]) (f := ufName) (as := [Expr.var "@a"])
     (by simp [pathCompressRule])
   obtain ⟨a, hla, rfl⟩ := Expr.evalList_singleton ha₁
   obtain ⟨b, hlb, rfl⟩ := Expr.evalList_singleton hv₁
   obtain ⟨ts₂, us₂, ha₂, hv₂, hm₂⟩ := mem_terms_of_mem_matchQuery_entry hr hidx hσ
-    (vs := [Expr.var "@c"]) (f := ufName) (as := [Expr.var "@b"]) rfl
+    (vs := [Expr.var "@c"]) (f := ufName) (as := [Expr.var "@b"])
     (by simp [pathCompressRule])
   obtain ⟨b', hlb', rfl⟩ := Expr.evalList_singleton ha₂
   obtain ⟨c, hlc, rfl⟩ := Expr.evalList_singleton hv₂
@@ -26,7 +26,7 @@ theorem pathCompressRule_soundTerms {src : Database} {d d' : FDatabase} {σ : En
   have ham : a ∈ d.terms := FDatabase.mem_terms_of_column hsc hm₁ (by simp)
   have hcm : c ∈ d.terms := FDatabase.mem_terms_of_column hsc hm₂ (by simp)
   obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := execLocalActions_entry (g := ufName)
-    (args := [.var "@a"]) (out := [.var "@c"]) rfl hf
+    (args := [.var "@a"]) (out := [.var "@c"]) hf
   obtain ⟨a', hla', rfl⟩ := Expr.evalList_singleton hesh
   obtain rfl : a = a' := Option.some.inj ((Expr.eval_append_env _ hla).symm.trans hla')
   obtain ⟨c', hlc', rfl⟩ := Expr.evalList_singleton hvsh
@@ -43,10 +43,10 @@ theorem eclassRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f 
     (hf : execLocalActions d [.expr (.app (viewName f) (cs ++ [.var "@x"]))] σ = some d') :
     SoundTerms d' src := by
   obtain ⟨ts, us, hats, hvus, hmv⟩ := mem_terms_of_mem_matchQuery_entry hr hidx hσ
-    (vs := [Expr.var "@e"]) (f := viewName f) (as := cs) (prim_viewName _) (by simp)
+    (vs := [Expr.var "@e"]) (f := viewName f) (as := cs) (by simp)
   obtain ⟨e, hle, rfl⟩ := Expr.evalList_singleton hvus
   obtain ⟨ts₂, us₂, hats₂, hvus₂, hmu⟩ := mem_terms_of_mem_matchQuery_entry hr hidx hσ
-    (vs := [Expr.var "@x"]) (f := ufName) (as := [Expr.var "@e"]) rfl (by simp)
+    (vs := [Expr.var "@x"]) (f := ufName) (as := [Expr.var "@e"]) (by simp)
   obtain ⟨e', hle', rfl⟩ := Expr.evalList_singleton hats₂
   obtain ⟨x, hlx, rfl⟩ := Expr.evalList_singleton hvus₂
   obtain rfl : e = e' := Option.some.inj (hle.symm.trans hle')
@@ -56,7 +56,7 @@ theorem eclassRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f 
     fun z hz => FDatabase.mem_terms_of_column hsc hmv (List.mem_append_left _ hz)
   have hxm : x ∈ d.terms := FDatabase.mem_terms_of_column hsc hmu (by simp)
   obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := execLocalActions_entry (g := viewName f)
-    (args := cs) (out := [.var "@x"]) (prim_viewName _) hf
+    (args := cs) (out := [.var "@x"]) hf
   obtain rfl : esh = ts := Option.some.inj (hesh.symm.trans (Expr.evalList_append_env _ hats))
   obtain ⟨x', hlx', rfl⟩ := Expr.evalList_singleton hvsh
   obtain rfl : x = x' := Option.some.inj ((Expr.eval_append_env _ hlx).symm.trans hlx')
@@ -74,11 +74,11 @@ theorem childRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f :
       [.expr (.app (viewName f) (cs.set i (.var "@x") ++ [.var "@e"]))] σ = some d') :
     SoundTerms d' src := by
   obtain ⟨ts, us, hats, hvus, hmv⟩ := mem_terms_of_mem_matchQuery_entry hr hidx hσ
-    (vs := [Expr.var "@e"]) (f := viewName f) (as := cs) (prim_viewName _) (by simp)
+    (vs := [Expr.var "@e"]) (f := viewName f) (as := cs) (by simp)
   obtain ⟨e, hle, rfl⟩ := Expr.evalList_singleton hvus
   obtain ⟨c, hci, hlc⟩ := Expr.getElem?_of_evalList hats i hi
   obtain ⟨ts₂, us₂, hats₂, hvus₂, hmu⟩ := mem_terms_of_mem_matchQuery_entry hr hidx hσ
-    (vs := [Expr.var "@x"]) (f := ufName) (as := [Expr.var v]) rfl (by simp)
+    (vs := [Expr.var "@x"]) (f := ufName) (as := [Expr.var v]) (by simp)
   obtain ⟨c', hlc', rfl⟩ := Expr.evalList_singleton hats₂
   obtain ⟨x, hlx, rfl⟩ := Expr.evalList_singleton hvus₂
   obtain rfl : c = c' := Option.some.inj (hlc.symm.trans hlc')
@@ -89,7 +89,7 @@ theorem childRule_soundTerms {src : Database} {d d' : FDatabase} {σ : Env} {f :
   have hem : e ∈ d.terms := FDatabase.mem_terms_of_column hsc hmv (by simp)
   have hxm : x ∈ d.terms := FDatabase.mem_terms_of_column hsc hmu (by simp)
   obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := execLocalActions_entry (g := viewName f)
-    (args := cs.set i (.var "@x")) (out := [.var "@e"]) (prim_viewName _) hf
+    (args := cs.set i (.var "@x")) (out := [.var "@e"]) hf
   have hset := Expr.evalList_set (Expr.evalList_append_env (τ := d.env) _ hats) i
     (Expr.eval_append_env (τ := d.env) _ hlx)
   obtain rfl : esh = ts.set i x := Option.some.inj (hesh.symm.trans hset)

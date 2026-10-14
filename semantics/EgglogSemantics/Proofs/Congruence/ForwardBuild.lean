@@ -50,7 +50,7 @@ mutual
 The target id is the head expression evaluated at target ids, not the source term itself. -/
 theorem encodeBuild_reads {sig : Signature} {σ : Env} :
     ∀ (e : Expr) {t : Term} {d : FDatabase},
-      (∀ f ∈ e.fns, Prim.ofName f = none) →
+      e.OrderingFree →
       (∀ f ∈ e.fns, sig.IsCtor f → d.sig.IsCtor f) →
       (∀ fk ∈ e.ctors, (d.sig (viewName fk.1)).isSome = true) →
       Env.Reads d.toDatabase σ d.env → e.eval sig σ = some t →
@@ -62,20 +62,20 @@ theorem encodeBuild_reads {sig : Signature} {σ : Env} :
   | .var v, t, d, _, _, _, hρ, he => by
       obtain ⟨i, hi, hr⟩ := hρ v t he
       exact ⟨i, d, hi, rfl, hr⟩
+  | .min _ _, _, _, hp, _, _, _, _ => (Expr.not_orderingFree_min hp).elim
   | .app f args, t, d, hp, hc, hd, hρ, he => by
-      have hpf := hp f (by simp [Expr.fns])
       have hctor : sig.IsCtor f := by
         by_contra hn
-        rw [Expr.eval_app_not_ctor hpf hn] at he
+        rw [Expr.eval_app_not_ctor hn] at he
         contradiction
-      rw [Expr.eval_app_ctor hpf hctor] at he
+      rw [Expr.eval_app_ctor hctor] at he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
       obtain ⟨is, m, his, hm, hviews⟩ := encodeBuildArgs_reads args
-        (fun g hg => hp g (by simp [Expr.fns, hg]))
+        (Expr.orderingFree_app hp)
         (fun g hg => hc g (by simp [Expr.fns, hg]))
         (fun fk hk => hd fk (List.mem_cons_of_mem _ hk)) hρ hts
       have htarget : (Expr.app f args).eval d.sig d.env = some (.app f is) := by
-        rw [Expr.eval_app_ctor hpf (hc f (by simp [Expr.fns]) hctor), his]; rfl
+        rw [Expr.eval_app_ctor (hc f (by simp [Expr.fns]) hctor), his]; rfl
       have hsig := Egglog.FDatabase.execActions_sig hm
       have henv := Egglog.FDatabase.execActions_env hm
       have hcols : Expr.evalList m.sig (args ++ [.app f args]) m.env =
@@ -83,7 +83,7 @@ theorem encodeBuild_reads {sig : Signature} {σ : Env} :
         rw [hsig, henv]
         exact Expr.evalList_append_eq his (by
           simp only [Expr.evalList, htarget, Option.bind_some, Option.map_some])
-      have hwrite := execAction_atom_of_eval (prim_viewName f)
+      have hwrite := execAction_atom_of_eval
         (by rw [hsig]; exact hd (f, args.length) List.mem_cons_self) hcols
       refine ⟨.app f is, m.addAtom (.app (viewName f) (is ++ [.app f is])),
         htarget, execActions_append_eq hm ?_, ?_⟩
@@ -94,7 +94,7 @@ theorem encodeBuild_reads {sig : Signature} {σ : Env} :
 @[inherit_doc encodeBuild_reads]
 theorem encodeBuildArgs_reads {sig : Signature} {σ : Env} :
     ∀ (es : List Expr) {ts : List Term} {d : FDatabase},
-      (∀ f ∈ Expr.fnsList es, Prim.ofName f = none) →
+      Expr.OrderingFreeList es →
       (∀ f ∈ Expr.fnsList es, sig.IsCtor f → d.sig.IsCtor f) →
       (∀ fk ∈ Expr.ctorsList es, (d.sig (viewName fk.1)).isSome = true) →
       Env.Reads d.toDatabase σ d.env → Expr.evalList sig es σ = some ts →
@@ -106,14 +106,13 @@ theorem encodeBuildArgs_reads {sig : Signature} {σ : Env} :
   | e :: es, _, d, hp, hc, hd, hρ, he => by
       obtain ⟨t, ht, he⟩ := Option.bind_eq_some_iff.mp he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
-      obtain ⟨i, m, hi, hm, hv⟩ := encodeBuild_reads e
-        (fun f hf => hp f (by simp [Expr.fnsList, hf]))
+      obtain ⟨i, m, hi, hm, hv⟩ := encodeBuild_reads e (Expr.orderingFreeList_cons hp).1
         (fun f hf => hc f (by simp [Expr.fnsList, hf]))
         (fun fk hk => hd fk (by simp [Expr.ctorsList, hk])) hρ ht
       have hsig := Egglog.FDatabase.execActions_sig hm
       have henv := Egglog.FDatabase.execActions_env hm
       obtain ⟨is, d', his, hr, hvs⟩ := encodeBuildArgs_reads (d := m) es
-        (fun f hf => hp f (by simp [Expr.fnsList, hf]))
+        (Expr.orderingFreeList_cons hp).2
         (fun f hf hctor => by rw [hsig]; exact hc f (by simp [Expr.fnsList, hf]) hctor)
         (fun fk hk => by rw [hsig]; exact hd fk (by simp [Expr.ctorsList, hk]))
         (by rw [henv]; exact hρ.mono (Egglog.FDatabase.execActions_contained hm)) hts
@@ -124,10 +123,11 @@ theorem encodeBuildArgs_reads {sig : Signature} {σ : Env} :
 
 end
 
-/-- The endpoint readings of an encoded union are joined by its explicit UF entry. -/
+/-- The endpoint readings of an encoded union are joined by an explicit UF entry: the link
+from the larger id, the other link being a self-loop. -/
 theorem encodeUnion_reads {sig : Signature} {σ : Env} {a b : Expr} {ta tb : Term}
     {d : FDatabase}
-    (hp : ∀ e ∈ [a, b], ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ [a, b], e.OrderingFree)
     (hc : ∀ e ∈ [a, b], ∀ f ∈ e.fns, sig.IsCtor f → d.sig.IsCtor f)
     (hd : ∀ e ∈ [a, b], ∀ fk ∈ e.ctors, (d.sig (viewName fk.1)).isSome = true)
     (huf : (d.sig ufName).isSome = true) (hρ : Env.Reads d.toDatabase σ d.env)
@@ -146,23 +146,35 @@ theorem encodeUnion_reads {sig : Signature} {σ : Env} {a b : Expr} {ta tb : Ter
     (by rw [henv]; exact hρ.mono (Egglog.FDatabase.execActions_contained hm)) hb
   have hbuild := execActions_append_eq hm hn
   rw [hsig, henv] at hj
-  have hvals := eval_order_ids hi hj
-  have hcols : Expr.evalList n.sig [maxE a b, minE a b] n.env =
-      some [upperId i j, lowerId i j] := by
-    rw [Egglog.FDatabase.execActions_sig hbuild, Egglog.FDatabase.execActions_env hbuild]
-    simp only [Expr.evalList, hvals.1, hvals.2, Option.bind_some, Option.map_some]
-  have hwrite := execAction_atom_of_eval (show Prim.ofName ufName = none from rfl)
-    (by rw [Egglog.FDatabase.execActions_sig hbuild]; exact huf) hcols
-  refine ⟨i, j, n.addAtom (.app ufName [upperId i j, lowerId i j]),
+  have hsig' := Egglog.FDatabase.execActions_sig hbuild
+  have henv' := Egglog.FDatabase.execActions_env hbuild
+  have hi' : a.eval n.sig n.env = some i := by rw [hsig', henv']; exact hi
+  have hj' : b.eval n.sig n.env = some j := by rw [hsig', henv']; exact hj
+  have hmin := eval_min_ids hi' hj'
+  have hcols₁ : Expr.evalList n.sig [a, .min a b] n.env = some [i, lowerId i j] := by
+    simp only [Expr.evalList, hi', hmin, Option.bind_some, Option.map_some]
+  have huf' : (n.sig ufName).isSome = true := by rw [hsig']; exact huf
+  have hwrite₁ := execAction_atom_of_eval huf' hcols₁
+  have hcols₂ : Expr.evalList (n.addAtom (.app ufName [i, lowerId i j])).sig [b, .min a b]
+      (n.addAtom (.app ufName [i, lowerId i j])).env = some [j, lowerId i j] := by
+    change Expr.evalList n.sig [b, .min a b] n.env = _
+    simp only [Expr.evalList, hj', hmin, Option.bind_some, Option.map_some]
+  have hwrite₂ := execAction_atom_of_eval (d := n.addAtom (.app ufName [i, lowerId i j]))
+    huf' hcols₂
+  refine ⟨i, j, (n.addAtom (.app ufName [i, lowerId i j])).addAtom (.app ufName [j, lowerId i j]),
     execActions_append_eq hbuild ?_, ?_, ?_, ?_⟩
-  · simp only [execActions, hwrite, Option.bind_some]
-  · exact (hia.mono (Egglog.FDatabase.execActions_contained hn)).mono
-      (Egglog.FDatabase.execAction_contained hwrite)
-  · exact hjb.mono (Egglog.FDatabase.execAction_contained hwrite)
-  · have ho := out_addAtom n ufName [upperId i j] (lowerId i j)
-    rcases ids_paired i j with ⟨hu, hl⟩ | ⟨hu, hl⟩
-    · exact Or.inl (by simpa only [List.cons_append, List.nil_append, hu, hl] using ho)
-    · exact Or.inr (by simpa only [List.cons_append, List.nil_append, hu, hl] using ho)
+  · simp only [execActions, hwrite₁, Option.bind_some, hwrite₂]
+  · exact ((hia.mono (Egglog.FDatabase.execActions_contained hn)).mono
+      (Egglog.FDatabase.execAction_contained hwrite₁)).mono
+      (Egglog.FDatabase.execAction_contained hwrite₂)
+  · exact (hjb.mono (Egglog.FDatabase.execAction_contained hwrite₁)).mono
+      (Egglog.FDatabase.execAction_contained hwrite₂)
+  · have ho₁ := (out_addAtom n ufName [i] (lowerId i j)).mono
+      (Egglog.FDatabase.execAction_contained hwrite₂)
+    have ho₂ := out_addAtom (n.addAtom (.app ufName [i, lowerId i j])) ufName [j] (lowerId i j)
+    rcases ids_paired i j with ⟨-, hl⟩ | ⟨-, hl⟩
+    · exact Or.inl (by simpa only [List.cons_append, List.nil_append, hl] using ho₁)
+    · exact Or.inr (by simpa only [List.cons_append, List.nil_append, hl] using ho₂)
 
 theorem ViewReprList.mem_read {d : Database} : ∀ {as is : List Term},
     ViewReprList d as is → ∀ t ∈ as, ∃ i, ViewRepr d t i
@@ -231,7 +243,7 @@ theorem SourceReads.addEq {d src : Database} (h : SourceReads d src) {a b i j : 
 new existence and union facts. This does not require rebuilding until the block ends. -/
 theorem encodeAction_reads {src post : Database} {d : FDatabase} {a : Action}
     (hcs : src.sig.AllConstructors)
-    (hp : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ actionExprs a, e.OrderingFree)
     (hc : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, src.sig.IsCtor f → d.sig.IsCtor f)
     (hd : ∀ e ∈ actionExprs a, ∀ fk ∈ e.ctors, (d.sig (viewName fk.1)).isSome = true)
     (huf : (d.sig ufName).isSome = true) (hρ : Env.Reads d.toDatabase src.env d.env)
@@ -249,7 +261,7 @@ theorem encodeAction_reads {src post : Database} {d : FDatabase} {a : Action}
 /-- Rule heads and global action blocks execute while retaining all source facts. -/
 theorem encodeActions_reads {src post : Database} {d : FDatabase} {as : List Action}
     (hcs : src.sig.AllConstructors)
-    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, e.OrderingFree)
     (hc : ∀ a ∈ as, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns,
       src.sig.IsCtor f → d.sig.IsCtor f)
     (hd : ∀ a ∈ as, ∀ e ∈ actionExprs a, ∀ fk ∈ e.ctors,

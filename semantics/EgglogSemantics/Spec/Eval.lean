@@ -5,8 +5,7 @@ import EgglogSemantics.Spec.Congruence
 
 Value expressions build ground terms; complete atoms may also describe function entries.
 Actions add equations to the database. Evaluation returns `none` for unbound variables,
-undeclared heads, table applications in value positions, invalid primitive operands, and
-unions on literals. Atom columns use value evaluation. Rule firing and merge closure
+undeclared heads, table applications in value positions, and unions on literals. Atom columns use value evaluation. Rule firing and merge closure
 are specified separately in `Spec/Step.lean`.
 -/
 
@@ -14,16 +13,13 @@ namespace Egglog
 mutual
 
 /-- Build the ground term an expression denotes. The signature is read for one thing only —
-whether a name **builds, computes, reads, or means nothing** — and the primitive table is
-consulted first, so a reserved name shadows a user function. -/
+whether a name **builds, reads, or means nothing**. -/
 def Expr.eval (sig : Signature) : Expr → Env → Option Term
   | .lit l, _ => some (.lit l)
   | .var v, σ => Env.lookup v σ
   | .app f args, σ =>
-      match Prim.ofName f with
-      | some p => (Expr.evalList sig args σ).bind p.apply
-      | none =>
-          if sig.IsCtor f then (Expr.evalList sig args σ).map (Term.app f) else none
+      if sig.IsCtor f then (Expr.evalList sig args σ).map (Term.app f) else none
+  | .min a b, σ => (a.eval sig σ).bind fun x => (b.eval sig σ).map (Term.least x)
 
 /-- `Expr.eval` over an argument list, failing if any argument does. -/
 def Expr.evalList (sig : Signature) : List Expr → Env → Option (List Term)
@@ -33,21 +29,18 @@ def Expr.evalList (sig : Signature) : List Expr → Env → Option (List Term)
 end
 
 /-- Interpret a root application as a table entry. The declaration determines which
-columns are keys and which are outputs. Primitive and constructor applications are values. -/
+columns are keys and which are outputs. Constructor applications and `min` are values. -/
 def Expr.entry (sig : Signature) : Expr → Option (FnName × List Expr × List Expr)
   | .app f cols =>
-      if (Prim.ofName f).isSome then none else
-        (sig f).bind fun d =>
-          if d.merge.isSome then some (f, cols.take d.arity, cols.drop d.arity) else none
+      (sig f).bind fun d =>
+        if d.merge.isSome then some (f, cols.take d.arity, cols.drop d.arity) else none
   | _ => none
 
 /-- Evaluate a complete query or action expression. An entry's columns are evaluated as
 values, so entry applications cannot occur as children. -/
 def Expr.evalAtom (sig : Signature) : Expr → Env → Option Term
   | .app f cols, σ =>
-      match Prim.ofName f with
-      | some p => (Expr.evalList sig cols σ).bind p.apply
-      | none => if (sig f).isSome then (Expr.evalList sig cols σ).map (Term.app f) else none
+      if (sig f).isSome then (Expr.evalList sig cols σ).map (Term.app f) else none
   | e, σ => e.eval sig σ
 
 /-- Run one action in the database's evaluation context. Actions never bind variables.

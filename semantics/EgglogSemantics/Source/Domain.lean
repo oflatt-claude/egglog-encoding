@@ -21,6 +21,7 @@ def Expr.ctors : Expr → List (FnName × Nat)
   | .lit _ => []
   | .var _ => []
   | .app f args => (f, args.length) :: Expr.ctorsList args
+  | .min a b => a.ctors ++ b.ctors
 
 /-- `Expr.ctors` over an argument list. -/
 def Expr.ctorsList : List Expr → List (FnName × Nat)
@@ -62,8 +63,7 @@ def Expr.ClosedG (G : List (Var × Expr)) : Prop :=
 
 def Database.GlobalsInline (src : Database) (G : List (Var × Expr)) : Prop :=
   ∀ v e, Expr.lookupG v G = some e →
-    e.vars = [] ∧ (∀ fk ∈ e.ctors, Prim.ofName fk.1 = none) ∧
-      ∃ t, e.eval src.sig [] = some t ∧ Env.lookup v src.env = some t
+    e.vars = [] ∧ ∃ t, e.eval src.sig [] = some t ∧ Env.lookup v src.env = some t
 
 /-- The clause moves to a state that still builds what it built and still binds what it
 bound. -/
@@ -73,8 +73,8 @@ theorem Database.GlobalsInline.mono_src {src src' : Database} {G : List (Var × 
     (henv : ∀ v t, Env.lookup v src.env = some t → Env.lookup v src'.env = some t) :
     src'.GlobalsInline G := by
   intro v e he
-  obtain ⟨hcl, hnp, t, hev, hlk⟩ := h v e he
-  exact ⟨hcl, hnp, t, hsig e t hev, henv v t hlk⟩
+  obtain ⟨hcl, t, hev, hlk⟩ := h v e he
+  exact ⟨hcl, t, hsig e t hev, henv v t hlk⟩
 
 /-- The static half of the clause, which is what the three text conditions need. -/
 theorem Database.GlobalsInline.closed {src : Database} {G : List (Var × Expr)}
@@ -176,6 +176,7 @@ def Expr.ArgVar (v : Var) : Expr → Prop
   | .lit _ => False
   | .var _ => False
   | .app _ args => Expr.var v ∈ args ∨ Expr.ArgVarList v args
+  | .min a b => Expr.ArgVar v a ∨ Expr.ArgVar v b
 
 /-- `Expr.ArgVar` over an argument list. -/
 def Expr.ArgVarList (v : Var) : List Expr → Prop
@@ -211,7 +212,7 @@ bare variable the query does not bind, which `encodeBuild` emits no action for a
 
 * **A `union` on a literal.** `evalAction` refuses it — egglog's type checker does, and this
   untyped model cannot see it until the operands are values — while `encodeAction` emits
-  `.set @UF [ordering-max …] […]`, which `execAction` never refuses. Only a **rule head**
+  `.set @UF [a] [min a b]`, which `execAction` never refuses. Only a **rule head**
   needs excluding, and either by having no `union` or by the program building no literal at
   all: a bare variable operand can be bound to a literal too, and it is bound to a term the
   source holds.
@@ -235,6 +236,7 @@ def Expr.litFreeB : Expr → Bool
   | .lit _ => false
   | .var _ => true
   | .app _ args => Expr.litFreeListB args
+  | .min a b => Expr.litFreeB a && Expr.litFreeB b
 
 /-- `Expr.litFreeB` over an argument list. -/
 def Expr.litFreeListB : List Expr → Bool
@@ -297,14 +299,12 @@ the signature the firing reads, and `Cmd.sigBind` is the only thing that grows i
 cannot fire before its own `Cmd.rule`, so declared-before-the-rule is
 declared-before-every-firing.
 
-`Action.Declared` lets a **primitive** stand in for a declaration, since a `:merge` body is
-where primitives are legal; `EncodeDomain.noPrim` closes that off for a source program, and a
-rule head's names are among `Program.ctors`. -/
+A rule head's names are among `Program.ctors`. -/
 @[simp] def Program.HeadsDeclared : Program → Signature → Prop
   | [], _ => True
   | c :: cs, sig => c.HeadsDeclared sig ∧ Program.HeadsDeclared cs (c.sigBind sig)
 
-/-! Given `noPrim` this is equivalent to the `Bool` accumulator it replaced —
+/-! This is equivalent to the `Bool` accumulator it replaced —
 `Program.HeadsDeclared P (fun _ => none) ↔ headCtorsDeclaredB [] P` — for **every** program and
 not only the corpus, checked out of tree and left there, since stating it in the build needs
 that `Bool` back. In tree the evidence is `encodeDomainB_iff` and the census pins. -/
@@ -319,7 +319,7 @@ instance decidableNeNone {α : Type u} (o : Option α) : Decidable (o ≠ none) 
   decidable_of_iff (o.isSome = true) (by cases o <;> simp)
 
 instance Expr.decidableDeclared (e : Expr) (sig : Signature) : Decidable (e.Declared sig) :=
-  inferInstanceAs (Decidable (∀ f ∈ e.fns, Prim.ofName f ≠ none ∨ sig f ≠ none))
+  inferInstanceAs (Decidable (∀ f ∈ e.fns, sig f ≠ none))
 
 instance Action.decidableDeclared : ∀ (a : Action) (sig : Signature),
     Decidable (a.Declared sig)
@@ -392,6 +392,7 @@ instance Expr.decidableIsApp : ∀ e : Expr, Decidable e.IsApp
   | .app _ _ => .isTrue trivial
   | .lit _ => .isFalse (fun h => (h : False))
   | .var _ => .isFalse (fun h => (h : False))
+  | .min _ _ => .isFalse (fun h => (h : False))
 
 instance Expr.decidableScoped (e : Expr) (Γ : Scope) : Decidable (e.Scoped Γ) :=
   inferInstanceAs (Decidable (∀ v ∈ e.vars, v ∈ Γ))
@@ -424,8 +425,8 @@ structure Program.EncodeDomain (P : Program) : Prop where
   /-- Compatibility condition for the existing proof interfaces; automatic in the
   current action syntax. -/
   setLegal : Program.SetLegal P (fun _ => none)
-  /-- Every source application builds a constructor rather than evaluating a primitive. -/
-  noPrim : ∀ fk ∈ P.ctors, Prim.ofName fk.1 = none
+  /-- The source never computes with `min`: every expression builds. -/
+  noMin : Program.OrderingFree P
   /-- Source function, variable, and ruleset names cannot collide with generated names. -/
   noAt : ∀ n ∈ P.names, ¬ "@".isPrefixOf n
   /-- Patterns supply constructor reads and key every variable. Flattening a bare literal
@@ -443,6 +444,6 @@ structure Program.EncodeDomain (P : Program) : Prop where
 
 /-- **Every application the source holds is a declared constructor's, applied.** -/
 def Database.TermsBuild (src : Database) : Prop :=
-  ∀ f as, Term.app f as ∈ src.terms → Prim.ofName f = none ∧ src.sig.IsCtor f
+  ∀ f as, Term.app f as ∈ src.terms → src.sig.IsCtor f
 
 end Egglog

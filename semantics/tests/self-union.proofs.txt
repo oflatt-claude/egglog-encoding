@@ -15,6 +15,8 @@
 
 (F (A)) = (F (A))  fiat
 
+(F (A)) = (F (A))  fiat
+
 (A) = (A)  fiat
 
 (F (A)) = (F (A))  fiat
@@ -29,6 +31,8 @@
 (A) = (A)  trans
   (A) = (A)  fiat
   (A) = (A)  fiat
+
+(A) = (A)  fiat
 
 (A) = (A)  fiat
 

@@ -41,51 +41,56 @@ theorem Database.empty_ctorsIn {P : Program} : Database.empty.CtorsIn P := by
 mutual
 
 /-- **An expression whose applications `P` makes evaluates to a term whose applications `P`
-makes**, in an environment whose bindings do. `Prim.ofName f = none` keeps the primitive
-branch out, exactly as it does for `Expr.eval_litFree`: `if` returns one of its operands and
-`ordering-gt` a fresh literal, and neither is an application `Expr.ctors` recorded. -/
+makes**, in an environment whose bindings do. Building applies a head `Expr.ctors` recorded,
+and `min` returns one of its operands, exactly as for `Expr.eval_litFree`. -/
 theorem Expr.eval_ctorsIn {P : Program} {sig : Signature} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Term.CtorsIn P t) :
     ∀ (e : Expr) {t : Term}, (∀ fk ∈ e.ctors, fk ∈ P.ctors) →
-      (∀ f ∈ e.fns, Prim.ofName f = none) → e.eval sig σ = some t → Term.CtorsIn P t
-  | .lit _, _, _, _, he => by
+      e.eval sig σ = some t → Term.CtorsIn P t
+  | .lit _, _, _, he => by
       obtain rfl : _ = _ := Option.some.inj he
       exact Term.ctorsIn_lit
-  | .var v, t, _, _, he => hσ v t he
-  | .app f args, t, hc, hf, he => by
-      rw [Expr.eval_app_ctor (hf f (by simp [Expr.fns])) ?_] at he
-      · obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
+  | .var v, t, _, he => hσ v t he
+  | .app f args, t, hc, he => by
+      by_cases hcc : sig.IsCtor f
+      · rw [Expr.eval_app_ctor hcc] at he
+        obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
         refine Term.ctorsIn_app.mpr ⟨?_, ?_⟩
         · rw [Expr.evalList_length hts]
           exact hc _ (by rw [Expr.ctors]; exact List.mem_cons_self)
         · exact Expr.evalList_ctorsIn hσ args
-            (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hk))
-            (fun g hg => hf g (by simp [Expr.fns, hg])) hts
-      · by_contra hcc
-        rw [Expr.eval_app_not_ctor (hf f (by simp [Expr.fns])) hcc] at he
+            (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hk)) hts
+      · rw [Expr.eval_app_not_ctor hcc] at he
         exact absurd he (by simp)
+  | .min a b, t, hc, he => by
+      rw [Expr.eval_min, Option.bind_eq_some_iff] at he
+      obtain ⟨x, hx, hmap⟩ := he
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+      rcases Term.least_eq_or x y with h | h <;> rw [h]
+      · exact Expr.eval_ctorsIn hσ a
+          (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_append_left _ hk)) hx
+      · exact Expr.eval_ctorsIn hσ b
+          (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_append_right _ hk)) hy
 
 @[inherit_doc Expr.eval_ctorsIn]
 theorem Expr.evalList_ctorsIn {P : Program} {sig : Signature} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Term.CtorsIn P t) :
     ∀ (es : List Expr) {ts : List Term}, (∀ fk ∈ Expr.ctorsList es, fk ∈ P.ctors) →
-      (∀ f ∈ Expr.fnsList es, Prim.ofName f = none) →
       Expr.evalList sig es σ = some ts → ∀ t ∈ ts, Term.CtorsIn P t
-  | [], _, _, _, he => by
+  | [], _, _, he => by
       obtain rfl : _ = _ := Option.some.inj he
       simp
-  | e :: es, ts, hc, hf, he => by
+  | e :: es, ts, hc, he => by
       rw [Expr.evalList_cons, Option.bind_eq_some_iff] at he
       obtain ⟨u, hu, hrest⟩ := he
       obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
       intro t ht
       rcases List.mem_cons.mp ht with rfl | ht'
       · exact Expr.eval_ctorsIn hσ e
-          (fun fk hk => hc fk (by rw [Expr.ctorsList]; exact List.mem_append_left _ hk))
-          (fun g hg => hf g (by simp [hg])) hu
+          (fun fk hk => hc fk (by rw [Expr.ctorsList]; exact List.mem_append_left _ hk)) hu
       · exact Expr.evalList_ctorsIn hσ es
           (fun fk hk => hc fk (by rw [Expr.ctorsList]; exact List.mem_append_right _ hk))
-          (fun g hg => hf g (by simp [hg])) hus t ht'
+          hus t ht'
 
 end
 
@@ -94,8 +99,7 @@ theorem Database.CtorsIn.lookup {db : Database} {P : Program} (hw : db.WF)
   fun v t hv => h.term hw (hw.envInTerms (v, t) (Env.mem_of_lookup hv))
 
 /-- An action applies only constructor names and arities found in the source program. -/
-def Action.CtorsIn (a : Action) (P : Program) : Prop :=
-  (∀ fk ∈ a.ctors, fk ∈ P.ctors) ∧ (∀ fk ∈ a.ctors, Prim.ofName fk.1 = none)
+def Action.CtorsIn (a : Action) (P : Program) : Prop := ∀ fk ∈ a.ctors, fk ∈ P.ctors
 
 /-- `Action.CtorsIn` at every action a command runs. -/
 def Cmd.CtorsIn : Cmd → Program → Prop
@@ -104,19 +108,16 @@ def Cmd.CtorsIn : Cmd → Program → Prop
   | _, _ => True
 
 /-- **Every command of the source program is one**, since its own `Cmd.ctors` are among the
-program's and `Program.EncodeDomain.noPrim` reads exactly that list. -/
-theorem Cmd.CtorsIn.of_domain {P : Program} (hdom : P.EncodeDomain) {c : Cmd} (hc : c ∈ P) :
+program's. -/
+theorem Cmd.CtorsIn.of_domain {P : Program} (_hdom : P.EncodeDomain) {c : Cmd} (hc : c ∈ P) :
     c.CtorsIn P := by
   cases c with
-  | action a => exact ⟨fun fk hk => mem_program_ctors hc hk,
-      fun fk hk => hdom.noPrim fk (mem_program_ctors hc hk)⟩
+  | action a => exact fun fk hk => mem_program_ctors hc hk
   | rule r =>
-      intro a ha
-      have hsub : ∀ fk ∈ a.ctors, fk ∈ P.ctors := fun fk hk =>
-        mem_program_ctors hc (by
-          rw [Cmd.ctors]
-          exact List.mem_append_right _ (List.mem_flatMap.mpr ⟨a, ha, hk⟩))
-      exact ⟨hsub, fun fk hk => hdom.noPrim fk (hsub fk hk)⟩
+      intro a ha fk hk
+      exact mem_program_ctors hc (by
+        rw [Cmd.ctors]
+        exact List.mem_append_right _ (List.mem_flatMap.mpr ⟨a, ha, hk⟩))
   | run R => trivial
   | saturate R => trivial
   | decl f dc => trivial
@@ -125,30 +126,29 @@ theorem Cmd.CtorsIn.of_domain {P : Program} (hdom : P.EncodeDomain) {c : Cmd} (h
 theorem Expr.evalAtom_ctorsIn {P : Program} {sig : Signature} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Term.CtorsIn P t)
     (e : Expr) {t : Term} (hc : ∀ fk ∈ e.ctors, fk ∈ P.ctors)
-    (hf : ∀ f ∈ e.fns, Prim.ofName f = none) (he : e.evalAtom sig σ = some t) :
-    Term.CtorsIn P t := by
+    (he : e.evalAtom sig σ = some t) : Term.CtorsIn P t := by
   cases e with
   | lit _ => cases Option.some.inj he; exact Term.ctorsIn_lit
   | var v => exact hσ v t he
+  | min a b => exact Expr.eval_ctorsIn hσ (.min a b) hc he
   | app f args =>
-    obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv (hf f (by simp [Expr.fns])) he
+    obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv he
     refine Term.ctorsIn_app.mpr ⟨?_, ?_⟩
     · rw [Expr.evalList_length hts]
       exact hc _ (by rw [Expr.ctors]; exact List.mem_cons_self)
     · exact Expr.evalList_ctorsIn hσ args
-        (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hk))
-        (fun g hg => hf g (by simp [Expr.fns, hg])) hts
+        (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_cons_of_mem _ hk)) hts
 
 theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : db.CtorsIn P)
     {a : Action} (ha : a.CtorsIn P) (hv : evalAction db a = some db') : db'.CtorsIn P := by
   have hlk := h.lookup hw
-  obtain ⟨hc, hp⟩ := ha
+  have hc := ha
   have hcin : ∀ {t : Term}, Term.CtorsIn P t →
       ∀ f as, Term.app f as ∈ t.subterms → (f, as.length) ∈ P.ctors := fun ht f as hs =>
     ht f as hs
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
     ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
-  · have ht : Term.CtorsIn P t := Expr.evalAtom_ctorsIn hlk e hc (noPrim_fns hp) he
+  · have ht : Term.CtorsIn P t := Expr.evalAtom_ctorsIn hlk e hc he
     intro g bs hs
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
@@ -158,12 +158,8 @@ theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : d
       fun fk hk => hc fk (by rw [Action.ctors]; exact List.mem_append_left _ hk)
     have hc₂ : ∀ fk ∈ e₂.ctors, fk ∈ P.ctors :=
       fun fk hk => hc fk (by rw [Action.ctors]; exact List.mem_append_right _ hk)
-    have hp₁ : ∀ fk ∈ e₁.ctors, Prim.ofName fk.1 = none :=
-      fun fk hk => hp fk (by rw [Action.ctors]; exact List.mem_append_left _ hk)
-    have hp₂ : ∀ fk ∈ e₂.ctors, Prim.ofName fk.1 = none :=
-      fun fk hk => hp fk (by rw [Action.ctors]; exact List.mem_append_right _ hk)
-    have ht₁ : Term.CtorsIn P t₁ := Expr.eval_ctorsIn hlk e₁ hc₁ (noPrim_fns hp₁) he₁
-    have ht₂ : Term.CtorsIn P t₂ := Expr.eval_ctorsIn hlk e₂ hc₂ (noPrim_fns hp₂) he₂
+    have ht₁ : Term.CtorsIn P t₁ := Expr.eval_ctorsIn hlk e₁ hc₁ he₁
+    have ht₂ : Term.CtorsIn P t₂ := Expr.eval_ctorsIn hlk e₂ hc₂ he₂
     intro g bs hs
     rw [Database.addEq_terms] at hs
     rcases hs with hs' | hs'

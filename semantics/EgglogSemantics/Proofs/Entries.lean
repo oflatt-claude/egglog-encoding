@@ -68,12 +68,11 @@ theorem Expr.evalList_pair {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts :
 the operands evaluated to in the state the action ran in. `addRow` is `addTerm` on the entry
 term, so this is also the read-back of the *entry term* and of all of its subterms. -/
 theorem execAction_entry {d e : FDatabase} {f : FnName} {args out : List Expr}
-    (hp : Prim.ofName f = none)
     (h : execAction d (.expr (.app f (args ++ out))) = some e) :
     ∃ as vs, Expr.evalList d.sig args d.env = some as ∧
       Expr.evalList d.sig out d.env = some vs ∧ e = d.addAtom (.app f (as ++ vs)) := by
   obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp h
-  simp only [Expr.evalAtom, hp] at ht
+  simp only [Expr.evalAtom] at ht
   split at ht
   · obtain ⟨cols, hc, rfl⟩ := Option.map_eq_some_iff.mp ht
     rw [Expr.evalList_append_map] at hc
@@ -111,7 +110,7 @@ theorem mem_terms_of_patternHolds_expr {d : FDatabase} (hr : d.EqsRefl) (hidx : 
           fun p hp => diag_closureF (fun q hq => hr q (by simpa using hq)) hp
         obtain rfl : ts = r.args := eq_of_congrKeys hcl ha
         obtain rfl : us = r.out := eq_of_congrKeys hcl ho
-        obtain ⟨dc, hd, hmg, -, -⟩ := Expr.entry_some he
+        obtain ⟨dc, hd, hmg, -⟩ := Expr.entry_some he
         refine ⟨.app f (r.args ++ r.out), Expr.evalAtom_entry he hk hv, ?_⟩
         have hm' := mem_terms_of_indexOk hr hidx hm (by
           rw [hfn, Signature.mergeOf, hd, Option.bind_some]
@@ -120,13 +119,13 @@ theorem mem_terms_of_patternHolds_expr {d : FDatabase} (hr : d.EqsRefl) (hidx : 
 
 /-- Read an atom's columns at any chosen syntactic split. The split need not be its index key. -/
 theorem mem_terms_of_patternHolds_entry {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
-    {vs as : List Expr} {f : FnName} {σ : Env} (hp : Prim.ofName f = none)
+    {vs as : List Expr} {f : FnName} {σ : Env}
     (h : patternHolds d (.expr (.app f (as ++ vs))) σ = true) :
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
       Expr.evalList d.sig vs σ = some us ∧
       Term.app f (ts ++ us) ∈ d.terms := by
   obtain ⟨t, hev, hm⟩ := mem_terms_of_patternHolds_expr hr hidx h
-  obtain ⟨cols, hcols, rfl⟩ := Expr.evalAtom_app_inv hp hev
+  obtain ⟨cols, hcols, rfl⟩ := Expr.evalAtom_app_inv hev
   obtain ⟨ts, us, hts, hus, rfl⟩ := Expr.evalList_append hcols
   exact ⟨ts, us, hts, hus, hm⟩
 
@@ -157,21 +156,20 @@ theorem Expr.eval_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refin
       rw [Expr.eval] at h ⊢
       exact lookup_append_of_refines hr h
   | .app f args, _, h => by
-      cases hp : Prim.ofName f with
-      | some p =>
-        simp only [Expr.eval, hp] at h ⊢
-        obtain ⟨ts, hts, hap⟩ := Option.bind_eq_some_iff.mp h
+      simp only [Expr.eval] at h ⊢
+      by_cases hct : sig.IsCtor f
+      · rw [if_pos hct] at h ⊢
+        obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
         rw [Expr.evalList_of_refines hr args hts]
-        exact hap
-      | none =>
-        simp only [Expr.eval, hp] at h ⊢
-        by_cases hct : sig.IsCtor f
-        · rw [if_pos hct] at h ⊢
-          obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
-          rw [Expr.evalList_of_refines hr args hts]
-          exact congrArg some hap
-        · rw [if_neg hct] at h
-          exact absurd h (by simp)
+        exact congrArg some hap
+      · rw [if_neg hct] at h
+        exact absurd h (by simp)
+  | .min a b, _, h => by
+      rw [Expr.eval_min] at h ⊢
+      obtain ⟨x, hx, hmap⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
+      rw [Expr.eval_of_refines hr a hx, Option.bind_some, Expr.eval_of_refines hr b hy,
+        Option.map_some]
 
 @[inherit_doc Expr.eval_of_refines]
 theorem Expr.evalList_of_refines {sig : Signature} {env ρ σ : Env} (hr : Env.Refines ρ σ) :
@@ -197,12 +195,12 @@ theorem patternHolds_of_mem_matchQuery {d : FDatabase} {q : Query} {σ : Env}
 /-- **A matched query's row atom, read at the substitution its head runs under.** -/
 theorem mem_terms_of_mem_matchQuery_entry {d : FDatabase} (hr : d.EqsRefl) (hidx : d.IndexOk)
     {q : Query} {σ : Env} (hσ : σ ∈ matchQuery d q) {vs as : List Expr} {f : FnName}
-    (hn : Prim.ofName f = none) (hp : Pattern.expr (.app f (as ++ vs)) ∈ q) :
+    (hp : Pattern.expr (.app f (as ++ vs)) ∈ q) :
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
       Expr.evalList d.sig vs σ = some us ∧
       Term.app f (ts ++ us) ∈ d.terms := by
   obtain ⟨ts, us, ha, hv, hmem⟩ :=
-    mem_terms_of_patternHolds_entry hr hidx hn (patternHolds_of_mem_matchQuery hσ hp)
+    mem_terms_of_patternHolds_entry hr hidx (patternHolds_of_mem_matchQuery hσ hp)
   exact ⟨ts, us, Expr.evalList_of_refines (env := []) Env.refines_canon as ha,
     Expr.evalList_of_refines (env := []) Env.refines_canon vs hv, hmem⟩
 
@@ -214,7 +212,6 @@ pre-state, so what the firing contributes to `terms` is exactly the entry the `s
 The reading is at `σ ++ d.env`, which is where `execLocalActions` runs a head: the match's own
 bindings win, and `Expr.eval_append_env` is what carries a matched atom's value into it. -/
 theorem execLocalActions_entry {d d' : FDatabase} {g : FnName} {args out : List Expr} {σ : Env}
-    (hp : Prim.ofName g = none)
     (h : execLocalActions d [.expr (.app g (args ++ out))] σ = some d') :
     ∃ es vs, Expr.evalList d.sig args (σ ++ d.env) = some es ∧
       Expr.evalList d.sig out (σ ++ d.env) = some vs ∧
@@ -225,7 +222,7 @@ theorem execLocalActions_entry {d d' : FDatabase} {g : FnName} {args out : List 
   obtain ⟨e₁, he₁, he₂⟩ := Option.bind_eq_some_iff.mp he
   rw [execActions, Option.some.injEq] at he₂
   subst he₂
-  obtain ⟨es, vs, hes, hvs, rfl⟩ := execAction_entry hp he₁
+  obtain ⟨es, vs, hes, hvs, rfl⟩ := execAction_entry he₁
   exact ⟨es, vs, hes, hvs, fun t ht => ht⟩
 
 /-- One column of the right-hand list moved along a congruence. What the rebuild's column
@@ -480,12 +477,12 @@ theorem congrKeys_self {cl : Finset (Term × Term)} {as : List Term}
   rw [show q = (q.1, q.1) from Prod.ext rfl heq.symm]
   exact h q.1 hmem
 
-/-- Evaluated columns record a complete atom at a declared nonprimitive head. -/
+/-- Evaluated columns record a complete atom at a declared head. -/
 theorem execAction_atom_of_eval {d : FDatabase} {f : FnName} {cols : List Expr}
-    {ts : List Term} (hp : Prim.ofName f = none) (hd : (d.sig f).isSome = true)
+    {ts : List Term} (hd : (d.sig f).isSome = true)
     (hev : Expr.evalList d.sig cols d.env = some ts) :
     execAction d (.expr (.app f cols)) = some (d.addAtom (.app f ts)) := by
-  simp only [execAction, Expr.evalAtom, hp, hd, if_true, hev, Option.map_some]
+  simp only [execAction, Expr.evalAtom, hd, if_true, hev, Option.map_some]
 
 /-- **A row of a `:merge` function makes its own atom hold**, at the values its columns are.
 The converse of `mem_terms_of_patternHolds_entry`, and what says that lemma — and the three

@@ -12,7 +12,7 @@ A constructor's entry is the term `f(args)`. A merge function's entry is
 records equations, and `Database.terms` consists of the terms related to themselves by
 `Cong`. Building an entry records it and its subterms through reflexive equations.
 
-Value expressions evaluate constructors, primitives, and variables under a signature and
+Value expressions evaluate constructors, `min`, literals, and variables under a signature and
 environment. A complete atom such as `(LowerBound expr bound)` reads a function row in a
 query and records one in an action. Its declaration determines where the key columns end
 and the output columns begin. Entry atoms cannot be children of value expressions or
@@ -65,8 +65,8 @@ insertion order breaks the remaining tie. `mergeOneOriented` passes that residen
 Fuel exhaustion returns `none`, rather than a partially settled result.
 
 Term ordering (`Term.blt`) is structural. It does not reproduce Rust's allocated value
-ordering. Programs that observe which representative an ordering primitive selects can
-therefore differ, even in row counts.
+ordering. Programs that observe which representative `min` selects can therefore differ,
+even in row counts.
 
 ## Interpreter contracts
 
@@ -87,8 +87,8 @@ theorem execM_contained {p : Program} (hns : p.NoSaturate)
 `Recorded` allows the interpreter's information to be represented up to congruence in a
 reachable specification state. It does not identify the two states or establish that the
 interpreter computes every output the specification permits. The union-free arm keeps
-congruence diagonal; the ordering-free arm permits unions while excluding the
-`ordering-gt` primitive that breaks congruence-stable evaluation.
+congruence diagonal; the ordering-free arm permits unions while excluding `min`, which
+compares terms structurally and so breaks congruence-stable evaluation.
 
 `NoSaturate` is required by this refinement proof: an interpreter fixpoint need not be a
 specification fixpoint when the specification permits more matches. The

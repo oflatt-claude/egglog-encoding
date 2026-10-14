@@ -19,6 +19,7 @@ def Expr.freeVars : Expr → Env → List Var
   | .lit _, _ => []
   | .var v, σ => if (Env.lookup v σ).isSome then [] else [v]
   | .app _ args, σ => Expr.freeVarsList args σ
+  | .min a b, σ => a.freeVars σ ∪ b.freeVars σ
 
 /-- `Expr.freeVars` over an argument list, deduplicated. -/
 def Expr.freeVarsList : List Expr → Env → List Var

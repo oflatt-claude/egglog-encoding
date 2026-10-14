@@ -32,15 +32,14 @@ private theorem viewWrites_ufTermsDescend {src : Database} (hw : src.WF)
 
 theorem encodeBuild_ufTermsDescend {src : Database} (hw : src.WF) (hs : SourceSafe src)
     (e : Expr) {d d' : FDatabase} {t : Term}
-    (hp : ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : e.OrderingFree)
     (he : e.eval d.sig d.env = some t) (ht : t ∈ src.terms) (h : UFTermsDescend d)
     (run : execActions d (encodeBuild e) = some d') : UFTermsDescend d' :=
   encodeBuild_preserves hw (viewWrites_ufTermsDescend hw hs) e hp he ht h run
 
 theorem encodeUnion_ufTermsDescend {src : Database} (hw : src.WF) (hs : SourceSafe src)
     {d d' : FDatabase} {a b : Expr} {ta tb : Term}
-    (hpa : ∀ f ∈ a.fns, Prim.ofName f = none)
-    (hpb : ∀ f ∈ b.fns, Prim.ofName f = none)
+    (hpa : a.OrderingFree) (hpb : b.OrderingFree)
     (ha : a.eval d.sig d.env = some ta) (hb : b.eval d.sig d.env = some tb)
     (hc : Cong src ta tb) (h : UFTermsDescend d)
     (run : execActions d (encodeAction (.union a b)) = some d') : UFTermsDescend d' := by
@@ -60,7 +59,7 @@ theorem encodeUnion_ufTermsDescend {src : Database} (hw : src.WF) (hs : SourceSa
 /-- Source action execution supplies the columns for descending UF writes. -/
 theorem encodeAction_ufTermsDescend {src post : Database} {d d' : FDatabase} {a : Action}
     (hw : post.WF) (hs : SourceSafe post) (hctors : src.sig.AllConstructors)
-    (hp : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ e ∈ actionExprs a, e.OrderingFree)
     (heval : ∀ e ∈ actionExprs a, e.eval d.sig d.env = e.eval src.sig src.env)
     (h : UFTermsDescend d) (hsrc : evalAction src a = some post)
     (htgt : execActions d (encodeAction a) = some d') : UFTermsDescend d' := by
@@ -79,7 +78,7 @@ theorem encodeAction_ufTermsDescend {src post : Database} {d d' : FDatabase} {a 
 /-- Historical descent survives an entire compiled source action block. -/
 theorem encodeActions_ufTermsDescend {src post : Database} {d d' : FDatabase} {as : List Action}
     (hw : src.WF) (hs : SourceSafe post) (hctors : src.sig.AllConstructors)
-    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, Prim.ofName f = none)
+    (hp : ∀ a ∈ as, ∀ e ∈ actionExprs a, e.OrderingFree)
     (heval : ∀ a ∈ as, ∀ e ∈ actionExprs a,
       e.eval d.sig d.env = e.eval src.sig src.env)
     (h : UFTermsDescend d) (hsrc : evalActions src as = some post)

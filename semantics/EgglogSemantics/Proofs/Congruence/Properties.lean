@@ -16,6 +16,7 @@ mutual
 /-- Compiled constructions write entries and never assert a built-in union. -/
 theorem encodeBuild_unionFree : ∀ e : Expr, Actions.UnionFree (encodeBuild e)
   | .lit _ | .var _ => trivial
+  | .min a b => actions_unionFree_append (encodeBuild_unionFree a) (encodeBuild_unionFree b)
   | .app _ es => actions_unionFree_append (encodeBuildArgs_unionFree es) ⟨trivial, trivial⟩
 
 theorem encodeBuildArgs_unionFree : ∀ es : List Expr, Actions.UnionFree (encodeBuildArgs es)
@@ -31,7 +32,7 @@ theorem encodeAction_unionFree (a : Action) : Actions.UnionFree (encodeAction a)
   | union a b =>
     exact actions_unionFree_append
       (actions_unionFree_append (encodeBuild_unionFree a) (encodeBuild_unionFree b))
-      ⟨trivial, trivial⟩
+      ⟨trivial, trivial, trivial⟩
 
 theorem encodeActions_unionFree (as : List Action) : Actions.UnionFree (encodeActions as) := by
   induction as with

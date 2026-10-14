@@ -81,8 +81,10 @@ Each table has one output column. Structural constructor terms serve as ids. Bui
 `f(cs…)` builds its children and writes `(@fView cs… (f cs…))`; it needs no table lookup,
 temporary variable, proof term, or separate construction-history relation.
 
-A source union writes an edge from the larger structural id to the smaller one. Both UF
-and view collisions keep the smaller output and write the displaced id's parent edge.
+`min` is the only computation in the fragment: the smaller of two terms in the model's
+structural order, egglog's `ordering-min`. A source union writes an edge from each of the
+two ids to the smaller one; the edge from the smaller id to itself is not a union-find
+edge. Both UF and view collisions keep the smaller output and write the same two edges.
 Their merge bodies use ordinary `old` and `new` bindings. All output columns determine
 whether a row changed, so no special identity-column setting is needed.
 
@@ -133,14 +135,14 @@ are recovered by evaluating the original action or merge, without guessing endpo
 The pass accepts flat table queries and equality tests whose variables and existence
 witnesses come from table premises. This covers the congruence compiler's output;
 unanchored equality-only queries, constructor writes, and `:no-merge` declarations
-are outside its input fragment. Function bodies and results may use primitives and
+are outside its input fragment. Function bodies and results may use `min` and
 multiple output columns. Generated names use the reserved `@prov:` prefix.
 
 Only original data columns determine merge conflicts. This also suppresses collisions
-between distinct proofs of identical rows. If a merge result equals an input's data,
-it retains that input's proof; a new result records both inputs. Body facts always
-record the merge justification. Proof metadata therefore cannot trigger a data merge
-or cause an otherwise stable rule to accumulate longer resident proofs.
+between distinct proofs of identical rows. A conflict records both inputs' proofs in
+the result's proof, and body facts record the merge justification too. Proof metadata
+therefore cannot trigger a data merge or cause an otherwise stable rule to accumulate
+longer resident proofs.
 
 Extraction decodes a proof constructor into a proof tree with explicit facts, then checks
 it against the uninstrumented relational program, which has no `union`. Equality premises
@@ -232,8 +234,8 @@ stored function row without establishing a second input to its merge body. The
 [checker guide](CHECKER.md#source-merge-inputs) records the counterexample. This does not
 affect the constructor-only completeness theorem or the relational provenance pass.
 
-The theorem retains `Program.EncodeDomain`: constructor declarations, no primitive
-or generated source names, consistent arities, supported queries, scoped and declared
+The theorem retains `Program.EncodeDomain`: constructor declarations, no `min` and no
+generated source names, consistent arities, supported queries, scoped and declared
 heads, and no literal unions. A query fact is an application, as in egglog's syntax; a
 bare variable or literal fact is outside the domain and the source checker's fragment.
 Arbitrary source merge functions remain outside its scope.
