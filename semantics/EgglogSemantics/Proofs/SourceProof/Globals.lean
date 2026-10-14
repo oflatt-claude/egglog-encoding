@@ -42,6 +42,9 @@ theorem Context.Sound.step {C C' : Context} {db db' : Database} {cmd : Cmd}
   | saturate R =>
       cases Option.some.inj hr
       exact ⟨hc.sig.trans hs.sig.symm, hkeep⟩
+  | check q =>
+      cases Option.some.inj hr
+      exact ⟨hc.sig.trans hs.sig.symm, hkeep⟩
 
 theorem Context.Sound.program {db db' : Database} {P : Program}
     (hs : ProgramStep db P db') {C C' : Context} (hc : C.Sound db) (he : db.env = [])

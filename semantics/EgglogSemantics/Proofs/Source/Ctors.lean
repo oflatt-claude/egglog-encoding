@@ -121,6 +121,7 @@ theorem Cmd.CtorsIn.of_domain {P : Program} (_hdom : P.Fragment) {c : Cmd} (hc :
   | run R => trivial
   | saturate R => trivial
   | decl f dc => trivial
+  | check _ => trivial
 
 /-- Evaluating a source atom preserves its constructor names and arities. -/
 theorem Expr.evalAtom_ctorsIn {P : Program} {sig : Signature} {σ : Env}
@@ -222,7 +223,7 @@ theorem Database.CtorsInState.runRules {R : RulesetName} {db : Database} {P : Pr
 theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
     (h : db.CtorsInState P) {c : Cmd} (hn : c.CtorsIn P) (hdecl : c.CtorDecl)
     (hstep : CmdStep db c db') : db'.CtorsInState P := by
-  obtain ⟨d, hreach, hcl⟩ := hstep
+  obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
   | action a =>
       have hv : evalAction db a = some d := hreach
@@ -257,6 +258,10 @@ theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact ⟨fun f' as ht => h.terms f' as (Database.terms_setSig ▸ ht), h.heads⟩
+  | check q =>
+      obtain ⟨_, rfl⟩ := hreach
+      rw [hcl.eq_of_allConstructors hc.sig]
+      exact h
 
 @[inherit_doc cmdStep_ctorsIn]
 theorem programStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)

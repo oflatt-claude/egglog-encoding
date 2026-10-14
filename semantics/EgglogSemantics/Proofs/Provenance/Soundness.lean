@@ -30,7 +30,7 @@ theorem checkNode_sound {P : Program} {C : SourceProof.Context} {db : Database}
       intro u hu
       obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hu
       exact hp q hq
-    | action _ | run _ | saturate _ | decl _ _ => simp at hr
+    | action _ | run _ | saturate _ | decl _ _ | check _ => simp at hr
   | merge t f old new =>
     simp only [checkNode, checkReason, Proof.fact_merge, Bool.and_eq_true_iff,
       Bool.and_true] at h

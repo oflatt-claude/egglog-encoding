@@ -1,3 +1,6 @@
+import EgglogSemantics.Congruence.Correctness
+import EgglogSemantics.Tests.Checks
+import EgglogSemantics.Proofs.Result
 import EgglogSemantics.Proofs.Counterexamples
 import EgglogSemantics.Proofs.Interp
 import EgglogSemantics.Proofs.Lattice

@@ -534,6 +534,16 @@ def FDatabase.execCmdM (d : FDatabase) : Cmd → Option FDatabase
   | .run R => d.runRoundM R
   | .saturate R => d.runSaturateM R runFuel
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }
+  | .check q => if (matchQuery d q).isEmpty then none else some d
+
+/-- A successful check leaves every field unchanged. -/
+theorem FDatabase.execCheck_eq {d d' : FDatabase} {q : Query}
+    (h : FDatabase.execCmdM d (.check q) = some d') : d' = d := by
+  simp only [FDatabase.execCmdM] at h
+  split at h
+  · cases h
+  · exact (Option.some.inj h).symm
+
 
 /-- `ProgramStep`, computed. -/
 def FDatabase.execProgramM (d : FDatabase) : Program → Option FDatabase

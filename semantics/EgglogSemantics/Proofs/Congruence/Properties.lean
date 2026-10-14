@@ -1,4 +1,5 @@
-import EgglogSemantics.Proofs.Congruence.Read
+import EgglogSemantics.Congruence.Encode
+import EgglogSemantics.Spec.Step
 
 /-! Structural properties of the congruence compiler, independent of provenance. -/
 
@@ -100,6 +101,10 @@ private theorem cmd_unionFree (i : Nat) (c : Cmd) :
       rcases hd with ⟨a', ha, rfl⟩ | rfl
       · exact mem_actions_unionFree (encodeAction_unionFree a) a' ha
       · trivial
+  | check q =>
+      simp only [encodeCmd, List.mem_singleton] at hd
+      subst d
+      trivial
   | run R | saturate R =>
       simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hd
       rcases hd with rfl | rfl <;> trivial
@@ -126,13 +131,6 @@ theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) := by
   induction q with
   | nil => trivial
   | cons c cs ih => exact ⟨hall c (by simp), ih fun d hd => hall d (by simp [hd])⟩
-
-/-- The target's built-in equality remains diagonal; equality is represented by tables. -/
-theorem execM_encode_eqsRefl {P : Program} {tgt : FDatabase}
-    (h : execM (encode P) = some tgt) : tgt.EqsRefl := by
-  intro p hp
-  rw [(execM_noUnions (encode_unionFree P) h).eqs] at hp
-  simp at hp
 
 /-- Every self-collision is ignored using the single id output, without proof-specific
 identity-column configuration. -/

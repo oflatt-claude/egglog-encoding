@@ -209,6 +209,7 @@ def encodeCmd (index : Nat) : Cmd → List Command
   | .rule r => [taggedRule (encodeRule r) (.source index)]
   | .run R => [⟨.run R, none⟩, ⟨.saturate rebuildRuleset, none⟩]
   | .saturate R => [⟨.saturate R, none⟩, ⟨.saturate rebuildRuleset, none⟩]
+  | .check q => [⟨.check (encodeQuery q 0).1, none⟩]
 
 /-- Keep command indices stable even when declarations disappear or actions expand. -/
 def encodeCmds : Program → Nat → List Command

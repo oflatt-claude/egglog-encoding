@@ -5,7 +5,7 @@ import Batteries.Data.List.Basic
 
 ```
 Program = (Cmd ...)
-Cmd     = Action | Rule | (run R) | (saturate R) | Decl
+Cmd     = Action | Rule | (run R) | (saturate R) | Decl | (check Query)
 Decl    = (constructor ...) | (function ... :merge ...)
 Rule    = (rule Query Actions :ruleset R)
 Query   = (Pattern ...)
@@ -169,6 +169,9 @@ inductive Cmd where
   <ruleset>))` (`egglog/src/ast/parse.rs:1073-1079`). -/
   | saturate : RulesetName → Cmd
   | decl : FnName → FnDecl → Cmd
+  /-- Observe whether a query has a match. A failed check stops the program; a successful
+  check changes no state. Checks are commands, never rule-head or merge-body actions. -/
+  | check : Query → Cmd
 
 abbrev Program := List Cmd
 

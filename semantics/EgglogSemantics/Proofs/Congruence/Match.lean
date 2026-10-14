@@ -1,3 +1,5 @@
+import EgglogSemantics.Proofs.Diagonal
+import EgglogSemantics.Proofs.Source.Domain
 import EgglogSemantics.Proofs.Congruence.Correspond
 
 /-!

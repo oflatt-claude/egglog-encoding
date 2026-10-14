@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Congruence.Read
 import EgglogSemantics.Proofs.Congruence.Properties
 
 /-! Union-find roots for the single-output congruence tables. -/

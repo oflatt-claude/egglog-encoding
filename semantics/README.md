@@ -8,7 +8,8 @@ including multi-output functions and action blocks inside `:merge` bodies.
 ## Language and semantics
 
 Programs declare functions and rules, assert expressions and function rows, union values,
-and run or saturate named rulesets. Rule variables come from the query; merge bodies
+run or saturate named rulesets, and check queries. A check succeeds without changing
+the database or terminates the program with `checkFailed`. Rule variables come from the query; merge bodies
 use their old/new parameters. Actions evaluate in a fixed environment.
 
 The specification records equations and derives congruence over the terms they mention.
@@ -27,8 +28,10 @@ proof annotations. A separate provenance pass adds proof columns for globals, ru
 and function merges, and proof lifting turns its proofs into source proofs
 that both the Lean and Rust checkers accept.
 
-The congruence pass has a proved end-to-end correspondence theorem for the constructor
-source fragment, including execution without implicit target equality reasoning. Both the
+The congruence pass retains its proved correspondence theorem against an executable
+target. The paper theorem is being separated into a mathematical compiler-correctness
+obligation: terminating source and compiled evaluations agree on success or check failure.
+Termination preservation is a stretch goal; interpreter correctness is outside the paper. Both the
 constructor source checker and relational provenance checker have proved soundness and
 existence support. The library permits no `sorry`.
 
@@ -56,7 +59,7 @@ Start with [Syntax.lean](EgglogSemantics/Spec/Syntax.lean),
 [Eval.lean](EgglogSemantics/Spec/Eval.lean), and
 [Step.lean](EgglogSemantics/Spec/Step.lean), then read
 [Congruence/Encode.lean](EgglogSemantics/Congruence/Encode.lean) and
-[Congruence/Complete.lean](EgglogSemantics/Proofs/Congruence/Complete.lean).
+[Congruence/Correctness.lean](EgglogSemantics/Congruence/Correctness.lean).
 
 ## Validation
 

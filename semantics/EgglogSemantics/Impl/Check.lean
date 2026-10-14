@@ -81,6 +81,7 @@ installs, so it may write the function's own table. -/
 def Cmd.arityOk : Cmd → Signature → Bool
   | .action a, sig => a.arityOk sig
   | .rule r, sig => r.arityOk sig
+  | .check q, sig => q.all (Pattern.arityOk · sig)
   | .run _, _ => true
   | .saturate _, _ => true
   | .decl f d, sig => d.arityOk ((Cmd.decl f d).sigBind sig)
@@ -153,6 +154,7 @@ def Rule.noLookup (r : Rule) (sig : Signature) : Bool :=
 def Cmd.noLookup : Cmd → Signature → Bool
   | .action a, sig => a.noLookup sig
   | .rule r, sig => r.noLookup sig
+  | .check q, sig => q.all (Pattern.noLookup · sig)
   | .run _, _ => true
   | .saturate _, _ => true
   | .decl f d, sig =>

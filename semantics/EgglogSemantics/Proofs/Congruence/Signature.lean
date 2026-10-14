@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Congruence.Read
 import EgglogSemantics.Proofs.Congruence.Properties
 
 /-! Declaration invariants for the generated single-output tables. -/
@@ -108,6 +109,10 @@ private theorem cmd_shape (i : Nat) (c : Cmd) :
   | action a =>
       simp only [encodeCmd, List.mem_append, List.mem_map, List.mem_singleton] at hd
       rcases hd with ⟨a', _, rfl⟩ | rfl <;> trivial
+  | check q =>
+      simp only [encodeCmd, List.mem_singleton] at hd
+      subst d
+      trivial
   | run R | saturate R =>
       simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hd
       rcases hd with rfl | rfl <;> trivial

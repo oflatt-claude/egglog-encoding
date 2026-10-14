@@ -1,4 +1,6 @@
-import EgglogSemantics.Proofs.Congruence.Properties
+import EgglogSemantics.Congruence.Read
+import EgglogSemantics.Congruence.Encode
+import EgglogSemantics.Proofs.Step
 
 /-!
 # Correspondence reductions

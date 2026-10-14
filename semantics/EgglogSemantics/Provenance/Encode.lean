@@ -64,6 +64,7 @@ def programOk (P : Program) (sig : Signature) : Bool := P.all fun c => match c w
           body.all (tableActionOk sig (oldVars ++ newVars)) &&
           res.length == d.outArity && valueExprsOk sig (oldVars ++ newVars) res
   | .action a => tableActionOk sig [] a
+  | .check q => queryOk sig q && q.vars.all (fun v => !namePrefix.isPrefixOf v)
   | .rule r => queryOk sig r.query &&
       r.query.vars.all (fun v => (witness r.query (.var v)).isSome) &&
       r.actions.all (tableActionOk sig r.query.vars)
@@ -124,6 +125,7 @@ def encodeCmd (i : Nat) : Cmd → Option Cmd
   | .decl f d => some (.decl f (encodeDecl f d))
   | .action a => some (.action (encodeAction (.app (globalName i) []) a))
   | .rule r => (encodeRule i r).map Cmd.rule
+  | .check q => some (.check (q.zipIdx.map fun pi => encodePattern pi.2 pi.1))
   | c => some c
 
 /-- Instrument flat table programs, including every congruence-compiled program in

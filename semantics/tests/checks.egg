@@ -1,0 +1,12 @@
+; Checks observe congruence, share query bindings, and leave no bindings behind.
+(sort Math)
+(constructor A () Math)
+(constructor B () Math)
+(constructor F (Math) Math)
+(F (A))
+(check (F x))
+(union (A) (B))
+(check (F (B)))
+(check (= (F (A)) (F (B))))
+(check (F x) (= x (B)))
+(check)

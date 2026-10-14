@@ -1218,6 +1218,18 @@ theorem runSaturateF_saturateReach {R : RulesetName} {n : Nat} {d e : FDatabase}
   exact toDatabase_eq_of_fields sig_execRunRules hsame.1.1 hsame.2 env_execRunRules
     rules_execRunRules
 
+/-- Constructor queries have a match exactly when the enumerator is nonempty. -/
+theorem queryHolds_iff_matchQuery {d : FDatabase} (he : d.Closed)
+    (hsig : d.sig.AllConstructors) (q : Query) :
+    QueryHolds d.toDatabase q ↔ (matchQuery d q).isEmpty = false := by
+  rw [List.isEmpty_eq_false_iff_exists_mem]
+  constructor
+  · rintro ⟨σ, hσ⟩
+    exact ⟨_, (mem_matchQuery_of_validQuerySubst he hsig hσ).1⟩
+  · rintro ⟨σ, hσ⟩
+    obtain ⟨τ, hτ, _⟩ := validQuerySubst_of_mem_matchQuery he hsig hσ
+    exact ⟨τ, hτ⟩
+
 /-! ### Refinement: commands and programs -/
 /-- **The interpreter's command is the specification's `cmdReach`**, on the four commands
 where that relation is the graph of a function. -/
@@ -1241,6 +1253,10 @@ theorem execCmd_toDatabase {d : FDatabase} (he : d.Closed) (hsig : d.sig.AllCons
     rw [show execCmd d (.decl f dc) = some { d with sig := Function.update d.sig f (some dc) }
         from rfl, Option.map_some, Option.some.injEq]
     exact eq_comm
+
+  | check q =>
+    simp only [execCmd, cmdReach, queryHolds_iff_matchQuery he hsig]
+    cases hq : (matchQuery d q).isEmpty <;> simp [eq_comm]
 
 /-- **The interpreter's command is one the specification reaches.** The uniform statement:
 `Cmd.saturate` is a fixpoint condition rather than a function, and
@@ -1272,6 +1288,12 @@ theorem execCmd_closed {d d' : FDatabase} (he : d.Closed) {c : Cmd}
         from rfl, Option.some.injEq] at h
     exact h ▸ he.setSig _
 
+  | check q =>
+    simp only [execCmd] at h
+    split at h
+    · cases h
+    · cases h; exact he
+
 theorem execCmd_sig {d d' : FDatabase} (he : d.Closed) (hsig : d.sig.AllConstructors)
     {c : Cmd} (h : execCmd d c = some d') :
     d'.sig = c.sigBind d.sig :=
@@ -1300,14 +1322,14 @@ theorem execCmd_cmdStep {d : FDatabase} (he : d.Closed) (hsig : d.sig.AllConstru
   cases hce : execCmd d c with
   | none =>
     refine ⟨fun h => absurd h (by simp), fun hstep => ?_⟩
-    obtain ⟨x, hreach, -⟩ := hstep
+    obtain ⟨x, hreach, -⟩ := hstep.reach
     have hns : c.NoSaturate := hs.resolve_right (by rw [hce]; simp)
     have hx : (execCmd d c).map FDatabase.toDatabase = some x :=
       (execCmd_toDatabase he hsig hns).mpr hreach
     rw [hce] at hx; simp at hx
   | some d' =>
     have hstep : CmdStep d.toDatabase c d'.toDatabase :=
-      ⟨d'.toDatabase, execCmd_cmdReach he hsig hce, Relation.ReflTransGen.refl⟩
+      CmdStep.of_reach (execCmd_cmdReach he hsig hce)
     rw [Option.map_some, Option.some.injEq]
     exact ⟨fun h => h ▸ hstep, fun h => CmdStep.det hsig hdecl hstep h⟩
 
@@ -1338,7 +1360,7 @@ theorem execProgram_programStep {p : Program} : ∀ {d : FDatabase}, d.Closed �
       rw [hce] at hcs; simp at hcs
     | some d₁ =>
       have hstep₁ : CmdStep d.toDatabase c d₁.toDatabase :=
-        ⟨d₁.toDatabase, execCmd_cmdReach he hsig hce, Relation.ReflTransGen.refl⟩
+        CmdStep.of_reach (execCmd_cmdReach he hsig hce)
       have hs₁ : Program.NoSaturate cs ∨ execProgram d₁ cs ≠ none :=
         hs.imp (fun hns c' hc' => hns c' (List.mem_cons_of_mem c hc'))
           (fun hne => by rwa [hcons, hce, Option.bind_some] at hne)

@@ -2,10 +2,31 @@
 
 ## Agreed plan and scope
 
-This is the working plan for PR #58. The implementation order is:
+This is the working plan for PR #58. The current priority is to separate mathematical
+compiler correctness from the executable sanity checks:
 
-1. **Port completeness to the congruence pass.** Establish the execution invariants
-   needed for source/target correspondence, retaining the current constructor-only
+- Add a top-level `check q`. It observes whether the complete query has a match, leaves
+  the database unchanged on success, and stops the program on failure. Checks neither
+  construct terms nor initiate a merge or rebuilding phase.
+- Give finite evaluation the explicit results `Result.ok db` and `Result.checkFailed`.
+  Failure short-circuits the suffix; divergence has no finite evaluation derivation.
+- State congruence compiler correctness over mathematical `Database` states on both
+  sides. For well-formed programs in the supported source fragment, every pair of
+  terminating source/compiled evaluations must have the same success/failure observation.
+  Establish query correspondence at command boundaries as the internal proof invariant.
+- Interpreter correctness is outside the paper's obligations. Keep executable models
+  and differential tests as sanity checks; do not route the paper theorem through
+  `FDatabase` or an existential wrapper around executable target evaluation.
+- **Stretch goal:** termination preservation. The required theorem assumes both
+  evaluations terminate, counting a failed check as termination.
+
+The existing theorem about an executable compiled target is retained during the port;
+it does not discharge the new mathematical execution theorem.
+
+The remaining pipeline responsibilities are:
+
+1. **Port completeness to the mathematical congruence pass.** Establish the execution
+   invariants and check correspondence above, retaining the constructor-only
    source fragment (`Program.Fragment`). The paper's completeness theorem ends
    here. The compiled target uses functions, but extending the theorem to arbitrary
    source merge functions is deferred.
@@ -104,6 +125,65 @@ identity and stored-value existence for matching and function-key collisions, an
 implicit congruence rebuilding. `encode_relational` proves that this execution produces
 exactly the same result as the general interpreter. Source equality is represented by
 ordinary UF and view entries; target `(= x y)` is just an identity test with existence.
+
+## Checks and observable correctness
+
+A top-level `check q` asks whether the entire query has a compatible existential
+substitution:
+
+```text
+holds(D, q)  iff  ∃ σ. ValidQuerySubst(D, q, σ)
+result      ::= ok(D) | checkFailed
+```
+
+The finite evaluation rules are:
+
+```text
+holds(D, q)     D ⊢ rest ⇓ r
+───────────────────────────
+D ⊢ check q; rest ⇓ r
+
+¬ holds(D, q)
+────────────────────────────────────
+D ⊢ check q; rest ⇓ checkFailed
+```
+
+The first rule uses exactly the original database. Checks create no terms, export no
+bindings, and perform no merge phase. The second rule has no premise about the suffix,
+so failure terminates even before a divergent suffix. The empty query succeeds.
+Divergence has no finite evaluation derivation; it is not `checkFailed`.
+
+`Source/WellFormed.lean` supplies the static premise separately from `Program.Fragment`:
+declarations are fresh and precede uses, applications have the declared arities, and
+actions have bound variables and legal global union operands. A declared but absent
+constructor remains a valid query and may cause a failed check. Rule unions may use query
+variables under the fragment's existing literal restrictions.
+
+The obligation in `Congruence/Correctness.lean` is:
+
+```text
+WellFormed(P) ∧ Fragment(P)
+∧ ∅ ⊢ P ⇓ r ∧ ∅ ⊢ encode(P) ⇓ s
+⇒ succeeded(r) = succeeded(s)
+```
+
+Both states are mathematical `Database` values. Neither `FDatabase` nor interpreter fuel
+appears in this statement. `PreservesObservations` names this **unproved obligation**;
+adding the definition does not establish it. The remaining proof work is abstract
+execution simulation and query correspondence at every check boundary. The internal
+state-reading definitions and correspondence lemmas have independent mathematical
+imports. The older `Complete.lean` proof remains available while that port proceeds.
+
+`Proofs/Result.lean` proves that successful results coincide with `ProgramStep`, that a
+failure is exactly a successful prefix followed by a false check, and that query
+correspondence gives check-outcome agreement in both directions. Interpreter correctness
+is outside the paper's obligations. The executable `observeM` and `Relational.observe`
+return `some checkFailed` for a failed check and reserve `none` for an inconclusive run,
+including exhausted fuel. Their regressions are sanity checks, not a replacement proof.
+
+`PreservesTermination` is a separate stretch goal: a finite source evaluation implies
+some finite compiled evaluation. It is not a premise or a consequence of the required
+conditional observation theorem.
 
 ## Query traversal
 
@@ -206,7 +286,8 @@ The congruence pass has kernel-checked proofs for:
 - The executable reader and correspondence under explicit state invariants
   (`sameClassF_iff`, `Rebuilt.corresponds`).
 
-**Step 1 is complete.** [Complete.lean](EgglogSemantics/Proofs/Congruence/Complete.lean) proves
+**The previous executable-target theorem is complete; the mathematical execution port
+is pending.** [Complete.lean](EgglogSemantics/Proofs/Congruence/Complete.lean) proves
 `Egglog.Congruence.encode_corresponds`:
 
 ```lean

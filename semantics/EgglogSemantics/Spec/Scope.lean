@@ -61,6 +61,7 @@ nothing about one. -/
   | .run _, _ => True
   | .saturate _, _ => True
   | .decl _ _, _ => True
+  | .check q, _ => ∀ p ∈ q, p.Scoped
 
 /-- Every command in the same initial scope. -/
 @[simp] def Program.Scoped : Program → Scope → Prop
@@ -113,6 +114,9 @@ def Action.Evaluable : Action → Signature → Prop
   | .run _, _ => True
   | .saturate _, _ => True
   | .decl _ _, _ => True
+  | .check q, sig => ∀ p ∈ q, match p with
+      | .expr e => e.AtomEvaluable sig
+      | .eq a b => a.Evaluable sig ∧ b.Evaluable sig
 
 /-- Each command in the signature the earlier ones leave. -/
 @[simp] def Program.Evaluable : Program → Signature → Prop
@@ -148,6 +152,7 @@ def Action.UnionLegal : Action → Prop
   | .run _ => True
   | .saturate _ => True
   | .decl _ d => ∀ ms ∈ d.merge, ms.UnionLegal
+  | .check _ => True
 
 @[simp] def Program.UnionLegal : Program → Prop
   | [] => True
@@ -213,6 +218,9 @@ This is the one check besides `MergeDeclared` that walks into a `:merge`, for th
   | .run _, _ => True
   | .saturate _, _ => True
   | .decl f d, sig => ∀ ms ∈ d.merge, ms.WidthOk d.outArity ((Cmd.decl f d).sigBind sig)
+  | .check q, sig => ∀ p ∈ q, match p with
+      | .expr e => e.AtomWidthOk sig
+      | .eq a b => a.WidthOk sig ∧ b.WidthOk sig
 
 /-- Check each command in the signature left by the earlier commands. -/
 @[simp] def Program.WidthOk : Program → Signature → Prop
@@ -230,6 +238,7 @@ breaking `Database.DeclaredTerms`. -/
   | .rule _, _ => True
   | .run _, _ => True
   | .saturate _, _ => True
+  | .check _, _ => True
 
 /-- Each command is asked **before** `Cmd.sigBind` installs its declaration; asked after,
 the check would read back `Function.update`'s own entry and always fail. -/
@@ -266,6 +275,7 @@ it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
   | .rule _, _ => True
   | .run _, _ => True
   | .saturate _, _ => True
+  | .check _, _ => True
 
 @[simp] def Program.MergeDeclared : Program → Signature → Prop
   | [], _ => True
@@ -314,6 +324,7 @@ def Signature.UnionFree (sig : Signature) : Prop := ∀ f d, sig f = some d → 
   | .run _ => True
   | .saturate _ => True
   | .decl _ d => d.UnionFree
+  | .check _ => True
 
 /-- No signature threading: which actions a command carries does not depend on what is
 declared. -/
@@ -398,6 +409,7 @@ def Signature.OrderingFree (sig : Signature) : Prop :=
   | .run _ => True
   | .saturate _ => True
   | .decl _ d => d.OrderingFree
+  | .check q => ∀ p ∈ q, p.OrderingFree
 
 /-- No signature threading, as `Program.UnionFree`. -/
 @[simp] def Program.OrderingFree : Program → Prop
@@ -430,6 +442,7 @@ instance : ∀ c : Cmd, Decidable c.OrderingFree
   | .run _ => inferInstanceAs (Decidable True)
   | .saturate _ => inferInstanceAs (Decidable True)
   | .decl _ d => inferInstanceAs (Decidable d.OrderingFree)
+  | .check q => inferInstanceAs (Decidable (∀ p ∈ q, p.OrderingFree))
 instance instDecidableProgramOrderingFree : ∀ P : Program, Decidable (Program.OrderingFree P)
   | [] => inferInstanceAs (Decidable True)
   | c :: cs => @instDecidableAnd _ _ inferInstance (instDecidableProgramOrderingFree cs)

@@ -79,4 +79,8 @@ def ValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
 def ValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (ValidSubst db) q σs ∧ Env.UnionAll σs σ
 
+/-- The whole query has a compatible substitution. Check variables are existential and
+local to the query; evaluating a check exports no bindings and builds no terms. -/
+def QueryHolds (db : Database) (q : Query) : Prop := ∃ σ, ValidQuerySubst db q σ
+
 end Egglog

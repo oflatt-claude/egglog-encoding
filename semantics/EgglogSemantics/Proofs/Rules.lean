@@ -21,6 +21,7 @@ theorem execCmdM_mem_rules_iff {d e : FDatabase} {c : Cmd}
       simp
   | run R => rw [(runRoundM_fields h).2.2]; simp
   | saturate R => rw [(runSaturateM_fields runFuel h).2.2]; simp
+  | check q => rw [FDatabase.execCheck_eq h]; simp
 
 /-- A program's final rule store consists of its initial rules and all rule commands. -/
 theorem execProgramM_mem_rules_iff {p : Program} :
@@ -208,7 +209,7 @@ theorem cmdStep_rules_of_saturate {sd sd' : Database} {R : RulesetName}
 /-- A source command changes rule membership only when it registers a rule. -/
 theorem CmdStep.mem_rules_iff {src post : Database} {c : Cmd} (h : CmdStep src c post)
     (r : Rule) : r ∈ post.rules ↔ r ∈ src.rules ∨ c = .rule r := by
-  obtain ⟨mid, hm, hcl⟩ := h
+  obtain ⟨mid, hm, hcl⟩ := h.reach
   rw [hcl.envRules.2]
   cases c with
   | action a => rw [evalAction_rules hm]; simp
@@ -224,6 +225,7 @@ theorem CmdStep.mem_rules_iff {src post : Database} {c : Cmd} (h : CmdStep src c
   | saturate R =>
       rw [runReach_rules (show SaturateReach R src mid from hm).1]
       simp
+  | check q => rw [(show QueryHolds src q ∧ mid = src from hm).2]; simp
 
 /-- A source prefix retains its initial rules and exactly the rules it registered. -/
 theorem ProgramStep.mem_rules_iff {pre : Program} {src post : Database}

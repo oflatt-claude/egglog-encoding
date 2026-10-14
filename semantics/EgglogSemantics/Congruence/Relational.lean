@@ -1,3 +1,5 @@
+import EgglogSemantics.Impl.Observe
+import EgglogSemantics.Proofs.Congruence.Read
 import EgglogSemantics.Proofs.Congruence.Properties
 
 /-!
@@ -593,6 +595,7 @@ def execCmd (d : FDatabase) : Cmd → Option FDatabase
   | .run R => runRound R d
   | .saturate R => runSaturate R runFuel d
   | .decl f dc => some { d with sig := Function.update d.sig f (some dc) }
+  | .check q => if (matchQuery d q).isEmpty then none else some d
 
 def execProgram (d : FDatabase) : Program → Option FDatabase
   | [] => some d
@@ -600,5 +603,9 @@ def execProgram (d : FDatabase) : Program → Option FDatabase
 
 /-- Execute a union-free program using only structural equality and table operations. -/
 def exec (p : Program) (_ : p.UnionFree) : Option FDatabase := execProgram FDatabase.empty p
+
+/-- Structural execution with check failure distinguished from an inconclusive run. -/
+def observe (p : Program) (_ : p.UnionFree) : Option ExecutionResult :=
+  observeWith execCmd (fun d q => !(matchQuery d q).isEmpty) FDatabase.empty p
 
 end Egglog.Relational

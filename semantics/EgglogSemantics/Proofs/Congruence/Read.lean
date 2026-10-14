@@ -1,3 +1,4 @@
+import EgglogSemantics.Congruence.Read
 import EgglogSemantics.Congruence.Encode
 import EgglogSemantics.Proofs.NoUnions
 import EgglogSemantics.Proofs.Source.Domain
@@ -15,29 +16,6 @@ and rule-simulation invariants; the reader theorem alone does not assert that re
 -/
 
 namespace Egglog.Congruence
-
-mutual
-
-/-- Read one id per source subterm from the single-output view tables. -/
-inductive ViewRepr (d : Database) : Term → Term → Prop where
-  | lit {l : Lit} : ViewRepr d (.lit l) (.lit l)
-  | app {f : FnName} {as es : List Term} {e : Term} :
-      ViewReprList d as es → d.Out (viewName f) es [e] → ViewRepr d (.app f as) e
-
-/-- Pointwise view representation. -/
-inductive ViewReprList (d : Database) : List Term → List Term → Prop where
-  | nil : ViewReprList d [] []
-  | cons {a e : Term} {as es : List Term} :
-      ViewRepr d a e → ViewReprList d as es → ViewReprList d (a :: as) (e :: es)
-
-end
-
-/-- Rebuilding propagates parent edges into views, so the reading needs no UF walk. -/
-def SameClass (d : Database) (a b : Term) : Prop :=
-  ∃ e, ViewRepr d a e ∧ ViewRepr d b e
-
-theorem SameClass.symm {d : Database} {a b : Term} (h : SameClass d a b) :
-    SameClass d b a := ⟨h.choose, h.choose_spec.2, h.choose_spec.1⟩
 
 /-- Pointwise membership: `ks` picks, per column, one of the ids that column's child was
 given. `false` at unequal lengths, which is what makes a view entry of the wrong width no

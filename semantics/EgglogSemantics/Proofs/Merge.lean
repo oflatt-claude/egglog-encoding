@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Diagonal
 import EgglogSemantics.Spec.Step
 import EgglogSemantics.Impl.Merge
 import EgglogSemantics.Proofs.Congruence
@@ -1112,7 +1113,7 @@ theorem RunReach.contained {R : RulesetName} {db d : Database}
 
 theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db.Contained db' := by
-  obtain ⟨d, hreach, hcl⟩ := h
+  obtain ⟨d, hreach, hcl⟩ := h.reach
   refine Database.Contained.trans ?_ (MergeClosure.contained hcl)
   cases c with
   | saturate R => exact RunReach.contained (show SaturateReach R db d from hreach).1
@@ -1120,6 +1121,7 @@ theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   | rule r => subst hreach; exact ⟨subset_rfl⟩
   | run R => subst hreach; exact Database.Contained.sUnion _ _
   | decl f dc => subst hreach; exact ⟨subset_rfl⟩
+  | check q => rw [hreach.2]; exact .refl _
 
 theorem ProgramStep.contained {db db' : Database} {p : Program}
     (h : ProgramStep db p db') : db.Contained db' := by
@@ -1528,6 +1530,7 @@ def Action.WriteLegal (a : Action) (sig : Signature) : Prop :=
 @[simp] def Cmd.WriteLegal : Cmd → Signature → Prop
   | .action a, sig => a.WriteLegal sig
   | .rule r, sig => Actions.WriteLegal r.actions sig
+  | .check _, _ => True
   | .run _, _ => True
   | .saturate _, _ => True
   | .decl _ _, _ => True
@@ -2659,6 +2662,7 @@ theorem execCmd_sigBind {d d' : FDatabase} {c : Cmd} (hs : execCmd d c = some d'
       runSaturateF_iterate runFuel (show d.runSaturateF R runFuel = some d' from hs)
     exact hk ▸ (execRunRules_iterate_sig k)
   | decl f dc => simp only [execCmd, Option.some.injEq] at hs; exact hs ▸ rfl
+  | check q => rw [execCheck_eq hs]; rfl
 
 theorem execProgramM_eq_execProgram {d : FDatabase} (hsig : d.sig.AllConstructors)
     {p : Program} (hdecl : p.CtorDecls) : d.execProgramM p = execProgram d p := by
@@ -2676,6 +2680,7 @@ theorem execProgramM_eq_execProgram {d : FDatabase} (hsig : d.sig.AllConstructor
           rw [Option.bind_some, FDatabase.mergeSaturateF_eq_self
             (FDatabase.hasMergeRow_eq_false (by
               rw [FDatabase.execAction_sig (hv)]; exact hsig))]
+      | check _ => rfl
       | rule r => rfl
       | run R => exact FDatabase.runRoundM_eq_round hsig
       | saturate R => exact FDatabase.runSaturateM_eq_runSaturateF runFuel hsig
@@ -3013,7 +3018,7 @@ theorem cmdReach_wf' {db d : Database} (hw : db.WF) {c : Cmd} (h : cmdReach db c
 
 theorem CmdStep.wf {db db' : Database} (hw : db.WF) {c : Cmd} (h : CmdStep db c db') :
     db'.WF := by
-  obtain ⟨d, hreach, hcl⟩ := h
+  obtain ⟨d, hreach, hcl⟩ := h.reach
   exact MergeClosure.wf (cmdReach_wf' hw hreach) hcl
 
 /-- A whole run preserves `Database.WF`, `CmdStep.wf` per command. It is what pays for
@@ -3171,6 +3176,7 @@ theorem cmdReach_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.Declare
   | saturate R =>
     exact runReach_declaredTerms hwf hdt hr hml hmw (show SaturateReach R db d from h).1
   | decl f dc => subst h; exact decl_declaredTerms hdt hfresh
+  | check q => rw [h.2]; exact hdt
 
 /-- The two signature-level invariants are read at the signature the command *installs*, as
 `Cmd.WidthOk` and `Cmd.MergeDeclared` are: that is the signature the merge phase runs
@@ -3179,7 +3185,7 @@ theorem cmdStep_declaredTerms {db d : Database} (hwf : db.WF) (hdt : db.Declared
     (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig)
     (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
     (hmw : (c.sigBind db.sig).MergesWidthOk) (h : CmdStep db c d) : d.DeclaredTerms := by
-  obtain ⟨x, hx, hcl⟩ := h
+  obtain ⟨x, hx, hcl⟩ := h.reach
   have hxs : x.sig = c.sigBind db.sig := cmdReach_sig hx
   exact mergeClosure_declaredTerms (cmdReach_wf' hwf hx)
     (cmdReach_declaredTerms hwf hdt hr hw hfresh hml hmw hx)
@@ -3248,17 +3254,6 @@ one excludes and vice versa — is the section "Ordering-freedom, and where it p
 are what carry it across a merge phase and a rule phase, which read their actions from the
 signature and the rule set rather than from the command. -/
 
-/-- Every asserted equation is reflexive. -/
-def Database.Diag (db : Database) : Prop := ∀ p ∈ db.eqs, p.1 = p.2
-
-/-- A state whose merge bodies and rule heads assert nothing either. The three fields are
-what the three phases read: `diag` is the state, `sig` is what a `MergeStep` runs, `rules`
-is what a `RunRules` runs. -/
-structure Database.NoUnions (db : Database) : Prop where
-  diag : db.Diag
-  sig : Signature.UnionFree db.sig
-  rules : ∀ r ∈ db.rules, Actions.UnionFree r.actions
-
 /-! #### Ordering-freedom survives the globals a rule is resolved through
 
 `cmdReach` stores `Rule.resolveGlobals`, which reads a global's *value* back into the query
@@ -3318,45 +3313,6 @@ structure Database.NoOrdering (db : Database) : Prop where
   sig : Signature.OrderingFree db.sig
   rules : ∀ r ∈ db.rules, Rule.OrderingFree r
   env : ∀ b ∈ db.env, Term.OrderingFree b.2
-
-namespace Database
-
-/-- A subset of a diagonal is diagonal. -/
-theorem Diag.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hd : d₂.Diag) : d₁.Diag :=
-  fun p hp => hd p (h.eqs hp)
-
-theorem Diag.addTerm {db : Database} (h : db.Diag) (t : Term) : (db.addTerm t).Diag := by
-  rintro p (hp | ⟨s, -, rfl⟩)
-  · exact h p hp
-  · rfl
-
-theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
-    (db.addTerms ts).Diag := by
-  induction ts generalizing db with
-  | nil => exact h
-  | cons t ts ih => exact ih (h.addTerm t)
-
-/-- `withOperands` posits its operands reflexively, so it cannot break diagonality. -/
-theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
-    (db.withOperands ts).Diag := h.addTerms ts
-
-end Database
-
-/-- **On a diagonal state congruence is equality.** No equation relates two distinct terms,
-so `assert` cannot and neither can `congr`, whose arguments are equal by the pointwise
-hypothesis. -/
-theorem Cong.eq_of_diag {E : Database} (h : E.Diag) : ∀ {a b : Term}, Cong E a b → a = b := by
-  intro a b hc
-  induction hc using Cong.rec (motive_2 := fun as bs _ => as = bs) with
-  | assert hab => exact h _ hab
-  | symm _ ih => exact ih.symm
-  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
-  | congr _ _ _ _ _ ihl => exact congrArg _ ihl
-  | nil => rfl
-  | cons _ _ ih ihl => exact congrArg₂ List.cons ih ihl
-
-theorem congOn_eq_of_diag {E : Database} (h : E.Diag) {ts : List Term} {a b : Term}
-    (hc : CongOn E ts a b) : a = b := Cong.eq_of_diag (h.withOperands ts) hc
 
 /-- **`Recorded` is `Contained` on a diagonal recorder.** The witness equation is congruent
 to the recorded one, and on a diagonal state that means equal. This is the whole content of
@@ -3604,18 +3560,6 @@ theorem owes_lit {E : Database} (hlit : E.LitsIsolated) {l : Lit} {x : Term}
   have h := owes_eq_of_isLit hlit (List.Forall₂.cons ho .nil) (by simp [Term.isLit])
   simpa using h.symm
 
-/-- `Expr.OrderingFree`, read off an application: its arguments are. -/
-theorem Expr.orderingFree_app {f : FnName} {args : List Expr}
-    (h : Expr.OrderingFree (.app f args)) : Expr.OrderingFreeList args := h
-
-/-- `Expr.OrderingFree`, read off a `min`: there is none. -/
-theorem Expr.not_orderingFree_min {a b : Expr} (h : Expr.OrderingFree (.min a b)) : False := by
-  simp [Expr.OrderingFree, Expr.hasMin] at h
-
-/-- `Expr.OrderingFreeList`, read off a cons. -/
-theorem Expr.orderingFreeList_cons {e : Expr} {es : List Expr}
-    (h : Expr.OrderingFreeList (e :: es)) : e.OrderingFree ∧ Expr.OrderingFreeList es := by
-  simpa [Expr.OrderingFreeList, Expr.OrderingFree, Expr.hasMinList] using h
 
 mutual
 
@@ -4907,7 +4851,7 @@ ends with moves neither, and `MergeClosure.diag` is what keeps the state diagona
 it. -/
 theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.UnionFree)
     (h : CmdStep A c B) : B.NoUnions := by
-  obtain ⟨e, hreach, hcl⟩ := h
+  obtain ⟨e, hreach, hcl⟩ := h.reach
   have hE : e.NoUnions := by
     cases c with
     | saturate R =>
@@ -4935,6 +4879,7 @@ theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.Un
         exact hg' ▸ hu
       · rw [Function.update_of_ne hgf] at hg'
         exact hn.sig g dc' hg'
+    | check q => rw [hreach.2]; exact hn
   exact ⟨MergeClosure.diag hE.sig hE.diag hcl,
     by rw [MergeClosure.sig hcl]; exact hE.sig,
     by rw [(MergeClosure.envRules hcl).2]; exact hE.rules⟩
@@ -4968,10 +4913,11 @@ theorem cmdReach_noOrdering {A e : Database} (hn : A.NoOrdering) {c : Cmd}
       exact hg' ▸ hu
     · rw [Function.update_of_ne hgf] at hg'
       exact hn.sig g dc' hg'
+  | check q => rw [heff.2]; exact hn
 
 theorem CmdStep.noOrdering {A B : Database} (hn : A.NoOrdering) {c : Cmd}
     (hu : c.OrderingFree) (h : CmdStep A c B) : B.NoOrdering := by
-  obtain ⟨e, hreach, hcl⟩ := h
+  obtain ⟨e, hreach, hcl⟩ := h.reach
   have hE : e.NoOrdering := by
     cases c with
     | saturate R =>
@@ -5034,7 +4980,12 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
     (h : CmdStep A c B) :
     ∃ D, CmdStep C c D ∧ B.Contained D ∧ B.sig = D.sig ∧ B.env = D.env ∧
       B.rules = D.rules := by
-  obtain ⟨e, hreach, hcl⟩ := h
+  by_cases hcheck : ∃ q, c = .check q
+  · obtain ⟨q, rfl⟩ := hcheck
+    obtain ⟨⟨σ, hσ⟩, rfl⟩ := h
+    exact ⟨C, ⟨⟨σ, ValidQuerySubst.mono hc hsig henv.symm hσ⟩, rfl⟩,
+      hc, hsig, henv, hrules⟩
+  obtain ⟨e, hreach, hcl⟩ := h.reach
   have key : ∃ E, cmdReach C c E ∧ e.Contained E ∧ e.sig = E.sig ∧ e.env = E.env ∧
       e.rules = E.rules := by
     cases c with
@@ -5064,9 +5015,10 @@ theorem CmdStep.mono {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.s
       exact ⟨_, rfl, ⟨hc.eqs⟩, by
         change Function.update A.sig f (some dc) = Function.update C.sig f (some dc)
         rw [hsig], henv, hrules⟩
+    | check q => exact (hcheck ⟨q, rfl⟩).elim
   obtain ⟨E, hE, hcont, hs, he, hr⟩ := key
   obtain ⟨D, hclD, hcontD, hsigD⟩ := MergeClosure.transport hcont hs hcl
-  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
+  exact ⟨D, CmdStep.of_merge (fun q heq => hcheck ⟨q, heq⟩) hE hclD, hcontD, hsigD,
     by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
     by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
 
@@ -5156,7 +5108,15 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
   · obtain ⟨D, hstep, hcont, hs, he, hr⟩ :=
       h.mono (hc.contained_of_diag hdiag) hsig henv hrules hns
     exact ⟨D, hstep, .of_contained hcont, hs, he, hr⟩
-  obtain ⟨e, hreach, hcl⟩ := h
+  by_cases hcheck : ∃ q, c = .check q
+  · obtain ⟨q, rfl⟩ := hcheck
+    obtain ⟨⟨σ, hσ⟩, rfl⟩ := h
+    have hres : B ∈ RuleResults B ⟨q, [], ""⟩ :=
+      ⟨σ, hσ, by simp [evalLocalActions, evalActions]⟩
+    obtain ⟨_, ⟨τ, hτ, _⟩, _⟩ := RuleResults.mono_recorded (r := ⟨q, [], ""⟩) hc hwfA hwfC hsig henv
+      (Or.inr ⟨hcof, trivial⟩) hres
+    exact ⟨C, ⟨⟨τ, hτ⟩, rfl⟩, hc, hsig, henv, hrules⟩
+  obtain ⟨e, hreach, hcl⟩ := h.reach
   have key : ∃ E, cmdReach C c E ∧ e.Recorded E ∧ e.sig = E.sig ∧ e.env = E.env ∧
       e.rules = E.rules ∧ E.WF ∧ e.WF := by
     have hwfe : e.WF := cmdReach_wf hwfA hns hreach
@@ -5191,11 +5151,12 @@ theorem CmdStep.mono_recorded {A C B : Database} (hc : A.Recorded C) (hwfA : A.W
         exact ⟨q, hq, congOn_setSig hc₁, congOn_setSig hc₂⟩
       · change Function.update A.sig f (some dc) = Function.update C.sig f (some dc)
         rw [hsig]
+    | check q => exact (hcheck ⟨q, rfl⟩).elim
   obtain ⟨E, hE, hcont, hs, he, hr, hwfE, hwfe⟩ := key
   obtain ⟨D, hclD, hcontD, hsigD⟩ :=
     MergeClosure.transport_recorded hcont hwfe hwfE hs
       (Or.inr (cmdReach_noOrdering hno hcof hns hE).sig) hcl
-  exact ⟨D, ⟨E, hE, hclD⟩, hcontD, hsigD,
+  exact ⟨D, CmdStep.of_merge (fun q heq => hcheck ⟨q, heq⟩) hE hclD, hcontD, hsigD,
     by rw [(MergeClosure.envRules hcl).1, (MergeClosure.envRules hclD).1, he],
     by rw [(MergeClosure.envRules hcl).2, (MergeClosure.envRules hclD).2, hr]⟩
 
@@ -5910,6 +5871,7 @@ theorem execCmdM_sig {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') 
     rw [(runSaturateM_fields runFuel hs).1]
     rfl
   | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ rfl
+  | check q => rw [FDatabase.execCheck_eq hs]; rfl
 
 /-- **A legal run declares each name once, and freshly.**
 
@@ -5933,6 +5895,7 @@ theorem ProgramLegal.declsFresh {p : Program} : ∀ {d d' : FDatabase},
       | rule r => trivial
       | run R => trivial
       | saturate R => trivial
+      | check _ => trivial
     · show Program.DeclsFresh cs (c.sigBind d.sig)
       rw [← execCmdM_sig hd₁]
       exact ih (hp.2.2.2 d₁ hd₁) hcs
@@ -5965,6 +5928,7 @@ theorem Inv.execCmdM {d d' : FDatabase} (h : d.Inv) {c : Cmd}
   | decl f dc =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     exact hs ▸ h.decl hunused.1 hunused.2
+  | check q => rw [FDatabase.execCheck_eq hs]; exact h
 
 /-- Rule-head legality is preserved: `.rule` installs a head `Cmd.WriteLegal` has already
 checked, and `.decl` only ever declares a fresh name (`Actions.WriteLegal.update`). -/
@@ -6000,6 +5964,7 @@ theorem execCmdM_rulesLegal {d d' : FDatabase} {c : Cmd}
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     subst hs
     exact fun r hr => Actions.WriteLegal.update hunused.1 (hrules r hr)
+  | check q => rw [FDatabase.execCheck_eq hs]; exact hrules
 
 /-! #### The three containment theorems -/
 
@@ -6098,6 +6063,16 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.No
     -- to `Cong`.
     obtain ⟨q, hq, hc₁, hc₂⟩ := (Database.Recorded.refl (db := d.toDatabase)).eqs p hp
     exact ⟨q, hq, congOn_setSig hc₁, congOn_setSig hc₂⟩
+  | check q =>
+    have heq := FDatabase.execCheck_eq hs
+    subst d'
+    have hnonempty : (matchQuery d q).isEmpty = false := by
+      cases he : (matchQuery d q).isEmpty
+      · rfl
+      · simp [FDatabase.execCmdM, he] at hs
+    obtain ⟨σ, hσ⟩ := List.isEmpty_eq_false_iff_exists_mem.mp hnonempty
+    obtain ⟨τ, hτ, _⟩ := FDatabase.matchQuery_validQuerySubst h hσ
+    exact ⟨d.toDatabase, ⟨⟨τ, hτ⟩, rfl⟩, .refl, rfl, rfl, rfl⟩
 
 /-- **The interpreter's answer to one command is contained in one the specification
 reaches.**
@@ -6304,6 +6279,7 @@ theorem execCmdM_data_of_declOrRule {d d' : FDatabase} {c : Cmd} (hc : c.DeclOrR
   | action a => exact (hc : False).elim
   | run R => exact (hc : False).elim
   | saturate R => exact (hc : False).elim
+  | check _ => exact (hc : False).elim
 
 theorem execProgramM_data_of_declOrRule {p : Program} (hp : ∀ c ∈ p, c.DeclOrRule) :
     ∀ {d d' : FDatabase}, d.execProgramM p = some d' →

@@ -338,6 +338,7 @@ theorem cmdReach_sig {db d : Database} {c : Cmd} (h : cmdReach db c d) :
   | run R => subst h; rfl
   | saturate R => exact RunReach.sig (show SaturateReach R db d from h).1
   | decl f dc => subst h; rfl
+  | check q => rw [(h : QueryHolds db q ∧ d = db).2]; rfl
 
 /-- Well-formedness through every command but a saturating run, whose rounds need
 `CtorState` (`cmdReach_ctorState`). -/
@@ -349,6 +350,7 @@ theorem cmdReach_wf {db d : Database} (hw : db.WF) {c : Cmd} (hns : c.NoSaturate
   | run R => subst h; exact RunRules.wf hw
   | saturate R => exact (hns : False).elim
   | decl f dc => subst h; exact hw.congr rfl rfl
+  | check q => rw [(h : QueryHolds db q ∧ d = db).2]; exact hw
 
 theorem cmdReach_allConstructors {db d : Database} (hsig : db.sig.AllConstructors)
     {c : Cmd} (hdecl : c.CtorDecl) (h : cmdReach db c d) : d.sig.AllConstructors := by
@@ -369,6 +371,7 @@ theorem cmdReach_det {db e₁ e₂ : Database} (hsig : db.sig.AllConstructors) {
   | saturate R => exact saturateReach_det hsig h₁ h₂
   | action a => exact Option.some.inj (h₁.symm.trans h₂)
   | rule _ | run _ | decl _ _ => exact h₁.trans h₂.symm
+  | check q => exact h₁.2.trans h₂.2.symm
 
 /-! ### The step relations
 
@@ -388,7 +391,7 @@ theorem RunReach.env {R : RulesetName} {db db' : Database}
 /-- No command introduces persistent variable bindings. -/
 theorem CmdStep.env {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db'.env = db.env := by
-  obtain ⟨d, he, hm⟩ := h
+  obtain ⟨d, he, hm⟩ := h.reach
   refine (MergeClosure.envRules hm).1.trans ?_
   cases c with
   | action a => exact evalAction_env he
@@ -396,6 +399,7 @@ theorem CmdStep.env {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   | rule r => subst he; rfl
   | run R => subst he; rfl
   | decl f dc => subst he; rfl
+  | check q => rw [(he : QueryHolds db q ∧ d = db).2]
 
 /-- A program keeps its initial context; in particular, an ordinary run leaves it empty. -/
 theorem ProgramStep.env {db db' : Database} {p : Program} (h : ProgramStep db p db') :
@@ -406,7 +410,7 @@ theorem ProgramStep.env {db db' : Database} {p : Program} (h : ProgramStep db p 
 
 theorem CmdStep.sig {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
     db'.sig = c.sigBind db.sig := by
-  obtain ⟨d, hreach, hcl⟩ := h
+  obtain ⟨d, hreach, hcl⟩ := h.reach
   rw [hcl.sig]; exact cmdReach_sig hreach
 
 /-- **A command keeps the constructor fragment's state, with no condition on its actions.**
@@ -414,7 +418,7 @@ The one thing that has to be excluded is the *declaration* of a `:merge` functio
 `Cmd.CtorDecl`; a `set` cannot disturb either field. -/
 theorem CmdStep.ctorState {db db' : Database} (h : db.CtorState) {c : Cmd}
     (hdecl : c.CtorDecl) (hstep : CmdStep db c db') : db'.CtorState := by
-  obtain ⟨d, hreach, hcl⟩ := hstep
+  obtain ⟨d, hreach, hcl⟩ := hstep.reach
   have hd := cmdReach_ctorState h hdecl hreach
   rw [hcl.eq_of_allConstructors hd.sig]
   exact hd
@@ -979,6 +983,7 @@ theorem cmdStep_sigMergeDeclared {db d : Database} {c : Cmd} (hsmd : SigMergeDec
   | run R => exact hsmd
   | saturate R => exact hsmd
   | decl g d' => exact sigMergeDeclared_decl hsmd hc
+  | check _ => exact hsmd
 
 /-- Every state a checked program reaches satisfies the invariant, so `declStep_iff` covers
 every `.decl` such a program runs. -/
@@ -1038,8 +1043,8 @@ merge phase now follows a `.decl` as well: declaring a `:merge` function is exac
 run on an otherwise constructor-only state regains a choice. -/
 theorem CmdStep.det {db d₁ d₂ : Database} (hsig : db.sig.AllConstructors) {c : Cmd}
     (hdecl : c.CtorDecl) (h₁ : CmdStep db c d₁) (h₂ : CmdStep db c d₂) : d₁ = d₂ := by
-  obtain ⟨e₁, hr₁, hcl₁⟩ := h₁
-  obtain ⟨e₂, hr₂, hcl₂⟩ := h₂
+  obtain ⟨e₁, hr₁, hcl₁⟩ := h₁.reach
+  obtain ⟨e₂, hr₂, hcl₂⟩ := h₂.reach
   obtain rfl := cmdReach_det hsig hr₁ hr₂
   have hs := cmdReach_allConstructors hsig hdecl hr₁
   rw [hcl₁.eq_of_allConstructors hs, hcl₂.eq_of_allConstructors hs]

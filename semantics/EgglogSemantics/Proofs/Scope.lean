@@ -3,7 +3,7 @@ import EgglogSemantics.Proofs.Step
 
 namespace Egglog
 /-- The scope describes the environment's domain exactly. This is the induction invariant
-`programStep_of_scoped` carries across a run. -/
+`Eval.exists_of_scoped` carries across a run. -/
 def Scope.Models (Γ : Scope) (σ : Env) : Prop := ∀ v, v ∈ Γ ↔ v ∈ Env.dom σ
 
 theorem Scope.Models.empty : Scope.Models [] ([] : Env) := by simp [Models]
@@ -92,58 +92,40 @@ theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
 
 /-! ### Scoped, evaluable programs do not get stuck
 
-`Cmd.sigBind` is what the signature half of the invariant is: a command leaves the
-signature `Program.Evaluable` checks the rest of the program against. -/
-theorem cmdStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
+Finite runs may stop at a failed check. The result theorem therefore establishes a
+finite evaluation, rather than demanding a successful final database. -/
+theorem CmdEval.exists_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {c : Cmd} (hns : c.NoSaturate) (h : c.Scoped Γ) (he : c.Evaluable db.sig) :
-    ∃ db', CmdStep db c db' ∧ Γ.Models db'.env ∧
-      db'.sig = c.sigBind db.sig := by
+    ∃ r, CmdEval db c r := by
+  classical
   cases c with
   | action a =>
-    obtain ⟨db', hv, hm'⟩ := evalAction_isSome_of_scoped hm h he
-    have htop : evalAction db a = some db' := by
-      cases a with
-      | _ => exact hv
-    exact ⟨db', ⟨db', htop, Relation.ReflTransGen.refl⟩, hm', evalAction_sig hv⟩
-  | rule r => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
-  | run R => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
+    obtain ⟨db', hv, _⟩ := evalAction_isSome_of_scoped hm h he
+    exact ⟨.ok db', .ok ⟨db', hv, .refl⟩⟩
+  | rule r => exact ⟨_, .ok ⟨_, rfl, .refl⟩⟩
+  | run R => exact ⟨_, .ok ⟨_, rfl, .refl⟩⟩
   | saturate R => exact (hns : False).elim
-  | decl f d => exact ⟨_, ⟨_, rfl, Relation.ReflTransGen.refl⟩, hm, rfl⟩
+  | decl f d => exact ⟨_, .ok ⟨_, rfl, .refl⟩⟩
+  | check q =>
+    by_cases hq : QueryHolds db q
+    · exact ⟨.ok db, .ok ⟨hq, rfl⟩⟩
+    · exact ⟨.checkFailed, .checkFailed hq⟩
 
-theorem programStep_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
+/-- Scoped, evaluable programs with bounded rounds have a finite result. A false check
+is a terminating result, so no assumption that all checks pass is needed. -/
+theorem Eval.exists_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {p : Program} (hns : p.NoSaturate) (h : Program.Scoped p Γ)
-    (he : Program.Evaluable p db.sig) :
-    ∃ db', ProgramStep db p db' ∧ Γ.Models db'.env := by
-  induction p generalizing db Γ with
-  | nil => exact ⟨db, .nil, hm⟩
+    (he : Program.Evaluable p db.sig) : ∃ r, Eval db p r := by
+  induction p generalizing db with
+  | nil => exact ⟨.ok db, .nil⟩
   | cons c cs ih =>
-    obtain ⟨db₁, h₁, hm₁, hs₁⟩ :=
-      cmdStep_of_scoped hm (hns c List.mem_cons_self) h.1 he.1
-    obtain ⟨db₂, h₂, hm₂⟩ :=
-      ih hm₁ (fun c' hc' => hns c' (List.mem_cons_of_mem c hc')) h.2 (by rw [hs₁]; exact he.2)
-    exact ⟨db₂, .cons h₁ h₂, hm₂⟩
-
-/-- A program whose variables are bound and whose applications all build runs to
-completion: some state is reachable, rather than the run getting stuck at an action that
-cannot evaluate.
-
-`Evaluable` is a hypothesis rather than part of `WellScoped` because it is not about
-scope: it is what `Expr.eval` needs on top of a bound environment, and folding it into
-the scope check would make "well-scoped" reject `(min 1 2)`, which egglog accepts.
-
-The merge phase is what stops this from being uniqueness as well: `CmdStep` may stop
-anywhere in `MergeClosure`. On the constructor fragment there is nothing to stop in, and
-`ProgramStep.det` says so.
-
-`hns` is not removable: a `Cmd.saturate` reaches a state only if its ruleset *has* a
-fixpoint, and `(rule () ((f (g x))))` under a saturating run has none. Scope and
-evaluability are properties of the syntax and cannot see that, so the totality theorem is
-for the fragment whose round counts are written down. -/
-theorem programStep_isSome {p : Program} (hns : p.NoSaturate) (h : WellScoped p)
-    (he : p.Evaluable Database.empty.sig) :
-    ∃ db, ProgramStep Database.empty p db := by
-  obtain ⟨db, hdb, _⟩ := programStep_of_scoped
-    (db := Database.empty) Scope.Models.empty hns h he
-  exact ⟨db, hdb⟩
+    obtain ⟨r, hc⟩ := CmdEval.exists_of_scoped hm (hns c List.mem_cons_self) h.1 he.1
+    cases hc with
+    | ok hs =>
+        obtain ⟨r, hr⟩ := ih (by rw [hs.env]; exact hm)
+          (fun c' hc' => hns c' (List.mem_cons_of_mem c hc')) h.2
+          (by rw [hs.sig]; exact he.2)
+        exact ⟨r, .cons (.ok hs) hr⟩
+    | checkFailed hq => exact ⟨.checkFailed, .fail (.checkFailed hq)⟩
 
 end Egglog

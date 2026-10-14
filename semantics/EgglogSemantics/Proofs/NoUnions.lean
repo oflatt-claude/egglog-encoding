@@ -282,6 +282,7 @@ theorem execCmdM_noUnions {d d' : FDatabase} {c : Cmd} (hu : c.UnionFree) (hn : 
         exact hg' ▸ hu
       · rw [Function.update_of_ne hgf] at hg'
         exact hn.sig g dc' hg'
+  | check q => rw [FDatabase.execCheck_eq h]; exact hn
 
 @[inherit_doc execCmdM_noUnions]
 theorem execProgramM_noUnions : ∀ {p : Program} {d d' : FDatabase}, Program.UnionFree p →

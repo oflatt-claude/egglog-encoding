@@ -256,7 +256,7 @@ theorem Database.NoLits.runRules {R : RulesetName} {db : Database} (hw : db.WF)
 theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
     {c : Cmd} (hn : c.NoLits) (hdecl : c.CtorDecl) (hstep : CmdStep db c db') :
     db'.NoLits := by
-  obtain ⟨d, hreach, hcl⟩ := hstep
+  obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
   | action a =>
       have hv : evalAction db a = some d := hreach
@@ -290,6 +290,11 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact ⟨fun t ht => h.terms t (Database.terms_setSig ▸ ht), h.heads⟩
+
+  | check q =>
+      obtain ⟨_, rfl⟩ := hreach
+      rw [hcl.eq_of_allConstructors hc.sig]
+      exact h
 
 /-- **`Database.NoLits` at every state a run reaches.** Applied to a *prefix* of the source
 program it is the invariant at the state a firing command starts from, which is where the
@@ -448,7 +453,7 @@ theorem Actions.Builds.update {sig : Signature} {f : FnName} {d : FnDecl} (hd : 
 theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.HeadsBuild)
     {c : Cmd} (hrun : c.HeadRuns db.sig) (hdecl : c.CtorDecl) (hstep : CmdStep db c db') :
     db'.HeadsBuild := by
-  obtain ⟨d, hreach, hcl⟩ := hstep
+  obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
   | action a =>
       have hv : evalAction db a = some d := hreach
@@ -487,6 +492,11 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact fun r hr => Actions.Builds.update hdecl (h r hr)
 
+  | check q =>
+      obtain ⟨_, rfl⟩ := hreach
+      rw [hcl.eq_of_allConstructors hc.sig]
+      exact h
+
 /-- **`Database.HeadsBuild` at every state a run reaches.** -/
 theorem programStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.HeadsBuild)
     {p : Program} (hrun : Program.HeadRuns p db.sig) (hdecl : p.CtorDecls)
@@ -514,6 +524,7 @@ theorem Cmd.NoLits.of_domain {P : Program} (_hdom : P.Fragment)
   | run R => trivial
   | saturate R => trivial
   | decl f d => trivial
+  | check _ => trivial
 
 /-- **`Database.NoLits` at every state the source run reaches**, under `noLitUnion`'s second
 arm. Applied to a *prefix* of the program it is the invariant at the state a firing command

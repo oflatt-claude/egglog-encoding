@@ -73,6 +73,7 @@ theorem ProgramStep.declared {d e : Database} {p : Program} (h : ProgramStep d p
         | rule r => exact Or.inl hm
         | run R => exact Or.inl hm
         | saturate R => exact Or.inl hm
+        | check _ => exact Or.inl hm
       · exact Or.inr (List.mem_cons_of_mem c hm)
 
 end Egglog

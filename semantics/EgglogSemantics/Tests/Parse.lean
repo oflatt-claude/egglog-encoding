@@ -187,6 +187,7 @@ def runTarget : Sexp → Except String RulesetName
 
 /-- The commands of one top-level form, under the signature so far. -/
 def command (sig : Signature) : Sexp → Except String (List Cmd)
+  | .list (.atom "check" :: facts) => return [.check (← facts.mapM (pattern sig))]
   | .list (.atom "sort" :: _) | .list (.atom "ruleset" :: _) | .list [.atom "print-size"] =>
     .ok []
   | .list (.atom "constructor" :: .atom f :: ins :: out :: opts) => do

@@ -96,6 +96,7 @@ theorem execCmd_eq {d : FDatabase} (h : d.NoUnions) {c : Cmd} (hc : c.UnionFree)
     intro e he
     exact mergeSaturate_eq mergeFuel (execAction_noUnions hc h he)
   | rule _ | decl _ _ => rfl
+  | check q => simp only [execCmd, FDatabase.execCmdM, matchQuery_eq (eqsRefl_of_noUnions h)]
   | run R =>
     simp only [execCmd, FDatabase.execCmdM]
     exact runRound_eq h R
@@ -119,6 +120,14 @@ theorem exec_eq {p : Program} (h : p.UnionFree) : exec p h = execM p :=
 end Egglog.Relational
 
 namespace Egglog.Congruence
+
+/-- The target's built-in equality remains diagonal; equality is represented by tables. -/
+theorem execM_encode_eqsRefl {P : Program} {tgt : FDatabase}
+    (h : execM (encode P) = some tgt) : tgt.EqsRefl := by
+  intro p hp
+  rw [(execM_noUnions (encode_unionFree P) h).eqs] at hp
+  simp at hp
+
 
 /-- The congruence pass needs no equality closure in its target runtime. -/
 theorem encode_relational (P : Program) :

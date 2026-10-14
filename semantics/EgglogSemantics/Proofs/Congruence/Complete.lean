@@ -66,13 +66,13 @@ theorem Simulation.step_of_data {P : Program} {src post : Database} {d e : FData
 theorem source_setup_eqs {src post : Database} {c : Cmd} (hcs : src.sig.AllConstructors)
     (hc : c.DeclOrRule) (hdecl : c.CtorDecl) (hs : CmdStep src c post) :
     post.eqs = src.eqs := by
-  obtain ⟨m, hm, hmerge⟩ := hs
+  obtain ⟨m, hm, hmerge⟩ := hs.reach
   have heq := hmerge.eq_of_allConstructors (cmdReach_allConstructors hcs hdecl hm)
   rw [heq]
   cases c with
   | decl f dc => subst hm; rfl
   | rule r => subst hm; rfl
-  | action _ | run _ | saturate _ => exact hc.elim
+  | action _ | run _ | saturate _ | check _ => exact hc.elim
 
 /-- Source declarations require no target commands because the prelude declared all tables. -/
 theorem Simulation.decl {P : Program} {src post : Database} {d e : FDatabase}
@@ -197,6 +197,13 @@ theorem Simulation.step {P pre rest : Program} (hdom : P.Fragment) {c : Cmd}
       exact h.step_of_data hs run hr hs' hreads
   | run R => exact Simulation.run hdom hP hpre hs h run
   | saturate R => exact Simulation.saturate hdom hP hpre hs h run
+  | check q =>
+      obtain ⟨_, rfl⟩ := hs
+      have he : d.execCmdM (.check (encodeQuery q 0).1) = some e := by
+        simpa only [encodeCmd, List.map_cons, List.map_nil,
+          Egglog.FDatabase.execProgramM, Option.bind_fun_some] using run
+      rw [Egglog.FDatabase.execCheck_eq he]
+      exact h
 
 /-- Compose command simulations along the original program. -/
 theorem Simulation.program {P pre rest : Program} (hdom : P.Fragment)

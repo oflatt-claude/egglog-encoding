@@ -99,18 +99,69 @@ def cmdReach (db : Database) : Cmd → Database → Prop
   | .run R, d => d = RunRules R db
   | .saturate R, d => SaturateReach R db d
   | .decl f dc, d => d = { db with sig := Function.update db.sig f (some dc) }
+  | .check q, d => QueryHolds db q ∧ d = db
 
-/-- Run one command: what it reaches, then a merge phase. Every command merges, so a
+/-- Successful execution of a command. A check only observes its input. Every other
+command merges, so a
 top-level `set` is its own merge phase, and `run` is one round of rule firing followed by
 one. The phase is neutral after a `Cmd.saturate`, which ends merge-saturated
 (`cmdStep_saturate_iff`). -/
 def CmdStep (db : Database) (c : Cmd) (db' : Database) : Prop :=
-  ∃ d, cmdReach db c d ∧ MergeClosure d db'
+  match c with
+  | .check q => QueryHolds db q ∧ db' = db
+  | _ => ∃ d, cmdReach db c d ∧ MergeClosure d db'
+
+/-- The successful transition still decomposes into a reach and a merge closure; for a
+check that closure is reflexive. The converse requires the check to leave the state alone. -/
+theorem CmdStep.reach {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
+    ∃ d, cmdReach db c d ∧ MergeClosure d db' := by
+  cases c <;> try exact h
+  obtain ⟨hq, rfl⟩ := h
+  exact ⟨_, ⟨hq, rfl⟩, .refl⟩
+
+/-- A command may finish with a reflexive merge phase. For checks this is the only phase. -/
+theorem CmdStep.of_reach {db db' : Database} {c : Cmd} (h : cmdReach db c db') :
+    CmdStep db c db' := by
+  cases c <;> try exact ⟨db', h, .refl⟩
+  exact h
+
+/-- State-changing commands may additionally take a merge closure. -/
+theorem CmdStep.of_merge {db mid db' : Database} {c : Cmd}
+    (hc : ∀ q, c ≠ .check q) (hr : cmdReach db c mid) (hm : MergeClosure mid db') :
+    CmdStep db c db' := by
+  cases c <;> try exact ⟨mid, hr, hm⟩
+  exact (hc _ rfl).elim
 
 /-- Run the commands in order. `ProgramStep Database.empty p` is running the program `p`. -/
 inductive ProgramStep : Database → Program → Database → Prop where
   | nil {db : Database} : ProgramStep db [] db
   | cons {db d d' : Database} {c : Cmd} {cs : Program} :
       CmdStep db c d → ProgramStep d cs d' → ProgramStep db (c :: cs) d'
+
+/-- A finite execution either finishes with a database or stops at a failed check.
+Divergence and interpreter fuel exhaustion are not semantic results. -/
+inductive Result where
+  | ok (db : Database)
+  | checkFailed
+
+/-- The observation compared by compiler correctness, independent of the final database. -/
+def Result.succeeded : Result → Bool
+  | .ok _ => true
+  | .checkFailed => false
+
+/-- Command evaluation with an explicit check-failure outcome. -/
+inductive CmdEval : Database → Cmd → Result → Prop where
+  | ok {db db' : Database} {c : Cmd} : CmdStep db c db' → CmdEval db c (.ok db')
+  | checkFailed {db : Database} {q : Query} :
+      ¬ QueryHolds db q → CmdEval db (.check q) .checkFailed
+
+/-- Finite program evaluation. Failure short-circuits the suffix, even if that suffix
+would diverge. Only successful commands pass their resulting database to the next one. -/
+inductive Eval : Database → Program → Result → Prop where
+  | nil {db : Database} : Eval db [] (.ok db)
+  | cons {db db' : Database} {c : Cmd} {cs : Program} {r : Result} :
+      CmdEval db c (.ok db') → Eval db' cs r → Eval db (c :: cs) r
+  | fail {db : Database} {c : Cmd} {cs : Program} :
+      CmdEval db c .checkFailed → Eval db (c :: cs) .checkFailed
 
 end Egglog

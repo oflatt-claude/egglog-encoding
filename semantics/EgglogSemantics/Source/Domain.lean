@@ -49,6 +49,7 @@ def Cmd.ctors : Cmd → List (FnName × Nat)
   | .run _ => []
   | .saturate _ => []
   | .decl f d => [(f, d.arity)]
+  | .check q => q.flatMap Pattern.ctors
 
 /-- Every function name and arity the program mentions, deduplicated. -/
 def Program.ctors (P : Program) : List (FnName × Nat) := (P.flatMap Cmd.ctors).dedup
@@ -94,6 +95,7 @@ def Cmd.vars : Cmd → List Var
   | .run _ => []
   | .saturate _ => []
   | .decl _ _ => []
+  | .check q => q.vars
 
 /-- Every variable the program mentions. -/
 def Program.vars (P : Program) : List Var := (P.flatMap Cmd.vars).dedup
@@ -105,6 +107,7 @@ def Cmd.rulesets : Cmd → List RulesetName
   | .saturate R => [R]
   | .action _ => []
   | .decl _ _ => []
+  | .check _ => []
 
 /-- Every ruleset name the program mentions. -/
 def Program.rulesets (P : Program) : List RulesetName := (P.flatMap Cmd.rulesets).dedup
@@ -172,6 +175,7 @@ in egglog — and the query is `Query.VarsKeyed`. Vacuous at every other command
 the only place a query can occur. -/
 def Cmd.QueryEncodable : Cmd → Prop
   | .rule r => (∀ p ∈ r.query, p.Grounded ∧ p.Scoped) ∧ Query.VarsKeyed r.query
+  | .check q => (∀ p ∈ q, p.Grounded ∧ p.Scoped) ∧ Query.VarsKeyed q
   | _ => True
 
 /-! ### The heads the source cannot run
@@ -298,6 +302,7 @@ instance Cmd.decidableHeadsDeclared : ∀ (c : Cmd) (sig : Signature),
   | .run _, _ => .isTrue trivial
   | .saturate _, _ => .isTrue trivial
   | .decl _ _, _ => .isTrue trivial
+  | .check _, _ => .isTrue trivial
 
 instance Program.decidableHeadsDeclared : ∀ (P : Program) (sig : Signature),
     Decidable (Program.HeadsDeclared P sig)
@@ -348,6 +353,7 @@ instance Cmd.decidableHeadScoped : ∀ c : Cmd, Decidable c.HeadScoped
   | .run _ => .isTrue trivial
   | .saturate _ => .isTrue trivial
   | .decl _ _ => .isTrue trivial
+  | .check _ => .isTrue trivial
 
 instance Program.decidableHeadsScoped (P : Program) : Decidable P.HeadsScoped :=
   inferInstanceAs (Decidable (∀ c ∈ P, c.HeadScoped))
@@ -485,6 +491,8 @@ instance : ∀ c : Cmd, Decidable c.QueryEncodable
   | .run _ => .isTrue trivial
   | .saturate _ => .isTrue trivial
   | .decl _ _ => .isTrue trivial
+  | .check q => inferInstanceAs (Decidable ((∀ p ∈ q, p.Grounded ∧ p.Scoped) ∧
+      Query.VarsKeyed q))
 
 instance (P : Program) : Decidable P.CtorDecls :=
   inferInstanceAs (Decidable (∀ c ∈ P, c.CtorDecl))

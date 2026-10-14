@@ -44,6 +44,7 @@ theorem execCmdM_terms {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d'
   | run R => exact runRoundM_terms hs
   | saturate R => exact runSaturateM_terms _ hs
   | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
+  | check q => rw [FDatabase.execCheck_eq hs]; exact fun _ h => h
 
 theorem execProgramM_terms {p : Program} : ∀ {d d' : FDatabase},
     d.execProgramM p = some d' → ∀ t ∈ d.terms, t ∈ d'.terms := by
@@ -116,6 +117,7 @@ theorem execCmdM_eqs {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') 
   | run R => exact runRoundM_eqs hs
   | saturate R => exact runSaturateM_eqs _ hs
   | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
+  | check q => rw [FDatabase.execCheck_eq hs]; exact fun _ h => h
 
 theorem execProgramM_eqs {p : Program} : ∀ {d d' : FDatabase},
     d.execProgramM p = some d' → ∀ q ∈ d.eqs, q ∈ d'.eqs := by
@@ -158,6 +160,7 @@ theorem execCmdM_env {d d' : FDatabase} {c : Cmd}
   | run R => exact (runRoundM_fields hs).2.1
   | saturate R => exact (runSaturateM_fields runFuel hs).2.1
   | decl f dc => cases Option.some.inj hs; rfl
+  | check q => rw [FDatabase.execCheck_eq hs]
 
 /-- Executing a program preserves its initial environment. -/
 theorem execProgramM_env {p : Program} {d D : FDatabase}

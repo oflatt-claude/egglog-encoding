@@ -148,7 +148,7 @@ theorem termsBuild_runRules {R : RulesetName} {db : Database} (hw : db.WF)
 complete atoms, no separate restriction on rule-head write actions is necessary. -/
 theorem cmdStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.TermsBuild)
     {c : Cmd} (hdecl : c.CtorDecl) (hstep : CmdStep db c db') : db'.TermsBuild := by
-  obtain ⟨d, hreach, hcl⟩ := hstep
+  obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
   | action a =>
       have hv : evalAction db a = some d := hreach
@@ -178,6 +178,10 @@ theorem cmdStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.Terms
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       intro g q ht
       exact Signature.IsCtor.update hdecl (h g q (Database.terms_setSig ▸ ht))
+  | check q =>
+      obtain ⟨_, rfl⟩ := hreach
+      rw [hcl.eq_of_allConstructors hc.sig]
+      exact h
 
 theorem programStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.TermsBuild)
     {p : Program} (hdecl : p.CtorDecls) (hstep : ProgramStep db p db') : db'.TermsBuild := by

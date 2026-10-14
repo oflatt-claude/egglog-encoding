@@ -140,6 +140,7 @@ def Cmd.toEgg (sig : Signature) : Cmd → String
     | none => "(constructor " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
         ++ ") Math)"
     | some m => FnDecl.toEgg ((Cmd.decl f d).sigBind sig) f d m
+  | .check q => "(check" ++ String.join (q.map fun p => " " ++ p.toEgg sig) ++ ")"
 
 /-! ### Collecting the signature
 
@@ -188,6 +189,7 @@ def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .run _ => []
   | .saturate _ => []
   | .decl f d => (f, d.entryWidth) :: (d.merge.map MergeSpec.fnArities).getD []
+  | .check q => q.flatMap Pattern.fnArities
 
 /-- Every function the program uses, with its arity, deduplicated. -/
 def Program.fnArities (p : Program) : List (FnName × Nat) :=

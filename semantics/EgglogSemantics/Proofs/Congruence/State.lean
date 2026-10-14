@@ -1,3 +1,5 @@
+import EgglogSemantics.Proofs.Congruence.Read
+import EgglogSemantics.Proofs.Congruence.Properties
 import EgglogSemantics.Proofs.Congruence.Correspond
 
 /-! Soundness invariants on retained single-output view and union-find entries. -/

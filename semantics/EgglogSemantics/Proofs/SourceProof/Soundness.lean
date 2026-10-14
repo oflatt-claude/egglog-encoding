@@ -52,7 +52,7 @@ theorem checkNode_supported {P : Program} {C : Context} {db : Database}
           intro d hd
           obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hd
           exact hp q hq
-      | action _ | run _ | saturate _ | decl _ _ => simp at h
+      | action _ | run _ | saturate _ | decl _ _ | check _ => simp at h
 
 mutual
 
