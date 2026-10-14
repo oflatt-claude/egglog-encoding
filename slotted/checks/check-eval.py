@@ -353,14 +353,14 @@ def goal_reporting():
         nested_goal = next(k for k in head if k.startswith("ref-nested goal"))
         assert cells[enc_goal] == "yes" and cells[nested_goal] == outcome
         assert cells["egglog elapsed (s)"] == "2.3"
-        assert cells["ref-nested elapsed (s)"] == "1.2"
+        assert cells["ref-nested elapsed (s)"] == ("timeout" if outcome == "timeout" else "1.2")
         assert cells["ref-multi goal"] == cells["ref-multi elapsed (s)"] == ""
         assert R.graph_cell(nested) in table[0]
         assert not V.successful([enc, nested], ("encoding", "ref-nested"), True)
         for rendered in (R.markdown(head, table), R.html([("Full report", "", head, table)])):
             assert "elapsed (s)" in rendered and "no (1.2)" not in rendered
         long = dict(zip(R.LONG_HEAD, R.long_cells(nested), strict=True))
-        assert long["goal"] == outcome and long["seconds"] == "1.2"
+        assert long["goal"] == outcome and long["seconds"] == ("timeout" if outcome == "timeout" else "1.2")
 
 
 def summary_reporting():
@@ -384,7 +384,7 @@ def summary_reporting():
         nested.goal = goal
         nested.seconds, nested.nodes, nested.classes = None, None, 0
         head, table = R.summary([nested], ("ref-nested",))
-        assert table == [["MMM (1st)", "—"]]
+        assert table == [["MMM (1st)", "timeout" if goal == "timeout" else "—"]]
         errors = V.failures([nested], ("ref-nested",), False)
         assert len(errors) == 1 and f"goal not reached ({goal})" in errors[0]
 

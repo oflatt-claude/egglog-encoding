@@ -154,8 +154,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--slotted-timeout",
         type=_positive_int,
-        default=300,
-        help="seconds per slotted benchmark process (default: 300)",
+        default=150,
+        help="seconds per slotted benchmark process (default: 150)",
     )
     parser.add_argument(
         "--slotted-jobs",

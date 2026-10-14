@@ -12,8 +12,13 @@ from scripts import nightly_bench as nightly
 
 
 @pytest.mark.parametrize("slotted_status", [0, 1])
+@pytest.mark.parametrize("explicit_options", [False, True])
 def test_nightly_publishes_one_complete_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], slotted_status: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    slotted_status: int,
+    explicit_options: bool,
 ) -> None:
     page, cache = tmp_path / "report.html", tmp_path / "report.jsonl"
     cache.write_text("proof observations\n")
@@ -29,7 +34,7 @@ def test_nightly_publishes_one_complete_report(
         return 0
 
     def slotted(*, timeout: int, jobs: int) -> int:
-        assert (timeout, jobs) == (17, 2)
+        assert (timeout, jobs) == ((17, 2) if explicit_options else (150, 1))
         with cache.open("a") as handle:
             handle.write("slotted observations\n")
         return slotted_status
@@ -37,7 +42,8 @@ def test_nightly_publishes_one_complete_report(
     monkeypatch.setattr(nightly, "_run", run)
     monkeypatch.setattr(nightly, "_run_slotted", slotted)
     output = tmp_path / "published"
-    assert nightly.main([str(output), "--rounds", "1", "--slotted-timeout", "17", "--slotted-jobs", "2"]) == 0
+    extra = ["--slotted-timeout", "17", "--slotted-jobs", "2"] if explicit_options else []
+    assert nightly.main([str(output), "--rounds", "1", *extra]) == 0
     assert len(calls) == len(nightly.TARGETS) * len(nightly.ENDPOINTS) + 1
     assert calls[-1] == (nightly.BRANCH, nightly.HEADLINE, True, 1)
     assert (output / "index.html").read_bytes() == page.read_bytes()

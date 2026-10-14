@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from benchmarking import models
+from benchmarking.reports.catalog import ReportTable
 from benchmarking.reports.interactive import write_interactive_report
 from benchmarking.reports.interactive_runtime import InteractiveRuntime, scope_for_comparison
 from benchmarking.reports.slotted import slotted_catalog
@@ -123,6 +124,24 @@ def test_single_page_embeds_shared_data_and_slotted_tables_without_iframe(tmp_pa
     catalog = slotted_catalog(cache.store.records)
     assert "different: nodes" in str(catalog)
     assert "SLOTTED CORRECTNESS CHECKS FAILED OR INCOMPLETE" in str(catalog)
+
+
+def test_timeout_cells_show_the_outcome_in_cli_and_nightly(tmp_path: Path) -> None:
+    cache, _config, _args, task, rows = _case(tmp_path)
+    reports = importlib.import_module("eval_report")
+    encoding = rows[0]
+    encoding.goal, encoding.seconds = "timeout", 300.125
+    cache.append(task, rows)
+
+    assert reports.seconds_cell(encoding) == "timeout"
+    assert reports.summary(rows, ("encoding", "ref-multi"))[1][0][1:] == ["timeout", "0.125"]
+    catalog = slotted_catalog(cache.store.records)
+    table = catalog.sections[0].blocks[0]
+    assert isinstance(table, ReportTable)
+    assert table.rows[0].cells[1].display == "timeout"
+    # Keep elapsed time in the cache and cell data, but don't print it as a result.
+    assert cache.store.records[0]["wall_sec"] == 300.125
+    assert table.rows[0].cells[1].raw == 300.125
 
 
 def test_reference_treatments_cannot_silently_run_proofs() -> None:

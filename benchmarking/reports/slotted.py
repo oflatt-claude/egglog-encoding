@@ -42,6 +42,13 @@ def workload_label(study: str, case: str, rules: int | None) -> str:
     return f"{study}: {case}{suffix}"
 
 
+def elapsed_time(seconds: float | None, goal: str) -> str:
+    """A timeout is a censored observation, not a completed execution time."""
+    if goal == "timeout":
+        return "timeout"
+    return "" if seconds is None else f"{seconds:.3g}"
+
+
 def _label(evidence: SlottedEvidence) -> str:
     return workload_label(evidence["study"], evidence["case"], evidence["rules"])
 
@@ -105,7 +112,8 @@ def slotted_catalog(records: Sequence[ReportRecord]) -> ReportCatalog:
             for side in pair:
                 value = group.get(side)
                 seconds = None if value is None else value["wall_sec"]
-                cells.append(text_cell(seconds, "—" if seconds is None else f"{seconds:.3g}"))
+                label = "—" if value is None else elapsed_time(seconds, value["slotted"]["goal"]) or "—"
+                cells.append(text_cell(seconds, label))
             rows.append(ReportRow("/".join(key), tuple(cells)))
         blocks.append(
             ReportTable(
@@ -116,7 +124,7 @@ def slotted_catalog(records: Sequence[ReportRecord]) -> ReportCatalog:
                     *(ReportColumn(side, LABELS.get(side, side), "right") for side in pair),
                 ),
                 tuple(rows),
-                "Seconds from one process, including unsuccessful runs. Latest cached workload versions; "
+                "Seconds from one process; timeout means the time limit was reached. Latest cached workload versions; "
                 "rewrite budgets, provenance and correctness results are below. "
                 "Snapshot reference timings are diagnostic only.",
             )

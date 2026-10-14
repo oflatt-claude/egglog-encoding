@@ -165,7 +165,7 @@ def main(argv=None):
     return 1 if errors else 0
 
 
-def nightly(report_path, *, env=None, timeout=300, jobs=1):
+def nightly(report_path, *, env=None, timeout=150, jobs=1):
     """Populate the shared report cache using the paper's rewrite budgets."""
     build(env=env)
     return main(

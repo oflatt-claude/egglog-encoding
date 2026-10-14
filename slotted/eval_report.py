@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 
 from benchmarking.reports.slotted import EXACT_PAIRS as EXACT_PAIRS
-from benchmarking.reports.slotted import LABELS, workload_label
+from benchmarking.reports.slotted import LABELS, elapsed_time, workload_label
 from benchmarking.reports.slotted import SIDES as SIDES
 
 
@@ -171,7 +171,7 @@ LONG_HEAD = (
     "paper (iters, nodes, classes, sat.)",
 )
 SUMMARY_NOTE = (
-    "Seconds, including unsuccessful runs; — means unavailable. "
+    "Seconds for completed runs; timeout means the time limit was reached, and — means unavailable. "
     "SDQL uses 44 rules unless noted. ref-nested uses syntactic substitution. "
     "Budgets, graph sizes, and snapshot-reference timings are in the full report."
 )
@@ -208,7 +208,7 @@ def vs_cell(r):
 
 
 def seconds_cell(r):
-    return "" if r.seconds is None else f"{r.seconds:.3g}"
+    return elapsed_time(r.seconds, r.goal)
 
 
 def graph_cell(r):

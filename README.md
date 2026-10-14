@@ -380,7 +380,9 @@ multipattern and nested timing tables. All observations and their correctness
 evidence share `.reports.jsonl`; `index.jsonl` is the complete downloadable cache.
 The slotted tables require raw class/node counts and verified isomorphism for
 egglog/ref-multi and egglog-no-aliasing/ref-nested-snapshot. Failures and missing
-evidence appear in an error block below the timings.
+evidence appear in an error block below the timings. Timed-out runs display `timeout`
+instead of a completed-run time. Nightly slotted processes use a 150-second timeout
+(`--slotted-timeout` to override); local `./bench.py slotted` runs default to 300 seconds.
 
 `./bench.py slotted array --params 0` collects a small slotted comparison through
 the same cache. Use `--report /tmp/slotted.jsonl` for a disposable cache and
