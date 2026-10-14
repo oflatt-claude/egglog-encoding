@@ -190,17 +190,17 @@ def pA : Program := ctorHeader ++ [.decl "f" stuckDecl, .action (.expr (.app "f"
 
 def dA : FDatabase := (execM pA).getD FDatabase.empty
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem execM_pA : execM pA = some dA := rfl
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dA_sig : dA.sig = Function.update baseSig "f" (some stuckDecl) := rfl
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dA_row : (Row.mk "f" [] [tA]) ∈ dA.rows := by decide
@@ -365,35 +365,35 @@ def pB : Program :=
 
 def dB : FDatabase := (execM pB).getD FDatabase.empty
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem execM_pB : execM pB = some dB := rfl
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_sig : dB.sig = Function.update baseSig "f" (some minDecl) := rfl
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **The interpreter's final state holds both rows at the one key class.** -/
 theorem dB_row1 : (Row.mk "f" [] [t1]) ∈ dB.rows := by decide
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_row2 : (Row.mk "f" [] [t2]) ∈ dB.rows := by decide
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_mergeOf : dB.sig.mergeOf "f" =
     some (MergeSpec.merge [.union (.var "old") (.var "new")]
       [.min (.var "old") (.var "new")]) := rfl
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **`hjoin` holds**, and not vacuously: `min` is a join for `leB`. -/
@@ -421,7 +421,7 @@ theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   · exact ⟨Or.inr (Or.inr ⟨⟨_, rfl⟩, not_sing_of_two ha2⟩),
       Or.inr (Or.inr ⟨⟨_, rfl⟩, not_sing_of_two hb2⟩)⟩
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- `hjoin` is **not** vacuous here: on two constructor terms the body's `union` goes
@@ -465,7 +465,7 @@ theorem not_leB_t1_t2 : ¬ leB [t1] [t2] := by
     simp [t1, t2, Term.blt, Lit.blt] at hlt
   · exact hs ⟨t1, rfl⟩
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **Refutation B.**  `leB` is reflexive, transitive and antisymmetric, `hjoin` holds
@@ -539,17 +539,17 @@ def pC : Program :=
 
 def dC : FDatabase := (execM pC).getD FDatabase.empty
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem execM_pC : execM pC = some dC := rfl
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_sig : dC.sig = Function.update baseSig "f" (some cDecl) := rfl
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_mergeOf : dC.sig.mergeOf "f" =
@@ -561,7 +561,7 @@ colliding rows `mergeEnv` calls `old` or which one the pass overwrites. -/
 def vsC : List Term :=
   ((dC.rows.find? fun r => r.fn == "f").getD ⟨"f", [], []⟩).out
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_row : (Row.mk "f" [] vsC) ∈ dC.rows := by decide
@@ -573,7 +573,7 @@ def okA (vs : List Term) : Bool :=
      | [.app "C" [p, q]] => decide (p ≠ tA) && decide (q ≠ tA)
      | _ => true)
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_okA : okA vsC = true := by decide
@@ -590,7 +590,7 @@ theorem not_leC_of_okA {vs : List Term} (h : okA vs = true) : ¬ leC [tA] vs := 
     · exact h'.2.2 (by simpa using h₂.symm)
   · simp at hlen
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **`hjoin` holds**, and the merge is total: `(C old new)` computes a value at every
@@ -624,7 +624,7 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
   · exact ⟨Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩),
       Or.inr (Or.inr ⟨⟨_, _, rfl⟩, by omega⟩)⟩
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- `hjoin` is not vacuous here either, and the merge is **total**: `(C old new)`
@@ -657,7 +657,7 @@ theorem pC_reaches_entryA {db : Database}
   exact (ProgramStep.contained r2).terms
     ((MergeClosure.contained hcl).terms (Database.mem_addTerm _ _))
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **Refutation C.**  `leC` is reflexive and antisymmetric, the merge is total and
@@ -681,7 +681,7 @@ fails at `d.toDatabase`, with no `ProgramStep` and no `MergeStep` in sight.
 This is what makes the three counterexamples robust to a repair of `hjoin`: they are not
 artefacts of the specification reaching states the interpreter does not. -/
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_out_1 : dB.toDatabase.Out "f" [] [t1] :=
@@ -694,7 +694,7 @@ theorem dB_out_1 : dB.toDatabase.Out "f" [] [t1] :=
 theorem dB_not_current : ¬ dB.toDatabase.Current leB "f" [] [t2] :=
   fun hcur => not_leB_t1_t2 (hcur.2 [t1] dB_out_1)
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_out_a : dC.toDatabase.Out "f" [] [tA] :=
@@ -814,14 +814,14 @@ theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName}
     rw [hstep, Option.some.injEq] at h''
     exact h'' ▸ htail
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pA_legal : FDatabase.empty.ProgramLegal pA :=
   legal_header (legal_decl_cons rfl rfl rfl rfl
     (legal_action_cons rfl rfl rfl rfl rfl rfl trivial))
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pB_legal : FDatabase.empty.ProgramLegal pB :=
@@ -829,7 +829,7 @@ theorem pB_legal : FDatabase.empty.ProgramLegal pB :=
     (legal_action_cons rfl rfl rfl rfl rfl rfl
       (legal_action_cons rfl rfl rfl rfl rfl rfl trivial)))
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pC_legal : FDatabase.empty.ProgramLegal pC :=
@@ -838,15 +838,15 @@ theorem pC_legal : FDatabase.empty.ProgramLegal pC :=
       (legal_action_cons rfl rfl rfl rfl rfl rfl
         (legal_action_cons rfl rfl rfl rfl rfl rfl trivial))))
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pA_reads : ReadsAreAtoms pA := rfl
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pB_reads : ReadsAreAtoms pB := rfl
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem pC_reads : ReadsAreAtoms pC := rfl

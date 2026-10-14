@@ -203,7 +203,6 @@ theorem execLocalActions_atom_of_eval {d : FDatabase} {f : FnName} {cols : List 
       Option.map_some]
     rfl
   · change Term.app f ts ∈ ({d with env := σ ++ d.env}.addTerm (.app f ts)).terms
-    simp only [FDatabase.mem_addTerm_terms]
-    exact Or.inl ((Term.mem_subtermList _).mpr (Term.self_mem_subterms _))
+    exact FDatabase.self_mem_addTerm _ _
 
 end Egglog

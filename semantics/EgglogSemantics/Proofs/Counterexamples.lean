@@ -167,13 +167,12 @@ def dEx : FDatabase := FDatabase.empty.addTerm t0
 
 theorem dEx_inv : dEx.Inv := FDatabase.Inv.empty.addTerm t0
 
-theorem t0_mem : t0 ∈ dEx.terms := by
-  simp [dEx, FDatabase.addTerm, t0, List.mem_dedup]
+theorem t0_mem : t0 ∈ dEx.terms := FDatabase.self_mem_addTerm _ _
 
 /-- `t0` is its own witness. There is no `Cong.refl`, so this is the *asserted* reflexive
 equation `addTerm` wrote, read back. -/
 theorem t0_cong : (t0, t0) ∈ (dEx.addTerm t0).closureF :=
-  (FDatabase.mem_closureF_addTerm dEx_inv.eqs).mpr (Database.mem_addTerm t0 dEx.toDatabase)
+  (FDatabase.mem_closureF_addTerm dEx_inv.closed).mpr (Database.mem_addTerm t0 dEx.toDatabase)
 
 /-- The pattern `0` matches under a substitution binding `x`, which the pattern does not
 mention: `patternHolds` reads `σ` only through `d.env ++ σ`. -/
@@ -208,7 +207,7 @@ theorem mem_matchQuery_ex : [("x", t0)] ∈ matchQuery dEx qEx := by
     intro b hb
     rw [List.mem_singleton] at hb
     subst hb
-    simp [FDatabase.valueTerms, dEx, FDatabase.addTerm, t0, List.mem_dedup]
+    exact List.mem_filter.mpr ⟨t0_mem, rfl⟩
   · change (patternHolds dEx (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) &&
       (patternHolds dEx (.expr (.var "x")) (Env.canon ["x"] [("x", t0)]) && true)) = true
     rw [show Env.canon ["x"] [("x", t0)] = [("x", t0)] from rfl, holds_var]

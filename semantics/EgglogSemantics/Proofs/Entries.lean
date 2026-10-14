@@ -281,7 +281,7 @@ theorem congOn_self {db : Database} (t : Term) : CongOn db [t] t t :=
 /-- **`patternHolds` is `Matches`, at a diagonal state whose index is faithful.**
 `patternHolds_iff` with `Signature.AllConstructors` traded for the two invariants an encoded
 target has; only the read branch differs, and there it is `mem_terms_of_patternHolds_entry`. -/
-theorem matches_of_patternHolds {d : FDatabase} (he : d.EqsInTerms) (hr : d.EqsRefl)
+theorem matches_of_patternHolds {d : FDatabase} (he : d.Closed) (hr : d.EqsRefl)
     (hidx : d.IndexOk) {p : Pattern} {σ : Env} (h : patternHolds d p σ = true) :
     Matches d.toDatabase p σ := by
   cases p with
@@ -307,7 +307,7 @@ theorem matches_of_patternHolds {d : FDatabase} (he : d.EqsInTerms) (hr : d.EqsR
 diagonal target with a faithful index. `validQuerySubst_of_mem_matchQuery` with its
 signature hypothesis replaced; the repackaging from one restricted substitution to the
 specification's `Env.UnionAll` of per-pattern ones is the same. -/
-theorem validQuerySubst_of_mem_matchQuery_diag {d : FDatabase} (he : d.EqsInTerms)
+theorem validQuerySubst_of_mem_matchQuery_diag {d : FDatabase} (he : d.Closed)
     (hr : d.EqsRefl) (hidx : d.IndexOk) {q : Query} {σ : Env} (h : σ ∈ matchQuery d q) :
     ∃ τ, ValidQuerySubst d.toDatabase q τ ∧ Env.Agree τ σ := by
   simp only [matchQuery, List.mem_filter, mem_assignments, List.all_eq_true] at h
@@ -395,7 +395,8 @@ theorem FDatabase.addAtom_eq_addRow {d : FDatabase} {f : FnName} {dc : FnDecl}
 /-- Atom insertion preserves existing rows. -/
 theorem mem_addAtom_rows {d : FDatabase} {t : Term} {r : Row}
     (h : r ∈ d.rows) : r ∈ (d.addAtom t).rows := by
-  simp [FDatabase.addAtom, FDatabase.addTerm, h]
+  simp only [FDatabase.addAtom, List.mem_dedup, List.mem_append]
+  exact Or.inr (FDatabase.mem_addTerm_rows_of_mem h)
 
 /-- **A row a firing neither displaced nor rewrote is a row of its result.** The skip branch
 filters `r₁` out and moves nothing else; the body branch filters `r₁` and rewrites `r₂`. -/
@@ -417,7 +418,7 @@ theorem mem_rows_of_mergeOneOriented {cl : Finset (Term × Term)} {d e : FDataba
         obtain ⟨vs, hvs, he⟩ := Option.map_eq_some_iff.mp hfire
         subst he
         refine List.mem_map.mpr ⟨r, List.mem_filter.mpr
-          ⟨FDatabase.mem_addTerm_rows.mpr (Or.inr ?_), by simpa using h₁⟩, by simp [h₂]⟩
+          ⟨FDatabase.mem_addTerm_rows_of_mem (?_), by simpa using h₁⟩, by simp [h₂]⟩
         exact FDatabase.execActions_rows hmb r hm
     next => exact absurd hfire (by simp)
   next => exact absurd hfire (by simp)

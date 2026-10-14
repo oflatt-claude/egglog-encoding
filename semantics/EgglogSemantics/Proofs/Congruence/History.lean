@@ -91,7 +91,7 @@ theorem EntryRowsUF.addAtom {d : FDatabase} (hshape : MergeShape d.sig)
   refine h.step rfl (fun s hs => FDatabase.mem_addTerm_of_mem hs)
     (RowsCarryUF.of_subset fun r hr => mem_addAtom_rows hr) ?_
   intro f dc hd body res hm cs x hlen hmem
-  rcases Egglog.FDatabase.mem_addTerm_terms.mp hmem with hsubterm | hold
+  rcases Egglog.FDatabase.mem_addTerm_terms_imp hmem with hsubterm | hold
   · by_cases he : Term.app f (cs ++ [x]) = t
     · subst t
       have hout := (hshape f dc hd body res hm).2.2.2.1
@@ -187,7 +187,7 @@ theorem mergeOneOriented_survivorUF {d e : FDatabase} {cl : Finset (Term × Term
   refine ⟨old, new, lowerId old new, hold, hnew, hfn, hargs, ?_, hreach⟩
   rw [he]
   refine List.mem_map.mpr ⟨r₂, List.mem_filter.mpr ⟨?_, by simpa using hne.symm⟩, by simp⟩
-  exact Egglog.FDatabase.mem_addTerm_rows.mpr (Or.inr (mem_rows_of_mergeLinks hm₂))
+  exact Egglog.FDatabase.mem_addTerm_rows_of_mem ((mem_rows_of_mergeLinks hm₂))
 
 theorem mergeOneOriented_rowsCarryUF {cl : Finset (Term × Term)} {d e : FDatabase}
     {r₁ r₂ : Row} (hshape : MergeShape d.sig) (hidx : d.IndexOk)
@@ -269,8 +269,7 @@ theorem mergeOneOriented_newEntryRow {d e : FDatabase} {cl : Finset (Term × Ter
         rw [he]
         refine List.mem_map.mpr ⟨u, List.mem_filter.mpr ⟨?_, by simpa using hu₁⟩,
           by simp [hu₂, u]⟩
-        apply Egglog.FDatabase.mem_addTerm_rows.mpr
-        apply Or.inr
+        apply Egglog.FDatabase.mem_addTerm_rows_of_mem
         have hrows := mergeLinks_rows (d := { d with env := mergeEnv [old] [new] })
           hdc (by simp [hmerge]) (by simpa using hlen.symm)
           (hshape _ dc hdc body res hmerge).2.2.2.1 old new
@@ -280,9 +279,9 @@ theorem mergeOneOriented_newEntryRow {d e : FDatabase} {cl : Finset (Term × Ter
         · exact hrows.2
     · exact Or.inl (FDatabase.subterms_of_columns hsc hcols _ hm ht)
   rw [he] at hmem
-  rcases Egglog.FDatabase.mem_addTerm_terms.mp hmem with hm | hm
+  rcases Egglog.FDatabase.mem_addTerm_terms_imp hmem with hm | hm
   · exact Or.inl (hsc _ hsurv _ hm)
-  · rcases mem_terms_mergeLinks.mp hm with hm | hm | hm
+  · rcases mem_terms_mergeLinks_imp hm with hm | hm | hm
     · exact hlink new (by simp) hm
     · exact hlink old (by simp) hm
     · exact Or.inl hm

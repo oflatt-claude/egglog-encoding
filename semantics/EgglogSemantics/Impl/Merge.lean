@@ -261,10 +261,10 @@ it out of step with that term while buying nothing — congruence never reads a 
 left alone too; a `:no-merge` collision is a program error, not a resolution. -/
 /-- The canonical member of `t`'s congruence class: the congruent term created *first*.
 
-`ts` is `FDatabase.terms`, whose *tail* is the oldest part — `addTerm` prepends and
-`List.dedup` keeps a repeated term's last occurrence, so a term's position is fixed when
-it is first added. The last congruent entry is therefore the earliest-created one, which
-is egglog's representative, its union-find unioning by min id.
+`ts` is `FDatabase.terms`, whose *tail* is the oldest part — `addTerm` prepends what is
+new and leaves a recorded term where it is, so a term's position is fixed when it is first
+added. The last congruent entry is therefore the earliest-created one, which is egglog's
+representative, its union-find unioning by min id.
 
 `canonTerm` is the predicate this is the witness of: a term is canonical exactly when it
 is its own representative. A term `ts` does not hold represents itself.

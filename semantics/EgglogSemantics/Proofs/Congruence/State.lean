@@ -55,11 +55,11 @@ theorem SoundTerms.addTerm {src : Database} {d : FDatabase} {t : Term}
     SoundTerms (d.addTerm t) src := by
   constructor
   · intro f cs e hm
-    rcases List.mem_append.mp (List.mem_dedup.mp hm) with hm' | hm'
+    rcases FDatabase.mem_addTerm_terms_imp hm with hm' | hm'
     · exact hv f cs e hm'
     · exact h.1 f cs e hm'
   · intro x p hm
-    rcases List.mem_append.mp (List.mem_dedup.mp hm) with hm' | hm'
+    rcases FDatabase.mem_addTerm_terms_imp hm with hm' | hm'
     · exact hu x p hm'
     · exact h.2 x p hm'
 

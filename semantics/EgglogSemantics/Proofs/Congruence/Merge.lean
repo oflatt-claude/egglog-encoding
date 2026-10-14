@@ -94,9 +94,9 @@ def mergeLinks (d : FDatabase) (old new : Term) : FDatabase :=
   (d.addAtom (.app ufName [old, lowerId old new])).addAtom (.app ufName [new, lowerId old new])
 
 /-- Indexing an atom changes nothing but the rows; its terms are the atom's and the old ones. -/
-theorem mem_addAtom_terms {d : FDatabase} {t s : Term} :
+theorem mem_addAtom_terms {d : FDatabase} (hc : d.SubtermClosed) {t s : Term} :
     s ∈ (d.addAtom t).terms ↔ s ∈ t.subtermList ∨ s ∈ d.terms :=
-  Egglog.FDatabase.mem_addTerm_terms
+  Egglog.FDatabase.mem_addTerm_terms hc
 
 @[simp] theorem mergeLinks_sig (d : FDatabase) (old new : Term) :
     (mergeLinks d old new).sig = d.sig := rfl
@@ -104,24 +104,31 @@ theorem mem_addAtom_terms {d : FDatabase} {t s : Term} :
 @[simp] theorem mergeLinks_env (d : FDatabase) (old new : Term) :
     (mergeLinks d old new).env = d.env := rfl
 
-theorem mem_terms_mergeLinks {d : FDatabase} {old new t : Term} :
+theorem mem_terms_mergeLinks_imp {d : FDatabase} {old new t : Term}
+    (h : t ∈ (mergeLinks d old new).terms) :
+    t ∈ (Term.app ufName [new, lowerId old new]).subtermList ∨
+      t ∈ (Term.app ufName [old, lowerId old new]).subtermList ∨ t ∈ d.terms := by
+  rcases Egglog.FDatabase.mem_addTerm_terms_imp h with h | h
+  · exact Or.inl h
+  · exact Or.inr (Egglog.FDatabase.mem_addTerm_terms_imp h)
+
+theorem mem_terms_mergeLinks {d : FDatabase} (hc : d.SubtermClosed) {old new t : Term} :
     t ∈ (mergeLinks d old new).terms ↔
       t ∈ (Term.app ufName [new, lowerId old new]).subtermList ∨
         t ∈ (Term.app ufName [old, lowerId old new]).subtermList ∨ t ∈ d.terms := by
-  rw [mergeLinks, mem_addAtom_terms, mem_addAtom_terms]
+  rw [mergeLinks, mem_addAtom_terms (d := d.addAtom (.app ufName [old, lowerId old new]))
+    (hc.addTerm _), mem_addAtom_terms hc]
 
 theorem mem_terms_of_mergeLinks {d : FDatabase} {old new t : Term} (h : t ∈ d.terms) :
     t ∈ (mergeLinks d old new).terms :=
-  mem_terms_mergeLinks.mpr (Or.inr (Or.inr h))
+  Egglog.FDatabase.mem_addTerm_of_mem (Egglog.FDatabase.mem_addTerm_of_mem h)
 
 /-- Both links are recorded as entry terms. -/
 theorem mergeLinks_links (d : FDatabase) (old new : Term) :
     Term.app ufName [old, lowerId old new] ∈ (mergeLinks d old new).terms ∧
       Term.app ufName [new, lowerId old new] ∈ (mergeLinks d old new).terms :=
-  ⟨mem_terms_mergeLinks.mpr (Or.inr (Or.inl ((Term.mem_subtermList _).mpr
-      (Term.self_mem_subterms _)))),
-    mem_terms_mergeLinks.mpr (Or.inl ((Term.mem_subtermList _).mpr
-      (Term.self_mem_subterms _)))⟩
+  ⟨Egglog.FDatabase.mem_addTerm_of_mem (Egglog.FDatabase.self_mem_addTerm d _),
+    Egglog.FDatabase.self_mem_addTerm _ _⟩
 
 theorem mem_rows_of_mergeLinks {d : FDatabase} {old new : Term} {r : Row} (h : r ∈ d.rows) :
     r ∈ (mergeLinks d old new).rows :=
@@ -163,14 +170,14 @@ theorem mem_rows_mergeLinks {d : FDatabase} {dc : FnDecl} (huf : d.sig ufName = 
   simp only [FDatabase.addRow, List.mem_dedup, List.mem_cons] at hr
   rcases hr with hr | hr
   · exact Or.inr (Or.inl hr)
-  rcases Egglog.FDatabase.mem_addTerm_rows.mp hr with hr | hr
+  rcases Egglog.FDatabase.mem_addTerm_rows_imp hr with hr | hr
   · exact (hmg (Egglog.FDatabase.mem_ctorRowList hr).2.1).elim
   change r ∈ (d.addAtom (.app ufName ([old] ++ [lowerId old new]))).rows at hr
   rw [e₁] at hr
   simp only [FDatabase.addRow, List.mem_dedup, List.mem_cons] at hr
   rcases hr with hr | hr
   · exact Or.inl hr
-  rcases Egglog.FDatabase.mem_addTerm_rows.mp hr with hr | hr
+  rcases Egglog.FDatabase.mem_addTerm_rows_imp hr with hr | hr
   · exact (hmg (Egglog.FDatabase.mem_ctorRowList hr).2.1).elim
   · exact Or.inr (Or.inr hr)
 

@@ -38,9 +38,8 @@ theorem FlatRead.holds {d : FDatabase} {ρ : Env} {p : Pattern} (h : FlatRead d 
       have hb' : b.eval d.sig σ = some i := by
         rw [Expr.eval_agreeOn b (fun v hv => hag v (List.mem_union_iff.mpr (Or.inr hv)))]
         exact hb
-      have hmem : i ∈ ((d.addTerm i).addTerm i).terms := by
-        simp only [FDatabase.mem_addTerm_terms]
-        exact Or.inr (Or.inr hi)
+      have hmem : i ∈ ((d.addTerm i).addTerm i).terms :=
+        FDatabase.mem_addTerm_of_mem (FDatabase.mem_addTerm_of_mem hi)
       have hcl : (i, i) ∈ ((d.addTerm i).addTerm i).closureF :=
         Egglog.FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl, hmem⟩))
       change patternHolds d (.eq a b) σ = true

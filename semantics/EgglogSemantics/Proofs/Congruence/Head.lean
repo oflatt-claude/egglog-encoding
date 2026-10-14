@@ -102,7 +102,7 @@ retained target entry is justified by its post-state. Source-head totality is se
 the source fragment rules out unbound variables and literal unions. -/
 theorem encodedRule_firing_sound {src : Database} {d d' : FDatabase} {r : Rule} {σ : Env}
     (hw : src.WF) (hb : src.TermsBuild) (hcs : src.sig.AllConstructors)
-    (hr : d.EqsRefl) (he : d.EqsInTerms) (hi : d.IndexOk) (hsc : d.SubtermClosed)
+    (hr : d.EqsRefl) (he : d.Closed) (hi : d.IndexOk) (hsc : d.SubtermClosed)
     (hs : SoundTerms d src)
     (hof : ∀ p ∈ r.query, p.OrderingFree)
     (hg : ∀ p ∈ r.query, p.Grounded) (hk : Query.VarsKeyed r.query)
@@ -183,7 +183,7 @@ assuming the existence of a convenient source post-state. -/
 theorem encodedRule_firing {src : Database} {d d' : FDatabase} {r : Rule} {σ : Env}
     (hw : src.WF) (hb : src.TermsBuild) (hcs : src.sig.AllConstructors)
     (hnames : ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f)
-    (hr : d.EqsRefl) (he : d.EqsInTerms) (hi : d.IndexOk) (hsc : d.SubtermClosed)
+    (hr : d.EqsRefl) (he : d.Closed) (hi : d.IndexOk) (hsc : d.SubtermClosed)
     (hs : SoundTerms d src) (hof : r.OrderingFree)
     (hg : ∀ p ∈ r.query, p.Grounded) (hk : Query.VarsKeyed r.query)
     (hscoped : Actions.Scoped r.actions (Query.vars r.query))
@@ -235,7 +235,7 @@ theorem encodedRule_firing_of_programStep {P pre rest : Program} (hdom : P.Encod
         Cmd.NoLits.of_domain hdom hlit hmem⟩
   exact encodedRule_firing hcs.wf
     (termsBuild_of_programStep (fun c hc => hdom.ctorsOnly c (hsub c hc)) hpre) hcs.sig
-    (sourceNames_of_programStep hdom hsub hpre) hn.eqsRefl hi.eqs hi.index
+    (sourceNames_of_programStep hdom hsub hpre) hn.eqsRefl hi.closed hi.index
     (Egglog.FDatabase.SubtermClosed.of_wf hi.wf) hs
     (Program.OrderingFree.of_mem hdom.noMin hmem)
     (fun p hp => ((hdom.queryEncodable _ hmem).1 p hp).1)

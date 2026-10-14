@@ -229,8 +229,10 @@ theorem global_action_simulation {src post : Database} {d D : FDatabase} {a : Ac
   have huf : (d.sig ufName).isSome = true := by simp [h.uf]
   have hwrites := encodeAction_sourceWrites hw hcs hp hd huf heval hs
   have hD := hwrites.execProgram hw hsafe (h.mono_src (evalAction_contained hs)) run
-  obtain ⟨m, hm, hr⟩ := encodeAction_reads hcs hp hc hd huf hρ hreads hs
-  obtain ⟨m', hm', hmem⟩ := exists_execActions_of_execProgramM (encodeAction_isAtomWrite a) run
+  obtain ⟨m, hm, hr⟩ := encodeAction_reads hcs (Egglog.FDatabase.SubtermClosed.of_wf h.inv.wf)
+    hp hc hd huf hρ hreads hs
+  obtain ⟨m', hm', hmem⟩ :=
+    exists_execActions_of_execProgramM (encodeAction_isAtomWrite a) h.inv.closed run
   have heq : m' = m := Option.some.inj (hm'.symm.trans hm)
   subst m'
   have hn := execActions_noUnions (encodeAction_unionFree a) h.noUnions hm

@@ -94,13 +94,14 @@ noncomputable def rowsWeight (ts : List Term) (d : FDatabase) : Nat :=
 @[simp] theorem tableRows_addTerm (d : FDatabase) (t : Term) :
     tableRows (d.addTerm t) = tableRows d := by
   ext r
-  simp only [mem_tableRows, Egglog.FDatabase.mem_addTerm_rows, Egglog.FDatabase.addTerm_sig]
+  simp only [mem_tableRows, Egglog.FDatabase.addTerm_sig]
   constructor
-  · rintro ⟨hr | hr, hm⟩
+  · rintro ⟨hr, hm⟩
+    rcases Egglog.FDatabase.mem_addTerm_rows_imp hr with hr | hr
     · exact (hm (Egglog.FDatabase.mem_ctorRowList hr).2.1).elim
     · exact ⟨hr, hm⟩
   · rintro ⟨hr, hm⟩
-    exact ⟨Or.inr hr, hm⟩
+    exact ⟨Egglog.FDatabase.mem_addTerm_rows_of_mem hr, hm⟩
 
 /-- A collision can leave its survivor and the two new UF links, plus untouched old table
 rows. -/
@@ -130,7 +131,7 @@ theorem mergeOneOriented_tableRows {cl : Finset (Term × Term)} {d e : FDatabase
   · exact Or.inr (Or.inl (by simpa [hs₂] using hr.symm))
   · obtain rfl : s = r := by simpa [hs₂] using hr
     have hmr' : d.sig.mergeOf s.fn ≠ none := hmr
-    rcases Egglog.FDatabase.mem_addTerm_rows.mp hs with hs | hs
+    rcases Egglog.FDatabase.mem_addTerm_rows_imp hs with hs | hs
     · exact (hmr' (Egglog.FDatabase.mem_ctorRowList hs).2.1).elim
     · rcases mem_rows_mergeLinks (d := { d with env := mergeEnv [old] [new] }) huf
           (by simp [tableDecl]) rfl rfl hs hmr' with hs | hs | hs

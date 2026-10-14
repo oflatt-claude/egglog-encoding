@@ -19,7 +19,7 @@ theorem UFTermsDescend.addTerm {d : FDatabase} (h : UFTermsDescend d) {t : Term}
     (hn : ∀ a b, Term.app ufName [a, b] ∈ t.subtermList →
       b = a ∨ Term.blt b a = true) : UFTermsDescend (d.addTerm t) := by
   intro a b hm
-  rcases Egglog.FDatabase.mem_addTerm_terms.mp hm with hm | hm
+  rcases Egglog.FDatabase.mem_addTerm_terms_imp hm with hm | hm
   · exact hn a b hm
   · exact h a b hm
 

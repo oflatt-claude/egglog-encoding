@@ -44,7 +44,8 @@ theorem encodedRule_firing_reads {P : Program} {d : FDatabase} {src querySrc pos
         (src' := { querySrc with env := σ ++ querySrc.env }) ⟨Set.Subset.refl _⟩
   obtain ⟨tp, htp, hpost⟩ := encodeActions_reads (src := { querySrc with env := σ ++ querySrc.env })
     (d := { d with env := ρ ++ d.env })
-    hcs hp hctor hd (by simp [h.uf]) henvread hstart hsp
+    hcs (Egglog.FDatabase.SubtermClosed.of_wf (d := d) h.inv.wf) hp hctor hd (by simp [h.uf])
+    henvread hstart hsp
   refine ⟨ρ, { tp with env := d.env, rules := d.rules }, hmatch, ?_, ?_⟩
   · change (execActions { d with env := ρ ++ d.env } (encodeActions r.actions)).map _ = _
     rw [htp]; rfl

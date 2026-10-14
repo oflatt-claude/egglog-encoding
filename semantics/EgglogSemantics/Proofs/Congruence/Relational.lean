@@ -47,7 +47,7 @@ theorem rebuild_diagonal (d : FDatabase) :
 
 theorem mergeRound_eq {d : FDatabase} (h : d.EqsRefl) :
     mergeRound d = d.mergeRound := by
-  rw [mergeRound, ← rebuild_diagonal d, diagonal_eq_closure h]
+  rw [mergeRound, mergeRoundWith_eq, ← rebuild_diagonal d, diagonal_eq_closure h]
   rfl
 
 theorem mergeSaturate_eq (n : Nat) {d : FDatabase} (h : d.NoUnions) :

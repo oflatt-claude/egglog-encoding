@@ -23,18 +23,21 @@ inductive Term where
 namespace Term
 mutual
 
-/-- Decidable equality. -/
-def decEq : (s t : Term) → Decidable (s = t)
-  | .lit l₁, .lit l₂ =>
-    if h : l₁ = l₂ then .isTrue (by rw [h]) else .isFalse (by simp [h])
-  | .lit _, .app _ _ => .isFalse (by simp)
-  | .app _ _, .lit _ => .isFalse (by simp)
-  | .app f₁ as₁, .app f₂ as₂ =>
-    if hf : f₁ = f₂ then
-      match decEqList as₁ as₂ with
-      | .isTrue ha => .isTrue (by rw [hf, ha])
-      | .isFalse ha => .isFalse (by simp [ha])
-    else .isFalse (by simp [hf])
+/-- Decidable equality. Physically identical terms are equal without a traversal, which
+matters for the proof terms the provenance pass builds: they share subterms heavily. -/
+def decEq (s t : Term) : Decidable (s = t) :=
+  withPtrEqDecEq s t fun _ =>
+    match s, t with
+    | .lit l₁, .lit l₂ =>
+      if h : l₁ = l₂ then .isTrue (by rw [h]) else .isFalse (by simp [h])
+    | .lit _, .app _ _ => .isFalse (by simp)
+    | .app _ _, .lit _ => .isFalse (by simp)
+    | .app f₁ as₁, .app f₂ as₂ =>
+      if hf : f₁ = f₂ then
+        match decEqList as₁ as₂ with
+        | .isTrue ha => .isTrue (by rw [hf, ha])
+        | .isFalse ha => .isFalse (by simp [ha])
+      else .isFalse (by simp [hf])
 
 def decEqList : (as bs : List Term) → Decidable (as = bs)
   | [], [] => .isTrue rfl

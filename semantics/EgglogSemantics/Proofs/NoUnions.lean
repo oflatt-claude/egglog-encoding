@@ -38,19 +38,14 @@ theorem FDatabase.EqsRefl.toDatabase {d : FDatabase} (h : d.EqsRefl) :
   · exact he
   · exact h p hp'
 
-/-- The interpreter's term list is closed under subterms. This is the only part of
-`Database.WF` the reading below needs, and unlike `WF` it is decidable, so a self-test can
-report it at the state it swept. -/
-def FDatabase.SubtermClosed (d : FDatabase) : Prop :=
-  ∀ t ∈ d.terms, ∀ s ∈ t.subtermList, s ∈ d.terms
-
-/-- Decided. -/
+/-- `FDatabase.SubtermClosed`, decided: the only part of `Database.WF` the reading below
+needs, and a self-test can report it at the state it swept. -/
 def FDatabase.subtermClosedB (d : FDatabase) : Bool :=
   d.terms.all fun t => t.subtermList.all fun s => d.terms.contains s
 
 theorem FDatabase.subtermClosedB_iff (d : FDatabase) :
     d.subtermClosedB = true ↔ d.SubtermClosed := by
-  simp [FDatabase.subtermClosedB, FDatabase.SubtermClosed, List.all_eq_true]
+  simp [FDatabase.subtermClosedB, FDatabase.SubtermClosed, Term.ListClosed, List.all_eq_true]
 
 /-- `Database.WF`'s own clause, read back onto the list. -/
 theorem FDatabase.SubtermClosed.of_wf {d : FDatabase} (hw : d.toDatabase.WF) :
@@ -70,9 +65,6 @@ structure FDatabase.NoUnions (d : FDatabase) : Prop where
   sig : Signature.UnionFree d.sig
   /-- No rule head asserts anything, which is what a round runs. -/
   rules : ∀ r ∈ d.rules, Actions.UnionFree r.actions
-
-/-- `addTerm` writes `terms` and `rows`, and nothing else. -/
-theorem FDatabase.addTerm_eqs (t : Term) (d : FDatabase) : (d.addTerm t).eqs = d.eqs := rfl
 
 /-- `addRow` is an `addTerm` and an index write. -/
 theorem FDatabase.addRow_eqs (f : FnName) (as vs : List Term) (d : FDatabase) :
@@ -338,23 +330,6 @@ theorem eq_of_congrKeys {cl : Finset (Term × Term)} (hcl : ∀ p ∈ cl, p.1 = 
           hall' q (by rw [List.zip_cons_cons]; exact List.mem_cons_of_mem _ hq))⟩
       have heq : a = b := hcl (a, b) hab
       rw [heq, ih hrest]
-
-/-- A term the list held it still holds. -/
-theorem FDatabase.mem_addTerm_of_mem {d : FDatabase} {t s : Term} (hs : s ∈ d.terms) :
-    s ∈ (d.addTerm t).terms := by
-  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
-  exact Or.inr hs
-
-/-- Subterm closure survives an `addTerm`: what the list records is closed under subterms
-already. -/
-theorem FDatabase.SubtermClosed.addTerm {d : FDatabase} (h : d.SubtermClosed) (t : Term) :
-    (d.addTerm t).SubtermClosed := by
-  intro u hu s hs
-  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append] at hu ⊢
-  rcases hu with hu | hu
-  · exact Or.inl ((Term.mem_subtermList t).mpr
-      (((Term.mem_subtermList u).mp hs).trans ((Term.mem_subtermList t).mp hu)))
-  · exact Or.inr (h u hu s hs)
 
 theorem FDatabase.SubtermClosed.addRow {d : FDatabase} (h : d.SubtermClosed) (g : FnName)
     (as vs : List Term) : (FDatabase.addRow g as vs d).SubtermClosed :=

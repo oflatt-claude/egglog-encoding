@@ -54,20 +54,176 @@ structure Row where
   out : List Term
   deriving DecidableEq
 
-/-- The constructor entries among `t`'s subterms, each mapping its own children to itself,
-in `subtermList`'s order.
+/-- The constructor row of `t`'s root, if it has one: a constructor application maps its
+own children to itself.
 
 A **declared merge function**'s application is an entry term `f(a…, v…)` that already
 carries its value columns, and `FDatabase.addRow` indexes that one directly; synthesising
 `⟨f, a… ++ v…, [f(a…, v…)]⟩` for it as well would give `f` a second, bogus key class. So
 those are filtered out, and everything else — a declared constructor, or a name nobody
-declared — is recorded exactly as before. `Expr.eval` builds no application of a merge
-function, so on a term the evaluator produced the filter removes nothing. -/
+declared — is recorded. `Expr.eval` builds no application of a merge function, so on a term
+the evaluator produced the filter removes nothing. -/
+def Term.ctorRow (sig : Signature) : Term → List Row
+  | .lit _ => []
+  | .app f as => if (sig.mergeOf f).isSome then [] else [⟨f, as, []⟩]
+
+/-- The constructor rows of all of `t`'s subterms, in `subtermList`'s order: what recording
+`t` into an empty list indexes. -/
 def Term.ctorRowList (sig : Signature) (t : Term) : List Row :=
-  t.subtermList.filterMap fun s =>
-    match s with
-    | .app f as => if (sig.mergeOf f).isSome then none else some ⟨f, as, []⟩
-    | .lit _ => none
+  t.subtermList.flatMap (Term.ctorRow sig)
+
+mutual
+
+/-- The subterms of `t` that neither `ts` nor `new` holds, consed onto `new`, newest first,
+visiting nothing below a term `ts` holds. Every list the interpreter builds is closed under
+subterms (`FDatabase.Closed`), so nothing below a recorded term is missing — and a built
+term shares subterms with the recorded ones, and with itself, far beyond what its tree size
+suggests; the proof terms the provenance pass builds especially. -/
+def Term.record (ts : List Term) : Term → List Term → List Term
+  | t, new =>
+    if t ∈ ts || t ∈ new then new else
+      t :: match t with
+        | .lit _ => new
+        | .app _ args => Term.recordArgs ts args new
+
+/-- `Term.record` over an argument list, first argument first, so that it ends up deepest:
+`subtermList`'s reverse creation order. -/
+def Term.recordArgs (ts : List Term) : List Term → List Term → List Term
+  | [], new => new
+  | a :: as, new => Term.recordArgs ts as (Term.record ts a new)
+
+end
+
+namespace Term
+
+/-- A term list closed under subterms. -/
+def ListClosed (ts : List Term) : Prop := ∀ t ∈ ts, ∀ s ∈ t.subtermList, s ∈ ts
+
+theorem record_of_mem {ts : List Term} {t : Term} (new : List Term) (h : t ∈ ts) :
+    record ts t new = new := by
+  unfold record; rw [if_pos (by simp [h])]
+
+/-- `t` is recorded, unless it was already. -/
+theorem self_mem_record (ts : List Term) (t : Term) (new : List Term) :
+    t ∈ ts ∨ t ∈ record ts t new := by
+  unfold record; split
+  · rename_i h
+    rcases Bool.or_eq_true_iff.mp h with h | h
+    · exact Or.inl (of_decide_eq_true h)
+    · exact Or.inr (of_decide_eq_true h)
+  · exact Or.inr (List.mem_cons_self ..)
+
+mutual
+
+/-- Recording keeps everything recorded so far. -/
+theorem record_mono (ts : List Term) : ∀ (t : Term) (new : List Term),
+    ∀ s ∈ new, s ∈ record ts t new
+  | .lit _, new, s, hs => by
+    unfold record; split
+    · exact hs
+    · exact List.mem_cons_of_mem _ hs
+  | .app _ args, new, s, hs => by
+    unfold record; split
+    · exact hs
+    · exact List.mem_cons_of_mem _ (recordArgs_mono ts args new s hs)
+
+theorem recordArgs_mono (ts : List Term) : ∀ (as : List Term) (new : List Term),
+    ∀ s ∈ new, s ∈ recordArgs ts as new
+  | [], _, _, hs => hs
+  | a :: as, new, s, hs => recordArgs_mono ts as (record ts a new) s (record_mono ts a new s hs)
+
+end
+
+mutual
+
+/-- Recording adds only subterms of `t`. -/
+theorem mem_record (ts : List Term) : ∀ (t : Term) (new : List Term) {s : Term},
+    s ∈ record ts t new → s ∈ t.subtermList ∨ s ∈ new
+  | .lit _, new, s, hs => by
+    unfold record at hs; split at hs
+    · exact Or.inr hs
+    · rcases List.mem_cons.mp hs with rfl | hs
+      · exact Or.inl (List.mem_cons_self ..)
+      · exact Or.inr hs
+  | .app _ args, new, s, hs => by
+    unfold record at hs; split at hs
+    · exact Or.inr hs
+    · rcases List.mem_cons.mp hs with rfl | hs
+      · exact Or.inl (List.mem_cons_self ..)
+      · rcases mem_recordArgs ts args new hs with h | h
+        · exact Or.inl (List.mem_cons_of_mem _ h)
+        · exact Or.inr h
+
+theorem mem_recordArgs (ts : List Term) : ∀ (as : List Term) (new : List Term) {s : Term},
+    s ∈ recordArgs ts as new → s ∈ subtermListL as ∨ s ∈ new
+  | [], _, _, hs => Or.inr hs
+  | a :: as, new, s, hs => by
+    rcases mem_recordArgs ts as (record ts a new) hs with h | h
+    · exact Or.inl (List.mem_append_left _ h)
+    · rcases mem_record ts a new h with h | h
+      · exact Or.inl (List.mem_append_right _ h)
+      · exact Or.inr h
+
+end
+
+mutual
+
+/-- Onto a closed list, recording records every subterm of `t`, and the list stays
+closed. -/
+theorem record_spec (ts : List Term) : ∀ (t : Term) (new : List Term),
+    ListClosed (new ++ ts) →
+    ListClosed (record ts t new ++ ts) ∧ ∀ s ∈ t.subtermList, s ∈ record ts t new ++ ts
+  | .lit _, new, hc => by
+    unfold record; split
+    · rename_i h
+      refine ⟨hc, fun s hs => ?_⟩
+      rw [List.mem_singleton.mp hs]
+      rcases (Bool.or_eq_true _ _).mp h with h | h
+      · exact List.mem_append_right _ (of_decide_eq_true h)
+      · exact List.mem_append_left _ (of_decide_eq_true h)
+    · refine ⟨fun u hu s hs => ?_, fun s hs => ?_⟩
+      · rcases List.mem_cons.mp hu with rfl | hu
+        · rw [List.mem_singleton.mp hs]; exact List.mem_cons_self ..
+        · exact List.mem_cons_of_mem _ (hc u hu s hs)
+      · rw [List.mem_singleton.mp hs]; exact List.mem_cons_self ..
+  | .app f args, new, hc => by
+    unfold record; split
+    · rename_i h
+      refine ⟨hc, fun s hs => ?_⟩
+      have ht : Term.app f args ∈ new ++ ts := by
+        rcases (Bool.or_eq_true _ _).mp h with h | h
+        · exact List.mem_append_right _ (of_decide_eq_true h)
+        · exact List.mem_append_left _ (of_decide_eq_true h)
+      exact hc _ ht s hs
+    · obtain ⟨hc', hsub⟩ := recordArgs_spec ts args new hc
+      refine ⟨fun u hu s hs => ?_, fun s hs => ?_⟩
+      · rcases List.mem_cons.mp hu with rfl | hu
+        · rcases List.mem_cons.mp hs with rfl | hs
+          · exact List.mem_cons_self ..
+          · exact List.mem_cons_of_mem _ (hsub s hs)
+        · exact List.mem_cons_of_mem _ (hc' u hu s hs)
+      · rcases List.mem_cons.mp hs with rfl | hs
+        · exact List.mem_cons_self ..
+        · exact List.mem_cons_of_mem _ (hsub s hs)
+
+theorem recordArgs_spec (ts : List Term) : ∀ (as : List Term) (new : List Term),
+    ListClosed (new ++ ts) →
+    ListClosed (recordArgs ts as new ++ ts) ∧
+      ∀ s ∈ subtermListL as, s ∈ recordArgs ts as new ++ ts
+  | [], _, hc => ⟨hc, fun _ hs => by simp [subtermListL] at hs⟩
+  | a :: as, new, hc => by
+    obtain ⟨hc₁, h₁⟩ := record_spec ts a new hc
+    obtain ⟨hc₂, h₂⟩ := recordArgs_spec ts as (record ts a new) hc₁
+    refine ⟨hc₂, fun s hs => ?_⟩
+    rcases List.mem_append.mp hs with hs | hs
+    · exact h₂ s hs
+    · rcases List.mem_append.mp (h₁ s hs) with h | h
+      · exact List.mem_append_left _ (recordArgs_mono ts as _ s h)
+      · exact List.mem_append_right _ h
+
+end
+
+end Term
 
 /-! ### Finite databases -/
 /-- The executable counterpart of `Database`. Every component is a `List`; membership,
@@ -96,7 +252,7 @@ that bridge unconditional rather than an invariant to be maintained. `Cong` can 
 term the list does not hold would put a term in the denotation that the interpreter cannot
 see. The restriction is not a weakening — `closureTotal` already imposes it on `eqsF`, so
 this is the denotation agreeing with the computation, and it removes nothing from a
-database the interpreter built: `EqsInTerms` below.
+database the interpreter built: `Closed` below.
 
 `rows` is simply dropped: every row is also an entry term in `terms`, put there by
 `addRow` and never taken out, so the index carries nothing the denotation does not already
@@ -139,14 +295,73 @@ def empty : FDatabase where
   env := []
   rules := []
 
-/-- Insert `t` and all of its subterms.
+/-- Insert `t` and all of its subterms, and index the constructor applications among them.
 
-Deduplicated on insertion. That is invisible to `toDatabase`, but not to performance: a
-round's `union` copies every operand's terms, so without it the list length multiplies
-each round and the per-substitution `List.toFinset` in `closureF` goes quadratic on it. -/
+`Term.record` stops at a subterm the list already holds, which is what keeps this linear in
+what is new rather than in the size of `t`'s tree. `FDatabase.Closed`, which every state
+the interpreter builds satisfies, is what makes that exact: `mem_addTerm_terms` reads
+precisely `t.subtermList` back. -/
 def addTerm (t : Term) (d : FDatabase) : FDatabase :=
-  { d with terms := (t.subtermList ++ d.terms).dedup,
-           rows := (Term.ctorRowList d.sig t ++ d.rows).dedup }
+  let new := Term.record d.terms t []
+  { d with terms := new ++ d.terms, rows := new.flatMap (Term.ctorRow d.sig) ++ d.rows }
+
+@[simp] theorem addTerm_sig {d : FDatabase} {t : Term} : (d.addTerm t).sig = d.sig := rfl
+@[simp] theorem addTerm_eqs {d : FDatabase} {t : Term} : (d.addTerm t).eqs = d.eqs := rfl
+@[simp] theorem addTerm_env {d : FDatabase} {t : Term} : (d.addTerm t).env = d.env := rfl
+@[simp] theorem addTerm_rules {d : FDatabase} {t : Term} : (d.addTerm t).rules = d.rules := rfl
+
+/-- The term list is closed under subterms. Every state the interpreter builds satisfies
+it; `addTerm` relies on it to stop at a recorded subterm. -/
+def SubtermClosed (d : FDatabase) : Prop := Term.ListClosed d.terms
+
+theorem mem_addTerm_terms_imp {d : FDatabase} {t s : Term} (h : s ∈ (d.addTerm t).terms) :
+    s ∈ t.subtermList ∨ s ∈ d.terms := by
+  rcases List.mem_append.mp h with h | h
+  · rcases Term.mem_record d.terms t [] h with h | h
+    · exact Or.inl h
+    · simp at h
+  · exact Or.inr h
+
+/-- A term the list held it still holds. -/
+theorem mem_addTerm_of_mem {d : FDatabase} {t s : Term} (hs : s ∈ d.terms) :
+    s ∈ (d.addTerm t).terms :=
+  List.mem_append_right _ hs
+
+theorem self_mem_addTerm (d : FDatabase) (t : Term) : t ∈ (d.addTerm t).terms := by
+  rcases Term.self_mem_record d.terms t [] with h | h
+  · exact List.mem_append_right _ h
+  · exact List.mem_append_left _ h
+
+/-- Under subterm closure, `addTerm` records exactly the subterms of `t`. -/
+theorem mem_addTerm_terms {d : FDatabase} (hc : d.SubtermClosed) {t s : Term} :
+    s ∈ (d.addTerm t).terms ↔ s ∈ t.subtermList ∨ s ∈ d.terms :=
+  ⟨mem_addTerm_terms_imp, fun h =>
+    h.elim ((Term.record_spec d.terms t [] hc).2 s) mem_addTerm_of_mem⟩
+
+/-- Subterm closure survives an `addTerm`. -/
+theorem SubtermClosed.addTerm {d : FDatabase} (hc : d.SubtermClosed) (t : Term) :
+    (d.addTerm t).SubtermClosed :=
+  (Term.record_spec d.terms t [] hc).1
+
+theorem mem_addTerm_rows_imp {d : FDatabase} {t : Term} {r : Row}
+    (h : r ∈ (d.addTerm t).rows) : r ∈ Term.ctorRowList d.sig t ∨ r ∈ d.rows := by
+  rcases List.mem_append.mp h with h | h
+  · obtain ⟨s, hs, hr⟩ := List.mem_flatMap.mp h
+    rcases Term.mem_record d.terms t [] hs with hs | hs
+    · exact Or.inl (List.mem_flatMap.mpr ⟨s, hs, hr⟩)
+    · simp at hs
+  · exact Or.inr h
+
+/-- A row the index held it still holds. -/
+theorem mem_addTerm_rows_of_mem {d : FDatabase} {t : Term} {r : Row} (h : r ∈ d.rows) :
+    r ∈ (d.addTerm t).rows :=
+  List.mem_append_right _ h
+
+/-- A term the list holds adds nothing. -/
+theorem addTerm_of_mem {d : FDatabase} {t : Term} (h : t ∈ d.terms) : d.addTerm t = d := by
+  unfold addTerm
+  rw [Term.record_of_mem [] h]
+  rfl
 
 /-- `addTerm` over a list. -/
 def addTerms (ts : List Term) (d : FDatabase) : FDatabase :=
@@ -197,42 +412,50 @@ satisfies the condition, the four writers below preserve it, and they are the on
 every `set`, `union` and rule firing goes through them, and `Impl/Merge.lean` reaches
 `eqs` and `terms` only through `addTerm` and `execActions`, a merge pass otherwise
 rewriting `rows` alone. -/
-/-- Every equation names terms the list holds. -/
-def EqsInTerms (d : FDatabase) : Prop := ∀ p ∈ d.eqs, p.1 ∈ d.terms ∧ p.2 ∈ d.terms
+/-- The list invariant: every equation names terms the list holds, and the list is closed
+under subterms. The first is what makes `toDatabase`'s restriction invisible; the second is
+what lets `addTerm` stop at a recorded subterm. -/
+structure Closed (d : FDatabase) : Prop where
+  eqs : ∀ p ∈ d.eqs, p.1 ∈ d.terms ∧ p.2 ∈ d.terms
+  subterms : d.SubtermClosed
 
-theorem empty_eqsInTerms : EqsInTerms empty := by simp [EqsInTerms, empty]
+theorem empty_closed : Closed empty :=
+  ⟨by simp [empty], by simp [SubtermClosed, Term.ListClosed, empty]⟩
 
 /-- `addTerm` only grows `terms`. -/
-theorem EqsInTerms.addTerm {d : FDatabase} (h : d.EqsInTerms) (t : Term) :
-    (d.addTerm t).EqsInTerms := by
-  intro p hp
-  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
-  exact ⟨Or.inr (h p hp).1, Or.inr (h p hp).2⟩
+theorem Closed.addTerm {d : FDatabase} (h : d.Closed) (t : Term) : (d.addTerm t).Closed where
+  eqs := fun p hp => ⟨mem_addTerm_of_mem (h.eqs p hp).1, mem_addTerm_of_mem (h.eqs p hp).2⟩
+  subterms := h.subterms.addTerm t
 
 /-- `addRow` is `addTerm` on the entry term. -/
-theorem EqsInTerms.addRow {d : FDatabase} (h : d.EqsInTerms) (f : FnName) (as vs : List Term) :
-    (FDatabase.addRow f as vs d).EqsInTerms := h.addTerm _
+theorem Closed.addRow {d : FDatabase} (h : d.Closed) (f : FnName) (as vs : List Term) :
+    (FDatabase.addRow f as vs d).Closed :=
+  ⟨(h.addTerm (.app f (as ++ vs))).eqs, (h.addTerm (.app f (as ++ vs))).subterms⟩
 
 /-- **The one writer that introduces a pair**, and it inserts both sides. -/
-theorem EqsInTerms.addEq {d : FDatabase} (h : d.EqsInTerms) (a b : Term) :
-    (FDatabase.addEq a b d).EqsInTerms := by
-  have hself : ∀ t : Term, t ∈ t.subtermList := fun t => by
-    cases t <;> simp [Term.subtermList]
-  intro p hp
-  simp only [FDatabase.addEq, List.mem_dedup, List.mem_cons] at hp
-  simp only [FDatabase.addEq, FDatabase.addTerm, List.mem_dedup, List.mem_append]
-  rcases hp with rfl | hp
-  · exact ⟨Or.inr (Or.inl (hself a)), Or.inl (hself b)⟩
-  · exact ⟨Or.inr (Or.inr (h p hp).1), Or.inr (Or.inr (h p hp).2)⟩
+theorem Closed.addEq {d : FDatabase} (h : d.Closed) (a b : Term) :
+    (FDatabase.addEq a b d).Closed where
+  eqs := fun p hp => by
+    simp only [FDatabase.addEq, List.mem_dedup, List.mem_cons] at hp
+    rcases hp with rfl | hp
+    · exact ⟨mem_addTerm_of_mem (self_mem_addTerm d a), self_mem_addTerm _ b⟩
+    · exact ⟨mem_addTerm_of_mem (mem_addTerm_of_mem (h.eqs p hp).1),
+        mem_addTerm_of_mem (mem_addTerm_of_mem (h.eqs p hp).2)⟩
+  subterms := (h.subterms.addTerm a).addTerm b
 
 /-- `union` concatenates `eqs` and `terms` together. -/
-theorem EqsInTerms.union {d₁ d₂ : FDatabase} (h₁ : d₁.EqsInTerms) (h₂ : d₂.EqsInTerms) :
-    (d₁.union d₂).EqsInTerms := by
-  intro p hp
-  simp only [FDatabase.union, List.mem_dedup, List.mem_append] at hp ⊢
-  rcases hp with hp | hp
-  · exact ⟨Or.inl (h₁ p hp).1, Or.inl (h₁ p hp).2⟩
-  · exact ⟨Or.inr (h₂ p hp).1, Or.inr (h₂ p hp).2⟩
+theorem Closed.union {d₁ d₂ : FDatabase} (h₁ : d₁.Closed) (h₂ : d₂.Closed) :
+    (d₁.union d₂).Closed where
+  eqs := fun p hp => by
+    simp only [FDatabase.union, List.mem_dedup, List.mem_append] at hp ⊢
+    rcases hp with hp | hp
+    · exact ⟨Or.inl (h₁.eqs p hp).1, Or.inl (h₁.eqs p hp).2⟩
+    · exact ⟨Or.inr (h₂.eqs p hp).1, Or.inr (h₂.eqs p hp).2⟩
+  subterms := fun u hu s hs => by
+    simp only [FDatabase.union, List.mem_dedup, List.mem_append] at hu ⊢
+    rcases hu with hu | hu
+    · exact Or.inl (h₁.subterms u hu s hs)
+    · exact Or.inr (h₂.subterms u hu s hs)
 
 /-- `terms` as a `Finset`, for the closure. -/
 def termsF (d : FDatabase) : Finset Term := d.terms.toFinset
@@ -368,17 +591,17 @@ def FDatabase.closureWith (cl : Finset (Term × Term)) (d : FDatabase) (ts : Lis
 
 /-- `addTerm` only grows `terms`. -/
 theorem FDatabase.mem_terms_addTerm {d : FDatabase} {t s : Term} (h : s ∈ d.terms) :
-    s ∈ (d.addTerm t).terms := by
-  simp only [FDatabase.addTerm, List.mem_dedup, List.mem_append]
-  exact Or.inr h
+    s ∈ (d.addTerm t).terms :=
+  FDatabase.mem_addTerm_of_mem h
+
+/-- Every term is its own subterm. -/
+theorem Term.self_mem_subtermList (t : Term) : t ∈ t.subtermList := by
+  cases t <;> exact List.mem_cons_self ..
 
 /-- **A term the database already holds adds nothing to the candidate universe.** -/
 theorem FDatabase.termsF_addTerm_of_mem {d : FDatabase} {t : Term}
     (h : ∀ s ∈ t.subtermList, s ∈ d.terms) : (d.addTerm t).termsF = d.termsF := by
-  ext s
-  simp only [FDatabase.termsF, FDatabase.addTerm, List.mem_toFinset, List.mem_dedup,
-    List.mem_append]
-  exact ⟨fun hs => hs.elim (h s) id, Or.inr⟩
+  rw [FDatabase.addTerm_of_mem (h t (Term.self_mem_subtermList t))]
 
 /-- …and so nothing to the closure, `addTerm` not touching `eqs`. -/
 theorem FDatabase.closureF_addTerm_of_mem {d : FDatabase} {t : Term}

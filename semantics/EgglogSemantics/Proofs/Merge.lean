@@ -1598,7 +1598,7 @@ version did not have; it is what every `toDatabase_*` bridge needs, and carrying
 what keeps it off the statements of `execCmdM_contained` and `execM_contained`. -/
 structure FDatabase.Inv (d : FDatabase) : Prop where
   wf : d.WF
-  eqs : d.EqsInTerms
+  closed : d.Closed
   index : d.IndexOk
 
 namespace FDatabase
@@ -1607,28 +1607,18 @@ namespace FDatabase
 theorem mem_ctorRowList {sig : Signature} {t : Term} {r : Row}
     (h : r ∈ Term.ctorRowList sig t) :
     r.out = [] ∧ sig.mergeOf r.fn = none ∧ Term.app r.fn r.args ∈ t.subtermList := by
-  rw [Term.ctorRowList, List.mem_filterMap] at h
+  rw [Term.ctorRowList, List.mem_flatMap] at h
   obtain ⟨s, hs, hr⟩ := h
   cases s with
-  | lit l => exact absurd hr (by simp)
+  | lit l => exact absurd hr (by simp [Term.ctorRow])
   | app f as =>
-    simp only at hr
+    simp only [Term.ctorRow] at hr
     split at hr
     · exact absurd hr (by simp)
     · next hm =>
-      rw [Option.some.injEq] at hr
+      rw [List.mem_singleton] at hr
       subst hr
       exact ⟨rfl, Option.not_isSome_iff_eq_none.mp (by simpa using hm), hs⟩
-
-@[simp] theorem mem_addTerm_terms {d : FDatabase} {t s : Term} :
-    s ∈ (d.addTerm t).terms ↔ s ∈ t.subtermList ∨ s ∈ d.terms := by
-  simp [FDatabase.addTerm, List.mem_dedup]
-
-@[simp] theorem mem_addTerm_rows {d : FDatabase} {t : Term} {r : Row} :
-    r ∈ (d.addTerm t).rows ↔ r ∈ Term.ctorRowList d.sig t ∨ r ∈ d.rows := by
-  simp [FDatabase.addTerm, List.mem_dedup]
-
-@[simp] theorem addTerm_sig {d : FDatabase} {t : Term} : (d.addTerm t).sig = d.sig := rfl
 
 /-- `IndexOk` reads `sig`, `terms`, `rows` and `eqs`; `env` and `rules` may be replaced
 freely. -/
@@ -1653,21 +1643,21 @@ theorem Inv.setEnv {d : FDatabase} (h : d.Inv) {σ : Env}
     (hσ : ∀ b ∈ σ, b.2 ∈ d.toDatabase.terms) :
     ({ d with env := σ } : FDatabase).Inv where
   wf := h.wf.setEnvRules (rs := d.rules) hσ
-  eqs := h.eqs
+  closed := ⟨h.closed.eqs, h.closed.subterms⟩
   index := h.index.setEnvRules σ d.rules
 
 theorem Inv.setEnvRules {d : FDatabase} (h : d.Inv) {σ : Env} {rs : List Rule}
     (hσ : ∀ b ∈ σ, b.2 ∈ d.toDatabase.terms) :
     ({ d with env := σ, rules := rs } : FDatabase).Inv where
   wf := h.wf.setEnvRules hσ
-  eqs := h.eqs
+  closed := ⟨h.closed.eqs, h.closed.subterms⟩
   index := h.index.setEnvRules σ rs
 
 end FDatabase
 
 theorem FDatabase.Inv.empty : FDatabase.empty.Inv where
   wf := FDatabase.empty_wf
-  eqs := FDatabase.empty_eqsInTerms
+  closed := FDatabase.empty_closed
   index := ⟨by simp [FDatabase.empty], by simp [FDatabase.empty], by simp [FDatabase.empty]⟩
 
 @[simp] theorem FDatabase.addTerms_sig {d : FDatabase} {ts : List Term} :
@@ -1682,21 +1672,21 @@ say that any more, and `ctorRowList` filters a merge function's application out 
 rather than synthesising a bogus row for it. -/
 theorem FDatabase.Inv.addTerm {d : FDatabase} (h : d.Inv) (t : Term) :
     (d.addTerm t).Inv where
-  wf := h.wf.addTerm h.eqs t
-  eqs := h.eqs.addTerm t
+  wf := h.wf.addTerm h.closed t
+  closed := h.closed.addTerm t
   index := by
     have hcont : d.toDatabase.Contained (d.addTerm t).toDatabase := by
-      rw [FDatabase.toDatabase_addTerm h.eqs]; exact Database.Contained.addTerm t d.toDatabase
+      rw [FDatabase.toDatabase_addTerm h.closed]; exact Database.Contained.addTerm t d.toDatabase
     refine ⟨fun r hr hm => ?_, fun r hr hm => ?_, fun r hr dc hdc hm => ?_⟩
-    · rcases FDatabase.mem_addTerm_rows.mp hr with hr' | hr'
+    · rcases FDatabase.mem_addTerm_rows_imp hr with hr' | hr'
       · obtain ⟨hout, -, hmem⟩ := FDatabase.mem_ctorRowList hr'
-        exact ⟨hout, FDatabase.mem_addTerm_terms.mpr (Or.inl hmem)⟩
+        exact ⟨hout, (FDatabase.mem_addTerm_terms h.closed.subterms).mpr (Or.inl hmem)⟩
       · exact ⟨(h.index.ctor r hr' hm).1,
-          FDatabase.mem_addTerm_terms.mpr (Or.inr (h.index.ctor r hr' hm).2)⟩
-    · rcases FDatabase.mem_addTerm_rows.mp hr with hr' | hr'
+          FDatabase.mem_addTerm_of_mem ((h.index.ctor r hr' hm).2)⟩
+    · rcases FDatabase.mem_addTerm_rows_imp hr with hr' | hr'
       · exact absurd (FDatabase.mem_ctorRowList hr').2.1 hm
       · exact Database.Out.mono hcont (h.index.entry r hr' hm)
-    · rcases FDatabase.mem_addTerm_rows.mp hr with hr' | hr'
+    · rcases FDatabase.mem_addTerm_rows_imp hr with hr' | hr'
       · exact absurd (FDatabase.mem_ctorRowList hr').2.1 hm
       · exact h.index.width r hr' dc hdc hm
 
@@ -1708,13 +1698,13 @@ theorem FDatabase.Inv.addTerms {d : FDatabase} (h : d.Inv) (ts : List Term) :
 
 theorem FDatabase.Inv.addEq {d : FDatabase} (h : d.Inv) (a b : Term)
     (hlit : a.isLit ∨ b.isLit → a = b) : (d.addEq a b).Inv where
-  wf := h.wf.addEq h.eqs a b hlit
-  eqs := h.eqs.addEq a b
+  wf := h.wf.addEq h.closed a b hlit
+  closed := h.closed.addEq a b
   index := by
     have hbase := (h.addTerm a).addTerm b
     have hcont : ((d.addTerm a).addTerm b).toDatabase.Contained (d.addEq a b).toDatabase := by
-      rw [FDatabase.toDatabase_addEq h.eqs,
-        FDatabase.toDatabase_addTerm (h.eqs.addTerm a), FDatabase.toDatabase_addTerm h.eqs]
+      rw [FDatabase.toDatabase_addEq h.closed,
+        FDatabase.toDatabase_addTerm (h.closed.addTerm a), FDatabase.toDatabase_addTerm h.closed]
       exact ⟨Set.subset_insert _ _⟩
     refine ⟨fun r hr hm => hbase.index.ctor r hr hm, fun r hr hm => ?_,
       fun r hr dc hdc hm => hbase.index.width r hr dc hdc hm⟩
@@ -1730,7 +1720,7 @@ theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : L
   have hbase : (d.addTerm (.app f (as ++ vs))).Inv := h.addTerm _
   have hmem : Term.app f (as ++ vs) ∈ (d.addTerm (.app f (as ++ vs))).toDatabase.terms := by
     rw [FDatabase.mem_toDatabase_terms]
-    exact FDatabase.mem_addTerm_terms.mpr (Or.inl ((Term.mem_subtermList _).mpr (.refl _)))
+    exact FDatabase.self_mem_addTerm _ _
   have hargs : ∀ x ∈ as, x ∈ (d.addTerm (.app f (as ++ vs))).toDatabase.terms := by
     intro x hx
     refine hbase.wf.subtermClosed _ hmem ?_
@@ -1740,7 +1730,8 @@ theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : L
       r = ⟨f, as, vs⟩ ∨ r ∈ (d.addTerm (.app f (as ++ vs))).rows := by
     intro r hr
     exact List.mem_cons.mp (List.mem_dedup.mp hr)
-  refine ⟨hbase.wf, hbase.eqs, ⟨fun r hr hm => ?_, fun r hr hm => ?_, fun r hr dc hdc hm => ?_⟩⟩
+  refine ⟨hbase.wf, ⟨hbase.closed.eqs, hbase.closed.subterms⟩,
+    ⟨fun r hr hm => ?_, fun r hr hm => ?_, fun r hr dc hdc hm => ?_⟩⟩
   · rcases hrow hr with rfl | hr'
     · exact absurd hm hf
     · exact hbase.index.ctor r hr' hm
@@ -1751,12 +1742,23 @@ theorem FDatabase.Inv.addRow {d : FDatabase} (h : d.Inv) {f : FnName} {as vs : L
     · exact hw dc hdc
     · exact hbase.index.width r hr' dc hdc hm
 
+/-- `Inv` reads `rows` by membership only. -/
+theorem FDatabase.Inv.dedupRows {d : FDatabase} (h : d.Inv) :
+    ({ d with rows := d.rows.dedup } : FDatabase).Inv where
+  wf := h.wf
+  closed := ⟨h.closed.eqs, h.closed.subterms⟩
+  index := ⟨fun r hr hm => h.index.ctor r (List.mem_dedup.mp hr) hm,
+    fun r hr hm => h.index.entry r (List.mem_dedup.mp hr) hm,
+    fun r hr dc hdc hm => h.index.width r (List.mem_dedup.mp hr) dc hdc hm⟩
+
 theorem FDatabase.Inv.addAtom {d : FDatabase} (h : d.Inv) (t : Term) : (d.addAtom t).Inv := by
   cases t with
-  | lit l => simpa [FDatabase.addAtom, FDatabase.entryRowList, FDatabase.addTerm] using h.addTerm (.lit l)
+  | lit l => exact (h.addTerm (.lit l)).dedupRows
   | app f cols =>
     cases hd : d.sig f with
-    | none => simpa [FDatabase.addAtom, FDatabase.entryRowList, hd, FDatabase.addTerm] using h.addTerm (.app f cols)
+    | none =>
+      simp only [FDatabase.addAtom, FDatabase.entryRowList, hd, List.nil_append]
+      exact (h.addTerm (.app f cols)).dedupRows
     | some dc =>
       by_cases hc : dc.merge.isSome && cols.length == dc.entryWidth
       · have hm : dc.merge.isSome = true := ((Bool.and_eq_true _ _).mp hc).1
@@ -1775,7 +1777,9 @@ theorem FDatabase.Inv.addAtom {d : FDatabase} (h : d.Inv) (t : Term) : (d.addAto
           cases Option.some.inj hd'
           simp only [List.length_take, List.length_drop]
           omega
-      · simpa [FDatabase.addAtom, FDatabase.entryRowList, hd, hc, FDatabase.addTerm] using h.addTerm (.app f cols)
+      · simp only [FDatabase.addAtom, FDatabase.entryRowList, hd, hc, Bool.false_eq_true,
+          if_false, List.nil_append]
+        exact (h.addTerm (.app f cols)).dedupRows
 
 theorem FDatabase.Inv.execAction {d d' : FDatabase} (h : d.Inv) {a : Action}
     (hlegal : a.WriteLegal d.sig) (hs : execAction d a = some d') : d'.Inv := by
@@ -1800,12 +1804,12 @@ the merge interpreter's action semantics too, and `Proofs/Interp.lean`'s
 `execAction_toDatabase` already says they compute `evalAction`/`evalActions` — which
 after M12 is what `CmdStep.action`, `RuleResults` and `MergeStep.collide` read. -/
 /-- `execAction_toDatabase` in the `some` shape the merge proofs use. -/
-theorem FDatabase.execAction_evalAction {d d' : FDatabase} (he : d.EqsInTerms) {a : Action}
+theorem FDatabase.execAction_evalAction {d d' : FDatabase} (he : d.Closed) {a : Action}
     (hs : execAction d a = some d') : evalAction d.toDatabase a = some d'.toDatabase := by
   rw [← execAction_toDatabase he, hs, Option.map_some]
 
 /-- `execActions_toDatabase` in the `some` shape the merge proofs use. -/
-theorem FDatabase.execActions_evalActions {d d' : FDatabase} (he : d.EqsInTerms)
+theorem FDatabase.execActions_evalActions {d d' : FDatabase} (he : d.Closed)
     {as : List Action} (hs : execActions d as = some d') :
     evalActions d.toDatabase as = some d'.toDatabase := by
   rw [← execActions_toDatabase he, hs, Option.map_some]
@@ -1871,7 +1875,7 @@ theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Patte
         simp only [hev, decide_eq_true_eq] at hs
         obtain ⟨w, hwm, hcl⟩ := hs
         exact ⟨hv, .expr (FDatabase.mem_toDatabase_terms.mpr hwm) hev
-          (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm h.eqs).mp hcl))⟩
+          (congOn_singleton.mpr ((FDatabase.mem_closureF_addTerm h.closed).mp hcl))⟩
     | some entry =>
       obtain ⟨f, as, vs⟩ := entry
       simp only [patternHolds, he] at hs
@@ -1887,10 +1891,10 @@ theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Patte
           simp [Signature.mergeOf, hdc, Option.isSome_iff_ne_none.mp hm]
         have hkeyC : CongListOn d.toDatabase [Term.app r.fn (ts ++ us)] ts r.args :=
           CongList.mono Database.addTerms_contained_withOperands
-            ((FDatabase.congrTuple_addTerms_iff h.eqs).mp hkey)
+            ((FDatabase.congrTuple_addTerms_iff h.closed).mp hkey)
         have hvalC : CongListOn d.toDatabase [Term.app r.fn (ts ++ us)] us r.out :=
           CongList.mono Database.addTerms_contained_withOperands
-            ((FDatabase.congrTuple_addTerms_iff h.eqs).mp hval)
+            ((FDatabase.congrTuple_addTerms_iff h.closed).mp hval)
         have hop : Term.app r.fn (ts ++ us) ∈
             (d.toDatabase.withOperands [Term.app r.fn (ts ++ us)]).terms :=
           Database.mem_addTerms (by simp)
@@ -1908,8 +1912,8 @@ theorem FDatabase.patternHolds_validSubst {d : FDatabase} (h : d.Inv) {p : Patte
       rw [Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hs
       obtain ⟨heq, w, hwm, hcl⟩ := hs
       exact ⟨hv, .eq (FDatabase.mem_toDatabase_terms.mpr hwm) hev₁ hev₂
-        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.eqs).mp hcl))
-        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.eqs).mp heq))⟩
+        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.closed).mp hcl))
+        (congOn_pair.mpr ((FDatabase.mem_closureF_addTerm₂ h.closed).mp heq))⟩
     · exact absurd hs (by simp)
 
 /-- **Every substitution the enumerator produces is, up to `Env.Agree`, one
@@ -2020,7 +2024,7 @@ theorem eqsRefl (d : FDatabase) : ∀ t ∈ d.toDatabase.terms, (t, t) ∈ d.toD
   fun _ ht => Or.inl ⟨rfl, FDatabase.mem_toDatabase_terms.mp ht⟩
 
 /-- Containment of denotations, read off the two lists. Unconditional, where the
-`toDatabase_*` bridges need `EqsInTerms`: this asks only that both lists grow, and
+`toDatabase_*` bridges need `Closed`: this asks only that both lists grow, and
 `toDatabase` is monotone in each. -/
 theorem toDatabase_contained_of_lists {d e : FDatabase}
     (ht : ∀ t ∈ d.terms, t ∈ e.terms) (hq : ∀ p ∈ d.eqs, p ∈ e.eqs) :
@@ -2040,27 +2044,26 @@ theorem mem_addTerms_terms {d : FDatabase} {ts : List Term} {t : Term} (h : t �
     t ∈ (d.addTerms ts).terms := by
   induction ts generalizing d with
   | nil => exact h
-  | cons u ts ih => exact ih (FDatabase.mem_addTerm_terms.mpr (Or.inr h))
+  | cons u ts ih => exact ih (FDatabase.mem_addTerm_of_mem (h))
 
 theorem contained_addTerm {d : FDatabase} {t : Term} :
     d.toDatabase.Contained (d.addTerm t).toDatabase :=
-  toDatabase_contained_of_lists (fun _ hx => FDatabase.mem_addTerm_terms.mpr (Or.inr hx))
+  toDatabase_contained_of_lists (fun _ hx => FDatabase.mem_addTerm_of_mem (hx))
     (fun _ hp => hp)
 
 /-- The action interpreter only adds, at the list level. -/
 theorem execAction_lists {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     (∀ t ∈ d.terms, t ∈ e.terms) ∧ (∀ p ∈ d.eqs, p ∈ e.eqs) := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ <;>
-    exact ⟨fun x hx => by
-        simp [FDatabase.addAtom, FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hx],
-      fun q hq => by
-        simp [FDatabase.addAtom, FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hq]⟩
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩
+  · exact ⟨fun x hx => FDatabase.mem_addTerm_of_mem hx, fun q hq => hq⟩
+  · exact ⟨fun x hx => FDatabase.mem_addTerm_of_mem (FDatabase.mem_addTerm_of_mem hx),
+      fun q hq => List.mem_dedup.mpr (List.mem_cons_of_mem _ hq)⟩
 
 theorem execAction_rows {d e : FDatabase} {a : Action} (h : execAction d a = some e) :
     ∀ r ∈ d.rows, r ∈ e.rows := by
-  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ <;>
-    intro r hr <;>
-    simp [FDatabase.addAtom, FDatabase.addTerm, FDatabase.addEq, FDatabase.addRow, List.mem_dedup, hr]
+  rcases execAction_eq_some h with ⟨t, rfl⟩ | ⟨t₁, t₂, -, rfl⟩ <;> intro r hr
+  · exact List.mem_dedup.mpr (List.mem_append_right _ (FDatabase.mem_addTerm_rows_of_mem hr))
+  · exact FDatabase.mem_addTerm_rows_of_mem (FDatabase.mem_addTerm_rows_of_mem hr)
 
 theorem execActions_lists {as : List Action} : ∀ {d e : FDatabase},
     execActions d as = some e →
@@ -2214,12 +2217,12 @@ theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
             subst h
             have hcb := execActions_lists hb
             have hsb := execActions_sig hb
-            refine ⟨fun x hx => FDatabase.mem_addTerm_terms.mpr (Or.inr (hcb.1 x hx)),
+            refine ⟨fun x hx => FDatabase.mem_addTerm_of_mem ((hcb.1 x hx)),
               fun q hq => hcb.2.1 q hq, ?_, fun r hr hnm => ?_⟩
             · change (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).sig = d.sig
               exact hsb
             · have hrb : r ∈ (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).rows :=
-                FDatabase.mem_addTerm_rows.mpr (Or.inr ((execActions_rows hb) r hr))
+                FDatabase.mem_addTerm_rows_of_mem (((execActions_rows hb) r hr))
               have hfn : r₁.fn = r₂.fn := by
                 simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
                 exact hcond.1.1.1
@@ -2252,6 +2255,112 @@ theorem mergeOneWith_confined {cl : Finset (Term × Term)} {d e : FDatabase} {r�
         r ∈ e.rows := by
   rcases mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
     exact mergeOneOriented_confined (he ▸ h)
+
+/-- A firing keeps the list invariant: its body runs through `execActions`, and the
+combined entry term is an `addTerm`. -/
+theorem mergeOneOriented_closed {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hc : d.Closed) (h : d.mergeOneOriented cl r₁ r₂ = some e) : e.Closed := by
+  unfold FDatabase.mergeOneOriented at h
+  match hm : d.sig.mergeOf r₁.fn with
+  | none => rw [hm] at h; simp at h
+  | some .noMerge => rw [hm] at h; simp at h
+  | some (.merge body res) =>
+    rw [hm] at h
+    simp only at h
+    split at h
+    case isFalse => simp at h
+    case isTrue =>
+      split at h
+      case isTrue =>
+        rw [Option.some.injEq] at h
+        subst h
+        exact ⟨hc.eqs, hc.subterms⟩
+      case isFalse =>
+        cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
+        | none => rw [hb] at h; simp at h
+        | some eb =>
+          rw [hb, Option.bind_some] at h
+          cases hv : Expr.evalList eb.sig res eb.env with
+          | none => rw [hv] at h; simp at h
+          | some vs =>
+            rw [hv, Option.map_some, Option.some.injEq] at h
+            subst h
+            have hcb : eb.Closed := execActions_closed (hc.setEnv _) hb
+            exact ⟨(hcb.addTerm (.app r₂.fn (r₂.args ++ vs))).eqs,
+              (hcb.addTerm (.app r₂.fn (r₂.args ++ vs))).subterms⟩
+
+theorem mergeOneWith_closed {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
+    (hc : d.Closed) (h : d.mergeOneWith cl r₁ r₂ = some e) : e.Closed := by
+  rcases mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
+    exact mergeOneOriented_closed hc (he ▸ h)
+
+/-- A rebuild writes `rows` only. -/
+theorem rebuild_closed {cl : Finset (Term × Term)} {d : FDatabase} (hc : d.Closed) :
+    (FDatabase.rebuild cl d).Closed :=
+  ⟨hc.eqs, hc.subterms⟩
+
+/-- The list invariant through the two folds of a pass. No legality is needed: closure
+is about what a body writes, and every write goes through `execActions`. -/
+theorem mergeRoundWith_closed {cl : Finset (Term × Term)} {e : FDatabase} (hc : e.Closed) :
+    (FDatabase.mergeRoundWith cl e).Closed := by
+  have hstep : ∀ (x : FDatabase) (r₁ r₂ : Row), x.Closed →
+      (match FDatabase.mergeOneWith cl x r₁ r₂ with
+         | some y => y
+         | none => x).Closed := by
+    intro x r₁ r₂ hx
+    cases hy : FDatabase.mergeOneWith cl x r₁ r₂ with
+    | none => simpa [hy] using hx
+    | some y => exact mergeOneWith_closed hx hy
+  have hfold : ∀ (l : List Row) (r₁ : Row) (x : FDatabase), x.Closed →
+      (l.foldl (fun acc' r₂ =>
+          if r₁ == r₂ then acc'
+          else match FDatabase.mergeOneWith cl acc' r₁ r₂ with
+            | some acc'' => acc''
+            | none => acc') x).Closed := by
+    intro l
+    induction l with
+    | nil => intro _ x hx; exact hx
+    | cons r₂ l ih =>
+      intro r₁ x hx
+      refine ih r₁ _ ?_
+      by_cases hbe : r₁ == r₂
+      · simpa [hbe] using hx
+      · simpa [hbe] using hstep x r₁ r₂ hx
+  have houter : ∀ (m l : List Row) (x : FDatabase), x.Closed →
+      (l.foldl (fun acc r₁ =>
+          m.foldl (fun acc' r₂ =>
+            if r₁ == r₂ then acc'
+            else match FDatabase.mergeOneWith cl acc' r₁ r₂ with
+              | some acc'' => acc''
+              | none => acc') acc) x).Closed := by
+    intro m l
+    induction l with
+    | nil => intro _ hx; exact hx
+    | cons r₁ l ih => intro x hx; exact ih _ (hfold m r₁ x hx)
+  exact houter e.rows e.rows e hc
+
+theorem mergeRound_closed {d : FDatabase} (hc : d.Closed) : d.mergeRound.Closed := by
+  rw [← FDatabase.mergeRoundFast_eq]
+  unfold FDatabase.mergeRoundFast
+  split
+  · exact hc
+  · exact mergeRoundWith_closed (rebuild_closed hc)
+
+theorem mergeSaturateF_closed {n : Nat} : ∀ {d e : FDatabase}, d.Closed →
+    d.mergeSaturateF n = some e → e.Closed := by
+  induction n with
+  | zero =>
+    intro d e hc hs
+    rw [FDatabase.mergeSaturateF] at hs
+    split at hs
+    · rw [Option.some.injEq] at hs; exact hs ▸ hc
+    · exact absurd hs (by simp)
+  | succ n ih =>
+    intro d e hc hs
+    rw [FDatabase.mergeSaturateF] at hs
+    split at hs
+    · rw [Option.some.injEq] at hs; exact hs ▸ hc
+    · exact ih (mergeRound_closed hc) hs
 
 /-! #### The rebuild
 
@@ -2386,7 +2495,7 @@ preserved because `canonKeyOf` is a `map`. -/
 theorem Inv.rebuild {cl : Finset (Term × Term)} {d : FDatabase} (h : d.Inv)
     (hcl : d.ClosureSound cl) : (FDatabase.rebuild cl d).Inv where
   wf := h.wf
-  eqs := h.eqs
+  closed := ⟨h.closed.eqs, h.closed.subterms⟩
   index := by
     refine ⟨fun r hr hm => ?_, fun r hr hm => ?_, fun r hr dc hdc hm => ?_⟩
     · obtain ⟨s, hs, rfl⟩ := mem_rebuild_rows.mp hr
@@ -2661,7 +2770,7 @@ theorem Inv.mergeRows {d : FDatabase} (h : d.Inv) {r₁ r₂ : Row} {vs : List T
     ({ d with rows := (d.rows.filter fun r => r ≠ r₁).map fun r =>
         if r = r₂ then ⟨r₂.fn, r₂.args, vs⟩ else r } : FDatabase).Inv where
   wf := h.wf
-  eqs := h.eqs
+  closed := ⟨h.closed.eqs, h.closed.subterms⟩
   index := by
     refine ⟨fun r hr hm => ?_, fun r hr hm => ?_, fun r hr dc hdc hm => ?_⟩
     · rcases mem_mergeRows hr with hr' | rfl
@@ -2680,7 +2789,7 @@ and `IndexOk` is a condition on each row separately. -/
 theorem Inv.dropRow {d : FDatabase} (h : d.Inv) {r₁ : Row} :
     ({ d with rows := d.rows.filter fun r => r ≠ r₁ } : FDatabase).Inv where
   wf := h.wf
-  eqs := h.eqs
+  closed := ⟨h.closed.eqs, h.closed.subterms⟩
   index :=
     ⟨fun r hr => h.index.ctor r (mem_dropRow hr), fun r hr => h.index.entry r (mem_dropRow hr),
       fun r hr => h.index.width r (mem_dropRow hr)⟩
@@ -2774,7 +2883,7 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
         have hmemT : Term.app r₂.fn (r₂.args ++ vs) ∈
             (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).toDatabase.terms := by
           rw [FDatabase.mem_toDatabase_terms]
-          exact FDatabase.mem_addTerm_terms.mpr (Or.inl ((Term.mem_subtermList _).mpr (.refl _)))
+          exact FDatabase.self_mem_addTerm _ _
         have hargs : ∀ x ∈ r₂.args,
             x ∈ (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).toDatabase.terms := by
           intro x hx
@@ -2786,7 +2895,7 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
         have hne₂ : (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).sig.mergeOf r₂.fn ≠ none := by
           rw [← hfn]; exact hne₁
         have hr₂' : r₂ ∈ (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).rows :=
-          FDatabase.mem_addTerm_rows.mpr (Or.inr (execActions_rows hb r₂ hr₂))
+          FDatabase.mem_addTerm_rows_of_mem ((execActions_rows hb r₂ hr₂))
         refine (hbase.mergeRows hne₂ (Database.out_self hmemT hargs) ?_).setEnvRules ?_
         · intro dc hdc
           have hdceq : dc₁ = dc := by
@@ -4442,7 +4551,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         -- The body, re-run at `D`.
         have hbodyStep : evalActions
             ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).toDatabase body
-            = some eb.toDatabase := FDatabase.execActions_evalActions h₀.eqs hb
+            = some eb.toDatabase := FDatabase.execActions_evalActions h₀.closed hb
         obtain ⟨D₁, hD₁step, hD₁c, hD₁sig, hD₁env⟩ :=
           evalActions_mono_recorded
             (db := ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).toDatabase)
@@ -4471,7 +4580,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         have hb₂' : CongList D₁ r₂.args bs₂ := CongList.mono hDD₁ hb₂
         have hbridge : (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).toDatabase
             = eb.toDatabase.addTerm (.app r₂.fn (r₂.args ++ vs)) :=
-          FDatabase.toDatabase_addTerm (execActions_eqsInTerms h₀.eqs hb)
+          FDatabase.toDatabase_addTerm (execActions_closed h₀.closed hb)
         have hmemD₁ : Term.app r₂.fn (bs₂ ++ vs) ∈ (D₁.addTerm (.app r₂.fn (bs₂ ++ vs))).terms :=
           Database.mem_addTerm _ D₁
         have hrec : (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).toDatabase.Recorded
@@ -4667,7 +4776,7 @@ The enumerator's substitution is transported to the specification's by
 `evalActions_envAgree`: `matchQuery_validQuerySubst` only produces one that
 `Env.Agree`s, and `Database.EnvAgree.eq_of_env_rules` turns that back into equality once
 `fireInto` restores the caller's environment. -/
-theorem union_contained {d₁ d₂ : FDatabase} (he₁ : d₁.EqsInTerms) (he₂ : d₂.EqsInTerms)
+theorem union_contained {d₁ d₂ : FDatabase} (he₁ : d₁.Closed) (he₂ : d₂.Closed)
     {R : Database} (h₁ : d₁.toDatabase.Contained R) (h₂ : d₂.toDatabase.Contained R) :
     (d₁.union d₂).toDatabase.Contained R := by
   refine ⟨fun p hp => ?_⟩
@@ -4676,30 +4785,30 @@ theorem union_contained {d₁ d₂ : FDatabase} (he₁ : d₁.EqsInTerms) (he₂
     · exact h₁.eqs (Or.inl ⟨hpe, hx⟩)
     · exact h₂.eqs (Or.inl ⟨hpe, hx⟩)
   · rcases mem_eqs_union.mp hq with hq' | hq'
-    · exact h₁.eqs (Or.inr ⟨hq', (he₁ p hq').1, (he₁ p hq').2⟩)
-    · exact h₂.eqs (Or.inr ⟨hq', (he₂ p hq').1, (he₂ p hq').2⟩)
+    · exact h₁.eqs (Or.inr ⟨hq', (he₁.eqs p hq').1, (he₁.eqs p hq').2⟩)
+    · exact h₂.eqs (Or.inr ⟨hq', (he₂.eqs p hq').1, (he₂.eqs p hq').2⟩)
 
 theorem execRunRules_contained {R : RulesetName} {d : FDatabase} (h : d.Inv) :
     (execRunRules R d).toDatabase.Contained (RunRules R d.toDatabase) := by
   set S : Database := RunRules R d.toDatabase with hS
-  -- One firing lands inside `RunRules`, and keeps the accumulator's `EqsInTerms`.
+  -- One firing lands inside `RunRules`, and keeps the accumulator's `Closed`.
   have hone : ∀ (r : Rule), r ∈ d.rules → r.ruleset = R → ∀ (σ : Env),
       σ ∈ matchQuery d r.query →
-      ∀ acc : FDatabase, acc.EqsInTerms → acc.toDatabase.Contained S →
-      (fireInto d r acc σ).EqsInTerms ∧ (fireInto d r acc σ).toDatabase.Contained S := by
+      ∀ acc : FDatabase, acc.Closed → acc.toDatabase.Contained S →
+      (fireInto d r acc σ).Closed ∧ (fireInto d r acc σ).toDatabase.Contained S := by
     intro r hr hR σ hσ acc hacce hacc
     rw [fireInto, execLocalActions]
     cases hv : execActions { d with env := σ ++ d.env } r.actions with
     | none => simpa using ⟨hacce, hacc⟩
     | some e =>
-      have hee : e.EqsInTerms := execActions_eqsInTerms (h.eqs.setEnv (σ ++ d.env)) hv
+      have hee : e.Closed := execActions_closed (h.closed.setEnv (σ ++ d.env)) hv
       have hmemS : ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase ∈
           {D | ∃ r' ∈ d.toDatabase.rules, r'.ruleset = R ∧ D ∈ RuleResults d.toDatabase r'} := by
         obtain ⟨τ, hτ, hag⟩ := matchQuery_validQuerySubst h hσ
         have hstep : evalActions
             ({ d.toDatabase with env := σ ++ d.toDatabase.env } : Database) r.actions
             = some e.toDatabase := by
-          have := FDatabase.execActions_evalActions (h.eqs.setEnv (σ ++ d.env)) hv
+          have := FDatabase.execActions_evalActions (h.closed.setEnv (σ ++ d.env)) hv
           simpa using this
         have hEA : ({ d.toDatabase with env := σ ++ d.toDatabase.env } : Database).EnvAgree
             { d.toDatabase with env := τ ++ d.toDatabase.env } :=
@@ -4714,12 +4823,12 @@ theorem execRunRules_contained {R : RulesetName} {d : FDatabase} (h : d.Inv) :
           ({ e with env := d.env, rules := d.rules } : FDatabase).toDatabase.Contained S :=
         Database.Contained.mem_sUnion hmemS
       simp only [Option.map_some]
-      exact ⟨EqsInTerms.union hacce (hee.restore), union_contained hacce hee.restore hacc hsub⟩
+      exact ⟨Closed.union hacce (hee.restore), union_contained hacce hee.restore hacc hsub⟩
   -- The two folds.
   have hinner : ∀ (r : Rule), r ∈ d.rules → r.ruleset = R → ∀ (σs : List Env),
-      (∀ σ ∈ σs, σ ∈ matchQuery d r.query) → ∀ acc : FDatabase, acc.EqsInTerms →
+      (∀ σ ∈ σs, σ ∈ matchQuery d r.query) → ∀ acc : FDatabase, acc.Closed →
       acc.toDatabase.Contained S →
-      (σs.foldl (fireInto d r) acc).EqsInTerms ∧
+      (σs.foldl (fireInto d r) acc).Closed ∧
         (σs.foldl (fireInto d r) acc).toDatabase.Contained S := by
     intro r hr hR σs
     induction σs with
@@ -4730,8 +4839,8 @@ theorem execRunRules_contained {R : RulesetName} {d : FDatabase} (h : d.Inv) :
       obtain ⟨h₁, h₂⟩ := hone r hr hR σ (hall σ List.mem_cons_self) acc hacce hacc
       exact ih (fun τ hτ => hall τ (List.mem_cons_of_mem _ hτ)) _ h₁ h₂
   have houter : ∀ (l : List Rule), (∀ r ∈ l, r ∈ d.rules ∧ r.ruleset = R) →
-      ∀ acc : FDatabase, acc.EqsInTerms → acc.toDatabase.Contained S →
-      (l.foldl (fireRule d) acc).EqsInTerms ∧
+      ∀ acc : FDatabase, acc.Closed → acc.toDatabase.Contained S →
+      (l.foldl (fireRule d) acc).Closed ∧
         (l.foldl (fireRule d) acc).toDatabase.Contained S := by
     intro l
     induction l with
@@ -4747,7 +4856,7 @@ theorem execRunRules_contained {R : RulesetName} {d : FDatabase} (h : d.Inv) :
         | exact (hinner r (hall r List.mem_cons_self).1 (hall r List.mem_cons_self).2 _
             (fun _ hσ => hσ) acc hacce hacc).2
   rw [execRunRules]
-  exact (houter _ (fun _ hr => mem_rules_filter.mp hr) d h.eqs
+  exact (houter _ (fun _ hr => mem_rules_filter.mp hr) d h.closed
     (Database.Contained.sUnion _ _)).2
 
 /-- **`execCmdM_contained`'s `.action` case**, with `CmdStep.action`'s two premises spelled
@@ -4771,7 +4880,7 @@ theorem execCmdM_action_contained {d e : FDatabase} (h : d.Inv) {a : Action}
   have hsig₁ : d₁.sig = d.sig := execAction_sig hd₁
   have hlegal₁ : Signature.MergesLegal d₁.sig := by rw [hsig₁]; exact hlegal
   have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
-    FDatabase.execAction_evalAction h.eqs hd₁
+    FDatabase.execAction_evalAction h.closed hd₁
   obtain ⟨db, hcl, hcont⟩ :=
     mergeSaturateF_contained (h.execAction halegal hd₁) hlegal₁ (by
       rcases hcond with ⟨hufree, hdiag, hau⟩ | hof
@@ -5399,7 +5508,7 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
     toDatabase_contained_of_lists (fun _ hx => mem_terms_union.mpr (Or.inr hx))
       (fun _ hx => mem_eqs_union.mpr (Or.inr hx))
   refine ⟨⟨eqsRefl _, fun t ht s hs => ?_, fun b hb => ?_, fun p hp => ?_⟩,
-    EqsInTerms.union hd.eqs he.eqs, ⟨fun r hr hm => ?_, fun r hr hm => ?_,
+    Closed.union hd.closed he.closed, ⟨fun r hr hm => ?_, fun r hr hm => ?_,
       fun r hr dc hdc hm => ?_⟩⟩
   · rw [FDatabase.mem_toDatabase_terms] at ht
     rw [FDatabase.mem_toDatabase_terms]
@@ -5415,9 +5524,9 @@ theorem Inv.union {d e : FDatabase} (hd : d.Inv) (he : e.Inv) (hsig : e.sig = d.
     · exact fun _ => heq
     · rcases mem_eqs_union.mp hp' with hp'' | hp''
       · exact hd.wf.litsIsolated p
-          ((FDatabase.mem_toDatabase_eqs_of_eqsInTerms hd.eqs).mpr (Or.inr hp''))
+          ((FDatabase.mem_toDatabase_eqs_of_closed hd.closed).mpr (Or.inr hp''))
       · exact he.wf.litsIsolated p
-          ((FDatabase.mem_toDatabase_eqs_of_eqsInTerms he.eqs).mpr (Or.inr hp''))
+          ((FDatabase.mem_toDatabase_eqs_of_closed he.closed).mpr (Or.inr hp''))
   · rcases mem_rows_union.mp hr with hr' | hr'
     · exact ⟨(hd.index.ctor r hr' hm).1,
         mem_terms_union.mpr (Or.inl (hd.index.ctor r hr' hm).2)⟩
@@ -5581,7 +5690,7 @@ theorem Inv.decl {d : FDatabase} (h : d.Inv) {f : FnName} {dc : FnDecl}
   have hcont : d.toDatabase.Contained
       ({ d with sig := Function.update d.sig f (some dc) } : FDatabase).toDatabase :=
     ⟨fun _ hp => hp⟩
-  refine ⟨h.wf.congr rfl rfl, h.eqs, ⟨fun r hr hm => ?_, fun r hr hm => ?_,
+  refine ⟨h.wf.congr rfl rfl, h.closed.setSig _, ⟨fun r hr hm => ?_, fun r hr hm => ?_,
     fun r hr dc' hdc hm => ?_⟩⟩
   · exact h.index.ctor r hr (by rw [← hmerge r hr]; exact hm)
   · exact Database.Out.mono hcont (h.index.entry r hr (by rw [← hmerge r hr]; exact hm))
@@ -5913,7 +6022,7 @@ theorem Inv.execCmdM {d d' : FDatabase} (h : d.Inv) {c : Cmd}
   | rule r =>
     rw [FDatabase.execCmdM, Option.some.injEq] at hs
     exact hs ▸ ⟨h.wf.setEnvRules (rs := r :: d.rules) h.wf.envInTerms,
-      h.eqs, h.index.setEnvRules d.env (r :: d.rules)⟩
+      h.closed.consRule r, h.index.setEnvRules d.env (r :: d.rules)⟩
   | run R =>
     rw [FDatabase.execCmdM] at hs
     exact h.runRoundM hmerges hrules hs
@@ -5979,12 +6088,12 @@ theorem execCmdM_contained' {d d' : FDatabase} (h : d.Inv) {c : Cmd} (hns : c.No
     rw [FDatabase.execCmdM] at hs
     obtain ⟨d₁, hd₁, hsat⟩ := Option.bind_eq_some_iff.mp hs
     have htop : evalAction d.toDatabase a = some d₁.toDatabase :=
-      FDatabase.execAction_evalAction h.eqs hd₁
+      FDatabase.execAction_evalAction h.closed hd₁
     replace hd₁ : execAction d a = some d₁ := hd₁
     have hmerges₁ : Signature.MergesLegal d₁.sig := by
       rw [execAction_sig hd₁]; exact hmerges
     have heval : evalAction d.toDatabase a = some d₁.toDatabase :=
-      FDatabase.execAction_evalAction h.eqs hd₁
+      FDatabase.execAction_evalAction h.closed hd₁
     obtain ⟨db, hcl, hcont⟩ :=
       mergeSaturateF_contained (h.execAction hlegal hd₁) hmerges₁ (by
         rcases hcond with ⟨hnu, hcu⟩ | ⟨hno, hcof⟩
@@ -6243,7 +6352,8 @@ theorem FDatabase.Inv.of_empty_data {d : FDatabase} (ht : d.terms = []) (hr : d.
         rcases FDatabase.mem_toDatabase_eqs.mp hq with ⟨hqe, -⟩ | ⟨hqm, -, -⟩
         · exact hqe
         · rw [he] at hqm; exact absurd hqm (by simp)⟩
-  eqs := by intro p hp; rw [he] at hp; exact absurd hp (by simp)
+  closed := ⟨fun p hp => by rw [he] at hp; exact absurd hp (by simp),
+    fun t hmem => by rw [ht] at hmem; exact absurd hmem (by simp)⟩
   index := ⟨fun r hrm => absurd (by rw [hr] at hrm; exact hrm) (by simp),
     fun r hrm => absurd (by rw [hr] at hrm; exact hrm) (by simp),
     fun r hrm => absurd (by rw [hr] at hrm; exact hrm) (by simp)⟩
