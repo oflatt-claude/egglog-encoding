@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
 slotenc = __import__("slotted-encoder")
 slotcc = __import__("slotted-egglog")
-EGGLOG = ROOT / "target" / "debug" / "egglog"
+EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
 XMULTI = ROOT / "slotted" / "xmulti"
 
 
@@ -438,7 +438,7 @@ def run_encoding(case, rules=None, keep=None, mult=3):
     path.write_text(prog)
     try:
         r = subprocess.run(
-            [str(EGGLOG), str(path)],
+            [str(EGGLOG), "--slotted-encoded", str(path)],
             capture_output=True,
             text=True,
             timeout=RUN_TIMEOUT,

@@ -9,12 +9,12 @@ them — including branch against main. Each endpoint is labelled by target
 (``branch`` / ``main``) and commit hash, so it is clear which commit each side
 is.
 
-The last proof run writes the interactive page, opening on proof overhead of the
-current checkout. The Python slotted evaluator then collects its reference
-comparisons, retaining the paper's rewrite budgets. Its two timing tables and full
-report are embedded beneath the proof report and published as standalone HTML,
-Markdown and JSONL files. Comparison failures remain visible in the report's error
-banner; failure to produce the artifacts preserves the previous publication.
+Proofs and slotted observations share the ordinary ReportStore cache. Slotted
+collection keeps the paper's rewrite budgets and exact comparison evidence.
+After both collectors finish, one interactive page renders the proof comparison
+and both slotted timing tables directly, with a shared downloadable JSONL.
+Comparison failures remain visible in the page; collection errors preserve the
+previous publication.
 
 The egraphs-good nightly service (``nightly.cs.washington.edu``) checks out this
 repository, runs ``make nightly``, and serves that directory, matching
@@ -33,7 +33,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -130,28 +129,10 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
-def _run_slotted(directory: Path, *, timeout: int, jobs: int) -> int:
-    """Use the same collector and correctness gates as the public slotted CLI."""
+def _run_slotted(*, timeout: int, jobs: int) -> int:
+    """Use the public collector and the same cache as proof observations."""
     evaluator = importlib.import_module("slotted.slotted-eval")
-    return int(evaluator.nightly(directory, env=_bench_env(), timeout=timeout, jobs=jobs))
-
-
-def _with_slotted_report(page: str) -> str:
-    """Keep the interactive proof report intact and embed the slotted tables."""
-    section = """
-<section id="slotted-report" style="margin:2rem">
-  <h1>Slotted e-graphs — current checkout</h1>
-  <p><a href="slotted.html">Open full report</a> ·
-     <a href="slotted.md">Markdown</a> · <a href="slotted.jsonl">Measurements</a></p>
-  <iframe src="slotted.html" title="Slotted e-graph benchmark tables"
-          style="width:100%;height:70rem;border:0"></iframe>
-</section>
-"""
-    navigation = '<nav style="margin:1rem 2rem"><a href="#slotted-report">Slotted e-graph benchmarks</a></nav>'
-    # The bundled JavaScript also contains a literal "</body>". Insert at the
-    # document's final closing tag without changing those embedded strings.
-    body, tail = page.rsplit("</body>", 1)
-    return body.replace("<body>", "<body>" + navigation, 1) + section + "</body>" + tail
+    return int(evaluator.nightly(REPORT_PATH, env=_bench_env(), timeout=timeout, jobs=jobs))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -192,34 +173,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             if _run(target, endpoint, open_report=False, rounds=args.rounds) != 0:
                 print(f"nightly: skipped {target[0]} {endpoint[0]}/{endpoint[1]}", file=sys.stderr)
 
-    # The whole cache is now populated, so this last run re-renders it as the
-    # page. Its rows are already cached, so it only rebuilds the report.
+    try:
+        status = _run_slotted(timeout=args.slotted_timeout, jobs=args.slotted_jobs)
+    except (OSError, SystemExit, ValueError) as error:
+        print(f"nightly: slotted collection failed: {error}", file=sys.stderr)
+        return 1
+    if status:
+        print("nightly: slotted comparisons are incomplete or failed; see the report's error banner", file=sys.stderr)
+
+    # Render after both collectors finish: the page and download contain exactly
+    # the same shared cache snapshot, including slotted comparison evidence.
     if _run(BRANCH, HEADLINE, open_report=True, rounds=args.rounds) != 0 or not PAGE_PATH.is_file():
         print("nightly: benchmark did not produce a report", file=sys.stderr)
         return 1
-    # Stage both reports before replacing the published page. Comparison failures
-    # are visible in the slotted report; failure to produce that report preserves
-    # the previous publication instead of silently dropping the slotted tables.
-    with tempfile.TemporaryDirectory(prefix="egglog-nightly-") as temporary:
-        stage = Path(temporary)
-        try:
-            status = _run_slotted(stage, timeout=args.slotted_timeout, jobs=args.slotted_jobs)
-        except (OSError, SystemExit) as error:
-            print(f"nightly: slotted collection failed: {error}", file=sys.stderr)
-            return 1
-        artifacts = ("slotted.html", "slotted.md", "slotted.jsonl")
-        if any(not (stage / name).is_file() for name in artifacts):
-            print("nightly: slotted collection did not produce all reports", file=sys.stderr)
-            return 1
-        if status != 0:
-            print(
-                "nightly: slotted comparisons are incomplete or failed; see the report's error banner", file=sys.stderr
-            )
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for name in artifacts:
-            shutil.copyfile(stage / name, output_dir / name)
-        shutil.copyfile(REPORT_PATH, output_dir / "index.jsonl")
-        (output_dir / "index.html").write_text(_with_slotted_report(PAGE_PATH.read_text()))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(REPORT_PATH, output_dir / "index.jsonl")
+    shutil.copyfile(PAGE_PATH, output_dir / "index.html")
     print(f"nightly: wrote report to {output_dir / 'index.html'}", file=sys.stderr)
     return 0
 

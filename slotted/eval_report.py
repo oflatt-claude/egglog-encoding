@@ -1,29 +1,23 @@
-"""Observation records, cache loading, and tables for slotted/slotted-eval.py.
+"""Observation records and tables for slotted/slotted-eval.py.
 
 No processes are launched here. Comparison evidence is tied to both observation
 IDs, so merging cache batches cannot turn an unchecked pair into a verified one.
 """
 
-import datetime
-import json
-import re
 import sys
 import threading
 import uuid
 from collections import Counter
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 
-import paper_fixtures as pf
-
-REPORT_SCHEMA = 7
-
-SIDES = ("encoding", "encoding-no-aliasing", "ref-multi", "ref-nested-snapshot", "ref-nested")
-EXACT_PAIRS = {"encoding": "ref-multi", "encoding-no-aliasing": "ref-nested-snapshot"}
+from benchmarking.reports.slotted import EXACT_PAIRS as EXACT_PAIRS
+from benchmarking.reports.slotted import LABELS, workload_label
+from benchmarking.reports.slotted import SIDES as SIDES
 
 
 def side_label(side):
     """Display names; CLI selectors and cached treatment identities stay stable."""
-    return {"encoding": "egglog", "encoding-no-aliasing": "egglog-no-aliasing"}.get(side, side)
+    return LABELS.get(side, side)
 
 
 def quiet_progress(row, phase):
@@ -131,67 +125,32 @@ class Row:
             return "inconclusive: selected observations have not been compared"
         return comparison.verdict
 
-    def as_dict(self, batch, *, egglog="target/release/egglog", xmulti="slotted/xmulti/target/release/xmulti"):
-        d = dict(vars(self))
-        d.pop("graph")
-        d["schema"] = REPORT_SCHEMA
+    def as_dict(self, batch):
+        """Untimed evidence; the shared cache owns timing and endpoint provenance."""
+        d = {key: value for key, value in vars(self).items() if key not in ("graph", "seconds")}
         d["vs_ref"] = {side: asdict(comparison) for side, comparison in self.vs_ref.items()}
-        d["egglog"] = egglog
-        d["xmulti"] = xmulti
-        d["date"] = datetime.datetime.now().isoformat(timespec="seconds")
-        d["batch"] = batch  # one invocation of this script: what a report shows by default
+        d["batch"] = batch
+        d["counts"] = True
         return d
 
     @classmethod
-    def from_dict(cls, d):
-        """A row back from its `--jsonl` record."""
-        if d.get("schema") != REPORT_SCHEMA:
-            raise SystemExit("slotted-eval.py: report cache schema changed; recompute into a fresh --jsonl path")
-        row = cls(d["study"], d["case"], d["side"], d["rounds"], d.get("rules"))
+    def from_dict(cls, evidence):
+        row = cls(evidence["study"], evidence["case"], evidence["side"], evidence["rounds"], evidence["rules"])
         for field in (
             "observation",
             "jobs",
             "goal",
             "saturated",
-            "seconds",
             "classes",
             "nodes",
             "checks",
             "substitution",
             "graph_issue",
         ):
-            setattr(row, field, d[field])
-        row.paper = tuple(d["paper"]) if d.get("paper") is not None else None
-        row.vs_ref = {side: Comparison(**comparison) for side, comparison in d["vs_ref"].items()}
+            setattr(row, field, evidence[field])
+        row.paper = tuple(evidence["paper"]) if evidence["paper"] is not None else None
+        row.vs_ref = {side: Comparison(**comparison) for side, comparison in evidence["vs_ref"].items()}
         return row
-
-
-def load_rows(path, merged):
-    """The runs a record holds: the latest batch -- one invocation of this script --
-    or, `merged`, the latest entry per workload and side across every batch, in the
-    order they first appeared. Comparisons belong to their original observations."""
-    records = []
-    with path.open() as f:
-        for line in f:
-            if line.strip():
-                records.append(json.loads(line))
-    if not records:
-        return [], None
-    if not merged:
-        batch = records[-1].get("batch")
-        records = [d for d in records if d.get("batch") == batch]
-    latest, order = {}, []
-    for d in records:
-        row = Row.from_dict(d)
-        key = (*row.workload(), row.side)
-        if key not in latest:
-            order.append(key)
-        latest[key] = row
-    for row in latest.values():
-        for side, comparison in row.vs_ref.items():
-            reference = latest.get((*row.workload(), side))
-            row.vs_ref[side] = replace(comparison, verdict=row.verdict(reference))
-    return [latest[key] for key in order], (None if merged else records[-1].get("date"))
 
 
 # ------------------------------------------------------------------------- output
@@ -308,20 +267,6 @@ def pivot(rows, sides):
         cells += [got.get(f"{e} vs {s}", "") for e, s in compared]
         table.append([study, case, str(rounds), str(rules or ""), *cells, got["paper"]])
     return head, table
-
-
-def workload_label(study, case, rules):
-    """Short paper names for known workloads, retaining custom workload identities."""
-    if study == "sdql":
-        for kernel, phase in pf.WORKLOADS:
-            if case == f"{kernel}_{phase}-{rules}rules":
-                name = "ΣMMM" if kernel == "mmm_sum" else kernel.upper()
-                suffix = f", {rules} rules" if rules != 44 else ""
-                return f"{name} ({phase}{suffix})"
-    if study == "array" and (match := re.fullmatch(r"goal-2d-4f-N(\d+)", case)):
-        return f"Array N={match[1]}"
-    suffix = f" ({rules} rules)" if rules is not None else ""
-    return f"{study}: {case}{suffix}"
 
 
 def summary(rows, sides):

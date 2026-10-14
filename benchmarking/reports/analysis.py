@@ -438,7 +438,8 @@ def _timing_aggregates(
             if record["status"] != "success":
                 continue
             summary = record["timing_summary"]
-            assert summary is not None
+            if summary is None:
+                continue  # Reference matchers do not emit egglog phase timings.
             per_ruleset: dict[str, PhaseValues] = {}
             for ruleset in summary["rulesets"]:
                 totals = PhaseValues(

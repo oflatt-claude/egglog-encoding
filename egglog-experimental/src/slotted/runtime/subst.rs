@@ -48,8 +48,8 @@
 //! onto another member of `body`'s class.
 
 use super::*;
-use crate::exec_state::{Internal, RegistrySealed};
-use egglog_bridge::{TableAction, TableKind};
+use egglog::api::RawValues;
+use egglog::{TableKind, TableMetadata};
 use hashbrown::HashMap;
 use num::BigUint;
 use smallvec::SmallVec;
@@ -407,7 +407,7 @@ fn intern(state: &mut FullState<'_, '_>, ren: &Renaming) -> Value {
             )
         })
         .collect();
-    state.container_to_value(MapContainer::renaming(data))
+    state.container_to_value(map_container(data))
 }
 
 /// Every class's parsed nodes and smallest-term choice in this execution's snapshot.
@@ -740,16 +740,10 @@ fn decode_renaming(state: &FullState<'_, '_>, value: Value) -> Result<Renaming, 
     Ok(ren)
 }
 
-fn live_action(state: &FullState<'_, '_>, name: &str) -> Result<TableAction, String> {
-    let action = state
-        .registry()
-        .lookup_table(name)
-        .cloned()
-        .ok_or_else(|| format!("required table {name} is not registered"))?;
-    if !action.is_live(state.es(), name) {
-        return Err(format!("required table {name} is not live"));
-    }
-    Ok(action)
+fn live_action(state: &FullState<'_, '_>, name: &str) -> Result<TableMetadata, String> {
+    state
+        .table_metadata(name)
+        .ok_or_else(|| format!("required table {name} is not live"))
 }
 
 fn metadata_rows(
@@ -760,10 +754,10 @@ fn metadata_rows(
     let action = live_action(state, name)?;
     let mut expected = inputs.to_vec();
     expected.push(ColumnTy::Base(state.base_values().get_ty::<()>()));
-    if action.kind() != TableKind::Function
-        || action.input_arity() != inputs.len()
-        || action.output_arity() != 1
-        || action.schema() != expected
+    if action.kind != TableKind::Function
+        || action.input_arity != inputs.len()
+        || action.output_arity != 1
+        || action.schema != expected
     {
         return Err(format!(
             "{name} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
@@ -806,10 +800,10 @@ fn class_slots_if_present(
 
 fn validate_class_slots(state: &FullState<'_, '_>, class_slots: &str) -> Result<(), String> {
     let action = live_action(state, class_slots)?;
-    if action.kind() != TableKind::Function
-        || action.input_arity() != 1
-        || action.output_arity() != 1
-        || action.schema() != [ColumnTy::Id, ColumnTy::Id]
+    if action.kind != TableKind::Function
+        || action.input_arity != 1
+        || action.output_arity != 1
+        || action.schema != [ColumnTy::Id, ColumnTy::Id]
     {
         return Err(format!(
             "{class_slots} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
@@ -825,10 +819,10 @@ fn validate_constructor_layout(
     string: ColumnTy,
 ) -> Result<(), String> {
     let action = live_action(state, ctor)?;
-    if action.kind() != TableKind::Constructor
-        || action.input_arity() != layout.arity
-        || action.output_arity() != 1
-        || action.schema().get(layout.arity) != Some(&ColumnTy::Id)
+    if action.kind != TableKind::Constructor
+        || action.input_arity != layout.arity
+        || action.output_arity != 1
+        || action.schema.get(layout.arity) != Some(&ColumnTy::Id)
     {
         return Err(format!(
             "constructor {ctor} does not have the e-class schema described by {NODE_LAYOUT}"
@@ -850,8 +844,8 @@ fn validate_constructor_layout(
                 "overlapping {EDGE_LAYOUT} columns in {ctor} at {edge}/{child}"
             ));
         }
-        if action.schema().get(edge) != Some(&ColumnTy::Id)
-            || action.schema().get(child) != Some(&ColumnTy::Id)
+        if action.schema.get(edge) != Some(&ColumnTy::Id)
+            || action.schema.get(child) != Some(&ColumnTy::Id)
         {
             return Err(format!(
                 "{EDGE_LAYOUT} for {ctor} marks columns {edge}/{child} whose runtime types are not Id"
@@ -864,7 +858,7 @@ fn validate_constructor_layout(
     // payload; the erased runtime schema cannot distinguish those cases or say
     // how they should be rebuilt, so decline instead of copying an unsound id.
     for col in 0..layout.arity {
-        if !occupied.contains(&col) && !matches!(action.schema()[col], ColumnTy::Base(_)) {
+        if !occupied.contains(&col) && !matches!(action.schema[col], ColumnTy::Base(_)) {
             return Err(format!(
                 "constructor {ctor} has an unsupported Id payload at column {col}"
             ));
@@ -902,7 +896,7 @@ fn validate_constructor_layout(
                         "{BINDER_LAYOUT} discriminator column {col} for {ctor} is not a payload"
                     ));
                 }
-                if action.schema().get(col) != Some(&string) {
+                if action.schema.get(col) != Some(&string) {
                     return Err(format!(
                         "{BINDER_LAYOUT} discriminator column {col} for {ctor} is not a String"
                     ));
@@ -1132,7 +1126,7 @@ impl FullPrim for SlottedSubst {
                 )
             })
             .collect();
-        let substitutions = state.es().execution_cache::<Substitutions>();
+        let substitutions = state.execution_cache::<Substitutions>();
         let mut guard = substitutions
             .0
             .lock()

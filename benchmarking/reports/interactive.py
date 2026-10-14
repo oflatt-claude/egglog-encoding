@@ -42,6 +42,7 @@ _PYTHON_MODULES = (
     "benchmarking/reports/store.py",
     "benchmarking/reports/analysis.py",
     "benchmarking/reports/catalog.py",
+    "benchmarking/reports/slotted.py",
     "benchmarking/reports/presentation.py",
     "benchmarking/reports/interactive_runtime.py",
 )

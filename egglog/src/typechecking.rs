@@ -309,8 +309,7 @@ impl EGraph {
                 // Detach the typechecker while the sort registers, so only direct
                 // `add_*_primitive` calls propagate to it.
                 let saved = self.proof_state.original_typechecking.take();
-                sort.clone().register_primitives(self);
-                crate::sort::slotted::register_sort(self, &sort);
+                sort.register_primitives(self);
                 self.proof_state.original_typechecking = saved;
                 Ok(())
             }

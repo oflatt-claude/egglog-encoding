@@ -19,7 +19,7 @@ struct Claim {
     invocations: Vec<(String, String)>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct State {
     lang: Language,
     initialized: bool,
@@ -27,6 +27,31 @@ struct State {
     extracts: usize,
     reserved: BTreeSet<String>,
     declared: BTreeSet<String>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            lang: Language::default(),
+            initialized: false,
+            rules: 0,
+            extracts: 0,
+            reserved: [
+                "Names",
+                "Binding",
+                "Frame",
+                "Renaming",
+                "Frames",
+                "Group",
+                "Groups",
+                "Renamings",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            declared: BTreeSet::new(),
+        }
+    }
 }
 
 /// Compiler state for successive input files or complete REPL commands.

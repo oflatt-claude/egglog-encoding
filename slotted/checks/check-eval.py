@@ -22,7 +22,23 @@ CHECK_CONFIG = E.Config(
     xmulti=ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti",
 )
 
-ENCODED_CONFIG = E.Config(egglog=ROOT / "target" / "debug" / "egglog", xmulti=CHECK_CONFIG.xmulti)
+ENCODED_CONFIG = E.Config(egglog=ROOT / "target" / "debug" / "egglog-experimental", xmulti=CHECK_CONFIG.xmulti)
+
+
+def cached_record(row, batch):
+    from eval_cache import ENDPOINTS, record
+
+    from benchmarking.models import TargetRow
+    from benchmarking.reports.store import CacheKey
+
+    backend, treatment = ENDPOINTS[row.side]
+    return record(
+        row,
+        batch,
+        key=CacheKey("sha256:test-binary", "sha256:test-workload", treatment, 60, backend),
+        provenance=TargetRow("test", str(ROOT), "HEAD", "test", False),
+        counts=True,
+    )
 
 
 def graphs(name, program, spec, lang=X.LANG):
@@ -145,7 +161,7 @@ def raw_node_counts():
         program = E.sc.compile_source(E.sc.Source(path))
         path.write_text(program)
         subprocess.run(
-            [str(CHECK_CONFIG.egglog), "--to-json", *E.ISO.SERIALIZE_LIMITS, str(path)],
+            [str(CHECK_CONFIG.egglog), "--slotted-encoded", "--to-json", *E.ISO.SERIALIZE_LIMITS, str(path)],
             capture_output=True,
             text=True,
             check=True,
@@ -251,7 +267,7 @@ def exit_status(enc, ref):
             )
             assert E.successful([enc, ref], sides, True) == (verdict == "isomorphic")
             assert E.successful([enc, ref], sides, False)  # explicitly goal-only
-            path.write_text("".join(json.dumps(row.as_dict("regression")) + "\n" for row in (enc, ref)))
+            path.write_text("".join(json.dumps(cached_record(row, "regression")) + "\n" for row in (enc, ref)))
             result = subprocess.run(
                 [
                     sys.executable,
@@ -277,7 +293,9 @@ def exit_status(enc, ref):
                     with patch.object(side, name, value):
                         assert not E.successful([enc, ref], sides, True)
                         assert E.successful([enc, ref], sides, False)
-                        path.write_text("".join(json.dumps(row.as_dict("regression")) + "\n" for row in (enc, ref)))
+                        path.write_text(
+                            "".join(json.dumps(cached_record(row, "regression")) + "\n" for row in (enc, ref))
+                        )
                         result = subprocess.run(
                             [
                                 sys.executable,
@@ -381,7 +399,7 @@ def summary_reporting():
 
     with tempfile.TemporaryDirectory(prefix="slotted-eval-summary-") as tmp:
         path, page = Path(tmp) / "report.jsonl", Path(tmp) / "report.html"
-        record = "".join(json.dumps(row.as_dict("summary")) + "\n" for row in rows)
+        record = "".join(json.dumps(cached_record(row, "summary")) + "\n" for row in rows)
         path.write_text(record)
         summary = R.markdown(*R.summary(rows, ("encoding", "ref-multi")), right_align=True)
         nested_summary = R.markdown(*R.summary(rows, ("encoding-no-aliasing", "ref-nested")), right_align=True)
@@ -426,7 +444,7 @@ def summary_reporting():
         for row in (enc, snapshot):
             row.goal = "yes"
         enc.side = "encoding-no-aliasing"
-        path.write_text("".join(json.dumps(row.as_dict("unchecked")) + "\n" for row in (enc, snapshot)))
+        path.write_text("".join(json.dumps(cached_record(row, "unchecked")) + "\n" for row in (enc, snapshot)))
         result = subprocess.run(
             [sys.executable, E.__file__, "--from", path, "--no-counts"],
             capture_output=True,
@@ -488,12 +506,12 @@ def merged_observations():
     sides = ("encoding", "ref-multi")
     with tempfile.TemporaryDirectory(prefix="slotted-eval-merge-") as tmp:
         path = Path(tmp) / "report.jsonl"
-        original = [enc.as_dict("first"), reference.as_dict("first")]
+        original = [cached_record(enc, "first"), cached_record(reference, "first")]
         for records, valid in (
             (original, True),
-            ([enc.as_dict("first"), reference.as_dict("copied-observation")], True),
-            (original + [newer.as_dict("reference-only")], False),
-            ([enc.as_dict("first")], False),
+            ([cached_record(enc, "first"), cached_record(reference, "copied-observation")], True),
+            (original + [cached_record(newer, "reference-only")], False),
+            ([cached_record(enc, "first")], False),
         ):
             path.write_text("".join(json.dumps(row) + "\n" for row in records))
             rows, _ = E.load_rows(path, merged=True)
@@ -510,8 +528,8 @@ def merged_observations():
         replaced_encoding = E.Row.from_dict(enc.as_dict("test"))
         replaced_encoding.observation = "another-observation"
         assert not E.successful([replaced_encoding, reference], sides, True)
-        old = enc.as_dict("old-schema")
-        del old["schema"]
+        old = cached_record(enc, "old-schema")
+        del old["report_schema_version"]
         path.write_text(json.dumps(old) + "\n")
         result = subprocess.run(
             [sys.executable, E.__file__, "--from", path],
@@ -604,7 +622,7 @@ def nested_comparison_policy():
             enc.vs_ref = {} if verdict is None else {ref.side: E.Comparison(enc.observation, ref.observation, verdict)}
             assert E.successful([enc, ref], sides, True) == (verdict == "isomorphic")
             assert E.successful([enc, ref], sides, False)
-            path.write_text("".join(json.dumps(r.as_dict("test")) + "\n" for r in (enc, ref)))
+            path.write_text("".join(json.dumps(cached_record(r, "test")) + "\n" for r in (enc, ref)))
             result = subprocess.run(
                 [sys.executable, E.__file__, "--from", path, "--side", ",".join(sides)],
                 capture_output=True,
@@ -624,7 +642,7 @@ def nested_comparison_policy():
     full = E.Row("regression", enc.case, "encoding", 1)
     with tempfile.TemporaryDirectory(prefix="slotted-nested-report-") as tmp:
         path = Path(tmp) / "rows.jsonl"
-        path.write_text("".join(json.dumps(r.as_dict("test")) + "\n" for r in (enc, ref, full)))
+        path.write_text("".join(json.dumps(cached_record(r, "test")) + "\n" for r in (enc, ref, full)))
         loaded, _ = E.load_rows(path, merged=True)
         assert len(loaded) == 3 and loaded[0].verdict(loaded[1]) == "isomorphic"
         for long in (False, True):
@@ -677,7 +695,7 @@ def combined_comparisons():
 
     with tempfile.TemporaryDirectory(prefix="slotted-combined-report-") as tmp:
         path = Path(tmp) / "rows.jsonl"
-        path.write_text("".join(json.dumps(r.as_dict("combined")) + "\n" for r in rows))
+        path.write_text("".join(json.dumps(cached_record(r, "combined")) + "\n" for r in rows))
         # Preserve both certificates across loading, and keep the old flag usable.
         for extra in ([], ["--nested-compat", "--side", "encoding,ref-nested"]):
             result = subprocess.run(
@@ -692,7 +710,7 @@ def combined_comparisons():
         newer = E.Row.from_dict(by_side["encoding"].as_dict("newer"))
         newer.observation = "different-encoding-run"
         with path.open("a") as f:
-            f.write(json.dumps(newer.as_dict("newer")) + "\n")
+            f.write(json.dumps(cached_record(newer, "newer")) + "\n")
         loaded, _ = E.load_rows(path, merged=True)
         assert len(loaded) == len(E.SIDES)
         group = {r.side: r for r in loaded}

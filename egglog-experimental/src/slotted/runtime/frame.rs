@@ -36,6 +36,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
+type HashMap<K, V> = hashbrown::HashMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+
 /// A spelling with a deterministic ordering key. The key preserves canonical
 /// numbering across processes, but identity also compares the complete text:
 /// hash collisions cannot identify different variables. Clones share ownership
@@ -259,7 +261,7 @@ impl std::ops::Deref for Fr {
     }
 }
 
-impl crate::core_relations::BaseValue for Fr {}
+impl egglog::BaseValue for Fr {}
 
 impl Frame {
     /// One atom's constraints: its label, exactly one `Root` among the bindings, and
@@ -859,13 +861,14 @@ impl BaseSort for FrameSort {
         add_primitive!(eg, "frame" = | | -> Fr { Fr::new(Frame::default()) });
         // one atom's constraints: `(atom "label" binding...)`, the label first because the
         // macro's varargs are of one sort
+        let [string, binding, frame] = ["String", "Binding", "Frame"].map(|name| eg.type_info().get_sort_by_name(name).unwrap().clone());
         for nested in [false, true] {
             eg.add_pure_primitive(
                 AtomPrim {
                     nested,
-                    string: eg.type_info.get_sort_by_name("String").expect("String sort").clone(),
-                    binding: eg.type_info.get_sort_by_name("Binding").expect("Binding sort").clone(),
-                    frame: eg.type_info.get_sort_by_name("Frame").expect("Frame sort").clone(),
+                    string: string.clone(),
+                    binding: binding.clone(),
+                    frame: frame.clone(),
                 },
                 None,
             );

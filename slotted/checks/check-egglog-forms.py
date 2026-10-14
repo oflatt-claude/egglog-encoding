@@ -200,7 +200,12 @@ def repeatable_compilation():
         assert not src.lang.bound
         compiled = path.with_name("compiled.egg")
         compiled.write_text(full)
-        run = subprocess.run([ROOT / "target/debug/egglog", compiled], capture_output=True, text=True, timeout=30)
+        run = subprocess.run(
+            [ROOT / "target/debug/egglog-experimental", "--slotted-encoded", compiled],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         assert run.returncode == 0, run.stderr
         # This CLI path emits a snapshot and runs the full program in one invocation.
         snapshot = path.with_name("snapshot.egg")

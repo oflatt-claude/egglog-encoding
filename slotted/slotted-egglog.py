@@ -157,6 +157,7 @@ class Source:
             and form[0] in ("sort", "constructor", "function", "relation", "ruleset")
             and not (form[0] == "sort" and len(form) == 2 and form[1] in carriers)
         }
+        reserved.update({"Names", "Binding", "Frame", "Renaming", "Frames", "Group", "Groups", "Renamings"})
         collision = next((sort for sort in self.sorts if sort in reserved), None)
         if collision is None:
             collision = next((form[1] for form in self._ctors if form[1] in reserved), None)
@@ -1162,7 +1163,11 @@ def main():
         f.write(text)
         path = f.name
     r = subprocess.run(
-        [str(ROOT / "target" / "debug" / "egglog"), path], capture_output=True, text=True, cwd=ROOT, timeout=1800
+        [str(ROOT / "target" / "debug" / "egglog-experimental"), "--slotted-encoded", path],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        timeout=1800,
     )
     if r.returncode != 0:
         err = [line for line in r.stderr.splitlines() if "ERROR" in line]

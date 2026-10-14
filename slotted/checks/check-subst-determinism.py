@@ -24,7 +24,7 @@ sc = __import__("slotted-egglog")
 slotenc = __import__("slotted-encoder")
 pf = __import__("paper_fixtures")
 
-EGGLOG = ROOT / "target" / "debug" / "egglog"
+EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
 TEST = ROOT / "slotted" / "tests" / "sdql-paper-mmm.egg"
 SCRATCH = ROOT / "target" / "slotted"
 RUNS = 4
@@ -100,7 +100,7 @@ def main():
         for _ in range(RUNS):
             json_path.unlink(missing_ok=True)
             run = subprocess.run(
-                [str(EGGLOG), "--to-json", *ISO.SERIALIZE_LIMITS, str(compiled)],
+                [str(EGGLOG), "--slotted-encoded", "--to-json", *ISO.SERIALIZE_LIMITS, str(compiled)],
                 capture_output=True,
                 text=True,
                 cwd=ROOT,

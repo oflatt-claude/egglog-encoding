@@ -44,7 +44,8 @@ use crate::{
     sort::{F, S},
     typechecking::FuncType,
 };
-use egglog_bridge::{ActionRegistry, TableAction, TableKind};
+pub use egglog_bridge::TableKind;
+use egglog_bridge::{ActionRegistry, TableAction};
 use smallvec::SmallVec;
 
 /// Inline scratch for a row of column values. Matches the
@@ -307,14 +308,33 @@ pub trait Core<'a, 'db: 'a>: Internal<'a, 'db> {
 /// The single-entry methods (`lookup`, `eclass_of`, `contains`)
 /// return `None` if absent — never insert. The iteration /
 /// introspection methods (`function_entries`, `constructor_enodes`,
-/// `table_size`, `table_sizes`) walk the current
-/// contents of the database.
+/// `table_size`, `table_sizes`) walk the current contents of the database.
 ///
 /// Detectable misuse (wrong table subtype, wrong arity) is reported
 /// as [`crate::ApiError`] via the method's `Result`. Per-column sort
 /// matching is **not** checked at this layer.
 #[allow(private_bounds)]
 pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
+    /// Immutable metadata for a currently live table. Entries left behind by a
+    /// rollback are omitted, even if another table has since reused their id.
+    fn table_metadata(&self, name: &str) -> Option<TableMetadata> {
+        let action = self.registry().lookup_table(name)?;
+        action.is_live(self.es(), name).then(|| TableMetadata {
+            kind: action.kind(),
+            input_arity: action.input_arity(),
+            output_arity: action.output_arity(),
+            schema: action.schema().to_vec(),
+        })
+    }
+
+    /// Extension-owned scratch data shared by workers reading this execution's
+    /// database snapshot. A new execution (including after rollback) starts empty.
+    /// Mutations are staged until execution finishes, so cached reads do not
+    /// include pending writes. Use a distinct wrapper type for each cache.
+    fn execution_cache<T: Default + Send + Sync + 'static>(&self) -> std::sync::Arc<T> {
+        self.es().execution_cache::<T>()
+    }
+
     /// Look up a function's output value at the given key. Returns
     /// `Ok(None)` if the row is absent. The returned `Value` is raw —
     /// extract a Rust type via [`Core::value_to_base`] for base sorts
@@ -438,6 +458,16 @@ pub trait Read<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 }
 
+/// The kind and physical column types of a live table. Schema columns are
+/// inputs followed by outputs; equality and container sorts both use `Id`.
+#[derive(Clone, Debug)]
+pub struct TableMetadata {
+    pub kind: TableKind,
+    pub input_arity: usize,
+    pub output_arity: usize,
+    pub schema: Vec<crate::sort::ColumnTy>,
+}
+
 /// One enode from [`Read::constructor_enodes`]. Columns are raw
 /// [`Value`]s; convert with [`Core::value_to_base`] / [`Core::value_to_container`].
 #[derive(Clone, Copy, Debug)]
@@ -547,7 +577,7 @@ pub trait Write<'a, 'db: 'a>: Core<'a, 'db> + RegistrySealed<'a, 'db> {
     }
 }
 
-pub(crate) fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
+fn lookup_action(registry: &ActionRegistry, name: &str) -> Result<TableAction, Error> {
     registry.lookup_table(name).cloned().ok_or_else(|| {
         ApiError::MissingTable {
             name: name.to_string(),

@@ -43,7 +43,9 @@ def main():
         path = Path(scratch) / "case.egg"
         for args in itertools.product(itertools.permutations("FGH"), (False, True), (False, True)):
             path.write_text(program(*args))
-            result = subprocess.run([str(X.EGGLOG), str(path)], capture_output=True, text=True, timeout=30, cwd=ROOT)
+            result = subprocess.run(
+                [str(X.EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=30, cwd=ROOT
+            )
             assert result.returncode == 0, (args, result.stderr)
             cases += 1
     print(f"OK: {cases} leader reversals preserve identities and symmetries")

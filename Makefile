@@ -89,7 +89,7 @@ slotted-check:
 # it is sized to run beside eighteen other checks, not to be a confidence statement.
 # Takes minutes and many cores; `campaign.py`'s header records what a deep run found.
 slotted-campaign:
-	cargo build --release --bin egglog
+	cargo build --release --bin egglog-experimental
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	python3 slotted/xdiff/campaign.py iso --cases 500 --seeds 32
 	python3 slotted/xdiff/campaign.py order --cases 100 --seeds 32
@@ -101,7 +101,7 @@ slotted-campaign:
 # encoding and on the reference through both of its matchers, at the artifact's budgets.
 # Release builds of both binaries, since these are the numbers a graph is drawn from.
 slotted-eval:
-	python3 slotted/slotted-eval.py --params 0 1 2 3 --counts --jsonl target/slotted/eval.jsonl
+	./bench.py slotted --params 0 1 2 3 --counts
 
 slotted-check-no-oracle:
 	cargo build

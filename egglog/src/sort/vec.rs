@@ -196,7 +196,6 @@ impl ContainerSort for VecSort {
         }, vec_get_validator);
         add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (arc), i: i64, x: # (self.element())| -> @VecContainer (arc) {{ xs.data[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (arc), i: i64                       | -> @VecContainer (arc) {{ xs.data.remove(i as usize); xs }});
-
         if self.element.is_eq_sort() {
             eg.add_write_primitive(
                 Union {

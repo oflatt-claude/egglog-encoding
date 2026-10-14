@@ -43,7 +43,7 @@ fn register_renamings(
     maps.into_iter()
         .map(|m| {
             let data = value_map(state.base_values(), m);
-            state.register_container(MapContainer::renaming(data))
+            state.register_container(map_container(data))
         })
         .collect()
 }
@@ -65,7 +65,7 @@ fn value_maps(
 fn intern_group(state: &mut PureState<'_, '_>, maps: Vec<BTreeMap<Value, Value>>) -> SetContainer {
     let data = maps
         .into_iter()
-        .map(|m| state.register_container(MapContainer::renaming(m)))
+        .map(|m| state.register_container(map_container(m)))
         .collect();
     SetContainer {
         do_rebuild: false,
@@ -74,7 +74,12 @@ fn intern_group(state: &mut PureState<'_, '_>, maps: Vec<BTreeMap<Value, Value>>
 }
 
 #[rustfmt::skip]
-pub(super) fn register_map(eg: &mut EGraph, map: &MapSort, arc: ArcSort) {
+pub(super) fn register_map(eg: &mut EGraph, arc: ArcSort) {
+        add_primitive!(eg, "map-intersect" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -> @MapContainer (arc) { map_container(map_intersect(&xs.data, &ys.data)) });
+            add_primitive!(eg, "compose-total" = |a: @MapContainer (arc), b: @MapContainer (arc)| -?> @MapContainer (arc) { Some(map_container(compose_total(&a.data, &b.data)?)) });
+            add_primitive!(eg, "map-image"   = |a: @MapContainer (arc)| -> @MapContainer (arc) { map_container(map_image(&a.data)) });
+
+    add_primitive!(eg, "map-domain" = |a: @MapContainer (arc)| -> @MapContainer (arc) { map_container(map_domain(&a.data)) });
     // Slotted matching frames (`slotted/frame.rs`) read renamings off matched
     // e-nodes and hand renamings back: the bindings an `atom` is made of,
     // a variable's renaming out of a frame, and a built node's slot set.
@@ -103,19 +108,19 @@ pub(super) fn register_map(eg: &mut EGraph, map: &MapSort, arc: ArcSort) {
         Bd::new(Binding::Leaf { edge: slot_map(state.base_values(), &e.data) })
     });
     add_primitive!(eg, "ren" = |f: Fr, name: S| -?> @MapContainer (arc) {
-        Some(MapContainer::renaming(value_map(state.base_values(), f.ren(name.as_str())?)))
+        Some(map_container(value_map(state.base_values(), f.ren(name.as_str())?)))
     });
     add_primitive!(eg, "without" = |f: Fr, slots: @MapContainer (arc), bound: Ns| -?> @MapContainer (arc) {{
         let bv = state.base_values();
-        Some(MapContainer::renaming(value_map(bv, f.without(&slot_map(bv, &slots.data), &bound.0 .0)?)))
+        Some(map_container(value_map(bv, f.without(&slot_map(bv, &slots.data), &bound.0 .0)?)))
     }});
     add_primitive!(eg, "node-slots" = |f: Fr, uncovered: Ns, covered: Ns, bound: Ns| -?> @MapContainer (arc) {
-        Some(MapContainer::renaming(value_map(state.base_values(), f.node_slots(&uncovered.0 .0, &covered.0 .0, &bound.0 .0)?)))
+        Some(map_container(value_map(state.base_values(), f.node_slots(&uncovered.0 .0, &covered.0 .0, &bound.0 .0)?)))
     });
-    add_primitive!(eg, "find-mapping-total" = {map.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
+    add_primitive!(eg, "find-mapping-total" = {arc.clone(): ArcSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
         let bv = state.base_values();
         let maps: Vec<Renaming> = xs.map(|m| slot_map(bv, &m.data)).collect();
-        Some(MapContainer::renaming(value_map(bv, find_mapping_total(&maps)?)))
+        Some(map_container(value_map(bv, find_mapping_total(&maps)?)))
     }});
 
     // Substitution needs both a read (to extract a term) and a
@@ -125,6 +130,7 @@ pub(super) fn register_map(eg: &mut EGraph, map: &MapSort, arc: ArcSort) {
     // the renaming placing it in `body`'s frame.
     // The two halves are called with the same arguments in one action, so
     // they share what one call computes.
+    let slot = eg.type_info().get_sort_by_name("i64").unwrap().clone();
     for half in [
         super::subst::Half::Class,
         super::subst::Half::Frame,
@@ -133,7 +139,7 @@ pub(super) fn register_map(eg: &mut EGraph, map: &MapSort, arc: ArcSort) {
             super::subst::SlottedSubst {
                 half,
                 renaming: arc.clone(),
-                slot: map.key(),
+                slot: slot.clone(),
             },
             None,
         );
@@ -141,57 +147,57 @@ pub(super) fn register_map(eg: &mut EGraph, map: &MapSort, arc: ArcSort) {
 }
 
 #[rustfmt::skip]
-pub(super) fn register_set(eg: &mut EGraph, set: &SetSort, arc: ArcSort, renaming: ArcSort) {
-    add_primitive!(eg, "group-restrict" = {set.clone(): SetSort} |s: @SetContainer (arc.clone()), cs: @MapContainer (renaming.clone())| -?> @SetContainer (arc.clone()) {{
+pub(super) fn register_set(eg: &mut EGraph, arc: ArcSort, renaming: ArcSort) {
+    add_primitive!(eg, "group-restrict" = {arc.clone(): ArcSort} |s: @SetContainer (arc.clone()), cs: @MapContainer (renaming.clone())| -?> @SetContainer (arc.clone()) {{
         let maps = value_maps(&state, s.data.iter().copied())?;
         Some(intern_group(&mut state, group::restrict(&maps, &cs.data)))
     }});
-    add_primitive!(eg, "group-close" = {set.clone(): SetSort} |s: @SetContainer (arc.clone())| -?> @SetContainer (arc.clone()) {{
+    add_primitive!(eg, "group-close" = {arc.clone(): ArcSort} |s: @SetContainer (arc.clone())| -?> @SetContainer (arc.clone()) {{
         let maps = value_maps(&state, s.data.iter().copied())?;
         Some(intern_group(&mut state, group::close(&maps)))
     }});
-    add_primitive!(eg, "group-coset-reps" = {set.clone(): SetSort} |s: @SetContainer (arc.clone()), pinned: @MapContainer (renaming.clone())| -?> @SetContainer (arc.clone()) {{
+    add_primitive!(eg, "group-coset-reps" = {arc.clone(): ArcSort} |s: @SetContainer (arc.clone()), pinned: @MapContainer (renaming.clone())| -?> @SetContainer (arc.clone()) {{
         let values: Vec<Value> = s.data.iter().copied().collect();
         let maps = slot_maps(&state, values.iter().copied())?;
         let pinned = slot_map(state.base_values(), &pinned.data);
         let data = group::coset_reps(&maps, &pinned).into_iter().map(|i| values[i]).collect();
         Some(SetContainer { do_rebuild: false, data: Arc::new(data) })
     }});
-    add_primitive!(eg, "coset-min" = {set.clone(): SetSort} |m: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> @MapContainer (renaming.clone()) {{
+    add_primitive!(eg, "coset-min" = {arc.clone(): ArcSort} |m: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> @MapContainer (renaming.clone()) {{
         let maps = slot_maps(&state, s.data.iter().copied())?;
         let m = slot_map(state.base_values(), &m.data);
         let least = group::coset_min(&m, &maps)?;
-        Some(MapContainer::renaming(value_map(state.base_values(), least)))
+        Some(map_container(value_map(state.base_values(), least)))
     }});
     // `(root "p" cs grp)` and `(child "v" e cs grp)`: a binding whose reading of
     // its class is any element of the group, decided by the frame once the rest
     // of the pattern has pinned what it can (C5); see `Frame::refinements`.
-    add_primitive!(eg, "root" = {set.clone(): SetSort} |v: S, cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
+    add_primitive!(eg, "root" = {arc.clone(): ArcSort} |v: S, cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
         let group = slot_maps(&state, grp.data.iter().copied())?;
         let class_slots = slot_set(state.base_values(), &cs.data)?;
         Some(Bd::new(Binding::Root { var: PVarId::new(v.as_str()), class_slots, reading: Reading::Group(Arc::new(group)) }))
     }});
-    add_primitive!(eg, "child" = {set.clone(): SetSort} |v: S, e: @MapContainer (renaming.clone()), cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
+    add_primitive!(eg, "child" = {arc.clone(): ArcSort} |v: S, e: @MapContainer (renaming.clone()), cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
         let group = slot_maps(&state, grp.data.iter().copied())?;
         let bv = state.base_values();
         Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_set(bv, &cs.data)?, reading: Reading::Group(Arc::new(group)) }))
     }});
-    add_primitive!(eg, "coset-same" = {set.clone(): SetSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> () {{
+    add_primitive!(eg, "coset-same" = {arc.clone(): ArcSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> () {{
         let maps = value_maps(&state, s.data.iter().copied())?;
         group::coset_same(&m1.data, &m2.data, &maps).then_some(())
     }});
-    add_primitive!(eg, "group-slot-closure" = {set.clone(): SetSort} |s: @SetContainer (arc.clone()), slots: @MapContainer (renaming.clone())| -?> @MapContainer (renaming.clone()) {{
+    add_primitive!(eg, "group-slot-closure" = {arc.clone(): ArcSort} |s: @SetContainer (arc.clone()), slots: @MapContainer (renaming.clone())| -?> @MapContainer (renaming.clone()) {{
         let maps = value_maps(&state, s.data.iter().copied())?;
-        Some(MapContainer::renaming(group::slot_closure(&maps, &slots.data)))
+        Some(map_container(group::slot_closure(&maps, &slots.data)))
     }});
 
 }
 
 #[rustfmt::skip]
-pub(super) fn register_vec(eg: &mut EGraph, vec: &VecSort, arc: ArcSort) {
+pub(super) fn register_vec(eg: &mut EGraph, arc: ArcSort) {
     // `(shape e1 e2 ...)`: the edges in canonical spelling, then the renaming from
     // that spelling back to the node's names; see `shape`.
-    add_primitive!(eg, "shape" = {vec.clone(): VecSort} [xs: # (vec.element())] -?> @VecContainer (arc) {{
+    add_primitive!(eg, "shape" = {arc.clone(): ArcSort} [xs: # (arc.inner_sorts()[0].clone())] -?> @VecContainer (arc) {{
         let maps = slot_maps(&state, xs)?;
         let data = register_renamings(&mut state, shape(&maps).into_maps());
         Some(VecContainer { do_rebuild: false, data })
@@ -199,10 +205,10 @@ pub(super) fn register_vec(eg: &mut EGraph, vec: &VecSort, arc: ArcSort) {
 }
 
 #[rustfmt::skip]
-pub(super) fn register_node_shape(eg: &mut EGraph, vec: &VecSort, arc: ArcSort, groups: ArcSort) {
+pub(super) fn register_node_shape(eg: &mut EGraph, arc: ArcSort, groups: ArcSort) {
     // `(node-shape (vec-of e1 ...) (vec-of g1 ...))`: the canonical edges, the
     // renaming back to the node's names, then its symmetries; see `node_shape`.
-    add_primitive!(eg, "node-shape" = {vec.clone(): VecSort} |es: @VecContainer (arc.clone()), gs: @VecContainer (groups.clone())| -?> @VecContainer (arc.clone()) {{
+    add_primitive!(eg, "node-shape" = {arc.clone(): ArcSort} |es: @VecContainer (arc.clone()), gs: @VecContainer (groups.clone())| -?> @VecContainer (arc.clone()) {{
         let edges = slot_maps(&state, es.data.iter().copied())?;
         let mut groups = Vec::with_capacity(gs.data.len());
         for value in gs.data.iter().copied() {
@@ -215,17 +221,17 @@ pub(super) fn register_node_shape(eg: &mut EGraph, vec: &VecSort, arc: ArcSort, 
 }
 
 #[rustfmt::skip]
-pub(super) fn register_symmetries(eg: &mut EGraph, vec: &VecSort, arc: ArcSort, set: ArcSort) {
+pub(super) fn register_symmetries(eg: &mut EGraph, arc: ArcSort, set: ArcSort) {
     // the symmetries `node-shape` put after its first `n` entries
-    add_primitive!(eg, "symmetries-of" = {vec.clone(): VecSort} |xs: @VecContainer (arc.clone()), n: i64| -?> @SetContainer (set.clone()) {{
+    add_primitive!(eg, "symmetries-of" = {arc.clone(): ArcSort} |xs: @VecContainer (arc.clone()), n: i64| -?> @SetContainer (set.clone()) {{
         let n = usize::try_from(n).ok()?;
         Some(SetContainer { do_rebuild: false, data: std::sync::Arc::new(xs.data.get(n..)?.iter().copied().collect()) })
     }});
 }
 
 #[rustfmt::skip]
-pub(super) fn register_frame_vec(eg: &mut EGraph, vec: &VecSort, arc: ArcSort) {
-    add_primitive!(eg, "refinements" = {vec.clone(): VecSort} |f: Fr| -> @VecContainer (arc) { VecContainer {
+pub(super) fn register_frame_vec(eg: &mut EGraph, arc: ArcSort) {
+    add_primitive!(eg, "refinements" = {arc.clone(): ArcSort} |f: Fr| -> @VecContainer (arc) { VecContainer {
         do_rebuild: false,
         data: f
             .refinements()
@@ -233,4 +239,44 @@ pub(super) fn register_frame_vec(eg: &mut EGraph, vec: &VecSort, arc: ArcSort) {
             .map(|g| state.base_values().get::<Fr>(Fr::new(g)))
             .collect(),
     } });
+}
+
+/// `a ∘ b` where every key of `b` must survive; `None` if any is lost.
+///
+/// [`compose`] narrows silently when `b`'s image escapes `a`'s domain,
+/// which is correct for composing partial maps but wrong wherever the result
+/// becomes an *edge* of an e-node: an edge's domain must be its child's slot set,
+/// so a narrowed edge misstates which slots the child has. Use this there, and
+/// the rule declines instead of asserting something false.
+fn compose_total(
+    a: &BTreeMap<Value, Value>,
+    b: &BTreeMap<Value, Value>,
+) -> Option<BTreeMap<Value, Value>> {
+    let out = compose(a, b);
+    (out.len() == b.len()).then_some(out)
+}
+
+/// The identity map on `im(m)`.
+///
+/// A set of slots is represented as an identity renaming, so this is how to name
+/// "the slots `m` maps onto" — the long way round being `(compose m (inverse m))`.
+fn map_image(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+    m.values().map(|v| (*v, *v)).collect()
+}
+
+/// The identity map on `dom(m)`; the counterpart of [`map_image`], spelled
+/// the long way round as `(compose (inverse m) m)`.
+fn map_domain(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+    m.keys().map(|k| (*k, *k)).collect()
+}
+
+/// The entries two maps agree on.
+///
+/// A slot set is an identity renaming, so this is how one narrows: intersecting two
+/// identity maps gives the identity on the intersection of their domains.
+fn map_intersect(a: &BTreeMap<Value, Value>, b: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
+    a.iter()
+        .filter(|(k, v)| b.get(k) == Some(v))
+        .map(|(k, v)| (*k, *v))
+        .collect()
 }

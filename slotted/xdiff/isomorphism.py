@@ -972,7 +972,7 @@ def _dump(case, mult, timeout, *, lang=X.LANG, egg_program=X.egg_program):
     p.write_text(prog)
     try:
         r = subprocess.run(
-            [str(X.EGGLOG), "--to-json", *SERIALIZE_LIMITS, str(p)],
+            [str(X.EGGLOG), "--slotted-encoded", "--to-json", *SERIALIZE_LIMITS, str(p)],
             capture_output=True,
             text=True,
             cwd=X.ROOT,

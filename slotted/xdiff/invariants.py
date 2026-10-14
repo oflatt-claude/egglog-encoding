@@ -98,7 +98,9 @@ def probe(case):
     p = X.ROOT / f"inv-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=300)
+        r = subprocess.run(
+            [str(X.EGGLOG), "--slotted-encoded", str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=300
+        )
     except subprocess.TimeoutExpired:
         return None
     finally:

@@ -12,19 +12,19 @@ pub struct MapContainer {
 }
 
 impl MapContainer {
-    /// A renaming: a map whose keys and values are slot names, so its contents
-    /// never need rebuilding.
-    pub(crate) fn renaming(data: BTreeMap<Value, Value>) -> Self {
-        MapContainer {
-            do_rebuild_keys: false,
-            do_rebuild_vals: false,
+    /// Construct a map, specifying which columns contain equality values (or
+    /// containers of equality values) and therefore need rebuilding.
+    pub fn new(data: BTreeMap<Value, Value>, rebuild_keys: bool, rebuild_values: bool) -> Self {
+        Self {
+            do_rebuild_keys: rebuild_keys,
+            do_rebuild_vals: rebuild_values,
             data: Arc::new(data),
         }
     }
 
     /// Whether this map's keys or values are e-classes, and so are rebuilt when
     /// the e-graph merges classes.
-    pub(crate) fn rebuilds_contents(&self) -> bool {
+    pub fn rebuilds_contents(&self) -> bool {
         self.do_rebuild_keys || self.do_rebuild_vals
     }
 }
@@ -103,25 +103,10 @@ fn normalize_map_term(termdag: &mut TermDag, args: &[TermId]) -> Option<TermId> 
 /// `a ∘ b`, the map sending `x` to `a[b[x]]`: `b` applies first. Undefined
 /// wherever either step is, so the result is keyed on
 /// `{x ∈ dom(b) | b[x] ∈ dom(a)}`.
-pub(crate) fn compose<T: Copy + Ord>(a: &BTreeMap<T, T>, b: &BTreeMap<T, T>) -> BTreeMap<T, T> {
+pub fn compose<T: Copy + Ord>(a: &BTreeMap<T, T>, b: &BTreeMap<T, T>) -> BTreeMap<T, T> {
     b.iter()
         .filter_map(|(x, y)| a.get(y).map(|z| (*x, *z)))
         .collect()
-}
-
-/// `a ∘ b` where every key of `b` must survive; `None` if any is lost.
-///
-/// [`compose`] narrows silently when `b`'s image escapes `a`'s domain,
-/// which is correct for composing partial maps but wrong wherever the result
-/// becomes an *edge* of an e-node: an edge's domain must be its child's slot set,
-/// so a narrowed edge misstates which slots the child has. Use this there, and
-/// the rule declines instead of asserting something false.
-fn compose_total(
-    a: &BTreeMap<Value, Value>,
-    b: &BTreeMap<Value, Value>,
-) -> Option<BTreeMap<Value, Value>> {
-    let out = compose(a, b);
-    (out.len() == b.len()).then_some(out)
 }
 
 /// The inverse map; `None` unless the input is injective.
@@ -132,31 +117,6 @@ fn compose_total(
 fn inverse(m: &BTreeMap<Value, Value>) -> Option<BTreeMap<Value, Value>> {
     let out: BTreeMap<Value, Value> = m.iter().map(|(k, v)| (*v, *k)).collect();
     (out.len() == m.len()).then_some(out)
-}
-
-/// The identity map on `im(m)`.
-///
-/// A set of slots is represented as an identity renaming, so this is how to name
-/// "the slots `m` maps onto" — the long way round being `(compose m (inverse m))`.
-fn map_image(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
-    m.values().map(|v| (*v, *v)).collect()
-}
-
-/// The identity map on `dom(m)`; the counterpart of [`map_image`], spelled
-/// the long way round as `(compose (inverse m) m)`.
-fn map_domain(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
-    m.keys().map(|k| (*k, *k)).collect()
-}
-
-/// The entries two maps agree on.
-///
-/// A slot set is an identity renaming, so this is how one narrows: intersecting two
-/// identity maps gives the identity on the intersection of their domains.
-fn map_intersect(a: &BTreeMap<Value, Value>, b: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
-    a.iter()
-        .filter(|(k, v)| b.get(k) == Some(v))
-        .map(|(k, v)| (*k, *v))
-        .collect()
 }
 
 /// Union of partial maps; `None` if they disagree on a shared key.
@@ -182,7 +142,7 @@ fn map_union(
 ///
 /// `None` when the halves are unequal in length, when a pair's key sets
 /// differ, or when the constraints make `R` non-functional or non-injective.
-pub(crate) fn find_mapping<T: Copy + Ord>(
+pub fn find_mapping<T: Copy + Ord>(
     maps: &[impl std::borrow::Borrow<BTreeMap<T, T>>],
 ) -> Option<BTreeMap<T, T>> {
     if !maps.len().is_multiple_of(2) {
@@ -376,7 +336,6 @@ impl ContainerSort for MapSort {
         add_primitive_with_validator!(eg, "map-not-contains" = |xs: @MapContainer (arc), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) }, map_not_contains_validator);
 
         add_primitive!(eg, "map-union" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(map_union(&xs.data, &ys.data)?), ..xs }) });
-        add_primitive!(eg, "map-intersect" = |xs: @MapContainer (arc), ys: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_intersect(&xs.data, &ys.data)), ..xs } });
 
         // With matching key and value sorts a map is a partial injection on one
         // space — a renaming, in the slotted-e-graph sense — so it composes and
@@ -384,11 +343,8 @@ impl ContainerSort for MapSort {
         // edges onto another; it is variadic, taking the two tuples flat.
         if self.key.name() == self.value.name() {
             add_primitive!(eg, "compose" = |a: @MapContainer (arc), b: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(compose(&a.data, &b.data)), ..b } });
-            add_primitive!(eg, "compose-total" = |a: @MapContainer (arc), b: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(compose_total(&a.data, &b.data)?), ..b }) });
             add_primitive!(eg, "inverse"     = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(inverse(&a.data)?), ..a }) });
             add_primitive!(eg, "map-inverse" = |a: @MapContainer (arc)| -?> @MapContainer (arc) { Some(MapContainer { data: Arc::new(inverse(&a.data)?), ..a }) });
-            add_primitive!(eg, "map-image"   = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_image(&a.data)), ..a } });
-            add_primitive!(eg, "map-domain"  = |a: @MapContainer (arc)| -> @MapContainer (arc) { MapContainer { data: Arc::new(map_domain(&a.data)), ..a } });
             add_primitive!(eg, "find-mapping" = {self.clone(): MapSort} [xs: @MapContainer (arc)] -?> @MapContainer (arc) {{
                 let maps: Vec<_> = xs.map(|m| m.data).collect();
                 Some(MapContainer {

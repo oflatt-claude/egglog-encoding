@@ -10,6 +10,11 @@ target/debug/egglog-experimental --slotted slotted/tests/paper/figure-3.egg
 target/debug/egglog-experimental --slotted --mode desugar slotted/tests/paper/figure-3.egg
 ```
 
+The flag installs the slotted runtime in experimental and transforms the source
+before evaluation. To replay already lowered code, use
+`egglog-experimental --slotted-encoded`. From Rust, evaluate `Compiler::compile`'s
+output with `egglog_experimental::slotted::new_egraph()`.
+
 `--slotted-no-aliasing`, together with `--slotted`, restricts rewrite matching to the reference nested matcher's
 aliasing policy. It keeps the outer class's slots and each nested node's fresh
 slots pairwise distinct, while preserving sharing already present in child edges.

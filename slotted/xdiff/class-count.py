@@ -49,7 +49,9 @@ def encoding_classes(case):
     p = X.ROOT / f"xdiff-tmp-cc-{os.getpid()}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=120)
+        r = subprocess.run(
+            [str(X.EGGLOG), "--slotted-encoded", str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=120
+        )
     except subprocess.TimeoutExpired:
         return None
     finally:

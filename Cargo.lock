@@ -708,12 +708,15 @@ dependencies = [
  "egglog-experimental-dd",
  "egglog-reports",
  "glob",
+ "hashbrown 0.16.1",
  "insta",
  "lazy_static",
  "libtest-mimic",
  "log",
  "num",
+ "rustc-hash",
  "serde_json",
+ "smallvec",
 ]
 
 [[package]]

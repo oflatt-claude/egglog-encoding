@@ -31,7 +31,13 @@ def treatment_flags(treatment: Treatment) -> list[str]:
         return ["--term-encoding"]
     if treatment == "proof-extraction":
         return ["--proof-extraction"]
-    return ["--proofs"]
+    if treatment == "proofs":
+        return ["--proofs"]
+    if treatment == "slotted":
+        return ["--slotted"]
+    if treatment == "slotted-no-aliasing":
+        return ["--slotted", "--slotted-no-aliasing"]
+    raise ValueError("reference matcher treatments require the slotted collector")
 
 
 def backend_flags(backend: Backend) -> list[str]:

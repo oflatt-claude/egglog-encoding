@@ -14,7 +14,9 @@ from typing import Literal
 
 Status = Literal["success", "timed-out", "failure"]
 Backend = str
-Treatment = Literal["off", "term", "proofs", "proof-extraction"]
+Treatment = Literal[
+    "off", "term", "proofs", "proof-extraction", "slotted", "slotted-no-aliasing", "multi", "nested", "nested-snapshot"
+]
 DetailLevel = Literal["summary", "files", "phases", "rulesets"]
 
 
@@ -26,7 +28,8 @@ class BackendSpec:
 
 
 BACKEND_SPECS: dict[Backend, BackendSpec] = {
-    "main": BackendSpec(("off", "term", "proofs", "proof-extraction"), ()),
+    "main": BackendSpec(("off", "term", "proofs", "proof-extraction", "slotted", "slotted-no-aliasing"), ()),
+    "slotted-reference": BackendSpec(("multi", "nested", "nested-snapshot"), ()),
     "dd": BackendSpec(("term", "proofs"), ("--backend", "dd"), ("dd-backend",)),
 }
 

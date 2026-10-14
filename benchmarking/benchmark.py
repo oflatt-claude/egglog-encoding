@@ -66,7 +66,7 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--backend",
-        choices=tuple(BACKEND_SPECS),
+        choices=tuple(name for name in BACKEND_SPECS if name != "slotted-reference"),
         default="main",
         help="candidate backend (default: main)",
     )
@@ -83,7 +83,7 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--compare-backend",
-        choices=tuple(BACKEND_SPECS),
+        choices=tuple(name for name in BACKEND_SPECS if name != "slotted-reference"),
         default="main",
         help="baseline backend (default: main)",
     )

@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Final, Literal, TypedDict, cast
+from typing import Final, Literal, NotRequired, TypedDict, cast
 
 from ..models import (
     Backend,
@@ -23,8 +23,8 @@ from ..models import (
     Treatment,
 )
 
-type ReportSchemaVersion = Literal[1]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 1
+type ReportSchemaVersion = Literal[2]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 2
 
 type TimingSummarySchemaVersion = Literal[2]
 TIMING_SUMMARY_SCHEMA_VERSION: Final[TimingSummarySchemaVersion] = 2
@@ -46,6 +46,39 @@ class TimingSummaryRecord(TypedDict):
 
     schema_version: TimingSummarySchemaVersion
     rulesets: list[RulesetTimingRecord]
+
+
+class SlottedComparison(TypedDict):
+    encoding: str
+    reference: str
+    verdict: str
+
+
+class SlottedEvidence(TypedDict):
+    """Untimed correctness evidence attached to one timed slotted observation.
+
+    A certificate names both observation IDs. Selecting different cached rows
+    must never silently reuse it for an unverified pair.
+    """
+
+    observation: str
+    batch: str
+    study: str
+    case: str
+    side: str
+    rounds: int
+    rules: int | None
+    jobs: int
+    counts: bool
+    goal: str
+    saturated: str
+    classes: int | None
+    nodes: int | None
+    checks: str | None
+    substitution: str | None
+    paper: list[int | bool] | None
+    graph_issue: str | None
+    vs_ref: dict[str, SlottedComparison]
 
 
 class ReportRecord(TypedDict):
@@ -74,6 +107,7 @@ class ReportRecord(TypedDict):
     error_signal: int | None
     error_message: str | None
     timing_summary: TimingSummaryRecord | None
+    slotted: NotRequired[SlottedEvidence]
 
 
 @dataclass(frozen=True)
@@ -279,7 +313,7 @@ def _require_current_record(record: ReportRecord) -> None:
     summary = record["timing_summary"]
     if summary is not None:
         _require_current_timing_summary(summary)
-    if record["status"] == "success" and summary is None:
+    if record["status"] == "success" and summary is None and "slotted" not in record:
         raise ValueError("successful benchmark record is missing its timing summary")
 
 

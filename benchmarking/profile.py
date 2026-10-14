@@ -97,7 +97,7 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--backend",
-        choices=tuple(BACKEND_SPECS),
+        choices=tuple(name for name in BACKEND_SPECS if name != "slotted-reference"),
         default="main",
         help="backend to profile (default: main)",
     )

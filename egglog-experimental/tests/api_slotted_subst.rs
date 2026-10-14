@@ -12,7 +12,6 @@ use egglog::prelude::*;
 /// A binary node `H`, a payload-carrying unary node `Lbl`, and the two nodes a
 /// beta step needs.
 const SLOTTED: &str = r#"
-(sort Renaming (Map i64 i64))
 (sort U)
 (constructor Var (i64) U)
 (constructor Null () U)
@@ -59,7 +58,7 @@ const SLOTTED: &str = r#"
 "#;
 
 fn egraph(program: &str) -> Result<EGraph, Error> {
-    let mut egraph = EGraph::default();
+    let mut egraph = egglog_experimental::slotted::new_egraph();
     egraph.parse_and_run_program(None, &format!("{SLOTTED}\n{program}"))?;
     Ok(egraph)
 }

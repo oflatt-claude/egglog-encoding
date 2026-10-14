@@ -75,7 +75,9 @@ def main():
         path = Path(scratch) / "case.egg"
         for reverse, order in itertools.product((False, True), itertools.permutations(range(3))):
             path.write_text(program(reverse, order))
-            result = subprocess.run([str(X.EGGLOG), str(path)], capture_output=True, text=True, timeout=30, cwd=ROOT)
+            result = subprocess.run(
+                [str(X.EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=30, cwd=ROOT
+            )
             assert result.returncode == 0, (reverse, order, result.stderr)
             assert result.stdout.split() == ["1", "0"], (reverse, order, result.stdout)
             cases += 1

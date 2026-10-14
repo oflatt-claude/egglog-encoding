@@ -1366,7 +1366,7 @@ caches collected with the previous Python compilation path.
 | `slotted/slotted-egglog.py` | the independent Python source compiler retained as a migration oracle |
 | `slotted/slotted-encoder.py` | the Python encoding used by the differential harness and migration oracle |
 | `slotted/checks/check-rust.py` | raw counts and verified graph isomorphisms between the Rust and Python passes |
-| `egglog/src/sort/slotted/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
+| `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
 | `slotted/tests/` | tests written in the source language |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |

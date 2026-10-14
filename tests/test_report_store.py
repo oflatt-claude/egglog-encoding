@@ -96,14 +96,14 @@ def test_typed_dict_schema_and_nested_values_round_trip(tmp_path: Path) -> None:
     loaded = parse_report_record(report.read_bytes())
 
     assert loaded == record
-    assert tuple(loaded) == tuple(ReportRecord.__annotations__)
+    assert tuple(loaded) == tuple(key for key in ReportRecord.__annotations__ if key != "slotted")
     summary = cast(TimingSummaryRecord, loaded["timing_summary"])
     assert tuple(summary) == tuple(TimingSummaryRecord.__annotations__)
     rulesets = cast(list[RulesetTimingRecord], summary["rulesets"])
     assert tuple(rulesets[0]) == tuple(RulesetTimingRecord.__annotations__)
 
 
-@pytest.mark.parametrize("schema_version", [None, 2], ids=["missing", "wrong"])
+@pytest.mark.parametrize("schema_version", [None, 1], ids=["missing", "wrong"])
 def test_incompatible_report_schema_fails_during_load(tmp_path: Path, schema_version: int | None) -> None:
     report = tmp_path / "report.jsonl"
     current = make_record(0, started_at="2026-07-15T12:00:00Z")

@@ -147,7 +147,9 @@ def run_case(case, machinery=None):
     p = X.ROOT / f"inv2-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=600)
+        r = subprocess.run(
+            [str(X.EGGLOG), "--slotted-encoded", str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=600
+        )
     except subprocess.TimeoutExpired:
         return None
     finally:

@@ -252,7 +252,9 @@ def run_encoding(case, atom_order=None, keep=None, mult=3):
     path = keep or (ROOT / f"xarray-tmp-{os.getpid()}-{mult}.egg")
     path.write_text(prog)
     try:
-        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
+        r = subprocess.run(
+            [str(EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT
+        )
     except subprocess.TimeoutExpired:
         return ("TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})")
     if r.returncode != 0:
@@ -270,7 +272,9 @@ def run_encoding_goal(case, keep=None):
     path = keep or (ROOT / f"xarray-goal-tmp-{os.getpid()}.egg")
     path.write_text(prog)
     try:
-        r = subprocess.run([str(EGGLOG), str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT)
+        r = subprocess.run(
+            [str(EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT
+        )
     except subprocess.TimeoutExpired:
         return "TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})"
     if r.returncode != 0:

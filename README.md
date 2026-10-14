@@ -375,8 +375,21 @@ uv run --locked python scripts/nightly_bench.py /path/to/output  # alternate out
 Endpoints are labelled by target (`branch` / `main`) and commit hash, so the
 page's dropdown can compare any two of them and it is clear which commit each
 side is; endpoints with identical binaries collapse to one option. The page
-opens on proof overhead of the current checkout. Populating is best effort: an
-endpoint that fails to build or run drops one dropdown option rather than
+opens on proof overhead of the current checkout, followed directly by the slotted
+multipattern and nested timing tables. All observations and their correctness
+evidence share `.reports.jsonl`; `index.jsonl` is the complete downloadable cache.
+The slotted tables require raw class/node counts and verified isomorphism for
+egglog/ref-multi and egglog-no-aliasing/ref-nested-snapshot. Failures and missing
+evidence appear in an error block below the timings.
+
+`./bench.py slotted array --params 0` collects a small slotted comparison through
+the same cache. Use `--report /tmp/slotted.jsonl` for a disposable cache and
+`--force-run` for new samples. The slotted `--rounds` flag sets rewrite iterations;
+it does not change the proof runner's sampling count. Cache reuse includes binary
+hashes, generated workload content, checking policy, timeout and parallelism.
+The report schema is now version 2; old disposable caches need recomputation.
+
+Populating is best effort: an endpoint that fails to build or run drops one dropdown option rather than
 failing the run, and the output directory is only overwritten after a
 successful run. Edit `TARGETS` and `ENDPOINTS` in `scripts/nightly_bench.py` to
 change what is measured.

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 type Map<T> = BTreeMap<T, T>;
 
-use crate::sort::map::compose;
+use egglog::sort::compose;
 
 pub(super) fn restrict<T: Copy + Ord>(
     group: &[impl Borrow<Map<T>>],

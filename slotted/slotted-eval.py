@@ -21,15 +21,15 @@ substitution as a diagnostic baseline. Every selected side must reach its goal.
 Defaults: serial execution, release builds, 300 seconds per process, the paper's
 round budgets. --jobs N runs up to N workloads in separate worker processes,
 including their count and isomorphism checks. Parallel timings include contention.
-Records are appended to eval.jsonl; use --jsonl for a separate cache. --from
-prints cached observations without collecting; --merged selects the latest
-observation per workload/side and invalidates stale comparisons. Both the compact
+Records share .reports.jsonl with proofs; use --report for a separate cache.
+Unchanged workloads reuse exact cached observations; --force-run collects fresh ones. --from
+prints the latest cached observation per workload/side without collecting and
+invalidates stale comparisons. Both the compact
 summary and full report are rendered by eval_report.py. See ENCODING.md for the
 counting convention, substitution policies, and limitations of these comparisons.
 """
 
 import argparse
-import datetime
 import json
 import multiprocessing
 import os
@@ -37,16 +37,17 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "slotted"))
 sys.path.insert(0, str(ROOT / "slotted" / "xdiff"))
 
 import isomorphism as ISO  # noqa: E402
 import xarray as XA  # noqa: E402
+from eval_cache import Cache, load_rows  # noqa: E402
 from eval_report import (  # noqa: E402
     EXACT_PAIRS,
     SIDES,
@@ -54,7 +55,6 @@ from eval_report import (  # noqa: E402
     Progress,
     Row,
     html,
-    load_rows,
     markdown_report,
     quiet_progress,
     report_sections,
@@ -69,7 +69,7 @@ BATAX_SUBSET = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
 
 SCRATCH = ROOT / "target" / "slotted"
 #: Where every run is recorded unless `--jsonl` says otherwise: append-only, ignored by git.
-REPORT = ROOT / "eval.jsonl"
+REPORT = Path(".reports.jsonl")
 
 
 #: Release builds of both sides: egglog, and the reference through `xmulti` without the
@@ -271,7 +271,7 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
         r = subprocess.run(
             [
                 str(config.egglog),
-                *([] if encoded else slotted_flags(row)),
+                *(["--slotted-encoded"] if encoded else slotted_flags(row)),
                 "--to-json",
                 *ISO.SERIALIZE_LIMITS,
                 str(path),
@@ -540,7 +540,12 @@ def main(argv=None):
         help="maximum concurrent workloads (default: 1, serial); parallel timings include contention",
     )
     ap.add_argument(
-        "--jsonl", type=Path, default=REPORT, help=f"record one JSON object per run here (default {REPORT.name})"
+        "--report",
+        "--jsonl",
+        dest="jsonl",
+        type=Path,
+        default=REPORT,
+        help=f"record one JSON object per run here (default {REPORT.name})",
     )
     ap.add_argument(
         "--from",
@@ -552,11 +557,14 @@ def main(argv=None):
     )
     ap.add_argument("--html", type=Path, help="also write the table as an HTML page here")
     ap.add_argument("--long", action="store_true", help="one row per run with every field, instead of the timing pivot")
-    ap.add_argument(
-        "--merged", action="store_true", help="with --from: the latest entry per workload and side across every batch"
-    )
+    ap.add_argument("--merged", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--no-build", action="store_true", help="skip `cargo build`; the binaries are known current")
+    ap.add_argument(
+        "--force-run", action="store_true", help="append fresh observations instead of reusing exact cached results"
+    )
     args = ap.parse_args(argv)
+    if str(args.jsonl) == "-":
+        ap.error("--report requires a filesystem path")
     if args.jobs < 1:
         ap.error("--jobs must be at least 1")
 
@@ -573,8 +581,7 @@ def main(argv=None):
         # reporting alone: the rows come from an earlier run's record
         rows, when = load_rows(args.report, args.merged)
         rows = [r for r in rows if r.side in sides]
-        shown = "every batch, latest entries" if args.merged else f"the batch of {when}"
-        print(f"{args.report}: {shown}", file=sys.stderr)
+        print(f"{args.report}: latest cached observations (through {when})", file=sys.stderr)
         if args.study != "all":
             rows = [r for r in rows if r.study == args.study]
         if args.side == "all":
@@ -588,47 +595,28 @@ def main(argv=None):
     if args.html:
         args.html.write_text(html(sections, errors))
         print(f"wrote {args.html}", file=sys.stderr)
-    if not args.report:
-        # one id per invocation: the clock alone can name two quick runs alike
-        batch = f"{datetime.datetime.now().isoformat(timespec='microseconds')}-{os.getpid()}"
-        with args.jsonl.open("a") as f:
-            for r in rows:
-                f.write(
-                    json.dumps(
-                        r.as_dict(batch, egglog=str(EGGLOG.relative_to(ROOT)), xmulti=str(XMULTI.relative_to(ROOT)))
-                    )
-                    + "\n"
-                )
     return 1 if errors else 0
 
 
-def nightly(output_dir, *, env=None, timeout=300, jobs=1):
-    """Collect the paper workloads and write the nightly's standalone artifacts.
-
-    A nonzero verdict still writes tables with their correctness-error banner.
-    The proof benchmark's sampling rounds do not change these rewrite budgets.
-    """
+def nightly(report_path, *, env=None, timeout=300, jobs=1):
+    """Populate the shared report cache using the paper's rewrite budgets."""
     build(env=env)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with (output_dir / "slotted.md").open("w") as report, redirect_stdout(report):
-        return main(
-            [
-                "--no-build",
-                "--timeout",
-                str(timeout),
-                "--jobs",
-                str(jobs),
-                "--params",
-                "0",
-                "1",
-                "2",
-                "3",
-                "--jsonl",
-                str(output_dir / "slotted.jsonl"),
-                "--html",
-                str(output_dir / "slotted.html"),
-            ]
-        )
+    return main(
+        [
+            "--no-build",
+            "--timeout",
+            str(timeout),
+            "--jobs",
+            str(jobs),
+            "--params",
+            "0",
+            "1",
+            "2",
+            "3",
+            "--report",
+            str(report_path),
+        ]
+    )
 
 
 def successful(rows, sides, counts):
@@ -746,13 +734,40 @@ def collect(args, sides, ap, *, config=None):
         flush=True,
     )
 
-    rows = []
+    cache = None
+    if getattr(args, "jsonl", None) is not None:
+        manifests = {}
+        for task in tasks:
+            study, workload = task
+            if study == "array":
+                case = XA.goal_cases([workload], rounds=6 if args.rounds is None else args.rounds)[0]
+                manifests[task] = array_program(case, with_target=True)
+            else:
+                kernel, phase = workload
+                budget = pf.iteration_limit(kernel, phase) if args.rounds is None else args.rounds
+                manifests[task] = sdql_program(kernel, phase, args.rules, budget, True)
+        cache = Cache(args.jsonl, ROOT, config, args, manifests)
+    rows_by_task = {}
+    pending = []
+    for task in tasks:
+        reused = cache.reuse(task, sides) if cache else None
+        if reused is None:
+            pending.append(task)
+        else:
+            rows_by_task[task] = reused
+    print(f"Workloads: {len(rows_by_task)} cached, {len(pending)} to collect.", file=sys.stderr)
+
+    def accept(task, group):
+        if cache:
+            cache.append(task, group)
+        rows_by_task[task] = group
+
     if args.jobs == 1:
         with Progress() as progress:
-            for task in tasks:
-                rows += collect_workload(task, args, sides, config, progress)
-    elif tasks:
-        workers = min(args.jobs, len(tasks))
+            for task in pending:
+                accept(task, collect_workload(task, args, sides, config, progress))
+    elif pending:
+        workers = min(args.jobs, len(pending))
         print(
             f"Parallel workers: {workers} (limit {args.jobs}); dots follow completion order. "
             "Timings include contention.",
@@ -762,17 +777,18 @@ def collect(args, sides, ap, *, config=None):
         # Separate processes let Python graph checks use multiple cores too.
         context = multiprocessing.get_context("spawn")
         with context.Pool(workers, initializer=init_worker) as pool:
-            payloads = ((task, args, sides, config) for task in tasks)
-            for group in pool.imap(parallel_workload, payloads):
-                rows += group
+            payloads = ((task, args, sides, config) for task in pending)
+            for task, group in zip(pending, pool.imap(parallel_workload, payloads), strict=True):
+                accept(task, group)
             # On success let idle workers return normally. Pool.__exit__ terminates
             # them while queue locks may be held; signal-driven unwinding can hang.
             pool.close()
             pool.join()
         print(file=sys.stderr, flush=True)
+    rows = [row for task in tasks for row in rows_by_task[task]]
     elapsed = int(time.perf_counter() - started)
     print(
-        f"Collected {len(rows)} samples in {elapsed // 60}m {elapsed % 60:02d}s (build + runs + checks).",
+        f"Selected {len(rows)} samples in {elapsed // 60}m {elapsed % 60:02d}s (build + runs + checks).",
         file=sys.stderr,
     )
     return rows

@@ -1,18 +1,6 @@
-;; A renaming is a partial injection on slots.
-(sort Renaming (Map i64 i64))
-
-;; Every way a match's slots may be merged, and the indices to read one at.
-(sort Frames (Vec Frame))
-;; A class's symmetry group: the renamings of its slots it is equal under.
-(sort Group (Set Renaming))
-;; One group per child column of a node.
-(sort Groups (Vec Group))
 ;; The indices a group's element index is read at.
 (relation GroupIdx (i64))
 (relation GroupIdxSmall (i64))
-;; A node's edges in canonical spelling, and the renaming back to its own names.
-;; Declared after `Groups`, which is where `node-shape` reads its groups.
-(sort Renamings (Vec Renaming))
 ;; Valid indices for each refinement-vector length, shared by equal lengths.
 (ruleset slotted-refine)
 (relation Idx (i64 i64))

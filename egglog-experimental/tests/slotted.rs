@@ -14,7 +14,7 @@ fn evaluate(compiler: &mut Compiler, graph: &mut egglog::EGraph, source: &str) {
 #[test]
 fn transformation_emits_ordinary_egglog() {
     let mut compiler = Compiler::default();
-    let mut graph = egglog::EGraph::default();
+    let mut graph = egglog_experimental::slotted::new_egraph();
     evaluate(&mut compiler, &mut graph, LANGUAGE);
     evaluate(
         &mut compiler,
@@ -33,7 +33,7 @@ fn transformation_emits_ordinary_egglog() {
 #[test]
 fn scopes_restore_declarations_globals_and_rules() {
     let mut compiler = Compiler::default();
-    let mut graph = egglog::EGraph::default();
+    let mut graph = egglog_experimental::slotted::new_egraph();
     evaluate(
         &mut compiler,
         &mut graph,
@@ -95,7 +95,7 @@ fn compilation_errors_are_transactional_and_located() {
 fn matching_policy_changes_aliasing_and_checks_remain_unrestricted() {
     for no_aliasing in [false, true] {
         let mut compiler = Compiler::new(Options { no_aliasing });
-        let mut graph = egglog::EGraph::default();
+        let mut graph = egglog_experimental::slotted::new_egraph();
         evaluate(&mut compiler, &mut graph, LANGUAGE);
         evaluate(
             &mut compiler,

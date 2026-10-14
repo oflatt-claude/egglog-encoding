@@ -50,7 +50,8 @@ use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{ReportLevel, RunReport};
 pub use exec_state::{
-    Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, Write, WriteState,
+    Context, Core, Enode, FullState, FunctionEntry, PureState, Read, ReadState, TableKind,
+    TableMetadata, Write, WriteState,
 };
 use extract::{DefaultCost, Extractor, TreeAdditiveCostModel};
 use indexmap::map::Entry;
@@ -472,7 +473,6 @@ impl EGraph {
         add_base_sort(&mut eg, F64Sort, span!()).unwrap();
         add_base_sort(&mut eg, BigIntSort, span!()).unwrap();
         add_base_sort(&mut eg, BigRatSort, span!()).unwrap();
-        sort::slotted::register_base_sorts(&mut eg);
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();

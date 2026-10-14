@@ -8,8 +8,8 @@ enum Backend {
 }
 
 fn main() {
-    let (slotted, no_aliasing, args) =
-        extract_slotted_args(std::env::args_os()).unwrap_or_else(|err| {
+    let (slotted, encoded, no_aliasing, args) = extract_slotted_args(std::env::args_os())
+        .unwrap_or_else(|err| {
             eprintln!("error: {err}");
             std::process::exit(2);
         });
@@ -23,7 +23,7 @@ fn main() {
         .any(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Experimental options:\n  --slotted              Transform slotted source before evaluation\n  --slotted-no-aliasing  Restrict matching to the nested reference's aliasing policy\n  --backend <main|dd>    Select the execution backend\n"
+            "Experimental options:\n  --slotted              Transform slotted source before evaluation\n  --slotted-encoded      Evaluate already lowered slotted code\n  --slotted-no-aliasing  Restrict matching to the nested reference's aliasing policy\n  --backend <main|dd>    Select the execution backend\n"
         );
     }
     let proof_mode = args.iter().take_while(|arg| *arg != "--").any(|arg| {
@@ -32,12 +32,12 @@ fn main() {
             Some("--proofs" | "--proof-testing" | "--proof-extraction" | "--term-encoding")
         )
     });
-    if slotted && proof_mode {
+    if (slotted || encoded) && proof_mode {
         eprintln!("error: --slotted cannot be combined with term/proof encoding");
         std::process::exit(2);
     }
     #[cfg(feature = "dd-backend")]
-    if slotted && backend == Backend::Dd {
+    if (slotted || encoded) && backend == Backend::Dd {
         eprintln!("error: --slotted currently requires --backend main");
         std::process::exit(2);
     }
@@ -48,7 +48,8 @@ fn main() {
         args
     };
     let egraph = match backend {
-        Backend::Main if proof_mode || slotted => {
+        Backend::Main if slotted || encoded => egglog_experimental::slotted::new_egraph(),
+        Backend::Main if proof_mode => {
             egglog_experimental::new_experimental_egraph_with_native_schedule()
         }
         Backend::Main => egglog_experimental::new_experimental_egraph(),
@@ -72,8 +73,8 @@ fn main() {
 
 fn extract_slotted_args(
     args: impl IntoIterator<Item = OsString>,
-) -> Result<(bool, bool, Vec<OsString>), String> {
-    let (mut slotted, mut no_aliasing) = (false, false);
+) -> Result<(bool, bool, bool, Vec<OsString>), String> {
+    let (mut slotted, mut encoded, mut no_aliasing) = (false, false, false);
     let mut filtered = Vec::new();
     let mut positional = false;
     for arg in args {
@@ -83,6 +84,7 @@ fn extract_slotted_args(
                 filtered.push(arg);
             }
             Some("--slotted") if !positional => slotted = true,
+            Some("--slotted-encoded") if !positional => encoded = true,
             Some("--slotted-no-aliasing") if !positional => no_aliasing = true,
             _ => filtered.push(arg),
         }
@@ -90,7 +92,10 @@ fn extract_slotted_args(
     if no_aliasing && !slotted {
         return Err("--slotted-no-aliasing requires --slotted".into());
     }
-    Ok((slotted, no_aliasing, filtered))
+    if slotted && encoded {
+        return Err("--slotted and --slotted-encoded are mutually exclusive".into());
+    }
+    Ok((slotted, encoded, no_aliasing, filtered))
 }
 
 fn extract_backend_arg<I>(args: I) -> Result<(Backend, Vec<OsString>), String>

@@ -87,7 +87,9 @@ for c in cases:
     p = X.ROOT / f"xdiff-tmp-def4-{os.getpid()}.egg"
     p.write_text(prog)
     try:
-        r = subprocess.run([str(X.EGGLOG), str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=120)
+        r = subprocess.run(
+            [str(X.EGGLOG), "--slotted-encoded", str(p)], capture_output=True, text=True, cwd=X.ROOT, timeout=120
+        )
     except subprocess.TimeoutExpired:
         continue
     finally:

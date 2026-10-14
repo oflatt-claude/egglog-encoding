@@ -5,7 +5,7 @@ A check passes only if its tool exits 0 AND its summary line says everything agr
 so a tool that runs zero cases fails rather than reporting a vacuous pass. The
 recorded totals are floors: adding cases is fine, losing them is not.
 
-Needs `target/debug/egglog`, `target/debug/egglog-experimental`, and
+Needs `target/debug/egglog-experimental` and
 `slotted/xmulti/target/debug/xmulti`.
 
 Usage:
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-EGGLOG = ROOT / "target" / "debug" / "egglog"
+EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 
 # One entry per generated file: the command that writes it. These are BUILD OUTPUT,
@@ -401,7 +401,6 @@ def main():
 
     needed = [
         (EGGLOG, "cargo build"),
-        (ROOT / "target" / "debug" / "egglog-experimental", "cargo build -p egglog-experimental"),
     ]
     if not args.no_oracle:
         needed.append((XMULTI, "cargo build in slotted/xmulti"))

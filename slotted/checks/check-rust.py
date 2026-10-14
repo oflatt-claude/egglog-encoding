@@ -64,7 +64,7 @@ def compare_file(path, tmp, nested=False):
     source = sc.Source(path)
     # Maintenance only; this does not execute another user rewrite round.
     old = sc.compile_source(source, nested_compat=nested) + sc.schedule(0, 0)
-    legacy = dump("egglog", old, Path(tmp) / "legacy.egg")
+    legacy = dump("egglog-experimental", old, Path(tmp) / "legacy.egg", ["--slotted-encoded"])
     flags = ["--slotted", *(["--slotted-no-aliasing"] if nested else [])]
     native = dump("egglog-experimental", path.read_text() + "\n(run 0)\n", Path(tmp) / "native.egg", flags)
     for sort in source.carriers:

@@ -1,7 +1,7 @@
 //! Slot renaming, shape, and total-mapping algorithms.
 
 use super::Renaming;
-use crate::sort::map::find_mapping;
+use egglog::sort::find_mapping;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Internal result of canonicalizing a node. Only the primitive boundary flattens

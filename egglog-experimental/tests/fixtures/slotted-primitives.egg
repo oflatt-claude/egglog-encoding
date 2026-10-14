@@ -1,8 +1,3 @@
-;; When a map's key and value sorts coincide it reads as a partial injection on
-;; one space -- a "renaming" -- and these primitives are registered for it.
-
-(sort R (Map i64 i64))
-
 ;;; map-image / map-domain: a renaming's two slot sets, as identity maps.
 (check (= (map-image  (map-of 0 5 1 7)) (map-of 5 5 7 7)))
 (check (= (map-domain (map-of 0 5 1 7)) (map-of 0 0 1 1)))
