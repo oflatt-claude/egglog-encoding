@@ -2,8 +2,8 @@
 
 ## Agreed plan and scope
 
-This is the working plan for PR #58. The current priority is to separate mathematical
-compiler correctness from the executable sanity checks:
+This is the working plan for PR #58. Mathematical congruence compiler correctness is
+proved separately from the executable sanity checks:
 
 - Add a top-level `check q`. It observes whether the complete query has a match, leaves
   the database unchanged on success, and stops the program on failure. Checks neither
@@ -20,16 +20,18 @@ compiler correctness from the executable sanity checks:
 - **Stretch goal:** termination preservation. The required theorem assumes both
   evaluations terminate, counting a failed check as termination.
 
-The existing theorem about an executable compiled target is retained during the port;
-it does not discharge the new mathematical execution theorem.
+The mathematical theorem is `Egglog.Congruence.preservesObservations` in
+[AbstractComplete.lean](EgglogSemantics/Proofs/Congruence/AbstractComplete.lean). Its
+transitive imports contain no executable interpreter modules. The older executable
+correspondence theorem remains available for the sanity checks.
 
-The remaining pipeline responsibilities are:
+The pipeline responsibilities are:
 
-1. **Port completeness to the mathematical congruence pass.** Establish the execution
-   invariants and check correspondence above, retaining the constructor-only
-   source fragment (`Program.Fragment`). The paper's completeness theorem ends
-   here. The compiled target uses functions, but extending the theorem to arbitrary
-   source merge functions is deferred.
+1. **Mathematical congruence correctness — proved.** The execution invariants and check
+   correspondence establish conditional success/failure equivalence, retaining the
+   constructor-only source fragment (`Program.Fragment`). The paper's completeness
+   theorem ends here. The compiled target uses functions, but extending the theorem to
+   arbitrary source merge functions is deferred.
 2. **Implement a sound source proof checker.** Check explicit propositions against
    the original program, initially in the constructor-only source fragment.
    `Fiat` must be justified by original globals; it cannot
@@ -168,11 +170,12 @@ WellFormed(P) ∧ Fragment(P)
 ```
 
 Both states are mathematical `Database` values. Neither `FDatabase` nor interpreter fuel
-appears in this statement. `PreservesObservations` remains an **unproved Lean obligation**.
-The abstract rebuilding, query-correspondence, and observation-composition lemmas below
-are proved; the outstanding obligation is to establish their data and metadata invariants
-along every compiled prefix. The older executable `Complete.lean` theorem does not
-discharge that obligation.
+appears in this statement. `preservesObservations : PreservesObservations` is **proved in
+Lean** by `Proofs/Congruence/AbstractComplete.lean`. The proof establishes all data and
+metadata invariants along actual compiled executions, proves `CheckAgreement`, and then
+applies the observation-composition theorem. It has no executable-state or interpreter
+correctness dependency and no unproved invariant premise. The public well-formedness
+premise is retained; the proof in fact needs only `Fragment` and the two finite evaluations.
 
 `Proofs/Result.lean` proves that successful results coincide with `ProgramStep`, that a
 failure is exactly a successful prefix followed by a false check, and that query
@@ -184,6 +187,71 @@ including exhausted fuel. Their regressions are sanity checks, not a replacement
 `PreservesTermination` is a separate stretch goal: a finite source evaluation implies
 some finite compiled evaluation. It is not a premise or a consequence of the required
 conditional observation theorem.
+
+### Strength, non-vacuity, and comparison
+
+The paper should call this **agreement of check outcomes when both executions
+terminate**. It is a conditional compiler-correctness theorem, not full behavioral
+equivalence. Its quantifiers cover every pair of finite source and target evaluations;
+there is no assumption about matching merge schedules or saturation round counts.
+`checkFailed` is a defined observable result that must be preserved, not undefined
+behavior that licenses arbitrary target behavior.
+
+Non-vacuity requires actual evaluation witnesses as well as consistent static premises.
+The mathematical examples in
+[Tests/CongruenceCorrectness.lean](EgglogSemantics/Tests/CongruenceCorrectness.lean)
+establish well-formedness, membership in the supported fragment, and finite evaluations
+on both sides for these programs:
+
+| Source program | Source and compiled result |
+| --- | --- |
+| Declare nullary `C`; construct `C()`; check `C()` | Success |
+| Declare nullary `C`; check `C()` without constructing it | Check failure |
+
+These witnesses rule out an empty supported domain or an impossible finite-target
+premise. They do not establish target termination for every supported source program.
+In particular, the conditional contract rejects erasing all checks when the resulting
+program succeeds, but admits a hypothetical compiler that always loops or gets stuck:
+such a compiler supplies no finite target evaluation to compare. Replacing a terminating
+failure with divergence is likewise unconstrained. Absence of an `Eval` derivation alone
+does not distinguish divergence from stuckness in the current semantics.
+
+The internal result is stronger than the final Boolean observation: `boundary_prefix`
+relates every pair of successful corresponding prefixes through sound target rows,
+source-fact coverage, and completed rebuilding; `checkAgreement` consequently gives
+equivalence of the source query and its flattening at each reached check. These results
+still assume both prefix executions exist, but require no execution of the remaining
+suffix. For the paper, present check correspondence as the main technical lemma and
+finite-outcome agreement as its corollary.
+
+Established compiler theorems make different choices about observations and exceptions:
+
+| Theorem | Observations and guarantee | Explicit limits |
+| --- | --- | --- |
+| This congruence pass | All paired finite evaluations agree on success or check failure | Requires both finite evaluations; no divergence or progress theorem |
+| CompCert | Successful compilation gives a backward simulation; target behaviors are justified by source behaviors, including termination, divergence, and I/O traces | Source undefined behavior permits behavior improvement; compilation can reject input |
+| CakeML backend | Generated machine behavior follows source termination/divergence and FFI traces, or exits early at a resource limit | Source semantics excludes `Fail`; successful compilation and machine/environment setup; explicit resource-limit allowance |
+
+CompCert's [compiler theorem](https://compcert.org/doc/html/compcert.driver.Compiler.html)
+and [behavior definitions](https://compcert.org/doc/html/compcert.common.Behaviors.html)
+include behaviors for divergence and getting stuck, and prove that every program has a
+behavior. Consequently, when all source behaviors terminate without undefined behavior,
+the target cannot satisfy refinement merely by diverging. This differs from requiring
+two finite derivations as premises.
+
+The [CakeML backend paper](https://cakeml.org/jfp19.pdf), §2.3–2.4 and §10, explicitly
+acknowledges that its resource-limit exception admits a compiler that always immediately
+runs out of memory. Its theorem nevertheless constrains ordinary terminating and
+diverging behavior, including traces. The comparison is therefore about the exact
+permitted exceptions, not a claim that established compiler theorems have no loopholes.
+
+The next strengthening is the existing `PreservesTermination` obligation. Combined with
+the proved theorem, it would yield a matching finite target result for every finite
+source result. Its existential conclusion concerns existence of a terminating target
+execution, not termination of every possible schedule. It would still leave source
+programs having no finite evaluation unconstrained; full behavioral refinement would
+also require a treatment of divergence and stuckness. Termination preservation remains
+a stretch goal.
 
 ### Correctness proof
 
@@ -266,7 +334,7 @@ requirement at equality patterns. This is the proved `Abstract.Rebuilt.queryHold
 in `AbstractForward.lean`, using `AbstractQuery.lean`, `AbstractTransport.lean`, and
 the reverse matching proof in `Match.lean`.
 
-**Execution lemma (remaining Lean port).** The prelude establishes the boundary relation
+**Execution lemma (proved).** The prelude establishes the boundary relation
 at empty source data, and paired successful executions of each source command and its
 compiled block preserve it. The mathematical argument is by command cases:
 
@@ -311,8 +379,15 @@ compiled block preserve it. The mathematical argument is by command cases:
 
 Induction over successful prefixes using this execution lemma establishes
 `CheckAgreement`, which the observation theorem turns into `PreservesObservations`.
-The execution lemma is the remaining formal obligation; the checked query and observation
-theorems must not be reported as a completed Lean proof of the compiler theorem.
+This composition is proved by `Boundary.step`, `Boundary.program`, `boundary_prefix`,
+and `checkAgreement` in `AbstractComplete.lean`; the final theorem is
+`preservesObservations : PreservesObservations`. `AbstractWidths.lean` derives declared
+row widths and rule validity from the compiled program, while `AbstractMetadata.lean`
+derives the signature, rule census, and diagonality from actual prefix execution.
+`AbstractMerge.lean`, `AbstractMaintenanceSound.lean`, and
+`AbstractMaintenanceDescent.lean` prove preservation for arbitrary merge choices and
+maintenance firings. `AbstractGlobals.lean`, `AbstractSoundRounds.lean`, and
+`AbstractRounds.lean` supply the command cases. No invariant is left as a public premise.
 
 ## Query traversal
 
@@ -400,6 +475,9 @@ checks the whole corpus.
 
 The congruence pass has kernel-checked proofs for:
 
+- Mathematical check correspondence and conditional success/failure agreement, with
+  all representation invariants derived from actual executions
+  (`Abstract.checkAgreement`, `preservesObservations`).
 - Union-free output and equivalence with execution using structural identity only
   (`encode_unionFree`, `encode_relational`).
 - Query flattening and matching in both directions (`sourceMatch_of_encodedQuery`,
@@ -415,8 +493,9 @@ The congruence pass has kernel-checked proofs for:
 - The executable reader and correspondence under explicit state invariants
   (`sameClassF_iff`, `Rebuilt.corresponds`).
 
-**The previous executable-target theorem is complete; the mathematical execution port
-is pending.** [Complete.lean](EgglogSemantics/Proofs/Congruence/Complete.lean) proves
+**The mathematical execution proof is complete**, as described above. The earlier
+executable-target theorem remains available for sanity checks:
+[Complete.lean](EgglogSemantics/Proofs/Congruence/Complete.lean) proves
 `Egglog.Congruence.encode_corresponds`:
 
 ```lean

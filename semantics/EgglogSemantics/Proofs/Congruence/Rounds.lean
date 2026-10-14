@@ -1,4 +1,5 @@
 import EgglogSemantics.Proofs.Execution
+import EgglogSemantics.Proofs.Congruence.AbstractRounds
 import EgglogSemantics.Proofs.Congruence.ForwardHead
 import EgglogSemantics.Proofs.Congruence.RuleStore
 import EgglogSemantics.Proofs.Congruence.RunState
@@ -7,16 +8,6 @@ import EgglogSemantics.Proofs.Congruence.Head
 /-! Forward source-round simulation and preservation of target invariants across source runs. -/
 
 namespace Egglog.Congruence
-
-theorem actionExprs_ctors {a : Action} {e : Expr} (he : e ∈ actionExprs a)
-    {fk : FnName × Nat} (hk : fk ∈ e.ctors) : fk ∈ a.ctors := by
-  cases a with
-  | expr x => obtain rfl := List.mem_singleton.mp he; exact hk
-  | union x y =>
-      rcases List.mem_cons.mp he with rfl | he
-      · exact List.mem_append_left _ hk
-      · obtain rfl := List.mem_singleton.mp he
-        exact List.mem_append_right _ hk
 
 /-- The agreed source domain supplies the syntactic and declaration premises for
 forward rule firing at any represented source prefix. -/
@@ -57,27 +48,6 @@ theorem encodedRule_firing_reads_of_programStep {P pre : Program}
     exact sourceConstructors_of_programStep hdom hsub hpre hsig f (hqsig ▸ hctor)
   · intro a ha e he fk hk
     simp [htables.view fk.1 fk.2 (hhead a ha e he fk hk)]
-
-/-- Source facts from all firings can be read in one common target state. -/
-theorem SourceReads.sUnion {d src : Database} {S : Set Database} (h : SourceReads d src)
-    (hs : ∀ s ∈ S, SourceReads d s) : SourceReads d (src.sUnion S) := by
-  refine ⟨fun t ht => ?_, fun a b hab hne => ?_⟩
-  · rcases Database.sUnion_terms ▸ ht with ht | ht
-    · exact h.terms t ht
-    · obtain ⟨s, hs', ht⟩ := Set.mem_iUnion₂.mp ht
-      exact (hs s hs').terms t ht
-  · rcases Database.sUnion_eqs ▸ hab with hab | hab
-    · exact h.unions a b hab hne
-    · obtain ⟨s, hs', hab⟩ := Set.mem_iUnion₂.mp hab
-      exact (hs s hs').unions a b hab hne
-
-/-- One source round is represented when all of its rule results are represented. -/
-theorem SourceReads.runRules {d src : Database} {R : RulesetName} (h : SourceReads d src)
-    (hf : ∀ r ∈ src.rules, r.ruleset = R → ∀ post ∈ RuleResults src r, SourceReads d post) :
-    SourceReads d (RunRules R src) := by
-  apply h.sUnion
-  rintro post ⟨r, hr, hR, hp⟩
-  exact hf r hr hR post hp
 
 /-- A compiled fixed point represents every original source firing from the source
 facts it already represents. Rebuilding supplies the unflattened query's canonical ids. -/

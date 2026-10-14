@@ -28,15 +28,18 @@ proof annotations. A separate provenance pass adds proof columns for globals, ru
 and function merges, and proof lifting turns its proofs into source proofs
 that both the Lean and Rust checkers accept.
 
-The congruence pass retains its proved correspondence theorem against an executable
-target. The paper theorem is being separated into a mathematical compiler-correctness
-obligation: terminating source and compiled evaluations agree on success or check failure.
-The abstract rebuilding and query-agreement lemmas, and the reduction from check-boundary
-agreement to whole-program observations, are proved. Preservation of the representation
-invariants across mathematical executions remains to be ported. Termination preservation
-is a stretch goal; interpreter correctness is outside the paper. Both the
-constructor source checker and relational provenance checker have proved soundness and
-existence support. The library permits no `sorry`.
+The congruence pass proves
+[`preservesObservations`](EgglogSemantics/Proofs/Congruence/AbstractComplete.lean):
+for well-formed programs in the supported source fragment, terminating source and compiled
+evaluations agree on success or check failure. Both sides use mathematical databases;
+the proof derives its representation invariants from the actual executions and imports no
+executable interpreter. Termination preservation remains a stretch goal, and interpreter
+correctness is outside the paper. Executable correspondence and differential tests remain
+sanity checks. This conditional theorem does not rule out a compiler introducing
+divergence; the encoding guide includes mathematical non-vacuity examples and a
+comparison with CompCert and CakeML. Both the constructor source checker and relational
+provenance checker have proved soundness and existence support. The library permits no
+`sorry`.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
 and source restrictions. The [checker guide](CHECKER.md) explains the certificate

@@ -138,4 +138,20 @@ theorem tableDecl_no_self_conflict (arity : Nat) (values : List Term) :
     ¬ MergeConflict (tableDecl arity) mergeBody values values := by
   simp [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody]
 
+
+/-- Any compiled prefix is union-free, with the prelude of any complete program. -/
+theorem encodePrefix_unionFree (P pre : Program) (i : Nat) :
+    Program.UnionFree ((encodePrelude P ++ encodeCmds pre i).map Command.command) := by
+  have hall : ∀ c ∈ (encodePrelude P ++ encodeCmds pre i).map Command.command,
+      c.UnionFree := by
+    intro c hc
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hc
+    rcases List.mem_append.mp hd with hd | hd
+    · exact prelude_unionFree P d hd
+    · exact cmds_unionFree pre i d hd
+  generalize (encodePrelude P ++ encodeCmds pre i).map Command.command = q at *
+  induction q with
+  | nil => trivial
+  | cons c cs ih => exact ⟨hall c (by simp), ih fun d hd => hall d (by simp [hd])⟩
+
 end Egglog.Congruence

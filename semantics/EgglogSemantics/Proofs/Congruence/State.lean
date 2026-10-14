@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Congruence.EntryShape
 import EgglogSemantics.Proofs.Congruence.Read
 import EgglogSemantics.Proofs.Congruence.Properties
 import EgglogSemantics.Proofs.Congruence.Correspond
@@ -95,10 +96,6 @@ theorem SoundTerms.union {src : Database} {d₁ d₂ : FDatabase}
 theorem empty_soundTerms {src : Database} : SoundTerms FDatabase.empty src :=
   ⟨fun _ _ _ hm => absurd hm (by simp [FDatabase.empty]),
     fun _ _ hm => absurd hm (by simp [FDatabase.empty])⟩
-
-def EntryShaped (t : Term) : Prop :=
-  (∃ f cs e, t = Term.app (viewName f) (cs ++ [e])) ∨
-    (∃ x p, t = Term.app ufName [x, p])
 
 theorem SoundTerms.addTerm_top {src : Database} {d : FDatabase} {t : Term}
     (h : SoundTerms d src)

@@ -13,26 +13,6 @@ structure RebuildTables (P : Program) (d : FDatabase) : Prop where
   output : ∀ f k, (f, k) ∈ P.ctors → eclassRule f k ∈ d.rules
   child : ∀ f k, (f, k) ∈ P.ctors → ∀ i < k, childRule f k i ∈ d.rules
 
-theorem maintenance_mem_prelude {P : Program} {c : Command} (hc : c ∈ allMaintenanceRules P) :
-    c ∈ encodePrelude P := by
-  simp only [encodePrelude, List.mem_cons, List.mem_append]
-  exact Or.inr hc
-
-theorem eclassRule_mem_maintenance {P : Program} {f : FnName} {k : Nat}
-    (hk : (f, k) ∈ P.ctors) :
-    taggedRule (eclassRule f k) (.rebuild (.eclass f)) ∈ allMaintenanceRules P := by
-  apply List.mem_append_left
-  apply List.mem_cons_of_mem
-  exact List.mem_flatMap.mpr ⟨(f, k), hk, List.mem_cons_self⟩
-
-theorem childRule_mem_maintenance {P : Program} {f : FnName} {k i : Nat}
-    (hk : (f, k) ∈ P.ctors) (hi : i < k) :
-    taggedRule (childRule f k i) (.rebuild (.child f i)) ∈ allMaintenanceRules P := by
-  apply List.mem_append_left
-  apply List.mem_cons_of_mem
-  apply List.mem_flatMap.mpr
-  exact ⟨(f, k), hk, List.mem_cons_of_mem _ (List.mem_map.mpr ⟨i, List.mem_range.mpr hi, rfl⟩)⟩
-
 /-- All generated rules are registered by the prelude. -/
 theorem prelude_registered {P : Program} {d : FDatabase}
     (run : FDatabase.empty.execProgramM ((encodePrelude P).map Command.command) = some d)

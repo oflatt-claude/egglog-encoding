@@ -5,43 +5,6 @@ import EgglogSemantics.Proofs.NoUnions
 
 namespace Egglog
 
-/-- The value at one position is that operand's. -/
-theorem Expr.getElem?_of_evalList {sig : Signature} {ρ : Env} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
-      ∀ (i : Nat) {e : Expr}, es[i]? = some e →
-        ∃ t, ts[i]? = some t ∧ e.eval sig ρ = some t
-  | [], _, _, i, _, hi => by simp at hi
-  | e :: es, _, h, 0, e', hi => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      obtain rfl : e = e' := by simpa using hi
-      exact ⟨u, by simp, hu⟩
-  | e :: es, _, h, i + 1, e', hi => by
-      rw [Expr.evalList] at h
-      obtain ⟨u, hu, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp hrest
-      obtain ⟨t, ht, hev⟩ := Expr.getElem?_of_evalList hus i (by simpa using hi)
-      exact ⟨t, by simpa using ht, hev⟩
-
-/-- A one-element operand list. -/
-theorem Expr.evalList_singleton {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
-    (h : Expr.evalList sig [e] σ = some ts) : ∃ t, e.eval sig σ = some t ∧ ts = [t] := by
-  rw [Expr.evalList] at h
-  obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
-  rw [Expr.evalList, Option.map_some, Option.some.injEq] at h
-  exact ⟨t, ht, h.symm⟩
-
-/-- Evaluate a pair of operands. -/
-theorem Expr.evalList_pair {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
-    (h : Expr.evalList sig [e₁, e₂] σ = some ts) :
-    ∃ t₁ t₂, e₁.eval sig σ = some t₁ ∧ e₂.eval sig σ = some t₂ ∧ ts = [t₁, t₂] := by
-  rw [Expr.evalList] at h
-  obtain ⟨t₁, ht₁, h⟩ := Option.bind_eq_some_iff.mp h
-  obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h
-  obtain ⟨t₂, ht₂, rfl⟩ := Expr.evalList_singleton hus
-  exact ⟨t₁, t₂, ht₁, ht₂, rfl⟩
-
 /-- **What one entry atom records**: its evaluated key and output columns
 the operands evaluated to in the state the action ran in. `addRow` is `addTerm` on the entry
 term, so this is also the read-back of the *entry term* and of all of its subterms. -/
@@ -202,42 +165,6 @@ theorem execLocalActions_entry {d d' : FDatabase} {g : FnName} {args out : List 
   subst he₂
   obtain ⟨es, vs, hes, hvs, rfl⟩ := execAction_entry he₁
   exact ⟨es, vs, hes, hvs, fun t ht => ht⟩
-
-/-- One column of the right-hand list moved along a congruence. What the rebuild's column
-rules do to a key, pointwise. -/
-theorem CongList.setAt {db : Database} {as cs : List Term} {c x : Term} (i : Nat)
-    (h : CongList db as cs) (hget : cs[i]? = some c) (hcx : Cong db c x) :
-    CongList db as (cs.set i x) := by
-  rw [CongList.forall₂] at h ⊢
-  induction i generalizing as cs with
-  | zero =>
-    cases h with
-    | nil => simp at hget
-    | cons hab hl =>
-      obtain rfl : _ = c := by simpa using hget
-      simpa using List.Forall₂.cons (hab.trans hcx) hl
-  | succ n ih =>
-    cases h with
-    | nil => simp at hget
-    | cons hab hl => simpa using List.Forall₂.cons hab (ih hl (by simpa using hget))
-
-/-- A member of a list one position was replaced in is a member or the replacement. -/
-theorem mem_or_eq_of_mem_set {α : Type _} {l : List α} {i : Nat} {b a : α}
-    (h : a ∈ l.set i b) : a ∈ l ∨ a = b := by
-  induction l generalizing i with
-  | nil => simp at h
-  | cons c cs ih =>
-    cases i with
-    | zero =>
-      rw [List.set_cons_zero, List.mem_cons] at h
-      rcases h with rfl | h
-      · exact Or.inr rfl
-      · exact Or.inl (List.mem_cons_of_mem _ h)
-    | succ j =>
-      rw [List.set_cons_succ, List.mem_cons] at h
-      rcases h with rfl | h
-      · exact Or.inl List.mem_cons_self
-      · exact (ih h).imp (List.mem_cons_of_mem _) id
 
 /-! ## The match, read back at a diagonal target
 

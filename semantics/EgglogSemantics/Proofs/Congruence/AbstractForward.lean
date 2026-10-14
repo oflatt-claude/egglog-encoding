@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Congruence.QueryVars
 import EgglogSemantics.Proofs.Congruence.AbstractQuery
 import EgglogSemantics.Proofs.Congruence.Flatten
 import EgglogSemantics.Proofs.Source.FreshBindings
@@ -209,6 +210,33 @@ theorem matchQuery_of_query {d : Database} (hd : d.Diag) (hw : d.WF)
         exact (Option.some.inj hi) ▸ hv v j hlk
   obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_flatReads hval (hp _ hσ hext)
   exact ⟨τ, ρ₀ ++ σ, hτ, hag, hext⟩
+
+/-- A source match has a compiled match retaining canonical readings of each source
+binding. The source being matched may precede the source justifying target entries. -/
+theorem encodedQuery_match_of_source {d src querySrc : Database}
+    (h : Rebuilt d) (hd : d.Diag) (hdecl : ViewDeclared d)
+    (he : EdgesSound d src) (hw : src.WF)
+    (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d querySrc)
+    (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d t e) {σ : Env} {q : Query}
+    (hof : ∀ p ∈ q, p.OrderingFree) (hk : Query.VarsKeyed q)
+    (hg : ∀ p ∈ q, p.Grounded) (hn : ∀ v ∈ Query.vars q, ¬ "@".isPrefixOf v = true)
+    (hm : ValidQuerySubst querySrc q σ) (n : Nat) :
+    ∃ ρ, ValidQuerySubst d (encodeQuery q n).1 ρ ∧ CanonicalReads d σ ρ := by
+  obtain ⟨ρ₀, hρ₀, hdom, hreads, hv⟩ := exists_queryRead h he hw hcs hun hex hof hk hm
+  have hvars : ∀ v ∈ Env.dom σ, v ∈ Query.vars q := by
+    intro v hv
+    obtain ⟨p, hp, hfv⟩ := hm.mem_dom_iff.mp hv
+    exact Query.mem_vars.mpr ⟨p, hp, ((Pattern.mem_freeVars p).mp hfv).1⟩
+  have hn₀ : ∀ b ∈ ρ₀, ¬ "@".isPrefixOf b.1 = true := by
+    intro b hb
+    exact hn b.1 (hvars b.1 (hdom ▸ Env.mem_dom_of_mem hb))
+  obtain ⟨ρ, ρ', hmatch, hag, hext⟩ := matchQuery_of_query hd h.wf hdecl hv hn₀ hreads hg n
+  refine ⟨ρ, hmatch, fun v t ht => ?_⟩
+  obtain ⟨i, hi, hrep, hroot⟩ := hρ₀ v t ht
+  obtain ⟨p, hp, harg⟩ := hk v (hvars v (Env.mem_dom_of_mem (Env.mem_of_lookup ht)))
+  refine ⟨i, ?_, hrep, hroot⟩
+  rw [hag v (mem_vars_encodeQuery_of_argVar q n hof hp harg)]
+  exact hext v i hi
 
 /-- At a represented, rebuilt boundary, a complete existential query has a match on one
 side exactly when its flattening has a match on the other. -/
