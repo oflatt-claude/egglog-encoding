@@ -8,6 +8,11 @@ keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]
 license = "MIT"
 readme = "README.md"
 
+[[bin]]
+name = "egglog-experimental"
+path = "src/main.rs"
+required-features = ["bin"]
+
 [[test]]
 harness = false
 name = "files"
@@ -18,7 +23,7 @@ name = "files"
 
 [features]
 default = ["bin"]
-bin = ["egglog/bin"]
+bin = ["egglog/bin", "dep:mimalloc"]
 dd-backend = ["dep:egglog-experimental-dd"]
 
 [dependencies]
@@ -27,6 +32,7 @@ egglog-ast = { workspace = true }
 egglog-reports = { workspace = true }
 egglog-experimental-dd = { path = "dd", optional = true }
 
+mimalloc = { workspace = true, optional = true }
 hashbrown = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }

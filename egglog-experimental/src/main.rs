@@ -1,5 +1,9 @@
 use std::ffi::OsString;
 
+// Match the standard egglog executable when comparing experimental encodings.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Backend {
     Main,

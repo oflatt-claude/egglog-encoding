@@ -1213,8 +1213,9 @@ Both Markdown and HTML reports start with two timing tables, each with one row p
 benchmark: `egglog` versus `ref-multi`, then `egglog-no-aliasing` versus `ref-nested`.
 The tables label the encoding as `egglog`; CLI selectors and cache identities remain
 `encoding` and `encoding-no-aliasing`.
-Cells contain elapsed seconds, including unsuccessful runs; missing times are marked
-with a dash. `ref-nested-snapshot` still runs for correctness and appears in the full
+Cells contain elapsed seconds for completed runs, including missed goals; processes
+that hit the time limit display `timeout`, and missing times use a dash. The cache
+retains elapsed seconds for timed-out processes. `ref-nested-snapshot` still runs for correctness and appears in the full
 diagnostic table, alongside goals, round budgets, counts, and reference saturation.
 Its timing is never used in place of the syntactic `ref-nested` baseline. Benchmarks
 with multiple round budgets get distinct row labels. `--long` changes only the full
