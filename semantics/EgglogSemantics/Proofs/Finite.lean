@@ -7,7 +7,8 @@ needed: rule matching ranges over finitely many substitutions at each finite sta
 
 namespace Egglog
 
-private theorem finite_lists {α : Type*} {S : Set α} (hS : S.Finite) (n : Nat) :
+/-- Lists of a fixed length over a finite set form a finite set. -/
+theorem finite_lists {α : Type*} {S : Set α} (hS : S.Finite) (n : Nat) :
     {xs : List α | xs.length = n ∧ ∀ x ∈ xs, x ∈ S}.Finite := by
   induction n with
   | zero =>

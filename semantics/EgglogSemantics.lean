@@ -1,4 +1,5 @@
 import EgglogSemantics.Proofs.Congruence.AbstractComplete
+import EgglogSemantics.Proofs.Congruence.AbstractTerminationComplete
 import EgglogSemantics.Congruence.Correctness
 import EgglogSemantics.Tests.Checks
 import EgglogSemantics.Tests.CongruenceCorrectness

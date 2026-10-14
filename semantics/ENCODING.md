@@ -17,19 +17,27 @@ proved separately from the executable sanity checks:
 - Interpreter correctness is outside the paper's obligations. Keep executable models
   and differential tests as sanity checks; do not route the paper theorem through
   `FDatabase` or an existential wrapper around executable target evaluation.
-- **Stretch goal:** termination preservation. The required theorem assumes both
-  evaluations terminate, counting a failed check as termination.
+- **Termination preservation — proved.** Every finite source evaluation has a finite
+  compiled evaluation, counting a failed check as termination. Together with outcome
+  agreement, this removes the target-termination premise from finite observation
+  preservation. Divergence preservation and termination of every schedule remain outside
+  the theorem.
 
-The mathematical theorem is `Egglog.Congruence.preservesObservations` in
-[AbstractComplete.lean](EgglogSemantics/Proofs/Congruence/AbstractComplete.lean). Its
+The strengthened mathematical theorem is `Egglog.Congruence.preservesFiniteObservations`
+in
+[AbstractTerminationComplete.lean](EgglogSemantics/Proofs/Congruence/AbstractTerminationComplete.lean)
+and combines the original `PreservesTermination` contract with
+`preservesObservations` from
+[AbstractComplete.lean](EgglogSemantics/Proofs/Congruence/AbstractComplete.lean). Their
 transitive imports contain no executable interpreter modules. The older executable
 correspondence theorem remains available for the sanity checks.
 
 The pipeline responsibilities are:
 
 1. **Mathematical congruence correctness — proved.** The execution invariants and check
-   correspondence establish conditional success/failure equivalence, retaining the
-   constructor-only source fragment (`Program.Fragment`). The paper's completeness
+   correspondence establish conditional success/failure equivalence, and finite row
+   bounds establish target execution existence for every finite source evaluation. The
+   constructor-only source fragment (`Program.Fragment`) remains. The paper's completeness
    theorem ends here. The compiled target uses functions, but extending the theorem to
    arbitrary source merge functions is deferred.
 2. **Implement a sound source proof checker.** Check explicit propositions against
@@ -184,16 +192,24 @@ is outside the paper's obligations. The executable `observeM` and `Relational.ob
 return `some checkFailed` for a failed check and reserve `none` for an inconclusive run,
 including exhausted fuel. Their regressions are sanity checks, not a replacement proof.
 
-`PreservesTermination` is a separate stretch goal: a finite source evaluation implies
-some finite compiled evaluation. It is not a premise or a consequence of the required
-conditional observation theorem.
+`PreservesTermination` is separately **proved**: a finite source evaluation implies
+some finite compiled evaluation. It is not a consequence of conditional observation
+agreement alone. `preservesFiniteObservations` combines the two results:
+
+```text
+WellFormed(P) ∧ Fragment(P) ∧ ∅ ⊢ P ⇓ r
+⇒ ∃ s. ∅ ⊢ encode(P) ⇓ s ∧ succeeded(r) = succeeded(s).
+```
+
+Target termination is a conclusion, including when the source fails a check before an
+unreachable suffix.
 
 ### Strength, non-vacuity, and comparison
 
-The paper should call this **agreement of check outcomes when both executions
-terminate**. It is a conditional compiler-correctness theorem, not full behavioral
-equivalence. Its quantifiers cover every pair of finite source and target evaluations;
-there is no assumption about matching merge schedules or saturation round counts.
+The strengthened paper theorem is **preservation of finite success/failure observations**:
+each finite source execution has a finite compiled execution with the same observation.
+The original conditional theorem additionally covers every pair of finite source and
+target evaluations. Neither assumes matching merge schedules or saturation round counts.
 `checkFailed` is a defined observable result that must be preserved, not undefined
 behavior that licenses arbitrary target behavior.
 
@@ -209,26 +225,28 @@ on both sides for these programs:
 | Declare nullary `C`; check `C()` without constructing it | Check failure |
 
 These witnesses rule out an empty supported domain or an impossible finite-target
-premise. They do not establish target termination for every supported source program.
-In particular, the conditional contract rejects erasing all checks when the resulting
-program succeeds, but admits a hypothetical compiler that always loops or gets stuck:
-such a compiler supplies no finite target evaluation to compare. Replacing a terminating
-failure with divergence is likewise unconstrained. Absence of an `Eval` derivation alone
-does not distinguish divergence from stuckness in the current semantics.
+premise. The general termination theorem separately establishes a finite compiled
+evaluation for every finite source evaluation. The original conditional contract alone
+admits an always-looping or always-stuck compiler, since it supplies no target evaluation
+to compare. The strengthened theorem excludes that loophole: a terminating source failure
+must have a finite compiled failure, and a terminating source success must have a finite
+compiled success. It still does not constrain programs with no finite source evaluation.
+Absence of an `Eval` derivation alone does not distinguish divergence from stuckness.
 
 The internal result is stronger than the final Boolean observation: `boundary_prefix`
 relates every pair of successful corresponding prefixes through sound target rows,
 source-fact coverage, and completed rebuilding; `checkAgreement` consequently gives
 equivalence of the source query and its flattening at each reached check. These results
-still assume both prefix executions exist, but require no execution of the remaining
-suffix. For the paper, present check correspondence as the main technical lemma and
-finite-outcome agreement as its corollary.
+require no execution of the remaining suffix. Termination preservation supplies a
+compiled prefix whenever the source prefix has a finite execution. For the paper,
+present check correspondence and finite target execution existence as the technical
+lemmas yielding finite observation preservation.
 
 Established compiler theorems make different choices about observations and exceptions:
 
 | Theorem | Observations and guarantee | Explicit limits |
 | --- | --- | --- |
-| This congruence pass | All paired finite evaluations agree on success or check failure | Requires both finite evaluations; no divergence or progress theorem |
+| This congruence pass | Every finite source evaluation has a finite compiled evaluation with the same outcome; all paired finite outcomes agree | Existence of a terminating target run; no divergence preservation or guarantee for every schedule |
 | CompCert | Successful compilation gives a backward simulation; target behaviors are justified by source behaviors, including termination, divergence, and I/O traces | Source undefined behavior permits behavior improvement; compilation can reject input |
 | CakeML backend | Generated machine behavior follows source termination/divergence and FFI traces, or exits early at a resource limit | Source semantics excludes `Fail`; successful compilation and machine/environment setup; explicit resource-limit allowance |
 
@@ -236,8 +254,9 @@ CompCert's [compiler theorem](https://compcert.org/doc/html/compcert.driver.Comp
 and [behavior definitions](https://compcert.org/doc/html/compcert.common.Behaviors.html)
 include behaviors for divergence and getting stuck, and prove that every program has a
 behavior. Consequently, when all source behaviors terminate without undefined behavior,
-the target cannot satisfy refinement merely by diverging. This differs from requiring
-two finite derivations as premises.
+the target cannot satisfy refinement merely by diverging. Our termination theorem now
+also excludes losing all finite target outcomes for a terminating source, but does not
+provide CompCert's guarantees about every target behavior or about divergent sources.
 
 The [CakeML backend paper](https://cakeml.org/jfp19.pdf), §2.3–2.4 and §10, explicitly
 acknowledges that its resource-limit exception admits a compiler that always immediately
@@ -245,13 +264,10 @@ runs out of memory. Its theorem nevertheless constrains ordinary terminating and
 diverging behavior, including traces. The comparison is therefore about the exact
 permitted exceptions, not a claim that established compiler theorems have no loopholes.
 
-The next strengthening is the existing `PreservesTermination` obligation. Combined with
-the proved theorem, it would yield a matching finite target result for every finite
-source result. Its existential conclusion concerns existence of a terminating target
-execution, not termination of every possible schedule. It would still leave source
-programs having no finite evaluation unconstrained; full behavioral refinement would
-also require a treatment of divergence and stuckness. Termination preservation remains
-a stretch goal.
+The remaining distinction is between existence of a terminating target execution and
+constraints on every target behavior. Arbitrarily stuttering schedules are possible in
+the relational step semantics. Full behavioral refinement would also require a treatment
+of divergence and stuckness, including programs having no finite source evaluation.
 
 ### Correctness proof
 
@@ -389,6 +405,45 @@ derives the signature, rule census, and diagonality from actual prefix execution
 maintenance firings. `AbstractGlobals.lean`, `AbstractSoundRounds.lean`, and
 `AbstractRounds.lean` supply the command cases. No invariant is left as a public premise.
 
+### Termination preservation proof
+
+Finiteness of each reached database alone does not prove termination: a sequence of
+finite databases can grow forever. The new argument supplies **one finite bound for all
+reachable databases** in each compiled saturation.
+
+`AbstractFiniteRows.lean` defines `SoundRows(S)`: view rows justified by an existing source
+application at congruent children, and UF rows joining source-congruent values. When
+`Terms(S)` is finite, these rows form a finite set. The held source applications determine
+finitely many view names and arities, and every column comes from `Terms(S)`.
+
+For dedicated rebuilding, all reachable target terms lie in
+`Terms(T₀) ∪ SoundRows(S)`. Merges and maintenance rearrange held values without creating
+new constructor values. `AbstractTermination.lean` proves this bound and constructs
+finite completed merge and rebuild executions.
+
+For source saturation, fix the source's finite final state `S*`. The existing soundness
+proof justifies every finite target firing in `S*`, because `S*` already contains every
+source rule contribution. Compiled source heads only write generated rows; any newly
+constructed proper subterm is a source value. `AbstractRowWrites.lean` and
+`AbstractSaturationTermination.lean` therefore bound every reachable target term by
+
+```text
+Terms(T₀) ∪ Terms(S*) ∪ SoundRows(S*).
+```
+
+`Proofs/FiniteSaturation.lean` chooses a reachable state with a maximal equation set inside
+the finite bound. A rule round is always available with a reflexive merge phase, so it
+cannot enlarge that state. Any subsequent merge is likewise reachable and cannot enlarge
+it. Rules, declarations, and environment remain fixed, so the state is both rule-saturated
+and merge-saturated. The maximizing state comes with an actual finite reachability
+derivation; no assumption of a target fixed point or round bound is introduced.
+
+`AbstractTerminationCommands.lean` constructs the prelude and ordinary command blocks,
+then inducts over the finite source evaluation. A failed check ends this induction
+immediately. `AbstractTerminationComplete.lean` closes the original `PreservesTermination`
+contract and combines it with `preservesObservations`. The result uses neither an
+interpreter bridge nor a well-founded order on all possible structural terms.
+
 ## Query traversal
 
 Flattening visits conjuncts left to right. Within an application it recursively visits
@@ -478,6 +533,8 @@ The congruence pass has kernel-checked proofs for:
 - Mathematical check correspondence and conditional success/failure agreement, with
   all representation invariants derived from actual executions
   (`Abstract.checkAgreement`, `preservesObservations`).
+- Finite target execution existence and preservation of finite success/failure
+  observations (`preservesTermination`, `preservesFiniteObservations`).
 - Union-free output and equivalence with execution using structural identity only
   (`encode_unionFree`, `encode_relational`).
 - Query flattening and matching in both directions (`sourceMatch_of_encodedQuery`,

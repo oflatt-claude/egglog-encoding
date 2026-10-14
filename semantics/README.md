@@ -29,17 +29,18 @@ and function merges, and proof lifting turns its proofs into source proofs
 that both the Lean and Rust checkers accept.
 
 The congruence pass proves
-[`preservesObservations`](EgglogSemantics/Proofs/Congruence/AbstractComplete.lean):
-for well-formed programs in the supported source fragment, terminating source and compiled
-evaluations agree on success or check failure. Both sides use mathematical databases;
-the proof derives its representation invariants from the actual executions and imports no
-executable interpreter. Termination preservation remains a stretch goal, and interpreter
-correctness is outside the paper. Executable correspondence and differential tests remain
-sanity checks. This conditional theorem does not rule out a compiler introducing
-divergence; the encoding guide includes mathematical non-vacuity examples and a
-comparison with CompCert and CakeML. Both the constructor source checker and relational
-provenance checker have proved soundness and existence support. The library permits no
-`sorry`.
+[`preservesFiniteObservations`](EgglogSemantics/Proofs/Congruence/AbstractTerminationComplete.lean):
+for well-formed programs in the supported source fragment, every finite source evaluation
+has a finite compiled evaluation with the same success or check-failure outcome.
+`preservesObservations` additionally relates every pair of finite evaluations. Both sides
+use mathematical databases; the proofs derive their representation invariants and finite
+row bounds from actual executions and import no executable interpreter. Termination
+preservation establishes existence of a finite target run; divergence preservation and
+termination of every possible schedule are outside the theorem. Interpreter correctness
+is outside the paper. Executable correspondence and differential tests remain sanity
+checks. The encoding guide includes mathematical non-vacuity examples and a comparison
+with CompCert and CakeML. Both the constructor source checker and relational provenance
+checker have proved soundness and existence support. The library permits no `sorry`.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
 and source restrictions. The [checker guide](CHECKER.md) explains the certificate
