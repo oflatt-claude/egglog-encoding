@@ -14,7 +14,7 @@ private def body : List Action := [.union (.var "old") c.toExpr]
 
 private def program : Program :=
   [.decl "A" ctor, .decl "B" ctor, .decl "C" ctor,
-   .decl "Table" ⟨0, 1, some (.merge body [.var "old"]), none⟩,
+   .decl "Table" ⟨0, 1, some (.merge ["old"] ["new"] body [.var "old"]), none⟩,
    .action (.expr (row a).toExpr), .action (.union a.toExpr b.toExpr),
    .action (.expr c.toExpr), .saturate "R"]
 
@@ -28,7 +28,7 @@ private def program : Program :=
 
 -- Running the merge body at two row spellings would assert the unsupported equality.
 #guard (contextOf program).any fun C =>
-  (actionsFacts C.sig (mergeEnv [a] [b]) body).any fun fs =>
+  (actionsFacts C.sig (mergeEnv ["old"] ["new"] [a] [b]) body).any fun fs =>
     decide ((⟨a, c⟩ : Claim) ∈ fs)
 
 /-- Congruence establishes the second spelling without establishing a collision. -/

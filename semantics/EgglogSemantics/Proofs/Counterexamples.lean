@@ -47,6 +47,7 @@ recursion the kernel cannot unfold.
 -/
 
 namespace Egglog
+
 namespace Falsity
 
 /-! ## Shared vocabulary -/
@@ -54,7 +55,7 @@ namespace Falsity
 /-- `(function f () i64 :merge 7)`: a nullary `:merge` function with an empty merge body
 whose merged value is the constant `7`. -/
 def fDecl : FnDecl :=
-  { arity := 0, outArity := 1, merge := some (.merge [] [.lit (.int 7)]) }
+  { arity := 0, outArity := 1, merge := some (.merge ["old"] ["new"] [] [.lit (.int 7)]) }
 
 /-- `(constructor c (S…) S)` at `n` argument columns. Declaration is required, so every witness
 below that *builds* a term has to declare its constructor first. -/
@@ -92,7 +93,8 @@ theorem dG_row : (⟨"g", [], []⟩ : Row) ∈ dG.rows := by decide
 theorem dG'_row : (⟨"g", [], []⟩ : Row) ∈ dG'.rows := dG_row
 
 /-- `mergeOf` at `g` really has changed. -/
-theorem dG'_mergeOf : dG'.sig.mergeOf "g" = some (MergeSpec.merge [] [.lit (.int 7)]) := rfl
+theorem dG'_mergeOf : dG'.sig.mergeOf "g" = some (MergeSpec.merge ["old"] ["new"] []
+  [.lit (.int 7)]) := rfl
 
 /-- **Claim 1, CONFIRMED.** `Cmd.decl` takes a database satisfying `FDatabase.Inv` to one
 that does not.
@@ -122,7 +124,7 @@ executable `arityOk` check reject atoms whose full column count is wrong. -/
 
 /-- `(function h () i64 :merge 9)`. -/
 def hDecl : FnDecl :=
-  { arity := 0, outArity := 1, merge := some (.merge [] [.lit (.int 9)]) }
+  { arity := 0, outArity := 1, merge := some (.merge ["old"] ["new"] [] [.lit (.int 9)]) }
 
 def sigH : Signature := Function.update (fun _ => none) "h" (some hDecl)
 
@@ -279,7 +281,7 @@ def mergeSetDb : Database := mergeSig.addTerm (.app "f" [.lit (.int 0)])
 /-- The other state the merge phase allows: the entry collides with itself and `f`'s body
 writes `7` at the same key. -/
 def mergeCollideDb : Database :=
-  { (({ mergeSetDb with env := mergeEnv [.lit (.int 0)] [.lit (.int 0)] } :
+  { (({ mergeSetDb with env := mergeEnv ["old"] ["new"] [.lit (.int 0)] [.lit (.int 0)] } :
         Database).addTerm (.app "f" [.lit (.int 7)])) with
     env := mergeSetDb.env, rules := mergeSetDb.rules }
 
@@ -338,7 +340,7 @@ theorem mergeDeclProgram_checks :
       Expr.fns, Cmd.sigBind, Database.empty]
   · refine ⟨?_, ?_, trivial⟩
     · intro ms hms
-      have heq : .merge [] [.lit (.int 7)] = ms := by simpa [fDecl] using hms
+      have heq : .merge ["old"] ["new"] [] [.lit (.int 7)] = ms := by simpa [fDecl] using hms
       subst ms
       exact ⟨rfl, trivial, trivial, trivial⟩
     · refine ⟨fun dc hdc => ?_, trivial, trivial⟩
@@ -346,7 +348,7 @@ theorem mergeDeclProgram_checks :
       rfl
   · refine ⟨?_, trivial, trivial⟩
     intro ms hms
-    have heq : .merge [] [.lit (.int 7)] = ms := by simpa [fDecl] using hms
+    have heq : .merge ["old"] ["new"] [] [.lit (.int 7)] = ms := by simpa [fDecl] using hms
     subst ms
     exact ⟨trivial, by simp [Expr.Declared, Expr.fns]⟩
 
@@ -444,7 +446,7 @@ the rule contributes nothing, and no term of `f` is ever built. Its signature *i
 is isolated as what rejects it. -/
 
 /-- `(function M () i64 :merge new)`. -/
-def staleDecl : FnDecl := ⟨0, 1, some (.merge [] [.var "new"]), none⟩
+def staleDecl : FnDecl := ⟨0, 1, some (.merge ["old"] ["new"] [] [.var "new"]), none⟩
 
 /-- `(rule ((= 0 (M))) ((f)))`. Its head names `f`, which nothing has declared; no
 structural check constrains a head, so the rule is still legal, and it is
@@ -461,18 +463,18 @@ def staleProgram : Program :=
 def staleSig : Signature := Function.update (fun _ => none) "M" (some staleDecl)
 
 theorem staleSig_mergeOf :
-    Signature.mergeOf staleSig "M" = some (.merge [] [.var "new"]) := rfl
+    Signature.mergeOf staleSig "M" = some (.merge ["old"] ["new"] [] [.var "new"]) := rfl
 
 /-- …and the merge-body condition it carries. -/
 theorem staleProgram_mergesLegal : Signature.MergesLegal staleSig := by
-  intro g dc body res hg hm
+  intro g dc oldVars newVars body res hg hm
   by_cases hgM : g = "M"
   · subst hgM
     rw [show staleSig "M" = some staleDecl from rfl, Option.some.injEq] at hg
     subst hg
-    rw [show staleDecl.merge = some (MergeSpec.merge [] [.var "new"]) from rfl,
+    rw [show staleDecl.merge = some (MergeSpec.merge ["old"] ["new"] [] [.var "new"]) from rfl,
       Option.some.injEq, MergeSpec.merge.injEq] at hm
-    obtain ⟨rfl, rfl⟩ := hm
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := hm
     exact ⟨trivial, rfl⟩
   · rw [staleSig, Function.update_of_ne hgM] at hg
     exact absurd hg (by simp)
@@ -513,7 +515,8 @@ declared afterwards, and the declaration turns a state where nothing merges into
 a step applies. -/
 
 /-- `(function g (Math) i64 :merge (f))` — a `:merge` whose result names `f`. -/
-def gdecl : FnDecl := { arity := 1, outArity := 1, merge := some (.merge [] [.app "f" []]) }
+def gdecl : FnDecl :=
+  { arity := 1, outArity := 1, merge := some (.merge ["old"] ["new"] [] [.app "f" []]) }
 
 /-- `g`'s one entry: key `0`, value `0`. -/
 def entry : Term := .app "g" [t0, t0]
@@ -590,14 +593,14 @@ undeclared, so `Expr.evalList` returns `none` and `MergeStep.collide` cannot fir
 theorem no_merge_before (x : Database) : ¬ MergeStep db₀ x := by
   intro h
   cases h with
-  | @collide d f decl as bs a b vs body res hsig hmerge _ _ _ _ _ _ heval hres =>
+  | @collide d f decl as bs a b vs oldVars newVars body res hsig hmerge _ _ _ _ _ _ heval hres =>
     have hdecl : decl = gdecl := by
       by_cases hf : f = "g"
       · subst hf; simpa [db₀] using hsig.symm
       · simp [db₀, hf] at hsig
     subst hdecl
     simp only [gdecl, Option.some.injEq, MergeSpec.merge.injEq] at hmerge
-    obtain ⟨rfl, rfl⟩ := hmerge
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := hmerge
     simp only [evalActions, Option.some.injEq] at heval
     subst heval
     simp [Expr.evalList, Expr.eval, Signature.IsCtor, db₀] at hres
@@ -611,11 +614,12 @@ theorem decl_enables_merge :
   have hctor : db₁.sig.IsCtor "f" := ⟨ctorDecl 0, by simp [db₁], rfl⟩
   have hentry : entry ∈ db₁.terms := Cong.assert (by simp [db₁, db₀])
   have ht0 : Cong db₁ t0 t0 := Cong.assert (by simp [db₁, db₀])
-  have hres : Expr.evalList db₁.sig [Expr.app "f" []] (mergeEnv [t0] [t0]) =
+  have hres : Expr.evalList db₁.sig [Expr.app "f" []] (mergeEnv ["old"] ["new"] [t0] [t0]) =
       some [Term.app "f" []] := by
     simp [Expr.evalList, Expr.eval, hctor]
   refine ⟨_, ⟨db₁, rfl, Relation.ReflTransGen.single (MergeStep.collide (f := "g")
-    (d := { db₁ with env := mergeEnv [t0] [t0] }) (as := [t0]) (bs := [t0]) (a := [t0])
+    (d :=
+      { db₁ with env := mergeEnv ["old"] ["new"] [t0] [t0] }) (as := [t0]) (bs := [t0]) (a := [t0])
     (b := [t0]) hg rfl trivial rfl rfl hentry hentry
       (CongList.cons ht0 CongList.nil) rfl hres)⟩, ?_⟩
   intro hcontra
@@ -629,7 +633,8 @@ signature `f` is not already in, so no program the checks admit builds `db₀`. 
 theorem gdecl_not_mergeDeclared (sig : Signature) (h : sig "f" = none) :
     ¬ Cmd.MergeDeclared (.decl "g" gdecl) sig := by
   intro hc
-  exact hc (.merge [] [.app "f" []]) rfl |>.2 (.app "f" []) (List.mem_cons_self ..) "f"
+  exact hc (.merge ["old"] ["new"] [] [.app "f" []]) rfl |>.2 (.app "f" [])
+    (List.mem_cons_self ..) "f"
     (by simp [Expr.fns, Expr.fnsList])
     (show Function.update sig "g" (some gdecl) "f" = none by
       rw [Function.update_of_ne (by simp)]; exact h)
@@ -638,7 +643,7 @@ theorem gdecl_not_mergeDeclared (sig : Signature) (h : sig "f" = none) :
 it fails. -/
 theorem db₀_not_sigMergeDeclared : ¬ SigMergeDeclared db₀.sig := by
   intro h
-  exact (h "g" gdecl (.merge [] [.app "f" []]) (by simp [db₀]) rfl).2 (.app "f" [])
+  exact (h "g" gdecl (.merge ["old"] ["new"] [] [.app "f" []]) (by simp [db₀]) rfl).2 (.app "f" [])
     (List.mem_cons_self ..) "f" (by simp [Expr.fns, Expr.fnsList]) (by simp [db₀])
 
 /-! ## The two `Recorded` transports need their side condition
@@ -838,16 +843,16 @@ theorem A_rec_C : A.Recorded C := by
 
 /-! ### The specification's merge step
 
-`mergeEnv [p] [r]` binds `old := p`, `new := r`; `p < r`, so `mergeBody` writes
+`mergeEnv ["old"] ["new"] [p] [r]` binds `old := p`, `new := r`; `p < r`, so `mergeBody` writes
 `@UF(p) ↦ p` and `@UF(r) ↦ p`, and `mergeResult` settles on `p`. -/
 
 def dA : Database :=
-  (({ A with env := mergeEnv [P1] [R] } : Database).addTerm (ufrow P1 P1)).addTerm
+  (({ A with env := mergeEnv ["old"] ["new"] [P1] [R] } : Database).addTerm (ufrow P1 P1)).addTerm
     (ufrow R P1)
 
 def B : Database := { dA.addTerm (vrow P1) with env := A.env, rules := A.rules }
 
-theorem evalA : evalActions ({ A with env := mergeEnv [P1] [R] } : Database) mergeBody
+theorem evalA : evalActions ({ A with env := mergeEnv ["old"] ["new"] [P1] [R] } : Database) mergeBody
     = some dA := rfl
 
 theorem resA : Expr.evalList dA.sig mergeResult dA.env = some [P1] := rfl
@@ -1011,14 +1016,14 @@ e-classes are linked to it. -/
 
 /-- The state `mergeBody` reaches from `C` on a collision whose e-classes are `x` and `y`. -/
 def dC (x y : Term) : Database :=
-  (({ C with env := mergeEnv [x] [y] } : Database).addTerm
+  (({ C with env := mergeEnv ["old"] ["new"] [x] [y] } : Database).addTerm
     (ufrow x (Term.least x y))).addTerm (ufrow y (Term.least x y))
 
 /-- The value `mergeResult` settles on there. -/
 def vsC (x y : Term) : List Term := [Term.least x y]
 
 theorem evalC (x y : Term) :
-    evalActions ({ C with env := mergeEnv [x] [y] } : Database) mergeBody
+    evalActions ({ C with env := mergeEnv ["old"] ["new"] [x] [y] } : Database) mergeBody
       = some (dC x y) := rfl
 
 theorem resC (x y : Term) :
@@ -1057,15 +1062,17 @@ theorem step_phiInv {x y : Term} (hx : x = S ∨ x = R) (hy : y = S ∨ y = R) :
 /-- Every state one merge step of `C` reaches satisfies the invariant. -/
 theorem C_step_phiInv {D : Database} (h : MergeStep C D) : PhiInv D := by
   cases h with
-  | @collide d f decl as bs a b vs body res hdecl hmerge _hconf hla hlb hra hrb hcong hbody
+  | @collide d f decl as bs a b vs oldVars newVars body res
+    hdecl hmerge _hconf hla hlb hra hrb hcong hbody
       hres =>
     have hm : decl.merge ≠ none := by rw [hmerge]; simp
     rcases sg_merge hdecl hm with rfl | rfl
     · have hdc : decl = tableDecl 1 := (Option.some.inj (sg_V.symm.trans hdecl)).symm
       subst hdc
-      obtain ⟨rfl, rfl⟩ : body = mergeBody ∧ res = mergeResult := by
+      obtain ⟨rfl, rfl, rfl, rfl⟩ :
+          oldVars = ["old"] ∧ newVars = ["new"] ∧ body = mergeBody ∧ res = mergeResult := by
         simp only [tableDecl, Option.some.injEq, MergeSpec.merge.injEq] at hmerge
-        exact ⟨hmerge.1.symm, hmerge.2.symm⟩
+        exact ⟨hmerge.1.symm, hmerge.2.1.symm, hmerge.2.2.1.symm, hmerge.2.2.2.symm⟩
       obtain ⟨rfl, ha⟩ := view_entry hla hra
       obtain ⟨rfl, hb⟩ := view_entry hlb hrb
       obtain ⟨x, hxa, hx⟩ : ∃ x, a = [x] ∧ (x = S ∨ x = R) := by

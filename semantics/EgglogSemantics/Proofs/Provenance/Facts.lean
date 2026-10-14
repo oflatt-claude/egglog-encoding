@@ -110,7 +110,7 @@ theorem mergeFacts_sound {db : Database} (hw : db.WF) (hclosed : MergeSaturated 
   | none => simp [hm] at hdecl
   | some ms =>
     cases ms with
-    | merge body res =>
+    | merge oldVars newVars body res =>
       simp only [hm] at hdecl
       cases old with
       | lit _ => simp at hdecl
@@ -145,7 +145,8 @@ theorem mergeFacts_sound {db : Database} (hw : db.WF) (hclosed : MergeSaturated 
                 have hk : CongList db (oc.take d.arity) (nc.take d.arity) := by
                   rw [← hkeys]; exact CongList.refl hkeymem
                 obtain ⟨D, hD, hfs⟩ := actionsFacts_sound
-                  (db := { db with env := mergeEnv (oc.drop d.arity) (nc.drop d.arity) }) hbody
+                  (db :=
+                    { db with env := mergeEnv oldVars newVars (oc.drop d.arity) (nc.drop d.arity) }) hbody
                 have hv : Expr.evalList D.sig res D.env = some vs := by
                   rw [evalActions_sig hD, evalActions_env hD]; exact hres
                 let post : Database :=

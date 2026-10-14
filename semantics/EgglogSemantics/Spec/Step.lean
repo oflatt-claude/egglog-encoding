@@ -18,20 +18,9 @@ def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
 
 end Database
 /-! ### The merge step -/
-/-- egglog's indexed merge parameters, from column `i` on. -/
-def mergeEnvIdx : Nat → List Term → List Term → Env
-  | _, [], _ => []
-  | _, _, [] => []
-  | i, o :: os, n :: ns =>
-      ("old" ++ toString i, o) :: ("new" ++ toString i, n) :: mergeEnvIdx (i + 1) os ns
-
-/-- The environment a `:merge` body runs in: the two colliding entries' outputs, column `i`
-as `old<i>`/`new<i>`, and the first column also as `old`/`new`. egglog binds the unindexed
-names for a single output and the indexed ones for several; binding both lets a column be
-appended without renaming a body. -/
-def mergeEnv : List Term → List Term → Env
-  | o :: os, n :: ns => ("old", o) :: ("new", n) :: mergeEnvIdx 0 (o :: os) (n :: ns)
-  | _, _ => []
+/-- Componentwise substitution of the two output tuples for a merge's parameters. -/
+def mergeEnv (oldVars newVars : List Var) (old new : List Term) : Env :=
+  oldVars.zip old ++ newVars.zip new
 
 /-- How many leading value columns a collision must leave unchanged to count as no change
 at all (`egglog-bridge/src/lib.rs:1418`): the declared identity columns, or — for a `:merge`
@@ -57,13 +46,13 @@ entry also collides with itself, and `MergeConflict` is what keeps that collisio
 resolving to anything unless the function asked for it. -/
 inductive MergeStep : Database → Database → Prop where
   | collide {db d : Database} {f : FnName} {decl : FnDecl} {as bs a b vs : List Term}
-      {body : List Action} {res : List Expr} :
-      db.sig f = some decl → decl.merge = some (.merge body res) →
+      {oldVars newVars : List Var} {body : List Action} {res : List Expr} :
+      db.sig f = some decl → decl.merge = some (.merge oldVars newVars body res) →
       MergeConflict decl body a b →
       as.length = decl.arity → bs.length = decl.arity →
       Term.app f (as ++ a) ∈ db.terms → Term.app f (bs ++ b) ∈ db.terms →
       CongList db as bs →
-      evalActions { db with env := mergeEnv a b } body = some d →
+      evalActions { db with env := mergeEnv oldVars newVars a b } body = some d →
       Expr.evalList d.sig res d.env = some vs →
       MergeStep db
         { d.addTerm (.app f (as ++ vs)) with env := db.env, rules := db.rules }

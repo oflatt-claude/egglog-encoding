@@ -51,8 +51,8 @@ def tableRole (P : Program) (f : FnName) : Option TableRole :=
     (P.ctors.find? fun fk => viewName fk.1 == f).map fun fk => .view fk.1
 
 /-- A collision retains the smaller id and links both ids to it; for the smaller one that
-is a self-loop, which is not a union-find edge. With one output column, `mergeEnv`
-supplies the ordinary `old` and `new` bindings. -/
+is a self-loop, which is not a union-find edge. `tableDecl` explicitly binds
+the singleton input tuples as `old` and `new`. -/
 def mergeBody : List Action :=
   [.expr (.app ufName [.var "old", .min (.var "old") (.var "new")]),
    .expr (.app ufName [.var "new", .min (.var "old") (.var "new")])]
@@ -62,7 +62,7 @@ def mergeResult : List Expr := [.min (.var "old") (.var "new")]
 
 /-- A generated function with one id column. All output columns determine change. -/
 def tableDecl (arity : Nat) : FnDecl :=
-  { arity, outArity := 1, merge := some (.merge mergeBody mergeResult) }
+  { arity, outArity := 1, merge := some (.merge ["old"] ["new"] mergeBody mergeResult) }
 
 /-- Structural ids use the source constructor and its original arity. -/
 def ctorDecl (arity : Nat) : FnDecl := { arity, outArity := 1, merge := none }

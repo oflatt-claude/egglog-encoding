@@ -521,13 +521,13 @@ def runRulesFast (R : RulesetName) (d : FDatabase) : FDatabase :=
 /-- `FDatabase.mergeOneOriented` at the diagonal: colliding keys are identical keys. -/
 def mergeOneOriented (ts : List Term) (d : FDatabase) (r₁ r₂ : Row) : Option FDatabase :=
   match d.sig.mergeOf r₁.fn with
-  | some (.merge body res) =>
+  | some (.merge oldVars newVars body res) =>
     if r₁.fn = r₂.fn && sameTuple ts r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
       if FDatabase.noConflict ((d.sig r₁.fn).bind (·.unchangedWidth body)) r₁ r₂ then
         some { d with rows := d.rows.filter fun r => r ≠ r₁ }
       else
-        (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
+        (execActions { d with env := mergeEnv oldVars newVars r₂.out r₁.out } body).bind
           fun e => (Expr.evalList e.sig res e.env).map fun vs =>
             let e' := e.addTerm (.app r₂.fn (r₂.args ++ vs))
             { e' with

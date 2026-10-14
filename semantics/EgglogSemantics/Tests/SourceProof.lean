@@ -91,7 +91,7 @@ private def nested : Program := declarations ++
 #guard accepts nested (.rule ⟨ga, ga⟩ 6 [("x", a)] [fiat (.app "F" [fa])]) ⟨ga, ga⟩
 
 private def functions : Program := declarations ++
-  [.decl "Table" ⟨0, 1, some (.merge [] [.var "old"]), none⟩,
+  [.decl "Table" ⟨0, 1, some (.merge ["old"] ["new"] [] [.var "old"]), none⟩,
    .action (.expr (.app "Table" [a.toExpr]))]
 
 #guard !sourceOk functions

@@ -474,24 +474,24 @@ of keys that makes two rows collide. See `MERGE.md` for the model's limits. -/
 
 private def dist (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [] [.min (.var "old") (.var "new")]) }
+    merge := some (.merge ["old"] ["new"] [] [.min (.var "old") (.var "new")]) }
 
 private def distMax (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [] [.min (.var "new") (.var "old")]) }
+    merge := some (.merge ["old"] ["new"] [] [.min (.var "new") (.var "old")]) }
 
 
 /-- A block with an observable execution marker and a primitive result. -/
 private def distBlock (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.union (C "Tick") (C "Tick")]
+    merge := some (.merge ["old"] ["new"] [.union (C "Tick") (C "Tick")]
       [.min (.var "old") (.var "new")]) }
 
 /-- `:merge old` / `:merge new`, the two merges no commutative one can distinguish. `old`
 is the value already in the table and `new` the one being inserted — which row that is, at
 a collision a rebuild caused, is `Impl/Merge.lean`'s `swapForCanon`. -/
 private def distPick (n : Nat) (which : String) : FnDecl :=
-  { arity := n, outArity := 1, merge := some (.merge [] [.var which]) }
+  { arity := n, outArity := 1, merge := some (.merge ["old"] ["new"] [] [.var which]) }
 
 private def num (n : Int) : Expr := .lit (.int n)
 
@@ -527,11 +527,11 @@ value after a real collision — is not observable through `print-size` at all, 
 `(check (= (values …) …))`, which is a different oracle and a `Cmd.check` this fragment
 does not have. -/
 /-- A two-column merge function: `min` on column 0, `max` on column 1, which is what
-`mergeEnvIdx`'s `old0`/`new0`/`old1`/`new1` naming is for. Emitted as
+the explicit parameter tuples `[old0, old1]` and `[new0, new1]` name. Emitted as
 `(function Dist (Math…) (i64 i64) :merge (values (min old0 new0) (max old1 new1)))`. -/
 private def distPair (n : Nat) : FnDecl :=
   { arity := n, outArity := 2,
-    merge := some (.merge [] [.min (.var "old0") (.var "new0"),
+    merge := some (.merge ["old0", "old1"] ["new0", "new1"] [] [.min (.var "old0") (.var "new0"),
                               .min (.var "new1") (.var "old1")]) }
 
 private def pset (f : FnName) (args : List Expr) (v w : Int) : Cmd :=
@@ -583,11 +583,12 @@ private def readValue (v : Int) : Rule where
 
 /-- `distPick` at two value columns: `(values old0 old1)` or `(values new0 new1)`. The one
 merge that is both **non-commutative** and **multi-column**, so it is the only shape in
-which `mergeEnvIdx`'s per-column binding is observable on its own — every other multi-column
+which componentwise parameter binding is observable on its own — every other multi-column
 case here combines with `min`/`max`, which cannot tell the two rows apart. -/
 private def distPickPair (n : Nat) (which : String) : FnDecl :=
   { arity := n, outArity := 2,
-    merge := some (.merge [] [.var (which ++ "0"), .var (which ++ "1")]) }
+    merge :=
+      some (.merge ["old0", "old1"] ["new0", "new1"] [] [.var (which ++ "0"), .var (which ++ "1")]) }
 
 /-- The two-column acceptance test's rule: guarded on the *pre-merge* value tuple. -/
 private def readStale : Rule where
@@ -659,23 +660,24 @@ the two engines are not obliged to agree on, so the *combination* has to be
 order-insensitive for the value read to mean anything. -/
 private def logDecl : FnDecl :=
   { arity := 1, outArity := 1,
-    merge := some (.merge [] [.min (.var "old") (.var "new")]) }
+    merge := some (.merge ["old"] ["new"] [] [.min (.var "old") (.var "new")]) }
 
 /-- A merge that logs one of the colliding values into `Log` and returns the other. -/
 private def distLog (n : Nat) (logged kept : String) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.expr (.app "Log" [C "L", .var logged])] [.var kept]) }
+    merge := some (.merge ["old"] ["new"] [.expr (.app "Log" [C "L", .var logged])] [.var kept]) }
 
 /-- A merge whose body is `(union (U) (V))` — the body's entire effect is an equality, as
 in a union-find's. -/
 private def distUnion (n : Nat) (kept : String) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.union (C "U") (C "V")] [.var kept]) }
+    merge := some (.merge ["old"] ["new"] [.union (C "U") (C "V")] [.var kept]) }
 
 
 private def distInlineLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,
-    merge := some (.merge [.expr (.app "Log" [C "L", .min (.var "old") (.var "new")])]
+    merge :=
+      some (.merge ["old"] ["new"] [.expr (.app "Log" [C "L", .min (.var "old") (.var "new")])]
                          [.min (.var "old") (.var "new")]) }
 
 /-- Seeds `W` at both operands of a body's `union`, so that `W`'s row count falls from 2 to
@@ -688,7 +690,8 @@ column unchanged and moves the other. The skip is all-or-nothing over the whole 
 tuple, so this body must still run; a model that skipped per column would report `L 0`. -/
 private def distPairLog (n : Nat) : FnDecl :=
   { arity := n, outArity := 2,
-    merge := some (.merge [.expr (.app "Log" [C "L", .var "old0"])] [.var "new0", .var "new1"]) }
+    merge :=
+      some (.merge ["old0", "old1"] ["new0", "new1"] [.expr (.app "Log" [C "L", .var "old0"])] [.var "new0", .var "new1"]) }
 
 /-! ### Widths and arities the suite never drew
 
@@ -699,7 +702,7 @@ columns. Three gaps followed, each a distinct branch:
   is the empty tuple — `congrKeys` at length zero, which nothing had run.
 * **arity 3.** Three key columns, collided through a `union` on the third, so
   `congrKeys` has to walk past two equal columns to a congruent one.
-* **value width 3.** `mergeEnvIdx` binds `old0`/`new0`/`old1`/`new1`/`old2`/`new2`, and only
+* **value width 3.** The merge explicitly binds `old0`/`new0`/`old1`/`new1`/`old2`/`new2`, and only
   the first two pairs had ever been read. The width-3 case's merge uses all three, one per
   column and a different combiner in each, so a body reading the wrong index computes a
   different tuple and the guarded read stops firing.
@@ -709,11 +712,12 @@ no sorts at all, and `Tests/Egg.lean`'s `FnDecl.toEgg` renders `i64` per output 
 no program this file can build has one. Adding the sort would also want `ordering-min` to
 render, and `Term.blt` is structural where egglog's is by insertion order — a known
 divergence (`Tests/Egg.lean`, `FnDecl.toEgg`). Missing feature, not untested path. -/
-/-- A three-column merge: a different combiner per column, so every `mergeEnvIdx` binding
+/-- A three-column merge: a different combiner per column, so every parameter binding
 is load-bearing. -/
 private def distTriple (n : Nat) : FnDecl :=
   { arity := n, outArity := 3,
-    merge := some (.merge [] [.min (.var "old0") (.var "new0"),
+    merge :=
+      some (.merge ["old0", "old1", "old2"] ["new0", "new1", "new2"] [] [.min (.var "old0") (.var "new0"),
                               .min (.var "new1") (.var "old1"),
                               .var "old2"]) }
 
@@ -725,14 +729,16 @@ private def curatedMerge : List (String × Program) :=
     ("min-one",
       [.decl "Dist" (dist 1), mset "Dist" [C "A"] 5, mset "Dist" [C "A"] 3,
        mset "Dist" [C "A"] 7]),
-    -- First-column aliases must retain their meaning when rendered for Rust egglog.
-    ("scalar-indexed-alias",
-      [.decl "Dist" (distPick 1 "new0"), mset "Dist" [C "A"] 5,
+    -- Explicit parameters are independent of egglog's scalar and tuple spellings.
+    ("scalar-explicit-parameters",
+      [.decl "Dist" ⟨1, 1, some (.merge ["before"] ["incoming"] [] [.var "incoming"]),
+        none⟩, mset "Dist" [C "A"] 5,
        mset "Dist" [C "A"] 3, .rule (readValue 3), .run ""]),
-    ("tuple-unindexed-alias",
+    ("tuple-explicit-parameters",
       [.decl "Log" (dist 1),
-       .decl "Dist" ⟨1, 2, some (.merge [.expr (.app "Log" [C "L", .var "old"])]
-         [.var "new", .var "new1"]), none⟩,
+       .decl "Dist" ⟨1, 2, some (.merge ["beforeLo", "beforeHi"] ["incomingLo", "incomingHi"]
+         [.expr (.app "Log" [C "L", .var "beforeLo"])]
+         [.var "incomingLo", .var "incomingHi"]), none⟩,
        pset "Dist" [C "A"] 5 7, pset "Dist" [C "A"] 3 4,
        .rule readPair, .rule (readInto "Logged" "Log" [C "L"] 5), .run ""]),
     -- Two distinct keys stay two rows.
@@ -1068,8 +1074,9 @@ private def curatedMerge : List (String × Program) :=
        .run ""]),
     -- **`old`/`new` per column, at a canonicity-decided collision.** `canon-old` and
     -- `canon-new` at two value columns: the merge is `(values old0 old1)` resp. `(values
-    -- new0 new1)`, so every column's binding is `mergeEnvIdx`'s rather than `mergeEnv`'s
-    -- and none of it is hidden behind a commutative combiner. `Hit`/`Miss` read the whole
+    -- new0 new1)`, so each tuple component has its own explicit parameter
+    -- and none of the orientation is hidden behind a commutative combiner. `Hit`/`Miss` read the
+    -- whole
     -- surviving tuple, so binding `old` and `new` backwards at *any* column moves both
     -- counts. This is the shape the random stream draws once its value width exceeds one.
     ("tuple-canon-old",
@@ -1114,7 +1121,7 @@ private def curatedMerge : List (String × Program) :=
        .rule (readInto "Hit" "Dist" [C "A", C "B", C "X"] 3),
        .rule (readInto "Miss" "Dist" [C "A", C "B", C "X"] 5), .run ""]),
     -- **Value width 3**, one combiner per column: `min` on 0, `max` on 1, `old` on 2. A
-    -- body reading the wrong `mergeEnvIdx` index computes a different tuple, and the
+    -- body reading the wrong parameter index computes a different tuple, and the
     -- guarded read then stops firing.
     ("tuple-three",
       [.decl "Dist" (distTriple 1), tset "Dist" [C "A"] [5, 1, 7],
@@ -1161,7 +1168,7 @@ private def curatedMerge : List (String × Program) :=
 
 
 /-- Generate egglog's surface spelling for column `i` of a width-`w` output: unindexed
-at one value column and indexed above. The model also accepts first-column aliases. -/
+at one value column and indexed above. The generator declares these names explicitly. -/
 private def oldAt (w i : Nat) : Expr := .var (if w == 1 then "old" else "old" ++ toString i)
 
 /-- `oldAt`'s counterpart, the arriving row's column `i`. -/
@@ -1189,13 +1196,14 @@ private def genMergeSpec (w : Nat) (s : Nat) : MergeSpec × Nat :=
   let (res, s) := genCombiners w w s
   let (logged, s) := genCombiner w 0 s
   let (shape, s) := pick 8 s
+  let os := mergeParamsToEgg "old" w
+  let ns := mergeParamsToEgg "new" w
   match shape with
-  | 4 => (.merge [.union (C "U") (C "U")] (logged :: res.tail), s)
-  | 5 => (.merge [.expr (.app "Log" [C "L", logged])] res, s)
-  | 6 => (.merge [.union (C "U") (C "V")] res, s)
-  | 7 => (.merge [.expr (.app "Log" [C "L", logged])]
-            (logged :: res.tail), s)
-  | _ => (.merge [] res, s)
+  | 4 => (.merge os ns [.union (C "U") (C "U")] (logged :: res.tail), s)
+  | 5 => (.merge os ns [.expr (.app "Log" [C "L", logged])] res, s)
+  | 6 => (.merge os ns [.union (C "U") (C "V")] res, s)
+  | 7 => (.merge os ns [.expr (.app "Log" [C "L", logged])] (logged :: res.tail), s)
+  | _ => (.merge os ns [] res, s)
 
 /-- Whether a drawn body writes the side table, which the program then has to declare —
 `writeCase`'s `illegalSets` guard is what an omission would trip. -/
@@ -1203,7 +1211,7 @@ private def specSetsLog (m : MergeSpec) : Bool := m.fnArities.any (fun fa => fa.
 
 /-- Whether a drawn body asserts an equality, which only `seedW` makes observable. -/
 private def specUnions : MergeSpec → Bool
-  | .merge body _ => body.any fun a => match a with
+  | .merge _ _ body _ => body.any fun a => match a with
     | .union _ _ => true
     | _ => false
 
@@ -1276,7 +1284,7 @@ draws its key and value and so reports on a collision only by luck: with the mod
 `old` and `new` backwards, all 30 generated merge cases still passed.
 
 Above width one the tuple is read whole, so a per-column combiner drawn from the wrong
-`mergeEnvIdx` binding also moves it; and the values are `genValue`'s **denotations**, so a
+parameter binding also moves it; and the values are `genValue`'s **denotations**, so a
 primitive the model built instead of computing moves it too.
 
 The query is ground, so it costs one substitution and no enumeration. -/
@@ -1324,7 +1332,7 @@ The **key arity** is drawn from 0 to 3 and the **value width** from 1 to 3, so t
 column counts that had never varied now do. Arity 0 is the empty key tuple — `congrKeys` at
 length zero, with one key class for the whole table — and arity 3 makes the key comparison
 walk two columns before reaching the one a `union` moved. Width above one is what gives
-`mergeEnvIdx`'s indexed bindings anything to get wrong.
+componentwise binding anything to get wrong.
 
 The side table and the equality seeds are conditional on what `genMergeSpec` drew, because
 neither is inert: `Log` has to be declared *before* `Dist`, whose body writes it, and `W`'s

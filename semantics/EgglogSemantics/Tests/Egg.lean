@@ -84,28 +84,24 @@ def Rule.toEgg (sig : Signature) (r : Rule) : String :=
     ++ String.intercalate " " (r.actions.map (Action.toEgg sig)) ++ ")"
     ++ (if r.ruleset = "" then "" else " :ruleset " ++ r.ruleset) ++ ")"
 
-/-- A merge specification as egglog source. A constructor has no merge specification and
-so never reaches here. The name map renders `mergeEnv`'s first-column aliases using
-egglog's scalar or tuple spelling, without changing the semantic program.
+/-- egglog's implicit parameter spellings; these conventions stay in the syntax adapter. -/
+def mergeParamsToEgg (side : String) (width : Nat) : List Var :=
+  if width == 1 then [side] else (List.range width).map fun i => side ++ toString i
 
-The block form is `:merge (<action>* <result>)` — the actions and the result are
-*siblings* in one list, not two nested ones (`egglog/src/ast/parse.rs:531-569`, and
-`egglog/tests/merge-action-block.egg`). The parse is disambiguated by whether the first
-element is itself a list, which is why an empty body has to emit the bare result: an
-expression always has an atom head, so `:merge (min old new)` reads as a result and
-`:merge ((set (Log) (min old new)) (min old new))` as a block. -/
-def MergeSpec.toEgg (sig : Signature) (name : Var → String) : MergeSpec → String
-  | .merge [] res => " :merge " ++ Expr.valuesToEggWith name res
-  | .merge body res =>
-      " :merge (" ++ String.intercalate " " (body.map (Action.toEggWith sig name)) ++ " "
-        ++ Expr.valuesToEggWith name res ++ ")"
+/-- Map explicitly bound parameters to egglog's scalar or tuple parameter spellings. -/
+def mergeNameToEgg (oldVars newVars : List Var) (v : Var) : String :=
+  let names := oldVars.zip (mergeParamsToEgg "old" oldVars.length) ++
+    newVars.zip (mergeParamsToEgg "new" newVars.length)
+  ((names.find? fun p => p.1 == v).map Prod.snd).getD v
 
-/-- egglog uses `old`/`new` for a scalar and `old0`/`new0` for the first tuple component. -/
-def mergeNameToEgg (width : Nat) (v : Var) : String :=
-  if width == 1 then
-    if v == "old0" then "old" else if v == "new0" then "new" else v
-  else
-    if v == "old" then "old0" else if v == "new" then "new0" else v
+/-- A merge specification as egglog source. The block form places actions and result
+as siblings; a bodyless merge emits only its result. Renaming occurs only on output. -/
+def MergeSpec.toEgg (sig : Signature) : MergeSpec → String
+  | .merge oldVars newVars body res =>
+    let name := mergeNameToEgg oldVars newVars
+    if body.isEmpty then " :merge " ++ Expr.valuesToEggWith name res
+    else " :merge (" ++ String.intercalate " " (body.map (Action.toEggWith sig name)) ++ " "
+      ++ Expr.valuesToEggWith name res ++ ")"
 
 /-- A `:merge` function's declaration.
 
@@ -129,7 +125,7 @@ def FnDecl.toEgg (sig : Signature) (f : FnName) (d : FnDecl) (m : MergeSpec) : S
     | 1 => sort
     | _ => "(" ++ String.intercalate " " (List.replicate d.outArity sort) ++ ")"
   "(function " ++ f ++ " (" ++ String.intercalate " " (List.replicate d.arity "Math")
-    ++ ") " ++ out ++ m.toEgg sig (mergeNameToEgg d.outArity) ++ ")"
+    ++ ") " ++ out ++ m.toEgg sig ++ ")"
 
 /-- A command as egglog source. A run of the *unnamed* ruleset is `(run 1)`, which is what
 egglog's bare form means (`egglog/src/ast/parse.rs:834-864`); a named one carries its name.
@@ -184,7 +180,7 @@ def Action.fnArities : Action → List (FnName × Nat)
 any other, so a constructor mentioned *only* there — `(set (Log (A)) old)` — still has to
 be declared, and the function it `set`s still has to be a name the emitter knows. -/
 def MergeSpec.fnArities : MergeSpec → List (FnName × Nat)
-  | .merge body res => body.flatMap Action.fnArities ++ Expr.fnAritiesL res
+  | .merge _ _ body res => body.flatMap Action.fnArities ++ Expr.fnAritiesL res
 
 def Cmd.fnArities : Cmd → List (FnName × Nat)
   | .action a => a.fnArities

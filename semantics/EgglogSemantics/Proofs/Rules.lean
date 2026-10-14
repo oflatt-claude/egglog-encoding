@@ -78,13 +78,13 @@ theorem mergeOneOriented_setRules (cl : Finset (Term × Term)) (d : FDatabase)
   | none => rfl
   | some ms =>
       cases ms with
-      | merge body res =>
+      | merge oldVars newVars body res =>
           dsimp only
           split
           · split
             · rfl
-            · rw [execActions_setRules { d with env := mergeEnv r₂.out r₁.out } rs body]
-              cases execActions { d with env := mergeEnv r₂.out r₁.out } body with
+            · rw [execActions_setRules { d with env := mergeEnv oldVars newVars r₂.out r₁.out } rs body]
+              cases execActions { d with env := mergeEnv oldVars newVars r₂.out r₁.out } body with
               | none => rfl
               | some e =>
                   simp only [Option.map_some, Option.bind_some]

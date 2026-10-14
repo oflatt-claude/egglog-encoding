@@ -139,7 +139,7 @@ def Action.UnionLegal : Action → Prop
 
 /-- `res` is evaluated rather than run. -/
 @[simp] def MergeSpec.UnionLegal : MergeSpec → Prop
-  | .merge body _ => Actions.UnionLegal body
+  | .merge _ _ body _ => Actions.UnionLegal body
 
 /-- Its actions, and its `:merge` bodies: a `union` runs in either. -/
 @[simp] def Cmd.UnionLegal : Cmd → Prop
@@ -202,7 +202,7 @@ def Action.WidthOk : Action → Signature → Prop
 This is the one check besides `MergeDeclared` that walks into a `:merge`, for the reason
 `MergeDeclared`'s own heading gives — the body and `res` are where a merge writes. -/
 @[simp] def MergeSpec.WidthOk : MergeSpec → Nat → Signature → Prop
-  | .merge body res, n, sig =>
+  | .merge _ _ body res, n, sig =>
       res.length = n ∧ Actions.WidthOk body sig ∧ Expr.WidthOkList res sig
 
 /-- Asked of the signature the declaration **installs**, as `Cmd.MergeDeclared` and unlike
@@ -256,7 +256,7 @@ def Action.Declared : Action → Signature → Prop
   | a :: as, sig => a.Declared sig ∧ Actions.Declared as sig
 
 @[simp] def MergeSpec.Declared : MergeSpec → Signature → Prop
-  | .merge body res, sig => Actions.Declared body sig ∧ ∀ e ∈ res, e.Declared sig
+  | .merge _ _ body res, sig => Actions.Declared body sig ∧ ∀ e ∈ res, e.Declared sig
 
 /-- Asked of the signature the declaration **installs**, so a `:merge` may name the function
 it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
@@ -298,7 +298,7 @@ def Action.UnionFree : Action → Prop
 
 /-- `res` is evaluated rather than run. -/
 @[simp] def MergeSpec.UnionFree : MergeSpec → Prop
-  | .merge body _ => Actions.UnionFree body
+  | .merge _ _ body _ => Actions.UnionFree body
 
 /-- A declaration is union-free when its `:merge` body is: the body is what a collision
 runs. -/
@@ -381,7 +381,7 @@ survives the move — `FnDecl.unchangedWidth = none`, which is `body = []` with 
 `:internal-identity-vals`. Every `:merge` *expression* is that, `:merge (min old new)` and
 every lattice in this development included; `FnDecl.OrderingFree` carries the other half. -/
 @[simp] def MergeSpec.OrderingFree : MergeSpec → Prop
-  | .merge body res => body = [] ∧ Expr.OrderingFreeList res
+  | .merge _ _ body res => body = [] ∧ Expr.OrderingFreeList res
 
 @[inherit_doc MergeSpec.OrderingFree]
 def FnDecl.OrderingFree (d : FnDecl) : Prop :=
@@ -419,7 +419,7 @@ instance instDecidableActionsOrderingFree : ∀ as : List Action, Decidable (Act
 instance (r : Rule) : Decidable r.OrderingFree :=
   inferInstanceAs (Decidable ((∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions))
 instance : ∀ ms : MergeSpec, Decidable ms.OrderingFree
-  | .merge body res => decidable_of_iff (body.isEmpty = true ∧ Expr.OrderingFreeList res)
+  | .merge _ _ body res => decidable_of_iff (body.isEmpty = true ∧ Expr.OrderingFreeList res)
       (by simp [List.isEmpty_iff])
 instance (d : FnDecl) : Decidable d.OrderingFree :=
   decidable_of_iff (d.identityVals = none ∧ ∀ ms ∈ d.merge.toList, ms.OrderingFree)

@@ -13,7 +13,7 @@ inductive ProofKind where
 def proofKinds (P : Program) : List (FnName × ProofKind) :=
   (subtermName, .subterm) :: P.zipIdx.flatMap fun ci => match ci.1 with
     | .decl f d => match d.merge with
-      | some (.merge body _) => (resultName f, .result f) ::
+      | some (.merge _ _ body _) => (resultName f, .result f) ::
           body.zipIdx.map fun aj => (bodyName f aj.2, .body f aj.2)
       | _ => []
     | .action _ => [(globalName ci.2, .global ci.2)]
@@ -31,11 +31,11 @@ def actionRoot (sig : Signature) (σ : Env) : Action → Option Term
 def mergeBodyRoot (sig : Signature) (f : FnName) (j : Nat)
     (old new : Term) : Option Term := do
   let d ← sig f
-  let some (.merge body _) := d.merge | none
+  let some (.merge oldVars newVars body _) := d.merge | none
   let .app _ oc := old | none
   let .app _ nc := new | none
   let a ← body[j]?
-  actionRoot sig (mergeEnv (oc.drop d.arity) (nc.drop d.arity)) a
+  actionRoot sig (mergeEnv oldVars newVars (oc.drop d.arity) (nc.drop d.arity)) a
 
 private theorem sizeOf_tail_le (ts : List Term) : sizeOf ts.tail ≤ sizeOf ts := by
   cases ts with

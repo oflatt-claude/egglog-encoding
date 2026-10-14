@@ -51,8 +51,8 @@ private def missingPremise : Program :=
 
 private def tablesWith (firstOld firstNew : Var) : Program :=
   [.decl "Key" (ctor 0),
-   .decl "Audit" ⟨2, 1, some (.merge [] [.var "old"]), none⟩,
-   .decl "Bounds" ⟨1, 2, some (.merge
+   .decl "Audit" ⟨2, 1, some (.merge ["old"] ["new"] [] [.var "old"]), none⟩,
+   .decl "Bounds" ⟨1, 2, some (.merge [firstOld, "old1"] [firstNew, "new1"]
      [.expr (.app "Audit" [.var firstOld, .var firstNew, .var "new1"])]
      [.min (.var firstOld) (.var firstNew),
       .min (.var "new1") (.var "old1")]), none⟩,
@@ -62,23 +62,24 @@ private def tablesWith (firstOld firstNew : Var) : Program :=
 private def tables : Program := tablesWith "old0" "new0"
 
 #guard validates tables
-#guard validates (tablesWith "old" "new")
+#guard validates (tablesWith "lowerBefore" "lowerIncoming")
 
 -- Metadata-only collisions must not execute an otherwise unconditional merge.
 private def sameData : Program :=
-  [.decl "T" ⟨0, 1, some (.merge [] [.min (.var "old") (int 9)]), none⟩,
+  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [.min (.var "old") (int 9)]), none⟩,
    .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
 
 #guard validates sameData
 
 private def zeroOutputs : Program :=
-  [.decl "T" ⟨1, 0, some (.merge [] []), none⟩,
+  [.decl "T" ⟨1, 0, some (.merge [] [] [] []), none⟩,
    .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
 
 #guard validates zeroOutputs
 
 private def partialIdentity : Program :=
-  [.decl "T" ⟨0, 2, some (.merge [] [.var "new0", .var "new1"]), some 1⟩,
+  [.decl "T" ⟨0, 2, some (.merge ["old0", "old1"] ["new0", "new1"]
+     [] [.var "new0", .var "new1"]), some 1⟩,
    .action (.expr (.app "T" [int 1, int 2])),
    .action (.expr (.app "T" [int 1, int 3]))]
 
@@ -86,10 +87,21 @@ private def partialIdentity : Program :=
 
 -- An over-wide identity prefix must not include the appended proof column.
 private def wideIdentity : Program :=
-  [.decl "T" ⟨0, 1, some (.merge [] [int 9]), some 2⟩,
+  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [int 9]), some 2⟩,
    .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
 
 #guard validates wideIdentity
+
+-- No implicit `old`/`new` aliases: only declared names are in scope.
+private def parameterProgram (os ns : List Var) (e : Expr) : Program :=
+  [.decl "T" ⟨0, 1, some (.merge os ns [] [e]), none⟩]
+
+#guard (encode (parameterProgram ["before"] ["incoming"] (.var "incoming"))).isSome
+#guard (encode (parameterProgram ["before"] ["incoming"] (.var "new"))).isNone
+#guard (encode (parameterProgram [] ["incoming"] (int 0))).isNone
+#guard (encode (parameterProgram ["x"] ["x"] (int 0))).isNone
+#guard (encode (parameterProgram [proofVar 0] ["incoming"] (int 0))).isNone
+#guard (encode (parameterProgram ["before"] [proofVar 1] (int 0))).isNone
 
 private def bounds (a b : Int) : Term :=
   .app "Bounds" [term "Key", .lit (.int a), .lit (.int b)]
@@ -105,7 +117,7 @@ private def new : Proof := .global (bounds 4 1) 4
 #guard (check tables (.merge (bounds 2 1) "Bounds" old old)).isNone
 
 private def distinctKeys : Program :=
-  [.decl "T" ⟨1, 1, some (.merge [] [.var "new"]), none⟩,
+  [.decl "T" ⟨1, 1, some (.merge ["old"] ["new"] [] [.var "new"]), none⟩,
    .action (.expr (.app "T" [int 1, int 3])),
    .action (.expr (.app "T" [int 2, int 4]))]
 
@@ -115,7 +127,7 @@ private def distinctKeys : Program :=
 
 private def table (n : Int) : Term := .app "T" [.lit (.int n)]
 private def tProgram : Program :=
-  [.decl "T" ⟨0, 1, some (.merge [] [.min (.var "old") (.var "new")]), none⟩,
+  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [.min (.var "old") (.var "new")]), none⟩,
    .action (.expr (.app "T" [int 3])),
    .rule ⟨[.expr (.app "T" [.var "x"])], [.expr (.app "T" [int 2])], "R"⟩,
    .saturate "R"]

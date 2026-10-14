@@ -86,6 +86,8 @@ deleted rather than carried as `sorry`s. `RunStep.unique_of_confluent` went with
 -/
 
 namespace Egglog
+
+variable {oldVars newVars : List Var}
 /-! ### The constructor fragment collapses
 
 Congruence is M2's already; this says the same of the *step* relations. -/
@@ -720,7 +722,7 @@ M9 unchanged. -/
 theorem MergeStep.contained {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
     d₁.Contained d₂ := by
   cases h with
-  | @collide d f _ as _ _ _ vs _ _ _ _ _ _ _ _ _ _ hbody _ =>
+  | @collide d f _ as _ _ _ vs _ _ _ _ _ _ _ _ _ _ _ _ hbody _ =>
     have hb : d₁.Contained d := ⟨(evalActions_contained hbody).eqs⟩
     exact ⟨(hb.trans (Database.Contained.addTerm _ d)).eqs⟩
 
@@ -760,8 +762,8 @@ an instance of `MergeStep`, so removing them would change what the theorem says.
 theorem MergeStep.self_id {db d : Database} {f : FnName} {dc : FnDecl} {as a : List Term}
     {body : List Action} {res : List Expr} (hw : db.WF)
     (hrow : Term.app f (as ++ a) ∈ db.terms)
-    (hsig : db.sig f = some dc) (hdc : dc.merge = some (MergeSpec.merge body res))
-    (hbody : evalActions { db with env := mergeEnv a a } body = some d)
+    (hsig : db.sig f = some dc) (hdc : dc.merge = some (MergeSpec.merge oldVars newVars body res))
+    (hbody : evalActions { db with env := mergeEnv oldVars newVars a a } body = some d)
     (hfix : d.eqs = db.eqs)
     (hres : Expr.evalList d.sig res d.env = some a) :
     ({ d.addTerm (.app f (as ++ a)) with env := db.env, rules := db.rules } : Database)
@@ -1377,15 +1379,16 @@ theorem evalActions_mono_recorded {db D d : Database} (hc : db.Recorded D)
 /-- **A merge collision available at `A` is available at any `C` containing it.**
 
 No `env`/`rules` hypothesis is needed: a `MergeStep` overwrites the environment with
-`mergeEnv a b` before running the body and restores the caller's `env`/`rules`
+`mergeEnv oldVars newVars a b` before running the body and restores the caller's `env`/`rules`
 afterwards, so neither field is ever read. `sig` is needed, because `CongList.mono` is.
 -/
 theorem MergeStep.transport {A C B : Database} (hc : A.Contained C) (hsig : A.sig = C.sig)
     (h : MergeStep A B) : ∃ D, MergeStep C D ∧ B.Contained D ∧ B.sig = D.sig := by
   cases h with
-  | @collide dA f dc as bs a b vs body res hdc hmg hcf hla hlb hra hrb hcong hbody hres =>
-    have hc0 : ({ A with env := mergeEnv a b } : Database).Contained
-        { C with env := mergeEnv a b } := ⟨hc.eqs⟩
+  | @collide dA f dc as bs a b vs oldVars newVars body res
+    hdc hmg hcf hla hlb hra hrb hcong hbody hres =>
+    have hc0 : ({ A with env := mergeEnv oldVars newVars a b } : Database).Contained
+        { C with env := mergeEnv oldVars newVars a b } := ⟨hc.eqs⟩
     obtain ⟨dC, hstepC, hcont, hsig', henv'⟩ := evalActions_mono hc0 hsig rfl hbody
     refine ⟨{ dC.addTerm (.app f (as ++ vs)) with env := C.env, rules := C.rules },
       .collide (by rw [← hsig]; exact hdc) hmg hcf hla hlb (hc.terms hra) (hc.terms hrb)
@@ -2165,18 +2168,19 @@ how the proof encoding declares its proof nodes, so deleting one would delete a 
 
 The reason it holds is one line: the only rows dropped or overwritten are `r₁` and `r₂`
 themselves, whose function is `r₁.fn`, and the branch was taken only because
-`d.sig.mergeOf r₁.fn = .merge body res`. A row of any other kind of function is therefore
-distinct from both. The `noConflict` branch drops `r₁` and nothing else, so the same line
+`d.sig.mergeOf r₁.fn = .merge oldVars newVars body res`. A row of any other kind of function
+is therefore distinct from both. The `noConflict` branch drops `r₁` and nothing else, so the same line
 covers it with `r₂` to spare. -/
 theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
     {r₁ r₂ : Row} (h : d.mergeOneOriented cl r₁ r₂ = some e) :
     (∀ t ∈ d.terms, t ∈ e.terms) ∧ (∀ p ∈ d.eqs, p ∈ e.eqs) ∧ e.sig = d.sig ∧
-      ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ some (MergeSpec.merge body res)) →
+      ∀ r ∈ d.rows, (∀ oldVars newVars body res,
+        d.sig.mergeOf r.fn ≠ some (MergeSpec.merge oldVars newVars body res)) →
         r ∈ e.rows := by
   unfold FDatabase.mergeOneOriented at h
   match hm : d.sig.mergeOf r₁.fn with
   | none => rw [hm] at h; simp at h
-  | some (.merge body res) =>
+  | some (.merge oldVars newVars body res) =>
     rw [hm] at h
     simp only at h
     split at h
@@ -2188,9 +2192,9 @@ theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
         rw [Option.some.injEq] at h
         subst h
         refine ⟨fun _ h => h, fun _ h => h, rfl, fun r hr hnm => ?_⟩
-        exact mem_dropRow_of hr fun hq => hnm body res (by rw [hq]; exact hm)
+        exact mem_dropRow_of hr fun hq => hnm oldVars newVars body res (by rw [hq]; exact hm)
       case isFalse =>
-        cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
+        cases hb : execActions { d with env := mergeEnv oldVars newVars r₂.out r₁.out } body with
         | none => rw [hb] at h; simp at h
         | some eb =>
           rw [hb, Option.bind_some] at h
@@ -2211,7 +2215,8 @@ theorem mergeOneOriented_confined {cl : Finset (Term × Term)} {d e : FDatabase}
                 simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
                 exact hcond.1.1.1
               have hne : r ≠ r₁ ∧ r ≠ r₂ := by
-                refine ⟨fun hq => hnm body res ?_, fun hq => hnm body res ?_⟩
+                refine ⟨fun hq => hnm oldVars newVars body res ?_, fun hq => hnm oldVars
+                  newVars body res ?_⟩
                 · rw [hq]; exact hm
                 · rw [hq, ← hfn]; exact hm
               exact mem_mergeRows_of hrb hne.1 hne.2
@@ -2235,7 +2240,8 @@ theorem mergeOneWith_eq_oriented {cl : Finset (Term × Term)} {d : FDatabase} (r
 theorem mergeOneWith_confined {cl : Finset (Term × Term)} {d e : FDatabase} {r₁ r₂ : Row}
     (h : d.mergeOneWith cl r₁ r₂ = some e) :
     (∀ t ∈ d.terms, t ∈ e.terms) ∧ (∀ p ∈ d.eqs, p ∈ e.eqs) ∧ e.sig = d.sig ∧
-      ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ some (MergeSpec.merge body res)) →
+      ∀ r ∈ d.rows, (∀ oldVars newVars body res,
+        d.sig.mergeOf r.fn ≠ some (MergeSpec.merge oldVars newVars body res)) →
         r ∈ e.rows := by
   rcases mergeOneWith_eq_oriented (cl := cl) (d := d) r₁ r₂ with he | he <;>
     exact mergeOneOriented_confined (he ▸ h)
@@ -2247,7 +2253,7 @@ theorem mergeOneOriented_closed {cl : Finset (Term × Term)} {d e : FDatabase} {
   unfold FDatabase.mergeOneOriented at h
   match hm : d.sig.mergeOf r₁.fn with
   | none => rw [hm] at h; simp at h
-  | some (.merge body res) =>
+  | some (.merge oldVars newVars body res) =>
     rw [hm] at h
     simp only at h
     split at h
@@ -2259,7 +2265,7 @@ theorem mergeOneOriented_closed {cl : Finset (Term × Term)} {d e : FDatabase} {
         subst h
         exact ⟨hc.eqs, hc.subterms⟩
       case isFalse =>
-        cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
+        cases hb : execActions { d with env := mergeEnv oldVars newVars r₂.out r₁.out } body with
         | none => rw [hb] at h; simp at h
         | some eb =>
           rw [hb, Option.bind_some] at h
@@ -2389,11 +2395,12 @@ theorem canonOf_spec {cl : Finset (Term × Term)} {ts : List Term} {t : Term} :
 
 /-- A row of a function without a `:merge` body is not re-keyed. -/
 theorem rebuildRow_of_not_merge {cl : Finset (Term × Term)} {d : FDatabase} {r : Row}
-    (h : ∀ body res, d.sig.mergeOf r.fn ≠ some (MergeSpec.merge body res)) :
+    (h : ∀ oldVars newVars body res,
+      d.sig.mergeOf r.fn ≠ some (MergeSpec.merge oldVars newVars body res)) :
     d.rebuildRow cl r = r := by
   unfold FDatabase.rebuildRow
   split
-  · rename_i body res hm; exact absurd hm (h body res)
+  · rename_i oldVars newVars body res hm; exact absurd hm (h oldVars newVars body res)
   · rfl
 
 /-- A rebuilt row is a row of `d`, re-keyed — and every row of `d` contributes one. -/
@@ -2425,7 +2432,8 @@ theorem rebuild_confined {cl : Finset (Term × Term)} {d : FDatabase} :
     (∀ t ∈ d.terms, t ∈ (FDatabase.rebuild cl d).terms) ∧
       (∀ p ∈ d.eqs, p ∈ (FDatabase.rebuild cl d).eqs) ∧
       (FDatabase.rebuild cl d).sig = d.sig ∧
-      ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ some (MergeSpec.merge body res)) →
+      ∀ r ∈ d.rows, (∀ oldVars newVars body res,
+        d.sig.mergeOf r.fn ≠ some (MergeSpec.merge oldVars newVars body res)) →
         r ∈ (FDatabase.rebuild cl d).rows :=
   ⟨fun _ h => h, fun _ h => h, rfl,
     fun r hr hnm => mem_rebuild_rows.mpr ⟨r, hr, (rebuildRow_of_not_merge hnm).symm⟩⟩
@@ -2485,7 +2493,7 @@ theorem Inv.rebuild {cl : Finset (Term × Term)} {d : FDatabase} (h : d.Inv)
       have hfn : (d.rebuildRow cl s).fn = s.fn := by
         unfold FDatabase.rebuildRow; split <;> rfl
       have hsame : d.rebuildRow cl s = s :=
-        rebuildRow_of_not_merge fun body res hb => by
+        rebuildRow_of_not_merge fun oldVars newVars body res hb => by
           rw [← hfn] at hb; rw [show (FDatabase.rebuild cl d).sig = d.sig from rfl, hb] at hm
           exact absurd hm (by simp)
       rw [hsame] at hm ⊢
@@ -2522,13 +2530,15 @@ deletes merge rows only". -/
 theorem mergeRound_confined {d : FDatabase} :
     (∀ t ∈ d.terms, t ∈ d.mergeRound.terms) ∧ (∀ p ∈ d.eqs, p ∈ d.mergeRound.eqs) ∧
       d.mergeRound.sig = d.sig ∧
-      ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ some (MergeSpec.merge body res)) →
+      ∀ r ∈ d.rows, (∀ oldVars newVars body res,
+        d.sig.mergeOf r.fn ≠ some (MergeSpec.merge oldVars newVars body res)) →
         r ∈ d.mergeRound.rows := by
   -- The invariant is exactly the conclusion, relative to the fixed starting database.
   let P : FDatabase → Prop := fun x =>
     (∀ t ∈ d.terms, t ∈ x.terms) ∧ (∀ p ∈ d.eqs, p ∈ x.eqs) ∧
       x.sig = d.sig ∧
-      ∀ r ∈ d.rows, (∀ body res, d.sig.mergeOf r.fn ≠ some (MergeSpec.merge body res)) → r ∈ x.rows
+      ∀ r ∈ d.rows, (∀ oldVars newVars body res,
+        d.sig.mergeOf r.fn ≠ some (MergeSpec.merge oldVars newVars body res)) → r ∈ x.rows
   have hstep : ∀ (x : FDatabase) (r₁ r₂ : Row), P x →
       P (match FDatabase.mergeOneWith d.closureF x r₁ r₂ with
          | some y => y
@@ -2697,7 +2707,8 @@ their index rows, so a merge whose result builds an application adds a key class
 *different* function's table. With `k` any term:
 
 ```
-d.sig  = fun n => if n = "f" then some ⟨1, 1, .merge [] [.app "F" [.var "old"]]⟩ else none
+d.sig  = fun n => if n = "f" then some ⟨1, 1, .merge ["old"] ["new"] [] [.app "F" [.var "old"]]⟩
+else none
 d.terms = [k],  d.rows = [⟨"f", [k], [k]⟩],  d.eqs = []
 ```
 
@@ -2718,7 +2729,8 @@ No program-level check walks into a merge body, so this has to be carried separa
 `FDatabase.IndexOk.width` needs of the row a firing writes, which is `MergeStep.collide`'s
 `arity` premises reaching back into the declaration. -/
 def Signature.MergesLegal (sig : Signature) : Prop :=
-  ∀ g dc body res, sig g = some dc → dc.merge = some (MergeSpec.merge body res) →
+  ∀ g dc oldVars newVars body res, sig g = some dc → dc.merge = some (MergeSpec.merge
+    oldVars newVars body res) →
     Actions.WriteLegal body sig ∧ res.length = dc.outArity
 
 /-! #### The merge phase
@@ -2798,7 +2810,7 @@ set_option maxHeartbeats 1000000 in
 -- chain, with `mergeOneOriented` unfolded twice; the default budget is short.
 /-- **One merge firing preserves `Inv`, provided the declared merges are legal.**
 
-Four steps. Rebinding `env` to `mergeEnv r₂.out r₁.out` is harmless because
+Four steps. Rebinding `env` to `mergeEnv oldVars newVars r₂.out r₁.out` is harmless because
 `WF.subtermClosed` puts both rows' outputs in `terms` — an entry *is* a term now, so this
 is what `rowsWF` used to say and no longer has to. Running the body is `Inv.execActions`,
 which is where `hlegal`'s `WriteLegal` half is spent. The combined entry term goes in by
@@ -2812,7 +2824,7 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
   unfold FDatabase.mergeOneOriented at hm
   match hmo : d.sig.mergeOf r₁.fn with
   | none => rw [hmo] at hm; simp at hm
-  | some (.merge body res) =>
+  | some (.merge oldVars newVars body res) =>
     rw [hmo] at hm
     simp only at hm
     split at hm
@@ -2821,12 +2833,12 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
       simp only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] at hcond
       obtain ⟨⟨⟨hfn, -⟩, hr₁⟩, hr₂⟩ := hcond
       obtain ⟨dc₁, hdc₁, hdcm₁⟩ : ∃ dc, d.sig r₁.fn = some dc ∧
-          dc.merge = some (MergeSpec.merge body res) := by
+          dc.merge = some (MergeSpec.merge oldVars newVars body res) := by
         rw [Signature.mergeOf] at hmo
         cases hd : d.sig r₁.fn with
         | none => rw [hd] at hmo; simp at hmo
         | some dc => exact ⟨dc, rfl, by rw [hd] at hmo; simpa using hmo⟩
-      obtain ⟨hbodyLegal, hresLen⟩ := hlegal r₁.fn dc₁ body res hdc₁ hdcm₁
+      obtain ⟨hbodyLegal, hresLen⟩ := hlegal r₁.fn dc₁ oldVars newVars body res hdc₁ hdcm₁
       split at hm
       case isTrue =>
         rw [Option.some.injEq] at hm
@@ -2841,19 +2853,19 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
           exact h.wf.subtermClosed _ hmem
             (Term.mem_subterms.mpr (Term.IsSubterm.arg (List.mem_append_right _ hx)
               (Term.IsSubterm.refl x)))
-      have hσ : ∀ b ∈ mergeEnv r₂.out r₁.out, b.2 ∈ d.toDatabase.terms := by
+      have hσ : ∀ b ∈ mergeEnv oldVars newVars r₂.out r₁.out, b.2 ∈ d.toDatabase.terms := by
         intro b hb
         rcases mem_mergeEnv hb with hb' | hb'
         · exact hmemRow r₂ hr₂ b.2 hb'
         · exact hmemRow r₁ hr₁ b.2 hb'
-      have h₀ : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).Inv := h.setEnv hσ
-      cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
+      have h₀ : ({ d with env := mergeEnv oldVars newVars r₂.out r₁.out } : FDatabase).Inv := h.setEnv hσ
+      cases hb : execActions { d with env := mergeEnv oldVars newVars r₂.out r₁.out } body with
       | none => rw [hb] at hm; simp at hm
       | some eb =>
         rw [hb, Option.bind_some, Option.map_eq_some_iff] at hm
         obtain ⟨vs, hv, rfl⟩ := hm
         have hsig : eb.sig = d.sig :=
-          execActions_sig (d := { d with env := mergeEnv r₂.out r₁.out }) hb
+          execActions_sig (d := { d with env := mergeEnv oldVars newVars r₂.out r₁.out }) hb
         have hebInv : eb.Inv :=
           h₀.execActions (show Actions.WriteLegal body d.sig from hbodyLegal) hb
         have hbase : (eb.addTerm (.app r₂.fn (r₂.args ++ vs))).Inv := hebInv.addTerm _
@@ -2885,11 +2897,13 @@ theorem mergeOneOriented_inv {cl : Finset (Term × Term)} {d e : FDatabase} {r�
           exact hresLen
         · intro b hb'
           refine (contained_addTerm (d := eb) (t := .app r₂.fn (r₂.args ++ vs))).terms ?_
-          refine (execActions_contained (d := { d with env := mergeEnv r₂.out r₁.out }) hb).terms
+          refine (execActions_contained (d :=
+            { d with env := mergeEnv oldVars newVars r₂.out r₁.out }) hb).terms
             ?_
           exact Database.mem_terms_of_eqs
             (d₁ := d.toDatabase)
-            (d₂ := ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).toDatabase)
+            (d₂ :=
+              ({ d with env := mergeEnv oldVars newVars r₂.out r₁.out } : FDatabase).toDatabase)
             (fun _ hp => hp) (h.wf.envInTerms b hb')
 
 /-- `mergeOneOriented_inv` at whichever orientation the firing took. -/
@@ -2955,17 +2969,18 @@ end FDatabase
 
 /-- A merge preserves the invariants. `RowsWF` is gone as a hypothesis: an entry is a term,
 so `WF.subtermClosed` already puts the colliding entries' value columns in `terms`, which
-is what `WF.envInTerms` needs of `mergeEnv a b` before the body runs. -/
+is what `WF.envInTerms` needs of `mergeEnv oldVars newVars a b` before the body runs. -/
 theorem MergeStep.wf {d₁ d₂ : Database} (hw : d₁.WF) (h : MergeStep d₁ d₂) : d₂.WF := by
   cases h with
-  | @collide d f dc as bs a b vs body res hdc hmg _ hla hlb hra hrb hcong hbody hres =>
+  | @collide d f dc as bs a b vs oldVars newVars body res
+    hdc hmg _ hla hlb hra hrb hcong hbody hres =>
     have hout : ∀ (cs os : List Term), Term.app f (cs ++ os) ∈ d₁.terms →
         ∀ x ∈ os, x ∈ d₁.terms := by
       intro cs os hmem x hx
       exact hw.subtermClosed _ hmem
         (Term.mem_subterms.mpr (Term.IsSubterm.arg (List.mem_append_right _ hx)
           (Term.IsSubterm.refl x)))
-    have hw0 : ({ d₁ with env := mergeEnv a b } : Database).WF :=
+    have hw0 : ({ d₁ with env := mergeEnv oldVars newVars a b } : Database).WF :=
       hw.setEnv fun p hp => by
         rcases mem_mergeEnv hp with hpa | hpb
         · exact hout as a hra _ hpa
@@ -3034,18 +3049,19 @@ theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.Decl
     (_hml : db.sig.MergesLegal) (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') :
     db'.DeclaredTerms := by
   cases h with
-  | @collide d f decl as bs a b vs body res hd hmerge _ hasl _ hae hbe _ hbody hres =>
-  have hmemab : ∀ p ∈ mergeEnv a b, p.2 ∈ db.terms := by
+  | @collide d f decl as bs a b vs oldVars newVars body res
+    hd hmerge _ hasl _ hae hbe _ hbody hres =>
+  have hmemab : ∀ p ∈ mergeEnv oldVars newVars a b, p.2 ∈ db.terms := by
     intro p hp
     rcases mem_mergeEnv hp with hp' | hp'
     · exact Database.mem_terms_of_arg hwf hae (List.mem_append_right as hp')
     · exact Database.mem_terms_of_arg hwf hbe (List.mem_append_right bs hp')
-  have hwf₀ : ({ db with env := mergeEnv a b } : Database).WF := hwf.setEnv hmemab
-  have hdt₀ : ({ db with env := mergeEnv a b } : Database).DeclaredTerms := by
+  have hwf₀ : ({ db with env := mergeEnv oldVars newVars a b } : Database).WF := hwf.setEnv hmemab
+  have hdt₀ : ({ db with env := mergeEnv oldVars newVars a b } : Database).DeclaredTerms := by
     intro g cs hmem; rw [Database.terms_setEnv] at hmem; exact hdt g cs hmem
   have hspec := hmw f decl _ hd hmerge
   have hdsig : d.sig = db.sig :=
-    evalActions_sig (db := { db with env := mergeEnv a b }) hbody
+    evalActions_sig (db := { db with env := mergeEnv oldVars newVars a b }) hbody
   have hdwf : d.WF := evalActions_wf hwf₀ hbody
   have hddt : d.DeclaredTerms := evalActions_declaredTerms hwf₀ hdt₀ hspec.2.1 hbody
   have hvsd : ∀ t ∈ vs, Term.DeclaredTerm db.sig t := by
@@ -3399,8 +3415,8 @@ theorem evalLocalActions_diag {db db' : Database} {as : List Action} {σ : Env}
 theorem MergeStep.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeStep d₁ d₂) : d₂.Diag := by
   cases h with
-  | @collide d f dc as bs a b vs body res hdc hmg _ _ _ _ _ _ hbody _ =>
-    exact (evalActions_diag (db := { d₁ with env := mergeEnv a b })
+  | @collide d f dc as bs a b vs oldVars newVars body res hdc hmg _ _ _ _ _ _ hbody _ =>
+    exact (evalActions_diag (db := { d₁ with env := mergeEnv oldVars newVars a b })
       (hs f dc hdc _ hmg) hd hbody).addTerm _
 
 theorem MergeClosure.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
@@ -3934,28 +3950,23 @@ theorem recorded_entry {A C : Database} (hc : A.Recorded C) (hwfA : A.WF) (hwfC 
 theorem envOwes_nil {C : Database} : EnvOwes C [] [] := by
   intro v t ht; simp [Env.lookup] at ht
 
-theorem mergeEnvIdx_owes {C : Database} : ∀ {os os' ns ns' : List Term} (i : Nat),
-    List.Forall₂ (Owes C) os os' → List.Forall₂ (Owes C) ns ns' →
-    EnvOwes C (mergeEnvIdx i os ns) (mergeEnvIdx i os' ns')
-  | [], [], _, _, _, .nil, _ => envOwes_nil
-  | _ :: _, _ :: _, [], [], _, .cons _ _, .nil => envOwes_nil
-  | o :: os, o' :: os', n :: ns, n' :: ns', i, .cons ho hos, .cons hn hns => by
-      change EnvOwes C (("old" ++ toString i, o) :: ("new" ++ toString i, n) ::
-          mergeEnvIdx (i + 1) os ns)
-        (("old" ++ toString i, o') :: ("new" ++ toString i, n') ::
-          mergeEnvIdx (i + 1) os' ns')
-      exact ((mergeEnvIdx_owes (i + 1) hos hns).cons _ hn).cons _ ho
+/-- Binding the same parameters to pointwise related tuples preserves environment lookup. -/
+theorem zip_append_owes {C : Database} (vars : List Var)
+    {os os' : List Term} (hos : List.Forall₂ (Owes C) os os')
+    {σ σ' : Env} (hσ : EnvOwes C σ σ') :
+    EnvOwes C (vars.zip os ++ σ) (vars.zip os' ++ σ') := by
+  induction vars generalizing os os' with
+  | nil => exact hσ
+  | cons v vars ih =>
+    cases hos with
+    | nil => simpa using hσ
+    | cons ho hos => exact (ih hos).cons v ho
 
 theorem mergeEnv_owes {C : Database} {os os' ns ns' : List Term}
     (hos : List.Forall₂ (Owes C) os os') (hns : List.Forall₂ (Owes C) ns ns') :
-    EnvOwes C (mergeEnv os ns) (mergeEnv os' ns') := by
-  cases hos with
-  | nil => exact envOwes_nil
-  | cons ho hos =>
-    cases hns with
-    | nil => exact envOwes_nil
-    | cons hn hns =>
-      exact ((mergeEnvIdx_owes 0 (.cons ho hos) (.cons hn hns)).cons "new" hn).cons "old" ho
+    EnvOwes C (mergeEnv oldVars newVars os ns) (mergeEnv oldVars newVars os' ns') := by
+  exact zip_append_owes oldVars hos
+    (by simpa using zip_append_owes newVars hns (envOwes_nil (C := C)))
 
 theorem forall₂_mem_left {α β : Type} {R : α → β → Prop} : ∀ {as : List α} {bs : List β},
     List.Forall₂ R as bs → ∀ {a : α}, a ∈ as → ∃ b ∈ bs, R a b
@@ -4004,7 +4015,8 @@ theorem MergeStep.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : 
     (hwfC : C.WF) (hsig : A.sig = C.sig) (hof : Signature.OrderingFree C.sig)
     (h : MergeStep A B) : ∃ D, MergeStep C D ∧ B.Recorded D ∧ B.sig = D.sig := by
   cases h with
-  | @collide dA f dc as bs a b vs body res hdc hmg _ hla hlb hra hrb hcong hbody hres =>
+  | @collide dA f dc as bs a b vs oldVars newVars body res
+    hdc hmg _ hla hlb hra hrb hcong hbody hres =>
     -- the two colliding entries, matched column by column at `C`
     obtain ⟨cs, hcs, howcs⟩ := recorded_entry hc hwfA hwfC hra
     obtain ⟨es, hes, howes⟩ := recorded_entry hc hwfA hwfC hrb
@@ -4018,15 +4030,15 @@ theorem MergeStep.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : 
         (fun x hx => hmemC hcs x (List.mem_append_left _ hx))
         (fun y hy => hmemC hes y (List.mem_append_left _ hy))
     -- the body runs at `C` under the congruent merge environment
-    have hwfCe : Database.WF { C with env := mergeEnv a' b' } :=
+    have hwfCe : Database.WF { C with env := mergeEnv oldVars newVars a' b' } :=
       hwfC.setEnv fun p hp => (mem_mergeEnv hp).elim
         (fun hm => hmemC hcs p.2 (List.mem_append_right _ hm))
         (fun hm => hmemC hes p.2 (List.mem_append_right _ hm))
-    have hfollows : StateOwes { A with env := mergeEnv a b } { C with env := mergeEnv a' b' } :=
+    have hfollows : StateOwes { A with env := mergeEnv oldVars newVars a b } { C with env := mergeEnv oldVars newVars a' b' } :=
       ⟨hc.setEnv _ _, hsig, (mergeEnv_owes howa howb).setEnv⟩
     have hdcof : dc.OrderingFree := hof f dc (hsig ▸ hdc)
     obtain ⟨hbodyof, hresof⟩ : Actions.OrderingFree body ∧ Expr.OrderingFreeList res := by
-      obtain ⟨hnil, hres'⟩ := hdcof.2 (MergeSpec.merge body res) (by rw [hmg]; rfl)
+      obtain ⟨hnil, hres'⟩ := hdcof.2 (MergeSpec.merge oldVars newVars body res) (by rw [hmg]; rfl)
       exact ⟨by rw [hnil]; trivial, hres'⟩
     obtain ⟨dC, hdC, hfd⟩ := evalActions_owes hfollows hwfCe hbodyof hbody
     have hwfdC : dC.WF := evalActions_wf hwfCe hdC
@@ -4034,7 +4046,7 @@ theorem MergeStep.transport_owes {A C B : Database} (hc : A.Recorded C) (hwfA : 
     obtain ⟨vs', hvs', howvs⟩ :=
       evalList_owes hwfdC.litsIsolated hfd.env hresof (hfd.sig ▸ hres)
     -- the combined entry
-    have hcontCd : ({ C with env := mergeEnv a' b' } : Database).Contained dC :=
+    have hcontCd : ({ C with env := mergeEnv oldVars newVars a' b' } : Database).Contained dC :=
       evalActions_contained hdC
     have howentry : Owes dC (.app f (as ++ vs)) (.app f (as' ++ vs')) :=
       owes_append (howas.imp (fun {_ _} ho => Owes.mono ⟨hcontCd.eqs⟩ (Owes.setEnv ho))) howvs
@@ -4415,7 +4427,7 @@ re-runs the merge body at `D`.
 
 The witness takes the two rows in the order `(r₂, r₁)`, which is the whole reason
 `MergeStep.collide` lines up with the implementation: `collide` runs the body under
-`mergeEnv a b` and writes the combined row at the *first* row's key, and
+`mergeEnv oldVars newVars a b` and writes the combined row at the *first* row's key, and
 `mergeOneOriented` binds `old` from `r₂` and overwrites `r₂`. Both facts are the one fact
 that `r₂` is the row already in the table — which of the two colliding rows that is,
 `mergeOneWith` decides, and `mergeOneWith_mergeStep` says the decision is free.
@@ -4448,7 +4460,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
   unfold FDatabase.mergeOneOriented at hm
   match hmo : x.sig.mergeOf r₁.fn with
   | none => rw [hmo] at hm; simp at hm
-  | some (.merge body res) =>
+  | some (.merge oldVars newVars body res) =>
     rw [hmo] at hm
     simp only at hm
     split at hm
@@ -4457,7 +4469,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
       simp only [Bool.and_eq_true, decide_eq_true_eq, List.contains_iff_mem] at hcond
       obtain ⟨⟨⟨hfn, hck⟩, hr₁⟩, hr₂⟩ := hcond
       obtain ⟨dc, hdc, hdcm⟩ : ∃ dc, x.sig r₁.fn = some dc ∧
-          dc.merge = some (MergeSpec.merge body res) := by
+          dc.merge = some (MergeSpec.merge oldVars newVars body res) := by
         rw [Signature.mergeOf] at hmo
         cases hd : x.sig r₁.fn with
         | none => rw [hd] at hmo; simp at hmo
@@ -4472,12 +4484,12 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
           exact hx.wf.subtermClosed _ hmem
             (Term.mem_subterms.mpr (Term.IsSubterm.arg (List.mem_append_right _ hz)
               (Term.IsSubterm.refl z)))
-      have hσ : ∀ b ∈ mergeEnv r₂.out r₁.out, b.2 ∈ x.toDatabase.terms := by
+      have hσ : ∀ b ∈ mergeEnv oldVars newVars r₂.out r₁.out, b.2 ∈ x.toDatabase.terms := by
         intro b hb
         rcases mem_mergeEnv hb with hb' | hb'
         · exact hmemRow r₂ hr₂ b.2 hb'
         · exact hmemRow r₁ hr₁ b.2 hb'
-      have h₀ : ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).Inv := hx.setEnv hσ
+      have h₀ : ({ x with env := mergeEnv oldVars newVars r₂.out r₁.out } : FDatabase).Inv := hx.setEnv hσ
       split at hm
       case isTrue =>
         -- The no-conflict skip takes no specification step: `y` only drops a row of `x`.
@@ -4489,7 +4501,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
         refine mergeConflict_of_noConflict (r₁ := r₁) (r₂ := r₂) ?_
         rw [hdc] at hnc
         simpa using hnc
-      cases hb : execActions { x with env := mergeEnv r₂.out r₁.out } body with
+      cases hb : execActions { x with env := mergeEnv oldVars newVars r₂.out r₁.out } body with
       | none => rw [hb] at hm; simp at hm
       | some eb =>
         rw [hb, Option.bind_some, Option.map_eq_some_iff] at hm
@@ -4510,12 +4522,13 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
           rw [← hb₁.length_eq]; exact (hx.index.width r₁ hr₁ dc hdc hne₁).1
         -- The body, re-run at `D`.
         have hbodyStep : evalActions
-            ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).toDatabase body
+            ({ x with env := mergeEnv oldVars newVars r₂.out r₁.out } : FDatabase).toDatabase body
             = some eb.toDatabase := FDatabase.execActions_evalActions h₀.closed hb
         obtain ⟨D₁, hD₁step, hD₁c, hD₁sig, hD₁env⟩ :=
           evalActions_mono_recorded
-            (db := ({ x with env := mergeEnv r₂.out r₁.out } : FDatabase).toDatabase)
-            (D := { D with env := mergeEnv r₂.out r₁.out })
+            (db :=
+              ({ x with env := mergeEnv oldVars newVars r₂.out r₁.out } : FDatabase).toDatabase)
+            (D := { D with env := mergeEnv oldVars newVars r₂.out r₁.out })
             (hxc.setEnv _ _) (hxs.trans hDsig.symm) rfl hbodyStep
         have hmlD : Expr.evalList D₁.sig res D₁.env = some vs := by
           rw [← hD₁env, ← hD₁sig]; exact hv
@@ -4525,7 +4538,7 @@ theorem mergeOneOriented_mergeStep {d x y : FDatabase} {r₁ r₂ : Row} {D : Da
           exact hDwf.subtermClosed _ hmem
             (Term.mem_subterms.mpr (Term.IsSubterm.arg (List.mem_append_right _ hz)
               (Term.IsSubterm.refl z)))
-        have hσD : ∀ b ∈ mergeEnv r₂.out r₁.out, b.2 ∈ D.terms := by
+        have hσD : ∀ b ∈ mergeEnv oldVars newVars r₂.out r₁.out, b.2 ∈ D.terms := by
           intro b hb
           rcases mem_mergeEnv hb with hb' | hb'
           · exact houtD r₂ bs₂ hr₂D b.2 hb'
@@ -5326,7 +5339,7 @@ theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}
   unfold FDatabase.mergeOneOriented at h
   match hmo : d.sig.mergeOf r₁.fn with
   | none => rw [hmo] at h; simp at h
-  | some (.merge body res) =>
+  | some (.merge oldVars newVars body res) =>
     rw [hmo] at h
     simp only at h
     split at h
@@ -5335,7 +5348,7 @@ theorem mergeOneOriented_envRules {cl : Finset (Term × Term)} {d e : FDatabase}
       split at h
       case isTrue => rw [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl⟩
       case isFalse =>
-        cases hb : execActions { d with env := mergeEnv r₂.out r₁.out } body with
+        cases hb : execActions { d with env := mergeEnv oldVars newVars r₂.out r₁.out } body with
         | none => rw [hb] at h; simp at h
         | some eb =>
           rw [hb, Option.bind_some, Option.map_eq_some_iff] at h
@@ -6239,7 +6252,7 @@ theorem execM_contained {p : Program} (hns : p.NoSaturate)
     (hcond : p.UnionFree ∨ p.OrderingFree) {d : FDatabase} (h : execM p = some d) :
     ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ d.toDatabase.Recorded db :=
   FDatabase.execProgramM_contained FDatabase.Inv.empty hns
-    (fun g dc body res hg _ => absurd hg (by simp [FDatabase.empty]))
+    (fun g dc oldVars newVars body res hg _ => absurd hg (by simp [FDatabase.empty]))
     (fun r hr => absurd hr (by simp [FDatabase.empty]))
     (hcond.imp
       (fun hu => ⟨⟨by simp [FDatabase.toDatabase_empty, Database.Diag, Database.empty],

@@ -20,7 +20,7 @@ def unionFree (P : Program) : Bool := P.all fun c => match c with
   | .action a => match a with | .expr _ => true | .union _ _ => false
   | .rule r => r.actions.all fun a => match a with | .expr _ => true | .union _ _ => false
   | .decl _ d => match d.merge with
-    | some (.merge body _) => body.all fun a => match a with
+    | some (.merge _ _ body _) => body.all fun a => match a with
       | .expr _ => true | .union _ _ => false
     | _ => true
   | _ => true
@@ -56,7 +56,7 @@ def conflicts (d : FnDecl) (body : List Action) (old new : List Term) : Bool :=
 /-- Both inputs must be actual entries at the same structural key. -/
 def mergeFacts (sig : Signature) (f : FnName) (old new : Term) : Option MergeFacts := do
   let d ← sig f
-  let some (.merge body res) := d.merge | none
+  let some (.merge oldVars newVars body res) := d.merge | none
   let .app ofn oc := old | none
   let .app nfn nc := new | none
   if ofn == f && nfn == f && oc.length == d.entryWidth && nc.length == d.entryWidth &&
@@ -64,7 +64,7 @@ def mergeFacts (sig : Signature) (f : FnName) (old new : Term) : Option MergeFac
     let os := oc.drop d.arity
     let ns := nc.drop d.arity
     if conflicts d body os ns then do
-      let σ := mergeEnv os ns
+      let σ := mergeEnv oldVars newVars os ns
       let facts ← actionsFacts sig σ body
       let vs ← Expr.evalList sig res σ
       if vs.length == d.outArity && SourceProof.valuesOk sig vs then

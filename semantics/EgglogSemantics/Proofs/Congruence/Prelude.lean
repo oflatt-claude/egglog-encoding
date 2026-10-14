@@ -38,7 +38,7 @@ theorem prelude_state {P : Program} (hdom : P.Fragment) {d : FDatabase}
       uf := (Egglog.FDatabase.execProgramM_sig run) ▸ encodeSig_ufName hdom
       sound := ⟨fun f cs e hm => False.elim (by simp [ht] at hm),
         fun a b hm => False.elim (by simp [ht] at hm)⟩
-      history := by intro f dc hd body res hm cs x hlen hmem; simp [ht] at hmem
+      history := by intro f dc hd oldVars newVars body res hm cs x hlen hmem; simp [ht] at hmem
       descend := by intro a b hab; simp [UFStep, ht] at hab }
   have hsettled : d.settled = true := by
     simp [Egglog.FDatabase.settled, Egglog.FDatabase.mergeRound,

@@ -133,7 +133,7 @@ theorem mergeOneOriented_tableRows {cl : Finset (Term × Term)} {d e : FDatabase
     have hmr' : d.sig.mergeOf s.fn ≠ none := hmr
     rcases Egglog.FDatabase.mem_addTerm_rows_imp hs with hs | hs
     · exact (hmr' (Egglog.FDatabase.mem_ctorRowList hs).2.1).elim
-    · rcases mem_rows_mergeLinks (d := { d with env := mergeEnv [old] [new] }) huf
+    · rcases mem_rows_mergeLinks (d := { d with env := mergeEnv ["old"] ["new"] [old] [new] }) huf
           (by simp [tableDecl]) rfl rfl hs hmr' with hs | hs | hs
       · exact Or.inr (Or.inr (Or.inl hs))
       · exact Or.inr (Or.inr (Or.inr hs))
@@ -437,12 +437,12 @@ theorem noMerge_of_settled {d : FDatabase} (hset : d.settled = true)
 theorem mergeOneWith_isSome_of_collide {cl : Finset (Term × Term)} {d : FDatabase}
     {r₁ r₂ : Row} {dc : FnDecl} (hshape : MergeShape d.sig) (hidx : d.IndexOk)
     (huf : d.sig ufName = some (tableDecl 1)) (hdecl : d.sig r₁.fn = some dc)
-    (hdc : dc.merge = some (.merge mergeBody mergeResult))
+    (hdc : dc.merge = some (.merge ["old"] ["new"] mergeBody mergeResult))
     (hm₁ : r₁ ∈ d.rows) (hm₂ : r₂ ∈ d.rows) (hfn : r₁.fn = r₂.fn)
     (hargs : r₁.args = r₂.args) (hkeys : FDatabase.congrKeys cl r₁.args r₂.args = true) :
     (d.mergeOneWith cl r₁ r₂).isSome = true := by
   have hout := (hshape r₁.fn dc hdecl mergeBody mergeResult hdc).2.2.2.1
-  have hmg : d.sig.mergeOf r₁.fn = some (.merge mergeBody mergeResult) := by
+  have hmg : d.sig.mergeOf r₁.fn = some (.merge ["old"] ["new"] mergeBody mergeResult) := by
     simp [Signature.mergeOf, hdecl, hdc]
   have hmg₂ : d.sig.mergeOf r₂.fn ≠ none := by rw [← hfn, hmg]; simp
   have hswap : FDatabase.swapForCanon cl d r₁ r₂ = false := by
@@ -452,8 +452,8 @@ theorem mergeOneWith_isSome_of_collide {cl : Finset (Term × Term)} {d : FDataba
     ((hidx.width r₁ hm₁ dc hdecl (by rw [hmg]; simp)).2.trans hout)
   obtain ⟨old, hold⟩ := List.length_eq_one_iff.mp
     ((hidx.width r₂ hm₂ dc (by rw [← hfn]; exact hdecl) hmg₂).2.trans hout)
-  have henv : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).env =
-      mergeEnv [old] [new] := by rw [hold, hnew]
+  have henv : ({ d with env := mergeEnv ["old"] ["new"] r₂.out r₁.out } : FDatabase).env =
+      mergeEnv ["old"] ["new"] [old] [new] := by rw [hold, hnew]
   have hbody := execActions_mergeBody henv
   simp only [huf, Option.isSome_some, ↓reduceIte] at hbody
   have hguard : (decide (r₁.fn = r₂.fn) && FDatabase.congrKeys cl r₁.args r₂.args
@@ -466,7 +466,8 @@ theorem mergeOneWith_isSome_of_collide {cl : Finset (Term × Term)} {d : FDataba
   split
   · simp
   · rw [hbody, Option.bind_some]
-    change (Option.map _ (Expr.evalList d.sig mergeResult (mergeEnv r₂.out r₁.out))).isSome = true
+    change (Option.map _ (Expr.evalList d.sig mergeResult (mergeEnv ["old"] ["new"]
+      r₂.out r₁.out))).isSome = true
     rw [hold, hnew, evalList_mergeResult]
     rfl
 
@@ -475,11 +476,11 @@ theorem tableRows_unique_of_settled {d : FDatabase} (hset : d.settled = true)
     (hshape : MergeShape d.sig) (huf : d.sig ufName = some (tableDecl 1))
     (hi : d.Inv) (hn : d.NoUnions) (hdes : UFTermsDescend d)
     {r₁ r₂ : Row} {dc : FnDecl} (hdecl : d.sig r₁.fn = some dc)
-    (hdc : dc.merge = some (.merge mergeBody mergeResult))
+    (hdc : dc.merge = some (.merge ["old"] ["new"] mergeBody mergeResult))
     (hm₁ : r₁ ∈ d.rows) (hm₂ : r₂ ∈ d.rows) (hfn : r₁.fn = r₂.fn)
     (hargs : r₁.args = r₂.args) : r₁ = r₂ := by
   by_contra hne
-  have hmg : d.sig.mergeOf r₁.fn = some (.merge mergeBody mergeResult) := by
+  have hmg : d.sig.mergeOf r₁.fn = some (.merge ["old"] ["new"] mergeBody mergeResult) := by
     simp [Signature.mergeOf, hdecl, hdc]
   have hhas : d.hasMergeRow = true := by
     apply List.any_eq_true.mpr

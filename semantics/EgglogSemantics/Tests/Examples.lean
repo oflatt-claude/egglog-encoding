@@ -451,11 +451,12 @@ private def emptySig : Signature := fun _ => none
 
 /- `(function Dist (Math) i64 :merge 0)`. -/
 private def one : FnDecl :=
-  { arity := 1, outArity := 1, merge := some (.merge [] [eNum 0]) }
+  { arity := 1, outArity := 1, merge := some (.merge ["old"] ["new"] [] [eNum 0]) }
 
 /- `(function Dist (Math) (i64 i64) :merge (values 0 1))`. -/
 private def two : FnDecl :=
-  { arity := 1, outArity := 2, merge := some (.merge [] [eNum 0, eNum 1]) }
+  { arity :=
+    1, outArity := 2, merge := some (.merge ["o₁", "o₂"] ["n₁", "n₂"] [] [eNum 0, eNum 1]) }
 
 private def A : Expr := .app "A" []
 
@@ -510,7 +511,13 @@ column or none. -/
 
 /- "The :merge of tuple-output function Dist has 1 columns but the function has 2 output
 columns." -/
-#guard !accepts { two with merge := some (.merge [] [eNum 0]) } []
+-- Parameter tuples must match the output width and have distinct names.
+#guard !accepts { one with merge := some (.merge [] ["n"] [] [eNum 0]) } []
+#guard !accepts { one with merge := some (.merge ["x"] ["x"] [] [eNum 0]) } []
+#guard !accepts { two with merge := some (.merge ["o", "o"] ["n₁", "n₂"]
+  [] [eNum 0, eNum 1]) } []
+
+#guard !accepts { two with merge := some (.merge ["o₁", "o₂"] ["n₁", "n₂"] [] [eNum 0]) } []
 
 /- "Function F has a tuple output, which is only allowed for plain functions (not
 constructors, relations, or view tables)." -/
@@ -519,12 +526,15 @@ constructors, relations, or view tables)." -/
 /- A merge body is checked against the signature the declaration itself installs, so it
 may write the function's own table — `(function Dist (Math) i64 :merge ((set (Dist (A)) 1)
 (min old new)))` runs. A forward reference is instead "Unbound function". -/
-#guard accepts { one with merge := some (.merge [.expr (.app "Dist" [A, eNum 1])] [eNum 0]) } []
+#guard accepts
+  { one with merge := some (.merge ["old"] ["new"]
+      [.expr (.app "Dist" [A, eNum 1])] [eNum 0]) } []
 
 /- …and its arity is checked there too: "Arity mismatch, expected 1 args:
 (Dist @A @A1)". -/
 #guard !accepts
-  { one with merge := some (.merge [.expr (.app "Dist" [A, A, eNum 1])] [eNum 0]) } []
+  { one with merge := some (.merge ["old"] ["new"]
+      [.expr (.app "Dist" [A, A, eNum 1])] [eNum 0]) } []
 
 /-! ### Undeclared names are unconstrained
 
@@ -556,7 +566,7 @@ private def emptySig : Signature := fun _ => none
 /- `(function Dist (Math) i64 :merge (min old new))` and a second like it. -/
 private def dist : FnDecl :=
   { arity := 1, outArity := 1,
-    merge := some (.merge [] [.min (.var "old") (.var "new")]) }
+    merge := some (.merge ["old"] ["new"] [] [.min (.var "old") (.var "new")]) }
 
 /-- The constructors the cases below apply, declared: `noLookup` asks for a *declared*
 constructor or a primitive, so an undeclared name would be rejected for the wrong
@@ -595,9 +605,10 @@ to `Pattern.values` and so what removes `Expr.eval`'s `lookup` constructor. -/
 `(function Dist (Math) i64 :merge (min old (Zero)))` reads `Zero` and panics with
 "Lookup on Zero failed in the merge function for Dist" when the row is missing. -/
 #guard !Program.noLookup
-  [.decl "Zero" { arity := 0, outArity := 1, merge := some (.merge [] [.lit (.int 0)]) },
+  [.decl "Zero"
+     { arity := 0, outArity := 1, merge := some (.merge ["old"] ["new"] [] [.lit (.int 0)]) },
    .decl "Dist" { arity := 1, outArity := 1,
-                  merge := some (.merge [] [.min (.var "old") (.app "Zero" [])]) }]
+                  merge := some (.merge ["old"] ["new"] [] [.min (.var "old") (.app "Zero" [])]) }]
   emptySig
 
 /- A read nested in a query fact. egglog flattens `(F (Dist k))` into the two atoms
@@ -614,7 +625,7 @@ A declared constructor, `min` and a literal are not reads, so a merge body compu
 #guard Program.noLookup
   [.decl "A" (ctorDecl 0),
    .decl "Dist" { arity := 1, outArity := 1,
-                  merge := some (.merge [.expr (.app "Dist" [A, .lit (.int 1)])]
+                  merge := some (.merge ["old"] ["new"] [.expr (.app "Dist" [A, .lit (.int 1)])]
                     [.min (.var "old") (.var "new")]) }] emptySig
 
 end Reading
@@ -643,7 +654,7 @@ private def one : Expr := .lit (.int 1)
 /-- The edge table `E(x, y) ↦ 1`. A `:merge` function whose collisions never conflict:
 every edge carries the same value, so the merge phase is inert and only the rounds show. -/
 private def edgeDecl : FnDecl :=
-  { arity := 2, outArity := 1, merge := some (.merge [] [.var "new"]) }
+  { arity := 2, outArity := 1, merge := some (.merge ["old"] ["new"] [] [.var "new"]) }
 
 /-- Transitive closure: `E(a,b)` and `E(b,c)` give `E(a,c)`. Over a path of `n` edges this
 needs `⌈log₂ n⌉` rounds, and that count is a function of the data, not of the program. -/
@@ -691,7 +702,7 @@ set_option linter.hashCommand false
 
 private def sig : Signature := fun f =>
   if f = "LowerBound" then some
-    { arity := 1, outArity := 1, merge := some (.merge [] [.var "old"]) }
+    { arity := 1, outArity := 1, merge := some (.merge ["old"] ["new"] [] [.var "old"]) }
   else if f = "Wrap" then some (ctorDecl 1)
   else if f = "Expr" ∨ f = "Bound" then some (ctorDecl 0)
   else none

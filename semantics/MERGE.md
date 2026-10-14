@@ -34,21 +34,29 @@ have the declared width.
 
 ## Collisions and command steps
 
-`MergeStep.collide` takes two entries with congruent keys and conflicting outputs. It
-installs the `mergeEnv` parameters, runs the body actions, evaluates one result expression
-per output column, and records the resulting entry. Body actions can build terms, assert
-unions, or write other tables. Column `i` is bound as `old<i>` and `new<i>`; the first
-column also has the aliases `old` and `new`. Appending a provenance column therefore
-preserves every original binding. The emitter chooses egglog's unindexed names for a
-single output and indexed names for multiple outputs. The ambient environment is restored
-afterward.
+A merge specification explicitly declares two parameter tuples:
 
-In mathematical notation, write an entry as `f(k̄; v̄)` and a merge environment as
-`[ō ↦ ā, n̄ ↦ b̄]`: two tuples of parameters bound componentwise to the colliding
-output tuples. The body returns a tuple of expressions; a scalar output is a singleton
-tuple. Provenance extends each output tuple with one proof component. The string spellings
-and first-component aliases implement these bindings and need not appear in the paper's
-merge rule.
+```text
+merge (ō, n̄) { A; return ē }
+```
+
+`MergeStep.collide` takes two entries `f(k̄; ā)` and `f(k̄′; b̄)` with congruent keys
+and conflicting outputs. It evaluates the body `A` and result tuple `ē` under the
+componentwise substitution `σ = [ō ↦ ā, n̄ ↦ b̄]`, then records the resulting entry.
+Body actions can build terms, assert unions, or write other tables. The caller's
+ambient environment is restored afterward. A scalar output is a singleton tuple.
+
+In Lean, this is `MergeSpec.merge oldVars newVars body res`; `mergeEnv` is simply
+`oldVars.zip a ++ newVars.zip b`. `MergeSpec.BindersOk` requires both parameter lists
+to have the declared output width and all their names to be distinct. The executable
+arity check enforces it; unbound variable reads fail evaluation as usual. Provenance
+also checks body and result scope, and reserves its generated parameter names.
+
+Provenance extends the parameter tuples to `(ō, p)` and `(n̄, q)`, where `p` and `q`
+are fresh proof parameters. It appends a proof result while preserving the original
+parameter names and expressions. Only the egglog parser and emitter know the surface
+conventions `old`/`new` for scalars and `old0`/`new0`, … for tuples; the specification
+has no implicit names or aliases.
 
 `FnDecl.unchangedWidth` determines which output columns count as a change. An explicit
 `identityVals` takes precedence; otherwise an action block compares all output columns.

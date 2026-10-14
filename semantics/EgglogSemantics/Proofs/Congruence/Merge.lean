@@ -83,13 +83,13 @@ theorem cong_lowerId_right {src : Database} {a b : Term} (h : Cong src a b) :
   · exact h.mem_of.2
   · exact h.symm
 
-/-- The one-column merge environment, including both names for its component. -/
+/-- The compiler explicitly binds its one-column inputs as `old` and `new`. -/
 theorem mergeEnv_pair (old new : Term) :
-    mergeEnv [old] [new] =
-      [("old", old), ("new", new), ("old0", old), ("new0", new)] := rfl
+    mergeEnv ["old"] ["new"] [old] [new] =
+      [("old", old), ("new", new)] := rfl
 
 theorem eval_merge_min {sig : Signature} {old new : Term} :
-    (Expr.min (.var "old") (.var "new")).eval sig (mergeEnv [old] [new]) =
+    (Expr.min (.var "old") (.var "new")).eval sig (mergeEnv ["old"] ["new"] [old] [new]) =
       some (lowerId old new) := by
   simp [Expr.eval, mergeEnv_pair, Env.lookup, lowerId, Term.least]
 
@@ -188,7 +188,7 @@ theorem mem_rows_mergeLinks {d : FDatabase} {dc : FnDecl} (huf : d.sig ufName = 
 
 /-- This equation also describes failure when UF has not been declared. -/
 theorem execActions_mergeBody {m : FDatabase} {old new : Term}
-    (henv : m.env = mergeEnv [old] [new]) :
+    (henv : m.env = mergeEnv ["old"] ["new"] [old] [new]) :
     execActions m mergeBody =
       if (m.sig ufName).isSome then some (mergeLinks m old new) else none := by
   have hsig : ∀ t, (m.addAtom t).sig = m.sig := fun _ => rfl
@@ -199,7 +199,7 @@ theorem execActions_mergeBody {m : FDatabase} {old new : Term}
   · simp [mergeBody, execActions, execAction, Expr.evalAtom, huf]
 
 theorem execActions_mergeBody_inv {m m' : FDatabase} {old new : Term}
-    (henv : m.env = mergeEnv [old] [new])
+    (henv : m.env = mergeEnv ["old"] ["new"] [old] [new])
     (h : execActions m mergeBody = some m') : m' = mergeLinks m old new := by
   rw [execActions_mergeBody henv] at h
   split at h
@@ -207,7 +207,8 @@ theorem execActions_mergeBody_inv {m m' : FDatabase} {old new : Term}
   · contradiction
 
 theorem evalList_mergeResult {sig : Signature} {old new : Term} :
-    Expr.evalList sig mergeResult (mergeEnv [old] [new]) = some [lowerId old new] := by
+    Expr.evalList sig mergeResult (mergeEnv ["old"] ["new"] [old] [new]) = some [lowerId
+      old new] := by
   simp [mergeResult, Expr.evalList, Expr.eval, mergeEnv_pair, Env.lookup, lowerId, Term.least]
 
 /-- Two colliding views justify equality of their output ids through existing source
@@ -260,7 +261,7 @@ theorem mergeOneOriented_soundTerms {src : Database} {cl : Finset (Term × Term)
   split at hfire
   next body res hms =>
     obtain ⟨dc, hdc, hmergedc⟩ := Option.bind_eq_some_iff.mp hms
-    obtain ⟨hname, rfl, rfl, hout, huf, -⟩ := hshape r₁.fn dc hdc body res hmergedc
+    obtain ⟨hname, rfl, rfl, hout, huf, -, rfl, rfl⟩ := hshape r₁.fn dc hdc body res hmergedc
     split at hfire
     next hg =>
       obtain ⟨⟨⟨hfn, hkeys⟩, hmem₁⟩, hmem₂⟩ : ((r₁.fn = r₂.fn ∧
@@ -302,11 +303,11 @@ theorem mergeOneOriented_soundTerms {src : Database} {cl : Finset (Term × Term)
       next =>
         obtain ⟨m, hm, hfire⟩ := Option.bind_eq_some_iff.mp hfire
         obtain ⟨vs, hvs, rfl⟩ := Option.map_eq_some_iff.mp hfire
-        have henv : ({ d with env := mergeEnv r₂.out r₁.out } : FDatabase).env =
-            mergeEnv [old] [new] := by rw [hnew, hold]
+        have henv : ({ d with env := mergeEnv ["old"] ["new"] r₂.out r₁.out } : FDatabase).env =
+            mergeEnv ["old"] ["new"] [old] [new] := by rw [hnew, hold]
         obtain rfl := execActions_mergeBody_inv henv hm
-        have henv' : (mergeLinks { d with env := mergeEnv r₂.out r₁.out } old new).env =
-            mergeEnv [old] [new] := henv
+        have henv' : (mergeLinks { d with env := mergeEnv ["old"] ["new"] r₂.out r₁.out } old new).env =
+            mergeEnv ["old"] ["new"] [old] [new] := henv
         rw [henv', evalList_mergeResult, Option.some.injEq] at hvs
         subst vs
         have hsurv : Term.app r₂.fn (r₂.args ++ [lowerId old new]) ∈ d.terms := by

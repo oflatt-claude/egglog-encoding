@@ -34,6 +34,9 @@ verbatim, kept here so the refutations have a subject.
 -/
 
 namespace Egglog
+
+variable {oldVars newVars oldVars₀ newVars₀ : List Var}
+
 namespace Lattice
 
 /-! ## Inversion helpers for `Expr.eval`
@@ -128,15 +131,15 @@ def dHdr : FDatabase := { FDatabase.empty with sig := baseSig }
 
 theorem mergeOf_update_inv {sig : Signature} (hsig : sig.AllConstructors) {dc : FnDecl}
     {f g : FnName} {body₀ body : List Action}
-    {res₀ res : List Expr} (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
+    {res₀ res : List Expr} (hdc : dc.merge = some (MergeSpec.merge oldVars₀ newVars₀ body₀ res₀))
     (h : Signature.mergeOf (Function.update sig f (some dc)) g =
-      some (MergeSpec.merge body res)) : body = body₀ ∧ res = res₀ := by
+      some (MergeSpec.merge oldVars newVars body res)) :
+    oldVars = oldVars₀ ∧ newVars = newVars₀ ∧ body = body₀ ∧ res = res₀ := by
   by_cases hg : g = f
   · subst hg
     rw [Signature.mergeOf, Function.update_self, Option.bind_some, hdc,
       Option.some.injEq] at h
-    exact ⟨((MergeSpec.merge.injEq .. ▸ h : _ ∧ _).1).symm,
-      ((MergeSpec.merge.injEq .. ▸ h : _ ∧ _).2).symm⟩
+    exact MergeSpec.merge.inj h.symm
   · rw [Signature.mergeOf_update_of_ne hg, hsig g] at h; exact absurd h (by simp)
 
 /-! ## The statement under test -/
@@ -153,12 +156,14 @@ def CurrentOfLattice : Prop :=
   ∀ (p : Program) (d : FDatabase) (le : List Term → List Term → Prop),
     execM p = some d →
     (∀ x y, le x y → le y x → x = y) →
-    (∀ (f : FnName) (body : List Action) (res : List Expr) (a b vs : List Term),
-      d.sig.mergeOf f = some (MergeSpec.merge body res) →
-      (∃ e, evalActions { d.toDatabase with env := mergeEnv a b } body = some e ∧
+    (∀ (f : FnName) (oldVars newVars : List Var) (body : List Action) (res : List Expr)
+      (a b vs : List Term),
+      d.sig.mergeOf f = some (MergeSpec.merge oldVars newVars body res) →
+      (∃ e, evalActions { d.toDatabase with env := mergeEnv oldVars newVars a b } body = some e ∧
         Expr.evalList e.sig res e.env = some vs) → le a vs ∧ le b vs) →
-    ∀ (f : FnName) (as vs : List Term) (body : List Action) (res : List Expr),
-      d.sig.mergeOf f = some (MergeSpec.merge body res) →
+    ∀ (f : FnName) (as vs : List Term) (oldVars newVars : List Var) (body : List Action)
+      (res : List Expr),
+      d.sig.mergeOf f = some (MergeSpec.merge oldVars newVars body res) →
       Row.mk f as vs ∈ d.rows →
       ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ db.Current le f as vs
 
@@ -179,11 +184,11 @@ computes anything satisfies `hjoin` vacuously, and `le := fun _ _ => False` then
 satisfies both hypotheses. -/
 
 /-- `(function f () i64 :merge (min 1 x))`.  The result column is stuck at *every* pair
-of operands: `x` is a variable `mergeEnv` never binds — it binds `old`/`new`, or the
-indexed `old<i>`/`new<i>` — so `Expr.eval` is `none` however the collision arose. -/
+of operands: `x` is absent from the declared parameter lists `[old]` and `[new]`,
+so `Expr.eval` is `none` however the collision arose. -/
 def stuckDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := some (.merge [] [.min (.lit (.int 1)) (.var "x")]) }
+    merge := some (.merge ["old"] ["new"] [] [.min (.lit (.int 1)) (.var "x")]) }
 
 /-- `(function f () i64 :merge (min 1 x))  (set (f) (a))`. -/
 def pA : Program := ctorHeader ++ [.decl "f" stuckDecl, .action (.expr (.app "f" [eA]))]
@@ -206,41 +211,28 @@ set_option maxHeartbeats 8000000 in
 theorem dA_row : (Row.mk "f" [] [tA]) ∈ dA.rows := by decide
 
 theorem dA_mergeOf {g : FnName} {body : List Action} {res : List Expr}
-    (h : dA.sig.mergeOf g = some (MergeSpec.merge body res)) :
-    res = [.min (.lit (.int 1)) (.var "x")] :=
-  (mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dA_sig ▸ h)).2
+    (h : dA.sig.mergeOf g = some (MergeSpec.merge oldVars newVars body res)) :
+    oldVars = ["old"] ∧ newVars = ["new"] ∧ res = [.min (.lit (.int 1)) (.var "x")] := by
+  obtain ⟨ho, hn, _, hr⟩ :=
+    mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dA_sig ▸ h)
+  exact ⟨ho, hn, hr⟩
 
-/-- A one-letter name is none of `mergeEnvIdx`'s, which prefix `old`/`new` to an index. -/
-theorem x_ne_indexed {s : String} (hs : s.length = 3) (i : Nat) : "x" ≠ s ++ toString i := by
-  intro h
-  have hl := congrArg String.length h
-  rw [String.length_append, hs] at hl
-  have h1 : "x".length = 1 := rfl
-  omega
-
-theorem lookup_x_mergeEnvIdx : ∀ (i : Nat) (os ns : List Term),
-    Env.lookup "x" (mergeEnvIdx i os ns) = none
-  | _, [], _ => rfl
-  | _, _ :: _, [] => rfl
-  | i, _ :: os, _ :: ns => by
-      rw [mergeEnvIdx, Env.lookup_cons, if_neg (x_ne_indexed rfl i), Env.lookup_cons,
-        if_neg (x_ne_indexed rfl i)]
-      exact lookup_x_mergeEnvIdx (i + 1) os ns
-
-/-- `mergeEnv` never binds `x`. -/
-theorem lookup_x_mergeEnv (a b : List Term) : Env.lookup "x" (mergeEnv a b) = none := by
-  cases a <;> cases b <;> simp [mergeEnv, Env.lookup, lookup_x_mergeEnvIdx]
+/-- This merge's explicit parameter lists do not bind `x`. -/
+theorem lookup_x_mergeEnv (a b : List Term) :
+    Env.lookup "x" (mergeEnv ["old"] ["new"] a b) = none := by
+  cases a <;> cases b <;> simp [mergeEnv, Env.lookup]
 
 /-- The stuck merge, machine-checked: no `a`, `b`, `vs` satisfy `hjoin`'s premise. -/
 theorem dA_no_merge_value {a b vs : List Term} {body : List Action} {res : List Expr}
-    (hres : res = [.min (.lit (.int 1)) (.var "x")])
-    (he : ∃ e, evalActions { dA.toDatabase with env := mergeEnv a b } body = some e ∧
+    (hparams : oldVars = ["old"] ∧ newVars = ["new"] ∧
+      res = [.min (.lit (.int 1)) (.var "x")])
+    (he : ∃ e, evalActions { dA.toDatabase with env := mergeEnv oldVars newVars a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : False := by
   obtain ⟨e, hbody, hev⟩ := he
-  subst hres
+  obtain ⟨rfl, rfl, rfl⟩ := hparams
   obtain ⟨t, rfl, hv⟩ := mevalList_one hev
   obtain ⟨_, y, -, hy, -⟩ := meval_min hv
-  have henv : e.env = mergeEnv a b := evalActions_env hbody
+  have henv : e.env = mergeEnv ["old"] ["new"] a b := evalActions_env hbody
   have hx : Env.lookup "x" e.env = some y := meval_var hy
   rw [henv, lookup_x_mergeEnv] at hx
   exact absurd hx (by simp)
@@ -250,8 +242,8 @@ theorem currentOfLattice_false : ¬ CurrentOfLattice := by
   intro H
   obtain ⟨_, -, hcur⟩ :=
     H pA dA (fun _ _ => False) execM_pA (fun _ _ h _ => h.elim)
-      (fun _ _ _ _ _ _ hg he => (dA_no_merge_value (dA_mergeOf hg) he).elim)
-      "f" [] [tA] _ _ rfl dA_row
+      (fun _ _ _ _ _ _ _ _ hg he => (dA_no_merge_value (dA_mergeOf hg) he).elim)
+      "f" [] [tA] _ _ _ _ rfl dA_row
   exact hcur.2 _ hcur.1
 
 /-! ## Counterexample B — `le` is a genuine partial order and the statement still fails
@@ -266,22 +258,22 @@ literal only dynamically — `evalAction` is stuck — so the collision is unres
 state holds **both** rows at the one key class.  `hjoin` says nothing about that, because
 it only constrains merges that *do* produce a value. -/
 
-/-- `mergeEnv` binds `old`/`new` to the first column of each output when both have one, and
-binds nothing at all otherwise.  This is the only fact about `mergeEnv` the join hypothesis
-needs, and it avoids reasoning about the indexed names `old1`, `new1`, … of the later
-columns. -/
+/-- Reading both singleton parameters requires both input tuples to be nonempty. -/
 theorem mergeEnv_cases (a b : List Term) :
-    (∃ x as y bs, a = x :: as ∧ b = y :: bs) ∨ Env.lookup "old" (mergeEnv a b) = none := by
+    (∃ x as y bs, a = x :: as ∧ b = y :: bs) ∨
+      Env.lookup "old" (mergeEnv ["old"] ["new"] a b) = none ∨
+      Env.lookup "new" (mergeEnv ["old"] ["new"] a b) = none := by
   match a, b with
-  | [], _ => exact Or.inr rfl
-  | _ :: _, [] => exact Or.inr rfl
+  | [], [] => exact Or.inr (Or.inl rfl)
+  | [], _ :: _ => exact Or.inr (Or.inl rfl)
+  | _ :: _, [] => exact Or.inr (Or.inr rfl)
   | x :: as, y :: bs => exact Or.inl ⟨x, as, y, bs, rfl, rfl⟩
 
 theorem mergeEnv_lookup_old (x y : Term) (as bs : List Term) :
-    Env.lookup "old" (mergeEnv (x :: as) (y :: bs)) = some x := rfl
+    Env.lookup "old" (mergeEnv ["old"] ["new"] (x :: as) (y :: bs)) = some x := rfl
 
 theorem mergeEnv_lookup_new (x y : Term) (as bs : List Term) :
-    Env.lookup "new" (mergeEnv (x :: as) (y :: bs)) = some y := rfl
+    Env.lookup "new" (mergeEnv ["old"] ["new"] (x :: as) (y :: bs)) = some y := rfl
 
 /-- `x` is a single column. -/
 def Sing (x : List Term) : Prop := ∃ t, x = [t]
@@ -353,7 +345,7 @@ theorem leB_least (x y : Term) : leB [x] [Term.least x y] ∧ leB [y] [Term.leas
 the result. -/
 def minDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := some (.merge [.union (.var "old") (.var "new")]
+    merge := some (.merge ["old"] ["new"] [.union (.var "old") (.var "new")]
       [.min (.var "old") (.var "new")]) }
 
 def t1 : Term := .lit (.int 1)
@@ -393,33 +385,36 @@ set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dB_mergeOf : dB.sig.mergeOf "f" =
-    some (MergeSpec.merge [.union (.var "old") (.var "new")]
+    some (MergeSpec.merge ["old"] ["new"] [.union (.var "old") (.var "new")]
       [.min (.var "old") (.var "new")]) := rfl
 
 set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **`hjoin` holds**, and not vacuously: `min` is a join for `leB`. -/
-theorem dB_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
-    (hg : dB.sig.mergeOf g = some (MergeSpec.merge body res))
-    (he : ∃ e, evalActions { dB.toDatabase with env := mergeEnv a b } body = some e ∧
+theorem dB_join (g : FnName) (oldVars newVars : List Var) (body : List Action)
+    (res : List Expr) (a b vs : List Term)
+    (hg : dB.sig.mergeOf g = some (MergeSpec.merge oldVars newVars body res))
+    (he : ∃ e, evalActions { dB.toDatabase with env := mergeEnv oldVars newVars a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : leB a vs ∧ leB b vs := by
-  obtain ⟨hbody, hres⟩ :=
+  obtain ⟨rfl, rfl, rfl, rfl⟩ :=
     mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dB_sig ▸ hg)
-  subst hbody; subst hres
   obtain ⟨e, hstep, hev⟩ := he
-  have henv : e.env = mergeEnv a b := evalActions_env hstep
+  have henv : e.env = mergeEnv ["old"] ["new"] a b := evalActions_env hstep
   obtain ⟨t, rfl, hv⟩ := mevalList_one hev
   obtain ⟨x, y, hx, hy, rfl⟩ := meval_min hv
-  have h1 : Env.lookup "old" (mergeEnv a b) = some x := by rw [← henv]; exact meval_var hx
-  have h2 : Env.lookup "new" (mergeEnv a b) = some y := by rw [← henv]; exact meval_var hy
-  rcases mergeEnv_cases a b with ⟨x', as, y', bs, rfl, rfl⟩ | hnone
+  have h1 : Env.lookup "old" (mergeEnv ["old"] ["new"] a b) = some x := by
+    rw [← henv]; exact meval_var hx
+  have h2 : Env.lookup "new" (mergeEnv ["old"] ["new"] a b) = some y := by
+    rw [← henv]; exact meval_var hy
+  rcases mergeEnv_cases a b with ⟨x', as, y', bs, rfl, rfl⟩ | hnone | hnone
   · rw [mergeEnv_lookup_old] at h1
     rw [mergeEnv_lookup_new] at h2
     obtain rfl : x' = x := Option.some.inj h1
     obtain rfl : y' = y := Option.some.inj h2
     exact ⟨leB_cons (leB_least _ _).1, leB_cons (leB_least _ _).2⟩
   · rw [hnone] at h1; simp at h1
+  · rw [hnone] at h2; simp at h2
 
 set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -427,7 +422,7 @@ set_option maxHeartbeats 8000000 in
 /-- `hjoin` is **not** vacuous here: on two constructor terms the body's `union` goes
 through, `min` chooses `(a)`, and that value is above both for `leB`. -/
 theorem dB_join_nonvacuous :
-    ∃ e, evalActions { dB.toDatabase with env := mergeEnv [tA] [tB] }
+    ∃ e, evalActions { dB.toDatabase with env := mergeEnv ["old"] ["new"] [tA] [tB] }
         [.union (.var "old") (.var "new")] = some e ∧
       Expr.evalList e.sig [.min (.var "old") (.var "new")] e.env = some [tA] :=
   ⟨_, rfl, rfl⟩
@@ -473,7 +468,7 @@ the specification also records `1` there, and `leB [1] [2]` is false. -/
 theorem currentOfLattice_false_partialOrder : ¬ CurrentOfLattice := by
   intro H
   obtain ⟨db, hstep, hcur⟩ :=
-    H pB dB leB execM_pB leB_anti dB_join "f" [] [t2] _ _ dB_mergeOf dB_row2
+    H pB dB leB execM_pB leB_anti dB_join "f" [] [t2] _ _ _ _ dB_mergeOf dB_row2
   exact not_leB_t1_t2 (hcur.2 [t1] ⟨[], .nil, pB_reaches_entry1 hstep⟩)
 
 /-! ## Counterexample C — the merge is total, `le` is reflexive, and transitivity is the
@@ -535,7 +530,7 @@ theorem leC_anti (x y : List Term) (h₁ : leC x y) (h₂ : leC y x) : x = y := 
 /-- `(function f () S :merge (C old new))`. -/
 def cDecl : FnDecl :=
   { arity := 0, outArity := 1,
-    merge := some (.merge [] [.app "C" [.var "old", .var "new"]]) }
+    merge := some (.merge ["old"] ["new"] [] [.app "C" [.var "old", .var "new"]]) }
 
 /-- Three `set`s at one key class, so the merge phase runs a chain of two collisions. -/
 def pC : Program :=
@@ -559,7 +554,7 @@ set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 theorem dC_mergeOf : dC.sig.mergeOf "f" =
-    some (MergeSpec.merge [] [.app "C" [.var "old", .var "new"]]) := rfl
+    some (MergeSpec.merge ["old"] ["new"] [] [.app "C" [.var "old", .var "new"]]) := rfl
 
 /-- The value the interpreter's one surviving `f`-row holds.  Read off the interpreter
 rather than written out, so that the refutation does not depend on which of the two
@@ -601,13 +596,13 @@ set_option maxHeartbeats 8000000 in
 -- signature lookup's `Function.update` chain, which is enough to exceed the default.
 /-- **`hjoin` holds**, and the merge is total: `(C old new)` computes a value at every
 pair of single columns. -/
-theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : List Term)
-    (hg : dC.sig.mergeOf g = some (MergeSpec.merge body res))
-    (he : ∃ e, evalActions { dC.toDatabase with env := mergeEnv a b } body = some e ∧
+theorem dC_join (g : FnName) (oldVars newVars : List Var) (body : List Action)
+    (res : List Expr) (a b vs : List Term)
+    (hg : dC.sig.mergeOf g = some (MergeSpec.merge oldVars newVars body res))
+    (he : ∃ e, evalActions { dC.toDatabase with env := mergeEnv oldVars newVars a b } body = some e ∧
       Expr.evalList e.sig res e.env = some vs) : leC a vs ∧ leC b vs := by
-  obtain ⟨hbody, hres⟩ :=
+  obtain ⟨rfl, rfl, rfl, rfl⟩ :=
     mergeOf_update_inv baseSig_allConstructors (f := "f") rfl (dC_sig ▸ hg)
-  subst hbody; subst hres
   obtain ⟨e, hstep, hev⟩ := he
   rw [evalActions_nil, Option.some.injEq] at hstep
   subst hstep
@@ -616,9 +611,9 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
     Option.map_eq_some_iff] at hv
   obtain ⟨ts, hts, rfl⟩ := hv
   obtain ⟨u, v, rfl, hva, hvb⟩ := mevalList_two hts
-  have h1 : Env.lookup "old" (mergeEnv a b) = some _ := meval_var hva
-  have h2 : Env.lookup "new" (mergeEnv a b) = some _ := meval_var hvb
-  rcases mergeEnv_cases a b with ⟨x, as, y, bs, rfl, rfl⟩ | hnone
+  have h1 : Env.lookup "old" (mergeEnv ["old"] ["new"] a b) = some _ := meval_var hva
+  have h2 : Env.lookup "new" (mergeEnv ["old"] ["new"] a b) = some _ := meval_var hvb
+  rcases mergeEnv_cases a b with ⟨x, as, y, bs, rfl, rfl⟩ | hnone | hnone
   · rw [mergeEnv_lookup_old] at h1
     rw [mergeEnv_lookup_new] at h2
     obtain rfl : x = _ := Option.some.inj h1
@@ -626,6 +621,7 @@ theorem dC_join (g : FnName) (body : List Action) (res : List Expr) (a b vs : Li
     exact ⟨leC_cons (Or.inr (Or.inl ⟨_, _, rfl, Or.inl rfl⟩)),
       leC_cons (Or.inr (Or.inl ⟨_, _, rfl, Or.inr rfl⟩))⟩
   · rw [hnone] at h1; simp at h1
+  · rw [hnone] at h2; simp at h2
 
 set_option maxHeartbeats 8000000 in
 -- The kernel evaluates the program here. Declaring the constructors lengthens every
@@ -633,7 +629,7 @@ set_option maxHeartbeats 8000000 in
 /-- `hjoin` is not vacuous here either, and the merge is **total**: `(C old new)`
 computes a value at every pair of single columns. -/
 theorem dC_join_nonvacuous (x y : Term) :
-    ∃ e, evalActions { dC.toDatabase with env := mergeEnv [x] [y] } [] = some e ∧
+    ∃ e, evalActions { dC.toDatabase with env := mergeEnv ["old"] ["new"] [x] [y] } [] = some e ∧
       Expr.evalList e.sig [.app "C" [.var "old", .var "new"]] e.env
         = some [.app "C" [x, y]] :=
   ⟨_, rfl, rfl⟩
@@ -668,7 +664,7 @@ above the intermediate value, which is above `[(a)]`, but `leC` does not compose
 theorem currentOfLattice_false_total : ¬ CurrentOfLattice := by
   intro H
   obtain ⟨db, hstep, hcur⟩ :=
-    H pC dC leC execM_pC leC_anti dC_join "f" [] vsC _ _ dC_mergeOf dC_row
+    H pC dC leC execM_pC leC_anti dC_join "f" [] vsC _ _ _ _ dC_mergeOf dC_row
   exact not_leC_of_okA dC_okA (hcur.2 [tA] ⟨[], .nil, pC_reaches_entryA hstep⟩)
 
 /-! ## Neither B nor C blames the specification's over-approximation
@@ -718,9 +714,9 @@ so no merge body or result column reads a table. -/
 
 theorem mergeOf_update_self {sig : Signature} {dc : FnDecl} {f : FnName}
     {body₀ : List Action} {res₀ : List Expr}
-    (hdc : dc.merge = some (MergeSpec.merge body₀ res₀)) :
+    (hdc : dc.merge = some (MergeSpec.merge oldVars₀ newVars₀ body₀ res₀)) :
     Signature.mergeOf (Function.update sig f (some dc)) f =
-      some (MergeSpec.merge body₀ res₀) := by
+      some (MergeSpec.merge oldVars₀ newVars₀ body₀ res₀) := by
   rw [Signature.mergeOf, Function.update_self, Option.bind_some]
   exact hdc
 
@@ -730,7 +726,7 @@ theorem mergeOf_of_decl {sig : Signature} {g : FnName} {dc : FnDecl} {m : MergeS
   rw [Signature.mergeOf, hd, Option.bind_some, hm]
 
 theorem mergesLegal_of_allConstructors {sig : Signature} (h : sig.AllConstructors) :
-    Signature.MergesLegal sig := fun _ _ _ _ hd hm => (h.elim (mergeOf_of_decl hd hm)).elim
+    Signature.MergesLegal sig := fun _ _ _ _ _ _ hd hm => (h.elim (mergeOf_of_decl hd hm)).elim
 
 /-- Every action is a legal write: the structural predicate is automatic. -/
 theorem actions_writeLegal (as : List Action) (sig : Signature) :
@@ -743,16 +739,16 @@ theorem actions_writeLegal (as : List Action) (sig : Signature) :
 column.  All three merges above have a single value column, so it is `rfl` at each use. -/
 theorem mergesLegal_update {sig : Signature} (hsig : sig.AllConstructors) {dc : FnDecl}
     {f : FnName} {body₀ : List Action} {res₀ : List Expr}
-    (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
+    (hdc : dc.merge = some (MergeSpec.merge oldVars₀ newVars₀ body₀ res₀))
     (hwidth : res₀.length = dc.outArity) :
     Signature.MergesLegal (Function.update sig f (some dc)) := by
-  intro g dc' body res hd hm
+  intro g dc' oldVars newVars body res hd hm
   by_cases hg : g = f
   · subst hg
     rw [Function.update_self, Option.some.injEq] at hd
     subst hd
     rw [hdc, Option.some.injEq, MergeSpec.merge.injEq] at hm
-    obtain ⟨rfl, rfl⟩ := hm
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := hm
     exact ⟨actions_writeLegal _ _, hwidth⟩
   · rw [Function.update_of_ne hg] at hd
     exact (hsig.elim (mergeOf_of_decl hd hm)).elim
@@ -784,7 +780,8 @@ theorem legal_header {rest : Program} (htail : dHdr.ProgramLegal rest) :
           (allConstructors_update (fun _ => rfl) rfl) rfl) rfl) rfl rfl htail)))
 
 theorem legal_decl_cons {dc : FnDecl} {f : FnName} {body₀ : List Action} {res₀ : List Expr}
-    {rest : Program} {d' : FDatabase} (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
+    {rest : Program} {d' : FDatabase}
+    (hdc : dc.merge = some (MergeSpec.merge oldVars₀ newVars₀ body₀ res₀))
     (hwidth : res₀.length = dc.outArity)
     (hfresh : dHdr.sig f = none)
     (hstep : dHdr.execCmdM (Cmd.decl f dc) = some d')
@@ -801,7 +798,7 @@ declared key and value columns.  All three programs declare `f` nullary with one
 column, which is what makes `(set (f) e)` the right shape. -/
 theorem legal_action_cons {d d' : FDatabase} {dc : FnDecl} {f : FnName}
     {body₀ : List Action} {res₀ : List Expr} {e : Expr} {rest : Program}
-    (hdc : dc.merge = some (MergeSpec.merge body₀ res₀))
+    (hdc : dc.merge = some (MergeSpec.merge oldVars₀ newVars₀ body₀ res₀))
     (hwidth : res₀.length = dc.outArity)
     (harity : dc.arity = 0) (hout : dc.outArity = 1)
     (hsig : d.sig = Function.update baseSig f (some dc))

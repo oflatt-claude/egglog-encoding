@@ -65,11 +65,19 @@ structure Rule where
   /-- The ruleset this rule belongs to. Only a run naming it fires it. -/
   ruleset : RulesetName
 
-/-- How two entries of a **merge function** colliding on one key combine: `merge body res`
-runs `body` once with the two outputs bound by `mergeEnv`, then evaluates `res`, one
-expression per value column. -/
+/-- How two entries colliding on one key combine: `merge oldVars newVars body res`
+binds the two output tuples to the declared parameters, runs `body`, then evaluates
+`res`, one expression per output column. Scalars are singleton tuples. -/
 inductive MergeSpec where
-  | merge : List Action → List Expr → MergeSpec
+  | merge (oldVars newVars : List Var) (body : List Action) (res : List Expr)
+
+/-- Each input tuple has one distinct parameter per output column. -/
+def MergeSpec.BindersOk : MergeSpec → Nat → Prop
+  | .merge oldVars newVars _ _, n =>
+      oldVars.length = n ∧ newVars.length = n ∧ (oldVars ++ newVars).Nodup
+
+instance (m : MergeSpec) (n : Nat) : Decidable (m.BindersOk n) := by
+  cases m; unfold MergeSpec.BindersOk; infer_instance
 
 /-- A function declaration: a constructor when `merge = none`, a merge function when not. -/
 structure FnDecl where

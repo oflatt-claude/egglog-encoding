@@ -3,6 +3,9 @@ import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Congruence
 
 namespace Egglog
+
+variable {oldVars newVars : List Var}
+
 /-! ### The terms depend on `eqs` alone
 
 `Database.terms` is `{t | Cong db t t}` and `Cong` reads `eqs`, so an update to `sig`,
@@ -99,7 +102,7 @@ theorem eval_app_not_ctor {sig : Signature} {f : FnName} {args : List Expr} {σ 
 and `Impl/Check.lean`'s `noLookup` rejects one in every position this is called from. -/
 theorem eval_app_merge {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
     {body : List Action} {res : List Expr}
-    (hc : sig.mergeOf f = some (MergeSpec.merge body res)) :
+    (hc : sig.mergeOf f = some (MergeSpec.merge oldVars newVars body res)) :
     (Expr.app f args).eval sig σ = none :=
   eval_app_not_ctor (Signature.not_isCtor hc)
 

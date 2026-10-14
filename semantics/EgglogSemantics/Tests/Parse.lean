@@ -135,16 +135,20 @@ def options : List Sexp → Except String (List (String × Option Sexp))
   | [.atom k] => if k.startsWith ":" then .ok [(k, none)] else .error s!"unexpected {k}"
   | s :: _ => .error s!"unexpected {repr s}"
 
-def mergeSpec (sig : Signature) : Sexp → Except String MergeSpec
+def mergeSpec (sig : Signature) (width : Nat) : Sexp → Except String MergeSpec
   | .list (first :: rest) =>
     match first with
     | .list _ => do
       let body := first :: rest
       let some res := body.getLast? | .error "empty merge block"
       let actions ← (body.dropLast).mapM (action sig)
-      pure (.merge actions (← values res))
-    | _ => do pure (.merge [] (← values (.list (first :: rest))))
-  | s => do pure (.merge [] (← values s))
+      pure (.merge (mergeParamsToEgg "old" width) (mergeParamsToEgg "new" width)
+        actions (← values res))
+    | _ => do
+      pure (.merge (mergeParamsToEgg "old" width) (mergeParamsToEgg "new" width)
+        [] (← values (.list (first :: rest))))
+  | s => do
+    pure (.merge (mergeParamsToEgg "old" width) (mergeParamsToEgg "new" width) [] (← values s))
 
 def columns : Sexp → Nat
   | .list xs => xs.length
@@ -160,7 +164,7 @@ def decl (sig : Signature) (f : FnName) (ins : Sexp) (out : Sexp) (opts : List S
     else pure ⟨sorts.length, 1, none, none⟩
   else
     let merge ← match opts.find? (·.1 == ":merge") with
-      | some (_, some m) => mergeSpec sig m
+      | some (_, some m) => mergeSpec sig (columns out) m
       | _ => .error s!"{f}: a function needs `:merge`"
     pure ⟨sorts.length, columns out, some merge, none⟩
 
@@ -235,6 +239,9 @@ private def roundTrip (src : String) : Bool :=
 #guard roundTrip "(sort Math)\n(constructor A () Math)\n(function Log (Math) i64 :merge new)\n\
   (function Dist (Math) i64 :merge ((set (Log (A)) old) (min old new)))\n\
   (set (Dist (A)) 3)\n(rule ((= v (Dist x))) ((set (Dist x) (max v -2))))\n(run 1)\n"
+#guard roundTrip "(sort Math)\n(constructor K () Math)\n\
+  (function Bounds (Math) (i64 i64) :merge (values (min old0 new0) (min old1 new1)))\n\
+  (set (Bounds (K)) (values 3 7))\n"
 #guard (Program.ofEgg "(datatype Math (A))").isOk == false
 #guard (Program.ofEgg "(constructor A () Math").isOk == false
 #guard (Program.ofEgg "; a comment\n(sort Math) (constructor A () Math) (A)").isOk

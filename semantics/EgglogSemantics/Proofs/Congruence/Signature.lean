@@ -7,9 +7,10 @@ namespace Egglog.Congruence
 /-- A merging declaration has the generated body, one output, and no special identity
 columns. Only UF and constructor views merge; UF has one key. -/
 def DeclShape (f : FnName) (dc : FnDecl) : Prop :=
-  ∀ body res, dc.merge = some (.merge body res) →
+  ∀ {oldVars newVars : List Var} body res, dc.merge = some (.merge oldVars newVars body res) →
     (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
-      dc.outArity = 1 ∧ (f = ufName → dc.arity = 1) ∧ dc.identityVals = none
+      dc.outArity = 1 ∧ (f = ufName → dc.arity = 1) ∧ dc.identityVals = none ∧
+      oldVars = ["old"] ∧ newVars = ["new"]
 
 def MergeShape (sig : Signature) : Prop :=
   ∀ f dc, sig f = some dc → DeclShape f dc
@@ -79,18 +80,20 @@ private theorem prelude_shape (P : Program) :
   simp only [encodePrelude, List.mem_cons, List.mem_append, List.mem_flatMap,
     List.not_mem_nil, or_false] at hc
   rcases hc with (rfl | ⟨⟨f, k⟩, _, hc⟩) | hc
-  · intro body res he
-    obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
+  · intro oldVars newVars body res he
+    obtain ⟨rfl, rfl, rfl, rfl⟩ :
+        ["old"] = oldVars ∧ ["new"] = newVars ∧ mergeBody = body ∧ mergeResult = res := by
       simpa [tableDecl] using he
-    exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl, rfl⟩
+    exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, rfl⟩
   · rcases hc with rfl | rfl
-    · intro body res he
+    · intro oldVars newVars body res he
       simp [ctorDecl] at he
-    · intro body res he
-      obtain ⟨rfl, rfl⟩ : mergeBody = body ∧ mergeResult = res := by
+    · intro oldVars newVars body res he
+      obtain ⟨rfl, rfl, rfl, rfl⟩ :
+        ["old"] = oldVars ∧ ["new"] = newVars ∧ mergeBody = body ∧ mergeResult = res := by
         simpa [tableDecl] using he
       exact ⟨Or.inr ⟨f, rfl⟩, rfl, rfl, rfl,
-        fun hu => False.elim (viewName_ne_ufName hu), rfl⟩
+        fun hu => False.elim (viewName_ne_ufName hu), rfl, rfl, rfl⟩
   · exact allMaintenance_shape P c hc
 
 private theorem cmd_shape (i : Nat) (c : Cmd) :
@@ -134,7 +137,7 @@ theorem execM_encode_mergeShape {P : Program} {tgt : FDatabase}
 output count also agrees with the merge result. -/
 theorem MergeShape.mergesLegal {sig : Signature} (h : MergeShape sig) :
     Signature.MergesLegal sig := by
-  intro f dc body res hdc hm
+  intro f dc oldVars newVars body res hdc hm
   obtain ⟨-, rfl, rfl, ho, -, -⟩ := h f dc hdc body res hm
   exact ⟨⟨trivial, trivial, trivial⟩, ho.symm⟩
 
@@ -142,7 +145,7 @@ theorem MergeShape.mergesLegal {sig : Signature} (h : MergeShape sig) :
 theorem MergeShape.unionFree {sig : Signature} (h : MergeShape sig) : sig.UnionFree := by
   intro f dc hd ms hm
   cases ms with
-  | merge body res =>
+  | merge oldVars newVars body res =>
       have hb := (h f dc hd body res hm).2.1
       rw [hb]
       exact ⟨trivial, trivial, trivial⟩

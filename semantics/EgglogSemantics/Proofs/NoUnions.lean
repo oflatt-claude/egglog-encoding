@@ -147,7 +147,7 @@ theorem mergeOneOriented_noUnions {cl : Finset (Term × Term)} {d d' : FDatabase
     (hn : d.NoUnions) (h : d.mergeOneOriented cl r₁ r₂ = some d') : d'.NoUnions := by
   rw [FDatabase.mergeOneOriented] at h
   split at h
-  · rename_i body res hm
+  · rename_i oldVars newVars body res hm
     obtain ⟨dc, hdc, hmm⟩ := Option.bind_eq_some_iff.mp hm
     have hbody : Actions.UnionFree body := hn.sig _ _ hdc _ hmm
     split at h
@@ -158,7 +158,7 @@ theorem mergeOneOriented_noUnions {cl : Finset (Term × Term)} {d d' : FDatabase
         obtain ⟨vs, -, rfl⟩ := Option.map_eq_some_iff.mp h
         have hE : e.NoUnions :=
           execActions_noUnions hbody
-            (show ({d with env := mergeEnv r₂.out r₁.out} : FDatabase).NoUnions from
+            (show ({d with env := mergeEnv oldVars newVars r₂.out r₁.out} : FDatabase).NoUnions from
               ⟨hn.eqs, hn.sig, hn.rules⟩) he
         exact ⟨by rw [show _ = (e.addTerm (.app r₂.fn (r₂.args ++ vs))).eqs from rfl,
                   FDatabase.addTerm_eqs]; exact hE.eqs,

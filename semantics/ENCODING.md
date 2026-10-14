@@ -85,7 +85,7 @@ temporary variable, proof term, or separate construction-history relation.
 structural order, egglog's `ordering-min`. A source union writes an edge from each of the
 two ids to the smaller one; the edge from the smaller id to itself is not a union-find
 edge. Both UF and view collisions keep the smaller output and write the same two edges.
-Their merge bodies use ordinary `old` and `new` bindings. All output columns determine
+Their merge specifications explicitly bind singleton parameters `old` and `new`. All output columns determine
 whether a row changed, so no special identity-column setting is needed.
 
 Maintenance rules compress paths, propagate changed output ids through views, and re-key
@@ -134,8 +134,10 @@ are recovered by evaluating the original action or merge, without guessing endpo
 
 Appending a proof output preserves the original merge parameter bindings. The pass
 instruments actions and appends a result without renaming the original expressions; it
-uses the new component's indexed parameters for the two input proofs. Scalar and tuple
-parameter spellings are handled by the emitter;
+appends fresh `@prov:p0` and `@prov:p1` parameters for the two input proofs. The input
+check requires distinct parameter names of the declared width and excludes the reserved
+`@prov:` prefix, even for unused parameters. Scalar and tuple parameter spellings are
+handled by the parser and emitter;
 the [merge guide](MERGE.md#collisions-and-command-steps) gives the componentwise notation.
 
 The pass accepts flat table queries and equality tests whose variables and existence

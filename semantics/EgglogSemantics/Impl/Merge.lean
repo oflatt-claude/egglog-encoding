@@ -84,7 +84,8 @@ column — a width-2 body with one column equal and one different runs on both s
 
 **No width means no skip.** A single-expression `:merge` does not short-circuit in egglog
 and deliberately so, since it may be non-idempotent: `:merge (+ old new)` on two rows both
-holding `2` still gives `4` there. `MergeSpec.merge body res` with `body = []` is exactly
+holding `2` still gives `4` there. `MergeSpec.merge oldVars newVars body res` with `body = []` is
+exactly
 that form, and `unchangedWidth` gives it no width. The `let`-only block form does take the
 skip, unobservably — such a body writes nothing and its result is `min v v = v` either way.
 
@@ -103,7 +104,8 @@ def FDatabase.noConflict (w : Option Nat) (r₁ r₂ : Row) : Bool :=
 
 /-- One `:merge` firing on an *oriented* pair of rows, if it applies: `r₂` is the row
 already in the table and `r₁` the one arriving, so the body runs under
-`mergeEnv r₂.out r₁.out` — `old` from `r₂`, `new` from `r₁`, the opposite of the argument
+`mergeEnv oldVars newVars r₂.out r₁.out` — `old` from `r₂`, `new` from `r₁`, the opposite of the
+argument
 order. `mergeOneWith` is what decides the orientation; nothing else should call this.
 
 The signature is consulted *before* the congruence check, which is not cosmetic: the
@@ -134,13 +136,13 @@ to merge. -/
 def FDatabase.mergeOneOriented (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Option FDatabase :=
   match d.sig.mergeOf r₁.fn with
-  | some (.merge body res) =>
+  | some (.merge oldVars newVars body res) =>
     if r₁.fn = r₂.fn && congrKeys cl r₁.args r₂.args
         && d.rows.contains r₁ && d.rows.contains r₂ then
       if FDatabase.noConflict ((d.sig r₁.fn).bind (·.unchangedWidth body)) r₁ r₂ then
         some { d with rows := d.rows.filter fun r => r ≠ r₁ }
       else
-        (execActions { d with env := mergeEnv r₂.out r₁.out } body).bind
+        (execActions { d with env := mergeEnv oldVars newVars r₂.out r₁.out } body).bind
           fun e => (Expr.evalList e.sig res e.env).map fun vs =>
             let e' := e.addTerm (.app r₂.fn (r₂.args ++ vs))
             { e' with
@@ -280,7 +282,7 @@ def FDatabase.canonKeyOf (cl : Finset (Term × Term)) (ts : List Term) (as : Lis
 /-- A row at its canonical key. Only a `.merge` function's rows move. -/
 def FDatabase.rebuildRow (cl : Finset (Term × Term)) (d : FDatabase) (r : Row) : Row :=
   match d.sig.mergeOf r.fn with
-  | some (.merge _ _) => ⟨r.fn, FDatabase.canonKeyOf cl d.terms r.args, r.out⟩
+  | some (.merge _ _ _ _) => ⟨r.fn, FDatabase.canonKeyOf cl d.terms r.args, r.out⟩
   | _ => r
 
 /-- **egglog's rebuild**: every `:merge` row re-keyed onto its class's canonical key, the
@@ -312,7 +314,7 @@ which is the argument order already. -/
 def FDatabase.swapForCanon (cl : Finset (Term × Term)) (d : FDatabase) (r₁ r₂ : Row) :
     Bool :=
   match d.sig.mergeOf r₁.fn with
-  | some (.merge _ _) =>
+  | some (.merge _ _ _ _) =>
     r₁.args != r₂.args && r₁.fn == r₂.fn && congrKeys cl r₁.args r₂.args
       && FDatabase.canonKey cl d.terms r₁.args && !FDatabase.canonKey cl d.terms r₂.args
   | _ => false
@@ -333,7 +335,7 @@ def FDatabase.mergeOne (d : FDatabase) (r₁ r₂ : Row) : Option FDatabase :=
 keeps a constructor-only database out of the closure entirely. -/
 def FDatabase.hasMergeRow (d : FDatabase) : Bool :=
   d.rows.any fun r => match d.sig.mergeOf r.fn with
-    | some (.merge _ _) => true
+    | some (.merge _ _ _ _) => true
     | _ => false
 
 /-- One pass of the merge phase: a **rebuild**, then every ordered pair of *distinct* rows

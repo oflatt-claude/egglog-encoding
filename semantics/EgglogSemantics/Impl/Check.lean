@@ -65,7 +65,8 @@ def Rule.arityOk (r : Rule) (sig : Signature) : Bool :=
 
 /-- A merge specification, against the declaration's `outArity` value columns. -/
 def MergeSpec.arityOk : MergeSpec → Nat → Signature → Bool
-  | .merge body res, outArity, sig =>
+  | .merge oldVars newVars body res, outArity, sig =>
+      decide (MergeSpec.BindersOk (.merge oldVars newVars body res) outArity) &&
       res.length == outArity && Actions.arityOk body sig && res.all (Expr.arityOk · sig)
 
 /-- A declaration's own value columns: a constructor has exactly one, which is egglog
@@ -137,7 +138,7 @@ def Actions.noLookup (as : List Action) (sig : Signature) : Bool :=
 
 /-- A `:merge` body and its result columns. -/
 def MergeSpec.noLookup : MergeSpec → Signature → Bool
-  | .merge body res, sig => Actions.noLookup body sig && res.all (Expr.noLookup · sig)
+  | .merge _ _ body res, sig => Actions.noLookup body sig && res.all (Expr.noLookup · sig)
 
 /-- Entries are complete query atoms; equality compares values. -/
 def Pattern.noLookup : Pattern → Signature → Bool

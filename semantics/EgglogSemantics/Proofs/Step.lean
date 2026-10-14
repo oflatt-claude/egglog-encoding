@@ -3,6 +3,8 @@ import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Match
 
 namespace Egglog
+
+variable {oldVars newVars : List Var}
 /-! ### Declaredness, in a signature that grows
 
 `Cmd.sigBind` only ever writes a `some`, so every check reading `Expr.Declared` survives a
@@ -49,7 +51,7 @@ theorem Actions.Declared.mono : ∀ {as : List Action} {sig sig' : Signature},
 theorem MergeSpec.Declared.mono {ms : MergeSpec} {sig sig' : Signature}
     (hs : sig'.Extends sig) (h : ms.Declared sig) : ms.Declared sig' := by
   cases ms with
-  | merge body res =>
+  | merge oldVars newVars body res =>
     exact ⟨Actions.Declared.mono hs h.1, fun e he => Expr.Declared.mono hs (h.2 e he)⟩
 
 /-! ### The constructor fragment's state
@@ -133,49 +135,24 @@ theorem MergeClosure.envRules {d₁ d₂ : Database} (h : MergeClosure d₁ d₂
   | refl => exact ⟨rfl, rfl⟩
   | tail _ hstep ih => exact ⟨hstep.envRules.1.trans ih.1, hstep.envRules.2.trans ih.2⟩
 
-/-- Every binding a merge body's environment provides is one of the two colliding rows'
-outputs. `Proofs/Merge.lean`'s `MergeStep.wf` and `mergeOneOriented_inv` both need it,
-because `WF.envInTerms` has to hold of `mergeEnv a b` before the body runs — and an entry is
-a term now, so `WF.subtermClosed` supplies the outputs where `RowsWF` used to;
-`mergeStep_avoids` below reads it for the same reason. -/
-theorem mem_mergeEnvIdx {i : Nat} {os ns : List Term} {p : Var × Term}
-    (h : p ∈ mergeEnvIdx i os ns) : p.2 ∈ os ∨ p.2 ∈ ns := by
-  induction os generalizing i ns with
-  | nil => simp [mergeEnvIdx] at h
-  | cons o os ih =>
-    cases ns with
-    | nil => simp [mergeEnvIdx] at h
-    | cons n ns =>
-      simp only [mergeEnvIdx, List.mem_cons] at h
-      rcases h with rfl | rfl | h
-      · exact Or.inl (by simp)
-      · exact Or.inr (by simp)
-      · exact (ih h).imp (fun hm => by simp [hm]) fun hm => by simp [hm]
-
-@[inherit_doc mem_mergeEnvIdx]
-theorem mem_mergeEnv {os ns : List Term} {p : Var × Term} (h : p ∈ mergeEnv os ns) :
-    p.2 ∈ os ∨ p.2 ∈ ns := by
-  cases os with
-  | nil => simp [mergeEnv] at h
-  | cons o os =>
-    cases ns with
-    | nil => simp [mergeEnv] at h
-    | cons n ns =>
-      simp only [mergeEnv, List.mem_cons] at h
-      rcases h with rfl | rfl | h
-      · exact Or.inl (by simp)
-      · exact Or.inr (by simp)
-      · exact mem_mergeEnvIdx h
+/-- Every merge binding is an output of one of the colliding rows. Subterm closure
+therefore puts the whole merge environment in the database before the body runs. -/
+theorem mem_mergeEnv {os ns : List Term} {p : Var × Term}
+    (h : p ∈ mergeEnv oldVars newVars os ns) : p.2 ∈ os ∨ p.2 ∈ ns := by
+  rcases List.mem_append.mp h with h | h
+  · exact Or.inl (List.of_mem_zip h).2
+  · exact Or.inr (List.of_mem_zip h).2
 
 /-- **A `:merge` expression with no `:internal-identity-vals` conflicts on every pair**: it
 has no action block, so `FnDecl.unchangedWidth` gives it no width and every collision
 resolves. This is the whole of `MergeConflict` on the fragment `Signature.OrderingFree`
 admits. -/
 theorem mergeConflict_of_ordering_free {decl : FnDecl} (h : decl.OrderingFree)
-    {body : List Action} {res : List Expr} (hm : decl.merge = some (.merge body res))
+    {body : List Action} {res : List Expr} (hm : decl.merge = some (.merge oldVars
+      newVars body res))
     (a b : List Term) : MergeConflict decl body a b := by
   obtain ⟨hid, hms⟩ := h
-  obtain ⟨hbody, -⟩ := hms (.merge body res) (by rw [hm]; rfl)
+  obtain ⟨hbody, -⟩ := hms (.merge oldVars newVars body res) (by rw [hm]; rfl)
   simp [MergeConflict, FnDecl.unchangedWidth, hid, hbody]
 
 /-- **A collision's value tuples have the declared width.** `MergeStep.collide` fixes the
@@ -219,7 +196,7 @@ theorem mergeConflict_iff_split {decl : FnDecl} {body : List Action} {a b : List
 theorem MergeStep.not_of_allConstructors {db db' : Database}
     (hsig : db.sig.AllConstructors) (h : MergeStep db db') : False := by
   cases h with
-  | @collide _ f _ _ _ _ _ _ _ _ hd hm _ _ _ _ _ _ _ _ =>
+  | @collide _ f _ _ _ _ _ _ _ _ _ _ hd hm _ _ _ _ _ _ _ _ =>
     have hno := hsig f
     rw [Signature.mergeOf, hd, Option.bind_some, hm] at hno
     simp at hno
@@ -507,13 +484,14 @@ theorem evalActions_setRules (R : Set Rule) : ∀ (db : Database) (as : List Act
 theorem MergeStep.setRules {db db' : Database} (h : MergeStep db db') (R : Set Rule) :
     MergeStep { db with rules := R } { db' with rules := R } := by
   cases h with
-  | @collide d f decl as bs a b vs body res hsig hmerge hcf ha hb hma hmb hcl heval hres =>
+  | @collide d f decl as bs a b vs oldVars newVars body res
+    hsig hmerge hcf ha hb hma hmb hcl heval hres =>
       refine MergeStep.collide (d := { d with rules := R }) hsig hmerge hcf ha hb
         (Database.mem_terms_of_eqs_eq (d₁ := db) (d₂ := { db with rules := R }) rfl hma)
         (Database.mem_terms_of_eqs_eq (d₁ := db) (d₂ := { db with rules := R }) rfl hmb)
         (CongList.of_eqs_eq (d₁ := db) (d₂ := { db with rules := R }) rfl hcl) ?_ hres
-      rw [show ({ db with rules := R, env := mergeEnv a b } : Database)
-            = { { db with env := mergeEnv a b } with rules := R } from rfl,
+      rw [show ({ db with rules := R, env := mergeEnv oldVars newVars a b } : Database)
+            = { { db with env := mergeEnv oldVars newVars a b } with rules := R } from rfl,
         evalActions_setRules, heval]
       rfl
 
@@ -741,20 +719,22 @@ colliding rows do not hold one. -/
 theorem mergeStep_avoids {f : FnName} {db x : Database} (hf : db.sig f = none)
     (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f) (h : MergeStep db x) : x.Avoids f := by
   cases h with
-  | @collide d g decl as bs a b vs body res hsig hmerge _ _ _ hta htb _ heval hres =>
+  | @collide d g decl as bs a b vs oldVars newVars body res
+    hsig hmerge _ _ _ hta htb _ heval hres =>
       have hgf : g ≠ f := by rintro rfl; rw [hf] at hsig; exact absurd hsig (by simp)
-      have hdec := hsmd g decl (.merge body res) hsig hmerge
+      have hdec := hsmd g decl (.merge oldVars newVars body res) hsig hmerge
       have hta' := hav.terms _ hta
       have htb' := hav.terms _ htb
-      have hmenv : ∀ p ∈ mergeEnv a b, ¬ Term.Mentions f p.2 := by
+      have hmenv : ∀ p ∈ mergeEnv oldVars newVars a b, ¬ Term.Mentions f p.2 := by
         intro p hp
         rcases mem_mergeEnv hp with hm | hm
         · exact Term.not_mentions_args hta' _ (List.mem_append_right _ hm)
         · exact Term.not_mentions_args htb' _ (List.mem_append_right _ hm)
       have hdav : d.Avoids f :=
-        evalActions_avoids body { db with env := mergeEnv a b } d hf hdec.1
+        evalActions_avoids body { db with env := mergeEnv oldVars newVars a b } d hf hdec.1
           (Database.Avoids.congr (d₁ := db) rfl hmenv hav) heval
-      have hdsig : d.sig = db.sig := evalActions_sig (db := { db with env := mergeEnv a b }) heval
+      have hdsig : d.sig = db.sig :=
+        evalActions_sig (db := { db with env := mergeEnv oldVars newVars a b }) heval
       have hvs : ∀ v ∈ vs, ¬ Term.Mentions f v :=
         evalList_avoids res vs
           (fun e _ t ht => eval_avoids (by rw [hdsig]; exact hf) hdav.env e t ht) hres
@@ -882,7 +862,8 @@ theorem mergeStep_update_iff {f : FnName} {fd : FnDecl} {db x : Database}
   constructor
   · intro h
     cases h with
-    | @collide d g decl as bs a b vs body res hsig hmerge hcf harity hbrity hta htb hcl
+    | @collide d g decl as bs a b vs oldVars newVars body res
+      hsig hmerge hcf harity hbrity hta htb hcl
         heval hres =>
         have hsigg : sig' g = some decl := hsig
         have hta' : Term.app g (as ++ a) ∈ db.terms :=
@@ -894,13 +875,13 @@ theorem mergeStep_update_iff {f : FnName} {fd : FnDecl} {db x : Database}
         have hgf : g ≠ f := by
           rintro rfl; exact hav.terms _ hta' (Term.mentions_head _ _)
         rw [hsig', Function.update_of_ne hgf] at hsigg
-        have hdec := hsmd g decl (.merge body res) hsigg hmerge
-        have heval' : evalActions { { db with env := mergeEnv a b } with sig := sig' } body
+        have hdec := hsmd g decl (.merge oldVars newVars body res) hsigg hmerge
+        have heval' : evalActions { { db with env := mergeEnv oldVars newVars a b } with sig := sig' } body
             = some d := heval
-        rw [evalActions_update body { db with env := mergeEnv a b } hf hag hdec.1] at heval'
+        rw [evalActions_update body { db with env := mergeEnv oldVars newVars a b } hf hag hdec.1] at heval'
         obtain ⟨d₀, hd₀, rfl⟩ := Option.map_eq_some_iff.mp heval'
         have hd₀sig : d₀.sig = db.sig :=
-          evalActions_sig (db := { db with env := mergeEnv a b }) hd₀
+          evalActions_sig (db := { db with env := mergeEnv oldVars newVars a b }) hd₀
         have hres' : Expr.evalList sig' res d₀.env = some vs := hres
         refine ⟨_, MergeStep.collide hsigg hmerge hcf harity hbrity hta' htb' hcl' hd₀ ?_, rfl⟩
         refine Eq.trans ?_ hres'
@@ -909,21 +890,22 @@ theorem mergeStep_update_iff {f : FnName} {fd : FnDecl} {db x : Database}
             (by rw [hd₀sig]; exact hdec.2 e he) d₀.env
   · rintro ⟨y, h, rfl⟩
     cases h with
-    | @collide d g decl as bs a b vs body res hsig hmerge hcf harity hbrity hta htb hcl
+    | @collide d g decl as bs a b vs oldVars newVars body res
+      hsig hmerge hcf harity hbrity hta htb hcl
         heval hres =>
         have hgf : g ≠ f := by rintro rfl; rw [hf] at hsig; exact absurd hsig (by simp)
-        have hdec := hsmd g decl (.merge body res) hsig hmerge
+        have hdec := hsmd g decl (.merge oldVars newVars body res) hsig hmerge
         have hdsig : d.sig = db.sig :=
-          evalActions_sig (db := { db with env := mergeEnv a b }) heval
+          evalActions_sig (db := { db with env := mergeEnv oldVars newVars a b }) heval
         refine MergeStep.collide (d := { d with sig := sig' })
           (show sig' g = some decl by rw [hsig', Function.update_of_ne hgf]; exact hsig)
           hmerge hcf harity hbrity
           (Database.mem_terms_of_eqs_eq (d₁ := db) (d₂ := { db with sig := sig' }) rfl hta)
           (Database.mem_terms_of_eqs_eq (d₁ := db) (d₂ := { db with sig := sig' }) rfl htb)
           (CongList.of_eqs_eq (d₁ := db) (d₂ := { db with sig := sig' }) rfl hcl) ?_ ?_
-        · change evalActions { { db with env := mergeEnv a b } with sig := sig' } body
+        · change evalActions { { db with env := mergeEnv oldVars newVars a b } with sig := sig' } body
             = some { d with sig := sig' }
-          rw [evalActions_update body { db with env := mergeEnv a b } hf hag hdec.1, heval]
+          rw [evalActions_update body { db with env := mergeEnv oldVars newVars a b } hf hag hdec.1, heval]
           rfl
         · change Expr.evalList sig' res d.env = some vs
           refine Eq.trans ?_ hres

@@ -55,17 +55,14 @@ def queryOk (sig : Signature) (q : Query) : Bool := q.all fun p => match p with
   | .eq a b => leaf a && leaf b && ((witness q a).isSome || (witness q b).isSome)
   | _ => false
 
-/-- The variables a `:merge` body with `n` value columns may read: `mergeEnv`'s names. -/
-def mergeVars (n : Nat) : List Var :=
-  if n == 0 then [] else
-    ["old", "new"] ++ (List.range n).flatMap fun i => ["old" ++ toString i, "new" ++ toString i]
-
 def programOk (P : Program) (sig : Signature) : Bool := P.all fun c => match c with
   | .decl f d => !namePrefix.isPrefixOf f && match d.merge with
     | none => true
-    | some (.merge body res) =>
-        body.all (tableActionOk sig (mergeVars d.outArity)) &&
-          res.length == d.outArity && valueExprsOk sig (mergeVars d.outArity) res
+    | some (.merge oldVars newVars body res) =>
+        decide (MergeSpec.BindersOk (.merge oldVars newVars body res) d.outArity) &&
+          (oldVars ++ newVars).all (fun v => !namePrefix.isPrefixOf v) &&
+          body.all (tableActionOk sig (oldVars ++ newVars)) &&
+          res.length == d.outArity && valueExprsOk sig (oldVars ++ newVars) res
   | .action a => tableActionOk sig [] a
   | .rule r => queryOk sig r.query &&
       r.query.vars.all (fun v => (witness r.query (.var v)).isSome) &&
@@ -94,19 +91,19 @@ def encodeRule (i : Nat) (r : Rule) : Option Rule := do
     actions := r.actions.zipIdx.map fun aj =>
       encodeAction (.app (ruleName i aj.2) payload) aj.1 }
 
-/-- A merge function gains a proof column, bound as `mergeEnv`'s next parameter pair: every
-body action records both inputs' proofs, and the result column records them with the
-result. The identity columns stay the original value columns, so a collision that changes
+/-- A merge function gains a proof column and a fresh parameter on each input tuple.
+Every body action records both inputs' proofs, and the result column records them with
+the result. The identity columns stay the original value columns, so a collision that changes
 no data runs nothing, as before. -/
 def encodeDecl (f : FnName) (d : FnDecl) : FnDecl :=
   match d.merge with
-  | some (.merge body res) =>
-    let old := Expr.var ("old" ++ toString d.outArity)
-    let new := Expr.var ("new" ++ toString d.outArity)
+  | some (.merge oldVars newVars body res) =>
+    let old := Expr.var (proofVar 0)
+    let new := Expr.var (proofVar 1)
     { d with
       outArity := d.outArity + 1
       identityVals := some (min ((d.unchangedWidth body).getD d.outArity) d.outArity)
-      merge := some (.merge
+      merge := some (.merge (oldVars ++ [proofVar 0]) (newVars ++ [proofVar 1])
         (body.zipIdx.map fun aj =>
           encodeAction (.app (bodyName f aj.2) [old, new]) aj.1)
         (res ++ [.app (resultName f) [old, new]])) }
@@ -115,7 +112,7 @@ def encodeDecl (f : FnName) (d : FnDecl) : FnDecl :=
 def proofDecls (P : Program) : Program :=
   .decl subtermName (ctor 2) :: P.zipIdx.flatMap fun ci => match ci.1 with
     | .decl f d => match d.merge with
-      | some (.merge body _) => .decl (resultName f) (ctor 2) ::
+      | some (.merge _ _ body _) => .decl (resultName f) (ctor 2) ::
           body.zipIdx.map fun aj => .decl (bodyName f aj.2) (ctor 2)
       | _ => []
     | .action _ => [.decl (globalName ci.2) (ctor 0)]
