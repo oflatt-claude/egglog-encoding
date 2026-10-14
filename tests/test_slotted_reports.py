@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def _case(tmp_path: Path) -> tuple[Any, Any, Any, tuple[str, int], list[Any]]:
     evaluator = importlib.import_module("slotted.slotted-eval")
     cache_module = importlib.import_module("eval_cache")
+    report_module = importlib.import_module("eval_report")
     egglog, reference = tmp_path / "egglog", tmp_path / "reference"
     egglog.write_bytes(b"encoding binary")
     reference.write_bytes(b"reference binary")
@@ -37,9 +38,9 @@ def _case(tmp_path: Path) -> tuple[Any, Any, Any, tuple[str, int], list[Any]]:
     for row in rows:
         row.goal, row.classes, row.nodes, row.seconds = "yes", 2, 3, 0.125
     by_side = {row.side: row for row in rows}
-    for encoding, ref in evaluator.EXACT_PAIRS.items():
+    for encoding, ref in report_module.EXACT_PAIRS.items():
         enc, oracle = by_side[encoding], by_side[ref]
-        enc.vs_ref[ref] = evaluator.Comparison(enc.observation, oracle.observation, "isomorphic")
+        enc.vs_ref[ref] = report_module.Comparison(enc.observation, oracle.observation, "isomorphic")
     return cache, config, args, task, rows
 
 

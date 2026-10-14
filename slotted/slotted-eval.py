@@ -1,488 +1,45 @@
 #!/usr/bin/env python3
-"""Run the paper's array and SDQL workloads and compare their final e-graphs.
+"""Run the paper's array and SDQL evaluations.
 
-    python3 slotted/slotted-eval.py array --params 0
-    python3 slotted/slotted-eval.py sdql --kernel mmm --phase 1st
-    python3 slotted/slotted-eval.py --side encoding-no-aliasing,ref-nested-snapshot
-    python3 slotted/slotted-eval.py --jobs 4
-    python3 slotted/slotted-eval.py --from /tmp/eval.jsonl --html /tmp/eval.html
+    ./bench.py slotted array --params 0
+    ./bench.py slotted sdql --kernel mmm --phase 1st
+    ./bench.py slotted --jobs 4 --report /tmp/eval.jsonl
+    ./bench.py slotted --from /tmp/eval.jsonl
 
-Per side, one timed process checks the goal, including the Rust transformation.
-A separate untimed process collects counts and the final graph without inserting the target. Encoding/ref-multi
-comparisons require equal class/node counts AND a verified isomorphism. Missing
-or bounded-out evidence is inconclusive and fails the correctness gate.
+The flow is prepare inputs -> reuse or collect -> check -> cache -> report.
+Each side gets one timed goal check and a separate, untimed graph export.
+Default execution is serial, with release binaries, a 300-second process timeout,
+and the paper's rewrite budgets. Parallel timings include resource contention.
 
-Both encodings run alongside the references by default. encoding-no-aliasing
-restricts aliasing and requires equality to ref-nested-snapshot. Both exact pairs
-use matching snapshot substitution. ref-nested retains the artifact's syntactic
-substitution as a diagnostic baseline. Every selected side must reach its goal.
---no-counts explicitly opts into goal/timing checks alone.
+Workload generation is in eval_workloads; subprocess timing is in eval_run.
+Graph export, raw counts, and verified isomorphism checks are in eval_verify.
+The exact pairs are encoding/ref-multi and encoding-no-aliasing/ref-nested-snapshot;
+ref-nested keeps the paper's syntactic substitution as a timing baseline.
+Missing evidence fails the correctness gate. --no-counts opts into timing/goals only.
 
-Defaults: serial execution, release builds, 300 seconds per process, the paper's
-round budgets. --jobs N runs up to N workloads in separate worker processes,
-including their count and isomorphism checks. Parallel timings include contention.
-Records share .reports.jsonl with proofs; use --report for a separate cache.
-Unchanged workloads reuse exact cached observations; --force-run collects fresh ones. --from
-prints the latest cached observation per workload/side without collecting and
-invalidates stale comparisons. Both the compact
-summary and full report are rendered by eval_report.py. See ENCODING.md for the
-counting convention, substitution policies, and limitations of these comparisons.
+All observations share the proof benchmark's ReportStore through eval_cache;
+eval_report renders the two timing summaries and full evidence table.
+See ENCODING.md for comparison policies and limitations.
 """
 
 import argparse
-import json
 import multiprocessing
-import os
 import signal
-import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "slotted"))
-sys.path.insert(0, str(ROOT / "slotted" / "xdiff"))
+sys.path[:0] = [str(ROOT), str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
 
-import isomorphism as ISO  # noqa: E402
-import xarray as XA  # noqa: E402
+import eval_verify as verification  # noqa: E402
+import eval_workloads as workloads  # noqa: E402
 from eval_cache import Cache, load_rows  # noqa: E402
-from eval_report import (  # noqa: E402
-    EXACT_PAIRS,
-    SIDES,
-    Comparison,
-    Progress,
-    Row,
-    html,
-    markdown_report,
-    quiet_progress,
-    report_sections,
-    workload_label,
-)
+from eval_report import SIDES, Progress, Row, html, markdown_report, report_sections  # noqa: E402
+from eval_run import GROUP_CAP, Config, build, run_egglog, run_reference  # noqa: E402
 
-sc = __import__("slotted-egglog")
-slotenc = __import__("slotted-encoder")
-pf = __import__("paper_fixtures")
-
-BATAX_SUBSET = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
-
-SCRATCH = ROOT / "target" / "slotted"
-#: Where every run is recorded unless `--jsonl` says otherwise: append-only, ignored by git.
 REPORT = Path(".reports.jsonl")
-
-
-#: Release builds of both sides: egglog, and the reference through `xmulti` without the
-#: crate's `checks` feature, the way the paper's experiments ran it.
-EGGLOG = ROOT / "target" / "release" / "egglog-experimental"
-#: `--group-cap`: how many live slots the oracle enumerates a symmetry group over when it
-#: dumps its graph; past it the exact comparison is unavailable, but direct counts remain.
-#: The oracle's own default is 6. Larger SDQL graphs exceed even 10; raising the
-#: cap has factorial cost, so keep counts available independently of that limit.
-GROUP_CAP = 10
-XMULTI = ROOT / "slotted" / "xmulti" / "target" / "release" / "xmulti"
-BUILDS = (
-    ("cargo", "build", "--release", "--bin", "egglog-experimental"),
-    ("cargo", "build", "--release", "--no-default-features", "--manifest-path", "slotted/xmulti/Cargo.toml"),
-)
-
-
-@dataclass(frozen=True)
-class Config:
-    egglog: Path = EGGLOG
-    xmulti: Path = XMULTI
-    group_cap: int = GROUP_CAP
-
-
-def build(*, env=None):
-    """Bring both binaries up to date, so a timing is of the code in the checkout.
-    cargo's own output stays on stderr."""
-    for cmd in BUILDS:
-        if subprocess.run(cmd, cwd=ROOT, stdout=sys.stderr, env=env).returncode != 0:
-            sys.exit(f"slotted-eval.py: `{' '.join(cmd)}` failed")
-
-
-# ------------------------------------------------------------------ the reference
-def oracle_env(side, group_cap):
-    """Choose the comparison's policy explicitly, overriding ambient XMULTI_SUBST."""
-    return {
-        **os.environ,
-        "XMULTI_GROUP_SLOT_CAP": str(group_cap),
-        "XMULTI_SUBST": "syntactic" if side == "ref-nested" else "snapshot",
-    }
-
-
-def run_reference(spec, row, timeout, counts, progress=quiet_progress, *, config=None):
-    """One timed `xmulti` run, whose GOAL line is the criterion; with `counts`, a second,
-    untimed run that also dumps the graph, since enumerating the symmetry groups for the
-    dump can cost more than the run."""
-    config = config or Config()
-    env = oracle_env(row.side, config.group_cap)
-    row.substitution = env["XMULTI_SUBST"]
-    progress(row, "goal")
-    t0 = time.perf_counter()
-    try:
-        r = subprocess.run([str(config.xmulti)], input=spec, capture_output=True, text=True, timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        row.goal, row.seconds = "timeout", time.perf_counter() - t0
-        if counts:
-            row.graph_issue = "reference timed run exceeded timeout"
-        return
-    row.seconds = time.perf_counter() - t0
-    lines = r.stdout.splitlines()
-    if r.returncode != 0 and "REFERENCE_LIMIT:" not in r.stderr:
-        row.goal = "error: " + ((r.stderr.strip().splitlines() or ["?"])[-1])[:80]
-        row.graph_issue = row.goal
-        return
-    row.goal = next((ln.split()[1] for ln in lines if ln.startswith("GOAL ")), "?")
-    row.saturated = next((ln.split()[1] for ln in lines if ln.startswith("SATURATED ")), "?")
-    row.checks = next((ln.split("=", 1)[1] for ln in lines if ln.startswith("CONFIG checks=")), None)
-    reported_subst = next((ln.split("=", 1)[1] for ln in lines if ln.startswith("CONFIG substitution=")), None)
-    if reported_subst != row.substitution:
-        row.goal = "error: reference substitution policy missing or unexpected; rebuild xmulti"
-        row.graph_issue = row.goal
-        return
-    if counts:
-        progress(row, "counts + graph dump")
-        try:
-            r = subprocess.run(
-                [str(config.xmulti)],
-                input=spec + "sizes\ndump\n",
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-            )
-        except subprocess.TimeoutExpired as exc:
-            reference_sizes((exc.stdout or b"").decode(), row)
-            row.graph_issue = "reference graph dump exceeded timeout"
-            return
-        reference_sizes(r.stdout, row)
-        if r.returncode != 0:
-            row.graph_issue = "reference graph dump failed: " + (r.stderr.strip() or f"exit {r.returncode}")
-            return
-        progress(row, "reading graph")
-        try:
-            g = ISO.parse_reference(r.stdout)
-        except ValueError as exc:
-            row.graph_issue = f"reference graph unreadable: {exc}"
-            return
-        if not g.ids():
-            row.graph_issue = "reference graph dump is empty"
-            return
-        if (row.classes, row.nodes) != g.summary():
-            row.graph_issue = "reference direct sizes disagree with graph dump"
-            return
-        row.graph = g
-
-
-def reference_sizes(stdout, row):
-    """Keep cheap direct counts even when enumerating symmetry groups fails."""
-    for line in stdout.splitlines():
-        if line.startswith("SIZES "):
-            row.classes, row.nodes = map(int, line.split()[1:])
-            return
-
-
-def ctor_lines(lang):
-    """`ctor <tag> <Name>` lines: what the encoding calls each of the oracle's constructors,
-    so the oracle's substitution snapshot breaks ties by the same spelling."""
-    out = []
-    for op in {id(op): op for op in lang.ops.values()}.values():
-        if op.ref:
-            out.append(f"ctor {op.ref} {op.ctor}")
-        else:
-            out.append(f"ctor {'symbol' if 'String' in op.sig else 'number'} {op.ctor}")
-    return sorted(out)
-
-
-def rule_lines(lang, rules_path, selected, nested):
-    """A rule file's rules as oracle spec lines, flattened or nested."""
-    src = sc.Source(rules_path)
-    out = []
-    for form in sc.parse(rules_path.read_text()):
-        if not (isinstance(form, list) and form and form[0] == "rewrite"):
-            continue
-        r = sc.rewrite_parts(src, form)
-        if selected is not None and r["name"] not in selected:
-            continue
-        lhs = src.term(r["lhs"], ground=False)
-        rhs = slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, src.term(r["rhs"], ground=False)))
-        if nested:
-            out += ["rule", f"nested {slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, lhs))}", f"rhs root {rhs}"]
-        else:
-            root, atoms = slotenc.flatten(lang, lhs)
-            root, atom_text = slotenc.atom_lines(lang, root, atoms)
-            out += ["rule", *atom_text, f"rhs {root} {rhs}"]
-        for want, slot, pvars in r["conds"]:
-            out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
-    return out
-
-
-# ------------------------------------------------------------------- the encoding
-def slotted_flags(row):
-    return ["--slotted", *(["--slotted-no-aliasing"] if row.side == "encoding-no-aliasing" else [])]
-
-
-def goal_result(result):
-    if result.returncode == 0:
-        return "yes"
-    return "no" if "Check failed" in result.stderr else "error"
-
-
-def run_egglog(program, name, row, timeout, goal_of, progress=quiet_progress, *, config=None):
-    """Run one egglog program; `goal_of(result)` reads the criterion off it."""
-    config = config or Config()
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    path = SCRATCH / f"eval-{name}-{os.getpid()}.egg"
-    path.write_text(program)
-    progress(row, "goal")
-    t0 = time.perf_counter()
-    try:
-        r = subprocess.run(
-            [str(config.egglog), *slotted_flags(row), str(path)],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        row.goal, row.seconds = "timeout", time.perf_counter() - t0
-        return
-    finally:
-        path.unlink(missing_ok=True)
-    row.seconds = time.perf_counter() - t0
-    row.goal = goal_of(r)
-
-
-def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, *, config=None, encoded=False):
-    """Count and read the graph at the requested budget, without further user rounds.
-
-    An extra round to probe saturation can explode even when this graph is cheap
-    to collect. Equal row counts would not establish a fixed point either.
-    """
-    config = config or Config()
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    path = SCRATCH / f"eval-{name}-{os.getpid()}-counts.egg"
-    jpath = path.with_suffix(".json")
-    path.write_text(program)
-    progress(row, "counts + graph dump")
-    try:
-        r = subprocess.run(
-            [
-                str(config.egglog),
-                *(["--slotted-encoded"] if encoded else slotted_flags(row)),
-                "--to-json",
-                *ISO.SERIALIZE_LIMITS,
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-            timeout=timeout,
-        )
-        if r.returncode != 0:
-            row.graph_issue = "encoding graph dump failed: " + (r.stderr.strip() or f"exit {r.returncode}")
-            return
-        if ISO.incomplete_serialization(r.stderr):
-            row.graph_issue = "encoding graph serialization was truncated"
-            return
-        if not jpath.exists():
-            row.graph_issue = "encoding graph dump was not written"
-            return
-        progress(row, "validating graph")
-        doc = json.loads(jpath.read_text())
-        constructors = {op.ctor for op in lang.ops.values()} | {ISO.SYM.var}
-        row.nodes = sum(n.get("op") in constructors for n in doc["nodes"].values())
-        g, issues = ISO.build_encoding_graph(doc, lang)
-        if issues:
-            row.graph_issue = "encoding graph unreadable: " + "; ".join(map(str, issues))
-            return
-        # the reference's node forms: a binder's bound slot as a slot literal
-        var_class = next((c for c in g.ids() if any(n[0] == "var" for n in g.nodes[c])), None)
-        g, unfaithful = ISO.to_reference_shape(g, var_class, lang=lang)
-        if unfaithful:
-            row.graph_issue = "encoding graph cannot be converted faithfully: " + str(unfaithful)
-            return
-        row.classes, reconstructed_nodes = g.summary()
-        if row.nodes != reconstructed_nodes:
-            row.graph_issue = (
-                f"encoding raw constructor count {row.nodes} disagrees with reconstructed graph {reconstructed_nodes}"
-            )
-            return
-        row.graph = g
-    except subprocess.TimeoutExpired:
-        row.graph_issue = "encoding graph dump exceeded timeout"
-    except (json.JSONDecodeError, ISO.IsomorphismLimit) as exc:
-        row.graph_issue = f"encoding graph unavailable: {exc}"
-    finally:
-        path.unlink(missing_ok=True)
-        jpath.unlink(missing_ok=True)
-
-
-def compare_counts(enc, ref):
-    """A cheap check of the reported sizes, independent of witness search/verification."""
-    missing = False
-    for name in ("classes", "nodes"):
-        a, b = getattr(enc, name), getattr(ref, name)
-        if a is None or b is None:
-            missing = True
-        elif a != b:
-            return f"different: {name} {a} vs {b} (encoding vs reference)"
-    return "inconclusive: counts unavailable" if missing else "same counts"
-
-
-def compare(rows, progress=quiet_progress, *, search_cap=5_000):
-    """Compare complete graphs, preserving differences and resource limits.
-
-    Only a verified class/slot/group/node witness establishes graph equality.
-    Probe partitions and row counts cannot replace that obligation.
-    """
-    for enc in (r for r in rows if r.side in EXACT_PAIRS):
-        for ref_row in (r for r in rows if r.side.startswith("ref-")):
-            progress(enc, f"isomorphism vs {ref_row.side}")
-            enc.vs_ref[ref_row.side] = Comparison(
-                enc.observation, ref_row.observation, compare_graphs(enc, ref_row, search_cap=search_cap)
-            )
-    progress(None, "idle")
-
-
-def compare_graphs(enc, reference, *, search_cap=5_000):
-    counts = compare_counts(enc, reference)
-    if counts != "same counts":
-        issues = [r.graph_issue for r in (enc, reference) if r.graph_issue]
-        return counts + ("; " + "; ".join(issues) if issues else "")
-    if enc.graph is None:
-        return "inconclusive: no encoding graph"
-    if reference.graph is None:
-        return "inconclusive: no reference graph" + (f"; {reference.graph_issue}" if reference.graph_issue else "")
-    try:
-        iso, why = ISO.find_isomorphism(reference.graph, enc.graph, search_cap=search_cap)
-        if iso is not None:
-            bad = ISO.verify(reference.graph, enc.graph, *iso)
-            return "isomorphic" if bad is None else f"inconclusive: witness rejected ({bad})"
-        if why and why.endswith("-- inconclusive"):
-            return "inconclusive: " + why.removesuffix(" -- inconclusive")
-        return f"different: {why}"
-    except (ISO.IsomorphismLimit, RecursionError) as exc:
-        return f"inconclusive: {exc}"
-
-
-# ------------------------------------------------------------------ the array study
-def array_program(case, *, with_target):
-    """Source terms and the shared eight-rule library; Rust performs the encoding."""
-
-    def term(t):
-        if t[0] == "var":
-            return f"${t[1]}"
-        op = XA.LANG.ops[t[0]]
-        args = []
-        for kind, arg in zip(op.arg_kinds(), t[1:], strict=True):
-            if kind is slotenc.CHILD:
-                args.append(term(arg))
-            elif kind is slotenc.BINDER:
-                args.append(f"${XA.LANG.slot(arg)}")
-            else:
-                args.append(json.dumps(arg))
-        return "(" + " ".join([op.ctor, *args]) + ")"
-
-    lines = ['(include "slotted/languages/array-rules.egg")']
-    lines += [f"(let input{i} {term(t)})" for i, t in enumerate(case.terms)]
-    lines += [f"(union {term(a)} {term(b)})" for a, b in case.unions]
-    lines.append(f"(run {case.rounds})")
-    if with_target:
-        a, b = case.probes
-        lines.append(f"(check (= {term(a)} {term(b)}))")
-    return "\n".join(lines) + "\n"
-
-
-def array_rows(params, rounds, sides, counts, timeout, progress=quiet_progress, *, config=None):
-    for n in params:
-        case = XA.goal_cases([n], rounds=rounds)[0]
-        a, b = case.probes
-        head = [f"rounds {rounds}", *ctor_lines(XA.LANG), f"term {XA.sexpr(a)}"]
-        goal = [f"goal {XA.sexpr(b)}"]
-        group, bare_program = [], None
-        for side in sides:
-            row = Row("array", case.name, side, rounds)
-            progress(row, "preparing")
-            if side == "ref-multi":
-                lines = [ln for r in case.rules for ln in r.spec_lines()]
-                run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts, progress, config=config)
-            elif side.startswith("ref-nested"):
-                lines = rule_lines(XA.LANG, XA.ARRAY_SRC_RULES, None, nested=True)
-                run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts, progress, config=config)
-            else:
-                prog = array_program(case, with_target=True)
-                run_egglog(prog, case.name, row, timeout, goal_result, progress, config=config)
-                if counts:
-                    progress(row, "preparing counts")
-                    bare_program = array_program(case, with_target=False)
-                    encoding_counts(bare_program, case.name, XA.LANG, row, timeout, progress, config=config)
-            progress(row, "done")
-            group.append(row)
-        if counts and bare_program is not None:
-            compare(group, progress)
-        yield from group
-
-
-# ------------------------------------------------------------------- the SDQL study
-def sdql_program(kernel, phase, rules, rounds, with_target):
-    """One workload as a slotted source: the full library by include, or BATAX's own 12."""
-    if rules == 12:
-        # the goal-directed test, its own rules and schedule; only its terms are reused
-        forms = sc.parse(BATAX_SUBSET.read_text())
-        forms = [["run", str(rounds)] if f[:1] == ["run"] and f[1] != "0" else f for f in forms]
-    else:
-        forms = pf.test_forms(kernel, phase, rounds)
-    if not with_target:
-        # the saturated input alone, for counting: no target, no check
-        forms = [f for f in forms if f[0] != "check" and f[:2] != ["let", "paper-target"]]
-    return "\n".join(sc.render(f) for f in forms) + "\n"
-
-
-def sdql_rows(workloads, rules, rounds, sides, counts, timeout, progress=quiet_progress, *, config=None):
-    lang = pf.reference_language()
-    source = sc.Source(pf.RULES)
-    for kernel, phase in workloads:
-        start, target = pf.workload_text(kernel, phase, source, lang)
-        budget = pf.iteration_limit(kernel, phase) if rounds is None else rounds
-        selected = None
-        if rules == 12:
-            subset = sc.Source(BATAX_SUBSET)
-            selected = {
-                sc.rule_name(subset, form) for form in sc.parse(BATAX_SUBSET.read_text()) if form[:1] == ["rewrite"]
-            }
-        head = [f"rounds {budget}", *ctor_lines(lang), f"term {start}"]
-        goal = [f"goal {target}"]
-        name = f"{kernel}_{phase}-{rules}rules"
-        group, bare_program = [], None
-        for side in sides:
-            row = Row("sdql", name, side, budget, rules)
-            progress(row, "preparing")
-            row.paper = pf.TABLE1[(kernel, phase)]
-            if side.startswith("ref-"):
-                lines = rule_lines(lang, pf.RULES, selected, nested=side.startswith("ref-nested"))
-                run_reference("\n".join(head + lines + goal) + "\n", row, timeout, counts, progress, config=config)
-            else:
-                run_egglog(
-                    sdql_program(kernel, phase, rules, budget, True),
-                    name,
-                    row,
-                    timeout,
-                    goal_result,
-                    progress,
-                    config=config,
-                )
-                if counts:
-                    progress(row, "preparing counts")
-                    bare_program = sdql_program(kernel, phase, rules, budget, False)
-                    encoding_counts(bare_program, name, lang, row, timeout, progress, config=config)
-            progress(row, "done")
-            group.append(row)
-        if counts and bare_program is not None:
-            compare(group, progress)
-        yield from group
 
 
 def main(argv=None):
@@ -498,9 +55,19 @@ def main(argv=None):
     ap.add_argument(
         "--rounds", type=int, default=None, help="iterations; default 6 for array, the artifact's limit for sdql"
     )
-    ap.add_argument("--kernel", nargs="*", default=list(pf.KERNELS), choices=pf.KERNELS, help="sdql: kernels to run")
     ap.add_argument(
-        "--phase", nargs="*", default=list(pf.PHASES), choices=pf.PHASES, help="sdql: compiler phases to run"
+        "--kernel",
+        nargs="*",
+        default=list(workloads.pf.KERNELS),
+        choices=workloads.pf.KERNELS,
+        help="sdql: kernels to run",
+    )
+    ap.add_argument(
+        "--phase",
+        nargs="*",
+        default=list(workloads.pf.PHASES),
+        choices=workloads.pf.PHASES,
+        help="sdql: compiler phases to run",
     )
     ap.add_argument(
         "--rules",
@@ -589,7 +156,7 @@ def main(argv=None):
     else:
         rows = collect(args, sides, ap, config=config)
 
-    errors = failures(rows, sides, args.counts)
+    errors = verification.failures(rows, sides, args.counts)
     sections = report_sections(rows, sides, args.long, counts=args.counts)
     print(markdown_report(sections, errors))
     if args.html:
@@ -619,68 +186,23 @@ def nightly(report_path, *, env=None, timeout=300, jobs=1):
     )
 
 
-def successful(rows, sides, counts):
-    """Goals must succeed; each selected exact pair requires counts and a certificate."""
-    return not failures(rows, sides, counts)
-
-
-def failures(rows, sides, counts):
-    """The error banner and exit status use the same correctness gate."""
-    if not rows:
-        return ["No benchmark results."]
-    errors = []
-    groups = {}
+def collect_workload(workload, args, sides, config, progress):
+    """One timing run per side; collect untimed evidence and then compare the group."""
+    rows = []
+    for side in sides:
+        row = Row(workload.study, workload.case, side, workload.rounds, workload.rules)
+        row.paper, row.jobs = workload.paper, args.jobs
+        if side.startswith("ref-"):
+            run_reference(workload.reference(side), row, args.timeout, progress, config=config)
+        else:
+            run_egglog(workload.program, workload.case, row, args.timeout, progress, config=config)
+        if args.counts:
+            verification.collect_graph(workload, row, args.timeout, progress, config=config)
+        progress(row, "done")
+        rows.append(row)
+    if args.counts:
+        verification.compare(rows, progress)
     for row in rows:
-        groups.setdefault(row.workload(), {})[row.side] = row
-        if row.goal != "yes":
-            label = workload_label(row.study, row.case, row.rules)
-            errors.append(f"{label} [{row.rounds} rounds] / {row.side}: goal not reached ({row.goal}).")
-    for (study, case, rounds, rules), group in groups.items():
-        label = f"{workload_label(study, case, rules)} [{rounds} rounds]"
-        missing = [side for side in sides if side not in group]
-        if missing:
-            errors.append(f"{label}: missing results for {', '.join(missing)}.")
-        if not counts:
-            continue
-        for encoding, reference in EXACT_PAIRS.items():
-            if encoding not in sides or reference not in sides:
-                continue
-            if encoding not in group or reference not in group:
-                continue
-            enc, ref = group[encoding], group[reference]
-            reasons = []
-            count_verdict, graph_verdict = compare_counts(enc, ref), enc.verdict(ref)
-            # Graph verdicts can already carry the count failure plus its cause.
-            if count_verdict != "same counts" and not graph_verdict.startswith(count_verdict):
-                reasons.append(count_verdict)
-            if graph_verdict != "isomorphic":
-                reasons.append(graph_verdict)
-            if reasons:
-                errors.append(f"{label}: {encoding} vs {reference}: {'; '.join(reasons)}")
-    return errors
-
-
-def collect_workload(task, args, sides, config, progress):
-    """Keep all sides and graph comparisons of a workload in one process."""
-    study, workload = task
-    if study == "array":
-        rows = list(
-            array_rows(
-                [workload],
-                6 if args.rounds is None else args.rounds,
-                sides,
-                args.counts,
-                args.timeout,
-                progress,
-                config=config,
-            )
-        )
-    else:
-        rows = list(
-            sdql_rows([workload], args.rules, args.rounds, sides, args.counts, args.timeout, progress, config=config)
-        )
-    for row in rows:
-        row.jobs = args.jobs
         # Comparisons are finished. Do not retain or send large graphs to the parent.
         row.graph = None
     return rows
@@ -697,13 +219,13 @@ def init_worker():
 
 
 def parallel_workload(payload):
-    task, args, sides, config = payload
+    workload, args, sides, config = payload
     # Only unwind our own work. Idle workers must use the default SIGTERM handler:
     # raising while multiprocessing waits on a queue lock can hang pool shutdown.
     previous = signal.signal(signal.SIGTERM, stop_worker)
     try:
         with Progress(parallel=True) as progress:
-            return collect_workload(task, args, sides, config, progress)
+            return collect_workload(workload, args, sides, config, progress)
     finally:
         signal.signal(signal.SIGTERM, previous)
 
@@ -716,10 +238,10 @@ def collect(args, sides, ap, *, config=None):
     if args.study in ("all", "array"):
         tasks += [("array", n) for n in args.params]
     if args.study in ("all", "sdql"):
-        workloads = [w for w in pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
-        if args.rules == 12 and workloads != [("batax", "2nd")]:
+        selected = [w for w in workloads.pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
+        if args.rules == 12 and selected != [("batax", "2nd")]:
             ap.error("--rules 12 is the suite's BATAX second-phase subset: use --kernel batax --phase 2nd")
-        tasks += [("sdql", w) for w in workloads]
+        tasks += [("sdql", w) for w in selected]
     if not args.no_build:
         build()
     for tool in (config.egglog, config.xmulti):
@@ -734,18 +256,10 @@ def collect(args, sides, ap, *, config=None):
         flush=True,
     )
 
+    prepared = {task: workloads.prepare(task, rounds=args.rounds, rules=args.rules) for task in tasks}
     cache = None
     if getattr(args, "jsonl", None) is not None:
-        manifests = {}
-        for task in tasks:
-            study, workload = task
-            if study == "array":
-                case = XA.goal_cases([workload], rounds=6 if args.rounds is None else args.rounds)[0]
-                manifests[task] = array_program(case, with_target=True)
-            else:
-                kernel, phase = workload
-                budget = pf.iteration_limit(kernel, phase) if args.rounds is None else args.rounds
-                manifests[task] = sdql_program(kernel, phase, args.rules, budget, True)
+        manifests = {task: asdict(workload) for task, workload in prepared.items()}
         cache = Cache(args.jsonl, ROOT, config, args, manifests)
     rows_by_task = {}
     pending = []
@@ -765,7 +279,7 @@ def collect(args, sides, ap, *, config=None):
     if args.jobs == 1:
         with Progress() as progress:
             for task in pending:
-                accept(task, collect_workload(task, args, sides, config, progress))
+                accept(task, collect_workload(prepared[task], args, sides, config, progress))
     elif pending:
         workers = min(args.jobs, len(pending))
         print(
@@ -777,7 +291,7 @@ def collect(args, sides, ap, *, config=None):
         # Separate processes let Python graph checks use multiple cores too.
         context = multiprocessing.get_context("spawn")
         with context.Pool(workers, initializer=init_worker) as pool:
-            payloads = ((task, args, sides, config) for task in pending)
+            payloads = ((prepared[task], args, sides, config) for task in pending)
             for task, group in zip(pending, pool.imap(parallel_workload, payloads), strict=True):
                 accept(task, group)
             # On success let idle workers return normally. Pool.__exit__ terminates

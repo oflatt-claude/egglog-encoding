@@ -1179,8 +1179,9 @@ reach one value. The root keeps the frame's spelling (C11).
 The unrestricted `encoding` matches the reference crate's multipattern matcher,
 `ref-multi`. The `encoding-no-aliasing` variant restricts aliasing to match
 `ref-nested-snapshot`. In both comparisons the goal is the same e-graph: the same
-classes, slots, groups, and nodes up to a verified isomorphism. `slotted/slotted-eval.py`
-compares the final graphs and says `isomorphic`, `different`, or `inconclusive`.
+classes, slots, groups, and nodes up to a verified isomorphism. The evaluator delegates
+graph export, counting, and witness verification to `slotted/eval_verify.py`,
+which compares the final graphs and says `isomorphic`, `different`, or `inconclusive`.
 It attempts witness search on every available graph pair, using compact interned
 class and slot signatures and explicit search/node-variant work limits. Counts and
 probe partitions cannot override an exact rejection or establish equality. With
@@ -1262,7 +1263,7 @@ be made the same, each established on a minimal case the harness keeps:
   class was created with -- history the encoding cannot replay. So the oracle harness
   substitutes as the encoding does: `slotted/xmulti`'s `SnapshotSubst` takes the
   smallest term per class at each round's start, the same tie-break over the same
-  constructor names (`ctor` lines in the spec, from `slotted-eval.py`), and is the harness's
+  constructor names (`ctor` lines in the spec, from `eval_workloads.py`), and is the harness's
   default (`XMULTI_SUBST=syntactic` restores the crate's). Reconstructing that term
   freshens each node's bound occurrences before applying its free-slot renaming,
   so a stored binder name cannot capture an invocation's free slot.
@@ -1371,8 +1372,12 @@ caches collected with the previous Python compilation path.
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
 | `slotted/paper_fixtures.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
-| `slotted/slotted-eval.py` | collection and correctness checks for the paper's two case studies; `make slotted-eval` |
-| `slotted/eval_report.py` | observation records, cache loading, and the summary/full tables; launches no benchmarks |
+| `slotted/slotted-eval.py` | CLI, cache reuse, and one evaluation loop for both case studies; `./bench.py slotted` |
+| `slotted/eval_workloads.py` | explicit source programs and reference specs, prepared once for cache lookup and execution |
+| `slotted/eval_run.py` | builds and timed goal-checking processes; no graph export or isomorphism search |
+| `slotted/eval_verify.py` | untimed graph export, independent raw counts, verified isomorphism witnesses, and the correctness gate |
+| `slotted/eval_cache.py` | slotted observations in the shared proof/slotted `ReportStore`; hashes all generated inputs and checking code |
+| `slotted/eval_report.py` | observation records, progress, and the summary/full tables; launches no benchmarks |
 | `spot-check.py` | independent Array N=0 spot check: explicit reference multipatterns, direct live-row/leader counts, one timed run per side; imports no eval or differential-checking scripts |
 
 The shared and per-carrier maintenance rules live in the Rust compiler's

@@ -125,6 +125,9 @@ class Cache:
         dependencies = [
             "slotted/slotted-eval.py",
             "slotted/eval_cache.py",
+            "slotted/eval_run.py",
+            "slotted/eval_verify.py",
+            "slotted/eval_workloads.py",
             "slotted/paper_fixtures.py",
             "slotted/slotted-egglog.py",
             "slotted/slotted-encoder.py",
@@ -139,7 +142,7 @@ class Cache:
             task: digest(
                 json.dumps(
                     {
-                        "program": program,
+                        "workload": manifest,
                         "sources": sources,
                         "counts": args.counts,
                         "group_cap": config.group_cap,
@@ -148,7 +151,7 @@ class Cache:
                     sort_keys=True,
                 ).encode()
             )
-            for task, program in manifests.items()
+            for task, manifest in manifests.items()
         }
 
     def key(self, task, side):

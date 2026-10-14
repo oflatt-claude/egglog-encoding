@@ -8,7 +8,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
-E = __import__("slotted-eval")
+sys.path.insert(0, str(ROOT))
+import eval_report as R  # noqa: E402
+import eval_run as run  # noqa: E402
+import eval_verify as V  # noqa: E402
+import eval_workloads as W  # noqa: E402
 import xdiff as X  # noqa: E402
 
 # name, initial unions, input, pattern, replacement, whether full matching adds nodes
@@ -87,7 +91,7 @@ def compiler_flag(tmp):
 
 
 def main():
-    config = E.Config(
+    config = run.Config(
         egglog=ROOT / "target/debug/egglog-experimental",
         xmulti=ROOT / "slotted/xmulti/target/debug/xmulti",
     )
@@ -101,28 +105,29 @@ def main():
             )
             sizes = []
             for compat in (False, True):
-                src = E.sc.Source(path)
+                src = W.sc.Source(path)
                 head = [
                     "rounds 1",
-                    *E.ctor_lines(X.LANG),
-                    f"term {X.LANG.sexpr(src.term(E.sc.parse(start)[0], ground=True))}",
+                    *W.ctor_lines(X.LANG),
+                    f"term {X.LANG.sexpr(src.term(W.sc.parse(start)[0], ground=True))}",
                     "term (var $0)",
                     *(
                         "union " + " ".join(X.LANG.sexpr(src.term(t, ground=True)) for t in f[1:])
-                        for f in E.sc.parse(unions)
+                        for f in W.sc.parse(unions)
                     ),
                 ]
-                spec = "\n".join(head + E.rule_lines(X.LANG, path, None, nested=compat)) + "\n"
+                spec = "\n".join(head + W.rule_lines(X.LANG, path, None, nested=compat)) + "\n"
                 enc, ref = (
-                    E.Row("regression", name, side, 1)
+                    R.Row("regression", name, side, 1)
                     for side in (
                         ("encoding-no-aliasing", "ref-nested-snapshot") if compat else ("encoding", "ref-multi")
                     )
                 )
                 program = path.read_text()
-                E.encoding_counts(program, name, X.LANG, enc, 30, config=config)
-                E.run_reference(spec, ref, 30, True, config=config)
-                E.compare([enc, ref])
+                V.encoding_counts(program, name, X.LANG, enc, 30, config=config)
+                run.run_reference(spec, ref, 30, config=config)
+                V.reference_counts(spec, ref, 30, config=config)
+                V.compare([enc, ref])
                 assert enc.verdict(ref) == "isomorphic", (name, compat, enc.verdict(ref))
                 assert (enc.classes, enc.nodes) == (ref.classes, ref.nodes)
                 sizes.append(enc.nodes)

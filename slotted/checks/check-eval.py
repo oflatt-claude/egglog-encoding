@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
 E = __import__("slotted-eval")
 import eval_report as R  # noqa: E402
+import eval_run as run  # noqa: E402
+import eval_verify as V  # noqa: E402
+import eval_workloads as W  # noqa: E402
 import xdiff as X  # noqa: E402
 
 CHECK_CONFIG = E.Config(
@@ -42,27 +45,28 @@ def cached_record(row, batch):
 
 
 def graphs(name, program, spec, lang=X.LANG):
-    enc, ref = (E.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
-    E.encoding_counts(program, name, lang, enc, 60, config=ENCODED_CONFIG, encoded=True)
-    E.run_reference(spec, ref, 60, True, config=CHECK_CONFIG)
+    enc, ref = (R.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
+    V.encoding_counts(program, name, lang, enc, 60, config=ENCODED_CONFIG, encoded=True)
+    run.run_reference(spec, ref, 60, config=CHECK_CONFIG)
+    V.reference_counts(spec, ref, 60, config=CHECK_CONFIG)
     assert enc.graph is not None and ref.graph is not None, (name, enc.as_dict("test"), ref.as_dict("test"))
-    E.compare([enc, ref])
+    V.compare([enc, ref])
     return enc, ref
 
 
 def source_graphs(name, rounds):
     """Compare a small SDQL fixture's start, unions, rewrites, and final goal."""
     path = ROOT / "slotted" / "tests" / f"{name}.egg"
-    src = E.sc.Source(path)
-    lang = E.pf.reference_language()
-    forms = E.sc.parse(path.read_text())
+    src = W.sc.Source(path)
+    lang = W.pf.reference_language()
+    forms = W.sc.parse(path.read_text())
     start = next(f[2] for f in forms if f[:2] == ["let", "start"])
     target = next(f[1][2] for f in forms if f[0] == "check")
     spec = (
         "\n".join(
             [
                 f"rounds {rounds}",
-                *E.ctor_lines(lang),
+                *W.ctor_lines(lang),
                 f"term {lang.sexpr(src.term(start, ground=True))}",
                 "term (var $0)",
                 *(
@@ -70,13 +74,13 @@ def source_graphs(name, rounds):
                     for f in forms
                     if f[0] == "union"
                 ),
-                *E.rule_lines(lang, path, None, False),
+                *W.rule_lines(lang, path, None, False),
                 f"goal {lang.sexpr(src.term(target, ground=True))}",
             ]
         )
         + "\n"
     )
-    return graphs(name, E.sc.compile_source(src), spec, lang)
+    return graphs(name, W.sc.compile_source(src), spec, lang)
 
 
 def substitution_refresh():
@@ -141,11 +145,11 @@ def count_round_budget():
         path.write_text(
             '(include "slotted/languages/toy.egg")\n(rewrite (Null) (F $0 $0))\n(let start (Null))\n(run 1)\n'
         )
-        program = E.sc.compile_source(E.sc.Source(path))
+        program = W.sc.compile_source(W.sc.Source(path))
     # Installed after the requested run: any additional user-rule step is an error.
     program += '\n(rule () ((panic "graph collection exceeded the round budget")))\n'
-    row = E.Row("regression", "count-budget", "encoding", 1)
-    E.encoding_counts(program, "count-budget", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
+    row = R.Row("regression", "count-budget", "encoding", 1)
+    V.encoding_counts(program, "count-budget", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
     assert row.graph is not None, row.graph_issue
     assert row.graph.summary() == (2, 3) == (row.classes, row.nodes)
     assert row.saturated == "?"
@@ -158,10 +162,10 @@ def raw_node_counts():
         path.write_text(
             '(include "slotted/languages/toy.egg")\n(let a (F $1 (Null)))\n(let b (F $2 (Null)))\n(run 0)\n'
         )
-        program = E.sc.compile_source(E.sc.Source(path))
+        program = W.sc.compile_source(W.sc.Source(path))
         path.write_text(program)
         subprocess.run(
-            [str(CHECK_CONFIG.egglog), "--slotted-encoded", "--to-json", *E.ISO.SERIALIZE_LIMITS, str(path)],
+            [str(CHECK_CONFIG.egglog), "--slotted-encoded", "--to-json", *V.ISO.SERIALIZE_LIMITS, str(path)],
             capture_output=True,
             text=True,
             check=True,
@@ -177,32 +181,32 @@ def raw_node_counts():
             if node["op"] == "map-of" and [nodes[c]["op"] for c in node["children"]] == pairs
         )
 
-    original, issues = E.ISO.build_encoding_graph(doc)
+    original, issues = V.ISO.build_encoding_graph(doc)
     assert not issues and original.summary() == (3, 3), issues
     extra = copy.deepcopy(next(n for n in nodes.values() if n["op"] == "F"))
     # The retired invocation has a different raw key and frame: F($2, Null)
     # instead of F($1, Null). Both translate to the same slotted node.
     slots_two = nodes[renaming_node(["2", "2"])]["eclass"]
-    follower = next(n for n in nodes.values() if n["op"] == E.ISO.SYM.class_slots and n["eclass"] == slots_two)
+    follower = next(n for n in nodes.values() if n["op"] == V.ISO.SYM.class_slots and n["eclass"] == slots_two)
     extra["eclass"] = nodes[follower["children"][0]]["eclass"]
     extra["children"][0] = renaming_node(["0", "2"])
     nodes["unretired-F"] = extra
-    duplicated, issues = E.ISO.build_encoding_graph(doc)
+    duplicated, issues = V.ISO.build_encoding_graph(doc)
     assert not issues and duplicated.summary() == (3, 4), issues
-    witness, _why = E.ISO.find_isomorphism(original, duplicated)
+    witness, _why = V.ISO.find_isomorphism(original, duplicated)
     assert witness is None
 
     def dump(cmd, **_kwargs):
         Path(cmd[-1]).with_suffix(".json").write_text(json.dumps(doc))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    row = E.Row("regression", "raw-node-count", "encoding", 0)
+    row = R.Row("regression", "raw-node-count", "encoding", 0)
     # A future reader regression must not defeat the independent raw count.
     with (
-        patch.object(E.subprocess, "run", side_effect=dump),
-        patch.object(E.ISO, "build_encoding_graph", return_value=(original, [])),
+        patch.object(subprocess, "run", side_effect=dump),
+        patch.object(V.ISO, "build_encoding_graph", return_value=(original, [])),
     ):
-        E.encoding_counts(program, "raw-node-count", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
+        V.encoding_counts(program, "raw-node-count", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
     assert row.nodes == 4 and row.graph is None
     assert "raw constructor count 4 disagrees" in row.graph_issue, row.graph_issue
 
@@ -217,12 +221,12 @@ def verdicts():
 
     enc, ref = symmetry_case(41, False)
     assert enc.classes > 40 and enc.verdict(ref) == "isomorphic", enc.vs_ref
-    E.compare([enc, ref], search_cap=0)
+    V.compare([enc, ref], search_cap=0)
     assert enc.verdict(ref).startswith("inconclusive:"), enc.vs_ref
-    assert E.compare_counts(enc, ref) == "same counts"
+    assert V.compare_counts(enc, ref) == "same counts"
     assert f"{enc.classes}/{enc.nodes}" in R.graph_cell(enc)
 
-    witness, why = E.ISO.find_isomorphism(ref.graph, enc.graph)
+    witness, why = V.ISO.find_isomorphism(ref.graph, enc.graph)
     assert witness is not None, why
     # Even a broken checker that always accepts must not override the simple counts.
     for side in (enc, ref):
@@ -230,26 +234,26 @@ def verdicts():
             for value in (getattr(side, name) + 1, None):
                 with (
                     patch.object(side, name, value),
-                    patch.object(E.ISO, "find_isomorphism", return_value=(witness, None)) as search,
-                    patch.object(E.ISO, "verify", return_value=None) as verify,
+                    patch.object(V.ISO, "find_isomorphism", return_value=(witness, None)) as search,
+                    patch.object(V.ISO, "verify", return_value=None) as verify,
                 ):
-                    E.compare([enc, ref])
+                    V.compare([enc, ref])
                     prefix = "inconclusive: counts unavailable" if value is None else f"different: {name} "
                     assert enc.verdict(ref).startswith(prefix), enc.vs_ref
                     search.assert_not_called()
                     verify.assert_not_called()
     with (
-        patch.object(E.ISO, "find_isomorphism", return_value=(witness, None)),
-        patch.object(E.ISO, "verify", return_value="deliberately invalid witness"),
+        patch.object(V.ISO, "find_isomorphism", return_value=(witness, None)),
+        patch.object(V.ISO, "verify", return_value="deliberately invalid witness"),
     ):
-        E.compare([enc, ref])
+        V.compare([enc, ref])
     assert enc.verdict(ref).startswith("inconclusive: witness rejected"), enc.vs_ref
 
     with patch.object(ref, "graph", None):
-        E.compare([enc, ref])
+        V.compare([enc, ref])
         assert enc.verdict(ref) == "inconclusive: no reference graph"
     enc.graph = None
-    E.compare([enc, ref])
+    V.compare([enc, ref])
     assert enc.verdict(ref) == "inconclusive: no encoding graph"
     return enc, ref
 
@@ -257,16 +261,16 @@ def verdicts():
 def exit_status(enc, ref):
     enc.goal = ref.goal = "yes"
     sides = ("encoding", "ref-multi")
-    assert not E.successful([], sides, True)
-    assert not E.successful([enc], sides, True)
+    assert not V.successful([], sides, True)
+    assert not V.successful([enc], sides, True)
     with tempfile.TemporaryDirectory(prefix="slotted-eval-check-") as tmp:
         path = Path(tmp) / "report.jsonl"
         for verdict in ("isomorphic", "different: symmetry group", "inconclusive: search cap", "same rows", None):
             enc.vs_ref = (
-                {} if verdict is None else {"ref-multi": E.Comparison(enc.observation, ref.observation, verdict)}
+                {} if verdict is None else {"ref-multi": R.Comparison(enc.observation, ref.observation, verdict)}
             )
-            assert E.successful([enc, ref], sides, True) == (verdict == "isomorphic")
-            assert E.successful([enc, ref], sides, False)  # explicitly goal-only
+            assert V.successful([enc, ref], sides, True) == (verdict == "isomorphic")
+            assert V.successful([enc, ref], sides, False)  # explicitly goal-only
             path.write_text("".join(json.dumps(cached_record(row, "regression")) + "\n" for row in (enc, ref)))
             result = subprocess.run(
                 [
@@ -286,13 +290,13 @@ def exit_status(enc, ref):
             if verdict != "isomorphic":
                 assert "encoding vs ref-multi" in result.stdout.split(R.ERROR_TITLE)[1]
         # Loading a report also checks counts, even if its stored verdict is positive.
-        enc.vs_ref = {"ref-multi": E.Comparison(enc.observation, ref.observation, "isomorphic")}
+        enc.vs_ref = {"ref-multi": R.Comparison(enc.observation, ref.observation, "isomorphic")}
         for side in (enc, ref):
             for name in ("classes", "nodes"):
                 for value in (getattr(side, name) + 1, None):
                     with patch.object(side, name, value):
-                        assert not E.successful([enc, ref], sides, True)
-                        assert E.successful([enc, ref], sides, False)
+                        assert not V.successful([enc, ref], sides, True)
+                        assert V.successful([enc, ref], sides, False)
                         path.write_text(
                             "".join(json.dumps(cached_record(row, "regression")) + "\n" for row in (enc, ref))
                         )
@@ -312,23 +316,29 @@ def exit_status(enc, ref):
                         assert result.returncode == 1, (name, value, result.stdout, result.stderr)
                         banner = result.stdout.split(R.ERROR_TITLE)[1].split("## Full report")[0]
                         assert ("counts unavailable" if value is None else f"different: {name}") in banner
-    enc.vs_ref = {"ref-multi": E.Comparison(enc.observation, ref.observation, "isomorphic")}
+    enc.vs_ref = {"ref-multi": R.Comparison(enc.observation, ref.observation, "isomorphic")}
     for enc_goal, ref_goal in (("yes", "no"), ("no", "yes"), ("no", "no")):
         enc.goal, ref.goal = enc_goal, ref_goal
         for counts in (True, False):
-            assert not E.successful([enc, ref], sides, counts)
+            assert not V.successful([enc, ref], sides, counts)
 
 
 def goal_reporting():
     # A short budget actually misses the goal on all sides. Equal graphs
     # alone must not turn this into a successful benchmark.
-    rows = list(E.array_rows([0], 1, E.SIDES, True, 30, config=CHECK_CONFIG))
+    rows = E.collect_workload(
+        W.array_workload(0, rounds=1),
+        argparse.Namespace(counts=True, timeout=30, jobs=1),
+        R.SIDES,
+        CHECK_CONFIG,
+        R.quiet_progress,
+    )
     assert all(r.goal == "no" for r in rows), [r.as_dict("test") for r in rows]
     by_side = {r.side: r for r in rows}
-    assert set(by_side) == set(E.SIDES)
-    for encoding, reference in E.EXACT_PAIRS.items():
+    assert set(by_side) == set(R.SIDES)
+    for encoding, reference in R.EXACT_PAIRS.items():
         assert by_side[encoding].verdict(by_side[reference]) == "isomorphic"
-    assert not E.successful(rows, E.SIDES, True)
+    assert not V.successful(rows, R.SIDES, True)
 
     # Report outcomes independently: nested may miss a goal encoding reaches.
     # A timed failed run must never put "no (1.2)" in its elapsed-time column.
@@ -337,7 +347,7 @@ def goal_reporting():
     nested.seconds = 1.2
     for outcome in ("no", "timeout", "error"):
         nested.goal = outcome
-        head, table = R.pivot([enc, nested], E.SIDES)
+        head, table = R.pivot([enc, nested], R.SIDES)
         cells = dict(zip(head, table[0], strict=True))
         enc_goal = next(k for k in head if k.startswith("egglog goal"))
         nested_goal = next(k for k in head if k.startswith("ref-nested goal"))
@@ -346,7 +356,7 @@ def goal_reporting():
         assert cells["ref-nested elapsed (s)"] == "1.2"
         assert cells["ref-multi goal"] == cells["ref-multi elapsed (s)"] == ""
         assert R.graph_cell(nested) in table[0]
-        assert not E.successful([enc, nested], ("encoding", "ref-nested"), True)
+        assert not V.successful([enc, nested], ("encoding", "ref-nested"), True)
         for rendered in (R.markdown(head, table), R.html([("Full report", "", head, table)])):
             assert "elapsed (s)" in rendered and "no (1.2)" not in rendered
         long = dict(zip(R.LONG_HEAD, R.long_cells(nested), strict=True))
@@ -354,11 +364,11 @@ def goal_reporting():
 
 
 def summary_reporting():
-    enc = E.Row("sdql", "mmm_1st-44rules", "encoding", 30, 44)
+    enc = R.Row("sdql", "mmm_1st-44rules", "encoding", 30, 44)
     enc.goal, enc.seconds, enc.nodes, enc.classes, enc.saturated = "yes", 1.2, 1_234, 56, "yes"
-    nested = E.Row("sdql", enc.case, "ref-nested", 30, 44)
+    nested = R.Row("sdql", enc.case, "ref-nested", 30, 44)
     nested.goal, nested.seconds = "no", 0.5
-    snapshot = E.Row("sdql", enc.case, "ref-nested-snapshot", 30, 44)
+    snapshot = R.Row("sdql", enc.case, "ref-nested-snapshot", 30, 44)
     snapshot.goal, snapshot.seconds = "yes", 9.9
     head, table = R.summary([nested, enc, snapshot], ("encoding", "ref-multi"))
     assert head == ("Benchmark", "egglog", "ref-multi")
@@ -367,7 +377,7 @@ def summary_reporting():
     assert head == ("Benchmark", "egglog-no-aliasing", "ref-nested")
     assert table == [["MMM (1st)", "—", "0.5"]]
     # The snapshot timing must never be relabelled as the syntactic baseline.
-    assert R.summary([snapshot], E.SIDES)[1][0][-1] == "—"
+    assert R.summary([snapshot], R.SIDES)[1][0][-1] == "—"
 
     # Missing/failed measurements stay explicit, including in a timing-only run.
     for goal in ("timeout", "error: detailed diagnostic", "?"):
@@ -375,15 +385,15 @@ def summary_reporting():
         nested.seconds, nested.nodes, nested.classes = None, None, 0
         head, table = R.summary([nested], ("ref-nested",))
         assert table == [["MMM (1st)", "—"]]
-        errors = E.failures([nested], ("ref-nested",), False)
+        errors = V.failures([nested], ("ref-nested",), False)
         assert len(errors) == 1 and f"goal not reached ({goal})" in errors[0]
 
     # Different round budgets and rule subsets cannot collapse into one group.
-    small = E.Row("sdql", "batax_2nd-12rules", "encoding", 12, 12)
-    full = E.Row("sdql", "batax_2nd-44rules", "encoding", 12, 44)
-    longer = E.Row("sdql", full.case, "encoding", 30, 44)
-    array = E.Row("array", "goal-2d-4f-N3", "encoding", 6)
-    custom = E.Row("custom", "<case&>", "encoding", 1, 7)
+    small = R.Row("sdql", "batax_2nd-12rules", "encoding", 12, 12)
+    full = R.Row("sdql", "batax_2nd-44rules", "encoding", 12, 44)
+    longer = R.Row("sdql", full.case, "encoding", 30, 44)
+    array = R.Row("array", "goal-2d-4f-N3", "encoding", 6)
+    custom = R.Row("custom", "<case&>", "encoding", 1, 7)
     rows = [enc, nested, snapshot, small, full, longer, array, custom]
     head, table = R.summary(rows, ("encoding",))
     labels = [row[0] for row in table]
@@ -411,7 +421,7 @@ def summary_reporting():
                     "--from",
                     path,
                     "--side",
-                    ",".join(E.SIDES),
+                    ",".join(R.SIDES),
                     "--html",
                     page,
                     *(["--long"] if long else []),
@@ -428,7 +438,7 @@ def summary_reporting():
             assert result.stdout.index("## Nested matching") < result.stdout.index(R.ERROR_TITLE)
             assert result.stdout.index(R.ERROR_TITLE) < result.stdout.index("## Full report")
             assert "goal not reached" in result.stdout.split(R.ERROR_TITLE)[1]
-            full_table = (R.LONG_HEAD, [R.long_cells(r) for r in rows]) if long else R.pivot(rows, E.SIDES)
+            full_table = (R.LONG_HEAD, [R.long_cells(r) for r in rows]) if long else R.pivot(rows, R.SIDES)
             assert R.markdown(*full_table) in result.stdout
             markup = page.read_text()
             assert markup.count("<table>") == 3
@@ -470,9 +480,10 @@ rule
         ("ref-multi", "atom root app lam t\natom lam lam $x body", "snapshot", "f"),
     ):
         spec = head + lhs + f"\nrhs root ?body[(var $x) := ?t]\ngoal ({op} (null) (null))\n"
-        row = E.Row("regression", "substitution-policy", side, 1)
+        row = R.Row("regression", "substitution-policy", side, 1)
         with patch.dict(os.environ, {"XMULTI_SUBST": "invalid-ambient-policy"}):
-            E.run_reference(spec, row, 30, True, config=CHECK_CONFIG)
+            run.run_reference(spec, row, 30, config=CHECK_CONFIG)
+            V.reference_counts(spec, row, 30, config=CHECK_CONFIG)
         assert row.goal == "yes", row.as_dict("test")
         assert row.substitution == policy
         graph = row.graph
@@ -488,7 +499,7 @@ rule
             if elems == (("child", null, ()), ("child", null, ()))
         }
         assert op in substituted and other not in substituted, graph.nodes
-        loaded = E.Row.from_dict(row.as_dict("test"))
+        loaded = R.Row.from_dict(row.as_dict("test"))
         assert loaded.substitution == policy
         assert f"subst {policy}" in R.long_cells(loaded)[2]
         assert f"subst {policy}" in R.pivot([loaded], (side,))[0][4]
@@ -515,7 +526,7 @@ def merged_observations():
         ):
             path.write_text("".join(json.dumps(row) + "\n" for row in records))
             rows, _ = E.load_rows(path, merged=True)
-            assert E.successful(rows, sides, True) == valid
+            assert V.successful(rows, sides, True) == valid
             for extra in ([], ["--long"]):
                 result = subprocess.run(
                     [sys.executable, E.__file__, "--from", path, "--merged", "--side", ",".join(sides), *extra],
@@ -525,9 +536,9 @@ def merged_observations():
                 )
                 assert result.returncode == (0 if valid else 1), result.stderr
                 assert ("isomorphic" in result.stdout) == valid, result.stdout
-        replaced_encoding = E.Row.from_dict(enc.as_dict("test"))
+        replaced_encoding = R.Row.from_dict(enc.as_dict("test"))
         replaced_encoding.observation = "another-observation"
-        assert not E.successful([replaced_encoding, reference], sides, True)
+        assert not V.successful([replaced_encoding, reference], sides, True)
         old = cached_record(enc, "old-schema")
         del old["report_schema_version"]
         path.write_text(json.dumps(old) + "\n")
@@ -539,8 +550,8 @@ def merged_observations():
         )
         assert result.returncode != 0 and "recompute" in result.stderr
 
-    small = E.Row("sdql", "batax", "ref-multi", 12, 12)
-    full = E.Row("sdql", "batax", "ref-multi", 12, 44)
+    small = R.Row("sdql", "batax", "ref-multi", 12, 12)
+    full = R.Row("sdql", "batax", "ref-multi", 12, 44)
     small.checks, full.checks = "off", None
     small.substitution = full.substitution = "snapshot"
     head, table = R.pivot([small, full], ("ref-multi",))
@@ -550,14 +561,14 @@ def merged_observations():
 
 def graph_failure_reasons():
     def row():
-        return E.Row("regression", "diagnostics", "encoding", 1)
+        return R.Row("regression", "diagnostics", "encoding", 1)
 
-    with tempfile.TemporaryDirectory(prefix="slotted-eval-errors-") as tmp, patch.object(E, "SCRATCH", Path(tmp)):
+    with tempfile.TemporaryDirectory(prefix="slotted-eval-errors-") as tmp, patch.object(V, "SCRATCH", Path(tmp)):
         failed = row()
-        with patch.object(E.subprocess, "run", side_effect=subprocess.TimeoutExpired("egglog", 1)):
-            E.encoding_counts("", "timeout", X.LANG, failed, 1)
+        with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("egglog", 1)):
+            V.encoding_counts("", "timeout", X.LANG, failed, 1)
         assert "exceeded timeout" in failed.graph_issue
-        assert E.Row.from_dict(failed.as_dict("test")).graph_issue == failed.graph_issue
+        assert R.Row.from_dict(failed.as_dict("test")).graph_issue == failed.graph_issue
         assert failed.graph_issue in R.graph_cell(failed)
 
         def dump(args, **_kwargs):
@@ -565,11 +576,11 @@ def graph_failure_reasons():
             return subprocess.CompletedProcess(args, 0, "", "")
 
         with (
-            patch.object(E.subprocess, "run", side_effect=dump),
-            patch.object(E.ISO, "build_encoding_graph", side_effect=RuntimeError("reader bug")),
+            patch.object(subprocess, "run", side_effect=dump),
+            patch.object(V.ISO, "build_encoding_graph", side_effect=RuntimeError("reader bug")),
         ):
             try:
-                E.encoding_counts("", "bug", X.LANG, row(), 1)
+                V.encoding_counts("", "bug", X.LANG, row(), 1)
             except RuntimeError as exc:
                 assert str(exc) == "reader bug"
             else:
@@ -582,14 +593,15 @@ def graph_failure_reasons():
         (0, "CLASS c SLOTS x\nGROUP c ?\n", "", "reference graph unreadable"),
         (0, "", "", "reference graph dump is empty"),
     ):
-        reference = E.Row("regression", "diagnostics", "ref-multi", 1)
+        reference = R.Row("regression", "diagnostics", "ref-multi", 1)
         dump = subprocess.CompletedProcess([], code, stdout, stderr)
-        with patch.object(E.subprocess, "run", side_effect=[timed, dump]):
-            E.run_reference("", reference, 1, True)
+        with patch.object(subprocess, "run", side_effect=[timed, dump]):
+            run.run_reference("", reference, 1)
+            V.reference_counts("", reference, 1)
         assert reference.goal == "yes" and reason in reference.graph_issue
         assert reference.graph is None and reference.classes is None and reference.nodes is None
         failed = row()
-        E.compare([failed, reference])
+        V.compare([failed, reference])
         assert reason in failed.verdict(reference)
 
     # Direct sizes survive the dump's symmetry cap or a timeout after SIZES.
@@ -597,21 +609,22 @@ def graph_failure_reasons():
         subprocess.CompletedProcess([], 2, "SIZES 10 20\n", "REFERENCE_LIMIT: symmetry cap"),
         subprocess.TimeoutExpired("xmulti", 1, output=b"SIZES 10 20\n"),
     ):
-        reference = E.Row("regression", "diagnostics", "ref-nested-snapshot", 1)
-        with patch.object(E.subprocess, "run", side_effect=[timed, dump]):
-            E.run_reference("", reference, 1, True)
+        reference = R.Row("regression", "diagnostics", "ref-nested-snapshot", 1)
+        with patch.object(subprocess, "run", side_effect=[timed, dump]):
+            run.run_reference("", reference, 1)
+            V.reference_counts("", reference, 1)
         assert (reference.classes, reference.nodes) == (10, 20)
         assert reference.graph is None and reference.graph_issue
         failed = row()
         failed.classes, failed.nodes = 10, 20
         failed.graph = object()
-        E.compare([failed, reference])
+        V.compare([failed, reference])
         assert failed.verdict(reference).startswith("inconclusive: no reference graph")
 
 
 def nested_comparison_policy():
     enc, ref = (
-        E.Row("regression", "nested-policy", side, 1) for side in ("encoding-no-aliasing", "ref-nested-snapshot")
+        R.Row("regression", "nested-policy", side, 1) for side in ("encoding-no-aliasing", "ref-nested-snapshot")
     )
     for row in (enc, ref):
         row.goal, row.classes, row.nodes = "yes", 1, 1
@@ -619,9 +632,9 @@ def nested_comparison_policy():
     with tempfile.TemporaryDirectory(prefix="slotted-nested-gate-") as tmp:
         path = Path(tmp) / "rows.jsonl"
         for verdict in ("isomorphic", "different: node sets", "inconclusive: cap", None):
-            enc.vs_ref = {} if verdict is None else {ref.side: E.Comparison(enc.observation, ref.observation, verdict)}
-            assert E.successful([enc, ref], sides, True) == (verdict == "isomorphic")
-            assert E.successful([enc, ref], sides, False)
+            enc.vs_ref = {} if verdict is None else {ref.side: R.Comparison(enc.observation, ref.observation, verdict)}
+            assert V.successful([enc, ref], sides, True) == (verdict == "isomorphic")
+            assert V.successful([enc, ref], sides, False)
             path.write_text("".join(json.dumps(cached_record(r, "test")) + "\n" for r in (enc, ref)))
             result = subprocess.run(
                 [sys.executable, E.__file__, "--from", path, "--side", ",".join(sides)],
@@ -633,65 +646,71 @@ def nested_comparison_policy():
             assert (R.ERROR_TITLE in result.stdout) == (verdict != "isomorphic")
             if verdict != "isomorphic":
                 assert "encoding-no-aliasing vs ref-nested-snapshot" in result.stdout.split(R.ERROR_TITLE)[1]
-    enc.vs_ref = {ref.side: E.Comparison(enc.observation, ref.observation, "isomorphic")}
-    assert not E.successful([enc], sides, True)
+    enc.vs_ref = {ref.side: R.Comparison(enc.observation, ref.observation, "isomorphic")}
+    assert not V.successful([enc], sides, True)
     with patch.object(ref, "nodes", 2):
-        assert not E.successful([enc, ref], sides, True)
+        assert not V.successful([enc, ref], sides, True)
 
     # Both encodings share one workload but have distinct observation identities.
-    full = E.Row("regression", enc.case, "encoding", 1)
+    full = R.Row("regression", enc.case, "encoding", 1)
     with tempfile.TemporaryDirectory(prefix="slotted-nested-report-") as tmp:
         path = Path(tmp) / "rows.jsonl"
         path.write_text("".join(json.dumps(cached_record(r, "test")) + "\n" for r in (enc, ref, full)))
         loaded, _ = E.load_rows(path, merged=True)
         assert len(loaded) == 3 and loaded[0].verdict(loaded[1]) == "isomorphic"
         for long in (False, True):
-            sections = R.report_sections(loaded, E.SIDES, long)
+            sections = R.report_sections(loaded, R.SIDES, long)
             assert sections[0][2] == ("Benchmark", "egglog", "ref-multi")
             assert sections[1][2] == ("Benchmark", "egglog-no-aliasing", "ref-nested")
             assert "egglog-no-aliasing" in R.markdown(*sections[-1][2:])
             assert "encoding" not in R.markdown(*sections[-1][2:])
-        head, table = R.pivot(loaded, E.SIDES)
+        head, table = R.pivot(loaded, R.SIDES)
         assert len(table) == 1
         cells = dict(zip(head, table[0], strict=True))
         assert cells["egglog-no-aliasing vs ref-nested-snapshot"] == "isomorphic"
-        assert len(R.summary(loaded, E.SIDES)[1]) == 1
+        assert len(R.summary(loaded, R.SIDES)[1]) == 1
 
 
 def combined_comparisons():
-    rows = list(E.sdql_rows([("mmm_sum", "1st")], 44, None, E.SIDES, True, 30, config=CHECK_CONFIG))
-    assert E.successful(rows, E.SIDES, True), [r.as_dict("test") for r in rows]
+    rows = E.collect_workload(
+        W.sdql_workload("mmm_sum", "1st"),
+        argparse.Namespace(counts=True, timeout=30, jobs=1),
+        R.SIDES,
+        CHECK_CONFIG,
+        R.quiet_progress,
+    )
+    assert V.successful(rows, R.SIDES, True), [r.as_dict("test") for r in rows]
     by_side = {r.side: r for r in rows}
-    for missing in E.SIDES:
+    for missing in R.SIDES:
         partial = [r for r in rows if r.side != missing]
         for counts in (False, True):
-            assert not E.successful(partial, E.SIDES, counts)
-    head, table = R.pivot(rows, E.SIDES)
+            assert not V.successful(partial, R.SIDES, counts)
+    head, table = R.pivot(rows, R.SIDES)
     assert len(table) == 1
     cells = dict(zip(head, table[0], strict=True))
-    for encoding, reference in E.EXACT_PAIRS.items():
+    for encoding, reference in R.EXACT_PAIRS.items():
         enc, ref = by_side[encoding], by_side[reference]
         assert cells[f"{R.side_label(encoding)} vs {reference}"] == "isomorphic"
         # The other encoding's successful comparison cannot mask this one's failure.
         for verdict in ("different: node sets", "inconclusive: cap"):
-            comparison = E.Comparison(enc.observation, ref.observation, verdict)
+            comparison = R.Comparison(enc.observation, ref.observation, verdict)
             with patch.dict(enc.vs_ref, {reference: comparison}):
-                assert not E.successful(rows, E.SIDES, True)
-                assert E.successful(rows, E.SIDES, False)
-                assert E.failures(rows, E.SIDES, True) == [
+                assert not V.successful(rows, R.SIDES, True)
+                assert V.successful(rows, R.SIDES, False)
+                assert V.failures(rows, R.SIDES, True) == [
                     f"ΣMMM (1st) [{enc.rounds} rounds]: {encoding} vs {reference}: {verdict}"
                 ]
-                head, table = R.pivot(rows, E.SIDES)
+                head, table = R.pivot(rows, R.SIDES)
                 assert dict(zip(head, table[0], strict=True))[f"{R.side_label(encoding)} vs {reference}"] == verdict
         with patch.object(enc, "observation", "new-run"):
-            assert not E.successful(rows, E.SIDES, True)
-            assert "selected observations have not been compared" in E.failures(rows, E.SIDES, True)[0]
+            assert not V.successful(rows, R.SIDES, True)
+            assert "selected observations have not been compared" in V.failures(rows, R.SIDES, True)[0]
 
     # Syntactic nested graphs remain diagnostic; their differences do not fail an
     # otherwise valid report or masquerade as failure of the required snapshot pair.
     enc, ref = by_side["encoding-no-aliasing"], by_side["ref-nested"]
-    with patch.dict(enc.vs_ref, {ref.side: E.Comparison(enc.observation, ref.observation, "different: node sets")}):
-        assert not E.failures(rows, E.SIDES, True)
+    with patch.dict(enc.vs_ref, {ref.side: R.Comparison(enc.observation, ref.observation, "different: node sets")}):
+        assert not V.failures(rows, R.SIDES, True)
 
     with tempfile.TemporaryDirectory(prefix="slotted-combined-report-") as tmp:
         path = Path(tmp) / "rows.jsonl"
@@ -707,16 +726,16 @@ def combined_comparisons():
             assert result.returncode == 0, (result.stdout, result.stderr)
             assert "egglog-no-aliasing" in result.stdout and "ref-nested-snapshot" in result.stdout
 
-        newer = E.Row.from_dict(by_side["encoding"].as_dict("newer"))
+        newer = R.Row.from_dict(by_side["encoding"].as_dict("newer"))
         newer.observation = "different-encoding-run"
         with path.open("a") as f:
             f.write(json.dumps(cached_record(newer, "newer")) + "\n")
         loaded, _ = E.load_rows(path, merged=True)
-        assert len(loaded) == len(E.SIDES)
+        assert len(loaded) == len(R.SIDES)
         group = {r.side: r for r in loaded}
         assert group["encoding-no-aliasing"].verdict(group["ref-nested-snapshot"]) == "isomorphic"
         assert group["encoding"].verdict(group["ref-multi"]).startswith("inconclusive:")
-        assert not E.successful(loaded, E.SIDES, True)
+        assert not V.successful(loaded, R.SIDES, True)
 
 
 def zero_round_budget():
@@ -769,17 +788,17 @@ def parallel_collection():
             for r in rows
         ]
 
-    serial = E.collect(args, E.SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
+    serial = E.collect(args, R.SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
     args.jobs = 2
-    parallel = E.collect(args, E.SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
+    parallel = E.collect(args, R.SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
     # The small round budget misses the array goal, even though its graphs agree.
-    assert not E.successful(serial, E.SIDES, True) and not E.successful(parallel, E.SIDES, True)
+    assert not V.successful(serial, R.SIDES, True) and not V.successful(parallel, R.SIDES, True)
     assert evidence(serial) == evidence(parallel)
     assert all(r.graph is None for r in parallel)
     loaded = [R.Row.from_dict(r.as_dict("parallel")) for r in parallel]
     assert all(r.jobs == 2 for r in loaded)
-    assert not E.successful(loaded, E.SIDES, True)
-    sections = R.report_sections(loaded, E.SIDES)
+    assert not V.successful(loaded, R.SIDES, True)
+    sections = R.report_sections(loaded, R.SIDES)
     notes = " ".join(note for _, note, _, _ in sections)
     assert "contention" in notes and "worker limits are in the full report" in notes
     for _, _, head, table in sections[:2]:
@@ -793,10 +812,10 @@ def parallel_collection():
     )
     enc, ref = limited
     assert enc.goal == ref.goal == "no"
-    assert E.compare_counts(enc, ref) == "same counts"
+    assert V.compare_counts(enc, ref) == "same counts"
     assert ref.graph_issue and "REFERENCE_LIMIT" in ref.graph_issue
     assert enc.verdict(ref).startswith("inconclusive:")
-    assert not E.successful(limited, sides, True)
+    assert not V.successful(limited, sides, True)
 
 
 def import_without_compilation():
@@ -815,8 +834,37 @@ with patch.object(compiler, "compile_source", side_effect=AssertionError("compil
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def separate_timing_and_graph_runs():
+    """Failed goals still get untimed evidence; failed processes never certify a graph."""
+    workload = W.array_workload(0, rounds=0)
+    sides = ("ref-multi",)
+    timed = subprocess.CompletedProcess([], 0, "GOAL no\nCONFIG substitution=snapshot\n", "")
+    dump = subprocess.CompletedProcess([], 2, "SIZES 10 20\n", "REFERENCE_LIMIT: symmetry cap")
+    for counts in (False, True):
+        args = argparse.Namespace(counts=counts, timeout=30, jobs=1)
+        with patch.object(subprocess, "run", side_effect=[timed, dump]) as process:
+            (row,) = E.collect_workload(workload, args, sides, CHECK_CONFIG, R.quiet_progress)
+        assert process.call_count == (2 if counts else 1)
+        assert row.goal == "no" and row.seconds is not None
+        assert (row.classes, row.nodes) == ((10, 20) if counts else (None, None))
+        assert not V.successful([row], sides, counts)
+
+    args.counts = True
+    for failed in (
+        subprocess.TimeoutExpired("xmulti", 30),
+        subprocess.CompletedProcess([], 1, "", "reference error"),
+        subprocess.CompletedProcess([], 0, "GOAL yes\nCONFIG substitution=syntactic\n", ""),
+    ):
+        with patch.object(subprocess, "run", side_effect=[failed]) as process:
+            (row,) = E.collect_workload(workload, args, sides, CHECK_CONFIG, R.quiet_progress)
+        assert process.call_count == 1
+        assert row.graph_issue and row.classes is None and row.nodes is None
+        assert not V.successful([row], sides, True)
+
+
 def main():
     import_without_compilation()
+    separate_timing_and_graph_runs()
     substitution_policies()
     nested_comparison_policy()
     combined_comparisons()
