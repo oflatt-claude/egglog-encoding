@@ -5,7 +5,8 @@ A check passes only if its tool exits 0 AND its summary line says everything agr
 so a tool that runs zero cases fails rather than reporting a vacuous pass. The
 recorded totals are floors: adding cases is fine, losing them is not.
 
-Needs `target/debug/egglog` and `slotted/xmulti/target/debug/xmulti`.
+Needs `target/debug/egglog`, `target/debug/egglog-experimental`, and
+`slotted/xmulti/target/debug/xmulti`.
 
 Usage:
     ./check-slotted.py           everything
@@ -31,9 +32,9 @@ XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 # derived artifact.
 
 
-#: Compiled slotted tests. Each is what running that test runs, committed so a change
-#: in the compiler shows up as a diff -- the same reason the proof encoding snapshots
-#: its generated program.
+#: Compiled fixtures from the independent Python oracle. Rust execution is checked
+#: against that oracle by rust-source-pass and rust-source-fuzz; these snapshots
+#: make changes to the oracle's generated programs visible in review.
 SNAPSHOT_DIR = ROOT / "slotted" / "tests" / "snapshots"
 EMIT_SNAPSHOTS = ("slotted/run-slotted-tests.py", "--emit")
 

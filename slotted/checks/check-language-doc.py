@@ -3,8 +3,8 @@
 
 The reference for the language states what a claim means, and prose drifts. A fenced
 block marked ```slotted is a WHOLE program: this extracts each one and runs it through
-`slotted-egglog.py`, so an example that stopped being true is a failure rather than a
-sentence nobody re-read.
+the Rust CLI and the Python oracle, so an example that stopped being true is a
+failure rather than a sentence nobody re-read.
 
 Blocks left untagged are syntax illustrations -- a constructor line, a rule shape -- and
 are not programs. What has to be true of those is that the forms they use exist, which
@@ -21,7 +21,10 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOC = ROOT / "slotted" / "LANGUAGE.md"
-COMPILE = ROOT / "slotted" / "slotted-egglog.py"
+COMPILERS = {
+    "Rust": [str(ROOT / "target/debug/egglog-experimental"), "--slotted"],
+    "Python": [sys.executable, str(ROOT / "slotted/slotted-egglog.py")],
+}
 
 #: Every claim the doc names in its table, so a claim can be added there and forgotten
 #: about here. Each has to appear in at least one runnable example.
@@ -45,13 +48,16 @@ def main():
         with tempfile.NamedTemporaryFile("w", suffix=".egg", delete=False) as f:
             f.write(src)
             path = f.name
-        r = subprocess.run([sys.executable, str(COMPILE), path], capture_output=True, text=True, timeout=1800, cwd=ROOT)
-        ok = r.returncode == 0
-        if not ok:
-            err = [ln for ln in (r.stdout + r.stderr).splitlines() if "ERROR" in ln or "FAIL" in ln]
-            bad.append((i, err[-1][:120] if err else "?"))
-        pathlib.Path(path).unlink(missing_ok=True)
-        print(f"  {'ok  ' if ok else 'FAIL'} block {i}  {first[:58]}")
+        try:
+            for compiler, command in COMPILERS.items():
+                r = subprocess.run([*command, path], capture_output=True, text=True, timeout=1800, cwd=ROOT)
+                ok = r.returncode == 0
+                if not ok:
+                    err = [ln for ln in (r.stdout + r.stderr).splitlines() if "ERROR" in ln or "FAIL" in ln]
+                    bad.append((i, f"{compiler}: " + (err[-1][:120] if err else "?")))
+                print(f"  {'ok  ' if ok else 'FAIL'} {compiler}: block {i}  {first[:58]}")
+        finally:
+            pathlib.Path(path).unlink(missing_ok=True)
 
     # A claim in the table nobody ever runs is a claim nobody checked.
     unused = [c for c in CLAIMS if not any(f"({c} " in p for p in progs)]
@@ -61,7 +67,7 @@ def main():
     if unused:
         print(f"       claims in the table with no runnable example: {', '.join(unused)}")
     unexercised = f", {len(unused)} claims unexercised" if unused else ""
-    print(f"\n{len(progs) - len(bad)}/{len(progs)} examples run{unexercised}")
+    print(f"\n{len(progs) - len({i for i, _ in bad})}/{len(progs)} examples run through both compilers{unexercised}")
     return 1 if bad or unused else 0
 
 

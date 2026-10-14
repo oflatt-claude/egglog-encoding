@@ -176,8 +176,7 @@ fn cli_reuses_files_includes_serialization_and_timing_reports() {
     }
 }
 
-#[test]
-fn cli_transforms_complete_stdin_commands() {
+fn repl(source: &str) -> std::process::Output {
     let mut child = cli()
         .args(["--slotted", "--mode", "interactive"])
         .stdin(Stdio::piped())
@@ -186,13 +185,16 @@ fn cli_transforms_complete_stdin_commands() {
         .spawn()
         .unwrap();
     let mut input = child.stdin.take().unwrap();
-    writeln!(
-        input,
-        "{LANGUAGE}\n(let input (F $1\n $2))\n(run 0)\n(check (slots input $1 $2))"
-    )
-    .unwrap();
+    writeln!(input, "{source}").unwrap();
     drop(input);
-    let result = child.wait_with_output().unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn cli_transforms_complete_stdin_commands() {
+    let result = repl(&format!(
+        "{LANGUAGE}\n(let input (F $1\n $2))\n(run 0)\n(check (slots input $1 $2))"
+    ));
     assert!(
         result.status.success(),
         "{}",
@@ -201,6 +203,31 @@ fn cli_transforms_complete_stdin_commands() {
     let stdout = String::from_utf8(result.stdout).unwrap();
     assert!(!stdout.contains("(error)"), "{stdout}");
     assert_eq!(stdout.matches("(done)").count(), 4, "{stdout}");
+}
+
+#[test]
+fn cli_recovers_compiler_and_egraph_after_failed_inputs() {
+    let result = repl(
+        "(datatype U (Null)) (function broken)\n\
+         (datatype U (Null) (One))\n\
+         (let transient (Null)) (check (= (Null) (One))) (let later (One))\n\
+         (fail (check (= (Null) (Null))))\n\
+         (let transient (One)) (let later (Null)) (run 0)\n\
+         (check (holds transient One)) (check (holds later Null))\n\
+         (push)\n\
+         (pop) (datatype V (Gone)) (check (= (Null) (One)))\n\
+         (pop)\n\
+         (datatype V (Kept)) (let x (Kept)) (run 0) (check (holds x Kept))\n\
+         (datatype W (BadCtor)) (function cost (Missing) i64 :no-merge)\n\
+         (datatype W (GoodCtor))\n\
+         (let typed (GoodCtor)) (run 0) (check (holds typed GoodCtor))",
+    );
+    let stdout = String::from_utf8(result.stdout).unwrap();
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(result.status.success(), "{stdout}\n{stderr}");
+    assert_eq!(stdout.matches("(error)").count(), 4, "{stdout}\n{stderr}");
+    assert_eq!(stdout.matches("(done)").count(), 9, "{stdout}\n{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
 }
 
 #[test]

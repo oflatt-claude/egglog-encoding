@@ -11,11 +11,33 @@ pub(super) struct Atom {
     pub pays: Vec<Term>,
 }
 
+/// Names shared by all patterns in one rule. Frames erase a leading `?`, so
+/// freshness must use that same spelling even when generated roots retain it.
+#[derive(Default)]
+pub(super) struct PatternNames(BTreeSet<String>);
+
+impl PatternNames {
+    pub fn reserve(&mut self, name: &str) {
+        self.0.insert(fname(name).to_owned());
+    }
+
+    pub fn fresh(&mut self, stem: &str) -> String {
+        let mut name = stem.to_owned();
+        let mut suffix = 0;
+        while !self.0.insert(fname(&name).to_owned()) {
+            suffix += 1;
+            name = format!("{stem}_{suffix}");
+        }
+        name
+    }
+}
+
 pub(super) fn flatten(
     lang: &Language,
     t: &Term,
     root: &str,
     tmp: &str,
+    names: &mut PatternNames,
 ) -> Result<Vec<Atom>, String> {
     fn go(
         lang: &Language,
@@ -23,6 +45,7 @@ pub(super) fn flatten(
         root: String,
         tmp: &str,
         id: &mut usize,
+        names: &mut PatternNames,
         out: &mut Vec<Atom>,
     ) -> Result<(), String> {
         let Term::Node(n, args) = t else {
@@ -41,7 +64,7 @@ pub(super) fn flatten(
                 }
                 Term::Node(_, _) => {
                     *id += 1;
-                    let name = format!("{tmp}{id}");
+                    let name = names.fresh(&format!("{tmp}{id}"));
                     kids.push(Term::Variable(name.clone()));
                     nested.push((c, name));
                 }
@@ -55,14 +78,15 @@ pub(super) fn flatten(
             pays: pays.into_iter().cloned().collect(),
         });
         for (c, name) in nested {
-            go(lang, c, name, tmp, id, out)?;
+            go(lang, c, name, tmp, id, names, out)?;
         }
         Ok(())
     }
     let mut t = t.clone();
     lang.refresh_shadowed(&mut t);
     let mut out = Vec::new();
-    go(lang, &t, root.into(), tmp, &mut 0, &mut out)?;
+    names.reserve(root);
+    go(lang, &t, root.into(), tmp, &mut 0, names, &mut out)?;
     Ok(out)
 }
 

@@ -23,6 +23,8 @@ inputs into ordinary egglog before evaluation. It shares egglog's lexer and CLI;
 file arguments, stdin, serialization and timing reports work through the normal
 runner. Includes resolve relative to the invocation directory. Successive files
 share compiler state, and `push`/`pop` restore declarations, globals and rewrites.
+In stdin/REPL mode, a failed complete input restores both compiler and e-graph
+state, including any commands executed earlier in that input.
 The slotted flag currently requires the main backend and cannot be combined with
 term or proof encoding. The older Python compiler remains a differential test
 oracle; it is not used to execute the paper evaluation.
@@ -121,6 +123,8 @@ constructors declared.
 
 `$n` is a slot. In a binder column it **is** the bound slot; anywhere else it is an
 occurrence of that slot. Writing `$0` twice in one term means the same slot twice.
+Ground slots are signed 64-bit integers: `$01` and `$+1` both mean `$1`, and
+`$-0` means `$0`.
 
 ## Asserting an equation
 
@@ -150,6 +154,12 @@ A **pattern variable** stands for a subterm and may be written bare, `x`, which 
 egglog's spelling, or with a sigil, `?x`, which is egg's. They name the same variable, so
 one rule may mix them. A bare name that is a `let`-bound global means that global. `$x`
 is a slot literal the match solves for.
+Pattern names such as `_p` and `_t1` are valid; generated names avoid source names
+throughout the rule, including its side patterns and guards.
+
+Rewrites use the default user ruleset. A `:ruleset` option is rejected because
+`(run N)` does not select named rulesets; its phases must keep user matching and
+slotted maintenance together.
 
 There is one known lowering limitation for explicit slot occurrences. `MultiPattern`
 has one rule-global slot namespace, while the source syntax determines which binder

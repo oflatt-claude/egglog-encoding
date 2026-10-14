@@ -37,7 +37,7 @@ enc = __import__("slotted-encoder")
 
 
 TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
-SLOT = re.compile(r"\$\w+\Z")
+SLOT = re.compile(r"\$(?:[+-]?\d+|\w+)\Z")
 
 
 def parse(text):
@@ -332,7 +332,7 @@ class Source:
                 # `#` instead, and a `$` in a global's name is refused where it is bound.
                 if not ground:
                     return form
-                slot = int(form[1:]) if form[1:].isdigit() else form[1:]
+                slot = int(form[1:]) if re.fullmatch(r"[+-]?\d+", form[1:]) else form[1:]
                 return slot if column is enc.BINDER else ("var", slot)
             if form in self.spec:
                 # A CONSTRUCTOR NEEDS ITS PARENS, as it does in egglog: a nullary one is
@@ -606,11 +606,12 @@ def schedule(steps, rules):
     return enc.round_schedule(steps)
 
 
-KEYWORDS = (":name", ":when", ":ruleset", ":lead", ":fresh")
+KEYWORDS = (":name", ":when", ":lead", ":fresh")
 
 #: egglog's own `rewrite` options this language does not implement, and why. Named so the
 #: refusal says what is missing rather than listing what is not.
 EGGLOG_REWRITE_OPTIONS = {
+    ":ruleset": "named rulesets are not supported by the slotted schedule; omit :ruleset and use (run N)",
     ":subsume": "subsumption has no meaning for a class the machinery keeps several "
     "values for, and the actions it belongs with -- `set`, `delete` -- are not here either",
 }
@@ -631,7 +632,7 @@ def keywords(src, rest):
                 )
             raise SystemExit(f"{src.path.name}: expected one of {KEYWORDS}, got {kw!r}")
         i = 1
-        while i < len(rest) and rest[i] not in KEYWORDS:
+        while i < len(rest) and not (isinstance(rest[i], str) and rest[i].startswith(":")):
             i += 1
         out.append((kw, rest[1:i]))
         rest = rest[i:]
@@ -651,12 +652,12 @@ def compile_rewrite(src, form, ruleset=None, *, nested_compat=False):
     `:fresh` names the slots the right-hand side binds that the pattern never mentions,
     so the compiler mints them against everything the match already used.
 
-    `ruleset` overrides the form's own ruleset for a differential harness.
+    `ruleset` selects the lowered matcher ruleset for a differential harness.
+    Source programs use the default ruleset through the phased `(run N)` schedule.
     """
     parts = rewrite_parts(src, form)
     conds, fresh, lead = parts["conds"], parts["fresh"], parts["lead"]
     diseq, same = parts["diseq"], parts["same"]
-    ruleset = ruleset or parts["ruleset"]
     # egglog reports a rule by its `:name` and takes it as a string literal. It panics
     # on a name already live in the scope, so reuse is only legal once a `(pop)` has
     # removed the earlier rule.
@@ -671,13 +672,13 @@ def compile_rewrite(src, form, ruleset=None, *, nested_compat=False):
             f"{src.path.name}: a rewrite's left side must be a call, got {lhs!r} -- "
             "a bare variable there matches everything"
         )
-    root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False))
+    root, atoms = enc.flatten(src.lang, src.term(lhs, ground=False), names=parts["names"])
     if nested_compat and parts["equalities"]:
         raise SystemExit("--nested-compat requires a single nested pattern; side patterns are unsupported")
     # each `:when (= v <call>)` is another rooted pattern; `tmp` is per-equality so the
     # names `flatten` invents for nested sub-terms cannot collide between them
     for i, (var, pat) in enumerate(parts["equalities"]):
-        _, extra = enc.flatten(src.lang, src.term(pat, ground=False), root=var, tmp=f"?_w{i}_")
+        _, extra = enc.flatten(src.lang, src.term(pat, ground=False), root=var, tmp=f"?_w{i}_", names=parts["names"])
         atoms += extra
     root_sort = src.lang[atoms[0][1]].sort
     foreign = next((src.lang[atom[1]].sort for atom in atoms if src.lang[atom[1]].sort != root_sort), None)
@@ -742,7 +743,9 @@ def rewrite_parts(src, form):
     reading of `:when` is a second place for the two to disagree.
     """
     assert form[0] == "rewrite", form[:1]
+    pattern_names = enc.PatternNames(form)
     out = {
+        "names": pattern_names,
         "name": None,
         "lhs": form[1],
         "rhs": form[2],
@@ -751,7 +754,6 @@ def rewrite_parts(src, form):
         "diseq": [],
         "same": [],
         "fresh": [],
-        "ruleset": None,
         "lead": 0,
     }
     kws = keywords(src, form[3:])
@@ -767,8 +769,6 @@ def rewrite_parts(src, form):
     for key, vals in kws:
         if key == ":name":
             out["name"] = unquote(vals[0])
-        elif key == ":ruleset":
-            out["ruleset"] = vals[0]
         elif key == ":lead":
             out["lead"] = int(vals[0])
         elif key == ":fresh":
@@ -782,7 +782,7 @@ def rewrite_parts(src, form):
                     # A BARE CALL as a fact, which in egglog means "such a node exists".
                     # It is another pattern with nothing joining it to the rest, so it
                     # gets a root of its own.
-                    out["equalities"].append((f"_fact{len(out['equalities'])}", cond))
+                    out["equalities"].append((pattern_names.fresh(f"_fact{len(out['equalities'])}"), cond))
                 elif want == "=" and len(rest) == 2 and isinstance(rest[1], str):
                     # `(= x y)` between two VARIABLES identifies them: the same class
                     # reached by the same renaming, which is what `=` means here.
@@ -835,7 +835,7 @@ def rewrite_parts(src, form):
                     names = []
                     for v in pvars:
                         if isinstance(v, list):
-                            fresh = f"_cond{len(out['equalities'])}"
+                            fresh = pattern_names.fresh(f"_cond{len(out['equalities'])}")
                             out["equalities"].append((fresh, v))
                             names.append(fresh)
                         else:

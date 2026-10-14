@@ -26,6 +26,7 @@ import os
 import random
 import subprocess
 import sys
+from functools import cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,7 @@ EGGLOG = ROOT / "target" / "debug" / "egglog"
 XMULTI = ROOT / "slotted" / "xmulti"
 
 
+@cache
 def machinery(lang):
     """A language's machinery, compiled here rather than read from a build artifact.
 

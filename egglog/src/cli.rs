@@ -107,17 +107,33 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    cli_with_preprocessor(egraph, args, |_, source| Ok(source.to_owned()));
+    cli_with_preprocessor_impl(egraph, args, |_, source| Ok(source.to_owned()), false);
 }
 
 /// Use the standard CLI with a source-to-source pass before parsing each input.
 /// File names, serialization, reports, and evaluation retain normal CLI behavior.
 /// The pass also receives each complete REPL input, with no file name.
+/// Failed REPL inputs restore both the e-graph and the cloned pass state, including
+/// when evaluation executed part of the input before failing. File inputs exit on
+/// failure and do not pay for these snapshots.
 #[allow(clippy::disallowed_macros)]
 pub fn cli_with_preprocessor<I, T>(
+    egraph: EGraph,
+    args: I,
+    preprocess: impl FnMut(Option<String>, &str) -> Result<String, Error> + Clone,
+) where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    cli_with_preprocessor_impl(egraph, args, preprocess, true);
+}
+
+#[allow(clippy::disallowed_macros)]
+fn cli_with_preprocessor_impl<I, T>(
     mut egraph: EGraph,
     args: I,
-    mut preprocess: impl FnMut(Option<String>, &str) -> Result<String, Error>,
+    mut preprocess: impl FnMut(Option<String>, &str) -> Result<String, Error> + Clone,
+    transactional_repl: bool,
 ) where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -167,6 +183,7 @@ pub fn cli_with_preprocessor<I, T>(
             args.mode,
             io::stdin().is_terminal(),
             &mut preprocess,
+            transactional_repl,
         ) {
             Ok(()) => {}
             Err(err) => {
@@ -288,9 +305,14 @@ impl EGraph {
         R: Read,
         W: Write,
     {
-        self.repl_preprocessed(input, output, mode, is_terminal, &mut |_, source| {
-            Ok(source.to_owned())
-        })
+        self.repl_preprocessed(
+            input,
+            output,
+            mode,
+            is_terminal,
+            &mut |_, source| Ok(source.to_owned()),
+            false,
+        )
     }
 
     fn repl_preprocessed<R: Read, W: Write>(
@@ -299,8 +321,20 @@ impl EGraph {
         mut output: W,
         mode: RunMode,
         is_terminal: bool,
-        preprocess: &mut impl FnMut(Option<String>, &str) -> Result<String, Error>,
+        preprocess: &mut (impl FnMut(Option<String>, &str) -> Result<String, Error> + Clone),
+        transactional: bool,
     ) -> io::Result<()> {
+        let mut run = |egraph: &mut Self, source: &str, output: &mut W| {
+            let checkpoint = transactional.then(|| (egraph.clone(), preprocess.clone()));
+            let result = run_commands(egraph, None, source, output, mode, preprocess);
+            if !matches!(result, Ok(None))
+                && let Some((previous_graph, previous_pass)) = checkpoint
+            {
+                *egraph = previous_graph;
+                *preprocess = previous_pass;
+            }
+            result.map(|_| ())
+        };
         // https://doc.rust-lang.org/beta/std/io/trait.IsTerminal.html#examples
         if is_terminal {
             output.write_all(welcome_prompt().as_bytes())?;
@@ -315,7 +349,7 @@ impl EGraph {
             cmd_buffer.push('\n');
             // handles multi-line commands
             if should_eval(&cmd_buffer) {
-                run_commands(self, None, &cmd_buffer, &mut output, mode, preprocess)?;
+                run(self, &cmd_buffer, &mut output)?;
                 cmd_buffer = String::new();
                 if is_terminal {
                     output.write_all(b"> ")?;
@@ -325,7 +359,7 @@ impl EGraph {
         }
 
         if !cmd_buffer.is_empty() {
-            run_commands(self, None, &cmd_buffer, &mut output, mode, preprocess)?;
+            run(self, &cmd_buffer, &mut output)?;
         }
 
         Ok(())

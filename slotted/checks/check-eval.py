@@ -781,7 +781,24 @@ def parallel_collection():
     assert not E.successful(limited, sides, True)
 
 
+def import_without_compilation():
+    """Workload definitions and reporting must not compile the unused Python encoding."""
+    code = """
+import importlib
+import sys
+from unittest.mock import patch
+sys.path[:0] = ["slotted", "slotted/xdiff"]
+compiler = importlib.import_module("slotted-egglog")
+with patch.object(compiler, "compile_source", side_effect=AssertionError("compiled during import")):
+    importlib.import_module("slotted-eval")
+    importlib.import_module("xsdql")
+"""
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def main():
+    import_without_compilation()
     substitution_policies()
     nested_comparison_policy()
     combined_comparisons()

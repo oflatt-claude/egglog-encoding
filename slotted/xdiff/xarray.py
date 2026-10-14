@@ -71,10 +71,6 @@ LANG = slotenc.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 # the carrier's table names, read off the language rather than written out
 SYM = LANG.symbols_for(LANG.default_sort)
 
-# the per-language machinery, not the generic string-headed one
-#: the array language's machinery, compiled rather than read from `target/`
-MACHINERY = machinery("array")
-
 enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
 
 MAP = ("sym", "map")
@@ -168,7 +164,7 @@ def schedule(steps):
 
 def egg_program(case, atom_order=None, mult=3, defer_probes=False, *, nested_compat=False):
     out = [
-        MACHINERY,
+        machinery("array"),
         "(ruleset probe)",
         "(relation ProbeId (U i64))",
         "(relation SameClass (i64 i64))",

@@ -157,6 +157,11 @@ CASES = [
     ),
     ("a program that declares nothing", "(run 1)\n", "no equality sort is declared"),
     (
+        "a named ruleset that the slotted schedule cannot select",
+        LANG + '(ruleset custom)\n(rewrite (Succ a) a :name "custom-rule" :ruleset custom)\n',
+        "named rulesets are not supported",
+    ),
+    (
         "a pattern variable in a binder column",
         LANG + "(rewrite (Lam x (Succ x)) (Null))\n",
         "cannot stand in a binder column",

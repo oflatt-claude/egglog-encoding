@@ -49,7 +49,7 @@ PROBES = [
     ("refused", "computing a payload", L + '(rewrite (Add (N i) (N j)) (N (+ i j)) :name "r")\n'),
     # ---- rewrite options ----------------------------------------------------------
     ("ok", ":name, as a string literal", L + '(rewrite (Add x y) (Nil) :name "r")\n'),
-    ("ok", ":ruleset", "(ruleset rs)\n" + L + '(rewrite (Add x y) (Nil) :ruleset rs :name "r")\n'),
+    ("refused", ":ruleset", "(ruleset rs)\n" + L + '(rewrite (Add x y) (Nil) :ruleset rs :name "r")\n'),
     ("refused", ":subsume", L + '(rewrite (Add x y) (Nil) :subsume :name "r")\n'),
     # ---- declarations -------------------------------------------------------------
     ("ok", "datatype", L + "(let a (N 1))\n(run 0)\n"),
@@ -75,20 +75,79 @@ PROBES = [
     ),
     ("ok", "print-size", L + "(let a (Nil))\n(run 0)\n(print-size)\n"),
     ("refused", "run-schedule, which would skip the phasing", L + "(let a (Nil))\n(run-schedule (run 1))\n"),
+    # Generated roots and temporaries must not capture source pattern names.
+    (
+        "ok",
+        "a source variable named like the generated root",
+        L + "(let start (Add $1 $2))\n(rewrite (Add _p b) (Mul b _p))\n(run 1)\n(check (= start (Mul $2 $1)))\n",
+    ),
+    (
+        "ok",
+        "a sigiled source variable named like the generated root",
+        L + "(let start (Add $1 $2))\n(rewrite (Add ?_p b) (Mul b ?_p))\n(run 1)\n(check (= start (Mul $2 $1)))\n",
+    ),
+    (
+        "ok",
+        "a source variable named like a nested temporary",
+        L + "(let start (Add (Mul $1 $2) $3))\n(rewrite (Add (Mul _t1 b) c) (Mul c _t1))\n(run 1)\n"
+        "(check (= start (Mul $3 $1)))\n",
+    ),
+    (
+        "ok",
+        "a source variable named like a side-pattern root",
+        L + "(let start (Add $1 $2))\n(let other (Mul $1 $2))\n"
+        "(rewrite (Add _fact0 b) (Mul b _fact0) :when ((Mul _fact0 b)))\n(run 1)\n"
+        "(check (= start (Mul $2 $1)))\n",
+    ),
+    (
+        "ok",
+        "a source variable named like a guard root",
+        L + "(let start (Lam $1 $2))\n"
+        "(rewrite (Lam $v _cond0) (App _cond0 _cond0) :when ((not-free $v (Lam $v _cond0))))\n(run 1)\n"
+        "(check (= start (App $2 $2)))\n",
+    ),
+    (
+        "ok",
+        "a source variable named like a nested side-pattern temporary",
+        L + "(let start (Add (Mul (Mul $1 $2) $3) $4))\n"
+        "(rewrite (Add a _w0_1) (Mul _w0_1 p) :when ((= a (Mul (Mul p q) r))))\n(run 1)\n"
+        "(check (= start (Mul $4 $1)))\n",
+    ),
+    (
+        "ok",
+        "equivalent numbered slot spellings",
+        L + "(let start (Add $01 $+1))\n(let zero (Add $-0 $+0))\n(run 0)\n"
+        "(check (slots start $1))\n(check (= start (Add $1 $1)))\n"
+        "(check (slots zero $0))\n(check (= zero (Add $0 $0)))\n",
+    ),
+    (
+        "ok",
+        "constructor names colliding with derived RHS locals",
+        "(datatype U (Start U) (F U) (F_slots U) (F_edge U) (Pair U U))\n"
+        "(let start (Start $0))\n"
+        "(rewrite (Start a) (Pair (F a) (Pair (F_slots a) (F_edge a))))\n"
+        "(run 1)\n(check (= start (Pair (F $0) (Pair (F_slots $0) (F_edge $0)))))\n",
+    ),
 ]
 
 
-def verdict_of(program):
+COMPILERS = {
+    "Rust": [str(ROOT / "target/debug/egglog-experimental"), "--slotted"],
+    "Python": [sys.executable, "slotted/slotted-egglog.py"],
+}
+
+
+def verdict_of(program, compiler):
     TMP.write_text(program)
     r = subprocess.run(
-        [sys.executable, "slotted/slotted-egglog.py", str(TMP)],
+        [*COMPILERS[compiler], str(TMP)],
         cwd=ROOT,
         capture_output=True,
         text=True,
         timeout=1800,
     )
     out = r.stdout + r.stderr
-    if "Traceback (most recent call last)" in out:
+    if "Traceback (most recent call last)" in out or "panicked" in out:
         return "CRASH", next((ln for ln in reversed(out.splitlines()) if ln.strip()), "")[:80]
     if r.returncode == 0:
         return "ok", ""
@@ -100,15 +159,19 @@ def main():
     repeatable_compilation()
     bad = []
     for want, what, program in PROBES:
-        got, detail = verdict_of(program)
-        if got == want:
-            print(f"  {got:8} {what}")
-        else:
-            print(f"  {'CHANGED':8} {what}: expected {want}, got {got}\n           {detail}")
-            bad.append(what)
+        for compiler in COMPILERS:
+            got, detail = verdict_of(program, compiler)
+            if got == want:
+                print(f"  {got:8} {compiler}: {what}")
+            else:
+                print(f"  {'CHANGED':8} {compiler}: {what}: expected {want}, got {got}\n           {detail}")
+                bad.append(what)
     TMP.unlink(missing_ok=True)
     n_ok = sum(1 for w, _, _ in PROBES if w == "ok")
-    print(f"\n{len(PROBES) - len(bad)}/{len(PROBES)} egglog forms behave as recorded ({n_ok} accepted)")
+    print(
+        f"\n{len(PROBES) - len(set(bad))}/{len(PROBES)} egglog forms behave as recorded "
+        f"({n_ok} accepted; both compilers)"
+    )
     return 1 if bad else 0
 
 

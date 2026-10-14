@@ -1804,7 +1804,31 @@ def plain_pays(t):
     return tuple(plain_pays(a) for a in t)
 
 
-def flatten(lang, term, root="?_p", tmp="?_t"):
+class PatternNames:
+    """Fresh pattern names, using the frame's spelling without a leading `?`."""
+
+    def __init__(self, form):
+        self.used = set()
+
+        def reserve(value):
+            if isinstance(value, str):
+                self.used.add(value.lstrip("?"))
+            elif isinstance(value, (list, tuple)):
+                for child in value:
+                    reserve(child)
+
+        reserve(form)
+
+    def fresh(self, stem):
+        name, suffix = stem, 0
+        while name.lstrip("?") in self.used:
+            suffix += 1
+            name = f"{stem}_{suffix}"
+        self.used.add(name.lstrip("?"))
+        return name
+
+
+def flatten(lang, term, root=None, tmp="?_t", *, names=None):
     """A nested pattern as depth-1 atoms, pre-order, so every atom's root is a child
     of an earlier one -- which is the connectivity the recipe requires.
 
@@ -1816,6 +1840,11 @@ def flatten(lang, term, root="?_p", tmp="?_t"):
     payload column unusable in any rule.
     """
     term = lang.refresh_shadowed_binders(term)
+    names = names or PatternNames(term)
+    if root is None:
+        root = names.fresh("?_p")
+    else:
+        names.used.add(root.lstrip("?"))
     atoms, ctr = [], [0]
 
     def go(t, name):
@@ -1828,7 +1857,7 @@ def flatten(lang, term, root="?_p", tmp="?_t"):
                 kids.append(("cls", plain_pays(c)))
             else:
                 ctr[0] += 1
-                nm = f"{tmp}{ctr[0]}"
+                nm = names.fresh(f"{tmp}{ctr[0]}")
                 kids.append(("pv", nm))
                 nested.append((c, nm))
         atoms.append((name, t[0], kids, pays))
@@ -2094,8 +2123,7 @@ def compile_query(
         return pv.lstrip("?").lstrip("_") or "v"
 
     def fname(pv):
-        """The frame's name for a pattern variable: the source's own, or `_t1` for one the
-        flattener invented, which no author's name begins with."""
+        """The source name or a fresh flattener name, without the optional sigil."""
         return pv.lstrip("?")
 
     def kid_label(k, j):
@@ -2338,13 +2366,13 @@ def build_rhs(lang, term, expected_sort, q):
         slots = f"(node-slots {q.frame} (names{quoted(uncovered)}) (names{quoted(covered)}) (names{quoted(bound)}))"
         for n in nested:
             slots = f"(map-union {slots} {n})"
-        sv = f"{value}_slots"
+        sv = q.new(f"{value}_slots")
         lets.append(f"(let {sv} {slots})")
         if back is None:
             return sv, value, ("slots", sv)
         # the frame's names for the slots the node leaves free, read off its canonical
         # ones: `compose` drops a canonical slot the node binds
-        ev = f"{value}_edge"
+        ev = q.new(f"{value}_edge")
         lets.append(f"(let {ev} (compose {sv} {back}))")
         return ev, value, ("slots", sv)
 

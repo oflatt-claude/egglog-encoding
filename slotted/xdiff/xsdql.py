@@ -43,7 +43,6 @@ SYM = slotenc.carrier_symbols(("U",))["U"]
 
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
-MACHINERY = machinery("sdql")
 
 # The source-level regression fixtures.  Python supplies the differential-test
 # orchestration and expected partitions, but the terms and the two scope-sensitive
@@ -382,7 +381,7 @@ def schedule(steps):
 
 
 def egg_program(case, with_rule=True, mult=3):
-    out = [MACHINERY, "(ruleset sdql)"]
+    out = [machinery("sdql"), "(ruleset sdql)"]
     if with_rule:
         out.append(f";; {case.rule.name}")
         out.append(case.rule.egg if case.rule.egg is not None else egg_rule(case.rule.name))

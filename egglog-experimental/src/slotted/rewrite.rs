@@ -124,10 +124,10 @@ fn build(
             for s in nested {
                 slots = format!("(map-union {slots} {s})");
             }
-            let sv = format!("{value}_slots");
+            let sv = q.fresh(&format!("{value}_slots"));
             actions.push(format!("(let {sv} {slots})"));
             let edge = if let Some(back) = back {
-                let ev = format!("{value}_edge");
+                let ev = q.fresh(&format!("{value}_edge"));
                 actions.push(format!("(let {ev} (compose {sv} {back}))"));
                 ev
             } else {
@@ -234,7 +234,6 @@ pub(super) struct Rewrite<'a> {
     pub rhs: &'a Term,
     pub conditions: Conditions,
     pub name: Option<&'a str>,
-    pub ruleset: Option<&'a str>,
     pub ordinal: usize,
     pub nested: bool,
 }
@@ -285,7 +284,7 @@ pub(super) fn compile(lang: &Language, mut r: Rewrite<'_>) -> Result<String, Str
     };
     let naive = rhs.uses_subst();
     let Some(split) = q.split else {
-        return Ok(rule(&q.body, &actions, naive, r.ruleset, r.name));
+        return Ok(rule(&q.body, &actions, naive, None, r.name));
     };
     let relation = format!("_slotted_match_{}", r.ordinal);
     let mut columns = vec![q.refined.clone(), q.length.clone()];
@@ -309,7 +308,7 @@ pub(super) fn compile(lang: &Language, mut r: Rewrite<'_>) -> Result<String, Str
             &q.body[..split],
             &[row.clone(), format!("(Idx {} 0)", q.length)],
             naive,
-            r.ruleset,
+            None,
             r.name,
         ),
         rule(

@@ -384,11 +384,13 @@ impl Compiler {
         let term = match f {
             Form::Atom(s) if s.starts_with('$') => {
                 if ground {
-                    s[1..]
+                    let slot = s[1..]
                         .parse::<i64>()
                         .map_err(|_| format!("a ground term needs numbered slots, got {s}"))?;
+                    Term::Slot(format!("${slot}"))
+                } else {
+                    Term::Slot(s.clone())
                 }
-                Term::Slot(s.clone())
             }
             Form::Atom(s) if lang.constructors.contains_key(s) => {
                 return Err(format!("constructor {s} needs parentheses: ({s})"));
@@ -488,10 +490,26 @@ impl Compiler {
         }
         let lhs = self.term(&args[0], false, None)?;
         let rhs = self.term(&args[1], false, None)?;
-        let root = "?_p";
-        let mut atoms = query::flatten(&self.state.lang, &lhs, root, "?_t")?;
+        // Reserve the entire source rule before allocating roots, including
+        // names introduced only by side patterns or used on the right-hand side.
+        fn reserve(form: &Form, names: &mut query::PatternNames) {
+            match form {
+                Form::Atom(name) => names.reserve(name),
+                Form::List(forms) => {
+                    for form in forms {
+                        reserve(form, names);
+                    }
+                }
+            }
+        }
+        let mut names = query::PatternNames::default();
+        for form in args {
+            reserve(form, &mut names);
+        }
+        let root = names.fresh("?_p");
+        let mut atoms = query::flatten(&self.state.lang, &lhs, &root, "?_t", &mut names)?;
         let mut conditions = query::Conditions::default();
-        let (mut name, mut ruleset, mut lead) = (None, None, 0);
+        let (mut name, mut lead) = (None, 0);
         let mut side = 0;
         let mut when_seen = false;
         let mut i = 2;
@@ -504,14 +522,16 @@ impl Compiler {
             }
             let values = &args[start..i];
             match key {
-                ":name" | ":ruleset" | ":lead" => {
+                ":ruleset" => {
+                    return Err("named rulesets are not supported by the slotted schedule; omit :ruleset and use (run N)".into());
+                }
+                ":name" | ":lead" => {
                     if values.len() != 1 {
                         return Err(format!("{key} expects one argument"));
                     }
                     let value = values[0].atom()?;
                     match key {
                         ":name" => name = Some(unquote(value)?),
-                        ":ruleset" => ruleset = Some(value.to_owned()),
                         _ => lead = value.parse().map_err(|_| "invalid :lead index")?,
                     }
                 }
@@ -564,7 +584,7 @@ impl Compiler {
                                             pvars.push(v.trim_start_matches('?').into())
                                         }
                                         _ => {
-                                            let v = format!("_cond{side}");
+                                            let v = names.fresh(&format!("_cond{side}"));
                                             side += 1;
                                             pvars.push(v.clone());
                                             extra.push((v, f.clone()));
@@ -574,7 +594,7 @@ impl Compiler {
                                 conditions.free.push((kind == "free", slot, pvars));
                             }
                             kind if self.state.lang.constructors.contains_key(kind) => {
-                                let v = format!("_fact{side}");
+                                let v = names.fresh(&format!("_fact{side}"));
                                 side += 1;
                                 extra.push((v, fact.clone()));
                             }
@@ -592,6 +612,7 @@ impl Compiler {
                                 &t,
                                 &v,
                                 &format!("?_w{side}_"),
+                                &mut names,
                             )?);
                             side += 1;
                         }
@@ -611,12 +632,11 @@ impl Compiler {
         let result = rewrite::compile(
             &self.state.lang,
             rewrite::Rewrite {
-                root,
+                root: &root,
                 atoms: &atoms,
                 rhs: &rhs,
                 conditions,
                 name: name.as_deref(),
-                ruleset: ruleset.as_deref(),
                 ordinal: self.state.rules,
                 nested: self.options.no_aliasing,
             },
@@ -644,7 +664,13 @@ impl Compiler {
             pattern.slot_literals(&mut used);
             rename_binders(lang, &mut pattern, &BTreeMap::new(), &mut used, &mut 0);
             let root = format!("?_c{i}");
-            let atoms = query::flatten(lang, &pattern, &root, &format!("?_c{i}t"))?;
+            let atoms = query::flatten(
+                lang,
+                &pattern,
+                &root,
+                &format!("?_c{i}t"),
+                &mut query::PatternNames::default(),
+            )?;
             let atoms = query::connected(atoms, 0)?;
             let q = query::compile(
                 lang,
