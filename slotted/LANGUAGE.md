@@ -1,21 +1,31 @@
 # The slotted language
 
-What `slotted/slotted-egglog.py` accepts, and how it differs from egglog.
+What `egglog-experimental --slotted` accepts, and how it differs from egglog.
 
 A file here is an egglog program with a few additions. Run one directly:
 
 ```
-python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg
-python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg --desugar   # see the egglog
+cargo build -p egglog-experimental
+target/debug/egglog-experimental --slotted slotted/tests/paper/figure-3.egg
+target/debug/egglog-experimental --slotted --mode desugar slotted/tests/paper/figure-3.egg
 ```
 
-`--nested-compat` restricts rewrite matching to the reference nested matcher's
+`--slotted-no-aliasing`, together with `--slotted`, restricts rewrite matching to the reference nested matcher's
 aliasing policy. It keeps the outer class's slots and each nested node's fresh
 slots pairwise distinct, while preserving sharing already present in child edges.
 The default implements the more complete multipattern matcher. Compatibility mode
 accepts a single nested left-hand pattern and rejects additional equality side
 patterns; checks keep their ordinary semantics. See [ENCODING.md](ENCODING.md#against-the-reference)
-for the exact graph comparisons and substitution policy used by `eval.py`.
+for the exact graph comparisons and substitution policy used by `slotted-eval.py`.
+
+The Rust pass in `egglog-experimental/src/slotted/` transforms complete source
+inputs into ordinary egglog before evaluation. It shares egglog's lexer and CLI;
+file arguments, stdin, serialization and timing reports work through the normal
+runner. Includes resolve relative to the invocation directory. Successive files
+share compiler state, and `push`/`pop` restore declarations, globals and rewrites.
+The slotted flag currently requires the main backend and cannot be combined with
+term or proof encoding. The older Python compiler remains a differential test
+oracle; it is not used to execute the paper evaluation.
 
 The additions exist because a slotted term is not an egglog value. A term denotes a
 class **together with** a renaming — an *invocation* — and egglog has no notion of
@@ -509,6 +519,13 @@ rule, and extracts the function. The answer is therefore in the LEADER's frame, 
 necessarily the frame of the term you asked about: `(extract q)` above prints
 `lam $0. $3`.
 
+This command uses egglog's cost for the encoded term, including renamings and
+binder-marker children. It does not minimize the source tree's node count and does
+not use the source-term extractor inside `slotted-subst`. It is currently useful
+for inspecting a class; producing an optimized source term in the requested
+invocation's frame still needs a separate extraction interface. The benchmark
+goal checks test target membership, not this command's output.
+
 ## What `ok` tells you
 
 A run reports what it did, because "ok" means different things for different files.
@@ -516,8 +533,8 @@ A file under `slotted/tests/` asks something; a file under `slotted/languages/` 
 language and its rules, so running it only says that it loaded:
 
 ```
-ok   figure-3.egg   4 terms, 1 union, 3 claims
-ok   array.egg   8 rules, nothing asked -- a rule library, included by other files
+ok   figure-3.egg
+ok   array.egg
 ```
 
 The second has no terms and no claims, so nothing was checked — it only loaded.
@@ -528,9 +545,10 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | --- | --- |
 | `slotted/tests/` | programs in this language that ASK something: terms, and claims about them. Run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
-| `slotted/tests/nested/` | fixtures whose assertions require `--nested-compat`; the test runner supplies the flag |
-| `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/eval.py` runs in full |
+| `slotted/tests/nested/` | fixtures whose assertions require `--slotted-no-aliasing`; the test runner supplies the flag |
+| `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/slotted-eval.py` runs in full |
 | `slotted/tests/unsupported/` | originals written with constructs the language refuses, kept beside their runnable translations; skipped by the runner |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
-| `slotted/slotted-egglog.py` | the compiler |
+| `egglog-experimental/src/slotted/` | the Rust compiler |
+| `slotted/slotted-egglog.py` | independent Python migration oracle |
 | `slotted/ENCODING.md` | what this language compiles TO, and why each table is there |

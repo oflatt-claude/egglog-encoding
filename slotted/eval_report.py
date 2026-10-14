@@ -1,4 +1,4 @@
-"""Observation records, cache loading, and tables for slotted/eval.py.
+"""Observation records, cache loading, and tables for slotted/slotted-eval.py.
 
 No processes are launched here. Comparison evidence is tied to both observation
 IDs, so merging cache batches cannot turn an unchecked pair into a verified one.
@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, replace
 
 import paper_fixtures as pf
 
-REPORT_SCHEMA = 5
+REPORT_SCHEMA = 7
 
 SIDES = ("encoding", "encoding-no-aliasing", "ref-multi", "ref-nested-snapshot", "ref-nested")
 EXACT_PAIRS = {"encoding": "ref-multi", "encoding-no-aliasing": "ref-nested-snapshot"}
@@ -146,7 +146,7 @@ class Row:
     def from_dict(cls, d):
         """A row back from its `--jsonl` record."""
         if d.get("schema") != REPORT_SCHEMA:
-            raise SystemExit("eval.py: report cache schema changed; recompute into a fresh --jsonl path")
+            raise SystemExit("slotted-eval.py: report cache schema changed; recompute into a fresh --jsonl path")
         row = cls(d["study"], d["case"], d["side"], d["rounds"], d.get("rules"))
         for field in (
             "observation",

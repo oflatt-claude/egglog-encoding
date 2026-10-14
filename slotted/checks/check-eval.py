@@ -2,6 +2,7 @@
 """Regressions for complete refinement and trustworthy evaluation verdicts."""
 
 import argparse
+import copy
 import json
 import os
 import subprocess
@@ -12,19 +13,21 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
-import eval as E  # noqa: E402
+E = __import__("slotted-eval")
 import eval_report as R  # noqa: E402
 import xdiff as X  # noqa: E402
 
 CHECK_CONFIG = E.Config(
-    egglog=ROOT / "target" / "debug" / "egglog",
+    egglog=ROOT / "target" / "debug" / "egglog-experimental",
     xmulti=ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti",
 )
+
+ENCODED_CONFIG = E.Config(egglog=ROOT / "target" / "debug" / "egglog", xmulti=CHECK_CONFIG.xmulti)
 
 
 def graphs(name, program, spec, lang=X.LANG):
     enc, ref = (E.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
-    E.encoding_counts(program, name, lang, enc, 60, config=CHECK_CONFIG)
+    E.encoding_counts(program, name, lang, enc, 60, config=ENCODED_CONFIG, encoded=True)
     E.run_reference(spec, ref, 60, True, config=CHECK_CONFIG)
     assert enc.graph is not None and ref.graph is not None, (name, enc.as_dict("test"), ref.as_dict("test"))
     E.compare([enc, ref])
@@ -115,6 +118,79 @@ def complete_refinement():
     assert enc.graph.summary() == (77, 280) == (ref.classes, ref.nodes)
 
 
+def count_round_budget():
+    """Graph collection must not execute another user round to probe saturation."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "budget.egg"
+        path.write_text(
+            '(include "slotted/languages/toy.egg")\n(rewrite (Null) (F $0 $0))\n(let start (Null))\n(run 1)\n'
+        )
+        program = E.sc.compile_source(E.sc.Source(path))
+    # Installed after the requested run: any additional user-rule step is an error.
+    program += '\n(rule () ((panic "graph collection exceeded the round budget")))\n'
+    row = E.Row("regression", "count-budget", "encoding", 1)
+    E.encoding_counts(program, "count-budget", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
+    assert row.graph is not None, row.graph_issue
+    assert row.graph.summary() == (2, 3) == (row.classes, row.nodes)
+    assert row.saturated == "?"
+
+
+def raw_node_counts():
+    """An unretired invocation must survive reading and fail the count check."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "rows.egg"
+        path.write_text(
+            '(include "slotted/languages/toy.egg")\n(let a (F $1 (Null)))\n(let b (F $2 (Null)))\n(run 0)\n'
+        )
+        program = E.sc.compile_source(E.sc.Source(path))
+        path.write_text(program)
+        subprocess.run(
+            [str(CHECK_CONFIG.egglog), "--to-json", *E.ISO.SERIALIZE_LIMITS, str(path)],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+        doc = json.loads(path.with_suffix(".json").read_text())
+    nodes = doc["nodes"]
+
+    def renaming_node(pairs):
+        return next(
+            key
+            for key, node in nodes.items()
+            if node["op"] == "map-of" and [nodes[c]["op"] for c in node["children"]] == pairs
+        )
+
+    original, issues = E.ISO.build_encoding_graph(doc)
+    assert not issues and original.summary() == (3, 3), issues
+    extra = copy.deepcopy(next(n for n in nodes.values() if n["op"] == "F"))
+    # The retired invocation has a different raw key and frame: F($2, Null)
+    # instead of F($1, Null). Both translate to the same slotted node.
+    slots_two = nodes[renaming_node(["2", "2"])]["eclass"]
+    follower = next(n for n in nodes.values() if n["op"] == E.ISO.SYM.class_slots and n["eclass"] == slots_two)
+    extra["eclass"] = nodes[follower["children"][0]]["eclass"]
+    extra["children"][0] = renaming_node(["0", "2"])
+    nodes["unretired-F"] = extra
+    duplicated, issues = E.ISO.build_encoding_graph(doc)
+    assert not issues and duplicated.summary() == (3, 4), issues
+    witness, _why = E.ISO.find_isomorphism(original, duplicated)
+    assert witness is None
+
+    def dump(cmd, **_kwargs):
+        Path(cmd[-1]).with_suffix(".json").write_text(json.dumps(doc))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    row = E.Row("regression", "raw-node-count", "encoding", 0)
+    # A future reader regression must not defeat the independent raw count.
+    with (
+        patch.object(E.subprocess, "run", side_effect=dump),
+        patch.object(E.ISO, "build_encoding_graph", return_value=(original, [])),
+    ):
+        E.encoding_counts(program, "raw-node-count", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
+    assert row.nodes == 4 and row.graph is None
+    assert "raw constructor count 4 disagrees" in row.graph_issue, row.graph_issue
+
+
 def verdicts():
     # Same class/node counts on both sides; only the symmetry group differs.
     # Exercise both sides of the former 40-class cutoff.
@@ -177,7 +253,14 @@ def exit_status(enc, ref):
             assert E.successful([enc, ref], sides, False)  # explicitly goal-only
             path.write_text("".join(json.dumps(row.as_dict("regression")) + "\n" for row in (enc, ref)))
             result = subprocess.run(
-                [sys.executable, str(ROOT / "slotted" / "eval.py"), "--from", str(path), "--side", ",".join(sides)],
+                [
+                    sys.executable,
+                    str(ROOT / "slotted" / "slotted-eval.py"),
+                    "--from",
+                    str(path),
+                    "--side",
+                    ",".join(sides),
+                ],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -198,7 +281,7 @@ def exit_status(enc, ref):
                         result = subprocess.run(
                             [
                                 sys.executable,
-                                str(ROOT / "slotted" / "eval.py"),
+                                str(ROOT / "slotted" / "slotted-eval.py"),
                                 "--from",
                                 str(path),
                                 "--side",
@@ -460,7 +543,7 @@ def graph_failure_reasons():
         assert failed.graph_issue in R.graph_cell(failed)
 
         def dump(args, **_kwargs):
-            Path(args[-1]).with_suffix(".json").write_text("{}")
+            Path(args[-1]).with_suffix(".json").write_text('{"nodes": {}}')
             return subprocess.CompletedProcess(args, 0, "", "")
 
         with (
@@ -711,6 +794,8 @@ def main():
     substitution_refresh()
     coset_direction()
     complete_refinement()
+    count_round_budget()
+    raw_node_counts()
     exit_status(*verdicts())
     print("OK: complete refinement, separate count checks, exact graph verdicts, and evaluation exit statuses")
 

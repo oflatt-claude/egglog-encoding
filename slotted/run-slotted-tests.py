@@ -98,9 +98,9 @@ def main():
 
     bad = []
     for src in srcs:
-        cmd = [sys.executable, str(COMPILE), str(src), "--run"]
+        cmd = [str(ROOT / "target" / "debug" / "egglog-experimental"), "--slotted", str(src)]
         if NESTED in src.parents:
-            cmd.append("--nested-compat")
+            cmd.append("--slotted-no-aliasing")
         # A library's rules are already snapshotted by the generator that emits them
         # into `target/slotted/`, so snapshotting its compiled program too
         # would commit the same language rules twice.
@@ -108,10 +108,21 @@ def main():
             # `--own-only`: the machinery and any included library are snapshotted by
             # the generators that emit them, so a test's snapshot is its own compiled
             # terms, rules and claims -- the part nothing else covers.
-            cmd += ["--own-only", "-o", str(SNAPSHOTS / src.name)]
+            # Keep the Python implementation's snapshots as the migration oracle.
+            snapshot = [
+                sys.executable,
+                str(COMPILE),
+                str(src),
+                "--desugar",
+                "--own-only",
+                "-o",
+                str(SNAPSHOTS / src.name),
+            ]
+            if NESTED in src.parents:
+                snapshot.append("--nested-compat")
+            subprocess.run(snapshot, cwd=ROOT, check=True, capture_output=True, text=True)
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
-        line = (r.stdout.strip().splitlines() or [""])[0]
-        print(f"  {line or r.stderr.strip()[:160]}")
+        print(f"  ok   {src.name}" if r.returncode == 0 else f"  FAIL {src.name}: {r.stderr.strip()[:300]}")
         if r.returncode != 0:
             bad.append(src.name)
 

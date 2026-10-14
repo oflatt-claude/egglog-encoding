@@ -1,0 +1,466 @@
+//! Multipattern matching, shared by rewrite lowering and read-only claims.
+use super::model::*;
+use super::syntax::quote;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Debug)]
+pub(super) struct Atom {
+    pub root: String,
+    pub op: String,
+    pub kids: Vec<Term>,
+    pub pays: Vec<Term>,
+}
+
+pub(super) fn flatten(
+    lang: &Language,
+    t: &Term,
+    root: &str,
+    tmp: &str,
+) -> Result<Vec<Atom>, String> {
+    fn go(
+        lang: &Language,
+        t: &Term,
+        root: String,
+        tmp: &str,
+        id: &mut usize,
+        out: &mut Vec<Atom>,
+    ) -> Result<(), String> {
+        let Term::Node(n, args) = t else {
+            return Err("a pattern's root must be a constructor call".into());
+        };
+        let (children, pays) = lang.constructors[n].split(args);
+        let mut kids = Vec::new();
+        let mut nested = Vec::new();
+        for c in children {
+            match c {
+                Term::Variable(_) | Term::Slot(_) => kids.push(c.clone()),
+                Term::Node(n, _)
+                    if lang.constructors[n].children().is_empty() && !c.has_payload_variable() =>
+                {
+                    kids.push(c.clone())
+                }
+                Term::Node(_, _) => {
+                    *id += 1;
+                    let name = format!("{tmp}{id}");
+                    kids.push(Term::Variable(name.clone()));
+                    nested.push((c, name));
+                }
+                _ => return Err("unsupported term in pattern".into()),
+            }
+        }
+        out.push(Atom {
+            root,
+            op: n.clone(),
+            kids,
+            pays: pays.into_iter().cloned().collect(),
+        });
+        for (c, name) in nested {
+            go(lang, c, name, tmp, id, out)?;
+        }
+        Ok(())
+    }
+    let mut t = t.clone();
+    lang.refresh_shadowed(&mut t);
+    let mut out = Vec::new();
+    go(lang, &t, root.into(), tmp, &mut 0, &mut out)?;
+    Ok(out)
+}
+
+fn variables(a: &Atom) -> BTreeSet<String> {
+    std::iter::once(a.root.clone()).chain(children(a)).collect()
+}
+fn children(a: &Atom) -> BTreeSet<String> {
+    a.kids
+        .iter()
+        .filter_map(|k| {
+            if let Term::Variable(v) = k {
+                Some(v.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+pub(super) fn connected(mut atoms: Vec<Atom>, first: usize) -> Result<Vec<Atom>, String> {
+    if first >= atoms.len() {
+        return Err(":lead is outside the flattened pattern".into());
+    }
+    let a = atoms.remove(first);
+    let mut seen = variables(&a);
+    let mut roots = BTreeSet::from([a.root.clone()]);
+    let mut kids = children(&a);
+    let mut out = vec![a];
+    while !atoms.is_empty() {
+        let i = atoms
+            .iter()
+            .position(|a| kids.contains(&a.root) || !children(a).is_disjoint(&roots))
+            .or_else(|| atoms.iter().position(|a| !variables(a).is_disjoint(&seen)))
+            .unwrap_or(0);
+        let a = atoms.remove(i);
+        seen.extend(variables(&a));
+        roots.insert(a.root.clone());
+        kids.extend(children(&a));
+        out.push(a);
+    }
+    Ok(out)
+}
+
+#[derive(Default, Clone)]
+pub(super) struct Conditions {
+    pub free: Vec<(bool, String, Vec<String>)>,
+    pub same: Vec<(String, String)>,
+    pub distinct: Vec<(String, String)>,
+    pub fresh: BTreeSet<String>,
+}
+
+#[derive(Default)]
+pub(super) struct Query {
+    pub body: Vec<String>,
+    pub classes: Vec<(String, String)>,
+    pub sorts: BTreeMap<String, String>,
+    pub slots: BTreeMap<String, String>,
+    pub maps: BTreeMap<String, String>,
+    pub pays: BTreeMap<String, (String, String)>,
+    pub frame: String,
+    pub split: Option<usize>,
+    pub refined: String,
+    pub length: String,
+    used: BTreeSet<String>,
+    prefix: String,
+    id: usize,
+}
+impl Query {
+    pub fn fresh(&mut self, stem: &str) -> String {
+        let mut name = format!("{}{stem}", self.prefix);
+        while !self.used.insert(name.clone()) {
+            self.id += 1;
+            name = format!("{}{stem}_{}", self.prefix, self.id);
+        }
+        name
+    }
+    pub fn class(&self, pv: &str) -> Result<String, String> {
+        self.classes
+            .iter()
+            .find(|(p, _)| p == pv)
+            .map(|(_, c)| c.clone())
+            .ok_or_else(|| format!("pattern variable {pv:?} is not bound"))
+    }
+    fn bind(&mut self, pv: &str) -> String {
+        if let Ok(c) = self.class(pv) {
+            c
+        } else {
+            let c = self.fresh(&format!("cls_{}", label(pv)));
+            self.classes.push((pv.into(), c.clone()));
+            c
+        }
+    }
+    pub fn payload(&self, t: &Term) -> Result<String, String> {
+        match t {
+            Term::Payload(s) => Ok(s.clone()),
+            Term::PayloadVariable(p) => self
+                .pays
+                .get(p)
+                .map(|(v, _)| v.clone())
+                .ok_or_else(|| format!("payload variable {p:?} is not bound")),
+            _ => Err("invalid payload".into()),
+        }
+    }
+}
+fn label(s: &str) -> &str {
+    let s = s.trim_start_matches('?').trim_start_matches('_');
+    if s.is_empty() { "v" } else { s }
+}
+pub(super) fn fname(s: &str) -> &str {
+    s.trim_start_matches('?')
+}
+pub(super) fn names_expr(xs: impl IntoIterator<Item = String>) -> String {
+    call("names", xs.into_iter().map(|x| quote(&x)))
+}
+
+fn occurrence(
+    q: &mut Query,
+    lang: &Language,
+    pv: &str,
+    root: bool,
+    parents: &BTreeMap<String, (String, String, usize)>,
+    groups: &mut BTreeMap<String, String>,
+    facts: &mut Vec<String>,
+) -> Result<String, String> {
+    let symbols = lang.symbols(&q.sorts[pv]);
+    if root
+        && fname(pv).starts_with('_')
+        && let Some((op, cols, j)) = parents.get(pv)
+    {
+        let sym = q.fresh(&format!("sym_{}", label(pv)));
+        let pinned = q.fresh(&format!("pinned_{}", label(pv)));
+        facts.push(format!("(= {pinned} (_pinned_{op} {cols} {j}))"));
+        facts.push(format!(
+            "({} {} {pinned} {sym})",
+            symbols.reading,
+            q.class(pv)?
+        ));
+        return Ok(format!(" {sym}"));
+    }
+    if !groups.contains_key(pv) {
+        let g = q.fresh(&format!("grp_{}", label(pv)));
+        facts.push(format!("(= {g} ({} {}))", symbols.group, q.class(pv)?));
+        groups.insert(pv.into(), g);
+    }
+    Ok(format!(" {}", groups[pv]))
+}
+
+pub(super) fn compile(
+    lang: &Language,
+    atoms: &[Atom],
+    conditions: &Conditions,
+    prefix: &str,
+    refine: bool,
+    anchor: Option<&str>,
+    nested: bool,
+) -> Result<Query, String> {
+    let mut q = Query {
+        prefix: prefix.into(),
+        ..Default::default()
+    };
+    for a in atoms {
+        let sort = &lang.constructors[&a.op].sort;
+        for pv in variables(a) {
+            if let Some(previous) = q.sorts.insert(pv.clone(), sort.clone())
+                && previous != *sort
+            {
+                return Err(format!(
+                    "pattern variable {pv:?} has incompatible sorts {previous} and {sort}"
+                ));
+            }
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut literals = BTreeSet::new();
+    let mut avs = Vec::new();
+    let mut parents = BTreeMap::new();
+    let mut groups = BTreeMap::new();
+    for (idx, a) in atoms.iter().enumerate() {
+        let op = &lang.constructors[&a.op];
+        let sy = lang.symbols(&op.sort);
+        let edges = a
+            .kids
+            .iter()
+            .enumerate()
+            .map(|(j, k)| {
+                q.fresh(&format!(
+                    "e{idx}_{}",
+                    match k {
+                        Term::Variable(v) => label(v).into(),
+                        Term::Slot(s) => format!("lit_{}", &s[1..]),
+                        _ => format!("leaf{j}"),
+                    }
+                ))
+            })
+            .collect::<Vec<_>>();
+        let pay_cols = op.columns.iter().filter_map(|c| {
+            if let Column::Payload(s) = c {
+                Some(s)
+            } else {
+                None
+            }
+        });
+        for (col, p) in pay_cols.zip(&a.pays) {
+            if let Term::PayloadVariable(p) = p {
+                if let Some((_, sort)) = q.pays.get(p) {
+                    if sort != col {
+                        return Err(format!("payload variable {p:?} has incompatible sorts"));
+                    }
+                } else {
+                    let name = q.fresh(&format!("pay_{p}"));
+                    q.pays.insert(p.clone(), (name, col.clone()));
+                }
+            }
+        }
+        let rv = q.bind(&a.root);
+        let mut facts = Vec::new();
+        let mut bindings = Vec::new();
+        let mut kids = Vec::new();
+        let mut reached = Vec::new();
+        let reading = if seen.contains(&a.root) {
+            occurrence(
+                &mut q,
+                lang,
+                &a.root,
+                true,
+                &parents,
+                &mut groups,
+                &mut facts,
+            )?
+        } else {
+            String::new()
+        };
+        bindings.push(format!(
+            "(root {} ({} {rv}){reading})",
+            quote(fname(&a.root)),
+            sy.class_slots
+        ));
+        seen.insert(a.root.clone());
+        for (j, (k, e)) in a.kids.iter().zip(&edges).enumerate() {
+            match k {
+                Term::Variable(pv) => {
+                    let c = q.bind(pv);
+                    kids.push(c.clone());
+                    let reading = if seen.contains(pv) {
+                        occurrence(&mut q, lang, pv, false, &parents, &mut groups, &mut facts)?
+                    } else {
+                        String::new()
+                    };
+                    bindings.push(format!(
+                        "(child {} {e} ({} {c}){reading})",
+                        quote(fname(pv)),
+                        sy.class_slots
+                    ));
+                    seen.insert(pv.clone());
+                }
+                Term::Slot(s) => {
+                    kids.push(format!("({} 0)", sy.var));
+                    literals.insert(s.clone());
+                    bindings.push(format!(
+                        "({} {} {e})",
+                        if op.binders().contains(&j) {
+                            "bound"
+                        } else {
+                            "lit"
+                        },
+                        quote(s)
+                    ));
+                }
+                Term::Node(_, _) => {
+                    let c = q.fresh(&format!("leaf{idx}_{j}"));
+                    kids.push(c.clone());
+                    reached.push((k, c, j));
+                    bindings.push(format!("(leaf {e})"));
+                }
+                _ => return Err("invalid flattened child".into()),
+            }
+        }
+        let pays = a
+            .pays
+            .iter()
+            .map(|p| q.payload(p))
+            .collect::<Result<Vec<_>, _>>()?;
+        let node = op.node(&op.name, &edges, &kids, &pays);
+        q.body.push(format!("(= {rv} {node})"));
+        let cols = node[op.name.len() + 1..node.len() - 1]
+            .trim_start()
+            .to_owned();
+        for (j, k) in a.kids.iter().enumerate() {
+            if let Term::Variable(pv) = k {
+                parents
+                    .entry(pv.clone())
+                    .or_insert((op.name.clone(), cols.clone(), j + 1));
+            }
+        }
+        for (t, c, j) in reached {
+            let ren = q.fresh(&format!("leafren{idx}_{j}"));
+            q.body.push(format!(
+                "({} {} {ren} {c})",
+                sy.renames,
+                lang.encode(t, &op.sort)
+            ));
+        }
+        q.body.extend(facts);
+        let av = q.fresh(&format!("atom_{idx}"));
+        q.body.push(format!(
+            "(= {av} ({} \"@atom:{idx}\" {}))",
+            if nested { "nested-atom" } else { "atom" },
+            bindings.join(" ")
+        ));
+        avs.push(av);
+    }
+    for (a, b) in &conditions.same {
+        let (ca, cb) = (q.class(a)?, q.class(b)?);
+        if q.sorts[a] != q.sorts[b] {
+            return Err("equality compares different carrier sorts".into());
+        }
+        q.body.push(format!("(= {ca} {cb})"));
+    }
+    let mut frame = avs.first().cloned().unwrap_or_else(|| "(frame)".into());
+    for av in avs.iter().skip(1) {
+        frame = format!("(frame-join {frame} {av})");
+    }
+    if avs.len() > 1 {
+        let f = q.fresh("f");
+        q.body.push(format!("(= {f} {frame})"));
+        frame = f;
+    }
+    if let Some(root) = anchor
+        && !atoms.is_empty()
+    {
+        frame = format!("(anchor {frame} {})", quote(fname(root)));
+    }
+    if refine && !atoms.is_empty() {
+        q.refined = q.fresh("refined");
+        let choice = q.fresh("choice");
+        q.length = q.fresh("refined_len");
+        q.body.extend([
+            format!("(= {} (refinements {frame}))", q.refined),
+            format!("(= {} (vec-length {}))", q.length, q.refined),
+            format!("(> {} 0)", q.length),
+        ]);
+        q.split = Some(q.body.len());
+        q.body.push(format!("(Idx {} {choice})", q.length));
+        frame = format!("(vec-get {} {choice})", q.refined);
+    }
+    if !conditions.fresh.is_empty() {
+        frame = format!(
+            "(mint {frame} {})",
+            names_expr(conditions.fresh.iter().cloned())
+        );
+    }
+    q.frame = q.fresh("m");
+    q.body.push(format!("(= {} {frame})", q.frame));
+    for (pv, _) in &q.classes {
+        q.maps.insert(
+            pv.clone(),
+            format!("(ren {} {})", q.frame, quote(fname(pv))),
+        );
+    }
+    for lit in literals.union(&conditions.fresh) {
+        q.slots.insert(
+            lit.clone(),
+            format!("(map-get (ren {} {}) 0)", q.frame, quote(lit)),
+        );
+    }
+    for (want, slot, pvars) in &conditions.free {
+        if !q.slots.contains_key(slot) {
+            return Err(format!("slot {slot} is not bound by the pattern"));
+        }
+        for v in pvars {
+            q.class(v)?;
+        }
+        q.body.push(format!(
+            "({} {} {} {})",
+            if *want { "free" } else { "not-free" },
+            q.frame,
+            quote(slot),
+            names_expr(pvars.iter().map(|s| fname(s).into()))
+        ));
+    }
+    for (a, b) in &conditions.same {
+        q.body.push(format!(
+            "(same {} {} {})",
+            q.frame,
+            quote(fname(a)),
+            quote(fname(b))
+        ));
+    }
+    for (a, b) in &conditions.distinct {
+        let (ca, cb) = (q.class(a)?, q.class(b)?);
+        if q.sorts[a] != q.sorts[b] {
+            return Err("disequality compares different carrier sorts".into());
+        }
+        q.body.push(format!(
+            "(guard (or (bool-!= {ca} {cb}) (not (bool-same {} {} {}))))",
+            q.frame,
+            quote(fname(a)),
+            quote(fname(b))
+        ));
+    }
+    Ok(q)
+}

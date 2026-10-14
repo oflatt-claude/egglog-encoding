@@ -495,16 +495,9 @@ def build_encoding_graph(doc, lang=X.LANG):
         )
         g.nodes[rep_of[cid]].append((name, moved))
 
-    # rows that coincide after translating are one node, as in the reference, whose class
-    # keys its nodes by shape
-    for cid in list(g.nodes):
-        seen, uniq = set(), []
-        for n in g.nodes[cid]:
-            if repr(n) not in seen:
-                seen.add(repr(n))
-                uniq.append(n)
-        g.nodes[cid] = uniq
-
+    # Preserve every live constructor row. The encoding must retire redundant
+    # invocations itself: deduplicating after frame translation would hide both
+    # extra rows and the corresponding node-count disagreement with the reference.
     g.close_groups()
     return g, issues
 

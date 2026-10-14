@@ -47,7 +47,7 @@ def run_seed(script, prefix, cases, seed):
         text=True,
         cwd=ROOT,
     )
-    return seed, r.stdout + r.stderr
+    return seed, r.returncode, r.stdout + r.stderr
 
 
 def main():
@@ -58,6 +58,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=0, help="parallel processes (default: one per seed)")
     ap.add_argument("--first-seed", type=int, default=1000)
     args = ap.parse_args()
+    if args.cases < 1 or args.seeds < 1 or args.jobs < 0:
+        ap.error("--cases and --seeds must be positive; --jobs must be nonnegative")
 
     script, prefix, pattern = MODES[args.mode]
     seeds = range(args.first_seed, args.first_seed + args.seeds)
@@ -67,16 +69,24 @@ def main():
     # state is the read-only egglog binary.
     ok = total = 0
     findings = []
+    failed = False
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        for seed, out in pool.map(lambda s: run_seed(script, prefix, args.cases, s), seeds):
+        for seed, returncode, out in pool.map(lambda s: run_seed(script, prefix, args.cases, s), seeds):
+            if returncode:
+                failed = True
+                findings.append(f"seed {seed}: worker exited {returncode}")
             m = re.search(pattern, out)
             if not m:
+                failed = True
                 findings.append(f"seed {seed}: no summary line -- {out.strip().splitlines()[-1:]}")
                 continue
+            if int(m.group(2)) == 0:
+                failed = True
+                findings.append(f"seed {seed}: no comparable cases")
             ok += int(m.group(1))
             total += int(m.group(2))
             for line in out.splitlines():
-                if re.match(r"\s+(FAIL|limit)\s", line):
+                if re.match(r"\s+(FAIL|limit|unreadable|skip)\s", line):
                     findings.append(f"seed={seed} {line.strip()}")
 
     print(f"\n{ok}/{total} pass   ({args.mode}, {args.seeds} seeds x {args.cases} cases)")
@@ -84,7 +94,7 @@ def main():
         print(f"\n{len(findings)} findings:")
         for line in findings:
             print(f"  {line}")
-    return 1 if ok != total else 0
+    return 1 if failed or ok != total else 0
 
 
 if __name__ == "__main__":

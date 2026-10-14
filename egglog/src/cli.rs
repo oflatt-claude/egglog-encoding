@@ -102,8 +102,23 @@ pub fn cli(egraph: EGraph) {
 /// Custom binaries can pre-parse their own flags and pass the remaining
 /// arguments here while still using egglog's standard CLI behavior.
 #[allow(clippy::disallowed_macros)]
-pub fn cli_with_args<I, T>(mut egraph: EGraph, args: I)
+pub fn cli_with_args<I, T>(egraph: EGraph, args: I)
 where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    cli_with_preprocessor(egraph, args, |_, source| Ok(source.to_owned()));
+}
+
+/// Use the standard CLI with a source-to-source pass before parsing each input.
+/// File names, serialization, reports, and evaluation retain normal CLI behavior.
+/// The pass also receives each complete REPL input, with no file name.
+#[allow(clippy::disallowed_macros)]
+pub fn cli_with_preprocessor<I, T>(
+    mut egraph: EGraph,
+    args: I,
+    mut preprocess: impl FnMut(Option<String>, &str) -> Result<String, Error>,
+) where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
@@ -146,7 +161,13 @@ where
         egraph.set_strict_mode(true);
     }
     if args.inputs.is_empty() {
-        match egraph.repl(args.mode) {
+        match egraph.repl_preprocessed(
+            io::stdin(),
+            io::stdout(),
+            args.mode,
+            io::stdin().is_terminal(),
+            &mut preprocess,
+        ) {
             Ok(()) => {}
             Err(err) => {
                 log::error!("{err}");
@@ -166,6 +187,7 @@ where
                 &program,
                 io::stdout(),
                 args.mode,
+                &mut preprocess,
             ) {
                 Ok(None) => {}
                 _ => std::process::exit(1),
@@ -258,7 +280,7 @@ impl EGraph {
     pub fn repl_with<R, W>(
         &mut self,
         input: R,
-        mut output: W,
+        output: W,
         mode: RunMode,
         is_terminal: bool,
     ) -> io::Result<()>
@@ -266,6 +288,19 @@ impl EGraph {
         R: Read,
         W: Write,
     {
+        self.repl_preprocessed(input, output, mode, is_terminal, &mut |_, source| {
+            Ok(source.to_owned())
+        })
+    }
+
+    fn repl_preprocessed<R: Read, W: Write>(
+        &mut self,
+        input: R,
+        mut output: W,
+        mode: RunMode,
+        is_terminal: bool,
+        preprocess: &mut impl FnMut(Option<String>, &str) -> Result<String, Error>,
+    ) -> io::Result<()> {
         // https://doc.rust-lang.org/beta/std/io/trait.IsTerminal.html#examples
         if is_terminal {
             output.write_all(welcome_prompt().as_bytes())?;
@@ -280,7 +315,7 @@ impl EGraph {
             cmd_buffer.push('\n');
             // handles multi-line commands
             if should_eval(&cmd_buffer) {
-                run_commands(self, None, &cmd_buffer, &mut output, mode)?;
+                run_commands(self, None, &cmd_buffer, &mut output, mode, preprocess)?;
                 cmd_buffer = String::new();
                 if is_terminal {
                     output.write_all(b"> ")?;
@@ -290,7 +325,7 @@ impl EGraph {
         }
 
         if !cmd_buffer.is_empty() {
-            run_commands(self, None, &cmd_buffer, &mut output, mode)?;
+            run_commands(self, None, &cmd_buffer, &mut output, mode, preprocess)?;
         }
 
         Ok(())
@@ -311,12 +346,23 @@ fn run_commands<W>(
     command: &str,
     mut output: W,
     mode: RunMode,
+    preprocess: &mut impl FnMut(Option<String>, &str) -> Result<String, Error>,
 ) -> io::Result<Option<Error>>
 where
     W: Write,
 {
+    let command = match preprocess(filename.clone(), command) {
+        Ok(source) => source,
+        Err(err) => {
+            log::error!("{err}");
+            if mode == RunMode::Interactive {
+                writeln!(output, "(error)")?;
+            }
+            return Ok(Some(err));
+        }
+    };
     if mode == RunMode::ShowDesugaredEgglog {
-        return Ok(match egraph.resolve_program(filename, command) {
+        return Ok(match egraph.resolve_program(filename, &command) {
             Ok(resolved) => {
                 let sanitized = sanitize_internal_names(&resolved);
 
@@ -332,7 +378,7 @@ where
         });
     };
 
-    Ok(match egraph.parse_and_run_program(filename, command) {
+    Ok(match egraph.parse_and_run_program(filename, &command) {
         Ok(msgs) => {
             if mode != RunMode::NoMessages {
                 for msg in msgs {

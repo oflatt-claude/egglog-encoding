@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
-import eval as E  # noqa: E402
+E = __import__("slotted-eval")
 import xdiff as X  # noqa: E402
 
 # name, initial unions, input, pattern, replacement, whether full matching adds nodes
@@ -54,7 +54,14 @@ def compiler_flag(tmp):
         "(check (= (F $0 (G $1 (Null))) (F $0 (G $1 (Null)))))\n"
     )
     result = subprocess.run(
-        [sys.executable, E.sc.__file__, path, "--nested-compat", "--desugar", "--own-only"],
+        [
+            str(ROOT / "target/debug/egglog-experimental"),
+            "--slotted",
+            "--slotted-no-aliasing",
+            "--mode",
+            "desugar",
+            path,
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -63,7 +70,14 @@ def compiler_flag(tmp):
     assert "(nested-atom " in result.stdout and "(atom " in result.stdout
     path.write_text('(include "slotted/languages/toy.egg")\n(rewrite (F a b) a :when ((= b (G x y))))\n')
     result = subprocess.run(
-        [sys.executable, E.sc.__file__, path, "--nested-compat", "--desugar"],
+        [
+            str(ROOT / "target/debug/egglog-experimental"),
+            "--slotted",
+            "--slotted-no-aliasing",
+            "--mode",
+            "desugar",
+            path,
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -73,8 +87,10 @@ def compiler_flag(tmp):
 
 
 def main():
-    E.EGGLOG = ROOT / "target" / "debug" / "egglog"
-    E.XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
+    config = E.Config(
+        egglog=ROOT / "target/debug/egglog-experimental",
+        xmulti=ROOT / "slotted/xmulti/target/debug/xmulti",
+    )
     with tempfile.TemporaryDirectory(prefix="slotted-nested-") as tmp:
         compiler_flag(tmp)
         for name, unions, start, lhs, rhs, differs in CASES:
@@ -103,9 +119,9 @@ def main():
                         ("encoding-no-aliasing", "ref-nested-snapshot") if compat else ("encoding", "ref-multi")
                     )
                 )
-                program = E.sc.compile_source(src, nested_compat=compat)
-                E.encoding_counts(program, name, X.LANG, enc, 30)
-                E.run_reference(spec, ref, 30, True)
+                program = path.read_text()
+                E.encoding_counts(program, name, X.LANG, enc, 30, config=config)
+                E.run_reference(spec, ref, 30, True, config=config)
                 E.compare([enc, ref])
                 assert enc.verdict(ref) == "isomorphic", (name, compat, enc.verdict(ref))
                 assert (enc.classes, enc.nodes) == (ref.classes, ref.nodes)

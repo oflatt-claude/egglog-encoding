@@ -135,6 +135,9 @@ def check_snapshots():
 # revision of `slotted-egraphs`; `--no-oracle` still permits offline encoding-only runs
 # when that revision is not already in Cargo's cache.
 CHECKS = [
+    ("rust-source-pass", ("slotted/checks/check-rust.py",), starts_ok, False, False),
+    ("rust-source-fuzz", ("slotted/checks/check-rust.py", "--fuzz", "100"), starts_ok, True, False),
+    ("campaign-status", ("slotted/checks/check-campaign.py",), starts_ok, False, False),
     ("leader-maintenance", ("slotted/checks/check-leader-maintenance.py",), starts_ok, False, False),
     ("shape-cache", ("slotted/checks/check-shape-cache.py",), starts_ok, False, False),
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
@@ -395,7 +398,10 @@ def main():
     )
     args = ap.parse_args()
 
-    needed = [(EGGLOG, "cargo build")]
+    needed = [
+        (EGGLOG, "cargo build"),
+        (ROOT / "target" / "debug" / "egglog-experimental", "cargo build -p egglog-experimental"),
+    ]
     if not args.no_oracle:
         needed.append((XMULTI, "cargo build in slotted/xmulti"))
     for tool, hint in needed:

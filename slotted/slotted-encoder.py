@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the slotted e-graph encoding from typed constructors and rules.
+"""Independent Python encoding used by differential tests and migration snapshots.
+
+The public source compiler is now egglog-experimental/src/slotted (Rust). This
+implementation is retained to check that migration and to drive low-level fuzzers.
 
 The implementation has four layers: constructor signatures, invariant-maintenance
 rules, term encoding, and MultiPattern rule encoding. Each equality-sort carrier has

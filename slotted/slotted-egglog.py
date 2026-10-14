@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Compile a test written in the SLOTTED language down to plain egglog.
+"""Legacy Python implementation retained as an independent migration oracle.
+
+Use `egglog-experimental --slotted` to run source programs. The paper evaluation
+uses that Rust pass; check-rust.py compares both implementations' complete graphs.
+
+Compile a test written in the SLOTTED language down to plain egglog.
 
 A slotted test declares its own constructors at the top and then talks about terms,
 rules and classes -- never about renamings, edges or `(Var 0)`. This turns that into a

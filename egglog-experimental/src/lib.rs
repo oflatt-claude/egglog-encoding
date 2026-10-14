@@ -42,6 +42,7 @@ pub use rational::*;
 pub mod scheduling;
 pub use scheduling::*;
 mod fresh_macro;
+pub mod slotted;
 
 mod set_cost;
 pub use set_cost::*;
@@ -71,8 +72,13 @@ pub fn new_experimental_egraph() -> EGraph {
     new_experimental_egraph_with_options(true)
 }
 
-pub fn new_experimental_egraph_for_proofs() -> EGraph {
+/// Keep egglog's built-in schedule semantics for generated encodings.
+pub fn new_experimental_egraph_with_native_schedule() -> EGraph {
     new_experimental_egraph_with_options(false)
+}
+
+pub fn new_experimental_egraph_for_proofs() -> EGraph {
+    new_experimental_egraph_with_native_schedule()
 }
 
 fn new_experimental_egraph_with_options(extended_run_schedule: bool) -> EGraph {

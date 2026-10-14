@@ -1,0 +1,39 @@
+;; A renaming is a partial injection on slots.
+(sort Renaming (Map i64 i64))
+
+;; Every way a match's slots may be merged, and the indices to read one at.
+(sort Frames (Vec Frame))
+;; A class's symmetry group: the renamings of its slots it is equal under.
+(sort Group (Set Renaming))
+;; One group per child column of a node.
+(sort Groups (Vec Group))
+;; The indices a group's element index is read at.
+(relation GroupIdx (i64))
+(relation GroupIdxSmall (i64))
+;; A node's edges in canonical spelling, and the renaming back to its own names.
+;; Declared after `Groups`, which is where `node-shape` reads its groups.
+(sort Renamings (Vec Renaming))
+;; Valid indices for each refinement-vector length, shared by equal lengths.
+(ruleset slotted-refine)
+(relation Idx (i64 i64))
+(rule ((Idx _len _i) (= _next (+ (* _i 2) 1)) (< _next _len)) ((Idx _len _next)) :ruleset slotted-refine)
+(rule ((Idx _len _i) (= _next (+ (* _i 2) 2)) (< _next _len)) ((Idx _len _next)) :ruleset slotted-refine)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; multi-sort slotted machinery
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(ruleset slotted)
+;; rows moved into their leaders' frames: once the leaders have settled
+(ruleset slotted-migrate)
+;; the groups from the rows' symmetries, closed and restricted, settled on their own
+(ruleset slotted-group)
+;; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`
+(ruleset slotted-shape)
+;; the readings a pattern joins: derived once the groups have settled
+(ruleset slotted-read)
+(ruleset slotted-apply)
+
+(function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)
+(function SlottedPayloadLayout (String i64 String) Unit :no-merge :internal-hidden)
