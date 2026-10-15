@@ -1,4 +1,5 @@
 import EgglogSemantics.Proofs.Diagonal
+import EgglogSemantics.Proofs.Step
 
 /-! Union-free mathematical executions preserve diagonal congruence. -/
 
@@ -7,10 +8,8 @@ namespace Egglog
 /-- Value construction and function writes add only reflexive equations. -/
 theorem evalAction_diag {db db' : Database} {a : Action} (hu : a.UnionFree)
     (hd : db.Diag) (h : evalAction db a = some db') : db'.Diag := by
-  rcases evalAction_eq_some h with ⟨_, t, _, _, rfl⟩ |
-    ⟨_, _, _, _, ks, vs, _, _, _, _, rfl⟩ | ⟨_, _, _, _, rfl, _⟩
+  rcases evalAction_eq_some h with ⟨_, t, _, _, rfl⟩ | ⟨_, _, _, _, rfl, _⟩
   · exact hd.addTerm t
-  · exact hd.addTerms (ks ++ vs)
   · exact absurd hu id
 
 theorem evalActions_diag {db db' : Database} {as : List Action} (hu : Actions.UnionFree as)
@@ -39,8 +38,7 @@ theorem MergeValues.diag {d e : Database} {decl : FnDecl} {old new vs : List Ter
     exact evalActions_diag (db := { d with env := mergeEnv oldVars newVars old new })
       (db' := e) (hu _ hmerge) hd hbody
 
-/-- A merge phase runs the body the signature names. Removing rows does not remove
-constructor equations, and installing the result only records its columns. -/
+/-- Merging removes reflexive row assertions and adds only reflexive assertions. -/
 theorem MergeStep.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeStep d₁ d₂) : d₂.Diag := by
   cases h with

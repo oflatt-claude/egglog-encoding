@@ -292,7 +292,10 @@ theorem List.forall₂_map_self {α β : Type*} {R : α → β → Prop} {f : α
 namespace ValidEnv
 variable {vars : List Var} {db : Database} {σ : Env}
 
-theorem mem_terms (h : ValidEnv vars db σ) : ∀ b ∈ σ, b.2 ∈ db.terms := h.2
+theorem mem_values (h : ValidEnv vars db σ) : ∀ b ∈ σ, b.2 ∈ db.values := h.2
+
+theorem mem_terms (h : ValidEnv vars db σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
+  fun b hb => (h.mem_values b hb).1
 
 theorem mem_dom_iff (h : ValidEnv vars db σ) {v : Var} : v ∈ Env.dom σ ↔ v ∈ vars :=
   h.1.mem_iff
@@ -339,6 +342,9 @@ variable {db : Database} {p : Pattern} {σ : Env}
 which is why requiring it costs nothing. Since the hoist it is the left conjunct. -/
 theorem validEnv (h : ValidSubst db p σ) : ValidEnv (p.freeVars []) db σ := h.1
 
+theorem mem_values (h : ValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.values :=
+  h.validEnv.mem_values
+
 theorem mem_terms (h : ValidSubst db p σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
   h.validEnv.mem_terms
 
@@ -356,23 +362,20 @@ an executable enumerator has to canonicalize rather than emit any agreeing repre
 theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
     (h : ValidSubst db p σ) (hag : Env.Agree σ σ')
     (hdom : Env.dom σ' = p.freeVars []) : ValidSubst db p σ' := by
-  have hterms : ∀ b ∈ σ', b.2 ∈ db.terms := by
+  have hterms : ∀ b ∈ σ', b.2 ∈ db.values := by
     intro b hb
     have hnd : (Env.dom σ').Nodup := hdom ▸ p.freeVars_nodup []
     have hlk : Env.lookup b.1 σ' = some b.2 := (Env.lookup_eq_some_iff_mem hnd).mpr hb
     rw [← hag b.1] at hlk
-    exact h.mem_terms _ (Env.mem_of_lookup hlk)
+    exact h.mem_values _ (Env.mem_of_lookup hlk)
   have hperm : (Env.dom σ').Perm (p.freeVars []) := hdom ▸ List.Perm.refl _
   have hev : ∀ e : Expr, e.eval db.sig σ' = e.eval db.sig σ :=
     fun e => Expr.eval_agree hag.symm e
-  have hevl : ∀ es : List Expr,
-      Expr.evalList db.sig es σ' = Expr.evalList db.sig es σ :=
-    fun es => Expr.evalList_agree hag.symm es
+  have heva : ∀ e : Expr, e.evalAtom db.sig σ' = e.evalAtom db.sig σ :=
+    fun e => Expr.evalAtom_agree hag.symm e
   refine ⟨⟨hperm, hterms⟩, ?_⟩
   cases h.2 with
-  | expr hwm he hc => exact .expr hwm (by rw [hev]; exact he) hc
-  | entry he hk hv hr hn hc =>
-      exact .entry he (by rw [hevl]; exact hk) (by rw [hevl]; exact hv) hr hn hc
+  | expr hwm he hc => exact .expr hwm (by rw [heva]; exact he) hc
   | eq hwm he₁ he₂ hc₁ hc₂ =>
     exact .eq hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
 
@@ -389,23 +392,7 @@ theorem Matches.of_agreeOn {db : Database} {p : Pattern} {σ σ' : Env} (h : Mat
     Matches db p σ' := by
   cases h with
   | @expr e _ w t hwm he hc =>
-    exact .expr hwm (by rw [Expr.eval_agreeOn e fun v hv => (hag v hv).symm]; exact he) hc
-  | @entry e _ f keys values ks vs row he hk hv hr hn hc =>
-      obtain ⟨_, _, _, heq⟩ := Expr.entry_some he
-      have hak : ∀ v ∈ Expr.varsList keys, Env.lookup v σ = Env.lookup v σ' := by
-        intro v hv
-        apply hag v
-        change v ∈ e.vars
-        rw [heq, Expr.vars_app, Expr.mem_varsList_append]
-        exact Or.inl hv
-      have hav : ∀ v ∈ Expr.varsList values, Env.lookup v σ = Env.lookup v σ' := by
-        intro v hv
-        apply hag v
-        change v ∈ e.vars
-        rw [heq, Expr.vars_app, Expr.mem_varsList_append]
-        exact Or.inr hv
-      exact .entry he ((Expr.evalList_agreeOn keys hak).symm.trans hk)
-        ((Expr.evalList_agreeOn values hav).symm.trans hv) hr hn hc
+    exact .expr hwm (by rw [Expr.evalAtom_agreeOn e fun v hv => (hag v hv).symm]; exact he) hc
   | @eq e₁ e₂ _ w t₁ t₂ hwm he₁ he₂ hc₁ hc₂ =>
     refine .eq hwm ?_ ?_ hc₁ hc₂
     · rw [Expr.eval_agreeOn e₁ fun v hv =>
@@ -420,11 +407,14 @@ variable {db : Database} {q : Query} {σ : Env}
 
 /-- Every value a query substitution binds is a term the database holds — `ValidEnv` per
 pattern, unioned. -/
-theorem mem_terms (h : ValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms := by
+theorem mem_values (h : ValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.values := by
   obtain ⟨σs, hall, hu⟩ := h
   refine hu.forall_mem fun σ' hσ' b hb => ?_
   obtain ⟨p, _, hv⟩ := hall.exists_left hσ'
-  exact hv.mem_terms b hb
+  exact hv.mem_values b hb
+
+theorem mem_terms (h : ValidQuerySubst db q σ) : ∀ b ∈ σ, b.2 ∈ db.terms :=
+  fun b hb => (h.mem_values b hb).1
 
 /-- A query substitution binds exactly the query's free variables. -/
 theorem mem_dom_iff (h : ValidQuerySubst db q σ) {v : Var} :

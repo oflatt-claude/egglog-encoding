@@ -32,6 +32,10 @@ end
 /-- The terms `db` holds: a term is present exactly when it is self-equal. -/
 def Database.terms (db : Database) : Set Term := {t | Cong db t t}
 
+/-- Bindings range over held values, excluding row atoms. -/
+def Database.values (db : Database) : Set Term :=
+  {t | t ∈ db.terms ∧ t.IsValue db.sig}
+
 /-- Both sides of a derivable equation are present. -/
 theorem eqsInTerms_free {db : Database} {a b : Term} (h : Cong db a b) :
     a ∈ db.terms ∧ b ∈ db.terms := ⟨h.trans h.symm, h.symm.trans h⟩
@@ -47,6 +51,10 @@ structure Database.StoreOk (db : Database) : Prop where
   declared : ∀ row ∈ db.entries,
     ∃ decl, db.sig row.name = some decl ∧ decl.merge ≠ none
   columns : ∀ row ∈ db.entries, ∀ t ∈ row.columns, t ∈ db.terms
+  typed : ∀ p ∈ db.eqs,
+    (p.1.IsValue db.sig ∧ p.2.IsValue db.sig) ∨
+      ∃ row : Entry, row.Valid db.sig ∧ p = (row.atom, row.atom)
+  envValues : ∀ b ∈ db.env, b.2.IsValue db.sig
 
 /-- No asserted equation puts a literal beside anything but itself: `evalAction` refuses a
 `union` on a literal and `addTerm` writes only reflexive pairs. `Cong.eq_of_isLit` reads it
@@ -79,14 +87,11 @@ represented existence; merely mentioning an absent term does not establish it. -
 def Database.Infers (db : Database) (a b : Term) : Prop :=
   ∃ w ∈ db.terms, CongOn db [a, b] w a ∧ CongOn db [a, b] a b
 
-/-- Observable mathematical state at a completed round. Constructor spellings are
-compared through inferred facts; function entries are compared directly. Completed
-rounds separately require these entries to have one row per congruent key. -/
+/-- Completed states agree on inferred facts, including function atoms. -/
 structure Database.SameMeaning (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   env : d₁.env = d₂.env
   rules : d₁.rules = d₂.rules
-  entries : d₁.entries = d₂.entries
   inferred : ∀ a b, d₁.Infers a b ↔ d₂.Infers a b
 
 end Egglog

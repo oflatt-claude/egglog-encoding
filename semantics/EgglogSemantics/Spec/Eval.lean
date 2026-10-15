@@ -17,7 +17,7 @@ mutual
 whether a name **builds, reads, or means nothing**. -/
 def Expr.eval (sig : Signature) : Expr → Env → Option Term
   | .lit l, _ => some (.lit l)
-  | .var v, σ => Env.lookup v σ
+  | .var v, σ => (Env.lookup v σ).filter (Term.isValue sig)
   | .app f args, σ =>
       if sig.IsCtor f then (Expr.evalList sig args σ).map (Term.app f) else none
   | .min a b, σ => (a.eval sig σ).bind fun x => (b.eval sig σ).map (Term.least x)
@@ -41,7 +41,10 @@ def Expr.entry (sig : Signature) : Expr → Option (FnName × List Expr × List 
 values, so entry applications cannot occur as children. -/
 def Expr.evalAtom (sig : Signature) : Expr → Env → Option Term
   | .app f cols, σ =>
-      if (sig f).isSome then (Expr.evalList sig cols σ).map (Term.app f) else none
+      (sig f).bind fun d =>
+        if d.merge = none ∨ cols.length = d.entryWidth then
+          (Expr.evalList sig cols σ).map (Term.app f)
+        else none
   | e, σ => e.eval sig σ
 
 /-- Run one action in the database's evaluation context. Actions never bind variables.
@@ -53,12 +56,7 @@ see it until the operands are values. Asserting it instead would cost
 `Database.LitsIsolated`. -/
 def evalAction (db : Database) : Action → Option Database
   | .expr e =>
-      match e.entry db.sig with
-      | some (f, keys, values) =>
-          (Expr.evalList db.sig keys db.env).bind fun ks =>
-            (Expr.evalList db.sig values db.env).map fun vs =>
-              db.putEntry ⟨f, ks, vs⟩
-      | none => (e.eval db.sig db.env).map fun t => db.addTerm t
+      (e.evalAtom db.sig db.env).map fun t => db.addTerm t
   | .union e₁ e₂ =>
       (e₁.eval db.sig db.env).bind fun t₁ =>
         (e₂.eval db.sig db.env).bind fun t₂ =>

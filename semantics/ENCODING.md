@@ -2,14 +2,15 @@
 
 ## Current migration: live tables and semantic saturation
 
-The mathematical specification now keeps current function entries separately from
-constructor existence/equations. Writes insert directly into the set of entries;
-there is no pending-write store. A single merge rule consumes two distinct colliding
-rows and installs the result, including merge-body effects. `MergeNormal` means
-one entry per congruent key; `MergeNormalize` reaches such a state by merge steps.
-`ordering-min` is size-first; saturation stops
-at the first completed round preserving inferred constructor facts and current
-entries. Definitions and rationale live in [Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
+The mathematical specification stores value equations and reflexive function atoms
+in one assertion set. Function entries are a derived view; declarations supply the
+key/output split and merge policy. Expression matching has one rule. A merge consumes
+two colliding atom assertions and installs the result, preserving column values and
+merge-body effects. `MergeNormal` means one entry per congruent key;
+`MergeNormalize` reaches such a state by merge steps. Saturation compares inferred
+facts, including atoms; on diagonal target states this implies exact state equality.
+The definitions have brief comments in `Spec/Database.lean`, `Spec/Match.lean`, and
+`Spec/Step.lean`.
 
 The core specification and ordering/live-table lemmas build. New mathematical
 proofs establish semantic equivalence of ordering-free source checks, current UF
@@ -27,9 +28,9 @@ has been introduced.
 
 The next proof obligations are:
 
-1. Derive `Live.State`, `Live.GeneratedTables`, and registered-head width correctness
-   along the generated prelude and actual compiled prefixes. `LiveState.lean` already
-   propagates them through actions and rounds and constructs completed rounds.
+1. Derive `Live.GeneratedTables` and the UF declaration along the generated prelude
+   and compiled prefixes. `LiveState.lean` derives row shape from declarations and
+   finiteness, propagates it through actions and rounds, and constructs completed rounds.
 2. Port `AbstractState`, rebuilding, and query correspondence to current entries.
    Soundness must use source `Infers` when a target structural spelling is represented
    but not literally recorded in the source. Equation containment alone no longer
@@ -38,27 +39,20 @@ The next proof obligations are:
    vocabulary ordering. Then reassemble the end-to-end observation and termination
    theorems. Full divergence equivalence remains open.
 
-Validation after removing pending: `make check` passes. The focused Lean build of
-`OrderFinite`, `SourceMeaning`, `Congruence.LiveLeaders`, `Congruence.LiveState`,
-the repaired source helpers, `StepMonotone`, `Tests.LiveCompiler`, and
-`Tests.MergeViews` passes (1,001 jobs). `Tests.LiveSemantics`
-also proves that a cyclic equality can infer an unrecorded nested spelling and that
-recording it preserves `SameMeaning`. Axiom audits contain
-only Lean's standard `propext`, `Classical.choice`, and `Quot.sound`; these paper
-proofs and the pure semantic regressions transitively import no executable
-interpreter module.
+Validation after unifying assertions: the focused Lean build passes (1,003 jobs),
+including source query transport, generated merge termination, and the live semantic
+regressions. `Tests.AtomStore` proves an actual minimum normalization, preserved scalar
+existence, successful retained-row matching, failed stale-row matching, and rejected
+row bindings. `Tests.MergeViews` still proves different UF lookups from two completed
+merge orders. Axiom audits use only `propext`, `Classical.choice`, and `Quot.sound`;
+the pure proof import closure contains no executable interpreter module.
 
-`Tests.MergeViews` proves that two completed merge orders can have different UF
-lookups. Its comments record the implication for computed views; its axiom audit
-also uses only Lean's standard axioms.
-
-`make -k lean-check lean-difftest` was also attempted and fails during the remaining
-legacy proof migration. The current first failing modules are `MatchMonotone`,
-`Congruence.Match`, `ActionMonotone`, `Out`, `Setup`, `RuleStore`,
-`StatePreservation`, `Congruence.AbstractState`, `Congruence.SourceWrites`,
-`Congruence.AbstractRebuild`, `Interp`, and `SourceProof.Actions`. The differential
-runner consequently cannot build. This is an explicit incomplete proof checkpoint,
-not a passing full Lean build or an interpreter-correctness claim.
+`make check` passed formatting, linting, type checking, documentation checks, and all
+172 Python tests. Rust tests hit the host's thread limit (`Resource temporarily
+unavailable`), including a retry with reduced concurrency. `make -k lean-check
+lean-difftest` still fails in the remaining legacy compiler/interpreter proof port;
+the differential runner therefore does not build. This is an incomplete compiler
+proof checkpoint, not a passing full Lean build or an interpreter-correctness claim.
 
 
 ## Prior proof milestone and continuing scope

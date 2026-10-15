@@ -55,6 +55,21 @@ end
 
 instance : DecidableEq Term := decEq
 
+mutual
+
+/-- Values contain only literals and declared constructors, never table atoms. -/
+def isValue (sig : Signature) : Term → Bool
+  | .lit _ => true
+  | .app f args => decide (sig.IsCtor f) && areValues sig args
+
+def areValues (sig : Signature) : List Term → Bool
+  | [] => true
+  | t :: ts => isValue sig t && areValues sig ts
+
+end
+
+abbrev IsValue (sig : Signature) (t : Term) : Prop := t.isValue sig = true
+
 /-- `t` is a base value. egglog's `union` requires an eq-sort and so rejects one;
 `evalAction` reads this to refuse the same. -/
 def isLit : Term → Bool

@@ -1,5 +1,5 @@
 import EgglogSemantics.Spec.Congruence
-import EgglogSemantics.Proofs.Term
+import EgglogSemantics.Proofs.AtomEntries
 
 namespace Egglog
 namespace Env
@@ -206,9 +206,6 @@ theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
 @[simp] theorem addTerm_rules {t : Term} {db : Database} :
     (db.addTerm t).rules = db.rules := rfl
 
-@[simp] theorem addTerm_entries {t : Term} {db : Database} :
-    (db.addTerm t).entries = db.entries := rfl
-
 theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
   Cong.assert (Or.inr ⟨t, Term.IsSubterm.refl t, rfl⟩)
 
@@ -248,12 +245,6 @@ theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb :
 
 @[simp] theorem addEq_sig {a b : Term} {db : Database} : (db.addEq a b).sig = db.sig := rfl
 
-@[simp] theorem addEq_entries {a b : Term} {db : Database} :
-    (db.addEq a b).entries = db.entries := rfl
-
-@[simp] theorem sUnion_entries {db : Database} {S : Set Database} :
-    (db.sUnion S).entries = db.entries ∪ ⋃ d ∈ S, d.entries := rfl
-
 @[simp] theorem sUnion_eqs {db : Database} {S : Set Database} :
     (db.sUnion S).eqs = db.eqs ∪ ⋃ d ∈ S, d.eqs := rfl
 
@@ -286,7 +277,7 @@ caller's environment. -/
 theorem EnvAgree.eq_of_env_rules {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (σ : Env)
     (R : Set Rule) :
     ({ d₁ with env := σ, rules := R } : Database) = { d₂ with env := σ, rules := R } := by
-  rw [h.sig, h.eqs, h.entries]
+  rw [h.sig, h.eqs]
 
 /-! ### `addTerms`
 
@@ -313,12 +304,6 @@ theorem addTerms_append {db : Database} {ts us : List Term} :
 
 @[simp] theorem addTerms_rules {db : Database} {ts : List Term} :
     (db.addTerms ts).rules = db.rules := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih
-
-@[simp] theorem addTerms_entries {db : Database} {ts : List Term} :
-    (db.addTerms ts).entries = db.entries := by
   induction ts generalizing db with
   | nil => rfl
   | cons t ts ih => exact ih
@@ -361,17 +346,15 @@ theorem addTerms_setSig (db : Database) (sig : Signature) (ts : List Term) :
 /-! ### Current function entries -/
 
 @[simp] theorem putEntry_eqs {db : Database} {e : Entry} :
-    (db.putEntry e).eqs = (db.addTerms e.columns).eqs := rfl
+    (db.putEntry e).eqs = (db.addTerm e.atom).eqs := rfl
 @[simp] theorem putEntry_sig {db : Database} {e : Entry} :
-    (db.putEntry e).sig = db.sig := addTerms_sig
+    (db.putEntry e).sig = db.sig := rfl
 @[simp] theorem putEntry_env {db : Database} {e : Entry} :
-    (db.putEntry e).env = db.env := addTerms_env
+    (db.putEntry e).env = db.env := rfl
 @[simp] theorem putEntry_rules {db : Database} {e : Entry} :
-    (db.putEntry e).rules = db.rules := addTerms_rules
-@[simp] theorem putEntry_entries {db : Database} {e : Entry} :
-    (db.putEntry e).entries = insert e db.entries := by simp [putEntry]
+    (db.putEntry e).rules = db.rules := rfl
 @[simp] theorem putEntry_terms {db : Database} {e : Entry} :
-    (db.putEntry e).terms = (db.addTerms e.columns).terms := terms_eq_of_eqs_eq rfl
+    (db.putEntry e).terms = db.terms ∪ e.atom.subterms := addTerm_terms
 
 @[simp] theorem eraseEntry_sig {db : Database} {e : Entry} :
     (db.eraseEntry e).sig = db.sig := rfl
@@ -380,28 +363,25 @@ theorem addTerms_setSig (db : Database) (sig : Signature) (ts : List Term) :
 @[simp] theorem eraseEntry_rules {db : Database} {e : Entry} :
     (db.eraseEntry e).rules = db.rules := rfl
 @[simp] theorem eraseEntry_eqs {db : Database} {e : Entry} :
-    (db.eraseEntry e).eqs = db.eqs := rfl
+    (db.eraseEntry e).eqs = db.eqs \ {(e.atom, e.atom)} := rfl
 
 @[simp] theorem putEntry_setRules (db : Database) (R : Set Rule) (e : Entry) :
     ({ db with rules := R } : Database).putEntry e = { db.putEntry e with rules := R } := by
-  simp [putEntry, addTerms_setRules]
+  rfl
 
 @[simp] theorem putEntry_setSig (db : Database) (sig : Signature) (e : Entry) :
     ({ db with sig := sig } : Database).putEntry e = { db.putEntry e with sig := sig } := by
-  simp [putEntry, addTerms_setSig]
+  rfl
 
 theorem mem_putEntry_columns {db : Database} {e : Entry} {t : Term}
     (ht : t ∈ e.columns) : t ∈ (db.putEntry e).terms := by
   rw [putEntry_terms]
-  exact mem_addTerms ht
-
-@[simp] theorem eraseEntry_terms {db : Database} {e : Entry} :
-    (db.eraseEntry e).terms = db.terms := terms_eq_of_eqs_eq rfl
+  exact Or.inr (Term.arg_subterms ht (Term.self_mem_subterms t))
 
 namespace EnvAgree
 theorem addTerm {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (t : Term) :
     (d₁.addTerm t).EnvAgree (d₂.addTerm t) :=
-  ⟨h.sig, by simp only [addTerm_eqs, h.eqs], h.entries, h.rules, h.env⟩
+  ⟨h.sig, by simp only [addTerm_eqs, h.eqs], h.rules, h.env⟩
 
 theorem addTerms {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (ts : List Term) :
     (d₁.addTerms ts).EnvAgree (d₂.addTerms ts) := by
@@ -411,8 +391,7 @@ theorem addTerms {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (ts : List Term
 
 theorem putEntry {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (e : Entry) :
     (d₁.putEntry e).EnvAgree (d₂.putEntry e) := by
-  have ht := h.addTerms e.columns
-  exact ⟨ht.sig, ht.eqs, congrArg (insert e) ht.entries, ht.rules, ht.env⟩
+  exact h.addTerm e.atom
 
 end EnvAgree
 namespace Contained
@@ -453,13 +432,13 @@ theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (a b : Term)
   ⟨Set.insert_subset_insert ((h.addTerm_mono a).addTerm_mono b).eqs⟩
 
 theorem putEntry (e : Entry) (db : Database) : Contained db (db.putEntry e) :=
-  ⟨(addTerms e.columns db).eqs⟩
+  addTerm e.atom db
 
-theorem eraseEntry (e : Entry) (db : Database) : Contained db (db.eraseEntry e) :=
-  ⟨subset_rfl⟩
+theorem eraseEntry (e : Entry) (db : Database) : Contained (db.eraseEntry e) db :=
+  ⟨Set.sdiff_subset⟩
 
 theorem putEntry_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (e : Entry) :
-    (d₁.putEntry e).Contained (d₂.putEntry e) := ⟨(h.addTerms_mono e.columns).eqs⟩
+    (d₁.putEntry e).Contained (d₂.putEntry e) := h.addTerm_mono e.atom
 
 theorem sUnion (db : Database) (S : Set Database) : Contained db (db.sUnion S) :=
   ⟨Set.subset_union_left⟩

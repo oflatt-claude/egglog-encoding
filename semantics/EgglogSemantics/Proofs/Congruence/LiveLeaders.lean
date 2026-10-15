@@ -31,45 +31,35 @@ theorem MergeNormal.out_unique {d : Database} (hn : MergeNormal d)
 
 namespace Congruence.Live
 
-/-- A successful generated UF atom reads the actual current tuple. The width premise
-is the generated table-shape invariant, rather than a claim about malformed stores. -/
+/-- A successful UF atom reads a current row through ordinary matching. -/
 theorem uf_match_out {d : Database} (hd : d.Diag) (hs : d.StoreOk)
     (huf : d.sig ufName = some (tableDecl 1))
-    (hwidth : ∀ row ∈ d.entries, row.name = ufName → row.key.length = 1)
     {σ : Env} {v w : Var} {a r : Term}
     (ha : Env.lookup v σ = some a) (hr : Env.lookup w σ = some r)
     (hm : Matches d (.expr (.app ufName [.var v, .var w])) σ) :
     d.Out ufName [a] [r] := by
-  have he : (Expr.app ufName [.var v, .var w]).entry d.sig =
-      some (ufName, [Expr.var v], [Expr.var w]) := by
-    simp [Expr.entry, huf, tableDecl]
-  have hv : (Expr.app ufName [.var v, .var w]).eval d.sig σ = none := by
-    simp [Expr.eval, Signature.IsCtor, huf, tableDecl]
-  have hk : Expr.evalList d.sig [Expr.var v] σ = some [a] := by
-    simp [Expr.evalList, Expr.eval, ha]
-  have ho : Expr.evalList d.sig [Expr.var w] σ = some [r] := by
-    simp [Expr.evalList, Expr.eval, hr]
-  obtain ⟨row, hrow, hn, hc⟩ := LiveTables.table_match_current he hv hk ho hm
-  have hcols : row.key ++ row.value = [a, r] :=
-    (CongList.eq_of_diag (hd.withOperands _) hc).symm
-  have hlen := hwidth row hrow hn
-  have hkey : row.key = [a] := by
-    calc
-      row.key = (row.key ++ row.value).take row.key.length := by simp
-      _ = [a] := by rw [hlen, hcols]; rfl
-  have hvalue : row.value = [r] := by
-    calc
-      row.value = (row.key ++ row.value).drop row.key.length := by simp
-      _ = [r] := by rw [hlen, hcols]; rfl
-  have hroweq : row = ⟨ufName, [a], [r]⟩ := by
-    cases row
-    cases hn
-    cases hkey
-    cases hvalue
-    rfl
-  have hexists : a ∈ d.terms :=
-    hs.columns row hrow a (by rw [Entry.columns, hcols]; simp)
-  exact ⟨[a], .cons hexists .nil, hroweq ▸ hrow⟩
+  cases hm with
+  | expr hx he hc =>
+    have hva : a.IsValue d.sig := by
+      cases hv : a.isValue d.sig with
+      | true => exact hv
+      | false => simp [Expr.evalAtom, huf, tableDecl, FnDecl.entryWidth,
+          Expr.evalList, Expr.eval, Option.filter_some, ha, hv] at he
+    have hvr : r.IsValue d.sig := by
+      cases hv : r.isValue d.sig with
+      | true => exact hv
+      | false => simp [Expr.evalAtom, huf, tableDecl, FnDecl.entryWidth,
+          Expr.evalList, Expr.eval, Option.filter_some, ha, hr, hva, hv] at he
+    have hev : (Expr.app ufName [.var v, .var w]).evalAtom d.sig σ =
+        some (Entry.mk ufName [a] [r]).atom := by
+      simp [Expr.evalAtom, huf, tableDecl, FnDecl.entryWidth, Expr.evalList,
+        Expr.eval, Option.filter_some, ha, hr, hva, hvr, Entry.atom, Entry.columns]
+    obtain rfl := Option.some.inj (hev.symm.trans he)
+    have hm : Entry.mk ufName [a] [r] ∈ d.entries := by
+      refine ⟨⟨tableDecl 1, huf, by simp [tableDecl], rfl, rfl, ?_⟩,
+        hd.eqsRefl ((congOn_eq_of_diag hd hc) ▸ hx)⟩
+      simpa [Entry.columns] using And.intro hva hvr
+    exact ⟨[a], .cons (hs.columns _ hm a (by simp [Entry.columns])) .nil, hm⟩
 
 /-- Unlike a historical self-loop, a current self-parent rules out any other parent. -/
 theorem self_parent_only {d : Database} (hn : MergeNormal d) {r p : Term}

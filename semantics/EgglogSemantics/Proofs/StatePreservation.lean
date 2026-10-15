@@ -121,12 +121,6 @@ Two front-end checks pay for it: `Program.WidthOk` for the terms a command build
 `Program.DeclsFresh` for the signature a `.decl` writes. Two conditions no signature-level
 check can deliver are carried by `Database.RunLegal`. -/
 
-/-- Every declared `:merge`'s body and result pass the width check, read of a *signature*
-because a `MergeStep` reads the body it runs from one. `Signature.MergesLegal`'s width twin,
-and what `Cmd.WidthOk (.decl _ _)` establishes of the signature a declaration installs. -/
-def Signature.MergesWidthOk (sig : Signature) : Prop :=
-  ∀ g dc ms, sig g = some dc → dc.merge = some ms → MergeSpec.WidthOk ms dc.outArity sig
-
 /-- **`DeclaredTerms` is preserved by a merge firing**, under the two signature-level
 invariants and no premise on the firing itself. `MergesWidthOk` supplies the body's
 `Actions.WidthOk`, which is what running the body needs; the combined entry is

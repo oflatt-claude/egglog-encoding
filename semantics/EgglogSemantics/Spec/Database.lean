@@ -4,12 +4,9 @@ import EgglogSemantics.Spec.Term
 /-!
 # The database
 
-The state separates constructor existence/equations from function entries. Writes
-insert directly into the entry set, which may temporarily contain conflicting rows.
-Both compiler sides use this same mathematical representation.
-There is no separate constructor term set: `t = t` records that `t`
-was built, and `Database.terms` is the terms that are self-equal. Replacing a function
-entry preserves the existence of its columns and all established equalities.
+One assertion set stores value equations and reflexive atom facts. Function rows
+are decoded using declarations; merging deletes displaced atom facts, preserving
+their column values. Both compiler sides use this mathematical representation.
 -/
 
 namespace Egglog
@@ -56,7 +53,7 @@ theorem lookup_append_of_none {v : Var} {σ₁ σ₂ : Env} (h : lookup v σ₁ 
 
 end Env
 
-/-- A current function entry. Outputs are an explicit tuple, separate from the key. -/
+/-- A decoded function row, used by normalization. -/
 structure Entry where
   name : FnName
   key : List Term
@@ -66,16 +63,21 @@ structure Entry where
 /-- All values mentioned by an entry. Entry atoms themselves are not constructor values. -/
 def Entry.columns (e : Entry) : List Term := e.key ++ e.value
 
+def Entry.atom (e : Entry) : Term := .app e.name e.columns
+
+/-- Declarations fix the functional dependency and the unique column split. -/
+def Entry.Valid (sig : Signature) (e : Entry) : Prop :=
+  ∃ d, sig e.name = some d ∧ d.merge ≠ none ∧
+    e.key.length = d.arity ∧ e.value.length = d.outArity ∧
+    ∀ t ∈ e.columns, t.IsValue sig
+
 /-- Egglog's global state. -/
 @[ext]
 structure Database where
   /-- The declared functions. Written only by `Cmd.decl`. -/
   sig : Signature
-  /-- The *asserted* equalities: `union`s, and a reflexive `t = t` per term built. Not
-  closed under congruence, and never shrinks. -/
+  /-- Value equations and reflexive atom facts; not closed under congruence. -/
   eqs : Set (Term × Term)
-  /-- Current function entries; merging replaces displaced entries. -/
-  entries : Set Entry := ∅
   /-- The evaluation context, installed temporarily for a rule or merge firing.
   Commands preserve it; a program starting at `empty` leaves it empty. -/
   env : Env
@@ -83,6 +85,10 @@ structure Database where
   rules : Set Rule
 
 namespace Database
+/-- Function rows are a view of reflexive assertions, not a separate store. -/
+def entries (db : Database) : Set Entry :=
+  {e | e.Valid db.sig ∧ (e.atom, e.atom) ∈ db.eqs}
+
 /-- The initial database. -/
 def empty : Database where
   sig := fun _ => none
@@ -105,24 +111,20 @@ def addEq (a b : Term) (db : Database) : Database :=
 /-- Insert a function entry, recording its column values. Identical writes coalesce;
 distinct conflicting rows remain until merging resolves them. -/
 def putEntry (e : Entry) (db : Database) : Database :=
-  let d := db.addTerms e.columns
-  { d with entries := insert e d.entries }
+  db.addTerm e.atom
 
 def eraseEntry (e : Entry) (db : Database) : Database :=
-  { db with entries := db.entries \ {e} }
+  { db with eqs := db.eqs \ {(e.atom, e.atom)} }
 
 /-- Union in a whole family of databases at once, taking `sig`, `env` and `rules` from
 `db`. -/
 def sUnion (db : Database) (S : Set Database) : Database :=
-  { db with
-    eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs
-    entries := db.entries ∪ ⋃ d ∈ S, d.entries }
+  { db with eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs }
 
 /-- Databases that differ only in an environment no `lookup` can tell apart. -/
 structure EnvAgree (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   eqs : d₁.eqs = d₂.eqs
-  entries : d₁.entries = d₂.entries
   rules : d₁.rules = d₂.rules
   env : Env.Agree d₁.env d₂.env
 

@@ -50,7 +50,7 @@ theorem Expr.eval_ctorsIn {P : Program} {sig : Signature} {σ : Env}
   | .lit _, _, _, he => by
       obtain rfl : _ = _ := Option.some.inj he
       exact Term.ctorsIn_lit
-  | .var v, t, _, he => hσ v t he
+  | .var v, t, _, he => hσ v t (Option.filter_eq_some_iff.mp he).1
   | .app f args, t, hc, he => by
       by_cases hcc : sig.IsCtor f
       · rw [Expr.eval_app_ctor hcc] at he
@@ -130,7 +130,7 @@ theorem Expr.evalAtom_ctorsIn {P : Program} {sig : Signature} {σ : Env}
     (he : e.evalAtom sig σ = some t) : Term.CtorsIn P t := by
   cases e with
   | lit _ => cases Option.some.inj he; exact Term.ctorsIn_lit
-  | var v => exact hσ v t he
+  | var v => exact hσ v t (Option.filter_eq_some_iff.mp he).1
   | min a b => exact Expr.eval_ctorsIn hσ (.min a b) hc he
   | app f args =>
     obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv he
@@ -148,20 +148,13 @@ theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : d
       ∀ f as, Term.app f as ∈ t.subterms → (f, as.length) ∈ P.ctors := fun ht f as hs =>
     ht f as hs
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
-    ⟨e, f, keys, vals, ks, vs, rfl, he, hk, hvals, rfl⟩ |
     ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
-  · have ht : Term.CtorsIn P t := Expr.eval_ctorsIn hlk e hc he
+  · have ht : Term.CtorsIn P t := Expr.evalAtom_ctorsIn hlk e hc he
     intro g bs hs
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
     · exact h g bs hs'
     · exact hcin ht g bs hs'
-  · have ht := Expr.evalAtom_ctorsIn hlk e hc (Expr.evalAtom_entry he hk hvals)
-    intro g bs hs
-    rw [Database.putEntry_terms, Database.addTerms_terms] at hs
-    rcases hs with hs | ⟨t, ht', hs⟩
-    · exact h g bs hs
-    · exact ht g bs (Term.arg_subterms ht' hs)
   · have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
       fun fk hk => hc fk (by rw [Action.ctors]; exact List.mem_append_left _ hk)
     have hc₂ : ∀ fk ∈ e₂.ctors, fk ∈ P.ctors :=

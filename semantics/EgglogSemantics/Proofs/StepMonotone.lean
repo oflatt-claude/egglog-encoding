@@ -1,49 +1,48 @@
 import EgglogSemantics.Proofs.Step
 
-/-! Mathematical commands retain every previously asserted equation. -/
+/-! Merging preserves value equations while replacing row assertions. -/
 
 namespace Egglog
 
-/-- Merging preserves asserted equations even when it replaces current table rows. -/
-theorem MergeStep.contained {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
-    d₁.Contained d₂ := by
+structure Database.ValueContained (d e : Database) : Prop where
+  sig : d.sig = e.sig
+  eqs : ∀ p ∈ d.eqs, p.1.IsValue d.sig → p.2.IsValue d.sig → p ∈ e.eqs
+
+theorem Database.ValueContained.refl (d : Database) : d.ValueContained d :=
+  ⟨rfl, fun _ hp _ _ => hp⟩
+
+theorem Database.ValueContained.trans {d e f : Database}
+    (h : d.ValueContained e) (h' : e.ValueContained f) : d.ValueContained f :=
+  ⟨h.sig.trans h'.sig, fun p hp ha hb => h'.eqs p (h.eqs p hp ha hb)
+    (h.sig ▸ ha) (h.sig ▸ hb)⟩
+
+theorem MergeStep.valueContained {d e : Database} (h : MergeStep d e) :
+    d.ValueContained e := by
+  refine ⟨h.sig.symm, ?_⟩
   cases h with
-  | @collide d old _ _ vs _ _ _ _ _ _ hv =>
-      have hb : d₁.Contained d := ⟨hv.contained.eqs⟩
-      exact hb.trans (.putEntry ⟨old.name, old.key, vs⟩ d)
+  | @collide mid old new decl vs hold hnew _ _ _ _ hv =>
+    intro p hp ha _
+    have keep (row : Entry) (hr : row.Valid d.sig) : p ≠ (row.atom, row.atom) := by
+      intro heq
+      exact hr.atom_not_value (by simpa only [heq] using ha)
+    have hp' : p ∈ ((d.eraseEntry old).eraseEntry new).eqs :=
+      ⟨⟨hp, keep old hold.1⟩, keep new hnew.1⟩
+    exact (Database.Contained.putEntry _ mid).eqs (hv.contained.eqs hp')
 
-theorem MergeClosure.contained {d₁ d₂ : Database} (h : MergeClosure d₁ d₂) :
-    d₁.Contained d₂ := by
+theorem MergeClosure.valueContained {d e : Database} (h : MergeClosure d e) :
+    d.ValueContained e := by
   induction h with
-  | refl => exact Database.Contained.refl _
-  | tail _ hstep ih => exact ih.trans (MergeStep.contained hstep)
+  | refl => exact .refl _
+  | tail _ hs ih => exact ih.trans hs.valueContained
 
-/-- A completed round preserves the equation component, independently of table updates. -/
-theorem RunStep.contained {R : RulesetName} {db db' : Database} (h : RunStep R db db') :
-    db.Contained db' :=
-  Database.Contained.trans (Database.Contained.sUnion _ _) (MergeClosure.contained h.1)
+theorem RunStep.valueContained {R : RulesetName} {d e : Database}
+    (h : RunStep R d e) : d.ValueContained e := by
+  exact (show d.ValueContained (RunRules R d) from
+    ⟨rfl, fun _ hp _ _ => Or.inl hp⟩).trans h.1.valueContained
 
-theorem RunReach.contained {R : RulesetName} {db d : Database}
-    (h : Relation.ReflTransGen (RunStep R) db d) : db.Contained d :=
-  RunReach.induction (P := fun x => db.Contained x)
-    (fun _ _ hp hs => hp.trans hs.contained) h (Database.Contained.refl _)
-
-theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
-    db.Contained db' := by
-  obtain ⟨d, hreach, hcl⟩ := h.reach
-  refine Database.Contained.trans ?_ (MergeClosure.contained hcl)
-  cases c with
-  | saturate R => exact RunReach.contained (show SaturateReach R db d from hreach).reach
-  | action a => exact evalAction_contained (hreach)
-  | rule r => subst hreach; exact ⟨subset_rfl⟩
-  | run R => subst hreach; exact Database.Contained.sUnion _ _
-  | decl f dc => subst hreach; exact ⟨subset_rfl⟩
-  | check q => rw [hreach.2]; exact .refl _
-
-theorem ProgramStep.contained {db db' : Database} {p : Program}
-    (h : ProgramStep db p db') : db.Contained db' := by
-  induction h with
-  | nil => exact Database.Contained.refl _
-  | cons hc _ ih => exact (CmdStep.contained hc).trans ih
+theorem RunReach.valueContained {R : RulesetName} {d e : Database}
+    (h : Relation.ReflTransGen (RunStep R) d e) : d.ValueContained e :=
+  RunReach.induction (P := fun e => d.ValueContained e)
+    (fun _ _ hp hs => hp.trans hs.valueContained) h (.refl _)
 
 end Egglog

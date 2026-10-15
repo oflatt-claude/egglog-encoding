@@ -16,8 +16,8 @@ private abbrev small (n : Nat) : Prop := n ∈ [1, 2, 3, 4]
 
 private def state (rows : Set Entry) (ρ : Env := []) : Database where
   sig := fun f => if f = ufName then some (tableDecl 1) else none
-  eqs := {(val 1, val 1), (val 2, val 2), (val 3, val 3), (val 4, val 4)}
-  entries := rows
+  eqs := {(val 1, val 1), (val 2, val 2), (val 3, val 3), (val 4, val 4)} ∪
+    {(r.atom, r.atom) | r ∈ rows}
   env := ρ
   rules := ∅
 
@@ -26,31 +26,70 @@ private theorem held {rows : Set Entry} {ρ : Env} {n : Nat} (hn : small n) :
   simp only [small, List.mem_cons, List.not_mem_nil, or_false] at hn
   rcases hn with rfl | rfl | rfl | rfl <;> simp [state]
 
-private theorem add_val {d : Database} {n : Nat} (hn : (val n, val n) ∈ d.eqs) :
-    d.addTerm (val n) = d := by
-  have he : d.eqs ∪ {(s, s) | s ∈ (val n).subterms} = d.eqs := by
-    apply Set.union_eq_left.mpr
-    rintro p ⟨s, hs, rfl⟩
-    have hs' : s = val n := by simpa [val] using hs
-    simpa [hs'] using hn
-  simp only [Database.addTerm, he]
+private theorem row_valid (k v : Nat) : (row k v).Valid (state ∅).sig := by
+  refine ⟨tableDecl 1, by simp [state, row], by simp [tableDecl], rfl, rfl, ?_⟩
+  simp [Entry.columns, row, val, Term.IsValue, Term.isValue]
+
+private theorem state_entries {rows : Set Entry} {ρ : Env}
+    (hr : ∀ r ∈ rows, r.Valid (state ∅).sig) : (state rows ρ).entries = rows := by
+  apply Database.entries_eq_of_packed (d := state rows ρ) rfl _ hr
+  rintro p (rfl | rfl | rfl | rfl) <;> rfl
+
+private theorem erase_state (rows : Set Entry) (ρ : Env) (r : Entry)
+    (hr : r.Valid (state ∅).sig) (hall : ∀ e ∈ rows, e.Valid (state ∅).sig) :
+    (state rows ρ).eraseEntry r = state (rows \ {r}) ρ := by
+  have hn : ∀ p ∈ ({(val 1, val 1), (val 2, val 2), (val 3, val 3),
+      (val 4, val 4)} : Set (Term × Term)), p ≠ (r.atom, r.atom) := by
+    rintro p (rfl | rfl | rfl | rfl) he <;> simp [val, Entry.atom] at he
+  unfold Database.eraseEntry state
+  congr 1
+  ext p
+  constructor
+  · rintro ⟨hp | ⟨e, he, rfl⟩, hne⟩
+    · exact Or.inl hp
+    · exact Or.inr ⟨e, ⟨he, fun heq => hne (by rw [show e = r from heq]; rfl)⟩, rfl⟩
+  · rintro (hp | ⟨e, ⟨he, hne⟩, rfl⟩)
+    · exact ⟨Or.inl hp, hn p hp⟩
+    · refine ⟨Or.inr ⟨e, he, rfl⟩, ?_⟩
+      intro heq
+      exact hne ((hall e he).atom_injective hr (congrArg Prod.fst heq))
 
 private theorem put_state (rows : Set Entry) (ρ : Env) {k v : Nat}
     (hk : small k) (hv : small v) :
     (state rows ρ).putEntry (row k v) = state (insert (row k v) rows) ρ := by
-  have hk' := add_val (held (rows := rows) (ρ := ρ) hk)
-  have hv' := add_val (held (rows := rows) (ρ := ρ) hv)
-  simp only [Database.putEntry, row, Entry.columns, Database.addTerms,
-    List.singleton_append, List.foldl_cons, List.foldl_nil, hk', hv']
-  rfl
+  have he := Database.putEntry_eqs_of_columns (d := state rows ρ) (row := row k v) (by
+    intro t ht u hu
+    simp only [row, Entry.columns, List.singleton_append, List.mem_cons,
+      List.not_mem_nil, or_false] at ht
+    rcases ht with rfl | rfl
+    · have heq : u = val k := by simpa [val] using hu
+      exact heq ▸ held hk
+    · have heq : u = val v := by simpa [val] using hu
+      exact heq ▸ held hv)
+  apply Database.ext <;> try rfl
+  rw [he]
+  ext p
+  constructor
+  · rintro (rfl | hp)
+    · exact Or.inr ⟨row k v, Or.inl rfl, rfl⟩
+    · rcases hp with hp | ⟨e, he, rfl⟩
+      · exact Or.inl hp
+      · exact Or.inr ⟨e, Or.inr he, rfl⟩
+  · rintro (hp | ⟨e, he, rfl⟩)
+    · exact Or.inr (Or.inl hp)
+    · rcases he with rfl | he
+      · exact Or.inl rfl
+      · exact Or.inr (Or.inr ⟨e, he, rfl⟩)
 
 private theorem state_diag (rows : Set Entry) (ρ : Env := []) : (state rows ρ).Diag := by
   intro p hp
-  simp only [state, Set.mem_insert_iff, Set.mem_singleton_iff] at hp
-  rcases hp with rfl | rfl | rfl | rfl <;> rfl
+  rcases hp with hp | ⟨e, _, rfl⟩
+  · rcases hp with rfl | rfl | rfl | rfl <;> rfl
+  · rfl
 
 /-- One generated collision, with its two UF side effects retained. -/
-private theorem collision (rows : Set Entry) {k a b : Nat}
+private theorem collision (rows : Set Entry)
+    (hall : ∀ e ∈ rows, e.Valid (state ∅).sig) {k a b : Nat}
     (hk : small k) (ha : small a) (hb : small b) (hne : a ≠ b)
     (hmin : Term.least (val a) (val b) = val a)
     (hra : row k a ∈ rows) (hrb : row k b ∈ rows) :
@@ -63,7 +102,7 @@ private theorem collision (rows : Set Entry) {k a b : Nat}
   have hbody : evalActions { state rest with env := ρ } mergeBody =
       some (state bodyRows ρ) := by
     have he := eval_mergeBody (d := state rest)
-      (by simp [state]) (val a) (val b)
+      (by simp [state]) (val a) (val b) (by rfl) (by rfl)
     rw [hmin] at he
     change evalActions (state rest ρ) mergeBody =
       some (((state rest ρ).putEntry (row a a)).putEntry (row b a)) at he
@@ -71,7 +110,8 @@ private theorem collision (rows : Set Entry) {k a b : Nat}
     exact he
   have hres : Expr.evalList (state bodyRows ρ).sig mergeResult (state bodyRows ρ).env =
       some [val a] := by
-    simpa [state, mergeResult, Expr.evalList, Expr.eval, ρ, mergeEnv, Env.lookup] using
+    simpa [state, mergeResult, Expr.evalList, Expr.eval, ρ, mergeEnv, Env.lookup,
+      Option.filter_some, Term.isValue, val] using
       congrArg (fun t => some [t]) hmin
   have hconf : MergeConflict (tableDecl 1) mergeBody [val a] [val b] := by
     have hvals : val a ≠ val b := by
@@ -82,26 +122,66 @@ private theorem collision (rows : Set Entry) {k a b : Nat}
     simpa [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody] using hvals
   have hm : MergeValues (state rest) (tableDecl 1) [val a] [val b]
       (state bodyRows) [val a] := .changed rfl hconf hbody hres
+  have herase : ((state rows).eraseEntry (row k a)).eraseEntry (row k b) = state rest := by
+    rw [erase_state rows [] (row k a) (row_valid k a) hall,
+      erase_state _ [] (row k b) (row_valid k b) (fun e he => hall e he.1)]
   have hs := MergeStep.collide (db := state rows) (old := row k a) (new := row k b)
-    (decl := tableDecl 1) hra hrb (by
+    (decl := tableDecl 1) (by rwa [state_entries hall])
+    (by rwa [state_entries hall]) (by
       intro he
       have hv := congrArg Entry.value he
       simp only [row, List.singleton_inj, val, Term.lit.injEq, Lit.int.injEq] at hv
       exact hne (by exact_mod_cast hv)) rfl (by simp [state, row])
-    (.cons (.assert (held hk)) .nil) hm
+    (.cons (.assert (held hk)) .nil) (herase.symm ▸ hm)
   change MergeStep (state rows) ((state bodyRows).putEntry (row k a)) at hs
   rw [put_state bodyRows [] hk ha] at hs
   exact hs
 
 private def startRows : Set Entry := {row 4 1, row 4 2, row 4 3}
+
+private theorem startRows_valid : ∀ e ∈ startRows, e.Valid (state ∅).sig := by
+  intro e he
+  simp only [startRows, Set.mem_insert_iff, Set.mem_singleton_iff] at he
+  rcases he with rfl | rfl | rfl <;> exact row_valid _ _
+
 private def leftMiddle : Set Entry := {row 4 1, row 4 3, row 1 1, row 2 1}
+
+private theorem leftMiddle_valid : ∀ e ∈ leftMiddle, e.Valid (state ∅).sig := by
+  intro e he
+  simp only [leftMiddle, Set.mem_insert_iff, Set.mem_singleton_iff] at he
+  rcases he with rfl | rfl | rfl | rfl <;> exact row_valid _ _
+
 private def rightMiddle : Set Entry := {row 4 1, row 4 2, row 2 2, row 3 2}
+
+private theorem rightMiddle_valid : ∀ e ∈ rightMiddle, e.Valid (state ∅).sig := by
+  intro e he
+  simp only [rightMiddle, Set.mem_insert_iff, Set.mem_singleton_iff] at he
+  rcases he with rfl | rfl | rfl | rfl <;> exact row_valid _ _
+
 private def rightLast : Set Entry := {row 4 1, row 1 1, row 2 1, row 2 2, row 3 2}
+
+private theorem rightLast_valid : ∀ e ∈ rightLast, e.Valid (state ∅).sig := by
+  intro e he
+  simp only [rightLast, Set.mem_insert_iff, Set.mem_singleton_iff] at he
+  rcases he with rfl | rfl | rfl | rfl | rfl <;> exact row_valid _ _
+
 private def leftRows : Set Entry := {row 4 1, row 1 1, row 2 1, row 3 1}
+
+private theorem leftRows_valid : ∀ e ∈ leftRows, e.Valid (state ∅).sig := by
+  intro e he
+  simp only [leftRows, Set.mem_insert_iff, Set.mem_singleton_iff] at he
+  rcases he with rfl | rfl | rfl | rfl <;> exact row_valid _ _
+
 private def rightRows : Set Entry := {row 4 1, row 1 1, row 2 1, row 3 2}
 
+private theorem rightRows_valid : ∀ e ∈ rightRows, e.Valid (state ∅).sig := by
+  intro e he
+  simp only [rightRows, Set.mem_insert_iff, Set.mem_singleton_iff] at he
+  rcases he with rfl | rfl | rfl | rfl <;> exact row_valid _ _
+
+
 private theorem left_first : MergeStep (state startRows) (state leftMiddle) := by
-  convert collision startRows (k := 4) (a := 1) (b := 2)
+  convert collision startRows startRows_valid (k := 4) (a := 1) (b := 2)
     (by decide) (by decide) (by decide) (by decide) (by decide +kernel)
     (by simp [startRows]) (by simp [startRows]) using 1
   congr 1
@@ -110,7 +190,7 @@ private theorem left_first : MergeStep (state startRows) (state leftMiddle) := b
   aesop
 
 private theorem left_second : MergeStep (state leftMiddle) (state leftRows) := by
-  convert collision leftMiddle (k := 4) (a := 1) (b := 3)
+  convert collision leftMiddle leftMiddle_valid (k := 4) (a := 1) (b := 3)
     (by decide) (by decide) (by decide) (by decide) (by decide +kernel)
     (by simp [leftMiddle]) (by simp [leftMiddle]) using 1
   congr 1
@@ -119,7 +199,7 @@ private theorem left_second : MergeStep (state leftMiddle) (state leftRows) := b
   aesop
 
 private theorem right_first : MergeStep (state startRows) (state rightMiddle) := by
-  convert collision startRows (k := 4) (a := 2) (b := 3)
+  convert collision startRows startRows_valid (k := 4) (a := 2) (b := 3)
     (by decide) (by decide) (by decide) (by decide) (by decide +kernel)
     (by simp [startRows]) (by simp [startRows]) using 1
   congr 1
@@ -128,7 +208,7 @@ private theorem right_first : MergeStep (state startRows) (state rightMiddle) :=
   aesop
 
 private theorem right_second : MergeStep (state rightMiddle) (state rightLast) := by
-  convert collision rightMiddle (k := 4) (a := 1) (b := 2)
+  convert collision rightMiddle rightMiddle_valid (k := 4) (a := 1) (b := 2)
     (by decide) (by decide) (by decide) (by decide) (by decide +kernel)
     (by simp [rightMiddle]) (by simp [rightMiddle]) using 1
   congr 1
@@ -137,7 +217,7 @@ private theorem right_second : MergeStep (state rightMiddle) (state rightLast) :
   aesop
 
 private theorem right_third : MergeStep (state rightLast) (state rightRows) := by
-  convert collision rightLast (k := 2) (a := 1) (b := 2)
+  convert collision rightLast rightLast_valid (k := 2) (a := 1) (b := 2)
     (by decide) (by decide) (by decide) (by decide) (by decide +kernel)
     (by simp [rightLast]) (by simp [rightLast]) using 1
   congr 1
@@ -148,14 +228,16 @@ private theorem right_third : MergeStep (state rightLast) (state rightRows) := b
 private theorem left_normal : MergeNormal (state leftRows) := by
   intro a ha b hb _ hk
   have he := CongList.eq_of_diag (state_diag leftRows) hk
-  simp only [state, leftRows, Set.mem_insert_iff, Set.mem_singleton_iff] at ha hb
+  rw [state_entries leftRows_valid] at ha hb
+  simp only [leftRows, Set.mem_insert_iff, Set.mem_singleton_iff] at ha hb
   rcases ha with rfl | rfl | rfl | rfl <;>
     rcases hb with rfl | rfl | rfl | rfl <;> simp_all [row, val]
 
 private theorem right_normal : MergeNormal (state rightRows) := by
   intro a ha b hb _ hk
   have he := CongList.eq_of_diag (state_diag rightRows) hk
-  simp only [state, rightRows, Set.mem_insert_iff, Set.mem_singleton_iff] at ha hb
+  rw [state_entries rightRows_valid] at ha hb
+  simp only [rightRows, Set.mem_insert_iff, Set.mem_singleton_iff] at ha hb
   rcases ha with rfl | rfl | rfl | rfl <;>
     rcases hb with rfl | rfl | rfl | rfl <;> simp_all [row, val]
 
@@ -169,18 +251,21 @@ theorem distinct_normalized_views :
     ⟨(Relation.ReflTransGen.single left_first).tail left_second, left_normal⟩,
     ⟨((Relation.ReflTransGen.single right_first).tail right_second).tail right_third,
       right_normal⟩, ?_, ?_⟩
-  · refine ⟨⟨?_, ?_, ?_⟩, by simp [state], ?_⟩
-    · simp [state]
-    · simp [state, startRows]
-    · simp [state]
+  · refine ⟨Database.FiniteStore.of_eqs_rules ?_ (by simp [state]), by simp [state], ?_⟩
+    · exact (by simp : ({(val 1, val 1), (val 2, val 2), (val 3, val 3),
+        (val 4, val 4)} : Set (Term × Term)).Finite).union
+        ((by simp [startRows] : startRows.Finite).image fun r : Entry => (r.atom, r.atom))
     · intro e he
-      simp only [state, startRows, Set.mem_insert_iff, Set.mem_singleton_iff] at he
+      rw [state_entries startRows_valid] at he
+      simp only [startRows, Set.mem_insert_iff, Set.mem_singleton_iff] at he
       rcases he with rfl | rfl | rfl <;>
         exact ⟨by simp [state, row], ⟨_, rfl⟩⟩
-  · exact ⟨[val 3], .cons (.assert (held (by decide))) .nil, by simp [state, leftRows, row]⟩
+  · exact ⟨[val 3], .cons (.assert (held (by decide))) .nil,
+      by rw [state_entries leftRows_valid]; simp [leftRows, row]⟩
   · rintro ⟨ks, hk, hr⟩
     have he : [val 3] = ks := CongList.eq_of_diag (state_diag rightRows) hk
     rw [← he] at hr
-    simp [state, rightRows, row, val] at hr
+    rw [state_entries rightRows_valid] at hr
+    simp [rightRows, row, val] at hr
 
 end Egglog.Tests.MergeViews

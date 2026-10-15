@@ -15,15 +15,15 @@ namespace Egglog
 namespace Database.SameMeaning
 
 theorem refl (d : Database) : d.SameMeaning d :=
-  ⟨rfl, rfl, rfl, rfl, fun _ _ => Iff.rfl⟩
+  ⟨rfl, rfl, rfl, fun _ _ => Iff.rfl⟩
 
 theorem symm {d e : Database} (h : d.SameMeaning e) : e.SameMeaning d :=
-  ⟨h.sig.symm, h.env.symm, h.rules.symm, h.entries.symm, fun a b => (h.inferred a b).symm⟩
+  ⟨h.sig.symm, h.env.symm, h.rules.symm, fun a b => (h.inferred a b).symm⟩
 
 theorem trans {d e f : Database} (h : d.SameMeaning e) (h' : e.SameMeaning f) :
     d.SameMeaning f :=
   ⟨h.sig.trans h'.sig, h.env.trans h'.env, h.rules.trans h'.rules,
-    h.entries.trans h'.entries, fun a b => (h.inferred a b).trans (h'.inferred a b)⟩
+    fun a b => (h.inferred a b).trans (h'.inferred a b)⟩
 
 end Database.SameMeaning
 
@@ -374,7 +374,7 @@ theorem infers_of_interpreted_extension {d e : Database} (hw : d.WF)
 /-- Materializing an already inferred constructor term changes no inferred fact. -/
 theorem sameMeaning_addTerm {d : Database} (hw : d.WF) {t : Term}
     (ht : d.Infers t t) : d.SameMeaning (d.addTerm t) := by
-  refine ⟨rfl, rfl, rfl, rfl, fun a b => ⟨infers_mono
+  refine ⟨rfl, rfl, rfl, fun a b => ⟨infers_mono
     (Database.Contained.addTerm t d), ?_⟩⟩
   apply infers_of_interpreted_extension hw
   · rintro p (hp | ⟨s, _, rfl⟩)
@@ -397,7 +397,7 @@ no inferred fact. The premise includes existence, even for `a = a`. -/
 theorem sameMeaning_addEq {d : Database} (hw : d.WF) {a b : Term}
     (hab : d.Infers a b) : d.SameMeaning (d.addEq a b) := by
   obtain ⟨w, hw', ha, hb⟩ := (infers_iff_interpret hw).mp hab
-  refine ⟨rfl, rfl, rfl, rfl, fun x y => ⟨infers_mono
+  refine ⟨rfl, rfl, rfl, fun x y => ⟨infers_mono
     (Database.Contained.addEq a b d), ?_⟩⟩
   apply infers_of_interpreted_extension hw
   · rintro p (rfl | (hp | ⟨s, _, rfl⟩) | ⟨s, _, rfl⟩)
@@ -484,7 +484,7 @@ theorem sameMeaning_addEq_congr {d : Database} (hw : d.WF)
     · exact infers_mono hg (infers_of_cong (.assert hp))
     · exact infers_subterm hD (infers_left hD hab) hs
     · exact infers_subterm hD (infers_right hD hab) hs
-  exact ⟨rfl, rfl, rfl, rfl, fun x y =>
+  exact ⟨rfl, rfl, rfl, fun x y =>
     ⟨forward ha hb hlit', forward ha.symm hb.symm hlit⟩⟩
 
 
@@ -495,7 +495,7 @@ namespace Database.SameMeaning
 /-- The same constructor write preserves equivalence of inferred states. -/
 theorem addTerm {d e : Database} (h : d.SameMeaning e) (hd : d.WF) (he : e.WF)
     (t : Term) : (d.addTerm t).SameMeaning (e.addTerm t) := by
-  refine ⟨h.sig, h.env, h.rules, h.entries, fun a b => ?_⟩
+  refine ⟨h.sig, h.env, h.rules, fun a b => ?_⟩
   have forward : ∀ {d e : Database}, d.SameMeaning e → e.WF →
       ∀ {a b}, (d.addTerm t).Infers a b → (e.addTerm t).Infers a b := by
     intro d e h he a b hi
@@ -511,7 +511,7 @@ well-formed endpoints are explicit because literal isolation is a database invar
 theorem addEq {d e : Database} (h : d.SameMeaning e) (hd : d.WF) (he : e.WF)
     (a b : Term) (hlit : a.isLit ∨ b.isLit → a = b) :
     (d.addEq a b).SameMeaning (e.addEq a b) := by
-  refine ⟨h.sig, h.env, h.rules, h.entries, fun x y => ?_⟩
+  refine ⟨h.sig, h.env, h.rules, fun x y => ?_⟩
   have forward : ∀ {d e : Database}, d.SameMeaning e → e.WF →
       ∀ {x y}, (d.addEq a b).Infers x y → (e.addEq a b).Infers x y := by
     intro d e h he x y hi

@@ -134,28 +134,6 @@ theorem MergeValues.merge_ne_none {db d : Database} {decl : FnDecl} {old new vs 
   cases h with
   | unchanged hm _ | changed hm _ _ _ => simp [hm]
 
-theorem MergeValues.storeOk {db d : Database} {decl : FnDecl} {old new vs : List Term}
-    (h : MergeValues db decl old new d vs) (hs : db.StoreOk) : d.StoreOk := by
-  cases h with
-  | unchanged => exact hs
-  | @changed post vs ovs nvs body res _ _ hb _ =>
-      have hstart : ({ db with env := mergeEnv ovs nvs old new } : Database).StoreOk :=
-        hs.of_contained ⟨subset_rfl⟩ rfl subset_rfl
-      exact (evalActions_storeOk hstart hb).of_contained ⟨subset_rfl⟩ rfl subset_rfl
-
-theorem MergeStep.storeOk {db d : Database} (h : MergeStep db d) (hs : db.StoreOk) :
-    d.StoreOk := by
-  cases h with
-  | @collide post old new decl vs _ _ _ _ hd _ hv =>
-      apply (hv.storeOk ((hs.eraseEntry old).eraseEntry new)).putEntry
-      exact ⟨decl, by rw [hv.sig]; exact hd, hv.merge_ne_none⟩
-
-theorem MergeClosure.storeOk {db d : Database} (h : MergeClosure db d) (hs : db.StoreOk) :
-    d.StoreOk := by
-  induction h with
-  | refl => exact hs
-  | tail _ hm ih => exact hm.storeOk ih
-
 theorem MergeStep.sig {d₁ d₂ : Database} (h : MergeStep d₁ d₂) : d₂.sig = d₁.sig := by
   cases h with
   | collide _ _ _ _ _ _ hv =>
@@ -191,6 +169,51 @@ theorem mem_mergeEnv {os ns : List Term} {p : Var × Term}
   rcases List.mem_append.mp h with h | h
   · exact Or.inl (List.of_mem_zip h).2
   · exact Or.inr (List.of_mem_zip h).2
+
+def Signature.MergesWidthOk (sig : Signature) : Prop :=
+  ∀ g dc ms, sig g = some dc → dc.merge = some ms → MergeSpec.WidthOk ms dc.outArity sig
+
+theorem MergeValues.storeOk {db d : Database} {decl : FnDecl} {old new vs : List Term}
+    (h : MergeValues db decl old new d vs) (hs : db.StoreOk)
+    (ho : ∀ t ∈ old, t.IsValue db.sig) (hn : ∀ t ∈ new, t.IsValue db.sig) : d.StoreOk := by
+  cases h with
+  | unchanged => exact hs
+  | @changed post vs ovs nvs body res _ _ hb _ =>
+      have hstart : ({ db with env := mergeEnv ovs nvs old new } : Database).StoreOk :=
+        hs.setEnv (fun b hb => (mem_mergeEnv hb).elim (ho b.2) (hn b.2))
+      exact (evalActions_storeOk hstart hb).congr rfl rfl (by
+        simpa only [evalActions_sig hb] using hs.envValues)
+
+theorem MergeValues.output_values {db d : Database} {decl : FnDecl} {old new vs : List Term}
+    (h : MergeValues db decl old new d vs) (ho : ∀ t ∈ old, t.IsValue db.sig) :
+    ∀ t ∈ vs, t.IsValue d.sig := by
+  cases h with
+  | unchanged => exact ho
+  | changed _ _ _ hr => exact Expr.evalList_isValue hr
+
+theorem MergeStep.storeOk {db d : Database} (h : MergeStep db d) (hs : db.StoreOk)
+    (hw : db.sig.MergesWidthOk) : d.StoreOk := by
+  cases h with
+  | @collide post old new decl vs ho hn _ _ hd _ hv =>
+      have hs' := (hs.eraseEntry old ho.1).eraseEntry new hn.1
+      have hpost := hv.storeOk hs' ho.1.output_values hn.1.output_values
+      apply hpost.putEntry
+      have hlen : vs.length = old.value.length := by
+        obtain ⟨dc, hdc, _, _, hlen, _⟩ := ho.1
+        have he : dc = decl := Option.some.inj (hdc.symm.trans hd)
+        subst dc
+        cases hv with
+        | unchanged => rfl
+        | changed hm _ _ hr =>
+            exact (Expr.evalList_length hr).trans ((hw _ _ _ hd hm).1.trans hlen.symm)
+      simpa only [hv.sig, Database.eraseEntry_sig] using ho.1.with_value hlen
+        (by simpa only [hv.sig, Database.eraseEntry_sig] using hv.output_values ho.1.output_values)
+
+theorem MergeClosure.storeOk {db d : Database} (h : MergeClosure db d) (hs : db.StoreOk)
+    (hw : db.sig.MergesWidthOk) : d.StoreOk := by
+  induction h with
+  | refl => exact hs
+  | tail hc hm ih => exact hm.storeOk ih (by rw [MergeClosure.sig hc]; exact hw)
 
 /-- **A `:merge` expression with no `:internal-identity-vals` conflicts on every pair**: it
 has no action block, so `FnDecl.unchangedWidth` gives it no width and every collision
@@ -310,36 +333,28 @@ theorem RuleResults.entries_subset {db d : Database} {r : Rule} (h : d ∈ RuleR
   exact evalLocalActions_entries_subset hs
 
 theorem RunRules.entries_subset {R : RulesetName} {db : Database} :
-    db.entries ⊆ (RunRules R db).entries := Set.subset_union_left
+    db.entries ⊆ (RunRules R db).entries := fun _ hr => ⟨hr.1, Or.inl hr.2⟩
 
-/-- Rule firing is unchanged exactly when every firing adds neither equations nor
-function entries. -/
+/-- A round is unchanged exactly when each firing adds no assertion. -/
 theorem runRules_eq_self_iff (R : RulesetName) (db : Database) :
     RunRules R db = db ↔
       ∀ r ∈ db.rules, r.ruleset = R → ∀ d ∈ RuleResults db r,
-        Database.Contained d db ∧ d.entries ⊆ db.entries := by
+        Database.Contained d db := by
   constructor
   · intro h r hr hR d hd
     have hmem : d ∈ {d | ∃ r ∈ db.rules, r.ruleset = R ∧ d ∈ RuleResults db r} :=
       ⟨r, hr, hR, hd⟩
     have he : d.eqs ⊆ (RunRules R db).eqs := fun _ hp =>
       Or.inr (Set.mem_biUnion hmem hp)
-    have hp : d.entries ⊆ (RunRules R db).entries := fun _ hp =>
-      Or.inr (Set.mem_biUnion hmem hp)
-    rw [h] at he hp
-    exact ⟨⟨he⟩, hp⟩
+    rw [h] at he
+    exact ⟨he⟩
   · intro h
-    refine Database.ext rfl ?_ ?_ rfl rfl
-    · refine Set.Subset.antisymm ?_ Set.subset_union_left
-      rintro p (hp | hp)
-      · exact hp
-      · obtain ⟨d, ⟨r, hr, hR, hd⟩, hp⟩ := Set.mem_iUnion₂.mp hp
-        exact (h r hr hR d hd).1.eqs hp
-    · refine Set.Subset.antisymm ?_ Set.subset_union_left
-      rintro p (hp | hp)
-      · exact hp
-      · obtain ⟨d, ⟨r, hr, hR, hd⟩, hp⟩ := Set.mem_iUnion₂.mp hp
-        exact (h r hr hR d hd).2 hp
+    refine Database.ext rfl ?_ rfl rfl
+    refine Set.Subset.antisymm ?_ Set.subset_union_left
+    rintro p (hp | hp)
+    · exact hp
+    · obtain ⟨d, ⟨r, hr, hR, hd⟩, hp⟩ := Set.mem_iUnion₂.mp hp
+      exact (h r hr hR d hd).eqs hp
 
 /-! ### A saturating run
 
@@ -560,14 +575,7 @@ theorem evalAction_setRules (db : Database) (R : Set Rule) (a : Action) :
       = (evalAction db a).map fun d => { d with rules := R } := by
   cases a with
   | expr e =>
-      cases he : e.entry db.sig with
-      | none =>
-          cases h : e.eval db.sig db.env <;> simp [evalAction, he, h, Database.addTerm]
-      | some entry =>
-          obtain ⟨f, keys, values⟩ := entry
-          cases hk : Expr.evalList db.sig keys db.env <;>
-            cases hv : Expr.evalList db.sig values db.env <;>
-            simp [evalAction, he, hk, hv]
+      cases h : e.evalAtom db.sig db.env <;> simp [evalAction, h, Database.addTerm]
   | union e₁ e₂ =>
       cases h₁ : e₁.eval db.sig db.env with
       | none => simp [evalAction, h₁]
@@ -777,7 +785,7 @@ theorem eval_avoids {sig : Signature} {f : FnName} {σ : Env} (hf : sig f = none
   | var v =>
       intro t h
       rw [Expr.eval] at h
-      exact hσ (v, t) (Env.mem_of_lookup h)
+      exact hσ (v, t) (Env.mem_of_lookup (Option.filter_eq_some_iff.mp h).1)
   | app g args ih =>
       intro t h
       rw [Expr.eval] at h
@@ -808,32 +816,21 @@ theorem evalAtom_avoids {sig : Signature} {f : FnName} {σ : Env} (hf : sig f = 
   | var v => exact eval_avoids hf hσ (.var v) t h
   | min a b => exact eval_avoids hf hσ (.min a b) t h
   | app g args =>
-    simp only [Expr.evalAtom] at h
-    have hargs := evalList_avoids args (sig := sig) (σ := σ) (f := f)
+    obtain ⟨d, hd, h⟩ := Option.bind_eq_some_iff.mp h
     split at h
-    · rename_i hg
-      obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
+    · obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
       intro hm
       rcases Term.mentions_app hm with rfl | ⟨a, ha, hm⟩
-      · simp [hf] at hg
-      · exact hargs ts (fun a _ => eval_avoids hf hσ a) hts a ha hm
+      · simp [hf] at hd
+      · exact evalList_avoids args ts (fun a _ => eval_avoids hf hσ a) hts a ha hm
     · simp at h
 
 theorem evalAction_avoids {f : FnName} {db d : Database} {a : Action}
     (hf : db.sig f = none) (_hd : a.Declared db.sig) (hav : db.Avoids f)
     (h : evalAction db a = some d) : d.Avoids f := by
   rcases evalAction_eq_some h with ⟨e, t, _, ht, rfl⟩ |
-    ⟨e, g, keys, values, ks, vs, _, _, hk, hv, rfl⟩ |
     ⟨e₁, e₂, t₁, t₂, _, ht₁, ht₂, _, rfl⟩
-  · exact ⟨avoids_addTerm hav.terms (eval_avoids hf hav.env e t ht), hav.env⟩
-  · have hcols : ∀ t ∈ ks ++ vs, ¬ Term.Mentions f t := by
-      intro t ht
-      rcases List.mem_append.mp ht with ht | ht
-      · exact evalList_avoids keys ks (fun e _ => eval_avoids hf hav.env e) hk t ht
-      · exact evalList_avoids values vs (fun e _ => eval_avoids hf hav.env e) hv t ht
-    refine ⟨?_, ?_⟩
-    · simpa only [Database.putEntry_terms, Entry.columns] using avoids_addTerms hav.terms hcols
-    · simpa only [Database.putEntry_env] using hav.env
+  · exact ⟨avoids_addTerm hav.terms (evalAtom_avoids hf hav.env e t ht), hav.env⟩
   · exact ⟨avoids_addEq hav.terms (eval_avoids hf hav.env e₁ t₁ ht₁)
       (eval_avoids hf hav.env e₂ t₂ ht₂), hav.env⟩
 
@@ -873,40 +870,40 @@ theorem mergeValues_avoids {f : FnName} {db d : Database} {decl : FnDecl}
       exact evalList_avoids res vs
         (fun e _ => eval_avoids (by rw [hsig]; exact hf) hpost.env e) hr
 
-/-- Stored values supply the environments used by destructive merges. -/
+/-- Erasing rows and evaluating a declared merge cannot introduce a fresh name. -/
 theorem mergeStep_avoids {f : FnName} {db x : Database} (hf : db.sig f = none)
-    (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f) (hs : db.StoreOk)
+    (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f)
     (h : MergeStep db x) : x.Avoids f := by
   have hcols : ∀ row ∈ db.entries, ∀ t ∈ row.columns,
-      ¬ Term.Mentions f t := fun row hr t ht => hav.terms t (hs.columns row hr t ht)
+      ¬ Term.Mentions f t := fun row hr t ht =>
+        Term.not_mentions_args (hav.terms row.atom (Cong.assert hr.2)) t ht
   cases h with
   | @collide post old new decl vs ho hn _ _ hd _ hv =>
       have hov := hcols old ho
       have hnv := hcols new hn
       have hstart : ((db.eraseEntry old).eraseEntry new).Avoids f :=
-        Database.Avoids.congr (d₁ := db)
-          (d₂ := (db.eraseEntry old).eraseEntry new) rfl hav.env hav
-      obtain ⟨havpost, hvs⟩ := mergeValues_avoids (db := ((db.eraseEntry old).eraseEntry new)) hf
+        ⟨fun t ht => hav.terms t ((Database.Contained.eraseEntry old db).terms
+          ((Database.Contained.eraseEntry new (db.eraseEntry old)).terms ht)), hav.env⟩
+      obtain ⟨havpost, hvs⟩ := mergeValues_avoids (db := (db.eraseEntry old).eraseEntry new) hf
         (hsmd old.name decl · hd) hstart
         (fun t ht => hov t (List.mem_append_right _ ht))
         (fun t ht => hnv t (List.mem_append_right _ ht)) hv
-      refine ⟨?_, ?_⟩
-      · rw [Database.putEntry_terms]
-        apply avoids_addTerms havpost.terms
-        intro t ht
-        exact (List.mem_append.mp ht).elim
-          (fun ht => hov t (List.mem_append_left _ ht)) (hvs t)
-      · simpa using havpost.env
+      refine ⟨avoids_addTerm havpost.terms ?_, havpost.env⟩
+      intro hm
+      rcases Term.mentions_app hm with he | ⟨t, ht, hm⟩
+      · rw [he, hf] at hd
+        contradiction
+      · exact (List.mem_append.mp ht).elim
+          (fun ht => hov t (List.mem_append_left _ ht) hm) (fun ht => hvs t ht hm)
 
 theorem mergeClosure_avoids {f : FnName} {db d : Database} (hf : db.sig f = none)
-    (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f) (hs : db.StoreOk)
+    (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f)
     (h : MergeClosure db d) : d.Avoids f := by
   induction h with
   | refl => exact hav
   | @tail p q hcl hstep ih =>
       have hpsig : p.sig = db.sig := MergeClosure.sig hcl
-      exact mergeStep_avoids (by rw [hpsig]; exact hf) (by rw [hpsig]; exact hsmd)
-        ih (MergeClosure.storeOk hcl hs) hstep
+      exact mergeStep_avoids (by rw [hpsig]; exact hf) (by rw [hpsig]; exact hsmd) ih hstep
 
 /-! #### The declaration commutes with its merge phase -/
 
@@ -918,20 +915,62 @@ theorem evalList_update {sig sig' : Signature} {σ : Env} :
       rw [Expr.evalList, Expr.evalList, h e (List.mem_cons_self ..),
         evalList_update es fun a ha => h a (List.mem_cons_of_mem _ ha)]
 
+theorem Term.isValue_update {sig sig' : Signature} {f : FnName}
+    (hag : ∀ g, g ≠ f → sig g = sig' g) {t : Term}
+    (ht : ¬ t.Mentions f) : t.isValue sig = t.isValue sig' := by
+  have hiff : t.IsValue sig ↔ t.IsValue sig' := by
+    induction t using Term.recTerm with
+    | lit l => simp [Term.IsValue, Term.isValue]
+    | app g args ih =>
+      have hgf : g ≠ f := fun he => ht (he ▸ Term.mentions_head g args)
+      rw [Term.isValue_app_iff, Term.isValue_app_iff]
+      have hc : sig.IsCtor g ↔ sig'.IsCtor g := by simp [Signature.IsCtor, hag g hgf]
+      exact and_congr hc (forall₂_congr (fun a ha => ih a ha (Term.not_mentions_args ht a ha)))
+  cases h₁ : t.isValue sig <;> cases h₂ : t.isValue sig' <;> simp_all [Term.IsValue]
+
+theorem Entry.valid_update_iff {sig sig' : Signature} {f : FnName} {row : Entry}
+    (hag : ∀ g, g ≠ f → sig g = sig' g) (ht : ¬ row.atom.Mentions f) :
+    row.Valid sig ↔ row.Valid sig' := by
+  have hn : row.name ≠ f := fun he => ht (he ▸ Term.mentions_head row.name row.columns)
+  have hc : ∀ t ∈ row.columns, t.IsValue sig ↔ t.IsValue sig' := by
+    intro t hm
+    exact congrArg (· = true) (Term.isValue_update hag (Term.not_mentions_args ht t hm)) |>.to_iff
+  simp only [Entry.Valid, hag row.name hn]
+  constructor <;> rintro ⟨d, hd, hm, hk, hv, hcols⟩
+  · exact ⟨d, hd, hm, hk, hv, fun t ht => (hc t ht).mp (hcols t ht)⟩
+  · exact ⟨d, hd, hm, hk, hv, fun t ht => (hc t ht).mpr (hcols t ht)⟩
+
+theorem Database.entries_update_of_avoids {db : Database} {sig' : Signature} {f : FnName}
+    (hag : ∀ g, g ≠ f → db.sig g = sig' g) (hav : db.Avoids f) :
+    ({db with sig := sig'} : Database).entries = db.entries := by
+  ext row
+  constructor
+  · rintro ⟨hv, hp⟩
+    exact ⟨(Entry.valid_update_iff hag (hav.terms _ (Cong.assert hp))).mpr hv, hp⟩
+  · rintro ⟨hv, hp⟩
+    exact ⟨(Entry.valid_update_iff hag (hav.terms _ (Cong.assert hp))).mp hv, hp⟩
+
 /-- Declaring a name a `Declared` expression cannot mention leaves its value alone. -/
 theorem eval_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
     (hag : ∀ g, g ≠ f → sig g = sig' g) :
-    ∀ (e : Expr), e.Declared sig → ∀ (σ : Env), e.eval sig σ = e.eval sig' σ := by
+    ∀ (e : Expr), e.Declared sig → ∀ (σ : Env),
+      (∀ b ∈ σ, ¬ Term.Mentions f b.2) → e.eval sig σ = e.eval sig' σ := by
   intro e
   induction e using Expr.recExpr with
-  | lit l => intro _ σ; rfl
-  | var v => intro _ σ; rfl
+  | lit l => intro _ σ _; rfl
+  | var v =>
+      intro _ σ hv
+      cases hl : Env.lookup v σ with
+      | none => simp [Expr.eval, hl]
+      | some t =>
+        simp only [Expr.eval, hl, Option.filter_some]
+        rw [Term.isValue_update hag (hv (v,t) (Env.mem_of_lookup hl))]
   | app g args ih =>
-      intro hdec σ
+      intro hdec σ hv
       have hargs : ∀ a ∈ args, a.Declared sig := fun a ha x hx =>
         hdec x (by rw [Expr.fns]; exact List.mem_cons_of_mem _ (Expr.fns_subset_fnsList ha hx))
       have hlist : Expr.evalList sig args σ = Expr.evalList sig' args σ :=
-        evalList_update args fun a ha => ih a ha (hargs a ha) σ
+        evalList_update args fun a ha => ih a ha (hargs a ha) σ hv
       rw [Expr.eval, Expr.eval, hlist]
       have hgf : g ≠ f := by
         rintro rfl
@@ -942,22 +981,23 @@ theorem eval_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
       · rw [if_pos hc, if_pos (hiff.mp hc)]
       · rw [if_neg hc, if_neg fun h => hc (hiff.mpr h)]
   | min a b iha ihb =>
-      intro hdec σ
+      intro hdec σ hv
       have ha : a.Declared sig := fun x hx => hdec x (by simp [hx])
       have hb : b.Declared sig := fun x hx => hdec x (by simp [hx])
-      rw [Expr.eval_min, Expr.eval_min, iha ha σ, ihb hb σ]
+      rw [Expr.eval_min, Expr.eval_min, iha ha σ hv, ihb hb σ hv]
 
 theorem evalAtom_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
-    (hag : ∀ g, g ≠ f → sig g = sig' g) (e : Expr) (hd : e.Declared sig) (σ : Env) :
+    (hag : ∀ g, g ≠ f → sig g = sig' g) (e : Expr) (hd : e.Declared sig) (σ : Env)
+    (hv : ∀ b ∈ σ, ¬ Term.Mentions f b.2) :
     e.evalAtom sig σ = e.evalAtom sig' σ := by
   cases e with
   | lit _ => rfl
-  | var _ => rfl
-  | min a b => exact eval_update hf hag (.min a b) hd σ
+  | var v => exact eval_update hf hag (.var v) hd σ hv
+  | min a b => exact eval_update hf hag (.min a b) hd σ hv
   | app g args =>
     have hargs : ∀ a ∈ args, a.Declared sig := fun a ha x hx =>
       hd x (by rw [Expr.fns]; exact List.mem_cons_of_mem _ (Expr.fns_subset_fnsList ha hx))
-    have hl := evalList_update args (fun a ha => eval_update hf hag a (hargs a ha) σ)
+    have hl := evalList_update args (fun a ha => eval_update hf hag a (hargs a ha) σ hv)
     simp only [Expr.evalAtom, hl]
     have hgf : g ≠ f := by
       rintro rfl
@@ -977,35 +1017,18 @@ theorem Expr.entry_update {sig sig' : Signature} {f : FnName} (hf : sig f = none
       simp only [Expr.entry, hag g hgf]
 
 theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : Action}
-    (hf : db.sig f = none) (hag : ∀ g, g ≠ f → db.sig g = sig' g) (hd : a.Declared db.sig) :
+    (hf : db.sig f = none) (hag : ∀ g, g ≠ f → db.sig g = sig' g) (hd : a.Declared db.sig)
+    (hv : ∀ b ∈ db.env, ¬ Term.Mentions f b.2) :
     evalAction { db with sig := sig' } a
       = (evalAction db a).map fun d => { d with sig := sig' } := by
   cases a with
   | expr e =>
-      have he := Expr.entry_update hf hag e hd
-      cases he₀ : e.entry db.sig with
-      | none =>
-          have hev := eval_update hf hag e hd db.env
-          cases h : e.eval db.sig db.env <;>
-            simp [evalAction, ← he, he₀, ← hev, h, Database.addTerm]
-      | some entry =>
-          obtain ⟨g, keys, values⟩ := entry
-          obtain ⟨_, _, _, heq⟩ := Expr.entry_some he₀
-          have hargs : ∀ a ∈ keys ++ values, a.Declared db.sig := by
-            intro a ha x hx
-            apply hd x
-            rw [heq, Expr.fns]
-            exact List.mem_cons_of_mem _ (Expr.fns_subset_fnsList ha hx)
-          have hk := evalList_update keys (fun a ha =>
-            eval_update hf hag a (hargs a (List.mem_append_left _ ha)) db.env)
-          have hv := evalList_update values (fun a ha =>
-            eval_update hf hag a (hargs a (List.mem_append_right _ ha)) db.env)
-          cases hk₀ : Expr.evalList db.sig keys db.env <;>
-            cases hv₀ : Expr.evalList db.sig values db.env <;>
-            simp [evalAction, ← he, he₀, ← hk, ← hv, hk₀, hv₀]
+      have he := evalAtom_update hf hag e hd db.env hv
+      cases h : e.evalAtom db.sig db.env <;>
+        simp [evalAction, ← he, h, Database.addTerm]
   | union e₁ e₂ =>
-      have h₁ := eval_update hf hag e₁ hd.1 db.env
-      have h₂ := eval_update hf hag e₂ hd.2 db.env
+      have h₁ := eval_update hf hag e₁ hd.1 db.env hv
+      have h₂ := eval_update hf hag e₂ hd.2 db.env hv
       cases hc₁ : e₁.eval db.sig db.env with
       | none => simp [evalAction, ← h₁, hc₁]
       | some t₁ =>
@@ -1018,30 +1041,34 @@ theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : A
 theorem evalActions_update {f : FnName} {sig' : Signature} :
     ∀ (as : List Action) (db : Database), db.sig f = none →
       (∀ g, g ≠ f → db.sig g = sig' g) → Actions.Declared as db.sig →
+      (∀ b ∈ db.env, ¬ Term.Mentions f b.2) →
       evalActions { db with sig := sig' } as
         = (evalActions db as).map fun d => { d with sig := sig' } := by
   intro as
   induction as with
-  | nil => intro db _ _ _; simp [evalActions]
+  | nil => intro db _ _ _ _; simp [evalActions]
   | cons a as ih =>
-      intro db hf hag hd
+      intro db hf hag hd hv
       cases h : evalAction db a with
-      | none => simp [evalActions, evalAction_update hf hag hd.1, h]
+      | none => simp [evalActions, evalAction_update hf hag hd.1 hv, h]
       | some d =>
           have hsig : d.sig = db.sig := evalAction_sig h
           have hstep : evalActions { db with sig := sig' } (a :: as)
               = evalActions { d with sig := sig' } as := by
-            simp [evalActions, evalAction_update hf hag hd.1, h]
+            simp [evalActions, evalAction_update hf hag hd.1 hv, h]
           rw [hstep, ih d (by rw [hsig]; exact hf) (by rw [hsig]; exact hag)
-            (by rw [hsig]; exact hd.2)]
+            (by rw [hsig]; exact hd.2) (by rw [evalAction_env h]; exact hv)]
           simp [evalActions, h]
 
 theorem mergeValues_update_iff {f : FnName} {sig' : Signature} {db d : Database}
     {decl : FnDecl} {old new vs : List Term} (hf : db.sig f = none)
     (hag : ∀ g, g ≠ f → db.sig g = sig' g)
-    (hd : ∀ ms, decl.merge = some ms → ms.Declared db.sig) :
+    (hd : ∀ ms, decl.merge = some ms → ms.Declared db.sig)
+    (ho : ∀ t ∈ old, ¬ Term.Mentions f t) (hn : ∀ t ∈ new, ¬ Term.Mentions f t) :
     MergeValues { db with sig := sig' } decl old new d vs ↔
       ∃ post, MergeValues db decl old new post vs ∧ d = { post with sig := sig' } := by
+  have henv : ∀ ovs nvs, ∀ b ∈ mergeEnv ovs nvs old new, ¬ Term.Mentions f b.2 :=
+    fun _ _ b hb => (mem_mergeEnv hb).elim (ho b.2) (hn b.2)
   constructor
   · intro h
     cases h with
@@ -1050,14 +1077,15 @@ theorem mergeValues_update_iff {f : FnName} {sig' : Signature} {db d : Database}
         change evalActions { { db with env := mergeEnv ovs nvs old new } with sig := sig' }
           body = some post at hb
         rw [evalActions_update body { db with env := mergeEnv ovs nvs old new }
-          hf hag (hd _ hm).1] at hb
+          hf hag (hd _ hm).1 (henv ovs nvs)] at hb
         obtain ⟨post₀, hb₀, rfl⟩ := Option.map_eq_some_iff.mp hb
         have hsig : post₀.sig = db.sig := by have hh := evalActions_sig hb₀; exact hh
         refine ⟨_, MergeValues.changed hm hc hb₀ ?_, rfl⟩
         have he := evalList_update (sig := post₀.sig) (sig' := sig') res (fun e he =>
           eval_update (sig := post₀.sig) (sig' := sig') (f := f)
             (by rw [hsig]; exact hf) (by rw [hsig]; exact hag) e
-            (by rw [hsig]; exact (hd _ hm).2 e he) post₀.env)
+            (by rw [hsig]; exact (hd _ hm).2 e he) post₀.env
+              (by rw [evalActions_env hb₀]; exact henv ovs nvs))
         exact he.trans hr
   · rintro ⟨post, h, rfl⟩
     cases h with
@@ -1068,52 +1096,55 @@ theorem mergeValues_update_iff {f : FnName} {sig' : Signature} {db d : Database}
         · change evalActions { { db with env := mergeEnv ovs nvs old new } with sig := sig' }
             body = _
           rw [evalActions_update body { db with env := mergeEnv ovs nvs old new }
-            hf hag (hd _ hm).1, hb]
+            hf hag (hd _ hm).1 (henv ovs nvs), hb]
           rfl
         · have he := evalList_update (sig := post.sig) (sig' := sig') res (fun e he =>
             eval_update (sig := post.sig) (sig' := sig') (f := f)
             (by rw [hsig]; exact hf) (by rw [hsig]; exact hag) e
-              (by rw [hsig]; exact (hd _ hm).2 e he) post.env)
+              (by rw [hsig]; exact (hd _ hm).2 e he) post.env
+                (by rw [evalActions_env hb]; exact henv ovs nvs))
           exact he.symm.trans hr
 
 theorem mergeStep_update_iff {f : FnName} {fd : FnDecl} {db x : Database}
-    (hf : db.sig f = none) (hsmd : SigMergeDeclared db.sig) (_hav : db.Avoids f)
-    (hs : db.StoreOk) :
+    (hf : db.sig f = none) (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f) :
     MergeStep { db with sig := Function.update db.sig f (some fd) } x ↔
       ∃ y, MergeStep db y ∧ x = { y with sig := Function.update db.sig f (some fd) } := by
   let sig' := Function.update db.sig f (some fd)
   have hag : ∀ g, g ≠ f → db.sig g = sig' g :=
     fun g hg => (Function.update_of_ne hg _ _).symm
+  have he := Database.entries_update_of_avoids hag hav
   have hne : ∀ row ∈ db.entries, row.name ≠ f := by
     intro row hr hname
-    obtain ⟨decl, hd, _⟩ := hs.declared row hr
-    rw [hname, hf] at hd
-    contradiction
+    exact hav.terms row.atom (Cong.assert hr.2) (hname ▸ Term.mentions_head row.name row.columns)
+  have hcols : ∀ row ∈ db.entries, ∀ t ∈ row.value, ¬ Term.Mentions f t := by
+    intro row hr t ht
+    exact Term.not_mentions_args (hav.terms row.atom (Cong.assert hr.2)) t
+      (List.mem_append_right _ ht)
   constructor
   · intro h
     cases h with
     | @collide post old new decl vs ho hn hneq hname hd hk hv =>
-        have hd' : db.sig old.name = some decl :=
-          (hag old.name (hne old ho)).trans hd
+        have ho' : old ∈ db.entries := he ▸ ho
+        have hn' : new ∈ db.entries := he ▸ hn
+        have hd' : db.sig old.name = some decl := (hag old.name (hne old ho')).trans hd
         obtain ⟨post₀, hv₀, rfl⟩ :=
           (mergeValues_update_iff (db := (db.eraseEntry old).eraseEntry new)
-            hf hag (hsmd old.name decl · hd')).mp hv
-        refine ⟨_, MergeStep.collide ho hn hneq hname hd'
+            hf hag (hsmd old.name decl · hd') (hcols old ho') (hcols new hn')).mp hv
+        refine ⟨_, MergeStep.collide ho' hn' hneq hname hd'
           (CongList.of_eqs_eq (d₁ := { db with sig := sig' }) (d₂ := db) rfl hk) hv₀, ?_⟩
         exact Database.putEntry_setSig post₀ sig' _
   · rintro ⟨y, h, rfl⟩
     cases h with
     | @collide post old new decl vs ho hn hneq hname hd hk hv =>
         rw [← Database.putEntry_setSig]
-        apply MergeStep.collide (db := { db with sig := sig' }) ho hn hneq hname
-          ((hag old.name (hne old ho)).symm.trans hd)
+        apply MergeStep.collide (db := { db with sig := sig' }) (he.symm ▸ ho)
+          (he.symm ▸ hn) hneq hname ((hag old.name (hne old ho)).symm.trans hd)
           (CongList.of_eqs_eq (d₁ := db) (d₂ := { db with sig := sig' }) rfl hk)
         exact (mergeValues_update_iff (db := (db.eraseEntry old).eraseEntry new)
-          hf hag (hsmd old.name decl · hd)).mpr ⟨post, hv, rfl⟩
+          hf hag (hsmd old.name decl · hd) (hcols old ho) (hcols new hn)).mpr ⟨post, hv, rfl⟩
 
 theorem mergeClosure_setSig {f : FnName} {fd : FnDecl} {db db' : Database}
-    (hf : db.sig f = none) (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f)
-    (hs : db.StoreOk) :
+    (hf : db.sig f = none) (hsmd : SigMergeDeclared db.sig) (hav : db.Avoids f) :
     MergeClosure { db with sig := Function.update db.sig f (some fd) } db' ↔
       ∃ d, MergeClosure db d ∧ db' = { d with sig := Function.update db.sig f (some fd) } := by
   constructor
@@ -1125,7 +1156,7 @@ theorem mergeClosure_setSig {f : FnName} {fd : FnDecl} {db db' : Database}
         have hdsig : d.sig = db.sig := MergeClosure.sig hcl
         have hiff := mergeStep_update_iff (f := f) (fd := fd) (db := d) (x := q)
           (by rw [hdsig]; exact hf) (by rw [hdsig]; exact hsmd)
-          (mergeClosure_avoids hf hsmd hav hs hcl) (MergeClosure.storeOk hcl hs)
+          (mergeClosure_avoids hf hsmd hav hcl)
         rw [hdsig] at hiff
         obtain ⟨y, hy, rfl⟩ := hiff.mp hstep
         exact ⟨y, hcl.tail hy, rfl⟩
@@ -1137,36 +1168,41 @@ theorem mergeClosure_setSig {f : FnName} {fd : FnDecl} {db db' : Database}
         have hiff := mergeStep_update_iff (f := f) (fd := fd) (db := p)
           (x := { q with sig := Function.update db.sig f (some fd) })
           (by rw [hpsig]; exact hf) (by rw [hpsig]; exact hsmd)
-          (mergeClosure_avoids hf hsmd hav hs hcl) (MergeClosure.storeOk hcl hs)
+          (mergeClosure_avoids hf hsmd hav hcl)
         rw [hpsig] at hiff
         exact ih.tail (hiff.mpr ⟨q, hstep, rfl⟩)
 
-/-- **`.decl` is neutral.** Under the checks — the declared name fresh, every `:merge` in
-the signature declared, the state well-formed — the merge phase the declaration gained is
-one the *preceding* merge phase already reaches. -/
-theorem MergeNormal.setSig {db : Database} (h : MergeNormal db) (sig : Signature) :
+/-- Updating a signature preserves normality when its derived rows are unchanged. -/
+theorem MergeNormal.setSig {db : Database} (h : MergeNormal db) (sig : Signature)
+    (he : ({ db with sig := sig } : Database).entries = db.entries) :
     MergeNormal { db with sig := sig } := by
   intro a ha b hb hn hk
-  exact h a ha b hb hn (CongList.of_eqs_eq (d₁ := { db with sig := sig }) (d₂ := db) rfl hk)
+  exact h a (he ▸ ha) b (he ▸ hb) hn
+    (CongList.of_eqs_eq (d₁ := { db with sig := sig }) (d₂ := db) rfl hk)
 
-/-- A fresh declaration commutes with normalization when every stored row already
-names a function in the original signature. -/
+/-- A fresh declaration commutes with normalization. -/
 theorem declStep_iff {db db' : Database} {f : FnName} {fd : FnDecl} (hf : db.sig f = none)
     (hsmd : SigMergeDeclared db.sig) (hwf : db.WF) (hdt : db.DeclaredTerms)
-    (hs : db.StoreOk) :
+    (_hs : db.StoreOk) :
     CmdStep db (.decl f fd) db' ↔
       ∃ d, MergeNormalize db d ∧ db' = { d with sig := Function.update db.sig f (some fd) } := by
   have hav := avoids_of_declaredTerms hf hwf hdt
+  have rows : ∀ d, MergeClosure db d →
+      ({d with sig := Function.update db.sig f (some fd)} : Database).entries = d.entries := by
+    intro d hd
+    exact Database.entries_update_of_avoids
+      (fun g hg => by rw [hd.sig]; exact (Function.update_of_ne hg _ _).symm)
+      (mergeClosure_avoids hf hsmd hav hd)
   constructor
   · rintro ⟨mid, rfl, hcl, hn⟩
-    obtain ⟨d, hd, rfl⟩ := (mergeClosure_setSig hf hsmd hav hs).mp hcl
+    obtain ⟨d, hd, rfl⟩ := (mergeClosure_setSig hf hsmd hav).mp hcl
     have hdn : MergeNormal d := by
-      have hh := hn.setSig d.sig
+      have hh := hn.setSig d.sig (rows d hd).symm
       exact hh
     exact ⟨d, ⟨hd, hdn⟩, rfl⟩
   · rintro ⟨d, ⟨hd, hn⟩, rfl⟩
-    exact ⟨_, rfl, (mergeClosure_setSig hf hsmd hav hs).mpr ⟨d, hd, rfl⟩,
-      hn.setSig (Function.update db.sig f (some fd))⟩
+    exact ⟨_, rfl, (mergeClosure_setSig hf hsmd hav).mpr ⟨d, hd, rfl⟩,
+      hn.setSig _ (rows d hd)⟩
 
 /-! #### `Program.MergeDeclared` supplies `declStep_iff`'s hypothesis -/
 

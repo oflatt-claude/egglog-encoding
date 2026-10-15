@@ -1,4 +1,5 @@
-import EgglogSemantics.Proofs.Step
+import EgglogSemantics.Spec.Step
+import EgglogSemantics.Proofs.Match
 
 /-! Structural equality in mathematical union-free states, and syntax inversion for
 ordering-free source expressions. No executable state is involved. -/
@@ -33,15 +34,23 @@ theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
   | nil => exact h
   | cons t ts ih => exact ih (h.addTerm t)
 
+theorem Diag.eqsRefl {db : Database} (h : db.Diag) {t : Term}
+    (ht : t ∈ db.terms) : (t, t) ∈ db.eqs := by
+  obtain ⟨u, hp | hp⟩ := mem_terms_iff.mp ht
+  · have he : t = u := h _ hp
+    exact he ▸ hp
+  · have he : u = t := h _ hp
+    exact he ▸ hp
+
 /-- `withOperands` posits its operands reflexively, so it cannot break diagonality. -/
 theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
     (db.withOperands ts).Diag := h.addTerms ts
 
 theorem Diag.eraseEntry {db : Database} (h : db.Diag) (row : Entry) :
-    (db.eraseEntry row).Diag := h
+    (db.eraseEntry row).Diag := fun p hp => h p hp.1
 
 theorem Diag.putEntry {db : Database} (h : db.Diag) (row : Entry) :
-    (db.putEntry row).Diag := h.addTerms row.columns
+    (db.putEntry row).Diag := h.addTerm row.atom
 
 end Database
 
@@ -60,6 +69,24 @@ theorem Cong.eq_of_diag {E : Database} (h : E.Diag) : ∀ {a b : Term}, Cong E a
 
 theorem congOn_eq_of_diag {E : Database} (h : E.Diag) {ts : List Term} {a b : Term}
     (hc : CongOn E ts a b) : a = b := Cong.eq_of_diag (h.withOperands ts) hc
+
+/-- On diagonal states, inferred-state comparison is exact state comparison. -/
+theorem Database.SameMeaning.eq_of_diag {d e : Database} (h : d.SameMeaning e)
+    (hd : d.Diag) (he : e.Diag) : d = e := by
+  have incl {d e : Database} (hd : d.Diag) (he : e.Diag)
+      (hi : ∀ a b, d.Infers a b → e.Infers a b) : d.eqs ⊆ e.eqs := by
+    intro p hp
+    have ht : p.1 ∈ d.terms := (Cong.assert hp).mem_left
+    have hcon := ht.mono (Database.Contained.addTerms [p.1, p.1] d)
+    obtain ⟨w, hw, hc, _⟩ := hi _ _ ⟨p.1, ht, hcon, hcon⟩
+    have hr := he.eqsRefl ((congOn_eq_of_diag he hc) ▸ hw)
+    change (p.1, p.2) ∈ e.eqs
+    rw [← hd p hp]
+    exact hr
+  apply Database.ext h.sig _ h.env h.rules
+  exact Set.Subset.antisymm
+    (incl hd he (fun a b => (h.inferred a b).mp))
+    (incl he hd (fun a b => (h.inferred a b).mpr))
 
 theorem CongList.eq_of_diag {d : Database} (h : d.Diag) {as bs : List Term}
     (hc : CongList d as bs) : as = bs := by

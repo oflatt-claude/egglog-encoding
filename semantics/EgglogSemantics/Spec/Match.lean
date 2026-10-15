@@ -47,10 +47,10 @@ inductive UnionAll : List Env → Env → Prop where
 
 end Env
 /-! ### Well-formed substitutions -/
-/-- `σ` binds exactly `vars`, each to a term the database holds. `Perm` rather than
+/-- `σ` binds exactly `vars`, each to a value the database holds. `Perm` rather than
 equality, so the order `Expr.freeVars` produces does not matter. -/
 def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
-  (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.terms
+  (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.values
 
 /-! ### Matching -/
 /-- A pattern **matches** under `σ` when its instance is congruent to a term the database
@@ -62,15 +62,7 @@ as written, and a match supplies all of its variables. The database's ambient en
 is not consulted. -/
 inductive Matches (db : Database) : Pattern → Env → Prop where
   | expr {e : Expr} {σ : Env} {w t : Term} :
-      w ∈ db.terms → e.eval db.sig σ = some t → CongOn db [t] w t →
-      Matches db (.expr e) σ
-  | entry {e : Expr} {σ : Env} {f : FnName} {keys values : List Expr}
-      {ks vs : List Term} {row : Entry} :
-      e.entry db.sig = some (f, keys, values) →
-      Expr.evalList db.sig keys σ = some ks →
-      Expr.evalList db.sig values σ = some vs →
-      row ∈ db.entries → row.name = f →
-      CongList (db.withOperands (ks ++ vs)) (ks ++ vs) row.columns →
+      w ∈ db.terms → e.evalAtom db.sig σ = some t → CongOn db [t] w t →
       Matches db (.expr e) σ
   | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
       w ∈ db.terms →

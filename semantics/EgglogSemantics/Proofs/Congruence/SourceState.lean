@@ -31,7 +31,7 @@ theorem eval_constructorTerm {sig : Signature} {ρ : Env}
   | .lit _, _, h => by
       obtain rfl : _ = _ := Option.some.inj h
       exact ConstructorTerm.lit
-  | .var v, t, h => hρ v t h
+  | .var v, t, h => hρ v t (Option.filter_eq_some_iff.mp h).1
   | .app f args, t, h => by
       have hct : sig.IsCtor f := by
         by_contra hc
@@ -87,15 +87,14 @@ theorem evalAction_termsBuild {db db' : Database}
   have hlk := termsBuild_lookup hw h
   have hbase : ∀ t ∈ db.terms, ConstructorTerm db.sig t := fun t ht => termsBuild_term hw h ht
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
-    ⟨e, f, keys, vals, ks, vs, rfl, he, _, _, rfl⟩ |
     ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
   · refine termsBuild_of_terms fun s hs => ?_
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
     · exact hbase s hs'
-    · exact fun g gs hg => eval_constructorTerm hlk e he g gs (Term.subterms_subset_of_mem hs' hg)
-  · rw [Expr.entry_none_of_allConstructors hcs] at he
-    contradiction
+    · exact fun g gs hg => eval_constructorTerm hlk e
+        (by simpa only [Expr.evalAtom_eq_eval hcs] using he) g gs
+        (Term.subterms_subset_of_mem hs' hg)
   · refine termsBuild_of_terms fun s hs => ?_
     rw [Database.addEq_terms] at hs
     rcases hs with hs' | hs'

@@ -103,28 +103,48 @@ def OutputsIn (values : Set Term) (d : Database) : Prop :=
 
 def ufEntry (a b : Term) : Entry := ⟨ufName, [a], [b]⟩
 
+theorem ufEntry_valid {sig : Signature} (huf : sig ufName = some (tableDecl 1))
+    {a b : Term} (ha : a.IsValue sig) (hb : b.IsValue sig) :
+    (ufEntry a b).Valid sig := by
+  refine ⟨tableDecl 1, huf, by simp [tableDecl], rfl, rfl, ?_⟩
+  simpa [ufEntry, Entry.columns] using And.intro ha hb
+
+private theorem result_valid {sig : Signature} {row : Entry} {a b : Term} {vs : List Term}
+    (hr : row.Valid sig) (ha : row.value = [a]) (hb : b.IsValue sig)
+    (hvs : vs = [a] ∨ vs = [Term.least a b]) :
+    (Entry.mk row.name row.key vs).Valid sig := by
+  have hva := hr.output_values a (by simp [ha])
+  apply hr.with_value
+  · rcases hvs with rfl | rfl <;> simp [ha]
+  · rcases hvs with rfl | rfl
+    · simpa using hva
+    · simpa using hva.least hb
+
 /-- The generated merge body inserts two UF rows, both at the chosen minimum. -/
 theorem eval_mergeBody {d : Database} (huf : d.sig ufName = some (tableDecl 1))
-    (a b : Term) :
+    (a b : Term) (ha : a.IsValue d.sig) (hb : b.IsValue d.sig) :
     evalActions { d with env := mergeEnv ["old"] ["new"] [a] [b] } mergeBody =
       some (Database.putEntry (ufEntry b (Term.least a b))
         (Database.putEntry (ufEntry a (Term.least a b))
           { d with env := mergeEnv ["old"] ["new"] [a] [b] })) := by
-  simp [mergeBody, evalActions, evalAction, Expr.entry, huf, tableDecl, Expr.evalList,
-    Expr.eval, mergeEnv, Env.lookup, ufEntry]
+  simp [mergeBody, evalActions, evalAction, Expr.evalAtom, huf, tableDecl, FnDecl.entryWidth,
+    Expr.evalList, Expr.eval, mergeEnv, Env.lookup, ufEntry, Entry.atom, Entry.columns,
+    Database.putEntry, Option.filter, ha, hb]
 
 theorem mergeValues_exists {d : Database} (huf : d.sig ufName = some (tableDecl 1))
-    (k : Nat) (a b : Term) : ∃ e vs, MergeValues d (tableDecl k) [a] [b] e vs := by
+    (k : Nat) (a b : Term) (ha : a.IsValue d.sig) (hb : b.IsValue d.sig) :
+    ∃ e vs, MergeValues d (tableDecl k) [a] [b] e vs := by
   classical
   by_cases hab : a = b
   · refine ⟨d, [a], .unchanged rfl ?_⟩
     simp [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody, hab]
-  · refine ⟨_, [Term.least a b], .changed rfl ?_ (eval_mergeBody huf a b) ?_⟩
+  · refine ⟨_, [Term.least a b], .changed rfl ?_ (eval_mergeBody huf a b ha hb) ?_⟩
     · simp [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody, hab]
-    · simp [mergeResult, Expr.evalList, Expr.eval, mergeEnv, Env.lookup]
+    · simp [mergeResult, Expr.evalList, Expr.eval, mergeEnv, Env.lookup, Option.filter, ha, hb]
 
 theorem mergeValues_effects {d e : Database} (huf : d.sig ufName = some (tableDecl 1))
     {k : Nat} {a b : Term} {vs : List Term}
+    (ha : a.IsValue d.sig) (hb : b.IsValue d.sig)
     (h : MergeValues d (tableDecl k) [a] [b] e vs) :
     e.sig = d.sig ∧
       ((a = b ∧ vs = [a] ∧ e.entries = d.entries) ∨
@@ -138,17 +158,25 @@ theorem mergeValues_effects {d e : Database} (huf : d.sig ufName = some (tableDe
     have hab : a = b := by
       simpa [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody] using hc
     exact ⟨rfl, Or.inl ⟨hab, rfl, rfl⟩⟩
-  | changed hm hc hb hr =>
+  | changed hm hc hbody hr =>
     simp only [tableDecl, Option.some.injEq, MergeSpec.merge.injEq] at hm
     rcases hm with ⟨rfl, rfl, rfl, rfl⟩
     have hab : a ≠ b := by
       simpa [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody] using hc
-    rw [eval_mergeBody huf a b] at hb
-    cases hb
+    rw [eval_mergeBody huf a b ha hb] at hbody
+    cases hbody
     have hvs : vs = [Term.least a b] := by
-      simpa [mergeResult, Expr.evalList, Expr.eval, mergeEnv, Env.lookup] using hr.symm
+      simpa [mergeResult, Expr.evalList, Expr.eval, mergeEnv, Env.lookup, Option.filter,
+        ha, hb] using hr.symm
     refine ⟨by simp, Or.inr ⟨hab, hvs, ?_⟩⟩
-    simp
+    let start : Database := { d with env := mergeEnv ["old"] ["new"] [a] [b] }
+    change ((Database.putEntry (ufEntry b (Term.least a b))
+      (Database.putEntry (ufEntry a (Term.least a b)) start))).entries = _
+    rw [Database.putEntry_entries
+        (d := start.putEntry (ufEntry a (Term.least a b)))
+        (ufEntry_valid huf hb (ha.least hb)),
+      Database.putEntry_entries (d := start) (ufEntry_valid huf ha (ha.least hb))]
+    rfl
 
 def mergeCost (rank : Term → Nat) (a b : Term) : Nat :=
   if a = b then 5 ^ rank a else 5 * 5 ^ rank (Term.least a b)
@@ -177,19 +205,20 @@ theorem potential_erase_add (rank : Term → Nat) {d : Database} (hf : d.FiniteS
     {e : Entry} (he : e ∈ d.entries) :
     potential rank (d.eraseEntry e) + rowWeight rank e = potential rank d := by
   have := weightSum_erase_add rank hf.entries he
-  simp only [potential, Database.eraseEntry]
-  omega
+  simpa only [potential, Database.eraseEntry_entries he.1] using this
 
 /-- The result and two possible UF rows cost at most five minimum weights.
 The loose bound is convenient for comparing against either strictly larger output. -/
 theorem potential_merge_le (rank : Term → Nat) {d e : Database} (hf : d.FiniteStore)
     (huf : d.sig ufName = some (tableDecl 1)) {k : Nat} {a b : Term} {vs : List Term}
-    (h : MergeValues d (tableDecl k) [a] [b] e vs) (f : FnName) (key : List Term) :
+    (ha : a.IsValue d.sig) (hb : b.IsValue d.sig)
+    (h : MergeValues d (tableDecl k) [a] [b] e vs) (f : FnName) (key : List Term)
+    (hr : (Entry.mk f key vs).Valid e.sig) :
     potential rank (e.putEntry ⟨f, key, vs⟩) ≤ potential rank d + mergeCost rank a b := by
-  obtain ⟨_, hcase⟩ := mergeValues_effects huf h
+  obtain ⟨_, hcase⟩ := mergeValues_effects huf ha hb h
   rcases hcase with ⟨hab, rfl, he⟩ | ⟨hab, rfl, he⟩
   · have hi := weightSum_insert_le rank hf.entries ⟨f, key, [a]⟩
-    simp only [potential, Database.putEntry_entries, he]
+    simp only [potential, Database.putEntry_entries hr, he]
     simp only [rowWeight, rowValue, List.headD_cons] at hi
     simp only [mergeCost, if_pos hab]
     omega
@@ -199,7 +228,7 @@ theorem potential_merge_le (rank : Term → Nat) {d e : Database} (hf : d.Finite
     have hi := weightSum_insert_le rank
       ((hf.entries.insert (ufEntry a (Term.least a b))).insert (ufEntry b (Term.least a b)))
       ⟨f, key, [Term.least a b]⟩
-    simp only [potential, Database.putEntry_entries, he]
+    simp only [potential, Database.putEntry_entries hr, he]
     simp only [rowWeight, rowValue, ufEntry, List.headD_cons] at hi hu hv
     simp only [mergeCost, if_neg hab, ufEntry]
     omega
@@ -218,12 +247,20 @@ theorem potential_step_lt {values : Set Term} (hv : values.Finite)
     obtain ⟨b, hb⟩ := hnew.output
     have hav := hin old ho a (by simp [ha])
     have hbv := hin new hn b (by simp [hb])
+    have hva := ho.1.output_values a (by simp [ha])
+    have hvb := hn.1.output_values b (by simp [hb])
     rw [ha, hb] at hm
+    have hvs := (mergeValues_effects (d := (d.eraseEntry old).eraseEntry new)
+      h.uf hva hvb hm).2
+    have hresult := result_valid ho.1 ha hvb
+      (hvs.elim (fun h => Or.inl h.2.1) (fun h => Or.inr h.2.1))
     have hcost := potential_merge_le (valueRank values)
-      ((h.finite.eraseEntry old).eraseEntry new) h.uf hm old.name old.key
+      ((h.finite.eraseEntry old).eraseEntry new) h.uf hva hvb hm old.name old.key
+      (by simpa only [hm.sig, Database.eraseEntry_sig] using hresult)
     have he1 := potential_erase_add (valueRank values) h.finite ho
     have he2 := potential_erase_add (valueRank values) (h.finite.eraseEntry old)
-      (e := new) (show new ∈ d.entries \ {old} from ⟨hn, by simpa using Ne.symm hne⟩)
+      (e := new) (by rw [Database.eraseEntry_entries ho.1]
+                     exact ⟨hn, by simpa using Ne.symm hne⟩)
     have hlt := mergeCost_lt (valueRank values)
       (fun ht => valueRank_lt hv hav ht) (fun ht => valueRank_lt hv hbv ht)
     simp only [rowWeight, rowValue, ha, hb, List.headD_cons] at he1 he2
@@ -235,22 +272,23 @@ def AllRows (P : Entry → Prop) (d : Database) : Prop :=
 theorem AllRows.eraseEntry {P : Entry → Prop} {d : Database} (h : AllRows P d)
     (e : Entry) : AllRows P (d.eraseEntry e) := by
   intro row hr
-  exact h row hr.1
+  exact h row (Database.eraseEntry_entries_subset hr)
 
 theorem AllRows.putEntry {P : Entry → Prop} {d : Database} (h : AllRows P d)
-    {e : Entry} (he : P e) : AllRows P (d.putEntry e) := by
+    {e : Entry} (he : P e) (hv : e.Valid d.sig) : AllRows P (d.putEntry e) := by
   intro row hr
-  simp only [Database.putEntry_entries, Set.mem_insert_iff] at hr
+  simp only [Database.putEntry_entries hv, Set.mem_insert_iff] at hr
   rcases hr with rfl | hr
   · exact he
   · exact h row hr
 
 theorem mergeValues_allRows {P : Entry → Prop} {d e : Database}
     (huf : d.sig ufName = some (tableDecl 1)) {k : Nat} {a b : Term} {vs : List Term}
+    (hva : a.IsValue d.sig) (hvb : b.IsValue d.sig)
     (h : MergeValues d (tableDecl k) [a] [b] e vs) (hd : AllRows P d)
     (ha : P (ufEntry a (Term.least a b))) (hb : P (ufEntry b (Term.least a b))) :
     AllRows P e := by
-  obtain ⟨_, hp⟩ := mergeValues_effects huf h
+  obtain ⟨_, hp⟩ := mergeValues_effects huf hva hvb h
   intro row hr
   change row ∈ e.entries at hr
   rcases hp with ⟨_, _, hp⟩ | ⟨_, _, hp⟩
@@ -306,15 +344,21 @@ theorem state_step {values : Set Term} {d e : Database} (h : State d)
     obtain ⟨b, hb⟩ := hnew.1.output
     have hav := hold.2 a (by simp [ha])
     have hbv := hnew.2 b (by simp [hb])
+    have hva := ho.1.output_values a (by simp [ha])
+    have hvb := hn.1.output_values b (by simp [hb])
     have hlo : Term.least a b ∈ values :=
       (least_eq_or a b).elim (fun h => h.symm ▸ hav) (fun h => h.symm ▸ hbv)
     rw [ha, hb] at hm
     have hmrows := mergeValues_allRows (d := (d.eraseEntry old).eraseEntry new)
-      h.uf hm ((hd.eraseEntry old).eraseEntry new)
+      h.uf hva hvb hm ((hd.eraseEntry old).eraseEntry new)
       (good_uf h.uf a hlo) (good_uf h.uf b hlo)
-    have hvs := (mergeValues_effects (h := hm) (by exact h.uf)).2
+    have hvs := (mergeValues_effects (d := (d.eraseEntry old).eraseEntry new)
+      h.uf hva hvb hm).2
     apply hmrows.putEntry
-    exact good_result hold.1 hav hbv (hvs.elim (fun h => Or.inl h.2.1) (fun h => Or.inr h.2.1))
+    · exact good_result hold.1 hav hbv
+        (hvs.elim (fun h => Or.inl h.2.1) (fun h => Or.inr h.2.1))
+    · simpa only [hm.sig, Database.eraseEntry_sig] using result_valid ho.1 ha hvb
+        (hvs.elim (fun h => Or.inl h.2.1) (fun h => Or.inr h.2.1))
 
 /-- Every unfinished legal generated state has an actual merge successor. -/
 theorem step_exists {d : Database} (h : State d) (hn : ¬ MergeNormal d) :
@@ -330,6 +374,7 @@ theorem step_exists {d : Database} (h : State d) (hn : ¬ MergeNormal d) :
   obtain ⟨b, hb⟩ := hnrow.output
   obtain ⟨mid, vs, hm⟩ := mergeValues_exists
     (d := (d.eraseEntry old).eraseEntry new) h.uf old.key.length a b
+    (ho.1.output_values a (by simp [ha])) (hnew.1.output_values b (by simp [hb]))
   rw [← ha, ← hb] at hm
   exact ⟨_, .collide ho hnew hne hname hold.declared hkeys hm⟩
 

@@ -29,10 +29,8 @@ there.
 namespace Egglog
 /-! ### The table index
 
-`FDatabase.rows` stores current tuples, re-keyed by `FDatabase.rebuild` and replaced by
-`FDatabase.mergeOneOriented`. Its function rows project to the mathematical database's
-`entries`. The executable term list also retains historical entry atoms; adapting that
-equation projection and proving interpreter correspondence remain separate work. -/
+`FDatabase.rows` supplies current function atoms to `toDatabase`; historical row
+atoms in the term list are filtered out. -/
 /-- One tuple of one function's table: `fn args… ↦ out…`.
 
 `out` is a *list*, one entry per value column: egglog's tables are multi-column, and the
@@ -230,61 +228,58 @@ not multiplicity or order, is what it denotes. -/
 structure FDatabase where
   sig : Signature
   terms : List Term
-  /-- The table index. Not a component of the denotation — see "The table index" above. -/
+  /-- Current rows; only these function atoms enter the mathematical projection. -/
   rows : List Row
   eqs : List (Term × Term)
   env : Env
   rules : List Rule
 
 namespace FDatabase
-/-- The spec database an `FDatabase` denotes. The refinement theorems are stated against
-this.
+/-- Values and current row atoms are visible; displaced row atoms are not. -/
+def Visible (d : FDatabase) (t : Term) : Prop :=
+  t.IsValue d.sig ∨ ∃ row ∈ d.rows,
+    (d.sig.mergeOf row.fn).isSome ∧ row.toEntry.atom = t
 
-**`terms` becomes the diagonal.** A `Database` has no term field — `t` is present exactly
-when `t = t` is derivable — so the list contributes one reflexive equation per member and
-`Database.terms` reads them back out. `toDatabase_terms` is that bridge, and it is what
-every refinement theorem rests on.
-
-**An equation is kept only where the list holds both of its sides**, which is what makes
-that bridge unconditional rather than an invariant to be maintained. `Cong` can reach
-`Cong db t t` by `symm` and `trans` from a *non*-reflexive pair, so an equation naming a
-term the list does not hold would put a term in the denotation that the interpreter cannot
-see. The restriction is not a weakening — `closureTotal` already imposes it on `eqsF`, so
-this is the denotation agreeing with the computation, and it removes nothing from a
-database the interpreter built: `Closed` below.
-
-`rows` is simply dropped: every row is also an entry term in `terms`, put there by
-`addRow` and never taken out, so the index carries nothing the denotation does not already
-have. Synthesising the entry terms *here* instead would not work — `closureF`'s candidate
-universe is `terms`, so an entry that is not in the list is congruent to nothing. -/
+/-- Project current facts into the mathematical assertion store. -/
 def toDatabase (d : FDatabase) : Database where
   sig := d.sig
-  eqs := {p | p.1 = p.2 ∧ p.1 ∈ d.terms} ∪
-    {p | p ∈ d.eqs ∧ p.1 ∈ d.terms ∧ p.2 ∈ d.terms}
-  entries := {e | ∃ row ∈ d.rows, (d.sig.mergeOf row.fn).isSome ∧ row.toEntry = e}
+  eqs := {p | p.1 = p.2 ∧ p.1 ∈ d.terms ∧ d.Visible p.1} ∪
+    {p | p ∈ d.eqs ∧ p.1 ∈ d.terms ∧ p.2 ∈ d.terms ∧
+      p.1.IsValue d.sig ∧ p.2.IsValue d.sig}
   env := d.env
   rules := {r | r ∈ d.rules}
 
-/-- Every term a derivation over the denotation mentions is one the list holds. Immediate
-from `toDatabase`'s restriction on `eqs`: `assert` is the only rule that introduces a term,
-and `congr`'s two self-congruence premises carry the memberships for it. -/
 theorem toDatabase_cong_mem {d : FDatabase} {a b : Term} (h : Cong d.toDatabase a b) :
     a ∈ d.terms ∧ b ∈ d.terms := by
   match h with
   | .assert hm =>
-    rcases hm with ⟨he, hd⟩ | ⟨_, h₁, h₂⟩
-    · refine ⟨hd, ?_⟩
-      have he' : a = b := he
-      exact he' ▸ hd
+    rcases hm with ⟨he, hd, _⟩ | ⟨_, h₁, h₂, _, _⟩
+    · change a = b at he
+      exact ⟨hd, he ▸ hd⟩
     · exact ⟨h₁, h₂⟩
   | .symm h => exact (toDatabase_cong_mem h).symm
   | .trans h₁ h₂ => exact ⟨(toDatabase_cong_mem h₁).1, (toDatabase_cong_mem h₂).2⟩
   | .congr hm₁ hm₂ _ => exact ⟨(toDatabase_cong_mem hm₁).1, (toDatabase_cong_mem hm₂).1⟩
 
-/-- **The denotation holds exactly the terms the list does.** -/
-theorem toDatabase_terms (d : FDatabase) : d.toDatabase.terms = {t | t ∈ d.terms} := by
+theorem toDatabase_cong_visible {d : FDatabase} {a b : Term}
+    (h : Cong d.toDatabase a b) : d.Visible a ∧ d.Visible b := by
+  match h with
+  | .assert hm =>
+    rcases hm with ⟨he, _, hv⟩ | ⟨_, _, _, h₁, h₂⟩
+    · change a = b at he
+      exact ⟨hv, he ▸ hv⟩
+    · exact ⟨Or.inl h₁, Or.inl h₂⟩
+  | .symm h => exact (toDatabase_cong_visible h).symm
+  | .trans h₁ h₂ => exact ⟨(toDatabase_cong_visible h₁).1, (toDatabase_cong_visible h₂).2⟩
+  | .congr hm₁ hm₂ _ =>
+      exact ⟨(toDatabase_cong_visible hm₁).1, (toDatabase_cong_visible hm₂).1⟩
+
+/-- Only held values and current row atoms survive projection. -/
+theorem toDatabase_terms (d : FDatabase) :
+    d.toDatabase.terms = {t | t ∈ d.terms ∧ d.Visible t} := by
   ext t
-  exact ⟨fun h => (toDatabase_cong_mem h).1, fun h => Cong.assert (Or.inl ⟨rfl, h⟩)⟩
+  exact ⟨fun h => ⟨(toDatabase_cong_mem h).1, (toDatabase_cong_visible h).1⟩,
+    fun h => Cong.assert (Or.inl ⟨rfl, h⟩)⟩
 
 /-- The initial database. -/
 def empty : FDatabase where
@@ -1148,7 +1143,7 @@ private theorem joinKnown_holds {d : FDatabase} {ρ ρ' : Env}
         simp only [joinKnown, List.map_cons, List.filterMap_cons, joinOperand, id]
         exact List.mem_cons_self ..
       | .var w =>
-        simp only [Expr.eval] at hey
+        have hey : Env.lookup w ρ' = some y := (Option.filter_eq_some_iff.mp hey).1
         cases hw : Env.lookup w ρ with
         | none => exact hnew w y hw hey
         | some z =>
@@ -1210,7 +1205,7 @@ private theorem joinConsistent_of_congrTuple {cl : Finset (Term × Term)} {d : F
         subst hs; subst hey; exact hzy
       | .var w =>
         simp only [joinOperand] at hs
-        simp only [Expr.eval] at hey
+        have hey : Env.lookup w ρ' = some y := (Option.filter_eq_some_iff.mp hey).1
         have := hmono w s hs
         rw [hey] at this
         cases (Option.some.injEq .. ▸ this)

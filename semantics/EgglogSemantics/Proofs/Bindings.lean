@@ -34,16 +34,20 @@ theorem Env.lookup_zip : ∀ (vs : List Var) (as : List Term), vs.length = as.le
 theorem Expr.evalList_map_var {sig : Signature} : ∀ (vs : List Var) (as : List Term) (ρ : Env),
     vs.length = as.length →
     (∀ (i : Nat) (hi : i < vs.length) (hi' : i < as.length), Env.lookup vs[i] ρ = some as[i]) →
+    (∀ t ∈ as, t.IsValue sig) →
     Expr.evalList sig (vs.map Expr.var) ρ = some as
-  | [], [], _, _, _ => rfl
-  | [], _ :: _, _, hlen, _ => by simp at hlen
-  | _ :: _, [], _, hlen, _ => by simp at hlen
-  | v :: vs, a :: as, ρ, hlen, h => by
+  | [], [], _, _, _, _ => rfl
+  | [], _ :: _, _, hlen, _, _ => by simp at hlen
+  | _ :: _, [], _, hlen, _, _ => by simp at hlen
+  | v :: vs, a :: as, ρ, hlen, h, hv => by
       have h0 : Env.lookup v ρ = some a := h 0 (by simp) (by simp)
       have hrest : Expr.evalList sig (vs.map Expr.var) ρ = some as :=
         Expr.evalList_map_var vs as ρ (by simpa using hlen)
           (fun i hi hi' => h (i + 1) (by simpa using hi) (by simpa using hi'))
-      rw [List.map_cons, Expr.evalList, Expr.eval, h0, Option.bind_some, hrest]
+          (fun t ht => hv t (List.mem_cons_of_mem _ ht))
+      have hev : Expr.eval sig (.var v) ρ = some a :=
+        Option.filter_eq_some_iff.mpr ⟨h0, hv a (by simp)⟩
+      rw [List.map_cons, Expr.evalList, hev, Option.bind_some, hrest]
       rfl
 
 /-- Every free variable of a list of variable atoms is one of them. -/
@@ -80,7 +84,8 @@ theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
   | .lit _, _, _, hv => by simp [Expr.vars] at hv
   | .var w, _, he, hv => by
       obtain rfl : v = w := by simpa [Expr.vars] using hv
-      rw [Expr.eval_var] at he; rw [he]; rfl
+      rw [Expr.eval_var] at he
+      rw [(Option.filter_eq_some_iff.mp he).1]; rfl
   | .app f args, t, he, hv => by
       rw [Expr.vars] at hv
       have hl : ∃ ts, Expr.evalList sig args ρ = some ts := by
