@@ -30,7 +30,7 @@ theorem Boundary.rule {src post d e : Database} (h : Boundary src d)
   change n = { d with rules := insert (encodeRule r) d.rules } at hn
   subst n
   have hsat := runSaturated_addRule h.saturated (r := encodeRule r) hR
-  rw [hcl.eq_of_mergeSaturated hsat.2]
+  rw [hcl.eq_of_mergeNormal hsat.2]
   have heq := source_setup_eqs hcs (c := .rule r) trivial trivial hs
   refine ⟨?_, ?_, ?_, hsat⟩
   · exact (h.sound.mono_src hs.contained.eqs).congr_terms Database.terms_setRules

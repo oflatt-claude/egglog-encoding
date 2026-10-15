@@ -4,8 +4,10 @@ import EgglogSemantics.Spec.Term
 /-!
 # The database
 
-The state separates constructor existence/equations from current function entries and
-pending writes. There is no separate constructor term set: `t = t` records that `t`
+The state separates constructor existence/equations from function entries. Writes
+insert directly into the entry set, which may temporarily contain conflicting rows.
+Both compiler sides use this same mathematical representation.
+There is no separate constructor term set: `t = t` records that `t`
 was built, and `Database.terms` is the terms that are self-equal. Replacing a function
 entry preserves the existence of its columns and all established equalities.
 -/
@@ -74,9 +76,6 @@ structure Database where
   eqs : Set (Term × Term)
   /-- Current function entries; merging replaces displaced entries. -/
   entries : Set Entry := ∅
-  /-- Writes awaiting insertion or merging. A write remains distinct from an existing
-  entry even when their tuples agree, so non-idempotent merges can observe a reset. -/
-  pending : Set Entry := ∅
   /-- The evaluation context, installed temporarily for a rule or merge firing.
   Commands preserve it; a program starting at `empty` leaves it empty. -/
   env : Env
@@ -103,19 +102,11 @@ def addEq (a b : Term) (db : Database) : Database :=
   let d := (db.addTerm a).addTerm b
   { d with eqs := insert (a, b) d.eqs }
 
-/-- Propose a function write, preserving the existence of all its values. -/
-def writeEntry (e : Entry) (db : Database) : Database :=
-  let d := db.addTerms e.columns
-  { d with pending := insert e d.pending }
-
-/-- Install a resolved entry. Callers remove the displaced entries first. -/
+/-- Insert a function entry, recording its column values. Identical writes coalesce;
+distinct conflicting rows remain until merging resolves them. -/
 def putEntry (e : Entry) (db : Database) : Database :=
   let d := db.addTerms e.columns
   { d with entries := insert e d.entries }
-
-/-- Consume a write before executing its merge body, so the body may propose it again. -/
-def consumeWrite (e : Entry) (db : Database) : Database :=
-  { db with pending := db.pending \ {e} }
 
 def eraseEntry (e : Entry) (db : Database) : Database :=
   { db with entries := db.entries \ {e} }
@@ -125,15 +116,13 @@ def eraseEntry (e : Entry) (db : Database) : Database :=
 def sUnion (db : Database) (S : Set Database) : Database :=
   { db with
     eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs
-    entries := db.entries ∪ ⋃ d ∈ S, d.entries
-    pending := db.pending ∪ ⋃ d ∈ S, d.pending }
+    entries := db.entries ∪ ⋃ d ∈ S, d.entries }
 
 /-- Databases that differ only in an environment no `lookup` can tell apart. -/
 structure EnvAgree (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   eqs : d₁.eqs = d₂.eqs
   entries : d₁.entries = d₂.entries
-  pending : d₁.pending = d₂.pending
   rules : d₁.rules = d₂.rules
   env : Env.Agree d₁.env d₂.env
 

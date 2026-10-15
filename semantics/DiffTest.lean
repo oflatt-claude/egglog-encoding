@@ -467,10 +467,9 @@ private def genProgram (s : Nat) : Program :=
 
 /-! ### Merge cases
 
-Idempotent merges avoid unbounded derivations from self-collisions in the specification.
 The `old-*`, `new-*`, and `canon-*` cases test noncommutative merges and resident-row
 selection. Merge bodies write entries; queries read them. `min-rebuild` tests a union
-of keys that makes two rows collide. See `MERGE.md` for the model's limits. -/
+of keys that makes two rows collide. See `Spec/Step.lean` for the mathematical model. -/
 
 private def dist (n : Nat) : FnDecl :=
   { arity := n, outArity := 1,

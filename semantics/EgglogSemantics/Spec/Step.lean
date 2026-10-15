@@ -4,8 +4,9 @@ import EgglogSemantics.Spec.Match
 /-!
 # Steps
 
-Merge closure, and what a command and a program do: `Prop`-valued, relational because merge
-closure and rule firing are order- and choice-dependent; `Spec/Eval.lean` is `Option`-valued.
+Merging and program execution. A merge step resolves one pair of conflicting entries;
+normalization repeats these steps until every key has one entry. Rule saturation repeats
+completed rounds until `SameMeaning` holds. These relations need not terminate.
 -/
 
 namespace Egglog
@@ -22,17 +23,14 @@ end Database
 def mergeEnv (oldVars newVars : List Var) (old new : List Term) : Env :=
   oldVars.zip old ++ newVars.zip new
 
-/-- How many leading value columns a collision must leave unchanged to count as no change
-at all (`egglog-bridge/src/lib.rs:1418`): the declared identity columns, or — for a `:merge`
-with an action block — every value column. A single-expression `:merge` has no width and so
-resolves every collision, since it may be non-idempotent: `:merge (+ old new)` on two rows
-both holding `2` still gives `4`. -/
+/-- The output prefix used to decide whether to run a merge body. Explicit identity
+columns take precedence; a nonempty action block otherwise compares all outputs.
+A pure result expression without identity columns is evaluated for every collision. -/
 def FnDecl.unchangedWidth (d : FnDecl) (body : List Action) : Option Nat :=
   d.identityVals <|> if body.isEmpty then none else some d.outArity
 
-/-- The two colliding value tuples **conflict**: they differ in a value column that counts
-(`FnDecl.unchangedWidth`), which is the whole of when a collision resolves to anything.
-`Impl/Merge.lean`'s `noConflict` is this test, decided and negated. -/
+/-- Whether resolving a collision runs the merge body. Otherwise it keeps the old
+outputs, still removing the second entry. -/
 def MergeConflict (decl : FnDecl) (body : List Action) (a b : List Term) : Prop :=
   match decl.unchangedWidth body with
   | some k => a.take k ≠ b.take k
@@ -40,7 +38,7 @@ def MergeConflict (decl : FnDecl) (body : List Action) (a b : List Term) : Prop 
 
 /-- Resolve two output tuples, preserving the merge body's effects. Equal identity
 columns skip the body. This relation does not invent a second input by colliding a
-resident row with itself: the caller supplies an actual write or a distinct row. -/
+row with itself: the caller supplies two distinct rows. -/
 inductive MergeValues (db : Database) (decl : FnDecl) (old new : List Term) :
     Database → List Term → Prop where
   | unchanged {oldVars newVars : List Var} {body : List Action} {res : List Expr} :
@@ -54,39 +52,32 @@ inductive MergeValues (db : Database) (decl : FnDecl) (old new : List Term) :
       Expr.evalList d.sig res d.env = some vs →
       MergeValues db decl old new { d with env := db.env, rules := db.rules } vs
 
-/-- One insertion or destructive merge. Consumed inputs disappear before the body
-runs, so writes produced by that body remain pending. Constructor existence and
-asserted equalities are preserved when a function entry is replaced. -/
+/-- Resolve two distinct entries at congruent keys. Consume both before running the
+body, so entries written by the body survive. Constructor existence and equations
+are preserved when entries are replaced. Identical writes coalesce as set insertion. -/
 inductive MergeStep : Database → Database → Prop where
-  | insert {db : Database} {row : Entry} {decl : FnDecl} :
-      db.sig row.name = some decl → decl.merge ≠ none →
-      row ∈ db.pending →
-      (∀ old ∈ db.entries, old.name = row.name → ¬ CongList db old.key row.key) →
-      MergeStep db ((db.consumeWrite row).putEntry row)
-  | write {db d : Database} {old new : Entry} {decl : FnDecl} {vs : List Term} :
-      new ∈ db.pending → old ∈ db.entries → old.name = new.name →
-      db.sig old.name = some decl → CongList db old.key new.key →
-      MergeValues ((db.consumeWrite new).eraseEntry old) decl old.value new.value d vs →
-      MergeStep db (d.putEntry ⟨old.name, old.key, vs⟩)
   | collide {db d : Database} {old new : Entry} {decl : FnDecl} {vs : List Term} :
       old ∈ db.entries → new ∈ db.entries → old ≠ new → old.name = new.name →
       db.sig old.name = some decl → CongList db old.key new.key →
       MergeValues ((db.eraseEntry old).eraseEntry new) decl old.value new.value d vs →
       MergeStep db (d.putEntry ⟨old.name, old.key, vs⟩)
 
-/-- Merge closure: any finite sequence of insertions and merges. -/
+/-- Zero or more merge steps, possibly stopping before merging is complete.
+In mathematical notation this is simply `→ₘ*`. -/
 def MergeClosure : Database → Database → Prop := Relation.ReflTransGen MergeStep
 
-/-- A completed merge phase has no pending writes and one current entry per
-function/key congruence class. A lone row is not an outstanding collision. -/
-structure MergeSaturated (db : Database) : Prop where
-  pending : db.pending = ∅
-  unique : ∀ a ∈ db.entries, ∀ b ∈ db.entries,
+/-- Merging is complete when every function/key congruence class has one entry.
+A lone entry is already normal, even when its merge body is non-idempotent. -/
+def MergeNormal (db : Database) : Prop :=
+  ∀ a ∈ db.entries, ∀ b ∈ db.entries,
     a.name = b.name → CongList db a.key b.key → a = b
 
-/-- Normalization must finish processing writes, including writes emitted by merges. -/
+/-- Complete merging: reach a normal state by finitely many merge steps (`⇓ₘ`).
+This includes collisions created by merge bodies. A computed interpretation can combine
+these completed rows with `CongrOn`; it must remain relational (`Tests/MergeViews.lean`).
+Query operands extend equality only and must not trigger merge effects. -/
 def MergeNormalize (db db' : Database) : Prop :=
-  MergeClosure db db' ∧ MergeSaturated db'
+  MergeClosure db db' ∧ MergeNormal db'
 
 /-! ### Running -/
 /-- The databases one rule contributes, one per substitution satisfying its query. -/
@@ -107,7 +98,7 @@ def RunStep (R : RulesetName) (db db' : Database) : Prop :=
 /-- Saturation compares the meaning of completed rounds. Redundant constructor
 spellings and writes absorbed by merging do not prevent saturation. -/
 def RunSaturated (R : RulesetName) (d : Database) : Prop :=
-  MergeSaturated d ∧ ∃ d', RunStep R d d' ∧ d.SameMeaning d'
+  MergeNormal d ∧ ∃ d', RunStep R d d' ∧ d.SameMeaning d'
 
 /-- Repeat completed rounds, stopping at the first one that preserves meaning. The
 final round's writes are allowed and its normalized post-state is returned. Continuing
@@ -129,8 +120,8 @@ theorem SaturateReach.reach {R : RulesetName} {db d : Database}
   | done hs _ => exact .single hs
   | step hs _ _ ih => exact (Relation.ReflTransGen.single hs).trans ih
 
-theorem SaturateReach.mergeSaturated {R : RulesetName} {db d : Database}
-    (h : SaturateReach R db d) : MergeSaturated d := by
+theorem SaturateReach.mergeNormal {R : RulesetName} {db d : Database}
+    (h : SaturateReach R db d) : MergeNormal d := by
   induction h with
   | done hs _ => exact hs.2
   | step _ _ _ ih => exact ih
@@ -149,7 +140,7 @@ def cmdReach (db : Database) : Cmd → Database → Prop
 /-- Successful execution of a command. A check only observes its input. Every other
 command merges, so a
 top-level `set` is its own merge phase, and `run` is one round of rule firing followed by
-one. The phase is neutral after a `Cmd.saturate`, which ends merge-saturated
+one. The phase is neutral after a `Cmd.saturate`, which ends merge-normal
 (`cmdStep_saturate_iff`). -/
 def CmdStep (db : Database) (c : Cmd) (db' : Database) : Prop :=
   match c with
@@ -166,7 +157,7 @@ theorem CmdStep.reach {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
 
 /-- A command may finish with a reflexive merge phase. For checks this is the only phase. -/
 theorem CmdStep.of_reach {db db' : Database} {c : Cmd} (h : cmdReach db c db')
-    (hn : MergeSaturated db') :
+    (hn : MergeNormal db') :
     CmdStep db c db' := by
   cases c <;> try exact ⟨db', h, .refl, hn⟩
   exact h

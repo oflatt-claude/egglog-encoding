@@ -99,7 +99,7 @@ theorem conflicts_sound {d : FnDecl} {body : List Action} {old new : List Term}
   unfold MergeConflict
   cases hw : d.unchangedWidth body <;> simp_all
 
-theorem mergeFacts_sound {db : Database} (hw : db.WF) (hclosed : MergeSaturated db)
+theorem mergeFacts_sound {db : Database} (hw : db.WF) (hclosed : MergeNormal db)
     {f : FnName} {old new : Term} {fs : MergeFacts}
     (ho : old ∈ db.terms) (hn : new ∈ db.terms)
     (hf : mergeFacts db.sig f old new = some fs) :

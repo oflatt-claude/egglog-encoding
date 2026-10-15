@@ -21,17 +21,15 @@ theorem State.addEq {d : Database} (h : State d) (a b : Term) : State (d.addEq a
   · simpa using h.uf
   · simpa using h.rows
 
-theorem State.writeEntry {d : Database} (h : State d) {row : Entry}
-    (hr : LegalRow d.sig row) : State (d.writeEntry row) := by
-  refine ⟨h.finite.writeEntry row, by simpa using h.uf, ?_⟩
+theorem State.putEntry {d : Database} (h : State d) {row : Entry}
+    (hr : LegalRow d.sig row) : State (d.putEntry row) := by
+  refine ⟨h.finite.putEntry row, by simpa using h.uf, ?_⟩
   intro e he
-  simp only [Database.writeEntry_sig]
-  simp only [Database.writeEntry_entries, Database.writeEntry_pending,
-    Set.mem_union, Set.mem_insert_iff] at he
-  rcases he with he | rfl | he
-  · exact h.rows e (Or.inl he)
+  simp only [Database.putEntry_sig]
+  simp only [Database.putEntry_entries, Set.mem_insert_iff] at he
+  rcases he with rfl | he
   · exact hr
-  · exact h.rows e (Or.inr he)
+  · exact h.rows e he
 
 private theorem legal_evaluated_entry {sig : Signature} (hg : GeneratedTables sig)
     {e : Expr} {f : FnName} {keys vals : List Expr} {ks vs : List Term} {env : Env}
@@ -64,7 +62,7 @@ theorem State.evalAction {d e : Database} (h : State d) (hg : GeneratedTables d.
     ⟨exp, f, keys, vals, ks, vs, rfl, hentry, hk, hv, rfl⟩ |
     ⟨_, _, a, b, rfl, _, _, _, rfl⟩
   · exact h.addTerm t
-  · exact h.writeEntry (legal_evaluated_entry hg hw hentry hk hv)
+  · exact h.putEntry (legal_evaluated_entry hg hw hentry hk hv)
   · exact h.addEq a b
 
 theorem State.evalActions {d e : Database} (h : State d) (hg : GeneratedTables d.sig)
@@ -85,7 +83,7 @@ theorem State.evalLocalActions {d e : Database} (h : State d) (hg : GeneratedTab
     (he : evalLocalActions d as env = some e) : State e := by
   obtain ⟨mid, hm, rfl⟩ := Option.map_eq_some_iff.mp he
   have hmid := (h.setEnv (env ++ d.env)).evalActions hg hw hm
-  exact ⟨⟨hmid.finite.eqs, hmid.finite.entries, hmid.finite.pending, h.finite.rules⟩,
+  exact ⟨⟨hmid.finite.eqs, hmid.finite.entries, h.finite.rules⟩,
     hmid.uf, hmid.rows⟩
 
 /-- All substitutions of all registered rules preserve legal generated rows. -/
@@ -99,16 +97,11 @@ theorem State.runRules {d : Database} (h : State d) (hg : GeneratedTables d.sig)
     simpa only [evalLocalActions_sig heval] using hp.rows row hrow
   intro row hrow
   change row ∈ (d.entries ∪ ⋃ post ∈ {post | ∃ r ∈ d.rules,
-      r.ruleset = R ∧ post ∈ RuleResults d r}, post.entries) ∪
-    (d.pending ∪ ⋃ post ∈ {post | ∃ r ∈ d.rules,
-      r.ruleset = R ∧ post ∈ RuleResults d r}, post.pending) at hrow
-  rcases hrow with (hr | hr) | (hr | hr)
-  · exact h.rows row (Or.inl hr)
+      r.ruleset = R ∧ post ∈ RuleResults d r}, post.entries) at hrow
+  rcases hrow with hr | hr
+  · exact h.rows row hr
   · obtain ⟨post, hp, hr⟩ := Set.mem_iUnion₂.mp hr
-    exact hresult post hp row (Or.inl hr)
-  · exact h.rows row (Or.inr hr)
-  · obtain ⟨post, hp, hr⟩ := Set.mem_iUnion₂.mp hr
-    exact hresult post hp row (Or.inr hr)
+    exact hresult post hp row hr
 
 /-- A completed round always exists for a finite generated state with width-correct rules. -/
 theorem State.runStep_exists {d : Database} (h : State d) (hg : GeneratedTables d.sig)

@@ -4,7 +4,7 @@ import EgglogSemantics.Spec.Congruence
 # Evaluating expressions and actions
 
 Value expressions build ground terms; complete atoms may also describe function entries.
-Actions add constructor equations or propose function writes. Evaluation returns `none`
+Actions add constructor equations or insert function entries. Evaluation returns `none`
 for unbound variables, undeclared heads, table applications in value positions, and
 unions on literals. Atom columns use value evaluation. Rule firing and merge closure
 are specified separately in `Spec/Step.lean`.
@@ -45,7 +45,7 @@ def Expr.evalAtom (sig : Signature) : Expr → Env → Option Term
   | e, σ => e.eval sig σ
 
 /-- Run one action in the database's evaluation context. Actions never bind variables.
-An entry atom proposes its row; `MergeStep` inserts it or resolves a collision.
+An entry atom inserts its row; merging later resolves collisions with other rows.
 
 A `union` on a literal is stuck. egglog rejects it in its type checker — `union` wants an
 eq-sort and `i64` is not one (`TypeError::NonEqsortUnion`) — and this untyped model cannot
@@ -57,7 +57,7 @@ def evalAction (db : Database) : Action → Option Database
       | some (f, keys, values) =>
           (Expr.evalList db.sig keys db.env).bind fun ks =>
             (Expr.evalList db.sig values db.env).map fun vs =>
-              db.writeEntry ⟨f, ks, vs⟩
+              db.putEntry ⟨f, ks, vs⟩
       | none => (e.eval db.sig db.env).map fun t => db.addTerm t
   | .union e₁ e₂ =>
       (e₁.eval db.sig db.env).bind fun t₁ =>

@@ -124,7 +124,7 @@ private theorem target_noUF_query {q : Query} {σ : Env} {es : List Expr}
   obtain ⟨ρ, _, hρ⟩ := hσs.flip.exists_left hp
   exact target_noUF_match es ρ hρ.2
 
-private theorem target_merges_saturated : MergeSaturated targetBuilt := by
+private theorem target_merges_saturated : MergeNormal targetBuilt := by
   intro d h
   cases h with
   | @collide post f decl as bs a b vs oldVars newVars body res

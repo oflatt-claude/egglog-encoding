@@ -8,8 +8,8 @@ import EgglogSemantics.Spec.Step
 It shares value evaluation, matching, and actions with `Impl/Interp.lean`. Queries read
 current rows; the specification permits any retained entry.
 
-`Proofs/Merge.lean` proves containment in a reachable specification state under its
-legality and fragment assumptions. See `MERGE.md` for the contract and limitations.
+`Proofs/Merge.lean`'s historical containment proof awaits the live-table port.
+The implementation notes below describe its earlier append-only specification.
 -/
 
 namespace Egglog
@@ -191,7 +191,7 @@ list position is fixed when the term is *first* added, which matches egglog for 
 built by actions and by rule heads in the order the interpreter runs them, but a round
 that fires several rules is free to build terms in another order than egglog's; and
 `min` continues to compare by the structural `Term.blt`, which consults no database.
-See `MERGE.md`, "The executable row index". -/
+The mathematical collision relation is in `Spec/Step.lean`. -/
 /-- Whether `t` is the canonical member of its congruence class — no congruent term was
 created before it — which is what makes egglog's rebuild leave a row keyed on `t` alone.
 
@@ -351,7 +351,7 @@ re-keys still counts as progress and `mergeSaturateF` runs another; `rebuild` is
 idempotent, so that terminates.
 
 **Not** saturation. Structurally terminating, so it needs neither fuel nor a termination
-witness, and sound because `CmdStep` ends in a `MergeClosure` with no `MergeSaturated`
+witness, and sound because `CmdStep` ends in a `MergeClosure` with no `MergeNormal`
 requirement — a prefix of the closure is still a reachable state.
 
 **Position in `rows` is insertion age, and the pair reaches `mergeOneWith` youngest

@@ -63,7 +63,7 @@ theorem runSaturated_addRule {d : Database} {R : RulesetName} (h : RunSaturated 
       exact ⟨((runRules_eq_self_iff R d).mp h.1 s hs hR out ⟨σ, hσ', hout⟩).eqs⟩
   · intro post hm
     obtain ⟨out, hout, heq⟩ := mergeClosure_setRules.mp (Relation.ReflTransGen.single hm)
-    rw [hout.eq_of_mergeSaturated h.2] at heq
+    rw [hout.eq_of_mergeNormal h.2] at heq
     exact heq
 
 end Egglog.Congruence.Abstract

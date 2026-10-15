@@ -5,7 +5,7 @@ import EgglogSemantics.Spec.Step
 /-! Existence of finite normalization and saturation requires actual progress.
 
 A finite equation universe still supplies a maximal equation set, but no longer proves
-normalization: destructive changes to current entries and pending writes can cycle while
+normalization: destructive changes to current entries can cycle while
 equations remain unchanged. The execution theorems below instead require well-founded
 progress and totality at reachable states. The generated compiler must prove those
 premises for its merge bodies and rules. -/
@@ -55,18 +55,18 @@ theorem exists_reachable_normal_of_wellFounded {α : Type*}
 
 /-- A principled replacement for the former finite-equation-bound normalization
 helper. The hypothesis includes both availability of a merge and well-founded progress
-whenever pending writes or current-entry collisions remain. -/
+whenever current-entry collisions remain. -/
 theorem mergeNormalize_exists_of_wellFounded (d : Database)
     (lt : Database → Database → Prop) (hwf : WellFounded lt)
-    (hprogress : ∀ e, MergeClosure d e → ¬ MergeSaturated e →
+    (hprogress : ∀ e, MergeClosure d e → ¬ MergeNormal e →
       ∃ e', MergeStep e e' ∧ lt e' e) :
     ∃ e, MergeNormalize d e :=
-  exists_reachable_normal_of_wellFounded MergeStep MergeSaturated d lt hwf hprogress
+  exists_reachable_normal_of_wellFounded MergeStep MergeNormal d lt hwf hprogress
 
-/-- A natural-number potential is enough when insertions and generated merges each
+/-- A natural-number potential is enough when generated merges each
 have a strictly decreasing weighted store size. -/
 theorem mergeNormalize_exists_of_measure (d : Database) (rank : Database → Nat)
-    (hprogress : ∀ e, MergeClosure d e → ¬ MergeSaturated e →
+    (hprogress : ∀ e, MergeClosure d e → ¬ MergeNormal e →
       ∃ e', MergeStep e e' ∧ rank e' < rank e) :
     ∃ e, MergeNormalize d e :=
   mergeNormalize_exists_of_wellFounded d (fun e' e => rank e' < rank e)

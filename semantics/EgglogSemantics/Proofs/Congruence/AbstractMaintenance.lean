@@ -49,7 +49,7 @@ theorem atom_rule_closed {d : Database} {R : RulesetName} (hfix : RunRules R d =
     (Database.mem_addTerm _ _)
 
 /-- Generated table collisions join both outputs in the mathematical merge fixed point. -/
-theorem merge_join {d : Database} (hd : d.Diag) (hw : d.WF) (hsat : MergeSaturated d)
+theorem merge_join {d : Database} (hd : d.Diag) (hw : d.WF) (hsat : MergeNormal d)
     (hu : d.sig ufName = some (tableDecl 1)) {f : FnName} {cs : List Term} {a b : Term}
     (hf : d.sig f = some (tableDecl cs.length))
     (ha : d.Out f cs [a]) (hb : d.Out f cs [b]) :

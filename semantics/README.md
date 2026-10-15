@@ -17,8 +17,8 @@ Constructors build values; other functions store key/value entries. A complete a
 `(LowerBound expr bound)` reads an entry in a query and records one in an action. The
 declaration determines the key/output split. Entries cannot be nested inside value
 expressions or used as equality or union operands. Merge bodies can perform actions as
-well as return values. The [merge semantics](MERGE.md) guide explains how this relates to the interpreter's row index,
-its refinement contracts, and the limits of the model.
+well as return values. Definitions and brief rationale are in
+[Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
 
 ## Encoding passes
 
@@ -28,10 +28,11 @@ proof annotations. A separate provenance pass adds proof columns for globals, ru
 and function merges, and proof lifting turns its proofs into source proofs
 that both the Lean and Rust checkers accept.
 
-The congruence pass proves
+The historical congruence semantics at `aac8168` proves
 [`preservesFiniteObservations`](EgglogSemantics/Proofs/Congruence/AbstractTerminationComplete.lean):
 for well-formed programs in the supported source fragment, every finite source evaluation
 has a finite compiled evaluation with the same success or check-failure outcome.
+These proofs are being ported to the current table semantics.
 `preservesObservations` additionally relates every pair of finite evaluations. Both sides
 use mathematical databases; the proofs derive their representation invariants and finite
 row bounds from actual executions and import no executable interpreter. Termination

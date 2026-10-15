@@ -37,14 +37,8 @@ theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
 theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
     (db.withOperands ts).Diag := h.addTerms ts
 
-theorem Diag.consumeWrite {db : Database} (h : db.Diag) (row : Entry) :
-    (db.consumeWrite row).Diag := h
-
 theorem Diag.eraseEntry {db : Database} (h : db.Diag) (row : Entry) :
     (db.eraseEntry row).Diag := h
-
-theorem Diag.writeEntry {db : Database} (h : db.Diag) (row : Entry) :
-    (db.writeEntry row).Diag := h.addTerms row.columns
 
 theorem Diag.putEntry {db : Database} (h : db.Diag) (row : Entry) :
     (db.putEntry row).Diag := h.addTerms row.columns
@@ -87,7 +81,7 @@ theorem Database.Out.columns {d : Database} (h : d.StoreOk) {f : FnName} {as vs 
   rcases List.mem_append.mp hm with hm | hm
   · obtain ⟨b, _, hb⟩ := (CongList.forall₂.mp hc).flip.exists_left hm
     exact hb.mem_left
-  · exact h.columns _ (Or.inl ht) t (List.mem_append_right _ hm)
+  · exact h.columns _ ht t (List.mem_append_right _ hm)
 
 /-- `Expr.OrderingFree`, read off an application: its arguments are. -/
 theorem Expr.orderingFree_app {f : FnName} {args : List Expr}

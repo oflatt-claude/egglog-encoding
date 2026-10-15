@@ -8,11 +8,6 @@ namespace Egglog
 theorem MergeStep.contained {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
     d₁.Contained d₂ := by
   cases h with
-  | @insert row _ _ _ _ _ =>
-      exact (Database.Contained.consumeWrite row d₁).trans (.putEntry row _)
-  | @write d old _ _ vs _ _ _ _ _ hv =>
-      have hb : d₁.Contained d := ⟨hv.contained.eqs⟩
-      exact hb.trans (.putEntry ⟨old.name, old.key, vs⟩ d)
   | @collide d old _ _ vs _ _ _ _ _ _ hv =>
       have hb : d₁.Contained d := ⟨hv.contained.eqs⟩
       exact hb.trans (.putEntry ⟨old.name, old.key, vs⟩ d)

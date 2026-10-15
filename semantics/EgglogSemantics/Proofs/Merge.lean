@@ -17,7 +17,8 @@ import EgglogSemantics.Proofs.Interp
 /-!
 # What M9 has to prove
 
-`MERGE.md` says which theorem buys what.
+This file's historical-row proofs are being ported; its claims below describe that
+earlier semantics. Current mathematical merging is defined in `Spec/Step.lean`.
 
 ## The two transports, and the conditions that buy them
 
@@ -104,7 +105,7 @@ Congruence is M2's already; this says the same of the *step* relations. -/
 /-- With no `.merge` function there is no collision to resolve, so a round is `RunRules`
 and nothing else: M9 restricted to constructors is M0–M8 unchanged. -/
 theorem MergeStep.saturated_of_allConstructors {db : Database}
-    (hsig : db.sig.AllConstructors) : MergeSaturated db := by
+    (hsig : db.sig.AllConstructors) : MergeNormal db := by
   intro db' h
   exact (MergeStep.not_of_allConstructors hsig h).elim
 
@@ -722,7 +723,7 @@ Database equality is available again, and `Database.WF.eqsRefl` is the clause th
 restored it: `addTerm` on a term the database already holds is the identity
 (`Database.addTerm_eq_self`), so the step's `addTerm` of the combined entry cancels once
 the entry is one `db` has and the body changed no equation. That is what makes
-`MergeSaturated` — "no merge collision *changes* anything" — reachable at all, since every
+`MergeNormal` — "no merge collision *changes* anything" — reachable at all, since every
 entry collides with itself and so a step always applies.
 
 `hsig`, `hdc` and `hres` are not used by the equation — they are what makes the conclusion
@@ -798,7 +799,7 @@ Monotonicity in `Contained` — half of what a diamond proof for `MergeStep` nee
 `MergeStep.diamond_of_join` — follows the same way. -/
 
 /-- A saturated state is a fixpoint of the whole closure, not only of one step. -/
-theorem MergeSaturated.closure_eq {db d : Database} (hs : MergeSaturated db)
+theorem MergeNormal.closure_eq {db d : Database} (hs : MergeNormal db)
     (h : MergeClosure db d) : d = db := by
   induction h with
   | refl => rfl
@@ -825,7 +826,7 @@ existential form.
 theorem MergeClosure.unique_of_diamond {db d₁ d₂ : Database}
     (hdiamond : ∀ e e₁ e₂, MergeStep e e₁ → MergeStep e e₂ →
       ∃ e', Relation.ReflGen MergeStep e₁ e' ∧ MergeClosure e₂ e')
-    (hs₁ : MergeSaturated d₁) (hs₂ : MergeSaturated d₂)
+    (hs₁ : MergeNormal d₁) (hs₂ : MergeNormal d₂)
     (h₁ : MergeClosure db d₁) (h₂ : MergeClosure db d₂) : d₁ = d₂ := by
   obtain ⟨e, he₁, he₂⟩ := Relation.church_rosser hdiamond h₁ h₂
   exact (hs₁.closure_eq he₁).symm.trans (hs₂.closure_eq he₂)

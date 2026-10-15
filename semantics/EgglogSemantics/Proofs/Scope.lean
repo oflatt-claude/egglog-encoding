@@ -54,8 +54,8 @@ theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models
         rw [Expr.evalList_append_map, Option.bind_eq_some_iff] at hcols
         obtain ⟨ks, hk, hrest⟩ := hcols
         obtain ⟨vs, hv, _⟩ := Option.map_eq_some_iff.mp hrest
-        exact ⟨db.writeEntry ⟨f, ks, vs⟩,
-          by simp [evalAction, hentry, hk, hv], by simpa only [Database.writeEntry_env] using hm⟩
+        exact ⟨db.putEntry ⟨f, ks, vs⟩,
+          by simp [evalAction, hentry, hk, hv], by simpa only [Database.putEntry_env] using hm⟩
   | union e₁ e₂ =>
     obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1.2
     obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2.2
@@ -108,7 +108,7 @@ Finite runs may stop at a failed check. The result theorem therefore establishes
 finite evaluation. Scope guarantees that evaluation produces writes; terminating their
 merge bodies is a separate obligation, including for programs with bounded rounds. -/
 
-/-- Every raw result of this command can finish processing its pending writes. -/
+/-- Every raw result of this command can finish resolving its entry collisions. -/
 def Cmd.NormalizeTotal (c : Cmd) (db : Database) : Prop :=
   ∀ mid, cmdReach db c mid → ∃ post, MergeNormalize mid post
 

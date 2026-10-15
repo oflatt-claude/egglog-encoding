@@ -3,10 +3,13 @@
 ## Current migration: live tables and semantic saturation
 
 The mathematical specification now keeps current function entries separately from
-constructor existence/equations, consumes pending writes, replaces colliding rows,
-and requires merge normalization. `ordering-min` is size-first; saturation stops
+constructor existence/equations. Writes insert directly into the set of entries;
+there is no pending-write store. A single merge rule consumes two distinct colliding
+rows and installs the result, including merge-body effects. `MergeNormal` means
+one entry per congruent key; `MergeNormalize` reaches such a state by merge steps.
+`ordering-min` is size-first; saturation stops
 at the first completed round preserving inferred constructor facts and current
-entries. See [MERGE.md](MERGE.md) for the exact definitions and their scope.
+entries. Definitions and rationale live in [Spec/Step.lean](EgglogSemantics/Spec/Step.lean).
 
 The core specification and ordering/live-table lemmas build. New mathematical
 proofs establish semantic equivalence of ordering-free source checks, current UF
@@ -35,13 +38,19 @@ The next proof obligations are:
    vocabulary ordering. Then reassemble the end-to-end observation and termination
    theorems. Full divergence equivalence remains open.
 
-Validation of this checkpoint: `make check` passes. The focused Lean build of
+Validation after removing pending: `make check` passes. The focused Lean build of
 `OrderFinite`, `SourceMeaning`, `Congruence.LiveLeaders`, `Congruence.LiveState`,
-the repaired source helpers, and `Tests.LiveCompiler` passes. `Tests.LiveSemantics`
+the repaired source helpers, `StepMonotone`, `Tests.LiveCompiler`, and
+`Tests.MergeViews` passes (1,001 jobs). `Tests.LiveSemantics`
 also proves that a cyclic equality can infer an unrecorded nested spelling and that
 recording it preserves `SameMeaning`. Axiom audits contain
-only Lean's standard `propext`, `Classical.choice`, and `Quot.sound`; these new paper
-proofs transitively import no executable interpreter module.
+only Lean's standard `propext`, `Classical.choice`, and `Quot.sound`; these paper
+proofs and the pure semantic regressions transitively import no executable
+interpreter module.
+
+`Tests.MergeViews` proves that two completed merge orders can have different UF
+lookups. Its comments record the implication for computed views; its axiom audit
+also uses only Lean's standard axioms.
 
 `make -k lean-check lean-difftest` was also attempted and fails during the remaining
 legacy proof migration. The current first failing modules are `MatchMonotone`,
@@ -534,7 +543,7 @@ appends fresh `@prov:p0` and `@prov:p1` parameters for the two input proofs. The
 check requires distinct parameter names of the declared width and excludes the reserved
 `@prov:` prefix, even for unused parameters. Scalar and tuple parameter spellings are
 handled by the parser and emitter;
-the [merge guide](MERGE.md#collisions-and-command-steps) gives the componentwise notation.
+[`mergeEnv`](EgglogSemantics/Spec/Step.lean) defines the componentwise binding.
 
 The pass accepts flat table queries and equality tests whose variables and existence
 witnesses come from table premises. This covers the congruence compiler's output;

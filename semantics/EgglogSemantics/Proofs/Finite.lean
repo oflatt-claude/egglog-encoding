@@ -5,7 +5,7 @@ import EgglogSemantics.Spec.Step
 
 /-! Finite mathematical executions have finite stores. No executable representation is
 needed: rule matching ranges over finitely many substitutions at each finite state.
-Current entries and pending writes are also tracked explicitly by `Database.FiniteStore`. -/
+Current entries are also tracked explicitly by `Database.FiniteStore`. -/
 
 namespace Egglog
 
@@ -163,15 +163,11 @@ theorem MergeValues.finite_rules {db d : Database} {decl : FnDecl}
 theorem MergeStep.finite_eqs {db d : Database} (h : MergeStep db d)
     (he : db.eqs.Finite) : d.eqs.Finite := by
   cases h with
-  | insert => exact Database.finite_addTerms (db := db.consumeWrite _) he _
-  | write _ _ _ _ _ hv => exact Database.finite_addTerms (hv.finite_eqs he) _
   | collide _ _ _ _ _ _ hv => exact Database.finite_addTerms (hv.finite_eqs he) _
 
 theorem MergeStep.finite_rules {db d : Database} (h : MergeStep db d)
     (hr : db.rules.Finite) : d.rules.Finite := by
   cases h with
-  | insert => simpa using hr
-  | write _ _ _ _ _ hv => simpa using hv.finite_rules hr
   | collide _ _ _ _ _ _ hv => simpa using hv.finite_rules hr
 
 theorem MergeClosure.finite_eqs {db d : Database} (h : MergeClosure db d)
@@ -230,23 +226,22 @@ extra premise: the signature is metadata and every environment is already a list
 structure Database.FiniteStore (db : Database) : Prop where
   eqs : db.eqs.Finite
   entries : db.entries.Finite
-  pending : db.pending.Finite
   rules : db.rules.Finite
 
 namespace Database.FiniteStore
 
 theorem setEnv {db : Database} (h : db.FiniteStore) (env : Env) :
-    ({ db with env } : Database).FiniteStore := ⟨h.eqs, h.entries, h.pending, h.rules⟩
+    ({ db with env } : Database).FiniteStore := ⟨h.eqs, h.entries, h.rules⟩
 
 theorem setSig {db : Database} (h : db.FiniteStore) (sig : Signature) :
-    ({ db with sig } : Database).FiniteStore := ⟨h.eqs, h.entries, h.pending, h.rules⟩
+    ({ db with sig } : Database).FiniteStore := ⟨h.eqs, h.entries, h.rules⟩
 
 theorem empty : Database.empty.FiniteStore :=
-  ⟨Set.finite_empty, Set.finite_empty, Set.finite_empty, Set.finite_empty⟩
+  ⟨Set.finite_empty, Set.finite_empty, Set.finite_empty⟩
 
 theorem addTerm {db : Database} (h : db.FiniteStore) (t : Term) :
     (db.addTerm t).FiniteStore :=
-  ⟨Database.finite_addTerm h.eqs t, h.entries, h.pending, h.rules⟩
+  ⟨Database.finite_addTerm h.eqs t, h.entries, h.rules⟩
 
 theorem addTerms {db : Database} (h : db.FiniteStore) (ts : List Term) :
     (db.addTerms ts).FiniteStore := by
@@ -256,25 +251,16 @@ theorem addTerms {db : Database} (h : db.FiniteStore) (ts : List Term) :
 
 theorem addEq {db : Database} (h : db.FiniteStore) (a b : Term) :
     (db.addEq a b).FiniteStore :=
-  ⟨Database.finite_addEq h.eqs a b, h.entries, h.pending, h.rules⟩
-
-theorem writeEntry {db : Database} (h : db.FiniteStore) (e : Entry) :
-    (db.writeEntry e).FiniteStore := by
-  have h' := h.addTerms e.columns
-  exact ⟨h'.eqs, h'.entries, h'.pending.insert e, h'.rules⟩
+  ⟨Database.finite_addEq h.eqs a b, h.entries, h.rules⟩
 
 theorem putEntry {db : Database} (h : db.FiniteStore) (e : Entry) :
     (db.putEntry e).FiniteStore := by
   have h' := h.addTerms e.columns
-  exact ⟨h'.eqs, h'.entries.insert e, h'.pending, h'.rules⟩
-
-theorem consumeWrite {db : Database} (h : db.FiniteStore) (e : Entry) :
-    (db.consumeWrite e).FiniteStore :=
-  ⟨h.eqs, h.entries, h.pending.subset Set.sdiff_subset, h.rules⟩
+  exact ⟨h'.eqs, h'.entries.insert e, h'.rules⟩
 
 theorem eraseEntry {db : Database} (h : db.FiniteStore) (e : Entry) :
     (db.eraseEntry e).FiniteStore :=
-  ⟨h.eqs, h.entries.subset Set.sdiff_subset, h.pending, h.rules⟩
+  ⟨h.eqs, h.entries.subset Set.sdiff_subset, h.rules⟩
 
 end Database.FiniteStore
 
@@ -292,7 +278,7 @@ theorem evalAction_finiteStore {db d : Database} {a : Action} (h : db.FiniteStor
           rw [evalAction, hentry] at he
           obtain ⟨ks, _, he⟩ := Option.bind_eq_some_iff.mp he
           obtain ⟨vs, _, rfl⟩ := Option.map_eq_some_iff.mp he
-          exact h.writeEntry _
+          exact h.putEntry _
   | union a b =>
       rw [evalAction] at he
       obtain ⟨ta, _, he⟩ := Option.bind_eq_some_iff.mp he
@@ -313,7 +299,7 @@ theorem evalLocalActions_finiteStore {as : List Action} {db d : Database} {σ : 
     (h : db.FiniteStore) (he : evalLocalActions db as σ = some d) : d.FiniteStore := by
   obtain ⟨mid, hm, rfl⟩ := Option.map_eq_some_iff.mp he
   have hmfin := evalActions_finiteStore (h.setEnv (σ ++ db.env)) hm
-  exact ⟨hmfin.eqs, hmfin.entries, hmfin.pending, h.rules⟩
+  exact ⟨hmfin.eqs, hmfin.entries, h.rules⟩
 
 theorem RunRules.finiteStore {db : Database} (h : db.FiniteStore) (R : RulesetName) :
     (RunRules R db).FiniteStore := by
@@ -323,8 +309,7 @@ theorem RunRules.finiteStore {db : Database} (h : db.FiniteStore) (R : RulesetNa
     rintro d ⟨r, _, _, σ, _, hd⟩
     exact evalLocalActions_finiteStore h hd
   exact ⟨RunRules.finite_eqs h.eqs h.rules R,
-    h.entries.union (hresults.biUnion fun d hd => (hf d hd).entries),
-    h.pending.union (hresults.biUnion fun d hd => (hf d hd).pending), h.rules⟩
+    h.entries.union (hresults.biUnion fun d hd => (hf d hd).entries), h.rules⟩
 
 theorem MergeValues.finiteStore {db d : Database} {decl : FnDecl}
     {old new vs : List Term} (h : MergeValues db decl old new d vs)
@@ -333,14 +318,11 @@ theorem MergeValues.finiteStore {db d : Database} {decl : FnDecl}
   | unchanged => exact hf
   | changed _ _ hbody _ =>
       have h' := evalActions_finiteStore (hf.setEnv (mergeEnv _ _ old new)) hbody
-      exact ⟨h'.eqs, h'.entries, h'.pending, hf.rules⟩
+      exact ⟨h'.eqs, h'.entries, hf.rules⟩
 
 theorem MergeStep.finiteStore {db d : Database} (h : MergeStep db d)
     (hf : db.FiniteStore) : d.FiniteStore := by
   cases h with
-  | insert => exact (hf.consumeWrite _).putEntry _
-  | write _ _ _ _ _ hv =>
-      exact (hv.finiteStore ((hf.consumeWrite _).eraseEntry _)).putEntry _
   | collide _ _ _ _ _ _ hv =>
       exact (hv.finiteStore ((hf.eraseEntry _).eraseEntry _)).putEntry _
 
@@ -367,7 +349,7 @@ theorem CmdStep.finiteStore {db d : Database} {c : Cmd}
   cases c with
   | action a => exact evalAction_finiteStore hf hm
   | decl f dc => cases hm; exact hf.setSig _
-  | rule r => cases hm; exact ⟨hf.eqs, hf.entries, hf.pending, hf.rules.insert r⟩
+  | rule r => cases hm; exact ⟨hf.eqs, hf.entries, hf.rules.insert r⟩
   | check q => obtain ⟨_, rfl⟩ := hm; exact hf
   | run R => cases hm; exact RunRules.finiteStore hf R
   | saturate R => exact (show SaturateReach R db mid from hm).finiteStore hf
@@ -379,7 +361,7 @@ theorem ProgramStep.finiteStore {db d : Database} {P : Program}
   | cons hc _ ih => exact ih (hc.finiteStore hf)
 
 /-- Actual finite mathematical executions from the empty database have finite current
-entries and finite pending writes, as well as finite equalities and registered rules. -/
+entries, equalities, and registered rules. -/
 theorem ProgramStep.finiteStore_from_empty {d : Database} {P : Program}
     (h : ProgramStep Database.empty P d) : d.FiniteStore :=
   h.finiteStore Database.FiniteStore.empty

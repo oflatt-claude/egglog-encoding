@@ -1167,7 +1167,7 @@ theorem recorded_empty {d : Database} (h : d.Recorded Database.empty) : d.eqs = 
   Set.eq_empty_of_forall_notMem fun p hp =>
     absurd (h.eqs p hp).choose_spec.1 (Set.notMem_empty _)
 
-/-- **`MergeStep` still says something**, and so `Database.empty` is `MergeSaturated`
+/-- **`MergeStep` still says something**, and so `Database.empty` is `MergeNormal`
 vacuously rather than by a step that changes nothing. -/
 theorem not_mergeStep_empty (db' : Database) : ¬ MergeStep Database.empty db' := by
   intro h

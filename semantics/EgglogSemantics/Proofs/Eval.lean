@@ -37,20 +37,14 @@ theorem Database.WF.congr {d₁ d₂ : Database} (hw : d₁.WF) (heqs : d₁.eqs
     exact hw.envInTerms b (by rw [henv]; exact hb)
   · exact hw.litsIsolated p (by rw [heqs]; exact hp)
 
-/-- A table write adds values and queues a row without changing the value invariants. -/
-theorem Database.WF.writeEntry {db : Database} (hw : db.WF) (e : Entry) :
-    (db.writeEntry e).WF := (hw.addTerms e.columns).congr rfl rfl
-
+/-- A table write adds values and inserts a row without changing the value invariants. -/
 theorem Database.WF.putEntry {db : Database} (hw : db.WF) (e : Entry) :
     (db.putEntry e).WF := (hw.addTerms e.columns).congr rfl rfl
-
-theorem Database.WF.consumeWrite {db : Database} (hw : db.WF) (e : Entry) :
-    (db.consumeWrite e).WF := hw.congr rfl rfl
 
 theorem Database.WF.eraseEntry {db : Database} (hw : db.WF) (e : Entry) :
     (db.eraseEntry e).WF := hw.congr rfl rfl
 
-/-! ### The current and pending table store -/
+/-! ### The function-entry store -/
 
 theorem Database.StoreOk.empty : Database.empty.StoreOk := by
   constructor <;> simp [Database.empty]
@@ -58,7 +52,7 @@ theorem Database.StoreOk.empty : Database.empty.StoreOk := by
 /-- Keeping only old rows and extending equations preserves the store invariant. -/
 theorem Database.StoreOk.of_contained {d₁ d₂ : Database} (h : d₁.StoreOk)
     (hc : d₁.Contained d₂) (hs : d₂.sig = d₁.sig)
-    (hr : d₂.entries ∪ d₂.pending ⊆ d₁.entries ∪ d₁.pending) : d₂.StoreOk := by
+    (hr : d₂.entries ⊆ d₁.entries) : d₂.StoreOk := by
   refine ⟨?_, ?_⟩
   · intro row hm
     simpa only [hs] using h.declared row (hr hm)
@@ -71,38 +65,16 @@ theorem Database.StoreOk.addTerm {db : Database} (h : db.StoreOk) (t : Term) :
 theorem Database.StoreOk.addEq {db : Database} (h : db.StoreOk) (a b : Term) :
     (db.addEq a b).StoreOk := h.of_contained (.addEq a b db) rfl subset_rfl
 
-theorem Database.StoreOk.consumeWrite {db : Database} (h : db.StoreOk) (e : Entry) :
-    (db.consumeWrite e).StoreOk :=
-  h.of_contained (.consumeWrite e db) rfl (Set.union_subset_union subset_rfl Set.sdiff_subset)
-
 theorem Database.StoreOk.eraseEntry {db : Database} (h : db.StoreOk) (e : Entry) :
     (db.eraseEntry e).StoreOk :=
-  h.of_contained (.eraseEntry e db) rfl (Set.union_subset_union Set.sdiff_subset subset_rfl)
-
-theorem Database.StoreOk.writeEntry {db : Database} (h : db.StoreOk) (e : Entry)
-    (hd : ∃ decl, db.sig e.name = some decl ∧ decl.merge ≠ none) : (db.writeEntry e).StoreOk := by
-  have hrows : ∀ row ∈ (db.writeEntry e).entries ∪ (db.writeEntry e).pending,
-      row = e ∨ row ∈ db.entries ∪ db.pending := by
-    intro row hr
-    simpa only [Database.writeEntry_entries, Database.writeEntry_pending,
-      Set.mem_union, Set.mem_insert_iff, or_left_comm] using hr
-  constructor
-  · intro row hr
-    rcases hrows row hr with rfl | hr
-    · simpa using hd
-    · simpa using h.declared row hr
-  · intro row hr t ht
-    rcases hrows row hr with rfl | hr
-    · exact Database.mem_writeEntry_columns ht
-    · exact (Database.Contained.writeEntry e db).terms (h.columns row hr t ht)
+  h.of_contained (.eraseEntry e db) rfl Set.sdiff_subset
 
 theorem Database.StoreOk.putEntry {db : Database} (h : db.StoreOk) (e : Entry)
     (hd : ∃ decl, db.sig e.name = some decl ∧ decl.merge ≠ none) : (db.putEntry e).StoreOk := by
-  have hrows : ∀ row ∈ (db.putEntry e).entries ∪ (db.putEntry e).pending,
-      row = e ∨ row ∈ db.entries ∪ db.pending := by
+  have hrows : ∀ row ∈ (db.putEntry e).entries,
+      row = e ∨ row ∈ db.entries := by
     intro row hr
-    simpa only [Database.putEntry_entries, Database.putEntry_pending,
-      Set.mem_union, Set.mem_insert_iff, or_assoc] using hr
+    simpa only [Database.putEntry_entries, Set.mem_insert_iff] using hr
   constructor
   · intro row hr
     rcases hrows row hr with rfl | hr
@@ -405,12 +377,12 @@ theorem Database.declaredTerms_addEq {db : Database} (hdt : db.DeclaredTerms) {a
   · exact ha f as h
   · exact hb f as h
 
-theorem Database.declaredTerms_writeEntry {db : Database} (hdt : db.DeclaredTerms)
+theorem Database.declaredTerms_putEntry {db : Database} (hdt : db.DeclaredTerms)
     {e : Entry} (hc : ∀ t ∈ e.columns, Term.DeclaredTerm db.sig t) :
-    (db.writeEntry e).DeclaredTerms := by
+    (db.putEntry e).DeclaredTerms := by
   intro f args ht
-  rw [Database.writeEntry_terms, Database.addTerms_terms] at ht
-  rw [Database.writeEntry_sig]
+  rw [Database.putEntry_terms, Database.addTerms_terms] at ht
+  rw [Database.putEntry_sig]
   rcases ht with ht | ⟨t, hm, ht⟩
   · exact hdt f args ht
   · exact hc t hm f args ht
@@ -740,20 +712,20 @@ end Expr
     evalActions db (a :: as) = (evalAction db a).bind fun db' => evalActions db' as := rfl
 
 /-! ### Actions only add -/
-/-- A value expression is inserted as a constructor value, without queuing a row. -/
+/-- A value expression is inserted as a constructor value, without inserting a function entry. -/
 theorem evalAction_expr_of_eval {db : Database} {e : Expr} {t : Term}
     (h : e.eval db.sig db.env = some t) :
     evalAction db (.expr e) = some (db.addTerm t) := by
   simp [evalAction, Expr.entry_none_of_eval h, h]
 
-/-- A successful action builds a value, queues a table write, or asserts an equality.
+/-- A successful action builds a value, inserts a function entry, or asserts an equality.
 The table case records its evaluated columns, never the entry atom as a value. -/
 theorem evalAction_eq_some {db db' : Database} {a : Action}
     (h : evalAction db a = some db') :
     (∃ e t, a = .expr e ∧ e.eval db.sig db.env = some t ∧ db' = db.addTerm t) ∨
       (∃ e f keys values ks vs, a = .expr e ∧ e.entry db.sig = some (f, keys, values) ∧
         Expr.evalList db.sig keys db.env = some ks ∧
-        Expr.evalList db.sig values db.env = some vs ∧ db' = db.writeEntry ⟨f, ks, vs⟩) ∨
+        Expr.evalList db.sig values db.env = some vs ∧ db' = db.putEntry ⟨f, ks, vs⟩) ∨
       (∃ e₁ e₂ t₁ t₂, a = .union e₁ e₂ ∧ e₁.eval db.sig db.env = some t₁ ∧
         e₂.eval db.sig db.env = some t₂ ∧ ¬ (t₁.isLit ∨ t₂.isLit) ∧ db' = db.addEq t₁ t₂) := by
   cases a with
@@ -784,7 +756,7 @@ theorem evalAction_contained {db db' : Database} {a : Action}
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ |
     ⟨_, f, _, _, ks, vs, -, -, -, -, rfl⟩ | ⟨_, _, t₁, t₂, -, -, -, -, rfl⟩
   · exact .addTerm t db
-  · exact .writeEntry ⟨f, ks, vs⟩ db
+  · exact .putEntry ⟨f, ks, vs⟩ db
   · exact .addEq t₁ t₂ db
 
 theorem evalAction_rules {db db' : Database} {a : Action}
@@ -804,36 +776,22 @@ theorem evalAction_env {db db' : Database} {a : Action}
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
     ⟨_, _, _, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, -, -, -, -, rfl⟩ <;> simp
 
-/-- Actions queue writes; only merge steps change the current entries. -/
-theorem evalAction_entries {db db' : Database} {a : Action}
-    (h : evalAction db a = some db') : db'.entries = db.entries := by
-  rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
-    ⟨_, _, _, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, -, -, -, -, rfl⟩ <;> simp
-
-/-- Evaluating an action may add pending writes but cannot consume one. -/
-theorem evalAction_pending_subset {db db' : Database} {a : Action}
-    (h : evalAction db a = some db') : db.pending ⊆ db'.pending := by
+/-- Evaluating an action may add entries but cannot remove one. -/
+theorem evalAction_entries_subset {db db' : Database} {a : Action}
+    (h : evalAction db a = some db') : db.entries ⊆ db'.entries := by
   rcases evalAction_eq_some h with ⟨_, _, -, -, rfl⟩ |
     ⟨_, _, _, _, _, _, -, -, -, -, rfl⟩ | ⟨_, _, _, _, -, -, -, -, rfl⟩
   · exact subset_rfl
   · simp
   · exact subset_rfl
 
-theorem evalActions_entries {db db' : Database} {as : List Action}
-    (h : evalActions db as = some db') : db'.entries = db.entries := by
-  induction as generalizing db with
-  | nil => cases Option.some.inj h; rfl
-  | cons a as ih =>
-      obtain ⟨d, ha, has⟩ := Option.bind_eq_some_iff.mp h
-      exact (ih has).trans (evalAction_entries ha)
-
-theorem evalActions_pending_subset {db db' : Database} {as : List Action}
-    (h : evalActions db as = some db') : db.pending ⊆ db'.pending := by
+theorem evalActions_entries_subset {db db' : Database} {as : List Action}
+    (h : evalActions db as = some db') : db.entries ⊆ db'.entries := by
   induction as generalizing db with
   | nil => cases Option.some.inj h; exact subset_rfl
   | cons a as ih =>
       obtain ⟨d, ha, has⟩ := Option.bind_eq_some_iff.mp h
-      exact (evalAction_pending_subset ha).trans (ih has)
+      exact (evalAction_entries_subset ha).trans (ih has)
 
 theorem evalAction_storeOk {db db' : Database} (hs : db.StoreOk) {a : Action}
     (h : evalAction db a = some db') : db'.StoreOk := by
@@ -841,7 +799,7 @@ theorem evalAction_storeOk {db db' : Database} (hs : db.StoreOk) {a : Action}
     ⟨_, f, _, _, ks, vs, -, he, -, -, rfl⟩ | ⟨_, _, t₁, t₂, -, -, -, -, rfl⟩
   · exact hs.addTerm t
   · obtain ⟨decl, hd, hm, _⟩ := Expr.entry_some he
-    exact hs.writeEntry ⟨f, ks, vs⟩ ⟨decl, hd, by intro hnone; simp [hnone] at hm⟩
+    exact hs.putEntry ⟨f, ks, vs⟩ ⟨decl, hd, by intro hnone; simp [hnone] at hm⟩
   · exact hs.addEq t₁ t₂
 
 theorem evalActions_storeOk {db db' : Database} (hs : db.StoreOk) {as : List Action}
@@ -866,7 +824,7 @@ theorem evalAction_wf {db db' : Database} (hw : db.WF) {a : Action}
   rcases evalAction_eq_some h with ⟨_, t, -, -, rfl⟩ |
     ⟨_, f, _, _, ks, vs, -, -, -, -, rfl⟩ | ⟨_, _, t₁, t₂, -, -, -, hlit, rfl⟩
   · exact hw.addTerm t
-  · exact hw.writeEntry ⟨f, ks, vs⟩
+  · exact hw.putEntry ⟨f, ks, vs⟩
   · exact hw.addEq t₁ t₂ fun hl => absurd hl hlit
 
 theorem evalActions_contained {db db' : Database} {as : List Action}
@@ -930,7 +888,7 @@ theorem evalAction_declaredTerms {db db' : Database} (hwf : db.WF) (hdt : db.Dec
   · exact Database.declaredTerms_addTerm hdt
       (Expr.evalAtom_declaredTerm henv hw (Expr.evalAtom_of_eval ht))
   · have hterm := Expr.evalAtom_declaredTerm henv hw (Expr.evalAtom_entry he hk hv)
-    apply Database.declaredTerms_writeEntry hdt
+    apply Database.declaredTerms_putEntry hdt
     intro t ht g args hsub
     exact hterm g args (Term.arg_subterms ht hsub)
   · exact Database.declaredTerms_addEq hdt (Expr.eval_declaredTerm henv hw.1 ht₁)
@@ -974,7 +932,7 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
           | some ks =>
               cases Expr.evalList d₁.sig values d₁.env with
               | none => exact .none
-              | some vs => exact .some (h.writeEntry ⟨f, ks, vs⟩)
+              | some vs => exact .some (h.putEntry ⟨f, ks, vs⟩)
   | union e₁ e₂ =>
     simp only [evalAction, ← h.sig, ← Expr.eval_agree (sig := d₁.sig) h.env e₁,
       ← Expr.eval_agree (sig := d₁.sig) h.env e₂]
@@ -990,7 +948,7 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
         · simp only [if_neg hlit]
           exact .some ⟨h.sig,
             by simp only [Database.addEq_eqs, ((h.addTerm t₁).addTerm t₂).eqs],
-            h.entries, h.pending, h.rules, h.env⟩
+            h.entries, h.rules, h.env⟩
 
 theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as : List Action) :
     Option.Rel Database.EnvAgree (evalActions d₁ as) (evalActions d₂ as) := by
@@ -1017,7 +975,7 @@ theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as
 theorem evalLocalActions_agree {db : Database} (as : List Action) {σ₁ σ₂ : Env}
     (h : Env.Agree σ₁ σ₂) : evalLocalActions db as σ₁ = evalLocalActions db as σ₂ := by
   have hE : Database.EnvAgree { db with env := σ₁ ++ db.env } { db with env := σ₂ ++ db.env } :=
-    ⟨rfl, rfl, rfl, rfl, rfl, Env.Agree.append_right db.env h⟩
+    ⟨rfl, rfl, rfl, rfl, Env.Agree.append_right db.env h⟩
   have hrel := evalActions_envAgree hE as
   simp only [evalLocalActions]
   cases h₁ : evalActions { db with env := σ₁ ++ db.env } as with
@@ -1059,15 +1017,10 @@ theorem evalLocalActions_sig {db db' : Database} {as : List Action} {σ : Env}
   obtain ⟨_, hv, rfl⟩ := evalLocalActions_eq_some h
   exact (evalActions_sig hv : _ = ({ db with env := σ ++ db.env } : Database).sig)
 
-theorem evalLocalActions_entries {db db' : Database} {as : List Action} {σ : Env}
-    (h : evalLocalActions db as σ = some db') : db'.entries = db.entries := by
+theorem evalLocalActions_entries_subset {db db' : Database} {as : List Action} {σ : Env}
+    (h : evalLocalActions db as σ = some db') : db.entries ⊆ db'.entries := by
   obtain ⟨post, hp, rfl⟩ := evalLocalActions_eq_some h
-  exact evalActions_entries (db := { db with env := σ ++ db.env }) (db' := post) hp
-
-theorem evalLocalActions_pending_subset {db db' : Database} {as : List Action} {σ : Env}
-    (h : evalLocalActions db as σ = some db') : db.pending ⊆ db'.pending := by
-  obtain ⟨post, hp, rfl⟩ := evalLocalActions_eq_some h
-  exact evalActions_pending_subset (db := { db with env := σ ++ db.env }) (db' := post) hp
+  exact evalActions_entries_subset (db := { db with env := σ ++ db.env }) (db' := post) hp
 
 theorem evalLocalActions_contained {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db.Contained db' := by

@@ -81,10 +81,10 @@ theorem mergeClosure_finite_bound {d : Database} (h : Runtime d) (hf : d.eqs.Fin
   exact ⟨mergeClosure_termBound h he hm.1, mergeClosure_termBound h he hm.2⟩
 
 /-- Every finite generated-table state admits a finite merge schedule to a fixed point. -/
-theorem mergeSaturated_exists {d : Database} (h : Runtime d) (hf : d.eqs.Finite) :
-    ∃ e, MergeClosure d e ∧ MergeSaturated e := by
+theorem mergeNormal_exists {d : Database} (h : Runtime d) (hf : d.eqs.Finite) :
+    ∃ e, MergeClosure d e ∧ MergeNormal e := by
   obtain ⟨B, hB, hb⟩ := mergeClosure_finite_bound h hf
-  exact Egglog.mergeSaturated_exists_of_finite_bound d hB hb
+  exact Egglog.mergeNormal_exists_of_finite_bound d hB hb
 
 /-- Maintenance writes complete UF or view rows, never bare structural constructors. -/
 private theorem maintenance_head_generated {P : Program} {c : Command}

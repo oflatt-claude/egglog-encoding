@@ -1200,7 +1200,7 @@ theorem runSaturate_saturateReach {R : RulesetName} : ∀ {d : FDatabase}
 
 The rounds are `runSaturateF_iterate` replayed as `RunStep`s; the fixpoint is
 `runSaturateF_sameData` read through `execRunRules_RunRules`, which on the constructor
-fragment is an *equality* and not a containment. `MergeSaturated` is free there —
+fragment is an *equality* and not a containment. `MergeNormal` is free there —
 `MergeStep.not_of_allConstructors`. -/
 theorem runSaturateF_saturateReach {R : RulesetName} {n : Nat} {d e : FDatabase}
     (he : d.Closed) (hsig : d.sig.AllConstructors) (h : d.runSaturateF R n = some e) :

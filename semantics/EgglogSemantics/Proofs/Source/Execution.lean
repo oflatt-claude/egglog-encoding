@@ -178,7 +178,7 @@ theorem evalAction_litFree {db db' : Database} (hw : db.WF) (h : db.LitFree)
     · exact ht s hs'
   · have ht := Expr.evalAtom_litFree hlk e hl (Expr.evalAtom_entry he hk hvals)
     intro s hs
-    rw [Database.writeEntry_terms, Database.addTerms_terms] at hs
+    rw [Database.putEntry_terms, Database.addTerms_terms] at hs
     rcases hs with hs | ⟨t, ht', hs⟩
     · exact h s hs
     · exact ht s (Term.arg_subterms ht' hs)

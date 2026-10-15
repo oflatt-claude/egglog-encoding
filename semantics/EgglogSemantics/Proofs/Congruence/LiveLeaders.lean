@@ -14,16 +14,16 @@ leave it. These statements use mathematical databases only.
 namespace Egglog
 
 /-- Normalized outputs agree even when the lookup keys are merely congruent. -/
-theorem MergeSaturated.out_functional {d : Database} (hn : MergeSaturated d)
+theorem MergeNormal.out_functional {d : Database} (hn : MergeNormal d)
     {f : FnName} {as bs old new : List Term} (hk : CongList d as bs)
     (ha : d.Out f as old) (hb : d.Out f bs new) : old = new := by
   obtain ⟨cs, hac, ha⟩ := ha
   obtain ⟨ds, hbd, hb⟩ := hb
   exact congrArg Entry.value
-    (hn.unique _ ha _ hb rfl (hac.symm.trans (hk.trans hbd)))
+    (hn _ ha _ hb rfl (hac.symm.trans (hk.trans hbd)))
 
 /-- An exact-key lookup has a unique current output. -/
-theorem MergeSaturated.out_unique {d : Database} (hn : MergeSaturated d)
+theorem MergeNormal.out_unique {d : Database} (hn : MergeNormal d)
     {f : FnName} {as old new : List Term}
     (ha : d.Out f as old) (hb : d.Out f as new) : old = new := by
   obtain ⟨cs, hc, hr⟩ := ha
@@ -68,16 +68,16 @@ theorem uf_match_out {d : Database} (hd : d.Diag) (hs : d.StoreOk)
     cases hvalue
     rfl
   have hexists : a ∈ d.terms :=
-    hs.columns row (Or.inl hrow) a (by rw [Entry.columns, hcols]; simp)
+    hs.columns row hrow a (by rw [Entry.columns, hcols]; simp)
   exact ⟨[a], .cons hexists .nil, hroweq ▸ hrow⟩
 
 /-- Unlike a historical self-loop, a current self-parent rules out any other parent. -/
-theorem self_parent_only {d : Database} (hn : MergeSaturated d) {r p : Term}
+theorem self_parent_only {d : Database} (hn : MergeNormal d) {r p : Term}
     (hr : d.Out ufName [r] [r]) (hp : d.Out ufName [r] [p]) : p = r := by
   exact List.singleton_inj.mp (hn.out_unique hp hr)
 
 /-- A parent walk starting at a certified root cannot reach another term. -/
-theorem walk_from_self_parent {d : Database} (hn : MergeSaturated d) {r p : Term}
+theorem walk_from_self_parent {d : Database} (hn : MergeNormal d) {r p : Term}
     (hr : d.Out ufName [r] [r])
     (hw : Relation.ReflTransGen (fun a b => d.Out ufName [a] [b]) r p) : p = r := by
   induction hw with
@@ -85,7 +85,7 @@ theorem walk_from_self_parent {d : Database} (hn : MergeSaturated d) {r p : Term
   | tail _ hs ih => exact self_parent_only hn hr (ih ▸ hs)
 
 /-- The two positive lookups used by `leaderQuery` select a unique rooted parent. -/
-theorem guarded_leader_unique {d : Database} (hn : MergeSaturated d) {a r s : Term}
+theorem guarded_leader_unique {d : Database} (hn : MergeNormal d) {a r s : Term}
     (har : d.Out ufName [a] [r]) (hrr : d.Out ufName [r] [r])
     (has : d.Out ufName [a] [s]) :
     s = r ∧ ∀ p, d.Out ufName [r] [p] → p = r :=

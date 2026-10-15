@@ -34,3 +34,4 @@ import EgglogSemantics.Proofs.Congruence.LiveNormalization
 import EgglogSemantics.Proofs.Congruence.LiveState
 import EgglogSemantics.Tests.LiveCompiler
 import EgglogSemantics.Tests.LiveSemantics
+import EgglogSemantics.Tests.MergeViews

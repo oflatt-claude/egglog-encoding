@@ -44,9 +44,6 @@ constructor equations, and installing the result only records its columns. -/
 theorem MergeStep.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeStep d₁ d₂) : d₂.Diag := by
   cases h with
-  | insert => exact (hd.consumeWrite _).putEntry _
-  | write _ _ _ hdecl _ hbody =>
-    exact (hbody.diag (hs _ _ hdecl) ((hd.consumeWrite _).eraseEntry _)).putEntry _
   | collide _ _ _ _ hdecl _ hbody =>
     exact (hbody.diag (hs _ _ hdecl) ((hd.eraseEntry _).eraseEntry _)).putEntry _
 

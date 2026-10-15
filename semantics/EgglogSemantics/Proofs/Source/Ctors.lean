@@ -158,7 +158,7 @@ theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : d
     · exact hcin ht g bs hs'
   · have ht := Expr.evalAtom_ctorsIn hlk e hc (Expr.evalAtom_entry he hk hvals)
     intro g bs hs
-    rw [Database.writeEntry_terms, Database.addTerms_terms] at hs
+    rw [Database.putEntry_terms, Database.addTerms_terms] at hs
     rcases hs with hs | ⟨t, ht', hs⟩
     · exact h g bs hs
     · exact ht g bs (Term.arg_subterms ht' hs)

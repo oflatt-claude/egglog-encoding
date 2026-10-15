@@ -41,12 +41,12 @@ declared, and it carries that declaration's `entryWidth` children. -/
 def Database.DeclaredTerms (db : Database) : Prop :=
   ∀ f as, Term.app f as ∈ db.terms → ∃ d, db.sig f = some d ∧ as.length = d.entryWidth
 
-/-- Current rows and queued writes name declared functions and contain existing values.
+/-- Function rows name declared functions and contain existing values.
 This store invariant is separate from the equation and environment invariant `WF`. -/
 structure Database.StoreOk (db : Database) : Prop where
-  declared : ∀ row ∈ db.entries ∪ db.pending,
+  declared : ∀ row ∈ db.entries,
     ∃ decl, db.sig row.name = some decl ∧ decl.merge ≠ none
-  columns : ∀ row ∈ db.entries ∪ db.pending, ∀ t ∈ row.columns, t ∈ db.terms
+  columns : ∀ row ∈ db.entries, ∀ t ∈ row.columns, t ∈ db.terms
 
 /-- No asserted equation puts a literal beside anything but itself: `evalAction` refuses a
 `union` on a literal and `addTerm` writes only reflexive pairs. `Cong.eq_of_isLit` reads it
@@ -59,8 +59,7 @@ of every term it holds, binds its variables to terms it holds, and isolates lite
 
 `eqsRefl` makes "the term is present" and "the equation `t = t` is asserted"
 interchangeable. Together with subterm closure, it makes recording an already held
-term the identity. `StoreOk` separately records the invariants of current function
-entries and pending writes. -/
+term the identity. `StoreOk` separately records the invariants of function entries. -/
 structure Database.WF (db : Database) : Prop where
   eqsRefl : ∀ t ∈ db.terms, (t, t) ∈ db.eqs
   subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
@@ -81,8 +80,8 @@ def Database.Infers (db : Database) (a b : Term) : Prop :=
   ∃ w ∈ db.terms, CongOn db [a, b] w a ∧ CongOn db [a, b] a b
 
 /-- Observable mathematical state at a completed round. Constructor spellings are
-compared through inferred facts; current function entries are compared directly.
-Pending writes are excluded here: both endpoints must separately be merge-normal. -/
+compared through inferred facts; function entries are compared directly. Completed
+rounds separately require these entries to have one row per congruent key. -/
 structure Database.SameMeaning (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   env : d₁.env = d₂.env
