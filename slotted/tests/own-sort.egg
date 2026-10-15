@@ -15,7 +15,7 @@
 (constructor Null () S)
 (constructor Succ (S) S)
 (constructor Prev (S) S)
-(constructor Lam (S S) S :binder 0)
+(constructor Lam (Var S) S :binder 0)
 (constructor G (S S) S)
 
 

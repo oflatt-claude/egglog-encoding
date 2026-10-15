@@ -533,7 +533,9 @@ Part II explains how the current implementation keeps one.
 
 ## Binders
 
-`:binder i` marks a child column whose slot the node binds. The bound slot is
+The source sort `Var` requires a slot literal such as `$a` or `$0`. It lowers to
+a variable child and its renaming, using the constructor's carrier. `:binder i`
+marks a `Var` column whose slot the node binds. The bound slot is
 stored as an edge `0 -> s` to `(Var 0)` like any other, so a binder is not a
 different kind of column — what differs is that the slot is taken out of the
 class's slot set over the column the binder **covers**, which is the one right

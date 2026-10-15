@@ -30,6 +30,36 @@ TOKEN = re.compile(r'\(|\)|"[^"]*"|;[^\n]*|[^\s()]+')
 SLOT = re.compile(r"\$(?:[+-]?\d+|\w+)\Z")
 
 
+class Slots:
+    """Stable ground-slot identities, separate from globals and pattern slots."""
+
+    def __init__(self):
+        self.names = {}
+        self.sources = {}
+        self.used = set()
+        self.next = -(1 << 63)
+
+    def intern(self, source):
+        if not SLOT.fullmatch(source):
+            raise SystemExit(f"expected a slot literal, got {source!r}")
+        name = source[1:]
+        number = int(name) if re.fullmatch(r"[+-]?[0-9]+", name) else None
+        if number is not None and not -(1 << 63) <= number < 1 << 63:
+            raise SystemExit(f"slot {source} is outside the signed 64-bit range")
+        key = str(number) if number is not None else name
+        if key not in self.names:
+            if number is not None and number not in self.used:
+                slot = number
+            else:
+                while self.next in self.used:
+                    self.next += 1
+                slot = self.next
+            self.names[key] = slot
+            self.sources[slot] = f"${key}"
+            self.used.add(slot)
+        return self.names[key]
+
+
 def parse(text):
     """Every top-level form, as nested lists of tokens. Comments are dropped."""
     toks = [t for t in TOKEN.findall(text) if not t.startswith(";")]
@@ -122,6 +152,7 @@ class Source:
         except ValueError:
             self.relpath = path.name
         self.spec = {}
+        self.slots = Slots()
         self.output_sorts = {}
         self.child_sorts = {}
         self.body = []
@@ -147,7 +178,7 @@ class Source:
             and form[0] in ("sort", "constructor", "function", "relation", "ruleset")
             and not (form[0] == "sort" and len(form) == 2 and form[1] in carriers)
         }
-        reserved.update({"Names", "Binding", "Frame", "Renaming", "Frames", "Group", "Groups", "Renamings"})
+        reserved.update({"Var", "Names", "Binding", "Frame", "Renaming", "Frames", "Group", "Groups", "Renamings"})
         collision = next((sort for sort in self.sorts if sort in reserved), None)
         if collision is None:
             collision = next((form[1] for form in self._ctors if form[1] in reserved), None)
@@ -302,7 +333,9 @@ class Source:
         naming the class pick out the same thing. Without this a global in a pattern died
         with `KeyError: 'name'`, whichever spelling it wore.
         """
-        return ("name", name) if ground else self.lang.bound[name]
+        return (
+            ("name", name) if ground else as_pattern(self.lang, self.lang.bound[name], self.slots.sources.__getitem__)
+        )
 
     def term(self, form, column=enc.CHILD, ground=True, expected_sort=None):
         """A slotted term as the encoder's tuple form.
@@ -315,6 +348,8 @@ class Source:
         `$s` string in either column.
         """
         if isinstance(form, str):
+            if form.startswith("$") and not SLOT.fullmatch(form):
+                raise SystemExit(f"invalid slot literal {form}")
             if SLOT.match(form):
                 # ALWAYS a slot. egglog spells a global `$name`, and this language cannot
                 # borrow that: `$0` is a slot, so `$name` was resolved as a global when one
@@ -323,7 +358,7 @@ class Source:
                 # `#` instead, and a `$` in a global's name is refused where it is bound.
                 if not ground:
                     return form
-                slot = int(form[1:]) if re.fullmatch(r"[+-]?\d+", form[1:]) else form[1:]
+                slot = self.slots.intern(form)
                 return slot if column is enc.BINDER else ("var", slot)
             if form in self.spec:
                 # A CONSTRUCTOR NEEDS ITS PARENS, as it does in egglog: a nullary one is
@@ -379,18 +414,8 @@ class Source:
         child_sorts = getattr(self, "child_sorts", {}).get(head, self.lang[head].kid_sorts)
         for arg, kind in zip(args, kinds, strict=True):
             if kind in enc.SLOTTED:
-                if kind is enc.BINDER and not ground and not (isinstance(arg, str) and SLOT.match(arg)):
-                    # A binder column takes a slot literal and nothing else. A literal is a
-                    # rigid name, the reference's reading of a written slot; a pattern
-                    # variable there would be a slot free to become any other, which
-                    # neither matcher has a word for. A rule that wants two binders whether
-                    # or not they bind one slot is two rules.
-                    raise SystemExit(
-                        f"{self.path.name}: {head}'s binder column takes a slot literal, and {render(arg)!r} "
-                        "is not one -- a pattern variable cannot stand in a binder column. Write `$x` "
-                        "there; to match two binders whether or not they bind the same slot, write the "
-                        "rule twice, once with one literal in both columns and once with two."
-                    )
+                if kind in (enc.BINDER, enc.SLOT) and not (isinstance(arg, str) and SLOT.match(arg)):
+                    raise SystemExit(f"{self.path.name}: {head}'s Var column takes a slot literal, got {render(arg)!r}")
                 parsed.append(self.term(arg, kind, ground, child_sorts[child]))
                 child += 1
             else:
@@ -434,6 +459,7 @@ def compile_source(src, own_only=False, *, nested_compat=False):
     # Each compilation starts with fresh global bindings and scopes.
     src = copy.copy(src)
     src.lang = Terms(src.lang.ops, src.carriers)
+    src.slots = Slots()
     out = [f";;; Compiled from {src.relpath} by slotted/slotted-egglog.py."]
     if own_only:
         out.append(";;; Source forms only; maintenance and includes omitted.")
@@ -461,11 +487,11 @@ def compile_source(src, own_only=False, *, nested_compat=False):
             # closed region stayed bound: a later rule mentioning it matched that stale
             # term instead of binding a pattern variable, and a ground mention compiled to
             # a reference egglog no longer had.
-            scopes.append(dict(src.lang.bound))
+            scopes.append((dict(src.lang.bound), copy.deepcopy(src.slots)))
             _emit(out, keep, render(form))
         elif head == "pop":
             if scopes:
-                src.lang.bound = scopes.pop()
+                src.lang.bound, src.slots = scopes.pop()
             _emit(out, keep, render(form))
         elif head == "let":
             _, name, body = form
@@ -825,7 +851,7 @@ def rule_name(src, form):
 Matched = collections.namedtuple("Matched", "cls mp")
 
 
-def as_pattern(lang, t):
+def as_pattern(lang, t, slot_name=lambda n: f"${n}"):
     """A term read as GROUND, written the way a pattern writes it.
 
     A `let`-bound global inlines the term it was bound to, and that was read as
@@ -838,16 +864,16 @@ def as_pattern(lang, t):
     if isinstance(t, str):
         return t
     if t[0] == "name":
-        return as_pattern(lang, lang.bound[t[1]])
+        return as_pattern(lang, lang.bound[t[1]], slot_name)
     if t[0] == lang.VAR:
-        return f"${t[1]}"
+        return slot_name(t[1])
     op = lang[t[0]]
     out = []
     for kind, a in zip(op.arg_kinds(), t[1:], strict=True):
         if kind is enc.BINDER:
-            out.append(a if isinstance(a, str) else f"${lang.slot(a)}")
-        elif kind is enc.CHILD:
-            out.append(as_pattern(lang, a))
+            out.append(a if isinstance(a, str) else slot_name(lang.slot(a)))
+        elif kind in (enc.CHILD, enc.SLOT):
+            out.append(as_pattern(lang, a, slot_name))
         else:
             out.append(a)
     return (t[0], *out)
@@ -890,7 +916,7 @@ def rename_bound_slots(lang, t, counter=None, subst=None, taken=None):
         if kind is enc.BINDER:
             out.append(bound[i])
             child += 1
-        elif kind is enc.CHILD:
+        elif kind in (enc.CHILD, enc.SLOT):
             child += 1
             out.append(rename_bound_slots(lang, arg, counter, inner if child == op.covered else subst, taken))
         else:
@@ -906,7 +932,7 @@ def _written(lang, t):
     for kind, arg in zip(lang[t[0]].arg_kinds(), t[1:], strict=True):
         if kind is enc.BINDER:
             out.add(arg)
-        elif kind is enc.CHILD:
+        elif kind in (enc.CHILD, enc.SLOT):
             out |= _written(lang, arg)
     return out
 
@@ -1035,7 +1061,8 @@ def compile_check(src, form):
         # the match's renaming already carries them into.
         sort = src.sort_of_form(args[0])
         body, (a,) = claim_query(src, args[:1], sort)
-        named = " ".join(f"{s[1:]} {s[1:]}" for s in args[1:])
+        slots = [src.slots.intern(s) for s in args[1:]]
+        named = " ".join(f"{s} {s}" for s in slots)
         want = f"(map-of {named})" if named else "(map-empty)"
         return claimed(body, [f"(= (map-image {a.mp}) {want})"])
     # Not one of the slotted claims, so it is an ordinary egglog check about the

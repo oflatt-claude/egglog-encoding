@@ -15,7 +15,7 @@
   (Succ M)
   (Prev M)
   (Add M M)
-  (Lam M M :binder 0)
+  (Lam Var M :binder 0)
   (Pair M M)
   (Same))
 

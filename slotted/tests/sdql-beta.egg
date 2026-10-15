@@ -25,11 +25,11 @@
 
 (sort U)
 
-(constructor Let (U U U) U :binder 1)
+(constructor Let (U Var U) U :binder 1)
 (constructor Add (U U) U)
-(constructor Lambda (U U) U :binder 0)
+(constructor Lambda (Var U) U :binder 0)
 (constructor Unique (U) U)
-(constructor Sum (U U U U) U :binder 1 2)
+(constructor Sum (U Var Var U) U :binder 1 2)
 (constructor Num (i64) U)
 (constructor Null () U)
 

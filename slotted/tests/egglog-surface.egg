@@ -18,7 +18,7 @@
 (constructor Pair (U U) U)
 (constructor IConst () U)
 (constructor Mul (U U) U)
-(constructor Lam (U U) U :binder 0)
+(constructor Lam (Var U) U :binder 0)
 (constructor G (U U) U)
 
 

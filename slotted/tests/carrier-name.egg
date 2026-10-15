@@ -12,7 +12,7 @@
 (constructor Null () U)
 (constructor Succ (U) U)
 (constructor Prev (U) U)
-(constructor Lam (U U) U :binder 0)
+(constructor Lam (Var U) U :binder 0)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const LANGUAGE: &str = "(datatype U (Null) (F U U) (G U U) (H U U) (Lam U U :binder 0))";
+const LANGUAGE: &str = "(datatype U (Null) (F U U) (G U U) (H U U) (Lam Var U :binder 0))";
 
 fn evaluate(compiler: &mut Compiler, graph: &mut egglog::EGraph, source: &str) {
     let encoded = compiler.compile(None, source).unwrap();
@@ -40,6 +40,77 @@ fn transformation_emits_ordinary_egglog() {
         (check (= start (G $2 $1)))
         (check (!= start (G $1 $2)))
         (check (slots start $1 $2))
+    "#,
+    );
+}
+
+#[test]
+fn named_slots_persist_across_inputs_and_scopes() {
+    let mut compiler = Compiler::default();
+    let mut graph = egglog_experimental::slotted::new_egraph();
+    evaluate(&mut compiler, &mut graph, LANGUAGE);
+    evaluate(&mut compiler, &mut graph, "(let a (F $a $a0))");
+    evaluate(
+        &mut compiler,
+        &mut graph,
+        "(push) (let local (F $temp $-9223372036854775808)) (pop)",
+    );
+    evaluate(
+        &mut compiler,
+        &mut graph,
+        r#"
+        (let b (F $a $-9223372036854775808))
+        (run 0)
+        (check (= a (F $a $a0)))
+        (check (slots a $a $a0))
+        (check (slots b $a $-9223372036854775808))
+        (check (!= a b))
+        (check (!= $a $-9223372036854775808))
+    "#,
+    );
+    assert!(
+        compiler
+            .compile(None, "(let bad (F $fresh missing))")
+            .is_err()
+    );
+    evaluate(
+        &mut compiler,
+        &mut graph,
+        "(let valid (F $fresh $a)) (run 0) (check (slots valid $fresh $a))",
+    );
+}
+
+#[test]
+fn var_columns_require_slots() {
+    let mut compiler = Compiler::default();
+    let mut graph = egglog_experimental::slotted::new_egraph();
+    evaluate(&mut compiler, &mut graph, LANGUAGE);
+    for source in [
+        "(sort Var)",
+        "(datatype Var (Named String))",
+        "(constructor Bad (U U) U :binder 0)",
+        "(let bad (Lam (Null) (Null)))",
+        "(let alias (F $a $a)) (let bad (Lam alias (Null)))",
+        "(rewrite (Lam x a) a)",
+        "(rewrite (F x a) (Lam x a))",
+        "(constructor Occurrence (Var) U) (let bad (Occurrence (Null)))",
+        "(let bad (F $9223372036854775808 $a))",
+        "(let bad (F $ $a))",
+    ] {
+        assert!(
+            compiler.compile(None, source).is_err(),
+            "accepted: {source}"
+        );
+    }
+    evaluate(
+        &mut compiler,
+        &mut graph,
+        r#"
+        (constructor Tagged (String Var U) U :binder 0)
+        (let id (Tagged "lambda" $a $a))
+        (run 0)
+        (check (= id (Tagged "lambda" $b $b)))
+        (check (slots id))
     "#,
     );
 }
@@ -159,12 +230,12 @@ fn cli_reuses_files_includes_serialization_and_timing_reports() {
     std::fs::write(temp.0.join("language.egg"), LANGUAGE).unwrap();
     std::fs::write(
         temp.0.join("first.egg"),
-        "(include \"language.egg\")\n(let input (F $1 $2))",
+        "(include \"language.egg\")\n(let input (F $a $a0))",
     )
     .unwrap();
     std::fs::write(
         temp.0.join("second.egg"),
-        "(rewrite (F a b) (G b a))\n(run 1)\n(check (= input (G $2 $1)))",
+        "(rewrite (F a b) (G b a))\n(run 1)\n(check (= input (G $a0 $a)))",
     )
     .unwrap();
     let result = cli()
@@ -207,7 +278,7 @@ fn repl(source: &str) -> std::process::Output {
 #[test]
 fn cli_transforms_complete_stdin_commands() {
     let result = repl(&format!(
-        "{LANGUAGE}\n(let input (F $1\n $2))\n(run 0)\n(check (slots input $1 $2))"
+        "{LANGUAGE}\n(let input (F $a\n $a0))\n(run 0)\n(check (slots input $a $a0))"
     ));
     assert!(
         result.status.success(),

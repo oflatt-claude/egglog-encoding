@@ -18,9 +18,10 @@ import re
 from dataclasses import dataclass
 
 CHILD = object()  # a slotted child: `Renaming U`
+SLOT = object()  # a Var column: a free slot occurrence
 BINDER = object()  # a slotted child that also binds its slot
 
-SLOTTED = (CHILD, BINDER)
+SLOTTED = (CHILD, SLOT, BINDER)
 
 
 @dataclass(frozen=True)
@@ -77,16 +78,12 @@ def carrier_symbols(sorts):
 def read_language(path, sorts=("U",)):
     """Parse annotated constructor declarations.
 
-        (constructor Lam (U U) U :binder 0)
-        (constructor Sum (U U U U) U :binder 1 2)
+        (constructor Lam (Var U) U :binder 0)
+        (constructor Sum (U Var Var U) U :binder 1 2)
         (constructor Num (i64) U)
 
-    A `U` column is a slotted child and expands to `Renaming U`; anything else is a
-    payload and passes through. `:binder` names the child positions -- counted over
-    children, not over columns -- whose slot the node binds. This is the syntax the
-    encoder recognises today; the intent is for egglog-experimental to accept it and
-    strip it on the way down to core egglog, where nothing about a binder is
-    primitive.
+    Carrier and `Var` columns expand to `Renaming U`; payloads pass through.
+    `:binder` selects `Var` positions, counting over carrier and `Var` columns.
     """
     language = {}
     for raw in path.read_text().splitlines():
@@ -136,11 +133,10 @@ def constructor_options(name, tokens):
 def signature(cols, binders, sorts=("U",), name="constructor"):
     """Columns and the binding child positions as the encoder's signature.
 
-    A column whose sort is one the program DECLARED is a slotted child and expands to
-    `Renaming <sort>`; anything else -- `i64`, `String`, a primitive -- is a payload and
-    passes through. `sorts` defaults to the carrier the hand-written core declares.
+    Carrier and `Var` columns are slotted; `Var` requires a slot literal. Payload
+    columns pass through. `sorts` lists the program's declared carriers.
     """
-    child_count = sum(col in sorts for col in cols)
+    child_count = sum(col in sorts or col == "Var" for col in cols)
     if len(set(binders)) != len(binders):
         raise SystemExit(f"constructor {name}: duplicate `:binder` position")
     if any(pos < 0 or pos >= child_count for pos in binders):
@@ -154,8 +150,10 @@ def signature(cols, binders, sorts=("U",), name="constructor"):
 
     sig, seen_kids = [], 0
     for col in cols:
-        if col in sorts:
-            sig.append(BINDER if seen_kids in binders else CHILD)
+        if col == "Var" or col in sorts:
+            if seen_kids in binders and col != "Var":
+                raise SystemExit(f"constructor {name}: binder column {seen_kids} must have sort Var")
+            sig.append(BINDER if seen_kids in binders else SLOT if col == "Var" else CHILD)
             seen_kids += 1
         else:
             sig.append(col)
@@ -178,7 +176,7 @@ def read_typed_language_form(form, sorts=("U",)):
             f"constructor {name}: output sort {output!r} is not one of the declared equality sorts ({', '.join(sorts)})"
         )
     sig = signature(cols, constructor_options(name, form[4:]), sorts, name)
-    return name, sig, output, tuple(col for col in cols if col in sorts)
+    return name, sig, output, tuple(output if col == "Var" else col for col in cols if col == "Var" or col in sorts)
 
 
 def read_correspondence(path):
@@ -314,7 +312,7 @@ def layout(name, sig):
 
 def shape_of(col):
     """A column's kind as it is written in a generated file's comments."""
-    return {CHILD: "child", BINDER: "binder"}.get(col, str(col))
+    return {CHILD: "child", SLOT: "child", BINDER: "binder"}.get(col, str(col))
 
 
 # The hand-written half, and the generated file that includes it. A language file
@@ -1533,7 +1531,7 @@ class TermLang:
             for kind, arg in zip(op.arg_kinds(), x[1:], strict=True):
                 if kind is BINDER:
                     out.add(self.slot(arg))
-                elif kind is CHILD:
+                elif kind in (CHILD, SLOT):
                     out |= all_slots(arg)
             return out
 
@@ -1630,7 +1628,7 @@ class TermLang:
             return (t[0], t[1] + k)
         out = []
         for kind, a in zip(self.ops[t[0]].arg_kinds(), t[1:], strict=True):
-            if kind is CHILD:
+            if kind in (CHILD, SLOT):
                 out.append(self.shift(a, k))
             elif kind is BINDER:
                 out.append(self.shift(a, k) if isinstance(a, tuple) else a + k)

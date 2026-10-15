@@ -28,7 +28,7 @@
 
 (sort U)
 
-(constructor Let (U U U) U :binder 0)
+(constructor Let (Var U U) U :binder 0)
 (constructor App (U U) U)
 (constructor Sym (String) U)
 

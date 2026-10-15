@@ -10,10 +10,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TMP = ROOT / "target" / "slotted" / "refusal.egg"
 
-LANG = "(datatype M (Null) (IConst) (Succ M) (Mul M M) (Lam M M :binder 0))\n"
+LANG = "(datatype M (Null) (IConst) (Succ M) (Mul M M) (Lam Var M :binder 0))\n"
 
 #: (what is refused, program, a phrase the message must carry)
 CASES = [
+    ("redeclaring the built-in slot sort", "(datatype Var (V))\n", "reserved"),
+    (
+        "a carrier-typed binder column",
+        "(datatype M (Lam M M :binder 0))\n",
+        "must have sort Var",
+    ),
+    ("a term in a ground Var column", LANG + "(let bad (Lam (Null) (Null)))\n", "takes a slot literal"),
+    (
+        "a global in a Var column",
+        LANG + "(let alias (Succ $a))\n(let bad (Lam alias (Null)))\n",
+        "takes a slot literal",
+    ),
+    (
+        "a pattern variable in a Var result column",
+        LANG + "(rewrite (Succ x) (Lam x x))\n",
+        "takes a slot literal",
+    ),
+    (
+        "a term in a nonbinding Var column",
+        "(datatype M (N) (Occurrence Var))\n(let bad (Occurrence (N)))\n",
+        "takes a slot literal",
+    ),
+    ("an out-of-range numeric slot", LANG + "(let bad (Succ $9223372036854775808))\n", "signed 64-bit"),
+    ("an empty slot name", LANG + "(let bad (Succ $))\n", "invalid slot literal"),
     ("a global named with a `$`", LANG + "(let $I (IConst))\n", "may not be named"),
     (
         "a global bound to a bare slot invocation",
@@ -57,17 +81,17 @@ CASES = [
     ),
     (
         "duplicate binder positions",
-        "(sort M)\n(constructor F (M M) M :binder 0 0)\n",
+        "(sort M)\n(constructor F (Var M) M :binder 0 0)\n",
         "duplicate",
     ),
     (
         "non-contiguous nested binders",
-        "(sort M)\n(constructor F (M M M M) M :binder 0 2)\n",
+        "(sort M)\n(constructor F (Var M Var M) M :binder 0 2)\n",
         "contiguous",
     ),
     (
         "a binder without a covered child",
-        "(sort M)\n(constructor F (M M) M :binder 1)\n",
+        "(sort M)\n(constructor F (M Var) M :binder 1)\n",
         "followed",
     ),
     (
@@ -154,7 +178,7 @@ CASES = [
     (
         "a pattern variable in a binder column",
         LANG + "(rewrite (Lam x (Succ x)) (Null))\n",
-        "cannot stand in a binder column",
+        "takes a slot literal",
     ),
     ("a sort with no constructors", "(sort A)\n(run 1)\n", "no constructors declared"),
     ("a rewrite whose left side is a bare variable", LANG + '(rewrite x (Mul x x) :name "r")\n', "must be a call"),

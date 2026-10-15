@@ -37,6 +37,7 @@ impl Default for State {
             rules: 0,
             extracts: 0,
             reserved: [
+                "Var",
                 "Names",
                 "Binding",
                 "Frame",
@@ -210,7 +211,10 @@ impl Compiler {
             .iter()
             .map(Form::atom)
             .collect::<Result<Vec<_>, _>>()?;
-        let child_count = cols.iter().filter(|s| carriers.contains(**s)).count();
+        let child_count = cols
+            .iter()
+            .filter(|s| **s == "Var" || carriers.contains(**s))
+            .count();
         let mut binders = BTreeSet::new();
         let mut in_binder = false;
         for f in &args[3..] {
@@ -246,17 +250,25 @@ impl Compiler {
         let mut child = 0;
         let mut columns = Vec::new();
         for col in cols {
-            if carriers.contains(col) {
+            if col == "Var" {
+                columns.push(if binders.contains(&child) {
+                    Column::Binder
+                } else {
+                    Column::Slot
+                });
+                child += 1;
+            } else if carriers.contains(col) {
                 if col != sort {
                     return Err(format!(
                         "constructor {name}: cross-sort slotted children are not supported"
                     ));
                 }
-                columns.push(if binders.contains(&child) {
-                    Column::Binder
-                } else {
-                    Column::Child
-                });
+                if binders.contains(&child) {
+                    return Err(format!(
+                        "constructor {name}: binder column {child} must have sort Var"
+                    ));
+                }
+                columns.push(Column::Child);
                 child += 1;
             } else if ["i64", "String"].contains(&col) {
                 columns.push(Column::Payload(col.into()));
@@ -291,13 +303,12 @@ impl Compiler {
                         "a slotted global name must not start with $; $ introduces a slot".into(),
                     );
                 }
-                let mut t = self.term(&args[1], true, None)?;
+                let t = self.term(&args[1], true, None)?;
                 if matches!(t, Term::Slot(_)) {
                     return Err(
                         "a global cannot currently store the invocation of a bare slot".into(),
                     );
                 }
-                self.state.lang.refresh_shadowed(&mut t);
                 let sort = self.sort_of(&t)?;
                 let encoded = self.state.lang.encode_top(&t, &sort);
                 self.state.lang.globals.insert(name.into(), t);
@@ -384,7 +395,7 @@ impl Compiler {
                 "bare slot has no equality-sort context; put it under a constructor".into()
             })
     }
-    fn common(&self, forms: &[Form]) -> Result<(String, Vec<Term>), String> {
+    fn common(&mut self, forms: &[Form]) -> Result<(String, Vec<Term>), String> {
         let terms = forms
             .iter()
             .map(|f| self.term(f, true, None))
@@ -404,27 +415,23 @@ impl Compiler {
         Ok((sort, terms))
     }
 
-    fn term(&self, f: &Form, ground: bool, expected: Option<&str>) -> Result<Term, String> {
-        let lang = &self.state.lang;
+    fn term(&mut self, f: &Form, ground: bool, expected: Option<&str>) -> Result<Term, String> {
         let term = match f {
             Form::Atom(s) if s.starts_with('$') => {
                 if ground {
-                    let slot = s[1..]
-                        .parse::<i64>()
-                        .map_err(|_| format!("a ground term needs numbered slots, got {s}"))?;
-                    Term::Slot(format!("${slot}"))
+                    Term::Slot(self.state.lang.slot_names.intern(s)?)
                 } else {
                     Term::Slot(s.clone())
                 }
             }
-            Form::Atom(s) if lang.constructors.contains_key(s) => {
+            Form::Atom(s) if self.state.lang.constructors.contains_key(s) => {
                 return Err(format!("constructor {s} needs parentheses: ({s})"));
             }
-            Form::Atom(s) if lang.globals.contains_key(s) => {
+            Form::Atom(s) if self.state.lang.globals.contains_key(s) => {
                 if ground {
                     Term::Global(s.clone())
                 } else {
-                    self.expand(&lang.globals[s])
+                    self.expand(&self.state.lang.globals[s])
                 }
             }
             Form::Atom(s) if !ground => Term::Variable(s.trim_start_matches('?').into()),
@@ -443,9 +450,12 @@ impl Compiler {
                         self.term(&args[2], false, expected)?,
                     ])));
                 }
-                let op = lang
+                let op = self
+                    .state
+                    .lang
                     .constructors
                     .get(head)
+                    .cloned()
                     .ok_or_else(|| format!("unknown constructor {head:?}"))?;
                 if args.len() != op.columns.len() {
                     return Err(format!(
@@ -475,10 +485,10 @@ impl Compiler {
                             }
                         }
                         Column::Child => self.term(a, ground, Some(&op.sort))?,
-                        Column::Binder => {
+                        Column::Slot | Column::Binder => {
                             let t = self.term(a, ground, Some(&op.sort))?;
                             if !matches!(t, Term::Slot(_)) {
-                                return Err(format!("{head}'s binder column takes a slot literal"));
+                                return Err(format!("{head}'s Var column takes a slot literal"));
                             }
                             t
                         }
@@ -487,14 +497,19 @@ impl Compiler {
                 Term::Node(head.into(), terms)
             }
         };
-        if let (Some(want), Some(actual)) = (expected, lang.sort_of(&term))
+        if let (Some(want), Some(actual)) = (expected, self.state.lang.sort_of(&term))
             && want != actual
         {
             return Err(format!("term has sort {actual}, expected {want}"));
         }
         let mut term = term;
         if ground {
-            lang.refresh_shadowed(&mut term);
+            self.state.lang.refresh_shadowed(&mut term);
+            let mut slots = BTreeSet::new();
+            term.slot_literals(&mut slots);
+            for slot in slots {
+                self.state.lang.slot_names.intern(&slot)?;
+            }
         }
         Ok(term)
     }
@@ -680,7 +695,11 @@ impl Compiler {
                 let c = format!("({} 0)", sy.var);
                 matched.push((
                     c.clone(),
-                    format!("(compose (map-of 0 {}) ({} {c}))", &s[1..], sy.class_slots),
+                    format!(
+                        "(compose (map-of 0 {}) ({} {c}))",
+                        lang.slot_names.id(s),
+                        sy.class_slots
+                    ),
                 ));
                 continue;
             }
@@ -710,22 +729,18 @@ impl Compiler {
             let mut free = lang
                 .slots(t)
                 .into_iter()
-                .map(|s| {
-                    s[1..]
-                        .parse::<i64>()
-                        .map_err(|_| "claims require numbered slots".to_owned())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|s| (lang.slot_names.id(&s), s))
+                .collect::<Vec<_>>();
             free.sort();
             let mut pairs = Vec::new();
-            for s in free {
+            for (id, s) in free {
                 pairs.push(
                     q.slots
-                        .get(&format!("${s}"))
-                        .ok_or_else(|| format!("claim lost free slot ${s}"))?
+                        .get(&s)
+                        .ok_or_else(|| format!("claim lost free slot {s}"))?
                         .clone(),
                 );
-                pairs.push(s.to_string());
+                pairs.push(id.to_string());
             }
             let frame = if pairs.is_empty() {
                 "(map-empty)".into()
@@ -741,7 +756,7 @@ impl Compiler {
         })
     }
 
-    fn check(&self, f: &Form) -> Result<String, String> {
+    fn check(&mut self, f: &Form) -> Result<String, String> {
         let (head, mut args) = f.call()?;
         let negated = head == "fail";
         let mut command = f;
@@ -793,13 +808,9 @@ impl Compiler {
                 if kind == "slots" {
                     let mut pairs = Vec::new();
                     for s in &terms[1..] {
-                        let s = s
-                            .atom()?
-                            .strip_prefix('$')
-                            .ok_or("slots expects slot names")?;
-                        s.parse::<i64>()
-                            .map_err(|_| "slots expects numbered slots")?;
-                        pairs.extend([s.to_owned(), s.to_owned()]);
+                        let name = self.state.lang.slot_names.intern(s.atom()?)?;
+                        let s = self.state.lang.slot_names.id(&name).to_string();
+                        pairs.extend([s.clone(), s]);
                     }
                     let wanted = if pairs.is_empty() {
                         "(map-empty)".into()
@@ -893,7 +904,7 @@ fn rename_binders(
             let mut child = 0;
             for (col, arg) in op.columns.iter().zip(args) {
                 match col {
-                    Column::Child => {
+                    Column::Child | Column::Slot => {
                         rename_binders(
                             lang,
                             arg,

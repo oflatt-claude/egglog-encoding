@@ -5,6 +5,7 @@ mod maintenance;
 mod model;
 mod query;
 mod rewrite;
+mod slots;
 mod syntax;
 pub use frontend::{Compiler, Options};
 

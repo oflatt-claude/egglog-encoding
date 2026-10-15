@@ -83,17 +83,20 @@ def fuzz(tmp, count):
 
     def term(t):
         if t[0] == "var":
-            return f"${t[1]}"
+            return slot(t[1])
         op = surface.X.LANG.ops[t[0]]
         args = []
         for kind, arg in zip(op.arg_kinds(), t[1:], strict=True):
             if kind is enc.CHILD:
                 args.append(term(arg))
             elif kind is enc.BINDER:
-                args.append(f"${surface.X.LANG.slot(arg)}")
+                args.append(slot(surface.X.LANG.slot(arg)))
             else:
                 args.append(json.dumps(arg))
         return "(" + " ".join([op.ctor, *args]) + ")"
+
+    def slot(n):
+        return f"$a{n}" if compared % 2 else f"${n}"
 
     for i in range(count * 4):
         if compared == count:

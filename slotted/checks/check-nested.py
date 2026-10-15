@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check both matching modes against their own reference, including lost aliases."""
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -38,6 +39,16 @@ CASES = [
     ),
     ("shared", "", "(F $0 (G $0 (Null)))", "(F a (G a n))", "(H a a)", False),
     ("binders", "", "(F (Lam $0 $0) (Lam $1 $1))", "(F (Lam $x a) (Lam $x b))", "(H a b)", True),
+    ("named-binders", "", "(F (Lam $a $a) (Lam $a0 $a0))", "(F (Lam $x a) (Lam $x b))", "(H a b)", True),
+    ("named-and-numbered", "", "(F $a0 (G $0 (Null)))", "(F a (G b n))", "(H a b)", False),
+    (
+        "named-shadowing",
+        "",
+        "(Lam $a (Lam $a (F $a $a0)))",
+        "(Lam $x (Lam $y (F $y body)))",
+        "(Lam $x (Lam $y (G body $y)))",
+        False,
+    ),
     ("binder-capture", "", "(F $4 (Lam $5 $5))", "(F a (Lam $x b))", "(Lam $x (F a b))", True),
     (
         "symmetry",
@@ -90,6 +101,12 @@ def compiler_flag(tmp):
     assert "Traceback" not in result.stderr
 
 
+def reference_term(src, form):
+    text = X.LANG.sexpr(src.term(form, ground=True))
+    # Exercise the reference's own named-slot parser as well.
+    return re.sub(r"\$[+-]?\d+", lambda m: src.slots.sources[int(m[0][1:])], text)
+
+
 def main():
     config = run.Config(
         egglog=ROOT / "target/debug/egglog-experimental",
@@ -106,15 +123,13 @@ def main():
             sizes = []
             for compat in (False, True):
                 src = W.sc.Source(path)
+
                 head = [
                     "rounds 1",
                     *W.ctor_lines(X.LANG),
-                    f"term {X.LANG.sexpr(src.term(W.sc.parse(start)[0], ground=True))}",
+                    f"term {reference_term(src, W.sc.parse(start)[0])}",
                     "term (var $0)",
-                    *(
-                        "union " + " ".join(X.LANG.sexpr(src.term(t, ground=True)) for t in f[1:])
-                        for f in W.sc.parse(unions)
-                    ),
+                    *("union " + " ".join(reference_term(src, t) for t in f[1:]) for f in W.sc.parse(unions)),
                 ]
                 spec = "\n".join(head + W.rule_lines(X.LANG, path, None, nested=compat)) + "\n"
                 enc, ref = (

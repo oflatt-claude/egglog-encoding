@@ -47,8 +47,8 @@ whatever egglog gains next.
 
 ```
 (datatype U
-  (Lam U U :binder 0)
-  (Let U U U :binder 1)
+  (Lam Var U :binder 0)
+  (Let U Var U :binder 1)
   (App U U)
   (Num i64))
 ```
@@ -57,8 +57,8 @@ or the same thing the long way, which egglog also accepts:
 
 ```
 (sort U)
-(constructor Lam (U U) U :binder 0)
-(constructor Let (U U U) U :binder 1)
+(constructor Lam (Var U) U :binder 0)
+(constructor Let (U Var U) U :binder 1)
 (constructor App (U U) U)
 (constructor Num (i64) U)
 ```
@@ -69,8 +69,8 @@ slotted child. Programs may have several independent carriers, either as separat
 
 ```
 (datatype*
-  (Expr (EVar Expr) (ELam Expr Expr :binder 0))
-  (Type (TVar Type) (TForall Type Type :binder 0)))
+  (Expr (EVar Var) (ELam Var Expr :binder 0))
+  (Type (TVar Var) (TForall Var Type :binder 0)))
 ```
 
 Each carrier gets its own variable constructor and its own
@@ -97,9 +97,15 @@ generated layout has not identified as a slotted edge rather than guessing wheth
 is a container. A top-level bare slot in a multi-carrier program is also rejected when
 there is no constructor context from which to infer its carrier.
 
-`:binder` names the child positions whose slot the node binds, counting over the
-carrier columns only — so `Lam` binds the slot in its first child and `Let` in its
-second. It may stand anywhere among a declaration's options, and on a `datatype`
+`Var` is a built-in sort for slot-only columns. It needs no declaration and cannot
+be redeclared. A `Var` argument must be a slot literal such as `$a` or `$0`, in both
+ground terms and rewrite patterns; a term, global, or pattern variable is rejected.
+For example, `(EVar $a)` is valid, while `(EVar (Num 1))` is not. A `Var` column
+without `:binder` is a free slot occurrence.
+
+`:binder` names the `Var` positions whose slot the node binds, counting over the
+carrier and `Var` columns together, skipping payloads — so `Lam` binds its first
+position and `Let` its second. It may stand anywhere among a declaration's options, and on a `datatype`
 variant it goes after the columns, where egglog puts a variant's options.
 
 A binder covers the column *after* the one it binds, which is what wrapping a single
@@ -121,15 +127,31 @@ constructors declared.
 ## Writing terms
 
 ```
-(let id (Lam $0 $0))                    ; lam $0. $0
-(let k  (Lam $0 $3))                    ; lam $0. $3, which keeps $3 free
+(let id (Lam $a $a))                    ; lam a. a
+(let k  (Lam $a $a0))                   ; lam a. a0, which keeps a0 free
 (let t  (App (Num 0) $7))
 ```
 
-`$n` is a slot. In a binder column it **is** the bound slot; anywhere else it is an
-occurrence of that slot. Writing `$0` twice in one term means the same slot twice.
-Ground slots are signed 64-bit integers: `$01` and `$+1` both mean `$1`, and
-`$-0` means `$0`.
+`$name` is a slot. Names may contain letters, digits, and underscores, such as
+`$a`, `$a0`, or `$outer_var`. In a binder column it **is** the bound slot; in a
+carrier column it is a variable term. Repeated names denote the same slot, subject
+to binder shadowing. Ground names persist across files and REPL inputs. In rewrite
+patterns, slot names are local to the rule and matching determines their identities.
+
+Numbered slots still work: `$01` and `$+1` both mean `$1` in ground terms, and `$-0`
+means `$0`. Numbers must fit in a signed 64-bit integer. Named and numbered slots
+are distinct: `$a0` does not denote `$0`. Slot identities are internal; their source
+spellings do not affect alpha-equivalence.
+
+```slotted
+(datatype Expr (Lam Var Expr :binder 0) (App Expr Expr))
+(let id (Lam $a $a))
+(let constant (Lam $a $a0))
+(run 0)
+(check (= id (Lam $renamed $renamed)))
+(check (!= id constant))
+(check (slots constant $a0))
+```
 
 ## Asserting an equation
 
@@ -183,7 +205,7 @@ language cannot borrow that spelling, because `$0` is already a slot. So a globa
 written bare, as an egglog rule writes one, and `$x` is a slot wherever it appears:
 
 ```slotted
-(datatype M (IConst) (Mul M M) (Lam M M :binder 0))
+(datatype M (IConst) (Mul M M) (Lam Var M :binder 0))
 
 (let j (IConst))
 (rewrite (Mul a j) a :name "id-right")
@@ -270,7 +292,7 @@ nothing:
 ```slotted
 (sort U)
 (constructor Num (i64) U)
-(constructor Lam (U U) U :binder 0)
+(constructor Lam (Var U) U :binder 0)
 (constructor Pair (U U) U)
 (constructor Fired () U)
 
@@ -359,7 +381,7 @@ All of them at once:
 
 ```slotted
 (sort U)
-(constructor Lam (U U) U :binder 0)
+(constructor Lam (Var U) U :binder 0)
 (constructor Mult (U U) U)
 (constructor Null () U)
 
@@ -382,7 +404,7 @@ alpha-variants whose free slot is renamed:
 
 ```slotted
 (sort U)
-(constructor Lam (U U) U :binder 0)
+(constructor Lam (Var U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
 (run 0)
@@ -521,7 +543,7 @@ outright whenever the class settled on a different invocation:
 
 ```slotted
 (sort U)
-(constructor Lam (U U) U :binder 0)
+(constructor Lam (Var U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
 (run 0)

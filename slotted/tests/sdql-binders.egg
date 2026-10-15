@@ -12,9 +12,9 @@
 (sort U)
 
 (constructor Sing (U U) U)
-(constructor Sum (U U U U) U :binder 1 2)
-(constructor Merge (U U U U U U) U :binder 2 3 4)
-(constructor Let (U U U) U :binder 1)
+(constructor Sum (U Var Var U) U :binder 1 2)
+(constructor Merge (U U Var Var Var U) U :binder 2 3 4)
+(constructor Let (U Var U) U :binder 1)
 (constructor Null () U)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -15,7 +15,7 @@ TMP = ROOT / "target" / "slotted" / "forms.egg"
 sys.path.insert(0, str(ROOT / "slotted"))
 sc = __import__("slotted-egglog")
 
-L = "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n"
+L = "(datatype M (N i64) (Add M M) (Mul M M) (Lam Var M :binder 0) (App M M) (Nil))\n"
 
 #: (expected verdict, what, program)
 PROBES = [

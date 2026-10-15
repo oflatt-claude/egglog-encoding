@@ -17,7 +17,7 @@
 
 (sort U)
 
-(constructor Lam (U U) U :binder 0)              ; Lam(Bind<AppliedId>)      "lam"
+(constructor Lam (Var U) U :binder 0)              ; Lam(Bind<AppliedId>)      "lam"
 (constructor F (U U) U)                          ; F(AppliedId, AppliedId)   "f"
 (constructor G (U U) U)                          ; G(AppliedId, AppliedId)   "g"
 (constructor H (U U) U)                          ; H(AppliedId, AppliedId)   "h"

@@ -1,4 +1,5 @@
 //! Source terms and typed constructor layouts, independent of query emission.
+use super::slots::Slots;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
@@ -41,6 +42,7 @@ impl Symbols {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Column {
     Child,
+    Slot,
     Binder,
     Payload(String),
 }
@@ -123,6 +125,7 @@ pub(super) struct Language {
     pub carriers: Vec<Symbols>,
     pub constructors: BTreeMap<String, Constructor>,
     pub globals: BTreeMap<String, Term>,
+    pub slot_names: Slots,
 }
 
 impl Language {
@@ -192,12 +195,12 @@ impl Language {
     }
     pub fn edge(&self, t: &Term) -> String {
         if let Term::Slot(s) = t {
-            return format!("(map-of 0 {})", &s[1..]);
+            return format!("(map-of 0 {})", self.slot_names.id(s));
         }
         let mut slots = self
             .slots(t)
             .into_iter()
-            .map(|s| s[1..].parse::<i64>().expect("numeric ground slot"))
+            .map(|s| self.slot_names.id(&s))
             .collect::<Vec<_>>();
         slots.sort();
         if slots.is_empty() {
@@ -213,7 +216,7 @@ impl Language {
     }
     pub fn encode_top(&self, t: &Term, sort: &str) -> String {
         if let Term::Slot(s) = t {
-            format!("({} {})", self.symbols(sort).var, &s[1..])
+            format!("({} {})", self.symbols(sort).var, self.slot_names.id(s))
         } else {
             self.encode(t, sort)
         }
