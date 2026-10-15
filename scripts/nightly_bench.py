@@ -54,9 +54,7 @@ PAGE_PATH = REPO_ROOT / ".reports.html"
 BRANCH: Target = ("branch", ".")
 TARGETS: tuple[Target, ...] = (BRANCH, ("main", "@origin/main"))
 
-# Endpoints to measure, all on the main backend: proof-extraction is main-only,
-# and the differential-dataflow backend's endpoints — ("dd", "term") and
-# ("dd", "proofs") — are disabled for now. Re-add them here to measure dd again.
+# Endpoints to measure on the main backend.
 ENDPOINTS: tuple[Endpoint, ...] = (
     ("main", "term"),
     ("main", "proofs"),

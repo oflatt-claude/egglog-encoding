@@ -1,5 +1,5 @@
-;; The full benchmark runs 11 rounds. Eight preserves its rule and seed shape
-;; while leaving enough headroom for the DD backend.
+;; A smaller version of math-microbenchmark.egg: eight rounds instead of eleven,
+;; with the same rules and seeds.
 (datatype Math
     (Diff Math Math)
     (Integral Math Math)

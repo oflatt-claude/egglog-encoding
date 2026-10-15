@@ -1,5 +1,5 @@
 ---
-source: egglog-experimental/dd/tests/files.rs
+source: egglog/tests/files.rs
 expression: out
 ---
 ((deleted 0)

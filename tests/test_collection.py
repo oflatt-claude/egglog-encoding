@@ -73,7 +73,7 @@ def test_collection_plans_group_only_the_same_resolved_target(monkeypatch: pytes
     shared_target = make_target(target_label="shared", binary_sha256="sha256:shared")
     comparison = models.ComparisonSpec(
         models.BenchmarkEndpoint(shared_target, "main", "off"),
-        models.BenchmarkEndpoint(shared_target, "dd", "proofs"),
+        models.BenchmarkEndpoint(shared_target, "main", "proofs"),
         (FILE_SPEC,),
         1,
         120,
@@ -138,7 +138,7 @@ def test_collection_plans_keep_distinct_targets_with_the_same_binary_separate(
     assert observed == [baseline_target, candidate_target]
 
 
-def test_same_checkout_target_aliases_build_once_with_union_backend_features(
+def test_same_checkout_target_aliases_build_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     baseline_request = targets.parse_target(".")
@@ -149,7 +149,7 @@ def test_same_checkout_target_aliases_build_once_with_union_backend_features(
     }
     binary_path = ROOT / "target/release/egglog-experimental"
     materialized: list[models.TargetRequest] = []
-    builds: list[tuple[models.TargetRequest, tuple[str, ...]]] = []
+    builds: list[models.TargetRequest] = []
 
     def materialize(request: models.TargetRequest, *_args: object) -> models.TargetRow:
         materialized.append(request)
@@ -162,15 +162,14 @@ def test_same_checkout_target_aliases_build_once_with_union_backend_features(
         row: models.TargetRow,
         _console: Console,
         _profile: targets.BuildProfile,
-        features: tuple[str, ...],
     ) -> models.ResolvedTarget:
         assert materialized == [baseline_request, candidate_request]
-        builds.append((request, features))
-        return models.ResolvedTarget(request, row, "sha256:union", binary_path)
+        builds.append(request)
+        return models.ResolvedTarget(request, row, "sha256:shared", binary_path)
 
     monkeypatch.setattr(collection, "build_resolved_target", build)
     baseline = models.EndpointRequest(baseline_request, "main", "off")
-    candidate = models.EndpointRequest(candidate_request, "dd", "proofs")
+    candidate = models.EndpointRequest(candidate_request, "main", "proofs")
 
     resolved = collection.resolve_targets(
         (
@@ -187,13 +186,13 @@ def test_same_checkout_target_aliases_build_once_with_union_backend_features(
         Console(stderr=True),
     )
 
-    assert builds == [(baseline_request, ("dd-backend",))]
+    assert builds == [baseline_request]
     assert resolved[baseline_request].request == baseline_request
     assert resolved[candidate_request].request == candidate_request
     assert resolved[baseline_request].row.source == "."
     assert resolved[candidate_request].row.source == str(ROOT)
     assert resolved[baseline_request].binary_path == resolved[candidate_request].binary_path == binary_path
-    assert resolved[baseline_request].binary_sha256 == resolved[candidate_request].binary_sha256 == "sha256:union"
+    assert resolved[baseline_request].binary_sha256 == resolved[candidate_request].binary_sha256 == "sha256:shared"
 
 
 def test_batch_target_resolution_reuses_complete_cache_label_before_building_pending_target(
@@ -215,7 +214,7 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
     fresh_row = models.TargetRow(".", str(tmp_path / "checkout"), "HEAD", "fresh123", False)
     binary_path = tmp_path / "checkout/target/release/egglog-experimental"
     materialized: list[models.TargetRequest] = []
-    builds: list[tuple[str, ...]] = []
+    builds: list[models.TargetRequest] = []
 
     def materialize(request: models.TargetRequest, *_args: object) -> models.TargetRow:
         materialized.append(request)
@@ -226,16 +225,15 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
         row: models.TargetRow,
         _console: Console,
         _profile: targets.BuildProfile,
-        features: tuple[str, ...],
     ) -> models.ResolvedTarget:
-        builds.append(features)
+        builds.append(request)
         return models.ResolvedTarget(request, row, "sha256:fresh", binary_path)
 
     monkeypatch.setattr(collection, "materialize_target_request", materialize)
     monkeypatch.setattr(collection, "build_resolved_target", build)
     groups = (
         (cached_request, (models.EndpointRequest(cached_request, "main", "off"),)),
-        (fresh_request, (models.EndpointRequest(fresh_request, "dd", "proofs"),)),
+        (fresh_request, (models.EndpointRequest(fresh_request, "main", "proofs"),)),
     )
 
     resolved = collection.resolve_targets(
@@ -251,7 +249,7 @@ def test_batch_target_resolution_reuses_complete_cache_label_before_building_pen
     )
 
     assert materialized == [fresh_request]
-    assert builds == [("dd-backend",)]
+    assert builds == [fresh_request]
     assert resolved[cached_request].binary_sha256 == "sha256:cached"
     assert resolved[cached_request].binary_path is None
     assert resolved[fresh_request].binary_sha256 == "sha256:fresh"
@@ -276,7 +274,7 @@ def test_collection_plan_counts_cache_and_missing_rows(tmp_path: Path) -> None:
     assert force_plan.total_missing_observations == 2
 
 
-def test_collection_plan_does_not_reuse_main_rows_for_dd(tmp_path: Path) -> None:
+def test_collection_plan_does_not_reuse_main_rows_for_reference(tmp_path: Path) -> None:
     report = tmp_path / "report.jsonl"
     write_report(
         report,
@@ -290,15 +288,15 @@ def test_collection_plan_does_not_reuse_main_rows_for_dd(tmp_path: Path) -> None
     )
     target = make_target()
     file_spec = models.FileSpec("file.egg", ROOT / "file.egg", "sha256:file")
-    endpoints = (endpoint(target, "main", "term"), endpoint(target, "dd", "term"))
+    endpoints = (endpoint(target, "main", "term"), endpoint(target, "slotted-reference", "multi"))
 
     plan = collection.build_collection_plan(ReportStore(report), target, endpoints, (file_spec,), 1, 120, False)
 
-    main_run, dd_run = plan.runs
+    main_run, reference_run = plan.runs
     assert main_run.backend == "main"
     assert main_run.missing_observations == 0
-    assert dd_run.backend == "dd"
-    assert dd_run.missing_observations == 1
+    assert reference_run.backend == "slotted-reference"
+    assert reference_run.missing_observations == 1
 
 
 def test_pair_collection_reuses_each_endpoint_independently_and_force_runs_both(tmp_path: Path) -> None:
@@ -469,7 +467,7 @@ def test_collect_rows_rejects_unsupported_timing_summary_before_append(
     assert report.read_text(encoding="utf-8") == ""
 
 
-def test_run_process_passes_backend_flag_only_for_dd(
+def test_run_process_passes_treatment_flags_and_captures_timing_summary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -504,20 +502,18 @@ def test_run_process_passes_backend_flag_only_for_dd(
     monkeypatch.setattr(collection, "run_command", fake_run_command)
 
     main = collection.run_process(ROOT / "egglog-experimental", ROOT, file_spec, "main", "off", 120)
-    dd = collection.run_process(ROOT / "egglog-experimental", ROOT, file_spec, "dd", "proofs", 120)
+    proofs = collection.run_process(ROOT / "egglog-experimental", ROOT, file_spec, "main", "proofs", 120)
 
     assert "--backend" not in commands[0]
-    assert commands[1][commands[1].index("--backend") : commands[1].index("--backend") + 2] == [
-        "--backend",
-        "dd",
-    ]
+    assert "--backend" not in commands[1]
+    assert "--proofs" not in commands[0]
     assert "--proofs" in commands[1]
     assert main.timing_summary is not None
     assert main.timing_summary["rulesets"][0]["search_ns"] == 4
     assert main.timing_summary["rulesets"][0]["apply_ns"] == 6
     assert main.timing_summary["rulesets"][0]["unattributed_ns"] == 10
     assert main.timing_summary["rulesets"][0]["merge_ns"] == 20
-    assert dd.timing_summary is not None
+    assert proofs.timing_summary is not None
 
 
 def test_run_process_rejects_success_without_timing_summary(

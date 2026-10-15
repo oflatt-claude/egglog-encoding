@@ -54,11 +54,9 @@ rust-format-check:
 
 rust-test:
 	cargo test --workspace
-	cargo test -p egglog-experimental --features dd-backend --test timing_summary_cli
 
 rust-clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
-	cargo clippy -p egglog-experimental --features dd-backend --all-targets -- -D warnings
 
 # Clippy does not resolve doc links, and plain `cargo doc` skips the private
 # items most of this codebase documents, so a rename leaves stale links behind

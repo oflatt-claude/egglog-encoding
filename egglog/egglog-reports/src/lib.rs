@@ -79,9 +79,7 @@ pub struct RuleSetReport {
 /// Parallel execution reports one wall-clock duration because search and apply
 /// can overlap. Serial execution reports an additive, backend-defined phase
 /// breakdown. Main egglog derives `unattributed` so the components close its
-/// measured outer interval. DD instead defines its pre-merge total directly as
-/// its native search plus apply regions and therefore reports zero
-/// `unattributed` time.
+/// measured outer interval.
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum PreMergeTiming {
     /// One wall-clock duration for execution modes whose search and apply work

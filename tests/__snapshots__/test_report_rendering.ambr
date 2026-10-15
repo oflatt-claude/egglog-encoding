@@ -8,13 +8,13 @@
   | Role | Target | Git | Backend | Treatment |
   | --- | --- | --- | --- | --- |
   | Baseline | baseline | abc123 | main | off |
-  | Candidate | candidate | abc123 | dd | proofs |
+  | Candidate | candidate | abc123 | main | proofs |
   
   *2 file(s): math.egg, rewrite.egg · 2 round(s) per endpoint/file · 120 s timeout per run · Report: /tmp/benchmark-report.jsonl*
   
   *This comparison changes more than one of target, backend, and treatment. Its ratios describe the joint endpoint change and do not isolate one cause.*
   
-  ## Summary — candidate dd/proofs vs baseline main/off
+  ## Summary — candidate main/proofs vs baseline main/off
   
   | Metric | Scope | File(s) | Ratio (95% CI) | Result |
   | --- | --- | --- | ---: | --- |

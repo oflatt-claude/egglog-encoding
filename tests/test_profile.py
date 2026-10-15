@@ -141,9 +141,10 @@ def test_parse_profile_args_rejects_iterations_with_profile_seconds() -> None:
 def test_resolve_profile_request_reuses_backend_treatment_validation(tmp_path: Path) -> None:
     file_path = tmp_path / "file.egg"
     file_path.write_text("(check (= 1 1))\n", encoding="utf-8")
-    args = profile_runner.parse_profile_args([str(file_path), "--backend", "dd", "--treatment", "off"])
+    args = profile_runner.parse_profile_args([str(file_path), "--treatment", "off"])
+    args.backend = "slotted-reference"
 
-    with pytest.raises(ValueError, match="backend dd does not support treatment off"):
+    with pytest.raises(ValueError, match="backend slotted-reference does not support treatment off"):
         profile_runner.resolve_profile_request(args, ROOT)
 
 
@@ -166,7 +167,6 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
     target = make_target(binary_path=ROOT / "egglog-experimental")
     materialized: list[models.TargetRequest] = []
     build_profiles: list[targets.BuildProfile] = []
-    build_features: list[tuple[str, ...]] = []
 
     def fake_materialize(
         target_request: models.TargetRequest,
@@ -181,12 +181,10 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         target_row: models.TargetRow,
         console: Console,
         build_profile: targets.BuildProfile,
-        cargo_features: tuple[str, ...],
     ) -> models.ResolvedTarget:
         assert target_request == request
         assert target_row == row
         build_profiles.append(build_profile)
-        build_features.append(cargo_features)
         return target
 
     monkeypatch.setattr(collection, "materialize_target_request", fake_materialize)
@@ -207,13 +205,12 @@ def test_target_resolvers_share_materialization_and_select_build_profile(
         ROOT,
         Console(stderr=True),
     )[request]
-    profile_target = targets.resolve_profile_target(request, "dd", ROOT, ROOT, Console(stderr=True))
+    profile_target = targets.resolve_profile_target(request, ROOT, ROOT, Console(stderr=True))
 
     assert benchmark_target == target
     assert profile_target == target
     assert materialized == [request, request]
     assert build_profiles == ["release", "profiling"]
-    assert build_features == [(), ("dd-backend",)]
 
 
 def test_build_target_uses_profiling_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -679,4 +676,4 @@ def test_profile_auto_iteration_cap_prints_warning(
 
 def test_profile_rejects_cache_only_label_targets() -> None:
     with pytest.raises(ValueError, match="cache-only label="):
-        targets.resolve_profile_target(targets.parse_target("cached="), "main", ROOT, ROOT, Console(stderr=True))
+        targets.resolve_profile_target(targets.parse_target("cached="), ROOT, ROOT, Console(stderr=True))

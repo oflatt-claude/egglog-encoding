@@ -100,7 +100,7 @@ or modify the JSONL.
   simplify proofs without verifying them. Treat its results as performance
   evidence only; `--proof-testing` remains the strict correctness mode.
 - Bare `./bench.py` compares `proofs` with `off`. The main-only
-  `proof-extraction` treatment is explicit opt-in; the DD backend rejects it.
+  `proof-extraction` treatment is explicit opt-in.
 - Benchmark inputs should not contain executable `(prove ...)` commands. Use
   `(check ...)` so the selected treatment controls proof extraction, and cover
   strict proof validity in proof tests.

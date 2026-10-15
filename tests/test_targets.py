@@ -154,7 +154,7 @@ def test_path_targets_retain_dirty_checkout(use_absolute_path: bool, tmp_path: P
     assert tracked.read_text(encoding="utf-8") == "dirty\n"
 
 
-def test_build_target_enables_requested_backend_features(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_target_uses_release_profile_and_literal_label(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     commands: list[list[str]] = []
     binary = tmp_path / "target" / "release" / "egglog-experimental"
     binary.parent.mkdir(parents=True)
@@ -168,8 +168,7 @@ def test_build_target_enables_requested_backend_features(monkeypatch: pytest.Mon
     targets.build_target(
         row,
         Console(file=stream, color_system=None),
-        cargo_features=models.backend_cargo_features(("main", "dd")),
     )
 
-    assert commands == [["cargo", "build", "--release", "-p", "egglog-experimental", "--features", "dd-backend"]]
+    assert commands == [["cargo", "build", "--release", "-p", "egglog-experimental"]]
     assert stream.getvalue().strip() == f"Building {label}"

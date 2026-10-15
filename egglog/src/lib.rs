@@ -440,8 +440,7 @@ impl EGraph {
     ///
     /// [`EGraph::default`] uses the in-memory reference backend
     /// (`egglog_bridge::EGraph`); downstream crates can supply their own
-    /// backend (e.g. a differential-dataflow engine) by implementing
-    /// [`Backend`] and passing it here.
+    /// backend by implementing [`Backend`] and passing it here.
     pub fn with_backend(backend: Box<dyn Backend>) -> Self {
         let mut parser = Parser::default();
         let proof_state = EncodingState::new(&mut parser.symbol_gen);
@@ -647,14 +646,6 @@ impl EGraph {
     /// (bridge-backed) e-graph, so this backend need not implement typechecking.
     pub fn with_term_encoding(mut self) -> Self {
         self.enable_term_encoding(EGraph::default());
-        self
-    }
-
-    /// Enable the term-encoding pipeline for a custom backend, using the given
-    /// bridge-backed e-graph for parsing/typechecking before instrumentation.
-    #[doc(hidden)]
-    pub fn with_term_encoding_typechecker(mut self, typechecker: EGraph) -> Self {
-        self.enable_term_encoding(typechecker);
         self
     }
 

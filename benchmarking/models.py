@@ -23,14 +23,11 @@ DetailLevel = Literal["summary", "files", "phases", "rulesets"]
 @dataclass(frozen=True)
 class BackendSpec:
     treatments: tuple[Treatment, ...]
-    flags: tuple[str, ...]
-    cargo_features: tuple[str, ...] = ()
 
 
 BACKEND_SPECS: dict[Backend, BackendSpec] = {
-    "main": BackendSpec(("off", "term", "proofs", "proof-extraction", "slotted", "slotted-no-aliasing"), ()),
-    "slotted-reference": BackendSpec(("multi", "nested", "nested-snapshot"), ()),
-    "dd": BackendSpec(("term", "proofs"), ("--backend", "dd"), ("dd-backend",)),
+    "main": BackendSpec(("off", "term", "proofs", "proof-extraction", "slotted", "slotted-no-aliasing")),
+    "slotted-reference": BackendSpec(("multi", "nested", "nested-snapshot")),
 }
 
 
@@ -41,12 +38,6 @@ def backend_spec(backend: Backend) -> BackendSpec:
         return BACKEND_SPECS[backend]
     except KeyError as error:
         raise ValueError(f"unknown backend: {backend}") from error
-
-
-def backend_cargo_features(backends: Sequence[Backend]) -> tuple[str, ...]:
-    """Return deduplicated Cargo features required by ``backends``."""
-
-    return tuple(dict.fromkeys(feature for backend in backends for feature in backend_spec(backend).cargo_features))
 
 
 def validate_backend_treatment(backend: Backend, treatment: Treatment) -> None:

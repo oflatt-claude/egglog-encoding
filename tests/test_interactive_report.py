@@ -33,7 +33,7 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     files = cast(list[dict[str, JsonValue]], selectors["files"])
 
     assert {endpoint["label"] for endpoint in endpoints} == {
-        "alternative · abc123 · dd/proofs",
+        "alternative · abc123 · slotted-reference/multi",
         "baseline · abc123 · main/off",
         "candidate · abc123 · main/proofs",
         "historical · abc123 · main/term",
@@ -44,7 +44,7 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     assert selectors["max_rounds"] == 2
     assert _section_ids(payload) == ["selection", "summary", "files", "phases", "rulesets"]
 
-    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "dd")
+    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "slotted-reference")
     baseline = next(endpoint for endpoint in endpoints if endpoint["treatment"] == "off")
     first_file = next(file for file in files if file["label"] == "one.egg")
     second_file = next(file for file in files if file["label"] == "two.egg")
@@ -71,12 +71,47 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     assert [row["file"] for row in rows] == ["two.egg", "one.egg"]
 
 
+def test_retired_backends_do_not_block_opening_or_retargeting_a_mixed_cache(tmp_path: Path) -> None:
+    _runtime, original, store, comparison = _interactive_case(tmp_path)
+    retired = make_record(
+        10,
+        started_at="2026-07-18T00:00:00Z",
+        backend="retired",
+        binary_sha256="sha256:retired",
+        file_sha256="sha256:retired-file",
+        timeout_sec=999,
+        target_label="retired-target",
+    )
+    store.append(retired)
+    before = store.path.read_bytes()
+    runtime = InteractiveRuntime(store, scope_for_comparison(comparison))
+
+    assert runtime.payload() == original
+    report_path = interactive.write_interactive_report(store, comparison, tmp_path / "mixed.html")
+    envelope = _embedded_envelope(report_path.read_text(encoding="utf-8"))
+    assert "retired-target" not in json.dumps(envelope["initial_payload"])
+
+    scope = scope_for_comparison(comparison)
+    swapped = runtime.apply(
+        scope
+        | {
+            "baseline_endpoint_id": scope["candidate_endpoint_id"],
+            "candidate_endpoint_id": scope["baseline_endpoint_id"],
+        }
+    )
+    selectors = cast(dict[str, JsonValue], swapped["selectors"])
+    assert selectors["baseline_endpoint_id"] == scope["candidate_endpoint_id"]
+    assert selectors["candidate_endpoint_id"] == scope["baseline_endpoint_id"]
+    assert store.records[-1] == retired
+    assert store.path.read_bytes() == before
+
+
 def test_incomplete_scope_publishes_missing_cells_but_invalid_scope_rolls_back(tmp_path: Path) -> None:
     runtime, payload, _store, _comparison = _interactive_case(tmp_path)
     selectors = cast(dict[str, JsonValue], payload["selectors"])
     endpoints = cast(list[dict[str, JsonValue]], selectors["endpoints"])
     files = cast(list[dict[str, JsonValue]], selectors["files"])
-    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "dd")
+    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "slotted-reference")
     baseline = next(endpoint for endpoint in endpoints if endpoint["treatment"] == "off")
     first_file = next(file for file in files if file["label"] == "one.egg")
 
@@ -343,8 +378,8 @@ def _interactive_case(
         make_endpoint(
             target_label="alternative",
             binary_sha256="sha256:alternative",
-            backend="dd",
-            treatment="proofs",
+            backend="slotted-reference",
+            treatment="multi",
         ),
         make_endpoint(target_label="historical", binary_sha256="sha256:historical", treatment="term"),
     )

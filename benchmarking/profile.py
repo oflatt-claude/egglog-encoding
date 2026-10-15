@@ -359,7 +359,7 @@ def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> P
 
 def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path, repo_root: Path) -> None:
     request = resolve_profile_request(args, invocation_cwd)
-    target = resolve_profile_target(request.target_request, request.backend, invocation_cwd, repo_root, console)
+    target = resolve_profile_target(request.target_request, invocation_cwd, repo_root, console)
     if target.binary_path is None:
         raise ValueError(f"target {target.display_label} needs a profiling binary")
     checkout_path = Path(target.row.path)

@@ -49,9 +49,8 @@ impl ProofInstrumentor<'_> {
 
         // Pick the lexicographically-smallest row as the witness rather than
         // whichever row the backend happens to yield first. A backend whose row
-        // order is not deterministic (e.g. the differential-dataflow backend's
-        // hash-set mirror) would otherwise make the extracted existence proof —
-        // and thus proof snapshots — vary run to run.
+        // order is not deterministic would otherwise make the extracted existence
+        // proof — and thus proof snapshots — vary run to run.
         let mut best_row: Option<Vec<Value>> = None;
         self.egraph.backend.for_each(backend_id, |row| {
             if best_row.as_deref().is_none_or(|best| row.vals < best) {

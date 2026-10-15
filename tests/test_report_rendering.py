@@ -45,7 +45,7 @@ def test_realistic_pair_report_markdown_snapshot(tmp_path: Path, snapshot: Snaps
         "rulesets",
     )
     assert "| Baseline | baseline | abc123 | main | off |" in markdown
-    assert "| Candidate | candidate | abc123 | dd | proofs |" in markdown
+    assert "| Candidate | candidate | abc123 | main | proofs |" in markdown
     assert "0.983–1.16x" in markdown
     assert "883 ms–1.14 s" not in markdown
     assert "0.883–1.14 s" in markdown
@@ -53,7 +53,12 @@ def test_realistic_pair_report_markdown_snapshot(tmp_path: Path, snapshot: Snaps
 
 def test_selection_uses_backend_and_treatment_from_the_comparison(tmp_path: Path) -> None:
     baseline = make_endpoint(target_label="main/off", binary_sha256="sha256:shared", backend="main", treatment="off")
-    candidate = make_endpoint(target_label="DD/term", binary_sha256="sha256:shared", backend="dd", treatment="term")
+    candidate = make_endpoint(
+        target_label="reference/multi",
+        binary_sha256="sha256:reference",
+        backend="slotted-reference",
+        treatment="multi",
+    )
     comparison = models.ComparisonSpec(
         baseline,
         candidate,
@@ -65,7 +70,7 @@ def test_selection_uses_backend_and_treatment_from_the_comparison(tmp_path: Path
     markdown = render_markdown_report_document(build_report_catalog(ReportStore(tmp_path / "report.jsonl"), comparison))
 
     assert "| Baseline | main/off | abc123 | main | off |" in markdown
-    assert "| Candidate | DD/term | abc123 | dd | term |" in markdown
+    assert "| Candidate | reference/multi | abc123 | slotted-reference | multi |" in markdown
 
 
 def test_shared_formatters_keep_compact_units_and_unambiguous_paths() -> None:
@@ -358,7 +363,7 @@ def _pair_case(tmp_path: Path) -> tuple[Path, models.ComparisonSpec]:
     candidate = make_endpoint(
         target_label="candidate",
         binary_sha256="sha256:candidate",
-        backend="dd",
+        backend="main",
         treatment="proofs",
     )
     records: list[ReportRecord] = []

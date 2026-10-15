@@ -28,13 +28,11 @@ name = "files"
 [features]
 default = ["bin"]
 bin = ["egglog/bin", "dep:mimalloc"]
-dd-backend = ["dep:egglog-experimental-dd"]
 
 [dependencies]
 egglog = { workspace = true }
 egglog-ast = { workspace = true }
 egglog-reports = { workspace = true }
-egglog-experimental-dd = { path = "dd", optional = true }
 
 mimalloc = { workspace = true, optional = true }
 hashbrown = { workspace = true }

@@ -213,9 +213,8 @@ pub type ContainerMergeFn =
 /// A backend that stores an egglog e-graph and runs rules over it.
 ///
 /// The frontend holds a `Box<dyn Backend>` and drives everything through this
-/// trait. Implementations: the in-memory reference `egglog_bridge::EGraph`
-/// (this crate's `backend_impl`), and separate-crate engines such as the
-/// Differential Dataflow backend in `egglog-experimental/dd`.
+/// trait. The in-memory reference implementation is `egglog_bridge::EGraph`
+/// (this crate's `backend_impl`); downstream crates can supply their own engines.
 ///
 /// See the crate docs for which methods are required vs. optional and how the
 /// ergonomic sugar on `dyn Backend` relates to the `_dyn` methods here.
@@ -310,9 +309,8 @@ pub trait Backend: Send + Sync {
     // The frontend loads `(input …)` facts by minting ids and inserting the
     // encoded term/view (and, in proof mode, AST/proof) rows directly, rather
     // than compiling and running a loader rule. Each backend services these
-    // against its own storage (db buffers for the reference bridge, the
-    // host-side mirror for Differential Dataflow), so input loading never falls
-    // back to rule compilation.
+    // against its own storage (db buffers for the reference bridge), so input
+    // loading never falls back to rule compilation.
 
     /// Mint a fresh id: the next unused integer from the backend's counter. A fresh
     /// id names a term (terms double as their own e-class) or a proof/AST node; the
@@ -466,9 +464,8 @@ pub trait Backend: Send + Sync {
     }
 
     /// Whether this backend needs the frontend's term-encoding pipeline to be
-    /// enabled. A backend without a native union-find, such as the experimental
-    /// Differential Dataflow backend, relies on term encoding to lower
-    /// congruence and rebuild to ordinary rules over `@uf` tables. Native mode
+    /// enabled. A backend without a native union-find relies on term encoding to
+    /// lower congruence and rebuild to ordinary rules over `@uf` tables. Native mode
     /// has no correct representation for those unions, so the frontend refuses
     /// to run such a backend unless the e-graph was built with term encoding
     /// (via `EGraph::with_term_encoding`).

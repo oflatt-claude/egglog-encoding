@@ -5,8 +5,7 @@
 ;; consumed at the end of maintenance, while `set` goes to the view at once, so the
 ;; merge computes `(set-union old new)` first and the deferred delete then drops the
 ;; whole row. Under `--term-encoding` or `--proofs` the check below fails, which is why
-;; this file is on the manual proof-disable list in `files.rs`, and why the DD backend's
-;; harness expects it to fail (`TERM_ENCODING_DIVERGES` in `dd/tests/files.rs`).
+;; this file is on the manual proof-disable list in `files.rs`.
 (sort IS (Set i64))
 (function G (i64) IS :merge (set-union old new))
 (set (G 0) (set-of 1 2 3))

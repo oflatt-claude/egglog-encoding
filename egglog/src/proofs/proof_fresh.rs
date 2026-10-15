@@ -13,8 +13,7 @@
 //! carry only type constraints here; their runtime behavior is supplied by the
 //! backend SPI ([`Backend::register_get_fresh`] / [`Backend::register_set_if_empty`]
 //! / [`Backend::register_view_column_read`]) so each backend services the mint /
-//! canonicalize against its own storage — db tables for the reference bridge, a
-//! host-side mirror for the Differential Dataflow backend.
+//! canonicalize against its own storage — db tables for the reference bridge.
 
 use crate::*;
 

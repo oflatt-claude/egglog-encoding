@@ -45,22 +45,20 @@ def test_pair_cli_defaults_to_current_main_off_vs_proofs() -> None:
     assert args.command == "benchmark"
 
 
-def test_compare_target_inherits_candidate_but_compare_backend_stays_main() -> None:
-    args = benchmark.parse_benchmark_args(["--target", "mine=@branch", "--backend", "dd"])
+def test_compare_target_inherits_candidate_target() -> None:
+    args = benchmark.parse_benchmark_args(["--target", "mine=@branch"])
     baseline, candidate = benchmark.endpoint_requests(args)
 
     assert baseline.target == candidate.target == targets.parse_target("mine=@branch")
     assert baseline.backend == "main"
     assert baseline.treatment == "off"
-    assert candidate.backend == "dd"
+    assert candidate.backend == "main"
     assert candidate.treatment == "proofs"
 
 
-def test_dd_rejects_explicit_proof_extraction_treatment() -> None:
-    args = benchmark.parse_benchmark_args(["--backend", "dd", "--treatment", "proof-extraction"])
-
-    with pytest.raises(ValueError, match="backend dd does not support treatment proof-extraction"):
-        benchmark.endpoint_requests(args)
+def test_reference_backend_rejects_proof_extraction_treatment() -> None:
+    with pytest.raises(ValueError, match="backend slotted-reference does not support treatment proof-extraction"):
+        models.EndpointRequest(targets.parse_target("."), "slotted-reference", "proof-extraction")
 
 
 def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
@@ -69,7 +67,7 @@ def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
             "--compare-target",
             "old=@origin/main",
             "--compare-backend",
-            "dd",
+            "main",
             "--compare-treatment",
             "term",
             "--target",
@@ -84,7 +82,7 @@ def test_pair_cli_accepts_arbitrary_explicit_endpoints() -> None:
     )
     baseline, candidate = benchmark.endpoint_requests(args)
 
-    assert baseline == models.EndpointRequest(targets.parse_target("old=@origin/main"), "dd", "term")
+    assert baseline == models.EndpointRequest(targets.parse_target("old=@origin/main"), "main", "term")
     assert candidate == models.EndpointRequest(targets.parse_target("new=."), "main", "proofs")
     assert args.detail == "rulesets"
 
@@ -98,7 +96,7 @@ def test_pair_cli_accepts_each_named_detail_level(detail: str) -> None:
     "argv",
     [
         ("--treatments", "off,proofs"),
-        ("--backend", "main,dd"),
+        ("--backend", "main,slotted-reference"),
         ("--phase-timings",),
         ("--detailed-timing",),
         ("--serve",),
@@ -124,7 +122,7 @@ def test_endpoint_validation_uses_backend_registry(monkeypatch: pytest.MonkeyPat
     monkeypatch.setitem(
         models.BACKEND_SPECS,
         "future",
-        models.BackendSpec(("proofs",), ("--backend", "future"), ("future-backend",)),
+        models.BackendSpec(("proofs",)),
     )
     request = targets.parse_target(".")
 
@@ -132,8 +130,6 @@ def test_endpoint_validation_uses_backend_registry(monkeypatch: pytest.MonkeyPat
     _baseline, candidate = benchmark.endpoint_requests(args)
 
     assert candidate == models.EndpointRequest(request, "future", "proofs")
-    assert targets.backend_flags("future") == ["--backend", "future"]
-    assert models.backend_cargo_features(("main", "future")) == ("future-backend",)
     with pytest.raises(ValueError, match="backend future does not support treatment off"):
         models.EndpointRequest(request, "future", "off")
 

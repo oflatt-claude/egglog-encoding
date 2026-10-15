@@ -36,7 +36,6 @@ from .models import (
     TargetRequest,
     TargetRow,
     Treatment,
-    backend_cargo_features,
 )
 from .processes import TimingResult, run_command
 from .reports.store import (
@@ -91,11 +90,10 @@ class ProcessObservation:
 
 @dataclass(frozen=True)
 class _PendingTarget:
-    """One materialized target awaiting a checkout-wide feature build."""
+    """One materialized target awaiting its checkout build."""
 
     request: TargetRequest
     row: TargetRow
-    endpoint_requests: tuple[EndpointRequest, ...]
 
 
 def _now_iso() -> str:
@@ -162,10 +160,8 @@ def resolve_targets(
 ) -> dict[TargetRequest, ResolvedTarget]:
     """Resolve every request, then build once per canonical checkout path.
 
-    Materializing all requests before building prevents distinct aliases for the
-    same checkout from overwriting one another's feature-specific executable.
     Each alias retains its own request and row provenance while sharing the
-    executable path and hash produced from the union of required backends.
+    executable path and hash produced by the checkout build.
     """
 
     resolved: dict[TargetRequest, ResolvedTarget] = {}
@@ -192,14 +188,12 @@ def resolve_targets(
         git_shas = {target.row.git_sha for target in pending_targets}
         if len(git_shas) != 1:
             raise ValueError(f"target selectors resolved checkout {checkout_path} at different git commits")
-        backends = tuple(endpoint.backend for target in pending_targets for endpoint in target.endpoint_requests)
         representative = pending_targets[0]
         built = build_resolved_target(
             representative.request,
             representative.row,
             console,
             "release",
-            backend_cargo_features(backends),
         )
         for target in pending_targets:
             resolved[target.request] = ResolvedTarget(
@@ -253,10 +247,10 @@ def _resolve_or_materialize_target(
             )
         checkout_path, resolved_sha = materialize_git_ref(repo_root, pointer.row.git_sha, request.label)
         row = target_row_for_request(request, checkout_path, resolved_sha)
-        return _PendingTarget(request, row, endpoint_requests)
+        return _PendingTarget(request, row)
 
     row = materialize_target_request(request, invocation_cwd, repo_root)
-    return _PendingTarget(request, row, endpoint_requests)
+    return _PendingTarget(request, row)
 
 
 def label_has_enough_rows(

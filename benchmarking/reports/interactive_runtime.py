@@ -1,8 +1,9 @@
 """Recompute interactive benchmark catalogs from one immutable cache snapshot.
 
 This module is the environment-neutral core shared by native artifact creation
-and the Pyodide browser runtime.  It discovers selector choices from every row
-in the loaded JSONL and atomically replaces the published all-sections catalog.
+and the Pyodide browser runtime. It discovers selector choices for supported
+backends in the loaded JSONL and atomically replaces the published all-sections
+catalog.
 Incomplete selections remain valid so the shared report can show its precise
 missing-result cells.  HTML generation, browser startup, and filesystem export
 belong in :mod:`interactive`.
@@ -18,7 +19,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import TypedDict, cast
 
-from ..models import BenchmarkEndpoint, ComparisonSpec, FileSpec, ResolvedTarget, TargetRequest, TargetRow
+from ..models import (
+    BACKEND_SPECS,
+    BenchmarkEndpoint,
+    ComparisonSpec,
+    FileSpec,
+    ResolvedTarget,
+    TargetRequest,
+    TargetRow,
+)
 from .catalog import CellTone, ReportCatalog, ReportCell, ReportMessage, report_id
 from .presentation import build_report_catalog, report_file_labels
 from .slotted import slotted_catalog
@@ -322,6 +331,8 @@ def _cache_universe(
     timeouts: set[int] = set()
     counts: Counter[tuple[str, str, int]] = Counter()
     for row_index, record in enumerate(records):
+        if record["backend"] not in BACKEND_SPECS:
+            continue
         order_key = (datetime.fromisoformat(record["started_at"]), row_index)
         endpoint_id = _record_endpoint_id(record)
         file_id = _record_file_id(record)

@@ -96,9 +96,8 @@ Treatments map directly to engine modes:
 | `proofs` | `--proofs` |
 | `proof-extraction` | `--proof-extraction`; rewrite checks, then extract, materialize, clean, and simplify proofs without verifying them |
 
-The `main` backend supports all four treatments. The `dd` backend supports
-`term` and `proofs`; an explicit `proof-extraction` treatment is rejected. The
-engine's `--proof-testing` option is a strict correctness mode that rewrites
+The `main` backend supports all four treatments. The engine's
+`--proof-testing` option is a strict correctness mode that rewrites
 checks, extracts proofs, and verifies them, not a benchmark treatment. Results
 from `proof-extraction` are performance evidence only, not proof-validity
 evidence.
@@ -121,12 +120,6 @@ Compare the current proof implementation with proof mode on `origin/main`:
 
 ```bash
 ./bench.py --compare-target @origin/main --compare-treatment proofs
-```
-
-Compare the DD backend with main while holding proof mode fixed:
-
-```bash
-./bench.py --backend dd --compare-treatment proofs
 ```
 
 Compare term encoding with ordinary mode:
@@ -293,11 +286,8 @@ nanosecond totals:
 - Merge: resolving and installing staged updates.
 - Rebuild: rebuilding indexes and e-graph state.
 
-The pre-merge boundary is backend-defined. Main egglog measures one contiguous
-pre-merge interval and records the remainder after Search and Apply as
-Unattributed. DD directly times its native Search and Apply regions and defines
-its pre-merge total as their sum, so DD records zero Unattributed time. DD work
-outside those phase boundaries remains part of Outside recorded rulesets.
+Egglog measures one contiguous pre-merge interval and records the remainder
+after Search and Apply as Unattributed.
 
 The phase report aggregates all rulesets and keeps two kinds of otherwise
 hidden time distinct:
@@ -328,8 +318,7 @@ ruleset absent from one endpoint is displayed as `—`, while a measured zero
 remains `0 ns`.
 
 Benchmarks run single-threaded. This keeps Search and Apply attribution
-additive for main egglog's interleaved executor. The DD backend records the same
-schema at its natural search, apply, merge, and rebuild boundaries.
+additive for egglog's interleaved executor.
 
 ### Interactive report
 
@@ -347,8 +336,9 @@ ruleset-detail report, then loads a pinned Pyodide runtime and SciPy over HTTPS
 to enable retargeting. The initial report preserves the invocation's endpoint
 provenance and file order; after Apply, retargeted endpoints and files use the
 latest cached provenance for each cache identity within that immutable snapshot.
-The page can select any two cached endpoints, any nonempty file subset, a cached
-timeout, and an available round count; it always shows all report sections.
+The page can select any two cached endpoints for supported backends, any nonempty
+file subset, a cached timeout, and an available round count; it always shows all
+report sections.
 Combinations without enough matching observations remain selectable and produce
 explicit missing-result states. A failed request leaves the prior report and
 selectors intact.
@@ -363,10 +353,9 @@ sharing it.
 ### Nightly
 
 `make nightly` benchmarks each endpoint in `ENDPOINTS` — the main backend's
-`term`, `proofs`, and `proof-extraction`, with the `dd` backend disabled for
-now — on the current checkout and on the latest `main`, accumulating them all in
-the ordinary report cache, and copies the resulting interactive page and its
-cache to `nightly/output/index.html` and `index.jsonl`:
+`term`, `proofs`, and `proof-extraction` — on the current checkout and on the
+latest `main`, accumulating them all in the ordinary report cache, and copies
+the resulting interactive page and its cache to `nightly/output/index.html` and `index.jsonl`:
 
 ```bash
 make nightly
@@ -422,7 +411,7 @@ separate Samply command when a particular endpoint needs call-stack diagnosis:
 ```bash
 ./bench.py profile FILE
 ./bench.py profile FILE --target @origin/main --treatment proofs --open
-./bench.py profile FILE --backend dd --profile-seconds 20
+./bench.py profile FILE --treatment term --profile-seconds 20
 ```
 
 Profiling selects one target, backend, treatment, and file. Artifacts are cached
