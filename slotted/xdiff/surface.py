@@ -1,40 +1,17 @@
-"""Does a rule written in the SURFACE SYNTAX behave like one compiled directly?
+"""Compare source-level rewrites with directly compiled multipattern rules.
 
-`xdiff.py` builds a Python list of atoms and hands it to `enc.compile_rule`. That is the
-engine, and the fuzzer drives it hard -- but it is not the route a user has. A user writes
-a `(rewrite ...)`, which goes through `slotted-egglog.py`: `keywords`, `rewrite_parts`,
-`flatten`, and the `:when` desugaring. No sweep touched any of that, which is why three
-surface bugs sat there until someone outside the project wrote a program.
+Renders generated rules with one left-hand pattern and the remaining atoms as
+`:when` equality patterns, then compares probe partitions with direct compilation.
+No reference binary is needed. Different generated rule text is permitted.
 
-So: render each generated rule as surface text, run the case with its rules compiled that
-way, and require the same probe partition as compiling them directly. The engine is the
-oracle and the path to it is what is under test, so this needs no reference and runs
-without one.
+A source rewrite must act on its left-hand root; cases whose actions require a
+root absent from every atom are skipped. References to the matched root are
+expressed by rebuilding the left-hand pattern. Reports distinguish unsupported
+cases from execution limits, and include multipattern counts and maximum width.
 
-COMPARING BEHAVIOUR, NOT TEXT. The two paths may emit different rules for one
-multipattern -- a different atom order is a different query plan -- and both are right. An
-earlier version compared the compiled text and called those differences failures.
-
-A flat atom list renders with one atom as the left-hand side and every other atom as
-`:when (= root (Ctor a b))`, the maximally `:when`-using spelling and so the most
-stressing one.
-
-TWO LIMITS OF `rewrite`, counted rather than worked around:
-
-  * its conclusion is always about the left-hand side's ROOT, while the fuzzer roots an
-    action at any bound variable. An action rooted at a variable no atom roots would need
-    `rule`, which this language does not have.
-  * the matched root has no NAME, so a right-hand side mentioning it rebuilds the pattern
-    instead -- which is what one writes in egglog, and denotes the same term.
-
-WHAT THE COUNTS SAY. A renderer that expressed nothing would agree on everything, so
-the result reports how many compared cases actually carried more than one atom and how
-wide the widest was. It also splits the skips: a case no `rewrite` can say is a limit of
-this language, a case too big to run either way is not.
-
+Usage:
     python3 slotted/xdiff/surface.py            200 generated cases
-    python3 slotted/xdiff/surface.py 500 7      500 cases, seed 7
-"""
+    python3 slotted/xdiff/surface.py 500 7      500 cases, seed 7"""
 
 import random
 import sys

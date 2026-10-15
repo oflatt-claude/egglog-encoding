@@ -38,10 +38,8 @@ use std::sync::Arc;
 
 type HashMap<K, V> = hashbrown::HashMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
 
-/// A spelling with a deterministic ordering key. The key preserves canonical
-/// numbering across processes, but identity also compares the complete text:
-/// hash collisions cannot identify different variables. Clones share ownership
-/// of the text without a global interner, lock, or permanently leaked strings.
+/// A spelling with deterministic ordering across processes.
+/// Equality compares the complete text, including when ordering keys collide.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Name {
     order: u64,
@@ -242,8 +240,7 @@ pub struct Frame {
     rigid: Option<BTreeSet<Occ>>,
 }
 
-/// Interned frames are immutable. Primitive reads share them instead of cloning
-/// their partitions and slot maps; frame transformations still return owned frames.
+/// An immutable frame value registered with egglog.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Fr(Arc<Frame>);
 
@@ -479,9 +476,7 @@ impl Frame {
         frame.consistent().then_some(frame)
     }
 
-    /// Every way to decide the open readings that keeps the frame consistent, each
-    /// once. The rest of the frame usually pins the slots on both sides, so one
-    /// element of the group fits, or none.
+    /// Every consistent assignment of the open readings, each once.
     fn resolved(&self) -> Vec<Frame> {
         if self.pending.is_empty() {
             return vec![self.clone()];
@@ -623,8 +618,7 @@ impl Frame {
         self.block_of(occ).map(|i| self.numbering()[i])
     }
 
-    /// A variable's renaming into the pattern's slots, or a literal's `{0 -> slot}`:
-    /// the numbering is computed once for the call, not once per slot.
+    /// A variable's renaming into the pattern's slots, or a literal's `{0 -> slot}`.
     pub fn ren(&self, name: &str) -> Option<Renaming> {
         self.renaming(&Name::new(name))
     }

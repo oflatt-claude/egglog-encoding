@@ -115,7 +115,7 @@ where
 /// The pass also receives each complete REPL input, with no file name.
 /// Failed REPL inputs restore both the e-graph and the cloned pass state, including
 /// when evaluation executed part of the input before failing. File inputs exit on
-/// failure and do not pay for these snapshots.
+/// failure.
 #[allow(clippy::disallowed_macros)]
 pub fn cli_with_preprocessor<I, T>(
     egraph: EGraph,

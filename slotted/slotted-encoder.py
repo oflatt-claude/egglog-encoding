@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Independent Python encoding used by differential tests and migration snapshots.
+"""Independent Python encoding for differential tests and generated cases.
 
-The public source compiler is now egglog-experimental/src/slotted (Rust). This
-implementation is retained to check that migration and to drive low-level fuzzers.
+The production source compiler is egglog-experimental/src/slotted (Rust).
+Differential tests compare its graphs with this implementation.
 
 The implementation has four layers: constructor signatures, invariant-maintenance
 rules, term encoding, and MultiPattern rule encoding. Each equality-sort carrier has
@@ -164,7 +164,7 @@ def read_typed_language_form(form, sorts=("U",)):
     """One constructor declaration with the sort information the generic recipe erases.
 
     Returns ``(name, signature, output_sort, child_sorts)``.  ``signature`` remains
-    the historical CHILD/BINDER/payload walk, while ``child_sorts`` records the
+    the CHILD/BINDER/payload walk, while ``child_sorts`` records the
     equality sort of each slotted column.  Keeping both lets the existing term and
     rule algorithms stay structural while multi-sort emission selects the right
     per-sort tables at every edge.
@@ -325,7 +325,7 @@ def shape_of(col):
 
 
 def _symbols(symbols):
-    """The historical single-sort names when a caller needs no namespace."""
+    """The default generated names for a single-sort language."""
     return symbols or CarrierSymbols.create("U")
 
 
@@ -1021,8 +1021,7 @@ def carrier_core(symbols):
             # indexed in part, which the guard refuses outright. Two tiers, because the
             # join tries every index against every set: most sets hold a few elements,
             # so the first few indices are joined with every set and the rest only with
-            # the sets that reach them (20% of MMM's second phase went to the one-tier
-            # join).
+            # the sets that reach them.
             f"""(rule ((GroupIdxSmall i)
        (= s ({s.coset_reps} c pinned))
        (= g (set-get s i)))
@@ -1081,14 +1080,9 @@ CARRIER_SORT = "U"
 #: many stops the program rather than match under part of its group.
 GROUP_INDICES = 512
 
-#: How the machinery saturates. Each phase reads what the ones before it settle: the
-#: core (leaders, slot sets, the edges' closure), then the migration of rows onto
-#: their leaders, then the groups from the rows' symmetries, then the shape walks,
-#: which enumerate the children's groups, and last the coset readings, which
-#: enumerate a class's own and which nothing in the core reads. So each runs only
-#: once the ones before it are done: the walks in an outer loop with the core, the
-#: readings once at the end. Run together instead, MMM's second phase walked each
-#: `Binop` row thirteen times over and migrated rows that then moved again.
+#: Settle leaders, migration, groups, and shapes to a fixed point, then derive
+#: coset readings. Shape computation depends on settled child groups; readings
+#: are only consumed by user matching, so they run after maintenance.
 MACHINERY_SCHEDULE = (
     "(seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate))"
     " (saturate (run slotted-group)) (run slotted-shape)))"

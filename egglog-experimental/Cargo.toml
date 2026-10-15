@@ -17,6 +17,10 @@ required-features = ["bin"]
 harness = false
 name = "files"
 
+[[test]]
+harness = false
+name = "slotted_snapshots"
+
 [[bench]]
 harness = false
 name = "files"

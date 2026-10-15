@@ -1,10 +1,7 @@
-"""Compare the current pinned oracle with another reference revision.
+"""Compare the pinned reference implementation with another revision.
 
-The normal suite asks only the exact revision in `slotted/xmulti/Cargo.toml`. This
-manual diagnostic runs the same corpus against a second binary so a reference update
-can be audited case by case. It was first written to assess PR #45's `extend_subst`
-canonicalisation fix, but neither side is hard-coded here.
-"""
+Runs the same corpus against two reference binaries and reports disagreements
+case by case, for auditing reference updates."""
 
 import subprocess
 import sys

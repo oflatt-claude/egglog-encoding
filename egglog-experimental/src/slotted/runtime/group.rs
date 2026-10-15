@@ -49,8 +49,8 @@ pub(super) fn close<T: Copy + Ord>(group: &[impl Borrow<Map<T>>]) -> Vec<Map<T>>
 
 /// Least representative for each inverse action on the pinned slots. A reading
 /// maps a nested node's slots into its parent's frame, so the parent pins images,
-/// not inputs, of that permutation. The indices retain the caller's already
-/// interned values; ordering is by actual slot numbers.
+/// not inputs, of that permutation. Returns indices into the input group;
+/// ordering is by slot numbers.
 pub(super) fn coset_reps<T: Copy + Ord>(
     group: &[impl Borrow<Map<T>>],
     pinned: &Map<T>,

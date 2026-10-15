@@ -561,9 +561,9 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | `slotted/tests/` | programs in this language that ASK something: terms, and claims about them. Run by `slotted/run-slotted-tests.py` |
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
 | `slotted/tests/nested/` | fixtures whose assertions require `--slotted-no-aliasing`; the test runner supplies the flag |
+| `slotted/tests/snapshots/` | Rust compiler output checked by `insta` in `cargo test`; update with `make update-snapshots` |
 | `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/slotted-eval.py` runs in full |
-| `slotted/tests/unsupported/` | originals written with constructs the language refuses, kept beside their runnable translations; skipped by the runner |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `egglog-experimental/src/slotted/` | the Rust compiler |
-| `slotted/slotted-egglog.py` | independent Python migration oracle |
+| `slotted/slotted-egglog.py` | independent Python compiler used by differential tests |
 | `slotted/ENCODING.md` | what this language compiles TO, and why each table is there |

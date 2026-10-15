@@ -9,12 +9,10 @@ them — including branch against main. Each endpoint is labelled by target
 (``branch`` / ``main``) and commit hash, so it is clear which commit each side
 is.
 
-Proofs and slotted observations share the ordinary ReportStore cache. Slotted
-collection keeps the paper's rewrite budgets and exact comparison evidence.
-After both collectors finish, one interactive page renders the proof comparison
-and both slotted timing tables directly, with a shared downloadable JSONL.
-Comparison failures remain visible in the page; collection errors preserve the
-previous publication.
+The page includes proof comparisons and slotted timing tables. Slotted runs use
+the paper's rewrite budgets and check graph equivalence against the reference
+matchers. Failed or incomplete comparisons appear in the report. Collection
+errors leave the published report untouched.
 
 The egraphs-good nightly service (``nightly.cs.washington.edu``) checks out this
 repository, runs ``make nightly``, and serves that directory, matching
@@ -121,7 +119,7 @@ def _run(target: Target, endpoint: Endpoint, *, open_report: bool, rounds: int |
 
 
 def _positive_int(value: str) -> int:
-    """Parse ``--rounds``, which bench.py also requires to be positive."""
+    """Parse a positive integer command-line argument."""
 
     parsed = int(value)
     if parsed <= 0:
@@ -130,7 +128,7 @@ def _positive_int(value: str) -> int:
 
 
 def _run_slotted(*, timeout: int, jobs: int) -> int:
-    """Use the public collector and the same cache as proof observations."""
+    """Collect slotted timings and reference comparison results."""
     evaluator = importlib.import_module("slotted.slotted-eval")
     return int(evaluator.nightly(REPORT_PATH, env=_bench_env(), timeout=timeout, jobs=jobs))
 
@@ -181,8 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if status:
         print("nightly: slotted comparisons are incomplete or failed; see the report's error banner", file=sys.stderr)
 
-    # Render after both collectors finish: the page and download contain exactly
-    # the same shared cache snapshot, including slotted comparison evidence.
+    # Finish collection before rendering so the page includes every result.
     if _run(BRANCH, HEADLINE, open_report=True, rounds=args.rounds) != 0 or not PAGE_PATH.is_file():
         print("nightly: benchmark did not produce a report", file=sys.stderr)
         return 1

@@ -1,2 +1,3 @@
 # Syrupy's Amber serializer indents blank snapshot lines by design.
 tests/__snapshots__/*.ambr -whitespace
+slotted/tests/snapshots/*.snap linguist-generated=true

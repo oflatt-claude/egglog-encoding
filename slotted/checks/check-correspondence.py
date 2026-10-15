@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
-"""Every tag in a `.ref` file must be one the oracle actually answers to.
+"""Check that .ref constructor tags match the reference language definitions.
 
-A `.ref` says what the reference calls each constructor, and the harness writes those
-tags into the terms and rules it hands the oracle. `define_language!` dispatches on the
-tag alone, so a tag renamed in `xmulti/src/main.rs` and not here does not fail loudly:
-the oracle either reports a parse error on one case or, worse, parses the text as a
-DIFFERENT node. This compares the two.
+Compares tags, which identify nodes in rule and term text. Rust enum variant
+names may differ because several languages share the oracle's enum.
 
-The variant NAMES are deliberately not compared. The oracle holds several languages in
-one enum and had to rename variants where two languages wanted the same one -- `Lam` ->
-`Lambda`, `Add` -> `Plus` -- while keeping the tags, and it is the tag that rule and
-term text carries.
-
-Usage:  ./check-correspondence.py
-"""
+Run with `python3 slotted/checks/check-correspondence.py`."""
 
 import pathlib
 import re

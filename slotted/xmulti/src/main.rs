@@ -323,7 +323,7 @@ fn split_two_sexprs(s: &str) -> (String, String) {
 // The encoding computes every substitution of a round from the e-graph as the round
 // began (its `beta/apply` rule runs in one apply phase, whose reads are the phase's
 // snapshot), into the smallest term of the body's class, ties broken by a canonical
-// spelling of the term (`sort/slotted/subst.rs`, `cheapest`). The crate's substitution
+// spelling of the term (`egglog-experimental/src/slotted/runtime/subst.rs`, `cheapest`). The crate's substitution
 // methods read the e-graph at application time, after the round's earlier unions,
 // and its syntactic method takes the node a class was created with -- history the
 // encoding cannot replay. `SnapshotSubst` does what the encoding does, so that the
@@ -334,7 +334,7 @@ thread_local! {
     static CTORS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
 }
 
-/// One piece of a term's spelling, as `sort/slotted/subst.rs` spells it.
+/// One piece of a term's canonical spelling for snapshot substitution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Tok {
     Text(String),
@@ -832,16 +832,8 @@ fn main() {
     println!("PARTITION {}", partition(&eg, &spec.probes));
 }
 
-/// A class's symmetry group, as every permutation of its slots that it proves.
-///
-/// The group is not part of the node set: a commutative class holds *one* node and a
-/// swap, where a class without the swap holds the same one node. So a comparison that
-/// looks only at nodes cannot tell them apart, and this is the missing half.
-///
-/// `group` itself is crate-private, but `eq` on two AppliedIds over the same class is
-/// exactly a membership test on `a.m * b.m^-1`, so enumerating permutations recovers it.
-/// A class with more slots than `GROUP_SLOT_CAP` produces an explicit limit rather
-/// than a partial dump, since 6! is where this stops being cheap.
+/// Every permutation of a class's slots that preserves its identity.
+/// Returns the slot count as an error when it exceeds `GROUP_SLOT_CAP`.
 fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
     let mut slots: Vec<Slot> = eg.slots(id).iter().copied().collect();
     slots.sort_by_key(|s| s.to_string());
@@ -893,12 +885,8 @@ fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
     Ok(out)
 }
 
-/// Every class and node, in a form the encoding side can be compared against.
-///
-/// `to_syntax` gives a node as a sequence of operator/payload strings, child
-/// invocations and slot literals, so nothing has to be recovered from `Debug`
-/// output. Slot *names* are printed as they are; the comparison is what
-/// canonicalises them away, since the two sides pick names independently.
+/// Dump every class, symmetry group, and node, preserving the reference's slot names.
+/// Reject graphs exceeding the group limit before printing any graph data.
 fn dump_structured(eg: &G) -> Result<(), String> {
     let mut ids = eg.ids();
     ids.sort_by_key(|i| format!("{i:?}"));

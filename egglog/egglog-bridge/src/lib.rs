@@ -76,12 +76,8 @@ impl ActionRegistry {
         self.table_actions.get(name)
     }
 
-    /// Snapshot the registered table names and their current row counts,
-    /// leaving out entries whose table `state` no longer holds.
-    ///
-    /// The registry is shared by every snapshot an egglog `push` takes, so a
-    /// `pop` can leave behind an entry for a table its database no longer has —
-    /// and a later table can be given the id that entry still names.
+    /// Registered table names and row counts currently visible in `state`.
+    /// Excludes tables removed by rollback, including when their ids are reused.
     pub fn table_sizes(&self, state: &ExecutionState) -> Vec<(&str, usize)> {
         self.table_actions
             .iter()

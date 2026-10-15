@@ -3,8 +3,7 @@ use super::renaming::*;
 use super::*;
 use std::collections::BTreeMap;
 
-/// A renaming's entries as slot numbers, which is what the solvers in this file
-/// work on.
+/// Decode a renaming's entries as slot numbers.
 fn slot_map(bv: &BaseValues, m: &BTreeMap<Value, Value>) -> Renaming {
     m.iter()
         .map(|(k, v)| (bv.unwrap::<i64>(*k), bv.unwrap::<i64>(*v)))
@@ -241,13 +240,8 @@ pub(super) fn register_frame_vec(eg: &mut EGraph, arc: ArcSort) {
     } });
 }
 
-/// `a ∘ b` where every key of `b` must survive; `None` if any is lost.
-///
-/// [`compose`] narrows silently when `b`'s image escapes `a`'s domain,
-/// which is correct for composing partial maps but wrong wherever the result
-/// becomes an *edge* of an e-node: an edge's domain must be its child's slot set,
-/// so a narrowed edge misstates which slots the child has. Use this there, and
-/// the rule declines instead of asserting something false.
+/// `a ∘ b`, preserving every key of `b`; `None` if `im(b)` escapes `dom(a)`.
+/// Use this for e-node edges, whose domain must remain the child's slot set.
 fn compose_total(
     a: &BTreeMap<Value, Value>,
     b: &BTreeMap<Value, Value>,
@@ -257,15 +251,11 @@ fn compose_total(
 }
 
 /// The identity map on `im(m)`.
-///
-/// A set of slots is represented as an identity renaming, so this is how to name
-/// "the slots `m` maps onto" — the long way round being `(compose m (inverse m))`.
 fn map_image(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     m.values().map(|v| (*v, *v)).collect()
 }
 
-/// The identity map on `dom(m)`; the counterpart of [`map_image`], spelled
-/// the long way round as `(compose (inverse m) m)`.
+/// The identity map on `dom(m)`; the counterpart of [`map_image`].
 fn map_domain(m: &BTreeMap<Value, Value>) -> BTreeMap<Value, Value> {
     m.keys().map(|k| (*k, *k)).collect()
 }

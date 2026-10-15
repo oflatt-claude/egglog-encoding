@@ -81,9 +81,7 @@ fn assert_subst_rejected(program: &str) {
     );
 }
 
-/// Every reachable constructor needs an explicit physical layout. In particular,
-/// the primitive must not recover the old heuristic of guessing edges from adjacent
-/// runtime `Id` columns.
+/// Reject reachable constructors without explicit physical layout metadata.
 #[test]
 fn a_reachable_constructor_without_layout_is_rejected() {
     assert_subst_rejected(
@@ -130,9 +128,7 @@ fn substitutes_an_occurring_slot() -> Result<(), Error> {
     Ok(())
 }
 
-/// A multi-sort compiler gives each carrier its own class-slot function.  The
-/// optional final argument selects that function without changing the legacy
-/// five-argument form above.
+/// The optional final argument selects a carrier's class-slot function.
 #[test]
 fn accepts_an_explicit_class_slots_table() -> Result<(), Error> {
     egraph(

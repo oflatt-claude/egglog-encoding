@@ -1,24 +1,9 @@
-"""Are the invariants the primitives and Def. 4 rely on actually maintained?
+"""Check stored renamings for injectivity and over-wide edge domains.
 
-Two checks, both sound -- no proxy, no false positives.
-
-`inverse` is total on injective input only, and nothing checks that. A composition
-of injective maps is injective, so it is enough to ask whether every renaming the
-machinery *stores* is injective. Non-injectivity is detectable without a new
-primitive: for injective `m`, `(map-image m)` has as many keys as `m`; for a
-non-injective one the image is smaller.
-
-Def. 4 requires an edge's domain to be exactly its child's slot set. The too-wide
-direction is provable: an idempotent self-loop `s` on the child is a partial
-identity, so `child = s*child` and every slot outside `dom(s)` is redundant --
-the child's live slots are contained in `dom(s)`. An idempotent self-loop with
-FEWER keys than the edge therefore proves the edge names slots the child does not
-have. Looking only for narrower witnesses is what makes this immune to the too-wide
-self-loops of open question 2, which an earlier version of this probe mistook for
-bad edges.
-
-The too-narrow direction is not checked here: it is what `compose-total` now
-prevents where it was reachable.
+An injective map has as many image slots as domain slots. An idempotent
+self-loop on a child witnesses a set containing its live slots; a wider edge
+therefore violates Definition 4. This check only detects over-wide edges.
+`def4-edges.py` checks exact domains against ClassSlots.
 """
 
 import subprocess

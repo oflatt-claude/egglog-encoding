@@ -1,4 +1,4 @@
-"""Persist slotted observations in the ordinary benchmark ReportStore.
+"""Persist slotted timings and graph comparison evidence in ReportStore.
 
 A workload key hashes the generated inputs, checking policy and implementation.
 Binary hashes identify each endpoint independently. Exact comparisons remain tied
@@ -50,7 +50,7 @@ def target(root, *, reference=False):
 
 
 def record(row, batch, *, key, provenance, counts):
-    """Use the same envelope and cache identity as proof observations."""
+    """Build a report record with timing, provenance, and graph evidence."""
     evidence = row.as_dict(batch)
     evidence["counts"] = counts
     status = "success" if row.goal == "yes" else "timed-out" if row.goal == "timeout" else "failure"

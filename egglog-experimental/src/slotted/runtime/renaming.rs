@@ -4,8 +4,7 @@ use super::Renaming;
 use egglog::sort::find_mapping;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Internal result of canonicalizing a node. Only the primitive boundary flattens
-/// this into the legacy vector representation.
+/// A node's canonical edges, renaming back to its frame, and self-symmetries.
 #[derive(Debug)]
 pub(super) struct NodeShape {
     pub edges: Vec<Renaming>,
@@ -44,18 +43,10 @@ pub(super) fn shape(edges: &[Renaming]) -> NodeShape {
     }
 }
 
-/// A node's canonical spelling and the symmetries it gives its class, from one walk of
-/// the readings its children's symmetries allow.
-///
-/// Records canonical edges, the renaming back to the node's own names, and its
-/// non-identity symmetries. A reading composes each column's edge
-/// with a symmetry of that column's class; only a renaming that permutes the column's
-/// own slots is one, so a stale symmetry is ignored. The least reading is the spelling
-/// every reading agrees on, so two nodes equal up to their children's symmetries have
-/// equal canonical edges. A reading that spells the node the way it already spells
-/// itself says the class equals itself under the renaming between them, which is the
-/// reference's `weak_shape` over `get_group_compatible_variants` and its
-/// `determine_self_symmetries` in one pass.
+/// A node's least spelling under its children's symmetries, the renaming back to
+/// its frame, and its non-identity self-symmetries. Nodes equal under their
+/// children's symmetries have equal canonical edges. Group elements that do not
+/// permute the corresponding child's slots are ignored.
 pub(super) fn node_shape(edges: &[Renaming], groups: &[Vec<Renaming>]) -> NodeShape {
     let own = shape(edges);
     let mut best: Option<NodeShape> = None;

@@ -65,27 +65,13 @@ LAM_PROB = float(os.environ.get("XDIFF_LAM", "0.2"))
 # a non-trivial symmetry group. Raise it to search symmetry-heavy ground: XDIFF_SYM=0.9
 SYM_PROB = float(os.environ.get("XDIFF_SYM", "0.35"))
 
-# How often a generated leaf is the PAYLOAD leaf `num`. The language had no payload
-# column at all, so no pattern could hold one and that whole grammar went unsearched --
-# a payload literal is what `(= x (Num 2))` is made of. The oracle can be asked about a
-# literal (its `Pattern::ENode` carries a concrete node) but NOT about a payload
-# variable, so only the literal half is compared here.
+# Probability of a numeric payload leaf. The reference supports concrete payload
+# patterns but not payload variables, so only literal payloads are compared.
 NUM_PROB = float(os.environ.get("XDIFF_NUM", "0.3"))
 
-# How often a rule gets a DISCONNECTED atom -- root and children all fresh, so it shares
-# no variable with the rest of the pattern. Such an atom is unconstrained: it matches
-# every node of its operator and the rule becomes a cross product, which is why the
-# extra atoms below draw their children from the bound set instead, and why this is rare
-# rather than either off or common.
-#
-# It earns its place: with it off, no generated rule had more than two disconnected
-# pieces, so three atoms whose slots are all placeholders -- kept apart only by the
-# cliques, and offered to refinement together (C8) -- went unsearched. That is the
-# shape that found `K1`.
-#
-# A reference that runs out of time is reported as such and left out of the ratio rather
-# than counted as a divergence, since a cross product is sometimes more work than its
-# budget. Raise this to search the ground harder: XDIFF_DISC=0.5
+# Probability of an atom with no variables shared with the rest of the pattern.
+# These exercise refinement across disconnected components. Their cross products
+# can exceed the reference's budget; timeouts are reported separately.
 DISCONNECT_PROB = float(os.environ.get("XDIFF_DISC", "0.08"))
 
 # How often a rule's pattern is drawn DIRECTLY as a conjunctive query rather than read
@@ -1938,13 +1924,8 @@ def rand_case(rng, i):
 
 
 # ------------------------------------------------------------- known divergences
-#: Reproductions of OPEN bugs. Deliberately NOT part of `curated()`, which every green
-#: check shares: a case known to diverge would turn those red, and silencing it there
-#: would hide a real one. `isomorphism.py known` runs these and requires each to STILL
-#: diverge -- one that starts agreeing is news, because the bug was fixed and the entry
-#: is stale, and its case then belongs in `curated()` where it is held green from then on.
-#:
-#: EMPTY is the good state. `K1`, `K2` and `LIT1` all lived here and now sit in `curated()`.
+#: Reproductions of known disagreements, tested separately from curated agreement
+#: cases. A reproduction that starts agreeing must move into the curated suite.
 
 
 def known_divergences():

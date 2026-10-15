@@ -5,8 +5,6 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer {
     pub do_rebuild: bool,
-    /// behind an `Arc`, so that a primitive taking the container by value copies a
-    /// pointer, not a set (a class's symmetry group can hold hundreds of elements)
     pub data: Arc<BTreeSet<Value>>,
 }
 

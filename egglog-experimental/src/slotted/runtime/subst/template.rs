@@ -1,5 +1,5 @@
-//! Shared spellings of extracted trees. Sharing saves storage; every child occurrence
-//! still counts toward tree cost and gets fresh internal slots when compared.
+//! Canonical spellings of extracted trees. Every child occurrence counts toward
+//! tree cost and has fresh internal slots, including shared children.
 
 use super::Slot;
 use smallvec::SmallVec;
@@ -61,8 +61,7 @@ impl Template {
         self.parts.push(Part::Child { template, public });
     }
 
-    /// The same UTF-8 byte ordering as comparing fully expanded canonical strings,
-    /// stopping at the first difference and never allocating those strings.
+    /// Compare by the UTF-8 byte ordering of fully expanded canonical strings.
     pub(super) fn compare(&self, other: &Self) -> Ordering {
         if std::ptr::eq(self, other) {
             Ordering::Equal
@@ -81,8 +80,7 @@ enum Resolved {
     Inner { owner: usize, index: usize },
 }
 
-/// One occurrence of a shared template. Only this node's own internal slots
-/// need storage; no flattened range is reserved for its descendants.
+/// One occurrence of a template and its slot namespace.
 struct Walk<'a> {
     parts: std::slice::Iter<'a, Part>,
     public: BTreeMap<Slot, Resolved>,

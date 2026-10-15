@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
-"""Legacy Python implementation retained as an independent migration oracle.
+"""Independent Python source compiler for differential testing.
 
-Use `egglog-experimental --slotted` to run source programs. The paper evaluation
-uses that Rust pass; check-rust.py compares both implementations' complete graphs.
-
-Compile a test written in the SLOTTED language down to plain egglog.
-
-A slotted test declares its own constructors at the top and then talks about terms,
-rules and classes -- never about renamings, edges or `(Var 0)`. This turns that into a
-self-contained egglog program: the hand-written core, the machinery for exactly the
-constructors declared, and the compiled body. The output includes no generated file,
-so there is no build artifact on the path between a test and running it.
-
-`slotted/LANGUAGE.md` is the language: every form, and the reason each exists. Only a
-form that NAMES A SLOTTED TERM is compiled, because only a term has to be encoded;
-every other command means here what it means in egglog and goes through as written.
+Compile slotted source to ordinary egglog with the runtime declarations and
+constructor maintenance rules it needs. The production CLI is
+`egglog-experimental --slotted`; check-rust.py compares its graphs with this
+compiler's output. See LANGUAGE.md for source syntax and semantics.
 
 Usage:
-    ./slotted-egglog.py SRC.egg              run it
-    ./slotted-egglog.py SRC.egg --desugar    write the compiled program to stdout
-    ./slotted-egglog.py SRC.egg -o OUT.egg   ... or to a file
+    ./slotted-egglog.py SRC.egg             run it
+    ./slotted-egglog.py SRC.egg --desugar   print the compiled program
+    ./slotted-egglog.py SRC.egg -o OUT.egg  write the compiled program and run it
 """
 
 import argparse
@@ -440,33 +430,13 @@ class Source:
 
 
 def compile_source(src, own_only=False, *, nested_compat=False):
-    """The whole program, or -- for a snapshot -- only what this file contributes.
-
-    `own_only` drops the machinery and anything an included library brought, because
-    both are already snapshotted by the generator that emits them. What is left is the
-    forms this test wrote, which is the part no other snapshot covers.
-    """
-    # Parsed declarations are shared; bindings and scopes belong to this compilation.
-    # In particular, emitting a snapshot after a full program must start before any
-    # of that program's globals, just as the first compilation did.
+    """Compile a program; own_only omits maintenance and included source forms."""
+    # Each compilation starts with fresh global bindings and scopes.
     src = copy.copy(src)
     src.lang = Terms(src.lang.ops, src.carriers)
-    out = [
-        f";;; COMPILED from {src.relpath} by slotted/slotted-egglog.py.",
-        ";;;",
-        ";;; GENERATED, never edited by hand, and it includes nothing -- the machinery is",
-        ";;; here. Under `slotted/tests/snapshots/` this is the committed copy of what a",
-        ";;; test runs, so a change in the compiler shows up as a diff; `check-slotted.py",
-        ";;; --update` rewrites it. Under `target/` it is build output.",
-        "",
-    ]
+    out = [f";;; Compiled from {src.relpath} by slotted/slotted-egglog.py."]
     if own_only:
-        out[2:5] = [
-            f";;; Only the forms THIS file contributes. The machinery for its {len(src.spec)} constructors,",
-            ";;; and anything an included library brought, are left out -- committing the",
-            ";;; same generated thousands of lines once per test would swamp the diff that",
-            ";;; a change in the compiler is supposed to show.",
-        ]
+        out.append(";;; Source forms only; maintenance and includes omitted.")
     else:
         out += [src.core(), ""]
         emitted = []
@@ -1144,10 +1114,7 @@ def main():
     src = Source(args.src)
     text = compile_source(src, nested_compat=args.nested_compat)
 
-    # Writing the program out and running it are INDEPENDENT. They used not to be:
-    # `-o` and `--own-only` implied `--desugar` and returned, so `--run -o snap.egg`
-    # wrote the snapshot and reported success without running anything -- which is how
-    # `run-slotted-tests.py --emit` came to report every test as passing.
+    # An output file can be written whether or not execution is requested.
     if args.desugar or args.out is not None or args.own_only:
         out = compile_source(src, own_only=args.own_only, nested_compat=args.nested_compat) if args.own_only else text
         if args.out:

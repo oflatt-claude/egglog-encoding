@@ -653,7 +653,7 @@ so no two may share a block:
 
 A frame is **consistent** when no clique is broken; `atom` and `frame-join` return
 nothing otherwise, so a reading that identifies two slots of one node simply fails to
-join. The cliques are not stored: `sort/slotted/frame.rs` in the egglog crate reads them off
+join. The cliques are not stored: `runtime/frame.rs` in the experimental crate reads them off
 the occurrences (`apart`). The reference matcher keeps the same information as pairwise
 disequality constraints. In the match above every block holds a slot of the root
 node, so the node clique pins all four and `refinements` holds the frame alone; C8
@@ -764,28 +764,23 @@ reads what the ones before it settle -- a migration reads leaders, a group reads
 rows where they now live, a shape walk enumerates its children's groups, a reading a
 class's own -- so each waits for the ones before it: the walks once per settled state
 in an outer loop, the readings once at the very end, since nothing in the core reads
-them and a matching rule only runs after. Run together instead, MMM's second phase
-walked each `Binop` row thirteen times over, migrated rows twice that then moved
-again, and rebuilt groups that a pending migration was about to change; phased, it
-runs a third faster and TTM's second phase 40%. The dedup has to share the walk's
-phase, and *One row per shape per class* says why.
+them and a matching rule only runs after. This ordering avoids shape walks over
+rows awaiting migration and group reconstruction before their rows settle.
+Deduplication shares the shape walk's phase; see *One row per shape per class*.
 
 # Part II. What the generator adds, and why
 
 These choices reduce repeated work and duplicate storage. They are intended to
 preserve the decoded graph and the specified matching and substitution policies.
-The suite checks the resulting implementation against the multipattern reference;
-it does not run a version with all these choices removed. Timings quoted in this
-section are historical development measurements, not a reproducible ablation table
-for the current revision.
+The suite checks the resulting implementation against the reference. It does not
+measure each optimization's contribution independently.
 
 ## One row per shape per class
 
 The index says which rows are one node; it removes none. A class can still hold two
 rows of one node under two readings: the same node built twice in different frames,
 or a node and its image under a symmetry of a child. Every such row is matched, indexed
-and migrated again; this caused the version without deduplication to stall on
-`redundancy-tests.egg` during development.
+and migrated again.
 One row is enough, and one is what the reference's hashcons keeps. The merge block has
 already recorded the symmetry between the two readings, and a pattern reaches the
 other reading through the class's group and its children's (C5). So the shape walk
@@ -921,10 +916,8 @@ built once per index. So the generator emits one relation and three
 rules per rewrite: the first finds a match and stores its refinements and the classes
 the action reads; the second, in the `slotted-apply` ruleset, joins the stored row
 with `Idx`, reads one refinement, checks the conditions and acts; and the third deletes
-the row once that phase has read it (C13). On the matrix-multiplication workload's
-first phase this took the run from 1.16 s to 0.18 s with one thread, the user rules'
-apply time, where `--timing-summary` books the primitives, falling from 820 ms to
-about 20 ms.
+the row once that phase has read it (C13). Frame computation is therefore shared
+by all refinements of a match.
 
 The first rule seeds `Idx(length, 0)` for each nonempty refinement vector. Before
 the apply phase, `slotted-refine` fills the indices for each length: each index
@@ -980,8 +973,7 @@ The plain action spells every node it builds in the frame's own slots. Two rules
 build one node in two frames then write two rows and reach two egglog values denoting
 one class, and the machinery has to find them equal, migrate the rows of one into the
 other, point every parent at the survivor and close the edges that all of that adds.
-That cascade runs per built node; removing it made the second-phase workloads three
-times faster. So a node below the root is emitted with its edges through `shape`
+To avoid that cascade, a node below the root is emitted with its edges through `shape`
 first, in the canonical numbering and not in this rule's, and its edge into its parent
 is the renaming back to the frame, narrowed to the slots the node leaves free (C16).
 The root keeps the frame's spelling, since the action unions it with the root's class
@@ -1253,7 +1245,7 @@ be made the same, each established on a minimal case the harness keeps:
 
 - *Substitution picks the same term.* `beta` substitutes into one term of the body's
   class, and which term decides which rows the graph holds from then on. The encoding
-  takes the smallest term, ties broken by a canonical spelling (`sort/slotted/subst.rs`,
+  takes the smallest term, ties broken by a canonical spelling (`egglog-experimental/src/slotted/runtime/subst.rs`,
   `cheapest`), from the e-graph as the round began, since `beta/apply` runs in one
   apply phase whose reads are that snapshot. The parsed terms and substitution results
   belong to that execution state and are shared by its workers and the two result
@@ -1355,9 +1347,8 @@ reference matchers.
 early when a round applies nothing new and reports that. Encoding graph collection
 stops at the requested budget without a further user-rule round; its saturation
 status is left unknown. A timeout or missing graph leaves equivalence inconclusive;
-it is never evidence of saturation or graph equality. Timings include the Rust
-source transformation and evaluation in one process, so the report schema rejects
-caches collected with the previous Python compilation path.
+it is never evidence of saturation or graph equality. Timings include source
+transformation and evaluation in one process.
 
 # Where the pieces live
 
@@ -1365,8 +1356,8 @@ caches collected with the previous Python compilation path.
 | --- | --- |
 | `slotted/LANGUAGE.md` | the source language: every form and why it exists |
 | `egglog-experimental/src/slotted/` | the Rust source-to-source compiler, used by `--slotted` |
-| `slotted/slotted-egglog.py` | the independent Python source compiler retained as a migration oracle |
-| `slotted/slotted-encoder.py` | the Python encoding used by the differential harness and migration oracle |
+| `slotted/slotted-egglog.py` | the independent Python source compiler used by differential tests |
+| `slotted/slotted-encoder.py` | the Python encoding used by the differential harness |
 | `slotted/checks/check-rust.py` | raw counts and verified graph isomorphisms between the Rust and Python passes |
 | `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
 | `slotted/tests/` | tests written in the source language |

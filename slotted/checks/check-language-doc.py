@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""Every runnable example in `slotted/LANGUAGE.md` is a program that passes.
+"""Run every complete program marked ```slotted in LANGUAGE.md.
 
-The reference for the language states what a claim means, and prose drifts. A fenced
-block marked ```slotted is a WHOLE program: this extracts each one and runs it through
-the Rust CLI and the Python oracle, so an example that stopped being true is a
-failure rather than a sentence nobody re-read.
+Each example must pass through both the Rust CLI and the Python oracle.
+Untagged code blocks illustrate syntax and are not executed.
 
-Blocks left untagged are syntax illustrations -- a constructor line, a rule shape -- and
-are not programs. What has to be true of those is that the forms they use exist, which
-the tagged ones exercise.
-
-Usage:  ./check-language-doc.py
-"""
+Run with `python3 slotted/checks/check-language-doc.py`."""
 
 import pathlib
 import re

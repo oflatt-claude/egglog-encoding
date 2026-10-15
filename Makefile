@@ -70,24 +70,16 @@ rust-doc-links:
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
 
-# The slotted-e-graph encoding: the tests written in the slotted language and the
-# ones written against the encoding, the snapshots of what the compiler and the
-# generators emit, the differential suites against the slotted-egraphs reference, and
-# source-rule mutation checks. Kept out of `check` because the fuzzers dominate
-# its runtime; `--quick` drops them, and `--update` rewrites the snapshots. xmulti is the
-# reference-side oracle the suites compare to.
+# Slotted fixtures, compiler snapshots, reference comparisons, and mutation tests.
+# The Python runner's --quick flag skips fuzzing; --no-oracle skips reference checks.
 slotted-check:
 	cargo build
+	cargo test -p egglog-experimental --test slotted_snapshots
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	cargo test --manifest-path slotted/xmulti/Cargo.toml
 	python3 slotted/checks/check-slotted.py
 
-# The offline half of the above. The rest compares against `xmulti`, whose separately
-# locked Cargo workspace fetches the pinned `slotted-egraphs` reference revision; use
-# this target when that Git dependency is unavailable.
-# A deep sweep, for when the 60-case `iso-fuzz` in `slotted-check` is not enough --
-# it is sized to run beside eighteen other checks, not to be a confidence statement.
-# Takes minutes and many cores; `campaign.py`'s header records what a deep run found.
+# Larger randomized campaigns for graph equivalence, rule order, and checker mutations.
 slotted-campaign:
 	cargo build --release --bin egglog-experimental
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
@@ -105,6 +97,7 @@ slotted-eval:
 
 slotted-check-no-oracle:
 	cargo build
+	cargo test -p egglog-experimental --test slotted_snapshots
 	python3 slotted/checks/check-slotted.py --no-oracle
 
 # Use a disposable report path, keeping the default report cache untouched.
@@ -142,6 +135,7 @@ nightly-local: nightly-uv nightly-rustup
 
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details
+	INSTA_UPDATE=always cargo test -p egglog-experimental --test slotted_snapshots
 
 format:
 	uv run --locked ruff format .

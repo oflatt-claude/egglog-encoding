@@ -37,8 +37,9 @@ make format         # apply Ruff and rustfmt formatting
 
 `make benchmark-smoke` uses a one-round comparison and writes its disposable
 JSONL report to `/tmp/egglog-encoding-bench-smoke.jsonl`. Override
-`BENCHMARK_SMOKE_REPORT` to choose another path. `make update-snapshots` is the
-explicit review action for accepting intentional Markdown report changes.
+`BENCHMARK_SMOKE_REPORT` to choose another path. `make update-snapshots` accepts
+intentional changes to Markdown reports and slotted compiler snapshots; review
+the resulting diff before committing it.
 
 The root workspace includes both `egglog` and `egglog-experimental`.
 `egglog-experimental` depends on the workspace `egglog` crate, keeping proof
@@ -376,20 +377,20 @@ Endpoints are labelled by target (`branch` / `main`) and commit hash, so the
 page's dropdown can compare any two of them and it is clear which commit each
 side is; endpoints with identical binaries collapse to one option. The page
 opens on proof overhead of the current checkout, followed directly by the slotted
-multipattern and nested timing tables. All observations and their correctness
-evidence share `.reports.jsonl`; `index.jsonl` is the complete downloadable cache.
+multipattern and nested timing tables. Observations and correctness evidence are
+stored in `.reports.jsonl` and published as the downloadable `index.jsonl`.
 The slotted tables require raw class/node counts and verified isomorphism for
 egglog/ref-multi and egglog-no-aliasing/ref-nested-snapshot. Failures and missing
 evidence appear in an error block below the timings. Timed-out runs display `timeout`
 instead of a completed-run time. Nightly slotted processes use a 150-second timeout
 (`--slotted-timeout` to override); local `./bench.py slotted` runs default to 300 seconds.
 
-`./bench.py slotted array --params 0` collects a small slotted comparison through
-the same cache. Use `--report /tmp/slotted.jsonl` for a disposable cache and
+`./bench.py slotted array --params 0` collects a small slotted comparison.
+Use `--report /tmp/slotted.jsonl` for a disposable cache and
 `--force-run` for new samples. The slotted `--rounds` flag sets rewrite iterations;
 it does not change the proof runner's sampling count. Cache reuse includes binary
 hashes, generated workload content, checking policy, timeout and parallelism.
-The report schema is now version 2; old disposable caches need recomputation.
+Incompatible cache schemas require recomputation.
 
 Populating is best effort: an endpoint that fails to build or run drops one dropdown option rather than
 failing the run, and the output directory is only overwritten after a

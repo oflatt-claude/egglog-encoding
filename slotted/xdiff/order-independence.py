@@ -1,24 +1,10 @@
 #!/usr/bin/env python3
-"""A pattern is a conjunction, so the order its atoms are written in cannot matter.
+"""Check that reordering a pattern's atoms preserves the encoding's e-graph.
 
-The reference combines matches through `unify`; the encoding joins frames and
-then refines the remaining slot placeholders. Both should give the same graph
-regardless of atom order. The compiler's preferred connected order is a query
-ordering convention, not a correctness requirement.
+Compares complete graphs by isomorphism, including classes not named by probes.
+This check needs no reference binary.
 
-Two reasons this check is worth having beside the differential one:
-
-  * The property is INTERNAL, so it needs no oracle and runs where the differential
-    half cannot -- CI included. Two orders of one pattern disagreeing is a compiler bug
-    whatever the reference says.
-  * It is sharper than comparing partitions. The probes of a case only see the classes
-    they name, and the bug this was written for is invisible to the probes of the very
-    case that exposed it: the union it loses is between the variable class and a term,
-    and a bare `(var $0)` cannot be a probe. So orders are compared by their whole
-    e-graph, up to isomorphism, rather than by the probe partition.
-
-    python3 slotted/xdiff/order-independence.py [N] [seed]
-"""
+Run with `python3 slotted/xdiff/order-independence.py [N] [seed]`."""
 
 import itertools
 import random

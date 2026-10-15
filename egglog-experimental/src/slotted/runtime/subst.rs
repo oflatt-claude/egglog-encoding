@@ -5,23 +5,18 @@
 //! returns a class spelled in `body`'s frame whose slots are
 //! `(slots(body) \ {x}) ∪ im(t_ren)`.
 //!
-//! A slotted node's children occupy two columns each — a `Renaming` naming the
-//! child's slots in the node's frame, then the child class. The compiler publishes
-//! the complete physical node and edge layout in hidden Unit-valued functions, so
-//! this primitive never guesses which erased `Id` columns are edges. Input-language
-//! container columns are outside the slotted front end's current contract; the
-//! metadata nevertheless makes every supported constructor layout explicit.
+//! Constructors must have the compiler's node and edge layout metadata.
+//! Container payloads are not supported.
 //!
-//! # One term, not a sub-e-graph
+//! # Representative selection
 //!
 //! This extracts a single smallest term rooted at `body`, substitutes in that
 //! term, and adds the result back. Like the reference library's optional
 //! `ExtractionSubst`, it minimizes tree size; the round snapshot and deterministic
 //! spelling tie-break are matched by the harness's `SnapshotSubst`. The paper's
 //! SDQL artifact instead uses the library's default syntactic representative.
-//! It is deliberately not a copy of the whole reachable
-//! sub-e-graph: the classes the substitution does not touch are shared with the
-//! original, and a class where `x` cannot occur is returned untouched.
+//! Classes unaffected by substitution retain their identity. A class where `x`
+//! cannot occur is returned untouched.
 //!
 //! Extraction is cost-based, so a class whose only e-nodes refer back to itself
 //! has no finite term. Substituting under such a class returns no value rather
@@ -411,8 +406,7 @@ fn intern(state: &mut FullState<'_, '_>, ren: &Renaming) -> Value {
 }
 
 /// Every class's parsed nodes and smallest-term choice in this execution's snapshot.
-/// Scan each declared constructor once. ClassSlots distinguishes public slots from
-/// private binder/redundant slots; layout metadata identifies physical columns.
+/// Uses ClassSlots for public slots and layout metadata for physical columns.
 fn build_terms(
     state: &FullState<'_, '_>,
     layouts: &Layouts,
@@ -468,20 +462,9 @@ fn build_terms(
     Ok((Terms { nodes, best }, slots_used))
 }
 
-/// The e-node rooting each class's smallest term, by term size, and among equal
-/// sizes the one whose spelling is least.
-///
-/// The choice must not depend on the order the table scan happens to yield e-nodes in,
-/// or two runs of one program substitute different representatives and their e-graphs
-/// part ways for good. Sizes come from a least fixpoint rather than a walk -- a class
-/// can hold an e-node that refers back to itself, and only a cost that has to come from
-/// somewhere rules those out. Then classes are visited by increasing size, so a node's
-/// children are decided before it, and among a class's smallest nodes the least
-/// spelling wins: a rendering of the whole term with slots numbered by first
-/// occurrence, so the e-graph's own slot names do not enter. Two candidates that
-/// still tie are the same term up to a permutation of the class's frame -- a symmetry
-/// the class records -- and the first in table order is kept. A class with no finite
-/// term is absent.
+/// Select each class's smallest finite tree, breaking ties by canonical spelling
+/// with slots numbered by first occurrence. Remaining ties are equivalent under
+/// the class's symmetries. Classes without a finite term are absent.
 fn cheapest(
     nodes: &HashMap<Value, Vec<Node>>,
     public: &HashMap<Value, BTreeSet<Slot>>,
@@ -963,8 +946,7 @@ impl Layouts {
         }
 
         Self::load_binders(state, string, integer, &mut layouts)?;
-        // a program without the payload table spells payloads by their ids: older
-        // preludes, and the tests' own
+        // Without payload metadata, use the raw value's spelling.
         if live_action(state, PAYLOAD_LAYOUT).is_ok() {
             for row in metadata_rows(state, PAYLOAD_LAYOUT, &[string, integer, string])? {
                 let ctor = state.value_to_base::<S>(row[0]).into_inner();
@@ -1043,13 +1025,8 @@ impl Layouts {
     }
 }
 
-/// Which half of a substitution's result a primitive answers.
-///
-/// A substitution's result is an invocation, and a primitive returns one value,
-/// so it takes two calls to read one. `slotted-subst` gives the class and
-/// `slotted-subst-frame` the renaming; called with the same arguments they
-/// describe the same result. Both calls share extraction and rebuilding through
-/// the execution state's cache.
+/// Select the result class (`slotted-subst`) or renaming (`slotted-subst-frame`).
+/// Calls with the same arguments within one execution describe the same invocation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Half {
     /// The result class.
@@ -1177,8 +1154,8 @@ impl FullPrim for SlottedSubst {
 }
 
 /// `(slotted-subst body x var t_ren t [class_slots])`, where the optional string
-/// names the carrier's class-slot function. The five-argument form uses the legacy
-/// `ClassSlots`. `slotted-subst-frame` has the same inputs and a `Renaming` result.
+/// names the carrier's class-slot function (default: `ClassSlots`).
+/// `slotted-subst-frame` has the same inputs and a `Renaming` result.
 struct SlottedSubstTypeConstraint {
     half: Half,
     name: String,

@@ -1,17 +1,7 @@
-"""Does this language still refuse what it says it refuses, and say why?
+"""Check that unsupported source forms fail with the expected diagnostic.
 
-Every refusal below is a program the compiler must decline, with the phrase its message
-has to carry. Two things rot silently and neither changes any answer:
-
-  * a refusal that stops firing -- the program is then quietly mistranslated, which is
-    what `(constructor Succ (S) S)` did before sorts were carriers;
-  * a refusal that fires as a PYTHON TRACEBACK rather than a message, which is what
-    `(datatype ...)` did. A user-facing error is prose, not a stack.
-
-So each case must exit nonzero, print its phrase, and show no traceback.
-
-    python3 slotted/checks/check-refusals.py
-"""
+Each case must exit nonzero, include its diagnostic phrase, and omit a traceback.
+Run with `python3 slotted/checks/check-refusals.py`."""
 
 import subprocess
 import sys

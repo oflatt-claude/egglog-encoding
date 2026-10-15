@@ -1,25 +1,15 @@
-"""Does a stranded node carry anything no visible node carries?
+"""Check that every node on a symmetry-less class has a visible equivalent.
 
-A class holding a node but no element in its group is invisible to every compiled
-rule, since they all join that row to reach the class's symmetries. Whether that
-costs anything depends on whether some *visible* node is alpha-equivalent to the
-stranded one -- same operator, same children, edges equal up to one injective
-renaming of the node's own slots.
+A visible class has a nonempty symmetry group. Each stranded row must have a
+visible row with the same operator and children, and edges equal under one
+injective renaming of the node's slots.
 
-This decides that question by pairing each invisible row against every visible one
-and searching for such a renaming. An empty report means the invariant holds on
-this case: every fact on a symmetry-less class is also on one with symmetries.
+Observer rules cover the constructors in `slotted/languages/toy.egg`.
 
-The observer rules are built from `slotted/languages/toy.egg`, the language the harness
-runs. Written over `App{n}` -- the string-headed constructors, which no generated case
-builds -- they matched nothing, and every case printed "nothing stranded" whatever the
-state was. `def4-edges.py` and `invariants.py` share the shape and the trap. Verify a
-checker like this by INVERTING it and confirming it fires; a clean zero proves nothing.
-
-    python3 slotted/xdiff/stranded.py            the two migration cases
-    python3 slotted/xdiff/stranded.py all        every curated case
-    python3 slotted/xdiff/stranded.py fuzz 100   generated
-"""
+Usage:
+    python3 slotted/xdiff/stranded.py            two migration cases
+    python3 slotted/xdiff/stranded.py all        curated cases
+    python3 slotted/xdiff/stranded.py fuzz 100   generated cases"""
 
 import random
 import re

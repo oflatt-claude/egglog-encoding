@@ -26,18 +26,6 @@ ROOT = Path(__file__).resolve().parents[2]
 EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 
-# One entry per generated file: the command that writes it. These are BUILD OUTPUT,
-# under `target/`, so nothing here is committed -- the tests include them, and
-# `make slotted-check` builds them first. `slotted/tests/snapshots/` is the committed
-# derived artifact.
-
-
-#: Compiled fixtures from the independent Python oracle. Rust execution is checked
-#: against that oracle by rust-source-pass and rust-source-fuzz; these snapshots
-#: make changes to the oracle's generated programs visible in review.
-SNAPSHOT_DIR = ROOT / "slotted" / "tests" / "snapshots"
-EMIT_SNAPSHOTS = ("slotted/run-slotted-tests.py", "--emit")
-
 
 def ratio(pattern, floor):
     """`n/m <something>` with n == m, and m at least `floor`."""
@@ -67,12 +55,7 @@ def zero_categories(out):
 
 
 def none_of(pattern, floor):
-    """A summary line with `bad` at zero and `seen` at least `floor`, both named groups.
-
-    THE CASE COUNT IS HALF THE CHECK. A probe written over constructors the corpus never
-    builds reports a clean zero and passes, which is how three of these went dead
-    unnoticed; the floor on cases actually looked at is what such a probe fails.
-    """
+    """Require named groups `bad` to be zero and `seen` to meet the coverage floor."""
 
     def check(out):
         m = re.search(pattern, out, re.M)
@@ -108,33 +91,7 @@ def paper_sdql_ran(out: str) -> str | None:
     return f"paper SDQL tests did not run: {', '.join(missing)}" if missing else None
 
 
-def check_snapshots():
-    """The committed compiled programs match what the compiler emits now.
-
-    DRIFT ONLY. Emitting also runs each test, so its exit code is about the tests and
-    is deliberately ignored here -- `slotted-tests` is what reports those. A test that
-    fails to COMPILE writes no snapshot and so shows up below as one that changed.
-    """
-    before = {p.name: p.read_bytes() for p in SNAPSHOT_DIR.glob("*.egg")}
-    if not before:
-        return "no compiled snapshots committed"
-    try:
-        subprocess.run([sys.executable, *EMIT_SNAPSHOTS], capture_output=True, text=True, timeout=3600, cwd=ROOT)
-        now = {p.name: p.read_bytes() for p in SNAPSHOT_DIR.glob("*.egg")}
-        stale = sorted(set(now) - set(before)) + sorted(n for n in before if before[n] != now.get(n))
-    finally:
-        for name, text in before.items():
-            (SNAPSHOT_DIR / name).write_bytes(text)
-    if stale:
-        return "stale, rerun with --update: " + ", ".join(stale)
-    print(f"       {len(before)} compiled programs byte-identical")
-    return None
-
-
-# name, argv or a callable, what its output must say, whether --quick skips it, and
-# whether it needs the reference ORACLE. The oracle is `xmulti`, pinned to an exact Git
-# revision of `slotted-egraphs`; `--no-oracle` still permits offline encoding-only runs
-# when that revision is not already in Cargo's cache.
+# Check name, Python script/arguments, output validator, fuzzing flag, reference flag.
 CHECKS = [
     ("rust-source-pass", ("slotted/checks/check-rust.py",), starts_ok, False, False),
     ("rust-source-fuzz", ("slotted/checks/check-rust.py", "--fuzz", "100"), starts_ok, True, False),
@@ -143,7 +100,6 @@ CHECKS = [
     ("shape-cache", ("slotted/checks/check-shape-cache.py",), starts_ok, False, False),
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
     ("nested-compatibility", ("slotted/checks/check-nested.py",), starts_ok, False, True),
-    # First: the machinery under `target/` is build output, and five tests include it.
     (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
@@ -165,10 +121,7 @@ CHECKS = [
         False,
         True,
     ),
-    ("snapshot-drift", check_snapshots, None, False, False),
-    # `slotted-subst` copies one representative of the body; the choice must not follow
-    # the table scan's order, or two runs build two e-graphs. The MMM subset program is
-    # the one that showed it.
+    # Substitution's representative must be independent of table scan order.
     (
         "subst-determinism",
         ("slotted/checks/check-subst-determinism.py",),
@@ -185,8 +138,6 @@ CHECKS = [
         False,
         False,
     ),
-    # A rule's `:name` is what egglog reports it by, and nothing else notices when one
-    # is missing, since it changes no answer.
     (
         "rule-names",
         ("slotted/checks/check-rule-names.py",),
@@ -194,10 +145,7 @@ CHECKS = [
         False,
         False,
     ),
-    # A rule whose right-hand side rebinds a slot over a variable matched outside it
-    # owes `(not-free $b v)`: matching may read the binder as that variable's name, and
-    # the node built would capture it. `let-lam-diff` without this collapsed the array
-    # study. The floor is the two libraries plus the BATAX test's copies.
+    # Capture guards are required in both libraries and the BATAX fixture's copies.
     (
         "capture-guards",
         ("slotted/checks/check-capture-guards.py",),
@@ -205,9 +153,6 @@ CHECKS = [
         False,
         False,
     ),
-    # Every refusal the language documents, with the phrase its message carries. A
-    # refusal that stops firing mistranslates the program in silence, and one that
-    # arrives as a traceback is not a message -- both went unnoticed before.
     (
         "refusals",
         ("slotted/checks/check-refusals.py",),
@@ -258,12 +203,6 @@ CHECKS = [
         False,
         True,
     ),
-    # The encoding's own invariants, read off the raw egglog rows rather than through a
-    # comparison. They need no oracle, and they are here rather than left standalone
-    # because a probe nothing runs is a probe that quietly dies -- all three had.
-    # The surface syntax against the engine. Needs no oracle: the engine is the oracle,
-    # and what is under test is `slotted-egglog.py`'s path to it -- which no sweep
-    # touched, because the fuzzer calls the encoder directly.
     (
         "surface-syntax",
         ("slotted/xdiff/surface.py", "120"),
@@ -311,7 +250,6 @@ CHECKS = [
         True,
     ),
     (
-        # An example nobody runs is an example nobody checked.
         "language-doc",
         ("slotted/checks/check-language-doc.py",),
         ratio(r"(\d+)/(\d+) examples run", 9),
@@ -386,11 +324,6 @@ CHECKS = [
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="skip the fuzzers")
-    ap.add_argument(
-        "--update",
-        action="store_true",
-        help="rewrite the generated snapshots and report which changed, then stop",
-    )
     ap.add_argument("-k", metavar="SUBSTRING", help="only checks whose name contains this")
     ap.add_argument(
         "--no-oracle",
@@ -409,19 +342,6 @@ def main():
             print(f"missing {tool.relative_to(ROOT)} -- run `{hint}`")
             return 2
 
-    if args.update:
-        before = {q.name: q.read_bytes() for q in SNAPSHOT_DIR.glob("*.egg")}
-        r = subprocess.run([sys.executable, *EMIT_SNAPSHOTS], capture_output=True, text=True, timeout=3600, cwd=ROOT)
-        if r.returncode != 0:
-            print(f"{EMIT_SNAPSHOTS[0]} failed: {r.stderr.strip()[:300]}")
-            return 1
-        now = {q.name: q.read_bytes() for q in SNAPSHOT_DIR.glob("*.egg")}
-        changed = sorted(n for n in now if now[n] != before.get(n))
-        for name in changed:
-            print(f"  updated {name}")
-        print(f"\n{len(changed)}/{len(now)} snapshots changed")
-        return 0
-
     picked = [
         c
         for c in CHECKS
@@ -430,17 +350,14 @@ def main():
     failed = []
     for name, cmd, expect, _, _needs_oracle in picked:
         print(f"  .... {name}", flush=True)
-        if callable(cmd):
-            why = cmd()
-        else:
-            r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=7200, cwd=ROOT)
-            why = expect(r.stdout) if expect else None
-            if r.returncode != 0:
-                failure = f"exit {r.returncode}: {r.stderr.strip()[:200]}"
-                why = f"{why}; {failure}" if why else failure
-            if why:
-                tail = [line for line in r.stdout.splitlines() if line.strip()][-6:]
-                why += "\n       " + "\n       ".join(tail)
+        r = subprocess.run([sys.executable, *cmd], capture_output=True, text=True, timeout=7200, cwd=ROOT)
+        why = expect(r.stdout) if expect else None
+        if r.returncode != 0:
+            failure = f"exit {r.returncode}: {r.stderr.strip()[:200]}"
+            why = f"{why}; {failure}" if why else failure
+        if why:
+            tail = [line for line in r.stdout.splitlines() if line.strip()][-6:]
+            why += "\n       " + "\n       ".join(tail)
         print(f"  {'ok  ' if why is None else 'FAIL'} {name}" + (f"  {why}" if why else ""), flush=True)
         if why:
             failed.append(name)

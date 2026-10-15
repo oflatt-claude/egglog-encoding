@@ -1,19 +1,10 @@
-"""Do `multipattern.egg`'s failing claims have teeth?
+"""Verify that negative multipattern assertions detect missing joins.
 
-A `fail (check ...)` passes for two very different reasons: the rule correctly declined
-to fire, or the rule could never have fired at all. The second is worthless, and it is
-the easy mistake -- naming a term the rule would not produce even when misfiring, or
-building the term after the `(run)`. Both happened while that file was written.
+Each mutation removes one join from a source rule and identifies assertions
+that must then fail. The mutated programs run with the normal compiler and
+runtime primitives.
 
-So each mutation below removes exactly one join from one rule and names the claims that
-must then break. A mutation the file still passes is a claim that is not testing what
-its comment says.
-
-The mutations change source rules in temporary files; the compiler and Rust
-primitives always run their normal implementations.
-
-    python3 slotted/checks/check-multipattern-teeth.py
-"""
+Run with `python3 slotted/checks/check-multipattern-teeth.py`."""
 
 import re
 import subprocess

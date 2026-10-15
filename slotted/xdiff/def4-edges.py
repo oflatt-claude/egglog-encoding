@@ -1,31 +1,14 @@
-"""Is every edge's domain *exactly* its child's slot set?
+"""Check edge domains against their children's live slot sets (Definition 4).
 
-Def. 4 wants equality, and the two halves used to be checked separately and partially:
-`xdiff.py`'s check 6 looks for an edge wider than an idempotent self-loop on its child, and
-the narrow half was recorded as "not checkable this way" and left to `compose-total`. Both
-are one comparison against `ClassSlots`, which is where a class's slots are held:
+Ordinary child edges must satisfy `(map-domain m) = (ClassSlots c)`.
+Binder-marker edges instead have domain `{0}` and point to the variable class:
+they name a bound slot rather than an invocation of that class.
 
-    (!= (map-domain m) (ClassSlots c))
+Observer rules cover the constructors in `slotted/languages/toy.egg`.
 
-`map-domain` and `ClassSlots` are both identity maps, so comparing them is set equality of
-the edge's domain with the class's slots.
-
-This is also the precondition the compiled action depends on. An action reads renamings off
-a matched node, and narrowing them by `ClassSlots` is a no-op exactly when those renamings
-already have the child's slots for their domain -- which is what this checks. That is why
-A BINDER COLUMN IS EXEMPT, and is checked against its own invariant instead. What sits
-there is a name the node binds, not a use of its child, so its domain is always the one
-slot `0` however few slots the variable class has left -- which is exactly the point:
-tying it to `ClassSlots` is what used to destroy a bound slot the moment two variable
-invocations were equated. So for those columns this asserts `map-domain = {0}` and that
-the child is the variable class, the two things the binder rules read.
-
-The rules are built from `slotted/languages/toy.egg`, the language the harness runs, so a
-constructor added there is covered without touching this file.
-
-    python3 slotted/xdiff/def4-edges.py            curated
-    python3 slotted/xdiff/def4-edges.py fuzz 250   generated
-"""
+Usage:
+    python3 slotted/xdiff/def4-edges.py            curated cases
+    python3 slotted/xdiff/def4-edges.py fuzz 250   generated cases"""
 
 import os
 import random

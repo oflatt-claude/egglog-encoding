@@ -1,24 +1,13 @@
-"""Does the encoding have the same number of *slotted* classes as the reference?
+"""Compare slotted class counts with the reference.
 
-A slotted class spans several `U` values, so counting `ClassSlots` rows over-counts. Two
-values are the same class when *any* `RenamesToLeader` relates them -- including a partial
-one, which is the redundancy relation (`a = m*b` with `m` dropping slots says b's class does
-not depend on them) and which the reference also models as one class. Requiring a bijection
-instead leaves the encoding with one extra class on `C13` and on 4 of 250 generated cases,
-all of which agree under this criterion; that is how it was settled. Counting the values
-that have a strictly smaller peer gives the number of non-canonical members, and
+A slotted class can contain several egglog values connected by RenamesToLeader,
+including partial renamings that remove redundant slots. The count is the number
+of ClassSlots rows minus the number of members with a strictly smaller peer.
+This avoids relying on printed value names, which may be Unextractable.
 
-    slotted classes  =  ClassSlots rows  -  non-canonical members
-
-which needs no value names, so it is immune to several classes printing as `Unextractable`.
-
-Worth checking on its own: merging two classes the reference keeps apart is invisible to the
-probe partition, which only compares the terms it was given, and can be invisible to node
-counts too. This is the cheap version of the isomorphism check's class bijection.
-
-    python3 slotted/xdiff/class-count.py            curated
-    python3 slotted/xdiff/class-count.py fuzz 250   generated
-"""
+Usage:
+    python3 slotted/xdiff/class-count.py            curated cases
+    python3 slotted/xdiff/class-count.py fuzz 250   generated cases"""
 
 import os
 import random

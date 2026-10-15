@@ -1,21 +1,9 @@
-"""How much of egglog's rule and declaration grammar does this language accept?
+"""Check which egglog declaration, rule, and command forms the frontend accepts.
 
-An inventory, asserted rather than remembered. Each probe is a small program and each
-carries the verdict it should get:
+Each program must either execute successfully or fail with a diagnostic,
+according to its recorded verdict. Tracebacks are failures in either case.
 
-    ok        accepted and run
-    refused   declined with a MESSAGE -- either by design, or a gap stated plainly
-
-A traceback is never a verdict: a user-facing error is prose. A probe whose verdict
-CHANGES is reported either way, since accepting more is news and accepting less is a
-regression.
-
-This is what says which egglog forms are missing without anyone having to remember. The
-gaps it currently records are value primitives over payloads -- egglog's arithmetic and
-comparisons -- and the actions `set`/`delete`/`subsume`, which need `rule`.
-
-    python3 slotted/checks/check-egglog-forms.py
-"""
+Run with `python3 slotted/checks/check-egglog-forms.py`."""
 
 import subprocess
 import sys

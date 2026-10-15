@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
-"""Our evaluation rule sets are the reference's, semantics included.
+"""Compare the evaluation's rewrite rules with the reference runner's active rules.
 
-`sdql-rules.egg` and `array-rules.egg` claim to carry the reference's rules. That claim went
-unchecked, and drifted twice in one session: the sdql file said "rule for rule" while
-missing `beta`, and then gained `sum-range-2`, which the reference DEFINES but does not
-RUN. Counting `Rewrite::new` calls is the trap -- a rule only counts if it reaches the
-list handed to the runner.
+Checks names, left- and right-hand patterns, and slot-freedom guards. Slot and
+pattern-variable names are alpha-normalised; parser-only spelling differences
+in the SDQL oracle are removed before comparison. Only rules selected by the
+reference runner count, including when its source defines additional rules.
 
-Compares every rewrite here against the rules the reference's own runner list holds:
-name, left- and right-hand patterns, and slot-freedom guards.  Slot and pattern-variable
-names are alpha-normalised, and the SDQL oracle's parser-only spelling workarounds are
-removed before comparison.
-
-Usage:  ./check-reference-rules.py
-"""
+Run with `python3 slotted/checks/check-reference-rules.py`."""
 
 import json
 import pathlib

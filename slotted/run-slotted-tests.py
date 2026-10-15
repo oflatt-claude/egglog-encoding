@@ -1,87 +1,33 @@
 #!/usr/bin/env python3
-"""Compile every slotted-language test and run it.
+"""Run slotted fixtures and rule libraries through the Rust CLI.
 
-A test in `slotted/tests/` is a SLOTTED source when it includes nothing: it declares
-its own constructors and the compiler supplies the core and the machinery. A test that
-`(include ...)`s something is written in plain egglog against the encoding -- the
-machinery tests -- and is run directly by `check-slotted.py`'s `egg-files`.
+Nested-matcher fixtures run with --slotted-no-aliasing. Libraries are loaded
+and counted separately from tests that contain assertions.
 
 Usage:
-    ./run-slotted-tests.py            compile and run each
-    ./run-slotted-tests.py -k sdql    only those whose name contains `sdql`
-    ./run-slotted-tests.py --emit     also write each test's own compiled forms to
-                                      slotted/tests/snapshots/, so a change in the
-                                      encoder shows up as a diff
+    ./run-slotted-tests.py          run every fixture and library
+    ./run-slotted-tests.py -k sdql  select files by name
 """
 
 import argparse
 import pathlib
-import re
 import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "slotted" / "tests"
-SNAPSHOTS = SRC_DIR / "snapshots"
-# Originals written against constructs the language refuses; see the README there.
-UNSUPPORTED = SRC_DIR / "unsupported"
 # These fixtures expect the reference nested matcher's restricted aliasing.
 NESTED = SRC_DIR / "nested"
-COMPILE = ROOT / "slotted" / "slotted-egglog.py"
 
 
 def slotted_sources():
-    """The tests written in the slotted language.
-
-    Told apart by WHAT they include, not by whether they include anything: a slotted
-    source may include another slotted source -- that is how a test over the sdql rules
-    gets them without restating 43 -- but never the hand-written core and never a
-    generated file, because the compiler supplies the first and generates the second. A
-    test written against the encoding includes one of those, which is what makes it not
-    a source.
-    """
-    seen = {}
-
-    def is_source(q):
-        """Transitively: everything it reaches has to be a source too.
-
-        The tutorial's test file includes the tutorial, which includes a generated
-        machinery file -- so neither is a source, and only following the chain says so.
-        """
-        key = q.name
-        if key in seen:
-            return seen[key]
-        seen[key] = False  # a cycle is not a source
-        ok = True
-        for t in re.findall(r'\(include "([^"]*)"\)', q.read_text()):
-            target = ROOT / t
-            slotted_source = t.startswith(("slotted/tests/", "slotted/languages/"))
-            if not slotted_source or "target/" in t or not target.exists():
-                ok = False
-                break
-            if not is_source(target):
-                ok = False
-                break
-        seen[key] = ok
-        return ok
-
-    # Recursive: `paper/` holds one file per reference test. `snapshots/` is compiled
-    # output rather than a source, and `unsupported/` holds originals the compiler
-    # refuses; both are excluded by name rather than by reading them.
-    # `slotted/languages/` holds a language and its rules -- no terms, nothing asked --
-    # so those come out as the rule libraries the count line reports. They are compiled
-    # and loaded here so a broken one is caught where it lives, not in a test that
-    # happens to include it.
-    skipped = (SNAPSHOTS, UNSUPPORTED)
-    files = [q for q in sorted(SRC_DIR.rglob("*.egg")) if not any(d in q.parents for d in skipped)]
-    files += sorted((ROOT / "slotted" / "languages").glob("*.egg"))
-    return [q for q in files if is_source(q)]
+    """Every source fixture and language library, in path order."""
+    return sorted(SRC_DIR.rglob("*.egg")) + sorted((ROOT / "slotted/languages").glob("*.egg"))
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-k", metavar="SUBSTRING")
-    ap.add_argument("--emit", action="store_true", help="also write the snapshots")
     args = ap.parse_args()
 
     srcs = [p for p in slotted_sources() if not args.k or args.k in p.name]
@@ -93,34 +39,11 @@ def main():
     # inflate the number with something that asserts nothing.
     libs = {p.name for p in srcs if "(check" not in p.read_text()}
 
-    if args.emit:
-        SNAPSHOTS.mkdir(exist_ok=True)
-
     bad = []
     for src in srcs:
         cmd = [str(ROOT / "target" / "debug" / "egglog-experimental"), "--slotted", str(src)]
         if NESTED in src.parents:
             cmd.append("--slotted-no-aliasing")
-        # A library's rules are already snapshotted by the generator that emits them
-        # into `target/slotted/`, so snapshotting its compiled program too
-        # would commit the same language rules twice.
-        if args.emit and src.name not in libs:
-            # `--own-only`: the machinery and any included library are snapshotted by
-            # the generators that emit them, so a test's snapshot is its own compiled
-            # terms, rules and claims -- the part nothing else covers.
-            # Keep the Python implementation's snapshots as the migration oracle.
-            snapshot = [
-                sys.executable,
-                str(COMPILE),
-                str(src),
-                "--desugar",
-                "--own-only",
-                "-o",
-                str(SNAPSHOTS / src.name),
-            ]
-            if NESTED in src.parents:
-                snapshot.append("--nested-compat")
-            subprocess.run(snapshot, cwd=ROOT, check=True, capture_output=True, text=True)
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=1800)
         print(f"  ok   {src.name}" if r.returncode == 0 else f"  FAIL {src.name}: {r.stderr.strip()[:300]}")
         if r.returncode != 0:

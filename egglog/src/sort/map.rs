@@ -6,8 +6,6 @@ use std::sync::Arc;
 pub struct MapContainer {
     do_rebuild_keys: bool,
     do_rebuild_vals: bool,
-    /// behind an `Arc`, so that a primitive taking the container by value -- every
-    /// `@MapContainer` argument is fetched by clone -- copies a pointer, not a map
     pub data: Arc<BTreeMap<Value, Value>>,
 }
 
@@ -110,10 +108,6 @@ pub fn compose<T: Copy + Ord>(a: &BTreeMap<T, T>, b: &BTreeMap<T, T>) -> BTreeMa
 }
 
 /// The inverse map; `None` unless the input is injective.
-///
-/// A renaming is a partial injection, so the inverse of a non-injective map is
-/// not meaningful. Rejecting it turns a silently wrong answer into a rule that
-/// does not fire.
 fn inverse(m: &BTreeMap<Value, Value>) -> Option<BTreeMap<Value, Value>> {
     let out: BTreeMap<Value, Value> = m.iter().map(|(k, v)| (*v, *k)).collect();
     (out.len() == m.len()).then_some(out)
