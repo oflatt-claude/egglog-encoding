@@ -1,14 +1,20 @@
 import EgglogSemantics.Congruence.Encode
 import EgglogSemantics.Source.WellFormed
-import EgglogSemantics.Spec.Step
+import EgglogSemantics.Spec.Behavior
 
 /-! The paper's compiler-correctness obligation. Both evaluations use mathematical
 `Database` states. No executable interpreter or fuel bound occurs in the statement.
-`Proofs/Congruence/AbstractComplete.lean` proves `preservesObservations` against this
-contract. The paper's source programs use bounded rounds; only compiled rebuilding
+`Proofs/Congruence/AbstractBehaviorComplete.lean` proves `preservesBehaviors`.
+The paper's source programs use bounded rounds; only compiled rebuilding
 uses saturation. -/
 
 namespace Egglog.Congruence
+
+/-- Compilation preserves success, failed checks, and divergence. Neither side's
+termination is a premise; source schedules use bounded rounds. -/
+def PreservesBehaviors : Prop :=
+  ∀ P : Program, P.WellFormed → P.Fragment → P.NoSaturate → ∀ behavior : Behavior,
+    Behaves Database.empty (encode P) behavior ↔ Behaves Database.empty P behavior
 
 /-- For a well-formed supported source program, every pair of finite evaluations agrees
 on success versus check failure. This does not assert either evaluation exists. -/

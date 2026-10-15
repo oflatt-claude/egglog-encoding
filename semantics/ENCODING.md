@@ -43,8 +43,11 @@ row replacement, and `LiveRebuildTermination` proves maintenance has such a boun
 `Proofs/Source/Termination` derives source evaluation existence from well-formedness,
 constructor-only declarations, and `NoSaturate`. Thus `evaluations_exist` gives actual
 finite executions on both sides, and `observations_iff` equates their possible Boolean
-success/failure observations. This does not assert termination of every target merge
-schedule. The theorem and non-vacuity examples use mathematical databases only.
+success/failure observations. `preservesBehaviors` in `AbstractBehaviorComplete.lean`
+now proves equivalence of success, failed checks, and divergence without evaluation premises.
+`LiveProgramTermination` excludes every infinite compiled merge/rebuilding trace for
+`NoSaturate` sources. These theorems and their non-vacuity examples use mathematical
+databases only, with atomic rule rounds as in the specification.
 
 Source saturation is deliberately outside this strengthened theorem. The optional
 flattened encoding interleaves maintenance with source rules, whereas Rust recursively

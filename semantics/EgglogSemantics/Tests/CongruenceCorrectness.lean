@@ -1,4 +1,5 @@
-import EgglogSemantics.Proofs.Congruence.AbstractTerminationComplete
+import EgglogSemantics.Proofs.Congruence.AbstractBehaviorComplete
+import EgglogSemantics.Tests.Divergence
 
 /-! Non-vacuity checks for the mathematical compiler theorem. These witnesses use
 `Database`, `CmdStep`, and `Eval` directly; no interpreter correctness bridge is used. -/
@@ -322,5 +323,39 @@ theorem finite_congruence_check :
     congruence_fragment
     (by simp [Program.NoSaturate, congruenceProgram, Cmd.NoSaturate]) _ congruence_source
   exact ⟨target, ht, he.symm⟩
+
+/-- The full contract applies to real successes and dynamic failures. -/
+theorem full_success_behavior :
+    Behaves Database.empty (encode successProgram) .success ∧
+      ¬ Behaves Database.empty (encode successProgram) .diverges :=
+  ⟨(preservesBehaviors successProgram success_wellFormed success_fragment
+      success_noSaturate .success).mpr ⟨sourceBuilt, source_success⟩,
+    not_encode_diverges success_fragment success_noSaturate⟩
+
+theorem full_failure_behavior :
+    Behaves Database.empty (encode failureProgram) .checkFailed ∧
+      ¬ Behaves Database.empty (encode failureProgram) .diverges :=
+  ⟨(preservesBehaviors failureProgram failure_wellFormed failure_fragment
+      failure_noSaturate .checkFailed).mpr source_failure,
+    not_encode_diverges failure_fragment failure_noSaturate⟩
+
+theorem rejects_empty_behavior_compiler :
+    ¬ (∀ P : Program, P.WellFormed → P.Fragment → P.NoSaturate → ∀ b : Behavior,
+      Behaves Database.empty [] b ↔ Behaves Database.empty P b) := by
+  intro h
+  have he := (h failureProgram failure_wellFormed failure_fragment failure_noSaturate
+    .checkFailed).mpr source_failure
+  cases he
+
+/-- A compiler that introduces a real divergent execution violates the full contract. -/
+theorem rejects_diverging_behavior_compiler :
+    ∃ Q : Program, ProgramDiverges Database.empty Q ∧
+      ¬ (∀ P : Program, P.WellFormed → P.Fragment → P.NoSaturate → ∀ b : Behavior,
+        Behaves Database.empty Q b ↔ Behaves Database.empty P b) := by
+  obtain ⟨Q, hQ⟩ := Divergence.divergent_from_empty
+  refine ⟨Q, hQ, ?_⟩
+  intro h
+  exact (neither_diverges success_fragment success_noSaturate).1
+    ((h successProgram success_wellFormed success_fragment success_noSaturate .diverges).mp hQ)
 
 end Egglog.Tests.CongruenceCorrectness
