@@ -85,14 +85,50 @@ theorem sourceWrites_preserves {src d e : Database} {as : List Action}
       obtain ⟨hs', hd'⟩ := sourceAtom_preserves hw hsafe hs hd ht
       exact ih hs' hd' (fun a ha => hwrites a (List.mem_cons_of_mem _ ha)) run
 
+/-- Rule-local write justifications use the firing environment and any fixed source model. -/
+theorem sourceWrites_local_preserves {src d e : Database} {as : List Action} {ρ : Env}
+    (hw : src.WF) (hsafe : SourceSafe src) (hs : SoundTerms d src) (hd : Descending d)
+    (hwrites : SourceWrites src d.sig (ρ ++ d.env) as)
+    (run : evalLocalActions d as ρ = some e) : SoundTerms e src ∧ Descending e := by
+  obtain ⟨post, hp, rfl⟩ := Option.map_eq_some_iff.mp run
+  have hi := sourceWrites_preserves (d := { d with env := ρ ++ d.env }) hw hsafe
+    (by simpa only [SoundTerms, Database.terms_setEnv] using hs)
+    (by simpa only [Descending, Database.terms_setEnv] using hd) hwrites hp
+  simpa only [SoundTerms, Descending, Database.terms_setEnvRules] using hi
+
+/-- A completed source model can justify target heads without a paired source firing. -/
+theorem encodeActions_preserves_of_justified {src d e : Database} {as : List Action}
+    (hw : src.WF) (hsafe : SourceSafe src) (hs : SoundTerms d src) (hdesc : Descending d)
+    (hp : ∀ a ∈ as, ∀ x ∈ actionExprs a, x.OrderingFree)
+    (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
+      d.sig (viewName fk.1) = some (tableDecl fk.2))
+    (huf : d.sig ufName = some (tableDecl 1))
+    (hsource : ∀ a ∈ as, SourceAction src d.sig d.env a)
+    (run : evalActions d (encodeActions as) = some e) : SoundTerms e src ∧ Descending e :=
+  sourceWrites_preserves hw hsafe hs hdesc
+    (encodeActions_sourceWrites_of_justified hw hp hd huf hsource) run
+
+theorem encodeLocalActions_preserves_of_justified {src d e : Database}
+    {as : List Action} {ρ : Env}
+    (hw : src.WF) (hsafe : SourceSafe src) (hs : SoundTerms d src) (hdesc : Descending d)
+    (hp : ∀ a ∈ as, ∀ x ∈ actionExprs a, x.OrderingFree)
+    (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
+      d.sig (viewName fk.1) = some (tableDecl fk.2))
+    (huf : d.sig ufName = some (tableDecl 1))
+    (hsource : ∀ a ∈ as, SourceAction src d.sig (ρ ++ d.env) a)
+    (run : evalLocalActions d (encodeActions as) ρ = some e) :
+    SoundTerms e src ∧ Descending e :=
+  sourceWrites_local_preserves hw hsafe hs hdesc
+    (encodeActions_sourceWrites_of_justified hw hp hd huf hsource) run
+
 /-- Executing the compiled source block is sound in the source block's final state. -/
 theorem encodeActions_preserves {src post d e : Database} {as : List Action}
     (hw : src.WF) (hsafe : SourceSafe post) (hcs : src.sig.AllConstructors)
     (hs : SoundTerms d src) (hdesc : Descending d)
     (hp : ∀ a ∈ as, ∀ x ∈ actionExprs a, x.OrderingFree)
     (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
-      (d.sig (viewName fk.1)).isSome = true)
-    (huf : (d.sig ufName).isSome = true)
+      d.sig (viewName fk.1) = some (tableDecl fk.2))
+    (huf : d.sig ufName = some (tableDecl 1))
     (heval : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ t,
       x.eval src.sig src.env = some t → x.eval d.sig d.env = some t)
     (hsrc : evalActions src as = some post)

@@ -20,9 +20,10 @@ theorem Database.terms_empty_of_eqs_empty {d : Database} (h : d.eqs = ∅) :
 theorem MergeStep.not_of_empty_eqs {d e : Database} (he : d.eqs = ∅)
     (h : MergeStep d e) : False := by
   cases h with
-  | collide _ _ _ _ _ ht _ _ _ _ =>
-      rw [Database.terms_empty_of_eqs_empty he] at ht
-      exact ht
+  | collide ho _ _ _ _ _ _ =>
+      have hp := ho.2
+      rw [he] at hp
+      exact hp
 
 theorem MergeClosure.eq_of_empty_eqs {d e : Database} (he : d.eqs = ∅)
     (h : MergeClosure d e) : e = d := by

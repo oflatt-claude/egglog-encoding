@@ -101,6 +101,10 @@ theorem Database.Out.entry {d : Database} (h : d.Diag) {f : FnName} {as vs : Lis
   obtain ⟨bs, hc, ht⟩ := ho
   exact CongList.eq_of_diag h hc ▸ ht
 
+theorem Database.Out.term {d : Database} (h : d.Diag) {f : FnName} {as vs : List Term}
+    (ho : d.Out f as vs) : Term.app f (as ++ vs) ∈ d.terms :=
+  .assert (ho.entry h).2
+
 theorem Database.Out.columns {d : Database} (h : d.StoreOk) {f : FnName} {as vs : List Term}
     (ho : d.Out f as vs) : ∀ t ∈ as ++ vs, t ∈ d.terms := by
   obtain ⟨bs, hc, ht⟩ := ho

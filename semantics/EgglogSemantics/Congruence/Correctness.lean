@@ -5,8 +5,8 @@ import EgglogSemantics.Spec.Step
 /-! The paper's compiler-correctness obligation. Both evaluations use mathematical
 `Database` states. No executable interpreter or fuel bound occurs in the statement.
 `Proofs/Congruence/AbstractComplete.lean` proves `preservesObservations` against this
-contract. `Proofs/Congruence/AbstractTerminationComplete.lean` separately proves
-`preservesTermination` and combines them in `preservesFiniteObservations`. -/
+contract. The paper's source programs use bounded rounds; only compiled rebuilding
+uses saturation. -/
 
 namespace Egglog.Congruence
 
@@ -17,12 +17,10 @@ def PreservesObservations : Prop :=
     Eval Database.empty P source → Eval Database.empty (encode P) target →
       source.succeeded = target.succeeded
 
-/-- A finite source evaluation has a finite compiled evaluation.
-A failed check is a finite evaluation even when its unreachable suffix would diverge.
-This asserts existence of a finite target run, not termination of every target schedule;
-it makes no assertion about source programs without a finite evaluation. -/
+/-- Bounded source schedules have finite compiled evaluations. Generated rebuilding
+may saturate; this asserts existence, not termination of every merge schedule. -/
 def PreservesTermination : Prop :=
-  ∀ P : Program, P.WellFormed → P.Fragment → ∀ source : Result,
+  ∀ P : Program, P.WellFormed → P.Fragment → P.NoSaturate → ∀ source : Result,
     Eval Database.empty P source → ∃ target, Eval Database.empty (encode P) target
 
 end Egglog.Congruence

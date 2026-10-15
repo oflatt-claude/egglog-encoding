@@ -49,7 +49,7 @@ theorem evalList_vars_held {d : Database} {ρ : Env} (hv : ∀ b ∈ ρ, b.2 ∈
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
       intro x hx
       rcases List.mem_cons.mp hx with rfl | hx
-      · exact hv (v, x) (Env.mem_of_lookup ht)
+      · exact hv (v, x) (Env.mem_of_lookup (Option.filter_eq_some_iff.mp ht).1)
       · exact evalList_vars_held hv cs
           (fun c hc => hvars c (List.mem_cons_of_mem _ hc)) hts x hx
 

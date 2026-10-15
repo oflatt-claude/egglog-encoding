@@ -10,14 +10,9 @@ namespace Egglog
 `@UF_<Sort>` per sort there is one table here. -/
 def ufName : FnName := "@UF"
 
-/-- The ruleset the maintenance rules join, and the one the emitted rebuild runs.
-
-**One flat ruleset, one `saturate`.** egglog's rebuild schedule nests three
-(`egglog/src/proofs/proof_encoding.rs:1928-1943`); this is exactly as strong, because a
-fixpoint of the union of rulesets is a fixpoint of each, and `Cmd.saturate` runs to a
-fixpoint. It is not the *only* ruleset the maintenance rules join: `allMaintenanceRules`
-copies them into each ruleset a source `Cmd.saturate` names, which is what rebuilds between
-that command's rounds. -/
+/-- Maintenance saturates here after each compiled action or single source round.
+Copies inside a source saturation only interleave maintenance; the paper excludes
+source saturation with `Program.NoSaturate`. -/
 def rebuildRuleset : RulesetName := "@rebuild"
 
 /-- The view table for source constructor `f`; its key is the tuple of child ids. -/

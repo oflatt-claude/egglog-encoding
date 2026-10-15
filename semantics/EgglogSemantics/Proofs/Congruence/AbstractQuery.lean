@@ -1,6 +1,7 @@
 import EgglogSemantics.Proofs.EnvTransform
 import EgglogSemantics.Proofs.Congruence.Match
 import EgglogSemantics.Proofs.Congruence.AbstractTransport
+import EgglogSemantics.Proofs.Congruence.AbstractMaintenance
 
 /-! A common target substitution reads every pattern of a source match. -/
 
@@ -51,7 +52,7 @@ theorem queryRead_of_eval_view {d : Database} {src : Database}
       rw [h.root_lit hs hw l]
       exact .lit
   | .var v, t, i, _, he, hv => by
-      obtain ⟨j, hj, hvj, hrj⟩ := hρ v t he
+      obtain ⟨j, hj, hvj, hrj⟩ := hρ v t (Option.filter_eq_some_iff.mp he).1
       have heq : j = h.root i := by
         have hh := h.unique_view t hvj hv
         simpa only [h.root_eq hrj] using hh
@@ -114,23 +115,23 @@ theorem patternRead_of_matches {d : Database} {src querySrc : Database}
 mutual
 
 /-- A variable appearing as a constructor argument receives a matchable value from a row. -/
-theorem QueryRead.value_argVar {d : Database} (hw : d.WF) {ρ : Env} {v : Var} :
+theorem QueryRead.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {v : Var} :
     ∀ {e : Expr} {i : Term}, QueryRead d ρ e i → Expr.ArgVar v e →
-      ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.terms
+      ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.values
   | _, _, .lit, hv => absurd hv (by simp [Expr.ArgVar])
   | _, _, .var _, hv => absurd hv (by simp [Expr.ArgVar])
   | _, _, .app hl ho, hv => by
-      have hcols := ho.columns hw
+      have hcols := out_values hd hstore ho
       rcases hv with hv | hv
       · exact QueryReadList.value_memVar hl
           (fun j hj => hcols j (List.mem_append_left _ hj)) hv
-      · exact QueryReadList.value_argVar hw hl hv
+      · exact QueryReadList.value_argVar hd hstore hl hv
 
 /-- A direct variable column reads the value in that column. -/
 theorem QueryReadList.value_memVar {d : Database} {ρ : Env} {v : Var} :
     ∀ {es : List Expr} {is : List Term}, QueryReadList d ρ es is →
-      (∀ i ∈ is, i ∈ d.terms) → Expr.var v ∈ es →
-      ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.terms
+      (∀ i ∈ is, i ∈ d.values) → Expr.var v ∈ es →
+      ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.values
   | _, _, .nil, _, hv => absurd hv (by simp)
   | _, _, .cons he hl, hc, hv => by
       rcases List.mem_cons.mp hv with rfl | hv
@@ -140,43 +141,43 @@ theorem QueryReadList.value_memVar {d : Database} {ρ : Env} {v : Var} :
           (fun j hj => hc j (List.mem_cons_of_mem _ hj)) hv
 
 /-- Descend to the constructor occurrence that provides the variable's value. -/
-theorem QueryReadList.value_argVar {d : Database} (hw : d.WF) {ρ : Env} {v : Var} :
+theorem QueryReadList.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {v : Var} :
     ∀ {es : List Expr} {is : List Term}, QueryReadList d ρ es is → Expr.ArgVarList v es →
-      ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.terms
+      ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.values
   | _, _, .nil, hv => absurd hv (by simp [Expr.ArgVarList])
   | _, _, .cons he hl, hv =>
-      hv.elim (QueryRead.value_argVar hw he) (QueryReadList.value_argVar hw hl)
+      hv.elim (QueryRead.value_argVar hd hstore he) (QueryReadList.value_argVar hd hstore hl)
 
 end
 
-theorem PatternRead.value_argVar {d : Database} (hw : d.WF) {ρ : Env} {v : Var} {p : Pattern}
+theorem PatternRead.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {v : Var} {p : Pattern}
     (h : PatternRead d ρ p) (hv : Pattern.ArgVar v p) :
-    ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.terms := by
+    ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.values := by
   cases h with
-  | expr he => exact QueryRead.value_argVar hw he hv
-  | eq ha hb => exact hv.elim (QueryRead.value_argVar hw ha) (QueryRead.value_argVar hw hb)
+  | expr he => exact QueryRead.value_argVar hd hstore he hv
+  | eq ha hb => exact hv.elim (QueryRead.value_argVar hd hstore ha) (QueryRead.value_argVar hd hstore hb)
 
 /-- A nonliteral reading has an existing value, either from its binding or its parent row. -/
-theorem QueryRead.output_value {d : Database} (hw : d.WF) {ρ : Env} {e : Expr} {i : Term}
+theorem QueryRead.output_value {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {e : Expr} {i : Term}
     (h : QueryRead d ρ e i)
-    (hv : ∀ v j, Env.lookup v ρ = some j → j ∈ d.terms)
-    (hn : ∀ l, e ≠ .lit l) : i ∈ d.terms := by
+    (hv : ∀ v j, Env.lookup v ρ = some j → j ∈ d.values)
+    (hn : ∀ l, e ≠ .lit l) : i ∈ d.values := by
   cases h with
   | lit => exact False.elim (hn _ rfl)
   | var hlk => exact hv _ _ hlk
-  | app _ ho => exact ho.columns hw _ (by simp)
+  | app _ ho => exact out_values hd hstore ho _ (by simp)
 
 /-- A complete source match has a consistent target substitution whose values can be
 used in mathematical matching and whose original patterns read through view rows. -/
 theorem exists_queryRead {d : Database} {src querySrc : Database}
-    (h : Rebuilt d) (hs : EdgesSound d src) (hw : src.WF)
+    (h : Rebuilt d) (hd : d.Diag) (hstore : d.StoreOk) (hs : EdgesSound d src) (hw : src.WF)
     (hcs : querySrc.sig.AllConstructors) (hun : UnionsRead d querySrc)
     (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d t e) {σ : Env} {q : Query}
     (hp : ∀ p ∈ q, p.OrderingFree) (hk : Query.VarsKeyed q)
     (hm : ValidQuerySubst querySrc q σ) :
     ∃ ρ, CanonicalReads d σ ρ ∧ Env.dom ρ = Env.dom σ ∧
       (∀ p ∈ q, PatternRead d ρ p) ∧
-      (∀ v j, Env.lookup v ρ = some j → j ∈ d.terms) := by
+      (∀ v j, Env.lookup v ρ = some j → j ∈ d.values) := by
   obtain ⟨ρ, hρ, hdom⟩ := exists_canonical_env h hs hw hm.mem_terms hex
   have hreads : ∀ p ∈ q, PatternRead d ρ p := fun p hmem =>
     patternRead_of_matches h hs hw hcs hun hex hρ
@@ -187,7 +188,7 @@ theorem exists_queryRead {d : Database} {src querySrc : Database}
   have hvq : v ∈ Query.vars q :=
     Query.mem_vars.mpr ⟨p, hpm, ((Pattern.mem_freeVars p).mp hvp).1⟩
   obtain ⟨a, ha, hva⟩ := hk v hvq
-  obtain ⟨i, hi, him⟩ := PatternRead.value_argVar h.wf (hreads a ha) hva
+  obtain ⟨i, hi, him⟩ := PatternRead.value_argVar hd hstore (hreads a ha) hva
   exact (Option.some.inj (hi.symm.trans hj)) ▸ him
 
 end Egglog.Congruence.Abstract

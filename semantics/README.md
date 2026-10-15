@@ -28,20 +28,19 @@ proof annotations. A separate provenance pass adds proof columns for globals, ru
 and function merges, and proof lifting turns its proofs into source proofs
 that both the Lean and Rust checkers accept.
 
-The historical congruence semantics at `aac8168` proves
+The current table semantics proves
 [`preservesFiniteObservations`](EgglogSemantics/Proofs/Congruence/AbstractTerminationComplete.lean):
-for well-formed programs in the supported source fragment, every finite source evaluation
-has a finite compiled evaluation with the same success or check-failure outcome.
-These proofs are being ported to the current table semantics.
-`preservesObservations` additionally relates every pair of finite evaluations. Both sides
-use mathematical databases; the proofs derive their representation invariants and finite
-row bounds from actual executions and import no executable interpreter. Termination
-preservation establishes existence of a finite target run; divergence preservation and
-termination of every possible schedule are outside the theorem. Interpreter correctness
-is outside the paper. Executable correspondence and differential tests remain sanity
-checks. The encoding guide includes mathematical non-vacuity examples and a comparison
-with CompCert and CakeML. Both the constructor source checker and relational provenance
-checker have proved soundness and existence support. The library permits no `sorry`.
+well-formed supported source programs without `saturate` have finite compiled evaluations
+with the same success or check-failure outcome. Source commands use bounded rounds;
+compiled rebuilding may saturate. `evaluations_exist` derives finite executions on both
+sides from the static premises, and `observations_iff` equates their possible outcomes.
+`preservesObservations` also relates every pair of finite evaluations.
+
+Both sides use mathematical databases; these proofs import no executable interpreter.
+Termination establishes existence of finite evaluations, not termination of every target
+merge schedule. Interpreter correctness is outside the paper. Executable correspondence
+and differential tests remain sanity checks, with legacy proofs still being ported.
+The library permits no `sorry`.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
 and source restrictions. The [checker guide](CHECKER.md) explains the certificate

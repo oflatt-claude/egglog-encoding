@@ -1,16 +1,16 @@
-import EgglogSemantics.Proofs.Congruence.AbstractForward
-import EgglogSemantics.Proofs.Congruence.AbstractBuild
+import EgglogSemantics.Proofs.Congruence.LeaderEval
+import EgglogSemantics.Proofs.Congruence.UFCoverage
 
-/-! Source rule firings lift to mathematical compiled firings that retain their source facts. -/
+/-! Source firings lift to leader-bound compiled firings. -/
 
 namespace Egglog.Congruence.Abstract
 
-/-- A source firing lifts to an actual compiled match and successful compiled firing.
-The source state being matched may be earlier than the state justifying target entries. -/
+open Live
+
 theorem encodedRule_firing_reads {d : Database} {src querySrc post : Database}
-    (h : Rebuilt d) (hdg : d.Diag) (hdecl : ViewDeclared d)
-    (he : EdgesSound d src) (hw : src.WF)
-    (hcs : querySrc.sig.AllConstructors) (hreads : SourceReads d querySrc)
+    (h : Rebuilt d) (hdg : d.Diag) (hstore : d.StoreOk) (hdecl : ViewDeclared d)
+    (he : EdgesSound d src) (hw : src.WF) (htotal : UFTotal d)
+    (hcs : querySrc.sig.AllConstructors) (hreads : Reads d querySrc)
     (henv : querySrc.env = []) {r : Rule} {σ : Env}
     (hqp : ∀ p ∈ r.query, p.OrderingFree)
     (hqk : Query.VarsKeyed r.query) (hqg : ∀ p ∈ r.query, p.Grounded)
@@ -18,41 +18,66 @@ theorem encodedRule_firing_reads {d : Database} {src querySrc post : Database}
     (hp : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, e.OrderingFree)
     (hctor : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ f ∈ e.fns,
       querySrc.sig.IsCtor f → d.sig.IsCtor f)
-    (huf : (d.sig ufName).isSome = true)
+    (huf : d.sig ufName = some (tableDecl 1))
     (hd : ∀ a ∈ r.actions, ∀ e ∈ actionExprs a, ∀ fk ∈ e.ctors,
-      (d.sig (viewName fk.1)).isSome = true)
+      d.sig (viewName fk.1) = some (tableDecl fk.2))
     (hm : ValidQuerySubst querySrc r.query σ)
     (hf : evalLocalActions querySrc r.actions σ = some post) :
     ∃ ρ d', ValidQuerySubst d (encodeRule r).query ρ ∧
-      evalLocalActions d (encodeRule r).actions ρ = some d' ∧
-      SourceReads d' post := by
-  have hun := unionsRead_of_unionsJoined (h.viewLeader he hw) hreads.unions
-  obtain ⟨ρ, hmatch, hρ⟩ := encodedQuery_match_of_source h hdg hdecl he hw
-    hcs hun hreads.terms hqp hqk hqg hqn hm 0
+      evalLocalActions d (encodeRule r).actions ρ = some d' ∧ Reads d' post := by
+  obtain ⟨hex, hun⟩ := hreads.normalize h hstore he hw
+  have hself : ∀ t ∈ querySrc.terms, ∀ i ∈ d.values,
+      ViewRepr d t i → Root d i → d.Out ufName [i] [i] := by
+    intro _ _ i hi _ hr
+    have hh := h.root_lookup hdg hstore (fun a ha => by
+      obtain ⟨b, hb⟩ := htotal a ha
+      exact ⟨b, out_of_current hstore hb⟩) hi
+    exact (hr _ (h.root_spec i).1) ▸ hh.2
+  obtain ⟨ρ, hmatch, _, hρ⟩ := encodedRule_match_of_source h hdg hstore hdecl he hw
+    hcs hun hex hself hqp hqk hqg hqn hm 0
   obtain ⟨sp, hsp, rfl⟩ := Option.map_eq_some_iff.mp hf
-  have henvread : Env.Reads ({ d with env := ρ ++ d.env } : Database)
-      (σ ++ querySrc.env) (ρ ++ d.env) := by
+  have hrename := evalActions_leaderEnv
+    (d := { querySrc with env := σ ++ querySrc.env }) hcs hsp
+  have hρ' : EnvReads d (leaderEnv σ) ρ := hρ.envReads hdg
+    (fun v i hi => (hmatch.mem_values (v, i) (Env.mem_of_lookup hi)).2)
+  have henvread : EnvReads ({ d with env := ρ ++ d.env } : Database)
+      (leaderEnv (σ ++ querySrc.env)) (ρ ++ d.env) := by
     intro v t ht
     rw [henv, List.append_nil] at ht
-    obtain ⟨i, hi, hv, _⟩ := hρ v t ht
-    exact ⟨i, Env.lookup_append_of_some hi,
-      hv.mono (show d.Contained
-        ({ d with env := ρ ++ d.env } : Database) from ⟨Set.Subset.refl _⟩)⟩
-  have hstart : SourceReads ({ d with env := ρ ++ d.env } : Database)
-      { querySrc with env := σ ++ querySrc.env } :=
-    (hreads.mono (d' := ({ d with env := ρ ++ d.env } : Database))
-      ⟨Set.Subset.refl _⟩).restrict
-        (src' := { querySrc with env := σ ++ querySrc.env }) ⟨Set.Subset.refl _⟩
-  obtain ⟨tp, htp, hpost⟩ := encodeActions_reads (src := { querySrc with env := σ ++ querySrc.env })
-    (d := { d with env := ρ ++ d.env })
-    hcs hp hctor hd huf
-    henvread hstart hsp
+    obtain ⟨i, hi, hv, hr⟩ := hρ' v t ht
+    exact ⟨i, Env.lookup_append_of_some hi, hv,
+      Live.Repr.mono (d := d) (e := { d with env := ρ ++ d.env }) (Set.Subset.refl _) hr⟩
+  have hstart : Reads ({ d with env := ρ ++ d.env } : Database)
+      { querySrc with env := leaderEnv (σ ++ querySrc.env) } :=
+    (hreads.mono (e := ({ d with env := ρ ++ d.env } : Database))
+      (Set.Subset.refl _)).restrict ⟨Set.Subset.refl _⟩
+  obtain ⟨tp, htp, hpost⟩ := encodeActions_reads
+    (src := { querySrc with env := leaderEnv (σ ++ querySrc.env) })
+    (d := { d with env := ρ ++ d.env }) hcs
+    (by
+      intro a ha e he
+      obtain ⟨a₀, ha₀, rfl⟩ := List.mem_map.mp ha
+      rw [leaderAction_exprs] at he
+      obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
+      exact (leaderExpr_orderingFree e₀).mpr (hp a₀ ha₀ e₀ he₀))
+    (by
+      intro a ha e he f hf hc
+      obtain ⟨a₀, ha₀, rfl⟩ := List.mem_map.mp ha
+      rw [leaderAction_exprs] at he
+      obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
+      exact hctor a₀ ha₀ e₀ he₀ f (by simpa using hf) hc)
+    (by
+      intro a ha e he fk hk
+      obtain ⟨a₀, ha₀, rfl⟩ := List.mem_map.mp ha
+      rw [leaderAction_exprs] at he
+      obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
+      exact hd a₀ ha₀ e₀ he₀ fk (by simpa using hk)) huf henvread hstart hrename
   refine ⟨ρ, { tp with env := d.env, rules := d.rules }, hmatch, ?_, ?_⟩
-  · change (evalActions { d with env := ρ ++ d.env } (encodeActions r.actions)).map _ = _
+  · change (evalActions { d with env := ρ ++ d.env }
+      (encodeActions (r.actions.map leaderAction))).map _ = _
     rw [htp]; rfl
   · exact (hpost.mono
-      (d' := ({ tp with env := d.env, rules := d.rules } : Database))
-      ⟨Set.Subset.refl _⟩).restrict
-        (src' := { sp with env := querySrc.env, rules := querySrc.rules }) ⟨Set.Subset.refl _⟩
+      (e := ({ tp with env := d.env, rules := d.rules } : Database))
+      (Set.Subset.refl _)).restrict ⟨Set.Subset.refl _⟩
 
 end Egglog.Congruence.Abstract

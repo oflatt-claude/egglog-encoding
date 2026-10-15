@@ -287,6 +287,44 @@ theorem encodeSig_tables {P : Program} (hdom : P.Fragment) {f : FnName} {k : Nat
     · exact hd.trans
         (congrArg tableDecl (hdom.aritiesAgree (g, l) hg (f, k) hf (viewName_inj he).symm))
 
+/-- A declared generated view always has the compiler's singleton-output table shape. -/
+theorem encodeSig_view_census {P : Program} (hp : P.Fragment) {f : FnName} {dc : FnDecl}
+    (hf : encodeSig P (viewName f) = some dc) : ∃ k, (f, k) ∈ P.ctors ∧ dc = tableDecl k := by
+  have hfold : ∀ p : Program,
+      (∀ decl, Cmd.decl (viewName f) decl ∈ p → ∃ k, (f, k) ∈ P.ctors ∧ decl = tableDecl k) →
+      ∀ sig : Signature,
+      (∀ decl, sig (viewName f) = some decl → ∃ k, (f, k) ∈ P.ctors ∧ decl = tableDecl k) →
+      ∀ decl, (p.foldl (fun s c => c.sigBind s) sig) (viewName f) = some decl →
+        ∃ k, (f, k) ∈ P.ctors ∧ decl = tableDecl k := by
+    intro p
+    induction p with
+    | nil => intro _ sig hs; exact hs
+    | cons c cs ih =>
+      intro hc sig hs
+      apply ih (fun decl hd => hc decl (List.mem_cons_of_mem _ hd))
+      intro decl hd
+      cases c with
+      | decl g dg =>
+        by_cases he : viewName f = g
+        · subst g
+          have hde : dg = decl := by simpa [Cmd.sigBind] using hd
+          exact hde ▸ hc dg List.mem_cons_self
+        · exact hs decl (by simpa [Cmd.sigBind, Function.update_of_ne he] using hd)
+      | action _ | rule _ | check _ | run _ | saturate _ => exact hs decl hd
+  apply hfold ((encodePrelude P).map Command.command) ?_ (fun _ => none) (by simp) dc hf
+  intro decl hd
+  rcases prelude_decl_iff.mp hd with ⟨hn, _⟩ | ⟨g, k, hg, hd⟩
+  · exact (viewName_ne_ufName hn).elim
+  · rcases hd with ⟨hn, _⟩ | ⟨hn, rfl⟩
+    · exact (source_ne_view hp hg f hn.symm).elim
+    · obtain rfl := viewName_inj hn
+      exact ⟨k, hg, rfl⟩
+
+theorem encodeSig_view_shape {P : Program} (hp : P.Fragment) {f : FnName} {dc : FnDecl}
+    (hf : encodeSig P (viewName f) = some dc) : ∃ k, dc = tableDecl k := by
+  obtain ⟨k, _, hk⟩ := encodeSig_view_census hp hf
+  exact ⟨k, hk⟩
+
 /-- Every constructor available in a source prefix has an id constructor in the target. -/
 theorem sourceConstructors_of_programStep {P p : Program} (hdom : P.Fragment)
     (hp : ∀ c ∈ p, c ∈ P) {src : Database} (hsrc : ProgramStep Database.empty p src)

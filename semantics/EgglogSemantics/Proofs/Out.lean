@@ -4,12 +4,11 @@ import EgglogSemantics.Proofs.Step
 
 namespace Egglog
 
-/-- `Out` is monotone, because both of its conjuncts are. A rule body reading a table
-never *loses* a match — the property an overwriting merge would destroy, and the one
-seminaive evaluation rests on. -/
+/-- Lookup persists when assertions grow at a fixed signature. -/
 theorem Database.Out.mono {d₁ d₂ : Database} (h : d₁.Contained d₂)
+    (hsig : d₁.sig = d₂.sig)
     {f : FnName} {as vs : List Term} (ho : d₁.Out f as vs) : d₂.Out f as vs := by
   obtain ⟨bs, hl, hrow⟩ := ho
-  exact ⟨bs, CongList.mono h hl, h.terms hrow⟩
+  exact ⟨bs, CongList.mono h hl, ⟨hsig ▸ hrow.1, h.eqs hrow.2⟩⟩
 
 end Egglog

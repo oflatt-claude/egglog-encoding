@@ -218,7 +218,8 @@ def inRuleset (R : RulesetName) (c : Command) : Command :=
   | .rule r => { c with command := .rule { r with ruleset := R } }
   | _ => c
 
-/-- Maintenance also participates in every source saturation round. -/
+/-- Outside the bounded source fragment, maintenance interleaves with source saturation.
+This does not complete rebuilding between its internal rounds. -/
 def allMaintenanceRules (P : Program) : List Command :=
   maintenanceRules P ++ P.saturateRulesets.flatMap fun R =>
     (maintenanceRules P).map (inRuleset R)

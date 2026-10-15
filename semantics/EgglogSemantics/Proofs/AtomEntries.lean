@@ -39,6 +39,13 @@ end Term
 
 namespace Entry.Valid
 
+theorem decl_spec {sig : Signature} {row : Entry} (h : row.Valid sig)
+    {decl : FnDecl} (hd : sig row.name = some decl) :
+    decl.merge ≠ none ∧ row.key.length = decl.arity ∧ row.value.length = decl.outArity := by
+  obtain ⟨dc, hdc, hm, hk, ho, _⟩ := h
+  obtain rfl := Option.some.inj (hdc.symm.trans hd)
+  exact ⟨hm, hk, ho⟩
+
 theorem column_values {sig : Signature} {row : Entry} (h : row.Valid sig) :
     ∀ t ∈ row.columns, t.IsValue sig := h.choose_spec.2.2.2.2
 

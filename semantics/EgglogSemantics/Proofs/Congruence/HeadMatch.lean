@@ -9,13 +9,16 @@ mutual
 /-- **An evaluation transports along `Signature.IsCtor` at the names it applies.** -/
 theorem eval_transport {s₁ s₂ : Signature} :
     ∀ (e : Expr) {ρ₁ ρ₂ : Env} {t : Term}, (∀ f ∈ e.fns, s₁.IsCtor f → s₂.IsCtor f) →
-      (∀ v ∈ e.vars, Env.lookup v ρ₁ = Env.lookup v ρ₂) → e.eval s₁ ρ₁ = some t →
+      (∀ v ∈ e.vars, Env.lookup v ρ₁ = Env.lookup v ρ₂) →
+      (∀ v ∈ e.vars, ∀ a, Env.lookup v ρ₁ = some a → a.IsValue s₁ → a.IsValue s₂) →
+      e.eval s₁ ρ₁ = some t →
       e.eval s₂ ρ₂ = some t
-  | .lit _, _, _, _, _, _, h => h
-  | .var v, _, _, _, _, hv, h => by
-      rw [Expr.eval] at h ⊢
-      rw [← hv v (by simp [Expr.vars]), h]
-  | .app f args, _, _, _, hc, hv, h => by
+  | .lit _, _, _, _, _, _, _, h => h
+  | .var v, _, _, t, _, hv, hval, h => by
+      obtain ⟨hl, ht⟩ := Option.filter_eq_some_iff.mp h
+      exact Option.filter_eq_some_iff.mpr
+        ⟨(hv v (by simp [Expr.vars])).symm.trans hl, hval v (by simp [Expr.vars]) t hl ht⟩
+  | .app f args, _, _, _, hc, hv, hval, h => by
       have hfn : ∀ g ∈ Expr.fnsList args, s₁.IsCtor g → s₂.IsCtor g :=
         fun g hg => hc g (by simp [Expr.fns, hg])
       have hvl : ∀ v ∈ Expr.varsList args, Env.lookup v _ = Env.lookup v _ :=
@@ -25,20 +28,23 @@ theorem eval_transport {s₁ s₂ : Signature} :
       · rw [if_pos hct] at h
         obtain ⟨ts, hts, hap⟩ := Option.map_eq_some_iff.mp h
         rw [if_pos (hc f (by simp [Expr.fns]) hct),
-          evalList_transport args hfn hvl hts]
+          evalList_transport args hfn hvl
+            (fun v hv => hval v (by simpa [Expr.vars] using hv)) hts]
         exact congrArg some hap
       · rw [if_neg hct] at h
         exact absurd h (by simp)
-  | .min a b, _, _, _, hc, hv, h => by
+  | .min a b, _, _, _, hc, hv, hval, h => by
       rw [Expr.eval_min, Option.bind_eq_some_iff] at h
       obtain ⟨x, hx, hmap⟩ := h
       obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
       rw [Expr.eval_min,
         eval_transport a (fun g hg => hc g (by simp [Expr.fns, hg]))
-          (fun w hw => hv w (by simp [Expr.vars, hw])) hx,
+          (fun w hw => hv w (by simp [Expr.vars, hw]))
+          (fun w hw => hval w (by simp [Expr.vars, hw])) hx,
         Option.bind_some,
         eval_transport b (fun g hg => hc g (by simp [Expr.fns, hg]))
-          (fun w hw => hv w (by simp [Expr.vars, hw])) hy,
+          (fun w hw => hv w (by simp [Expr.vars, hw]))
+          (fun w hw => hval w (by simp [Expr.vars, hw])) hy,
         Option.map_some]
 
 @[inherit_doc eval_transport]
@@ -46,50 +52,65 @@ theorem evalList_transport {s₁ s₂ : Signature} :
     ∀ (es : List Expr) {ρ₁ ρ₂ : Env} {ts : List Term},
       (∀ f ∈ Expr.fnsList es, s₁.IsCtor f → s₂.IsCtor f) →
       (∀ v ∈ Expr.varsList es, Env.lookup v ρ₁ = Env.lookup v ρ₂) →
+      (∀ v ∈ Expr.varsList es, ∀ a, Env.lookup v ρ₁ = some a → a.IsValue s₁ → a.IsValue s₂) →
       Expr.evalList s₁ es ρ₁ = some ts → Expr.evalList s₂ es ρ₂ = some ts
-  | [], _, _, _, _, _, h => h
-  | e :: es, _, _, _, hc, hv, h => by
+  | [], _, _, _, _, _, _, h => h
+  | e :: es, _, _, _, hc, hv, hval, h => by
       rw [Expr.evalList] at h ⊢
       obtain ⟨t, ht, hrest⟩ := Option.bind_eq_some_iff.mp h
       obtain ⟨ts, hts, hcons⟩ := Option.map_eq_some_iff.mp hrest
       rw [eval_transport e (fun g hg => hc g (by simp [Expr.fnsList, hg]))
-          (fun w hw => hv w (by simp [Expr.varsList, hw])) ht,
+          (fun w hw => hv w (by simp [Expr.varsList, hw]))
+          (fun w hw => hval w (by simp [Expr.varsList, hw])) ht,
         evalList_transport es (fun g hg => hc g (by simp [Expr.fnsList, hg]))
-          (fun w hw => hv w (by simp [Expr.varsList, hw])) hts]
+          (fun w hw => hv w (by simp [Expr.varsList, hw]))
+          (fun w hw => hval w (by simp [Expr.varsList, hw])) hts]
       exact congrArg some hcons
 
 end
 
 /-- The source match preserves every evaluation a scoped rule head performs. Since
 source heads have no let-bound globals, only the query's variables need transporting. -/
-theorem sourceMatch_evaluations {src tgt : Database} (hb : src.TermsBuild)
+theorem sourceMatch_evaluations {src tgt : Database} (hb : src.TermsBuild) (hw : src.WF)
     (hs : ViewsSound tgt src) (hd : tgt.Diag)
-    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) {q : Query} {n : Nat} {σ : Env}
+    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) (hdecl : ViewTables tgt) {q : Query} {n : Nat} {σ : Env}
     (hof : ∀ p ∈ q, p.OrderingFree) (hg : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∃ τ, ValidQuerySubst src q τ ∧
       ∀ (e : Expr), (∀ f ∈ e.fns, tgt.sig.IsCtor f ↔ src.sig.IsCtor f) →
         (∀ v ∈ e.vars, v ∈ Query.vars q) →
         e.eval tgt.sig (σ ++ tgt.env) = e.eval src.sig (τ ++ src.env) := by
-  obtain ⟨τ, hτ, _, hlookup⟩ := sourceMatch_of_encodedQuery hb hs hd hsc hof hg hk h
-  have hread := patternReads_of_encodeQuery hd hsc hof hk h
+  obtain ⟨τ, hτ, _, hlookup⟩ := sourceMatch_of_encodedQuery hb hw hs hd hsc hdecl hof hg hk h
+  have hread := patternReads_of_encodeQuery hd hsc hdecl hof hk h
   have henv : ∀ v ∈ Query.vars q,
       Env.lookup v (σ ++ tgt.env) = Env.lookup v (τ ++ src.env) := by
     intro v hv
     obtain ⟨p, hp, hvp⟩ := hk v hv
     obtain ⟨i, hi, _⟩ := mem_terms_of_patternArgVar hs (hread p hp) hvp
     rw [Env.lookup_append_of_some hi, hlookup v hv i hi]
+  have hvalue : ∀ v ∈ Query.vars q, ∃ i, Env.lookup v (σ ++ tgt.env) = some i ∧
+      i.IsValue src.sig ∧ i.IsValue tgt.sig := by
+    intro v hv
+    obtain ⟨p, hp, ha⟩ := hk v hv
+    obtain ⟨i, hi, him⟩ := mem_terms_of_patternArgVar hs (hread p hp) ha
+    exact ⟨i, Env.lookup_append_of_some hi, termsBuild_isValue hb hw him,
+      (h.mem_values (v, i) (Env.mem_of_lookup hi)).2⟩
   refine ⟨τ, hτ, fun e hf hv => ?_⟩
   have hvars := fun v hv' => henv v (hv v hv')
   cases ht : e.eval tgt.sig (σ ++ tgt.env) with
   | some t =>
-      exact (eval_transport e (fun f hm => (hf f hm).mp) hvars ht).symm
+      exact (eval_transport e (fun f hm => (hf f hm).mp) hvars (fun v hve t hl _ => by
+          obtain ⟨i, hi, hsrc, _⟩ := hvalue v (hv v hve)
+          exact Option.some.inj (hi.symm.trans hl) ▸ hsrc) ht).symm
   | none =>
       cases hs : e.eval src.sig (τ ++ src.env) with
       | none => rfl
       | some t =>
           have hback := eval_transport e (fun f hm => (hf f hm).mpr)
-            (fun v hm => (hvars v hm).symm) hs
+            (fun v hm => (hvars v hm).symm) (fun v hm t hl _ => by
+              obtain ⟨i, hi, _, htgt⟩ := hvalue v (hv v hm)
+              have he := Option.some.inj (hi.symm.trans ((hvars v hm).trans hl))
+              exact he ▸ htgt) hs
           rw [ht] at hback
           contradiction
 

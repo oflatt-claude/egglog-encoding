@@ -1,6 +1,6 @@
 # Encoding passes
 
-## Current migration: live tables and semantic saturation
+## Current compiler correctness: live tables and bounded source schedules
 
 The mathematical specification stores value equations and reflexive function atoms
 in one assertion set. Function entries are a derived view; declarations supply the
@@ -19,40 +19,44 @@ stores with the generated table shape. These are in `SameMeaning.lean`,
 `SourceMeaning.lean`, `Congruence/LiveLeaders.lean`, and
 `Congruence/LiveNormalization.lean` under `EgglogSemantics/Proofs`.
 
-Compiler correctness
-and termination proofs below were completed for the historical-row semantics at
-`aac8168`; they are being ported and are **not yet established for the new semantics**.
-The compiler now initializes UF self-parents and binds actual leaders in source-rule
-queries before constructing heads. No intern operation or implicit target equality
-has been introduced.
+The conditional compiler-correctness port is now checked for these semantics.
+`preservesObservations` in `AbstractComplete.lean` proves the original public contract:
+well-formed supported programs agree on success versus failed checks whenever both
+mathematical evaluations terminate. All representation, UF coverage, and rebuilding
+invariants are derived from actual executions. The proof uses the source's inferred-fact
+completion internally; neither the language nor the theorem uses an executable database.
 
-The next proof obligations are:
+`Tests.CongruenceCorrectness` constructs actual mathematical executions for a successful
+nonempty check, a dynamically failed check, and a rule round that creates the checked
+term. All satisfy `NoSaturate`; an empty-output compiler still violates the contract.
+The focused build passes (1,080 jobs). The strengthened theorem's 111-module local
+import closure contains no interpreter; its axiom audit uses only `propext`,
+`Classical.choice`, and `Quot.sound`.
 
-1. Derive `Live.GeneratedTables` and the UF declaration along the generated prelude
-   and compiled prefixes. `LiveState.lean` derives row shape from declarations and
-   finiteness, propagates it through actions and rounds, and constructs completed rounds.
-2. Port `AbstractState`, rebuilding, and query correspondence to current entries.
-   Soundness must use source `Infers` when a target structural spelling is represented
-   but not literally recorded in the source. Equation containment alone no longer
-   transports current table lookups across destructive merges.
-3. Bound meaning-changing saturation rounds using canonical leaders and the finite
-   vocabulary ordering. Then reassemble the end-to-end observation and termination
-   theorems. Full divergence equivalence remains open.
+Termination preservation is now checked for sources satisfying `Program.NoSaturate`.
+The source can use any finite number of `run` commands; each compiled action or run
+finishes `saturate @rebuild`. Neither source `CongrOn` nor the language's scheduling
+syntax changes. `LiveSaturation` proves finite-bound saturation despite destructive
+row replacement, and `LiveRebuildTermination` proves maintenance has such a bound.
+`AbstractTerminationComplete` composes these results into `preservesFiniteObservations`.
 
-Validation after unifying assertions: the focused Lean build passes (1,003 jobs),
-including source query transport, generated merge termination, and the live semantic
-regressions. `Tests.AtomStore` proves an actual minimum normalization, preserved scalar
-existence, successful retained-row matching, failed stale-row matching, and rejected
-row bindings. `Tests.MergeViews` still proves different UF lookups from two completed
-merge orders. Axiom audits use only `propext`, `Classical.choice`, and `Quot.sound`;
-the pure proof import closure contains no executable interpreter module.
+`Proofs/Source/Termination` derives source evaluation existence from well-formedness,
+constructor-only declarations, and `NoSaturate`. Thus `evaluations_exist` gives actual
+finite executions on both sides, and `observations_iff` equates their possible Boolean
+success/failure observations. This does not assert termination of every target merge
+schedule. The theorem and non-vacuity examples use mathematical databases only.
 
-`make check` passed formatting, linting, type checking, documentation checks, and all
-172 Python tests. Rust tests hit the host's thread limit (`Resource temporarily
-unavailable`), including a retry with reduced concurrency. `make -k lean-check
-lean-difftest` still fails in the remaining legacy compiler/interpreter proof port;
-the differential runner therefore does not build. This is an incomplete compiler
-proof checkpoint, not a passing full Lean build or an interpreter-correctness claim.
+Source saturation is deliberately outside this strengthened theorem. The optional
+flattened encoding interleaves maintenance with source rules, whereas Rust recursively
+inserts completed rebuilding after each scheduled run. `Tests.LeaderGrowth` records
+the nested-head growth trace and proves that its program violates `NoSaturate`.
+No nested schedules are needed for the paper's bounded source fragment.
+
+`make -k lean-check lean-difftest` remains blocked on the older `SourceReads` and
+interpreter proofs. These are outside the compiler theorem's import closure.
+`make check`, retried with serial tests and CPU affinity, passes the nits and all
+172 Python tests; Rust tests still encounter the host thread limit in explicit
+multi-threaded cases. No generated snapshot replacements are accepted.
 
 
 ## Prior proof milestone and continuing scope
@@ -181,7 +185,8 @@ whether a row changed, so no special identity-column setting is needed.
 
 Maintenance rules compress paths, propagate changed output ids through views, and re-key
 child columns. Rebuilding runs after each source action and run. Copies of the maintenance
-rules join each source saturation ruleset, so rebuilding also happens between its rounds.
+rules also join source saturation rulesets outside the paper's `NoSaturate` fragment;
+those copies interleave maintenance without completing it between rounds.
 
 `Congruence.compile` returns commands with rule origins. Source rules are tagged with
 their original command index; generated rules identify path compression, output

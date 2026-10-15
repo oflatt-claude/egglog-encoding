@@ -33,6 +33,7 @@ import EgglogSemantics.Proofs.Congruence.LiveLeaders
 import EgglogSemantics.Proofs.Congruence.LiveNormalization
 import EgglogSemantics.Proofs.Congruence.LiveState
 import EgglogSemantics.Tests.LiveCompiler
+import EgglogSemantics.Tests.LeaderGrowth
 import EgglogSemantics.Tests.LiveSemantics
 import EgglogSemantics.Tests.MergeViews
 

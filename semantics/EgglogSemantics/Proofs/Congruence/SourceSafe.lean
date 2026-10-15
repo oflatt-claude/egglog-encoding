@@ -1,6 +1,7 @@
 import EgglogSemantics.Proofs.Congruence.EntryShape
 import EgglogSemantics.Proofs.Congruence.SourceState
 import EgglogSemantics.Proofs.SignatureLookup
+import EgglogSemantics.Proofs.Completion
 
 /-! Source values do not contain generated entries. -/
 
@@ -19,6 +20,16 @@ theorem sourceSafe_of_names {src : Database} (hb : src.TermsBuild)
       simp [viewName, String.isPrefixOf, String.startsWith_string_iff, String.toList_append])
   · obtain ⟨dc, hdc, -⟩ := hb _ _ ht
     exact hn _ dc hdc (by decide +kernel)
+
+/-- Inferred constructor spellings still avoid every generated table name. -/
+theorem sourceSafe_completion {src : Database} (hw : src.WF) (hs : src.StoreOk)
+    (hc : src.sig.AllConstructors)
+    (hn : ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f) :
+    SourceSafe src.completion := by
+  apply sourceSafe_of_names (src := src.completion) ?_ hn
+  intro f cs ht
+  exact (Term.isValue_app_iff.mp
+    ((hs.completion hw hc).values_of_allConstructors hc _ ht)).1
 
 /-- A source execution cannot declare names from the generated namespace. -/
 theorem sourceNames_of_programStep {P p : Program} {src : Database}

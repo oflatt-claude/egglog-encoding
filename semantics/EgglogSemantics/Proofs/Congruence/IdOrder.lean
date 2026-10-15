@@ -9,6 +9,27 @@ def lowerId (old new : Term) : Term := if Term.blt new old then new else old
 
 def upperId (old new : Term) : Term := if Term.blt new old then old else new
 
+/-- The reflexive order used to track outputs through destructive minimum merges. -/
+def IdLe (a b : Term) : Prop := a = b ∨ Term.blt a b = true
+
+theorem IdLe.refl (a : Term) : IdLe a a := Or.inl rfl
+
+theorem IdLe.trans {a b c : Term} (hab : IdLe a b) (hbc : IdLe b c) : IdLe a c := by
+  rcases hab with rfl | hab
+  · exact hbc
+  rcases hbc with rfl | hbc
+  · exact Or.inr hab
+  exact Or.inr (Term.blt_trans a b c hab hbc)
+
+theorem IdLe.antisymm {a b : Term} (hab : IdLe a b) (hba : IdLe b a) : a = b := by
+  rcases hab with rfl | hab
+  · rfl
+  rcases hba with hba | hba
+  · exact hba.symm
+  have hn := Term.blt_asymm a b hab
+  rw [hn] at hba
+  contradiction
+
 theorem ids_paired (old new : Term) :
     (upperId old new = old ∧ lowerId old new = new) ∨
     (upperId old new = new ∧ lowerId old new = old) := by
@@ -85,10 +106,12 @@ theorem mergeEnv_pair (old new : Term) :
     mergeEnv ["old"] ["new"] [old] [new] =
       [("old", old), ("new", new)] := rfl
 
-theorem eval_merge_min {sig : Signature} {old new : Term} :
+theorem eval_merge_min {sig : Signature} {old new : Term}
+    (hold : old.IsValue sig) (hnew : new.IsValue sig) :
     (Expr.min (.var "old") (.var "new")).eval sig (mergeEnv ["old"] ["new"] [old] [new]) =
       some (lowerId old new) := by
-  simp [Expr.eval, mergeEnv_pair, Env.lookup, lowerId, Term.least]
+  simp [Expr.eval, mergeEnv_pair, Env.lookup, Option.filter_some, hold, hnew,
+    lowerId, Term.least]
 
 
 end Egglog.Congruence

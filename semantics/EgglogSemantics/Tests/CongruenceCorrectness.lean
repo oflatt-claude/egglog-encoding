@@ -1,4 +1,4 @@
-import EgglogSemantics.Proofs.Congruence.AbstractComplete
+import EgglogSemantics.Proofs.Congruence.AbstractTerminationComplete
 
 /-! Non-vacuity checks for the mathematical compiler theorem. These witnesses use
 `Database`, `CmdStep`, and `Eval` directly; no interpreter correctness bridge is used. -/
@@ -26,6 +26,8 @@ private theorem safe_name : ¬ "@".isPrefixOf "C" := by
   decide
 
 theorem success_wellFormed : successProgram.WellFormed := by decide
+theorem success_noSaturate : successProgram.NoSaturate := by
+  simp [Program.NoSaturate, successProgram, Cmd.NoSaturate]
 theorem success_fragment : successProgram.Fragment := by
   refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide, by decide⟩
   intro n hn
@@ -34,6 +36,8 @@ theorem success_fragment : successProgram.Fragment := by
   exact safe_name
 
 theorem failure_wellFormed : failureProgram.WellFormed := by decide
+theorem failure_noSaturate : failureProgram.NoSaturate := by
+  simp [Program.NoSaturate, failureProgram, Cmd.NoSaturate]
 theorem failure_fragment : failureProgram.Fragment := by
   refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide, by decide⟩
   intro n hn
@@ -57,21 +61,46 @@ private theorem no_query_of_empty {d : Database} (hd : d.eqs = ∅) {q : Query}
           | expr hw _ _ => simp [Database.terms_empty_of_eqs_empty hd] at hw
           | eq hw _ _ _ _ => simp [Database.terms_empty_of_eqs_empty hd] at hw
 
+private theorem empty_normal {d : Database} (hd : d.eqs = ∅) : MergeNormal d := by
+  intro row hr
+  exact (hd ▸ hr.2).elim
+
+private theorem constructors_normal {d : Database} (hc : d.sig.AllConstructors) :
+    MergeNormal d := by
+  intro row hr
+  obtain ⟨dc, hd, hm, _⟩ := hr.1
+  have hh := hc row.name
+  rw [Signature.mergeOf, hd, Option.bind_some] at hh
+  exact (hm hh).elim
+
+private theorem source_ctors : sourceDeclared.sig.AllConstructors := by
+  intro f
+  by_cases hf : f = "C"
+  · subst f; rfl
+  · simp [sourceDeclared, Database.empty, Signature.mergeOf, hf]
+
 private theorem source_check : QueryHolds sourceBuilt constructorQuery := by
   obtain ⟨σ, hσ, _⟩ := Abstract.validQuerySubst_of_flatReads
     (d := sourceBuilt) (ρ := []) (q := constructorQuery)
     (by simp [Env.lookup]) (by
       intro p hp
       obtain rfl := List.mem_singleton.mp hp
-      exact .entry (by rfl) rfl (Database.mem_addTerm _ _))
+      exact .entry ⟨ctorDecl 0, rfl, Or.inl rfl⟩ rfl (Database.mem_addTerm _ _))
   exact ⟨σ, hσ⟩
 
+private theorem source_decl : CmdStep Database.empty (.decl "C" (ctorDecl 0)) sourceDeclared :=
+  .of_reach rfl (empty_normal rfl)
+
+private theorem source_action :
+    CmdStep sourceDeclared (.action (.expr constructorExpr)) sourceBuilt :=
+  .of_reach rfl (constructors_normal source_ctors)
+
 theorem source_success : Eval Database.empty successProgram (.ok sourceBuilt) := by
-  exact .cons (.ok (.of_reach rfl))
-    (.cons (.ok (.of_reach rfl)) (.cons (.ok ⟨source_check, rfl⟩) .nil))
+  exact .cons (.ok source_decl)
+    (.cons (.ok source_action) (.cons (.ok ⟨source_check, rfl⟩) .nil))
 
 theorem source_failure : Eval Database.empty failureProgram .checkFailed := by
-  exact .cons (.ok (.of_reach rfl))
+  exact .cons (.ok source_decl)
     (.fail (.checkFailed (no_query_of_empty (d := sourceDeclared) rfl (by decide))))
 
 def targetSetup : Program :=
@@ -85,140 +114,138 @@ def targetDeclared : Database :=
         "C" (some (ctorDecl 0))) (viewName "C") (some (tableDecl 0)),
     eqs := ∅, env := [], rules := insert (eclassRule "C" 0) (insert pathCompressRule ∅) }
 
-def targetBuilt : Database := targetDeclared.addTerm view
-
 private theorem target_setup : ProgramStep Database.empty targetSetup targetDeclared := by
-  exact .cons (.of_reach rfl) (.cons (.of_reach rfl) (.cons (.of_reach rfl)
-    (.cons (.of_reach rfl) (.cons (.of_reach rfl) .nil))))
+  exact .cons (.of_reach rfl (empty_normal rfl))
+    (.cons (.of_reach rfl (empty_normal rfl)) (.cons (.of_reach rfl (empty_normal rfl))
+      (.cons (.of_reach rfl (empty_normal rfl)) (.cons (.of_reach rfl (empty_normal rfl)) .nil))))
 
 private theorem success_encoding : encode successProgram = targetSetup ++
-    [.action (.expr (.app (viewName "C") [constructorExpr])),
-     .saturate rebuildRuleset, .check viewQuery] := by rfl
+    (encodeCmd 1 (.action (.expr constructorExpr))).map Command.command ++
+      [.check viewQuery] := by rfl
 
 private theorem failure_encoding : encode failureProgram = targetSetup ++ [.check viewQuery] :=
   by rfl
 
-private theorem target_terms : targetBuilt.terms = {view, ctorTerm} := by
-  have he : targetDeclared.terms = ∅ := Database.terms_empty_of_eqs_empty rfl
-  simp [targetBuilt, Database.addTerm_terms, he, view, ctorTerm]
-
-private theorem target_diagonal : targetBuilt.Diag :=
-  (show targetDeclared.Diag from fun _ h => h.elim).addTerm view
-
-private theorem target_noUF (cols : List Term) :
-    Term.app ufName cols ∉ targetBuilt.terms := by
-  rw [target_terms]
-  simp [view, ctorTerm, ufName, viewName]
-
-private theorem target_noUF_match (es : List Expr) (σ : Env) :
-    ¬ Matches targetBuilt (.expr (.app ufName es)) σ := by
-  intro h
-  cases h with
-  | expr hw he hc =>
-      obtain ⟨cols, _, rfl⟩ := Expr.evalAtom_app_inv he
-      exact target_noUF cols ((congOn_eq_of_diag target_diagonal hc) ▸ hw)
-
-private theorem target_noUF_query {q : Query} {σ : Env} {es : List Expr}
-    (hp : Pattern.expr (.app ufName es) ∈ q) : ¬ ValidQuerySubst targetBuilt q σ := by
-  rintro ⟨σs, hσs, _⟩
-  obtain ⟨ρ, _, hρ⟩ := hσs.flip.exists_left hp
-  exact target_noUF_match es ρ hρ.2
-
-private theorem target_merges_saturated : MergeNormal targetBuilt := by
-  intro d h
-  cases h with
-  | @collide post f decl as bs a b vs oldVars newVars body res
-      hf hm hconf _ _ hleft hright hk _ _ =>
-      have hab : as = bs := CongList.eq_of_diag target_diagonal hk
-      subst bs
-      rw [target_terms] at hleft hright
-      simp only [Set.mem_insert_iff, Set.mem_singleton_iff, view, ctorTerm,
-        Term.app.injEq] at hleft hright
-      rcases hleft with ⟨rfl, hcols⟩ | ⟨rfl, _⟩
-      · have hdecl : decl = tableDecl 0 := by simpa [targetBuilt, targetDeclared] using hf.symm
-        subst decl
-        have hm' := Option.some.inj hm
-        injection hm' with _ _ hbody _
-        subst body
-        rcases hright with ⟨_, hcols'⟩ | ⟨hbad, _⟩
-        · have hab : a = b := List.append_cancel_left (hcols.trans hcols'.symm)
-          subst b
-          exact (tableDecl_no_self_conflict 0 a hconf).elim
-        · simp [viewName] at hbad
-      · have hdecl : decl = ctorDecl 0 := by
-          simpa [targetBuilt, targetDeclared, viewName, ufName] using hf.symm
-        subst decl
-        simp [ctorDecl] at hm
-
-private theorem target_saturated : RunSaturated rebuildRuleset targetBuilt := by
-  refine ⟨(runRules_eq_self_iff _ _).mpr ?_, target_merges_saturated⟩
-  intro r hr _ d hd
-  obtain ⟨σ, hσ, _⟩ := hd
-  have hr' : r = eclassRule "C" 0 ∨ r = pathCompressRule := by
-    simpa [targetBuilt, targetDeclared] using hr
-  rcases hr' with rfl | rfl
-  · exact (target_noUF_query (es := [.var "@e", .var "@x"])
-      (by simp [eclassRule]) hσ).elim
-  · exact (target_noUF_query (es := [.var "@a", .var "@b"])
-      (by simp [pathCompressRule]) hσ).elim
-
-private theorem target_check : QueryHolds targetBuilt viewQuery := by
-  have hc : ctorTerm ∈ targetBuilt.terms := by rw [target_terms]; simp
-  obtain ⟨σ, hσ, _⟩ := Abstract.validQuerySubst_of_flatReads
-    (d := targetBuilt) (ρ := [(freshVar 0, ctorTerm)]) (q := viewQuery)
-    (by
-      intro v i hi
-      simp only [Env.lookup] at hi
-      split at hi
-      · exact Option.some.inj hi ▸ hc
-      · simp at hi)
-    (by
-      intro p hp
-      obtain rfl := List.mem_singleton.mp hp
-      exact .entry (by rfl) (by rfl) (Database.mem_addTerm _ _))
-  exact ⟨σ, hσ⟩
-
-theorem target_success : Eval Database.empty (encode successProgram) (.ok targetBuilt) := by
+/-- The compiled writes and rebuilding terminate before the nonempty check. -/
+theorem target_success : ∃ d, Eval Database.empty (encode successProgram) (.ok d) := by
+  have hp : ProgramStep Database.empty [.decl "C" (ctorDecl 0)] sourceDeclared :=
+    .cons source_decl .nil
+  have htp : ProgramStep Database.empty
+      ((encodePrelude successProgram ++ encodeCmds [.decl "C" (ctorDecl 0)] 0).map
+        Command.command) targetDeclared := target_setup
+  have hsub : ∀ c ∈ [.decl "C" (ctorDecl 0)], c ∈ successProgram := by
+    intro c hc; obtain rfl := List.mem_singleton.mp hc; simp [successProgram]
+  have hrules := Live.rulesEncoded_of_prefix hp htp
+  obtain ⟨d, hd⟩ := Live.global_command_exists success_fragment hsub hp
+    (by simp [successProgram]) source_action (Live.prefix_runtime success_fragment htp)
+    (empty_normal rfl) (Live.prefix_sig htp) rfl
+    (hrules.rebuild_only success_fragment hp hsub) 1
+  have hsrc : ProgramStep Database.empty
+      [.decl "C" (ctorDecl 0), .action (.expr constructorExpr)] sourceBuilt :=
+    .cons source_decl (.cons source_action .nil)
+  have htgt := Abstract.compiled_prefix_step htp hd
+  have hcheck : QueryHolds d viewQuery :=
+    (Abstract.checkAgreement success_fragment
+      [.decl "C" (ctorDecl 0), .action (.expr constructorExpr)] constructorQuery []
+      sourceBuilt d rfl hsrc htgt).mp source_check
+  refine ⟨d, ?_⟩
   rw [success_encoding]
-  apply Eval.append_of_ok target_setup
-  exact .cons (.ok (.of_reach rfl))
-    (.cons (.ok (.of_reach ⟨.refl, target_saturated⟩))
-      (.cons (.ok ⟨target_check, rfl⟩) .nil))
+  exact Eval.append_of_ok (target_setup.append hd) (.cons (.ok ⟨hcheck, rfl⟩) .nil)
 
 theorem target_failure : Eval Database.empty (encode failureProgram) .checkFailed := by
   rw [failure_encoding]
   apply Eval.append_of_ok target_setup
   exact .fail (.checkFailed (no_query_of_empty (d := targetDeclared) rfl (by decide)))
 
-/-- Both premises of the correctness theorem are inhabited for a successful check. -/
+/-- The theorem's premises include a constructed value and a successful nonempty check. -/
 theorem successful_instance :
-    successProgram.WellFormed ∧ successProgram.Fragment ∧
+    successProgram.WellFormed ∧ successProgram.Fragment ∧ successProgram.NoSaturate ∧
     ∃ source target, Eval Database.empty successProgram source ∧
       Eval Database.empty (encode successProgram) target ∧
       source.succeeded = true ∧ target.succeeded = true := by
-  refine ⟨success_wellFormed, success_fragment, .ok sourceBuilt, .ok targetBuilt,
-    source_success, target_success, rfl, ?_⟩
-  exact (preservesObservations successProgram success_wellFormed success_fragment _ _
-    source_success target_success).symm
+  obtain ⟨d, hd⟩ := target_success
+  exact ⟨success_wellFormed, success_fragment, success_noSaturate, .ok sourceBuilt, .ok d,
+    source_success, hd, rfl, rfl⟩
 
 /-- Both premises are also inhabited for genuine dynamic check failure. -/
 theorem failing_instance :
-    failureProgram.WellFormed ∧ failureProgram.Fragment ∧
+    failureProgram.WellFormed ∧ failureProgram.Fragment ∧ failureProgram.NoSaturate ∧
     ∃ source target, Eval Database.empty failureProgram source ∧
       Eval Database.empty (encode failureProgram) target ∧
       source.succeeded = false ∧ target.succeeded = false := by
-  refine ⟨failure_wellFormed, failure_fragment, .checkFailed, .checkFailed,
+  refine ⟨failure_wellFormed, failure_fragment, failure_noSaturate, .checkFailed, .checkFailed,
     source_failure, target_failure, rfl, ?_⟩
   exact (preservesObservations failureProgram failure_wellFormed failure_fragment _ _
     source_failure target_failure).symm
 
 /-- The finite-outcome contract rejects a compiler that simply erases every program. -/
 theorem rejects_empty_compiler : ¬ (∀ P : Program, P.WellFormed → P.Fragment →
+    P.NoSaturate →
     ∀ source target : Result, Eval Database.empty P source →
       Eval Database.empty ([] : Program) target → source.succeeded = target.succeeded) := by
   intro h
-  have heq := h failureProgram failure_wellFormed failure_fragment .checkFailed
+  have heq := h failureProgram failure_wellFormed failure_fragment failure_noSaturate .checkFailed
     (.ok Database.empty) source_failure .nil
   contradiction
+
+-- These obtain target executions from the termination theorem itself.
+theorem finite_success : ∃ target, Eval Database.empty (encode successProgram) target ∧
+    target.succeeded = true := by
+  obtain ⟨target, ht, he⟩ := preservesFiniteObservations successProgram success_wellFormed
+    success_fragment success_noSaturate _ source_success
+  exact ⟨target, ht, he.symm⟩
+
+theorem finite_failure : ∃ target, Eval Database.empty (encode failureProgram) target ∧
+    target.succeeded = false := by
+  obtain ⟨target, ht, he⟩ := preservesFiniteObservations failureProgram failure_wellFormed
+    failure_fragment failure_noSaturate _ source_failure
+  exact ⟨target, ht, he.symm⟩
+
+private def createRule : Rule := ⟨[], [.expr constructorExpr], "R"⟩
+private def roundProgram : Program :=
+  [.decl "C" (ctorDecl 0), .rule createRule, .run "R", .check constructorQuery]
+private def sourceRule : Database :=
+  { sourceDeclared with rules := insert createRule sourceDeclared.rules }
+private def sourceRan : Database := RunRules "R" sourceRule
+
+private theorem round_wellFormed : roundProgram.WellFormed := by decide
+private theorem round_noSaturate : roundProgram.NoSaturate := by
+  simp [Program.NoSaturate, roundProgram, Cmd.NoSaturate]
+private theorem round_fragment : roundProgram.Fragment := by
+  refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide, by decide⟩
+  intro n hn
+  change n ∈ ["C", "R"] at hn
+  rcases List.mem_cons.mp hn with rfl | hn
+  · exact safe_name
+  · obtain rfl := List.mem_singleton.mp hn
+    rw [String.isPrefixOf, String.startsWith_string_iff]
+    decide
+
+private theorem source_round_success : Eval Database.empty roundProgram (.ok sourceRan) := by
+  have hfire : evalLocalActions sourceRule createRule.actions [] =
+      some (sourceRule.addTerm ctorTerm) := rfl
+  have hcontains : (sourceRule.addTerm ctorTerm).Contained sourceRan :=
+    Database.Contained.mem_sUnion ⟨createRule, by simp [sourceRule], rfl,
+      [], ValidQuerySubst.nil_iff.mpr rfl, hfire⟩
+  have hcheck : QueryHolds sourceRan constructorQuery := by
+    obtain ⟨σ, hσ, _⟩ := Abstract.validQuerySubst_of_flatReads
+      (d := sourceRan) (ρ := []) (q := constructorQuery)
+      (by simp [Env.lookup]) (by
+        intro p hp
+        obtain rfl := List.mem_singleton.mp hp
+        exact .entry ⟨ctorDecl 0, rfl, Or.inl rfl⟩ rfl
+          (hcontains.terms (Database.mem_addTerm _ _)))
+    exact ⟨σ, hσ⟩
+  exact .cons (.ok source_decl)
+    (.cons (.ok (.of_reach rfl (empty_normal rfl)))
+      (.cons (.ok (.of_reach rfl (constructors_normal source_ctors)))
+        (.cons (.ok ⟨hcheck, rfl⟩) .nil)))
+
+-- One source round creates the checked term; compiled rebuilding must terminate too.
+theorem finite_rule_round : ∃ target, Eval Database.empty (encode roundProgram) target ∧
+    target.succeeded = true := by
+  obtain ⟨target, ht, he⟩ := preservesFiniteObservations roundProgram round_wellFormed
+    round_fragment round_noSaturate _ source_round_success
+  exact ⟨target, ht, he.symm⟩
 
 end Egglog.Tests.CongruenceCorrectness

@@ -8,7 +8,7 @@ namespace Egglog
 the pre-state, and so is every merge step. This is what carries `UnionsInv.rules` across a
 firing command, where the source's rules are the ones the target already holds encodings of. -/
 theorem runStep_rules {R : RulesetName} {db db' : Database} (h : RunStep R db db') :
-    db'.rules = db.rules := (MergeClosure.envRules h).2
+    db'.rules = db.rules := (MergeClosure.envRules h.1).2
 
 @[inherit_doc runStep_rules]
 theorem runReach_rules {R : RulesetName} {db d : Database}
@@ -19,13 +19,13 @@ theorem runReach_rules {R : RulesetName} {db d : Database}
 
 theorem cmdStep_rules_of_run {sd sd' : Database} {R : RulesetName}
     (h : CmdStep sd (.run R) sd') : sd'.rules = sd.rules := by
-  obtain ⟨d, hreach, hcl⟩ := h
+  obtain ⟨d, hreach, hcl⟩ := h.reach
   rw [(MergeClosure.envRules hcl).2, show d = RunRules R sd from hreach]
   rfl
 
 theorem cmdStep_rules_of_saturate {sd sd' : Database} {R : RulesetName}
     (h : CmdStep sd (.saturate R) sd') : sd'.rules = sd.rules :=
-  runReach_rules (cmdStep_saturate_iff.mp h).1
+  runReach_rules (cmdStep_saturate_iff.mp h).reach
 
 /-- A source command changes rule membership only when it registers a rule. -/
 theorem CmdStep.mem_rules_iff {src post : Database} {c : Cmd} (h : CmdStep src c post)
@@ -44,7 +44,7 @@ theorem CmdStep.mem_rules_iff {src post : Database} {c : Cmd} (h : CmdStep src c
       subst hm
       simp [RunRules, Database.sUnion_rules]
   | saturate R =>
-      rw [runReach_rules (show SaturateReach R src mid from hm).1]
+      rw [runReach_rules (show SaturateReach R src mid from hm).reach]
       simp
   | check q => rw [(show QueryHolds src q ∧ mid = src from hm).2]; simp
 

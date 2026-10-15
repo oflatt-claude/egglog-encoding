@@ -35,10 +35,11 @@ theorem rebuildSubst_key {cs : List Term} {e x : Term} (i : Nat) (hi : i < cs.le
   exact Env.lookup_zip _ _ (length_rebuildVarNames _) (rebuildVarNames_nodup _) i
     (by simpa only [length_rebuildVarNames] using hi) hi
 
-theorem eval_rebuildVars {sig : Signature} (cs : List Term) (e x : Term) :
+theorem eval_rebuildVars {sig : Signature} (cs : List Term) (e x : Term)
+    (hvalues : ∀ c ∈ cs, c.IsValue sig) :
     Expr.evalList sig (rebuildVars cs.length) (rebuildSubst cs e x) = some cs := by
   rw [rebuildVars_eq_map]
-  apply Expr.evalList_map_var _ _ _ (length_rebuildVarNames _)
+  apply Expr.evalList_map_var _ _ _ (length_rebuildVarNames _) ?_ hvalues
   intro i hi hi'
   rw [getElem_rebuildVarNames hi']
   exact rebuildSubst_key i hi'

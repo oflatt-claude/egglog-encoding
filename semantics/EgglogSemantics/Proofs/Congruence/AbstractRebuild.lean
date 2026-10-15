@@ -3,8 +3,8 @@ import EgglogSemantics.Proofs.Finite
 import EgglogSemantics.Proofs.Order
 import EgglogSemantics.Proofs.Congruence.Correspond
 
-/-! Rebuilding over mathematical databases. Retained rows suffice: collisions join their
-outputs, and maintenance propagates those joins. There is no live-row index. -/
+/-! Rebuilding over mathematical databases. Closure refers to current rows and must
+be established after a completed maintenance round and destructive normalization. -/
 
 namespace Egglog.Congruence.Abstract
 
@@ -54,7 +54,7 @@ structure Rebuilt (d : Database) : Prop where
   descend : ∀ a b, d.Out ufName [a] [b] → b = a ∨ Term.blt b a = true
 
 private instance : IsStrictOrder Term (fun a b => Term.blt a b = true) where
-  irrefl := fun a h => by simpa [h] using Term.blt_asymm a a h
+  irrefl := fun a h => by simp at h
   trans := fun a b c => Term.blt_trans a b c
 
 theorem Rebuilt.exists_root {d : Database} (h : Rebuilt d) (a : Term) :
@@ -64,7 +64,8 @@ theorem Rebuilt.exists_root {d : Database} (h : Rebuilt d) (a : Term) :
     intro b hb
     rcases hb with rfl | ⟨cs, _, ht⟩
     · exact Set.mem_insert _ _
-    · exact Set.mem_insert_of_mem _ (Database.mem_terms_of_arg h.wf ht (by simp))
+    · exact Set.mem_insert_of_mem _
+        (Database.mem_terms_of_arg h.wf (Cong.assert ht.2).mem_left (by simp [Entry.columns]))
   have hw := Set.wellFoundedOn_iff.mp
     (hf.wellFoundedOn (r := fun x y => Term.blt x y = true))
   obtain ⟨b, hb, hmin⟩ := hw.has_min {b | Parent d a b} ⟨a, .refl d a⟩
