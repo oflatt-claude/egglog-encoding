@@ -1,4 +1,5 @@
 import EgglogSemantics.Proofs.Congruence.AbstractTerminationCommands
+import EgglogSemantics.Proofs.Congruence.LiveRebuildStrongTermination
 import EgglogSemantics.Proofs.Source.Termination
 
 /-! Termination and observation preservation for bounded source schedules. -/

@@ -3,6 +3,31 @@ import EgglogSemantics.Proofs.Eval
 
 namespace Egglog.SourceProof
 
+mutual
+
+theorem valueOk_isValue {sig : Signature} : ∀ {t : Term},
+    valueOk sig t = true → t.IsValue sig
+  | .lit _, _ => rfl
+  | .app f args, h => by
+      simp only [valueOk, Option.any_eq_true, Bool.and_eq_true_iff, beq_iff_eq] at h
+      obtain ⟨d, hd, h⟩ := h
+      exact Term.IsValue.app ⟨d, hd, Option.isNone_iff_eq_none.mp h.1.1⟩
+        (valuesOk_isValue h.2)
+
+theorem valuesOk_isValue {sig : Signature} : ∀ {ts : List Term},
+    valuesOk sig ts = true → ∀ t ∈ ts, t.IsValue sig
+  | [], _ => by simp
+  | t :: ts, h => by
+      simp only [valuesOk, Bool.and_eq_true_iff] at h
+      have ht := valueOk_isValue h.1
+      have hts := valuesOk_isValue h.2
+      intro u hu
+      rcases List.mem_cons.mp hu with rfl | hu
+      · exact ht
+      · exact hts u hu
+
+end
+
 def Claim.Holds (db : Database) (c : Claim) : Prop := Cong db c.lhs c.rhs
 
 theorem Claim.Holds.mono {A B : Database} (h : A.Contained B) {c : Claim}

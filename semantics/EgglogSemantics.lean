@@ -21,9 +21,13 @@ import EgglogSemantics.Tests.Congruence
 -- Source proof checking and existence soundness.
 import EgglogSemantics.Proofs.SourceProof.Counterexamples
 import EgglogSemantics.Tests.SourceProof
+import EgglogSemantics.Tests.SourceProofCorrectness
 
 -- Function provenance and checking against the relational program.
 import EgglogSemantics.Tests.Provenance
+import EgglogSemantics.Proofs.Provenance.Counterexamples
+import EgglogSemantics.Proofs.Provenance.Countermodel
+import EgglogSemantics.Proofs.Provenance.DistinctMerge
 import EgglogSemantics.Tests.Resugar
 
 -- Current-table specification migration: pure foundations and executable regressions.

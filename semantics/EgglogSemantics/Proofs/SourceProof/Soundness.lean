@@ -48,7 +48,7 @@ theorem checkNode_supported {P : Program} {C : Context} {db : Database}
           obtain ⟨fs, hfs, h⟩ := Option.bind_eq_some_iff.mp h
           have hc : c ∈ fs := by simpa using h
           have hr : Cmd.rule r ∈ P := List.mem_of_getElem? hcmd
-          refine ruleFacts_supported hs hw hC hclosed hr (sourceOk_rule hok hr) ?_ hfs c hc
+          refine ruleFacts_supported hs hw hC hclosed hok hr ?_ hfs c hc
           intro d hd
           obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hd
           exact hp q hq
@@ -125,8 +125,15 @@ theorem check_supported {P : Program} {db : Database} {pf : Proof} {c : Claim}
     split at h
     · rename_i hv
       cases Option.some.inj h
-      exact valid_supported hs hw (contextOf_sound hC hs) hclosed hok' pf hv
+      exact valid_supported hs hw (contextOf_sound hC hs (sourceOk_ctors hok')) hclosed hok' pf hv
     · contradiction
+
+/-- Checking proves an inferred source equality, even at unstored constructor spellings. -/
+theorem check_infers {P : Program} {db : Database} {pf : Proof} {c : Claim}
+    (hs : ProgramStep Database.empty P db) (hw : db.WF)
+    (hclosed : ∀ R, RunSaturated R db) (h : check P pf = some c) :
+    db.Infers c.lhs c.rhs :=
+  (check_supported hs hw hclosed h).infers hw
 
 /-- On endpoints held by the source, checking implies its original congruence relation. -/
 theorem check_sound {P : Program} {db : Database} {pf : Proof} {c : Claim}

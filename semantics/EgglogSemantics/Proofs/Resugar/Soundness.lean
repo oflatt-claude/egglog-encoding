@@ -46,4 +46,16 @@ theorem lift_sound {P : Program} {C : SourceProof.Context} {db : Database}
     Cong db claim.lhs claim.rhs :=
   (lift_supported hs hw hclosed hC hf hc h).holds hw hl hr
 
+/-- Lifted claims have represented existence, even for spellings absent from the store. -/
+theorem lift_infers {P : Program} {C : SourceProof.Context} {db : Database}
+    {input : Provenance.Proof} {output : SourceProof.Proof}
+    {fact : Term} {claim : SourceProof.Claim}
+    (hs : ProgramStep Database.empty P db) (hw : db.WF)
+    (hclosed : ∀ R, RunSaturated R db)
+    (hC : SourceProof.contextOf P = some C)
+    (hf : Provenance.check (Congruence.encode P) input = some fact)
+    (hc : factClaim P C fact = some claim) (h : lift P input = some output) :
+    db.Infers claim.lhs claim.rhs :=
+  (lift_supported hs hw hclosed hC hf hc h).infers hw
+
 end Egglog.Resugar

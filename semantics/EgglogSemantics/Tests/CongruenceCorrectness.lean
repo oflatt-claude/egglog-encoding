@@ -248,4 +248,79 @@ theorem finite_rule_round : ∃ target, Eval Database.empty (encode roundProgram
     round_fragment round_noSaturate _ source_round_success
   exact ⟨target, ht, he.symm⟩
 
+private def a : Term := .app "A" []
+private def b : Term := .app "B" []
+private def fa : Term := .app "F" [a]
+private def fb : Term := .app "F" [b]
+private def queryFB : Query := [.expr (.app "F" [.app "B" []])]
+
+/-- The final check needs congruence: only `F(A)` was built. -/
+def congruenceProgram : Program :=
+  [.decl "A" (ctorDecl 0), .decl "B" (ctorDecl 0), .decl "F" (ctorDecl 1),
+   .action (.union (.app "A" []) (.app "B" [])),
+   .action (.expr (.app "F" [.app "A" []])), .check queryFB]
+
+private def declaredA : Database :=
+  { Database.empty with sig := Function.update Database.empty.sig "A" (some (ctorDecl 0)) }
+private def declaredAB : Database :=
+  { declaredA with sig := Function.update declaredA.sig "B" (some (ctorDecl 0)) }
+private def declaredABF : Database :=
+  { declaredAB with sig := Function.update declaredAB.sig "F" (some (ctorDecl 1)) }
+private def unitedAB : Database := declaredABF.addEq a b
+private def builtFA : Database := unitedAB.addTerm fa
+
+private theorem congruence_ctors : declaredABF.sig.AllConstructors := by
+  intro f
+  by_cases hF : f = "F"
+  · subst f; rfl
+  · by_cases hB : f = "B"
+    · subst f; rfl
+    · by_cases hA : f = "A"
+      · subst f; rfl
+      · simp [declaredABF, declaredAB, declaredA, Database.empty, Signature.mergeOf,
+          hF, hB, hA]
+
+private theorem congruence_fragment : congruenceProgram.Fragment := by
+  refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide, by decide⟩
+  intro n hn
+  have hs : ∀ n ∈ congruenceProgram.names, ¬ "@".isPrefixOf n := by
+    simp only [String.isPrefixOf, String.startsWith_string_iff]
+    decide
+  exact hs n hn
+
+private theorem congruence_check : QueryHolds builtFA queryFB := by
+  have hfa : fa ∈ builtFA.terms := Database.mem_addTerm _ _
+  have hab : Cong builtFA a b := Cong.mono (Database.Contained.addTerm _ _) (.assert
+    (Set.mem_insert _ _))
+  have hread : CongOn builtFA [fb] fa fb := by
+    apply Cong.congr
+    · exact Cong.mono (Database.Contained.addTerm _ _) hfa
+    · exact Database.mem_addTerm _ _
+    · exact .cons (Cong.mono (Database.Contained.addTerm _ _) hab) .nil
+  refine ⟨[], [[]], .cons ⟨?_, Matches.expr hfa rfl hread⟩ .nil, .single []⟩
+  exact ⟨List.Perm.refl [], by simp⟩
+
+private theorem congruence_source : Eval Database.empty congruenceProgram (.ok builtFA) := by
+  exact .cons (.ok (.of_reach rfl (empty_normal rfl)))
+    (.cons (.ok (.of_reach rfl (empty_normal rfl)))
+      (.cons (.ok (.of_reach rfl (empty_normal rfl)))
+        (.cons (.ok (.of_reach rfl (constructors_normal congruence_ctors)))
+          (.cons (.ok (.of_reach rfl (constructors_normal congruence_ctors)))
+            (.cons (.ok ⟨congruence_check, rfl⟩) .nil)))))
+
+/-- The witness succeeds without inserting the queried spelling into the source store. -/
+theorem congruence_without_stored_spelling :
+    fb ∉ builtFA.terms ∧ QueryHolds builtFA queryFB := by
+  refine ⟨?_, congruence_check⟩
+  have he : declaredABF.terms = ∅ := Database.terms_empty_of_eqs_empty rfl
+  simp [builtFA, unitedAB, a, b, fa, fb, he]
+
+theorem finite_congruence_check :
+    ∃ target, Eval Database.empty (encode congruenceProgram) target ∧
+      target.succeeded = true := by
+  obtain ⟨target, ht, he⟩ := preservesFiniteObservations congruenceProgram (by decide)
+    congruence_fragment
+    (by simp [Program.NoSaturate, congruenceProgram, Cmd.NoSaturate]) _ congruence_source
+  exact ⟨target, ht, he.symm⟩
+
 end Egglog.Tests.CongruenceCorrectness

@@ -4,36 +4,11 @@ namespace Egglog.SourceProof
 
 open Conservativity
 
-private theorem pin {db : Database} (hw : db.WF) {s u : Term} {ts : List Term}
-    (hu : u ∈ db.terms) (hs : s ∈ ts) (h : Cong (ambient db) s u) :
-    CongOn db ts s u :=
-  Cong.mono ⟨withOperands_mono_list (by simpa using hs)⟩
-    (cong_pin hw.subtermClosed (fun _ hp => mem_amb_eqs hp) hu h)
-
-theorem Supports.record {A db : Database} (hr : A.Recorded db) (hw : db.WF)
-    {t : Term} (ht : Supports db t) : (A.addTerm t).Recorded db := by
-  refine ⟨fun p hp => ?_⟩
-  rcases hp with hp | ⟨s, hs, rfl⟩
-  · exact hr.eqs p hp
-  · obtain ⟨u, hu, hsu⟩ := ht s hs
-    have hc : CongOn db [s, s] s u := pin hw hu (by simp) hsu
-    exact ⟨(u, u), hw.eqsRefl u hu, hc, hc⟩
-
-theorem Claim.Supported.record {A db : Database} (hr : A.Recorded db) (hw : db.WF)
-    {c : Claim} (hc : c.Supported db) : (A.addEq c.lhs c.rhs).Recorded db := by
-  have hterms := hc.rhs.record (hc.lhs.record hr hw) hw
-  refine ⟨fun p hp => ?_⟩
-  rcases Set.mem_insert_iff.mp hp with rfl | hp
-  · obtain ⟨u, hu, hlu⟩ := hc.lhs c.lhs (Term.self_mem_subterms _)
-    exact ⟨(u, u), hw.eqsRefl u hu, pin hw hu (by simp) hlu,
-      pin hw hu (by simp) (hc.equality.symm.trans hlu)⟩
-  · exact hterms.eqs p hp
-
 theorem Claim.Supported.addEq_wf {A db : Database} (hA : A.WF) (hw : db.WF)
     {c : Claim} (hc : c.Supported db) : (A.addEq c.lhs c.rhs).WF := by
   refine hA.addEq _ _ (Cong.eq_of_isLit ?_ hc.equality)
   intro p hp hl
-  exact (mem_amb_eqs hp).elim (fun hp => hw.litsIsolated p hp hl) id
+  exact (show p ∈ db.eqs ∨ p.1 = p.2 from hp).elim (fun hp => hw.litsIsolated p hp hl) id
 
 def ledger (sig : Signature) : List Claim → Database
   | [] => { Database.empty with sig := sig }
@@ -49,12 +24,25 @@ def ledger (sig : Signature) : List Claim → Database
   | nil => rfl
   | cons c cs ih => exact ih
 
-theorem ledger_recorded {db : Database} (hw : db.WF) (sig : Signature) {cs : List Claim}
-    (hc : ∀ c ∈ cs, c.Supported db) : (ledger sig cs).Recorded db := by
+theorem ledger_contained_completion {db : Database} (hw : db.WF)
+    (sig : Signature) {cs : List Claim} (hc : ∀ c ∈ cs, c.Supported db) :
+    (ledger sig cs).Contained db.completion := by
   induction cs with
   | nil => exact ⟨by simp [ledger, Database.empty]⟩
   | cons c cs ih =>
-      exact (hc c (by simp)).record (ih fun c h => hc c (by simp [h])) hw
+      have hclaim := (hc c (by simp)).completion hw
+      have htail := ih (fun c h => hc c (by simp [h]))
+      refine ⟨?_⟩
+      intro p hp
+      rcases Set.mem_insert_iff.mp hp with rfl | hp
+      · exact (Database.cong_completion_iff hw).mp hclaim
+      · rcases hp with hp | ⟨s, hs, rfl⟩
+        · rcases hp with hp | ⟨s, hs, rfl⟩
+          · exact htail.eqs hp
+          · exact hw.completion.eqsRefl s
+              (hw.completion.subtermClosed c.lhs hclaim.mem_left hs)
+        · exact hw.completion.eqsRefl s
+            (hw.completion.subtermClosed c.rhs hclaim.mem_right hs)
 
 theorem ledger_wf {db : Database} (hw : db.WF) (sig : Signature) {cs : List Claim}
     (hc : ∀ c ∈ cs, c.Supported db) : (ledger sig cs).WF := by

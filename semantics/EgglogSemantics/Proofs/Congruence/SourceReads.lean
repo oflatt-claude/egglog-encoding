@@ -7,17 +7,17 @@ namespace Egglog.Congruence
 
 mutual
 
-/-- Historical readings survive every operation that retains the recorded equations. -/
-theorem ViewRepr.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) :
+/-- Readings persist when assertions grow at a fixed signature. -/
+theorem ViewRepr.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig) :
     ∀ {a i : Term}, ViewRepr d₁ a i → ViewRepr d₂ a i
   | _, _, .lit => .lit
-  | _, _, .app hs ho => .app (ViewReprList.mono h hs) (ho.mono h)
+  | _, _, .app hs ho => .app (ViewReprList.mono h hsig hs) (ho.mono h hsig)
 
 @[inherit_doc ViewRepr.mono]
-theorem ViewReprList.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) :
+theorem ViewReprList.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (hsig : d₁.sig = d₂.sig) :
     ∀ {as is : List Term}, ViewReprList d₁ as is → ViewReprList d₂ as is
   | _, _, .nil => .nil
-  | _, _, .cons ha hs => .cons (ViewRepr.mono h ha) (ViewReprList.mono h hs)
+  | _, _, .cons ha hs => .cons (ViewRepr.mono h hsig ha) (ViewReprList.mono h hsig hs)
 
 end
 
@@ -27,10 +27,10 @@ def Env.Reads (d : Database) (σ ρ : Env) : Prop :=
     ∃ i, Env.lookup v ρ = some i ∧ ViewRepr d t i
 
 theorem Env.Reads.mono {d d' : Database} {σ ρ : Env} (h : Env.Reads d σ ρ)
-    (hc : d.Contained d') : Env.Reads d' σ ρ := by
+    (hc : d.Contained d') (hsig : d.sig = d'.sig) : Env.Reads d' σ ρ := by
   intro v t ht
   obtain ⟨i, hi, hr⟩ := h v t ht
-  exact ⟨i, hi, hr.mono hc⟩
+  exact ⟨i, hi, hr.mono hc hsig⟩
 
 theorem ViewReprList.mem_read {d : Database} : ∀ {as is : List Term},
     ViewReprList d as is → ∀ t ∈ as, ∃ i, ViewRepr d t i
@@ -52,18 +52,18 @@ theorem ViewRepr.subterms {d : Database} {t i : Term} (h : ViewRepr d t i) :
           obtain ⟨j, hj⟩ := hl.mem_read _ hm
           exact ih hj
 
-/-- Monotone source facts carried between rebuilding fixed points. Every source union
-retains the entry that recorded it, even after the live rows have changed. -/
+/-- Readings in a fixed snapshot. Persistence across merges uses `Live.Reads`. -/
 structure SourceReads (d src : Database) : Prop where
   terms : ∀ t ∈ src.terms, ∃ i, ViewRepr d t i
   unions : UnionsJoined d src
 
 theorem SourceReads.mono {d d' src : Database} (h : SourceReads d src)
-    (hc : d.Contained d') : SourceReads d' src := by
-  refine ⟨fun t ht => (h.terms t ht).imp fun _ hr => hr.mono hc, ?_⟩
+    (hc : d.Contained d') (hsig : d.sig = d'.sig) : SourceReads d' src := by
+  refine ⟨fun t ht => (h.terms t ht).imp fun _ hr => hr.mono hc hsig, ?_⟩
   intro a b hab hne
   obtain ⟨i, j, hi, hj, ho⟩ := h.unions a b hab hne
-  exact ⟨i, j, hi.mono hc, hj.mono hc, ho.imp (Database.Out.mono hc) (Database.Out.mono hc)⟩
+  exact ⟨i, j, hi.mono hc hsig, hj.mono hc hsig,
+    ho.imp (Database.Out.mono hc hsig) (Database.Out.mono hc hsig)⟩
 
 /-- A smaller source state only asks for a subset of the already represented facts. -/
 theorem SourceReads.restrict {d src src' : Database} (h : SourceReads d src)
