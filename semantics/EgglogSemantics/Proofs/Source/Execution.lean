@@ -150,8 +150,7 @@ theorem Database.LitFree.lookup {db : Database} (hw : db.WF) (h : db.LitFree) :
     ∀ v t, Env.lookup v db.env = some t → Term.LitFree t := fun v t hv =>
   h.term hw (hw.envInTerms (v, t) (Env.mem_of_lookup hv))
 
-/-- **A literal-free action keeps the state literal-free.** Every writer is an `addTerm` or
-an `addEq` of a value `Expr.eval_litFree` covers. -/
+/-- Evaluating a literal-free complete atom produces literal-free columns. -/
 theorem Expr.evalAtom_litFree {sig : Signature} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Term.LitFree t)
     (e : Expr) {t : Term} (hl : e.litFreeB = true) (he : e.evalAtom sig σ = some t) :
@@ -169,13 +168,20 @@ theorem evalAction_litFree {db db' : Database} (hw : db.WF) (h : db.LitFree)
     (hv : evalAction db a = some db') : db'.LitFree := by
   have hlk := h.lookup hw
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
+    ⟨e, f, keys, vals, ks, vs, rfl, he, hk, hvals, rfl⟩ |
     ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
-  · have ht : Term.LitFree t := Expr.evalAtom_litFree hlk e hl he
+  · have ht : Term.LitFree t := Expr.eval_litFree hlk e hl he
     intro s hs
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
     · exact h s hs'
     · exact ht s hs'
+  · have ht := Expr.evalAtom_litFree hlk e hl (Expr.evalAtom_entry he hk hvals)
+    intro s hs
+    rw [Database.writeEntry_terms, Database.addTerms_terms] at hs
+    rcases hs with hs | ⟨t, ht', hs⟩
+    · exact h s hs
+    · exact ht s (Term.arg_subterms ht' hs)
   · rw [Action.litFreeB, Bool.and_eq_true] at hl
     have ht₁ : Term.LitFree t₁ := Expr.eval_litFree hlk e₁ hl.1 he₁
     have ht₂ : Term.LitFree t₂ := Expr.eval_litFree hlk e₂ hl.2 he₂
@@ -279,8 +285,9 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       exact h.runRules hc.wf
   | saturate R =>
-      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp ⟨d, hreach, hcl⟩
-      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.NoLits) ?_ hsat.1 ⟨hc, h⟩).2
+      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp hstep
+      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.NoLits) ?_
+        hsat.reach ⟨hc, h⟩).2
       intro x y hx hxy
       obtain rfl : y = RunRules R x := hxy.eq_of_allConstructors hx.1.sig
       exact ⟨⟨RunRules.wf hx.1.wf, by rw [RunRules.sig]; exact hx.1.sig⟩,
@@ -290,7 +297,6 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact ⟨fun t ht => h.terms t (Database.terms_setSig ▸ ht), h.heads⟩
-
   | check q =>
       obtain ⟨_, rfl⟩ := hreach
       rw [hcl.eq_of_allConstructors hc.sig]
@@ -326,7 +332,7 @@ theorem evalAction_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Models
   cases a with
   | expr e =>
       obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb
-      exact ⟨db.addTerm t, by simp [evalAction, Expr.evalAtom_of_eval ht], hm⟩
+      exact ⟨db.addTerm t, evalAction_expr_of_eval ht, hm⟩
   | union e₁ e₂ =>
       obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm hsc.1 hb.1
       obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb.2
@@ -478,8 +484,8 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
       rw [RunRules.sig]
       exact h r (by rw [RunRules, Database.sUnion_rules] at hr; exact hr)
   | saturate R =>
-      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp ⟨d, hreach, hcl⟩
-      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.HeadsBuild) ?_ hsat.1
+      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp hstep
+      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.HeadsBuild) ?_ hsat.reach
         ⟨hc, h⟩).2
       intro x y hx hxy
       obtain rfl : y = RunRules R x := hxy.eq_of_allConstructors hx.1.sig
@@ -491,7 +497,6 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=
         hcl.eq_of_allConstructors (hc.sig.sigBind hdecl)
       exact fun r hr => Actions.Builds.update hdecl (h r hr)
-
   | check q =>
       obtain ⟨_, rfl⟩ := hreach
       rw [hcl.eq_of_allConstructors hc.sig]

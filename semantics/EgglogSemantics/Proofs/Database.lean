@@ -172,6 +172,12 @@ theorem mem_terms_iff {db : Database} {t : Term} :
     h.elim (fun h => (eqsInTerms_free (Cong.assert h)).1)
       fun h => (eqsInTerms_free (Cong.assert h)).2⟩
 
+/-- Two databases asserting the same equations hold the same values. -/
+theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
+    d₁.terms = d₂.terms := by
+  ext t
+  simp only [mem_terms_iff, h]
+
 @[simp] theorem empty_terms : Database.empty.terms = ∅ := by
   ext t; simp [mem_terms_iff, Database.empty]
 
@@ -199,6 +205,12 @@ theorem mem_terms_iff {db : Database} {t : Term} :
 
 @[simp] theorem addTerm_rules {t : Term} {db : Database} :
     (db.addTerm t).rules = db.rules := rfl
+
+@[simp] theorem addTerm_entries {t : Term} {db : Database} :
+    (db.addTerm t).entries = db.entries := rfl
+
+@[simp] theorem addTerm_pending {t : Term} {db : Database} :
+    (db.addTerm t).pending = db.pending := rfl
 
 theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
   Cong.assert (Or.inr ⟨t, Term.IsSubterm.refl t, rfl⟩)
@@ -239,6 +251,18 @@ theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb :
 
 @[simp] theorem addEq_sig {a b : Term} {db : Database} : (db.addEq a b).sig = db.sig := rfl
 
+@[simp] theorem addEq_entries {a b : Term} {db : Database} :
+    (db.addEq a b).entries = db.entries := rfl
+
+@[simp] theorem addEq_pending {a b : Term} {db : Database} :
+    (db.addEq a b).pending = db.pending := rfl
+
+@[simp] theorem sUnion_entries {db : Database} {S : Set Database} :
+    (db.sUnion S).entries = db.entries ∪ ⋃ d ∈ S, d.entries := rfl
+
+@[simp] theorem sUnion_pending {db : Database} {S : Set Database} :
+    (db.sUnion S).pending = db.pending ∪ ⋃ d ∈ S, d.pending := rfl
+
 @[simp] theorem sUnion_eqs {db : Database} {S : Set Database} :
     (db.sUnion S).eqs = db.eqs ∪ ⋃ d ∈ S, d.eqs := rfl
 
@@ -271,7 +295,7 @@ caller's environment. -/
 theorem EnvAgree.eq_of_env_rules {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (σ : Env)
     (R : Set Rule) :
     ({ d₁ with env := σ, rules := R } : Database) = { d₂ with env := σ, rules := R } := by
-  rw [show d₁.sig = d₂.sig from h.sig, show d₁.eqs = d₂.eqs from h.eqs]
+  rw [h.sig, h.eqs, h.entries, h.pending]
 
 /-! ### `addTerms`
 
@@ -302,6 +326,18 @@ theorem addTerms_append {db : Database} {ts us : List Term} :
   | nil => rfl
   | cons t ts ih => exact ih
 
+@[simp] theorem addTerms_entries {db : Database} {ts : List Term} :
+    (db.addTerms ts).entries = db.entries := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih
+
+@[simp] theorem addTerms_pending {db : Database} {ts : List Term} :
+    (db.addTerms ts).pending = db.pending := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih
+
 @[simp] theorem addTerms_terms {db : Database} {ts : List Term} :
     (db.addTerms ts).terms = db.terms ∪ {s | ∃ t ∈ ts, s ∈ t.subterms} := by
   induction ts generalizing db with
@@ -325,16 +361,118 @@ theorem mem_addTerms {db : Database} {ts : List Term} {t : Term} (h : t ∈ ts) 
     t ∈ (db.addTerms ts).terms :=
   addTerms_terms ▸ Or.inr ⟨t, h, t.self_mem_subterms⟩
 
+theorem addTerms_setRules (db : Database) (R : Set Rule) (ts : List Term) :
+    ({ db with rules := R } : Database).addTerms ts = { db.addTerms ts with rules := R } := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih (db.addTerm t)
+
+theorem addTerms_setSig (db : Database) (sig : Signature) (ts : List Term) :
+    ({ db with sig := sig } : Database).addTerms ts = { db.addTerms ts with sig := sig } := by
+  induction ts generalizing db with
+  | nil => rfl
+  | cons t ts ih => exact ih (db.addTerm t)
+
+/-! ### Current entries and pending writes -/
+
+@[simp] theorem writeEntry_eqs {db : Database} {e : Entry} :
+    (db.writeEntry e).eqs = (db.addTerms e.columns).eqs := rfl
+@[simp] theorem writeEntry_sig {db : Database} {e : Entry} :
+    (db.writeEntry e).sig = db.sig := addTerms_sig
+@[simp] theorem writeEntry_env {db : Database} {e : Entry} :
+    (db.writeEntry e).env = db.env := addTerms_env
+@[simp] theorem writeEntry_rules {db : Database} {e : Entry} :
+    (db.writeEntry e).rules = db.rules := addTerms_rules
+@[simp] theorem writeEntry_entries {db : Database} {e : Entry} :
+    (db.writeEntry e).entries = db.entries := addTerms_entries
+@[simp] theorem writeEntry_pending {db : Database} {e : Entry} :
+    (db.writeEntry e).pending = insert e db.pending := by simp [writeEntry]
+@[simp] theorem writeEntry_terms {db : Database} {e : Entry} :
+    (db.writeEntry e).terms = (db.addTerms e.columns).terms := terms_eq_of_eqs_eq rfl
+
+@[simp] theorem putEntry_eqs {db : Database} {e : Entry} :
+    (db.putEntry e).eqs = (db.addTerms e.columns).eqs := rfl
+@[simp] theorem putEntry_sig {db : Database} {e : Entry} :
+    (db.putEntry e).sig = db.sig := addTerms_sig
+@[simp] theorem putEntry_env {db : Database} {e : Entry} :
+    (db.putEntry e).env = db.env := addTerms_env
+@[simp] theorem putEntry_rules {db : Database} {e : Entry} :
+    (db.putEntry e).rules = db.rules := addTerms_rules
+@[simp] theorem putEntry_entries {db : Database} {e : Entry} :
+    (db.putEntry e).entries = insert e db.entries := by simp [putEntry]
+@[simp] theorem putEntry_pending {db : Database} {e : Entry} :
+    (db.putEntry e).pending = db.pending := addTerms_pending
+@[simp] theorem putEntry_terms {db : Database} {e : Entry} :
+    (db.putEntry e).terms = (db.addTerms e.columns).terms := terms_eq_of_eqs_eq rfl
+
+@[simp] theorem consumeWrite_sig {db : Database} {e : Entry} :
+    (db.consumeWrite e).sig = db.sig := rfl
+@[simp] theorem consumeWrite_env {db : Database} {e : Entry} :
+    (db.consumeWrite e).env = db.env := rfl
+@[simp] theorem consumeWrite_rules {db : Database} {e : Entry} :
+    (db.consumeWrite e).rules = db.rules := rfl
+@[simp] theorem consumeWrite_eqs {db : Database} {e : Entry} :
+    (db.consumeWrite e).eqs = db.eqs := rfl
+@[simp] theorem eraseEntry_sig {db : Database} {e : Entry} :
+    (db.eraseEntry e).sig = db.sig := rfl
+@[simp] theorem eraseEntry_env {db : Database} {e : Entry} :
+    (db.eraseEntry e).env = db.env := rfl
+@[simp] theorem eraseEntry_rules {db : Database} {e : Entry} :
+    (db.eraseEntry e).rules = db.rules := rfl
+@[simp] theorem eraseEntry_eqs {db : Database} {e : Entry} :
+    (db.eraseEntry e).eqs = db.eqs := rfl
+
+@[simp] theorem putEntry_setRules (db : Database) (R : Set Rule) (e : Entry) :
+    ({ db with rules := R } : Database).putEntry e = { db.putEntry e with rules := R } := by
+  simp [putEntry, addTerms_setRules]
+
+@[simp] theorem writeEntry_setRules (db : Database) (R : Set Rule) (e : Entry) :
+    ({ db with rules := R } : Database).writeEntry e = { db.writeEntry e with rules := R } := by
+  simp [writeEntry, addTerms_setRules]
+
+@[simp] theorem putEntry_setSig (db : Database) (sig : Signature) (e : Entry) :
+    ({ db with sig := sig } : Database).putEntry e = { db.putEntry e with sig := sig } := by
+  simp [putEntry, addTerms_setSig]
+
+@[simp] theorem writeEntry_setSig (db : Database) (sig : Signature) (e : Entry) :
+    ({ db with sig := sig } : Database).writeEntry e = { db.writeEntry e with sig := sig } := by
+  simp [writeEntry, addTerms_setSig]
+
+theorem mem_writeEntry_columns {db : Database} {e : Entry} {t : Term}
+    (ht : t ∈ e.columns) : t ∈ (db.writeEntry e).terms := by
+  rw [writeEntry_terms]
+  exact mem_addTerms ht
+
+theorem mem_putEntry_columns {db : Database} {e : Entry} {t : Term}
+    (ht : t ∈ e.columns) : t ∈ (db.putEntry e).terms := by
+  rw [putEntry_terms]
+  exact mem_addTerms ht
+
+@[simp] theorem consumeWrite_terms {db : Database} {e : Entry} :
+    (db.consumeWrite e).terms = db.terms := terms_eq_of_eqs_eq rfl
+@[simp] theorem eraseEntry_terms {db : Database} {e : Entry} :
+    (db.eraseEntry e).terms = db.terms := terms_eq_of_eqs_eq rfl
+
 namespace EnvAgree
 theorem addTerm {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (t : Term) :
     (d₁.addTerm t).EnvAgree (d₂.addTerm t) :=
-  ⟨h.sig, by simp only [addTerm_eqs, h.eqs], h.rules, h.env⟩
+  ⟨h.sig, by simp only [addTerm_eqs, h.eqs], h.entries, h.pending, h.rules, h.env⟩
 
 theorem addTerms {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (ts : List Term) :
     (d₁.addTerms ts).EnvAgree (d₂.addTerms ts) := by
   induction ts generalizing d₁ d₂ with
   | nil => exact h
   | cons t ts ih => exact ih (h.addTerm t)
+
+theorem writeEntry {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (e : Entry) :
+    (d₁.writeEntry e).EnvAgree (d₂.writeEntry e) := by
+  have ht := h.addTerms e.columns
+  exact ⟨ht.sig, ht.eqs, ht.entries, congrArg (insert e) ht.pending, ht.rules, ht.env⟩
+
+theorem putEntry {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (e : Entry) :
+    (d₁.putEntry e).EnvAgree (d₂.putEntry e) := by
+  have ht := h.addTerms e.columns
+  exact ⟨ht.sig, ht.eqs, congrArg (insert e) ht.entries, ht.pending, ht.rules, ht.env⟩
 
 end EnvAgree
 namespace Contained
@@ -373,6 +511,24 @@ theorem addTerms_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (ts : Lis
 theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (a b : Term) :
     (d₁.addEq a b).Contained (d₂.addEq a b) :=
   ⟨Set.insert_subset_insert ((h.addTerm_mono a).addTerm_mono b).eqs⟩
+
+theorem writeEntry (e : Entry) (db : Database) : Contained db (db.writeEntry e) :=
+  ⟨(addTerms e.columns db).eqs⟩
+
+theorem putEntry (e : Entry) (db : Database) : Contained db (db.putEntry e) :=
+  ⟨(addTerms e.columns db).eqs⟩
+
+theorem consumeWrite (e : Entry) (db : Database) : Contained db (db.consumeWrite e) :=
+  ⟨subset_rfl⟩
+
+theorem eraseEntry (e : Entry) (db : Database) : Contained db (db.eraseEntry e) :=
+  ⟨subset_rfl⟩
+
+theorem writeEntry_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (e : Entry) :
+    (d₁.writeEntry e).Contained (d₂.writeEntry e) := ⟨(h.addTerms_mono e.columns).eqs⟩
+
+theorem putEntry_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (e : Entry) :
+    (d₁.putEntry e).Contained (d₂.putEntry e) := ⟨(h.addTerms_mono e.columns).eqs⟩
 
 theorem sUnion (db : Database) (S : Set Database) : Contained db (db.sUnion S) :=
   ⟨Set.subset_union_left⟩

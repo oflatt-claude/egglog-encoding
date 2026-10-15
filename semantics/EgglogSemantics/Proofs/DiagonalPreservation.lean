@@ -4,15 +4,14 @@ import EgglogSemantics.Proofs.Diagonal
 
 namespace Egglog
 
-/-- Every action but `union` writes through `addTerm`. -/
+/-- Value construction and function writes add only reflexive equations. -/
 theorem evalAction_diag {db db' : Database} {a : Action} (hu : a.UnionFree)
     (hd : db.Diag) (h : evalAction db a = some db') : db'.Diag := by
-  cases a with
-  | expr e =>
-    rw [evalAction, Option.map_eq_some_iff] at h
-    obtain ⟨t, -, rfl⟩ := h
-    exact hd.addTerm t
-  | union e₁ e₂ => exact absurd hu id
+  rcases evalAction_eq_some h with ⟨_, t, _, _, rfl⟩ |
+    ⟨_, _, _, _, ks, vs, _, _, _, _, rfl⟩ | ⟨_, _, _, _, rfl, _⟩
+  · exact hd.addTerm t
+  · exact hd.addTerms (ks ++ vs)
+  · exact absurd hu id
 
 theorem evalActions_diag {db db' : Database} {as : List Action} (hu : Actions.UnionFree as)
     (hd : db.Diag) (h : evalActions db as = some db') : db'.Diag := by
@@ -31,14 +30,25 @@ theorem evalLocalActions_diag {db db' : Database} {as : List Action} {σ : Env}
   obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
   exact evalActions_diag (db := { db with env := σ ++ db.env }) (db' := d) hu hd hv
 
-/-- A merge phase runs the body the *signature* names, so this is where
-`Signature.UnionFree` is spent. -/
+theorem MergeValues.diag {d e : Database} {decl : FnDecl} {old new vs : List Term}
+    (hu : decl.UnionFree) (hd : d.Diag) (h : MergeValues d decl old new e vs) :
+    e.Diag := by
+  cases h with
+  | unchanged => exact hd
+  | @changed e vs oldVars newVars body res hmerge _ hbody _ =>
+    exact evalActions_diag (db := { d with env := mergeEnv oldVars newVars old new })
+      (db' := e) (hu _ hmerge) hd hbody
+
+/-- A merge phase runs the body the signature names. Removing rows does not remove
+constructor equations, and installing the result only records its columns. -/
 theorem MergeStep.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeStep d₁ d₂) : d₂.Diag := by
   cases h with
-  | @collide d f dc as bs a b vs oldVars newVars body res hdc hmg _ _ _ _ _ _ hbody _ =>
-    exact (evalActions_diag (db := { d₁ with env := mergeEnv oldVars newVars a b })
-      (hs f dc hdc _ hmg) hd hbody).addTerm _
+  | insert => exact (hd.consumeWrite _).putEntry _
+  | write _ _ _ hdecl _ hbody =>
+    exact (hbody.diag (hs _ _ hdecl) ((hd.consumeWrite _).eraseEntry _)).putEntry _
+  | collide _ _ _ _ hdecl _ hbody =>
+    exact (hbody.diag (hs _ _ hdecl) ((hd.eraseEntry _).eraseEntry _)).putEntry _
 
 theorem MergeClosure.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeClosure d₁ d₂) : d₂.Diag := by
@@ -61,9 +71,9 @@ theorem RunRules.diag {R : RulesetName} {db : Database} (hn : db.NoUnions) :
 to iterate it. -/
 theorem RunStep.noUnions {R : RulesetName} {A B : Database} (h : RunStep R A B)
     (hn : A.NoUnions) : B.NoUnions :=
-  ⟨MergeClosure.diag (by rw [RunRules.sig]; exact hn.sig) (RunRules.diag hn) h,
-    by rw [MergeClosure.sig h, RunRules.sig]; exact hn.sig,
-    by rw [(MergeClosure.envRules h).2]
+  ⟨MergeClosure.diag (by rw [RunRules.sig]; exact hn.sig) (RunRules.diag hn) h.1,
+    by rw [MergeClosure.sig h.1, RunRules.sig]; exact hn.sig,
+    by rw [(MergeClosure.envRules h.1).2]
        simpa only [RunRules, Database.sUnion_rules] using hn.rules⟩
 
 /-- **One command preserves union-freedom, all three clauses.** `.decl` is the only case
@@ -79,7 +89,7 @@ theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.Un
     | saturate R =>
       exact RunReach.induction (P := Database.NoUnions)
         (fun _ _ hp hs => RunStep.noUnions hs hp)
-        (show SaturateReach R A e from hreach).1 hn
+        (show SaturateReach R A e from hreach).reach hn
     | action a =>
       replace heff : evalAction A a = some e := hreach
       exact ⟨evalAction_diag hu hn.diag heff, by rw [evalAction_sig heff]; exact hn.sig,

@@ -4,8 +4,9 @@ import EgglogSemantics.Spec.Congruence
 # Evaluating expressions and actions
 
 Value expressions build ground terms; complete atoms may also describe function entries.
-Actions add equations to the database. Evaluation returns `none` for unbound variables,
-undeclared heads, table applications in value positions, and unions on literals. Atom columns use value evaluation. Rule firing and merge closure
+Actions add constructor equations or propose function writes. Evaluation returns `none`
+for unbound variables, undeclared heads, table applications in value positions, and
+unions on literals. Atom columns use value evaluation. Rule firing and merge closure
 are specified separately in `Spec/Step.lean`.
 -/
 
@@ -44,14 +45,20 @@ def Expr.evalAtom (sig : Signature) : Expr → Env → Option Term
   | e, σ => e.eval sig σ
 
 /-- Run one action in the database's evaluation context. Actions never bind variables.
-An entry atom records its row; `MergeStep` resolves a collision on a congruent key.
+An entry atom proposes its row; `MergeStep` inserts it or resolves a collision.
 
 A `union` on a literal is stuck. egglog rejects it in its type checker — `union` wants an
 eq-sort and `i64` is not one (`TypeError::NonEqsortUnion`) — and this untyped model cannot
 see it until the operands are values. Asserting it instead would cost
 `Database.LitsIsolated`. -/
 def evalAction (db : Database) : Action → Option Database
-  | .expr e => (e.evalAtom db.sig db.env).map fun t => db.addTerm t
+  | .expr e =>
+      match e.entry db.sig with
+      | some (f, keys, values) =>
+          (Expr.evalList db.sig keys db.env).bind fun ks =>
+            (Expr.evalList db.sig values db.env).map fun vs =>
+              db.writeEntry ⟨f, ks, vs⟩
+      | none => (e.eval db.sig db.env).map fun t => db.addTerm t
   | .union e₁ e₂ =>
       (e₁.eval db.sig db.env).bind fun t₁ =>
         (e₂.eval db.sig db.env).bind fun t₂ =>

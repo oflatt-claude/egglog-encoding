@@ -148,13 +148,20 @@ theorem evalAction_ctorsIn {db db' : Database} {P : Program} (hw : db.WF) (h : d
       ∀ f as, Term.app f as ∈ t.subterms → (f, as.length) ∈ P.ctors := fun ht f as hs =>
     ht f as hs
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
+    ⟨e, f, keys, vals, ks, vs, rfl, he, hk, hvals, rfl⟩ |
     ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
-  · have ht : Term.CtorsIn P t := Expr.evalAtom_ctorsIn hlk e hc he
+  · have ht : Term.CtorsIn P t := Expr.eval_ctorsIn hlk e hc he
     intro g bs hs
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
     · exact h g bs hs'
     · exact hcin ht g bs hs'
+  · have ht := Expr.evalAtom_ctorsIn hlk e hc (Expr.evalAtom_entry he hk hvals)
+    intro g bs hs
+    rw [Database.writeEntry_terms, Database.addTerms_terms] at hs
+    rcases hs with hs | ⟨t, ht', hs⟩
+    · exact h g bs hs
+    · exact ht g bs (Term.arg_subterms ht' hs)
   · have hc₁ : ∀ fk ∈ e₁.ctors, fk ∈ P.ctors :=
       fun fk hk => hc fk (by rw [Action.ctors]; exact List.mem_append_left _ hk)
     have hc₂ : ∀ fk ∈ e₂.ctors, fk ∈ P.ctors :=
@@ -246,8 +253,8 @@ theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       exact h.runRules hc.wf
   | saturate R =>
-      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp ⟨d, hreach, hcl⟩
-      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.CtorsInState P) ?_ hsat.1
+      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp hstep
+      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.CtorsInState P) ?_ hsat.reach
         ⟨hc, h⟩).2
       intro x y hx hxy
       obtain rfl : y = RunRules R x := hxy.eq_of_allConstructors hx.1.sig

@@ -370,7 +370,9 @@ theorem ValidSubst.of_agree {db : Database} {p : Pattern} {σ σ' : Env}
     fun es => Expr.evalList_agree hag.symm es
   refine ⟨⟨hperm, hterms⟩, ?_⟩
   cases h.2 with
-  | expr hwm he hc => exact .expr hwm (by rw [Expr.evalAtom_agree hag.symm]; exact he) hc
+  | expr hwm he hc => exact .expr hwm (by rw [hev]; exact he) hc
+  | entry he hk hv hr hn hc =>
+      exact .entry he (by rw [hevl]; exact hk) (by rw [hevl]; exact hv) hr hn hc
   | eq hwm he₁ he₂ hc₁ hc₂ =>
     exact .eq hwm (by rw [hev]; exact he₁) (by rw [hev]; exact he₂) hc₁ hc₂
 
@@ -387,7 +389,23 @@ theorem Matches.of_agreeOn {db : Database} {p : Pattern} {σ σ' : Env} (h : Mat
     Matches db p σ' := by
   cases h with
   | @expr e _ w t hwm he hc =>
-    exact .expr hwm (by rw [Expr.evalAtom_agreeOn e fun v hv => (hag v hv).symm]; exact he) hc
+    exact .expr hwm (by rw [Expr.eval_agreeOn e fun v hv => (hag v hv).symm]; exact he) hc
+  | @entry e _ f keys values ks vs row he hk hv hr hn hc =>
+      obtain ⟨_, _, _, heq⟩ := Expr.entry_some he
+      have hak : ∀ v ∈ Expr.varsList keys, Env.lookup v σ = Env.lookup v σ' := by
+        intro v hv
+        apply hag v
+        change v ∈ e.vars
+        rw [heq, Expr.vars_app, Expr.mem_varsList_append]
+        exact Or.inl hv
+      have hav : ∀ v ∈ Expr.varsList values, Env.lookup v σ = Env.lookup v σ' := by
+        intro v hv
+        apply hag v
+        change v ∈ e.vars
+        rw [heq, Expr.vars_app, Expr.mem_varsList_append]
+        exact Or.inr hv
+      exact .entry he ((Expr.evalList_agreeOn keys hak).symm.trans hk)
+        ((Expr.evalList_agreeOn values hav).symm.trans hv) hr hn hc
   | @eq e₁ e₂ _ w t₁ t₂ hwm he₁ he₂ hc₁ hc₂ =>
     refine .eq hwm ?_ ?_ hc₁ hc₂
     · rw [Expr.eval_agreeOn e₁ fun v hv =>

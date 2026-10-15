@@ -41,6 +41,13 @@ declared, and it carries that declaration's `entryWidth` children. -/
 def Database.DeclaredTerms (db : Database) : Prop :=
   ∀ f as, Term.app f as ∈ db.terms → ∃ d, db.sig f = some d ∧ as.length = d.entryWidth
 
+/-- Current rows and queued writes name declared functions and contain existing values.
+This store invariant is separate from the equation and environment invariant `WF`. -/
+structure Database.StoreOk (db : Database) : Prop where
+  declared : ∀ row ∈ db.entries ∪ db.pending,
+    ∃ decl, db.sig row.name = some decl ∧ decl.merge ≠ none
+  columns : ∀ row ∈ db.entries ∪ db.pending, ∀ t ∈ row.columns, t ∈ db.terms
+
 /-- No asserted equation puts a literal beside anything but itself: `evalAction` refuses a
 `union` on a literal and `addTerm` writes only reflexive pairs. `Cong.eq_of_isLit` reads it
 back as "a literal's class is a singleton", which is what makes `min` on literals stable. -/
@@ -50,10 +57,10 @@ def Database.LitsIsolated (db : Database) : Prop :=
 /-- The database invariants: it records the diagonal of what it holds, holds the children
 of every term it holds, binds its variables to terms it holds, and isolates literals.
 
-`eqsRefl` is what makes "the term is present" and "the equation `t = t` is asserted"
-interchangeable. Without it a term can be present by `symm`/`trans` alone, and then
-`addTerm` on a term already held is not the identity — so a self-collision, which always
-applies, would still change the state and nothing would be `MergeSaturated`. -/
+`eqsRefl` makes "the term is present" and "the equation `t = t` is asserted"
+interchangeable. Together with subterm closure, it makes recording an already held
+term the identity. `StoreOk` separately records the invariants of current function
+entries and pending writes. -/
 structure Database.WF (db : Database) : Prop where
   eqsRefl : ∀ t ∈ db.terms, (t, t) ∈ db.eqs
   subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
@@ -67,5 +74,20 @@ def Database.withOperands (db : Database) (ts : List Term) : Database := db.addT
 
 @[inherit_doc Database.withOperands] def CongOn
     (db : Database) (ts : List Term) (a b : Term) : Prop := Cong (db.withOperands ts) a b
+
+/-- An inferred equality has a witness in the original database. Its diagonal expresses
+represented existence; merely mentioning an absent term does not establish it. -/
+def Database.Infers (db : Database) (a b : Term) : Prop :=
+  ∃ w ∈ db.terms, CongOn db [a, b] w a ∧ CongOn db [a, b] a b
+
+/-- Observable mathematical state at a completed round. Constructor spellings are
+compared through inferred facts; current function entries are compared directly.
+Pending writes are excluded here: both endpoints must separately be merge-normal. -/
+structure Database.SameMeaning (d₁ d₂ : Database) : Prop where
+  sig : d₁.sig = d₂.sig
+  env : d₁.env = d₂.env
+  rules : d₁.rules = d₂.rules
+  entries : d₁.entries = d₂.entries
+  inferred : ∀ a b, d₁.Infers a b ↔ d₂.Infers a b
 
 end Egglog

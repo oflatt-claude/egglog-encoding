@@ -123,22 +123,44 @@ mutual
 
 /-- A total order on terms: literals below applications, then by argument count, then by
 name, then lexicographically. -/
-def Term.blt : Term → Term → Bool
+def Term.structuralBlt : Term → Term → Bool
   | .lit l, .lit m => Lit.blt l m
   | .lit _, .app _ _ => true
   | .app _ _, .lit _ => false
   | .app f as, .app g bs =>
       if as.length ≠ bs.length then decide (as.length < bs.length)
       else if f ≠ g then decide (f < g)
-      else Term.bltList as bs
+      else Term.structuralBltList as bs
 
 /-- `Term.blt` lexicographically over argument lists. -/
-def Term.bltList : List Term → List Term → Bool
+def Term.structuralBltList : List Term → List Term → Bool
   | [], _ => false
   | _ :: _, [] => false
-  | a :: as, b :: bs => if a = b then Term.bltList as bs else Term.blt a b
+  | a :: as, b :: bs =>
+      if a = b then Term.structuralBltList as bs else Term.structuralBlt a b
 
 end
+
+mutual
+
+/-- Constructor and literal node count. In particular, wrapping a term strictly
+increases its size, regardless of the constructor's name. -/
+def Term.nodeSize : Term → Nat
+  | .lit _ => 1
+  | .app _ args => 1 + Term.nodeSizeList args
+
+def Term.nodeSizeList : List Term → Nat
+  | [] => 0
+  | a :: as => a.nodeSize + Term.nodeSizeList as
+
+end
+
+/-- Size first, then the structural order to break ties. On the finite constructor
+and literal vocabulary of a program, every initial segment is finite. Literal
+comparisons retain the ordinary integer order. -/
+def Term.blt (s t : Term) : Bool :=
+  if s.nodeSize ≠ t.nodeSize then decide (s.nodeSize < t.nodeSize)
+  else Term.structuralBlt s t
 
 /-- The smaller of two terms in `Term.blt`, egglog's `ordering-min`: the right operand when
 it is strictly below the left one, else the left. -/

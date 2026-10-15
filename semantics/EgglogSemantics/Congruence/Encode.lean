@@ -111,13 +111,15 @@ def encodeQuery : Query → Nat → Query × Nat
 
 mutual
 
-/-- Build children before their parent. The original expression itself is the structural
-id, so no temporary variable or table lookup is needed in a head. -/
+/-- Build children before their parent, and give every value a UF entry. Its initial
+self-parent is absorbed by the existing parent when the value was already linked. -/
 def encodeBuild : Expr → List Action
-  | .lit _ | .var _ => []
+  | e@(.lit _) | e@(.var _) => [.expr (.app ufName [e, e])]
   | .min a b => encodeBuild a ++ encodeBuild b
   | .app f args =>
-      encodeBuildArgs args ++ [.expr (.app (viewName f) (args ++ [.app f args]))]
+      encodeBuildArgs args ++
+        [.expr (.app (viewName f) (args ++ [.app f args])),
+         .expr (.app ufName [.app f args, .app f args])]
 
 /-- Build argument occurrences in the same left-to-right order as query flattening. -/
 def encodeBuildArgs : List Expr → List Action
@@ -135,9 +137,38 @@ def encodeAction : Action → List Action
 /-- No justification argument is needed for compiling a head. -/
 def encodeActions (as : List Action) : List Action := as.flatMap encodeAction
 
+/-- Head variables refer to the current leaders of their query values. -/
+def leaderVar (v : Var) : Var := "@leader:" ++ v
+
+mutual
+
+def leaderExpr : Expr → Expr
+  | .lit l => .lit l
+  | .var v => .var (leaderVar v)
+  | .app f args => .app f (leaderArgs args)
+  | .min a b => .min (leaderExpr a) (leaderExpr b)
+
+def leaderArgs : List Expr → List Expr
+  | [] => []
+  | a :: as => leaderExpr a :: leaderArgs as
+
+end
+
+def leaderAction : Action → Action
+  | .expr e => .expr (leaderExpr e)
+  | .union a b => .union (leaderExpr a) (leaderExpr b)
+
+/-- With one current UF output, a self-parent certifies an actual root. These atoms
+do not match displaced historical parents. Maintenance supplies compressed edges. -/
+def leaderQuery (vs : List Var) : Query :=
+  vs.flatMap fun v =>
+    [.expr (.app ufName [.var v, .var (leaderVar v)]),
+     .expr (.app ufName [.var (leaderVar v), .var (leaderVar v)])]
+
 /-- Variable supplies are local to a rule; source names cannot use the `@` namespace. -/
 def encodeRule (r : Rule) : Rule :=
-  { query := (encodeQuery r.query 0).1, actions := encodeActions r.actions,
+  { query := (encodeQuery r.query 0).1 ++ leaderQuery r.query.vars,
+    actions := encodeActions (r.actions.map leaderAction),
     ruleset := r.ruleset }
 
 /-- Compress two explicit parent edges into one. -/
@@ -159,7 +190,7 @@ def eclassRule (f : FnName) (arity : Nat) : Rule :=
     actions := [.expr (.app (viewName f) (cs ++ [.var "@x"]))],
     ruleset := rebuildRuleset }
 
-/-- Re-key one child column. Old entry terms remain recorded by the interpreter. -/
+/-- Add the view at a child's current parent key. The old key may remain represented. -/
 def childRule (f : FnName) (arity index : Nat) : Rule :=
   let cs := rebuildVars arity
   { query := [.expr (.app (viewName f) (cs ++ [.var "@e"])),

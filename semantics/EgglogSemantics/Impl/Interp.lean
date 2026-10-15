@@ -7,8 +7,10 @@ import EgglogSemantics.Spec.Step
 `Spec/Step.lean`'s `RunRules` is a function but not a computation: it unions over a set
 of substitutions carved out by a predicate. This runs the constructor fragment computably,
 so programs can actually be executed — which is what makes the model testable against the
-Rust implementation through `DiffTest.lean`. `Proofs/Interp.lean`'s `exec_programStep` is the
-equation between the two, in both directions.
+Rust implementation through `DiffTest.lean`. The current-table specification is being
+ported separately from the historical interpreter-correctness proofs. In particular,
+the executable saturation loop still uses its finite-store comparison; no correspondence
+with the new semantic stopping condition is claimed here.
 
 `FDatabase`'s components are `List`s, not `Finset`s, for one blunt reason:
 `Finset.toList` is noncomputable, so anything that has to *enumerate* a `Finset` cannot
@@ -27,16 +29,10 @@ there.
 namespace Egglog
 /-! ### The table index
 
-`Spec/` has no rows: a merge function's entry at the key `a…` with value columns `v…` is
-the term `f(a…, v…)`, and a constructor's is `f(a…)`. An implementation cannot work from
-that alone, because egglog's tables are not append-only — an insert *replaces* the
-resident entry and a rebuild *moves* one — and reconstructing which entries are still
-current by scanning a monotone term set is exactly the work a table exists to avoid.
-
-`FDatabase.rows` is therefore an **index**: a derived structure, re-keyed by
-`FDatabase.rebuild` and deleted from by `FDatabase.mergeOneOriented`, over a `terms` that
-never shrinks. `FDatabase.toDatabase` drops it, so neither the re-keying nor the deletion
-moves the denotation. -/
+`FDatabase.rows` stores current tuples, re-keyed by `FDatabase.rebuild` and replaced by
+`FDatabase.mergeOneOriented`. Its function rows project to the mathematical database's
+`entries`. The executable term list also retains historical entry atoms; adapting that
+equation projection and proving interpreter correspondence remain separate work. -/
 /-- One tuple of one function's table: `fn args… ↦ out…`.
 
 `out` is a *list*, one entry per value column: egglog's tables are multi-column, and the
@@ -53,6 +49,9 @@ structure Row where
   args : List Term
   out : List Term
   deriving DecidableEq
+
+/-- A live function row in the mathematical table store. -/
+def Row.toEntry (row : Row) : Entry := ⟨row.fn, row.args, row.out⟩
 
 /-- The constructor row of `t`'s root, if it has one: a constructor application maps its
 own children to itself.
@@ -262,6 +261,7 @@ def toDatabase (d : FDatabase) : Database where
   sig := d.sig
   eqs := {p | p.1 = p.2 ∧ p.1 ∈ d.terms} ∪
     {p | p ∈ d.eqs ∧ p.1 ∈ d.terms ∧ p.2 ∈ d.terms}
+  entries := {e | ∃ row ∈ d.rows, (d.sig.mergeOf row.fn).isSome ∧ row.toEntry = e}
   env := d.env
   rules := {r | r ∈ d.rules}
 

@@ -1,6 +1,63 @@
 # Encoding passes
 
-## Agreed plan and scope
+## Current migration: live tables and semantic saturation
+
+The mathematical specification now keeps current function entries separately from
+constructor existence/equations, consumes pending writes, replaces colliding rows,
+and requires merge normalization. `ordering-min` is size-first; saturation stops
+at the first completed round preserving inferred constructor facts and current
+entries. See [MERGE.md](MERGE.md) for the exact definitions and their scope.
+
+The core specification and ordering/live-table lemmas build. New mathematical
+proofs establish semantic equivalence of ordering-free source checks, current UF
+root uniqueness, and termination of every generated merge schedule on finite
+stores with the generated table shape. These are in `SameMeaning.lean`,
+`SourceMeaning.lean`, `Congruence/LiveLeaders.lean`, and
+`Congruence/LiveNormalization.lean` under `EgglogSemantics/Proofs`.
+
+Compiler correctness
+and termination proofs below were completed for the historical-row semantics at
+`aac8168`; they are being ported and are **not yet established for the new semantics**.
+The compiler now initializes UF self-parents and binds actual leaders in source-rule
+queries before constructing heads. No intern operation or implicit target equality
+has been introduced.
+
+The next proof obligations are:
+
+1. Derive `Live.State`, `Live.GeneratedTables`, and registered-head width correctness
+   along the generated prelude and actual compiled prefixes. `LiveState.lean` already
+   propagates them through actions and rounds and constructs completed rounds.
+2. Port `AbstractState`, rebuilding, and query correspondence to current entries.
+   Soundness must use source `Infers` when a target structural spelling is represented
+   but not literally recorded in the source. Equation containment alone no longer
+   transports current table lookups across destructive merges.
+3. Bound meaning-changing saturation rounds using canonical leaders and the finite
+   vocabulary ordering. Then reassemble the end-to-end observation and termination
+   theorems. Full divergence equivalence remains open.
+
+Validation of this checkpoint: `make check` passes. The focused Lean build of
+`OrderFinite`, `SourceMeaning`, `Congruence.LiveLeaders`, `Congruence.LiveState`,
+the repaired source helpers, and `Tests.LiveCompiler` passes. `Tests.LiveSemantics`
+also proves that a cyclic equality can infer an unrecorded nested spelling and that
+recording it preserves `SameMeaning`. Axiom audits contain
+only Lean's standard `propext`, `Classical.choice`, and `Quot.sound`; these new paper
+proofs transitively import no executable interpreter module.
+
+`make -k lean-check lean-difftest` was also attempted and fails during the remaining
+legacy proof migration. The current first failing modules are `MatchMonotone`,
+`Congruence.Match`, `ActionMonotone`, `Out`, `Setup`, `RuleStore`,
+`StatePreservation`, `Congruence.AbstractState`, `Congruence.SourceWrites`,
+`Congruence.AbstractRebuild`, `Interp`, and `SourceProof.Actions`. The differential
+runner consequently cannot build. This is an explicit incomplete proof checkpoint,
+not a passing full Lean build or an interpreter-correctness claim.
+
+
+## Prior proof milestone and continuing scope
+
+The completion claims in this section record the historical semantics at
+`aac8168`. The current full Lean build remains blocked on the downstream proof
+migration; the new foundational modules are checked separately. This section
+must not be read as a completion claim for the current specification.
 
 This is the working plan for PR #58. Mathematical congruence compiler correctness is
 proved separately from the executable sanity checks:

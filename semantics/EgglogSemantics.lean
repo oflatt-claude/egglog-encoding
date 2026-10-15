@@ -25,3 +25,12 @@ import EgglogSemantics.Tests.SourceProof
 -- Function provenance and checking against the relational program.
 import EgglogSemantics.Tests.Provenance
 import EgglogSemantics.Tests.Resugar
+
+-- Current-table specification migration: pure foundations and executable regressions.
+import EgglogSemantics.Proofs.OrderFinite
+import EgglogSemantics.Proofs.SourceMeaning
+import EgglogSemantics.Proofs.Congruence.LiveLeaders
+import EgglogSemantics.Proofs.Congruence.LiveNormalization
+import EgglogSemantics.Proofs.Congruence.LiveState
+import EgglogSemantics.Tests.LiveCompiler
+import EgglogSemantics.Tests.LiveSemantics

@@ -1,133 +1,145 @@
-# Merge semantics
+# Mathematical tables, merging, and saturation
 
-The specification in [Step.lean](EgglogSemantics/Spec/Step.lean) supports functions with
-multiple output columns and action blocks in their merge bodies.
-[Impl/Merge.lean](EgglogSemantics/Impl/Merge.lean) supplies an executable interpreter;
-[Proofs/Merge.lean](EgglogSemantics/Proofs/Merge.lean) proves its refinement contract.
+The specification uses one mathematical `Database` on both sides of the compiler.
+Its state contains declarations, rules, an evaluation environment, constructor
+existence/equations, current function entries, and pending function writes. Current
+entries and writes are sets of `Entry { name, key, value }`; both the key and output
+are explicit tuples. This is a mathematical state, not an executable row index.
 
-## Entries and reads
+## Values and current entries
 
-A constructor's entry is the term `f(args)`. A merge function's entry is
-`f(args ++ outputs)`, with the key/output split given by its declaration. `Database.eqs`
-records equations, and `Database.terms` consists of the terms related to themselves by
-`Cong`. Building an entry records it and its subterms through reflexive equations.
+Constructor values are ground terms. The reflexive equation `t = t` records that
+`t` exists, and constructor congruence is derived from the asserted equations.
+A function entry is stored separately:
 
-Value expressions evaluate constructors, `min`, literals, and variables under a signature and
-environment. A complete atom such as `(LowerBound expr bound)` reads a function row in a
-query and records one in an action. Its declaration determines where the key columns end
-and the output columns begin. Entry atoms cannot be children of value expressions or
-operands of equality and union.
+```text
+f(k̄) ↦ v̄
+```
 
-`Database.Out` permits any recorded output at a congruent key. Since the specification
-keeps old entries, this need not be the implementation's current output. Equality patterns
-retain a held witness congruent to both evaluated sides: `(= term term)` succeeds only
-when that class exists in the database.
+Writing an entry records the existence of its column values and proposes the entry
+for insertion. A table query reads only current entries. A pending write is not a
+query result, and replacing an entry does not leave its displaced output available
+to table queries. The existence of the displaced value and established equations
+are preserved.
 
-The model has integer literals but no general sort system. Static scope,
-declaration, union, and write checks live in [Scope.lean](EgglogSemantics/Spec/Scope.lean).
-The executable `arityOk` and `noLookup` checks in
-[Check.lean](EgglogSemantics/Impl/Check.lean) are used before differential-test emission.
-Arity checking requires an entry atom's full column count to match the declaration.
-Nested expressions use constructor arities and must evaluate as values. These checks are
-separate from the step relation; the interpreter indexes an entry only when its columns
-have the declared width.
+The surface atom `(f k₁ … kₙ v₁ … vₘ)` still uses the declaration to separate keys
+from outputs. Function entries cannot occur in value-expression positions.
 
-## Collisions and command steps
+## Explicit merge binding
 
-A merge specification explicitly declares two parameter tuples:
+A merge specification binds two output tuples:
 
 ```text
 merge (ō, n̄) { A; return ē }
 ```
 
-`MergeStep.collide` takes two entries `f(k̄; ā)` and `f(k̄′; b̄)` with congruent keys
-and conflicting outputs. It evaluates the body `A` and result tuple `ē` under the
-componentwise substitution `σ = [ō ↦ ā, n̄ ↦ b̄]`, then records the resulting entry.
-Body actions can build terms, assert unions, or write other tables. The caller's
-ambient environment is restored afterward. A scalar output is a singleton tuple.
+A collision evaluates the body and result with the componentwise substitution
+`σ = [ō ↦ ā, n̄ ↦ b̄]`. Scalars are singleton tuples. The declared identity columns
+control whether an arriving tuple differs enough to run the body; an unchanged
+collision keeps the resident tuple and skips the body.
 
-In Lean, this is `MergeSpec.merge oldVars newVars body res`; `mergeEnv` is simply
-`oldVars.zip a ++ newVars.zip b`. `MergeSpec.BindersOk` requires both parameter lists
-to have the declared output width and all their names to be distinct. The executable
-arity check enforces it; unbound variable reads fail evaluation as usual. Provenance
-also checks body and result scope, and reserves its generated parameter names.
+`MergeStep` has three cases:
 
-Provenance extends the parameter tuples to `(ō, p)` and `(n̄, q)`, where `p` and `q`
-are fresh proof parameters. It appends a proof result while preserving the original
-parameter names and expressions. Only the egglog parser and emitter know the surface
-conventions `old`/`new` for scalars and `old0`/`new0`, … for tuples; the specification
-has no implicit names or aliases.
+1. Insert a pending write whose key has no current entry.
+2. Consume a pending write and a resident entry with congruent keys, run the merge,
+   and install its result in place of the resident entry.
+3. Consume two distinct current entries whose keys have become congruent, run the
+   merge, and install one result in their place.
 
-`FnDecl.unchangedWidth` determines which output columns count as a change. An explicit
-`identityVals` takes precedence; otherwise an action block compares all output columns.
-Equal compared prefixes skip the body. A single-expression merge has no default skip,
-since a merge such as `(+ old new)` can change a value even when its inputs are equal.
-The congruence tables have a single output column and compare it directly.
+Inputs are consumed before the merge body runs. Consequently, a body that proposes
+one of those inputs again leaves a new pending write; it is not accidentally
+removed afterward. Body actions can create constructor terms, add equations, or
+propose further function writes. The surrounding environment and rules are restored.
 
-`MergeClosure` permits any finite sequence of merge steps. Every command ends in a merge
-phase, including a declaration, a rule registration, and a top-level action. A `run`
-fires the named ruleset against the pre-state and then merges. A `saturate` repeats rounds
-until both rule firing and merging leave the specification state unchanged.
+A completed merge phase has no pending writes and at most one current entry per
+function/key congruence class. A lone resident entry is not a collision with itself.
+`MergeNormalize D D′` requires both a finite merge closure and this completion
+condition. The semantics does not assume that arbitrary merge bodies normalize.
 
-## The executable row index
+Pending writes are a **set of proposals per phase**. A proposal identical to a
+resident row is still a real write, but duplicate proposals within one phase are
+coalesced. This is sufficient for the congruence compiler's idempotent merges; it is
+not a model of the multiplicity of arbitrary non-idempotent Rust updates.
 
-`FDatabase.rows` is a finite index in addition to the terms and equations retained by
-`toDatabase`. The interpreter replaces colliding rows and removes displaced rows from
-this index. Terms and equations remain recorded, so the denotation still grows even
-when the current row index shrinks.
+## Representative ordering
 
-For a collision, `mergeOneWith` prefers the row at the canonical key as the resident row;
-insertion order breaks the remaining tie. `mergeOneOriented` passes that resident row as
-`old` and the arriving row as `new`. `noConflict` implements the unchanged-column test.
-`mergeRound` processes collisions, and `mergeSaturateF` repeats until the state settles.
-Fuel exhaustion returns `none`, rather than a partially settled result.
+`ordering-min` compares constructor/literal node counts first, then uses the
+structural comparison to break ties. In particular, a proper subterm precedes the
+term containing it. Comparing two integer literals retains ordinary integer order.
 
-Term ordering (`Term.blt`) is structural. It does not reproduce Rust's allocated value
-ordering. Programs that observe which representative `min` selects can therefore differ,
-even in row counts.
+The constructor fragment introduces no new constructor names or literal values.
+Over that finite vocabulary, every initial segment of the size-first order is
+finite, and the order is well founded. This is the bound used for representatives;
+there is no claim that the order on all integers or all possible names is a global
+well-order. `Proofs/Order.lean` and `Proofs/OrderFinite.lean` prove these properties.
 
-## Interpreter contracts
+## Completed rounds and semantic stopping
 
-For constructor programs, `exec_programStep` relates `exec` to `ProgramStep` by an
-if-and-only-if. It requires `p.CtorDecls` and either `p.NoSaturate` or a successful
-interpreter execution. The latter condition accounts for the interpreter's finite
-saturation fuel. See [Proofs/Interp.lean](EgglogSemantics/Proofs/Interp.lean).
+A round fires the rules against its pre-state, combines their equation additions
+and proposed writes, then finishes a merge phase. Saturation repeats these completed
+rounds and stops at the **first** round preserving the database's meaning. It returns
+that round's post-state, including its permitted redundant writes.
 
-For merge programs, the proved statement is:
+For constructor terms, meaning includes both inferred existence and equality:
 
-```lean
-theorem execM_contained {p : Program} (hns : p.NoSaturate)
-    (hp : FDatabase.empty.ProgramLegal p)
-    (hcond : p.UnionFree ∨ p.OrderingFree) {d : FDatabase} (h : execM p = some d) :
-    ∃ db, ProgramStep FDatabase.empty.toDatabase p db ∧ d.toDatabase.Recorded db
+```text
+Infers(D, a, b) iff
+  ∃ w ∈ terms(D). CongOn(D, [a,b], w, a) ∧ CongOn(D, [a,b], a, b)
 ```
 
-`Recorded` allows the interpreter's information to be represented up to congruence in a
-reachable specification state. It does not identify the two states or establish that the
-interpreter computes every output the specification permits. The union-free arm keeps
-congruence diagonal; the ordering-free arm permits unions while excluding `min`, which
-compares terms structurally and so breaks congruence-stable evaluation.
+The old-state witness is essential: reflexivity of a hypothetical operand does not
+establish that an absent term exists. `SameMeaning D D′` requires agreement on these
+inferred facts, current function entries, and metadata. Pending writes are empty at
+both completed boundaries. Current entries are compared directly; the compiler
+must establish their normalization through its own UF/view rules.
 
-`NoSaturate` is required by this refinement proof: an interpreter fixpoint need not be a
-specification fixpoint when the specification permits more matches. The
-[encoding correspondence theorem](ENCODING.md#proof-status) separately handles
-successful saturating target executions.
+```text
+Round(D, D′)    SameMeaning(D, D′)
+─────────────────────────────────
+Saturate(D, D′)
 
-There is also no general theorem that the interpreter computes the greatest recorded
-output of a lattice merge. `Database.Current` defines that notion;
-[Lattice.lean](EgglogSemantics/Proofs/Lattice.lean) and
-[Counterexamples.lean](EgglogSemantics/Proofs/Counterexamples.lean) retain counterexamples
-to stronger candidate contracts and unrestricted ordering transports.
+Round(D, M)    ¬SameMeaning(D, M)    Saturate(M, D′)
+─────────────────────────────────────────────────
+Saturate(D, D′)
+```
 
-## Differential testing
+The constructor source fragment excludes `min`, so its rule evaluation can respect
+congruence. Proving that an unchanged semantic round remains stable requires that
+fragment property. The general language's `min` can observe different represented
+spellings; semantic stability for arbitrary such programs is not assumed.
 
-[DiffTest.lean](DiffTest.lean) includes curated and generated merge programs and emits
-them through [Tests/Egg.lean](EgglogSemantics/Tests/Egg.lean). `make lean-difftest` compares
-per-function row counts with the workspace's Rust egglog binary. Fixtures that guard on
-an output value make selected value differences observable as additional rows.
+## Congruence compilation and proof migration
 
-Row-count agreement does not establish equality of table contents. The corpus covers a
-restricted collection of merges; current-value reads, representative choices, and
-order-sensitive bodies can expose differences between the model and Rust. The
-interpreter theorem and the differential tests provide distinct checks, each within its
-stated scope.
+The target still uses ordinary UF and view tables and has no implicit equality
+reasoning. Generated heads seed each value's UF self-parent. Source-rule queries
+bind `UF(x, r)` and `UF(r, r)`, then use `r` in the head. With a single current output,
+the second atom certifies a genuine root. Maintenance supplies compressed parent
+edges and normalized view entries.
+
+The core spec, size-first order laws, finite-vocabulary order bounds, and direct
+live-table lemmas are kernel checked. `Proofs/SameMeaning.lean` gives a partial
+interpretation of constructor terms that characterizes inferred facts;
+`Proofs/SourceMeaning.lean` proves that ordering-free source checks agree across
+`SameMeaning` states, transporting their substitutions when necessary.
+
+`Proofs/Congruence/LiveNormalization.lean` proves termination of **every** generated
+merge schedule from a finite store with the generated declarations and singleton
+output shape. It also constructs a completed normalization. A row whose output
+has finite-set rank `n` has weight `5^n`; a pending write has twice that weight.
+Every insertion or collision strictly decreases the total weight, including the
+up to two UF writes emitted by a changed collision. This proof needs neither
+diagonal congruence nor a global well-order on terms.
+
+The end-to-end compiler execution and termination proofs are still being ported.
+They must establish the generated-table invariants from actual compiled programs,
+prove rebuilt view/query correspondence using current rows and inferred source
+facts, and bound whole saturation rounds. Merge termination alone does not imply
+termination of saturation. The former historical-row theorems must not be cited as
+proofs of the new semantics: a finite bound on equations alone no longer proves
+merge termination, since current tables can change without adding equations.
+
+`Tests/LiveSemantics.lean` gives a concrete distinction from raw equality: with
+`C = F(C)`, the spelling `F(F(C))` is absent but inferred, and adding it preserves
+`SameMeaning`. `Tests/LiveCompiler.lean` checks that the formerly growing compiled
+nested-head and descending-leader examples terminate, and that displaced outputs
+and missing constructor instances fail their checks.

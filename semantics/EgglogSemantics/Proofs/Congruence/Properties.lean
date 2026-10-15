@@ -16,9 +16,9 @@ mutual
 
 /-- Compiled constructions write entries and never assert a built-in union. -/
 theorem encodeBuild_unionFree : ∀ e : Expr, Actions.UnionFree (encodeBuild e)
-  | .lit _ | .var _ => trivial
+  | .lit _ | .var _ => ⟨trivial, trivial⟩
   | .min a b => actions_unionFree_append (encodeBuild_unionFree a) (encodeBuild_unionFree b)
-  | .app _ es => actions_unionFree_append (encodeBuildArgs_unionFree es) ⟨trivial, trivial⟩
+  | .app _ es => actions_unionFree_append (encodeBuildArgs_unionFree es) ⟨trivial, trivial, trivial⟩
 
 theorem encodeBuildArgs_unionFree : ∀ es : List Expr, Actions.UnionFree (encodeBuildArgs es)
   | [] => trivial
@@ -95,7 +95,7 @@ private theorem cmd_unionFree (i : Nat) (c : Cmd) :
   | rule r =>
       simp only [encodeCmd, List.mem_singleton] at hd
       subst d
-      exact encodeActions_unionFree r.actions
+      exact encodeActions_unionFree (r.actions.map leaderAction)
   | action a =>
       simp only [encodeCmd, List.mem_append, List.mem_map, List.mem_singleton] at hd
       rcases hd with ⟨a', ha, rfl⟩ | rfl

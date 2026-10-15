@@ -4,18 +4,18 @@ import EgglogSemantics.Proofs.Step
 
 namespace Egglog
 
-/-- **A merge never shrinks the database.**
-
-Constraint (3), discharged by the representation rather than by an argument: the step
-adds the combined row beside the two it merged, so there is nothing to overwrite. This
-is what lets `Cong.mono`, `Out.mono` and every `WF`-preservation lemma survive into
-M9 unchanged. -/
+/-- Merging preserves asserted equations even when it replaces current table rows. -/
 theorem MergeStep.contained {d₁ d₂ : Database} (h : MergeStep d₁ d₂) :
     d₁.Contained d₂ := by
   cases h with
-  | @collide d f _ as _ _ _ vs _ _ _ _ _ _ _ _ _ _ _ _ hbody _ =>
-    have hb : d₁.Contained d := ⟨(evalActions_contained hbody).eqs⟩
-    exact ⟨(hb.trans (Database.Contained.addTerm _ d)).eqs⟩
+  | @insert row _ _ _ _ _ =>
+      exact (Database.Contained.consumeWrite row d₁).trans (.putEntry row _)
+  | @write d old _ _ vs _ _ _ _ _ hv =>
+      have hb : d₁.Contained d := ⟨hv.contained.eqs⟩
+      exact hb.trans (.putEntry ⟨old.name, old.key, vs⟩ d)
+  | @collide d old _ _ vs _ _ _ _ _ _ hv =>
+      have hb : d₁.Contained d := ⟨hv.contained.eqs⟩
+      exact hb.trans (.putEntry ⟨old.name, old.key, vs⟩ d)
 
 theorem MergeClosure.contained {d₁ d₂ : Database} (h : MergeClosure d₁ d₂) :
     d₁.Contained d₂ := by
@@ -23,18 +23,10 @@ theorem MergeClosure.contained {d₁ d₂ : Database} (h : MergeClosure d₁ d�
   | refl => exact Database.Contained.refl _
   | tail _ hstep ih => exact ih.trans (MergeStep.contained hstep)
 
-/-- **Every command only adds.**
-
-The formal content of "never delete a term row or a proof row", which the encoding
-depends on and which the invariant argument needs: anything the checker reads is
-positive in the state, so once true it stays true. `.rule` and `.decl` touch only
-fields `Contained` ignores.
-
-`CmdStep` is a `def` now — an effect followed by a merge phase — so the case split is on
-the command rather than on the step. -/
+/-- A completed round preserves the equation component, independently of table updates. -/
 theorem RunStep.contained {R : RulesetName} {db db' : Database} (h : RunStep R db db') :
     db.Contained db' :=
-  Database.Contained.trans (Database.Contained.sUnion _ _) (MergeClosure.contained h)
+  Database.Contained.trans (Database.Contained.sUnion _ _) (MergeClosure.contained h.1)
 
 theorem RunReach.contained {R : RulesetName} {db d : Database}
     (h : Relation.ReflTransGen (RunStep R) db d) : db.Contained d :=
@@ -46,7 +38,7 @@ theorem CmdStep.contained {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   obtain ⟨d, hreach, hcl⟩ := h.reach
   refine Database.Contained.trans ?_ (MergeClosure.contained hcl)
   cases c with
-  | saturate R => exact RunReach.contained (show SaturateReach R db d from hreach).1
+  | saturate R => exact RunReach.contained (show SaturateReach R db d from hreach).reach
   | action a => exact evalAction_contained (hreach)
   | rule r => subst hreach; exact ⟨subset_rfl⟩
   | run R => subst hreach; exact Database.Contained.sUnion _ _

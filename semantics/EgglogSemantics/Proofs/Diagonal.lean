@@ -37,6 +37,18 @@ theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
 theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
     (db.withOperands ts).Diag := h.addTerms ts
 
+theorem Diag.consumeWrite {db : Database} (h : db.Diag) (row : Entry) :
+    (db.consumeWrite row).Diag := h
+
+theorem Diag.eraseEntry {db : Database} (h : db.Diag) (row : Entry) :
+    (db.eraseEntry row).Diag := h
+
+theorem Diag.writeEntry {db : Database} (h : db.Diag) (row : Entry) :
+    (db.writeEntry row).Diag := h.addTerms row.columns
+
+theorem Diag.putEntry {db : Database} (h : db.Diag) (row : Entry) :
+    (db.putEntry row).Diag := h.addTerms row.columns
+
 end Database
 
 /-- **On a diagonal state congruence is equality.** No equation relates two distinct terms,
@@ -63,19 +75,19 @@ theorem CongList.eq_of_diag {d : Database} (h : d.Diag) {as bs : List Term}
   | nil => rfl
   | cons hc _ ih => exact congrArg₂ List.cons (Cong.eq_of_diag h hc) ih
 
-theorem Database.Out.term {d : Database} (h : d.Diag) {f : FnName} {as vs : List Term}
-    (ho : d.Out f as vs) : Term.app f (as ++ vs) ∈ d.terms := by
+theorem Database.Out.entry {d : Database} (h : d.Diag) {f : FnName} {as vs : List Term}
+    (ho : d.Out f as vs) : Entry.mk f as vs ∈ d.entries := by
   obtain ⟨bs, hc, ht⟩ := ho
   exact CongList.eq_of_diag h hc ▸ ht
 
-theorem Database.Out.columns {d : Database} (h : d.WF) {f : FnName} {as vs : List Term}
+theorem Database.Out.columns {d : Database} (h : d.StoreOk) {f : FnName} {as vs : List Term}
     (ho : d.Out f as vs) : ∀ t ∈ as ++ vs, t ∈ d.terms := by
   obtain ⟨bs, hc, ht⟩ := ho
   intro t hm
   rcases List.mem_append.mp hm with hm | hm
   · obtain ⟨b, _, hb⟩ := (CongList.forall₂.mp hc).flip.exists_left hm
     exact hb.mem_left
-  · exact Database.mem_terms_of_arg h ht (List.mem_append_right _ hm)
+  · exact h.columns _ (Or.inl ht) t (List.mem_append_right _ hm)
 
 /-- `Expr.OrderingFree`, read off an application: its arguments are. -/
 theorem Expr.orderingFree_app {f : FnName} {args : List Expr}

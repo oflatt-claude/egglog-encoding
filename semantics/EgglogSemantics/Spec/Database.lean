@@ -4,12 +4,10 @@ import EgglogSemantics.Spec.Term
 /-!
 # The database
 
-The state: the asserted equalities, evaluation context, rules, and declarations. There is no separate term set — the equation `t = t` records that `t`
-was built, and `Database.terms` is the terms that are self-equal. It is the *endpoints* of
-`eqs`, not its diagonal: asserting `1 = 2` alone holds both, by `symm` and `trans`. The two
-coincide exactly under `WF.eqsRefl`, which is what that field is for. A function's table
-lives there too: a merge function's entry at the key `a…` with value columns `v…` is the
-term `f(a…, v…)`, and a constructor's entry is `f(a…)`.
+The state separates constructor existence/equations from current function entries and
+pending writes. There is no separate constructor term set: `t = t` records that `t`
+was built, and `Database.terms` is the terms that are self-equal. Replacing a function
+entry preserves the existence of its columns and all established equalities.
 -/
 
 namespace Egglog
@@ -55,6 +53,17 @@ theorem lookup_append_of_none {v : Var} {σ₁ σ₂ : Env} (h : lookup v σ₁ 
       · rename_i hvw; rw [if_neg hvw]; exact ih h
 
 end Env
+
+/-- A current function entry. Outputs are an explicit tuple, separate from the key. -/
+structure Entry where
+  name : FnName
+  key : List Term
+  value : List Term
+  deriving DecidableEq
+
+/-- All values mentioned by an entry. Entry atoms themselves are not constructor values. -/
+def Entry.columns (e : Entry) : List Term := e.key ++ e.value
+
 /-- Egglog's global state. -/
 @[ext]
 structure Database where
@@ -63,6 +72,11 @@ structure Database where
   /-- The *asserted* equalities: `union`s, and a reflexive `t = t` per term built. Not
   closed under congruence, and never shrinks. -/
   eqs : Set (Term × Term)
+  /-- Current function entries; merging replaces displaced entries. -/
+  entries : Set Entry := ∅
+  /-- Writes awaiting insertion or merging. A write remains distinct from an existing
+  entry even when their tuples agree, so non-idempotent merges can observe a reset. -/
+  pending : Set Entry := ∅
   /-- The evaluation context, installed temporarily for a rule or merge firing.
   Commands preserve it; a program starting at `empty` leaves it empty. -/
   env : Env
@@ -89,15 +103,37 @@ def addEq (a b : Term) (db : Database) : Database :=
   let d := (db.addTerm a).addTerm b
   { d with eqs := insert (a, b) d.eqs }
 
+/-- Propose a function write, preserving the existence of all its values. -/
+def writeEntry (e : Entry) (db : Database) : Database :=
+  let d := db.addTerms e.columns
+  { d with pending := insert e d.pending }
+
+/-- Install a resolved entry. Callers remove the displaced entries first. -/
+def putEntry (e : Entry) (db : Database) : Database :=
+  let d := db.addTerms e.columns
+  { d with entries := insert e d.entries }
+
+/-- Consume a write before executing its merge body, so the body may propose it again. -/
+def consumeWrite (e : Entry) (db : Database) : Database :=
+  { db with pending := db.pending \ {e} }
+
+def eraseEntry (e : Entry) (db : Database) : Database :=
+  { db with entries := db.entries \ {e} }
+
 /-- Union in a whole family of databases at once, taking `sig`, `env` and `rules` from
 `db`. -/
 def sUnion (db : Database) (S : Set Database) : Database :=
-  { db with eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs }
+  { db with
+    eqs := db.eqs ∪ ⋃ d ∈ S, d.eqs
+    entries := db.entries ∪ ⋃ d ∈ S, d.entries
+    pending := db.pending ∪ ⋃ d ∈ S, d.pending }
 
 /-- Databases that differ only in an environment no `lookup` can tell apart. -/
 structure EnvAgree (d₁ d₂ : Database) : Prop where
   sig : d₁.sig = d₂.sig
   eqs : d₁.eqs = d₂.eqs
+  entries : d₁.entries = d₂.entries
+  pending : d₁.pending = d₂.pending
   rules : d₁.rules = d₂.rules
   env : Env.Agree d₁.env d₂.env
 

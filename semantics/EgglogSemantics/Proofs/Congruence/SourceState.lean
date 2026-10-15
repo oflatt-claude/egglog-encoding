@@ -87,13 +87,15 @@ theorem evalAction_termsBuild {db db' : Database}
   have hlk := termsBuild_lookup hw h
   have hbase : ∀ t ∈ db.terms, ConstructorTerm db.sig t := fun t ht => termsBuild_term hw h ht
   rcases evalAction_eq_some hv with ⟨e, t, rfl, he, rfl⟩ |
+    ⟨e, f, keys, vals, ks, vs, rfl, he, _, _, rfl⟩ |
     ⟨e₁, e₂, t₁, t₂, rfl, he₁, he₂, -, rfl⟩
-  · rw [Expr.evalAtom_eq_eval hcs] at he
-    refine termsBuild_of_terms fun s hs => ?_
+  · refine termsBuild_of_terms fun s hs => ?_
     rw [Database.addTerm_terms] at hs
     rcases hs with hs' | hs'
     · exact hbase s hs'
     · exact fun g gs hg => eval_constructorTerm hlk e he g gs (Term.subterms_subset_of_mem hs' hg)
+  · rw [Expr.entry_none_of_allConstructors hcs] at he
+    contradiction
   · refine termsBuild_of_terms fun s hs => ?_
     rw [Database.addEq_terms] at hs
     rcases hs with hs' | hs'
@@ -165,8 +167,8 @@ theorem cmdStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.Terms
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       exact termsBuild_runRules hc.wf h hc.sig
   | saturate R =>
-      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp ⟨d, hreach, hcl⟩
-      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.TermsBuild) ?_ hsat.1
+      have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp hstep
+      refine (RunReach.induction (P := fun x => x.CtorState ∧ x.TermsBuild) ?_ hsat.reach
         ⟨hc, h⟩).2
       intro x y hx hxy
       obtain rfl : y = RunRules R x := hxy.eq_of_allConstructors hx.1.sig
