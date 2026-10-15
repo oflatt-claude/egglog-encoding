@@ -2,7 +2,7 @@
 use super::model::*;
 use super::syntax::machinery;
 
-pub(super) const MACHINERY: &str = "(seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read)))";
+pub(super) const MACHINERY: &str = "(seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read)))";
 
 pub(super) fn schedule(steps: usize, has_rules: bool) -> String {
     if steps == 0 || !has_rules {
@@ -35,6 +35,7 @@ pub(super) fn carrier(s: &Symbols) -> String {
         subst_pending = s.subst_pending,
         shape_equal = s.shape_equal,
         invocation = s.invocation,
+        group_replace = format!("GroupReplace_{}", s.index),
         group = s.group,
         coset_reps = s.coset_reps,
         big_reading = s.big_reading,

@@ -22,6 +22,10 @@ const MANUAL_PROOF_DISABLED_FILES: &[ManualProofDisable] = &[
         file: "subsume-relation.egg",
         reason: "proof-testing rewrites a check on a subsumed relation row into a prove query that no longer matches",
     },
+    ManualProofDisable {
+        file: "delete-then-set.egg",
+        reason: "the encoding defers a head's `delete` past its `set` of the same key, so the set merges with the old value instead of replacing it",
+    },
 ];
 
 // These proof-testing runs are still executed, but their proof snapshots are

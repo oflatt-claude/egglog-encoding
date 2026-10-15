@@ -15,6 +15,9 @@
 (ruleset slotted-migrate)
 ;; the groups from the rows' symmetries, closed and restricted, settled on their own
 (ruleset slotted-group)
+(ruleset slotted-empty)
+(ruleset slotted-shrink)
+(ruleset slotted-restore)
 ;; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`
 (ruleset slotted-shape)
 ;; the readings a pattern joins: derived once the groups have settled

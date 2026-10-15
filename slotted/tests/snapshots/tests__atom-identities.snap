@@ -20,6 +20,9 @@ input_file: slotted/tests/atom-identities.egg
 (ruleset slotted-migrate)
 ;; the groups from the rows' symmetries, closed and restricted, settled on their own
 (ruleset slotted-group)
+(ruleset slotted-empty)
+(ruleset slotted-shrink)
+(ruleset slotted-restore)
 ;; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`
 (ruleset slotted-shape)
 ;; the readings a pattern joins: derived once the groups have settled
@@ -564,6 +567,7 @@ input_file: slotted/tests/atom-identities.egg
 (function ShapeEqual_0 (U Renaming U) Unit :no-merge)
 (function Invocation_0 (U Renaming) U :merge ((union old new) old))
 (function EclassGroup_0 (U) Group :merge (set-union old new))
+(function GroupReplace_0 (U) Group :merge new)
 (function CosetReps_0 (U Renaming) Group :merge new)
 (relation BigReading_0 (U Renaming))
 (relation Reading_0 (U Renaming Renaming))
@@ -643,7 +647,7 @@ input_file: slotted/tests/atom-identities.egg
        (!= _f _l)
        (= _f (ordering-max _f _l)))
       ((delete (EclassGroup_0 _f))
-       (set (EclassGroup_0 _f) (set-empty))) :ruleset slotted)
+       (set (GroupReplace_0 _f) (set-empty))) :ruleset slotted-empty)
 
 (rule ((RenamesToLeader_0 _f _g _f)
        (RenamesToLeader_0 _f _m _l)
@@ -656,7 +660,11 @@ input_file: slotted/tests/atom-identities.egg
        (= _s2 (group-close (group-restrict _s _cs)))
        (!= _s _s2))
       ((delete (EclassGroup_0 _c))
-       (set (EclassGroup_0 _c) _s2)) :ruleset slotted-group)
+       (set (GroupReplace_0 _c) _s2)) :ruleset slotted-shrink)
+
+(rule ((= _s2 (GroupReplace_0 _c)))
+      ((set (EclassGroup_0 _c) _s2)
+       (delete (GroupReplace_0 _c))) :ruleset slotted-restore)
 
 (rule ((RenamesToLeader_0 _f _m _l)
        (= _csf (ClassSlots_0 _f))
@@ -877,5 +885,5 @@ input_file: slotted/tests/atom-identities.egg
  (let built_g_slots (node-slots m (names "$x" "$y") (names) (names)))
  (union built_g cls_p)) :ruleset slotted-apply)
 (rule ((_slotted_match_0 refined refined_len cls_p cls_p_2 cls_p2)) ((delete (_slotted_match_0 refined refined_len cls_p cls_p_2 cls_p2))) :ruleset slotted-apply)
-(run-schedule (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))) (repeat 1 (seq (run) (saturate (run slotted-refine)) (run slotted-apply) (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))))))
+(run-schedule (seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read))) (repeat 1 (seq (run) (saturate (run slotted-refine)) (run slotted-apply) (seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read))))))
 (check (= _c0cls_c0 (Null)) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)))) (= _c0m _c0atom_0) (= _c1cls_c1 (G _c1e0_lit_0 (SlottedVar_0 0) _c1e0_lit_1 (SlottedVar_0 0))) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)) (lit "$0" _c1e0_lit_0) (lit "$1" _c1e0_lit_1))) (= _c1m _c1atom_0) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-empty) (ren _c0m "_c0")) (compose (map-of (map-get (ren _c1m "$0") 0) 0 (map-get (ren _c1m "$1") 0) 1) (ren _c1m "_c1")) _grp))

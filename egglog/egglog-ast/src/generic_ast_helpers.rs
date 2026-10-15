@@ -816,7 +816,9 @@ impl Display for Literal {
                 }
             }
             Literal::Bool(b) => Display::fmt(b, f),
-            Literal::String(s) => write!(f, "\"{s}\""),
+            Literal::String(s) => {
+                write!(f, "\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            }
             Literal::Unit => write!(f, "()"),
         }
     }

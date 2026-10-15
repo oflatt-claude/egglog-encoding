@@ -20,6 +20,9 @@ input_file: slotted/tests/rudi/relation.egg
 (ruleset slotted-migrate)
 ;; the groups from the rows' symmetries, closed and restricted, settled on their own
 (ruleset slotted-group)
+(ruleset slotted-empty)
+(ruleset slotted-shrink)
+(ruleset slotted-restore)
 ;; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`
 (ruleset slotted-shape)
 ;; the readings a pattern joins: derived once the groups have settled
@@ -564,6 +567,7 @@ input_file: slotted/tests/rudi/relation.egg
 (function ShapeEqual_0 (U Renaming U) Unit :no-merge)
 (function Invocation_0 (U Renaming) U :merge ((union old new) old))
 (function EclassGroup_0 (U) Group :merge (set-union old new))
+(function GroupReplace_0 (U) Group :merge new)
 (function CosetReps_0 (U Renaming) Group :merge new)
 (relation BigReading_0 (U Renaming))
 (relation Reading_0 (U Renaming Renaming))
@@ -643,7 +647,7 @@ input_file: slotted/tests/rudi/relation.egg
        (!= _f _l)
        (= _f (ordering-max _f _l)))
       ((delete (EclassGroup_0 _f))
-       (set (EclassGroup_0 _f) (set-empty))) :ruleset slotted)
+       (set (GroupReplace_0 _f) (set-empty))) :ruleset slotted-empty)
 
 (rule ((RenamesToLeader_0 _f _g _f)
        (RenamesToLeader_0 _f _m _l)
@@ -656,7 +660,11 @@ input_file: slotted/tests/rudi/relation.egg
        (= _s2 (group-close (group-restrict _s _cs)))
        (!= _s _s2))
       ((delete (EclassGroup_0 _c))
-       (set (EclassGroup_0 _c) _s2)) :ruleset slotted-group)
+       (set (GroupReplace_0 _c) _s2)) :ruleset slotted-shrink)
+
+(rule ((= _s2 (GroupReplace_0 _c)))
+      ((set (EclassGroup_0 _c) _s2)
+       (delete (GroupReplace_0 _c))) :ruleset slotted-restore)
 
 (rule ((RenamesToLeader_0 _f _m _l)
        (= _csf (ClassSlots_0 _f))
@@ -790,7 +798,7 @@ input_file: slotted/tests/rudi/relation.egg
  (let built_relb_slots (node-slots m (names "x" "y") (names) (names)))
  (union built_relb cls_p)) :ruleset slotted-apply)
 (rule ((_slotted_match_0 refined refined_len cls_p cls_Truth cls_x cls_y)) ((delete (_slotted_match_0 refined refined_len cls_p cls_Truth cls_x cls_y))) :ruleset slotted-apply)
-(run-schedule (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))) (repeat 10 (seq (run) (saturate (run slotted-refine)) (run slotted-apply) (seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate)) (saturate (run slotted-group)) (run slotted-shape))) (saturate (run slotted-read))))))
+(run-schedule (seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read))) (repeat 10 (seq (run) (saturate (run slotted-refine)) (run slotted-apply) (seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read))))))
 (check (= _c0cls_c0 (Truth)) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)))) (= _c0m _c0atom_0) (= _c1cls_c1 (RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2)) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)) (child "_c1t1" _c1e0_c1t1 (ClassSlots_0 _c1cls_c1t1)) (child "_c1t2" _c1e0_c1t2 (ClassSlots_0 _c1cls_c1t2)))) (= _c1cls_c1t1 (Thingy _c1e1_lit_0 (SlottedVar_0 0) _c1e1_lit_1 (SlottedVar_0 0) _c1e1_lit_2 (SlottedVar_0 0))) (= _c1pinned_c1t1 (_pinned_RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2 1)) (Reading_0 _c1cls_c1t1 _c1pinned_c1t1 _c1sym_c1t1) (= _c1atom_1 (atom "@atom:1" (root "_c1t1" (ClassSlots_0 _c1cls_c1t1) _c1sym_c1t1) (lit "$0" _c1e1_lit_0) (lit "$1" _c1e1_lit_1) (lit "$2" _c1e1_lit_2))) (= _c1cls_c1t2 (Thingy _c1e2_lit_3 (SlottedVar_0 0) _c1e2_lit_4 (SlottedVar_0 0) _c1e2_lit_5 (SlottedVar_0 0))) (= _c1pinned_c1t2 (_pinned_RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2 2)) (Reading_0 _c1cls_c1t2 _c1pinned_c1t2 _c1sym_c1t2) (= _c1atom_2 (atom "@atom:2" (root "_c1t2" (ClassSlots_0 _c1cls_c1t2) _c1sym_c1t2) (lit "$3" _c1e2_lit_3) (lit "$4" _c1e2_lit_4) (lit "$5" _c1e2_lit_5))) (= _c1f (frame-join (frame-join _c1atom_0 _c1atom_1) _c1atom_2)) (= _c1m _c1f) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-empty) (ren _c0m "_c0")) (compose (map-of (map-get (ren _c1m "$0") 0) 0 (map-get (ren _c1m "$1") 0) 1 (map-get (ren _c1m "$2") 0) 2 (map-get (ren _c1m "$3") 0) 3 (map-get (ren _c1m "$4") 0) 4 (map-get (ren _c1m "$5") 0) 5) (ren _c1m "_c1")) _grp))
 (check (= _c0cls_c0 (Truth)) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)))) (= _c0m _c0atom_0) (= _c1cls_c1 (RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2)) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)) (child "_c1t1" _c1e0_c1t1 (ClassSlots_0 _c1cls_c1t1)) (child "_c1t2" _c1e0_c1t2 (ClassSlots_0 _c1cls_c1t2)))) (= _c1cls_c1t1 (Thingy _c1e1_lit_0 (SlottedVar_0 0) _c1e1_lit_1 (SlottedVar_0 0) _c1e1_lit_2 (SlottedVar_0 0))) (= _c1pinned_c1t1 (_pinned_RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2 1)) (Reading_0 _c1cls_c1t1 _c1pinned_c1t1 _c1sym_c1t1) (= _c1atom_1 (atom "@atom:1" (root "_c1t1" (ClassSlots_0 _c1cls_c1t1) _c1sym_c1t1) (lit "$0" _c1e1_lit_0) (lit "$1" _c1e1_lit_1) (lit "$2" _c1e1_lit_2))) (= _c1cls_c1t2 (Thingy _c1e2_lit_0 (SlottedVar_0 0) _c1e2_lit_4 (SlottedVar_0 0) _c1e2_lit_5 (SlottedVar_0 0))) (= _c1pinned_c1t2 (_pinned_RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2 2)) (Reading_0 _c1cls_c1t2 _c1pinned_c1t2 _c1sym_c1t2) (= _c1atom_2 (atom "@atom:2" (root "_c1t2" (ClassSlots_0 _c1cls_c1t2) _c1sym_c1t2) (lit "$0" _c1e2_lit_0) (lit "$4" _c1e2_lit_4) (lit "$5" _c1e2_lit_5))) (= _c1f (frame-join (frame-join _c1atom_0 _c1atom_1) _c1atom_2)) (= _c1m _c1f) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-empty) (ren _c0m "_c0")) (compose (map-of (map-get (ren _c1m "$0") 0) 0 (map-get (ren _c1m "$1") 0) 1 (map-get (ren _c1m "$2") 0) 2 (map-get (ren _c1m "$4") 0) 4 (map-get (ren _c1m "$5") 0) 5) (ren _c1m "_c1")) _grp))
 (check (= _c0cls_c0 (Truth)) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)))) (= _c0m _c0atom_0) (= _c1cls_c1 (RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2)) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)) (child "_c1t1" _c1e0_c1t1 (ClassSlots_0 _c1cls_c1t1)) (child "_c1t2" _c1e0_c1t2 (ClassSlots_0 _c1cls_c1t2)))) (= _c1cls_c1t1 (Thingy _c1e1_lit_0 (SlottedVar_0 0) _c1e1_lit_1 (SlottedVar_0 0) _c1e1_lit_2 (SlottedVar_0 0))) (= _c1pinned_c1t1 (_pinned_RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2 1)) (Reading_0 _c1cls_c1t1 _c1pinned_c1t1 _c1sym_c1t1) (= _c1atom_1 (atom "@atom:1" (root "_c1t1" (ClassSlots_0 _c1cls_c1t1) _c1sym_c1t1) (lit "$0" _c1e1_lit_0) (lit "$1" _c1e1_lit_1) (lit "$2" _c1e1_lit_2))) (= _c1cls_c1t2 (Thingy _c1e2_lit_3 (SlottedVar_0 0) _c1e2_lit_0 (SlottedVar_0 0) _c1e2_lit_5 (SlottedVar_0 0))) (= _c1pinned_c1t2 (_pinned_RelB _c1e0_c1t1 _c1cls_c1t1 _c1e0_c1t2 _c1cls_c1t2 2)) (Reading_0 _c1cls_c1t2 _c1pinned_c1t2 _c1sym_c1t2) (= _c1atom_2 (atom "@atom:2" (root "_c1t2" (ClassSlots_0 _c1cls_c1t2) _c1sym_c1t2) (lit "$3" _c1e2_lit_3) (lit "$0" _c1e2_lit_0) (lit "$5" _c1e2_lit_5))) (= _c1f (frame-join (frame-join _c1atom_0 _c1atom_1) _c1atom_2)) (= _c1m _c1f) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-empty) (ren _c0m "_c0")) (compose (map-of (map-get (ren _c1m "$0") 0) 0 (map-get (ren _c1m "$1") 0) 1 (map-get (ren _c1m "$2") 0) 2 (map-get (ren _c1m "$3") 0) 3 (map-get (ren _c1m "$5") 0) 5) (ren _c1m "_c1")) _grp))

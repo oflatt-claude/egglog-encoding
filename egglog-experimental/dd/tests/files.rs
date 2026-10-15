@@ -98,6 +98,14 @@ const KNOWN_UNSUPPORTED: &[(&str, &str)] = &[
     ("string_quotes.egg", "string_quotes.csv"),
 ];
 
+/// Files egglog proof-disables by hand (`MANUAL_PROOF_DISABLED_FILES` in
+/// `egglog/tests/files.rs`) because the term encoding answers them differently
+/// from native egglog, so their shared snapshot is native-only. `file_supports_proofs`
+/// does not know that list. DD is term-encoded and inherits the divergence, so each
+/// entry must fail with the given diagnostic; one that matches the snapshot again
+/// has been fixed and comes off both lists.
+const TERM_ENCODING_DIVERGES: &[(&str, &str)] = &[("delete-then-set.egg", "Check failed")];
+
 /// Run `program` on DD and render its outputs with the SAME normalization
 /// egglog's snapshot used, so the two are directly comparable.
 fn run_dd(file: &str, program: &str) -> Result<String, String> {
@@ -136,19 +144,20 @@ fn check(path: &PathBuf) -> Result<(), Failed> {
 
     let expected_unsupported = KNOWN_UNSUPPORTED
         .iter()
+        .chain(TERM_ENCODING_DIVERGES)
         .find_map(|&(file, expected)| (file == name).then_some(expected));
     match dd {
         Ok(Err(err)) => match expected_unsupported {
             Some(expected) if err.contains(expected) => Ok(()),
             Some(expected) => Err(format!(
-                "{name}: DD returned the wrong controlled error for a known unsupported feature\n\
+                "{name}: DD returned the wrong error for a listed file\n\
                  expected diagnostic containing: {expected}\n\
                  actual error: {err}"
             )
             .into()),
             None => Err(format!(
-                "{name}: DD failed but is not in KNOWN_UNSUPPORTED — \
-                     add it with an expected controlled diagnostic or investigate the regression\n\
+                "{name}: DD failed but is not in KNOWN_UNSUPPORTED or TERM_ENCODING_DIVERGES — \
+                     add it with an expected diagnostic or investigate the regression\n\
                      error: {err}"
             )
             .into()),
@@ -166,7 +175,8 @@ fn check(path: &PathBuf) -> Result<(), Failed> {
             .into())
         }
         Ok(Ok(_)) if expected_unsupported.is_some() => Err(format!(
-            "{name} is listed in KNOWN_UNSUPPORTED but now runs — remove it from that list"
+            "{name} is listed in KNOWN_UNSUPPORTED or TERM_ENCODING_DIVERGES but now runs — \
+             remove it from that list"
         )
         .into()),
         Ok(Ok(out)) => {

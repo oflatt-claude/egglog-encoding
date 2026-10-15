@@ -44,6 +44,7 @@ impl Form {
 fn convert(s: Sexp) -> Form {
     match s {
         Sexp::Atom(a, _) => Form::Atom(a),
+        Sexp::Literal(egglog::ast::Literal::String(s), _) => Form::Atom(quote(&s)),
         Sexp::Literal(l, _) => Form::Atom(l.to_string()),
         Sexp::List(xs, _) => Form::List(xs.into_iter().map(convert).collect()),
     }

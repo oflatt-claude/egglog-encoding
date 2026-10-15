@@ -11,6 +11,7 @@
 (function {shape_equal} ({sort} Renaming {sort}) Unit :no-merge)
 (function {invocation} ({sort} Renaming) {sort} :merge ((union old new) old))
 (function {group} ({sort}) Group :merge (set-union old new))
+(function {group_replace} ({sort}) Group :merge new)
 (function {coset_reps} ({sort} Renaming) Group :merge new)
 (relation {big_reading} ({sort} Renaming))
 (relation {reading} ({sort} Renaming Renaming))
@@ -90,7 +91,7 @@
        (!= _f _l)
        (= _f (ordering-max _f _l)))
       ((delete ({group} _f))
-       (set ({group} _f) (set-empty))) :ruleset slotted)
+       (set ({group_replace} _f) (set-empty))) :ruleset slotted-empty)
 
 (rule (({renames} _f _g _f)
        ({renames} _f _m _l)
@@ -103,7 +104,11 @@
        (= _s2 (group-close (group-restrict _s _cs)))
        (!= _s _s2))
       ((delete ({group} _c))
-       (set ({group} _c) _s2)) :ruleset slotted-group)
+       (set ({group_replace} _c) _s2)) :ruleset slotted-shrink)
+
+(rule ((= _s2 ({group_replace} _c)))
+      ((set ({group} _c) _s2)
+       (delete ({group_replace} _c))) :ruleset slotted-restore)
 
 (rule (({renames} _f _m _l)
        (= _csf ({class_slots} _f))

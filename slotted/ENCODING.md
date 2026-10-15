@@ -218,7 +218,7 @@ direct set-membership join. Primitives such as `coset-min`, `group-slot-closure`
 
 ## The rules, once per sort
 
-Seventeen rules and two facts, none of which mentions a constructor. Part II adds
+Eighteen rules and two facts, none of which mentions a constructor. Part II adds
 five more.
 
 **Orienting `Equated`.** The larger value is the follower, so a leader is the least
@@ -343,15 +343,25 @@ class's group is the one those generate; `group-close` takes the closure. Storin
 closure rather than generators is what lets a match look up the element it needs in one
 join. The rule is whole-set because the function's merge only ever unions: shrinking is
 a delete and a set, and two rules shrinking one set in one iteration would lose an edit
-or, under the union, undo each other forever.
+or, under the union, undo each other forever. The delete and the set are two rules a
+run apart: the first deletes the live row and stages the new set in `GroupReplace`, the
+second writes it back. Deleting and setting one key in one head means "replace" to
+egglog, which applies the removal before the insert, but not to the term/proof encoding,
+which defers the delete past the set's merge (`egglog/tests/delete-then-set.egg`), so
+the two steps are two runs and the shrink runs alone, once the group phase has settled,
+where no other rule's write to the key can land between them.
 
 ```
+(function GroupReplace (Math) Group :merge new)
 (rule ((= s (EclassGroup c))
        (= cs (ClassSlots c))
        (= s2 (group-close (group-restrict s cs)))
        (!= s s2))
       ((delete (EclassGroup c))
-       (set (EclassGroup c) s2)) :ruleset slotted)
+       (set (GroupReplace c) s2)) :ruleset slotted-shrink)
+(rule ((= s2 (GroupReplace c)))
+      ((set (EclassGroup c) s2)
+       (delete (GroupReplace c))) :ruleset slotted-restore)
 ```
 
 **One variable class.** `(Var v)` with `v` other than 0 is restated as `(Var 0)` under
@@ -749,16 +759,23 @@ matching from application, generates every needed refinement index between them,
 and phases maintenance as follows:
 
 ```
-(seq (saturate (seq (saturate (run slotted))
+(seq (saturate (seq (saturate (seq (saturate (run slotted))
+                                   (run slotted-empty)
+                                   (run slotted-restore)))
                     (saturate (run slotted-migrate))
-                    (saturate (run slotted-group))
+                    (saturate (seq (saturate (run slotted-group))
+                                   (run slotted-shrink)
+                                   (run slotted-restore)))
                     (run slotted-shape)))
      (saturate (run slotted-read)))
 ```
 
 `slotted` is the core: leaders, slot sets, the closure of the edges. `slotted-migrate`
 moves rows and parents onto leaders; `slotted-group` derives each class's group from
-its rows' symmetries and closes and restricts it; `slotted-shape` holds the shape
+its rows' symmetries and closes it; `slotted-shrink` restricts a group to narrowed
+slots and `slotted-empty` empties a follower's, each deleting the row and staging its
+replacement for `slotted-restore` to write back one run later, once the phase before
+it has settled (*A group is spelled on its class's slots*); `slotted-shape` holds the shape
 walks and the row dedup; `slotted-read` the coset readings and their index. Each phase
 reads what the ones before it settle -- a migration reads leaders, a group reads the
 rows where they now live, a shape walk enumerates its children's groups, a reading a
@@ -997,20 +1014,23 @@ Every rule that reads a group reads it off a class a row or a child column names
 those are leaders, so a group on a value that has a leader is a copy nothing reads —
 one row of it per member per group element, which was most of the edge relation. It is
 emptied, and its index rows go with it through the view rules; emptied rather than
-deleted, because the view can only follow a set that is there to compare against. Its
+deleted, because the view can only follow a set that is there to compare against. The
+delete and the empty set are two runs apart through `GroupReplace`, for the reason the
+group's shrink rule gives, in a phase of their own once the core has settled. Its
 identity edge goes too.
 
 Both deletions require the edge to point toward a smaller value. A native union can
 reverse an existing edge, making its source the new leader. The rule that removes
-obsolete edges runs in the same batch as these rules, so they must check the direction
-themselves. Otherwise they erase the new leader's identity or symmetries; unchanged
-slot sets and equations need not re-fire to restore them.
+obsolete edges runs in the same batch as the identity rule, so that rule must check
+the direction itself, and the group rule carries the same guard. Otherwise they erase
+the new leader's identity or symmetries; unchanged slot sets and equations need not
+re-fire to restore them.
 
 ```
 (rule ((= s (EclassGroup f)) (> (set-length s) 0) (RenamesToLeader f m l)
        (!= f l) (= f (ordering-max f l)))
       ((delete (EclassGroup f))
-       (set (EclassGroup f) (set-empty))) :ruleset slotted)
+       (set (GroupReplace f) (set-empty))) :ruleset slotted-empty)
 (rule ((RenamesToLeader f g f) (RenamesToLeader f m l)
        (!= f l) (= f (ordering-max f l)))
       ((delete (RenamesToLeader f g f))) :ruleset slotted)

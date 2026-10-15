@@ -12,6 +12,20 @@ fn evaluate(compiler: &mut Compiler, graph: &mut egglog::EGraph, source: &str) {
 }
 
 #[test]
+fn string_payloads_preserve_quotes_and_backslashes() {
+    let mut compiler = Compiler::default();
+    let mut graph = egglog_experimental::slotted::new_egraph();
+    evaluate(
+        &mut compiler,
+        &mut graph,
+        r#"(datatype U (Text String)) (let value (Text "a\"b\\c"))"#,
+    );
+    graph
+        .parse_and_run_program(None, r#"(check (= text (Text "a\"b\\c")))"#)
+        .unwrap();
+}
+
+#[test]
 fn transformation_emits_ordinary_egglog() {
     let mut compiler = Compiler::default();
     let mut graph = egglog_experimental::slotted::new_egraph();

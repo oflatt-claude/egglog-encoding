@@ -36,6 +36,7 @@ class CarrierSymbols:
     shape_equal: str
     invocation: str
     group: str
+    group_replace: str
     coset_reps: str
     big_reading: str
     reading: str
@@ -52,6 +53,7 @@ class CarrierSymbols:
             f"ShapeEqual_{index}",
             f"Invocation_{index}",
             f"EclassGroup_{index}",
+            f"GroupReplace_{index}",
             f"CosetReps_{index}",
             f"BigReading_{index}",
             f"Reading_{index}",
@@ -837,6 +839,13 @@ def carrier_core(symbols):
             # and `node-shape` takes it whole to spell a node once over every reading
             # its children allow rather than once per reading (C14).
             f"(function {s.group} ({s.sort}) Group :merge (set-union old new))",
+            # A group that has to SHRINK -- respelled on narrower slots, or emptied on a
+            # follower -- is staged here by a `slotted-shrink`/`slotted-empty` rule that
+            # deletes the live row, and `slotted-restore` writes it back one run later.
+            # Deleting and setting one key in one head is not the same thing under the
+            # term/proof encoding, which defers the delete past the set's merge
+            # (egglog/tests/delete-then-set.egg), so the two steps are two runs.
+            f"(function {s.group_replace} ({s.sort}) Group :merge new)",
             # The readings a pattern needs of a class it reaches through one column of
             # a parent row: one group element per way the group acts on the slots the
             # parent's OTHER columns pin, given as an identity renaming (C5). Readings
@@ -951,19 +960,20 @@ def carrier_core(symbols):
             # a leader. So a group on a value that has a leader is a copy no one reads,
             # and it is emptied; its index rows go with it through the view rules below.
             # Emptied rather than deleted, because the view can only follow a set that
-            # is there to compare against.
+            # is there to compare against. The delete and the empty set are two runs
+            # apart (see `GroupReplace`), in phases of their own after the core settles.
             # Both follower-cleanup rules must check the edge's current direction:
             # a native union can make f smaller than l. The obsolete-edge rule
-            # removes that edge in this same batch; it must not also erase the new
-            # leader's group or identity. Their seed rules may have no new input
-            # to restore them.
+            # removes that edge in the identity rule's own batch; neither rule may
+            # erase the new leader's group or identity. Their seed rules may have no
+            # new input to restore them.
             f"""(rule ((= s ({s.group} f))
        (> (set-length s) 0)
        ({s.renames} f m l)
        (!= f l)
        (= f (ordering-max f l)))
       ((delete ({s.group} f))
-       (set ({s.group} f) (set-empty))) :ruleset slotted)""",
+       (set ({s.group_replace} f) (set-empty))) :ruleset slotted-empty)""",
             "",
             # And its identity row, which the rule above leaves behind.
             f"""(rule (({s.renames} f g f)
@@ -979,13 +989,20 @@ def carrier_core(symbols):
             # class each state their own symmetries, so the class's group is the one
             # they generate. Whole-set, because the merge only ever unions: shrinking is
             # a delete and a set, and two rules shrinking one set in one iteration would
-            # lose an edit or undo each other.
+            # lose an edit or undo each other. The delete runs alone, once the group
+            # phase has settled, and the restore one run later, so no other rule's
+            # write to the key can land between the two and be lost.
             f"""(rule ((= s ({s.group} c))
        (= cs ({s.class_slots} c))
        (= s2 (group-close (group-restrict s cs)))
        (!= s s2))
       ((delete ({s.group} c))
-       (set ({s.group} c) s2)) :ruleset slotted-group)""",
+       (set ({s.group_replace} c) s2)) :ruleset slotted-shrink)""",
+            "",
+            # The staged group written back onto the key the shrink deleted.
+            f"""(rule ((= s2 ({s.group_replace} c)))
+      ((set ({s.group} c) s2)
+       (delete ({s.group_replace} c))) :ruleset slotted-restore)""",
             "",
             # A renaming outlives a narrowing of its classes' slots: restate it on what
             # they have now.
@@ -1084,8 +1101,10 @@ GROUP_INDICES = 512
 #: coset readings. Shape computation depends on settled child groups; readings
 #: are only consumed by user matching, so they run after maintenance.
 MACHINERY_SCHEDULE = (
-    "(seq (saturate (seq (saturate (run slotted)) (saturate (run slotted-migrate))"
-    " (saturate (run slotted-group)) (run slotted-shape)))"
+    "(seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore)))"
+    " (saturate (run slotted-migrate))"
+    " (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore)))"
+    " (run slotted-shape)))"
     " (saturate (run slotted-read)))"
 )
 
@@ -1143,8 +1162,13 @@ def multi_sort_core(carriers):
             "(ruleset slotted)",
             ";; rows moved into their leaders' frames: once the leaders have settled",
             "(ruleset slotted-migrate)",
+            ";; a follower's group emptied: its delete, then its restore, once the core settles",
+            "(ruleset slotted-empty)",
             ";; the groups from the rows' symmetries, closed and restricted, settled on their own",
             "(ruleset slotted-group)",
+            ";; a group respelled on narrower slots: its delete, then its restore, once the groups settle",
+            "(ruleset slotted-shrink)",
+            "(ruleset slotted-restore)",
             ";; the shape walks: once per settled state of the groups, see `MACHINERY_SCHEDULE`",
             "(ruleset slotted-shape)",
             ";; the readings a pattern joins: derived once the groups have settled",
