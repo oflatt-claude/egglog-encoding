@@ -19,9 +19,9 @@ pub(super) struct Atom {
 /// than making the reader repeat the allocation policy.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct ProofNames {
-    /// Root pattern, then the additional equality patterns, in source order.
+    /// Root pattern (empty for a variable), then additional equality patterns.
     pub patterns: Vec<Vec<(Vec<usize>, String)>>,
-    /// Generated bindings for those atoms only, not every source variable.
+    /// Generated class bindings for pattern variables and atoms.
     pub classes: BTreeMap<String, String>,
     pub readings: BTreeMap<String, String>,
     pub frame: String,

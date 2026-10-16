@@ -1653,8 +1653,11 @@ impl<'a> Translator<'a> {
             .rules
             .get(name)
             .ok_or_else(|| format!("no generated names for rule {name}"))?;
-        let root_name = &names.patterns[0][0].1;
-        let root_class = &names.classes[root_name];
+        let root_name = match self.out.term_dag.get(rewrite.lhs) {
+            Term::Var(v) => v.clone(),
+            _ => names.patterns[0][0].1.clone(),
+        };
+        let root_class = &names.classes[&root_name];
         // the stored match and its firing
         let (firing, rekeys) = self.unwrap_match(prems[0])?;
         let matched = self.egg.get(firing).clone();
@@ -1690,7 +1693,7 @@ impl<'a> Translator<'a> {
         } = self.expand(cls_p, rewrite.lhs, &[], &ctx, HashMap::default())?;
         let root = self.content_form(root); // cls_p = C
         let root_atom = self
-            .atom_label(&frame, root_name, rewrite.lhs, root_occ.get(&vec![]))
+            .atom_label(&frame, &root_name, rewrite.lhs, root_occ.get(&vec![]))
             .or(Some("@atom:0".to_string()));
         let nested = self.nested_node_slots(
             &frame,
@@ -2316,6 +2319,11 @@ impl<'a> Translator<'a> {
     ) -> R<Expansion> {
         let mut occurrences = HashMap::from_iter([(path.to_vec(), Occurrence { cls, row: None })]);
         let Term::App(ctor, kids) = self.out.term_dag.get(pattern).clone() else {
+            if let Term::Var(v) = self.out.term_dag.get(pattern)
+                && !v.starts_with('$')
+            {
+                variables.insert(v.clone(), cls);
+            }
             let t = self.dec(cls)?;
             return Ok(Expansion {
                 proof: self.reflexive(t)?,
@@ -2662,7 +2670,8 @@ impl<'a> Translator<'a> {
                             }
                         }
                         Term::Var(v) => {
-                            if let Some(&want) = variables.get(v)
+                            let bound = ctx.classes.get(v).and_then(|c| ctx.subst.get(c));
+                            if let Some(&want) = variables.get(v).or(bound)
                                 && class != Some(want)
                             {
                                 return false;
