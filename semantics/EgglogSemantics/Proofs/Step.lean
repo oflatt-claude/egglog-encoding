@@ -4,6 +4,40 @@ import EgglogSemantics.Proofs.Match
 
 namespace Egglog
 
+theorem SaturateReach.reach {R : RulesetName} {db d : Database}
+    (h : SaturateReach R db d) : Relation.ReflTransGen (RunStep R) db d := by
+  induction h with
+  | done hs _ => exact .single hs
+  | step hs _ _ ih => exact (Relation.ReflTransGen.single hs).trans ih
+
+theorem SaturateReach.mergeNormal {R : RulesetName} {db d : Database}
+    (h : SaturateReach R db d) : MergeNormal d := by
+  induction h with
+  | done hs _ => exact hs.2
+  | step _ _ _ ih => exact ih
+
+/-- The successful transition still decomposes into a reach and a merge closure; for a
+check that closure is reflexive. The converse requires the check to leave the state alone. -/
+theorem CmdStep.reach {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
+    ∃ d, cmdReach db c d ∧ MergeClosure d db' := by
+  cases c <;> try exact ⟨h.choose, h.choose_spec.1, h.choose_spec.2.1⟩
+  obtain ⟨hq, rfl⟩ := h
+  exact ⟨_, ⟨hq, rfl⟩, .refl⟩
+
+/-- A command may finish with a reflexive merge phase. For checks this is the only phase. -/
+theorem CmdStep.of_reach {db db' : Database} {c : Cmd} (h : cmdReach db c db')
+    (hn : MergeNormal db') :
+    CmdStep db c db' := by
+  cases c <;> try exact ⟨db', h, .refl, hn⟩
+  exact h
+
+/-- State-changing commands may additionally take a merge closure. -/
+theorem CmdStep.of_merge {db mid db' : Database} {c : Cmd}
+    (hc : ∀ q, c ≠ .check q) (hr : cmdReach db c mid) (hm : MergeNormalize mid db') :
+    CmdStep db c db' := by
+  cases c <;> try exact ⟨mid, hr, hm⟩
+  exact (hc _ rfl).elim
+
 variable {oldVars newVars : List Var}
 /-! ### Declaredness, in a signature that grows
 

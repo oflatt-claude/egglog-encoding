@@ -37,10 +37,6 @@ def Database.terms (db : Database) : Set Term := {t | Cong db t t}
 def Database.values (db : Database) : Set Term :=
   {t | t ∈ db.terms ∧ t.IsValue db.sig}
 
-/-- Both sides of a derivable equation are present. -/
-theorem eqsInTerms_free {db : Database} {a b : Term} (h : Cong db a b) :
-    a ∈ db.terms ∧ b ∈ db.terms := ⟨h.trans h.symm, h.symm.trans h⟩
-
 /-- Every application the database holds is a **declared** function's entry: its head is
 declared, and it carries that declaration's `entryWidth` children. -/
 def Database.DeclaredTerms (db : Database) : Prop :=
@@ -67,14 +63,6 @@ def Database.LitsIsolated (db : Database) : Prop :=
 structure Database.WF (db : Database) : Prop where
   envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
   litsIsolated : db.LitsIsolated
-
-/-- Subterm existence follows from congruence, independently of well-formedness. -/
-theorem Database.subtermClosed (db : Database) :
-    ∀ t ∈ db.terms, t.subterms ⊆ db.terms :=
-  fun _ ht _ hs => Cong.subterm ht hs
-
-theorem Database.WF.subtermClosed {db : Database} (_h : db.WF) :
-    ∀ t ∈ db.terms, t.subterms ⊆ db.terms := db.subtermClosed
 
 /-- `db` plus the terms `ts`, used to relate a term the database may not hold — a pattern
 instance, say — to one it does. It records that each of `ts` exists and **adds no equation

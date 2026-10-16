@@ -1,7 +1,6 @@
 import Mathlib.Data.Set.Finite.Lattice
 import Mathlib.Data.Finite.Prod
-import EgglogSemantics.Proofs.Match
-import EgglogSemantics.Spec.Step
+import EgglogSemantics.Proofs.Step
 
 /-! Finite mathematical executions have finite stores. No executable representation is
 needed: rule matching ranges over finitely many substitutions at each finite state.

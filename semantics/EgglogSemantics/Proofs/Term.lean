@@ -3,6 +3,16 @@ import EgglogSemantics.Proofs.Syntax
 
 namespace Egglog
 namespace Term
+@[simp] theorem toExpr_lit (l : Lit) : (Term.lit l).toExpr = .lit l := rfl
+
+@[simp] theorem toExpr_app (f : FnName) (ts : List Term) :
+    (Term.app f ts).toExpr = .app f (Term.toExprList ts) := rfl
+
+@[simp] theorem toExprList_nil : Term.toExprList [] = [] := rfl
+
+@[simp] theorem toExprList_cons (t : Term) (ts : List Term) :
+    Term.toExprList (t :: ts) = t.toExpr :: Term.toExprList ts := rfl
+
 /-- Structural induction over `Term`, with the induction hypothesis given for
 every element of an application's argument list. -/
 @[elab_as_elim]

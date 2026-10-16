@@ -115,16 +115,6 @@ def toExprList : List Term → List Expr
 
 end
 
-@[simp] theorem toExpr_lit (l : Lit) : (Term.lit l).toExpr = .lit l := rfl
-
-@[simp] theorem toExpr_app (f : FnName) (ts : List Term) :
-    (Term.app f ts).toExpr = .app f (Term.toExprList ts) := rfl
-
-@[simp] theorem toExprList_nil : Term.toExprList [] = [] := rfl
-
-@[simp] theorem toExprList_cons (t : Term) (ts : List Term) :
-    Term.toExprList (t :: ts) = t.toExpr :: Term.toExprList ts := rfl
-
 end Term
 /-! ### The term order
 
