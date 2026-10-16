@@ -392,11 +392,33 @@ def combined_comparisons():
         assert by_side[encoding].verdict(by_side[reference]) == "isomorphic"
 
 
+def logic_case_studies():
+    """Use the public collector for source-derived logic rules and exact evidence."""
+    paths = sorted(W.LOGIC_FIXTURES.glob("first-order-logic*.egg"))
+    assert len(paths) >= 2, "missing first-order logic fixtures"
+    for path in paths:
+        workload = W.logic_workload(path)
+        rows = E.collect_workload(
+            workload,
+            argparse.Namespace(counts=True, timeout=60, jobs=1),
+            SIDES,
+            CHECK_CONFIG,
+            run.quiet_progress,
+        )
+        assert [row.side for row in rows] == ["encoding", "ref-multi"]
+        assert set(workload.unsupported) == {"encoding-no-aliasing", "ref-nested-snapshot", "ref-nested"}
+        assert successful(rows, SIDES, True), [row.as_dict("test") for row in rows]
+        enc, ref = rows
+        assert V.compare_counts(enc, ref) == "same counts"
+        assert enc.verdict(ref) == "isomorphic"
+
+
 def zero_round_budget():
     """An explicit zero must not silently run the paper's default budget."""
     args = argparse.Namespace(
         no_build=True,
         study="all",
+        case=None,
         params=[0],
         kernel=["mmm"],
         phase=["1st"],
@@ -409,7 +431,7 @@ def zero_round_budget():
     with tempfile.TemporaryDirectory(prefix="slotted-zero-rounds-") as tmp:
         args.jsonl = Path(tmp) / "report.jsonl"
         records = E.collect(args, ("ref-multi",), argparse.ArgumentParser(), config=CHECK_CONFIG)
-    assert len(records) == 2
+    assert len(records) == 4
     assert all(r["slotted"]["rounds"] == 0 and r["slotted"]["goal"] == "no" for r in records), records
 
 
@@ -418,6 +440,7 @@ def parallel_collection():
     args = argparse.Namespace(
         no_build=True,
         study="all",
+        case=None,
         params=[0],
         kernel=["mmm_sum"],
         phase=["1st"],
@@ -514,6 +537,7 @@ def main():
     separate_timing_and_graph_runs()
     substitution_policies()
     combined_comparisons()
+    logic_case_studies()
     graph_failure_reasons()
     goal_reporting()
     zero_round_budget()

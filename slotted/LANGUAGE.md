@@ -596,7 +596,7 @@ discover all files under `slotted/tests/` and the libraries under
   `egglog-experimental --slotted`, so its `(check ...)` assertions must pass.
 
 Reference comparisons are separate: adding a `.egg` file does not automatically
-translate it to the reference language. `slotted/checks/check-case-studies.py`
+translate it to the reference language. `./bench.py slotted logic`
 discovers `slotted/tests/rudi/first-order-logic*.egg` and translates their rules,
 initial equations, round budget, and goal directly from those files. Both sides
 must prove the goal, have equal class and raw node counts, and pass exact graph
@@ -604,6 +604,8 @@ isomorphism before the check passes. Graphs are collected before the goal check
 so the target cannot seed either graph. `ref-nested` is reported as unsupported
 because these rules require multipattern `:when` conditions. The reference
 language's constructor declarations live in `slotted/xmulti/src/main.rs`.
+Use `--case first-order-logic2` to select one fixture. These workloads also run
+in the default slotted suite and nightly, using the shared report cache and tables.
 
 `make check` runs the Python and Rust unit tests, including compiler snapshots.
 `make slotted-check` also runs the source assertions and reference comparisons.

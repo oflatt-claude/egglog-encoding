@@ -25,6 +25,7 @@ class Row:
         self.checks = None  # the oracle's `CONFIG checks=` answer, for reference sides
         self.substitution = None  # the oracle's `CONFIG substitution=` answer
         self.paper = None  # Table 1's slotted row for this workload, when it has one
+        self.unsupported = {}  # Treatments this workload cannot express, with reasons.
         #: encoding side: per reference side, how its final graph compares (`compare`)
         self.vs_ref = {}
         self.graph = None  # only used during comparison; not recorded in the cache

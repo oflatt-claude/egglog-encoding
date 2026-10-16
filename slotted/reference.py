@@ -771,12 +771,12 @@ def payload(tok, ground=True):
 class Source:
     """One slotted test: its language, and its body in order."""
 
-    def __init__(self, path):
+    def __init__(self, path, *, text=None):
         self.path = path
         self.slots = Slots()
         self.spec, self.output_sorts, self.child_sorts = {}, {}, {}
         self.body, self.sorts, self._ctors, self.includes = [], [], [], []
-        self._read(path)
+        self._read(path, text=text)
         self.carriers = carrier_symbols(self.sorts)
         for form in self._ctors:
             name, sig, output, children = read_typed_language_form(form, self.sorts)
@@ -791,9 +791,9 @@ class Source:
             self.carriers,
         )
 
-    def _read(self, path):
+    def _read(self, path, *, text=None):
         """This file's declarations and body, with any included source read first."""
-        for form in parse(path.read_text()):
+        for form in parse(path.read_text() if text is None else text):
             if isinstance(form, list) and form and form[0] == "include":
                 inc = ROOT / form[1].strip('"')
                 assert inc.exists(), f"{path.name}: no such file {form[1]}"

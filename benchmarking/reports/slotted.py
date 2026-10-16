@@ -42,6 +42,8 @@ class SlottedReport:
 
 
 def workload_label(study: str, case: str, rules: int | None) -> str:
+    if study == "logic":
+        return case
     if study == "array" and (match := re.fullmatch(r"goal-2d-4f-N(\d+)", case)):
         return "Array N=" + match[1]
     if study == "sdql" and (
@@ -143,10 +145,12 @@ def slotted_report(
         + (f" [{key[2]} rounds]" if names[workload_label(key[0], key[1], key[3])] > 1 else "")
         for key in groups
     }
+    unsupported = {key: next(iter(group.values()))["slotted"]["unsupported"] for key, group in groups.items()}
     note = (
         "Elapsed seconds for completed runs, including missed goals; timeout means the time limit was reached. "
         "ref-nested uses syntactic substitution; snapshot-reference timings are diagnostic only. "
-        "Each workload/budget shows its latest cached version. Parallel timings include resource contention."
+        "Each workload/budget shows its latest cached version. Parallel timings include resource contention. "
+        "Unsupported treatments are not run."
     )
     if not counts:
         note += " Class/node counts and isomorphism checks are disabled (--no-counts)."
@@ -162,6 +166,9 @@ def slotted_report(
         for key, group in groups.items():
             cells = [text_cell(labels[key])]
             for side in shown:
+                if side in unsupported[key]:
+                    cells.append(text_cell(None, "unsupported"))
+                    continue
                 value = group.get(side)
                 seconds = None if value is None else value["wall_sec"]
                 label = "—" if value is None else elapsed_time(seconds, value["slotted"]["goal"])
@@ -182,6 +189,16 @@ def slotted_report(
     for key, group in groups.items():
         label = labels[key]
         for side in sides:
+            if side in unsupported[key]:
+                graph_issues.append(
+                    _row(
+                        report_id(*key[:3], side),
+                        label,
+                        LABELS.get(side, side),
+                        "unsupported: " + unsupported[key][side],
+                    )
+                )
+                continue
             selected = group.get(side)
             if selected is None:
                 errors.append(f"{label}: missing {LABELS.get(side, side)} observation.")
@@ -194,6 +211,8 @@ def slotted_report(
             identity = evidence["observation"]
             if side in EXACT_PAIRS:
                 for ref in sides:
+                    if ref in unsupported[key]:
+                        continue
                     if ref != EXACT_PAIRS[side] and ref not in evidence["vs_ref"]:
                         continue
                     reference = group.get(ref)
