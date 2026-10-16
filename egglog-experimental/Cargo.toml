@@ -39,6 +39,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 num = "0.4.3"
 lazy_static = "1.4"
 log = "0.4"

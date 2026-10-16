@@ -8,11 +8,12 @@ mod frontend;
 mod layout;
 mod maintenance;
 mod model;
+pub mod proofs;
 mod query;
 mod rewrite;
 mod slots;
 mod syntax;
-pub use frontend::{Compiler, Options};
+pub use frontend::{Compiler, Options, ProofMode};
 
 mod runtime;
 
@@ -48,4 +49,15 @@ pub fn register(graph: &mut egglog::EGraph) {
             std::sync::Arc::new(export::ExportCommand),
         )
         .unwrap();
+}
+
+/// An e-graph that lifts encoded slotted proofs and checks them against the source.
+pub fn new_egraph_with_proofs() -> egglog::EGraph {
+    with_proofs(new_egraph())
+}
+
+/// Enable proof translation and checking on a registered slotted e-graph.
+pub fn with_proofs(mut graph: egglog::EGraph) -> egglog::EGraph {
+    proofs::pipeline::register(&mut graph);
+    graph.with_proofs_for_translation()
 }

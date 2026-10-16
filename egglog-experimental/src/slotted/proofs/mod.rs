@@ -1,0 +1,21 @@
+//! Proofs for the slotted encoding: a proof format over the surface terms of
+//! `slotted/LANGUAGE.md`, a checker for it against the slotted source program,
+//! and the translation from egglog proofs over the encoded program. The format
+//! and its rules are specified in `slotted/PROOFS.md`.
+
+pub mod checker;
+pub mod format;
+pub(crate) mod pipeline;
+pub mod source;
+pub mod terms;
+pub(crate) mod translate;
+
+pub use checker::{Checked, SlottedCheckError, check_claim, check_proof};
+pub use format::{
+    SlottedJustification, SlottedProof, SlottedProofId, SlottedProofStore, SlottedProposition,
+};
+pub use source::{Claim, ClaimKind, Condition, Constructor, Rewrite, Rhs, SlottedProgram, Union};
+pub use terms::Renaming;
+
+type HashMap<K, V> = hashbrown::HashMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+type HashSet<K> = hashbrown::HashSet<K, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;

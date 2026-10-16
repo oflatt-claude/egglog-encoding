@@ -1,6 +1,8 @@
 # Changes
 
 ## [Unreleased] - ReleaseDate
+- Allow opt-in extension commands on term-encoded e-graphs and expose unsimplified proofs for external translation. Add map and ordering validators.
+
 
 - Tree extraction materializes each reachable table once and re-relaxes only the rows whose children improved (from #956). Costs, chronological tie-breaking and extracted terms are unchanged.
 - Index construction skips constant radix digits and uses wider digits for larger inputs when they reduce the pass count, preserving row order within each key.

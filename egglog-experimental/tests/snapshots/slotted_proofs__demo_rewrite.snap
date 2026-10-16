@@ -1,0 +1,62 @@
+---
+source: egglog-experimental/tests/slotted_proofs.rs
+expression: "format!(\"Source:\\n{source}\\n\\nProof:\\n{}\", proofs[0])"
+---
+Source:
+(datatype U (F U))
+(let input (F $a))
+(rewrite (F x) x :name "unwrap")
+(run 1)
+(check (= input $a))
+
+Proof:
+#0: $v0 = $v0
+    by fiat
+#1: $v0 = {a->v0, v0->a}·$a
+    by shift #0 by {a->v0, v0->a}
+#2: $v0 = $v0
+    by sym #0
+#3: $v0 = $v0
+    by sym #2
+#4: $v0 = {a->v0, v0->a}·$a
+    by shift #3 by {a->v0, v0->a}
+#5: $a = {a->v0, v0->a}·$v0
+    by sym #4
+#6: (F $a) = (F $a)
+    by fiat
+#7: (F $a) = (F $a)
+    by congr #6 at 0 with #5
+#8: (F $a) = (F $a)
+    by sym #7
+#9: (F $a) = (F $a)
+    by trans #8 #7
+#10: (F $a) = $a
+    by rule "unwrap" [x := $a] from #9
+#11: (F $a) = $a
+    by trans #9 #10
+#12: (F $a) = {a->v0, v0->a}·$v0
+    by shift #11 by {a->v0, v0->a}
+#13: $v0 = {a->v0, v0->a}·(F $a)
+    by sym #12
+#14: $v0 = {a->v0, v0->a}·(F $a)
+    by trans #13 #9
+#15: $v0 = (F $v0)
+    by shift #14 by {a->v0, v0->a}
+#16: (F $v0) = $v0
+    by sym #15
+#17: $v0 = (F $v0)
+    by sym #16
+#18: (F $v0) = (F $v0)
+    by trans #16 #17
+#19: $v0 = (F $v0)
+    by trans #15 #18
+#20: $v0 = (F $v0)
+    by congr #19 at 0 with #0
+#21: $v0 = {a->v0, v0->a}·(F $a)
+    by shift #20 by {a->v0, v0->a}
+#22: (F $a) = {a->v0, v0->a}·$v0
+    by sym #21
+#23: (F $a) = {a->v0, v0->a}·$v0
+    by trans #22 #0
+#24: (F $a) = $a
+    by trans #23 #1
