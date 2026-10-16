@@ -162,6 +162,82 @@ def test_timeout_cells_show_the_outcome_in_cli_and_nightly(tmp_path: Path) -> No
     assert table.rows[0].cells[1].raw == 300.125
 
 
+def test_unsupported_treatments_are_distinct_from_missing_comparisons(tmp_path: Path) -> None:
+    cache, _, _, task, rows = _case(tmp_path)
+    active = [row for row in rows if row.side in ("encoding", "ref-multi")]
+    for row in active:
+        row.study, row.case = "logic", "first-order-logic"
+        row.unsupported = dict.fromkeys(
+            ("encoding-no-aliasing", "ref-nested", "ref-nested-snapshot"), "multipattern side conditions"
+        )
+    records = cache.append(task, active)
+    assert cache.reuse(task, tuple(row.side for row in active)) == records
+    report = slotted_report(records)
+    assert not report.errors
+    nested = report.catalog.sections[0].blocks[1]
+    assert isinstance(nested, ReportTable)
+    assert [cell.display for cell in nested.rows[0].cells] == ["first-order-logic", "unsupported", "unsupported"]
+    assert all(cell.raw is None for cell in nested.rows[0].cells[1:])
+    assert "multipattern side conditions" in str(report.catalog)
+
+    # Explicitly unsupported treatments cannot excuse a missing supported pair,
+    # or waive its independent count and isomorphism obligations.
+    assert "missing ref-multi" in str(slotted_report(records[:1]).errors)
+    records[0]["slotted"]["nodes"] += 1
+    assert "different: nodes" in str(slotted_report(records).errors)
+    records[0]["slotted"]["nodes"] -= 1
+    records[0]["slotted"]["vs_ref"].clear()
+    assert "not been compared" in str(slotted_report(records).errors)
+    assert cache.reuse(task, tuple(row.side for row in active)) is None
+
+
+def test_collector_never_runs_unsupported_treatments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, config, args, _, _ = _case(tmp_path)
+    evaluator = importlib.import_module("slotted.slotted-eval")
+    workloads = importlib.import_module("eval_workloads")
+    verification = importlib.import_module("eval_verify")
+    workload = workloads.prepare(("logic", "first-order-logic"))
+    ran, graphed = [], []
+
+    def encoding(_program: str, _name: str, row: Any, *_args: Any, **_kwargs: Any) -> None:
+        ran.append(row.side)
+        row.goal, row.seconds = "yes", 0.01
+
+    def reference(_spec: str, row: Any, *_args: Any, **_kwargs: Any) -> None:
+        ran.append(row.side)
+        row.goal, row.seconds = "yes", 0.01
+
+    def graph(_workload: Any, row: Any, *_args: Any, **_kwargs: Any) -> None:
+        graphed.append(row.side)
+
+    monkeypatch.setattr(evaluator, "run_egglog", encoding)
+    monkeypatch.setattr(evaluator, "run_reference", reference)
+    monkeypatch.setattr(verification, "collect_graph", graph)
+    monkeypatch.setattr(verification, "compare", lambda *_args: None)
+    rows = evaluator.collect_workload(workload, args, SIDES, config, lambda *_args: None)
+    assert ran == graphed == ["encoding", "ref-multi"]
+    assert all(row.unsupported == workload.unsupported for row in rows)
+
+
+def test_logic_inputs_keep_the_fixture_budget_and_survive_source_changes(tmp_path: Path) -> None:
+    importlib.import_module("slotted.slotted-eval")
+    workloads = importlib.import_module("eval_workloads")
+    path = tmp_path / "logic.egg"
+    original = (ROOT / "slotted/tests/rudi/first-order-logic2.egg").read_text()
+    path.write_text(original)
+    workload = workloads.logic_workload(path)
+    assert workload.rounds == 5
+    assert "(run 5)" in workload.program and workload.multi.startswith("rounds 5\n")
+    zero = workloads.logic_workload(path, rounds=0)
+    assert "(run 0)" in zero.program and zero.multi.startswith("rounds 0\n")
+    assert "(check" not in zero.graph_program
+    assert zero.unsupported == workload.unsupported
+    path.unlink()
+    assert workload.lang.default_sort == "L" and "Forall" in workload.lang.ops
+    with pytest.raises(ValueError, match="single nested pattern"):
+        workload.reference("ref-nested")
+
+
 def test_reference_treatments_cannot_silently_run_proofs() -> None:
     from benchmarking.engines import TREATMENTS
     from benchmarking.targets import workload_command

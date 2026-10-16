@@ -24,8 +24,8 @@ from ..models import (
     Treatment,
 )
 
-type ReportSchemaVersion = Literal[6]
-REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 6
+type ReportSchemaVersion = Literal[7]
+REPORT_SCHEMA_VERSION: Final[ReportSchemaVersion] = 7
 
 type GroupedSchemaVersion = Literal[1]
 GROUPED_SCHEMA_VERSION: Final[GroupedSchemaVersion] = 1
@@ -93,6 +93,7 @@ class SlottedEvidence(TypedDict):
     checks: str | None
     substitution: str | None
     paper: list[int | bool] | None
+    unsupported: dict[str, str]
     graph_issue: str | None
     vs_ref: dict[str, SlottedComparison]
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Run the paper's array and SDQL evaluations.
+"""Run the slotted array, SDQL, and first-order logic evaluations.
 
     ./bench.py slotted array --params 0
     ./bench.py slotted sdql --kernel mmm --phase 1st
+    ./bench.py slotted logic --case first-order-logic2
     ./bench.py slotted --jobs 4 --report /tmp/eval.jsonl
     ./bench.py slotted --from /tmp/eval.jsonl
 
@@ -49,7 +50,10 @@ REPORT = Path(".reports.jsonl")
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql"))
+    ap.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql", "logic"))
+    ap.add_argument(
+        "--case", nargs="+", help="logic: fixture names without .egg; default all first-order logic fixtures"
+    )
     ap.add_argument("--side", default="all", help="comma-separated subset of " + ",".join(SIDES))
     ap.add_argument(
         "--nested-compat",
@@ -58,7 +62,10 @@ def main(argv=None):
     )
     ap.add_argument("--params", type=int, nargs="*", default=[0, 1, 2], help="array: extra function parameters")
     ap.add_argument(
-        "--rounds", type=int, default=None, help="iterations; default 6 for array, the artifact's limit for sdql"
+        "--rounds",
+        type=int,
+        default=None,
+        help="iterations; default 6 for array, artifact limits for SDQL, fixture budgets for logic",
     )
     ap.add_argument(
         "--kernel",
@@ -137,6 +144,8 @@ def main(argv=None):
         ap.error("--report requires a filesystem path")
     if args.jobs < 1:
         ap.error("--jobs must be at least 1")
+    if args.case and args.study not in ("all", "logic"):
+        ap.error("--case selects logic fixtures; use study logic or all")
 
     config = Config(group_cap=args.group_cap)
     sides = SIDES if args.side == "all" else tuple(s.strip() for s in args.side.split(","))
@@ -152,6 +161,8 @@ def main(argv=None):
             records = ReportStore(args.report.expanduser()).records
             if args.study != "all":
                 records = [r for r in records if "slotted" in r and r["slotted"]["study"] == args.study]
+            if args.case:
+                records = [r for r in records if "slotted" in r and r["slotted"]["case"] in args.case]
             print(f"{args.report}: latest cached workload versions", file=sys.stderr)
         else:
             records = collect(args, sides, ap, config=config)
@@ -178,9 +189,10 @@ def collect_workload(workload, args, sides, config, progress):
     import eval_verify as verification
 
     rows = []
-    for side in sides:
+    for side in workload.supported_sides(sides):
         row = Row(workload.study, workload.case, side, workload.rounds, workload.rules)
         row.paper, row.jobs = workload.paper, args.jobs
+        row.unsupported = workload.unsupported
         if side.startswith("ref-"):
             run_reference(workload.reference(side), row, args.timeout, progress, config=config)
         else:
@@ -233,6 +245,17 @@ def collect(args, sides, ap, *, config=None):
         if args.rules == 12 and selected != [("batax", "2nd")]:
             ap.error("--rules 12 is the suite's BATAX second-phase subset: use --kernel batax --phase 2nd")
         tasks += [("sdql", w) for w in selected]
+    if args.study in ("all", "logic"):
+        names = [p.stem for p in sorted(workloads.LOGIC_FIXTURES.glob("first-order-logic*.egg"))]
+        if args.case and (unknown := set(args.case) - set(names)):
+            ap.error(f"unknown logic cases: {', '.join(sorted(unknown))}; choose from {', '.join(names)}")
+        tasks += [("logic", name) for name in names if not args.case or name in args.case]
+    if not tasks:
+        ap.error("no workloads selected")
+    prepared = {task: workloads.prepare(task, rounds=args.rounds, rules=args.rules) for task in tasks}
+    for workload in prepared.values():
+        if not workload.supported_sides(sides):
+            ap.error(f"{workload.case}: all selected treatments are unsupported: {workload.unsupported}")
     if not args.no_build:
         build()
     for tool in (config.egglog, config.xmulti):
@@ -247,13 +270,12 @@ def collect(args, sides, ap, *, config=None):
         flush=True,
     )
 
-    prepared = {task: workloads.prepare(task, rounds=args.rounds, rules=args.rules) for task in tasks}
     manifests = {task: asdict(workload) for task, workload in prepared.items()}
     cache = Cache(args.jsonl.expanduser(), ROOT, config, args, manifests)
     rows_by_task = {}
     pending = []
     for task in tasks:
-        reused = cache.reuse(task, sides)
+        reused = cache.reuse(task, prepared[task].supported_sides(sides))
         if reused is None:
             pending.append(task)
         else:
