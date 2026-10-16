@@ -11,17 +11,19 @@ def premise : Term := .app "A" []
 def conclusion : Term := .app "B" []
 def derive : Rule :=
   ⟨[.expr (.app "A" [])], [.expr (.app "B" [])], "R"⟩
+def initial : Rule := ⟨[], [.expr premise.toExpr], "seed"⟩
 def program : Program :=
-  [.decl "A" ctor, .decl "B" ctor, .action (.expr (.app "A" [])), .rule derive, .run "R"]
+  [.decl "A" ctor, .decl "B" ctor, .rule initial, .run "seed", .rule derive, .run "R"]
 def certificate : Proof :=
-  .rule ⟨conclusion, conclusion⟩ 3 [] [.fiat ⟨premise, premise⟩]
+  .rule ⟨conclusion, conclusion⟩ 4 [] [.rule ⟨premise, premise⟩ 2 [] []]
 
 private def declaredA : Database :=
   { Database.empty with sig := Function.update Database.empty.sig "A" (some ctor) }
 private def declared : Database :=
   { declaredA with sig := Function.update declaredA.sig "B" (some ctor) }
-private def built : Database := declared.addTerm premise
-private def registered : Database := { built with rules := insert derive ∅ }
+private def seeded : Database := { declared with rules := insert initial ∅ }
+private def built : Database := RunRules "seed" seeded
+private def registered : Database := { built with rules := insert derive built.rules }
 def reached : Database := RunRules "R" registered
 
 private theorem constructors : declared.sig.AllConstructors := by
@@ -46,7 +48,8 @@ theorem source_reached : ProgramStep Database.empty program reached := by
     (.cons (.of_reach rfl (empty_normal rfl))
       (.cons (.of_reach rfl (normal constructors))
         (.cons (.of_reach rfl (normal constructors))
-          (.cons (.of_reach rfl (normal constructors)) .nil))))
+          (.cons (.of_reach rfl (normal constructors))
+            (.cons (.of_reach rfl (normal constructors)) .nil)))))
 
 private theorem source_fragment : program.Fragment := by
   refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide, by decide⟩
@@ -63,17 +66,25 @@ theorem certificate_accepted :
   simp only [check, hok, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   decide
 
+private theorem premise_asserted : (premise, premise) ∈ registered.eqs := by
+  have hc : (seeded.addTerm premise).Contained built :=
+    Database.Contained.mem_sUnion ⟨initial, by simp [seeded], rfl,
+      [], ⟨[], .nil, .nil⟩, rfl⟩
+  exact hc.eqs (Set.mem_insert _ _)
+
 private theorem initial_match : ValidQuerySubst registered derive.query [] := by
-  have ha : premise ∈ registered.terms := by
-    simpa only [registered, Database.terms_setRules, built] using
-      Database.mem_addTerm premise declared
+  have ha : premise ∈ registered.terms := Cong.direct premise_asserted
   refine ⟨[[]], .cons ⟨⟨List.Perm.refl [], by simp⟩, ?_⟩ .nil, .single []⟩
   exact .expr ha rfl (ha.mono (Database.Contained.addTerms _ _))
 
 theorem premise_exists : premise ∈ reached.terms :=
-  (Database.Contained.sUnion registered _).terms (by
-    simpa only [registered, Database.terms_setRules, built] using
-      Database.mem_addTerm premise declared)
+  (Database.Contained.sUnion registered _).terms (Cong.direct premise_asserted)
+
+private theorem conclusion_asserted : (conclusion, conclusion) ∈ reached.eqs := by
+  have hc : (registered.addTerm conclusion).Contained reached :=
+    Database.Contained.mem_sUnion ⟨derive, by simp [registered], rfl,
+      [], initial_match, rfl⟩
+  exact hc.eqs (Set.mem_insert _ _)
 
 theorem conclusion_exists : conclusion ∈ reached.terms := by
   have hf : evalLocalActions registered derive.actions [] =
@@ -83,14 +94,14 @@ theorem conclusion_exists : conclusion ∈ reached.terms := by
       [], initial_match, hf⟩
   exact hc.terms (Database.mem_addTerm _ _)
 
-theorem conclusion_not_global :
-    check program (.fiat ⟨conclusion, conclusion⟩) = none := by
+theorem conclusion_not_initial :
+    check program (.rule ⟨conclusion, conclusion⟩ 2 [] []) = none := by
   have hok : sourceOk program = true := decide_eq_true source_fragment
   simp only [check, hok, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   decide
 
 theorem missing_premise_rejected :
-    check program (.rule ⟨conclusion, conclusion⟩ 3 [] []) = none := by
+    check program (.rule ⟨conclusion, conclusion⟩ 4 [] []) = none := by
   have hok : sourceOk program = true := decide_eq_true source_fragment
   simp only [check, hok, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   decide
@@ -102,26 +113,35 @@ theorem source_saturated (R : RulesetName) : RunSaturated R reached := by
   have hfixed : RunRules R reached = reached := by
     apply (runRules_eq_self_iff R reached).mpr
     intro r hr _ out hout
-    have hr' : r = derive := by
-      change r ∈ insert derive (∅ : Set Rule) at hr
+    have hr' : r = derive ∨ r = initial := by
+      change r ∈ insert derive (insert initial (∅ : Set Rule)) at hr
       simpa using hr
-    subst r
-    obtain ⟨σ, _, hf⟩ := hout
-    have he : evalLocalActions reached derive.actions σ =
-        some (reached.addTerm conclusion) := rfl
-    rw [he] at hf
-    obtain rfl := Option.some.inj hf
-    constructor
-    rintro p (hp | ⟨t, ht, rfl⟩)
-    · exact hp
-    · exact reached_wf.eqsRefl t (reached_wf.subtermClosed _ conclusion_exists ht)
+    rcases hr' with rfl | rfl
+    · obtain ⟨σ, _, hf⟩ := hout
+      have he : evalLocalActions reached derive.actions σ =
+          some (reached.addTerm conclusion) := rfl
+      rw [he] at hf
+      obtain rfl := Option.some.inj hf
+      constructor
+      rintro p (rfl | hp)
+      · exact conclusion_asserted
+      · exact hp
+    · obtain ⟨σ, _, hf⟩ := hout
+      have he : evalLocalActions reached initial.actions σ =
+          some (reached.addTerm premise) := rfl
+      rw [he] at hf
+      obtain rfl := Option.some.inj hf
+      constructor
+      rintro p (rfl | hp)
+      · exact (Database.Contained.sUnion registered _).eqs premise_asserted
+      · exact hp
   have hn : MergeNormal reached := normal constructors
   refine ⟨hn, reached, ?_, Database.SameMeaning.refl _⟩
   change MergeNormalize (RunRules R reached) reached
   rw [hfixed]
   exact ⟨.refl, hn⟩
 
-/-- The checker theorem is instantiated with a real premise and a non-global conclusion. -/
+/-- The checker theorem is instantiated with a real premise and a derived conclusion. -/
 theorem accepted_rule_is_supported : Claim.Supported reached ⟨conclusion, conclusion⟩ :=
   check_supported source_reached reached_wf source_saturated certificate_accepted
 

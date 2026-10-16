@@ -1,25 +1,10 @@
 import EgglogSemantics.Resugar.Query
 import EgglogSemantics.Provenance.Extract
-import EgglogSemantics.Congruence.Encode
+import EgglogSemantics.Resugar.Claim
 
 namespace Egglog.Resugar
 
 open SourceProof (Claim Context Proof)
-
-/-- A view relates its id to its constructor application; UF records an equality. -/
-def factClaim (P : Program) (C : Context) (t : Term) : Option Claim := do
-  if SourceProof.valueOk C.sig t then some ⟨t, t⟩ else do
-    let .app f cols := t | none
-    match Congruence.tableRole P f with
-    | some .unionFind =>
-      let [a, b] := cols | none
-      some ⟨a, b⟩
-    | some (.view ctor) => do
-      let d ← C.sig ctor
-      if cols.length != d.arity + 1 then none else do
-        let id ← cols[d.arity]?
-        some ⟨id, .app ctor (cols.take d.arity)⟩
-    | none => none
 
 def sourceSubst (vars : List Var) (σ : Env) : Option Env :=
   vars.mapM fun v => (Env.lookup v σ).map (v, ·)
@@ -59,7 +44,6 @@ mutual
 /-- Lift relational provenance to a source proof of the same fact's claim. -/
 def liftProof (P : Program) (C : Context) (compiled : List Congruence.Command) :
     Provenance.Proof → Option Proof
-  | .global t _ => expect P C t fun c => node P C (.fiat c)
   | .subterm t parent => expect P C t fun c => do
       let p ← liftProof P C compiled parent
       finish P C p c
@@ -102,17 +86,8 @@ def lift (P : Program) (pf : Provenance.Proof) : Option Proof := do
     let result ← liftProof P C compiled pf
     if SourceProof.check P result == some wanted then some result else none
 
-def extractRow (P : Program) (r : Row) : Option Proof := do
+def extractRow (P : Program) (r : Entry) : Option Proof := do
   let intermediate ← Provenance.extractRow (Congruence.encode P) r
   lift P intermediate
-
-/-- Run the instrumented compilation of `P` with `exec` and lift every retained row. -/
-def certificates (exec : Program → Option FDatabase) (P : Program) :
-    Option (List Proof) := do
-  let target := Congruence.encode P
-  let C ← SourceProof.contextOf target
-  let annotated ← Provenance.encode target
-  let d ← exec annotated
-  (Provenance.retainedRows C.sig d.terms).mapM (extractRow P ·)
 
 end Egglog.Resugar

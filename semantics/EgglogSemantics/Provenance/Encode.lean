@@ -3,7 +3,6 @@ import EgglogSemantics.Provenance.Checker
 namespace Egglog.Provenance
 
 def namePrefix : String := "@prov:"
-def globalName (i : Nat) : FnName := namePrefix ++ "global:" ++ toString i
 def ruleName (i j : Nat) : FnName := namePrefix ++ "rule:" ++ toString i ++ ":" ++ toString j
 def bodyName (f : FnName) (j : Nat) : FnName := namePrefix ++ "body:" ++ f ++ ":" ++ toString j
 def resultName (f : FnName) : FnName := namePrefix ++ "result:" ++ f
@@ -63,7 +62,6 @@ def programOk (P : Program) (sig : Signature) : Bool := P.all fun c => match c w
           (oldVars ++ newVars).all (fun v => !namePrefix.isPrefixOf v) &&
           body.all (tableActionOk sig (oldVars ++ newVars)) &&
           res.length == d.outArity && valueExprsOk sig (oldVars ++ newVars) res
-  | .action a => tableActionOk sig [] a
   | .check q => queryOk sig q && q.vars.all (fun v => !namePrefix.isPrefixOf v)
   | .rule r => queryOk sig r.query &&
       r.query.vars.all (fun v => (witness r.query (.var v)).isSome) &&
@@ -116,14 +114,12 @@ def proofDecls (P : Program) : Program :=
       | some (.merge _ _ body _) => .decl (resultName f) (ctor 2) ::
           body.zipIdx.map fun aj => .decl (bodyName f aj.2) (ctor 2)
       | _ => []
-    | .action _ => [.decl (globalName ci.2) (ctor 0)]
     | .rule r => r.actions.zipIdx.map fun aj =>
         .decl (ruleName ci.2 aj.2) (ctor (r.query.vars.length + r.query.length))
     | _ => []
 
 def encodeCmd (i : Nat) : Cmd → Option Cmd
   | .decl f d => some (.decl f (encodeDecl f d))
-  | .action a => some (.action (encodeAction (.app (globalName i) []) a))
   | .rule r => (encodeRule i r).map Cmd.rule
   | .check q => some (.check (q.zipIdx.map fun pi => encodePattern pi.2 pi.1))
   | c => some c

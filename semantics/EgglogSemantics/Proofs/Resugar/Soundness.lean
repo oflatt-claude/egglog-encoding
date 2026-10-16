@@ -1,5 +1,6 @@
 import EgglogSemantics.Resugar.Lift
 import EgglogSemantics.Proofs.SourceProof.Soundness
+import EgglogSemantics.Proofs.Provenance.Soundness
 
 namespace Egglog.Resugar
 
@@ -57,5 +58,30 @@ theorem lift_infers {P : Program} {C : SourceProof.Context} {db : Database}
     (hc : factClaim P C fact = some claim) (h : lift P input = some output) :
     db.Infers claim.lhs claim.rhs :=
   (lift_supported hs hw hclosed hC hf hc h).infers hw
+
+/-- An extracted source proof certifies the row's data columns. -/
+theorem extractRow_checked {P : Program} {C target : SourceProof.Context}
+    {row : Entry} {decl : FnDecl} {output : SourceProof.Proof} {claim : SourceProof.Claim}
+    (hC : SourceProof.contextOf P = some C)
+    (hT : SourceProof.contextOf (Congruence.encode P) = some target)
+    (hd : target.sig row.name = some decl)
+    (hm : factClaim P C (.app row.name (row.key ++ row.value.take decl.outArity)) =
+      some claim)
+    (h : extractRow P row = some output) : SourceProof.check P output = some claim := by
+  obtain ⟨input, hi, hl⟩ := Option.bind_eq_some_iff.mp h
+  exact lift_checked hC (Provenance.extractRow_checked hT hd hi) hm hl
+
+/-- Extraction followed by lifting establishes the corresponding source equality. -/
+theorem extractRow_infers {P : Program} {C target : SourceProof.Context} {db : Database}
+    {row : Entry} {decl : FnDecl} {output : SourceProof.Proof} {claim : SourceProof.Claim}
+    (hs : ProgramStep Database.empty P db) (hw : db.WF)
+    (hclosed : ∀ R, RunSaturated R db)
+    (hC : SourceProof.contextOf P = some C)
+    (hT : SourceProof.contextOf (Congruence.encode P) = some target)
+    (hd : target.sig row.name = some decl)
+    (hm : factClaim P C (.app row.name (row.key ++ row.value.take decl.outArity)) =
+      some claim)
+    (h : extractRow P row = some output) : db.Infers claim.lhs claim.rhs :=
+  SourceProof.check_infers hs hw hclosed (extractRow_checked hC hT hd hm h)
 
 end Egglog.Resugar

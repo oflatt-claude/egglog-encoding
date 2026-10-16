@@ -14,9 +14,6 @@ theorem checkNode_supported {P : Program} {C : Context} {db : Database}
     {pf : Proof} (hp : ∀ q ∈ pf.subproofs, q.claim.Supported db)
     (h : checkNode P C pf = true) : pf.claim.Supported db := by
   cases pf with
-  | fiat c =>
-      simp only [checkNode, Bool.and_eq_true_iff, decide_eq_true_eq] at h
-      exact (hC.globals c h.2).supported hw
   | symm c p =>
       simp only [checkNode, Proof.claim_symm, Bool.and_eq_true_iff, beq_iff_eq] at h
       change Claim.Supported db c
@@ -52,7 +49,7 @@ theorem checkNode_supported {P : Program} {C : Context} {db : Database}
           intro d hd
           obtain ⟨q, hq, rfl⟩ := List.mem_map.mp hd
           exact hp q hq
-      | action _ | run _ | saturate _ | decl _ _ | check _ => simp at h
+      | run _ | saturate _ | decl _ _ | check _ => simp at h
 
 mutual
 
@@ -60,9 +57,6 @@ theorem valid_supported {P : Program} {C : Context} {db : Database}
     (hs : ProgramStep Database.empty P db) (hw : db.WF) (hC : C.Sound db)
     (hclosed : ∀ R, RunSaturated R db) (hok : sourceOk P = true) :
     (pf : Proof) → valid P C pf = true → pf.claim.Supported db
-  | .fiat c, h => by
-      simp only [valid] at h
-      exact checkNode_supported hs hw hC hclosed hok (by simp [Proof.subproofs]) h
   | .symm c p, h => by
       simp only [valid, Bool.and_eq_true_iff] at h
       have ih := valid_supported hs hw hC hclosed hok p h.1
@@ -125,7 +119,7 @@ theorem check_supported {P : Program} {db : Database} {pf : Proof} {c : Claim}
     split at h
     · rename_i hv
       cases Option.some.inj h
-      exact valid_supported hs hw (contextOf_sound hC hs (sourceOk_ctors hok')) hclosed hok' pf hv
+      exact valid_supported hs hw (contextOf_sound hC hs) hclosed hok' pf hv
     · contradiction
 
 /-- Checking proves an inferred source equality, even at unstored constructor spellings. -/

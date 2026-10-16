@@ -46,15 +46,21 @@ theorem RowAction.uf (a b : Expr) : RowAction (.expr (.app ufName [a, b])) := by
 mutual
 
 theorem encodeBuild_rowActions : ∀ e a, a ∈ encodeBuild e → RowAction a
-  | .lit _, _, h => by cases h
-  | .var _, _, h => by cases h
+  | .lit l, a, h => by
+      obtain rfl := List.mem_singleton.mp h
+      exact RowAction.uf (.lit l) (.lit l)
+  | .var v, a, h => by
+      obtain rfl := List.mem_singleton.mp h
+      exact RowAction.uf (.var v) (.var v)
   | .min x y, a, h =>
       (List.mem_append.mp h).elim (encodeBuild_rowActions x a) (encodeBuild_rowActions y a)
   | .app f args, a, h => by
       rcases List.mem_append.mp h with h | h
       · exact encodeBuildArgs_rowActions args a h
-      · obtain rfl := List.mem_singleton.mp h
-        exact RowAction.view f args (.app f args)
+      · rcases List.mem_cons.mp h with rfl | h
+        · exact RowAction.view f args (.app f args)
+        · obtain rfl := List.mem_singleton.mp h
+          exact RowAction.uf (.app f args) (.app f args)
 
 theorem encodeBuildArgs_rowActions : ∀ es a, a ∈ encodeBuildArgs es → RowAction a
   | [], _, h => by cases h

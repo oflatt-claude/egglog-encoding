@@ -16,7 +16,8 @@ def validates (P : Program) : Bool := (do
   let encoded ← encode P
   let original ← Relational.execProgram FDatabase.empty P
   let annotated ← Relational.execProgram FDatabase.empty encoded
-  let rows := annotated.rows.filterMap (eraseRow C.sig)
+  let rows := annotated.rows.filterMap fun row =>
+    (eraseRow C.sig row.toEntry).map fun e => (⟨e.name, e.key, e.value⟩ : Row)
   let proofs := retainedRows C.sig annotated.terms
   some (unionFree encoded && decide (rows.toFinset = original.rows.toFinset) &&
     decide ((annotated.terms.filterMap (eraseFact C.sig)).toFinset = original.terms.toFinset) &&
@@ -24,14 +25,14 @@ def validates (P : Program) : Bool := (do
 
 private def nestedUnion : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "F" (ctor 1),
-   .action (.expr (.app "F" [atom "A"])), .action (.expr (.app "F" [atom "B"])),
-   .action (.union (atom "A") (atom "B"))]
+   .rule ⟨[], [.expr (.app "F" [atom "A"]), .expr (.app "F" [atom "B"]),
+     .union (atom "A") (atom "B")], "seed"⟩, .run "seed"]
 
 #guard validates (Congruence.encode nestedUnion)
 
 private def equalityRule : Program :=
   [.decl "A" (ctor 0), .decl "F" (ctor 1), .decl "G" (ctor 1),
-   .action (.expr (.app "F" [atom "A"])),
+   .rule ⟨[], [.expr (.app "F" [atom "A"])], "seed"⟩, .run "seed",
    .rule ⟨[.eq (.app "F" [.var "x"]) (.app "F" [.var "x"])],
      [.expr (.app "G" [.var "x"])], "R"⟩,
    .saturate "R"]
@@ -56,8 +57,8 @@ private def tablesWith (firstOld firstNew : Var) : Program :=
      [.expr (.app "Audit" [.var firstOld, .var firstNew, .var "new1"])]
      [.min (.var firstOld) (.var firstNew),
       .min (.var "new1") (.var "old1")]), none⟩,
-   .action (.expr (.app "Bounds" [atom "Key", int 2, int 3])),
-   .action (.expr (.app "Bounds" [atom "Key", int 4, int 1]))]
+   .rule ⟨[], [.expr (.app "Bounds" [atom "Key", int 2, int 3])], "seed0"⟩, .run "seed0",
+   .rule ⟨[], [.expr (.app "Bounds" [atom "Key", int 4, int 1])], "seed1"⟩, .run "seed1"]
 
 private def tables : Program := tablesWith "old0" "new0"
 
@@ -67,28 +68,31 @@ private def tables : Program := tablesWith "old0" "new0"
 -- Metadata-only collisions must not execute an otherwise unconditional merge.
 private def sameData : Program :=
   [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [.min (.var "old") (int 9)]), none⟩,
-   .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
+   .rule ⟨[], [.expr (.app "T" [int 1])], "seed0"⟩, .run "seed0",
+   .rule ⟨[], [.expr (.app "T" [int 1])], "seed1"⟩, .run "seed1"]
 
 #guard validates sameData
 
 private def zeroOutputs : Program :=
   [.decl "T" ⟨1, 0, some (.merge [] [] [] []), none⟩,
-   .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
+   .rule ⟨[], [.expr (.app "T" [int 1])], "seed0"⟩, .run "seed0",
+   .rule ⟨[], [.expr (.app "T" [int 1])], "seed1"⟩, .run "seed1"]
 
 #guard validates zeroOutputs
 
 private def partialIdentity : Program :=
   [.decl "T" ⟨0, 2, some (.merge ["old0", "old1"] ["new0", "new1"]
      [] [.var "new0", .var "new1"]), some 1⟩,
-   .action (.expr (.app "T" [int 1, int 2])),
-   .action (.expr (.app "T" [int 1, int 3]))]
+   .rule ⟨[], [.expr (.app "T" [int 1, int 2])], "seed0"⟩, .run "seed0",
+   .rule ⟨[], [.expr (.app "T" [int 1, int 3])], "seed1"⟩, .run "seed1"]
 
 #guard validates partialIdentity
 
 -- An over-wide identity prefix must not include the appended proof column.
 private def wideIdentity : Program :=
   [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [int 9]), some 2⟩,
-   .action (.expr (.app "T" [int 1])), .action (.expr (.app "T" [int 1]))]
+   .rule ⟨[], [.expr (.app "T" [int 1])], "seed0"⟩, .run "seed0",
+   .rule ⟨[], [.expr (.app "T" [int 1])], "seed1"⟩, .run "seed1"]
 
 #guard validates wideIdentity
 
@@ -106,8 +110,8 @@ private def parameterProgram (os ns : List Var) (e : Expr) : Program :=
 private def bounds (a b : Int) : Term :=
   .app "Bounds" [term "Key", .lit (.int a), .lit (.int b)]
 
-private def old : Proof := .global (bounds 2 3) 3
-private def new : Proof := .global (bounds 4 1) 4
+private def old : Proof := .rule (bounds 2 3) 3 [] []
+private def new : Proof := .rule (bounds 4 1) 5 [] []
 
 #guard (check tables (.merge (bounds 2 1) "Bounds" old new)).isSome
 #guard (check tables
@@ -118,36 +122,36 @@ private def new : Proof := .global (bounds 4 1) 4
 
 private def distinctKeys : Program :=
   [.decl "T" ⟨1, 1, some (.merge ["old"] ["new"] [] [.var "new"]), none⟩,
-   .action (.expr (.app "T" [int 1, int 3])),
-   .action (.expr (.app "T" [int 2, int 4]))]
+   .rule ⟨[], [.expr (.app "T" [int 1, int 3])], "seed0"⟩, .run "seed0",
+   .rule ⟨[], [.expr (.app "T" [int 2, int 4])], "seed1"⟩, .run "seed1"]
 
 #guard (check distinctKeys (.merge (.app "T" [.lit (.int 1), .lit (.int 4)]) "T"
-  (.global (.app "T" [.lit (.int 1), .lit (.int 3)]) 1)
-  (.global (.app "T" [.lit (.int 2), .lit (.int 4)]) 2))).isNone
+  (.rule (.app "T" [.lit (.int 1), .lit (.int 3)]) 1 [] [])
+  (.rule (.app "T" [.lit (.int 2), .lit (.int 4)]) 3 [] []))).isNone
 
 private def table (n : Int) : Term := .app "T" [.lit (.int n)]
 private def tProgram : Program :=
   [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [.min (.var "old") (.var "new")]), none⟩,
-   .action (.expr (.app "T" [int 3])),
+   .rule ⟨[], [.expr (.app "T" [int 3])], "seed"⟩, .run "seed",
    .rule ⟨[.expr (.app "T" [.var "x"])], [.expr (.app "T" [int 2])], "R"⟩,
    .saturate "R"]
-private def stored : Proof := .global (table 3) 1
+private def stored : Proof := .rule (table 3) 1 [] []
 
 #guard validates tProgram
 #guard check tProgram stored == some (table 3)
-#guard (check tProgram (.global (table 2) 1)).isNone
-#guard (check tProgram (.global (table 2) 2)).isNone
+#guard (check tProgram (.rule (table 2) 1 [] [])).isNone
+#guard (check tProgram (.rule (table 2) 3 [] [])).isNone
 #guard (check tProgram (.subterm (table 2) stored)).isNone
 -- Every node is checked, not only the root.
-#guard (check tProgram (.subterm (table 3) (.global (table 2) 1))).isNone
-#guard (check tProgram (.rule (table 2) 2 [("x", .lit (.int 3))] [stored])).isSome
-#guard (check tProgram (.rule (table 2) 2 [("x", .lit (.int 2))] [stored])).isNone
-#guard (check tProgram (.rule (table 2) 2 [] [stored])).isNone
-#guard (check tProgram (.rule (table 2) 2 [("x", .lit (.int 3))] [])).isNone
-#guard (extract tProgram (.app (globalName 2) [])).isNone
-#guard (extract tProgram (.app (globalName 1) [term "Missing"])).isNone
-#guard (extract tProgram (.app subtermName [table 2, .app (globalName 1) []])).isNone
-#guard (extractRow tProgram ⟨"T", [], [.lit (.int 2), .app (globalName 1) []]⟩).isNone
+#guard (check tProgram (.subterm (table 3) (.rule (table 2) 1 [] []))).isNone
+#guard (check tProgram (.rule (table 2) 3 [("x", .lit (.int 3))] [stored])).isSome
+#guard (check tProgram (.rule (table 2) 3 [("x", .lit (.int 2))] [stored])).isNone
+#guard (check tProgram (.rule (table 2) 3 [] [stored])).isNone
+#guard (check tProgram (.rule (table 2) 3 [("x", .lit (.int 3))] [])).isNone
+#guard (extract tProgram (.app (ruleName 3 0) [])).isNone
+#guard (extract tProgram (.app (ruleName 1 0) [term "Missing"])).isNone
+#guard (extract tProgram (.app subtermName [table 2, .app (ruleName 1 0) []])).isNone
+#guard (extractRow tProgram ⟨"T", [], [.lit (.int 2), .app (ruleName 1 0) []]⟩).isNone
 
 -- Equality-only variables have no table evidence and are outside this pass's input fragment.
 #guard (encode [.rule ⟨[.eq (.var "x") (.var "x")], [], "R"⟩]).isNone

@@ -36,13 +36,7 @@ theorem ledger_contained_completion {db : Database} (hw : db.WF)
       intro p hp
       rcases Set.mem_insert_iff.mp hp with rfl | hp
       · exact (Database.cong_completion_iff hw).mp hclaim
-      · rcases hp with hp | ⟨s, hs, rfl⟩
-        · rcases hp with hp | ⟨s, hs, rfl⟩
-          · exact htail.eqs hp
-          · exact hw.completion.eqsRefl s
-              (hw.completion.subtermClosed c.lhs hclaim.mem_left hs)
-        · exact hw.completion.eqsRefl s
-            (hw.completion.subtermClosed c.rhs hclaim.mem_right hs)
+      · exact htail.eqs hp
 
 theorem ledger_wf {db : Database} (hw : db.WF) (sig : Signature) {cs : List Claim}
     (hc : ∀ c ∈ cs, c.Supported db) : (ledger sig cs).WF := by

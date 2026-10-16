@@ -9,7 +9,7 @@ open SourceProof (Proof)
 set_option linter.hashCommand false
 
 private def term (f : FnName) : Term := .app f []
-private def fiat (t : Term) : Proof := .fiat ⟨t, t⟩
+private def initial (t : Term) : Proof := .rule ⟨t, t⟩ 4 [] []
 
 def certificates (P : Program) : Option (List Proof) :=
   Resugar.certificates (Relational.execProgram FDatabase.empty) P
@@ -23,11 +23,14 @@ def validates (P : Program) : Bool := (certificates P).any fun cs =>
 #guard lifted.all fun np => validates np.2
 #guard (certificates nestedUnion).any fun cs => cs.any fun c => c.nodes.any fun n =>
   match n with | .congr _ _ _ _ => true | _ => false
-#guard (certificates ruleChain).any fun cs => cs.all fun c => c.nodes.all fun n =>
-  match n with | .fiat _ => false | _ => true
+#guard (certificates ruleChain).any fun cs => cs.any fun c => c.nodes.any fun n =>
+  match n with | .rule _ 3 [] [] => true | _ => false
 #guard (certificates missingPremise).any fun cs => cs.all fun c =>
   SourceProof.check missingPremise c != some (⟨term "A", term "B"⟩ : SourceProof.Claim)
-#guard (lift missingPremise (.global (.app (viewName "Missing") [term "Missing"]) 0)).isNone
+#guard let command := (((Congruence.compile missingPremise).zipIdx.find? fun ci =>
+  decide (ci.1.ruleOrigin = some (.source 3))).map Prod.snd).getD 0
+  (lift missingPremise
+    (.rule (.app (viewName "Missing") [term "Missing"]) command [] [])).isNone
 
 -- The hand-written fixtures have the verdicts their names promise.
 #guard accepted.all fun f => f.certificates.all fun c => (SourceProof.check f.program c).isSome
@@ -36,8 +39,8 @@ def validates (P : Program) : Bool := (certificates P).any fun cs =>
 
 -- A transformed enclosing term's child still needs the derivation that introduced it.
 private def supportProof : Proof :=
-  .congr ⟨.app "F" [term "A"], .app "F" [.app "G" [term "B"]]⟩ (fiat (.app "F" [term "A"])) 0
-    (.rule ⟨term "A", .app "G" [term "B"]⟩ 5 [] [])
+  .congr ⟨.app "F" [term "A"], .app "F" [.app "G" [term "B"]]⟩ (initial (.app "F" [term "A"])) 0
+    (.rule ⟨term "A", .app "G" [term "B"]⟩ 6 [] [])
 
 #guard (SourceProof.contextOf supportCase).any fun C =>
   (support supportCase C (term "B") supportProof).any fun result =>

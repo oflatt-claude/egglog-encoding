@@ -36,7 +36,6 @@ def ruleFacts (C : Context) (r : Rule) (σ : Env)
 def checkNode (P : Program) (C : Context) (pf : Proof) : Bool :=
   atomOk C.sig pf.claim.lhs && atomOk C.sig pf.claim.rhs &&
   match pf with
-  | .fiat c => decide (c ∈ C.globals)
   | .symm c p => c == ⟨p.claim.rhs, p.claim.lhs⟩
   | .trans c p q => p.claim.rhs == q.claim.lhs && c == ⟨p.claim.lhs, q.claim.rhs⟩
   | .congr c p k q =>
@@ -55,7 +54,6 @@ mutual
 
 /-- Every node is valid. -/
 def valid (P : Program) (C : Context) : Proof → Bool
-  | .fiat c => checkNode P C (.fiat c)
   | .symm c p => valid P C p && checkNode P C (.symm c p)
   | .trans c p q => valid P C p && valid P C q && checkNode P C (.trans c p q)
   | .congr c p k q => valid P C p && valid P C q && checkNode P C (.congr c p k q)

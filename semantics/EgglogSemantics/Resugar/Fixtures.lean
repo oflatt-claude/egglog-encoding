@@ -1,4 +1,4 @@
-import EgglogSemantics.Resugar.Lift
+import EgglogSemantics.Resugar.Execute
 import EgglogSemantics.Congruence.Relational
 
 /-! Proofs the Lean and Rust source checkers must judge alike: lifted proofs for small
@@ -12,21 +12,21 @@ private def term (f : FnName) : Term := .app f []
 
 def nestedUnion : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "F" (ctor 1),
-   .action (.expr (.app "F" [atom "A"])), .action (.expr (.app "F" [atom "B"])),
-   .action (.union (atom "A") (atom "B"))]
+   .rule ⟨[], [.expr (.app "F" [atom "A"]), .expr (.app "F" [atom "B"]),
+     .union (atom "A") (atom "B")], "seed"⟩, .run "seed"]
 
 def nestedQuery : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "G" (ctor 1), .decl "F" (ctor 2),
    .decl "H" (ctor 1),
-   .action (.expr (.app "F" [.app "G" [atom "B"], .app "G" [atom "B"]])),
-   .action (.union (atom "A") (atom "B")),
+   .rule ⟨[], [.expr (.app "F" [.app "G" [atom "B"], .app "G" [atom "B"]]),
+     .union (atom "A") (atom "B")], "seed"⟩, .run "seed",
    .rule ⟨[.expr (.app "F" [.app "G" [.var "x"], .app "G" [.var "x"]])],
      [.expr (.app "H" [.var "x"])], "R"⟩, .saturate "R"]
 
 def equalityQuery : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "F" (ctor 1), .decl "G" (ctor 1),
-   .action (.expr (.app "F" [atom "A"])), .action (.expr (.app "G" [atom "B"])),
-   .action (.union (.app "F" [atom "A"]) (.app "G" [atom "B"])),
+   .rule ⟨[], [.expr (.app "F" [atom "A"]), .expr (.app "G" [atom "B"]),
+     .union (.app "F" [atom "A"]) (.app "G" [atom "B"])], "seed"⟩, .run "seed",
    .rule ⟨[.eq (.app "F" [.var "x"]) (.app "G" [.var "y"])],
      [.union (.var "x") (.var "y")], "R"⟩, .saturate "R"]
 
@@ -38,13 +38,13 @@ def ruleChain : Program :=
 
 def missingPremise : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "Missing" (ctor 0),
-   .action (.expr (atom "A")), .action (.expr (atom "B")),
+   .rule ⟨[], [.expr (atom "A"), .expr (atom "B")], "seed"⟩, .run "seed",
    .rule ⟨[.expr (atom "Missing")], [.union (atom "A") (atom "B")], "R"⟩,
    .saturate "R"]
 
 def supportCase : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "F" (ctor 1), .decl "G" (ctor 1),
-   .action (.expr (.app "F" [atom "A"])),
+   .rule ⟨[], [.expr (.app "F" [atom "A"])], "seed"⟩, .run "seed",
    .rule ⟨[], [.union (atom "A") (.app "G" [atom "B"])], "R"⟩]
 
 /-- Programs whose every retained row lifts to an accepted source proof. -/
@@ -64,32 +64,35 @@ private def missing : Term := term "Missing"
 private def fa : Term := .app "F" [a]
 private def fb : Term := .app "F" [b]
 private def ga : Term := .app "G" [a]
-private def fiat (t : Term) : SourceProof.Proof := .fiat ⟨t, t⟩
+private def fact (t : Term) : SourceProof.Proof := .rule ⟨t, t⟩ 5 [] []
+private def unionFact (x y : Term) : SourceProof.Proof := .rule ⟨x, y⟩ 6 [] []
 
 private def declarations : Program :=
   [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "Missing" (ctor 0),
    .decl "F" (ctor 1), .decl "G" (ctor 1)]
 
-private def globals : Program := declarations ++
-  [.action (.expr fa.toExpr), .action (.union a.toExpr b.toExpr)]
+private def seed : Program := declarations ++
+  [.rule ⟨[], [.expr fa.toExpr], "seed"⟩,
+   .rule ⟨[], [.union a.toExpr b.toExpr], "seed"⟩, .run "seed"]
 
-/-- Command 7 builds `(G x)` from `(F x)`. -/
-private def create : Program := globals ++
+/-- Command 8 builds `(G x)` from `(F x)`. -/
+private def create : Program := seed ++
   [.rule ⟨[.expr (.app "F" [.var "x"])], [.expr (.app "G" [.var "x"])], "R"⟩, .saturate "R"]
 
-/-- Command 7 reads `(F x)` and then `(= x (B))`. -/
-private def ordered : Program := globals ++
+/-- Command 8 reads `(F x)` and then `(= x (B))`. -/
+private def ordered : Program := seed ++
   [.rule ⟨[.expr (.app "F" [.var "x"]), .eq (.var "x") b.toExpr],
     [.expr (.app "G" [.var "x"])], "R"⟩]
 
-/-- Command 6 reads the nested pattern `(F (F x))` as one premise. -/
+/-- Command 7 reads the nested pattern `(F (F x))` as one premise. -/
 private def nested : Program := declarations ++
-  [.action (.expr (.app "F" [fa.toExpr])),
+  [.rule ⟨[], [.expr (.app "F" [fa.toExpr])], "seed"⟩, .run "seed",
    .rule ⟨[.expr (.app "F" [.app "F" [.var "x"]])], [.expr (.app "G" [.var "x"])], "R"⟩]
 
-/-- Command 7 fires only on `(Missing)`, which is never built. -/
+/-- Command 8 fires only on `(Missing)`, which is never built. -/
 private def absentPremise : Program := declarations ++
-  [.action (.expr a.toExpr), .action (.expr b.toExpr),
+  [.rule ⟨[], [.expr a.toExpr], "seed"⟩,
+   .rule ⟨[], [.expr b.toExpr], "seed"⟩, .run "seed",
    .rule ⟨[.expr missing.toExpr], [.union a.toExpr b.toExpr], "R"⟩]
 
 private def one (name : String) (P : Program) (pf : SourceProof.Proof) : Fixture :=
@@ -97,23 +100,23 @@ private def one (name : String) (P : Program) (pf : SourceProof.Proof) : Fixture
 
 /-- Accepted hand-written proofs: ordered premises and a nested premise. -/
 def accepted : List Fixture :=
-  [one "ordered-premises" ordered (.rule ⟨ga, ga⟩ 7 [("x", a)] [fiat fa, .fiat ⟨a, b⟩]),
-   one "nested-premise" nested (.rule ⟨ga, ga⟩ 6 [("x", a)] [fiat (.app "F" [fa])])]
+  [one "ordered-premises" ordered (.rule ⟨ga, ga⟩ 8 [("x", a)] [fact fa, unionFact a b]),
+   one "nested-premise" nested (.rule ⟨ga, ga⟩ 7 [("x", a)] [fact (.app "F" [fa])])]
 
-/-- Rejected hand-written proofs: invented globals, an absent premise, malformed
+/-- Rejected hand-written proofs: invented initial facts, an absent premise, malformed
 substitutions, wrong premise order or count, and wrong endpoints and conclusions. -/
 def rejected : List Fixture :=
-  [one "invented-global" create (fiat missing),
-   one "invented-application" create (fiat fb),
-   one "absent-premise" absentPremise (.rule ⟨a, b⟩ 7 [] [fiat missing]),
-   one "unbound-variable" create (.rule ⟨ga, ga⟩ 7 [] [fiat fa]),
-   one "wrong-binding" create (.rule ⟨ga, ga⟩ 7 [("x", b)] [fiat fa]),
-   one "missing-premise-proof" create (.rule ⟨ga, ga⟩ 7 [("x", a)] []),
-   one "premise-order" ordered (.rule ⟨ga, ga⟩ 7 [("x", a)] [.fiat ⟨a, b⟩, fiat fa]),
-   one "wrong-conclusion" create (.rule ⟨a, b⟩ 7 [("x", a)] [fiat fa]),
-   one "transitivity-endpoints" create (.trans ⟨a, b⟩ (fiat a) (fiat b)),
-   one "congruence-child" create (.congr ⟨fa, fb⟩ (fiat fa) 0 (.fiat ⟨b, a⟩)),
-   one "symmetry-claim" create (.symm ⟨a, a⟩ (fiat fa))]
+  [one "invented-initial-fact" create (fact missing),
+   one "invented-application" create (fact fb),
+   one "absent-premise" absentPremise (.rule ⟨a, b⟩ 8 [] [fact missing]),
+   one "unbound-variable" create (.rule ⟨ga, ga⟩ 8 [] [fact fa]),
+   one "wrong-binding" create (.rule ⟨ga, ga⟩ 8 [("x", b)] [fact fa]),
+   one "missing-premise-proof" create (.rule ⟨ga, ga⟩ 8 [("x", a)] []),
+   one "premise-order" ordered (.rule ⟨ga, ga⟩ 8 [("x", a)] [unionFact a b, fact fa]),
+   one "wrong-conclusion" create (.rule ⟨a, b⟩ 8 [("x", a)] [fact fa]),
+   one "transitivity-endpoints" create (.trans ⟨a, b⟩ (fact a) (fact b)),
+   one "congruence-child" create (.congr ⟨fa, fb⟩ (fact fa) 0 (unionFact b a)),
+   one "symmetry-claim" create (.symm ⟨a, a⟩ (fact fa))]
 
 /-- Every fixture, with the lifted ones first. `none` if a program fails to lift. -/
 def all : Option (List Fixture) := do

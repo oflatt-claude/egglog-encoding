@@ -44,7 +44,6 @@ def endpoints (P : Program) (C : Context) (t : Term) (p : Proof)
 
 /-- Recover subterm existence from a source derivation, without a new proof axiom. -/
 def support (P : Program) (C : Context) (t : Term) : Proof → Option Proof
-  | p@(.fiat _) => endpoints P C t p fun _ => node P C (.fiat ⟨t, t⟩)
   | p@(.rule _ command σ ps) => endpoints P C t p fun _ =>
       node P C (.rule ⟨t, t⟩ command σ ps)
   | p@(.symm _ q) => endpoints P C t p fun _ => support P C t q

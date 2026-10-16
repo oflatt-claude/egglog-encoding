@@ -1735,7 +1735,8 @@ private def provenanceCheck (fuel : Nat) (p : Program) (liftProofs : Bool) : Lis
     return ["instrumented program stuck or exhausted fuel"]
   let mut errors : List String := []
   if !Provenance.unionFree encoded then errors := errors ++ ["provenance introduced union"]
-  let rows := annotated.rows.filterMap (Provenance.eraseRow C.sig)
+  let rows := annotated.rows.filterMap fun r =>
+    (Provenance.eraseRow C.sig r.toEntry).map fun e => (⟨e.name, e.key, e.value⟩ : Row)
   if rows.toFinset != original.rows.toFinset then
     errors := errors ++ ["projected live rows differ"]
   -- The live rows are compared above. The term history also holds superseded rows, and

@@ -18,7 +18,6 @@ mutual
 
 /-- The claim and its justification, with the subproofs indented below. -/
 def Proof.render (indent : String) : Proof → String
-  | .fiat c => indent ++ c.render ++ "  fiat\n"
   | .symm c p => indent ++ c.render ++ "  symm\n" ++ p.render (indent ++ "  ")
   | .trans c p q => indent ++ c.render ++ "  trans\n" ++
       p.render (indent ++ "  ") ++ q.render (indent ++ "  ")

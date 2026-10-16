@@ -25,6 +25,10 @@ import EgglogSemantics.Tests.SourceProof
 import EgglogSemantics.Tests.SourceProofCorrectness
 
 -- Function provenance and checking against the relational program.
+import EgglogSemantics.Proofs.Provenance.Soundness
+import EgglogSemantics.Proofs.Resugar.Soundness
+import EgglogSemantics.Tests.GeneratedProvenance
+import EgglogSemantics.Tests.ProofPass
 import EgglogSemantics.Tests.Provenance
 import EgglogSemantics.Proofs.Provenance.Counterexamples
 import EgglogSemantics.Proofs.Provenance.Countermodel

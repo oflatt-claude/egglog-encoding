@@ -20,7 +20,6 @@ def actionsFacts (sig : Signature) (σ : Env) : List Action → Option (List Ter
       some (fs ++ rest)
 
 def unionFree (P : Program) : Bool := P.all fun c => match c with
-  | .action a => match a with | .expr _ => true | .union _ _ => false
   | .rule r => r.actions.all fun a => match a with | .expr _ => true | .union _ _ => false
   | .decl _ d => match d.merge with
     | some (.merge _ _ body _) => body.all fun a => match a with
@@ -78,10 +77,6 @@ def mergeFacts (sig : Signature) (f : FnName) (old new : Term) : Option MergeFac
 
 /-- The root node's justification, against the facts its subproofs state. -/
 def checkReason (P : Program) (sig : Signature) : Proof → Bool
-  | .global t i => (do
-      let .action a ← P[i]? | none
-      let facts ← actionFacts sig [] a
-      some (decide (t ∈ facts))).getD false
   | .rule t i σ ps => (do
       let .rule r ← P[i]? | none
       let facts ← ruleFacts sig r σ (ps.map Proof.fact)
@@ -92,16 +87,12 @@ def checkReason (P : Program) (sig : Signature) : Proof → Bool
   | .subterm t parent => decide (t ∈ parent.fact.subtermList)
 
 def checkNode (P : Program) (C : SourceProof.Context) (pf : Proof) : Bool :=
-  SourceProof.atomOk C.sig pf.fact && checkReason P C.sig pf &&
-    match pf with
-    | .global t _ => decide ((⟨t, t⟩ : SourceProof.Claim) ∈ C.globals)
-    | _ => true
+  SourceProof.atomOk C.sig pf.fact && checkReason P C.sig pf
 
 mutual
 
 /-- Every node is valid. -/
 def valid (P : Program) (C : SourceProof.Context) : Proof → Bool
-  | .global t i => checkNode P C (.global t i)
   | .rule t i σ ps => allValid P C ps && checkNode P C (.rule t i σ ps)
   | .merge t f p q => valid P C p && valid P C q && checkNode P C (.merge t f p q)
   | .subterm t p => valid P C p && checkNode P C (.subterm t p)

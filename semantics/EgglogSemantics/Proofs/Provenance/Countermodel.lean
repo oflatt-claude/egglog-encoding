@@ -23,9 +23,12 @@ private theorem single_normal : MergeNormal single := by
     simp [entry, Entry.columns, Term.IsValue, Term.isValue]
   have only : ∀ e ∈ single.entries, e = entry := by
     intro e he
-    rcases Database.mem_addTerm_entries.mp he with he | ⟨he, ht⟩
-    · exact he.2.elim
-    · exact he.atom_subterm hv ht
+    have hatom : e.atom = entry.atom := by
+      have hroot := he.2
+      simp only [single, Database.addTerm_eqs, base, Database.empty,
+        Set.mem_insert_iff, Set.mem_empty_iff_false, or_false] at hroot
+      exact congrArg Prod.fst hroot
+    exact he.1.atom_injective hv hatom
   intro a ha b hb _ _
   exact (only a ha).trans (only b hb).symm
 
@@ -41,7 +44,7 @@ theorem single_row_merge_counterexample :
       mergeFacts db.sig "T" input input = some facts ∧ facts.result ∉ db.terms := by
   refine ⟨single, row 1, ⟨[], row 9⟩, single_wf, single_normal, ?_, ?_,
     single_lacks_result⟩
-  · exact Cong.direct (Or.inr ⟨row 1, Term.self_mem_subterms _, rfl⟩)
+  · exact Database.mem_addTerm _ _
   · rfl
 
 end Egglog.Provenance.Counterexamples

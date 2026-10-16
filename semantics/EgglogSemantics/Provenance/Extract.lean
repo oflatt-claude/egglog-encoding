@@ -1,10 +1,8 @@
 import EgglogSemantics.Provenance.Encode
-import EgglogSemantics.Impl.Interp
 
 namespace Egglog.Provenance
 
 inductive ProofKind where
-  | global (command : Nat)
   | rule (command action : Nat)
   | body (function : FnName) (action : Nat)
   | result (function : FnName)
@@ -16,7 +14,6 @@ def proofKinds (P : Program) : List (FnName × ProofKind) :=
       | some (.merge _ _ body _) => (resultName f, .result f) ::
           body.zipIdx.map fun aj => (bodyName f aj.2, .body f aj.2)
       | _ => []
-    | .action _ => [(globalName ci.2, .global ci.2)]
     | .rule r => r.actions.zipIdx.map fun aj => (ruleName ci.2 aj.2, .rule ci.2 aj.2)
     | _ => []
 
@@ -62,11 +59,6 @@ def decode (P : Program) (sig : Signature) (kinds : List (FnName × ProofKind)) 
   | .app f args => do
     let (_, kind) ← kinds.find? (fun kv => kv.1 == f)
     match kind with
-    | .global i =>
-      if !args.isEmpty then none else do
-        let .action a ← P[i]? | none
-        let fact ← actionRoot sig [] a
-        node P sig (.global fact i)
     | .rule i j => do
       let .rule r ← P[i]? | none
       let n := r.query.vars.length
@@ -115,21 +107,21 @@ def extract (P : Program) (pf : Term) : Option Proof := do
     if (check P p).isSome then some p else none
 
 /-- The selected proof must establish exactly the row's original data columns. -/
-def extractRow (P : Program) (r : Row) : Option Proof := do
+def extractRow (P : Program) (r : Entry) : Option Proof := do
   let C ← SourceProof.contextOf P
-  let d ← C.sig r.fn
-  if d.merge.isNone || r.args.length != d.arity || r.out.length != d.outArity + 1 then
+  let d ← C.sig r.name
+  if d.merge.isNone || r.key.length != d.arity || r.value.length != d.outArity + 1 then
     none
   else do
-    let pf ← r.out[d.outArity]?
+    let pf ← r.value[d.outArity]?
     let p ← extract P pf
-    if check P p == some (.app r.fn (r.args ++ r.out.take d.outArity)) then
+    if check P p == some (.app r.name (r.key ++ r.value.take d.outArity)) then
       some p
     else none
 
-def eraseRow (sig : Signature) (r : Row) : Option Row := do
-  let d ← sig r.fn
-  if d.merge.isSome then some { r with out := r.out.take d.outArity }
+def eraseRow (sig : Signature) (r : Entry) : Option Entry := do
+  let d ← sig r.name
+  if d.merge.isSome then some { r with value := r.value.take d.outArity }
   else some r
 
 def eraseFact (sig : Signature) (t : Term) : Option Term := do
@@ -140,7 +132,7 @@ def eraseFact (sig : Signature) (t : Term) : Option Term := do
       some (.app f (cols.take d.entryWidth))
     else none
 
-def retainedRows (sig : Signature) (terms : List Term) : List Row :=
+def retainedRows (sig : Signature) (terms : List Term) : List Entry :=
   terms.filterMap fun t => do
     let .app f cols := t | none
     let d ← sig f
