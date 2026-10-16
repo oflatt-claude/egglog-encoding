@@ -18,26 +18,31 @@ ref-nested keeps the paper's syntactic substitution as a timing baseline.
 Missing evidence fails the correctness gate. --no-counts opts into timing/goals only.
 
 All observations share the proof benchmark's ReportStore through eval_cache;
-eval_report renders the two timing summaries and full evidence table.
+benchmarking.reports.slotted builds the same tables and checks for the CLI and nightly.
 See ENCODING.md for comparison policies and limitations.
 """
 
 import argparse
 import multiprocessing
 import signal
+import subprocess
 import sys
 import time
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
 
-import eval_verify as verification  # noqa: E402
-import eval_workloads as workloads  # noqa: E402
-from eval_cache import Cache, load_rows  # noqa: E402
-from eval_report import SIDES, Progress, Row, html, markdown_report, report_sections  # noqa: E402
-from eval_run import GROUP_CAP, Config, build, run_egglog, run_reference  # noqa: E402
+import paper_fixtures as pf  # noqa: E402
+from eval_cache import Cache  # noqa: E402
+from eval_observation import Row  # noqa: E402
+from eval_run import GROUP_CAP, Config, Progress, build, run_egglog, run_reference  # noqa: E402
+
+from benchmarking.reports.render import render_html_report_document, render_markdown_report_document  # noqa: E402
+from benchmarking.reports.slotted import SIDES, slotted_report  # noqa: E402
+from benchmarking.reports.store import ReportStore  # noqa: E402
 
 REPORT = Path(".reports.jsonl")
 
@@ -58,15 +63,15 @@ def main(argv=None):
     ap.add_argument(
         "--kernel",
         nargs="*",
-        default=list(workloads.pf.KERNELS),
-        choices=workloads.pf.KERNELS,
+        default=list(pf.KERNELS),
+        choices=pf.KERNELS,
         help="sdql: kernels to run",
     )
     ap.add_argument(
         "--phase",
         nargs="*",
-        default=list(workloads.pf.PHASES),
-        choices=workloads.pf.PHASES,
+        default=list(pf.PHASES),
+        choices=pf.PHASES,
         help="sdql: compiler phases to run",
     )
     ap.add_argument(
@@ -123,8 +128,6 @@ def main(argv=None):
         help=f"print the table from a record instead of running (default {REPORT.name})",
     )
     ap.add_argument("--html", type=Path, help="also write the table as an HTML page here")
-    ap.add_argument("--long", action="store_true", help="one row per run with every field, instead of the timing pivot")
-    ap.add_argument("--merged", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--no-build", action="store_true", help="skip `cargo build`; the binaries are known current")
     ap.add_argument(
         "--force-run", action="store_true", help="append fresh observations instead of reusing exact cached results"
@@ -144,50 +147,36 @@ def main(argv=None):
         aliases = {"encoding": "encoding-no-aliasing", "ref-nested": "ref-nested-snapshot"}
         sides = tuple(dict.fromkeys(aliases.get(s, s) for s in sides))
 
-    if args.report:
-        # reporting alone: the rows come from an earlier run's record
-        rows, when = load_rows(args.report, args.merged)
-        rows = [r for r in rows if r.side in sides]
-        print(f"{args.report}: latest cached observations (through {when})", file=sys.stderr)
-        if args.study != "all":
-            rows = [r for r in rows if r.study == args.study]
-        if args.side == "all":
-            sides = tuple(s for s in sides if any(r.side == s for r in rows))
-    else:
-        rows = collect(args, sides, ap, config=config)
-
-    errors = verification.failures(rows, sides, args.counts)
-    sections = report_sections(rows, sides, args.long, counts=args.counts)
-    print(markdown_report(sections, errors))
-    if args.html:
-        args.html.write_text(html(sections, errors))
-        print(f"wrote {args.html}", file=sys.stderr)
-    return 1 if errors else 0
-
-
-def nightly(report_path, *, env=None, timeout=150, jobs=1):
-    """Populate the shared report cache using the paper's rewrite budgets."""
-    build(env=env)
-    return main(
-        [
-            "--no-build",
-            "--timeout",
-            str(timeout),
-            "--jobs",
-            str(jobs),
-            "--params",
-            "0",
-            "1",
-            "2",
-            "3",
-            "--report",
-            str(report_path),
-        ]
-    )
+    try:
+        if args.report:
+            records = ReportStore(args.report.expanduser()).records
+            if args.study != "all":
+                records = [r for r in records if "slotted" in r and r["slotted"]["study"] == args.study]
+            print(f"{args.report}: latest cached workload versions", file=sys.stderr)
+        else:
+            records = collect(args, sides, ap, config=config)
+        report = slotted_report(records, sides=sides, counts=args.counts)
+        print(render_markdown_report_document(report.catalog))
+        if args.html:
+            cache_path = args.report or args.jsonl
+            if args.html.resolve() == cache_path.resolve():
+                raise ValueError("HTML output must differ from the JSONL report path")
+            args.html.write_text(render_html_report_document(report.catalog))
+            print(f"wrote {args.html}", file=sys.stderr)
+        return 1 if report.errors else 0
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"slotted evaluation failed: {error}", file=sys.stderr)
+        return 2
+    except Exception:
+        # Preserve programming errors as tracebacks, with the collection-error status.
+        traceback.print_exc()
+        return 2
 
 
 def collect_workload(workload, args, sides, config, progress):
     """One timing run per side; collect untimed evidence and then compare the group."""
+    import eval_verify as verification
+
     rows = []
     for side in sides:
         row = Row(workload.study, workload.case, side, workload.rounds, workload.rules)
@@ -232,13 +221,15 @@ def parallel_workload(payload):
 
 def collect(args, sides, ap, *, config=None):
     """Build both sides and run the requested workloads: the rows a report is made of."""
+    import eval_workloads as workloads
+
     started = time.perf_counter()
     config = config or Config()
     tasks = []
     if args.study in ("all", "array"):
         tasks += [("array", n) for n in args.params]
     if args.study in ("all", "sdql"):
-        selected = [w for w in workloads.pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
+        selected = [w for w in pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
         if args.rules == 12 and selected != [("batax", "2nd")]:
             ap.error("--rules 12 is the suite's BATAX second-phase subset: use --kernel batax --phase 2nd")
         tasks += [("sdql", w) for w in selected]
@@ -257,14 +248,12 @@ def collect(args, sides, ap, *, config=None):
     )
 
     prepared = {task: workloads.prepare(task, rounds=args.rounds, rules=args.rules) for task in tasks}
-    cache = None
-    if getattr(args, "jsonl", None) is not None:
-        manifests = {task: asdict(workload) for task, workload in prepared.items()}
-        cache = Cache(args.jsonl, ROOT, config, args, manifests)
+    manifests = {task: asdict(workload) for task, workload in prepared.items()}
+    cache = Cache(args.jsonl.expanduser(), ROOT, config, args, manifests)
     rows_by_task = {}
     pending = []
     for task in tasks:
-        reused = cache.reuse(task, sides) if cache else None
+        reused = cache.reuse(task, sides)
         if reused is None:
             pending.append(task)
         else:
@@ -272,9 +261,7 @@ def collect(args, sides, ap, *, config=None):
     print(f"Workloads: {len(rows_by_task)} cached, {len(pending)} to collect.", file=sys.stderr)
 
     def accept(task, group):
-        if cache:
-            cache.append(task, group)
-        rows_by_task[task] = group
+        rows_by_task[task] = cache.append(task, group)
 
     if args.jobs == 1:
         with Progress() as progress:

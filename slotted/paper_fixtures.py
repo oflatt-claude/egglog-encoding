@@ -31,8 +31,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "slotted"))
-sc = __import__("slotted-egglog")
-slotenc = __import__("slotted-encoder")
+import reference as syntax  # noqa: E402
 
 FIXTURES = ROOT / "slotted" / "tests" / "artifact" / "sdql"
 TESTS = ROOT / "slotted" / "tests" / "sdql-paper"
@@ -149,20 +148,20 @@ def translate(term, names=None):
 def workload(kernel, phase):
     """`(input, target)` of one workload as parsed forms in the language of `sdql-rules.egg`."""
     src_name, tgt_name = fixture_names(kernel, phase)
-    src = sc.parse((FIXTURES / src_name).read_text())[0]
-    tgt = sc.parse((FIXTURES / tgt_name).read_text())[0]
+    src = syntax.parse((FIXTURES / src_name).read_text())[0]
+    tgt = syntax.parse((FIXTURES / tgt_name).read_text())[0]
     return translate(src), translate(tgt)
 
 
 def reference_language():
     """The SDQL language with the oracle's spelling of each constructor."""
     decls = RULES.with_name("sdql.egg")
-    return slotenc.language(decls, decls.with_suffix(".ref"))
+    return syntax.language(decls, decls.with_suffix(".ref"))
 
 
 def workload_text(kernel, phase, source=None, lang=None):
     """The same two terms spelled for the oracle."""
-    source = source or sc.Source(RULES)
+    source = source or syntax.Source(RULES)
     lang = lang or reference_language()
     inp, tgt = workload(kernel, phase)
     return lang.sexpr(source.term(inp, ground=True)), lang.sexpr(source.term(tgt, ground=True))
@@ -171,7 +170,7 @@ def workload_text(kernel, phase, source=None, lang=None):
 # ---------------------------------------------------------------------- the tests
 def pretty(form, indent=0, width=100):
     """A parsed form, one child per line once it stops fitting; the head keeps its leading atoms."""
-    flat = sc.render(form)
+    flat = syntax.render(form)
     if not isinstance(form, list) or indent + len(flat) <= width:
         return flat
     lead = 1

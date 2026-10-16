@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run every complete program marked ```slotted in LANGUAGE.md.
 
-Each example must pass through both the Rust CLI and the Python oracle.
+Each example must pass through the Rust CLI.
 Untagged code blocks illustrate syntax and are not executed.
 
 Run with `python3 slotted/checks/check-language-doc.py`."""
@@ -16,7 +16,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOC = ROOT / "slotted" / "LANGUAGE.md"
 COMPILERS = {
     "Rust": [str(ROOT / "target/debug/egglog-experimental"), "--slotted"],
-    "Python": [sys.executable, str(ROOT / "slotted/slotted-egglog.py")],
 }
 
 #: Every claim the doc names in its table, so a claim can be added there and forgotten
@@ -60,7 +59,7 @@ def main():
     if unused:
         print(f"       claims in the table with no runnable example: {', '.join(unused)}")
     unexercised = f", {len(unused)} claims unexercised" if unused else ""
-    print(f"\n{len(progs) - len({i for i, _ in bad})}/{len(progs)} examples run through both compilers{unexercised}")
+    print(f"\n{len(progs) - len({i for i, _ in bad})}/{len(progs)} examples run through the Rust CLI{unexercised}")
     return 1 if bad or unused else 0
 
 

@@ -10,10 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import paper_fixtures as pf
+import reference as syntax
 import xarray as XA
 
-sc = __import__("slotted-egglog")
-slotenc = __import__("slotted-encoder")
 ROOT = Path(__file__).resolve().parents[1]
 BATAX_SUBSET = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
 
@@ -61,21 +60,21 @@ def ctor_lines(lang):
 
 def rule_lines(lang, rules_path, selected, nested):
     """A rule file's rules as oracle spec lines, flattened or nested."""
-    src = sc.Source(rules_path)
+    src = syntax.Source(rules_path)
     out = []
-    for form in sc.parse(rules_path.read_text()):
+    for form in syntax.parse(rules_path.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
-        r = sc.rewrite_parts(src, form)
+        r = syntax.rewrite_parts(src, form)
         if selected is not None and r["name"] not in selected:
             continue
         lhs = src.term(r["lhs"], ground=False)
-        rhs = slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, src.term(r["rhs"], ground=False)))
+        rhs = syntax.pat_sexpr(lang, syntax.rhs_of(lang, src.term(r["rhs"], ground=False)))
         if nested:
-            out += ["rule", f"nested {slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, lhs))}", f"rhs root {rhs}"]
+            out += ["rule", f"nested {syntax.pat_sexpr(lang, syntax.rhs_of(lang, lhs))}", f"rhs root {rhs}"]
         else:
-            root, atoms = slotenc.flatten(lang, lhs)
-            root, atom_text = slotenc.atom_lines(lang, root, atoms)
+            root, atoms = syntax.flatten(lang, lhs)
+            root, atom_text = syntax.atom_lines(lang, root, atoms)
             out += ["rule", *atom_text, f"rhs {root} {rhs}"]
         for want, slot, pvars in r["conds"]:
             out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
@@ -91,9 +90,9 @@ def array_program(case, *, with_target):
         op = XA.LANG.ops[t[0]]
         args = []
         for kind, arg in zip(op.arg_kinds(), t[1:], strict=True):
-            if kind is slotenc.CHILD:
+            if kind is syntax.CHILD:
                 args.append(term(arg))
-            elif kind is slotenc.BINDER:
+            elif kind is syntax.BINDER:
                 args.append(f"${XA.LANG.slot(arg)}")
             else:
                 args.append(json.dumps(arg))
@@ -132,24 +131,24 @@ def sdql_program(kernel, phase, rules, rounds, with_target):
     """One workload as a slotted source: the full library by include, or BATAX's own 12."""
     if rules == 12:
         # the goal-directed test, its own rules and schedule; only its terms are reused
-        forms = sc.parse(BATAX_SUBSET.read_text())
+        forms = syntax.parse(BATAX_SUBSET.read_text())
         forms = [["run", str(rounds)] if f[:1] == ["run"] and f[1] != "0" else f for f in forms]
     else:
         forms = pf.test_forms(kernel, phase, rounds)
     if not with_target:
         # the saturated input alone, for counting: no target, no check
         forms = [f for f in forms if f[0] != "check" and f[:2] != ["let", "paper-target"]]
-    return "\n".join(sc.render(f) for f in forms) + "\n"
+    return "\n".join(syntax.render(f) for f in forms) + "\n"
 
 
 def sdql_workload(kernel, phase, *, rules=44, rounds=None):
     lang = pf.reference_language()
-    start, target = pf.workload_text(kernel, phase, sc.Source(pf.RULES), lang)
+    start, target = pf.workload_text(kernel, phase, syntax.Source(pf.RULES), lang)
     budget = pf.iteration_limit(kernel, phase) if rounds is None else rounds
     selected = None
     if rules == 12:
-        subset = sc.Source(BATAX_SUBSET)
-        selected = {sc.rule_name(subset, f) for f in sc.parse(BATAX_SUBSET.read_text()) if f[:1] == ["rewrite"]}
+        subset = syntax.Source(BATAX_SUBSET)
+        selected = {syntax.rule_name(subset, f) for f in syntax.parse(BATAX_SUBSET.read_text()) if f[:1] == ["rewrite"]}
     head = [f"rounds {budget}", *ctor_lines(lang), f"term {start}"]
     goal = [f"goal {target}"]
     multi = rule_lines(lang, pf.RULES, selected, nested=False)

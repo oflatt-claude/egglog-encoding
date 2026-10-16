@@ -8,7 +8,7 @@
 ;;; is the carrier, and a column in it is a slotted child. `own-sort.egg` writes the same
 ;;; language the long way.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/datatype.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/datatype.egg
 
 (datatype M
   (Num i64)

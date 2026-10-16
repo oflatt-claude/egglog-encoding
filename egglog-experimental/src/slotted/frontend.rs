@@ -548,8 +548,15 @@ impl Compiler {
         for form in args {
             reserve(form, &mut names);
         }
-        let root = names.fresh("?_p");
-        let mut atoms = query::flatten(&self.state.lang, &lhs, &root, "?_t", &mut names)?;
+        // A named root can be bound by the side patterns. This also permits a
+        // rewrite of a child matched inside another atom of a multipattern.
+        let (root, mut atoms) = if let Term::Variable(v) = &lhs {
+            (v.clone(), Vec::new())
+        } else {
+            let root = names.fresh("?_p");
+            let atoms = query::flatten(&self.state.lang, &lhs, &root, "?_t", &mut names)?;
+            (root, atoms)
+        };
         let mut conditions = query::Conditions::default();
         let (mut name, mut lead) = (None, 0);
         let mut side = 0;
@@ -663,7 +670,18 @@ impl Compiler {
                 _ => return Err(format!("unsupported rewrite option {key}")),
             }
         }
-        let sort = &self.state.lang.constructors[&atoms[0].op].sort;
+        let first = atoms
+            .first()
+            .ok_or("a rewrite needs a constructor pattern on the left or in :when")?;
+        if !atoms.iter().any(|a| {
+            a.root == root
+                || a.kids
+                    .iter()
+                    .any(|k| matches!(k, Term::Variable(v) if *v == root))
+        }) {
+            return Err(format!("rewrite root {root:?} is not bound by a pattern"));
+        }
+        let sort = &self.state.lang.constructors[&first.op].sort;
         if atoms
             .iter()
             .any(|a| self.state.lang.constructors[&a.op].sort != *sort)

@@ -29,17 +29,13 @@ Usage:
                               executable witnesses for known encoding gaps
 """
 
-import functools
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import EGGLOG, ROOT, XMULTI, machinery, parse_same_class, slotenc  # noqa: E402
-
-# the carrier's table names, read off the encoder rather than written out
-SYM = slotenc.carrier_symbols(("U",))["U"]
+from xdiff import EGGLOG, ROOT, XMULTI, driver, parse_same_class, syntax  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
@@ -60,13 +56,8 @@ BINDER_FIXTURE = ROOT / "slotted" / "tests" / "sdql-binders.egg"
 #       | ('merge', range1, range2, slot, slot, slot, body)
 #       | ('let', value, slot, body)
 #
-# The encoding of one is NOT written here: `slotted-encoder.py` owns `slots` /
-# `edge` / `enc` / `sexpr` / `shift`, and the columns it walks are read off
-# `slotted/languages/sdql.egg`, which also declares the rules
-# compiler's constructors. So a term cannot come to disagree with the rule that
-# has to match it about a node's arity, its payload columns, or which of its
-# children it binds: `sum`, `merge` and `let` bind their columns 1&2, 2&3&4 and 1
-# because that file's `:binder` says they do, and nothing here restates it.
+# Constructor columns come from `languages/sdql.egg`; reference tags come from
+# `languages/sdql.ref`. Python spells source terms; Rust compiles the encoding.
 #
 # Terms take their columns in the reference's surface order, which is where its
 # `Bind<>` layers put the bound slots: `Sum(AppliedId, Bind<Bind<AppliedId>>)`
@@ -110,21 +101,19 @@ SDQL_SRC = ROOT / "slotted" / "languages" / "sdql.egg"
 #: from sdql.egg alone
 SDQL_SRC_RULES = ROOT / "slotted" / "languages" / "sdql-rules.egg"
 # The language file says what the constructors are; the `.ref` beside it says what the
-# reference calls them, including the two workarounds above. `slotenc.language` checks
+# reference calls them, including the two workarounds above. `syntax.language` checks
 # that the two name the same constructors, so an operator added to one and not the other
 # is an error here rather than a corpus that quietly stops covering the language the
 # rules were compiled from.
-LANG = slotenc.language(SDQL_SRC, SDQL_SRC.with_suffix(".ref"))
+LANG = syntax.language(SDQL_SRC, SDQL_SRC.with_suffix(".ref"))
 
-CORR = slotenc.read_correspondence(SDQL_SRC.with_suffix(".ref"))
+CORR = syntax.read_correspondence(SDQL_SRC.with_suffix(".ref"))
 OPS = {op: (ctor, tag) for op, (ctor, tag, _) in CORR.items()}
 SYM_PREFIX = CORR["sym"][2]
 LET_TAG = CORR["let"][1]
 assert SYM_PREFIX and LET_TAG != "let", "sdql.ref lost one of the two workarounds above"
 
-enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
-
-sc = __import__("slotted-egglog")
+sexpr, shift = LANG.sexpr, LANG.shift
 
 
 def _fixture_blocks(path):
@@ -134,7 +123,7 @@ def _fixture_blocks(path):
     fixture's own `let` names, and a library changing its own scopes must not silently
     renumber those cases.
     """
-    src = sc.Source(path)
+    src = syntax.Source(path)
     blocks, block = [], None
     for form, origin in src.body:
         if origin != path or not isinstance(form, list) or not form:
@@ -203,12 +192,12 @@ def _fixture_block(path, anchor):
 
 def _fixture_rewrites(path, *names):
     """Read uniquely named local rewrites from a source fixture."""
-    src = sc.Source(path)
+    src = syntax.Source(path)
     wanted, found = set(names), {}
     for form, origin in src.body:
         if origin != path or not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
-        parts = sc.rewrite_parts(src, form)
+        parts = syntax.rewrite_parts(src, form)
         if parts["name"] in wanted:
             if parts["name"] in found:
                 raise ValueError(f"{path.name}: duplicate rewrite {parts['name']!r}")
@@ -258,7 +247,7 @@ class Rule:
         self.lhs = lhs
         self.rhs = rhs
         self.conds = list(conds)
-        #: `(root, atoms)` from `slotenc.flatten`, or None where the pattern has no
+        #: `(root, atoms)` from `syntax.flatten`, or None where the pattern has no
         #: atom spelling; see `atom_lines`.
         self.flat = atoms
         # Ordinary cases lift the generated rule by name. A focused compiler
@@ -271,7 +260,7 @@ class Rule:
         """The pattern as `atom` lines, or None where it has no atom spelling."""
         if self.flat is None:
             return None
-        return slotenc.atom_lines(LANG, *self.flat)
+        return syntax.atom_lines(LANG, *self.flat)
 
     def spec_lines(self):
         spelled = self.atom_lines()
@@ -289,21 +278,21 @@ def _rule_from_parts(src, parts):
     if parts["equalities"]:
         raise ValueError(f"{parts['name']}: `:when (= ...)` is not supported by the SDQL harness yet")
     lhs_term, rhs_term = (src.term(side, ground=False) for side in (parts["lhs"], parts["rhs"]))
-    lhs, rhs = (slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, term)) for term in (lhs_term, rhs_term))
+    lhs, rhs = (syntax.pat_sexpr(LANG, syntax.rhs_of(LANG, term)) for term in (lhs_term, rhs_term))
     try:
-        atoms = slotenc.flatten(LANG, lhs_term)
+        atoms = syntax.flatten(LANG, lhs_term)
     except Exception:
         atoms = None
     return Rule(parts["name"], lhs, rhs, conds=parts["conds"], atoms=atoms)
 
 
 #: Source rewrites shared by the encoding and the reference rule translation.
-SOURCE = sc.Source(SDQL_SRC_RULES)
+SOURCE = syntax.Source(SDQL_SRC_RULES)
 SOURCE_RULES = {
-    sc.rule_name(SOURCE, form): form for form in sc.parse(SDQL_SRC_RULES.read_text()) if form[:1] == ["rewrite"]
+    syntax.rule_name(SOURCE, form): form for form in syntax.parse(SDQL_SRC_RULES.read_text()) if form[:1] == ["rewrite"]
 }
 
-RULES = {name: _rule_from_parts(SOURCE, sc.rewrite_parts(SOURCE, form)) for name, form in SOURCE_RULES.items()}
+RULES = {name: _rule_from_parts(SOURCE, syntax.rewrite_parts(SOURCE, form)) for name, form in SOURCE_RULES.items()}
 
 # The substitution cases below use the runnable fixture's beta definition on the
 # reference side. The encoding compiles the corresponding library rule. This
@@ -314,10 +303,8 @@ if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
     raise ValueError(f"{BETA_FIXTURE.name}: beta no longer matches {SDQL_SRC_RULES.name}")
 
 
-@functools.cache
-def egg_rule(name):
-    """Compile the selected source rewrite into the harness's `sdql` ruleset."""
-    return sc.compile_rewrite(SOURCE, SOURCE_RULES[name], ruleset="sdql").strip()
+def source_rule(name):
+    return syntax.render(SOURCE_RULES[name])
 
 
 # ---------------------------------------------------------------------- the cases
@@ -376,42 +363,9 @@ class Case:
         )
 
 
-def schedule(steps):
-    return slotenc.round_schedule(steps, "(run sdql)")
-
-
 def egg_program(case, with_rule=True, mult=3):
-    out = [machinery("sdql"), "(ruleset sdql)"]
-    if with_rule:
-        out.append(f";; {case.rule.name}")
-        out.append(case.rule.egg if case.rule.egg is not None else egg_rule(case.rule.name))
-    # A slotted e-class is not one egglog e-class: two probes are in the same
-    # slotted class when they reach a common leader.
-    out += [
-        "(ruleset probe)",
-        "(relation ProbeId (U i64))",
-        "(relation SameClass (i64 i64))",
-        "(rule ((ProbeId a i) (ProbeId b j)\n"
-        f"       ({SYM.renames} a m1 l) ({SYM.renames} b m2 l))\n"
-        "      ((SameClass i j)) :ruleset probe)",
-    ]
-    for i, t in enumerate(case.terms):
-        out.append(f"(let _t{i} {enc(t)})")
-    for i, (a, b) in enumerate(case.unions):
-        out.append(f"(let _ua{i} {enc(a)})")
-        out.append(f"(let _ub{i} {enc(b)})")
-        out.append(f"(union _ua{i} _ub{i})")
-    for i, t in enumerate(case.probes):
-        out.append(f"(let _p{i} {enc(t)})")
-    out.append(schedule(case.rounds * mult))
-    for i, _ in enumerate(case.probes):
-        out.append(f"(ProbeId _p{i} {i})")
-    # The reference gets exactly `rounds * mult` user-rule rounds.  Probe
-    # installation must not silently give the encoding that budget a second time.
-    out.append(slotenc.machinery_schedule())
-    out.append("(run-schedule (saturate (run probe)))")
-    out.append("(print-function SameClass 100000)")
-    return "\n".join(out) + "\n"
+    rules = [case.rule.egg if case.rule.egg is not None else source_rule(case.rule.name)] if with_rule else []
+    return driver.program("sdql", LANG, rules, case.terms, case.unions, case.probes, case.rounds * mult)
 
 
 def run_reference(case, with_rule=True):
@@ -544,7 +498,7 @@ def compiler_regression_cases():
     """Synthetic MultiPatterns that directly exercise the generic compiler.
 
     They use SDQL constructors only as a convenient shared language.  Keeping the
-    exact `compile_rule` output on the encoding side makes these positive tests of
+    generated source rewrite on the encoding side makes these positive tests of
     compiler behavior rather than generated-artifact coverage.
     """
     out = []
@@ -558,14 +512,14 @@ def compiler_regression_cases():
         ("?r", "mult", [("pv", "a1"), ("pv", "b1")], []),
         ("?r", "sub", [("pv", "a2"), ("pv", "b2")], []),
     ]
-    atoms = slotenc.connected_order(LANG, atoms, first=0)
+    atoms = atoms
     conds = [(True, "$x", ["a2"])]
-    multi_egg = slotenc.compile_rule(
+    multi_egg = driver.rewrite(
         LANG,
         atoms,
-        ("build", "?r", ("unique", ("pv", "a2"))),
+        "?r",
+        ("unique", ("pv", "a2")),
         conds=conds,
-        ruleset="sdql",
         name="compiler-carried-slot-refinement",
     )
     multi_rule = Rule(
@@ -603,11 +557,11 @@ def compiler_regression_cases():
     symmetry_target = ("add", V(3), V(2))
     repeated = ("subarray", a, swapped, a)
     atoms = [("?r", "subarray", [("pv", "x"), ("pv", "x"), ("pv", "x")], [])]
-    repeated_egg = slotenc.compile_rule(
+    repeated_egg = driver.rewrite(
         LANG,
         atoms,
-        ("build", "?r", ("unique", ("pv", "x"))),
-        ruleset="sdql",
+        "?r",
+        ("unique", ("pv", "x")),
         name="compiler-repeated-pvar-symmetry",
     )
     repeated_rule = Rule(
@@ -1017,23 +971,23 @@ def known_encoding_limitations():
     naive = scope_parts["binder-free-same-spelling-known-limit"]
     reference_lhs = scope_src.term(reference["lhs"], ground=False)
     naive_lhs = scope_src.term(naive["lhs"], ground=False)
-    reference_rhs = slotenc.rhs_of(LANG, scope_src.term(reference["rhs"], ground=False))
-    naive_rhs = slotenc.rhs_of(LANG, scope_src.term(naive["rhs"], ground=False))
+    reference_rhs = syntax.rhs_of(LANG, scope_src.term(reference["rhs"], ground=False))
+    naive_rhs = syntax.rhs_of(LANG, scope_src.term(naive["rhs"], ground=False))
     if reference_rhs != naive_rhs:
         raise ValueError(f"{BINDER_FIXTURE.name}: the paired scope witnesses must have the same right-hand side")
-    reference_root, reference_atoms = slotenc.flatten(LANG, reference_lhs)
-    root, naive_atoms = slotenc.flatten(LANG, naive_lhs)
-    scope_egg = slotenc.compile_rule(
+    reference_root, reference_atoms = syntax.flatten(LANG, reference_lhs)
+    root, naive_atoms = syntax.flatten(LANG, naive_lhs)
+    scope_egg = driver.rewrite(
         LANG,
         naive_atoms,
-        ("build", root, naive_rhs),
-        ruleset="sdql",
+        root,
+        naive_rhs,
         name="known-flat-binder-free",
     )
     scope_rule = Rule(
         "known-flat-binder-free",
-        slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, naive_lhs)),
-        slotenc.pat_sexpr(LANG, reference_rhs),
+        syntax.pat_sexpr(LANG, syntax.rhs_of(LANG, naive_lhs)),
+        syntax.pat_sexpr(LANG, reference_rhs),
         atoms=(reference_root, reference_atoms),
         egg=scope_egg,
     )

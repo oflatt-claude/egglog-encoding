@@ -30,8 +30,8 @@ runner. Includes resolve relative to the invocation directory. Successive files
 share compiler state, and `push`/`pop` restore declarations, globals and rewrites.
 In stdin/REPL mode, a failed complete input restores both compiler and e-graph
 state, including any commands executed earlier in that input.
-The slotted flag cannot be combined with term or proof encoding. The older Python compiler remains a differential test
-oracle; it is not used to execute the paper evaluation.
+The slotted flag cannot be combined with term or proof encoding. Differential tests
+and paper evaluation both run this Rust implementation against the reference.
 
 The additions exist because a slotted term is not an egglog value. A term denotes a
 class **together with** a renaming — an *invocation* — and egglog has no notion of
@@ -224,8 +224,19 @@ written bare, as an egglog rule writes one, and `$x` is a slot wherever it appea
 Naming a global with a `$` is refused: `$j` in a term would be the slot and never the
 global.
 
-A rewrite's **left side must be a call**. A bare variable there matches every class, so
-the rule would say nothing.
+A rewrite's left side can be a constructor call or a variable bound by its
+`:when` patterns. The latter lets a multipattern rewrite a matched child:
+
+```slotted
+(datatype U (F U U) (G U) (N))
+(let start (F (N) (N)))
+(rewrite child (G child) :when ((= parent (F child other))))
+(run 1)
+(check (= (N) (G (N))))
+```
+
+An unbound left-hand variable is rejected. The nested compatibility mode still
+requires a single nested left-hand pattern.
 
 `:when` takes **one** argument, a list of facts — `:when ((= a b) (not-free $x f))`.
 That is egglog's spelling and the only one it accepts, so all of a rule's facts go in
@@ -586,5 +597,5 @@ The second has no terms and no claims, so nothing was checked — it only loaded
 | `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/slotted-eval.py` runs in full |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `egglog-experimental/src/slotted/` | the Rust compiler |
-| `slotted/slotted-egglog.py` | independent Python compiler used by differential tests |
+| `slotted/reference.py` | test input metadata and translation to the reference |
 | `slotted/ENCODING.md` | what this language compiles TO, and why each table is there |

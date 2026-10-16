@@ -5,7 +5,7 @@
 ;;; rather than emitted twice, since the core declares it ahead of the relations that
 ;;; use it.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/carrier-name.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/carrier-name.egg
 
 (sort U)
 

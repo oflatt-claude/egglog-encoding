@@ -20,8 +20,8 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
-sc = __import__("slotted-egglog")
-slotenc = __import__("slotted-encoder")
+import reference as syntax  # noqa: E402
+
 pf = __import__("paper_fixtures")
 
 ARTIFACT_COMMIT = pf.ARTIFACT_COMMIT
@@ -142,15 +142,15 @@ def rewrites(path: pathlib.Path) -> dict[str, tuple[Any, ...]]:
     guard and mean the same thing. The signature below is over the artifact's
     semantics, so those guards are discounted; `check-capture-guards.py` requires them.
     """
-    src = sc.Source(path)
+    src = syntax.Source(path)
     out = {}
-    for form in sc.parse(path.read_text()):
+    for form in syntax.parse(path.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
-        rule = sc.rewrite_parts(src, form)
-        lhs = slotenc.rhs_of(src.lang, src.term(rule["lhs"], ground=False))
-        rhs = slotenc.rhs_of(src.lang, src.term(rule["rhs"], ground=False))
-        owed = slotenc.capture_guards(src.lang, lhs, rhs)
+        rule = syntax.rewrite_parts(src, form)
+        lhs = syntax.rhs_of(src.lang, src.term(rule["lhs"], ground=False))
+        rhs = syntax.rhs_of(src.lang, src.term(rule["rhs"], ground=False))
+        owed = syntax.capture_guards(src.lang, lhs, rhs)
         conds = [c for c in rule["conds"] if c[0] or not all((c[1], v) in owed for v in c[2])]
         semantics = dict(rule, conds=conds)
         out[rule["name"]] = tuple(
@@ -166,7 +166,7 @@ def semantic_hash(rules: dict[str, tuple[Any, ...]]) -> str:
 
 def constructors(path: pathlib.Path) -> dict[str, list[Any]]:
     out = {}
-    for form in sc.parse(path.read_text()):
+    for form in syntax.parse(path.read_text()):
         if isinstance(form, list) and form[:1] == ["constructor"]:
             out[form[1]] = form[2:]
     return out
@@ -178,27 +178,27 @@ def reference_goal() -> str | None:
         return f"locked reference executable not found: {XMULTI}"
 
     decls = declarations_of(RULES)
-    lang = slotenc.language(decls, decls.with_suffix(".ref"))
-    fixture_source = sc.Source(TEST)
-    source = sc.parse((FIXTURES / "batax_2nd.sexp").read_text())[0]
-    target = sc.parse((FIXTURES / "batax_2nd_esat.sexp").read_text())[0]
+    lang = syntax.language(decls, decls.with_suffix(".ref"))
+    fixture_source = syntax.Source(TEST)
+    source = syntax.parse((FIXTURES / "batax_2nd.sexp").read_text())[0]
+    target = syntax.parse((FIXTURES / "batax_2nd_esat.sexp").read_text())[0]
     start_text = lang.sexpr(fixture_source.term(translate(source), ground=True))
     goal_text = lang.sexpr(fixture_source.term(translate(target), ground=True))  # `$var_NN` -> `$NN`
 
-    rule_source = sc.Source(RULES)
+    rule_source = syntax.Source(RULES)
     lines = ["rounds 12", f"term {start_text}"]
     seen = set()
-    for form in sc.parse(RULES.read_text()):
+    for form in syntax.parse(RULES.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
-        rule = sc.rewrite_parts(rule_source, form)
+        rule = syntax.rewrite_parts(rule_source, form)
         if rule["name"] not in SELECTED_RULES:
             continue
         seen.add(rule["name"])
         lhs_term = rule_source.term(rule["lhs"], ground=False)
-        rhs = slotenc.pat_sexpr(lang, slotenc.rhs_of(lang, rule_source.term(rule["rhs"], ground=False)))
-        root, atoms = slotenc.flatten(lang, lhs_term)
-        root, atom_text = slotenc.atom_lines(lang, root, atoms)
+        rhs = syntax.pat_sexpr(lang, syntax.rhs_of(lang, rule_source.term(rule["rhs"], ground=False)))
+        root, atoms = syntax.flatten(lang, lhs_term)
+        root, atom_text = syntax.atom_lines(lang, root, atoms)
         lines += ["rule", *atom_text, f"rhs {root} {rhs}"]
         for want, slot_name, variables in rule["conds"]:
             lines.append(f"cond {'in' if want else 'notin'} {slot_name} {' '.join(variables)}")
@@ -250,16 +250,16 @@ def main() -> int:
         path = pf.test_path(kernel, phase)
         if not path.is_file():
             errors.append(f"missing {path.relative_to(ROOT)}; `python3 slotted/paper_fixtures.py --write`")
-        elif sc.parse(path.read_text()) != pf.test_forms(kernel, phase):
+        elif syntax.parse(path.read_text()) != pf.test_forms(kernel, phase):
             errors.append(f"{path.relative_to(ROOT)} is not the translation of its fixtures at the artifact's limit")
     owned = {pf.test_path(k, p).name for k, p in pf.SUITE}
     for stray in sorted(q.name for q in pf.TESTS.glob("*.egg") if q.name not in owned):
         errors.append(f"{stray}: not a workload of the paper's Table 1")
 
-    forms = sc.parse(TEST.read_text())
+    forms = syntax.parse(TEST.read_text())
     try:
-        source = sc.parse((FIXTURES / "batax_2nd.sexp").read_text())[0]
-        target = sc.parse((FIXTURES / "batax_2nd_esat.sexp").read_text())[0]
+        source = syntax.parse((FIXTURES / "batax_2nd.sexp").read_text())[0]
+        target = syntax.parse((FIXTURES / "batax_2nd_esat.sexp").read_text())[0]
         if named(forms, "let", "paper-input")[2] != translate(source):
             errors.append("paper-input is not the translated artifact batax_2nd.sexp")
         if named(forms, "let", "paper-target")[2] != translate(target):
@@ -269,7 +269,7 @@ def main() -> int:
 
     # `sdql-paper-mmm.egg`: the artifact's input and target, the thirteen rules as the
     # library has them, and the artifact's 30 rounds in all.
-    mmm_forms = sc.parse(MMM_TEST.read_text())
+    mmm_forms = syntax.parse(MMM_TEST.read_text())
     try:
         mmm_input, mmm_target = pf.workload("mmm", "2nd")
         if named(mmm_forms, "let", "paper-input")[2] != mmm_input:

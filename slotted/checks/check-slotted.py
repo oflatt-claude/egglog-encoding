@@ -93,8 +93,6 @@ def paper_sdql_ran(out: str) -> str | None:
 
 # Check name, Python script/arguments, output validator, fuzzing flag, reference flag.
 CHECKS = [
-    ("rust-source-pass", ("slotted/checks/check-rust.py",), starts_ok, False, False),
-    ("rust-source-fuzz", ("slotted/checks/check-rust.py", "--fuzz", "100"), starts_ok, True, False),
     ("campaign-status", ("slotted/checks/check-campaign.py",), starts_ok, False, False),
     ("leader-maintenance", ("slotted/checks/check-leader-maintenance.py",), starts_ok, False, False),
     ("shape-cache", ("slotted/checks/check-shape-cache.py",), starts_ok, False, False),

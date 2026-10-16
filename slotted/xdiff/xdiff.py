@@ -26,25 +26,15 @@ import os
 import random
 import subprocess
 import sys
-from functools import cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
-slotenc = __import__("slotted-encoder")
-slotcc = __import__("slotted-egglog")
+import reference as syntax  # noqa: E402
+import test_program as driver  # noqa: E402
+
 EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
 XMULTI = ROOT / "slotted" / "xmulti"
-
-
-@cache
-def machinery(lang):
-    """A language's machinery, compiled here rather than read from a build artifact.
-
-    The harness writes its programs as text, so it can hold the machinery as text too:
-    nothing has to be staged on disk for an `(include ...)` to find.
-    """
-    return slotcc.compile_source(slotcc.Source(ROOT / "slotted" / "languages" / f"{lang}.egg"))
 
 
 BINOPS = ["add", "f", "g", "h", "k", "sub", "sub2"]
@@ -117,7 +107,7 @@ USEBIND_PROB = float(os.environ.get("XDIFF_USEBIND", "0"))
 # here restates a signature or a binder column: `Lam` binds its column 0 because that
 # file's `:binder` says so, so this cannot disagree with the rules generated for it.
 LANG_DIR = ROOT / "slotted" / "languages"
-LANG = slotenc.language(LANG_DIR / "toy.egg", LANG_DIR / "toy.ref")
+LANG = syntax.language(LANG_DIR / "toy.egg", LANG_DIR / "toy.ref")
 
 # `BINOPS` is what generated terms are built from, so it must be every operator that
 # takes two children and binds neither -- read off the language rather than restated.
@@ -127,7 +117,7 @@ assert sorted(op for op, o in LANG.ops.items() if op == o.name and len(o.kid_col
     f"BINOPS and toy.egg disagree: {BINOPS}"
 )
 
-slots, enc, sexpr, shift_term = LANG.slots, LANG.enc, LANG.sexpr, LANG.shift
+slots, sexpr, shift_term = LANG.slots, LANG.sexpr, LANG.shift
 
 # The machinery's table names are the carrier's, so they are read off the language
 # rather than written out: a program compiles to `RenamesToLeader_0` and friends, and
@@ -225,7 +215,7 @@ class Case:
             # its own. That is the same spelling `xarray` and `xsdql` use, so the two
             # cannot drift.
             enc_atoms = [(r, o, [_child(c1), _child(c2)]) for (r, o, c1, c2) in atoms]
-            out += slotenc.atom_lines(LANG, enc_atoms[0][0], enc_atoms)[1]
+            out += syntax.atom_lines(LANG, enc_atoms[0][0], enc_atoms)[1]
             for want, slot, pvars in conds:
                 kind = "in" if want else "notin"
                 out.append(f"cond {kind} {slot} {' '.join(pvars)}")
@@ -239,7 +229,7 @@ class Case:
 
 def rhs_text(t):
     """An RHS tree as reference pattern text: `(h (g ?a ?b) ?b)`."""
-    return slotenc.pat_sexpr(LANG, slotenc.rhs_of(LANG, t))
+    return syntax.pat_sexpr(LANG, syntax.rhs_of(LANG, t))
 
 
 def check_encodable(case):
@@ -279,88 +269,33 @@ def _child(c):
     return ("sl", c) if c.startswith("$") else ("pv", c)
 
 
-def compile_rule(atoms, action, conds=()):
-    """Compile a flattened multipattern into an egglog rule, through the encoder.
-
-    Nothing here is the recipe -- `slotted-encoder.compile_rule` is. This is the
-    harness's spelling of a rule translated into the encoder's: an atom is written
-    `(root, op, c1, c2)` over bare names, and an action either `(root, rhs-tree)` or
-    the flat `(root, op, a, b)`, whose `=` equates two variables.
-
-    The flat form builds one depth-1 node over bound variables.
-    """
-    atoms = slotenc.connected_order(LANG, [(r, o, [_child(c1), _child(c2)]) for r, o, c1, c2 in atoms])
+def source_rule(atoms, action, conds=()):
+    atoms = [(r, o, [_child(c1), _child(c2)]) for r, o, c1, c2 in atoms]
     if len(action) == 2:
         root, rhs = action
-        act = ("build", root, slotenc.rhs_of(LANG, rhs))
+        rhs = syntax.rhs_of(LANG, rhs)
     elif action[1] == "=":
-        act = ("build", action[0], ("pv", action[2]))
+        root, rhs = action[0], ("pv", action[2])
     else:
         root, op, a, b = action
-        act = ("row", root, op, [a, b])
-    return slotenc.compile_rule(LANG, atoms, act, conds=conds)
+        rhs = (op, _child(a), _child(b))
+    return driver.rewrite(LANG, atoms, root, rhs, conds=conds)
 
 
 # -------------------------------------------------------------- egg generation
-def schedule(steps):
-    """`steps` user-rule iterations, with the slotted invariants saturated between them.
-
-    The invariant rules maintain the encoding, and a user rule that matches a node before
-    its alpha- and slot-canonicalisation has finished sees a spelling about to change --
-    and matches again when it does, so neither settles. User rules are not expected to
-    terminate, so they get a finite step count while the machinery gets `saturate`. This
-    is the shape egglog's proof encoding uses for its own maintenance rulesets, where
-    `instrument_schedule` wraps every user run as `(seq <run> <rebuild>)`.
-    """
-    return slotenc.round_schedule(steps)
 
 
 def egg_program(case, rules=None, mult=3):
     rules = case.rules if rules is None else rules
-    out = [machinery("toy")]
-    # A slotted e-class is NOT one egglog e-class: the alpha-finder relates
-    # equal-up-to-renaming nodes with `RenamesToLeader` and deletes one, rather
-    # than unioning them. So two probes are in the same slotted class when they
-    # reach a common leader, which is also what the machinery's own tests check.
-    # In its own ruleset, so reading the probes costs no user-rule steps: a reference
-    # round applies every rule once, so a round here must mean one `(run)` and no more.
-    out.append("(ruleset probes)")
-    out.append("(relation ProbeId (U i64))")
-    out.append("(relation SameClass (i64 i64))")
-    out.append(
-        "(rule ((ProbeId a i) (ProbeId b j)\n"
-        f"       ({SYM.renames} a m1 l) ({SYM.renames} b m2 l))\n"
-        "      ((SameClass i j)) :ruleset probes)"
+    return driver.program(
+        "toy",
+        LANG,
+        [source_rule(a, act, cs) for a, act, cs in rules if a],
+        case.terms,
+        case.unions,
+        case.probes,
+        case.rounds * mult,
     )
-    # Two of a case's rules can compile to the SAME text -- the generator draws each
-    # independently -- and egglog rejects a rule it already has, panicking with "was
-    # already present" and taking the whole case down. A repeated rule means nothing
-    # extra anyway, so emit each once.
-    seen_rules = set()
-    for atoms, action, conds in rules:
-        if not atoms:
-            continue
-        text = compile_rule(atoms, action, conds)
-        if text not in seen_rules:
-            seen_rules.add(text)
-            out.append(text)
-    for i, t in enumerate(case.terms):
-        out.append(f"(let _t{i} {enc(t)})")
-    for i, (a, b) in enumerate(case.unions):
-        out.append(f"(let _ua{i} {enc(a)})")
-        out.append(f"(let _ub{i} {enc(b)})")
-        out.append(f"(union _ua{i} _ub{i})")
-    for i, t in enumerate(case.probes):
-        out.append(f"(let _p{i} {enc(t)})")
-    out.append(schedule(case.rounds * mult))
-    # Named after the rules have run, then read WITHOUT running them again: a second
-    # `schedule(...)` here would hand the encoding twice the user-rule steps its budget
-    # names, and a reference round would look worth two of them.
-    for i, _ in enumerate(case.probes):
-        out.append(f"(ProbeId _p{i} {i})")
-    out.append(f"(run-schedule {slotenc.MACHINERY_SCHEDULE} (saturate (run probes)))")
-    out.append("(print-function SameClass 100000)")
-    return "\n".join(out) + "\n"
 
 
 def parse_same_class(stdout, n):
@@ -920,7 +855,7 @@ def curated():
     # because a binder's bound slot is renamable and can always be moved off `a`'s
     # slots. The encoding did, and over-merged: refinement was offered every slot
     # in play as a merge candidate rather than only those the substitution carries, and
-    # a pattern slot may be a merge TARGET. See `final_refine` in `slotted-encoder.py`.
+    # a pattern slot may be a merge TARGET. See frame refinement in the Rust query compiler.
     #
     # No condition, a condition on the binder's own body, and joining the two atoms all
     # agreed even before the fix, which is what isolated it.
@@ -1956,7 +1891,7 @@ def main():
         print("=== encoding  ===", run_encoding(case, rules, keep=keep))
         for n, (atoms, act, cs) in enumerate(rules):
             print(f"=== rule {n} ===")
-            print(compile_rule(atoms, act, cs))
+            print(source_rule(atoms, act, cs))
         return 0
     if args and args[0] == "fuzz":
         n = int(args[1]) if len(args) > 1 else 100

@@ -10,8 +10,10 @@ import os
 import subprocess
 
 import isomorphism as ISO
-from eval_report import EXACT_PAIRS, Comparison, quiet_progress, workload_label
-from eval_run import ROOT, SCRATCH, Config, oracle_env, slotted_flags
+from eval_observation import Comparison
+from eval_run import ROOT, SCRATCH, Config, oracle_env, quiet_progress, slotted_flags
+
+from benchmarking.reports.slotted import EXACT_PAIRS, count_issue
 
 
 def collect_graph(workload, row, timeout, progress=quiet_progress, *, config=None):
@@ -135,14 +137,7 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
 
 def compare_counts(enc, ref):
     """A cheap check of the reported sizes, independent of witness search/verification."""
-    missing = False
-    for name in ("classes", "nodes"):
-        a, b = getattr(enc, name), getattr(ref, name)
-        if a is None or b is None:
-            missing = True
-        elif a != b:
-            return f"different: {name} {a} vs {b} (encoding vs reference)"
-    return "inconclusive: counts unavailable" if missing else "same counts"
+    return count_issue(enc.as_dict(""), ref.as_dict("")) or "same counts"
 
 
 def compare(rows, progress=quiet_progress, *, search_cap=5_000):
@@ -179,44 +174,3 @@ def compare_graphs(enc, reference, *, search_cap=5_000):
         return f"different: {why}"
     except (ISO.IsomorphismLimit, RecursionError) as exc:
         return f"inconclusive: {exc}"
-
-
-def successful(rows, sides, counts):
-    """Goals must succeed; each selected exact pair requires counts and a certificate."""
-    return not failures(rows, sides, counts)
-
-
-def failures(rows, sides, counts):
-    """The error banner and exit status use the same correctness gate."""
-    if not rows:
-        return ["No benchmark results."]
-    errors = []
-    groups = {}
-    for row in rows:
-        groups.setdefault(row.workload(), {})[row.side] = row
-        if row.goal != "yes":
-            label = workload_label(row.study, row.case, row.rules)
-            errors.append(f"{label} [{row.rounds} rounds] / {row.side}: goal not reached ({row.goal}).")
-    for (study, case, rounds, rules), group in groups.items():
-        label = f"{workload_label(study, case, rules)} [{rounds} rounds]"
-        missing = [side for side in sides if side not in group]
-        if missing:
-            errors.append(f"{label}: missing results for {', '.join(missing)}.")
-        if not counts:
-            continue
-        for encoding, reference in EXACT_PAIRS.items():
-            if encoding not in sides or reference not in sides:
-                continue
-            if encoding not in group or reference not in group:
-                continue
-            enc, ref = group[encoding], group[reference]
-            reasons = []
-            count_verdict, graph_verdict = compare_counts(enc, ref), enc.verdict(ref)
-            # Graph verdicts can already carry the count failure plus its cause.
-            if count_verdict != "same counts" and not graph_verdict.startswith(count_verdict):
-                reasons.append(count_verdict)
-            if graph_verdict != "isomorphic":
-                reasons.append(graph_verdict)
-            if reasons:
-                errors.append(f"{label}: {encoding} vs {reference}: {'; '.join(reasons)}")
-    return errors

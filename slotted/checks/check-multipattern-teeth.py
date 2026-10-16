@@ -13,7 +13,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
-sc = __import__("slotted-egglog")
+import reference as syntax  # noqa: E402
+
+driver = __import__("test_program")
 
 CORPUS = ROOT / "slotted/tests/multipattern.egg"
 MUTANT = ROOT / "target/slotted/multipattern-mutant.egg"
@@ -110,24 +112,20 @@ BROKE = re.compile(r"\[ERROR\] In (\d+):")
 
 
 def broken_claim(text, source):
-    """The term named by the claim egglog reported, or None if the file passed.
-
-    egglog names the compiled command, and a claim compiles to a query over the
-    encoding that mentions no source name at all -- so the line it reports is mapped
-    back through the compiled program, by counting the claims that precede it.
-    """
+    """Map a failed check in Rust's desugared program back to its source claim."""
+    if "Check failed" not in text and "Command should have failed" not in text:
+        return None
     m = BROKE.search(text)
     if not m:
         return None
-    lines = sc.compile_source(source).splitlines()
-    before = sum(1 for ln in lines[: int(m.group(1)) - 1] if ln.startswith("(check ") or ln.startswith("(fail (check "))
-    claims = [form for form, _ in source.body if isinstance(form, list) and form[0] in ("check", "fail")]
+    lines = driver.compile_source(source.path.read_text()).splitlines()
+    before = sum(ln.startswith("(check ") or ln.startswith("(fail (check ") for ln in lines[: int(m.group(1)) - 1])
+    claims = [f for f, _ in source.body if f[0] in ("check", "fail")]
     if before >= len(claims):
         return None
     claim = claims[before]
     while claim[0] in ("fail", "check"):
         claim = claim[1]
-    # the first term the claim names, which is the one its section is about
     return next((a for a in claim[1:] if isinstance(a, str) and not a.startswith("$")), None)
 
 
@@ -184,14 +182,16 @@ def main():
             bad.append(name)
             continue
         MUTANT.write_text(mutated)
+        compiled = MUTANT.with_suffix(".compiled.egg")
+        compiled.write_text(driver.compile_source(mutated))
         r = subprocess.run(
-            [sys.executable, "slotted/slotted-egglog.py", str(MUTANT)],
+            [str(ROOT / "target/debug/egglog-experimental"), "--slotted-encoded", str(compiled)],
             cwd=ROOT,
             capture_output=True,
             text=True,
             timeout=1800,
         )
-        got = broken_claim(r.stdout + r.stderr, sc.Source(MUTANT))
+        got = broken_claim(r.stdout + r.stderr, syntax.Source(MUTANT))
         if got in want:
             print(f"  ok     {name}  ->  `{got}` breaks")
         elif got is None:
@@ -204,6 +204,7 @@ def main():
             print(f"  FAIL   {name}  ->  `{got}` broke, expected one of {sorted(want)}")
             bad.append(name)
     MUTANT.unlink(missing_ok=True)
+    compiled.unlink(missing_ok=True)
     print(f"\n{len(MUTATIONS) - len(bad)}/{len(MUTATIONS)} multipattern claims have teeth")
     return 1 if bad else 0
 

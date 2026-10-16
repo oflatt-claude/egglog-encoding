@@ -12,7 +12,7 @@
 ;;;
 ;;; Standalone: run it as it stands.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/redundancy-tests.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/redundancy-tests.egg
 
 (sort U)
 

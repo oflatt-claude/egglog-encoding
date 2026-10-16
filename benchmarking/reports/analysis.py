@@ -159,6 +159,7 @@ class _TimingMean(NamedTuple):
     rulesets: dict[tuple[RulesetMechanism, str], PhaseValues]
     native_rebuild_ns: float
     residual_ns: float | None
+    issue: str | None
 
 
 def analyze_pair(
@@ -367,7 +368,14 @@ def _timing_breakdowns(
         candidate = means[(1, file_order)]
         baseline_wall = metric_estimates[(0, file_order, "wall_sec")]
         candidate_wall = metric_estimates[(1, file_order, "wall_sec")]
-        issue = issues[(0, file_order)] or issues[(1, file_order)] or baseline_wall.issue or candidate_wall.issue
+        issue = (
+            issues[(0, file_order)]
+            or issues[(1, file_order)]
+            or baseline_wall.issue
+            or candidate_wall.issue
+            or baseline.issue
+            or candidate.issue
+        )
         wall_delta_ns = (
             None
             if issue is not None or baseline_wall.estimate.point is None or candidate_wall.estimate.point is None
@@ -416,6 +424,7 @@ def _timing_means(
 ) -> dict[_ObservationKey, _TimingMean]:
     result: dict[_ObservationKey, _TimingMean] = {}
     for key, rows in observations.items():
+        issue = None
         typecheck = 0.0
         frontend = 0.0
         commands = 0.0
@@ -427,7 +436,8 @@ def _timing_means(
                 continue
             summary = record["timing_summary"]
             if summary is None and "slotted" in record:
-                continue  # Slotted observations carry graph evidence instead of phase timings.
+                issue = "phase timings unavailable"
+                continue
             if summary is None:
                 raise ValueError("successful benchmark record is missing its timing summary")
             typecheck += summary["typecheck_ns"]
@@ -465,6 +475,7 @@ def _timing_means(
             ruleset_means,
             native_rebuild,
             None if wall is None else wall * 1_000_000_000.0 - recorded,
+            issue,
         )
     return result
 

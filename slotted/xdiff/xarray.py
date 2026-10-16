@@ -20,7 +20,7 @@ The two sides:
               `tests/array/mod.rs` instead has a non-binding `Lam(Slot, AppliedId)` and
               an oppositely-polarized `slot_free_in` helper.
   encoding    a generated .egg file, each rule flattened into depth-1 atoms and
-              compiled by `slotted/slotted-encoder.py`, which is the
+              compiled by `egglog-experimental --slotted`, which is the
               recipe in `slotted/ENCODING.md`.
 
 Usage:
@@ -40,9 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import EGGLOG, ROOT, XMULTI, machinery, parse_same_class, slotenc  # noqa: E402
-
-sc = __import__("slotted-egglog")
+from xdiff import EGGLOG, ROOT, XMULTI, driver, parse_same_class, syntax  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 
@@ -66,12 +64,10 @@ ARRAY_SRC = ROOT / "slotted" / "languages" / "array.egg"
 #: the rewrites, split out of the declarations so the machinery can be compiled
 #: from array.egg alone
 ARRAY_SRC_RULES = ROOT / "slotted" / "languages" / "array-rules.egg"
-LANG = slotenc.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
+LANG = syntax.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 
-# the carrier's table names, read off the language rather than written out
-SYM = LANG.symbols_for(LANG.default_sort)
 
-enc, sexpr, shift = LANG.enc, LANG.sexpr, LANG.shift
+sexpr, shift = LANG.sexpr, LANG.shift
 
 MAP = ("sym", "map")
 
@@ -96,10 +92,10 @@ class Rule:
 
     def atom_lines(self):
         """The pattern as `MultiPattern` atom lines."""
-        return slotenc.atom_lines(LANG, self.atoms[0][0], self.atoms)
+        return syntax.atom_lines(LANG, self.atoms[0][0], self.atoms)
 
     def spec_lines(self):
-        pat = slotenc.pat_sexpr(LANG, self.rhs)
+        pat = syntax.pat_sexpr(LANG, self.rhs)
         spelled = self.atom_lines()
         # an `atom`/`rhs` root is written bare; xmulti supplies the `?`
         out = ["rule", *spelled[1], f"rhs {self.rhs_root.lstrip('?')} {pat}"]
@@ -108,23 +104,9 @@ class Rule:
         return out
 
 
-def compile_array_rule(rule, atom_order=None, *, nested_compat=False):
-    """One array rule, through the encoder, which is the recipe in
-    `slotted/ENCODING.md`.
-
-    `atom_order` names the atom written first; the encoding's answer must not depend
-    on which, and `check_case` varies it. Under frames the order means nothing, and
-    this is the check that it stays that way.
-    """
+def source_rule(rule, atom_order=None):
     lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
-    return slotenc.compile_rule(
-        LANG,
-        slotenc.connected_order(LANG, rule.atoms, first=lead),
-        ("build", rule.rhs_root, rule.rhs),
-        conds=rule.conds,
-        fresh=rule.fresh,
-        nested_compat=nested_compat,
-    )
+    return driver.rewrite(LANG, rule.atoms, rule.rhs_root, rule.rhs, conds=rule.conds, fresh=rule.fresh, lead=lead)
 
 
 # ----------------------------------------------------------------------- cases
@@ -158,47 +140,17 @@ class Case:
         )
 
 
-def schedule(steps):
-    return slotenc.round_schedule(steps)
-
-
-def egg_program(case, atom_order=None, mult=3, defer_probes=False, *, nested_compat=False):
-    out = [
-        machinery("array"),
-        "(ruleset probe)",
-        "(relation ProbeId (U i64))",
-        "(relation SameClass (i64 i64))",
-        "(rule ((ProbeId a i) (ProbeId b j)\n"
-        f"       ({SYM.renames} a m1 l) ({SYM.renames} b m2 l))\n"
-        "      ((SameClass i j)) :ruleset probe)",
-    ]
-    for r in case.rules:
-        out.append(f";; {r.name}")
-        out.append(compile_array_rule(r, atom_order, nested_compat=nested_compat))
-    for i, t in enumerate(case.terms):
-        out.append(f"(let _t{i} {enc(t)})")
-    for i, (a, b) in enumerate(case.unions):
-        out.append(f"(let _ua{i} {enc(a)})")
-        out.append(f"(let _ub{i} {enc(b)})")
-        out.append(f"(union _ua{i} _ub{i})")
-    if not defer_probes:
-        for i, t in enumerate(case.probes):
-            out.append(f"(let _p{i} {enc(t)})")
-    out.append(schedule(case.rounds * mult))
-    if defer_probes:
-        # Goal terms are observational: build them only after the user-rule budget.
-        # The following schedule runs invariant maintenance and the probe relation,
-        # never the user rules, so the expected target cannot seed rewrite search.
-        for i, t in enumerate(case.probes):
-            out.append(f"(let _p{i} {enc(t)})")
-    for i, _ in enumerate(case.probes):
-        out.append(f"(ProbeId _p{i} {i})")
-    # Do not give the encoding a second user-rule budget after installing probes.
-    # The reference runs exactly `rounds * mult`; only invariant maintenance and the
-    # observational rule remain here.
-    out.append(f"(run-schedule {slotenc.MACHINERY_SCHEDULE} (saturate (run probe)))")
-    out.append("(print-function SameClass 100000)")
-    return "\n".join(out) + "\n"
+def egg_program(case, atom_order=None, mult=3, defer_probes=False):
+    return driver.program(
+        "array",
+        LANG,
+        [source_rule(r, atom_order) for r in case.rules],
+        case.terms,
+        case.unions,
+        case.probes,
+        case.rounds * mult,
+        defer_probes=defer_probes,
+    )
 
 
 def run_reference(case):
@@ -342,25 +294,25 @@ def check_case(case, order_check=True, shift_check=True):
 # ------------------------------------------------------------------- the 8 rules
 #
 # Read from `slotted/languages/array.egg`, written in the slotted language, so the rules a
-# reader sees are the rules that run here. `slotted-egglog.py` compiles the same file
+# reader sees are the rules that run here. the Rust CLI compiles the same file
 # for `run-slotted-tests.py`; neither restates a rule.
 #
 # The atoms come from `flatten`, which emits the pattern's outermost node first.
 def _load_rules():
-    src = sc.Source(ARRAY_SRC_RULES)
+    src = syntax.Source(ARRAY_SRC_RULES)
     out = []
-    for form in sc.parse(ARRAY_SRC_RULES.read_text()):
+    for form in syntax.parse(ARRAY_SRC_RULES.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
-        r = sc.rewrite_parts(src, form)
+        r = syntax.rewrite_parts(src, form)
         assert r["name"], f"a rewrite with no :name in {ARRAY_SRC_RULES.name}"
         # `:when (= ...)` contributes PATTERN ATOMS, and this builds its own rule object
         # from `lhs`/`conds` alone, so one would be dropped in silence and the reference
         # would be asked a different question than the encoding. Teach `Rule` about extra
         # atoms before using one in this language.
         assert not r["equalities"], f"{r['name']}: `:when (= ...)` is not supported here yet"
-        root, atoms = slotenc.flatten(LANG, src.term(r["lhs"], ground=False))
-        rhs = slotenc.rhs_of(LANG, src.term(r["rhs"], ground=False))
+        root, atoms = syntax.flatten(LANG, src.term(r["lhs"], ground=False))
+        rhs = syntax.rhs_of(LANG, src.term(r["rhs"], ground=False))
         out.append(Rule(r["name"], atoms, root, rhs, conds=r["conds"], fresh=r["fresh"]))
     return out
 
@@ -685,7 +637,7 @@ def _artifact_goal_text(o):
 
 def _alpha_shape(text):
     """A binder-name-free tree, sufficient to compare closed artifact terms."""
-    tree = sc.parse(text)[0]
+    tree = syntax.parse(text)[0]
     counter = [0]
 
     def go(term, env):
@@ -900,7 +852,7 @@ def main():
         print(case.spec(), end="")
         for r in case.rules:
             print(f"=== rule {r.name} ===")
-            print(compile_array_rule(r))
+            print(source_rule(r))
         keep = ROOT / f"xarray-show-{case.name}.egg"
         print("=== reference ===", run_reference(case))
         print("=== encoding  ===", run_encoding(case, keep=keep))

@@ -4,7 +4,7 @@
 ;;; there, so the two can be diffed side by side, and standalone: the constructors
 ;;; below are all it needs, and the compiler generates their machinery.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/paper/var-xy-eq-yz.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/paper/var-xy-eq-yz.egg
 ;;;
 ;;;     f($0,$1) = f($1,$2)  =>  one class, and it has NO slots
 ;;;

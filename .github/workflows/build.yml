@@ -56,6 +56,7 @@ jobs:
       # That covers the .egg files, the slotted-language tests, the four drift gates
       # keeping generated files, snapshots, tutorial and correspondence honest, and
       # every suite that compares against the reference.
+      - uses: astral-sh/setup-uv@v6
       - run: make slotted-check
 
   benchmark-smoke:

@@ -8,7 +8,7 @@
 ;;;
 ;;; Standalone: run it as it stands.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/symmetry-tests.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/symmetry-tests.egg
 
 (sort U)
 

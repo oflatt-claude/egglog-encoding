@@ -13,7 +13,7 @@
 ;;; run has had no rule applied to it, so a `fail` claim about it would hold whatever
 ;;; the rule does.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/multipattern.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/multipattern.egg
 ;;;
 ;;; AGAINST THE REFERENCE. The claims here are this file's own, and a claim is not the
 ;;; reference. So the shapes below have counterparts in the differential's curated

@@ -22,7 +22,7 @@ from ..engines import TREATMENT_SPECS
 from ..models import BenchmarkEndpoint, ComparisonSpec, EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
 from .catalog import CellTone, ReportCatalog, ReportCell, ReportMessage, report_id
 from .presentation import build_report_catalog, report_file_labels
-from .slotted import slotted_catalog
+from .slotted import slotted_report
 from .store import ReportRecord, ReportStore
 
 type JsonScalar = str | int | float | bool | None
@@ -99,8 +99,10 @@ class InteractiveRuntime:
 
     def _build_catalog(self, comparison: ComparisonSpec) -> ReportCatalog:
         pair = build_report_catalog(self._store, comparison, "rulesets")
-        slotted = slotted_catalog(self._store.records)
-        return ReportCatalog(pair.sections + slotted.sections)
+        if any("slotted" in record for record in self._store.records):
+            slotted = slotted_report(self._store.records)
+            return ReportCatalog(pair.sections + slotted.catalog.sections)
+        return pair
 
     @classmethod
     def from_path(

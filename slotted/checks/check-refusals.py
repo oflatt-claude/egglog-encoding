@@ -38,7 +38,7 @@ CASES = [
     ),
     ("an out-of-range numeric slot", LANG + "(let bad (Succ $9223372036854775808))\n", "signed 64-bit"),
     ("an empty slot name", LANG + "(let bad (Succ $))\n", "invalid slot literal"),
-    ("a global named with a `$`", LANG + "(let $I (IConst))\n", "may not be named"),
+    ("a global named with a `$`", LANG + "(let $I (IConst))\n", "must not start with $"),
     (
         "a global bound to a bare slot invocation",
         LANG + "(let v $7)\n",
@@ -47,7 +47,7 @@ CASES = [
     (
         "a bare `:when` fact without the list",
         LANG + '(rewrite (Mul a b) a :when (= a (Succ p)) :name "r")\n',
-        "takes a LIST of facts",
+        "takes a list of facts",
     ),
     (
         "several `:when` clauses",
@@ -57,27 +57,27 @@ CASES = [
     (
         "egglog's `:cost`, which extraction here would not honour",
         "(sort M)\n(constructor Succ (M) M :cost 5)\n",
-        "not implemented here",
+        "option :cost is not supported",
     ),
-    ("an unknown declaration option", "(sort M)\n(constructor Succ (M) M :wat 1)\n", "unknown option"),
+    ("an unknown declaration option", "(sort M)\n(constructor Succ (M) M :wat 1)\n", "option :wat is not supported"),
     # egglog refuses the bare spelling in both positions -- `Unbound symbol` where a term
     # is wanted, `Shadowing is not allowed` where a rule variable would be -- so reading
     # it as a call here was a divergence that bought nothing.
-    ("a nullary constructor without its parens, in a term", LANG + "(let n Null)\n", "needs its parens"),
+    ("a nullary constructor without its parens, in a term", LANG + "(let n Null)\n", "needs parentheses"),
     (
         "a nullary constructor without its parens, in a pattern",
         LANG + '(rewrite (Succ Null) (Null) :name "r")\n',
-        "needs its parens",
+        "needs parentheses",
     ),
     (
         "a negative binder position",
         "(sort M)\n(constructor F (M M) M :binder -1)\n",
-        "outside",
+        "binder position",
     ),
     (
         "an out-of-range binder position",
         "(sort M)\n(constructor F (M M) M :binder 2)\n",
-        "outside",
+        "binder position",
     ),
     (
         "duplicate binder positions",
@@ -92,7 +92,7 @@ CASES = [
     (
         "a binder without a covered child",
         "(sort M)\n(constructor F (M Var) M :binder 1)\n",
-        "followed",
+        "following child",
     ),
     (
         "a cross-sort slotted child",
@@ -107,32 +107,32 @@ CASES = [
     (
         "a cross-sort union",
         "(datatype* (A (A0)) (B (B0)))\n(let a (A0))\n(let b (B0))\n(union a b)\n",
-        "cannot union terms of sorts",
+        "cannot compare terms of different equality sorts",
     ),
     (
         "a global used at the wrong sort",
         "(datatype* (A (A0)) (B (B0) (G B)))\n(let a (A0))\n(let bad (G a))\n",
-        "this position requires B",
+        "expected B",
     ),
     (
         "a cross-sort equality check",
         "(datatype* (A (A0)) (B (B0)))\n(check (= (A0) (B0)))\n",
-        "cannot compare terms of sorts",
+        "cannot compare terms of different equality sorts",
     ),
     (
         "a cross-sort renaming equality check",
         "(datatype* (A (A0)) (B (B0)))\n(check (renaming-= (A0) (B0)))\n",
-        "cannot compare terms of sorts",
+        "cannot compare terms of different equality sorts",
     ),
     (
         "a holds check naming a constructor from another sort",
         "(datatype* (A (A0)) (B (B0)))\n(check (holds (A0) B0))\n",
-        "B nodes, not A nodes",
+        "holds compares different carrier sorts",
     ),
     (
         "a cross-sort rewrite result",
         '(datatype* (A (A0)) (B (B0)))\n(rewrite (A0) (B0) :name "bad")\n',
-        "where A is required",
+        "B0 produces B, expected A",
     ),
     (
         "a cross-sort side pattern",
@@ -142,32 +142,32 @@ CASES = [
     (
         "an ambiguous top-level slot comparison",
         "(datatype* (A (A0)) (B (B0)))\n(check (= $0 $1))\n",
-        "no equality sort",
+        "no equality-sort context",
     ),
     (
         "a multi-sort encoding-name collision",
         "(sort A)\n(sort B)\n(constructor SlottedVar_0 () A)\n(constructor B0 () B)\n",
-        "reserved by the multi-sort",
+        "reserved by the slotted",
     ),
     (
         "a duplicate equality sort declaration",
         "(sort A)\n(sort A)\n(constructor A0 () A)\n",
-        "sort is declared more than once",
+        'sort "A" is declared more than once',
     ),
     (
         "a duplicate constructor declaration",
         "(sort A)\n(constructor A0 () A)\n(constructor A0 () A)\n",
-        "constructor 'A0' is declared more than once",
+        'constructor "A0" is declared more than once',
     ),
     (
         "a payload-layout name collision",
         "(sort U)\n(constructor SlottedPayloadLayout () U)\n",
-        "reserved by the multi-sort",
+        "reserved by the slotted",
     ),
     (
         "a machinery phase ruleset collision",
         LANG + "(ruleset slotted-group)\n",
-        "reserved by the multi-sort",
+        "reserved by the slotted",
     ),
     ("a program that declares nothing", "(run 1)\n", "no equality sort is declared"),
     (
@@ -181,12 +181,20 @@ CASES = [
         "takes a slot literal",
     ),
     ("a sort with no constructors", "(sort A)\n(run 1)\n", "no constructors declared"),
-    ("a rewrite whose left side is a bare variable", LANG + '(rewrite x (Mul x x) :name "r")\n', "must be a call"),
-    ("egglog's `rule`, which this language does not have", LANG + "(rule ((= a (Null))) ())\n", "not part of"),
+    (
+        "an unbound rewrite root",
+        LANG + '(rewrite x (Mul x x) :name "r")\n',
+        "needs a constructor pattern",
+    ),
+    (
+        "egglog's `rule`, which this language does not have",
+        LANG + "(rule ((= a (Null))) ())\n",
+        "not supported by the slotted frontend",
+    ),
     (
         "a payload variable the right-hand side names and no pattern binds",
         '(sort M)\n(constructor N (i64) M)\n(constructor A (M M) M)\n(rewrite (A x y) (N j) :name "r")\n',
-        "no pattern binds",
+        "is not bound",
     ),
 ]
 
@@ -197,7 +205,7 @@ def main():
     for what, program, phrase in CASES:
         TMP.write_text(program)
         r = subprocess.run(
-            [sys.executable, "slotted/slotted-egglog.py", str(TMP)],
+            [str(ROOT / "target/debug/egglog-experimental"), "--slotted", str(TMP)],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -207,7 +215,7 @@ def main():
         if r.returncode == 0:
             print(f"  FAIL {what}: accepted")
             bad.append(what)
-        elif "Traceback (most recent call last)" in out:
+        elif "Traceback (most recent call last)" in out or "panicked" in out:
             print(f"  FAIL {what}: refused with a traceback, not a message")
             bad.append(what)
         elif phrase not in out:

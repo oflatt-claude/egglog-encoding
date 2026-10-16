@@ -13,6 +13,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 
 from benchmarking.models import TargetRow
+from benchmarking.reports.slotted import EXACT_PAIRS
 from benchmarking.reports.store import REPORT_SCHEMA_VERSION, CacheKey, ReportStore
 
 ENDPOINTS = {
@@ -78,36 +79,6 @@ def record(row, batch, *, key, provenance, counts):
     }
 
 
-def row_from_record(record):
-    from eval_report import Row
-
-    row = Row.from_dict(record["slotted"])
-    row.seconds = record["wall_sec"]
-    return row
-
-
-def load_rows(path, merged):
-    """Select the latest slotted observations, including reused earlier batches.
-
-    ``merged`` remains a CLI compatibility alias; cache reuse makes a batch-only
-    report incomplete whenever an invocation collects just part of its plan.
-    """
-    from dataclasses import replace
-
-    records = [r for r in ReportStore(path).records if "slotted" in r]
-    if not records:
-        return [], None
-    latest = {}
-    for record_ in records:
-        row = row_from_record(record_)
-        latest[*row.workload(), row.side] = row
-    for row in latest.values():
-        for side, comparison in row.vs_ref.items():
-            reference = latest.get((*row.workload(), side))
-            row.vs_ref[side] = replace(comparison, verdict=row.verdict(reference))
-    return list(latest.values()), None if merged else records[-1]["started_at"]
-
-
 class Cache:
     def __init__(self, path, root, config, args, manifests):
         self.store = ReportStore(path)
@@ -126,11 +97,11 @@ class Cache:
             "slotted/slotted-eval.py",
             "slotted/eval_cache.py",
             "slotted/eval_run.py",
+            "slotted/eval_observation.py",
             "slotted/eval_verify.py",
             "slotted/eval_workloads.py",
             "slotted/paper_fixtures.py",
-            "slotted/slotted-egglog.py",
-            "slotted/slotted-encoder.py",
+            "slotted/reference.py",
             "slotted/xdiff/xdiff.py",
             "slotted/xdiff/xarray.py",
             "slotted/xdiff/xsdql.py",
@@ -168,29 +139,30 @@ class Cache:
         selected = [self.store.latest_records(self.key(task, side), 1) for side in sides]
         if any(not rows for rows in selected):
             return None
-        rows = [row_from_record(records[0].record) for records in selected]
+        records = [rows[0].record for rows in selected]
         if self.counts:
-            from eval_report import EXACT_PAIRS
-
-            by_side = {row.side: row for row in rows}
+            by_side = {record["slotted"]["side"]: record["slotted"] for record in records}
             for encoding, reference in EXACT_PAIRS.items():
                 if encoding in by_side and reference in by_side:
-                    comparison = by_side[encoding].vs_ref.get(reference)
-                    if comparison is None or (comparison.encoding, comparison.reference) != (
-                        by_side[encoding].observation,
-                        by_side[reference].observation,
+                    comparison = by_side[encoding]["vs_ref"].get(reference)
+                    if comparison is None or (comparison["encoding"], comparison["reference"]) != (
+                        by_side[encoding]["observation"],
+                        by_side[reference]["observation"],
                     ):
                         return None
-        return rows
+        return records
 
     def append(self, task, rows):
-        for row in rows:
-            self.store.append(
-                record(
-                    row,
-                    self.batch,
-                    key=self.key(task, row.side),
-                    provenance=self.targets[row.side.startswith("ref-")],
-                    counts=self.counts,
-                )
+        records = [
+            record(
+                row,
+                self.batch,
+                key=self.key(task, row.side),
+                provenance=self.targets[row.side.startswith("ref-")],
+                counts=self.counts,
             )
+            for row in rows
+        ]
+        for observation in records:
+            self.store.append(observation)
+        return records

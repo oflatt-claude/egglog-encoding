@@ -18,7 +18,7 @@ The source-to-source pass lives in `egglog-experimental/src/slotted/`: `frontend
 handles source commands and scopes, `model` tracks typed terms, `maintenance`
 emits invariant rules, and `query`/`rewrite` lower matching and actions. Its output
 is ordinary egglog; the core parser and evaluator have no slotted macro mechanism.
-The existing Rust runtime primitives are shared with the Python test oracle.
+The differential tests and paper evaluation both run this Rust compiler and runtime.
 
 `slotted/LANGUAGE.md` is the source language a person writes. This file is the
 level below it: what that language compiles *to*, and why each table exists.
@@ -1075,9 +1075,10 @@ expanded-template implementation to check that the optimized encoding agrees.
 
 # The contract
 
-What a compiled rule asserts, clause by clause; `compile_query` and
-`compile_rule` in `slotted-encoder.py` name these where they emit them. The curated
-regressions and differential comparisons exercise these requirements.
+What a compiled rule asserts, clause by clause. The `compile` functions in
+`egglog-experimental/src/slotted/query.rs` and `rewrite.rs` emit these constraints
+and actions. The curated regressions and differential comparisons exercise these
+requirements.
 
 **C1. A pattern variable is an invocation.** `x` is a class `cls_x` and a renaming
 `(ren m "x")` of that class's slots into the pattern's. Two occurrences agree when
@@ -1209,10 +1210,13 @@ and a count mismatch rejects the comparison without trusting the isomorphism che
 Missing counts or unverified comparisons to an encoding's paired reference fail the
 command when both sides are selected; loading a saved report also requires equal counts as well
 as a verified verdict. Each comparison records the encoding and reference observation
-IDs. A merged report replacing either observation marks the old comparison inconclusive;
+IDs. A saved report replacing either observation marks the old comparison inconclusive;
 it cannot reuse an earlier witness verdict just because the counts still match. Workload
-identity includes the rule count; each encoding and reference variant has its own
-system identity. Reference class/node counts
+identity includes the generated programs, checking policy, parallelism, and rule count;
+each encoding and reference variant has its own system identity. Reports select the
+latest workload version and timeout for each named benchmark and rewrite budget.
+Missing sides stay missing; timings from an older version cannot fill their cells.
+Reference class/node counts
 are collected directly before dumping the graph and checked against the parsed dump.
 They remain available if symmetry enumeration exceeds its cap or timeout. Graph
 collection records why evidence is unavailable; unexpected reader errors propagate.
@@ -1232,15 +1236,17 @@ that hit the time limit display `timeout`, and missing times use a dash. The cac
 retains elapsed seconds for timed-out processes. `ref-nested-snapshot` still runs for correctness and appears in the full
 diagnostic table, alongside goals, round budgets, counts, and reference saturation.
 Its timing is never used in place of the syntactic `ref-nested` baseline. Benchmarks
-with multiple round budgets get distinct row labels. `--long` changes only the full
-diagnostic table.
+with multiple round budgets get distinct row labels. The CLI and nightly use the
+same timing and evidence tables, selection policy, and correctness gate.
 Encoding saturation is left unknown: graph collection stops at the requested budget.
 An extra round can exceed the time limit even when that graph is available, and
 equal row counts before and after another round would not establish a fixed point.
 An error banner immediately after the timing tables lists missed goals, missing results,
 count mismatches, and unsuccessful or inconclusive required isomorphism comparisons.
-The same checks determine the nonzero exit status, including when loading saved
-results. An explicit `--no-counts` report states that count/isomorphism checks are disabled;
+The same checks determine exit status 1, including when loading saved results.
+Build and collection errors return status 2. Nightly invokes the public CLI with
+a 150-second timeout and all paper workloads, then publishes the shared cache
+through the normal CLI's `--open` option. An explicit `--no-counts` report states that count/isomorphism checks are disabled;
 goals are still required. Both views use the same observations.
 The two encoding variants have separate timings and comparison certificates;
 neither can overwrite the other's result when cached runs are merged.
@@ -1378,9 +1384,8 @@ transformation and evaluation in one process.
 | --- | --- |
 | `slotted/LANGUAGE.md` | the source language: every form and why it exists |
 | `egglog-experimental/src/slotted/` | the Rust source-to-source compiler, used by `--slotted` |
-| `slotted/slotted-egglog.py` | the independent Python source compiler used by differential tests |
-| `slotted/slotted-encoder.py` | the Python encoding used by the differential harness |
-| `slotted/checks/check-rust.py` | raw counts and verified graph isomorphisms between the Rust and Python passes |
+| `slotted/reference.py` | fixture syntax, language metadata, and translation to the reference |
+| `slotted/test_program.py` | Rust CLI adapter and observer rules for differential tests |
 | `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
 | `slotted/tests/` | tests written in the source language |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
@@ -1388,10 +1393,11 @@ transformation and evaluation in one process.
 | `slotted/paper_fixtures.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
 | `slotted/slotted-eval.py` | CLI, cache reuse, and one evaluation loop for both case studies; `./bench.py slotted` |
 | `slotted/eval_workloads.py` | explicit source programs and reference specs, prepared once for cache lookup and execution |
-| `slotted/eval_run.py` | builds and timed goal-checking processes; no graph export or isomorphism search |
-| `slotted/eval_verify.py` | untimed graph export, independent raw counts, verified isomorphism witnesses, and the correctness gate |
+| `slotted/eval_run.py` | builds, progress, and timed goal-checking processes; no graph export or isomorphism search |
+| `slotted/eval_verify.py` | untimed graph export, independent raw counts, and verified isomorphism witnesses |
 | `slotted/eval_cache.py` | slotted observations in the shared proof/slotted `ReportStore`; hashes all generated inputs and checking code |
-| `slotted/eval_report.py` | observation records, progress, and the summary/full tables; launches no benchmarks |
+| `slotted/eval_observation.py` | transient observations and graph evidence, converted to shared records after comparison |
+| `benchmarking/reports/slotted.py` | shared CLI/nightly selection, correctness gate, and report tables; launches no benchmarks |
 | `spot-check.py` | independent Array N=0 spot check: explicit reference multipatterns, direct live-row/leader counts, one timed run per side; imports no eval or differential-checking scripts |
 
 The shared and per-carrier maintenance rules live in the Rust compiler's

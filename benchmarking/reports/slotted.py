@@ -1,13 +1,15 @@
-"""Slotted timing tables and correctness evidence from the shared report cache.
+"""Select slotted observations and build the CLI and nightly report.
 
-This module is also embedded in the interactive report. It only reads records;
-no binary, reference library, compiler, or graph search is needed to render it.
+Only shared cache records enter this module. Workload generation, subprocesses,
+and graph search stay in the collector; rendering also works in the browser.
 """
 
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from .catalog import (
@@ -16,8 +18,10 @@ from .catalog import (
     ReportColumn,
     ReportMessage,
     ReportRow,
+    ReportScalar,
     ReportSection,
     ReportTable,
+    report_id,
     text_cell,
 )
 from .store import ReportRecord, SlottedEvidence
@@ -25,10 +29,19 @@ from .store import ReportRecord, SlottedEvidence
 SIDES = ("encoding", "encoding-no-aliasing", "ref-multi", "ref-nested-snapshot", "ref-nested")
 EXACT_PAIRS = {"encoding": "ref-multi", "encoding-no-aliasing": "ref-nested-snapshot"}
 LABELS = {"encoding": "egglog", "encoding-no-aliasing": "egglog-no-aliasing"}
+ERROR_TITLE = "SLOTTED CORRECTNESS CHECKS FAILED OR INCOMPLETE"
+type Workload = tuple[str, str, int, int | None]
+
+
+@dataclass(frozen=True)
+class SlottedReport:
+    """The error banner and CLI exit status come from the same checks."""
+
+    catalog: ReportCatalog
+    errors: tuple[str, ...]
 
 
 def workload_label(study: str, case: str, rules: int | None) -> str:
-    """Paper labels shared by the terminal and nightly reports."""
     if study == "array" and (match := re.fullmatch(r"goal-2d-4f-N(\d+)", case)):
         return "Array N=" + match[1]
     if study == "sdql" and (
@@ -43,41 +56,54 @@ def workload_label(study: str, case: str, rules: int | None) -> str:
 
 
 def elapsed_time(seconds: float | None, goal: str) -> str:
-    """A timeout is a censored observation, not a completed execution time."""
+    """Completed processes retain elapsed time, even if they missed the goal."""
     if goal == "timeout":
         return "timeout"
-    return "" if seconds is None else f"{seconds:.3g}"
+    return "—" if seconds is None else f"{seconds:.3g}"
 
 
-def _label(evidence: SlottedEvidence) -> str:
-    return workload_label(evidence["study"], evidence["case"], evidence["rules"])
-
-
-def comparison_issue(encoding: SlottedEvidence, reference: SlottedEvidence | None) -> str | None:
-    """Check raw counts and the exact certificate's observation identities."""
-    if reference is None:
-        return "inconclusive: reference observation unavailable"
+def count_issue(encoding: SlottedEvidence, reference: SlottedEvidence) -> str | None:
+    """Raw counts independently constrain every positive isomorphism verdict."""
+    missing = False
     for name in ("classes", "nodes"):
         a, b = encoding[name], reference[name]
         if a is None or b is None:
-            return "inconclusive: counts unavailable"
-        if a != b:
+            missing = True
+        elif a != b:
             return f"different: {name} {a} vs {b} (encoding vs reference)"
+    return "inconclusive: counts unavailable" if missing else None
+
+
+def comparison_verdict(encoding: SlottedEvidence, reference: SlottedEvidence | None) -> str:
+    """A certificate applies only to the two observations it names."""
+    if reference is None:
+        return "inconclusive: reference observation unavailable"
     certificate = encoding["vs_ref"].get(reference["side"])
     if certificate is None or (certificate["encoding"], certificate["reference"]) != (
         encoding["observation"],
         reference["observation"],
     ):
         return "inconclusive: selected observations have not been compared"
-    return None if certificate["verdict"] == "isomorphic" else certificate["verdict"]
+    return certificate["verdict"]
 
 
-def slotted_catalog(records: Sequence[ReportRecord]) -> ReportCatalog:
-    """Show the latest workload versions, with no unverified equality claims.
+def comparison_issue(encoding: SlottedEvidence, reference: SlottedEvidence | None) -> str | None:
+    if reference is not None and (issue := count_issue(encoding, reference)):
+        return issue
+    verdict = comparison_verdict(encoding, reference)
+    return None if verdict == "isomorphic" else verdict
 
-    Workload hashes include the rewrite budget and checking policy. After choosing
-    the latest version of each named workload, only matching hashes are shown.
-    Within that version each side retains its own latest binary and provenance.
+
+def _workload(evidence: SlottedEvidence) -> Workload:
+    return evidence["study"], evidence["case"], evidence["rounds"], evidence["rules"]
+
+
+def select_slotted_records(records: Sequence[ReportRecord]) -> tuple[ReportRecord, ...]:
+    """Select each named workload/budget's latest version, then its latest sides.
+
+    Versions include the generated inputs, checking policy, parallelism, and
+    timeout. A partial new version leaves missing sides; it cannot borrow old
+    timings or certificates. Different rewrite budgets remain separate rows.
     """
     ordered = sorted(
         (
@@ -87,54 +113,75 @@ def slotted_catalog(records: Sequence[ReportRecord]) -> ReportCatalog:
         ),
         key=lambda item: item[:2],
     )
-    versions: dict[tuple[str, str], str] = {}
+    versions: dict[Workload, tuple[str, int]] = {}
+    for _, _, record in ordered:
+        versions[_workload(record["slotted"])] = record["file_sha256"], record["timeout_sec"]
+    groups: dict[Workload, dict[str, ReportRecord]] = {key: {} for key in versions}
     for _, _, record in ordered:
         evidence = record["slotted"]
-        versions[evidence["study"], evidence["case"]] = record["file_sha256"]
-    groups: dict[tuple[str, str], dict[str, ReportRecord]] = {key: {} for key in versions}
-    for _, _, record in ordered:
-        evidence = record["slotted"]
-        key = evidence["study"], evidence["case"]
-        if record["file_sha256"] == versions[key]:
+        key = _workload(evidence)
+        if (record["file_sha256"], record["timeout_sec"]) == versions[key]:
             groups[key][evidence["side"]] = record
-    if not groups:
-        return ReportCatalog(())
+    return tuple(record for group in groups.values() for record in group.values())
 
+
+def _row(identity: str, *values: ReportScalar) -> ReportRow:
+    return ReportRow(identity, tuple(text_cell(value) for value in values))
+
+
+def slotted_report(
+    records: Sequence[ReportRecord], *, sides: Sequence[str] = SIDES, counts: bool = True
+) -> SlottedReport:
+    """Build timing tables and evidence using one selection and correctness policy."""
+    groups: dict[Workload, dict[str, ReportRecord]] = {}
+    for record in select_slotted_records(records):
+        evidence = record["slotted"]
+        groups.setdefault(_workload(evidence), {})[evidence["side"]] = record
+    names = Counter(workload_label(study, case, rules) for study, case, _, rules in groups)
+    labels = {
+        key: workload_label(key[0], key[1], key[3])
+        + (f" [{key[2]} rounds]" if names[workload_label(key[0], key[1], key[3])] > 1 else "")
+        for key in groups
+    }
+    note = (
+        "Elapsed seconds for completed runs, including missed goals; timeout means the time limit was reached. "
+        "ref-nested uses syntactic substitution; snapshot-reference timings are diagnostic only. "
+        "Each workload/budget shows its latest cached version. Parallel timings include resource contention."
+    )
+    if not counts:
+        note += " Class/node counts and isomorphism checks are disabled (--no-counts)."
     blocks: list[ReportBlock] = []
     for name, title, pair in (
         ("multi", "Multipattern matching", ("encoding", "ref-multi")),
         ("nested", "Nested matching", ("encoding-no-aliasing", "ref-nested")),
     ):
-        rows = []
+        shown = tuple(side for side in pair if side in sides)
+        if not shown:
+            continue
+        timing_rows = []
         for key, group in groups.items():
-            first = next(iter(group.values()))["slotted"]
-            cells = [text_cell(_label(first))]
-            for side in pair:
+            cells = [text_cell(labels[key])]
+            for side in shown:
                 value = group.get(side)
                 seconds = None if value is None else value["wall_sec"]
-                label = "—" if value is None else elapsed_time(seconds, value["slotted"]["goal"]) or "—"
+                label = "—" if value is None else elapsed_time(seconds, value["slotted"]["goal"])
                 cells.append(text_cell(seconds, label))
-            rows.append(ReportRow("/".join(key), tuple(cells)))
+            timing_rows.append(ReportRow(report_id(*key[:3], str(key[3])), tuple(cells)))
         blocks.append(
             ReportTable(
                 "slotted-" + name,
                 title,
-                (
-                    ReportColumn("benchmark", "Benchmark"),
-                    *(ReportColumn(side, LABELS.get(side, side), "right") for side in pair),
-                ),
-                tuple(rows),
-                "Seconds from one process; timeout means the time limit was reached. Latest cached workload versions; "
-                "rewrite budgets, provenance and correctness results are below. "
-                "Snapshot reference timings are diagnostic only.",
+                (ReportColumn("benchmark", "Benchmark"), *(ReportColumn(s, LABELS.get(s, s), "right") for s in shown)),
+                tuple(timing_rows),
+                note,
             )
         )
 
-    errors: list[str] = []
-    details = []
+    errors: list[str] = [] if groups else ["No benchmark results."]
+    sizes, comparisons, configuration, provenance_rows, graph_issues = [], [], [], [], []
     for key, group in groups.items():
-        label = _label(next(iter(group.values()))["slotted"])
-        for side in SIDES:
+        label = labels[key]
+        for side in sides:
             selected = group.get(side)
             if selected is None:
                 errors.append(f"{label}: missing {LABELS.get(side, side)} observation.")
@@ -143,73 +190,105 @@ def slotted_catalog(records: Sequence[ReportRecord]) -> ReportCatalog:
             evidence = record["slotted"]
             if evidence["goal"] != "yes":
                 errors.append(f"{label} / {LABELS.get(side, side)}: goal not reached ({evidence['goal']}).")
-            verdict = "—"
+            name = LABELS.get(side, side)
+            identity = evidence["observation"]
             if side in EXACT_PAIRS:
-                if not evidence["counts"]:
-                    verdict = "disabled"
-                    errors.append(f"{label} / {LABELS.get(side, side)}: counts and isomorphism checks disabled.")
-                else:
-                    reference = group.get(EXACT_PAIRS[side])
+                for ref in sides:
+                    if ref != EXACT_PAIRS[side] and ref not in evidence["vs_ref"]:
+                        continue
+                    reference = group.get(ref)
                     issue = comparison_issue(evidence, None if reference is None else reference["slotted"])
-                    verdict = issue or "isomorphic"
-                    if issue:
-                        errors.append(f"{label}: {LABELS.get(side, side)} vs {EXACT_PAIRS[side]}: {issue}")
+                    if not counts or not evidence["counts"]:
+                        issue = "counts and isomorphism checks disabled"
+                    comparisons.append(_row(report_id(identity, ref), label, name, ref, issue or "isomorphic"))
+                    if counts and ref == EXACT_PAIRS[side] and issue:
+                        errors.append(f"{label}: {LABELS.get(side, side)} vs {ref}: {issue}")
             provenance = f"{record['target_label'] or record['target_source']} {record['target_git_sha'][:12]}"
             if record["target_is_dirty"]:
                 provenance += " dirty"
-            details.append(
-                ReportRow(
-                    "/".join((*key, side)),
-                    tuple(
-                        text_cell(value)
-                        for value in (
-                            label,
-                            LABELS.get(side, side),
-                            evidence["rounds"],
-                            record["timeout_sec"],
-                            evidence["jobs"],
-                            evidence["goal"],
-                            evidence["classes"],
-                            evidence["nodes"],
-                            verdict,
-                            evidence["graph_issue"],
-                            provenance,
-                            record["binary_sha256"],
-                            record["started_at"],
-                        )
-                    ),
+            paper = evidence["paper"]
+            paper_text = "" if paper is None else f"{paper[0]}, {paper[1]}, {paper[2]}, {'yes' if paper[3] else 'no'}"
+            sizes.append(
+                _row(
+                    identity,
+                    label,
+                    name,
+                    evidence["rounds"],
+                    elapsed_time(record["wall_sec"], evidence["goal"]),
+                    evidence["goal"],
+                    evidence["classes"],
+                    evidence["nodes"],
+                    evidence["saturated"],
                 )
             )
-    if errors:
-        blocks.append(
-            ReportMessage(
-                "slotted-errors", "SLOTTED CORRECTNESS CHECKS FAILED OR INCOMPLETE", "\n".join(errors), "error"
+            configuration.append(
+                _row(
+                    identity,
+                    label,
+                    name,
+                    record["timeout_sec"],
+                    evidence["jobs"],
+                    evidence["checks"],
+                    evidence["substitution"],
+                    paper_text,
+                )
             )
-        )
-    headers = (
-        "Benchmark",
-        "Treatment",
-        "Iterations",
-        "Timeout (s)",
-        "Jobs",
-        "Goal",
-        "Classes",
-        "Nodes",
-        "Exact comparison",
-        "Graph issue",
-        "Target",
-        "Binary SHA-256",
-        "Collected",
+            provenance_rows.append(
+                _row(
+                    identity,
+                    label,
+                    name,
+                    provenance,
+                    record["binary_sha256"],
+                    record["started_at"],
+                )
+            )
+            if evidence["graph_issue"]:
+                graph_issues.append(_row(identity, label, name, evidence["graph_issue"]))
+    if errors:
+        blocks.append(ReportMessage("slotted-errors", ERROR_TITLE, "\n".join(errors), "error"))
+    tables = (
+        (
+            "sizes",
+            "Slotted e-graph sizes",
+            ("Benchmark", "Treatment", "Iterations", "Seconds", "Goal", "Classes", "Nodes", "Saturated"),
+            sizes,
+            None,
+        ),
+        (
+            "comparisons",
+            "Slotted graph comparisons",
+            ("Benchmark", "Encoding", "Reference", "Verdict"),
+            comparisons,
+            "egglog must match ref-multi; egglog-no-aliasing must match ref-nested-snapshot, when both are selected. "
+            "Equal raw class/node counts and a verified isomorphism are both required. "
+            "Other comparisons are diagnostic.",
+        ),
+        ("diagnostics", "Slotted graph diagnostics", ("Benchmark", "Treatment", "Issue"), graph_issues, None),
+        (
+            "configuration",
+            "Slotted run configuration",
+            ("Benchmark", "Treatment", "Timeout (s)", "Jobs", "Reference checks", "Substitution", "Paper sizes"),
+            configuration,
+            "Paper sizes lists iterations, nodes, classes, and saturation from Table 1.",
+        ),
+        (
+            "provenance",
+            "Slotted provenance",
+            ("Benchmark", "Treatment", "Target", "Binary SHA-256", "Collected"),
+            provenance_rows,
+            None,
+        ),
     )
-    blocks.append(
-        ReportTable(
-            "slotted-evidence",
-            "Slotted correctness and provenance",
-            tuple(ReportColumn(str(i), name) for i, name in enumerate(headers)),
-            tuple(details),
-            "egglog must match ref-multi; egglog-no-aliasing must match ref-nested-snapshot. "
-            "Both class/node counts and a verified isomorphism are required. "
-            "Parallel samples include resource contention.",
-        )
-    )
-    return ReportCatalog((ReportSection("slotted", "Slotted e-graphs", tuple(blocks)),))
+    for name, title, headers, rows, caption in tables:
+        if rows:
+            blocks.append(
+                ReportTable(
+                    "slotted-" + name,
+                    title,
+                    tuple(ReportColumn(str(i), name) for i, name in enumerate(headers)),
+                    tuple(rows),
+                    caption,
+                )
+            )
+    return SlottedReport(ReportCatalog((ReportSection("slotted", "Slotted e-graphs", tuple(blocks)),)), tuple(errors))
