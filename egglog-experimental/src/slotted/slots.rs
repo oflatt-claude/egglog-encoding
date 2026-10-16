@@ -58,4 +58,8 @@ impl Slots {
     pub fn id(&self, name: &str) -> i64 {
         self.names[name]
     }
+
+    pub fn names(&self) -> &BTreeMap<String, i64> {
+        &self.names
+    }
 }

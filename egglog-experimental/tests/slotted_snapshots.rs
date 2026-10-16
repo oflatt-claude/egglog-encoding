@@ -22,6 +22,7 @@ fn main() {
                 let source = std::fs::read_to_string(&path)?;
                 let mut compiler = Compiler::new(Options {
                     no_aliasing: path.starts_with("slotted/tests/nested"),
+                    ..Options::default()
                 });
                 let encoded = compiler.compile(Some(path.display().to_string()), &source)?;
                 let mut settings = insta::Settings::clone_current();

@@ -679,9 +679,11 @@ dependencies = [
  "mimalloc",
  "num",
  "rustc-hash",
+ "serde",
  "serde_json",
  "smallvec",
  "stacker",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

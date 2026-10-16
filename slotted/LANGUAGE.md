@@ -5,9 +5,8 @@ What `egglog-experimental --slotted` accepts, and how it differs from egglog.
 A file here is an egglog program with a few additions. Run one directly:
 
 ```
-cargo build -p egglog-experimental
-target/debug/egglog-experimental --slotted slotted/tests/paper/figure-3.egg
-target/debug/egglog-experimental --slotted --mode desugar slotted/tests/paper/figure-3.egg
+cargo run -p egglog-experimental -- --slotted slotted/tests/paper/figure-3.egg
+cargo run -p egglog-experimental -- --slotted --proofs slotted/tests/paper/figure-3.egg
 ```
 
 The flag installs the slotted runtime in experimental and transforms the source
