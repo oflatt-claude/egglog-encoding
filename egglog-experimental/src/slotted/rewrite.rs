@@ -288,16 +288,9 @@ pub(super) fn compile(
         }
     };
     let naive = rhs.uses_subst();
-    let atoms: std::collections::BTreeSet<_> = names
-        .patterns
-        .iter()
-        .flatten()
-        .map(|(_, name)| name.as_str())
-        .collect();
     names.classes = q
         .classes
         .iter()
-        .filter(|(v, _)| atoms.contains(fname(v)))
         .map(|(v, c)| (fname(v).to_owned(), c.clone()))
         .collect();
     names.readings = q.readings.clone();
