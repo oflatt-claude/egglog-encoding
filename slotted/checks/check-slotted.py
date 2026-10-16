@@ -99,6 +99,13 @@ CHECKS = [
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
     ("nested-compatibility", ("slotted/checks/check-nested.py",), starts_ok, False, True),
     (
+        "logic-case-studies",
+        ("slotted/checks/check-case-studies.py",),
+        ratio(r"(\d+)/(\d+) case studies match ref-multi", 2),
+        False,
+        True,
+    ),
+    (
         "slotted-tests",
         ("slotted/run-slotted-tests.py",),
         both(ratio(r"(\d+)/(\d+) slotted tests pass", 22), paper_sdql_ran),

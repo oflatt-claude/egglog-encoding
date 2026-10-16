@@ -118,6 +118,18 @@ define_language! {
             /*      v: */ AppliedId,
             /*   body: */ Bind<AppliedId>,
         ) = "sdql-let",
+
+        // Rudi's first-order logic fixtures use these constructor names directly.
+        True() = "True",
+        False() = "False",
+        Forall(Bind<AppliedId>) = "Forall",
+        Implies(AppliedId, AppliedId) = "Implies",
+        And(AppliedId, AppliedId) = "And",
+        P(AppliedId) = "P",
+        Q(AppliedId) = "Q",
+        C() = "C",
+        Identity(AppliedId) = "Identity",
+        LogicLet(Bind<AppliedId>, AppliedId) = "Let",
     }
 }
 

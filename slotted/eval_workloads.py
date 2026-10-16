@@ -68,16 +68,7 @@ def rule_lines(lang, rules_path, selected, nested):
         r = syntax.rewrite_parts(src, form)
         if selected is not None and r["name"] not in selected:
             continue
-        lhs = src.term(r["lhs"], ground=False)
-        rhs = syntax.pat_sexpr(lang, syntax.rhs_of(lang, src.term(r["rhs"], ground=False)))
-        if nested:
-            out += ["rule", f"nested {syntax.pat_sexpr(lang, syntax.rhs_of(lang, lhs))}", f"rhs root {rhs}"]
-        else:
-            root, atoms = syntax.flatten(lang, lhs)
-            root, atom_text = syntax.atom_lines(lang, root, atoms)
-            out += ["rule", *atom_text, f"rhs {root} {rhs}"]
-        for want, slot, pvars in r["conds"]:
-            out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
+        out += syntax.rule_lines(src, lang, form, nested=nested)
     return out
 
 
