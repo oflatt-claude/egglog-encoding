@@ -432,6 +432,8 @@ def _timing_means(
             if record["status"] != "success":
                 continue
             summary = record["timing_summary"]
+            if summary is None and "slotted" in record:
+                continue  # Slotted observations carry graph evidence instead of phase timings.
             if summary is None:
                 raise ValueError("successful benchmark record is missing its timing summary")
             typecheck += summary["typecheck_ns"]

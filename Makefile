@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-check slotted-campaign slotted-eval slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -68,6 +68,36 @@ rust-doc-links:
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
 
+# Slotted fixtures, compiler snapshots, reference comparisons, and mutation tests.
+# The Python runner's --quick flag skips fuzzing; --no-oracle skips reference checks.
+slotted-check:
+	cargo build
+	cargo test -p egglog-experimental --test slotted_snapshots
+	cargo build --manifest-path slotted/xmulti/Cargo.toml
+	cargo test --manifest-path slotted/xmulti/Cargo.toml
+	python3 slotted/checks/check-slotted.py
+
+# Larger randomized campaigns for graph equivalence, rule order, and checker mutations.
+slotted-campaign:
+	cargo build --release -p egglog-experimental
+	cargo build --manifest-path slotted/xmulti/Cargo.toml
+	python3 slotted/xdiff/campaign.py iso --cases 500 --seeds 32
+	python3 slotted/xdiff/campaign.py order --cases 100 --seeds 32
+	python3 slotted/xdiff/campaign.py checker --cases 200 --seeds 8
+	XDIFF_DEPTH=3 XDIFF_DUP=0.4 XDIFF_SHARE=0.7 XDIFF_LAM=0.55 XDIFF_USEBIND=0.6 \
+		python3 slotted/xdiff/campaign.py iso --cases 300 --seeds 8
+
+# The paper's case studies -- the S4.1 array goal and the S4.2 SDQL workloads -- on the
+# encoding and on the reference through both of its matchers, at the artifact's budgets.
+# Release builds of both binaries, since these are the numbers a graph is drawn from.
+slotted-eval:
+	./bench.py slotted --params 0 1 2 3 --counts
+
+slotted-check-no-oracle:
+	cargo build
+	cargo test -p egglog-experimental --test slotted_snapshots
+	python3 slotted/checks/check-slotted.py --no-oracle
+
 # Smoke the runner on small files, not the full local benchmark suite.
 benchmark-smoke:
 	rm -f -- "$(BENCHMARK_SMOKE_REPORT)"
@@ -102,6 +132,7 @@ nightly-local: nightly-uv nightly-rustup
 
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details
+	INSTA_UPDATE=always cargo test -p egglog-experimental --test slotted_snapshots
 
 format:
 	uv run --locked ruff format .

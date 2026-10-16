@@ -210,6 +210,8 @@ def build_target(
     build_profile: BuildProfile = "release",
     engine: Engine = "egglog",
 ) -> tuple[Path, str]:
+    if engine == "slotted-reference":
+        raise ValueError("reference matcher treatments require the slotted collector")
     checkout_path = Path(row.path)
     engine_label = "" if engine == "egglog" else f" · {engine}"
     console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), engine_label))
@@ -310,10 +312,10 @@ def workload_command(
 ) -> list[str]:
     specification = TREATMENT_SPECS[treatment]
     file_spec = file_spec.for_engine(specification.engine)
+    validate_engine_workload(file_spec, treatment)
     if specification.engine != "egglog":
         if disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
-        validate_engine_workload(file_spec, treatment)
         if specification.engine != "egg":
             return [str(binary_path), str(file_spec.absolute_path), "100000", "10000"]
         return [str(binary_path), *specification.flags]

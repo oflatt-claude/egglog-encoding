@@ -22,6 +22,7 @@ from ..engines import TREATMENT_SPECS, Engine
 from ..models import BenchmarkEndpoint, ComparisonSpec, EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
 from .catalog import CellTone, ReportCatalog, ReportCell, ReportMessage, report_id
 from .presentation import build_report_catalog, report_file_labels
+from .slotted import slotted_catalog
 from .store import GroupedReport, ReportRecord, parse_grouped_report
 
 type JsonScalar = str | int | float | bool | None
@@ -133,7 +134,12 @@ class InteractiveRuntime:
         scope = self._parse_scope(initial_scope)
         comparison = self._comparison(scope)
         self._scope = scope
-        self._catalog = build_report_catalog(store, comparison, "rulesets")
+        self._catalog = self._build_catalog(comparison)
+
+    def _build_catalog(self, comparison: ComparisonSpec) -> ReportCatalog:
+        pair = build_report_catalog(self._store, comparison, "rulesets")
+        slotted = slotted_catalog(self._store.records)
+        return ReportCatalog(pair.sections + slotted.sections)
 
     @classmethod
     def from_path(
@@ -170,7 +176,7 @@ class InteractiveRuntime:
         file_choices = tuple(_FileChoice(_file_id(file), file) for file in comparison.files) + tuple(
             choice for choice in self._file_choices if choice.file_id not in file_ids
         )
-        catalog = build_report_catalog(self._store, comparison, "rulesets")
+        catalog = self._build_catalog(comparison)
         return self._payload(scope, catalog, endpoint_choices, file_choices)
 
     def apply(self, value: object) -> dict[str, JsonValue]:
@@ -178,7 +184,7 @@ class InteractiveRuntime:
 
         scope = self._parse_scope(value)
         comparison = self._comparison(scope)
-        catalog = build_report_catalog(self._store, comparison, "rulesets")
+        catalog = self._build_catalog(comparison)
         payload = self._payload(
             scope,
             catalog,

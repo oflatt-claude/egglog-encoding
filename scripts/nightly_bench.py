@@ -4,12 +4,14 @@
 Runs ``bench.py`` once per target and treatment into ``<output_dir>/index.jsonl``,
 then re-renders that cache as the interactive page beside it. Both files are
 replaced each run, so the cache never outlives the schema version that wrote it
-and a failed run publishes no page.
+and a failed run publishes no page. Slotted observations and exact reference
+comparisons are collected into the same cache and appear on that page.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import shlex
 import subprocess
@@ -21,6 +23,7 @@ type Target = tuple[str, str]  # (label, source) for bench.py's label=source syn
 type Treatment = str
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 BENCH_SCRIPT = REPO_ROOT / "bench.py"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "nightly" / "output"
 
@@ -110,12 +113,18 @@ def _clear(output_dir: Path) -> None:
 
 
 def _positive_int(value: str) -> int:
-    """Parse ``--rounds``, which bench.py also requires to be positive."""
+    """Parse a positive integer command-line argument."""
 
     parsed = int(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be positive")
     return parsed
+
+
+def _run_slotted(*, report_path: Path, timeout: int, jobs: int) -> int:
+    """Collect slotted timings and reference comparison results."""
+    evaluator = importlib.import_module("slotted.slotted-eval")
+    return int(evaluator.nightly(report_path, env=_bench_env(), timeout=timeout, jobs=jobs))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -134,6 +143,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=_positive_int,
         help="rounds per endpoint/file, passed to bench.py",
     )
+    parser.add_argument(
+        "--slotted-timeout",
+        type=_positive_int,
+        default=150,
+        help="seconds per slotted benchmark process (default: 150)",
+    )
+    parser.add_argument(
+        "--slotted-jobs",
+        type=_positive_int,
+        default=1,
+        help="concurrent slotted workloads; values above 1 contend for resources",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     output_dir = args.output_dir.expanduser().resolve()
     _clear(output_dir)
@@ -145,6 +166,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         for treatment in TREATMENTS:
             if _run(target, treatment, report_path=report_path, open_report=False, rounds=args.rounds) != 0:
                 print(f"nightly: skipped {target[0]} {treatment}", file=sys.stderr)
+
+    try:
+        status = _run_slotted(report_path=report_path, timeout=args.slotted_timeout, jobs=args.slotted_jobs)
+    except (OSError, SystemExit, ValueError) as error:
+        print(f"nightly: slotted collection failed: {error}", file=sys.stderr)
+        return 1
+    if status:
+        print("nightly: slotted comparisons are incomplete or failed; see the report's error banner", file=sys.stderr)
 
     # The whole cache is now populated, so this last run re-renders it as the
     # page. Its rows are already cached, so it only rebuilds the report.
