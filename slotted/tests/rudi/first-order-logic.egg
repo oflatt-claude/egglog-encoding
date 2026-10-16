@@ -3,7 +3,7 @@
 (constructor True () L)
 (constructor False () L)
 
-(constructor Forall (L L) L :binder 0)
+(constructor Forall (Var L) L :binder 0)
 (constructor Implies (L L) L)
 (constructor And (L L) L)
 
