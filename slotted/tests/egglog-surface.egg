@@ -8,7 +8,7 @@
 ;;; holds, and that it does NOT where the condition fails. Only the second has teeth --
 ;;; a condition that is silently ignored passes the first on its own.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/egglog-surface.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/egglog-surface.egg
 
 (sort U)
 

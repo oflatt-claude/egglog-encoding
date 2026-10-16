@@ -17,7 +17,7 @@ REF_DIRS = (ROOT / "slotted" / "languages",)
 ORACLE = ROOT / "slotted" / "xmulti" / "src" / "main.rs"
 
 sys.path.insert(0, str(ROOT / "slotted"))
-enc = __import__("slotted-encoder")
+import reference as syntax  # noqa: E402
 
 
 def oracle_language():
@@ -49,8 +49,8 @@ def main():
     bad = []
     refs = sorted(r for d in REF_DIRS for r in d.glob("*.ref"))
     for ref in refs:
-        corr = enc.read_correspondence(ref)
-        spec = enc.read_language(ref.with_suffix(".egg"))
+        corr = syntax.read_correspondence(ref)
+        spec = syntax.read_language(ref.with_suffix(".egg"))
         missing = sorted({t for _, t, _ in corr.values() if t and t not in tags})
         # an `=payload` operator has no tag, so the oracle must carry it as an
         # untagged variant -- otherwise the harness is writing a bare payload the

@@ -13,7 +13,7 @@
 ;;; `sub2` exists because `sub` is a reference tag in more than one of the oracle's
 ;;; languages; see `toy.ref`.
 ;;;
-;;; Compile with: python3 slotted/slotted-egglog.py slotted/languages/toy.egg --desugar
+;;; Compile with: target/debug/egglog-experimental --slotted slotted/languages/toy.egg --mode desugar
 
 (sort U)
 

@@ -21,7 +21,7 @@
 ;;; has seen its node, so the narrowing M8 does inside one rule happens one phase
 ;;; later, through a relation the compiler emits alongside.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/sdql-beta.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/sdql-beta.egg
 
 (sort U)
 

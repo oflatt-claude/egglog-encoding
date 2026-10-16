@@ -16,8 +16,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
-sc = __import__("slotted-egglog")
-slotenc = __import__("slotted-encoder")
+import reference as syntax  # noqa: E402
 
 
 def declarations_of(path):
@@ -120,26 +119,26 @@ def their_names(path):
 
 def local_rules(path):
     """Render the slotted source through the same language metadata as the oracle."""
-    src = sc.Source(path)
+    src = syntax.Source(path)
     decls = declarations_of(path)
-    lang = slotenc.language(decls, decls.with_suffix(".ref"))
+    lang = syntax.language(decls, decls.with_suffix(".ref"))
     out = {}
-    for form in sc.parse(path.read_text()):
+    for form in syntax.parse(path.read_text()):
         if not (isinstance(form, list) and form and form[0] == "rewrite"):
             continue
-        rule = sc.rewrite_parts(src, form)
+        rule = syntax.rewrite_parts(src, form)
         sides, terms = [], []
         for side in (rule["lhs"], rule["rhs"]):
-            term = slotenc.rhs_of(lang, src.term(side, ground=False))
+            term = syntax.rhs_of(lang, src.term(side, ground=False))
             terms.append(term)
-            sides.append(slotenc.pat_sexpr(lang, term))
+            sides.append(syntax.pat_sexpr(lang, term))
         # The guards a rule OWES here are discounted: where a right-hand side rebinds a
         # slot over a variable matched outside it, this port says `(not-free $b v)`,
         # since matching may read the binder as that variable's name. The reference's
         # nested matcher keeps bound slots injective, so its rule sets can lack the
         # guard and mean the same thing. `check-capture-guards.py` requires the guards;
         # this compares everything else.
-        owed = slotenc.capture_guards(lang, terms[0], terms[1])
+        owed = syntax.capture_guards(lang, terms[0], terms[1])
         conds = [c for c in rule["conds"] if c[0] or not all((c[1], v) in owed for v in c[2])]
         out[rule["name"]] = (sides[0], sides[1], conds)
     return out

@@ -7,7 +7,7 @@
 ;;; Those ten inputs are under `slotted/tests/artifact/sdql/`, run as tests from
 ;;; `slotted/tests/sdql-paper/` and by `slotted/slotted-eval.py`, with
 ;;; `slotted/checks/check-paper-sdql.py` pinning their provenance.  Written at the slotted level, a rule says
-;;; what it rewrites and nothing about renamings -- `slotted/slotted-egglog.py` turns
+;;; what it rewrites and nothing about renamings -- `egglog-experimental --slotted` turns
 ;;; it into egglog for both the source tests and the differential harness.
 ;;; The rules live in `slotted/languages/sdql-rules.egg`.
 ;;;

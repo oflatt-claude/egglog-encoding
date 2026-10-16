@@ -8,9 +8,11 @@ escaping, headings, and table syntax.
 
 from __future__ import annotations
 
+from io import StringIO
+
 from rich import box
 from rich.cells import cell_len
-from rich.console import Group, RenderableType
+from rich.console import Console, Group, RenderableType
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
@@ -136,6 +138,14 @@ def render_markdown_report_document(catalog: ReportCatalog) -> str:
     for section in catalog.sections:
         parts.extend(_markdown_section_parts(section))
     return "\n\n".join(part.strip() for part in parts if part.strip())
+
+
+def render_html_report_document(catalog: ReportCatalog) -> str:
+    """Export the shared Rich report as a standalone, static HTML document."""
+
+    console = Console(record=True, width=200, file=StringIO())
+    console.print(render_rich_report_document(catalog, console.width))
+    return console.export_html(inline_styles=True)
 
 
 def _rich_section_renderables(

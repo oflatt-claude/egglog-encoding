@@ -75,7 +75,7 @@ slotted-check:
 	cargo test -p egglog-experimental --test slotted_snapshots
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	cargo test --manifest-path slotted/xmulti/Cargo.toml
-	python3 slotted/checks/check-slotted.py
+	uv run --locked python slotted/checks/check-slotted.py
 
 # Larger randomized campaigns for graph equivalence, rule order, and checker mutations.
 slotted-campaign:
@@ -96,7 +96,7 @@ slotted-eval:
 slotted-check-no-oracle:
 	cargo build
 	cargo test -p egglog-experimental --test slotted_snapshots
-	python3 slotted/checks/check-slotted.py --no-oracle
+	uv run --locked python slotted/checks/check-slotted.py --no-oracle
 
 # Smoke the runner on small files, not the full local benchmark suite.
 benchmark-smoke:

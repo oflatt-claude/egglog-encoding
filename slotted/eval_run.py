@@ -3,11 +3,12 @@
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from eval_report import quiet_progress
+from benchmarking.reports.slotted import workload_label
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRATCH = ROOT / "target" / "slotted"
@@ -34,18 +35,89 @@ class Config:
     group_cap: int = GROUP_CAP
 
 
+def quiet_progress(row, phase):
+    """Library callers collect observations without displaying CLI progress."""
+
+
+class Progress:
+    """One dot per sample; identify a phase only when it takes more than five seconds.
+
+    Timer callbacks only print to stderr. Cancel and join before changing the display
+    so a completed phase cannot report itself as still running.
+    """
+
+    delay = 5
+
+    def __init__(self, parallel=False):
+        self.timer = None
+        self.workload = None
+        self.line_open = False
+        self.parallel = parallel
+
+    def __enter__(self):
+        return self
+
+    def cancel(self):
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer.join()
+            self.timer = None
+
+    def __exit__(self, *_):
+        self.cancel()
+        if self.line_open:
+            print(file=sys.stderr, flush=True)
+
+    def __call__(self, row, phase):
+        self.cancel()
+        if phase == "idle":
+            return
+        label = workload_label(row.study, row.case, row.rules)
+        if self.parallel and phase == "done":
+            print(".", end="", file=sys.stderr, flush=True)
+            return
+        if not self.parallel and row.workload() != self.workload:
+            if self.line_open:
+                print(file=sys.stderr)
+            print(f"{label}: ", end="", file=sys.stderr, flush=True)
+            self.workload, self.line_open = row.workload(), True
+        if phase == "done":
+            print("." if self.line_open else "  .", end="", file=sys.stderr, flush=True)
+            self.line_open = True
+            return
+
+        def slow():
+            if self.parallel:
+                # Write a complete, short message at once so workers' text does not
+                # interleave inside a message. Dots may arrive between messages.
+                sys.stderr.write(f"\n  {label} / {row.side}: {phase} (Running ...)\n")
+                sys.stderr.flush()
+                return
+            if self.line_open:
+                print(file=sys.stderr)
+            print(f"  {label} / {row.side}: {phase} (Running ...)", file=sys.stderr, flush=True)
+            self.line_open = False
+
+        self.timer = threading.Timer(self.delay, slow)
+        self.timer.daemon = True
+        self.timer.start()
+
+
 def build(*, env=None):
     """Bring both binaries up to date, so a timing is of the code in the checkout.
     cargo's own output stays on stderr."""
     for cmd in BUILDS:
-        if subprocess.run(cmd, cwd=ROOT, stdout=sys.stderr, env=env).returncode != 0:
-            sys.exit(f"slotted-eval.py: `{' '.join(cmd)}` failed")
+        subprocess.run(cmd, cwd=ROOT, stdout=sys.stderr, env=env, check=True)
 
 
 def oracle_env(side, group_cap):
-    """Choose the comparison's policy explicitly, overriding ambient XMULTI_SUBST."""
+    """Use the selected substitution policy without reference debugging overhead."""
     return {
-        **os.environ,
+        **{
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("XMULTI_DEBUG", "XMULTI_DEBUG_RULE", "XMULTI_TRACE")
+        },
         "XMULTI_GROUP_SLOT_CAP": str(group_cap),
         "XMULTI_SUBST": "syntactic" if side == "ref-nested" else "snapshot",
     }

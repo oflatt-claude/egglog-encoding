@@ -19,9 +19,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
 sys.path.insert(0, str(ROOT / "slotted" / "xdiff"))
 import isomorphism as ISO  # noqa: E402
+import reference as syntax  # noqa: E402
 
-sc = __import__("slotted-egglog")
-slotenc = __import__("slotted-encoder")
 pf = __import__("paper_fixtures")
 
 EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
@@ -33,16 +32,14 @@ ROUNDS = (4, 12)
 
 def program(rounds):
     """The MMM subset test's rules and input, run for `rounds`, with the target added after."""
-    forms = sc.parse(TEST.read_text())
+    forms = syntax.parse(TEST.read_text())
     keep = [f for f in forms if isinstance(f, list) and f[0] in ("include", "rewrite")]
     inp, tgt = pf.workload("mmm", "2nd")
     keep += [["let", "paper-input", inp], ["run", str(rounds)], ["let", "paper-target", tgt], ["run", "0"]]
     SCRATCH.mkdir(parents=True, exist_ok=True)
     path = SCRATCH / f"subst-determinism-{rounds}.egg"
-    path.write_text("\n".join(sc.render(f) for f in keep) + "\n")
-    compiled = path.with_suffix(".compiled.egg")
-    compiled.write_text(sc.compile_source(sc.Source(path)))
-    return compiled
+    path.write_text("\n".join(syntax.render(f) for f in keep) + "\n")
+    return path
 
 
 def compare_graphs(first, graph, issues):
@@ -91,7 +88,7 @@ def main():
         print(f"FAIL: {EGGLOG.relative_to(ROOT)} not built")
         return 1
     decls = pf.RULES.with_name("sdql.egg")
-    lang = slotenc.language(decls, decls.with_suffix(".ref"))
+    lang = syntax.language(decls, decls.with_suffix(".ref"))
     bad = []
     for rounds in ROUNDS:
         compiled = program(rounds)
@@ -100,7 +97,7 @@ def main():
         for _ in range(RUNS):
             json_path.unlink(missing_ok=True)
             run = subprocess.run(
-                [str(EGGLOG), "--slotted-encoded", "--to-json", *ISO.SERIALIZE_LIMITS, str(compiled)],
+                [str(EGGLOG), "--slotted", "--to-json", *ISO.SERIALIZE_LIMITS, str(compiled)],
                 capture_output=True,
                 text=True,
                 cwd=ROOT,

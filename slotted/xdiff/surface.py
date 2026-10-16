@@ -1,11 +1,11 @@
-"""Compare source-level rewrites with directly compiled multipattern rules.
+"""Compare nested and flat source spellings through the Rust compiler.
 
 Renders generated rules with one left-hand pattern and the remaining atoms as
-`:when` equality patterns, then compares probe partitions with direct compilation.
+`:when` equality patterns, then compares probe partitions with the equivalent flat source rewrite.
 No reference binary is needed. Different generated rule text is permitted.
 
-A source rewrite must act on its left-hand root; cases whose actions require a
-root absent from every atom are skipped. References to the matched root are
+The nested spelling acts on its left-hand root; cases whose actions require a
+root absent from every atom are checked by the flat differential suite instead. References to the matched root are
 expressed by rebuilding the left-hand pattern. Reports distinguish unsupported
 cases from execution limits, and include multipattern counts and maximum width.
 
@@ -19,31 +19,9 @@ import sys
 sys.path.insert(0, "slotted/xdiff")
 import xdiff as X
 
-enc = X.slotenc
-sc = __import__("slotted-egglog")
 
-
-class Unexpressible(Exception):
-    """A rule a `rewrite` cannot say. Counted, not failed."""
-
-
-class FakeSource:
-    """What `compile_rewrite` reads off a `Source`, without a file behind it."""
-
-    def __init__(self, lang, spec):
-        self.lang = lang
-        # `term()` consults it for globals; a generated rule has none, and an empty map is
-        # what makes every bare name a pattern variable
-        if not hasattr(lang, "bound"):
-            lang.bound = {}
-        self.spec = spec
-        self.path = type("P", (), {"name": "<fuzz>"})()
-
-    def term(self, form, column=enc.CHILD, ground=True, expected_sort=None):
-        return sc.Source.term(self, form, column, ground, expected_sort)
-
-
-SRC = FakeSource(X.LANG, {op.ctor: op.sig for op in X.LANG.ops.values()})
+class NoNestedForm(Exception):
+    """A rule without the nested spelling used by this metamorphic check."""
 
 
 def ctor(op):
@@ -59,18 +37,18 @@ def rhs_text(t, ref):
 
 
 def render(atoms, action, conds):
-    """A `(rewrite ...)` for this rule. Raises `Unexpressible` when there is none.
+    """A `(rewrite ...)` for this rule. Raises `NoNestedForm` when there is none.
 
     Bare variables throughout, on purpose: egglog's spelling.
     """
     root = action[0]
     lead = next((i for i, a in enumerate(atoms) if a[0] == root), None)
     if lead is None:
-        raise Unexpressible("the conclusion is about a variable no atom roots")
+        raise NoNestedForm("the conclusion is about a variable no atom roots")
     if sum(1 for a in atoms if a[0] == root) > 1:
         # a second atom rooted there would have to be written `:when (= <call> ...)`,
         # and an equality's left side must be a variable
-        raise Unexpressible("two atoms are rooted at the conclusion's variable")
+        raise NoNestedForm("two atoms are rooted at the conclusion's variable")
 
     def pay(c):
         """A `#k` child is the harness's spelling of the PAYLOAD LEAF `k`, shared with
@@ -114,17 +92,12 @@ def render(atoms, action, conds):
     return "\n".join(parts) + ")"
 
 
-def surface_compile(atoms, action, conds=()):
-    """`xdiff.compile_rule`'s signature, going the long way round."""
-    return sc.compile_rewrite(SRC, sc.parse(render(atoms, action, conds))[0])
-
-
 def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
     seed = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     rng = random.Random(seed)
 
-    direct = X.compile_rule
+    direct = X.source_rule
     compared = agreed = 0
     # skips have two very different reasons and lumping them hid how much was skipped
     # for being inexpressible rather than for being too big to run
@@ -140,16 +113,16 @@ def main():
             continue
         try:
             texts = [render(a, act, c) for a, act, c in case.rules if a]
-        except Unexpressible:
+        except NoNestedForm:
             no_rewrite += 1
             continue
 
         want = X.run_encoding(case)
         try:
-            X.compile_rule = surface_compile
+            X.source_rule = render
             got = X.run_encoding(case)
         finally:
-            X.compile_rule = direct
+            X.source_rule = direct
 
         if want[0] != "OK" or got[0] != "OK":
             # an error on ONE side is a finding; on both it is the case being too big
@@ -176,7 +149,7 @@ def main():
     shape = ", ".join(f"{w} atom{'s' if w > 1 else ''}: {widths[w]}" for w in sorted(widths))
     print(f"\n{agreed}/{compared} cases agree through the surface syntax")
     print(f"  multipatterns: {multi}/{compared} carried more than one atom   ({shape})")
-    print(f"  skipped: {no_rewrite} no `rewrite` says it, {too_big} too big to run either way")
+    print(f"  skipped: {no_rewrite} no nested spelling, {too_big} too big to run either way")
     return 1 if bad else 0
 
 

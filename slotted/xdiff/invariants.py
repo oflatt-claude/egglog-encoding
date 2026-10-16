@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, "slotted/xdiff")
 import xdiff as X
 
-OBS_TEMPLATE = """
+OBS_TEMPLATE = f"""
 ;; Observers live in their own ruleset and are run ALONE, so the machinery cannot
 ;; churn while they look. Running them alongside it would answer a question about
 ;; history instead: these are relations, and a row deleted later still leaves its
@@ -37,7 +37,7 @@ OBS_TEMPLATE = """
 (print-function WideEdge 200)
 """
 
-enc = X.slotenc
+enc = X.syntax
 LANG = enc.read_language(X.LANG_DIR / "toy.egg")
 
 
@@ -91,6 +91,8 @@ def probe(case):
     finally:
         p.unlink(missing_ok=True)
     ni = next((int(x.strip()) for x in r.stdout.splitlines() if x.strip().isdigit()), None)
+    if r.returncode or ni is None:
+        raise RuntimeError(f"{case.name}: observer failed: {r.stderr}")
     wide = [
         line.strip().split(" -> ")[0][len("(WideEdge ") : -1]
         for line in r.stdout.splitlines()

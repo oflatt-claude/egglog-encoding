@@ -4,7 +4,7 @@
 ;;; there, so the two can be diffed side by side, and standalone: the constructors
 ;;; below are all it needs, and the compiler generates their machinery.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/paper/two-redundant-slots.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/paper/two-redundant-slots.egg
 ;;;
 ;;; A redundant slot stands for infinitely many e-nodes, so a match picks fresh slots
 ;;; for them. After `mul($7,$8) = 0` the zero class also contains `mul($x,$y)` for

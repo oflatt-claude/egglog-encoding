@@ -4,7 +4,7 @@
 ;;; there, so the two can be diffed side by side, and standalone: the constructors
 ;;; below are all it needs, and the compiler generates their machinery.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/paper/enode-collisions.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/paper/enode-collisions.egg
 ;;;
 ;;; A symmetry of a CHILD has to become a symmetry of the parent, which the hashcons
 ;;; alone cannot find: `i(c($0,$1))` and `i(c($1,$0))` are two different rows and

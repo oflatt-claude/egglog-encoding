@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TMP = ROOT / "target" / "slotted" / "forms.egg"
 sys.path.insert(0, str(ROOT / "slotted"))
-sc = __import__("slotted-egglog")
+import test_program as driver  # noqa: E402
 
 L = "(datatype M (N i64) (Add M M) (Mul M M) (Lam Var M :binder 0) (App M M) (Nil))\n"
 
@@ -121,7 +121,6 @@ PROBES = [
 
 COMPILERS = {
     "Rust": [str(ROOT / "target/debug/egglog-experimental"), "--slotted"],
-    "Python": [sys.executable, "slotted/slotted-egglog.py"],
 }
 
 
@@ -156,10 +155,7 @@ def main():
                 bad.append(what)
     TMP.unlink(missing_ok=True)
     n_ok = sum(1 for w, _, _ in PROBES if w == "ok")
-    print(
-        f"\n{len(PROBES) - len(set(bad))}/{len(PROBES)} egglog forms behave as recorded "
-        f"({n_ok} accepted; both compilers)"
-    )
+    print(f"\n{len(PROBES) - len(set(bad))}/{len(PROBES)} egglog forms behave as recorded ({n_ok} accepted; Rust CLI)")
     return 1 if bad else 0
 
 
@@ -180,12 +176,9 @@ def repeatable_compilation():
     with tempfile.TemporaryDirectory(prefix="slotted-compile-") as tmp:
         path = Path(tmp) / "source.egg"
         path.write_text(program)
-        src = sc.Source(path)
-        full = sc.compile_source(src)
-        own = sc.compile_source(src, own_only=True)
-        assert full == sc.compile_source(src)
-        assert own == sc.compile_source(sc.Source(path), own_only=True)
-        assert not src.lang.bound
+        full = driver.compile_source(program)
+        driver.compile_source.cache_clear()
+        assert full == driver.compile_source(program)
         compiled = path.with_name("compiled.egg")
         compiled.write_text(full)
         run = subprocess.run(
@@ -195,17 +188,7 @@ def repeatable_compilation():
             timeout=30,
         )
         assert run.returncode == 0, run.stderr
-        # This CLI path emits a snapshot and runs the full program in one invocation.
-        snapshot = path.with_name("snapshot.egg")
-        run = subprocess.run(
-            [sys.executable, ROOT / "slotted/slotted-egglog.py", path, "--own-only", "--run", "-o", snapshot],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert run.returncode == 0, run.stdout + run.stderr
-        assert snapshot.read_text() == own
-    print("  ok       repeated compilation and CLI snapshots preserve source scopes")
+    print("  ok       repeated Rust compilation preserve source scopes")
 
 
 if __name__ == "__main__":

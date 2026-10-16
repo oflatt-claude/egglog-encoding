@@ -4,7 +4,7 @@
 ;;; there, so the two can be diffed side by side, and standalone: the constructors
 ;;; below are all it needs, and the compiler generates their machinery.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/paper/figure-3.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/paper/figure-3.egg
 ;;;
 ;;;     mul($7, 0) = 0   =>   mul($9, 0) = 0
 ;;;

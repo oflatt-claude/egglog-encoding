@@ -8,7 +8,7 @@
 ;;; independent carriers gets one indexed table family per sort; see
 ;;; `multiple-sorts.egg` for that case.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/own-sort.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/own-sort.egg
 
 (sort S)
 

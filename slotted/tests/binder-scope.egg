@@ -24,7 +24,7 @@
 ;;; cannot emit an edge whose domain is not its child's slot set, so here that is
 ;;; not a thing to get right.
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/binder-scope.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/binder-scope.egg
 
 (sort U)
 

@@ -10,7 +10,7 @@ free variable builds a node that captures `v`; `let-lam-diff` reading
 paper's array study that collapsed every class into one. The rule owes
 `(not-free $b v)`, which both the encoding and the reference evaluate.
 
-`capture_guards` in `slotted-encoder.py` derives what a rule owes; this holds the two
+`capture_guards` in `reference.py` derives what a rule owes; this holds the two
 rule libraries to it. Under the reference's nested matcher the guards are vacuous, its
 bound slots staying injective, which is why the reference's own rule sets can lack them
 and `check-reference-rules.py` discounts exactly these when comparing.
@@ -23,8 +23,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "slotted"))
-sc = __import__("slotted-egglog")
-slotenc = __import__("slotted-encoder")
+import reference as syntax  # noqa: E402
 
 LIBRARIES = [
     ROOT / "slotted" / "languages" / "array-rules.egg",
@@ -37,17 +36,17 @@ def main():
     bad, rules = [], 0
     for path in LIBRARIES:
         # the source's own language: a library includes its declarations, a test makes them
-        src = sc.Source(path)
+        src = syntax.Source(path)
         lang = src.lang
-        for form in sc.parse(path.read_text()):
+        for form in syntax.parse(path.read_text()):
             if not (isinstance(form, list) and form and form[0] == "rewrite"):
                 continue
-            r = sc.rewrite_parts(src, form)
+            r = syntax.rewrite_parts(src, form)
             rules += 1
-            lhs = slotenc.rhs_of(lang, src.term(r["lhs"], ground=False))
+            lhs = syntax.rhs_of(lang, src.term(r["lhs"], ground=False))
             rhs_term = src.term(r["rhs"], ground=False)
-            rhs = slotenc.rhs_of(lang, rhs_term)
-            missing = slotenc.missing_capture_guards(lang, lhs, rhs, r["conds"])
+            rhs = syntax.rhs_of(lang, rhs_term)
+            missing = syntax.missing_capture_guards(lang, lhs, rhs, r["conds"])
             if missing:
                 owed = " ".join(f"(not-free {s} {v})" for s, v in sorted(missing))
                 print(f"  FAIL {path.name}: {r['name']} rebinds over an outside variable without {owed}")

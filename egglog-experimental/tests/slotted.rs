@@ -334,3 +334,27 @@ fn cli_explains_flags_and_rejects_incompatible_modes() {
         );
     }
 }
+
+#[test]
+fn side_patterns_can_bind_the_rewrite_root() {
+    let mut compiler = Compiler::default();
+    let mut graph = egglog_experimental::slotted::new_egraph();
+    evaluate(&mut compiler, &mut graph, LANGUAGE);
+    evaluate(
+        &mut compiler,
+        &mut graph,
+        r#"
+        (let start (F (G $a $b) (Null)))
+        (rewrite child (H $x $y) :when ((= parent (F child n)) (= child (G $x $y))))
+        (run 1)
+        (check (= (G $a $b) (H $a $b)))
+        (check (!= (G $a $b) (H $b $a)))
+    "#,
+    );
+    for source in [
+        "(rewrite missing (Null))",
+        "(rewrite missing (Null) :when ((= other (Null))))",
+    ] {
+        assert!(compiler.compile(None, source).is_err(), "{source}");
+    }
+}

@@ -6,7 +6,7 @@
 ;;; concatenated in front. Here each is the same program written as a slotted one,
 ;;; so the file runs as it stands:
 ;;;
-;;;     python3 slotted/slotted-egglog.py slotted/tests/rewrite-tests.egg
+;;;     target/debug/egglog-experimental --slotted slotted/tests/rewrite-tests.egg
 
 (sort U)
 

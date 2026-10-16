@@ -24,7 +24,7 @@ HEAD = """
 """
 
 
-enc = X.slotenc
+enc = X.syntax
 LANG = enc.read_language(X.LANG_DIR / "toy.egg")
 
 
@@ -44,7 +44,7 @@ def obs():
                 )
                 out.append(
                     f"(rule ((= v {pat})\n"
-                    f"       (!= {kids[i]} (Var 0)))\n"
+                    f"       (!= {kids[i]} ({X.SYM.var} 0)))\n"
                     f"      ((BadDomain {where} {edges[i]} (map-of 0 0))) :ruleset def4)"
                 )
                 continue
@@ -64,7 +64,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "fuzz":
 else:
     cases = X.curated()
 
-total, bad = 0, []
+total, seen, bad = 0, 0, []
 for c in cases:
     prog = X.egg_program(c).replace("(print-function SameClass 100000)", obs())
     p = X.ROOT / f"xdiff-tmp-def4-{os.getpid()}.egg"
@@ -79,8 +79,8 @@ for c in cases:
         p.unlink(missing_ok=True)
     nums = [int(x.strip()) for x in r.stdout.splitlines() if x.strip().isdigit()]
     if r.returncode != 0 or not nums:
-        print(f"  {c.name:12} could not be checked")
-        continue
+        raise RuntimeError(f"{c.name}: observer failed: {r.stderr}")
+    seen += 1
     n = nums[-1]
     total += n
     if n:
@@ -92,7 +92,7 @@ for c in cases:
             print(f"       {row[:110]}")
 
 print(
-    f"\n{total} edges over {len(cases)} cases whose domain is not exactly the child's "
+    f"\n{total} edges over {seen} cases whose domain is not exactly the child's "
     f"slot set, in {len(bad)}: {', '.join(bad[:8])}{' ...' if len(bad) > 8 else ''}"
 )
 sys.exit(1 if bad else 0)

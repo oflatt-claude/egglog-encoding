@@ -8,12 +8,12 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
-import xdiff as X  # noqa: E402
+sys.path.insert(0, str(ROOT / "slotted"))
+import test_program as driver  # noqa: E402
 
 
 def program(reverse, order):
-    maintenance = X.slotenc.machinery_schedule()
+    maintenance = driver.maintenance()
     children = [
         "(let $a (F (map-of 0 0) $v (map-of 0 1) $v))",
         "(let $b (G (map-of 0 0) $v (map-of 0 1) $v))",
@@ -29,7 +29,7 @@ def program(reverse, order):
     # The native union makes the old row-based cache keys collide. In the failing
     # order an obsolete shape overwrote a fresh one after its producer had run.
     lines = [
-        X.machinery("toy"),
+        driver.machinery("toy"),
         "(let $v (SlottedVar_0 0))",
         *children,
         maintenance,
@@ -44,7 +44,7 @@ def program(reverse, order):
         maintenance,
         "(print-size H)",
     ]
-    cached = X.slotenc.shapeof_call("H", ["m1", "m2"], ["g1", "g2"])
+    cached = "(_shapeof_H m1 g1 m2 g2)"
     lines.append(f"""
 (ruleset observe)
 (relation Fresh ())
@@ -76,7 +76,11 @@ def main():
         for reverse, order in itertools.product((False, True), itertools.permutations(range(3))):
             path.write_text(program(reverse, order))
             result = subprocess.run(
-                [str(X.EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=30, cwd=ROOT
+                [str(driver.EGGLOG), "--slotted-encoded", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=ROOT,
             )
             assert result.returncode == 0, (reverse, order, result.stderr)
             assert result.stdout.split() == ["1", "0"], (reverse, order, result.stdout)

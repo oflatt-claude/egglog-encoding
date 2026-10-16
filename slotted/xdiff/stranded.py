@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, "slotted/xdiff")
 import xdiff as X
 
-enc = X.slotenc
+enc = X.syntax
 LANG = enc.read_language(X.LANG_DIR / "toy.egg")
 
 #: The constructors this reads: exactly two slotted columns and no payload, which is the
@@ -130,10 +130,8 @@ def alpha_eq(x, y):
     return len(set(rho.values())) == len(rho)  # injective
 
 
-def run_case(case, machinery=None):
+def run_case(case):
     prog = X.egg_program(case).replace("(print-function SameClass 100000)", OBS)
-    if machinery:
-        prog = prog.replace(X.MACHINERY, machinery)
     p = X.ROOT / f"inv2-{abs(hash(case.name)) % 99999}.egg"
     p.write_text(prog)
     try:
@@ -156,7 +154,9 @@ def run_case(case, machinery=None):
     # when the two halves agree
     n = len(BINARY)
     sizes = [int(line.strip()) for line in r.stdout.splitlines() if line.strip().isdigit()]
-    fix = len(sizes) >= 2 * n and sizes[:n] == sizes[n : 2 * n]
+    if r.returncode or len(sizes) < 2 * n:
+        raise RuntimeError(f"{case.name}: observer failed: {r.stderr}")
+    fix = sizes[:n] == sizes[n : 2 * n]
     vis, allr = set(rows("WithSym")), rows("NoSym")
     return fix, [x for x in allr if x not in vis], vis
 
@@ -164,8 +164,8 @@ def run_case(case, machinery=None):
 TALLY = {"cases": 0, "stranded": 0, "unique": 0}
 
 
-def report(case, machinery=None):
-    got = run_case(case, machinery)
+def report(case):
+    got = run_case(case)
     if got is None:
         print(f"{case.name:34} timeout")
         return
