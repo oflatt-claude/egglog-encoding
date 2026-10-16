@@ -5,8 +5,9 @@ What `egglog-experimental --slotted` accepts, and how it differs from egglog.
 A file here is an egglog program with a few additions. Run one directly:
 
 ```
-cargo run -p egglog-experimental -- --slotted slotted/tests/paper/figure-3.egg
-cargo run -p egglog-experimental -- --slotted --proofs slotted/tests/paper/figure-3.egg
+cargo build -p egglog-experimental
+target/debug/egglog-experimental --slotted slotted/tests/paper/figure-3.egg
+target/debug/egglog-experimental --slotted --mode desugar slotted/tests/paper/figure-3.egg
 ```
 
 The flag installs the slotted runtime in experimental and transforms the source
@@ -29,8 +30,7 @@ runner. Includes resolve relative to the invocation directory. Successive files
 share compiler state, and `push`/`pop` restore declarations, globals and rewrites.
 In stdin/REPL mode, a failed complete input restores both compiler and e-graph
 state, including any commands executed earlier in that input.
-The slotted flag cannot be combined with term or proof encoding. Differential tests
-and paper evaluation both run this Rust implementation against the reference.
+Differential tests and paper evaluation both run this Rust implementation against the reference.
 
 The additions exist because a slotted term is not an egglog value. A term denotes a
 class **together with** a renaming — an *invocation* — and egglog has no notion of
@@ -533,6 +533,22 @@ so a test can ask about the encoding itself without leaving the language:
 relation is what `=` and `renaming-=` are defined in terms of: `=` asks
 for **one** renaming reaching both terms from the leader, `renaming-=` lets each have its
 own. Unlike `=`, it says plainly that it is dropping a level.
+
+## Getting proofs
+
+Add `--proofs` to print checked proofs of positive `=` and `renaming-=` claims:
+
+```sh
+target/debug/egglog-experimental --slotted --proofs slotted/tests/paper/figure-3.egg
+```
+
+Proofs use source terms and slot names. Fresh names use `$v0`, `$v1`, …, skipping
+source names and rule variables. Other claim forms remain ordinary checks.
+Sources using `subst` are not yet supported in proof mode.
+
+`--slotted-proof-checks` runs the proof-compatible encoding with ordinary checks.
+Other term/proof flags cannot be combined with `--slotted`.
+See [PROOFS.md](PROOFS.md) for example output, the proof format, and implementation details.
 
 ## Extraction and printing
 
