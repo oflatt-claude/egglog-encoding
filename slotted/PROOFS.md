@@ -133,11 +133,72 @@ proof must be about the claim's sort, or about no sort at all. `(check
 (renaming-= a b))` is proved by `a = m·b` for any `m`. Negative claims and the
 other claim forms are checked, not proved.
 
+# The proof profile
+
+`--slotted --proofs` compiles the same slotted graph operations into forms supported
+by egglog's term/proof encoding. Generated machinery rules have stable names under
+`slotted/`, so the translator can identify their derivations. User rules keep their
+source names, with `/apply` and `/drain` on their companion rules.
+
+`group-coset-reps` returns a vector sorted by content in both profiles, so the index
+a `Reading` row was read at means the same in every run, which a proof citing it needs.
+
+**What the proof profile avoids**, and how each table is respelled:
+
+- *No tuple outputs.* `_shape_F` becomes `_shape_class_F (key...) <sort> :merge old`
+  and `_shape_back_F (key...) Renaming :merge old`, both set by the index rule;
+  `_shapeof_F` becomes `_shapeof_edges_F (...) Renamings :no-merge`, holding
+  `[s1 .. sn, back]`, and `_shapeof_syms_F (...) Group :no-merge`.
+- *No `:merge` action blocks.* The collision a merge block stated is a rule,
+  `shape-collision`, in the shape phase: a row `c` whose memoized shape finds a
+  stored pair `(c0, back0)` under its key other than its own `(c, back)` states
+  `(ShapeEqual c (compose back (inverse back0)) c0)` -- a symmetry of `c` when only
+  the renaming differs -- one run after the index write it reads. Since the dedup
+  can fold a row in that run, before the collision rule sees it, the profile's dedup
+  also states the symmetry between the two rows it compares as it deletes one.
+  `Invocation` becomes `(relation Invocation_N (<sort> Renaming <sort>))`, written
+  `(Invocation c name a)`, and `invocation-merge` unions two members under one name.
+- *No eq-sort `:no-merge` functions.* None remain: the `:no-merge` tables are
+  `Unit`- or container-valued, and the extract helper `_leaderN` has its
+  `(ordering-min old new)` merge in both profiles.
+- *Claims.* A positive `=` or `renaming-=` claim compiles to `(prove-slotted <claim>
+  <facts>)` over exactly the facts its `check` would have, so proof mode extracts a
+  proof of them; the claim, `(= U ("a" _c0cls_c0) ("b" _c1cls_c1))`, is the carrier
+  sort and the two source terms as written, each with the fact variable that holds
+  the class it matched (a bare slot's side binds `(= _cNcls (SlottedVar_N 0))` for
+  the purpose), and is what
+  egglog translates the proof to and checks it against (see *Claims*). `fail`-wrapped,
+  `!=`, `slots` and `holds` claims stay as they are. Plain egglog refuses
+  `prove-slotted` outside proof mode, so `--slotted-proof-checks` keeps every claim a
+  `check`. Both modes use the same maintenance and query compiler.
+
+**Source metadata.** Four hidden `Unit` functions, declared beside the layout tables
+and filled by the compiler, carry the source a translator needs:
+
+| row | holds |
+| --- | --- |
+| `(SlottedCarrier "Sort" n)` | the equality sort with carrier index `n`, the suffix of its tables |
+| `(SlottedRuleSource "name" "(rewrite LHS RHS :when (...) :name \"name\")")` | a rewrite's canonical source under its rule name |
+| `(SlottedLetSource "x" "(Mul $7 (Null))")` | a global and the term text it was bound to |
+| `(SlottedUnionSource "a" "b" "U")` | the two terms of a top-level `union`, as written, and their carrier sort |
+
+The conventions: a term or pattern is the source form re-rendered with single
+spaces, comments dropped, and a pattern variable's `?` sigil removed, so a variable
+reads as the compiled rule's frame names it (the strings in `(ren m "x")`); slot
+literals stay `$x`, payload literals and globals stay as written, and a global inside a
+term or a union is its name, which `SlottedLetSource` resolves. A rewrite's conditions
+record the compiler's resolved pattern names, including the generated variables for
+bare constructor facts and nested condition terms. An unnamed rewrite uses its match
+relation's name, `_slotted_match_<ordinal>`. The source recorder is an experimental
+command macro backed by e-graph extension state, so recording follows execution order
+and `push`/`pop` restore the source together with the database. A claim's terms follow
+the same conventions inside its `prove-slotted` header.
+
 # What the checker reads
 
 The compiler publishes the source program in hidden rows next to the layout
 metadata: `SlottedCarrier`, `SlottedRuleSource`, `SlottedLetSource`,
-`SlottedUnionSource` (the exact conventions are in `slotted/ENCODING.md`). Binder
+`SlottedUnionSource` (see *The proof profile* above). Binder
 positions come from `SlottedBinderLayout`, and each constructor's column and output
 sorts from its declaration. The claim itself travels with its command:
 `(prove-slotted (= U ("a" _c0cls) ("b" _c1cls) "slot-name map") ...)` names the carrier sort, the
@@ -216,6 +277,8 @@ They run with `make check` or
 extracts an egglog proof for each positive equality claim, translates it, and prints
 its checked slotted proof. To replay lowered code, use
 `egglog-experimental --slotted-encoded --proofs encoded.egg`.
+From Rust, compile with `Options { proof_mode: ProofMode::Prove, ..Default::default() }`
+and evaluate the result with `new_egraph_with_proofs()`.
 `make slotted-proof-tests` builds the experimental binary and runs the supported
 source corpus. The runner skips sources using `subst`, which has no proof translation;
 the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
