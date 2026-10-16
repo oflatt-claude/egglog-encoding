@@ -107,6 +107,8 @@ fn rust_frontend_lifts_and_checks_surface_proofs() {
         include_str!("../../slotted/tests/bare-slot-union.egg"),
         include_str!("../../slotted/tests/symmetry-with-redundancy.egg"),
         include_str!("../../slotted/tests/named-slots.egg"),
+        include_str!("../../slotted/tests/rudi/first-order-logic.egg"),
+        include_str!("../../slotted/tests/rudi/first-order-logic2.egg"),
     ] {
         let proofs = prove(
             &mut compiler(ProofMode::Prove),
@@ -153,6 +155,45 @@ fn reconstruction_uses_the_compilers_fresh_names() {
             &source,
         );
         assert_eq!(proofs.len(), 1, "{rewrite}");
+    }
+}
+
+#[test]
+fn side_patterns_can_bind_the_proved_rewrite_root() {
+    for (input, rewrites, rounds, claim) in [
+        (
+            "(F (G $a $b) (Null))",
+            r#"(rewrite child (H $x $y)
+                :when ((= parent (F child n)) (= child (G $x $y))) :name "child")"#,
+            1,
+            "(= (G $a $b) (H $a $b))",
+        ),
+        (
+            "(F (G $a $b) (Null))",
+            r#"(rewrite child n :when ((= parent (F child n))) :name "child")"#,
+            1,
+            "(= (G $a $b) (Null))",
+        ),
+        (
+            "(F (Null) (Null))",
+            r#"(rewrite (Null) (G $x $y) :name "build")
+               (rewrite child (H $x $y)
+                :when ((= parent (F child n)) (= child (G $x $y))) :name "child")"#,
+            2,
+            "(= (Null) (H $a $b))",
+        ),
+    ] {
+        let source = format!(
+            "(datatype U (F U U) (G U U) (H U U) (Null))
+             (let input {input}) {rewrites} (run {rounds}) (check {claim})"
+        );
+        let proofs = prove(
+            &mut compiler(ProofMode::Prove),
+            &mut new_egraph_with_proofs(),
+            &source,
+        );
+        assert_eq!(proofs.len(), 1);
+        assert!(proofs[0].contains("by rule \"child\""));
     }
 }
 

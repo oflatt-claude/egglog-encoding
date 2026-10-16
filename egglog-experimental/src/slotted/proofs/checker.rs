@@ -432,6 +432,14 @@ fn check_rule(
     for (_, call) in &equalities {
         variable_sorts(program, &store.term_dag, *call, &mut expected_sorts).map_err(&fail)?;
     }
+    if let Term::Var(root) = store.term_dag.get(rule.lhs) {
+        sort = expected_sorts.get(root).cloned().or_else(|| {
+            equalities
+                .iter()
+                .find(|(var, _)| *var == root)
+                .and_then(|(_, call)| program.sort_of(&store.term_dag, *call))
+        });
+    }
     if let Rhs::Term(t) = &rule.rhs {
         variable_sorts(program, &store.term_dag, *t, &mut expected_sorts).map_err(&fail)?;
     }
@@ -849,6 +857,68 @@ mod tests {
         let crossed = store.congr(refl, 0, slots).unwrap();
         let err = check_proof(&mut store, &program, crossed).unwrap_err();
         assert!(err.to_string().contains("column 0 of WB is B"), "{err}");
+    }
+
+    #[test]
+    fn variable_root_rules_keep_the_sort_of_their_binding() {
+        for (rule, premise) in [
+            (
+                r#"(rewrite x y :when ((= p (PairA x y))) :name "r")"#,
+                ("pair", "pair"),
+            ),
+            (
+                r#"(rewrite x y :when ((= x (WA y))) :name "r")"#,
+                ("zero", "wa"),
+            ),
+        ] {
+            let mut dag = TermDag::default();
+            let mut program = SlottedProgram::default();
+            program.add_sorted_constructor("PairA", "A", vec![(ColumnKind::Child, "A".into()); 2]);
+            program.add_sorted_constructor("WA", "A", vec![(ColumnKind::Child, "A".into())]);
+            program.add_sorted_constructor("WB", "B", vec![(ColumnKind::Child, "B".into())]);
+            for (name, term) in [
+                ("zero", "$0"),
+                ("one", "$1"),
+                ("pair", "(PairA $0 $1)"),
+                ("wa", "(WA $1)"),
+                ("wb", "(WB $0)"),
+            ] {
+                program.add_let(&mut dag, name, term).unwrap();
+            }
+            program.add_union(&mut dag, "zero", "wa", "A").unwrap();
+            program.add_rewrite(&mut dag, rule).unwrap();
+            let (s0, s1, wb) = (
+                program.lets["zero"],
+                program.lets["one"],
+                program.lets["wb"],
+            );
+            let mut store = SlottedProofStore::new(dag);
+            let root = store.fiat(s0, s0);
+            let side = store.fiat(program.lets[premise.0], program.lets[premise.1]);
+            let proof = store.add(
+                SlottedProposition::equal(s0, s1),
+                SlottedJustification::Rule {
+                    name: "r".into(),
+                    substitution: vec![
+                        ("x".into(), s0),
+                        ("y".into(), s1),
+                        ("p".into(), program.lets["pair"]),
+                    ],
+                    premises: vec![root, side],
+                },
+            );
+            assert_eq!(
+                check_proof(&mut store, &program, proof)
+                    .unwrap()
+                    .sort
+                    .as_deref(),
+                Some("A")
+            );
+            let refl = store.fiat(wb, wb);
+            let crossed = store.congr(refl, 0, proof).unwrap();
+            let err = check_proof(&mut store, &program, crossed).unwrap_err();
+            assert!(err.to_string().contains("column 0 of WB is B"), "{err}");
+        }
     }
 
     #[test]

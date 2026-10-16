@@ -291,8 +291,10 @@ impl SlottedProgram {
             return Err(SourceError(format!("not a rewrite: {text}")));
         }
         let lhs = self.pattern_term(dag, lhs)?;
-        if !matches!(dag.get(lhs), Term::App(..)) {
-            return Err(SourceError("a rewrite's left side must be a call".into()));
+        if !matches!(dag.get(lhs), Term::App(..)) && !is_class_var(dag, lhs) {
+            return Err(SourceError(
+                "a rewrite's left side must be a call or a pattern variable".into(),
+            ));
         }
         let rhs = match rhs {
             Sexp::Atom(name) if !name.starts_with('$') && !is_number(name) => {
@@ -339,6 +341,16 @@ impl SlottedProgram {
                 }
                 None => return Err(SourceError("malformed rewrite options".into())),
             }
+        }
+        if let Term::Var(root) = dag.get(lhs)
+            && !conditions.iter().any(|condition| {
+                matches!(condition, Condition::Eq { var, call }
+                    if var == root || super::terms::pattern_vars(dag, *call).contains(root))
+            })
+        {
+            return Err(SourceError(format!(
+                "rewrite root {root:?} is not bound by a pattern"
+            )));
         }
         let name = name.ok_or_else(|| SourceError("a rewrite needs a :name".into()))?;
         self.rewrites.insert(
