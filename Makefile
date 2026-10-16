@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests slotted-check slotted-campaign slotted-eval slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-proof-tests slotted-check slotted-campaign slotted-eval slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -68,6 +68,14 @@ rust-doc-links:
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
 
+# Every slotted test with a positive claim, compiled in the proof profile and run
+# under `egglog-experimental --slotted --proofs`: each claim's egglog proof is translated to a
+# slotted proof and checked against the source program. Sources that use `subst`
+# are skipped (no proof translation yet).
+slotted-proof-tests:
+	cargo build -p egglog-experimental --bin egglog-experimental
+	python3 slotted/run-slotted-tests.py --slotted-proofs
+
 # Slotted fixtures, compiler snapshots, reference comparisons, and mutation tests.
 # The Python runner's --quick flag skips fuzzing; --no-oracle skips reference checks.
 slotted-check:
@@ -76,6 +84,7 @@ slotted-check:
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	cargo test --manifest-path slotted/xmulti/Cargo.toml
 	uv run --locked python slotted/checks/check-slotted.py
+	python3 slotted/run-slotted-tests.py --slotted-proofs
 
 # Larger randomized campaigns for graph equivalence, rule order, and checker mutations.
 slotted-campaign:
@@ -97,6 +106,7 @@ slotted-check-no-oracle:
 	cargo build
 	cargo test -p egglog-experimental --test slotted_snapshots
 	uv run --locked python slotted/checks/check-slotted.py --no-oracle
+	python3 slotted/run-slotted-tests.py --slotted-proofs
 
 # Smoke the runner on small files, not the full local benchmark suite.
 benchmark-smoke:
