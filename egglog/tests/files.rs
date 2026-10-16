@@ -243,11 +243,12 @@ impl Run {
             // nondeterministic).
             // TODO: when we move to per-EGraph local thread pools, replace this
             // with `egraph.with_num_threads()` and remove the explicit pool.
-            let pool = rayon::ThreadPoolBuilder::new()
+            // Join the workers before the trial returns. Ordinary pool drop
+            // only signals shutdown, so even serial trials can overlap pools.
+            rayon::ThreadPoolBuilder::new()
                 .num_threads(self.threads)
-                .build()
+                .build_scoped(|thread| thread.run(), |pool| pool.install(|| self.run()))
                 .expect("failed to build rayon thread pool");
-            pool.install(|| self.run());
             Ok(())
         })
     }

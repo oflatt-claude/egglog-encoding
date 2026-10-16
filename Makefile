@@ -9,6 +9,10 @@
 
 BENCHMARK_SMOKE_REPORT ?= /tmp/egglog-encoding-bench-smoke.jsonl
 
+# For constrained hosts: make check RUST_TEST_ARGS=--test-threads=1
+# This serializes trials while retaining each trial's internal thread count.
+RUST_TEST_ARGS ?=
+
 # No Ubuntu release packages uv, so `make nightly` installs a pinned copy into
 # the checkout when uv is missing from PATH. uv then downloads its own CPython,
 # so the runner needs neither uv nor Python 3.12.
@@ -61,8 +65,8 @@ rust-format-check:
 	cargo fmt --all -- --check
 
 rust-test:
-	cargo test --workspace
-	cargo test -p egglog-experimental --features dd-backend --test timing_summary_cli
+	cargo test --workspace -- $(RUST_TEST_ARGS)
+	cargo test -p egglog-experimental --features dd-backend --test timing_summary_cli -- $(RUST_TEST_ARGS)
 
 rust-clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
@@ -76,7 +80,7 @@ rust-doc-links:
 
 # This is a name-filtered subset of rust-test, useful for proof iteration.
 proof-tests:
-	cargo test --workspace --test files 'proofs/'
+	cargo test --workspace --test files 'proofs/' -- $(RUST_TEST_ARGS)
 
 # Use a disposable report path, keeping the default report cache untouched.
 benchmark-smoke:
@@ -156,7 +160,7 @@ lean-certificate-test:
 	cd semantics && .lake/build/bin/difftest export-fixtures "$(LEAN_CERTIFICATES)"
 	cmp "$(LEAN_CERTIFICATES)" egglog/tests/lean-certificates.json
 	cd semantics && .lake/build/bin/difftest export-certificates 64 "$(LEAN_CERTIFICATES)"
-	EGGLOG_LEAN_CERTIFICATES="$(LEAN_CERTIFICATES)" cargo test -p egglog --test lean_certificates
+	EGGLOG_LEAN_CERTIFICATES="$(LEAN_CERTIFICATES)" cargo test -p egglog --test lean_certificates -- $(RUST_TEST_ARGS)
 
 lean-update-fixtures:
 	cd semantics && PATH="$(LEAN_BIN_DIR):$$PATH" lake build difftest
