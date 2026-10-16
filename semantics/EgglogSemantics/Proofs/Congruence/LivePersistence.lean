@@ -13,6 +13,14 @@ inductive Joined (d : Database) : Term → Term → Prop where
   | symm {a b : Term} : Joined d a b → Joined d b a
   | trans {a b c : Term} : Joined d a b → Joined d b c → Joined d a c
 
+theorem Joined.mono {d e : Database} (h : d.entries ⊆ e.entries)
+    {a b : Term} (hj : Joined d a b) : Joined e a b := by
+  induction hj with
+  | refl a => exact .refl a
+  | edge hr => exact .edge (h hr)
+  | symm _ ih => exact ih.symm
+  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+
 /-- On a diagonal store, a genuine collision has different singleton outputs. -/
 theorem mergeStep_entries {d e : Database} (h : State d) (hd : d.Diag)
     (hs : MergeStep d e) :

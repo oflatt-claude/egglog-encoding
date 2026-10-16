@@ -23,19 +23,21 @@ theorem saturated_endpoint {d e : Database} (h : Runtime d) {R : RulesetName}
     (hr : SaturateReach R d e) : RunSaturated R e := by
   induction hr with
   | @done a b hs hm =>
-      have he := hm.eq_of_diag h.noUnions.diag (h.runStep hs).noUnions.diag
-      subst b
-      exact ⟨hs.2, a, hs, Database.SameMeaning.refl a⟩
+      exact ⟨hs.2, b, hs.self_of_sameMeaning h.noUnions h.storeOk h.mergesWidthOk hm,
+        Database.SameMeaning.refl b⟩
   | step hs _ _ ih => exact ih (h.runStep hs)
 
 theorem Covers.firing {d post : Database} (h : Runtime d) {R : RulesetName}
     (hs : RunSaturated R d) {r : Rule} (hr : r ∈ d.rules) (hR : r.ruleset = R)
-    (hf : post ∈ RuleResults d r) : Covers post d :=
-  (Covers.of_entries (e := RunRules R d)
+    (hf : post ∈ RuleResults d r) : Covers post d := by
+  obtain ⟨out, hstep, heq⟩ := hs.2
+  have hentries := h.storeOk.entries_eq_of_terms_eq (h.runStep hstep).storeOk heq.sig
+    (heq.terms_eq_of_diag h.noUnions.diag (h.runStep hstep).noUnions.diag)
+  exact (Covers.of_entries (e := RunRules R d)
     (show post.sig = (RunRules R d).sig from RuleResults.sig (db := d) hf)
     (fun _ he => ruleResult_row hr hR hf he)).trans
-    (Covers.mergeClosure (h.runRules R).state (h.runRules R).noUnions.diag
-      (runSaturated_runStep_self h.noUnions hs).1)
+    ((Covers.mergeClosure (h.runRules R).state (h.runRules R).noUnions.diag hstep.1).trans
+      (Covers.of_entries heq.sig.symm hentries.symm.subset))
 
 theorem Reads.round {d src : Database} {R : RulesetName} (h : Reads d src)
     (hf : ∀ r ∈ src.rules, r.ruleset = R →

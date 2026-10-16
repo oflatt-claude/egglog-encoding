@@ -66,17 +66,15 @@ theorem Term.finite_subterms (t : Term) : t.subterms.Finite := by
   intro s hs
   exact (Term.mem_subtermList t).mpr hs
 
-/-- Only asserted endpoints can be present, even after closing under congruence. -/
+/-- A finite assertion set has finitely many subterms. -/
 theorem Database.finite_terms {db : Database} (h : db.eqs.Finite) : db.terms.Finite := by
-  apply ((h.image Prod.fst).union (h.image Prod.snd)).subset
+  apply (h.biUnion (fun p _ => p.1.finite_subterms.union p.2.finite_subterms)).subset
   intro t ht
-  obtain ⟨u, htu | hut⟩ := Database.mem_terms_iff.mp ht
-  · exact Or.inl ⟨(t, u), htu, rfl⟩
-  · exact Or.inr ⟨(u, t), hut, rfl⟩
+  obtain ⟨p, hp, ht⟩ := Database.mem_terms_iff.mp ht
+  exact Set.mem_iUnion₂.mpr ⟨p, hp, ht⟩
 
 theorem Database.finite_addTerm {db : Database} (h : db.eqs.Finite) (t : Term) :
-    (db.addTerm t).eqs.Finite :=
-  h.union ((t.finite_subterms.image fun s => (s, s)))
+    (db.addTerm t).eqs.Finite := h.insert _
 
 theorem Database.finite_addTerms {db : Database} (h : db.eqs.Finite) (ts : List Term) :
     (db.addTerms ts).eqs.Finite := by
@@ -86,7 +84,13 @@ theorem Database.finite_addTerms {db : Database} (h : db.eqs.Finite) (ts : List 
 
 theorem Database.finite_addEq {db : Database} (h : db.eqs.Finite) (a b : Term) :
     (db.addEq a b).eqs.Finite :=
-  (Database.finite_addTerm (Database.finite_addTerm h a) b).insert _
+  h.insert _
+
+theorem Database.finite_eraseEntry {db : Database} (h : db.eqs.Finite) (row : Entry) :
+    (db.eraseEntry row).eqs.Finite := by
+  apply (h.subset Set.sdiff_subset).union
+  simpa only [Set.image, Set.mem_setOf_eq, eq_comm] using
+    (List.finite_toSet row.columns).image (fun t => (t, t))
 
 theorem evalAction_finite {db d : Database} {a : Action} (h : db.eqs.Finite)
     (he : evalAction db a = some d) : d.eqs.Finite := by
@@ -156,7 +160,7 @@ theorem MergeStep.finite_eqs {db d : Database} (h : MergeStep db d)
   cases h with
   | collide _ _ _ _ _ _ hv =>
       exact Database.finite_addTerm
-        (hv.finite_eqs ((he.subset Set.sdiff_subset).subset Set.sdiff_subset)) _
+        (hv.finite_eqs (Database.finite_eraseEntry (Database.finite_eraseEntry he _) _)) _
 
 theorem MergeStep.finite_rules {db d : Database} (h : MergeStep db d)
     (hr : db.rules.Finite) : d.rules.Finite := by
@@ -254,7 +258,7 @@ theorem putEntry {db : Database} (h : db.FiniteStore) (e : Entry) :
 
 theorem eraseEntry {db : Database} (h : db.FiniteStore) (e : Entry) :
     (db.eraseEntry e).FiniteStore :=
-  of_eqs_rules (h.eqs.subset Set.sdiff_subset) h.rules
+  of_eqs_rules (Database.finite_eraseEntry h.eqs e) (by simpa using h.rules)
 
 end Database.FiniteStore
 

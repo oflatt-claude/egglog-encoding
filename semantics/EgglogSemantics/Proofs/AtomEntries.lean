@@ -101,8 +101,8 @@ namespace Database
 
 theorem mem_addTerm_entries {d : Database} {t : Term} {row : Entry} :
     row ∈ (d.addTerm t).entries ↔
-      row ∈ d.entries ∨ (row.Valid d.sig ∧ row.atom ∈ t.subterms) := by
-  simp [entries, addTerm, and_or_left]
+      row ∈ d.entries ∨ (row.Valid d.sig ∧ row.atom = t) := by
+  simp [entries, addTerm, and_or_left, or_comm]
 
 theorem addTerm_entries {d : Database} {t : Term} (ht : t.IsValue d.sig) :
     (d.addTerm t).entries = d.entries := by
@@ -111,7 +111,7 @@ theorem addTerm_entries {d : Database} {t : Term} (ht : t.IsValue d.sig) :
   constructor
   · rintro (hr | ⟨hv, hs⟩)
     · exact hr
-    · exact (hv.atom_not_value (ht.subterm hs)).elim
+    · exact (hv.atom_not_value (hs.symm ▸ ht)).elim
   · exact Or.inl
 
 theorem addTerms_entries {d : Database} {ts : List Term}
@@ -124,11 +124,8 @@ theorem addTerms_entries {d : Database} {ts : List Term}
       addTerm_entries (ht t (by simp))]
 
 theorem addEq_entries {d : Database} {a b : Term}
-    (ha : a.IsValue d.sig) (hb : b.IsValue d.sig) :
+    (ha : a.IsValue d.sig) (_hb : b.IsValue d.sig) :
     (d.addEq a b).entries = d.entries := by
-  have hrows : ((d.addTerm a).addTerm b).entries = d.entries := by
-    rw [addTerm_entries (d := d.addTerm a) hb, addTerm_entries ha]
-  rw [← hrows]
   ext row
   change (row.Valid d.sig ∧
     ((row.atom, row.atom) = (a, b) ∨ (row.atom, row.atom) ∈ _)) ↔ _
@@ -148,26 +145,32 @@ theorem putEntry_entries {d : Database} {row : Entry} (hr : row.Valid d.sig) :
   constructor
   · rintro (he | ⟨hv, hs⟩)
     · exact Or.inr he
-    · exact Or.inl (hv.atom_subterm hr hs)
+    · exact Or.inl (hv.atom_injective hr hs)
   · rintro (rfl | he)
-    · exact Or.inr ⟨hr, .refl _⟩
+    · exact Or.inr ⟨hr, rfl⟩
     · exact Or.inl he
-
-theorem eraseEntry_entries_subset {d : Database} {row : Entry} :
-    (d.eraseEntry row).entries ⊆ d.entries := fun _ h => ⟨h.1, h.2.1⟩
 
 theorem eraseEntry_entries {d : Database} {row : Entry} (hr : row.Valid d.sig) :
     (d.eraseEntry row).entries = d.entries \ {row} := by
   ext other
   constructor
-  · rintro ⟨hv, he, hne⟩
-    refine ⟨⟨hv, he⟩, ?_⟩
-    intro heq
-    exact hne (congrArg (fun (e : Entry) => (e.atom, e.atom)) heq)
+  · rintro ⟨hv, ⟨he, hne⟩ | ⟨t, ht, heq⟩⟩
+    · refine ⟨⟨hv, he⟩, ?_⟩
+      intro heq
+      exact hne (congrArg (fun (e : Entry) => (e.atom, e.atom)) heq)
+    · apply (hv.atom_not_value ?_).elim
+      have hatom : other.atom = t := congrArg Prod.fst heq
+      rw [hatom]
+      exact hr.column_values t ht
   · rintro ⟨⟨hv, he⟩, hne⟩
-    refine ⟨hv, he, ?_⟩
+    refine ⟨hv, Or.inl ⟨he, ?_⟩⟩
     intro heq
     exact hne (hv.atom_injective hr (congrArg Prod.fst heq))
+
+theorem eraseEntry_entries_subset {d : Database} {row : Entry}
+    (hr : row.Valid d.sig) : (d.eraseEntry row).entries ⊆ d.entries := by
+  rw [eraseEntry_entries hr]
+  exact Set.sdiff_subset
 
 theorem finite_entries {d : Database} (he : d.eqs.Finite) : d.entries.Finite :=
   Set.Finite.of_injOn (f := fun row : Entry => (row.atom, row.atom))
@@ -205,21 +208,6 @@ theorem entries_eq_of_packed {d : Database} {E : Set (Term × Term)} {rows : Set
     refine ⟨hr row hrow, ?_⟩
     rw [he]
     exact Or.inr ⟨row, hrow, rfl⟩
-
-theorem putEntry_eqs_of_columns {d : Database} {row : Entry}
-    (hc : ∀ t ∈ row.columns, ∀ s ∈ t.subterms, (s, s) ∈ d.eqs) :
-    (d.putEntry row).eqs = insert (row.atom, row.atom) d.eqs := by
-  ext p
-  constructor
-  · rintro (hp | ⟨s, hs, rfl⟩)
-    · exact Or.inr hp
-    · rcases (Term.subterms_app (f := row.name) (args := row.columns)) ▸ hs with rfl | hs
-      · exact Or.inl rfl
-      · obtain ⟨t, ht, hs⟩ := Set.mem_iUnion₂.mp hs
-        exact Or.inr (hc t ht s hs)
-  · rintro (rfl | hp)
-    · exact Or.inr ⟨row.atom, .refl _, rfl⟩
-    · exact Or.inl hp
 
 end Database
 end Egglog

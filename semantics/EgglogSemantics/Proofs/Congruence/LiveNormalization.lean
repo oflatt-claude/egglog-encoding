@@ -270,9 +270,9 @@ def AllRows (P : Entry → Prop) (d : Database) : Prop :=
   ∀ e ∈ d.entries, P e
 
 theorem AllRows.eraseEntry {P : Entry → Prop} {d : Database} (h : AllRows P d)
-    (e : Entry) : AllRows P (d.eraseEntry e) := by
+    (e : Entry) (he : e.Valid d.sig) : AllRows P (d.eraseEntry e) := by
   intro row hr
-  exact h row (Database.eraseEntry_entries_subset hr)
+  exact h row (Database.eraseEntry_entries_subset he hr)
 
 theorem AllRows.putEntry {P : Entry → Prop} {d : Database} (h : AllRows P d)
     {e : Entry} (he : P e) (hv : e.Valid d.sig) : AllRows P (d.putEntry e) := by
@@ -350,7 +350,7 @@ theorem state_step {values : Set Term} {d e : Database} (h : State d)
       (least_eq_or a b).elim (fun h => h.symm ▸ hav) (fun h => h.symm ▸ hbv)
     rw [ha, hb] at hm
     have hmrows := mergeValues_allRows (d := (d.eraseEntry old).eraseEntry new)
-      h.uf hva hvb hm ((hd.eraseEntry old).eraseEntry new)
+      h.uf hva hvb hm ((hd.eraseEntry old ho.1).eraseEntry new hn.1)
       (good_uf h.uf a hlo) (good_uf h.uf b hlo)
     have hvs := (mergeValues_effects (d := (d.eraseEntry old).eraseEntry new)
       h.uf hva hvb hm).2

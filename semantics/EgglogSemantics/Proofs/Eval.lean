@@ -28,11 +28,7 @@ theorem Database.terms_setRules {db : Database} {R : Set Rule} :
 theorem Database.WF.congr {d₁ d₂ : Database} (hw : d₁.WF) (heqs : d₁.eqs = d₂.eqs)
     (henv : d₁.env = d₂.env) : d₂.WF := by
   have ht : d₁.terms = d₂.terms := Database.terms_eq_of_eqs_eq heqs
-  refine ⟨fun t htm => ?_, fun t htm => ?_, fun b hb => ?_, fun p hp => ?_⟩
-  · rw [← heqs, ← ht] at *
-    exact hw.eqsRefl t htm
-  · rw [← ht] at htm ⊢
-    exact hw.subtermClosed t htm
+  refine ⟨fun b hb => ?_, fun p hp => ?_⟩
   · rw [← ht]
     exact hw.envInTerms b (by rw [henv]; exact hb)
   · exact hw.litsIsolated p (by rw [heqs]; exact hp)
@@ -60,13 +56,28 @@ theorem Database.StoreOk.empty : Database.empty.StoreOk := by
 
 theorem Database.StoreOk.term {db : Database} (h : db.StoreOk) {t : Term}
     (ht : t ∈ db.terms) : t.Stored db.sig := by
-  obtain ⟨u, hp | hp⟩ := Database.mem_terms_iff.mp ht
-  · rcases h.typed (t, u) hp with hv | ⟨row, hr, he⟩
-    · exact Or.inl hv.1
-    · exact Or.inr ⟨row, hr, congrArg Prod.fst he⟩
-  · rcases h.typed (u, t) hp with hv | ⟨row, hr, he⟩
-    · exact Or.inl hv.2
-    · exact Or.inr ⟨row, hr, congrArg Prod.snd he⟩
+  obtain ⟨p, hp, ht | ht⟩ := Database.mem_terms_iff.mp ht
+  · rcases h.typed p hp with hv | ⟨row, hr, rfl⟩
+    · exact Or.inl (hv.1.subterm ht)
+    · exact Term.Stored.subterm (Or.inr ⟨row, hr, rfl⟩) ht
+  · rcases h.typed p hp with hv | ⟨row, hr, rfl⟩
+    · exact Or.inl (hv.2.subterm ht)
+    · exact Term.Stored.subterm (Or.inr ⟨row, hr, rfl⟩) ht
+
+/-- A typed table atom cannot occur properly inside another stored fact. -/
+theorem Database.StoreOk.entry_of_held_atom {db : Database} (h : db.StoreOk)
+    {row : Entry} (hr : row.Valid db.sig) (ht : row.atom ∈ db.terms) :
+    row ∈ db.entries := by
+  refine ⟨hr, ?_⟩
+  obtain ⟨p, hp, ht | ht⟩ := Database.mem_terms_iff.mp ht
+  · rcases h.typed p hp with hv | ⟨other, ho, rfl⟩
+    · exact (hr.atom_not_value (hv.1.subterm ht)).elim
+    · obtain rfl := hr.atom_subterm ho ht
+      exact hp
+  · rcases h.typed p hp with hv | ⟨other, ho, rfl⟩
+    · exact (hr.atom_not_value (hv.2.subterm ht)).elim
+    · obtain rfl := hr.atom_subterm ho ht
+      exact hp
 
 theorem Database.StoreOk.congr {d₁ d₂ : Database} (h : d₁.StoreOk)
     (hs : d₂.sig = d₁.sig) (he : d₂.eqs = d₁.eqs)
@@ -88,63 +99,81 @@ theorem Database.StoreOk.addTerm {db : Database} (h : db.StoreOk) (t : Term)
     obtain ⟨d, hd, hm, _⟩ := hr.1
     exact ⟨d, hd, hm⟩
   · intro row hr s hs
-    rcases hr.2 with hp | ⟨u, hu, he⟩
-    · exact (Database.Contained.addTerm t db).terms (h.columns row ⟨hr.1, hp⟩ s hs)
-    · have he' : row.atom = u := (congrArg Prod.fst he).symm
-      apply Cong.assert
-      exact Or.inr ⟨s, Term.subterms_subset_of_mem (he'.symm ▸ hu)
-        (Term.arg_subterms hs (Term.self_mem_subterms s)), rfl⟩
+    exact Cong.subterm (.assert hr.2) (Term.arg_subterms hs (.refl _))
   · intro p hp
-    rcases hp with hp | ⟨s, hs, rfl⟩
-    · exact h.typed p hp
-    · rcases ht.subterm hs with hv | ⟨row, hr, rfl⟩
+    rcases hp with rfl | hp
+    · rcases ht with hv | ⟨row, hr, rfl⟩
       · exact Or.inl ⟨hv, hv⟩
       · exact Or.inr ⟨row, hr, rfl⟩
+    · exact h.typed p hp
 
 theorem Database.StoreOk.addEq {db : Database} (h : db.StoreOk) (a b : Term)
     (ha : a.IsValue db.sig) (hb : b.IsValue db.sig) : (db.addEq a b).StoreOk := by
-  have hbase := (h.addTerm a (Or.inl ha)).addTerm b (Or.inl hb)
   refine ⟨?_, ?_, ?_, h.envValues⟩
   · intro row hr
     obtain ⟨d, hd, hm, _⟩ := hr.1
     exact ⟨d, hd, hm⟩
   · intro row hr t ht
-    have hp : (row.atom, row.atom) ∈ ((db.addTerm a).addTerm b).eqs := by
-      rcases hr.2 with he | he
-      · apply (hr.1.atom_not_value ?_).elim
-        rw [show row.atom = a from congrArg Prod.fst he]
-        exact ha
-      · exact he
-    exact (show Database.Contained ((db.addTerm a).addTerm b) (db.addEq a b) from
-      ⟨Set.subset_insert _ _⟩).terms (hbase.columns row ⟨hr.1, hp⟩ t ht)
+    exact Cong.subterm (.assert hr.2) (Term.arg_subterms ht (.refl _))
   · intro p hp
     rcases hp with rfl | hp
     · exact Or.inl ⟨ha, hb⟩
-    · exact hbase.typed p hp
+    · exact h.typed p hp
 
 theorem Database.StoreOk.putEntry {db : Database} (h : db.StoreOk) (row : Entry)
     (hr : row.Valid db.sig) : (db.putEntry row).StoreOk :=
   h.addTerm row.atom (Or.inr ⟨row, hr, rfl⟩)
 
-/-- Deleting a row atom cannot remove a held value. -/
+/-- Erasure retains every proper subterm of the removed atom through its columns. -/
+theorem Database.mem_terms_eraseEntry_of_ne {db : Database} {row : Entry} {t : Term}
+    (hne : t ≠ row.atom) (ht : t ∈ db.terms) :
+    t ∈ (db.eraseEntry row).terms := by
+  obtain ⟨p, hp, hs⟩ := Database.mem_terms_iff.mp ht
+  by_cases he : p = (row.atom, row.atom)
+  · subst p
+    have hs : t ∈ row.atom.subterms := hs.elim id id
+    rw [Entry.atom, Term.subterms_app, Set.mem_insert_iff] at hs
+    rcases hs with hs | hs
+    · exact (hne hs).elim
+    · obtain ⟨v, hv, hs⟩ := Set.mem_iUnion₂.mp hs
+      apply Cong.subterm (s := t) (t := v) _ hs
+      apply Cong.assert
+      rw [Database.eraseEntry_eqs]
+      exact Or.inr ⟨v, hv, rfl⟩
+  · apply Database.mem_terms_iff.mpr
+    refine ⟨p, ?_, hs⟩
+    rw [Database.eraseEntry_eqs]
+    exact Or.inl ⟨hp, he⟩
+
+/-- Deleting a valid row atom cannot remove a held value. -/
 theorem Database.mem_terms_eraseEntry_of_value {db : Database} {row : Entry} {t : Term}
     (hr : row.Valid db.sig) (hv : t.IsValue db.sig) (ht : t ∈ db.terms) :
-    t ∈ (db.eraseEntry row).terms := by
-  have hn : t ≠ row.atom := fun he => hr.atom_not_value (he ▸ hv)
-  obtain ⟨u, hp | hp⟩ := Database.mem_terms_iff.mp ht
-  · exact Database.mem_terms_iff.mpr ⟨u, Or.inl ⟨hp, by
-      intro he; exact hn (congrArg Prod.fst (Set.mem_singleton_iff.mp he))⟩⟩
-  · exact Database.mem_terms_iff.mpr ⟨u, Or.inr ⟨hp, by
-      intro he; exact hn (congrArg Prod.snd (Set.mem_singleton_iff.mp he))⟩⟩
+    t ∈ (db.eraseEntry row).terms :=
+  Database.mem_terms_eraseEntry_of_ne (fun he => hr.atom_not_value (he ▸ hv)) ht
+
+/-- Erasing a row with existing columns introduces no new terms. -/
+theorem Database.terms_eraseEntry_subset {db : Database} {row : Entry}
+    (hc : ∀ t ∈ row.columns, t ∈ db.terms) : (db.eraseEntry row).terms ⊆ db.terms := by
+  intro t ht
+  obtain ⟨p, hp, hs⟩ := Database.mem_terms_iff.mp ht
+  rw [Database.eraseEntry_eqs] at hp
+  rcases hp with hp | ⟨v, hv, rfl⟩
+  · exact Database.mem_terms_iff.mpr ⟨p, hp.1, hs⟩
+  · exact Cong.subterm (hc v hv) (hs.elim id id)
 
 theorem Database.StoreOk.eraseEntry {db : Database} (h : db.StoreOk) (row : Entry)
     (hr : row.Valid db.sig) : (db.eraseEntry row).StoreOk := by
-  refine ⟨?_, ?_, fun p hp => h.typed p hp.1, h.envValues⟩
+  refine ⟨?_, ?_, ?_, by simpa using h.envValues⟩
   · intro r hm
-    exact h.declared r ⟨hm.1, hm.2.1⟩
+    obtain ⟨dc, hd, hm, _⟩ := hm.1
+    exact ⟨dc, hd, hm⟩
   · intro r hm t ht
-    exact Database.mem_terms_eraseEntry_of_value hr (hm.1.column_values t ht)
-      (h.columns r ⟨hm.1, hm.2.1⟩ t ht)
+    exact Cong.subterm (.assert hm.2) (Term.arg_subterms ht (.refl _))
+  · intro p hp
+    rw [Database.eraseEntry_eqs] at hp
+    rcases hp with hp | ⟨v, hv, rfl⟩
+    · simpa only [Database.eraseEntry_sig] using h.typed p hp.1
+    · exact Or.inl ⟨hr.column_values v hv, hr.column_values v hv⟩
 
 theorem Database.StoreOk.addTerms {db : Database} (h : db.StoreOk) (ts : List Term)
     (ht : ∀ t ∈ ts, t.Stored db.sig) : (db.addTerms ts).StoreOk := by
@@ -159,61 +188,58 @@ theorem Database.StoreOk.setEnv {db : Database} (h : db.StoreOk) {σ : Env}
 
 theorem Database.StoreOk.terms_eraseEntry {db : Database} (h : db.StoreOk)
     {row : Entry} (hr : row.Valid db.sig) :
-    (db.eraseEntry row).terms = db.terms \ {row.atom} := by
-  have heq : ∀ p ∈ db.eqs, p.1 = row.atom ∨ p.2 = row.atom →
-      p = (row.atom, row.atom) := by
-    intro p hp he
-    rcases h.typed p hp with hv | ⟨r, _, rfl⟩
-    · rcases he with he | he
-      · exact (hr.atom_not_value (he ▸ hv.1)).elim
-      · exact (hr.atom_not_value (he ▸ hv.2)).elim
-    · rcases he with he | he
-      · change r.atom = row.atom at he
-        rw [he]
-      · change r.atom = row.atom at he
-        rw [he]
+    (db.eraseEntry row).terms = (db.terms \ {row.atom}) ∪
+      {s | ∃ t ∈ row.columns, s ∈ t.subterms} := by
+  have hgone : row.atom ∉ (db.eraseEntry row).terms := by
+    intro ht
+    have he := (h.eraseEntry row hr).entry_of_held_atom
+      (by simpa only [Database.eraseEntry_sig] using hr) ht
+    rw [Database.eraseEntry_entries hr] at he
+    exact he.2 rfl
   ext t
   constructor
   · intro ht
-    refine ⟨(Database.Contained.eraseEntry row db).terms ht, ?_⟩
-    intro hn
-    have hn : t = row.atom := hn
-    obtain ⟨u, hp | hp⟩ := Database.mem_terms_iff.mp ht
-    · exact hp.2 (heq _ hp.1 (Or.inl hn))
-    · exact hp.2 (heq _ hp.1 (Or.inr hn))
-  · rintro ⟨ht, hn⟩
-    obtain ⟨u, hp | hp⟩ := Database.mem_terms_iff.mp ht
-    · exact Database.mem_terms_iff.mpr ⟨u, Or.inl ⟨hp, fun he =>
-        hn (congrArg Prod.fst he)⟩⟩
-    · exact Database.mem_terms_iff.mpr ⟨u, Or.inr ⟨hp, fun he =>
-        hn (congrArg Prod.snd he)⟩⟩
+    obtain ⟨p, hp, hs⟩ := Database.mem_terms_iff.mp ht
+    rw [Database.eraseEntry_eqs] at hp
+    rcases hp with hp | ⟨v, hv, rfl⟩
+    · refine Or.inl ⟨Database.mem_terms_iff.mpr ⟨p, hp.1, hs⟩, ?_⟩
+      intro he
+      apply hgone
+      exact he ▸ Database.mem_terms_iff.mpr ⟨p,
+        Database.eraseEntry_eqs ▸ Or.inl hp, hs⟩
+    · exact Or.inr ⟨v, hv, hs.elim id id⟩
+  · rintro (⟨ht, hn⟩ | ⟨v, hv, hs⟩)
+    · exact Database.mem_terms_eraseEntry_of_ne hn ht
+    · apply Cong.subterm (t := v) _ hs
+      exact .assert (Database.eraseEntry_eqs ▸ Or.inr ⟨v, hv, rfl⟩)
+
+/-- Actual row deletion removes just that atom; its value columns remain held. -/
+theorem Database.StoreOk.terms_eraseEntry_of_mem {db : Database} (h : db.StoreOk)
+    {row : Entry} (hr : row ∈ db.entries) :
+    (db.eraseEntry row).terms = db.terms \ {row.atom} := by
+  rw [h.terms_eraseEntry hr.1]
+  apply Set.union_eq_left.mpr
+  rintro t ⟨v, hv, ht⟩
+  refine ⟨Cong.subterm (h.columns row hr v hv) ht, ?_⟩
+  intro he
+  exact hr.1.atom_not_value (he ▸ (hr.1.column_values v hv).subterm ht)
 
 theorem Database.WF.eraseEntry {db : Database} (hw : db.WF)
     (hs : db.StoreOk) (row : Entry) (hr : row.Valid db.sig) :
     (db.eraseEntry row).WF := by
-  have ht := hs.terms_eraseEntry hr
-  refine ⟨?_, ?_, ?_, fun p hp => hw.litsIsolated p hp.1⟩
-  · intro t hm
-    obtain ⟨hm, hn⟩ := ht ▸ hm
-    exact ⟨hw.eqsRefl t hm, fun he => hn (congrArg Prod.fst he)⟩
-  · intro t hm u hu
-    obtain ⟨hm, hn⟩ := ht ▸ hm
-    rw [ht]
-    refine ⟨hw.subtermClosed t hm hu, ?_⟩
-    intro he
-    have he : u = row.atom := he
-    rcases hs.term hm with hv | ⟨r, hv, rfl⟩
-    · exact hr.atom_not_value (he ▸ hv.subterm hu)
-    · have hrow : row = r := hr.atom_subterm hv (he ▸ hu)
-      exact hn (congrArg Entry.atom hrow.symm)
+  refine ⟨?_, ?_⟩
   · intro b hb
+    rw [Database.eraseEntry_env] at hb
     exact Database.mem_terms_eraseEntry_of_value hr (hs.envValues b hb) (hw.envInTerms b hb)
+  · intro p hp
+    rw [Database.eraseEntry_eqs] at hp
+    rcases hp with hp | ⟨v, _, rfl⟩
+    · exact hw.litsIsolated p hp.1
+    · exact fun _ => rfl
 
 /-- Replacing the environment by one whose values the database holds keeps `WF`. -/
 theorem Database.WF.setEnv {db : Database} (hw : db.WF) {σ : Env}
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) : Database.WF { db with env := σ } where
-  eqsRefl := by simpa using hw.eqsRefl
-  subtermClosed := by simpa using hw.subtermClosed
   envInTerms b hb := by simpa using hσ b hb
   litsIsolated := hw.litsIsolated
 
@@ -1093,7 +1119,7 @@ theorem evalAction_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (a :
         · simp only [if_pos hlit]; exact .none
         · simp only [if_neg hlit]
           exact .some ⟨h.sig,
-            by simp only [Database.addEq_eqs, ((h.addTerm t₁).addTerm t₂).eqs],
+            by simp only [Database.addEq_eqs, h.eqs],
             h.rules, h.env⟩
 
 theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as : List Action) :
@@ -1179,8 +1205,7 @@ theorem evalLocalActions_wf {db db' : Database} (hw : db.WF) {as : List Action} 
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (h : evalLocalActions db as σ = some db') : db'.WF := by
   obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
   have hd := evalActions_wf (hw.appendEnv hσ) hv
-  exact ⟨by simpa using hd.eqsRefl, by simpa using hd.subtermClosed,
-    fun b hb => Database.terms_setEnvRules ▸ (evalActions_contained hv).terms
+  exact ⟨fun b hb => Database.terms_setEnvRules ▸ (evalActions_contained hv).terms
       (Database.terms_setEnv ▸ hw.envInTerms b hb),
     hd.litsIsolated⟩
 

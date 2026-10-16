@@ -81,7 +81,7 @@ theorem atom_rule_bound {d : Database} {R : RulesetName} (h : Live.State d)
   have hf := atom_rule_result hval hnames hq hv hhead he
   have hrow : Entry.mk f cs [a] ∈ (d.putEntry ⟨f, cs, [a]⟩).entries := by
     rw [Database.putEntry_entries hv]; exact Set.mem_insert _ _
-  obtain ⟨b, hb, hj, hle⟩ := Live.firing_row_bound h hg hn hsat hr hR hf hrow
+  obtain ⟨b, hb, hj, hle⟩ := Live.firing_row_bound h hg hn hs hsat hr hR hf hrow
   exact ⟨b, out_of_current hs hb, hj, hle⟩
 
 theorem compress_closed {d : Database} {R : RulesetName} (h : Live.State d)

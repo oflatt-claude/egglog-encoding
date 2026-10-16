@@ -223,7 +223,7 @@ def ViewTables (d : Database) : Prop :=
   ∀ f decl, d.sig (viewName f) = some decl → ∃ k, decl = tableDecl k
 
 theorem out_of_matches_entry {d : Database} (hd : d.Diag)
-    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) (hdecl : ViewTables d)
+    (hstore : d.StoreOk) (hdecl : ViewTables d)
     {as : List Expr} {f : FnName} {v : Var} {σ : Env}
     (h : Matches d (.expr (.app (viewName f) (as ++ [.var v]))) σ) :
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
@@ -248,8 +248,10 @@ theorem out_of_matches_entry {d : Database} (hd : d.Diag)
         simp only [tableDecl]
         omega
       · simpa [tableDecl] using Expr.evalList_length hus
-    refine ⟨ts, us, hts, hus, hw, ts, CongList.refl fun a ha => ?_, hvalid, hd.eqsRefl hw⟩
-    exact hsc _ hw (Term.arg_subterms (List.mem_append_left _ ha) (Term.self_mem_subterms a))
+    refine ⟨ts, us, hts, hus, hw, ts, CongList.refl fun a ha => ?_,
+      hstore.entry_of_held_atom hvalid hw⟩
+    exact d.subtermClosed _ hw
+      (Term.arg_subterms (List.mem_append_left _ ha) (Term.self_mem_subterms a))
 
 theorem encodeQueryExpr_var {v : Var} {n : Nat} :
     encodeQueryExpr (.var v) n = (.var v, [], n) := rfl
@@ -391,7 +393,7 @@ private theorem evalList_one_var {sig : Signature} {x : Var} {ρ : Env} {us : Li
 mutual
 
 theorem queryRead_of_matches {d : Database} (hd : d.Diag)
-    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) (hdecl : ViewTables d) {σ : Env} :
+    (hstore : d.StoreOk) (hdecl : ViewTables d) {σ : Env} :
     ∀ (e : Expr) (n : Nat) {i : Term}, e.OrderingFree →
       (∀ a ∈ (encodeQueryExpr e n).2.1, Matches d a σ) →
       Expr.eval d.sig (encodeQueryExpr e n).1 (σ) = some i →
@@ -405,17 +407,17 @@ theorem queryRead_of_matches {d : Database} (hd : d.Diag)
     rw [encodeQueryExpr_app_atoms] at hm
     rw [encodeQueryExpr_app_expr, Expr.eval_var] at hi
     obtain ⟨ts, us, hts, hus, -, ho⟩ :=
-      out_of_matches_entry hd hsc hdecl
+      out_of_matches_entry hd hstore hdecl
         (as := (encodeQueryArgs args n).1)
         (hm (.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++
           [.var (freshVar (encodeQueryArgs args n).2.2)]))) (by simp))
     obtain ⟨a, ha, rfl⟩ := evalList_one_var hus
     obtain rfl : a = i := Option.some.inj (ha.symm.trans (Option.filter_eq_some_iff.mp hi).1)
-    exact .app (queryReadList_of_matches hd hsc hdecl args n (Expr.orderingFree_app hof)
+    exact .app (queryReadList_of_matches hd hstore hdecl args n (Expr.orderingFree_app hof)
       (fun x hx => hm x (List.mem_append.mpr (Or.inl hx))) hts) ho
 
 theorem queryReadList_of_matches {d : Database} (hd : d.Diag)
-    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) (hdecl : ViewTables d) {σ : Env} :
+    (hstore : d.StoreOk) (hdecl : ViewTables d) {σ : Env} :
     ∀ (es : List Expr) (n : Nat) {ts : List Term}, Expr.OrderingFreeList es →
       (∀ a ∈ (encodeQueryArgs es n).2.1, Matches d a σ) →
       Expr.evalList d.sig (encodeQueryArgs es n).1 (σ) = some ts →
@@ -428,23 +430,23 @@ theorem queryReadList_of_matches {d : Database} (hd : d.Diag)
     rw [encodeQueryArgs_cons_exprs, Expr.evalList_cons, Option.bind_eq_some_iff] at h
     obtain ⟨t, ht, h'⟩ := h
     obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h'
-    exact .cons (queryRead_of_matches hd hsc hdecl e n (Expr.orderingFreeList_cons hof).1
+    exact .cons (queryRead_of_matches hd hstore hdecl e n (Expr.orderingFreeList_cons hof).1
         (fun x hx => hm x (List.mem_append.mpr (Or.inl hx))) ht)
-      (queryReadList_of_matches hd hsc hdecl es (encodeQueryExpr e n).2.2
+      (queryReadList_of_matches hd hstore hdecl es (encodeQueryExpr e n).2.2
         (Expr.orderingFreeList_cons hof).2
         (fun x hx => hm x (List.mem_append.mpr (Or.inr hx))) hus)
 
 end
 
 theorem patternRead_of_matches {d : Database} (hd : d.Diag)
-    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) (hdecl : ViewTables d) {σ : Env} :
+    (hstore : d.StoreOk) (hdecl : ViewTables d) {σ : Env} :
     ∀ (p : Pattern) (n : Nat), p.OrderingFree →
       (∀ v ∈ p.vars, ∃ t, Env.lookup v σ = some t ∧ t.IsValue d.sig) →
       (∀ a ∈ (encodePattern p n).1, Matches d a σ) → PatternRead d (σ) p
   | .expr e, n, hof, hb, hm => by
     rw [encodePattern_expr_atoms] at hm
     obtain ⟨i, hi⟩ := exists_eval_encodeQueryExpr e n hof hm hb
-    exact .expr (queryRead_of_matches hd hsc hdecl e n hof hm hi)
+    exact .expr (queryRead_of_matches hd hstore hdecl e n hof hm hi)
   | .eq e₁ e₂, n, hof, _, hm => by
     rw [encodePattern_eq_atoms] at hm
     cases hm (.eq (encodeQueryExpr e₁ n).1 (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1)
@@ -452,15 +454,15 @@ theorem patternRead_of_matches {d : Database} (hd : d.Diag)
     | @eq _ _ _ w t₁ t₂ hw he₁ he₂ hc₁ hc₂ =>
       obtain rfl : t₁ = t₂ := congOn_eq_of_diag hd hc₂
       exact .eq
-        (queryRead_of_matches hd hsc hdecl e₁ n hof.1
+        (queryRead_of_matches hd hstore hdecl e₁ n hof.1
           (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inl ha)))))
           he₁)
-        (queryRead_of_matches hd hsc hdecl e₂ (encodeQueryExpr e₁ n).2.2 hof.2
+        (queryRead_of_matches hd hstore hdecl e₂ (encodeQueryExpr e₁ n).2.2 hof.2
           (fun a ha => hm a (List.mem_append.mpr (Or.inl (List.mem_append.mpr (Or.inr ha)))))
           he₂)
 
 theorem patternReads_of_encodeQuery_matches {tgt : Database} (hd : tgt.Diag)
-    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) (hdecl : ViewTables tgt) {q : Query} {n : Nat} {σ : Env}
+    (hstore : tgt.StoreOk) (hdecl : ViewTables tgt) {q : Query} {n : Nat} {σ : Env}
     (hof : ∀ p ∈ q, p.OrderingFree) (hk : Query.VarsKeyed q)
     (hval : ∀ b ∈ σ, b.2 ∈ tgt.values)
     (h : ∀ p ∈ (encodeQuery q n).1, Matches tgt p σ) :
@@ -476,19 +478,19 @@ theorem patternReads_of_encodeQuery_matches {tgt : Database} (hd : tgt.Diag)
     exact lookup_isSome_of_patternArgVar p m (hof p hp) hm ha
   intro p hp
   obtain ⟨m, hm⟩ := hblock p hp
-  exact patternRead_of_matches hd hsc hdecl p m (hof p hp)
+  exact patternRead_of_matches hd hstore hdecl p m (hof p hp)
     (fun v hv => by
       obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp (hbound v (Query.mem_vars.mpr ⟨p, hp, hv⟩))
       exact ⟨t, ht, (hval (v, t) (Env.mem_of_lookup ht)).2⟩) hm
 
 
 theorem patternReads_of_encodeQuery {tgt : Database} (hd : tgt.Diag)
-    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) (hdecl : ViewTables tgt)
+    (hstore : tgt.StoreOk) (hdecl : ViewTables tgt)
     {q : Query} {n : Nat} {σ : Env}
     (hof : ∀ p ∈ q, p.OrderingFree) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∀ p ∈ q, PatternRead tgt σ p :=
-  patternReads_of_encodeQuery_matches hd hsc hdecl hof hk h.mem_values
+  patternReads_of_encodeQuery_matches hd hstore hdecl hof hk h.mem_values
     (fun _ hp => h.matches_of_mem hp)
 
 theorem mem_terms_of_patternArgVar {src d : Database} (hs : ViewsSound d src) {ρt : Env}
@@ -535,13 +537,13 @@ theorem exists_validQuerySubst_at_ids {src d : Database} (hb : src.TermsBuild) (
 This is the query obligation used when transporting a compiled rule head to the source. -/
 theorem sourceMatch_of_encodedQuery {src tgt : Database} (hb : src.TermsBuild) (hw : src.WF)
     (hs : ViewsSound tgt src) (hd : tgt.Diag)
-    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) (hdecl : ViewTables tgt) {q : Query} {n : Nat} {σ : Env}
+    (hstore : tgt.StoreOk) (hdecl : ViewTables tgt) {q : Query} {n : Nat} {σ : Env}
     (hof : ∀ p ∈ q, p.OrderingFree) (hg : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
       ∀ v ∈ Query.vars q, ∀ i, Env.lookup v σ = some i →
         Env.lookup v (τ ++ src.env) = some i :=
   exists_validQuerySubst_at_ids hb hw hs (fun p hp => (hg p hp).groundedAt) hk
-    (patternReads_of_encodeQuery hd hsc hdecl hof hk h)
+    (patternReads_of_encodeQuery hd hstore hdecl hof hk h)
 
 end Egglog.Congruence

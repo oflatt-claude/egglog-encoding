@@ -50,7 +50,7 @@ theorem queryHolds_iff {src d : Database} (h : Abstract.Rebuilt d)
   · rintro ⟨ρ, hρ⟩
     obtain ⟨σ, hσ, _, _⟩ := sourceMatch_of_encodedQuery
       (completion_termsBuild hw hs hc) hw.completion (hsound.viewsSound hd)
-      hd h.wf.subtermClosed htables hof hg hk hρ
+      hd hstore htables hof hg hk hρ
     exact (SourceMeaning.queryHolds_completion_iff hw hs hc hof).mp ⟨σ, hσ⟩
 
 end Egglog.Congruence.Live

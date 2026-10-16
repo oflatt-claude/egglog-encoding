@@ -79,7 +79,8 @@ theorem canonicalEq_of_congOn {querySrc : Database} (hun : UnionsRead d querySrc
     {ts : List Term} {a b : Term} (hab : CongOn querySrc ts a b) : CanonicalEq h a b := by
   refine Cong.le (R := CanonicalEq h) ?_ (fun _ _ => CanonicalEq.symm)
     (fun _ _ _ => CanonicalEq.trans)
-    (fun _ _ _ _ _ hl => canonicalEq_congr h hs hw hl) hab
+    (fun _ _ _ _ _ hl => canonicalEq_congr h hs hw hl)
+    (fun _ s _ _ => CanonicalEq.refl h s) hab
   intro x y hxy
   rcases Conservativity.mem_addTerms_eqs ts querySrc (x, y) hxy with hxy | hxy
   · by_cases heq : x = y

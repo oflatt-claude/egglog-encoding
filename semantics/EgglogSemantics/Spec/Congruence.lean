@@ -15,6 +15,7 @@ mutual
 relation**: symmetric and transitive, but reflexive only where an equation makes it so. -/
 inductive Cong (db : Database) : Term → Term → Prop where
   | assert {a b : Term} : (a, b) ∈ db.eqs → Cong db a b
+  | subterm {t s : Term} : Cong db t t → s ∈ t.subterms → Cong db s s
   | symm {a b : Term} : Cong db a b → Cong db b a
   | trans {a b c : Term} : Cong db a b → Cong db b c → Cong db a c
   | congr {f : FnName} {as bs : List Term} :
@@ -62,17 +63,18 @@ back as "a literal's class is a singleton", which is what makes `min` on literal
 def Database.LitsIsolated (db : Database) : Prop :=
   ∀ p ∈ db.eqs, p.1.isLit ∨ p.2.isLit → p.1 = p.2
 
-/-- The database invariants: it records the diagonal of what it holds, holds the children
-of every term it holds, binds its variables to terms it holds, and isolates literals.
-
-`eqsRefl` makes "the term is present" and "the equation `t = t` is asserted"
-interchangeable. Together with subterm closure, it makes recording an already held
-term the identity. `StoreOk` separately records the invariants of function entries. -/
+/-- Environment bindings exist, and literals have singleton equivalence classes. -/
 structure Database.WF (db : Database) : Prop where
-  eqsRefl : ∀ t ∈ db.terms, (t, t) ∈ db.eqs
-  subtermClosed : ∀ t ∈ db.terms, t.subterms ⊆ db.terms
   envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
   litsIsolated : db.LitsIsolated
+
+/-- Subterm existence follows from congruence, independently of well-formedness. -/
+theorem Database.subtermClosed (db : Database) :
+    ∀ t ∈ db.terms, t.subterms ⊆ db.terms :=
+  fun _ ht _ hs => Cong.subterm ht hs
+
+theorem Database.WF.subtermClosed {db : Database} (_h : db.WF) :
+    ∀ t ∈ db.terms, t.subterms ⊆ db.terms := db.subtermClosed
 
 /-- `db` plus the terms `ts`, used to relate a term the database may not hold — a pattern
 instance, say — to one it does. It records that each of `ts` exists and **adds no equation

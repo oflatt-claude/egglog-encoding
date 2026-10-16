@@ -20,14 +20,6 @@ inductive ReprList (d : Database) : List Term → List Term → Prop where
 
 end
 
-theorem Joined.mono {d e : Database} (h : d.entries ⊆ e.entries)
-    {a b : Term} (hj : Joined d a b) : Joined e a b := by
-  induction hj with
-  | refl a => exact .refl a
-  | edge hr => exact .edge (h hr)
-  | symm _ ih => exact ih.symm
-  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
-
 theorem Repr.transport {d e : Database}
     (hrow : ∀ f cs a, Entry.mk f cs [a] ∈ d.entries →
       ∃ b, Entry.mk f cs [b] ∈ e.entries ∧ Joined e a b)
@@ -139,10 +131,10 @@ theorem Reads.addTerm {d src : Database} (h : Reads d src) {t i : Term}
     rcases Database.addTerm_terms ▸ hs with hs | hs
     · exact h.terms s hs
     · exact ht.subterms s hs
-  · rcases Database.addTerm_eqs ▸ hab with hab | ⟨s, _, heq⟩
-    · exact h.unions a b hab hn
+  · rcases Database.addTerm_eqs ▸ hab with heq | hab
     · obtain ⟨rfl, rfl⟩ := Prod.mk.inj heq
       exact (hn rfl).elim
+    · exact h.unions a b hab hn
 
 theorem Reads.addEq {d src : Database} (h : Reads d src) {a b i j : Term}
     (ha : Repr d a i) (hb : Repr d b j) (hu : Joined d i j) : Reads d (src.addEq a b) := by
@@ -154,7 +146,7 @@ theorem Reads.addEq {d src : Database} (h : Reads d src) {a b i j : Term}
   · rcases Database.addEq_eqs ▸ hxy with heq | hxy
     · obtain ⟨rfl, rfl⟩ := Prod.mk.inj heq
       exact ⟨j, .joined ha hu, hb⟩
-    · exact ht.unions x y hxy hn
+    · exact h.unions x y hxy hn
 
 theorem Reads.sUnion {d src : Database} {S : Set Database} (h : Reads d src)
     (hs : ∀ s ∈ S, Reads d s) : Reads d (src.sUnion S) := by

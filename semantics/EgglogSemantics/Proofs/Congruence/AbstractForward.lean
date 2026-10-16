@@ -268,7 +268,7 @@ theorem Rebuilt.queryHolds_iff {d src : Database} (h : Rebuilt d) (hd : d.Diag)
     obtain ⟨τ, _, ht, _, _⟩ := matchQuery_of_query hd hstore hdecl hv hnames hr hg n
     exact ⟨τ, ht⟩
   · rintro ⟨σ, hσ⟩
-    obtain ⟨τ, ht, _, _⟩ := sourceMatch_of_encodedQuery hb hw hs hd h.wf.subtermClosed htables hof hg hk hσ
+    obtain ⟨τ, ht, _, _⟩ := sourceMatch_of_encodedQuery hb hw hs hd hstore htables hof hg hk hσ
     exact ⟨τ, ht⟩
 
 end Egglog.Congruence.Abstract

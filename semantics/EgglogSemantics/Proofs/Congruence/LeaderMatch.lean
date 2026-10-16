@@ -24,14 +24,14 @@ theorem leaderQuery_reads {d : Database} (hd : d.Diag) (hs : d.StoreOk)
 
 theorem sourceMatch_of_leaderQuery {src d : Database} (hb : src.TermsBuild) (hw : src.WF)
     (hs : ViewsSound d src) (he : EdgesSound d src) (hd : d.Diag) (hst : d.StoreOk)
-    (hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) (hdecl : ViewTables d)
+    (_hsc : ∀ t ∈ d.terms, t.subterms ⊆ d.terms) (hdecl : ViewTables d)
     (huf : d.sig ufName = some (tableDecl 1)) {q : Query} {n : Nat} {σ : Env}
     (hof : ∀ p ∈ q, p.OrderingFree) (hg : ∀ p ∈ q, p.Grounded)
     (hk : Query.VarsKeyed q)
     (hm : ValidQuerySubst d ((encodeQuery q n).1 ++ leaderQuery q.vars) σ) :
     ∃ τ, ValidQuerySubst src q τ ∧ ∀ v ∈ q.vars, ∀ i,
       Env.lookup (leaderVar v) σ = some i → Env.lookup v (τ ++ src.env) = some i := by
-  have hread := patternReads_of_encodeQuery_matches hd hsc hdecl hof hk hm.mem_values
+  have hread := patternReads_of_encodeQuery_matches hd hst hdecl hof hk hm.mem_values
     (fun _ hp => hm.matches_of_mem (List.mem_append_left _ hp))
   have hleaders := fun v (hv : v ∈ q.vars) => leaderQuery_reads hd hst huf
     (fun _ hp => hm.matches_of_mem (List.mem_append_right _ hp)) hv

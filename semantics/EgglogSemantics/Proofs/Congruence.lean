@@ -67,6 +67,7 @@ theorem Cong.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) {a b : Term}
     (hc : Cong d₁ a b) : Cong d₂ a b := by
   match hc with
   | .assert hm => exact .assert (h.eqs hm)
+  | .subterm hc hs => exact .subterm (Cong.mono h hc) hs
   | .symm hc => exact .symm (Cong.mono h hc)
   | .trans h₁ h₂ => exact .trans (Cong.mono h h₁) (Cong.mono h h₂)
   | .congr hm₁ hm₂ hl =>
@@ -77,6 +78,30 @@ theorem CongList.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) {as bs : 
   match hc with
   | .nil => exact .nil
   | .cons hc hl => exact .cons (Cong.mono h hc) (CongList.mono h hl)
+
+end
+
+mutual
+
+/-- Derivable assertions suffice to transport a congruence derivation. -/
+theorem Cong.of_assertions {d e : Database}
+    (h : ∀ p ∈ d.eqs, Cong e p.1 p.2) {a b : Term}
+    (hc : Cong d a b) : Cong e a b := by
+  match hc with
+  | .assert hp => exact h _ hp
+  | .subterm ht hs => exact .subterm (Cong.of_assertions h ht) hs
+  | .symm hc => exact .symm (Cong.of_assertions h hc)
+  | .trans hl hr => exact .trans (Cong.of_assertions h hl) (Cong.of_assertions h hr)
+  | .congr hl hr hs =>
+    exact .congr (Cong.of_assertions h hl)
+      (Cong.of_assertions h hr) (CongList.of_assertions h hs)
+
+theorem CongList.of_assertions {d e : Database}
+    (h : ∀ p ∈ d.eqs, Cong e p.1 p.2) {as bs : List Term}
+    (hc : CongList d as bs) : CongList e as bs := by
+  match hc with
+  | .nil => exact .nil
+  | .cons ht hs => exact .cons (Cong.of_assertions h ht) (CongList.of_assertions h hs)
 
 end
 
@@ -106,47 +131,42 @@ theorem CongList.mem_of {db : Database} {as bs : List Term} (hc : CongList db as
 
 mutual
 
-/-- `Cong db` is the *least* relation containing `db`'s asserted equalities and closed
-under symmetry, transitivity and congruence: any such relation contains it.
-
-This is `Cong.rec` packaged usefully. It is how negative facts about the closure get
-proved — exhibit such a relation that the pair is not in — and it is the shape the
-proof-checker soundness argument will take, since a proof term denotes exactly one
-of these derivations. -/
+/-- The least relation closed under assertions, subterm existence, and congruence. -/
 theorem Cong.le {db : Database} {R : Term → Term → Prop}
     (hassert : ∀ a b, (a, b) ∈ db.eqs → R a b)
     (hsymm : ∀ a b, R a b → R b a) (htrans : ∀ a b c, R a b → R b c → R a c)
     (hcongr : ∀ f as bs, Term.app f as ∈ db.terms → Term.app f bs ∈ db.terms →
       List.Forall₂ R as bs → R (.app f as) (.app f bs))
+    (hsubterm : ∀ t s, R t t → s ∈ t.subterms → R s s)
     {a b : Term} (h : Cong db a b) : R a b := by
   match h with
   | .assert hm => exact hassert _ _ hm
-  | .symm h => exact hsymm _ _ (Cong.le hassert hsymm htrans hcongr h)
+  | .subterm ht hs =>
+    exact hsubterm _ _
+      (Cong.le hassert hsymm htrans hcongr hsubterm ht) hs
+  | .symm h => exact hsymm _ _ (Cong.le hassert hsymm htrans hcongr hsubterm h)
   | .trans h₁ h₂ =>
-    exact htrans _ _ _ (Cong.le hassert hsymm htrans hcongr h₁)
-      (Cong.le hassert hsymm htrans hcongr h₂)
+    exact htrans _ _ _ (Cong.le hassert hsymm htrans hcongr hsubterm h₁)
+      (Cong.le hassert hsymm htrans hcongr hsubterm h₂)
   | .congr hm₁ hm₂ hl =>
-    exact hcongr _ _ _ hm₁ hm₂ (CongList.le hassert hsymm htrans hcongr hl)
+    exact hcongr _ _ _ hm₁ hm₂ (CongList.le hassert hsymm htrans hcongr hsubterm hl)
 
 theorem CongList.le {db : Database} {R : Term → Term → Prop}
     (hassert : ∀ a b, (a, b) ∈ db.eqs → R a b)
     (hsymm : ∀ a b, R a b → R b a) (htrans : ∀ a b c, R a b → R b c → R a c)
     (hcongr : ∀ f as bs, Term.app f as ∈ db.terms → Term.app f bs ∈ db.terms →
       List.Forall₂ R as bs → R (.app f as) (.app f bs))
+    (hsubterm : ∀ t s, R t t → s ∈ t.subterms → R s s)
     {as bs : List Term} (h : CongList db as bs) : List.Forall₂ R as bs := by
   match h with
   | .nil => exact .nil
   | .cons hab hl =>
-    exact .cons (Cong.le hassert hsymm htrans hcongr hab)
-      (CongList.le hassert hsymm htrans hcongr hl)
+    exact .cons (Cong.le hassert hsymm htrans hcongr hsubterm hab)
+      (CongList.le hassert hsymm htrans hcongr hsubterm hl)
 
 end
 
-/-- **Re-adding a term the database already holds derives nothing new.** `addTerm` no
-longer leaves the state untouched — it asserts a reflexive equation per subterm, which
-`eqs` need not have carried — so "the step changed nothing" is now a statement about the
-relation, not about the database. Under `WF` every equation it adds was derivable already.
-The `terms` half is `addTerm_terms` and `WF.subtermClosed`. -/
+/-- Reasserting a held term derives nothing new. -/
 theorem Cong.of_addTerm {db : Database} (hw : db.WF) {t : Term} (ht : t ∈ db.terms)
     {a b : Term} (hc : Cong (db.addTerm t) a b) : Cong db a b := by
   have hmem : ∀ {s : Term}, s ∈ (db.addTerm t).terms → s ∈ db.terms := by
@@ -155,12 +175,12 @@ theorem Cong.of_addTerm {db : Database} (hw : db.WF) {t : Term} (ht : t ∈ db.t
     · exact hs
     · exact hw.subtermClosed t ht hs
   refine Cong.le (R := Cong db) (fun a b hm => ?_) (fun _ _ => Cong.symm)
-    (fun _ _ _ => Cong.trans) (fun _ _ _ ha hb hl => Cong.congr' (hmem ha) (hmem hb) hl) hc
-  rcases hm with hm | ⟨s, hs, hseq⟩
+    (fun _ _ _ => Cong.trans) (fun _ _ _ ha hb hl => Cong.congr' (hmem ha) (hmem hb) hl)
+    (fun t s ht hs => hw.subtermClosed t ht hs) hc
+  rcases Set.mem_insert_iff.mp hm with heq | hm
+  · obtain ⟨rfl, rfl⟩ := Prod.mk.inj heq
+    exact ht
   · exact .assert hm
-  · simp only [Prod.mk.injEq] at hseq
-    obtain ⟨rfl, rfl⟩ := hseq
-    exact hw.subtermClosed t ht hs
 
 /-! ### A literal's class is a singleton
 
@@ -174,6 +194,7 @@ theorem Cong.eq_of_isLit {db : Database} (hl : db.LitsIsolated) {a b : Term}
     (hc : Cong db a b) : a.isLit ∨ b.isLit → a = b := by
   induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
   | assert hab => exact hl _ hab
+  | subterm => exact fun _ => rfl
   | symm _ ih => exact fun h => (ih h.symm).symm
   | trans _ _ ih₁ ih₂ =>
     rintro (h | h)
@@ -226,6 +247,7 @@ theorem Cong.isValue_iff {db : Database} (hs : db.StoreOk) {a b : Term}
       have hbb := congrArg Prod.snd heq
       dsimp only at hab hbb
       rw [hab, hbb]
+  | subterm => exact Iff.rfl
   | symm _ ih => exact ih.symm
   | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
   | congr _ _ _ _ _ ih => simp only [Term.isValue_app_iff, ih]

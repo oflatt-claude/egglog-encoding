@@ -56,8 +56,8 @@ theorem uf_match_out {d : Database} (hd : d.Diag) (hs : d.StoreOk)
         Expr.eval, Option.filter_some, ha, hr, hva, hvr, Entry.atom, Entry.columns]
     obtain rfl := Option.some.inj (hev.symm.trans he)
     have hm : Entry.mk ufName [a] [r] ∈ d.entries := by
-      refine ⟨⟨tableDecl 1, huf, by simp [tableDecl], rfl, rfl, ?_⟩,
-        hd.eqsRefl ((congOn_eq_of_diag hd hc) ▸ hx)⟩
+      apply hs.entry_of_held_atom (hr := ⟨tableDecl 1, huf,
+        by simp [tableDecl], rfl, rfl, ?_⟩) ((congOn_eq_of_diag hd hc) ▸ hx)
       simpa [Entry.columns] using And.intro hva hvr
     exact ⟨[a], .cons (hs.columns _ hm a (by simp [Entry.columns])) .nil, hm⟩
 

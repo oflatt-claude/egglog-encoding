@@ -8,7 +8,8 @@ key/output split and merge policy. Expression matching has one rule. A merge con
 two colliding atom assertions and installs the result, preserving column values and
 merge-body effects. `MergeNormal` means one entry per congruent key;
 `MergeNormalize` reaches such a state by merge steps. Saturation compares inferred
-facts, including atoms; on diagonal target states this implies exact state equality.
+facts, including atoms. Subterm existence is implicit, so redundant root assertions
+need not make the raw stores equal.
 The definitions have brief comments in `Spec/Database.lean`, `Spec/Match.lean`, and
 `Spec/Step.lean`.
 

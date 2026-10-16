@@ -23,9 +23,6 @@ theorem Database.mem_completion_iff {d : Database} (hw : d.WF) {t : Term} :
     t ∈ d.completion.terms ↔ d.Infers t t := cong_completion_iff hw
 
 theorem Database.WF.completion {d : Database} (hw : d.WF) : d.completion.WF where
-  eqsRefl := fun _ ht => (Database.mem_completion_iff hw).mp ht
-  subtermClosed := fun _ ht _ hs => (Database.mem_completion_iff hw).mpr
-    (infers_subterm hw ((Database.mem_completion_iff hw).mp ht) hs)
   envInTerms := fun b hb => (d.contained_completion).terms (hw.envInTerms b hb)
   litsIsolated := fun _ hp hl => infers_eq_of_isLit hw hp hl
 
@@ -84,12 +81,11 @@ theorem InferredFacts.supported_isValue {d : Database} (hw : d.WF)
 theorem Database.StoreOk.values_of_allConstructors {d : Database} (hs : d.StoreOk)
     (hc : d.sig.AllConstructors) : ∀ t ∈ d.terms, t.IsValue d.sig := by
   intro t ht
-  obtain ⟨u, hu | hu⟩ := Database.mem_terms_iff.mp ht
-  all_goals
-    rcases hs.typed _ hu with hv | ⟨row, hr, _⟩
-    · first | exact hv.1 | exact hv.2
-    · obtain ⟨decl, hd, hn, _⟩ := hr
-      exact (hn (by simpa [Signature.mergeOf, hd] using hc row.name)).elim
+  obtain ⟨p, hp, ht⟩ := Database.mem_terms_iff.mp ht
+  rcases hs.typed p hp with hv | ⟨row, hr, _⟩
+  · exact ht.elim hv.1.subterm hv.2.subterm
+  · obtain ⟨decl, hd, hn, _⟩ := hr
+    exact (hn (by simpa [Signature.mergeOf, hd] using hc row.name)).elim
 
 theorem Database.StoreOk.completion {d : Database} (hw : d.WF) (hs : d.StoreOk)
     (hc : d.sig.AllConstructors) : d.completion.StoreOk := by

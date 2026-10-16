@@ -129,6 +129,7 @@ theorem interpret_congr {d e : Database}
   induction hc using Cong.rec
       (motive_2 := fun as bs _ => interpretList d as = interpretList d bs) with
   | assert hp => exact he _ hp
+  | subterm => rfl
   | symm _ ih => exact ih.symm
   | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
   | congr _ _ _ _ _ ih => exact congrArg (interpretApp d _) ih
@@ -150,39 +151,38 @@ theorem interpret_congOn {d : Database} (hw : d.WF) {ts : List Term} {a b : Term
   · exact congrArg (interpret d) hp
 
 private theorem mem_addTerms_eqs : ∀ (ts : List Term) (d : Database) (p : Term × Term),
-    p ∈ (d.addTerms ts).eqs → p ∈ d.eqs ∨ ∃ t ∈ ts, ∃ s ∈ t.subterms, p = (s, s)
+    p ∈ (d.addTerms ts).eqs → p ∈ d.eqs ∨ ∃ t ∈ ts, p = (t, t)
   | [], _, _, h => Or.inl h
   | t :: ts, d, p, h => by
-      rcases mem_addTerms_eqs ts (d.addTerm t) p h with h' | ⟨u, hu, s, hs, rfl⟩
-      · rcases h' with h' | ⟨s, hs, hp⟩
+      rcases mem_addTerms_eqs ts (d.addTerm t) p h with h' | ⟨u, hu, rfl⟩
+      · rcases h' with rfl | h'
+        · exact Or.inr ⟨t, List.mem_cons_self .., rfl⟩
         · exact Or.inl h'
-        · exact Or.inr ⟨t, List.mem_cons_self .., s, hs, hp.symm⟩
-      · exact Or.inr ⟨u, List.mem_cons_of_mem t hu, s, hs, rfl⟩
+      · exact Or.inr ⟨u, List.mem_cons_of_mem t hu, rfl⟩
 
-private theorem refl_mem_addTerms {s t : Term} (hs : s ∈ t.subterms) :
-    ∀ (ts : List Term) (d : Database), t ∈ ts → (s, s) ∈ (d.addTerms ts).eqs
+private theorem refl_mem_addTerms {t : Term} :
+    ∀ (ts : List Term) (d : Database), t ∈ ts → (t, t) ∈ (d.addTerms ts).eqs
   | [], _, h => by simp at h
   | u :: ts, d, h => by
       rcases List.mem_cons.mp h with rfl | ht
-      · exact (Database.Contained.addTerms ts (d.addTerm t)).eqs (Or.inr ⟨s, hs, rfl⟩)
-      · exact refl_mem_addTerms hs ts (d.addTerm u) ht
+      · exact (Database.Contained.addTerms ts (d.addTerm t)).eqs (Or.inl rfl)
+      · exact refl_mem_addTerms ts (d.addTerm u) ht
 
 private theorem operands_mono_list {d : Database} {ts us : List Term}
     (h : ∀ t ∈ ts, t ∈ us) : (d.withOperands ts).Contained (d.withOperands us) := by
   constructor
   intro p hp
-  rcases mem_addTerms_eqs ts d p hp with hp | ⟨t, ht, s, hs, rfl⟩
+  rcases mem_addTerms_eqs ts d p hp with hp | ⟨t, ht, rfl⟩
   · exact (Database.Contained.addTerms us d).eqs hp
-  · exact refl_mem_addTerms hs us d (h t ht)
+  · exact refl_mem_addTerms us d (h t ht)
 
 private theorem operand_subterm {d : Database} {t parent : Term}
-    (ht : t ∈ parent.subterms) :
-    (d.withOperands [t]).Contained (d.withOperands [parent]) := by
-  constructor
-  change (d.addTerm t).eqs ⊆ (d.addTerm parent).eqs
-  rintro p (hp | ⟨s, hs, rfl⟩)
-  · exact Or.inl hp
-  · exact Or.inr ⟨s, Term.subterms_subset_of_mem ht hs, rfl⟩
+    (ht : t ∈ parent.subterms) {a b : Term} (hc : CongOn d [t] a b) :
+    CongOn d [parent] a b := by
+  apply Cong.of_assertions (d := d.withOperands [t]) ?_ hc
+  rintro p (rfl | hp)
+  · exact .subterm (Database.mem_addTerm parent d) ht
+  · exact .assert (Or.inr hp)
 
 mutual
 
@@ -226,8 +226,8 @@ theorem congListOn_of_interpret {d : Database} (hw : d.WF) :
   | t :: ts, b :: bs, _, hb, hi, hs => by
       simp only [interpretList, List.map_cons, List.cons.injEq] at hi
       exact .cons
-        ((congOn_of_interpret hw t (hb b (by simp)) hi.1).mono
-          (operand_subterm (hs t (by simp))))
+        (operand_subterm (hs t (by simp))
+          (congOn_of_interpret hw t (hb b (by simp)) hi.1))
         (congListOn_of_interpret hw ts
           (fun x hx => hb x (List.mem_cons_of_mem b hx)) hi.2
           (fun x hx => hs x (List.mem_cons_of_mem t hx)))
@@ -377,9 +377,9 @@ theorem sameMeaning_addTerm {d : Database} (hw : d.WF) {t : Term}
   refine ⟨rfl, rfl, rfl, fun a b => ⟨infers_mono
     (Database.Contained.addTerm t d), ?_⟩⟩
   apply infers_of_interpreted_extension hw
-  · rintro p (hp | ⟨s, _, rfl⟩)
-    · exact interpret_assert hw hp
+  · rintro p (rfl | hp)
     · rfl
+    · exact interpret_assert hw hp
   · intro s hs
     rw [Database.addTerm_terms] at hs
     rcases hs with hs | hs
@@ -400,11 +400,9 @@ theorem sameMeaning_addEq {d : Database} (hw : d.WF) {a b : Term}
   refine ⟨rfl, rfl, rfl, fun x y => ⟨infers_mono
     (Database.Contained.addEq a b d), ?_⟩⟩
   apply infers_of_interpreted_extension hw
-  · rintro p (rfl | (hp | ⟨s, _, rfl⟩) | ⟨s, _, rfl⟩)
+  · rintro p (rfl | hp)
     · exact ha.trans hb.symm
     · exact interpret_assert hw hp
-    · rfl
-    · rfl
   · intro s hs
     rw [Database.addEq_terms] at hs
     rcases hs with (hs | hs) | hs
@@ -428,7 +426,7 @@ theorem sameMeaning_addTerm_congr {d : Database} (hw : d.WF) {a b : Term}
         (infers_of_held (Database.mem_addTerm b d)) hc')
   have hcomm : (d.addTerm a).addTerm b = (d.addTerm b).addTerm a := by
     apply Database.ext <;> try rfl
-    exact Set.union_right_comm _ _ _
+    exact Set.insert_comm _ _ _
   have hr := (sameMeaning_addTerm (hw.addTerm b) hb).symm
   rw [← hcomm] at hr
   exact (sameMeaning_addTerm (hw.addTerm a) ha).trans hr
@@ -446,16 +444,15 @@ theorem infers_of_assertions {d e : Database} (hw : d.WF)
   · intro t ht'
     exact (infers_self_iff_supported hw).mp (ht t ht')
 
-/-- The witness premise follows from assertions: every recorded term is an
-endpoint of an asserted equation. -/
+/-- Every held term is a subterm of an asserted endpoint. -/
 theorem infers_of_assertions_only {d e : Database} (hw : d.WF)
     (he : ∀ p ∈ e.eqs, d.Infers p.1 p.2) {a b : Term}
     (hi : e.Infers a b) : d.Infers a b := by
   apply infers_of_assertions hw he ?_ hi
   intro t ht
-  obtain ⟨u, hu | hu⟩ := Database.mem_terms_iff.mp ht
-  · exact infers_left hw (he (t, u) hu)
-  · exact infers_right hw (he (u, t) hu)
+  obtain ⟨p, hp, ht | ht⟩ := Database.mem_terms_iff.mp ht
+  · exact infers_subterm hw (infers_left hw (he p hp)) ht
+  · exact infers_subterm hw (infers_right hw (he p hp)) ht
 
 /-- Replacing both operands by hypothetically congruent terms preserves a union's
 meaning. Literal legality is stated separately for the two concrete writes. -/
@@ -479,11 +476,9 @@ theorem sameMeaning_addEq_congr {d : Database} (hw : d.WF)
       (hb.symm.mono (hg.addTerms_mono bs))
     have hab := infers_trans hD (infers_symm hD haa) (infers_trans hD hu hbb)
     apply infers_of_assertions_only hD ?_ hi
-    rintro p (rfl | (hp | ⟨s, hs, rfl⟩) | ⟨s, hs, rfl⟩)
+    rintro p (rfl | hp)
     · exact hab
     · exact infers_mono hg (infers_of_cong (.assert hp))
-    · exact infers_subterm hD (infers_left hD hab) hs
-    · exact infers_subterm hD (infers_right hD hab) hs
   exact ⟨rfl, rfl, rfl, fun x y =>
     ⟨forward ha hb hlit', forward ha.symm hb.symm hlit⟩⟩
 
@@ -500,10 +495,10 @@ theorem addTerm {d e : Database} (h : d.SameMeaning e) (hd : d.WF) (he : e.WF)
       ∀ {a b}, (d.addTerm t).Infers a b → (e.addTerm t).Infers a b := by
     intro d e h he a b hi
     apply InferredFacts.infers_of_assertions_only (he.addTerm t) ?_ hi
-    rintro p (hp | ⟨s, hs, rfl⟩)
+    rintro p (rfl | hp)
+    · exact InferredFacts.infers_of_held (Database.mem_addTerm t e)
     · exact InferredFacts.infers_mono (Database.Contained.addTerm t e)
         ((h.inferred _ _).mp (InferredFacts.infers_of_cong (.assert hp)))
-    · exact InferredFacts.infers_of_held (by simp [Database.addTerm_terms, hs])
   exact ⟨forward h he, forward h.symm hd⟩
 
 /-- The same asserted equation preserves equivalence of inferred states. The
@@ -516,12 +511,10 @@ theorem addEq {d e : Database} (h : d.SameMeaning e) (hd : d.WF) (he : e.WF)
       ∀ {x y}, (d.addEq a b).Infers x y → (e.addEq a b).Infers x y := by
     intro d e h he x y hi
     apply InferredFacts.infers_of_assertions_only (he.addEq a b hlit) ?_ hi
-    rintro p (rfl | (hp | ⟨s, hs, rfl⟩) | ⟨s, hs, rfl⟩)
+    rintro p (rfl | hp)
     · exact InferredFacts.infers_of_cong (.assert (Set.mem_insert _ _))
     · exact InferredFacts.infers_mono (Database.Contained.addEq a b e)
         ((h.inferred _ _).mp (InferredFacts.infers_of_cong (.assert hp)))
-    · exact InferredFacts.infers_of_held (by simp [Database.addEq_terms, hs])
-    · exact InferredFacts.infers_of_held (by simp [Database.addEq_terms, hs])
   exact ⟨forward h he, forward h.symm hd⟩
 
 end Database.SameMeaning

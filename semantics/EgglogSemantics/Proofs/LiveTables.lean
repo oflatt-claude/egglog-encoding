@@ -71,6 +71,7 @@ theorem cong_table_head_iff {d : Database} (hs : d.StoreOk)
       rfl
   | symm _ ih => exact ih.symm
   | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
+  | subterm => rfl
   | congr =>
     constructor <;> rintro ⟨cols, he⟩
     · obtain ⟨rfl, _⟩ := Term.app.inj he
@@ -109,6 +110,12 @@ theorem cong_table_columns {d : Database} (hs : d.StoreOk)
       intro f decl as bs hd hm ha hb
       obtain ⟨cols, hcols⟩ := (cong_table_head_iff hs hd hm h₁).mp ⟨as, ha⟩
       exact (ih₁ hd hm ha hcols).trans (ih₂ hd hm hcols hb)
+    | subterm ht hs _ =>
+      intro f decl as bs _ _ ha hb
+      cases ha
+      obtain ⟨_, rfl⟩ := Term.app.inj hb
+      exact CongList.refl fun t ht' => Cong.subterm (Cong.subterm ht hs)
+        (Term.arg_subterms ht' (.refl _))
     | congr _ _ hcols _ _ _ =>
       intro f decl as bs _ _ ha hb
       obtain ⟨rfl, rfl⟩ := Term.app.inj ha
@@ -120,19 +127,8 @@ theorem cong_table_columns {d : Database} (hs : d.StoreOk)
 
 /-- Typed held atoms have their own assertion, so they decode as current rows. -/
 theorem entry_of_held_atom {d : Database} (hs : d.StoreOk) {row : Entry}
-    (hr : row.Valid d.sig) (ht : row.atom ∈ d.terms) : row ∈ d.entries := by
-  refine ⟨hr, ?_⟩
-  obtain ⟨u, hp | hp⟩ := Database.mem_terms_iff.mp ht
-  · rcases hs.typed _ hp with ⟨hv, _⟩ | ⟨other, ho, he⟩
-    · exact (hr.atom_not_value hv).elim
-    · have hrow := hr.atom_injective ho (congrArg Prod.fst he)
-      subst other
-      simpa only [he] using hp
-  · rcases hs.typed _ hp with ⟨_, hv⟩ | ⟨other, ho, he⟩
-    · exact (hr.atom_not_value hv).elim
-    · have hrow := hr.atom_injective ho (congrArg Prod.snd he)
-      subst other
-      simpa only [he] using hp
+    (hr : row.Valid d.sig) (ht : row.atom ∈ d.terms) : row ∈ d.entries :=
+  hs.entry_of_held_atom hr ht
 
 /-- Unified atom matching still reads a compatible current function row. -/
 theorem table_match_current {d : Database} (hs : d.StoreOk)
@@ -159,6 +155,7 @@ theorem table_match_current {d : Database} (hs : d.StoreOk)
 
 /-- In a diagonal state, an atom match names an actual stored row exactly. -/
 theorem table_match_current_of_diagonal {d : Database} (hd : d.Diag)
+    (hs : d.StoreOk)
     {e : Expr} {σ : Env} {target : Entry} (ht : target.Valid d.sig)
     (he : e.evalAtom d.sig σ = some target.atom) (hm : Matches d (.expr e) σ) :
     target ∈ d.entries := by
@@ -166,12 +163,7 @@ theorem table_match_current_of_diagonal {d : Database} (hd : d.Diag)
   | expr hw he' hc =>
     obtain rfl := Option.some.inj (he'.symm.trans he)
     obtain rfl := congOn_eq_of_diag hd hc
-    refine ⟨ht, ?_⟩
-    obtain ⟨u, hp | hp⟩ := Database.mem_terms_iff.mp hw
-    · have hu : target.atom = u := hd _ hp
-      simpa only [hu] using hp
-    · have hu : u = target.atom := hd _ hp
-      simpa only [hu] using hp
+    exact hs.entry_of_held_atom ht hw
 
 /-- A compatible current row supplies the witness for unified atom matching. -/
 theorem table_match_of_current {d : Database} {e : Expr} {σ : Env} {target row : Entry}
@@ -181,9 +173,9 @@ theorem table_match_of_current {d : Database} {e : Expr} {σ : Env} {target row 
     Matches d (.expr e) σ := by
   apply Matches.expr (.assert hr.2) he
   have hrow : Cong (d.withOperands [target.atom]) row.atom row.atom :=
-    .assert (Or.inl hr.2)
+    (Cong.assert hr.2).mono (Database.Contained.addTerms _ _)
   have htarget : Cong (d.withOperands [target.atom]) target.atom target.atom :=
-    .assert (Or.inr ⟨target.atom, .refl _, rfl⟩)
+    Database.mem_addTerms (by simp)
   change Cong (d.withOperands [target.atom])
     (.app row.name row.columns) (.app target.name target.columns)
   rw [hn]
@@ -200,18 +192,11 @@ theorem replaced_output_does_not_match {d : Database} (hs : d.StoreOk)
   obtain ⟨row, hr, hn, hc⟩ := table_match_current hs ht he hm
   exact hgone row hr hn hc
 
-private theorem addTerm_eq_of_held {d : Database} (hw : d.WF) {t : Term}
-    (ht : t ∈ d.terms) : d.addTerm t = d := by
-  have hs : {(s, s) | s ∈ t.subterms} ⊆ d.eqs := by
-    rintro p ⟨s, hs, rfl⟩
-    exact hw.eqsRefl s (hw.subtermClosed t ht hs)
-  unfold Database.addTerm
-  rw [Set.union_eq_left.mpr hs]
-
 /-- Repeating an already materialized row insertion is exactly the identity. -/
 theorem putEntry_eq_of_mem {d : Database} {row : Entry}
-    (hw : d.WF) (hr : row ∈ d.entries) : d.putEntry row = d :=
-  addTerm_eq_of_held hw (.assert hr.2)
+    (_hw : d.WF) (hr : row ∈ d.entries) : d.putEntry row = d := by
+  unfold Database.putEntry Database.addTerm
+  rw [Set.insert_eq_of_mem hr.2]
 
 /-- A duplicate insertion into a normal store already has a completed normalization. -/
 theorem normalize_existing_putEntry {d : Database} {row : Entry}

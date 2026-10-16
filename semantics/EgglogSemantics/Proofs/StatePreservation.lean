@@ -8,10 +8,8 @@ namespace Egglog
 theorem Database.WF.setEnvRules {db : Database} (hw : db.WF) {σ : Env} {R : Set Rule}
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) :
     ({ db with env := σ, rules := R } : Database).WF := by
-  refine ⟨fun t ht => ?_, fun t ht => ?_, fun b hb => ?_, hw.litsIsolated⟩
-  · rw [Database.terms_setEnvRules] at ht; exact hw.eqsRefl t ht
-  · rw [Database.terms_setEnvRules] at ht ⊢; exact hw.subtermClosed t ht
-  · rw [Database.terms_setEnvRules]; exact hσ b hb
+  refine ⟨fun b hb => ?_, hw.litsIsolated⟩
+  rw [Database.terms_setEnvRules]; exact hσ b hb
 
 def Action.SetWidthOk : Action → Signature → Prop
   | _, _ => True
@@ -390,12 +388,15 @@ theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hs : db.Store
     (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') : db'.DeclaredTerms := by
   cases h with
   | @collide d old new decl vs hold hnew _ _ hd _ hv =>
-    have hc0 : ((db.eraseEntry old).eraseEntry new).Contained db :=
-      (Database.Contained.eraseEntry new _).trans (Database.Contained.eraseEntry old _)
+    have hc0 : ((db.eraseEntry old).eraseEntry new).terms ⊆ db.terms :=
+      (Database.terms_eraseEntry_subset (row := new) (fun t ht =>
+        Database.mem_terms_eraseEntry_of_value hold.1 (hnew.1.column_values t ht)
+          (hs.columns new hnew t ht))).trans
+        (Database.terms_eraseEntry_subset (hs.columns old hold))
     have hw0 := (hwf.eraseEntry hs old hold.1).eraseEntry
       (hs.eraseEntry old hold.1) new hnew.1
     have hdt0 : ((db.eraseEntry old).eraseEntry new).DeclaredTerms :=
-      fun f args ht => hdt f args (hc0.terms ht)
+      fun f args ht => hdt f args (hc0 ht)
     have keep : ∀ t, t.IsValue db.sig → t ∈ db.terms →
         t ∈ ((db.eraseEntry old).eraseEntry new).terms := fun t ht hm =>
       Database.mem_terms_eraseEntry_of_value hnew.1 ht

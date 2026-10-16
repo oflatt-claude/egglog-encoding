@@ -108,8 +108,11 @@ theorem mergeStep_soundTerms {src d e : Database} (hshape : MergeShape d.sig)
   have hta : Term.app f (cs ++ [a]) ∈ d.terms := .assert hrowa.2
   have htb : Term.app f (cs ++ [b]) ∈ d.terms := .assert hrowb.2
   let base := (d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩
-  have hbase : base.Contained d := (Database.Contained.eraseEntry _ _).trans
-    (Database.Contained.eraseEntry _ _)
+  have hbase : base.terms ⊆ d.terms :=
+    (Database.terms_eraseEntry_subset (fun t ht =>
+      Database.mem_terms_eraseEntry_of_value hrowa.1 (hrowb.1.column_values t ht)
+        (hstore.columns _ hrowb t ht))).trans
+      (Database.terms_eraseEntry_subset (hstore.columns _ hrowa))
   have hwbase : base.WF := (hw.eraseEntry hstore _ hrowa.1).eraseEntry
     (hstore.eraseEntry _ hrowa.1) _ hrowb.1
   have kept : ∀ t, t.IsValue d.sig → t ∈ d.terms → t ∈ base.terms := fun t hv ht =>
@@ -126,7 +129,7 @@ theorem mergeStep_soundTerms {src d e : Database} (hshape : MergeShape d.sig)
     · exact entrySound_collide (hs.1 g cs a hta) (hs.1 g cs b htb)
   have hsurv : Term.app f (cs ++ [lowerId a b]) ∈ d.terms := by
     rcases lowerId_eq_or a b with he | he <;> rw [he] <;> assumption
-  apply ((hs.mono_terms hbase.terms).mergeLinks hwbase ha hb hab).addTerm
+  apply ((hs.mono_terms hbase).mergeLinks hwbase ha hb hab).addTerm
   · exact fun g ks v hm => hs.1 g ks v (hw.subtermClosed _ hsurv hm)
   · exact fun x y hm => hs.2 x y (hw.subtermClosed _ hsurv hm)
 
@@ -139,8 +142,11 @@ theorem mergeStep_descending {d e : Database} (hshape : MergeShape d.sig)
   have hta : Term.app f (cs ++ [a]) ∈ d.terms := .assert hrowa.2
   have htb : Term.app f (cs ++ [b]) ∈ d.terms := .assert hrowb.2
   let base := (d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩
-  have hbase : base.Contained d := (Database.Contained.eraseEntry _ _).trans
-    (Database.Contained.eraseEntry _ _)
+  have hbase : base.terms ⊆ d.terms :=
+    (Database.terms_eraseEntry_subset (fun t ht =>
+      Database.mem_terms_eraseEntry_of_value hrowa.1 (hrowb.1.column_values t ht)
+        (hstore.columns _ hrowb t ht))).trans
+      (Database.terms_eraseEntry_subset (hstore.columns _ hrowa))
   have hwbase : base.WF := (hw.eraseEntry hstore _ hrowa.1).eraseEntry
     (hstore.eraseEntry _ hrowa.1) _ hrowb.1
   have kept : ∀ t, t.IsValue d.sig → t ∈ d.terms → t ∈ base.terms := fun t hv ht =>
@@ -152,7 +158,7 @@ theorem mergeStep_descending {d e : Database} (hshape : MergeShape d.sig)
     (Database.mem_terms_of_arg hw htb (by simp : b ∈ cs ++ [b]))
   have hsurv : Term.app f (cs ++ [lowerId a b]) ∈ d.terms := by
     rcases lowerId_eq_or a b with he | he <;> rw [he] <;> assumption
-  have hl := (hs.mono_terms hbase.terms).mergeLinks hwbase ha hb
+  have hl := (hs.mono_terms hbase).mergeLinks hwbase ha hb
   intro x y hm
   rcases Database.addTerm_terms ▸ hm with hm | hm
   · exact hl x y hm

@@ -96,26 +96,26 @@ def empty : Database where
   env := []
   rules := ∅
 
-/-- Record `t` and all of its subterms, each by its reflexive equation. -/
+/-- Assert that `t` exists; congruence supplies subterm existence. -/
 def addTerm (t : Term) (db : Database) : Database :=
-  { db with eqs := db.eqs ∪ {(s, s) | s ∈ t.subterms} }
+  { db with eqs := insert (t, t) db.eqs }
 
 def addTerms (ts : List Term) (db : Database) : Database :=
   ts.foldl (fun d t => d.addTerm t) db
 
-/-- Assert `a = b` and record both operands' subterms. Symmetry and endpoint reflexivity
-follow from congruence; subterm existence and the stored diagonals need these writes. -/
+/-- Assert `a = b`; congruence supplies endpoint and subterm existence. -/
 def addEq (a b : Term) (db : Database) : Database :=
-  let d := (db.addTerm a).addTerm b
-  { d with eqs := insert (a, b) d.eqs }
+  { db with eqs := insert (a, b) db.eqs }
 
 /-- Insert a function entry, recording its column values. Identical writes coalesce;
 distinct conflicting rows remain until merging resolves them. -/
 def putEntry (e : Entry) (db : Database) : Database :=
   db.addTerm e.atom
 
+/-- Remove a row while retaining its column values. -/
 def eraseEntry (e : Entry) (db : Database) : Database :=
-  { db with eqs := db.eqs \ {(e.atom, e.atom)} }
+  { db with eqs := (db.eqs \ {(e.atom, e.atom)}) ∪
+      {p | ∃ t ∈ e.columns, p = (t, t)} }
 
 /-- Union in a whole family of databases at once, taking `sig`, `env` and `rules` from
 `db`. -/

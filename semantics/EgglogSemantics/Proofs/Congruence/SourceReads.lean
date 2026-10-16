@@ -32,26 +32,6 @@ theorem Env.Reads.mono {d d' : Database} {σ ρ : Env} (h : Env.Reads d σ ρ)
   obtain ⟨i, hi, hr⟩ := h v t ht
   exact ⟨i, hi, hr.mono hc hsig⟩
 
-theorem ViewReprList.mem_read {d : Database} : ∀ {as is : List Term},
-    ViewReprList d as is → ∀ t ∈ as, ∃ i, ViewRepr d t i
-  | _, _, .nil, _, ht => absurd ht (by simp)
-  | _, _, .cons ha hs, _, ht => by
-      rcases List.mem_cons.mp ht with rfl | ht
-      · exact ⟨_, ha⟩
-      · exact ViewReprList.mem_read hs _ ht
-
-/-- Reading a parent already contains readings of every one of its source subterms. -/
-theorem ViewRepr.subterms {d : Database} {t i : Term} (h : ViewRepr d t i) :
-    ∀ s ∈ t.subterms, ∃ j, ViewRepr d s j := by
-  intro s hs
-  induction hs generalizing i with
-  | refl => exact ⟨i, h⟩
-  | arg hm _ ih =>
-      cases h with
-      | app hl _ =>
-          obtain ⟨j, hj⟩ := hl.mem_read _ hm
-          exact ih hj
-
 /-- Readings in a fixed snapshot. Persistence across merges uses `Live.Reads`. -/
 structure SourceReads (d src : Database) : Prop where
   terms : ∀ t ∈ src.terms, ∃ i, ViewRepr d t i

@@ -143,20 +143,21 @@ theorem Agree.append_right (ρ : Env) {σ₁ σ₂ : Env} (h : Agree σ₁ σ₂
     rw [lookup_append_of_not_mem hv, lookup_append_of_not_mem hv₂]
 
 end Env
-/-! ### What the database holds
+/-! ### What the database holds -/
 
-`Database.terms` is a `def` over `Cong`, not a field, so the lemmas below are proved rather
-than `rfl`. They all come from one fact: no rule of `Cong` introduces a term the equations
-do not already name, so `terms` is a comprehension over `eqs`. -/
-
-/-- **A derivation mentions only what the equations name.** Both endpoints of a `Cong` are
-endpoints of an asserted equation; with no reflexivity rule there is nowhere else for a
-term to come from. -/
+/-- Congruence endpoints occur within asserted equations. -/
 theorem Cong.mem_endpoints {db : Database} {a b : Term} (h : Cong db a b) :
-    (∃ u, (a, u) ∈ db.eqs ∨ (u, a) ∈ db.eqs) ∧
-      (∃ u, (b, u) ∈ db.eqs ∨ (u, b) ∈ db.eqs) := by
+    (∃ p ∈ db.eqs, a ∈ p.1.subterms ∨ a ∈ p.2.subterms) ∧
+      (∃ p ∈ db.eqs, b ∈ p.1.subterms ∨ b ∈ p.2.subterms) := by
   induction h using Cong.rec (motive_2 := fun _ _ _ => True) with
-  | assert hab => exact ⟨⟨_, Or.inl hab⟩, ⟨_, Or.inr hab⟩⟩
+  | assert hab =>
+    exact ⟨⟨_, hab, Or.inl (Term.self_mem_subterms _)⟩,
+      ⟨_, hab, Or.inr (Term.self_mem_subterms _)⟩⟩
+  | subterm _ hs ih =>
+    obtain ⟨p, hp, ht⟩ := ih.1
+    have hm := ht.elim (fun ht => Or.inl (Term.subterms_subset_of_mem ht hs))
+      (fun ht => Or.inr (Term.subterms_subset_of_mem ht hs))
+    exact ⟨⟨p, hp, hm⟩, ⟨p, hp, hm⟩⟩
   | symm _ ih => exact ih.symm
   | trans _ _ ih₁ ih₂ => exact ⟨ih₁.1, ih₂.2⟩
   | congr _ _ _ ih₁ ih₂ _ => exact ⟨ih₁.1, ih₂.1⟩
@@ -164,13 +165,13 @@ theorem Cong.mem_endpoints {db : Database} {a b : Term} (h : Cong db a b) :
   | cons => trivial
 
 namespace Database
-/-- **The terms are exactly the endpoints of the asserted equations.** Every `terms` lemma
-below is this plus set algebra. -/
+/-- Held terms are precisely subterms of asserted endpoints. -/
 theorem mem_terms_iff {db : Database} {t : Term} :
-    t ∈ db.terms ↔ ∃ u, (t, u) ∈ db.eqs ∨ (u, t) ∈ db.eqs :=
-  ⟨fun ht => (Cong.mem_endpoints ht).1, fun ⟨_, h⟩ =>
-    h.elim (fun h => (eqsInTerms_free (Cong.assert h)).1)
-      fun h => (eqsInTerms_free (Cong.assert h)).2⟩
+    t ∈ db.terms ↔ ∃ p ∈ db.eqs, t ∈ p.1.subterms ∨ t ∈ p.2.subterms := by
+  refine ⟨fun ht => (Cong.mem_endpoints ht).1, ?_⟩
+  rintro ⟨p, hp, ht | ht⟩
+  · exact Cong.subterm (eqsInTerms_free (Cong.assert hp)).1 ht
+  · exact Cong.subterm (eqsInTerms_free (Cong.assert hp)).2 ht
 
 /-- Two databases asserting the same equations hold the same values. -/
 theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
@@ -184,20 +185,17 @@ theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
 @[simp] theorem addTerm_terms {t : Term} {db : Database} :
     (db.addTerm t).terms = db.terms ∪ t.subterms := by
   ext s
-  simp only [mem_terms_iff, Database.addTerm, Set.mem_union, Set.mem_setOf_eq, Prod.mk.injEq]
+  simp only [mem_terms_iff, Database.addTerm, Set.mem_insert_iff, Set.mem_union]
   constructor
-  · rintro ⟨u, (h | ⟨v, hv, hv₁, hv₂⟩) | (h | ⟨v, hv, hv₁, hv₂⟩)⟩
-    · exact Or.inl ⟨u, Or.inl h⟩
-    · exact Or.inr (hv₁ ▸ hv)
-    · exact Or.inl ⟨u, Or.inr h⟩
-    · exact Or.inr (hv₂ ▸ hv)
-  · rintro (⟨u, h | h⟩ | h)
-    · exact ⟨u, Or.inl (Or.inl h)⟩
-    · exact ⟨u, Or.inr (Or.inl h)⟩
-    · exact ⟨s, Or.inl (Or.inr ⟨s, h, rfl, rfl⟩)⟩
+  · rintro ⟨p, rfl | hp, hs⟩
+    · exact Or.inr (hs.elim id id)
+    · exact Or.inl ⟨p, hp, hs⟩
+  · rintro (⟨p, hp, hs⟩ | hs)
+    · exact ⟨p, Or.inr hp, hs⟩
+    · exact ⟨(t, t), Or.inl rfl, Or.inl hs⟩
 
 @[simp] theorem addTerm_eqs {t : Term} {db : Database} :
-    (db.addTerm t).eqs = db.eqs ∪ {(s, s) | s ∈ t.subterms} := rfl
+    (db.addTerm t).eqs = insert (t, t) db.eqs := rfl
 
 @[simp] theorem addTerm_sig {t : Term} {db : Database} : (db.addTerm t).sig = db.sig := rfl
 
@@ -207,36 +205,30 @@ theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
     (db.addTerm t).rules = db.rules := rfl
 
 theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
-  Cong.assert (Or.inr ⟨t, Term.IsSubterm.refl t, rfl⟩)
+  Cong.assert (Set.mem_insert _ _)
 
 @[simp] theorem addEq_eqs {a b : Term} {db : Database} :
-    (db.addEq a b).eqs = insert (a, b) ((db.addTerm a).addTerm b).eqs := rfl
-
-/-- Asserting an equation between terms the database already holds adds no terms. -/
-theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb : b ∈ db.terms) :
-    ({ db with eqs := insert (a, b) db.eqs } : Database).terms = db.terms := by
-  obtain ⟨ua, ha⟩ := mem_terms_iff.mp ha
-  obtain ⟨ub, hb⟩ := mem_terms_iff.mp hb
-  ext s
-  simp only [mem_terms_iff, Set.mem_insert_iff, Prod.mk.injEq]
-  constructor
-  · rintro ⟨u, (⟨rfl, rfl⟩ | h) | (⟨rfl, rfl⟩ | h)⟩
-    · exact ⟨ua, ha⟩
-    · exact ⟨u, Or.inl h⟩
-    · exact ⟨ub, hb⟩
-    · exact ⟨u, Or.inr h⟩
-  · rintro ⟨u, h⟩
-    exact ⟨u, h.imp Or.inr Or.inr⟩
+    (db.addEq a b).eqs = insert (a, b) db.eqs := rfl
 
 @[simp] theorem addEq_terms {a b : Term} {db : Database} :
     (db.addEq a b).terms = db.terms ∪ a.subterms ∪ b.subterms := by
-  have ha : a ∈ ((db.addTerm a).addTerm b).terms := by
-    simp only [addTerm_terms]; exact Or.inl (Or.inr a.self_mem_subterms)
-  have hb : b ∈ ((db.addTerm a).addTerm b).terms := by
-    simp only [addTerm_terms]; exact Or.inr b.self_mem_subterms
-  change ({ (db.addTerm a).addTerm b with
-      eqs := insert (a, b) ((db.addTerm a).addTerm b).eqs } : Database).terms = _
-  rw [terms_insert_eq ha hb, addTerm_terms, addTerm_terms]
+  ext s
+  simp only [mem_terms_iff, Database.addEq, Set.mem_insert_iff, Set.mem_union]
+  constructor
+  · rintro ⟨p, rfl | hp, hs⟩
+    · exact hs.elim (fun hs => Or.inl (Or.inr hs)) Or.inr
+    · exact Or.inl (Or.inl ⟨p, hp, hs⟩)
+  · rintro ((⟨p, hp, hs⟩ | hs) | hs)
+    · exact ⟨p, Or.inr hp, hs⟩
+    · exact ⟨(a, b), Or.inl rfl, Or.inl hs⟩
+    · exact ⟨(a, b), Or.inl rfl, Or.inr hs⟩
+
+/-- Asserting an equation between held terms adds no terms. -/
+theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb : b ∈ db.terms) :
+    ({ db with eqs := insert (a, b) db.eqs } : Database).terms = db.terms := by
+  change (db.addEq a b).terms = _
+  rw [addEq_terms, Set.union_eq_self_of_subset_right (db.subtermClosed a ha),
+    Set.union_eq_self_of_subset_right (db.subtermClosed b hb)]
 
 @[simp] theorem addEq_env {a b : Term} {db : Database} : (db.addEq a b).env = db.env := rfl
 
@@ -253,14 +245,12 @@ theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb :
   ext s
   simp only [Set.mem_union, Set.mem_iUnion, mem_terms_iff, sUnion_eqs, exists_prop]
   constructor
-  · rintro ⟨u, (h | ⟨d, hd, h⟩) | (h | ⟨d, hd, h⟩)⟩
-    · exact Or.inl ⟨u, Or.inl h⟩
-    · exact Or.inr ⟨d, hd, u, Or.inl h⟩
-    · exact Or.inl ⟨u, Or.inr h⟩
-    · exact Or.inr ⟨d, hd, u, Or.inr h⟩
-  · rintro (⟨u, h⟩ | ⟨d, hd, u, h⟩)
-    · exact ⟨u, h.imp Or.inl Or.inl⟩
-    · exact ⟨u, h.imp (fun h => Or.inr ⟨d, hd, h⟩) fun h => Or.inr ⟨d, hd, h⟩⟩
+  · rintro ⟨p, hp | ⟨d, hd, hp⟩, hs⟩
+    · exact Or.inl ⟨p, hp, hs⟩
+    · exact Or.inr ⟨d, hd, p, hp, hs⟩
+  · rintro (⟨p, hp, hs⟩ | ⟨d, hd, p, hp, hs⟩)
+    · exact ⟨p, Or.inl hp, hs⟩
+    · exact ⟨p, Or.inr ⟨d, hd, hp⟩, hs⟩
 
 @[simp] theorem sUnion_env {db : Database} {S : Set Database} :
     (db.sUnion S).env = db.env := rfl
@@ -308,6 +298,25 @@ theorem addTerms_append {db : Database} {ts us : List Term} :
   | nil => rfl
   | cons t ts ih => exact ih
 
+@[simp] theorem addTerms_eqs {db : Database} {ts : List Term} :
+    (db.addTerms ts).eqs = db.eqs ∪ {p | ∃ t ∈ ts, p = (t, t)} := by
+  induction ts generalizing db with
+  | nil => simp [addTerms]
+  | cons t ts ih =>
+    change ((db.addTerm t).addTerms ts).eqs = _
+    rw [ih, addTerm_eqs]
+    ext p
+    simp only [Set.mem_union, Set.mem_insert_iff, Set.mem_setOf_eq, List.mem_cons]
+    constructor
+    · rintro ((rfl | hp) | ⟨u, hu, rfl⟩)
+      · exact Or.inr ⟨t, Or.inl rfl, rfl⟩
+      · exact Or.inl hp
+      · exact Or.inr ⟨u, Or.inr hu, rfl⟩
+    · rintro (hp | ⟨u, rfl | hu, rfl⟩)
+      · exact Or.inl (Or.inr hp)
+      · exact Or.inl (Or.inl rfl)
+      · exact Or.inr ⟨u, hu, rfl⟩
+
 @[simp] theorem addTerms_terms {db : Database} {ts : List Term} :
     (db.addTerms ts).terms = db.terms ∪ {s | ∃ t ∈ ts, s ∈ t.subterms} := by
   induction ts generalizing db with
@@ -346,7 +355,7 @@ theorem addTerms_setSig (db : Database) (sig : Signature) (ts : List Term) :
 /-! ### Current function entries -/
 
 @[simp] theorem putEntry_eqs {db : Database} {e : Entry} :
-    (db.putEntry e).eqs = (db.addTerm e.atom).eqs := rfl
+    (db.putEntry e).eqs = insert (e.atom, e.atom) db.eqs := rfl
 @[simp] theorem putEntry_sig {db : Database} {e : Entry} :
     (db.putEntry e).sig = db.sig := rfl
 @[simp] theorem putEntry_env {db : Database} {e : Entry} :
@@ -363,7 +372,8 @@ theorem addTerms_setSig (db : Database) (sig : Signature) (ts : List Term) :
 @[simp] theorem eraseEntry_rules {db : Database} {e : Entry} :
     (db.eraseEntry e).rules = db.rules := rfl
 @[simp] theorem eraseEntry_eqs {db : Database} {e : Entry} :
-    (db.eraseEntry e).eqs = db.eqs \ {(e.atom, e.atom)} := rfl
+    (db.eraseEntry e).eqs = (db.eqs \ {(e.atom, e.atom)}) ∪
+      {p | ∃ t ∈ e.columns, p = (t, t)} := rfl
 
 @[simp] theorem putEntry_setRules (db : Database) (R : Set Rule) (e : Entry) :
     ({ db with rules := R } : Database).putEntry e = { db.putEntry e with rules := R } := by
@@ -401,7 +411,7 @@ theorem trans {d₁ d₂ d₃ : Database} (h₁ : Contained d₁ d₂) (h₂ : C
     Contained d₁ d₃ := ⟨h₁.eqs.trans h₂.eqs⟩
 
 theorem addTerm (t : Term) (db : Database) : Contained db (db.addTerm t) :=
-  ⟨Set.subset_union_left⟩
+  ⟨Set.subset_insert _ _⟩
 
 theorem addTerms (ts : List Term) (db : Database) : Contained db (db.addTerms ts) := by
   induction ts generalizing db with
@@ -409,14 +419,14 @@ theorem addTerms (ts : List Term) (db : Database) : Contained db (db.addTerms ts
   | cons t ts ih => exact (addTerm t db).trans (ih (db := db.addTerm t))
 
 theorem addEq (a b : Term) (db : Database) : Contained db (db.addEq a b) :=
-  ((addTerm a db).trans (addTerm b _)).trans ⟨Set.subset_insert _ _⟩
+  ⟨Set.subset_insert _ _⟩
 
 /-! The same operation applied to both sides. This is what makes an action, and hence a
 whole action block, transportable along `Contained`. -/
 /-- `Contained` is preserved by adding the same term to both sides. -/
 theorem addTerm_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (t : Term) :
     (d₁.addTerm t).Contained (d₂.addTerm t) :=
-  ⟨Set.union_subset_union h.eqs subset_rfl⟩
+  ⟨Set.insert_subset_insert h.eqs⟩
 
 /-- `addTerm_mono` folded. -/
 theorem addTerms_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (ts : List Term) :
@@ -429,13 +439,10 @@ theorem addTerms_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (ts : Lis
 `eqs` component. -/
 theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (a b : Term) :
     (d₁.addEq a b).Contained (d₂.addEq a b) :=
-  ⟨Set.insert_subset_insert ((h.addTerm_mono a).addTerm_mono b).eqs⟩
+  ⟨Set.insert_subset_insert h.eqs⟩
 
 theorem putEntry (e : Entry) (db : Database) : Contained db (db.putEntry e) :=
   addTerm e.atom db
-
-theorem eraseEntry (e : Entry) (db : Database) : Contained (db.eraseEntry e) db :=
-  ⟨Set.sdiff_subset⟩
 
 theorem putEntry_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (e : Entry) :
     (d₁.putEntry e).Contained (d₂.putEntry e) := h.addTerm_mono e.atom
@@ -450,68 +457,32 @@ theorem mem_sUnion {db d : Database} {S : Set Database} (h : d ∈ S) :
 end Contained
 namespace WF
 theorem empty : WF Database.empty where
-  eqsRefl := by simp
-  subtermClosed := by simp
   envInTerms := by simp [Database.empty]
   litsIsolated := by simp [Database.empty, LitsIsolated]
 
 theorem addTerm {db : Database} (h : WF db) (t : Term) : WF (db.addTerm t) where
-  eqsRefl := by
-    simp only [addTerm_terms, addTerm_eqs]
-    rintro s (hs | hs)
-    · exact Or.inl (h.eqsRefl s hs)
-    · exact Or.inr ⟨s, hs, rfl⟩
-  subtermClosed := by
-    simp only [addTerm_terms]
-    rintro s (hs | hs) u hu
-    · exact Or.inl (h.subtermClosed s hs hu)
-    · exact Or.inr (Term.subterms_subset_of_mem hs hu)
   envInTerms b hb := by
     simp only [addTerm_terms]; exact Or.inl (h.envInTerms b hb)
   litsIsolated := by
-    rintro p (hp | ⟨s, -, rfl⟩)
-    exacts [h.litsIsolated p hp, fun _ => rfl]
+    rintro p (rfl | hp)
+    exacts [fun _ => rfl, h.litsIsolated p hp]
 
 theorem addTerms {db : Database} (h : WF db) (ts : List Term) : WF (db.addTerms ts) := by
   induction ts generalizing db with
   | nil => exact h
   | cons t ts ih => exact ih (h.addTerm t)
 
-/-- `hlit` is what `evalAction`'s `union` check pays for: an equation with a literal
-endpoint is reflexive, and `Database.LitsIsolated` survives. -/
 theorem addEq {db : Database} (h : WF db) (a b : Term)
     (hlit : a.isLit ∨ b.isLit → a = b) : WF (db.addEq a b) where
-  eqsRefl s hs := Set.mem_insert_of_mem _ (((h.addTerm a).addTerm b).eqsRefl s (by
-    simpa only [addTerm_terms, ← Set.union_assoc] using
-      (by simpa only [addEq_terms, ← Set.union_assoc] using hs)))
-  subtermClosed := by
-    simp only [addEq_terms]
-    rintro s ((hs | hs) | hs) u hu
-    · exact Or.inl (Or.inl (h.subtermClosed s hs hu))
-    · exact Or.inl (Or.inr (Term.subterms_subset_of_mem hs hu))
-    · exact Or.inr (Term.subterms_subset_of_mem hs hu)
   envInTerms b hb := by
     simp only [addEq_terms]; exact Or.inl (Or.inl (h.envInTerms b hb))
   litsIsolated := by
     rintro p (rfl | hp)
     · exact hlit
-    · exact ((h.addTerm a).addTerm b).litsIsolated p hp
+    · exact h.litsIsolated p hp
 
 theorem sUnion {db : Database} (h : WF db) {S : Set Database}
     (hS : ∀ d ∈ S, WF d) : WF (db.sUnion S) where
-  eqsRefl := by
-    simp only [sUnion_terms, sUnion_eqs]
-    rintro t (ht | ht)
-    · exact Or.inl (h.eqsRefl t ht)
-    · obtain ⟨d, hd, ht⟩ := Set.mem_iUnion₂.mp ht
-      exact Or.inr (Set.mem_biUnion hd ((hS d hd).eqsRefl t ht))
-  subtermClosed := by
-    simp only [sUnion_terms]
-    rintro t (ht | ht)
-    · exact (h.subtermClosed t ht).trans Set.subset_union_left
-    · obtain ⟨d, hd, ht⟩ := Set.mem_iUnion₂.mp ht
-      exact ((hS d hd).subtermClosed t ht).trans
-        (Set.subset_union_of_subset_right (Set.subset_biUnion_of_mem hd) _)
   envInTerms b hb := by
     simp only [sUnion_terms]; exact Or.inl (h.envInTerms b hb)
   litsIsolated := by

@@ -584,7 +584,7 @@ theorem evalAction_setRules (db : Database) (R : Set Rule) (a : Action) :
           | none => simp [evalAction, h₁, h₂]
           | some t₂ =>
               simp only [evalAction, h₁, h₂, Option.bind_some]
-              split <;> simp [Database.addEq, Database.addTerm]
+              split <;> simp [Database.addEq]
 
 theorem evalActions_setRules (R : Set Rule) : ∀ (db : Database) (as : List Action),
     evalActions { db with rules := R } as
@@ -881,9 +881,14 @@ theorem mergeStep_avoids {f : FnName} {db x : Database} (hf : db.sig f = none)
   | @collide post old new decl vs ho hn _ _ hd _ hv =>
       have hov := hcols old ho
       have hnv := hcols new hn
+      have hterms : ((db.eraseEntry old).eraseEntry new).terms ⊆ db.terms :=
+        (Database.terms_eraseEntry_subset (row := new) (fun t ht =>
+          Database.mem_terms_eraseEntry_of_value ho.1 (hn.1.column_values t ht)
+            (Cong.subterm (.assert hn.2) (Term.arg_subterms ht (.refl _))))).trans
+          (Database.terms_eraseEntry_subset (fun t ht =>
+            Cong.subterm (.assert ho.2) (Term.arg_subterms ht (.refl _))))
       have hstart : ((db.eraseEntry old).eraseEntry new).Avoids f :=
-        ⟨fun t ht => hav.terms t ((Database.Contained.eraseEntry old db).terms
-          ((Database.Contained.eraseEntry new (db.eraseEntry old)).terms ht)), hav.env⟩
+        ⟨fun t ht => hav.terms t (hterms ht), hav.env⟩
       obtain ⟨havpost, hvs⟩ := mergeValues_avoids (db := (db.eraseEntry old).eraseEntry new) hf
         (hsmd old.name decl · hd) hstart
         (fun t ht => hov t (List.mem_append_right _ ht))
@@ -1036,7 +1041,7 @@ theorem evalAction_update {f : FnName} {sig' : Signature} {db : Database} {a : A
           | none => simp [evalAction, ← h₁, ← h₂, hc₁, hc₂]
           | some t₂ =>
               simp only [evalAction, ← h₁, ← h₂, hc₁, hc₂, Option.bind_some]
-              split <;> simp [Database.addEq, Database.addTerm]
+              split <;> simp [Database.addEq]
 
 theorem evalActions_update {f : FnName} {sig' : Signature} :
     ∀ (as : List Action) (db : Database), db.sig f = none →

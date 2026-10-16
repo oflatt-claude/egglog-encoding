@@ -63,8 +63,10 @@ theorem mergeStep_values_subset {d e : Database} (h : Runtime d)
     rcases lowerId_eq_or a b with he | he <;> rw [he] <;> assumption
   have hbase : ((d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩).values ⊆ d.values := by
     intro t ht
-    exact ⟨(Database.Contained.eraseEntry _ _).terms
-      ((Database.Contained.eraseEntry _ _).terms ht.1), ht.2⟩
+    refine ⟨Database.terms_eraseEntry_subset (h.storeOk.columns _ hra) (?_) , ht.2⟩
+    exact Database.terms_eraseEntry_subset (fun s hs =>
+      Database.mem_terms_eraseEntry_of_value hra.1 (hrb.1.column_values s hs)
+        (h.storeOk.columns _ hrb s hs)) ht.1
   have hlink (x : Term) (hx : x ∈ d.terms) (hvx : x.IsValue d.sig) :
       ∀ t ∈ (Term.app ufName [x, lowerId a b]).subterms,
         t.IsValue d.sig → t ∈ d.terms := by
@@ -127,8 +129,8 @@ private theorem complete_self {base d : Database} {t : Term}
     · obtain ⟨c, hc', hs'⟩ := value_subterm_row (ufEntry_valid huf hv hv) hs' hs.2
       have he : c = t := by simpa [ufEntry, Entry.columns] using hc'
       exact hcover s (hp s (he ▸ hs'))
-  · exact ⟨.assert (Or.inr ⟨t, Term.arg_subterms (by simp [ufEntry, Entry.columns])
-      (.refl t), rfl⟩), hv⟩
+  · exact ⟨Cong.subterm (Database.mem_addTerm _ _)
+      (Term.arg_subterms (by simp [ufEntry, Entry.columns]) (.refl t)), hv⟩
 
 private theorem self_write {d : Database} {x : Expr} {t : Term}
     (huf : d.sig ufName = some (tableDecl 1)) (he : x.eval d.sig d.env = some t) :

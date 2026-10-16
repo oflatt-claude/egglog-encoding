@@ -73,15 +73,15 @@ end
 source heads have no let-bound globals, only the query's variables need transporting. -/
 theorem sourceMatch_evaluations {src tgt : Database} (hb : src.TermsBuild) (hw : src.WF)
     (hs : ViewsSound tgt src) (hd : tgt.Diag)
-    (hsc : ∀ t ∈ tgt.terms, t.subterms ⊆ tgt.terms) (hdecl : ViewTables tgt) {q : Query} {n : Nat} {σ : Env}
+    (hstore : tgt.StoreOk) (hdecl : ViewTables tgt) {q : Query} {n : Nat} {σ : Env}
     (hof : ∀ p ∈ q, p.OrderingFree) (hg : ∀ p ∈ q, p.Grounded) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∃ τ, ValidQuerySubst src q τ ∧
       ∀ (e : Expr), (∀ f ∈ e.fns, tgt.sig.IsCtor f ↔ src.sig.IsCtor f) →
         (∀ v ∈ e.vars, v ∈ Query.vars q) →
         e.eval tgt.sig (σ ++ tgt.env) = e.eval src.sig (τ ++ src.env) := by
-  obtain ⟨τ, hτ, _, hlookup⟩ := sourceMatch_of_encodedQuery hb hw hs hd hsc hdecl hof hg hk h
-  have hread := patternReads_of_encodeQuery hd hsc hdecl hof hk h
+  obtain ⟨τ, hτ, _, hlookup⟩ := sourceMatch_of_encodedQuery hb hw hs hd hstore hdecl hof hg hk h
+  have hread := patternReads_of_encodeQuery hd hstore hdecl hof hk h
   have henv : ∀ v ∈ Query.vars q,
       Env.lookup v (σ ++ tgt.env) = Env.lookup v (τ ++ src.env) := by
     intro v hv

@@ -2,16 +2,12 @@ import EgglogSemantics.Proofs.Congruence.LivePersistence
 import EgglogSemantics.Proofs.Congruence.LiveState
 import EgglogSemantics.Proofs.Congruence.LiveLeaders
 import EgglogSemantics.Proofs.Congruence.AbstractRebuild
+import EgglogSemantics.Proofs.Congruence.AbstractRuntime
+import EgglogSemantics.Proofs.DiagonalRound
 
 /-! Completed maintenance fixed points absorb writes through actual minimum merges. -/
 
 namespace Egglog.Congruence.Live
-
-theorem runSaturated_runStep_self {d : Database} {R : RulesetName}
-    (hn : d.NoUnions) (hs : RunSaturated R d) : RunStep R d d := by
-  obtain ⟨post, hstep, heq⟩ := hs.2
-  have he := heq.eq_of_diag hn.diag (hstep.noUnions hn).diag
-  exact he ▸ hstep
 
 theorem ruleResult_row {d post : Database} {R : RulesetName} {r : Rule}
     (hr : r ∈ d.rules) (hR : r.ruleset = R) (hf : post ∈ RuleResults d r)
@@ -23,12 +19,18 @@ theorem ruleResult_row {d post : Database} {R : RulesetName} {r : Rule}
 /-- A head row may be consumed, but its current replacement is connected and no larger. -/
 theorem firing_row_bound {d post : Database} {R : RulesetName}
     (h : State d) (hg : GeneratedTables d.sig) (hn : d.NoUnions)
-    (hs : RunSaturated R d) {r : Rule} (hr : r ∈ d.rules) (hR : r.ruleset = R)
+    (hstore : d.StoreOk) (hs : RunSaturated R d) {r : Rule}
+    (hr : r ∈ d.rules) (hR : r.ruleset = R)
     (hf : post ∈ RuleResults d r) {f : FnName} {key : List Term} {a : Term}
     (hrow : Entry.mk f key [a] ∈ post.entries) :
-    ∃ b, Entry.mk f key [b] ∈ d.entries ∧ Joined d a b ∧ IdLe b a :=
-  row_closure (h.runRules hg R) (RunRules.diag hn)
-    (runSaturated_runStep_self hn hs).1 (ruleResult_row hr hR hf hrow)
+    ∃ b, Entry.mk f key [b] ∈ d.entries ∧ Joined d a b ∧ IdLe b a := by
+  obtain ⟨out, hstep, heq⟩ := hs.2
+  have hentries := hstore.entries_eq_of_terms_eq
+    (hstep.storeOk hstore (hg.mergesWidthOk h.uf)) heq.sig
+    (heq.terms_eq_of_diag hn.diag (hstep.noUnions hn).diag)
+  obtain ⟨b, hb, hj, hle⟩ := row_closure (h.runRules hg R) (RunRules.diag hn)
+    hstep.1 (ruleResult_row hr hR hf hrow)
+  exact ⟨b, hentries.symm ▸ hb, hj.mono (fun _ hr => hentries.symm ▸ hr), hle⟩
 
 end Egglog.Congruence.Live
 

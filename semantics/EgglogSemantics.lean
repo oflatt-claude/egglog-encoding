@@ -43,3 +43,5 @@ import EgglogSemantics.Tests.LiveSemantics
 import EgglogSemantics.Tests.MergeViews
 
 import EgglogSemantics.Tests.AtomStore
+
+import EgglogSemantics.Tests.SubtermExistence

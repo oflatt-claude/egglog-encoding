@@ -11,9 +11,9 @@ theorem mem_addTerms_eqs : ∀ (ts : List Term) (db : Database) (p : Term × Ter
   | [], _, _, h => Or.inl h
   | t :: ts, db, p, h => by
       rcases mem_addTerms_eqs ts (db.addTerm t) p h with h' | h'
-      · rcases h' with h' | ⟨s, _, hs⟩
+      · rcases h' with rfl | h'
+        · exact Or.inr rfl
         · exact Or.inl h'
-        · exact Or.inr (by rw [← hs])
       · exact Or.inr h'
 
 end Egglog.Conservativity

@@ -36,7 +36,8 @@ private theorem state_entries {rows : Set Entry} {ρ : Env}
   rintro p (rfl | rfl | rfl | rfl) <;> rfl
 
 private theorem erase_state (rows : Set Entry) (ρ : Env) (r : Entry)
-    (hr : r.Valid (state ∅).sig) (hall : ∀ e ∈ rows, e.Valid (state ∅).sig) :
+    (hr : r.Valid (state ∅).sig) (hall : ∀ e ∈ rows, e.Valid (state ∅).sig)
+    (hcols : ∀ t ∈ r.columns, (t, t) ∈ (state ∅ ρ).eqs) :
     (state rows ρ).eraseEntry r = state (rows \ {r}) ρ := by
   have hn : ∀ p ∈ ({(val 1, val 1), (val 2, val 2), (val 3, val 3),
       (val 4, val 4)} : Set (Term × Term)), p ≠ (r.atom, r.atom) := by
@@ -45,29 +46,22 @@ private theorem erase_state (rows : Set Entry) (ρ : Env) (r : Entry)
   congr 1
   ext p
   constructor
-  · rintro ⟨hp | ⟨e, he, rfl⟩, hne⟩
+  · rintro (⟨hp | ⟨e, he, rfl⟩, hne⟩ | ⟨t, ht, rfl⟩)
     · exact Or.inl hp
     · exact Or.inr ⟨e, ⟨he, fun heq => hne (by rw [show e = r from heq]; rfl)⟩, rfl⟩
+    · have hh := hcols t ht
+      simpa only [state, Set.mem_union, Set.mem_setOf_eq, Set.mem_empty_iff_false,
+        false_and, exists_false, or_false] using Or.inl hh
   · rintro (hp | ⟨e, ⟨he, hne⟩, rfl⟩)
-    · exact ⟨Or.inl hp, hn p hp⟩
-    · refine ⟨Or.inr ⟨e, he, rfl⟩, ?_⟩
+    · exact Or.inl ⟨Or.inl hp, hn p hp⟩
+    · refine Or.inl ⟨Or.inr ⟨e, he, rfl⟩, ?_⟩
       intro heq
       exact hne ((hall e he).atom_injective hr (congrArg Prod.fst heq))
 
-private theorem put_state (rows : Set Entry) (ρ : Env) {k v : Nat}
-    (hk : small k) (hv : small v) :
+private theorem put_state (rows : Set Entry) (ρ : Env) {k v : Nat} :
     (state rows ρ).putEntry (row k v) = state (insert (row k v) rows) ρ := by
-  have he := Database.putEntry_eqs_of_columns (d := state rows ρ) (row := row k v) (by
-    intro t ht u hu
-    simp only [row, Entry.columns, List.singleton_append, List.mem_cons,
-      List.not_mem_nil, or_false] at ht
-    rcases ht with rfl | rfl
-    · have heq : u = val k := by simpa [val] using hu
-      exact heq ▸ held hk
-    · have heq : u = val v := by simpa [val] using hu
-      exact heq ▸ held hv)
   apply Database.ext <;> try rfl
-  rw [he]
+  change insert ((row k v).atom, (row k v).atom) (state rows ρ).eqs = _
   ext p
   constructor
   · rintro (rfl | hp)
@@ -106,7 +100,7 @@ private theorem collision (rows : Set Entry)
     rw [hmin] at he
     change evalActions (state rest ρ) mergeBody =
       some (((state rest ρ).putEntry (row a a)).putEntry (row b a)) at he
-    rw [put_state rest ρ ha ha, put_state (insert (row a a) rest) ρ hb ha] at he
+    rw [put_state rest ρ, put_state (insert (row a a) rest) ρ] at he
     exact he
   have hres : Expr.evalList (state bodyRows ρ).sig mergeResult (state bodyRows ρ).env =
       some [val a] := by
@@ -123,8 +117,15 @@ private theorem collision (rows : Set Entry)
   have hm : MergeValues (state rest) (tableDecl 1) [val a] [val b]
       (state bodyRows) [val a] := .changed rfl hconf hbody hres
   have herase : ((state rows).eraseEntry (row k a)).eraseEntry (row k b) = state rest := by
-    rw [erase_state rows [] (row k a) (row_valid k a) hall,
-      erase_state _ [] (row k b) (row_valid k b) (fun e he => hall e he.1)]
+    have hcols (v : Nat) (hv : small v) :
+        ∀ t ∈ (row k v).columns, (t, t) ∈ (state ∅).eqs := by
+      intro t ht
+      simp only [row, Entry.columns, List.singleton_append, List.mem_cons,
+        List.not_mem_nil, or_false] at ht
+      rcases ht with rfl | rfl
+      exacts [held hk, held hv]
+    rw [erase_state rows [] (row k a) (row_valid k a) hall (hcols a ha),
+      erase_state _ [] (row k b) (row_valid k b) (fun e he => hall e he.1) (hcols b hb)]
   have hs := MergeStep.collide (db := state rows) (old := row k a) (new := row k b)
     (decl := tableDecl 1) (by rwa [state_entries hall])
     (by rwa [state_entries hall]) (by
@@ -134,7 +135,7 @@ private theorem collision (rows : Set Entry)
       exact hne (by exact_mod_cast hv)) rfl (by simp [state, row])
     (.cons (.assert (held hk)) .nil) (herase.symm ▸ hm)
   change MergeStep (state rows) ((state bodyRows).putEntry (row k a)) at hs
-  rw [put_state bodyRows [] hk ha] at hs
+  rw [put_state bodyRows []] at hs
   exact hs
 
 private def startRows : Set Entry := {row 4 1, row 4 2, row 4 3}

@@ -11,6 +11,26 @@ compiled table reading. `Complete.lean` establishes these invariants for full ex
 
 namespace Egglog.Congruence
 
+theorem ViewReprList.mem_read {d : Database} : ∀ {as is : List Term},
+    ViewReprList d as is → ∀ t ∈ as, ∃ i, ViewRepr d t i
+  | _, _, .nil, _, ht => absurd ht (by simp)
+  | _, _, .cons ha hs, _, ht => by
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact ⟨_, ha⟩
+      · exact ViewReprList.mem_read hs _ ht
+
+/-- Reading a parent already contains readings of every one of its source subterms. -/
+theorem ViewRepr.subterms {d : Database} {t i : Term} (h : ViewRepr d t i) :
+    ∀ s ∈ t.subterms, ∃ j, ViewRepr d s j := by
+  intro s hs
+  induction hs generalizing i with
+  | refl => exact ⟨i, h⟩
+  | arg hm _ ih =>
+      cases h with
+      | app hl _ =>
+          obtain ⟨j, hj⟩ := hl.mem_read _ hm
+          exact ih hj
+
 /-- Closure obligations for the source congruence rules. -/
 structure CongObligations (src tgt : Database) : Prop where
   assert : ∀ a b, (a, b) ∈ src.eqs → SameClass tgt a b
@@ -21,8 +41,12 @@ structure CongObligations (src tgt : Database) : Prop where
     List.Forall₂ (SameClass tgt) as bs → SameClass tgt (.app f as) (.app f bs)
 
 theorem cong_sameClass {src tgt : Database} (h : CongObligations src tgt) {a b : Term}
-    (hc : Cong src a b) : SameClass tgt a b :=
-  Cong.le h.assert (fun _ _ hab => hab.symm) h.trans h.congr hc
+    (hc : Cong src a b) : SameClass tgt a b := by
+  refine Cong.le h.assert (fun _ _ hab => hab.symm) h.trans h.congr ?_ hc
+  intro t s ht hs
+  obtain ⟨i, hi, _⟩ := ht
+  obtain ⟨j, hj⟩ := hi.subterms s hs
+  exact ⟨j, hj, hj⟩
 
 /-- View ids normalize to a common leader, consistently with every UF edge. -/
 def ViewLeader (d : Database) : Prop :=
