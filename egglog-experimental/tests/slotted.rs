@@ -316,7 +316,10 @@ fn compilation_errors_are_transactional_and_located() {
 #[test]
 fn matching_policy_changes_aliasing_and_checks_remain_unrestricted() {
     for no_aliasing in [false, true] {
-        let mut compiler = Compiler::new(Options { no_aliasing });
+        let mut compiler = Compiler::new(Options {
+            no_aliasing,
+            ..Default::default()
+        });
         let mut graph = egglog_experimental::slotted::new_egraph();
         evaluate(&mut compiler, &mut graph, LANGUAGE);
         evaluate(
@@ -533,7 +536,10 @@ fn cli_explains_flags_and_rejects_incompatible_modes() {
             .unwrap()
             .contains("--slotted")
     );
-    for flags in [vec!["--slotted-no-aliasing"], vec!["--slotted", "--proofs"]] {
+    for flags in [
+        vec!["--slotted-no-aliasing"],
+        vec!["--slotted", "--proof-testing"],
+    ] {
         let result = cli().args(flags).output().unwrap();
         assert_eq!(result.status.code(), Some(2));
         assert!(
