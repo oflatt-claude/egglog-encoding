@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests slotted-eval benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-proof-tests slotted-eval benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -71,6 +71,9 @@ rust-doc-links:
 # This is a name-filtered subset of rust-test, useful for proof iteration.
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
+
+slotted-proof-tests:
+	cargo test -p egglog-experimental --test slotted_proof_files
 
 # The paper's case studies -- the S4.1 array goal and the S4.2 SDQL workloads -- on the
 # encoding and on the reference through both of its matchers, at the artifact's budgets.
