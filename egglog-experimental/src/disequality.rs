@@ -154,6 +154,7 @@ impl CommandMacro for LowerDisequality {
                     schema,
                     cost,
                     unextractable,
+                    injective: _,
                     hidden,
                     let_binding,
                 } = &command
@@ -474,6 +475,7 @@ fn constructor(span: &Span, name: String, input: Vec<String>, output: &str) -> C
         schema: Schema::new(input, output.into()),
         cost: None,
         unextractable: true,
+        injective: false,
         hidden: true,
         let_binding: false,
     }

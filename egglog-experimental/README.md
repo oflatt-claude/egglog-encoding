@@ -26,3 +26,28 @@ egglog-experimental = "3.0"
 
 Check out the crate documentation (built locally) for the current list of implemented extensions, API details, and demo links.
 Releases are coordinated with compatible releases of egglog.
+
+## Constructor injectivity
+
+Mark a constructor with `:injective` to infer equal arguments when two of its
+results are equal. Schedule the shared `injectivity` ruleset explicitly:
+
+```lisp
+(datatype Term (Leaf String))
+(constructor Wrap (Term) Term :injective)
+(union (Wrap (Leaf "a")) (Wrap (Leaf "b")))
+(run-schedule (saturate injectivity))
+(check (= (Leaf "a") (Leaf "b")))
+```
+
+Datatype variants also accept the annotation, for example
+`(datatype Term (Leaf String) (Wrap Term :injective))`. It combines with
+`:cost` and `:unextractable`. Equality-sort arguments are unioned; differing
+primitive arguments trigger a panic when the ruleset runs. Container arguments
+are currently rejected at declaration. Injectivity applies within each marked
+constructor and does not require different constructors to have different
+results. The generated rules support term encoding and proof testing.
+
+Executable examples cover [mixed arguments](tests/injectivity/injectivity-basic.egg),
+[recursive propagation](tests/injectivity/injectivity-recursive.egg), and
+[mutually recursive datatypes](tests/injectivity/injectivity-datatypes.egg).

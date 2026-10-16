@@ -33,6 +33,12 @@
 //!   portion of the constructor sub-e-graph reachable from `root` with each key
 //!   e-class replaced by its mapped value.
 //!
+//! Mark a constructor or datatype variant with `:injective` to infer equality
+//! of its arguments from equality of its results. Run the shared `injectivity`
+//! ruleset explicitly with `(run-schedule (saturate injectivity))`. Equality-sort
+//! arguments are unioned; unequal primitive arguments panic. Container arguments
+//! are rejected. These rules also support term encoding and proof testing.
+//!
 //! ## Generic containers and callbacks
 //!
 //! `(sort Name (Maybe T))` declares an optional `T`. The language primitives
@@ -100,6 +106,7 @@ mod dag_print;
 mod disequality;
 mod f64;
 mod fresh_macro;
+mod injectivity;
 mod map_fold;
 mod subst;
 mod type_constraints;
@@ -179,6 +186,7 @@ fn add_experimental_extensions(egraph: &mut EGraph, extended_run_schedule: bool)
 
     // Support for set cost
     add_set_cost(egraph);
+    injectivity::add_injectivity_support(egraph);
     egraph.add_read_primitive(GetSizePrimitive, None);
     maybe::add_maybe(egraph);
     egraph.add_read_primitive(GetNodeSizePrimitive, None);
