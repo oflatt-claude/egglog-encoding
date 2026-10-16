@@ -44,7 +44,6 @@ def Action.ctors : Action → List (FnName × Nat)
 
 /-- `Expr.ctors` over a command. A declaration counts even if nothing applies it. -/
 def Cmd.ctors : Cmd → List (FnName × Nat)
-  | .action a => a.ctors
   | .rule r => (r.query.flatMap Pattern.ctors) ++ (r.actions.flatMap Action.ctors)
   | .run _ => []
   | .saturate _ => []
@@ -90,7 +89,6 @@ def Action.vars : Action → List Var
 
 /-- `Action.vars` over a command. -/
 def Cmd.vars : Cmd → List Var
-  | .action a => a.vars
   | .rule r => r.query.vars ∪ (r.actions.flatMap Action.vars)
   | .run _ => []
   | .saturate _ => []
@@ -105,7 +103,6 @@ def Cmd.rulesets : Cmd → List RulesetName
   | .rule r => [r.ruleset]
   | .run R => [R]
   | .saturate R => [R]
-  | .action _ => []
   | .decl _ _ => []
   | .check _ => []
 
@@ -178,34 +175,10 @@ def Cmd.QueryEncodable : Cmd → Prop
   | .check q => (∀ p ∈ q, p.Grounded ∧ p.Scoped) ∧ Query.VarsKeyed q
   | _ => True
 
-/-! ### The heads the source cannot run
+/-! ### Rule-head legality
 
-A source rule head that gets **stuck** contributes nothing and its encoding's head writes
-anyway. `RuleResults` asks `evalLocalActions` for a `some`, so a stuck block silently drops
-the firing — where a stuck *top-level* action drops `ProgramStep` and makes the claim
-vacuous, a stuck rule head leaves the source running and the target one entry ahead. **Three**
-shapes do it; the two clauses below exclude two of them, and the third is not excluded by any
-clause — see `Proofs/Congruence/Correspond.lean`'s `bare_build_invents_equality`, a head that builds a
-bare variable the query does not bind, which `encodeBuild` emits no action for at all:
-
-* **A `union` on a literal.** `evalAction` refuses it — egglog's type checker does, and this
-  untyped model cannot see it until the operands are values — while `encodeAction` emits
-  `.set @UF [a] [min a b]`, which `execAction` never refuses. Only a **rule head**
-  needs excluding, and either by having no `union` or by the program building no literal at
-  all: a bare variable operand can be bound to a literal too, and it is bound to a term the
-  source holds.
-  `encode_corresponds_unions_literals` is the program, and it refutes the *conclusion*
-  rather than only its residue: the bogus edge is what a rebuild column rule then re-keys a
-  view entry along.
-* **An application of a name nobody declared.** `Expr.eval` needs `Signature.IsCtor`, so the
-  source head is stuck, while `encodePrelude` declares a structural constructor for **every**
-  name `Program.ctors` reads off the uses — declared or not. `execM_soundTerms_false` is that
-  program.
-
-Both are decidable conditions on the source program's text, so a witness discharges them by
-`decide` and `difftest`'s census counts exactly them. Neither costs the corpus
-anything: all seventy in-domain cases are literal-free and are run with their constructors
-declared up front (`Program.declared`). -/
+A stuck rule head contributes no writes. The fragment excludes undeclared applications
+and literal unions so that source and compiled firings agree. -/
 
 mutual
 
@@ -232,7 +205,6 @@ def Action.litFreeB : Action → Bool
 
 /-- `Action.litFreeB` at every action a command runs. -/
 def Cmd.litFreeB : Cmd → Bool
-  | .action a => a.litFreeB
   | .rule r => r.actions.all Action.litFreeB
   | _ => true
 
@@ -241,16 +213,12 @@ def Action.unionFreeB : Action → Bool
   | .union _ _ => false
   | _ => true
 
-/-- No **rule head** asserts a `union`. A top-level `union` needs no clause: on a literal it
-sticks the source run outright, and `ProgramStep` then has no state for the correspondence to
-be about — which is what `difftest`'s `litUnionCase` reports as `sourceStuck`. -/
+/-- No rule head asserts a union. -/
 def Cmd.ruleUnionFreeB : Cmd → Bool
   | .rule r => r.actions.all Action.unionFreeB
   | _ => true
 
-/-- `Spec/Scope.lean`'s `Action.Declared` at a rule's head, and nothing at any other
-command: a stuck **top-level** action drops `ProgramStep` and makes the claim vacuous, so
-only a head needs the condition. -/
+/-- Every function applied by a rule head is declared. -/
 def Cmd.HeadsDeclared : Cmd → Signature → Prop
   | .rule r, sig => Actions.Declared r.actions sig
   | _, _ => True
@@ -298,7 +266,6 @@ instance Actions.decidableDeclared : ∀ (as : List Action) (sig : Signature),
 instance Cmd.decidableHeadsDeclared : ∀ (c : Cmd) (sig : Signature),
     Decidable (c.HeadsDeclared sig)
   | .rule r, sig => inferInstanceAs (Decidable (Actions.Declared r.actions sig))
-  | .action _, _ => .isTrue trivial
   | .run _, _ => .isTrue trivial
   | .saturate _, _ => .isTrue trivial
   | .decl _ _, _ => .isTrue trivial
@@ -349,7 +316,6 @@ instance Actions.decidableScoped : ∀ (as : List Action) (Γ : Scope),
 
 instance Cmd.decidableHeadScoped : ∀ c : Cmd, Decidable c.HeadScoped
   | .rule r => inferInstanceAs (Decidable (Actions.Scoped r.actions (Query.vars r.query)))
-  | .action _ => .isTrue trivial
   | .run _ => .isTrue trivial
   | .saturate _ => .isTrue trivial
   | .decl _ _ => .isTrue trivial
@@ -487,7 +453,6 @@ instance (q : Query) : Decidable (Query.VarsKeyed q) :=
 instance : ∀ c : Cmd, Decidable c.QueryEncodable
   | .rule r => inferInstanceAs (Decidable ((∀ p ∈ r.query, p.Grounded ∧ p.Scoped) ∧
       Query.VarsKeyed r.query))
-  | .action _ => .isTrue trivial
   | .run _ => .isTrue trivial
   | .saturate _ => .isTrue trivial
   | .decl _ _ => .isTrue trivial

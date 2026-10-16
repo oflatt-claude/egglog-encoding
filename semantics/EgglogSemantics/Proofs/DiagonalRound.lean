@@ -12,9 +12,9 @@ theorem Database.StoreOk.entries_eq_of_terms_eq {d e : Database}
   ext row
   constructor
   · intro hr
-    exact he.entry_of_held_atom (hsig ▸ hr.1) (ht ▸ Cong.assert hr.2)
+    exact he.entry_of_held_atom (hsig ▸ hr.1) (ht ▸ Cong.direct hr.2)
   · intro hr
-    exact hd.entry_of_held_atom (hsig.symm ▸ hr.1) (ht.symm ▸ Cong.assert hr.2)
+    exact hd.entry_of_held_atom (hsig.symm ▸ hr.1) (ht.symm ▸ Cong.direct hr.2)
 
 private def overlay (d : Database) (E : Set (Term × Term)) : Database :=
   { d with eqs := d.eqs ∪ E }

@@ -118,18 +118,14 @@ inductive SaturateReach (R : RulesetName) : Database → Database → Prop where
 bindings are supplied when they fire. Saturation is a fixpoint condition rather than a
 function because it may not terminate. -/
 def cmdReach (db : Database) : Cmd → Database → Prop
-  | .action a, d => evalAction db a = some d
   | .rule r, d => d = { db with rules := insert r db.rules }
   | .run R, d => d = RunRules R db
   | .saturate R, d => SaturateReach R db d
   | .decl f dc, d => d = { db with sig := Function.update db.sig f (some dc) }
   | .check q, d => QueryHolds db q ∧ d = db
 
-/-- Successful execution of a command. A check only observes its input. Every other
-command merges, so a
-top-level `set` is its own merge phase, and `run` is one round of rule firing followed by
-one. The phase is neutral after a `Cmd.saturate`, which ends merge-normal
-(`cmdStep_saturate_iff`). -/
+/-- Successful command execution. Checks only observe; every other command completes
+merging. Saturation already ends merge-normal (`cmdStep_saturate_iff`). -/
 def CmdStep (db : Database) (c : Cmd) (db' : Database) : Prop :=
   match c with
   | .check q => QueryHolds db q ∧ db' = db

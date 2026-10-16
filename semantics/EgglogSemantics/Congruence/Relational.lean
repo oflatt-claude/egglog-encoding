@@ -96,7 +96,7 @@ theorem diagonal_eq_closure {d : FDatabase} (h : d.EqsRefl) :
   rw [mem_diagonal, FDatabase.mem_closureF_iff]
   constructor
   · rintro ⟨rfl, ha⟩
-    exact Cong.assert (Or.inl ⟨rfl, ha⟩)
+    exact Cong.direct (Or.inl ⟨rfl, ha⟩)
   · intro hab
     exact ⟨Cong.eq_of_eqsRefl h.toDatabase hab, (FDatabase.toDatabase_cong_mem hab).1⟩
 
@@ -590,7 +590,6 @@ def runSaturate (R : RulesetName) : Nat → FDatabase → Option FDatabase
     if d.sameData e then some d else runSaturate R n e
 
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
-  | .action a => (execAction d a).bind (mergeSaturate mergeFuel)
   | .rule r => some { d with rules := r :: d.rules }
   | .run R => runRound R d
   | .saturate R => runSaturate R runFuel d

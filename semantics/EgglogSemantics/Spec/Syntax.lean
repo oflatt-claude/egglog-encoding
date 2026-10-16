@@ -158,9 +158,8 @@ def Query.vars : Query → List Var
   | [] => []
   | p :: ps => p.vars ∪ Query.vars ps
 
-/-- A top-level command. -/
+/-- A top-level command. Initial facts use an empty-query rule followed by `run`. -/
 inductive Cmd where
-  | action : Action → Cmd
   | rule : Rule → Cmd
   /-- One round of a ruleset: egglog's `(run <ruleset> 1)`, which is `(repeat 1 (run
   <ruleset>))` (`egglog/src/ast/parse.rs:834-864`). -/

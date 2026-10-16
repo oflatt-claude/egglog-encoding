@@ -204,7 +204,7 @@ theorem encodeAction_soundTerms {src post : Database} {d d' : FDatabase} {a : Ac
   · apply encodeUnion_soundTerms hw hs (hp a (by simp [actionExprs]))
       (hp b (by simp [actionExprs])) ((heval a (by simp [actionExprs])).trans ha)
       ((heval b (by simp [actionExprs])).trans hb) _ hpost htgt
-    exact Cong.assert (Set.mem_insert _ _)
+    exact Cong.direct (Set.mem_insert _ _)
 
 /-- Action blocks use the same variable environment throughout. Each successive source
 post-state supplies the existence and equality needed by its compiled writes. -/
@@ -294,7 +294,7 @@ theorem encodeAction_entryRowsUF {src post : Database} {d d' : FDatabase} {a : A
   · apply encodeUnion_entryRowsUF hw hs (hp a (by simp [actionExprs]))
       (hp b (by simp [actionExprs])) ((heval a (by simp [actionExprs])).trans ha)
       ((heval b (by simp [actionExprs])).trans hb) _ hshape h htgt
-    exact Cong.assert (Set.mem_insert _ _)
+    exact Cong.direct (Set.mem_insert _ _)
 
 /-- The bridge survives a compiled source action block. -/
 theorem encodeActions_entryRowsUF {src post : Database} {d d' : FDatabase} {as : List Action}

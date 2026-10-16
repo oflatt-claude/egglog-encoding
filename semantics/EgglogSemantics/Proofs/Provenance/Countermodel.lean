@@ -41,7 +41,7 @@ theorem single_row_merge_counterexample :
       mergeFacts db.sig "T" input input = some facts ∧ facts.result ∉ db.terms := by
   refine ⟨single, row 1, ⟨[], row 9⟩, single_wf, single_normal, ?_, ?_,
     single_lacks_result⟩
-  · exact Cong.assert (Or.inr ⟨row 1, Term.self_mem_subterms _, rfl⟩)
+  · exact Cong.direct (Or.inr ⟨row 1, Term.self_mem_subterms _, rfl⟩)
   · rfl
 
 end Egglog.Provenance.Counterexamples

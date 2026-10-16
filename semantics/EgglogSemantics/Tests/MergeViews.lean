@@ -133,7 +133,7 @@ private theorem collision (rows : Set Entry)
       have hv := congrArg Entry.value he
       simp only [row, List.singleton_inj, val, Term.lit.injEq, Lit.int.injEq] at hv
       exact hne (by exact_mod_cast hv)) rfl (by simp [state, row])
-    (.cons (.assert (held hk)) .nil) (herase.symm ▸ hm)
+    (.cons (.direct (held hk)) .nil) (herase.symm ▸ hm)
   change MergeStep (state rows) ((state bodyRows).putEntry (row k a)) at hs
   rw [put_state bodyRows []] at hs
   exact hs
@@ -261,7 +261,7 @@ theorem distinct_normalized_views :
       simp only [startRows, Set.mem_insert_iff, Set.mem_singleton_iff] at he
       rcases he with rfl | rfl | rfl <;>
         exact ⟨by simp [state, row], ⟨_, rfl⟩⟩
-  · exact ⟨[val 3], .cons (.assert (held (by decide))) .nil,
+  · exact ⟨[val 3], .cons (.direct (held (by decide))) .nil,
       by rw [state_entries leftRows_valid]; simp [leftRows, row]⟩
   · rintro ⟨ks, hk, hr⟩
     have he : [val 3] = ks := CongList.eq_of_diag (state_diag rightRows) hk

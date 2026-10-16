@@ -74,24 +74,4 @@ theorem evalAction_covers {d e post : Database} (h : Covers d e) (henv : d.env =
         obtain ⟨y, hy, hj⟩ := h.rows f cs x hx
         exact ⟨y, hy, hj.mono (by rw [Database.addEq_entries (h.sig ▸ hva) (h.sig ▸ hvb)])⟩
 
-theorem evalActions_covers_program {d e post final : Database} (h : Covers d e)
-    (henv : d.env = e.env) (he : Runtime e) {as : List Action}
-    (hu : Actions.UnionFree as) (hf : evalActions d as = some post)
-    (hr : ProgramStep e (as.map Cmd.action) final) : Covers post final := by
-  induction as generalizing d e with
-  | nil =>
-      obtain rfl := Option.some.inj hf
-      obtain rfl := hr.nil_inv
-      exact h
-  | cons a as ih =>
-      obtain ⟨mid, hm, hrest⟩ := Option.bind_eq_some_iff.mp hf
-      obtain ⟨next, hc, hr⟩ := hr.cons_inv
-      obtain ⟨raw, hraw, hmerge⟩ := hc
-      obtain ⟨raw', hraw', hcov, henv'⟩ := evalAction_covers h henv hm
-      obtain rfl := Option.some.inj (hraw'.symm.trans hraw)
-      have hmrg := Covers.mergeClosure (he.state.evalAction he.generated hraw')
-        (evalAction_diag hu.1 he.noUnions.diag hraw') hmerge.1
-      exact ih (hcov.trans hmrg) (henv'.trans hmerge.1.envRules.1.symm)
-        (he.cmd (c := .action a) trivial hu.1 ⟨raw', hraw', hmerge⟩) hu.2 hrest hr
-
 end Egglog.Congruence.Live

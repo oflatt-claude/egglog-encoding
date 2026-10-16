@@ -15,7 +15,7 @@ theorem actionFacts_sound {db : Database} {a : Action} {fs : List Term}
     · cases Option.some.inj h
       refine ⟨db.addTerm t, by simp [evalAction, ht], ?_⟩
       intro s hs
-      exact Cong.assert (Or.inr ⟨s, (Term.mem_subtermList t).mp hs, rfl⟩)
+      exact Cong.direct (Or.inr ⟨s, (Term.mem_subtermList t).mp hs, rfl⟩)
     · contradiction
 
 theorem actionsFacts_sound {db : Database} {as : List Action} {fs : List Term}
@@ -163,7 +163,7 @@ theorem mergeFacts_sound {db : Database} (hw : db.WF) (hclosed : MergeNormal db)
                     (show (D.addTerm (.app f (oc.take d.arity ++ vs))).Contained post from
                       ⟨fun _ h => h⟩)
                   exact hcont.terms (hfs t ht)
-                · exact Cong.assert (Or.inr ⟨t,
+                · exact Cong.direct (Or.inr ⟨t,
                     (Term.mem_subtermList _).mp ht, rfl⟩)
               · contradiction
             · contradiction

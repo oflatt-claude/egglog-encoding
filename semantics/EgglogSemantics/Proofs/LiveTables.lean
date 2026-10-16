@@ -60,7 +60,7 @@ theorem cong_table_head_iff {d : Database} (hs : d.StoreOk)
     {a b : Term} (hc : Cong d a b) :
     (∃ cols, a = .app f cols) ↔ (∃ cols, b = .app f cols) := by
   induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
-  | assert hp =>
+  | direct hp =>
     rcases hs.typed _ hp with ⟨ha, hb⟩ | ⟨row, _, he⟩
     · constructor
       · rintro ⟨cols, rfl⟩
@@ -91,7 +91,7 @@ theorem cong_table_columns {d : Database} (hs : d.StoreOk)
       a = .app f as → b = .app f bs → CongList d as bs := by
     intro a b hc
     induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
-    | assert hp =>
+    | direct hp =>
       intro f decl as bs hd hm ha hb
       cases ha
       cases hb
@@ -171,9 +171,9 @@ theorem table_match_of_current {d : Database} {e : Expr} {σ : Env} {target row 
     (hn : row.name = target.name)
     (hc : CongList (d.withOperands [target.atom]) target.columns row.columns) :
     Matches d (.expr e) σ := by
-  apply Matches.expr (.assert hr.2) he
+  apply Matches.expr (.direct hr.2) he
   have hrow : Cong (d.withOperands [target.atom]) row.atom row.atom :=
-    (Cong.assert hr.2).mono (Database.Contained.addTerms _ _)
+    (Cong.direct hr.2).mono (Database.Contained.addTerms _ _)
   have htarget : Cong (d.withOperands [target.atom]) target.atom target.atom :=
     Database.mem_addTerms (by simp)
   change Cong (d.withOperands [target.atom])

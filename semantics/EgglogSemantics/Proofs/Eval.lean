@@ -99,7 +99,7 @@ theorem Database.StoreOk.addTerm {db : Database} (h : db.StoreOk) (t : Term)
     obtain ⟨d, hd, hm, _⟩ := hr.1
     exact ⟨d, hd, hm⟩
   · intro row hr s hs
-    exact Cong.subterm (.assert hr.2) (Term.arg_subterms hs (.refl _))
+    exact Cong.subterm (.direct hr.2) (Term.arg_subterms hs (.refl _))
   · intro p hp
     rcases hp with rfl | hp
     · rcases ht with hv | ⟨row, hr, rfl⟩
@@ -114,7 +114,7 @@ theorem Database.StoreOk.addEq {db : Database} (h : db.StoreOk) (a b : Term)
     obtain ⟨d, hd, hm, _⟩ := hr.1
     exact ⟨d, hd, hm⟩
   · intro row hr t ht
-    exact Cong.subterm (.assert hr.2) (Term.arg_subterms ht (.refl _))
+    exact Cong.subterm (.direct hr.2) (Term.arg_subterms ht (.refl _))
   · intro p hp
     rcases hp with rfl | hp
     · exact Or.inl ⟨ha, hb⟩
@@ -137,7 +137,7 @@ theorem Database.mem_terms_eraseEntry_of_ne {db : Database} {row : Entry} {t : T
     · exact (hne hs).elim
     · obtain ⟨v, hv, hs⟩ := Set.mem_iUnion₂.mp hs
       apply Cong.subterm (s := t) (t := v) _ hs
-      apply Cong.assert
+      apply Cong.direct
       rw [Database.eraseEntry_eqs]
       exact Or.inr ⟨v, hv, rfl⟩
   · apply Database.mem_terms_iff.mpr
@@ -168,7 +168,7 @@ theorem Database.StoreOk.eraseEntry {db : Database} (h : db.StoreOk) (row : Entr
     obtain ⟨dc, hd, hm, _⟩ := hm.1
     exact ⟨dc, hd, hm⟩
   · intro r hm t ht
-    exact Cong.subterm (.assert hm.2) (Term.arg_subterms ht (.refl _))
+    exact Cong.subterm (.direct hm.2) (Term.arg_subterms ht (.refl _))
   · intro p hp
     rw [Database.eraseEntry_eqs] at hp
     rcases hp with hp | ⟨v, hv, rfl⟩
@@ -211,7 +211,7 @@ theorem Database.StoreOk.terms_eraseEntry {db : Database} (h : db.StoreOk)
   · rintro (⟨ht, hn⟩ | ⟨v, hv, hs⟩)
     · exact Database.mem_terms_eraseEntry_of_ne hn ht
     · apply Cong.subterm (t := v) _ hs
-      exact .assert (Database.eraseEntry_eqs ▸ Or.inr ⟨v, hv, rfl⟩)
+      exact .direct (Database.eraseEntry_eqs ▸ Or.inr ⟨v, hv, rfl⟩)
 
 /-- Actual row deletion removes just that atom; its value columns remain held. -/
 theorem Database.StoreOk.terms_eraseEntry_of_mem {db : Database} (h : db.StoreOk)

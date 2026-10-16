@@ -41,7 +41,6 @@ theorem not_cmdDiverges {P : Program} (hp : P.Fragment) {d : Database}
   | merge hncheck hnsat hr hm =>
       rename_i mid
       cases c with
-      | action a => exact (h.action hu hr).state.not_mergeDiverges hm
       | run R =>
           subst mid
           exact (h.runRules R).state.not_mergeDiverges hm

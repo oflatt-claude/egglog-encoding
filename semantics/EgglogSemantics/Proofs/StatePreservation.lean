@@ -26,7 +26,6 @@ def Action.WriteLegal (a : Action) (sig : Signature) : Prop :=
   Actions.SetWidthOk as sig
 
 @[simp] def Cmd.WriteLegal : Cmd → Signature → Prop
-  | .action a, sig => a.WriteLegal sig
   | .rule r, sig => Actions.WriteLegal r.actions sig
   | .check _, _ => True
   | .run _, _ => True
@@ -92,7 +91,7 @@ theorem Database.StoreOk.decl {db : Database} (hs : db.StoreOk) {f : FnName}
     rcases hs.typed p hp with hp' | ⟨row, hr, rfl⟩
     · exact Or.inl ⟨hv _ hp'.1, hv _ hp'.2⟩
     · exact Or.inr ⟨row, (Entry.valid_update_iff hag
-        (hav.terms row.atom (Cong.assert hp))).mp hr, rfl⟩
+        (hav.terms row.atom (Cong.direct hp))).mp hr, rfl⟩
 
 theorem evalLocalActions_storeOk {db d : Database} (hs : db.StoreOk)
     {as : List Action} {σ : Env} (hv : ∀ b ∈ σ, b.2.IsValue db.sig)
@@ -206,7 +205,6 @@ theorem cmdReach_storeOk {db d : Database} (hs : db.StoreOk) {c : Cmd}
     (hf : c.DeclFresh db.sig) (hmw : (c.sigBind db.sig).MergesWidthOk)
     (h : cmdReach db c d) : d.StoreOk := by
   cases c with
-  | action a => exact evalAction_storeOk hs h
   | rule r => subst d; exact hs.congr rfl rfl hs.envValues
   | run R => subst d; exact RunRules.storeOk hs
   | saturate R => exact RunReach.storeOk hs hmw (show SaturateReach R db d from h).reach
@@ -497,7 +495,6 @@ theorem cmdReach_declaredTerms {db d : Database} (hwf : db.WF) (hs : db.StoreOk)
     (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
     (hmw : (c.sigBind db.sig).MergesWidthOk) (h : cmdReach db c d) : d.DeclaredTerms := by
   cases c with
-  | action a => exact evalAction_declaredTerms hwf hdt hw h
   | rule r =>
     subst h
     intro g cs hmem

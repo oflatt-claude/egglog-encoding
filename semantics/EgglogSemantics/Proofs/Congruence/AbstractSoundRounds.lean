@@ -18,7 +18,7 @@ theorem completion_firing_contained_round {src out post : Database} {r : Rule}
   constructor
   intro p hp
   exact InferredFacts.infers_mono (SourceMeaning.firing_contained_round hr hR ho')
-    ((hh.inferred _ _).mp (InferredFacts.infers_of_cong (.assert hp)))
+    ((hh.inferred _ _).mp (InferredFacts.infers_of_cong (.direct hp)))
 
 theorem completion_mono {src post : Database} (h : src.Contained post) :
     src.completion.Contained post.completion :=

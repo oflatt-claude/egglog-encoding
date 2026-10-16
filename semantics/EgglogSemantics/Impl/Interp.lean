@@ -252,7 +252,7 @@ def toDatabase (d : FDatabase) : Database where
 theorem toDatabase_cong_mem {d : FDatabase} {a b : Term} (h : Cong d.toDatabase a b) :
     a ∈ d.terms ∧ b ∈ d.terms := by
   match h with
-  | .assert hm =>
+  | .direct hm =>
     rcases hm with ⟨he, hd, _⟩ | ⟨_, h₁, h₂, _, _⟩
     · change a = b at he
       exact ⟨hd, he ▸ hd⟩
@@ -264,7 +264,7 @@ theorem toDatabase_cong_mem {d : FDatabase} {a b : Term} (h : Cong d.toDatabase 
 theorem toDatabase_cong_visible {d : FDatabase} {a b : Term}
     (h : Cong d.toDatabase a b) : d.Visible a ∧ d.Visible b := by
   match h with
-  | .assert hm =>
+  | .direct hm =>
     rcases hm with ⟨he, _, hv⟩ | ⟨_, _, _, h₁, h₂⟩
     · change a = b at he
       exact ⟨hv, he ▸ hv⟩
@@ -279,7 +279,7 @@ theorem toDatabase_terms (d : FDatabase) :
     d.toDatabase.terms = {t | t ∈ d.terms ∧ d.Visible t} := by
   ext t
   exact ⟨fun h => ⟨(toDatabase_cong_mem h).1, (toDatabase_cong_visible h).1⟩,
-    fun h => Cong.assert (Or.inl ⟨rfl, h⟩)⟩
+    fun h => Cong.direct (Or.inl ⟨rfl, h⟩)⟩
 
 /-- The initial database. -/
 def empty : FDatabase where
@@ -1559,7 +1559,6 @@ def runFuel : Nat := 64
 
 /-- `CmdStep`, computed. -/
 def execCmd (d : FDatabase) : Cmd → Option FDatabase
-  | .action a => execAction d a
   | .rule r => some { d with rules := r :: d.rules }
   | .run R => some (execRunRules R d)
   | .saturate R => d.runSaturateF R runFuel

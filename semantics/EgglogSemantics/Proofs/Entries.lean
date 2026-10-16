@@ -178,7 +178,7 @@ the signature condition, which is what the encoded target has. -/
 /-- `withOperands` records the operand, so it is congruent to itself there whether or not
 the state held it. -/
 theorem congOn_self {db : Database} (t : Term) : CongOn db [t] t t :=
-  Cong.assert (by
+  Cong.direct (by
     simp only [Database.withOperands, Database.addTerms, List.foldl_cons,
       List.foldl_nil, Database.addTerm, Set.mem_union, Set.mem_setOf_eq]
     exact Or.inr ⟨t, Term.self_mem_subterms t, rfl⟩)
@@ -402,7 +402,7 @@ theorem patternHolds_entry_of_mem_rows {d : FDatabase} {vs as : List Expr} {f : 
     patternHolds d (.expr (.app f (as ++ vs))) σ = true := by
   have hrefl : ∀ c ∈ ts ++ us, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF := by
     intro c hc
-    exact FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl,
+    exact FDatabase.mem_closureF_iff.mpr (Cong.direct (Or.inl ⟨rfl,
       FDatabase.mem_addTerms_terms (FDatabase.mem_addTerms_terms (hcol c hc))⟩))
   have hct : ∀ (xs : List Term),
       (∀ c ∈ xs, (c, c) ∈ ((d.addTerms ts).addTerms us).closureF) →

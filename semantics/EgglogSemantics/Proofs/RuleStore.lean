@@ -33,7 +33,6 @@ theorem CmdStep.mem_rules_iff {src post : Database} {c : Cmd} (h : CmdStep src c
   obtain ⟨mid, hm, hcl⟩ := h.reach
   rw [hcl.envRules.2]
   cases c with
-  | action a => rw [evalAction_rules hm]; simp
   | rule s =>
       subst hm
       simp [eq_comm, or_comm]

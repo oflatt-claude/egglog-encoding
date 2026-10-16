@@ -1,6 +1,9 @@
 import EgglogSemantics.Proofs.SourceProof.Support
 import EgglogSemantics.Impl.Merge
 
+/-! One stored `Table(A)` row and `A = B` can justify the spelling `Table(B)`.
+They do not establish a second row or authorize running its merge body. -/
+
 namespace Egglog.SourceProof.Counterexamples
 
 set_option linter.hashCommand false

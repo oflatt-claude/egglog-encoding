@@ -472,13 +472,12 @@ theorem saturateReach_det {R : RulesetName} {db d₁ d₂ : Database}
 
 /-! ### What a command reaches
 
-`cmdReach` is a function's graph on four commands out of five and a fixpoint condition on
+`cmdReach` is a function's graph on three commands, a check condition, or a fixpoint on
 `Cmd.saturate`. Absorbing the split here is what keeps it out of `CmdStep`'s proofs
 below. -/
 theorem cmdReach_sig {db d : Database} {c : Cmd} (h : cmdReach db c d) :
     d.sig = c.sigBind db.sig := by
   cases c with
-  | action a => exact evalAction_sig h
   | rule r => subst h; rfl
   | run R => subst h; rfl
   | saturate R => exact RunReach.sig (show SaturateReach R db d from h).reach
@@ -490,7 +489,6 @@ theorem cmdReach_sig {db d : Database} {c : Cmd} (h : cmdReach db c d) :
 theorem cmdReach_wf {db d : Database} (hw : db.WF) {c : Cmd} (hns : c.NoSaturate)
     (h : cmdReach db c d) : d.WF := by
   cases c with
-  | action a => exact evalAction_wf hw h
   | rule r => subst h; exact hw.congr rfl rfl
   | run R => subst h; exact RunRules.wf hw
   | saturate R => exact (hns : False).elim
@@ -508,13 +506,13 @@ theorem cmdReach_ctorState {db d : Database} (h : db.CtorState) {c : Cmd}
   | saturate R => exact (RunReach.ctorState h (show SaturateReach R db d from hr).reach).wf
   | _ => exact cmdReach_wf h.wf (by trivial) hr
 
-/-- What a command reaches is unique on the constructor fragment: four commands are
-functions, and a saturating run's fixpoint is unique by `saturateReach_det`. -/
+/-- What a command reaches is unique on the constructor fragment: three commands are
+functions, checks retain the state, and a saturating run's fixpoint is unique by
+`saturateReach_det`. -/
 theorem cmdReach_det {db e₁ e₂ : Database} (hsig : db.sig.AllConstructors) {c : Cmd}
     (h₁ : cmdReach db c e₁) (h₂ : cmdReach db c e₂) : e₁ = e₂ := by
   cases c with
   | saturate R => exact saturateReach_det hsig h₁ h₂
-  | action a => exact Option.some.inj (h₁.symm.trans h₂)
   | rule _ | run _ | decl _ _ => exact h₁.trans h₂.symm
   | check q => exact h₁.2.trans h₂.2.symm
 
@@ -539,7 +537,6 @@ theorem CmdStep.env {db db' : Database} {c : Cmd} (h : CmdStep db c db') :
   obtain ⟨d, he, hm⟩ := h.reach
   refine (MergeClosure.envRules hm).1.trans ?_
   cases c with
-  | action a => exact evalAction_env he
   | saturate R => exact RunReach.env (show SaturateReach R db d from he).reach
   | rule r => subst he; rfl
   | run R => subst he; rfl
@@ -910,7 +907,7 @@ theorem mergeStep_avoids {f : FnName} {db x : Database} (hf : db.sig f = none)
     (h : MergeStep db x) : x.Avoids f := by
   have hcols : ∀ row ∈ db.entries, ∀ t ∈ row.columns,
       ¬ Term.Mentions f t := fun row hr t ht =>
-        Term.not_mentions_args (hav.terms row.atom (Cong.assert hr.2)) t ht
+        Term.not_mentions_args (hav.terms row.atom (Cong.direct hr.2)) t ht
   cases h with
   | @collide post old new decl vs ho hn _ _ hd _ hv =>
       have hov := hcols old ho
@@ -918,9 +915,9 @@ theorem mergeStep_avoids {f : FnName} {db x : Database} (hf : db.sig f = none)
       have hterms : ((db.eraseEntry old).eraseEntry new).terms ⊆ db.terms :=
         (Database.terms_eraseEntry_subset (row := new) (fun t ht =>
           Database.mem_terms_eraseEntry_of_value ho.1 (hn.1.column_values t ht)
-            (Cong.subterm (.assert hn.2) (Term.arg_subterms ht (.refl _))))).trans
+            (Cong.subterm (.direct hn.2) (Term.arg_subterms ht (.refl _))))).trans
           (Database.terms_eraseEntry_subset (fun t ht =>
-            Cong.subterm (.assert ho.2) (Term.arg_subterms ht (.refl _))))
+            Cong.subterm (.direct ho.2) (Term.arg_subterms ht (.refl _))))
       have hstart : ((db.eraseEntry old).eraseEntry new).Avoids f :=
         ⟨fun t ht => hav.terms t (hterms ht), hav.env⟩
       obtain ⟨havpost, hvs⟩ := mergeValues_avoids (db := (db.eraseEntry old).eraseEntry new) hf
@@ -985,9 +982,9 @@ theorem Database.entries_update_of_avoids {db : Database} {sig' : Signature} {f 
   ext row
   constructor
   · rintro ⟨hv, hp⟩
-    exact ⟨(Entry.valid_update_iff hag (hav.terms _ (Cong.assert hp))).mpr hv, hp⟩
+    exact ⟨(Entry.valid_update_iff hag (hav.terms _ (Cong.direct hp))).mpr hv, hp⟩
   · rintro ⟨hv, hp⟩
-    exact ⟨(Entry.valid_update_iff hag (hav.terms _ (Cong.assert hp))).mp hv, hp⟩
+    exact ⟨(Entry.valid_update_iff hag (hav.terms _ (Cong.direct hp))).mp hv, hp⟩
 
 /-- Declaring a name a `Declared` expression cannot mention leaves its value alone. -/
 theorem eval_update {sig sig' : Signature} {f : FnName} (hf : sig f = none)
@@ -1154,10 +1151,10 @@ theorem mergeStep_update_iff {f : FnName} {fd : FnDecl} {db x : Database}
   have he := Database.entries_update_of_avoids hag hav
   have hne : ∀ row ∈ db.entries, row.name ≠ f := by
     intro row hr hname
-    exact hav.terms row.atom (Cong.assert hr.2) (hname ▸ Term.mentions_head row.name row.columns)
+    exact hav.terms row.atom (Cong.direct hr.2) (hname ▸ Term.mentions_head row.name row.columns)
   have hcols : ∀ row ∈ db.entries, ∀ t ∈ row.value, ¬ Term.Mentions f t := by
     intro row hr t ht
-    exact Term.not_mentions_args (hav.terms row.atom (Cong.assert hr.2)) t
+    exact Term.not_mentions_args (hav.terms row.atom (Cong.direct hr.2)) t
       (List.mem_append_right _ ht)
   constructor
   · intro h
@@ -1265,7 +1262,6 @@ theorem cmdStep_sigMergeDeclared {db d : Database} {c : Cmd} (hsmd : SigMergeDec
     (hc : c.MergeDeclared db.sig) (h : CmdStep db c d) : SigMergeDeclared d.sig := by
   rw [CmdStep.sig h]
   cases c with
-  | action a => exact hsmd
   | rule r => exact hsmd
   | run R => exact hsmd
   | saturate R => exact hsmd

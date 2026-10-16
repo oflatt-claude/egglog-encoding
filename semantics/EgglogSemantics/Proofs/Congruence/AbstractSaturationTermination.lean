@@ -63,7 +63,7 @@ theorem source_saturate_exists {P pre rest : Program} (hp : P.Fragment)
   have hbound := (Database.finite_terms hf).union (hsrc.union (SoundRows.finite hsrc))
   apply Egglog.saturateReach_exists_of_finite_bound R d (hbound.prod hbound)
   intro e he p hp'
-  have hm := eqsInTerms_free (Cong.assert hp')
+  have hm := eqsInTerms_free (Cong.direct hp')
   have ht := source_saturation_termBound hp hP hpre h hs hd hsig hrules hsat he
   exact ⟨ht hm.1, ht hm.2⟩
 

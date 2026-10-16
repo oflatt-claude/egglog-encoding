@@ -155,23 +155,12 @@ theorem Boundary.step {P pre rest : Program} (hp : P.Fragment) {c : Cmd}
   have hcs := (hpre.ctorState Database.CtorState.empty
     (fun cmd hm => hp.ctorsOnly cmd (hsub cmd hm))).sig
   have hrt := Live.prefix_runtime hp htpre
-  have hsig := Live.prefix_sig htpre
-  have hrules := Live.rulesEncoded_of_prefix hpre htpre
   cases c with
   | decl f dc => exact h.decl hcs (hp.ctorsOnly _ hmem) hs ht
   | rule r =>
       exact h.rule hcs
         (htpre.mergeNormal (Database.StoreOk.empty.mergeNormal Database.CtorState.empty.sig)) hs ht
   | check q => exact h.check hs ht
-  | action a =>
-      obtain ⟨he, hsound, hdesc, hreads, hu, hsat⟩ := global_command_of_programStep
-        hp hsub hpre hmem hs hrt hsig htpre.env h.sound h.descend h.reads h.total
-        (maintenance_only hp hsub hpre hrules) ht
-      have hnext := hpre.append (.cons hs .nil)
-      have htnext := compiled_prefix_step htpre ht
-      exact ⟨hsound, hdesc, hreads, rebuilt_of_metadata he hp (Live.prefix_sig htnext)
-        (Live.rulesEncoded_of_prefix hnext htnext) (Or.inl rfl)
-        (Database.finite_terms he.state.finite.eqs) hsat hdesc, hu⟩
   | run R => exact h.run hp hP hpre htpre hrt hs ht
   | saturate R => exact h.saturate hp hP hpre htpre hrt hs ht
 /-- Compose command preservation without requiring either execution to determine the other. -/

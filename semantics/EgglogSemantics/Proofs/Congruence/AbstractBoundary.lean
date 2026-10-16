@@ -11,7 +11,7 @@ theorem CmdStep.mergeNormal {d e : Database} {c : Cmd} (h : CmdStep d c e)
     (hn : MergeNormal d) : MergeNormal e := by
   cases c with
   | check q => obtain ⟨_, rfl⟩ := h; exact hn
-  | decl | rule | action | run | saturate => exact h.choose_spec.2.2
+  | decl | rule | run | saturate => exact h.choose_spec.2.2
 
 theorem ProgramStep.mergeNormal {d e : Database} {p : Program}
     (h : ProgramStep d p e) (hn : MergeNormal d) : MergeNormal e := by

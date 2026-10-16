@@ -212,7 +212,7 @@ replays wherever each *asserted* equation of `D` is derivable. -/
 theorem cong_replay {D E : Database} (h : ∀ p ∈ D.eqs, Cong E p.1 p.2) {a b : Term}
     (hc : Cong D a b) : Cong E a b := by
   induction hc using Cong.rec (motive_2 := fun as bs _ => CongList E as bs) with
-  | assert hab => exact h _ hab
+  | direct hab => exact h _ hab
   | symm _ ih => exact .symm ih
   | trans _ _ ih₁ ih₂ => exact .trans ih₁ ih₂
   | congr _ _ _ ih₁ ih₂ ihl => exact .congr ih₁ ih₂ ihl
@@ -261,7 +261,7 @@ theorem terms_subtermClosed {E : Database}
   have key : ∀ {a b : Term}, Cong E a b → a.subterms ⊆ E.terms ∧ b.subterms ⊆ E.terms := by
     intro a b hc
     induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
-    | assert hab => exact h _ hab
+    | direct hab => exact h _ hab
     | symm _ ih => exact ⟨ih.2, ih.1⟩
     | trans _ _ ih₁ ih₂ => exact ⟨ih₁.1, ih₂.2⟩
     | congr _ _ _ ih₁ ih₂ _ => exact ⟨ih₁.1, ih₂.1⟩
@@ -278,10 +278,10 @@ theorem withOperands_subtermClosed {db : Database}
     Cong.mono (Database.Contained.addTerms ts db) hx
   intro p hp
   rcases mem_addTerms_eqs' ts db p hp with hq | ⟨t, ht, s, hs, rfl⟩
-  · have hm := eqsInTerms_free (Cong.assert hq)
+  · have hm := eqsInTerms_free (Cong.direct hq)
     exact ⟨fun x hx => grow (hwf _ hm.1 hx), fun x hx => grow (hwf _ hm.2 hx)⟩
   · have hsub : ∀ x ∈ (s : Term).subterms, x ∈ (db.withOperands ts).terms := fun x hx =>
-      Cong.assert (refl_mem_addTerms (Term.subterms_subset_of_mem hs hx) ts db ht)
+      Cong.direct (refl_mem_addTerms (Term.subterms_subset_of_mem hs hx) ts db ht)
     exact ⟨hsub, hsub⟩
 
 /-! #### The model -/
@@ -375,9 +375,9 @@ theorem I_congr {db E : Database} (hsub : ∀ t ∈ db.terms, t.subterms ⊆ db.
     (hE : ∀ p ∈ E.eqs, p ∈ db.eqs ∨ p.1 = p.2) {a b : Term} (hc : Cong E a b) :
     I db a = I db b := by
   induction hc using Cong.rec (motive_2 := fun as bs _ => IList db as = IList db bs) with
-  | @assert x y hxy =>
+  | @direct x y hxy =>
     rcases hE _ hxy with hp | hp
-    · have hcong : Cong db x y := Cong.assert hp
+    · have hcong : Cong db x y := Cong.direct hp
       have hm := eqsInTerms_free hcong
       rw [I_eq_of_mem hsub x hm.1, I_eq_of_mem hsub y hm.2]
       exact Quot.sound hcong
@@ -462,12 +462,12 @@ theorem cong_of_mem_eqs {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hwf : d
     {S : Set Term} (hS : d₁.terms ⊆ S) {D : Database} (hD : d₂.eqs ⊆ D.eqs)
     {p : Term × Term} (hp : p ∈ d₁.eqs) : Cong (amb D S) p.1 p.2 := by
   obtain ⟨q, hq, h₁, h₂⟩ := h.eqs p hp
-  have hmem := eqsInTerms_free (Cong.assert hp)
+  have hmem := eqsInTerms_free (Cong.direct hp)
   have hsub : (d₂.withOperands [p.1, p.2]).eqs ⊆ (amb D S).eqs :=
     pair_operands_subset (fun s hs => hS (hwf.subtermClosed _ hmem.1 hs))
       (fun s hs => hS (hwf.subtermClosed _ hmem.2 hs)) hD
   exact (Cong.mono ⟨hsub⟩ h₁).trans
-    ((Cong.assert (subset_amb (hD hq))).trans (Cong.mono ⟨hsub⟩ h₂).symm)
+    ((Cong.direct (subset_amb (hD hq))).trans (Cong.mono ⟨hsub⟩ h₂).symm)
 
 /-- A whole derivation of `d₁`, moved into the wide ambient. -/
 theorem cong_transport {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hwf : d₁.WF)
@@ -490,15 +490,15 @@ theorem trans_side {d₂ d₃ : Database} (h₂₃ : d₂.Recorded d₃) (hwf₂
     intro w hw
     rcases mem_addTerms_eqs' ts d₂ w hw with hw2 | ⟨t, ht, s, hs, rfl⟩
     · obtain ⟨r', hr', h₁', h₂'⟩ := h₂₃.eqs w hw2
-      have hwm := eqsInTerms_free (Cong.assert hw2)
+      have hwm := eqsInTerms_free (Cong.direct hw2)
       have hsub := pair_operands_subset (D := d₃.withOperands ts) (S := d₂.terms)
         (fun s hs => hwf₂.subtermClosed _ hwm.1 hs)
         (fun s hs => hwf₂.subtermClosed _ hwm.2 hs) hD3
       exact (Cong.mono ⟨hsub⟩ h₁').trans
-        ((Cong.assert (subset_amb (hD3 hr'))).trans (Cong.mono ⟨hsub⟩ h₂').symm)
-    · exact Cong.assert (subset_amb (refl_mem_addTerms hs ts d₃ ht))
+        ((Cong.direct (subset_amb (hD3 hr'))).trans (Cong.mono ⟨hsub⟩ h₂').symm)
+    · exact Cong.direct (subset_amb (refl_mem_addTerms hs ts d₃ ht))
   -- (b) `d₃`'s own witness for `q` lives there too
-  have hqmem := eqsInTerms_free (Cong.assert hq)
+  have hqmem := eqsInTerms_free (Cong.direct hq)
   have hsubq := pair_operands_subset (D := d₃.withOperands ts) (S := d₂.terms)
     (fun s hs => hwf₂.subtermClosed _ hqmem.1 hs)
     (fun s hs => hwf₂.subtermClosed _ hqmem.2 hs) hD3
@@ -612,7 +612,7 @@ theorem trans {d₁ d₂ d₃ : Database} (h₁ : d₁.Recorded d₂) (h₂ : d�
   refine ⟨fun p hp => ?_⟩
   obtain ⟨q, hq, hq₁, hq₂⟩ := h₁.eqs p hp
   obtain ⟨r, hr, hr₁, hr₂⟩ := h₂.eqs q hq
-  have hrmem := eqsInTerms_free (Cong.assert hr)
+  have hrmem := eqsInTerms_free (Cong.direct hr)
   exact ⟨r, hr, Conservativity.trans_side h₂ hwf₂ hwf₃ hq (by simp) hrmem.1 hq₁ hr₁,
     Conservativity.trans_side h₂ hwf₂ hwf₃ hq (by simp) hrmem.2 hq₂ hr₂⟩
 
@@ -682,12 +682,12 @@ theorem addTerm_congr {d₁ d₂ : Database} (h : d₁.Recorded d₂) (hw : d₂
           (Term.app f (as ++ vs)) u := by
         refine Cong.congr (mem_congOn_self (by simp)) ?_ ?_
         · exact Cong.mono (Database.Contained.addTerms _ _)
-            (Cong.assert (Or.inr ⟨u, Term.self_mem_subterms u, rfl⟩))
+            (Cong.direct (Or.inr ⟨u, Term.self_mem_subterms u, rfl⟩))
         · refine CongList.append (CongList.mono ?_ hcong) (CongList.refl ?_)
           · exact (Database.Contained.addTerm u d₂).trans
               (Database.Contained.addTerms _ _)
           · intro y hy
-            exact Cong.assert (Database.Contained.addTerms _ _ |>.eqs
+            exact Cong.direct (Database.Contained.addTerms _ _ |>.eqs
               (hsub y (List.mem_append_right _ hy) y (Term.self_mem_subterms y)))
       exact ⟨(u, u), Or.inr ⟨u, Term.self_mem_subterms u, rfl⟩, key, key⟩
     | @arg x _ _ hx hxt =>
@@ -2681,12 +2681,12 @@ theorem reach_iff {C E : Database} (hCE : C.Contained E)
       List.Forall₂ (fun a b => Cong E a b ∧ (Reach C E a ↔ Reach C E b)) as bs →
       List.Forall₂ (Cong E) as bs := fun h => h.imp (fun {_ _} h => h.1)
   refine (Cong.le (R := fun a b => Cong E a b ∧ (Reach C E a ↔ Reach C E b))
-    (fun a b hab => ⟨.assert hab, ?_⟩) (fun _ _ h => ⟨h.1.symm, h.2.symm⟩)
+    (fun a b hab => ⟨.direct hab, ?_⟩) (fun _ _ h => ⟨h.1.symm, h.2.symm⟩)
     (fun _ _ _ h₁ h₂ => ⟨h₁.1.trans h₂.1, h₁.2.trans h₂.2⟩)
     (fun f as bs hma hmb hl => ⟨Cong.congr' hma hmb (hforall hl), ?_⟩) h).2
   · -- an asserted pair: either `C`'s own, or reflexive
     rcases hE _ hab with hp | hp
-    · have hm := eqsInTerms_free (Cong.assert (db := C) hp)
+    · have hm := eqsInTerms_free (Cong.direct (db := C) hp)
       cases a with
       | lit l => rw [show b = Term.lit l from (hlit _ hp (Or.inl rfl)).symm]
       | app f args =>
@@ -3068,7 +3068,7 @@ to one the specification holds, in the ambient pinned to that term alone. -/
 theorem terms_clause {A C : Database} (h : A.Recorded C) (hwf : A.WF) {t : Term}
     (ht : t ∈ A.terms) : ∃ t' ∈ C.terms, CongOn C [t] t t' := by
   obtain ⟨q, hq, h₁, -⟩ := h.eqs (t, t) (hwf.eqsRefl t ht)
-  exact ⟨q.1, (Cong.assert hq).trans (Cong.assert hq).symm,
+  exact ⟨q.1, (Cong.direct hq).trans (Cong.direct hq).symm,
     Cong.mono ⟨operands_pair_subset⟩ h₁⟩
 
 theorem owes_of_congOn {C : Database} {x u : Term} (h : CongOn C [x] x u)

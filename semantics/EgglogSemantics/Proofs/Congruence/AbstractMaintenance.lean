@@ -33,7 +33,7 @@ theorem evalAtom_of_row {sig : Signature} {row : Entry} (hv : row.Valid sig)
 theorem match_current {d : Database} {row : Entry} (hr : row ∈ d.entries)
     {es : List Expr} {ρ : Env} (he : Expr.evalList d.sig es ρ = some row.columns) :
     Matches d (.expr (.app row.name es)) ρ := by
-  have held := (Cong.assert hr.2).mem_left
+  have held := (Cong.direct hr.2).mem_left
   exact .expr held (evalAtom_of_row hr.1 he)
     (held.mono (Database.Contained.addTerms [row.atom] d))
 

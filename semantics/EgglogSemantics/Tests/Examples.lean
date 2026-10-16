@@ -106,7 +106,7 @@ private theorem chain_terms : chain.terms = {cnst "a", cnst "b", cnst "c"} := by
   · obtain ⟨u, h | h⟩ := Database.mem_terms_iff.mp ht <;>
       simp only [chain, Set.mem_insert_iff, Set.mem_singleton_iff, Prod.mk.injEq] at h <;>
       rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> simp
-  · rintro t (rfl | rfl | rfl) <;> exact .assert (by simp [chain])
+  · rintro t (rfl | rfl | rfl) <;> exact .direct (by simp [chain])
 
 /-- `chain` is a state a program could have reached. `eqsRefl` is the clause the three
 reflexive equations are there for; without them the terms would still be the three
@@ -123,14 +123,14 @@ private theorem chain_wf : chain.WF where
   litsIsolated := by rintro p (rfl | rfl | rfl | rfl | rfl) <;> simp [cnst, Term.isLit]
 
 example : Cong chain (cnst "a") (cnst "c") :=
-  .trans (b := cnst "b") (.assert (by simp [chain])) (.assert (by simp [chain]))
+  .trans (b := cnst "b") (.direct (by simp [chain])) (.direct (by simp [chain]))
 
 example : Cong chain (cnst "c") (cnst "a") :=
-  .symm (.trans (b := cnst "b") (.assert (by simp [chain])) (.assert (by simp [chain])))
+  .symm (.trans (b := cnst "b") (.direct (by simp [chain])) (.direct (by simp [chain])))
 
 /-- Self-congruence is not a rule of `Cong` but an equation like any other: the database
 holds `(b)` because it asserts `(b) = (b)`. -/
-example : Cong chain (cnst "b") (cnst "b") := .assert (by simp [chain])
+example : Cong chain (cnst "b") (cnst "b") := .direct (by simp [chain])
 
 /-- The closure relates nothing to a term the database does not hold, which follows
 from there being no reflexivity rule: every derivation ends at an asserted equation. -/
@@ -152,8 +152,8 @@ private def wrapped : Database where
   rules := ∅
 
 example : Cong wrapped (.app "wrapper" [num 1]) (.app "wrapper" [num 2]) :=
-  .congr (.assert (by simp [wrapped])) (.assert (by simp [wrapped]))
-    (.cons (.assert (by simp [wrapped])) .nil)
+  .congr (.direct (by simp [wrapped])) (.direct (by simp [wrapped]))
+    (.cons (.direct (by simp [wrapped])) .nil)
 
 /-- Congruence derives nothing beyond what is asserted. Over `{1, 4, 7}` with only
 `4 = 7`, the term `1` stays alone — proved by exhibiting a congruence containing the
@@ -199,15 +199,15 @@ private def preWrapped : Database where
 example : ValidSubst preWrapped (.expr (.app "wrapper" [eNum 1])) [] :=
   ⟨⟨by simp [Pattern.freeVars, eNum], by simp⟩,
     .expr (w := .app "wrapper" [num 2]) (t := .app "wrapper" [num 1])
-      (.assert (by simp [preWrapped]))
+      (.direct (by simp [preWrapped]))
       (by apply Expr.evalAtom_of_eval
           rw [Expr.eval_app_ctor
             (show Signature.IsCtor preWrapped.sig "wrapper" from ⟨ctorDecl 1, rfl, rfl⟩)]
           rfl)
       (congOn_singleton.mpr (Cong.congr
-        (.assert (Set.mem_union_left _ (by simp [preWrapped])))
+        (.direct (Set.mem_union_left _ (by simp [preWrapped])))
         (Database.mem_addTerm _ _)
-        (.cons (.symm (.assert (Set.mem_union_left _ (by simp [preWrapped])))) .nil)))⟩
+        (.cons (.symm (.direct (Set.mem_union_left _ (by simp [preWrapped])))) .nil)))⟩
 
 /-- Over the database holding just `1`, the substitution `v1 ↦ 1` is a valid
 environment for `v1`. -/
@@ -216,7 +216,7 @@ example : ValidEnv ["v1"]
   refine ⟨by simp, ?_⟩
   intro b hb
   rw [List.mem_singleton] at hb
-  exact hb ▸ .assert rfl
+  exact hb ▸ .direct rfl
 
 /-! ### Running a program of actions
 
@@ -253,7 +253,7 @@ example : ∃ db, ProgramStep Database.empty actionsProgram db ∧
     (.cons ⟨_, rfl, .refl⟩ (.cons ⟨_, rfl, .refl⟩ .nil)))), ?_, ?_, rfl, ?_⟩
   · ext t; simp [b1, cnst, num, Database.mem_terms_iff]; tauto
   · ext p; simp [b1, cnst, num]; tauto
-  · exact .symm (.assert (by simp [b1, cnst, num]))
+  · exact .symm (.direct (by simp [b1, cnst, num]))
 
 /-! ### Running a rule
 
@@ -307,12 +307,12 @@ private theorem ruleProgram_step :
 private theorem swap_matches :
     ValidQuerySubst preRun swapRule.query [("a", num 1), ("b", num 2)] := by
   refine ⟨[[("a", num 1), ("b", num 2)]], .cons ?_ .nil, .single _⟩
-  refine ⟨⟨?_, ?_⟩, Matches.expr (w := add12) (t := add12) (.assert ?_) ?_
-    (congOn_singleton.mpr (.assert (Set.mem_union_left _ ?_)))⟩
+  refine ⟨⟨?_, ?_⟩, Matches.expr (w := add12) (t := add12) (.direct ?_) ?_
+    (congOn_singleton.mpr (.direct (Set.mem_union_left _ ?_)))⟩
   · simp [Env.dom, Pattern.freeVars]
   · intro c hc
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
-    rcases hc with rfl | rfl <;> exact .assert (by simp [preRun, num])
+    rcases hc with rfl | rfl <;> exact .direct (by simp [preRun, num])
   · simp [preRun, add12]
   · simp [Expr.eval, Expr.evalList, Env.lookup, preRun, add12, num, ctorDecl]
   · simp [preRun, add12]

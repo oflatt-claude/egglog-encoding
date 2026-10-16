@@ -111,8 +111,8 @@ theorem storeOk_of_sourceTerms {src : Database} (hw : src.WF) (hb : src.TermsBui
     exact hm (by simpa [Signature.mergeOf, hd] using hc row.name)
   refine ⟨fun row hr => (hn row hr).elim, fun row hr => (hn row hr).elim, ?_, ?_⟩
   · intro p hp
-    exact Or.inl ⟨termsBuild_isValue hb hw (Cong.assert hp).mem_left,
-      termsBuild_isValue hb hw (Cong.assert hp).mem_right⟩
+    exact Or.inl ⟨termsBuild_isValue hb hw (Cong.direct hp).mem_left,
+      termsBuild_isValue hb hw (Cong.direct hp).mem_right⟩
   · intro b hb'
     exact termsBuild_isValue hb hw (hw.envInTerms b hb')
 

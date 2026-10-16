@@ -114,23 +114,38 @@ theorem finite_wellFormed_divergent_store :
       ((Database.FiniteStore.empty.setSig base.sig).addTerm zero).addTerm one
     exact (hf.putEntry oldRow).putEntry newRow
 
-private theorem first_normal : MergeNormal (prepared.putEntry oldRow) := by
-  have hrows : (prepared.putEntry oldRow).entries = {oldRow} := by
-    rw [Database.putEntry_entries (d := prepared) old_valid]
-    unfold prepared
-    rw [Database.addTerm_entries (d := base.addTerm zero)
-      (show one.IsValue base.sig from rfl),
-      Database.addTerm_entries (d := base) (show zero.IsValue base.sig from rfl)]
-    simp [base, Database.entries, Database.empty]
-  intro a ha b hb _ _
-  rw [hrows] at ha hb
-  exact (Set.mem_singleton_iff.mp ha).trans (Set.mem_singleton_iff.mp hb).symm
+private def seed : Rule :=
+  ⟨[], [.expr (.lit (.int 0)), .expr (.lit (.int 1)),
+    .expr (.app "T" [.lit (.int 0)]), .expr (.app "T" [.lit (.int 1)])], "seed"⟩
+private def registered : Database := { base with rules := {seed} }
+private def seeded : Database := { start with rules := {seed} }
 
-/-- The loop is reached by ordinary commands from the empty database. -/
+private theorem seed_eval : evalLocalActions registered seed.actions [] = some seeded := rfl
+
+private theorem seed_run : RunRules "seed" registered = seeded := by
+  have hresults : {d | ∃ r ∈ registered.rules, r.ruleset = "seed" ∧
+      d ∈ RuleResults registered r} = {seeded} := by
+    ext d
+    constructor
+    · rintro ⟨r, hr, _, σ, hσ, he⟩
+      have hr : r = seed := by simpa [registered] using hr
+      subst r
+      have hσ : σ = [] := ValidQuerySubst.nil_iff.mp hσ
+      subst σ
+      rw [seed_eval] at he
+      exact (Option.some.inj he).symm
+    · intro hd
+      obtain rfl := Set.mem_singleton_iff.mp hd
+      exact ⟨seed, by simp [registered], rfl, [],
+        ValidQuerySubst.nil_iff.mpr rfl, seed_eval⟩
+  unfold RunRules
+  rw [hresults]
+  apply Database.ext <;> try rfl
+  simp [Database.sUnion, registered, base, Database.empty]
+
+/-- An empty-query rule reaches the loop in an ordinary run from the empty database. -/
 theorem divergent_from_empty : ∃ P, ProgramDiverges Database.empty P := by
-  refine ⟨[.decl "T" decl, .action (.expr (.lit (.int 0))),
-    .action (.expr (.lit (.int 1))), .action (.expr (.app "T" [.lit (.int 0)])),
-    .action (.expr (.app "T" [.lit (.int 1)]))], ?_⟩
+  refine ⟨[.decl "T" decl, .rule seed, .run "seed"], ?_⟩
   apply ProgramDiverges.tail (mid := base)
   · apply CmdStep.of_reach
     · change base = _
@@ -139,26 +154,15 @@ theorem divergent_from_empty : ∃ P, ProgramDiverges Database.empty P := by
       simp [base, Database.empty, Function.update]
     · intro row hr
       exact hr.2.elim
-  · apply ProgramDiverges.tail (mid := base.addTerm zero)
-    · apply CmdStep.of_reach (show cmdReach base (.action (.expr (.lit (.int 0))))
-        (base.addTerm zero) from rfl)
-      intro row hr
-      simp [Database.entries, Database.addTerm, base, Database.empty, zero, Entry.atom] at hr
-    apply ProgramDiverges.tail (mid := prepared)
-    · apply CmdStep.of_reach (show cmdReach (base.addTerm zero)
-        (.action (.expr (.lit (.int 1)))) prepared from rfl)
-      intro row hr
-      simp [Database.entries, prepared, Database.addTerm, base, Database.empty,
-        zero, one, Entry.atom] at hr
-    apply ProgramDiverges.tail (mid := prepared.putEntry oldRow)
-    · apply CmdStep.of_reach ?_ first_normal
-      simp [cmdReach, evalAction, Expr.evalAtom, Expr.evalList, Expr.eval, prepared, base, decl,
-        FnDecl.entryWidth, oldRow, Entry.atom, Entry.columns, zero, Database.putEntry]
+  · apply ProgramDiverges.tail (mid := registered)
+    · apply CmdStep.of_reach
+      · change registered = _
+        simp [registered, base, Database.empty]
+      · intro row hr
+        exact hr.2.elim
     · apply ProgramDiverges.head
-      apply CmdDiverges.merge (mid := start) (fun _ => by simp) (fun _ => by simp)
-        ?_ merge_diverges
-      simp [cmdReach, evalAction, Expr.evalAtom, Expr.evalList, Expr.eval, prepared, base, decl,
-        FnDecl.entryWidth, oldRow, newRow, Entry.atom, Entry.columns, zero, one,
-        Database.putEntry, start]
+      apply CmdDiverges.merge (d := registered) (c := .run "seed") (mid := seeded)
+        (fun _ => by simp) (fun _ => by simp) seed_run.symm
+      exact ⟨fun _ => seeded, rfl, fun _ => merge_self_loop.setRules {seed}⟩
 
 end Egglog.Tests.Divergence

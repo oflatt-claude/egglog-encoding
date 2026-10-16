@@ -57,7 +57,7 @@ theorem ledger_holds {sig : Signature} {cs : List Claim} {c : Claim} (hc : c ∈
   | nil => simp at hc
   | cons d ds ih =>
       rcases List.mem_cons.mp hc with rfl | hc
-      · exact Cong.assert (Set.mem_insert _ _)
+      · exact Cong.direct (Set.mem_insert _ _)
       · exact (ih hc).mono (Database.Contained.addEq _ _ _)
 
 end Egglog.SourceProof

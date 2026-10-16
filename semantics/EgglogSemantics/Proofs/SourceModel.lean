@@ -34,11 +34,11 @@ private theorem round_infers {d e : Database} (hd : d.WF) (he : e.WF)
   apply infers_of_assertions_only (RunRules.wf he) ?_ hi
   rintro p (hp | hp)
   · exact infers_mono (round_extends e R)
-      ((h.inferred _ _).mp (infers_of_cong (.assert hp)))
+      ((h.inferred _ _).mp (infers_of_cong (.direct hp)))
   · obtain ⟨out, ⟨r, hr, hR, ho⟩, hp⟩ := Set.mem_iUnion₂.mp hp
     obtain ⟨out', ho', hh⟩ := firing_transport hd he hs hc h hdEnv heEnv (hn r hr hR) ho
     exact infers_mono (firing_contained_round (h.rules ▸ hr) hR ho')
-      ((hh.inferred _ _).mp (infers_of_cong (.assert hp)))
+      ((hh.inferred _ _).mp (infers_of_cong (.direct hp)))
 
 /-- Source rounds depend only on inferred facts, despite different stored spellings. -/
 theorem round_sameMeaning {d e : Database} (hd : d.WF) (he : e.WF)
@@ -66,7 +66,7 @@ theorem completion_closed {d : Database} (hw : d.WF) (hs : d.StoreOk)
   intro p hp
   exact (hfixed.inferred _ _).mpr
     (infers_mono (firing_contained_round (d := d) hr hR ho')
-      ((hh.inferred _ _).mp (infers_of_cong (.assert hp))))
+      ((hh.inferred _ _).mp (infers_of_cong (.direct hp))))
 
 theorem completion_closed_of_saturated {d : Database} (hw : d.WF) (hs : d.StoreOk)
     (hc : d.sig.AllConstructors) (henv : d.env = []) {R : RulesetName}

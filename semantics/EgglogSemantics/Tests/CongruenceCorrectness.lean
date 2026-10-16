@@ -14,9 +14,11 @@ def constructorQuery : Query := [.expr constructorExpr]
 def view : Term := .app (viewName "C") [ctorTerm]
 def viewQuery : Query := [.expr (.app (viewName "C") [.var (freshVar 0)])]
 
-/-- The successful check observes a term built by the preceding action. -/
+private def initialRule : Rule := ⟨[], [.expr constructorExpr], "seed"⟩
+
+/-- An empty-query rule builds the term observed by the successful check. -/
 def successProgram : Program :=
-  [.decl "C" (ctorDecl 0), .action (.expr constructorExpr), .check constructorQuery]
+  [.decl "C" (ctorDecl 0), .rule initialRule, .run "seed", .check constructorQuery]
 
 /-- Declaration alone does not build an instance, so this check fails dynamically. -/
 def failureProgram : Program :=
@@ -32,9 +34,12 @@ theorem success_noSaturate : successProgram.NoSaturate := by
 theorem success_fragment : successProgram.Fragment := by
   refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide, by decide⟩
   intro n hn
-  change n ∈ ["C"] at hn
-  obtain rfl := List.mem_singleton.mp hn
-  exact safe_name
+  change n ∈ ["C", "seed"] at hn
+  rcases List.mem_cons.mp hn with rfl | hn
+  · exact safe_name
+  · obtain rfl := List.mem_singleton.mp hn
+    rw [String.isPrefixOf, String.startsWith_string_iff]
+    decide
 
 theorem failure_wellFormed : failureProgram.WellFormed := by decide
 theorem failure_noSaturate : failureProgram.NoSaturate := by
@@ -48,7 +53,9 @@ theorem failure_fragment : failureProgram.Fragment := by
 
 def sourceDeclared : Database :=
   { Database.empty with sig := Function.update Database.empty.sig "C" (some (ctorDecl 0)) }
-def sourceBuilt : Database := sourceDeclared.addTerm ctorTerm
+private def sourceRegistered : Database :=
+  { sourceDeclared with rules := {initialRule} }
+def sourceBuilt : Database := sourceRegistered.addTerm ctorTerm
 
 private theorem no_query_of_empty {d : Database} (hd : d.eqs = ∅) {q : Query}
     (hq : q ≠ []) : ¬ QueryHolds d q := by
@@ -92,13 +99,47 @@ private theorem source_check : QueryHolds sourceBuilt constructorQuery := by
 private theorem source_decl : CmdStep Database.empty (.decl "C" (ctorDecl 0)) sourceDeclared :=
   .of_reach rfl (empty_normal rfl)
 
-private theorem source_action :
-    CmdStep sourceDeclared (.action (.expr constructorExpr)) sourceBuilt :=
-  .of_reach rfl (constructors_normal source_ctors)
+private theorem run_initializer {d e : Database} {r : Rule}
+    (hempty : d.eqs = ∅) (hrules : d.rules = {r}) (hquery : r.query = [])
+    (hfire : evalLocalActions d r.actions [] = some e) : RunRules r.ruleset d = e := by
+  have hresults : {out | ∃ s ∈ d.rules, s.ruleset = r.ruleset ∧
+      out ∈ RuleResults d s} = {e} := by
+    ext out
+    constructor
+    · rintro ⟨s, hs, _, σ, hσ, he⟩
+      have hs : s = r := by simpa [hrules] using hs
+      subst s
+      have hσ : σ = [] := ValidQuerySubst.nil_iff.mp (hquery ▸ hσ)
+      subst σ
+      rw [hfire] at he
+      exact (Option.some.inj he).symm
+    · intro he
+      obtain rfl := Set.mem_singleton_iff.mp he
+      exact ⟨r, by simp [hrules], rfl, [], by
+        simpa only [hquery] using (ValidQuerySubst.nil_iff.mpr rfl : ValidQuerySubst d [] []),
+        hfire⟩
+  unfold RunRules
+  rw [hresults]
+  apply Database.ext
+  · exact (evalLocalActions_sig hfire).symm
+  · simp [Database.sUnion, hempty]
+  · exact (evalLocalActions_env hfire).symm
+  · exact (evalLocalActions_rules hfire).symm
+
+private theorem source_rule : CmdStep sourceDeclared (.rule initialRule) sourceRegistered := by
+  apply CmdStep.of_reach
+  · change sourceRegistered =
+      { sourceDeclared with rules := insert initialRule sourceDeclared.rules }
+    simp [sourceRegistered, sourceDeclared, Database.empty]
+  · exact empty_normal rfl
+
+private theorem source_run : CmdStep sourceRegistered (.run "seed") sourceBuilt :=
+  .of_reach (run_initializer (d := sourceRegistered) (e := sourceBuilt)
+    (r := initialRule) rfl rfl rfl rfl).symm (constructors_normal source_ctors)
 
 theorem source_success : Eval Database.empty successProgram (.ok sourceBuilt) := by
   exact .cons (.ok source_decl)
-    (.cons (.ok source_action) (.cons (.ok ⟨source_check, rfl⟩) .nil))
+    (.cons (.ok source_rule) (.cons (.ok source_run) (.cons (.ok ⟨source_check, rfl⟩) .nil)))
 
 theorem source_failure : Eval Database.empty failureProgram .checkFailed := by
   exact .cons (.ok source_decl)
@@ -120,38 +161,44 @@ private theorem target_setup : ProgramStep Database.empty targetSetup targetDecl
     (.cons (.of_reach rfl (empty_normal rfl)) (.cons (.of_reach rfl (empty_normal rfl))
       (.cons (.of_reach rfl (empty_normal rfl)) (.cons (.of_reach rfl (empty_normal rfl)) .nil))))
 
+private def targetRegistered : Database :=
+  { targetDeclared with rules := insert (encodeRule initialRule) targetDeclared.rules }
+
+private theorem target_register : ProgramStep targetDeclared
+    ((encodeCmd 1 (.rule initialRule)).map Command.command) targetRegistered :=
+  .cons (.of_reach rfl (empty_normal rfl)) .nil
+
 private theorem success_encoding : encode successProgram = targetSetup ++
-    (encodeCmd 1 (.action (.expr constructorExpr))).map Command.command ++
-      [.check viewQuery] := by rfl
+    (encodeCmd 1 (.rule initialRule)).map Command.command ++
+    (encodeCmd 2 (.run "seed")).map Command.command ++ [.check viewQuery] := by rfl
 
 private theorem failure_encoding : encode failureProgram = targetSetup ++ [.check viewQuery] :=
   by rfl
 
-/-- The compiled writes and rebuilding terminate before the nonempty check. -/
+/-- The compiled initialization round and rebuilding finish before the nonempty check. -/
 theorem target_success : ∃ d, Eval Database.empty (encode successProgram) (.ok d) := by
-  have hp : ProgramStep Database.empty [.decl "C" (ctorDecl 0)] sourceDeclared :=
-    .cons source_decl .nil
+  have hp : ProgramStep Database.empty [.decl "C" (ctorDecl 0), .rule initialRule]
+      sourceRegistered := .cons source_decl (.cons source_rule .nil)
   have htp : ProgramStep Database.empty
-      ((encodePrelude successProgram ++ encodeCmds [.decl "C" (ctorDecl 0)] 0).map
-        Command.command) targetDeclared := target_setup
-  have hsub : ∀ c ∈ [.decl "C" (ctorDecl 0)], c ∈ successProgram := by
-    intro c hc; obtain rfl := List.mem_singleton.mp hc; simp [successProgram]
-  have hrules := Live.rulesEncoded_of_prefix hp htp
-  obtain ⟨d, hd⟩ := Live.global_command_exists success_fragment hsub hp
-    (by simp [successProgram]) source_action (Live.prefix_runtime success_fragment htp)
-    (empty_normal rfl) (Live.prefix_sig htp) rfl
-    (hrules.rebuild_only success_fragment hp hsub) 1
+      ((encodePrelude successProgram ++
+        encodeCmds [.decl "C" (ctorDecl 0), .rule initialRule] 0).map Command.command)
+      targetRegistered := target_setup.append target_register
+  have hboundary := Abstract.boundary_prefix success_fragment
+    (show successProgram = [.decl "C" (ctorDecl 0), .rule initialRule] ++
+      [.run "seed", .check constructorQuery] from rfl) hp htp
+  obtain ⟨d, hd⟩ := hboundary.run_exists success_fragment rfl hp htp source_run
   have hsrc : ProgramStep Database.empty
-      [.decl "C" (ctorDecl 0), .action (.expr constructorExpr)] sourceBuilt :=
-    .cons source_decl (.cons source_action .nil)
+      [.decl "C" (ctorDecl 0), .rule initialRule, .run "seed"] sourceBuilt :=
+    .cons source_decl (.cons source_rule (.cons source_run .nil))
   have htgt := Abstract.compiled_prefix_step htp hd
   have hcheck : QueryHolds d viewQuery :=
     (Abstract.checkAgreement success_fragment
-      [.decl "C" (ctorDecl 0), .action (.expr constructorExpr)] constructorQuery []
+      [.decl "C" (ctorDecl 0), .rule initialRule, .run "seed"] constructorQuery []
       sourceBuilt d rfl hsrc htgt).mp source_check
   refine ⟨d, ?_⟩
   rw [success_encoding]
-  exact Eval.append_of_ok (target_setup.append hd) (.cons (.ok ⟨hcheck, rfl⟩) .nil)
+  exact Eval.append_of_ok ((target_setup.append target_register).append hd)
+    (.cons (.ok ⟨hcheck, rfl⟩) .nil)
 
 theorem target_failure : Eval Database.empty (encode failureProgram) .checkFailed := by
   rw [failure_encoding]
@@ -255,11 +302,13 @@ private def fa : Term := .app "F" [a]
 private def fb : Term := .app "F" [b]
 private def queryFB : Query := [.expr (.app "F" [.app "B" []])]
 
-/-- The final check needs congruence: only `F(A)` was built. -/
+private def congruenceInitializer : Rule :=
+  ⟨[], [.union (.app "A" []) (.app "B" []), .expr (.app "F" [.app "A" []])], "seed"⟩
+
+/-- The final check needs congruence: the initialization rule only builds `F(A)`. -/
 def congruenceProgram : Program :=
   [.decl "A" (ctorDecl 0), .decl "B" (ctorDecl 0), .decl "F" (ctorDecl 1),
-   .action (.union (.app "A" []) (.app "B" [])),
-   .action (.expr (.app "F" [.app "A" []])), .check queryFB]
+   .rule congruenceInitializer, .run "seed", .check queryFB]
 
 private def declaredA : Database :=
   { Database.empty with sig := Function.update Database.empty.sig "A" (some (ctorDecl 0)) }
@@ -267,7 +316,9 @@ private def declaredAB : Database :=
   { declaredA with sig := Function.update declaredA.sig "B" (some (ctorDecl 0)) }
 private def declaredABF : Database :=
   { declaredAB with sig := Function.update declaredAB.sig "F" (some (ctorDecl 1)) }
-private def unitedAB : Database := declaredABF.addEq a b
+private def registeredABF : Database :=
+  { declaredABF with rules := {congruenceInitializer} }
+private def unitedAB : Database := registeredABF.addEq a b
 private def builtFA : Database := unitedAB.addTerm fa
 
 private theorem congruence_ctors : declaredABF.sig.AllConstructors := by
@@ -291,7 +342,7 @@ private theorem congruence_fragment : congruenceProgram.Fragment := by
 
 private theorem congruence_check : QueryHolds builtFA queryFB := by
   have hfa : fa ∈ builtFA.terms := Database.mem_addTerm _ _
-  have hab : Cong builtFA a b := Cong.mono (Database.Contained.addTerm _ _) (.assert
+  have hab : Cong builtFA a b := Cong.mono (Database.Contained.addTerm _ _) (.direct
     (Set.mem_insert _ _))
   have hread : CongOn builtFA [fb] fa fb := by
     apply Cong.congr
@@ -302,19 +353,30 @@ private theorem congruence_check : QueryHolds builtFA queryFB := by
   exact ⟨List.Perm.refl [], by simp⟩
 
 private theorem congruence_source : Eval Database.empty congruenceProgram (.ok builtFA) := by
-  exact .cons (.ok (.of_reach rfl (empty_normal rfl)))
-    (.cons (.ok (.of_reach rfl (empty_normal rfl)))
-      (.cons (.ok (.of_reach rfl (empty_normal rfl)))
-        (.cons (.ok (.of_reach rfl (constructors_normal congruence_ctors)))
-          (.cons (.ok (.of_reach rfl (constructors_normal congruence_ctors)))
-            (.cons (.ok ⟨congruence_check, rfl⟩) .nil)))))
+  have hA : CmdStep Database.empty (.decl "A" (ctorDecl 0)) declaredA :=
+    .of_reach rfl (empty_normal rfl)
+  have hB : CmdStep declaredA (.decl "B" (ctorDecl 0)) declaredAB :=
+    .of_reach rfl (empty_normal rfl)
+  have hF : CmdStep declaredAB (.decl "F" (ctorDecl 1)) declaredABF :=
+    .of_reach rfl (empty_normal rfl)
+  have hregister : CmdStep declaredABF (.rule congruenceInitializer) registeredABF := by
+    apply CmdStep.of_reach
+    · change registeredABF =
+        { declaredABF with rules := insert congruenceInitializer declaredABF.rules }
+      simp [registeredABF, declaredABF, declaredAB, declaredA, Database.empty]
+    · exact empty_normal rfl
+  have hrun : CmdStep registeredABF (.run "seed") builtFA :=
+    .of_reach (run_initializer (d := registeredABF) (e := builtFA)
+      (r := congruenceInitializer) rfl rfl rfl rfl).symm (constructors_normal congruence_ctors)
+  exact .cons (.ok hA) (.cons (.ok hB) (.cons (.ok hF)
+    (.cons (.ok hregister) (.cons (.ok hrun) (.cons (.ok ⟨congruence_check, rfl⟩) .nil)))))
 
 /-- The witness succeeds without inserting the queried spelling into the source store. -/
 theorem congruence_without_stored_spelling :
     fb ∉ builtFA.terms ∧ QueryHolds builtFA queryFB := by
   refine ⟨?_, congruence_check⟩
   have he : declaredABF.terms = ∅ := Database.terms_empty_of_eqs_empty rfl
-  simp [builtFA, unitedAB, a, b, fa, fb, he]
+  simp [builtFA, unitedAB, registeredABF, a, b, fa, fb, he]
 
 theorem finite_congruence_check :
     ∃ target, Eval Database.empty (encode congruenceProgram) target ∧

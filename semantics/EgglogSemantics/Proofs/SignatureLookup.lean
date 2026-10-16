@@ -55,7 +55,6 @@ theorem ProgramStep.declared {d e : Database} {p : Program} (h : ProgramStep d p
               exact Or.inr List.mem_cons_self
             · rw [Cmd.sigBind, Function.update_of_ne hg] at hm
               exact Or.inl hm
-        | action a => exact Or.inl hm
         | rule r => exact Or.inl hm
         | run R => exact Or.inl hm
         | saturate R => exact Or.inl hm

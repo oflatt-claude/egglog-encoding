@@ -151,11 +151,6 @@ theorem cmdStep_termsBuild {db db' : Database} (hc : db.CtorState) (h : db.Terms
     {c : Cmd} (hdecl : c.CtorDecl) (hstep : CmdStep db c db') : db'.TermsBuild := by
   obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
-  | action a =>
-      have hv : evalAction db a = some d := hreach
-      obtain rfl : db' = d :=
-        hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
-      exact evalAction_termsBuild hc.wf h hc.sig hv
   | rule r =>
       obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } := hcl.eq_of_allConstructors hc.sig

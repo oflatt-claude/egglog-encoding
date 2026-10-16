@@ -96,11 +96,6 @@ private theorem cmd_unionFree (i : Nat) (c : Cmd) :
       simp only [encodeCmd, List.mem_singleton] at hd
       subst d
       exact encodeActions_unionFree (r.actions.map leaderAction)
-  | action a =>
-      simp only [encodeCmd, List.mem_append, List.mem_map, List.mem_singleton] at hd
-      rcases hd with ⟨a', ha, rfl⟩ | rfl
-      · exact mem_actions_unionFree (encodeAction_unionFree a) a' ha
-      · trivial
   | check q =>
       simp only [encodeCmd, List.mem_singleton] at hd
       subst d

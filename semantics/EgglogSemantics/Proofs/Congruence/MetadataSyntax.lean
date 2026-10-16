@@ -89,9 +89,6 @@ private theorem cmd_shape (i : Nat) (c : Cmd) :
       simp only [encodeCmd, List.mem_singleton] at hd
       subst d
       trivial
-  | action a =>
-      simp only [encodeCmd, List.mem_append, List.mem_map, List.mem_singleton] at hd
-      rcases hd with ⟨a', _, rfl⟩ | rfl <;> trivial
   | check q =>
       simp only [encodeCmd, List.mem_singleton] at hd
       subst d
@@ -169,9 +166,6 @@ private theorem cmd_noDecl (i : Nat) (c : Cmd) :
       simp only [encodeCmd, List.mem_singleton] at hd
       subst d
       trivial
-  | action a =>
-      simp only [encodeCmd, List.mem_append, List.mem_map, List.mem_singleton] at hd
-      rcases hd with ⟨a', _, rfl⟩ | rfl <;> trivial
   | check q =>
       simp only [encodeCmd, List.mem_singleton] at hd
       subst d
@@ -310,7 +304,7 @@ theorem encodeSig_view_census {P : Program} (hp : P.Fragment) {f : FnName} {dc :
           have hde : dg = decl := by simpa [Cmd.sigBind] using hd
           exact hde ▸ hc dg List.mem_cons_self
         · exact hs decl (by simpa [Cmd.sigBind, Function.update_of_ne he] using hd)
-      | action _ | rule _ | check _ | run _ | saturate _ => exact hs decl hd
+      | rule _ | check _ | run _ | saturate _ => exact hs decl hd
   apply hfold ((encodePrelude P).map Command.command) ?_ (fun _ => none) (by simp) dc hf
   intro decl hd
   rcases prelude_decl_iff.mp hd with ⟨hn, _⟩ | ⟨g, k, hg, hd⟩
@@ -342,7 +336,7 @@ theorem sourceConstructors_of_programStep {P p : Program} (hdom : P.Fragment)
 theorem rule_mem_encodeCmd (i : Nat) (c : Cmd) (r : Rule) :
     Cmd.rule r ∈ (encodeCmd i c).map Command.command ↔
       ∃ s, c = .rule s ∧ r = encodeRule s := by
-  cases c <;> simp [encodeCmd, taggedRule, Function.comp_def, eq_comm]
+  cases c <;> simp [encodeCmd, taggedRule, eq_comm]
 
 /-- The compiler's command counter does not change which rules a prefix registers. -/
 theorem rule_mem_encodeCmds (pre : Program) (i : Nat) (r : Rule) :

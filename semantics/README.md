@@ -7,10 +7,10 @@ including multi-output functions and action blocks inside `:merge` bodies.
 
 ## Language and semantics
 
-Programs declare functions and rules, assert expressions and function rows, union values,
-run or saturate named rulesets, and check queries. A check succeeds without changing
-the database or terminates the program with `checkFailed`. Rule variables come from the query; merge bodies
-use their old/new parameters. Actions evaluate in a fixed environment.
+Programs declare functions and rules, run or saturate named rulesets, and check queries.
+Actions occur in rule heads and merge bodies; initial facts use an empty-query rule and
+one `run`. A check leaves the database unchanged or stops with `checkFailed`.
+Rule variables come from the query; merge bodies use their old/new parameters.
 
 The specification records equations and derives congruence over the terms they mention.
 Constructors build values; other functions store key/value entries. A complete atom such as
@@ -28,23 +28,17 @@ proof annotations. A separate provenance pass adds proof columns for globals, ru
 and function merges, and proof lifting turns its proofs into source proofs
 that both the Lean and Rust checkers accept.
 
-The current table semantics proves
-[`preservesFiniteObservations`](EgglogSemantics/Proofs/Congruence/AbstractTerminationComplete.lean):
-well-formed supported source programs without `saturate` have finite compiled evaluations
-with the same success or check-failure outcome. Source commands use bounded rounds;
-compiled rebuilding may saturate. `evaluations_exist` derives finite executions on both
-sides from the static premises, and `observations_iff` equates their possible outcomes.
-`preservesObservations` also relates every pair of finite evaluations.
-
-Both sides use mathematical databases; these proofs import no executable interpreter.
-Termination establishes existence of finite evaluations, not termination of every target
-merge schedule. Interpreter correctness is outside the paper. Executable correspondence
-and differential tests remain sanity checks, with legacy proofs still being ported.
-The library permits no `sorry`.
+[`preservesBehaviors`](EgglogSemantics/Proofs/Congruence/Correctness.lean) proves that
+well-formed supported source programs without `saturate` and their compilations have
+exactly the same success, check-failure, and divergence behaviors. Both use mathematical
+databases. Generated rebuilding and merging terminate under every permitted schedule;
+termination is not a premise. Interpreter correctness remains a separate sanity check,
+with legacy interpreter and certificate proofs still being ported.
 
 The [encoding guide](ENCODING.md) describes the current implementation, theorem status,
-and source restrictions. The [checker guide](CHECKER.md) explains the certificate
-boundaries.
+and source restrictions. Brief certificate notes live with the
+[source checker](EgglogSemantics/SourceProof/Checker.lean) and
+[relational checker](EgglogSemantics/Provenance/Checker.lean).
 
 ## Layout
 

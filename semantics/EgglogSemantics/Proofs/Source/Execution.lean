@@ -193,7 +193,6 @@ def Action.NoLits (a : Action) : Prop := a.litFreeB = true
 /-- `Action.NoLits` at every action a command runs. Vacuous at a run, a saturation and a
 declaration, which evaluate nothing. -/
 def Cmd.NoLits : Cmd → Prop
-  | .action a => a.NoLits
   | .rule r => ∀ a ∈ r.actions, a.NoLits
   | _ => True
 
@@ -257,12 +256,6 @@ theorem cmdStep_noLits {db db' : Database} (hc : db.CtorState) (h : db.NoLits)
     db'.NoLits := by
   obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
-  | action a =>
-      have hv : evalAction db a = some d := hreach
-      obtain rfl : db' = d :=
-        hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
-      exact ⟨evalAction_litFree hc.wf h.terms hn hv,
-        by rw [evalAction_rules hv]; exact h.heads⟩
   | rule r =>
       obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } :=
@@ -461,13 +454,6 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
     db'.HeadsBuild := by
   obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
-  | action a =>
-      have hv : evalAction db a = some d := hreach
-      obtain rfl : db' = d :=
-        hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
-      intro r hr
-      rw [evalAction_sig hv]
-      exact h r (by rw [← evalAction_rules hv]; exact hr)
   | rule r =>
       obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } :=
@@ -520,7 +506,6 @@ theorem programStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.H
 theorem Cmd.NoLits.of_domain {P : Program} (_hdom : P.Fragment)
     (hlit : ∀ c ∈ P, c.litFreeB = true) {c : Cmd} (hc : c ∈ P) : c.NoLits := by
   cases c with
-  | action a => exact hlit _ hc
   | rule r =>
       intro a ha
       have hb := hlit _ hc

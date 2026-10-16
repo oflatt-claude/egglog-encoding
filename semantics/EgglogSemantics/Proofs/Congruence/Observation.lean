@@ -13,7 +13,6 @@ theorem encodeCmd_no_checks (i : Nat) {c : Cmd} (hc : ∀ q, c ≠ .check q) :
   cases c with
   | check p => exact (hc p rfl).elim
   | decl _ _ | rule _ | run _ | saturate _ => simp [encodeCmd, taggedRule]
-  | action a => simp [encodeCmd, List.mem_map]
 
 theorem prelude_no_checks (P : Program) :
     ∀ q, Cmd.check q ∉ (encodePrelude P).map Command.command := by

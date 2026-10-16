@@ -198,7 +198,6 @@ theorem CmdStep.finite {db d : Database} {c : Cmd} (h : CmdStep db c d)
   suffices hmfin : mid.eqs.Finite ∧ mid.rules.Finite from
     ⟨hc.finite_eqs hmfin.1, hc.finite_rules hmfin.2⟩
   cases c with
-  | action a => exact ⟨evalAction_finite he hm, (evalAction_rules hm) ▸ hr⟩
   | decl f dc => cases hm; exact ⟨he, hr⟩
   | rule r => cases hm; exact ⟨he, hr.insert r⟩
   | check q => obtain ⟨_, rfl⟩ := hm; exact ⟨he, hr⟩
@@ -329,7 +328,6 @@ theorem CmdStep.finiteStore {db d : Database} {c : Cmd}
   obtain ⟨mid, hm, hc⟩ := h.reach
   apply hc.finiteStore
   cases c with
-  | action a => exact evalAction_finiteStore hf hm
   | decl f dc => cases hm; exact hf.setSig _
   | rule r => cases hm; exact ⟨hf.eqs, hf.entries, hf.rules.insert r⟩
   | check q => obtain ⟨_, rfl⟩ := hm; exact hf

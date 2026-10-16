@@ -188,7 +188,7 @@ theorem Cong.mem_endpoints {db : Database} {a b : Term} (h : Cong db a b) :
     (∃ p ∈ db.eqs, a ∈ p.1.subterms ∨ a ∈ p.2.subterms) ∧
       (∃ p ∈ db.eqs, b ∈ p.1.subterms ∨ b ∈ p.2.subterms) := by
   induction h using Cong.rec (motive_2 := fun _ _ _ => True) with
-  | assert hab =>
+  | direct hab =>
     exact ⟨⟨_, hab, Or.inl (Term.self_mem_subterms _)⟩,
       ⟨_, hab, Or.inr (Term.self_mem_subterms _)⟩⟩
   | subterm _ hs ih =>
@@ -208,8 +208,8 @@ theorem mem_terms_iff {db : Database} {t : Term} :
     t ∈ db.terms ↔ ∃ p ∈ db.eqs, t ∈ p.1.subterms ∨ t ∈ p.2.subterms := by
   refine ⟨fun ht => (Cong.mem_endpoints ht).1, ?_⟩
   rintro ⟨p, hp, ht | ht⟩
-  · exact Cong.subterm (eqsInTerms_free (Cong.assert hp)).1 ht
-  · exact Cong.subterm (eqsInTerms_free (Cong.assert hp)).2 ht
+  · exact Cong.subterm (eqsInTerms_free (Cong.direct hp)).1 ht
+  · exact Cong.subterm (eqsInTerms_free (Cong.direct hp)).2 ht
 
 /-- Two databases asserting the same equations hold the same values. -/
 theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
@@ -243,7 +243,7 @@ theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
     (db.addTerm t).rules = db.rules := rfl
 
 theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
-  Cong.assert (Set.mem_insert _ _)
+  Cong.direct (Set.mem_insert _ _)
 
 @[simp] theorem addEq_eqs {a b : Term} {db : Database} :
     (db.addEq a b).eqs = insert (a, b) db.eqs := rfl

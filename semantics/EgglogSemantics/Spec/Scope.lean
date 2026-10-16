@@ -56,7 +56,6 @@ def Query.bind (q : Query) (Γ : Scope) : Scope := Γ ∪ Query.vars q
 `mergeEnv` builds rather than in the ambient context, so `Scoped` and `Evaluable` say
 nothing about one. -/
 @[simp] def Cmd.Scoped : Cmd → Scope → Prop
-  | .action a, Γ => a.Scoped Γ
   | .rule r, Γ => r.Scoped Γ
   | .run _, _ => True
   | .saturate _, _ => True
@@ -109,7 +108,6 @@ def Action.Evaluable : Action → Signature → Prop
   Actions.Evaluable r.actions sig
 
 @[simp] def Cmd.Evaluable : Cmd → Signature → Prop
-  | .action a, sig => a.Evaluable sig
   | .rule r, sig => r.Evaluable sig
   | .run _, _ => True
   | .saturate _, _ => True
@@ -147,7 +145,6 @@ def Action.UnionLegal : Action → Prop
 
 /-- Its actions, and its `:merge` bodies: a `union` runs in either. -/
 @[simp] def Cmd.UnionLegal : Cmd → Prop
-  | .action a => a.UnionLegal
   | .rule r => Actions.UnionLegal r.actions
   | .run _ => True
   | .saturate _ => True
@@ -213,7 +210,6 @@ This is the one check besides `MergeDeclared` that walks into a `:merge`, for th
 /-- Asked of the signature the declaration **installs**, as `Cmd.MergeDeclared` and unlike
 `Cmd.DeclFresh`, so a `:merge` may name the function it resolves. -/
 @[simp] def Cmd.WidthOk : Cmd → Signature → Prop
-  | .action a, sig => a.WidthOk sig
   | .rule r, sig => r.WidthOk sig
   | .run _, _ => True
   | .saturate _, _ => True
@@ -234,7 +230,6 @@ breaking `Database.DeclaredTerms`. -/
 
 @[simp] def Cmd.DeclFresh : Cmd → Signature → Prop
   | .decl f _, sig => sig f = none
-  | .action _, _ => True
   | .rule _, _ => True
   | .run _, _ => True
   | .saturate _, _ => True
@@ -271,7 +266,6 @@ def Action.Declared : Action → Signature → Prop
 it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
 @[simp] def Cmd.MergeDeclared : Cmd → Signature → Prop
   | .decl f d, sig => ∀ ms ∈ d.merge, ms.Declared ((Cmd.decl f d).sigBind sig)
-  | .action _, _ => True
   | .rule _, _ => True
   | .run _, _ => True
   | .saturate _, _ => True
@@ -319,7 +313,6 @@ def FnDecl.UnionFree (d : FnDecl) : Prop := ∀ ms ∈ d.merge, ms.UnionFree
 def Signature.UnionFree (sig : Signature) : Prop := ∀ f d, sig f = some d → d.UnionFree
 
 @[simp] def Cmd.UnionFree : Cmd → Prop
-  | .action a => a.UnionFree
   | .rule r => r.UnionFree
   | .run _ => True
   | .saturate _ => True
@@ -404,7 +397,6 @@ def Signature.OrderingFree (sig : Signature) : Prop :=
   ∀ f d, sig f = some d → d.OrderingFree
 
 @[simp] def Cmd.OrderingFree : Cmd → Prop
-  | .action a => a.OrderingFree
   | .rule r => r.OrderingFree
   | .run _ => True
   | .saturate _ => True
@@ -437,7 +429,6 @@ instance (d : FnDecl) : Decidable d.OrderingFree :=
   decidable_of_iff (d.identityVals = none ∧ ∀ ms ∈ d.merge.toList, ms.OrderingFree)
     (by unfold FnDecl.OrderingFree; rcases d.merge with _ | ms <;> simp)
 instance : ∀ c : Cmd, Decidable c.OrderingFree
-  | .action a => inferInstanceAs (Decidable a.OrderingFree)
   | .rule r => inferInstanceAs (Decidable r.OrderingFree)
   | .run _ => inferInstanceAs (Decidable True)
   | .saturate _ => inferInstanceAs (Decidable True)

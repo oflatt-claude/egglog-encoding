@@ -245,17 +245,4 @@ theorem encodeActions_reads {src post : Database} {d : Database} {as : List Acti
         hmid hr
       exact ⟨d', evalActions_append_eq hfirst hrest, hpost⟩
 
-/-- Command-level merge phases between emitted writes cannot lose any source reading. -/
-theorem encodeAction_program_reads {src post d D : Database} {a : Action}
-    (hRuntime : Live.Runtime d)
-    (hcs : src.sig.AllConstructors) (hp : ∀ e ∈ actionExprs a, e.OrderingFree)
-    (hc : ∀ e ∈ actionExprs a, ∀ f ∈ e.fns, src.sig.IsCtor f → d.sig.IsCtor f)
-    (hd : ∀ e ∈ actionExprs a, ∀ fk ∈ e.ctors, d.sig (viewName fk.1) = some (tableDecl fk.2))
-    (huf : d.sig ufName = some (tableDecl 1)) (hρ : EnvReads d src.env d.env)
-    (h : Reads d src) (hs : evalAction src a = some post)
-    (ht : ProgramStep d ((encodeAction a).map Cmd.action) D) : Reads D post := by
-  obtain ⟨m, hm, hreads⟩ := encodeAction_reads hcs hp hc hd huf hρ h hs
-  exact (evalActions_covers_program (Covers.refl d) rfl hRuntime
-    (encodeAction_unionFree a) hm ht).reads hreads
-
 end Egglog.Congruence.Abstract

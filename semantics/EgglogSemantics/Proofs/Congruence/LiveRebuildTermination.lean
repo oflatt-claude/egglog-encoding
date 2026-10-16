@@ -55,7 +55,7 @@ theorem eqs_bound_of_values {P : Program} (hp : P.Fragment) {d : Database}
   have he := h.noUnions.diag p hp'
   have hm : p.1 ∈ values ∪ atomsOver P values := by
     rcases h.storeOk.typed p hp' with ⟨ha, _⟩ | ⟨row, hr, heq⟩
-    · exact Or.inl (hv ⟨(Cong.assert hp').mem_left, ha⟩)
+    · exact Or.inl (hv ⟨(Cong.direct hp').mem_left, ha⟩)
     · subst p
       exact Or.inr (row_mem_atomsOver hp h hsig hv ⟨hr, hp'⟩)
   exact ⟨hm, he ▸ hm⟩

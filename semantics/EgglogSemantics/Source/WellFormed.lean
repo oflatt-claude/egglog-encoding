@@ -10,23 +10,15 @@ syntax, not the database's term set: a declared constructor may have no instance
 def Cmd.ApplicationsDeclared (c : Cmd) (sig : Signature) : Prop :=
   ∀ fk ∈ c.ctors, (sig fk.1).map FnDecl.arity = some fk.2
 
-/-- Top-level unions have closed constructor applications as operands. Rule unions may
-use query variables; their legality is supplied by `Fragment.noLitUnion`. -/
-def Action.GlobalUnionLegal : Action → Prop
-  | .union a b => a.IsApp ∧ b.IsApp
-  | .expr _ => True
-
 /-- Static checks at a source command boundary. Checks bind variables only inside their
 query. Declarations are fresh; every other application has an earlier declaration. -/
 def Cmd.WellFormed (sig : Signature) : Cmd → Prop
   | .decl f _ => (sig f).isNone = true
-  | .action a => a.Scoped [] ∧ a.GlobalUnionLegal ∧
-      (Cmd.action a).ApplicationsDeclared sig
   | .rule r => r.Scoped [] ∧ (Cmd.rule r).ApplicationsDeclared sig
   | .check q => (∀ p ∈ q, p.Scoped) ∧ (Cmd.check q).ApplicationsDeclared sig
   | .run _ | .saturate _ => True
 
-/-- Check a program in declaration order. Actions and checks never extend the scope. -/
+/-- Check a program in declaration order. Commands never extend the variable scope. -/
 def Program.WellFormedFrom : Signature → Program → Prop
   | _, [] => True
   | sig, c :: cs => c.WellFormed sig ∧ Program.WellFormedFrom (c.sigBind sig) cs
@@ -37,14 +29,8 @@ def Program.WellFormed (P : Program) : Prop := P.WellFormedFrom (fun _ => none)
 instance (c : Cmd) (sig : Signature) : Decidable (c.ApplicationsDeclared sig) :=
   inferInstanceAs (Decidable (∀ fk ∈ c.ctors, (sig fk.1).map FnDecl.arity = some fk.2))
 
-instance : ∀ a : Action, Decidable a.GlobalUnionLegal
-  | .union a b => inferInstanceAs (Decidable (a.IsApp ∧ b.IsApp))
-  | .expr _ => .isTrue trivial
-
 instance (sig : Signature) : ∀ c : Cmd, Decidable (c.WellFormed sig)
   | .decl f _ => inferInstanceAs (Decidable ((sig f).isNone = true))
-  | .action a => inferInstanceAs (Decidable (a.Scoped [] ∧ a.GlobalUnionLegal ∧
-      (Cmd.action a).ApplicationsDeclared sig))
   | .rule r => inferInstanceAs (Decidable (((∀ p ∈ r.query, p.Scoped) ∧
         Actions.Scoped r.actions (Query.bind r.query [])) ∧
         (Cmd.rule r).ApplicationsDeclared sig))

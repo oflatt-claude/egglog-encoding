@@ -77,7 +77,7 @@ theorem mergeClosure_finite_bound {d : Database} (h : Runtime d) (hf : d.eqs.Fin
   refine ⟨(mergeTermBound d).prod (mergeTermBound d),
     (mergeTermBound_finite hf).prod (mergeTermBound_finite hf), ?_⟩
   intro e he p hp
-  have hm := eqsInTerms_free (Cong.assert hp)
+  have hm := eqsInTerms_free (Cong.direct hp)
   exact ⟨mergeClosure_termBound h he hm.1, mergeClosure_termBound h he hm.2⟩
 
 /-- Every finite generated-table state admits a finite merge schedule to a fixed point. -/
@@ -277,7 +277,7 @@ theorem maintenance_saturate_exists {P : Program} {R : RulesetName} {src d : Dat
     (Database.finite_terms hf).union (SoundRows.finite hsrc)
   apply Egglog.saturateReach_exists_of_finite_bound R d (hbound.prod hbound)
   intro e he p hp
-  have hm := eqsInTerms_free (Cong.assert hp)
+  have hm := eqsInTerms_free (Cong.direct hp)
   have ht := (maintenance_reach_termBound h hs honly he).2
   exact ⟨ht hm.1, ht hm.2⟩
 

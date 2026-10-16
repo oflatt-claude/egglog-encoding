@@ -36,7 +36,7 @@ theorem Claim.Holds.mono {A B : Database} (h : A.Contained B) {c : Claim}
 theorem reflClaims_sound {db : Database} {t : Term} {c : Claim}
     (hc : c ∈ reflClaims t) : c.Holds (db.addTerm t) := by
   obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hc
-  exact Cong.assert (Or.inr ⟨s, (Term.mem_subtermList t).mp hs, rfl⟩)
+  exact Cong.direct (Or.inr ⟨s, (Term.mem_subtermList t).mp hs, rfl⟩)
 
 theorem actionFacts_sound {db : Database} {a : Action} {fs : List Claim}
     (h : actionFacts db.sig db.env a = some fs) :
@@ -60,9 +60,9 @@ theorem actionFacts_sound {db : Database} {a : Action} {fs : List Claim}
         refine ⟨db.addEq x y, by simp [evalAction, hx, hy, hok.2.1, hok.2.2], ?_⟩
         intro c hc
         rcases List.mem_cons.mp hc with rfl | hc
-        · exact Cong.assert (Set.mem_insert _ _)
+        · exact Cong.direct (Set.mem_insert _ _)
         rcases List.mem_cons.mp hc with rfl | hc
-        · exact (Cong.assert (db := db.addEq x y) (Set.mem_insert _ _)).symm
+        · exact (Cong.direct (db := db.addEq x y) (Set.mem_insert _ _)).symm
         rcases List.mem_append.mp hc with hc | hc
         · exact (reflClaims_sound (db := db) hc).mono
             ((Database.Contained.addTerm y _).trans ⟨Set.subset_insert _ _⟩)

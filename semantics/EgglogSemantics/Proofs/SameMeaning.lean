@@ -128,7 +128,7 @@ theorem interpret_congr {d e : Database}
     {a b : Term} (hc : Cong e a b) : interpret d a = interpret d b := by
   induction hc using Cong.rec
       (motive_2 := fun as bs _ => interpretList d as = interpretList d bs) with
-  | assert hp => exact he _ hp
+  | direct hp => exact he _ hp
   | subterm => rfl
   | symm _ ih => exact ih.symm
   | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
@@ -138,7 +138,7 @@ theorem interpret_congr {d e : Database}
 
 theorem interpret_assert {d : Database} (hw : d.WF) {p : Term × Term}
     (hp : p ∈ d.eqs) : interpret d p.1 = interpret d p.2 := by
-  have hc := Cong.assert hp
+  have hc := Cong.direct hp
   rw [interpret_of_held hw _ hc.mem_of.1, interpret_of_held hw _ hc.mem_of.2]
   exact congrArg some (Quot.sound hc)
 
@@ -182,7 +182,7 @@ private theorem operand_subterm {d : Database} {t parent : Term}
   apply Cong.of_assertions (d := d.withOperands [t]) ?_ hc
   rintro p (rfl | hp)
   · exact .subterm (Database.mem_addTerm parent d) ht
-  · exact .assert (Or.inr hp)
+  · exact .direct (Or.inr hp)
 
 mutual
 
@@ -469,7 +469,7 @@ theorem sameMeaning_addEq_congr {d : Database} (hw : d.WF)
     have hD := hw.addEq a' b' hlit'
     have hg := Database.Contained.addEq a' b' d
     have hu : (d.addEq a' b').Infers a' b' :=
-      infers_of_cong (.assert (Set.mem_insert _ _))
+      infers_of_cong (.direct (Set.mem_insert _ _))
     have haa := infers_of_congOn hD (infers_left hD hu)
       (ha.symm.mono (hg.addTerms_mono as))
     have hbb := infers_of_congOn hD (infers_right hD hu)
@@ -478,7 +478,7 @@ theorem sameMeaning_addEq_congr {d : Database} (hw : d.WF)
     apply infers_of_assertions_only hD ?_ hi
     rintro p (rfl | hp)
     · exact hab
-    · exact infers_mono hg (infers_of_cong (.assert hp))
+    · exact infers_mono hg (infers_of_cong (.direct hp))
   exact ⟨rfl, rfl, rfl, fun x y =>
     ⟨forward ha hb hlit', forward ha.symm hb.symm hlit⟩⟩
 
@@ -498,7 +498,7 @@ theorem addTerm {d e : Database} (h : d.SameMeaning e) (hd : d.WF) (he : e.WF)
     rintro p (rfl | hp)
     · exact InferredFacts.infers_of_held (Database.mem_addTerm t e)
     · exact InferredFacts.infers_mono (Database.Contained.addTerm t e)
-        ((h.inferred _ _).mp (InferredFacts.infers_of_cong (.assert hp)))
+        ((h.inferred _ _).mp (InferredFacts.infers_of_cong (.direct hp)))
   exact ⟨forward h he, forward h.symm hd⟩
 
 /-- The same asserted equation preserves equivalence of inferred states. The
@@ -512,9 +512,9 @@ theorem addEq {d e : Database} (h : d.SameMeaning e) (hd : d.WF) (he : e.WF)
     intro d e h he x y hi
     apply InferredFacts.infers_of_assertions_only (he.addEq a b hlit) ?_ hi
     rintro p (rfl | hp)
-    · exact InferredFacts.infers_of_cong (.assert (Set.mem_insert _ _))
+    · exact InferredFacts.infers_of_cong (.direct (Set.mem_insert _ _))
     · exact InferredFacts.infers_mono (Database.Contained.addEq a b e)
-        ((h.inferred _ _).mp (InferredFacts.infers_of_cong (.assert hp)))
+        ((h.inferred _ _).mp (InferredFacts.infers_of_cong (.direct hp)))
   exact ⟨forward h he, forward h.symm hd⟩
 
 end Database.SameMeaning

@@ -524,12 +524,11 @@ def FDatabase.runSaturateM (R : RulesetName) : Nat → FDatabase → Option FDat
 
 /-- `CmdStep`, computed.
 
-Both `.action` and a run end in a merge phase, which is egglog's shape and not a choice:
+A run ends in a merge phase:
 top-level actions go through the same staging path as a rule head, so **each top-level
 `set` is its own merge phase** (`src/lib.rs:1490-1512`). Without that, the three top-level
 `set`s of a difftest case would collide only at the next `(run 1)`. -/
 def FDatabase.execCmdM (d : FDatabase) : Cmd → Option FDatabase
-  | .action a => (execAction d a).bind (FDatabase.mergeSaturateF mergeFuel)
   | .rule r => some { d with rules := r :: d.rules }
   | .run R => d.runRoundM R
   | .saturate R => d.runSaturateM R runFuel

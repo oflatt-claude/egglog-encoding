@@ -9,7 +9,7 @@ def ambient (db : Database) : Database :=
   { db with eqs := db.eqs ∪ {p | p.1 = p.2} }
 
 theorem ambient_refl (db : Database) (t : Term) : Cong (ambient db) t t :=
-  .assert (Or.inr rfl)
+  .direct (Or.inr rfl)
 
 theorem ambient_contains (db : Database) : db.Contained (ambient db) := ⟨fun _ hp => Or.inl hp⟩
 

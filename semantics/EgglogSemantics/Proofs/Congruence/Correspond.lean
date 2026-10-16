@@ -33,7 +33,7 @@ theorem ViewRepr.subterms {d : Database} {t i : Term} (h : ViewRepr d t i) :
 
 /-- Closure obligations for the source congruence rules. -/
 structure CongObligations (src tgt : Database) : Prop where
-  assert : ∀ a b, (a, b) ∈ src.eqs → SameClass tgt a b
+  direct : ∀ a b, (a, b) ∈ src.eqs → SameClass tgt a b
 
   trans : ∀ a b c, SameClass tgt a b → SameClass tgt b c → SameClass tgt a c
 
@@ -42,7 +42,7 @@ structure CongObligations (src tgt : Database) : Prop where
 
 theorem cong_sameClass {src tgt : Database} (h : CongObligations src tgt) {a b : Term}
     (hc : Cong src a b) : SameClass tgt a b := by
-  refine Cong.le h.assert (fun _ _ hab => hab.symm) h.trans h.congr ?_ hc
+  refine Cong.le h.direct (fun _ _ hab => hab.symm) h.trans h.congr ?_ hc
   intro t s ht hs
   obtain ⟨i, hi, _⟩ := ht
   obtain ⟨j, hj⟩ := hi.subterms s hs
@@ -108,7 +108,7 @@ end
 
 theorem sameClass_self_of_viewsCover {src d : Database} (hc : ViewsCover d src) (hw : src.WF)
     {a : Term} (h : (a, a) ∈ src.eqs) : SameClass d a a :=
-  let ⟨e, he⟩ := viewRepr_total hc hw a (Cong.assert h)
+  let ⟨e, he⟩ := viewRepr_total hc hw a (Cong.direct h)
   ⟨e, he, he⟩
 
 /-- Every nonreflexive source equation has a shared view id. -/

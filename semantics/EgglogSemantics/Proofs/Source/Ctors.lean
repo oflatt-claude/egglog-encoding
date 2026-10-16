@@ -103,7 +103,6 @@ def Action.CtorsIn (a : Action) (P : Program) : Prop := ∀ fk ∈ a.ctors, fk �
 
 /-- `Action.CtorsIn` at every action a command runs. -/
 def Cmd.CtorsIn : Cmd → Program → Prop
-  | .action a, P => a.CtorsIn P
   | .rule r, P => ∀ a ∈ r.actions, a.CtorsIn P
   | _, _ => True
 
@@ -112,7 +111,6 @@ program's. -/
 theorem Cmd.CtorsIn.of_domain {P : Program} (_hdom : P.Fragment) {c : Cmd} (hc : c ∈ P) :
     c.CtorsIn P := by
   cases c with
-  | action a => exact fun fk hk => mem_program_ctors hc hk
   | rule r =>
       intro a ha fk hk
       exact mem_program_ctors hc (by
@@ -225,12 +223,6 @@ theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)
     (hstep : CmdStep db c db') : db'.CtorsInState P := by
   obtain ⟨d, hreach, hcl⟩ := hstep.reach
   cases c with
-  | action a =>
-      have hv : evalAction db a = some d := hreach
-      obtain rfl : db' = d :=
-        hcl.eq_of_allConstructors (by rw [evalAction_sig hv]; exact hc.sig)
-      exact ⟨evalAction_ctorsIn hc.wf h.terms hn hv,
-        by rw [evalAction_rules hv]; exact h.heads⟩
   | rule r =>
       obtain rfl : d = { db with rules := insert r db.rules } := hreach
       obtain rfl : db' = { db with rules := insert r db.rules } :=

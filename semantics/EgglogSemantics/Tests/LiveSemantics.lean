@@ -9,7 +9,7 @@ private def c : Term := .app "C" []
 private def f (t : Term) : Term := .app "F" [t]
 private def cyclic : Database := Database.empty.addEq c (f c)
 
-private theorem cycle : Cong cyclic c (f c) := .assert (Set.mem_insert _ _)
+private theorem cycle : Cong cyclic c (f c) := .direct (Set.mem_insert _ _)
 
 /-- `F(F(C))` is represented by the existing class of `F(C)`. -/
 theorem nested_inferred : cyclic.Infers (f (f c)) (f (f c)) := by

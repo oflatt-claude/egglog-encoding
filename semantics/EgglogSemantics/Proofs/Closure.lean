@@ -103,7 +103,7 @@ theorem mem_closure_iff {db : Database} {terms : Finset Term} {rel : Finset (Ter
     (hterms : db.terms = ↑terms) (heqs : db.eqs = ↑rel) (h : rel ⊆ candidates terms)
     {a b : Term} : (a, b) ∈ closure terms rel h ↔ Cong db a b := by
   have hassert : ∀ p ∈ rel, Cong db p.1 p.2 := fun p hp =>
-    Cong.assert (by rw [heqs]; exact hp)
+    Cong.direct (by rw [heqs]; exact hp)
   refine ⟨fun hp => closure_sound hterms rel h hassert (a, b) hp, fun hc => ?_⟩
   refine hc.le (R := fun x y => (x, y) ∈ closure terms rel h) ?_ ?_ ?_ ?_
   · exact fun x y hxy => subset_closure h (by rw [heqs] at hxy; exact hxy)

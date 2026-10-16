@@ -79,7 +79,6 @@ def FnDecl.arityOk (d : FnDecl) (sig : Signature) : Bool :=
 /-- A command. A declaration's merge body sees the signature the declaration itself
 installs, so it may write the function's own table. -/
 def Cmd.arityOk : Cmd → Signature → Bool
-  | .action a, sig => a.arityOk sig
   | .rule r, sig => r.arityOk sig
   | .check q, sig => q.all (Pattern.arityOk · sig)
   | .run _, _ => true
@@ -152,7 +151,6 @@ def Rule.noLookup (r : Rule) (sig : Signature) : Bool :=
 
 /-- A declaration's merge body sees the declaration itself, so it can write its own table. -/
 def Cmd.noLookup : Cmd → Signature → Bool
-  | .action a, sig => a.noLookup sig
   | .rule r, sig => r.noLookup sig
   | .check q, sig => q.all (Pattern.noLookup · sig)
   | .run _, _ => true

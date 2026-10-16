@@ -14,6 +14,6 @@ theorem source_setup_eqs {src post : Database} {c : Cmd} (hcs : src.sig.AllConst
   cases c with
   | decl f dc => subst hm; rfl
   | rule r => subst hm; rfl
-  | action _ | run _ | saturate _ | check _ => exact hc.elim
+  | run _ | saturate _ | check _ => exact hc.elim
 
 end Egglog.Congruence

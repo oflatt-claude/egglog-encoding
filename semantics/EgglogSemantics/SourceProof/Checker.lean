@@ -1,9 +1,12 @@
 import EgglogSemantics.SourceProof.Evaluate
 import EgglogSemantics.Source.Domain
 
+/-! Source certificates use original rule queries and retain evidence of term existence.
+Arbitrary reflexivity cannot justify a missing rule premise. -/
+
 namespace Egglog.SourceProof
 
-/-- The checker accepts proofs about programs of the source fragment only. -/
+/-- Only the constructor source fragment; function-merge proofs require stronger evidence. -/
 def sourceOk (P : Program) : Bool := decide P.Fragment
 
 /-- A fact premise proves its instance equal to some held term; an equality premise proves

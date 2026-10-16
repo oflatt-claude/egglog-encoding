@@ -121,10 +121,6 @@ theorem CmdEval.exists_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db
     ∃ r, CmdEval db c r := by
   classical
   cases c with
-  | action a =>
-    obtain ⟨db', hv, _⟩ := evalAction_isSome_of_scoped hm h he hv hw
-    obtain ⟨post, hp⟩ := hnorm db' hv
-    exact ⟨.ok post, .ok ⟨db', hv, hp⟩⟩
   | rule r =>
       obtain ⟨post, hp⟩ := hnorm _ rfl
       exact ⟨_, .ok ⟨_, rfl, hp⟩⟩

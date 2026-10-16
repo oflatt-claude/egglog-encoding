@@ -4,7 +4,7 @@ import EgglogSemantics.Proofs.Congruence.AbstractRunState
 import EgglogSemantics.Proofs.Congruence.AbstractSoundHead
 import EgglogSemantics.Proofs.Congruence.LiveRunRead
 
-/-! Actual compiled global actions preserve the live source correspondence. -/
+/-! Compiled rule firings and rounds preserve complete union-find coverage. -/
 
 namespace Egglog.Congruence.Live
 
@@ -59,125 +59,5 @@ theorem target_runReach_ufTotal {P pre : Program} (hp : P.Fragment)
   intro r
   rw [hrules']
   exact hrules r
-
-theorem global_writes_of_programStep {P pre : Program} (hp : P.Fragment)
-    (hsub : ∀ c ∈ pre, c ∈ P) {src post : Database}
-    (hpre : ProgramStep Database.empty pre src) {a : Action} (ha : Cmd.action a ∈ P)
-    (hsrc : CmdStep src (.action a) post) {d e : Database} (h : Runtime d)
-    (hsig : d.sig = encodeSig P) (henv : d.env = [])
-    (hs : SoundTerms d src.completion) (hd : Descending d)
-    (hreads : Reads d src) (hu : UFTotal d)
-    (htgt : ProgramStep d ((encodeAction a).map Cmd.action) e) :
-    Runtime e ∧ SoundTerms e post.completion ∧ Descending e ∧ Reads e post ∧ UFTotal e := by
-  have hcs := hpre.ctorState Database.CtorState.empty
-    (fun c hc => hp.ctorsOnly c (hsub c hc))
-  have hact : evalAction src a = some post := by
-    obtain ⟨mid, hm, hn⟩ := hsrc
-    have he : post = mid := hn.1.eq_of_allConstructors (by
-      rw [evalAction_sig hm]; exact hcs.sig)
-    exact he.symm ▸ hm
-  have hpostwf := evalAction_wf hcs.wf hact
-  have hsourceStore := storeOk_of_sourceTerms hcs.wf
-    (termsBuild_of_programStep (fun c hc => hp.ctorsOnly c (hsub c hc)) hpre) hcs.sig
-  have hpostStore := evalAction_storeOk hsourceStore hact
-  have hpostCtor : post.sig.AllConstructors := by rw [evalAction_sig hact]; exact hcs.sig
-  have hsafe : SourceSafe post.completion := sourceSafe_completion hpostwf hpostStore
-    hpostCtor (by
-      intro f dc hf
-      rw [evalAction_sig hact] at hf
-      exact sourceNames_of_programStep hp hsub hpre f dc hf)
-  have hsrcenv : src.env = [] := hpre.env
-  have hctor := sourceConstructors_of_programStep hp hsub hpre hsig
-  have hof := Action.orderingFree_exprs (Program.OrderingFree.of_mem hp.noMin ha)
-  have hviews : ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
-      d.sig (viewName fk.1) = some (tableDecl fk.2) := by
-    intro x hx fk hk
-    exact hsig ▸ (encodeSig_tables hp (mem_program_ctors ha (actionExprs_ctors hx hk))).2
-  have heval : ∀ x ∈ actionExprs a, ∀ t,
-      x.eval src.sig src.env = some t → x.eval d.sig d.env = some t := by
-    intro x _ t ht
-    apply eval_transport x (fun f _ => hctor f) ?_ ?_ ht
-    · intro v _; rw [hsrcenv, henv]
-    · intro v _ t ht _; simp [hsrcenv] at ht
-  have hρ : EnvReads d src.env d.env := by
-    intro v t ht
-    simp [hsrcenv] at ht
-  have hwrite := (encodeAction_sourceWrites hpostwf hcs.sig hof hviews h.state.uf heval hact).mono
-    post.contained_completion
-  have hcontained : src.completion.Contained post.completion :=
-    ⟨fun _ hi => InferredFacts.infers_mono (evalAction_contained hact) hi⟩
-  obtain ⟨hruntime, hsound, hdesc⟩ := sourceWrites_program_preserves hpostwf.completion
-    hsafe h (hsig ▸ encodeSig_mergeShape P) (hs.mono_src hcontained.eqs) hd hwrite htgt
-  obtain ⟨raw, hraw, hreadraw⟩ := encodeAction_reads hcs.sig hof
-    (fun _ _ f _ => hctor f) hviews h.state.uf hρ hreads hact
-  have huraw := encodeAction_ufTotal h.wf hu hof hviews h.state.uf
-    (encodeAction_evaluates hof hraw) hraw
-  exact ⟨hruntime, hsound, hdesc,
-    (evalActions_covers_program (Covers.refl d) rfl h (encodeAction_unionFree a)
-      hraw htgt).reads hreadraw,
-    UFTotal.of_evalActions_program h (hsig ▸ encodeSig_mergeShape P)
-      (encodeAction_unionFree a) hraw huraw htgt⟩
-
-private theorem append_inv {p q : Program} {d e : Database}
-    (hr : ProgramStep d (p ++ q) e) : ∃ mid, ProgramStep d p mid ∧ ProgramStep mid q e := by
-  induction p generalizing d with
-  | nil => exact ⟨d, .nil, hr⟩
-  | cons c cs ih =>
-      obtain ⟨mid, hc, hrest⟩ := hr.cons_inv
-      obtain ⟨post, hp, hq⟩ := ih hrest
-      exact ⟨post, .cons hc hp, hq⟩
-
-private theorem action_program_rules {d e : Database} {as : List Action}
-    (h : ProgramStep d (as.map Cmd.action) e) : e.rules = d.rules := by
-  ext r
-  rw [h.mem_rules_iff]
-  constructor
-  · rintro (hr | hr)
-    · exact hr
-    · obtain ⟨a, _, ha⟩ := List.mem_map.mp hr
-      cases ha
-  · exact Or.inl
-
-private theorem action_program_sig {d e : Database} {as : List Action}
-    (h : ProgramStep d (as.map Cmd.action) e) : e.sig = d.sig := by
-  induction as generalizing d with
-  | nil => obtain rfl := h.nil_inv; rfl
-  | cons a as ih =>
-      obtain ⟨mid, hm, hr⟩ := h.cons_inv
-      exact (ih hr).trans hm.sig
-
-theorem global_command_of_programStep {P pre : Program} (hp : P.Fragment)
-    (hsub : ∀ c ∈ pre, c ∈ P) {src post : Database}
-    (hpre : ProgramStep Database.empty pre src) {a : Action} (ha : Cmd.action a ∈ P)
-    (hsrc : CmdStep src (.action a) post) {d e : Database} (h : Runtime d)
-    (hsig : d.sig = encodeSig P) (henv : d.env = [])
-    (hs : SoundTerms d src.completion) (hd : Descending d)
-    (hreads : Reads d src) (hu : UFTotal d)
-    (honly : ∀ r ∈ d.rules, r.ruleset = rebuildRuleset →
-      ∃ c ∈ allMaintenanceRules P, c.command = .rule r)
-    {i : Nat} (htgt : ProgramStep d ((encodeCmd i (.action a)).map Command.command) e) :
-    Runtime e ∧ SoundTerms e post.completion ∧ Descending e ∧ Reads e post ∧
-      UFTotal e ∧ RunSaturated rebuildRuleset e := by
-  have hprog : ProgramStep d
-      ((encodeAction a).map Cmd.action ++ [.saturate rebuildRuleset]) e := by
-    simpa only [encodeCmd, List.map_append, List.map_map, List.map_cons, List.map_nil,
-      Function.comp_def] using htgt
-  obtain ⟨mid, hwrite, hrest⟩ := append_inv hprog
-  obtain ⟨post', hsat, hnil⟩ := hrest.cons_inv
-  obtain rfl := hnil.nil_inv
-  obtain ⟨hm, hsound, hdesc, hread, hutotal⟩ :=
-    global_writes_of_programStep hp hsub hpre ha hsrc h hsig henv hs hd hreads hu hwrite
-  have hmsig : mid.sig = encodeSig P := (action_program_sig hwrite).trans hsig
-  have hrules := action_program_rules hwrite
-  have honly' : ∀ r ∈ mid.rules, r.ruleset = rebuildRuleset →
-      ∃ c ∈ allMaintenanceRules P, c.command = .rule r :=
-    fun r hr hR => honly r (hrules ▸ hr) hR
-  have hsaturate := cmdStep_saturate_iff.mp hsat
-  obtain ⟨hsound', hdesc'⟩ :=
-    rebuild_cmd_preserves hm (hmsig ▸ encodeSig_mergeShape P) hsound hdesc honly' hsat
-  exact ⟨hm.runReach hsaturate.reach, hsound', hdesc',
-    (Covers.runReach hm hsaturate.reach).reads hread,
-    hutotal.rebuild hp hm hmsig honly' hsaturate.reach,
-    saturated_endpoint hm hsaturate⟩
 
 end Egglog.Congruence.Live

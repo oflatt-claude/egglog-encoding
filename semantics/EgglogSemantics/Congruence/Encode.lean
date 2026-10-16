@@ -232,18 +232,16 @@ def encodePrelude (P : Program) : List Command :=
       [⟨.decl fk.1 (ctorDecl fk.2), none⟩,
        ⟨.decl (viewName fk.1) (tableDecl fk.2), none⟩]) ++ allMaintenanceRules P
 
-/-- Rebuild after every source action or run. Source declarations are emitted once by
+/-- Rebuild after every source run. Source declarations are emitted once by
  the prelude; a rule's tag points back to its exact position in the original program. -/
 def encodeCmd (index : Nat) : Cmd → List Command
   | .decl _ _ => []
-  | .action a => (encodeAction a).map (fun a' => ⟨.action a', none⟩) ++
-      [⟨.saturate rebuildRuleset, none⟩]
   | .rule r => [taggedRule (encodeRule r) (.source index)]
   | .run R => [⟨.run R, none⟩, ⟨.saturate rebuildRuleset, none⟩]
   | .saturate R => [⟨.saturate R, none⟩, ⟨.saturate rebuildRuleset, none⟩]
   | .check q => [⟨.check (encodeQuery q 0).1, none⟩]
 
-/-- Keep command indices stable even when declarations disappear or actions expand. -/
+/-- Keep command indices stable even when declarations disappear or runs expand. -/
 def encodeCmds : Program → Nat → List Command
   | [], _ => []
   | c :: cs, index => encodeCmd index c ++ encodeCmds cs (index + 1)

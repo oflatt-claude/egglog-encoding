@@ -70,15 +70,15 @@ theorem minimum_normalizes : MergeNormalize before after := by
 
 /-- A scalar outlives the function row that used it. -/
 theorem superseded_value_remains : value 7 ∈ after.values := by
-  refine ⟨Cong.assert ?_, rfl⟩
+  refine ⟨Cong.direct ?_, rfl⟩
   simp [after, before, base, Database.eraseEntry, Database.putEntry, Database.addTerm,
     row, Entry.atom, Entry.columns, value]
 
 /-- The retained row matches through the ordinary expression rule. -/
 theorem retained_row_matches : Matches after (.expr (atom 3)) [] := by
   have hr : row 3 ∈ after.entries := by rw [remaining]; exact Set.mem_singleton _
-  exact .expr (Cong.assert hr.2) (eval_atom 3)
-    ((Cong.assert hr.2).mono (Database.Contained.addTerms _ _))
+  exact .expr (Cong.direct hr.2) (eval_atom 3)
+    ((Cong.direct hr.2).mono (Database.Contained.addTerms _ _))
 
 /-- Hypothetical operands cannot supply the original-state witness. -/
 theorem stale_row_does_not_match : ¬ Matches after (.expr (atom 7)) [] := by

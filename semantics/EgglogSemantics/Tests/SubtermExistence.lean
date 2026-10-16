@@ -23,7 +23,7 @@ example : (Database.empty.addEq parent child).eqs = {(parent, child)} := by
   simp [Database.addEq, Database.empty]
 
 example : child ∈ (Database.empty.addEq parent child).terms :=
-  (Cong.assert (Set.mem_insert _ _)).mem_right
+  (Cong.direct (Set.mem_insert _ _)).mem_right
 
 private def other : Term := .lit (.int 1)
 private def parentsEqual : Database :=

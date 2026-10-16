@@ -132,7 +132,7 @@ theorem sourceAction_of_evalAction {src post : Database} {a : Action}
   rcases evalAction_eq_some hr with ⟨e, t, rfl, he, rfl⟩ |
     ⟨a, b, ta, tb, rfl, ha, hb, _, rfl⟩
   · exact ⟨t, by simpa only [Expr.evalAtom_eq_eval hc] using he, Database.mem_addTerm t src⟩
-  · exact ⟨ta, tb, ha, hb, .assert (Set.mem_insert _ _)⟩
+  · exact ⟨ta, tb, ha, hb, .direct (Set.mem_insert _ _)⟩
 
 theorem sourceActions_of_evalActions {src post : Database} {as : List Action}
     (hc : src.sig.AllConstructors) (hr : evalActions src as = some post) :
@@ -190,7 +190,7 @@ theorem encodeAction_sourceWrites {src post : Database} {sig : Signature} {ρ : 
       (Database.mem_addTerm t src)
   · exact encodeUnion_sourceWrites hw hp hd huf
       (heval a (by simp [actionExprs]) _ ha)
-      (heval b (by simp [actionExprs]) _ hb) (Cong.assert (Set.mem_insert _ _))
+      (heval b (by simp [actionExprs]) _ hb) (Cong.direct (Set.mem_insert _ _))
 
 theorem SourceAtom.mono {src post : Database} (hc : src.Contained post) {t : Term}
     (h : SourceAtom src t) : SourceAtom post t := by

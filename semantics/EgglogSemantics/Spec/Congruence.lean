@@ -14,7 +14,7 @@ mutual
 /-- The congruence closure of `db`'s asserted equalities. A **partial equivalence
 relation**: symmetric and transitive, but reflexive only where an equation makes it so. -/
 inductive Cong (db : Database) : Term → Term → Prop where
-  | assert {a b : Term} : (a, b) ∈ db.eqs → Cong db a b
+  | direct {a b : Term} : (a, b) ∈ db.eqs → Cong db a b
   | subterm {t s : Term} : Cong db t t → s ∈ t.subterms → Cong db s s
   | symm {a b : Term} : Cong db a b → Cong db b a
   | trans {a b c : Term} : Cong db a b → Cong db b c → Cong db a c

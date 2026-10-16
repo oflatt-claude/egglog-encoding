@@ -11,11 +11,11 @@ def Database.completion (d : Database) : Database :=
   {d with eqs := {p | d.Infers p.1 p.2}}
 
 theorem Database.contained_completion (d : Database) : d.Contained d.completion :=
-  ⟨fun _ hp => infers_of_cong (.assert hp)⟩
+  ⟨fun _ hp => infers_of_cong (.direct hp)⟩
 
 theorem Database.cong_completion_iff {d : Database} (hw : d.WF) {a b : Term} :
     Cong d.completion a b ↔ d.Infers a b := by
-  refine ⟨fun hc => ?_, fun hi => .assert hi⟩
+  refine ⟨fun hc => ?_, fun hi => .direct hi⟩
   exact infers_of_assertions_only (e := d.completion) hw (fun _ hp => hp)
     (infers_of_cong hc)
 
@@ -98,8 +98,8 @@ theorem Database.StoreOk.completion {d : Database} (hw : d.WF) (hs : d.StoreOk)
     have hd' : d.sig row.name = some decl := hd
     exact hn (by simpa [Signature.mergeOf, hd'] using hc row.name)
   exact ⟨fun row hr => (hnone row hr).elim, fun row hr => (hnone row hr).elim,
-    fun p hp => Or.inl ⟨hv p.1 (Cong.assert hp).mem_left,
-      hv p.2 (Cong.assert hp).mem_right⟩, hs.envValues⟩
+    fun p hp => Or.inl ⟨hv p.1 (Cong.direct hp).mem_left,
+      hv p.2 (Cong.direct hp).mem_right⟩, hs.envValues⟩
 
 theorem SourceMeaning.queryHolds_completion_iff {d : Database}
     (hw : d.WF) (hs : d.StoreOk) (hc : d.sig.AllConstructors)

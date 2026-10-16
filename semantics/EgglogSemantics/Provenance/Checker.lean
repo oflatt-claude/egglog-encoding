@@ -1,6 +1,9 @@
 import EgglogSemantics.Provenance.Format
 import EgglogSemantics.Spec.Scope
 
+/-! Intermediate certificates for union-free relational programs, before source lifting.
+Merge inputs must be established entries, not merely congruent row spellings. -/
+
 namespace Egglog.Provenance
 
 def actionFacts (sig : Signature) (σ : Env) : Action → Option (List Term)

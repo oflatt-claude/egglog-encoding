@@ -654,7 +654,7 @@ the same proofs and rejects the same hand-written counterexamples
 
 Source merge proofs are deferred: equality can produce another spelling of one
 stored function row without establishing a second input to its merge body. The
-[checker guide](CHECKER.md#source-merge-inputs) records the counterexample. This does not
+[Lean counterexample](EgglogSemantics/Proofs/SourceProof/Counterexamples.lean) records this. This does not
 affect the constructor-only completeness theorem or the relational provenance pass.
 
 The source fragment is defined once, as `Program.Fragment`: constructor declarations, no

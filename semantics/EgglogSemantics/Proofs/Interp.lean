@@ -37,11 +37,11 @@ theorem mem_closure_iff_of_diag {db : Database} {terms : Finset Term}
     simp only [stepAdds, Bool.or_eq_true, decide_eq_true_eq]
     exact Or.inl (Or.inl (Or.inl trivial))
   refine ⟨fun hp =>
-    closure_sound hterms rel h (fun p hp' => Cong.assert (hsub p hp')) (a, b) hp, fun hc => ?_⟩
+    closure_sound hterms rel h (fun p hp' => Cong.direct (hsub p hp')) (a, b) hp, fun hc => ?_⟩
   refine hc.le (R := fun x y => (x, y) ∈ closure terms rel h) ?_ ?_ ?_ ?_
   · intro x y hxy
     rcases hsup (x, y) hxy with heq | hmem
-    · have hx : x ∈ db.terms := (Cong.assert hxy).mem_left
+    · have hx : x ∈ db.terms := (Cong.direct hxy).mem_left
       have hxy' : x = y := heq
       rw [hterms] at hx
       exact hxy' ▸ hdiag x hx

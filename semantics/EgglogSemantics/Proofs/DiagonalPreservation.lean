@@ -73,7 +73,7 @@ theorem RunStep.noUnions {R : RulesetName} {A B : Database} (h : RunStep R A B)
 
 /-- **One command preserves union-freedom, all three clauses.** `.decl` is the only case
 that moves `sig` and `.rule` the only one that moves `rules`, which is why `Cmd.UnionFree`
-constrains exactly those two alongside a top-level action; the merge phase every command
+constrains exactly those two; the merge phase every command
 ends with moves neither, and `MergeClosure.diag` is what keeps the state diagonal across
 it. -/
 theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.UnionFree)
@@ -85,10 +85,6 @@ theorem CmdStep.noUnions {A B : Database} (hn : A.NoUnions) {c : Cmd} (hu : c.Un
       exact RunReach.induction (P := Database.NoUnions)
         (fun _ _ hp hs => RunStep.noUnions hs hp)
         (show SaturateReach R A e from hreach).reach hn
-    | action a =>
-      replace heff : evalAction A a = some e := hreach
-      exact ⟨evalAction_diag hu hn.diag heff, by rw [evalAction_sig heff]; exact hn.sig,
-        by rw [evalAction_rules heff]; exact hn.rules⟩
     | rule r =>
       subst hreach
       refine ⟨hn.diag, hn.sig, fun r' hr' => ?_⟩

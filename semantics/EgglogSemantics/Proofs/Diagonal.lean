@@ -50,12 +50,12 @@ theorem Diag.putEntry {db : Database} (h : db.Diag) (row : Entry) :
 end Database
 
 /-- **On a diagonal state congruence is equality.** No equation relates two distinct terms,
-so `assert` cannot and neither can `congr`, whose arguments are equal by the pointwise
+so `direct` cannot and neither can `congr`, whose arguments are equal by the pointwise
 hypothesis. -/
 theorem Cong.eq_of_diag {E : Database} (h : E.Diag) : ∀ {a b : Term}, Cong E a b → a = b := by
   intro a b hc
   induction hc using Cong.rec (motive_2 := fun as bs _ => as = bs) with
-  | assert hab => exact h _ hab
+  | direct hab => exact h _ hab
   | subterm => rfl
   | symm _ ih => exact ih.symm
   | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
@@ -94,7 +94,7 @@ theorem Database.Out.entry {d : Database} (h : d.Diag) {f : FnName} {as vs : Lis
 
 theorem Database.Out.term {d : Database} (h : d.Diag) {f : FnName} {as vs : List Term}
     (ho : d.Out f as vs) : Term.app f (as ++ vs) ∈ d.terms :=
-  .assert (ho.entry h).2
+  .direct (ho.entry h).2
 
 theorem Database.Out.columns {d : Database} (h : d.StoreOk) {f : FnName} {as vs : List Term}
     (ho : d.Out f as vs) : ∀ t ∈ as ++ vs, t ∈ d.terms := by

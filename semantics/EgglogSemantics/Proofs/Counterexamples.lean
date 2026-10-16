@@ -310,7 +310,7 @@ theorem mergeDecl_reaches_collide :
     (.cons ⟨mergeSetDb, mergeDecl_eval, .single mergeDecl_mergeStep⟩ .nil)
 
 theorem mergeCollideDb_mem : Term.app "f" [Term.lit (.int 7)] ∈ mergeCollideDb.terms :=
-  Cong.assert (Or.inr ⟨_, Term.IsSubterm.refl _, rfl⟩)
+  Cong.direct (Or.inr ⟨_, Term.IsSubterm.refl _, rfl⟩)
 
 /-- …and they are different: only the merged one holds the term recording `7`. -/
 theorem mergeDecl_ne : mergeSetDb ≠ mergeCollideDb := by
@@ -537,7 +537,7 @@ theorem f_fresh : db₀.sig "f" = none := by simp [db₀]
 
 theorem cong_db₀ {a b : Term} (h : Cong db₀ a b) : a = b ∧ (a = t0 ∨ a = entry) := by
   induction h using Cong.rec (motive_2 := fun as bs _ => as = bs) with
-  | assert hab =>
+  | direct hab =>
     simp only [db₀, Set.mem_insert_iff, Set.mem_singleton_iff, Prod.mk.injEq] at hab
     rcases hab with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> simp
   | symm _ ih => obtain ⟨rfl, h⟩ := ih; exact ⟨rfl, h⟩
@@ -551,7 +551,7 @@ theorem terms_db₀ : db₀.terms = {t0, entry} := by
   ext u
   constructor
   · intro h; rcases (cong_db₀ h).2 with rfl | rfl <;> simp
-  · rintro (rfl | rfl) <;> exact Cong.assert (by simp [db₀])
+  · rintro (rfl | rfl) <;> exact Cong.direct (by simp [db₀])
 
 /-- The state is well formed, so the counterexample is not a malformed database. -/
 theorem wf_db₀ : db₀.WF where
@@ -612,8 +612,8 @@ theorem decl_enables_merge :
     ∃ db', CmdStep db₀ (.decl "f" (ctorDecl 0)) db' ∧ db' ≠ db₁ := by
   have hg : db₁.sig "g" = some gdecl := by simp [db₁, db₀]
   have hctor : db₁.sig.IsCtor "f" := ⟨ctorDecl 0, by simp [db₁], rfl⟩
-  have hentry : entry ∈ db₁.terms := Cong.assert (by simp [db₁, db₀])
-  have ht0 : Cong db₁ t0 t0 := Cong.assert (by simp [db₁, db₀])
+  have hentry : entry ∈ db₁.terms := Cong.direct (by simp [db₁, db₀])
+  have ht0 : Cong db₁ t0 t0 := Cong.direct (by simp [db₁, db₀])
   have hres : Expr.evalList db₁.sig [Expr.app "f" []] (mergeEnv ["old"] ["new"] [t0] [t0]) =
       some [Term.app "f" []] := by
     simp [Expr.evalList, Expr.eval, hctor]
@@ -700,7 +700,7 @@ theorem cong_mem_of_eqs_mem {db : Database} {SS : Set Term}
     (h : ∀ p ∈ db.eqs, p.1 ∈ SS ∧ p.2 ∈ SS) {a b : Term} (hc : Cong db a b) :
     a ∈ SS ∧ b ∈ SS := by
   induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
-  | assert hab => exact h _ hab
+  | direct hab => exact h _ hab
   | symm _ ih => exact ⟨ih.2, ih.1⟩
   | trans _ _ ih₁ ih₂ => exact ⟨ih₁.1, ih₂.2⟩
   | congr _ _ _ ih₁ ih₂ _ => exact ⟨ih₁.1, ih₂.1⟩
@@ -715,7 +715,7 @@ theorem wf_of {d : Database} {SS : Set Term} (henv : d.env = [])
     (hnolit : ∀ t ∈ SS, t.isLit = false) : d.WF := by
   have hterms : ∀ t ∈ d.terms, t ∈ SS := fun t ht => (cong_mem_of_eqs_mem hsub ht).1
   refine ⟨fun t ht => hrefl t (hterms t ht), fun t ht s hs => ?_, ?_, ?_⟩
-  · exact Cong.assert (hrefl s (hclosed t (hterms t ht) s hs))
+  · exact Cong.direct (hrefl s (hclosed t (hterms t ht) s hs))
   · rw [henv]; simp
   · intro p hp hlit
     rcases hlit with hlit | hlit
@@ -823,23 +823,23 @@ theorem C_P1S : ((P1, S) : Term × Term) ∈ C.eqs :=
 /-- The one interesting clause of `A.Recorded C`: `C` holds `@fView(k) ↦ s` where `A` holds
 `@fView(k) ↦ p`, and the two are congruent because `C` asserts `p = s`. -/
 theorem cong_vP1_vS {ts : List Term} (h : vrow P1 ∈ ts) : CongOn C ts (vrow P1) (vrow S) :=
-  Cong.congr (Cong.assert (refl_mem_addTerms (Term.IsSubterm.refl (vrow P1)) ts C h))
-    (Cong.assert (eqs_subset_addTerms ts C C_vS))
-    (.cons (Cong.assert (eqs_subset_addTerms ts C C_K))
-      (.cons (Cong.assert (eqs_subset_addTerms ts C C_P1S)) .nil))
+  Cong.congr (Cong.direct (refl_mem_addTerms (Term.IsSubterm.refl (vrow P1)) ts C h))
+    (Cong.direct (eqs_subset_addTerms ts C C_vS))
+    (.cons (Cong.direct (eqs_subset_addTerms ts C C_K))
+      (.cons (Cong.direct (eqs_subset_addTerms ts C C_P1S)) .nil))
 
 theorem A_rec_C : A.Recorded C := by
   refine ⟨fun p hp => ?_⟩
   rcases hp with rfl | rfl | rfl | rfl | rfl
   · exact ⟨(vrow S, vrow S), C_vS, cong_vP1_vS (by simp), cong_vP1_vS (by simp)⟩
-  · exact ⟨(vrow R, vrow R), C_vR, Cong.assert (eqs_subset_addTerms _ C C_vR),
-      Cong.assert (eqs_subset_addTerms _ C C_vR)⟩
-  · exact ⟨(K, K), C_K, Cong.assert (eqs_subset_addTerms _ C C_K),
-      Cong.assert (eqs_subset_addTerms _ C C_K)⟩
-  · exact ⟨(P1, P1), C_P1, Cong.assert (eqs_subset_addTerms _ C C_P1),
-      Cong.assert (eqs_subset_addTerms _ C C_P1)⟩
-  · exact ⟨(R, R), C_R, Cong.assert (eqs_subset_addTerms _ C C_R),
-      Cong.assert (eqs_subset_addTerms _ C C_R)⟩
+  · exact ⟨(vrow R, vrow R), C_vR, Cong.direct (eqs_subset_addTerms _ C C_vR),
+      Cong.direct (eqs_subset_addTerms _ C C_vR)⟩
+  · exact ⟨(K, K), C_K, Cong.direct (eqs_subset_addTerms _ C C_K),
+      Cong.direct (eqs_subset_addTerms _ C C_K)⟩
+  · exact ⟨(P1, P1), C_P1, Cong.direct (eqs_subset_addTerms _ C C_P1),
+      Cong.direct (eqs_subset_addTerms _ C C_P1)⟩
+  · exact ⟨(R, R), C_R, Cong.direct (eqs_subset_addTerms _ C C_R),
+      Cong.direct (eqs_subset_addTerms _ C C_R)⟩
 
 /-! ### The specification's merge step
 
@@ -864,8 +864,8 @@ theorem conflict_P1_R : MergeConflict (tableDecl 1) mergeBody [P1] [R] := by
 
 theorem stepA : MergeStep A B :=
   MergeStep.collide (f := V) (decl := tableDecl 1) (as := [K]) (bs := [K]) (a := [P1])
-    (b := [R]) sg_V rfl conflict_P1_R rfl rfl (Cong.assert A_vP1) (Cong.assert A_vR)
-    (.cons (Cong.assert A_K) .nil) evalA resA
+    (b := [R]) sg_V rfl conflict_P1_R rfl rfl (Cong.direct A_vP1) (Cong.direct A_vR)
+    (.cons (Cong.direct A_K) .nil) evalA resA
 
 /-- The edge the specification wrote. -/
 theorem B_uf : ((ufrow R P1, ufrow R P1) : Term × Term) ∈ B.eqs :=
@@ -907,7 +907,7 @@ theorem cong_phi {E : Database}
     (h : ∀ p ∈ E.eqs, ufPhi p.1 = ufPhi p.2 ∧ cc p.1 = cc p.2) {a b : Term}
     (hc : Cong E a b) : ufPhi a = ufPhi b ∧ cc a = cc b := by
   induction hc using Cong.rec (motive_2 := fun as bs _ => as.map cc = bs.map cc) with
-  | assert hab => exact h _ hab
+  | direct hab => exact h _ hab
   | symm _ ih => exact ⟨ih.1.symm, ih.2.symm⟩
   | trans _ _ ih₁ ih₂ => exact ⟨ih₁.1.trans ih₂.1, ih₁.2.trans ih₂.2⟩
   | @congr f as bs _ _ _ _ _ ihl =>
@@ -1098,8 +1098,8 @@ theorem conflict_S_R : MergeConflict (tableDecl 1) mergeBody [S] [R] := by
 entry at `r`. -/
 theorem C_steps : ∃ D, MergeStep C D :=
   ⟨_, MergeStep.collide (f := V) (decl := tableDecl 1) (as := [K]) (bs := [K]) (a := [S])
-    (b := [R]) sg_V rfl conflict_S_R rfl rfl (Cong.assert C_vS) (Cong.assert C_vR)
-    (.cons (Cong.assert C_K) .nil) (evalC S R) (resC S R)⟩
+    (b := [R]) sg_V rfl conflict_S_R rfl rfl (Cong.direct C_vS) (Cong.direct C_vR)
+    (.cons (Cong.direct C_K) .nil) (evalC S R) (resC S R)⟩
 
 /-! ### The verdict -/
 

@@ -1,5 +1,5 @@
 import EgglogSemantics.Proofs.Congruence.AbstractComplete
-import EgglogSemantics.Proofs.Congruence.LiveCommandTermination
+import EgglogSemantics.Proofs.Congruence.LiveRebuildTermination
 
 /-! Finite compiled blocks for source commands with bounded rounds. -/
 
@@ -31,20 +31,6 @@ theorem prelude_exists (P : Program) :
         | _ => contradiction
   exact go _ (prelude_setup P) Database.empty rfl
 
-/-- Successful source actions have finite compiled writes and rebuilding. -/
-theorem Boundary.action_exists {P pre rest : Program} (hp : P.Fragment) {a : Action}
-    (hP : P = pre ++ Cmd.action a :: rest) {src post d : Database}
-    (hpre : ProgramStep Database.empty pre src)
-    (htpre : ProgramStep Database.empty
-      ((encodePrelude P ++ encodeCmds pre 0).map Command.command) d)
-    (_h : Boundary src d) (hsrc : CmdStep src (.action a) post) :
-    ∃ e, ProgramStep d ((encodeCmd pre.length (.action a)).map Command.command) e := by
-  have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => hP ▸ List.mem_append_left _ hc
-  have ha : Cmd.action a ∈ P := hP ▸ List.mem_append_right _ List.mem_cons_self
-  exact Live.global_command_exists hp hsub hpre ha hsrc (Live.prefix_runtime hp htpre)
-    (htpre.mergeNormal (empty_normal rfl)) (Live.prefix_sig htpre) htpre.env
-    ((Live.rulesEncoded_of_prefix hpre htpre).rebuild_only hp hpre hsub) pre.length
-
 /-- Every finite generated store admits one rule round and a completed rebuild. -/
 theorem Boundary.run_exists {P pre rest : Program} (hp : P.Fragment) {R : RulesetName}
     (hP : P = pre ++ Cmd.run R :: rest) {src post d : Database}
@@ -71,7 +57,6 @@ theorem Boundary.nonSaturate_exists {P pre rest : Program} (hp : P.Fragment) {c 
     (h : Boundary src d) (hsrc : CmdStep src c post) (hn : c.NoSaturate) :
     ∃ e, ProgramStep d ((encodeCmd pre.length c).map Command.command) e := by
   cases c with
-  | action a => exact h.action_exists hp hP hpre htpre hsrc
   | run R => exact h.run_exists hp hP hpre htpre hsrc
   | decl f dc => exact ⟨d, .nil⟩
   | rule r =>

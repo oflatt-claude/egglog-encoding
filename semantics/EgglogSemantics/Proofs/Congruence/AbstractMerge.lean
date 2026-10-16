@@ -105,8 +105,8 @@ theorem mergeStep_soundTerms {src d e : Database} (hshape : MergeShape d.sig)
     (hstep : MergeStep d e) : SoundTerms e src := by
   obtain ⟨f, cs, a, b, hrowa, hrowb, hkind, rfl⟩ :=
     mergeStep_form hshape hd huf hstep
-  have hta : Term.app f (cs ++ [a]) ∈ d.terms := .assert hrowa.2
-  have htb : Term.app f (cs ++ [b]) ∈ d.terms := .assert hrowb.2
+  have hta : Term.app f (cs ++ [a]) ∈ d.terms := .direct hrowa.2
+  have htb : Term.app f (cs ++ [b]) ∈ d.terms := .direct hrowb.2
   let base := (d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩
   have hbase : base.terms ⊆ d.terms :=
     (Database.terms_eraseEntry_subset (fun t ht =>
@@ -139,8 +139,8 @@ theorem mergeStep_descending {d e : Database} (hshape : MergeShape d.sig)
     (huf : d.sig ufName = some (tableDecl 1)) (hs : Descending d)
     (hstep : MergeStep d e) : Descending e := by
   obtain ⟨f, cs, a, b, hrowa, hrowb, _, rfl⟩ := mergeStep_form hshape hd huf hstep
-  have hta : Term.app f (cs ++ [a]) ∈ d.terms := .assert hrowa.2
-  have htb : Term.app f (cs ++ [b]) ∈ d.terms := .assert hrowb.2
+  have hta : Term.app f (cs ++ [a]) ∈ d.terms := .direct hrowa.2
+  have htb : Term.app f (cs ++ [b]) ∈ d.terms := .direct hrowb.2
   let base := (d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩
   have hbase : base.terms ⊆ d.terms :=
     (Database.terms_eraseEntry_subset (fun t ht =>

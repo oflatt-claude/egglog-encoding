@@ -42,7 +42,7 @@ theorem FlatRead.holds {d : FDatabase} {ρ : Env} {p : Pattern} (h : FlatRead d 
       have hmem : i ∈ ((d.addTerm i).addTerm i).terms :=
         FDatabase.mem_addTerm_of_mem (FDatabase.mem_addTerm_of_mem hi)
       have hcl : (i, i) ∈ ((d.addTerm i).addTerm i).closureF :=
-        Egglog.FDatabase.mem_closureF_iff.mpr (Cong.assert (Or.inl ⟨rfl, hmem⟩))
+        Egglog.FDatabase.mem_closureF_iff.mpr (Cong.direct (Or.inl ⟨rfl, hmem⟩))
       change patternHolds d (.eq a b) σ = true
       simp only [patternHolds, ha', hb']
       exact Bool.and_eq_true_iff.mpr ⟨decide_eq_true hcl, decide_eq_true ⟨i, hi, hcl⟩⟩

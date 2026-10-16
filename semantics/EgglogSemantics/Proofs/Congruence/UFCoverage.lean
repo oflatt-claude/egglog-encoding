@@ -1,4 +1,6 @@
-import EgglogSemantics.Proofs.Congruence.AbstractWriteCommands
+import EgglogSemantics.Proofs.Congruence.AbstractRuntime
+import EgglogSemantics.Proofs.Congruence.AbstractWrites
+import EgglogSemantics.Proofs.Congruence.AbstractMerge
 import EgglogSemantics.Proofs.Congruence.LiveCoverage
 import EgglogSemantics.Proofs.Congruence.AbstractMaintenanceDescent
 
@@ -80,8 +82,8 @@ theorem mergeStep_values_subset {d e : Database} (h : Runtime d)
   intro t ht _
   apply h.wf.subtermClosed _ ?_ ht
   rcases lowerId_eq_or a b with he | he
-  · rw [he]; exact .assert hra.2
-  · rw [he]; exact .assert hrb.2
+  · rw [he]; exact .direct hra.2
+  · rw [he]; exact .direct hrb.2
 
 theorem mergeClosure_values_subset {d e : Database} (h : Runtime d)
     (hshape : MergeShape d.sig) (hm : MergeClosure d e) : e.values ⊆ d.values := by
@@ -374,56 +376,6 @@ theorem encodeLocalActions_ufTotal {d e : Database} {as : List Action} {ρ : Env
       Database.terms_setEnv, Database.entries] using hu) hp hd huf heval hp'
   simpa only [UFTotal, HasUF, Database.values, Database.terms_setEnvRules,
     Database.entries] using hi
-
-private theorem evalAction_values_subset {d e post out : Database} {a : Action}
-    (hsig : d.sig = e.sig) (henv : d.env = e.env) (hv : e.values ⊆ d.values)
-    (hu : a.UnionFree) (hd : evalAction d a = some post) (he : evalAction e a = some out) :
-    out.values ⊆ post.values := by
-  rcases evalAction_eq_some hd with ⟨x, t, rfl, hx, rfl⟩ |
-    ⟨_, _, _, _, rfl, _, _, _, _⟩
-  · have hex : evalAction e (.expr x) = some (e.addTerm t) := by
-      simp only [evalAction, ← hsig, ← henv, hx, Option.map_some]
-    obtain rfl := Option.some.inj (he.symm.trans hex)
-    intro s hs
-    have hvs : s.IsValue d.sig := hsig ▸ hs.2
-    rcases Database.addTerm_terms ▸ hs.1 with hm | hm
-    · exact ⟨(Database.Contained.addTerm _ _).terms (hv ⟨hm, hs.2⟩).1, hvs⟩
-    · exact ⟨Database.addTerm_terms ▸ Or.inr hm, hvs⟩
-  · contradiction
-
-/-- Interleaved generated merges add no values beyond the corresponding raw block. -/
-theorem evalActions_program_values_subset {d e post final : Database} (h : Covers d e)
-    (henv : d.env = e.env) (hv : e.values ⊆ d.values) (he : Runtime e)
-    (hshape : MergeShape e.sig) {as : List Action} (hu : Actions.UnionFree as)
-    (hf : evalActions d as = some post) (hr : ProgramStep e (as.map Cmd.action) final) :
-    final.values ⊆ post.values := by
-  induction as generalizing d e with
-  | nil =>
-      obtain rfl := Option.some.inj hf
-      obtain rfl := hr.nil_inv
-      exact hv
-  | cons a as ih =>
-      obtain ⟨mid, hm, hrest⟩ := Option.bind_eq_some_iff.mp hf
-      obtain ⟨next, hc, hr⟩ := hr.cons_inv
-      obtain ⟨raw, hraw, hmerge⟩ := hc
-      obtain ⟨raw', hraw', hcov, henv'⟩ := evalAction_covers h henv hm
-      obtain rfl := Option.some.inj (hraw'.symm.trans hraw)
-      have hrawstate := he.action hu.1 hraw'
-      have hrawshape : MergeShape raw'.sig := by rw [evalAction_sig hraw']; exact hshape
-      have hcovmerge := Covers.mergeClosure hrawstate.state hrawstate.noUnions.diag hmerge.1
-      exact ih (hcov.trans hcovmerge) (henv'.trans hmerge.1.envRules.1.symm)
-        ((mergeClosure_values_subset hrawstate hrawshape hmerge.1).trans
-          (evalAction_values_subset h.sig henv hv hu.1 hm hraw'))
-        (hrawstate.merge hmerge.1) (by rw [hmerge.1.sig]; exact hrawshape)
-        hu.2 hrest hr
-
-theorem UFTotal.of_evalActions_program {d post final : Database} (h : Runtime d)
-    (hshape : MergeShape d.sig) {as : List Action} (hu : Actions.UnionFree as)
-    (hf : evalActions d as = some post) (htotal : UFTotal post)
-    (hr : ProgramStep d (as.map Cmd.action) final) : UFTotal final :=
-  htotal.of_covers (evalActions_covers_program (Covers.refl d) rfl h hu hf hr)
-    (evalActions_program_values_subset (Covers.refl d) rfl (Set.Subset.refl _)
-      h hshape hu hf hr)
 
 theorem UFTotal.localFlat {d e : Database} {q : Query} {ρ : Env}
     {f : FnName} {xs : List Expr} (h : UFTotal d) (hw : d.WF)

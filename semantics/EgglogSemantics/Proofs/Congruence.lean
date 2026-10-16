@@ -66,7 +66,7 @@ mutual
 theorem Cong.mono {d₁ d₂ : Database} (h : d₁.Contained d₂) {a b : Term}
     (hc : Cong d₁ a b) : Cong d₂ a b := by
   match hc with
-  | .assert hm => exact .assert (h.eqs hm)
+  | .direct hm => exact .direct (h.eqs hm)
   | .subterm hc hs => exact .subterm (Cong.mono h hc) hs
   | .symm hc => exact .symm (Cong.mono h hc)
   | .trans h₁ h₂ => exact .trans (Cong.mono h h₁) (Cong.mono h h₂)
@@ -88,7 +88,7 @@ theorem Cong.of_assertions {d e : Database}
     (h : ∀ p ∈ d.eqs, Cong e p.1 p.2) {a b : Term}
     (hc : Cong d a b) : Cong e a b := by
   match hc with
-  | .assert hp => exact h _ hp
+  | .direct hp => exact h _ hp
   | .subterm ht hs => exact .subterm (Cong.of_assertions h ht) hs
   | .symm hc => exact .symm (Cong.of_assertions h hc)
   | .trans hl hr => exact .trans (Cong.of_assertions h hl) (Cong.of_assertions h hr)
@@ -140,7 +140,7 @@ theorem Cong.le {db : Database} {R : Term → Term → Prop}
     (hsubterm : ∀ t s, R t t → s ∈ t.subterms → R s s)
     {a b : Term} (h : Cong db a b) : R a b := by
   match h with
-  | .assert hm => exact hassert _ _ hm
+  | .direct hm => exact hassert _ _ hm
   | .subterm ht hs =>
     exact hsubterm _ _
       (Cong.le hassert hsymm htrans hcongr hsubterm ht) hs
@@ -180,7 +180,7 @@ theorem Cong.of_addTerm {db : Database} (hw : db.WF) {t : Term} (ht : t ∈ db.t
   rcases Set.mem_insert_iff.mp hm with heq | hm
   · obtain ⟨rfl, rfl⟩ := Prod.mk.inj heq
     exact ht
-  · exact .assert hm
+  · exact .direct hm
 
 /-! ### A literal's class is a singleton
 
@@ -193,7 +193,7 @@ what establishes the hypothesis. -/
 theorem Cong.eq_of_isLit {db : Database} (hl : db.LitsIsolated) {a b : Term}
     (hc : Cong db a b) : a.isLit ∨ b.isLit → a = b := by
   induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
-  | assert hab => exact hl _ hab
+  | direct hab => exact hl _ hab
   | subterm => exact fun _ => rfl
   | symm _ ih => exact fun h => (ih h.symm).symm
   | trans _ _ ih₁ ih₂ =>
@@ -240,7 +240,7 @@ theorem Cong.isValue_iff {db : Database} (hs : db.StoreOk) {a b : Term}
   induction h using Cong.rec
       (motive_2 := fun as bs _ =>
         (∀ a ∈ as, a.IsValue db.sig) ↔ ∀ b ∈ bs, b.IsValue db.sig) with
-  | assert he =>
+  | direct he =>
     rcases hs.typed _ he with hv | ⟨row, _, heq⟩
     · exact iff_of_true hv.1 hv.2
     · have hab := congrArg Prod.fst heq

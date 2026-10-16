@@ -73,7 +73,7 @@ theorem encodeAction_ufTermsDescend {src post : Database} {d d' : FDatabase} {a 
   · apply encodeUnion_ufTermsDescend hw hs (hp a (by simp [actionExprs]))
       (hp b (by simp [actionExprs])) ((heval a (by simp [actionExprs])).trans ha)
       ((heval b (by simp [actionExprs])).trans hb) _ h htgt
-    exact Cong.assert (Set.mem_insert _ _)
+    exact Cong.direct (Set.mem_insert _ _)
 
 /-- Historical descent survives an entire compiled source action block. -/
 theorem encodeActions_ufTermsDescend {src post : Database} {d d' : FDatabase} {as : List Action}
