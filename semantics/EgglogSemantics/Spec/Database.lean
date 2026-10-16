@@ -103,7 +103,8 @@ def addTerm (t : Term) (db : Database) : Database :=
 def addTerms (ts : List Term) (db : Database) : Database :=
   ts.foldl (fun d t => d.addTerm t) db
 
-/-- Assert `a = b`, recording both terms. -/
+/-- Assert `a = b` and record both operands' subterms. Symmetry and endpoint reflexivity
+follow from congruence; subterm existence and the stored diagonals need these writes. -/
 def addEq (a b : Term) (db : Database) : Database :=
   let d := (db.addTerm a).addTerm b
   { d with eqs := insert (a, b) d.eqs }

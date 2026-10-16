@@ -2,6 +2,8 @@ import EgglogSemantics.Proofs.Congruence.AbstractTerminationComplete
 import EgglogSemantics.Proofs.Congruence.LiveProgramTermination
 import EgglogSemantics.Proofs.Behavior
 
+/-! Top-level congruence compiler correctness: success, check failure, and divergence. -/
+
 namespace Egglog.Congruence
 
 /-- All success, failure, and divergence behaviors agree, without evaluation premises. -/

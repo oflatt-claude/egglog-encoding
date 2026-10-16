@@ -4,7 +4,7 @@ import EgglogSemantics.Spec.Behavior
 
 /-! The paper's compiler-correctness obligation. Both evaluations use mathematical
 `Database` states. No executable interpreter or fuel bound occurs in the statement.
-`Proofs/Congruence/AbstractBehaviorComplete.lean` proves `preservesBehaviors`.
+`Proofs/Congruence/Correctness.lean` proves `preservesBehaviors`.
 The paper's source programs use bounded rounds; only compiled rebuilding
 uses saturation. -/
 

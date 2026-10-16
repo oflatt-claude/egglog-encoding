@@ -1,4 +1,4 @@
-import EgglogSemantics.Proofs.Congruence.AbstractBehaviorComplete
+import EgglogSemantics.Proofs.Congruence.Correctness
 import EgglogSemantics.Tests.Divergence
 
 /-! Non-vacuity checks for the mathematical compiler theorem. These witnesses use

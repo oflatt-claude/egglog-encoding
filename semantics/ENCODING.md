@@ -43,7 +43,7 @@ row replacement, and `LiveRebuildTermination` proves maintenance has such a boun
 `Proofs/Source/Termination` derives source evaluation existence from well-formedness,
 constructor-only declarations, and `NoSaturate`. Thus `evaluations_exist` gives actual
 finite executions on both sides, and `observations_iff` equates their possible Boolean
-success/failure observations. `preservesBehaviors` in `AbstractBehaviorComplete.lean`
+success/failure observations. `preservesBehaviors` in `Proofs/Congruence/Correctness.lean`
 now proves equivalence of success, failed checks, and divergence without evaluation premises.
 `LiveProgramTermination` excludes every infinite compiled merge/rebuilding trace for
 `NoSaturate` sources. These theorems and their non-vacuity examples use mathematical
