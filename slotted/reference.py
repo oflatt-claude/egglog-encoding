@@ -601,7 +601,7 @@ def rhs_of(lang, t):
     return (t[0], *out)
 
 
-def atom_lines(lang, root, atoms, var="var"):
+def atom_lines(lang, root, atoms, var="var", *, names=None):
     """A flattened pattern as the oracle's `MultiPattern` atom lines.
 
     `(root_name, lines)`, with the leading `?` stripped as those lines want. An atom's
@@ -632,7 +632,7 @@ def atom_lines(lang, root, atoms, var="var"):
                 spelled.append(c)
             elif kind == "sl":
                 extra[0] += 1
-                v = f"_sl{extra[0]}"
+                v = names.fresh(f"_sl{extra[0]}") if names else f"_sl{extra[0]}"
                 out.append(f"atom {v} {var} {c}")
                 spelled.append(v)
             else:
@@ -641,7 +641,7 @@ def atom_lines(lang, root, atoms, var="var"):
                 # atom of its own and the child refers to that. Its payload is marked `#`
                 # so it stays a payload rather than becoming a variable.
                 extra[0] += 1
-                v = f"_cl{extra[0]}"
+                v = names.fresh(f"_cl{extra[0]}") if names else f"_cl{extra[0]}"
                 leaf = lang.sexpr(c)
                 if leaf.startswith("("):
                     head, *pays = leaf[1:-1].split()
@@ -935,6 +935,47 @@ def rewrite_parts(src, form):
 def rule_name(src, form):
     """A rewrite's `:name`, or None."""
     return rewrite_parts(src, form)["name"]
+
+
+class NestedPatternUnsupported(ValueError):
+    """A source rule needs multiple patterns, which ref-nested cannot express."""
+
+
+def rule_lines(src, lang, form, *, nested=False):
+    """Translate one source rewrite, including its side patterns, to oracle spec lines.
+
+    Reject conditions the oracle protocol cannot express instead of comparing a
+    weaker rule. All atoms share a fresh-name supply, including literal leaves.
+    """
+    parts = rewrite_parts(src, form)
+    if parts["same"] or parts["diseq"] or parts["fresh"] or parts["lead"]:
+        raise ValueError(f"{src.path.name}: unsupported reference rewrite options: {render(form)}")
+    lhs = src.term(parts["lhs"], ground=False)
+    rhs = pat_sexpr(lang, rhs_of(lang, src.term(parts["rhs"], ground=False)))
+    if nested:
+        if parts["equalities"] or isinstance(lhs, str):
+            raise NestedPatternUnsupported("requires a single nested pattern; found multipattern :when conditions")
+        out = ["rule", f"nested {pat_sexpr(lang, rhs_of(lang, lhs))}", f"rhs root {rhs}"]
+    else:
+        names = parts["names"]
+        if isinstance(lhs, str):
+            if lhs.startswith("$"):
+                raise ValueError("reference rewrite root must be a constructor or a pattern variable")
+            root, atoms = lhs, []
+        else:
+            root, atoms = flatten(lang, lhs, names=names)
+        for name, pattern in parts["equalities"]:
+            _, extra = flatten(lang, src.term(pattern, ground=False), root=name, names=names)
+            atoms.extend(extra)
+        bound = {a[0].lstrip("?") for a in atoms}
+        bound.update(child.lstrip("?") for _, _, kids, _ in atoms for kind, child in kids if kind == "pv")
+        if root.lstrip("?") not in bound:
+            raise ValueError("reference rewrite root must be bound by a constructor pattern")
+        root, text = atom_lines(lang, root, atoms, names=names)
+        out = ["rule", *text, f"rhs {root} {rhs}"]
+    for want, slot, pvars in parts["conds"]:
+        out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
+    return out
 
 
 def as_pattern(lang, t, slot_name=lambda n: f"${n}"):
