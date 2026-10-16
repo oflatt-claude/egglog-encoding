@@ -676,8 +676,11 @@ dependencies = [
  "lazy_static",
  "libtest-mimic",
  "log",
+ "mimalloc",
  "num",
+ "rustc-hash",
  "serde_json",
+ "smallvec",
  "stacker",
 ]
 

@@ -101,6 +101,7 @@ mod disequality;
 mod f64;
 mod fresh_macro;
 mod map_fold;
+pub mod slotted;
 mod subst;
 mod type_constraints;
 pub use subst::Subst;

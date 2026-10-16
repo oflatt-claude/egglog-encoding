@@ -12,18 +12,25 @@ readme = "README.md"
 harness = false
 name = "files"
 
+[[test]]
+harness = false
+name = "slotted_snapshots"
+
 [[bench]]
 harness = false
 name = "files"
 
 [features]
 default = ["bin"]
-bin = ["egglog/bin"]
+bin = ["egglog/bin", "dep:mimalloc"]
 
 [dependencies]
 egglog = { workspace = true }
 egglog-ast = { workspace = true }
 egglog-reports = { workspace = true }
+mimalloc = { workspace = true, optional = true }
+rustc-hash = { workspace = true }
+smallvec = { workspace = true }
 num = "0.4.3"
 lazy_static = "1.4"
 log = "0.4"

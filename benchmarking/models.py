@@ -118,7 +118,7 @@ class EndpointRequest:
     disequality_encoding: DisequalityEncoding = "nee"
 
     def __post_init__(self) -> None:
-        if TREATMENT_SPECS[self.treatment].engine == "egg" and self.disequality_encoding != "nee":
+        if TREATMENT_SPECS[self.treatment].engine != "egglog" and self.disequality_encoding != "nee":
             raise ValueError("disequality encoding selection is only supported by egglog treatments")
 
 

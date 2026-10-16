@@ -208,6 +208,7 @@ def test_html_embeds_exact_jsonl_initial_catalog_runtime_and_safe_data(tmp_path:
         "benchmarking/reports/interactive_runtime.py",
         "benchmarking/reports/presentation.py",
         "benchmarking/reports/store.py",
+        "benchmarking/reports/slotted.py",
     }
     initial_payload = cast(dict[str, JsonValue], envelope["initial_payload"])
     assert _section_ids(initial_payload) == ["selection", "summary", "files", "phases", "rulesets"]

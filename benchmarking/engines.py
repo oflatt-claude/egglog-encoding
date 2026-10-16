@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-type Engine = Literal["egglog", "egg"]
+type Engine = Literal["egglog", "egg", "slotted-reference"]
 type Treatment = Literal[
     "off",
     "term",
@@ -17,6 +17,11 @@ type Treatment = Literal[
     "egg-proofs",
     "egg-proof-extraction",
     "egg-proof-testing",
+    "slotted",
+    "slotted-no-aliasing",
+    "multi",
+    "nested",
+    "nested-snapshot",
 ]
 
 
@@ -47,8 +52,14 @@ TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
     "egg-proofs": TreatmentSpec("egg", ("--proof-mode", "enabled")),
     "egg-proof-extraction": TreatmentSpec("egg", ("--proof-mode", "extract")),
     "egg-proof-testing": TreatmentSpec("egg", ("--proof-mode", "check")),
+    "slotted": TreatmentSpec("egglog", ("--slotted",)),
+    "slotted-no-aliasing": TreatmentSpec("egglog", ("--slotted", "--slotted-no-aliasing")),
+    "multi": TreatmentSpec("slotted-reference", ()),
+    "nested": TreatmentSpec("slotted-reference", ()),
+    "nested-snapshot": TreatmentSpec("slotted-reference", ()),
 }
-TREATMENTS = tuple(TREATMENT_SPECS)
+# Reference matchers use the slotted collector and its generated workloads.
+TREATMENTS = tuple(name for name, spec in TREATMENT_SPECS.items() if spec.engine != "slotted-reference")
 
 MATH_WORKLOAD_PATH = Path("egglog-experimental/tests/math-microbenchmark-rational.egg")
 
@@ -56,6 +67,8 @@ MATH_WORKLOAD_PATH = Path("egglog-experimental/tests/math-microbenchmark-rationa
 def validate_engine_workload(file_spec: WorkloadFile, treatment: Treatment) -> None:
     """Reject workload features unsupported by the selected treatment engine."""
 
+    if TREATMENT_SPECS[treatment].engine == "slotted-reference":
+        raise ValueError("reference matcher treatments require the slotted collector")
     if TREATMENT_SPECS[treatment].engine != "egg":
         return
     project_fixture = Path(__file__).resolve().parents[1] / MATH_WORKLOAD_PATH
