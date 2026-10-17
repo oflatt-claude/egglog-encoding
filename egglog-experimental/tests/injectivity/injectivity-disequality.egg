@@ -1,19 +1,47 @@
-; Read primitive and explicit child witnesses without storing derived pair facts.
+; Disequality witnesses are queried on demand; derived pairs are not stored.
+; A failed known-disequal? check means unknown; it does not establish equality.
 ; This query supports ordinary execution, without term/proof encoding.
 (datatype Term
   (A) (B) (C) (D)
+  (U1) (U2) (V1) (V2)
+  (EqL) (EqR)
   (Num i64 :injective)
   (Pair Term Term :injective)
-  (Wrap Term :injective))
+  (Wrap Term :injective)
+  (Plain Term Term))
+
+; Primitive fields use native !=; no explicit disequal assertion is needed.
 (Num 1) (Num 2)
 (check (known-disequal? (Num 1) (Num 2)))
 
+; Different e-classes alone supply no witness. An explicit child fact does.
 (Pair (A) (C)) (Pair (B) (C))
 (fail (check (known-disequal? (Pair (A) (C)) (Pair (B) (C)))))
 (disequal (A) (B))
 (check (known-disequal? (Pair (A) (C)) (Pair (B) (C))))
+; A difference in either binary argument suffices, including the second.
+(Pair (C) (A)) (Pair (C) (B))
+(check (known-disequal? (Pair (C) (A)) (Pair (C) (B))))
 
-; Only unary constructors allow reverse disequality reasoning.
+; The same known child difference does not propagate through unmarked Plain.
+(Plain (A) (C)) (Plain (B) (C))
+(fail (check (known-disequal? (Plain (A) (C)) (Plain (B) (C)))))
+
+; Unary reverse reasoning follows congruence even without injectivity;
+; this API scopes it to marked constructors such as Wrap.
 (disequal (Wrap (C)) (Wrap (D)))
 (check (known-disequal? (C) (D)))
 (fail (check (known-disequal? (A) (C))))
+
+; Binary parent disequality means at least one argument differs, without
+; identifying which. These fresh leaves have no other disequality seeds.
+(disequal (Pair (U1) (V1)) (Pair (U2) (V2)))
+(check (known-disequal? (Pair (U1) (V1)) (Pair (U2) (V2))))
+(fail (check (known-disequal? (U1) (U2))))
+(fail (check (known-disequal? (V1) (V2))))
+
+; Equality injectivity runs separately. The queries above needed no saturation.
+(union (Wrap (EqL)) (Wrap (EqR)))
+(fail (check (= (EqL) (EqR))))
+(run-schedule (saturate injectivity))
+(check (= (EqL) (EqR)))

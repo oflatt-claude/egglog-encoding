@@ -1,4 +1,60 @@
-//! Constructor injectivity, lowered to ordinary rules before term/proof encoding.
+//! Opt-in constructor injectivity and its rules encoding.
+//!
+//! # Reference
+//!
+//! `:injective` is a flag on a constructor or a datatype variant, including
+//! variants in `datatype*`. It combines with `:cost` and `:unextractable`:
+//!
+//! ```lisp
+//! (datatype Term (Leaf String) (Wrap Term :injective))
+//! (constructor Tagged (Term i64) Term :injective :cost 2)
+//! (union (Tagged (Leaf "a") 7) (Tagged (Leaf "b") 7))
+//! (run-schedule (saturate injectivity))
+//! (check (= (Leaf "a") (Leaf "b")))
+//! ```
+//!
+//! When two applications of the **same marked constructor** have equal
+//! results, corresponding unionable equality-sort arguments are unioned. A
+//! differing primitive argument triggers a panic when the `injectivity` ruleset
+//! runs. Container and non-unionable equality-sort arguments are rejected at
+//! declaration; unmarked constructors retain their ordinary behavior. Different
+//! constructor names imply no disjointness, and subsumed rows still participate
+//! in the constraints.
+//!
+//! The shared `injectivity` ruleset exists on experimental graphs, but its
+//! rules run only when scheduled. `(run-schedule (saturate injectivity))`
+//! propagates equality through successive constructor layers. The generated
+//! equality rules support ordinary execution, term encoding, and proof testing.
+//! The separate `known-disequal?` read predicate supports ordinary execution
+//! only; its reference and witness-search explanation are in `disequality.rs`.
+//!
+//! # Encoding explanation
+//!
+//! The core AST/parser carries the annotation; this extension consumes it
+//! before core desugaring. The expansion preserves the original declaration
+//! and options with the flag cleared, then adds ordinary rules. Plain egglog
+//! rejects an unconsumed `:injective` flag rather than ignoring its semantics.
+//!
+//! For a marked `F`, every rule joins two existing rows on equal output:
+//!
+//! ```text
+//! F(a_0, ..., a_n) = F(b_0, ..., b_n)
+//! ```
+//!
+//! If equality-sort fields exist, one rule unions them all. Each primitive
+//! field gets its own rule with an additional native `(!= a_i b_i)` premise
+//! and a panic action. Thus primitive contradictions do not require a primitive
+//! disequality table. These joins include subsumed rows, and generated rule
+//! names are fresh so a declaration reinstated after `pop` has a distinct proof
+//! identity. Nullary marked constructors need no equality rule.
+//!
+//! The lazy hidden function `@injectivity-constructors : String -> Unit`
+//! records one constructor name per successful marked declaration. This is
+//! O(number of marked constructors) declaration metadata, used by the
+//! on-demand disequality search; it stores no derived value pairs. Declaring
+//! it with its first write lets term/proof lowering instrument both together.
+//! Its rows follow normal cloning and `push`/`pop`, failed declarations do not
+//! add markers, and `keep-best` preserves this table while compacting data.
 
 use std::{collections::HashSet, sync::Arc};
 
@@ -147,6 +203,9 @@ impl CommandMacro for LowerInjectivity {
     }
 }
 
+/// Build the equal-output join, one combined equality-sort union head, and
+/// one independently guarded panic rule per primitive field. Sort validation
+/// happens before any declaration or marker is installed in the live graph.
 fn injectivity_rules(
     span: &Span,
     name: &str,
