@@ -12,7 +12,7 @@ open Live
 theorem encodedRule_firing_reads_of_programStep {P pre : Program}
     (hp : P.Fragment) (hsub : ∀ c ∈ pre, c ∈ P)
     {src querySrc post : Database} (hpre : ProgramStep Database.empty pre src)
-    (hqsig : querySrc.sig = src.sig) (hqenv : querySrc.env = [])
+    (hqsig : querySrc.sig = src.sig)
     {d : Database} (h : Rebuilt d) (hrt : Live.Runtime d)
     (hs : SoundTerms d src.completion) (htotal : UFTotal d)
     (hsig : d.sig = encodeSig P) (hreads : Reads d querySrc)
@@ -29,7 +29,7 @@ theorem encodedRule_firing_reads_of_programStep {P pre : Program}
     exact List.mem_append_right _ (List.mem_flatMap.mpr ⟨a, ha, actionExprs_ctors he hk⟩)
   apply encodedRule_firing_reads h hrt.noUnions.diag hrt.storeOk
     (viewDeclared_of_signature hp hrt.noUnions.diag hsig) (hs.edgesSound hrt.noUnions.diag)
-    hcs.wf.completion htotal (by rw [hqsig]; exact hcs.sig) hreads hqenv
+    hcs.wf.completion htotal (by rw [hqsig]; exact hcs.sig) hreads
     ?_ (hp.queryEncodable _ hr).2
     (fun p hm => ((hp.queryEncodable _ hr).1 p hm).1) ?_ ?_ ?_ ?_ ?_ hm hf
   · exact (Program.OrderingFree.of_mem hp.noMin hr).1
@@ -50,7 +50,7 @@ theorem encodedRule_firing_reads_of_programStep {P pre : Program}
 theorem reads_round_of_closed {P pre : Program} (hp : P.Fragment)
     (hsub : ∀ c ∈ pre, c ∈ P) {src querySrc : Database}
     (hpre : ProgramStep Database.empty pre src)
-    (hqsig : querySrc.sig = src.sig) (hqenv : querySrc.env = [])
+    (hqsig : querySrc.sig = src.sig)
     {d : Database} (h : Rebuilt d) (hrt : Live.Runtime d)
     (hs : SoundTerms d src.completion) (htotal : UFTotal d)
     (hsig : d.sig = encodeSig P) (hreads : Reads d querySrc)
@@ -60,13 +60,13 @@ theorem reads_round_of_closed {P pre : Program} (hp : P.Fragment)
   intro r hr hR post hpost
   obtain ⟨σ, hm, hf⟩ := hpost
   obtain ⟨ρ, d', hmatch, hfire, hreads'⟩ := encodedRule_firing_reads_of_programStep
-    hp hsub hpre hqsig hqenv h hrt hs htotal hsig hreads (hrules r hr).1 hm hf
+    hp hsub hpre hqsig h hrt hs htotal hsig hreads (hrules r hr).1 hm hf
   exact (Covers.firing hrt hclosed (hrules r hr).2 hR ⟨ρ, hmatch, hfire⟩).reads hreads'
 
 theorem reads_reach_of_closed {P pre : Program} (hp : P.Fragment)
     (hsub : ∀ c ∈ pre, c ∈ P) {src start post : Database}
     (hpre : ProgramStep Database.empty pre src)
-    (hssig : start.sig = src.sig) (hsenv : start.env = [])
+    (hssig : start.sig = src.sig)
     {d : Database} (h : Rebuilt d) (hrt : Live.Runtime d)
     (hs : SoundTerms d src.completion) (htotal : UFTotal d)
     (hsig : d.sig = encodeSig P) (hreads : Reads d start)
@@ -75,15 +75,13 @@ theorem reads_reach_of_closed {P pre : Program} (hp : P.Fragment)
     (hreach : Relation.ReflTransGen (RunStep R) start post) : Reads d post := by
   have hctor := (hpre.ctorState Database.CtorState.empty
     (fun c hc => hp.ctorsOnly c (hsub c hc))).sig
-  have go : Reads d post ∧ post.sig = src.sig ∧ post.env = [] ∧
-      post.rules = start.rules := by
+  have go : Reads d post ∧ post.sig = src.sig ∧ post.rules = start.rules := by
     induction hreach with
-    | refl => exact ⟨hreads, hssig, hsenv, rfl⟩
+    | refl => exact ⟨hreads, hssig, rfl⟩
     | @tail m e hreach hstep ih =>
-        have hresult := reads_round_of_closed hp hsub hpre ih.2.1 ih.2.2.1 h hrt hs
-          htotal hsig ih.1 (fun r hr => hrules r (ih.2.2.2 ▸ hr)) hclosed
-        refine ⟨?_, hstep.sig.trans ih.2.1, hstep.env.trans ih.2.2.1,
-          hstep.1.envRules.2.trans ih.2.2.2⟩
+        have hresult := reads_round_of_closed hp hsub hpre ih.2.1 h hrt hs
+          htotal hsig ih.1 (fun r hr => hrules r (ih.2.2 ▸ hr)) hclosed
+        refine ⟨?_, hstep.sig.trans ih.2.1, hstep.1.envRules.2.trans ih.2.2⟩
         rw [hstep.eq_of_allConstructors (by rw [ih.2.1]; exact hctor)]
         exact hresult
   exact go.1
@@ -103,7 +101,7 @@ theorem round_reads {P pre : Program} (hp : P.Fragment) (hsub : ∀ c ∈ pre, c
   have hmem : Cmd.rule r ∈ P := hsub _ (by
     simpa [Database.empty] using (hpre.mem_rules_iff r).mp hr)
   obtain ⟨ρ, d', hmatch, hfire, hreads'⟩ := encodedRule_firing_reads_of_programStep
-    hp hsub hpre rfl hpre.env h hrt hs htotal hsig hreads hmem hm hf
+    hp hsub hpre rfl h hrt hs htotal hsig hreads hmem hm hf
   apply (Covers.mergeClosure (hrt.runRules R).state
     (hrt.runRules R).noUnions.diag htarget.1).reads
   apply hreads'.mono
@@ -113,12 +111,12 @@ theorem round_reads {P pre : Program} (hp : P.Fragment) (hsub : ∀ c ∈ pre, c
 theorem saturation_reads {P pre : Program} (hp : P.Fragment)
     (hsub : ∀ c ∈ pre, c ∈ P) {src start : Database}
     (hpre : ProgramStep Database.empty pre src) {R : RulesetName}
-    (hsource : SaturateReach R start src) (henv : start.env = [])
+    (hsource : SaturateReach R start src)
     {initial d : Database} (hi : Live.Runtime initial) (htarget : SaturateReach R initial d)
     (h : Rebuilt d) (hs : SoundTerms d src.completion) (htotal : UFTotal d)
     (hsig : d.sig = encodeSig P) (hrules : Live.RulesEncoded P src d)
     (hreads : Reads initial start) : Reads d src := by
-  apply reads_reach_of_closed hp hsub hpre (RunReach.sig hsource.reach).symm henv
+  apply reads_reach_of_closed hp hsub hpre (RunReach.sig hsource.reach).symm
     h (hi.runReach htarget.reach) hs htotal hsig
     ((Covers.runReach hi htarget.reach).reads hreads) ?_
     (saturated_endpoint hi htarget) hsource.reach

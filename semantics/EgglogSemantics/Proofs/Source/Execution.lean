@@ -233,7 +233,7 @@ theorem evalLocalActions_litFree {db db' : Database} (hw : db.WF) (h : db.LitFre
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (hv : evalLocalActions db as σ = some db') :
     db'.LitFree := by
   obtain ⟨d, hd, rfl⟩ := evalLocalActions_eq_some hv
-  have hlf : ({ db with env := σ ++ db.env } : Database).LitFree := by
+  have hlf : ({ db with env := σ } : Database).LitFree := by
     intro t ht; exact h t (Database.terms_setEnv ▸ ht)
   intro t ht
   rw [Database.terms_setEnvRules] at ht
@@ -259,13 +259,13 @@ theorem Database.NoLits.runRules {R : RulesetName} {db : Database} (hw : db.WF)
     (h : db.NoLits) : (RunRules R db).NoLits := by
   refine ⟨?_, ?_⟩
   · intro t ht
-    rw [RunRules, Database.sUnion_terms] at ht
+    rw [RunRules.eq_sUnion, Database.sUnion_terms] at ht
     rcases ht with ht' | ht'
     · exact h.terms t ht'
     · obtain ⟨d, hd, ht''⟩ := Set.mem_iUnion₂.mp ht'
       obtain ⟨r, hr, -, σ, hq, hfire⟩ := hd
       exact evalLocalActions_litFree hw h.terms (h.heads r hr) hq.mem_terms hfire t ht''
-  · rw [RunRules, Database.sUnion_rules]; exact h.heads
+  · rw [RunRules.eq_sUnion, Database.sUnion_rules]; exact h.heads
 
 /-! ##### One command and one run keep it -/
 
@@ -374,15 +374,19 @@ theorem evalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Model
 
 /-- **A rule head does not get stuck**, at the substitution its query delivered.
 `Spec/Scope.lean`'s `evalLocalActions_isSome_of_scoped` with the `union` clause weakened. -/
-theorem evalLocalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
+theorem evalLocalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Models [])
     (hw : db.WF) {r : Rule} (hsc : Actions.Scoped r.actions (Query.bind r.query Γ))
     (hb : Actions.Builds r.actions db.sig)
     (hr : Actions.UnionRunnable r.actions db) {σ : Env}
     (hq : ValidQuerySubst db r.query σ) :
-    ∃ d, evalActions { db with env := σ ++ db.env } r.actions = some d ∧
+    ∃ d, evalActions { db with env := σ } r.actions = some d ∧
       evalLocalActions db r.actions σ = some { d with env := db.env, rules := db.rules } := by
+  have hbind : (Query.bind r.query Γ).Models ({ db with env := σ } : Database).env := by
+    intro v
+    rw [Query.bind, List.mem_union_iff, hm v, hq.mem_dom_iff, Query.mem_vars]
+    simp [Env.dom, Pattern.mem_freeVars]
   obtain ⟨d, hd, -⟩ := evalActions_isSome_of_builds
-    (db := { db with env := σ ++ db.env }) (Query.bind_models hm hq)
+    (db := { db with env := σ }) hbind
     (hw.appendEnv hq.mem_terms) hsc hb
     (by rcases hr with huf | ⟨hlf, hnl⟩
         · exact Or.inl huf
@@ -479,7 +483,7 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
         hcl.eq_of_allConstructors (by rw [RunRules.sig]; exact hc.sig)
       intro r hr
       rw [RunRules.sig]
-      exact h r (by rw [RunRules, Database.sUnion_rules] at hr; exact hr)
+      exact h r (by rw [RunRules.eq_sUnion, Database.sUnion_rules] at hr; exact hr)
   | saturate R =>
       have hsat : SaturateReach R db db' := cmdStep_saturate_iff.mp hstep
       refine (RunReach.induction (P := fun x => x.CtorState ∧ x.HeadsBuild) ?_ hsat.reach
@@ -488,7 +492,7 @@ theorem cmdStep_headsBuild {db db' : Database} (hc : db.CtorState) (h : db.Heads
       obtain rfl : y = RunRules R x := hxy.eq_of_allConstructors hx.1.sig
       refine ⟨⟨RunRules.wf hx.1.wf, by rw [RunRules.sig]; exact hx.1.sig⟩, fun r hr => ?_⟩
       rw [RunRules.sig]
-      exact hx.2 r (by rw [RunRules, Database.sUnion_rules] at hr; exact hr)
+      exact hx.2 r (by rw [RunRules.eq_sUnion, Database.sUnion_rules] at hr; exact hr)
   | decl f dc =>
       obtain rfl : d = { db with sig := Function.update db.sig f (some dc) } := hreach
       obtain rfl : db' = { db with sig := Function.update db.sig f (some dc) } :=

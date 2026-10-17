@@ -41,7 +41,7 @@ theorem CmdStep.mem_rules_iff {src post : Database} {c : Cmd} (h : CmdStep src c
       simp
   | run R =>
       subst hm
-      simp [RunRules, Database.sUnion_rules]
+      simp [RunRules.eq_sUnion, Database.sUnion_rules]
   | saturate R =>
       rw [runReach_rules (show SaturateReach R src mid from hm).reach]
       simp

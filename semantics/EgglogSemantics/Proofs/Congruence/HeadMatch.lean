@@ -102,31 +102,31 @@ theorem sourceMatch_evaluations {src tgt : Database} (hb : src.TermsBuild) (hw :
     ∃ τ, ValidQuerySubst src q τ ∧
       ∀ (e : Expr), (∀ f ∈ e.fns, tgt.sig.IsCtor f ↔ src.sig.IsCtor f) →
         (∀ v ∈ e.vars, v ∈ Query.vars q) →
-        e.eval tgt.sig (σ ++ tgt.env) = e.eval src.sig (τ ++ src.env) := by
+        e.eval tgt.sig (σ) = e.eval src.sig (τ) := by
   obtain ⟨τ, hτ, _, hlookup⟩ := sourceMatch_of_encodedQuery hb hw hs hd hstore hdecl hof hg hk h
   have hread := patternReads_of_encodeQuery hd hstore hdecl hof hk h
   have henv : ∀ v ∈ Query.vars q,
-      Env.lookup v (σ ++ tgt.env) = Env.lookup v (τ ++ src.env) := by
+      Env.lookup v (σ) = Env.lookup v (τ) := by
     intro v hv
     obtain ⟨p, hp, hvp⟩ := hk v hv
     obtain ⟨i, hi, _⟩ := mem_terms_of_patternArgVar hs (hread p hp) hvp
-    rw [Env.lookup_append_of_some hi, hlookup v hv i hi]
-  have hvalue : ∀ v ∈ Query.vars q, ∃ i, Env.lookup v (σ ++ tgt.env) = some i ∧
+    rw [hi, hlookup v hv i hi]
+  have hvalue : ∀ v ∈ Query.vars q, ∃ i, Env.lookup v (σ) = some i ∧
       i.IsValue src.sig ∧ i.IsValue tgt.sig := by
     intro v hv
     obtain ⟨p, hp, ha⟩ := hk v hv
     obtain ⟨i, hi, him⟩ := mem_terms_of_patternArgVar hs (hread p hp) ha
-    exact ⟨i, Env.lookup_append_of_some hi, termsBuild_isValue hb hw him,
+    exact ⟨i, hi, termsBuild_isValue hb hw him,
       (h.mem_values hstore (encodeQuery_safe q n hof hk) (v, i) (Env.mem_of_lookup hi)).2⟩
   refine ⟨τ, hτ, fun e hf hv => ?_⟩
   have hvars := fun v hv' => henv v (hv v hv')
-  cases ht : e.eval tgt.sig (σ ++ tgt.env) with
+  cases ht : e.eval tgt.sig (σ) with
   | some t =>
       exact (eval_transport e (fun f hm => (hf f hm).mp) hvars (fun v hve t hl _ => by
           obtain ⟨i, hi, hsrc, _⟩ := hvalue v (hv v hve)
           exact Option.some.inj (hi.symm.trans hl) ▸ hsrc) ht).symm
   | none =>
-      cases hs : e.eval src.sig (τ ++ src.env) with
+      cases hs : e.eval src.sig (τ) with
       | none => rfl
       | some t =>
           have hback := eval_transport e (fun f hm => (hf f hm).mpr)

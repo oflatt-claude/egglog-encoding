@@ -22,9 +22,8 @@ namespace Egglog.LiveTables
 theorem mergeNormal_no_step {d e : Database} (hn : MergeNormal d) :
     ¬ MergeStep d e := by
   intro hs
-  cases hs with
-  | collide ha hb hne hname _ hkey _ =>
-      exact hne (hn _ ha _ hb hname hkey)
+  obtain ⟨_, _, _, _, _, ha, hb, hne, hname, _, hkey, _, rfl⟩ := mergeStep_iff.mp hs
+  exact hne (hn _ ha _ hb hname hkey)
 
 /-- A finite merge sequence from a completed state is necessarily empty. -/
 theorem mergeClosure_eq_of_normal {d e : Database} (hn : MergeNormal d)
@@ -37,7 +36,7 @@ theorem mergeClosure_eq_of_normal {d e : Database} (hn : MergeNormal d)
 theorem normalize_unique {d e : Database} (hn : MergeNormalize d e)
     {a b : Entry} (ha : a ∈ e.entries) (hb : b ∈ e.entries)
     (hname : a.name = b.name) (hkey : StoredCongList e a.key b.key) : a = b :=
-  hn.2 a ha b hb hname hkey.toCong
+  (Database.conflicts_eq_empty_iff.mp hn.2) a ha b hb hname hkey.toCong
 
 /-- In particular, an exact key with held components has one current output. -/
 theorem normalize_exact_key {d e : Database} (hn : MergeNormalize d e)
@@ -203,7 +202,7 @@ theorem normalize_existing_putEntry {d : Database} {row : Entry}
     (hw : d.WF) (hn : MergeNormal d) (hr : row ∈ d.entries) :
     MergeNormalize (d.putEntry row) d := by
   rw [putEntry_eq_of_mem hw hr]
-  exact ⟨.refl, hn⟩
+  exact ⟨.refl, (Database.conflicts_eq_empty_iff.mpr hn)⟩
 
 /-- Removing colliding rows before the body runs allows it to reinsert either row. -/
 theorem reinsert_erased_entry (d : Database) (old new : Entry) (ho : old.Valid d.sig) :
@@ -220,7 +219,8 @@ theorem saturate_absorbed_write {d : Database} {R : RulesetName} {row : Entry}
     (hround : RunRules R d = d.putEntry row)
     (hn : MergeNormalize (d.putEntry row) d) : SaturateReach R d d := by
   apply SaturateReach.done
-  · simpa only [RunStep, hround] using hn
+  · rw [RunStep, hround]
+    exact hn
   · exact sameMeaning_refl d
 
 /-- An inactive ruleset really has an identity rule phase. -/
@@ -231,7 +231,7 @@ theorem runRules_eq_of_no_rules {d : Database} {R : RulesetName}
     apply Set.eq_empty_iff_forall_notMem.mpr
     rintro e ⟨r, hr, hR, _⟩
     exact h r hr hR
-  simp [RunRules, hempty, Database.sUnion]
+  simp [RunRules.eq_sUnion, hempty, Database.sUnion]
 
 /-- The new saturation predicate has actual completed-round witnesses. -/
 theorem runSaturated_of_no_rules {d : Database} {R : RulesetName}
@@ -239,14 +239,14 @@ theorem runSaturated_of_no_rules {d : Database} {R : RulesetName}
     RunSaturated R d := by
   refine ⟨hn, d, ?_, sameMeaning_refl d⟩
   rw [RunStep, runRules_eq_of_no_rules h]
-  exact ⟨.refl, hn⟩
+  exact ⟨.refl, (Database.conflicts_eq_empty_iff.mpr hn)⟩
 
 /-- In particular, saturating the empty database is a finite execution. -/
 theorem empty_saturateReach (R : RulesetName) :
     SaturateReach R Database.empty Database.empty := by
   apply SaturateReach.done
   · rw [RunStep, runRules_eq_of_no_rules (by simp [Database.empty])]
-    exact ⟨.refl, by simp [MergeNormal, Database.entries, Database.empty]⟩
+    exact ⟨.refl, by simp [Database.conflicts, Database.entries, Database.empty]⟩
   · exact sameMeaning_refl _
 
 end Egglog.LiveTables

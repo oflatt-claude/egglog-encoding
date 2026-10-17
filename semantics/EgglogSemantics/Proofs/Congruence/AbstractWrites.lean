@@ -88,10 +88,10 @@ theorem sourceWrites_preserves {src d e : Database} {as : List Action}
 /-- Rule-local write justifications use the firing environment and any fixed source model. -/
 theorem sourceWrites_local_preserves {src d e : Database} {as : List Action} {ρ : Env}
     (hw : src.WF) (hsafe : SourceSafe src) (hs : SoundTerms d src) (hd : Descending d)
-    (hwrites : SourceWrites src d.sig (ρ ++ d.env) as)
+    (hwrites : SourceWrites src d.sig (ρ) as)
     (run : evalLocalActions d as ρ = some e) : SoundTerms e src ∧ Descending e := by
   obtain ⟨post, hp, rfl⟩ := Option.map_eq_some_iff.mp run
-  have hi := sourceWrites_preserves (d := { d with env := ρ ++ d.env }) hw hsafe
+  have hi := sourceWrites_preserves (d := { d with env := ρ }) hw hsafe
     (by simpa only [SoundTerms, Database.terms_setEnv] using hs)
     (by simpa only [Descending, Database.terms_setEnv] using hd) hwrites hp
   simpa only [SoundTerms, Descending, Database.terms_setEnvRules] using hi
@@ -115,7 +115,7 @@ theorem encodeLocalActions_preserves_of_justified {src d e : Database}
     (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
       d.sig (viewName fk.1) = some (tableDecl fk.2))
     (huf : d.sig ufName = some (tableDecl 1))
-    (hsource : ∀ a ∈ as, SourceAction src d.sig (ρ ++ d.env) a)
+    (hsource : ∀ a ∈ as, SourceAction src d.sig (ρ) a)
     (run : evalLocalActions d (encodeActions as) ρ = some e) :
     SoundTerms e src ∧ Descending e :=
   sourceWrites_local_preserves hw hsafe hs hdesc

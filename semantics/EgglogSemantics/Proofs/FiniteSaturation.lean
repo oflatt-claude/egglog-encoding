@@ -1,6 +1,7 @@
 import Mathlib.Data.Set.Card
 import Mathlib.Data.Set.Finite.Lemmas
-import EgglogSemantics.Spec.Step
+import EgglogSemantics.Spec.Sequential
+import EgglogSemantics.Proofs.Writes
 
 /-! Existence of finite normalization and saturation requires actual progress.
 
@@ -60,8 +61,10 @@ theorem mergeNormalize_exists_of_wellFounded (d : Database)
     (lt : Database → Database → Prop) (hwf : WellFounded lt)
     (hprogress : ∀ e, MergeClosure d e → ¬ MergeNormal e →
       ∃ e', MergeStep e e' ∧ lt e' e) :
-    ∃ e, MergeNormalize d e :=
-  exists_reachable_normal_of_wellFounded MergeStep MergeNormal d lt hwf hprogress
+    ∃ e, MergeNormalize d e := by
+  obtain ⟨e, hc, hn⟩ :=
+    exists_reachable_normal_of_wellFounded MergeStep MergeNormal d lt hwf hprogress
+  exact ⟨e, .of_normal hc hn⟩
 
 /-- A natural-number potential is enough when generated merges each
 have a strictly decreasing weighted store size. -/

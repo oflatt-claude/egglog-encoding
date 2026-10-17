@@ -53,9 +53,9 @@ def Entry.Shape (sig : Signature) (e : Entry) : Prop :=
   D=(\Sigma,E,\mathcal R)\qquad E\subseteq\{(s,t)\mid s,t\in\mathit{Term}\}\\
   \rows D=\{r=f(a_1,\ldots,a_k;b_1,\ldots,b_\ell)\mid
     \Sigma(f)=\kw{fun}(k,\ell,\mu),\ (r,r)\in E\}\\
-  \operatorname{cols}(f(a_1,\ldots,a_k;b_1,\ldots,b_\ell))
-    =(a_1,\ldots,a_k,b_1,\ldots,b_\ell)\\
-  D+(s,t)\triangleq D[E\gets E\cup\{(s,t)\}]
+  D+S\triangleq D[E\gets E\cup S]\qquad
+  D\ominus f(\bar t)\triangleq
+    D[E\gets(E\setminus\{(f(\bar t),f(\bar t))\})\cup\{(t_i,t_i)\}_i]
   \end{gathered}
   \]
   -/)
@@ -93,6 +93,10 @@ def addTerms (ts : List Term) (db : Database) : Database :=
 /-- Assert `a = b`; congruence supplies endpoint and subterm existence. -/
 def addEq (a b : Term) (db : Database) : Database :=
   { db with eqs := insert (a, b) db.eqs }
+
+/-- Assert a set of equations. -/
+def addEqs (ps : Set (Term × Term)) (db : Database) : Database :=
+  { db with eqs := db.eqs ∪ ps }
 
 /-- Insert a function entry, recording its column values. Identical writes coalesce;
 distinct conflicting rows remain until merging resolves them. -/

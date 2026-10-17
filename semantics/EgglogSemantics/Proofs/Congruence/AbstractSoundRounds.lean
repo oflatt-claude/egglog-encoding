@@ -8,12 +8,12 @@ namespace Egglog.Congruence.Abstract
 /-- A completed source firing may be re-expressed using recorded source values. -/
 theorem completion_firing_contained_round {src out post : Database} {r : Rule}
     {R : RulesetName} (hw : src.WF) (hs : src.StoreOk) (hc : src.sig.AllConstructors)
-    (henv : src.env = []) (hn : r.OrderingFree)
+    (hn : r.OrderingFree)
     (hr : r ∈ src.rules) (hR : r.ruleset = R)
     (hout : out ∈ RuleResults src.completion r) (hstep : RunStep R src post) :
     out.Contained post.completion := by
   obtain ⟨out', ho', hh⟩ := SourceMeaning.firing_transport hw.completion hw hs hc
-    (src.sameMeaning_completion hw).symm henv henv hn hout
+    (src.sameMeaning_completion hw).symm hn hout
   obtain rfl := hstep.eq_of_allConstructors hc
   constructor
   intro p hp
@@ -70,8 +70,7 @@ theorem source_round_preserves {P pre rest : Program} (hp : P.Fragment)
     exact completion_firing_contained_round hc.wf
       (storeOk_of_sourceTerms hc.wf
         (termsBuild_of_programStep (fun c hm => hp.ctorsOnly c (hsub c hm)) hpre) hc.sig)
-      hc.sig hpre.env
-      (Program.OrderingFree.of_mem hp.noMin hmem) hs' hR hresult hsource
+      hc.sig (Program.OrderingFree.of_mem hp.noMin hmem) hs' hR hresult hsource
 
 /-- A closed completed source model justifies arbitrarily many actual target rounds. -/
 theorem source_saturation_preserves {P pre rest : Program} (hp : P.Fragment)

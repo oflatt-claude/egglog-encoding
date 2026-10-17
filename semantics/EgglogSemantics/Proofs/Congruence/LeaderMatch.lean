@@ -31,7 +31,7 @@ theorem sourceMatch_of_leaderQuery {src d : Database} (hb : src.TermsBuild) (hw 
     (hk : Query.VarsKeyed q)
     (hm : ValidQuerySubst d ((encodeQuery q n).1 ++ leaderQuery q.vars) σ) :
     ∃ τ, ValidQuerySubst src q τ ∧ ∀ v ∈ q.vars, ∀ i,
-      Env.lookup (leaderVar v) σ = some i → Env.lookup v (τ ++ src.env) = some i := by
+      Env.lookup (leaderVar v) σ = some i → Env.lookup v (τ) = some i := by
   have hread := patternReads_of_encodeQuery_matches hd hst hdecl hof hk
     (hm.mem_values hst (encodeQuery_leader_safe q n hof))
     (fun _ hp => hm.matches_of_mem (List.mem_append_left _ hp))
@@ -53,7 +53,7 @@ theorem sourceMatch_of_leaderQuery {src d : Database} (hb : src.TermsBuild) (hw 
   obtain ⟨τ, hτ, _, hlookup⟩ := validQuerySubst_of_patternReads hb hs hvalue hlink
     (fun p hp => (hg p hp).groundedAt) hread
   exact ⟨τ, hτ, fun v hv i hi => by
-    rw [Env.lookup_append_of_some (hlookup v hv)]
+    rw [hlookup v hv]
     simp only [g, idReading_eq hi]⟩
 
 mutual
@@ -119,12 +119,12 @@ theorem sourceMatch_leader_evaluations {src d : Database} (hb : src.TermsBuild)
     ∃ τ, ValidQuerySubst src q τ ∧ ∀ e : Expr,
       (∀ f ∈ e.fns, d.sig.IsCtor f ↔ src.sig.IsCtor f) →
       (∀ v ∈ e.vars, v ∈ q.vars) →
-      Expr.eval d.sig (leaderExpr e) (σ ++ d.env) = Expr.eval src.sig e (τ ++ src.env) := by
+      Expr.eval d.sig (leaderExpr e) σ = Expr.eval src.sig e τ := by
   obtain ⟨τ, hτ, hlookup⟩ := sourceMatch_of_leaderQuery hb hw hs he hd hst hsc hdecl huf
     hof hg hk hm
   refine ⟨τ, hτ, fun e hf hv => eval_leader_eq e hf fun v hve => ?_⟩
   obtain ⟨_, b, _, hl, _, _⟩ := leaderQuery_reads hd hst huf
     (fun _ hp => hm.matches_of_mem (List.mem_append_right _ hp)) (hv v hve)
-  simp only [Expr.eval_var, Env.lookup_append_of_some hl, hlookup v (hv v hve) b hl]
+  simp only [Expr.eval_var, hl, hlookup v (hv v hve) b hl]
 
 end Egglog.Congruence

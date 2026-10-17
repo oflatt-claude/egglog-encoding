@@ -124,7 +124,7 @@ theorem mergeFacts_step {d : Database} (h : Live.Runtime d)
                 rw [← hkeys]
                 exact CongList.refl fun t ht => h.storeOk.columns oldRow hro t
                   (List.mem_append_left _ ht)
-              have hstep : MergeStep d post := .collide hro hrn hrows rfl hd hk
+              have hstep : MergeStep d post := .collide' hro hrn hrows rfl hd hk
                 (.eval rfl hmerge)
               refine ⟨post, hstep, ?_⟩
               intro t ht

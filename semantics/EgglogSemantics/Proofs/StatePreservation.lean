@@ -97,8 +97,7 @@ theorem evalLocalActions_storeOk {db d : Database} (hs : db.StoreOk)
     {as : List Action} {σ : Env} (hv : ∀ b ∈ σ, b.2.IsValue db.sig)
     (h : evalLocalActions db as σ = some d) : d.StoreOk := by
   obtain ⟨post, hp, rfl⟩ := evalLocalActions_eq_some h
-  have hstart := hs.setEnv (σ := σ ++ db.env) (fun b hb =>
-    (List.mem_append.mp hb).elim (hv b) (hs.envValues b))
+  have hstart := hs.setEnv (σ := σ) hv
   exact (evalActions_storeOk hstart hp).congr rfl rfl (by
     simpa only [evalActions_sig hp] using hs.envValues)
 
@@ -112,6 +111,7 @@ theorem RunRules.storeOk_of_values {R : RulesetName} {db : Database} (hs : db.St
     (hv : ∀ r ∈ db.rules, ∀ σ, ValidQuerySubst db r.query σ →
       ∀ b ∈ σ, b.2.IsValue db.sig) :
     (RunRules R db).StoreOk := by
+  rw [RunRules.eq_sUnion]
   have sigs : ∀ d ∈ {d | ∃ r ∈ db.rules, r.ruleset = R ∧ d ∈ RuleResults db r},
       d.sig = db.sig := by
     rintro d ⟨r, _, _, hd⟩
@@ -121,13 +121,13 @@ theorem RunRules.storeOk_of_values {R : RulesetName} {db : Database} (hs : db.St
     obtain ⟨decl, hd, hm, _⟩ := hr.1
     exact ⟨decl, hd, hm⟩
   · intro row hr t ht
-    rw [RunRules, Database.sUnion_entries sigs] at hr
+    rw [Database.sUnion_entries sigs] at hr
     rcases hr with hr | hr
     · exact (Database.Contained.sUnion db _).terms (hs.columns row hr t ht)
     · obtain ⟨d, hd, hr⟩ := Set.mem_iUnion₂.mp hr
       obtain ⟨r, hrmem, hR, hdr⟩ := hd
       have hcol := (RuleResults.storeOk_of_values hs (hv r hrmem) hdr).columns row hr t ht
-      rw [RunRules, Database.sUnion_terms]
+      rw [Database.sUnion_terms]
       exact Or.inr (Set.mem_iUnion₂.mpr ⟨d, ⟨r, hrmem, hR, hdr⟩, hcol⟩)
   · intro p hp
     rcases hp with hp | hp
@@ -135,7 +135,7 @@ theorem RunRules.storeOk_of_values {R : RulesetName} {db : Database} (hs : db.St
     · obtain ⟨d, hd, hp⟩ := Set.mem_iUnion₂.mp hp
       obtain ⟨r, hrmem, hR, hdr⟩ := hd
       have ht := (RuleResults.storeOk_of_values hs (hv r hrmem) hdr).typed p hp
-      simpa only [RuleResults.sig hdr, RunRules.sig] using ht
+      simpa only [RuleResults.sig hdr, Database.sUnion_sig] using ht
 
 theorem RuleResults.storeOk {db d : Database} (hs : db.StoreOk) {r : Rule}
     (hq : r.query.Safe) (h : d ∈ RuleResults db r) : d.StoreOk :=
@@ -187,23 +187,22 @@ theorem MergeValues.wf {db d : Database} {decl : FnDecl} {old new vs : List Term
 
 theorem MergeStep.wf {d₁ d₂ : Database} (hw : d₁.WF) (hs : d₁.StoreOk)
     (h : MergeStep d₁ d₂) : d₂.WF := by
-  cases h with
-  | @collide d old new decl vs hold hnew _ _ _ _ hv =>
-    have hov := hs.entry_valid hold
-    have hnv := hs.entry_valid hnew
-    have hs0 := (hs.eraseEntry old hov).eraseEntry new hnv
-    have hw0 := (hw.eraseEntry hs old hov).eraseEntry
-      (hs.eraseEntry old hov) new hnv
-    have keep : ∀ t, t.IsValue d₁.sig → t ∈ d₁.terms →
-        t ∈ ((d₁.eraseEntry old).eraseEntry new).terms := fun t ht hm =>
-      Database.mem_terms_eraseEntry_of_value hnv ht
-        (Database.mem_terms_eraseEntry_of_value hov ht hm)
-    apply Database.WF.putEntry
-    exact hv.wf hw0
-      (fun t ht => keep t (hov.output_values t ht)
-        (hs.columns old hold t (List.mem_append_right _ ht)))
-      (fun t ht => keep t (hnv.output_values t ht)
-        (hs.columns new hnew t (List.mem_append_right _ ht)))
+  obtain ⟨old, new, decl, d, vs, hold, hnew, _, _, _, _, hv, rfl⟩ := mergeStep_iff.mp h
+  have hov := hs.entry_valid hold
+  have hnv := hs.entry_valid hnew
+  have hs0 := (hs.eraseEntry old hov).eraseEntry new hnv
+  have hw0 := (hw.eraseEntry hs old hov).eraseEntry
+    (hs.eraseEntry old hov) new hnv
+  have keep : ∀ t, t.IsValue d₁.sig → t ∈ d₁.terms →
+      t ∈ ((d₁.eraseEntry old).eraseEntry new).terms := fun t ht hm =>
+    Database.mem_terms_eraseEntry_of_value hnv ht
+      (Database.mem_terms_eraseEntry_of_value hov ht hm)
+  apply Database.WF.putEntry
+  exact hv.wf hw0
+    (fun t ht => keep t (hov.output_values t ht)
+      (hs.columns old hold t (List.mem_append_right _ ht)))
+    (fun t ht => keep t (hnv.output_values t ht)
+      (hs.columns new hnew t (List.mem_append_right _ ht)))
 
 theorem MergeClosure.wf {d₁ d₂ : Database} (hw : d₁.WF) (hs : d₁.StoreOk)
     (hmw : d₁.sig.MergesWidthOk) (h : MergeClosure d₁ d₂) : d₂.WF := by
@@ -457,49 +456,48 @@ theorem MergeValues.declaredTerms {db d : Database} {decl : FnDecl} {old new vs 
 theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hs : db.StoreOk)
     (hdt : db.DeclaredTerms) (_hml : db.sig.MergesLegal)
     (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') : db'.DeclaredTerms := by
-  cases h with
-  | @collide d old new decl vs hold hnew _ _ hd _ hv =>
-    have hov := hs.entry_valid hold
-    have hnv := hs.entry_valid hnew
-    have hc0 : ((db.eraseEntry old).eraseEntry new).terms ⊆ db.terms :=
-      (Database.terms_eraseEntry_subset (row := new) (fun t ht =>
-        Database.mem_terms_eraseEntry_of_value hov (hnv.column_values t ht)
-          (hs.columns new hnew t ht))).trans
-        (Database.terms_eraseEntry_subset (hs.columns old hold))
-    have hw0 := (hwf.eraseEntry hs old hov).eraseEntry
-      (hs.eraseEntry old hov) new hnv
-    have hdt0 : ((db.eraseEntry old).eraseEntry new).DeclaredTerms :=
-      fun f args ht => hdt f args (hc0 ht)
-    have keep : ∀ t, t.IsValue db.sig → t ∈ db.terms →
-        t ∈ ((db.eraseEntry old).eraseEntry new).terms := fun t ht hm =>
-      Database.mem_terms_eraseEntry_of_value hnv ht
-        (Database.mem_terms_eraseEntry_of_value hov ht hm)
-    obtain ⟨hddt, hvals⟩ := hv.declaredTerms hw0 hdt0
-      (fun t ht => keep t (hov.output_values t ht)
-        (hs.columns old hold t (List.mem_append_right _ ht)))
-      (fun t ht => keep t (hnv.output_values t ht)
-        (hs.columns new hnew t (List.mem_append_right _ ht)))
-      (hmw old.name decl · hd)
-    have hlen : vs.length = old.value.length := by
-      obtain ⟨dc, hdc, _, _, hlen, _⟩ := hov
-      have he : dc = decl := Option.some.inj (hdc.symm.trans hd)
-      subst dc
-      cases hv with
-      | eval hm hb =>
-        obtain ⟨_, hr⟩ := evalMerge_eq_some.mp hb
-        exact (Expr.evalList_length hr).trans
-          ((hmw _ _ _ hd hm).1.trans hlen.symm)
-    have hrow : (Entry.mk old.name old.key vs).Valid d.sig := by
-      rw [hv.sig]
-      exact hov.with_value hlen (by
-        simpa only [hv.sig, Database.eraseEntry_sig] using
-          hv.output_values hov.output_values hnv.output_values)
-    apply Database.declaredTerms_putEntry hddt hrow
-    intro t ht
-    rcases List.mem_append.mp ht with ht | ht
-    · rw [hv.sig]
-      exact Database.declaredTerm_of_mem hwf hdt (hs.columns old hold t (List.mem_append_left _ ht))
-    · exact hvals t ht
+  obtain ⟨old, new, decl, d, vs, hold, hnew, _, _, hd, _, hv, rfl⟩ := mergeStep_iff.mp h
+  have hov := hs.entry_valid hold
+  have hnv := hs.entry_valid hnew
+  have hc0 : ((db.eraseEntry old).eraseEntry new).terms ⊆ db.terms :=
+    (Database.terms_eraseEntry_subset (row := new) (fun t ht =>
+      Database.mem_terms_eraseEntry_of_value hov (hnv.column_values t ht)
+        (hs.columns new hnew t ht))).trans
+      (Database.terms_eraseEntry_subset (hs.columns old hold))
+  have hw0 := (hwf.eraseEntry hs old hov).eraseEntry
+    (hs.eraseEntry old hov) new hnv
+  have hdt0 : ((db.eraseEntry old).eraseEntry new).DeclaredTerms :=
+    fun f args ht => hdt f args (hc0 ht)
+  have keep : ∀ t, t.IsValue db.sig → t ∈ db.terms →
+      t ∈ ((db.eraseEntry old).eraseEntry new).terms := fun t ht hm =>
+    Database.mem_terms_eraseEntry_of_value hnv ht
+      (Database.mem_terms_eraseEntry_of_value hov ht hm)
+  obtain ⟨hddt, hvals⟩ := hv.declaredTerms hw0 hdt0
+    (fun t ht => keep t (hov.output_values t ht)
+      (hs.columns old hold t (List.mem_append_right _ ht)))
+    (fun t ht => keep t (hnv.output_values t ht)
+      (hs.columns new hnew t (List.mem_append_right _ ht)))
+    (hmw old.name decl · hd)
+  have hlen : vs.length = old.value.length := by
+    obtain ⟨dc, hdc, _, _, hlen, _⟩ := hov
+    have he : dc = decl := Option.some.inj (hdc.symm.trans hd)
+    subst dc
+    cases hv with
+    | eval hm hb =>
+      obtain ⟨_, hr⟩ := evalMerge_eq_some.mp hb
+      exact (Expr.evalList_length hr).trans
+        ((hmw _ _ _ hd hm).1.trans hlen.symm)
+  have hrow : (Entry.mk old.name old.key vs).Valid d.sig := by
+    rw [hv.sig]
+    exact hov.with_value hlen (by
+      simpa only [hv.sig, Database.eraseEntry_sig] using
+        hv.output_values hov.output_values hnv.output_values)
+  apply Database.declaredTerms_putEntry hddt hrow
+  intro t ht
+  rcases List.mem_append.mp ht with ht | ht
+  · rw [hv.sig]
+    exact Database.declaredTerm_of_mem hwf hdt (hs.columns old hold t (List.mem_append_left _ ht))
+  · exact hvals t ht
 
 theorem mergeClosure_declaredTerms {db db' : Database} (hwf : db.WF) (hs : db.StoreOk)
     (hdt : db.DeclaredTerms) (hml : db.sig.MergesLegal) (hmw : db.sig.MergesWidthOk)
@@ -521,7 +519,7 @@ theorem runRules_declaredTerms {R : RulesetName} {db : Database} (hwf : db.WF)
     (hdt : db.DeclaredTerms)
     (hr : db.RulesOk) : (RunRules R db).DeclaredTerms := by
   intro g cs hmem
-  rw [RunRules, Database.sUnion_terms] at hmem
+  rw [RunRules.eq_sUnion, Database.sUnion_terms] at hmem
   rcases hmem with hmem | hmem
   · exact hdt g cs hmem
   · obtain ⟨e, he, hmem⟩ := Set.mem_iUnion₂.mp hmem

@@ -23,6 +23,7 @@ theorem runRules_preserves {src d : Database} {R : RulesetName}
       ValidQuerySubst d r.query σ → evalLocalActions d r.actions σ = some post →
         SoundTerms post src ∧ Descending post) :
     SoundTerms (RunRules R d) src ∧ Descending (RunRules R d) := by
+  rw [RunRules.eq_sUnion]
   constructor
   · apply hs.sUnion
     rintro e ⟨r, hr, hR, σ, hσ, hf⟩

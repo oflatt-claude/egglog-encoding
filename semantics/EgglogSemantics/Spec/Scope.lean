@@ -93,7 +93,7 @@ def Expr.AtomEvaluable : Expr → Signature → Prop
 
 /-- `Action.Scoped`'s companion: every expression the action evaluates builds, and a
 `union` operand is an application — the strongest sound stand-in for egglog's eq-sort
-requirement, which `evalAction` refuses dynamically. A variable operand may hold a literal,
+requirement, which `Action.write` refuses dynamically. A variable operand may hold a literal,
 since a query binds one under a literal argument, so no check reading the expression alone
 admits it. -/
 def Action.Evaluable : Action → Signature → Prop
@@ -126,7 +126,7 @@ def Action.Evaluable : Action → Signature → Prop
 
 egglog rejects a `union` on a sort that is not an eq sort statically (`constraint.rs:697-701`
 against `typechecking.rs:966-969`, and `core.rs:514` of the lowering) where `Spec/Eval.lean`'s
-`evalAction` only gets stuck on it. The typed rule needs base sorts, which this model does not
+`Action.write` only gets stuck on it. The typed rule needs base sorts, which this model does not
 have, so this is its syntactic half: an operand is not a literal *expression*.
 `Action.Evaluable` asks the stronger `Expr.IsApp` of one and its docstring records the same gap,
 so the reach this adds is a `:merge` body, which no `Evaluable` walks into. -/

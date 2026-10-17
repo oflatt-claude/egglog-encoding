@@ -28,36 +28,35 @@ theorem mergeStep_entries {d e : Database} (h : State d) (hd : d.Diag)
       a ≠ b ∧ e.entries = insert ⟨f, key, [Term.least a b]⟩
         (insert (ufEntry b (Term.least a b)) (insert (ufEntry a (Term.least a b))
           ((d.entries \ {⟨f, key, [a]⟩}) \ {⟨f, key, [b]⟩}))) := by
-  cases hs with
-  | @collide mid old new decl vs ho hn hne hname hdecl hkeys hm =>
-    have hold := h.rows old ho
-    have hnew := h.rows new hn
-    have he : decl = tableDecl old.key.length := Option.some.inj (hdecl.symm.trans hold.declared)
-    subst decl
-    obtain ⟨a, ha⟩ := hold.output
-    obtain ⟨b, hb⟩ := hnew.output
-    have hva := (h.typed old ho).output_values a (by simp [ha])
-    have hvb := (h.typed new hn).output_values b (by simp [hb])
-    have hk := CongList.eq_of_diag hd hkeys
-    have hea : old = ⟨old.name, old.key, [a]⟩ := by
-      cases old; exact congrArg (Entry.mk _ _) ha
-    have heb : new = ⟨old.name, old.key, [b]⟩ := by
-      rw [hname, hk]
-      cases new; exact congrArg (Entry.mk _ _) hb
-    have hab : a ≠ b := by
-      intro hab
-      exact hne (hea.trans (hab ▸ heb.symm))
-    rw [ha, hb] at hm
-    obtain ⟨hsig, hvs, heffects⟩ :=
-      mergeValues_effects (d := (d.eraseEntry old).eraseEntry new) h.uf hva hvb hm
-    have hresult : (Entry.mk old.name old.key [Term.least a b]).Valid mid.sig := by
-      rw [hsig]
-      exact (h.typed old ho).with_value (by simp [ha]) (by simpa using hva.least hvb)
-    refine ⟨old.name, old.key, a, b, hea ▸ ho, heb ▸ hn, hab, ?_⟩
-    rw [hvs, Database.putEntry_entries hresult, heffects,
-      Database.eraseEntry_entries (by simpa using h.typed new hn),
-      Database.eraseEntry_entries (h.typed old ho),
-      hea, heb]
+  obtain ⟨old, new, decl, mid, vs, ho, hn, hne, hname, hdecl, hkeys, hm, rfl⟩ := mergeStep_iff.mp hs
+  have hold := h.rows old ho
+  have hnew := h.rows new hn
+  have he : decl = tableDecl old.key.length := Option.some.inj (hdecl.symm.trans hold.declared)
+  subst decl
+  obtain ⟨a, ha⟩ := hold.output
+  obtain ⟨b, hb⟩ := hnew.output
+  have hva := (h.typed old ho).output_values a (by simp [ha])
+  have hvb := (h.typed new hn).output_values b (by simp [hb])
+  have hk := CongList.eq_of_diag hd hkeys
+  have hea : old = ⟨old.name, old.key, [a]⟩ := by
+    cases old; exact congrArg (Entry.mk _ _) ha
+  have heb : new = ⟨old.name, old.key, [b]⟩ := by
+    rw [hname, hk]
+    cases new; exact congrArg (Entry.mk _ _) hb
+  have hab : a ≠ b := by
+    intro hab
+    exact hne (hea.trans (hab ▸ heb.symm))
+  rw [ha, hb] at hm
+  obtain ⟨hsig, hvs, heffects⟩ :=
+    mergeValues_effects (d := (d.eraseEntry old).eraseEntry new) h.uf hva hvb hm
+  have hresult : (Entry.mk old.name old.key [Term.least a b]).Valid mid.sig := by
+    rw [hsig]
+    exact (h.typed old ho).with_value (by simp [ha]) (by simpa using hva.least hvb)
+  refine ⟨old.name, old.key, a, b, hea ▸ ho, heb ▸ hn, hab, ?_⟩
+  rw [hvs, Database.putEntry_entries hresult, heffects,
+    Database.eraseEntry_entries (by simpa using h.typed new hn),
+    Database.eraseEntry_entries (h.typed old ho),
+    hea, heb]
 
 theorem row_step {d e : Database} (h : State d) (hd : d.Diag)
     (hs : MergeStep d e) {f : FnName} {key : List Term} {a : Term}

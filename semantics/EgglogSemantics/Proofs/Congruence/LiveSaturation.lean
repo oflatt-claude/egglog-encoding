@@ -83,7 +83,7 @@ theorem saturate_exists_of_finite_bound {d : Database} (h : Runtime d)
     intro e he
     induction he with
     | refl => exact hn
-    | tail _ hs _ => exact hs.2
+    | tail _ hs _ => exact hs.normal
   apply saturateReach_exists_of_measure R d (fun e => states.ncard - (below e).ncard)
   · intro e he
     exact (h.runReach he).state.runStep_exists (h.runReach he).generated

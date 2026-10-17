@@ -116,7 +116,7 @@ theorem evalActions_finite {as : List Action} {db d : Database} (h : db.eqs.Fini
 theorem evalLocalActions_finite {as : List Action} {db d : Database} {σ : Env}
     (h : db.eqs.Finite) (he : evalLocalActions db as σ = some d) : d.eqs.Finite := by
   obtain ⟨mid, hm, rfl⟩ := Option.map_eq_some_iff.mp he
-  exact evalActions_finite (db := { db with env := σ ++ db.env }) (d := mid) h hm
+  exact evalActions_finite (db := { db with env := σ }) (d := mid) h hm
 
 theorem RuleResults.finite {db : Database} (ht : db.terms.Finite) (r : Rule) :
     (RuleResults db r).Finite := by
@@ -135,6 +135,7 @@ private theorem finite_rule_results {db : Database}
 
 theorem RunRules.finite_eqs {db : Database} (he : db.eqs.Finite) (hr : db.rules.Finite)
     (R : RulesetName) : (RunRules R db).eqs.Finite := by
+  rw [RunRules.eq_sUnion]
   apply he.union ((finite_rule_results he hr R).biUnion ?_)
   rintro d ⟨r, _, _, σ, _, hd⟩
   exact evalLocalActions_finite he hd
@@ -155,15 +156,14 @@ theorem MergeValues.finite_rules {db d : Database} {decl : FnDecl}
 
 theorem MergeStep.finite_eqs {db d : Database} (h : MergeStep db d)
     (he : db.eqs.Finite) : d.eqs.Finite := by
-  cases h with
-  | collide _ _ _ _ _ _ hv =>
-      exact Database.finite_addTerm
-        (hv.finite_eqs (Database.finite_eraseEntry (Database.finite_eraseEntry he _) _)) _
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hv, rfl⟩ := mergeStep_iff.mp h
+  exact Database.finite_addTerm
+    (hv.finite_eqs (Database.finite_eraseEntry (Database.finite_eraseEntry he _) _)) _
 
 theorem MergeStep.finite_rules {db d : Database} (h : MergeStep db d)
     (hr : db.rules.Finite) : d.rules.Finite := by
-  cases h with
-  | collide _ _ _ _ _ _ hv => simpa using hv.finite_rules hr
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hv, rfl⟩ := mergeStep_iff.mp h
+  simpa using hv.finite_rules hr
 
 theorem MergeClosure.finite_eqs {db d : Database} (h : MergeClosure db d)
     (he : db.eqs.Finite) : d.eqs.Finite := by
@@ -184,7 +184,7 @@ theorem RunStep.finite {R : RulesetName} {db d : Database} (h : RunStep R db d)
 theorem SaturateReach.finite {R : RulesetName} {db d : Database}
     (h : SaturateReach R db d) (he : db.eqs.Finite) (hr : db.rules.Finite) :
     d.eqs.Finite ∧ d.rules.Finite := by
-  induction h with
+  induction h using SaturateReach.induction with
   | done hs _ => exact hs.finite he hr
   | step hs _ _ ih =>
       obtain ⟨he, hr⟩ := hs.finite he hr
@@ -284,7 +284,7 @@ theorem evalActions_finiteStore {as : List Action} {db d : Database}
 theorem evalLocalActions_finiteStore {as : List Action} {db d : Database} {σ : Env}
     (h : db.FiniteStore) (he : evalLocalActions db as σ = some d) : d.FiniteStore := by
   obtain ⟨mid, hm, rfl⟩ := Option.map_eq_some_iff.mp he
-  have hmfin := evalActions_finiteStore (h.setEnv (σ ++ db.env)) hm
+  have hmfin := evalActions_finiteStore (h.setEnv σ) hm
   exact ⟨hmfin.eqs, hmfin.entries, h.rules⟩
 
 theorem RunRules.finiteStore {db : Database} (h : db.FiniteStore) (R : RulesetName) :
@@ -302,9 +302,8 @@ theorem MergeValues.finiteStore {db d : Database} {decl : FnDecl}
 
 theorem MergeStep.finiteStore {db d : Database} (h : MergeStep db d)
     (hf : db.FiniteStore) : d.FiniteStore := by
-  cases h with
-  | collide _ _ _ _ _ _ hv =>
-      exact (hv.finiteStore ((hf.eraseEntry _).eraseEntry _)).putEntry _
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hv, rfl⟩ := mergeStep_iff.mp h
+  exact (hv.finiteStore ((hf.eraseEntry _).eraseEntry _)).putEntry _
 
 theorem MergeClosure.finiteStore {db d : Database} (h : MergeClosure db d)
     (hf : db.FiniteStore) : d.FiniteStore := by
@@ -318,7 +317,7 @@ theorem RunStep.finiteStore {R : RulesetName} {db d : Database}
 
 theorem SaturateReach.finiteStore {R : RulesetName} {db d : Database}
     (h : SaturateReach R db d) (hf : db.FiniteStore) : d.FiniteStore := by
-  induction h with
+  induction h using SaturateReach.induction with
   | done hs _ => exact hs.finiteStore hf
   | step hs _ _ ih => exact ih (hs.finiteStore hf)
 

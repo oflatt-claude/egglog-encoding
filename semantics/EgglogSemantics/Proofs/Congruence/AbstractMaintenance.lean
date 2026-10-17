@@ -71,7 +71,7 @@ theorem atom_rule_result {d : Database} {r : Rule} {ρ : Env}
       rw [hnoneσ, hnoneρ]
   refine ⟨σ, hσ, ?_⟩
   rw [hhead]
-  have hev := evalAtom_of_row hv.shape (Expr.evalList_append_env (τ := d.env) es heσ)
+  have hev := evalAtom_of_row hv.shape heσ
   simp only [evalLocalActions, evalActions, evalAction, hev, Option.map_some,
     Option.bind_some]
   rfl

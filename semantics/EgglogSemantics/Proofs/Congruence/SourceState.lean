@@ -128,7 +128,7 @@ theorem evalLocalActions_termsBuild {db db' : Database}
     {as : List Action} {σ : Env} (hσ : ∀ b ∈ σ, b.2 ∈ db.terms)
     (hv : evalLocalActions db as σ = some db') : db'.TermsBuild := by
   obtain ⟨d, hd, rfl⟩ := evalLocalActions_eq_some hv
-  have hlf : ({ db with env := σ ++ db.env } : Database).TermsBuild := by
+  have hlf : ({ db with env := σ } : Database).TermsBuild := by
     intro f q ht; exact h f q (Database.terms_setEnv ▸ ht)
   intro f q ht
   rw [Database.terms_setEnvRules] at ht
@@ -139,7 +139,7 @@ theorem termsBuild_runRules {R : RulesetName} {db : Database} (hw : db.WF)
     (h : db.TermsBuild) (hcs : db.sig.AllConstructors) : (RunRules R db).TermsBuild := by
   intro f q ht
   rw [RunRules.sig]
-  rw [RunRules, Database.sUnion_terms] at ht
+  rw [RunRules.eq_sUnion, Database.sUnion_terms] at ht
   rcases ht with ht | ht
   · exact h f q ht
   · obtain ⟨d, hd, ht⟩ := Set.mem_iUnion₂.mp ht

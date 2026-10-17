@@ -32,9 +32,9 @@ theorem pathCompressRule_descending {d d' : Database} {σ : Env}
   obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := evalLocalActions_entry (g := ufName)
     (args := [.var "@a"]) (out := [.var "@c"]) hf
   obtain ⟨a', hla', rfl⟩ := Expr.evalList_singleton hesh
-  obtain rfl : a = a' := Option.some.inj ((Expr.eval_append_env _ hla).symm.trans hla')
+  obtain rfl : a = a' := Option.some.inj (hla.symm.trans hla')
   obtain ⟨c', hlc', rfl⟩ := Expr.evalList_singleton hvsh
-  obtain rfl : c = c' := Option.some.inj ((Expr.eval_append_env _ hlc).symm.trans hlc')
+  obtain rfl : c = c' := Option.some.inj (hlc.symm.trans hlc')
   exact (h.addUF hw ham hcm hac).mono_terms hterms
 
 /-- Bound variable columns remain held when a maintenance head rearranges them. -/
@@ -62,9 +62,7 @@ theorem evalLocalActions_vars_descending {d d' : Database} {q : Query} {σ : Env
   obtain ⟨ts, vs, hts, hvs, hterms⟩ := evalLocalActions_entry (args := cols) (out := [])
     (by simpa using run)
   obtain rfl : vs = [] := (Option.some.inj hvs).symm
-  have hval : ∀ b ∈ σ ++ d.env, b.2 ∈ d.terms := by
-    intro b hb
-    exact (List.mem_append.mp hb).elim (hσ.mem_terms b) (hw.envInTerms b)
+  have hval : ∀ b ∈ σ, b.2 ∈ d.terms := hσ.mem_terms
   have hcols := evalList_vars_held hval cols hvars hts
   apply Descending.mono_terms hterms
   intro a b hm

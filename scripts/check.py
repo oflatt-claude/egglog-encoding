@@ -22,7 +22,6 @@ PAPER_MODULES = (
     "EgglogSemantics.Spec.Divergence",
     "EgglogSemantics.Spec.Behavior",
     "EgglogSemantics.Spec.Order",
-    "EgglogSemantics.Spec.Presentation",
     "EgglogSemantics.Source.Domain",
     "EgglogSemantics.Source.WellFormed",
     "EgglogSemantics.Proofs.OrderFinite",

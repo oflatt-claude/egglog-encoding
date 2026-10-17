@@ -46,39 +46,38 @@ theorem mergeStep_form {d e : Database} (hshape : MergeShape d.sig) (hd : d.Diag
       ((f = ufName ∧ cs.length = 1) ∨ ∃ g, f = viewName g) ∧
       e = (mergeLinks ((d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩)
         a b).addTerm (.app f (cs ++ [lowerId a b])) := by
-  cases hstep with
-  | @collide post old new dc vs ho hn hne hname hsig hkeys hm =>
-    have hnot := ho.1.decl_spec hsig
-    obtain ⟨ms, hms⟩ := Option.ne_none_iff_exists'.mp hnot.1
-    cases ms with
-    | merge oldVars newVars body res =>
-      obtain ⟨hrole, rfl, rfl, hout, hufarity, rfl, rfl⟩ :=
-        hshape old.name dc hsig body res hms
-      have hdc : dc = tableDecl dc.arity := by
-        cases dc; simp_all [tableDecl]
-      obtain ⟨a, ha⟩ := List.length_eq_one_iff.mp (hnot.2.2.trans hout)
-      have hk := CongList.eq_of_diag hd hkeys
-      have hsig' : d.sig new.name = some dc := hname ▸ hsig
-      obtain ⟨b, hb⟩ := List.length_eq_one_iff.mp ((hn.1.decl_spec hsig').2.2.trans hout)
-      have hea : old = ⟨old.name, old.key, [a]⟩ := by
-        cases old; exact congrArg (Entry.mk _ _) ha
-      have heb : new = ⟨old.name, old.key, [b]⟩ := by
-        rw [hname, hk]; cases new; exact congrArg (Entry.mk _ _) hb
-      have hab : a ≠ b := fun he => hne (hea.trans (he ▸ heb.symm))
-      have hkind : (old.name = ufName ∧ old.key.length = 1) ∨
-          ∃ g, old.name = viewName g :=
-        hrole.elim (fun hu => Or.inl ⟨hu, hnot.2.1.trans (hufarity hu)⟩) Or.inr
-      rw [hdc, ha, hb] at hm
-      cases hm with
-      | eval hm he =>
-        simp only [tableDecl, Option.some.injEq, MergeSpec.merge.injEq] at hm
-        rcases hm with ⟨rfl, rfl, rfl, rfl⟩
-        rw [Live.eval_merge (d := (d.eraseEntry old).eraseEntry new)
-          huf a b] at he
-        cases he
-        refine ⟨old.name, old.key, a, b, hea ▸ ho, heb ▸ hn, hkind, ?_⟩
-        rw [hea, heb]
-        rfl
+  obtain ⟨old, new, dc, post, vs, ho, hn, hne, hname, hsig, hkeys, hm, rfl⟩ := mergeStep_iff.mp hstep
+  have hnot := ho.1.decl_spec hsig
+  obtain ⟨ms, hms⟩ := Option.ne_none_iff_exists'.mp hnot.1
+  cases ms with
+  | merge oldVars newVars body res =>
+    obtain ⟨hrole, rfl, rfl, hout, hufarity, rfl, rfl⟩ :=
+      hshape old.name dc hsig body res hms
+    have hdc : dc = tableDecl dc.arity := by
+      cases dc; simp_all [tableDecl]
+    obtain ⟨a, ha⟩ := List.length_eq_one_iff.mp (hnot.2.2.trans hout)
+    have hk := CongList.eq_of_diag hd hkeys
+    have hsig' : d.sig new.name = some dc := hname ▸ hsig
+    obtain ⟨b, hb⟩ := List.length_eq_one_iff.mp ((hn.1.decl_spec hsig').2.2.trans hout)
+    have hea : old = ⟨old.name, old.key, [a]⟩ := by
+      cases old; exact congrArg (Entry.mk _ _) ha
+    have heb : new = ⟨old.name, old.key, [b]⟩ := by
+      rw [hname, hk]; cases new; exact congrArg (Entry.mk _ _) hb
+    have hab : a ≠ b := fun he => hne (hea.trans (he ▸ heb.symm))
+    have hkind : (old.name = ufName ∧ old.key.length = 1) ∨
+        ∃ g, old.name = viewName g :=
+      hrole.elim (fun hu => Or.inl ⟨hu, hnot.2.1.trans (hufarity hu)⟩) Or.inr
+    rw [hdc, ha, hb] at hm
+    cases hm with
+    | eval hm he =>
+      simp only [tableDecl, Option.some.injEq, MergeSpec.merge.injEq] at hm
+      rcases hm with ⟨rfl, rfl, rfl, rfl⟩
+      rw [Live.eval_merge (d := (d.eraseEntry old).eraseEntry new)
+        huf a b] at he
+      cases he
+      refine ⟨old.name, old.key, a, b, hea ▸ ho, heb ▸ hn, hkind, ?_⟩
+      rw [hea, heb]
+      rfl
 
 /-- Equal view keys justify congruence of the two retained outputs. -/
 theorem entrySound_collide {src : Database} {f : FnName} {cs : List Term} {a b : Term}

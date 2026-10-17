@@ -1,5 +1,6 @@
 import EgglogSemantics.Proofs.SameMeaning
 import EgglogSemantics.Proofs.EnvTransform
+import EgglogSemantics.Proofs.Query
 
 /-! Ordering-free source evaluation and matching respect inferred constructor facts. -/
 
@@ -214,6 +215,7 @@ theorem queryHolds_iff {d e : Database} (hd : d.WF) (he : e.WF)
     (hdStore : d.StoreOk) (heStore : e.StoreOk)
     (hc : d.sig.AllConstructors) (h : d.SameMeaning e)
     {q : Query} (hn : ∀ p ∈ q, p.OrderingFree) : QueryHolds d q ↔ QueryHolds e q := by
+  simp only [queryHolds_iff_validQuerySubst]
   constructor
   · rintro ⟨σ, hσ⟩
     obtain ⟨τ, hτ, _⟩ := validQuerySubst_transport hd he heStore hc h hn hσ
@@ -313,19 +315,17 @@ substitutions may use different recorded representatives; the surrounding progra
 environments are empty, as they are in executions from `Database.empty`. -/
 theorem evalLocalActions_transport {d e d' : Database} (hd : d.WF) (he : e.WF)
     (hc : d.sig.AllConstructors) (h : d.SameMeaning e)
-    (hdEnv : d.env = []) (heEnv : e.env = []) {σ τ : Env}
+    {σ τ : Env}
     (hs : ∀ b ∈ σ, b.2 ∈ d.terms) (ht : ∀ b ∈ τ, b.2 ∈ e.terms)
     (hσ : EnvRelated e σ τ) {as : List Action} (hn : Actions.OrderingFree as)
     (hr : evalLocalActions d as σ = some d') :
     ∃ e', evalLocalActions e as τ = some e' ∧ d'.SameMeaning e' := by
   obtain ⟨post, hpost, rfl⟩ := evalLocalActions_eq_some hr
   have hcore :
-      (withoutEnv {d with env := σ ++ d.env}).SameMeaning
-        (withoutEnv {e with env := τ ++ e.env}) := withoutEnv_same (d := d) (e := e) h
-  have hrel : EnvRelated {e with env := τ ++ e.env}
-      (σ ++ d.env) (τ ++ e.env) := by
-    simpa only [hdEnv, heEnv, List.append_nil] using
-      hσ.mono (show e.Contained {e with env := τ ++ e.env} from ⟨subset_rfl⟩) rfl
+      (withoutEnv { d with env := σ }).SameMeaning
+        (withoutEnv { e with env := τ }) := withoutEnv_same (d := d) (e := e) h
+  have hrel : EnvRelated { e with env := τ } σ τ :=
+    hσ.mono (show e.Contained { e with env := τ } from ⟨subset_rfl⟩) rfl
   obtain ⟨post', hpost', hh⟩ := evalActions_transport
     (hd.appendEnv hs) (he.appendEnv ht) hc hcore hrel hn hpost
   refine ⟨{post' with env := e.env, rules := e.rules}, ?_, ?_⟩

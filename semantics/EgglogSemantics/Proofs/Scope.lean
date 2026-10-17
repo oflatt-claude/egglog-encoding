@@ -106,13 +106,16 @@ theorem Query.bind_models {db : Database} {Γ : Scope} (hm : Γ.Models db.env) {
     · exact Or.inl hv
 
 theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
-    (hm : Γ.Models db.env) {r : Rule} (hr : r.Scoped Γ) (hre : r.Evaluable db.sig)
+    (hm : Γ.Models []) {r : Rule} (hr : r.Scoped Γ) (hre : r.Evaluable db.sig)
     {σ : Env} (hσ : ValidQuerySubst db r.query σ)
     (hw : Actions.WidthOk r.actions db.sig) :
     ∃ d, evalLocalActions db r.actions σ = some d := by
+  have hbind : (Query.bind r.query Γ).Models ({ db with env := σ } : Database).env := by
+    intro v
+    rw [Query.bind, List.mem_union_iff, hm v, hσ.mem_dom_iff, Query.mem_vars]
+    simp [Env.dom, Pattern.mem_freeVars]
   obtain ⟨d, hd, _⟩ := evalActions_isSome_of_scoped
-    (db := { db with env := σ ++ db.env }) (Query.bind_models hm hσ) hr.2 hre
-    hw
+    (db := { db with env := σ }) hbind hr.2 hre hw
   exact ⟨{ d with env := db.env, rules := db.rules }, by simp [evalLocalActions, hd]⟩
 
 /-! ### Scoped, evaluable programs whose normalization terminates
@@ -137,16 +140,12 @@ theorem CmdEval.exists_of_scoped {db : Database} {Γ : Scope} (_hm : Γ.Models d
     ∃ r, CmdEval db c r := by
   classical
   cases c with
-  | rule r =>
-      obtain ⟨post, hp⟩ := hnorm _ rfl
-      exact ⟨_, .ok ⟨_, rfl, hp⟩⟩
+  | rule r => exact ⟨_, .ok (c := .rule r) rfl⟩
   | run R =>
       obtain ⟨post, hp⟩ := hnorm _ rfl
-      exact ⟨_, .ok ⟨_, rfl, hp⟩⟩
+      exact ⟨_, .ok hp⟩
   | saturate R => exact (hns : False).elim
-  | decl f d =>
-      obtain ⟨post, hp⟩ := hnorm _ rfl
-      exact ⟨_, .ok ⟨_, rfl, hp⟩⟩
+  | decl f d => exact ⟨_, .ok (c := .decl f d) rfl⟩
   | check q =>
     by_cases hq : QueryHolds db q
     · exact ⟨.ok db, .ok ⟨hq, rfl⟩⟩

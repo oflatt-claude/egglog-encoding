@@ -69,35 +69,32 @@ def Expr.evalAtom (sig : Signature) : Expr → Env → Option Term
       if xs = ys then yes.evalAtom sig σ else no.evalAtom sig σ
   | e, σ => e.eval sig σ
 
-/-- Run one action in the database's evaluation context. Actions never bind variables.
-An entry atom inserts its row; merging later resolves collisions with other rows.
+/-- The one equation an action asserts. Actions read only the signature and bindings,
+never the store, so a head denotes a set of equations.
 
 A `union` on a literal is stuck. egglog rejects it in its type checker — `union` wants an
 eq-sort and `i64` is not one (`TypeError::NonEqsortUnion`) — and this untyped model cannot
 see it until the operands are values. Asserting it instead would cost
 `Database.LitsIsolated`. -/
-def evalAction (db : Database) : Action → Option Database
-  | .expr e =>
-      (e.evalAtom db.sig db.env).map fun t => db.addTerm t
+def Action.write (sig : Signature) (σ : Env) : Action → Option (Term × Term)
+  | .expr e => (e.evalAtom sig σ).map fun t => (t, t)
   | .union e₁ e₂ =>
-      (e₁.eval db.sig db.env).bind fun t₁ =>
-        (e₂.eval db.sig db.env).bind fun t₂ =>
-          if t₁.isLit || t₂.isLit then none else some (db.addEq t₁ t₂)
+      (e₁.eval sig σ).bind fun t₁ =>
+        (e₂.eval sig σ).bind fun t₂ =>
+          if t₁.isLit || t₂.isLit then none else some (t₁, t₂)
 
-/-- Run the actions in order, threading the database through. -/
-def evalActions (db : Database) : List Action → Option Database
-  | [] => some db
-  | a :: as => (evalAction db a).bind fun db' => evalActions db' as
-
-/-- Run a rule's actions under its query substitution, then restore the surrounding context.
-For program executions the surrounding environment is empty (`ProgramStep.env`). -/
-def evalLocalActions (db : Database) (as : List Action) (σ : Env) : Option Database :=
-  (evalActions { db with env := σ ++ db.env } as).map fun db' =>
-    { db' with env := db.env, rules := db.rules }
-
-/-- Execute the merge body, then evaluate its output tuple. -/
-def evalMerge (db : Database) (body : List Action) (res : List Expr) :
-    Option (Database × List Term) :=
-  (evalActions db body).bind fun d => (Expr.evalList d.sig res d.env).map (d, ·)
+/-- The equations a head asserts, defined only when every action's is. -/
+@[blueprint "def:actions"
+  (statement := /--
+\[
+  \writes e=(\aval e,\aval e)\qquad
+  \writes{\kw{union}(e_1,e_2)}=(\eval{e_1},\eval{e_2})\qquad
+  \writes{h_1;\ldots;h_n}=\{\writes{h_1},\ldots,\writes{h_n}\}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def Action.writes (sig : Signature) (σ : Env) : List Action → Option (Set (Term × Term))
+  | [] => some ∅
+  | a :: as => (a.write sig σ).bind fun p => (Action.writes sig σ as).map (insert p)
 
 end Egglog

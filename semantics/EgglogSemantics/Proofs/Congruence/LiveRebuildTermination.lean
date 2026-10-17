@@ -68,9 +68,7 @@ theorem localFlat_values_subset {d e : Database} {q : Query} {ρ : Env}
   obtain ⟨ts, us, hts, hus, hterms⟩ := evalLocalActions_entry (args := xs) (out := [])
     (by simpa using hr)
   obtain rfl : us = [] := (Option.some.inj hus).symm
-  have henv : ∀ b ∈ ρ ++ d.env, b.2 ∈ d.terms := by
-    intro b hb
-    exact (List.mem_append.mp hb).elim (hρ.mem_terms b) (hw.envInTerms b)
+  have henv : ∀ b ∈ ρ, b.2 ∈ d.terms := hρ.mem_terms
   have hcols := evalList_vars_held henv xs hvars hts
   intro t ht
   have hv : t.IsValue d.sig := (evalLocalActions_sig hr) ▸ ht.2
@@ -100,7 +98,7 @@ theorem maintenance_runRules_values_subset {P : Program} (hp : P.Fragment)
   intro t ht
   have hv : t.IsValue d.sig := ht.2
   have hm := ht.1
-  rw [RunRules, Database.sUnion_terms] at hm
+  rw [RunRules.eq_sUnion, Database.sUnion_terms] at hm
   rcases hm with hm | hm
   · exact ⟨hm, hv⟩
   · obtain ⟨post, ⟨r, hr, hR, ρ, hρ, he⟩, hm⟩ := Set.mem_iUnion₂.mp hm

@@ -27,7 +27,7 @@ theorem evalLocalActions_diag {db db' : Database} {as : List Action} {σ : Env}
     (hu : Actions.UnionFree as) (hd : db.Diag) (h : evalLocalActions db as σ = some db') :
     db'.Diag := by
   obtain ⟨d, hv, rfl⟩ := evalLocalActions_eq_some h
-  exact evalActions_diag (db := { db with env := σ ++ db.env }) (db' := d) hu hd hv
+  exact evalActions_diag (db := { db with env := σ }) (db' := d) hu hd hv
 
 theorem MergeValues.diag {d e : Database} {decl : FnDecl} {old new vs : List Term}
     (hu : decl.UnionFree) (hd : d.Diag) (h : MergeValues d decl old new e vs) :
@@ -41,9 +41,8 @@ theorem MergeValues.diag {d e : Database} {decl : FnDecl} {old new vs : List Ter
 /-- Merging removes reflexive row assertions and adds only reflexive assertions. -/
 theorem MergeStep.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeStep d₁ d₂) : d₂.Diag := by
-  cases h with
-  | collide _ _ _ _ hdecl _ hbody =>
-    exact (hbody.diag (hs _ _ hdecl) ((hd.eraseEntry _).eraseEntry _)).putEntry _
+  obtain ⟨_, _, _, _, _, _, _, _, _, hdecl, _, hbody, rfl⟩ := mergeStep_iff.mp h
+  exact (hbody.diag (hs _ _ hdecl) ((hd.eraseEntry _).eraseEntry _)).putEntry _
 
 theorem MergeClosure.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.sig)
     (hd : d₁.Diag) (h : MergeClosure d₁ d₂) : d₂.Diag := by
@@ -56,6 +55,7 @@ theorem MergeClosure.diag {d₁ d₂ : Database} (hs : Signature.UnionFree d₁.
 clause is spent. -/
 theorem RunRules.diag {R : RulesetName} {db : Database} (hn : db.NoUnions) :
     (RunRules R db).Diag := by
+  rw [RunRules.eq_sUnion]
   rintro p (hp | hp)
   · exact hn.diag p hp
   · obtain ⟨d, ⟨r, hr, -, σ, -, hσ⟩, hp'⟩ := Set.mem_iUnion₂.mp hp
@@ -69,7 +69,7 @@ theorem RunStep.noUnions {R : RulesetName} {A B : Database} (h : RunStep R A B)
   ⟨MergeClosure.diag (by rw [RunRules.sig]; exact hn.sig) (RunRules.diag hn) h.1,
     by rw [MergeClosure.sig h.1, RunRules.sig]; exact hn.sig,
     by rw [(MergeClosure.envRules h.1).2]
-       simpa only [RunRules, Database.sUnion_rules] using hn.rules⟩
+       simpa only [RunRules.eq_sUnion, Database.sUnion_rules] using hn.rules⟩
 
 /-- **One command preserves union-freedom, all three clauses.** `.decl` is the only case
 that moves `sig` and `.rule` the only one that moves `rules`, which is why `Cmd.UnionFree`

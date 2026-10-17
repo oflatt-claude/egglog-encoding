@@ -12,8 +12,9 @@ namespace Egglog.Congruence.Live
 theorem ruleResult_row {d post : Database} {R : RulesetName} {r : Rule}
     (hr : r ∈ d.rules) (hR : r.ruleset = R) (hf : post ∈ RuleResults d r)
     {row : Entry} (hrow : row ∈ post.entries) : row ∈ (RunRules R d).entries := by
+  rw [RunRules.eq_sUnion]
   refine ⟨?_, Or.inr ?_⟩
-  · simpa only [RunRules.sig, ← RuleResults.sig hf] using hrow.1
+  · simpa only [Database.sUnion_sig, ← RuleResults.sig hf] using hrow.1
   · exact Set.mem_iUnion₂.mpr ⟨post, ⟨r, hr, hR, hf⟩, hrow.2⟩
 
 /-- A head row may be consumed, but its current replacement is connected and no larger. -/

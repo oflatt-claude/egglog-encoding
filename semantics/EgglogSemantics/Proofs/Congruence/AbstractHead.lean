@@ -11,7 +11,7 @@ theorem encodedRule_firing_reads {d : Database} {src querySrc post : Database}
     (h : Rebuilt d) (hdg : d.Diag) (hstore : d.StoreOk) (hdecl : ViewDeclared d)
     (he : EdgesSound d src) (hw : src.WF) (htotal : UFTotal d)
     (hcs : querySrc.sig.AllConstructors) (hreads : Reads d querySrc)
-    (henv : querySrc.env = []) {r : Rule} {σ : Env}
+    {r : Rule} {σ : Env}
     (hqp : ∀ p ∈ r.query, p.OrderingFree)
     (hqk : Query.VarsKeyed r.query) (hqg : ∀ p ∈ r.query, p.Grounded)
     (hqn : ∀ v ∈ Query.vars r.query, ¬ "@".isPrefixOf v = true)
@@ -37,24 +37,23 @@ theorem encodedRule_firing_reads {d : Database} {src querySrc post : Database}
     hcs hun hex hself hqp hqk hqg hqn hm 0
   obtain ⟨sp, hsp, rfl⟩ := Option.map_eq_some_iff.mp hf
   have hrename := evalActions_leaderEnv
-    (d := { querySrc with env := σ ++ querySrc.env }) hcs hsp
+    (d := { querySrc with env := σ }) hcs hsp
   have hρ' : EnvReads d (leaderEnv σ) ρ := hρ.envReads hdg
     (fun v i hi =>
       (hmatch.mem_values hstore (encodeRule_querySafe r hqp) (v, i) (Env.mem_of_lookup hi)).2)
-  have henvread : EnvReads ({ d with env := ρ ++ d.env } : Database)
-      (leaderEnv (σ ++ querySrc.env)) (ρ ++ d.env) := by
+  have henvread : EnvReads ({ d with env := ρ } : Database)
+      (leaderEnv σ) ρ := by
     intro v t ht
-    rw [henv, List.append_nil] at ht
     obtain ⟨i, hi, hv, hr⟩ := hρ' v t ht
-    exact ⟨i, Env.lookup_append_of_some hi, hv,
-      Live.Repr.mono (d := d) (e := { d with env := ρ ++ d.env }) (Set.Subset.refl _) hr⟩
-  have hstart : Reads ({ d with env := ρ ++ d.env } : Database)
-      { querySrc with env := leaderEnv (σ ++ querySrc.env) } :=
-    (hreads.mono (e := ({ d with env := ρ ++ d.env } : Database))
+    exact ⟨i, hi, hv,
+      Live.Repr.mono (d := d) (e := { d with env := ρ }) (Set.Subset.refl _) hr⟩
+  have hstart : Reads ({ d with env := ρ } : Database)
+      { querySrc with env := leaderEnv (σ) } :=
+    (hreads.mono (e := ({ d with env := ρ } : Database))
       (Set.Subset.refl _)).restrict ⟨Set.Subset.refl _⟩
   obtain ⟨tp, htp, hpost⟩ := encodeActions_reads
-    (src := { querySrc with env := leaderEnv (σ ++ querySrc.env) })
-    (d := { d with env := ρ ++ d.env }) hcs
+    (src := { querySrc with env := leaderEnv (σ) })
+    (d := { d with env := ρ }) hcs
     (by
       intro a ha e he
       obtain ⟨a₀, ha₀, rfl⟩ := List.mem_map.mp ha
@@ -74,7 +73,7 @@ theorem encodedRule_firing_reads {d : Database} {src querySrc post : Database}
       obtain ⟨e₀, he₀, rfl⟩ := List.mem_map.mp he
       exact hd a₀ ha₀ e₀ he₀ fk (by simpa using hk)) huf henvread hstart hrename
   refine ⟨ρ, { tp with env := d.env, rules := d.rules }, hmatch, ?_, ?_⟩
-  · change (evalActions { d with env := ρ ++ d.env }
+  · change (evalActions { d with env := ρ }
       (encodeActions (r.actions.map leaderAction))).map _ = _
     rw [htp]; rfl
   · exact (hpost.mono

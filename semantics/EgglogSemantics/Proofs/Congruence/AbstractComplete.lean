@@ -79,11 +79,11 @@ theorem Boundary.run {P pre rest : Program} (hp : P.Fragment)
     fun c hc => hP' ▸ List.mem_append_left _ hc
   have hsig := Live.prefix_sig htpre
   have hrules := Live.rulesEncoded_of_prefix hpre htpre
-  have hs : RunStep R src post := by obtain ⟨mid, rfl, hs⟩ := hsource; exact hs
+  have hs : RunStep R src post := hsource
   obtain ⟨mid, hfirst, hrest⟩ := htarget.cons_inv
   obtain ⟨last, hlast, hnil⟩ := hrest.cons_inv
   obtain rfl := hnil.nil_inv
-  have ht : RunStep R d mid := by obtain ⟨out, rfl, ht⟩ := hfirst; exact ht
+  have ht : RunStep R d mid := hfirst
   obtain ⟨hsound, hdesc⟩ := source_round_preserves hp hP hpre hrt
     h.sound h.descend hsig (fun r hr => (hrules r).mp hr) hs ht
   have hreads := round_reads hp hsub hpre hs h.rebuilt hrt h.sound h.total
@@ -120,7 +120,7 @@ theorem Boundary.saturate {P pre rest : Program} (hp : P.Fragment)
     (fun c hc => hp.ctorsOnly c (hsub c hc))
   have hstore := storeOk_of_sourceTerms hcs.wf
     (termsBuild_of_programStep (fun c hc => hp.ctorsOnly c (hsub c hc)) hpre) hcs.sig
-  have hfixed := SourceMeaning.saturation_completion_closed hcs.wf hstore hcs.sig hpre.env
+  have hfixed := SourceMeaning.saturation_completion_closed hcs.wf hstore hcs.sig
     (fun r hr _ => Program.OrderingFree.of_mem hp.noMin (hsub (.rule r) (by
       simpa [Database.empty] using (hpre.mem_rules_iff r).mp hr))) hs
   have hrulesPost : Live.RulesEncoded P post d := by
@@ -138,7 +138,7 @@ theorem Boundary.saturate {P pre rest : Program} (hp : P.Fragment)
   have hu := target_runReach_ufTotal hp hsub hpre hrt hsig hrules h.total ht.reach
   have hrebuild := rebuilt_of_metadata hmid hp hmsig hrules' (Or.inr hR)
     (Database.finite_terms hmid.state.finite.eqs) (saturated_endpoint hrt ht) hdesc
-  have hreads := saturation_reads hp hsub' hnext hs hpre.env hrt ht hrebuild
+  have hreads := saturation_reads hp hsub' hnext hs hrt ht hrebuild
     hsound hu hmsig hrules' h.reads
   exact boundary_of_rebuild hp hsub' hnext hmid hmsig hsound hdesc hrules' hreads hu hlast
 
@@ -159,7 +159,7 @@ theorem Boundary.step {P pre rest : Program} (hp : P.Fragment) {c : Cmd}
   | decl f dc => exact h.decl hcs (hp.ctorsOnly _ hmem) hs ht
   | rule r =>
       exact h.rule hcs
-        (htpre.mergeNormal (Database.StoreOk.empty.mergeNormal Database.CtorState.empty.sig)) hs ht
+        (Congruence.prefix_mergeNormal htpre) hs ht
   | check q => exact h.check hs ht
   | run R => exact h.run hp hP hpre htpre hrt hs ht
   | saturate R => exact h.saturate hp hP hpre htpre hrt hs ht

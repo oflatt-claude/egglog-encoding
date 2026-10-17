@@ -18,7 +18,7 @@ theorem not_rebuildDiverges {P : Program} (hp : P.Fragment) {d : Database}
   · obtain ⟨trace, hstart, hstep⟩ := ht
     obtain ⟨n, hn⟩ := rebuild_trace_stops hp h hn hsig honly trace hstart
       (fun n => (hstep n).1)
-    exact (hstep n).2 hn
+    exact (hstep n).2 ((hstep n).1.sameMeaning_iff.mp hn)
   · have hreach := changingRunReach_runReach hr
     exact ((h.runReach hreach).runRules rebuildRuleset).state.not_mergeDiverges
       ((h.runReach hreach).runRules rebuildRuleset).noUnions.diag hm
@@ -39,22 +39,7 @@ theorem not_cmdDiverges {P : Program} (hp : P.Fragment) {d : Database}
       have he := hsat _ rfl
       subst he
       exact not_rebuildDiverges hp h hn hsig honly hd
-  | merge hncheck hnsat hr hm =>
-      rename_i mid
-      cases c with
-      | run R =>
-          subst mid
-          exact (h.runRules R).state.not_mergeDiverges (h.runRules R).noUnions.diag hm
-      | rule r =>
-          subst mid
-          have hs : State {d with rules := insert r d.rules} :=
-            State.of_generated ⟨h.state.finite.eqs, h.state.finite.entries,
-              h.state.finite.rules.insert r⟩
-              h.state.uf h.generated h.state.typed
-          exact hs.not_mergeDiverges h.noUnions.diag hm
-      | decl => contradiction
-      | check q => exact hncheck q rfl
-      | saturate R => exact hnsat R rfl
+  | run hm => exact (h.runRules _).state.not_mergeDiverges (h.runRules _).noUnions.diag hm
 
 theorem not_programDiverges {P : Program} (hp : P.Fragment) {p : Program}
     (hnd : ∀ c ∈ p, NoDecl c) (hu : p.UnionFree) (hqs : p.QueriesSafe)
@@ -77,7 +62,8 @@ theorem not_programDiverges {P : Program} (hp : P.Fragment) {p : Program}
           apply ih (fun c hm => hnd c (List.mem_cons_of_mem _ hm)) hu.2 hqs.2
             (fun R hm => hsat R (List.mem_cons_of_mem _ hm))
             (fun r hm => hrules r (List.mem_cons_of_mem _ hm))
-            (h.cmd (hnd _ List.mem_cons_self) hu.1 hqs.1 hc) (hc.mergeNormal hn)
+            (h.cmd (hnd _ List.mem_cons_self) hu.1 hqs.1 hc)
+            (hc.mergeNormal hn (hnd _ List.mem_cons_self))
             ((hc.sig.trans (noDecl_sigBind (hnd _ List.mem_cons_self) _)).trans hsig) ?_ hd
           intro r hr hR
           rcases (hc.mem_rules_iff r).mp hr with hr | hr
@@ -140,13 +126,7 @@ private theorem setup_not_diverge {p : Program} (hp : ∀ c ∈ p, c.DeclOrRule)
           have hc := hp c List.mem_cons_self
           cases hd with
           | saturate => contradiction
-          | merge _ _ hr hm =>
-              cases c with
-              | decl | rule =>
-                  subst hr
-                  apply not_mergeDiverges_empty _ hm
-                  exact he
-              | _ => contradiction
+          | run => contradiction
       | tail hs hd =>
           exact ih (fun c hm => hp c (List.mem_cons_of_mem _ hm))
             (hs.eqs_empty_of_declOrRule (hp _ List.mem_cons_self) he) hd

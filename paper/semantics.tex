@@ -5,6 +5,7 @@
 \usepackage{array}
 \usepackage[colorlinks=true,linkcolor=blue]{hyperref}
 \usepackage[font=footnotesize,labelfont=bf]{caption}
+\newtheorem{theorem}{Theorem}
 \pagestyle{empty}
 
 % Extracted fragments carry declaration links; the figures display only their math.
@@ -18,8 +19,10 @@
 \newcommand{\kw}[1]{\mathsf{#1}}
 \newcommand{\rows}[1]{\operatorname{Rows}(#1)}
 \newcommand{\fire}{\mathsf{F}}
-\newcommand{\eval}[1]{\llbracket #1\rrbracket_{\Sigma,\sigma}}
-\newcommand{\aval}[1]{\llbracket #1\rrbracket^{\mathrm{atom}}_{\Sigma,\sigma}}
+\newcommand{\eval}[1]{\llbracket #1\rrbracket_{\sigma}}
+\newcommand{\aval}[1]{\llbracket #1\rrbracket^{\mathrm{atom}}_{\sigma}}
+\newcommand{\writes}[1]{\mathcal W_\sigma(#1)}
+\newcommand{\conf}[1]{\operatorname{Conf}(#1)}
 \newcommand{\ir}[3]{\inferrule[\textsc{#1}]{#2}{#3}}
 \newcommand{\syntaxline}[2]{%
   \noindent\begin{tabular}[t]{@{}p{.25\linewidth}@{}p{.75\linewidth}@{}}%
@@ -80,7 +83,8 @@
     asserted equalities, and $\mathcal R$ stores rules.
     A function row separates key and output terms with a semicolon and is stored as $(r,r)$.
     $\operatorname{Rows}(D)$ selects these rows from $E$ using their declarations;
-    it is not additional storage. Adding $(t,t)$ asserts the existence of $t$; $T_E$ collects stored subterms.}
+    it is not additional storage. Adding $(t,t)$ asserts the existence of $t$; $T_E$ collects stored subterms.
+    $D+(s,t)$ abbreviates $D+\{(s,t)\}$. Removing a row with $\ominus$ keeps its column terms.}
   \label{fig:representation}
 \end{figure}
 
@@ -100,23 +104,26 @@
     \inputleannode{def:query}
     \inputleannode{def:actions}
     \panel{Merging stored rows}
+    \inputleannode{def:conflicts}
     \inputleannode{def:merging}
-    \inputleannode{def:normalization}
-    \panel{Completed rounds and saturation}
+    \panel{Commands and programs}
     \inputleannode{def:round}
     \inputleannode{def:saturation}
-    \panel{Commands and program behavior}
     \inputleannode{def:behavior}
-    \inputleannode{def:divergence}
   \end{minipage}
-  \caption{Egglog semantics at command boundaries, where the temporary environment is empty.
+  \caption{Egglog semantics.
     Bars abbreviate tuples, e.g.\ $\bar e=(e_1,\ldots,e_n)$; $\epsilon$ is an empty sequence.
     $s\unlhd t$ means subterm; tuple relations are pointwise on equal lengths.
-    All displayed evaluations must be defined; row and binder widths follow $\Sigma$, with distinct merge binders.
-    Replacing rows retains their column terms.
-    $\delta$ is defined only on the three displayed command forms.
+    Evaluation reads $\Sigma$ from the current state, and all displayed evaluations must be defined;
+    row and binder widths follow $\Sigma$, with distinct merge binders.
     The order $\prec$ is the fixed size-first term order.
     $s\sim_E t$ includes represented spellings; query bindings range over stored subterms $T_E$.}
   \label{fig:semantics}
 \end{figure}
+
+\clearpage
+\inputleannode{thm:congruence}
+\noindent Source programs do not use $\kw{saturate}$; only the compiled rebuilding saturates.
+A source saturation can repeat forever, so supporting one would also require relating
+nonterminating executions.
 \end{document}

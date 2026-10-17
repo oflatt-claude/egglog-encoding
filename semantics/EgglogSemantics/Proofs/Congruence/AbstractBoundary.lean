@@ -1,23 +1,46 @@
 import EgglogSemantics.Proofs.Congruence.AbstractSoundRounds
 import EgglogSemantics.Proofs.Congruence.LiveRead
 import EgglogSemantics.Proofs.Congruence.UFCoverage
+import EgglogSemantics.Proofs.ActionProgram
 
 /-! Data invariants at boundaries between original source commands. -/
 
 namespace Egglog
 
-/-- Completed command phases retain merge normality, including unchanged checks. -/
+/-- Commands other than declarations retain merge normality. -/
 theorem CmdStep.mergeNormal {d e : Database} {c : Cmd} (h : CmdStep d c e)
-    (hn : MergeNormal d) : MergeNormal e := by
+    (hn : MergeNormal d) (hc : Congruence.NoDecl c) : MergeNormal e := by
   cases c with
   | check q => obtain ⟨_, rfl⟩ := h; exact hn
-  | decl | rule | run | saturate => exact h.choose_spec.2.2
+  | rule r =>
+    have h : e = { d with rules := insert r d.rules } := h
+    subst h
+    exact hn.setRules _
+  | run R => exact MergeNormalize.normal h
+  | saturate R => exact SaturateReach.mergeNormal h
+  | decl => exact hc.elim
 
 theorem ProgramStep.mergeNormal {d e : Database} {p : Program}
-    (h : ProgramStep d p e) (hn : MergeNormal d) : MergeNormal e := by
+    (h : ProgramStep d p e) (hn : MergeNormal d) (hp : ∀ c ∈ p, Congruence.NoDecl c) :
+    MergeNormal e := by
   induction h with
   | nil => exact hn
-  | cons hc _ ih => exact ih (hc.mergeNormal hn)
+  | cons hc _ ih =>
+    exact ih (hc.mergeNormal hn (hp _ List.mem_cons_self))
+      (fun c hm => hp c (List.mem_cons_of_mem _ hm))
+
+/-- A compiled prefix ends merge-normal: its declarations all run on empty data. -/
+theorem Congruence.prefix_mergeNormal {P pre : Program} {d : Database}
+    (h : ProgramStep Database.empty
+      ((Congruence.encodePrelude P ++ Congruence.encodeCmds pre 0).map
+        Congruence.Command.command) d) :
+    MergeNormal d := by
+  rw [List.map_append] at h
+  obtain ⟨m, hm, hrest⟩ := h.append_inv
+  have hme : m.eqs = ∅ := hm.eqs_empty_of_declOrRule (Congruence.prelude_setup P) rfl
+  refine hrest.mergeNormal ?_ (Congruence.cmds_noDecl pre 0)
+  intro row hr
+  exact (hme ▸ hr.2).elim
 
 namespace Congruence.Abstract
 

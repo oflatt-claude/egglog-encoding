@@ -6,12 +6,12 @@ The mathematical specification stores value equations and reflexive function ato
 in one assertion set. Function entries are a derived view; declarations supply the
 key/output split and merge policy. Expression matching has one rule. A merge consumes
 two colliding atom assertions and installs the result, preserving column values and
-merge-body effects. `MergeNormal` means one entry per congruent key;
-`MergeNormalize` reaches such a state by merge steps. Saturation compares inferred
-facts, including atoms. Subterm existence is implicit, so redundant root assertions
-need not make the raw stores equal.
+merge-body effects. A run (`RunStep`) fires its rules and merges until no conflict
+remains (`Database.conflicts` is empty). Saturation repeats runs until one leaves
+congruence unchanged. Subterm existence is implicit, so redundant root assertions need
+not make the raw stores equal.
 The definitions have brief comments in `Spec/Database.lean`, `Spec/Match.lean`, and
-`Spec/Step.lean`.
+`Spec/Step.lean`; `Spec/Sequential.lean` holds the step-by-step forms the proofs use.
 
 The core specification and ordering/live-table lemmas build. New mathematical
 proofs establish semantic equivalence of ordering-free source checks, current UF

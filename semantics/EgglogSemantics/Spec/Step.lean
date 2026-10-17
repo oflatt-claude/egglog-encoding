@@ -4,147 +4,107 @@ import EgglogSemantics.Spec.Match
 /-!
 # Steps
 
-Merging and program execution. A merge step resolves one pair of conflicting entries;
-normalization repeats these steps until every key has one entry. Rule saturation repeats
-completed rounds until `SameMeaning` holds. These relations need not terminate.
+Merging and program execution. A merge step resolves one pair of conflicting rows;
+a run fires its rules and then merges until no conflict remains. Saturation repeats runs
+until one leaves congruence unchanged. These relations need not terminate.
 -/
 
 namespace Egglog
-/-! ### The merge step -/
+/-! ### Merging -/
 /-- Componentwise substitution of the two output tuples for a merge's parameters. -/
 def mergeEnv (oldVars newVars : List Var) (old new : List Term) : Env :=
   oldVars.zip old ++ newVars.zip new
 
-/-- Run the declared body and result, restoring the caller's temporary environment. -/
-inductive MergeValues (db : Database) (decl : FnDecl) (old new : List Term) :
-    Database → List Term → Prop where
-  | eval {d : Database} {vs : List Term} {oldVars newVars : List Var} {body : List Action} {res : List Expr} :
-      decl.merge = some (.merge oldVars newVars body res) →
-      evalMerge { db with env := mergeEnv oldVars newVars old new } body res = some (d, vs) →
-      MergeValues db decl old new { d with env := db.env, rules := db.rules } vs
+/-- Pairs of distinct rows of one function at congruent keys. -/
+@[blueprint "def:conflicts"
+  (statement := /--
+\[
+  \conf D\triangleq\{(a,b)\mid a=f(\bar k;\bar v)\in\rows D,\
+    b=f(\bar k';\bar w)\in\rows D,\ a\ne b,\ \bar k\sim_E\bar k'\}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def Database.conflicts (db : Database) : Set (Entry × Entry) :=
+  {p | p.1 ∈ db.entries ∧ p.2 ∈ db.entries ∧ p.1 ≠ p.2 ∧ p.1.name = p.2.name ∧
+    CongList db p.1.key p.2.key}
 
-/-- Resolve two distinct entries at congruent keys. Consume both before running the
-body, so entries written by the body survive. Constructor existence and equations
-are preserved when entries are replaced. Identical writes coalesce as set insertion. -/
+/-- Resolve two conflicting rows. Both are removed before the body's writes and the merged
+row are added, so rows the body writes survive. -/
 @[blueprint "def:merging"
   (statement := /--
   \[
   \ir{Collide}{
-    a=f(\bar k;\bar v)\in\rows D\quad b=f(\bar k';\bar w)\in\rows D\quad
-      a\ne b\quad\bar k\sim_E\bar k'\\\\
-    \Sigma(f)=\kw{fun}(k,\ell,\kw{merge}(\bar x,\bar y,H,\bar e))\quad
-      \sigma=[\bar x\mapsto\bar v,\bar y\mapsto\bar w]\\\\
-    E_1=(E\setminus\{(a,a)\})\cup\{(t,t)\mid t\in\operatorname{cols}(a)\}\quad
-    E_2=(E_1\setminus\{(b,b)\})\cup\{(t,t)\mid t\in\operatorname{cols}(b)\}\\\\
-    D[E\gets E_2],\sigma\vdash H\Downarrow D'\quad\eval{\bar e}=\bar u}
-    {D\to_m D'+(f(\bar k;\bar u),f(\bar k;\bar u))}
+    (a,b)\in\conf D\quad a=f(\bar k;\bar v)\quad b=f(\bar k';\bar w)\\\\
+    \Sigma(f)=\kw{fun}(\_,\_,\kw{merge}(\bar x,\bar y,H,\bar e))\quad
+    \sigma=[\bar x\mapsto\bar v,\bar y\mapsto\bar w]\quad r=f(\bar k;\eval{\bar e})}
+    {D\to_m(D\ominus a\ominus b)+\writes H+(r,r)}
   \]
   -/)
   (latexEnv := "paperfragment")]
 inductive MergeStep : Database → Database → Prop where
-  | collide {db d : Database} {old new : Entry} {decl : FnDecl} {vs : List Term} :
-      old ∈ db.entries → new ∈ db.entries → old ≠ new → old.name = new.name →
-      db.sig old.name = some decl → CongList db old.key new.key →
-      MergeValues ((db.eraseEntry old).eraseEntry new) decl old.value new.value d vs →
-      MergeStep db (d.putEntry ⟨old.name, old.key, vs⟩)
+  | collide {db : Database} {old new : Entry} {oldVars newVars : List Var}
+      {body : List Action} {res : List Expr} {W : Set (Term × Term)} {vs : List Term} :
+      (old, new) ∈ db.conflicts →
+      db.sig.mergeOf old.name = some (.merge oldVars newVars body res) →
+      Action.writes db.sig (mergeEnv oldVars newVars old.value new.value) body = some W →
+      Expr.evalList db.sig res (mergeEnv oldVars newVars old.value new.value) = some vs →
+      MergeStep db
+        ((((db.eraseEntry old).eraseEntry new).addEqs W).putEntry ⟨old.name, old.key, vs⟩)
 
-/-- Zero or more merge steps, possibly stopping before merging is complete.
-In mathematical notation this is simply `→ₘ*`. -/
+/-- Zero or more merge steps, written `→ₘ*`. -/
 def MergeClosure : Database → Database → Prop := Relation.ReflTransGen MergeStep
 
-/-- Merging is complete when every function/key congruence class has one entry.
-A lone entry is already normal, even when its merge body is non-idempotent. -/
-def MergeNormal (db : Database) : Prop :=
-  ∀ a ∈ db.entries, ∀ b ∈ db.entries,
-    a.name = b.name → CongList db a.key b.key → a = b
-
-/-- Reach a merge-normal state by finitely many merge steps. -/
-@[blueprint "def:normalization"
-  (statement := /--
-\[
-  \operatorname{Normal}(D)\iff
-  \forall a,b\in\rows D.\ (a.f=b.f\land a.\bar k\sim_E b.\bar k)\Rightarrow a=b
-  \qquad
-  \ir{Normalize}{D\to_m^*D'\\\operatorname{Normal}(D')}{D\Downarrow_m D'}
-  \]
-  -/)
-  (latexEnv := "paperfragment")]
-def MergeNormalize (db db' : Database) : Prop :=
-  MergeClosure db db' ∧ MergeNormal db'
-
-/-! ### Running -/
-/-- The databases one rule contributes, one per substitution satisfying its query. -/
-def RuleResults (db : Database) (r : Rule) : Set Database :=
-  {d | ∃ σ, ValidQuerySubst db r.query σ ∧ evalLocalActions db r.actions σ = some d}
-
-/-- The rule-firing half of a round of the ruleset `R`: every rule *of `R`* fires on every
-substitution satisfying its query *in the pre-state*, and all the results are unioned
-in. -/
+/-! ### Rounds and saturation -/
+/-- Every rule of `R` fires on every substitution satisfying its query in the pre-state;
+their writes are added together. -/
 def RunRules (R : RulesetName) (db : Database) : Database :=
-  db.sUnion {d | ∃ r ∈ db.rules, r.ruleset = R ∧ d ∈ RuleResults db r}
+  db.addEqs (⋃₀ {W | ∃ r ∈ db.rules, r.ruleset = R ∧
+    ∃ σ, QueryMatches db r.query σ ∧ Action.writes db.sig σ r.actions = some W})
 
-/-- One round of `R`: rule firing, then a merge phase. What `Cmd.run R` does once and
-`Cmd.saturate R` repeats. -/
+/-- `⟨run R, D⟩ ⇓ D'`: fire the rules of `R`, then merge until no conflict remains. -/
 @[blueprint "def:round"
   (statement := /--
 \[
-  \fire_R(D)\triangleq
-    D\left[E\gets E\cup\bigcup\left\{E_{D'}\ \middle|\ \exists Q,H,\sigma.\
-      (R,Q\Rightarrow H)\in\mathcal R,\ D,\sigma\models Q,\ D,\sigma\vdash H\Downarrow D'
-    \right\}\right]
+  \fire_R(D)\triangleq D+\bigcup\{\writes H\mid(R,Q\Rightarrow H)\in\mathcal R,\
+    D,\sigma\models Q\}
   \qquad
-  \ir{Round}{\fire_R(D)\Downarrow_m D'}{D\xrightarrow{R}D'}
+  \ir{Run}{\fire_R(D)\to_m^*D'\\\conf{D'}=\emptyset}{\langle\kw{run}\ R,D\rangle\Downarrow D'}
   \]
   -/)
   (latexEnv := "paperfragment")]
 def RunStep (R : RulesetName) (db db' : Database) : Prop :=
-  MergeNormalize (RunRules R db) db'
+  MergeClosure (RunRules R db) db' ∧ db'.conflicts = ∅
 
-/-- Saturation compares the meaning of completed rounds. Redundant constructor
-spellings and writes absorbed by merging do not prevent saturation. -/
-def RunSaturated (R : RulesetName) (d : Database) : Prop :=
-  MergeNormal d ∧ ∃ d', RunStep R d d' ∧ d.SameMeaning d'
-
-/-- Repeat completed rounds, stopping at the first one that preserves meaning. The
-final round's writes are allowed and its normalized post-state is returned. Continuing
-past an unchanged round is not an execution of `saturate`.
-
-For the constructor source fragment, a congruence-respecting round makes this a semantic
-fixed point. The general language also has `min`, so that stability is a theorem with
-fragment premises, not part of this operational stopping rule. -/
+/-- `⟨saturate R, D⟩ ⇓ D'`: run `R` until a run leaves congruence unchanged, returning
+that run's result. Redundant spellings and writes absorbed by merging do not prevent
+saturation. -/
 @[blueprint "def:saturation"
   (statement := /--
 \[
-  D\simeq D'\iff\Sigma=\Sigma'\land\mathcal R=\mathcal R'\land{\sim_E}={\sim_{E'}}
+  \ir{Fixpoint}{\langle\kw{run}\ R,D\rangle\Downarrow D'\\{\sim_E}={\sim_{E'}}}
+    {\langle\kw{saturate}\ R,D\rangle\Downarrow D'}
   \qquad
-  \ir{Stop}{D\xrightarrow{R}D'\\D\simeq D'}{D\Downarrow_R D'}\quad
-  \ir{Repeat}{D\xrightarrow{R}D_1\\D\not\simeq D_1\\D_1\Downarrow_R D'}{D\Downarrow_R D'}
+  \ir{Repeat}{\langle\kw{run}\ R,D\rangle\Downarrow D_1\\{\sim_E}\ne{\sim_{E_1}}\\
+    \langle\kw{saturate}\ R,D_1\rangle\Downarrow D'}
+    {\langle\kw{saturate}\ R,D\rangle\Downarrow D'}
   \]
   -/)
   (latexEnv := "paperfragment")]
 inductive SaturateReach (R : RulesetName) : Database → Database → Prop where
-  | done {db d : Database} :
-      RunStep R db d → db.SameMeaning d → SaturateReach R db d
-  | step {db mid d : Database} :
-      RunStep R db mid → ¬ db.SameMeaning mid → SaturateReach R mid d →
-      SaturateReach R db d
+  | fixpoint {db d : Database} :
+      RunStep R db d → Cong db = Cong d → SaturateReach R db d
+  | again {db mid d : Database} :
+      RunStep R db mid → Cong db ≠ Cong mid → SaturateReach R mid d → SaturateReach R db d
 
-/-- What a command reaches before its merge phase. Rules are registered as written; variable
-bindings are supplied when they fire. Saturation is a fixpoint condition rather than a
-function because it may not terminate. -/
-def cmdReach (db : Database) : Cmd → Database → Prop
-  | .rule r, d => d = { db with rules := insert r db.rules }
-  | .run R, d => d = RunRules R db
-  | .saturate R, d => SaturateReach R db d
-  | .decl f dc, d => d = { db with sig := Function.update db.sig f (some dc) }
-  | .check q, d => QueryHolds db q ∧ d = db
-
-/-- Successful command execution. Checks only observe; every other command completes
-merging. Saturation already ends merge-normal (`cmdStep_saturate_iff`). -/
-def CmdStep (db : Database) (c : Cmd) (db' : Database) : Prop :=
-  match c with
-  | .check q => QueryHolds db q ∧ db' = db
-  | _ => ∃ d, cmdReach db c d ∧ MergeNormalize d db'
+/-! ### Commands and programs -/
+/-- Successful command execution. A check only observes. Rules are registered as written;
+variable bindings are supplied when they fire. -/
+def CmdStep (db : Database) : Cmd → Database → Prop
+  | .decl f dc, db' => db' = { db with sig := Function.update db.sig f (some dc) }
+  | .rule r, db' => db' = { db with rules := insert r db.rules }
+  | .run R, db' => RunStep R db db'
+  | .saturate R, db' => SaturateReach R db db'
+  | .check q, db' => QueryHolds db q ∧ db' = db
 
 /-- Run the commands in order. `ProgramStep Database.empty p` is running the program `p`. -/
 inductive ProgramStep : Database → Program → Database → Prop where
@@ -171,6 +131,24 @@ inductive CmdEval : Database → Cmd → Result → Prop where
 
 /-- Finite program evaluation. Failure short-circuits the suffix, even if that suffix
 would diverge. Only successful commands pass their resulting database to the next one. -/
+@[blueprint "def:behavior"
+  (statement := /--
+  \[
+  \ir{Declare}{}
+    {\langle\kw{declare}\ f:d,D\rangle\Downarrow D[\Sigma\gets\Sigma[f\mapsto d]]}\quad
+  \ir{Rule}{}{\langle\kw{rule}\ \rho,D\rangle\Downarrow D[\mathcal R\gets\mathcal R\cup\{\rho\}]}\quad
+  \ir{Check}{D,\sigma\models Q}{\langle\kw{check}\ Q,D\rangle\Downarrow D}\quad
+  \ir{Fail}{\nexists\sigma.\ D,\sigma\models Q}{\langle\kw{check}\ Q,D\rangle\Downarrow\kw{error}}
+  \]
+  \[
+  \ir{Done}{}{\langle\epsilon,D\rangle\Downarrow D}\quad
+  \ir{Next}{\langle C,D\rangle\Downarrow D_1\\\langle P,D_1\rangle\Downarrow o}
+    {\langle C;P,D\rangle\Downarrow o}\quad
+  \ir{Abort}{\langle C,D\rangle\Downarrow\kw{error}}{\langle C;P,D\rangle\Downarrow\kw{error}}
+  \qquad o\in\mathit{Database}\cup\{\kw{error}\}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 inductive Eval : Database → Program → Result → Prop where
   | nil {db : Database} : Eval db [] (.ok db)
   | cons {db db' : Database} {c : Cmd} {cs : Program} {r : Result} :

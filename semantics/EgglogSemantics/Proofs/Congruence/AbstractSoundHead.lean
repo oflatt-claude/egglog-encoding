@@ -44,13 +44,13 @@ theorem encodedRule_firing_sound {src d d' : Database} {r : Rule} {σ : Env}
     (hs.viewsSound hrt.noUnions.diag) (hs.edgesSound hrt.noUnions.diag)
     hrt.noUnions.diag hrt.storeOk hrt.wf.subtermClosed htables hrt.state.uf hof hg hk hmatch
   refine ⟨τ, hτ, fun post hpost hsafe => ?_⟩
-  have hjust : ∀ a ∈ r.actions, SourceAction post src.sig (τ ++ src.env) a := by
+  have hjust : ∀ a ∈ r.actions, SourceAction post src.sig τ a := by
     obtain ⟨sp, hsp, rfl⟩ := Option.map_eq_some_iff.mp hpost
     intro a ha
     exact Egglog.Congruence.SourceAction.mono
       (src := sp) (post := { sp with env := src.env, rules := src.rules })
       ⟨Set.Subset.refl _⟩
-      (sourceActions_of_evalActions (src := { src with env := τ ++ src.env }) hcs hsp a ha)
+      (sourceActions_of_evalActions (src := { src with env := τ }) hcs hsp a ha)
   apply encodeLocalActions_preserves_of_justified (evalLocalActions_wf hw hτ.mem_terms hpost)
     hsafe (hs.mono_src (evalLocalActions_contained hpost).eqs) hdesc
     (as := r.actions.map leaderAction) ?_ ?_ hrt.state.uf ?_ hfire
@@ -92,10 +92,10 @@ theorem encodedRule_firing {src d d' : Database} {r : Rule} {σ : Env}
     (fun a ha e hem f hfm =>
       ⟨fun _ => hbexpr a ha e hem f hfm, fun hf => hctor f hf⟩)
     (scoped_exprs hscoped) hd hmatch hfire
-  have hscope : Actions.Scoped r.actions (Query.bind r.query (Env.dom src.env)) :=
+  have hscope : Actions.Scoped r.actions (Query.bind r.query (Env.dom [])) :=
     Actions.Scoped.mono r.actions
       (fun v hv => List.mem_union_iff.mpr (Or.inr hv)) hscoped
-  obtain ⟨post, _, hpost⟩ := evalLocalActions_isSome_of_builds (Scope.Models.dom src.env)
+  obtain ⟨post, _, hpost⟩ := evalLocalActions_isSome_of_builds (Scope.Models.dom [])
     hw hscope hbuild hrun hτ
   refine ⟨τ, _, hτ, hpost, hsound _ hpost ?_⟩
   apply sourceSafe_of_names (evalLocalActions_termsBuild hw hb hcs hτ.mem_terms hpost)

@@ -25,6 +25,14 @@ theorem not_mergeDiverges_of_wellFounded {d : Database}
     (hw : WellFounded (fun e' e => MergeClosure d e ∧ MergeStep e e')) :
     ¬ MergeDiverges d := not_infiniteTrace_of_wellFounded hw
 
+theorem changingRunStep_iff {R : RulesetName} {db db' : Database} :
+    ChangingRunStep R db db' ↔ RunStep R db db' ∧ ¬ db.SameMeaning db' := by
+  constructor
+  · rintro ⟨hs, hc⟩
+    exact ⟨hs, fun hm => hc ((hs.sameMeaning_iff).mp hm)⟩
+  · rintro ⟨hs, hm⟩
+    exact ⟨hs, fun hc => hm ((hs.sameMeaning_iff).mpr hc)⟩
+
 theorem changingRunReach_runReach {R : RulesetName} {d e : Database}
     (h : Relation.ReflTransGen (ChangingRunStep R) d e) :
     Relation.ReflTransGen (RunStep R) d e :=
@@ -38,7 +46,7 @@ theorem not_saturateDiverges_of_wellFounded {R : RulesetName} {d : Database}
     ¬ SaturateDiverges R d := by
   rintro (htrace | ⟨mid, hreach, hmerge⟩)
   · apply not_infiniteTrace_of_wellFounded ?_ htrace
-    exact hrounds.mono (fun _ _ h => ⟨changingRunReach_runReach h.1, h.2⟩)
+    exact hrounds.mono (fun _ _ h => ⟨changingRunReach_runReach h.1, changingRunStep_iff.mp h.2⟩)
   · exact not_mergeDiverges_of_wellFounded
       (hmerges mid (changingRunReach_runReach hreach)) hmerge
 
@@ -79,8 +87,7 @@ theorem not_cmdDiverges_of_allConstructors {d : Database} {c : Cmd}
   intro h
   cases h with
   | saturate _ => exact hn.elim
-  | merge _ _ hr hm =>
-      exact not_mergeDiverges_of_allConstructors (cmdReach_allConstructors hc hd hr) hm
+  | run hm => exact not_mergeDiverges_of_allConstructors (d := RunRules _ d) hc hm
 
 /-- Bounded constructor programs have no divergent schedule, even without assuming progress. -/
 theorem not_programDiverges_of_allConstructors {d : Database} {P : Program}

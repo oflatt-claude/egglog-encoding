@@ -1,4 +1,5 @@
 import EgglogSemantics.Spec.Step
+import EgglogSemantics.Proofs.Query
 
 /-! Finite success and check failure, independent of any executable interpreter. -/
 
@@ -129,7 +130,7 @@ theorem Eval.append_of_no_checks {db : Database} {p q : Program} {r : Result}
 
 /-- An empty conjunction always passes, including in an empty database. -/
 theorem QueryHolds.nil (db : Database) : QueryHolds db [] :=
-  ⟨[], [], .nil, .nil⟩
+  queryHolds_iff_validQuerySubst.mpr ⟨[], [], .nil, .nil⟩
 
 /-- Query correspondence is enough to compare both outcomes of a check. No equality
 between source and target databases is needed. -/

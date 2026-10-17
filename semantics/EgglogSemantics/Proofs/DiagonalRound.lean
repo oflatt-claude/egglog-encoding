@@ -74,7 +74,7 @@ private theorem evalActions_overlay (d : Database) (E : Set (Term × Term))
 private theorem evalLocalActions_overlay (d : Database) (E : Set (Term × Term))
     (as : List Action) (σ : Env) :
     evalLocalActions (overlay d E) as σ = (evalLocalActions d as σ).map (overlay · E) := by
-  change (evalActions (overlay { d with env := σ ++ d.env } E) as).map _ = _
+  change (evalActions (overlay { d with env := σ } E) as).map _ = _
   rw [evalActions_overlay]
   simp only [evalLocalActions, Option.map_map]
   rfl
@@ -121,16 +121,15 @@ private theorem MergeValues.with_overlay {d e : Database} {decl : FnDecl}
 private theorem MergeStep.with_overlay {d e : Database} (hm : MergeStep d e)
     {E : Set (Term × Term)} (hE : ∀ p ∈ E, p.1.IsValue d.sig) :
     MergeStep (overlay d E) (overlay e E) := by
-  cases hm with
-  | @collide post old new decl vs ho hn hne hname hd hk hv =>
-      change MergeStep (overlay d E) (overlay (post.addTerm _) E)
-      rw [← overlay_addTerm]
-      apply MergeStep.collide (db := overlay d E)
-        ((overlay_entries hE).symm ▸ ho) ((overlay_entries hE).symm ▸ hn)
-        hne hname hd (hk.mono (overlay_contained d E))
-      rw [overlay_eraseEntry hE ho.1,
-        overlay_eraseEntry (d := d.eraseEntry old) hE hn.1]
-      exact hv.with_overlay E
+  obtain ⟨old, new, decl, post, vs, ho, hn, hne, hname, hd, hk, hv, rfl⟩ := mergeStep_iff.mp hm
+  change MergeStep (overlay d E) (overlay (post.addTerm _) E)
+  rw [← overlay_addTerm]
+  apply MergeStep.collide' (db := overlay d E)
+    ((overlay_entries hE).symm ▸ ho) ((overlay_entries hE).symm ▸ hn)
+    hne hname hd (hk.mono (overlay_contained d E))
+  rw [overlay_eraseEntry hE ho.1,
+    overlay_eraseEntry (d := d.eraseEntry old) hE hn.1]
+  exact hv.with_overlay E
 
 private theorem MergeClosure.with_overlay {d e : Database} (hm : MergeClosure d e)
     {E : Set (Term × Term)} (hE : ∀ p ∈ E, p.1.IsValue d.sig) :
@@ -141,20 +140,19 @@ private theorem MergeClosure.with_overlay {d e : Database} (hm : MergeClosure d 
 
 private theorem MergeStep.value_eqs {d e : Database} (hm : MergeStep d e)
     {p : Term × Term} (hv : p.1.IsValue d.sig) (hp : p ∈ d.eqs) : p ∈ e.eqs := by
-  cases hm with
-  | @collide post old new decl vs ho hn hne hname hd hk hvals =>
-      have keep : p ∈ ((d.eraseEntry old).eraseEntry new).eqs := by
-        apply Or.inl
-        refine ⟨Or.inl ⟨hp, ?_⟩, ?_⟩ <;> intro he
-        · have he := Set.mem_singleton_iff.mp he
-          subst p
-          exact ho.1.atom_not_value hv
-        · have he := Set.mem_singleton_iff.mp he
-          subst p
-          exact hn.1.atom_not_value hv
-      apply Or.inr
-      cases hvals with
-      | eval _ hb => exact (evalMerge_contained hb).eqs keep
+  obtain ⟨old, new, decl, post, vs, ho, hn, hne, hname, hd, hk, hvals, rfl⟩ := mergeStep_iff.mp hm
+  have keep : p ∈ ((d.eraseEntry old).eraseEntry new).eqs := by
+    apply Or.inl
+    refine ⟨Or.inl ⟨hp, ?_⟩, ?_⟩ <;> intro he
+    · have he := Set.mem_singleton_iff.mp he
+      subst p
+      exact ho.1.atom_not_value hv
+    · have he := Set.mem_singleton_iff.mp he
+      subst p
+      exact hn.1.atom_not_value hv
+  apply Or.inr
+  cases hvals with
+  | eval _ hb => exact (evalMerge_contained hb).eqs keep
 
 private theorem MergeClosure.value_eqs {d e : Database} (hm : MergeClosure d e)
     {p : Term × Term} (hv : p.1.IsValue d.sig) (hp : p ∈ d.eqs) : p ∈ e.eqs := by
@@ -192,6 +190,7 @@ private theorem query_of_diag_terms {d e : Database} (hd : d.Diag)
 private theorem runRules_overlay (d : Database) (E : Set (Term × Term))
     (hquery : ∀ q σ, ValidQuerySubst (overlay d E) q σ ↔ ValidQuerySubst d q σ)
     (R : RulesetName) : RunRules R (overlay d E) = overlay (RunRules R d) E := by
+  rw [RunRules.eq_sUnion, RunRules.eq_sUnion]
   apply Database.ext <;> try rfl
   ext p
   constructor

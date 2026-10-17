@@ -53,7 +53,7 @@ theorem merge_self_loop : MergeStep start start := by
     exact Or.inr (Or.inl rfl)
   have hn : newRow ∈ start.entries :=
     ⟨new_valid.shape, Or.inl rfl⟩
-  have hs := MergeStep.collide ho hn (by decide +kernel) rfl
+  have hs := MergeStep.collide' ho hn (by decide +kernel) rfl
     (show start.sig oldRow.name = some decl by simp [start, prepared, base, oldRow])
     CongList.nil hm
   change MergeStep start (restored.putEntry oldRow) at hs
@@ -64,10 +64,9 @@ theorem merge_diverges : MergeDiverges start :=
 
 theorem run_diverges : ProgramDiverges start [.run "R"] := by
   apply ProgramDiverges.head
-  apply CmdDiverges.merge (fun _ => by simp) (fun _ => by simp)
-    (mid := start) ?_ merge_diverges
-  exact (LiveTables.runRules_eq_of_no_rules
-    (by simp [start, prepared, base, Database.empty])).symm
+  apply CmdDiverges.run
+  rw [LiveTables.runRules_eq_of_no_rules (by simp [start, prepared, base, Database.empty])]
+  exact merge_diverges
 
 private def falseQuery : Query := [.eq (.lit (.int 0)) (.lit (.int 1))]
 
@@ -81,7 +80,7 @@ private theorem start_diag : start.Diag := by
 
 private theorem false_query : ¬ QueryHolds start falseQuery := by
   rintro ⟨σ, hσ⟩
-  have hm := hσ.matches_of_mem (show Pattern.eq (.lit (.int 0)) (.lit (.int 1)) ∈
+  have hm := hσ.2 _ (show Pattern.eq (.lit (.int 0)) (.lit (.int 1)) ∈
     falseQuery by simp [falseQuery])
   cases hm with
   | equal he₁ he₂ he =>
@@ -96,9 +95,7 @@ theorem failed_check_stops : Eval start [.check falseQuery, .run "R"] .checkFail
 theorem failed_check_does_not_diverge : ¬ ProgramDiverges start [.check falseQuery, .run "R"] := by
   intro h
   cases h with
-  | head hc =>
-      cases hc with
-      | merge hcheck _ _ _ => exact hcheck _ rfl
+  | head hc => cases hc
   | tail hc _ => exact false_query hc.1
 
 theorem divergent_behavior_exists : ∃ d P, Behaves d P .diverges :=
@@ -138,8 +135,7 @@ private theorem seed_run : RunRules "seed" registered = seeded := by
       obtain rfl := Set.mem_singleton_iff.mp hd
       exact ⟨seed, by simp [registered], rfl, [],
         ValidQuerySubst.nil_iff.mpr rfl, seed_eval⟩
-  unfold RunRules
-  rw [hresults]
+  rw [RunRules.eq_sUnion, hresults]
   apply Database.ext <;> try rfl
   simp [Database.sUnion, registered, base, Database.empty]
 
@@ -161,8 +157,8 @@ theorem divergent_from_empty : ∃ P, ProgramDiverges Database.empty P := by
       · intro row hr
         exact hr.2.elim
     · apply ProgramDiverges.head
-      apply CmdDiverges.merge (d := registered) (c := .run "seed") (mid := seeded)
-        (fun _ => by simp) (fun _ => by simp) seed_run.symm
+      apply CmdDiverges.run
+      rw [seed_run]
       exact ⟨fun _ => seeded, rfl, fun _ => merge_self_loop.setRules {seed}⟩
 
 end Egglog.Tests.Divergence

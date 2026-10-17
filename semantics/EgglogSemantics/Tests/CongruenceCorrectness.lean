@@ -59,6 +59,7 @@ def sourceBuilt : Database := sourceRegistered.addTerm ctorTerm
 
 private theorem no_query_of_empty {d : Database} (hd : d.eqs = ∅) {q : Query}
     (hq : q ≠ []) : ¬ QueryHolds d q := by
+  rw [queryHolds_iff_validQuerySubst]
   rintro ⟨σ, σs, hσs, _⟩
   cases q with
   | nil => exact hq rfl
@@ -95,7 +96,7 @@ private theorem source_check : QueryHolds sourceBuilt constructorQuery := by
       obtain rfl := List.mem_singleton.mp hp
       exact .entry ⟨ctorDecl 0, rfl, Or.inl rfl⟩ rfl (Database.mem_addTerm _ _))
     (by intro p hp; obtain rfl := List.mem_singleton.mp hp; rfl)
-  exact ⟨σ, hσ⟩
+  exact queryHolds_iff_validQuerySubst.mpr ⟨σ, hσ⟩
 
 private theorem source_decl : CmdStep Database.empty (.decl "C" (ctorDecl 0)) sourceDeclared :=
   .of_reach rfl (empty_normal rfl)
@@ -119,8 +120,7 @@ private theorem run_initializer {d e : Database} {r : Rule}
       exact ⟨r, by simp [hrules], rfl, [], by
         simpa only [hquery] using (ValidQuerySubst.nil_iff.mpr rfl : ValidQuerySubst d [] []),
         hfire⟩
-  unfold RunRules
-  rw [hresults]
+  rw [RunRules.eq_sUnion, hresults]
   apply Database.ext
   · exact (evalLocalActions_sig hfire).symm
   · simp [Database.sUnion, hempty]
@@ -273,8 +273,9 @@ private theorem round_fragment : roundProgram.Fragment := by
 private theorem source_round_success : Eval Database.empty roundProgram (.ok sourceRan) := by
   have hfire : evalLocalActions sourceRule createRule.actions [] =
       some (sourceRule.addTerm ctorTerm) := rfl
-  have hcontains : (sourceRule.addTerm ctorTerm).Contained sourceRan :=
-    Database.Contained.mem_sUnion ⟨createRule, by simp [sourceRule], rfl,
+  have hcontains : (sourceRule.addTerm ctorTerm).Contained sourceRan := by
+    rw [sourceRan, RunRules.eq_sUnion]
+    exact Database.Contained.mem_sUnion ⟨createRule, by simp [sourceRule], rfl,
       [], ValidQuerySubst.nil_iff.mpr rfl, hfire⟩
   have hcheck : QueryHolds sourceRan constructorQuery := by
     obtain ⟨σ, hσ, _⟩ := Abstract.validQuerySubst_of_flatReads
@@ -285,7 +286,7 @@ private theorem source_round_success : Eval Database.empty roundProgram (.ok sou
         exact .entry ⟨ctorDecl 0, rfl, Or.inl rfl⟩ rfl
           (hcontains.terms (Database.mem_addTerm _ _)))
       (by intro p hp; obtain rfl := List.mem_singleton.mp hp; rfl)
-    exact ⟨σ, hσ⟩
+    exact queryHolds_iff_validQuerySubst.mpr ⟨σ, hσ⟩
   exact .cons (.ok source_decl)
     (.cons (.ok (.of_reach rfl (empty_normal rfl)))
       (.cons (.ok (.of_reach rfl (constructors_normal source_ctors)))
@@ -347,7 +348,8 @@ private theorem congruence_check : QueryHolds builtFA queryFB := by
   have hab : Cong builtFA a b := Cong.mono (Database.Contained.addTerm _ _) (.direct
     (Set.mem_insert _ _))
   have hread : Cong builtFA fa fb := .congr (Database.toCong hfa) (.cons hab .nil)
-  refine ⟨[], [[]], .cons ⟨?_, Matches.atom rfl (hread.symm.trans hread)⟩ .nil, .single []⟩
+  refine queryHolds_iff_validQuerySubst.mpr
+    ⟨[], [[]], .cons ⟨?_, Matches.atom rfl (hread.symm.trans hread)⟩ .nil, .single []⟩
   exact ⟨List.Perm.refl [], by simp⟩
 
 private theorem congruence_source : Eval Database.empty congruenceProgram (.ok builtFA) := by

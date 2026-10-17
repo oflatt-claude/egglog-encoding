@@ -42,6 +42,7 @@ theorem queryHolds_iff {src d : Database} (h : Abstract.Rebuilt d)
     (n : Nat) : QueryHolds src q ↔ QueryHolds d (encodeQuery q n).1 := by
   have he := hsound.edgesSound hd
   obtain ⟨hex, hun⟩ := hr.normalize h hstore he hw.completion
+  simp only [queryHolds_iff_validQuerySubst]
   constructor
   · rintro ⟨σ, hσ⟩
     obtain ⟨ρ, hρ, _⟩ := Abstract.encodedQuery_match_of_source h hd hstore hdecl he
@@ -51,6 +52,8 @@ theorem queryHolds_iff {src d : Database} (h : Abstract.Rebuilt d)
     obtain ⟨σ, hσ, _, _⟩ := sourceMatch_of_encodedQuery
       (completion_termsBuild hw hs hc) hw.completion (hsound.viewsSound hd)
       hd hstore htables hof hg hk hρ
-    exact (SourceMeaning.queryHolds_completion_iff hw hs hc hof).mp ⟨σ, hσ⟩
+    apply queryHolds_iff_validQuerySubst.mp
+    exact (SourceMeaning.queryHolds_completion_iff hw hs hc hof).mp
+      (queryHolds_iff_validQuerySubst.mpr ⟨σ, hσ⟩)
 
 end Egglog.Congruence.Live

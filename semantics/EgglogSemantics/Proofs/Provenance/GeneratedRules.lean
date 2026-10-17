@@ -87,7 +87,7 @@ theorem rule_firing_sound {P : Program} (hp : P.Fragment) {src d post : Database
       (termsBuild_of_programStep hp.ctorsOnly hsource) hcs.sig
     have hfixed : RunRules s.ruleset src.completion = src.completion := by
       apply SourceMeaning.completion_closed_of_saturated hcs.wf hstore hcs.sig
-        hsource.env (fun r hr _ => ?_)
+        (fun r hr _ => ?_)
         (hclosed s.ruleset)
       have hmem : Cmd.rule r ∈ P := by
         simpa [Database.empty] using (hsource.mem_rules_iff r).mp hr
@@ -120,7 +120,7 @@ private theorem ruleFacts_eval {d : Database} (hw : d.WF) (henv : d.env = [])
     obtain ⟨out, hout, hfs⟩ := actionsFacts_sound (db := { d with env := σ }) hf
     let post : Database := { out with env := d.env, rules := d.rules }
     have hlocal : evalLocalActions d r.actions σ = some post := by
-      simp only [evalLocalActions, henv, List.append_nil, hout, Option.map_some]
+      simp only [evalLocalActions, henv, hout, Option.map_some]
       simp only [post, henv]
     refine ⟨τ, post, hτ, ?_, hlocal, actionsFacts_unionFree hf, ?_⟩
     · rw [evalLocalActions_agree _ hag]; exact hlocal

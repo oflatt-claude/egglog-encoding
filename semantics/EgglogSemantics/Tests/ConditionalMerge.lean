@@ -1,4 +1,5 @@
 import EgglogSemantics.Provenance.Encode
+import EgglogSemantics.Spec.Sequential
 
 namespace Egglog.Tests.ConditionalMerge
 

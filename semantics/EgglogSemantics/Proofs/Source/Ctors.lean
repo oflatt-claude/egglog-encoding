@@ -193,7 +193,7 @@ theorem evalLocalActions_ctorsIn {db db' : Database} {P : Program} (hw : db.WF)
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) (hv : evalLocalActions db as σ = some db') :
     db'.CtorsIn P := by
   obtain ⟨d, hd, rfl⟩ := evalLocalActions_eq_some hv
-  have hlf : ({ db with env := σ ++ db.env } : Database).CtorsIn P := by
+  have hlf : ({ db with env := σ } : Database).CtorsIn P := by
     intro f as' ht; exact h f as' (Database.terms_setEnv ▸ ht)
   intro f as' ht
   rw [Database.terms_setEnvRules] at ht
@@ -217,13 +217,13 @@ theorem Database.CtorsInState.runRules {R : RulesetName} {db : Database} {P : Pr
     (hw : db.WF) (h : db.CtorsInState P) : (RunRules R db).CtorsInState P := by
   refine ⟨?_, ?_⟩
   · intro f as ht
-    rw [RunRules, Database.sUnion_terms] at ht
+    rw [RunRules.eq_sUnion, Database.sUnion_terms] at ht
     rcases ht with ht' | ht'
     · exact h.terms f as ht'
     · obtain ⟨d, hd, ht''⟩ := Set.mem_iUnion₂.mp ht'
       obtain ⟨r, hr, -, σ, hq, hfire⟩ := hd
       exact evalLocalActions_ctorsIn hw h.terms (h.heads r hr) hq.mem_terms hfire f as ht''
-  · rw [RunRules, Database.sUnion_rules]; exact h.heads
+  · rw [RunRules.eq_sUnion, Database.sUnion_rules]; exact h.heads
 
 /-- Source commands preserve the constructor census in both terms and rule heads. -/
 theorem cmdStep_ctorsIn {db db' : Database} {P : Program} (hc : db.CtorState)

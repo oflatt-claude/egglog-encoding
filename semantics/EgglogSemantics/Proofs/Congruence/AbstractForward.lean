@@ -258,6 +258,7 @@ theorem Rebuilt.queryHolds_iff {d src : Database} (h : Rebuilt d) (hd : d.Diag)
     {q : Query} (hof : ∀ p ∈ q, p.OrderingFree) (hg : ∀ p ∈ q, p.Grounded)
     (hk : Query.VarsKeyed q) (hn : ∀ v ∈ Query.vars q, ¬ "@".isPrefixOf v = true)
     (n : Nat) : QueryHolds src q ↔ QueryHolds d (encodeQuery q n).1 := by
+  simp only [queryHolds_iff_validQuerySubst]
   constructor
   · rintro ⟨σ, hσ⟩
     obtain ⟨ρ, _, hdom, hr, hv⟩ := exists_queryRead h hd hstore he hw hc

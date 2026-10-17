@@ -26,8 +26,8 @@ theorem mem_terms_of_validQuerySubst_entry {d : Database} (hd : d.Diag)
 theorem evalLocalActions_entry {d d' : Database} {σ : Env} {g : FnName}
     {args out : List Expr}
     (h : evalLocalActions d [.expr (.app g (args ++ out))] σ = some d') :
-    ∃ es vs, Expr.evalList d.sig args (σ ++ d.env) = some es ∧
-      Expr.evalList d.sig out (σ ++ d.env) = some vs ∧
+    ∃ es vs, Expr.evalList d.sig args (σ) = some es ∧
+      Expr.evalList d.sig out (σ) = some vs ∧
       d'.terms ⊆ (d.addTerm (.app g (es ++ vs))).terms := by
   obtain ⟨mid, hmid, rfl⟩ := Option.map_eq_some_iff.mp h
   simp only [evalActions, evalAction] at hmid
@@ -64,9 +64,9 @@ theorem pathCompressRule_soundTerms {src : Database} {d d' : Database} {σ : Env
   obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := evalLocalActions_entry (g := ufName)
     (args := [.var "@a"]) (out := [.var "@c"]) hf
   obtain ⟨a', hla', rfl⟩ := Expr.evalList_singleton hesh
-  obtain rfl : a = a' := Option.some.inj ((Expr.eval_append_env _ hla).symm.trans hla')
+  obtain rfl : a = a' := Option.some.inj (hla.symm.trans hla')
   obtain ⟨c', hlc', rfl⟩ := Expr.evalList_singleton hvsh
-  obtain rfl : c = c' := Option.some.inj ((Expr.eval_append_env _ hlc).symm.trans hlc')
+  obtain rfl : c = c' := Option.some.inj (hlc.symm.trans hlc')
   exact (h.addUF hsc ham hcm (hab.trans hbc)).mono_terms hterms
 
 /-- Propagating an output through UF preserves the original constructor witness. -/
@@ -93,9 +93,9 @@ theorem eclassRule_soundTerms {src : Database} {d d' : Database} {σ : Env} {f :
   have hxm : x ∈ d.terms := Database.mem_terms_of_arg hsc hmu (by simp)
   obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := evalLocalActions_entry (g := viewName f)
     (args := cs) (out := [.var "@x"]) hf
-  obtain rfl : esh = ts := Option.some.inj (hesh.symm.trans (Expr.evalList_append_env _ hats))
+  obtain rfl : esh = ts := Option.some.inj (hesh.symm.trans hats)
   obtain ⟨x', hlx', rfl⟩ := Expr.evalList_singleton hvsh
-  obtain rfl : x = x' := Option.some.inj ((Expr.eval_append_env _ hlx).symm.trans hlx')
+  obtain rfl : x = x' := Option.some.inj (hlx.symm.trans hlx')
   exact (h.addView hsc hcol hxm ⟨as, ha, hal, hae.trans hex⟩).mono_terms hterms
 
 /-- Re-keying a child changes the represented key, while retaining the source witness
@@ -126,11 +126,10 @@ theorem childRule_soundTerms {src : Database} {d d' : Database} {σ : Env} {f : 
   have hxm : x ∈ d.terms := Database.mem_terms_of_arg hsc hmu (by simp)
   obtain ⟨esh, vsh, hesh, hvsh, hterms⟩ := evalLocalActions_entry (g := viewName f)
     (args := cs.set i (.var "@x")) (out := [.var "@e"]) hf
-  have hset := Expr.evalList_set (Expr.evalList_append_env (τ := d.env) _ hats) i
-    (Expr.eval_append_env (τ := d.env) _ hlx)
+  have hset := Expr.evalList_set hats i hlx
   obtain rfl : esh = ts.set i x := Option.some.inj (hesh.symm.trans hset)
   obtain ⟨e', hle', rfl⟩ := Expr.evalList_singleton hvsh
-  obtain rfl : e = e' := Option.some.inj ((Expr.eval_append_env _ hle).symm.trans hle')
+  obtain rfl : e = e' := Option.some.inj (hle.symm.trans hle')
   have hcol' : ∀ z ∈ ts.set i x, z ∈ d.terms := by
     intro z hz
     rcases mem_or_eq_of_mem_set hz with hz | rfl

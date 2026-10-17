@@ -19,11 +19,10 @@ theorem Database.terms_empty_of_eqs_empty {d : Database} (h : d.eqs = ∅) :
 /-- Merges require existing rows, so they cannot create the first data. -/
 theorem MergeStep.not_of_empty_eqs {d e : Database} (he : d.eqs = ∅)
     (h : MergeStep d e) : False := by
-  cases h with
-  | collide ho _ _ _ _ _ _ =>
-      have hp := ho.2
-      rw [he] at hp
-      exact hp
+  obtain ⟨_, _, _, _, _, ho, _, _, _, _, _, _, rfl⟩ := mergeStep_iff.mp h
+  have hp := ho.2
+  rw [he] at hp
+  exact hp
 
 theorem MergeClosure.eq_of_empty_eqs {d e : Database} (he : d.eqs = ∅)
     (h : MergeClosure d e) : e = d := by

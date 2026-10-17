@@ -7,7 +7,7 @@ import EgglogSemantics.Spec.Eval
 
 Which variables a pattern leaves for the matcher to assign, how the substitutions of
 several patterns are joined, when one is well formed against a database, and the matching
-relation itself. What a match *does* is `Spec/Step.lean`'s `RuleResults`.
+relation itself. What a match *does* is `Spec/Step.lean`'s `RunRules`.
 -/
 
 namespace Egglog
@@ -87,8 +87,8 @@ def ValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
 def ValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (ValidSubst db) q σs ∧ Env.UnionAll σs σ
 
-/-- The whole query has a compatible substitution. Check variables are existential and
-local to the query; evaluating a check exports no bindings and builds no terms. -/
-def QueryHolds (db : Database) (q : Query) : Prop := ∃ σ, ValidQuerySubst db q σ
+/-- Some substitution satisfies the query. Check variables are existential and local to
+the query; evaluating a check exports no bindings and builds no terms. -/
+def QueryHolds (db : Database) (q : Query) : Prop := ∃ σ, QueryMatches db q σ
 
 end Egglog

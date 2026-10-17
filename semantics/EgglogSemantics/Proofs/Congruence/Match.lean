@@ -524,7 +524,7 @@ theorem exists_validQuerySubst_at_ids {src d : Database} (hb : src.TermsBuild) (
     (hread : ∀ p ∈ q, PatternRead d ρt p) :
     ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
       ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i →
-        Env.lookup v (τ ++ src.env) = some i := by
+        Env.lookup v τ = some i := by
   have hbound : ∀ v ∈ Query.vars q, ∃ i, Env.lookup v ρt = some i ∧ i ∈ src.terms := by
     intro v hv
     obtain ⟨p, hp, ha⟩ := hk v hv
@@ -537,7 +537,7 @@ theorem exists_validQuerySubst_at_ids {src d : Database} (hb : src.TermsBuild) (
     (g := idReading ρt) hgt
     (fun v hv i hi => idReading_eq hi ▸ Database.toStored (hgt v hv).1) hgr hread
   exact ⟨τ, hv, hdom, fun v hvq i hi => by
-    rw [Env.lookup_append_of_some (hτ v hvq), idReading_eq hi]⟩
+    rw [hτ v hvq, idReading_eq hi]⟩
 
 /-- A match of the flattened query supplies an existing source match at the same values.
 This is the query obligation used when transporting a compiled rule head to the source. -/
@@ -548,7 +548,7 @@ theorem sourceMatch_of_encodedQuery {src tgt : Database} (hb : src.TermsBuild) (
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
       ∀ v ∈ Query.vars q, ∀ i, Env.lookup v σ = some i →
-        Env.lookup v (τ ++ src.env) = some i :=
+        Env.lookup v (τ) = some i :=
   exists_validQuerySubst_at_ids hb hw hs (fun p hp => (hg p hp).groundedAt) hk
     (patternReads_of_encodeQuery hd hstore hdecl hof hk h)
 

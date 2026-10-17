@@ -12,6 +12,7 @@ import Mathlib.Util.AssertNoSorry
 
 -- The mathematical proof closure used to build the paper.
 assert_no_sorry Egglog.Congruence.preservesBehaviors
+assert_no_sorry Egglog.Congruence.correctness
 assert_no_sorry Egglog.Provenance.check_sound
 assert_no_sorry Egglog.Provenance.encodedMerge_equal_data
 assert_no_sorry Egglog.Provenance.encodedMerge_data_distinct
@@ -20,8 +21,10 @@ assert_no_sorry Egglog.queryHolds_iff_queryMatches
 assert_no_sorry Egglog.mem_ruleResults_iff_queryMatches
 assert_no_sorry Egglog.Matches.expr_iff_cong
 assert_no_sorry Egglog.Matches.eq_iff_cong
-assert_no_sorry Egglog.actionsEval_iff_evalLocalActions
-assert_no_sorry Egglog.mem_ruleResults_iff_actionsEval
+assert_no_sorry Egglog.evalActions_eq_writes
+assert_no_sorry Egglog.RunRules.eq_sUnion
+assert_no_sorry Egglog.mergeStep_iff
+assert_no_sorry Egglog.SaturateReach.induction
 assert_no_sorry Egglog.Eval.empty_env
 assert_no_sorry Egglog.Term.blt_admissible
 

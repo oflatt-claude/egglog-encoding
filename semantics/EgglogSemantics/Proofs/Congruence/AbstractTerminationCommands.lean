@@ -44,9 +44,9 @@ theorem Boundary.run_exists {P pre rest : Program} (hp : P.Fragment) {R : Rulese
   have hsig := Live.prefix_sig htpre
   have honly := (Live.rulesEncoded_of_prefix hpre htpre).rebuild_only hp hpre hsub
   obtain ⟨mid, hm⟩ := hrt.state.runStep_exists hrt.generated hrt.storeOk hrt.rulesSafe hrt.noUnions R
-  obtain ⟨e, he⟩ := Live.rebuild_exists hp (hrt.runStep hm) hm.2 (hm.sig.trans hsig)
+  obtain ⟨e, he⟩ := Live.rebuild_exists hp (hrt.runStep hm) hm.normal (hm.sig.trans hsig)
     (fun r hr hR => honly r (hm.1.envRules.2 ▸ hr) hR)
-  exact ⟨e, .cons ⟨_, rfl, hm⟩ (.cons (cmdStep_saturate_iff.mpr he) .nil)⟩
+  exact ⟨e, .cons hm (.cons (cmdStep_saturate_iff.mpr he) .nil)⟩
 
 /-- Ordinary source commands have finite compiled blocks at corresponding prefixes. -/
 theorem Boundary.nonSaturate_exists {P pre rest : Program} (hp : P.Fragment) {c : Cmd}
@@ -60,7 +60,7 @@ theorem Boundary.nonSaturate_exists {P pre rest : Program} (hp : P.Fragment) {c 
   | run R => exact h.run_exists hp hP hpre htpre hsrc
   | decl f dc => exact ⟨d, .nil⟩
   | rule r =>
-      have hd := htpre.mergeNormal (empty_normal rfl)
+      have hd := Congruence.prefix_mergeNormal htpre
       exact ⟨_, .cons (CmdStep.of_reach rfl (hd.setRules _)) .nil⟩
   | check q =>
       exact ⟨d, .cons ⟨(checkAgreement hp pre q rest src d hP hpre htpre).mp hsrc.1, rfl⟩

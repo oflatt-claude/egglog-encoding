@@ -58,7 +58,7 @@ theorem ruleFacts_supported {P : Program} {C : Context} {db : Database}
         fun b hb => hvalue _ (hw.envInTerms b hb)⟩
     have hmodel : ∀ R, RunRules R db.completion = db.completion := by
       intro R
-      apply SourceMeaning.completion_closed_of_saturated hw hstore hcs.sig hs.env
+      apply SourceMeaning.completion_closed_of_saturated hw hstore hcs.sig
         (fun r hr _ => sourceOk_rule hok ?_) (hclosed R)
       simpa [Database.empty] using (hs.mem_rules_iff r).mp hr
     have hh : ∀ c ∈ premises, c.Holds db.completion :=
@@ -79,7 +79,7 @@ theorem ruleFacts_supported {P : Program} {C : Context} {db : Database}
     let post : Database := { d with env := db.env, rules := db.rules }
     have hlocal : evalLocalActions db.completion r.actions σ = some post := by
       have henv : db.completion.env = [] := hs.env
-      simp only [evalLocalActions, henv, List.append_nil, hd, Option.map_some]
+      simp only [evalLocalActions, henv, hd, Option.map_some]
       simp only [post, show db.env = [] from hs.env]
       rfl
     have hresult : post ∈ RuleResults db.completion r :=

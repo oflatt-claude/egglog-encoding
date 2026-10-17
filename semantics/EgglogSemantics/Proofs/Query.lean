@@ -1,4 +1,4 @@
-import EgglogSemantics.Spec.Step
+import EgglogSemantics.Spec.Sequential
 import EgglogSemantics.Proofs.Match
 
 /-! Single-substitution queries agree with the join representation. -/
@@ -170,15 +170,18 @@ theorem exists_queryMatches {db : Database} {q : Query} {σ : Env}
 
 end ValidQuerySubst
 
-/-- Checks use the same matches under either substitution representation. -/
 theorem queryHolds_iff_queryMatches {db : Database} {q : Query} :
-    QueryHolds db q ↔ ∃ σ, QueryMatches db q σ := by
+    QueryHolds db q ↔ ∃ σ, QueryMatches db q σ := Iff.rfl
+
+/-- Checks hold under the join representation of query matches. -/
+theorem queryHolds_iff_validQuerySubst {db : Database} {q : Query} :
+    QueryHolds db q ↔ ∃ σ, ValidQuerySubst db q σ := by
   constructor
   · rintro ⟨σ, hσ⟩
-    obtain ⟨τ, hτ, _⟩ := hσ.exists_queryMatches
+    obtain ⟨τ, hτ, _⟩ := hσ.exists_validQuerySubst
     exact ⟨τ, hτ⟩
   · rintro ⟨σ, hσ⟩
-    obtain ⟨τ, hτ, _⟩ := hσ.exists_validQuerySubst
+    obtain ⟨τ, hτ, _⟩ := hσ.exists_queryMatches
     exact ⟨τ, hτ⟩
 
 /-- Rule firings produce exactly the same databases under either representation. -/

@@ -26,7 +26,7 @@ theorem rounds_wellFounded_of_finite_bound {d : Database} (h : Runtime d)
     intro e he
     induction he with
     | refl => exact hn
-    | tail _ hs _ => exact hs.2
+    | tail _ hs _ => exact hs.normal
   apply (measure (fun e => states.ncard - (below e).ncard)).wf.mono
   rintro e' e ⟨he, hs, hchange⟩
   have he' : e' ∈ states := he.tail hs

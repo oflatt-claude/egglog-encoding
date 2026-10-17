@@ -1,4 +1,5 @@
 import EgglogSemantics.Spec.Eval
+import EgglogSemantics.Spec.Sequential
 import EgglogSemantics.Spec.Scope
 import EgglogSemantics.Proofs.Congruence
 
@@ -245,11 +246,10 @@ theorem Database.WF.setEnv {db : Database} (hw : db.WF) {σ : Env}
   envInTerms b hb := by simpa using hσ b hb
   litsIsolated := hw.litsIsolated
 
-/-- `WF.setEnv` at the one environment the semantics imposes: the globals extended by a
-rule-local substitution. -/
+/-- `WF.setEnv` at the environment a rule firing installs: its query substitution. -/
 theorem Database.WF.appendEnv {db : Database} (hw : db.WF) {σ : Env}
-    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) : Database.WF { db with env := σ ++ db.env } :=
-  hw.setEnv fun b hb => (List.mem_append.mp hb).elim (hσ b) (hw.envInTerms b)
+    (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) : Database.WF { db with env := σ } :=
+  hw.setEnv hσ
 
 /-- Each argument of an application the database holds is a term the database holds:
 `WF.subtermClosed` at depth one. -/
@@ -742,8 +742,7 @@ end
 mutual
 
 /-- **Extending the environment on the right keeps a value.** `Env.lookup` is left-biased, so
-a variable the prefix already binds reads the same either way — which is what relates a rule
-head's reading at `σ ++ db.env` to the match's own at `σ`. -/
+a variable the prefix already binds reads the same either way. -/
 theorem Expr.eval_append_env {sig : Signature} {σ τ : Env} :
     ∀ (e : Expr) {t : Term}, e.eval sig σ = some t → e.eval sig (σ ++ τ) = some t
   | .lit _, _, h => h
@@ -1263,17 +1262,17 @@ theorem evalActions_envAgree {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (as
 /-- Local actions cannot tell agreeing substitutions apart. -/
 theorem evalLocalActions_agree {db : Database} (as : List Action) {σ₁ σ₂ : Env}
     (h : Env.Agree σ₁ σ₂) : evalLocalActions db as σ₁ = evalLocalActions db as σ₂ := by
-  have hE : Database.EnvAgree { db with env := σ₁ ++ db.env } { db with env := σ₂ ++ db.env } :=
-    ⟨rfl, rfl, rfl, Env.Agree.append_right db.env h⟩
+  have hE : Database.EnvAgree { db with env := σ₁ } { db with env := σ₂ } :=
+    ⟨rfl, rfl, rfl, h⟩
   have hrel := evalActions_envAgree hE as
   simp only [evalLocalActions]
-  cases h₁ : evalActions { db with env := σ₁ ++ db.env } as with
+  cases h₁ : evalActions { db with env := σ₁ } as with
   | none =>
-    cases h₂ : evalActions { db with env := σ₂ ++ db.env } as with
+    cases h₂ : evalActions { db with env := σ₂ } as with
     | none => rfl
     | some e₂ => rw [h₁, h₂] at hrel; exact absurd hrel (by intro hc; cases hc)
   | some e₁ =>
-    cases h₂ : evalActions { db with env := σ₂ ++ db.env } as with
+    cases h₂ : evalActions { db with env := σ₂ } as with
     | none => rw [h₁, h₂] at hrel; exact absurd hrel (by intro hc; cases hc)
     | some e₂ =>
       rw [h₁, h₂] at hrel
@@ -1285,9 +1284,9 @@ theorem evalLocalActions_agree {db : Database} (as : List Action) {σ₁ σ₂ :
 environment and rules back. -/
 theorem evalLocalActions_eq_some {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') :
-    ∃ d, evalActions { db with env := σ ++ db.env } as = some d ∧
+    ∃ d, evalActions { db with env := σ } as = some d ∧
       db' = { d with env := db.env, rules := db.rules } := by
-  cases hv : evalActions { db with env := σ ++ db.env } as with
+  cases hv : evalActions { db with env := σ } as with
   | none => simp [evalLocalActions, hv] at h
   | some d =>
     simp only [evalLocalActions, hv, Option.map_some, Option.some.injEq] at h
@@ -1304,12 +1303,12 @@ theorem evalLocalActions_rules {db db' : Database} {as : List Action} {σ : Env}
 theorem evalLocalActions_sig {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db'.sig = db.sig := by
   obtain ⟨_, hv, rfl⟩ := evalLocalActions_eq_some h
-  exact (evalActions_sig hv : _ = ({ db with env := σ ++ db.env } : Database).sig)
+  exact (evalActions_sig hv : _ = ({ db with env := σ } : Database).sig)
 
 theorem evalLocalActions_entries_subset {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db.entries ⊆ db'.entries := by
   obtain ⟨post, hp, rfl⟩ := evalLocalActions_eq_some h
-  exact evalActions_entries_subset (db := { db with env := σ ++ db.env }) (db' := post) hp
+  exact evalActions_entries_subset (db := { db with env := σ }) (db' := post) hp
 
 theorem evalLocalActions_contained {db db' : Database} {as : List Action} {σ : Env}
     (h : evalLocalActions db as σ = some db') : db.Contained db' := by

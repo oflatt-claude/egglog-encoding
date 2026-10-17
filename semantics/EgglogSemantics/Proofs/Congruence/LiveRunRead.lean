@@ -21,9 +21,10 @@ theorem Covers.runReach {d e : Database} (h : Runtime d) {R : RulesetName}
 
 theorem saturated_endpoint {d e : Database} (h : Runtime d) {R : RulesetName}
     (hr : SaturateReach R d e) : RunSaturated R e := by
-  induction hr with
+  induction hr using SaturateReach.induction with
   | @done a b hs hm =>
-      exact ⟨hs.2, b, hs.self_of_sameMeaning h.noUnions h.storeOk h.rulesSafe h.mergesWidthOk hm,
+      exact ⟨hs.normal, b,
+        hs.self_of_sameMeaning h.noUnions h.storeOk h.rulesSafe h.mergesWidthOk hm,
         Database.SameMeaning.refl b⟩
   | step hs _ _ ih => exact ih (h.runStep hs)
 
@@ -42,6 +43,7 @@ theorem Covers.firing {d post : Database} (h : Runtime d) {R : RulesetName}
 theorem Reads.round {d src : Database} {R : RulesetName} (h : Reads d src)
     (hf : ∀ r ∈ src.rules, r.ruleset = R →
       ∀ post ∈ RuleResults src r, Reads d post) : Reads d (RunRules R src) := by
+  rw [RunRules.eq_sUnion]
   apply h.sUnion
   rintro post ⟨r, hr, hR, hp⟩
   exact hf r hr hR post hp

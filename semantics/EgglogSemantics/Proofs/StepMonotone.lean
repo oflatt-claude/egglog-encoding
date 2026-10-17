@@ -19,16 +19,15 @@ theorem Database.ValueContained.trans {d e f : Database}
 theorem MergeStep.valueContained {d e : Database} (h : MergeStep d e) :
     d.ValueContained e := by
   refine ⟨h.sig.symm, ?_⟩
-  cases h with
-  | @collide mid old new decl vs hold hnew _ _ _ _ hv =>
-    intro p hp ha _
-    have keep (row : Entry) (hr : row.Shape d.sig) : p ≠ (row.atom, row.atom) := by
-      intro heq
-      exact hr.atom_not_value (by simpa only [heq] using ha)
-    have hp' : p ∈ ((d.eraseEntry old).eraseEntry new).eqs := by
-      rw [Database.eraseEntry_eqs, Database.eraseEntry_eqs]
-      exact Or.inl ⟨Or.inl ⟨hp, keep old hold.1⟩, keep new hnew.1⟩
-    exact (Database.Contained.putEntry _ mid).eqs (hv.contained.eqs hp')
+  obtain ⟨old, new, decl, mid, vs, hold, hnew, _, _, _, _, hv, rfl⟩ := mergeStep_iff.mp h
+  intro p hp ha _
+  have keep (row : Entry) (hr : row.Shape d.sig) : p ≠ (row.atom, row.atom) := by
+    intro heq
+    exact hr.atom_not_value (by simpa only [heq] using ha)
+  have hp' : p ∈ ((d.eraseEntry old).eraseEntry new).eqs := by
+    rw [Database.eraseEntry_eqs, Database.eraseEntry_eqs]
+    exact Or.inl ⟨Or.inl ⟨hp, keep old hold.1⟩, keep new hnew.1⟩
+  exact (Database.Contained.putEntry _ mid).eqs (hv.contained.eqs hp')
 
 theorem MergeClosure.valueContained {d e : Database} (h : MergeClosure d e) :
     d.ValueContained e := by
