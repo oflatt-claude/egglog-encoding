@@ -51,3 +51,29 @@ results. The generated rules support term encoding and proof testing.
 Executable examples cover [mixed arguments](tests/injectivity/injectivity-basic.egg),
 [recursive propagation](tests/injectivity/injectivity-recursive.egg), and
 [mutually recursive datatypes](tests/injectivity/injectivity-datatypes.egg).
+
+`(known-disequal? left right)` queries known disequality on demand. Both operands
+must have the same equality sort; the predicate returns `Unit` when it finds a
+finite witness and is undefined otherwise. For example:
+
+```lisp
+(datatype Term (Num i64 :injective))
+(Num 1) (Num 2)
+(check (known-disequal? (Num 1) (Num 2)))
+```
+
+For two existing applications of the same marked constructor, any unequal
+corresponding arguments establish unequal results. Primitive arguments use native
+`!=`; equality-sort arguments use asserted `(disequal ...)` facts or recursive
+witnesses. For a marked unary constructor with an equality-sort argument, known
+unequal results also establish unequal arguments. Multiple-argument constructors
+have no reverse rule.
+
+Queries read the current graph without creating constructor applications or
+storing derived disequality pairs. They need no saturation; equality propagation
+still requires scheduling `injectivity`. Unknown equality supplies no inequality
+witness. Cycles terminate, although a query can visit many value pairs. Use
+`:naive` for rules whose bodies call this predicate, because its reads extend
+beyond the rule's explicit table atoms. The new query currently supports ordinary
+execution only; term encoding and proof testing reject it. See the executable
+[disequality query example](tests/injectivity/injectivity-disequality.egg).

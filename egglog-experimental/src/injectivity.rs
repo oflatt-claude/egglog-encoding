@@ -5,11 +5,14 @@ use std::{collections::HashSet, sync::Arc};
 use egglog::{
     CommandMacro, EGraph, Error, TypeError, TypeInfo,
     ast::{
-        Action, Actions, Command, Expr, Fact, ParseError, Rule, RuleEvalMode, Span, Subdatatypes,
+        Action, Actions, Command, Expr, Fact, Literal, ParseError, Rule, RuleEvalMode, Schema,
+        Span, Subdatatypes,
     },
     span,
     util::{FreshGen, SymbolGen},
 };
+
+pub(crate) const MARKED_CONSTRUCTORS: &str = "@injectivity-constructors";
 
 pub(crate) fn add_injectivity_support(egraph: &mut EGraph) {
     // Install once, outside user push/pop scopes, even if no constructor is marked.
@@ -53,6 +56,7 @@ impl CommandMacro for LowerInjectivity {
         }
 
         let mut rules = Vec::new();
+        let mut marked = Vec::new();
         match &mut command {
             Command::Constructor {
                 span,
@@ -70,6 +74,7 @@ impl CommandMacro for LowerInjectivity {
                     &eq_sorts,
                     &containers,
                 )?);
+                marked.push((span.clone(), name.clone()));
                 *injective = false;
             }
             Command::Datatype { variants, .. } => {
@@ -83,6 +88,7 @@ impl CommandMacro for LowerInjectivity {
                         &eq_sorts,
                         &containers,
                     )?);
+                    marked.push((variant.span.clone(), variant.name.clone()));
                     variant.injective = false;
                 }
             }
@@ -99,6 +105,7 @@ impl CommandMacro for LowerInjectivity {
                                 &eq_sorts,
                                 &containers,
                             )?);
+                            marked.push((variant.span.clone(), variant.name.clone()));
                             variant.injective = false;
                         }
                     }
@@ -108,7 +115,34 @@ impl CommandMacro for LowerInjectivity {
         }
         // Validate every marked signature before installing the declaration.
         let mut commands = vec![command];
+        // Declare lazily so term/proof encoding instruments the table together
+        // with its first write rather than seeing an unencoded startup table.
+        if !marked.is_empty() && types.get_func_type(MARKED_CONSTRUCTORS).is_none() {
+            commands.push(Command::Function {
+                span: span!(),
+                name: MARKED_CONSTRUCTORS.into(),
+                schema: Schema::new(vec!["String".into()], "Unit".into()),
+                merge: None,
+                hidden: true,
+                let_binding: false,
+                internal_view: None,
+                unextractable: true,
+                identity_vals: None,
+                cost: None,
+                term_node: false,
+            });
+        }
         commands.extend(rules);
+        // Database metadata follows clone/push/pop and is written only after
+        // the declaration and its generated rules have installed successfully.
+        commands.extend(marked.into_iter().map(|(span, name)| {
+            Command::Action(Action::Set(
+                span.clone(),
+                MARKED_CONSTRUCTORS.into(),
+                vec![Expr::Lit(span.clone(), Literal::String(name))],
+                Expr::Lit(span, Literal::Unit),
+            ))
+        }));
         Ok(commands)
     }
 }

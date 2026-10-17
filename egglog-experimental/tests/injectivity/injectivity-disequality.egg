@@ -1,0 +1,19 @@
+; Read primitive and explicit child witnesses without storing derived pair facts.
+; This query supports ordinary execution, without term/proof encoding.
+(datatype Term
+  (A) (B) (C) (D)
+  (Num i64 :injective)
+  (Pair Term Term :injective)
+  (Wrap Term :injective))
+(Num 1) (Num 2)
+(check (known-disequal? (Num 1) (Num 2)))
+
+(Pair (A) (C)) (Pair (B) (C))
+(fail (check (known-disequal? (Pair (A) (C)) (Pair (B) (C)))))
+(disequal (A) (B))
+(check (known-disequal? (Pair (A) (C)) (Pair (B) (C))))
+
+; Only unary constructors allow reverse disequality reasoning.
+(disequal (Wrap (C)) (Wrap (D)))
+(check (known-disequal? (C) (D)))
+(fail (check (known-disequal? (A) (C))))

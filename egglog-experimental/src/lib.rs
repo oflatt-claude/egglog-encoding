@@ -39,6 +39,13 @@
 //! arguments are unioned; unequal primitive arguments panic. Container arguments
 //! are rejected. These rules also support term encoding and proof testing.
 //!
+//! `(known-disequal? left right)` reads known disequality without storing derived
+//! pairs. For marked constructors, it follows explicit equality-sort argument
+//! disequalities and native primitive differences forward at any arity, and
+//! result disequalities backward at unary constructors. Both operands must have
+//! the same equality sort. Use `:naive` in rules with this read predicate. The
+//! query currently supports ordinary execution only, without term/proof encoding.
+//!
 //! ## Generic containers and callbacks
 //!
 //! `(sort Name (Maybe T))` declares an optional `T`. The language primitives
