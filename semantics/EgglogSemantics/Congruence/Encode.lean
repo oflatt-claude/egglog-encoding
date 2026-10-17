@@ -60,7 +60,7 @@ def mergeBody : List Action :=
 /-- The sole output column of both generated function tables. -/
 def mergeResult : List Expr := [.min (.var "old") (.var "new")]
 
-/-- A generated function with one id column. All output columns determine change. -/
+/-- A generated function with one id column. -/
 def tableDecl (arity : Nat) : FnDecl :=
   { arity, outArity := 1, merge := some (.merge ["old"] ["new"] mergeBody mergeResult) }
 
@@ -74,6 +74,7 @@ def encodeQueryExpr : Expr → Nat → Expr × Query × Nat
   | .lit l, n => (.lit l, [], n)
   | .var v, n => (.var v, [], n)
   | .min a b, n => (.min a b, [], n)
+  | .ite lhs rhs yes no, n => (.ite lhs rhs yes no, [], n)
   | .app f args, n =>
       match encodeQueryArgs args n with
       | (es, ps, next) =>
@@ -116,6 +117,7 @@ self-parent is absorbed by the existing parent when the value was already linked
 def encodeBuild : Expr → List Action
   | e@(.lit _) | e@(.var _) => [.expr (.app ufName [e, e])]
   | .min a b => encodeBuild a ++ encodeBuild b
+  | .ite _ _ _ _ => []
   | .app f args =>
       encodeBuildArgs args ++
         [.expr (.app (viewName f) (args ++ [.app f args])),
@@ -147,6 +149,8 @@ def leaderExpr : Expr → Expr
   | .var v => .var (leaderVar v)
   | .app f args => .app f (leaderArgs args)
   | .min a b => .min (leaderExpr a) (leaderExpr b)
+  | .ite lhs rhs yes no =>
+      .ite (leaderArgs lhs) (leaderArgs rhs) (leaderExpr yes) (leaderExpr no)
 
 def leaderArgs : List Expr → List Expr
   | [] => []

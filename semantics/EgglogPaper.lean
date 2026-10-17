@@ -1,0 +1,31 @@
+import EgglogSemantics.Proofs.Congruence.Correctness
+import EgglogSemantics.Proofs.Provenance.Soundness
+import EgglogSemantics.Proofs.Provenance.DistinctMerge
+import EgglogSemantics.Proofs.Resugar.Soundness
+import EgglogSemantics.Proofs.Query
+import EgglogSemantics.Proofs.Presentation
+import EgglogSemantics.Proofs.OrderFinite
+import EgglogSemantics.Tests.ConditionalMerge
+import EgglogSemantics.Tests.SemanticCong
+import EgglogSemantics.Tests.CongruenceCorrectness
+import Mathlib.Util.AssertNoSorry
+
+-- The mathematical proof closure used to build the paper.
+assert_no_sorry Egglog.Congruence.preservesBehaviors
+assert_no_sorry Egglog.Provenance.check_sound
+assert_no_sorry Egglog.Provenance.encodedMerge_equal_data
+assert_no_sorry Egglog.Provenance.encodedMerge_data_distinct
+assert_no_sorry Egglog.Resugar.extractRow_infers
+assert_no_sorry Egglog.queryHolds_iff_queryMatches
+assert_no_sorry Egglog.mem_ruleResults_iff_queryMatches
+assert_no_sorry Egglog.Matches.expr_iff_cong
+assert_no_sorry Egglog.Matches.eq_iff_cong
+assert_no_sorry Egglog.actionsEval_iff_evalLocalActions
+assert_no_sorry Egglog.mem_ruleResults_iff_actionsEval
+assert_no_sorry Egglog.Eval.empty_env
+assert_no_sorry Egglog.Term.blt_admissible
+
+assert_no_sorry Egglog.InferredFacts.congr_iff_infers
+assert_no_sorry Egglog.Tests.CongruenceCorrectness.finite_congruence_check
+assert_no_sorry Egglog.Tests.CongruenceCorrectness.rejects_empty_behavior_compiler
+assert_no_sorry Egglog.Tests.CongruenceCorrectness.rejects_diverging_behavior_compiler

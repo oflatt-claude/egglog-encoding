@@ -36,6 +36,7 @@ theorem encodeBuild_reads {sig : Signature} {σ : Env} :
       obtain ⟨i, hi, hr⟩ := hρ v t he
       exact ⟨i, d, hi, rfl, hr⟩
   | .min _ _, _, _, _, hp, _, _, _, _ => (Expr.not_orderingFree_min hp).elim
+  | .ite _ _ _ _, _, _, _, hp, _, _, _, _ => (Expr.not_orderingFree_ite hp).elim
   | .app f args, t, d, hsc, hp, hc, hd, hρ, he => by
       have hctor : sig.IsCtor f := by
         by_contra hn

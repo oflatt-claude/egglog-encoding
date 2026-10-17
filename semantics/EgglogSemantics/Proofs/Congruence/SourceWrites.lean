@@ -8,7 +8,7 @@ namespace Egglog.Congruence
 inductive SourceAtom (src : Database) : Term → Prop where
   | view {f : FnName} {cs : List Term} : Term.app f cs ∈ src.terms →
       SourceAtom src (.app (viewName f) (cs ++ [.app f cs]))
-  | uf {a b : Term} : Cong src a b → (b = a ∨ Term.blt b a = true) →
+  | uf {a b : Term} : StoredCong src a b → (b = a ∨ Term.blt b a = true) →
       SourceAtom src (.app ufName [a, b])
 
 /-- The values of a compiled action block depend only on its signature and environment,
@@ -42,6 +42,7 @@ theorem encodeBuild_sourceWrites {src : Database} (hw : src.WF) {sig : Signature
   | .lit _, _, _, _, he, ht => ufSelf_sourceWrites huf he ht
   | .var _, _, _, _, he, ht => ufSelf_sourceWrites huf he ht
   | .min _ _, _, hp, _, _, _ => (Expr.not_orderingFree_min hp).elim
+  | .ite _ _ _ _, _, hp, _, _, _ => (Expr.not_orderingFree_ite hp).elim
   | .app f args, _, hp, hd, he, ht => by
       have hctor : sig.IsCtor f := by
         by_contra hn
@@ -99,7 +100,7 @@ theorem encodeUnion_sourceWrites {src : Database} (hw : src.WF) {sig : Signature
     (hp : ∀ e ∈ [a, b], e.OrderingFree)
     (hd : ∀ e ∈ [a, b], ∀ fk ∈ e.ctors, sig (viewName fk.1) = some (tableDecl fk.2))
     (huf : sig ufName = some (tableDecl 1))
-    (ha : a.eval sig ρ = some ta) (hb : b.eval sig ρ = some tb) (hc : Cong src ta tb) :
+    (ha : a.eval sig ρ = some ta) (hb : b.eval sig ρ = some tb) (hc : StoredCong src ta tb) :
     SourceWrites src sig ρ (encodeAction (.union a b)) := by
   apply SourceWrites.append
     ((encodeBuild_sourceWrites hw huf a (hp a (by simp)) (hd a (by simp)) ha hc.mem_of.1).append
@@ -118,7 +119,7 @@ theorem encodeUnion_sourceWrites {src : Database} (hw : src.WF) {sig : Signature
 /-- Ground source facts justify compiled actions independently of a source execution. -/
 def SourceAction (src : Database) (sig : Signature) (ρ : Env) : Action → Prop
   | .expr e => ∃ t, e.eval sig ρ = some t ∧ t ∈ src.terms
-  | .union a b => ∃ ta tb, a.eval sig ρ = some ta ∧ b.eval sig ρ = some tb ∧ Cong src ta tb
+  | .union a b => ∃ ta tb, a.eval sig ρ = some ta ∧ b.eval sig ρ = some tb ∧ StoredCong src ta tb
 
 theorem SourceAction.mono {src post : Database} {sig : Signature} {ρ : Env} {a : Action}
     (hc : src.Contained post) (h : SourceAction src sig ρ a) : SourceAction post sig ρ a := by
@@ -190,7 +191,7 @@ theorem encodeAction_sourceWrites {src post : Database} {sig : Signature} {ρ : 
       (Database.mem_addTerm t src)
   · exact encodeUnion_sourceWrites hw hp hd huf
       (heval a (by simp [actionExprs]) _ ha)
-      (heval b (by simp [actionExprs]) _ hb) (Cong.direct (Set.mem_insert _ _))
+      (heval b (by simp [actionExprs]) _ hb) (StoredCong.direct (Set.mem_insert _ _))
 
 theorem SourceAtom.mono {src post : Database} (hc : src.Contained post) {t : Term}
     (h : SourceAtom src t) : SourceAtom post t := by

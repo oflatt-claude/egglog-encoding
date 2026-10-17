@@ -29,6 +29,11 @@ theorem sourceExpr_width {P : Program} (hp : P.Fragment) : ∀ e : Expr,
   | .var _, _ => trivial
   | .min a b, hc => ⟨sourceExpr_width hp a (fun fk hk => hc fk (List.mem_append_left _ hk)),
       sourceExpr_width hp b (fun fk hk => hc fk (List.mem_append_right _ hk))⟩
+  | .ite lhs rhs yes no, hc =>
+      ⟨sourceExprs_width hp lhs (fun fk hk => hc fk (by simp [Expr.ctors, hk])),
+       sourceExprs_width hp rhs (fun fk hk => hc fk (by simp [Expr.ctors, hk])),
+       sourceExpr_width hp yes (fun fk hk => hc fk (by simp [Expr.ctors, hk])),
+       sourceExpr_width hp no (fun fk hk => hc fk (by simp [Expr.ctors, hk]))⟩
   | .app f es, hc => by
       refine ⟨?_, sourceExprs_width hp es (fun fk hk => hc fk (List.mem_cons_of_mem _ hk))⟩
       intro dc hd
@@ -55,6 +60,7 @@ theorem encodeBuild_width {P : Program} (hp : P.Fragment) : ∀ e : Expr,
   | .min a b, hc => actions_width_append
       (encodeBuild_width hp a (fun fk hk => hc fk (List.mem_append_left _ hk)))
       (encodeBuild_width hp b (fun fk hk => hc fk (List.mem_append_right _ hk)))
+  | .ite _ _ _ _, _ => trivial
   | .app f es, hc => by
       apply actions_width_append
         (encodeBuildArgs_width hp es (fun fk hk => hc fk (List.mem_cons_of_mem _ hk)))

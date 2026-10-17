@@ -21,35 +21,32 @@ inductive FlatRead (d : Database) (ρ : Env) : Pattern → Prop where
   | eq {a b : Expr} {i : Term} :
       a.eval d.sig ρ = some i → b.eval d.sig ρ = some i → i ∈ d.values → FlatRead d ρ (.eq a b)
 
-theorem FlatRead.bound {d : Database} {ρ : Env} {p : Pattern} (h : FlatRead d ρ p)
+theorem FlatRead.bound {d : Database} {ρ : Env} {p : Pattern} (h : FlatRead d ρ p) (ho : p.OrderingFree)
     {v : Var} (hv : v ∈ p.vars) : (Env.lookup v ρ).isSome := by
   cases h with
-  | entry _ he _ => exact Expr.lookup_isSome_of_mem_varsList he hv
+  | entry _ he _ => exact Expr.lookup_isSome_of_mem_varsList ho he hv
   | eq ha hb _ =>
       rcases List.mem_union_iff.mp hv with hv | hv
-      · exact Expr.lookup_isSome_of_mem_vars ha hv
-      · exact Expr.lookup_isSome_of_mem_vars hb hv
+      · exact Expr.lookup_isSome_of_mem_vars ho.1 ha hv
+      · exact Expr.lookup_isSome_of_mem_vars ho.2 hb hv
 
 theorem FlatRead.holds {d : Database} {ρ : Env} {p : Pattern} (h : FlatRead d ρ p) :
     Matches d p ρ := by
   cases h with
   | @entry f es ts hf he ht =>
       obtain ⟨decl, hd, hw⟩ := hf
-      exact .expr ht (by rw [Expr.evalAtom_app_decl hd hw, he]; rfl)
-        (Cong.mono (Database.Contained.addTerms _ _) ht)
-  | @eq a b i ha hb ht =>
-      have hc : CongOn d [i, i] i i := Cong.mono (Database.Contained.addTerms _ _) ht.1
-      exact .eq ht.1 ha hb hc hc
+      exact .atom (by rw [Expr.evalAtom_app_decl hd hw, he]; rfl) (Database.toCong ht)
+  | @eq a b i ha hb ht => exact .equal ha hb (Database.toCong ht.1)
 
 theorem validQuerySubst_of_flatReads {d : Database} {ρ : Env} {q : Query}
     (hv : ∀ v i, Env.lookup v ρ = some i → i ∈ d.values)
-    (hr : ∀ p ∈ q, FlatRead d ρ p) :
+    (hr : ∀ p ∈ q, FlatRead d ρ p) (ho : ∀ p ∈ q, p.OrderingFree) :
     ∃ σ, ValidQuerySubst d q σ ∧
       ∀ v ∈ Query.vars q, Env.lookup v σ = Env.lookup v ρ := by
   apply validQuerySubst_of_matches ?_ (fun p hp => (hr p hp).holds)
   intro v hvq
   obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp hvq
-  obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp ((hr p hp).bound hvp)
+  obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp ((hr p hp).bound (ho p hp) hvp)
   exact ⟨t, ht, hv v t ht⟩
 
 mutual
@@ -65,7 +62,7 @@ theorem freshEnv_of_queryRead {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
           Expr.eval d.sig (encodeQueryExpr e n).1 ρ = some i ∧
           ∀ p ∈ (encodeQueryExpr e n).2.1, FlatRead d ρ p
   | _, _, .lit, _ => ⟨[], .nil, fun _ _ _ => ⟨rfl, by simp [encodeQueryExpr]⟩⟩
-  | _, _, .var hi, _ => ⟨[], .nil, fun _ _ hext => ⟨Option.filter_eq_some_iff.mpr ⟨hext _ _ hi, (hval _ _ hi).2⟩,
+  | _, _, .var hi, _ => ⟨[], .nil, fun _ _ hext => ⟨hext _ _ hi,
       by simp [encodeQueryExpr]⟩⟩
   | _, _, @QueryRead.app _ _ f args is i hl ho, n => by
       have ht := ho.term hd
@@ -86,8 +83,8 @@ theorem freshEnv_of_queryRead {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
       · obtain ⟨hargs, hatoms⟩ := hp₀ ρ (fun b hb => hσ b (List.mem_append_left _ hb)) hext
         have him : Env.lookup (freshVar m) ρ = some i := hσ (freshVar m, i) (by simp)
         have hout : Expr.evalList d.sig [.var (freshVar m)] ρ = some [i] := by
-          simp [Expr.evalList, Expr.eval, him, Option.filter_some, (hc i (by simp)).2]
-        refine ⟨Option.filter_eq_some_iff.mpr ⟨him, (hc i (by simp)).2⟩, fun p hp => ?_⟩
+          simp [Expr.evalList, Expr.eval, him]
+        refine ⟨him, fun p hp => ?_⟩
         change p ∈ (encodeQueryArgs args n).2.1 ++ [_] at hp
         rcases List.mem_append.mp hp with hp | hp
         · exact hatoms p hp
@@ -110,7 +107,8 @@ theorem freshEnv_of_queryReadList {d : Database} (hd : d.Diag) (hstore : d.Store
   | _, _, .nil, _ => ⟨[], .nil, fun _ _ _ => ⟨rfl, by simp [encodeQueryArgs]⟩⟩
   | _, _, @QueryReadList.cons _ _ e i es is he hl, n => by
       obtain ⟨σ₁, hf₁, hp₁⟩ := freshEnv_of_queryRead hd hstore hdecl hval he n
-      obtain ⟨σ₂, hf₂, hp₂⟩ := freshEnv_of_queryReadList hd hstore hdecl hval hl (encodeQueryExpr e n).2.2
+      obtain ⟨σ₂, hf₂, hp₂⟩ :=
+        freshEnv_of_queryReadList hd hstore hdecl hval hl (encodeQueryExpr e n).2.2
       refine ⟨σ₁ ++ σ₂, ?_, fun ρ hσ hext => ?_⟩
       · change FreshBindings d.values n (encodeQueryArgs es (encodeQueryExpr e n).2.2).2.2 _
         exact hf₁.append hf₂ (le_encodeQueryExpr_next e n) (le_encodeQueryArgs_next es _)
@@ -177,7 +175,8 @@ theorem freshEnv_of_query {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
   | [], _, _, _ => ⟨[], .nil, fun _ _ _ => by simp [encodeQuery]⟩
   | p :: ps, hr, hg, n => by
       obtain ⟨σ₁, hf₁, hp₁⟩ :=
-        freshEnv_of_patternRead hd hstore hdecl hv (hr p List.mem_cons_self) (hg p List.mem_cons_self) n
+        freshEnv_of_patternRead hd hstore hdecl hv
+          (hr p List.mem_cons_self) (hg p List.mem_cons_self) n
       obtain ⟨σ₂, hf₂, hp₂⟩ := freshEnv_of_query hd hstore hdecl hv ps
         (fun p hp => hr p (List.mem_cons_of_mem _ hp))
         (fun p hp => hg p (List.mem_cons_of_mem _ hp)) (encodePattern p n).2
@@ -193,7 +192,8 @@ theorem matchQuery_of_query {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
     (hdecl : ViewDeclared d) {ρ₀ : Env} {q : Query}
     (hv : ∀ v i, Env.lookup v ρ₀ = some i → i ∈ d.values)
     (hn : ∀ b ∈ ρ₀, ¬ "@".isPrefixOf b.1 = true)
-    (hr : ∀ p ∈ q, PatternRead d ρ₀ p) (hg : ∀ p ∈ q, p.Grounded) (n : Nat) :
+    (hr : ∀ p ∈ q, PatternRead d ρ₀ p) (hg : ∀ p ∈ q, p.Grounded)
+    (ho : ∀ p ∈ q, p.OrderingFree) (n : Nat) :
     ∃ σ ρ, ValidQuerySubst d (encodeQuery q n).1 σ ∧
       (∀ v ∈ Query.vars (encodeQuery q n).1, Env.lookup v σ = Env.lookup v ρ) ∧
       ∀ v i, Env.lookup v ρ₀ = some i → Env.lookup v ρ = some i := by
@@ -218,6 +218,7 @@ theorem matchQuery_of_query {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
         rw [Env.lookup_append_of_some hlk] at hi
         exact (Option.some.inj hi) ▸ hv v j hlk
   obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_flatReads hval (hp _ hσ hext)
+    (fun p hp => (encodeQuery_flat q n ho p hp).orderingFree)
   exact ⟨τ, ρ₀ ++ σ, hτ, hag, hext⟩
 
 /-- A source match has a compiled match retaining canonical readings of each source
@@ -239,7 +240,7 @@ theorem encodedQuery_match_of_source {d src querySrc : Database}
   have hn₀ : ∀ b ∈ ρ₀, ¬ "@".isPrefixOf b.1 = true := by
     intro b hb
     exact hn b.1 (hvars b.1 (hdom ▸ Env.mem_dom_of_mem hb))
-  obtain ⟨ρ, ρ', hmatch, hag, hext⟩ := matchQuery_of_query hd hstore hdecl hv hn₀ hreads hg n
+  obtain ⟨ρ, ρ', hmatch, hag, hext⟩ := matchQuery_of_query hd hstore hdecl hv hn₀ hreads hg hof n
   refine ⟨ρ, hmatch, fun v t ht => ?_⟩
   obtain ⟨i, hi, hrep, hroot⟩ := hρ₀ v t ht
   obtain ⟨p, hp, harg⟩ := hk v (hvars v (Env.mem_dom_of_mem (Env.mem_of_lookup ht)))
@@ -250,7 +251,8 @@ theorem encodedQuery_match_of_source {d src querySrc : Database}
 /-- At a represented, rebuilt boundary, a complete existential query has a match on one
 side exactly when its flattening has a match on the other. -/
 theorem Rebuilt.queryHolds_iff {d src : Database} (h : Rebuilt d) (hd : d.Diag)
-    (hstore : d.StoreOk) (htables : ViewTables d) (hdecl : ViewDeclared d) (he : EdgesSound d src) (hs : ViewsSound d src)
+    (hstore : d.StoreOk) (htables : ViewTables d) (hdecl : ViewDeclared d)
+    (he : EdgesSound d src) (hs : ViewsSound d src)
     (hw : src.WF) (hb : src.TermsBuild) (hc : src.sig.AllConstructors)
     (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d t e) (hun : UnionsJoined d src)
     {q : Query} (hof : ∀ p ∈ q, p.OrderingFree) (hg : ∀ p ∈ q, p.Grounded)
@@ -265,7 +267,7 @@ theorem Rebuilt.queryHolds_iff {d src : Database} (h : Rebuilt d) (hd : d.Diag)
       have hm : b.1 ∈ Env.dom σ := hdom ▸ Env.mem_dom_of_mem hb
       obtain ⟨p, hp, hvp⟩ := hσ.mem_dom_iff.mp hm
       exact hn b.1 (Query.mem_vars.mpr ⟨p, hp, (p.mem_freeVars.mp hvp).1⟩)
-    obtain ⟨τ, _, ht, _, _⟩ := matchQuery_of_query hd hstore hdecl hv hnames hr hg n
+    obtain ⟨τ, _, ht, _, _⟩ := matchQuery_of_query hd hstore hdecl hv hnames hr hg hof n
     exact ⟨τ, ht⟩
   · rintro ⟨σ, hσ⟩
     obtain ⟨τ, ht, _, _⟩ := sourceMatch_of_encodedQuery hb hw hs hd hstore htables hof hg hk hσ

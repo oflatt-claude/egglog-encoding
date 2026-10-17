@@ -65,7 +65,7 @@ theorem Rebuilt.exists_root {d : Database} (h : Rebuilt d) (a : Term) :
     rcases hb with rfl | ⟨cs, _, ht⟩
     · exact Set.mem_insert _ _
     · exact Set.mem_insert_of_mem _
-        (Database.mem_terms_of_arg h.wf (Cong.direct ht.2).mem_left (by simp [Entry.columns]))
+        (Database.mem_terms_of_arg h.wf (StoredCong.direct ht.2).mem_left (by simp [Entry.columns]))
   have hw := Set.wellFoundedOn_iff.mp
     (hf.wellFoundedOn (r := fun x y => Term.blt x y = true))
   obtain ⟨b, hb, hmin⟩ := hw.has_min {b | Parent d a b} ⟨a, .refl d a⟩
@@ -198,7 +198,7 @@ theorem Rebuilt.corresponds {d src : Database} (h : Rebuilt d) (he : EdgesSound 
     (hv : ViewsSound d src) (hw : src.WF)
     (hex : ∀ t ∈ src.terms, ∃ e, ViewRepr d t e) (hun : UnionsJoined d src)
     (a b : Term) (ha : a ∈ src.terms) (hb : b ∈ src.terms) :
-    Cong src a b ↔ SameClass d a b :=
+    StoredCong src a b ↔ SameClass d a b :=
   corresponds_of_invariants hw (h.viewLeader he hw) (h.viewsCover he hw hex) hun hv a b ha hb
 
 end Egglog.Congruence.Abstract

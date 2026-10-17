@@ -44,7 +44,7 @@ theorem lift_sound {P : Program} {C : SourceProof.Context} {db : Database}
     (hf : Provenance.check (Congruence.encode P) input = some fact)
     (hc : factClaim P C fact = some claim) (h : lift P input = some output)
     (hl : claim.lhs ∈ db.terms) (hr : claim.rhs ∈ db.terms) :
-    Cong db claim.lhs claim.rhs :=
+    StoredCong db claim.lhs claim.rhs :=
   (lift_supported hs hw hclosed hC hf hc h).holds hw hl hr
 
 /-- Lifted claims have represented existence, even for spellings absent from the store. -/

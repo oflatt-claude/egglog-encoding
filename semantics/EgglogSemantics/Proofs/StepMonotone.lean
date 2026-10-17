@@ -22,7 +22,7 @@ theorem MergeStep.valueContained {d e : Database} (h : MergeStep d e) :
   cases h with
   | @collide mid old new decl vs hold hnew _ _ _ _ hv =>
     intro p hp ha _
-    have keep (row : Entry) (hr : row.Valid d.sig) : p ≠ (row.atom, row.atom) := by
+    have keep (row : Entry) (hr : row.Shape d.sig) : p ≠ (row.atom, row.atom) := by
       intro heq
       exact hr.atom_not_value (by simpa only [heq] using ha)
     have hp' : p ∈ ((d.eraseEntry old).eraseEntry new).eqs := by

@@ -14,10 +14,8 @@ theorem eval_transport {s₁ s₂ : Signature} :
       e.eval s₁ ρ₁ = some t →
       e.eval s₂ ρ₂ = some t
   | .lit _, _, _, _, _, _, _, h => h
-  | .var v, _, _, t, _, hv, hval, h => by
-      obtain ⟨hl, ht⟩ := Option.filter_eq_some_iff.mp h
-      exact Option.filter_eq_some_iff.mpr
-        ⟨(hv v (by simp [Expr.vars])).symm.trans hl, hval v (by simp [Expr.vars]) t hl ht⟩
+  | .var v, _, _, _, _, hv, _, h =>
+      (hv v (by simp [Expr.vars])).symm.trans h
   | .app f args, _, _, _, hc, hv, hval, h => by
       have hfn : ∀ g ∈ Expr.fnsList args, s₁.IsCtor g → s₂.IsCtor g :=
         fun g hg => hc g (by simp [Expr.fns, hg])
@@ -46,6 +44,31 @@ theorem eval_transport {s₁ s₂ : Signature} :
           (fun w hw => hv w (by simp [Expr.vars, hw]))
           (fun w hw => hval w (by simp [Expr.vars, hw])) hy,
         Option.map_some]
+  | .ite lhs rhs yes no, _, _, _, hc, hv, hval, h => by
+      simp only [Expr.eval] at h ⊢
+      obtain ⟨ls, hls, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨rs, hrs, h⟩ := Option.bind_eq_some_iff.mp h
+      apply Option.bind_eq_some_iff.mpr
+      refine ⟨ls, evalList_transport lhs
+        (fun f hf => hc f (by simp [Expr.fns, hf]))
+        (fun v hv' => hv v (by simp [Expr.vars, hv']))
+        (fun v hv' => hval v (by simp [Expr.vars, hv'])) hls, ?_⟩
+      apply Option.bind_eq_some_iff.mpr
+      refine ⟨rs, evalList_transport rhs
+        (fun f hf => hc f (by simp [Expr.fns, hf]))
+        (fun v hv' => hv v (by simp [Expr.vars, hv']))
+        (fun v hv' => hval v (by simp [Expr.vars, hv'])) hrs, ?_⟩
+      by_cases hEq : ls = rs
+      · rw [if_pos hEq] at h ⊢
+        exact eval_transport yes
+          (fun f hf => hc f (by simp [Expr.fns, hf]))
+          (fun v hv' => hv v (by simp [Expr.vars, hv']))
+          (fun v hv' => hval v (by simp [Expr.vars, hv'])) h
+      · rw [if_neg hEq] at h ⊢
+        exact eval_transport no
+          (fun f hf => hc f (by simp [Expr.fns, hf]))
+          (fun v hv' => hv v (by simp [Expr.vars, hv']))
+          (fun v hv' => hval v (by simp [Expr.vars, hv'])) h
 
 @[inherit_doc eval_transport]
 theorem evalList_transport {s₁ s₂ : Signature} :
@@ -94,7 +117,7 @@ theorem sourceMatch_evaluations {src tgt : Database} (hb : src.TermsBuild) (hw :
     obtain ⟨p, hp, ha⟩ := hk v hv
     obtain ⟨i, hi, him⟩ := mem_terms_of_patternArgVar hs (hread p hp) ha
     exact ⟨i, Env.lookup_append_of_some hi, termsBuild_isValue hb hw him,
-      (h.mem_values (v, i) (Env.mem_of_lookup hi)).2⟩
+      (h.mem_values hstore (encodeQuery_safe q n hof hk) (v, i) (Env.mem_of_lookup hi)).2⟩
   refine ⟨τ, hτ, fun e hf hv => ?_⟩
   have hvars := fun v hv' => henv v (hv v hv')
   cases ht : e.eval tgt.sig (σ ++ tgt.env) with

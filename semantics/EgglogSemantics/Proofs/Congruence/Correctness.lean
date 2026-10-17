@@ -7,6 +7,15 @@ import EgglogSemantics.Proofs.Behavior
 namespace Egglog.Congruence
 
 /-- All success, failure, and divergence behaviors agree, without evaluation premises. -/
+@[blueprint "thm:congruence"
+  (title := /-- Congruence compiler correctness -/)
+  (statement := /-- For every well-formed program $P$ in the supported constructor
+  source fragment with no saturation commands, and every observation $b$,
+  \[\operatorname{Behaves}(\varnothing,\operatorname{encode}(P),b)
+    \quad\Longleftrightarrow\quad\operatorname{Behaves}(\varnothing,P,b).\]
+  Neither side's termination is a premise. The compiled program may saturate its
+  rebuilding rules; no such generated rebuilding or merge schedule diverges. -/)
+  (hasProof := false) (latexEnv := "theorem")]
 theorem preservesBehaviors : PreservesBehaviors := by
   intro P hw hp hn behavior
   cases behavior with

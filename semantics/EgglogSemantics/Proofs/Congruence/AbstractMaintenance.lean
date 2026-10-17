@@ -6,24 +6,25 @@ import EgglogSemantics.Proofs.Congruence.RebuildSubst
 
 namespace Egglog.Congruence.Abstract
 
-theorem Matches.bound {d : Database} {p : Pattern} {ρ : Env} (hm : Matches d p ρ)
+theorem Matches.bound {d : Database} {p : Pattern} {ρ : Env} (hm : Matches d p ρ) (ho : p.OrderingFree)
     {v : Var} (hv : v ∈ p.vars) : (Env.lookup v ρ).isSome := by
   cases hm with
-  | @expr e _ _ _ _ he _ =>
+  | @atom e _ _ he _ =>
       cases e with
       | app f es =>
           obtain ⟨ts, he, _⟩ := Expr.evalAtom_app_inv he
-          exact Expr.lookup_isSome_of_mem_varsList he hv
-      | lit _ | var _ | min _ _ => exact Expr.lookup_isSome_of_mem_vars he hv
-  | eq _ ha hb _ _ =>
+          exact Expr.lookup_isSome_of_mem_varsList ho he hv
+      | lit _ | var _ | min _ _ => exact Expr.lookup_isSome_of_mem_vars ho he hv
+      | ite => exact (Expr.not_orderingFree_ite ho).elim
+  | equal ha hb _ =>
       rcases List.mem_union_iff.mp hv with hv | hv
-      · exact Expr.lookup_isSome_of_mem_vars ha hv
-      · exact Expr.lookup_isSome_of_mem_vars hb hv
+      · exact Expr.lookup_isSome_of_mem_vars ho.1 ha hv
+      · exact Expr.lookup_isSome_of_mem_vars ho.2 hb hv
 
-theorem evalAtom_of_row {sig : Signature} {row : Entry} (hv : row.Valid sig)
+theorem evalAtom_of_row {sig : Signature} {row : Entry} (hv : row.Shape sig)
     {es : List Expr} {ρ : Env} (he : Expr.evalList sig es ρ = some row.columns) :
     (Expr.app row.name es).evalAtom sig ρ = some row.atom := by
-  obtain ⟨decl, hd, hm, hk, hv, _⟩ := hv
+  obtain ⟨decl, hd, hm, hk, hv⟩ := hv
   have hw : es.length = decl.entryWidth := by
     rw [← Expr.evalList_length he]
     simp [Entry.columns, hk, hv, FnDecl.entryWidth, hm]
@@ -33,19 +34,19 @@ theorem evalAtom_of_row {sig : Signature} {row : Entry} (hv : row.Valid sig)
 theorem match_current {d : Database} {row : Entry} (hr : row ∈ d.entries)
     {es : List Expr} {ρ : Env} (he : Expr.evalList d.sig es ρ = some row.columns) :
     Matches d (.expr (.app row.name es)) ρ := by
-  have held := (Cong.direct hr.2).mem_left
-  exact .expr held (evalAtom_of_row hr.1 he)
-    (held.mono (Database.Contained.addTerms [row.atom] d))
+  have held := (StoredCong.direct hr.2).mem_left
+  exact .atom (evalAtom_of_row hr.1 he) (Database.toCong held)
 
 theorem out_values {d : Database} (hd : d.Diag) (hs : d.StoreOk)
     {f : FnName} {cs vs : List Term} (ho : d.Out f cs vs) :
     ∀ t ∈ cs ++ vs, t ∈ d.values := fun t ht =>
-  ⟨ho.columns hs t ht, (ho.entry hd).1.column_values t ht⟩
+  ⟨ho.columns hd t ht, (hs.entry_valid (ho.entry hd)).column_values t ht⟩
 
 /-- Construct the actual rule firing, retaining value guards in its query substitution. -/
 theorem atom_rule_result {d : Database} {r : Rule} {ρ : Env}
     (hval : ∀ b ∈ ρ, b.2 ∈ d.values) (hnames : ∀ b ∈ ρ, b.1 ∈ Query.vars r.query)
-    (hq : ∀ p ∈ r.query, Matches d p ρ) {row : Entry} (hv : row.Valid d.sig)
+    (hq : ∀ p ∈ r.query, Matches d p ρ) (ho : ∀ p ∈ r.query, p.OrderingFree)
+    {row : Entry} (hv : row.Valid d.sig)
     {es : List Expr} (hhead : r.actions = [.expr (.app row.name es)])
     (he : Expr.evalList d.sig es ρ = some row.columns) :
     d.putEntry row ∈ RuleResults d r := by
@@ -53,23 +54,31 @@ theorem atom_rule_result {d : Database} {r : Rule} {ρ : Env}
       ∃ t, Env.lookup v ρ = some t ∧ t ∈ d.values := by
     intro v hv
     obtain ⟨p, hp, hv⟩ := Query.mem_vars.mp hv
-    obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp (Matches.bound (hq p hp) hv)
+    obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp (Matches.bound (hq p hp) (ho p hp) hv)
     exact ⟨t, ht, hval (v, t) (Env.mem_of_lookup ht)⟩
   obtain ⟨σ, hσ, hag⟩ := validQuerySubst_of_matches hbound hq
   have heσ : Expr.evalList d.sig es σ = some row.columns := by
     rw [Expr.evalList_agreeOn es (fun v hv => ?_)]
     · exact he
-    obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp (Expr.lookup_isSome_of_mem_varsList he hv)
-    exact hag v (hnames (v, t) (Env.mem_of_lookup ht))
+    by_cases hvq : v ∈ r.query.vars
+    · exact hag v hvq
+    · have hnoneσ : Env.lookup v σ = none := Env.lookup_eq_none_iff.mpr fun hvσ => by
+        obtain ⟨p, hp, hfv⟩ := hσ.mem_dom_iff.mp hvσ
+        exact hvq (Query.mem_vars.mpr ⟨p, hp, (p.mem_freeVars.mp hfv).1⟩)
+      have hnoneρ : Env.lookup v ρ = none := Env.lookup_eq_none_iff.mpr fun hvρ => by
+        obtain ⟨t, ht⟩ := Env.mem_dom_iff.mp hvρ
+        exact hvq (hnames (v, t) ht)
+      rw [hnoneσ, hnoneρ]
   refine ⟨σ, hσ, ?_⟩
   rw [hhead]
-  have hev := evalAtom_of_row hv (Expr.evalList_append_env (τ := d.env) es heσ)
+  have hev := evalAtom_of_row hv.shape (Expr.evalList_append_env (τ := d.env) es heσ)
   simp only [evalLocalActions, evalActions, evalAction, hev, Option.map_some,
     Option.bind_some]
   rfl
 
 theorem atom_rule_bound {d : Database} {R : RulesetName} (h : Live.State d)
     (hg : Live.GeneratedTables d.sig) (hn : d.NoUnions) (hs : d.StoreOk)
+    (hrules : d.RulesSafe)
     (hsat : RunSaturated R d) {r : Rule} (hr : r ∈ d.rules)
     (hR : r.ruleset = R) {ρ : Env}
     (hval : ∀ b ∈ ρ, b.2 ∈ d.values) (hnames : ∀ b ∈ ρ, b.1 ∈ Query.vars r.query)
@@ -78,14 +87,15 @@ theorem atom_rule_bound {d : Database} {R : RulesetName} (h : Live.State d)
     (hhead : r.actions = [.expr (.app f es)])
     (he : Expr.evalList d.sig es ρ = some (cs ++ [a])) :
     ∃ b, d.Out f cs [b] ∧ Live.Joined d a b ∧ IdLe b a := by
-  have hf := atom_rule_result hval hnames hq hv hhead he
+  have hf := atom_rule_result hval hnames hq (hrules r hr).2 hv hhead he
   have hrow : Entry.mk f cs [a] ∈ (d.putEntry ⟨f, cs, [a]⟩).entries := by
     rw [Database.putEntry_entries hv]; exact Set.mem_insert _ _
-  obtain ⟨b, hb, hj, hle⟩ := Live.firing_row_bound h hg hn hs hsat hr hR hf hrow
+  obtain ⟨b, hb, hj, hle⟩ := Live.firing_row_bound h hg hn hs hrules hsat hr hR hf hrow
   exact ⟨b, out_of_current hs hb, hj, hle⟩
 
 theorem compress_closed {d : Database} {R : RulesetName} (h : Live.State d)
     (hg : Live.GeneratedTables d.sig) (hn : d.NoUnions) (hs : d.StoreOk)
+    (hrules : d.RulesSafe)
     (hsat : RunSaturated R d) (hr : { pathCompressRule with ruleset := R } ∈ d.rules)
     (hdesc : ∀ a b, d.Out ufName [a] [b] → IdLe b a)
     {a b c : Term} (hab : d.Out ufName [a] [b]) (hbc : d.Out ufName [b] [c]) :
@@ -103,15 +113,15 @@ theorem compress_closed {d : Database} {R : RulesetName} (h : Live.State d)
     simp only [pathCompressRule, List.mem_cons, List.not_mem_nil, or_false] at hp
     rcases hp with rfl | rfl
     · exact match_current (hab.entry hn.diag) (by
-        simp [ρ, Expr.evalList, Expr.eval, Env.lookup, Option.filter_some, ha.2, hb.2,
+        simp [ρ, Expr.evalList, Expr.eval, Env.lookup, hb.2,
           Entry.columns])
     · exact match_current (hbc.entry hn.diag) (by
-        simp [ρ, Expr.evalList, Expr.eval, Env.lookup, Option.filter_some, hb.2, hc.2,
+        simp [ρ, Expr.evalList, Expr.eval, Env.lookup, hc.2,
           Entry.columns])
-  obtain ⟨x, hx, _, hle⟩ := atom_rule_bound h hg hn hs hsat hr rfl hval
+  obtain ⟨x, hx, _, hle⟩ := atom_rule_bound h hg hn hs hrules hsat hr rfl hval
     (by simp [ρ, pathCompressRule, Query.vars, Pattern.vars, Expr.vars, Expr.varsList])
     hq (Live.ufEntry_valid h.uf ha.2 hc.2) rfl (by
-      simp [ρ, Expr.evalList, Expr.eval, Env.lookup, Option.filter_some, ha.2, hc.2])
+      simp [ρ, Expr.evalList, Expr.eval, Env.lookup])
   have he : x = b := List.singleton_inj.mp (hsat.1.out_unique hx hab)
   have hbc' : b = c := (he ▸ hle).antisymm (hdesc b c hbc)
   exact hbc' ▸ hab
@@ -154,6 +164,7 @@ theorem rebuildSubst_values {d : Database} {cs : List Term} {e x : Term}
 
 theorem output_closed {d : Database} {R : RulesetName} (h : Live.State d)
     (hg : Live.GeneratedTables d.sig) (hn : d.NoUnions) (hs : d.StoreOk)
+    (hrules : d.RulesSafe)
     (hsat : RunSaturated R d)
     (hdesc : ∀ a b, d.Out ufName [a] [b] → IdLe b a)
     {f : FnName} {cs : List Term} {e x : Term}
@@ -173,16 +184,16 @@ theorem output_closed {d : Database} {R : RulesetName} (h : Live.State d)
     rcases hp with rfl | rfl
     · apply match_current (hv.entry hn.diag)
       simp [Expr.evalList_append_map, hkeys, Expr.evalList, Expr.eval,
-        Option.filter_some, heval.2, Entry.columns]
+        Entry.columns]
     · apply match_current (he.entry hn.diag)
-      simp [Expr.evalList, Expr.eval, Option.filter_some, heval.2, hxval.2, Entry.columns]
+      simp [Expr.evalList, Expr.eval, Entry.columns]
   have hvalid : (Entry.mk (viewName f) cs [x]).Valid d.sig :=
-    (hv.entry hn.diag).1.with_value rfl (by simpa using hxval.2)
-  obtain ⟨b, hb, _, hle⟩ := atom_rule_bound h hg hn hs hsat hr rfl hval
+    (hs.entry_valid (hv.entry hn.diag)).with_value rfl (by simpa using hxval.2)
+  obtain ⟨b, hb, _, hle⟩ := atom_rule_bound h hg hn hs hrules hsat hr rfl hval
     (rebuildSubst_names cs e x (f := f) (arg := .var "@e") (by simp [eclassRule])
       (by simp [eclassRule])) hq hvalid rfl (by
         simp [Expr.evalList_append_map, hkeys, Expr.evalList, Expr.eval,
-          Option.filter_some, hxval.2])
+          hxval.2])
   have hbe : b = e := List.singleton_inj.mp (hsat.1.out_unique hb hv)
   have hex : e = x := (hbe ▸ hle).antisymm (hdesc e x he)
   exact hex ▸ hv
@@ -198,6 +209,7 @@ theorem view_root_of_output {d : Database} (hn : MergeNormal d)
 
 theorem child_closed {d : Database} {R : RulesetName} (h : Live.State d)
     (hg : Live.GeneratedTables d.sig) (hn : d.NoUnions) (hs : d.StoreOk)
+    (hrules : d.RulesSafe)
     (hsat : RunSaturated R d)
     (hcompress : ∀ a b c, d.Out ufName [a] [b] → d.Out ufName [b] [c] →
       d.Out ufName [a] [c])
@@ -211,7 +223,6 @@ theorem child_closed {d : Database} {R : RulesetName} (h : Live.State d)
     out_values hn.diag hs hv t (List.mem_append_left _ ht)
   have heval := out_values hn.diag hs hv e (by simp)
   have hxval := out_values hn.diag hs he x (by simp)
-  have hival := hcs cs[i] (List.getElem_mem hi)
   have hval := rebuildSubst_values hcs heval hxval
   have hkeys := eval_rebuildVars cs e x (fun t ht => (hcs t ht).2)
   have hq : ∀ p ∈ (childRule f cs.length i).query,
@@ -221,22 +232,22 @@ theorem child_closed {d : Database} {R : RulesetName} (h : Live.State d)
     rcases hp with rfl | rfl
     · apply match_current (hv.entry hn.diag)
       simp [Expr.evalList_append_map, hkeys, Expr.evalList, Expr.eval,
-        Option.filter_some, heval.2, Entry.columns]
+        Entry.columns]
     · apply match_current (he.entry hn.diag)
       simp only [Expr.evalList, Expr.eval, rebuildSubst_key (e := e) (x := x) i hi,
         rebuildSubst_x]
-      simp [Option.filter_some, hival.2, hxval.2, Entry.columns]
+      simp [Entry.columns]
   have hx : Expr.eval d.sig (.var "@x") (rebuildSubst cs e x) = some x := by
-    simp [Expr.eval, Option.filter_some, hxval.2]
+    simp [Expr.eval]
   have hhead : Expr.evalList d.sig
       ((rebuildVars cs.length).set i (.var "@x") ++ [.var "@e"])
       (rebuildSubst cs e x) = some (cs.set i x ++ [e]) := by
     rw [Expr.evalList_append_map, Expr.evalList_set hkeys i hx]
-    simp [Expr.evalList, Expr.eval, Option.filter_some, heval.2]
+    simp [Expr.evalList, Expr.eval]
   have hvalid : (Entry.mk (viewName f) (cs.set i x) [e]).Valid d.sig := by
     exact ⟨tableDecl cs.length, hf, by simp [tableDecl], by simp [tableDecl], rfl,
-      Expr.evalList_isValue hhead⟩
-  obtain ⟨b, hb, hj, _⟩ := atom_rule_bound h hg hn hs hsat hr rfl hval
+      Expr.evalList_isValue (fun b hb => (hval b hb).2) hhead⟩
+  obtain ⟨b, hb, hj, _⟩ := atom_rule_bound h hg hn hs hrules hsat hr rfl hval
     (rebuildSubst_names cs e x (f := f) (arg := .var ("@c" ++ toString i))
       (by simp [childRule]) (by simp [childRule])) hq hvalid rfl hhead
   have heb : e = b := joined_roots_eq hs hsat.1 hcompress hj
@@ -275,14 +286,15 @@ def TablesPresent (d : Database) (R : RulesetName := rebuildRuleset) : Prop :=
 /-- Actual completed rounds establish closure despite consuming conflicting head rows. -/
 theorem closed_of_saturated {d : Database} {R : RulesetName} (h : Live.State d)
     (hg : Live.GeneratedTables d.sig) (hn : d.NoUnions) (hs : d.StoreOk)
+    (hrules : d.RulesSafe)
     (hsat : RunSaturated R d) (ht : TablesPresent d R)
     (hr : { pathCompressRule with ruleset := R } ∈ d.rules)
     (hdesc : ∀ a b, d.Out ufName [a] [b] → IdLe b a) : Closed d := by
   have hc : ∀ a b c, d.Out ufName [a] [b] → d.Out ufName [b] [c] →
-      d.Out ufName [a] [c] := fun _ _ _ => compress_closed h hg hn hs hsat hr hdesc
+      d.Out ufName [a] [c] := fun _ _ _ => compress_closed h hg hn hs hrules hsat hr hdesc
   have ho : ∀ f cs e x, d.Out (viewName f) cs [e] → d.Out ufName [e] [x] →
       d.Out (viewName f) cs [x] := fun f cs e _ hv =>
-    output_closed h hg hn hs hsat hdesc (ht f cs e hv).2.1 hv
+    output_closed h hg hn hs hrules hsat hdesc (ht f cs e hv).2.1 hv
   have hroot : ∀ f cs e, d.Out (viewName f) cs [e] → Root d e :=
     fun _ _ _ => view_root_of_output hsat.1 ho
   refine ⟨hc, ?_, ?_, ho, ?_⟩
@@ -293,15 +305,16 @@ theorem closed_of_saturated {d : Database} {R : RulesetName} (h : Live.State d)
     exact ⟨a, .refl d a, Or.inl he.symm⟩
   · intro f cs ds e hv hl
     apply keys_closed (d := d) (f := f) (fun cs e i hi x hv he =>
-      child_closed h hg hn hs hsat hc hroot hi ((ht f cs e hv).2.2 i hi)
+      child_closed h hg hn hs hrules hsat hc hroot hi ((ht f cs e hv).2.2 i hi)
         (ht f cs e hv).1 hv he) hl [] e hv
 
 theorem rebuilt_of_saturated {d : Database} {R : RulesetName} (h : Live.State d)
     (hg : Live.GeneratedTables d.sig) (hn : d.NoUnions) (hs : d.StoreOk)
+    (hrules : d.RulesSafe)
     (hw : d.WF) (hfin : d.terms.Finite) (hsat : RunSaturated R d)
     (ht : TablesPresent d R) (hr : { pathCompressRule with ruleset := R } ∈ d.rules)
     (hdesc : ∀ a b, d.Out ufName [a] [b] → IdLe b a) : Rebuilt d :=
-  ⟨hw, hfin, closed_of_saturated h hg hn hs hsat ht hr hdesc, hdesc⟩
+  ⟨hw, hfin, closed_of_saturated h hg hn hs hrules hsat ht hr hdesc, hdesc⟩
 
 /-- A total current UF domain supplies both positive lookups in the leader guard. -/
 theorem Rebuilt.root_lookup {d : Database} (h : Rebuilt d) (hd : d.Diag)

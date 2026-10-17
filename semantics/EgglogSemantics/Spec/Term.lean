@@ -7,11 +7,11 @@ import EgglogSemantics.Spec.Syntax
 What an expression evaluates to, and what the database holds:
 
 ```
-Term = number | (constructor Term ...)
+Term = number | (head Term ...)
 ```
 
-A term is its own identity: there are no e-class ids, and the e-graph is a set of terms
-plus a congruence relation over them.
+A term is its own identity: there are no e-class ids. Assertions store equations and
+reflexive atoms; congruence derives equality and subterm existence.
 -/
 
 namespace Egglog
@@ -54,21 +54,6 @@ def decEqList : (as bs : List Term) → Decidable (as = bs)
 end
 
 instance : DecidableEq Term := decEq
-
-mutual
-
-/-- Values contain only literals and declared constructors, never table atoms. -/
-def isValue (sig : Signature) : Term → Bool
-  | .lit _ => true
-  | .app f args => decide (sig.IsCtor f) && areValues sig args
-
-def areValues (sig : Signature) : List Term → Bool
-  | [] => true
-  | t :: ts => isValue sig t && areValues sig ts
-
-end
-
-abbrev IsValue (sig : Signature) (t : Term) : Prop := t.isValue sig = true
 
 /-- `t` is a base value. egglog's `union` requires an eq-sort and so rejects one;
 `evalAction` reads this to refuse the same. -/
@@ -148,7 +133,7 @@ end
 
 mutual
 
-/-- Constructor and literal node count. In particular, wrapping a term strictly
+/-- Term node count. In particular, wrapping a term strictly
 increases its size, regardless of the constructor's name. -/
 def Term.nodeSize : Term → Nat
   | .lit _ => 1

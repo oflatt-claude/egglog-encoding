@@ -141,6 +141,7 @@ theorem rebuild_phases_wellFounded {P : Program} (hp : P.Fragment) {d : Database
       WellFounded (fun e' e => MergeClosure (RunRules rebuildRuleset mid) e ∧
         MergeStep e e') := by
   exact ⟨rebuild_rounds_wellFounded hp h hn hsig honly,
-    fun _ hr => merge_wellFounded ((h.runReach hr).runRules rebuildRuleset).state⟩
+    fun _ hr => merge_wellFounded ((h.runReach hr).runRules rebuildRuleset).state
+      ((h.runReach hr).runRules rebuildRuleset).noUnions.diag⟩
 
 end Egglog.Congruence.Live

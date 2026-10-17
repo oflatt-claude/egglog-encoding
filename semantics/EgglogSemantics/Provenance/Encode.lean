@@ -9,7 +9,7 @@ def resultName (f : FnName) : FnName := namePrefix ++ "result:" ++ f
 def subtermName : FnName := namePrefix ++ "subterm"
 def proofVar (i : Nat) : Var := namePrefix ++ "p" ++ toString i
 
-def ctor (n : Nat) : FnDecl := ⟨n, 1, none, none⟩
+def ctor (n : Nat) : FnDecl := ⟨n, 1, none⟩
 
 def leaf : Expr → Bool
   | .lit _ => true
@@ -30,6 +30,8 @@ def valueExprOk (sig : Signature) (vars : List Var) : Expr → Bool
       !namePrefix.isPrefixOf f && valueExprsOk sig vars args &&
         (sig f).any fun d => d.merge.isNone && args.length == d.arity
   | .min a b => valueExprOk sig vars a && valueExprOk sig vars b
+  | .ite lhs rhs yes no => valueExprsOk sig vars lhs && valueExprsOk sig vars rhs &&
+      valueExprOk sig vars yes && valueExprOk sig vars no
 
 def valueExprsOk (sig : Signature) (vars : List Var) : List Expr → Bool
   | [] => true
@@ -90,22 +92,31 @@ def encodeRule (i : Nat) (r : Rule) : Option Rule := do
     actions := r.actions.zipIdx.map fun aj =>
       encodeAction (.app (ruleName i aj.2) payload) aj.1 }
 
-/-- A merge function gains a proof column and a fresh parameter on each input tuple.
-Every body action records both inputs' proofs, and the result column records them with
-the result. The identity columns stay the original value columns, so a collision that changes
-no data runs nothing, as before. -/
+/-- An inactive table write reasserts the existing proof term. -/
+def encodeMergeBody (f : FnName) (oldVars newVars : List Var) (body : List Action) :
+    List Action :=
+  body.zipIdx.map fun aj =>
+    match encodeAction (.app (bodyName f aj.2)
+        [.var (proofVar 0), .var (proofVar 1)]) aj.1 with
+    | .expr e => .expr (.ite (oldVars.map Expr.var) (newVars.map Expr.var)
+        (.var (proofVar 0)) e)
+    | a => a
+
+/-- Equal data retains the old outputs and their proof. -/
+def encodeMergeResult (f : FnName) (oldVars newVars : List Var) (res : List Expr) :
+    List Expr :=
+  let select := Expr.ite (oldVars.map Expr.var) (newVars.map Expr.var)
+  (oldVars.zip res).map (fun ve => select (.var ve.1) ve.2) ++
+    [select (.var (proofVar 0))
+      (.app (resultName f) [.var (proofVar 0), .var (proofVar 1)])]
+
 def encodeDecl (f : FnName) (d : FnDecl) : FnDecl :=
   match d.merge with
   | some (.merge oldVars newVars body res) =>
-    let old := Expr.var (proofVar 0)
-    let new := Expr.var (proofVar 1)
     { d with
       outArity := d.outArity + 1
-      identityVals := some (min ((d.unchangedWidth body).getD d.outArity) d.outArity)
       merge := some (.merge (oldVars ++ [proofVar 0]) (newVars ++ [proofVar 1])
-        (body.zipIdx.map fun aj =>
-          encodeAction (.app (bodyName f aj.2) [old, new]) aj.1)
-        (res ++ [.app (resultName f) [old, new]])) }
+        (encodeMergeBody f oldVars newVars body) (encodeMergeResult f oldVars newVars res)) }
   | _ => d
 
 def proofDecls (P : Program) : Program :=

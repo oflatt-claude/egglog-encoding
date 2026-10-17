@@ -53,8 +53,8 @@ theorem ruleFacts_supported {P : Program} {C : Context} {db : Database}
       exact hm (by simpa [Signature.mergeOf, hd] using hcs.sig row.name)
     have hstore : db.StoreOk :=
       ⟨fun row hr => (hnone row hr).elim, fun row hr => (hnone row hr).elim,
-        fun p hp => Or.inl ⟨hvalue _ (Cong.direct hp).mem_left,
-          hvalue _ (Cong.direct hp).mem_right⟩,
+        fun p hp => Or.inl ⟨hvalue _ (StoredCong.direct hp).mem_left,
+          hvalue _ (StoredCong.direct hp).mem_right⟩,
         fun b hb => hvalue _ (hw.envInTerms b hb)⟩
     have hmodel : ∀ R, RunRules R db.completion = db.completion := by
       intro R

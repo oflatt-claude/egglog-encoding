@@ -28,6 +28,7 @@ theorem mem_vars_encodeQueryExpr_of_argVar : ∀ (e : Expr) (n : Nat) {v : Var},
   | .lit _, _, _, _, h => absurd h id
   | .var _, _, _, _, h => absurd h id
   | .min _ _, _, _, hof, _ => (Expr.not_orderingFree_min hof).elim
+  | .ite _ _ _ _, _, _, hof, _ => (Expr.not_orderingFree_ite hof).elim
   | .app f args, n, v, hof, h => by
       have hsplit : (encodeQueryExpr (.app f args) n).2.1
           = (encodeQueryArgs args n).2.1

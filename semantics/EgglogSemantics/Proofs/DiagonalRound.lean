@@ -12,9 +12,9 @@ theorem Database.StoreOk.entries_eq_of_terms_eq {d e : Database}
   ext row
   constructor
   · intro hr
-    exact he.entry_of_held_atom (hsig ▸ hr.1) (ht ▸ Cong.direct hr.2)
+    exact he.entry_of_held_atom (hsig ▸ hd.entry_valid hr) (ht ▸ (StoredCong.direct hr.2).toHeld)
   · intro hr
-    exact hd.entry_of_held_atom (hsig.symm ▸ hr.1) (ht.symm ▸ Cong.direct hr.2)
+    exact hd.entry_of_held_atom (hsig.symm ▸ he.entry_valid hr) (ht.symm ▸ (StoredCong.direct hr.2).toHeld)
 
 private def overlay (d : Database) (E : Set (Term × Term)) : Database :=
   { d with eqs := d.eqs ∪ E }
@@ -80,7 +80,7 @@ private theorem evalLocalActions_overlay (d : Database) (E : Set (Term × Term))
   rfl
 
 private theorem overlay_eraseEntry {d : Database} {E : Set (Term × Term)}
-    (hE : ∀ p ∈ E, p.1.IsValue d.sig) {row : Entry} (hv : row.Valid d.sig) :
+    (hE : ∀ p ∈ E, p.1.IsValue d.sig) {row : Entry} (hv : row.Shape d.sig) :
     (overlay d E).eraseEntry row = overlay (d.eraseEntry row) E := by
   apply Database.ext <;> try rfl
   ext p
@@ -99,17 +99,24 @@ private theorem overlay_eraseEntry {d : Database} {E : Set (Term × Term)}
     · exact Or.inr hp
     · exact Or.inl ⟨Or.inr hp, hn hp⟩
 
+private theorem evalMerge_overlay (d : Database) (E : Set (Term × Term))
+    (body : List Action) (res : List Expr) :
+    evalMerge (overlay d E) body res =
+      (evalMerge d body res).map fun p => (overlay p.1 E, p.2) := by
+  unfold evalMerge
+  rw [evalActions_overlay]
+  cases hb : evalActions d body <;>
+    simp [hb, overlay, Option.map_map, Function.comp_def]
+
 private theorem MergeValues.with_overlay {d e : Database} {decl : FnDecl}
     {old new vs : List Term} (hm : MergeValues d decl old new e vs)
     (E : Set (Term × Term)) : MergeValues (overlay d E) decl old new (overlay e E) vs := by
   cases hm with
-  | unchanged hd hc => exact .unchanged hd hc
-  | @changed post vs ovs nvs body res hd hc hb hr =>
-      apply MergeValues.changed (d := overlay post E) hd hc
-      · change evalActions (overlay { d with env := mergeEnv ovs nvs old new } E) body = _
-        rw [evalActions_overlay, hb]
-        rfl
-      · exact hr
+  | @eval post vs ovs nvs body res hd hb =>
+      apply MergeValues.eval (d := overlay post E) hd
+      change evalMerge (overlay { d with env := mergeEnv ovs nvs old new } E) body res = _
+      rw [evalMerge_overlay, hb]
+      rfl
 
 private theorem MergeStep.with_overlay {d e : Database} (hm : MergeStep d e)
     {E : Set (Term × Term)} (hE : ∀ p ∈ E, p.1.IsValue d.sig) :
@@ -147,8 +154,7 @@ private theorem MergeStep.value_eqs {d e : Database} (hm : MergeStep d e)
           exact hn.1.atom_not_value hv
       apply Or.inr
       cases hvals with
-      | unchanged => exact keep
-      | changed _ _ hb _ => exact (evalActions_contained hb).eqs keep
+      | eval _ hb => exact (evalMerge_contained hb).eqs keep
 
 private theorem MergeClosure.value_eqs {d e : Database} (hm : MergeClosure d e)
     {p : Term × Term} (hv : p.1.IsValue d.sig) (hp : p ∈ d.eqs) : p ∈ e.eqs := by
@@ -159,20 +165,20 @@ private theorem MergeClosure.value_eqs {d e : Database} (hm : MergeClosure d e)
 private theorem matches_of_diag_terms {d e : Database} (hd : d.Diag)
     (hsig : d.sig = e.sig) (ht : d.terms = e.terms) {p : Pattern} {σ : Env}
     (hm : Matches d p σ) : Matches e p σ := by
-  cases hm with
+  cases hm using Matches.storedCases with
   | expr hw he hc =>
       have hwt := congOn_eq_of_diag hd hc
       subst hwt
       exact .expr (ht ▸ hw) (hsig ▸ he)
-        ((ht ▸ hw).mono (Database.Contained.addTerms [_] e))
+        ((Database.toStored (ht ▸ hw)).mono (Database.Contained.addTerms [_] e))
   | eq hw ha hb hwa hab =>
       have hwt := congOn_eq_of_diag hd hwa
       have hab := congOn_eq_of_diag hd hab
       subst hwt
       subst hab
       apply Matches.eq (ht ▸ hw) (hsig ▸ ha) (hsig ▸ hb)
-      · exact (ht ▸ hw).mono (Database.Contained.addTerms _ e)
-      · exact (ht ▸ hw).mono (Database.Contained.addTerms _ e)
+      · exact (Database.toStored (ht ▸ hw)).mono (Database.Contained.addTerms _ e)
+      · exact (Database.toStored (ht ▸ hw)).mono (Database.Contained.addTerms _ e)
 
 private theorem query_of_diag_terms {d e : Database} (hd : d.Diag)
     (hsig : d.sig = e.sig) (ht : d.terms = e.terms) {q : Query} {σ : Env}
@@ -180,8 +186,8 @@ private theorem query_of_diag_terms {d e : Database} (hd : d.Diag)
   obtain ⟨σs, hσs, hu⟩ := hq
   refine ⟨σs, hσs.imp ?_, hu⟩
   intro p σ hp
-  exact ⟨⟨hp.1.1, fun b hb => ⟨ht ▸ (hp.1.2 b hb).1,
-    hsig ▸ (hp.1.2 b hb).2⟩⟩, matches_of_diag_terms hd hsig ht hp.2⟩
+  exact ⟨⟨hp.1.1, fun b hb => ht ▸ hp.1.2 b hb⟩,
+    matches_of_diag_terms hd hsig ht hp.2⟩
 
 private theorem runRules_overlay (d : Database) (E : Set (Term × Term))
     (hquery : ∀ q σ, ValidQuerySubst (overlay d E) q σ ↔ ValidQuerySubst d q σ)
@@ -210,17 +216,17 @@ private theorem runRules_overlay (d : Database) (E : Set (Term × Term))
 
 /-- A completed unchanged diagonal round has absorbed all redundant root assertions. -/
 theorem RunStep.self_of_sameMeaning {d e : Database} {R : RulesetName}
-    (hn : d.NoUnions) (hs : d.StoreOk) (hmw : d.sig.MergesWidthOk)
+    (hn : d.NoUnions) (hs : d.StoreOk) (hq : d.RulesSafe) (hmw : d.sig.MergesWidthOk)
     (hr : RunStep R d e) (heq : d.SameMeaning e) : RunStep R e e := by
   have hen := hr.noUnions hn
-  have hes := hr.storeOk hs hmw
+  have hes := hr.storeOk hs hq hmw
   have ht := heq.terms_eq_of_diag hn.diag hen.diag
   have hrows := hs.entries_eq_of_terms_eq hes heq.sig ht
   have hde : d.eqs ⊆ e.eqs := by
     intro p hp
     rcases hs.typed p hp with hv | ⟨row, hv, rfl⟩
     · exact hr.1.value_eqs hv.1 (Or.inl hp)
-    · exact (hrows ▸ (show row ∈ d.entries from ⟨hv, hp⟩)).2
+    · exact (hrows ▸ (show row ∈ d.entries from ⟨hv.shape, hp⟩)).2
   let E := e.eqs \ d.eqs
   have hE : ∀ p ∈ E, p.1.IsValue d.sig ∧ p.1 = p.2 := by
     intro p hp
@@ -228,7 +234,7 @@ theorem RunStep.self_of_sameMeaning {d e : Database} {R : RulesetName}
     rcases hes.typed p hp.1 with hv | ⟨row, hv, he⟩
     · exact heq.sig.symm ▸ hv.1
     · subst p
-      exact (hp.2 ((hrows.symm ▸ (show row ∈ e.entries from ⟨hv, hp.1⟩)).2)).elim
+      exact (hp.2 ((hrows.symm ▸ (show row ∈ e.entries from ⟨hv.shape, hp.1⟩)).2)).elim
   have hover : e = overlay d E := by
     apply Database.ext
     · exact hr.1.sig

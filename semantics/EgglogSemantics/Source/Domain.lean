@@ -24,6 +24,8 @@ def Expr.ctors : Expr → List (FnName × Nat)
   | .var _ => []
   | .app f args => (f, args.length) :: Expr.ctorsList args
   | .min a b => a.ctors ++ b.ctors
+  | .ite lhs rhs yes no =>
+      Expr.ctorsList lhs ++ Expr.ctorsList rhs ++ yes.ctors ++ no.ctors
 
 /-- `Expr.ctors` over an argument list. -/
 def Expr.ctorsList : List Expr → List (FnName × Nat)
@@ -142,29 +144,6 @@ def Pattern.GroundedAt (src : Database) : Pattern → Prop
   | .eq e₁ e₂ => (∀ l, e₁ = .lit l → Term.lit l ∈ src.terms) ∨
       (∀ l, e₂ = .lit l → Term.lit l ∈ src.terms)
 
-mutual
-
-/-- The variable occurs as an **argument of an application**: a key column of one of the view
-reads `encodeQueryExpr` emits. -/
-def Expr.ArgVar (v : Var) : Expr → Prop
-  | .lit _ => False
-  | .var _ => False
-  | .app _ args => Expr.var v ∈ args ∨ Expr.ArgVarList v args
-  | .min a b => Expr.ArgVar v a ∨ Expr.ArgVar v b
-
-/-- `Expr.ArgVar` over an argument list. -/
-def Expr.ArgVarList (v : Var) : List Expr → Prop
-  | [] => False
-  | e :: es => Expr.ArgVar v e ∨ Expr.ArgVarList v es
-
-end
-
-@[inherit_doc Expr.ArgVar]
-def Pattern.ArgVar (v : Var) : Pattern → Prop
-  | .expr e => Expr.ArgVar v e
-  | .eq e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
-
-def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
 
 /-- **The queries the flattening handles.** Every pattern of a rule's query is
 `Pattern.Grounded` and `Pattern.Scoped` — no bare literal, and a fact is an application, as
@@ -188,6 +167,8 @@ def Expr.litFreeB : Expr → Bool
   | .var _ => true
   | .app _ args => Expr.litFreeListB args
   | .min a b => Expr.litFreeB a && Expr.litFreeB b
+  | .ite lhs rhs yes no =>
+      Expr.litFreeListB lhs && Expr.litFreeListB rhs && yes.litFreeB && no.litFreeB
 
 /-- `Expr.litFreeB` over an argument list. -/
 def Expr.litFreeListB : List Expr → Bool
@@ -300,6 +281,7 @@ instance Expr.decidableIsApp : ∀ e : Expr, Decidable e.IsApp
   | .lit _ => .isFalse (fun h => (h : False))
   | .var _ => .isFalse (fun h => (h : False))
   | .min _ _ => .isFalse (fun h => (h : False))
+  | .ite _ _ _ _ => .isFalse (fun h => (h : False))
 
 instance Expr.decidableScoped (e : Expr) (Γ : Scope) : Decidable (e.Scoped Γ) :=
   inferInstanceAs (Decidable (∀ v ∈ e.vars, v ∈ Γ))
@@ -334,8 +316,16 @@ instance (P : Program) : Decidable P.AritiesAgree :=
 /-- **The source fragment**: the programs the congruence pass compiles, the completeness
 theorem is about, and the source proof checker accepts. Declarations, names, queries,
 arities, and rule heads satisfy the conditions recorded below. -/
+@[blueprint "def:fragment"
+  (title := /-- Supported source fragment -/)
+  (statement := /-- Source declarations are constructors, expressions contain no $\min$,
+  and source names avoid the generated \texttt{@} prefix. Expression patterns and build
+  actions are applications. Equality patterns are not pairs of bare literals, and every
+  query variable occurs as an application argument. Head variables are query-bound;
+  head functions are declared before the rule, and each name has a consistent arity.
+  Finally, either all heads are union-free or all head expressions are literal-free. -/)]
 structure Program.Fragment (P : Program) : Prop where
-  /-- The source declares only constructors. Generated target tables may be functions. -/
+  /-- Source declarations are constructors; future source functions must not be nested. -/
   ctorsOnly : P.CtorDecls
   /-- The source never computes with `min`: every expression builds. -/
   noMin : Program.OrderingFree P
@@ -397,6 +387,7 @@ theorem Expr.memVarB_iff (v : Var) : ∀ args : List Expr,
       exact or_congr_left eq_comm
   | .app _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
   | .min _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
+  | .ite _ _ _ _ :: es => by simpa [Expr.memVarB] using Expr.memVarB_iff v es
 
 mutual
 
@@ -406,6 +397,7 @@ def Expr.argVarB (v : Var) : Expr → Bool
   | .var _ => false
   | .app _ args => Expr.memVarB v args || Expr.argVarListB v args
   | .min a b => Expr.argVarB v a || Expr.argVarB v b
+  | .ite _ _ _ _ => false
 
 /-- `Expr.ArgVarList`, computed. -/
 def Expr.argVarListB (v : Var) : List Expr → Bool
@@ -417,6 +409,7 @@ end
 mutual
 
 theorem Expr.argVarB_iff (v : Var) : ∀ e : Expr, Expr.argVarB v e = true ↔ Expr.ArgVar v e
+  | .ite _ _ _ _ => by simp [Expr.argVarB, Expr.ArgVar]
   | .lit _ => by simp [Expr.argVarB, Expr.ArgVar]
   | .var _ => by simp [Expr.argVarB, Expr.ArgVar]
   | .app _ args => by

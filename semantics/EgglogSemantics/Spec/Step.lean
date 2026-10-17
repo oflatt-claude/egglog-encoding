@@ -10,51 +10,37 @@ completed rounds until `SameMeaning` holds. These relations need not terminate.
 -/
 
 namespace Egglog
-/-! ### Reading a table -/
-namespace Database
-/-- `vs` are outputs `db` records for `f` at the class of the key `as`: a lookup searches
-the key's congruence class rather than the term set, and a class may record several. -/
-def Out (db : Database) (f : FnName) (as : List Term) (vs : List Term) : Prop :=
-  ∃ bs, CongList db as bs ∧ Entry.mk f bs vs ∈ db.entries
-
-end Database
 /-! ### The merge step -/
 /-- Componentwise substitution of the two output tuples for a merge's parameters. -/
 def mergeEnv (oldVars newVars : List Var) (old new : List Term) : Env :=
   oldVars.zip old ++ newVars.zip new
 
-/-- The output prefix used to decide whether to run a merge body. Explicit identity
-columns take precedence; a nonempty action block otherwise compares all outputs.
-A pure result expression without identity columns is evaluated for every collision. -/
-def FnDecl.unchangedWidth (d : FnDecl) (body : List Action) : Option Nat :=
-  d.identityVals <|> if body.isEmpty then none else some d.outArity
-
-/-- Whether resolving a collision runs the merge body. Otherwise it keeps the old
-outputs, still removing the second entry. -/
-def MergeConflict (decl : FnDecl) (body : List Action) (a b : List Term) : Prop :=
-  match decl.unchangedWidth body with
-  | some k => a.take k ≠ b.take k
-  | none => True
-
-/-- Resolve two output tuples, preserving the merge body's effects. Equal identity
-columns skip the body. This relation does not invent a second input by colliding a
-row with itself: the caller supplies two distinct rows. -/
+/-- Run the declared body and result, restoring the caller's temporary environment. -/
 inductive MergeValues (db : Database) (decl : FnDecl) (old new : List Term) :
     Database → List Term → Prop where
-  | unchanged {oldVars newVars : List Var} {body : List Action} {res : List Expr} :
+  | eval {d : Database} {vs : List Term} {oldVars newVars : List Var} {body : List Action} {res : List Expr} :
       decl.merge = some (.merge oldVars newVars body res) →
-      ¬ MergeConflict decl body old new → MergeValues db decl old new db old
-  | changed {d : Database} {vs : List Term} {oldVars newVars : List Var}
-      {body : List Action} {res : List Expr} :
-      decl.merge = some (.merge oldVars newVars body res) →
-      MergeConflict decl body old new →
-      evalActions { db with env := mergeEnv oldVars newVars old new } body = some d →
-      Expr.evalList d.sig res d.env = some vs →
+      evalMerge { db with env := mergeEnv oldVars newVars old new } body res = some (d, vs) →
       MergeValues db decl old new { d with env := db.env, rules := db.rules } vs
 
 /-- Resolve two distinct entries at congruent keys. Consume both before running the
 body, so entries written by the body survive. Constructor existence and equations
 are preserved when entries are replaced. Identical writes coalesce as set insertion. -/
+@[blueprint "def:merging"
+  (statement := /--
+  \[
+  \ir{Collide}{
+    a=f(\bar k;\bar v)\in\rows D\quad b=f(\bar k';\bar w)\in\rows D\quad
+      a\ne b\quad\bar k\sim_E\bar k'\\\\
+    \Sigma(f)=\kw{fun}(k,\ell,\kw{merge}(\bar x,\bar y,H,\bar e))\quad
+      \sigma=[\bar x\mapsto\bar v,\bar y\mapsto\bar w]\\\\
+    E_1=(E\setminus\{(a,a)\})\cup\{(t,t)\mid t\in\operatorname{cols}(a)\}\quad
+    E_2=(E_1\setminus\{(b,b)\})\cup\{(t,t)\mid t\in\operatorname{cols}(b)\}\\\\
+    D[E\gets E_2],\sigma\vdash H\Downarrow D'\quad\eval{\bar e}=\bar u}
+    {D\to_m D'+(f(\bar k;\bar u),f(\bar k;\bar u))}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 inductive MergeStep : Database → Database → Prop where
   | collide {db d : Database} {old new : Entry} {decl : FnDecl} {vs : List Term} :
       old ∈ db.entries → new ∈ db.entries → old ≠ new → old.name = new.name →
@@ -72,10 +58,17 @@ def MergeNormal (db : Database) : Prop :=
   ∀ a ∈ db.entries, ∀ b ∈ db.entries,
     a.name = b.name → CongList db a.key b.key → a = b
 
-/-- Complete merging: reach a normal state by finitely many merge steps (`⇓ₘ`).
-This includes collisions created by merge bodies. A computed interpretation can combine
-these completed rows with `CongrOn`; it must remain relational (`Tests/MergeViews.lean`).
-Query operands extend equality only and must not trigger merge effects. -/
+/-- Reach a merge-normal state by finitely many merge steps. -/
+@[blueprint "def:normalization"
+  (statement := /--
+\[
+  \operatorname{Normal}(D)\iff
+  \forall a,b\in\rows D.\ (a.f=b.f\land a.\bar k\sim_E b.\bar k)\Rightarrow a=b
+  \qquad
+  \ir{Normalize}{D\to_m^*D'\\\operatorname{Normal}(D')}{D\Downarrow_m D'}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def MergeNormalize (db db' : Database) : Prop :=
   MergeClosure db db' ∧ MergeNormal db'
 
@@ -92,6 +85,18 @@ def RunRules (R : RulesetName) (db : Database) : Database :=
 
 /-- One round of `R`: rule firing, then a merge phase. What `Cmd.run R` does once and
 `Cmd.saturate R` repeats. -/
+@[blueprint "def:round"
+  (statement := /--
+\[
+  \fire_R(D)\triangleq
+    D\left[E\gets E\cup\bigcup\left\{E_{D'}\ \middle|\ \exists Q,H,\sigma.\
+      (R,Q\Rightarrow H)\in\mathcal R,\ D,\sigma\models Q,\ D,\sigma\vdash H\Downarrow D'
+    \right\}\right]
+  \qquad
+  \ir{Round}{\fire_R(D)\Downarrow_m D'}{D\xrightarrow{R}D'}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def RunStep (R : RulesetName) (db db' : Database) : Prop :=
   MergeNormalize (RunRules R db) db'
 
@@ -107,6 +112,16 @@ past an unchanged round is not an execution of `saturate`.
 For the constructor source fragment, a congruence-respecting round makes this a semantic
 fixed point. The general language also has `min`, so that stability is a theorem with
 fragment premises, not part of this operational stopping rule. -/
+@[blueprint "def:saturation"
+  (statement := /--
+\[
+  D\simeq D'\iff\Sigma=\Sigma'\land\mathcal R=\mathcal R'\land{\sim_E}={\sim_{E'}}
+  \qquad
+  \ir{Stop}{D\xrightarrow{R}D'\\D\simeq D'}{D\Downarrow_R D'}\quad
+  \ir{Repeat}{D\xrightarrow{R}D_1\\D\not\simeq D_1\\D_1\Downarrow_R D'}{D\Downarrow_R D'}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 inductive SaturateReach (R : RulesetName) : Database → Database → Prop where
   | done {db d : Database} :
       RunStep R db d → db.SameMeaning d → SaturateReach R db d

@@ -28,15 +28,15 @@ theorem valuesOk_isValue {sig : Signature} : ∀ {ts : List Term},
 
 end
 
-def Claim.Holds (db : Database) (c : Claim) : Prop := Cong db c.lhs c.rhs
+def Claim.Holds (db : Database) (c : Claim) : Prop := StoredCong db c.lhs c.rhs
 
 theorem Claim.Holds.mono {A B : Database} (h : A.Contained B) {c : Claim}
-    (hc : c.Holds A) : c.Holds B := Cong.mono h hc
+    (hc : c.Holds A) : c.Holds B := StoredCong.mono h hc
 
 theorem reflClaims_sound {db : Database} {t : Term} {c : Claim}
     (hc : c ∈ reflClaims t) : c.Holds (db.addTerm t) := by
   obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hc
-  exact Cong.subterm (Database.mem_addTerm t db) ((Term.mem_subtermList t).mp hs)
+  exact StoredCong.subterm (Database.mem_addTerm t db) ((Term.mem_subtermList t).mp hs)
 
 theorem actionFacts_sound {db : Database} {a : Action} {fs : List Claim}
     (h : actionFacts db.sig db.env a = some fs) :
@@ -60,15 +60,15 @@ theorem actionFacts_sound {db : Database} {a : Action} {fs : List Claim}
         refine ⟨db.addEq x y, by simp [evalAction, hx, hy, hok.2.1, hok.2.2], ?_⟩
         intro c hc
         rcases List.mem_cons.mp hc with rfl | hc
-        · exact Cong.direct (Set.mem_insert _ _)
+        · exact StoredCong.direct (Set.mem_insert _ _)
         rcases List.mem_cons.mp hc with rfl | hc
-        · exact (Cong.direct (db := db.addEq x y) (Set.mem_insert _ _)).symm
+        · exact (StoredCong.direct (db := db.addEq x y) (Set.mem_insert _ _)).symm
         rcases List.mem_append.mp hc with hc | hc
         · obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hc
-          exact Cong.subterm (eqsInTerms_free (Cong.direct (Set.mem_insert _ _))).1
+          exact StoredCong.subterm (Database.toStored (eqsInTerms_free (StoredCong.direct (Set.mem_insert _ _))).1)
             ((Term.mem_subtermList x).mp hs)
         · obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hc
-          exact Cong.subterm (eqsInTerms_free (Cong.direct (Set.mem_insert _ _))).2
+          exact StoredCong.subterm (Database.toStored (eqsInTerms_free (StoredCong.direct (Set.mem_insert _ _))).2)
             ((Term.mem_subtermList y).mp hs)
       · contradiction
 

@@ -14,7 +14,8 @@ theorem actionFacts_sound {db : Database} {a : Action} {fs : List Term}
     · cases Option.some.inj h
       refine ⟨db.addTerm t, by simp [evalAction, ht], ?_⟩
       intro s hs
-      exact Cong.subterm (Database.mem_addTerm t db) ((Term.mem_subtermList t).mp hs)
+      exact (db.addTerm t).subtermClosed t (Database.mem_addTerm t db)
+        ((Term.mem_subtermList t).mp hs)
     · contradiction
 
 theorem actionsFacts_sound {db : Database} {as : List Action} {fs : List Term}
@@ -43,9 +44,9 @@ theorem premiseMatches_sound {db : Database} {σ : Env} {p : Pattern} {t : Term}
   cases p with
   | expr e =>
     simp only [premiseMatches, beq_iff_eq] at h
-    exact .expr ht h (Cong.mono (Database.Contained.addTerms _ _) ht)
+    exact .expr ht h (StoredCong.mono (Database.Contained.addTerms _ _) ht)
   | eq a b =>
-    apply SourceProof.premiseMatches_sound (c := ⟨t, t⟩) ht
+    apply SourceProof.premiseMatches_sound (c := ⟨t, t⟩) (Database.toStored ht)
     simpa [premiseMatches, SourceProof.premiseMatches] using h
 
 theorem premisesMatch_sound {db : Database} {σ : Env} {q : Query} {ts : List Term}

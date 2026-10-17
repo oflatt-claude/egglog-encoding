@@ -8,7 +8,7 @@ namespace Egglog.Congruence.Abstract
 /-- Every retained generated row has a justification in the source database. -/
 def SoundTerms (d src : Database) : Prop :=
   (∀ f cs e, Term.app (viewName f) (cs ++ [e]) ∈ d.terms → EntrySound src f cs e) ∧
-  (∀ t p, Term.app ufName [t, p] ∈ d.terms → Cong src t p)
+  (∀ t p, Term.app ufName [t, p] ∈ d.terms → StoredCong src t p)
 
 /-- Every retained union-find edge points weakly down in the structural term order. -/
 def Descending (d : Database) : Prop :=
@@ -29,8 +29,8 @@ theorem SoundTerms.mono_src {src src' d : Database} (h : src.eqs ⊆ src'.eqs)
   constructor
   · intro f cs e hm
     obtain ⟨as, ha, hal, hae⟩ := hs.1 f cs e hm
-    exact ⟨as, Cong.mono ⟨h⟩ ha, hal.mono ⟨h⟩, Cong.mono ⟨h⟩ hae⟩
-  · exact fun a b hm => Cong.mono ⟨h⟩ (hs.2 a b hm)
+    exact ⟨as, (Database.Contained.mk h).terms ha, hal.mono ⟨h⟩, StoredCong.mono ⟨h⟩ hae⟩
+  · exact fun a b hm => StoredCong.mono ⟨h⟩ (hs.2 a b hm)
 
 theorem SoundTerms.viewsSound {src d : Database} (h : SoundTerms d src) (hd : d.Diag) :
     ViewsSound d src := fun f cs e ho => h.1 f cs e (ho.term hd)
@@ -43,7 +43,7 @@ theorem Descending.out {d : Database} (h : Descending d) (hd : d.Diag) {a b : Te
 
 theorem SoundTerms.addTerm {src d : Database} {t : Term} (h : SoundTerms d src)
     (hv : ∀ f cs e, Term.app (viewName f) (cs ++ [e]) ∈ t.subterms → EntrySound src f cs e)
-    (hu : ∀ a b, Term.app ufName [a, b] ∈ t.subterms → Cong src a b) :
+    (hu : ∀ a b, Term.app ufName [a, b] ∈ t.subterms → StoredCong src a b) :
     SoundTerms (d.addTerm t) src := by
   constructor
   · intro f cs e hm
@@ -81,7 +81,7 @@ theorem subterms_of_columns {d : Database} (hw : d.WF) {g : FnName} {cols : List
 theorem SoundTerms.addTerm_top {src d : Database} {t : Term} (h : SoundTerms d src)
     (hsub : ∀ s ∈ t.subterms, s ≠ t → s ∈ d.terms)
     (hv : ∀ f cs e, t = Term.app (viewName f) (cs ++ [e]) → EntrySound src f cs e)
-    (hu : ∀ a b, t = Term.app ufName [a, b] → Cong src a b) :
+    (hu : ∀ a b, t = Term.app ufName [a, b] → StoredCong src a b) :
     SoundTerms (d.addTerm t) src := by
   apply h.addTerm
   · intro f cs e hm
@@ -94,7 +94,7 @@ theorem SoundTerms.addTerm_top {src d : Database} {t : Term} (h : SoundTerms d s
     · exact h.2 a b (hsub _ hm he)
 
 theorem SoundTerms.addUF {src d : Database} (hw : d.WF) (h : SoundTerms d src)
-    {a b : Term} (ha : a ∈ d.terms) (hb : b ∈ d.terms) (hc : Cong src a b) :
+    {a b : Term} (ha : a ∈ d.terms) (hb : b ∈ d.terms) (hc : StoredCong src a b) :
     SoundTerms (d.addTerm (.app ufName [a, b])) src := by
   have hcol : ∀ c ∈ [a, b], c ∈ d.terms := by
     intro c hc

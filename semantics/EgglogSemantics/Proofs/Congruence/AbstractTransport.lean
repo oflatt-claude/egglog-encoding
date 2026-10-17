@@ -76,8 +76,8 @@ theorem canonicalEq_of_sameClass {a b : Term} (hab : SameClass d a b) :
 /-- Adding query operands introduces only reflexive assertions. Thus source congruence
 still preserves canonical target readings at these temporary terms. -/
 theorem canonicalEq_of_congOn {querySrc : Database} (hun : UnionsRead d querySrc)
-    {ts : List Term} {a b : Term} (hab : CongOn querySrc ts a b) : CanonicalEq h a b := by
-  refine Cong.le (R := CanonicalEq h) ?_ (fun _ _ => CanonicalEq.symm)
+    {ts : List Term} {a b : Term} (hab : StoredCongOn querySrc ts a b) : CanonicalEq h a b := by
+  refine StoredCong.le (R := CanonicalEq h) ?_ (fun _ _ => CanonicalEq.symm)
     (fun _ _ _ => CanonicalEq.trans)
     (fun _ _ _ _ _ hl => canonicalEq_congr h hs hw hl)
     (fun _ s _ _ => CanonicalEq.refl h s) hab
@@ -93,7 +93,7 @@ theorem canonicalEq_of_congOn {querySrc : Database} (hun : UnionsRead d querySrc
 Congruence transports that witness; it does not create existence on its own. -/
 theorem view_of_congOn {querySrc : Database} (hun : UnionsRead d querySrc)
     {ts : List Term} {a b e : Term}
-    (hab : CongOn querySrc ts a b) (ha : ViewRepr d a e) :
+    (hab : StoredCongOn querySrc ts a b) (ha : ViewRepr d a e) :
     ViewRepr d b (h.root e) :=
   (canonicalEq_of_congOn h hs hw hun hab e).mp
     (h.normalize_view hs hw a ha)
@@ -103,7 +103,7 @@ theorem view_of_matches_expr {querySrc : Database} (hun : UnionsRead d querySrc)
     (hex : ∀ t ∈ querySrc.terms, ∃ e, ViewRepr d t e)
     {e : Expr} {σ : Env} (hm : Matches querySrc (.expr e) σ) :
     ∃ t i, e.evalAtom querySrc.sig σ = some t ∧ ViewRepr d t (h.root i) := by
-  cases hm with
+  cases hm using Matches.storedCases with
   | expr hwit he hcng =>
       obtain ⟨i, hi⟩ := hex _ hwit
       exact ⟨_, i, he, view_of_congOn h hs hw hun hcng hi⟩
@@ -115,7 +115,7 @@ theorem views_of_matches_eq {querySrc : Database} (hun : UnionsRead d querySrc)
     {a b : Expr} {σ : Env} (hm : Matches querySrc (.eq a b) σ) :
     ∃ ta tb i, a.eval querySrc.sig σ = some ta ∧ b.eval querySrc.sig σ = some tb ∧
       ViewRepr d ta (h.root i) ∧ ViewRepr d tb (h.root i) := by
-  cases hm with
+  cases hm using Matches.storedCases with
   | eq hwit ha hb' hwa hab =>
       obtain ⟨i, hi⟩ := hex _ hwit
       have hia := view_of_congOn h hs hw hun hwa hi

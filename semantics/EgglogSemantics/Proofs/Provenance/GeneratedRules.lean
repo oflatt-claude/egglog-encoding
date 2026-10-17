@@ -50,16 +50,18 @@ private theorem generated_rule_cases {P : Program} {r : Rule}
     rule_mem_prelude, rule_mem_encodeCmds] using hr
 
 private theorem local_runtime {d post : Database} {r : Rule} {σ : Env}
-    (h : Live.Runtime d) (hu : Actions.UnionFree r.actions)
+    (h : Live.Runtime d) (hu : Actions.UnionFree r.actions) (hq : r.query.Safe)
     (hm : ValidQuerySubst d r.query σ)
     (hf : evalLocalActions d r.actions σ = some post) : Live.Runtime post := by
   refine ⟨evalLocalActions_wf h.wf hm.mem_terms hf,
-    evalLocalActions_storeOk h.storeOk (fun b hb => (hm.mem_values b hb).2) hf,
+    evalLocalActions_storeOk h.storeOk (fun b hb => (hm.mem_values h.storeOk hq b hb).2) hf,
     ⟨evalLocalActions_diag hu h.noUnions.diag hf, ?_, ?_⟩,
-    h.state.evalLocalActions h.generated hf, ?_⟩
+    h.state.evalLocalActions h.generated h.storeOk
+      (fun b hb => (hm.mem_values h.storeOk hq b hb).2) hf, ?_, ?_⟩
   · rw [evalLocalActions_sig hf]; exact h.noUnions.sig
   · rw [evalLocalActions_rules hf]; exact h.noUnions.rules
   · rw [evalLocalActions_sig hf]; exact h.generated
+  · simpa only [Database.RulesSafe, evalLocalActions_rules hf] using h.rulesSafe
 
 /-- Source saturation justifies both compiled source heads and maintenance heads. -/
 theorem rule_firing_sound {P : Program} (hp : P.Fragment) {src d post : Database}
@@ -141,7 +143,7 @@ theorem ruleFacts_sound {P : Program} (hp : P.Fragment) {src d : Database}
   obtain ⟨τ, post, hτ, hfire, hlocal, hu, hfs⟩ := ruleFacts_eval h.wf henv hprem hf
   obtain ⟨hsound, hdesc, hbound⟩ := rule_firing_sound hp hsource hclosed h hsig hs hd
     hr hτ hfire
-  exact ⟨post, hlocal, local_runtime h hu hτ hfire, evalLocalActions_sig hlocal,
+  exact ⟨post, hlocal, local_runtime h hu (encode_querySafe hp r hr) hτ hfire, evalLocalActions_sig hlocal,
     evalLocalActions_env hlocal, evalLocalActions_rules hlocal, hsound, hdesc, hbound, hfs⟩
 
 end Egglog.Provenance.Generated

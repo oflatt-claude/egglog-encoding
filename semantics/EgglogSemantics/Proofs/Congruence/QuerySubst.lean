@@ -39,7 +39,7 @@ theorem validQuerySubst_of_assignment {src : Database} {q : Query} {g : Var → 
     refine ⟨⟨by rw [dom_sourceSubst], ?_⟩, hm p hp⟩
     rintro b hb
     obtain ⟨v, hv, rfl⟩ := List.mem_map.mp hb
-    exact hgt v (hmem p hp v (p.mem_freeVars.mp hv).1)
+    exact (hgt v (hmem p hp v (p.mem_freeVars.mp hv).1)).1
   have hnd : (Env.dom (Query.vars q |>.map fun v => (v, g v))).Nodup := by
     simpa [Env.dom, List.map_map, Function.comp_def] using Query.vars_nodup q
   have hrefines : ∀ ρ ∈ q.map (sourceSubst [] g),

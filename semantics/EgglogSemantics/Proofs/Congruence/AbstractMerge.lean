@@ -21,7 +21,7 @@ theorem mergeLinks_wf {d : Database} (hw : d.WF) (a b : Term) :
     (mergeLinks d a b).WF := (hw.addTerm _).addTerm _
 
 theorem SoundTerms.mergeLinks {src d : Database} (hw : d.WF) (h : SoundTerms d src)
-    {a b : Term} (ha : a ∈ d.terms) (hb : b ∈ d.terms) (hc : Cong src a b) :
+    {a b : Term} (ha : a ∈ d.terms) (hb : b ∈ d.terms) (hc : StoredCong src a b) :
     SoundTerms (mergeLinks d a b) src := by
   have hl : lowerId a b ∈ d.terms := by
     rcases lowerId_eq_or a b with he | he <;> rw [he] <;> assumption
@@ -52,7 +52,7 @@ theorem mergeStep_form {d e : Database} (hshape : MergeShape d.sig) (hd : d.Diag
     obtain ⟨ms, hms⟩ := Option.ne_none_iff_exists'.mp hnot.1
     cases ms with
     | merge oldVars newVars body res =>
-      obtain ⟨hrole, rfl, rfl, hout, hufarity, hid, rfl, rfl⟩ :=
+      obtain ⟨hrole, rfl, rfl, hout, hufarity, rfl, rfl⟩ :=
         hshape old.name dc hsig body res hms
       have hdc : dc = tableDecl dc.arity := by
         cases dc; simp_all [tableDecl]
@@ -65,38 +65,28 @@ theorem mergeStep_form {d e : Database} (hshape : MergeShape d.sig) (hd : d.Diag
       have heb : new = ⟨old.name, old.key, [b]⟩ := by
         rw [hname, hk]; cases new; exact congrArg (Entry.mk _ _) hb
       have hab : a ≠ b := fun he => hne (hea.trans (he ▸ heb.symm))
-      have hva := ho.1.output_values a (by simp [ha])
-      have hvb := hn.1.output_values b (by simp [hb])
       have hkind : (old.name = ufName ∧ old.key.length = 1) ∨
           ∃ g, old.name = viewName g :=
         hrole.elim (fun hu => Or.inl ⟨hu, hnot.2.1.trans (hufarity hu)⟩) Or.inr
       rw [hdc, ha, hb] at hm
       cases hm with
-      | unchanged hm hconf =>
+      | eval hm he =>
         simp only [tableDecl, Option.some.injEq, MergeSpec.merge.injEq] at hm
         rcases hm with ⟨rfl, rfl, rfl, rfl⟩
-        exact (hab (by simpa [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody]
-          using hconf)).elim
-      | changed hm _ hbody hres =>
-        simp only [tableDecl, Option.some.injEq, MergeSpec.merge.injEq] at hm
-        rcases hm with ⟨rfl, rfl, rfl, rfl⟩
-        rw [Live.eval_mergeBody (d := (d.eraseEntry old).eraseEntry new)
-          huf a b hva hvb] at hbody
-        cases hbody
-        have hvs : vs = [lowerId a b] := by
-          simpa [mergeResult, Expr.evalList, Expr.eval, mergeEnv, Env.lookup,
-            Option.filter, hva, hvb, lowerId_eq_least] using hres.symm
-        subst vs
+        rw [Live.eval_merge (d := (d.eraseEntry old).eraseEntry new)
+          huf a b] at he
+        cases he
         refine ⟨old.name, old.key, a, b, hea ▸ ho, heb ▸ hn, hkind, ?_⟩
         rw [hea, heb]
         rfl
 
 /-- Equal view keys justify congruence of the two retained outputs. -/
 theorem entrySound_collide {src : Database} {f : FnName} {cs : List Term} {a b : Term}
-    (ha : EntrySound src f cs a) (hb : EntrySound src f cs b) : Cong src a b := by
+    (ha : EntrySound src f cs a) (hb : EntrySound src f cs b) : StoredCong src a b := by
   obtain ⟨as, ham, hal, hae⟩ := ha
   obtain ⟨bs, hbm, hbl, hbe⟩ := hb
-  exact hae.symm.trans ((Cong.congr ham hbm (hal.trans hbl.symm)).trans hbe)
+  exact hae.symm.trans ((StoredCong.congr (Database.toStored ham)
+    (Database.toStored hbm) (hal.trans hbl.symm)).trans hbe)
 
 /-- A merge only relates outputs that are already source-congruent. -/
 theorem mergeStep_soundTerms {src d e : Database} (hshape : MergeShape d.sig)
@@ -105,24 +95,24 @@ theorem mergeStep_soundTerms {src d e : Database} (hshape : MergeShape d.sig)
     (hstep : MergeStep d e) : SoundTerms e src := by
   obtain ⟨f, cs, a, b, hrowa, hrowb, hkind, rfl⟩ :=
     mergeStep_form hshape hd huf hstep
-  have hta : Term.app f (cs ++ [a]) ∈ d.terms := .direct hrowa.2
-  have htb : Term.app f (cs ++ [b]) ∈ d.terms := .direct hrowb.2
+  have hta : Term.app f (cs ++ [a]) ∈ d.terms := (StoredCong.direct hrowa.2).toHeld
+  have htb : Term.app f (cs ++ [b]) ∈ d.terms := (StoredCong.direct hrowb.2).toHeld
   let base := (d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩
   have hbase : base.terms ⊆ d.terms :=
     (Database.terms_eraseEntry_subset (fun t ht =>
-      Database.mem_terms_eraseEntry_of_value hrowa.1 (hrowb.1.column_values t ht)
+      Database.mem_terms_eraseEntry_of_value (hstore.entry_valid hrowa) ((hstore.entry_valid hrowb).column_values t ht)
         (hstore.columns _ hrowb t ht))).trans
       (Database.terms_eraseEntry_subset (hstore.columns _ hrowa))
-  have hwbase : base.WF := (hw.eraseEntry hstore _ hrowa.1).eraseEntry
-    (hstore.eraseEntry _ hrowa.1) _ hrowb.1
+  have hwbase : base.WF := (hw.eraseEntry hstore _ (hstore.entry_valid hrowa)).eraseEntry
+    (hstore.eraseEntry _ (hstore.entry_valid hrowa)) _ (hstore.entry_valid hrowb)
   have kept : ∀ t, t.IsValue d.sig → t ∈ d.terms → t ∈ base.terms := fun t hv ht =>
-    Database.mem_terms_eraseEntry_of_value hrowb.1 hv
-      (Database.mem_terms_eraseEntry_of_value hrowa.1 hv ht)
-  have ha := kept a (hrowa.1.output_values a (by simp))
+    Database.mem_terms_eraseEntry_of_value (hstore.entry_valid hrowb) hv
+      (Database.mem_terms_eraseEntry_of_value (hstore.entry_valid hrowa) hv ht)
+  have ha := kept a ((hstore.entry_valid hrowa).output_values a (by simp))
     (Database.mem_terms_of_arg hw hta (by simp : a ∈ cs ++ [a]))
-  have hb := kept b (hrowb.1.output_values b (by simp))
+  have hb := kept b ((hstore.entry_valid hrowb).output_values b (by simp))
     (Database.mem_terms_of_arg hw htb (by simp : b ∈ cs ++ [b]))
-  have hab : Cong src a b := by
+  have hab : StoredCong src a b := by
     rcases hkind with ⟨rfl, hk⟩ | ⟨g, rfl⟩
     · obtain ⟨key, rfl⟩ := List.length_eq_one_iff.mp hk
       exact (hs.2 key a hta).symm.trans (hs.2 key b htb)
@@ -139,22 +129,22 @@ theorem mergeStep_descending {d e : Database} (hshape : MergeShape d.sig)
     (huf : d.sig ufName = some (tableDecl 1)) (hs : Descending d)
     (hstep : MergeStep d e) : Descending e := by
   obtain ⟨f, cs, a, b, hrowa, hrowb, _, rfl⟩ := mergeStep_form hshape hd huf hstep
-  have hta : Term.app f (cs ++ [a]) ∈ d.terms := .direct hrowa.2
-  have htb : Term.app f (cs ++ [b]) ∈ d.terms := .direct hrowb.2
+  have hta : Term.app f (cs ++ [a]) ∈ d.terms := (StoredCong.direct hrowa.2).toHeld
+  have htb : Term.app f (cs ++ [b]) ∈ d.terms := (StoredCong.direct hrowb.2).toHeld
   let base := (d.eraseEntry ⟨f, cs, [a]⟩).eraseEntry ⟨f, cs, [b]⟩
   have hbase : base.terms ⊆ d.terms :=
     (Database.terms_eraseEntry_subset (fun t ht =>
-      Database.mem_terms_eraseEntry_of_value hrowa.1 (hrowb.1.column_values t ht)
+      Database.mem_terms_eraseEntry_of_value (hstore.entry_valid hrowa) ((hstore.entry_valid hrowb).column_values t ht)
         (hstore.columns _ hrowb t ht))).trans
       (Database.terms_eraseEntry_subset (hstore.columns _ hrowa))
-  have hwbase : base.WF := (hw.eraseEntry hstore _ hrowa.1).eraseEntry
-    (hstore.eraseEntry _ hrowa.1) _ hrowb.1
+  have hwbase : base.WF := (hw.eraseEntry hstore _ (hstore.entry_valid hrowa)).eraseEntry
+    (hstore.eraseEntry _ (hstore.entry_valid hrowa)) _ (hstore.entry_valid hrowb)
   have kept : ∀ t, t.IsValue d.sig → t ∈ d.terms → t ∈ base.terms := fun t hv ht =>
-    Database.mem_terms_eraseEntry_of_value hrowb.1 hv
-      (Database.mem_terms_eraseEntry_of_value hrowa.1 hv ht)
-  have ha := kept a (hrowa.1.output_values a (by simp))
+    Database.mem_terms_eraseEntry_of_value (hstore.entry_valid hrowb) hv
+      (Database.mem_terms_eraseEntry_of_value (hstore.entry_valid hrowa) hv ht)
+  have ha := kept a ((hstore.entry_valid hrowa).output_values a (by simp))
     (Database.mem_terms_of_arg hw hta (by simp : a ∈ cs ++ [a]))
-  have hb := kept b (hrowb.1.output_values b (by simp))
+  have hb := kept b ((hstore.entry_valid hrowb).output_values b (by simp))
     (Database.mem_terms_of_arg hw htb (by simp : b ∈ cs ++ [b]))
   have hsurv : Term.app f (cs ++ [lowerId a b]) ∈ d.terms := by
     rcases lowerId_eq_or a b with he | he <;> rw [he] <;> assumption
@@ -164,21 +154,22 @@ theorem mergeStep_descending {d e : Database} (hshape : MergeShape d.sig)
   · exact hl x y hm
   · exact hs x y (hw.subtermClosed _ hsurv hm)
 
-/-- Generated merge bodies have legal writes and exactly one result. -/
+/-- Every generated merge branch returns one output. -/
 theorem mergeShape_mergesLegal {sig : Signature} (h : MergeShape sig) :
     sig.MergesLegal := by
   intro f dc oldVars newVars body res hdc hm
   obtain ⟨_, rfl, rfl, ho, _⟩ := h f dc hdc body res hm
-  exact ⟨⟨trivial, trivial, trivial⟩, ho.symm⟩
+  simp [mergeResult, ho]
 
-/-- The body writes complete two-column UF entries. -/
+/-- The block writes complete two-column UF entries and returns one id. -/
 theorem mergeShape_mergesWidthOk {sig : Signature} (h : MergeShape sig)
     (hu : sig ufName = some (tableDecl 1)) : sig.MergesWidthOk := by
   intro f dc ms hd hm
   cases ms with
   | merge oldVars newVars body res =>
       obtain ⟨_, rfl, rfl, ho, _⟩ := h f dc hd body res hm
-      simp [MergeSpec.WidthOk, mergeResult, mergeBody, ho, Action.WidthOk,
+      simp [MergeSpec.WidthOk,
+        mergeResult, mergeBody, ho, Action.WidthOk,
         Expr.AtomWidthOk, Expr.WidthOk, Expr.WidthOkList, hu, tableDecl, FnDecl.entryWidth]
 
 /-- Arbitrary finite choices of generated collisions preserve source justification. -/

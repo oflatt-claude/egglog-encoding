@@ -140,7 +140,7 @@ theorem encodedRule_match_of_source {d src querySrc : Database}
       (fun hp' => (hp ρ hfresh hext p hp').holds) (hguard p)
   obtain ⟨τ, hτ, hag⟩ := validQuerySubst_of_matches (fun v hvq => by
     obtain ⟨p, hp, hvp⟩ := Query.mem_vars.mp hvq
-    obtain ⟨i, hi⟩ := Option.isSome_iff_exists.mp (Matches.bound (hall p hp) hvp)
+    obtain ⟨i, hi⟩ := Option.isSome_iff_exists.mp (Matches.bound (hall p hp) ((encodeQuery_leader_safe q n hof).2 p hp) hvp)
     exact ⟨i, hi, hval v i hi⟩) hall
   have hkeep : ∀ v ∈ q.vars, Env.lookup v τ = Env.lookup v ρ := by
     intro v hv

@@ -28,6 +28,17 @@ theorem Expr.exists_ctor_of_mem_fns : ∀ {e : Expr} {g : FnName}, g ∈ e.fns �
         exact ⟨k, by rw [Expr.ctors]; exact List.mem_append_left _ hk⟩
       · obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg'
         exact ⟨k, by rw [Expr.ctors]; exact List.mem_append_right _ hk⟩
+  | .ite lhs rhs yes no, g, hg => by
+      simp only [Expr.fns, List.mem_union_iff] at hg
+      rcases hg with (hg | hg) | (hg | hg)
+      · obtain ⟨k, hk⟩ := Expr.exists_ctorList_of_mem_fnsList hg
+        exact ⟨k, by simp [Expr.ctors, hk]⟩
+      · obtain ⟨k, hk⟩ := Expr.exists_ctorList_of_mem_fnsList hg
+        exact ⟨k, by simp [Expr.ctors, hk]⟩
+      · obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg
+        exact ⟨k, by simp [Expr.ctors, hk]⟩
+      · obtain ⟨k, hk⟩ := Expr.exists_ctor_of_mem_fns hg
+        exact ⟨k, by simp [Expr.ctors, hk]⟩
 
 @[inherit_doc Expr.exists_ctor_of_mem_fns]
 theorem Expr.exists_ctorList_of_mem_fnsList : ∀ {es : List Expr} {g : FnName},
@@ -105,7 +116,7 @@ theorem Expr.eval_litFree {sig : Signature} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Term.LitFree t) :
     ∀ (e : Expr) {t : Term}, e.litFreeB = true → e.eval sig σ = some t → Term.LitFree t
   | .lit _, _, hl, _ => by simp [Expr.litFreeB] at hl
-  | .var v, t, _, he => hσ v t (Option.filter_eq_some_iff.mp he).1
+  | .var v, t, _, he => hσ v t he
   | .app f args, t, hl, he => by
       by_cases hc : sig.IsCtor f
       · rw [Expr.eval_app_ctor hc] at he
@@ -123,6 +134,10 @@ theorem Expr.eval_litFree {sig : Signature} {σ : Env}
       rcases Term.least_eq_or x y with h | h <;> rw [h]
       · exact Expr.eval_litFree hσ a hl.1 hx
       · exact Expr.eval_litFree hσ b hl.2 hy
+  | .ite lhs rhs yes no, t, hl, he => by
+      simp only [Expr.litFreeB, Bool.and_eq_true] at hl
+      exact (Expr.eval_ite_inv he).elim
+        (Expr.eval_litFree hσ yes hl.1.2) (Expr.eval_litFree hσ no hl.2)
 
 @[inherit_doc Expr.eval_litFree]
 theorem Expr.evalList_litFree {sig : Signature} {σ : Env}
@@ -155,11 +170,14 @@ theorem Expr.evalAtom_litFree {sig : Signature} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Term.LitFree t)
     (e : Expr) {t : Term} (hl : e.litFreeB = true) (he : e.evalAtom sig σ = some t) :
     Term.LitFree t := by
-  cases e with
+  induction e using Expr.recExpr with
   | lit _ => simp [Expr.litFreeB] at hl
-  | var v => exact hσ v t (Option.filter_eq_some_iff.mp he).1
-  | min a b => exact Expr.eval_litFree hσ (.min a b) hl he
-  | app f args =>
+  | var v => exact hσ v t he
+  | min a b _ _ => exact Expr.eval_litFree hσ (.min a b) hl he
+  | ite lhs rhs yes no _ _ ihyes ihno =>
+      simp only [Expr.litFreeB, Bool.and_eq_true] at hl
+      exact (Expr.evalAtom_ite_inv he).elim (ihyes hl.1.2) (ihno hl.2)
+  | app f args _ =>
     obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv he
     exact Term.litFree_app.mpr (Expr.evalList_litFree hσ args hl hts)
 
@@ -313,16 +331,15 @@ def Actions.UnionRunnable (as : List Action) (db : Database) : Prop :=
 weakened to `Actions.UnionRunnable`. -/
 theorem evalAction_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     (hw : db.WF) {a : Action} {as : List Action} (hsc : a.Scoped Γ) (hb : a.Builds db.sig)
-    (hr : Actions.UnionRunnable (a :: as) db)
-    (hv : ∀ b ∈ db.env, b.2.IsValue db.sig) :
+    (hr : Actions.UnionRunnable (a :: as) db) :
     ∃ db', evalAction db a = some db' ∧ Γ.Models db'.env := by
   cases a with
   | expr e =>
-      obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb hv
+      obtain ⟨t, ht⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb
       exact ⟨db.addTerm t, evalAction_expr_of_eval ht, hm⟩
   | union e₁ e₂ =>
-      obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm hsc.1 hb.1 hv
-      obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb.2 hv
+      obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm hsc.1 hb.1
+      obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm hsc.2 hb.2
       rcases hr with huf | ⟨hlf, hnl⟩
       · exact absurd huf.1 id
       · have hl := hnl _ List.mem_cons_self
@@ -339,13 +356,12 @@ invariant: the union-free arm shrinks with the list, and the literal-free arm is
 `evalAction_litFree`. -/
 theorem evalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     (hw : db.WF) {as : List Action} (hsc : Actions.Scoped as Γ)
-    (hb : Actions.Builds as db.sig) (hr : Actions.UnionRunnable as db)
-    (hv : ∀ b ∈ db.env, b.2.IsValue db.sig) :
+    (hb : Actions.Builds as db.sig) (hr : Actions.UnionRunnable as db) :
     ∃ db', evalActions db as = some db' ∧ Γ.Models db'.env := by
   induction as generalizing db Γ with
   | nil => exact ⟨db, rfl, hm⟩
   | cons a as ih =>
-      obtain ⟨db₁, h₁, hm₁⟩ := evalAction_isSome_of_builds hm hw hsc.1 hb.1 hr hv
+      obtain ⟨db₁, h₁, hm₁⟩ := evalAction_isSome_of_builds hm hw hsc.1 hb.1 hr
       have hsig : db₁.sig = db.sig := evalAction_sig h₁
       have hr₁ : Actions.UnionRunnable as db₁ := by
         rcases hr with huf | ⟨hlf, hnl⟩
@@ -354,7 +370,6 @@ theorem evalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.Model
             fun b hb' => hnl b (List.mem_cons_of_mem _ hb')⟩
       obtain ⟨db₂, h₂, hm₂⟩ :=
         ih hm₁ (evalAction_wf hw h₁) hsc.2 (by rw [hsig]; exact hb.2) hr₁
-          (by rw [evalAction_env h₁, hsig]; exact hv)
       exact ⟨db₂, by simp [h₁, h₂], hm₂⟩
 
 /-- **A rule head does not get stuck**, at the substitution its query delivered.
@@ -363,8 +378,7 @@ theorem evalLocalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.
     (hw : db.WF) {r : Rule} (hsc : Actions.Scoped r.actions (Query.bind r.query Γ))
     (hb : Actions.Builds r.actions db.sig)
     (hr : Actions.UnionRunnable r.actions db) {σ : Env}
-    (hq : ValidQuerySubst db r.query σ)
-    (hv : ∀ b ∈ db.env, b.2.IsValue db.sig) :
+    (hq : ValidQuerySubst db r.query σ) :
     ∃ d, evalActions { db with env := σ ++ db.env } r.actions = some d ∧
       evalLocalActions db r.actions σ = some { d with env := db.env, rules := db.rules } := by
   obtain ⟨d, hd, -⟩ := evalActions_isSome_of_builds
@@ -373,9 +387,6 @@ theorem evalLocalActions_isSome_of_builds {db : Database} {Γ : Scope} (hm : Γ.
     (by rcases hr with huf | ⟨hlf, hnl⟩
         · exact Or.inl huf
         · exact Or.inr ⟨fun t ht => hlf t (Database.terms_setEnv ▸ ht), hnl⟩)
-    (by intro b hb; rcases List.mem_append.mp hb with hb | hb
-        · exact (hq.mem_values b hb).2
-        · exact hv b hb)
   exact ⟨d, hd, by simp [evalLocalActions, hd]⟩
 
 /-- **A declared name is a constructor**, on a constructor-only signature. This is the whole

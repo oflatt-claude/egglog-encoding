@@ -47,7 +47,7 @@ theorem round_sameMeaning {d e : Database} (hd : d.WF) (he : e.WF)
     (hdEnv : d.env = []) (heEnv : e.env = []) {R : RulesetName}
     (hn : ∀ r ∈ d.rules, r.ruleset = R → r.OrderingFree) :
     (RunRules R d).SameMeaning (RunRules R e) := by
-  refine ⟨h.sig, h.env, h.rules, fun a b => ⟨?_, ?_⟩⟩
+  refine Database.SameMeaning.of_inferred h.sig h.env h.rules (fun a b => ⟨?_, ?_⟩)
   · exact round_infers hd he heStore hc h hdEnv heEnv hn
   · exact round_infers he hd hdStore (h.sig ▸ hc) h.symm heEnv hdEnv
       (fun r hr hR => hn r (h.rules.symm ▸ hr) hR)
@@ -89,6 +89,6 @@ theorem saturation_completion_closed {d e : Database} (hw : d.WF) (hs : d.StoreO
       exact completion_closed hw hs hc henv hn hh'
   | @step d mid e hstep _ _ ih =>
       obtain rfl := hstep.eq_of_allConstructors hc
-      exact ih (RunRules.wf hw) (RunRules.storeOk hs) hc henv hn
+      exact ih (RunRules.wf hw) (RunRules.storeOk_of_allConstructors hs hc) hc henv hn
 
 end Egglog.SourceMeaning

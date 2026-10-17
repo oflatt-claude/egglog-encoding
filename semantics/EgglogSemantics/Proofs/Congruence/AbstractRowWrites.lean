@@ -54,6 +54,7 @@ theorem encodeBuild_rowActions : ∀ e a, a ∈ encodeBuild e → RowAction a
       exact RowAction.uf (.var v) (.var v)
   | .min x y, a, h =>
       (List.mem_append.mp h).elim (encodeBuild_rowActions x a) (encodeBuild_rowActions y a)
+  | .ite _ _ _ _, _, h => by cases h
   | .app f args, a, h => by
       rcases List.mem_append.mp h with h | h
       · exact encodeBuildArgs_rowActions args a h

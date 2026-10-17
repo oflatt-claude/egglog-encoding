@@ -73,6 +73,7 @@ theorem encodeBuild_preserves {src : Database} (hw : src.WF)
       obtain rfl := Option.some.inj run
       exact h
   | .min _ _, _, _, _, hp, _, _, _, _ => (Expr.not_orderingFree_min hp).elim
+  | .ite _ _ _ _, _, _, _, hp, _, _, _, _ => (Expr.not_orderingFree_ite hp).elim
   | .app f args, d, d', t, hp, he, ht, h, run => by
       have hctor : d.sig.IsCtor f := by
         by_contra hn

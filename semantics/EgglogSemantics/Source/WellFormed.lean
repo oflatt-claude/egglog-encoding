@@ -24,6 +24,12 @@ def Program.WellFormedFrom : Signature → Program → Prop
   | sig, c :: cs => c.WellFormed sig ∧ Program.WellFormedFrom (c.sigBind sig) cs
 
 /-- The paper's static premise, used together with `Program.Fragment`. -/
+@[blueprint "def:wellformed"
+  (title := /-- Static well-formedness -/)
+  (statement := /-- For constructor source programs, declarations are fresh; every
+  application uses an earlier declaration of the same arity. Rules and checks are
+  scoped, with head variables bound by the query.
+  These are syntactic conditions: a check need not be true for its program to be well formed. -/)]
 def Program.WellFormed (P : Program) : Prop := P.WellFormedFrom (fun _ => none)
 
 instance (c : Cmd) (sig : Signature) : Decidable (c.ApplicationsDeclared sig) :=

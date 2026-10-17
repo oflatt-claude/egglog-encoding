@@ -65,7 +65,7 @@ private theorem no_query_of_empty {d : Database} (hd : d.eqs = ∅) {q : Query}
   | cons p ps =>
       cases hσs with
       | cons hp _ =>
-          cases hp.2 with
+          cases hp.2 using Matches.storedCases with
           | expr hw _ _ => simp [Database.terms_empty_of_eqs_empty hd] at hw
           | eq hw _ _ _ _ => simp [Database.terms_empty_of_eqs_empty hd] at hw
 
@@ -94,6 +94,7 @@ private theorem source_check : QueryHolds sourceBuilt constructorQuery := by
       intro p hp
       obtain rfl := List.mem_singleton.mp hp
       exact .entry ⟨ctorDecl 0, rfl, Or.inl rfl⟩ rfl (Database.mem_addTerm _ _))
+    (by intro p hp; obtain rfl := List.mem_singleton.mp hp; rfl)
   exact ⟨σ, hσ⟩
 
 private theorem source_decl : CmdStep Database.empty (.decl "C" (ctorDecl 0)) sourceDeclared :=
@@ -283,6 +284,7 @@ private theorem source_round_success : Eval Database.empty roundProgram (.ok sou
         obtain rfl := List.mem_singleton.mp hp
         exact .entry ⟨ctorDecl 0, rfl, Or.inl rfl⟩ rfl
           (hcontains.terms (Database.mem_addTerm _ _)))
+      (by intro p hp; obtain rfl := List.mem_singleton.mp hp; rfl)
     exact ⟨σ, hσ⟩
   exact .cons (.ok source_decl)
     (.cons (.ok (.of_reach rfl (empty_normal rfl)))
@@ -344,12 +346,8 @@ private theorem congruence_check : QueryHolds builtFA queryFB := by
   have hfa : fa ∈ builtFA.terms := Database.mem_addTerm _ _
   have hab : Cong builtFA a b := Cong.mono (Database.Contained.addTerm _ _) (.direct
     (Set.mem_insert _ _))
-  have hread : CongOn builtFA [fb] fa fb := by
-    apply Cong.congr
-    · exact Cong.mono (Database.Contained.addTerm _ _) hfa
-    · exact Database.mem_addTerm _ _
-    · exact .cons (Cong.mono (Database.Contained.addTerm _ _) hab) .nil
-  refine ⟨[], [[]], .cons ⟨?_, Matches.expr hfa rfl hread⟩ .nil, .single []⟩
+  have hread : Cong builtFA fa fb := .congr (Database.toCong hfa) (.cons hab .nil)
+  refine ⟨[], [[]], .cons ⟨?_, Matches.atom rfl (hread.symm.trans hread)⟩ .nil, .single []⟩
   exact ⟨List.Perm.refl [], by simp⟩
 
 private theorem congruence_source : Eval Database.empty congruenceProgram (.ok builtFA) := by

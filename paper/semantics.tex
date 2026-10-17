@@ -1,0 +1,122 @@
+% Build from the repository root with `make paper`.
+\documentclass[10pt]{article}
+\usepackage[margin=.65in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,stmaryrd,mathpartir}
+\usepackage{array}
+\usepackage[colorlinks=true,linkcolor=blue]{hyperref}
+\usepackage[font=footnotesize,labelfont=bf]{caption}
+\pagestyle{empty}
+
+% Extracted fragments carry declaration links; the figures display only their math.
+\newenvironment{paperfragment}[1][]{\ignorespaces}{\ignorespacesafterend}
+\newcommand{\lean}[1]{}
+\newcommand{\uses}[1]{}
+\newcommand{\leanok}{}
+\newcommand{\mathlibok}{}
+\newcommand{\discussion}[1]{}
+\newcommand{\notready}{\PackageError{semantics}{Unfinished blueprint node}{Complete the Lean declaration before including it.}}
+\newcommand{\kw}[1]{\mathsf{#1}}
+\newcommand{\rows}[1]{\operatorname{Rows}(#1)}
+\newcommand{\fire}{\mathsf{F}}
+\newcommand{\eval}[1]{\llbracket #1\rrbracket_{\Sigma,\sigma}}
+\newcommand{\aval}[1]{\llbracket #1\rrbracket^{\mathrm{atom}}_{\Sigma,\sigma}}
+\newcommand{\ir}[3]{\inferrule[\textsc{#1}]{#2}{#3}}
+\newcommand{\syntaxline}[2]{%
+  \noindent\begin{tabular}[t]{@{}p{.25\linewidth}@{}p{.75\linewidth}@{}}%
+    \textsf{#1}&$#2$\end{tabular}\par}
+\newcommand{\panel}[1]{\par\smallskip\noindent\textsf{\bfseries #1}\par\nobreak}
+
+% A missing annotation is a build error, not an empty figure.
+\makeatletter
+\newcommand{\inputleannode}[1]{%
+  \@ifundefined{leannode@#1}%
+    {\PackageError{semantics}{Missing Lean node #1}{Check the label and extraction module list.}}%
+    {\csname leannode@#1\endcsname}}
+\makeatother
+\input{.lake/build/blueprint/library/EgglogPaper}
+
+\begin{document}
+\begin{figure}[!ht]
+  \centering
+  \begin{minipage}{\linewidth}
+    \small
+    \renewcommand{\arraystretch}{1.3}
+    \(x\in\mathit{Var}\qquad f\in\mathit{Fn}\qquad R\in\mathit{Ruleset}
+      \qquad k,\ell,n\in\mathbb N\)\par\medskip
+    \begin{minipage}[t]{.48\linewidth}
+      \inputleannode{def:expressions}
+      \inputleannode{def:patterns}
+      \inputleannode{def:queries}
+      \inputleannode{def:action-syntax}
+    \end{minipage}\hfill
+    \begin{minipage}[t]{.50\linewidth}
+      \inputleannode{def:rules}
+      \inputleannode{def:merges}
+      \inputleannode{def:declarations}
+      \inputleannode{def:commands}
+      \inputleannode{def:programs}
+    \end{minipage}
+  \end{minipage}
+  \caption{Egglog syntax, omitting literals. Sequences may be empty.
+    A constructor declaration gives its arity; a function declaration gives $k$ key columns,
+    $\ell$ output columns, and a merge $\mu$. Its arguments bind old and new output tuples, list the actions,
+    and give the resulting output expressions.
+    The source is constructor-only; compilation introduces function rows with constructor terms
+    in their columns. Constructor nesting is allowed.
+    An $\kw{if}$ compares evaluated tuples structurally and evaluates only the selected branch.
+    Initial facts use an empty-query rule followed by a run.}
+  \label{fig:syntax}
+\end{figure}
+
+\begin{figure}[!ht]
+  \centering
+  \begin{minipage}{\linewidth}
+    \small
+    \inputleannode{def:state}
+    \inputleannode{def:stored-terms}
+  \end{minipage}
+  \caption{Egglog representation. Terms are finite trees without variables, including $f()$.
+    $\Sigma$ maps names to declarations, $E$ stores
+    asserted equalities, and $\mathcal R$ stores rules.
+    A function row separates key and output terms with a semicolon and is stored as $(r,r)$.
+    $\operatorname{Rows}(D)$ selects these rows from $E$ using their declarations;
+    it is not additional storage. Adding $(t,t)$ asserts the existence of $t$; $T_E$ collects stored subterms.}
+  \label{fig:representation}
+\end{figure}
+
+\clearpage
+\begin{figure}[p]
+  \centering
+  \begin{minipage}{\linewidth}
+    \footnotesize
+    \setlength{\abovedisplayskip}{2pt}
+    \setlength{\belowdisplayskip}{2pt}
+    \setlength{\abovedisplayshortskip}{1pt}
+    \setlength{\belowdisplayshortskip}{1pt}
+    \panel{Semantic meaning: congruence}
+    \inputleannode{def:congruence}
+    \panel{Expression evaluation, matching, and writes}
+    \inputleannode{def:evaluation}
+    \inputleannode{def:query}
+    \inputleannode{def:actions}
+    \panel{Merging stored rows}
+    \inputleannode{def:merging}
+    \inputleannode{def:normalization}
+    \panel{Completed rounds and saturation}
+    \inputleannode{def:round}
+    \inputleannode{def:saturation}
+    \panel{Commands and program behavior}
+    \inputleannode{def:behavior}
+    \inputleannode{def:divergence}
+  \end{minipage}
+  \caption{Egglog semantics at command boundaries, where the temporary environment is empty.
+    Bars abbreviate tuples, e.g.\ $\bar e=(e_1,\ldots,e_n)$; $\epsilon$ is an empty sequence.
+    $s\unlhd t$ means subterm; tuple relations are pointwise on equal lengths.
+    All displayed evaluations must be defined; row and binder widths follow $\Sigma$, with distinct merge binders.
+    Replacing rows retains their column terms.
+    $\delta$ is defined only on the three displayed command forms.
+    The order $\prec$ is the fixed size-first term order.
+    $s\sim_E t$ includes represented spellings; query bindings range over stored subterms $T_E$.}
+  \label{fig:semantics}
+\end{figure}
+\end{document}

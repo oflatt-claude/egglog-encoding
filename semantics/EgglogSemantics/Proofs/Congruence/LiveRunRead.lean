@@ -23,7 +23,7 @@ theorem saturated_endpoint {d e : Database} (h : Runtime d) {R : RulesetName}
     (hr : SaturateReach R d e) : RunSaturated R e := by
   induction hr with
   | @done a b hs hm =>
-      exact ⟨hs.2, b, hs.self_of_sameMeaning h.noUnions h.storeOk h.mergesWidthOk hm,
+      exact ⟨hs.2, b, hs.self_of_sameMeaning h.noUnions h.storeOk h.rulesSafe h.mergesWidthOk hm,
         Database.SameMeaning.refl b⟩
   | step hs _ _ ih => exact ih (h.runStep hs)
 

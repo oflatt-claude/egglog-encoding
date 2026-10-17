@@ -8,7 +8,7 @@ namespace Egglog.Congruence
 flattened: the source domain contains none. -/
 def Leaf : Expr → Prop
   | .lit _ | .var _ => True
-  | .app _ _ | .min _ _ => False
+  | .app _ _ | .min _ _ | .ite _ _ _ _ => False
 
 /-- Complete entry atoms have only leaf columns; equalities compare leaves. -/
 def FlatPattern : Pattern → Prop
@@ -24,6 +24,7 @@ theorem encodeQueryExpr_flat : ∀ (e : Expr) (n : Nat), e.OrderingFree →
     Leaf (encodeQueryExpr e n).1 ∧ ∀ p ∈ (encodeQueryExpr e n).2.1, FlatPattern p
   | .lit _, _, _ | .var _, _, _ => ⟨trivial, by simp [encodeQueryExpr]⟩
   | .min _ _, _, ho => by simp [Expr.OrderingFree, Expr.hasMin] at ho
+  | .ite _ _ _ _, _, ho => by simp [Expr.OrderingFree, Expr.hasMin] at ho
   | .app f es, n, ho => by
       obtain ⟨hids, hps⟩ := encodeQueryArgs_flat es n
         (by simpa [Expr.OrderingFree, Expr.OrderingFreeList, Expr.hasMin] using ho)
@@ -100,6 +101,7 @@ theorem encodeQueryExpr_next : ∀ (e : Expr) (n : Nat), e.OrderingFree →
     (encodeQueryExpr e n).2.2 = n + e.ctors.length
   | .lit _, _, _ | .var _, _, _ => rfl
   | .min _ _, _, ho => by simp [Expr.OrderingFree, Expr.hasMin] at ho
+  | .ite _ _ _ _, _, ho => by simp [Expr.OrderingFree, Expr.hasMin] at ho
   | .app _ es, n, ho => by
       change (encodeQueryArgs es n).2.2 + 1 = _
       rw [encodeQueryArgs_next es n
@@ -125,7 +127,7 @@ mutual
 /-- The variable supply never runs backwards, whatever the expression: a `min` consumes
 nothing, and an application consumes its arguments' ids and then one more. -/
 theorem le_encodeQueryExpr_next : ∀ (e : Expr) (n : Nat), n ≤ (encodeQueryExpr e n).2.2
-  | .lit _, _ | .var _, _ | .min _ _, _ => Nat.le_refl _
+  | .lit _, _ | .var _, _ | .min _ _, _ | .ite _ _ _ _, _ => Nat.le_refl _
   | .app _ es, n => by
       change n ≤ (encodeQueryArgs es n).2.2 + 1
       exact Nat.le_succ_of_le (le_encodeQueryArgs_next es n)

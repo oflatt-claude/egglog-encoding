@@ -37,11 +37,10 @@ private theorem evalAction_atom_of_eval {d : Database} {f : FnName} {es : List E
   rfl
 
 private theorem row_addTerm {d : Database} (f : FnName) (cs : List Term) (i : Term)
-    (hf : d.sig f = some (tableDecl cs.length))
-    (hv : ∀ t ∈ cs ++ [i], t.IsValue d.sig) :
+    (hf : d.sig f = some (tableDecl cs.length)) :
     Entry.mk f cs [i] ∈ (d.addTerm (.app f (cs ++ [i]))).entries := by
   apply Database.mem_addTerm_entries.mpr
-  exact Or.inr ⟨⟨tableDecl cs.length, hf, by simp [tableDecl], rfl, rfl, hv⟩, .refl _⟩
+  exact Or.inr ⟨⟨tableDecl cs.length, hf, by simp [tableDecl], rfl, rfl⟩, .refl _⟩
 
 private theorem write_self {d : Database} {e : Expr} {t : Term}
     (huf : d.sig ufName = some (tableDecl 1)) (he : e.eval d.sig d.env = some t) :
@@ -64,13 +63,14 @@ theorem encodeBuild_reads {sig : Signature} {σ : Env} :
       exact ⟨.lit l, d.addTerm (.app ufName [.lit l, .lit l]), rfl,
         by simp [encodeBuild, evalActions, write_self huf (e := .lit l) rfl], .lit⟩
   | .var v, t, d, _, _, _, huf, hρ, he => by
-      obtain ⟨i, hi, hv, hr⟩ := hρ v t (Option.filter_eq_some_iff.mp he).1
+      obtain ⟨i, hi, _hv, hr⟩ := hρ v t he
       have hi' : (Expr.var v).eval d.sig d.env = some i :=
-        Option.filter_eq_some_iff.mpr ⟨hi, hv⟩
+        hi
       have hw := write_self huf hi'
       exact ⟨i, _, hi', by simp [encodeBuild, evalActions, hw],
         hr.mono (evalAction_entries_subset hw)⟩
   | .min _ _, _, _, hp, _, _, _, _, _ => (Expr.not_orderingFree_min hp).elim
+  | .ite _ _ _ _, _, _, hp, _, _, _, _, _ => (Expr.not_orderingFree_ite hp).elim
   | .app f args, t, d, hp, hc, hd, huf, hρ, he => by
       have hctor : sig.IsCtor f := by
         by_contra hn
@@ -107,7 +107,7 @@ theorem encodeBuild_reads {sig : Signature} {σ : Env} :
       · simp only [evalActions, hwrite, Option.bind_some, hself]
       · apply Repr.mono (evalAction_entries_subset hself)
         exact .app (hviews.mono (evalAction_entries_subset hwrite))
-          (row_addTerm (viewName f) is (.app f is) hview (Expr.evalList_isValue hcols))
+          (row_addTerm (viewName f) is (.app f is) hview)
 
 @[inherit_doc encodeBuild_reads]
 theorem encodeBuildArgs_reads {sig : Signature} {σ : Env} :
@@ -188,9 +188,8 @@ theorem encodeUnion_reads {sig : Signature} {σ : Env} {a b : Expr} {ta tb : Ter
   · exact (hjb.mono (evalAction_entries_subset hwrite₁)).mono
       (evalAction_entries_subset hwrite₂)
   · have ho₁ := row_addTerm (d := n) ufName [i] (lowerId i j) huf'
-        (Expr.evalList_isValue hcols₁)
     have ho₂ := row_addTerm (d := n.addTerm (.app ufName [i, lowerId i j]))
-      ufName [j] (lowerId i j) huf' (Expr.evalList_isValue hcols₂)
+      ufName [j] (lowerId i j) huf'
     exact (Joined.edge (evalAction_entries_subset hwrite₂ ho₁)).trans (Joined.edge ho₂).symm
 
 /-- Every successful source action has a successful compiled execution carrying its

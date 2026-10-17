@@ -8,14 +8,14 @@ open Conservativity
 def ambient (db : Database) : Database :=
   { db with eqs := db.eqs ∪ {p | p.1 = p.2} }
 
-theorem ambient_refl (db : Database) (t : Term) : Cong (ambient db) t t :=
+theorem ambient_refl (db : Database) (t : Term) : StoredCong (ambient db) t t :=
   .direct (Or.inr rfl)
 
 theorem ambient_contains (db : Database) : db.Contained (ambient db) := ⟨fun _ hp => Or.inl hp⟩
 
 /-- Every subterm has a representative that actually exists in the source. -/
 def Supports (db : Database) (t : Term) : Prop :=
-  ∀ s ∈ t.subterms, ∃ u ∈ db.terms, Cong (ambient db) s u
+  ∀ s ∈ t.subterms, ∃ u ∈ db.terms, StoredCong (ambient db) s u
 
 structure Claim.Supported (db : Database) (c : Claim) : Prop where
   equality : c.Holds (ambient db)
@@ -32,7 +32,7 @@ theorem Claim.Holds.supported {db : Database} (hw : db.WF) {c : Claim}
     supports_of_mem hw (eqsInTerms_free h).2⟩
 
 private theorem ambient_interpret {db : Database} (hw : db.WF) {a b : Term}
-    (hc : Cong (ambient db) a b) :
+    (hc : StoredCong (ambient db) a b) :
     InferredFacts.interpret db a = InferredFacts.interpret db b := by
   apply InferredFacts.interpret_congr (e := ambient db) ?_ hc
   rintro p (hp | hp)
@@ -59,8 +59,8 @@ theorem Claim.Supported.trans {db : Database} {a b c : Term}
     Claim.Supported db ⟨a, c⟩ := ⟨h₁.equality.trans h₂.equality, h₁.lhs, h₂.rhs⟩
 
 private theorem congrList_set {db : Database} {as : List Term} {i : Nat} {x y : Term}
-    (hi : as[i]? = some x) (hxy : Cong (ambient db) x y) :
-    CongList (ambient db) as (as.set i y) := by
+    (hi : as[i]? = some x) (hxy : StoredCong (ambient db) x y) :
+    StoredCongList (ambient db) as (as.set i y) := by
   induction as generalizing i with
   | nil => simp at hi
   | cons a as ih =>
@@ -68,7 +68,7 @@ private theorem congrList_set {db : Database} {as : List Term} {i : Nat} {x y : 
       | zero =>
           simp only [List.getElem?_cons_zero, Option.some.injEq] at hi
           subst a
-          exact .cons hxy (CongList.refl fun t _ => ambient_refl db t)
+          exact .cons hxy (StoredCongList.refl fun t _ => ambient_refl db t)
       | succ i => exact .cons (ambient_refl db a) (ih hi)
 
 private theorem mem_set_cases {as : List Term} {i : Nat} {y t : Term}
@@ -91,7 +91,7 @@ theorem Claim.Supported.congr {db : Database} {a x y : Term} {f : FnName}
     {as : List Term} {i : Nat} (base : Claim.Supported db ⟨a, .app f as⟩)
     (child : Claim.Supported db ⟨x, y⟩) (hi : as[i]? = some x) :
     Claim.Supported db ⟨a, .app f (as.set i y)⟩ := by
-  have hc : Cong (ambient db) (.app f as) (.app f (as.set i y)) :=
+  have hc : StoredCong (ambient db) (.app f as) (.app f (as.set i y)) :=
     .congr (ambient_refl db _) (ambient_refl db _) (congrList_set hi child.equality)
   refine ⟨base.equality.trans hc, base.lhs, ?_⟩
   intro s hs
@@ -111,7 +111,7 @@ theorem Claim.Supported.completion {db : Database} (hw : db.WF) {c : Claim}
 theorem Claim.Supported.of_completion {db : Database} (hw : db.WF) {c : Claim}
     (hc : c.Holds db.completion) : c.Supported db := by
   have hi := (Database.cong_completion_iff hw).mp hc
-  have hamb {a b : Term} (h : db.Infers a b) : Cong (ambient db) a b := by
+  have hamb {a b : Term} (h : db.Infers a b) : StoredCong (ambient db) a b := by
     exact h.choose_spec.2.2.mono
       (show (db.withOperands [a, b]).Contained (ambient db) from
         ⟨fun p hp => Conservativity.mem_addTerms_eqs _ db p hp⟩)

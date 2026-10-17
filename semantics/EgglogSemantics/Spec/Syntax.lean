@@ -1,17 +1,19 @@
 import Batteries.Data.List.Basic
+import Architect
 
 /-!
 # Syntax of the modelled egglog fragment
 
 ```
 Program = (Cmd ...)
-Cmd     = Action | Rule | (run R) | (saturate R) | Decl | (check Query)
+Cmd     = Rule | (run R) | (saturate R) | Decl | (check Query)
 Decl    = (constructor ...) | (function ... :merge ...)
 Rule    = (rule Query Actions :ruleset R)
 Query   = (Pattern ...)
 Pattern = expr | (= expr expr)
 Action  = expr | (union expr expr)
-expr    = number | var | (f expr ...) | (min expr expr)
+expr    = number | var | (f expr ...) | (min expr expr) | (if (expr ...) = (expr ...) expr expr)
+merge   = (merge (old-vars ...) (new-vars ...) Actions (expr ...))
 ```
 -/
 
@@ -22,31 +24,53 @@ abbrev Var := String
 /-- The name of a constructor or function. -/
 abbrev FnName := String
 
-/-- A base value: egglog's `i64`. -/
+/-- Mathematical integers, modelling egglog's integer literals without overflow. -/
 inductive Lit where
   | int : Int → Lit
   deriving DecidableEq, Repr, Inhabited
 
 /-- An expression. Evaluated against an environment to build a `Term`. -/
+-- The paper displays the literal-free fragment; the model also supports integers.
+@[blueprint "def:expressions"
+  (statement := /--
+  \syntaxline{Expressions}{\begin{aligned}[t]
+    e &::= x\mid f(e_1,\ldots,e_n)\mid\min(e,e)\\[-1pt]
+      &\phantom{::={}}\mid\kw{if}\ (e_1,\ldots,e_n)=(e'_1,\ldots,e'_n)\\[-1pt]
+      &\qquad\kw{then}\ e\ \kw{else}\ e
+    \end{aligned}}
+  -/)
+  (latexEnv := "paperfragment")]
 inductive Expr where
   | lit : Lit → Expr
   | var : Var → Expr
   | app : FnName → List Expr → Expr
-  /-- The smaller of two values in the term order (`Term.least`), egglog's `ordering-min`.
-  The only computation in the fragment: `:merge` functions and the congruence compiler's
-  leader choice use it. -/
+  /-- The smaller term in the fixed order, used by merges and leader selection. -/
   | min : Expr → Expr → Expr
+  /-- Compare evaluated tuples, evaluating only the chosen branch. -/
+  | ite (lhs rhs : List Expr) (yes no : Expr)
 
 /-- One conjunct of a rule's query: a pattern to match, an equality constraint, or an
 entry to read. -/
+@[blueprint "def:patterns"
+  (statement := /-- \syntaxline{Patterns}{p ::= e\mid e=e} -/)
+  (latexEnv := "paperfragment")]
 inductive Pattern where
   | expr : Expr → Pattern
   | eq : Expr → Expr → Pattern
 
 /-- A rule's query, matched conjunctively. -/
+@[blueprint "def:queries"
+  (statement := /-- \syntaxline{Queries}{Q ::= p_1\land\cdots\land p_n} -/)
+  (latexEnv := "paperfragment")]
 abbrev Query := List Pattern
 
 /-- An action: build a term, assert an equality, or record an entry. -/
+@[blueprint "def:action-syntax"
+  (statement := /--
+  \syntaxline{Actions}{h ::= e\mid\kw{union}(e,e)}
+  \syntaxline{Heads}{H ::= h_1;\ldots;h_n}
+  -/)
+  (latexEnv := "paperfragment")]
 inductive Action where
   | expr : Expr → Action
   | union : Expr → Expr → Action
@@ -59,15 +83,26 @@ abbrev RulesetName := String
 
 /-- A rule. Its actions run once per substitution satisfying its query, in the rounds of
 the ruleset it joins. -/
+@[blueprint "def:rules"
+  (statement := /--
+  \syntaxline{Rules}{\rho ::= (R,Q\Rightarrow H)}
+  -/)
+  (latexEnv := "paperfragment")]
 structure Rule where
   query : Query
   actions : List Action
   /-- The ruleset this rule belongs to. Only a run naming it fires it. -/
   ruleset : RulesetName
 
-/-- How two entries colliding on one key combine: `merge oldVars newVars body res`
-binds the two output tuples to the declared parameters, runs `body`, then evaluates
-`res`, one expression per output column. Scalars are singleton tuples. -/
+/-- Explicitly bind both output tuples before evaluating its body and result. -/
+@[blueprint "def:merges"
+  (statement := /--
+  \syntaxline{Merges}{\begin{aligned}[t]
+    \mu &::= \kw{merge}((x_1,\ldots,x_\ell),\\[-1pt]
+        &\qquad(y_1,\ldots,y_\ell),H,(e_1,\ldots,e_\ell))
+    \end{aligned}}
+  -/)
+  (latexEnv := "paperfragment")]
 inductive MergeSpec where
   | merge (oldVars newVars : List Var) (body : List Action) (res : List Expr)
 
@@ -80,6 +115,11 @@ instance (m : MergeSpec) (n : Nat) : Decidable (m.BindersOk n) := by
   cases m; unfold MergeSpec.BindersOk; infer_instance
 
 /-- A function declaration: a constructor when `merge = none`, a merge function when not. -/
+@[blueprint "def:declarations"
+  (statement := /--
+  \syntaxline{Declarations}{d ::= \kw{ctor}(k)\mid\kw{fun}(k,\ell,\mu)}
+  -/)
+  (latexEnv := "paperfragment")]
 structure FnDecl where
   /-- The number of key columns. Read by `MergeStep`, which needs to know where a term's
   key ends and its value columns begin. -/
@@ -88,9 +128,6 @@ structure FnDecl where
   outArity : Nat
   /-- How collisions are resolved, or `none` for a constructor. -/
   merge : Option MergeSpec
-  /-- `:internal-identity-vals k` (`egglog-bridge/src/lib.rs:227-235`): the first `k` value
-  columns decide whether a collision changed anything. `FnDecl.unchangedWidth` reads it. -/
-  identityVals : Option Nat := none
 
 /-- How many children a term recording an entry of this function carries: a constructor's
 entry is `f(a…)`, a merge function's `f(a…, v…)`. -/
@@ -128,6 +165,7 @@ def Expr.vars : Expr → List Var
   | .var v => [v]
   | .app _ args => Expr.varsList args
   | .min a b => a.vars ∪ b.vars
+  | .ite lhs rhs yes no => (Expr.varsList lhs ∪ Expr.varsList rhs) ∪ (yes.vars ∪ no.vars)
 
 def Expr.varsList : List Expr → List Var
   | [] => []
@@ -143,6 +181,7 @@ def Expr.fns : Expr → List FnName
   | .var _ => []
   | .app f args => f :: Expr.fnsList args
   | .min a b => a.fns ∪ b.fns
+  | .ite lhs rhs yes no => (Expr.fnsList lhs ∪ Expr.fnsList rhs) ∪ (yes.fns ∪ no.fns)
 
 def Expr.fnsList : List Expr → List FnName
   | [] => []
@@ -159,6 +198,14 @@ def Query.vars : Query → List Var
   | p :: ps => p.vars ∪ Query.vars ps
 
 /-- A top-level command. Initial facts use an empty-query rule followed by `run`. -/
+@[blueprint "def:commands"
+  (statement := /--
+  \syntaxline{Commands}{\begin{aligned}[t]
+    C &::= \kw{declare}\ f:d\mid\kw{rule}\ \rho\\[-1pt]
+      &\phantom{::={}}\mid\kw{run}\ R\mid\kw{saturate}\ R\mid\kw{check}\ Q
+    \end{aligned}}
+  -/)
+  (latexEnv := "paperfragment")]
 inductive Cmd where
   | rule : Rule → Cmd
   /-- One round of a ruleset: egglog's `(run <ruleset> 1)`, which is `(repeat 1 (run
@@ -172,6 +219,9 @@ inductive Cmd where
   check changes no state. Checks are commands, never rule-head or merge-body actions. -/
   | check : Query → Cmd
 
+@[blueprint "def:programs"
+  (statement := /-- \syntaxline{Programs}{P ::= C_1;\ldots;C_n} -/)
+  (latexEnv := "paperfragment")]
 abbrev Program := List Cmd
 
 /-! ### The constructor-only fragment -/

@@ -39,7 +39,8 @@ theorem encodedRule_firing_reads {d : Database} {src querySrc post : Database}
   have hrename := evalActions_leaderEnv
     (d := { querySrc with env := σ ++ querySrc.env }) hcs hsp
   have hρ' : EnvReads d (leaderEnv σ) ρ := hρ.envReads hdg
-    (fun v i hi => (hmatch.mem_values (v, i) (Env.mem_of_lookup hi)).2)
+    (fun v i hi =>
+      (hmatch.mem_values hstore (encodeRule_querySafe r hqp) (v, i) (Env.mem_of_lookup hi)).2)
   have henvread : EnvReads ({ d with env := ρ ++ d.env } : Database)
       (leaderEnv (σ ++ querySrc.env)) (ρ ++ d.env) := by
     intro v t ht

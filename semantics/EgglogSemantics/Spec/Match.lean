@@ -20,6 +20,8 @@ def Expr.freeVars : Expr → Env → List Var
   | .var v, σ => if (Env.lookup v σ).isSome then [] else [v]
   | .app _ args, σ => Expr.freeVarsList args σ
   | .min a b, σ => a.freeVars σ ∪ b.freeVars σ
+  | .ite lhs rhs yes no, σ =>
+      (Expr.freeVarsList lhs σ ∪ Expr.freeVarsList rhs σ) ∪ (yes.freeVars σ ∪ no.freeVars σ)
 
 /-- `Expr.freeVars` over an argument list, deduplicated. -/
 def Expr.freeVarsList : List Expr → Env → List Var
@@ -47,35 +49,41 @@ inductive UnionAll : List Env → Env → Prop where
 
 end Env
 /-! ### Well-formed substitutions -/
-/-- `σ` binds exactly `vars`, each to a value the database holds. `Perm` rather than
+/-- `σ` binds exactly `vars`, each to a term the database holds. `Perm` rather than
 equality, so the order `Expr.freeVars` produces does not matter. -/
 def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
-  (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.values
+  (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.terms
 
 /-! ### Matching -/
-/-- A pattern **matches** under `σ` when its instance is congruent to a term the database
-holds. The **witness** `w` is drawn from the *original* terms: without one, the reflexive
-equation `withOperands` adds for the instance would match everything.
-
-`σ` is the whole evaluation environment for the query. Rule registration stores the query
-as written, and a match supplies all of its variables. The database's ambient environment
-is not consulted. -/
+/-- Match evaluated terms through semantic congruence. Bindings remain local to the query. -/
 inductive Matches (db : Database) : Pattern → Env → Prop where
-  | expr {e : Expr} {σ : Env} {w t : Term} :
-      w ∈ db.terms → e.evalAtom db.sig σ = some t → CongOn db [t] w t →
-      Matches db (.expr e) σ
-  | eq {e₁ e₂ : Expr} {σ : Env} {w t₁ t₂ : Term} :
-      w ∈ db.terms →
+  | atom {e : Expr} {σ : Env} {t : Term} :
+      e.evalAtom db.sig σ = some t → Cong db t t → Matches db (.expr e) σ
+  | equal {e₁ e₂ : Expr} {σ : Env} {t₁ t₂ : Term} :
       e₁.eval db.sig σ = some t₁ → e₂.eval db.sig σ = some t₂ →
-      CongOn db [t₁, t₂] w t₁ → CongOn db [t₁, t₂] t₁ t₂ →
-      Matches db (.eq e₁ e₂) σ
+      Cong db t₁ t₂ → Matches db (.eq e₁ e₂) σ
+
+/-- One substitution binds the query's variables to held terms and satisfies every conjunct. -/
+@[blueprint "def:query"
+  (statement := /--
+\[
+  \ir{Atom}{\aval e=t\\t\sim_E t}{D,\sigma\models e}\quad
+  \ir{Equal}{\eval{e_1}=s\\\eval{e_2}=t\\s\sim_E t}
+    {D,\sigma\models e_1=e_2}\quad
+  \ir{Query}{\sigma:\operatorname{FV}(Q)\to T_E\\\forall p\in Q.\ D,\sigma\models p}
+    {D,\sigma\models Q}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
+def QueryMatches (db : Database) (q : Query) (σ : Env) : Prop :=
+  ValidEnv q.vars db σ ∧ ∀ p ∈ q, Matches db p σ
 
 /-- A substitution binds exactly the pattern's variables and makes the pattern match.
 Every query variable is local to the match. -/
 def ValidSubst (db : Database) (p : Pattern) (σ : Env) : Prop :=
   ValidEnv (p.freeVars []) db σ ∧ Matches db p σ
 
-/-- The substitutions a whole query admits: one per pattern, unioned. -/
+/-- Join representation of a query match; `Proofs/Query.lean` relates it to `QueryMatches`. -/
 def ValidQuerySubst (db : Database) (q : Query) (σ : Env) : Prop :=
   ∃ σs : List Env, List.Forall₂ (ValidSubst db) q σs ∧ Env.UnionAll σs σ
 

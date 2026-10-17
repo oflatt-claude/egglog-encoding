@@ -37,12 +37,12 @@ structure CongObligations (src tgt : Database) : Prop where
 
   trans : ∀ a b c, SameClass tgt a b → SameClass tgt b c → SameClass tgt a c
 
-  congr : ∀ f as bs, Cong src (.app f as) (.app f as) → Cong src (.app f bs) (.app f bs) →
+  congr : ∀ f as bs, Term.app f as ∈ src.terms → Term.app f bs ∈ src.terms →
     List.Forall₂ (SameClass tgt) as bs → SameClass tgt (.app f as) (.app f bs)
 
 theorem cong_sameClass {src tgt : Database} (h : CongObligations src tgt) {a b : Term}
-    (hc : Cong src a b) : SameClass tgt a b := by
-  refine Cong.le h.direct (fun _ _ hab => hab.symm) h.trans h.congr ?_ hc
+    (hc : StoredCong src a b) : SameClass tgt a b := by
+  refine StoredCong.le h.direct (fun _ _ hab => hab.symm) h.trans h.congr ?_ hc
   intro t s ht hs
   obtain ⟨i, hi, _⟩ := ht
   obtain ⟨j, hj⟩ := hi.subterms s hs
@@ -108,7 +108,7 @@ end
 
 theorem sameClass_self_of_viewsCover {src d : Database} (hc : ViewsCover d src) (hw : src.WF)
     {a : Term} (h : (a, a) ∈ src.eqs) : SameClass d a a :=
-  let ⟨e, he⟩ := viewRepr_total hc hw a (Cong.direct h)
+  let ⟨e, he⟩ := viewRepr_total hc hw a (StoredCong.direct h).toHeld
   ⟨e, he, he⟩
 
 /-- Every nonreflexive source equation has a shared view id. -/
@@ -132,7 +132,7 @@ theorem unionsRead_of_unionsJoined {src d : Database} (hlead : ViewLeader d)
   · rw [← huf e₂ e₁ ho]; exact hmem b e₂ h₂
 
 theorem cong_sameClass_of_state {src d : Database} (hw : src.WF) (hlead : ViewLeader d)
-    (hcov : ViewsCover d src) (hun : UnionsRead d src) {a b : Term} (h : Cong src a b) :
+    (hcov : ViewsCover d src) (hun : UnionsRead d src) {a b : Term} (h : StoredCong src a b) :
     SameClass d a b :=
   cong_sameClass
     ⟨fun x y hxy => if hxyeq : x = y then hxyeq ▸ sameClass_self_of_viewsCover hcov hw
@@ -142,13 +142,13 @@ theorem cong_sameClass_of_state {src d : Database} (hw : src.WF) (hlead : ViewLe
 
 /-- A view row is justified by an existing source application at congruent children. -/
 def EntrySound (src : Database) (f : FnName) (cs : List Term) (e : Term) : Prop :=
-  ∃ as, Term.app f as ∈ src.terms ∧ CongList src as cs ∧ Cong src (.app f as) e
+  ∃ as, Term.app f as ∈ src.terms ∧ StoredCongList src as cs ∧ StoredCong src (.app f as) e
 
 theorem EntrySound.cong_of_congList {src : Database} {f : FnName} {cs : List Term} {e : Term}
     (h : EntrySound src f cs e) {as : List Term} (ha : Term.app f as ∈ src.terms)
-    (hl : CongList src as cs) : Cong src (.app f as) e :=
+    (hl : StoredCongList src as cs) : StoredCong src (.app f as) e :=
   let ⟨_, hbm, hbl, hbe⟩ := h
-  (Cong.congr ha hbm (hl.trans hbl.symm)).trans hbe
+  (StoredCong.congr (Database.toStored ha) (Database.toStored hbm) (hl.trans hbl.symm)).trans hbe
 
 /-- Every recorded view entry has a source witness. -/
 def ViewsSound (d src : Database) : Prop :=
@@ -156,14 +156,14 @@ def ViewsSound (d src : Database) : Prop :=
 
 /-- Every recorded UF edge relates source-congruent terms. -/
 def EdgesSound (d src : Database) : Prop :=
-  ∀ t p, d.Out ufName [t] [p] → Cong src t p
+  ∀ t p, d.Out ufName [t] [p] → StoredCong src t p
 
 mutual
 
 /-- A represented source term is congruent to every id it reads. -/
 theorem cong_of_viewRepr {src d : Database} (hw : src.WF) (hs : ViewsSound d src) :
-    ∀ (a : Term) {e : Term}, a ∈ src.terms → ViewRepr d a e → Cong src a e
-  | .lit _, _, ha, .lit => ha
+    ∀ (a : Term) {e : Term}, a ∈ src.terms → ViewRepr d a e → StoredCong src a e
+  | .lit _, _, ha, .lit => Database.toStored ha
   | .app f as, _, ha, .app hl ho =>
       (hs f _ _ ho).cong_of_congList ha
         (congList_of_viewReprList hw hs as
@@ -173,7 +173,7 @@ theorem cong_of_viewRepr {src d : Database} (hw : src.WF) (hs : ViewsSound d src
 @[inherit_doc cong_of_viewRepr]
 theorem congList_of_viewReprList {src d : Database} (hw : src.WF) (hs : ViewsSound d src) :
     ∀ (as : List Term) {es : List Term}, (∀ a ∈ as, a ∈ src.terms) →
-      ViewReprList d as es → CongList src as es
+      ViewReprList d as es → StoredCongList src as es
   | [], _, _, .nil => .nil
   | a :: as, _, ha, .cons h₁ h₂ =>
       .cons (cong_of_viewRepr hw hs a (ha a (List.mem_cons_self ..)) h₁)
@@ -183,27 +183,27 @@ end
 
 /-- The conclusion of the structural reading induction. -/
 def ViewsJustified (d src : Database) : Prop :=
-  ∀ a e, a ∈ src.terms → ViewRepr d a e → Cong src a e
+  ∀ a e, a ∈ src.terms → ViewRepr d a e → StoredCong src a e
 
 @[inherit_doc cong_of_viewRepr]
 theorem ViewsSound.justified {src d : Database} (hw : src.WF)
     (hs : ViewsSound d src) : ViewsJustified d src := fun a _ ha h => cong_of_viewRepr hw hs a ha h
 
 theorem sameClass_cong_of_justified {src d : Database} (hj : ViewsJustified d src) {a b : Term}
-    (ha : a ∈ src.terms) (hb : b ∈ src.terms) (h : SameClass d a b) : Cong src a b :=
+    (ha : a ∈ src.terms) (hb : b ∈ src.terms) (h : SameClass d a b) : StoredCong src a b :=
   let ⟨e, hae, hbe⟩ := h
   (hj a e ha hae).trans (hj b e hb hbe).symm
 
 theorem sameClass_cong_of_state {src d : Database} (hw : src.WF) (hs : ViewsSound d src)
     {a b : Term} (ha : a ∈ src.terms) (hb : b ∈ src.terms) (h : SameClass d a b) :
-    Cong src a b :=
+    StoredCong src a b :=
   sameClass_cong_of_justified (hs.justified hw) ha hb h
 
 /-- The source and target agree when the execution establishes the data invariants. -/
 theorem corresponds_of_invariants {src d : Database} (hw : src.WF)
     (hlead : ViewLeader d) (hcov : ViewsCover d src) (hun : UnionsJoined d src)
     (hsound : ViewsSound d src) (a b : Term) (ha : a ∈ src.terms) (hb : b ∈ src.terms) :
-    Cong src a b ↔ SameClass d a b :=
+    StoredCong src a b ↔ SameClass d a b :=
   ⟨cong_sameClass_of_state hw hlead hcov (unionsRead_of_unionsJoined hlead hun),
    sameClass_cong_of_state hw hsound ha hb⟩
 

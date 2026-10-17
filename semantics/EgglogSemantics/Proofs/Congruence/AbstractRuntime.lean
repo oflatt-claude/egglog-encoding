@@ -1,4 +1,4 @@
-import EgglogSemantics.Proofs.Congruence.MetadataSyntax
+import EgglogSemantics.Proofs.Congruence.QuerySafety
 import EgglogSemantics.Proofs.Congruence.LiveState
 import EgglogSemantics.Proofs.StatePreservation
 import EgglogSemantics.Proofs.RuleStore
@@ -14,7 +14,7 @@ theorem generatedTables_of_mergeShape {sig : Signature} (h : MergeShape sig) :
   | some ms =>
     cases ms with
     | merge oldVars newVars body res =>
-      obtain ⟨_, hb, hr, ho, _, hi, hov, hnv⟩ := h f dc hd body res he
+      obtain ⟨_, hb, hr, ho, _, hov, hnv⟩ := h f dc hd body res he
       refine ⟨dc.arity, ?_⟩
       cases dc
       simp_all [tableDecl]
@@ -25,7 +25,8 @@ theorem GeneratedTables.mergesWidthOk {sig : Signature} (h : GeneratedTables sig
   obtain ⟨k, rfl⟩ := h f dc hd (by simp [hm])
   obtain rfl : ms = .merge ["old"] ["new"] mergeBody mergeResult := by
     simpa [tableDecl, eq_comm] using hm
-  simp [MergeSpec.WidthOk, mergeResult, mergeBody, Action.WidthOk,
+  simp [MergeSpec.WidthOk,
+    mergeResult, mergeBody, Action.WidthOk,
     Expr.AtomWidthOk, Expr.WidthOk, Expr.WidthOkList, hu, tableDecl, FnDecl.entryWidth]
 
 structure Runtime (d : Database) : Prop where
@@ -34,6 +35,7 @@ structure Runtime (d : Database) : Prop where
   noUnions : d.NoUnions
   state : State d
   generated : GeneratedTables d.sig
+  rulesSafe : d.RulesSafe
 
 theorem Runtime.action {d e : Database} (h : Runtime d) {a : Action}
     (hu : a.UnionFree) (he : evalAction d a = some e) : Runtime e where
@@ -42,8 +44,9 @@ theorem Runtime.action {d e : Database} (h : Runtime d) {a : Action}
   noUnions := ⟨evalAction_diag hu h.noUnions.diag he,
     by rw [evalAction_sig he]; exact h.noUnions.sig,
     by rw [evalAction_rules he]; exact h.noUnions.rules⟩
-  state := h.state.evalAction h.generated he
+  state := h.state.evalAction h.generated h.storeOk he
   generated := by rw [evalAction_sig he]; exact h.generated
+  rulesSafe := by simpa only [Database.RulesSafe, evalAction_rules he] using h.rulesSafe
 
 theorem Runtime.mergesWidthOk {d : Database} (h : Runtime d) : d.sig.MergesWidthOk :=
   h.generated.mergesWidthOk h.state.uf
@@ -57,14 +60,16 @@ theorem Runtime.merge {d e : Database} (h : Runtime d) (hm : MergeClosure d e) :
     by rw [hm.envRules.2]; exact h.noUnions.rules⟩
   state := (state_closure h.state (outputsIn_self _) hm).1
   generated := by rw [hm.sig]; exact h.generated
+  rulesSafe := by simpa only [Database.RulesSafe, hm.envRules.2] using h.rulesSafe
 
 theorem Runtime.runRules {d : Database} (h : Runtime d) (R : RulesetName) :
     Runtime (RunRules R d) where
   wf := RunRules.wf h.wf
-  storeOk := RunRules.storeOk h.storeOk
+  storeOk := RunRules.storeOk h.storeOk h.rulesSafe
   noUnions := ⟨RunRules.diag h.noUnions, h.noUnions.sig, h.noUnions.rules⟩
-  state := h.state.runRules h.generated R
+  state := h.state.runRules h.generated h.storeOk h.rulesSafe R
   generated := h.generated
+  rulesSafe := h.rulesSafe
 
 theorem Runtime.runStep {d e : Database} (h : Runtime d) {R : RulesetName}
     (hr : RunStep R d e) : Runtime e := (h.runRules R).merge hr.1
@@ -82,26 +87,29 @@ private theorem noDecl_fresh {c : Cmd} (h : NoDecl c) (sig : Signature) :
   cases c <;> trivial
 
 theorem Runtime.cmd {d e : Database} (h : Runtime d) {c : Cmd}
-    (hn : NoDecl c) (hu : c.UnionFree) (hc : CmdStep d c e) : Runtime e := by
+    (hn : NoDecl c) (hu : c.UnionFree) (hq : c.QueriesSafe) (hc : CmdStep d c e) : Runtime e := by
   have hsig : e.sig = d.sig := hc.sig.trans (noDecl_sigBind hn d.sig)
   have hmw : (c.sigBind d.sig).MergesWidthOk := by
     rw [noDecl_sigBind hn d.sig]; exact h.mergesWidthOk
-  refine ⟨hc.wf h.wf h.storeOk (noDecl_fresh hn _) hmw,
-    hc.storeOk h.storeOk (noDecl_fresh hn _) hmw, hc.noUnions h.noUnions hu,
-    State.of_generated (hc.finiteStore h.state.finite) ?_ ?_, ?_⟩
+  refine ⟨hc.wf h.wf h.storeOk h.rulesSafe (noDecl_fresh hn _) hmw,
+    hc.storeOk h.storeOk h.rulesSafe (noDecl_fresh hn _) hmw, hc.noUnions h.noUnions hu,
+    State.of_generated (hc.finiteStore h.state.finite) ?_ ?_
+      (fun _ hr => (hc.storeOk h.storeOk h.rulesSafe (noDecl_fresh hn _) hmw).entry_valid hr),
+    ?_, hc.rulesSafe h.rulesSafe hq⟩
   all_goals rw [hsig]
   · exact h.state.uf
   · exact h.generated
   · exact h.generated
 
 theorem Runtime.program {d e : Database} (h : Runtime d) {p : Program}
-    (hn : ∀ c ∈ p, NoDecl c) (hu : p.UnionFree) (hp : ProgramStep d p e) :
+    (hn : ∀ c ∈ p, NoDecl c) (hu : p.UnionFree) (hq : p.QueriesSafe)
+    (hp : ProgramStep d p e) :
     Runtime e := by
   induction hp with
   | nil => exact h
   | cons hc _ ih =>
-    exact ih (h.cmd (hn _ List.mem_cons_self) hu.1 hc)
-      (fun c hm => hn c (List.mem_cons_of_mem _ hm)) hu.2
+    exact ih (h.cmd (hn _ List.mem_cons_self) hu.1 hq.1 hc)
+      (fun c hm => hn c (List.mem_cons_of_mem _ hm)) hu.2 hq.2
 
 private theorem foldl_noDecl {p : Program} (hp : ∀ c ∈ p, NoDecl c) (s : Signature) :
     p.foldl (fun sig c => c.sigBind sig) s = s := by
@@ -141,8 +149,12 @@ theorem prelude_runtime {P : Program} {d : Database} (hp : P.Fragment)
   have hn : d.NoUnions := by
     apply h.noUnions Database.NoUnions.empty
     simpa [encodeCmds] using encodePrefix_unionFree P [] 0
-  exact ⟨Database.WF.empty.congr he.symm hen.symm, hs, hn,
-    State.of_generated h.finiteStore_from_empty hu hg, hg⟩
+  refine ⟨Database.WF.empty.congr he.symm hen.symm, hs, hn,
+    State.of_generated h.finiteStore_from_empty hu hg (fun _ hr => hs.entry_valid hr), hg, ?_⟩
+  intro r hr
+  have hmem : Cmd.rule r ∈ (encodePrelude P).map Command.command := by
+    simpa [Database.empty] using (h.mem_rules_iff r).mp hr
+  exact prelude_querySafe P r hmem
 
 private theorem append_inv {p q : Program} {d e : Database}
     (hr : ProgramStep d (p ++ q) e) : ∃ mid, ProgramStep d p mid ∧ ProgramStep mid q e := by
@@ -159,14 +171,24 @@ private theorem unionFree_append_right {p q : Program} (h : (p ++ q).UnionFree) 
   | nil => exact h
   | cons _ _ ih => exact ih h.2
 
+private theorem orderingFree_of_mem : ∀ p : Program,
+    (∀ c ∈ p, c.OrderingFree) → p.OrderingFree
+  | [], _ => trivial
+  | c :: cs, h => ⟨h c List.mem_cons_self,
+      orderingFree_of_mem cs (fun c hc => h c (List.mem_cons_of_mem _ hc))⟩
+
 theorem prefix_runtime {P pre : Program} {d : Database} {i : Nat} (hp : P.Fragment)
+    (hsub : ∀ c ∈ pre, c ∈ P)
     (ht : ProgramStep Database.empty
       ((encodePrelude P ++ encodeCmds pre i).map Command.command) d) : Runtime d := by
   rw [List.map_append] at ht
   obtain ⟨mid, hm, hrest⟩ := append_inv ht
-  apply (prelude_runtime hp hm).program (cmds_noDecl pre i) ?_ hrest
-  apply unionFree_append_right (p := (encodePrelude P).map Command.command)
-  simpa only [List.map_append] using encodePrefix_unionFree P pre i
+  have ho : pre.OrderingFree := orderingFree_of_mem pre
+    (fun c hc => Program.OrderingFree.of_mem hp.noMin (hsub c hc))
+  apply (prelude_runtime hp hm).program (cmds_noDecl pre i) ?_ ?_ hrest
+  · apply unionFree_append_right (p := (encodePrelude P).map Command.command)
+    simpa only [List.map_append] using encodePrefix_unionFree P pre i
+  · exact Program.queriesSafe_of_rules _ (encodeCmds_querySafe ho i)
 
 def RulesEncoded (P : Program) (src d : Database) : Prop :=
   ∀ r, r ∈ d.rules ↔ (∃ c ∈ allMaintenanceRules P, c.command = .rule r) ∨

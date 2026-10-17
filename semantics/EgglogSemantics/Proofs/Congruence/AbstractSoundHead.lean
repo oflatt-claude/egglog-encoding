@@ -71,7 +71,7 @@ theorem encodedRule_firing_sound {src d d' : Database} {r : Rule} {σ : Env}
 
 /-- Domain conditions make the reconstructed source head executable. -/
 theorem encodedRule_firing {src d d' : Database} {r : Rule} {σ : Env}
-    (hw : src.WF) (hstore : src.StoreOk) (hb : src.TermsBuild)
+    (hw : src.WF) (_hstore : src.StoreOk) (hb : src.TermsBuild)
     (hcs : src.sig.AllConstructors)
     (hnames : ∀ f dc, src.sig f = some dc → ¬ "@".isPrefixOf f)
     (hrt : Live.Runtime d) (htables : ViewTables d)
@@ -96,7 +96,7 @@ theorem encodedRule_firing {src d d' : Database} {r : Rule} {σ : Env}
     Actions.Scoped.mono r.actions
       (fun v hv => List.mem_union_iff.mpr (Or.inr hv)) hscoped
   obtain ⟨post, _, hpost⟩ := evalLocalActions_isSome_of_builds (Scope.Models.dom src.env)
-    hw hscope hbuild hrun hτ hstore.envValues
+    hw hscope hbuild hrun hτ
   refine ⟨τ, _, hτ, hpost, hsound _ hpost ?_⟩
   apply sourceSafe_of_names (evalLocalActions_termsBuild hw hb hcs hτ.mem_terms hpost)
   intro f dc hf
@@ -111,8 +111,8 @@ theorem storeOk_of_sourceTerms {src : Database} (hw : src.WF) (hb : src.TermsBui
     exact hm (by simpa [Signature.mergeOf, hd] using hc row.name)
   refine ⟨fun row hr => (hn row hr).elim, fun row hr => (hn row hr).elim, ?_, ?_⟩
   · intro p hp
-    exact Or.inl ⟨termsBuild_isValue hb hw (Cong.direct hp).mem_left,
-      termsBuild_isValue hb hw (Cong.direct hp).mem_right⟩
+    exact Or.inl ⟨termsBuild_isValue hb hw (StoredCong.direct hp).mem_left,
+      termsBuild_isValue hb hw (StoredCong.direct hp).mem_right⟩
   · intro b hb'
     exact termsBuild_isValue hb hw (hw.envInTerms b hb')
 

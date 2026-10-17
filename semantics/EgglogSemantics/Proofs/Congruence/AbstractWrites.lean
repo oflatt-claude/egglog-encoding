@@ -39,11 +39,11 @@ private theorem sourceAtom_view {src : Database} (hw : src.WF) {t : Term}
       obtain ⟨hk, ho⟩ := List.append_inj' hcols rfl
       have ho' : Term.app g ks = e := by simpa using ho
       rw [← hk, ← ho']
-      exact ⟨ks, ht, CongList.refl (fun _ hc => Database.mem_terms_of_arg hw ht hc), ht⟩
+      exact ⟨ks, ht, StoredCongList.refl (fun _ hc => Database.mem_terms_of_arg hw ht hc), Database.toStored ht⟩
   | uf _ _ => exact (viewName_ne_ufName (Term.app.inj he).1.symm).elim
 
 private theorem sourceAtom_edge {src : Database} {t a b : Term} (h : SourceAtom src t)
-    (he : t = .app ufName [a, b]) : Cong src a b ∧ (b = a ∨ Term.blt b a = true) := by
+    (he : t = .app ufName [a, b]) : StoredCong src a b ∧ (b = a ∨ Term.blt b a = true) := by
   cases h with
   | view _ => exact (viewName_ne_ufName (Term.app.inj he).1).elim
   | uf hc hd =>

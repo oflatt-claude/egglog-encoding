@@ -16,9 +16,10 @@ theorem leaderQuery_reads {d : Database} (hd : d.Diag) (hs : d.StoreOk)
   have hlast : Matches d (.expr (.app ufName [.var (leaderVar v), .var (leaderVar v)])) σ :=
     hm _ (List.mem_flatMap.mpr ⟨v, hv, by simp⟩)
   obtain ⟨a, ha⟩ := Option.isSome_iff_exists.mp
-    (Abstract.Matches.bound (v := v) hfirst (by simp [Pattern.vars, Expr.vars, Expr.varsList]))
+    (Abstract.Matches.bound (v := v) hfirst (by rfl) (by simp [Pattern.vars, Expr.vars, Expr.varsList]))
   obtain ⟨b, hb⟩ := Option.isSome_iff_exists.mp
-    (Abstract.Matches.bound (v := leaderVar v) hlast (by simp [Pattern.vars, Expr.vars, Expr.varsList]))
+    (Abstract.Matches.bound (v := leaderVar v) hlast (by rfl)
+      (by simp [Pattern.vars, Expr.vars, Expr.varsList]))
   exact ⟨a, b, ha, hb, Live.uf_match_out hd hs huf ha hb hfirst,
     Live.uf_match_out hd hs huf hb hb hlast⟩
 
@@ -31,12 +32,13 @@ theorem sourceMatch_of_leaderQuery {src d : Database} (hb : src.TermsBuild) (hw 
     (hm : ValidQuerySubst d ((encodeQuery q n).1 ++ leaderQuery q.vars) σ) :
     ∃ τ, ValidQuerySubst src q τ ∧ ∀ v ∈ q.vars, ∀ i,
       Env.lookup (leaderVar v) σ = some i → Env.lookup v (τ ++ src.env) = some i := by
-  have hread := patternReads_of_encodeQuery_matches hd hst hdecl hof hk hm.mem_values
+  have hread := patternReads_of_encodeQuery_matches hd hst hdecl hof hk
+    (hm.mem_values hst (encodeQuery_leader_safe q n hof))
     (fun _ hp => hm.matches_of_mem (List.mem_append_left _ hp))
   have hleaders := fun v (hv : v ∈ q.vars) => leaderQuery_reads hd hst huf
     (fun _ hp => hm.matches_of_mem (List.mem_append_right _ hp)) hv
   let g : Var → Term := fun v => idReading σ (leaderVar v)
-  have hlink : ∀ v ∈ q.vars, ∀ i, Env.lookup v σ = some i → Cong src (g v) i := by
+  have hlink : ∀ v ∈ q.vars, ∀ i, Env.lookup v σ = some i → StoredCong src (g v) i := by
     intro v hv i hi
     obtain ⟨a, b, ha, hb, ho, _⟩ := hleaders v hv
     obtain rfl : a = i := Option.some.inj (ha.symm.trans hi)
@@ -52,7 +54,7 @@ theorem sourceMatch_of_leaderQuery {src d : Database} (hb : src.TermsBuild) (hw 
     (fun p hp => (hg p hp).groundedAt) hread
   exact ⟨τ, hτ, fun v hv i hi => by
     rw [Env.lookup_append_of_some (hlookup v hv)]
-    simpa only [g, idReading_eq hi]⟩
+    simp only [g, idReading_eq hi]⟩
 
 mutual
 
@@ -74,6 +76,20 @@ theorem eval_leader_eq {s₁ s₂ : Signature} {ρ₁ ρ₂ : Env} : ∀ e : Exp
       rw [eval_leader_eq a (fun f hf => hc f (by simp [Expr.fns, hf]))
         (fun v hv' => hv v (by simp [Expr.vars, hv'])),
         eval_leader_eq b (fun f hf => hc f (by simp [Expr.fns, hf]))
+          (fun v hv' => hv v (by simp [Expr.vars, hv']))]
+  | .ite lhs rhs yes no, hc, hv => by
+      simp only [leaderExpr, Expr.eval]
+      rw [evalList_leader_eq lhs
+          (fun f hf => hc f (by simp [Expr.fns, hf]))
+          (fun v hv' => hv v (by simp [Expr.vars, hv'])),
+        evalList_leader_eq rhs
+          (fun f hf => hc f (by simp [Expr.fns, hf]))
+          (fun v hv' => hv v (by simp [Expr.vars, hv']))]
+      simp only [eval_leader_eq yes
+          (fun f hf => hc f (by simp [Expr.fns, hf]))
+          (fun v hv' => hv v (by simp [Expr.vars, hv'])),
+        eval_leader_eq no
+          (fun f hf => hc f (by simp [Expr.fns, hf]))
           (fun v hv' => hv v (by simp [Expr.vars, hv']))]
 
 theorem evalList_leader_eq {s₁ s₂ : Signature} {ρ₁ ρ₂ : Env} : ∀ es : List Expr,
@@ -107,11 +123,8 @@ theorem sourceMatch_leader_evaluations {src d : Database} (hb : src.TermsBuild)
   obtain ⟨τ, hτ, hlookup⟩ := sourceMatch_of_leaderQuery hb hw hs he hd hst hsc hdecl huf
     hof hg hk hm
   refine ⟨τ, hτ, fun e hf hv => eval_leader_eq e hf fun v hve => ?_⟩
-  obtain ⟨a, b, _, hl, ho, _⟩ := leaderQuery_reads hd hst huf
+  obtain ⟨_, b, _, hl, _, _⟩ := leaderQuery_reads hd hst huf
     (fun _ hp => hm.matches_of_mem (List.mem_append_right _ hp)) (hv v hve)
-  have htv : b.IsValue d.sig := (hm.mem_values (leaderVar v, b) (Env.mem_of_lookup hl)).2
-  have hsv : b.IsValue src.sig := termsBuild_isValue hb hw (he _ _ ho).mem_right
   simp only [Expr.eval_var, Env.lookup_append_of_some hl, hlookup v (hv v hve) b hl]
-  simp [Option.filter_some, htv, hsv]
 
 end Egglog.Congruence

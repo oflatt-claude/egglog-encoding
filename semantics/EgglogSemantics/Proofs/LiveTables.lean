@@ -36,14 +36,14 @@ theorem mergeClosure_eq_of_normal {d e : Database} (hn : MergeNormal d)
 /-- Normalization supplies one current row per congruence class of keys. -/
 theorem normalize_unique {d e : Database} (hn : MergeNormalize d e)
     {a b : Entry} (ha : a ∈ e.entries) (hb : b ∈ e.entries)
-    (hname : a.name = b.name) (hkey : CongList e a.key b.key) : a = b :=
-  hn.2 a ha b hb hname hkey
+    (hname : a.name = b.name) (hkey : StoredCongList e a.key b.key) : a = b :=
+  hn.2 a ha b hb hname hkey.toCong
 
 /-- In particular, an exact key with held components has one current output. -/
 theorem normalize_exact_key {d e : Database} (hn : MergeNormalize d e)
     {f : FnName} {key old new : List Term}
     (ha : Entry.mk f key old ∈ e.entries)
-    (hb : Entry.mk f key new ∈ e.entries) (hk : CongList e key key) : old = new := by
+    (hb : Entry.mk f key new ∈ e.entries) (hk : StoredCongList e key key) : old = new := by
   exact congrArg Entry.value (normalize_unique hn ha hb rfl hk)
 
 private theorem table_not_value {sig : Signature} {f : FnName} {decl : FnDecl}
@@ -57,9 +57,9 @@ private theorem table_not_value {sig : Signature} {f : FnName} {decl : FnDecl}
 /-- Typed equations preserve the head of a table atom. -/
 theorem cong_table_head_iff {d : Database} (hs : d.StoreOk)
     {f : FnName} {decl : FnDecl} (hd : d.sig f = some decl) (hm : decl.merge ≠ none)
-    {a b : Term} (hc : Cong d a b) :
+    {a b : Term} (hc : StoredCong d a b) :
     (∃ cols, a = .app f cols) ↔ (∃ cols, b = .app f cols) := by
-  induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
+  induction hc using StoredCong.rec (motive_2 := fun _ _ _ => True) with
   | direct hp =>
     rcases hs.typed _ hp with ⟨ha, hb⟩ | ⟨row, _, he⟩
     · constructor
@@ -84,13 +84,13 @@ theorem cong_table_head_iff {d : Database} (hs : d.StoreOk)
 /-- A table atom's only nontrivial congruence comes from its columns. -/
 theorem cong_table_columns {d : Database} (hs : d.StoreOk)
     {f : FnName} {decl : FnDecl} (hd : d.sig f = some decl) (hm : decl.merge ≠ none)
-    {as bs : List Term} (hc : Cong d (.app f as) (.app f bs)) : CongList d as bs := by
-  have aux : ∀ {a b : Term}, Cong d a b →
+    {as bs : List Term} (hc : StoredCong d (.app f as) (.app f bs)) : StoredCongList d as bs := by
+  have aux : ∀ {a b : Term}, StoredCong d a b →
       ∀ {f : FnName} {decl : FnDecl} {as bs : List Term},
       d.sig f = some decl → decl.merge ≠ none →
-      a = .app f as → b = .app f bs → CongList d as bs := by
+      a = .app f as → b = .app f bs → StoredCongList d as bs := by
     intro a b hc
-    induction hc using Cong.rec (motive_2 := fun _ _ _ => True) with
+    induction hc using StoredCong.rec (motive_2 := fun _ _ _ => True) with
     | direct hp =>
       intro f decl as bs hd hm ha hb
       cases ha
@@ -101,8 +101,8 @@ theorem cong_table_columns {d : Database} (hs : d.StoreOk)
         have hcols := (Term.app.inj ha).2
         have hcols' := (Term.app.inj hb).2
         rw [hcols, hcols']
-        apply CongList.refl
-        exact hs.columns row ⟨hr, by simpa only [he] using hp⟩
+        apply StoredCongList.refl
+        exact hs.columns row ⟨hr.shape, by simpa only [he] using hp⟩
     | symm _ ih =>
       intro f decl as bs hd hm ha hb
       exact (ih hd hm hb ha).symm
@@ -114,8 +114,8 @@ theorem cong_table_columns {d : Database} (hs : d.StoreOk)
       intro f decl as bs _ _ ha hb
       cases ha
       obtain ⟨_, rfl⟩ := Term.app.inj hb
-      exact CongList.refl fun t ht' => Cong.subterm (Cong.subterm ht hs)
-        (Term.arg_subterms ht' (.refl _))
+      exact StoredCongList.refl fun t ht' =>
+        (StoredCong.subterm (StoredCong.subterm ht hs) (Term.arg_subterms ht' (.refl _))).toHeld
     | congr _ _ hcols _ _ _ =>
       intro f decl as bs _ _ ha hb
       obtain ⟨rfl, rfl⟩ := Term.app.inj ha
@@ -135,8 +135,8 @@ theorem table_match_current {d : Database} (hs : d.StoreOk)
     {e : Expr} {σ : Env} {target : Entry} (ht : target.Valid d.sig)
     (he : e.evalAtom d.sig σ = some target.atom) (hm : Matches d (.expr e) σ) :
     ∃ row ∈ d.entries, row.name = target.name ∧
-      CongList (d.withOperands [target.atom]) target.columns row.columns := by
-  cases hm with
+      StoredCongList (d.withOperands [target.atom]) target.columns row.columns := by
+  cases hm using Matches.storedCases with
   | expr hw he' hc =>
     obtain rfl := Option.some.inj (he'.symm.trans he)
     have hs' : (d.withOperands [target.atom]).StoreOk :=
@@ -149,9 +149,9 @@ theorem table_match_current {d : Database} (hs : d.StoreOk)
         ⟨target.columns, rfl⟩
       have hname : row.name = target.name := (Term.app.inj hcols).1
       refine ⟨row, hrow, hname, ?_⟩
-      apply CongList.symm
+      apply StoredCongList.symm
       apply cong_table_columns hs' hd hmerge
-      simpa only [CongOn, Entry.atom, hname] using hc
+      simpa only [StoredCongOn, Entry.atom, hname] using hc
 
 /-- In a diagonal state, an atom match names an actual stored row exactly. -/
 theorem table_match_current_of_diagonal {d : Database} (hd : d.Diag)
@@ -159,7 +159,7 @@ theorem table_match_current_of_diagonal {d : Database} (hd : d.Diag)
     {e : Expr} {σ : Env} {target : Entry} (ht : target.Valid d.sig)
     (he : e.evalAtom d.sig σ = some target.atom) (hm : Matches d (.expr e) σ) :
     target ∈ d.entries := by
-  cases hm with
+  cases hm using Matches.storedCases with
   | expr hw he' hc =>
     obtain rfl := Option.some.inj (he'.symm.trans he)
     obtain rfl := congOn_eq_of_diag hd hc
@@ -169,14 +169,14 @@ theorem table_match_current_of_diagonal {d : Database} (hd : d.Diag)
 theorem table_match_of_current {d : Database} {e : Expr} {σ : Env} {target row : Entry}
     (he : e.evalAtom d.sig σ = some target.atom) (hr : row ∈ d.entries)
     (hn : row.name = target.name)
-    (hc : CongList (d.withOperands [target.atom]) target.columns row.columns) :
+    (hc : StoredCongList (d.withOperands [target.atom]) target.columns row.columns) :
     Matches d (.expr e) σ := by
-  apply Matches.expr (.direct hr.2) he
-  have hrow : Cong (d.withOperands [target.atom]) row.atom row.atom :=
-    (Cong.direct hr.2).mono (Database.Contained.addTerms _ _)
-  have htarget : Cong (d.withOperands [target.atom]) target.atom target.atom :=
-    Database.mem_addTerms (by simp)
-  change Cong (d.withOperands [target.atom])
+  apply Matches.expr (StoredCong.direct hr.2).toHeld he
+  have hrow : StoredCong (d.withOperands [target.atom]) row.atom row.atom :=
+    (StoredCong.direct hr.2).mono (Database.Contained.addTerms _ _)
+  have htarget : StoredCong (d.withOperands [target.atom]) target.atom target.atom :=
+    Database.toStored (Database.mem_addTerm target.atom d)
+  change StoredCong (d.withOperands [target.atom])
     (.app row.name row.columns) (.app target.name target.columns)
   rw [hn]
   exact .congr (by simpa only [Entry.atom, hn] using hrow) htarget hc.symm
@@ -186,7 +186,7 @@ theorem replaced_output_does_not_match {d : Database} (hs : d.StoreOk)
     {e : Expr} {σ : Env} {target : Entry} (ht : target.Valid d.sig)
     (he : e.evalAtom d.sig σ = some target.atom)
     (hgone : ∀ row ∈ d.entries, row.name = target.name →
-      ¬ CongList (d.withOperands [target.atom]) target.columns row.columns) :
+      ¬ StoredCongList (d.withOperands [target.atom]) target.columns row.columns) :
     ¬ Matches d (.expr e) σ := by
   intro hm
   obtain ⟨row, hr, hn, hc⟩ := table_match_current hs ht he hm
@@ -210,12 +210,6 @@ theorem reinsert_erased_entry (d : Database) (old new : Entry) (ho : old.Valid d
     old ∈ (((d.eraseEntry old).eraseEntry new).putEntry old).entries := by
   rw [Database.putEntry_entries (d := (d.eraseEntry old).eraseEntry new) ho]
   exact Set.mem_insert _ _
-
-/-- Equal output tuples satisfy every unchanged-width policy. -/
-theorem self_not_conflict {decl : FnDecl} {body : List Action} {values : List Term}
-    {k : Nat} (h : decl.unchangedWidth body = some k) :
-    ¬ MergeConflict decl body values values := by
-  simp [MergeConflict, h]
 
 theorem sameMeaning_refl (d : Database) : d.SameMeaning d :=
   ⟨rfl, rfl, rfl, fun _ _ => Iff.rfl⟩

@@ -36,9 +36,12 @@ of an application's argument list. `Term.recTerm`'s twin. -/
 @[elab_as_elim]
 theorem recExpr {motive : Expr → Prop} (lit : ∀ l, motive (.lit l)) (var : ∀ v, motive (.var v))
     (app : ∀ f args, (∀ a ∈ args, motive a) → motive (.app f args))
-    (min : ∀ a b, motive a → motive b → motive (.min a b)) (e : Expr) : motive e :=
+    (min : ∀ a b, motive a → motive b → motive (.min a b))
+    (ite : ∀ lhs rhs yes no, (∀ a ∈ lhs, motive a) → (∀ a ∈ rhs, motive a) →
+      motive yes → motive no → motive (.ite lhs rhs yes no)) (e : Expr) : motive e :=
   Expr.rec (motive_1 := motive) (motive_2 := fun args => ∀ a ∈ args, motive a) lit var
     (fun f args ih => app f args ih) (fun a b iha ihb => min a b iha ihb)
+    (fun lhs rhs yes no ihlhs ihrhs ihyes ihno => ite lhs rhs yes no ihlhs ihrhs ihyes ihno)
     (fun a ha => by simp at ha)
     (fun _ _ iht ihts a ha => (List.mem_cons.mp ha).elim (fun h => h ▸ iht) (ihts a)) e
 

@@ -45,7 +45,7 @@ theorem row_mem_atomsOver {P : Program} (hp : P.Fragment) {d : Database}
   refine ⟨(row.name, row.key.length), hwidth, row.columns, ?_, ?_, rfl⟩
   · simp [Entry.columns, ha]
   · intro c hc
-    exact hv ⟨h.storeOk.columns row hr c hc, hr.1.column_values c hc⟩
+    exact hv ⟨h.storeOk.columns row hr c hc, (h.storeOk.entry_valid hr).column_values c hc⟩
 
 theorem eqs_bound_of_values {P : Program} (hp : P.Fragment) {d : Database}
     (h : Runtime d) (hsig : d.sig = encodeSig P) {values : Set Term}
@@ -55,9 +55,9 @@ theorem eqs_bound_of_values {P : Program} (hp : P.Fragment) {d : Database}
   have he := h.noUnions.diag p hp'
   have hm : p.1 ∈ values ∪ atomsOver P values := by
     rcases h.storeOk.typed p hp' with ⟨ha, _⟩ | ⟨row, hr, heq⟩
-    · exact Or.inl (hv ⟨(Cong.direct hp').mem_left, ha⟩)
+    · exact Or.inl (hv ⟨(StoredCong.direct hp').mem_left, ha⟩)
     · subst p
-      exact Or.inr (row_mem_atomsOver hp h hsig hv ⟨hr, hp'⟩)
+      exact Or.inr (row_mem_atomsOver hp h hsig hv ⟨hr.shape, hp'⟩)
   exact ⟨hm, he ▸ hm⟩
 
 theorem localFlat_values_subset {d e : Database} {q : Query} {ρ : Env}

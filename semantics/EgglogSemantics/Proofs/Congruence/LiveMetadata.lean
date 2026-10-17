@@ -14,7 +14,7 @@ open Abstract
 theorem viewDeclared_of_signature {P : Program} (hp : P.Fragment) {d : Database}
     (hd : d.Diag) (hsig : d.sig = encodeSig P) : ViewDeclared d := by
   intro f cs e ho
-  obtain ⟨decl, hdecl, _, hk, _, _⟩ := (ho.entry hd).1
+  obtain ⟨decl, hdecl, _, hk, _⟩ := (ho.entry hd).1
   obtain ⟨k, _, rfl⟩ := encodeSig_view_census hp (hsig ▸ hdecl)
   have hwidth : cs.length = k := hk
   exact hwidth ▸ hdecl
@@ -77,7 +77,7 @@ theorem rebuilt_of_metadata {P : Program} {src d : Database}
     (hrules : RulesEncoded P src d) {R : RulesetName}
     (hR : R = rebuildRuleset ∨ R ∈ P.saturateRulesets)
     (hfin : d.terms.Finite) (hsat : RunSaturated R d) (hdesc : Descending d) : Rebuilt d :=
-  rebuilt_of_saturated h.state h.generated h.noUnions h.storeOk h.wf hfin hsat
+  rebuilt_of_saturated h.state h.generated h.noUnions h.storeOk h.rulesSafe h.wf hfin hsat
     (hrules.tablesPresent hp h.noUnions.diag hsig hR) (hrules.path hR)
     (fun _ _ ho => hdesc.out h.noUnions.diag ho)
 

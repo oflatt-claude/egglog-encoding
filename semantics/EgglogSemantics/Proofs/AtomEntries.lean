@@ -37,6 +37,50 @@ theorem IsValue.least {sig : Signature} {a b : Term}
 
 end Term
 
+theorem Entry.Valid.shape {sig : Signature} {row : Entry} (h : row.Valid sig) :
+    row.Shape sig := by
+  obtain ⟨d, hd, hm, hk, hv, _⟩ := h
+  exact ⟨d, hd, hm, hk, hv⟩
+
+namespace Entry.Shape
+
+theorem decl_spec {sig : Signature} {row : Entry} (h : row.Shape sig)
+    {decl : FnDecl} (hd : sig row.name = some decl) :
+    decl.merge ≠ none ∧ row.key.length = decl.arity ∧ row.value.length = decl.outArity := by
+  obtain ⟨dc, hdc, hm, hk, ho⟩ := h
+  obtain rfl := Option.some.inj (hdc.symm.trans hd)
+  exact ⟨hm, hk, ho⟩
+
+theorem atom_not_value {sig : Signature} {row : Entry} (h : row.Shape sig) :
+    ¬ row.atom.IsValue sig := by
+  obtain ⟨decl, hd, hm, _⟩ := h
+  intro hv
+  obtain ⟨ctor, hc, hnone⟩ := (Term.isValue_app_iff.mp hv).1
+  obtain rfl := Option.some.inj (hc.symm.trans hd)
+  exact hm hnone
+
+theorem atom_injective {sig : Signature} {a b : Entry}
+    (ha : a.Shape sig) (hb : b.Shape sig) (he : a.atom = b.atom) : a = b := by
+  cases a with | mk f ks vs =>
+    cases b with | mk g ls ws =>
+      obtain ⟨rfl, hcols⟩ := Term.app.inj he
+      obtain ⟨da, hda, _, hka, _⟩ := ha
+      obtain ⟨db, hdb, _, hkb, _⟩ := hb
+      obtain rfl := Option.some.inj (hda.symm.trans hdb)
+      have hk : ks.length = ls.length := hka.trans hkb.symm
+      obtain ⟨rfl, rfl⟩ := List.append_inj hcols hk
+      rfl
+
+end Entry.Shape
+
+/-- The stored equation invariant implies that every decoded row has constructor columns. -/
+theorem Database.StoreOk.entry_valid {db : Database} (hs : db.StoreOk)
+    {row : Entry} (hr : row ∈ db.entries) : row.Valid db.sig := by
+  rcases hs.typed _ hr.2 with hv | ⟨other, ho, he⟩
+  · exact (hr.1.atom_not_value hv.1).elim
+  · obtain rfl := hr.1.atom_injective ho.shape (congrArg Prod.fst he)
+    exact ho
+
 namespace Entry.Valid
 
 theorem decl_spec {sig : Signature} {row : Entry} (h : row.Valid sig)
@@ -101,7 +145,7 @@ namespace Database
 
 theorem mem_addTerm_entries {d : Database} {t : Term} {row : Entry} :
     row ∈ (d.addTerm t).entries ↔
-      row ∈ d.entries ∨ (row.Valid d.sig ∧ row.atom = t) := by
+      row ∈ d.entries ∨ (row.Shape d.sig ∧ row.atom = t) := by
   simp [entries, addTerm, and_or_left, or_comm]
 
 theorem addTerm_entries {d : Database} {t : Term} (ht : t.IsValue d.sig) :
@@ -127,7 +171,7 @@ theorem addEq_entries {d : Database} {a b : Term}
     (ha : a.IsValue d.sig) (_hb : b.IsValue d.sig) :
     (d.addEq a b).entries = d.entries := by
   ext row
-  change (row.Valid d.sig ∧
+  change (row.Shape d.sig ∧
     ((row.atom, row.atom) = (a, b) ∨ (row.atom, row.atom) ∈ _)) ↔ _
   constructor
   · rintro ⟨hv, he | he⟩
@@ -145,9 +189,9 @@ theorem putEntry_entries {d : Database} {row : Entry} (hr : row.Valid d.sig) :
   constructor
   · rintro (he | ⟨hv, hs⟩)
     · exact Or.inr he
-    · exact Or.inl (hv.atom_injective hr hs)
+    · exact Or.inl (hv.atom_injective hr.shape hs)
   · rintro (rfl | he)
-    · exact Or.inr ⟨hr, rfl⟩
+    · exact Or.inr ⟨hr.shape, rfl⟩
     · exact Or.inl he
 
 theorem eraseEntry_entries {d : Database} {row : Entry} (hr : row.Valid d.sig) :
@@ -165,7 +209,7 @@ theorem eraseEntry_entries {d : Database} {row : Entry} (hr : row.Valid d.sig) :
   · rintro ⟨⟨hv, he⟩, hne⟩
     refine ⟨hv, Or.inl ⟨he, ?_⟩⟩
     intro heq
-    exact hne (hv.atom_injective hr (congrArg Prod.fst heq))
+    exact hne (hv.atom_injective hr.shape (congrArg Prod.fst heq))
 
 theorem eraseEntry_entries_subset {d : Database} {row : Entry}
     (hr : row.Valid d.sig) : (d.eraseEntry row).entries ⊆ d.entries := by
@@ -202,10 +246,10 @@ theorem entries_eq_of_packed {d : Database} {E : Set (Term × Term)} {rows : Set
     rw [he] at hmem
     rcases hmem with hmem | ⟨other, ho, heq⟩
     · exact (hvalid.atom_not_value (hv _ hmem)).elim
-    · obtain rfl := (hr other ho).atom_injective hvalid (congrArg Prod.fst heq)
+    · obtain rfl := (hr other ho).shape.atom_injective hvalid (congrArg Prod.fst heq)
       exact ho
   · intro hrow
-    refine ⟨hr row hrow, ?_⟩
+    refine ⟨(hr row hrow).shape, ?_⟩
     rw [he]
     exact Or.inr ⟨row, hrow, rfl⟩
 

@@ -33,7 +33,8 @@ theorem World.empty {P : Program} (hp : P.Fragment) (src : Database) :
     · intro p hp; exact hp.elim
     · simp [emptyWorld, Database.empty]
   refine ⟨⟨hw, hs, ⟨?_, (encodeSig_mergeShape P).unionFree, ?_⟩,
-    Live.State.of_generated ?_ (encodeSig_ufName hp) hg, hg⟩,
+    Live.State.of_generated ?_ (encodeSig_ufName hp) hg (fun _ hr => hs.entry_valid hr), hg,
+      (by intro r hr; exact hr.elim)⟩,
     rfl, rfl, rfl, ?_, ?_, ?_⟩
   · intro p hp; exact hp.elim
   · intro r hr; exact hr.elim
@@ -56,7 +57,7 @@ theorem World.combine {P : Program} {src d e : Database}
       obtain ⟨decl, hdecl, hm, _⟩ := hr.1
       exact ⟨decl, hdecl, hm⟩
     · intro row hr t ht
-      exact hw.subtermClosed _ (.direct hr.2) (Term.arg_subterms ht t.self_mem_subterms)
+      exact hw.subtermClosed _ (StoredCong.direct hr.2).toHeld (Term.arg_subterms ht t.self_mem_subterms)
     · intro p hp
       rw [heqs] at hp
       rcases hp with hp | hp
@@ -69,7 +70,8 @@ theorem World.combine {P : Program} {src d e : Database}
     rw [heqs] at hp
     exact hp.elim (hd.runtime.noUnions.diag p) (he.runtime.noUnions.diag p)
   refine ⟨⟨hw, hs, hn, Live.State.of_generated ?_ hd.runtime.state.uf
-    hd.runtime.generated, hd.runtime.generated⟩,
+    hd.runtime.generated (fun _ hr => hs.entry_valid hr), hd.runtime.generated,
+      hd.runtime.rulesSafe⟩,
     hd.signature, hd.environment, hd.rules, ?_, ?_, ?_⟩
   · apply Database.FiniteStore.of_eqs_rules
     · rw [heqs]; exact hd.runtime.state.finite.eqs.union he.runtime.state.finite.eqs

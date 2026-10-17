@@ -38,28 +38,25 @@ theorem uf_match_out {d : Database} (hd : d.Diag) (hs : d.StoreOk)
     (ha : Env.lookup v σ = some a) (hr : Env.lookup w σ = some r)
     (hm : Matches d (.expr (.app ufName [.var v, .var w])) σ) :
     d.Out ufName [a] [r] := by
-  cases hm with
+  cases hm using Matches.storedCases with
   | expr hx he hc =>
-    have hva : a.IsValue d.sig := by
-      cases hv : a.isValue d.sig with
-      | true => exact hv
-      | false => simp [Expr.evalAtom, huf, tableDecl, FnDecl.entryWidth,
-          Expr.evalList, Expr.eval, Option.filter_some, ha, hv] at he
-    have hvr : r.IsValue d.sig := by
-      cases hv : r.isValue d.sig with
-      | true => exact hv
-      | false => simp [Expr.evalAtom, huf, tableDecl, FnDecl.entryWidth,
-          Expr.evalList, Expr.eval, Option.filter_some, ha, hr, hva, hv] at he
     have hev : (Expr.app ufName [.var v, .var w]).evalAtom d.sig σ =
         some (Entry.mk ufName [a] [r]).atom := by
       simp [Expr.evalAtom, huf, tableDecl, FnDecl.entryWidth, Expr.evalList,
-        Expr.eval, Option.filter_some, ha, hr, hva, hvr, Entry.atom, Entry.columns]
+        Expr.eval, ha, hr, Entry.atom, Entry.columns]
     obtain rfl := Option.some.inj (hev.symm.trans he)
-    have hm : Entry.mk ufName [a] [r] ∈ d.entries := by
-      apply hs.entry_of_held_atom (hr := ⟨tableDecl 1, huf,
-        by simp [tableDecl], rfl, rfl, ?_⟩) ((congOn_eq_of_diag hd hc) ▸ hx)
-      simpa [Entry.columns] using And.intro hva hvr
-    exact ⟨[a], .cons (hs.columns _ hm a (by simp [Entry.columns])) .nil, hm⟩
+    have ht : (Entry.mk ufName [a] [r]).atom ∈ d.terms :=
+      (congOn_eq_of_diag hd hc) ▸ hx
+    have hshape : (Entry.mk ufName [a] [r]).Shape d.sig :=
+      ⟨tableDecl 1, huf, by simp [tableDecl], rfl, rfl⟩
+    have hv : (Entry.mk ufName [a] [r]).Valid d.sig := by
+      rcases hs.term ht with hv | ⟨row, hv, he⟩
+      · exact (hshape.atom_not_value hv).elim
+      · have hrow := hshape.atom_injective hv.shape he
+        simpa only [hrow] using hv
+    have hm := hs.entry_of_held_atom hv ht
+    exact ⟨[a], .cons (Database.toCong (hs.columns _ hm a
+      (by simp [Entry.columns]))) .nil, hm⟩
 
 /-- Unlike a historical self-loop, a current self-parent rules out any other parent. -/
 theorem self_parent_only {d : Database} (hn : MergeNormal d) {r p : Term}

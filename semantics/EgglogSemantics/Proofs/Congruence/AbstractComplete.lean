@@ -154,7 +154,7 @@ theorem Boundary.step {P pre rest : Program} (hp : P.Fragment) {c : Cmd}
   have hmem : c ∈ P := hP ▸ List.mem_append_right _ List.mem_cons_self
   have hcs := (hpre.ctorState Database.CtorState.empty
     (fun cmd hm => hp.ctorsOnly cmd (hsub cmd hm))).sig
-  have hrt := Live.prefix_runtime hp htpre
+  have hrt := Live.prefix_runtime hp hsub htpre
   cases c with
   | decl f dc => exact h.decl hcs (hp.ctorsOnly _ hmem) hs ht
   | rule r =>
@@ -210,7 +210,7 @@ theorem checkAgreement {P : Program} (hp : P.Fragment) : CheckAgreement P := by
   have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => hP ▸ List.mem_append_left _ hc
   have hmem : Cmd.check q ∈ P := hP ▸ List.mem_append_right _ List.mem_cons_self
   have h := boundary_prefix hp hP hs ht
-  have hrt := Live.prefix_runtime hp ht
+  have hrt := Live.prefix_runtime hp hsub ht
   have hsig := Live.prefix_sig ht
   have hcs := hs.ctorState Database.CtorState.empty
     (fun c hc => hp.ctorsOnly c (hsub c hc))

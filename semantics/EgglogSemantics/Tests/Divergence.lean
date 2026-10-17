@@ -45,14 +45,14 @@ theorem merge_self_loop : MergeStep start start := by
   have hb : evalActions { erased with env := ρ } body =
       some { restored with env := ρ } := by rfl
   have hr : Expr.evalList restored.sig [.var "old"] ρ = some [zero] := by
-    simp [Expr.evalList, Expr.eval, ρ, mergeEnv, Option.filter, zero, Term.isValue]
+    simp [Expr.evalList, Expr.eval, ρ, mergeEnv]
   have hm : MergeValues erased decl [zero] [one] restored [zero] :=
-    .changed rfl (by simp [MergeConflict, FnDecl.unchangedWidth, decl, body, zero, one]) hb hr
+    .eval rfl (evalMerge_eq_some.mpr ⟨hb, hr⟩)
   have ho : oldRow ∈ start.entries := by
-    refine ⟨old_valid, ?_⟩
+    refine ⟨old_valid.shape, ?_⟩
     exact Or.inr (Or.inl rfl)
   have hn : newRow ∈ start.entries :=
-    ⟨new_valid, Or.inl rfl⟩
+    ⟨new_valid.shape, Or.inl rfl⟩
   have hs := MergeStep.collide ho hn (by decide +kernel) rfl
     (show start.sig oldRow.name = some decl by simp [start, prepared, base, oldRow])
     CongList.nil hm
@@ -84,10 +84,10 @@ private theorem false_query : ¬ QueryHolds start falseQuery := by
   have hm := hσ.matches_of_mem (show Pattern.eq (.lit (.int 0)) (.lit (.int 1)) ∈
     falseQuery by simp [falseQuery])
   cases hm with
-  | eq _ he₁ he₂ _ he =>
+  | equal he₁ he₂ he =>
       cases Option.some.inj he₁
       cases Option.some.inj he₂
-      have heq := congOn_eq_of_diag start_diag he
+      have heq := Cong.eq_of_diag start_diag he
       cases heq
 
 theorem failed_check_stops : Eval start [.check falseQuery, .run "R"] .checkFailed :=

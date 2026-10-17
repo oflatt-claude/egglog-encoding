@@ -6,7 +6,7 @@ open Conservativity
 
 theorem Claim.Supported.addEq_wf {A db : Database} (hA : A.WF) (hw : db.WF)
     {c : Claim} (hc : c.Supported db) : (A.addEq c.lhs c.rhs).WF := by
-  refine hA.addEq _ _ (Cong.eq_of_isLit ?_ hc.equality)
+  refine hA.addEq _ _ (StoredCong.eq_of_isLit ?_ hc.equality)
   intro p hp hl
   exact (show p ∈ db.eqs ∨ p.1 = p.2 from hp).elim (fun hp => hw.litsIsolated p hp hl) id
 
@@ -51,7 +51,7 @@ theorem ledger_holds {sig : Signature} {cs : List Claim} {c : Claim} (hc : c ∈
   | nil => simp at hc
   | cons d ds ih =>
       rcases List.mem_cons.mp hc with rfl | hc
-      · exact Cong.direct (Set.mem_insert _ _)
+      · exact StoredCong.direct (Set.mem_insert _ _)
       · exact (ih hc).mono (Database.Contained.addEq _ _ _)
 
 end Egglog.SourceProof

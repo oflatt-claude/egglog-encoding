@@ -31,7 +31,7 @@ theorem ValidEnv.finite {db : Database} (ht : db.terms.Finite) (vs : List Var) :
   intro σ hσ
   refine ⟨by simpa [Env.dom] using hσ.1.length_eq, ?_⟩
   intro b hb
-  exact ⟨hσ.1.subset (List.mem_map.mpr ⟨b, hb, rfl⟩), (hσ.2 b hb).1⟩
+  exact ⟨hσ.1.subset (List.mem_map.mpr ⟨b, hb, rfl⟩), hσ.2 b hb⟩
 
 theorem ValidSubst.finite {db : Database} (ht : db.terms.Finite) (p : Pattern) :
     {σ | ValidSubst db p σ}.Finite :=
@@ -143,16 +143,15 @@ theorem MergeValues.finite_eqs {db d : Database} {decl : FnDecl}
     {old new vs : List Term} (h : MergeValues db decl old new d vs)
     (he : db.eqs.Finite) : d.eqs.Finite := by
   cases h with
-  | unchanged => exact he
-  | changed _ _ hbody _ =>
-      have hf := evalActions_finite (db := { db with env := mergeEnv _ _ old new })
-        (d := _) he hbody
+  | eval _ hblock =>
+      obtain ⟨hbody, _⟩ := evalMerge_eq_some.mp hblock
+      have hf := evalActions_finite (db := { db with env := mergeEnv _ _ old new }) he hbody
       exact hf
 
 theorem MergeValues.finite_rules {db d : Database} {decl : FnDecl}
     {old new vs : List Term} (h : MergeValues db decl old new d vs)
     (hr : db.rules.Finite) : d.rules.Finite := by
-  cases h <;> exact hr
+  cases h; exact hr
 
 theorem MergeStep.finite_eqs {db d : Database} (h : MergeStep db d)
     (he : db.eqs.Finite) : d.eqs.Finite := by
@@ -296,8 +295,8 @@ theorem MergeValues.finiteStore {db d : Database} {decl : FnDecl}
     {old new vs : List Term} (h : MergeValues db decl old new d vs)
     (hf : db.FiniteStore) : d.FiniteStore := by
   cases h with
-  | unchanged => exact hf
-  | changed _ _ hbody _ =>
+  | eval _ hblock =>
+      obtain ⟨hbody, _⟩ := evalMerge_eq_some.mp hblock
       have h' := evalActions_finiteStore (hf.setEnv (mergeEnv _ _ old new)) hbody
       exact ⟨h'.eqs, h'.entries, hf.rules⟩
 

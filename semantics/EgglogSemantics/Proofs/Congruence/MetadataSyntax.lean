@@ -8,12 +8,11 @@ import EgglogSemantics.Proofs.Setup
 
 namespace Egglog.Congruence
 
-/-- A merging declaration has the generated body, one output, and no special identity
-columns. Only UF and constructor views merge; UF has one key. -/
+/-- Only UF and constructor views use the generated singleton-output merge. -/
 def DeclShape (f : FnName) (dc : FnDecl) : Prop :=
   ∀ {oldVars newVars : List Var} body res, dc.merge = some (.merge oldVars newVars body res) →
     (f = ufName ∨ ∃ g, f = viewName g) ∧ body = mergeBody ∧ res = mergeResult ∧
-      dc.outArity = 1 ∧ (f = ufName → dc.arity = 1) ∧ dc.identityVals = none ∧
+      dc.outArity = 1 ∧ (f = ufName → dc.arity = 1) ∧
       oldVars = ["old"] ∧ newVars = ["new"]
 
 def MergeShape (sig : Signature) : Prop :=
@@ -68,7 +67,7 @@ private theorem prelude_shape (P : Program) :
     obtain ⟨rfl, rfl, rfl, rfl⟩ :
         ["old"] = oldVars ∧ ["new"] = newVars ∧ mergeBody = body ∧ mergeResult = res := by
       simpa [tableDecl] using he
-    exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl, rfl, rfl, rfl⟩
+    exact ⟨Or.inl rfl, rfl, rfl, rfl, fun _ => rfl, rfl, rfl⟩
   · rcases hc with rfl | rfl
     · intro oldVars newVars body res he
       simp [ctorDecl] at he
@@ -77,7 +76,7 @@ private theorem prelude_shape (P : Program) :
         ["old"] = oldVars ∧ ["new"] = newVars ∧ mergeBody = body ∧ mergeResult = res := by
         simpa [tableDecl] using he
       exact ⟨Or.inr ⟨f, rfl⟩, rfl, rfl, rfl,
-        fun hu => False.elim (viewName_ne_ufName hu), rfl, rfl, rfl⟩
+        fun hu => False.elim (viewName_ne_ufName hu), rfl, rfl⟩
   · exact allMaintenance_shape P c hc
 
 private theorem cmd_shape (i : Nat) (c : Cmd) :
@@ -121,7 +120,7 @@ theorem MergeShape.unionFree {sig : Signature} (h : MergeShape sig) : sig.UnionF
   | merge oldVars newVars body res =>
       have hb := (h f dc hd body res hm).2.1
       rw [hb]
-      exact ⟨trivial, trivial, trivial⟩
+      simp [mergeBody, Action.UnionFree]
 
 private theorem maintenance_setup (P : Program) :
     ∀ c ∈ maintenanceRules P, c.command.DeclOrRule := by

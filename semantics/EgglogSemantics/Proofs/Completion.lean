@@ -14,13 +14,14 @@ theorem Database.contained_completion (d : Database) : d.Contained d.completion 
   ⟨fun _ hp => infers_of_cong (.direct hp)⟩
 
 theorem Database.cong_completion_iff {d : Database} (hw : d.WF) {a b : Term} :
-    Cong d.completion a b ↔ d.Infers a b := by
+    StoredCong d.completion a b ↔ d.Infers a b := by
   refine ⟨fun hc => ?_, fun hi => .direct hi⟩
   exact infers_of_assertions_only (e := d.completion) hw (fun _ hp => hp)
     (infers_of_cong hc)
 
 theorem Database.mem_completion_iff {d : Database} (hw : d.WF) {t : Term} :
-    t ∈ d.completion.terms ↔ d.Infers t t := cong_completion_iff hw
+    t ∈ d.completion.terms ↔ d.Infers t t :=
+  Database.mem_terms_iff_storedCong.trans (cong_completion_iff hw)
 
 theorem Database.WF.completion {d : Database} (hw : d.WF) : d.completion.WF where
   envInTerms := fun b hb => (d.contained_completion).terms (hw.envInTerms b hb)
@@ -28,8 +29,8 @@ theorem Database.WF.completion {d : Database} (hw : d.WF) : d.completion.WF wher
 
 theorem Database.sameMeaning_completion {d : Database} (hw : d.WF) :
     d.SameMeaning d.completion :=
-  ⟨rfl, rfl, rfl, fun _ _ => ⟨infers_mono d.contained_completion,
-    infers_of_assertions_only (e := d.completion) hw (fun _ hp => hp)⟩⟩
+  Database.SameMeaning.of_inferred rfl rfl rfl (fun _ _ => ⟨infers_mono d.contained_completion,
+    infers_of_assertions_only (e := d.completion) hw (fun _ hp => hp)⟩)
 
 theorem Database.completion_idempotent {d : Database} (hw : d.WF) :
     d.completion.completion = d.completion := by
@@ -48,10 +49,11 @@ theorem Database.SameMeaning.completion_eq {d e : Database} (h : d.SameMeaning e
 theorem Database.sameMeaning_iff_completion_eq {d e : Database} :
     d.SameMeaning e ↔ d.completion = e.completion := by
   refine ⟨Database.SameMeaning.completion_eq, fun h => ?_⟩
-  exact ⟨show d.completion.sig = e.completion.sig from congrArg Database.sig h,
-    show d.completion.env = e.completion.env from congrArg Database.env h,
-    show d.completion.rules = e.completion.rules from congrArg Database.rules h,
-    fun a b => Set.ext_iff.mp (congrArg Database.eqs h) (a, b)⟩
+  apply Database.SameMeaning.of_inferred
+  · exact show d.completion.sig = e.completion.sig from congrArg Database.sig h
+  · exact show d.completion.env = e.completion.env from congrArg Database.env h
+  · exact show d.completion.rules = e.completion.rules from congrArg Database.rules h
+  · exact fun a b => Set.ext_iff.mp (congrArg Database.eqs h) (a, b)
 
 theorem InferredFacts.supported_isValue {d : Database} (hw : d.WF)
     (hv : ∀ t ∈ d.terms, t.IsValue d.sig) :
@@ -98,8 +100,8 @@ theorem Database.StoreOk.completion {d : Database} (hw : d.WF) (hs : d.StoreOk)
     have hd' : d.sig row.name = some decl := hd
     exact hn (by simpa [Signature.mergeOf, hd'] using hc row.name)
   exact ⟨fun row hr => (hnone row hr).elim, fun row hr => (hnone row hr).elim,
-    fun p hp => Or.inl ⟨hv p.1 (Cong.direct hp).mem_left,
-      hv p.2 (Cong.direct hp).mem_right⟩, hs.envValues⟩
+    fun p hp => Or.inl ⟨hv p.1 (StoredCong.direct hp).mem_left,
+      hv p.2 (StoredCong.direct hp).mem_right⟩, hs.envValues⟩
 
 theorem SourceMeaning.queryHolds_completion_iff {d : Database}
     (hw : d.WF) (hs : d.StoreOk) (hc : d.sig.AllConstructors)

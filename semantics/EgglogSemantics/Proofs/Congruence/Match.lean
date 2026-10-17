@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Congruence.QuerySafety
 import EgglogSemantics.Proofs.Congruence.QuerySubst
 import EgglogSemantics.Proofs.Diagonal
 import EgglogSemantics.Proofs.Source.Domain
@@ -36,44 +37,45 @@ inductive PatternRead (d : Database) (ρ : Env) : Pattern → Prop where
       QueryRead d ρ e₁ i → QueryRead d ρ e₂ i → PatternRead d ρ (.eq e₁ e₂)
 
 def Env.ReadsAs (src : Database) (ρs ρt : Env) (vs : List Var) : Prop :=
-  ∀ v ∈ vs, ∀ i, Env.lookup v ρt = some i → ∃ t, Env.lookup v ρs = some t ∧ Cong src t i ∧ t.IsValue src.sig
+  ∀ v ∈ vs, ∀ i, Env.lookup v ρt = some i →
+    ∃ t, Env.lookup v ρs = some t ∧ StoredCong src t i ∧ t.IsValue src.sig
 
 theorem Env.ReadsAs.mono {src : Database} {ρs ρt : Env} {vs ws : List Var}
     (h : Env.ReadsAs src ρs ρt vs) (hsub : ws ⊆ vs) : Env.ReadsAs src ρs ρt ws :=
   fun v hv => h v (hsub hv)
 
 def CongUp (src : Database) (t i : Term) : Prop :=
-  ∀ D : Database, src.Contained D → (∀ s ∈ t.subterms, s ∈ D.terms) → Cong D t i
+  ∀ D : Database, src.Contained D → (∀ s ∈ t.subterms, s ∈ D.terms) → StoredCong D t i
 
 theorem CongUp.lit {src : Database} {l : Lit} : CongUp src (.lit l) (.lit l) :=
-  fun _ _ hsub => hsub _ (Term.self_mem_subterms _)
+  fun _ _ hsub => Database.toStored (hsub _ (Term.self_mem_subterms _))
 
-theorem CongUp.of_cong {src : Database} {t i : Term} (h : Cong src t i) : CongUp src t i :=
-  fun _ hc _ => Cong.mono hc h
+theorem CongUp.of_cong {src : Database} {t i : Term} (h : StoredCong src t i) : CongUp src t i :=
+  fun _ hc _ => StoredCong.mono hc h
 
 theorem CongUp.congList {src D : Database} (hcon : src.Contained D) {ts es : List Term}
     (h : List.Forall₂ (CongUp src) ts es)
-    (hsub : ∀ t ∈ ts, ∀ s ∈ t.subterms, s ∈ D.terms) : CongList D ts es := by
-  rw [CongList.forall₂]
+    (hsub : ∀ t ∈ ts, ∀ s ∈ t.subterms, s ∈ D.terms) : StoredCongList D ts es := by
+  rw [StoredCongList.forall₂]
   induction h with
   | nil => exact .nil
   | @cons a b as bs hab hl ih =>
     exact .cons (hab D hcon (hsub a (by simp))) (ih fun t ht => hsub t (by simp [ht]))
 
 theorem CongUp.congOn {src : Database} {t i : Term} (h : CongUp src t i) :
-    CongOn src [t] t i :=
+    StoredCongOn src [t] t i :=
   h _ (Database.Contained.addTerms _ _) fun s hs => by
     rw [Database.withOperands, Database.addTerms_terms]
     exact Or.inr ⟨t, by simp, hs⟩
 
 theorem CongUp.congOn_pair_left {src : Database} {t u i : Term} (h : CongUp src t i) :
-    CongOn src [t, u] t i :=
+    StoredCongOn src [t, u] t i :=
   h _ (Database.Contained.addTerms _ _) fun s hs => by
     rw [Database.withOperands, Database.addTerms_terms]
     exact Or.inr ⟨t, by simp, hs⟩
 
 theorem CongUp.congOn_pair_right {src : Database} {t u i : Term} (h : CongUp src u i) :
-    CongOn src [t, u] u i :=
+    StoredCongOn src [t, u] u i :=
   h _ (Database.Contained.addTerms _ _) fun s hs => by
     rw [Database.withOperands, Database.addTerms_terms]
     exact Or.inr ⟨u, by simp, hs⟩
@@ -92,17 +94,17 @@ theorem congUp_of_queryRead {src d : Database} (hb : src.TermsBuild)
   | @var v i hlk =>
     intro hlink
     obtain ⟨t, ht, hc, hv⟩ := hlink v (by simp [Expr.vars]) i hlk
-    exact ⟨t, Option.filter_eq_some_iff.mpr ⟨ht, hv⟩, .of_cong hc⟩
+    exact ⟨t, ht, .of_cong hc⟩
   | @app f args es i _ ho ih =>
     intro hlink
     obtain ⟨as, ham, hal, hae⟩ := hs f _ _ ho
     have hctor := hb f as ham
     obtain ⟨ts, hts, hup⟩ := ih (by simpa [Expr.vars] using hlink)
     refine ⟨.app f ts, by simp [Expr.eval, hctor, hts], fun D hcon hsub => ?_⟩
-    have hlD : CongList D ts es :=
+    have hlD : StoredCongList D ts es :=
       CongUp.congList hcon hup fun t ht s hs' => hsub s (Term.arg_subterms ht hs')
-    exact (Cong.congr (hsub _ (Term.self_mem_subterms _)) (hcon.terms ham)
-      (hlD.trans (CongList.mono hcon hal).symm)).trans (Cong.mono hcon hae)
+    exact (StoredCong.congr (Database.toStored (hsub _ (Term.self_mem_subterms _)))
+      (Database.toStored (hcon.terms ham)) (hlD.trans (StoredCongList.mono hcon hal).symm)).trans (StoredCong.mono hcon hae)
   | nil _ => exact ⟨[], rfl, .nil⟩
   | @cons a i as is _ _ ih ihl hlink =>
     obtain ⟨t, ht, hc⟩ := ih (hlink.mono (by
@@ -162,7 +164,7 @@ theorem matches_of_patternRead {src d : Database} (hb : src.TermsBuild)
 theorem validQuerySubst_of_patternReads {src d : Database} (hb : src.TermsBuild)
     (hs : ViewsSound d src) {q : Query} {g : Var → Term} {ρt : Env}
     (hgt : ∀ v ∈ Query.vars q, g v ∈ src.values)
-    (hlink : ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i → Cong src (g v) i)
+    (hlink : ∀ v ∈ Query.vars q, ∀ i, Env.lookup v ρt = some i → StoredCong src (g v) i)
     (hgr : ∀ p ∈ q, p.GroundedAt src) (hread : ∀ p ∈ q, PatternRead d ρt p) :
     ∃ τ, ValidQuerySubst src q τ ∧ (∀ b ∈ τ, b.1 ∈ Query.vars q) ∧
       ∀ v ∈ Query.vars q, Env.lookup v τ = some (g v) := by
@@ -177,7 +179,7 @@ mutual
 
 theorem exists_source_of_argVar {src d : Database} (hs : ViewsSound d src) {ρt : Env}
     {v : Var} {e : Expr} {i : Term} (h : QueryRead d ρt e i) (hv : Expr.ArgVar v e) :
-    ∃ j t, Env.lookup v ρt = some j ∧ Cong src t j := by
+    ∃ j t, Env.lookup v ρt = some j ∧ StoredCong src t j := by
   cases h with
   | lit => exact absurd hv (by simp [Expr.ArgVar])
   | var => exact absurd hv (by simp [Expr.ArgVar])
@@ -189,8 +191,8 @@ theorem exists_source_of_argVar {src d : Database} (hs : ViewsSound d src) {ρt 
 
 theorem exists_source_of_memVar {src d : Database} {ρt : Env} {v : Var} :
     ∀ {args : List Expr} {es as : List Term}, QueryReadList d ρt args es →
-      CongList src as es → Expr.var v ∈ args →
-      ∃ j t, Env.lookup v ρt = some j ∧ Cong src t j
+      StoredCongList src as es → Expr.var v ∈ args →
+      ∃ j t, Env.lookup v ρt = some j ∧ StoredCong src t j
   | _, _, _, .nil, _, hv => absurd hv (by simp)
   | _, _, _, .cons hr hl, hc, hv => by
     cases hc with
@@ -202,7 +204,7 @@ theorem exists_source_of_memVar {src d : Database} {ρt : Env} {v : Var} :
 
 theorem exists_source_of_argVarList {src d : Database} (hs : ViewsSound d src) {ρt : Env}
     {v : Var} : ∀ {args : List Expr} {es : List Term}, QueryReadList d ρt args es →
-      Expr.ArgVarList v args → ∃ j t, Env.lookup v ρt = some j ∧ Cong src t j
+      Expr.ArgVarList v args → ∃ j t, Env.lookup v ρt = some j ∧ StoredCong src t j
   | _, _, .nil, hv => absurd hv (by simp [Expr.ArgVarList])
   | _, _, .cons hr hl, hv => by
     rcases hv with hv | hv
@@ -213,7 +215,7 @@ end
 
 theorem exists_source_of_patternArgVar {src d : Database} (hs : ViewsSound d src) {ρt : Env}
     {v : Var} {p : Pattern} (h : PatternRead d ρt p) (hv : Pattern.ArgVar v p) :
-    ∃ j t, Env.lookup v ρt = some j ∧ Cong src t j := by
+    ∃ j t, Env.lookup v ρt = some j ∧ StoredCong src t j := by
   cases h with
   | expr hr => exact exists_source_of_argVar hs hr hv
   | eq h₁ h₂ => exact hv.elim (exists_source_of_argVar hs h₁) (exists_source_of_argVar hs h₂)
@@ -229,7 +231,7 @@ theorem out_of_matches_entry {d : Database} (hd : d.Diag)
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧
       Expr.evalList d.sig [.var v] σ = some us ∧
       Term.app (viewName f) (ts ++ us) ∈ d.terms ∧ d.Out (viewName f) ts us := by
-  cases h with
+  cases h using Matches.storedCases with
   | expr hw hev hc =>
     obtain ⟨decl, hf, heval⟩ := Option.bind_eq_some_iff.mp hev
     obtain ⟨k, rfl⟩ := hdecl f decl hf
@@ -242,7 +244,7 @@ theorem out_of_matches_entry {d : Database} (hd : d.Diag)
     have heq := congOn_eq_of_diag hd hc
     subst heq
     have hvalid : (Entry.mk (viewName f) ts us).Valid d.sig := by
-      refine ⟨tableDecl k, hf, by simp [tableDecl], ?_, ?_, Expr.evalList_isValue hcols⟩
+      refine ⟨tableDecl k, hf, by simp [tableDecl], ?_, ?_, (hstore.term hw).childrenValues⟩
       · have := Expr.evalList_length hts
         simp only [List.length_append, List.length_singleton] at hwidth
         simp only [tableDecl]
@@ -319,11 +321,12 @@ theorem lookup_isSome_of_argVar {d : Database} {σ : Env} {v : Var} :
   | .lit _, _, _, _, hv => absurd hv (by simp [Expr.ArgVar])
   | .var _, _, _, _, hv => absurd hv (by simp [Expr.ArgVar])
   | .min _ _, _, hof, _, _ => (Expr.not_orderingFree_min hof).elim
+  | .ite _ _ _ _, _, hof, _, _ => (Expr.not_orderingFree_ite hof).elim
   | .app f args, n, hof, hm, hv => by
     rw [encodeQueryExpr_app_atoms] at hm
     rcases hv with hv | hv
     · cases hm (.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++
-          [.var (freshVar (encodeQueryArgs args n).2.2)]))) (by simp) with
+          [.var (freshVar (encodeQueryArgs args n).2.2)]))) (by simp) using Matches.storedCases with
       | expr _ hev _ =>
         obtain ⟨cols, hcols, -⟩ := Expr.evalAtom_app_inv hev
         obtain ⟨ts, us, hts, -, -⟩ := Expr.evalList_append hcols
@@ -368,13 +371,14 @@ theorem exists_eval_encodeQueryExpr {d : Database} {σ : Env} :
   | .lit l, _, _, _, _ => ⟨.lit l, rfl⟩
   | .var v, _, _, _, hb => by
     obtain ⟨t, ht, hv⟩ := hb v (by simp)
-    exact ⟨t, Option.filter_eq_some_iff.mpr ⟨ht, hv⟩⟩
+    exact ⟨t, ht⟩
   | .min _ _, _, hof, _, _ => (Expr.not_orderingFree_min hof).elim
+  | .ite _ _ _ _, _, hof, _, _ => (Expr.not_orderingFree_ite hof).elim
   | .app f args, n, _, hm, _ => by
     rw [encodeQueryExpr_app_atoms] at hm
     rw [encodeQueryExpr_app_expr, Expr.eval_var]
     cases hm (.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++
-          [.var (freshVar (encodeQueryArgs args n).2.2)]))) (by simp) with
+          [.var (freshVar (encodeQueryArgs args n).2.2)]))) (by simp) using Matches.storedCases with
     | expr _ hev _ =>
       obtain ⟨cols, hcols, -⟩ := Expr.evalAtom_app_inv hev
       obtain ⟨ts, us, -, hus, -⟩ := Expr.evalList_append hcols
@@ -388,7 +392,7 @@ private theorem evalList_one_var {sig : Signature} {x : Var} {ρ : Env} {us : Li
   obtain ⟨a, ha, h⟩ := h
   obtain ⟨rest, hrest, rfl⟩ := Option.map_eq_some_iff.mp h
   obtain rfl : rest = [] := (Option.some.inj hrest).symm
-  exact ⟨a, (Option.filter_eq_some_iff.mp ha).1, rfl⟩
+  exact ⟨a, ha, rfl⟩
 
 mutual
 
@@ -401,8 +405,9 @@ theorem queryRead_of_matches {d : Database} (hd : d.Diag)
   | .lit l, _, _, _, _, hi => by
     obtain rfl : Term.lit l = _ := Option.some.inj hi
     exact .lit
-  | .var _, _, _, _, _, hi => .var (Option.filter_eq_some_iff.mp hi).1
+  | .var _, _, _, _, _, hi => .var hi
   | .min _ _, _, _, hof, _, _ => (Expr.not_orderingFree_min hof).elim
+  | .ite _ _ _ _, _, _, hof, _, _ => (Expr.not_orderingFree_ite hof).elim
   | .app f args, n, i, hof, hm, hi => by
     rw [encodeQueryExpr_app_atoms] at hm
     rw [encodeQueryExpr_app_expr, Expr.eval_var] at hi
@@ -412,7 +417,7 @@ theorem queryRead_of_matches {d : Database} (hd : d.Diag)
         (hm (.expr (.app (viewName f) ((encodeQueryArgs args n).1 ++
           [.var (freshVar (encodeQueryArgs args n).2.2)]))) (by simp))
     obtain ⟨a, ha, rfl⟩ := evalList_one_var hus
-    obtain rfl : a = i := Option.some.inj (ha.symm.trans (Option.filter_eq_some_iff.mp hi).1)
+    obtain rfl : a = i := Option.some.inj (ha.symm.trans hi)
     exact .app (queryReadList_of_matches hd hstore hdecl args n (Expr.orderingFree_app hof)
       (fun x hx => hm x (List.mem_append.mpr (Or.inl hx))) hts) ho
 
@@ -450,7 +455,7 @@ theorem patternRead_of_matches {d : Database} (hd : d.Diag)
   | .eq e₁ e₂, n, hof, _, hm => by
     rw [encodePattern_eq_atoms] at hm
     cases hm (.eq (encodeQueryExpr e₁ n).1 (encodeQueryExpr e₂ (encodeQueryExpr e₁ n).2.2).1)
-        (by simp) with
+        (by simp) using Matches.storedCases with
     | @eq _ _ _ w t₁ t₂ hw he₁ he₂ hc₁ hc₂ =>
       obtain rfl : t₁ = t₂ := congOn_eq_of_diag hd hc₂
       exact .eq
@@ -490,7 +495,8 @@ theorem patternReads_of_encodeQuery {tgt : Database} (hd : tgt.Diag)
     (hof : ∀ p ∈ q, p.OrderingFree) (hk : Query.VarsKeyed q)
     (h : ValidQuerySubst tgt (encodeQuery q n).1 σ) :
     ∀ p ∈ q, PatternRead tgt σ p :=
-  patternReads_of_encodeQuery_matches hd hstore hdecl hof hk h.mem_values
+  patternReads_of_encodeQuery_matches hd hstore hdecl hof hk
+    (h.mem_values hstore (encodeQuery_safe q n hof hk))
     (fun _ hp => h.matches_of_mem hp)
 
 theorem mem_terms_of_patternArgVar {src d : Database} (hs : ViewsSound d src) {ρt : Env}
@@ -529,7 +535,7 @@ theorem exists_validQuerySubst_at_ids {src d : Database} (hb : src.TermsBuild) (
     rw [idReading_eq hi]; exact ⟨hm, termsBuild_isValue hb hw hm⟩
   obtain ⟨τ, hv, hdom, hτ⟩ := validQuerySubst_of_patternReads hb hs
     (g := idReading ρt) hgt
-    (fun v hv i hi => idReading_eq hi ▸ (hgt v hv).1) hgr hread
+    (fun v hv i hi => idReading_eq hi ▸ Database.toStored (hgt v hv).1) hgr hread
   exact ⟨τ, hv, hdom, fun v hvq i hi => by
     rw [Env.lookup_append_of_some (hτ v hvq), idReading_eq hi]⟩
 

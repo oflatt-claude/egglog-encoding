@@ -52,12 +52,13 @@ theorem queryRead_of_eval_view {d : Database} {src : Database}
       rw [h.root_lit hs hw l]
       exact .lit
   | .var v, t, i, _, he, hv => by
-      obtain ⟨j, hj, hvj, hrj⟩ := hρ v t (Option.filter_eq_some_iff.mp he).1
+      obtain ⟨j, hj, hvj, hrj⟩ := hρ v t he
       have heq : j = h.root i := by
         have hh := h.unique_view t hvj hv
         simpa only [h.root_eq hrj] using hh
       exact heq ▸ QueryRead.var hj
   | .min _ _, _, _, hp, _, _ => (Expr.not_orderingFree_min hp).elim
+  | .ite _ _ _ _, _, _, hp, _, _ => (Expr.not_orderingFree_ite hp).elim
   | .app f args, t, i, hp, he, hv => by
       simp only [Expr.eval] at he
       split at he
@@ -115,7 +116,8 @@ theorem patternRead_of_matches {d : Database} {src querySrc : Database}
 mutual
 
 /-- A variable appearing as a constructor argument receives a matchable value from a row. -/
-theorem QueryRead.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {v : Var} :
+theorem QueryRead.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
+    {ρ : Env} {v : Var} :
     ∀ {e : Expr} {i : Term}, QueryRead d ρ e i → Expr.ArgVar v e →
       ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.values
   | _, _, .lit, hv => absurd hv (by simp [Expr.ArgVar])
@@ -141,7 +143,8 @@ theorem QueryReadList.value_memVar {d : Database} {ρ : Env} {v : Var} :
           (fun j hj => hc j (List.mem_cons_of_mem _ hj)) hv
 
 /-- Descend to the constructor occurrence that provides the variable's value. -/
-theorem QueryReadList.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {v : Var} :
+theorem QueryReadList.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
+    {ρ : Env} {v : Var} :
     ∀ {es : List Expr} {is : List Term}, QueryReadList d ρ es is → Expr.ArgVarList v es →
       ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.values
   | _, _, .nil, hv => absurd hv (by simp [Expr.ArgVarList])
@@ -150,15 +153,18 @@ theorem QueryReadList.value_argVar {d : Database} (hd : d.Diag) (hstore : d.Stor
 
 end
 
-theorem PatternRead.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {v : Var} {p : Pattern}
+theorem PatternRead.value_argVar {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
+    {ρ : Env} {v : Var} {p : Pattern}
     (h : PatternRead d ρ p) (hv : Pattern.ArgVar v p) :
     ∃ j, Env.lookup v ρ = some j ∧ j ∈ d.values := by
   cases h with
   | expr he => exact QueryRead.value_argVar hd hstore he hv
-  | eq ha hb => exact hv.elim (QueryRead.value_argVar hd hstore ha) (QueryRead.value_argVar hd hstore hb)
+  | eq ha hb =>
+      exact hv.elim (QueryRead.value_argVar hd hstore ha) (QueryRead.value_argVar hd hstore hb)
 
 /-- A nonliteral reading has an existing value, either from its binding or its parent row. -/
-theorem QueryRead.output_value {d : Database} (hd : d.Diag) (hstore : d.StoreOk) {ρ : Env} {e : Expr} {i : Term}
+theorem QueryRead.output_value {d : Database} (hd : d.Diag) (hstore : d.StoreOk)
+    {ρ : Env} {e : Expr} {i : Term}
     (h : QueryRead d ρ e i)
     (hv : ∀ v j, Env.lookup v ρ = some j → j ∈ d.values)
     (hn : ∀ l, e ≠ .lit l) : i ∈ d.values := by

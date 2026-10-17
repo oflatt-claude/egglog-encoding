@@ -6,8 +6,8 @@ import EgglogSemantics.Proofs.Divergence
 
 namespace Egglog.Congruence.Live
 
-theorem State.not_mergeDiverges {d : Database} (h : State d) : ¬ MergeDiverges d :=
-  not_infiniteTrace_of_wellFounded (merge_wellFounded h)
+theorem State.not_mergeDiverges {d : Database} (h : State d) (hd : d.Diag) : ¬ MergeDiverges d :=
+  not_infiniteTrace_of_wellFounded (merge_wellFounded h hd)
 
 theorem not_rebuildDiverges {P : Program} (hp : P.Fragment) {d : Database}
     (h : Runtime d) (hn : MergeNormal d) (hsig : d.sig = encodeSig P)
@@ -20,7 +20,8 @@ theorem not_rebuildDiverges {P : Program} (hp : P.Fragment) {d : Database}
       (fun n => (hstep n).1)
     exact (hstep n).2 hn
   · have hreach := changingRunReach_runReach hr
-    exact ((h.runReach hreach).runRules rebuildRuleset).state.not_mergeDiverges hm
+    exact ((h.runReach hreach).runRules rebuildRuleset).state.not_mergeDiverges
+      ((h.runReach hreach).runRules rebuildRuleset).noUnions.diag hm
 
 private theorem noDecl_sigBind {c : Cmd} (hc : NoDecl c) (sig : Signature) :
     c.sigBind sig = sig := by
@@ -43,20 +44,20 @@ theorem not_cmdDiverges {P : Program} (hp : P.Fragment) {d : Database}
       cases c with
       | run R =>
           subst mid
-          exact (h.runRules R).state.not_mergeDiverges hm
+          exact (h.runRules R).state.not_mergeDiverges (h.runRules R).noUnions.diag hm
       | rule r =>
           subst mid
           have hs : State {d with rules := insert r d.rules} :=
             State.of_generated ⟨h.state.finite.eqs, h.state.finite.entries,
               h.state.finite.rules.insert r⟩
-              h.state.uf h.generated
-          exact hs.not_mergeDiverges hm
+              h.state.uf h.generated h.state.typed
+          exact hs.not_mergeDiverges h.noUnions.diag hm
       | decl => contradiction
       | check q => exact hncheck q rfl
       | saturate R => exact hnsat R rfl
 
 theorem not_programDiverges {P : Program} (hp : P.Fragment) {p : Program}
-    (hnd : ∀ c ∈ p, NoDecl c) (hu : p.UnionFree)
+    (hnd : ∀ c ∈ p, NoDecl c) (hu : p.UnionFree) (hqs : p.QueriesSafe)
     (hsat : ∀ R, Cmd.saturate R ∈ p → R = rebuildRuleset)
     (hrules : ∀ r, Cmd.rule r ∈ p → r.ruleset = rebuildRuleset →
       ∃ c ∈ allMaintenanceRules P, c.command = .rule r)
@@ -73,10 +74,10 @@ theorem not_programDiverges {P : Program} (hp : P.Fragment) {p : Program}
           exact not_cmdDiverges hp h hn hsig honly (hnd _ List.mem_cons_self) hu.1
             (fun R he => hsat R (he ▸ List.mem_cons_self)) hc
       | tail hc hd =>
-          apply ih (fun c hm => hnd c (List.mem_cons_of_mem _ hm)) hu.2
+          apply ih (fun c hm => hnd c (List.mem_cons_of_mem _ hm)) hu.2 hqs.2
             (fun R hm => hsat R (List.mem_cons_of_mem _ hm))
             (fun r hm => hrules r (List.mem_cons_of_mem _ hm))
-            (h.cmd (hnd _ List.mem_cons_self) hu.1 hc) (hc.mergeNormal hn)
+            (h.cmd (hnd _ List.mem_cons_self) hu.1 hqs.1 hc) (hc.mergeNormal hn)
             ((hc.sig.trans (noDecl_sigBind (hnd _ List.mem_cons_self) _)).trans hsig) ?_ hd
           intro r hr hR
           rcases (hc.mem_rules_iff r).mp hr with hr | hr
@@ -109,7 +110,9 @@ theorem encoded_commands_not_diverge {P : Program} (hp : P.Fragment) (hn : P.NoS
   have hnormal : MergeNormal d := by
     intro row hr
     exact (hempty ▸ hr.2).elim
-  apply not_programDiverges hp (cmds_noDecl P 0) ?_ (cmds_onlySaturate hn 0) ?_
+  apply not_programDiverges hp (cmds_noDecl P 0) ?_
+    (Program.queriesSafe_of_rules _ (encodeCmds_querySafe hp.noMin 0))
+    (cmds_onlySaturate hn 0) ?_
     (prelude_runtime hp hpre) hnormal hpre.sig ?_
   · apply unionFree_append_right (p := (encodePrelude P).map Command.command)
     simpa only [List.map_append] using encodePrefix_unionFree P P 0

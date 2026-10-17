@@ -9,14 +9,14 @@ open Congruence Congruence.Abstract
 private theorem row_mem_soundRows {src d : Database}
     (hshape : MergeShape d.sig) (hs : SoundTerms d src) {row : Entry}
     (hr : row ∈ d.entries) : row.atom ∈ SoundRows src := by
-  obtain ⟨dc, hd, hm, hk, hv, _⟩ := hr.1
+  obtain ⟨dc, hd, hm, hk, hv⟩ := hr.1
   obtain ⟨ms, hms⟩ := Option.ne_none_iff_exists'.mp hm
   cases ms with
   | merge oldVars newVars body res =>
       obtain ⟨hrole, _, _, hout, huf, _⟩ := hshape row.name dc hd body res hms
       obtain ⟨a, ha⟩ := List.length_eq_one_iff.mp (hv.trans hout)
       have ht : Term.app row.name (row.key ++ [a]) ∈ d.terms := by
-        simpa only [Entry.atom, Entry.columns, ha] using (Cong.direct hr.2).mem_left
+        simpa only [Entry.atom, Entry.columns, ha] using (StoredCong.direct hr.2).mem_left
       rcases hrole with hn | ⟨f, hn⟩
       · obtain ⟨key, he⟩ := List.length_eq_one_iff.mp (hk.trans (huf hn))
         refine Or.inr ⟨key, a, ?_, ?_⟩
@@ -46,12 +46,6 @@ theorem World.mergeStep {P : Program} {src d e : Database}
   · subst t
     exact Or.inr (row_mem_soundRows (hm.sig ▸ hshape) hs
       (hr.storeOk.entry_of_held_atom hrow ht))
-
-private theorem conflicts_sound {d : FnDecl} {body : List Action} {old new : List Term}
-    (h : conflicts d body old new = true) : MergeConflict d body old new := by
-  unfold conflicts at h
-  unfold MergeConflict
-  cases hw : d.unchangedWidth body <;> simp_all
 
 private theorem table_entry_valid {sig : Signature} {f : FnName} {k : Nat}
     {cols : List Term} (hd : sig f = some (tableDecl k))
@@ -94,8 +88,8 @@ theorem mergeFacts_step {d : Database} (h : Live.Runtime d)
           simp only at hdecl
           split at hdecl
           · rename_i hcols
-            simp only [Bool.and_eq_true_iff, beq_iff_eq] at hcols
-            obtain ⟨⟨⟨⟨hfo, hfn⟩, hoc⟩, hnc⟩, hkeys⟩ := hcols
+            simp only [Bool.and_eq_true_iff, beq_iff_eq, bne_iff_ne] at hcols
+            obtain ⟨⟨⟨⟨⟨hfo, hfn⟩, hoc⟩, hnc⟩, hkeys⟩, hne⟩ := hcols
             subst ofn
             subst nfn
             have hoc' : oc.length = k + 1 := by simpa [FnDecl.entryWidth] using hoc
@@ -108,42 +102,38 @@ theorem mergeFacts_step {d : Database} (h : Live.Runtime d)
             have hrn : newRow ∈ d.entries :=
               h.storeOk.entry_of_held_atom (table_entry_valid hd hnc' han) (by
                 simpa [newRow, Entry.atom, Entry.columns] using hn)
-            split at hdecl
-            · rename_i hconf
-              have hc := conflicts_sound hconf
-              have hne : oldRow ≠ newRow := by
-                intro he
-                have hv := congrArg Entry.value he
-                change (oc.drop k).take 1 ≠ (nc.drop k).take 1 at hc
-                exact hc (congrArg (List.take 1) hv)
-              obtain ⟨facts, hbody, hafterBody⟩ := Option.bind_eq_some_iff.mp hdecl
-              obtain ⟨vs, hres, hafterRes⟩ := Option.bind_eq_some_iff.mp hafterBody
-              split at hafterRes
-              · cases Option.some.inj hafterRes
-                let base := (d.eraseEntry oldRow).eraseEntry newRow
-                let ρ := mergeEnv ["old"] ["new"] (oc.drop k) (nc.drop k)
-                obtain ⟨D, hD, hfs⟩ := actionsFacts_sound (db := { base with env := ρ }) hbody
-                have hv : Expr.evalList D.sig mergeResult D.env = some vs := by
-                  rw [evalActions_sig hD, evalActions_env hD]
-                  exact hres
-                let post := ({ D with env := d.env, rules := d.rules } : Database).putEntry
-                  ⟨f, oc.take k, vs⟩
-                have hk : CongList d oldRow.key newRow.key := by
-                  change CongList d (oc.take k) (nc.take k)
-                  rw [← hkeys]
-                  exact CongList.refl fun t ht => h.storeOk.columns oldRow hro t
-                    (List.mem_append_left _ ht)
-                have hstep : MergeStep d post := .collide hro hrn hne rfl hd hk
-                  (.changed rfl hc hD hv)
-                refine ⟨post, hstep, ?_⟩
-                intro t ht
-                rcases ht with ht | ht
-                · have hkeep : D.Contained { D with env := d.env, rules := d.rules } :=
-                    ⟨fun _ hp => hp⟩
-                  exact (Database.Contained.putEntry _ _).terms (hkeep.terms (hfs t ht))
-                · exact Cong.subterm (Database.mem_addTerm _ _)
-                    ((Term.mem_subtermList _).mp ht)
-              · contradiction
+            have hrows : oldRow ≠ newRow := by
+              intro he
+              apply hne
+              simpa [oldRow, newRow, Entry.atom, Entry.columns] using congrArg Entry.atom he
+            obtain ⟨facts, hbody, hafterBody⟩ := Option.bind_eq_some_iff.mp hdecl
+            obtain ⟨vs, hres, hafterRes⟩ := Option.bind_eq_some_iff.mp hafterBody
+            split at hafterRes
+            · cases Option.some.inj hafterRes
+              let base := (d.eraseEntry oldRow).eraseEntry newRow
+              let ρ := mergeEnv ["old"] ["new"] (oc.drop k) (nc.drop k)
+              obtain ⟨D, hD, hfs⟩ := actionsFacts_sound (db := { base with env := ρ }) hbody
+              have hv : Expr.evalList D.sig mergeResult D.env = some vs := by
+                rw [evalActions_sig hD, evalActions_env hD]; exact hres
+              have hmerge : evalMerge { base with env := ρ } mergeBody mergeResult = some (D, vs) := by
+                simp [evalMerge, hD, hv]
+              let post := ({ D with env := d.env, rules := d.rules } : Database).putEntry
+                ⟨f, oc.take k, vs⟩
+              have hk : CongList d oldRow.key newRow.key := by
+                change CongList d (oc.take k) (nc.take k)
+                rw [← hkeys]
+                exact CongList.refl fun t ht => h.storeOk.columns oldRow hro t
+                  (List.mem_append_left _ ht)
+              have hstep : MergeStep d post := .collide hro hrn hrows rfl hd hk
+                (.eval rfl hmerge)
+              refine ⟨post, hstep, ?_⟩
+              intro t ht
+              rcases ht with ht | ht
+              · have hkeep : D.Contained { D with env := d.env, rules := d.rules } :=
+                  ⟨fun _ hp => hp⟩
+                exact (Database.Contained.putEntry _ _).terms (hkeep.terms (hfs t ht))
+              · exact post.subtermClosed _ (Database.mem_addTerm _ _)
+                  ((Term.mem_subtermList _).mp ht)
             · contradiction
           · contradiction
 

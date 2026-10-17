@@ -36,8 +36,8 @@ theorem mergeStep_entries {d e : Database} (h : State d) (hd : d.Diag)
     subst decl
     obtain ⟨a, ha⟩ := hold.output
     obtain ⟨b, hb⟩ := hnew.output
-    have hva := ho.1.output_values a (by simp [ha])
-    have hvb := hn.1.output_values b (by simp [hb])
+    have hva := (h.typed old ho).output_values a (by simp [ha])
+    have hvb := (h.typed new hn).output_values b (by simp [hb])
     have hk := CongList.eq_of_diag hd hkeys
     have hea : old = ⟨old.name, old.key, [a]⟩ := by
       cases old; exact congrArg (Entry.mk _ _) ha
@@ -48,34 +48,17 @@ theorem mergeStep_entries {d e : Database} (h : State d) (hd : d.Diag)
       intro hab
       exact hne (hea.trans (hab ▸ heb.symm))
     rw [ha, hb] at hm
-    obtain ⟨hsig, hsame | ⟨_, hvs, heffects⟩⟩ :=
+    obtain ⟨hsig, hvs, heffects⟩ :=
       mergeValues_effects (d := (d.eraseEntry old).eraseEntry new) h.uf hva hvb hm
-    · exact (hab hsame.1).elim
     have hresult : (Entry.mk old.name old.key [Term.least a b]).Valid mid.sig := by
       rw [hsig]
-      exact ho.1.with_value (by simp [ha]) (by simpa using hva.least hvb)
+      exact (h.typed old ho).with_value (by simp [ha]) (by simpa using hva.least hvb)
     refine ⟨old.name, old.key, a, b, hea ▸ ho, heb ▸ hn, hab, ?_⟩
     rw [hvs, Database.putEntry_entries hresult, heffects,
-      Database.eraseEntry_entries (by simpa using hn.1), Database.eraseEntry_entries ho.1,
+      Database.eraseEntry_entries (by simpa using h.typed new hn),
+      Database.eraseEntry_entries (h.typed old ho),
       hea, heb]
 
-theorem mergeStep_diag {d e : Database} (h : State d) (hd : d.Diag)
-    (hs : MergeStep d e) : e.Diag := by
-  cases hs with
-  | collide ho _ _ _ hdecl _ hm =>
-    have he := Option.some.inj (hdecl.symm.trans (h.rows _ ho).declared)
-    subst he
-    apply (hm.diag ?_ ((hd.eraseEntry _).eraseEntry _)).putEntry
-    simp [FnDecl.UnionFree, tableDecl, mergeBody, Action.UnionFree]
-
-theorem mergeClosure_diag {d e : Database} (h : State d) (hd : d.Diag)
-    (hs : MergeClosure d e) : e.Diag := by
-  induction hs with
-  | refl => exact hd
-  | tail hp hs ih =>
-    exact mergeStep_diag (state_closure h (outputsIn_self d) hp).1 ih hs
-
-/-- Every pre-merge row has a surviving row at the same exact key. -/
 theorem row_step {d e : Database} (h : State d) (hd : d.Diag)
     (hs : MergeStep d e) {f : FnName} {key : List Term} {a : Term}
     (hr : Entry.mk f key [a] ∈ d.entries) :

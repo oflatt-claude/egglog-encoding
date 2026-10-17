@@ -45,8 +45,7 @@ theorem Expr.evalList_map_var {sig : Signature} : ∀ (vs : List Var) (as : List
         Expr.evalList_map_var vs as ρ (by simpa using hlen)
           (fun i hi hi' => h (i + 1) (by simpa using hi) (by simpa using hi'))
           (fun t ht => hv t (List.mem_cons_of_mem _ ht))
-      have hev : Expr.eval sig (.var v) ρ = some a :=
-        Option.filter_eq_some_iff.mpr ⟨h0, hv a (by simp)⟩
+      have hev : Expr.eval sig (.var v) ρ = some a := h0
       rw [List.map_cons, Expr.evalList, hev, Option.bind_some, hrest]
       rfl
 
@@ -76,17 +75,16 @@ theorem Expr.mem_freeVarsList_map_var : ∀ (vs : List Var) (σ : Env) {v : Var}
 
 mutual
 
-/-- **A variable of an expression that evaluates is bound.** `Expr.lookup_isSome_of_mem_evalList`
-at every variable rather than only at a top-level one. -/
+/-- Evaluating a constructor expression binds every variable it mentions. -/
 theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
-    ∀ {e : Expr} {t : Term}, Expr.eval sig e ρ = some t → v ∈ e.vars →
-      (Env.lookup v ρ).isSome
-  | .lit _, _, _, hv => by simp [Expr.vars] at hv
-  | .var w, _, he, hv => by
+    ∀ {e : Expr} {t : Term}, e.OrderingFree → Expr.eval sig e ρ = some t →
+      v ∈ e.vars → (Env.lookup v ρ).isSome
+  | .lit _, _, _, _, hv => by simp [Expr.vars] at hv
+  | .var w, _, _, he, hv => by
       obtain rfl : v = w := by simpa [Expr.vars] using hv
       rw [Expr.eval_var] at he
-      rw [(Option.filter_eq_some_iff.mp he).1]; rfl
-  | .app f args, t, he, hv => by
+      rw [he]; rfl
+  | .app f args, t, ho, he, hv => by
       rw [Expr.vars] at hv
       have hl : ∃ ts, Expr.evalList sig args ρ = some ts := by
         rw [Expr.eval] at he
@@ -94,27 +92,23 @@ theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
         · obtain ⟨ts, hts, -⟩ := Option.map_eq_some_iff.mp he; exact ⟨ts, hts⟩
         · exact absurd he (by simp)
       obtain ⟨ts, hts⟩ := hl
-      exact Expr.lookup_isSome_of_mem_varsList hts hv
-  | .min a b, t, he, hv => by
-      rw [Expr.vars_min, List.mem_union_iff] at hv
-      rw [Expr.eval_min] at he
-      obtain ⟨x, hx, he'⟩ := Option.bind_eq_some_iff.mp he
-      obtain ⟨y, hy, -⟩ := Option.map_eq_some_iff.mp he'
-      exact hv.elim (fun h => Expr.lookup_isSome_of_mem_vars hx h)
-        (fun h => Expr.lookup_isSome_of_mem_vars hy h)
+      exact Expr.lookup_isSome_of_mem_varsList ho hts hv
+  | .min _ _, _, ho, _, _ => by simp [Expr.OrderingFree, Expr.hasMin] at ho
+  | .ite _ _ _ _, _, ho, _, _ => by simp [Expr.OrderingFree, Expr.hasMin] at ho
 
 @[inherit_doc Expr.lookup_isSome_of_mem_vars]
 theorem Expr.lookup_isSome_of_mem_varsList {sig : Signature} {ρ : Env} {v : Var} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
-      v ∈ Expr.varsList es → (Env.lookup v ρ).isSome
-  | [], _, _, hv => by simp [Expr.varsList] at hv
-  | e :: es, _, he, hv => by
+    ∀ {es : List Expr} {ts : List Term}, Expr.OrderingFreeList es →
+      Expr.evalList sig es ρ = some ts → v ∈ Expr.varsList es → (Env.lookup v ρ).isSome
+  | [], _, _, _, hv => by simp [Expr.varsList] at hv
+  | e :: es, _, ho, he, hv => by
+      have ho' : e.OrderingFree ∧ Expr.OrderingFreeList es := Bool.or_eq_false_iff.mp ho
       rw [Expr.evalList_cons, Option.bind_eq_some_iff] at he
       obtain ⟨t, ht, he'⟩ := he
       obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp he'
       rw [Expr.varsList, List.mem_union_iff] at hv
-      exact hv.elim (fun h => Expr.lookup_isSome_of_mem_vars ht h)
-        (fun h => Expr.lookup_isSome_of_mem_varsList hus h)
+      exact hv.elim (fun h => Expr.lookup_isSome_of_mem_vars ho'.1 ht h)
+        (fun h => Expr.lookup_isSome_of_mem_varsList ho'.2 hus h)
 
 end
 
@@ -181,10 +175,10 @@ theorem Expr.evalList_pair {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts :
 
 /-- One column of the right-hand list moved along a congruence. What the rebuild's column
 rules do to a key, pointwise. -/
-theorem CongList.setAt {db : Database} {as cs : List Term} {c x : Term} (i : Nat)
-    (h : CongList db as cs) (hget : cs[i]? = some c) (hcx : Cong db c x) :
-    CongList db as (cs.set i x) := by
-  rw [CongList.forall₂] at h ⊢
+theorem StoredCongList.setAt {db : Database} {as cs : List Term} {c x : Term} (i : Nat)
+    (h : StoredCongList db as cs) (hget : cs[i]? = some c) (hcx : StoredCong db c x) :
+    StoredCongList db as (cs.set i x) := by
+  rw [StoredCongList.forall₂] at h ⊢
   induction i generalizing as cs with
   | zero =>
     cases h with

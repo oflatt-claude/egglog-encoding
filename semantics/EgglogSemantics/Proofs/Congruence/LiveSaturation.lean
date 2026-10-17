@@ -58,7 +58,7 @@ theorem Advances.antisymm {d e : Database} (h : Advances d e) (h' : Advances e d
     intro p hp
     rcases hs.typed p hp with ⟨ha, hb⟩ | ⟨row, hrow, rfl⟩
     · exact hv.eqs p hp ha hb
-    · exact (hr ⟨hrow, hp⟩).2
+    · exact (hr ⟨hrow.shape, hp⟩).2
   exact Database.ext h.values.sig
     (Set.Subset.antisymm (hsub h.values hd.storeOk hdrows) (hsub h'.values he.storeOk herows))
     h.env h.rules
@@ -86,7 +86,8 @@ theorem saturate_exists_of_finite_bound {d : Database} (h : Runtime d)
     | tail _ hs _ => exact hs.2
   apply saturateReach_exists_of_measure R d (fun e => states.ncard - (below e).ncard)
   · intro e he
-    exact (h.runReach he).state.runStep_exists (h.runReach he).generated R
+    exact (h.runReach he).state.runStep_exists (h.runReach he).generated
+      (h.runReach he).storeOk (h.runReach he).rulesSafe (h.runReach he).noUnions R
   · intro e e' he hs hchange
     have he' : e' ∈ states := he.tail hs
     have hadv := Advances.runStep (h.runReach he) hs

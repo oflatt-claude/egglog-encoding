@@ -1,4 +1,5 @@
 import EgglogSemantics.Proofs.Order
+import EgglogSemantics.Spec.Order
 import Mathlib.Data.Set.Finite.List
 import Mathlib.Data.Set.Card
 
@@ -11,14 +12,6 @@ well founded. No well-foundedness claim is made for arbitrary integers or names.
 -/
 
 namespace Egglog.Term
-
-/-- Every name and literal occurring in the term belongs to the specified vocabulary.
-The vocabulary restricts symbols, not term depth or constructor arity. -/
-inductive UsesVocabulary (names : Set FnName) (literals : Set Lit) : Term → Prop where
-  | lit {l : Lit} : l ∈ literals → UsesVocabulary names literals (.lit l)
-  | app {f : FnName} {args : List Term} : f ∈ names →
-      (∀ a ∈ args, UsesVocabulary names literals a) →
-      UsesVocabulary names literals (.app f args)
 
 theorem UsesVocabulary.subterm {names : Set FnName} {literals : Set Lit}
     {s t : Term} (ht : UsesVocabulary names literals t) (hs : IsSubterm s t) :
@@ -120,5 +113,19 @@ theorem blt_wellFounded_on_vocabulary {names : Set FnName} {literals : Set Lit}
   apply (measure rank).wf.mono
   intro s t hst
   exact predecessor_count_lt hn hl s.property hst
+
+/-- The implementation's size-first order satisfies the paper's order requirements. -/
+@[blueprint "thm:order"
+  (title := /-- Concrete order -/)
+  (statement := /-- The model's size-first term order satisfies the preceding
+  requirements. Structural comparison breaks ties of equal node count. -/)
+  (hasProof := false) (latexEnv := "theorem")]
+theorem blt_admissible : AdmissibleOrder (fun s t => blt s t = true) where
+  irrefl := by intro t; simp
+  trans := blt_trans
+  total := blt_total
+  subterm := fun _ _ hs hn => hs.blt hn
+  literals := by intro m n; simp [blt_lit_lit, Lit.blt]
+  finiteLower := fun _ _ hn hl t => finite_predecessors hn hl t
 
 end Egglog.Term

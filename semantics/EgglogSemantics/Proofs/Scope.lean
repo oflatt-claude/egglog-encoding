@@ -10,23 +10,40 @@ theorem Scope.Models.empty : Scope.Models [] ([] : Env) := by simp [Models]
 
 /-! ### Scoped, evaluable expressions evaluate -/
 theorem Expr.eval_isSome_of_scoped {sig : Signature} {e : Expr} {Γ : Scope} {σ : Env}
-    (hm : Γ.Models σ) (h : e.Scoped Γ) (he : e.Evaluable sig)
-    (hv : ∀ b ∈ σ, b.2.IsValue sig) :
+    (hm : Γ.Models σ) (h : e.Scoped Γ) (he : e.Evaluable sig) :
     ∃ t, e.eval sig σ = some t :=
-  e.eval_isSome (fun v hv => (hm v).mp (h v hv)) he hv
+  e.eval_isSome (fun v hv => (hm v).mp (h v hv)) he
 
 theorem Expr.evalAtom_isSome_of_scoped {sig : Signature} {e : Expr} {Γ : Scope} {σ : Env}
     (hm : Γ.Models σ) (h : e.Scoped Γ) (he : e.AtomEvaluable sig)
-    (hv : ∀ b ∈ σ, b.2.IsValue sig) (hw : e.AtomWidthOk sig) :
+    (hw : e.AtomWidthOk sig) :
     ∃ t, e.evalAtom sig σ = some t := by
-  cases e with
-  | lit l => exact ⟨.lit l, rfl⟩
-  | var v => exact Expr.eval_isSome_of_scoped hm h he hv
-  | min a b => exact Expr.eval_isSome_of_scoped hm h he hv
-  | app f cols =>
-    obtain ⟨ts, hts⟩ := Expr.evalList_isSome cols (fun v hv => (hm v).mp (h v hv)) he.2 hv
+  match e with
+  | .lit l => exact ⟨.lit l, rfl⟩
+  | .var v => exact Expr.eval_isSome_of_scoped hm h he
+  | .min a b => exact Expr.eval_isSome_of_scoped hm h he
+  | .app f cols =>
+    obtain ⟨ts, hts⟩ := Expr.evalList_isSome cols (fun v hv => (hm v).mp (h v hv)) he.2
     obtain ⟨d, hd⟩ := Option.isSome_iff_exists.mp he.1
     exact ⟨.app f ts, by rw [Expr.evalAtom_app_decl hd (Or.inr (hw.1 d hd)), hts]; rfl⟩
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx⟩ := Expr.evalList_isSome lhs
+      (fun v hv => (hm v).mp (h v (by simp [Expr.vars, hv]))) (by
+        intro f hf
+        obtain ⟨e, he', hf⟩ := Expr.mem_fnsList hf
+        exact he.1 e (List.mem_append_left _ he') f hf)
+    obtain ⟨ys, hy⟩ := Expr.evalList_isSome rhs
+      (fun v hv => (hm v).mp (h v (by simp [Expr.vars, hv]))) (by
+        intro f hf
+        obtain ⟨e, he', hf⟩ := Expr.mem_fnsList hf
+        exact he.1 e (List.mem_append_right _ he') f hf)
+    by_cases heq : xs = ys
+    · obtain ⟨t, ht⟩ := Expr.evalAtom_isSome_of_scoped hm
+        (fun v hv => h v (by simp [Expr.vars, hv])) he.2.1 hw.2.2.1
+      exact ⟨t, by simp [Expr.evalAtom, hx, hy, heq, ht]⟩
+    · obtain ⟨t, ht⟩ := Expr.evalAtom_isSome_of_scoped hm
+        (fun v hv => h v (by simp [Expr.vars, hv])) he.2.2 hw.2.2.2
+      exact ⟨t, by simp [Expr.evalAtom, hx, hy, heq, ht]⟩
 
 /-- An `Evaluable` application builds, so its value is not a literal. This is what
 `Action.Evaluable` asks of a `union` operand, and what `evalAction`'s check then needs. -/
@@ -42,29 +59,28 @@ theorem Expr.not_isLit_of_isApp {sig : Signature} {e : Expr} {σ : Env} {t : Ter
 /-! ### Actions do not get stuck -/
 theorem evalAction_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {a : Action} (h : a.Scoped Γ) (he : a.Evaluable db.sig)
-    (hv : ∀ b ∈ db.env, b.2.IsValue db.sig) (hw : a.WidthOk db.sig) :
+    (hw : a.WidthOk db.sig) :
     ∃ db', evalAction db a = some db' ∧ Γ.Models db'.env := by
   cases a with
   | expr e =>
-    obtain ⟨t, ht⟩ := Expr.evalAtom_isSome_of_scoped hm h.2 he hv hw
+    obtain ⟨t, ht⟩ := Expr.evalAtom_isSome_of_scoped hm h.2 he hw
     exact ⟨db.addTerm t, by simp [evalAction, ht], hm⟩
   | union e₁ e₂ =>
-    obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1.2 hv
-    obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2.2 hv
+    obtain ⟨t₁, ht₁⟩ := Expr.eval_isSome_of_scoped hm h.1 he.1.2
+    obtain ⟨t₂, ht₂⟩ := Expr.eval_isSome_of_scoped hm h.2 he.2.2
     have hl₁ := Expr.not_isLit_of_isApp he.1.1 he.1.2 ht₁
     have hl₂ := Expr.not_isLit_of_isApp he.2.1 he.2.2 ht₂
     exact ⟨db.addEq t₁ t₂, by simp [evalAction, ht₁, ht₂, hl₁, hl₂], hm⟩
 
 theorem evalActions_isSome_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
     {as : List Action} (h : Actions.Scoped as Γ) (he : Actions.Evaluable as db.sig)
-    (hv : ∀ b ∈ db.env, b.2.IsValue db.sig) (hw : Actions.WidthOk as db.sig) :
+    (hw : Actions.WidthOk as db.sig) :
     ∃ db', evalActions db as = some db' ∧ Γ.Models db'.env := by
   induction as generalizing db Γ with
   | nil => exact ⟨db, rfl, hm⟩
   | cons a as ih =>
-    obtain ⟨db₁, h₁, hm₁⟩ := evalAction_isSome_of_scoped hm h.1 he.1 hv hw.1
+    obtain ⟨db₁, h₁, hm₁⟩ := evalAction_isSome_of_scoped hm h.1 he.1 hw.1
     obtain ⟨db₂, h₂, hm₂⟩ := ih hm₁ h.2 (by rw [evalAction_sig h₁]; exact he.2)
-      (by rw [evalAction_sig h₁, evalAction_env h₁]; exact hv)
       (by rw [evalAction_sig h₁]; exact hw.2)
     exact ⟨db₂, by simp [h₁, h₂], hm₂⟩
 
@@ -92,11 +108,11 @@ theorem Query.bind_models {db : Database} {Γ : Scope} (hm : Γ.Models db.env) {
 theorem evalLocalActions_isSome_of_scoped {db : Database} {Γ : Scope}
     (hm : Γ.Models db.env) {r : Rule} (hr : r.Scoped Γ) (hre : r.Evaluable db.sig)
     {σ : Env} (hσ : ValidQuerySubst db r.query σ)
-    (hv : ∀ b ∈ db.env, b.2.IsValue db.sig) (hw : Actions.WidthOk r.actions db.sig) :
+    (hw : Actions.WidthOk r.actions db.sig) :
     ∃ d, evalLocalActions db r.actions σ = some d := by
   obtain ⟨d, hd, _⟩ := evalActions_isSome_of_scoped
     (db := { db with env := σ ++ db.env }) (Query.bind_models hm hσ) hr.2 hre
-    (fun b hb => (List.mem_append.mp hb).elim (fun hb => (hσ.mem_values b hb).2) (hv b)) hw
+    hw
   exact ⟨{ d with env := db.env, rules := db.rules }, by simp [evalLocalActions, hd]⟩
 
 /-! ### Scoped, evaluable programs whose normalization terminates
@@ -114,10 +130,10 @@ This does not assume successful checks or that a saturation command terminates. 
 def Program.NormalizeTotal (p : Program) (db : Database) : Prop :=
   ∀ pre c rest d, p = pre ++ c :: rest → ProgramStep db pre d → c.NormalizeTotal d
 
-theorem CmdEval.exists_of_scoped {db : Database} {Γ : Scope} (hm : Γ.Models db.env)
+theorem CmdEval.exists_of_scoped {db : Database} {Γ : Scope} (_hm : Γ.Models db.env)
     {c : Cmd} (hns : c.NoSaturate) (h : c.Scoped Γ) (he : c.Evaluable db.sig)
     (hnorm : c.NormalizeTotal db)
-    (hv : ∀ b ∈ db.env, b.2.IsValue db.sig) (hw : c.WidthOk db.sig) :
+    (_hv : ∀ b ∈ db.env, b.2.IsValue db.sig) (hw : c.WidthOk db.sig) :
     ∃ r, CmdEval db c r := by
   classical
   cases c with

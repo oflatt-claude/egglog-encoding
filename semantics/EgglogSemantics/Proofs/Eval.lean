@@ -8,7 +8,7 @@ variable {oldVars newVars : List Var}
 
 /-! ### The terms depend on `eqs` alone
 
-`Database.terms` is `{t | Cong db t t}` and `Cong` reads `eqs`, so an update to `sig`,
+`Database.terms` collects subterms of `eqs`, so an update to `sig`,
 `env` or `rules` leaves the terms alone — and, at an environment whose values the database
 holds, leaves `WF` alone too. Every field update the semantics performs is one of these. -/
 
@@ -68,7 +68,7 @@ theorem Database.StoreOk.term {db : Database} (h : db.StoreOk) {t : Term}
 theorem Database.StoreOk.entry_of_held_atom {db : Database} (h : db.StoreOk)
     {row : Entry} (hr : row.Valid db.sig) (ht : row.atom ∈ db.terms) :
     row ∈ db.entries := by
-  refine ⟨hr, ?_⟩
+  refine ⟨hr.shape, ?_⟩
   obtain ⟨p, hp, ht | ht⟩ := Database.mem_terms_iff.mp ht
   · rcases h.typed p hp with hv | ⟨other, ho, rfl⟩
     · exact (hr.atom_not_value (hv.1.subterm ht)).elim
@@ -99,7 +99,7 @@ theorem Database.StoreOk.addTerm {db : Database} (h : db.StoreOk) (t : Term)
     obtain ⟨d, hd, hm, _⟩ := hr.1
     exact ⟨d, hd, hm⟩
   · intro row hr s hs
-    exact Cong.subterm (.direct hr.2) (Term.arg_subterms hs (.refl _))
+    exact (StoredCong.subterm (.direct hr.2) (Term.arg_subterms hs (.refl _))).toHeld
   · intro p hp
     rcases hp with rfl | hp
     · rcases ht with hv | ⟨row, hr, rfl⟩
@@ -114,7 +114,7 @@ theorem Database.StoreOk.addEq {db : Database} (h : db.StoreOk) (a b : Term)
     obtain ⟨d, hd, hm, _⟩ := hr.1
     exact ⟨d, hd, hm⟩
   · intro row hr t ht
-    exact Cong.subterm (.direct hr.2) (Term.arg_subterms ht (.refl _))
+    exact (StoredCong.subterm (.direct hr.2) (Term.arg_subterms ht (.refl _))).toHeld
   · intro p hp
     rcases hp with rfl | hp
     · exact Or.inl ⟨ha, hb⟩
@@ -136,8 +136,9 @@ theorem Database.mem_terms_eraseEntry_of_ne {db : Database} {row : Entry} {t : T
     rcases hs with hs | hs
     · exact (hne hs).elim
     · obtain ⟨v, hv, hs⟩ := Set.mem_iUnion₂.mp hs
-      apply Cong.subterm (s := t) (t := v) _ hs
-      apply Cong.direct
+      apply StoredCong.toHeld
+      apply StoredCong.subterm (s := t) (t := v) _ hs
+      apply StoredCong.direct
       rw [Database.eraseEntry_eqs]
       exact Or.inr ⟨v, hv, rfl⟩
   · apply Database.mem_terms_iff.mpr
@@ -159,7 +160,7 @@ theorem Database.terms_eraseEntry_subset {db : Database} {row : Entry}
   rw [Database.eraseEntry_eqs] at hp
   rcases hp with hp | ⟨v, hv, rfl⟩
   · exact Database.mem_terms_iff.mpr ⟨p, hp.1, hs⟩
-  · exact Cong.subterm (hc v hv) (hs.elim id id)
+  · exact (StoredCong.subterm (Database.toStored (hc v hv)) (hs.elim id id)).toHeld
 
 theorem Database.StoreOk.eraseEntry {db : Database} (h : db.StoreOk) (row : Entry)
     (hr : row.Valid db.sig) : (db.eraseEntry row).StoreOk := by
@@ -168,7 +169,7 @@ theorem Database.StoreOk.eraseEntry {db : Database} (h : db.StoreOk) (row : Entr
     obtain ⟨dc, hd, hm, _⟩ := hm.1
     exact ⟨dc, hd, hm⟩
   · intro r hm t ht
-    exact Cong.subterm (.direct hm.2) (Term.arg_subterms ht (.refl _))
+    exact (StoredCong.subterm (.direct hm.2) (Term.arg_subterms ht (.refl _))).toHeld
   · intro p hp
     rw [Database.eraseEntry_eqs] at hp
     rcases hp with hp | ⟨v, hv, rfl⟩
@@ -210,19 +211,20 @@ theorem Database.StoreOk.terms_eraseEntry {db : Database} (h : db.StoreOk)
     · exact Or.inr ⟨v, hv, hs.elim id id⟩
   · rintro (⟨ht, hn⟩ | ⟨v, hv, hs⟩)
     · exact Database.mem_terms_eraseEntry_of_ne hn ht
-    · apply Cong.subterm (t := v) _ hs
+    · apply StoredCong.toHeld
+      apply StoredCong.subterm (t := v) _ hs
       exact .direct (Database.eraseEntry_eqs ▸ Or.inr ⟨v, hv, rfl⟩)
 
 /-- Actual row deletion removes just that atom; its value columns remain held. -/
 theorem Database.StoreOk.terms_eraseEntry_of_mem {db : Database} (h : db.StoreOk)
     {row : Entry} (hr : row ∈ db.entries) :
     (db.eraseEntry row).terms = db.terms \ {row.atom} := by
-  rw [h.terms_eraseEntry hr.1]
+  rw [h.terms_eraseEntry (h.entry_valid hr)]
   apply Set.union_eq_left.mpr
   rintro t ⟨v, hv, ht⟩
-  refine ⟨Cong.subterm (h.columns row hr v hv) ht, ?_⟩
+  refine ⟨(StoredCong.subterm (Database.toStored (h.columns row hr v hv)) ht).toHeld, ?_⟩
   intro he
-  exact hr.1.atom_not_value (he ▸ (hr.1.column_values v hv).subterm ht)
+  exact hr.1.atom_not_value (he ▸ ((h.entry_valid hr).column_values v hv).subterm ht)
 
 theorem Database.WF.eraseEntry {db : Database} (hw : db.WF)
     (hs : db.StoreOk) (row : Entry) (hr : row.Valid db.sig) :
@@ -269,7 +271,7 @@ namespace Expr
     (Expr.lit l).eval sig σ = some (.lit l) := rfl
 
 @[simp] theorem eval_var {sig : Signature} {v : Var} {σ : Env} :
-    (Expr.var v).eval sig σ = (Env.lookup v σ).filter (Term.isValue sig) := rfl
+    (Expr.var v).eval sig σ = Env.lookup v σ := rfl
 
 /-- The building case, which is the only one the constructor fragment ever takes. -/
 @[simp] theorem eval_app_ctor {sig : Signature} {f : FnName} {args : List Expr} {σ : Env}
@@ -281,6 +283,15 @@ namespace Expr
 @[simp] theorem eval_min {sig : Signature} {a b : Expr} {σ : Env} :
     (Expr.min a b).eval sig σ =
       (a.eval sig σ).bind fun x => (b.eval sig σ).map (Term.least x) := rfl
+
+theorem eval_ite_inv {sig : Signature} {σ : Env} {lhs rhs : List Expr}
+    {yes no : Expr} {t : Term} (h : (Expr.ite lhs rhs yes no).eval sig σ = some t) :
+    yes.eval sig σ = some t ∨ no.eval sig σ = some t := by
+  obtain ⟨xs, hx, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨ys, hy, h⟩ := Option.bind_eq_some_iff.mp h
+  split at h
+  · exact Or.inl h
+  · exact Or.inr h
 
 /-- **The stuck case**, all of it: anything that is not a *declared* constructor has no
 rule. It covers the two lookups — a `:merge` and a `:no-merge` function — and, since
@@ -327,23 +338,31 @@ theorem evalList_length {sig : Signature} {σ : Env} {es : List Expr} {ts : List
 mutual
 
 theorem eval_isValue {sig : Signature} {σ : Env} {e : Expr} {t : Term}
-    (h : e.eval sig σ = some t) : t.IsValue sig := by
+    (hσ : ∀ b ∈ σ, b.2.IsValue sig) (h : e.eval sig σ = some t) : t.IsValue sig := by
   match e with
   | .lit l => cases Option.some.inj h; exact .lit sig l
-  | .var _ => exact (Option.filter_eq_some_iff.mp h).2
+  | .var v => exact hσ (v, t) (Env.mem_of_lookup h)
   | .app f args =>
     by_cases hc : sig.IsCtor f
     · rw [eval_app_ctor hc] at h
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
-      exact .app hc (evalList_isValue hts)
+      exact .app hc (evalList_isValue hσ hts)
     · simp [eval_app_not_ctor hc] at h
   | .min a b =>
     obtain ⟨x, hx, h⟩ := Option.bind_eq_some_iff.mp h
     obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp h
-    exact (eval_isValue hx).least (eval_isValue hy)
+    exact (eval_isValue hσ hx).least (eval_isValue hσ hy)
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨ys, hy, h⟩ := Option.bind_eq_some_iff.mp h
+    split at h
+    · exact eval_isValue hσ h
+    · exact eval_isValue hσ h
+
 
 theorem evalList_isValue {sig : Signature} {σ : Env} {es : List Expr} {ts : List Term}
-    (h : evalList sig es σ = some ts) : ∀ t ∈ ts, t.IsValue sig := by
+    (hσ : ∀ b ∈ σ, b.2.IsValue sig) (h : evalList sig es σ = some ts) :
+    ∀ t ∈ ts, t.IsValue sig := by
   match es with
   | [] => cases Option.some.inj h; simp
   | e :: es =>
@@ -351,8 +370,8 @@ theorem evalList_isValue {sig : Signature} {σ : Env} {es : List Expr} {ts : Lis
     obtain ⟨us, hu, rfl⟩ := Option.map_eq_some_iff.mp h
     intro s hs
     rcases List.mem_cons.mp hs with rfl | hs
-    · exact eval_isValue ht
-    · exact evalList_isValue hu s hs
+    · exact eval_isValue hσ ht
+    · exact evalList_isValue hσ hu s hs
 
 end
 
@@ -370,7 +389,7 @@ theorem lookup_isSome_of_mem_evalList {sig : Signature} {ρ : Env} {v : Var}
     obtain ⟨us, hus, -⟩ := Option.map_eq_some_iff.mp h'
     rcases List.mem_cons.mp hv with rfl | hv'
     · rw [Expr.eval_var] at ht
-      rw [(Option.filter_eq_some_iff.mp ht).1]
+      rw [ht]
       rfl
     · exact ih hus hv'
 
@@ -409,7 +428,7 @@ theorem Expr.eval_ctorTerm {sig : Signature} {σ : Env}
     subst hs; exact Term.ctorTerm_lit
   | .var v =>
     rw [Expr.eval_var] at hs
-    exact hσ (v, t) (Env.mem_of_lookup (Option.filter_eq_some_iff.mp hs).1)
+    exact hσ (v, t) (Env.mem_of_lookup hs)
   | .app f args =>
     by_cases hu : sig.IsCtor f
     · rw [Expr.eval_app_ctor hu, Option.map_eq_some_iff] at hs
@@ -430,6 +449,13 @@ theorem Expr.eval_ctorTerm {sig : Signature} {σ : Env}
     rcases Term.least_eq_or x y with h | h <;> rw [h]
     · exact Expr.eval_ctorTerm hσ hx
     · exact Expr.eval_ctorTerm hσ hy
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx, hs⟩ := Option.bind_eq_some_iff.mp hs
+    obtain ⟨ys, hy, hs⟩ := Option.bind_eq_some_iff.mp hs
+    split at hs
+    · exact Expr.eval_ctorTerm hσ hs
+    · exact Expr.eval_ctorTerm hσ hs
+
 
 theorem Expr.evalList_ctorTerm {sig : Signature} {σ : Env}
     (hσ : ∀ b ∈ σ, Term.CtorTerm sig b.2) {es : List Expr} {ts : List Term}
@@ -482,7 +508,7 @@ theorem Expr.eval_declaredTerm {sig : Signature} {σ : Env}
     subst hs; exact Term.declaredTerm_lit
   | .var v =>
     rw [Expr.eval_var] at hs
-    exact hσ (v, t) (Env.mem_of_lookup (Option.filter_eq_some_iff.mp hs).1)
+    exact hσ (v, t) (Env.mem_of_lookup hs)
   | .app f args =>
     by_cases hu : sig.IsCtor f
     · rw [Expr.eval_app_ctor hu, Option.map_eq_some_iff] at hs
@@ -506,6 +532,13 @@ theorem Expr.eval_declaredTerm {sig : Signature} {σ : Env}
     rcases Term.least_eq_or x y with h | h <;> rw [h]
     · exact Expr.eval_declaredTerm hσ hw.1 hx
     · exact Expr.eval_declaredTerm hσ hw.2 hy
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx, hs⟩ := Option.bind_eq_some_iff.mp hs
+    obtain ⟨ys, hy, hs⟩ := Option.bind_eq_some_iff.mp hs
+    split at hs
+    · exact Expr.eval_declaredTerm hσ hw.2.2.1 hs
+    · exact Expr.eval_declaredTerm hσ hw.2.2.2 hs
+
 
 theorem Expr.evalList_declaredTerm {sig : Signature} {σ : Env}
     (hσ : ∀ b ∈ σ, Term.DeclaredTerm sig b.2) {es : List Expr} {ts : List Term}
@@ -590,6 +623,10 @@ theorem Expr.eval_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree σ�
   | .var v => simp only [Expr.eval, h v]
   | .app f args => simp only [Expr.eval, Expr.evalList_agree h args]
   | .min a b => simp only [Expr.eval, Expr.eval_agree h a, Expr.eval_agree h b]
+  | .ite lhs rhs yes no =>
+    simp only [Expr.eval, Expr.evalList_agree h lhs, Expr.evalList_agree h rhs,
+      Expr.eval_agree h yes, Expr.eval_agree h no]
+
 
 theorem Expr.evalList_agree {sig : Signature} {σ₁ σ₂ : Env} (h : Env.Agree σ₁ σ₂)
     (es : List Expr) : Expr.evalList sig es σ₁ = Expr.evalList sig es σ₂ := by
@@ -619,6 +656,14 @@ theorem Expr.eval_agreeOn {sig : Signature} {σ₁ σ₂ : Env} (e : Expr)
   | .min a b =>
     simp only [Expr.eval, Expr.eval_agreeOn a (fun v hv => h v (by simp [hv])),
       Expr.eval_agreeOn b (fun v hv => h v (by simp [hv]))]
+  | .ite lhs rhs yes no =>
+    simp only [Expr.eval,
+      Expr.evalList_agreeOn lhs (fun v hv => h v (by simp [Expr.vars, hv])),
+      Expr.evalList_agreeOn rhs (fun v hv => h v (by simp [Expr.vars, hv])),
+      Expr.eval_agreeOn yes (fun v hv => h v (by simp [Expr.vars, hv])),
+      Expr.eval_agreeOn no (fun v hv => h v (by simp [Expr.vars, hv]))]
+
+
 
 @[inherit_doc Expr.eval_agreeOn]
 theorem Expr.evalList_agreeOn {sig : Signature} {σ₁ σ₂ : Env} (es : List Expr)
@@ -640,41 +685,56 @@ neither evaluates. The two conditions are exactly `Expr.Scoped` and `Expr.Evalua
 (`Spec/Scope.lean`). -/
 theorem Expr.eval_isSome {sig : Signature} {σ : Env} (e : Expr)
     (h : ∀ v ∈ e.vars, v ∈ Env.dom σ)
-    (hf : ∀ f ∈ e.fns, sig.IsCtor f)
-    (hv : ∀ b ∈ σ, b.2.IsValue sig) :
+    (hf : ∀ f ∈ e.fns, sig.IsCtor f) :
     ∃ t, e.eval sig σ = some t := by
   match e with
   | .lit l => exact ⟨.lit l, rfl⟩
   | .var v =>
     obtain ⟨t, ht⟩ := Option.isSome_iff_exists.mp
       (Env.lookup_isSome_iff_mem_dom.mpr (h v (by simp)))
-    exact ⟨t, Option.filter_eq_some_iff.mpr ⟨ht, hv (v, t) (Env.mem_of_lookup ht)⟩⟩
+    exact ⟨t, ht⟩
   | .app f args =>
     have hc := hf f (by simp)
     obtain ⟨ts, hts⟩ := Expr.evalList_isSome args (by simpa using h)
-      (fun g hg => hf g (by simp [hg])) hv
+      (fun g hg => hf g (by simp [hg]))
     exact ⟨.app f ts, by rw [Expr.eval_app_ctor hc, hts, Option.map_some]⟩
   | .min a b =>
     obtain ⟨x, hx⟩ := Expr.eval_isSome a (fun v hv => h v (by simp [hv]))
-      (fun g hg => hf g (by simp [hg])) hv
+      (fun g hg => hf g (by simp [hg]))
     obtain ⟨y, hy⟩ := Expr.eval_isSome b (fun v hv => h v (by simp [hv]))
-      (fun g hg => hf g (by simp [hg])) hv
+      (fun g hg => hf g (by simp [hg]))
     exact ⟨Term.least x y, by rw [Expr.eval_min, hx, Option.bind_some, hy, Option.map_some]⟩
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx⟩ := Expr.evalList_isSome lhs
+      (fun v hv => h v (by simp [Expr.vars, hv]))
+      (fun f hf' => hf f (by simp [Expr.fns, hf']))
+    obtain ⟨ys, hy⟩ := Expr.evalList_isSome rhs
+      (fun v hv => h v (by simp [Expr.vars, hv]))
+      (fun f hf' => hf f (by simp [Expr.fns, hf']))
+    by_cases he : xs = ys
+    · obtain ⟨t, ht⟩ := Expr.eval_isSome yes
+        (fun v hv => h v (by simp [Expr.vars, hv]))
+        (fun f hf' => hf f (by simp [Expr.fns, hf']))
+      exact ⟨t, by simp [Expr.eval, hx, hy, he, ht]⟩
+    · obtain ⟨t, ht⟩ := Expr.eval_isSome no
+        (fun v hv => h v (by simp [Expr.vars, hv]))
+        (fun f hf' => hf f (by simp [Expr.fns, hf']))
+      exact ⟨t, by simp [Expr.eval, hx, hy, he, ht]⟩
+
 
 theorem Expr.evalList_isSome {sig : Signature} {σ : Env} (es : List Expr)
     (h : ∀ v ∈ Expr.varsList es, v ∈ Env.dom σ)
-    (hf : ∀ f ∈ Expr.fnsList es, sig.IsCtor f)
-    (hv : ∀ b ∈ σ, b.2.IsValue sig) :
+    (hf : ∀ f ∈ Expr.fnsList es, sig.IsCtor f) :
     ∃ ts, Expr.evalList sig es σ = some ts := by
   match es with
   | [] => exact ⟨[], rfl⟩
   | e :: es =>
     obtain ⟨t, ht⟩ := Expr.eval_isSome e (fun v hv =>
       h v (List.mem_union_iff.mpr (Or.inl hv)))
-      (fun g hg => hf g (List.mem_union_iff.mpr (Or.inl hg))) hv
+      (fun g hg => hf g (List.mem_union_iff.mpr (Or.inl hg)))
     obtain ⟨ts, hts⟩ := Expr.evalList_isSome es (fun v hv =>
       h v (List.mem_union_iff.mpr (Or.inr hv)))
-      (fun g hg => hf g (List.mem_union_iff.mpr (Or.inr hg))) hv
+      (fun g hg => hf g (List.mem_union_iff.mpr (Or.inr hg)))
     exact ⟨t :: ts, by rw [Expr.evalList_cons, ht, Option.bind_some, hts, Option.map_some]⟩
 
 end
@@ -687,9 +747,7 @@ head's reading at `σ ++ db.env` to the match's own at `σ`. -/
 theorem Expr.eval_append_env {sig : Signature} {σ τ : Env} :
     ∀ (e : Expr) {t : Term}, e.eval sig σ = some t → e.eval sig (σ ++ τ) = some t
   | .lit _, _, h => h
-  | .var v, _, h => by
-      obtain ⟨hl, hv⟩ := Option.filter_eq_some_iff.mp h
-      exact Option.filter_eq_some_iff.mpr ⟨Env.lookup_append_of_some hl, hv⟩
+  | .var _, _, h => Env.lookup_append_of_some h
   | .app f args, t, h => by
       by_cases hctor : sig.IsCtor f
       · rw [Expr.eval_app_ctor hctor] at h ⊢
@@ -704,6 +762,16 @@ theorem Expr.eval_append_env {sig : Signature} {σ τ : Env} :
       obtain ⟨y, hy, rfl⟩ := Option.map_eq_some_iff.mp hmap
       rw [Expr.eval_append_env a hx, Option.bind_some, Expr.eval_append_env b hy,
         Option.map_some]
+  | .ite lhs rhs yes no, t, h => by
+      obtain ⟨xs, hx, h⟩ := Option.bind_eq_some_iff.mp h
+      obtain ⟨ys, hy, h⟩ := Option.bind_eq_some_iff.mp h
+      split at h
+      · simpa [Expr.eval, Expr.evalList_append_env lhs hx,
+          Expr.evalList_append_env rhs hy, ‹xs = ys›] using Expr.eval_append_env yes h
+      · simpa [Expr.eval, Expr.evalList_append_env lhs hx,
+          Expr.evalList_append_env rhs hy, ‹xs ≠ ys›] using Expr.eval_append_env no h
+
+
 
 @[inherit_doc Expr.eval_append_env]
 theorem Expr.evalList_append_env {sig : Signature} {σ τ : Env} :
@@ -729,7 +797,7 @@ theorem entry_none_of_allConstructors {sig : Signature} (hs : sig.AllConstructor
   cases e with
   | lit _ => rfl
   | var _ => rfl
-  | min _ _ => rfl
+  | min _ _ | ite _ _ _ _ => rfl
   | app f cols =>
     cases hd : sig f with
     | none => simp [Expr.entry, hd]
@@ -741,7 +809,7 @@ theorem entry_none_of_allConstructors {sig : Signature} (hs : sig.AllConstructor
 theorem entry_none_of_eval {sig : Signature} {e : Expr} {ρ : Env} {t : Term}
     (h : e.eval sig ρ = some t) : e.entry sig = none := by
   cases e with
-  | lit _ | var _ | min _ _ => rfl
+  | lit _ | var _ | min _ _ | ite _ _ _ _ => rfl
   | app f args =>
       have hc : sig.IsCtor f := by
         by_contra hn
@@ -752,10 +820,12 @@ theorem entry_none_of_eval {sig : Signature} {e : Expr} {ρ : Env} {t : Term}
 
 /-- Outside the function-entry case, complete atoms and values agree. -/
 theorem evalAtom_eq_eval_of_entry_none {sig : Signature} {e : Expr} {ρ : Env}
-    (h : e.entry sig = none) : e.evalAtom sig ρ = e.eval sig ρ := by
-  cases e with
-  | lit _ | var _ | min _ _ => rfl
-  | app f args =>
+    (h : e.entry sig = none) (ho : e.OrderingFree) :
+    e.evalAtom sig ρ = e.eval sig ρ := by
+  match e with
+  | .lit _ | .var _ | .min _ _ => rfl
+  | ite _ _ _ _ => simp [Expr.OrderingFree, Expr.hasMin] at ho
+  | .app f args =>
       cases hd : sig f with
       | none =>
           have hc : ¬ sig.IsCtor f := by
@@ -774,7 +844,7 @@ theorem evalAtom_eq_eval_of_entry_none {sig : Signature} {e : Expr} {ρ : Env}
     (Expr.lit l).evalAtom sig σ = some (.lit l) := rfl
 
 @[simp] theorem evalAtom_var {sig : Signature} {v : Var} {σ : Env} :
-    (Expr.var v).evalAtom sig σ = (Env.lookup v σ).filter (Term.isValue sig) := rfl
+    (Expr.var v).evalAtom sig σ = Env.lookup v σ := rfl
 
 @[simp] theorem evalAtom_app_decl {sig : Signature} {f : FnName} {cols : List Expr}
     {d : FnDecl} {σ : Env} (hd : sig f = some d)
@@ -798,7 +868,7 @@ theorem entry_some {sig : Signature} {e : Expr} {f : FnName} {keys vals : List E
   cases e with
   | lit _ => simp [Expr.entry] at h
   | var _ => simp [Expr.entry] at h
-  | min _ _ => simp [Expr.entry] at h
+  | min _ _ | ite _ _ _ _ => simp [Expr.entry] at h
   | app g cols =>
     cases hd : sig g with
     | none => simp [Expr.entry, hd] at h
@@ -828,17 +898,26 @@ theorem evalAtom_app_inv {sig : Signature} {f : FnName} {cols : List Expr}
     exact ⟨ts, hs, rfl⟩
   · simp at h
 
+theorem evalAtom_ite_inv {sig : Signature} {σ : Env} {lhs rhs : List Expr}
+    {yes no : Expr} {t : Term} (h : (Expr.ite lhs rhs yes no).evalAtom sig σ = some t) :
+    yes.evalAtom sig σ = some t ∨ no.evalAtom sig σ = some t := by
+  obtain ⟨xs, hx, h⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨ys, hy, h⟩ := Option.bind_eq_some_iff.mp h
+  split at h
+  · exact Or.inl h
+  · exact Or.inr h
+
 theorem evalAtom_stored {sig : Signature} {e : Expr} {σ : Env} {t : Term}
-    (h : e.evalAtom sig σ = some t) : t.Stored sig := by
-  cases e with
-  | lit _ | var _ | min _ _ => exact Or.inl (eval_isValue h)
-  | app f cols =>
+    (hσ : ∀ b ∈ σ, b.2.IsValue sig) (h : e.evalAtom sig σ = some t) : t.Stored sig := by
+  match e with
+  | .lit _ | .var _ | .min _ _ => exact Or.inl (eval_isValue hσ h)
+  | .app f cols =>
     obtain ⟨d, hd, h⟩ := Option.bind_eq_some_iff.mp h
     split at h
     next hw =>
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp h
       by_cases hm : d.merge = none
-      · exact Or.inl (.app ⟨d, hd, hm⟩ (evalList_isValue hts))
+      · exact Or.inl (.app ⟨d, hd, hm⟩ (evalList_isValue hσ hts))
       · have hl : ts.length = d.arity + d.outArity :=
           by simpa [FnDecl.entryWidth, hm] using
             (evalList_length hts).trans (hw.resolve_left hm)
@@ -846,65 +925,96 @@ theorem evalAtom_stored {sig : Signature} {e : Expr} {σ : Env} {t : Term}
         · refine ⟨d, hd, hm, ?_, ?_, ?_⟩
           · simp only [List.length_take]; omega
           · simp only [List.length_drop]; omega
-          · simpa only [Entry.columns, List.take_append_drop] using evalList_isValue hts
+          · simpa only [Entry.columns, List.take_append_drop] using evalList_isValue hσ hts
         · simp only [Entry.atom, Entry.columns, List.take_append_drop]
     next => simp at h
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨ys, hy, h⟩ := Option.bind_eq_some_iff.mp h
+    split at h
+    · exact evalAtom_stored hσ h
+    · exact evalAtom_stored hσ h
+
+
 
 /-- Value evaluation is the restriction of atom evaluation to value expressions. -/
 theorem evalAtom_of_eval {sig : Signature} {e : Expr} {σ : Env} {t : Term}
     (h : e.eval sig σ = some t) : e.evalAtom sig σ = some t := by
-  cases e with
-  | lit _ => exact h
-  | var _ => exact h
-  | min _ _ => exact h
-  | app f cols =>
+  match e with
+  | .lit _ => exact h
+  | .var _ => exact h
+  | .min _ _ => exact h
+  | .app f cols =>
     by_cases hc : sig.IsCtor f
     · obtain ⟨d, hd, hm⟩ := hc
       simpa [Expr.evalAtom, Expr.eval, hd, Signature.IsCtor, hm] using h
     · simp [Expr.eval, hc] at h
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx, h⟩ := Option.bind_eq_some_iff.mp h
+    obtain ⟨ys, hy, h⟩ := Option.bind_eq_some_iff.mp h
+    split at h
+    · simpa [Expr.evalAtom, hx, hy, ‹xs = ys›] using evalAtom_of_eval h
+    · simpa [Expr.evalAtom, hx, hy, ‹xs ≠ ys›] using evalAtom_of_eval h
+
+
 
 /-- In a constructor-only signature the two evaluators coincide. -/
 theorem evalAtom_eq_eval {sig : Signature} (hs : sig.AllConstructors) (e : Expr) (σ : Env) :
     e.evalAtom sig σ = e.eval sig σ := by
-  cases e with
-  | lit _ => rfl
-  | var _ => rfl
-  | min _ _ => rfl
-  | app f cols =>
+  match e with
+  | .lit _ => rfl
+  | .var _ => rfl
+  | .min _ _ => rfl
+  | .app f cols =>
     cases hd : sig f with
     | none => simp [Expr.evalAtom, Expr.eval, hd, Signature.IsCtor]
     | some d =>
       have hm : d.merge = none := by simpa [Signature.mergeOf, hd] using hs f
       simp [Expr.evalAtom, Expr.eval, hd, Signature.IsCtor, hm]
+  | .ite lhs rhs yes no =>
+    simp only [Expr.evalAtom, Expr.eval, evalAtom_eq_eval hs yes, evalAtom_eq_eval hs no]
+
 
 theorem evalAtom_agree {sig : Signature} {σ τ : Env} (h : Env.Agree σ τ) (e : Expr) :
     e.evalAtom sig σ = e.evalAtom sig τ := by
-  cases e with
-  | lit _ => rfl
-  | var v => simp only [Expr.evalAtom, Expr.eval, h v]
-  | app f cols => simp only [Expr.evalAtom, Expr.evalList_agree h cols]
-  | min a b => exact Expr.eval_agree h (.min a b)
+  match e with
+  | .lit _ => rfl
+  | .var v => simp only [Expr.evalAtom, Expr.eval, h v]
+  | .app f cols => simp only [Expr.evalAtom, Expr.evalList_agree h cols]
+  | .min a b => exact Expr.eval_agree h (.min a b)
+  | .ite lhs rhs yes no =>
+    simp only [Expr.evalAtom, Expr.evalList_agree h lhs, Expr.evalList_agree h rhs,
+      evalAtom_agree h yes, evalAtom_agree h no]
+
 
 theorem evalAtom_agreeOn {sig : Signature} {σ τ : Env} (e : Expr)
     (h : ∀ v ∈ e.vars, Env.lookup v σ = Env.lookup v τ) :
     e.evalAtom sig σ = e.evalAtom sig τ := by
-  cases e with
-  | lit _ => rfl
-  | var v => simp only [Expr.evalAtom, Expr.eval, h v (by simp)]
-  | app f cols => simp only [Expr.evalAtom, Expr.evalList_agreeOn cols (by simpa using h)]
-  | min a b => exact Expr.eval_agreeOn (.min a b) h
+  match e with
+  | .lit _ => rfl
+  | .var v => simp only [Expr.evalAtom, Expr.eval, h v (by simp)]
+  | .app f cols => simp only [Expr.evalAtom, Expr.evalList_agreeOn cols (by simpa using h)]
+  | .min a b => exact Expr.eval_agreeOn (.min a b) h
+  | .ite lhs rhs yes no =>
+    simp only [Expr.evalAtom,
+      Expr.evalList_agreeOn lhs (fun v hv => h v (by simp [Expr.vars, hv])),
+      Expr.evalList_agreeOn rhs (fun v hv => h v (by simp [Expr.vars, hv])),
+      evalAtom_agreeOn yes (fun v hv => h v (by simp [Expr.vars, hv])),
+      evalAtom_agreeOn no (fun v hv => h v (by simp [Expr.vars, hv]))]
+
+
 
 /-- Atom evaluation respects the declaration's full entry width. -/
 theorem evalAtom_declaredTerm {sig : Signature} {σ : Env}
     (hσ : ∀ b ∈ σ, Term.DeclaredTerm sig b.2) {e : Expr} {t : Term}
     (hw : e.AtomWidthOk sig) (hs : e.evalAtom sig σ = some t) : Term.DeclaredTerm sig t := by
-  cases e with
-  | lit l =>
+  match e with
+  | .lit l =>
     cases Option.some.inj hs
     exact Term.declaredTerm_lit
-  | var v => exact hσ (v, t) (Env.mem_of_lookup (Option.filter_eq_some_iff.mp hs).1)
-  | min a b => exact Expr.eval_declaredTerm hσ (show (Expr.min a b).WidthOk sig from hw) hs
-  | app f cols =>
+  | .var v => exact hσ (v, t) (Env.mem_of_lookup hs)
+  | .min a b => exact Expr.eval_declaredTerm hσ (show (Expr.min a b).WidthOk sig from hw) hs
+  | .app f cols =>
     cases hd : sig f with
     | none => simp [Expr.evalAtom, hd] at hs
     | some d =>
@@ -917,6 +1027,13 @@ theorem evalAtom_declaredTerm {sig : Signature} {σ : Env}
         exact ⟨d, hd, (Expr.evalList_length hts).trans (hw.1 d hd)⟩
       · obtain ⟨x, hx, hxs⟩ := Set.mem_iUnion₂.mp hmem
         exact Expr.evalList_declaredTerm hσ hw.2 hts x hx g bs hxs
+  | .ite lhs rhs yes no =>
+    obtain ⟨xs, hx, hs⟩ := Option.bind_eq_some_iff.mp hs
+    obtain ⟨ys, hy, hs⟩ := Option.bind_eq_some_iff.mp hs
+    split at hs
+    · exact evalAtom_declaredTerm hσ hw.2.2.1 hs
+    · exact evalAtom_declaredTerm hσ hw.2.2.2 hs
+
 
 end Expr
 
@@ -991,8 +1108,8 @@ theorem evalAction_storeOk {db db' : Database} (hs : db.StoreOk) {a : Action}
     (h : evalAction db a = some db') : db'.StoreOk := by
   rcases evalAction_eq_some h with ⟨_, t, -, ht, rfl⟩ |
     ⟨_, _, t₁, t₂, -, h₁, h₂, -, rfl⟩
-  · exact hs.addTerm t (Expr.evalAtom_stored ht)
-  · exact hs.addEq t₁ t₂ (Expr.eval_isValue h₁) (Expr.eval_isValue h₂)
+  · exact hs.addTerm t (Expr.evalAtom_stored hs.envValues ht)
+  · exact hs.addEq t₁ t₂ (Expr.eval_isValue hs.envValues h₁) (Expr.eval_isValue hs.envValues h₂)
 
 theorem evalActions_storeOk {db db' : Database} (hs : db.StoreOk) {as : List Action}
     (h : evalActions db as = some db') : db'.StoreOk := by
@@ -1238,5 +1355,45 @@ theorem Expr.evalList_append {sig : Signature} {σ : Env} :
     obtain ⟨as, bs, has, hbs, rfl⟩ := ih hus
     exact ⟨t :: as, bs, by rw [Expr.evalList, ht, Option.bind_some, has, Option.map_some],
       hbs, rfl⟩
+
+
+theorem evalMerge_eq_some {body : List Action} {res : List Expr}
+    {db d : Database} {vs : List Term} :
+    evalMerge db body res = some (d, vs) ↔
+      evalActions db body = some d ∧ Expr.evalList d.sig res d.env = some vs := by
+  simp only [evalMerge, Option.bind_eq_some_iff, Option.map_eq_some_iff, Prod.mk.injEq]
+  constructor
+  · rintro ⟨mid, hm, us, hu, rfl, rfl⟩; exact ⟨hm, hu⟩
+  · rintro ⟨hm, hu⟩; exact ⟨d, hm, vs, hu, rfl, rfl⟩
+
+theorem evalMerge_sig {body res} {db d : Database} {vs : List Term}
+    (h : evalMerge db body res = some (d, vs)) : d.sig = db.sig :=
+  evalActions_sig (evalMerge_eq_some.mp h).1
+
+theorem evalMerge_env {body res} {db d : Database} {vs : List Term}
+    (h : evalMerge db body res = some (d, vs)) : d.env = db.env :=
+  evalActions_env (evalMerge_eq_some.mp h).1
+
+theorem evalMerge_rules {body res} {db d : Database} {vs : List Term}
+    (h : evalMerge db body res = some (d, vs)) : d.rules = db.rules :=
+  evalActions_rules (evalMerge_eq_some.mp h).1
+
+theorem evalMerge_contained {body res} {db d : Database} {vs : List Term}
+    (h : evalMerge db body res = some (d, vs)) : db.Contained d :=
+  evalActions_contained (evalMerge_eq_some.mp h).1
+
+theorem evalMerge_output_values {body res} {db d : Database} {vs : List Term}
+    (hσ : ∀ b ∈ db.env, b.2.IsValue db.sig)
+    (h : evalMerge db body res = some (d, vs)) : ∀ t ∈ vs, t.IsValue d.sig :=
+  Expr.evalList_isValue (by simpa only [evalMerge_env h, evalMerge_sig h] using hσ)
+    (evalMerge_eq_some.mp h).2
+
+theorem evalMerge_wf {body res} {db d : Database} {vs : List Term}
+    (hw : db.WF) (h : evalMerge db body res = some (d, vs)) : d.WF :=
+  evalActions_wf hw (evalMerge_eq_some.mp h).1
+
+theorem evalMerge_storeOk {body res} {db d : Database} {vs : List Term}
+    (hw : db.StoreOk) (h : evalMerge db body res = some (d, vs)) : d.StoreOk :=
+  evalActions_storeOk hw (evalMerge_eq_some.mp h).1
 
 end Egglog

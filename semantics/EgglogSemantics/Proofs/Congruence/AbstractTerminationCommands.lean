@@ -40,10 +40,10 @@ theorem Boundary.run_exists {P pre rest : Program} (hp : P.Fragment) {R : Rulese
     (_h : Boundary src d) (_hsrc : CmdStep src (.run R) post) :
     ∃ e, ProgramStep d ((encodeCmd pre.length (.run R)).map Command.command) e := by
   have hsub : ∀ c ∈ pre, c ∈ P := fun c hc => hP ▸ List.mem_append_left _ hc
-  have hrt := Live.prefix_runtime hp htpre
+  have hrt := Live.prefix_runtime hp hsub htpre
   have hsig := Live.prefix_sig htpre
   have honly := (Live.rulesEncoded_of_prefix hpre htpre).rebuild_only hp hpre hsub
-  obtain ⟨mid, hm⟩ := hrt.state.runStep_exists hrt.generated R
+  obtain ⟨mid, hm⟩ := hrt.state.runStep_exists hrt.generated hrt.storeOk hrt.rulesSafe hrt.noUnions R
   obtain ⟨e, he⟩ := Live.rebuild_exists hp (hrt.runStep hm) hm.2 (hm.sig.trans hsig)
     (fun r hr hR => honly r (hm.1.envRules.2 ▸ hr) hR)
   exact ⟨e, .cons ⟨_, rfl, hm⟩ (.cons (cmdStep_saturate_iff.mpr he) .nil)⟩

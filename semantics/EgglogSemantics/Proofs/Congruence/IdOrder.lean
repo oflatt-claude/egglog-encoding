@@ -86,19 +86,19 @@ theorem lowerId_lt_upperId {old new : Term} (h : old ≠ new) :
   · exact hlt
 
 /-- The smaller id is source-congruent to either operand once the operands are. -/
-theorem cong_lowerId_left {src : Database} {a b : Term} (h : Cong src a b) :
-    Cong src a (lowerId a b) := by
+theorem cong_lowerId_left {src : Database} {a b : Term} (h : StoredCong src a b) :
+    StoredCong src a (lowerId a b) := by
   unfold lowerId
   split
   · exact h
-  · exact h.mem_of.1
+  · exact h.trans h.symm
 
 @[inherit_doc cong_lowerId_left]
-theorem cong_lowerId_right {src : Database} {a b : Term} (h : Cong src a b) :
-    Cong src b (lowerId a b) := by
+theorem cong_lowerId_right {src : Database} {a b : Term} (h : StoredCong src a b) :
+    StoredCong src b (lowerId a b) := by
   unfold lowerId
   split
-  · exact h.mem_of.2
+  · exact h.symm.trans h
   · exact h.symm
 
 /-- The compiler explicitly binds its one-column inputs as `old` and `new`. -/

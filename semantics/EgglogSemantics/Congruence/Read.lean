@@ -1,3 +1,4 @@
+import EgglogSemantics.Proofs.Out
 import EgglogSemantics.Spec.Step
 import EgglogSemantics.Source.Names
 

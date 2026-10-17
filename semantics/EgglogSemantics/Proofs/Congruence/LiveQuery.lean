@@ -78,6 +78,7 @@ theorem liveQueryRead_of_eval_view {P : Program} {d : FDatabase} {src : Database
         simpa only [h.root_eq hrj] using hh
       exact heq ▸ LiveQueryRead.var hj
   | .min _ _, _, _, hp, _, _ => (Expr.not_orderingFree_min hp).elim
+  | .ite _ _ _ _, _, _, hp, _, _ => (Expr.not_orderingFree_ite hp).elim
   | .app f args, t, i, hp, he, hv => by
       simp only [Expr.eval] at he
       split at he

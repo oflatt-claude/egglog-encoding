@@ -133,7 +133,7 @@ theorem check_infers {P : Program} {db : Database} {pf : Proof} {c : Claim}
 theorem check_sound {P : Program} {db : Database} {pf : Proof} {c : Claim}
     (hs : ProgramStep Database.empty P db) (hw : db.WF)
     (hclosed : ∀ R, RunSaturated R db) (h : check P pf = some c)
-    (hl : c.lhs ∈ db.terms) (hr : c.rhs ∈ db.terms) : Cong db c.lhs c.rhs :=
+    (hl : c.lhs ∈ db.terms) (hr : c.rhs ∈ db.terms) : StoredCong db c.lhs c.rhs :=
   (check_supported hs hw hclosed h).holds hw hl hr
 
 end Egglog.SourceProof

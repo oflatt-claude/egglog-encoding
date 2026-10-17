@@ -9,7 +9,7 @@ namespace Egglog.Congruence.Abstract
 /-- The generated rows that can be justified in one fixed source state. -/
 def SoundRows (src : Database) : Set Term :=
   {t | (∃ f cs e, t = .app (viewName f) (cs ++ [e]) ∧ EntrySound src f cs e) ∨
-    (∃ a b, t = .app ufName [a, b] ∧ Cong src a b)}
+    (∃ a b, t = .app ufName [a, b] ∧ StoredCong src a b)}
 
 private def viewCandidates (src : Database) : Term → Set Term
   | .lit _ => ∅

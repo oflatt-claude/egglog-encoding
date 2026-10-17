@@ -4,7 +4,7 @@ import EgglogSemantics.Spec.Term
 /-!
 # The database
 
-One assertion set stores value equations and reflexive atom facts. Function rows
+One assertion set stores equations and reflexive atom facts. Function rows
 are decoded using declarations; merging deletes displaced atom facts, preserving
 their column values. Both compiler sides use this mathematical representation.
 -/
@@ -34,23 +34,36 @@ structure Entry where
   value : List Term
   deriving DecidableEq
 
-/-- All values mentioned by an entry. Entry atoms themselves are not constructor values. -/
+/-- The key and output columns of an entry. -/
 def Entry.columns (e : Entry) : List Term := e.key ++ e.value
 
 def Entry.atom (e : Entry) : Term := .app e.name e.columns
 
 /-- Declarations fix the functional dependency and the unique column split. -/
-def Entry.Valid (sig : Signature) (e : Entry) : Prop :=
+def Entry.Shape (sig : Signature) (e : Entry) : Prop :=
   ∃ d, sig e.name = some d ∧ d.merge ≠ none ∧
-    e.key.length = d.arity ∧ e.value.length = d.outArity ∧
-    ∀ t ∈ e.columns, t.IsValue sig
+    e.key.length = d.arity ∧ e.value.length = d.outArity
 
 /-- Egglog's global state. -/
-@[ext]
+@[ext, blueprint "def:state"
+  (statement := /--
+\[
+  \begin{gathered}
+  t\in\mathit{Term} ::= f(t_1,\ldots,t_n)\\
+  D=(\Sigma,E,\mathcal R)\qquad E\subseteq\{(s,t)\mid s,t\in\mathit{Term}\}\\
+  \rows D=\{r=f(a_1,\ldots,a_k;b_1,\ldots,b_\ell)\mid
+    \Sigma(f)=\kw{fun}(k,\ell,\mu),\ (r,r)\in E\}\\
+  \operatorname{cols}(f(a_1,\ldots,a_k;b_1,\ldots,b_\ell))
+    =(a_1,\ldots,a_k,b_1,\ldots,b_\ell)\\
+  D+(s,t)\triangleq D[E\gets E\cup\{(s,t)\}]
+  \end{gathered}
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 structure Database where
   /-- The declared functions. Written only by `Cmd.decl`. -/
   sig : Signature
-  /-- Value equations and reflexive atom facts; not closed under congruence. -/
+  /-- Equations and reflexive atom facts; not closed under congruence. -/
   eqs : Set (Term × Term)
   /-- The evaluation context, installed temporarily for a rule or merge firing.
   Commands preserve it; a program starting at `empty` leaves it empty. -/
@@ -61,7 +74,7 @@ structure Database where
 namespace Database
 /-- Function rows are a view of reflexive assertions, not a separate store. -/
 def entries (db : Database) : Set Entry :=
-  {e | e.Valid db.sig ∧ (e.atom, e.atom) ∈ db.eqs}
+  {e | e.Shape db.sig ∧ (e.atom, e.atom) ∈ db.eqs}
 
 /-- The initial database. -/
 def empty : Database where

@@ -33,8 +33,8 @@ theorem MergeValues.diag {d e : Database} {decl : FnDecl} {old new vs : List Ter
     (hu : decl.UnionFree) (hd : d.Diag) (h : MergeValues d decl old new e vs) :
     e.Diag := by
   cases h with
-  | unchanged => exact hd
-  | @changed e vs oldVars newVars body res hmerge _ hbody _ =>
+  | @eval e vs oldVars newVars body res hmerge hblock =>
+    obtain ⟨hbody, _⟩ := evalMerge_eq_some.mp hblock
     exact evalActions_diag (db := { d with env := mergeEnv oldVars newVars old new })
       (db' := e) (hu _ hmerge) hd hbody
 

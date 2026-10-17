@@ -58,8 +58,8 @@ theorem mergeStep_values_subset {d e : Database} (h : Runtime d)
     mergeStep_form hshape h.noUnions.diag h.state.uf hm
   have ha := h.storeOk.columns _ hra a (by simp [Entry.columns])
   have hb := h.storeOk.columns _ hrb b (by simp [Entry.columns])
-  have hva := hra.1.output_values a (by simp)
-  have hvb := hrb.1.output_values b (by simp)
+  have hva := (h.storeOk.entry_valid hra).output_values a (by simp)
+  have hvb := (h.storeOk.entry_valid hrb).output_values b (by simp)
   have hvmin : (lowerId a b).IsValue d.sig := hva.least hvb
   have hmin : lowerId a b ∈ d.terms := by
     rcases lowerId_eq_or a b with he | he <;> rw [he] <;> assumption
@@ -67,7 +67,8 @@ theorem mergeStep_values_subset {d e : Database} (h : Runtime d)
     intro t ht
     refine ⟨Database.terms_eraseEntry_subset (h.storeOk.columns _ hra) (?_) , ht.2⟩
     exact Database.terms_eraseEntry_subset (fun s hs =>
-      Database.mem_terms_eraseEntry_of_value hra.1 (hrb.1.column_values s hs)
+      Database.mem_terms_eraseEntry_of_value (h.storeOk.entry_valid hra)
+        ((h.storeOk.entry_valid hrb).column_values s hs)
         (h.storeOk.columns _ hrb s hs)) ht.1
   have hlink (x : Term) (hx : x ∈ d.terms) (hvx : x.IsValue d.sig) :
       ∀ t ∈ (Term.app ufName [x, lowerId a b]).subterms,
@@ -82,8 +83,8 @@ theorem mergeStep_values_subset {d e : Database} (h : Runtime d)
   intro t ht _
   apply h.wf.subtermClosed _ ?_ ht
   rcases lowerId_eq_or a b with he | he
-  · rw [he]; exact .direct hra.2
-  · rw [he]; exact .direct hrb.2
+  · rw [he]; exact (StoredCong.direct hra.2).toHeld
+  · rw [he]; exact (StoredCong.direct hrb.2).toHeld
 
 theorem mergeClosure_values_subset {d e : Database} (h : Runtime d)
     (hshape : MergeShape d.sig) (hm : MergeClosure d e) : e.values ⊆ d.values := by
@@ -118,7 +119,7 @@ private theorem complete_self {base d : Database} {t : Term}
     UFTotal (d.addTerm (ufEntry t t).atom) ∧
       t ∈ (d.addTerm (ufEntry t t).atom).values := by
   have hrow : ufEntry t t ∈ (d.addTerm (ufEntry t t).atom).entries :=
-    Database.mem_addTerm_entries.mpr (Or.inr ⟨ufEntry_valid huf hv hv, .refl _⟩)
+    Database.mem_addTerm_entries.mpr (Or.inr ⟨(ufEntry_valid huf hv hv).shape, .refl _⟩)
   have hcover : ∀ s, s = t ∨ s ∈ base.values → HasUF (d.addTerm (ufEntry t t).atom) s := by
     intro s hs
     rcases hs with rfl | hs
@@ -131,8 +132,9 @@ private theorem complete_self {base d : Database} {t : Term}
     · obtain ⟨c, hc', hs'⟩ := value_subterm_row (ufEntry_valid huf hv hv) hs' hs.2
       have he : c = t := by simpa [ufEntry, Entry.columns] using hc'
       exact hcover s (hp s (he ▸ hs'))
-  · exact ⟨Cong.subterm (Database.mem_addTerm _ _)
-      (Term.arg_subterms (by simp [ufEntry, Entry.columns]) (.refl t)), hv⟩
+  · refine ⟨?_, hv⟩
+    rw [Database.addTerm_terms]
+    exact Or.inr (Term.arg_subterms (by simp [ufEntry, Entry.columns]) (.refl t))
 
 private theorem self_write {d : Database} {x : Expr} {t : Term}
     (huf : d.sig ufName = some (tableDecl 1)) (he : x.eval d.sig d.env = some t) :
@@ -154,37 +156,38 @@ private theorem evalActions_append_build {d m e : Database} {as bs : List Action
 mutual
 
 theorem encodeBuild_ufTotal : ∀ (x : Expr) {d : Database} {t : Term},
-    d.WF → UFTotal d → x.OrderingFree →
+    d.WF → (∀ b ∈ d.env, b.2.IsValue d.sig) → UFTotal d → x.OrderingFree →
     (∀ fk ∈ x.ctors, d.sig (viewName fk.1) = some (tableDecl fk.2)) →
     d.sig ufName = some (tableDecl 1) → x.eval d.sig d.env = some t →
     ∃ e, evalActions d (encodeBuild x) = some e ∧ UFTotal e ∧ t ∈ e.values
-  | .lit l, d, t, _, hu, _, _, huf, he => by
+  | .lit l, d, t, _, _, hu, _, _, huf, he => by
       obtain rfl := Option.some.inj he
       refine ⟨_, self_write huf rfl, complete_self rfl (Set.Subset.refl _) hu huf
         (.lit _ l) (fun _ ht => Or.inr ht) ?_⟩
       intro s hs
       exact Or.inl (by simpa using hs)
-  | .var v, d, t, hw, hu, _, _, huf, he => by
-      have ht := hw.envInTerms (v, t) (Env.mem_of_lookup (Option.filter_eq_some_iff.mp he).1)
-      have hv := Expr.eval_isValue he
+  | .var v, d, t, hw, hv, hu, _, _, huf, he => by
+      have ht := hw.envInTerms (v, t) (Env.mem_of_lookup he)
+      have hv := Expr.eval_isValue hv he
       refine ⟨_, self_write huf he, complete_self rfl (Set.Subset.refl _) hu huf hv
         (fun _ ht => Or.inr ht) ?_⟩
       exact fun s hs => Or.inr ⟨hw.subtermClosed _ ht hs, hv.subterm hs⟩
-  | .min _ _, _, _, _, _, hp, _, _, _ => (Expr.not_orderingFree_min hp).elim
-  | .app f xs, d, t, hw, hu, hp, hd, huf, he => by
+  | .min _ _, _, _, _, _, _, hp, _, _, _ => (Expr.not_orderingFree_min hp).elim
+  | .ite _ _ _ _, _, _, _, _, _, hp, _, _, _ => (Expr.not_orderingFree_ite hp).elim
+  | .app f xs, d, t, hw, hv, hu, hp, hd, huf, he => by
       have hctor : d.sig.IsCtor f := by
         by_contra hn
         rw [Expr.eval_app_not_ctor hn] at he
         contradiction
       rw [Expr.eval_app_ctor hctor] at he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
-      obtain ⟨m, hm, hum, hheld⟩ := encodeBuildArgs_ufTotal xs hw hu
+      obtain ⟨m, hm, hum, hheld⟩ := encodeBuildArgs_ufTotal xs hw hv hu
         (Expr.orderingFree_app hp) (fun fk hk => hd fk (List.mem_cons_of_mem _ hk)) huf hts
       have hsig := evalActions_sig hm
       have henv := evalActions_env hm
       have hwm := evalActions_wf hw hm
       have hval : (Term.app f ts).IsValue m.sig := by
-        rw [hsig]; exact .app hctor (Expr.evalList_isValue hts)
+        rw [hsig]; exact .app hctor (Expr.evalList_isValue hv hts)
       have hproper : ∀ s ∈ (Term.app f ts).subterms,
           s = .app f ts ∨ s ∈ m.values := by
         intro s hs
@@ -235,23 +238,24 @@ theorem encodeBuild_ufTotal : ∀ (x : Expr) {d : Database} {t : Term},
       exact evalActions_append_build (by simp only [evalActions, hwrite, Option.bind_some]) hself
 
 theorem encodeBuildArgs_ufTotal : ∀ (xs : List Expr) {d : Database} {ts : List Term},
-    d.WF → UFTotal d → Expr.OrderingFreeList xs →
+    d.WF → (∀ b ∈ d.env, b.2.IsValue d.sig) → UFTotal d → Expr.OrderingFreeList xs →
     (∀ fk ∈ Expr.ctorsList xs, d.sig (viewName fk.1) = some (tableDecl fk.2)) →
     d.sig ufName = some (tableDecl 1) → Expr.evalList d.sig xs d.env = some ts →
     ∃ e, evalActions d (encodeBuildArgs xs) = some e ∧
       UFTotal e ∧ ∀ t ∈ ts, t ∈ e.values
-  | [], d, _, _, hu, _, _, _, he => by
+  | [], d, _, _, _, hu, _, _, _, he => by
       obtain rfl := Option.some.inj he
       exact ⟨d, rfl, hu, by simp⟩
-  | x :: xs, d, _, hw, hu, hp, hd, huf, he => by
+  | x :: xs, d, _, hw, hv, hu, hp, hd, huf, he => by
       obtain ⟨t, ht, he⟩ := Option.bind_eq_some_iff.mp he
       obtain ⟨ts, hts, rfl⟩ := Option.map_eq_some_iff.mp he
-      obtain ⟨m, hm, hum, htm⟩ := encodeBuild_ufTotal x hw hu
+      obtain ⟨m, hm, hum, htm⟩ := encodeBuild_ufTotal x hw hv hu
         (Expr.orderingFreeList_cons hp).1 (fun fk hk => hd fk (by simp [Expr.ctorsList, hk]))
         huf ht
       have hsig := evalActions_sig hm
       have henv := evalActions_env hm
-      obtain ⟨e, hr, hue, hheld⟩ := encodeBuildArgs_ufTotal xs (evalActions_wf hw hm) hum
+      obtain ⟨e, hr, hue, hheld⟩ := encodeBuildArgs_ufTotal xs (evalActions_wf hw hm)
+        (by simpa only [hsig, henv] using hv) hum
         (Expr.orderingFreeList_cons hp).2
         (fun fk hk => by rw [hsig]; exact hd fk (by simp [Expr.ctorsList, hk]))
         (by rw [hsig]; exact huf) (by rw [hsig, henv]; exact hts)
@@ -288,7 +292,8 @@ private theorem evalActions_append_uf (d : Database) (as bs : List Action) :
       cases evalAction d a <;> rfl
 
 theorem encodeAction_ufTotal {d e : Database} {a : Action}
-    (hw : d.WF) (hu : UFTotal d) (hp : ∀ x ∈ actionExprs a, x.OrderingFree)
+    (hw : d.WF) (hv : ∀ b ∈ d.env, b.2.IsValue d.sig) (hu : UFTotal d)
+    (hp : ∀ x ∈ actionExprs a, x.OrderingFree)
     (hd : ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
       d.sig (viewName fk.1) = some (tableDecl fk.2))
     (huf : d.sig ufName = some (tableDecl 1))
@@ -297,18 +302,19 @@ theorem encodeAction_ufTotal {d e : Database} {a : Action}
   cases a with
   | expr x =>
       obtain ⟨t, ht⟩ := heval x (by simp [actionExprs])
-      obtain ⟨post, hp', hu', _⟩ := encodeBuild_ufTotal x hw hu
+      obtain ⟨post, hp', hu', _⟩ := encodeBuild_ufTotal x hw hv hu
         (hp x (by simp [actionExprs])) (hd x (by simp [actionExprs])) huf ht
       obtain rfl := Option.some.inj (hp'.symm.trans hr)
       exact hu'
   | union x y =>
       obtain ⟨tx, hx⟩ := heval x (by simp [actionExprs])
       obtain ⟨ty, hy⟩ := heval y (by simp [actionExprs])
-      obtain ⟨m, hm, hum, htx⟩ := encodeBuild_ufTotal x hw hu
+      obtain ⟨m, hm, hum, htx⟩ := encodeBuild_ufTotal x hw hv hu
         (hp x (by simp [actionExprs])) (hd x (by simp [actionExprs])) huf hx
       have hsig := evalActions_sig hm
       have henv := evalActions_env hm
-      obtain ⟨n, hn, hun, hty⟩ := encodeBuild_ufTotal y (evalActions_wf hw hm) hum
+      obtain ⟨n, hn, hun, hty⟩ := encodeBuild_ufTotal y (evalActions_wf hw hm)
+        (by simpa only [hsig, henv] using hv) hum
         (hp y (by simp [actionExprs]))
         (fun fk hk => by rw [hsig]; exact hd y (by simp [actionExprs]) fk hk)
         (by rw [hsig]; exact huf) (by rw [hsig, henv]; exact hy)
@@ -340,7 +346,7 @@ theorem encodeAction_ufTotal {d e : Database} {a : Action}
           (ht''.elim (fun heq => heq ▸ hty.1) (fun heq => heq ▸ hl.1)))
 
 theorem encodeActions_ufTotal {d e : Database} {as : List Action}
-    (hw : d.WF) (hu : UFTotal d)
+    (hw : d.WF) (hv : ∀ b ∈ d.env, b.2.IsValue d.sig) (hu : UFTotal d)
     (hp : ∀ a ∈ as, ∀ x ∈ actionExprs a, x.OrderingFree)
     (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
       d.sig (viewName fk.1) = some (tableDecl fk.2))
@@ -353,17 +359,21 @@ theorem encodeActions_ufTotal {d e : Database} {as : List Action}
       change evalActions d (encodeAction a ++ encodeActions as) = some e at hr
       rw [evalActions_append_uf] at hr
       obtain ⟨mid, hm, hr⟩ := Option.bind_eq_some_iff.mp hr
-      have hum := encodeAction_ufTotal hw hu (hp a List.mem_cons_self)
+      have hum := encodeAction_ufTotal hw hv hu (hp a List.mem_cons_self)
         (hd a List.mem_cons_self) huf (heval a List.mem_cons_self) hm
       have hs := evalActions_sig hm
       have he := evalActions_env hm
-      exact ih (evalActions_wf hw hm) hum (fun a ha => hp a (List.mem_cons_of_mem _ ha))
+      exact ih (evalActions_wf hw hm)
+        (by simpa only [evalActions_sig hm, evalActions_env hm] using hv) hum
+        (fun a ha => hp a (List.mem_cons_of_mem _ ha))
         (fun a ha x hx fk hk => hs ▸ hd a (List.mem_cons_of_mem _ ha) x hx fk hk)
         (hs ▸ huf)
         (fun a ha x hx => by rw [hs, he]; exact heval a (List.mem_cons_of_mem _ ha) x hx) hr
 
 theorem encodeLocalActions_ufTotal {d e : Database} {as : List Action} {ρ : Env}
-    (hw : d.WF) (hu : UFTotal d) (hρ : ∀ b ∈ ρ, b.2 ∈ d.terms)
+    (hw : d.WF) (hv : ∀ b ∈ d.env, b.2.IsValue d.sig) (hu : UFTotal d)
+    (hρ : ∀ b ∈ ρ, b.2 ∈ d.terms)
+    (hρv : ∀ b ∈ ρ, b.2.IsValue d.sig)
     (hp : ∀ a ∈ as, ∀ x ∈ actionExprs a, x.OrderingFree)
     (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
       d.sig (viewName fk.1) = some (tableDecl fk.2))
@@ -372,7 +382,9 @@ theorem encodeLocalActions_ufTotal {d e : Database} {as : List Action} {ρ : Env
     (hr : evalLocalActions d (encodeActions as) ρ = some e) : UFTotal e := by
   obtain ⟨post, hp', rfl⟩ := Option.map_eq_some_iff.mp hr
   have hi := encodeActions_ufTotal (d := { d with env := ρ ++ d.env })
-    (hw.appendEnv hρ) (by simpa only [UFTotal, HasUF, Database.values,
+    (hw.appendEnv hρ)
+    (fun b hb => (List.mem_append.mp hb).elim (hρv b) (hv b))
+    (by simpa only [UFTotal, HasUF, Database.values,
       Database.terms_setEnv, Database.entries] using hu) hp hd huf heval hp'
   simpa only [UFTotal, HasUF, Database.values, Database.terms_setEnvRules,
     Database.entries] using hi
@@ -519,6 +531,7 @@ theorem encodeBuild_evaluates {d e : Database} {x : Expr} (hp : x.OrderingFree)
   | lit l => exact ⟨.lit l, rfl⟩
   | var v => exact self_write_evaluates hr
   | min a b => exact (Expr.not_orderingFree_min hp).elim
+  | ite => exact (Expr.not_orderingFree_ite hp).elim
   | app f xs =>
       rw [encodeBuild, evalActions_append_uf] at hr
       obtain ⟨m, hm, hr⟩ := Option.bind_eq_some_iff.mp hr
@@ -549,7 +562,7 @@ theorem encodeAction_evaluates {d e : Database} {a : Action}
           encodeBuild_evaluates (hp z (by simp [actionExprs])) hn
 
 theorem encodeActions_ufTotal_of_run {d e : Database} {as : List Action}
-    (hw : d.WF) (hu : UFTotal d)
+    (hw : d.WF) (hv : ∀ b ∈ d.env, b.2.IsValue d.sig) (hu : UFTotal d)
     (hp : ∀ a ∈ as, ∀ x ∈ actionExprs a, x.OrderingFree)
     (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
       d.sig (viewName fk.1) = some (tableDecl fk.2))
@@ -561,15 +574,19 @@ theorem encodeActions_ufTotal_of_run {d e : Database} {as : List Action}
       change evalActions d (encodeAction a ++ encodeActions as) = some e at hr
       rw [evalActions_append_uf] at hr
       obtain ⟨mid, hm, hr⟩ := Option.bind_eq_some_iff.mp hr
-      have hum := encodeAction_ufTotal hw hu (hp a List.mem_cons_self)
+      have hum := encodeAction_ufTotal hw hv hu (hp a List.mem_cons_self)
         (hd a List.mem_cons_self) huf (encodeAction_evaluates (hp a List.mem_cons_self) hm) hm
       have hs := evalActions_sig hm
-      exact ih (evalActions_wf hw hm) hum (fun a ha => hp a (List.mem_cons_of_mem _ ha))
+      exact ih (evalActions_wf hw hm)
+        (by simpa only [evalActions_sig hm, evalActions_env hm] using hv) hum
+        (fun a ha => hp a (List.mem_cons_of_mem _ ha))
         (fun a ha x hx fk hk => hs ▸ hd a (List.mem_cons_of_mem _ ha) x hx fk hk)
         (hs ▸ huf) hr
 
 theorem encodeLocalActions_ufTotal_of_run {d e : Database} {as : List Action} {ρ : Env}
-    (hw : d.WF) (hu : UFTotal d) (hρ : ∀ b ∈ ρ, b.2 ∈ d.terms)
+    (hw : d.WF) (hv : ∀ b ∈ d.env, b.2.IsValue d.sig) (hu : UFTotal d)
+    (hρ : ∀ b ∈ ρ, b.2 ∈ d.terms)
+    (hρv : ∀ b ∈ ρ, b.2.IsValue d.sig)
     (hp : ∀ a ∈ as, ∀ x ∈ actionExprs a, x.OrderingFree)
     (hd : ∀ a ∈ as, ∀ x ∈ actionExprs a, ∀ fk ∈ x.ctors,
       d.sig (viewName fk.1) = some (tableDecl fk.2))
@@ -577,7 +594,9 @@ theorem encodeLocalActions_ufTotal_of_run {d e : Database} {as : List Action} {�
     (hr : evalLocalActions d (encodeActions as) ρ = some e) : UFTotal e := by
   obtain ⟨post, hp', rfl⟩ := Option.map_eq_some_iff.mp hr
   have hi := encodeActions_ufTotal_of_run (d := { d with env := ρ ++ d.env })
-    (hw.appendEnv hρ) (by simpa only [UFTotal, HasUF, Database.values,
+    (hw.appendEnv hρ)
+    (fun b hb => (List.mem_append.mp hb).elim (hρv b) (hv b))
+    (by simpa only [UFTotal, HasUF, Database.values,
       Database.terms_setEnv, Database.entries] using hu) hp hd huf hp'
   simpa only [UFTotal, HasUF, Database.values, Database.terms_setEnvRules,
     Database.entries] using hi

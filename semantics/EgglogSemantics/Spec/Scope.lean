@@ -28,8 +28,7 @@ def Expr.IsApp : Expr → Prop
   | .app _ _ => True
   | _ => False
 
-/-- A query fact carries the application restriction and nothing else: a fact never fails
-to scope, and what it binds is `Query.bind`. A `.values` head is unconstrained. -/
+/-- Query facts must be applications; equality patterns have no shape restriction. -/
 def Pattern.Scoped : Pattern → Prop
   | .expr e => e.IsApp
   | .eq _ _ => True
@@ -88,6 +87,8 @@ def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
 /-- A complete atom has a declared head and value-producing columns. -/
 def Expr.AtomEvaluable : Expr → Signature → Prop
   | .app f cols, sig => (sig f).isSome = true ∧ ∀ g ∈ Expr.fnsList cols, sig.IsCtor g
+  | .ite lhs rhs yes no, sig =>
+      (∀ e ∈ lhs ++ rhs, e.Evaluable sig) ∧ yes.AtomEvaluable sig ∧ no.AtomEvaluable sig
   | e, sig => e.Evaluable sig
 
 /-- `Action.Scoped`'s companion: every expression the action evaluates builds, and a
@@ -139,7 +140,6 @@ def Action.UnionLegal : Action → Prop
   | [] => True
   | a :: as => a.UnionLegal ∧ Actions.UnionLegal as
 
-/-- `res` is evaluated rather than run. -/
 @[simp] def MergeSpec.UnionLegal : MergeSpec → Prop
   | .merge _ _ body _ => Actions.UnionLegal body
 
@@ -172,6 +172,9 @@ def Expr.WidthOk : Expr → Signature → Prop
   | .app f args, sig =>
       (∀ d, sig f = some d → args.length = d.arity) ∧ Expr.WidthOkList args sig
   | .min a b, sig => Expr.WidthOk a sig ∧ Expr.WidthOk b sig
+  | .ite lhs rhs yes no, sig =>
+      Expr.WidthOkList lhs sig ∧ Expr.WidthOkList rhs sig ∧
+        yes.WidthOk sig ∧ no.WidthOk sig
 
 /-- `Expr.WidthOk` over an argument list. -/
 def Expr.WidthOkList : List Expr → Signature → Prop
@@ -185,6 +188,9 @@ def Expr.AtomWidthOk : Expr → Signature → Prop
   | .app f cols, sig =>
       (∀ d, sig f = some d → cols.length = d.entryWidth) ∧ Expr.WidthOkList cols sig
   | .min a b, sig => Expr.WidthOk a sig ∧ Expr.WidthOk b sig
+  | .ite lhs rhs yes no, sig =>
+      Expr.WidthOkList lhs sig ∧ Expr.WidthOkList rhs sig ∧
+        yes.AtomWidthOk sig ∧ no.AtomWidthOk sig
   | _, _ => True
 
 /-- Complete atoms have their declared entry width; union operands use value widths. -/
@@ -200,9 +206,7 @@ def Action.WidthOk : Action → Signature → Prop
 @[simp] def Rule.WidthOk (r : Rule) (sig : Signature) : Prop :=
   Actions.WidthOk r.actions sig
 
-/-- One result expression per value column: `res` is what `MergeStep` writes into them.
-This is the one check besides `MergeDeclared` that walks into a `:merge`, for the reason
-`MergeDeclared`'s own heading gives — the body and `res` are where a merge writes. -/
+/-- Every branch returns the declared number of columns. -/
 @[simp] def MergeSpec.WidthOk : MergeSpec → Nat → Signature → Prop
   | .merge _ _ body res, n, sig =>
       res.length = n ∧ Actions.WidthOk body sig ∧ Expr.WidthOkList res sig
@@ -300,7 +304,6 @@ def Action.UnionFree : Action → Prop
 
 @[simp] def Rule.UnionFree (r : Rule) : Prop := Actions.UnionFree r.actions
 
-/-- `res` is evaluated rather than run. -/
 @[simp] def MergeSpec.UnionFree : MergeSpec → Prop
   | .merge _ _ body _ => Actions.UnionFree body
 
@@ -330,8 +333,8 @@ declared. -/
 The other condition, and it is about where a program may apply `min`. It compares two terms
 by `Term.blt`, a structural order, where egglog compares by e-class id. It is therefore not
 stable under congruence: `union (f 1) (g 1)` lets `min (f 1) (f 2)` and `min (g 1) (f 2)`
-settle on incongruent terms. On literals it is stable, since `Cong.eq_of_isLit` makes a
-literal's class a singleton, but this untyped model cannot tell the two uses apart, so the
+settle on incongruent terms. On literals it is stable because their classes are singletons, but this untyped
+model cannot tell the two uses apart, so the
 condition excludes `min` outright.
 
 It walks into a rule — both its query, which evaluates its patterns, and its head — and
@@ -344,7 +347,7 @@ def Expr.hasMin : Expr → Bool
   | .lit _ => false
   | .var _ => false
   | .app _ args => Expr.hasMinList args
-  | .min _ _ => true
+  | .min _ _ | .ite _ _ _ _ => true
 
 def Expr.hasMinList : List Expr → Bool
   | [] => false
@@ -352,7 +355,7 @@ def Expr.hasMinList : List Expr → Bool
 
 end
 
-/-- No `min` in `e`. -/
+/-- No order-sensitive minimum or structural conditional in `e`. -/
 def Expr.OrderingFree (e : Expr) : Prop := e.hasMin = false
 
 /-- `Expr.OrderingFree` over an argument list. -/
@@ -376,20 +379,12 @@ the substitution. -/
 @[simp] def Rule.OrderingFree (r : Rule) : Prop :=
   (∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions
 
-/-- A `:merge` evaluates both its body and its result — and it
-*compares* the two colliding value tuples, which is the second instability here.
-`Spec/Step.lean`'s `MergeConflict` decides whether a collision fires by **identity** on
-those tuples, and identity is no more stable under congruence than `min` is: moved
-to congruent values a firing can become a skip. Only a declaration that always conflicts
-survives the move — `FnDecl.unchangedWidth = none`, which is `body = []` with no
-`:internal-identity-vals`. Every `:merge` *expression* is that, `:merge (min old new)` and
-every lattice in this development included; `FnDecl.OrderingFree` carries the other half. -/
+/-- Pure returns without order-sensitive expressions form the transport fragment. -/
 @[simp] def MergeSpec.OrderingFree : MergeSpec → Prop
   | .merge _ _ body res => body = [] ∧ Expr.OrderingFreeList res
 
-@[inherit_doc MergeSpec.OrderingFree]
 def FnDecl.OrderingFree (d : FnDecl) : Prop :=
-  d.identityVals = none ∧ ∀ ms ∈ d.merge, ms.OrderingFree
+  ∀ ms ∈ d.merge, ms.OrderingFree
 
 /-- Read of a *signature*, because a `MergeStep` reads the body it runs from one, as
 `Signature.UnionFree`. -/
@@ -423,10 +418,9 @@ instance instDecidableActionsOrderingFree : ∀ as : List Action, Decidable (Act
 instance (r : Rule) : Decidable r.OrderingFree :=
   inferInstanceAs (Decidable ((∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions))
 instance : ∀ ms : MergeSpec, Decidable ms.OrderingFree
-  | .merge _ _ body res => decidable_of_iff (body.isEmpty = true ∧ Expr.OrderingFreeList res)
-      (by simp [List.isEmpty_iff])
+  | .merge _ _ body res => inferInstanceAs (Decidable (body = [] ∧ Expr.OrderingFreeList res))
 instance (d : FnDecl) : Decidable d.OrderingFree :=
-  decidable_of_iff (d.identityVals = none ∧ ∀ ms ∈ d.merge.toList, ms.OrderingFree)
+  decidable_of_iff (∀ ms ∈ d.merge.toList, ms.OrderingFree)
     (by unfold FnDecl.OrderingFree; rcases d.merge with _ | ms <;> simp)
 instance : ∀ c : Cmd, Decidable c.OrderingFree
   | .rule r => inferInstanceAs (Decidable r.OrderingFree)
@@ -437,5 +431,31 @@ instance : ∀ c : Cmd, Decidable c.OrderingFree
 instance instDecidableProgramOrderingFree : ∀ P : Program, Decidable (Program.OrderingFree P)
   | [] => inferInstanceAs (Decidable True)
   | c :: cs => @instDecidableAnd _ _ inferInstance (instDecidableProgramOrderingFree cs)
+
+mutual
+
+/-- The variable occurs as an **argument of an application**: a key column of one of the view
+reads `encodeQueryExpr` emits. -/
+def Expr.ArgVar (v : Var) : Expr → Prop
+  | .lit _ => False
+  | .var _ => False
+  | .app _ args => Expr.var v ∈ args ∨ Expr.ArgVarList v args
+  | .min a b => Expr.ArgVar v a ∨ Expr.ArgVar v b
+  | .ite _ _ _ _ => False
+
+/-- `Expr.ArgVar` over an argument list. -/
+def Expr.ArgVarList (v : Var) : List Expr → Prop
+  | [] => False
+  | e :: es => Expr.ArgVar v e ∨ Expr.ArgVarList v es
+
+end
+
+@[inherit_doc Expr.ArgVar]
+def Pattern.ArgVar (v : Var) : Pattern → Prop
+  | .expr e => Expr.ArgVar v e
+  | .eq e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
+
+def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
+
 
 end Egglog

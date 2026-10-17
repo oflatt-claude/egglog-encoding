@@ -31,7 +31,7 @@ theorem eval_constructorTerm {sig : Signature} {ρ : Env}
   | .lit _, _, h => by
       obtain rfl : _ = _ := Option.some.inj h
       exact ConstructorTerm.lit
-  | .var v, t, h => hρ v t (Option.filter_eq_some_iff.mp h).1
+  | .var v, t, h => hρ v t h
   | .app f args, t, h => by
       have hct : sig.IsCtor f := by
         by_contra hc
@@ -47,6 +47,8 @@ theorem eval_constructorTerm {sig : Signature} {ρ : Env}
       rcases Term.least_eq_or x y with h | h <;> rw [h]
       · exact eval_constructorTerm hρ a hx
       · exact eval_constructorTerm hρ b hy
+  | .ite _ _ yes no, _, h =>
+      (Expr.eval_ite_inv h).elim (eval_constructorTerm hρ yes) (eval_constructorTerm hρ no)
 
 theorem evalList_constructorTerm {sig : Signature} {ρ : Env}
     (hρ : ∀ v u, Env.lookup v ρ = some u → ConstructorTerm sig u) :

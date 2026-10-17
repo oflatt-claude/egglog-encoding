@@ -50,28 +50,19 @@ structure MergeFacts where
   body : List Term
   result : Term
 
-def conflicts (d : FnDecl) (body : List Action) (old new : List Term) : Bool :=
-  match d.unchangedWidth body with
-  | none => true
-  | some k => old.take k != new.take k
-
-/-- Both inputs must be actual entries at the same structural key. -/
+/-- Certificates resolve two distinct entries at the same structural key. -/
 def mergeFacts (sig : Signature) (f : FnName) (old new : Term) : Option MergeFacts := do
   let d ← sig f
   let some (.merge oldVars newVars body res) := d.merge | none
   let .app ofn oc := old | none
   let .app nfn nc := new | none
   if ofn == f && nfn == f && oc.length == d.entryWidth && nc.length == d.entryWidth &&
-      oc.take d.arity == nc.take d.arity then do
-    let os := oc.drop d.arity
-    let ns := nc.drop d.arity
-    if conflicts d body os ns then do
-      let σ := mergeEnv oldVars newVars os ns
-      let facts ← actionsFacts sig σ body
-      let vs ← Expr.evalList sig res σ
-      if vs.length == d.outArity && SourceProof.valuesOk sig vs then
-        some ⟨facts, .app f (oc.take d.arity ++ vs)⟩
-      else none
+      oc.take d.arity == nc.take d.arity && old != new then do
+    let σ := mergeEnv oldVars newVars (oc.drop d.arity) (nc.drop d.arity)
+    let facts ← actionsFacts sig σ body
+    let vs ← Expr.evalList sig res σ
+    if vs.length == d.outArity && SourceProof.valuesOk sig vs then
+      some ⟨facts, .app f (oc.take d.arity ++ vs)⟩
     else none
   else none
 

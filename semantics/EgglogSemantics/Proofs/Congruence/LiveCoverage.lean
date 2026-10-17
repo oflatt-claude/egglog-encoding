@@ -56,6 +56,15 @@ theorem Covers.addTerm {d e : Database} (h : Covers d e) (t : Term) :
       hj.mono (fun _ hr => Database.mem_addTerm_entries.mpr (Or.inl hr))⟩
   · exact ⟨a, Database.mem_addTerm_entries.mpr (Or.inr ⟨h.sig ▸ hv, ht⟩), .refl a⟩
 
+theorem Covers.addEq {d e : Database} (h : Covers d e) (a b : Term) :
+    Covers (d.addEq a b) (e.addEq a b) := by
+  refine ⟨h.sig, fun f cs t ht => ?_⟩
+  rcases ht.2 with he | he
+  · exact ⟨t, ⟨h.sig ▸ ht.1, Or.inl he⟩, .refl t⟩
+  · obtain ⟨u, hu, hj⟩ := h.rows f cs t ⟨ht.1, he⟩
+    exact ⟨u, ⟨hu.1, Or.inr hu.2⟩,
+      Joined.mono (d := e) (e := e.addEq a b) (fun _ hr => ⟨hr.1, Or.inr hr.2⟩) hj⟩
+
 theorem evalAction_covers {d e post : Database} (h : Covers d e) (henv : d.env = e.env)
     {a : Action} (hf : evalAction d a = some post) :
     ∃ out, evalAction e a = some out ∧ Covers post out ∧ post.env = out.env := by
@@ -65,13 +74,6 @@ theorem evalAction_covers {d e post : Database} (h : Covers d e) (henv : d.env =
   · refine ⟨e.addEq ta tb, ?_, ?_, henv⟩
     · simp only [not_or, Bool.not_eq_true] at hl
       simp [evalAction, ← h.sig, ← henv, ha, hb, hl.1, hl.2]
-    · have hva := Expr.eval_isValue ha
-      have hvb := Expr.eval_isValue hb
-      refine ⟨h.sig, ?_⟩
-      rw [Database.addEq_entries hva hvb,
-        Database.addEq_entries (h.sig ▸ hva) (h.sig ▸ hvb)]
-      exact fun f cs x hx => by
-        obtain ⟨y, hy, hj⟩ := h.rows f cs x hx
-        exact ⟨y, hy, hj.mono (by rw [Database.addEq_entries (h.sig ▸ hva) (h.sig ▸ hvb)])⟩
+    · exact h.addEq ta tb
 
 end Egglog.Congruence.Live

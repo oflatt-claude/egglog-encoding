@@ -18,6 +18,7 @@ mutual
 theorem encodeBuild_unionFree : ∀ e : Expr, Actions.UnionFree (encodeBuild e)
   | .lit _ | .var _ => ⟨trivial, trivial⟩
   | .min a b => actions_unionFree_append (encodeBuild_unionFree a) (encodeBuild_unionFree b)
+  | .ite _ _ _ _ => trivial
   | .app _ es => actions_unionFree_append (encodeBuildArgs_unionFree es) ⟨trivial, trivial, trivial⟩
 
 theorem encodeBuildArgs_unionFree : ∀ es : List Expr, Actions.UnionFree (encodeBuildArgs es)
@@ -126,13 +127,6 @@ theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) := by
   induction q with
   | nil => trivial
   | cons c cs ih => exact ⟨hall c (by simp), ih fun d hd => hall d (by simp [hd])⟩
-
-/-- Every self-collision is ignored using the single id output, without proof-specific
-identity-column configuration. -/
-theorem tableDecl_no_self_conflict (arity : Nat) (values : List Term) :
-    ¬ MergeConflict (tableDecl arity) mergeBody values values := by
-  simp [MergeConflict, FnDecl.unchangedWidth, tableDecl, mergeBody]
-
 
 /-- Any compiled prefix is union-free, with the prelude of any complete program. -/
 theorem encodePrefix_unionFree (P pre : Program) (i : Nat) :

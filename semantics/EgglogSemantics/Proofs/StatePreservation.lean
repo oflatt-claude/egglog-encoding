@@ -1,10 +1,11 @@
 import EgglogSemantics.Proofs.Step
+import EgglogSemantics.Proofs.MatchValues
 
 /-! Well-formedness and declared widths through mathematical execution. -/
 
 namespace Egglog
 
-/-- `env` and `rules` are invisible to `WF`, as they are to `Cong`. -/
+/-- `env` and `rules` are invisible to `WF`, as they are to `StoredCong`. -/
 theorem Database.WF.setEnvRules {db : Database} (hw : db.WF) {σ : Env} {R : Set Rule}
     (hσ : ∀ b ∈ σ, b.2 ∈ db.terms) :
     ({ db with env := σ, rules := R } : Database).WF := by
@@ -40,9 +41,8 @@ theorem Actions.WriteLegal.tail {a : Action} {as : List Action} {sig : Signature
 
 /-- Merge results have the declared tuple width. -/
 def Signature.MergesLegal (sig : Signature) : Prop :=
-  ∀ g dc oldVars newVars body res, sig g = some dc → dc.merge = some (MergeSpec.merge
-    oldVars newVars body res) →
-    Actions.WriteLegal body sig ∧ res.length = dc.outArity
+  ∀ g dc ovs nvs body res, sig g = some dc → dc.merge = some (.merge ovs nvs body res) →
+    res.length = dc.outArity
 
 theorem Term.IsValue.not_mentions_of_fresh {sig : Signature} {f : FnName}
     (hf : sig f = none) {t : Term} (ht : t.IsValue sig) : ¬ t.Mentions f := by
@@ -91,7 +91,7 @@ theorem Database.StoreOk.decl {db : Database} (hs : db.StoreOk) {f : FnName}
     rcases hs.typed p hp with hp' | ⟨row, hr, rfl⟩
     · exact Or.inl ⟨hv _ hp'.1, hv _ hp'.2⟩
     · exact Or.inr ⟨row, (Entry.valid_update_iff hag
-        (hav.terms row.atom (Cong.direct hp))).mp hr, rfl⟩
+        (hav.terms row.atom (StoredCong.direct (db := db) hp).toHeld)).mp hr, rfl⟩
 
 theorem evalLocalActions_storeOk {db d : Database} (hs : db.StoreOk)
     {as : List Action} {σ : Env} (hv : ∀ b ∈ σ, b.2.IsValue db.sig)
@@ -102,12 +102,15 @@ theorem evalLocalActions_storeOk {db d : Database} (hs : db.StoreOk)
   exact (evalActions_storeOk hstart hp).congr rfl rfl (by
     simpa only [evalActions_sig hp] using hs.envValues)
 
-theorem RuleResults.storeOk {db d : Database} (hs : db.StoreOk) {r : Rule}
+theorem RuleResults.storeOk_of_values {db d : Database} (hs : db.StoreOk) {r : Rule}
+    (hv : ∀ σ, ValidQuerySubst db r.query σ → ∀ b ∈ σ, b.2.IsValue db.sig)
     (h : d ∈ RuleResults db r) : d.StoreOk := by
   obtain ⟨σ, hσ, he⟩ := h
-  exact evalLocalActions_storeOk hs (fun b hb => (hσ.mem_values b hb).2) he
+  exact evalLocalActions_storeOk hs (hv σ hσ) he
 
-theorem RunRules.storeOk {R : RulesetName} {db : Database} (hs : db.StoreOk) :
+theorem RunRules.storeOk_of_values {R : RulesetName} {db : Database} (hs : db.StoreOk)
+    (hv : ∀ r ∈ db.rules, ∀ σ, ValidQuerySubst db r.query σ →
+      ∀ b ∈ σ, b.2.IsValue db.sig) :
     (RunRules R db).StoreOk := by
   have sigs : ∀ d ∈ {d | ∃ r ∈ db.rules, r.ruleset = R ∧ d ∈ RuleResults db r},
       d.sig = db.sig := by
@@ -123,7 +126,7 @@ theorem RunRules.storeOk {R : RulesetName} {db : Database} (hs : db.StoreOk) :
     · exact (Database.Contained.sUnion db _).terms (hs.columns row hr t ht)
     · obtain ⟨d, hd, hr⟩ := Set.mem_iUnion₂.mp hr
       obtain ⟨r, hrmem, hR, hdr⟩ := hd
-      have hcol := (RuleResults.storeOk hs hdr).columns row hr t ht
+      have hcol := (RuleResults.storeOk_of_values hs (hv r hrmem) hdr).columns row hr t ht
       rw [RunRules, Database.sUnion_terms]
       exact Or.inr (Set.mem_iUnion₂.mpr ⟨d, ⟨r, hrmem, hR, hdr⟩, hcol⟩)
   · intro p hp
@@ -131,37 +134,75 @@ theorem RunRules.storeOk {R : RulesetName} {db : Database} (hs : db.StoreOk) :
     · exact hs.typed p hp
     · obtain ⟨d, hd, hp⟩ := Set.mem_iUnion₂.mp hp
       obtain ⟨r, hrmem, hR, hdr⟩ := hd
-      have ht := (RuleResults.storeOk hs hdr).typed p hp
+      have ht := (RuleResults.storeOk_of_values hs (hv r hrmem) hdr).typed p hp
       simpa only [RuleResults.sig hdr, RunRules.sig] using ht
+
+theorem RuleResults.storeOk {db d : Database} (hs : db.StoreOk) {r : Rule}
+    (hq : r.query.Safe) (h : d ∈ RuleResults db r) : d.StoreOk :=
+  RuleResults.storeOk_of_values hs
+    (fun _ hσ b hb => (hσ.mem_values hs hq b hb).2) h
+
+theorem RunRules.storeOk {R : RulesetName} {db : Database} (hs : db.StoreOk)
+    (hq : db.RulesSafe) : (RunRules R db).StoreOk :=
+  RunRules.storeOk_of_values hs (fun r hr _ hσ b hb =>
+    (hσ.mem_values hs (hq r hr) b hb).2)
+
+theorem RunRules.storeOk_of_allConstructors {R : RulesetName} {db : Database}
+    (hs : db.StoreOk) (hc : db.sig.AllConstructors) : (RunRules R db).StoreOk := by
+  apply RunRules.storeOk_of_values hs
+  intro r _ σ hσ b hb
+  rcases hs.term (hσ.mem_terms b hb) with hv | ⟨row, hr, he⟩
+  · exact hv
+  · obtain ⟨decl, hd, hn, _⟩ := hr
+    exact (hn (by simpa [Signature.mergeOf, hd] using hc row.name)).elim
+
+@[simp] def Cmd.QueriesSafe : Cmd → Prop
+  | .rule r => r.query.Safe
+  | _ => True
+
+@[simp] def Program.QueriesSafe : Program → Prop
+  | [] => True
+  | c :: cs => c.QueriesSafe ∧ Program.QueriesSafe cs
+
+theorem Program.queriesSafe_of_rules : ∀ p : Program,
+    (∀ r, Cmd.rule r ∈ p → r.query.Safe) → p.QueriesSafe
+  | [], _ => trivial
+  | c :: cs, h => by
+      constructor
+      · cases c with
+        | rule r => exact h r List.mem_cons_self
+        | _ => trivial
+      · exact Program.queriesSafe_of_rules cs (fun r hr => h r (List.mem_cons_of_mem _ hr))
 
 theorem MergeValues.wf {db d : Database} {decl : FnDecl} {old new vs : List Term}
     (h : MergeValues db decl old new d vs) (hw : db.WF)
     (ho : ∀ t ∈ old, t ∈ db.terms) (hn : ∀ t ∈ new, t ∈ db.terms) : d.WF := by
   cases h with
-  | unchanged => exact hw
-  | @changed post vs ovs nvs body res _ _ hb _ =>
+  | @eval post vs ovs nvs body res _ hb =>
     have hstart := hw.setEnv (σ := mergeEnv ovs nvs old new)
       (fun b hb => (mem_mergeEnv hb).elim (ho b.2) (hn b.2))
-    exact (evalActions_wf hstart hb).setEnvRules (fun b hmem =>
-      (evalActions_contained hb).terms (by
+    exact (evalMerge_wf hstart hb).setEnvRules (fun b hmem =>
+      (evalMerge_contained hb).terms (by
         simpa only [Database.terms_setEnv] using hw.envInTerms b hmem))
 
 theorem MergeStep.wf {d₁ d₂ : Database} (hw : d₁.WF) (hs : d₁.StoreOk)
     (h : MergeStep d₁ d₂) : d₂.WF := by
   cases h with
   | @collide d old new decl vs hold hnew _ _ _ _ hv =>
-    have hs0 := (hs.eraseEntry old hold.1).eraseEntry new hnew.1
-    have hw0 := (hw.eraseEntry hs old hold.1).eraseEntry
-      (hs.eraseEntry old hold.1) new hnew.1
+    have hov := hs.entry_valid hold
+    have hnv := hs.entry_valid hnew
+    have hs0 := (hs.eraseEntry old hov).eraseEntry new hnv
+    have hw0 := (hw.eraseEntry hs old hov).eraseEntry
+      (hs.eraseEntry old hov) new hnv
     have keep : ∀ t, t.IsValue d₁.sig → t ∈ d₁.terms →
         t ∈ ((d₁.eraseEntry old).eraseEntry new).terms := fun t ht hm =>
-      Database.mem_terms_eraseEntry_of_value hnew.1 ht
-        (Database.mem_terms_eraseEntry_of_value hold.1 ht hm)
+      Database.mem_terms_eraseEntry_of_value hnv ht
+        (Database.mem_terms_eraseEntry_of_value hov ht hm)
     apply Database.WF.putEntry
     exact hv.wf hw0
-      (fun t ht => keep t (hold.1.output_values t ht)
+      (fun t ht => keep t (hov.output_values t ht)
         (hs.columns old hold t (List.mem_append_right _ ht)))
-      (fun t ht => keep t (hnew.1.output_values t ht)
+      (fun t ht => keep t (hnv.output_values t ht)
         (hs.columns new hnew t (List.mem_append_right _ ht)))
 
 theorem MergeClosure.wf {d₁ d₂ : Database} (hw : d₁.WF) (hs : d₁.StoreOk)
@@ -170,13 +211,14 @@ theorem MergeClosure.wf {d₁ d₂ : Database} (hw : d₁.WF) (hs : d₁.StoreOk
   | refl => exact hw
   | tail hc hstep ih => exact MergeStep.wf ih (MergeClosure.storeOk hc hs hmw) hstep
 
-theorem RunStep.storeOk {R : RulesetName} {db db' : Database} (hs : db.StoreOk)
+theorem RunStep.storeOk {R : RulesetName} {db db' : Database} (hs : db.StoreOk) (hq : db.RulesSafe)
     (hmw : db.sig.MergesWidthOk) (h : RunStep R db db') : db'.StoreOk :=
-  h.1.storeOk (RunRules.storeOk hs) hmw
+  h.1.storeOk (RunRules.storeOk hs hq) hmw
 
 theorem RunStep.wf {R : RulesetName} {db db' : Database} (hw : db.WF)
-    (hs : db.StoreOk) (hmw : db.sig.MergesWidthOk) (h : RunStep R db db') : db'.WF :=
-  MergeClosure.wf (RunRules.wf hw) (RunRules.storeOk hs) hmw h.1
+    (hs : db.StoreOk) (hq : db.RulesSafe) (hmw : db.sig.MergesWidthOk)
+    (h : RunStep R db db') : db'.WF :=
+  MergeClosure.wf (RunRules.wf hw) (RunRules.storeOk hs hq) hmw h.1
 
 theorem RunReach.envRules {R : RulesetName} {db d : Database}
     (h : Relation.ReflTransGen (RunStep R) db d) : d.env = db.env ∧ d.rules = db.rules := by
@@ -186,49 +228,69 @@ theorem RunReach.envRules {R : RulesetName} {db d : Database}
     have hm := MergeClosure.envRules hs.1
     exact ⟨hm.1.trans ih.1, hm.2.trans ih.2⟩
 
-theorem RunReach.storeOk {R : RulesetName} {db d : Database} (hs : db.StoreOk)
+theorem RunReach.storeOk {R : RulesetName} {db d : Database} (hs : db.StoreOk) (hq : db.RulesSafe)
     (hmw : db.sig.MergesWidthOk) (h : Relation.ReflTransGen (RunStep R) db d) : d.StoreOk := by
   induction h with
   | refl => exact hs
-  | tail hc hr ih => exact hr.storeOk ih (by rw [RunReach.sig hc]; exact hmw)
+  | tail hc hr ih =>
+    exact hr.storeOk ih
+      (by simpa only [Database.RulesSafe, (RunReach.envRules hc).2] using hq)
+      (by rw [RunReach.sig hc]; exact hmw)
 
 theorem RunReach.wf {R : RulesetName} {db d : Database} (hw : db.WF)
-    (hs : db.StoreOk) (hmw : db.sig.MergesWidthOk)
+    (hs : db.StoreOk) (hq : db.RulesSafe) (hmw : db.sig.MergesWidthOk)
     (h : Relation.ReflTransGen (RunStep R) db d) : d.WF := by
   induction h with
   | refl => exact hw
   | tail hc hr ih =>
-    exact hr.wf ih (RunReach.storeOk hs hmw hc)
+    exact hr.wf ih (RunReach.storeOk hs hq hmw hc)
+      (by simpa only [Database.RulesSafe, (RunReach.envRules hc).2] using hq)
       (by rw [RunReach.sig hc]; exact hmw)
 
-theorem cmdReach_storeOk {db d : Database} (hs : db.StoreOk) {c : Cmd}
+theorem cmdReach_storeOk {db d : Database} (hs : db.StoreOk) (hq : db.RulesSafe) {c : Cmd}
     (hf : c.DeclFresh db.sig) (hmw : (c.sigBind db.sig).MergesWidthOk)
     (h : cmdReach db c d) : d.StoreOk := by
   cases c with
   | rule r => subst d; exact hs.congr rfl rfl hs.envValues
-  | run R => subst d; exact RunRules.storeOk hs
-  | saturate R => exact RunReach.storeOk hs hmw (show SaturateReach R db d from h).reach
+  | run R => subst d; exact RunRules.storeOk hs hq
+  | saturate R => exact RunReach.storeOk hs hq hmw (show SaturateReach R db d from h).reach
   | decl f dc => subst d; exact hs.decl hf
   | check q => rw [h.2]; exact hs
 
-theorem cmdReach_wf' {db d : Database} (hw : db.WF) (hs : db.StoreOk) {c : Cmd}
+theorem cmdReach_wf' {db d : Database} (hw : db.WF) (hs : db.StoreOk) (hq : db.RulesSafe) {c : Cmd}
     (hmw : (c.sigBind db.sig).MergesWidthOk) (h : cmdReach db c d) : d.WF := by
   cases c with
-  | saturate R => exact RunReach.wf hw hs hmw (show SaturateReach R db d from h).reach
+  | saturate R => exact RunReach.wf hw hs hq hmw (show SaturateReach R db d from h).reach
   | _ => exact cmdReach_wf hw (by trivial) h
 
-theorem CmdStep.storeOk {db db' : Database} (hs : db.StoreOk) {c : Cmd}
+theorem CmdStep.storeOk {db db' : Database} (hs : db.StoreOk) (hq : db.RulesSafe) {c : Cmd}
     (hf : c.DeclFresh db.sig) (hmw : (c.sigBind db.sig).MergesWidthOk)
     (h : CmdStep db c db') : db'.StoreOk := by
   obtain ⟨d, hr, hc⟩ := h.reach
-  exact hc.storeOk (cmdReach_storeOk hs hf hmw hr) (by rw [cmdReach_sig hr]; exact hmw)
+  exact hc.storeOk (cmdReach_storeOk hs hq hf hmw hr) (by rw [cmdReach_sig hr]; exact hmw)
 
-theorem CmdStep.wf {db db' : Database} (hw : db.WF) (hs : db.StoreOk) {c : Cmd}
+theorem CmdStep.wf {db db' : Database} (hw : db.WF) (hs : db.StoreOk) (hq : db.RulesSafe) {c : Cmd}
     (hf : c.DeclFresh db.sig) (hmw : (c.sigBind db.sig).MergesWidthOk)
     (h : CmdStep db c db') : db'.WF := by
   obtain ⟨d, hr, hc⟩ := h.reach
-  exact hc.wf (cmdReach_wf' hw hs hmw hr) (cmdReach_storeOk hs hf hmw hr)
+  exact hc.wf (cmdReach_wf' hw hs hq hmw hr) (cmdReach_storeOk hs hq hf hmw hr)
     (by rw [cmdReach_sig hr]; exact hmw)
+
+theorem CmdStep.rulesSafe {db d : Database} {c : Cmd} (h : CmdStep db c d)
+    (hq : db.RulesSafe) (hc : c.QueriesSafe) : d.RulesSafe := by
+  obtain ⟨mid, hr, hm⟩ := h.reach
+  intro r hmem
+  rw [hm.envRules.2] at hmem
+  cases c with
+  | rule rule =>
+      subst mid
+      rcases hmem with rfl | hmem
+      · exact hc
+      · exact hq r hmem
+  | run R => subst mid; exact hq r hmem
+  | saturate R => exact hq r ((RunReach.envRules hr.reach).2 ▸ hmem)
+  | decl f dc => subst mid; exact hq r hmem
+  | check q => rw [hr.2] at hmem; exact hq r hmem
 
 mutual
 
@@ -242,6 +304,12 @@ theorem Expr.WidthOk.agree {sig sig' : Signature} (e : Expr)
     exact hw.1 d ((h f (by simp [Expr.fns])).trans hd)
   | .min a b => exact ⟨Expr.WidthOk.agree a (fun f hf => h f (by simp [hf])) hw.1,
       Expr.WidthOk.agree b (fun f hf => h f (by simp [hf])) hw.2⟩
+  | .ite lhs rhs yes no =>
+      exact ⟨Expr.WidthOkList.agree lhs (fun f hf => h f (by simp [Expr.fns, hf])) hw.1,
+        Expr.WidthOkList.agree rhs (fun f hf => h f (by simp [Expr.fns, hf])) hw.2.1,
+        Expr.WidthOk.agree yes (fun f hf => h f (by simp [Expr.fns, hf])) hw.2.2.1,
+        Expr.WidthOk.agree no (fun f hf => h f (by simp [Expr.fns, hf])) hw.2.2.2⟩
+
 
 theorem Expr.WidthOkList.agree {sig sig' : Signature} (es : List Expr)
     (h : ∀ f ∈ Expr.fnsList es, sig f = sig' f) (hw : Expr.WidthOkList es sig) :
@@ -255,13 +323,18 @@ end
 
 theorem Expr.AtomWidthOk.agree {sig sig' : Signature} (e : Expr)
     (h : ∀ f ∈ e.fns, sig f = sig' f) (hw : e.AtomWidthOk sig) : e.AtomWidthOk sig' := by
-  cases e with
-  | lit _ | var _ => trivial
-  | min a b => exact Expr.WidthOk.agree (.min a b) h hw
-  | app f args =>
+  match e with
+  | .lit _ | .var _ => trivial
+  | .min a b => exact Expr.WidthOk.agree (.min a b) h hw
+  | .app f args =>
     refine ⟨?_, Expr.WidthOkList.agree args (fun g hg => h g (by simp [Expr.fns, hg])) hw.2⟩
     intro d hd
     exact hw.1 d ((h f (by simp [Expr.fns])).trans hd)
+  | .ite lhs rhs yes no =>
+      exact ⟨Expr.WidthOkList.agree lhs (fun f hf => h f (by simp [Expr.fns, hf])) hw.1,
+        Expr.WidthOkList.agree rhs (fun f hf => h f (by simp [Expr.fns, hf])) hw.2.1,
+        Expr.AtomWidthOk.agree yes (fun f hf => h f (by simp [Expr.fns, hf])) hw.2.2.1,
+        Expr.AtomWidthOk.agree no (fun f hf => h f (by simp [Expr.fns, hf])) hw.2.2.2⟩
 
 theorem Expr.Declared.agrees_update {sig : Signature} {f : FnName} {dc : FnDecl}
     (hf : sig f = none) {e : Expr} (hd : e.Declared sig) :
@@ -295,13 +368,8 @@ theorem MergeSpec.WidthOk.update_of_fresh {sig : Signature} {f : FnName} {dc : F
     refine ⟨hw.1, hw.2.1.update_of_fresh hf hd.1, ?_⟩
     apply Expr.WidthOkList.agree res ?_ hw.2.2
     intro g hg
-    have hdecl : sig g ≠ none := by
-      obtain ⟨e, he, hg⟩ := Expr.mem_fnsList hg
-      exact hd.2 e he g hg
-    have hgf : g ≠ f := by
-      intro he
-      exact hdecl (by rw [he]; exact hf)
-    exact (Function.update_of_ne hgf _ _).symm
+    obtain ⟨e, he, hg⟩ := Expr.mem_fnsList hg
+    exact (hd.2 e he).agrees_update hf g hg
 
 theorem Signature.MergesWidthOk.sigBind {sig : Signature} {c : Cmd}
     (hmw : sig.MergesWidthOk) (hmd : SigMergeDeclared sig)
@@ -322,35 +390,40 @@ theorem Signature.MergesWidthOk.sigBind {sig : Signature} {c : Cmd}
 theorem ProgramStep.wf_storeOk {db d : Database} {p : Program} (h : ProgramStep db p d)
     (hw : db.WF) (hs : db.StoreOk) (hmw : db.sig.MergesWidthOk)
     (hmd : SigMergeDeclared db.sig) (hpw : p.WidthOk db.sig)
-    (hpf : p.DeclsFresh db.sig) (hpd : p.MergeDeclared db.sig) : d.WF ∧ d.StoreOk := by
+    (hpf : p.DeclsFresh db.sig) (hpd : p.MergeDeclared db.sig)
+    (hq : db.RulesSafe) (hpq : p.QueriesSafe) : d.WF ∧ d.StoreOk := by
   induction h with
   | nil => exact ⟨hw, hs⟩
   | @cons db mid d c cs hc hrest ih =>
     have hmw' := hmw.sigBind hmd hpw.1 hpf.1
-    exact ih (CmdStep.wf hw hs hpf.1 hmw' hc) (CmdStep.storeOk hs hpf.1 hmw' hc)
+    exact ih (CmdStep.wf hw hs hq hpf.1 hmw' hc) (CmdStep.storeOk hs hq hpf.1 hmw' hc)
       (by rw [hc.sig]; exact hmw') (cmdStep_sigMergeDeclared hmd hpd.1 hc)
       (by rw [hc.sig]; exact hpw.2) (by rw [hc.sig]; exact hpf.2)
-      (by rw [hc.sig]; exact hpd.2)
+      (by rw [hc.sig]; exact hpd.2) (hc.rulesSafe hq hpq.1) hpq.2
 
 theorem ProgramStep.wf {db d : Database} {p : Program} (h : ProgramStep db p d)
     (hw : db.WF) (hs : db.StoreOk) (hmw : db.sig.MergesWidthOk)
     (hmd : SigMergeDeclared db.sig) (hpw : p.WidthOk db.sig)
-    (hpf : p.DeclsFresh db.sig) (hpd : p.MergeDeclared db.sig) : d.WF :=
-  (h.wf_storeOk hw hs hmw hmd hpw hpf hpd).1
+    (hpf : p.DeclsFresh db.sig) (hpd : p.MergeDeclared db.sig)
+    (hq : db.RulesSafe) (hpq : p.QueriesSafe) : d.WF :=
+  (h.wf_storeOk hw hs hmw hmd hpw hpf hpd hq hpq).1
 
 theorem ProgramStep.storeOk {db d : Database} {p : Program} (h : ProgramStep db p d)
     (hw : db.WF) (hs : db.StoreOk) (hmw : db.sig.MergesWidthOk)
     (hmd : SigMergeDeclared db.sig) (hpw : p.WidthOk db.sig)
-    (hpf : p.DeclsFresh db.sig) (hpd : p.MergeDeclared db.sig) : d.StoreOk :=
-  (h.wf_storeOk hw hs hmw hmd hpw hpf hpd).2
+    (hpf : p.DeclsFresh db.sig) (hpd : p.MergeDeclared db.sig)
+    (hq : db.RulesSafe) (hpq : p.QueriesSafe) : d.StoreOk :=
+  (h.wf_storeOk hw hs hmw hmd hpw hpf hpd hq hpq).2
 
 theorem reachable_wf_storeOk {p : Program} {d : Database}
     (hw : p.WidthOk Database.empty.sig) (hf : p.DeclsFresh Database.empty.sig)
-    (hd : p.MergeDeclared Database.empty.sig) (h : ProgramStep Database.empty p d) :
+    (hd : p.MergeDeclared Database.empty.sig) (hq : p.QueriesSafe)
+    (h : ProgramStep Database.empty p d) :
     d.WF ∧ d.StoreOk := by
   exact h.wf_storeOk Database.WF.empty Database.StoreOk.empty
     (by simp [Signature.MergesWidthOk, Database.empty])
     (by simp [SigMergeDeclared, Database.empty]) hw hf hd
+    (by simp [Database.RulesSafe, Database.empty]) hq
 
 /-! ### `DeclaredTerms` over the step relations
 
@@ -368,8 +441,8 @@ theorem MergeValues.declaredTerms {db d : Database} {decl : FnDecl} {old new vs 
     (hspec : ∀ ms, decl.merge = some ms → ms.WidthOk decl.outArity db.sig) :
     d.DeclaredTerms ∧ ∀ t ∈ vs, Term.DeclaredTerm d.sig t := by
   cases h with
-  | unchanged => exact ⟨hdt, fun t ht => Database.declaredTerm_of_mem hw hdt (ho t ht)⟩
-  | @changed post vs ovs nvs body res hm _ hb hr =>
+  | @eval post vs ovs nvs body res hm hb =>
+    obtain ⟨hb, hr⟩ := evalMerge_eq_some.mp hb
     have hw0 := hw.setEnv (σ := mergeEnv ovs nvs old new)
       (fun b hb => (mem_mergeEnv hb).elim (ho b.2) (hn b.2))
     have hdt0 : ({ db with env := mergeEnv ovs nvs old new } : Database).DeclaredTerms := by
@@ -386,37 +459,41 @@ theorem mergeStep_declaredTerms {db db' : Database} (hwf : db.WF) (hs : db.Store
     (hmw : db.sig.MergesWidthOk) (h : MergeStep db db') : db'.DeclaredTerms := by
   cases h with
   | @collide d old new decl vs hold hnew _ _ hd _ hv =>
+    have hov := hs.entry_valid hold
+    have hnv := hs.entry_valid hnew
     have hc0 : ((db.eraseEntry old).eraseEntry new).terms ⊆ db.terms :=
       (Database.terms_eraseEntry_subset (row := new) (fun t ht =>
-        Database.mem_terms_eraseEntry_of_value hold.1 (hnew.1.column_values t ht)
+        Database.mem_terms_eraseEntry_of_value hov (hnv.column_values t ht)
           (hs.columns new hnew t ht))).trans
         (Database.terms_eraseEntry_subset (hs.columns old hold))
-    have hw0 := (hwf.eraseEntry hs old hold.1).eraseEntry
-      (hs.eraseEntry old hold.1) new hnew.1
+    have hw0 := (hwf.eraseEntry hs old hov).eraseEntry
+      (hs.eraseEntry old hov) new hnv
     have hdt0 : ((db.eraseEntry old).eraseEntry new).DeclaredTerms :=
       fun f args ht => hdt f args (hc0 ht)
     have keep : ∀ t, t.IsValue db.sig → t ∈ db.terms →
         t ∈ ((db.eraseEntry old).eraseEntry new).terms := fun t ht hm =>
-      Database.mem_terms_eraseEntry_of_value hnew.1 ht
-        (Database.mem_terms_eraseEntry_of_value hold.1 ht hm)
+      Database.mem_terms_eraseEntry_of_value hnv ht
+        (Database.mem_terms_eraseEntry_of_value hov ht hm)
     obtain ⟨hddt, hvals⟩ := hv.declaredTerms hw0 hdt0
-      (fun t ht => keep t (hold.1.output_values t ht)
+      (fun t ht => keep t (hov.output_values t ht)
         (hs.columns old hold t (List.mem_append_right _ ht)))
-      (fun t ht => keep t (hnew.1.output_values t ht)
+      (fun t ht => keep t (hnv.output_values t ht)
         (hs.columns new hnew t (List.mem_append_right _ ht)))
       (hmw old.name decl · hd)
     have hlen : vs.length = old.value.length := by
-      obtain ⟨dc, hdc, _, _, hlen, _⟩ := hold.1
+      obtain ⟨dc, hdc, _, _, hlen, _⟩ := hov
       have he : dc = decl := Option.some.inj (hdc.symm.trans hd)
       subst dc
       cases hv with
-      | unchanged => rfl
-      | changed hm _ _ hr =>
-        exact (Expr.evalList_length hr).trans ((hmw _ _ _ hd hm).1.trans hlen.symm)
+      | eval hm hb =>
+        obtain ⟨_, hr⟩ := evalMerge_eq_some.mp hb
+        exact (Expr.evalList_length hr).trans
+          ((hmw _ _ _ hd hm).1.trans hlen.symm)
     have hrow : (Entry.mk old.name old.key vs).Valid d.sig := by
       rw [hv.sig]
-      exact hold.1.with_value hlen (by
-        simpa only [hv.sig, Database.eraseEntry_sig] using hv.output_values hold.1.output_values)
+      exact hov.with_value hlen (by
+        simpa only [hv.sig, Database.eraseEntry_sig] using
+          hv.output_values hov.output_values hnv.output_values)
     apply Database.declaredTerms_putEntry hddt hrow
     intro t ht
     rcases List.mem_append.mp ht with ht | ht
@@ -473,7 +550,8 @@ then `mergeClosure_declaredTerms`; what makes the induction go through is that a
 neither `sig` nor `rules`, so `Database.RulesOk` and the two signature-level checks hold
 verbatim at every intermediate state. -/
 theorem runReach_declaredTerms {R : RulesetName} {db d : Database} (hwf : db.WF)
-    (hs : db.StoreOk) (hdt : db.DeclaredTerms) (hr : db.RulesOk) (hml : db.sig.MergesLegal)
+    (hs : db.StoreOk) (hq : db.RulesSafe) (hdt : db.DeclaredTerms)
+    (hr : db.RulesOk) (hml : db.sig.MergesLegal)
     (hmw : db.sig.MergesWidthOk) (h : Relation.ReflTransGen (RunStep R) db d) :
     d.DeclaredTerms := by
   induction h with
@@ -481,15 +559,16 @@ theorem runReach_declaredTerms {R : RulesetName} {db d : Database} (hwf : db.WF)
   | @tail x y hcl hstep ih =>
     have hxs := RunReach.sig hcl
     have hxr := (RunReach.envRules hcl).2
-    have hxw := RunReach.wf hwf hs hmw hcl
-    have hxs0 := RunReach.storeOk hs hmw hcl
+    have hxw := RunReach.wf hwf hs hq hmw hcl
+    have hxs0 := RunReach.storeOk hs hq hmw hcl
     have hro : x.RulesOk := fun r hr' => hxs ▸ hr r (hxr ▸ hr')
-    exact mergeClosure_declaredTerms (RunRules.wf hxw) (RunRules.storeOk hxs0)
+    exact mergeClosure_declaredTerms (RunRules.wf hxw)
+      (RunRules.storeOk hxs0 (by simpa only [Database.RulesSafe, hxr] using hq))
       (runRules_declaredTerms hxw ih hro)
       (by simpa only [RunRules.sig, hxs] using hml)
       (by simpa only [RunRules.sig, hxs] using hmw) hstep.1
 
-theorem cmdReach_declaredTerms {db d : Database} (hwf : db.WF) (hs : db.StoreOk)
+theorem cmdReach_declaredTerms {db d : Database} (hwf : db.WF) (hs : db.StoreOk) (hq : db.RulesSafe)
     (hdt : db.DeclaredTerms)
     (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig)
     (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
@@ -502,23 +581,23 @@ theorem cmdReach_declaredTerms {db d : Database} (hwf : db.WF) (hs : db.StoreOk)
     exact hdt g cs hmem
   | run R => subst h; exact runRules_declaredTerms hwf hdt hr
   | saturate R =>
-    exact runReach_declaredTerms hwf hs hdt hr hml hmw (show SaturateReach R db d from h).reach
+    exact runReach_declaredTerms hwf hs hq hdt hr hml hmw (show SaturateReach R db d from h).reach
   | decl f dc => subst h; exact decl_declaredTerms hdt hfresh
   | check q => rw [h.2]; exact hdt
 
 /-- The two signature-level invariants are read at the signature the command *installs*, as
 `Cmd.WidthOk` and `Cmd.MergeDeclared` are: that is the signature the merge phase runs
 against. -/
-theorem cmdStep_declaredTerms {db d : Database} (hwf : db.WF) (hs : db.StoreOk)
+theorem cmdStep_declaredTerms {db d : Database} (hwf : db.WF) (hs : db.StoreOk) (hq : db.RulesSafe)
     (hdt : db.DeclaredTerms)
     (hr : db.RulesOk) {c : Cmd} (hw : c.WidthOk db.sig)
     (hfresh : c.DeclFresh db.sig) (hml : (c.sigBind db.sig).MergesLegal)
     (hmw : (c.sigBind db.sig).MergesWidthOk) (h : CmdStep db c d) : d.DeclaredTerms := by
   obtain ⟨x, hx, hcl⟩ := h.reach
   have hxs : x.sig = c.sigBind db.sig := cmdReach_sig hx
-  exact mergeClosure_declaredTerms (cmdReach_wf' hwf hs hmw hx)
-    (cmdReach_storeOk hs hfresh hmw hx)
-    (cmdReach_declaredTerms hwf hs hdt hr hw hfresh hml hmw hx)
+  exact mergeClosure_declaredTerms (cmdReach_wf' hwf hs hq hmw hx)
+    (cmdReach_storeOk hs hq hfresh hmw hx)
+    (cmdReach_declaredTerms hwf hs hq hdt hr hw hfresh hml hmw hx)
     (by rw [hxs]; exact hml) (by rw [hxs]; exact hmw) hcl
 
 /-- What `Program.WidthOk` and `Program.DeclsFresh` cannot say, checked at the state each
@@ -530,7 +609,7 @@ under, and `Cmd.WidthOk` reaches a `:merge` only at the declaration that install
 def Database.RunLegal : Database → Program → Prop
   | _, [] => True
   | db, c :: cs =>
-      db.RulesOk ∧ Signature.MergesLegal (c.sigBind db.sig) ∧
+      (db.RulesOk ∧ db.RulesSafe) ∧ Signature.MergesLegal (c.sigBind db.sig) ∧
         Signature.MergesWidthOk (c.sigBind db.sig) ∧
         ∀ d, CmdStep db c d → Database.RunLegal d cs
 
@@ -546,9 +625,9 @@ theorem programStep_declaredTerms {db db' : Database} {p : Program}
   | @cons db x d' c cs hstep _ ih =>
     intro hwf hs hdt hw hfresh hl
     have hxs : x.sig = c.sigBind db.sig := CmdStep.sig hstep
-    exact ih (CmdStep.wf hwf hs hfresh.1 hl.2.2.1 hstep)
-      (CmdStep.storeOk hs hfresh.1 hl.2.2.1 hstep)
-      (cmdStep_declaredTerms hwf hs hdt hl.1 hw.1 hfresh.1 hl.2.1 hl.2.2.1 hstep)
+    exact ih (CmdStep.wf hwf hs hl.1.2 hfresh.1 hl.2.2.1 hstep)
+      (CmdStep.storeOk hs hl.1.2 hfresh.1 hl.2.2.1 hstep)
+      (cmdStep_declaredTerms hwf hs hl.1.2 hdt hl.1.1 hw.1 hfresh.1 hl.2.1 hl.2.2.1 hstep)
       (by rw [hxs]; exact hw.2) (by rw [hxs]; exact hfresh.2)
       (hl.2.2.2 x hstep)
 

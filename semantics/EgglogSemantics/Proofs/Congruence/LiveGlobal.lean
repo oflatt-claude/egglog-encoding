@@ -17,7 +17,9 @@ theorem encodedRule_firing_ufTotal {P : Program} (hp : P.Fragment) {r : Rule}
     (hρ : ValidQuerySubst d (encodeRule r).query ρ)
     (hfire : evalLocalActions d (encodeRule r).actions ρ = some e) : UFTotal e := by
   apply encodeLocalActions_ufTotal_of_run (as := r.actions.map leaderAction)
-    h.wf hu hρ.mem_terms ?_ ?_ h.state.uf hfire
+    h.wf h.storeOk.envValues hu hρ.mem_terms ?_ ?_ ?_ h.state.uf hfire
+  · exact fun b hb => (hρ.mem_values h.storeOk
+      (encodeRule_querySafe r (Program.OrderingFree.of_mem hp.noMin hrule).1) b hb).2
   · intro a ha x hx
     obtain ⟨original, horiginal, rfl⟩ := List.mem_map.mp ha
     rw [leaderAction_exprs] at hx

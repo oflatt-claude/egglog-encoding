@@ -50,7 +50,7 @@ theorem Expr.eval_ctorsIn {P : Program} {sig : Signature} {σ : Env}
   | .lit _, _, _, he => by
       obtain rfl : _ = _ := Option.some.inj he
       exact Term.ctorsIn_lit
-  | .var v, t, _, he => hσ v t (Option.filter_eq_some_iff.mp he).1
+  | .var v, t, _, he => hσ v t he
   | .app f args, t, hc, he => by
       by_cases hcc : sig.IsCtor f
       · rw [Expr.eval_app_ctor hcc] at he
@@ -71,6 +71,10 @@ theorem Expr.eval_ctorsIn {P : Program} {sig : Signature} {σ : Env}
           (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_append_left _ hk)) hx
       · exact Expr.eval_ctorsIn hσ b
           (fun fk hk => hc fk (by rw [Expr.ctors]; exact List.mem_append_right _ hk)) hy
+  | .ite lhs rhs yes no, t, hc, he => by
+      exact (Expr.eval_ite_inv he).elim
+        (Expr.eval_ctorsIn hσ yes (fun fk hk => hc fk (by simp [Expr.ctors, hk])))
+        (Expr.eval_ctorsIn hσ no (fun fk hk => hc fk (by simp [Expr.ctors, hk])))
 
 @[inherit_doc Expr.eval_ctorsIn]
 theorem Expr.evalList_ctorsIn {P : Program} {sig : Signature} {σ : Env}
@@ -126,11 +130,15 @@ theorem Expr.evalAtom_ctorsIn {P : Program} {sig : Signature} {σ : Env}
     (hσ : ∀ v t, Env.lookup v σ = some t → Term.CtorsIn P t)
     (e : Expr) {t : Term} (hc : ∀ fk ∈ e.ctors, fk ∈ P.ctors)
     (he : e.evalAtom sig σ = some t) : Term.CtorsIn P t := by
-  cases e with
+  induction e using Expr.recExpr with
   | lit _ => cases Option.some.inj he; exact Term.ctorsIn_lit
-  | var v => exact hσ v t (Option.filter_eq_some_iff.mp he).1
-  | min a b => exact Expr.eval_ctorsIn hσ (.min a b) hc he
-  | app f args =>
+  | var v => exact hσ v t he
+  | min a b _ _ => exact Expr.eval_ctorsIn hσ (.min a b) hc he
+  | ite lhs rhs yes no _ _ ihyes ihno =>
+      exact (Expr.evalAtom_ite_inv he).elim
+        (ihyes (fun fk hk => hc fk (by simp [Expr.ctors, hk])))
+        (ihno (fun fk hk => hc fk (by simp [Expr.ctors, hk])))
+  | app f args _ =>
     obtain ⟨ts, hts, rfl⟩ := Expr.evalAtom_app_inv he
     refine Term.ctorsIn_app.mpr ⟨?_, ?_⟩
     · rw [Expr.evalList_length hts]

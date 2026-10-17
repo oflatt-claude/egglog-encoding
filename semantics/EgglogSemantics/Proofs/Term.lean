@@ -1,4 +1,4 @@
-import EgglogSemantics.Spec.Term
+import EgglogSemantics.Proofs.StoreInvariant
 import EgglogSemantics.Proofs.Syntax
 
 namespace Egglog

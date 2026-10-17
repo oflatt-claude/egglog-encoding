@@ -12,7 +12,7 @@ theorem mem_terms_of_validQuerySubst_entry {d : Database} (hd : d.Diag)
     ∃ ts us, Expr.evalList d.sig as σ = some ts ∧ Expr.evalList d.sig vs σ = some us ∧
       Term.app f (ts ++ us) ∈ d.terms := by
   have hm := hσ.matches_of_mem hp
-  cases hm with
+  cases hm using Matches.storedCases with
   | expr hw he hc =>
       obtain ⟨cols, hcols, heq⟩ := Expr.evalAtom_app_inv he
       subst heq
