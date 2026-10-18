@@ -102,6 +102,7 @@ impl GlobalRemover<'_> {
 
                     identity_vals: None,
                     internal_native_uf: false,
+                    internal_native_rebuild: false,
                 }));
             Arc::new(FuncType {
                 name: table_name,

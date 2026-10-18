@@ -1408,6 +1408,7 @@ impl TypeInfo {
             span: fdecl.span.clone(),
             identity_vals: fdecl.identity_vals,
             internal_native_uf: fdecl.internal_native_uf,
+            internal_native_rebuild: fdecl.internal_native_rebuild,
         })
     }
 
@@ -1466,6 +1467,7 @@ impl TypeInfo {
         schedule: &Schedule,
     ) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
+            Schedule::NativeRebuild(span) => ResolvedSchedule::NativeRebuild(span.clone()),
             Schedule::Repeat(span, times, schedule) => ResolvedSchedule::Repeat(
                 span.clone(),
                 *times,

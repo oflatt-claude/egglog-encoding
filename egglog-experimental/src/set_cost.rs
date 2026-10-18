@@ -171,6 +171,7 @@ impl Macro<Vec<Command>> for SetCostDeclarations {
                             identity_vals: None,
                             cost: None,
                             native_uf: false,
+                            native_rebuild: false,
                         });
                     }
                 }
@@ -201,6 +202,7 @@ fn generate_cost_table_commands_from_variants(variants: &[Variant]) -> Vec<Comma
                 identity_vals: None,
                 cost: None,
                 native_uf: false,
+                native_rebuild: false,
             }
         })
         .collect::<Vec<_>>()

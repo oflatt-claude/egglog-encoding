@@ -54,7 +54,7 @@ use std::{collections::HashMap, sync::Mutex};
 
 use egglog::{
     CommandOutput, UserDefinedCommand,
-    ast::{Command, Expr, Fact, Literal, ParseError},
+    ast::{Command, Expr, Fact, Literal, ParseError, Schedule},
     prelude::{Span, run_ruleset},
     scheduler::{Scheduler, SchedulerId},
     span,
@@ -265,6 +265,15 @@ impl ScheduleState {
                 };
                 Ok((vec![], report))
             }
+            "native-rebuild" if exprs.is_empty() => {
+                // Serialized encodings replay through this extended scheduler.
+                // Execute the core step directly and retain its changed report
+                // so an enclosing saturation reaches the maintenance fixed point.
+                let outputs = egraph.run_program(vec![Command::RunSchedule(
+                    Schedule::NativeRebuild(span.clone()),
+                )])?;
+                Ok(split_outputs(outputs))
+            }
             "saturate" => {
                 let mut all_outputs: Vec<CommandOutput> = vec![];
                 let mut report = RunReport::default();
@@ -352,20 +361,24 @@ impl ScheduleState {
             ) || egraph.has_command(head) =>
             {
                 let outputs = egraph.parse_and_run_program(None, &format!("{}", arg))?;
-                let mut report = RunReport::default();
-                let mut cmd_outputs = Vec::new();
-                for output in outputs {
-                    if let CommandOutput::RunSchedule(r) = output {
-                        report.union(r);
-                    } else {
-                        cmd_outputs.push(output);
-                    }
-                }
-                Ok((cmd_outputs, report))
+                Ok(split_outputs(outputs))
             }
             _ => err(),
         }
     }
+}
+
+fn split_outputs(outputs: Vec<CommandOutput>) -> (Vec<CommandOutput>, RunReport) {
+    let mut report = RunReport::default();
+    let mut command_outputs = Vec::new();
+    for output in outputs {
+        if let CommandOutput::RunSchedule(step) = output {
+            report.union(step);
+        } else {
+            command_outputs.push(output);
+        }
+    }
+    (command_outputs, report)
 }
 
 impl UserDefinedCommand for RunExtendedSchedule {

@@ -189,6 +189,7 @@ impl CommandMacro for LowerInjectivity {
                 identity_vals: None,
                 cost: None,
                 native_uf: false,
+                native_rebuild: false,
             });
         }
         commands.extend(rules);

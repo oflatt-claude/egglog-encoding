@@ -603,6 +603,7 @@ impl Parser {
                     let mut identity_vals = None;
                     let mut cost = None;
                     let mut native_uf = false;
+                    let mut native_rebuild = false;
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
                             (":no-merge", []) => {
@@ -682,6 +683,7 @@ impl Parser {
                             }
                             (":internal-cost", [c]) => cost = Some(c.expect_uint("cost")?),
                             (":internal-native-uf", []) => native_uf = true,
+                            (":internal-native-rebuild", []) => native_rebuild = true,
                             _ => return error!(span, "could not parse function options"),
                         }
                     }
@@ -705,6 +707,7 @@ impl Parser {
                         cost,
                         span,
                         native_uf,
+                        native_rebuild,
                     }]
                 }
                 _ => {
@@ -1205,6 +1208,7 @@ impl Parser {
         let (head, tail, span) = sexp.expect_call("schedule")?;
 
         Ok(match head {
+            "native-rebuild" if tail.is_empty() => Schedule::NativeRebuild(span),
             "saturate" => Schedule::Saturate(
                 span.clone(),
                 Box::new(Schedule::Sequence(

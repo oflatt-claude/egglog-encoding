@@ -781,6 +781,7 @@ pub fn add_function(
         identity_vals: None,
         cost: None,
         native_uf: false,
+        native_rebuild: false,
     }])
 }
 
