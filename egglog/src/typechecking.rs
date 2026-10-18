@@ -1409,6 +1409,7 @@ impl TypeInfo {
             identity_vals: fdecl.identity_vals,
             internal_native_uf: fdecl.internal_native_uf,
             internal_native_rebuild: fdecl.internal_native_rebuild,
+            internal_rebuild_proof: fdecl.internal_rebuild_proof.clone(),
         })
     }
 

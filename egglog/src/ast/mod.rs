@@ -239,6 +239,7 @@ where
                     cost: f.cost,
                     native_uf: f.internal_native_uf,
                     native_rebuild: f.internal_native_rebuild,
+                    rebuild_proof: f.internal_rebuild_proof.clone(),
                 },
             },
             GenericNCommand::Index {
@@ -889,6 +890,7 @@ where
         /// Native union-find storage with explained historical root links.
         native_uf: bool,
         native_rebuild: bool,
+        rebuild_proof: Option<String>,
     },
 
     /// Declare a named index over an existing function's columns.
@@ -1240,6 +1242,7 @@ where
                 cost,
                 native_uf,
                 native_rebuild,
+                rebuild_proof,
             } => {
                 write!(f, "(function {name} {schema}")?;
                 if let Some(merge) = &merge {
@@ -1264,6 +1267,9 @@ where
                 }
                 if *native_rebuild {
                     write!(f, " :internal-native-rebuild")?;
+                    if let Some(proof) = rebuild_proof {
+                        write!(f, " {proof}")?;
+                    }
                 }
                 if *native_uf {
                     write!(f, " :internal-native-uf")?;
@@ -1614,6 +1620,7 @@ where
     /// Use the native explained UF table for this internal function.
     pub internal_native_uf: bool,
     pub internal_native_rebuild: bool,
+    pub internal_rebuild_proof: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1722,6 +1729,7 @@ impl FunctionDecl {
             identity_vals: None,
             internal_native_uf: false,
             internal_native_rebuild: false,
+            internal_rebuild_proof: None,
         }
     }
 
@@ -1748,6 +1756,7 @@ impl FunctionDecl {
             identity_vals: None,
             internal_native_uf: false,
             internal_native_rebuild: false,
+            internal_rebuild_proof: None,
         }
     }
 }
@@ -1775,6 +1784,7 @@ where
             identity_vals: self.identity_vals,
             internal_native_uf: self.internal_native_uf,
             internal_native_rebuild: self.internal_native_rebuild,
+            internal_rebuild_proof: self.internal_rebuild_proof.clone(),
         }
     }
 }
@@ -2190,6 +2200,7 @@ where
                 cost,
                 native_uf,
                 native_rebuild,
+                rebuild_proof,
             } => GenericCommand::Function {
                 span,
                 name: fun(name),
@@ -2205,6 +2216,7 @@ where
                 cost,
                 native_uf,
                 native_rebuild,
+                rebuild_proof: rebuild_proof.map(&mut *fun),
             },
             GenericCommand::Index {
                 span,
@@ -2317,6 +2329,7 @@ where
                 cost,
                 native_uf,
                 native_rebuild,
+                rebuild_proof,
             } => GenericCommand::Function {
                 span,
                 name,
@@ -2329,6 +2342,7 @@ where
                 cost,
                 native_uf,
                 native_rebuild,
+                rebuild_proof,
             },
             GenericCommand::Rule { rule } => GenericCommand::Rule {
                 rule: rule.visit_exprs(f),
@@ -2474,6 +2488,7 @@ where
                 cost,
                 native_uf,
                 native_rebuild,
+                rebuild_proof,
             } => GenericCommand::Function {
                 span,
                 name,
@@ -2486,6 +2501,7 @@ where
                 cost,
                 native_uf,
                 native_rebuild,
+                rebuild_proof,
             },
             GenericCommand::Index {
                 span,

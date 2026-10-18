@@ -782,6 +782,7 @@ pub fn add_function(
         cost: None,
         native_uf: false,
         native_rebuild: false,
+        rebuild_proof: None,
     }])
 }
 
