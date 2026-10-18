@@ -101,6 +101,7 @@ impl GlobalRemover<'_> {
                     span: span.clone(),
 
                     identity_vals: None,
+                    internal_native_uf: false,
                 }));
             Arc::new(FuncType {
                 name: table_name,

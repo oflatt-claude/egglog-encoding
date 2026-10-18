@@ -602,6 +602,7 @@ impl Parser {
                     let mut unextractable = false;
                     let mut identity_vals = None;
                     let mut cost = None;
+                    let mut native_uf = false;
                     for (key, val) in self.parse_options(rest)? {
                         match (key, val) {
                             (":no-merge", []) => {
@@ -680,6 +681,7 @@ impl Parser {
                                     Some(k.expect_uint::<usize>("identity value column count")?)
                             }
                             (":internal-cost", [c]) => cost = Some(c.expect_uint("cost")?),
+                            (":internal-native-uf", []) => native_uf = true,
                             _ => return error!(span, "could not parse function options"),
                         }
                     }
@@ -702,6 +704,7 @@ impl Parser {
                         identity_vals,
                         cost,
                         span,
+                        native_uf,
                     }]
                 }
                 _ => {

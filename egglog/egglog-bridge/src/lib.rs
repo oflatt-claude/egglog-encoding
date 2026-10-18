@@ -39,6 +39,7 @@ use web_time::{Duration, Instant};
 const FRESH_ID_RESERVATION_SIZE: usize = 256;
 
 pub mod macros;
+mod native_uf;
 pub(crate) mod rule;
 #[cfg(test)]
 mod tests;
@@ -161,7 +162,7 @@ pub struct EGraph {
     /// table would (see [`MergeFn::fill_deps`]).
     // Avoid introducing another randomly seeded hash table: row iteration order
     // in proof extraction can depend on the seed sequence of existing maps.
-    external_write_deps: BTreeMap<ExternalFunctionId, String>,
+    external_write_deps: BTreeMap<ExternalFunctionId, Vec<String>>,
     /// Lowering data for the encoding's write primitives, keyed by the runtime
     /// id their call sites resolve to. See [`EGraph::mint_insert_plan`].
     ///
@@ -242,6 +243,7 @@ pub struct FunctionConfig {
 enum TableStorage {
     SortedWrites,
     Flat,
+    ExplainedUf(Option<(FunctionId, FunctionId)>),
 }
 
 impl EGraph {
@@ -603,7 +605,7 @@ impl EGraph {
             counter: self.id_counter,
             vals,
         }));
-        self.external_write_deps.insert(id, dep);
+        self.external_write_deps.insert(id, vec![dep]);
         self.mint_specs.insert(id, spec);
         id
     }
@@ -691,9 +693,14 @@ impl EGraph {
     /// The table an external function inserts into, for the merge dependency
     /// graph. `None` for a function that writes no table, or one whose table is
     /// not declared yet.
-    fn external_write_table(&self, func: ExternalFunctionId) -> Option<TableId> {
-        let name = self.external_write_deps.get(&func)?;
-        Some(self.action_registry.read().lookup_table(name)?.table)
+    fn external_write_tables(&self, func: ExternalFunctionId) -> Vec<TableId> {
+        let registry = self.action_registry.read();
+        self.external_write_deps
+            .get(&func)
+            .into_iter()
+            .flatten()
+            .filter_map(|name| registry.lookup_table(name).map(|action| action.table))
+            .collect()
     }
 
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
@@ -828,7 +835,8 @@ impl EGraph {
             true
         } else {
             assert!(
-                table.as_any().is::<SortedWritesTable>(),
+                table.as_any().is::<SortedWritesTable>()
+                    || table.as_any().is::<core_relations::ExplainedUfTable>(),
                 "function table uses an unknown storage implementation"
             );
             false
@@ -1105,6 +1113,10 @@ impl EGraph {
         let mut read_deps = IndexSet::<TableId>::new();
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
+        if let TableStorage::ExplainedUf(Some((sym, trans))) = storage {
+            write_deps.insert(self.funcs[sym].table);
+            write_deps.insert(self.funcs[trans].table);
+        }
         // A self-referential merge may only *write* back into its own table (the pre-seeded
         // write buffer handles that); *reading* self during its own merge is unsupported and would
         // otherwise panic deep inside merge execution.
@@ -1140,6 +1152,21 @@ impl EGraph {
                     write_deps.iter().copied(),
                 )
             }
+            TableStorage::ExplainedUf(proof_functions) => {
+                assert_eq!(n_args, 1);
+                assert_eq!(n_cols, 4);
+                assert!(!can_subsume);
+                let composer = proof_functions.map(|(sym, trans)| {
+                    Arc::new(native_uf::ProofComposer::new(self, sym, trans))
+                        as Arc<dyn core_relations::ReasonComposer>
+                });
+                self.db.add_table_named(
+                    core_relations::ExplainedUfTable::new(composer),
+                    name.clone(),
+                    read_deps.iter().copied(),
+                    write_deps.iter().copied(),
+                )
+            }
         };
         assert_eq!(
             assigned_table_id, table_id,
@@ -1153,7 +1180,9 @@ impl EGraph {
             // The fallback rebuild scheduler expects one bookkeeping rule per
             // function. Flat proof records are immutable, so give them an
             // inert rule instead of generating keyed remove/reinsert actions.
-            TableStorage::Flat => (Vec::new(), self.inert_rebuild_rule(res)),
+            TableStorage::Flat | TableStorage::ExplainedUf(_) => {
+                (Vec::new(), self.inert_rebuild_rule(res))
+            }
         };
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
@@ -1876,9 +1905,7 @@ impl MergeFn {
                 // A primitive that inserts rows writes its table just as a
                 // `set` on it would, and the merge must be ordered and
                 // buffered against that table the same way.
-                if let Some(table) = egraph.external_write_table(*id) {
-                    write_deps.insert(table);
-                }
+                write_deps.extend(egraph.external_write_tables(*id));
                 // Canonicalizing a constructor in a merge reads its view before
                 // inserting on a miss. Keep that view available and merge its
                 // pending rows before this callback, just like a Function lookup.

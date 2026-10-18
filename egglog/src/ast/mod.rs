@@ -237,6 +237,7 @@ where
                     unextractable: f.unextractable,
                     identity_vals: f.identity_vals,
                     cost: f.cost,
+                    native_uf: f.internal_native_uf,
                 },
             },
             GenericNCommand::Index {
@@ -876,6 +877,8 @@ where
         /// Extraction head cost, from `:internal-cost`. Used by view tables to
         /// record the user operation's cost for the extractor.
         cost: Option<DefaultCost>,
+        /// Native union-find storage with explained historical root links.
+        native_uf: bool,
     },
 
     /// Declare a named index over an existing function's columns.
@@ -1225,6 +1228,7 @@ where
                 unextractable,
                 identity_vals,
                 cost,
+                native_uf,
             } => {
                 write!(f, "(function {name} {schema}")?;
                 if let Some(merge) = &merge {
@@ -1246,6 +1250,9 @@ where
                 }
                 if let Some(c) = cost {
                     write!(f, " :internal-cost {c}")?;
+                }
+                if *native_uf {
+                    write!(f, " :internal-native-uf")?;
                 }
                 write!(f, ")")
             }
@@ -1590,6 +1597,8 @@ where
     /// columns — a merge that leaves them unchanged is skipped and the existing
     /// row kept. Only valid for merges that are idempotent on equal inputs.
     pub identity_vals: Option<usize>,
+    /// Use the native explained UF table for this internal function.
+    pub internal_native_uf: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1696,6 +1705,7 @@ impl FunctionDecl {
             role: FunctionRole::Ordinary,
             span,
             identity_vals: None,
+            internal_native_uf: false,
         }
     }
 
@@ -1720,6 +1730,7 @@ impl FunctionDecl {
             role: FunctionRole::Ordinary,
             span,
             identity_vals: None,
+            internal_native_uf: false,
         }
     }
 }
@@ -1745,6 +1756,7 @@ where
             role: self.role,
             span: self.span,
             identity_vals: self.identity_vals,
+            internal_native_uf: self.internal_native_uf,
         }
     }
 }
@@ -2158,6 +2170,7 @@ where
                 unextractable,
                 identity_vals,
                 cost,
+                native_uf,
             } => GenericCommand::Function {
                 span,
                 name: fun(name),
@@ -2171,6 +2184,7 @@ where
                 unextractable,
                 identity_vals,
                 cost,
+                native_uf,
             },
             GenericCommand::Index {
                 span,
@@ -2281,6 +2295,7 @@ where
                 unextractable,
                 identity_vals,
                 cost,
+                native_uf,
             } => GenericCommand::Function {
                 span,
                 name,
@@ -2291,6 +2306,7 @@ where
                 unextractable,
                 identity_vals,
                 cost,
+                native_uf,
             },
             GenericCommand::Rule { rule } => GenericCommand::Rule {
                 rule: rule.visit_exprs(f),
@@ -2434,6 +2450,7 @@ where
                 unextractable,
                 identity_vals,
                 cost,
+                native_uf,
             } => GenericCommand::Function {
                 span,
                 name,
@@ -2444,6 +2461,7 @@ where
                 unextractable,
                 identity_vals,
                 cost,
+                native_uf,
             },
             GenericCommand::Index {
                 span,

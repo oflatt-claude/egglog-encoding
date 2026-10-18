@@ -604,3 +604,42 @@ fn proof_testing_certifies_plain_extracts_and_delimits_each_proof() {
     );
     assert_eq!(graph.num_nodes(), before);
 }
+
+#[test]
+fn stale_views_follow_historical_union_find_chains_without_inserting_proofs() {
+    let source = "(datatype E (A) (B) (C))
+        (A) (B) (C) (let saved (C)) (let alias saved)
+        (function value () E :merge old) (set (value) (C))
+        (union (C) (B)) (union (B) (A))";
+    let encoded = EGraph::new_with_proofs()
+        .resolve_program(None, source)
+        .unwrap()
+        .into_iter()
+        // Exercise certification before maintenance updates the view rows.
+        .filter(|command| !matches!(command, egglog::ast::GenericCommand::RunSchedule(_)))
+        .map(|command| command.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut graph = EGraph::default();
+    let program = graph.parse_program(None, source).unwrap();
+    graph.set_proof_checking_program(program, true).unwrap();
+    graph.ensure_no_reserved_symbols(false);
+    graph.parse_and_run_program(None, &encoded).unwrap();
+
+    let mut terms = TermDag::default();
+    let a = terms.app("A".into(), vec![]);
+    let c = terms.app("C".into(), vec![]);
+    let saved = terms.app("saved".into(), vec![]);
+    let alias = terms.app("alias".into(), vec![]);
+    let value = terms.app("value".into(), vec![]);
+    let sort = graph.type_info().get_sort_by_name("E").unwrap().clone();
+    let before = graph.num_nodes();
+    for left in [c, saved, alias, value] {
+        let (store, proof) = graph
+            .prove_equal_terms(&terms, left, a, sort.clone())
+            .unwrap();
+        assert_eq!(store.term_dag().to_string(store.get(proof).lhs()), "(C)");
+        assert_eq!(store.term_dag().to_string(store.get(proof).rhs()), "(A)");
+        assert_eq!(graph.num_nodes(), before, "certification must not add rows");
+    }
+}

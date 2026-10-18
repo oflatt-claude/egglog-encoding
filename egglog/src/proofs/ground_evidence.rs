@@ -55,8 +55,8 @@ impl Proofs {
         let mut extractor = RootExtractor::new();
         let mut imported = HashMap::default();
         for node in &nodes {
-            if let Some(row) = node.row {
-                for value in once(row.proof).chain(row.to_leader) {
+            if let Some(row) = &node.row {
+                for value in once(row.proof).chain(row.to_leader.iter().copied()) {
                     if imported.contains_key(&value) {
                         continue;
                     }
@@ -101,7 +101,11 @@ impl Proofs {
                 row: node.row.map(|row| Row {
                     kind: row.kind,
                     proof: conclusions[&imported[&row.proof]],
-                    to_leader: row.to_leader.map(|value| conclusions[&imported[&value]]),
+                    to_leader: row
+                        .to_leader
+                        .into_iter()
+                        .map(|value| conclusions[&imported[&value]])
+                        .collect(),
                 }),
             })
             .collect();

@@ -1407,6 +1407,7 @@ impl TypeInfo {
             role: fdecl.role,
             span: fdecl.span.clone(),
             identity_vals: fdecl.identity_vals,
+            internal_native_uf: fdecl.internal_native_uf,
         })
     }
 

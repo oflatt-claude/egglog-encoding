@@ -188,6 +188,7 @@ impl CommandMacro for LowerInjectivity {
                 unextractable: true,
                 identity_vals: None,
                 cost: None,
+                native_uf: false,
             });
         }
         commands.extend(rules);

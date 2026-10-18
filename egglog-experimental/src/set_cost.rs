@@ -170,6 +170,7 @@ impl Macro<Vec<Command>> for SetCostDeclarations {
                             unextractable: false,
                             identity_vals: None,
                             cost: None,
+                            native_uf: false,
                         });
                     }
                 }
@@ -199,6 +200,7 @@ fn generate_cost_table_commands_from_variants(variants: &[Variant]) -> Vec<Comma
                 unextractable: false,
                 identity_vals: None,
                 cost: None,
+                native_uf: false,
             }
         })
         .collect::<Vec<_>>()

@@ -26,13 +26,13 @@ pub(super) enum RowKind {
 
 /// Existing row evidence and its optional connection to the current leader.
 /// `P` is a stored proof value before import and a raw equality afterwards.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct Row<P = Value> {
     pub(super) kind: RowKind,
     /// Proof of this view row's equality.
     pub(super) proof: P,
-    /// Existing proof from the view representative to its current leader.
-    pub(super) to_leader: Option<P>,
+    /// Existing historical edges from the view representative to its leader.
+    pub(super) to_leader: Vec<P>,
 }
 
 /// The lookup result for one node of the input typed DAG.
@@ -416,13 +416,7 @@ fn canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Result<Value, Err
     if sort.is_eq_container_sort() {
         egraph
             .read(|mut state| {
-                rebuild_container_value_rec(
-                    &mut state,
-                    sort,
-                    value,
-                    &egraph.proof_state.uf_parent,
-                    true,
-                )
+                rebuild_container_value_rec(&mut state, sort, value, &egraph.proof_state.uf_parent)
             })
             .ok_or_else(|| fail("could not canonicalize container value"))
     } else {
@@ -430,17 +424,18 @@ fn canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Result<Value, Err
     }
 }
 
-/// Read the union-find proof connecting a view's output to `leader`.
-/// Returns `None` when the values already agree or `sort` is not an equality sort.
-/// Otherwise errors if the stored edge is missing or ends at a different value.
+/// Read the historical union-find proofs connecting a view's output to `leader`.
+/// Native UF links remain immutable when their former roots merge again, so a
+/// stale view can require several edges. Import their proofs without composing
+/// new e-graph records: ground certification must remain read-only.
 fn to_leader(
     egraph: &EGraph,
-    raw: Value,
+    mut raw: Value,
     leader: Value,
     sort: &ArcSort,
-) -> Result<Option<Value>, Error> {
+) -> Result<Vec<Value>, Error> {
     if raw == leader || !sort.is_eq_sort() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let name = egraph
         .proof_state
@@ -448,14 +443,20 @@ fn to_leader(
         .get(sort.name())
         .ok_or_else(|| fail("missing union-find proof table"))?;
     let table = &egraph.functions[name];
-    let row = egraph
-        .backend
-        .lookup_row(table.backend_id, &[raw])
-        .ok_or_else(|| fail("missing equality to the leader"))?;
-    if row[1] != leader {
-        return Err(fail("union proof does not reach the leader"));
+    let mut proofs = Vec::new();
+    let mut seen = HashSet::default();
+    while raw != leader {
+        if !seen.insert(raw) {
+            return Err(fail("union proof does not reach the leader"));
+        }
+        let row = egraph
+            .backend
+            .lookup_row(table.backend_id, &[raw])
+            .ok_or_else(|| fail("missing equality to the leader"))?;
+        proofs.push(row[2]);
+        raw = row[1];
     }
-    Ok(Some(row[2]))
+    Ok(proofs)
 }
 
 /// Evidence for a typed node. Only containers may wait for a parent's witness.
@@ -552,30 +553,31 @@ impl GroundProofs<'_> {
                 }
             }
             TypedTerm::App(ResolvedCall::Func(_), children) => {
-                let proof = if let Some(row) = self.nodes[id].row {
-                    match row.kind {
+                let proof = if let Some(row) = &self.nodes[id].row {
+                    let (kind, row_proof) = (row.kind, row.proof);
+                    match kind {
                         RowKind::Constructor => {
-                            let mut proof = row.proof;
+                            let mut proof = row_proof;
                             for (index, child) in children.into_iter().enumerate() {
-                                let witness = self.proofs.project(row.proof, index);
+                                let witness = self.proofs.project(row_proof, index);
                                 let child = self.finish(child, Some(witness))?;
                                 let back = self.proofs.sym(child);
                                 proof = self.proofs.congr(proof, index, back);
                             }
                             self.proofs.sym(proof)
                         }
-                        RowKind::Output(column) => self.proofs.project(row.proof, column),
+                        RowKind::Output(column) => self.proofs.project(row_proof, column),
                         RowKind::Global => {
                             let source = self.globals[global_name(self.terms, &children)?];
-                            if row.proof.rhs == source {
-                                self.proofs.sym(row.proof)
-                            } else if row.proof.lhs == source {
-                                let back = self.proofs.sym(row.proof);
-                                self.proofs.trans(row.proof, back)
+                            if row_proof.rhs == source {
+                                self.proofs.sym(row_proof)
+                            } else if row_proof.lhs == source {
+                                let back = self.proofs.sym(row_proof);
+                                self.proofs.trans(row_proof, back)
                             } else {
-                                let evidence = self.proofs.dependencies(&[row.proof]);
+                                let evidence = self.proofs.dependencies(&[row_proof]);
                                 self.proofs
-                                    .equality(source, row.proof.lhs, &evidence)
+                                    .equality(source, row_proof.lhs, &evidence)
                                     .ok_or_else(|| fail("global view has no source connector"))?
                             }
                         }
@@ -588,11 +590,13 @@ impl GroundProofs<'_> {
             }
             _ => return Err(fail("unsupported ground term")),
         };
-        if let Some(edge) = self.nodes[id].row.and_then(|row| row.to_leader) {
-            let GroundProof::Proof(proof) = result else {
-                unreachable!("only view rows carry union-find edges")
-            };
-            result = GroundProof::Proof(self.proofs.trans(proof, edge));
+        if let Some(row) = &self.nodes[id].row {
+            for &edge in &row.to_leader {
+                let GroundProof::Proof(proof) = result else {
+                    unreachable!("only view rows carry union-find edges")
+                };
+                result = GroundProof::Proof(self.proofs.trans(proof, edge));
+            }
         }
         self.memo[id] = Some(result.clone());
         Ok(result)
