@@ -205,3 +205,34 @@ fn parallel_publishers_are_committed_in_timestamp_order() {
         }
     }
 }
+
+#[test]
+fn parallel_read_compression_keeps_historical_explanations() {
+    empty_execution_state!(state);
+    let mut uf = ExplainedUfTable::new(None);
+    for i in (1..=1024).rev() {
+        uf.new_buffer().stage_insert(&[v(i), v(i - 1), v(i), v(0)]);
+    }
+    uf.merge(&mut state);
+    let old_path = uf.explain_to(v(1024), v(512)).unwrap();
+    let cursor = uf.cursor();
+    std::thread::scope(|scope| {
+        for _ in 0..12 {
+            let uf = &uf;
+            scope.spawn(move || {
+                for value in (0..=1024).rev() {
+                    assert_eq!(uf.find(v(value)), v(0));
+                }
+            });
+        }
+    });
+    assert_eq!(uf.cursor(), cursor, "compression publishes no equality");
+    assert_eq!(uf.explain_to(v(1024), v(512)).unwrap(), old_path);
+    for (node, value) in uf.values.iter().enumerate() {
+        assert_eq!(
+            uf.values[uf.parents[node].load(Ordering::Relaxed)],
+            v(0),
+            "{value:?}"
+        );
+    }
+}
