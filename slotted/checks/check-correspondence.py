@@ -51,11 +51,11 @@ def main():
     for ref in refs:
         corr = syntax.read_correspondence(ref)
         spec = syntax.read_language(ref.with_suffix(".egg"))
-        missing = sorted({t for _, t, _ in corr.values() if t and t not in tags})
+        missing = sorted({t for t, _ in corr.values() if t and t not in tags})
         # an `=payload` operator has no tag, so the oracle must carry it as an
         # untagged variant -- otherwise the harness is writing a bare payload the
         # oracle would read as a tag
-        payload_ops = sorted(op for op, (_, t, _) in corr.items() if t is None)
+        payload_ops = sorted(op for op, (t, _) in corr.items() if t is None)
         note = f", payload ops {payload_ops}" if payload_ops else ""
         if not untagged and payload_ops:
             missing.append("(the oracle has no untagged variant to hold a payload)")

@@ -20,7 +20,7 @@ emits invariant rules, and `query`/`rewrite` lower matching and actions. Its out
 is ordinary egglog; the core parser and evaluator have no slotted macro mechanism.
 The differential tests and paper evaluation both run this Rust compiler and runtime.
 
-`slotted/LANGUAGE.md` is the source language a person writes. This file is the
+[`slotted/LANGUAGE.md`](../../../slotted/LANGUAGE.md) describes the source language a person writes. This file is the
 level below it: what that language compiles *to*, and why each table exists.
 
 The running example is:
@@ -1207,13 +1207,18 @@ partner, and timing baseline:
 Both commands use the same generated programs and rewrite budgets:
 
 ```bash
-python3 slotted/eval.py array --params 0
-python3 slotted/check.py array --params 0
+python3 slotted/eval.py array
+python3 slotted/check.py array
 python3 slotted/check.py sdql --kernel mmm_sum --phase 1st
 python3 slotted/check.py logic
 ```
 
 Omitting the study selects all array, SDQL, and first-order logic workloads.
+The array suite fixes the paper's Figure 8 sweep at 0–10 additional function
+parameters, four functions, two array dimensions, and six rewrite iterations;
+the [artifact runner](https://github.com/memoryleak47/slotted-egraphs-artifact/blob/83f2e5b/functional-array-language/run.py#L100-L106)
+uses the same parameter range. These are workload sizes, not random seeds.
+The SDQL suite selects Table 1's ten kernel/phase combinations.
 `--rounds` overrides rewrite iterations, including an explicit zero. The default
 budgets come from the paper's artifact or the logic fixture. Unsupported nested
 patterns are reported explicitly; supported treatments still run and must pass.
@@ -1269,6 +1274,13 @@ and isomorphism have work limits rather than a wall-clock timeout, so correctnes
 checks can take longer than the timed runs. `--group-cap` on `check.py` controls
 reference symmetry enumeration and has factorial cost. Graph collection stops at
 the requested rewrite budget; it does not execute an extra round to probe saturation.
+
+The full array sweep includes graphs beyond the default 10-slot export cap:
+N=6–10 cannot complete their required isomorphism checks at that cap, even when
+their goals and raw counts agree. `check.py array` reports those comparisons as
+incomplete and exits nonzero. Raising the cap permits factorial enumeration;
+it is not a practical way to check every large case. This reference-export limit
+does not affect the timing runner.
 
 Three things had to
 be made the same, each established on a minimal case the harness keeps:
@@ -1338,7 +1350,7 @@ entire historical implementation.
 **Nested compatibility.** To compare exact graphs with the nested matcher, run:
 
 ```sh
-python3 slotted/check.py array --params 0
+python3 slotted/check.py array
 ```
 
 The compiler emits `nested-atom` instead of `atom` for rewrite patterns. This adds

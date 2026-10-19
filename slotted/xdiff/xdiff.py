@@ -36,7 +36,7 @@ EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
 XMULTI = ROOT / "slotted" / "xmulti"
 
 
-BINOPS = ["add", "f", "g", "h", "k", "sub", "sub2"]
+BINOPS = ["Add", "F", "G", "H", "K", "Sub", "Sub2"]
 
 # Permutations tried per case in the order-independence check. Each costs a full
 # saturation on both sides, so this is the main knob on runtime.
@@ -99,7 +99,7 @@ SHARE_PROB = float(os.environ.get("XDIFF_SHARE", "0"))
 USEBIND_PROB = float(os.environ.get("XDIFF_USEBIND", "0"))
 
 # ---------------------------------------------------------------- neutral terms
-# term := ('var', n) | ('null',) | (op, t1, t2) | ('lam', ('var', n), body)
+# term := ('var', n) | ('Null',) | (ctor, t1, t2) | ('Lam', ('var', n), body)
 #
 # The language is `slotted/languages/toy.egg`, one constructor per
 # operator, with `toy.ref` beside it saying what the reference calls each one. Nothing
@@ -110,9 +110,7 @@ LANG = syntax.language(LANG_DIR / "toy.egg", LANG_DIR / "toy.ref")
 
 # `BINOPS` is what generated terms are built from, so it must be every operator that
 # takes two children and binds neither -- read off the language rather than restated.
-# `op == o.name` skips the constructor aliases `language()` adds, so this compares
-# operator names with operator names.
-assert sorted(op for op, o in LANG.ops.items() if op == o.name and len(o.kid_cols) == 2 and not o.binders) == BINOPS, (
+assert sorted(op for op, o in LANG.ops.items() if len(o.kid_cols) == 2 and not o.binders) == BINOPS, (
     f"BINOPS and toy.egg disagree: {BINOPS}"
 )
 
@@ -128,7 +126,7 @@ def swap_slots(t, s1, s2):
     """`t` with slots `s1` and `s2` exchanged."""
     if t[0] == "var":
         return ("var", s2 if t[1] == s1 else s1 if t[1] == s2 else t[1])
-    if t[0] in ("null", "num"):
+    if t[0] in ("Null", "Num"):
         return t
     return (t[0], *(swap_slots(x, s1, s2) for x in t[1:]))
 
@@ -224,7 +222,9 @@ class Case:
             if action and len(action) == 2:
                 out.append(f"rhs {action[0]} {rhs_text(action[1])}")
             elif action:
-                out.append("action {} {} {} {}".format(*action))
+                root, ctor, a, b = action
+                tag = "=" if ctor == "=" else LANG[ctor].ref
+                out.append(f"action {root} {tag} {a} {b}")
         return driver.reference_spec(LANG, self.rounds, self.terms, self.unions, out, self.probes)
 
 
@@ -266,7 +266,7 @@ def _child(c):
     the same spelling the oracle's `atom` line uses for one.
     """
     if c.startswith("#"):
-        return ("cls", ("num", int(c[1:])))
+        return ("cls", ("Num", int(c[1:])))
     return ("sl", c) if c.startswith("$") else ("pv", c)
 
 
@@ -414,8 +414,8 @@ def check_case(case, verbose=False, stats=None):
 V0, V1, V2 = ("var", 0), ("var", 1), ("var", 2)
 # A compound term whose only slot is V0, for the top-level positions
 # where a bare leaf would lose its slot (see check_encodable).
-LEAF0 = ("sub", V0, V0)
-NUL = ("null",)
+LEAF0 = ("Sub", V0, V0)
+NUL = ("Null",)
 
 
 def curated():
@@ -425,11 +425,11 @@ def curated():
     cs.append(
         Case(
             "C1-repeat-live",
-            [("f", V0, V1), ("f", V0, V0)],
+            [("F", V0, V1), ("F", V0, V0)],
             [],
-            [("p", "f", "x", "x")],
-            ("p", "h", "x", "x"),
-            [("f", V0, V1), ("f", V0, V0), ("h", V0, V0)],
+            [("p", "F", "x", "x")],
+            ("p", "H", "x", "x"),
+            [("F", V0, V1), ("F", V0, V0), ("H", V0, V0)],
         )
     )
 
@@ -437,11 +437,11 @@ def curated():
     cs.append(
         Case(
             "C2-chain",
-            [("f", V0, ("g", V0, V1))],
+            [("F", V0, ("G", V0, V1))],
             [],
-            [("p", "f", "a", "b"), ("b", "g", "c", "d")],
-            ("p", "h", "c", "d"),
-            [("f", V0, ("g", V0, V1)), ("h", V0, V1), ("h", V1, V0)],
+            [("p", "F", "a", "b"), ("b", "G", "c", "d")],
+            ("p", "H", "c", "d"),
+            [("F", V0, ("G", V0, V1)), ("H", V0, V1), ("H", V1, V0)],
         )
     )
 
@@ -449,11 +449,11 @@ def curated():
     cs.append(
         Case(
             "C3-join",
-            [("f", V0, V1), ("g", V0, V1)],
+            [("F", V0, V1), ("G", V0, V1)],
             [],
-            [("p", "f", "x", "y"), ("q", "g", "x", "y")],
-            ("p", "h", "x", "y"),
-            [("f", V0, V1), ("g", V0, V1), ("h", V0, V1)],
+            [("p", "F", "x", "y"), ("q", "G", "x", "y")],
+            ("p", "H", "x", "y"),
+            [("F", V0, V1), ("G", V0, V1), ("H", V0, V1)],
         )
     )
 
@@ -461,11 +461,11 @@ def curated():
     cs.append(
         Case(
             "C4-symmetry",
-            [("f", ("k", V0, V1), ("k", V1, V0))],
-            [(("k", V0, V1), ("k", V1, V0))],
-            [("p", "f", "x", "x")],
-            ("p", "h", "x", "x"),
-            [("f", ("k", V0, V1), ("k", V1, V0)), ("h", ("k", V0, V1), ("k", V0, V1))],
+            [("F", ("K", V0, V1), ("K", V1, V0))],
+            [(("K", V0, V1), ("K", V1, V0))],
+            [("p", "F", "x", "x")],
+            ("p", "H", "x", "x"),
+            [("F", ("K", V0, V1), ("K", V1, V0)), ("H", ("K", V0, V1), ("K", V0, V1))],
         )
     )
 
@@ -473,11 +473,11 @@ def curated():
     cs.append(
         Case(
             "C5-redundant-same-node",
-            [("add", NUL, NUL)],
-            [(("sub", V0, V0), NUL)],
-            [("p", "add", "a", "b"), ("a", "sub", "u", "u"), ("b", "sub", "u", "u")],
-            ("p", "h", "u", "u"),
-            [("add", NUL, NUL), ("h", V0, V0), NUL],
+            [("Add", NUL, NUL)],
+            [(("Sub", V0, V0), NUL)],
+            [("p", "Add", "a", "b"), ("a", "Sub", "u", "u"), ("b", "Sub", "u", "u")],
+            ("p", "H", "u", "u"),
+            [("Add", NUL, NUL), ("H", V0, V0), NUL],
         )
     )
 
@@ -485,11 +485,11 @@ def curated():
     cs.append(
         Case(
             "C6-redundant-two-nodes",
-            [("add", NUL, NUL)],
-            [(("sub", V0, V0), NUL), (("sub2", V1, V1), NUL)],
-            [("p", "add", "a", "b"), ("a", "sub", "u", "u"), ("b", "sub2", "u", "u")],
-            ("p", "h", "u", "u"),
-            [("add", NUL, NUL), ("h", V0, V0), NUL],
+            [("Add", NUL, NUL)],
+            [(("Sub", V0, V0), NUL), (("Sub2", V1, V1), NUL)],
+            [("p", "Add", "a", "b"), ("a", "Sub", "u", "u"), ("b", "Sub2", "u", "u")],
+            ("p", "H", "u", "u"),
+            [("Add", NUL, NUL), ("H", V0, V0), NUL],
         )
     )
 
@@ -497,11 +497,11 @@ def curated():
     cs.append(
         Case(
             "C7-redundant-distinct-vars",
-            [("add", NUL, NUL)],
-            [(("sub", V0, V0), NUL), (("sub2", V1, V1), NUL)],
-            [("p", "add", "a", "b"), ("a", "sub", "u", "u"), ("b", "sub2", "v", "v")],
-            ("p", "h", "u", "v"),
-            [("add", NUL, NUL), ("h", V0, V0), ("h", V0, V1), NUL],
+            [("Add", NUL, NUL)],
+            [(("Sub", V0, V0), NUL), (("Sub2", V1, V1), NUL)],
+            [("p", "Add", "a", "b"), ("a", "Sub", "u", "u"), ("b", "Sub2", "v", "v")],
+            ("p", "H", "u", "v"),
+            [("Add", NUL, NUL), ("H", V0, V0), ("H", V0, V1), NUL],
         )
     )
 
@@ -509,11 +509,11 @@ def curated():
     cs.append(
         Case(
             "C8-two-paths",
-            [("f", ("g", V0, V1), ("k", V0, V1))],
+            [("F", ("G", V0, V1), ("K", V0, V1))],
             [],
-            [("p", "f", "a", "b"), ("a", "g", "x", "y"), ("b", "k", "x", "y")],
-            ("p", "h", "x", "y"),
-            [("f", ("g", V0, V1), ("k", V0, V1)), ("h", V0, V1), ("h", V1, V0)],
+            [("p", "F", "a", "b"), ("a", "G", "x", "y"), ("b", "K", "x", "y")],
+            ("p", "H", "x", "y"),
+            [("F", ("G", V0, V1), ("K", V0, V1)), ("H", V0, V1), ("H", V1, V0)],
         )
     )
 
@@ -521,11 +521,11 @@ def curated():
     cs.append(
         Case(
             "C9-redundancy-and-live",
-            [("f", V0, V1)],
-            [(("g", V0, V1), ("g", V0, V2))],
-            [("p", "f", "x", "y"), ("q", "g", "x", "y")],
-            ("p", "h", "x", "y"),
-            [("f", V0, V1), ("g", V0, V1), ("h", V0, V1)],
+            [("F", V0, V1)],
+            [(("G", V0, V1), ("G", V0, V2))],
+            [("p", "F", "x", "y"), ("q", "G", "x", "y")],
+            ("p", "H", "x", "y"),
+            [("F", V0, V1), ("G", V0, V1), ("H", V0, V1)],
         )
     )
 
@@ -533,11 +533,11 @@ def curated():
     cs.append(
         Case(
             "C10-chain-then-join",
-            [("f", V0, ("g", V0, V1)), ("k", V0, V0)],
+            [("F", V0, ("G", V0, V1)), ("K", V0, V0)],
             [],
-            [("p", "f", "a", "b"), ("b", "g", "c", "d"), ("q", "k", "c", "a")],
-            ("p", "h", "c", "d"),
-            [("f", V0, ("g", V0, V1)), ("k", V0, V0), ("h", V0, V1)],
+            [("p", "F", "a", "b"), ("b", "G", "c", "d"), ("q", "K", "c", "a")],
+            ("p", "H", "c", "d"),
+            [("F", V0, ("G", V0, V1)), ("K", V0, V0), ("H", V0, V1)],
         )
     )
 
@@ -555,15 +555,15 @@ def curated():
         Case(
             "C11-action-renamed-id-union",
             [NUL],
-            [(("g", ("sub2", NUL, NUL), ("sub", V1, V0)), NUL), (("add", ("k", V2, NUL), ("k", V0, NUL)), LEAF0)],
-            [("x3", "k", "x1", "x2"), ("x6", "k", "x4", "x5"), ("x7", "add", "x3", "x6")],
-            ("x7", "h", "x3", "x6"),
+            [(("G", ("Sub2", NUL, NUL), ("Sub", V1, V0)), NUL), (("Add", ("K", V2, NUL), ("K", V0, NUL)), LEAF0)],
+            [("x3", "K", "x1", "x2"), ("x6", "K", "x4", "x5"), ("x7", "Add", "x3", "x6")],
+            ("x7", "H", "x3", "x6"),
             [
                 NUL,
-                ("g", ("sub2", NUL, NUL), ("sub", V1, V0)),
-                ("add", ("k", V2, NUL), ("k", V0, NUL)),
-                ("h", V0, V1),
-                ("h", V0, V0),
+                ("G", ("Sub2", NUL, NUL), ("Sub", V1, V0)),
+                ("Add", ("K", V2, NUL), ("K", V0, NUL)),
+                ("H", V0, V1),
+                ("H", V0, V0),
                 NUL,
                 LEAF0,
             ],
@@ -585,11 +585,11 @@ def curated():
     cs.append(
         Case(
             "C12-atom-order-must-stay-connected",
-            [("h", ("k", V0, V0), ("k", V2, V0))],
+            [("H", ("K", V0, V0), ("K", V2, V0))],
             [],
-            [("x3", "k", "x1", "x2"), ("x6", "k", "x4", "x5"), ("x7", "h", "x3", "x6")],
-            ("x7", "h", "x2", "x4"),
-            [("h", ("k", V0, V0), ("k", V2, V0)), ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
+            [("x3", "K", "x1", "x2"), ("x6", "K", "x4", "x5"), ("x7", "H", "x3", "x6")],
+            ("x7", "H", "x2", "x4"),
+            [("H", ("K", V0, V0), ("K", V2, V0)), ("H", V0, V1), ("H", V0, V0), NUL, LEAF0],
             rounds=6,
         )
     )
@@ -607,16 +607,16 @@ def curated():
     cs.append(
         Case(
             "C13-binder-chain-and-join",
-            [("h", ("k", V2, NUL), ("lam", V0, V1))],
-            [(("g", ("h", V2, NUL), ("lam", V2, V1)), LEAF0), (("h", NUL, V2), ("add", NUL, NUL))],
-            [("x3", "k", "x1", "x2"), ("x5", "lam", "$s5", "x4"), ("x6", "h", "x3", "x5")],
-            ("x6", "h", "x4", "x4"),
+            [("H", ("K", V2, NUL), ("Lam", V0, V1))],
+            [(("G", ("H", V2, NUL), ("Lam", V2, V1)), LEAF0), (("H", NUL, V2), ("Add", NUL, NUL))],
+            [("x3", "K", "x1", "x2"), ("x5", "Lam", "$s5", "x4"), ("x6", "H", "x3", "x5")],
+            ("x6", "H", "x4", "x4"),
             [
-                ("h", ("k", V2, NUL), ("lam", V0, V1)),
-                ("g", ("h", V2, NUL), ("lam", V2, V1)),
-                ("h", NUL, V2),
-                ("h", V0, V1),
-                ("h", V0, V0),
+                ("H", ("K", V2, NUL), ("Lam", V0, V1)),
+                ("G", ("H", V2, NUL), ("Lam", V2, V1)),
+                ("H", NUL, V2),
+                ("H", V0, V1),
+                ("H", V0, V0),
                 NUL,
                 LEAF0,
             ],
@@ -630,15 +630,15 @@ def curated():
     # regress::same_node_redundant_slots_stay_distinct. Unioning f's two-slot
     # term into a slotless one makes both slots redundant. A pattern that would
     # have to identify them must not match; one that keeps them apart must.
-    red = [(("f", V0, V1), NUL)]
+    red = [(("F", V0, V1), NUL)]
     cs.append(
         Case(
             "P1a-redundant-slots-may-not-collapse",
             [NUL],
             red,
-            [("p", "f", "a", "a")],
-            ("p", "h", "a", "a"),
-            [NUL, ("f", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "F", "a", "a")],
+            ("p", "H", "a", "a"),
+            [NUL, ("F", V0, V1), ("H", V0, V0), ("H", V0, V1)],
         )
     )
     cs.append(
@@ -646,9 +646,9 @@ def curated():
             "P1b-redundant-slots-kept-apart",
             [NUL],
             red,
-            [("p", "f", "a", "b")],
-            ("p", "h", "a", "b"),
-            [NUL, ("f", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "F", "a", "b")],
+            ("p", "H", "a", "b"),
+            [NUL, ("F", V0, V1), ("H", V0, V0), ("H", V0, V1)],
         )
     )
 
@@ -657,21 +657,21 @@ def curated():
     cs.append(
         Case(
             "P2a-live-slots-may-not-collapse",
-            [("k", V0, V1)],
+            [("K", V0, V1)],
             [],
-            [("p", "k", "u", "u")],
-            ("p", "h", "u", "u"),
-            [("k", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "K", "u", "u")],
+            ("p", "H", "u", "u"),
+            [("K", V0, V1), ("H", V0, V0), ("H", V0, V1)],
         )
     )
     cs.append(
         Case(
             "P2b-live-slots-kept-apart",
-            [("k", V0, V1)],
+            [("K", V0, V1)],
             [],
-            [("p", "k", "u", "v")],
-            ("p", "h", "u", "v"),
-            [("k", V0, V1), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "K", "u", "v")],
+            ("p", "H", "u", "v"),
+            [("K", V0, V1), ("H", V0, V0), ("H", V0, V1)],
         )
     )
 
@@ -687,11 +687,11 @@ def curated():
     cs.append(
         Case(
             "C14-action-root-with-a-nonidentity-renaming",
-            [("f", V2, NUL), ("k", V2, NUL)],
-            [(("g", V1, NUL), ("k", NUL, V0))],
-            [("x3", "f", "x1", "x2")],
-            ("x1", "h", "x3", "x2"),
-            [("f", V2, NUL), ("k", V2, NUL), ("g", V1, NUL), ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
+            [("F", V2, NUL), ("K", V2, NUL)],
+            [(("G", V1, NUL), ("K", NUL, V0))],
+            [("x3", "F", "x1", "x2")],
+            ("x1", "H", "x3", "x2"),
+            [("F", V2, NUL), ("K", V2, NUL), ("G", V1, NUL), ("H", V0, V1), ("H", V0, V0), NUL, LEAF0],
             rounds=6,
         )
     )
@@ -704,10 +704,10 @@ def curated():
         Case(
             "C15-action-child-narrowed-to-its-class",
             [],
-            [(("h", NUL, V0), ("sub", V0, V0)), (("g", NUL, V2), ("sub", V0, V0))],
-            [("x3", "h", "x1", "x2")],
-            ("x1", "h", "x2", "x1"),
-            [("h", NUL, V0), ("g", NUL, V2), ("sub", V0, V0), ("h", V0, V1), ("h", V0, V0), NUL, LEAF0],
+            [(("H", NUL, V0), ("Sub", V0, V0)), (("G", NUL, V2), ("Sub", V0, V0))],
+            [("x3", "H", "x1", "x2")],
+            ("x1", "H", "x2", "x1"),
+            [("H", NUL, V0), ("G", NUL, V2), ("Sub", V0, V0), ("H", V0, V1), ("H", V0, V0), NUL, LEAF0],
             rounds=6,
         )
     )
@@ -724,11 +724,11 @@ def curated():
     cs.append(
         Case(
             "C16-slotless-child-unpins-the-action",
-            [("f", V0, V0), ("f", V1, V1), ("g", ("f", V0, V0), V0)],
-            [(("f", V0, V0), ("f", V1, V1))],
-            [("p", "g", "c", "$0"), ("c", "f", "a", "a")],
-            ("p", "h", "a", "a"),
-            [("g", ("f", V0, V0), V0), ("h", V0, V0), ("h", V1, V1), ("f", V0, V0), LEAF0],
+            [("F", V0, V0), ("F", V1, V1), ("G", ("F", V0, V0), V0)],
+            [(("F", V0, V0), ("F", V1, V1))],
+            [("p", "G", "c", "$0"), ("c", "F", "a", "a")],
+            ("p", "H", "a", "a"),
+            [("G", ("F", V0, V0), V0), ("H", V0, V0), ("H", V1, V1), ("F", V0, V0), LEAF0],
         )
     )
 
@@ -742,11 +742,11 @@ def curated():
     cs.append(
         Case(
             "X1-migration-must-not-truncate",
-            [("add", ("sub2", V0, V0), NUL)],
-            [(("h", V0, V2), NUL)],
-            [("x3", "h", "x1", "x2")],
-            ("x1", "h", "x3", "x1"),
-            [("add", ("sub2", V0, V0), NUL), ("h", V0, V2), ("h", V0, V1), ("h", V0, V0), NUL, ("sub", V0, V0)],
+            [("Add", ("Sub2", V0, V0), NUL)],
+            [(("H", V0, V2), NUL)],
+            [("x3", "H", "x1", "x2")],
+            ("x1", "H", "x3", "x1"),
+            [("Add", ("Sub2", V0, V0), NUL), ("H", V0, V2), ("H", V0, V1), ("H", V0, V0), NUL, ("Sub", V0, V0)],
             rounds=6,
         )
     )
@@ -769,11 +769,11 @@ def curated():
     cs.append(
         Case(
             "X2-migration-truncation-minimal",
-            [("h", V2, V1)],
+            [("H", V2, V1)],
             [],
-            [("x3", "h", "x1", "x2")],
-            ("x1", "h", "x2", "x3"),
-            [("h", V2, V1), ("h", V0, V1), ("h", V0, V0), NUL, ("sub", V0, V0)],
+            [("x3", "H", "x1", "x2")],
+            ("x1", "H", "x2", "x3"),
+            [("H", V2, V1), ("H", V0, V1), ("H", V0, V0), NUL, ("Sub", V0, V0)],
             rounds=6,
         )
     )
@@ -793,17 +793,17 @@ def curated():
     #
     # No condition, a condition on the binder's own body, and joining the two atoms all
     # agreed even before the fix, which is what isolated it.
-    K1_ATOMS = [("r0", "lam", "$s0", "v0"), ("r1", "sub2", "a", "b")]
+    K1_ATOMS = [("r0", "Lam", "$s0", "v0"), ("r1", "Sub2", "a", "b")]
     cs.append(
         Case(
             "K1-bound-slot-condition-across-disconnected-atoms",
-            [("lam", V0, V2), ("sub2", V0, V1)],
+            [("Lam", V0, V2), ("Sub2", V0, V1)],
             [],
             K1_ATOMS,
-            ("v0", "h", "r1", "r1"),
-            [("lam", V0, V2), ("sub2", V0, V1), ("h", V0, V1), ("h", V0, V0), NUL],
+            ("v0", "H", "r1", "r1"),
+            [("Lam", V0, V2), ("Sub2", V0, V1), ("H", V0, V1), ("H", V0, V0), NUL],
             rounds=6,
-            rules=[(K1_ATOMS, ("v0", "h", "r1", "r1"), [(True, "$s0", ["a"])])],
+            rules=[(K1_ATOMS, ("v0", "H", "r1", "r1"), [(True, "$s0", ["a"])])],
         )
     )
 
@@ -825,16 +825,16 @@ def curated():
     # and that constrains only the shared child's slots, leaving the rest of the second
     # atom's frame minted; a parent/child share is a stored EDGE and relates whole
     # frames. `connected_order` now prefers the latter.
-    K2_ATOMS = [("x3", "h", "x5", "x2"), ("x6", "f", "x4", "x5"), ("x7", "f", "x3", "x6")]
-    K2_LHS = ("f", ("h", NUL, V2), ("f", V2, NUL))
+    K2_ATOMS = [("x3", "H", "x5", "x2"), ("x6", "F", "x4", "x5"), ("x7", "F", "x3", "x6")]
+    K2_LHS = ("F", ("H", NUL, V2), ("F", V2, NUL))
     cs.append(
         Case(
             "K2-sibling-link-is-not-an-order",
             [K2_LHS],
-            [(K2_LHS, ("sub", V0, V0))],
+            [(K2_LHS, ("Sub", V0, V0))],
             K2_ATOMS,
-            ("x7", "h", "x2", "x6"),
-            [K2_LHS, ("sub", V0, V0), ("h", V0, V1), ("h", V0, V0), NUL],
+            ("x7", "H", "x2", "x6"),
+            [K2_LHS, ("Sub", V0, V0), ("H", V0, V1), ("H", V0, V0), NUL],
             rounds=6,
         )
     )
@@ -853,15 +853,15 @@ def curated():
     #
     # Both sides agree here, so this does not force the difference -- see the
     # doc. Kept because it exercises the shape.
-    BR = ("f", ("k", V0, V1), ("g", V0, V1))
+    BR = ("F", ("K", V0, V1), ("G", V0, V1))
     cs.append(
         Case(
             "U1-two-pairings-across-two-lookups",
             [BR],
             [(BR, NUL)],
-            [("p", "f", "x", "y"), ("q", "f", "x", "z")],
-            ("p", "h", "y", "z"),
-            [BR, NUL, ("h", ("g", V0, V1), ("g", V0, V1)), ("h", ("g", V0, V1), ("g", V1, V0))],
+            [("p", "F", "x", "y"), ("q", "F", "x", "z")],
+            ("p", "H", "y", "z"),
+            [BR, NUL, ("H", ("G", V0, V1), ("G", V0, V1)), ("H", ("G", V0, V1), ("G", V1, V0))],
         )
     )
 
@@ -876,11 +876,11 @@ def curated():
     cs.append(
         Case(
             "E1-equate-two-children",
-            [("f", V1, V2), ("f", V1, V1)],
+            [("F", V1, V2), ("F", V1, V1)],
             [],
-            [("p", "f", "a", "b")],
+            [("p", "F", "a", "b")],
             ("a", "=", "b", "b"),
-            [("f", V1, V2), ("f", V1, V1), ("h", V0, V1), ("h", V0, V0)],
+            [("F", V1, V2), ("F", V1, V1), ("H", V0, V1), ("H", V0, V0)],
         )
     )
 
@@ -888,11 +888,11 @@ def curated():
     cs.append(
         Case(
             "E2-equate-through-a-chain",
-            [("f", V0, ("k", V1, V2)), ("k", V1, V1)],
+            [("F", V0, ("K", V1, V2)), ("K", V1, V1)],
             [],
-            [("p", "f", "a", "b"), ("b", "k", "c", "d")],
+            [("p", "F", "a", "b"), ("b", "K", "c", "d")],
             ("c", "=", "d", "d"),
-            [("f", V0, ("k", V1, V2)), ("k", V1, V1), ("k", V1, V2), ("h", V0, V0)],
+            [("F", V0, ("K", V1, V2)), ("K", V1, V1), ("K", V1, V2), ("H", V0, V0)],
         )
     )
 
@@ -902,11 +902,11 @@ def curated():
     cs.append(
         Case(
             "E3-equate-binder-with-body",
-            [("lam", V0, V0), ("f", V0, V1)],
+            [("Lam", V0, V0), ("F", V0, V1)],
             [],
-            [("p", "lam", "$v", "b")],
+            [("p", "Lam", "$v", "b")],
             ("p", "=", "b", "b"),
-            [("lam", V0, V0), ("f", V0, V1), ("f", V0, V0), ("h", V0, V0)],
+            [("Lam", V0, V0), ("F", V0, V1), ("F", V0, V0), ("H", V0, V0)],
         )
     )
 
@@ -919,28 +919,28 @@ def curated():
     # `a` below has three slots and is given one 3-cycle. The parent then holds
     # `a` at the identity beside `a` at the cycle's SQUARE, which is never
     # unioned in, so `(f ?x ?x)` matches only if the square is stored too.
-    A3 = ("k", ("g", V0, V1), V2)  # a, at the identity
-    A3s = ("k", ("g", V1, V2), V0)  # a, under 0->1->2->0
-    A3ss = ("k", ("g", V2, V0), V1)  # a, under the square of that
+    A3 = ("K", ("G", V0, V1), V2)  # a, at the identity
+    A3s = ("K", ("G", V1, V2), V0)  # a, under 0->1->2->0
+    A3ss = ("K", ("G", V2, V0), V1)  # a, under the square of that
     cs.append(
         Case(
             "S1-symmetry-group-is-closed",
-            [("f", A3, A3ss)],
+            [("F", A3, A3ss)],
             [(A3, A3s)],
-            [("p", "f", "x", "x")],
-            ("p", "h", "x", "x"),
-            [("f", A3, A3ss), ("h", A3, A3), ("h", A3, A3s)],
+            [("p", "F", "x", "x")],
+            ("p", "H", "x", "x"),
+            [("F", A3, A3ss), ("H", A3, A3), ("H", A3, A3s)],
         )
     )
     # control: without the 3-cycle there is no symmetry to find, so no match
     cs.append(
         Case(
             "S1b-no-symmetry-no-match",
-            [("f", A3, A3ss)],
+            [("F", A3, A3ss)],
             [],
-            [("p", "f", "x", "x")],
-            ("p", "h", "x", "x"),
-            [("f", A3, A3ss), ("h", A3, A3), ("h", A3, A3s)],
+            [("p", "F", "x", "x")],
+            ("p", "H", "x", "x"),
+            [("F", A3, A3ss), ("H", A3, A3), ("H", A3, A3s)],
         )
     )
 
@@ -952,16 +952,16 @@ def curated():
     # union has made redundant. The parent holds `a` at the identity beside `a`
     # under the swap, so the match needs the real symmetry while a partial
     # symmetry is also present to be confused with it.
-    Ar = ("k", ("g", V0, V1), V2)
-    Arsw = ("k", ("g", V1, V0), V2)
+    Ar = ("K", ("G", V0, V1), V2)
+    Arsw = ("K", ("G", V1, V0), V2)
     cs.append(
         Case(
             "S2-symmetry-beside-redundancy",
-            [("f", Ar, Arsw)],
-            [(Ar, Arsw), (Ar, ("k", ("g", V0, V1), NUL))],
-            [("p", "f", "x", "x")],
-            ("p", "h", "x", "x"),
-            [("f", Ar, Arsw), ("h", Ar, Ar), ("h", Ar, Arsw)],
+            [("F", Ar, Arsw)],
+            [(Ar, Arsw), (Ar, ("K", ("G", V0, V1), NUL))],
+            [("p", "F", "x", "x")],
+            ("p", "H", "x", "x"),
+            [("F", Ar, Arsw), ("H", Ar, Ar), ("H", Ar, Arsw)],
         )
     )
 
@@ -973,11 +973,11 @@ def curated():
     cs.append(
         Case(
             "B1-binder-chain",
-            [("lam", V0, ("f", V0, V1))],
+            [("Lam", V0, ("F", V0, V1))],
             [],
-            [("p", "lam", "$v", "b"), ("b", "f", "x", "y")],
-            ("p", "h", "x", "y"),
-            [("lam", V0, ("f", V0, V1)), ("h", V0, V1), ("h", V0, V0)],
+            [("p", "Lam", "$v", "b"), ("b", "F", "x", "y")],
+            ("p", "H", "x", "y"),
+            [("Lam", V0, ("F", V0, V1)), ("H", V0, V1), ("H", V0, V0)],
         )
     )
 
@@ -986,11 +986,11 @@ def curated():
     cs.append(
         Case(
             "B2-alpha-equivalent-binders",
-            [("lam", V0, V0), ("lam", V1, V1)],
+            [("Lam", V0, V0), ("Lam", V1, V1)],
             [],
-            [("p", "lam", "$v", "b")],
-            ("p", "h", "b", "b"),
-            [("lam", V0, V0), ("lam", V1, V1), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "Lam", "$v", "b")],
+            ("p", "H", "b", "b"),
+            [("Lam", V0, V0), ("Lam", V1, V1), ("H", V0, V0), ("H", V0, V1)],
         )
     )
 
@@ -1001,11 +1001,11 @@ def curated():
     cs.append(
         Case(
             "B3-same-slot-literal-two-binders",
-            [("f", ("lam", V0, V0), ("lam", V0, V0))],
+            [("F", ("Lam", V0, V0), ("Lam", V0, V0))],
             [],
-            [("p", "f", "a", "b"), ("a", "lam", "$x", "c"), ("b", "lam", "$x", "d")],
-            ("p", "h", "c", "d"),
-            [("f", ("lam", V0, V0), ("lam", V0, V0)), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "F", "a", "b"), ("a", "Lam", "$x", "c"), ("b", "Lam", "$x", "d")],
+            ("p", "H", "c", "d"),
+            [("F", ("Lam", V0, V0), ("Lam", V0, V0)), ("H", V0, V0), ("H", V0, V1)],
         )
     )
 
@@ -1013,11 +1013,11 @@ def curated():
     cs.append(
         Case(
             "B4-same-slot-literal-different-bodies",
-            [("f", ("lam", V0, V0), ("lam", V0, ("f", V0, V1)))],
+            [("F", ("Lam", V0, V0), ("Lam", V0, ("F", V0, V1)))],
             [],
-            [("p", "f", "a", "b"), ("a", "lam", "$x", "c"), ("b", "lam", "$x", "d")],
-            ("p", "h", "c", "d"),
-            [("f", ("lam", V0, V0), ("lam", V0, ("f", V0, V1))), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "F", "a", "b"), ("a", "Lam", "$x", "c"), ("b", "Lam", "$x", "d")],
+            ("p", "H", "c", "d"),
+            [("F", ("Lam", V0, V0), ("Lam", V0, ("F", V0, V1))), ("H", V0, V0), ("H", V0, V1)],
         )
     )
 
@@ -1040,11 +1040,11 @@ def curated():
     cs.append(
         Case(
             "MP1-premise-on-a-bound-child",
-            [("f", ("lam", V0, ("add", V0, V0)), NUL)],
+            [("F", ("Lam", V0, ("Add", V0, V0)), NUL)],
             [],
-            [("p", "f", "a", "b"), ("a", "lam", "$v", "body")],
-            ("p", "h", "body", "b"),
-            [("f", ("lam", V0, ("add", V0, V0)), NUL), ("h", V0, V0), ("h", V0, V1)],
+            [("p", "F", "a", "b"), ("a", "Lam", "$v", "body")],
+            ("p", "H", "body", "b"),
+            [("F", ("Lam", V0, ("Add", V0, V0)), NUL), ("H", V0, V0), ("H", V0, V1)],
         )
     )
 
@@ -1054,11 +1054,11 @@ def curated():
     cs.append(
         Case(
             "MP2-join-on-two-variables",
-            [("f", V0, V1), ("g", V0, V1), ("g", V1, V0)],
+            [("F", V0, V1), ("G", V0, V1), ("G", V1, V0)],
             [],
-            [("p", "f", "x", "y"), ("q", "g", "x", "y")],
-            ("p", "h", "x", "y"),
-            [("f", V0, V1), ("g", V0, V1), ("g", V1, V0), ("h", V0, V1), ("h", V1, V0)],
+            [("p", "F", "x", "y"), ("q", "G", "x", "y")],
+            ("p", "H", "x", "y"),
+            [("F", V0, V1), ("G", V0, V1), ("G", V1, V0), ("H", V0, V1), ("H", V1, V0)],
         )
     )
 
@@ -1067,11 +1067,11 @@ def curated():
     cs.append(
         Case(
             "MP3-four-atom-chain",
-            [("k", ("add", ("f", V0, V1), ("f", V0, V1)), NUL)],
+            [("K", ("Add", ("F", V0, V1), ("F", V0, V1)), NUL)],
             [],
-            [("p", "k", "e", "z"), ("e", "add", "l", "r"), ("l", "f", "a", "b"), ("r", "f", "a", "b")],
-            ("p", "h", "a", "b"),
-            [("k", ("add", ("f", V0, V1), ("f", V0, V1)), NUL), ("h", V0, V1), ("h", V0, V0)],
+            [("p", "K", "e", "z"), ("e", "Add", "l", "r"), ("l", "F", "a", "b"), ("r", "F", "a", "b")],
+            ("p", "H", "a", "b"),
+            [("K", ("Add", ("F", V0, V1), ("F", V0, V1)), NUL), ("H", V0, V1), ("H", V0, V0)],
         )
     )
 
@@ -1081,14 +1081,14 @@ def curated():
     cs.append(
         Case(
             "MP4-body-shared-under-two-binders",
-            [("f", ("lam", V0, ("g", V1, V1)), ("lam", V2, ("g", V1, V1)))],
+            [("F", ("Lam", V0, ("G", V1, V1)), ("Lam", V2, ("G", V1, V1)))],
             [],
-            [("p", "f", "a", "b"), ("a", "lam", "$v", "body"), ("b", "lam", "$w", "body")],
-            ("p", "h", "body", "body"),
+            [("p", "F", "a", "b"), ("a", "Lam", "$v", "body"), ("b", "Lam", "$w", "body")],
+            ("p", "H", "body", "body"),
             [
-                ("f", ("lam", V0, ("g", V1, V1)), ("lam", V2, ("g", V1, V1))),
-                ("h", V0, V0),
-                ("h", V0, V1),
+                ("F", ("Lam", V0, ("G", V1, V1)), ("Lam", V2, ("G", V1, V1))),
+                ("H", V0, V0),
+                ("H", V0, V1),
             ],
         )
     )
@@ -1102,15 +1102,15 @@ def curated():
     cs.append(
         Case(
             "MP5-three-unrelated-atoms",
-            [("f", V0, V1), ("g", V0, NUL), ("k", V1, NUL)],
+            [("F", V0, V1), ("G", V0, NUL), ("K", V1, NUL)],
             [],
-            [("p", "f", "x", "y"), ("d0", "g", "d0a", "d0b"), ("d1", "k", "d1a", "d1b")],
-            ("p", "h", "x", "y"),
-            [("f", V0, V1), ("g", V0, NUL), ("k", V1, NUL), ("h", V0, V1), ("h", V0, V0)],
+            [("p", "F", "x", "y"), ("d0", "G", "d0a", "d0b"), ("d1", "K", "d1a", "d1b")],
+            ("p", "H", "x", "y"),
+            [("F", V0, V1), ("G", V0, NUL), ("K", V1, NUL), ("H", V0, V1), ("H", V0, V0)],
         )
     )
 
-    # ---- shapes taught by slotted/ENCODING.md --------------------
+    # ---- shapes taught by egglog-experimental/src/slotted/ENCODING.md --------------------
     # That file is the readable form of this compiler's recipe, so every shape it
     # teaches should be checked here too. The mapping is in its header; these two
     # were the shapes it had that nothing here covered.
@@ -1122,11 +1122,11 @@ def curated():
     cs.append(
         Case(
             "M1-commutativity",
-            [("f", V0, V1)],
+            [("F", V0, V1)],
             [],
-            [("p", "f", "a", "b")],
-            ("p", "f", "b", "a"),
-            [("f", V0, V1), ("f", V1, V0), ("h", V0, V1)],
+            [("p", "F", "a", "b")],
+            ("p", "F", "b", "a"),
+            [("F", V0, V1), ("F", V1, V0), ("H", V0, V1)],
         )
     )
 
@@ -1137,11 +1137,11 @@ def curated():
     cs.append(
         Case(
             "M3-one-shared-var-two-ops",
-            [("f", V0, V1), ("g", V0, V2)],
+            [("F", V0, V1), ("G", V0, V2)],
             [],
-            [("p", "f", "x", "y"), ("q", "g", "x", "z")],
-            ("p", "h", "y", "z"),
-            [("f", V0, V1), ("g", V0, V2), ("h", V1, V2), ("h", V1, V1)],
+            [("p", "F", "x", "y"), ("q", "G", "x", "z")],
+            ("p", "H", "y", "z"),
+            [("F", V0, V1), ("G", V0, V2), ("H", V1, V2), ("H", V1, V1)],
         )
     )
 
@@ -1155,12 +1155,12 @@ def curated():
     cs.append(
         Case(
             "MR1-rule-chain",
-            [("f", V0, V1)],
+            [("F", V0, V1)],
             [],
             None,
             None,
-            [("f", V0, V1), ("g", V0, V1), ("h", V0, V1), ("h", V1, V0)],
-            rules=[([("p", "f", "a", "b")], ("p", "g", "a", "b")), ([("q", "g", "x", "y")], ("q", "h", "y", "x"))],
+            [("F", V0, V1), ("G", V0, V1), ("H", V0, V1), ("H", V1, V0)],
+            rules=[([("p", "F", "a", "b")], ("p", "G", "a", "b")), ([("q", "G", "x", "y")], ("q", "H", "y", "x"))],
         )
     )
 
@@ -1169,17 +1169,17 @@ def curated():
     cs.append(
         Case(
             "MR2-comm-plus-rename",
-            [("add", LEAF0, ("g", V1, V1))],
+            [("Add", LEAF0, ("G", V1, V1))],
             [],
             None,
             None,
             [
-                ("add", LEAF0, ("g", V1, V1)),
-                ("add", ("g", V1, V1), LEAF0),
-                ("add", LEAF0, ("k", V1, V1)),
-                ("k", V1, V1),
+                ("Add", LEAF0, ("G", V1, V1)),
+                ("Add", ("G", V1, V1), LEAF0),
+                ("Add", LEAF0, ("K", V1, V1)),
+                ("K", V1, V1),
             ],
-            rules=[([("p", "add", "a", "b")], ("p", "add", "b", "a")), ([("q", "g", "x", "y")], ("q", "k", "x", "y"))],
+            rules=[([("p", "Add", "a", "b")], ("p", "Add", "b", "a")), ([("q", "G", "x", "y")], ("q", "K", "x", "y"))],
         )
     )
 
@@ -1188,12 +1188,12 @@ def curated():
     cs.append(
         Case(
             "MR3-two-routes",
-            [("f", V0, V1), ("g", V0, V1)],
+            [("F", V0, V1), ("G", V0, V1)],
             [],
             None,
             None,
-            [("f", V0, V1), ("g", V0, V1), ("h", V0, V1), ("h", V1, V0)],
-            rules=[([("p", "f", "a", "b")], ("p", "h", "a", "b")), ([("q", "g", "x", "y")], ("q", "h", "y", "x"))],
+            [("F", V0, V1), ("G", V0, V1), ("H", V0, V1), ("H", V1, V0)],
+            rules=[([("p", "F", "a", "b")], ("p", "H", "a", "b")), ([("q", "G", "x", "y")], ("q", "H", "y", "x"))],
         )
     )
 
@@ -1209,12 +1209,12 @@ def curated():
     cs.append(
         Case(
             "CD1-notin-decides",
-            [("lam", V0, ("g", V1, V1)), ("lam", V0, ("g", V0, V0))],
+            [("Lam", V0, ("G", V1, V1)), ("Lam", V0, ("G", V0, V0))],
             [],
             None,
             None,
-            [("lam", V0, ("g", V1, V1)), ("g", V1, V1), ("lam", V0, ("g", V0, V0)), ("g", V0, V0)],
-            rules=[([("p", "lam", "$s", "b")], ("p", "=", "b", "b"), [(False, "$s", ["b"])])],
+            [("Lam", V0, ("G", V1, V1)), ("G", V1, V1), ("Lam", V0, ("G", V0, V0)), ("G", V0, V0)],
+            rules=[([("p", "Lam", "$s", "b")], ("p", "=", "b", "b"), [(False, "$s", ["b"])])],
         )
     )
 
@@ -1223,12 +1223,12 @@ def curated():
     cs.append(
         Case(
             "CD2-notin-blocks",
-            [("lam", V0, ("g", V0, V0))],
+            [("Lam", V0, ("G", V0, V0))],
             [],
             None,
             None,
-            [("lam", V0, ("g", V0, V0)), ("g", V0, V0), ("g", V1, V1), NUL],
-            rules=[([("p", "lam", "$s", "b")], ("p", "=", "b", "b"), [(False, "$s", ["b"])])],
+            [("Lam", V0, ("G", V0, V0)), ("G", V0, V0), ("G", V1, V1), NUL],
+            rules=[([("p", "Lam", "$s", "b")], ("p", "=", "b", "b"), [(False, "$s", ["b"])])],
         )
     )
 
@@ -1236,12 +1236,12 @@ def curated():
     cs.append(
         Case(
             "CD3-in-fires",
-            [("lam", V0, ("g", V0, V0)), ("lam", V0, ("g", V1, V1))],
+            [("Lam", V0, ("G", V0, V0)), ("Lam", V0, ("G", V1, V1))],
             [],
             None,
             None,
-            [("lam", V0, ("g", V0, V0)), ("lam", V0, ("g", V1, V1)), ("h", ("g", V0, V0), ("g", V0, V0)), NUL],
-            rules=[([("p", "lam", "$s", "b")], ("p", "h", "b", "b"), [(True, "$s", ["b"])])],
+            [("Lam", V0, ("G", V0, V0)), ("Lam", V0, ("G", V1, V1)), ("H", ("G", V0, V0), ("G", V0, V0)), NUL],
+            rules=[([("p", "Lam", "$s", "b")], ("p", "H", "b", "b"), [(True, "$s", ["b"])])],
         )
     )
 
@@ -1250,17 +1250,17 @@ def curated():
     cs.append(
         Case(
             "CD4-in-either-decides",
-            [("lam", V0, ("f", ("g", V0, V0), ("k", V1, V1))), ("lam", V0, ("f", ("g", V1, V1), ("k", V1, V1)))],
+            [("Lam", V0, ("F", ("G", V0, V0), ("K", V1, V1))), ("Lam", V0, ("F", ("G", V1, V1), ("K", V1, V1)))],
             [],
             None,
             None,
             [
-                ("lam", V0, ("f", ("g", V0, V0), ("k", V1, V1))),
-                ("h", ("g", V0, V0), ("k", V1, V1)),
-                ("lam", V0, ("f", ("g", V1, V1), ("k", V1, V1))),
-                ("h", ("g", V1, V1), ("k", V1, V1)),
+                ("Lam", V0, ("F", ("G", V0, V0), ("K", V1, V1))),
+                ("H", ("G", V0, V0), ("K", V1, V1)),
+                ("Lam", V0, ("F", ("G", V1, V1), ("K", V1, V1))),
+                ("H", ("G", V1, V1), ("K", V1, V1)),
             ],
-            rules=[([("p", "lam", "$s", "x"), ("x", "f", "a", "b")], ("p", "h", "a", "b"), [(True, "$s", ["a", "b"])])],
+            rules=[([("p", "Lam", "$s", "x"), ("x", "F", "a", "b")], ("p", "H", "a", "b"), [(True, "$s", ["a", "b"])])],
         )
     )
 
@@ -1275,12 +1275,12 @@ def curated():
     cs.append(
         Case(
             "NR1-nested-build",
-            [("f", V0, V1)],
+            [("F", V0, V1)],
             [],
             None,
             None,
-            [("f", V0, V1), ("h", ("g", V0, V1), V1), ("g", V0, V1), ("h", ("g", V1, V0), V0)],
-            rules=[([("p", "f", "a", "b")], ("p", ("h", ("g", "a", "b"), "b")))],
+            [("F", V0, V1), ("H", ("G", V0, V1), V1), ("G", V0, V1), ("H", ("G", V1, V0), V0)],
+            rules=[([("p", "F", "a", "b")], ("p", ("H", ("G", "a", "b"), "b")))],
         )
     )
 
@@ -1289,12 +1289,12 @@ def curated():
     cs.append(
         Case(
             "NR2-two-levels",
-            [("f", V0, V1)],
+            [("F", V0, V1)],
             [],
             None,
             None,
-            [("f", V0, V1), ("h", ("g", ("k", V0, V1), V0), V1), ("g", ("k", V0, V1), V0), ("k", V0, V1)],
-            rules=[([("p", "f", "a", "b")], ("p", ("h", ("g", ("k", "a", "b"), "a"), "b")))],
+            [("F", V0, V1), ("H", ("G", ("K", V0, V1), V0), V1), ("G", ("K", V0, V1), V0), ("K", V0, V1)],
+            rules=[([("p", "F", "a", "b")], ("p", ("H", ("G", ("K", "a", "b"), "a"), "b")))],
         )
     )
 
@@ -1303,17 +1303,17 @@ def curated():
     cs.append(
         Case(
             "NR3-assoc",
-            [("add", LEAF0, ("add", ("g", V1, V1), ("k", V2, V2)))],
+            [("Add", LEAF0, ("Add", ("G", V1, V1), ("K", V2, V2)))],
             [],
             None,
             None,
             [
-                ("add", LEAF0, ("add", ("g", V1, V1), ("k", V2, V2))),
-                ("add", ("add", LEAF0, ("g", V1, V1)), ("k", V2, V2)),
-                ("add", LEAF0, ("g", V1, V1)),
+                ("Add", LEAF0, ("Add", ("G", V1, V1), ("K", V2, V2))),
+                ("Add", ("Add", LEAF0, ("G", V1, V1)), ("K", V2, V2)),
+                ("Add", LEAF0, ("G", V1, V1)),
                 NUL,
             ],
-            rules=[([("p", "add", "a", "x"), ("x", "add", "b", "c")], ("p", ("add", ("add", "a", "b"), "c")))],
+            rules=[([("p", "Add", "a", "x"), ("x", "Add", "b", "c")], ("p", ("Add", ("Add", "a", "b"), "c")))],
         )
     )
 
@@ -1331,17 +1331,17 @@ def curated():
     # so does the frame's join, where the two occurrences simply fall into one class.
     # A solve that read its equations as facts about two distinct names declined, and
     # never fired. `UN2` below is the bound-slot version of the same shape.
-    UN1_ATOMS = [("p", "k", "q", "d2"), ("q", "g", "d1", "n"), ("d1", "f", "x", "n2"), ("d2", "h", "x", "n3")]
-    UN1_Q = ("g", ("f", V0, NUL), NUL)
-    UN1_P = ("k", UN1_Q, ("h", V1, NUL))
+    UN1_ATOMS = [("p", "K", "q", "d2"), ("q", "G", "d1", "n"), ("d1", "F", "x", "n2"), ("d2", "H", "x", "n3")]
+    UN1_Q = ("G", ("F", V0, NUL), NUL)
+    UN1_P = ("K", UN1_Q, ("H", V1, NUL))
     cs.append(
         Case(
             "UN1-shared-var-through-two-redundant-slots",
             [UN1_P],
-            [(UN1_Q, ("g", ("f", ("var", 5), NUL), NUL)), (UN1_P, ("k", UN1_Q, ("h", ("var", 6), NUL)))],
+            [(UN1_Q, ("G", ("F", ("var", 5), NUL), NUL)), (UN1_P, ("K", UN1_Q, ("H", ("var", 6), NUL)))],
             UN1_ATOMS,
-            ("p", "sub", "d1", "d2"),
-            [UN1_P, ("sub", ("f", V0, NUL), ("h", V1, NUL)), ("sub", ("f", V0, NUL), ("h", V0, NUL)), NUL],
+            ("p", "Sub", "d1", "d2"),
+            [UN1_P, ("Sub", ("F", V0, NUL), ("H", V1, NUL)), ("Sub", ("F", V0, NUL), ("H", V0, NUL)), NUL],
             rounds=6,
         )
     )
@@ -1361,23 +1361,23 @@ def curated():
     # both chains for the straight reading, the two literals swapped for the other. Both
     # fire, so `(sub x x)` and `(sub x y)` with two slots join `out`'s class; written with
     # two different literals per chain and no swap, nothing matches on either side.
-    UN2_L = ("lam", V0, ("lam", V1, ("f", V0, V1)))
-    UN2_TERMS = [("f", UN2_L, UN2_L)]
-    UN2_UNIONS = [(("f", V0, V1), ("f", V1, V0))]
-    UN2_PROBES = [("f", UN2_L, UN2_L), ("sub", V0, V0), ("sub", V0, V1), NUL]
+    UN2_L = ("Lam", V0, ("Lam", V1, ("F", V0, V1)))
+    UN2_TERMS = [("F", UN2_L, UN2_L)]
+    UN2_UNIONS = [(("F", V0, V1), ("F", V1, V0))]
+    UN2_PROBES = [("F", UN2_L, UN2_L), ("Sub", V0, V0), ("Sub", V0, V1), NUL]
     UN2_STRAIGHT = [
-        ("out", "f", "l1", "l2"),
-        ("l1", "lam", "$x", "b1"),
-        ("b1", "lam", "$y", "a"),
-        ("l2", "lam", "$x", "b2"),
-        ("b2", "lam", "$y", "a"),
+        ("out", "F", "l1", "l2"),
+        ("l1", "Lam", "$x", "b1"),
+        ("b1", "Lam", "$y", "a"),
+        ("l2", "Lam", "$x", "b2"),
+        ("b2", "Lam", "$y", "a"),
     ]
     UN2_SWAPPED = [
-        ("out", "f", "l1", "l2"),
-        ("l1", "lam", "$x", "b1"),
-        ("b1", "lam", "$y", "a"),
-        ("l2", "lam", "$y", "b2"),
-        ("b2", "lam", "$x", "a"),
+        ("out", "F", "l1", "l2"),
+        ("l1", "Lam", "$x", "b1"),
+        ("b1", "Lam", "$y", "a"),
+        ("l2", "Lam", "$y", "b2"),
+        ("b2", "Lam", "$x", "a"),
     ]
     cs.append(
         Case(
@@ -1385,12 +1385,12 @@ def curated():
             UN2_TERMS,
             UN2_UNIONS,
             UN2_STRAIGHT,
-            ("out", ("sub", "$x", "$x")),
+            ("out", ("Sub", "$x", "$x")),
             UN2_PROBES,
             rounds=6,
             rules=[
-                (UN2_STRAIGHT, ("out", ("sub", "$x", "$x")), []),
-                (UN2_SWAPPED, ("out", ("sub", "$x", "$y")), []),
+                (UN2_STRAIGHT, ("out", ("Sub", "$x", "$x")), []),
+                (UN2_SWAPPED, ("out", ("Sub", "$x", "$y")), []),
             ],
         )
     )
@@ -1412,11 +1412,11 @@ def curated():
     cs.append(
         Case(
             "CLQ1-one-variable-two-node-slots",
-            [("g", ("f", V0, V1), NUL)],
-            [(("f", V0, V1), NUL)],
-            [("r", "g", "n", "z"), ("n", "f", "a", "a")],
-            ("r", "h", "a", "a"),
-            [("g", ("f", V0, V1), NUL), ("h", V0, V0), NUL],
+            [("G", ("F", V0, V1), NUL)],
+            [(("F", V0, V1), NUL)],
+            [("r", "G", "n", "z"), ("n", "F", "a", "a")],
+            ("r", "H", "a", "a"),
+            [("G", ("F", V0, V1), NUL), ("H", V0, V0), NUL],
             rounds=3,
         )
     )
@@ -1438,11 +1438,11 @@ def curated():
     cs.append(
         Case(
             "LIT1-two-literals-one-bound-slot",
-            [("lam", V2, V2)],
+            [("Lam", V2, V2)],
             [],
-            [("r0", "lam", "$s0", "b"), ("r1", "lam", "$s1", "b")],
-            ("b", "h", "r0", "r0"),
-            [("lam", V2, V2), ("h", V0, V1), ("h", V0, V0), NUL],
+            [("r0", "Lam", "$s0", "b"), ("r1", "Lam", "$s1", "b")],
+            ("b", "H", "r0", "r0"),
+            [("Lam", V2, V2), ("H", V0, V1), ("H", V0, V0), NUL],
             rounds=4,
         )
     )
@@ -1463,12 +1463,12 @@ def curated():
     # reading fires; `check-capture-guards.py` holds the rule libraries to this. The
     # probes ask for the sound result, the captured one, and a term the union must not
     # reach. `CAP0` is the same rule without its guard.
-    CAP_TERM = ("f", ("lam", V0, ("sub", V0, V0)), V2)
-    CAP_ATOMS = [("p", "f", "l", "e"), ("l", "lam", "$y", "body")]
+    CAP_TERM = ("F", ("Lam", V0, ("Sub", V0, V0)), V2)
+    CAP_ATOMS = [("p", "F", "l", "e"), ("l", "Lam", "$y", "body")]
     CAP_PROBES = [
         CAP_TERM,
-        ("lam", V1, ("f", ("sub", V1, V1), V2)),
-        ("lam", V1, ("f", ("sub", V1, V1), V1)),
+        ("Lam", V1, ("F", ("Sub", V1, V1), V2)),
+        ("Lam", V1, ("F", ("Sub", V1, V1), V1)),
         NUL,
     ]
     cs.append(
@@ -1477,10 +1477,10 @@ def curated():
             [CAP_TERM],
             [],
             CAP_ATOMS,
-            ("p", ("lam", "$y", ("f", "body", "e"))),
+            ("p", ("Lam", "$y", ("F", "body", "e"))),
             CAP_PROBES,
             rounds=3,
-            rules=[(CAP_ATOMS, ("p", ("lam", "$y", ("f", "body", "e"))), [(False, "$y", ["e"])])],
+            rules=[(CAP_ATOMS, ("p", ("Lam", "$y", ("F", "body", "e"))), [(False, "$y", ["e"])])],
         )
     )
 
@@ -1493,7 +1493,7 @@ def curated():
             [CAP_TERM],
             [],
             CAP_ATOMS,
-            ("p", ("lam", "$y", ("f", "body", "e"))),
+            ("p", ("Lam", "$y", ("F", "body", "e"))),
             CAP_PROBES,
             rounds=3,
         )
@@ -1506,16 +1506,16 @@ def curated():
 def rand_term(rng, depth, bound=()):
     """A random term; `bound` is the binders it sits under, outermost first."""
     if depth == 0 or rng.random() < 0.3:
-        leaves = [("var", rng.randrange(3)), ("null",)]
+        leaves = [("var", rng.randrange(3)), ("Null",)]
         if USEBIND_PROB and bound and rng.random() < USEBIND_PROB:
             leaves[0] = ("var", rng.choice(bound))
         if rng.random() < NUM_PROB:
             # a payload leaf, so a term -- and the patterns read off it -- can hold one
-            leaves.append(("num", rng.randrange(3)))
+            leaves.append(("Num", rng.randrange(3)))
         return rng.choice(leaves)
     if rng.random() < LAM_PROB:
         v = rng.randrange(3)
-        return ("lam", ("var", v), rand_term(rng, depth - 1, (*bound, v)))
+        return ("Lam", ("var", v), rand_term(rng, depth - 1, (*bound, v)))
     op = rng.choice(BINOPS)
     a = rand_term(rng, depth - 1, bound)
     b = a if DUP_PROB and rng.random() < DUP_PROB else rand_term(rng, depth - 1, bound)
@@ -1531,7 +1531,7 @@ def flatten_to_atoms(t, ctr, rng=None, memo=None):
     again may reuse it (`SHARE_PROB`) and the pattern joins the two occurrences."""
     if memo is None:
         memo = {}
-    if SHARE_PROB and t in memo and t[0] != "lam" and rng is not None and rng.random() < SHARE_PROB:
+    if SHARE_PROB and t in memo and t[0] != "Lam" and rng is not None and rng.random() < SHARE_PROB:
         return memo[t], []
     root, atoms = _flatten_fresh(t, ctr, rng, memo)
     memo[t] = root
@@ -1539,7 +1539,7 @@ def flatten_to_atoms(t, ctr, rng=None, memo=None):
 
 
 def _flatten_fresh(t, ctr, rng, memo):
-    if t[0] == "num":
+    if t[0] == "Num":
         # A payload leaf is either kept LITERALLY in the child position -- `#k`, which is
         # a pattern about the payload -- or read as a plain variable like any other leaf.
         # Both are shapes worth generating, and only the first tests the payload grammar.
@@ -1547,10 +1547,10 @@ def _flatten_fresh(t, ctr, rng, memo):
             return f"#{t[1]}", []
         ctr[0] += 1
         return f"x{ctr[0]}", []
-    if t[0] in ("var", "null"):
+    if t[0] in ("var", "Null"):
         ctr[0] += 1
         return f"x{ctr[0]}", []
-    if t[0] == "lam":
+    if t[0] == "Lam":
         pb, ab = flatten_to_atoms(t[2], ctr, rng, memo)
         ctr[0] += 1
         root = f"x{ctr[0]}"
@@ -1558,7 +1558,7 @@ def _flatten_fresh(t, ctr, rng, memo):
         # written with the same slot get exercised beside two written with different ones.
         r = rng.random() if rng is not None else 1.0
         sl = "$s0" if r < 1 / 3 else f"$s{ctr[0]}"
-        return root, ab + [(root, "lam", sl, pb)]
+        return root, ab + [(root, "Lam", sl, pb)]
     op, a, b = t
     pa, aa = flatten_to_atoms(a, ctr, rng, memo)
     pb, ab = flatten_to_atoms(b, ctr, rng, memo)
@@ -1578,7 +1578,7 @@ def rand_top(rng, depth):
     ride in the stored edges and survive.
     """
     t = rand_term(rng, depth)
-    if t[0] in ("var", "null"):
+    if t[0] in ("var", "Null"):
         t = (rng.choice(BINOPS), t, rand_term(rng, 0))
     return t
 
@@ -1607,7 +1607,7 @@ def rand_rule(rng, terms, unions):
             atoms = atoms[:-1]
         # swap an atom's children -- never a binder's, whose bound slot or variable has
         # to stay first: the body is not a binder position on either side.
-        swappable = [j for j, a in enumerate(atoms) if a[1] != "lam"]
+        swappable = [j for j, a in enumerate(atoms) if a[1] != "Lam"]
         if swappable and rng.random() < 0.4:
             j = rng.choice(swappable)
             r, o, c1, c2 = atoms[j]
@@ -1627,7 +1627,7 @@ def rand_rule(rng, terms, unions):
     # would be unconstrained, and the cross product costs a sweep more than the extra
     # shape is worth. `lam` is excluded: its first child has to be a slot literal.
     if rng.random() < 0.35:
-        plain = [o for o in BINOPS if o != "lam"]
+        plain = [o for o in BINOPS if o != "Lam"]
         for k in range(rng.randint(1, 2)):
             pvs = sorted({v for at in atoms for v in (at[0], at[2], at[3]) if not v.startswith(("$", "#"))})
             if len(pvs) < 2:
@@ -1638,7 +1638,7 @@ def rand_rule(rng, terms, unions):
     # A DISCONNECTED atom, sharing nothing with the rest. Kept rare because it is a cross
     # product: the case runs longer and the graph grows faster for one extra shape.
     if rng.random() < DISCONNECT_PROB:
-        plain = [o for o in BINOPS if o != "lam"]
+        plain = [o for o in BINOPS if o != "Lam"]
         for k in range(rng.randint(1, 2)):
             atoms.append((f"d{k}", rng.choice(plain), f"d{k}a", f"d{k}b"))
 
@@ -1662,7 +1662,7 @@ def rand_rule(rng, terms, unions):
         inner = (rng.choice(fresh_ops), rng.choice(allv), rng.choice(allv))
         action = (rng.choice(allv), (rng.choice(fresh_ops), inner, rng.choice(allv)))
     else:
-        action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
+        action = (rng.choice(allv), "H", rng.choice(allv), rng.choice(allv))
 
     # SIDE CONDITIONS, which were never generated: `free`/`not-free` had only the four
     # curated `CD*` cases, so the one part of a rule that is about a match's SLOTS rather
@@ -1705,7 +1705,7 @@ def rand_general_rule(rng, terms, unions):
     ops = list(BINOPS)
     atoms, bound, nslot = [], [], 0
     for k in range(rng.randint(1, 5)):
-        op = rng.choice(ops) if rng.random() < 0.75 else "lam"
+        op = rng.choice(ops) if rng.random() < 0.75 else "Lam"
 
         def pick(k=k):
             if bound and rng.random() < 0.55:
@@ -1713,7 +1713,7 @@ def rand_general_rule(rng, terms, unions):
             return f"v{k}_{rng.randrange(3)}"
 
         root = rng.choice(bound) if bound and rng.random() < 0.3 else f"r{k}"
-        if op == "lam":
+        if op == "Lam":
             # A binder column holds a slot literal. Reusing an earlier binder's slot name
             # is allowed: it constrains nothing, and that is itself a shape worth
             # generating; two different names are two slots that can never be one.
@@ -1744,7 +1744,7 @@ def rand_general_rule(rng, terms, unions):
         inner = (rng.choice(fresh_ops), rng.choice(allv), rng.choice(allv))
         action = (rng.choice(allv), (rng.choice(fresh_ops), inner, rng.choice(allv)))
     else:
-        action = (rng.choice(allv), "h", rng.choice(allv), rng.choice(allv))
+        action = (rng.choice(allv), "H", rng.choice(allv), rng.choice(allv))
 
     conds = []
     slots_seen = sorted({c for at in atoms for c in (at[2], at[3]) if c.startswith("$")})
@@ -1775,7 +1775,7 @@ def rand_case(rng, i):
             # `LEAF0` rather than a bare `(var $0)`: a bare leaf loses its slot
             # (see check_encodable), and although slot 0 happens to survive, the
             # slot-renaming check shifts it to one that would not.
-            b = ("null",) if rng.random() < 0.5 else LEAF0
+            b = ("Null",) if rng.random() < 0.5 else LEAF0
         else:
             b = rand_top(rng, rng.randrange(0, 2))
         unions.append((a, b))
@@ -1788,7 +1788,7 @@ def rand_case(rng, i):
         else (lambda: rand_rule(rng, terms, unions))
     )
     rules = [draw() for _ in range(2 if rng.random() < 0.25 else 1)]
-    probes = terms + [a for a, _ in unions] + [("h", V0, V1), ("h", V0, V0), ("null",), LEAF0]
+    probes = terms + [a for a, _ in unions] + [("H", V0, V1), ("H", V0, V0), ("Null",), LEAF0]
     return Case(f"fuzz{i}", terms, unions, None, None, probes, rounds=6, rules=rules)
 
 

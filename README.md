@@ -45,13 +45,15 @@ the resulting diff before committing it.
 Slotted case studies have standalone runners:
 
 ```bash
-python3 slotted/eval.py array --params 0   # fresh timings; no cache or graph checks
-python3 slotted/check.py array --params 0  # all treatments, counts, and exact isomorphism
+python3 slotted/eval.py array   # fresh timings; no cache or graph checks
+python3 slotted/check.py array  # all treatments, counts, and exact isomorphism
 ```
 
 Both use the same workload selectors and [treatment definitions](slotted/treatments.py).
-Omit `array --params 0` to run all case studies. See
-[the reference comparison documentation](slotted/ENCODING.md#against-the-reference)
+`array` runs Figure 8's fixed sweep of 0–10 extra function parameters;
+`sdql` runs Table 1's ten kernel/phase combinations. Omit the study to run all
+case studies. See
+[the reference comparison documentation](egglog-experimental/src/slotted/ENCODING.md#against-the-reference)
 for substitution policies and comparison requirements.
 
 The root workspace includes both `egglog` and `egglog-experimental`.

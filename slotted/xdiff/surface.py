@@ -24,16 +24,11 @@ class NoNestedForm(Exception):
     """A rule without the nested spelling used by this metamorphic check."""
 
 
-def ctor(op):
-    """The constructor name for a fuzzer operator: the surface syntax names those."""
-    return X.LANG.ops[op].ctor
-
-
 def rhs_text(t, ref):
     """A right-hand side as surface text; `ref` renders a variable."""
     if isinstance(t, str):
         return ref(t)
-    return "(" + ctor(t[0]) + " " + " ".join(rhs_text(a, ref) for a in t[1:]) + ")"
+    return "(" + t[0] + " " + " ".join(rhs_text(a, ref) for a in t[1:]) + ")"
 
 
 def render(atoms, action, conds):
@@ -55,11 +50,11 @@ def render(atoms, action, conds):
         the oracle; the surface writes the node itself, `(Num k)`. A bare `#` would read
         as this language's global sigil."""
         if isinstance(c, str) and c.startswith("#"):
-            return f"({ctor('num')} {c[1:]})"
+            return f"(Num {c[1:]})"
         return c
 
     head = atoms[lead]
-    lhs = f"({ctor(head[1])} {pay(head[2])} {pay(head[3])})"
+    lhs = f"({head[1]} {pay(head[2])} {pay(head[3])})"
 
     def ref(c):
         """A child, with the matched root written out.
@@ -76,9 +71,9 @@ def render(atoms, action, conds):
     elif action[1] == "=":
         rhs = ref(action[2])
     else:
-        rhs = f"({ctor(action[1])} {ref(action[2])} {ref(action[3])})"
+        rhs = f"({action[1]} {ref(action[2])} {ref(action[3])})"
 
-    facts = [f"(= {a[0]} ({ctor(a[1])} {ref(a[2])} {ref(a[3])}))" for i, a in enumerate(atoms) if i != lead]
+    facts = [f"(= {a[0]} ({a[1]} {ref(a[2])} {ref(a[3])}))" for i, a in enumerate(atoms) if i != lead]
     for want, slot, pvars in conds:
         # `ref` may render the matched root as the pattern itself, and a condition takes a
         # call where a variable goes for exactly this reason

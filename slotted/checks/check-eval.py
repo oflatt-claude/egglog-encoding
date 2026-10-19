@@ -86,26 +86,26 @@ def coset_direction():
 
 def symmetry_case(depth, swapped):
     left, right = ("var", 0), ("var", 1)
-    term = ("f", left, right)
-    chain = ("null",)
+    term = ("F", left, right)
+    chain = ("Null",)
     for _ in range(depth):
-        chain = ("g", ("null",), chain)
+        chain = ("G", ("Null",), chain)
     terms = [term, chain]
     source = '(include "slotted/languages/toy.egg")\n'
     source += "\n".join(f"(let seed{i} {X.driver.term(X.LANG, t)})" for i, t in enumerate(terms))
     program = X.driver.compile_source(source + "\n(run 0)")
     spec = "\n".join(f"term {X.sexpr(t)}" for t in terms) + "\n"
     if swapped:
-        spec += f"union {X.sexpr(term)} {X.sexpr(('f', right, left))}\n"
+        spec += f"union {X.sexpr(term)} {X.sexpr(('F', right, left))}\n"
     return graphs(f"symmetry-{depth}-{swapped}", program, spec)
 
 
 def complete_refinement():
-    atoms = [("root", "null", [])]
-    atoms += [(f"p{i}", "f", [("pv", f"a{i}"), ("pv", f"a{i}")]) for i in range(6)]
+    atoms = [("root", "Null", [])]
+    atoms += [(f"p{i}", "F", [("pv", f"a{i}"), ("pv", f"a{i}")]) for i in range(6)]
     rhs = ("pv", "a5")
     for i in reversed(range(5)):
-        rhs = ("g", ("pv", f"a{i}"), rhs)
+        rhs = ("G", ("pv", f"a{i}"), rhs)
     source = '(include "slotted/languages/toy.egg")\n'
     source += X.driver.rewrite(X.LANG, atoms, "root", rhs, name="all-refinements")
     program = X.driver.compile_source(source + "\n(let n (Null))\n(let f (F $0 $0))\n(run 1)")
@@ -422,7 +422,6 @@ def zero_round_budget():
     args = argparse.Namespace(
         study="all",
         case=None,
-        params=[0],
         kernel=["mmm"],
         phase=["1st"],
         rules=44,
@@ -430,23 +429,17 @@ def zero_round_budget():
     )
     results = run.run_workloads(W.select(args), E.benchmark, config=CHECK_CONFIG, timeout=30, sides=("ref-multi",))
     rows = [row for group in results for row in group]
-    assert len(rows) == 4
+    assert len(rows) == 14
     assert all(r.rounds == 0 and r.goal == "no" for r in rows), rows
 
 
 def parallel_collection():
     """Spawned workers preserve each workload's counts, verdicts, and configuration."""
-    args = argparse.Namespace(
-        study="all",
-        case=None,
-        params=[0],
-        kernel=["mmm_sum"],
-        phase=["1st"],
-        rules=44,
-        rounds=2,
-    )
-
-    selected = W.select(args)
+    selected = [
+        W.array_workload(0, rounds=2),
+        W.sdql_workload("mmm_sum", "1st", rounds=2),
+        *(W.logic_workload(path, rounds=2) for path in sorted(W.LOGIC_FIXTURES.glob("first-order-logic*.egg"))),
+    ]
 
     def collect(jobs, sides=SIDES, config=CHECK_CONFIG):
         return run.run_workloads(selected, C.check_workload, jobs=jobs, sides=sides, config=config, timeout=60)

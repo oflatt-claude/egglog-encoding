@@ -45,7 +45,7 @@ LANG = syntax.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 
 sexpr, shift = LANG.sexpr, LANG.shift
 
-MAP = ("sym", "map")
+MAP = ("Sym", "map")
 
 
 # ----------------------------------------------------------------------- cases
@@ -185,14 +185,14 @@ def V(n):
 
 
 def S(n):
-    return ("sym", n)
+    return ("Sym", n)
 
 
 def A(*xs):
     """Left-nested application: A(f, a, b) = (app (app f a) b)."""
     out = xs[0]
     for x in xs[1:]:
-        out = ("app", out, x)
+        out = ("App", out, x)
     return out
 
 
@@ -216,9 +216,9 @@ def per_rule_cases():
     cs.append(
         Case(
             "eta-fires",
-            [("lam", 0, ("app", S("f1"), V(0)))],
+            [("Lam", 0, ("App", S("f1"), V(0)))],
             [RULES["eta"]],
-            [("lam", 0, ("app", S("f1"), V(0))), S("f1"), S("f2")],
+            [("Lam", 0, ("App", S("f1"), V(0))), S("f1"), S("f2")],
         )
     )
     # blocked: the bound slot is free in the function position, so eta would
@@ -226,9 +226,9 @@ def per_rule_cases():
     cs.append(
         Case(
             "eta-blocked",
-            [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0)))],
+            [("Lam", 0, ("App", ("App", S("f1"), V(0)), V(0)))],
             [RULES["eta"]],
-            [("lam", 0, ("app", ("app", S("f1"), V(0)), V(0))), ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))],
+            [("Lam", 0, ("App", ("App", S("f1"), V(0)), V(0))), ("App", S("f1"), V(0)), ("App", S("f1"), S("cc"))],
         )
     )
 
@@ -236,12 +236,12 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-intro",
-            [("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa"))],
+            [("App", ("Lam", 0, ("App", S("f1"), V(0))), S("aa"))],
             [RULES["let-intro"]],
             [
-                ("app", ("lam", 0, ("app", S("f1"), V(0))), S("aa")),
-                ("let", 0, ("app", S("f1"), V(0)), S("aa")),
-                ("let", 0, ("app", S("f1"), V(0)), S("bb")),
+                ("App", ("Lam", 0, ("App", S("f1"), V(0))), S("aa")),
+                ("Let", 0, ("App", S("f1"), V(0)), S("aa")),
+                ("Let", 0, ("App", S("f1"), V(0)), S("bb")),
             ],
         )
     )
@@ -250,17 +250,17 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-unused-fires",
-            [("let", 0, ("app", S("f1"), S("cc")), S("aa"))],
+            [("Let", 0, ("App", S("f1"), S("cc")), S("aa"))],
             [RULES["let-unused"]],
-            [("let", 0, ("app", S("f1"), S("cc")), S("aa")), ("app", S("f1"), S("cc")), ("app", S("f1"), S("dd"))],
+            [("Let", 0, ("App", S("f1"), S("cc")), S("aa")), ("App", S("f1"), S("cc")), ("App", S("f1"), S("dd"))],
         )
     )
     cs.append(
         Case(
             "let-unused-blocked",
-            [("let", 0, ("app", S("f1"), V(0)), S("aa"))],
+            [("Let", 0, ("App", S("f1"), V(0)), S("aa"))],
             [RULES["let-unused"]],
-            [("let", 0, ("app", S("f1"), V(0)), S("aa")), ("app", S("f1"), V(0)), ("app", S("f1"), S("cc"))],
+            [("Let", 0, ("App", S("f1"), V(0)), S("aa")), ("App", S("f1"), V(0)), ("App", S("f1"), S("cc"))],
         )
     )
 
@@ -268,9 +268,9 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-var-same-fires",
-            [("let", 0, V(0), S("aa"))],
+            [("Let", 0, V(0), S("aa"))],
             [RULES["let-var-same"]],
-            [("let", 0, V(0), S("aa")), S("aa"), S("bb")],
+            [("Let", 0, V(0), S("aa")), S("aa"), S("bb")],
         )
     )
     # blocked: `$x` is written twice, so the binder and the body's variable have
@@ -278,9 +278,9 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-var-same-blocked",
-            [("lam", 1, ("let", 0, V(1), S("aa")))],
+            [("Lam", 1, ("Let", 0, V(1), S("aa")))],
             [RULES["let-var-same"]],
-            [("lam", 1, ("let", 0, V(1), S("aa"))), ("lam", 1, S("aa")), ("lam", 1, V(1))],
+            [("Lam", 1, ("Let", 0, V(1), S("aa"))), ("Lam", 1, S("aa")), ("Lam", 1, V(1))],
         )
     )
 
@@ -288,12 +288,12 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-app-fires",
-            [("let", 0, ("app", V(0), S("cc")), S("aa"))],
+            [("Let", 0, ("App", V(0), S("cc")), S("aa"))],
             [RULES["let-app"]],
             [
-                ("let", 0, ("app", V(0), S("cc")), S("aa")),
-                ("app", ("let", 0, V(0), S("aa")), ("let", 0, S("cc"), S("aa"))),
-                ("app", S("cc"), S("aa")),
+                ("Let", 0, ("App", V(0), S("cc")), S("aa")),
+                ("App", ("Let", 0, V(0), S("aa")), ("Let", 0, S("cc"), S("aa"))),
+                ("App", S("cc"), S("aa")),
             ],
         )
     )
@@ -301,12 +301,12 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-app-blocked",
-            [("let", 0, ("app", S("dd"), S("cc")), S("aa"))],
+            [("Let", 0, ("App", S("dd"), S("cc")), S("aa"))],
             [RULES["let-app"]],
             [
-                ("let", 0, ("app", S("dd"), S("cc")), S("aa")),
-                ("app", ("let", 0, S("dd"), S("aa")), ("let", 0, S("cc"), S("aa"))),
-                ("app", S("dd"), S("cc")),
+                ("Let", 0, ("App", S("dd"), S("cc")), S("aa")),
+                ("App", ("Let", 0, S("dd"), S("aa")), ("Let", 0, S("cc"), S("aa"))),
+                ("App", S("dd"), S("cc")),
             ],
         )
     )
@@ -315,12 +315,12 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-lam-diff-fires",
-            [("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa"))],
+            [("Let", 0, ("Lam", 1, ("App", V(1), V(0))), S("aa"))],
             [RULES["let-lam-diff"]],
             [
-                ("let", 0, ("lam", 1, ("app", V(1), V(0))), S("aa")),
-                ("lam", 1, ("let", 0, ("app", V(1), V(0)), S("aa"))),
-                ("lam", 1, ("app", V(1), S("aa"))),
+                ("Let", 0, ("Lam", 1, ("App", V(1), V(0))), S("aa")),
+                ("Lam", 1, ("Let", 0, ("App", V(1), V(0)), S("aa"))),
+                ("Lam", 1, ("App", V(1), S("aa"))),
             ],
         )
     )
@@ -328,12 +328,12 @@ def per_rule_cases():
     cs.append(
         Case(
             "let-lam-diff-blocked",
-            [("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa"))],
+            [("Let", 0, ("Lam", 1, ("App", V(1), S("cc"))), S("aa"))],
             [RULES["let-lam-diff"]],
             [
-                ("let", 0, ("lam", 1, ("app", V(1), S("cc"))), S("aa")),
-                ("lam", 1, ("let", 0, ("app", V(1), S("cc")), S("aa"))),
-                ("lam", 1, ("app", V(1), S("cc"))),
+                ("Let", 0, ("Lam", 1, ("App", V(1), S("cc"))), S("aa")),
+                ("Lam", 1, ("Let", 0, ("App", V(1), S("cc")), S("aa"))),
+                ("Lam", 1, ("App", V(1), S("cc"))),
             ],
         )
     )
@@ -346,8 +346,8 @@ def per_rule_cases():
             [RULES["map-fusion"]],
             [
                 MAPPED(S("f1"), MAPPED(S("f2"), S("arr"))),
-                MAPPED(("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))), S("arr")),
-                MAPPED(("lam", 0, ("app", S("f2"), ("app", S("f1"), V(0)))), S("arr")),
+                MAPPED(("Lam", 0, ("App", S("f1"), ("App", S("f2"), V(0)))), S("arr")),
+                MAPPED(("Lam", 0, ("App", S("f2"), ("App", S("f1"), V(0)))), S("arr")),
             ],
             rounds=4,
         )
@@ -357,12 +357,12 @@ def per_rule_cases():
     cs.append(
         Case(
             "map-fission-fires",
-            [("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0)))))],
+            [("App", MAP, ("Lam", 0, ("App", S("f1"), ("App", S("f2"), V(0)))))],
             [RULES["map-fission"]],
             [
-                ("app", MAP, ("lam", 0, ("app", S("f1"), ("app", S("f2"), V(0))))),
-                ("lam", 1, MAPPED(S("f1"), MAPPED(("lam", 0, ("app", S("f2"), V(0))), V(1)))),
-                ("lam", 1, MAPPED(S("f2"), MAPPED(("lam", 0, ("app", S("f1"), V(0))), V(1)))),
+                ("App", MAP, ("Lam", 0, ("App", S("f1"), ("App", S("f2"), V(0))))),
+                ("Lam", 1, MAPPED(S("f1"), MAPPED(("Lam", 0, ("App", S("f2"), V(0))), V(1)))),
+                ("Lam", 1, MAPPED(S("f2"), MAPPED(("Lam", 0, ("App", S("f1"), V(0))), V(1)))),
             ],
             rounds=3,
         )
@@ -372,12 +372,12 @@ def per_rule_cases():
     cs.append(
         Case(
             "map-fission-blocked",
-            [("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2"))))],
+            [("App", MAP, ("Lam", 0, ("App", ("App", S("f1"), V(0)), S("f2"))))],
             [RULES["map-fission"]],
             [
-                ("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f2")))),
-                ("lam", 1, MAPPED(("app", S("f1"), V(0)), MAPPED(("lam", 0, S("f2")), V(1)))),
-                ("app", MAP, ("lam", 0, ("app", ("app", S("f1"), V(0)), S("f3")))),
+                ("App", MAP, ("Lam", 0, ("App", ("App", S("f1"), V(0)), S("f2")))),
+                ("Lam", 1, MAPPED(("App", S("f1"), V(0)), MAPPED(("Lam", 0, S("f2")), V(1)))),
+                ("App", MAP, ("Lam", 0, ("App", ("App", S("f1"), V(0)), S("f3")))),
             ],
             rounds=3,
         )
@@ -389,7 +389,7 @@ def per_rule_cases():
 def _chain(fs, arg):
     """fs = [f1, f2, ...] applied innermost-first: f_n (... (f1 arg))."""
     for g in fs:
-        arg = ("app", g, arg)
+        arg = ("App", g, arg)
     return arg
 
 
@@ -417,28 +417,28 @@ def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
         def maps(fn):
             out = fn
             for _ in range(dims):
-                out = ("app", MAP, out)
+                out = ("App", MAP, out)
             return out
 
         def chained(parts, fresh_slot=fresh_slot):
             if len(parts) == 1:
                 return parts[0]
             x = fresh_slot()
-            return ("lam", x, _chain(parts, V(x)))
+            return ("Lam", x, _chain(parts, V(x)))
 
         a_body = maps(chained(fs))
         left, right = maps(chained(fs[half:])), maps(chained(fs[:half]))
         y = fresh_slot()
-        b_body = ("lam", y, ("app", left, ("app", right, V(y))))
+        b_body = ("Lam", y, ("App", left, ("App", right, V(y))))
 
         def wrap(t, n=n, fn_slots=fn_slots):
             if not wrap_lams:
                 return t
             # Artifact `nest_lams`: parameters inside function binders.
             for i in reversed(range(n)):
-                t = ("lam", 1 + i, t)
+                t = ("Lam", 1 + i, t)
             for slot in reversed(fn_slots):
-                t = ("lam", slot, t)
+                t = ("Lam", slot, t)
             return t
 
         A_, B_ = wrap(a_body), wrap(b_body)
@@ -560,14 +560,14 @@ def unbound_cases():
     # the bound one. `Bind` covers the body column only. Probing that needs a parent
     # that can see the difference: two applications that differ only in whether the
     # `let`'s slot and the argument's slot coincide.
-    B = ("app", S("f1"), V(0))
-    L = ("let", 0, B, V(0))
+    B = ("App", S("f1"), V(0))
+    L = ("Let", 0, B, V(0))
     cs.append(
         Case(
             "let-slot-free-in-value",
-            [("app", L, V(0)), ("app", L, V(1))],
+            [("App", L, V(0)), ("App", L, V(1))],
             [RULES["let-unused"]],
-            [("app", L, V(0)), ("app", L, V(1)), ("app", L, S("cc"))],
+            [("App", L, V(0)), ("App", L, V(1)), ("App", L, S("cc"))],
         )
     )
     return cs
@@ -588,7 +588,7 @@ def rand_term(rng, depth, pool, ctr):
     if depth == 0 or rng.random() < 0.25:
         if pool and rng.random() < 0.55:
             return ("var", rng.choice(sorted(pool)))
-        return ("sym", rng.choice(SYMS))
+        return ("Sym", rng.choice(SYMS))
 
     def sub(extra=()):
         return rand_term(rng, depth - 1, pool | set(extra), ctr)
@@ -602,29 +602,29 @@ def rand_term(rng, depth, pool, ctr):
     if rng.random() < 0.5:
         which = rng.randrange(6)
         if which == 0:  # map-fusion
-            return ("app", ("app", MAP, sub()), ("app", ("app", MAP, sub()), sub()))
+            return ("App", ("App", MAP, sub()), ("App", ("App", MAP, sub()), sub()))
         if which == 1:  # map-fission
             s = slot()
-            return ("app", MAP, ("lam", s, ("app", sub(), sub([s]))))
+            return ("App", MAP, ("Lam", s, ("App", sub(), sub([s]))))
         if which == 2:  # let-intro / beta shape
             s = slot()
-            return ("app", ("lam", s, sub([s])), sub())
+            return ("App", ("Lam", s, sub([s])), sub())
         if which == 3:  # eta
             s = slot()
-            return ("lam", s, ("app", sub(), ("var", s)))
+            return ("Lam", s, ("App", sub(), ("var", s)))
         if which == 4:  # let-var-same
             s = slot()
-            return ("let", s, ("var", s), sub())
+            return ("Let", s, ("var", s), sub())
         s = slot()  # a plain let
-        return ("let", s, sub([s]), sub())
+        return ("Let", s, sub([s]), sub())
 
     r = rng.random()
     if r < 0.55:
-        return ("app", sub(), sub())
+        return ("App", sub(), sub())
     s = slot()
     if r < 0.85:
-        return ("lam", s, sub([s]))
-    return ("let", s, sub([s]), sub())
+        return ("Lam", s, sub([s]))
+    return ("Let", s, sub([s]), sub())
 
 
 def subterms(t):
@@ -660,7 +660,7 @@ def rand_case(rng, i):
         probes.append(s)
         if len(probes) == 9:
             break
-    probes += [("lam", 90, ("app", S("f1"), V(90))), S("f1")]
+    probes += [("Lam", 90, ("App", S("f1"), V(90))), S("f1")]
     return Case(f"fuzz{i}", [t], list(rules), probes, rounds=3)
 
 

@@ -126,19 +126,20 @@ def read_typed_language_form(form, sorts=("U",)):
 
 
 def read_correspondence(path):
-    """Parse a `.ref` file: how a language's operators are spelled by the reference."""
+    """Map egglog constructors to reference tags or bare payloads with a prefix."""
     out = {}
     for raw in path.read_text().splitlines():
         line = raw.split(";")[0].strip()
         if not line:
             continue
-        op, ctor, ref, *rest = line.split()
+        ctor, ref, *rest = line.split()
+        assert ctor not in out, f"{path.name}: duplicate constructor {ctor}"
         if ref == "=payload":
-            assert len(rest) <= 1, f"{op}: one prefix at most, got {rest}"
-            out[op] = (ctor, None, rest[0] if rest else "")
+            assert len(rest) <= 1, f"{ctor}: one prefix at most, got {rest}"
+            out[ctor] = (None, rest[0] if rest else "")
         else:
-            assert not rest, f"{op}: a tag takes no further field, got {rest}"
-            out[op] = (ctor, ref, "")
+            assert not rest, f"{ctor}: a tag takes no further field, got {rest}"
+            out[ctor] = (ref, "")
     return out
 
 
@@ -146,18 +147,12 @@ def language(spec, ref):
     """A `TermLang` from a language file and its correspondence file."""
     sigs = read_language(spec)
     corr = read_correspondence(ref)
-    named = {ctor for ctor, _, _ in corr.values()}
+    named = set(corr)
     assert named == set(sigs), (
         f"{spec.name} declares {sorted(set(sigs) - named)} that {ref.name} does not name, "
         f"and {ref.name} names {sorted(named - set(sigs))} that it does not declare"
     )
-    ops = {op: Op(op, ctor, sigs[ctor], ref=tag, ref_prefix=prefix) for op, (ctor, tag, prefix) in corr.items()}
-    # Also reachable by CONSTRUCTOR name. A slotted `.egg` writes the constructor it
-    # declared, `(App ?a ?b)`, while a corpus written in Python names the operator,
-    # `("app", a, b)`; both denote the same node, and the `.ref` already gives one
-    # operator two names where a language wants them.
-    for op in list(ops.values()):
-        ops.setdefault(op.ctor, op)
+    ops = {ctor: Op(ctor, sigs[ctor], ref=tag, ref_prefix=prefix) for ctor, (tag, prefix) in corr.items()}
     return TermLang(ops)
 
 
@@ -197,7 +192,7 @@ def pay_text(op, pay):
     if isinstance(pay, tuple):
         if pay[0] == "ppv":
             raise SystemExit(
-                f"{op.name}: the oracle cannot be asked about a payload VARIABLE "
+                f"{op.ctor}: the oracle cannot be asked about a payload VARIABLE "
                 f"({pay[1]!r}); its patterns have no place for one."
             )
         pay = pay[1]
@@ -205,11 +200,10 @@ def pay_text(op, pay):
 
 
 class Op:
-    """One high-level operator, and the constructor column-walk it compiles to."""
+    """An egglog constructor's columns, binders, and reference spelling."""
 
     def __init__(
         self,
-        name,
         ctor,
         sig=(),
         pays=None,
@@ -218,17 +212,16 @@ class Op:
         sort="U",
         kid_sorts=None,
     ):
-        self.name = name
         self.ctor = ctor
         self.sig = list(sig)
         self.sort = sort
         self.kid_sorts = list(kid_sorts) if kid_sorts is not None else [sort] * sum(c in SLOTTED for c in self.sig)
         assert len(self.kid_sorts) == sum(c in SLOTTED for c in self.sig), (
-            f"{name}: {len(self.kid_sorts)} child sort(s) for {sum(c in SLOTTED for c in self.sig)} slotted column(s)"
+            f"{ctor}: {len(self.kid_sorts)} child sort(s) for {sum(c in SLOTTED for c in self.sig)} slotted column(s)"
         )
         npay = sum(1 for c in self.sig if c not in SLOTTED)
         self.pays = list(pays) if pays is not None else [None] * npay
-        assert len(self.pays) == npay, f"{name}: {npay} payload column(s)"
+        assert len(self.pays) == npay, f"{ctor}: {npay} payload column(s)"
         self.ref = ref
         self.ref_prefix = ref_prefix
 
@@ -277,12 +270,12 @@ class Op:
                     ai += 1
                 pays.append(lit)
                 pi += 1
-        assert ai == len(args), f"{self.name}: {len(args)} argument(s) for {ai} column(s)"
+        assert ai == len(args), f"{self.ctor}: {len(args)} argument(s) for {ai} column(s)"
         return kids, pays
 
 
 class TermLang:
-    """A high-level term language over the encoding: `{operator: Op}`."""
+    """Test terms keyed by egglog constructor name: `{constructor: Op}`."""
 
     VAR = "var"
 
@@ -420,7 +413,7 @@ class TermLang:
         if op.ref is None:
             # a payload leaf, written as its payload
             return op.ref_prefix + pay_text(op, pays[0])
-        assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
+        assert not (kids and None in op.pays), f"{op.ctor}: no oracle syntax for a payload argument beside a child"
         parts = [f"${self.slot(k)}" if i in op.binders else self.sexpr(k) for i, k in enumerate(kids)]
         return f"({op.ref} {' '.join(parts)})" if parts else op.ref
 
@@ -676,7 +669,7 @@ def pat_sexpr(lang, t, binder=False):
         # a ground term. The two renderers have to agree: one writes a rule's pattern
         # and the other the terms that rule has to match.
         return op.ref_prefix + pay_text(op, pays[0])
-    assert not (kids and None in op.pays), f"{op.name}: no oracle syntax for a payload argument beside a child"
+    assert not (kids and None in op.pays), f"{op.ctor}: no oracle syntax for a payload argument beside a child"
     parts = [pat_sexpr(lang, k, binder=(i in op.binders)) for i, k in enumerate(kids)]
     return f"({op.ref} {' '.join(parts)})" if parts else op.ref
 
@@ -784,10 +777,7 @@ class Source:
             self.output_sorts[name] = output
             self.child_sorts[name] = children
         self.lang = Terms(
-            {
-                c: Op(c, c, sig, sort=self.output_sorts[c], kid_sorts=self.child_sorts[c])
-                for c, sig in self.spec.items()
-            },
+            {c: Op(c, sig, sort=self.output_sorts[c], kid_sorts=self.child_sorts[c]) for c, sig in self.spec.items()},
             self.carriers,
         )
 

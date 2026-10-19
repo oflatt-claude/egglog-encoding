@@ -1267,7 +1267,7 @@ def selftest():
         f"{sum(group_checks)}/{len(group_checks)}"
     )
 
-    lam, fop = X.LANG["lam"], X.LANG["f"]
+    lam, fop = X.LANG["Lam"], X.LANG["F"]
     slots = {"var": (), "body": ()}
     valid = ("lam", [("child", "var", {0: 7}), ("child", "body", {})], "lc", lam)
     reader_cases = [
@@ -1531,14 +1531,14 @@ def known_groups():
     v0, v1, v2 = ("var", 0), ("var", 1), ("var", 2)
 
     def g(a, b):
-        return ("g", a, b)
+        return ("G", a, b)
 
     cases = [
         # f($0,$1) = f($1,$0) -- the group is {id, swap}
         (
             "swap",
             2,
-            X.Case("swap", [("f", v0, v1), ("f", v1, v0)], [(("f", v0, v1), ("f", v1, v0))], [], None, [], rounds=0),
+            X.Case("swap", [("F", v0, v1), ("F", v1, v0)], [(("F", v0, v1), ("F", v1, v0))], [], None, [], rounds=0),
         ),
         # g(g($0,$1),$2) = g(g($1,$2),$0) -- a 3-cycle generates three elements
         (

@@ -136,7 +136,7 @@ def ctor_lines(lang):
     """`ctor <tag> <Name>` lines: what the encoding calls each of the oracle's constructors,
     so the oracle's substitution snapshot breaks ties by the same spelling."""
     out = []
-    for op in {id(op): op for op in lang.ops.values()}.values():
+    for op in lang.ops.values():
         if op.ref:
             out.append(f"ctor {op.ref} {op.ctor}")
         else:
@@ -261,7 +261,6 @@ def add_arguments(parser):
     """Workload selectors have identical meanings in the benchmark and checker."""
     parser.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql", "logic"))
     parser.add_argument("--case", nargs="+", help="logic fixture names without .egg; default all")
-    parser.add_argument("--params", type=int, nargs="+", default=[0, 1, 2], help="array: extra function parameters")
     parser.add_argument("--rounds", type=int, help="rewrite iterations; default paper/fixture budget, not samples")
     parser.add_argument("--kernel", nargs="+", default=list(pf.KERNELS), choices=pf.KERNELS)
     parser.add_argument("--phase", nargs="+", default=list(pf.PHASES), choices=pf.PHASES)
@@ -275,9 +274,8 @@ def select(args):
         raise ValueError("--case selects logic fixtures; use study logic or all")
     tasks = []
     if args.study in ("all", "array"):
-        if any(n < 0 for n in args.params):
-            raise ValueError("--params must be nonnegative")
-        tasks += [("array", n) for n in args.params]
+        # Figure 8: four functions over a 2D array, with 0–10 extra parameters.
+        tasks += [("array", n) for n in range(11)]
     if args.study in ("all", "sdql"):
         selected = [w for w in pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
         if args.rules == 12 and selected != [("batax", "2nd")]:

@@ -1,42 +1,32 @@
-;;; How `sdql.egg` corresponds to the reference crate.
+;;; Egglog constructors in `sdql.egg` and their reference spellings.
 ;;;
-;;; The language file says what the constructors ARE; this says what the reference
-;;; calls them, which is the only thing a differential harness needs that the encoding
-;;; itself does not. Keeping it out of the .egg file keeps the .egg file a language
-;;; declaration rather than a harness configuration.
+;;;     <Constructor>  <reference>
 ;;;
-;;; One line per operator:
+;;; Python test terms use the egglog constructor name. The reference spelling is
+;;; an operator tag, or `=payload` for a bare literal with an optional prefix.
+;;; For example, `Add +` translates `(Add a b)` to `(+ a b)`, while
+;;; `Num =payload` translates `(Num 3)` to `3`.
 ;;;
-;;;     <operator>  <Constructor>  <reference>
-;;;
-;;; `<operator>` is the name terms and rules are written with. `<reference>` is the tag
-;;; the reference's parser uses, or `=payload` where the reference writes the payload
-;;; itself instead of a tag -- optionally `=payload <prefix>` where it needs one.
-;;;
-;;; Two entries are not just a rename, and both are the reference working around
-;;; itself rather than anything about the encoding:
-;;;
-;;;   let    the oracle holds two languages in one `define_language!`, so `let` is
-;;;          already taken by the array language's differently-shaped `let`
-;;;   sym    the oracle matches operator tags before payloads, so a bare symbol in a
-;;;          child position parses as an operator unless it is prefixed
+;;; The reference combines languages in one enum: `sdql-let` distinguishes this
+;;; constructor from the array language's `let`. Symbol payloads need `sym:` so
+;;; the reference parser does not interpret them as operator tags.
 
-lambda      Lambda      lambda
-sing        Sing        sing
-add         Add         +
-mult        Mult        *
-sub         Sub         -
-eq          Equality    eq
-get         Get         get
-range       Range       range
-apply       App         apply
-ifthen      IfThen      ifthen
-binop       Binop       binop
-subarray    SubArray    subarray
-unique      Unique      unique
-sum         Sum         sum
-merge       Merge       merge
-let         Let         sdql-let
-num         Num         =payload
-sym         Symbol      =payload sym:
-null        Null        null
+Lambda       lambda
+Sing         sing
+Add          +
+Mult         *
+Sub          -
+Equality     eq
+Get          get
+Range        range
+App          apply
+IfThen       ifthen
+Binop        binop
+SubArray     subarray
+Unique       unique
+Sum          sum
+Merge        merge
+Let          sdql-let
+Num          =payload
+Symbol       =payload sym:
+Null         null

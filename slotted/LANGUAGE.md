@@ -20,7 +20,7 @@ aliasing policy. It keeps the outer class's slots and each nested node's fresh
 slots pairwise distinct, while preserving sharing already present in child edges.
 The default implements the more complete multipattern matcher. Compatibility mode
 accepts a single nested left-hand pattern and rejects additional equality side
-patterns; checks keep their ordinary semantics. See [ENCODING.md](ENCODING.md#against-the-reference)
+patterns; checks keep their ordinary semantics. See [the encoding guide](../egglog-experimental/src/slotted/ENCODING.md#against-the-reference)
 for the exact graph comparisons and substitution policy used by `slotted/check.py`.
 
 The Rust pass in `egglog-experimental/src/slotted/` transforms complete source
@@ -358,7 +358,7 @@ language and the compiler rejects them rather than passing them through — writ
 three things — a variable, a term to build, or `subst` — and its conclusion is always that
 the two sides are equal. egglog's other actions have no spelling here: `set` and `delete`
 would have to name one row of a class that spans several, and `subsume` interacts with the
-shape index retiring rows. `slotted/ENCODING.md` C12 sets out the three
+shape index retiring rows. `egglog-experimental/src/slotted/ENCODING.md` C12 sets out the three
 right-hand sides and what each compiles to.
 
 ## Running
@@ -370,7 +370,7 @@ right-hand sides and what each compiles to.
 Three user-rule steps, with the machinery saturated around each. Saturating between
 steps is not optional: the invariants have to hold before the next user rule looks at
 the graph. A step has two phases of its own: the rules find their matches, then the
-`slotted-apply` ruleset acts on them (`slotted/ENCODING.md` C13), so one step is still
+`slotted-apply` ruleset acts on them (`egglog-experimental/src/slotted/ENCODING.md` C13), so one step is still
 one round of every rule.
 
 ## Asking questions
@@ -625,4 +625,4 @@ reference inputs are derived on each run and need no separate synchronization.
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `egglog-experimental/src/slotted/` | the Rust compiler |
 | `slotted/reference.py` | test input metadata and translation to the reference |
-| `slotted/ENCODING.md` | what this language compiles TO, and why each table is there |
+| `egglog-experimental/src/slotted/ENCODING.md` | what this language compiles TO, and why each table is there |

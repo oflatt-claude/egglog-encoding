@@ -55,6 +55,19 @@ def test_treatment_definitions_keep_exact_and_timing_pairs_distinct() -> None:
         workload.reference("encoding")
 
 
+def test_default_workloads_include_the_paper_array_sweep_and_sdql_table() -> None:
+    workloads = W.select(run.parser("test").parse_args([]))
+    arrays = [w for w in workloads if w.study == "array"]
+    assert [w.case for w in arrays] == [f"goal-2d-4f-N{n}" for n in range(11)]
+    assert all(w.rounds == 6 for w in arrays)
+    sdql = [w for w in workloads if w.study == "sdql"]
+    assert [w.case for w in sdql] == [f"{kernel}_{phase}-44rules" for kernel, phase in W.pf.WORKLOADS]
+    assert len(sdql) == 10
+    assert {w.case for w in workloads if w.study == "logic"} == {
+        p.stem for p in W.LOGIC_FIXTURES.glob("first-order-logic*.egg")
+    }
+
+
 @pytest.mark.parametrize("encoding,reference", T.EXACT_PAIRS.items())
 @pytest.mark.parametrize(
     "problem", ["classes", "nodes", "missing-counts", "identity", "verdict", "certificate", "graph"]
@@ -219,4 +232,4 @@ def test_build_failure_has_error_exit_status(module: Any, monkeypatch: pytest.Mo
         raise subprocess.CalledProcessError(1, ["cargo", "build"])
 
     monkeypatch.setattr(run, "build", fail_build)
-    assert module.main(["array", "--params", "0"]) == 2
+    assert module.main(["array"]) == 2

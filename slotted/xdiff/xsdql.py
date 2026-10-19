@@ -227,32 +227,32 @@ def compiler_regression_cases():
     # has made the slot redundant, so final refinement may merge another carried
     # slot onto `$x`. The side condition makes that alternative load-bearing.
     atoms = [
-        ("?r", "add", [("sl", "$x"), ("pv", "b0")], []),
-        ("?r", "mult", [("pv", "a1"), ("pv", "b1")], []),
-        ("?r", "sub", [("pv", "a2"), ("pv", "b2")], []),
+        ("?r", "Add", [("sl", "$x"), ("pv", "b0")], []),
+        ("?r", "Mult", [("pv", "a1"), ("pv", "b1")], []),
+        ("?r", "Sub", [("pv", "a2"), ("pv", "b2")], []),
     ]
     conds = [(True, "$x", ["a2"])]
     multi_egg = driver.rewrite(
         LANG,
         atoms,
         "?r",
-        ("unique", ("pv", "a2")),
+        ("Unique", ("pv", "a2")),
         conds=conds,
         name="compiler-carried-slot-refinement",
     )
     multi_rule = driver.Rule(SOURCE, LANG, syntax.parse(multi_egg)[0])
-    n = ("num", 99)
+    n = ("Num", 99)
     redundant_nodes = [
-        ("add", V(0), V(1)),
-        ("mult", V(2), V(3)),
-        ("sub", V(4), V(5)),
+        ("Add", V(0), V(1)),
+        ("Mult", V(2), V(3)),
+        ("Sub", V(4), V(5)),
     ]
     out.append(
         Case(
             "carried-slot-refinement",
             multi_rule,
             redundant_nodes,
-            [n, ("unique", V(4)), ("null",)],
+            [n, ("Unique", V(4)), ("Null",)],
             FIRED,
             rounds=2,
             unions=[(node, n) for node in redundant_nodes],
@@ -262,17 +262,17 @@ def compiler_regression_cases():
     # Repeated occurrences of one pvar independently unify modulo the class's
     # symmetry group. The middle occurrence needs the swap, while the first and
     # third need the identity; sharing one symmetry witness cannot match this row.
-    a = ("add", V(0), V(1))
-    swapped = ("add", V(1), V(0))
-    symmetry_source = ("add", V(2), V(3))
-    symmetry_target = ("add", V(3), V(2))
-    repeated = ("subarray", a, swapped, a)
-    atoms = [("?r", "subarray", [("pv", "x"), ("pv", "x"), ("pv", "x")], [])]
+    a = ("Add", V(0), V(1))
+    swapped = ("Add", V(1), V(0))
+    symmetry_source = ("Add", V(2), V(3))
+    symmetry_target = ("Add", V(3), V(2))
+    repeated = ("SubArray", a, swapped, a)
+    atoms = [("?r", "SubArray", [("pv", "x"), ("pv", "x"), ("pv", "x")], [])]
     repeated_egg = driver.rewrite(
         LANG,
         atoms,
         "?r",
-        ("unique", ("pv", "x")),
+        ("Unique", ("pv", "x")),
         name="compiler-repeated-pvar-symmetry",
     )
     repeated_rule = driver.Rule(SOURCE, LANG, syntax.parse(repeated_egg)[0])
@@ -281,7 +281,7 @@ def compiler_regression_cases():
             "repeated-pvar-symmetry",
             repeated_rule,
             [repeated],
-            [repeated, ("unique", a), ("null",)],
+            [repeated, ("Unique", a), ("Null",)],
             FIRED,
             rounds=2,
             unions=[(symmetry_source, symmetry_target)],
@@ -303,12 +303,12 @@ def cases():
             RULES["eq-comm"],
             [],
             [
-                ("sum", ("null",), 5, 5, V(5)),
-                ("sum", ("null",), 6, 7, V(7)),
-                ("sum", ("null",), 6, 7, V(6)),
-                ("merge", ("null",), ("null",), 5, 5, 5, V(5)),
-                ("merge", ("null",), ("null",), 6, 7, 8, V(8)),
-                ("merge", ("null",), ("null",), 6, 7, 8, V(6)),
+                ("Sum", ("Null",), 5, 5, V(5)),
+                ("Sum", ("Null",), 6, 7, V(7)),
+                ("Sum", ("Null",), 6, 7, V(6)),
+                ("Merge", ("Null",), ("Null",), 5, 5, 5, V(5)),
+                ("Merge", ("Null",), ("Null",), 6, 7, 8, V(8)),
+                ("Merge", ("Null",), ("Null",), 6, 7, 8, V(6)),
             ],
             "[0,1][2][3,4][5] missing[[]]",
         )
@@ -323,8 +323,8 @@ def cases():
         Case(
             "eq-comm",
             RULES["eq-comm"],
-            [("eq", V(1), ("num", 5))],
-            [("eq", V(1), ("num", 5)), ("eq", ("num", 5), V(1)), ("get", V(1), ("num", 5))],
+            [("Equality", V(1), ("Num", 5))],
+            [("Equality", V(1), ("Num", 5)), ("Equality", ("Num", 5), V(1)), ("Get", V(1), ("Num", 5))],
             FIRED,
         )
     )
@@ -334,8 +334,8 @@ def cases():
         Case(
             "mult-app1",
             RULES["mult-app1"],
-            [("mult", V(1), V(2))],
-            [("mult", V(1), V(2)), ("binop", ("sym", "mult"), V(1), V(2)), ("binop", ("sym", "add"), V(1), V(2))],
+            [("Mult", V(1), V(2))],
+            [("Mult", V(1), V(2)), ("Binop", ("Symbol", "mult"), V(1), V(2)), ("Binop", ("Symbol", "add"), V(1), V(2))],
             FIRED,
         )
     )
@@ -346,8 +346,8 @@ def cases():
         Case(
             "add-app1",
             RULES["add-app1"],
-            [("add", V(1), V(2))],
-            [("add", V(1), V(2)), ("binop", ("sym", "add"), V(1), V(2)), ("binop", ("sym", "sub"), V(1), V(2))],
+            [("Add", V(1), V(2))],
+            [("Add", V(1), V(2)), ("Binop", ("Symbol", "add"), V(1), V(2)), ("Binop", ("Symbol", "sub"), V(1), V(2))],
             FIRED,
         )
     )
@@ -357,8 +357,8 @@ def cases():
         Case(
             "mult-app2",
             RULES["mult-app2"],
-            [("binop", ("sym", "mult"), V(1), V(2))],
-            [("binop", ("sym", "mult"), V(1), V(2)), ("mult", V(1), V(2)), ("binop", ("sym", "add"), V(1), V(2))],
+            [("Binop", ("Symbol", "mult"), V(1), V(2))],
+            [("Binop", ("Symbol", "mult"), V(1), V(2)), ("Mult", V(1), V(2)), ("Binop", ("Symbol", "add"), V(1), V(2))],
             FIRED,
         )
     )
@@ -370,8 +370,8 @@ def cases():
         Case(
             "mult-app2-blocked",
             RULES["mult-app2"],
-            [("binop", ("sym", "add"), V(1), V(2))],
-            [("binop", ("sym", "add"), V(1), V(2)), ("mult", V(1), V(2)), ("binop", ("sym", "sub"), V(1), V(2))],
+            [("Binop", ("Symbol", "add"), V(1), V(2))],
+            [("Binop", ("Symbol", "add"), V(1), V(2)), ("Mult", V(1), V(2)), ("Binop", ("Symbol", "sub"), V(1), V(2))],
             BLOCKED,
         )
     )
@@ -381,8 +381,8 @@ def cases():
         Case(
             "add-zero",
             RULES["add-zero"],
-            [("add", V(1), ("num", 0))],
-            [("add", V(1), ("num", 0)), V(1), ("add", V(1), ("num", 1))],
+            [("Add", V(1), ("Num", 0))],
+            [("Add", V(1), ("Num", 0)), V(1), ("Add", V(1), ("Num", 1))],
             FIRED,
         )
     )
@@ -390,8 +390,8 @@ def cases():
         Case(
             "add-zero-blocked",
             RULES["add-zero"],
-            [("add", V(1), ("num", 1))],
-            [("add", V(1), ("num", 1)), V(1), ("add", V(1), ("num", 2))],
+            [("Add", V(1), ("Num", 1))],
+            [("Add", V(1), ("Num", 1)), V(1), ("Add", V(1), ("Num", 2))],
             BLOCKED,
         )
     )
@@ -401,8 +401,8 @@ def cases():
         Case(
             "unique-app1",
             RULES["unique-app1"],
-            [("unique", V(1))],
-            [("unique", V(1)), ("apply", ("sym", "uniquef"), V(1)), ("apply", ("sym", "uniquefx"), V(1))],
+            [("Unique", V(1))],
+            [("Unique", V(1)), ("App", ("Symbol", "uniquef"), V(1)), ("App", ("Symbol", "uniquefx"), V(1))],
             FIRED,
         )
     )
@@ -412,11 +412,11 @@ def cases():
         Case(
             "get-range",
             RULES["get-range"],
-            [("get", ("range", V(3), V(4)), V(7))],
+            [("Get", ("Range", V(3), V(4)), V(7))],
             [
-                ("get", ("range", V(3), V(4)), V(7)),
-                ("add", V(7), ("sub", V(3), ("num", 1))),
-                ("add", V(7), ("sub", ("num", 1), V(3))),
+                ("Get", ("Range", V(3), V(4)), V(7)),
+                ("Add", V(7), ("Sub", V(3), ("Num", 1))),
+                ("Add", V(7), ("Sub", ("Num", 1), V(3))),
             ],
             FIRED,
         )
@@ -427,11 +427,11 @@ def cases():
         Case(
             "let-binop3",
             RULES["let-binop3"],
-            [("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(3)))],
+            [("Let", V(1), 2, ("Binop", ("Symbol", "mult"), V(2), V(3)))],
             [
-                ("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(3))),
-                ("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(3))),
-                ("binop", ("sym", "add"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(3))),
+                ("Let", V(1), 2, ("Binop", ("Symbol", "mult"), V(2), V(3))),
+                ("Binop", ("Symbol", "mult"), ("Let", V(1), 2, V(2)), ("Let", V(1), 2, V(3))),
+                ("Binop", ("Symbol", "add"), ("Let", V(1), 2, V(2)), ("Let", V(1), 2, V(3))),
             ],
             FIRED,
         )
@@ -447,11 +447,11 @@ def cases():
         Case(
             "let-binop4-fires",
             RULES["let-binop4"],
-            [("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(1)))],
+            [("Binop", ("Symbol", "mult"), ("Let", V(1), 2, V(2)), ("Let", V(1), 2, V(1)))],
             [
-                ("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 2, V(1))),
-                ("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(1))),
-                ("let", V(1), 2, ("binop", ("sym", "add"), V(2), V(1))),
+                ("Binop", ("Symbol", "mult"), ("Let", V(1), 2, V(2)), ("Let", V(1), 2, V(1))),
+                ("Let", V(1), 2, ("Binop", ("Symbol", "mult"), V(2), V(1))),
+                ("Let", V(1), 2, ("Binop", ("Symbol", "add"), V(2), V(1))),
             ],
             FIRED,
         )
@@ -466,11 +466,11 @@ def cases():
         Case(
             "let-binop4-no-capture",
             RULES["let-binop4"],
-            [("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 3, V(2)))],
+            [("Binop", ("Symbol", "mult"), ("Let", V(1), 2, V(2)), ("Let", V(1), 3, V(2)))],
             [
-                ("binop", ("sym", "mult"), ("let", V(1), 2, V(2)), ("let", V(1), 3, V(2))),
-                ("let", V(1), 9, ("binop", ("sym", "mult"), V(9), V(2))),
-                ("let", V(1), 2, ("binop", ("sym", "mult"), V(2), V(2))),
+                ("Binop", ("Symbol", "mult"), ("Let", V(1), 2, V(2)), ("Let", V(1), 3, V(2))),
+                ("Let", V(1), 9, ("Binop", ("Symbol", "mult"), V(9), V(2))),
+                ("Let", V(1), 2, ("Binop", ("Symbol", "mult"), V(2), V(2))),
             ],
             FIRED,
         )
@@ -483,8 +483,8 @@ def cases():
         Case(
             "sum-sing",
             RULES["sum-sing"],
-            [("sum", V(9), 5, 6, ("sing", V(5), V(6)))],
-            [("sum", V(9), 5, 6, ("sing", V(5), V(6))), V(9), ("sum", V(9), 5, 6, ("sing", V(6), V(5)))],
+            [("Sum", V(9), 5, 6, ("Sing", V(5), V(6)))],
+            [("Sum", V(9), 5, 6, ("Sing", V(5), V(6))), V(9), ("Sum", V(9), 5, 6, ("Sing", V(6), V(5)))],
             FIRED,
         )
     )
@@ -494,23 +494,23 @@ def cases():
         Case(
             "sum-fact-inv-1",
             RULES["sum-fact-inv-1"],
-            [("mult", V(7), ("sum", V(1), 2, 3, ("get", V(2), V(3))))],
+            [("Mult", V(7), ("Sum", V(1), 2, 3, ("Get", V(2), V(3))))],
             [
-                ("mult", V(7), ("sum", V(1), 2, 3, ("get", V(2), V(3)))),
-                ("sum", V(1), 2, 3, ("mult", V(7), ("get", V(2), V(3)))),
-                ("sum", V(1), 2, 3, ("mult", ("get", V(2), V(3)), V(7))),
+                ("Mult", V(7), ("Sum", V(1), 2, 3, ("Get", V(2), V(3)))),
+                ("Sum", V(1), 2, 3, ("Mult", V(7), ("Get", V(2), V(3)))),
+                ("Sum", V(1), 2, 3, ("Mult", ("Get", V(2), V(3)), V(7))),
             ],
             FIRED,
         )
     )
 
     # --- `Merge`: three binders on one node, six children, and a built `let`
-    lhs = ("sum", V(1), 2, 3, ("sum", V(4), 5, 6, ("ifthen", ("eq", V(3), V(6)), ("get", V(2), V(5)))))
-    rhs = ("merge", V(1), V(4), 2, 5, 3, ("let", V(3), 6, ("get", V(2), V(5))))
+    lhs = ("Sum", V(1), 2, 3, ("Sum", V(4), 5, 6, ("IfThen", ("Equality", V(3), V(6)), ("Get", V(2), V(5)))))
+    rhs = ("Merge", V(1), V(4), 2, 5, 3, ("Let", V(3), 6, ("Get", V(2), V(5))))
     # NOT the two ranges swapped: that is the free-slot renaming $1 <-> $4 of
     # probe 1, i.e. the same class. The two key binders swapped reorders the bound
     # slots against the body, which no renaming undoes.
-    ctl = ("merge", V(1), V(4), 5, 2, 3, ("let", V(3), 6, ("get", V(2), V(5))))
+    ctl = ("Merge", V(1), V(4), 5, 2, 3, ("Let", V(3), 6, ("Get", V(2), V(5))))
     out.append(Case("sum-merge", RULES["sum-merge"], [lhs], [lhs, rhs, ctl], FIRED))
 
     # --- a slot-conditional rule, firing: `$x`,`$y` are not in `?e1`'s slots
@@ -518,11 +518,11 @@ def cases():
         Case(
             "sum-fact-1-fires",
             RULES["sum-fact-1"],
-            [("sum", V(1), 2, 3, ("mult", V(7), V(2)))],
+            [("Sum", V(1), 2, 3, ("Mult", V(7), V(2)))],
             [
-                ("sum", V(1), 2, 3, ("mult", V(7), V(2))),
-                ("mult", V(7), ("sum", V(1), 2, 3, V(2))),
-                ("mult", V(2), ("sum", V(1), 2, 3, V(7))),
+                ("Sum", V(1), 2, 3, ("Mult", V(7), V(2))),
+                ("Mult", V(7), ("Sum", V(1), 2, 3, V(2))),
+                ("Mult", V(2), ("Sum", V(1), 2, 3, V(7))),
             ],
             FIRED,
         )
@@ -533,11 +533,11 @@ def cases():
         Case(
             "sum-fact-1-blocked",
             RULES["sum-fact-1"],
-            [("sum", V(1), 2, 3, ("mult", V(2), V(7)))],
+            [("Sum", V(1), 2, 3, ("Mult", V(2), V(7)))],
             [
-                ("sum", V(1), 2, 3, ("mult", V(2), V(7))),
-                ("mult", V(2), ("sum", V(1), 2, 3, V(7))),
-                ("mult", V(7), ("sum", V(1), 2, 3, V(2))),
+                ("Sum", V(1), 2, 3, ("Mult", V(2), V(7))),
+                ("Mult", V(2), ("Sum", V(1), 2, 3, V(7))),
+                ("Mult", V(7), ("Sum", V(1), 2, 3, V(2))),
             ],
             BLOCKED,
         )
@@ -548,11 +548,11 @@ def cases():
         Case(
             "sum-fact-1-blocked-y",
             RULES["sum-fact-1"],
-            [("sum", V(1), 2, 3, ("mult", V(3), V(7)))],
+            [("Sum", V(1), 2, 3, ("Mult", V(3), V(7)))],
             [
-                ("sum", V(1), 2, 3, ("mult", V(3), V(7))),
-                ("mult", V(3), ("sum", V(1), 2, 3, V(7))),
-                ("mult", V(7), ("sum", V(1), 2, 3, V(3))),
+                ("Sum", V(1), 2, 3, ("Mult", V(3), V(7))),
+                ("Mult", V(3), ("Sum", V(1), 2, 3, V(7))),
+                ("Mult", V(7), ("Sum", V(1), 2, 3, V(3))),
             ],
             BLOCKED,
         )
@@ -575,16 +575,16 @@ def binder_collision_cases():
     main differential suite.
     """
     shapes = {
-        "let": ("let", V(5), 5, ("num", 0)),
-        "sum": ("sum", V(5), 5, 6, ("num", 0)),
-        "merge": ("merge", V(5), ("num", 0), 5, 6, 7, ("num", 0)),
+        "let": ("Let", V(5), 5, ("Num", 0)),
+        "sum": ("Sum", V(5), 5, 6, ("Num", 0)),
+        "merge": ("Merge", V(5), ("Num", 0), 5, 6, 7, ("Num", 0)),
     }
     return [
         Case(
             f"{name}-free-uncovered",
             RULES["eq-comm"],
             [],
-            [("apply", term, V(5)), ("apply", term, V(8))],
+            [("App", term, V(5)), ("App", term, V(8))],
             "[0][1] missing[[]]",
         )
         for name, term in shapes.items()

@@ -7,6 +7,22 @@ from typing import Any
 import pytest
 
 syntax = importlib.import_module("slotted.reference")
+LANGUAGES = Path(__file__).resolve().parents[1] / "slotted/languages"
+
+
+@pytest.mark.parametrize(
+    "name,term,reference",
+    [
+        ("toy", ("F", ("Lam", 0, ("var", 0)), ("Num", 3)), "(f (lam $0 (var $0)) 3)"),
+        ("array", ("App", ("Sym", "map"), ("Lam", 0, ("var", 0))), "(app map (lam $0 (var $0)))"),
+        ("sdql", ("Add", ("Symbol", "sum"), ("Num", 3)), "(+ sym:sum 3)"),
+    ],
+)
+def test_constructor_names_translate_to_reference_syntax(name: str, term: Any, reference: str) -> None:
+    path = LANGUAGES / f"{name}.egg"
+    lang = syntax.language(path, path.with_suffix(".ref"))
+    assert set(lang.ops) == set(syntax.read_language(path))
+    assert lang.sexpr(term) == reference
 
 
 def source(tmp_path: Path) -> Any:

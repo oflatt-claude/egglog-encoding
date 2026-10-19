@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check every supported treatment on the slotted paper workloads.
 
-    python3 slotted/check.py array --params 0
+    python3 slotted/check.py array
     python3 slotted/check.py sdql --kernel mmm_sum --phase 1st
     python3 slotted/check.py logic
 

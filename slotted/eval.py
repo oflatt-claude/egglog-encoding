@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Benchmark the slotted paper workloads, without caching or graph verification.
 
-    python3 slotted/eval.py array --params 0
+    python3 slotted/eval.py array
     python3 slotted/eval.py sdql --kernel batax --phase 1st
     python3 slotted/eval.py --samples 3 --jobs 4
 
