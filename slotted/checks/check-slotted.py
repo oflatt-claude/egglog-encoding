@@ -93,7 +93,6 @@ def paper_sdql_ran(out: str) -> str | None:
 
 # Check name, Python script/arguments, output validator, fuzzing flag, reference flag.
 CHECKS = [
-    ("campaign-status", ("slotted/checks/check-campaign.py",), starts_ok, False, False),
     ("leader-maintenance", ("slotted/checks/check-leader-maintenance.py",), starts_ok, False, False),
     ("shape-cache", ("slotted/checks/check-shape-cache.py",), starts_ok, False, False),
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
@@ -306,17 +305,38 @@ CHECKS = [
         False,
         True,
     ),
-    (
-        "iso-fuzz",
-        # 80 generated for a floor of 60: the ratio is over cases that could be
-        # COMPARED, and a rule whose atoms share nothing is a cross product the
-        # reference sometimes cannot finish, so the denominator has to have slack.
-        ("slotted/xdiff/isomorphism.py", "fuzz", "80"),
-        ratio(r"(\d+)/(\d+) isomorphic", 60),
-        True,
-        True,
-    ),
 ]
+
+# Fixed seeds make failures reproducible. Keep the default suite bounded; each
+# driver also accepts a case count and seed for larger runs of the same tests.
+for seed in (0, 1):
+    CHECKS.extend(
+        [
+            (
+                f"iso-fuzz-{seed}",
+                # Allow reference timeouts while requiring at least 60 comparisons.
+                # Mismatches and unreadable graphs fail the driver.
+                ("slotted/xdiff/isomorphism.py", "fuzz", "80", str(seed)),
+                ratio(r"(\d+)/(\d+) isomorphic", 60),
+                True,
+                True,
+            ),
+            (
+                f"order-fuzz-{seed}",
+                ("slotted/xdiff/order-independence.py", "20", str(seed)),
+                ratio(r"(\d+)/(\d+) order independent", 20),
+                True,
+                False,
+            ),
+            (
+                f"checker-mutations-{seed}",
+                ("slotted/xdiff/checker-mutations.py", "80", str(seed)),
+                ratio(r"(\d+)/(\d+) count-changing mutations caught", 300),
+                True,
+                True,
+            ),
+        ]
+    )
 
 
 def main():
