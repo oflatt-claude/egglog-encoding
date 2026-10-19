@@ -109,6 +109,7 @@ def main():
     config = run.Config(
         egglog=ROOT / "target/debug/egglog-experimental",
         xmulti=ROOT / "slotted/xmulti/target/debug/xmulti",
+        checker=ROOT / "target/debug/egraph-isomorphism",
     )
     with tempfile.TemporaryDirectory(prefix="slotted-nested-") as tmp:
         compiler_flag(tmp)

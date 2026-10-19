@@ -164,14 +164,11 @@ def compare_graphs(first, graph, issues):
         return None
     if first.summary() != graph.summary():
         return f"class/node counts differ: {first.summary()} vs {graph.summary()}"
-    try:
-        witness, why = ISO.find_isomorphism(first, graph)
-        if witness is None:
-            return f"no isomorphism: {why}"
-        bad = ISO.verify(first, graph, *witness)
-        return f"invalid isomorphism: {bad}" if bad is not None else None
-    except ISO.IsomorphismLimit as exc:
-        return f"isomorphism inconclusive: {exc}"
+    witness, why = ISO.find_isomorphism(first, graph)
+    if witness is None:
+        return f"no isomorphism: {why}"
+    bad = ISO.verify(first, graph, witness)
+    return f"invalid isomorphism: {bad}" if bad is not None else None
 
 
 def substitution_selftest():
@@ -190,7 +187,7 @@ def substitution_selftest():
     assert compare_graphs(first, first, ["reader error"]) is not None
     assert compare_graphs(first, different, []) is not None
     assert compare_graphs(first, renamed, []) is None
-    with patch.object(ISO, "find_isomorphism", side_effect=ISO.IsomorphismLimit("test bound")):
+    with patch.object(ISO, "find_isomorphism", return_value=(None, "test bound -- inconclusive")):
         assert compare_graphs(first, renamed, []) is not None
     with patch.object(ISO, "verify", return_value="test invalid witness"):
         assert compare_graphs(first, renamed, []) is not None

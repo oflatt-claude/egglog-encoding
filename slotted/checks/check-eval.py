@@ -24,6 +24,7 @@ from slotted.xdiff import xdiff as X  # noqa: E402
 CHECK_CONFIG = run.Config(
     egglog=ROOT / "target" / "debug" / "egglog-experimental",
     xmulti=ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti",
+    checker=ROOT / "target/debug/egraph-isomorphism",
 )
 
 
@@ -361,8 +362,13 @@ def graph_failure_reasons():
     timed = subprocess.CompletedProcess([], 0, "GOAL yes\nCONFIG substitution=snapshot\n", "")
     for code, stdout, stderr, reason in (
         (1, "", "REFERENCE_LIMIT: symmetry enumeration is capped", "symmetry enumeration"),
-        (0, "CLASS c SLOTS x\nGROUP c ?\n", "", "reference graph unreadable"),
-        (0, "", "", "reference graph dump is empty"),
+        (
+            0,
+            'GRAPH {"nodes":{},"slotted":{"classes":{"c":{"slots":["x"],"group":[]}},"nodes":{}}}\n',
+            "",
+            "reference graph unreadable",
+        ),
+        (0, 'GRAPH {"nodes":{},"slotted":{"classes":{},"nodes":{}}}\n', "", "reference graph dump is empty"),
     ):
         reference = run.Row("regression", "diagnostics", "ref-multi", 1)
         dump = subprocess.CompletedProcess([], code, stdout, stderr)
@@ -462,7 +468,9 @@ def parallel_collection():
     # Spawned workers receive explicit configuration, not fresh defaults.
     selected = selected[:1]
     sides = ("encoding-no-aliasing", "ref-nested-snapshot")
-    (limited,) = collect(2, sides, run.Config(CHECK_CONFIG.egglog, CHECK_CONFIG.xmulti, group_cap=0))
+    (limited,) = collect(
+        2, sides, run.Config(CHECK_CONFIG.egglog, CHECK_CONFIG.xmulti, group_cap=0, checker=CHECK_CONFIG.checker)
+    )
     enc, ref = limited
     assert enc.goal == ref.goal == "no"
     assert (enc.classes, enc.nodes) == (ref.classes, ref.nodes)

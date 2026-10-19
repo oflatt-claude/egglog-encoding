@@ -9,6 +9,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+egraph-isomorphism = { path = "../../egraph-isomorphism" }
+serde_json = "1.0"
 num-bigint = "0.4"
 # Pinned to a REV rather than a local path, so a runner with no checkout of the
 # reference can build this and the differential half can run in CI.

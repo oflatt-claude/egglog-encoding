@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import subprocess
 import sys
@@ -141,7 +142,7 @@ def test_checker_runs_every_supported_treatment(study: str, case: str | int, mon
 
     monkeypatch.setattr(run, "run", execute)
     monkeypatch.setattr(V, "collect_graph", lambda _w, r, *_a, **_k: graphed.append(r.side))
-    monkeypatch.setattr(V, "compare", lambda *_a: None)
+    monkeypatch.setattr(V, "compare", lambda *_a, **_k: None)
     rows = C.check_workload(workload)
     assert ran == graphed == list(workload.supported_sides(T.SIDES))
     assert all(row.unsupported == workload.unsupported for row in rows)
@@ -238,3 +239,37 @@ def test_build_failure_has_error_exit_status(module: Any, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(run, "build", fail_build)
     assert module.main(["array"]) == 2
+
+
+def test_common_graph_export_preserves_duplicate_rows_empty_classes_and_slot_names() -> None:
+    graph = V.ISO.Graph()
+    graph.add_class("empty", [])
+    graph.add_class("nonempty", [1, "1"])
+    graph.nodes["nonempty"] = [("pair", (("slot", 1), ("slot", "1")))] * 2
+    graph.close_groups()
+    exported = V.ISO.serialized_graph(graph)
+    assert len(exported["nodes"]) == 2
+    assert len(exported["class_data"]) == 2
+    slots = exported["slotted"]["classes"][json.dumps("nonempty")]["slots"]
+    assert len(set(slots)) == 2
+    graph.nodes["unrecorded-class"] = []
+    with pytest.raises(ValueError, match="different classes"):
+        V.ISO.serialized_graph(graph)
+
+
+def test_reference_adapter_rejects_semantics_it_cannot_preserve() -> None:
+    graph = V.ISO.Graph()
+    graph.add_class("constant", [])
+    graph.nodes["constant"] = [("constant", ())]
+    graph.close_groups()
+    exported = V.ISO.serialized_graph(graph)
+    assert V.ISO.parse_reference("GRAPH " + json.dumps(exported)).summary() == (1, 1)
+    change: dict[str, Any]
+    for change in (
+        {"root_eclasses": [json.dumps("constant")]},
+        {"class_data": {json.dumps("constant"): {"type": "Integer"}}},
+        {"class_data": {"unannotated-empty-class": {}}},
+        {"nodes": {nid: {**node, "subsumed": True} for nid, node in exported["nodes"].items()}},
+    ):
+        with pytest.raises(ValueError):
+            V.ISO.parse_reference("GRAPH " + json.dumps(exported | change))

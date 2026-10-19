@@ -1,0 +1,160 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use egraph_serialize::{ClassId, NodeId};
+use serde::{Deserialize, Serialize};
+
+use crate::Error;
+use crate::graph::{Arg, Graph, bijection};
+
+/// Explicit choices sufficient to check an isomorphism without any search.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Witness {
+    pub classes: BTreeMap<ClassId, ClassMatch>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClassMatch {
+    pub target: ClassId,
+    /// Target slot index for each source class slot.
+    pub slots: Vec<usize>,
+    pub nodes: BTreeMap<NodeId, NodeMatch>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NodeMatch {
+    pub target: NodeId,
+    /// Target private slot index for each source private slot (both start at zero).
+    pub locals: Vec<usize>,
+    /// Index into the target class's lexicographically sorted symmetry group.
+    pub parent: usize,
+    /// One group index per child occurrence, in argument order.
+    pub children: Vec<usize>,
+}
+
+/// Verify all class, slot, group, root, and node obligations directly.
+/// This code does not use search, refinement, variant enumeration, or bipartite matching.
+pub fn verify(left: &Graph, right: &Graph, witness: &Witness) -> Result<(), Error> {
+    let invalid = |reason: &str| Error(format!("invalid witness: {reason}"));
+    if witness.classes.keys().collect::<BTreeSet<_>>() != left.indices.keys().collect()
+        || witness
+            .classes
+            .values()
+            .map(|c| &c.target)
+            .collect::<BTreeSet<_>>()
+            != right.indices.keys().collect()
+        || left.classes.len() != right.classes.len()
+    {
+        return Err(invalid("not a bijection on classes"));
+    }
+    let phi: Vec<_> = left
+        .classes
+        .iter()
+        .map(|c| right.indices[&witness.classes[&c.id].target])
+        .collect();
+    if left.roots.iter().map(|&c| phi[c]).collect::<Vec<_>>() != right.roots {
+        return Err(invalid("root classes do not correspond"));
+    }
+    for (a, source) in left.classes.iter().enumerate() {
+        let target = &right.classes[phi[a]];
+        let class = &witness.classes[&source.id];
+        if source.sort != target.sort {
+            return Err(invalid("class sorts differ"));
+        }
+        if source.slots != target.slots || !bijection(&class.slots, target.slots) {
+            return Err(invalid("slot map is not a bijection"));
+        }
+        if source.group.len() != target.group.len() {
+            return Err(invalid("symmetry group sizes differ"));
+        }
+        for p in &source.group {
+            let mut transported = vec![0; target.slots];
+            for (i, &j) in p.iter().enumerate() {
+                transported[class.slots[i]] = class.slots[j];
+            }
+            if target.group.binary_search(&transported).is_err() {
+                return Err(invalid("slot map does not conjugate the symmetry groups"));
+            }
+        }
+        if class.nodes.keys().collect::<BTreeSet<_>>()
+            != source.nodes.iter().map(|n| &n.id).collect()
+            || class
+                .nodes
+                .values()
+                .map(|n| &n.target)
+                .collect::<BTreeSet<_>>()
+                != target.nodes.iter().map(|n| &n.id).collect()
+            || source.nodes.len() != target.nodes.len()
+        {
+            return Err(invalid("not a bijection on nodes"));
+        }
+        let targets: BTreeMap<_, _> = target.nodes.iter().map(|n| (&n.id, n)).collect();
+        for node in &source.nodes {
+            let choice = &class.nodes[&node.id];
+            let other = targets[&choice.target];
+            if node.label != other.label || node.args.len() != other.args.len() {
+                return Err(invalid("node labels or arities differ"));
+            }
+            if node.locals != other.locals || !bijection(&choice.locals, other.locals) {
+                return Err(invalid("private slot map is not a bijection"));
+            }
+            let parent = target
+                .group
+                .get(choice.parent)
+                .ok_or_else(|| invalid("parent symmetry index out of bounds"))?;
+            let source_slot = |s: usize| {
+                if s < source.slots {
+                    class.slots[s]
+                } else {
+                    target.slots + choice.locals[s - source.slots]
+                }
+            };
+            let target_slot = |s: usize| if s < target.slots { parent[s] } else { s };
+            let mut children = choice.children.iter();
+            for (arg, other_arg) in node.args.iter().zip(&other.args) {
+                match (arg, other_arg) {
+                    (Arg::Slot(s), Arg::Slot(t)) if source_slot(*s) == target_slot(*t) => {}
+                    (
+                        Arg::Child {
+                            class: child,
+                            slots,
+                        },
+                        Arg::Child {
+                            class: other_child,
+                            slots: other_slots,
+                        },
+                    ) => {
+                        if phi[*child] != *other_child {
+                            return Err(invalid("child classes differ"));
+                        }
+                        let index = children
+                            .next()
+                            .ok_or_else(|| invalid("missing child symmetry"))?;
+                        let symmetry = right.classes[*other_child]
+                            .group
+                            .get(*index)
+                            .ok_or_else(|| invalid("child symmetry index out of bounds"))?;
+                        let child_map = &witness.classes[&left.classes[*child].id].slots;
+                        // Compare the two invocation maps pointwise. This is deliberately
+                        // separate from the transformed-node equality used by search.
+                        for (slot, &image) in slots.iter().enumerate() {
+                            let mapped = *child_map
+                                .get(slot)
+                                .ok_or_else(|| invalid("missing child slot"))?;
+                            let target_key = *symmetry
+                                .get(mapped)
+                                .ok_or_else(|| invalid("invalid child slot map"))?;
+                            if source_slot(image) != target_slot(other_slots[target_key]) {
+                                return Err(invalid("child slot maps differ"));
+                            }
+                        }
+                    }
+                    _ => return Err(invalid("direct slot or argument kind differs")),
+                }
+            }
+            if children.next().is_some() {
+                return Err(invalid("extra child symmetries"));
+            }
+        }
+    }
+    Ok(())
+}

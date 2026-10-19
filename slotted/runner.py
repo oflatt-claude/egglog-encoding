@@ -74,6 +74,7 @@ class Config:
     egglog: Path = EGGLOG
     xmulti: Path = XMULTI
     group_cap: int = GROUP_CAP
+    checker: Path = ROOT / "target/release/egraph-isomorphism"
 
 
 def quiet_progress(row, phase):

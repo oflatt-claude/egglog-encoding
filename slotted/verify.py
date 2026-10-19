@@ -137,7 +137,7 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
         row.graph = g
     except subprocess.TimeoutExpired:
         row.graph_issue = "encoding graph dump exceeded timeout"
-    except (json.JSONDecodeError, ISO.IsomorphismLimit) as exc:
+    except json.JSONDecodeError as exc:
         row.graph_issue = f"encoding graph unavailable: {exc}"
     finally:
         path.unlink(missing_ok=True)
@@ -156,7 +156,7 @@ def compare_counts(enc, ref):
     return "inconclusive: counts unavailable" if missing else "same counts"
 
 
-def compare(rows, progress=quiet_progress, *, search_cap=5_000):
+def compare(rows, progress=quiet_progress, *, search_cap=5_000, checker=None):
     """Compare complete graphs, preserving differences and resource limits.
 
     Only a verified class/slot/group/node witness establishes graph equality.
@@ -165,11 +165,13 @@ def compare(rows, progress=quiet_progress, *, search_cap=5_000):
     for enc in (r for r in rows if r.side in EXACT_PAIRS):
         for ref_row in (r for r in rows if TREATMENTS[r.side].engine == "reference"):
             progress(enc, f"isomorphism vs {ref_row.side}")
-            enc.vs_ref[ref_row.side] = Comparison(enc, ref_row, compare_graphs(enc, ref_row, search_cap=search_cap))
+            enc.vs_ref[ref_row.side] = Comparison(
+                enc, ref_row, compare_graphs(enc, ref_row, search_cap=search_cap, checker=checker)
+            )
     progress(None, "idle")
 
 
-def compare_graphs(enc, reference, *, search_cap=5_000):
+def compare_graphs(enc, reference, *, search_cap=5_000, checker=None):
     counts = compare_counts(enc, reference)
     if counts != "same counts":
         issues = [r.graph_issue for r in (enc, reference) if r.graph_issue]
@@ -178,16 +180,15 @@ def compare_graphs(enc, reference, *, search_cap=5_000):
         return "inconclusive: no encoding graph"
     if reference.graph is None:
         return "inconclusive: no reference graph" + (f"; {reference.graph_issue}" if reference.graph_issue else "")
-    try:
-        iso, why = ISO.find_isomorphism(reference.graph, enc.graph, search_cap=search_cap)
-        if iso is not None:
-            bad = ISO.verify(reference.graph, enc.graph, *iso)
-            return "isomorphic" if bad is None else f"inconclusive: witness rejected ({bad})"
-        if why and why.endswith("-- inconclusive"):
-            return "inconclusive: " + why.removesuffix(" -- inconclusive")
-        return f"different: {why}"
-    except (ISO.IsomorphismLimit, RecursionError) as exc:
-        return f"inconclusive: {exc}"
+    iso, why = ISO.find_isomorphism(reference.graph, enc.graph, search_cap=search_cap, checker=checker)
+    if iso is not None:
+        bad = ISO.verify(reference.graph, enc.graph, iso, checker=checker)
+        return "isomorphic" if bad is None else f"inconclusive: witness rejected ({bad})"
+    if why and why.endswith("-- inconclusive"):
+        return "inconclusive: " + why.removesuffix(" -- inconclusive")
+    if why and why.startswith("invalid graph:"):
+        return "inconclusive: " + why
+    return f"different: {why}"
 
 
 def assess(rows, sides=SIDES):

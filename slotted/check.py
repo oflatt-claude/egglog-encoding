@@ -10,7 +10,7 @@ as eval.py. Each treatment gets a goal check and a separate input-only graph
 export. Counts and independently verified isomorphism are both required for the
 exact pairs defined in treatments.py. Other pairs are diagnostic. Reference
 timeouts are explicitly unverified; errors and inconclusive non-timeout evidence
-fail the command. Python graph checks use work limits, not wall-clock timeouts.
+fail the command. Rust isomorphism checks use work limits, not wall-clock timeouts.
 """
 
 import subprocess
@@ -35,7 +35,7 @@ def check_workload(workload, *, sides=SIDES, timeout=300, config=None, progress=
         verification.collect_graph(workload, row, timeout, progress, config=config)
         progress(row, "done")
         rows.append(row)
-    verification.compare(rows, progress)
+    verification.compare(rows, progress, checker=config.checker if config else None)
     for row in rows:
         # Comparisons retain the paired rows, but no large graphs leave this worker.
         row.graph = None
@@ -87,6 +87,13 @@ def main(argv=None):
     try:
         selected = workloads.select(args)
         config = run.setup(args, selected, config=run.Config(group_cap=args.group_cap))
+        if not args.no_build:
+            subprocess.run(
+                ["cargo", "build", "--release", "-p", "egraph-isomorphism"], cwd=run.ROOT, check=True, stdout=sys.stderr
+            )
+        if not config.checker.is_file():
+            raise ValueError(f"missing {config.checker}; run without --no-build")
+        print(f"isomorphism {config.checker}", file=sys.stderr)
         results = run.run_workloads(selected, check_workload, jobs=args.jobs, config=config, timeout=args.timeout)
         return int(bool(report(selected, results)))
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

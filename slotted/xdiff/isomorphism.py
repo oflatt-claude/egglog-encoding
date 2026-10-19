@@ -4,11 +4,11 @@ Everything else here compares a projection -- the probe partition, node counts p
 operator, one invariant. Two different e-graphs can agree on all of those. This
 constructs a witness instead: a bijection between the two sides' e-classes, plus a
 bijection between each matched pair's slots, under which the node sets are equal. A
-candidate is rechecked against all class, slot, group, and node-set obligations before
-success is reported. The checker deliberately has direct positive and negative tests
-for each quotient operation; this recheck is not an independent proof implementation,
-because it shares the node matcher with the search. Failure only means none was found
-within the search cap, and is reported as such rather than as a difference.
+candidate carries class and slot bijections, node pairings, private-slot bijections,
+and parent/child symmetry choices. The Rust crate `egraph-isomorphism` checks that
+witness directly without using the search matcher. Exhausted work limits remain
+inconclusive. This module validates engine dumps, preserves raw rows, and adapts
+them to egraph-serialize JSON with slotted annotations.
 
 Three things make the comparison non-trivial, and each is handled rather than assumed
 away:
@@ -46,10 +46,6 @@ SEARCH_CAP = 200_000
 MATCH_VARIANT_CAP = 200_000
 
 
-class IsomorphismLimit(RuntimeError):
-    """The exact comparison exceeded a declared work bound."""
-
-
 #: Raise egglog's serialization limits, which default to 40 and silently truncate -- see
 #: `_dump`. Well past anything a generated case reaches, while still bounding the dump.
 SERIALIZE_LIMITS = ["--max-functions", "1000000", "--max-calls-per-function", "1000000"]
@@ -74,11 +70,9 @@ class Graph:
         self.nodes.setdefault(cid, [])
 
     def close_groups(self):
-        """Put the identity in every group.
+        """Initialize identities when constructing graphs; this does not compute closure.
 
-        A group always contains it, but a slotless class's identity is the *empty*
-        permutation, which the reference prints as an empty field -- indistinguishable
-        from "no permutations" unless this is made explicit.
+        Readers of full exported groups validate them before constructing the graph.
         """
         for cid, slots in self.slots.items():
             self.group[cid].add(frozenset((s, s) for s in slots))
@@ -91,40 +85,56 @@ class Graph:
 
 
 def parse_reference(out):
-    g = Graph()
-    for line in out.splitlines():
-        p = line.split()
-        if not p:
-            continue
-        if p[0] == "CLASS":
-            slots = p[3].split(",") if len(p) > 3 and p[3] else []
-            g.add_class(p[1], [s for s in slots if s])
-        elif p[0] == "GROUP":
-            cid = p[1]
-            g.add_class(cid, g.slots.get(cid, ()))
-            if len(p) > 2 and p[2] != "?":
-                for perm in p[2].split(";"):
-                    if not perm:
-                        continue
-                    pairs = [tuple(x.split(">")) for x in perm.split("|")]
-                    g.group[cid].add(frozenset(pairs))
-            elif len(p) > 2:
-                raise ValueError("group too large to enumerate")
-        elif p[0] == "NODE":
-            cid, op, elems = p[1], None, []
-            for e in p[2:]:
-                kind, _, rest = e.partition(":")
-                if kind == "o":
-                    op = rest if op is None else f"{op}/{rest}"
-                elif kind == "s":
-                    elems.append(("slot", rest))
-                elif kind == "c":
-                    child, _, mtext = rest.partition(":")
-                    m = tuple(sorted(tuple(x.split(">")) for x in mtext.split("|") if x))
-                    elems.append(("child", child, m))
-            g.nodes[cid].append((op, tuple(elems)))
-    g.close_groups()
-    return g
+    """Read the reference's annotated egraph-serialize export without repairing it."""
+    exports = [line.removeprefix("GRAPH ") for line in out.splitlines() if line.startswith("GRAPH ")]
+    if len(exports) != 1:
+        raise ValueError("expected one complete GRAPH export")
+    try:
+        doc = json.loads(exports[0])
+        annotations, nodes = doc["slotted"], doc["nodes"]
+        if set(annotations["nodes"]) != set(nodes):
+            raise ValueError("node annotations do not cover exactly the exported nodes")
+        if set(doc.get("class_data", {})) - set(annotations["classes"]):
+            raise ValueError("class annotations omit exported classes")
+        # The reference adapter models a single untyped carrier without designated
+        # roots or subsumption. Reject additional semantics instead of erasing them.
+        if (
+            doc.get("root_eclasses")
+            or any(data.get("type") is not None for data in doc.get("class_data", {}).values())
+            or any(node.get("subsumed", False) for node in nodes.values())
+        ):
+            raise ValueError("reference adapter does not support roots, class types, or subsumption")
+        g = Graph()
+        for cid, data in annotations["classes"].items():
+            slots = data["slots"]
+            if len(slots) != len(set(slots)):
+                raise ValueError(f"{cid}: repeated class slot")
+            g.add_class(cid, slots)
+            for permutation in data["group"]:
+                if sorted(permutation) != list(range(len(slots))):
+                    raise ValueError(f"{cid}: invalid group permutation")
+                g.group[cid].add(frozenset((s, slots[i]) for s, i in zip(slots, permutation, strict=True)))
+            if len(g.group[cid]) != len(data["group"]):
+                raise ValueError(f"{cid}: duplicate group elements")
+            if not is_closed_group(g.group[cid], frozenset((s, s) for s in slots)):
+                raise ValueError(f"{cid}: incomplete symmetry group")
+        for nid, node in nodes.items():
+            children = iter(node["children"])
+            elems = []
+            for arg in annotations["nodes"][nid]["arguments"]:
+                if arg["kind"] == "slot":
+                    elems.append(("slot", arg["slot"]))
+                elif arg["kind"] == "child":
+                    cid = nodes[next(children)]["eclass"]
+                    elems.append(("child", cid, tuple(map(tuple, arg["renaming"]))))
+                else:
+                    raise ValueError(f"{nid}: unknown argument kind {arg['kind']!r}")
+            if next(children, None) is not None:
+                raise ValueError(f"{nid}: missing child annotations")
+            g.nodes[node["eclass"]].append((node["op"], tuple(elems)))
+        return g
+    except (KeyError, TypeError, IndexError, StopIteration) as exc:
+        raise ValueError(f"malformed annotated graph: {exc}") from exc
 
 
 def read_json_graph(doc, lang):
@@ -567,310 +577,91 @@ def to_reference_shape(g, var_class=None, *, lang):
     return out, unfaithful
 
 
-# ------------------------------------------------------------- node equivalence
-def node_slots(node, class_slots):
-    """The parent-frame slots a node names, and which of them its class does not."""
-    used = []
-    for e in node[1]:
-        if e[0] == "slot":
-            used.append(e[1])
-        else:
-            used += [p for _, p in e[2]]
-    seen, ordered = set(), []
-    for s in used:
-        if s not in seen:
-            seen.add(s)
-            ordered.append(s)
-    return ordered, [s for s in ordered if s not in class_slots]
+def serialized_graph(g):
+    """Standard egraph-serialize JSON with complete slotted annotations.
 
-
-def apply_node(node, pmap, cmap, smap):
-    """Rewrite a node: parent slots by `pmap`, child ids by `cmap`, child slots by
-    `smap[cid]`. A slot `pmap` does not mention is left alone."""
-    out = []
-    for e in node[1]:
-        if e[0] == "slot":
-            out.append(("slot", pmap.get(e[1], e[1])))
-        else:
-            cid = cmap[e[1]]
-            sm = smap[e[1]]
-            out.append(("child", cid, tuple(sorted((sm.get(cs, cs), pmap.get(ps, ps)) for cs, ps in e[2]))))
-    return (node[0], tuple(out))
-
-
-def group_variants(node, gp, groups):
-    """Every node equal to this one under the parent's group and the children's.
-
-    This is the reference's "strong shape": an invocation `m` of a child class denotes
-    the same thing as `m . h` for any `h` in that child's group, and the parent class
-    asserting a permutation `g` means its node set is closed under applying `g`.
+    Every original node gets its own ID; no rows are deduplicated. Class metadata
+    keeps empty classes visible. Child pointers choose an arbitrary node of their
+    class, as in the standard format; a dangling pointer remains an invalid input.
+    JSON spellings distinguish integer slots from string slots in reader tests.
     """
-    child_ids = [e[1] for e in node[1] if e[0] == "child"]
-    # `sorted` on frozensets would use subset order, which is partial; sort by contents
-    # so the enumeration is deterministic run to run
-    per_child = [sorted(groups.get(c) or {frozenset()}, key=lambda p: sorted(map(str, p))) for c in child_ids]
-    for g in sorted(gp or {frozenset()}, key=lambda p: sorted(map(str, p))):
-        gd = dict(g)
-        for combo in itertools.product(*per_child) if per_child else [()]:
-            out, k = [], 0
-            for e in node[1]:
-                if e[0] == "slot":
-                    out.append(("slot", gd.get(e[1], e[1])))
-                else:
-                    h = dict(combo[k])
-                    k += 1
-                    # m . h, then g on the parent side
-                    inv = {v: kk for kk, v in h.items()}
-                    m = {inv.get(cs, cs): gd.get(ps, ps) for cs, ps in e[2]}
-                    out.append(("child", e[1], tuple(sorted(m.items()))))
-            yield (node[0], tuple(out))
+    if set(g.slots) != set(g.group) or set(g.slots) != set(g.nodes):
+        raise ValueError("class slots, groups, and nodes name different classes")
+    ids = {c: json.dumps(c) for c in g.ids()}
 
+    def node_id(c, i):
+        return f"{ids[c]}/{i}"
 
-def match_nodes(src, dst, src_slots, dst_slots, pmap, cmap, smap, dst_groups):
-    """Can `src`'s nodes be matched one-to-one onto `dst`'s?
-
-    `pmap` fixes the class slots; slots the node carries but the class does not are
-    existentially quantified, so every bijection between the two sides' extras is
-    tried -- that is alpha-equivalence for a bound slot.
-    """
-    if len(src) != len(dst):
-        return False
-    variant_work = 0
-    variants = []
-    for n in dst:
-        current = set()
-        for variant in group_variants(n, dst_groups[1], dst_groups[0]):
-            variant_work += 1
-            if variant_work > MATCH_VARIANT_CAP:
-                raise IsomorphismLimit(f"node-variant cap ({MATCH_VARIANT_CAP}) reached -- inconclusive")
-            current.add(variant)
-        variants.append(current)
-
-    def compatible(n, j):
-        _, extra = node_slots(n, src_slots)
-        _, dextra = node_slots(dst[j], dst_slots)
-        if len(extra) != len(dextra):
-            return False
-        for perm in itertools.permutations(dextra):
-            nonlocal variant_work
-            variant_work += 1
-            if variant_work > MATCH_VARIANT_CAP:
-                raise IsomorphismLimit(f"node-variant cap ({MATCH_VARIANT_CAP}) reached -- inconclusive")
-            full = dict(pmap)
-            full.update(dict(zip(extra, perm, strict=True)))
-            if apply_node(n, full, cmap, smap) in variants[j]:
-                return True
-        return False
-
-    # small bipartite matching
-    pair = {}
-
-    def augment(i, seen):
-        for j in range(len(dst)):
-            if j in seen or not compatible(src[i], j):
-                continue
-            seen.add(j)
-            if j not in pair or augment(pair[j], seen):
-                pair[j] = i
-                return True
-        return False
-
-    return all(augment(i, set()) for i in range(len(src)))
-
-
-# --------------------------------------------------------------- the refinement
-def intern_color(palette, signature):
-    """An exact, compact label; paired graphs share the same palette.
-
-    Keeping the previous signature itself grows exponentially on cyclic graphs.
-    Interning avoids that expansion without relying on digest collision assumptions.
-    """
-    return palette.setdefault(signature, len(palette) + 1)
-
-
-def slot_colors(g, col, rounds=3, palette=None):
-    """A color per (class, slot) from how the class's nodes use the slot: the op and
-    column of each occurrence, the child's class color, and the child's own color for
-    the slot it sends there, refined a few rounds. Invariant under renaming, so a slot
-    bijection between two classes need only pair slots of one color."""
-    palette = {} if palette is None else palette
-    sc = {(c, s): 0 for c in g.ids() for s in g.slots[c]}
-    for _ in range(rounds):
-        raw = {}
-        for c in g.ids():
-            for s in g.slots[c]:
-                sig = []
-                for op, elems in g.nodes[c]:
-                    for k, e in enumerate(elems):
-                        if e[0] == "slot":
-                            if e[1] == s:
-                                sig.append((op, k, "direct"))
-                        else:
-                            for cs, ps in e[2]:
-                                if ps == s:
-                                    sig.append((op, k, col[e[1]], sc.get((e[1], cs), "private")))
-                raw[(c, s)] = sig
-        # a class's rows are kept once per symmetry, and which image of a row is kept
-        # can differ between two graphs: an occurrence of `s` in one is an occurrence of
-        # `g(s)` in the other. So a slot's own occurrences are not invariant, only the
-        # orbit's together are, and every slot of an orbit gets that one color.
-        prev, sc = sc, {}
-        for c in g.ids():
-            for s in g.slots[c]:
-                orbit = {dict(p).get(s, s) for p in g.group[c]} | {s}
-                occurrences = (e for t in sorted(orbit, key=repr) for e in raw[(c, t)])
-                sc[(c, s)] = intern_color(palette, (prev[(c, s)], tuple(sorted(occurrences, key=repr))))
-    return sc
-
-
-def depths(g):
-    """How far each class is from a leaf: the order in which children are placed before
-    their parents, so a class's nodes are checked as soon as it is placed."""
-    d = {c: None for c in g.ids()}
-    changed = True
-    while changed:
-        changed = False
-        for c in g.ids():
-            for _, elems in g.nodes[c]:
-                kids = [e[1] for e in elems if e[0] == "child"]
-                if all(d[k] is not None for k in kids if k != c):
-                    val = 1 + max((d[k] for k in kids if k != c), default=0)
-                    if d[c] is None or val < d[c]:
-                        d[c], changed = val, True
-    return {c: (v if v is not None else 10**6) for c, v in d.items()}
-
-
-def colors(g, rounds=6, palette=None):
-    palette = {} if palette is None else palette
-    col = {
-        c: intern_color(
-            palette,
-            (len(g.slots[c]), len(g.group[c]), tuple(sorted((n[0], tuple(e[0] for e in n[1])) for n in g.nodes[c]))),
-        )
-        for c in g.ids()
-    }
-    for _ in range(rounds):
-        nxt = {}
-        for c in g.ids():
-            sig = []
-            for op, elems in g.nodes[c]:
-                sig.append((op, tuple(e[0] if e[0] == "slot" else col[e[1]] for e in elems)))
-            nxt[c] = intern_color(palette, (col[c], tuple(sorted(sig))))
-        if all(
-            len({nxt[a] for a in g.ids() if col[a] == col[c]}) == len({col[a] for a in g.ids() if col[a] == col[c]})
-            for c in g.ids()
-        ):
-            return nxt
-        col = nxt
-    return col
-
-
-# ---------------------------------------------------------------- the isomorphism
-def find_isomorphism(ga, gb, *, search_cap=SEARCH_CAP):
-    """A (class bijection, per-class slot bijection) pair, or a reason there is none."""
-    if len(ga.ids()) != len(gb.ids()):
-        return None, (f"class count {len(ga.ids())} vs {len(gb.ids())}")
-    palette = {}
-    ca, cb = colors(ga, palette=palette), colors(gb, palette=palette)
-    from collections import Counter
-
-    if Counter(ca.values()) != Counter(cb.values()):
-        only_a = Counter(ca.values()) - Counter(cb.values())
-        return None, f"refinement colors differ ({len(only_a)} class shapes unmatched)"
-
-    cand = {a: [b for b in gb.ids() if cb[b] == ca[a]] for a in ga.ids()}
-    # children before parents, the least ambiguous first: a class placed after its
-    # children has its nodes checked at once, and a wrong choice is undone early
-    da = depths(ga)
-    order = sorted(ga.ids(), key=lambda a: (da[a], len(cand[a])))
-    slot_palette = {}
-    sca, scb = slot_colors(ga, ca, palette=slot_palette), slot_colors(gb, cb, palette=slot_palette)
-    budget = [search_cap]
-
-    def slot_bijections(a, b):
-        """Bijections pairing slots of one color, with the group carried across."""
-        sa, sb = ga.slots[a], gb.slots[b]
-        if len(sa) != len(sb):
-            return
-        by_color_a, by_color_b = {}, {}
-        for s in sa:
-            by_color_a.setdefault(sca[(a, s)], []).append(s)
-        for s in sb:
-            by_color_b.setdefault(scb[(b, s)], []).append(s)
-        if sorted(map(repr, by_color_a)) != sorted(map(repr, by_color_b)) or any(
-            len(by_color_a[k]) != len(by_color_b[k]) for k in by_color_a
-        ):
-            return
-        keys = list(by_color_a)
-        for perms in itertools.product(*(itertools.permutations(by_color_b[k]) for k in keys)):
-            m = {}
-            for k, perm in zip(keys, perms, strict=True):
-                m.update(zip(by_color_a[k], perm, strict=True))
-            # the group has to correspond too, not just the slot count
-            mapped = {frozenset((m[x], m[y]) for x, y in p) for p in ga.group[a]}
-            if mapped == gb.group[b]:
-                yield m
-
-    phi, sig = {}, {}
-
-    def rec(k):
-        if k == len(order):
-            return verify(ga, gb, phi, sig) is None
-        if budget[0] <= 0:
-            return False
-        a = order[k]
-        for b in cand[a]:
-            if b in phi.values():
-                continue
-            for m in slot_bijections(a, b):
-                budget[0] -= 1
-                phi[a], sig[a] = b, m
-                # check now if every child of every node of `a` is already assigned
-                ready = all(e[0] == "slot" or e[1] in phi for n in ga.nodes[a] for e in n[1])
-                if (
-                    not ready
-                    or match_nodes(
-                        ga.nodes[a], gb.nodes[b], ga.slots[a], gb.slots[b], m, phi, sig, (gb.group, gb.group[b])
+    classes, nodes, annotations = {}, {}, {}
+    for c in g.ids():
+        slots = g.slots[c]
+        positions = {s: i for i, s in enumerate(slots)}
+        group = []
+        for permutation in g.group[c]:
+            p = dict(permutation)
+            if len(p) != len(permutation) or set(p) != set(slots) or not set(p.values()) <= set(slots):
+                raise ValueError(f"{c}: malformed symmetry permutation")
+            group.append([positions[p[s]] for s in slots])
+        classes[ids[c]] = {"slots": list(map(json.dumps, slots)), "group": sorted(group)}
+        for i, (op, elems) in enumerate(g.nodes[c]):
+            children, arguments = [], []
+            for elem in elems:
+                if elem[0] == "slot":
+                    arguments.append({"kind": "slot", "slot": json.dumps(elem[1])})
+                elif elem[0] == "child":
+                    children.append(node_id(elem[1], 0))
+                    arguments.append(
+                        {"kind": "child", "renaming": [[json.dumps(a), json.dumps(b)] for a, b in elem[2]]}
                     )
-                ) and rec(k + 1):
-                    return True
-                del phi[a], sig[a]
-        return False
+                else:
+                    raise ValueError(f"{c}: unknown node argument {elem[0]!r}")
+            nodes[node_id(c, i)] = {"op": op, "eclass": ids[c], "children": children}
+            annotations[node_id(c, i)] = {"arguments": arguments}
+    return {
+        "nodes": nodes,
+        "class_data": {cid: {} for cid in ids.values()},
+        "slotted": {"classes": classes, "nodes": annotations},
+    }
 
+
+def rust_check(left, right, *, checker=None, **options):
+    checker = checker or driver.ROOT / "target/debug/egraph-isomorphism"
+    request = {"left": serialized_graph(left), "right": serialized_graph(right), **options}
+    result = subprocess.run([str(checker)], input=json.dumps(request), text=True, capture_output=True)
     try:
-        if rec(0):
-            return (dict(phi), dict(sig)), None
-    except IsomorphismLimit as exc:
-        return None, str(exc)
-    except RecursionError:
-        return None, "recursion limit reached -- inconclusive"
-    if budget[0] <= 0:
-        return None, f"search cap ({search_cap}) reached -- inconclusive"
-    return None, "no isomorphism exists (search exhausted)"
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"isomorphism checker failed ({result.returncode}): {result.stderr}") from exc
+    codes = {"isomorphic": 0, "verified": 0, "different": 1, "invalid": 2, "inconclusive": 3, "invalid_witness": 4}
+    if response.get("status") not in codes or result.returncode != codes[response["status"]]:
+        raise RuntimeError(f"unexpected checker response ({result.returncode}): {response}")
+    return response
 
 
-def verify(ga, gb, phi, sig):
-    """None if (phi, sig) really is an isomorphism, else the first thing wrong."""
-    if sorted(phi) != ga.ids() or sorted(phi.values()) != gb.ids():
-        return "not a bijection on classes"
-    for a in ga.ids():
-        b = phi[a]
-        if len(ga.slots[a]) != len(gb.slots[b]):
-            return f"{a}: slot count"
-        # Checked rather than trusted: a non-injective map here would let two of one
-        # side's slots collapse onto one of the other's and still match nodes. Node
-        # equality below deliberately reuses the search matcher, so the surrounding
-        # selftests independently exercise its group and redundant-slot quotients.
-        if sorted(sig[a]) != sorted(ga.slots[a]) or sorted(sig[a].values()) != sorted(gb.slots[b]):
-            return f"{a}: slot map is not a bijection"
-        mapped = {frozenset((sig[a][x], sig[a][y]) for x, y in p) for p in ga.group[a]}
-        if mapped != gb.group[b]:
-            return f"{a}: symmetry group ({len(ga.group[a])} vs {len(gb.group[b])})"
-        if not match_nodes(
-            ga.nodes[a], gb.nodes[b], ga.slots[a], gb.slots[b], sig[a], phi, sig, (gb.group, gb.group[b])
-        ):
-            return f"{a}: node sets ({len(ga.nodes[a])} vs {len(gb.nodes[b])})"
-    return None
+def find_isomorphism(ga, gb, *, search_cap=SEARCH_CAP, checker=None):
+    """Rust returns an explicit node/group witness, a difference, or a work limit."""
+    try:
+        result = rust_check(ga, gb, checker=checker, limits={"search": search_cap, "node_variants": MATCH_VARIANT_CAP})
+    except (KeyError, ValueError) as exc:
+        return None, f"invalid graph: {exc}"
+    match result["status"]:
+        case "isomorphic":
+            return result["witness"], None
+        case "inconclusive":
+            return None, result["reason"] + " -- inconclusive"
+        case "invalid":
+            return None, "invalid graph: " + result["reason"]
+        case _:
+            return None, result["reason"]
+
+
+def verify(ga, gb, witness, *, checker=None):
+    """Verify the explicit witness in Rust, without repeating the search."""
+    try:
+        result = rust_check(ga, gb, checker=checker, witness=witness)
+    except (KeyError, ValueError) as exc:
+        return f"invalid graph: {exc}"
+    return None if result["status"] == "verified" else result["reason"]
 
 
 # ------------------------------------------------------------------- the runners
@@ -1063,7 +854,7 @@ def check(
         if why and why.endswith("-- inconclusive"):
             return "limit", why
         return "FAIL", f"{why}  [ref {ref.summary()} enc {enc.summary()}]"
-    bad = verify(ref, enc, iso[0], iso[1])
+    bad = verify(ref, enc, iso)
     if bad:
         return "FAIL", f"witness rejected: {bad}"
     n, m = ref.summary()
@@ -1143,7 +934,7 @@ def selftest():
     for name, want, other in cases:
         got, why = find_isomorphism(base, other)
         ok = (got is not None) == want
-        if got is not None and verify(base, other, got[0], got[1]) is not None:
+        if got is not None and verify(base, other, got) is not None:
             ok = False
         bad += not ok
         print(
@@ -1231,7 +1022,7 @@ def selftest():
     for name, want, left, right in matcher_cases:
         got, why = find_isomorphism(left, right)
         ok = (got is not None) == want
-        if got is not None and verify(left, right, got[0], got[1]) is not None:
+        if got is not None and verify(left, right, got) is not None:
             ok = False
         bad += not ok
         print(

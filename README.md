@@ -63,6 +63,19 @@ the benchmarks' shared generators. The
 [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
 included in the Rust documentation for `egglog_experimental::slotted`.
 
+The reusable Rust checker accepts `egraph-serialize` JSON from either engine,
+with optional annotations for slotted graphs:
+
+```bash
+cargo run -p egraph-isomorphism -- left.json right.json
+```
+
+It prints a JSON verdict and an explicit isomorphism witness. Its separate witness
+verifier checks class and slot bijections, node pairings, and symmetry choices.
+See the crate's [API documentation](egraph-isomorphism/src/lib.rs) for the format
+and comparison policy. `slotted/check.py` builds and invokes this checker;
+`slotted/eval.py` only collects timings.
+
 The root workspace includes both `egglog` and `egglog-experimental`.
 `egglog-experimental` depends on the workspace `egglog` crate, keeping proof
 changes and downstream behavior in one reviewable unit.

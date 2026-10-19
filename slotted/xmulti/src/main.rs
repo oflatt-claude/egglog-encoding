@@ -21,6 +21,7 @@
 //! goal   <sexpr>              test whether a term is equivalent to the first `term`
 //! rounds <n>                  rounds to run, each applying every rule once (default 10)
 //! sizes                       print live class/node counts without a graph dump
+//! dump                        print GRAPH followed by annotated egraph-serialize JSON
 //! ```
 //!
 //! Two limits of that language, both about payload leaves:
@@ -41,6 +42,8 @@
 //!   `Symbol("null")`. A generator that needs payload symbols should spell them
 //!   so they cannot collide; `xdiff/xsdql.py` prefixes every one.
 
+use egraph_isomorphism::egraph_serialize::{ClassId, Cost, Node};
+use egraph_isomorphism::{AnnotatedEGraph, Argument, ClassSlots, NodeSlots, Slotted};
 use num_bigint::BigUint;
 use slotted_egraphs::*;
 use std::cell::RefCell;
@@ -836,9 +839,12 @@ fn main() {
         println!("SIZES {} {}", ids.len(), nodes);
     }
     if spec.dump {
-        if let Err(message) = dump_structured(&eg) {
-            eprintln!("REFERENCE_LIMIT: {message}");
-            std::process::exit(2);
+        match serialized_graph(&eg) {
+            Ok(graph) => println!("GRAPH {}", serde_json::to_string(&graph).unwrap()),
+            Err(message) => {
+                eprintln!("REFERENCE_LIMIT: {message}");
+                std::process::exit(2);
+            }
         }
     }
     println!("PARTITION {}", partition(&eg, &spec.probes));
@@ -846,7 +852,7 @@ fn main() {
 
 /// Every permutation of a class's slots that preserves its identity.
 /// Returns the slot count as an error when it exceeds `GROUP_SLOT_CAP`.
-fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
+fn group_of(eg: &G, id: Id) -> Result<Vec<Vec<usize>>, usize> {
     let mut slots: Vec<Slot> = eg.slots(id).iter().copied().collect();
     slots.sort_by_key(|s| s.to_string());
     if slots.len() > group_slot_cap() {
@@ -867,13 +873,11 @@ fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
         }
         let y = AppliedId::new(id, m);
         if eg.eq(&x, &y) {
-            let mut parts: Vec<String> = slots
-                .iter()
-                .zip(perm)
-                .map(|(a, b)| format!("{a}>{b}"))
-                .collect();
-            parts.sort();
-            out.push(parts.join("|"));
+            out.push(
+                perm.iter()
+                    .map(|slot| slots.iter().position(|s| s == slot).unwrap())
+                    .collect(),
+            );
         }
     };
     try_perm(&perm);
@@ -897,15 +901,11 @@ fn group_of(eg: &G, id: Id) -> Result<Vec<String>, usize> {
     Ok(out)
 }
 
-/// Dump every class, symmetry group, and node, preserving the reference's slot names.
-/// Reject graphs exceeding the group limit before printing any graph data.
-fn dump_structured(eg: &G) -> Result<(), String> {
+/// Serialize every live class, symmetry group, and node without choosing new
+/// representatives or deduplicating rows. Check the export cap before emitting data.
+fn serialized_graph(eg: &G) -> Result<AnnotatedEGraph, String> {
     let mut ids = eg.ids();
-    ids.sort_by_key(|i| format!("{i:?}"));
-
-    // Check the bound before writing anything.  A partial dump is especially
-    // dangerous to a graph-isomorphism oracle because it can look like a valid,
-    // smaller graph.  The caller turns this into a documented nonzero outcome.
+    ids.sort_by_key(|id| format!("{id:?}"));
     for id in &ids {
         let width = eg.slots(*id).len();
         if width > group_slot_cap() {
@@ -915,40 +915,61 @@ fn dump_structured(eg: &G) -> Result<(), String> {
             ));
         }
     }
-
+    let mut graph = AnnotatedEGraph::default();
+    let mut annotations = Slotted::default();
     for id in ids {
+        let cid = ClassId::from(format!("{id:?}"));
         let mut slots: Vec<String> = eg.slots(id).iter().map(|s| s.to_string()).collect();
         slots.sort();
-        println!("CLASS {:?} SLOTS {}", id, slots.join(","));
-        let group = group_of(eg, id).expect("group width was checked before dumping");
-        println!("GROUP {:?} {}", id, group.join(";"));
-        let mut lines: Vec<String> = Vec::new();
-        for node in eg.enodes(id) {
-            let mut parts: Vec<String> = Vec::new();
-            for e in node.to_syntax() {
-                match e {
-                    SyntaxElem::String(t) => parts.push(format!("o:{t}")),
-                    SyntaxElem::Slot(s) => parts.push(format!("s:{s}")),
-                    SyntaxElem::AppliedId(a) => {
-                        // Use one normalized AppliedId for both fields.  Combining
-                        // the leader returned by `find_applied_id` with the old map
-                        // can express an invocation in two incompatible frames.
-                        let a = eg.find_applied_id(&a);
-                        let mut m: Vec<String> =
-                            a.m.iter().map(|(k, v)| format!("{k}>{v}")).collect();
-                        m.sort();
-                        parts.push(format!("c:{:?}:{}", a.id, m.join("|")));
+        annotations.classes.insert(
+            cid.clone(),
+            ClassSlots {
+                slots,
+                group: group_of(eg, id).expect("group width was checked before serializing"),
+            },
+        );
+        for (i, node) in eg.enodes(id).into_iter().enumerate() {
+            let mut operators = Vec::new();
+            let mut children = Vec::new();
+            let mut arguments = Vec::new();
+            for elem in node.to_syntax() {
+                match elem {
+                    SyntaxElem::String(op) => operators.push(op),
+                    SyntaxElem::Slot(slot) => arguments.push(Argument::Slot {
+                        slot: slot.to_string(),
+                    }),
+                    SyntaxElem::AppliedId(applied) => {
+                        // Normalize the ID and its map together, so they share a frame.
+                        let applied = eg.find_applied_id(&applied);
+                        children.push(format!("{:?}/0", applied.id).into());
+                        let mut renaming: Vec<_> = applied
+                            .m
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect();
+                        renaming.sort();
+                        arguments.push(Argument::Child { renaming });
                     }
                 }
             }
-            lines.push(format!("NODE {:?} {}", id, parts.join(" ")));
-        }
-        lines.sort();
-        for l in lines {
-            println!("{l}");
+            let nid = format!("{id:?}/{i}");
+            graph.egraph.add_node(
+                nid.clone(),
+                Node {
+                    op: operators.join("/"),
+                    children,
+                    eclass: cid.clone(),
+                    cost: Cost::new(1.0).unwrap(),
+                    subsumed: false,
+                },
+            );
+            annotations
+                .nodes
+                .insert(nid.into(), NodeSlots { arguments });
         }
     }
-    Ok(())
+    graph.slotted = Some(annotations);
+    Ok(graph)
 }
 
 /// Probe indices grouped by **e-class identity**, as a canonical string.
@@ -1043,9 +1064,41 @@ mod tests {
         let id = eg.find_applied_id(&root).id;
 
         assert_eq!(group_of(&eg, id), Err(7));
-        assert!(dump_structured(&eg)
+        assert!(serialized_graph(&eg)
             .unwrap_err()
             .contains("symmetry enumeration is capped at 6"));
+    }
+
+    #[test]
+    fn annotated_export_preserves_sizes_binders_and_symmetries() {
+        let mut eg = G::default();
+        let a = add(&mut eg, "(f (var $a) (var $b))");
+        let b = add(&mut eg, "(f (var $b) (var $a))");
+        eg.union(&a, &b);
+        add(&mut eg, "(lam $bound (f (var $bound) (var $free)))");
+        let exported = serialized_graph(&eg).unwrap();
+        let annotation = exported.slotted.as_ref().unwrap();
+        assert_eq!(annotation.classes.len(), eg.ids().len());
+        assert_eq!(
+            exported.egraph.nodes.len(),
+            eg.ids()
+                .iter()
+                .map(|id| eg.enodes(*id).len())
+                .sum::<usize>()
+        );
+        assert!(annotation.classes.values().any(|c| c.group.len() == 2));
+        assert!(annotation.nodes.values().any(|n| n
+            .arguments
+            .iter()
+            .any(|arg| matches!(arg, Argument::Slot { .. }))));
+        let json = serde_json::to_string(&exported).unwrap();
+        let decoded: AnnotatedEGraph = serde_json::from_str(&json).unwrap();
+        let left = egraph_isomorphism::Graph::try_from(&exported).unwrap();
+        let right = egraph_isomorphism::Graph::try_from(&decoded).unwrap();
+        assert!(matches!(
+            egraph_isomorphism::find_isomorphism(&left, &right, Default::default()).unwrap(),
+            egraph_isomorphism::Outcome::Isomorphic { .. }
+        ));
     }
 
     #[test]
