@@ -18,12 +18,12 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path[:0] = [str(HERE), str(HERE / "xdiff")]
+sys.path.insert(0, str(HERE.parent))
 
-import eval_run as run  # noqa: E402
-import eval_verify as verification  # noqa: E402
-import eval_workloads as workloads  # noqa: E402
-from treatments import EXACT_PAIRS, SIDES, TREATMENTS  # noqa: E402
+from slotted import runner as run  # noqa: E402
+from slotted import verify as verification  # noqa: E402
+from slotted import workloads as workloads  # noqa: E402
+from slotted.treatments import EXACT_PAIRS, SIDES, TREATMENTS  # noqa: E402
 
 ERROR_TITLE = "SLOTTED CORRECTNESS CHECKS FAILED OR INCOMPLETE"
 

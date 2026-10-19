@@ -15,8 +15,8 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "slotted"))
-import reference as syntax  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from slotted import reference as syntax  # noqa: E402
 
 
 def declarations_of(path):
@@ -136,7 +136,7 @@ def local_rules(path):
         # slot over a variable matched outside it, this port says `(not-free $b v)`,
         # since matching may read the binder as that variable's name. The reference's
         # nested matcher keeps bound slots injective, so its rule sets can lack the
-        # guard and mean the same thing. `check-capture-guards.py` requires the guards;
+        # guard and mean the same thing. `checks/language.py guards` requires the guards;
         # this compares everything else.
         owed = syntax.capture_guards(lang, terms[0], terms[1])
         conds = [c for c in rule["conds"] if c[0] or not all((c[1], v) in owed for v in c[2])]

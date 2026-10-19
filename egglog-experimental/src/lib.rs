@@ -19,6 +19,8 @@
 //!
 //! ## Language and values
 //!
+//! - [`slotted`] documents the slotted source language and its [`slotted::Compiler`].
+//!   Evaluate lowered programs with [`slotted::new_egraph`], or use the CLI's `--slotted` flag.
 //! - [`RationalSort`] adds exact `Rational` values and numeric primitives.
 //! - [`For`] implements `(for (fact...) (action...))`, a rule that runs once
 //!   over the current matches.

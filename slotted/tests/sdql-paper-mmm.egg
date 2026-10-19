@@ -18,7 +18,7 @@
 ;;; of the body, it took the first e-node the table scan yielded, and egglog's processing
 ;;; order differs between processes. It now takes the smallest term and, among equal
 ;;; sizes, the least canonical spelling, so every run builds the same e-graph;
-;;; `slotted/checks/check-subst-determinism.py` holds it to that on this program.
+;;; `slotted/checks/maintenance.py substitution` holds it to that on this program.
 ;;; `slotted/checks/check-paper-sdql.py` checks the terms and that each rule is the library's.
 (include "slotted/languages/sdql.egg")
 

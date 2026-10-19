@@ -51,7 +51,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; A nullary constructor in a pattern is a call like any other, so it pins that child
 ;;; rather than standing for anything: the claim with teeth is that the deeper term did
-;;; not match. (A bare `Null` is refused, as in egglog; `check-refusals.py` has it.)
+;;; not match. (A bare `Null` is refused, as in egglog; `checks/frontend.py refusals` has it.)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
 (rewrite (Prev (Succ (Null))) (Null) :name "nullary-call")

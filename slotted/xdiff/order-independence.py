@@ -9,10 +9,11 @@ Run with `python3 slotted/xdiff/order-independence.py [N] [seed]`."""
 import itertools
 import random
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "slotted/xdiff")
-import isomorphism as I
-import xdiff as X
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from slotted.xdiff import isomorphism as I
+from slotted.xdiff import xdiff as X
 
 #: Orders tried per case. Every permutation of a 3-atom pattern is 6; capping keeps a
 #: 4-atom pattern from costing 24 graph builds when a few already settle the question.

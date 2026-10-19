@@ -15,9 +15,10 @@ Usage:
 
 import random
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "slotted/xdiff")
-import xdiff as X
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from slotted.xdiff import xdiff as X
 
 
 class NoNestedForm(Exception):

@@ -12,15 +12,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
-import check as C  # noqa: E402
-import eval as E  # noqa: E402
-import eval_observation as R  # noqa: E402
-import eval_run as run  # noqa: E402
-import eval_verify as V  # noqa: E402
-import eval_workloads as W  # noqa: E402
-import xdiff as X  # noqa: E402
-from treatments import EXACT_PAIRS, SIDES  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from slotted import check as C  # noqa: E402
+from slotted import eval as E  # noqa: E402
+from slotted import runner as run  # noqa: E402
+from slotted import verify as V  # noqa: E402
+from slotted import workloads as W  # noqa: E402
+from slotted.treatments import EXACT_PAIRS, SIDES  # noqa: E402
+from slotted.xdiff import xdiff as X  # noqa: E402
 
 CHECK_CONFIG = run.Config(
     egglog=ROOT / "target" / "debug" / "egglog-experimental",
@@ -33,7 +32,7 @@ def successful(rows, sides=SIDES):
 
 
 def graphs(name, program, spec, lang=X.LANG):
-    enc, ref = (R.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
+    enc, ref = (run.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
     V.encoding_counts(program, name, lang, enc, 60, config=CHECK_CONFIG, encoded=True)
     run.run_reference(spec, ref, 60, config=CHECK_CONFIG)
     V.reference_counts(spec, ref, 60, config=CHECK_CONFIG)
@@ -136,7 +135,7 @@ def count_round_budget():
         program = X.driver.compile_source(path.read_text())
     # Installed after the requested run: any additional user-rule step is an error.
     program += '\n(rule () ((panic "graph collection exceeded the round budget")))\n'
-    row = R.Row("regression", "count-budget", "encoding", 1)
+    row = run.Row("regression", "count-budget", "encoding", 1)
     V.encoding_counts(program, "count-budget", X.LANG, row, 60, config=CHECK_CONFIG, encoded=True)
     assert row.graph is not None, row.graph_issue
     assert row.graph.summary() == (2, 3) == (row.classes, row.nodes)
@@ -227,7 +226,7 @@ def raw_node_counts():
         Path(cmd[-1]).with_suffix(".json").write_text(json.dumps(doc))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    row = R.Row("regression", "raw-node-count", "encoding", 0)
+    row = run.Row("regression", "raw-node-count", "encoding", 0)
     # A future reader regression must not defeat the independent raw count.
     with (
         patch.object(subprocess, "run", side_effect=dump),
@@ -311,7 +310,7 @@ rule
         ("ref-multi", "atom root app lam t\natom lam lam $x body", "snapshot", "f"),
     ):
         spec = head + lhs + f"\nrhs root ?body[(var $x) := ?t]\ngoal ({op} (null) (null))\n"
-        row = R.Row("regression", "substitution-policy", side, 1)
+        row = run.Row("regression", "substitution-policy", side, 1)
         with patch.dict(os.environ, {"XMULTI_SUBST": "invalid-ambient-policy"}):
             run.run_reference(spec, row, 30, config=CHECK_CONFIG)
             V.reference_counts(spec, row, 30, config=CHECK_CONFIG)
@@ -334,7 +333,7 @@ rule
 
 def graph_failure_reasons():
     def row():
-        return R.Row("regression", "diagnostics", "encoding", 1)
+        return run.Row("regression", "diagnostics", "encoding", 1)
 
     with tempfile.TemporaryDirectory(prefix="slotted-eval-errors-") as tmp, patch.object(V, "SCRATCH", Path(tmp)):
         failed = row()
@@ -365,7 +364,7 @@ def graph_failure_reasons():
         (0, "CLASS c SLOTS x\nGROUP c ?\n", "", "reference graph unreadable"),
         (0, "", "", "reference graph dump is empty"),
     ):
-        reference = R.Row("regression", "diagnostics", "ref-multi", 1)
+        reference = run.Row("regression", "diagnostics", "ref-multi", 1)
         dump = subprocess.CompletedProcess([], code, stdout, stderr)
         with patch.object(subprocess, "run", side_effect=[timed, dump]):
             run.run_reference("", reference, 1)
@@ -381,7 +380,7 @@ def graph_failure_reasons():
         subprocess.CompletedProcess([], 2, "SIZES 10 20\n", "REFERENCE_LIMIT: symmetry cap"),
         subprocess.TimeoutExpired("xmulti", 1, output=b"SIZES 10 20\n"),
     ):
-        reference = R.Row("regression", "diagnostics", "ref-nested-snapshot", 1)
+        reference = run.Row("regression", "diagnostics", "ref-nested-snapshot", 1)
         with patch.object(subprocess, "run", side_effect=[timed, dump]):
             run.run_reference("", reference, 1)
             V.reference_counts("", reference, 1)
@@ -478,12 +477,12 @@ def import_without_compilation():
 import importlib
 import sys
 from unittest.mock import patch
-sys.path[:0] = ["slotted", "slotted/xdiff"]
-compiler = importlib.import_module("test_program")
+
+compiler = importlib.import_module("slotted.test_program")
 with patch.object(compiler, "compile_source", side_effect=AssertionError("compiled during import")):
-    importlib.import_module("eval")
-    importlib.import_module("check")
-    importlib.import_module("xsdql")
+    importlib.import_module("slotted.eval")
+    importlib.import_module("slotted.check")
+    importlib.import_module("slotted.xdiff.xsdql")
 """
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr

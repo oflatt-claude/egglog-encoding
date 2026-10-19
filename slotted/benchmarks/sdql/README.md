@@ -17,5 +17,5 @@ BATAX), each in the compiler's two phases.
 
 The published files have no final newline; the copies follow repository convention and
 do. `slotted/checks/check-paper-sdql.py` pins their hashes, and
-`slotted/paper_fixtures.py` translates them into the language of
+`slotted/benchmarks/sdql.py` translates them into the language of
 `slotted/languages/sdql.egg` and writes the tests under `slotted/tests/sdql-paper/`.

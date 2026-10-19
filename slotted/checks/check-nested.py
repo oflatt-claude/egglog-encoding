@@ -8,13 +8,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
 sys.path.insert(0, str(ROOT))
-import eval_observation as R  # noqa: E402
-import eval_run as run  # noqa: E402
-import eval_verify as V  # noqa: E402
-import eval_workloads as W  # noqa: E402
-import xdiff as X  # noqa: E402
+from slotted import runner as run  # noqa: E402
+from slotted import verify as V  # noqa: E402
+from slotted import workloads as W  # noqa: E402
+from slotted.xdiff import xdiff as X  # noqa: E402
 
 # name, initial unions, input, pattern, replacement, whether full matching adds nodes
 CASES = [
@@ -133,7 +131,7 @@ def main():
                 ]
                 spec = "\n".join(head + W.rule_lines(X.LANG, path, None, nested=compat)) + "\n"
                 enc, ref = (
-                    R.Row("regression", name, side, 1)
+                    run.Row("regression", name, side, 1)
                     for side in (
                         ("encoding-no-aliasing", "ref-nested-snapshot") if compat else ("encoding", "ref-multi")
                     )

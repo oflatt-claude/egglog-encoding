@@ -26,10 +26,11 @@ import copy
 import random
 import sys
 from collections import Counter
+from pathlib import Path
 
-sys.path.insert(0, "slotted/xdiff")
-import isomorphism as I
-import xdiff as X
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from slotted.xdiff import isomorphism as I
+from slotted.xdiff import xdiff as X
 
 
 def classes_with_nodes(g):

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import cache, lru_cache
 from pathlib import Path
 
-import reference as ref
+from slotted import reference as ref
 
 ROOT = Path(__file__).resolve().parents[1]
 EGGLOG = ROOT / "target/debug/egglog-experimental"

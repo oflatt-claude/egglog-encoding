@@ -28,7 +28,7 @@ In this workspace, `egglog-experimental --slotted FILE.egg` transforms the slott
 source language into ordinary egglog before evaluating it through the normal CLI.
 `--slotted-no-aliasing` selects compatibility with the reference nested matcher;
 `--mode desugar` shows the lowered program. The transformation lives entirely in
-this crate. See [the source language](../slotted/LANGUAGE.md) and
+this crate. See [the source language](src/slotted/LANGUAGE.md) and
 [the encoding](src/slotted/ENCODING.md) for its supported syntax and semantics.
 
 ## Documentation

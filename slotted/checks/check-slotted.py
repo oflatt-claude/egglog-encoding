@@ -84,8 +84,9 @@ def starts_ok(out):
 
 def paper_sdql_ran(out: str) -> str | None:
     """The artifact regressions are required by name, not just by count."""
-    sys.path.insert(0, str(ROOT / "slotted"))
-    pf = __import__("paper_fixtures")
+    sys.path.insert(0, str(ROOT))
+    from slotted.benchmarks import sdql as pf
+
     names = ["sdql-paper-batax.egg", "sdql-paper-mmm.egg", *(pf.test_path(k, p).name for k, p in pf.SUITE)]
     missing = [n for n in names if not re.search(rf"^\s*ok\s+{re.escape(n)}\b", out, re.M)]
     return f"paper SDQL tests did not run: {', '.join(missing)}" if missing else None
@@ -93,13 +94,13 @@ def paper_sdql_ran(out: str) -> str | None:
 
 # Check name, Python script/arguments, output validator, fuzzing flag, reference flag.
 CHECKS = [
-    ("leader-maintenance", ("slotted/checks/check-leader-maintenance.py",), starts_ok, False, False),
-    ("shape-cache", ("slotted/checks/check-shape-cache.py",), starts_ok, False, False),
+    ("leader-maintenance", ("slotted/checks/maintenance.py", "leaders"), starts_ok, False, False),
+    ("shape-cache", ("slotted/checks/maintenance.py", "shapes"), starts_ok, False, False),
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
     ("nested-compatibility", ("slotted/checks/check-nested.py",), starts_ok, False, True),
     (
         "slotted-tests",
-        ("slotted/run-slotted-tests.py",),
+        ("slotted/checks/language.py", "sources"),
         both(ratio(r"(\d+)/(\d+) slotted tests pass", 22), paper_sdql_ran),
         False,
         False,
@@ -121,7 +122,7 @@ CHECKS = [
     # Substitution's representative must be independent of table scan order.
     (
         "subst-determinism",
-        ("slotted/checks/check-subst-determinism.py",),
+        ("slotted/checks/maintenance.py", "substitution"),
         starts_ok,
         False,
         False,
@@ -137,7 +138,7 @@ CHECKS = [
     ),
     (
         "rule-names",
-        ("slotted/checks/check-rule-names.py",),
+        ("slotted/checks/language.py", "names"),
         ratio(r"(\d+)/(\d+) rule names reach the generated egglog", 50),
         False,
         False,
@@ -145,14 +146,14 @@ CHECKS = [
     # Capture guards are required in both libraries and the BATAX fixture's copies.
     (
         "capture-guards",
-        ("slotted/checks/check-capture-guards.py",),
+        ("slotted/checks/language.py", "guards"),
         ratio(r"(\d+)/(\d+) rules state the capture guards they owe", 60),
         False,
         False,
     ),
     (
         "refusals",
-        ("slotted/checks/check-refusals.py",),
+        ("slotted/checks/frontend.py", "refusals"),
         ratio(r"(\d+)/(\d+) refusals hold, with a message", 32),
         False,
         False,
@@ -181,14 +182,14 @@ CHECKS = [
     # refuses with a message. A verdict that changes is reported either way.
     (
         "egglog-forms",
-        ("slotted/checks/check-egglog-forms.py",),
+        ("slotted/checks/frontend.py", "forms"),
         ratio(r"(\d+)/(\d+) egglog forms behave as recorded", 30),
         False,
         False,
     ),
     (
         "correspondence",
-        ("slotted/checks/check-correspondence.py",),
+        ("slotted/checks/language.py", "correspondence"),
         ratio(r"OK: (\d+)/(\d+) correspondence files", 2),
         False,
         False,
@@ -248,8 +249,8 @@ CHECKS = [
     ),
     (
         "language-doc",
-        ("slotted/checks/check-language-doc.py",),
-        ratio(r"(\d+)/(\d+) examples run", 9),
+        ("slotted/checks/language.py", "docs"),
+        ratio(r"(\d+)/(\d+) examples run", 11),
         False,
         True,
     ),

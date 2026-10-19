@@ -12,10 +12,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "slotted"))
-import reference as syntax  # noqa: E402
-
-driver = __import__("test_program")
+sys.path.insert(0, str(ROOT))
+from slotted import reference as syntax  # noqa: E402
+from slotted import test_program as driver  # noqa: E402
 
 CORPUS = ROOT / "slotted/tests/multipattern.egg"
 MUTANT = ROOT / "target/slotted/multipattern-mutant.egg"

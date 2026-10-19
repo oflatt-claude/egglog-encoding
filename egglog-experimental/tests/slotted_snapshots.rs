@@ -8,7 +8,11 @@ fn main() {
     // Includes resolve from the invocation directory, as in the CLI.
     std::env::set_current_dir(root).unwrap();
     let mut tests = Vec::new();
-    for pattern in ["slotted/tests/**/*.egg", "slotted/languages/*.egg"] {
+    for pattern in [
+        "slotted/tests/**/*.egg",
+        "slotted/benchmarks/**/*.egg",
+        "slotted/languages/*.egg",
+    ] {
         for path in glob::glob(pattern).unwrap() {
             let path = path.unwrap();
             let name = path

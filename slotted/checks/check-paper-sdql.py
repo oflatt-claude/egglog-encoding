@@ -5,7 +5,7 @@ The runnable tests are written in this repository's slotted surface syntax. This
 keeps their source terms, expected terms, selected rewrite rules, and schedules tied to
 the original artifact instead of trusting a hand transcription: the twenty-one vendored
 fixtures by hash, the full-rule tests under `slotted/tests/sdql-paper/` as exactly what
-`slotted/paper_fixtures.py` writes from those fixtures, the goal-directed BATAX test's
+`slotted/benchmarks/sdql.py` writes from those fixtures, the goal-directed BATAX test's
 copied rules and constructors against the rule library and an independent translation of
 the artifact's `rewrite.rs`, and the MMM subset test's input and rules.
 """
@@ -19,10 +19,9 @@ import sys
 from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "slotted"))
-import reference as syntax  # noqa: E402
-
-pf = __import__("paper_fixtures")
+sys.path.insert(0, str(ROOT))
+from slotted import reference as syntax  # noqa: E402
+from slotted.benchmarks import sdql as pf  # noqa: E402
 
 ARTIFACT_COMMIT = pf.ARTIFACT_COMMIT
 FIXTURES = pf.FIXTURES
@@ -140,7 +139,7 @@ def rewrites(path: pathlib.Path) -> dict[str, tuple[Any, ...]]:
     here says `(not-free $b v)`, because matching may read the binder as that
     variable's name; the artifact's nested matcher never does, so its rules lack the
     guard and mean the same thing. The signature below is over the artifact's
-    semantics, so those guards are discounted; `check-capture-guards.py` requires them.
+    semantics, so those guards are discounted; `checks/language.py guards` requires them.
     """
     src = syntax.Source(path)
     out = {}
@@ -249,7 +248,7 @@ def main() -> int:
     for kernel, phase in pf.SUITE:
         path = pf.test_path(kernel, phase)
         if not path.is_file():
-            errors.append(f"missing {path.relative_to(ROOT)}; `python3 slotted/paper_fixtures.py --write`")
+            errors.append(f"missing {path.relative_to(ROOT)}; `python3 slotted/benchmarks/sdql.py --write`")
         elif syntax.parse(path.read_text()) != pf.test_forms(kernel, phase):
             errors.append(f"{path.relative_to(ROOT)} is not the translation of its fixtures at the artifact's limit")
     owned = {pf.test_path(k, p).name for k, p in pf.SUITE}

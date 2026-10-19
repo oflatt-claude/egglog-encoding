@@ -2,17 +2,26 @@
 
 Export the input-only graph at the same rewrite budget, validate its raw sizes,
 and independently verify the isomorphism witness. Missing or bounded-out evidence
-stays inconclusive. The timed goal-checking processes live in eval_run.
+stays inconclusive. The timed goal-checking processes live in runner.
 """
 
 import json
 import os
 import subprocess
+from dataclasses import dataclass
 
-import isomorphism as ISO
-from eval_observation import Comparison
-from eval_run import ROOT, SCRATCH, Config, goal_errors, oracle_env, quiet_progress, slotted_flags
-from treatments import EXACT_PAIRS, SIDES, TREATMENTS
+from slotted.runner import ROOT, SCRATCH, Config, Row, goal_errors, oracle_env, quiet_progress, slotted_flags
+from slotted.treatments import EXACT_PAIRS, SIDES, TREATMENTS
+from slotted.xdiff import isomorphism as ISO
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """Keep the actual compared rows together so a verdict cannot certify another run."""
+
+    encoding: Row
+    reference: Row
+    verdict: str
 
 
 def collect_graph(workload, row, timeout, progress=quiet_progress, *, config=None):

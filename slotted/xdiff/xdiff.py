@@ -28,9 +28,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "slotted"))
-import reference as syntax  # noqa: E402
-import test_program as driver  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from slotted import reference as syntax  # noqa: E402
+from slotted import test_program as driver  # noqa: E402
 
 EGGLOG = ROOT / "target" / "debug" / "egglog-experimental"
 XMULTI = ROOT / "slotted" / "xmulti"
@@ -1460,7 +1460,7 @@ def curated():
     # a reading both matchers offer on purpose. The right-hand side then rebinds `$y`
     # over `e`, and that reading builds the closed `(lam $2 (f (sub $2 $2) $2))`,
     # capturing `e`. So the rule says `e` and `$y` do not alias, and only the plain
-    # reading fires; `check-capture-guards.py` holds the rule libraries to this. The
+    # reading fires; `checks/language.py guards` holds the rule libraries to this. The
     # probes ask for the sound result, the captured one, and a term the union must not
     # reach. `CAP0` is the same rule without its guard.
     CAP_TERM = ("F", ("Lam", V0, ("Sub", V0, V0)), V2)

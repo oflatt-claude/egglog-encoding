@@ -8,9 +8,10 @@ therefore violates Definition 4. This check only detects over-wide edges.
 
 import subprocess
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "slotted/xdiff")
-import xdiff as X
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from slotted.xdiff import xdiff as X
 
 OBS_TEMPLATE = f"""
 ;; Observers live in their own ruleset and are run ALONE, so the machinery cannot

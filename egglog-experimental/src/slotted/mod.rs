@@ -1,4 +1,5 @@
 //! Source-to-source slotted e-graph encoding.
+#![doc = include_str!("LANGUAGE.md")]
 
 mod frontend;
 mod maintenance;

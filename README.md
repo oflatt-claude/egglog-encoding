@@ -56,6 +56,13 @@ case studies. See
 [the reference comparison documentation](egglog-experimental/src/slotted/ENCODING.md#against-the-reference)
 for substitution policies and comparison requirements.
 
+Benchmark inputs and generators live in [`slotted/benchmarks/`](slotted/benchmarks/);
+regression fixtures and compiler snapshots live in `slotted/tests/`.
+`make slotted-check` runs the language, differential, and fuzz tests, including
+the benchmarks' shared generators. The
+[source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
+included in the Rust documentation for `egglog_experimental::slotted`.
+
 The root workspace includes both `egglog` and `egglog-experimental`.
 `egglog-experimental` depends on the workspace `egglog` crate, keeping proof
 changes and downstream behavior in one reviewable unit.

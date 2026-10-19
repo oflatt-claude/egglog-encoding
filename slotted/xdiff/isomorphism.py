@@ -39,8 +39,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import test_program as driver  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from slotted import test_program as driver  # noqa: E402
 
 SEARCH_CAP = 200_000
 MATCH_VARIANT_CAP = 200_000
@@ -1083,7 +1083,7 @@ def selftest():
     so these stay honest if either changes.
     """
 
-    import xdiff as X
+    from slotted.xdiff import xdiff as X
 
     symbols = X.LANG.symbols_for(X.LANG.default_sort)
 
@@ -1526,7 +1526,7 @@ def known_groups():
 
     So: cases whose group is known, asked of each reader separately.
     """
-    import xdiff as X
+    from slotted.xdiff import xdiff as X
 
     v0, v1, v2 = ("var", 0), ("var", 1), ("var", 2)
 
@@ -1590,7 +1590,7 @@ def known_open_bugs():
     into `curated()` where it will be held green from then on.
     """
     bad = []
-    import xdiff as X
+    from slotted.xdiff import xdiff as X
 
     cases = X.known_divergences()
     for why, case in cases:
@@ -1607,7 +1607,7 @@ def known_open_bugs():
 
 
 def main():
-    import xdiff as X
+    from slotted.xdiff import xdiff as X
 
     args = sys.argv[1:]
     if args and args[0] == "selftest":

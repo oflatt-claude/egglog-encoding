@@ -10,14 +10,14 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import paper_fixtures as pf
-import reference as syntax
-import xarray as XA
-from treatments import TREATMENTS
+from slotted import reference as syntax
+from slotted.benchmarks import array as array_bench
+from slotted.benchmarks import sdql as pf
+from slotted.treatments import TREATMENTS
 
 ROOT = Path(__file__).resolve().parents[1]
 BATAX_SUBSET = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
-LOGIC_FIXTURES = ROOT / "slotted/tests/rudi"
+LOGIC_FIXTURES = ROOT / "slotted/benchmarks/logic"
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class Workload:
         # in each worker rather than pickling them with the generated programs.
         if self.study == "logic":
             return logic_source(Path(self.case), text=self.program).lang
-        return XA.LANG if self.study == "array" else pf.reference_language()
+        return array_bench.LANG if self.study == "array" else pf.reference_language()
 
     def reference(self, side):
         if side in self.unsupported:
@@ -158,47 +158,44 @@ def rule_lines(lang, rules_path, selected, nested):
     return out
 
 
-def array_program(case, *, with_target):
+def array_program(start, target, rounds, *, with_target):
     """Source terms and the shared eight-rule library; Rust performs the encoding."""
 
     def term(t):
         if t[0] == "var":
             return f"${t[1]}"
-        op = XA.LANG.ops[t[0]]
+        op = array_bench.LANG.ops[t[0]]
         args = []
         for kind, arg in zip(op.arg_kinds(), t[1:], strict=True):
             if kind is syntax.CHILD:
                 args.append(term(arg))
             elif kind is syntax.BINDER:
-                args.append(f"${XA.LANG.slot(arg)}")
+                args.append(f"${array_bench.LANG.slot(arg)}")
             else:
                 args.append(json.dumps(arg))
         return "(" + " ".join([op.ctor, *args]) + ")"
 
     lines = ['(include "slotted/languages/array-rules.egg")']
-    lines += [f"(let input{i} {term(t)})" for i, t in enumerate(case.terms)]
-    lines += [f"(union {term(a)} {term(b)})" for a, b in case.unions]
-    lines.append(f"(run {case.rounds})")
+    lines.append(f"(let input0 {term(start)})")
+    lines.append(f"(run {rounds})")
     if with_target:
-        a, b = case.probes
-        lines.append(f"(check (= {term(a)} {term(b)}))")
+        lines.append(f"(check (= {term(start)} {term(target)}))")
     return "\n".join(lines) + "\n"
 
 
 def array_workload(n, *, rounds=6):
-    case = XA.goal_cases([n], rounds=rounds)[0]
-    start, target = case.probes
-    head = [f"rounds {rounds}", *ctor_lines(XA.LANG), f"term {XA.sexpr(start)}"]
-    goal = [f"goal {XA.sexpr(target)}"]
-    multi = [line for rule in case.rules for line in rule.spec_lines()]
-    nested = rule_lines(XA.LANG, XA.ARRAY_SRC_RULES, None, nested=True)
+    start, target = array_bench.goal(n)
+    head = [f"rounds {rounds}", *ctor_lines(array_bench.LANG), f"term {array_bench.LANG.sexpr(start)}"]
+    goal = [f"goal {array_bench.LANG.sexpr(target)}"]
+    multi = rule_lines(array_bench.LANG, array_bench.RULES, None, nested=False)
+    nested = rule_lines(array_bench.LANG, array_bench.RULES, None, nested=True)
     return Workload(
         study="array",
-        case=case.name,
+        case=f"goal-2d-4f-N{n}",
         rounds=rounds,
         rules=None,
-        program=array_program(case, with_target=True),
-        graph_program=array_program(case, with_target=False),
+        program=array_program(start, target, rounds, with_target=True),
+        graph_program=array_program(start, target, rounds, with_target=False),
         multi="\n".join(head + multi + goal) + "\n",
         nested="\n".join(head + nested + goal) + "\n",
     )

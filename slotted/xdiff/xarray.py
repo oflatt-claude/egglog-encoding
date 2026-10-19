@@ -31,16 +31,17 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "slotted"))
-import reference as syntax  # noqa: E402
-import test_program as driver  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from slotted import reference as syntax  # noqa: E402
+from slotted import test_program as driver  # noqa: E402
+from slotted.benchmarks import array as benchmark  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 
 # Constructor signatures, binder columns, and reference names come from these files.
-ARRAY_SRC = ROOT / "slotted" / "languages" / "array.egg"
-ARRAY_SRC_RULES = ROOT / "slotted" / "languages" / "array-rules.egg"
-LANG = syntax.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
+ARRAY_SRC = benchmark.SOURCE
+ARRAY_SRC_RULES = benchmark.RULES
+LANG = benchmark.LANG
 
 
 sexpr, shift = LANG.sexpr, LANG.shift
@@ -386,66 +387,15 @@ def per_rule_cases():
     return cs
 
 
-def _chain(fs, arg):
-    """fs = [f1, f2, ...] applied innermost-first: f_n (... (f1 arg))."""
-    for g in fs:
-        arg = ("App", g, arg)
-    return arg
-
-
 def goal_cases(n_params=(0, 1), rounds=8, wrap_lams=True, nfun=4, dims=2):
-    """The paper artifact's S4.1 transformation: (A) -> (B).
-
-        (A)  \\f1. ... \\f4. map (map (\\x. f4 (f3 (f2 (f1 x)))))
-        (B)  \\f1. ... \\f4. \\y. map (map (\\x. f4 (f3 x)))
-                                      (map (map (\\x. f2 (f1 x))) y)
-
-    The artifact varies parameters `p1 ... pN` applied to each function. This port
-    follows its `functional-array-language/gen.py`, including two details the prior
-    hand-written case got wrong: (A) is eta-reduced and has no matrix binder, while
-    (B) introduces `y`; and the function binders are outside the parameter binders.
-    `wrap_lams=False` is a smaller diagnostic with those names left free.
-    """
-    cs = []
+    """Test wrappers around the shared Figure 8 input and target generator."""
+    cases = []
     for n in n_params:
-        ps = [V(1 + i) for i in range(n)]
-        fn_slots = [1000 + i for i in range(nfun)]
-        fs = [A(V(slot), *ps) for slot in fn_slots] if wrap_lams else [A(S(f"f{i + 1}"), *ps) for i in range(nfun)]
-        half = nfun // 2
-        fresh_slot = iter(range(100, 1000)).__next__
-
-        def maps(fn):
-            out = fn
-            for _ in range(dims):
-                out = ("App", MAP, out)
-            return out
-
-        def chained(parts, fresh_slot=fresh_slot):
-            if len(parts) == 1:
-                return parts[0]
-            x = fresh_slot()
-            return ("Lam", x, _chain(parts, V(x)))
-
-        a_body = maps(chained(fs))
-        left, right = maps(chained(fs[half:])), maps(chained(fs[:half]))
-        y = fresh_slot()
-        b_body = ("Lam", y, ("App", left, ("App", right, V(y))))
-
-        def wrap(t, n=n, fn_slots=fn_slots):
-            if not wrap_lams:
-                return t
-            # Artifact `nest_lams`: parameters inside function binders.
-            for i in reversed(range(n)):
-                t = ("Lam", 1 + i, t)
-            for slot in reversed(fn_slots):
-                t = ("Lam", slot, t)
-            return t
-
-        A_, B_ = wrap(a_body), wrap(b_body)
+        start, target = benchmark.goal(n, wrap_lams=wrap_lams, nfun=nfun, dims=dims)
         tag = "" if wrap_lams else "-free"
-        nm = f"goal{tag}-{dims}d-{nfun}f-N{n}"
-        cs.append(Case(nm, [A_], list(ALL_RULES), [A_, B_], rounds=rounds))
-    return cs
+        name = f"goal{tag}-{dims}d-{nfun}f-N{n}"
+        cases.append(Case(name, [start], list(ALL_RULES), [start, target], rounds=rounds))
+    return cases
 
 
 def _artifact_goal_text(o):
@@ -743,7 +693,7 @@ def main():
         # The stronger check: not just the probe partition but a witnessed
         # isomorphism of the two final e-graphs, which also compares class slot
         # sets and symmetry groups.
-        import isomorphism as I
+        from slotted.xdiff import isomorphism as I
 
         cases = per_rule_cases() + unbound_cases()
         if len(args) > 1:

@@ -20,7 +20,7 @@ emits invariant rules, and `query`/`rewrite` lower matching and actions. Its out
 is ordinary egglog; the core parser and evaluator have no slotted macro mechanism.
 The differential tests and paper evaluation both run this Rust compiler and runtime.
 
-[`slotted/LANGUAGE.md`](../../../slotted/LANGUAGE.md) describes the source language a person writes. This file is the
+[LANGUAGE.md](LANGUAGE.md) describes the source language a person writes. This file is the
 level below it: what that language compiles *to*, and why each table exists.
 
 The running example is:
@@ -1238,7 +1238,7 @@ report UI, and nightly automation.
 
 **Correctness.** `check.py` runs every supported treatment, including the snapshot
 nested reference. Each gets a goal check and a separate input-only graph export
-at the same rewrite budget. `eval_verify.py` validates raw sizes, searches for a
+at the same rewrite budget. `verify.py` validates raw sizes, searches for a
 complete class/slot/group/node isomorphism, and independently verifies the witness.
 The two required pairs need both equal class/node counts and a verified witness;
 other encoding/reference pairs are diagnostic. Counts or probe partitions cannot
@@ -1298,7 +1298,7 @@ be made the same, each established on a minimal case the harness keeps:
   class was created with -- history the encoding cannot replay. So the oracle harness
   substitutes as the encoding does: `slotted/xmulti`'s `SnapshotSubst` takes the
   smallest term per class at each round's start, the same tie-break over the same
-  constructor names (`ctor` lines in the spec, from `eval_workloads.py`), and is the harness's
+  constructor names (`ctor` lines in the spec, from `workloads.py`), and is the harness's
   default (`XMULTI_SUBST=syntactic` restores the crate's). Reconstructing that term
   freshens each node's bound occurrences before applying its free-slot renaming,
   so a stored binder name cannot capture an invocation's free slot.
@@ -1396,22 +1396,23 @@ transformation and evaluation in one process.
 
 | path | what it is |
 | --- | --- |
-| `slotted/LANGUAGE.md` | the source language: every form and why it exists |
+| `egglog-experimental/src/slotted/LANGUAGE.md` | the source language: every form and why it exists |
 | `egglog-experimental/src/slotted/` | the Rust source-to-source compiler, used by `--slotted` |
 | `slotted/reference.py` | fixture syntax, language metadata, and translation to the reference |
 | `slotted/test_program.py` | Rust CLI adapter and observer rules for differential tests |
 | `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
-| `slotted/tests/` | tests written in the source language |
+| `slotted/benchmarks/` | array generator, SDQL artifact inputs, and logic case studies |
+| `slotted/tests/` | regression fixtures and compiler snapshots |
+| `slotted/checks/` | language, frontend, maintenance, and evaluation regression checks |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
-| `slotted/paper_fixtures.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
+| `slotted/benchmarks/sdql.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
 | `slotted/eval.py` | standalone timing CLI and tables; fresh samples without graph checking |
 | `slotted/check.py` | standalone correctness CLI; all supported treatments, counts, and required isomorphism checks |
 | `slotted/treatments.py` | shared treatment definitions, exact comparison pairs, and timing baselines |
-| `slotted/eval_workloads.py` | shared workload selectors, source programs, and reference specs for both runners |
-| `slotted/eval_run.py` | builds, progress, subprocess execution, and serial/parallel workload execution |
-| `slotted/eval_verify.py` | untimed graph export, independent raw counts, and verified isomorphism witnesses |
-| `slotted/eval_observation.py` | in-memory observations and verdicts tied to the rows actually compared |
+| `slotted/workloads.py` | shared workload selectors, source programs, and reference specs for both runners |
+| `slotted/runner.py` | builds, progress, subprocess execution, and serial/parallel workload execution |
+| `slotted/verify.py` | untimed graph export, independent raw counts, and verified isomorphism witnesses |
 
 The shared and per-carrier maintenance rules live in the Rust compiler's
 `templates/` directory. Constructor-dependent rules are generated from the declared

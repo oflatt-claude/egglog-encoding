@@ -25,9 +25,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "slotted"))
-import reference as syntax  # noqa: E402
-import test_program as driver  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from slotted import reference as syntax  # noqa: E402
+from slotted import test_program as driver  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
@@ -741,7 +741,7 @@ def run_iso(args):
     on purpose, so an isomorphism is not expected to exist and finding none says
     nothing; they are reported as such rather than skipped silently.
     """
-    import isomorphism as I
+    from slotted.xdiff import isomorphism as I
 
     cases_ = [c for c in cases() if not args or c.name.startswith(args[0])]
     tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}

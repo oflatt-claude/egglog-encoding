@@ -205,7 +205,7 @@
 ;;; rebinds `$y` over `e`, which the left-hand side matched OUTSIDE the lambda, and
 ;;; under that reading the node built is `(Lam $2 (Pair (App $2 $2) $2))`: `e` captured,
 ;;; a closed term, and the class stops depending on `$2`. The rule has to say that `e`
-;;; and `$y` do not alias -- `(not-free $y e)` -- and `check-capture-guards.py` holds
+;;; and `$y` do not alias -- `(not-free $y e)` -- and `checks/language.py guards` holds
 ;;; the rule libraries to that. This is the shape that collapsed the paper's array
 ;;; study at zero parameters, through an unguarded `let-lam-diff`.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
