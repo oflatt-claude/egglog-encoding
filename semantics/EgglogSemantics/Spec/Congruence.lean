@@ -16,15 +16,13 @@ relation**: symmetric and transitive, but reflexive only where an equation makes
 @[blueprint "def:congruence"
   (statement := /--
 \[
-  \begin{gathered}
   \ir{Direct}{(s,t)\in E}{s\sim_E t}\qquad
   \ir{Sym}{s\sim_E t}{t\sim_E s}\qquad
-  \ir{Trans}{s\sim_E t\quad t\sim_E u}{s\sim_E u}\\[1em]
+  \ir{Trans}{s\sim_E t\quad t\sim_E u}{s\sim_E u}\qquad
   \ir{Subterm}{t\sim_E t\quad s\in\operatorname{subterms}(t)}{s\sim_E s}
   \qquad
   \ir{Cong}{f(\bar s)\sim_E f(\bar s)\quad
     \forall j.\ s_j\sim_E t_j}{f(\bar s)\sim_E f(\bar t)}
-  \end{gathered}
   \]
   -/)
   (latexEnv := "paperfragment")]
