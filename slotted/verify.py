@@ -58,6 +58,7 @@ def reference_counts(spec, row, timeout, progress=quiet_progress, *, config=None
     progress(row, "reading graph")
     try:
         g = ISO.parse_reference(r.stdout)
+        ISO.validate_document(g, checker=config.checker)
     except ValueError as exc:
         row.graph_issue = f"reference graph unreadable: {exc}"
         return
@@ -89,15 +90,13 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
     path = SCRATCH / f"eval-{name}-{os.getpid()}-counts.egg"
     jpath = path.with_suffix(".json")
     jpath.unlink(missing_ok=True)
-    path.write_text(program)
+    path.write_text(program + "\n" + ISO.export_command(jpath, lang))
     progress(row, "counts + graph dump")
     try:
         r = subprocess.run(
             [
                 str(config.egglog),
                 *(["--slotted-encoded"] if encoded else slotted_flags(row)),
-                "--to-json",
-                *ISO.SERIALIZE_LIMITS,
                 str(path),
             ],
             capture_output=True,
@@ -108,36 +107,16 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
         if r.returncode != 0:
             row.graph_issue = "encoding graph dump failed: " + (r.stderr.strip() or f"exit {r.returncode}")
             return
-        if ISO.incomplete_serialization(r.stderr):
-            row.graph_issue = "encoding graph serialization was truncated"
-            return
         if not jpath.exists():
             row.graph_issue = "encoding graph dump was not written"
             return
         progress(row, "validating graph")
         doc = json.loads(jpath.read_text())
-        constructors = {op.ctor for op in lang.ops.values()} | {lang.symbols_for(lang.default_sort).var}
-        row.nodes = sum(n.get("op") in constructors for n in doc["nodes"].values())
-        g, issues = ISO.build_encoding_graph(doc, lang)
-        if issues:
-            row.graph_issue = "encoding graph unreadable: " + "; ".join(map(str, issues))
-            return
-        # the reference's node forms: a binder's bound slot as a slot literal
-        var_class = next((c for c in g.ids() if any(n[0] == "var" for n in g.nodes[c])), None)
-        g, unfaithful = ISO.to_reference_shape(g, var_class, lang=lang)
-        if unfaithful:
-            row.graph_issue = "encoding graph cannot be converted faithfully: " + str(unfaithful)
-            return
-        row.classes, reconstructed_nodes = g.summary()
-        if row.nodes != reconstructed_nodes:
-            row.graph_issue = (
-                f"encoding raw constructor count {row.nodes} disagrees with reconstructed graph {reconstructed_nodes}"
-            )
-            return
-        row.graph = g
+        row.classes, row.nodes = doc["counts"]["classes"], doc["counts"]["nodes"]
+        row.graph = ISO.read_export(doc, checker=config.checker)
     except subprocess.TimeoutExpired:
         row.graph_issue = "encoding graph dump exceeded timeout"
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         row.graph_issue = f"encoding graph unavailable: {exc}"
     finally:
         path.unlink(missing_ok=True)

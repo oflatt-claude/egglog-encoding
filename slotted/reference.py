@@ -1,7 +1,7 @@
 """Fixture syntax, language metadata, and translation to the slotted reference.
 
-These helpers describe test inputs and read serialized graphs. They do not emit
-encoding rules or execute slotted programs; the Rust CLI owns that transformation.
+These helpers describe test inputs and reference operator correspondences. The
+Rust CLI owns encoding, execution, and logical graph export.
 """
 
 import re

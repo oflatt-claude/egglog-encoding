@@ -1,14 +1,13 @@
 """Validate engine dumps and compare their logical slotted e-graphs.
 
-Conversion to annotated egraph-serialize JSON preserves every node, slot map, and
-symmetry group. The Rust egraph-isomorphism crate owns search and witness
-verification; its API documentation defines graph equality. Work limits remain
-inconclusive.
+Both engines export annotated egraph-serialize JSON. Rust validates the documents,
+searches for an isomorphism, and independently verifies its witness. Python runs
+the processes and passes engine documents unchanged; mutable graph builders are
+used only for test fixtures and mutations. Work limits remain inconclusive.
 
 Run: `python3 slotted/xdiff/isomorphism.py [name-prefix|fuzz N [seed]]`
 """
 
-import itertools
 import json
 import os
 import random
@@ -24,14 +23,9 @@ SEARCH_CAP = 200_000
 MATCH_VARIANT_CAP = 200_000
 
 
-#: Raise egglog's serialization limits, which default to 40 and silently truncate -- see
-#: `_dump`. Well past anything a generated case reaches, while still bounding the dump.
-SERIALIZE_LIMITS = ["--max-functions", "1000000", "--max-calls-per-function", "1000000"]
-
-
 # ------------------------------------------------------------------ the graphs
 class Graph:
-    """Classes, each with slots, a symmetry group, and a set of nodes.
+    """Mutable test fixture builder; engine exports use Document instead.
 
     A node is `(op, elems)`; an elem is `("slot", s)` for a slot the node names
     directly, or `("child", cid, ((child_slot, parent_slot), ...))`.
@@ -59,497 +53,86 @@ class Graph:
         return (len(self.slots), sum(len(v) for v in self.nodes.values()))
 
 
+class Document:
+    """An engine's annotated graph, passed unchanged to the Rust checker."""
+
+    def __init__(self, document):
+        self.document = document
+
+    def ids(self):
+        return sorted(self.document["slotted"]["classes"])
+
+    def summary(self):
+        return len(self.ids()), len(self.document["nodes"])
+
+
 def parse_reference(out):
-    """Read the reference's annotated egraph-serialize export without repairing it."""
     exports = [line.removeprefix("GRAPH ") for line in out.splitlines() if line.startswith("GRAPH ")]
     if len(exports) != 1:
         raise ValueError("expected one complete GRAPH export")
-    try:
-        doc = json.loads(exports[0])
-        annotations, nodes = doc["slotted"], doc["nodes"]
-        if set(annotations["nodes"]) != set(nodes):
-            raise ValueError("node annotations do not cover exactly the exported nodes")
-        if set(doc.get("class_data", {})) - set(annotations["classes"]):
-            raise ValueError("class annotations omit exported classes")
-        # The reference adapter models a single untyped carrier without designated
-        # roots or subsumption. Reject additional semantics instead of erasing them.
-        if (
-            doc.get("root_eclasses")
-            or any(data.get("type") is not None for data in doc.get("class_data", {}).values())
-            or any(node.get("subsumed", False) for node in nodes.values())
-        ):
-            raise ValueError("reference adapter does not support roots, class types, or subsumption")
-        g = Graph()
-        for cid, data in annotations["classes"].items():
-            slots = data["slots"]
-            if len(slots) != len(set(slots)):
-                raise ValueError(f"{cid}: repeated class slot")
-            g.add_class(cid, slots)
-            for permutation in data["group"]:
-                if sorted(permutation) != list(range(len(slots))):
-                    raise ValueError(f"{cid}: invalid group permutation")
-                g.group[cid].add(frozenset((s, slots[i]) for s, i in zip(slots, permutation, strict=True)))
-            if len(g.group[cid]) != len(data["group"]):
-                raise ValueError(f"{cid}: duplicate group elements")
-            if not is_closed_group(g.group[cid], frozenset((s, s) for s in slots)):
-                raise ValueError(f"{cid}: incomplete symmetry group")
-        for nid, node in nodes.items():
-            children = iter(node["children"])
-            elems = []
-            for arg in annotations["nodes"][nid]["arguments"]:
-                if arg["kind"] == "slot":
-                    elems.append(("slot", arg["slot"]))
-                elif arg["kind"] == "child":
-                    cid = nodes[next(children)]["eclass"]
-                    elems.append(("child", cid, tuple(map(tuple, arg["renaming"]))))
-                else:
-                    raise ValueError(f"{nid}: unknown argument kind {arg['kind']!r}")
-            if next(children, None) is not None:
-                raise ValueError(f"{nid}: missing child annotations")
-            g.nodes[node["eclass"]].append((node["op"], tuple(elems)))
-        return g
-    except (KeyError, TypeError, IndexError, StopIteration) as exc:
-        raise ValueError(f"malformed annotated graph: {exc}") from exc
+    return Document(json.loads(exports[0]))
 
 
-def read_json_graph(doc, lang):
-    """The encoding's tables, out of egglog's serialized e-graph.
+def export_command(path, lang):
+    """Select reference operator spellings; Rust reads all layouts and table rows."""
+    names = []
+    for op in lang.ops.values():
+        fields = [json.dumps(op.ref or ("=payload" if op.pays else op.ctor))]
+        if op.ref_prefix:
+            fields.append(json.dumps(op.ref_prefix))
+        names.append(f"({op.ctor} {' '.join(fields)})")
+    return f"(slotted-export {json.dumps(str(path))} {' '.join(names)})\n"
 
-    Every row is a node with an `op`, the `eclass` it belongs to, and `children` naming other
-    nodes. A class id is `{sort}-{canonical value}`, so it identifies a class instead of
-    describing one -- which is the whole reason for reading the JSON rather than the printed
-    tables. Renamings come back as `map-of` nodes over `i64` nodes, so their contents are
-    readable too.
+
+def validate_document(graph, *, checker=None):
+    result = rust_request({"graph": serialized_graph(graph)}, checker=checker)
+    if result["status"] != "valid":
+        raise ValueError(result["reason"])
+    return result["classes"], result["nodes"]
+
+
+def read_export(doc, *, checker=None):
+    """Validate native export and independently check its recorded table sizes."""
+    graph = Document(doc)
+    counts = validate_document(graph, checker=checker)
+    raw = doc["counts"]
+    if (raw["classes"], raw["nodes"]) != counts:
+        raise ValueError(f"raw class/node counts {raw} disagree with exported graph {counts}")
+    return graph
+
+
+def fixture(graph):
+    """Copy a standard document into the mutable builder used by mutation tests.
+
+    Runtime comparisons use the original document. This helper deliberately keeps
+    only the single untyped carrier used by these mutation fixtures.
     """
-    symbols = lang.symbols_for(lang.default_sort)
-    node_ops = {op.ctor: op for op in lang.ops.values()}
-    nodes = doc.get("nodes", {})
-
-    def cls(node_id):
-        return nodes[node_id]["eclass"]
-
-    def is_renaming(node_id):
-        return cls(node_id).startswith("Renaming-")
-
-    # a renaming's contents, from the `map-of` node in its class
-    maps, issues = {}, []
-    for n in nodes.values():
-        if n.get("op") == "map-of" and n["eclass"].startswith("Renaming-"):
-            xs = [int(nodes[c]["op"]) for c in n.get("children", [])]
-            if len(xs) % 2:
-                issues.append(f"odd map-of row in {n['eclass']}")
-            maps[n["eclass"]] = dict(zip(xs[0::2], xs[1::2], strict=False))
-            if len(set(maps[n["eclass"]].values())) != len(maps[n["eclass"]]):
-                issues.append(f"non-injective renaming in {n['eclass']}")
-
-    # a group's contents, from the `set-of` node in its class: its elements are renamings
-    sets = {}
-    for n in nodes.values():
-        if n.get("op") == "set-of" and n["eclass"].startswith("Group-"):
-            sets[n["eclass"]] = list(n.get("children", []))
-
-    def as_renaming(node_id):
-        cid = cls(node_id)
-        if cid not in maps:
-            issues.append(f"no map-of row for {cid}")
-            return {}
-        return maps[cid]
-
-    slots_of, loops, rows, leaf = {}, [], [], {}
-    leaf_rows = {"var": 0, "null": 0}
-    for n in nodes.values():
-        op, kids = n.get("op"), n.get("children", [])
-        if op == symbols.class_slots and kids:
-            m = maps.get(n["eclass"])
-            if m is None:
-                issues.append(f"no map-of row for class-slots result {n['eclass']}")
-                m = {}
-            if any(k != v for k, v in m.items()):
-                issues.append(f"class-slots result {n['eclass']} is not an identity map: {m}")
-            value, slots = cls(kids[0]), tuple(sorted(m))
-            if value in slots_of and slots_of[value] != slots:
-                issues.append(f"conflicting class-slots rows for {value}")
-            slots_of[value] = slots
-        elif op == symbols.renames and len(kids) == 3:
-            loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[2])))
-        elif op == symbols.group and len(kids) == 1:
-            # a symmetry is a renaming of a class onto ITSELF, so each element of the
-            # class's group reads here as the self-loop the rest of this function is
-            # written against; a follower's group is empty
-            for element in sets.get(n["eclass"], []):
-                loops.append((cls(kids[0]), as_renaming(element), cls(kids[0])))
-        elif op == symbols.var:
-            leaf_rows["var"] += 1
-            if len(kids) != 1:
-                issues.append(f"{n['eclass']} Var: {len(kids)} payloads, expected 1")
-            else:
-                try:
-                    leaf["var_slot"] = int(nodes[kids[0]]["op"])
-                    if leaf["var_slot"] != 0:
-                        issues.append(f"{n['eclass']} Var: payload slot is not canonical 0")
-                except (KeyError, TypeError, ValueError):
-                    issues.append(f"{n['eclass']} Var: payload is not an i64 slot")
-            if "var" in leaf and leaf["var"] != n["eclass"]:
-                issues.append("Var rows occur in more than one U e-class")
-            leaf["var"] = n["eclass"]
-        elif op == "Null":
-            leaf_rows["null"] += 1
-            if kids:
-                issues.append(f"{n['eclass']} Null: {len(kids)} payloads, expected 0")
-            if "null" in leaf and leaf["null"] != n["eclass"]:
-                issues.append("Null rows occur in more than one U e-class")
-            leaf["null"] = n["eclass"]
-        elif op in node_ops:
-            payloads, elems, i = [], [], 0
-            while i < len(kids):
-                if is_renaming(kids[i]) and i + 1 < len(kids):
-                    elems.append(("child", cls(kids[i + 1]), as_renaming(kids[i])))
-                    i += 2
-                else:
-                    payloads.append(nodes[kids[i]]["op"].strip('"'))
-                    i += 1
-            # A payload-headed row is named by its payload and a per-constructor row
-            # by its tag. The payload needs the operator's `ref_prefix` in front of it,
-            # because that is the spelling the REFERENCE writes and these two names are
-            # about to be compared: sdql's symbols are `sym:mult` there and `mult` here,
-            # and without the prefix two identical graphs refine to different colours.
-            o = node_ops[op]
-            name = o.ref_prefix + "/".join(payloads) if payloads else (o.ref or o.ctor)
-            rows.append((name, elems, n["eclass"], o))
-    # `Var` is seeded by the carrier's own machinery, so a graph always has exactly one.
-    # `Null` is an ordinary constructor of the language under test and exists only where
-    # a term built one -- which is what the reference does too, so a case that never
-    # names it has none on either side.
-    for kind, count in leaf_rows.items():
-        cap = 1 if kind == "null" else None
-        if (count > cap) if cap is not None else (count != 1):
-            issues.append(f"expected at most one raw {kind.title()} row, found {count}")
-    return slots_of, loops, rows, leaf, issues
-
-
-def validate_encoding_rows(slots_of, rows, leaf, same_class=None):
-    """Reject raw rows whose structure the reference-shape conversion would erase.
-
-    In particular, converting a binder edge to a slot literal necessarily discards its
-    child class and all keys but `0`.  Those are invariants, not irrelevant spelling:
-    accepting a wrong child or an extra key here could make a malformed encoding graph
-    look isomorphic after conversion.  Ordinary edges get Def. 4's exact-domain check
-    for the same reason -- frame composition otherwise truncates an extra key.
-    """
-    issues = []
-    var_class = leaf.get("var")
-    for name, elems, cid, op in rows:
-        if len(elems) != len(op.kid_cols):
-            issues.append(f"{cid} {name}: {len(elems)} children, expected {len(op.kid_cols)}")
-            continue
-        for i, elem in enumerate(elems):
-            if elem[0] != "child":
-                issues.append(f"{cid} {name} child {i + 1}: not a child edge")
-                continue
-            child, m = elem[1], elem[2]
-            if i in op.binders:
-                if set(m) != {0}:
-                    issues.append(f"{cid} {name} binder {i + 1}: domain {sorted(m)}, expected [0]")
-                if same_class is not None and (var_class is None or not same_class(child, var_class)):
-                    issues.append(f"{cid} {name} binder {i + 1}: child {child}, expected variable class {var_class}")
-            elif child not in slots_of:
-                issues.append(f"{cid} {name} child {i + 1}: no ClassSlots row for {child}")
-            elif set(m) != set(slots_of[child]):
-                issues.append(
-                    f"{cid} {name} child {i + 1}: edge domain {sorted(m)}, child slots {sorted(slots_of[child])}"
-                )
-
-        # Def. 4 also requires the class slots to be a subset of every node's free
-        # slots. Binder marker columns are private names, and all bound names are
-        # removed only from the one covered child; uncovered columns retain them.
-        bound = {elems[i][2].get(0) for i in op.binders if i < len(elems) and elems[i][0] == "child"}
-        bound.discard(None)
-        free = set()
-        for i, elem in enumerate(elems):
-            if elem[0] != "child" or i in op.binders:
-                continue
-            image = set(elem[2].values())
-            free |= image - bound if i == op.covered else image
-        if cid in slots_of and not set(slots_of[cid]).issubset(free):
-            issues.append(
-                f"{cid} {name}: class slots {sorted(slots_of[cid])} not contained in node slots {sorted(free)}"
-            )
-    return issues
-
-
-def compose_maps(a, b):
-    """`a . b`: apply `b` then `a`, dropping keys `b` sends outside `a`'s domain."""
-    return {k: a[v] for k, v in b.items() if v in a}
-
-
-def rename_image(u, m):
-    """`m` with its image carried through `u`, leaving what `u` does not cover alone.
-
-    Composing with `u` would *truncate*: `u` covers a class's slots, and a node may carry
-    slots its class does not -- Def. 4 permits exactly that -- so the redundant ones are not in
-    `u` and a plain compose drops them. They are node-local and quantified per node when nodes
-    are matched, so they only need a name that cannot collide with a class slot, an int here.
-    """
-    return {k: u.get(v, f"~{v}") for k, v in m.items()}
-
-
-def invert_map(m):
-    inv = {v: k for k, v in m.items()}
-    return inv if len(inv) == len(m) else None
-
-
-def is_closed_group(perms, identity):
-    """Check a set of permutations of one slot set without repairing missing elements.
-
-    Grow a subgroup using a new generator only when it is not already generated.
-    Every product must be recorded in `perms`; after all generators are processed,
-    the generated subgroup equals `perms`. This is exact: a finite set of permutations
-    containing the identity and closed under composition is a group.
-
-    Each new generator at least doubles the subgroup, so valid groups need at most
-    log2(|perms|) generators instead of checking all |perms| squared pairs.
-    The caller has already checked that each element permutes the same slot set.
-    """
-    if identity not in perms:
-        return False
-    generated = {identity}
-    generators = []
-    for perm in perms:
-        if perm in generated:
-            continue
-        generators.append(dict(perm))
-        pending = list(generated)
-        for current in pending:
-            for generator in generators:
-                product = frozenset((a, generator[b]) for a, b in current)
-                if product not in perms:
-                    return False
-                if product not in generated:
-                    generated.add(product)
-                    pending.append(product)
-    return True
-
-
-def build_encoding_graph(doc, lang):
-    """One class per *slotted* class, merging the `U` values that make one up.
-
-    Membership is a connected component of *any* `RenamesToLeader` link, partial ones
-    included: a partial `m` in `a = m*b` is the redundancy relation, saying b's class does not
-    depend on the slots `m` drops, and the reference models that as one class with the smaller
-    slot set. `checks/check-eval.py` independently cross-checks the class count using
-    egglog observer rules over the curated corpus.
-
-    A CLASS WITH NO NODE IN IT IS A REAL SIGNAL, and nothing here hides one. The reference
-    never produces one, and across a 1200-case sweep neither do we -- but only once the
-    serialization limits `_dump` sets are in place. At egglog's defaults `RenamesToLeader`
-    truncates at 40 rows, links go missing, components split, and the leftovers look
-    exactly like classes the encoding failed to merge.
-    """
-    slots_of, loops, rows, leaf, issues = read_json_graph(doc, lang)
-    values = set(slots_of) | {c for _, _, c, _ in rows} | {leaf[k] for k in ("var", "null") if k in leaf}
-    for a, _m, b in loops:
-        values |= {a, b}
-
-    parent = {v: v for v in values}
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    linked = [(a, m, b) for a, m, b in loops if a != b]
-    for a, _m, b in linked:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    members = {}
-    for v in values:
-        members.setdefault(find(v), []).append(v)
-    edges_by_component = {root: [] for root in members}
-    for a, m, b in linked:
-        edges_by_component[find(a)].append((a, m, b))
-
-    issues += [f"{v}: no ClassSlots row" for v in sorted(values) if v not in slots_of]
-    issues += validate_encoding_rows(slots_of, rows, leaf, lambda a, b: find(a) == find(b))
-    if "null" in leaf and slots_of.get(leaf["null"], ()):
-        issues.append(f"{leaf['null']} Null: class slots must be empty")
-    if "var" in leaf and "var_slot" in leaf:
-        var_slots = set(slots_of.get(leaf["var"], ()))
-        if not var_slots.issubset({leaf["var_slot"]}):
-            issues.append(
-                f"{leaf['var']} Var: class slots {sorted(var_slots)} are not a subset "
-                f"of its payload slot {leaf['var_slot']}"
-            )
-
-    rep_of, frame = {}, {}
-    for root, group in members.items():
-        # the member with the most slots is the one whose frame can express the others
-        rep = max(sorted(group), key=lambda v: len(slots_of.get(v, ())))
-        for v in group:
-            rep_of[v] = rep
-        frame[rep] = {s: s for s in slots_of.get(rep, ())}
-        edges = edges_by_component[root]
-        while True:
-            placed = len(frame)
-            for a, m, b in edges:
-                if b in frame and a not in frame:
-                    frame[a] = compose_maps(m, frame[b])
-                elif a in frame and b not in frame:
-                    inv = invert_map(m)
-                    if inv is not None:
-                        frame[b] = compose_maps(inv, frame[a])
-            if len(frame) == placed:
-                break
-        # Where two paths disagree they differ by a symmetry of the class, and either is a
-        # valid choice of frame; the group comparison accounts for it.
-
-    unplaced = sorted(v for v in values if v not in frame)
-    issues += [f"{v}: could not be placed in a class frame" for v in unplaced]
-
-    # A frame is a bijection between the one slotted class's live slots as seen from
-    # the chosen representative and from this member.  `invert_map(...) or {}` used to
-    # turn a partial/non-injective frame into the empty map and keep going, which could
-    # erase precisely the slot difference the isomorphism check is meant to observe.
-    for v, m in frame.items():
-        rep = rep_of[v]
-        if set(m) != set(slots_of.get(rep, ())) or set(m.values()) != set(slots_of.get(v, ())) or invert_map(m) is None:
-            issues.append(
-                f"{v}: frame is not a bijection from {sorted(slots_of.get(rep, ()))} to {sorted(slots_of.get(v, ()))}"
-            )
-
-    # Everything below composes and inverts frames.  Once raw validation has shown
-    # one malformed, reconstruction cannot add useful evidence and must not crash
-    # while trying to interpret that malformed value.
-    if issues:
-        return Graph(), issues
-
-    def up(v):
-        return invert_map(frame[v])
-
-    g = Graph()
-    for rep in set(rep_of.values()):
-        g.add_class(rep, slots_of.get(rep, ()))
-
-    for a, m, b in loops:
-        if a != b or a in unplaced:
-            continue
-        rep = rep_of[a]
-        sym = compose_maps(up(a), compose_maps(m, frame[a]))
-        if set(sym) == set(sym.values()) == set(g.slots[rep]):
-            g.group[rep].add(frozenset(sym.items()))
-        else:
-            issues.append(f"{a}: framed symmetry is not a permutation of {sorted(g.slots[rep])}")
-
-    # Matching consumes the ACTUAL group value, so do not repair a missing group
-    # element in the reader. Require those rows to contain the identity and already be
-    # closed, then require every non-self relation to be path-consistent modulo that
-    # recorded group.
-    for rep, perms in g.group.items():
-        identity = frozenset((s, s) for s in g.slots[rep])
-        if identity not in perms:
-            issues.append(f"{rep}: no identity in the group")
-        if not is_closed_group(perms, identity):
-            issues.append(f"{rep}: self-loop permutations are not a closed group")
-
-    for a, m, b in linked:
-        if a in unplaced or b in unplaced:
-            continue
-        rep = rep_of[a]
-        relative = frozenset(compose_maps(up(a), compose_maps(m, frame[b])).items())
-        if relative not in g.group[rep]:
-            issues.append(f"{a} = m*{b}: relation is inconsistent with recorded symmetry group")
-
-    for kind, op in (("var", "var"), ("null", "null")):
-        v = leaf.get(kind)
-        if v is None or v in unplaced:
-            continue
-        u = up(v)
-        raw_slot = leaf.get("var_slot", 0)
-        elems = (("slot", u.get(raw_slot, f"~{raw_slot}")),) if kind == "var" else ()
-        g.nodes[rep_of[v]].append((op, elems))
-
-    for name, elems, cid, _op in rows:
-        if cid in unplaced or any(c in unplaced for _, c, _ in elems):
-            continue
-        u = up(cid)
-        moved = tuple(
-            ("child", rep_of[c], tuple(sorted(rename_image(u, compose_maps(m, frame[c])).items()))) for _, c, m in elems
-        )
-        g.nodes[rep_of[cid]].append((name, moved))
-
-    # Preserve every live constructor row. The encoding must retire redundant
-    # invocations itself: deduplicating after frame translation would hide both
-    # extra rows and the corresponding node-count disagreement with the reference.
-    g.close_groups()
-    return g, issues
-
-
-# ------------------------------------------------------- the encoding's own ops
-def to_reference_shape(g, var_class=None, *, lang):
-    """Rewrite the encoding's node forms into the reference's.
-
-    Two things are spelled differently by construction, and both are documented
-    where they are built (`enc` in xdiff.py / xarray.py, `define_language!` in
-    xmulti):
-
-      * a binder -- `lambda` is `lam` -- has each bound slot in a child edge to the
-        var class rather than as a slot literal on the node. A node may bind SEVERAL,
-        at positions the language declares: sdql's `Sum` binds its children 1 and 2 and
-        its `Merge` binds 2, 3 and 4, so neither the count nor the position can be
-        assumed.
-      * a child edge is a dict here and a sorted pair tuple there.
-    """
-    binders = {op.ref or op.ctor: op for op in lang.ops.values() if op.binders}
+    doc = serialized_graph(graph)
+    if (
+        doc.get("root_eclasses")
+        or any(c.get("type") for c in doc.get("class_data", {}).values())
+        or any(n.get("subsumed") for n in doc["nodes"].values())
+    ):
+        raise ValueError("mutation fixture requires an untyped graph without roots or subsumption")
     out = Graph()
-    for cid in g.ids():
-        out.add_class(cid, g.slots[cid])
-        out.group[cid] = g.group[cid]
-    fresh = itertools.count()
-    unfaithful = []
-    for cid in g.ids():
-        for op, elems in g.nodes[cid]:
-            binder_op = binders.get(op)
-            if binder_op is not None:
-                elems = list(elems)
-                for i in binder_op.binders:
-                    if i >= len(elems) or elems[i][0] != "child":
-                        unfaithful.append((cid, f"missing binder child {i + 1}"))
-                        continue
-                    child, m = elems[i][1], dict(elems[i][2])
-                    # The bound slot rides in this edge, and may be gone by the time it
-                    # gets here -- so a fresh name stands in, which is sound because a
-                    # slot the node's class does not have is renamed freely when nodes
-                    # are matched.
-                    #
-                    # `validate_encoding_rows` has already checked the raw edge's exact
-                    # domain and child before frame translation can erase either.  A
-                    # missing name here is therefore the valid consequence of translating
-                    # through the slotless variable class, and a fresh alpha-name is the
-                    # reference shape it denotes.
-                    if 0 in m:
-                        bound = m[0]
-                    elif len(m) == 1:
-                        bound = next(iter(m.values()))
-                    else:
-                        bound = f"_b{next(fresh)}"
-                    # the position is a binder by the encoding's convention, but it
-                    # still has to be the variable class, or the convention is not
-                    # being followed
-                    if var_class is not None and child != var_class:
-                        unfaithful.append((cid, child))
-                    elems[i] = ("slot", bound)
-                elems = tuple(elems)
-                op = binder_op.ref or binder_op.ctor
-            fixed = []
-            for e in elems:
-                if e[0] == "child":
-                    fixed.append(("child", e[1], tuple(sorted(e[2].items())) if isinstance(e[2], dict) else e[2]))
-                else:
-                    fixed.append(e)
-            out.nodes[cid].append((op, tuple(fixed)))
-    return out, unfaithful
+    for cid, data in doc["slotted"]["classes"].items():
+        slots = data["slots"]
+        out.add_class(cid, slots)
+        out.group[cid] = {frozenset(zip(slots, (slots[i] for i in p), strict=True)) for p in data["group"]}
+    for nid, node in doc["nodes"].items():
+        children = iter(node["children"])
+        elems = []
+        for arg in doc["slotted"]["nodes"][nid]["arguments"]:
+            if arg["kind"] == "slot":
+                elems.append(("slot", arg["slot"]))
+            else:
+                elems.append(("child", doc["nodes"][next(children)]["eclass"], tuple(map(tuple, arg["renaming"]))))
+        out.nodes[node["eclass"]].append((node["op"], tuple(elems)))
+    return out
+
+
+def group_sizes(graph):
+    return [len(c["group"]) for c in serialized_graph(graph)["slotted"]["classes"].values()]
 
 
 def serialized_graph(g):
@@ -558,6 +141,8 @@ def serialized_graph(g):
     Integer and string slot names remain distinct. Child pointers name an arbitrary
     node of their class; a dangling pointer remains an invalid input.
     """
+    if isinstance(g, Document):
+        return g.document
     if set(g.slots) != set(g.group) or set(g.slots) != set(g.nodes):
         raise ValueError("class slots, groups, and nodes name different classes")
     ids = {c: json.dumps(c) for c in g.ids()}
@@ -597,18 +182,29 @@ def serialized_graph(g):
     }
 
 
-def rust_check(left, right, *, checker=None, **options):
+def rust_request(request, *, checker=None):
     checker = checker or driver.ROOT / "target/debug/egraph-isomorphism"
-    request = {"left": serialized_graph(left), "right": serialized_graph(right), **options}
     result = subprocess.run([str(checker)], input=json.dumps(request), text=True, capture_output=True)
     try:
         response = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"isomorphism checker failed ({result.returncode}): {result.stderr}") from exc
-    codes = {"isomorphic": 0, "verified": 0, "different": 1, "invalid": 2, "inconclusive": 3, "invalid_witness": 4}
+    codes = {
+        "valid": 0,
+        "isomorphic": 0,
+        "verified": 0,
+        "different": 1,
+        "invalid": 2,
+        "inconclusive": 3,
+        "invalid_witness": 4,
+    }
     if response.get("status") not in codes or result.returncode != codes[response["status"]]:
         raise RuntimeError(f"unexpected checker response ({result.returncode}): {response}")
     return response
+
+
+def rust_check(left, right, *, checker=None, **options):
+    return rust_request({"left": serialized_graph(left), "right": serialized_graph(right), **options}, checker=checker)
 
 
 def find_isomorphism(ga, gb, *, search_cap=SEARCH_CAP, checker=None):
@@ -693,82 +289,42 @@ def reference_graph(case, mult=3, *, timeout=25):
         )
         return None, f"reference error: {detail}"
     try:
-        return parse_reference(r.stdout), None
+        graph = parse_reference(r.stdout)
+        validate_document(graph)
+        return graph, None
     except ValueError as exc:
         # The pinned oracle deliberately declines to enumerate symmetry groups above
         # six live slots.  That is a coverage limit, not evidence of agreement.
         return None, f"reference dump unavailable: {exc}"
 
 
-def canonical(g):
-    """A string that determines the graph, for comparing two runs of one case."""
-    return repr([(c, g.slots[c], sorted(map(sorted, g.group[c])), sorted(map(str, g.nodes[c]))) for c in g.ids()])
-
-
-def incomplete_serialization(stderr):
-    """The successful CLI diagnostics that mean its JSON is only a prefix."""
-    return [line.strip() for line in stderr.splitlines() if re.search(r"\b(?:Omitted|Truncated):", line)]
-
-
 def _dump(case, mult, timeout, *, egg_program=None):
-    """The encoding's graph, from egglog's serialized e-graph.
-
-    `--to-json` writes `<input>.json` and names a class `{sort}-{canonical value}`, an
-    identity rather than a rendering, so a class whose rows have been deleted is still
-    distinguishable -- where `print-function` renders every such class as the one word
-    `Unextractable` and the graph cannot be rebuilt.
-
-    THE LIMITS ARE NOT OPTIONAL. `--max-functions` and `--max-calls-per-function` default
-    to 40 each -- documented as "maximum number of function nodes to render in dot/svg
-    output", and `--to-json` inherits them. Any constructor with more than 40 rows is then
-    TRUNCATED, and the graph stops growing while the e-graph does not, which reads as the
-    encoding stalling against a reference that keeps going. Current egglog reports an
-    incomplete serialization as `Omitted:` or `Truncated:` on stderr, even on exit zero;
-    those diagnostics are therefore part of the reader's validity check.
-    """
-    lang = case.lang
     prog = egg_program(case, mult=mult) if egg_program else case.egg_program(mult=mult)
     prog = prog.replace("(print-function SameClass 100000)", "")
     p = driver.ROOT / f"xdiff-tmp-iso-{os.getpid()}-{mult}.egg"
     j = p.with_suffix(".json")
-    p.write_text(prog)
+    j.unlink(missing_ok=True)
+    p.write_text(prog + "\n" + export_command(j, case.lang))
     try:
         r = subprocess.run(
-            [str(driver.EGGLOG), "--slotted-encoded", "--to-json", *SERIALIZE_LIMITS, str(p)],
+            [str(driver.EGGLOG), "--slotted-encoded", str(p)],
             capture_output=True,
             text=True,
             cwd=driver.ROOT,
             timeout=timeout,
         )
+        if r.returncode != 0:
+            return None, ("unreadable", f"encoding export failed: {r.stderr[-600:]}")
+        if not j.exists():
+            return None, ("unreadable", "encoding produced no exported e-graph")
+        return read_export(json.loads(j.read_text())), None
     except subprocess.TimeoutExpired:
         return None, "timeout"
+    except ValueError as exc:
+        return None, ("unreadable", str(exc))
     finally:
         p.unlink(missing_ok=True)
-    try:
-        if r.returncode != 0:
-            err = [line for line in r.stderr.splitlines() if "ERROR" in line]
-            return None, f"encoding error: {err[-1] if err else r.stderr[:120]}"
-        incomplete = incomplete_serialization(r.stderr)
-        if incomplete:
-            return None, ("unreadable", f"incomplete encoding serialization: {incomplete[:2]}")
-        if not j.exists():
-            return None, "encoding produced no serialized e-graph"
-        g, issues = build_encoding_graph(json.loads(j.read_text()), lang)
-    finally:
         j.unlink(missing_ok=True)
-    if issues:
-        # Its own outcome, not "not comparable": that bucket is for a run that ran out of
-        # TIME, and this is a graph the reader could not rebuild -- a different thing,
-        # and one that could be hiding an encoding defect rather than a budget.
-        return None, ("unreadable", f"{len(issues)} encoding graph issue(s): {issues[:2]}")
-    leaf = {"var": None}
-    for cid in g.ids():
-        if any(n[0] == "var" for n in g.nodes[cid]):
-            leaf["var"] = cid
-    g, unfaithful = to_reference_shape(g, leaf.get("var"), lang=lang)
-    if unfaithful:
-        return None, f"binder position is not the variable class: {unfaithful[:2]}"
-    return g, None
 
 
 def encoding_graph(case, *, egg_program=None):
@@ -791,7 +347,12 @@ def encoding_graph(case, *, egg_program=None):
     if e2:
         err = e2 if e2 != "timeout" else ("limit", "encoding too slow to settle")
         return None, err, 12
-    if canonical(a) != canonical(b):
+    witness, why = find_isomorphism(a, b)
+    if witness is None:
+        if why.endswith(" -- inconclusive"):
+            return None, ("limit", why), 12
+        if why.startswith("invalid graph:"):
+            return None, ("unreadable", why), 12
         return None, "encoding has not settled: doubling the rounds changes the graph", 12
     return a, None, 6
 
@@ -831,7 +392,7 @@ def check(
     if bad:
         return "FAIL", f"witness rejected: {bad}"
     n, m = ref.summary()
-    groups = sum(len(v) for v in ref.group.values())
+    groups = sum(group_sizes(ref))
     return "ok", (n, m, groups)
 
 
@@ -842,14 +403,8 @@ def selftest():
     answers are pinned here: relabelling, symmetry-equivalent child representatives,
     and redundant-slot alpha-renaming must be *accepted*; missing symmetries, moved
     edges, nonmember permutations, and broken repeated-slot sharing must be *rejected*.
-    The raw encoding reader is tested too: it must not silently discard malformed
-    binder structure or a Def. 4 edge-domain difference.  No egglog and no reference,
-    so these stay honest if either changes.
+    These use no engine or reference; native export validation has its own Rust tests.
     """
-
-    from slotted.xdiff import xdiff as X
-
-    symbols = X.LANG.symbols_for(X.LANG.default_sort)
 
     def build(spec):
         g = Graph()
@@ -1004,239 +559,6 @@ def selftest():
             f"{'' if got else '  (' + (why or '') + ')'}"
         )
 
-    # Independent oracle: exhaustive pairwise composition of tuple permutations.
-    # Include every subset through S3, larger closed groups, and deletions from them.
-    # In particular, supplying generators without their products must be rejected.
-    group_checks = []
-    for degree in range(6):
-        symmetric = list(itertools.permutations(range(degree)))
-        if degree <= 3:
-            subsets = [set(s) for n in range(len(symmetric) + 1) for s in itertools.combinations(symmetric, n)]
-        else:
-            full = set(symmetric)
-            subsets = [full, *(full - {p} for p in symmetric)]
-        # Nonconsecutive slot names ensure this is not tied to dense integer slots.
-        labels = tuple(f"slot-{7 * i + 3}" for i in range(degree))
-        identity = frozenset((s, s) for s in labels)
-        for subset in subsets:
-            expected = tuple(range(degree)) in subset and all(
-                tuple(p[q[i]] for i in range(degree)) in subset for p in subset for q in subset
-            )
-            perms = {frozenset((labels[i], labels[j]) for i, j in enumerate(p)) for p in subset}
-            group_checks.append(is_closed_group(perms, identity) == expected)
-    groups_ok = all(group_checks)
-    bad += not groups_ok
-    print(
-        f"  {'ok  ' if groups_ok else 'FAIL'} group closure agrees with pairwise oracle: "
-        f"{sum(group_checks)}/{len(group_checks)}"
-    )
-
-    lam, fop = X.LANG["Lam"], X.LANG["F"]
-    slots = {"var": (), "body": ()}
-    valid = ("lam", [("child", "var", {0: 7}), ("child", "body", {})], "lc", lam)
-    reader_cases = [
-        ("valid binder row", False, [valid]),
-        (
-            "binder via leader",
-            False,
-            [("lam", [("child", "leader", {0: 7}), ("child", "body", {})], "lc", lam)],
-        ),
-        (
-            "extra binder key",
-            True,
-            [("lam", [("child", "var", {0: 7, 1: 8}), ("child", "body", {})], "lc", lam)],
-        ),
-        (
-            "wrong binder child",
-            True,
-            [("lam", [("child", "body", {0: 7}), ("child", "body", {})], "lc", lam)],
-        ),
-        (
-            "wide ordinary edge",
-            True,
-            [("f", [("child", "body", {0: 7}), ("child", "body", {})], "fc", fop)],
-        ),
-    ]
-
-    def same(a, b):
-        return a == b or {a, b} == {"leader", "var"}
-
-    for name, want_bad, rows in reader_cases:
-        issues = validate_encoding_rows(slots, rows, {"var": "var"}, same)
-        ok = bool(issues) == want_bad
-        bad += not ok
-        print(f"  {'ok  ' if ok else 'FAIL'} reader {name:20} rejected={bool(issues)}, expected={want_bad}")
-
-    def null_doc(with_slots=True, slots=()):
-        nodes = {
-            "n": {"op": "Null", "eclass": "U-n", "children": []},
-            "i0": {"op": "0", "eclass": "i64-0", "children": []},
-            "v": {"op": symbols.var, "eclass": "U-v", "children": ["i0"]},
-            "vm": {"op": "map-of", "eclass": "Renaming-var-id", "children": ["i0", "i0"]},
-            "vcs": {"op": symbols.class_slots, "eclass": "Renaming-var-id", "children": ["v"]},
-            "vrtl": {"op": symbols.renames, "eclass": "Unit-vrtl", "children": ["v", "vm", "v"]},
-        }
-        if with_slots:
-            children = []
-            for i, slot in enumerate(slots):
-                key, val = f"k{i}", f"v{i}"
-                nodes[key] = {"op": str(slot), "eclass": f"i64-k{i}", "children": []}
-                nodes[val] = {"op": str(slot), "eclass": f"i64-v{i}", "children": []}
-                children += [key, val]
-            nodes["m"] = {"op": "map-of", "eclass": "Renaming-id", "children": children}
-            nodes["cs"] = {"op": symbols.class_slots, "eclass": "Renaming-id", "children": ["n"]}
-            nodes["rtl"] = {"op": symbols.renames, "eclass": "Unit-rtl", "children": ["n", "m", "n"]}
-        return {"nodes": nodes}
-
-    nonidentity_var = {
-        "nodes": {
-            "i0": {"op": "0", "eclass": "i64-0", "children": []},
-            "i1": {"op": "1", "eclass": "i64-1", "children": []},
-            "v": {"op": symbols.var, "eclass": "U-v", "children": ["i0"]},
-            "m": {"op": "map-of", "eclass": "Renaming-weird", "children": ["i0", "i1"]},
-            "cs": {"op": symbols.class_slots, "eclass": "Renaming-weird", "children": ["v"]},
-            "rtl": {"op": symbols.renames, "eclass": "Unit-rtl", "children": ["v", "m", "v"]},
-        }
-    }
-    inconsistent_cycle = {
-        "nodes": {
-            "i0": {"op": "0", "eclass": "i64-0", "children": []},
-            "i1": {"op": "1", "eclass": "i64-1", "children": []},
-            "mid": {"op": "map-of", "eclass": "Renaming-id", "children": ["i0", "i0", "i1", "i1"]},
-            "mswap": {"op": "map-of", "eclass": "Renaming-swap", "children": ["i0", "i1", "i1", "i0"]},
-            "a": {"op": "opaque-a", "eclass": "U-a", "children": []},
-            "b": {"op": "opaque-b", "eclass": "U-b", "children": []},
-            "csa": {"op": symbols.class_slots, "eclass": "Renaming-id", "children": ["a"]},
-            "csb": {"op": symbols.class_slots, "eclass": "Renaming-id", "children": ["b"]},
-            "aa": {"op": symbols.renames, "eclass": "Unit-aa", "children": ["a", "mid", "a"]},
-            "bb": {"op": symbols.renames, "eclass": "Unit-bb", "children": ["b", "mid", "b"]},
-            "ab-id": {"op": symbols.renames, "eclass": "Unit-ab1", "children": ["a", "mid", "b"]},
-            "ab-swap": {"op": symbols.renames, "eclass": "Unit-ab2", "children": ["a", "mswap", "b"]},
-        }
-    }
-    seeded = null_doc()["nodes"]
-    seeded.update(inconsistent_cycle["nodes"])
-    inconsistent_cycle = {"nodes": seeded}
-
-    def group_doc(perms):
-        doc = null_doc()
-        nodes = doc["nodes"]
-        nodes["a"] = {"op": "opaque-a", "eclass": "U-a", "children": []}
-        for i in range(3):
-            nodes[f"slot{i}"] = {"op": str(i), "eclass": f"i64-{i}", "children": []}
-        nodes["aid"] = {
-            "op": "map-of",
-            "eclass": "Renaming-aid",
-            "children": [f"slot{i}" for i in range(3) for _ in range(2)],
-        }
-        nodes["csa"] = {"op": symbols.class_slots, "eclass": "Renaming-aid", "children": ["a"]}
-        for j, p in enumerate(perms):
-            nodes[f"p{j}"] = {
-                "op": "map-of",
-                "eclass": f"Renaming-p{j}",
-                "children": [f"slot{k}" for i, v in enumerate(p) for k in (i, v)],
-            }
-        nodes["group"] = {"op": "set-of", "eclass": "Group-a", "children": [f"p{j}" for j in range(len(perms))]}
-        nodes["ga"] = {"op": symbols.group, "eclass": "Group-a", "children": ["a"]}
-        return doc
-
-    def noninjective_link(reverse=False):
-        doc = null_doc()
-        doc["nodes"].update(
-            {
-                "i1": {"op": "1", "eclass": "i64-1", "children": []},
-                "wide-id": {
-                    "op": "map-of",
-                    "eclass": "Renaming-wide-id",
-                    "children": ["i0", "i0", "i1", "i1"],
-                },
-                "bad": {
-                    "op": "map-of",
-                    "eclass": "Renaming-bad",
-                    "children": ["i0", "i0", "i1", "i0"],
-                },
-                "a": {"op": "opaque-a", "eclass": "U-a", "children": []},
-                "b": {"op": "opaque-b", "eclass": "U-b", "children": []},
-                "csa": {"op": symbols.class_slots, "eclass": "Renaming-wide-id", "children": ["a"]},
-                "csb": {"op": symbols.class_slots, "eclass": "Renaming-wide-id", "children": ["b"]},
-                "aa": {"op": symbols.renames, "eclass": "Unit-aa", "children": ["a", "wide-id", "a"]},
-                "bb": {"op": symbols.renames, "eclass": "Unit-bb", "children": ["b", "wide-id", "b"]},
-                "bad-link": {
-                    "op": symbols.renames,
-                    "eclass": "Unit-bad-link",
-                    "children": ["b" if reverse else "a", "bad", "a" if reverse else "b"],
-                },
-            }
-        )
-        return doc
-
-    full_reader_cases = [
-        ("complete empty Null", False, null_doc()),
-        ("missing ClassSlots", True, null_doc(with_slots=False)),
-        ("nonidentity ClassSlots", True, nonidentity_var),
-        ("slots on Null", True, null_doc(slots=(0,))),
-        ("inconsistent RTL cycle", True, inconsistent_cycle),
-        ("noninjective RTL forward", True, noninjective_link()),
-        ("noninjective RTL reverse", True, noninjective_link(reverse=True)),
-        ("complete C3 group", False, group_doc([(0, 1, 2), (1, 2, 0), (2, 0, 1)])),
-        ("group missing product", True, group_doc([(0, 1, 2), (1, 2, 0)])),
-        ("group missing identity", True, group_doc([(1, 2, 0), (2, 0, 1)])),
-        ("group missing all elements", True, group_doc([])),
-    ]
-    var_one = null_doc()
-    var_one["nodes"]["i1"] = {"op": "1", "eclass": "i64-1", "children": []}
-    var_one["nodes"]["v"]["children"] = ["i1"]
-    duplicate_var = null_doc()
-    duplicate_var["nodes"]["v2"] = {"op": symbols.var, "eclass": "U-v", "children": ["i0"]}
-    full_reader_cases += [
-        ("noncanonical Var", True, var_one),
-        ("duplicate Var row", True, duplicate_var),
-    ]
-    for name, want_bad, doc in full_reader_cases:
-        _g, issues = build_encoding_graph(doc, X.LANG)
-        ok = bool(issues) == want_bad
-        bad += not ok
-        print(f"  {'ok  ' if ok else 'FAIL'} full reader {name:20} rejected={bool(issues)}, expected={want_bad}")
-
-    # Links deliberately arrive out of traversal order, so assigning frames needs
-    # multiple passes. Both link directions must give the same representative frame,
-    # and the unrelated Null component must remain separate.
-    for reverse in (False, True):
-        doc = null_doc()
-        nodes = doc["nodes"]
-        for name, slot in (("a", 7), ("b", 11), ("c", 13)):
-            nodes[name] = {"op": f"opaque-{name}", "eclass": f"U-{name}", "children": []}
-            nodes[f"i-{name}"] = {"op": str(slot), "eclass": f"i64-{slot}", "children": []}
-            nodes[f"m-{name}"] = {
-                "op": "map-of",
-                "eclass": f"Renaming-{name}-id",
-                "children": [f"i-{name}", f"i-{name}"],
-            }
-            nodes[f"cs-{name}"] = {
-                "op": symbols.class_slots,
-                "eclass": f"Renaming-{name}-id",
-                "children": [name],
-            }
-        for a, b in (("b", "c"), ("c", "v"), ("a", "b")):
-            if reverse:
-                a, b = b, a
-            key = f"{a}-{b}"
-            nodes[f"m-{key}"] = {
-                "op": "map-of",
-                "eclass": f"Renaming-{key}",
-                "children": ["i0" if c == "v" else f"i-{c}" for c in (b, a)],
-            }
-            nodes[key] = {"op": symbols.renames, "eclass": f"Unit-{key}", "children": [a, f"m-{key}", b]}
-        graph, issues = build_encoding_graph(doc, X.LANG)
-        ok = (
-            not issues
-            and graph.slots == {"U-a": (7,), "U-n": ()}
-            and graph.group == {"U-a": {frozenset({(7, 7)})}, "U-n": {frozenset()}}
-            and graph.nodes == {"U-a": [("var", (("slot", 7),))], "U-n": [("null", ())]}
-        )
-        bad += not ok
-        print(f"  {'ok  ' if ok else 'FAIL'} full reader out-of-order links, reversed={reverse}")
-
     seen_multipliers = []
 
     def fake_encoding(_case):
@@ -1267,12 +589,7 @@ def selftest():
     bad += not oracle_error_ok
     print(f"  {'ok  ' if oracle_error_ok else 'FAIL'} reference error verdict verdict={verdict}, expected=unreadable")
 
-    warnings = incomplete_serialization("[WARN ] Omitted: Diff\n[WARN ] Truncated: App\nordinary warning")
-    warning_ok = len(warnings) == 2
-    bad += not warning_ok
-    print(f"  {'ok  ' if warning_ok else 'FAIL'} serialization warnings detected={len(warnings)}, expected=2")
-
-    total = len(cases) + len(matcher_cases) + len(reader_cases) + len(full_reader_cases) + 7
+    total = len(cases) + len(matcher_cases) + 3
     print(f"\n{total - bad}/{total} self-tests pass")
     return 1 if bad else 0
 
@@ -1337,8 +654,8 @@ def known_groups():
                 print(f"  FAIL {name:9} reference@{mult}: {err}")
                 bad += 1
                 continue
-        rmax = max((len(v) for v in ref.group.values()), default=0)
-        emax = max((len(v) for v in enc.group.values()), default=0)
+        rmax = max(group_sizes(ref), default=0)
+        emax = max(group_sizes(enc), default=0)
         ok = rmax == want == emax
         bad += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} {name:9} largest group: reference {rmax}, encoding {emax}, want {want}")

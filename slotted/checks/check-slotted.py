@@ -235,7 +235,9 @@ CHECKS = [
     (
         "iso-selftest",
         ("slotted/xdiff/isomorphism.py", "selftest"),
-        ratio(r"(\d+)/(\d+) self-tests pass", 33),
+        # Raw table validation now lives with the native exporter and is exercised
+        # by cargo test. These are the remaining checker/runner protocol fixtures.
+        ratio(r"(\d+)/(\d+) self-tests pass", 11),
         False,
         True,
     ),

@@ -168,7 +168,7 @@ def main():
     for c in cases:
         g, err = I.reference_graph(c)
         if not err:
-            graphs.append((c.name, g))
+            graphs.append((c.name, I.fixture(g)))
     print(f"{len(graphs)} graphs from {n} cases")
 
     strict = Counter()

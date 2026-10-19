@@ -73,6 +73,16 @@ pub struct Graph {
     pub(crate) roots: Vec<usize>,
 }
 
+impl Graph {
+    /// Class and node counts after validation, retaining empty classes and duplicates.
+    pub fn counts(&self) -> (usize, usize) {
+        (
+            self.classes.len(),
+            self.classes.iter().map(|c| c.nodes.len()).sum(),
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Class {
     pub id: ClassId,

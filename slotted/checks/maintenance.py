@@ -205,11 +205,13 @@ def substitution():
     for rounds in ROUNDS:
         compiled = substitution_program(rounds)
         json_path = compiled.with_suffix(".json")
+        with compiled.open("a") as file:
+            file.write(ISO.export_command(json_path, lang))
         first = None
         for _ in range(RUNS):
             json_path.unlink(missing_ok=True)
             run = subprocess.run(
-                [str(EGGLOG), "--slotted", "--to-json", *ISO.SERIALIZE_LIMITS, str(compiled)],
+                [str(EGGLOG), "--slotted", str(compiled)],
                 capture_output=True,
                 text=True,
                 cwd=ROOT,
@@ -219,8 +221,11 @@ def substitution():
                 detail = (run.stderr.strip().splitlines() or [f"exit {run.returncode}"])[-1]
                 bad.append(f"{rounds} rounds: run failed: {detail[:120]}")
                 break
-            graph, issues = ISO.build_encoding_graph(json.loads(json_path.read_text()), lang)
-            issue = compare_graphs(first, graph, issues)
+            try:
+                graph = ISO.read_export(json.loads(json_path.read_text()))
+                issue = compare_graphs(first, graph, [])
+            except ValueError as exc:
+                issue = str(exc)
             if issue is not None:
                 bad.append(f"{rounds} rounds: {issue}")
                 break

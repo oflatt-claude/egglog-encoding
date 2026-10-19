@@ -1246,19 +1246,21 @@ establish equality or override a rejected witness. Missing counts, invalid graph
 exports, and inconclusive searches fail a required comparison.
 
 Both graphs reach the checker as `egraph-serialize` JSON with an optional
-`slotted` annotation object. The reference exports this format directly; the Python
-adapter validates encoding tables and reconstructs the logical graph. See the
+`slotted` annotation object. Both engines export this format directly. The
+[Rust exporter](export.rs) reads native encoding tables, validates their invariants,
+and reconstructs the logical graph. Python passes the document unchanged to the
+checker; operator correspondences come from the fixture's `.ref` metadata. See the
 [checker API](../../../egraph-isomorphism/src/lib.rs) for the format and comparison
 policy, including slot renaming, symmetry groups, and witness verification.
 
-Encoding nodes are counted directly from serialized constructor rows, including
+Encoding nodes are counted directly from native constructor table sizes, including
 the variable row and excluding auxiliary tables. This raw count must agree with
-the reconstructed graph. Reconstruction preserves every row, even when two rows
+the exported graph. Reconstruction preserves every row, even when two rows
 translate to identical nodes: retiring duplicates is the encoding's responsibility.
 Reference counts are collected directly before graph dumping and checked against
 the parsed dump. Counts remain available when symmetry enumeration exceeds its
 slot cap or a graph dump times out. A count mismatch rejects the comparison before
-isomorphism search. Unexpected reader errors propagate. The regression suite also
+isomorphism search. Unexpected exporter or checker errors propagate. The regression suite also
 checks class reconstruction against an independent count computed inside egglog.
 
 Each treatment's goal is checked independently. A missed goal fails the command
@@ -1408,6 +1410,7 @@ transformation and evaluation in one process.
 | `slotted/reference.py` | fixture syntax, language metadata, and translation to the reference |
 | `slotted/test_program.py` | Rust CLI adapter and observer rules for differential tests |
 | `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
+| `egglog-experimental/src/slotted/export.rs` | native logical graph export, raw row counts, and encoding invariant validation |
 | `slotted/benchmarks/` | array generator, SDQL artifact inputs, and logic case studies |
 | `slotted/tests/` | regression fixtures and compiler snapshots |
 | `slotted/checks/` | language, frontend, maintenance, and evaluation regression checks |

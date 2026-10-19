@@ -31,6 +31,13 @@ fn request(value: Value) -> (i32, Value) {
 #[test]
 fn json_protocol_distinguishes_all_verdicts_and_verifies_saved_witnesses() {
     let graph = json!({"nodes":{"node":{"op":"constant","eclass":"class"}}});
+    let (code, valid) = request(json!({"graph":graph}));
+    assert_eq!(code, 0);
+    assert_eq!(valid, json!({"status":"valid", "classes":1, "nodes":1}));
+    let (code, invalid) =
+        request(json!({"graph":{"nodes":{"n":{"op":"x","eclass":"c","children":["absent"]}}}}));
+    assert_eq!(code, 2);
+    assert_eq!(invalid["status"], "invalid");
     let comparison = json!({"left":graph, "right":graph});
     let (code, equal) = request(comparison.clone());
     assert_eq!(code, 0);

@@ -257,19 +257,15 @@ def test_common_graph_export_preserves_duplicate_rows_empty_classes_and_slot_nam
         V.ISO.serialized_graph(graph)
 
 
-def test_reference_adapter_rejects_semantics_it_cannot_preserve() -> None:
-    graph = V.ISO.Graph()
-    graph.add_class("constant", [])
-    graph.nodes["constant"] = [("constant", ())]
-    graph.close_groups()
-    exported = V.ISO.serialized_graph(graph)
-    assert V.ISO.parse_reference("GRAPH " + json.dumps(exported)).summary() == (1, 1)
-    change: dict[str, Any]
-    for change in (
-        {"root_eclasses": [json.dumps("constant")]},
-        {"class_data": {json.dumps("constant"): {"type": "Integer"}}},
-        {"class_data": {"unannotated-empty-class": {}}},
-        {"nodes": {nid: {**node, "subsumed": True} for nid, node in exported["nodes"].items()}},
-    ):
-        with pytest.raises(ValueError):
-            V.ISO.parse_reference("GRAPH " + json.dumps(exported | change))
+def test_reference_document_preserves_all_annotations() -> None:
+    document = {
+        "nodes": {"n": {"op": "constant", "eclass": "c", "children": [], "subsumed": True}},
+        "class_data": {"c": {"type": "Integer"}},
+        "root_eclasses": ["c"],
+        "slotted": {"classes": {"c": {"slots": [], "group": [[]]}}, "nodes": {"n": {"arguments": []}}},
+    }
+    parsed = V.ISO.parse_reference("GRAPH " + json.dumps(document))
+    assert parsed.summary() == (1, 1)
+    assert V.ISO.serialized_graph(parsed) == document
+    with pytest.raises(ValueError, match="one complete GRAPH"):
+        V.ISO.parse_reference("GRAPH {}\nGRAPH {}")

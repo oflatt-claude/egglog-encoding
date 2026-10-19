@@ -2,7 +2,6 @@
 """Regressions for complete refinement and trustworthy evaluation verdicts."""
 
 import argparse
-import copy
 import json
 import os
 import subprocess
@@ -147,8 +146,9 @@ def independent_class_counts():
     """Cross-check the graph reader against counts computed inside egglog.
 
     Each slotted class has one minimal member among its linked egglog values.
-    Count ClassSlots rows minus nonminimal members, independently of JSON graph
-    reconstruction. The isomorphism suite compares these same cases to the reference.
+    Count ClassSlots rows minus nonminimal members, independently of the native
+    exporter's component traversal. The isomorphism suite compares these same cases
+    to the reference.
     """
     observer = f"""
 (ruleset count-classes)
@@ -165,77 +165,40 @@ def independent_class_counts():
     with tempfile.TemporaryDirectory(prefix="slotted-class-counts-") as tmp:
         path = Path(tmp) / "counts.egg"
         for case in X.curated():
-            path.write_text(case.egg_program(mult=3).replace("(print-function SameClass 100000)", observer))
+            path.write_text(
+                case.egg_program(mult=3).replace("(print-function SameClass 100000)", observer)
+                + "\n"
+                + V.ISO.export_command(path.with_suffix(".json"), X.LANG)
+            )
             path.with_suffix(".json").unlink(missing_ok=True)
             result = subprocess.run(
-                [str(CHECK_CONFIG.egglog), "--slotted-encoded", "--to-json", *V.ISO.SERIALIZE_LIMITS, str(path)],
+                [str(CHECK_CONFIG.egglog), "--slotted-encoded", str(path)],
                 capture_output=True,
                 text=True,
                 check=True,
                 cwd=ROOT,
                 timeout=60,
             )
-            assert not V.ISO.incomplete_serialization(result.stderr), (case.name, result.stderr)
             total, nonminimal = [int(line.strip()) for line in result.stdout.splitlines() if line.strip().isdigit()]
-            graph, issues = V.ISO.build_encoding_graph(json.loads(path.with_suffix(".json").read_text()), X.LANG)
-            assert not issues, (case.name, issues)
-            assert total - nonminimal == len(graph.slots), (case.name, total, nonminimal, graph.summary())
+            graph = V.ISO.read_export(json.loads(path.with_suffix(".json").read_text()))
+            assert total - nonminimal == len(graph.ids()), (case.name, total, nonminimal, graph.summary())
 
 
 def raw_node_counts():
-    """An unretired invocation must survive reading and fail the count check."""
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "rows.egg"
-        path.write_text(
-            '(include "slotted/languages/toy.egg")\n(let a (F $1 (Null)))\n(let b (F $2 (Null)))\n(run 0)\n'
-        )
-        program = X.driver.compile_source(path.read_text())
-        path.write_text(program)
-        subprocess.run(
-            [str(CHECK_CONFIG.egglog), "--slotted-encoded", "--to-json", *V.ISO.SERIALIZE_LIMITS, str(path)],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=60,
-        )
-        doc = json.loads(path.with_suffix(".json").read_text())
-    nodes = doc["nodes"]
-
-    def renaming_node(pairs):
-        return next(
-            key
-            for key, node in nodes.items()
-            if node["op"] == "map-of" and [nodes[c]["op"] for c in node["children"]] == pairs
-        )
-
-    original, issues = V.ISO.build_encoding_graph(doc, X.LANG)
-    assert not issues and original.summary() == (3, 3), issues
-    extra = copy.deepcopy(next(n for n in nodes.values() if n["op"] == "F"))
-    # The retired invocation has a different raw key and frame: F($2, Null)
-    # instead of F($1, Null). Both translate to the same slotted node.
-    slots_two = nodes[renaming_node(["2", "2"])]["eclass"]
-    follower = next(n for n in nodes.values() if n["op"] == X.SYM.class_slots and n["eclass"] == slots_two)
-    extra["eclass"] = nodes[follower["children"][0]]["eclass"]
-    extra["children"][0] = renaming_node(["0", "2"])
-    nodes["unretired-F"] = extra
-    duplicated, issues = V.ISO.build_encoding_graph(doc, X.LANG)
-    assert not issues and duplicated.summary() == (3, 4), issues
-    witness, _why = V.ISO.find_isomorphism(original, duplicated)
-    assert witness is None
-
-    def dump(cmd, **_kwargs):
-        Path(cmd[-1]).with_suffix(".json").write_text(json.dumps(doc))
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    row = run.Row("regression", "raw-node-count", "encoding", 0)
-    # A future reader regression must not defeat the independent raw count.
-    with (
-        patch.object(subprocess, "run", side_effect=dump),
-        patch.object(V.ISO, "build_encoding_graph", return_value=(original, [])),
-    ):
-        V.encoding_counts(program, "raw-node-count", X.LANG, row, 60, config=CHECK_CONFIG, encoded=True)
-    assert row.nodes == 4 and row.graph is None
-    assert "raw constructor count 4 disagrees" in row.graph_issue, row.graph_issue
+    """Keep the independent count check when a document loses a constructor row."""
+    builder = V.ISO.Graph()
+    builder.add_class("constant", [])
+    builder.nodes["constant"] = [("null", ())]
+    builder.close_groups()
+    doc = V.ISO.serialized_graph(builder)
+    doc["counts"] = {"classes": 1, "nodes": 2}
+    with patch.object(V.ISO, "validate_document", return_value=(1, 1)):
+        try:
+            V.ISO.read_export(doc)
+        except ValueError as exc:
+            assert "disagree" in str(exc)
+        else:
+            raise AssertionError("lost constructor row escaped the independent count check")
 
 
 def verdicts():
@@ -320,6 +283,7 @@ rule
         graph = row.graph
         assert graph is not None, row.graph_issue
         assert (row.classes, row.nodes) == graph.summary()
+        graph = V.ISO.fixture(graph)
         # Both the timed and counting runs chose the intended substituted node.
         other = "f" if op == "g" else "g"
         null = next(cid for cid, nodes in graph.nodes.items() if any(tag == "null" for tag, _ in nodes))
@@ -344,12 +308,12 @@ def graph_failure_reasons():
         assert failed.as_dict()["graph_issue"] == failed.graph_issue
 
         def dump(args, **_kwargs):
-            Path(args[-1]).with_suffix(".json").write_text('{"nodes": {}}')
+            Path(args[-1]).with_suffix(".json").write_text('{"nodes": {}, "counts": {"classes": 0, "nodes": 0}}')
             return subprocess.CompletedProcess(args, 0, "", "")
 
         with (
             patch.object(subprocess, "run", side_effect=dump),
-            patch.object(V.ISO, "build_encoding_graph", side_effect=RuntimeError("reader bug")),
+            patch.object(V.ISO, "read_export", side_effect=RuntimeError("reader bug")),
         ):
             try:
                 V.encoding_counts("", "bug", X.LANG, row(), 1)
@@ -360,6 +324,7 @@ def graph_failure_reasons():
         assert not list(Path(tmp).iterdir())
 
     timed = subprocess.CompletedProcess([], 0, "GOAL yes\nCONFIG substitution=snapshot\n", "")
+    real_run = subprocess.run
     for code, stdout, stderr, reason in (
         (1, "", "REFERENCE_LIMIT: symmetry enumeration is capped", "symmetry enumeration"),
         (
@@ -372,9 +337,16 @@ def graph_failure_reasons():
     ):
         reference = run.Row("regression", "diagnostics", "ref-multi", 1)
         dump = subprocess.CompletedProcess([], code, stdout, stderr)
-        with patch.object(subprocess, "run", side_effect=[timed, dump]):
+        responses = iter([timed, dump])
+
+        def process(command, responses=responses, **kwargs):
+            if Path(command[0]).name == "egraph-isomorphism":
+                return real_run(command, **kwargs)
+            return next(responses)
+
+        with patch.object(subprocess, "run", side_effect=process):
             run.run_reference("", reference, 1)
-            V.reference_counts("", reference, 1)
+            V.reference_counts("", reference, 1, config=CHECK_CONFIG)
         assert reference.goal == "yes" and reason in reference.graph_issue
         assert reference.graph is None and reference.classes is None and reference.nodes is None
         failed = row()

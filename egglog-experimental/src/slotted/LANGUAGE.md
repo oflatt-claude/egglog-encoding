@@ -379,6 +379,27 @@ back to slotted source syntax yet. This command is useful for inspecting a class
 source-level extraction remains unsupported. Benchmark goals check target
 membership independently of extraction.
 
+## Graph export
+
+`(slotted-export "graph.json")` writes the logical slotted e-graph after the
+preceding commands. Run `(run 0)` first to settle maintenance without applying
+user rewrites. Export does not run additional rules. For example:
+
+```slotted
+(sort U)
+(constructor Lam (Var U) U :binder 0)
+(let identity (Lam $x $x))
+(run 0)
+(slotted-export "/tmp/slotted-language-example.json")
+```
+
+The document uses `egraph-serialize` with slot and symmetry annotations and a
+`counts` field. It preserves all live constructor rows and reads native tables
+without the visualization limits of `--to-json`. It rejects inconsistent frames,
+edges, or groups. Rust callers can use [`export::export`] on an `egglog::EGraph`;
+[`export::export_named`] also supports explicit operator correspondences for a
+single untyped reference language. This graph export does not extract a source term.
+
 ## Examples and validation
 
 Every complete `slotted` code block in this guide runs through the Rust CLI in

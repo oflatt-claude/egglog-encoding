@@ -7,7 +7,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Deserialize)]
-struct Request {
+#[serde(untagged)]
+enum Request {
+    Compare(Box<Comparison>),
+    Validate { graph: Box<AnnotatedEGraph> },
+}
+
+#[derive(Deserialize)]
+struct Comparison {
     left: AnnotatedEGraph,
     right: AnnotatedEGraph,
     #[serde(default)]
@@ -33,16 +40,25 @@ fn request() -> Result<Request, Box<dyn std::error::Error>> {
             _ => return Err(format!("unknown option: {arg}").into()),
         }
     }
-    Ok(Request {
+    Ok(Request::Compare(Box::new(Comparison {
         left: serde_json::from_reader(File::open(left)?)?,
         right: serde_json::from_reader(File::open(right)?)?,
         limits,
         witness,
-    })
+    })))
 }
 
 fn run() -> Result<(Value, u8), Box<dyn std::error::Error>> {
-    let request = request()?;
+    let request = match request()? {
+        Request::Compare(request) => *request,
+        Request::Validate { graph } => {
+            let (classes, nodes) = Graph::try_from(graph.as_ref())?.counts();
+            return Ok((
+                json!({"status":"valid", "classes":classes, "nodes":nodes}),
+                0,
+            ));
+        }
+    };
     let left = Graph::try_from(&request.left).map_err(|e| format!("left graph: {e}"))?;
     let right = Graph::try_from(&request.right).map_err(|e| format!("right graph: {e}"))?;
     if let Some(witness) = request.witness {
@@ -69,7 +85,7 @@ fn main() -> ExitCode {
         .is_some_and(|a| a == "--help" || a == "-h")
     {
         println!(
-            "egraph-isomorphism LEFT.json RIGHT.json [--search-limit N] [--node-limit N] [--witness FILE]\n\nWith no arguments, reads {{left, right, limits?, witness?}} JSON from stdin.\nPrints a JSON verdict and witness. Exit codes: 0 equal/verified, 1 different,\n2 invalid input, 3 inconclusive, 4 invalid witness. --witness reads the witness\nobject from an earlier isomorphic result. Inputs use egraph-serialize with\noptional slotted annotations; exports must be complete."
+            "egraph-isomorphism LEFT.json RIGHT.json [--search-limit N] [--node-limit N] [--witness FILE]\n\nWith no arguments, reads {{left, right, limits?, witness?}} JSON from stdin,\nor {{graph}} to validate a document and report its class/node counts.\nPrints a JSON verdict and witness. Exit codes: 0 equal/verified/valid, 1 different,\n2 invalid input, 3 inconclusive, 4 invalid witness. --witness reads the witness\nobject from an earlier isomorphic result. Inputs use egraph-serialize with\noptional slotted annotations; exports must be complete."
         );
         return ExitCode::SUCCESS;
     }
