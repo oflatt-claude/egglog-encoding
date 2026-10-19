@@ -160,6 +160,45 @@ def count_round_budget():
     assert row.saturated == "?"
 
 
+def independent_class_counts():
+    """Cross-check the graph reader against counts computed inside egglog.
+
+    Each slotted class has one minimal member among its linked egglog values.
+    Count ClassSlots rows minus nonminimal members, independently of JSON graph
+    reconstruction. The isomorphism suite compares these same cases to the reference.
+    """
+    observer = f"""
+(ruleset count-classes)
+(relation Nonminimal (U))
+; Links may be stored in either direction; count the larger endpoint once.
+(rule (({X.SYM.renames} a m b) (!= a b) (= a (ordering-max a b)))
+      ((Nonminimal a)) :ruleset count-classes)
+(rule (({X.SYM.renames} a m b) (!= a b) (= b (ordering-max a b)))
+      ((Nonminimal b)) :ruleset count-classes)
+(run count-classes 1)
+(print-size {X.SYM.class_slots})
+(print-size Nonminimal)
+"""
+    with tempfile.TemporaryDirectory(prefix="slotted-class-counts-") as tmp:
+        path = Path(tmp) / "counts.egg"
+        for case in X.curated():
+            path.write_text(case.egg_program(mult=3).replace("(print-function SameClass 100000)", observer))
+            path.with_suffix(".json").unlink(missing_ok=True)
+            result = subprocess.run(
+                [str(CHECK_CONFIG.egglog), "--slotted-encoded", "--to-json", *V.ISO.SERIALIZE_LIMITS, str(path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=ROOT,
+                timeout=60,
+            )
+            assert not V.ISO.incomplete_serialization(result.stderr), (case.name, result.stderr)
+            total, nonminimal = [int(line.strip()) for line in result.stdout.splitlines() if line.strip().isdigit()]
+            graph, issues = V.ISO.build_encoding_graph(json.loads(path.with_suffix(".json").read_text()), X.LANG)
+            assert not issues, (case.name, issues)
+            assert total - nonminimal == len(graph.slots), (case.name, total, nonminimal, graph.summary())
+
+
 def raw_node_counts():
     """An unretired invocation must survive reading and fail the count check."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -546,6 +585,7 @@ def main():
     coset_direction()
     complete_refinement()
     count_round_budget()
+    independent_class_counts()
     raw_node_counts()
     verdicts()
     print("OK: complete refinement, separate count checks, exact graph verdicts, and evaluation exit statuses")

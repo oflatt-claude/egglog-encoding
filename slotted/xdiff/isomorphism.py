@@ -351,7 +351,8 @@ def build_encoding_graph(doc, lang):
     Membership is a connected component of *any* `RenamesToLeader` link, partial ones
     included: a partial `m` in `a = m*b` is the redundancy relation, saying b's class does not
     depend on the slots `m` drops, and the reference models that as one class with the smaller
-    slot set. `class-count.py` is the independent check on that reading.
+    slot set. `checks/check-eval.py` independently cross-checks the class count using
+    egglog observer rules over the curated corpus.
 
     A CLASS WITH NO NODE IN IT IS A REAL SIGNAL, and nothing here hides one. The reference
     never produces one, and across a 1200-case sweep neither do we -- but only once the
