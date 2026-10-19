@@ -1,3 +1,11 @@
+//! Check a supplied correspondence without searching for replacements.
+//!
+//! A witness fixes the class and live-slot bijections, each node's target and
+//! private-slot bijection, and its parent/child symmetry choices. Verification
+//! checks these choices directly, without colors or search's node matcher. Every
+//! class and node must be covered exactly once, and live-slot maps must conjugate
+//! the complete groups. Thus a duplicate or omitted node cannot be hidden by reuse.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use egraph_serialize::{ClassId, NodeId};
@@ -9,17 +17,22 @@ use crate::graph::{Arg, Graph, bijection};
 /// Explicit choices sufficient to check an isomorphism without any search.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Witness {
+    /// One correspondence for every source class, keyed by its serialized ID.
     pub classes: BTreeMap<ClassId, ClassMatch>,
 }
 
+/// A class correspondence, with a shared live-slot map and a bijection on its nodes.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClassMatch {
     pub target: ClassId,
     /// Target slot index for each source class slot.
     pub slots: Vec<usize>,
+    /// One correspondence for every source node in this class, keyed by its ID.
     pub nodes: BTreeMap<NodeId, NodeMatch>,
 }
 
+/// A node correspondence and the local choices needed to compare its arguments.
+/// These choices are independent of the choices for other nodes in the same class.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeMatch {
     pub target: NodeId,
@@ -135,7 +148,13 @@ pub fn verify(left: &Graph, right: &Graph, witness: &Witness) -> Result<(), Erro
                             .get(*index)
                             .ok_or_else(|| invalid("child symmetry index out of bounds"))?;
                         let child_map = &witness.classes[&left.classes[*child].id].slots;
-                        // Check invocation maps pointwise, independently of search's node matcher.
+                        // Let A, B be the source/target edge maps, S the source
+                        // parent's live/private slot map, T the child's live-slot
+                        // map, and p, h the chosen target parent/child symmetries.
+                        // For every source child slot s, check:
+                        //     S(A(s)) = p(B(h(T(s))))
+                        // Here p fixes private slots. This checks the commuting
+                        // maps directly, independently of search's node matcher.
                         for (slot, &image) in slots.iter().enumerate() {
                             let mapped = *child_map
                                 .get(slot)

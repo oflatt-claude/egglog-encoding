@@ -12,6 +12,15 @@
 //! or an inconclusive result when a work limit is reached. [`verify`] checks a
 //! supplied witness without search. Callers must ensure their exports are complete.
 //!
+//! The input is an [`AnnotatedEGraph`] document, not a live engine e-graph.
+//! Engine-specific adapters must reconstruct the logical graph before calling
+//! [`Graph::try_from`]; that conversion validates the document and indexes it.
+//!
+//! Search first assigns **colors**: shared structural labels for classes and live
+//! slots. Different colors rule out a pairing; equal colors only identify candidates.
+//! It then searches class/slot bijections, pairs nodes modulo symmetries, and verifies
+//! the resulting witness. Colors alone never establish isomorphism.
+//!
 //! A one-slot variable class, including its identity symmetry:
 //!
 //! ```json
@@ -72,8 +81,11 @@ impl Default for Limits {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Outcome {
+    /// An explicit correspondence that has passed independent witness verification.
     Isomorphic { witness: Witness },
+    /// An invariant differs or exhaustive search found no correspondence.
     Different { reason: String },
+    /// A work limit prevented a decision; this does not establish a mismatch.
     Inconclusive { reason: String },
 }
 

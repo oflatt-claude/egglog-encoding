@@ -1,3 +1,16 @@
+//! Validate the serialized document and assign dense indices for comparison.
+//!
+//! Node children in egraph-serialize point to representative node IDs. Comparison
+//! follows their e-class IDs, so choosing another node of the same class changes
+//! nothing. Empty classes and duplicate node rows remain present.
+//!
+//! Each class's live slots occupy indices `0..class.slots`. Additional names in a
+//! node's arguments receive indices after that range, local to that node and in
+//! first-occurrence order. Thus equal private names in two different nodes do not
+//! link their scopes. A child edge's `slots[k]` is the image of child live slot k
+//! in the parent node's frame. Full symmetry groups are sorted so witnesses can
+//! identify group elements by index.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use egraph_serialize::{ClassId, EGraph, NodeId};
@@ -51,7 +64,8 @@ pub enum Argument {
 }
 
 /// A validated graph. Conversion rejects incomplete annotations, invalid edge
-/// maps, and incomplete symmetry groups.
+/// maps, and symmetry sets missing identity or closure. The exporter must supply
+/// the full symmetry group: a valid proper subgroup cannot be detected here.
 #[derive(Clone, Debug)]
 pub struct Graph {
     pub(crate) classes: Vec<Class>,
@@ -111,6 +125,9 @@ pub(crate) fn closed_group(group: &BTreeSet<Vec<usize>>, degree: usize) -> bool 
         if generated.contains(p) {
             continue;
         }
+        // Add a generator only when the previous ones cannot produce it. Close
+        // the generated set under these generators, rejecting any product absent
+        // from the supplied group. This validates closure without repairing input.
         generators.push(p);
         let mut pending: Vec<_> = generated.iter().cloned().collect();
         let mut i = 0;

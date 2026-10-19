@@ -1,3 +1,26 @@
+//! Find a class bijection and a live-slot bijection for each paired class.
+//!
+//! A **color** is an integer naming a structural signature. Equal signatures
+//! receive the same integer across both input graphs. Colors are temporary search
+//! metadata: their values have no meaning beyond equality. Different colors rule
+//! out a correspondence; equal colors leave it as a candidate.
+//!
+//! The search has three stages:
+//! 1. Refine class and slot colors using properties preserved by isomorphism.
+//! 2. Try class/slot bijections within those color classes, checking that slot maps
+//!    carry one class's symmetry group onto the other's.
+//! 3. Pair each class's nodes bijectively, allowing private-slot renaming and
+//!    independent parent/child symmetry choices. Record these choices in a witness.
+//!
+//! Colors can miss global differences: a two-class cycle and two separate
+//! self-loops, all labeled `step`, receive the same class colors. The explicit
+//! bijections and node checks distinguish them. The public entrypoint additionally
+//! checks every successful witness with [`crate::verify`], which does not use colors.
+//!
+//! Refinement round counts only bound preprocessing. They can change search cost
+//! and whether a budget is reached; they do not establish equality. Exhausting
+//! all candidates proves a difference, while exhausting a work budget is inconclusive.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::graph::{Arg, Class, Graph, Label, Node};
@@ -18,20 +41,29 @@ impl Budget {
     }
 }
 
+/// Give equal signatures the same color. Both graphs share one palette per round.
 fn intern<T: Ord>(palette: &mut BTreeMap<T, usize>, signature: T) -> usize {
     let fresh = palette.len();
     *palette.entry(signature).or_insert(fresh)
 }
 
 type ClassSignature = (
-    usize,
-    Option<String>,
-    usize,
-    usize,
-    Vec<usize>,
-    Vec<(Label, Vec<Option<usize>>)>,
+    usize,                            // previous color
+    Option<String>,                   // sort
+    usize,                            // live-slot count
+    usize,                            // symmetry-group size
+    Vec<usize>,                       // positions in the ordered root list
+    Vec<(Label, Vec<Option<usize>>)>, // node multiset; None marks a direct slot
 );
 
+/// Class colors shared across the inputs. Isomorphic classes must have equal colors.
+///
+/// Initially all classes share one color. Each round includes the previous color
+/// and each node's operator, argument kinds, and child colors. Sorting the nodes
+/// ignores row order while retaining duplicates; argument order stays significant.
+/// For example, singleton Zero and One classes separate first, then their F(...)
+/// parents separate on the next round. Exact slot maps and group elements are left
+/// to later checks, so this signature can safely leave extra candidates.
 fn colors(left: &Graph, right: &Graph) -> (Vec<usize>, Vec<usize>) {
     let graphs = [left, right];
     let mut colors = [vec![0; left.classes.len()], vec![0; right.classes.len()]];
@@ -83,6 +115,8 @@ fn colors(left: &Graph, right: &Graph) -> (Vec<usize>, Vec<usize>) {
                 .collect()
         });
         colors = next;
+        // The previous color is part of each signature, so colors can only split.
+        // An unchanged count therefore means the partition has stabilized.
         if palette.len() == old_count {
             break;
         }
@@ -93,12 +127,23 @@ fn colors(left: &Graph, right: &Graph) -> (Vec<usize>, Vec<usize>) {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Occurrence {
+    /// Operator and argument position of a direct live-slot use.
     Direct(Label, usize),
+    /// Operator, argument position, child-class color, and child-slot color.
     Edge(Label, usize, usize, usize),
 }
 
 type SlotColors = Vec<Vec<usize>>;
 
+/// Live-slot colors that any isomorphism's slot bijections must preserve.
+///
+/// A slot's signature describes its direct uses and uses through child edges.
+/// Uses are pooled over its symmetry orbit: all slots reachable by a class symmetry.
+/// For a commutative two-slot class with a swap, both slots have orbit {0, 1}; their
+/// colors must stay equal even if the stored node puts them in different positions.
+/// This makes the signature independent of the chosen parent representative.
+/// Child-slot colors are likewise constant on child symmetry orbits, so choosing
+/// a different child representative cannot change the signature either.
 fn slot_colors(
     left: &Graph,
     right: &Graph,
@@ -167,6 +212,9 @@ fn slot_colors(
     (a, b)
 }
 
+/// A leaf-first search order; self-edges are ignored and unresolved cycles sort last.
+/// This is only an ordering heuristic. A class can still be assigned before its
+/// children, in which case its node comparison is deferred until they are mapped.
 fn depths(graph: &Graph) -> Vec<usize> {
     let mut depth = vec![usize::MAX; graph.classes.len()];
     loop {
@@ -206,6 +254,11 @@ fn next_permutation(xs: &mut [usize]) -> bool {
 }
 
 /// All bijections preserving slot colors.
+///
+/// Partition source and target indices by color, then enumerate permutations
+/// within corresponding parts. For `[0, 0, 1] -> [1, 0, 0]`, the possible maps are
+/// `[1, 2, 0]` and `[2, 1, 0]`. Different part sizes admit no bijection. Private slots
+/// use a single color, so the same iterator enumerates all their bijections.
 struct Bijections {
     source: Vec<Vec<usize>>,
     target: Vec<Vec<usize>>,
@@ -267,6 +320,12 @@ impl Iterator for Bijections {
     }
 }
 
+/// Test that the slot bijection transports every symmetry of `a` into `b`.
+/// The caller supplies a bijection and equal-sized groups, so inclusion is equality.
+///
+/// For a source permutation `p` and slot map `s`, the target permutation `q` must
+/// satisfy `q[s[i]] = s[p[i]]`, or `q = s p s^-1`. Class colors already require
+/// equal group sizes.
 fn conjugates(a: &Class, b: &Class, slots: &[usize]) -> bool {
     a.group.iter().all(|p| {
         let mut image = vec![0; slots.len()];
@@ -280,6 +339,14 @@ fn conjugates(a: &Class, b: &Class, slots: &[usize]) -> bool {
 /// Target-node representatives, retaining the group elements that produced each one.
 type Variants = BTreeMap<Vec<Arg>, (usize, Vec<usize>)>;
 
+/// Enumerate the argument lists represented by one target node and their witnesses.
+///
+/// One parent symmetry acts on every live slot in this node's frame. Each child
+/// occurrence separately chooses a child symmetry, including repeated occurrences
+/// of the same class. For an edge `e` and choices `p`, `h`, its map becomes `p(e(h(s)))`.
+/// Parent symmetries leave private slots fixed; [`compatible`] handles their renaming.
+/// Deduplication here merges equivalent representatives of this one node only:
+/// distinct node rows still participate separately in the class's node matching.
 fn variants(
     graph: &Graph,
     class: usize,
@@ -331,11 +398,20 @@ fn variants(
 }
 
 struct Mapping<'a> {
+    /// Source class index -> target class index, when assigned.
     classes: &'a [Option<usize>],
+    /// Source live-slot index -> target live-slot index, for each assigned class.
     slots: &'a [Vec<usize>],
+    /// The live-slot map for the source node's own class.
     parent: &'a [usize],
 }
 
+/// Find a node correspondence under the assigned class and live-slot maps.
+/// The source node's class and all of its child classes must already be assigned.
+///
+/// Rename source arguments into target coordinates, trying every private-slot
+/// bijection. A match against variants supplies the parent/child symmetry choices
+/// for the certificate. Child maps transport both the edge's domain and its image.
 fn compatible(
     source: &Node,
     target: &Node,
@@ -389,6 +465,12 @@ fn compatible(
     Ok(None)
 }
 
+/// Find a bijection between the nodes of two assigned classes, preserving duplicates.
+///
+/// Compatible source/target node pairs form a bipartite graph. An augmenting path
+/// can reassign earlier pairs to make room for a later source node. Requiring a
+/// perfect matching ensures each target row is used exactly once; finding some
+/// compatible target independently for each source row would be insufficient.
 fn match_nodes(
     left: &Graph,
     right: &Graph,
@@ -471,6 +553,9 @@ fn match_nodes(
     ))
 }
 
+/// Candidate iterator for one source class at one depth of the backtracking search.
+/// The explicit stack retains this iterator while deeper classes are tried, then
+/// resumes at the next class/slot assignment when a deeper choice fails.
 struct Frame {
     candidates: Vec<usize>,
     next: usize,
@@ -547,8 +632,8 @@ fn search_inner(left: &Graph, right: &Graph, limits: Limits) -> Result<Option<Wi
     let depth = depths(left);
     let mut order: Vec<_> = (0..left.classes.len()).collect();
     order.sort_by_key(|&a| (depth[a], candidates[a].len(), a));
-    let mut phi = vec![None; order.len()];
-    let mut sig = vec![vec![]; order.len()];
+    let mut phi = vec![None; order.len()]; // source class -> assigned target class
+    let mut sig = vec![vec![]; order.len()]; // live-slot maps; valid where phi is Some
     let mut used = vec![false; order.len()];
     let mut budget = Budget {
         remaining: limits.search,
@@ -579,6 +664,7 @@ fn search_inner(left: &Graph, right: &Graph, limits: Limits) -> Result<Option<Wi
         phi[a] = Some(b);
         sig[a] = m;
         used[b] = true;
+        // Check early when every child has coordinates in the target graph.
         let ready = left.classes[a]
             .nodes
             .iter()
@@ -591,6 +677,8 @@ fn search_inner(left: &Graph, right: &Graph, limits: Limits) -> Result<Option<Wi
             frames.push(Frame::new(&candidates[order[k + 1]]));
             continue;
         }
+        // All classes are assigned. Check every class, including cyclic references
+        // that prevented an early check, and retain the complete node witnesses.
         let mut classes = BTreeMap::new();
         for (c, class) in left.classes.iter().enumerate() {
             let d = phi[c].unwrap();
