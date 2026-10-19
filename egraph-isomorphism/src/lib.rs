@@ -1,21 +1,16 @@
 //! Witnessed isomorphism of ordinary and slotted serialized e-graphs.
 //!
-//! [`AnnotatedEGraph`] flattens [`egraph_serialize::EGraph`] and adds an optional
-//! `slotted` object. Plain egg/egglog exports need no annotations. Slotted exports
-//! describe each class's live slots and full symmetry group, and each node's
-//! direct slots and child renamings. IDs are arbitrary; child order, operator
-//! labels, class types, subsumption flags, and ordered roots are preserved.
-//! Extraction costs and other class metadata are not part of graph equality.
+//! Accepts [`egraph_serialize::EGraph`] documents with optional [`Slotted`]
+//! annotations. Equality preserves operator labels, child order, class types,
+//! subsumption, ordered roots, duplicate nodes, and empty classes. IDs, slot
+//! spellings, extraction costs, and other class metadata do not affect equality.
 //!
-//! Node multiplicity is preserved, including duplicate rows and empty classes.
-//! Private slots are alpha-renamed independently per node. Parent and child
-//! symmetries may select different representatives of the same node.
+//! Slotted nodes are compared up to private-slot renaming and independent
+//! symmetry choices for each node and child occurrence.
 //!
-//! [`find_isomorphism`] returns an explicit [`Witness`] or distinguishes exhaustive
-//! failure from bounded search. [`verify`] checks that witness directly, without
-//! calling the search or node matcher. Input validation checks edge domains,
-//! injectivity, and complete symmetry groups; it never repairs missing elements.
-//! Callers must additionally establish that their engine's export is complete.
+//! [`find_isomorphism`] returns a verified [`Witness`], an exhaustive mismatch,
+//! or an inconclusive result when a work limit is reached. [`verify`] checks a
+//! supplied witness without search. Callers must ensure their exports are complete.
 //!
 //! A one-slot variable class, including its identity symmetry:
 //!
@@ -56,11 +51,13 @@ pub use witness::{ClassMatch, NodeMatch, Witness, verify};
 #[error("{0}")]
 pub struct Error(pub String);
 
-/// Search work limits. Input reading and direct witness verification do not search.
+/// Search budgets; these do not limit input validation or witness verification.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Limits {
+    /// Maximum class/slot assignments attempted across the search.
     pub search: usize,
+    /// Maximum symmetry variants and private-slot assignments per class comparison.
     pub node_variants: usize,
 }
 impl Default for Limits {
@@ -80,7 +77,8 @@ pub enum Outcome {
     Inconclusive { reason: String },
 }
 
-/// Search for a witness and check every returned witness before accepting it.
+/// Find and verify an isomorphism, distinguishing mismatches from work limits.
+/// Returns an error if the generated witness fails verification.
 pub fn find_isomorphism(left: &Graph, right: &Graph, limits: Limits) -> Result<Outcome, Error> {
     let result = search::search(left, right, limits);
     if let Outcome::Isomorphic { witness } = &result {

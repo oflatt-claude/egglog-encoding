@@ -1,31 +1,9 @@
-"""Is the encoding's final e-graph *isomorphic* to the reference's?
+"""Validate engine dumps and compare their logical slotted e-graphs.
 
-Everything else here compares a projection -- the probe partition, node counts per
-operator, one invariant. Two different e-graphs can agree on all of those. This
-constructs a witness instead: a bijection between the two sides' e-classes, plus a
-bijection between each matched pair's slots, under which the node sets are equal. A
-candidate carries class and slot bijections, node pairings, private-slot bijections,
-and parent/child symmetry choices. The Rust crate `egraph-isomorphism` checks that
-witness directly without using the search matcher. Exhausted work limits remain
-inconclusive. This module validates engine dumps, preserves raw rows, and adapts
-them to egraph-serialize JSON with slotted annotations.
-
-Three things make the comparison non-trivial, and each is handled rather than assumed
-away:
-
-* **Slot names are unrelated.** The reference mints `$f0, $f1, ...` from a global
-  counter; the encoding mints the smallest unused integer. So the per-class slot
-  bijection is part of what is searched for, not read off.
-* **A class's symmetry group is not in its node set.** A commutative class holds *one*
-  node and a swap; a class without the swap holds the same one node. Comparing node sets
-  alone cannot tell them apart, so the group is compared too -- recovered from the
-  reference with `eq` on two invocations, and from the encoding as the rows of
-  `EclassGroup c` whose elements permute the class's slots.
-* **A node is only defined up to those groups.** `k($0,$1)` and `k($1,$0)` are the same
-  node of a commutative class, and the two sides need not store the same representative.
-  So node equality quantifies over the parent's group and each child's group -- the
-  reference's "strong shape" -- and over renamings of slots the node carries but its
-  class does not, which is alpha-equivalence for a binder's bound slot.
+Conversion to annotated egraph-serialize JSON preserves every node, slot map, and
+symmetry group. The Rust egraph-isomorphism crate owns search and witness
+verification; its API documentation defines graph equality. Work limits remain
+inconclusive.
 
 Run: `python3 slotted/xdiff/isomorphism.py [name-prefix|fuzz N [seed]]`
 """
@@ -70,10 +48,7 @@ class Graph:
         self.nodes.setdefault(cid, [])
 
     def close_groups(self):
-        """Initialize identities when constructing graphs; this does not compute closure.
-
-        Readers of full exported groups validate them before constructing the graph.
-        """
+        """Add each group's identity; this does not compute closure."""
         for cid, slots in self.slots.items():
             self.group[cid].add(frozenset((s, s) for s in slots))
 
@@ -578,12 +553,10 @@ def to_reference_shape(g, var_class=None, *, lang):
 
 
 def serialized_graph(g):
-    """Standard egraph-serialize JSON with complete slotted annotations.
+    """Export annotated egraph-serialize JSON, preserving duplicates and empty classes.
 
-    Every original node gets its own ID; no rows are deduplicated. Class metadata
-    keeps empty classes visible. Child pointers choose an arbitrary node of their
-    class, as in the standard format; a dangling pointer remains an invalid input.
-    JSON spellings distinguish integer slots from string slots in reader tests.
+    Integer and string slot names remain distinct. Child pointers name an arbitrary
+    node of their class; a dangling pointer remains an invalid input.
     """
     if set(g.slots) != set(g.group) or set(g.slots) != set(g.nodes):
         raise ValueError("class slots, groups, and nodes name different classes")
@@ -639,7 +612,7 @@ def rust_check(left, right, *, checker=None, **options):
 
 
 def find_isomorphism(ga, gb, *, search_cap=SEARCH_CAP, checker=None):
-    """Rust returns an explicit node/group witness, a difference, or a work limit."""
+    """Return (witness, None), or (None, reason) for a mismatch, invalid input, or limit."""
     try:
         result = rust_check(ga, gb, checker=checker, limits={"search": search_cap, "node_variants": MATCH_VARIANT_CAP})
     except (KeyError, ValueError) as exc:
@@ -656,7 +629,7 @@ def find_isomorphism(ga, gb, *, search_cap=SEARCH_CAP, checker=None):
 
 
 def verify(ga, gb, witness, *, checker=None):
-    """Verify the explicit witness in Rust, without repeating the search."""
+    """Return None for a valid witness, otherwise its rejection reason."""
     try:
         result = rust_check(ga, gb, checker=checker, witness=witness)
     except (KeyError, ValueError) as exc:

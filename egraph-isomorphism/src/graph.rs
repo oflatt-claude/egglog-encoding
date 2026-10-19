@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
-/// The standard serialized e-graph, optionally annotated with slotted structure.
-/// Ordinary consumers of `egraph-serialize` can still read the flattened document.
+/// An [`EGraph`] document with an optional `slotted` field.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AnnotatedEGraph {
     #[serde(flatten)]
@@ -22,8 +21,8 @@ pub struct Slotted {
     pub nodes: BTreeMap<NodeId, NodeSlots>,
 }
 
-/// Slots are class-local names. Each group element is a permutation of their indices.
-/// Supply the full group, including identity; the reader validates rather than closes it.
+/// Live slot names and their complete symmetry group, including identity.
+/// Each element is a permutation mapping source slot indices to target indices.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClassSlots {
     pub slots: Vec<String>,
@@ -36,19 +35,23 @@ pub struct NodeSlots {
     pub arguments: Vec<Argument>,
 }
 
+/// A direct slot or child invocation. Slots absent from the parent class are
+/// private to this node.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Argument {
     Slot {
         slot: String,
     },
-    /// The next child in `Node::children`, with its complete injective slot map.
+    /// Maps every live slot of the next [`egraph_serialize::Node::children`]
+    /// entry's class injectively into the parent node's slot frame.
     Child {
         renaming: Vec<(String, String)>,
     },
 }
 
-/// A validated graph. IDs and slot spellings have no semantic role in matching.
+/// A validated graph. Conversion rejects incomplete annotations, invalid edge
+/// maps, and incomplete symmetry groups.
 #[derive(Clone, Debug)]
 pub struct Graph {
     pub(crate) classes: Vec<Class>,
@@ -95,7 +98,8 @@ impl Node {
     }
 }
 
-/// Exact group validation using incremental generation. Missing products are errors.
+/// Whether the supplied permutations form a group, including identity.
+/// Each input must already be a permutation of `0..degree`.
 pub(crate) fn closed_group(group: &BTreeSet<Vec<usize>>, degree: usize) -> bool {
     let identity: Vec<_> = (0..degree).collect();
     if !group.contains(&identity) {

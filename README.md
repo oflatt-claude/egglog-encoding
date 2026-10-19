@@ -70,11 +70,9 @@ with optional annotations for slotted graphs:
 cargo run -p egraph-isomorphism -- left.json right.json
 ```
 
-It prints a JSON verdict and an explicit isomorphism witness. Its separate witness
-verifier checks class and slot bijections, node pairings, and symmetry choices.
+It prints a JSON verdict and a verified isomorphism witness.
 See the crate's [API documentation](egraph-isomorphism/src/lib.rs) for the format
-and comparison policy. `slotted/check.py` builds and invokes this checker;
-`slotted/eval.py` only collects timings.
+and comparison policy. `slotted/check.py` builds and invokes this checker.
 
 The root workspace includes both `egglog` and `egglog-experimental`.
 `egglog-experimental` depends on the workspace `egglog` crate, keeping proof

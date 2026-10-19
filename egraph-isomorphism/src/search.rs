@@ -205,7 +205,7 @@ fn next_permutation(xs: &mut [usize]) -> bool {
     true
 }
 
-/// Lazy product of permutations within corresponding color cells.
+/// All bijections preserving slot colors.
 struct Bijections {
     source: Vec<Vec<usize>>,
     target: Vec<Vec<usize>>,

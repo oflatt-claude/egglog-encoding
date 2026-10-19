@@ -23,16 +23,17 @@ pub struct ClassMatch {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeMatch {
     pub target: NodeId,
-    /// Target private slot index for each source private slot (both start at zero).
+    /// Target private-slot index for each source private slot. Both use zero-based
+    /// first-occurrence order across arguments and child renamings.
     pub locals: Vec<usize>,
     /// Index into the target class's lexicographically sorted symmetry group.
     pub parent: usize,
-    /// One group index per child occurrence, in argument order.
+    /// Target child's sorted-group index per child occurrence, in argument order.
     pub children: Vec<usize>,
 }
 
-/// Verify all class, slot, group, root, and node obligations directly.
-/// This code does not use search, refinement, variant enumeration, or bipartite matching.
+/// Check the witness's class, slot, group, root, and node correspondences.
+/// Returns an error if any obligation fails.
 pub fn verify(left: &Graph, right: &Graph, witness: &Witness) -> Result<(), Error> {
     let invalid = |reason: &str| Error(format!("invalid witness: {reason}"));
     if witness.classes.keys().collect::<BTreeSet<_>>() != left.indices.keys().collect()
@@ -134,8 +135,7 @@ pub fn verify(left: &Graph, right: &Graph, witness: &Witness) -> Result<(), Erro
                             .get(*index)
                             .ok_or_else(|| invalid("child symmetry index out of bounds"))?;
                         let child_map = &witness.classes[&left.classes[*child].id].slots;
-                        // Compare the two invocation maps pointwise. This is deliberately
-                        // separate from the transformed-node equality used by search.
+                        // Check invocation maps pointwise, independently of search's node matcher.
                         for (slot, &image) in slots.iter().enumerate() {
                             let mapped = *child_map
                                 .get(slot)

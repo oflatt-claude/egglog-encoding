@@ -215,12 +215,20 @@ fn malformed_annotations_are_rejected_without_repair() {
 
 #[test]
 fn verifier_rejects_corrupt_certificates_without_searching() {
+    fn parent_node(w: &mut Witness) -> &mut NodeMatch {
+        w.classes
+            .get_mut(&"P".into())
+            .unwrap()
+            .nodes
+            .get_mut(&"p".into())
+            .unwrap()
+    }
+
     let a = graph(cyclic_slots(["x", "y", "z"]));
     let b = graph(cyclic_slots(["y", "z", "x"]));
     let witness = iso(&a, &b);
     let c = egraph_serialize::ClassId::from("C");
     let p = egraph_serialize::ClassId::from("P");
-    let node = egraph_serialize::NodeId::from("p");
     let mut mutants = Vec::new();
     let mut w = witness.clone();
     w.classes.remove(&c);
@@ -235,50 +243,19 @@ fn verifier_rejects_corrupt_certificates_without_searching() {
     w.classes.get_mut(&p).unwrap().slots[0] = usize::MAX;
     mutants.push(w);
     let mut w = witness.clone();
-    w.classes
-        .get_mut(&p)
-        .unwrap()
-        .nodes
-        .get_mut(&node)
-        .unwrap()
-        .parent = 1;
+    parent_node(&mut w).parent = 1;
     mutants.push(w);
     let mut w = witness.clone();
-    w.classes
-        .get_mut(&p)
-        .unwrap()
-        .nodes
-        .get_mut(&node)
-        .unwrap()
-        .children
-        .clear();
+    parent_node(&mut w).children.clear();
     mutants.push(w);
     let mut w = witness.clone();
-    w.classes
-        .get_mut(&p)
-        .unwrap()
-        .nodes
-        .get_mut(&node)
-        .unwrap()
-        .children = vec![usize::MAX; 2];
+    parent_node(&mut w).children = vec![usize::MAX; 2];
     mutants.push(w);
     let mut w = witness.clone();
-    w.classes
-        .get_mut(&p)
-        .unwrap()
-        .nodes
-        .get_mut(&node)
-        .unwrap()
-        .children = vec![0; 2];
+    parent_node(&mut w).children = vec![0; 2];
     mutants.push(w);
     let mut w = witness;
-    w.classes
-        .get_mut(&p)
-        .unwrap()
-        .nodes
-        .get_mut(&node)
-        .unwrap()
-        .target = "c".into();
+    parent_node(&mut w).target = "c".into();
     mutants.push(w);
     for (i, w) in mutants.into_iter().enumerate() {
         assert!(verify(&a, &b, &w).is_err(), "witness mutant {i}");

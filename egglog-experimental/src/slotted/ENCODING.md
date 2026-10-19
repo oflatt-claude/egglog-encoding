@@ -1239,22 +1239,17 @@ report UI, and nightly automation.
 **Correctness.** `check.py` runs every supported treatment, including the snapshot
 nested reference. Each gets a goal check and a separate input-only graph export
 at the same rewrite budget. `verify.py` validates raw sizes and calls the Rust
-`egraph-isomorphism` crate to search for a complete class/slot/group/node
-isomorphism. Its separate verifier checks the explicit witness without using the
-search matcher. The witness records node pairings, private-slot bijections, and
-parent/child symmetry choices as well as class and live-slot bijections.
+`egraph-isomorphism` crate to find an isomorphism and independently verify its witness.
 The two required pairs need both equal class/node counts and a verified witness;
 other encoding/reference pairs are diagnostic. Counts or probe partitions cannot
 establish equality or override a rejected witness. Missing counts, invalid graph
 exports, and inconclusive searches fail a required comparison.
 
 Both graphs reach the checker as `egraph-serialize` JSON with an optional
-`slotted` annotation object. The annotations give each class its live slots and
-full symmetry group, and each node its direct slots and child-edge renamings.
-The reference emits this format directly. The Python encoding adapter validates
-raw tables and reconstructs the logical graph before writing these annotations.
-Ordinary egg/egglog exports need no annotations. Conversion retains every node;
-missing annotations, invalid edge maps, and incomplete groups are errors.
+`slotted` annotation object. The reference exports this format directly; the Python
+adapter validates encoding tables and reconstructs the logical graph. See the
+[checker API](../../../egraph-isomorphism/src/lib.rs) for the format and comparison
+policy, including slot renaming, symmetry groups, and witness verification.
 
 Encoding nodes are counted directly from serialized constructor rows, including
 the variable row and excluding auxiliary tables. This raw count must agree with
@@ -1283,8 +1278,8 @@ messages identifying slow phases. Tables go to stdout and can be redirected to a
 file. `--timeout` defaults to 300 seconds per engine subprocess. Rust isomorphism
 search uses work limits. Graph reconstruction and input/witness validation have
 no wall-clock timeout, so correctness checks can take longer than the timed runs.
-`--group-cap` on `check.py` controls
-reference symmetry enumeration and has factorial cost. Graph collection stops at
+`--group-cap` on `check.py` controls reference symmetry enumeration and has factorial
+cost. Graph collection stops at
 the requested rewrite budget; it does not execute an extra round to probe saturation.
 
 The full array sweep includes graphs beyond the default 10-slot export cap:

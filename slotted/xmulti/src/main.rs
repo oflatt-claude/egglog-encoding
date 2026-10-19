@@ -901,8 +901,8 @@ fn group_of(eg: &G, id: Id) -> Result<Vec<Vec<usize>>, usize> {
     Ok(out)
 }
 
-/// Serialize every live class, symmetry group, and node without choosing new
-/// representatives or deduplicating rows. Check the export cap before emitting data.
+/// Export every live class, full symmetry group, and node, preserving representatives
+/// and duplicate rows. Returns an error if a class exceeds the slot cap.
 fn serialized_graph(eg: &G) -> Result<AnnotatedEGraph, String> {
     let mut ids = eg.ids();
     ids.sort_by_key(|id| format!("{id:?}"));
