@@ -61,10 +61,15 @@ TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
     "egg-ee": TreatmentSpec("egg-ee", (), timing_summary=False),
     "egg-nee": TreatmentSpec("egg-nee", (), timing_summary=False),
     "egg-oee": TreatmentSpec("egg-oee", (), timing_summary=False),
+    # Egglog's slotted encoding.
     "slotted": TreatmentSpec("egglog", ("--slotted",)),
+    # Egglog's slotted encoding in compatibility mode, restricting slot aliasing like the nested e-matcher.
     "slotted-no-aliasing": TreatmentSpec("egglog", ("--slotted", "--slotted-no-aliasing")),
+    # Reference multipattern e-matcher.
     "multi": TreatmentSpec("slotted-reference", ()),
+    # Reference nested e-matcher from the original paper, using syntactic substitution.
     "nested": TreatmentSpec("slotted-reference", ()),
+    # Reference nested e-matcher with deterministic snapshot substitution matching egglog's substitution primitive.
     "nested-snapshot": TreatmentSpec("slotted-reference", ()),
 }
 # Reference matchers use the slotted collector and its generated workloads.
