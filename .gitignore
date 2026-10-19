@@ -33,5 +33,5 @@ nc-*.egg
 xdiff-big.log
 mut-*.log
 
-# Legacy slotted report caches (current runs share .reports.jsonl).
+# Reports from earlier slotted evaluations.
 eval.jsonl

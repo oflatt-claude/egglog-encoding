@@ -366,12 +366,6 @@ def _timing_breakdowns(
         for endpoint in (comparison.baseline, comparison.candidate)
     ):
         return ()
-    if any(
-        row.record["status"] == "success" and row.record["timing_summary"] is None
-        for rows in observations.values()
-        for row in rows
-    ):
-        return ()
     means = _timing_means(observations, metric_estimates)
     files: list[FileTimingBreakdown] = []
     for file_order in range(len(comparison.files)):

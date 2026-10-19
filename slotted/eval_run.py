@@ -1,6 +1,9 @@
 """Build and time the two executables. Graph export and checking live in eval_verify."""
 
+import argparse
+import multiprocessing
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -8,7 +11,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from benchmarking.reports.slotted import workload_label
+from eval_observation import Row
+from eval_workloads import add_arguments, workload_label
+from treatments import SIDES, TREATMENTS, description
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRATCH = ROOT / "target" / "slotted"
@@ -119,7 +124,7 @@ def oracle_env(side, group_cap):
             if key not in ("XMULTI_DEBUG", "XMULTI_DEBUG_RULE", "XMULTI_TRACE")
         },
         "XMULTI_GROUP_SLOT_CAP": str(group_cap),
-        "XMULTI_SUBST": "syntactic" if side == "ref-nested" else "snapshot",
+        "XMULTI_SUBST": TREATMENTS[side].substitution,
     }
 
 
@@ -153,7 +158,7 @@ def run_reference(spec, row, timeout, progress=quiet_progress, *, config=None):
 
 
 def slotted_flags(row):
-    return ["--slotted", *(["--slotted-no-aliasing"] if row.side == "encoding-no-aliasing" else [])]
+    return TREATMENTS[row.side].flags
 
 
 def goal_result(result):
@@ -185,3 +190,101 @@ def run_egglog(program, name, row, timeout, progress=quiet_progress, *, config=N
         path.unlink(missing_ok=True)
     row.seconds = time.perf_counter() - t0
     row.goal = goal_result(r)
+
+
+def run(workload, side, timeout, progress=quiet_progress, *, config=None):
+    """Execute the same goal-checking program for benchmarking and testing."""
+    row = Row(workload.study, workload.case, side, workload.rounds, workload.rules)
+    row.unsupported = workload.unsupported
+    if TREATMENTS[side].engine == "reference":
+        run_reference(workload.reference(side), row, timeout, progress, config=config)
+    else:
+        run_egglog(workload.program, workload.case, row, timeout, progress, config=config)
+    return row
+
+
+def goal_errors(rows):
+    return [
+        f"{row.case} / {row.side}: goal not reached ({row.goal})"
+        for row in rows
+        if row.goal != "yes" and not (TREATMENTS[row.side].engine == "reference" and row.goal == "timeout")
+    ]
+
+
+def positive_int(value):
+    value = int(value)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be positive")
+    return value
+
+
+def parser(title):
+    result = argparse.ArgumentParser(
+        description=title, epilog=description(), formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    add_arguments(result)
+    result.add_argument("--timeout", type=positive_int, default=300, help="seconds per subprocess (default 300)")
+    result.add_argument("-j", "--jobs", type=positive_int, default=1, help="concurrent workloads (default 1)")
+    result.add_argument("--no-build", action="store_true", help="use existing release binaries")
+    return result
+
+
+def setup(args, workloads, sides=SIDES, *, config=None):
+    config = config or Config()
+    for workload in workloads:
+        if not workload.supported_sides(sides):
+            raise ValueError(f"{workload.case}: all selected treatments are unsupported: {workload.unsupported}")
+    if not args.no_build:
+        build()
+    for tool in (config.egglog, config.xmulti):
+        if not tool.exists():
+            raise ValueError(f"missing {tool}; run without --no-build")
+    print(f"egglog {config.egglog}\nxmulti {config.xmulti}", file=sys.stderr)
+    print(f"Timeout: {args.timeout}s per process. One dot per completed treatment/sample.", file=sys.stderr)
+    if args.jobs > 1:
+        print(f"Parallel workloads: {args.jobs}; timings include resource contention.", file=sys.stderr)
+    return config
+
+
+def stop_worker(_signum, _frame):
+    # Unwind subprocess.run and scratch-file finally blocks on pool termination.
+    raise SystemExit(0)
+
+
+def init_worker():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def parallel_workload(payload):
+    worker, workload, options = payload
+    # Idle workers use the default SIGTERM handler to avoid unwinding queue locks.
+    previous = signal.signal(signal.SIGTERM, stop_worker)
+    try:
+        with Progress(parallel=True) as progress:
+            return worker(workload, progress=progress, **options)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def run_workloads(workloads, worker, *, jobs=1, **options):
+    """Keep input order in the results; workers own their scratch files and progress."""
+    if jobs == 1:
+        with Progress() as progress:
+            return [worker(workload, progress=progress, **options) for workload in workloads]
+    context = multiprocessing.get_context("spawn")
+    with context.Pool(min(jobs, len(workloads)), initializer=init_worker) as pool:
+        results = list(pool.imap(parallel_workload, ((worker, w, options) for w in workloads)))
+        pool.close()
+        pool.join()
+    print(file=sys.stderr, flush=True)
+    return results
+
+
+def table(headers, rows):
+    """Small, static Markdown tables; no dependency on the proof benchmark UI."""
+
+    def line(values):
+        cells = ("—" if v is None else str(v).replace("|", "\\|").replace("\n", " ") for v in values)
+        return "| " + " | ".join(cells) + " |"
+
+    return "\n".join([line(headers), line(["---"] * len(headers)), *(line(row) for row in rows)])

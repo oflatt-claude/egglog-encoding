@@ -14,7 +14,7 @@
 ;;; metrics: BATAX under all 44 rules does not saturate and is too costly for the ordinary
 ;;; test suite, so this uses the goal-directed subset of the artifact's fine-grained rules
 ;;; needed by this witness. The workloads the suite can afford run under all 44 rules in
-;;; `slotted/tests/sdql-paper/`; `slotted/slotted-eval.py` runs every workload, BATAX included, with all of them.
+;;; `slotted/tests/sdql-paper/`; `slotted/eval.py` runs every workload, BATAX included, with all of them.
 ;;; `slotted/checks/check-paper-sdql.py` keeps these definitions semantically identical to the
 ;;; corresponding rules in `languages/sdql.egg` and checks both fixture transcriptions.
 (sort U)

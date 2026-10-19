@@ -13,48 +13,31 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "slotted"), str(ROOT / "slotted" / "xdiff")]
-E = __import__("slotted-eval")
+import check as C  # noqa: E402
+import eval as E  # noqa: E402
 import eval_observation as R  # noqa: E402
 import eval_run as run  # noqa: E402
 import eval_verify as V  # noqa: E402
 import eval_workloads as W  # noqa: E402
 import xdiff as X  # noqa: E402
+from treatments import EXACT_PAIRS, SIDES  # noqa: E402
 
-from benchmarking.reports.slotted import EXACT_PAIRS, SIDES, slotted_report  # noqa: E402
-
-CHECK_CONFIG = E.Config(
+CHECK_CONFIG = run.Config(
     egglog=ROOT / "target" / "debug" / "egglog-experimental",
     xmulti=ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti",
 )
 
-ENCODED_CONFIG = E.Config(egglog=ROOT / "target" / "debug" / "egglog-experimental", xmulti=CHECK_CONFIG.xmulti)
 
-
-def cached_record(row, batch):
-    from eval_cache import ENDPOINTS, record
-
-    from benchmarking.models import TargetRow
-    from benchmarking.reports.store import CacheKey
-
-    return record(
-        row,
-        batch,
-        key=CacheKey("sha256:test-binary", "sha256:test-workload", ENDPOINTS[row.side], 60),
-        provenance=TargetRow("test", str(ROOT), "HEAD", "test", False),
-        counts=True,
-    )
-
-
-def successful(rows, sides, counts):
-    return not slotted_report([cached_record(row, "test") for row in rows], sides=sides, counts=counts).errors
+def successful(rows, sides=SIDES):
+    return not V.assess(rows, sides)[1]
 
 
 def graphs(name, program, spec, lang=X.LANG):
     enc, ref = (R.Row("regression", name, side, 1) for side in ("encoding", "ref-multi"))
-    V.encoding_counts(program, name, lang, enc, 60, config=ENCODED_CONFIG, encoded=True)
+    V.encoding_counts(program, name, lang, enc, 60, config=CHECK_CONFIG, encoded=True)
     run.run_reference(spec, ref, 60, config=CHECK_CONFIG)
     V.reference_counts(spec, ref, 60, config=CHECK_CONFIG)
-    assert enc.graph is not None and ref.graph is not None, (name, enc.as_dict("test"), ref.as_dict("test"))
+    assert enc.graph is not None and ref.graph is not None, (name, enc.as_dict(), ref.as_dict())
     V.compare([enc, ref])
     return enc, ref
 
@@ -154,7 +137,7 @@ def count_round_budget():
     # Installed after the requested run: any additional user-rule step is an error.
     program += '\n(rule () ((panic "graph collection exceeded the round budget")))\n'
     row = R.Row("regression", "count-budget", "encoding", 1)
-    V.encoding_counts(program, "count-budget", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
+    V.encoding_counts(program, "count-budget", X.LANG, row, 60, config=CHECK_CONFIG, encoded=True)
     assert row.graph is not None, row.graph_issue
     assert row.graph.summary() == (2, 3) == (row.classes, row.nodes)
     assert row.saturated == "?"
@@ -250,7 +233,7 @@ def raw_node_counts():
         patch.object(subprocess, "run", side_effect=dump),
         patch.object(V.ISO, "build_encoding_graph", return_value=(original, [])),
     ):
-        V.encoding_counts(program, "raw-node-count", X.LANG, row, 60, config=ENCODED_CONFIG, encoded=True)
+        V.encoding_counts(program, "raw-node-count", X.LANG, row, 60, config=CHECK_CONFIG, encoded=True)
     assert row.nodes == 4 and row.graph is None
     assert "raw constructor count 4 disagrees" in row.graph_issue, row.graph_issue
 
@@ -304,19 +287,13 @@ def verdicts():
 def goal_reporting():
     # A short budget actually misses the goal on all sides. Equal graphs
     # alone must not turn this into a successful benchmark.
-    rows = E.collect_workload(
-        W.array_workload(0, rounds=1),
-        argparse.Namespace(counts=True, timeout=30, jobs=1),
-        SIDES,
-        CHECK_CONFIG,
-        run.quiet_progress,
-    )
-    assert all(r.goal == "no" for r in rows), [r.as_dict("test") for r in rows]
+    rows = C.check_workload(W.array_workload(0, rounds=1), timeout=30, config=CHECK_CONFIG)
+    assert all(r.goal == "no" for r in rows), [r.as_dict() for r in rows]
     by_side = {r.side: r for r in rows}
     assert set(by_side) == set(SIDES)
     for encoding, reference in EXACT_PAIRS.items():
         assert by_side[encoding].verdict(by_side[reference]) == "isomorphic"
-    assert not successful(rows, SIDES, True)
+    assert not successful(rows)
 
 
 def substitution_policies():
@@ -338,7 +315,7 @@ rule
         with patch.dict(os.environ, {"XMULTI_SUBST": "invalid-ambient-policy"}):
             run.run_reference(spec, row, 30, config=CHECK_CONFIG)
             V.reference_counts(spec, row, 30, config=CHECK_CONFIG)
-        assert row.goal == "yes", row.as_dict("test")
+        assert row.goal == "yes", row.as_dict()
         assert row.substitution == policy
         graph = row.graph
         assert graph is not None, row.graph_issue
@@ -364,7 +341,7 @@ def graph_failure_reasons():
         with patch.object(subprocess, "run", side_effect=subprocess.TimeoutExpired("egglog", 1)):
             V.encoding_counts("", "timeout", X.LANG, failed, 1)
         assert "exceeded timeout" in failed.graph_issue
-        assert failed.as_dict("test")["graph_issue"] == failed.graph_issue
+        assert failed.as_dict()["graph_issue"] == failed.graph_issue
 
         def dump(args, **_kwargs):
             Path(args[-1]).with_suffix(".json").write_text('{"nodes": {}}')
@@ -418,14 +395,8 @@ def graph_failure_reasons():
 
 
 def combined_comparisons():
-    rows = E.collect_workload(
-        W.sdql_workload("mmm_sum", "1st"),
-        argparse.Namespace(counts=True, timeout=30, jobs=1),
-        SIDES,
-        CHECK_CONFIG,
-        run.quiet_progress,
-    )
-    assert successful(rows, SIDES, True), [r.as_dict("test") for r in rows]
+    rows = C.check_workload(W.sdql_workload("mmm_sum", "1st"), timeout=30, config=CHECK_CONFIG)
+    assert successful(rows), [r.as_dict() for r in rows]
     by_side = {r.side: r for r in rows}
     for encoding, reference in EXACT_PAIRS.items():
         assert by_side[encoding].verdict(by_side[reference]) == "isomorphic"
@@ -437,16 +408,10 @@ def logic_case_studies():
     assert len(paths) >= 2, "missing first-order logic fixtures"
     for path in paths:
         workload = W.logic_workload(path)
-        rows = E.collect_workload(
-            workload,
-            argparse.Namespace(counts=True, timeout=60, jobs=1),
-            SIDES,
-            CHECK_CONFIG,
-            run.quiet_progress,
-        )
+        rows = C.check_workload(workload, timeout=60, config=CHECK_CONFIG)
         assert [row.side for row in rows] == ["encoding", "ref-multi"]
         assert set(workload.unsupported) == {"encoding-no-aliasing", "ref-nested-snapshot", "ref-nested"}
-        assert successful(rows, SIDES, True), [row.as_dict("test") for row in rows]
+        assert successful(rows), [row.as_dict() for row in rows]
         enc, ref = rows
         assert V.compare_counts(enc, ref) == "same counts"
         assert enc.verdict(ref) == "isomorphic"
@@ -455,7 +420,6 @@ def logic_case_studies():
 def zero_round_budget():
     """An explicit zero must not silently run the paper's default budget."""
     args = argparse.Namespace(
-        no_build=True,
         study="all",
         case=None,
         params=[0],
@@ -463,21 +427,16 @@ def zero_round_budget():
         phase=["1st"],
         rules=44,
         rounds=0,
-        counts=False,
-        timeout=30,
-        jobs=1,
     )
-    with tempfile.TemporaryDirectory(prefix="slotted-zero-rounds-") as tmp:
-        args.jsonl = Path(tmp) / "report.jsonl"
-        records = E.collect(args, ("ref-multi",), argparse.ArgumentParser(), config=CHECK_CONFIG)
-    assert len(records) == 4
-    assert all(r["slotted"]["rounds"] == 0 and r["slotted"]["goal"] == "no" for r in records), records
+    results = run.run_workloads(W.select(args), E.benchmark, config=CHECK_CONFIG, timeout=30, sides=("ref-multi",))
+    rows = [row for group in results for row in group]
+    assert len(rows) == 4
+    assert all(r.rounds == 0 and r.goal == "no" for r in rows), rows
 
 
 def parallel_collection():
-    """Spawned workers preserve both languages' counts, verdicts, and configuration."""
+    """Spawned workers preserve each workload's counts, verdicts, and configuration."""
     args = argparse.Namespace(
-        no_build=True,
         study="all",
         case=None,
         params=[0],
@@ -485,46 +444,39 @@ def parallel_collection():
         phase=["1st"],
         rules=44,
         rounds=2,
-        counts=True,
-        timeout=60,
-        jobs=1,
     )
 
-    def evidence(records):
-        return [
-            {
-                **{k: v for k, v in r["slotted"].items() if k not in ("observation", "batch", "jobs", "vs_ref")},
-                "vs_ref": {side: c["verdict"] for side, c in r["slotted"]["vs_ref"].items()},
-            }
-            for r in records
-        ]
+    selected = W.select(args)
 
-    with tempfile.TemporaryDirectory(prefix="slotted-parallel-") as tmp:
-        args.jsonl = Path(tmp) / "report.jsonl"
-        serial = E.collect(args, SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
-        args.jobs = 2
-        parallel = E.collect(args, SIDES, argparse.ArgumentParser(), config=CHECK_CONFIG)
-        # The small round budget misses the array goal, even though its graphs agree.
-        assert slotted_report(serial).errors and slotted_report(parallel).errors
-        assert evidence(serial) == evidence(parallel)
-        assert all(r["slotted"]["jobs"] == 2 for r in parallel)
-        assert all("graph" not in r["slotted"] for r in parallel)
+    def collect(jobs, sides=SIDES, config=CHECK_CONFIG):
+        return run.run_workloads(selected, C.check_workload, jobs=jobs, sides=sides, config=config, timeout=60)
 
-        # Spawned workers must receive CLI configuration, not fresh defaults.
-        args.study = "array"
-        sides = ("encoding-no-aliasing", "ref-nested-snapshot")
-        limited = E.collect(
-            args,
-            sides,
-            argparse.ArgumentParser(),
-            config=E.Config(CHECK_CONFIG.egglog, CHECK_CONFIG.xmulti, group_cap=0),
-        )
-        enc, ref = (r["slotted"] for r in limited)
-        assert enc["goal"] == ref["goal"] == "no"
-        assert (enc["classes"], enc["nodes"]) == (ref["classes"], ref["nodes"])
-        assert "REFERENCE_LIMIT" in ref["graph_issue"]
-        assert enc["vs_ref"][ref["side"]]["verdict"].startswith("inconclusive:")
-        assert slotted_report(limited, sides=sides).errors
+    serial, parallel = collect(1), collect(2)
+    # The small budget misses the array goal, even though its graphs agree.
+    assert not successful(serial[0]) and not successful(parallel[0])
+
+    def evidence(results):
+        return [[{k: v for k, v in row.as_dict().items() if k != "seconds"} for row in group] for group in results]
+
+    assert evidence(serial) == evidence(parallel)
+    assert all(row.graph is None for group in parallel for row in group)
+    for group in parallel:
+        by_side = {r.side: r for r in group}
+        for encoding, reference in EXACT_PAIRS.items():
+            if reference in by_side:
+                # Pickling must keep comparison identities attached to the returned rows.
+                assert by_side[encoding].verdict(by_side[reference]) == "isomorphic"
+
+    # Spawned workers receive explicit configuration, not fresh defaults.
+    selected = selected[:1]
+    sides = ("encoding-no-aliasing", "ref-nested-snapshot")
+    (limited,) = collect(2, sides, run.Config(CHECK_CONFIG.egglog, CHECK_CONFIG.xmulti, group_cap=0))
+    enc, ref = limited
+    assert enc.goal == ref.goal == "no"
+    assert (enc.classes, enc.nodes) == (ref.classes, ref.nodes)
+    assert "REFERENCE_LIMIT" in ref.graph_issue
+    assert enc.verdict(ref).startswith("inconclusive:")
+    assert not successful(limited, sides)
 
 
 def import_without_compilation():
@@ -536,7 +488,8 @@ from unittest.mock import patch
 sys.path[:0] = ["slotted", "slotted/xdiff"]
 compiler = importlib.import_module("test_program")
 with patch.object(compiler, "compile_source", side_effect=AssertionError("compiled during import")):
-    importlib.import_module("slotted-eval")
+    importlib.import_module("eval")
+    importlib.import_module("check")
     importlib.import_module("xsdql")
 """
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=30)
@@ -550,25 +503,24 @@ def separate_timing_and_graph_runs():
     timed = subprocess.CompletedProcess([], 0, "GOAL no\nCONFIG substitution=snapshot\n", "")
     dump = subprocess.CompletedProcess([], 2, "SIZES 10 20\n", "REFERENCE_LIMIT: symmetry cap")
     for counts in (False, True):
-        args = argparse.Namespace(counts=counts, timeout=30, jobs=1)
+        worker = C.check_workload if counts else E.benchmark
         with patch.object(subprocess, "run", side_effect=[timed, dump]) as process:
-            (row,) = E.collect_workload(workload, args, sides, CHECK_CONFIG, run.quiet_progress)
+            (row,) = worker(workload, sides=sides, config=CHECK_CONFIG, timeout=30)
         assert process.call_count == (2 if counts else 1)
         assert row.goal == "no" and row.seconds is not None
         assert (row.classes, row.nodes) == ((10, 20) if counts else (None, None))
-        assert not successful([row], sides, counts)
+        assert not successful([row], sides)
 
-    args.counts = True
     for failed in (
         subprocess.TimeoutExpired("xmulti", 30),
         subprocess.CompletedProcess([], 1, "", "reference error"),
         subprocess.CompletedProcess([], 0, "GOAL yes\nCONFIG substitution=syntactic\n", ""),
     ):
         with patch.object(subprocess, "run", side_effect=[failed]) as process:
-            (row,) = E.collect_workload(workload, args, sides, CHECK_CONFIG, run.quiet_progress)
+            (row,) = C.check_workload(workload, sides=sides, config=CHECK_CONFIG, timeout=30)
         assert process.call_count == 1
         assert row.graph_issue and row.classes is None and row.nodes is None
-        assert successful([row], sides, True) == isinstance(failed, subprocess.TimeoutExpired)
+        assert successful([row], sides) == isinstance(failed, subprocess.TimeoutExpired)
 
 
 def main():

@@ -6,7 +6,7 @@
 ;;;   input:  sdql/slotted/progs/mmm_2nd.sexp
 ;;;   target: sdql/baseline/progs/mmm_2nd_esat.sexp
 ;;; Table 1's slotted row: 18 iterations, 1,308 nodes, 128 classes, saturated. The full
-;;; 44-rule run is `slotted/slotted-eval.py sdql --kernel mmm --phase 2nd`; this is the suite's
+;;; 44-rule run is `slotted/eval.py sdql --kernel mmm --phase 2nd`; this is the suite's
 ;;; cheap witness with the thirteen rules that reach the target by round 18, run for the
 ;;; artifact's 30.
 ;;;

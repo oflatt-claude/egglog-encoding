@@ -1191,83 +1191,85 @@ reach one value. The root keeps the frame's spelling (C11).
 
 # Against the reference
 
-The unrestricted `encoding` matches the reference crate's multipattern matcher,
-`ref-multi`. The `encoding-no-aliasing` variant restricts aliasing to match
-`ref-nested-snapshot`. In both comparisons the goal is the same e-graph: the same
-classes, slots, groups, and nodes up to a verified isomorphism. The evaluator delegates
-graph export, counting, and witness verification to `slotted/eval_verify.py`,
-which compares the final graphs and says `isomorphic`, `different`, or `inconclusive`.
-It attempts witness search on every available graph pair, using compact interned
-class and slot signatures and explicit search/node-variant work limits. Counts and
-probe partitions cannot override an exact rejection or establish equality. With
-counts enabled, class and node counts are also checked separately before witness
-search. Encoding nodes are counted directly from the serialized constructor rows,
-including the variable row and excluding auxiliary tables, and checked against
+The treatment definitions in `slotted/treatments.py` are shared by the standalone
+benchmark (`slotted/eval.py`) and correctness runner (`slotted/check.py`). They
+specify the engine, matcher, substitution policy, CLI flags, exact comparison
+partner, and timing baseline:
+
+| Treatment | Behavior | Role |
+| --- | --- | --- |
+| `encoding` | Egglog's slotted encoding with slot aliasing and snapshot substitution | Must match `ref-multi` |
+| `encoding-no-aliasing` | Egglog's nested compatibility mode with snapshot substitution | Must match `ref-nested-snapshot`; timed against `ref-nested` |
+| `ref-multi` | Reference multipattern matcher with snapshot substitution | Exact reference and timing baseline |
+| `ref-nested-snapshot` | Reference nested matcher with snapshot substitution | Exact reference for compatibility checks |
+| `ref-nested` | Original nested matcher with syntactic substitution | Timing baseline; graph equality is diagnostic |
+
+Both commands use the same generated programs and rewrite budgets:
+
+```bash
+python3 slotted/eval.py array --params 0
+python3 slotted/check.py array --params 0
+python3 slotted/check.py sdql --kernel mmm_sum --phase 1st
+python3 slotted/check.py logic
+```
+
+Omitting the study selects all array, SDQL, and first-order logic workloads.
+`--rounds` overrides rewrite iterations, including an explicit zero. The default
+budgets come from the paper's artifact or the logic fixture. Unsupported nested
+patterns are reported explicitly; supported treatments still run and must pass.
+
+**Benchmarking.** `eval.py` builds release binaries and collects fresh wall-clock
+timings. It has no cache and does not export graphs or run isomorphism search.
+Its two tables show `egglog` versus `ref-multi`, then `egglog-no-aliasing` versus
+`ref-nested`. CLI selectors remain `encoding` and `encoding-no-aliasing`.
+The default is one sample per treatment; `--samples N` reports the median of N
+fresh samples. Each timed process includes Rust source transformation, execution,
+and its goal check. Completed runs retain their elapsed time even if the goal
+was missed, with failed goals listed after the tables. A cell says `timeout` if
+any of its samples exceeded the limit. `ref-nested-snapshot` is available through
+`--treatments` for diagnostic timings but is not substituted for the original
+nested baseline. These scripts are independent of the proof benchmark cache,
+report UI, and nightly automation.
+
+**Correctness.** `check.py` runs every supported treatment, including the snapshot
+nested reference. Each gets a goal check and a separate input-only graph export
+at the same rewrite budget. `eval_verify.py` validates raw sizes, searches for a
+complete class/slot/group/node isomorphism, and independently verifies the witness.
+The two required pairs need both equal class/node counts and a verified witness;
+other encoding/reference pairs are diagnostic. Counts or probe partitions cannot
+establish equality or override a rejected witness. Missing counts, invalid graph
+exports, and inconclusive searches fail a required comparison.
+
+Encoding nodes are counted directly from serialized constructor rows, including
+the variable row and excluding auxiliary tables. This raw count must agree with
 the reconstructed graph. Reconstruction preserves every row, even when two rows
-become identical after translating their frames; retiring duplicates is the
-encoding's responsibility. Counts remain visible even if search is inconclusive,
-and a count mismatch rejects the comparison without trusting the isomorphism checker.
-Missing counts or unverified comparisons to an encoding's paired reference fail the
-command when both sides are selected; loading a saved report also requires equal counts as well
-as a verified verdict. Each comparison records the encoding and reference observation
-IDs. A saved report replacing either observation marks the old comparison inconclusive;
-it cannot reuse an earlier witness verdict just because the counts still match. Workload
-identity includes the generated programs, checking policy, parallelism, and rule count;
-each encoding and reference variant has its own system identity. Reports select the
-latest workload version and timeout for each named benchmark and rewrite budget.
-Missing sides stay missing; timings from an older version cannot fill their cells.
-Reference class/node counts
-are collected directly before dumping the graph and checked against the parsed dump.
-They remain available if symmetry enumeration exceeds its cap or timeout. Graph
-collection records why evidence is unavailable; unexpected reader errors propagate.
-The JSONL is a versioned disposable cache, and old schemas require recomputation.
-Goal outcome, elapsed seconds, and graph size have separate columns. Each side's
-goal is checked independently, and any unsuccessful goal fails the command even
-when the graphs are isomorphic. The original nested baseline can miss a goal that
-the encoding reaches, and graph agreement with that baseline is not required.
-Elapsed seconds measure
-the whole run, including unsuccessful runs, rather than time to a successful goal.
-Both Markdown and HTML reports start with two timing tables, each with one row per
-benchmark: `egglog` versus `ref-multi`, then `egglog-no-aliasing` versus `ref-nested`.
-The tables label the encoding as `egglog`; CLI selectors and cache identities remain
-`encoding` and `encoding-no-aliasing`.
-Cells contain elapsed seconds for completed runs, including missed goals; processes
-that hit the time limit display `timeout`, and missing times use a dash. The cache
-retains elapsed seconds for timed-out processes. `ref-nested-snapshot` still runs for correctness and appears in the full
-diagnostic table, alongside goals, round budgets, counts, and reference saturation.
-Its timing is never used in place of the syntactic `ref-nested` baseline. Benchmarks
-with multiple round budgets get distinct row labels. The CLI and nightly use the
-same timing and evidence tables, selection policy, and correctness gate.
-Encoding saturation is left unknown: graph collection stops at the requested budget.
-An extra round can exceed the time limit even when that graph is available, and
-equal row counts before and after another round would not establish a fixed point.
-An error banner immediately after the timing tables lists missed goals, missing results,
-count mismatches, and unsuccessful or inconclusive required isomorphism comparisons.
-The same checks determine exit status 1, including when loading saved results.
-Build and collection errors return status 2. Nightly invokes the public CLI with
-a 150-second timeout and all paper workloads, then publishes the shared cache
-through the normal CLI's `--open` option. An explicit `--no-counts` report states that count/isomorphism checks are disabled;
-goals are still required. Both views use the same observations.
-The two encoding variants have separate timings and comparison certificates;
-neither can overwrite the other's result when cached runs are merged.
-Collection progress goes to stderr: one dot per completed workload/system sample
-in the printed system order, including unsuccessful samples. A phase lasting more
-than five seconds identifies the system and whether it is checking the goal,
-collecting or validating the graph, or comparing isomorphism. The final collection
-duration includes builds and correctness checks; the table's timings cover only
-the individual goal runs.
-Execution is serial by default. `python3 slotted/slotted-eval.py --jobs 4` runs up to four
-workloads concurrently, each in a separate process with its own checker state and
-scratch files. A worker runs all selected systems and all correctness checks for
-its workload; the final table retains the serial workload order. Parallel progress
-dots follow completion order, and slow-phase messages identify the workload and
-system. The worker limit is recorded in each observation and shown in saved reports.
-Parallel timings include contention for CPU and memory; use `--jobs 1` for serial
-performance measurements. The limit controls concurrent workloads, not CPU affinity.
-`--timeout` applies separately to each benchmark and graph-dump subprocess. Python
-graph validation and isomorphism have no wall-clock timeout (isomorphism uses
-search/work bounds instead), so the whole evaluation can take longer than the sum
-of the reported goal timings.
+translate to identical nodes: retiring duplicates is the encoding's responsibility.
+Reference counts are collected directly before graph dumping and checked against
+the parsed dump. Counts remain available when symmetry enumeration exceeds its
+slot cap or a graph dump times out. A count mismatch rejects the comparison before
+isomorphism search. Unexpected reader errors propagate. The regression suite also
+checks class reconstruction against an independent count computed inside egglog.
+
+Each treatment's goal is checked independently. A missed goal fails the command
+even if the graphs agree. Reference timeouts are explicitly unverified and do not
+produce a failure banner; they cannot excuse an encoding error or a known mismatch.
+The correctness tables show sizes, goals, and required versus diagnostic verdicts.
+An error banner and nonzero exit status identify failed goals, missing results,
+count mismatches, and unsuccessful required isomorphism checks. Results are kept
+only in memory, with each verdict attached to the actual pair of observations.
+
+**Execution.** Both commands are serial by default. `--jobs 4` runs up to four
+workloads concurrently in separate processes; each worker uses the same programs
+and treatment configuration, and output retains workload order. Parallel timings
+include CPU and memory contention; use `--jobs 1` for serial measurements. Progress
+goes to stderr, with one dot per completed treatment/sample and `(Running ...)`
+messages identifying slow phases. Tables go to stdout and can be redirected to a
+file. `--timeout` defaults to 300 seconds per subprocess. Python graph validation
+and isomorphism have work limits rather than a wall-clock timeout, so correctness
+checks can take longer than the timed runs. `--group-cap` on `check.py` controls
+reference symmetry enumeration and has factorial cost. Graph collection stops at
+the requested rewrite budget; it does not execute an extra round to probe saturation.
+
 Three things had to
 be made the same, each established on a minimal case the harness keeps:
 
@@ -1311,7 +1313,7 @@ probe/count diagnostic and could miss different symmetry groups; those records m
 be recomputed. TTM's second phase remains unverified:
 `ref-multi` did not finish it within the artifact's 300 s in the recorded evaluation.
 
-**The nested performance baseline.** `slotted-eval.py` explicitly selects `snapshot` for
+**The nested performance baseline.** `treatments.py` explicitly selects `snapshot` for
 `ref-multi` and `ref-nested-snapshot`, and `syntactic` for `ref-nested`, overriding ambient `XMULTI_SUBST` on
 both the timed and counting runs. The binary reports the selected policy and each
 evaluation row records it. Syntactic substitution does not build our extraction
@@ -1336,7 +1338,7 @@ entire historical implementation.
 **Nested compatibility.** To compare exact graphs with the nested matcher, run:
 
 ```sh
-python3 slotted/slotted-eval.py --side encoding-no-aliasing,ref-nested-snapshot --jsonl /tmp/nested-eval.jsonl
+python3 slotted/check.py array --params 0
 ```
 
 The compiler emits `nested-atom` instead of `atom` for rewrite patterns. This adds
@@ -1391,13 +1393,13 @@ transformation and evaluation in one process.
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
 | `slotted/paper_fixtures.py` | the paper's ten SDQL workloads from the artifact: translation, Table 1's numbers, the generated tests |
-| `slotted/slotted-eval.py` | CLI, cache reuse, and one evaluation loop for both case studies; `./bench.py slotted` |
-| `slotted/eval_workloads.py` | explicit source programs and reference specs, prepared once for cache lookup and execution |
-| `slotted/eval_run.py` | builds, progress, and timed goal-checking processes; no graph export or isomorphism search |
+| `slotted/eval.py` | standalone timing CLI and tables; fresh samples without graph checking |
+| `slotted/check.py` | standalone correctness CLI; all supported treatments, counts, and required isomorphism checks |
+| `slotted/treatments.py` | shared treatment definitions, exact comparison pairs, and timing baselines |
+| `slotted/eval_workloads.py` | shared workload selectors, source programs, and reference specs for both runners |
+| `slotted/eval_run.py` | builds, progress, subprocess execution, and serial/parallel workload execution |
 | `slotted/eval_verify.py` | untimed graph export, independent raw counts, and verified isomorphism witnesses |
-| `slotted/eval_cache.py` | slotted observations in the shared proof/slotted `ReportStore`; hashes all generated inputs and checking code |
-| `slotted/eval_observation.py` | transient observations and graph evidence, converted to shared records after comparison |
-| `benchmarking/reports/slotted.py` | shared CLI/nightly selection, correctness gate, and report tables; launches no benchmarks |
+| `slotted/eval_observation.py` | in-memory observations and verdicts tied to the rows actually compared |
 
 The shared and per-carrier maintenance rules live in the Rust compiler's
 `templates/` directory. Constructor-dependent rules are generated from the declared

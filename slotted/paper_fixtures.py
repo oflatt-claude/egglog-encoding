@@ -9,7 +9,7 @@ is the program its egg baseline extracted after saturating. Table 1 compares ext
 costs, and "finds the best program" there means reaching that cost; the tests here ask
 for more, that the input's class comes to contain the target itself.
 `slotted/checks/check-paper-sdql.py` pins the fixtures' hashes and checks that each test
-under `slotted/tests/sdql-paper/` is what `test_text` writes for it; `slotted/slotted-eval.py` runs
+under `slotted/tests/sdql-paper/` is what `test_text` writes for it; `slotted/eval.py` runs
 every workload from the same forms, so the eight that never became files are one command away.
 
 The artifact spells a variable `$name`, `name`, or `$var_NN`; its targets are alpha-numbered
@@ -61,7 +61,7 @@ TABLE1 = {
 #: seconds on the debug build the runner uses (ΣMMM's first phase at once, MMM's in about
 #: half a minute). The other six that saturate take the release build minutes (TTM's first
 #: phase six) to over the artifact's 300 s, and the two BATAX workloads longer still, so
-#: `slotted/slotted-eval.py` is where those run; `slotted/tests/sdql-paper-batax.egg` and
+#: `slotted/eval.py` is where those run; `slotted/tests/sdql-paper-batax.egg` and
 #: `slotted/tests/sdql-paper-mmm.egg` cover two of them in the suite with rule subsets.
 SUITE = (("mmm_sum", "1st"), ("mmm", "1st"))
 

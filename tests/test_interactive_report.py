@@ -210,7 +210,6 @@ def test_html_embeds_exact_grouped_snapshot_initial_catalog_runtime_and_safe_dat
         "benchmarking/reports/interactive_runtime.py",
         "benchmarking/reports/presentation.py",
         "benchmarking/reports/store.py",
-        "benchmarking/reports/slotted.py",
     }
     initial_payload = cast(dict[str, JsonValue], envelope["initial_payload"])
     assert _section_ids(initial_payload) == ["selection", "summary", "files", "phases", "rulesets"]

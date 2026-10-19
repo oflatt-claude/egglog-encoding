@@ -14,10 +14,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch without eagerly importing dependencies for the other command."""
 
     raw_argv = tuple(sys.argv[1:] if argv is None else argv)
-    if raw_argv and raw_argv[0] == "slotted":
-        import importlib
-
-        return int(importlib.import_module("slotted.slotted-eval").main(raw_argv[1:]))
     if raw_argv and raw_argv[0] == "profile":
         from benchmarking.profile import main as profile_main
 

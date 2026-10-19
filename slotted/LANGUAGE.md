@@ -21,7 +21,7 @@ slots pairwise distinct, while preserving sharing already present in child edges
 The default implements the more complete multipattern matcher. Compatibility mode
 accepts a single nested left-hand pattern and rejects additional equality side
 patterns; checks keep their ordinary semantics. See [ENCODING.md](ENCODING.md#against-the-reference)
-for the exact graph comparisons and substitution policy used by `slotted-eval.py`.
+for the exact graph comparisons and substitution policy used by `slotted/check.py`.
 
 The Rust pass in `egglog-experimental/src/slotted/` transforms complete source
 inputs into ordinary egglog before evaluation. It shares egglog's lexer and CLI;
@@ -596,16 +596,17 @@ discover all files under `slotted/tests/` and the libraries under
   `egglog-experimental --slotted`, so its `(check ...)` assertions must pass.
 
 Reference comparisons are separate: adding a `.egg` file does not automatically
-translate it to the reference language. `./bench.py slotted logic`
+translate it to the reference language. `python3 slotted/check.py logic`
 discovers `slotted/tests/rudi/first-order-logic*.egg` and translates their rules,
 initial equations, round budget, and goal directly from those files. Both sides
 must prove the goal, have equal class and raw node counts, and pass exact graph
-isomorphism before the check passes. Graphs are collected before the goal check
-so the target cannot seed either graph. `ref-nested` is reported as unsupported
+isomorphism before the check passes. Graphs are exported in separate processes
+without adding the target before rewriting. `ref-nested` is reported as unsupported
 because these rules require multipattern `:when` conditions. The reference
 language's constructor declarations live in `slotted/xmulti/src/main.rs`.
 Use `--case first-order-logic2` to select one fixture. These workloads also run
-in the default slotted suite and nightly, using the shared report cache and tables.
+in the default slotted suite. `python3 slotted/eval.py logic` separately measures
+fresh timings using the same generated inputs and treatment definitions.
 
 `make check` runs the Python and Rust unit tests, including compiler snapshots.
 `make slotted-check` also runs the source assertions and reference comparisons.
@@ -620,7 +621,7 @@ reference inputs are derived on each run and need no separate synchronization.
 | `slotted/tests/paper/` | one file per test in the reference's own suites |
 | `slotted/tests/nested/` | fixtures whose assertions require `--slotted-no-aliasing`; the test runner supplies the flag |
 | `slotted/tests/snapshots/` | Rust compiler output checked by `insta` in `cargo test`; update with `make update-snapshots` |
-| `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/slotted-eval.py` runs in full |
+| `slotted/tests/sdql-paper/` | the paper's SDQL case study, S4.2: a generated test per Table 1 workload the suite can afford, all 44 rules at the artifact's iteration limit; written by `slotted/paper_fixtures.py --write` from the fixtures under `slotted/tests/artifact/sdql/`, which `slotted/eval.py` runs in full |
 | `slotted/languages/` | a language and its rewrite rules, with no terms and nothing asked — `toy`, `array`, `sdql`, each an `.egg` beside a `.ref` saying how the reference spells its operators. Included by the tests that exercise them, and loaded on their own so a broken one is caught here |
 | `egglog-experimental/src/slotted/` | the Rust compiler |
 | `slotted/reference.py` | test input metadata and translation to the reference |

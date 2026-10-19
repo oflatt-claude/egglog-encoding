@@ -81,7 +81,7 @@ slotted-check:
 # encoding and on the reference through both of its matchers, at the artifact's budgets.
 # Release builds of both binaries, since these are the numbers a graph is drawn from.
 slotted-eval:
-	./bench.py slotted --params 0 1 2 3 --counts
+	uv run --locked python slotted/eval.py --params 0 1 2 3
 
 slotted-check-no-oracle:
 	cargo build

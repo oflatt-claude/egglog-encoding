@@ -42,6 +42,18 @@ JSONL report to `/tmp/egglog-encoding-bench-smoke.jsonl`. Override
 intentional changes to Markdown reports and slotted compiler snapshots; review
 the resulting diff before committing it.
 
+Slotted case studies have standalone runners:
+
+```bash
+python3 slotted/eval.py array --params 0   # fresh timings; no cache or graph checks
+python3 slotted/check.py array --params 0  # all treatments, counts, and exact isomorphism
+```
+
+Both use the same workload selectors and [treatment definitions](slotted/treatments.py).
+Omit `array --params 0` to run all case studies. See
+[the reference comparison documentation](slotted/ENCODING.md#against-the-reference)
+for substitution policies and comparison requirements.
+
 The root workspace includes both `egglog` and `egglog-experimental`.
 `egglog-experimental` depends on the workspace `egglog` crate, keeping proof
 changes and downstream behavior in one reviewable unit.
@@ -426,29 +438,13 @@ uv run --locked python scripts/nightly_bench.py /path/to/output  # alternate out
 Endpoints are labelled by target (`branch` / `main`) and commit hash, so the
 page's dropdown can compare any two of them and it is clear which commit each
 side is; endpoints with identical binaries collapse to one option. The page
-opens on proof overhead of the current checkout, followed by the slotted
-multipattern and nested timing tables. Populating is best effort: an
+opens on proof overhead of the current checkout. Populating is best effort: an
 endpoint that fails to build or run drops one dropdown option rather than
 failing the run. Edit `TARGETS` and `TREATMENTS` in `scripts/nightly_bench.py`
 to change what is measured.
 
 Each run replaces both published files, so `index.jsonl` is the cache that run
 measured into and a failed run publishes no page.
-
-Slotted observations and correctness evidence are stored in the same `index.jsonl`.
-The slotted tables require raw class/node counts and verified isomorphism for
-egglog/ref-multi and egglog-no-aliasing/ref-nested-snapshot. Failures and missing
-evidence appear in an error block below the timings. Reference timeouts leave
-comparisons unverified without an error banner. Timed-out runs display `timeout`
-instead of a completed-run time. Nightly slotted processes use a 150-second timeout
-(`--slotted-timeout` to override); local `./bench.py slotted` runs default to 300 seconds.
-
-`./bench.py slotted array --params 0` collects a small slotted comparison.
-Use `--report /tmp/slotted.jsonl` for a disposable cache and
-`--force-run` for new samples. The slotted `--rounds` flag sets rewrite iterations;
-it does not change the proof runner's sampling count. Cache reuse includes binary
-hashes, generated workload content, checking policy, timeout and parallelism.
-Incompatible cache schemas require recomputation.
 
 `make nightly-local` is the same run at `--rounds 1`, for trying the whole
 pipeline out without waiting for a full nightly.

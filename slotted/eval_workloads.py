@@ -1,4 +1,4 @@
-"""Prepare slotted workloads once, before timing or cache lookup.
+"""Prepare the same slotted workloads for benchmarking and correctness tests.
 
 Each workload has a source program with a goal check, an input-only program for
 graph export, and reference specs for the two matchers. These are plain data so
@@ -6,12 +6,14 @@ serial and spawned-worker evaluation consume exactly the same inputs.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import paper_fixtures as pf
 import reference as syntax
 import xarray as XA
+from treatments import TREATMENTS
 
 ROOT = Path(__file__).resolve().parents[1]
 BATAX_SUBSET = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
@@ -28,7 +30,6 @@ class Workload:
     graph_program: str
     multi: str
     nested: str | None
-    paper: tuple[int, int, int, bool] | None = None
     unsupported: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -42,7 +43,10 @@ class Workload:
     def reference(self, side):
         if side in self.unsupported:
             raise ValueError(f"{self.case} / {side}: {self.unsupported[side]}")
-        return self.multi if side == "ref-multi" else self.nested
+        treatment = TREATMENTS[side]
+        if treatment.engine != "reference":
+            raise ValueError(f"{side} is not a reference treatment")
+        return self.multi if treatment.matcher == "multi" else self.nested
 
     def supported_sides(self, sides):
         return tuple(side for side in sides if side not in self.unsupported)
@@ -112,7 +116,7 @@ def logic_workload(path, *, rounds=None):
         nested_spec = "\n".join(head + nested + tail) + "\n"
     except syntax.NestedPatternUnsupported as exc:
         nested_spec = None
-        unsupported = dict.fromkeys(("encoding-no-aliasing", "ref-nested-snapshot", "ref-nested"), str(exc))
+        unsupported = {name: str(exc) for name, t in TREATMENTS.items() if t.matcher == "nested"}
     forms = syntax.parse(program)
     forms = [["run", str(budget)] if f[0] == "run" else f for f in forms]
     return Workload(
@@ -235,5 +239,57 @@ def sdql_workload(kernel, phase, *, rules=44, rounds=None):
         graph_program=sdql_program(kernel, phase, rules, budget, False),
         multi="\n".join(head + multi + goal) + "\n",
         nested="\n".join(head + nested + goal) + "\n",
-        paper=pf.TABLE1[(kernel, phase)],
     )
+
+
+def workload_label(study, case, rules):
+    if study == "logic":
+        return case
+    if study == "array" and (match := re.fullmatch(r"goal-2d-4f-N(\d+)", case)):
+        return "Array N=" + match[1]
+    if study == "sdql" and (
+        match := re.fullmatch(r"(mmm_sum|mttkrp|mmm|ttm|batax)_(1st|2nd)-" + str(rules) + "rules", case)
+    ):
+        kernel, phase = match.groups()
+        name = "ΣMMM" if kernel == "mmm_sum" else kernel.upper()
+        suffix = f", {rules} rules" if rules != 44 else ""
+        return f"{name} ({phase}{suffix})"
+    return f"{study}: {case}"
+
+
+def add_arguments(parser):
+    """Workload selectors have identical meanings in the benchmark and checker."""
+    parser.add_argument("study", nargs="?", default="all", choices=("all", "array", "sdql", "logic"))
+    parser.add_argument("--case", nargs="+", help="logic fixture names without .egg; default all")
+    parser.add_argument("--params", type=int, nargs="+", default=[0, 1, 2], help="array: extra function parameters")
+    parser.add_argument("--rounds", type=int, help="rewrite iterations; default paper/fixture budget, not samples")
+    parser.add_argument("--kernel", nargs="+", default=list(pf.KERNELS), choices=pf.KERNELS)
+    parser.add_argument("--phase", nargs="+", default=list(pf.PHASES), choices=pf.PHASES)
+    parser.add_argument("--rules", type=int, default=44, choices=(12, 44), help="SDQL rules; 12 requires BATAX 2nd")
+
+
+def select(args):
+    if args.rounds is not None and args.rounds < 0:
+        raise ValueError("--rounds must be nonnegative")
+    if args.case and args.study not in ("all", "logic"):
+        raise ValueError("--case selects logic fixtures; use study logic or all")
+    tasks = []
+    if args.study in ("all", "array"):
+        if any(n < 0 for n in args.params):
+            raise ValueError("--params must be nonnegative")
+        tasks += [("array", n) for n in args.params]
+    if args.study in ("all", "sdql"):
+        selected = [w for w in pf.WORKLOADS if w[0] in args.kernel and w[1] in args.phase]
+        if args.rules == 12 and selected != [("batax", "2nd")]:
+            raise ValueError("--rules 12 requires --kernel batax --phase 2nd")
+        tasks += [("sdql", w) for w in selected]
+    if args.study in ("all", "logic"):
+        names = [p.stem for p in sorted(LOGIC_FIXTURES.glob("first-order-logic*.egg"))]
+        if args.case and (unknown := set(args.case) - set(names)):
+            raise ValueError(f"unknown logic cases: {', '.join(sorted(unknown))}; choose from {', '.join(names)}")
+        tasks += [("logic", name) for name in names if not args.case or name in args.case]
+    if not tasks:
+        raise ValueError("no workloads selected")
+    if len(set(tasks)) != len(tasks):
+        raise ValueError("duplicate workloads selected")
+    return [prepare(task, rounds=args.rounds, rules=args.rules) for task in tasks]

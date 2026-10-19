@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-type Engine = Literal["egglog", "egg", "egg-de", "egg-ee", "egg-nee", "egg-oee", "slotted-reference"]
+type Engine = Literal["egglog", "egg", "egg-de", "egg-ee", "egg-nee", "egg-oee"]
 type Treatment = Literal[
     "off",
     "term",
@@ -21,11 +21,6 @@ type Treatment = Literal[
     "egg-ee",
     "egg-nee",
     "egg-oee",
-    "slotted",
-    "slotted-no-aliasing",
-    "multi",
-    "nested",
-    "nested-snapshot",
 ]
 
 
@@ -61,19 +56,8 @@ TREATMENT_SPECS: dict[Treatment, TreatmentSpec] = {
     "egg-ee": TreatmentSpec("egg-ee", (), timing_summary=False),
     "egg-nee": TreatmentSpec("egg-nee", (), timing_summary=False),
     "egg-oee": TreatmentSpec("egg-oee", (), timing_summary=False),
-    # Egglog's slotted encoding.
-    "slotted": TreatmentSpec("egglog", ("--slotted",)),
-    # Egglog's slotted encoding in compatibility mode, restricting slot aliasing like the nested e-matcher.
-    "slotted-no-aliasing": TreatmentSpec("egglog", ("--slotted", "--slotted-no-aliasing")),
-    # Reference multipattern e-matcher.
-    "multi": TreatmentSpec("slotted-reference", ()),
-    # Reference nested e-matcher from the original paper, using syntactic substitution.
-    "nested": TreatmentSpec("slotted-reference", ()),
-    # Reference nested e-matcher with deterministic snapshot substitution matching egglog's substitution primitive.
-    "nested-snapshot": TreatmentSpec("slotted-reference", ()),
 }
-# Reference matchers use the slotted collector and its generated workloads.
-TREATMENTS = tuple(name for name, spec in TREATMENT_SPECS.items() if spec.engine != "slotted-reference")
+TREATMENTS = tuple(TREATMENT_SPECS)
 
 MATH_WORKLOAD_PATH = Path("egglog-experimental/tests/math-microbenchmark-rational.egg")
 PARAMETER_WORKLOAD_PATH = Path("benchmarks/disequality/parameter-analysis.egg")
@@ -83,8 +67,6 @@ def validate_engine_workload(file_spec: WorkloadFile, treatment: Treatment) -> N
     """Reject workload features unsupported by the selected treatment engine."""
 
     engine = TREATMENT_SPECS[treatment].engine
-    if engine == "slotted-reference":
-        raise ValueError("reference matcher treatments require the slotted collector")
     if engine == "egglog":
         return
     if file_spec.fact_directory is not None:

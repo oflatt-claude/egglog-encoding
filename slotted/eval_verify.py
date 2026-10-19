@@ -11,14 +11,13 @@ import subprocess
 
 import isomorphism as ISO
 from eval_observation import Comparison
-from eval_run import ROOT, SCRATCH, Config, oracle_env, quiet_progress, slotted_flags
-
-from benchmarking.reports.slotted import EXACT_PAIRS, count_issue
+from eval_run import ROOT, SCRATCH, Config, goal_errors, oracle_env, quiet_progress, slotted_flags
+from treatments import EXACT_PAIRS, SIDES, TREATMENTS
 
 
 def collect_graph(workload, row, timeout, progress=quiet_progress, *, config=None):
     """Collect a side's graph without including graph export in its measured time."""
-    if row.side.startswith("ref-"):
+    if TREATMENTS[row.side].engine == "reference":
         if row.graph_issue is None:
             reference_counts(workload.reference(row.side), row, timeout, progress, config=config)
     else:
@@ -80,6 +79,7 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
     SCRATCH.mkdir(parents=True, exist_ok=True)
     path = SCRATCH / f"eval-{name}-{os.getpid()}-counts.egg"
     jpath = path.with_suffix(".json")
+    jpath.unlink(missing_ok=True)
     path.write_text(program)
     progress(row, "counts + graph dump")
     try:
@@ -137,7 +137,14 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
 
 def compare_counts(enc, ref):
     """A cheap check of the reported sizes, independent of witness search/verification."""
-    return count_issue(enc.as_dict(""), ref.as_dict("")) or "same counts"
+    missing = False
+    for name in ("classes", "nodes"):
+        a, b = getattr(enc, name), getattr(ref, name)
+        if a is None or b is None:
+            missing = True
+        elif a != b:
+            return f"different: {name} {a} vs {b} (encoding vs reference)"
+    return "inconclusive: counts unavailable" if missing else "same counts"
 
 
 def compare(rows, progress=quiet_progress, *, search_cap=5_000):
@@ -147,11 +154,9 @@ def compare(rows, progress=quiet_progress, *, search_cap=5_000):
     Probe partitions and row counts cannot replace that obligation.
     """
     for enc in (r for r in rows if r.side in EXACT_PAIRS):
-        for ref_row in (r for r in rows if r.side.startswith("ref-")):
+        for ref_row in (r for r in rows if TREATMENTS[r.side].engine == "reference"):
             progress(enc, f"isomorphism vs {ref_row.side}")
-            enc.vs_ref[ref_row.side] = Comparison(
-                enc.observation, ref_row.observation, compare_graphs(enc, ref_row, search_cap=search_cap)
-            )
+            enc.vs_ref[ref_row.side] = Comparison(enc, ref_row, compare_graphs(enc, ref_row, search_cap=search_cap))
     progress(None, "idle")
 
 
@@ -174,3 +179,47 @@ def compare_graphs(enc, reference, *, search_cap=5_000):
         return f"different: {why}"
     except (ISO.IsomorphismLimit, RecursionError) as exc:
         return f"inconclusive: {exc}"
+
+
+def assess(rows, sides=SIDES):
+    """Require goals and both exact pairs; keep other comparisons diagnostic.
+
+    Reference timeouts are explicitly unverified. They cannot excuse unhealthy
+    encoding evidence or any known mismatch, including counts emitted before a
+    reference dump timed out.
+    """
+    if not rows:
+        return [], ["No results."]
+    by_side = {row.side: row for row in rows}
+    unsupported = rows[0].unsupported
+    errors = goal_errors(rows)
+    for side in sides:
+        if side not in unsupported and side not in by_side:
+            errors.append(f"missing {side} observation")
+    comparisons = []
+    for encoding, required in EXACT_PAIRS.items():
+        if encoding not in sides or encoding in unsupported or encoding not in by_side:
+            continue
+        enc = by_side[encoding]
+        for side in sides:
+            if side in unsupported or (side != required and side not in enc.vs_ref):
+                continue
+            ref = by_side.get(side)
+            counts = compare_counts(enc, ref) if ref is not None else "same counts"
+            verdict = counts if counts != "same counts" else enc.verdict(ref)
+            if verdict == "isomorphic" and (enc.graph_issue or ref.graph_issue):
+                verdict = "inconclusive: " + (enc.graph_issue or ref.graph_issue)
+            reference_timeout = ref is not None and (
+                ref.goal == "timeout" or ref.graph_issue == "reference graph dump exceeded timeout"
+            )
+            skipped = (
+                reference_timeout
+                and verdict.startswith("inconclusive:")
+                and enc.graph_issue is None
+                and enc.classes is not None
+                and enc.nodes is not None
+            )
+            comparisons.append((encoding, side, "not compared: reference timeout" if skipped else verdict))
+            if side == required and verdict != "isomorphic" and not skipped:
+                errors.append(f"{encoding} vs {side}: {verdict}")
+    return comparisons, errors
