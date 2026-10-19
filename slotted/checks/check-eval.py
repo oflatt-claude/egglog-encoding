@@ -529,7 +529,7 @@ def separate_timing_and_graph_runs():
             (row,) = E.collect_workload(workload, args, sides, CHECK_CONFIG, run.quiet_progress)
         assert process.call_count == 1
         assert row.graph_issue and row.classes is None and row.nodes is None
-        assert not successful([row], sides, True)
+        assert successful([row], sides, True) == isinstance(failed, subprocess.TimeoutExpired)
 
 
 def main():

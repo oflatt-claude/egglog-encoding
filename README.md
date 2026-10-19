@@ -438,7 +438,8 @@ measured into and a failed run publishes no page.
 Slotted observations and correctness evidence are stored in the same `index.jsonl`.
 The slotted tables require raw class/node counts and verified isomorphism for
 egglog/ref-multi and egglog-no-aliasing/ref-nested-snapshot. Failures and missing
-evidence appear in an error block below the timings. Timed-out runs display `timeout`
+evidence appear in an error block below the timings. Reference timeouts leave
+comparisons unverified without an error banner. Timed-out runs display `timeout`
 instead of a completed-run time. Nightly slotted processes use a 150-second timeout
 (`--slotted-timeout` to override); local `./bench.py slotted` runs default to 300 seconds.
 

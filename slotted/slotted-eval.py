@@ -16,7 +16,8 @@ Workload generation is in eval_workloads; subprocess timing is in eval_run.
 Graph export, raw counts, and verified isomorphism checks are in eval_verify.
 The exact pairs are encoding/ref-multi and encoding-no-aliasing/ref-nested-snapshot;
 ref-nested keeps the paper's syntactic substitution as a timing baseline.
-Missing evidence fails the correctness gate. --no-counts opts into timing/goals only.
+Missing evidence fails the correctness gate, except when a reference times out.
+Those comparisons remain unverified. --no-counts opts into timing/goals only.
 
 All observations share the proof benchmark's ReportStore through eval_cache;
 benchmarking.reports.slotted builds the same tables and checks for the CLI and nightly.

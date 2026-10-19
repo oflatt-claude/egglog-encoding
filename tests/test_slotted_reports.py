@@ -23,7 +23,7 @@ from benchmarking.reports.interactive_runtime import InteractiveRuntime, scope_f
 from benchmarking.reports.slotted import ERROR_TITLE, EXACT_PAIRS, SIDES, select_slotted_records, slotted_report
 from benchmarking.reports.store import ReportStore, serialize_grouped_report
 
-from .report_fixtures import make_endpoint, make_record
+from .report_fixtures import make_endpoint, make_record, make_timing_summary
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -162,6 +162,44 @@ def test_timeout_cells_show_the_outcome_in_cli_and_nightly(tmp_path: Path) -> No
     # Keep elapsed time in the cache and cell data, but don't print it as a result.
     assert cache.store.records[0]["wall_sec"] == 300.125
     assert table.rows[0].cells[1].raw == 300.125
+
+
+@pytest.mark.parametrize("encoding,reference", EXACT_PAIRS.items())
+@pytest.mark.parametrize("phase", ["timed run", "graph dump"])
+def test_reference_timeouts_leave_comparisons_unverified_without_error_banners(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], encoding: str, reference: str, phase: str
+) -> None:
+    cache, _, _, task, rows = _case(tmp_path)
+    enc, ref = (next(row for row in rows if row.side == side) for side in (encoding, reference))
+    ref.goal = "timeout" if phase == "timed run" else "yes"
+    ref.classes = ref.nodes = None
+    ref.graph_issue = f"reference {phase} exceeded timeout"
+    observation = importlib.import_module("eval_observation")
+    enc.vs_ref[reference] = observation.Comparison(enc.observation, ref.observation, "inconclusive: counts unavailable")
+    records = cache.append(task, rows)
+    report = slotted_report(records)
+    assert not report.errors
+    assert "not compared: reference timeout" in str(report.catalog)
+    assert ERROR_TITLE not in str(report.catalog)
+    evaluator = importlib.import_module("slotted.slotted-eval")
+    assert evaluator.main(["--from", str(cache.store.path)]) == 0
+    assert ERROR_TITLE not in capsys.readouterr().out
+
+    # A reference timeout cannot excuse an encoding failure or a known mismatch.
+    encoding_evidence = next(r["slotted"] for r in records if r["slotted"]["side"] == encoding)
+    reference_evidence = next(r["slotted"] for r in records if r["slotted"]["side"] == reference)
+    encoding_evidence["graph_issue"] = "encoding graph unreadable"
+    assert slotted_report(records).errors
+    encoding_evidence["graph_issue"] = None
+    encoding_evidence["nodes"] = None
+    assert slotted_report(records).errors
+    encoding_evidence["nodes"] = enc.nodes
+    reference_evidence["classes"] = enc.classes
+    reference_evidence["nodes"] = enc.nodes + 1
+    assert "different: nodes" in str(slotted_report(records).errors)
+    reference_evidence["nodes"] = enc.nodes
+    encoding_evidence["vs_ref"][reference]["verdict"] = "different: symmetry groups"
+    assert "different: symmetry groups" in str(slotted_report(records).errors)
 
 
 def test_unsupported_treatments_are_distinct_from_missing_comparisons(tmp_path: Path) -> None:
@@ -309,7 +347,7 @@ def test_reused_diagnostic_certificates_are_checked_against_selected_observation
     assert isinstance(table, ReportTable)
     comparisons = {row.cells[2].display: row.cells[3].display for row in table.rows if row.cells[1].display == "egglog"}
     assert comparisons["ref-multi"] == "isomorphic"
-    assert comparisons["ref-nested"] == "inconclusive: selected observations have not been compared"
+    assert comparisons["ref-nested"] == "not compared: reference timeout"
 
 
 @pytest.mark.parametrize("encoding,reference", EXACT_PAIRS.items())
@@ -341,11 +379,11 @@ def test_unsuccessful_goals_keep_elapsed_time_separate(tmp_path: Path, outcome: 
     cache, _, _, task, rows = _case(tmp_path)
     rows[-1].goal = outcome
     report = slotted_report(cache.append(task, rows))
-    assert f"goal not reached ({outcome})" in str(report.errors)
+    assert bool(report.errors) == (outcome != "timeout")
     nested = report.catalog.sections[0].blocks[1]
     assert isinstance(nested, ReportTable)
     assert nested.rows[0].cells[-1].display == display
-    assert slotted_report(cache.store.records, counts=False).errors
+    assert bool(slotted_report(cache.store.records, counts=False).errors) == (outcome != "timeout")
 
 
 def test_missing_instrumentation_is_unavailable_but_wall_times_remain_comparable(tmp_path: Path) -> None:
@@ -365,14 +403,23 @@ def test_missing_instrumentation_is_unavailable_but_wall_times_remain_comparable
     grouped = cache.store.grouped_report()
     analysis = analyze_pair(grouped, comparison, "rulesets")
     assert analysis.files[0].ratio.estimate.point == 4
-    assert analysis.timing[1].issue == "phase timings unavailable"
-    assert analysis.timing[1].mechanism_deltas == (None,) * 6
+    assert not analysis.timing
     runtime = InteractiveRuntime(grouped, scope_for_comparison(comparison))
     payload = json.loads(json.dumps(runtime.payload()))
     phase_text = json.dumps([s for s in payload["sections"] if s["id"] in ("phases", "rulesets")])
-    assert "phase timings unavailable" in phase_text
+    assert "Phase timings are unavailable for the selected endpoints." in phase_text
     assert "Source rules shown: 0/0" not in phase_text
     assert "0%  0 ms" not in phase_text
+
+    # Actual phase data remains usable for these same treatments.
+    for record in (records[0], records[2]):
+        instrumented = copy.deepcopy(record)
+        instrumented["timing_summary"] = make_timing_summary()
+        cache.store.append(instrumented)
+    analysis = analyze_pair(cache.store.grouped_report(), comparison, "rulesets")
+    assert analysis.files[0].ratio.estimate.point == 4
+    assert analysis.timing[1].issue is None
+    assert analysis.timing[1].wall_delta_ns == 375_000_000
 
 
 def test_reference_timing_environment_ignores_debug_flags(monkeypatch: pytest.MonkeyPatch) -> None:

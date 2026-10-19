@@ -150,7 +150,7 @@ def slotted_report(
         "Elapsed seconds for completed runs, including missed goals; timeout means the time limit was reached. "
         "ref-nested uses syntactic substitution; snapshot-reference timings are diagnostic only. "
         "Each workload/budget shows its latest cached version. Parallel timings include resource contention. "
-        "Unsupported treatments are not run."
+        "Unsupported treatments are not run. Reference timeouts leave comparisons unverified without an error banner."
     )
     if not counts:
         note += " Class/node counts and isomorphism checks are disabled (--no-counts)."
@@ -205,7 +205,7 @@ def slotted_report(
                 continue
             record = selected
             evidence = record["slotted"]
-            if evidence["goal"] != "yes":
+            if evidence["goal"] != "yes" and not (side.startswith("ref-") and evidence["goal"] == "timeout"):
                 errors.append(f"{label} / {LABELS.get(side, side)}: goal not reached ({evidence['goal']}).")
             name = LABELS.get(side, side)
             identity = evidence["observation"]
@@ -219,8 +219,21 @@ def slotted_report(
                     issue = comparison_issue(evidence, None if reference is None else reference["slotted"])
                     if not counts or not evidence["counts"]:
                         issue = "counts and isomorphism checks disabled"
-                    comparisons.append(_row(report_id(identity, ref), label, name, ref, issue or "isomorphic"))
-                    if counts and ref == EXACT_PAIRS[side] and issue:
+                    reference_timeout = reference is not None and (
+                        reference["status"] == "timed-out"
+                        or reference["slotted"]["graph_issue"] == "reference graph dump exceeded timeout"
+                    )
+                    skipped = (
+                        reference_timeout
+                        and issue is not None
+                        and issue.startswith("inconclusive:")
+                        and evidence["graph_issue"] is None
+                        and evidence["classes"] is not None
+                        and evidence["nodes"] is not None
+                    )
+                    verdict = "not compared: reference timeout" if skipped else issue or "isomorphic"
+                    comparisons.append(_row(report_id(identity, ref), label, name, ref, verdict))
+                    if counts and ref == EXACT_PAIRS[side] and issue and not skipped:
                         errors.append(f"{label}: {LABELS.get(side, side)} vs {ref}: {issue}")
             provenance = f"{record['target_label'] or record['target_source']} {record['target_git_sha'][:12]}"
             if record["target_is_dirty"]:
