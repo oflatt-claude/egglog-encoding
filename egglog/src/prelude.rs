@@ -88,14 +88,14 @@
 //! - [`crate::EGraph::extract_value`] — picks the lowest-cost
 //!   representative under the default tree-additive cost model and
 //!   returns it as a [`crate::TermId`] in a [`crate::TermDag`].
-//! - [`crate::EGraph::extract_value_with_cost_model`] — same but with
-//!   a user-supplied cost model, an impl of
-//!   [`crate::extract::CostModel`].
-//! - [`crate::EGraph::extract_value_to_string`] — convenience: prints
-//!   the extracted term back as egglog-syntax text.
+//! - [`crate::EGraph::extract_best`] / [`crate::EGraph::extract_variants`] —
+//!   extract batches of roots under the default cost model.
+//! - [`crate::EGraph::extract_best_with_cost_model`] /
+//!   [`crate::EGraph::extract_variants_with_cost_model`] — do the same under a
+//!   user-supplied cost model.
 //!
 //! See the [`crate::extract`] module for the full API
-//! ([`crate::extract::Extractor`], variant extraction,
+//! ([`crate::extract::TreeExtractor`], variant extraction,
 //! sort-restricted extraction, custom cost types).
 //!
 //! To get the `(sort, Value)` pair an `extract_value` call needs in
@@ -757,7 +757,6 @@ pub fn add_sort(egraph: &mut EGraph, name: &str) -> Result<Vec<CommandOutput>, E
         name: name.to_owned(),
         presort_and_args: None,
         uf: None,
-        proof_func: None,
         container_rebuild: None,
         proof_constructors: None,
         unionable: true,
@@ -778,7 +777,7 @@ pub fn add_function(
         merge: merge.map(GenericMerge::result_only),
         hidden: false,
         let_binding: false,
-        term_constructor: None,
+        internal_view: None,
         unextractable: false,
         identity_vals: None,
         cost: None,
@@ -802,7 +801,6 @@ pub fn add_constructor(
         unextractable,
         hidden: false,
         let_binding: false,
-        term_constructor: None,
     }])
 }
 
@@ -873,12 +871,12 @@ impl<T: BaseSort> Sort for BaseSortImpl<T> {
         self.0.name()
     }
 
-    fn column_ty(&self, base_values: &BaseValues) -> ColumnTy {
-        ColumnTy::Base(base_values.get_ty::<T::Base>())
+    fn column_ty(&self, egraph: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Base(egraph.base_values().get_ty::<T::Base>())
     }
 
-    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
-        backend.base_values_mut().register_type::<T::Base>();
+    fn register_type(&self, egraph: &mut egglog_bridge::EGraph) {
+        egraph.base_values_mut().register_type::<T::Base>();
     }
 
     fn value_type(&self) -> Option<TypeId> {
@@ -954,12 +952,12 @@ impl<T: ContainerSort> Sort for ContainerSortImpl<T> {
         self.0.name()
     }
 
-    fn column_ty(&self, _base_values: &BaseValues) -> ColumnTy {
+    fn column_ty(&self, _egraph: &egglog_bridge::EGraph) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
-        backend.register_container_ty::<T::Container>();
+    fn register_type(&self, egraph: &mut egglog_bridge::EGraph) {
+        egraph.register_container_ty::<T::Container>();
     }
 
     fn value_type(&self) -> Option<TypeId> {

@@ -22,6 +22,22 @@ pub trait NumericId: Copy + Clone + PartialEq + Eq + PartialOrd + Ord + Hash + S
     }
 }
 
+/// A [`NumericId`] whose in-memory representation may be accessed atomically.
+///
+/// # Safety
+///
+/// The ID must have the same size, byte representation, and set of valid bit
+/// patterns as both `Self::Rep` and `Self::Atomic`. (The atomic type may require
+/// stricter alignment; code creating an atomic view must check that separately.)
+/// It must therefore be sound to reinterpret a sufficiently aligned initialized
+/// slice of IDs as a slice of atomic integers, provided that atomic and
+/// non-atomic accesses do not overlap.
+pub unsafe trait AtomicNumericId: NumericId {}
+
+// SAFETY: `usize` and `AtomicUsize` have the same size, byte representation,
+// and valid bit patterns.
+unsafe impl AtomicNumericId for usize {}
+
 impl NumericId for usize {
     type Rep = usize;
     type Atomic = std::sync::atomic::AtomicUsize;
@@ -149,14 +165,6 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
         self.data.get_mut(key.index()).unwrap().take()
     }
 
-    /// Remove `key` if it is the final slot in the map.
-    pub fn pop_last(&mut self, key: K) -> Option<V> {
-        if key.inc() != self.next_id() {
-            return None;
-        }
-        self.data.pop().flatten()
-    }
-
     /// Get the current mapping for `key` in the table, or insert the value
     /// returned by `f` and return a mutable reference to it.
     pub fn get_or_insert(&mut self, key: K, f: impl FnOnce() -> V) -> &mut V {
@@ -166,6 +174,10 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
 
     pub fn raw(&self) -> &[Option<V>] {
         &self.data
+    }
+
+    pub fn raw_mut(&mut self) -> &mut [Option<V>] {
+        &mut self.data
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (K, &V)> {
@@ -222,24 +234,6 @@ impl<K: NumericId, V> DenseIdMap<K, V> {
 
     pub fn is_empty(&self) -> bool {
         self.data.iter().all(|v| v.is_none())
-    }
-}
-
-impl<K: NumericId, V: Send + Sync> DenseIdMap<K, V> {
-    /// Get a parallel iterator over the entries in the table.
-    pub fn par_iter(&self) -> impl ParallelIterator<Item = (K, &V)> {
-        self.data
-            .par_iter()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_ref()?)))
-    }
-
-    /// Get a parallel iterator over mutable references to the entries in the table.
-    pub fn par_iter_mut(&mut self) -> impl ParallelIterator<Item = (K, &mut V)> {
-        self.data
-            .par_iter_mut()
-            .enumerate()
-            .filter_map(|(i, v)| Some((K::from_usize(i), v.as_mut()?)))
     }
 }
 
@@ -423,15 +417,9 @@ impl<K: NumericId, V> IdVec<K, V> {
     pub fn get(&self, key: K) -> Option<&V> {
         self.data.get(key.index())
     }
-}
 
-impl<K: NumericId, V: Send + Sync> IdVec<K, V> {
-    pub fn par_iter_mut(&mut self) -> impl IndexedParallelIterator<Item = (K, &mut V)> {
-        self.data
-            .par_iter_mut()
-            .with_max_len(1)
-            .enumerate()
-            .map(|(i, v)| (K::from_usize(i), v))
+    pub fn as_mut_slice(&mut self) -> &mut [V] {
+        &mut self.data
     }
 }
 
@@ -448,10 +436,6 @@ impl<K: NumericId, V> ops::IndexMut<K> for IdVec<K, V> {
         &mut self.data[key.index()]
     }
 }
-
-use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
-};
 
 #[macro_export]
 #[doc(hidden)]
@@ -480,6 +464,7 @@ macro_rules! define_id {
     ($v:vis $name:ident, $repr:tt, pretty $pretty_name:expr) => { define_id!($v $name, $repr, "", pretty $pretty_name); };
     ($v:vis $name:ident, $repr:tt, $doc:tt, pretty $pretty_name:tt) => {
         #[derive(Copy, Clone)]
+        #[repr(transparent)]
         #[doc = $doc]
         $v struct $name {
             rep: $repr,
@@ -547,6 +532,10 @@ macro_rules! define_id {
                 self.rep
             }
         }
+
+        // SAFETY: this ID is `repr(transparent)` over its integer
+        // representation, and `Atomic` is the corresponding atomic integer.
+        unsafe impl $crate::AtomicNumericId for $name {}
 
         impl std::fmt::Debug for $name {
             fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {

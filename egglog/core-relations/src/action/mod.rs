@@ -3,7 +3,8 @@
 //! This allows us to execute the "right-hand-side" of a rule. The
 //! implementation here is optimized to execute on a batch of rows at a time.
 use std::{
-    ops::Deref,
+    any::Any,
+    hash::Hasher,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,19 +12,24 @@ use std::{
 };
 
 use crate::{
-    common::HashMap,
-    free_join::{invoke_batch, invoke_batch_assign},
+    free_join::{get_column_index_from_tableinfo, invoke_batch, invoke_batch_assign},
     numeric_id::{DenseIdMap, NumericId},
 };
 use egglog_concurrency::NotificationList;
+use hashbrown::HashTable;
+use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 
 use crate::{
-    BaseValues, ContainerValues, ExternalFunctionId, WrappedTable,
+    BaseValues, ContainerValues, ExternalFunctionId, Offset, WrappedTable,
     common::Value,
-    free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
+    free_join::{
+        CounterId, CounterReservation, Counters, ExternalFunctions, TableId, TableInfo, Variable,
+    },
+    offsets::Subset,
     pool::{Clear, Pooled, with_pool_set},
-    table_spec::{ColumnId, MutationBuffer},
+    row_buffer::TaggedRowBuffer,
+    table_spec::{ColumnId, Constraint, MutationBuffer},
 };
 
 use self::mask::{Mask, MaskIter, ValueSource, value_source};
@@ -289,41 +295,95 @@ pub(crate) struct ExtractedBinding {
     pub(crate) vals: Pooled<Vec<Value>>,
 }
 
+#[derive(Clone, Copy)]
+struct PredictedEntry {
+    hash: u64,
+    index: usize,
+    table: TableId,
+    key_arity: u32,
+}
+
 #[derive(Default)]
 pub(crate) struct PredictedVals {
-    #[allow(clippy::type_complexity)]
-    data: HashMap<(TableId, SmallVec<[Value; 3]>), Pooled<Vec<Value>>>,
+    index: HashTable<PredictedEntry>,
+    values: Vec<Value>,
 }
 
 impl Clear for PredictedVals {
     fn reuse(&self) -> bool {
-        self.data.capacity() > 0
+        self.index.capacity() > 0 || self.values.capacity() > 0
     }
     fn clear(&mut self) {
-        self.data.clear()
+        self.index.clear();
+        self.values.clear();
     }
     fn bytes(&self) -> usize {
-        self.data.capacity()
-            * (std::mem::size_of::<(TableId, SmallVec<[Value; 3]>)>()
-                + std::mem::size_of::<Pooled<Vec<Value>>>())
+        self.index.capacity() * std::mem::size_of::<PredictedEntry>()
+            + self.values.capacity() * std::mem::size_of::<Value>()
     }
 }
 
 impl PredictedVals {
-    pub(crate) fn get_val(
+    fn hash(table: TableId, key: &[Value]) -> u64 {
+        let mut hasher = FxHasher::default();
+        hasher.write_u32(table.rep());
+        hasher.write_usize(key.len());
+        for value in key {
+            hasher.write_u32(value.rep());
+        }
+        hasher.finish()
+    }
+
+    fn row(&self, entry: PredictedEntry, row_arity: usize) -> &[Value] {
+        &self.values[entry.index..entry.index + row_arity]
+    }
+
+    fn matches(&self, entry: &PredictedEntry, hash: u64, table: TableId, key: &[Value]) -> bool {
+        if entry.hash != hash || entry.table != table || entry.key_arity as usize != key.len() {
+            return false;
+        }
+        self.values[entry.index..entry.index + key.len()] == *key
+    }
+
+    pub(crate) fn get_or_insert_with(
         &mut self,
         table: TableId,
         key: &[Value],
-        default: impl FnOnce() -> Pooled<Vec<Value>>,
-    ) -> impl Deref<Target = Pooled<Vec<Value>>> + '_ {
-        self.data
-            .entry((table, SmallVec::from_slice(key)))
-            .or_insert_with(default)
+        row_arity: usize,
+        default: impl FnOnce(&mut Vec<Value>, usize),
+    ) -> (&[Value], bool) {
+        let hash = Self::hash(table, key);
+        if let Some(entry) = self
+            .index
+            .find(hash, |entry| self.matches(entry, hash, table, key))
+            .copied()
+        {
+            return (self.row(entry, row_arity), false);
+        }
+
+        let entry = PredictedEntry {
+            hash,
+            index: self.values.len(),
+            table,
+            key_arity: u32::try_from(key.len()).expect("predicted key arity must fit in u32"),
+        };
+        self.values.reserve(row_arity);
+        let row_start = self.values.len();
+        self.values.extend_from_slice(key);
+        default(&mut self.values, row_start);
+        assert_eq!(
+            self.values.len() - row_start,
+            row_arity,
+            "predicted row builder produced the wrong arity"
+        );
+        self.index.insert_unique(hash, entry, |entry| entry.hash);
+        (self.row(entry, row_arity), true)
     }
 }
 
 #[derive(Copy, Clone)]
 pub(crate) struct DbView<'a> {
+    pub(crate) external_context: ExternalContext<'a>,
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
     pub(crate) external_funcs: &'a ExternalFunctions,
@@ -331,6 +391,16 @@ pub(crate) struct DbView<'a> {
     pub(crate) containers: &'a ContainerValues,
     pub(crate) notification_list: &'a NotificationList<TableId>,
 }
+
+/// A borrowed value an embedder can make visible to every [`ExecutionState`]
+/// created for one operation, for its [`ExternalFunction`]s to read back with
+/// [`ExecutionState::external_context`].
+///
+/// It is borrowed for exactly the operation that supplied it, so an embedder
+/// cannot mutate the state it shared while that operation runs.
+///
+/// [`ExternalFunction`]: crate::ExternalFunction
+pub type ExternalContext<'a> = Option<&'a (dyn Any + Send + Sync)>;
 
 /// A handle on a database that may be in the process of running a rule.
 ///
@@ -360,12 +430,52 @@ pub(crate) struct DbView<'a> {
 pub struct ExecutionState<'a> {
     pub(crate) predicted: PredictedVals,
     pub(crate) db: DbView<'a>,
+    counter_reservations: CounterReservations,
     buffers: MutationBuffers<'a>,
     /// Whether any mutations have been staged via this ExecutionState.
     pub(crate) changed: bool,
     /// Atomic flag for early stopping of rule execution.
     /// This flag is shared across all handles (clones) of this ExecutionState.
     stop_match: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct CounterReservations {
+    ranges: DenseIdMap<CounterId, CounterReservation>,
+}
+
+impl CounterReservations {
+    fn next(&mut self, counters: &Counters, ctr: CounterId) -> usize {
+        self.ranges
+            .get_or_insert(ctr, || counters.take_reservation(ctr))
+            .next()
+    }
+}
+
+/// Copyable query-side view of an [`ExecutionState`]. Join tasks only need
+/// immutable database access and the shared early-stop flag; an owned state is
+/// materialized lazily when an action batch actually executes.
+#[derive(Copy, Clone)]
+pub(crate) struct ExecutionStateSeed<'db, 'state> {
+    db: DbView<'db>,
+    stop_match: &'state Arc<AtomicBool>,
+}
+
+impl<'db> ExecutionStateSeed<'db, '_> {
+    pub(crate) fn to_execution_state(self) -> ExecutionState<'db> {
+        ExecutionState {
+            predicted: Default::default(),
+            db: self.db,
+            counter_reservations: Default::default(),
+            buffers: MutationBuffers::new(self.db.notification_list, Default::default()),
+            changed: false,
+            stop_match: Arc::clone(self.stop_match),
+        }
+    }
+
+    pub(crate) fn should_stop(self) -> bool {
+        self.stop_match.load(Ordering::Acquire)
+    }
 }
 
 /// A basic wrapper around an map from table id to a mutation buffer for that table that also
@@ -414,6 +524,7 @@ impl Clone for ExecutionState<'_> {
         ExecutionState {
             predicted: Default::default(),
             db: self.db,
+            counter_reservations: Default::default(),
             buffers: self.buffers.clone(),
             changed: false,
             stop_match: Arc::clone(&self.stop_match),
@@ -429,9 +540,21 @@ impl<'a> ExecutionState<'a> {
         ExecutionState {
             predicted: Default::default(),
             db,
+            counter_reservations: Default::default(),
             buffers: MutationBuffers::new(db.notification_list, buffers),
             changed: false,
             stop_match: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Borrow the immutable seed used by rule-search tasks. Rule execution
+    /// starts from an empty mutation-buffer set; action batches create their own
+    /// fresh state from this seed only when they are ready to run.
+    pub(crate) fn seed(&self) -> ExecutionStateSeed<'a, '_> {
+        debug_assert!(self.buffers.buffers.is_empty());
+        ExecutionStateSeed {
+            db: self.db,
+            stop_match: &self.stop_match,
         }
     }
 
@@ -448,10 +571,24 @@ impl<'a> ExecutionState<'a> {
     /// Stage a batch of mutations against a single table, `mutate` receiving the
     /// table's mutation buffer directly, and notify the table as changed once
     /// for the whole batch.
-    fn stage_batch(&mut self, table: TableId, mutate: impl FnOnce(&mut dyn MutationBuffer)) {
+    pub fn stage_batch(&mut self, table: TableId, mutate: impl FnOnce(&mut dyn MutationBuffer)) {
+        self.stage_batch_with_counters(table, |buffer, _, _| mutate(buffer));
+    }
+
+    /// Let lowered inserts share the execution state's counter reservations,
+    /// just like scalar mint calls, without an atomic increment for every row.
+    fn stage_batch_with_counters(
+        &mut self,
+        table: TableId,
+        mutate: impl FnOnce(&mut dyn MutationBuffer, &Counters, &mut CounterReservations),
+    ) {
         self.buffers
             .lazy_init(table, || self.db.table_info[table].table.new_buffer());
-        mutate(&mut *self.buffers.buffers[table]);
+        mutate(
+            &mut *self.buffers.buffers[table],
+            self.db.counters,
+            &mut self.counter_reservations,
+        );
         self.buffers.notify_list.notify(table);
         self.changed = true;
     }
@@ -475,8 +612,14 @@ impl<'a> ExecutionState<'a> {
         self.db.external_funcs[func].invoke(self, args)
     }
 
-    pub fn inc_counter(&self, ctr: CounterId) -> usize {
-        self.db.counters.inc(ctr)
+    /// The value the caller of this operation supplied as its
+    /// [`ExternalContext`], if any.
+    pub fn external_context(&self) -> ExternalContext<'a> {
+        self.db.external_context
+    }
+
+    pub fn inc_counter(&mut self, ctr: CounterId) -> usize {
+        self.counter_reservations.next(self.db.counters, ctr)
     }
 
     pub fn read_counter(&self, ctr: CounterId) -> usize {
@@ -488,15 +631,79 @@ impl<'a> ExecutionState<'a> {
         self.db.table_info.iter().map(|(id, _)| id)
     }
 
+    /// Return the stable identity of `table`, or `None` if it is not visible to
+    /// this execution state.
+    #[doc(hidden)]
+    pub fn table_identity(&self, table: TableId) -> Option<crate::TableIdentity> {
+        self.db.table_info.get(table).map(TableInfo::identity)
+    }
+
     /// Get an immutable reference to the table with id `table`.
     /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &'a WrappedTable {
         &self.db.table_info[table].table
     }
 
+    /// Call `f` on each visible row in `table` whose `col` equals `value`,
+    /// with the whole row as a value slice.
+    pub fn for_each_matching_col(
+        &self,
+        table: TableId,
+        col: ColumnId,
+        value: Value,
+        mut f: impl FnMut(&[Value]),
+    ) {
+        let table_info = &self.db.table_info[table];
+        let constraint = Constraint::EqConst { col, val: value };
+
+        // Same order of preference as `Database::process_constraints`, for the
+        // one equality this takes: a sort the table already has, else an index
+        // on the column if it can be cached, else the constraint applied during
+        // the scan.
+        let cacheable = !*table_info
+            .spec
+            .uncacheable_columns
+            .get(col)
+            .unwrap_or(&false);
+        let (subset, slow) = if let Some(subset) = table_info.table.fast_subset(&constraint) {
+            (subset, Vec::new())
+        } else if cacheable {
+            let index = get_column_index_from_tableinfo(table_info, col);
+            let subset = match index.get().unwrap().get_subset(&value) {
+                Some(subset) => with_pool_set(|ps| subset.to_owned(&ps.get_pool())),
+                // No rows hold this key.
+                None => Subset::empty(),
+            };
+            (subset, Vec::new())
+        } else {
+            (table_info.table.all(), vec![constraint])
+        };
+
+        let imp = &table_info.table;
+        let cols: SmallVec<[_; 8]> = (0..imp.spec().arity()).map(ColumnId::from_usize).collect();
+        let mut cur = Offset::new(0);
+        let mut buf = TaggedRowBuffer::new_inline(imp.spec().arity());
+
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.iter() {
+                    f(row);
+                }
+                $buf.clear();
+            };
+        }
+
+        while let Some(next) = imp.scan_project(subset.as_ref(), &cols, cur, 1024, &slow, &mut buf)
+        {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
+    }
+
     /// Get the human-readable name for a table, if one exists.
     pub fn table_name(&self, table: TableId) -> Option<&'a str> {
-        self.db.table_info[table].name()
+        self.db.table_info.get(table).and_then(TableInfo::name)
     }
 
     pub fn base_values(&self) -> &'a BaseValues {
@@ -525,44 +732,31 @@ impl<'a> ExecutionState<'a> {
         if let Some(row) = self.db.table_info[table].table.get_row(key) {
             return row.vals;
         }
-        Pooled::cloned(
+        let row_arity = key.len() + vals.len();
+        let counters = self.db.counters;
+        let counter_reservations = &mut self.counter_reservations;
+        let (row, inserted) =
             self.predicted
-                .get_val(table, key, || {
-                    Self::construct_new_row(
-                        &self.db,
-                        &mut self.buffers,
-                        &mut self.changed,
-                        table,
-                        key,
-                        vals,
-                    )
-                })
-                .deref(),
-        )
-    }
-
-    fn construct_new_row(
-        db: &DbView,
-        buffers: &mut MutationBuffers,
-        changed: &mut bool,
-        table: TableId,
-        key: &[Value],
-        vals: impl ExactSizeIterator<Item = MergeVal>,
-    ) -> Pooled<Vec<Value>> {
+                .get_or_insert_with(table, key, row_arity, |values, _| {
+                    for val in vals {
+                        values.push(match val {
+                            MergeVal::Counter(ctr) => {
+                                Value::from_usize(counter_reservations.next(counters, ctr))
+                            }
+                            MergeVal::Constant(c) => c,
+                        });
+                    }
+                });
+        if inserted {
+            self.buffers
+                .lazy_init(table, || self.db.table_info[table].table.new_buffer());
+            self.buffers.stage_insert(table, row);
+            self.changed = true;
+        }
         with_pool_set(|ps| {
-            let mut new = ps.get::<Vec<Value>>();
-            new.reserve(key.len() + vals.len());
-            new.extend_from_slice(key);
-            for val in vals {
-                new.push(match val {
-                    MergeVal::Counter(ctr) => Value::from_usize(db.counters.inc(ctr)),
-                    MergeVal::Constant(c) => c,
-                })
-            }
-            buffers.lazy_init(table, || db.table_info[table].table.new_buffer());
-            buffers.stage_insert(table, &new);
-            *changed = true;
-            new
+            let mut result = ps.get::<Vec<Value>>();
+            result.extend_from_slice(row);
+            result
         })
     }
 
@@ -578,16 +772,28 @@ impl<'a> ExecutionState<'a> {
         if let Some(val) = self.db.table_info[table].table.get_row_column(key, col) {
             return val;
         }
-        self.predicted.get_val(table, key, || {
-            Self::construct_new_row(
-                &self.db,
-                &mut self.buffers,
-                &mut self.changed,
-                table,
-                key,
-                vals,
-            )
-        })[col.index()]
+        let row_arity = key.len() + vals.len();
+        let counters = self.db.counters;
+        let counter_reservations = &mut self.counter_reservations;
+        let (row, inserted) =
+            self.predicted
+                .get_or_insert_with(table, key, row_arity, |values, _| {
+                    for val in vals {
+                        values.push(match val {
+                            MergeVal::Counter(ctr) => {
+                                Value::from_usize(counter_reservations.next(counters, ctr))
+                            }
+                            MergeVal::Constant(c) => c,
+                        });
+                    }
+                });
+        if inserted {
+            self.buffers
+                .lazy_init(table, || self.db.table_info[table].table.new_buffer());
+            self.buffers.stage_insert(table, row);
+            self.changed = true;
+        }
+        row[col.index()]
     }
 
     /// Trigger early stopping by setting the stop_match flag.
@@ -610,7 +816,7 @@ impl<'a> ExecutionState<'a> {
 /// instruction.
 type RowScratch = SmallVec<[Value; 12]>;
 
-/// Where each column of a row comes from: one entry per element of `args`, in
+/// Where each column of a row comes from: one entry per element of `vals`, in
 /// order.
 ///
 /// A variable's entry borrows its whole binding slice, so [`gather_row`] indexes
@@ -618,22 +824,88 @@ type RowScratch = SmallVec<[Value; 12]>;
 /// the lanes come from; a shorter one panics rather than silently truncating the
 /// batch.
 fn row_sources<'a>(
-    args: &[QueryEntry],
+    vals: impl IntoIterator<Item = WriteVal>,
     bindings: &'a Bindings,
-) -> SmallVec<[ValueSource<'a, Value>; 12]> {
-    args.iter()
-        .map(|entry| value_source(entry, bindings))
+) -> SmallVec<[WriteSource<'a>; 12]> {
+    vals.into_iter()
+        .map(|val| match val {
+            WriteVal::QueryEntry(entry) => WriteSource::Value(value_source(&entry, bindings)),
+            WriteVal::IncCounter(ctr) => WriteSource::Counter(ctr),
+            WriteVal::CurrentVal(col) => WriteSource::Current(col),
+        })
         .collect()
+}
+
+/// One column's source within [`row_sources`]. `Counter` and `Current` are
+/// per-row: a counter yields a fresh value for every lane, and `Current` copies
+/// a column written earlier in the same row.
+enum WriteSource<'a> {
+    Value(ValueSource<'a, Value>),
+    Counter(CounterId),
+    Current(usize),
 }
 
 /// Overwrite `out` with lane `idx` of `sources`. Panics if any source slice is
 /// shorter than `idx + 1` (see [`row_sources`]).
-fn gather_row(sources: &[ValueSource<'_, Value>], idx: usize, out: &mut RowScratch) {
+fn gather_row(
+    sources: &[WriteSource<'_>],
+    counters: &Counters,
+    reservations: &mut CounterReservations,
+    idx: usize,
+    out: &mut RowScratch,
+) {
     out.clear();
-    out.extend(sources.iter().map(|source| source.at(idx)));
+    for source in sources {
+        let val = match source {
+            WriteSource::Value(source) => source.at(idx),
+            WriteSource::Counter(ctr) => Value::from_usize(reservations.next(counters, *ctr)),
+            WriteSource::Current(col) => out[*col],
+        };
+        out.push(val);
+    }
 }
 
 impl ExecutionState<'_> {
+    /// Stage one row per live lane into `table`.
+    fn stage_rows(&mut self, table: TableId, vals: &[WriteVal], mask: &Mask, bindings: &Bindings) {
+        let sources = row_sources(vals.iter().copied(), bindings);
+        let mut row = RowScratch::new();
+        self.stage_batch_with_counters(table, |buf, counters, reservations| {
+            for idx in mask.ones() {
+                gather_row(&sources, counters, reservations, idx, &mut row);
+                buf.stage_insert(&row);
+            }
+        });
+    }
+
+    /// [`ExecutionState::stage_rows`], also binding column `col` of each staged
+    /// row to `dst`. Kept separate so the common unbound insert stays a tight
+    /// gather-and-stage loop.
+    fn stage_rows_binding(
+        &mut self,
+        table: TableId,
+        vals: &[WriteVal],
+        col: ColumnId,
+        dst: Variable,
+        mask: &Mask,
+        bindings: &mut Bindings,
+    ) {
+        let mut out = with_pool_set(|ps| ps.get::<Vec<Value>>());
+        out.resize(bindings.matches, Value::stale());
+        {
+            let sources = row_sources(vals.iter().copied(), bindings);
+            let mut row = RowScratch::new();
+            self.stage_batch_with_counters(table, |buf, counters, reservations| {
+                for idx in mask.ones() {
+                    gather_row(&sources, counters, reservations, idx, &mut row);
+                    buf.stage_insert(&row);
+                    out[idx] = row[col.index()];
+                }
+            });
+        }
+        bindings.insert(dst, &out);
+    }
+
     /// Returns the number of matches that make it to the end of the instructions
     pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) -> usize {
         if bindings.var_offsets.next_id().rep() == 0 {
@@ -685,7 +957,6 @@ impl ExecutionState<'_> {
                 dst_col,
                 dst_var,
             } => {
-                let pool = with_pool_set(|ps| ps.get_pool::<Vec<Value>>().clone());
                 self.buffers.lazy_init(*table_id, || {
                     self.db.table_info[*table_id].table.new_buffer()
                 });
@@ -699,6 +970,9 @@ impl ExecutionState<'_> {
                     return;
                 }
                 let mut out = bindings.take(*dst_var).unwrap();
+                // Only a lane that adds a new prediction stages a row, so
+                // notify once for the batch, and only if one did.
+                let predicted_before = self.predicted.index.len();
                 for_each_binding_with_mask!(mask_copy, args.as_slice(), bindings, |iter| {
                     iter.assign_vec(&mut out.vals, |offset, key| {
                         // First, check if the entry is already in the table:
@@ -709,45 +983,43 @@ impl ExecutionState<'_> {
                         //
                         // We avoid doing this more than once by using the
                         // `predicted` map.
-                        let prediction_key = (
-                            *table_id,
-                            SmallVec::<[Value; 3]>::from_slice(key.as_slice()),
-                        );
                         let buffers = &mut self.buffers;
                         // Bind some mutable references because the closure passed
                         // to or_insert_with is `move`.
-                        let ctrs = &self.db.counters;
+                        let ctrs = self.db.counters;
+                        let counter_reservations = &mut self.counter_reservations;
                         let bindings = &bindings;
-                        let pool = pool.clone();
-                        let row =
-                            self.predicted
-                                .data
-                                .entry(prediction_key)
-                                .or_insert_with(move || {
-                                    let mut row = pool.get();
-                                    row.extend_from_slice(key.as_slice());
-                                    // Extend the key with the default values.
-                                    row.reserve(default.len());
-                                    for val in default {
-                                        let val = match val {
-                                            WriteVal::QueryEntry(QueryEntry::Const(c)) => *c,
-                                            WriteVal::QueryEntry(QueryEntry::Var(v)) => {
-                                                bindings[*v][offset]
-                                            }
-                                            WriteVal::IncCounter(ctr) => {
-                                                Value::from_usize(ctrs.inc(*ctr))
-                                            }
-                                            WriteVal::CurrentVal(ix) => row[*ix],
-                                        };
-                                        row.push(val)
-                                    }
-                                    // Insert it into the table.
-                                    buffers.stage_insert(*table_id, &row);
-                                    row
-                                });
+                        let row_arity = key.as_slice().len() + default.len();
+                        let (row, inserted) = self.predicted.get_or_insert_with(
+                            *table_id,
+                            key.as_slice(),
+                            row_arity,
+                            |values, row_start| {
+                                // Extend the key with the default values.
+                                for val in default {
+                                    let val = match val {
+                                        WriteVal::QueryEntry(QueryEntry::Const(c)) => *c,
+                                        WriteVal::QueryEntry(QueryEntry::Var(v)) => {
+                                            bindings[*v][offset]
+                                        }
+                                        WriteVal::IncCounter(ctr) => {
+                                            Value::from_usize(counter_reservations.next(ctrs, *ctr))
+                                        }
+                                        WriteVal::CurrentVal(ix) => values[row_start + *ix],
+                                    };
+                                    values.push(val)
+                                }
+                            },
+                        );
+                        if inserted {
+                            buffers.buffers[*table_id].stage_insert(row);
+                        }
                         row[dst_col.index()]
                     });
                 });
+                if self.predicted.index.len() != predicted_before {
+                    self.buffers.notify_list.notify(*table_id);
+                }
                 bindings.replace(out);
             }
             Instr::LookupWithDefault {
@@ -809,16 +1081,10 @@ impl ExecutionState<'_> {
                 lookup_result.union(&to_call_func);
                 *mask = lookup_result;
             }
-            Instr::Insert { table, vals } => {
-                let sources = row_sources(vals, bindings);
-                let mut row = RowScratch::new();
-                self.stage_batch(*table, |buf| {
-                    for idx in mask.ones() {
-                        gather_row(&sources, idx, &mut row);
-                        buf.stage_insert(&row);
-                    }
-                });
-            }
+            Instr::Insert { table, vals, bind } => match *bind {
+                None => self.stage_rows(*table, vals, mask, bindings),
+                Some((col, dst)) => self.stage_rows_binding(*table, vals, col, dst, mask, bindings),
+            },
             Instr::InsertIfEq { table, l, r, vals } => match (l, r) {
                 (QueryEntry::Var(v1), QueryEntry::Var(v2)) => {
                     for_each_binding_with_mask!(mask, vals.as_slice(), bindings, |iter| {
@@ -851,11 +1117,15 @@ impl ExecutionState<'_> {
                 }
             },
             Instr::Remove { table, args } => {
-                let sources = row_sources(args, bindings);
+                let sources: SmallVec<[_; 12]> = args
+                    .iter()
+                    .map(|entry| value_source(entry, bindings))
+                    .collect();
                 let mut row = RowScratch::new();
                 self.stage_batch(*table, |buf| {
                     for idx in mask.ones() {
-                        gather_row(&sources, idx, &mut row);
+                        row.clear();
+                        row.extend(sources.iter().map(|source| source.at(idx)));
                         buf.stage_remove(&row);
                     }
                 });
@@ -970,11 +1240,16 @@ pub(crate) enum Instr {
         dst_var: Variable,
     },
 
-    /// Insert the given return value value with the provided arguments into the
-    /// table.
+    /// Stage one row per lane into `table`, one column per entry of `vals`.
+    ///
+    /// A [`WriteVal::IncCounter`] column mints a fresh value for every lane, so
+    /// this also covers the term encoding's `mint-<Relation>!`: `bind` names the
+    /// column holding the minted id and the variable to bind it to.
     Insert {
         table: TableId,
-        vals: Vec<QueryEntry>,
+        vals: Vec<WriteVal>,
+        /// Bind this column of each staged row to a variable.
+        bind: Option<(ColumnId, Variable)>,
     },
 
     /// Insert `vals` into `table` if `l` and `r` are equal.

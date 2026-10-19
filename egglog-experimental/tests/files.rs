@@ -1,6 +1,12 @@
 use std::{collections::HashSet, path::PathBuf};
 
-use egglog::{ast::sanitize_internal_names, file_supports_proofs_with_egraph};
+use egglog::file_supports_proofs_with_egraph;
+use egglog::{
+    CommandOutput, Error,
+    ast::{Command, Expr, sanitize_internal_names},
+    extract::TreeCostModelFromDag,
+    span,
+};
 use egglog_experimental::*;
 use libtest_mimic::Trial;
 
@@ -9,6 +15,9 @@ struct Run {
     path: PathBuf,
     desugar: bool,
     proof_testing: bool,
+    /// Compare stable command output, including the appended table sizes,
+    /// between the ordinary and proof-testing runs.
+    snapshot_across_treatments: bool,
 }
 
 impl Run {
@@ -44,18 +53,30 @@ impl Run {
             )
         };
 
-        if self.proof_testing {
-            match result {
-                Ok(outputs) => {
+        match result {
+            Ok(outputs) => {
+                if self.proof_testing {
                     let snapshot = CommandOutput::snapshot_proofs_only(&outputs);
                     if !snapshot.is_empty() {
                         insta::assert_snapshot!(self.snapshot_name(), snapshot);
                     }
                 }
-                Err(err_msg) => {
-                    panic!("proof fixture failed: {err_msg}");
+
+                if self.snapshot_across_treatments {
+                    let snapshot = if self.proof_testing {
+                        CommandOutput::snapshot_non_proof_stable_under_proof_encoding(&outputs)
+                    } else {
+                        CommandOutput::snapshot_stable_under_proof_encoding(&outputs)
+                    };
+                    if !snapshot.is_empty() {
+                        insta::assert_snapshot!(self.snapshot_name_across_treatments(), snapshot);
+                    }
                 }
             }
+            Err(err_msg) if self.proof_testing => {
+                panic!("proof fixture failed: {err_msg}");
+            }
+            Err(_) => {}
         }
     }
 
@@ -74,7 +95,21 @@ impl Run {
         message: &str,
     ) -> Result<Vec<CommandOutput>, String> {
         let mut egraph = self.egraph();
-        match egraph.parse_and_run_program(filename, program) {
+        // Match the main file harness: table sizes are part of the output that
+        // must remain stable under proof encoding.
+        let program = if self.snapshot_across_treatments {
+            format!("{program}\n(print-size)")
+        } else {
+            program.to_owned()
+        };
+        let result = if self.proof_testing {
+            egraph.parse_and_run_program(filename, &program)
+        } else {
+            egraph
+                .parse_program(filename, &program)
+                .and_then(|program| run_program_with_extract_checks(&mut egraph, program))
+        };
+        match result {
             Ok(outputs) => {
                 if self.should_fail() {
                     panic!(
@@ -151,15 +186,189 @@ impl Run {
         self.name().to_string()
     }
 
+    fn snapshot_name_across_treatments(&self) -> String {
+        let stem = self.path.file_stem().unwrap();
+        let stem = stem.to_string_lossy().replace(['.', '-', ' '], "_");
+        format!("shared_snapshot_{stem}")
+    }
+
     fn should_fail(&self) -> bool {
         self.path.to_string_lossy().contains("fail-typecheck")
+    }
+}
+
+fn run_program_with_extract_checks(
+    egraph: &mut EGraph,
+    program: Vec<Command>,
+) -> Result<Vec<CommandOutput>, Error> {
+    let mut outputs = Vec::new();
+
+    for command in program {
+        let extract = extract_command_parts(&command);
+        // Validate from the same pre-command state without letting test
+        // instrumentation mutate the program's real e-graph.
+        let mut validation_egraph = extract.as_ref().map(|_| egraph.clone());
+        let command_outputs = egraph.run_program(vec![command])?;
+
+        let Some(extract) = extract else {
+            outputs.extend(command_outputs);
+            continue;
+        };
+
+        validate_extract_outputs(
+            validation_egraph.as_mut().unwrap(),
+            &extract,
+            &command_outputs,
+        )?;
+        outputs.extend(command_outputs);
+    }
+
+    Ok(outputs)
+}
+
+struct ExtractCheck {
+    root: Expr,
+    variants: Option<Expr>,
+    use_greedy_dag: bool,
+}
+
+fn extract_command_parts(command: &Command) -> Option<ExtractCheck> {
+    match command {
+        Command::UserDefined(_, name, args) if name == "extract" => {
+            let use_greedy_dag = matches!(
+                args.last_chunk::<2>(),
+                Some([Expr::Var(_, keyword), Expr::Var(..)]) if keyword == ":extractor"
+            );
+            let positional = if use_greedy_dag {
+                args.get(..args.len() - 2)?
+            } else {
+                args
+            };
+            match positional {
+                [root] => Some(ExtractCheck {
+                    root: root.clone(),
+                    variants: None,
+                    use_greedy_dag,
+                }),
+                [root, variants] => Some(ExtractCheck {
+                    root: root.clone(),
+                    variants: Some(variants.clone()),
+                    use_greedy_dag,
+                }),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn validate_extract_outputs(
+    egraph: &mut EGraph,
+    extract: &ExtractCheck,
+    requested_outputs: &[CommandOutput],
+) -> Result<(), Error> {
+    // Evaluate the potentially stateful root exactly once, then invoke the
+    // opposite extractor directly so both algorithms see that same value.
+    let (root_sort, root_value) = egraph.eval_expr(&extract.root)?;
+    let nvariants = if let Some(variants) = &extract.variants {
+        let (_, value) = egraph.eval_expr(variants)?;
+        usize::try_from(egraph.value_to_base::<i64>(value)).map_err(|_| {
+            Error::ExtractError("extract variant count must be nonnegative".to_owned())
+        })?
+    } else {
+        0
+    };
+
+    let requested_exprs = extracted_exprs(requested_outputs)?;
+    let roots = vec![(root_sort.clone(), root_value)];
+    let paired_exprs = if nvariants == 0 {
+        let extracted = if extract.use_greedy_dag {
+            egraph.extract_best_with_cost_model(roots, TreeCostModelFromDag(DynamicCostModel))?
+        } else {
+            extract_best_greedy_dag(egraph, roots, DynamicCostModel)?
+        };
+        let root = extracted
+            .terms
+            .into_iter()
+            .next()
+            .expect("one root was requested")
+            .ok_or_else(|| Error::ExtractError("paired extractor returned no term".to_owned()))?;
+        vec![extracted.termdag.term_to_expr(&root.term, span!())]
+    } else {
+        let extracted = if extract.use_greedy_dag {
+            egraph.extract_variants_with_cost_model(
+                roots,
+                nvariants,
+                TreeCostModelFromDag(DynamicCostModel),
+            )?
+        } else {
+            extract_variants_greedy_dag(egraph, roots, nvariants, DynamicCostModel)?
+        };
+        let variants = extracted
+            .variants
+            .into_iter()
+            .next()
+            .expect("one root was requested");
+        variants
+            .into_iter()
+            .map(|variant| extracted.termdag.term_to_expr(&variant.term, span!()))
+            .collect()
+    };
+
+    if requested_exprs.is_empty() != paired_exprs.is_empty() {
+        return Err(Error::ExtractError(
+            "only one extractor returned variants for the requested root".to_owned(),
+        ));
+    }
+
+    for extracted_expr in requested_exprs.iter().chain(&paired_exprs) {
+        let (extracted_sort, extracted_value) = egraph.eval_expr(extracted_expr)?;
+        if root_sort.name() != extracted_sort.name() || root_value != extracted_value {
+            return Err(Error::ExtractError(format!(
+                "extractor returned a term unequal to the requested root: root {:?}, extracted {extracted_expr:?}",
+                extract.root
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn extracted_exprs(outputs: &[CommandOutput]) -> Result<Vec<Expr>, Error> {
+    let mut saw_extract = false;
+    let mut extracted = Vec::new();
+    for output in outputs {
+        match output {
+            CommandOutput::ExtractBest(termdag, _cost, term) => {
+                extracted.push(termdag.term_to_expr(term, span!()));
+                saw_extract = true;
+            }
+            CommandOutput::ExtractVariants(termdag, terms) => {
+                for term in terms {
+                    extracted.push(termdag.term_to_expr(term, span!()));
+                }
+                saw_extract = true;
+            }
+            _ => {}
+        }
+    }
+    if saw_extract {
+        Ok(extracted)
+    } else {
+        Err(Error::ExtractError(
+            "extract command should produce an extract output".to_owned(),
+        ))
     }
 }
 
 fn generate_tests(glob: &str) -> Vec<Trial> {
     let mut trials = vec![];
     let mut push_trial = |run: Run| trials.push(run.into_trial());
-    let skipped_files = ["math-backoff.egg"];
+    let skipped_files = [
+        "math-backoff.egg",
+        // The bounded paper test checks the iteration witness and full proof.
+        "math-microbenchmark-rational.egg",
+    ];
 
     for entry in glob::glob(glob).unwrap() {
         let path = entry.unwrap();
@@ -171,6 +380,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             path: path.clone(),
             desugar: false,
             proof_testing: false,
+            snapshot_across_treatments: false,
         };
         if skipped_files.iter().any(|file| run.path.ends_with(file)) {
             continue;
@@ -178,6 +388,11 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let should_fail = run.should_fail();
         let supports_proofs = !should_fail
             && file_supports_proofs_with_egraph(&run.path, new_experimental_egraph_for_proofs());
+        let run = Run {
+            // A shared snapshot needs both an ordinary and proof-testing trial.
+            snapshot_across_treatments: supports_proofs && !run.requires_proofs() && !is_fixture,
+            ..run
+        };
 
         if !run.requires_proofs() && !is_fixture {
             push_trial(run.clone());

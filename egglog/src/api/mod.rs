@@ -32,10 +32,17 @@ use thiserror::Error;
 ///
 /// These signal a misuse the API can detect at runtime — wrong table
 /// subtype, wrong arity, mismatched column sorts, etc. They are *not*
-/// egglog typecheck errors and *not* backend / e-graph failures; for
+/// egglog typecheck errors and *not* general e-graph failures; for
 /// those, see [`enum@crate::Error`].
 #[derive(Debug, Error)]
 pub enum ApiError {
+    /// The execution was created without the e-graph's declarations, so a
+    /// table's signature cannot be resolved. Distinct from a missing table:
+    /// nothing was looked up.
+    #[error(
+        "declarations are not available in this execution, so the signature of `{name}` cannot be read"
+    )]
+    SchemasUnavailable { name: String },
     #[error("no table named `{name}` is registered")]
     MissingTable { name: String },
 

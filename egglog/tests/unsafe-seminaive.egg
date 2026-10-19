@@ -5,8 +5,8 @@
 ;
 ; It is unsafe: a read on a seminaive RHS observes the database
 ; mid-iteration, so results can depend on evaluation order. It's also a
-; direct-backend feature — the term/proof encoding rejects it, so this
-; file only runs on the default backend.
+; direct-execution feature — the term/proof encoding rejects it, so this
+; file only runs without term/proof encoding.
 
 (function f (i64) i64 :merge (max old new))
 (set (f 1) 100)

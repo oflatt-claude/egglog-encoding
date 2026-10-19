@@ -1,97 +1,59 @@
+use egglog_experimental::DisequalityEncoding;
 use std::ffi::OsString;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Backend {
-    Main,
-    #[cfg(feature = "dd-backend")]
-    Dd,
-}
-
 fn main() {
-    let (backend, args) = extract_backend_arg(std::env::args_os()).unwrap_or_else(|err| {
-        eprintln!("error: {err}");
+    let (encoding, args) = extension_args(std::env::args_os()).unwrap_or_else(|error| {
+        eprintln!("error: {error}");
         std::process::exit(2);
     });
-    let proof_mode = args.iter().any(|arg| {
+    let options: Vec<_> = args.iter().skip(1).take_while(|arg| *arg != "--").collect();
+    if options.iter().any(|arg| *arg == "--help" || *arg == "-h") {
+        println!(
+            "Experimental options:\n  --disequality-encoding <nee|ee>  Disequality encoding [default: nee]\n"
+        );
+    }
+    let proof_mode = options.iter().any(|arg| {
         matches!(
             arg.to_str(),
             Some("--proofs" | "--proof-testing" | "--proof-extraction" | "--term-encoding")
         )
     });
-    #[cfg(feature = "dd-backend")]
-    let args = if matches!(backend, Backend::Dd) {
-        strip_term_encoding_arg(args)
-    } else {
-        args
-    };
-    let egraph = match backend {
-        Backend::Main if proof_mode => egglog_experimental::new_experimental_egraph_for_proofs(),
-        Backend::Main => egglog_experimental::new_experimental_egraph(),
-        #[cfg(feature = "dd-backend")]
-        Backend::Dd => egglog_experimental::new_experimental_egraph_with_backend_for_proofs(
-            Box::new(egglog_experimental_dd::EGraph::new()),
-        ),
-    };
-    egglog::cli_with_args(egraph, args)
+    let egraph = egglog_experimental::new_experimental_egraph_with_options(!proof_mode, encoding);
+    egglog::cli_from(egraph, args)
 }
 
-fn extract_backend_arg<I>(args: I) -> Result<(Backend, Vec<OsString>), String>
-where
-    I: IntoIterator<Item = OsString>,
-{
-    let mut backend = Backend::Main;
-    let mut saw_backend = false;
-    let mut filtered = Vec::new();
-    let mut iter = args.into_iter();
-    while let Some(arg) = iter.next() {
-        match arg.to_str() {
-            Some("--backend") => {
-                if saw_backend {
-                    return Err("--backend may only be passed once".to_string());
-                }
-                let Some(value) = iter.next() else {
-                    return Err("--backend requires one of: main, dd".to_string());
-                };
-                backend = parse_backend(value.to_str())?;
-                saw_backend = true;
+fn extension_args(
+    args: impl IntoIterator<Item = OsString>,
+) -> Result<(DisequalityEncoding, Vec<OsString>), String> {
+    let mut args = args.into_iter();
+    let mut filtered = vec![args.next().ok_or("missing program name")?];
+    let mut encoding = None;
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            filtered.push(arg);
+            filtered.extend(args);
+            break;
+        }
+        let value = if arg == "--disequality-encoding" {
+            Some(
+                args.next()
+                    .ok_or("--disequality-encoding requires a value")?,
+            )
+        } else {
+            arg.to_str()
+                .and_then(|s| s.strip_prefix("--disequality-encoding="))
+                .map(OsString::from)
+        };
+        if let Some(value) = value {
+            if encoding.is_some() {
+                return Err("--disequality-encoding may only be specified once".into());
             }
-            Some(value) if value.starts_with("--backend=") => {
-                if saw_backend {
-                    return Err("--backend may only be passed once".to_string());
-                }
-                backend = parse_backend(value.strip_prefix("--backend="))?;
-                saw_backend = true;
-            }
-            _ => filtered.push(arg),
+            encoding = Some(value.to_str().ok_or("encoding must be UTF-8")?.parse()?);
+        } else {
+            filtered.push(arg);
         }
     }
-    Ok((backend, filtered))
-}
-
-/// The DD backend always runs under the term encoding, so `--term-encoding` is
-/// redundant there; drop it before handing the arguments to the CLI.
-#[cfg(feature = "dd-backend")]
-fn strip_term_encoding_arg(args: Vec<OsString>) -> Vec<OsString> {
-    args.into_iter()
-        .filter(|arg| arg.to_str() != Some("--term-encoding"))
-        .collect()
-}
-
-fn parse_backend(value: Option<&str>) -> Result<Backend, String> {
-    match value {
-        Some("main") => Ok(Backend::Main),
-        #[cfg(feature = "dd-backend")]
-        Some("dd") => Ok(Backend::Dd),
-        #[cfg(not(feature = "dd-backend"))]
-        Some("dd") => Err(
-            "backend \"dd\" requires building egglog-experimental with --features dd-backend"
-                .to_string(),
-        ),
-        Some(other) => Err(format!(
-            "unknown backend {other:?}; expected one of: main, dd"
-        )),
-        None => Err("backend value must be valid UTF-8".to_string()),
-    }
+    Ok((encoding.unwrap_or_default(), filtered))
 }
 
 #[cfg(test)]
@@ -99,39 +61,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_main_backend() {
-        assert_eq!(parse_backend(Some("main")), Ok(Backend::Main));
-    }
-
-    #[cfg(not(feature = "dd-backend"))]
-    #[test]
-    fn explains_how_to_enable_dd_backend() {
+    fn extension_options() {
+        for (args, expected) in [
+            (
+                vec!["bin", "--proofs", "--disequality-encoding=ee", "input.egg"],
+                DisequalityEncoding::Ee,
+            ),
+            (
+                vec![
+                    "bin",
+                    "--proofs",
+                    "--disequality-encoding",
+                    "nee",
+                    "input.egg",
+                ],
+                DisequalityEncoding::Nee,
+            ),
+            (
+                vec!["bin", "--proofs", "input.egg"],
+                DisequalityEncoding::Nee,
+            ),
+        ] {
+            let (encoding, rest) = extension_args(args.into_iter().map(OsString::from)).unwrap();
+            assert_eq!(encoding, expected);
+            assert_eq!(rest, ["bin", "--proofs", "input.egg"].map(OsString::from));
+        }
+        let args = ["bin", "--", "--disequality-encoding=ee"].map(OsString::from);
         assert_eq!(
-            parse_backend(Some("dd")),
-            Err(
-                "backend \"dd\" requires building egglog-experimental with --features dd-backend"
-                    .to_string()
-            )
+            extension_args(args.clone()).unwrap(),
+            (DisequalityEncoding::Nee, args.to_vec())
         );
-    }
-
-    #[cfg(feature = "dd-backend")]
-    #[test]
-    fn parses_enabled_dd_backend() {
-        assert_eq!(parse_backend(Some("dd")), Ok(Backend::Dd));
-    }
-
-    #[cfg(feature = "dd-backend")]
-    #[test]
-    fn dd_backend_arg_filtering_drops_term_encoding() {
-        let args = ["egglog", "--backend", "dd", "--term-encoding", "prog.egg"]
-            .into_iter()
-            .map(OsString::from);
-        let (backend, rest) = extract_backend_arg(args).unwrap();
-        assert_eq!(backend, Backend::Dd);
-        assert_eq!(
-            strip_term_encoding_arg(rest),
-            vec![OsString::from("egglog"), OsString::from("prog.egg")]
-        );
+        for args in [
+            vec!["bin", "--disequality-encoding"],
+            vec!["bin", "--disequality-encoding=de"],
+            vec![
+                "bin",
+                "--disequality-encoding=ee",
+                "--disequality-encoding=nee",
+            ],
+        ] {
+            assert!(extension_args(args.into_iter().map(OsString::from)).is_err());
+        }
     }
 }

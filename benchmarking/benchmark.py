@@ -26,17 +26,17 @@ from .collection import (
     preflight_collection,
     resolve_targets,
 )
+from .engines import TREATMENT_SPECS, TREATMENTS, Treatment, validate_engine_workload
 from .models import (
-    BACKEND_SPECS,
-    Backend,
     BenchmarkEndpoint,
     ComparisonSpec,
     DetailLevel,
     EndpointRequest,
     ResolvedTarget,
     TargetRequest,
-    Treatment,
+    validate_unique_file_identities,
 )
+from .reports.grouped import grouped_report_path, write_grouped_report
 from .reports.interactive import interactive_report_path, open_interactive_report, write_interactive_report
 from .reports.presentation import build_report_catalog
 from .reports.render import render_markdown_report_document, render_rich_report_document
@@ -46,14 +46,16 @@ from .workloads import resolve_files
 
 DEFAULT_REPORT = ".reports.jsonl"
 DEFAULT_ROUNDS = 6
-DEFAULT_TIMEOUT_SEC = 120
+DEFAULT_TIMEOUT_SEC = 1800
 
 
 def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse the public pair-only benchmark command."""
 
-    parser = argparse.ArgumentParser(description="Collect or reuse one egglog benchmark comparison.")
-    parser.add_argument("files", nargs="*", help="egglog files to benchmark")
+    parser = argparse.ArgumentParser(description="Collect or reuse one engine benchmark comparison.")
+    parser.add_argument("--disequality-encoding", choices=("nee", "ee"), default="nee")
+    parser.add_argument("--compare-disequality-encoding", choices=("nee", "ee"), default="nee")
+    parser.add_argument("files", nargs="*", help="workload files to benchmark")
     parser.add_argument(
         "--fact-directory",
         default=None,
@@ -65,14 +67,8 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
         help="candidate target: ., /path, @git-ref, #pr, label=source, or label=",
     )
     parser.add_argument(
-        "--backend",
-        choices=tuple(BACKEND_SPECS),
-        default="main",
-        help="candidate backend (default: main)",
-    )
-    parser.add_argument(
         "--treatment",
-        choices=("off", "term", "proofs", "proof-extraction"),
+        choices=TREATMENTS,
         default="proofs",
         help="candidate treatment (default: proofs)",
     )
@@ -82,14 +78,8 @@ def parse_benchmark_args(argv: Sequence[str]) -> argparse.Namespace:
         help="baseline target (default: candidate target)",
     )
     parser.add_argument(
-        "--compare-backend",
-        choices=tuple(BACKEND_SPECS),
-        default="main",
-        help="baseline backend (default: main)",
-    )
-    parser.add_argument(
         "--compare-treatment",
-        choices=("off", "term", "proofs", "proof-extraction"),
+        choices=TREATMENTS,
         default="off",
         help="baseline treatment (default: off)",
     )
@@ -164,13 +154,13 @@ def endpoint_requests(args: argparse.Namespace) -> tuple[EndpointRequest, Endpoi
     baseline_target = parse_target(str(args.compare_target)) if args.compare_target is not None else candidate_target
     baseline = EndpointRequest(
         baseline_target,
-        cast(Backend, str(args.compare_backend)),
         cast(Treatment, str(args.compare_treatment)),
+        args.compare_disequality_encoding,
     )
     candidate = EndpointRequest(
         candidate_target,
-        cast(Backend, str(args.backend)),
         cast(Treatment, str(args.treatment)),
+        args.disequality_encoding,
     )
     if baseline == candidate:
         raise ValueError("baseline and candidate endpoints must be different")
@@ -230,6 +220,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # materialization can build or run anything.
         store = ReportStore(report_path)
         files = resolve_files(args.files, invocation_cwd, args.fact_directory)
+        for endpoint in (baseline_request, candidate_request):
+            physical_files = tuple(file.for_engine(TREATMENT_SPECS[endpoint.treatment].engine) for file in files)
+            validate_unique_file_identities(physical_files)
+            for file in physical_files:
+                validate_engine_workload(file, endpoint.treatment)
         resolved_targets = resolve_targets(
             group_endpoint_requests(baseline_request, candidate_request),
             store,
@@ -244,13 +239,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         comparison = ComparisonSpec(
             baseline=BenchmarkEndpoint(
                 resolved_targets[baseline_request.target],
-                baseline_request.backend,
                 baseline_request.treatment,
+                baseline_request.disequality_encoding,
             ),
             candidate=BenchmarkEndpoint(
                 resolved_targets[candidate_request.target],
-                candidate_request.backend,
                 candidate_request.treatment,
+                candidate_request.disequality_encoding,
             ),
             files=files,
             rounds=int(args.rounds),
@@ -259,13 +254,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Preflight every fresh target before any measured observation can be
         # appended, then execute the already-validated plans in order.
         plans = collection_plans(store, comparison, bool(args.force_run))
-        for plan in plans:
-            preflight_collection(plan, comparison.timeout_sec)
-        for plan in plans:
-            emit_collection_plan(console, plan)
-            collect_rows(store, plan, comparison.timeout_sec, console)
+        collection_complete = False
+        try:
+            for plan in plans:
+                preflight_collection(plan, comparison.timeout_sec)
+            for plan in plans:
+                emit_collection_plan(console, plan)
+                collect_rows(store, plan, comparison.timeout_sec, console)
+            collection_complete = True
+        finally:
+            try:
+                grouped = store.grouped_report()
+                write_grouped_report(grouped, grouped_report_path(report_path))
+            except Exception as error:
+                if collection_complete:
+                    raise
+                console.print(Text.assemble(("error:", "red"), " could not refresh grouped report: ", str(error)))
 
-        catalog = build_report_catalog(store, comparison, cast(DetailLevel, str(args.detail)))
+        catalog = build_report_catalog(grouped, comparison, cast(DetailLevel, str(args.detail)))
         if args.format == "markdown":
             rendered = render_markdown_report_document(catalog)
             sys.stdout.write(rendered + "\n")
@@ -275,7 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.format == "markdown":
                 sys.stdout.flush()
             interactive_path = write_interactive_report(
-                store,
+                grouped,
                 comparison,
                 interactive_report_path(report_path),
             )

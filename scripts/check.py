@@ -116,18 +116,6 @@ class Checks:
 
     def rust_clippy(self) -> None:
         self._run("cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings")
-        self._run(
-            "cargo",
-            "clippy",
-            "-p",
-            "egglog-experimental",
-            "--features",
-            "dd-backend",
-            "--all-targets",
-            "--",
-            "-D",
-            "warnings",
-        )
 
     def rust_doc_links(self) -> None:
         self._run(
@@ -136,18 +124,6 @@ class Checks:
 
     def rust_test(self) -> None:
         self._run("cargo", "test", "--workspace", "--", *self._rust_args)
-        self._run(
-            "cargo",
-            "test",
-            "-p",
-            "egglog-experimental",
-            "--features",
-            "dd-backend",
-            "--test",
-            "timing_summary_cli",
-            "--",
-            *self._rust_args,
-        )
 
     def proof_tests(self) -> None:
         self._run("cargo", "test", "--workspace", "--test", "files", "proofs/", "--", *self._rust_args)

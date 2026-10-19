@@ -1,4 +1,13 @@
-use crate::{numeric_id::NumericId, offsets::Offsets};
+use std::collections::BTreeMap;
+
+use egglog_concurrency::ThreadPool;
+use rand::{Rng, SeedableRng, rngs::StdRng};
+
+use crate::{
+    common::{HashSet, Value},
+    numeric_id::NumericId,
+    offsets::{Offsets, RowId, Subset, SubsetRef},
+};
 
 use crate::{
     TupleIndex,
@@ -7,7 +16,22 @@ use crate::{
     table_spec::{ColumnId, WrappedTable},
 };
 
-use super::Index;
+use super::{
+    Index, IndexBase, IndexPosition, PositionedIndexBase, coarse_index_scan_partition_size,
+};
+
+fn subset_rows(subset: SubsetRef<'_>) -> Vec<usize> {
+    let mut rows = Vec::new();
+    subset.offsets(|row| rows.push(row.index()));
+    rows
+}
+
+#[test]
+fn coarse_index_scan_partitions_are_bounded() {
+    assert_eq!(coarse_index_scan_partition_size(0, 0), 256);
+    assert_eq!(coarse_index_scan_partition_size(1_000, 4), 256);
+    assert_eq!(coarse_index_scan_partition_size(4_096, 3), 1_366);
+}
 
 #[test]
 fn basic_updates() {
@@ -203,4 +227,383 @@ fn parallel_column_index_posts_a_row_once_per_distinct_value() {
         .expect("the duplicated value is indexed")
         .offsets(|row_id| got.push(row_id.index()));
     assert_eq!(got, vec![5], "one entry, not one per column");
+}
+
+/// Brute-force oracle: for the covered `cols`, map each value to the list of row ids (in scan,
+/// i.e. ascending-RowId, order) that contain it in some covered column. A value appearing in
+/// several of a row's columns contributes that row once.
+fn oracle(rows: &[Vec<Value>], cols: &[usize]) -> BTreeMap<u32, Vec<usize>> {
+    let mut map: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (row_id, row) in rows.iter().enumerate() {
+        let mut seen_in_row = Vec::new();
+        for &c in cols {
+            let val = row[c].rep();
+            if !seen_in_row.contains(&val) {
+                seen_in_row.push(val);
+                map.entry(val).or_default().push(row_id);
+            }
+        }
+    }
+    map
+}
+
+/// Collect a built [`ColumnIndex`] into `value -> row ids` for comparison against [`oracle`].
+fn collect(index: &ColumnIndex) -> BTreeMap<u32, Vec<usize>> {
+    let mut got: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    index.for_each_positioned(|_, val, subset| {
+        let mut ids = Vec::new();
+        subset.offsets(|row_id| ids.push(row_id.index()));
+        got.insert(val.rep(), ids);
+    });
+    got
+}
+
+fn assert_matches_oracle(index: &ColumnIndex, expected: &BTreeMap<u32, Vec<usize>>, ctx: &str) {
+    let got = collect(index);
+    for (val, ids) in &got {
+        // Each value's row ids must be strictly ascending: sorted (the ordering this PR fixes)
+        // and de-duplicated (a value repeated across a row's columns maps the row in once).
+        assert!(
+            ids.windows(2).all(|w| w[0] < w[1]),
+            "{ctx}: row ids for value {val} not strictly ascending: {ids:?}",
+        );
+    }
+    assert_eq!(&got, expected, "{ctx}");
+}
+
+/// Randomized oracle test: build a table whose value columns draw from a small pool (so values
+/// repeat across many rows), then check the sort-based rebuild, the parallel rebuild, and the
+/// adaptive `build_for_subset` path all produce each value's rows in sorted, de-duplicated order.
+#[test]
+fn column_index_rebuild_matches_oracle() {
+    // Column 0 is a unique key; columns `1..n_cols` are the covered value columns.
+    for seed in 0..4u64 {
+        let mut rng = StdRng::seed_from_u64(seed);
+        for &n_rows in &[1usize, 10, 63, 64, 200, 512, 1000] {
+            let distinct = ((n_rows / 4).max(1)) as u32;
+            for &n_val_cols in &[1usize, 2, 3, 4] {
+                let n_cols = n_val_cols + 1;
+                let rows: Vec<Vec<Value>> = (0..n_rows)
+                    .map(|i| {
+                        let mut row = Vec::with_capacity(n_cols);
+                        row.push(v(i));
+                        for _ in 1..n_cols {
+                            row.push(v(rng.random_range(0..distinct) as usize));
+                        }
+                        row
+                    })
+                    .collect();
+                let table = WrappedTable::new(fill_table(rows.clone(), 1, None, |old, new| {
+                    assert_eq!(old, new, "unique keys, so no conflicts");
+                    None
+                }));
+                let cols: Vec<ColumnId> = (1..n_cols).map(ColumnId::from_usize).collect();
+                let covered: Vec<usize> = (1..n_cols).collect();
+                let expected = oracle(&rows, &covered);
+                let ctx = format!("seed={seed} n_rows={n_rows} n_val_cols={n_val_cols}");
+
+                let mut serial = ColumnIndex::new();
+                serial.rebuild_full(&cols, table.as_ref(), table.all().as_ref());
+                assert_matches_oracle(&serial, &expected, &format!("{ctx} rebuild_full"));
+
+                // Install a multi-thread pool so `ColumnIndex` shards across several shards and
+                // the merge actually forks; correctness must not depend on the shard count.
+                let parallel = ThreadPool::new(8).install(|| {
+                    let mut ci = ColumnIndex::new();
+                    ci.merge_parallel(&cols, table.as_ref(), table.all().as_ref());
+                    ci
+                });
+                assert_matches_oracle(&parallel, &expected, &format!("{ctx} merge_parallel"));
+
+                let subset = ThreadPool::new(8).install(|| {
+                    ColumnIndex::build_for_subset(table.as_ref(), table.all().as_ref(), &cols)
+                });
+                assert_matches_oracle(&subset, &expected, &format!("{ctx} build_for_subset"));
+            }
+        }
+    }
+}
+
+#[test]
+fn parallel_column_index_handles_sparse_source_partitions() {
+    let rows = (0..1_000)
+        .map(|i| vec![v(i), v(i % 17), v((i / 3) % 23), v(i % 17)])
+        .collect::<Vec<_>>();
+    let selected = (0..rows.len()).filter(|i| i % 3 == 0).collect::<Vec<_>>();
+    let mut first_subset = Subset::empty();
+    let mut second_subset = Subset::empty();
+    for (i, &row) in selected.iter().enumerate() {
+        let subset = if i < selected.len() / 2 {
+            &mut first_subset
+        } else {
+            &mut second_subset
+        };
+        subset.add_row_sorted(RowId::from_usize(row));
+    }
+
+    let mut expected = BTreeMap::<u32, Vec<usize>>::new();
+    for &row_id in &selected {
+        let row = &rows[row_id];
+        let mut seen = Vec::new();
+        for value in &row[1..] {
+            if seen.contains(value) {
+                continue;
+            }
+            seen.push(*value);
+            expected.entry(value.rep()).or_default().push(row_id);
+        }
+    }
+
+    let table = WrappedTable::new(fill_table(rows, 1, None, |old, new| {
+        assert_eq!(old, new, "unique keys, so no conflicts");
+        None
+    }));
+    let cols = [ColumnId::new(1), ColumnId::new(2), ColumnId::new(3)];
+    let index = ThreadPool::new(8).install(|| {
+        let mut index = ColumnIndex::new();
+        index.merge_parallel(&cols, table.as_ref(), first_subset.as_ref());
+        index.merge_parallel(&cols, table.as_ref(), second_subset.as_ref());
+        index
+    });
+    assert_matches_oracle(&index, &expected, "sparse source partitions");
+
+    let mut selected_subset = Subset::empty();
+    for &row in &selected {
+        selected_subset.add_row_sorted(RowId::from_usize(row));
+    }
+    let built = ThreadPool::new(8)
+        .install(|| ColumnIndex::build_for_subset(table.as_ref(), selected_subset.as_ref(), &cols));
+    assert_matches_oracle(&built, &expected, "filtered occurrence index");
+}
+
+#[test]
+fn physical_shards_partition_index_iteration() {
+    ThreadPool::new(4).install(|| {
+        let rows = (0..257)
+            .map(|i| vec![v(i), v(i % 37), v(10_000 + i)])
+            .collect::<Vec<_>>();
+        let table = WrappedTable::new(fill_table(rows, 1, None, |old, new| {
+            assert_eq!(old, new, "unique keys, so no conflicts");
+            None
+        }));
+
+        let mut column = Index::new(vec![ColumnId::new(1)], ColumnIndex::new());
+        column.refresh(table.as_ref());
+        assert!(column.get_subset_positioned(&v(9_999_999)).is_none());
+        assert_eq!(column.shard_count(), 8);
+        let mut whole_column = BTreeMap::new();
+        column.for_each_positioned(|_, key, subset| {
+            whole_column.insert(key.rep(), subset.size());
+        });
+        let mut by_column_shard = BTreeMap::new();
+        for shard in 0..column.shard_count() {
+            let mut shard_keys = 0;
+            column.for_each_shard_positioned(shard, |_, key, subset| {
+                shard_keys += 1;
+                assert!(
+                    by_column_shard.insert(key.rep(), subset.size()).is_none(),
+                    "a column-index key appeared in more than one shard"
+                );
+            });
+            assert_eq!(column.shard_len(shard), shard_keys);
+        }
+        assert_eq!(by_column_shard, whole_column);
+
+        let mut tuple = Index::new(
+            vec![ColumnId::new(1), ColumnId::new(2)],
+            crate::TupleIndex::new(2),
+        );
+        tuple.refresh(table.as_ref());
+        assert_eq!(tuple.shard_count(), 8);
+        let mut whole_tuple = BTreeMap::new();
+        tuple.for_each_positioned(|_, key, subset| {
+            whole_tuple.insert((key[0].rep(), key[1].rep()), subset.size());
+        });
+        let mut by_tuple_shard = BTreeMap::new();
+        for shard in 0..tuple.shard_count() {
+            let mut shard_keys = 0;
+            tuple.for_each_shard_positioned(shard, |_, key, subset| {
+                shard_keys += 1;
+                assert!(
+                    by_tuple_shard
+                        .insert((key[0].rep(), key[1].rep()), subset.size())
+                        .is_none(),
+                    "a tuple-index key appeared in more than one shard"
+                );
+            });
+            assert_eq!(tuple.shard_len(shard), shard_keys);
+        }
+        assert_eq!(by_tuple_shard, whole_tuple);
+    });
+}
+
+#[test]
+fn positioned_lookups_and_iteration_agree() {
+    ThreadPool::new(4).install(|| {
+        let rows = (0..257)
+            .map(|i| vec![v(i), v(i % 37), v(10_000 + i % 53)])
+            .collect::<Vec<_>>();
+        let table = WrappedTable::new(fill_table(rows, 1, None, |old, new| {
+            assert_eq!(old, new, "unique keys, so no conflicts");
+            None
+        }));
+
+        let mut column = Index::new(vec![ColumnId::new(1)], ColumnIndex::new());
+        column.refresh(table.as_ref());
+        let mut positioned_column = BTreeMap::new();
+        let mut column_positions = HashSet::default();
+        column.for_each_positioned(|position, key, subset| {
+            let (lookup_position, lookup_subset) =
+                column.get_subset_positioned(key).expect("enumerated key");
+            assert_eq!(lookup_position, position);
+            assert_eq!(subset_rows(lookup_subset), subset_rows(subset));
+            assert!(position.slot() < column.shard_len(position.shard()));
+            assert!(column_positions.insert(position));
+            positioned_column.insert(key.rep(), (position, subset_rows(subset)));
+        });
+        assert_eq!(positioned_column.len(), column.len());
+
+        let mut legacy_column = BTreeMap::new();
+        column.for_each_positioned(|_, key, subset| {
+            legacy_column.insert(key.rep(), subset_rows(subset));
+        });
+        assert_eq!(
+            legacy_column,
+            positioned_column
+                .iter()
+                .map(|(key, (_, rows))| (*key, rows.clone()))
+                .collect()
+        );
+
+        let mut column_by_shard = BTreeMap::new();
+        for shard in 0..column.shard_count() {
+            let mut slots = Vec::new();
+            column.for_each_shard_positioned(shard, |position, key, subset| {
+                assert_eq!(position.shard(), shard);
+                slots.push(position.slot());
+                assert_eq!(
+                    positioned_column.get(&key.rep()),
+                    Some(&(position, subset_rows(subset)))
+                );
+                assert!(column_by_shard.insert(key.rep(), position).is_none());
+            });
+            slots.sort_unstable();
+            assert_eq!(slots, (0..column.shard_len(shard)).collect::<Vec<_>>());
+        }
+        assert_eq!(column_by_shard.len(), positioned_column.len());
+
+        let mut tuple = Index::new(vec![ColumnId::new(1), ColumnId::new(2)], TupleIndex::new(2));
+        tuple.refresh(table.as_ref());
+        assert!(
+            tuple
+                .get_subset_positioned(&[v(9_999_999), v(9_999_998)])
+                .is_none()
+        );
+        let mut positioned_tuple = BTreeMap::new();
+        let mut tuple_positions = HashSet::default();
+        tuple.for_each_positioned(|position, key, subset| {
+            let (lookup_position, lookup_subset) =
+                tuple.get_subset_positioned(key).expect("enumerated key");
+            assert_eq!(lookup_position, position);
+            assert_eq!(subset_rows(lookup_subset), subset_rows(subset));
+            assert!(position.slot() < tuple.shard_len(position.shard()));
+            assert!(tuple_positions.insert(position));
+            positioned_tuple.insert(
+                (key[0].rep(), key[1].rep()),
+                (position, subset_rows(subset)),
+            );
+        });
+        assert_eq!(positioned_tuple.len(), tuple.len());
+
+        let mut legacy_tuple = BTreeMap::new();
+        tuple.for_each_positioned(|_, key, subset| {
+            legacy_tuple.insert((key[0].rep(), key[1].rep()), subset_rows(subset));
+        });
+        assert_eq!(
+            legacy_tuple,
+            positioned_tuple
+                .iter()
+                .map(|(key, (_, rows))| (*key, rows.clone()))
+                .collect()
+        );
+
+        let mut tuple_by_shard = BTreeMap::new();
+        for shard in 0..tuple.shard_count() {
+            let mut slots = Vec::new();
+            tuple.for_each_shard_positioned(shard, |position, key, subset| {
+                assert_eq!(position.shard(), shard);
+                slots.push(position.slot());
+                let key = (key[0].rep(), key[1].rep());
+                assert_eq!(
+                    positioned_tuple.get(&key),
+                    Some(&(position, subset_rows(subset)))
+                );
+                assert!(tuple_by_shard.insert(key, position).is_none());
+            });
+            slots.sort_unstable();
+            assert_eq!(slots, (0..tuple.shard_len(shard)).collect::<Vec<_>>());
+        }
+        assert_eq!(tuple_by_shard.len(), positioned_tuple.len());
+    });
+}
+
+#[test]
+fn positions_survive_incremental_insertions() {
+    ThreadPool::new(4).install(|| {
+        let mut column = Index::new(vec![ColumnId::new(0)], ColumnIndex::new());
+        column.table.add_row(&[v(10)], RowId::new(0));
+        column.table.add_row(&[v(20)], RowId::new(1));
+        column.table.add_row(&[v(10)], RowId::new(2));
+        let old_column = [v(10), v(20)].map(|key| {
+            (
+                key,
+                column
+                    .get_subset_positioned(&key)
+                    .expect("initial column key")
+                    .0,
+            )
+        });
+
+        column.table.add_row(&[v(10)], RowId::new(3));
+        column.table.add_row(&[v(30)], RowId::new(4));
+        for (key, old_position) in old_column {
+            let (position, _) = column
+                .get_subset_positioned(&key)
+                .expect("retained column key");
+            assert_eq!(position, old_position);
+        }
+        let mut column_positions = HashSet::<IndexPosition>::default();
+        column.for_each_positioned(|position, _, _| {
+            assert!(column_positions.insert(position));
+        });
+        assert_eq!(column_positions.len(), column.len());
+
+        let mut tuple = Index::new(vec![ColumnId::new(0), ColumnId::new(1)], TupleIndex::new(2));
+        tuple.table.add_row(&[v(10), v(100)], RowId::new(0));
+        tuple.table.add_row(&[v(20), v(200)], RowId::new(1));
+        tuple.table.add_row(&[v(10), v(100)], RowId::new(2));
+        let old_tuple = [[v(10), v(100)], [v(20), v(200)]].map(|key| {
+            (
+                key,
+                tuple
+                    .get_subset_positioned(&key)
+                    .expect("initial tuple key")
+                    .0,
+            )
+        });
+
+        tuple.table.add_row(&[v(10), v(100)], RowId::new(3));
+        tuple.table.add_row(&[v(30), v(300)], RowId::new(4));
+        for (key, old_position) in old_tuple {
+            let (position, _) = tuple
+                .get_subset_positioned(&key)
+                .expect("retained tuple key");
+            assert_eq!(position, old_position);
+        }
+        let mut tuple_positions = HashSet::<IndexPosition>::default();
+        tuple.for_each_positioned(|position, _, _| {
+            assert!(tuple_positions.insert(position));
+        });
+        assert_eq!(tuple_positions.len(), tuple.len());
+    });
 }

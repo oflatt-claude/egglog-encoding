@@ -51,15 +51,39 @@ pub struct ProofConstructorNames {
     pub trans: String,
     pub sym: String,
     pub normalize: String,
-    /// The `Fiat` justification constructor.
+    /// Prefix of the per-sort `Fiat` justification constructors.
     pub fiat: String,
+    /// The `Proj` justification constructor.
+    pub proj: String,
+    /// Prefix of the per-arity primitive-projection `ProjPrim` constructors.
+    pub proj_prim: String,
+}
+
+/// A lowered rule plus the execution options needed to rebuild it for scheduling.
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledRule {
+    pub(crate) core: ResolvedCoreRule,
+    pub(crate) backend_id: egglog_bridge::RuleId,
+    /// Whether this rule's query uses delta evaluation.
+    pub(crate) seminaive: bool,
+    /// Whether its query or action may read the live database.
+    pub(crate) requires_read_context: bool,
+    pub(crate) no_decomp: bool,
+    pub(crate) include_subsumed: bool,
+}
+
+/// The egglog internal representation of already compiled rules.
+#[derive(Clone, Debug)]
+/// The egglog internal representation of already compiled rules
+pub(crate) struct Ruleset {
+    pub kind: RulesetKind,
+    pub timing_role: egglog_reports::RulesetTimingRole,
 }
 
 #[derive(Clone, Debug)]
-/// The egglog internal representation of already compiled rules
-pub(crate) enum Ruleset {
+pub(crate) enum RulesetKind {
     /// Represents a ruleset with a set of rules.
-    Rules(IndexMap<String, (ResolvedCoreRule, egglog_bridge::RuleId)>),
+    Rules(IndexMap<String, CompiledRule>),
     /// A combined ruleset may contain other rulesets.
     Combined(Vec<String>),
 }
@@ -96,9 +120,6 @@ where
         /// for this sort: `UF_<E>` (scanned by extraction's `find_canonical`)
         /// and the optional `UF_<E>f` index (single-key leader lookup).
         uf: Option<(String, Option<String>)>,
-        /// The name of the proof function for this sort.
-        /// Set by proof desugaring to record where proofs are stored for this sort.
-        proof_func: Option<String>,
         /// For container sorts under the term/proof encoding: the spec for the
         /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried
         /// as the `:internal-container-rebuild` annotation.
@@ -160,6 +181,11 @@ where
         span: Span,
         name: String,
         file: String,
+        /// `:internal-proof-base`: where this input's per-row actions start in
+        /// the program proof checking reads. The rows are loaded at run time,
+        /// possibly by an e-graph that did no encoding, so the fiat justifying
+        /// each row gets its position from here rather than from encoder state.
+        proof_base: Option<usize>,
     },
     UserDefined(Span, String, Vec<Expr>),
 }
@@ -176,7 +202,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -185,7 +210,6 @@ where
                 name: name.clone(),
                 presort_and_args: presort_and_args.clone(),
                 uf: uf.clone(),
-                proof_func: proof_func.clone(),
                 container_rebuild: container_rebuild.clone(),
                 proof_constructors: proof_constructors.clone(),
                 unionable: *unionable,
@@ -199,7 +223,6 @@ where
                     unextractable: f.unextractable,
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
-                    term_constructor: f.term_constructor.clone(),
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
                     span: f.span.clone(),
@@ -208,7 +231,7 @@ where
                     merge: f.merge.clone(),
                     hidden: f.internal_hidden,
                     let_binding: f.internal_let,
-                    term_constructor: f.term_constructor.clone(),
+                    internal_view: f.internal_view,
                     unextractable: f.unextractable,
                     identity_vals: f.identity_vals,
                     cost: f.cost,
@@ -268,10 +291,16 @@ where
                 span.clone(),
                 cmds.iter().map(|cmd| cmd.to_command()).collect(),
             ),
-            GenericNCommand::Input { span, name, file } => GenericCommand::Input {
+            GenericNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericCommand::Input {
                 span: span.clone(),
                 name: name.clone(),
                 file: file.clone(),
+                proof_base: *proof_base,
             },
             GenericNCommand::UserDefined(span, name, exprs) => {
                 GenericCommand::UserDefined(span.clone(), name.clone(), exprs.clone())
@@ -331,7 +360,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -340,7 +368,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -406,9 +433,17 @@ where
                     .map(|cmd| cmd.visit_exprs(&mut *f))
                     .collect(),
             ),
-            GenericNCommand::Input { span, name, file } => {
-                GenericNCommand::Input { span, name, file }
-            }
+            GenericNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericNCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            },
             GenericNCommand::UserDefined(span, name, exprs) => {
                 // We can't map `f` over UserDefined because UserDefined always assumes plain `Expr`s
                 GenericNCommand::UserDefined(span, name, exprs)
@@ -669,9 +704,6 @@ where
         /// The union-find `(constructor, optional function-index)` table names
         /// for this sort (see [`GenericNCommand::Sort`]).
         uf: Option<(String, Option<String>)>,
-        /// The name of the proof function for this sort.
-        /// Set by proof desugaring to record where proofs are stored for this sort.
-        proof_func: Option<String>,
         /// For container sorts under the term/proof encoding: the spec for the
         /// container's rebuild primitives (see [`ContainerRebuildSpec`]), carried
         /// as the `:internal-container-rebuild` annotation.
@@ -760,9 +792,6 @@ where
         /// Internal-let constructors are let bindings, excluded from print-size output.
         /// Used for global let bindings that are converted to constructors.
         let_binding: bool,
-        /// Internal-only metadata for proof-encoding view tables.
-        /// Parsed user syntax only supports `:internal-term-constructor` on `function`.
-        term_constructor: Option<String>,
     },
 
     /// The `relation` command declares a named relation
@@ -830,7 +859,7 @@ where
         merge: Option<GenericMerge<Head, Leaf>>,
         hidden: bool,
         let_binding: bool,
-        term_constructor: Option<String>,
+        internal_view: Option<ViewKind>,
         unextractable: bool,
         /// Marks the first `k` value columns as identity columns: a merge that
         /// leaves them unchanged is skipped and the existing row kept. Only
@@ -839,9 +868,9 @@ where
         /// Extraction head cost, from `:internal-cost`. Used by view tables to
         /// record the user operation's cost for the extractor.
         cost: Option<DefaultCost>,
-        /// `:internal-term-node`: an internal term/proof/AST/proof-list node
-        /// relation (minted id as the last input), which proof extraction
-        /// reconstructs. Unset for views and plain bookkeeping relations.
+        /// `:internal-term-node`: an internal proof-node relation (minted id as
+        /// the last input), which proof extraction reconstructs. Unset for views
+        /// and plain bookkeeping relations.
         term_node: bool,
     },
 
@@ -1073,6 +1102,8 @@ where
         span: Span,
         name: String,
         file: String,
+        /// See [`GenericNCommand::Input`].
+        proof_base: Option<usize>,
     },
     /// Extract and output a set of expressions to a file.
     Output {
@@ -1087,6 +1118,7 @@ where
     /// The argument specifies how many egraphs to pop.
     Pop(Span, usize),
     /// Assert that at least one of the wrapped commands fails with an error.
+    /// Includes, persistent definitions, and user-defined commands are not allowed inside `fail`.
     Fail(Span, Vec<GenericCommand<Head, Leaf>>),
     /// Include another egglog file directly as text and run it.
     Include(Span, String),
@@ -1136,7 +1168,6 @@ where
                 name,
                 presort_and_args: None,
                 uf,
-                proof_func,
                 proof_constructors,
                 ..
             } => {
@@ -1147,14 +1178,18 @@ where
                         write!(f, " {uf_index}")?;
                     }
                 }
-                if let Some(pf) = proof_func {
-                    write!(f, " :internal-proof-func {pf}")?;
-                }
                 if let Some(pc) = proof_constructors {
                     write!(
                         f,
-                        " :internal-proof-names {} {} {} {} {} {}",
-                        pc.congr, pc.congr_all, pc.trans, pc.sym, pc.normalize, pc.fiat
+                        " :internal-proof-names {} {} {} {} {} {} {} {}",
+                        pc.congr,
+                        pc.congr_all,
+                        pc.trans,
+                        pc.sym,
+                        pc.normalize,
+                        pc.fiat,
+                        pc.proj,
+                        pc.proj_prim
                     )?;
                 }
                 write!(f, ")")
@@ -1162,14 +1197,10 @@ where
             GenericCommand::Sort {
                 name,
                 presort_and_args: Some((name2, args)),
-                proof_func,
                 container_rebuild,
                 ..
             } => {
                 write!(f, "(sort {name} ({name2} {})", ListDisplay(args, " "))?;
-                if let Some(pf) = proof_func {
-                    write!(f, " :internal-proof-func {pf}")?;
-                }
                 if let Some(spec) = container_rebuild {
                     write!(f, " :internal-container-rebuild {spec}")?;
                 }
@@ -1182,7 +1213,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -1203,8 +1234,8 @@ where
                 if *let_binding {
                     write!(f, " :internal-let")?;
                 }
-                if let Some(tc) = term_constructor {
-                    write!(f, " :internal-term-constructor {tc}")?;
+                if let Some(kind) = internal_view {
+                    write!(f, " :internal-view {kind}")?;
                 }
                 if let Some(k) = identity_vals {
                     write!(f, " :internal-identity-vals {k}")?;
@@ -1225,7 +1256,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
             } => {
                 write!(f, "(constructor {name} {schema}")?;
                 if let Some(cost) = cost {
@@ -1239,9 +1269,6 @@ where
                 }
                 if *let_binding {
                     write!(f, " :internal-let")?;
-                }
-                if let Some(tc) = term_constructor {
-                    write!(f, " :internal-term-constructor {tc}")?;
                 }
                 write!(f, ")")
             }
@@ -1277,7 +1304,7 @@ where
             GenericCommand::Rule { rule } => rule.fmt(f),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
             GenericCommand::PrintOverallStatistics(_span, file) => match file {
-                Some(file) => write!(f, "(print-stats :file {file})"),
+                Some(file) => write!(f, "(print-stats :file {})", Literal::String(file.clone())),
                 None => write!(f, "(print-stats)"),
             },
             GenericCommand::Check(_ann, facts) => {
@@ -1301,7 +1328,7 @@ where
                     write!(f, " {n}")?;
                 }
                 if let Some(file) = file {
-                    write!(f, " :file {file:?}")?;
+                    write!(f, " :file {}", Literal::String(file.clone()))?;
                 }
                 match mode {
                     PrintFunctionMode::Default => {}
@@ -1316,16 +1343,28 @@ where
                 span: _,
                 name,
                 file,
+                proof_base,
             } => {
-                write!(f, "(input {name} {file:?})")
+                write!(f, "(input {name} {}", Literal::String(file.clone()))?;
+                if let Some(base) = proof_base {
+                    write!(f, " :internal-proof-base {base}")?;
+                }
+                write!(f, ")")
             }
             GenericCommand::Output {
                 span: _,
                 file,
                 exprs,
-            } => write!(f, "(output {file:?} {})", ListDisplay(exprs, " ")),
+            } => write!(
+                f,
+                "(output {} {})",
+                Literal::String(file.clone()),
+                ListDisplay(exprs, " ")
+            ),
             GenericCommand::Fail(_span, cmds) => write!(f, "(fail {})", ListDisplay(cmds, " ")),
-            GenericCommand::Include(_span, file) => write!(f, "(include {file:?})"),
+            GenericCommand::Include(_span, file) => {
+                write!(f, "(include {})", Literal::String(file.clone()))
+            }
             GenericCommand::Datatypes { span: _, datatypes } => {
                 let datatypes: Vec<_> = datatypes
                     .iter()
@@ -1444,6 +1483,27 @@ where
 pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
+/// What an encoded view stands in for. A constructor and a custom function get
+/// the same table shape, so the distinction has to be recorded: a constructor's
+/// first output is the e-class it minted, a function's is the value it was set
+/// to, and those two read differently even when both are eq-sorts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ViewKind {
+    /// A constructor, a relation, or an encoded global: the rows are e-nodes.
+    Constructor,
+    /// A custom function: the rows are its entries.
+    Function,
+}
+
+impl Display for ViewKind {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            ViewKind::Constructor => write!(f, "constructor"),
+            ViewKind::Function => write!(f, "function"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FunctionSubtype {
     Constructor,
@@ -1451,12 +1511,19 @@ pub enum FunctionSubtype {
     Custom,
 }
 
+impl FunctionSubtype {
+    /// How this subtype is spelled in a program, and in diagnostics about one.
+    pub fn label(self) -> &'static str {
+        match self {
+            FunctionSubtype::Constructor => "constructor",
+            FunctionSubtype::Custom => "function",
+        }
+    }
+}
+
 impl Display for FunctionSubtype {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            FunctionSubtype::Constructor => write!(f, "constructor"),
-            FunctionSubtype::Custom => write!(f, "function"),
-        }
+        write!(f, "{}", self.label())
     }
 }
 
@@ -1470,10 +1537,9 @@ where
 {
     pub name: String,
     pub subtype: FunctionSubtype,
-    /// Untyped schema
+    /// The schema as written. The resolved signature lives in `TypeInfo`,
+    /// keyed by `name`.
     pub schema: Schema,
-    /// Resolved schema after typechecking is stored here, otherwise "".
-    pub resolved_schema: Head,
     pub merge: Option<GenericMerge<Head, Leaf>>,
     pub cost: Option<DefaultCost>,
     pub unextractable: bool,
@@ -1484,17 +1550,18 @@ where
     /// This is used by visualization to handle globals differently.
     pub internal_let: bool,
     pub span: Span,
-    /// For view tables in proof encoding: the constructor to use for building
-    /// terms from the first n-1 children during extraction.
-    pub term_constructor: Option<String>,
+    /// `:internal-view <kind>`: this table is the proof encoding's view of a
+    /// user table, and `kind` is the subtype that user table was declared with.
+    /// `None` for every table that is not a view.
+    pub internal_view: Option<ViewKind>,
     /// `:internal-identity-vals k`: the first `k` value columns are identity
     /// columns — a merge that leaves them unchanged is skipped and the existing
     /// row kept. Only valid for merges that are idempotent on equal inputs.
     pub identity_vals: Option<usize>,
-    /// `:internal-term-node`: an internal term/proof/AST/proof-list node relation
-    /// created by the term/proof encoding, with the minted id as its last input.
-    /// Proof extraction reconstructs these; views and plain bookkeeping relations
-    /// (e.g. delete/subsume markers) are unmarked and never read as terms.
+    /// `:internal-term-node`: an internal proof-node relation created by the
+    /// proof encoding, with the minted id as its last input. Proof extraction
+    /// reconstructs these; views and plain bookkeeping relations (e.g.
+    /// subsumption markers) are unmarked and never read.
     pub internal_term_node: bool,
 }
 
@@ -1586,14 +1653,14 @@ impl FunctionDecl {
             name,
             subtype: FunctionSubtype::Custom,
             schema,
-            resolved_schema: String::new(),
+
             merge,
             cost: None,
             unextractable: true,
             internal_hidden: false,
             internal_let: false,
             span,
-            term_constructor: None,
+            internal_view: None,
             identity_vals: None,
             internal_term_node: false,
         }
@@ -1611,15 +1678,15 @@ impl FunctionDecl {
         Self {
             name,
             subtype: FunctionSubtype::Constructor,
-            resolved_schema: String::new(),
             schema,
+
             merge: None,
             cost,
             unextractable,
             internal_hidden: hidden,
             internal_let: false,
             span,
-            term_constructor: None,
+            internal_view: None,
             identity_vals: None,
             internal_term_node: false,
         }
@@ -1639,14 +1706,14 @@ where
             name: self.name,
             subtype: self.subtype,
             schema: self.schema,
-            resolved_schema: self.resolved_schema,
+
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             cost: self.cost,
             unextractable: self.unextractable,
             internal_hidden: self.internal_hidden,
             internal_let: self.internal_let,
             span: self.span,
-            term_constructor: self.term_constructor,
+            internal_view: self.internal_view,
             identity_vals: self.identity_vals,
             internal_term_node: self.internal_term_node,
         }
@@ -1964,7 +2031,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -1973,7 +2039,6 @@ where
                 name: fun(name),
                 presort_and_args,
                 uf: uf.map(|(ctor, index)| (fun(ctor), index.map(&mut *fun))),
-                proof_func: proof_func.map(&mut *fun),
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -2037,7 +2102,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
             } => GenericCommand::Constructor {
                 span,
                 name: fun(name),
@@ -2049,7 +2113,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor: term_constructor.map(&mut *fun),
             },
             GenericCommand::Relation { span, name, inputs } => GenericCommand::Relation {
                 span,
@@ -2063,7 +2126,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2078,7 +2141,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor: term_constructor.map(&mut *fun),
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2145,10 +2208,16 @@ where
                 GenericCommand::PrintFunction(span, fun(name), n, file, mode)
             }
             GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name.map(fun)),
-            GenericCommand::Input { span, name, file } => GenericCommand::Input {
+            GenericCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericCommand::Input {
                 span,
                 name: fun(name),
                 file,
+                proof_base,
             },
             GenericCommand::Output { span, file, exprs } => {
                 GenericCommand::Output { span, file, exprs }
@@ -2181,7 +2250,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2193,7 +2262,7 @@ where
                 merge: merge.map(|e| e.visit_exprs(f)),
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2282,7 +2351,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -2291,7 +2359,6 @@ where
                 name,
                 presort_and_args,
                 uf,
-                proof_func,
                 container_rebuild,
                 proof_constructors,
                 unionable,
@@ -2316,7 +2383,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
             } => GenericCommand::Constructor {
                 span,
                 name,
@@ -2325,7 +2391,6 @@ where
                 unextractable,
                 hidden,
                 let_binding,
-                term_constructor,
             },
             GenericCommand::Relation { span, name, inputs } => {
                 GenericCommand::Relation { span, name, inputs }
@@ -2337,7 +2402,7 @@ where
                 merge,
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2349,7 +2414,7 @@ where
                 merge: merge.map(|expr| expr.map_symbols(head, leaf)),
                 hidden,
                 let_binding,
-                term_constructor,
+                internal_view,
                 unextractable,
                 identity_vals,
                 cost,
@@ -2420,9 +2485,17 @@ where
                 GenericCommand::PrintFunction(span, name, n, file, mode)
             }
             GenericCommand::PrintSize(span, name) => GenericCommand::PrintSize(span, name),
-            GenericCommand::Input { span, name, file } => {
-                GenericCommand::Input { span, name, file }
-            }
+            GenericCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            } => GenericCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            },
             GenericCommand::Output { span, file, exprs } => GenericCommand::Output {
                 span,
                 file,

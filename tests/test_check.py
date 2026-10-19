@@ -43,10 +43,7 @@ def test_default_check_runs_all_hygiene_before_tests(commands: list[Command]) ->
     assert any("mypy" in command.args for command in commands[:first_test])
     assert any(command.args[:2] == ("cargo", "doc") for command in commands[:first_test])
     rust_tests = [command.args for command in commands if command.args[:2] == ("cargo", "test")]
-    assert len(rust_tests) == 2
-    assert "--workspace" in rust_tests[0]
-    assert "dd-backend" in rust_tests[1] and "timing_summary_cli" in rust_tests[1]
-    assert all(args[-1] == "--" for args in rust_tests)
+    assert rust_tests == [("cargo", "test", "--workspace", "--")]
 
 
 def test_overlapping_targets_do_not_repeat_completed_checks(commands: list[Command]) -> None:

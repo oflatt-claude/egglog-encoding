@@ -13,7 +13,6 @@ use std::any::TypeId;
 use std::sync::Mutex;
 
 use crate::exec_state::Internal;
-use egglog_backend_trait::BackendExt;
 use enum_map::EnumMap;
 
 use super::*;
@@ -107,33 +106,47 @@ impl Presort for FunctionSort {
         typeinfo: &mut TypeInfo,
         name: String,
         args: &[Expr],
+        span: Span,
     ) -> Result<ArcSort, TypeError> {
-        if let [inputs, Expr::Var(span, output)] = args {
+        if let [inputs, Expr::Var(output_span, output)] = args {
             let output_sort = typeinfo
                 .get_sort_by_name(output)
-                .ok_or(TypeError::UndefinedSort(output.clone(), span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(
+                    output.clone(),
+                    output_span.clone(),
+                ))?;
 
             let input_sorts = match inputs {
                 Expr::Call(_, first, rest_args) => {
-                    let all_args = once(first).chain(rest_args.iter().map(|arg| {
+                    let mut input_names = vec![first];
+                    for arg in rest_args {
                         if let Expr::Var(_, arg) = arg {
-                            arg
+                            input_names.push(arg);
                         } else {
-                            panic!("function sort must be called with list of input sorts");
+                            return Err(TypeError::BadPresortArguments(
+                                Self::presort_name().to_owned(),
+                                arg.span(),
+                            ));
                         }
-                    }));
-                    all_args
+                    }
+                    input_names
+                        .into_iter()
                         .map(|arg| {
                             typeinfo
                                 .get_sort_by_name(arg)
-                                .ok_or(TypeError::UndefinedSort(arg.clone(), span.clone()))
+                                .ok_or(TypeError::UndefinedSort(arg.clone(), output_span.clone()))
                                 .cloned()
                         })
                         .collect::<Result<Vec<_>, _>>()?
                 }
                 // an empty list of inputs args is parsed as a unit literal
                 Expr::Lit(_, Literal::Unit) => vec![],
-                _ => panic!("function sort must be called with list of input sorts"),
+                _ => {
+                    return Err(TypeError::BadPresortArguments(
+                        Self::presort_name().to_owned(),
+                        inputs.span(),
+                    ));
+                }
             };
 
             Ok(Arc::new(Self {
@@ -143,7 +156,10 @@ impl Presort for FunctionSort {
                 partial_arcsorts: Arc::new(Mutex::new(vec![])),
             }))
         } else {
-            panic!("function sort must be called with list of input args and output sort");
+            Err(TypeError::BadPresortArguments(
+                Self::presort_name().to_owned(),
+                span,
+            ))
         }
     }
 }
@@ -153,15 +169,13 @@ impl Sort for FunctionSort {
         &self.name
     }
 
-    fn column_ty(&self, _base_values: &BaseValues) -> ColumnTy {
+    fn column_ty(&self, _egraph: &egglog_bridge::EGraph) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, backend: &mut dyn egglog_backend_trait::Backend) {
-        backend.register_container_ty::<FunctionContainer>();
-        backend
-            .base_values_mut()
-            .register_type::<ResolvedFunction>();
+    fn register_type(&self, egraph: &mut egglog_bridge::EGraph) {
+        egraph.register_container_ty::<FunctionContainer>();
+        egraph.base_values_mut().register_type::<ResolvedFunction>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -601,7 +615,7 @@ impl FunctionContainer {
         let panic_id = self.3;
         // On capability mismatch, trigger the egglog runtime panic
         // pre-registered at the `unstable-fn` build site (see
-        // `BackendRule::prim`). The panic writes to the egraph's
+        // the rule translator). The panic writes to the egraph's
         // panic side channel and triggers early stop, so `run_rules`
         // surfaces the misuse as an `Err`.
         let mismatch = |state: &mut crate::PureState<'a, 'db>| -> Option<Value> {

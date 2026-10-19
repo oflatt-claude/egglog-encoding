@@ -1,4 +1,4 @@
-"""Define dependency-free benchmark identities, invariants, and backend metadata.
+"""Define dependency-free benchmark identities and invariants.
 
 This module owns endpoint selection, comparison scope, and the uniqueness rules
 required by cache-backed statistics. Feature-local requests, subprocess
@@ -12,48 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .engines import TREATMENT_SPECS, Engine, Treatment
+
 Status = Literal["success", "timed-out", "failure"]
-Backend = str
-Treatment = Literal["off", "term", "proofs", "proof-extraction"]
+DisequalityEncoding = Literal["nee", "ee"]
 DetailLevel = Literal["summary", "files", "phases", "rulesets"]
-
-
-@dataclass(frozen=True)
-class BackendSpec:
-    treatments: tuple[Treatment, ...]
-    flags: tuple[str, ...]
-    cargo_features: tuple[str, ...] = ()
-
-
-BACKEND_SPECS: dict[Backend, BackendSpec] = {
-    "main": BackendSpec(("off", "term", "proofs", "proof-extraction"), ()),
-    "dd": BackendSpec(("term", "proofs"), ("--backend", "dd"), ("dd-backend",)),
-}
-
-
-def backend_spec(backend: Backend) -> BackendSpec:
-    """Return metadata for a configured backend."""
-
-    try:
-        return BACKEND_SPECS[backend]
-    except KeyError as error:
-        raise ValueError(f"unknown backend: {backend}") from error
-
-
-def backend_cargo_features(backends: Sequence[Backend]) -> tuple[str, ...]:
-    """Return deduplicated Cargo features required by ``backends``."""
-
-    return tuple(dict.fromkeys(feature for backend in backends for feature in backend_spec(backend).cargo_features))
-
-
-def validate_backend_treatment(backend: Backend, treatment: Treatment) -> None:
-    """Reject one endpoint combination unsupported by its backend."""
-
-    supported = backend_spec(backend).treatments
-    if treatment not in supported:
-        raise ValueError(
-            f"backend {backend} does not support treatment {treatment}; supported treatments: {','.join(supported)}"
-        )
 
 
 @dataclass(frozen=True)
@@ -73,6 +36,15 @@ class FileSpec:
     sha256: str
     fact_directory: Path | None = None
     fact_directory_sha256: str = ""
+    engine_inputs: tuple[tuple[Engine, FileSpec], ...] = ()
+
+    def for_engine(self, engine: Engine) -> FileSpec:
+        """Resolve an engine's physical representation of this logical workload."""
+
+        for input_engine, file in self.engine_inputs:
+            if input_engine == engine:
+                return file
+        return self
 
 
 def validate_unique_file_identities(files: Sequence[FileSpec]) -> None:
@@ -102,11 +74,38 @@ class TargetRequest:
 
 
 @dataclass(frozen=True)
+class EngineBinary:
+    engine: Engine
+    sha256: str
+    path: Path | None
+
+
+@dataclass(frozen=True)
 class ResolvedTarget:
     request: TargetRequest
     row: TargetRow
     binary_sha256: str
     binary_path: Path | None
+    engine_binaries: tuple[EngineBinary, ...] = ()
+    primary_engine: Engine | None = None
+
+    def binary_sha256_for(self, treatment: Treatment) -> str:
+        engine = TREATMENT_SPECS[treatment].engine
+        for binary in self.engine_binaries:
+            if binary.engine == engine:
+                return binary.sha256
+        if engine == "egglog" and self.primary_engine in (None, "egglog"):
+            return self.binary_sha256
+        raise ValueError(f"target {self.display_label} has no {engine} binary")
+
+    def binary_path_for(self, treatment: Treatment) -> Path | None:
+        engine = TREATMENT_SPECS[treatment].engine
+        for binary in self.engine_binaries:
+            if binary.engine == engine:
+                return binary.path
+        if engine == "egglog" and self.primary_engine in (None, "egglog"):
+            return self.binary_path
+        raise ValueError(f"target {self.display_label} has no {engine} binary")
 
     @property
     def display_label(self) -> str:
@@ -121,32 +120,30 @@ class ResolvedTarget:
 
 @dataclass(frozen=True)
 class EndpointRequest:
-    """One unresolved target/backend/treatment selected by the CLI."""
+    """One unresolved target/treatment selected by the CLI."""
 
     target: TargetRequest
-    backend: Backend
     treatment: Treatment
+    disequality_encoding: DisequalityEncoding = "nee"
 
     def __post_init__(self) -> None:
-        validate_backend_treatment(self.backend, self.treatment)
+        if TREATMENT_SPECS[self.treatment].engine != "egglog" and self.disequality_encoding != "nee":
+            raise ValueError("disequality encoding selection is only supported by egglog treatments")
 
 
 @dataclass(frozen=True)
 class BenchmarkEndpoint:
-    """One resolved target/backend/treatment addressed by benchmark cache rows."""
+    """One resolved target/treatment addressed by benchmark cache rows."""
 
     target: ResolvedTarget
-    backend: Backend
     treatment: Treatment
-
-    def __post_init__(self) -> None:
-        validate_backend_treatment(self.backend, self.treatment)
+    disequality_encoding: DisequalityEncoding = "nee"
 
     @property
-    def cache_identity(self) -> tuple[str, Backend, Treatment]:
+    def cache_identity(self) -> tuple[str, Treatment, DisequalityEncoding]:
         """Return the endpoint coordinates shared by all of its file keys."""
 
-        return (self.target.binary_sha256, self.backend, self.treatment)
+        return (self.target.binary_sha256_for(self.treatment), self.treatment, self.disequality_encoding)
 
 
 @dataclass(frozen=True)
@@ -163,6 +160,9 @@ class ComparisonSpec:
         if not self.files:
             raise ValueError("benchmark comparison requires at least one file")
         validate_unique_file_identities(self.files)
+        for endpoint in (self.baseline, self.candidate):
+            engine = TREATMENT_SPECS[endpoint.treatment].engine
+            validate_unique_file_identities(tuple(file.for_engine(engine) for file in self.files))
         if self.rounds < 1:
             raise ValueError("benchmark rounds must be positive")
         if self.timeout_sec < 1:

@@ -4,6 +4,8 @@ expression: proof_snapshot
 ---
 (let t0 (vec-of (vec-of (w (b)))))
 (let t1 (p t0))
+(let prf0 (Fiat (= t1 t1)))
+(let prf1 (Proj (= t0 t0) prf0 0))
 (Rule
   (= t1 (b))
   (name "(rewrite (p (vec-of (vec-of (b)))) (b))")
@@ -12,13 +14,13 @@ expression: proof_snapshot
     (Eval)
     (Congr
       (= t1 (p (vec-of (vec-of (b)))))
-      (Fiat (= t1 t1))
+      prf0
       (Congr
         (= t0 (vec-of (vec-of (b))))
-        (Fiat (= t0 t0))
+        prf1
         (Congr
           (= (vec-of (w (b))) (vec-of (b)))
-          (Fiat (= (vec-of (w (b))) (vec-of (w (b)))))
+          (Proj (= (vec-of (w (b))) (vec-of (w (b)))) prf1 0)
           (Rule
             (= (w (b)) (b))
             (name "(rewrite (w x) x)")

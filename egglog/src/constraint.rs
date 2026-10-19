@@ -1,8 +1,5 @@
 use crate::{
-    core::{
-        Atom, CoreAction, CoreRule, GenericCoreActions, GenericCoreRule, HeadOrEq, Query,
-        QueryConstraints, StringOrEq,
-    },
+    core::{Atom, CoreAction, GenericCoreActions, GenericCoreRule, HeadOrEq, Query, StringOrEq},
     *,
 };
 use std::{cmp, rc::Rc};
@@ -511,23 +508,23 @@ impl Assignment<AtomTerm, ArcSort> {
         expr: &GenericExpr<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
         ctx: crate::Context,
-    ) -> ResolvedExpr {
+    ) -> Result<ResolvedExpr, TypeError> {
         match &expr {
-            GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(span.clone(), literal.clone()),
+            GenericExpr::Lit(span, literal) => Ok(ResolvedExpr::Lit(span.clone(), literal.clone())),
             GenericExpr::Var(span, var) => {
                 let global_sort = typeinfo.get_global_sort(var);
                 let ty = global_sort
                     // Span is ignored when looking up atom_terms
                     .or_else(|| self.get(&AtomTerm::Var(Span::Panic, var.clone())))
                     .expect("All variables should be assigned before annotation");
-                ResolvedExpr::Var(
+                Ok(ResolvedExpr::Var(
                     span.clone(),
                     ResolvedVar {
                         name: var.clone(),
                         sort: ty.clone(),
                         is_global_ref: global_sort.is_some(),
                     },
-                )
+                ))
             }
             GenericExpr::Call(
                 span,
@@ -538,24 +535,28 @@ impl Assignment<AtomTerm, ArcSort> {
                 args,
             ) => {
                 // get the resolved call using resolve_rule
-                let args: Vec<_> = args
+                let args: Vec<ResolvedExpr> = args
                     .iter()
                     .map(|arg| self.annotate_expr(arg, typeinfo, ctx))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 // The `values` tuple constructor resolves to `ResolvedCall::Values` carrying its
                 // element sorts. A tuple-output function call carries only its input columns here
                 // (its outputs live on the `values` side of the destructure/set), so it resolves
                 // from input types alone.
                 if head.as_str() == "values" {
                     let sorts = args.iter().map(|arg| arg.output_type()).collect();
-                    return GenericExpr::Call(span.clone(), ResolvedCall::Values(sorts), args);
+                    return Ok(GenericExpr::Call(
+                        span.clone(),
+                        ResolvedCall::Values(sorts),
+                        args,
+                    ));
                 }
                 if let Some(ty) = typeinfo.get_func_type(head).filter(|t| t.is_tuple_output()) {
                     let input_types: Vec<_> = args.iter().map(|arg| arg.output_type()).collect();
                     let resolved_call =
                         ResolvedCall::from_resolution_func_types(head, &input_types, typeinfo)
                             .unwrap_or_else(|| ResolvedCall::Func(ty.clone()));
-                    return GenericExpr::Call(span.clone(), resolved_call, args);
+                    return Ok(GenericExpr::Call(span.clone(), resolved_call, args));
                 }
                 let types: Vec<_> = args
                     .iter()
@@ -566,8 +567,9 @@ impl Assignment<AtomTerm, ArcSort> {
                             .clone(),
                     ))
                     .collect();
-                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo, ctx);
-                GenericExpr::Call(span.clone(), resolved_call, args)
+                let resolved_call =
+                    ResolvedCall::from_resolution(head, &types, typeinfo, ctx, span)?;
+                Ok(GenericExpr::Call(span.clone(), resolved_call, args))
             }
         }
     }
@@ -577,14 +579,16 @@ impl Assignment<AtomTerm, ArcSort> {
         facts: &GenericFact<CorrespondingVar<String, String>, String>,
         typeinfo: &TypeInfo,
         ctx: crate::Context,
-    ) -> ResolvedFact {
+    ) -> Result<ResolvedFact, TypeError> {
         match facts {
-            GenericFact::Eq(span, e1, e2) => ResolvedFact::Eq(
+            GenericFact::Eq(span, e1, e2) => Ok(ResolvedFact::Eq(
                 span.clone(),
-                self.annotate_expr(e1, typeinfo, ctx),
-                self.annotate_expr(e2, typeinfo, ctx),
-            ),
-            GenericFact::Fact(expr) => ResolvedFact::Fact(self.annotate_expr(expr, typeinfo, ctx)),
+                self.annotate_expr(e1, typeinfo, ctx)?,
+                self.annotate_expr(e2, typeinfo, ctx)?,
+            )),
+            GenericFact::Fact(expr) => {
+                Ok(ResolvedFact::Fact(self.annotate_expr(expr, typeinfo, ctx)?))
+            }
         }
     }
 
@@ -593,7 +597,7 @@ impl Assignment<AtomTerm, ArcSort> {
         mapped_facts: &[GenericFact<CorrespondingVar<String, String>, String>],
         typeinfo: &TypeInfo,
         ctx: crate::Context,
-    ) -> Vec<ResolvedFact> {
+    ) -> Result<Vec<ResolvedFact>, TypeError> {
         mapped_facts
             .iter()
             .map(|fact| self.annotate_fact(fact, typeinfo, ctx))
@@ -618,7 +622,7 @@ impl Assignment<AtomTerm, ArcSort> {
                         sort: ty.clone(),
                         is_global_ref: false,
                     },
-                    self.annotate_expr(expr, typeinfo, ctx),
+                    self.annotate_expr(expr, typeinfo, ctx)?,
                 ))
             }
             // Note mapped_var for set is a dummy variable that does not mean anything
@@ -631,11 +635,11 @@ impl Assignment<AtomTerm, ArcSort> {
                 children,
                 rhs,
             ) => {
-                let children: Vec<_> = children
+                let children: Vec<ResolvedExpr> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo, ctx))
-                    .collect();
-                let rhs = self.annotate_expr(rhs, typeinfo, ctx);
+                    .collect::<Result<_, _>>()?;
+                let rhs = self.annotate_expr(rhs, typeinfo, ctx)?;
                 // For a tuple-output function the `rhs` is a `(values ...)` form, so the function
                 // is resolved from its input columns alone.
                 let resolved_call = if let Some(ty) =
@@ -651,7 +655,7 @@ impl Assignment<AtomTerm, ArcSort> {
                         .map(|child| child.output_type())
                         .chain(once(rhs.output_type()))
                         .collect();
-                    ResolvedCall::from_resolution(head, &types, typeinfo, ctx)
+                    ResolvedCall::from_resolution(head, &types, typeinfo, ctx, span)?
                 };
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(head.clone(), span.clone()));
@@ -673,10 +677,10 @@ impl Assignment<AtomTerm, ArcSort> {
                 },
                 children,
             ) => {
-                let children: Vec<_> = children
+                let children: Vec<ResolvedExpr> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo, ctx))
-                    .collect();
+                    .collect::<Result<_, _>>()?;
                 let types: Vec<_> = children.iter().map(|child| child.output_type()).collect();
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
@@ -689,8 +693,8 @@ impl Assignment<AtomTerm, ArcSort> {
                 ))
             }
             GenericAction::Union(span, lhs, rhs) => {
-                let lhs = self.annotate_expr(lhs, typeinfo, ctx);
-                let rhs = self.annotate_expr(rhs, typeinfo, ctx);
+                let lhs = self.annotate_expr(lhs, typeinfo, ctx)?;
+                let rhs = self.annotate_expr(rhs, typeinfo, ctx)?;
 
                 let sort = lhs.output_type();
                 assert_eq!(sort.name(), rhs.output_type().name());
@@ -706,7 +710,7 @@ impl Assignment<AtomTerm, ArcSort> {
             GenericAction::Panic(span, msg) => Ok(ResolvedAction::Panic(span.clone(), msg.clone())),
             GenericAction::Expr(span, expr) => Ok(ResolvedAction::Expr(
                 span.clone(),
-                self.annotate_expr(expr, typeinfo, ctx),
+                self.annotate_expr(expr, typeinfo, ctx)?,
             )),
         }
     }
@@ -795,30 +799,6 @@ impl Problem<AtomTerm, ArcSort> {
         Ok(())
     }
 
-    pub(crate) fn add_rule(
-        &mut self,
-        rule: &CoreRule,
-        typeinfo: &TypeInfo,
-        symbol_gen: &mut SymbolGen,
-        query_ctx: crate::Context,
-        action_ctx: crate::Context,
-    ) -> Result<(), TypeError> {
-        let CoreRule {
-            span: _,
-            head,
-            body,
-        } = rule;
-        // Rule body atoms run as the LHS query; head atoms run as the
-        // RHS action. Contexts come from the caller — currently rule
-        // bodies always typecheck under `Read` and actions under
-        // `Full`; whether the rule actually opts out of seminaive is
-        // decided post-typecheck by walking for non-`Pure`/non-`Write`
-        // primitive kinds.
-        self.add_query(body, typeinfo, query_ctx)?;
-        self.add_actions(head, typeinfo, symbol_gen, action_ctx)?;
-        Ok(())
-    }
-
     pub(crate) fn assign_local_var_type(
         &mut self,
         var: &str,
@@ -831,17 +811,8 @@ impl Problem<AtomTerm, ArcSort> {
     }
 }
 
-trait CoreActionConstraints {
-    fn get_constraints(
-        &self,
-        typeinfo: &TypeInfo,
-        symbol_gen: &mut SymbolGen,
-        ctx: crate::Context,
-    ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError>;
-}
-
-impl CoreActionConstraints for CoreAction {
-    fn get_constraints(
+impl CoreAction {
+    pub(crate) fn get_constraints(
         &self,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
@@ -917,16 +888,8 @@ impl CoreActionConstraints for CoreAction {
     }
 }
 
-pub(crate) trait AtomConstraints {
-    fn get_constraints(
-        &self,
-        type_info: &TypeInfo,
-        ctx: crate::Context,
-    ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError>;
-}
-
-impl AtomConstraints for Atom<StringOrEq> {
-    fn get_constraints(
+impl Atom<StringOrEq> {
+    pub(crate) fn get_constraints(
         &self,
         type_info: &TypeInfo,
         ctx: crate::Context,

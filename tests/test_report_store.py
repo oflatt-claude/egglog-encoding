@@ -20,13 +20,12 @@ from benchmarking.reports.store import (
 from .report_fixtures import make_record, make_ruleset_timing, make_timing_summary, write_report
 
 
-def test_missing_report_is_an_empty_store_without_sidecar_artifacts(tmp_path: Path) -> None:
+def test_missing_report_is_an_empty_store_without_creating_files(tmp_path: Path) -> None:
     report = tmp_path / "nested" / "report.jsonl"
 
     ReportStore(report)
 
-    assert report.read_text(encoding="utf-8") == ""
-    assert list(report.parent.iterdir()) == [report]
+    assert not report.parent.exists()
 
 
 def test_append_is_immediately_queryable(tmp_path: Path) -> None:
@@ -42,6 +41,35 @@ def test_append_is_immediately_queryable(tmp_path: Path) -> None:
     raw = json.loads(report.read_text(encoding="utf-8"))
     assert raw == record
     assert "row_index" not in raw
+
+
+def test_label_pointers_select_the_latest_binary_for_each_engine(tmp_path: Path) -> None:
+    report = tmp_path / "report.jsonl"
+    write_report(
+        report,
+        make_record(
+            0,
+            started_at="2026-07-15T12:00:00Z",
+            target_label="current",
+            binary_sha256="sha256:egglog",
+            treatment="off",
+        ),
+        make_record(
+            1,
+            started_at="2026-07-15T12:00:01Z",
+            target_label="current",
+            binary_sha256="sha256:egg",
+            treatment="egg",
+        ),
+    )
+    store = ReportStore(report)
+    egglog = store.find_label_pointer("current", "egglog")
+    egg = store.find_label_pointer("current", "egg")
+    latest = store.find_label_pointer("current")
+
+    assert egglog is not None and egglog.binary_sha256 == "sha256:egglog"
+    assert egg is not None and egg.binary_sha256 == "sha256:egg"
+    assert latest is not None and latest.binary_sha256 == "sha256:egg"
 
 
 def test_append_indexes_the_exact_record_it_persists(tmp_path: Path) -> None:
@@ -85,10 +113,10 @@ def test_typed_dict_schema_and_nested_values_round_trip(tmp_path: Path) -> None:
                 "rules/λ",
                 search_ns=6,
                 apply_ns=5,
-                unattributed_ns=4,
+                execution_ns=4,
                 merge_ns=7,
-                rebuild_ns=3,
-            )
+            ),
+            native_rebuild_ns=3,
         ),
     )
 
@@ -100,7 +128,19 @@ def test_typed_dict_schema_and_nested_values_round_trip(tmp_path: Path) -> None:
     summary = cast(TimingSummaryRecord, loaded["timing_summary"])
     assert tuple(summary) == tuple(TimingSummaryRecord.__annotations__)
     rulesets = cast(list[RulesetTimingRecord], summary["rulesets"])
-    assert tuple(rulesets[0]) == tuple(RulesetTimingRecord.__annotations__)
+    assert all(tuple(ruleset) == tuple(RulesetTimingRecord.__annotations__) for ruleset in rulesets)
+    assert rulesets == [
+        {
+            "name": "rules/λ",
+            "role": "program",
+            "assembly_ns": 0,
+            "search_ns": 6,
+            "apply_ns": 5,
+            "execution_ns": 4,
+            "merge_ns": 7,
+        }
+    ]
+    assert summary["native_rebuild_ns"] == 3
 
 
 @pytest.mark.parametrize("schema_version", [None, 2], ids=["missing", "wrong"])
@@ -124,7 +164,7 @@ def test_incompatible_report_shapes_fail_during_load(tmp_path: Path, mixed: bool
     current = make_record(0, started_at="2026-07-15T12:00:00Z")
     old = cast(dict[str, object], make_record(1, started_at="2026-07-15T12:00:01Z"))
     timing = cast(dict[str, object], old["timing_summary"])
-    timing["schema_version"] = 1
+    timing["schema_version"] = 2
     records = (current, old) if mixed else (old,)
     report.write_text("".join(f"{json.dumps(record)}\n" for record in records), encoding="utf-8")
 

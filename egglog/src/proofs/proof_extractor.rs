@@ -3,7 +3,6 @@ use crate::extract::find_canonical;
 use crate::termdag::{TermDag, TermId};
 use crate::util::{HashMap, HashSet};
 use crate::{ArcSort, EGraph, Function, Value};
-use egglog_backend_trait::BackendExt;
 use std::ops::Range;
 
 /// A node of the search: a value together with the sort it is reconstructed at.
@@ -82,11 +81,11 @@ struct EqStage {
 /// extraction output column.
 ///
 /// A group's rows are in lexicographic order, so which row a search picks does
-/// not depend on the backend's row iteration order — see `prove_exists`.
+/// not depend on storage row iteration order — see `prove_exists`.
 struct FunctionRows {
     /// Row width; zero when the function has no rows.
     arity: usize,
-    /// The rows, concatenated in the order the backend yielded them.
+    /// The rows, concatenated in storage iteration order.
     vals: Vec<Value>,
     /// Row numbers into `vals`, ordered by output value and then by row
     /// contents, so each group is a contiguous run.
@@ -97,7 +96,7 @@ struct FunctionRows {
 
 impl FunctionRows {
     fn build(egraph: &EGraph, func: &Function) -> Self {
-        let output_idx = func.extraction_output_index();
+        let output_idx = func.extraction_layout().1;
         let mut arity = 0;
         let mut vals = Vec::new();
         egraph
@@ -185,11 +184,11 @@ impl EqStage {
             self.unscanned += 1;
             // Term/proof relations (function-to-Unit, id in the last input) and
             // ordinary constructors both reconstruct here; views and the
-            // delete/subsume markers (`is_relation_term` is false for markers) are
+            // subsumption markers (`is_proof_node_relation` is false for markers) are
             // skipped.
-            if (func.decl.subtype != FunctionSubtype::Constructor && !func.is_relation_term())
-                || func.extraction_output_sort().name() != sort.name()
-                || func.decl.term_constructor.is_some()
+            if (func.decl.subtype != FunctionSubtype::Constructor && !func.is_proof_node_relation())
+                || func.extraction_layout().0.name() != sort.name()
+                || func.decl.internal_view.is_some()
             {
                 continue;
             }
@@ -270,14 +269,13 @@ impl Frame {
                                 .functions
                                 .get_index(eq.func)
                                 .expect("the pending row's function");
-                            return if children.len() == func.extraction_num_children() {
-                                Step::Done(Some(termdag.app(
-                                    func.extraction_term_name().to_string(),
-                                    std::mem::take(children),
-                                )))
+                            return if children.len() == func.extraction_layout().1 {
+                                Step::Done(Some(
+                                    termdag.app(func.name().to_string(), std::mem::take(children)),
+                                ))
                             } else {
                                 let index = children.len();
-                                Step::Need(row[index], func.schema.input[index].clone())
+                                Step::Need(row[index], func.func_type.input[index].clone())
                             };
                         }
                         None => match eq.next_row(egraph, scanned, self.value, &self.sort) {
@@ -395,7 +393,7 @@ mod tests {
             .unwrap_or_else(|| panic!("function `{function_name}` was not declared"));
         let mut value = None;
         egraph.backend.for_each_while(func.backend_id, |row| {
-            value = Some(row.vals[func.extraction_output_index()]);
+            value = Some(row.vals[func.extraction_layout().1]);
             false
         });
         value.unwrap_or_else(|| panic!("function `{function_name}` has no rows"))

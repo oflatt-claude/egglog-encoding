@@ -9,7 +9,6 @@ pub(crate) fn desugar_command(
     parser: &mut Parser,
     proof_testing: bool,
 ) -> Result<Vec<NCommand>, Error> {
-    let rule_name = rule_name(&command);
     let res = match command {
         Command::Function {
             span,
@@ -18,7 +17,7 @@ pub(crate) fn desugar_command(
             merge,
             hidden,
             let_binding,
-            term_constructor,
+            internal_view,
             unextractable,
             identity_vals,
             cost,
@@ -27,18 +26,17 @@ pub(crate) fn desugar_command(
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
             fdecl.internal_hidden = hidden;
             fdecl.internal_let = let_binding;
-            fdecl.term_constructor = term_constructor;
+            fdecl.internal_view = internal_view;
             fdecl.identity_vals = identity_vals;
             fdecl.cost = cost;
             fdecl.internal_term_node = term_node;
-            // Functions with term_constructor are view tables that should be
-            // extractable unless explicitly marked unextractable
-            if fdecl.term_constructor.is_some() {
+            // A view table is extractable unless explicitly marked unextractable
+            if fdecl.internal_view.is_some() {
                 fdecl.unextractable = unextractable;
             } else if unextractable {
                 fdecl.unextractable = true;
             }
-            // For regular functions without term_constructor, keep the default
+            // For regular functions, keep the default
             // unextractable=true from FunctionDecl::function()
             vec![NCommand::Function(fdecl)]
         }
@@ -50,12 +48,10 @@ pub(crate) fn desugar_command(
             unextractable,
             hidden,
             let_binding,
-            term_constructor,
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
             fdecl.internal_let = let_binding;
-            fdecl.term_constructor = term_constructor;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),
@@ -76,7 +72,6 @@ pub(crate) fn desugar_command(
                         name,
                         presort_and_args: None,
                         uf: None,
-                        proof_func: None,
                         container_rebuild: None,
                         proof_constructors: None,
                         unionable: true,
@@ -98,7 +93,6 @@ pub(crate) fn desugar_command(
                     name,
                     presort_and_args: Some((sort, args)),
                     uf: None,
-                    proof_func: None,
                     container_rebuild: None,
                     proof_constructors: None,
                     unionable: true,
@@ -127,25 +121,19 @@ pub(crate) fn desugar_command(
 
             res
         }
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            let resolved_name = if rewrite.name.is_empty() {
-                rule_name
-            } else {
-                rewrite.name.clone()
-            };
-            desugar_rewrite(ruleset, resolved_name, rewrite, subsume, parser)
+        Command::Rewrite(ruleset, mut rewrite, subsume) => {
+            let name = RuleLikeCommand::Rewrite(&ruleset, &mut rewrite, subsume).resolve_name();
+            vec![desugar_rewrite(ruleset, name, rewrite, subsume, parser)?]
         }
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rule_name, rewrite, parser)
+        Command::BiRewrite(ruleset, mut rewrite) => {
+            let name = RuleLikeCommand::BiRewrite(&ruleset, &mut rewrite).resolve_name();
+            desugar_birewrite(ruleset, name, rewrite, parser)?
         }
         Command::Include(_span, _file) => {
             unreachable!("Include commands should be expanded before desugaring")
         }
         Command::Rule { mut rule } => {
-            if rule.name.is_empty() {
-                // format rule and use it as the name
-                rule.name = rule_name;
-            }
+            rule.name = RuleLikeCommand::Rule(&mut rule).resolve_name();
             vec![NCommand::NormRule { rule }]
         }
         Command::Sort {
@@ -153,7 +141,6 @@ pub(crate) fn desugar_command(
             name,
             presort_and_args,
             uf,
-            proof_func,
             container_rebuild,
             proof_constructors,
             unionable,
@@ -162,7 +149,6 @@ pub(crate) fn desugar_command(
             name,
             presort_and_args,
             uf,
-            proof_func,
             container_rebuild,
             proof_constructors,
             unionable,
@@ -217,12 +203,74 @@ pub(crate) fn desugar_command(
             // one `fail`, so the assertion covers all of them.
             let mut desugared = vec![];
             for cmd in cmds {
-                desugared.extend(desugar_command(cmd, parser, proof_testing)?);
+                if matches!(&cmd, Command::Include(..)) {
+                    // `include` is expanded before desugaring, so it never reaches
+                    // here from a top-level program; only a wrapped one can.
+                    return Err(Error::DesugarError(
+                        span.clone(),
+                        "include is not allowed inside (fail ...)".to_string(),
+                    ));
+                }
+                // Term/proof encoding reparses its own generated bindings. They
+                // use the parser's reserved prefix, so they cannot be written by
+                // a user, and must stay inside the transaction with the command
+                // that consumes them.
+                let is_user_let = matches!(
+                    &cmd,
+                    Command::Action(Action::Let(_, name, _))
+                        if !parser.symbol_gen.is_reserved(name)
+                );
+                if is_user_let
+                    || matches!(
+                        &cmd,
+                        Command::Sort { .. }
+                            | Command::Datatype { .. }
+                            | Command::Datatypes { .. }
+                            | Command::Constructor { .. }
+                            | Command::Relation { .. }
+                            | Command::Function { .. }
+                            | Command::Index { .. }
+                            | Command::AddRuleset(..)
+                            | Command::UnstableCombinedRuleset(..)
+                            | Command::Rule { .. }
+                            | Command::Rewrite(..)
+                            | Command::BiRewrite(..)
+                            | Command::Prove(..)
+                            | Command::ProveExists(..)
+                            | Command::LetBegin(..)
+                            | Command::Push(..)
+                            | Command::Pop(..)
+                            | Command::UserDefined(..)
+                    )
+                {
+                    return Err(Error::DesugarError(
+                        span.clone(),
+                        "prove, prove-exists, definitions, user-defined commands, push, and pop are not allowed inside (fail ...)"
+                            .to_string(),
+                    ));
+                }
+                desugared.extend(desugar_command(cmd, parser, false)?);
+            }
+            if desugared.is_empty() {
+                return Err(Error::DesugarError(
+                    span.clone(),
+                    "the commands inside (fail ...) expand to no commands".to_string(),
+                ));
             }
             return Ok(vec![NCommand::Fail(span, desugared)]);
         }
-        Command::Input { span, name, file } => {
-            vec![NCommand::Input { span, name, file }]
+        Command::Input {
+            span,
+            name,
+            file,
+            proof_base,
+        } => {
+            vec![NCommand::Input {
+                span,
+                name,
+                file,
+                proof_base,
+            }]
         }
         Command::UserDefined(span, name, args) => {
             vec![NCommand::UserDefined(span, name, args)]
@@ -234,6 +282,35 @@ pub(crate) fn desugar_command(
     };
 
     Ok(res)
+}
+
+enum RuleLikeCommand<'a> {
+    Rule(&'a mut Rule),
+    Rewrite(&'a str, &'a mut Rewrite, bool),
+    BiRewrite(&'a str, &'a mut Rewrite),
+}
+
+impl RuleLikeCommand<'_> {
+    fn resolve_name(mut self) -> String {
+        let supplied_name = match &mut self {
+            Self::Rule(rule) => std::mem::take(&mut rule.name),
+            Self::Rewrite(_, rw, _) | Self::BiRewrite(_, rw) => std::mem::take(&mut rw.name),
+        };
+        if !supplied_name.is_empty() {
+            return supplied_name;
+        }
+        self.to_string().replace('\"', "'")
+    }
+}
+
+impl std::fmt::Display for RuleLikeCommand<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rule(rule) => std::fmt::Display::fmt(&**rule, f),
+            Self::Rewrite(ruleset, rw, subsume) => rw.fmt_with_ruleset(f, ruleset, false, *subsume),
+            Self::BiRewrite(ruleset, rw) => rw.fmt_with_ruleset(f, ruleset, true, false),
+        }
+    }
 }
 
 /// Desugars a `prove` command into egglog commands.
@@ -262,7 +339,6 @@ fn desugar_prove(parser: &mut Parser, span: Span, query: Vec<Fact>) -> Vec<NComm
             name: fresh_sort.clone(),
             presort_and_args: None,
             uf: None,
-            proof_func: None,
             container_rebuild: None,
             proof_constructors: None,
             unionable: false,
@@ -314,7 +390,6 @@ fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCo
         name: name.clone(),
         presort_and_args: None,
         uf: None,
-        proof_func: None,
         container_rebuild: None,
         proof_constructors: None,
         unionable: true,
@@ -342,16 +417,19 @@ fn desugar_rewrite(
     rewrite: Rewrite,
     subsume: bool,
     parser: &mut Parser,
-) -> Vec<NCommand> {
-    let span = rewrite.span.clone();
+) -> Result<NCommand, Error> {
+    let span = rewrite.span;
+    let lhs = rewrite.lhs;
+    let rhs = rewrite.rhs;
+    let conditions = rewrite.conditions;
     let var = parser.symbol_gen.fresh("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
         span.clone(),
         Expr::Var(span.clone(), var.clone()),
-        rewrite.rhs.clone(),
+        rhs,
     ));
     if subsume {
-        match &rewrite.lhs {
+        match &lhs {
             Expr::Call(_, f, args) => {
                 head.0.push(Action::Change(
                     span.clone(),
@@ -361,24 +439,23 @@ fn desugar_rewrite(
                 ));
             }
             _ => {
-                panic!("Subsumed rewrite must have a function call on the lhs");
+                return Err(Error::DesugarError(
+                    lhs.span(),
+                    "subsumed rewrite must have a function call on the lhs".to_string(),
+                ));
             }
         }
     }
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
-    vec![NCommand::NormRule {
+    Ok(NCommand::NormRule {
         rule: Rule {
             span: span.clone(),
-            body: [Fact::Eq(
-                span.clone(),
-                Expr::Var(span, var),
-                rewrite.lhs.clone(),
-            )]
-            .into_iter()
-            .chain(rewrite.conditions.clone())
-            .collect(),
+            body: [Fact::Eq(span.clone(), Expr::Var(span, var), lhs)]
+                .into_iter()
+                .chain(conditions)
+                .collect(),
             head,
             ruleset,
             name,
@@ -386,44 +463,26 @@ fn desugar_rewrite(
             no_decomp: false,
             include_subsumed: false,
         },
-    }]
+    })
 }
 
 fn desugar_birewrite(
     ruleset: String,
-    name: String,
+    rewrite_name: String,
     rewrite: Rewrite,
     parser: &mut Parser,
-) -> Vec<NCommand> {
-    let span = rewrite.span.clone();
-    let rewrite_name = if rewrite.name.is_empty() {
-        name
-    } else {
-        rewrite.name.clone()
-    };
-    let rw2 = Rewrite {
-        span,
-        lhs: rewrite.rhs.clone(),
-        rhs: rewrite.lhs.clone(),
-        conditions: rewrite.conditions.clone(),
-        name: rewrite_name.clone(),
-    };
-    desugar_rewrite(
+) -> Result<Vec<NCommand>, Error> {
+    let mut reverse = rewrite.clone();
+    std::mem::swap(&mut reverse.lhs, &mut reverse.rhs);
+    let forward = desugar_rewrite(
         ruleset.clone(),
         format!("{rewrite_name}=>"),
         rewrite,
         false,
         parser,
-    )
-    .into_iter()
-    .chain(desugar_rewrite(
-        ruleset,
-        format!("{rewrite_name}<="),
-        rw2,
-        false,
-        parser,
-    ))
-    .collect()
+    )?;
+    let backward = desugar_rewrite(ruleset, format!("{rewrite_name}<="), reverse, false, parser)?;
+    Ok(vec![forward, backward])
 }
 
 /// Desugar relation by making a new sort and a constructor for it.
@@ -442,7 +501,6 @@ fn desugar_relation(
             name: fresh_sort.clone(),
             presort_and_args: None,
             uf: None,
-            proof_func: None,
             container_rebuild: None,
             proof_constructors: None,
             unionable: false,

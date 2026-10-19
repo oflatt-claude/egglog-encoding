@@ -152,10 +152,10 @@ impl EGraph {
                 // Tuple-output functions (e.g. the proof-mode `(children) -> (eclass, proof)` view)
                 // have more than one value column; the first value column is the e-class / output
                 // that serialization tracks, and any extra columns (a proof) are not serialized.
-                let n_keys = function.schema.input.len();
+                let n_keys = function.func_type.input.len();
                 let inps = &row.vals[..n_keys];
                 let out = &row.vals[n_keys];
-                let class_id = self.value_to_class_id(function.schema.output(), *out);
+                let class_id = self.value_to_class_id(function.func_type.output(), *out);
                 if function.decl.internal_let {
                     let_bindings
                         .entry(class_id.clone())
@@ -192,7 +192,7 @@ impl EGraph {
         let node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
             |mut acc, (func, _input, _output, _subsumed, class_id, node_id)| {
-                if func.schema.output().is_eq_sort() {
+                if func.func_type.output().is_eq_sort() {
                     acc.entry(class_id.clone())
                         .or_default()
                         .push_back(node_id.clone());
@@ -208,12 +208,12 @@ impl EGraph {
         };
 
         for (func, input, output, subsumed, class_id, node_id) in all_calls {
-            self.serialize_value(&mut serializer, func.schema.output(), output, &class_id);
+            self.serialize_value(&mut serializer, func.func_type.output(), output, &class_id);
 
-            assert_eq!(input.len(), func.schema.input.len());
+            assert_eq!(input.len(), func.func_type.input.len());
             let children: Vec<_> = input
                 .iter()
-                .zip(&func.schema.input)
+                .zip(&func.func_type.input)
                 .map(|(&v, sort)| {
                     self.serialize_value(&mut serializer, sort, v, &self.value_to_class_id(sort, v))
                 })
@@ -247,19 +247,18 @@ impl EGraph {
         // Canonicalize the value first so that we always use the canonical e-class ID
         let value = self
             .backend
-            .get_canon_repr(value, sort.column_ty(self.backend.base_values()));
-        assert!(
-            !sort.name().to_string().contains('-'),
-            "Tag cannot contain '-' when serializing"
-        );
+            .get_canon_repr(value, sort.column_ty(&self.backend));
         use numeric_id::NumericId;
+        // `value.rep()` is numeric and never contains '-', so the sort tag and the
+        // value are recovered by splitting on the *last* '-' (see `class_id_to_value`).
+        // This keeps class IDs unambiguous even when the sort name contains '-'.
         format!("{}-{}", sort.name(), value.rep()).into()
     }
 
     /// Gets the value for a serialized class ID.
     pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> Value {
         let s = eclass_id.to_string();
-        let (_tag, bits) = s.split_once('-').unwrap();
+        let (_tag, bits) = s.rsplit_once('-').unwrap();
         Value::new_const(bits.parse().unwrap())
     }
 

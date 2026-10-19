@@ -8,17 +8,19 @@ use std::{
 
 use crate::numeric_id::{DenseIdMap, NumericId};
 use crossbeam_queue::SegQueue;
+use smallvec::SmallVec;
 
 use crate::{
     TableChange, TaggedRowBuffer,
     action::ExecutionState,
     common::{HashMap, Value},
     offsets::{OffsetRange, RowId, Subset, SubsetRef},
+    parallel,
     pool::with_pool_set,
     row_buffer::RowBuffer,
     table_spec::{
-        ColumnId, Constraint, Generation, MutationBuffer, Offset, Rebuilder, Row, Table, TableSpec,
-        TableVersion, ValueRebuilder, WrappedTableRef,
+        ColumnId, Constraint, Generation, MutationBuffer, Offset, Rebuilder, Row, Table,
+        TableSchema, TableSpec, TableVersion, ValueRebuilder, WrappedTableRef,
     },
 };
 
@@ -26,6 +28,27 @@ use crate::{
 mod tests;
 
 type UnionFind = crate::union_find::UnionFind<Value>;
+
+/// Batches and timestamp groups of this size or smaller stay serial.
+const PARALLEL_UNION_THRESHOLD_ROWS: usize = 16 * 1024;
+/// Default task size for runs with enough rows to keep all workers busy.
+const PARALLEL_UNION_CHUNK_ROWS: usize = 16 * 1024;
+/// Finer task size for runs with fewer than 16K rows per worker.
+const SMALL_PARALLEL_UNION_CHUNK_ROWS: usize = 2 * 1024;
+
+#[derive(Clone, Copy)]
+struct UnionChunk {
+    buffer: usize,
+    start: usize,
+    end: usize,
+}
+
+struct TimestampGroup {
+    timestamp: Value,
+    chunks: std::ops::Range<usize>,
+    rows: usize,
+    max_value: Value,
+}
 
 /// A special table backed by a union-find used to efficiently implement
 /// egglog-style canonicaliztion.
@@ -88,7 +111,6 @@ impl Rebuilder for Canonicalizer<'_> {
         }
         assert!(end.index() <= buf.len());
         let mut cur = start;
-        let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
         // SAFETY: `cur` is always in-bounds, guaranteed by the above assertion.
         // Special-case small columns: this gives us a modest speedup on rebuilding-heavy
         // workloads.
@@ -99,10 +121,7 @@ impl Rebuilder for Canonicalizer<'_> {
                     let to_canon = row[c.index()];
                     let canon = self.table.uf.find_naive(to_canon);
                     if canon != to_canon {
-                        scratch.extend_from_slice(row);
-                        scratch[c.index()] = canon;
-                        out.add_row(cur, &scratch);
-                        scratch.clear();
+                        out.add_row_with(cur, row, |dst| dst[c.index()] = canon);
                     }
                     cur = cur.inc();
                 }
@@ -115,11 +134,10 @@ impl Rebuilder for Canonicalizer<'_> {
                     let ca1 = self.table.uf.find_naive(v1);
                     let ca2 = self.table.uf.find_naive(v2);
                     if ca1 != v1 || ca2 != v2 {
-                        scratch.extend_from_slice(row);
-                        scratch[c1.index()] = ca1;
-                        scratch[c2.index()] = ca2;
-                        out.add_row(cur, &scratch);
-                        scratch.clear();
+                        out.add_row_with(cur, row, |dst| {
+                            dst[c1.index()] = ca1;
+                            dst[c2.index()] = ca2;
+                        });
                     }
                     cur = cur.inc();
                 }
@@ -134,30 +152,34 @@ impl Rebuilder for Canonicalizer<'_> {
                     let ca2 = self.table.uf.find_naive(v2);
                     let ca3 = self.table.uf.find_naive(v3);
                     if ca1 != v1 || ca2 != v2 || ca3 != v3 {
-                        scratch.extend_from_slice(row);
-                        scratch[c1.index()] = ca1;
-                        scratch[c2.index()] = ca2;
-                        scratch[c3.index()] = ca3;
-                        out.add_row(cur, &scratch);
-                        scratch.clear();
+                        out.add_row_with(cur, row, |dst| {
+                            dst[c1.index()] = ca1;
+                            dst[c2.index()] = ca2;
+                            dst[c3.index()] = ca3;
+                        });
                     }
                     cur = cur.inc();
                 }
             }
             cs => {
+                let mut canons: SmallVec<[Value; 8]> = SmallVec::with_capacity(cs.len());
                 while cur < end {
-                    scratch.extend_from_slice(unsafe { buf.get_row_unchecked(cur) });
+                    let row = unsafe { buf.get_row_unchecked(cur) };
+                    canons.clear();
                     let mut changed = false;
                     for c in cs {
-                        let to_canon = scratch[c.index()];
+                        let to_canon = row[c.index()];
                         let canon = self.table.uf.find_naive(to_canon);
-                        scratch[c.index()] = canon;
                         changed |= canon != to_canon;
+                        canons.push(canon);
                     }
                     if changed {
-                        out.add_row(cur, &scratch);
+                        out.add_row_with(cur, row, |dst| {
+                            for (c, canon) in cs.iter().zip(canons.iter()) {
+                                dst[c.index()] = *canon;
+                            }
+                        });
                     }
-                    scratch.clear();
                     cur = cur.inc();
                 }
             }
@@ -264,8 +286,10 @@ impl Table for DisplacedTable {
         // The second column of this table is determined dynamically by the union-find.
         uncacheable_columns.insert(ColumnId::new(1), true);
         TableSpec {
-            n_keys: 1,
-            n_vals: 2,
+            schema: TableSchema::Fd {
+                n_keys: 1,
+                n_vals: 2,
+            },
             uncacheable_columns,
             allows_delete: false,
         }
@@ -439,22 +463,101 @@ impl Table for DisplacedTable {
     }
 
     fn merge(&mut self, _: &mut ExecutionState) -> TableChange {
-        while let Some(rowbuf) = self.buffered_writes.pop() {
-            for row in rowbuf.iter() {
-                self.changed |= self.insert_impl(row).is_some();
+        if parallel::current_num_threads() < 2 {
+            while let Some(rowbuf) = self.buffered_writes.pop() {
+                for row in rowbuf.iter() {
+                    self.changed |= self.insert_impl(row).is_some();
+                }
+            }
+            return self.take_change();
+        }
+
+        let mut buffers = Vec::new();
+        let mut total_rows = 0;
+        while let Some(buffer) = self.buffered_writes.pop() {
+            total_rows += buffer.len();
+            buffers.push(buffer);
+        }
+        if total_rows <= PARALLEL_UNION_THRESHOLD_ROWS {
+            for buffer in &buffers {
+                for row in buffer.iter() {
+                    self.changed |= self.insert_impl(row).is_some();
+                }
+            }
+            return self.take_change();
+        }
+
+        let (chunks, groups) = Self::union_work(&buffers);
+        // Timestamps are semantic barriers: a value must be recorded at the
+        // first timestamp at which it ceases to be canonical. Union order
+        // within one timestamp is intentionally unconstrained, but a later
+        // timestamp cannot race an earlier one.
+        for group in groups {
+            if group.rows <= PARALLEL_UNION_THRESHOLD_ROWS {
+                for chunk in &chunks[group.chunks] {
+                    for row_index in chunk.start..chunk.end {
+                        let row = buffers[chunk.buffer].get_row(RowId::from_usize(row_index));
+                        self.changed |= self.insert_impl(row).is_some();
+                    }
+                }
+                continue;
+            }
+
+            let successes = self.uf.with_atomic_access(group.max_value, |uf| {
+                if !parallel::enabled_for_len(group.chunks.len()) {
+                    let mut children = Vec::with_capacity(group.rows);
+                    for chunk in &chunks[group.chunks.clone()] {
+                        for row_index in chunk.start..chunk.end {
+                            let row = buffers[chunk.buffer].get_row(RowId::from_usize(row_index));
+                            let (parent, child) = uf.union(row[0], row[1]);
+                            if parent != child {
+                                children.push(child);
+                            }
+                        }
+                    }
+                    vec![children]
+                } else {
+                    parallel::map(&chunks[group.chunks.clone()], |_, chunk| {
+                        let mut children = Vec::with_capacity(chunk.end - chunk.start);
+                        for row_index in chunk.start..chunk.end {
+                            let row = buffers[chunk.buffer].get_row(RowId::from_usize(row_index));
+                            let (parent, child) = uf.union(row[0], row[1]);
+                            if parent != child {
+                                children.push(child);
+                            }
+                        }
+                        children
+                    })
+                }
+            });
+
+            let added = successes.iter().map(Vec::len).sum();
+            self.displaced.reserve(added);
+            self.lookup_table.reserve(added);
+            // A successful CAS links a root to a smaller root. It can never
+            // become a root again, so each returned child is globally unique
+            // and may be published once without deduplication. Publication
+            // stays serial because the backing Vec and HashMap are serial.
+            for child in successes.into_iter().flatten() {
+                self.publish_displaced(child, group.timestamp);
+                self.changed = true;
             }
         }
+        self.take_change()
+    }
+}
+
+impl DisplacedTable {
+    fn take_change(&mut self) -> TableChange {
         let changed = mem::take(&mut self.changed);
-        // UF table rows can be updated "in place", we count both added and removed as changed in
-        // this case.
+        // UF table rows can be updated "in place", so count a change as both
+        // an addition and a removal.
         TableChange {
             added: changed,
             removed: changed,
         }
     }
-}
 
-impl DisplacedTable {
     pub fn underlying_uf(&self) -> &UnionFind {
         &self.uf
     }
@@ -491,7 +594,11 @@ impl DisplacedTable {
         // Compress paths somewhat, given that we perform naive finds everywhere else.
         let _ = self.uf.find(parent);
         let _ = self.uf.find(child);
-        let ts = row[2];
+        self.publish_displaced(child, row[2]);
+        Some((parent, child))
+    }
+
+    fn publish_displaced(&mut self, child: Value, ts: Value) {
         if let Some((_, highest)) = self.displaced.last() {
             assert!(
                 *highest <= ts,
@@ -501,7 +608,96 @@ impl DisplacedTable {
         let next = RowId::from_usize(self.displaced.len());
         self.displaced.push((child, ts));
         self.lookup_table.insert(child, next);
-        Some((parent, child))
+    }
+
+    fn union_work(buffers: &[RowBuffer]) -> (Vec<UnionChunk>, Vec<TimestampGroup>) {
+        let mut chunks = Vec::new();
+        let mut groups = Vec::<TimestampGroup>::new();
+
+        for (buffer_index, buffer) in buffers.iter().enumerate() {
+            assert_eq!(
+                buffer.arity(),
+                3,
+                "attempt to insert a row with the wrong arity"
+            );
+            let mut run_start = 0;
+            let mut run_timestamp = None;
+            let mut run_max = None;
+            for (row_index, row) in buffer.iter().enumerate() {
+                let timestamp = row[2];
+                if run_timestamp.is_some_and(|current| current != timestamp) {
+                    Self::push_union_run(
+                        &mut chunks,
+                        &mut groups,
+                        buffer_index,
+                        run_start,
+                        row_index,
+                        run_timestamp.unwrap(),
+                        run_max.unwrap(),
+                    );
+                    run_start = row_index;
+                    run_max = None;
+                }
+                run_timestamp = Some(timestamp);
+                let row_max = row[0].max(row[1]);
+                run_max = Some(run_max.map_or(row_max, |current: Value| current.max(row_max)));
+            }
+            if let Some(timestamp) = run_timestamp {
+                Self::push_union_run(
+                    &mut chunks,
+                    &mut groups,
+                    buffer_index,
+                    run_start,
+                    buffer.len(),
+                    timestamp,
+                    run_max.unwrap(),
+                );
+            }
+        }
+        (chunks, groups)
+    }
+
+    fn push_union_run(
+        chunks: &mut Vec<UnionChunk>,
+        groups: &mut Vec<TimestampGroup>,
+        buffer: usize,
+        start: usize,
+        end: usize,
+        timestamp: Value,
+        max_value: Value,
+    ) {
+        let group = match groups.last_mut() {
+            Some(group) if group.timestamp == timestamp => group,
+            _ => {
+                let start = chunks.len();
+                groups.push(TimestampGroup {
+                    timestamp,
+                    chunks: start..start,
+                    rows: 0,
+                    max_value,
+                });
+                groups.last_mut().unwrap()
+            }
+        };
+        // Subdivide modest runs so more workers can participate. Larger runs
+        // keep coarse chunks to amortize scheduling overhead. The serial
+        // admission threshold is independent of this task-size choice.
+        let chunk_rows =
+            if end - start < PARALLEL_UNION_CHUNK_ROWS * parallel::current_num_threads() {
+                SMALL_PARALLEL_UNION_CHUNK_ROWS
+            } else {
+                PARALLEL_UNION_CHUNK_ROWS
+            };
+        for start in (start..end).step_by(chunk_rows) {
+            chunks.push(UnionChunk {
+                buffer,
+                start,
+                end: (start + chunk_rows).min(end),
+            });
+        }
+        group.chunks.end = chunks.len();
+        group.rows += end - start;
+        group.max_value = group.max_value.max(max_value);
     }
 }
 
