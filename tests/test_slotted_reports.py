@@ -21,7 +21,7 @@ from benchmarking.reports.catalog import ReportTable
 from benchmarking.reports.interactive import write_interactive_report
 from benchmarking.reports.interactive_runtime import InteractiveRuntime, scope_for_comparison
 from benchmarking.reports.slotted import ERROR_TITLE, EXACT_PAIRS, SIDES, select_slotted_records, slotted_report
-from benchmarking.reports.store import ReportStore
+from benchmarking.reports.store import ReportStore, serialize_grouped_report
 
 from .report_fixtures import make_endpoint, make_record
 
@@ -100,6 +100,8 @@ def test_single_page_embeds_shared_data_and_slotted_tables_without_iframe(tmp_pa
     cache.store.append(proof_on)
     cache.append(task, rows)
     store = ReportStore(cache.store.path)
+    grouped = store.grouped_report()
+    cache_bytes = store.path.read_bytes()
     comparison = models.ComparisonSpec(
         make_endpoint(treatment="off"),
         make_endpoint(treatment="proofs"),
@@ -107,19 +109,19 @@ def test_single_page_embeds_shared_data_and_slotted_tables_without_iframe(tmp_pa
         1,
         120,
     )
-    runtime = InteractiveRuntime(store, scope_for_comparison(comparison))
+    runtime = InteractiveRuntime(grouped, scope_for_comparison(comparison))
     payload = json.dumps(runtime.initial_payload(comparison))
     assert "Multipattern matching" in payload and "Nested matching" in payload
     assert "SLOTTED CORRECTNESS" not in payload
     assert "slotted-reference" in payload
     assert "Slotted e-graph sizes" in json.dumps(runtime.apply(scope_for_comparison(comparison)))
-    path = write_interactive_report(store, comparison, tmp_path / "page.html")
+    path = write_interactive_report(grouped, comparison, tmp_path / "page.html")
     page = path.read_text()
     assert '<iframe src="slotted.html"' not in page
     match = re.search(r'<script id="report-envelope"[^>]*>(.*?)</script>', page)
     assert match
     envelope = json.loads(base64.b64decode(match[1]))
-    assert base64.b64decode(envelope["report_jsonl_base64"]) == store.path.read_bytes()
+    assert base64.b64decode(envelope["report_grouped_base64"]) == serialize_grouped_report(grouped)
     assert envelope["initial_payload"]["sections"][-1]["id"] == "slotted"
 
     # Cached reference endpoints use their own engine identity when retargeted.
@@ -137,7 +139,7 @@ def test_single_page_embeds_shared_data_and_slotted_tables_without_iframe(tmp_pa
             }
         )
         assert "Slotted e-graph sizes" in json.dumps(retargeted)
-    assert store.path.read_bytes() == base64.b64decode(envelope["report_jsonl_base64"])
+    assert store.path.read_bytes() == cache_bytes
 
     # A bogus positive certificate must not conceal wrong raw counts.
     rows[0].nodes += 1
@@ -360,11 +362,12 @@ def test_missing_instrumentation_is_unavailable_but_wall_times_remain_comparable
         1,
         30,
     )
-    analysis = analyze_pair(cache.store, comparison, "rulesets")
+    grouped = cache.store.grouped_report()
+    analysis = analyze_pair(grouped, comparison, "rulesets")
     assert analysis.files[0].ratio.estimate.point == 4
     assert analysis.timing[1].issue == "phase timings unavailable"
     assert analysis.timing[1].mechanism_deltas == (None,) * 6
-    runtime = InteractiveRuntime(cache.store, scope_for_comparison(comparison))
+    runtime = InteractiveRuntime(grouped, scope_for_comparison(comparison))
     payload = json.loads(json.dumps(runtime.payload()))
     phase_text = json.dumps([s for s in payload["sections"] if s["id"] in ("phases", "rulesets")])
     assert "phase timings unavailable" in phase_text
