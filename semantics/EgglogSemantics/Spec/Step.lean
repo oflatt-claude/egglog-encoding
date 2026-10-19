@@ -33,11 +33,16 @@ row are added, so rows the body writes survive. -/
 @[blueprint "def:merging"
   (statement := /--
   \[
+  \begin{gathered}
   \ir{Collide}{
-    (a,b)\in\conf D\quad a=f(\bar k;\bar v)\quad b=f(\bar k';\bar w)\\\\
-    \Sigma(f)=\kw{fun}(\_,\_,\kw{merge}(\bar x,\bar y,H,\bar e))\quad
-    \sigma=[\bar x\mapsto\bar v,\bar y\mapsto\bar w]\quad r=f(\bar k;\eval{\bar e})}
-    {D\to_m(D\ominus a\ominus b)+\writes H+(r,r)}
+    (a,b)\in\conf D\qquad
+    \Sigma(f)=\kw{fun}(\_,\_,\kw{merge}(\bar x,\bar y,A,\bar e))}
+    {D\to_m D[E\gets E_0\cup\writes A\cup
+      \{(f(\bar k;\eval{\bar e}),f(\bar k;\eval{\bar e}))\}]}\\[.8em]
+    \text{where}\quad a=f(\bar k;\bar v),\quad b=f(\bar k';\bar w),\quad
+    \sigma=[\bar x\mapsto\bar v,\bar y\mapsto\bar w],\quad
+    (\Sigma,E_0,\mathcal R)=D\ominus a\ominus b
+  \end{gathered}
   \]
   -/)
   (latexEnv := "paperfragment")]
@@ -64,11 +69,12 @@ def RunRules (R : RulesetName) (db : Database) : Database :=
 /-- `⟨run R, D⟩ ⇓ D'`: fire the rules of `R`, then merge until no conflict remains. -/
 @[blueprint "def:round"
   (statement := /--
-\[
-  \fire_R(D)\triangleq D+\bigcup\{\writes H\mid(R,Q\Rightarrow H)\in\mathcal R,\
-    D,\sigma\models Q\}
-  \qquad
-  \ir{Run}{\fire_R(D)\to_m^*D'\\\conf{D'}=\emptyset}{\langle\kw{run}\ R,D\rangle\Downarrow D'}
+  \[
+  \ir{Run}{
+    D[E\gets E\cup\bigcup\{\writes A\mid(R,Q\Rightarrow A)\in\mathcal R,\
+      D,\sigma\models Q\}]\to_m^*D'\\\\
+    \conf{D'}=\emptyset}
+    {\langle\kw{run}\ R,D\rangle\Downarrow D'}
   \]
   -/)
   (latexEnv := "paperfragment")]
@@ -136,7 +142,9 @@ would diverge. Only successful commands pass their resulting database to the nex
   \[
   \ir{Declare}{}
     {\langle\kw{declare}\ f:d,D\rangle\Downarrow D[\Sigma\gets\Sigma[f\mapsto d]]}\quad
-  \ir{Rule}{}{\langle\kw{rule}\ \rho,D\rangle\Downarrow D[\mathcal R\gets\mathcal R\cup\{\rho\}]}\quad
+  \ir{Rule}{}{\langle\kw{rule}\ \rho,D\rangle\Downarrow D[\mathcal R\gets\mathcal R\cup\{\rho\}]}
+  \]
+  \[
   \ir{Check}{D,\sigma\models Q}{\langle\kw{check}\ Q,D\rangle\Downarrow D}\quad
   \ir{Fail}{\nexists\sigma.\ D,\sigma\models Q}{\langle\kw{check}\ Q,D\rangle\Downarrow\kw{error}}
   \]

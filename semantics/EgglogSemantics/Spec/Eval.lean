@@ -3,33 +3,50 @@ import EgglogSemantics.Spec.Congruence
 /-!
 # Evaluating expressions and actions
 
-Expressions build constructor terms; complete atoms may also describe function entries.
-Evaluation is partial for unbound variables, undeclared heads, nested function syntax,
-and unions on literals. Rule firing and merging are specified in `Spec/Step.lean`.
+The paper evaluator builds terms without consulting a signature. The checked entry
+points agree with it on well-formed expressions (see Proofs/Presentation.lean).
 -/
 
 namespace Egglog
 mutual
 
-/-- Build the ground term an expression denotes. The signature is read for one thing only —
-whether a name **builds, reads, or means nothing**. -/
+/-- Structural evaluation; declarations and row nesting are checked separately. -/
 @[blueprint "def:evaluation"
   (statement := /--
   \[
-  \begin{gathered}
-  \sigma:\mathit{Var}\rightharpoonup\mathit{Term}\qquad\eval x=\sigma(x)\\
-  \eval{c(\bar e)}=c(\eval{\bar e})\quad(c\in\mathit{Ctor}_{\Sigma})\qquad
-  \eval{\min(e_1,e_2)}=\min_{\prec}(\eval{e_1},\eval{e_2})\\
-  \aval{f(\bar e;\bar e')}=f(\eval{\bar e};\eval{\bar e'})\quad(f\in\mathit{Fun}_{\Sigma})
-  \qquad \aval e=\eval e\quad(e\text{ not a function atom or conditional})\\
-  \eval{\kw{if}\ \bar e=\bar e'\ \kw{then}\ a\ \kw{else}\ b}=
-    \begin{cases}\eval a&\eval{\bar e}=\eval{\bar e'}\\
-    \eval b&\eval{\bar e}\ne\eval{\bar e'}\end{cases}\quad
-  \text{and likewise for }\aval{\kw{if}\ \cdots}.
-  \end{gathered}
+  \begin{array}{@{}c@{\qquad}c@{\qquad}c@{\qquad}c@{}}
+    \sigma:\mathit{Var}\rightharpoonup\mathit{Term}
+      &\eval{f(e_1,\ldots,e_n)}
+      &\eval{\min(e_1,e_2)}
+      &\eval{\kw{if}\ \bar e=\bar e'\ \kw{then}\ a\ \kw{else}\ b}\\[.6em]
+    \eval x=\sigma(x)
+      &{}=f(\eval{e_1},\ldots,\eval{e_n})
+      &{}=\min_{\prec}(\eval{e_1},\eval{e_2})
+      &{}=\begin{cases}\eval a&\eval{\bar e}=\eval{\bar e'}\\
+        \eval b&\eval{\bar e}\ne\eval{\bar e'}\end{cases}
+  \end{array}
   \]
   -/)
   (latexEnv := "paperfragment")]
+def Expr.evaluate : Expr → Env → Option Term
+  | .lit l, _ => some (.lit l)
+  | .var v, σ => Env.lookup v σ
+  | .app f args, σ => (Expr.evaluateList args σ).map (Term.app f)
+  | .min a b, σ => (a.evaluate σ).bind fun x => (b.evaluate σ).map (Term.least x)
+  | .ite lhs rhs yes no, σ => do
+      let xs ← Expr.evaluateList lhs σ
+      let ys ← Expr.evaluateList rhs σ
+      if xs = ys then yes.evaluate σ else no.evaluate σ
+
+def Expr.evaluateList : List Expr → Env → Option (List Term)
+  | [], _ => some []
+  | e :: es, σ => (e.evaluate σ).bind fun t => (Expr.evaluateList es σ).map (t :: ·)
+
+end
+
+mutual
+
+/-- Evaluate a constructor expression, checking its applied names. -/
 def Expr.eval (sig : Signature) : Expr → Env → Option Term
   | .lit l, _ => some (.lit l)
   | .var v, σ => Env.lookup v σ
@@ -70,7 +87,7 @@ def Expr.evalAtom (sig : Signature) : Expr → Env → Option Term
   | e, σ => e.eval sig σ
 
 /-- The one equation an action asserts. Actions read only the signature and bindings,
-never the store, so a head denotes a set of equations.
+never the store, so an action sequence denotes a set of equations.
 
 A `union` on a literal is stuck. egglog rejects it in its type checker — `union` wants an
 eq-sort and `i64` is not one (`TypeError::NonEqsortUnion`) — and this untyped model cannot
@@ -83,13 +100,15 @@ def Action.write (sig : Signature) (σ : Env) : Action → Option (Term × Term)
         (e₂.eval sig σ).bind fun t₂ =>
           if t₁.isLit || t₂.isLit then none else some (t₁, t₂)
 
-/-- The equations a head asserts, defined only when every action's is. -/
+/-- The equations asserted by an action sequence, defined when every action's is. -/
 @[blueprint "def:actions"
   (statement := /--
 \[
-  \writes e=(\aval e,\aval e)\qquad
-  \writes{\kw{union}(e_1,e_2)}=(\eval{e_1},\eval{e_2})\qquad
-  \writes{h_1;\ldots;h_n}=\{\writes{h_1},\ldots,\writes{h_n}\}
+  \begin{gathered}
+  \writes e=\{(\eval e,\eval e)\}\qquad
+  \writes{\kw{union}(e_1,e_2)}=\{(\eval{e_1},\eval{e_2})\}\\
+  \writes{h_1;\ldots;h_n}=\bigcup_{i=1}^n\writes{h_i}
+  \end{gathered}
   \]
   -/)
   (latexEnv := "paperfragment")]

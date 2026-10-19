@@ -16,13 +16,15 @@ relation**: symmetric and transitive, but reflexive only where an equation makes
 @[blueprint "def:congruence"
   (statement := /--
 \[
-  \ir{Direct}{(s,t)\in E}{s\sim_E t}\quad
-  \ir{Sym}{s\sim_E t}{t\sim_E s}\quad
-  \ir{Trans}{s\sim_E t\\t\sim_E u}{s\sim_E u}\quad
-  \ir{Subterm}{t\sim_E t\\s\unlhd t}{s\sim_E s}
-  \quad
-  \ir{Cong}{f(\bar s)\sim_E f(\bar s)\\
+  \begin{gathered}
+  \ir{Direct}{(s,t)\in E}{s\sim_E t}\qquad
+  \ir{Sym}{s\sim_E t}{t\sim_E s}\qquad
+  \ir{Trans}{s\sim_E t\quad t\sim_E u}{s\sim_E u}\\[1em]
+  \ir{Subterm}{t\sim_E t\quad s\in\operatorname{subterms}(t)}{s\sim_E s}
+  \qquad
+  \ir{Cong}{f(\bar s)\sim_E f(\bar s)\quad
     \forall j.\ s_j\sim_E t_j}{f(\bar s)\sim_E f(\bar t)}
+  \end{gathered}
   \]
   -/)
   (latexEnv := "paperfragment")]
@@ -46,7 +48,11 @@ end
 /-- Terms explicitly occurring in the store, including subterms. -/
 @[blueprint "def:stored-terms"
   (statement := /--
-  \[ T_E\triangleq\{t\mid\exists(a,b)\in E.\ t\unlhd a\lor t\unlhd b\} \]
+  \[
+  \operatorname{terms}(E)\triangleq
+    \bigcup_{(s,t)\in E}
+      \bigl(\operatorname{subterms}(s)\cup\operatorname{subterms}(t)\bigr)
+  \]
   -/)
   (latexEnv := "paperfragment")]
 def Database.terms (db : Database) : Set Term :=

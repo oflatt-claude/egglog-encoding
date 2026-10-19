@@ -16,6 +16,9 @@ reflexive atoms; congruence derives equality and subterm existence.
 
 namespace Egglog
 /-- A ground term. -/
+@[blueprint "def:terms"
+  (statement := /-- \syntaxline{Terms}{t\in\mathit{Term} ::= f(t_1,\ldots,t_n)} -/)
+  (latexEnv := "paperfragment")]
 inductive Term where
   | lit : Lit → Term
   | app : FnName → List Term → Term

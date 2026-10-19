@@ -47,15 +47,15 @@ def Entry.Shape (sig : Signature) (e : Entry) : Prop :=
 /-- Egglog's global state. -/
 @[ext, blueprint "def:state"
   (statement := /--
-\[
+  \[
   \begin{gathered}
-  t\in\mathit{Term} ::= f(t_1,\ldots,t_n)\\
-  D=(\Sigma,E,\mathcal R)\qquad E\subseteq\{(s,t)\mid s,t\in\mathit{Term}\}\\
-  \rows D=\{r=f(a_1,\ldots,a_k;b_1,\ldots,b_\ell)\mid
-    \Sigma(f)=\kw{fun}(k,\ell,\mu),\ (r,r)\in E\}\\
-  D+S\triangleq D[E\gets E\cup S]\qquad
-  D\ominus f(\bar t)\triangleq
-    D[E\gets(E\setminus\{(f(\bar t),f(\bar t))\})\cup\{(t_i,t_i)\}_i]
+    D=(\Sigma,E,\mathcal R)\qquad
+    \Sigma:\mathit{Fn}\rightharpoonup\mathit{Decl}\qquad
+    E\subseteq\{(s,t)\mid s,t\in\mathit{Term}\}\qquad
+    \mathcal R=\{\rho_1,\ldots,\rho_m\}\\[1em]
+    \rows D=\{f(t_1,\ldots,t_n)\mid
+      (f(t_1,\ldots,t_n),f(t_1,\ldots,t_n))\in E,\
+      \Sigma(f)=\kw{fun}(k,\ell,\mu)\}
   \end{gathered}
   \]
   -/)
@@ -104,6 +104,15 @@ def putEntry (e : Entry) (db : Database) : Database :=
   db.addTerm e.atom
 
 /-- Remove a row while retaining its column values. -/
+@[blueprint "def:erase-row"
+  (statement := /--
+  \[
+  D\ominus f(t_1,\ldots,t_n)\triangleq
+    D[E\gets(E\setminus\{(f(t_1,\ldots,t_n),f(t_1,\ldots,t_n))\})
+      \cup\{(t_i,t_i)\mid 1\le i\le n\}]
+  \]
+  -/)
+  (latexEnv := "paperfragment")]
 def eraseEntry (e : Entry) (db : Database) : Database :=
   { db with eqs := (db.eqs \ {(e.atom, e.atom)}) ∪
       {p | ∃ t ∈ e.columns, p = (t, t)} }

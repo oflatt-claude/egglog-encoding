@@ -68,7 +68,7 @@ abbrev Query := List Pattern
 @[blueprint "def:action-syntax"
   (statement := /--
   \syntaxline{Actions}{h ::= e\mid\kw{union}(e,e)}
-  \syntaxline{Heads}{H ::= h_1;\ldots;h_n}
+  \syntaxline{Sequences}{A ::= h_1;\ldots;h_n}
   -/)
   (latexEnv := "paperfragment")]
 inductive Action where
@@ -85,7 +85,7 @@ abbrev RulesetName := String
 the ruleset it joins. -/
 @[blueprint "def:rules"
   (statement := /--
-  \syntaxline{Rules}{\rho ::= (R,Q\Rightarrow H)}
+  \syntaxline{Rules}{\rho\in\mathit{Rule} ::= (R,Q\Rightarrow A)}
   -/)
   (latexEnv := "paperfragment")]
 structure Rule where
@@ -99,7 +99,7 @@ structure Rule where
   (statement := /--
   \syntaxline{Merges}{\begin{aligned}[t]
     \mu &::= \kw{merge}((x_1,\ldots,x_\ell),\\[-1pt]
-        &\qquad(y_1,\ldots,y_\ell),H,(e_1,\ldots,e_\ell))
+        &\qquad(y_1,\ldots,y_\ell),A,(e_1,\ldots,e_\ell))
     \end{aligned}}
   -/)
   (latexEnv := "paperfragment")]
@@ -117,7 +117,7 @@ instance (m : MergeSpec) (n : Nat) : Decidable (m.BindersOk n) := by
 /-- A function declaration: a constructor when `merge = none`, a merge function when not. -/
 @[blueprint "def:declarations"
   (statement := /--
-  \syntaxline{Declarations}{d ::= \kw{ctor}(k)\mid\kw{fun}(k,\ell,\mu)}
+  \syntaxline{Declarations}{d\in\mathit{Decl} ::= \kw{ctor}(k)\mid\kw{fun}(k,\ell,\mu)}
   -/)
   (latexEnv := "paperfragment")]
 structure FnDecl where
@@ -216,7 +216,7 @@ inductive Cmd where
   | saturate : RulesetName → Cmd
   | decl : FnName → FnDecl → Cmd
   /-- Observe whether a query has a match. A failed check stops the program; a successful
-  check changes no state. Checks are commands, never rule-head or merge-body actions. -/
+  check changes no state. Checks are commands, never rule or merge actions. -/
   | check : Query → Cmd
 
 @[blueprint "def:programs"

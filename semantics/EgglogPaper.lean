@@ -26,6 +26,10 @@ assert_no_sorry Egglog.RunRules.eq_sUnion
 assert_no_sorry Egglog.mergeStep_iff
 assert_no_sorry Egglog.SaturateReach.induction
 assert_no_sorry Egglog.Eval.empty_env
+assert_no_sorry Egglog.Expr.eval_eq_evaluate
+assert_no_sorry Egglog.Expr.evalAtom_eq_evaluate
+assert_no_sorry Egglog.Action.writes_singleton
+assert_no_sorry Egglog.Action.writes_append
 assert_no_sorry Egglog.Term.blt_admissible
 
 assert_no_sorry Egglog.InferredFacts.congr_iff_infers

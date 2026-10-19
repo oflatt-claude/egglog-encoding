@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PAPER_MODULES = (
     "EgglogSemantics.Spec.Syntax",
+    "EgglogSemantics.Spec.Term",
     "EgglogSemantics.Spec.Database",
     "EgglogSemantics.Spec.Congruence",
     "EgglogSemantics.Spec.Eval",

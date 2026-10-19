@@ -67,10 +67,11 @@ inductive Matches (db : Database) : Pattern → Env → Prop where
 @[blueprint "def:query"
   (statement := /--
 \[
-  \ir{Atom}{\aval e=t\\t\sim_E t}{D,\sigma\models e}\quad
+  \ir{Atom}{\eval e=t\\t\sim_E t}{D,\sigma\models e}\quad
   \ir{Equal}{\eval{e_1}=s\\\eval{e_2}=t\\s\sim_E t}
     {D,\sigma\models e_1=e_2}\quad
-  \ir{Query}{\sigma:\operatorname{FV}(Q)\to T_E\\\forall p\in Q.\ D,\sigma\models p}
+  \ir{Query}{\sigma:\operatorname{FV}(Q)\to\operatorname{terms}(E)\\\\
+    \forall p\in Q.\ D,\sigma\models p}
     {D,\sigma\models Q}
   \]
   -/)
