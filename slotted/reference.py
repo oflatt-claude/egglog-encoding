@@ -941,6 +941,26 @@ class NestedPatternUnsupported(ValueError):
     """A source rule needs multiple patterns, which ref-nested cannot express."""
 
 
+def rule_atoms(src, lang, parts):
+    """Flatten a rewrite and its side patterns using one fresh-name supply."""
+    lhs = src.term(parts["lhs"], ground=False)
+    names = parts["names"]
+    if isinstance(lhs, str):
+        if lhs.startswith("$"):
+            raise ValueError("reference rewrite root must be a constructor or a pattern variable")
+        root, atoms = lhs, []
+    else:
+        root, atoms = flatten(lang, lhs, names=names)
+    for name, pattern in parts["equalities"]:
+        _, extra = flatten(lang, src.term(pattern, ground=False), root=name, names=names)
+        atoms.extend(extra)
+    bound = {a[0].lstrip("?") for a in atoms}
+    bound.update(child.lstrip("?") for _, _, kids, _ in atoms for kind, child in kids if kind == "pv")
+    if root.lstrip("?") not in bound:
+        raise ValueError("reference rewrite root must be bound by a constructor pattern")
+    return root, atoms
+
+
 def rule_lines(src, lang, form, *, nested=False):
     """Translate one source rewrite, including its side patterns, to oracle spec lines.
 
@@ -957,21 +977,8 @@ def rule_lines(src, lang, form, *, nested=False):
             raise NestedPatternUnsupported("requires a single nested pattern; found multipattern :when conditions")
         out = ["rule", f"nested {pat_sexpr(lang, rhs_of(lang, lhs))}", f"rhs root {rhs}"]
     else:
-        names = parts["names"]
-        if isinstance(lhs, str):
-            if lhs.startswith("$"):
-                raise ValueError("reference rewrite root must be a constructor or a pattern variable")
-            root, atoms = lhs, []
-        else:
-            root, atoms = flatten(lang, lhs, names=names)
-        for name, pattern in parts["equalities"]:
-            _, extra = flatten(lang, src.term(pattern, ground=False), root=name, names=names)
-            atoms.extend(extra)
-        bound = {a[0].lstrip("?") for a in atoms}
-        bound.update(child.lstrip("?") for _, _, kids, _ in atoms for kind, child in kids if kind == "pv")
-        if root.lstrip("?") not in bound:
-            raise ValueError("reference rewrite root must be bound by a constructor pattern")
-        root, text = atom_lines(lang, root, atoms, names=names)
+        root, atoms = rule_atoms(src, lang, parts)
+        root, text = atom_lines(lang, root, atoms, names=parts["names"])
         out = ["rule", *text, f"rhs {root} {rhs}"]
     for want, slot, pvars in parts["conds"]:
         out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")

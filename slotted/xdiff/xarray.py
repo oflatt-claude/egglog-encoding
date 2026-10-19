@@ -11,17 +11,9 @@ oracle and this compiler now support it (SDQL's `beta` exercises the compiled
 explicit-substitution alternative (footnote 4): `let-intro` followed by the let
 rules.  The remaining 8 are therefore the rules that benchmark actually runs.
 
-The two sides:
-
-  reference   the rules flattened to `MultiPattern` atoms. This is the pattern
-              language implemented by the encoding; nested `ematch_all` has different
-              semantics and is not used as an oracle here. The rule source follows
-              `tests/rise`, which has Listing 1's binding language and guard polarity;
-              `tests/array/mod.rs` instead has a non-binding `Lam(Slot, AppliedId)` and
-              an oppositely-polarized `slot_free_in` helper.
-  encoding    a generated .egg file, each rule flattened into depth-1 atoms and
-              compiled by `egglog-experimental --slotted`, which is the
-              recipe in `slotted/ENCODING.md`.
+Both sides use the source rules in `languages/array-rules.egg`. Rust compiles
+those rewrites for the encoding; `reference.py` translates them to MultiPattern
+atoms. `test_program.py` runs both binaries, and `isomorphism.py` compares graphs.
 
 Usage:
     ./xarray.py                each of the 8 rules firing, and each guard blocking
@@ -35,34 +27,18 @@ Usage:
 """
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import EGGLOG, ROOT, XMULTI, driver, parse_same_class, syntax  # noqa: E402
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "slotted"))
+import reference as syntax  # noqa: E402
+import test_program as driver  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XARRAY_TIMEOUT", "120"))
 
-# ---------------------------------------------------------------- array terms
-# term := ('var', slot) | ('sym', name) | ('num', n)
-#       | ('app', a, b) | ('lam', slot, body) | ('let', slot, body, val)
-#
-# The language is `slotted/languages/array.egg` -- the paper's Listing 1,
-# one constructor per operator, the shape `define_language!` produces -- with
-# `array.ref` beside it saying what the reference calls each one. Nothing here
-# restates a signature or a binder column: `Lam` and `Let` bind their column 0 because
-# that file's `:binder` says so, so this cannot disagree with the rules generated for
-# them.
-#
-# `let` takes its columns in the reference's order -- binder, body, value. The paper's
-# Listing 1 writes the same constructor as `Let(RenamedId, Bind<RenamedId>)`, i.e.
-# `(let ?e $x ?body)`.
-# The language is declared where its rules are: `slotted/languages/array.egg` holds
-# both, and `array.ref` beside it says what the reference calls each constructor.
+# Constructor signatures, binder columns, and reference names come from these files.
 ARRAY_SRC = ROOT / "slotted" / "languages" / "array.egg"
-#: the rewrites, split out of the declarations so the machinery can be compiled
-#: from array.egg alone
 ARRAY_SRC_RULES = ROOT / "slotted" / "languages" / "array-rules.egg"
 LANG = syntax.language(ARRAY_SRC, ARRAY_SRC.with_suffix(".ref"))
 
@@ -72,45 +48,13 @@ sexpr, shift = LANG.sexpr, LANG.shift
 MAP = ("sym", "map")
 
 
-# ------------------------------------------------------------- rule descriptions
-class Rule:
-    """One rewrite, in the encoder's grammar.
-
-    `atoms` are `(root, op, [child...])` with each child `("pv", name)`,
-    `("sl", "$x")` or `("cls", term)`; a right-hand side is one of those or
-    `(op, arg...)` to build a node. `conds` are `(want, "$slot", [pvar...])`, and
-    `fresh` names slots the right-hand side binds that the pattern never mentions.
-    """
-
-    def __init__(self, name, atoms, rhs_root, rhs, conds=(), fresh=()):
-        self.name = name
-        self.atoms = list(atoms)
-        self.rhs_root = rhs_root
-        self.rhs = rhs
-        self.conds = list(conds)
-        self.fresh = list(fresh)
-
-    def atom_lines(self):
-        """The pattern as `MultiPattern` atom lines."""
-        return syntax.atom_lines(LANG, self.atoms[0][0], self.atoms)
-
-    def spec_lines(self):
-        pat = syntax.pat_sexpr(LANG, self.rhs)
-        spelled = self.atom_lines()
-        # an `atom`/`rhs` root is written bare; xmulti supplies the `?`
-        out = ["rule", *spelled[1], f"rhs {self.rhs_root.lstrip('?')} {pat}"]
-        for want, slot, pvars in self.conds:
-            out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
-        return out
-
-
-def source_rule(rule, atom_order=None):
-    lead = 0 if atom_order is None else min(atom_order, len(rule.atoms) - 1)
-    return driver.rewrite(LANG, rule.atoms, rule.rhs_root, rule.rhs, conds=rule.conds, fresh=rule.fresh, lead=lead)
-
-
 # ----------------------------------------------------------------------- cases
 class Case:
+    lang = LANG
+
+    def egg_program(self, *, mult):
+        return egg_program(self, mult=mult)
+
     def __init__(self, name, terms, rules, probes, rounds=8, unions=()):
         self.name = name
         self.terms = list(terms)
@@ -120,14 +64,14 @@ class Case:
         self.unions = list(unions)
 
     def spec(self, include_probes=True):
-        out = [f"rounds {self.rounds}"]
-        out += [f"term {sexpr(t)}" for t in self.terms]
-        out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
-        for r in self.rules:
-            out += r.spec_lines()
-        if include_probes:
-            out += [f"probe {sexpr(t)}" for t in self.probes]
-        return "\n".join(out) + "\n"
+        return driver.reference_spec(
+            LANG,
+            self.rounds,
+            self.terms,
+            self.unions,
+            [line for r in self.rules for line in r.spec_lines()],
+            self.probes if include_probes else [],
+        )
 
     def shifted(self, k):
         return Case(
@@ -144,7 +88,7 @@ def egg_program(case, atom_order=None, mult=3, defer_probes=False):
     return driver.program(
         "array",
         LANG,
-        [source_rule(r, atom_order) for r in case.rules],
+        [r.source(lead=atom_order) for r in case.rules],
         case.terms,
         case.unions,
         case.probes,
@@ -154,87 +98,26 @@ def egg_program(case, atom_order=None, mult=3, defer_probes=False):
 
 
 def run_reference(case):
-    try:
-        r = subprocess.run(
-            [str(XMULTI / "target" / "debug" / "xmulti")],
-            input=case.spec(),
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return ("TIMEOUT", f">{RUN_TIMEOUT}s")
-    if r.returncode != 0:
-        return ("ERROR", (r.stderr.strip().splitlines() or ["?"])[-1])
-    part, sat = None, True
-    for line in r.stdout.splitlines():
-        if line.startswith("PARTITION "):
-            part = line[len("PARTITION ") :].strip()
-        elif line.startswith("SATURATED "):
-            sat = line.split()[1] == "yes"
-    if part is None:
-        return ("ERROR", "no PARTITION line")
-    return ("OK" if sat else "UNSATURATED", part)
+    return driver.run_reference(case.spec(), RUN_TIMEOUT)
 
 
 def run_reference_goal(case):
     """Run the artifact criterion without inserting the expected target."""
     spec = case.spec(include_probes=False) + f"goal {sexpr(case.probes[1])}\n"
-    try:
-        r = subprocess.run(
-            [str(XMULTI / "target" / "debug" / "xmulti")],
-            input=spec,
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", f">{RUN_TIMEOUT}s"
-    if r.returncode != 0:
-        return "ERROR", (r.stderr.strip().splitlines() or ["?"])[-1]
-    goals = [line.split()[1] for line in r.stdout.splitlines() if line.startswith("GOAL ")]
-    if len(goals) != 1:
-        return "ERROR", "no unique GOAL line"
-    saturated = all(not line.startswith("SATURATED no") for line in r.stdout.splitlines())
-    return ("OK" if saturated else "UNSATURATED"), goals[0]
+    return driver.run_reference(spec, RUN_TIMEOUT, result="GOAL")
 
 
 def run_encoding(case, atom_order=None, keep=None, mult=3):
-    prog = egg_program(case, atom_order, mult)
-    path = keep or (ROOT / f"xarray-tmp-{os.getpid()}-{mult}.egg")
-    path.write_text(prog)
-    try:
-        r = subprocess.run(
-            [str(EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT
-        )
-    except subprocess.TimeoutExpired:
-        return ("TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})")
-    if r.returncode != 0:
-        err = [line for line in r.stderr.splitlines() if "ERROR" in line]
-        msg = err[-1] if err else r.stderr.strip()[:600]
-        return ("ERROR", f"{msg}\n    (kept at {path})")
-    if not keep:
-        path.unlink(missing_ok=True)
-    return ("OK", parse_same_class(r.stdout, len(case.probes)))
+    return driver.run_encoding(egg_program(case, atom_order, mult), len(case.probes), RUN_TIMEOUT, keep=keep)
 
 
 def run_encoding_goal(case, keep=None):
     """Run user rules with only A present, then observe whether deferred B joins it."""
-    prog = egg_program(case, mult=1, defer_probes=True)
-    path = keep or (ROOT / f"xarray-goal-tmp-{os.getpid()}.egg")
-    path.write_text(prog)
-    try:
-        r = subprocess.run(
-            [str(EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT
-        )
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})"
-    if r.returncode != 0:
-        err = [line for line in r.stderr.splitlines() if "ERROR" in line]
-        return "ERROR", err[-1] if err else r.stderr[:160]
-    if keep is None:
-        path.unlink(missing_ok=True)
-    partition = parse_same_class(r.stdout, len(case.probes))
+    status, partition = driver.run_encoding(
+        egg_program(case, mult=1, defer_probes=True), len(case.probes), RUN_TIMEOUT, keep=keep
+    )
+    if status != "OK":
+        return status, partition
     return "OK", "yes" if partition.startswith("[0,1]") else "no"
 
 
@@ -291,36 +174,8 @@ def check_case(case, order_check=True, shift_check=True):
     return fails
 
 
-# ------------------------------------------------------------------- the 8 rules
-#
-# Read from `slotted/languages/array.egg`, written in the slotted language, so the rules a
-# reader sees are the rules that run here. the Rust CLI compiles the same file
-# for `run-slotted-tests.py`; neither restates a rule.
-#
-# The atoms come from `flatten`, which emits the pattern's outermost node first.
-def _load_rules():
-    src = syntax.Source(ARRAY_SRC_RULES)
-    out = []
-    for form in syntax.parse(ARRAY_SRC_RULES.read_text()):
-        if not (isinstance(form, list) and form and form[0] == "rewrite"):
-            continue
-        r = syntax.rewrite_parts(src, form)
-        assert r["name"], f"a rewrite with no :name in {ARRAY_SRC_RULES.name}"
-        # `:when (= ...)` contributes PATTERN ATOMS, and this builds its own rule object
-        # from `lhs`/`conds` alone, so one would be dropped in silence and the reference
-        # would be asked a different question than the encoding. Teach `Rule` about extra
-        # atoms before using one in this language.
-        assert not r["equalities"], f"{r['name']}: `:when (= ...)` is not supported here yet"
-        root, atoms = syntax.flatten(LANG, src.term(r["lhs"], ground=False))
-        rhs = syntax.rhs_of(LANG, src.term(r["rhs"], ground=False))
-        out.append(Rule(r["name"], atoms, root, rhs, conds=r["conds"], fresh=r["fresh"]))
-    return out
-
-
-#: name -> rule, and the same rules as a list. The per-rule cases below ask for one by
-#: name, which reads as the rule it is rather than as an index. Both sides receive the
-#: same flattened MultiPattern query.
-RULES = {r.name: r for r in _load_rules()}
+# Both sides derive their rules from the same source library.
+RULES = driver.load_rules(ARRAY_SRC_RULES, LANG)
 ALL_RULES = list(RULES.values())
 
 
@@ -815,7 +670,7 @@ def check_vacuity(case):
     Returns a failure string when it does not -- i.e. when the case would pass
     just as well with the condition deleted, which means it is testing nothing.
     """
-    stripped = [Rule(r.name, r.atoms, r.rhs_root, r.rhs, conds=(), fresh=r.fresh) for r in case.rules]
+    stripped = [r.without_guards() for r in case.rules]
     if not any(r.conds for r in case.rules):
         return f"{case.name}: no condition to drop"
     off = Case(case.name, case.terms, stripped, case.probes, case.rounds, case.unions)
@@ -852,7 +707,7 @@ def main():
         print(case.spec(), end="")
         for r in case.rules:
             print(f"=== rule {r.name} ===")
-            print(source_rule(r))
+            print(r.source())
         keep = ROOT / f"xarray-show-{case.name}.egg"
         print("=== reference ===", run_reference(case))
         print("=== encoding  ===", run_encoding(case, keep=keep))
@@ -895,7 +750,7 @@ def main():
             cases = [c for c in cases if c.name.startswith(args[1])]
         tally = {"ok": 0, "FAIL": 0, "skip": 0, "limit": 0, "unreadable": 0}
         for c in cases:
-            verdict, detail = I.check(c, lang=LANG, egg_program=egg_program)
+            verdict, detail = I.check(c)
             tally[verdict] += 1
             print(f"  {verdict:4} {c.name:36} {detail}", flush=True)
         print(

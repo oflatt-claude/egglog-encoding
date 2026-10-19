@@ -1,26 +1,17 @@
 #!/usr/bin/env python3
-"""Differential tester for the reference `sdql` language and its rewrite rules.
+"""SDQL differential regression cases using the shared test runner and graph checker.
 
-Compares the 44-rule SDQL library against the reference `slotted-egraphs`
-implementation, the same way `xarray.py` does for the array language.
+Rules come from `languages/sdql-rules.egg`: Rust compiles them for the encoding,
+and `reference.py` translates them to the reference's MultiPattern syntax.
+`check-reference-rules.py` separately checks the library against the pinned paper
+artifact. The cases below cover selected rules, guards, binding, and substitution;
+they do not provide a firing witness for every library rule.
 
-The two sides:
-
-  reference   the rule's own pattern text from `sdql_rules()` in
-              `slotted-egraphs/benches/sdql.rs`, flattened into the same
-              `MultiPattern` atoms as the encoding. Nested `ematch_all` is a
-              different pattern language and is not used as an oracle here.
-  encoding    the selected rewrite from `languages/sdql-rules.egg`, compiled
-              directly by the source compiler used for slotted programs.
-
-`beta` is compiled too. Its right-hand side becomes `slotted-subst` plus the frame
-plumbing needed to return an invocation rather than only an e-class. Capture,
-shadowing, and extraction-cost regressions run in the ordinary agreement suite. The
-focused known-encoding-limitations mode pins the remaining scope-erasing flattening
-divergence without making that suite green on a known-wrong answer.
+The known-encoding-limitations mode pins the remaining scope-erasing flattening
+divergence separately from the ordinary agreement suite.
 
 Usage:
-    ./xsdql.py                every case: each rule firing, and each guard blocking
+    ./xsdql.py                partition, expected-result, and slot-renaming checks
     ./xsdql.py iso [prefix]   the stronger check: a witnessed isomorphism of the two
                               final e-graphs, via `isomorphism.py`
     ./xsdql.py show <name>    one case's spec, its egg program, and both answers
@@ -30,12 +21,13 @@ Usage:
 """
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from xdiff import EGGLOG, ROOT, XMULTI, driver, parse_same_class, syntax  # noqa: E402
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "slotted"))
+import reference as syntax  # noqa: E402
+import test_program as driver  # noqa: E402
 
 RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 
@@ -48,267 +40,29 @@ BETA_FIXTURE = ROOT / "slotted" / "tests" / "sdql-beta.egg"
 BINDER_FIXTURE = ROOT / "slotted" / "tests" / "sdql-binders.egg"
 
 
-# --------------------------------------------------------------------- sdql terms
-# term := ('var', slot) | ('num', n) | ('sym', name)
-#       | (op, kid...)                for an ordinary operator
-#       | ('lambda', slot, body)
-#       | ('sum', range, slot, slot, body)
-#       | ('merge', range1, range2, slot, slot, slot, body)
-#       | ('let', value, slot, body)
-#
-# Constructor columns come from `languages/sdql.egg`; reference tags come from
-# `languages/sdql.ref`. Python spells source terms; Rust compiles the encoding.
-#
-# Terms take their columns in the reference's surface order, which is where its
-# `Bind<>` layers put the bound slots: `Sum(AppliedId, Bind<Bind<AppliedId>>)`
-# prints as `(sum ?R $k $v ?body)`.
-#
-# What that file does not say is the NAMING -- what the reference calls each
-# constructor -- because that is a fact about the harness and not about the
-# encoding. `languages/sdql.ref` beside it says that, including the two
-# workarounds below.
-
-# `let` is the one tag the oracle could not keep: `xmulti`'s language already has
-# the array `Let(Bind<AppliedId>, AppliedId) = "let"`, a different node, and
-# `define_language!` dispatches on the tag alone. See the comment in
-# `xmulti/src/main.rs`.
-
-# Every `Symbol` payload is written with this prefix on the REFERENCE side, and
-# without it on the encoding side.
-#
-# The reference's parser reads a leaf by trying the operator tags FIRST -- the
-# generated `from_syntax` is a `match` on the token -- and only falls through to
-# the payload types for a token that is no tag at all. So a payload spelled like
-# a tag is not a payload:
-#
-#     (binop add ?a ?b)    the array `Add(AppliedId, AppliedId) = "add"` arm, which
-#                          then wants two children and has none -> a parse ERROR
-#     (binop null ?a ?b)   the array `Null() = "null"` arm, which wants none --
-#                          it parses, as `Binop(Null, ?a, ?b)`, SILENTLY not the
-#                          `Symbol("null")` the encoding builds
-#
-# `sdql_rules()` uses the payload symbols `mult`, `add`, `sub`, `getf`, `singf`
-# and `uniquef`, two of which (`add`, `sub`) are array tags. Prefixing every one
-# of them makes the payload namespace disjoint from the tag namespace by
-# construction, so no rule can hit either case. The spelling is opaque -- only
-# `Symbol(x) == Symbol(y)` is ever asked -- and the prefix is applied to every
-# symbol on that side, terms and rules alike, so the two e-graphs stay isomorphic
-# and the probe partitions stay comparable.
-# The language is declared where its rules are: `slotted/languages/sdql.egg` holds both,
-# and `sdql.ref` beside it says what the reference calls each constructor.
+# Constructor signatures and reference names are data, shared with evaluation.
+# sdql.ref documents the reference's `let` tag and symbol-payload naming constraints.
 SDQL_SRC = ROOT / "slotted" / "languages" / "sdql.egg"
-#: the rewrites, split out of the declarations so the machinery can be compiled
-#: from sdql.egg alone
 SDQL_SRC_RULES = ROOT / "slotted" / "languages" / "sdql-rules.egg"
-# The language file says what the constructors are; the `.ref` beside it says what the
-# reference calls them, including the two workarounds above. `syntax.language` checks
-# that the two name the same constructors, so an operator added to one and not the other
-# is an error here rather than a corpus that quietly stops covering the language the
-# rules were compiled from.
 LANG = syntax.language(SDQL_SRC, SDQL_SRC.with_suffix(".ref"))
-
-CORR = syntax.read_correspondence(SDQL_SRC.with_suffix(".ref"))
-OPS = {op: (ctor, tag) for op, (ctor, tag, _) in CORR.items()}
-SYM_PREFIX = CORR["sym"][2]
-LET_TAG = CORR["let"][1]
-assert SYM_PREFIX and LET_TAG != "let", "sdql.ref lost one of the two workarounds above"
-
 sexpr, shift = LANG.sexpr, LANG.shift
-
-
-def _fixture_blocks(path):
-    """The top-level `(push)`/`(pop)` regions contributed by one fixture.
-
-    Included libraries are deliberately excluded: a case is selected by one of the
-    fixture's own `let` names, and a library changing its own scopes must not silently
-    renumber those cases.
-    """
-    src = syntax.Source(path)
-    blocks, block = [], None
-    for form, origin in src.body:
-        if origin != path or not isinstance(form, list) or not form:
-            continue
-        if form[0] == "push":
-            if block is not None:
-                raise ValueError(f"{path.name}: nested push regions are not fixture cases")
-            block = []
-        elif form[0] == "pop":
-            if block is None:
-                raise ValueError(f"{path.name}: pop without a fixture case")
-            blocks.append(block)
-            block = None
-        elif block is not None:
-            block.append(form)
-    if block is not None:
-        raise ValueError(f"{path.name}: unterminated fixture case")
-    return src, blocks
-
-
-def _fixture_term(term, named):
-    """Inline a fixture's `let` globals into the tuple form the oracle accepts."""
-    if not isinstance(term, tuple):
-        return term
-    if term[0] == "name":
-        try:
-            return named[term[1]]
-        except KeyError as exc:
-            raise ValueError(f"fixture term refers to unknown global {term[1]!r}") from exc
-    return tuple(_fixture_term(arg, named) for arg in term)
-
-
-def _fixture_block(path, anchor):
-    """Read the unique fixture region that binds `anchor`.
-
-    The result retains names because choosing the seed and observational probes is
-    differential-test metadata.  Their term trees and asserted unions remain owned by
-    the `.egg` source; the differential harness continues to own its round budget.
-    """
-    src, blocks = _fixture_blocks(path)
-    hits = [
-        block for block in blocks if any(form[0] == "let" and len(form) == 3 and form[1] == anchor for form in block)
-    ]
-    if len(hits) != 1:
-        raise ValueError(f"{path.name}: expected one fixture case binding {anchor!r}, found {len(hits)}")
-
-    named, unions = {}, []
-    for form in hits[0]:
-        if form[0] == "let":
-            _, name, body = form
-            if name in named:
-                raise ValueError(f"{path.name}: duplicate global {name!r} in fixture case {anchor!r}")
-            term = src.term(body)
-            src.lang.bound[name] = term
-            named[name] = _fixture_term(term, named)
-        elif form[0] == "union":
-            _, left, right = form
-            unions.append(
-                (
-                    _fixture_term(src.term(left), named),
-                    _fixture_term(src.term(right), named),
-                )
-            )
-    return src, named, unions
-
-
-def _fixture_rewrites(path, *names):
-    """Read uniquely named local rewrites from a source fixture."""
-    src = syntax.Source(path)
-    wanted, found = set(names), {}
-    for form, origin in src.body:
-        if origin != path or not (isinstance(form, list) and form and form[0] == "rewrite"):
-            continue
-        parts = syntax.rewrite_parts(src, form)
-        if parts["name"] in wanted:
-            if parts["name"] in found:
-                raise ValueError(f"{path.name}: duplicate rewrite {parts['name']!r}")
-            found[parts["name"]] = parts
-    missing = wanted - found.keys()
-    if missing:
-        raise ValueError(f"{path.name}: missing fixture rewrite(s): {', '.join(sorted(missing))}")
-    return src, found
-
-
-def check_term(t):
-    """Walk a term so future per-node validation has one central hook.
-
-    A bound name may also occur free in an uncovered column: `Bind<T>` covers only
-    its wrapped body, and the generated binder machinery renames the bound occurrence
-    away from that free one.  Such collisions used to be excluded here, hiding exactly
-    the scope boundary the differential suite needs to compare.
-    """
-    for x in t[1:]:
-        if isinstance(x, tuple):
-            check_term(x)
-
-
-# ---------------------------------------------------------------------- the rules
-# Read from `slotted/languages/sdql.egg` and rendered in the oracle's syntax, which is
-# where the two spelling workarounds above come from -- `Let`'s tag and `Symbol`'s
-# prefix are in `sdql.ref`, so neither is applied by hand here.
-#
-# A cond is (want, '$slot', [pvar...]) and reads "the slot is / is not among the slots
-# of any listed variable", which is what the reference's guards test: every SDQL guard
-# is `!subst[v].slots().contains(&Slot::named(s))`, so `notin` with one variable, and
-# two of them conjoined for the two bound slots.
-
-
-class Rule:
-    """One rewrite, with each side already in the oracle's own syntax.
-
-    Derived from `slotted/languages/sdql.egg` rather than restated: `pat_sexpr` renders a
-    pattern with `op.ref` for every operator and `op.ref_prefix` for a payload leaf,
-    which is where `sdql-let` and the `sym:` prefix come from. Deriving them, rather
-    than keeping a hand-written copy here, is what stops them drifting from the rules
-    that actually run.
-    """
-
-    def __init__(self, name, lhs, rhs, conds=(), atoms=None, egg=None):
-        self.name = name
-        self.lhs = lhs
-        self.rhs = rhs
-        self.conds = list(conds)
-        #: `(root, atoms)` from `syntax.flatten`, or None where the pattern has no
-        #: atom spelling; see `atom_lines`.
-        self.flat = atoms
-        # Ordinary cases lift the generated rule by name. A focused compiler
-        # limitation may instead carry the exact rule text compiled for its synthetic
-        # multipattern; keeping that exceptional path explicit prevents it from
-        # weakening the generated-artifact check above.
-        self.egg = egg
-
-    def atom_lines(self):
-        """The pattern as `atom` lines, or None where it has no atom spelling."""
-        if self.flat is None:
-            return None
-        return syntax.atom_lines(LANG, *self.flat)
-
-    def spec_lines(self):
-        spelled = self.atom_lines()
-        if spelled is None:
-            raise ValueError(f"{self.name}: reference oracle requires a MultiPattern atom spelling")
-        root, atoms = spelled
-        out = ["rule", *atoms, f"rhs {root} {self.rhs}"]
-        for want, slot, pvars in self.conds:
-            out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
-        return out
-
-
-def _rule_from_parts(src, parts):
-    """Build the oracle rule represented by one parsed source rewrite."""
-    if parts["equalities"]:
-        raise ValueError(f"{parts['name']}: `:when (= ...)` is not supported by the SDQL harness yet")
-    lhs_term, rhs_term = (src.term(side, ground=False) for side in (parts["lhs"], parts["rhs"]))
-    lhs, rhs = (syntax.pat_sexpr(LANG, syntax.rhs_of(LANG, term)) for term in (lhs_term, rhs_term))
-    try:
-        atoms = syntax.flatten(LANG, lhs_term)
-    except Exception:
-        atoms = None
-    return Rule(parts["name"], lhs, rhs, conds=parts["conds"], atoms=atoms)
-
-
-#: Source rewrites shared by the encoding and the reference rule translation.
+RULES = driver.load_rules(SDQL_SRC_RULES, LANG)
 SOURCE = syntax.Source(SDQL_SRC_RULES)
-SOURCE_RULES = {
-    syntax.rule_name(SOURCE, form): form for form in syntax.parse(SDQL_SRC_RULES.read_text()) if form[:1] == ["rewrite"]
-}
 
-RULES = {name: _rule_from_parts(SOURCE, syntax.rewrite_parts(SOURCE, form)) for name, form in SOURCE_RULES.items()}
-
-# The substitution cases below use the runnable fixture's beta definition on the
-# reference side. The encoding compiles the corresponding library rule. This
-# exact check catches drift between the two sources.
-_beta_src, _beta_parts = _fixture_rewrites(BETA_FIXTURE, "beta")
-BETA_RULE = _rule_from_parts(_beta_src, _beta_parts["beta"])
+# Substitution fixtures and the library must exercise the same beta rewrite.
+_beta_src, _beta_forms = driver.fixture_rewrites(BETA_FIXTURE, "beta")
+BETA_RULE = driver.Rule(_beta_src, LANG, _beta_forms["beta"])
 if BETA_RULE.spec_lines() != RULES["beta"].spec_lines():
     raise ValueError(f"{BETA_FIXTURE.name}: beta no longer matches {SDQL_SRC_RULES.name}")
 
 
-def source_rule(name):
-    return syntax.render(SOURCE_RULES[name])
-
-
 # ---------------------------------------------------------------------- the cases
 class Case:
+    lang = LANG
+
+    def egg_program(self, *, mult):
+        return egg_program(self, mult=mult)
+
     def __init__(
         self,
         name,
@@ -320,6 +74,7 @@ class Case:
         ref_want=None,
         why=None,
         unions=(),
+        ref_rule=None,
     ):
         self.name = name
         self.rule = rule
@@ -337,17 +92,20 @@ class Case:
         self.ref_want = ref_want
         self.why = why
         assert (ref_want is None) == (why is None), "a divergence needs its reason"
-        for t in self.terms + self.probes + [t for pair in self.unions for t in pair]:
-            check_term(t)
+        # A different reference rule is allowed only for an explicitly pinned limitation.
+        assert ref_rule is None or ref_want is not None
+        self.ref_rule = ref_rule
 
     def spec(self, with_rule=True):
-        out = [f"rounds {self.rounds}"]
-        out += [f"term {sexpr(t)}" for t in self.terms]
-        out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
-        if with_rule:
-            out += self.rule.spec_lines()
-        out += [f"probe {sexpr(t)}" for t in self.probes]
-        return "\n".join(out) + "\n"
+        rule = self.ref_rule or self.rule
+        return driver.reference_spec(
+            LANG,
+            self.rounds,
+            self.terms,
+            self.unions,
+            rule.spec_lines() if with_rule else [],
+            self.probes,
+        )
 
     def shifted(self, k):
         return Case(
@@ -360,60 +118,21 @@ class Case:
             self.ref_want,
             self.why,
             unions=[(shift(a, k), shift(b, k)) for a, b in self.unions],
+            ref_rule=self.ref_rule,
         )
 
 
 def egg_program(case, with_rule=True, mult=3):
-    rules = [case.rule.egg if case.rule.egg is not None else source_rule(case.rule.name)] if with_rule else []
+    rules = [case.rule.source()] if with_rule else []
     return driver.program("sdql", LANG, rules, case.terms, case.unions, case.probes, case.rounds * mult)
 
 
 def run_reference(case, with_rule=True):
-    try:
-        r = subprocess.run(
-            [str(XMULTI / "target" / "debug" / "xmulti")],
-            input=case.spec(with_rule),
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return ("TIMEOUT", f">{RUN_TIMEOUT}s")
-    if r.returncode != 0:
-        lines = r.stderr.strip().splitlines()
-        diagnostic = next(
-            (line for line in lines if "SlotMap::index" in line or "SlotMap::compose" in line),
-            next((line for line in lines if "panicked at" in line), lines[-1] if lines else "?"),
-        )
-        return ("ERROR", diagnostic)
-    part, sat = None, True
-    for line in r.stdout.splitlines():
-        if line.startswith("PARTITION "):
-            part = line[len("PARTITION ") :].strip()
-        elif line.startswith("SATURATED "):
-            sat = line.split()[1] == "yes"
-    if part is None:
-        return ("ERROR", "no PARTITION line")
-    return ("OK" if sat else "UNSATURATED", part)
+    return driver.run_reference(case.spec(with_rule), RUN_TIMEOUT)
 
 
 def run_encoding(case, with_rule=True, keep=None, mult=3):
-    prog = egg_program(case, with_rule, mult)
-    path = keep or (ROOT / f"xsdql-tmp-{os.getpid()}-{mult}.egg")
-    path.write_text(prog)
-    try:
-        r = subprocess.run(
-            [str(EGGLOG), "--slotted-encoded", str(path)], capture_output=True, text=True, timeout=RUN_TIMEOUT, cwd=ROOT
-        )
-    except subprocess.TimeoutExpired:
-        return ("TIMEOUT", f">{RUN_TIMEOUT}s (kept at {path})")
-    if r.returncode != 0:
-        err = [x for x in r.stderr.splitlines() if "ERROR" in x]
-        msg = err[-1] if err else r.stderr.strip()[:600]
-        return ("ERROR", f"{msg}\n    (kept at {path})")
-    if not keep:
-        path.unlink(missing_ok=True)
-    return ("OK", parse_same_class(r.stdout, len(case.probes)))
+    return driver.run_encoding(egg_program(case, with_rule, mult), len(case.probes), RUN_TIMEOUT, keep=keep)
 
 
 def check_case(case, shift_check=True):
@@ -512,7 +231,6 @@ def compiler_regression_cases():
         ("?r", "mult", [("pv", "a1"), ("pv", "b1")], []),
         ("?r", "sub", [("pv", "a2"), ("pv", "b2")], []),
     ]
-    atoms = atoms
     conds = [(True, "$x", ["a2"])]
     multi_egg = driver.rewrite(
         LANG,
@@ -522,14 +240,7 @@ def compiler_regression_cases():
         conds=conds,
         name="compiler-carried-slot-refinement",
     )
-    multi_rule = Rule(
-        "compiler-carried-slot-refinement",
-        "synthetic conjunctive pattern",
-        "(unique ?a2)",
-        conds=conds,
-        atoms=("?r", atoms),
-        egg=multi_egg,
-    )
+    multi_rule = driver.Rule(SOURCE, LANG, syntax.parse(multi_egg)[0])
     n = ("num", 99)
     redundant_nodes = [
         ("add", V(0), V(1)),
@@ -564,13 +275,7 @@ def compiler_regression_cases():
         ("unique", ("pv", "x")),
         name="compiler-repeated-pvar-symmetry",
     )
-    repeated_rule = Rule(
-        "compiler-repeated-pvar-symmetry",
-        "synthetic repeated-variable pattern",
-        "(unique ?x)",
-        atoms=("?r", atoms),
-        egg=repeated_egg,
-    )
+    repeated_rule = driver.Rule(SOURCE, LANG, syntax.parse(repeated_egg)[0])
     out.append(
         Case(
             "repeated-pvar-symmetry",
@@ -636,7 +341,7 @@ def cases():
     )
 
     # --- the payload symbol `add`, which is also an operator tag in `xmulti`'s
-    # array language: without `SYM_PREFIX` the reference cannot parse this rule.
+    # array language: without the symbol prefix in sdql.ref the reference cannot parse this rule.
     out.append(
         Case(
             "add-app1",
@@ -892,7 +597,7 @@ def substitution_regression_cases():
 
     # Capture avoidance must refresh the lambda's private slot, not the free slot in
     # the substituted term.
-    _, capture, capture_unions = _fixture_block(BETA_FIXTURE, "e")
+    _, capture, capture_unions = driver.fixture_block(BETA_FIXTURE, "e")
     out = [
         Case(
             "subst-capture",
@@ -907,7 +612,7 @@ def substitution_regression_cases():
 
     # A nested binder for the same slot shadows the outer substitution target. The
     # primitive must leave the covered subtree alone.
-    _, shadow, shadow_unions = _fixture_block(BETA_FIXTURE, "f")
+    _, shadow, shadow_unions = driver.fixture_block(BETA_FIXTURE, "f")
     out.append(
         Case(
             "subst-shadowed-target",
@@ -926,7 +631,7 @@ def substitution_regression_cases():
     # the encoding each binder is another edge to Var; counting those markers as
     # children used to reverse the costs to 5 versus 4 and therefore the result beta
     # built. Binder layout metadata now keeps marker edges out of AstSize.
-    _, cost, cost_unions = _fixture_block(BETA_FIXTURE, "g")
+    _, cost, cost_unions = driver.fixture_block(BETA_FIXTURE, "g")
     out.append(
         Case(
             "subst-binder-cost",
@@ -962,38 +667,20 @@ def known_encoding_limitations():
     # unconstrained pvar outside a binder may carry the same printed slot. It is only
     # about two explicit slot occurrences whose binding roles the source already says.
     # https://github.com/saulshanabrook/egglog-encoding/issues/81 tracks the fix.
-    scope_src, scope_parts = _fixture_rewrites(
+    scope_src, scope_forms = driver.fixture_rewrites(
         BINDER_FIXTURE,
         "binder-free-distinct-spellings",
         "binder-free-same-spelling-known-limit",
     )
-    reference = scope_parts["binder-free-distinct-spellings"]
-    naive = scope_parts["binder-free-same-spelling-known-limit"]
-    reference_lhs = scope_src.term(reference["lhs"], ground=False)
-    naive_lhs = scope_src.term(naive["lhs"], ground=False)
-    reference_rhs = syntax.rhs_of(LANG, scope_src.term(reference["rhs"], ground=False))
-    naive_rhs = syntax.rhs_of(LANG, scope_src.term(naive["rhs"], ground=False))
-    if reference_rhs != naive_rhs:
+    reference = scope_forms["binder-free-distinct-spellings"]
+    naive = scope_forms["binder-free-same-spelling-known-limit"]
+    if reference[2] != naive[2]:
         raise ValueError(f"{BINDER_FIXTURE.name}: the paired scope witnesses must have the same right-hand side")
-    reference_root, reference_atoms = syntax.flatten(LANG, reference_lhs)
-    root, naive_atoms = syntax.flatten(LANG, naive_lhs)
-    scope_egg = driver.rewrite(
-        LANG,
-        naive_atoms,
-        root,
-        naive_rhs,
-        name="known-flat-binder-free",
-    )
-    scope_rule = Rule(
-        "known-flat-binder-free",
-        syntax.pat_sexpr(LANG, syntax.rhs_of(LANG, naive_lhs)),
-        syntax.pat_sexpr(LANG, reference_rhs),
-        atoms=(reference_root, reference_atoms),
-        egg=scope_egg,
-    )
-    scope_fixture, scoped, scoped_unions = _fixture_block(BINDER_FIXTURE, "same-spelling")
+    scope_rule = driver.Rule(scope_src, LANG, naive)
+    reference_rule = driver.Rule(scope_src, LANG, reference)
+    scope_fixture, scoped, scoped_unions = driver.fixture_block(BINDER_FIXTURE, "same-spelling")
     scoped_target = scoped["same-spelling"]
-    scoped_result = scope_fixture.term(naive["rhs"])
+    scoped_result = scope_fixture.term(naive[2])
     out.append(
         Case(
             "flat-binder-free",
@@ -1008,6 +695,7 @@ def known_encoding_limitations():
                 "free and bound occurrences with one spelling"
             ),
             unions=scoped_unions,
+            ref_rule=reference_rule,
         )
     )
 
@@ -1062,7 +750,7 @@ def run_iso(args):
         if c.ref_want is not None:
             diverging.append(c.name)
             continue
-        verdict, detail = I.check(c, lang=LANG, egg_program=egg_program)
+        verdict, detail = I.check(c)
         tally[verdict] += 1
         print(f"  {verdict:4} {c.name:24} {detail}", flush=True)
     n = sum(tally.values())
@@ -1085,7 +773,7 @@ def main():
     if argv and argv[0] == "list":
         for c in cases():
             print(f"{c.name:<24} {c.want}")
-            print(f"    {c.rule.name:<16} {c.rule.lhs}  ->  {c.rule.rhs}")
+            print(f"    {c.rule.source()}")
         return 0
     if argv and argv[0] == "show":
         c = next(x for x in cases() if x.name == argv[1])

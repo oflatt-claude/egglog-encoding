@@ -37,13 +37,10 @@ import random
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "slotted/xdiff")
-import xdiff as X
-
-# the carrier's table names, so the serialized graph is read by the names the
-# machinery actually declares rather than by a fixed spelling
-SYM = X.SYM
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import test_program as driver  # noqa: E402
 
 SEARCH_CAP = 200_000
 MATCH_VARIANT_CAP = 200_000
@@ -130,7 +127,7 @@ def parse_reference(out):
     return g
 
 
-def read_json_graph(doc, lang=X.LANG):
+def read_json_graph(doc, lang):
     """The encoding's tables, out of egglog's serialized e-graph.
 
     Every row is a node with an `op`, the `eclass` it belongs to, and `children` naming other
@@ -139,6 +136,7 @@ def read_json_graph(doc, lang=X.LANG):
     tables. Renamings come back as `map-of` nodes over `i64` nodes, so their contents are
     readable too.
     """
+    symbols = lang.symbols_for(lang.default_sort)
     node_ops = {op.ctor: op for op in lang.ops.values()}
     nodes = doc.get("nodes", {})
 
@@ -176,7 +174,7 @@ def read_json_graph(doc, lang=X.LANG):
     leaf_rows = {"var": 0, "null": 0}
     for n in nodes.values():
         op, kids = n.get("op"), n.get("children", [])
-        if op == SYM.class_slots and kids:
+        if op == symbols.class_slots and kids:
             m = maps.get(n["eclass"])
             if m is None:
                 issues.append(f"no map-of row for class-slots result {n['eclass']}")
@@ -187,15 +185,15 @@ def read_json_graph(doc, lang=X.LANG):
             if value in slots_of and slots_of[value] != slots:
                 issues.append(f"conflicting class-slots rows for {value}")
             slots_of[value] = slots
-        elif op == SYM.renames and len(kids) == 3:
+        elif op == symbols.renames and len(kids) == 3:
             loops.append((cls(kids[0]), as_renaming(kids[1]), cls(kids[2])))
-        elif op == SYM.group and len(kids) == 1:
+        elif op == symbols.group and len(kids) == 1:
             # a symmetry is a renaming of a class onto ITSELF, so each element of the
             # class's group reads here as the self-loop the rest of this function is
             # written against; a follower's group is empty
             for element in sets.get(n["eclass"], []):
                 loops.append((cls(kids[0]), as_renaming(element), cls(kids[0])))
-        elif op == SYM.var:
+        elif op == symbols.var:
             leaf_rows["var"] += 1
             if len(kids) != 1:
                 issues.append(f"{n['eclass']} Var: {len(kids)} payloads, expected 1")
@@ -347,7 +345,7 @@ def is_closed_group(perms, identity):
     return True
 
 
-def build_encoding_graph(doc, lang=X.LANG):
+def build_encoding_graph(doc, lang):
     """One class per *slotted* class, merging the `U` values that make one up.
 
     Membership is a connected component of *any* `RenamesToLeader` link, partial ones
@@ -503,7 +501,7 @@ def build_encoding_graph(doc, lang=X.LANG):
 
 
 # ------------------------------------------------------- the encoding's own ops
-def to_reference_shape(g, var_class=None, *, lang=X.LANG):
+def to_reference_shape(g, var_class=None, *, lang):
     """Rewrite the encoding's node forms into the reference's.
 
     Two things are spelled differently by construction, and both are documented
@@ -886,7 +884,7 @@ def verify(ga, gb, phi, sig):
 SEED = "term (var $0)\n"
 
 
-def reference_graph(case, mult=3):
+def reference_graph(case, mult=3, *, timeout=25):
     """The reference's graph after the SAME number of rounds the encoding gets steps.
 
     NOT SATURATION -- a fixed count, because a generated rule set need not have a fixpoint.
@@ -900,20 +898,18 @@ def reference_graph(case, mult=3):
     `schedule(rounds * mult)`. Where the reference saturates the extra rounds change
     nothing, so it is safe for the whole corpus.
 
-    Scaled by rewriting the spec's own `rounds` line rather than by rebuilding the case:
-    `xarray` and `xsdql` bring their own case and rule types, and only the spec text is
-    common to all three.
+    Scale the spec's round budget without changing the terms, rules, or probes.
     """
     spec = case.spec()
     spec, subbed = re.subn(r"^rounds \d+$", f"rounds {case.rounds * mult}", spec, count=1, flags=re.M)
     assert subbed, f"{case.name}: spec has no `rounds` line to scale"
     try:
         r = subprocess.run(
-            [str(X.XMULTI / "target" / "debug" / "xmulti")],
+            [str(driver.XMULTI)],
             input=spec + SEED + "dump\n",
             capture_output=True,
             text=True,
-            timeout=X.RUN_TIMEOUT,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         # The reference running out of time is NOT a finding -- it is a case that cannot
@@ -949,7 +945,7 @@ def incomplete_serialization(stderr):
     return [line.strip() for line in stderr.splitlines() if re.search(r"\b(?:Omitted|Truncated):", line)]
 
 
-def _dump(case, mult, timeout, *, lang=X.LANG, egg_program=X.egg_program):
+def _dump(case, mult, timeout, *, egg_program=None):
     """The encoding's graph, from egglog's serialized e-graph.
 
     `--to-json` writes `<input>.json` and names a class `{sort}-{canonical value}`, an
@@ -965,17 +961,18 @@ def _dump(case, mult, timeout, *, lang=X.LANG, egg_program=X.egg_program):
     incomplete serialization as `Omitted:` or `Truncated:` on stderr, even on exit zero;
     those diagnostics are therefore part of the reader's validity check.
     """
-    prog = egg_program(case, mult=mult)
+    lang = case.lang
+    prog = egg_program(case, mult=mult) if egg_program else case.egg_program(mult=mult)
     prog = prog.replace("(print-function SameClass 100000)", "")
-    p = X.ROOT / f"xdiff-tmp-iso-{os.getpid()}-{mult}.egg"
+    p = driver.ROOT / f"xdiff-tmp-iso-{os.getpid()}-{mult}.egg"
     j = p.with_suffix(".json")
     p.write_text(prog)
     try:
         r = subprocess.run(
-            [str(X.EGGLOG), "--slotted-encoded", "--to-json", *SERIALIZE_LIMITS, str(p)],
+            [str(driver.EGGLOG), "--slotted-encoded", "--to-json", *SERIALIZE_LIMITS, str(p)],
             capture_output=True,
             text=True,
-            cwd=X.ROOT,
+            cwd=driver.ROOT,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -1009,7 +1006,7 @@ def _dump(case, mult, timeout, *, lang=X.LANG, egg_program=X.egg_program):
     return g, None
 
 
-def encoding_graph(case, *, lang=X.LANG, egg_program=X.egg_program):
+def encoding_graph(case, *, egg_program=None):
     """The encoding's final graph, at the strongest fixpoint available to it.
 
     The harness's schedule saturates the `slotted` invariants between user-rule steps and
@@ -1018,14 +1015,14 @@ def encoding_graph(case, *, lang=X.LANG, egg_program=X.egg_program):
     instead, established by two different step counts producing the same graph -- the same
     standard the partition comparison uses -- and reported separately.
     """
-    g, err = _dump(case, 3, timeout=60, lang=lang, egg_program=egg_program)
+    g, err = _dump(case, 3, timeout=60, egg_program=egg_program)
     if err != "timeout":
         return g, err, 3
-    a, e1 = _dump(case, 6, timeout=180, lang=lang, egg_program=egg_program)
+    a, e1 = _dump(case, 6, timeout=180, egg_program=egg_program)
     if e1:
         err = ("limit", "encoding too slow to settle") if e1 == "timeout" else e1
         return None, err, 6
-    b, e2 = _dump(case, 12, timeout=180, lang=lang, egg_program=egg_program)
+    b, e2 = _dump(case, 12, timeout=180, egg_program=egg_program)
     if e2:
         err = e2 if e2 != "timeout" else ("limit", "encoding too slow to settle")
         return None, err, 12
@@ -1039,17 +1036,14 @@ def check(
     encoding_builder=None,
     reference_builder=None,
     *,
-    lang=X.LANG,
-    egg_program=X.egg_program,
+    egg_program=None,
     search_cap=SEARCH_CAP,
 ):
     # Only a reference that ERRORS is skipped. One that has not settled is compared
     # anyway, at the same fixed number of rounds the encoding gets steps -- see
     # `reference_graph`.
     reference_builder = reference_builder or reference_graph
-    enc, err, mult = (
-        encoding_builder(case) if encoding_builder else encoding_graph(case, lang=lang, egg_program=egg_program)
-    )
+    enc, err, mult = encoding_builder(case) if encoding_builder else encoding_graph(case, egg_program=egg_program)
     if isinstance(err, tuple):
         return err[0], err[1]
     if err:
@@ -1087,6 +1081,10 @@ def selftest():
     binder structure or a Def. 4 edge-domain difference.  No egglog and no reference,
     so these stay honest if either changes.
     """
+
+    import xdiff as X
+
+    symbols = X.LANG.symbols_for(X.LANG.default_sort)
 
     def build(spec):
         g = Graph()
@@ -1308,10 +1306,10 @@ def selftest():
         nodes = {
             "n": {"op": "Null", "eclass": "U-n", "children": []},
             "i0": {"op": "0", "eclass": "i64-0", "children": []},
-            "v": {"op": SYM.var, "eclass": "U-v", "children": ["i0"]},
+            "v": {"op": symbols.var, "eclass": "U-v", "children": ["i0"]},
             "vm": {"op": "map-of", "eclass": "Renaming-var-id", "children": ["i0", "i0"]},
-            "vcs": {"op": SYM.class_slots, "eclass": "Renaming-var-id", "children": ["v"]},
-            "vrtl": {"op": SYM.renames, "eclass": "Unit-vrtl", "children": ["v", "vm", "v"]},
+            "vcs": {"op": symbols.class_slots, "eclass": "Renaming-var-id", "children": ["v"]},
+            "vrtl": {"op": symbols.renames, "eclass": "Unit-vrtl", "children": ["v", "vm", "v"]},
         }
         if with_slots:
             children = []
@@ -1321,18 +1319,18 @@ def selftest():
                 nodes[val] = {"op": str(slot), "eclass": f"i64-v{i}", "children": []}
                 children += [key, val]
             nodes["m"] = {"op": "map-of", "eclass": "Renaming-id", "children": children}
-            nodes["cs"] = {"op": SYM.class_slots, "eclass": "Renaming-id", "children": ["n"]}
-            nodes["rtl"] = {"op": SYM.renames, "eclass": "Unit-rtl", "children": ["n", "m", "n"]}
+            nodes["cs"] = {"op": symbols.class_slots, "eclass": "Renaming-id", "children": ["n"]}
+            nodes["rtl"] = {"op": symbols.renames, "eclass": "Unit-rtl", "children": ["n", "m", "n"]}
         return {"nodes": nodes}
 
     nonidentity_var = {
         "nodes": {
             "i0": {"op": "0", "eclass": "i64-0", "children": []},
             "i1": {"op": "1", "eclass": "i64-1", "children": []},
-            "v": {"op": SYM.var, "eclass": "U-v", "children": ["i0"]},
+            "v": {"op": symbols.var, "eclass": "U-v", "children": ["i0"]},
             "m": {"op": "map-of", "eclass": "Renaming-weird", "children": ["i0", "i1"]},
-            "cs": {"op": SYM.class_slots, "eclass": "Renaming-weird", "children": ["v"]},
-            "rtl": {"op": SYM.renames, "eclass": "Unit-rtl", "children": ["v", "m", "v"]},
+            "cs": {"op": symbols.class_slots, "eclass": "Renaming-weird", "children": ["v"]},
+            "rtl": {"op": symbols.renames, "eclass": "Unit-rtl", "children": ["v", "m", "v"]},
         }
     }
     inconsistent_cycle = {
@@ -1343,12 +1341,12 @@ def selftest():
             "mswap": {"op": "map-of", "eclass": "Renaming-swap", "children": ["i0", "i1", "i1", "i0"]},
             "a": {"op": "opaque-a", "eclass": "U-a", "children": []},
             "b": {"op": "opaque-b", "eclass": "U-b", "children": []},
-            "csa": {"op": SYM.class_slots, "eclass": "Renaming-id", "children": ["a"]},
-            "csb": {"op": SYM.class_slots, "eclass": "Renaming-id", "children": ["b"]},
-            "aa": {"op": SYM.renames, "eclass": "Unit-aa", "children": ["a", "mid", "a"]},
-            "bb": {"op": SYM.renames, "eclass": "Unit-bb", "children": ["b", "mid", "b"]},
-            "ab-id": {"op": SYM.renames, "eclass": "Unit-ab1", "children": ["a", "mid", "b"]},
-            "ab-swap": {"op": SYM.renames, "eclass": "Unit-ab2", "children": ["a", "mswap", "b"]},
+            "csa": {"op": symbols.class_slots, "eclass": "Renaming-id", "children": ["a"]},
+            "csb": {"op": symbols.class_slots, "eclass": "Renaming-id", "children": ["b"]},
+            "aa": {"op": symbols.renames, "eclass": "Unit-aa", "children": ["a", "mid", "a"]},
+            "bb": {"op": symbols.renames, "eclass": "Unit-bb", "children": ["b", "mid", "b"]},
+            "ab-id": {"op": symbols.renames, "eclass": "Unit-ab1", "children": ["a", "mid", "b"]},
+            "ab-swap": {"op": symbols.renames, "eclass": "Unit-ab2", "children": ["a", "mswap", "b"]},
         }
     }
     seeded = null_doc()["nodes"]
@@ -1366,7 +1364,7 @@ def selftest():
             "eclass": "Renaming-aid",
             "children": [f"slot{i}" for i in range(3) for _ in range(2)],
         }
-        nodes["csa"] = {"op": SYM.class_slots, "eclass": "Renaming-aid", "children": ["a"]}
+        nodes["csa"] = {"op": symbols.class_slots, "eclass": "Renaming-aid", "children": ["a"]}
         for j, p in enumerate(perms):
             nodes[f"p{j}"] = {
                 "op": "map-of",
@@ -1374,7 +1372,7 @@ def selftest():
                 "children": [f"slot{k}" for i, v in enumerate(p) for k in (i, v)],
             }
         nodes["group"] = {"op": "set-of", "eclass": "Group-a", "children": [f"p{j}" for j in range(len(perms))]}
-        nodes["ga"] = {"op": SYM.group, "eclass": "Group-a", "children": ["a"]}
+        nodes["ga"] = {"op": symbols.group, "eclass": "Group-a", "children": ["a"]}
         return doc
 
     def noninjective_link(reverse=False):
@@ -1394,12 +1392,12 @@ def selftest():
                 },
                 "a": {"op": "opaque-a", "eclass": "U-a", "children": []},
                 "b": {"op": "opaque-b", "eclass": "U-b", "children": []},
-                "csa": {"op": SYM.class_slots, "eclass": "Renaming-wide-id", "children": ["a"]},
-                "csb": {"op": SYM.class_slots, "eclass": "Renaming-wide-id", "children": ["b"]},
-                "aa": {"op": SYM.renames, "eclass": "Unit-aa", "children": ["a", "wide-id", "a"]},
-                "bb": {"op": SYM.renames, "eclass": "Unit-bb", "children": ["b", "wide-id", "b"]},
+                "csa": {"op": symbols.class_slots, "eclass": "Renaming-wide-id", "children": ["a"]},
+                "csb": {"op": symbols.class_slots, "eclass": "Renaming-wide-id", "children": ["b"]},
+                "aa": {"op": symbols.renames, "eclass": "Unit-aa", "children": ["a", "wide-id", "a"]},
+                "bb": {"op": symbols.renames, "eclass": "Unit-bb", "children": ["b", "wide-id", "b"]},
                 "bad-link": {
-                    "op": SYM.renames,
+                    "op": symbols.renames,
                     "eclass": "Unit-bad-link",
                     "children": ["b" if reverse else "a", "bad", "a" if reverse else "b"],
                 },
@@ -1424,13 +1422,13 @@ def selftest():
     var_one["nodes"]["i1"] = {"op": "1", "eclass": "i64-1", "children": []}
     var_one["nodes"]["v"]["children"] = ["i1"]
     duplicate_var = null_doc()
-    duplicate_var["nodes"]["v2"] = {"op": SYM.var, "eclass": "U-v", "children": ["i0"]}
+    duplicate_var["nodes"]["v2"] = {"op": symbols.var, "eclass": "U-v", "children": ["i0"]}
     full_reader_cases += [
         ("noncanonical Var", True, var_one),
         ("duplicate Var row", True, duplicate_var),
     ]
     for name, want_bad, doc in full_reader_cases:
-        _g, issues = build_encoding_graph(doc)
+        _g, issues = build_encoding_graph(doc, X.LANG)
         ok = bool(issues) == want_bad
         bad += not ok
         print(f"  {'ok  ' if ok else 'FAIL'} full reader {name:20} rejected={bool(issues)}, expected={want_bad}")
@@ -1450,7 +1448,7 @@ def selftest():
                 "children": [f"i-{name}", f"i-{name}"],
             }
             nodes[f"cs-{name}"] = {
-                "op": SYM.class_slots,
+                "op": symbols.class_slots,
                 "eclass": f"Renaming-{name}-id",
                 "children": [name],
             }
@@ -1463,8 +1461,8 @@ def selftest():
                 "eclass": f"Renaming-{key}",
                 "children": ["i0" if c == "v" else f"i-{c}" for c in (b, a)],
             }
-            nodes[key] = {"op": SYM.renames, "eclass": f"Unit-{key}", "children": [a, f"m-{key}", b]}
-        graph, issues = build_encoding_graph(doc)
+            nodes[key] = {"op": symbols.renames, "eclass": f"Unit-{key}", "children": [a, f"m-{key}", b]}
+        graph, issues = build_encoding_graph(doc, X.LANG)
         ok = (
             not issues
             and graph.slots == {"U-a": (7,), "U-n": ()}
@@ -1527,6 +1525,8 @@ def known_groups():
 
     So: cases whose group is known, asked of each reader separately.
     """
+    import xdiff as X
+
     v0, v1, v2 = ("var", 0), ("var", 1), ("var", 2)
 
     def g(a, b):
@@ -1589,6 +1589,8 @@ def known_open_bugs():
     into `curated()` where it will be held green from then on.
     """
     bad = []
+    import xdiff as X
+
     cases = X.known_divergences()
     for why, case in cases:
         verdict, detail = check(case)
@@ -1604,6 +1606,8 @@ def known_open_bugs():
 
 
 def main():
+    import xdiff as X
+
     args = sys.argv[1:]
     if args and args[0] == "selftest":
         return selftest()

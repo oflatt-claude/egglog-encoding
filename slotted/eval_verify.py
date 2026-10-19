@@ -107,7 +107,7 @@ def encoding_counts(program, name, lang, row, timeout, progress=quiet_progress, 
             return
         progress(row, "validating graph")
         doc = json.loads(jpath.read_text())
-        constructors = {op.ctor for op in lang.ops.values()} | {ISO.SYM.var}
+        constructors = {op.ctor for op in lang.ops.values()} | {lang.symbols_for(lang.default_sort).var}
         row.nodes = sum(n.get("op") in constructors for n in doc["nodes"].values())
         g, issues = ISO.build_encoding_graph(doc, lang)
         if issues:

@@ -24,7 +24,6 @@ Usage:
 import itertools
 import os
 import random
-import subprocess
 import sys
 from pathlib import Path
 
@@ -168,6 +167,11 @@ class Case:
     what the single-rule checks and `show` use.
     """
 
+    lang = LANG
+
+    def egg_program(self, *, mult):
+        return egg_program(self, mult=mult)
+
     def __init__(self, name, terms, unions, atoms, action, probes, rounds=10, rules=None):
         self.name = name
         self.terms = terms  # [term]
@@ -200,9 +204,7 @@ class Case:
 
     def spec(self, rules=None):
         rules = self.rules if rules is None else rules
-        out = [f"rounds {self.rounds}"]
-        out += [f"term {sexpr(t)}" for t in self.terms]
-        out += [f"union {sexpr(a)} {sexpr(b)}" for a, b in self.unions]
+        out = []
         for atoms, action, conds in rules:
             if not atoms:
                 continue
@@ -223,8 +225,7 @@ class Case:
                 out.append(f"rhs {action[0]} {rhs_text(action[1])}")
             elif action:
                 out.append("action {} {} {} {}".format(*action))
-        out += [f"probe {sexpr(t)}" for t in self.probes]
-        return "\n".join(out) + "\n"
+        return driver.reference_spec(LANG, self.rounds, self.terms, self.unions, out, self.probes)
 
 
 def rhs_text(t):
@@ -298,80 +299,13 @@ def egg_program(case, rules=None, mult=3):
     )
 
 
-def parse_same_class(stdout, n):
-    """Turn the printed SameClass rows into the same canonical string the
-    reference prints."""
-    pairs = set()
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("(SameClass "):
-            continue
-        nums = line[len("(SameClass ") :].split(")")[0].split()
-        pairs.add((int(nums[0]), int(nums[1])))
-    parent = list(range(n))
-
-    def find(x):
-        while parent[x] != x:
-            x = parent[x]
-        return x
-
-    for i, j in pairs:
-        a, b = find(i), find(j)
-        if a != b:
-            parent[max(a, b)] = min(a, b)
-    groups = {}
-    for i in range(n):
-        groups.setdefault(find(i), []).append(i)
-    gs = sorted("[" + ",".join(str(i) for i in sorted(v)) + "]" for v in groups.values())
-    # every probe is added, so nothing is ever missing on this side
-    return "".join(gs) + " missing[[]]"
-
-
 # ------------------------------------------------------------------ the runners
 def run_reference(case, rules=None):
-    try:
-        r = subprocess.run(
-            [str(XMULTI / "target" / "debug" / "xmulti")],
-            input=case.spec(rules),
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        return ("TIMEOUT", f">{RUN_TIMEOUT}s")
-    if r.returncode != 0:
-        return ("ERROR", r.stderr.strip().splitlines()[-1] if r.stderr else "?")
-    part, sat = None, True
-    for line in r.stdout.splitlines():
-        if line.startswith("PARTITION "):
-            part = line[len("PARTITION ") :].strip()
-        elif line.startswith("SATURATED "):
-            sat = line.split()[1] == "yes"
-    if part is None:
-        return ("ERROR", "no PARTITION line")
-    return ("OK" if sat else "UNSATURATED", part)
+    return driver.run_reference(case.spec(rules), RUN_TIMEOUT)
 
 
 def run_encoding(case, rules=None, keep=None, mult=3):
-    prog = egg_program(case, rules, mult)
-    # per-process, so two harness runs cannot clobber each other
-    path = keep or (ROOT / f"xdiff-tmp-{os.getpid()}.egg")
-    path.write_text(prog)
-    try:
-        r = subprocess.run(
-            [str(EGGLOG), "--slotted-encoded", str(path)],
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT,
-            cwd=ROOT,
-        )
-    except subprocess.TimeoutExpired:
-        return ("TIMEOUT", f">{RUN_TIMEOUT}s (program kept at {path})")
-    if r.returncode != 0:
-        err = [line for line in r.stderr.splitlines() if "ERROR" in line]
-        msg = err[-1] if err else r.stderr.strip()[:400]
-        return ("ERROR", f"{msg}\n    (program kept at {path})")
-    return ("OK", parse_same_class(r.stdout, len(case.probes)))
+    return driver.run_encoding(egg_program(case, rules, mult), len(case.probes), RUN_TIMEOUT, keep=keep)
 
 
 # ------------------------------------------------------------------ the checks

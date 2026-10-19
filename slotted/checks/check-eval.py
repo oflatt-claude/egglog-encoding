@@ -186,17 +186,17 @@ def raw_node_counts():
             if node["op"] == "map-of" and [nodes[c]["op"] for c in node["children"]] == pairs
         )
 
-    original, issues = V.ISO.build_encoding_graph(doc)
+    original, issues = V.ISO.build_encoding_graph(doc, X.LANG)
     assert not issues and original.summary() == (3, 3), issues
     extra = copy.deepcopy(next(n for n in nodes.values() if n["op"] == "F"))
     # The retired invocation has a different raw key and frame: F($2, Null)
     # instead of F($1, Null). Both translate to the same slotted node.
     slots_two = nodes[renaming_node(["2", "2"])]["eclass"]
-    follower = next(n for n in nodes.values() if n["op"] == V.ISO.SYM.class_slots and n["eclass"] == slots_two)
+    follower = next(n for n in nodes.values() if n["op"] == X.SYM.class_slots and n["eclass"] == slots_two)
     extra["eclass"] = nodes[follower["children"][0]]["eclass"]
     extra["children"][0] = renaming_node(["0", "2"])
     nodes["unretired-F"] = extra
-    duplicated, issues = V.ISO.build_encoding_graph(doc)
+    duplicated, issues = V.ISO.build_encoding_graph(doc, X.LANG)
     assert not issues and duplicated.summary() == (3, 4), issues
     witness, _why = V.ISO.find_isomorphism(original, duplicated)
     assert witness is None
