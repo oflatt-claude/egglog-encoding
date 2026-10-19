@@ -1398,7 +1398,6 @@ transformation and evaluation in one process.
 | `slotted/eval_cache.py` | slotted observations in the shared proof/slotted `ReportStore`; hashes all generated inputs and checking code |
 | `slotted/eval_observation.py` | transient observations and graph evidence, converted to shared records after comparison |
 | `benchmarking/reports/slotted.py` | shared CLI/nightly selection, correctness gate, and report tables; launches no benchmarks |
-| `spot-check.py` | independent Array N=0 spot check: explicit reference multipatterns, direct live-row/leader counts, one timed run per side; imports no eval or differential-checking scripts |
 
 The shared and per-carrier maintenance rules live in the Rust compiler's
 `templates/` directory. Constructor-dependent rules are generated from the declared
