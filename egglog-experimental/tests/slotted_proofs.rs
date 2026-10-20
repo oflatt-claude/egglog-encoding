@@ -42,6 +42,14 @@ fn demo_proof_snapshots() {
              (check (= input (Lam $b $b)))",
         ),
         (
+            "demo_binder_congruence",
+            r#"(datatype U (Wrap U) (Lam Var U :binder 0) (F U) (G U))
+(let input (Wrap (Lam $a (F $a))))
+(rewrite (F x) (G x) :name "f-to-g")
+(run 1)
+(check (= input (Wrap (Lam $b (G $b)))))"#,
+        ),
+        (
             "demo_redundant_slot",
             "(datatype U (Mul U U) (Zero))\n\
              (let input (Mul $a (Zero)))\n\
