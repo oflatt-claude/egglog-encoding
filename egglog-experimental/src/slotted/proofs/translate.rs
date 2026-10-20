@@ -1,5 +1,5 @@
 //! Translation of an egglog proof over the encoded program to a slotted proof
-//! over surface terms; see *Translation* in `slotted/PROOFS.md`.
+//! over surface terms; see *Translation* in `egglog-experimental/src/slotted/PROOFS.md`.
 //!
 //! The translator is demand driven: starting from the existence proof of the
 //! claim it follows only the premises the claim needs, translating each egglog

@@ -1,5 +1,5 @@
 //! Checks a slotted proof against the slotted source program, by the rules of
-//! `slotted/PROOFS.md`. The checker reads only the program: it knows nothing of
+//! `egglog-experimental/src/slotted/PROOFS.md`. The checker reads only the program: it knows nothing of
 //! the encoding the proof was translated from.
 
 use super::format::{

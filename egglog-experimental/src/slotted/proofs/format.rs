@@ -1,5 +1,5 @@
 //! The slotted proof format: ordinary equalities over surface terms and the
-//! justifications of `slotted/PROOFS.md`, in a hash-consed store.
+//! justifications of `egglog-experimental/src/slotted/PROOFS.md`, in a hash-consed store.
 
 use super::HashMap;
 use super::terms::{Renaming, all_slots, rename, slot_of};

@@ -35,7 +35,7 @@ Slotted proofs run with `cargo run -p egglog-experimental -- --slotted --proofs 
 Each positive equality claim is translated from an egglog proof to a proof over the
 source terms and checked independently. `--slotted-proof-checks` evaluates the same
 encoding with ordinary checks. Substitution is not supported by proof translation.
-See [`slotted/PROOFS.md`](../slotted/PROOFS.md) for the format and supported steps.
+See [the proof guide](src/slotted/PROOFS.md) for the format and supported steps.
 
 ## Documentation
 
