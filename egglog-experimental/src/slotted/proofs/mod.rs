@@ -1,7 +1,7 @@
 //! Proofs for the slotted encoding: a proof format over the surface terms of
-//! `slotted/LANGUAGE.md`, a checker for it against the slotted source program,
+//! `egglog-experimental/src/slotted/LANGUAGE.md`, a checker for it against the slotted source program,
 //! and the translation from egglog proofs over the encoded program. The format
-//! and its rules are specified in `slotted/PROOFS.md`.
+//! and its rules are specified in `egglog-experimental/src/slotted/PROOFS.md`.
 
 pub mod checker;
 pub mod format;
