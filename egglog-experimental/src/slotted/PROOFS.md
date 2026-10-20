@@ -13,7 +13,7 @@ program: terms like `(Add (map-of 0 1) (SlottedVar_0 0) ...)`, rows of
 `RenamesToLeader`, firings of the maintenance rules. That proof is unreadable, and
 it is a proof about the encoding, not about the program a person wrote. So it is
 translated into the format below, whose terms are the surface terms of
-`slotted/LANGUAGE.md` and whose rules are the program's own rewrites and unions,
+[the slotted language](LANGUAGE.md) and whose rules are the program's own rewrites and unions,
 and the translated proof is checked by an independent checker that knows nothing
 about the encoding. The slotted checker is the arbiter in this mode: egglog's own
 proof checker and simplifier are not run on the encoded proof. The experimental
@@ -288,11 +288,11 @@ be expressed as a product of symmetries the translator has proofs for.
 # Running
 
 The end-to-end demo snapshots show the source alongside its translated, checked
-proof: [a rewrite](../egglog-experimental/tests/snapshots/slotted_proofs__demo_rewrite.snap),
-[bound-slot renaming](../egglog-experimental/tests/snapshots/slotted_proofs__demo_alpha_renaming.snap),
-[congruence through a binder](../egglog-experimental/tests/snapshots/slotted_proofs__demo_binder_congruence.snap),
-[a redundant slot](../egglog-experimental/tests/snapshots/slotted_proofs__demo_redundant_slot.snap),
-and [fresh names avoiding source and rule variables](../egglog-experimental/tests/snapshots/slotted_proofs__demo_fresh_names.snap).
+proof: [a rewrite](../../tests/snapshots/slotted_proofs__demo_rewrite.snap),
+[bound-slot renaming](../../tests/snapshots/slotted_proofs__demo_alpha_renaming.snap),
+[congruence through a binder](../../tests/snapshots/slotted_proofs__demo_binder_congruence.snap),
+[a redundant slot](../../tests/snapshots/slotted_proofs__demo_redundant_slot.snap),
+and [fresh names avoiding source and rule variables](../../tests/snapshots/slotted_proofs__demo_fresh_names.snap).
 They run with `make check` or
 `cargo test -p egglog-experimental --test slotted_proofs demo_proof_snapshots`.
 
@@ -302,8 +302,9 @@ its checked slotted proof. To replay lowered code, use
 `egglog-experimental --slotted-encoded --proofs encoded.egg`.
 From Rust, compile with `Options { proof_mode: ProofMode::Prove, ..Default::default() }`
 and evaluate the result with `new_egraph_with_proofs()`.
-`make slotted-proof-tests` builds the experimental binary and runs the supported
-source corpus. The runner skips sources using `subst`, which has no proof translation;
+`make slotted-proof-tests` runs the supported source corpus through the Rust API,
+including each positive equality claim. The same tests run in `make check`.
+Sources using `subst` are ignored because it has no proof translation;
 the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
 checks for comparison.
 

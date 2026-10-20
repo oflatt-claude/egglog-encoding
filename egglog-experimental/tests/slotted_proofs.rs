@@ -115,8 +115,8 @@ fn rust_frontend_lifts_and_checks_surface_proofs() {
         include_str!("../../slotted/tests/bare-slot-union.egg"),
         include_str!("../../slotted/tests/symmetry-with-redundancy.egg"),
         include_str!("../../slotted/tests/named-slots.egg"),
-        include_str!("../../slotted/tests/rudi/first-order-logic.egg"),
-        include_str!("../../slotted/tests/rudi/first-order-logic2.egg"),
+        include_str!("../../slotted/benchmarks/logic/first-order-logic.egg"),
+        include_str!("../../slotted/benchmarks/logic/first-order-logic2.egg"),
     ] {
         let proofs = prove(
             &mut compiler(ProofMode::Prove),
