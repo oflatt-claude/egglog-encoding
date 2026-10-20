@@ -11,53 +11,7 @@ Source:
 (check (= input $a))
 
 Proof:
-#0: $v3 = $v3
+#0: (F $a) = (F $a)
     by fiat
-#1: $v3 = {a->v3, v3->a}·$a
-    by shift #0 by {a->v3, v3->a}
-#2: $v3 = $v3
-    by sym #0
-#3: $v3 = $v3
-    by sym #2
-#4: $v3 = {a->v3, v3->a}·$a
-    by shift #3 by {a->v3, v3->a}
-#5: $a = {a->v3, v3->a}·$v3
-    by sym #4
-#6: (F $a) = (F $a)
-    by fiat
-#7: (F $a) = (F $a)
-    by congr #6 at 0 with #5
-#8: (F $a) = (F $a)
-    by sym #7
-#9: (F $a) = (F $a)
-    by trans #8 #7
-#10: (F $a) = $a
-    by rule "unwrap" [v1 := $a] from #9
-#11: (F $a) = $a
-    by trans #9 #10
-#12: (F $a) = {a->v3, v3->a}·$v3
-    by shift #11 by {a->v3, v3->a}
-#13: $v3 = {a->v3, v3->a}·(F $a)
-    by sym #12
-#14: $v3 = {a->v3, v3->a}·(F $a)
-    by trans #13 #9
-#15: $v3 = (F $v3)
-    by shift #14 by {a->v3, v3->a}
-#16: (F $v3) = $v3
-    by sym #15
-#17: $v3 = (F $v3)
-    by sym #16
-#18: (F $v3) = (F $v3)
-    by trans #16 #17
-#19: $v3 = (F $v3)
-    by trans #15 #18
-#20: $v3 = (F $v3)
-    by congr #19 at 0 with #0
-#21: $v3 = {a->v3, v3->a}·(F $a)
-    by shift #20 by {a->v3, v3->a}
-#22: (F $a) = {a->v3, v3->a}·$v3
-    by sym #21
-#23: (F $a) = {a->v3, v3->a}·$v3
-    by trans #22 #0
-#24: (F $a) = $a
-    by trans #23 #1
+#1: (F $a) = $a
+    by rule "unwrap" [v1 := $a] from #0

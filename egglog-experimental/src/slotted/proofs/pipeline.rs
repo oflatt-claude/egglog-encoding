@@ -460,12 +460,18 @@ impl SlottedProofState {
             [&claim.lhs_class, &claim.rhs_class],
         )
         .map_err(|e| format!("claim {claim}: {e}"))?;
-        check_claim(&mut store, &program, &source, proof).map_err(|e| {
+        check_claim(&mut store, &program, &source, &proof).map_err(|e| {
             format!(
                 "the translated proof does not check: {e}\n{}",
-                store.proof_to_string(proof)
+                store.conclusion_to_string(&proof)
             )
         })?;
-        Ok(store.proof_to_string(proof))
+        let proof = super::format::SlottedConclusion {
+            proof: store.simplify(proof.proof),
+            ..proof
+        };
+        check_claim(&mut store, &program, &source, &proof)
+            .map_err(|e| format!("the normalized proof does not check: {e}"))?;
+        Ok(store.conclusion_to_string(&proof))
     }
 }

@@ -9,63 +9,6 @@ Source:
 (check (= input (Lam $b $b)))
 
 Proof:
-#0: $v1 = $v1
+#0: (Lam $a $a) = (Lam $a $a)
     by fiat
-#1: $v1 = $v1
-    by sym #0
-#2: $v1 = {v0->v1, v1->v0}·$v0
-    by shift #1 by {a->v1, v0->a, v1->v0}
-#3: $v0 = {v0->v1, v1->v0}·$v1
-    by sym #2
-#4: $v1 = {v0->v1, v1->v0}·$v0
-    by shift #1 by {v0->v1, v1->v0}
-#5: $v0 = {v0->v1, v1->v0}·$v1
-    by sym #4
-#6: $v1 = $v1
-    by sym #1
-#7: $v1 = {v0->v1, v1->v0}·$v0
-    by shift #6 by {a->v1, v0->a, v1->v0}
-#8: $v0 = {v0->v1, v1->v0}·$v1
-    by sym #7
-#9: $v1 = {v0->v1, v1->v0}·$v0
-    by shift #6 by {v0->v1, v1->v0}
-#10: $v0 = {v0->v1, v1->v0}·$v1
-    by sym #9
-#11: (Lam $a $a) = (Lam $a $a)
-    by fiat
-#12: (Lam $a $a) = {a->v0, v0->a}·(Lam $v0 $v0)
-    by shift #11 by {a->v0, v0->a}
-#13: (Lam $v0 $v0) = {a->v0, v0->a}·(Lam $a $a)
-    by sym #12
-#14: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by trans #13 #12
-#15: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by congr #14 at 0 with #10
-#16: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by congr #15 at 1 with #8
-#17: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by sym #16
-#18: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by trans #17 #16
-#19: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by congr #18 at 0 with #5
-#20: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by congr #19 at 1 with #3
-#21: (Lam $v0 $v0) = {b->v0, v0->b}·(Lam $b $b)
-    by shift #20 by {b->v0, v0->b}
-#22: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by sym #14
-#23: (Lam $v0 $v0) = (Lam $v0 $v0)
-    by trans #14 #22
-#24: (Lam $v0 $v0) = {a->v0, v0->a}·(Lam $a $a)
-    by shift #20 by {a->v0, v0->a}
-#25: (Lam $a $a) = {a->v0, v0->a}·(Lam $v0 $v0)
-    by sym #24
-#26: (Lam $a $a) = {a->v0, v0->a}·(Lam $v0 $v0)
-    by trans #25 #23
-#27: (Lam $a $a) = {a->b, b->a}·(Lam $b $b)
-    by trans #26 #21
-#28: (Lam $a $a) = (Lam $a $a)
-    by shift #27 by {a->v0, b->a, v0->b}
-#29: (Lam $a $a) = {a->b, b->a}·(Lam $b $b)
-    by shift #28 by {a->b, b->a}
+claim: (Lam $a $a) = {a->b, b->a}·(Lam $b $b)
