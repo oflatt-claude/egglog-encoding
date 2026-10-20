@@ -31,25 +31,25 @@ source.egg --Rust compiler--> encoded program --egglog--> egglog proof
 
 A term is what the language writes: a constructor applied to children, a payload
 literal, or a slot such as `$a`. A `Var` binder column holds the bound slot itself.
-Terms are compared syntactically. There is no alpha-equivalence in the checker:
-`(Lam $a $a)` and `(Lam $b $b)` are different terms, and a proof that relates them
-says how (see *Shift*).
+Ordinary proof steps compare terms syntactically: `(Lam $a $a)` and
+`(Lam $b $b)` are different terms. Equivariance explicitly transports proofs
+between slot names. Source equality conditions compare bound names by scope,
+and the final claim records how its requested terms are named in the proof.
 
 Printed proofs preserve source slot names in terms, substitutions, and renamings.
 Internal slots without a source name print as `$v0`, `$v1`, …, skipping source names
 and rule variables, even when they do not occur in the printed proof. The same
 slot has one name throughout the proof, including permutation coordinates that
-appear only in a Shift. Numbered source slots remain numbered.
+appear only in an equivariance step or the final witness. Numbered source slots
+remain numbered.
 
-One normalization is applied when terms are *read*, and it is the only thing the
-checker trusts about binders: every `let`, `union` and claim term, and every rule
+When terms are *read*, every `let`, `union` and claim term, and every rule
 instance the checker builds, has its bound slots named apart -- each binder
 occurrence gets a name of its own, apart from every other slot of the term,
 deterministically (`refresh_binders`); names already distinct from other binders
 and free slots are preserved. Two spellings of one term that differ only
-in how they share bound names then differ by a bijection of slots, which a Shift
-expresses, and a built term never shares a bound name with a free one. The
-translator reads terms the same way, which is how a proof states the program's
+in how they share bound names then differ by a bijection of slots, and a built
+term never shares a bound name with a free one. The translator reads terms the same way, which is how a proof states the program's
 terms by name.
 
 A term belongs to the carrier sort of its head constructor; a bare slot or a
@@ -61,77 +61,96 @@ every other equality between bare slots was derived in some sort and stays there
 
 # Propositions
 
-A proposition is `t1 = m·t2`: the term `t1` equals the term `t2` with its slots
-renamed by `m`. `m` is a finite bijection on slot names, the identity outside its
-support, and `m·t2` renames *every* slot occurrence in `t2`, bound and free alike.
-This is the term-level reading of the paper's applied e-class `m * c` and of the
-encoding's `RenamesToLeader f m l`, which reads `f = m * l`.
+A proposition is an ordinary equality `t1 = t2`. Any renaming has already been
+applied to the actual terms. Symmetry, transitivity and congruence check exact
+term identities and carry no renaming state.
 
-`t1 = id·t2` with the identity renaming is plain equality.
-
-What a proposition claims is `m` on the slots of `t2`: two propositions whose
-renamings agree there say the same thing, and the checker compares a derived step
-with the stated one after restricting both. The stored renaming is nevertheless
-kept whole. Trans and Shift compose it with others whose images leave the slots
-of `t2` -- `t2 = n·t3` may send a slot of `t3` to one `t2` does not have, when
-that slot is redundant -- and the whole permutation says what the composite means
-there. Any extension of `m` beyond the slots of `t2` is sound (renaming respects
-equality), so a proof is free to carry the one its derivation needs.
+A renaming `m` is a finite bijection on slot names, the identity outside its
+support. `rename(m, t)` recursively renames every slot occurrence, bound and free
+alike, including binder declarations. Constructor heads and payloads are unchanged.
+The explicit Equivariance rule applies this operation to both endpoints of a proof.
 
 # Justifications
 
-The egglog proof format's justifications, with the renaming threaded through, plus
-one new step.
+The ordinary equality rules, source axioms and source rewrite applications, plus
+Equivariance. The checker is independent of egglog's checker; its small equality
+rules have the same ordinary semantics.
 
-**Fiat.** `t = id·t` for a term the program built -- a slot, a payload literal, or a
-subterm of a `let` or a `union` -- and `a = id·b` for a source `(union a b)`, in
+**Fiat.** `t = t` for a term the program built -- a slot, a payload literal, or a
+subterm of a `let` or a `union` -- and `a = b` for a source `(union a b)`, in
 either direction. Reflexivity is not assumed for terms the program never built.
 
 **Rule.** `(rewrite L R :name n :when (...))` instantiated by a substitution σ from
 the rule's variables to terms. A pattern variable maps to a term of the sort the
 columns it stands in require; a slot literal `$x` maps to a slot, and different slot
 literals map to different slots (`(F $x $y)` does not match `(F $0 $0)`, as
-`LANGUAGE.md` says). Premises, in order: a proof `t = m·L[σ]` for the root pattern
-(any `m`: the rule is renaming-invariant), then for each `:when` pattern
-`(= v call)` a proof `σ(v) = m·call[σ]` where `m` fixes the free slots of one side
--- the same invocation, as for a claim below. Each `free`/`not-free` condition is
+`LANGUAGE.md` says). Premises, in order: an ordinary proof `t = L[σ]` for the root
+pattern,
+then for each `:when` pattern `(= v call)` an ordinary proof whose endpoints
+are `σ(v)` and `call[σ]` up to alpha-equivalence. This source-condition comparison
+allows scoped bound names to differ, but checks every free name exactly. Each
+`free`/`not-free` condition is
 evaluated on σ, over each variable it names, which needs the binder positions of
 the constructors. `(!= a b)` holds when the two instantiated terms differ: that is
 what the firing saw, two invocations, and as in egglog's own proofs the step records
 that the guard held when the rule fired, not that it holds still -- a later union
 may identify the two (the guard is non-monotonic, `LANGUAGE.md`). A slot literal
 that occurs only on the right-hand side is *minted*: σ binds it to a slot that
-occurs nowhere in any other binding. The conclusion is `L[σ] = id·R[σ]` or its
-reverse, or `s = id·s` for a subterm `s` of either side. A right-hand side `subst`
+occurs nowhere in any other binding. The conclusion is `L[σ] = R[σ]` or its
+reverse, or `s = s` for a subterm `s` of either side. A right-hand side `subst`
 is not supported.
 
-**Sym.** From `t1 = m·t2`, `t2 = m⁻¹·t1`. This carries the slotted e-graph's closure
-under renaming: renaming both sides of an equation by `m⁻¹` is sound, and that is
-what moves the renaming to the other side.
+**Sym.** From `a = b`, derive `b = a`.
 
-**Trans.** From `t1 = m·t2` and `t2 = n·t3`, `t1 = (m∘n)·t3`, where `(m∘n)·t` is
-`m·(n·t)`. The middle term must be syntactically the same in both.
+**Trans.** From `a = b` and `b = c`, derive `a = c`. The middle terms must
+be syntactically identical and their carrier sorts must agree.
 
-**Congr.** From `t1 = m·F(..., c, ...)` and `c = n·c'`, `t1 = m·F(..., n·c', ...)`:
-the child at the given position is replaced by the renamed term the child proof
-equates it with.
+**Congr.** From `a = F(..., c, ...)` and `c = d`, derive `a = F(..., d, ...)`.
+The selected child must match the child proof's left endpoint exactly; the
+child proof must have the column's sort. No renaming is performed by this rule.
 
-**Shift.** From `t1 = m·t2`, `t1 = (m∘σ⁻¹)·(σ·t2)` for any finite bijection σ. It
-renames one side and adjusts the renaming to match, so it changes spelling only.
-Applied to bound slots it is alpha-renaming: `(Lam $0 $0) = {1↦0}·(Lam $1 $1)` is
-one Shift from reflexivity, and the checker never had to know that `$1` was bound.
-
-Closure under renaming of both sides is derivable: Sym, Shift, Sym.
+**Equivariance.** From `a = b`, derive `rename(m, a) = rename(m, b)` for a finite
+slot permutation `m`. The checker recomputes both endpoints and preserves the
+proof's carrier sort. This rule applies only the slotted theory's action on slots;
+it does not rename payload values or constructor names.
 
 # Claims
 
-`(check (= a b))` is proved by `a = m·b` with `m` the identity on the free slots of
-`b`, or on the free slots of `a`: the two are the same claim, since renaming both
-sides by `m⁻¹` (Sym, Shift, Sym) moves the fixing from one side to the other, and
-the checker accepts either so that a proof need not end with that detour. The
-proof must be about the claim's sort, or about no sort at all. `(check
-(renaming-= a b))` is proved by `a = m·b` for any `m`. Negative claims and the
-other claim forms are checked, not proved.
+A claim carries an ordinary proof and a separate renaming witness `m`. For source
+terms `a` and `b`, the proof must have exactly the endpoints
+`a = rename(m, b)`, after the usual binder refresh on the source terms.
+
+`(check (= a b))` additionally requires `m` to fix the free slots of `b`, or the
+free slots of `a`. The latter is sufficient by equivariance with `m⁻¹` and
+alpha-equivalence of bound names. `(check (renaming-= a b))` allows any witness,
+but still checks the actual ordinary equality proof and its endpoints. The
+proof must have the claim's carrier sort, or no sort at all. Negative claims
+and other claim forms are checked, not proved.
+
+When the witness changes the spelling of `b`, the display ends with one
+`claim: a = m·b` line. This is a checked interpretation of the root equality,
+not another inference rule. For example, alpha-renaming needs only:
+
+```text
+#0: (Lam $a $a) = (Lam $a $a)
+    by fiat
+claim: (Lam $a $a) = {a->b, b->a}·(Lam $b $b)
+```
+
+# Normalization
+
+The lifted proof is checked before and after a normalization pass. The pass
+carries an accumulated permutation through Sym, Trans and Congr, materializing
+it in their endpoints. Nested equivariance steps compose. Source axioms and
+rule instances retain their provenance and substitutions, so remaining
+equivariance steps sit immediately above source steps. A renamed source union
+still has a proof of the original union underneath it.
+
+The pass also removes reflexive congruence, symmetry and transitivity steps and
+double symmetry. It memoizes by proof ID and accumulated permutation: shared
+subproofs stay shared when used in the same coordinates. Slot names are assigned
+to the resulting displayed proof, reserving all source names and rule variables.
+There is no Shift rule or permutation field on an equality proposition.
 
 # The proof profile
 
@@ -232,35 +251,38 @@ derivations, and fresh-slot supply across expansions. Its core is a denotation
 `dec(F(m1, c1, ..., mk, ck)) = F(m̂1·dec(c1), ...)`, where
 each edge is completed to a bijection by naming the child's redundant slots with
 fresh names, and `dec(SlottedVar_N 0)` is `$0`. Every encoded fact then denotes a
-proposition, and every maintenance rule firing has a fixed derivation:
+ordinary proposition, and every maintenance rule firing has a fixed derivation.
+A private lifting context also retains the encoded edge coordinates needed by
+later reconstruction. Restating an edge in different coordinates reuses the same
+ordinary proof; transporting its endpoints emits Equivariance:
 
 | encoded fact | proposition |
 | --- | --- |
-| egglog equality `a = b` | `dec(a) = id·dec(b)` |
-| `RenamesToLeader a m b`, `Equated a m b`, `ShapeEqual a m b` | `dec(a) = m̂·dec(b)` |
-| `g` in `EclassGroup c`, `Reading c _ g` | `dec(c) = ĝ·dec(c)` |
-| `Invocation c n a` | `dec(a) = n̂·dec(c)` |
-| slot `r` of `c` outside `ClassSlots c` | `dec(c) = {r↦r'}·dec(c)` for fresh `r'` |
+| egglog equality `a = b` | `dec(a) = dec(b)` |
+| `RenamesToLeader a m b`, `Equated a m b`, `ShapeEqual a m b` | `dec(a) = rename(m̂, dec(b))` |
+| `g` in `EclassGroup c`, `Reading c _ g` | `dec(c) = rename(ĝ, dec(c))` |
+| `Invocation c n a` | `dec(a) = rename(n̂, dec(c))` |
+| slot `r` of `c` outside `ClassSlots c` | `dec(c) = rename(swap(r, r'), dec(c))` for fresh `r'` |
 
 The last row is a *redundancy certificate*. It is derived on demand from the
 derivation of the `ClassSlots` row: the merge chain of intersections says which
 `set` dropped the slot, and transport along an edge and group slot closure each
-have a short Sym/Shift/Trans derivation. Group membership is derived through a
+have a short Sym/Equivariance/Trans derivation. Group membership is derived through a
 provenance-aware closure, since the stored group is closed and an element has to
 be expressed as a product of symmetries the translator has proofs for.
 
 | rule firing | derivation |
 | --- | --- |
-| orient, restate on narrower slots | Shift, with certificates for the slots the restriction dropped |
+| orient, restate on narrower slots | Change edge coordinates; use certificates for slots the restriction dropped |
 | self-equation, self-edge into the group | the premise, respelled |
 | transitivity | Trans of the first edge with the second |
-| one leader per follower | Sym, Trans, Shift |
-| migration | Sym of the edge, Shift by the total extension `R` |
-| child update | Congr with the child's edge |
-| binder scope | Shift away from the bound slot, which is not free on the left |
-| shape collision, node symmetries | Congr with the children's symmetries, then Shift by `back` |
+| one leader per follower | Sym, Trans, Equivariance |
+| migration | Sym of the edge, Equivariance by the total extension `R` |
+| child update | Equivariance into the parent's names, then Congr with the child's edge |
+| binder scope | Reframe the edge away from the bound slot; transport equality when needed |
+| shape collision, node symmetries | Congr with transported child symmetries, then align edge coordinates |
 | invocation naming | the edge, then Congr with the symmetry `coset-min` chose |
-| user rewrite | Rule, with the root premise built from the atom rows by Congr and Shift |
+| user rewrite | Rule, with premises built from the atom rows by Congr and Equivariance |
 | claim | the two terms' atom proofs, the class equality, and the `coset-same` symmetry |
 
 # Running
@@ -268,6 +290,7 @@ be expressed as a product of symmetries the translator has proofs for.
 The end-to-end demo snapshots show the source alongside its translated, checked
 proof: [a rewrite](../egglog-experimental/tests/snapshots/slotted_proofs__demo_rewrite.snap),
 [bound-slot renaming](../egglog-experimental/tests/snapshots/slotted_proofs__demo_alpha_renaming.snap),
+[congruence through a binder](../egglog-experimental/tests/snapshots/slotted_proofs__demo_binder_congruence.snap),
 [a redundant slot](../egglog-experimental/tests/snapshots/slotted_proofs__demo_redundant_slot.snap),
 and [fresh names avoiding source and rule variables](../egglog-experimental/tests/snapshots/slotted_proofs__demo_fresh_names.snap).
 They run with `make check` or

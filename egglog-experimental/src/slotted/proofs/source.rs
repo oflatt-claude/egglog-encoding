@@ -484,6 +484,25 @@ impl SlottedProgram {
         out
     }
 
+    /// Compare source-condition endpoints, allowing only scoped bound names to
+    /// differ. Free slots, constructor heads and payloads must match exactly.
+    pub(super) fn alpha_eq(&self, dag: &mut TermDag, lhs: TermId, rhs: TermId) -> bool {
+        if lhs == rhs {
+            return true;
+        }
+        let slots: BTreeSet<_> = super::terms::all_slots(dag, lhs)
+            .into_iter()
+            .chain(super::terms::all_slots(dag, rhs))
+            .collect();
+        // Reuse the source reader's scope-aware refresh, giving both terms the
+        // same fresh binder names. No free name is changed by this operation.
+        let canonical = |dag: &mut TermDag, term| {
+            let mut fresh = FreshSlots::new(slots.iter().copied());
+            self.refresh_binders_from(dag, term, &mut |_| fresh.fresh())
+        };
+        canonical(dag, lhs) == canonical(dag, rhs)
+    }
+
     fn free_slots_into(&self, dag: &TermDag, term: TermId, out: &mut BTreeSet<i64>) {
         match dag.get(term) {
             Term::Lit(_) => {}
@@ -912,6 +931,41 @@ mod tests {
             program.free_slots(&dag, program.lets["l"]),
             BTreeSet::from([1])
         );
+    }
+
+    #[test]
+    fn alpha_matching_preserves_free_names_and_binding_scope() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
+        program.add_constructor("Pair", vec![ColumnKind::Child, ColumnKind::Child]);
+        program.add_constructor(
+            "Let",
+            vec![ColumnKind::Binder, ColumnKind::Child, ColumnKind::Child],
+        );
+        for (a, b, equal) in [
+            ("(Lam $0 (Pair $0 $3))", "(Lam $1 (Pair $1 $3))", true),
+            ("(Lam $0 (Pair $0 $3))", "(Lam $1 (Pair $1 $4))", false),
+            ("(Lam $0 $1)", "(Lam $1 $1)", false),
+            ("(Lam $0 $0)", "(Lam $1 $0)", false),
+            ("(Lam $0 (Lam $0 $0))", "(Lam $1 (Lam $2 $2))", true),
+            ("(Lam $0 (Lam $1 $0))", "(Lam $2 (Lam $2 $2))", false),
+            ("(Let $0 $0 $0)", "(Let $1 $1 $0)", true),
+            ("(Let $0 $0 $0)", "(Let $1 $1 $1)", false),
+            ("(Pair (Lam $0 $0) $0)", "(Pair (Lam $1 $1) $0)", true),
+        ] {
+            let terms = program.claim(&mut dag, "=", "U", a, b).unwrap();
+            assert_eq!(
+                program.alpha_eq(&mut dag, terms.lhs, terms.rhs),
+                equal,
+                "{a} versus {b}"
+            );
+            assert_eq!(
+                program.alpha_eq(&mut dag, terms.rhs, terms.lhs),
+                equal,
+                "{b} versus {a}"
+            );
+        }
     }
 
     #[test]

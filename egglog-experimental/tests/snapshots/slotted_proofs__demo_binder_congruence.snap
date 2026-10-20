@@ -1,0 +1,25 @@
+---
+source: egglog-experimental/tests/slotted_proofs.rs
+expression: "format!(\"Source:\\n{source}\\n\\nProof:\\n{}\", proofs[0])"
+---
+Source:
+(datatype U (Wrap U) (Lam Var U :binder 0) (F U) (G U))
+(let input (Wrap (Lam $a (F $a))))
+(rewrite (F x) (G x) :name "f-to-g")
+(run 1)
+(check (= input (Wrap (Lam $b (G $b)))))
+
+Proof:
+#0: (F $a) = (F $a)
+    by fiat
+#1: (F $a) = (G $a)
+    by rule "f-to-g" [x := $a] from #0
+#2: (Lam $a (F $a)) = (Lam $a (F $a))
+    by fiat
+#3: (Lam $a (F $a)) = (Lam $a (G $a))
+    by congr #2 at 1 with #1
+#4: (Wrap (Lam $a (F $a))) = (Wrap (Lam $a (F $a)))
+    by fiat
+#5: (Wrap (Lam $a (F $a))) = (Wrap (Lam $a (G $a)))
+    by congr #4 at 0 with #3
+claim: (Wrap (Lam $a (F $a))) = {a->b, b->a}·(Wrap (Lam $b (G $b)))

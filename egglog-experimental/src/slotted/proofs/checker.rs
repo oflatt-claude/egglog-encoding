@@ -2,7 +2,9 @@
 //! `slotted/PROOFS.md`. The checker reads only the program: it knows nothing of
 //! the encoding the proof was translated from.
 
-use super::format::{SlottedJustification, SlottedProofId, SlottedProofStore, SlottedProposition};
+use super::format::{
+    SlottedConclusion, SlottedJustification, SlottedProofId, SlottedProofStore, SlottedProposition,
+};
 use super::source::{Claim, ClaimKind, Condition, Rhs, SlottedProgram};
 use super::terms::{all_slots, instantiate, is_subterm, pattern_vars, rename, slot_of};
 use super::{HashMap, HashSet};
@@ -122,22 +124,25 @@ pub fn check_claim(
     store: &mut SlottedProofStore,
     program: &SlottedProgram,
     claim: &Claim,
-    proof: SlottedProofId,
+    conclusion: &SlottedConclusion,
 ) -> Result<(), SlottedCheckError> {
-    let Checked { proposition, sort } = check_proof(store, program, proof)?;
-    let proven = store.normalize(proposition);
+    let Checked {
+        proposition: proven,
+        sort,
+    } = check_proof(store, program, conclusion.proof)?;
     let lhs = program.refresh_binders(&mut store.term_dag, claim.lhs);
     let rhs = program.refresh_binders(&mut store.term_dag, claim.rhs);
     let same_sort = sort.as_deref().is_none_or(|s| s == claim.sort);
     let holds = same_sort
         && proven.lhs == lhs
-        && proven.rhs == rhs
+        && proven.rhs == rename(&mut store.term_dag, &conclusion.renaming, rhs)
         && match claim.kind {
             ClaimKind::RenamingEq => true,
             ClaimKind::Eq => {
                 let free_rhs = program.free_slots(&store.term_dag, rhs);
                 let free_lhs = program.free_slots(&store.term_dag, lhs);
-                !proven.renaming.moves_any(&free_rhs) || !proven.renaming.moves_any(&free_lhs)
+                !conclusion.renaming.moves_any(&free_rhs)
+                    || !conclusion.renaming.moves_any(&free_lhs)
             }
         };
     if holds {
@@ -174,10 +179,7 @@ fn check_one(
     checked: &HashMap<SlottedProofId, Checked>,
 ) -> Result<Checked, SlottedCheckError> {
     let proof = store.get(id).clone();
-    // the stored proposition carries its whole permutation, which the derived
-    // steps compose; what it claims is its restriction to the right-hand side
-    let stored = proof.proposition.clone();
-    let claimed = store.normalize(stored.clone());
+    let claimed = proof.proposition.clone();
     let step = |step: &'static str, detail: String| SlottedCheckError::Step {
         proof: id,
         step,
@@ -195,11 +197,8 @@ fn check_one(
     let (derived, sort) = match &proof.justification {
         SlottedJustification::Fiat => {
             let dag = &store.term_dag;
-            let reflexive = claimed.lhs == claimed.rhs
-                && claimed.renaming.is_identity()
-                && program.is_built(dag, claimed.lhs);
-            let union = claimed.renaming.is_identity()
-                && program.union_sort(claimed.lhs, claimed.rhs).is_some();
+            let reflexive = claimed.lhs == claimed.rhs && program.is_built(dag, claimed.lhs);
+            let union = program.union_sort(claimed.lhs, claimed.rhs).is_some();
             if !(reflexive || union) {
                 return Err(SlottedCheckError::InvalidFiat {
                     proof: id,
@@ -226,10 +225,7 @@ fn check_one(
         SlottedJustification::Sym(inner) => {
             let p = premise(inner)?;
             let q = p.proposition;
-            (
-                SlottedProposition::new(q.rhs, q.renaming.inverse(), q.lhs),
-                p.sort,
-            )
+            (SlottedProposition::equal(q.rhs, q.lhs), p.sort)
         }
         SlottedJustification::Trans(left, right) => {
             let (l, r) = (premise(left)?, premise(right)?);
@@ -246,11 +242,7 @@ fn check_one(
             let sort = join_sorts(l.sort, r.sort)
                 .map_err(|(a, b)| step("trans", format!("joins a proof in {a} with one in {b}")))?;
             (
-                SlottedProposition::new(
-                    l.proposition.lhs,
-                    l.proposition.renaming.compose(&r.proposition.renaming),
-                    r.proposition.rhs,
-                ),
+                SlottedProposition::equal(l.proposition.lhs, r.proposition.rhs),
                 sort,
             )
         }
@@ -299,34 +291,23 @@ fn check_one(
                     ),
                 ));
             }
-            children[*child_index] = rename(
-                &mut store.term_dag,
-                &c.proposition.renaming,
-                c.proposition.rhs,
-            );
+            children[*child_index] = c.proposition.rhs;
             let rhs = store.term_dag.app(head, children);
             (
-                SlottedProposition::new(p.proposition.lhs, p.proposition.renaming, rhs),
+                SlottedProposition::equal(p.proposition.lhs, rhs),
                 p.sort.or(Some(ctor.output.clone())),
             )
         }
-        SlottedJustification::Shift {
+        SlottedJustification::Equivariance {
             proof: inner,
             renaming,
         } => {
             let p = premise(inner)?;
+            let lhs = rename(&mut store.term_dag, renaming, p.proposition.lhs);
             let rhs = rename(&mut store.term_dag, renaming, p.proposition.rhs);
-            (
-                SlottedProposition::new(
-                    p.proposition.lhs,
-                    p.proposition.renaming.compose(&renaming.inverse()),
-                    rhs,
-                ),
-                p.sort,
-            )
+            (SlottedProposition::equal(lhs, rhs), p.sort)
         }
     };
-    let derived = store.normalize(derived);
     if derived != claimed {
         return Err(step(
             "conclusion",
@@ -338,7 +319,7 @@ fn check_one(
         ));
     }
     Ok(Checked {
-        proposition: stored,
+        proposition: claimed,
         sort,
     })
 }
@@ -493,11 +474,11 @@ fn check_rule(
 
     let lhs = instantiate(&mut store.term_dag, rule.lhs, &subst).map_err(unbound)?;
     let lhs = program.refresh_binders(&mut store.term_dag, lhs);
-    let root = store.normalize(premises[0].proposition.clone());
+    let root = &premises[0].proposition;
     if root.rhs != lhs {
         return Err(fail(format!(
             "the root premise proves {}, which does not end in the matched {}",
-            store.proposition_to_string(&root),
+            store.proposition_to_string(root),
             store.term_dag.to_string(lhs)
         )));
     }
@@ -507,16 +488,15 @@ fn check_rule(
         let want_lhs = *subst.get(*var).ok_or_else(|| unbound((*var).clone()))?;
         let want_rhs = instantiate(&mut store.term_dag, *call, &subst).map_err(unbound)?;
         let want_rhs = program.refresh_binders(&mut store.term_dag, want_rhs);
-        let got = store.normalize(premise.proposition.clone());
-        // the same invocation: the renaming leaves one side's free slots alone,
-        // which fixes the other side's by renaming both sides back
-        let free_rhs = program.free_slots(&store.term_dag, want_rhs);
-        let free_lhs = program.free_slots(&store.term_dag, want_lhs);
-        let same = !got.renaming.moves_any(&free_rhs) || !got.renaming.moves_any(&free_lhs);
-        if got.lhs != want_lhs || got.rhs != want_rhs || !same {
+        let got = &premise.proposition;
+        // Source equality patterns are alpha-invariant. This does not permit
+        // changing free slots; ordinary proof steps still compare exact terms.
+        if !program.alpha_eq(&mut store.term_dag, got.lhs, want_lhs)
+            || !program.alpha_eq(&mut store.term_dag, got.rhs, want_rhs)
+        {
             return Err(fail(format!(
                 "the premise for (= {var} ...) proves {}, not {} = {}",
-                store.proposition_to_string(&got),
+                store.proposition_to_string(got),
                 store.term_dag.to_string(want_lhs),
                 store.term_dag.to_string(want_rhs)
             )));
@@ -605,11 +585,9 @@ fn check_rule(
     }
 
     // The conclusion: the instance in either direction, or reflexivity of a subterm.
-    let identity = claimed.renaming.is_identity();
-    let instance = identity
-        && ((claimed.lhs, claimed.rhs) == (lhs, rhs) || (claimed.lhs, claimed.rhs) == (rhs, lhs));
-    let reflexive = identity
-        && claimed.lhs == claimed.rhs
+    let instance =
+        (claimed.lhs, claimed.rhs) == (lhs, rhs) || (claimed.lhs, claimed.rhs) == (rhs, lhs);
+    let reflexive = claimed.lhs == claimed.rhs
         && (is_subterm(&store.term_dag, claimed.lhs, lhs)
             || is_subterm(&store.term_dag, claimed.lhs, rhs));
     if !(instance || reflexive) {
@@ -651,28 +629,147 @@ mod tests {
     }
 
     #[test]
-    fn redundancy_by_sym_and_shift() {
+    fn redundancy_by_equivariance() {
         let (mut store, program, claim) = figure_3();
         let (m7, zero) = (program.lets["m7"], program.lets["zero"]);
         let union = store.fiat(m7, zero);
         let back = store.sym(union);
-        let shifted = store.shift(back, Renaming::new([(7, 9), (9, 7)]).unwrap());
-        let proof = store.sym(shifted);
+        let renamed = store.equivariance(back, Renaming::new([(7, 9), (9, 7)]).unwrap());
+        let proof = store.sym(renamed);
         let proven = check_proof(&mut store, &program, proof).unwrap();
-        // the renaming is normalized away: `(Null)` has no slot for it to act on
+        // Equivariance acts on both endpoints; `(Null)` has no slots.
         assert_eq!(
             store.proposition_to_string(&proven.proposition),
             "(Mul $9 (Null)) = (Null)"
         );
         assert_eq!(proven.sort.as_deref(), Some("U"));
-        check_claim(&mut store, &program, &claim, proof).unwrap();
+        check_claim(
+            &mut store,
+            &program,
+            &claim,
+            &SlottedConclusion {
+                proof,
+                renaming: Renaming::identity(),
+            },
+        )
+        .unwrap();
         let text = store.proof_to_string(proof);
-        assert!(text.contains("by shift #1 by {7->9, 9->7}"), "{text}");
+        assert!(
+            text.contains("by equivariance #1 by {7->9, 9->7}"),
+            "{text}"
+        );
     }
 
     #[test]
-    fn a_non_injective_shift_cannot_be_stated() {
+    fn a_non_injective_equivariance_cannot_be_stated() {
         assert!(Renaming::new([(0, 1)]).is_none());
+    }
+
+    #[test]
+    fn equivariance_checks_both_endpoints() {
+        let (mut store, program, _) = figure_3();
+        let (term, zero) = (program.lets["m7"], program.lets["zero"]);
+        let union = store.fiat(term, zero);
+        let sigma = Renaming::new([(7, 9), (9, 7)]).unwrap();
+        let transported = store.equivariance(union, sigma.clone());
+        assert_eq!(
+            check_proof(&mut store, &program, transported)
+                .unwrap()
+                .sort
+                .as_deref(),
+            Some("U")
+        );
+        let forged = store.add(
+            SlottedProposition::equal(term, zero),
+            SlottedJustification::Equivariance {
+                proof: union,
+                renaming: sigma,
+            },
+        );
+        assert!(matches!(
+            check_proof(&mut store, &program, forged),
+            Err(SlottedCheckError::Step {
+                step: "conclusion",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn claim_witnesses_distinguish_free_and_bound_names() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("F", vec![ColumnKind::Child]);
+        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
+        program.add_let(&mut dag, "free", "(F $0)").unwrap();
+        program.add_let(&mut dag, "bound", "(Lam $0 $0)").unwrap();
+        let free = program.claim(&mut dag, "=", "U", "free", "(F $1)").unwrap();
+        let bound = program
+            .claim(&mut dag, "=", "U", "bound", "(Lam $1 $1)")
+            .unwrap();
+        let mut store = SlottedProofStore::new(dag);
+        let proof = store.fiat(free.lhs, free.lhs);
+        let witness = SlottedConclusion {
+            proof,
+            renaming: Renaming::new([(0, 1), (1, 0)]).unwrap(),
+        };
+        assert!(check_claim(&mut store, &program, &free, &witness).is_err());
+        let renaming_claim = Claim {
+            kind: ClaimKind::RenamingEq,
+            ..free
+        };
+        check_claim(&mut store, &program, &renaming_claim, &witness).unwrap();
+        let wrong = SlottedConclusion {
+            renaming: Renaming::identity(),
+            ..witness.clone()
+        };
+        assert!(check_claim(&mut store, &program, &renaming_claim, &wrong).is_err());
+        let proof = store.fiat(bound.lhs, bound.lhs);
+        check_claim(
+            &mut store,
+            &program,
+            &bound,
+            &SlottedConclusion { proof, ..witness },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn rule_side_patterns_accept_alpha_names_but_reject_free_renaming() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("F", vec![ColumnKind::Child]);
+        program.add_constructor("Pair", vec![ColumnKind::Child, ColumnKind::Child]);
+        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
+        program.add_constructor("K", vec![]);
+        program
+            .add_let(&mut dag, "child", "(Lam $0 (Pair $0 $3))")
+            .unwrap();
+        program.add_let(&mut dag, "root", "(F child)").unwrap();
+        program
+            .add_rewrite(
+                &mut dag,
+                r#"(rewrite (F x) (K) :when ((= x (Lam $a (Pair $a $b)))) :name "r")"#,
+            )
+            .unwrap();
+        let (root, child) = (program.lets["root"], program.lets["child"]);
+        let mut store = SlottedProofStore::new(dag);
+        let premise = store.fiat(root, root);
+        let side = store.fiat(child, child);
+        let k = store.term_dag.app("K".into(), vec![]);
+        let a = slot_term(&mut store.term_dag, 1);
+        for (free_slot, valid) in [(3, true), (4, false)] {
+            let b = slot_term(&mut store.term_dag, free_slot);
+            let rule = store.add(
+                SlottedProposition::equal(root, k),
+                SlottedJustification::Rule {
+                    name: "r".into(),
+                    substitution: vec![("x".into(), child), ("$a".into(), a), ("$b".into(), b)],
+                    premises: vec![premise, side],
+                },
+            );
+            assert_eq!(check_proof(&mut store, &program, rule).is_ok(), valid);
+        }
     }
 
     #[test]

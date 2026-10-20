@@ -5,11 +5,13 @@
 //! claim it follows only the premises the claim needs, translating each egglog
 //! proof of an equality between encoded carrier terms, or of a row that denotes
 //! one (`RenamesToLeader`, `Equated`, `ShapeEqual`, `Invocation`), into a slotted
-//! proof of `dec(lhs) = m·dec(rhs)`. The renaming a step comes out with is
-//! whatever the derivation gives; only the terms have to line up, and the claim
-//! is adjusted last.
+//! proof of `dec(lhs) = rename(m, dec(rhs))`. The lifting context retains the
+//! applied-class coordinates needed to interpret later encoded rows, while every
+//! emitted proof proposition is an ordinary equality. Coordinate changes do not
+//! emit proof steps; transporting an equality emits explicit equivariance.
 
-use super::format::{SlottedJustification, SlottedProofId, SlottedProofStore, SlottedProposition};
+use super::format::{SlottedConclusion, SlottedProofStore, SlottedProposition};
+use super::lifting::{LiftedId, Lifting};
 use super::pipeline::EncodingNames;
 use super::source::{Claim, ColumnKind, Condition, Rhs, SlottedProgram};
 use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term};
@@ -27,12 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 type R<T> = Result<T, String>;
 type ShapeKey = (String, Vec<SlotMap>, Vec<TermId>, Vec<TermId>);
 type SymmetryPremises = Vec<(TermId, ProofId)>;
-type ConditionProof = (
-    String,
-    TermId,
-    SlottedProofId,
-    HashMap<Vec<usize>, Occurrence>,
-);
+type ConditionProof = (String, TermId, LiftedId, HashMap<Vec<usize>, Occurrence>);
 
 /// Translate the egglog proof `root`, which proves the encoded form of `claim`,
 /// into a slotted proof of the claim over `dag`, the program's term dag.
@@ -46,7 +43,7 @@ pub(super) fn translate(
     root: ProofId,
     claim: &Claim,
     classes: [&str; 2],
-) -> R<(SlottedProofStore, SlottedProofId)> {
+) -> R<(SlottedProofStore, SlottedConclusion)> {
     // Every encoded slot/renaming coordinate is an integer term. Reserving all
     // integer literals also excludes payloads, harmlessly, without guessing the
     // types of extracted primitive values. Reserve surface names as well: a
@@ -67,7 +64,7 @@ pub(super) fn translate(
         program,
         names,
         egg,
-        out: SlottedProofStore::new(dag).with_slot_names(&program.slot_names),
+        out: Lifting::new(SlottedProofStore::new(dag).with_slot_names(&program.slot_names)),
         dec_memo: HashMap::default(),
         edge_memo: HashMap::default(),
         eq_memo: HashMap::default(),
@@ -80,24 +77,24 @@ pub(super) fn translate(
         reserved_terms,
     };
     let id = tr.claim(root, claim, classes)?;
-    Ok((tr.out, id))
+    Ok(tr.out.finish(id))
 }
 
 struct Translator<'a> {
     program: &'a SlottedProgram,
     names: &'a EncodingNames,
     egg: &'a ProofStore,
-    out: SlottedProofStore,
+    out: Lifting,
     /// Encoded term -> its surface term.
     dec_memo: HashMap<TermId, TermId>,
     /// (encoded node, surface column) -> the permutation that completed the
     /// column's edge when the node was decoded.
     edge_memo: HashMap<(TermId, usize), Renaming>,
     /// Egglog proof -> the slotted proof of the equality it denotes.
-    eq_memo: HashMap<ProofId, SlottedProofId>,
+    eq_memo: HashMap<ProofId, LiftedId>,
     /// Surface term -> a slotted proof whose left side it is, from which its
     /// reflexivity follows.
-    known: HashMap<TermId, SlottedProofId>,
+    known: HashMap<TermId, LiftedId>,
     /// A node spelled with canonical edges, shared by every row that has that shape.
     shape_terms: HashMap<ShapeKey, TermId>,
     /// Proofs of `FreeVars` rows by class, for redundancy certificates.
@@ -113,14 +110,14 @@ struct Translator<'a> {
 #[derive(Clone, Copy)]
 struct Occurrence {
     cls: TermId,
-    row: Option<(TermId, SlottedProofId)>,
+    row: Option<(TermId, LiftedId)>,
 }
 
 /// A pattern expansion and the bindings it established. Keeping these local
 /// lets translating a premise recursively apply another rule without saving
 /// or restoring the enclosing match's state.
 struct Expansion {
-    proof: SlottedProofId,
+    proof: LiftedId,
     variables: HashMap<String, TermId>,
     occurrences: HashMap<Vec<usize>, Occurrence>,
 }
@@ -222,7 +219,7 @@ impl<'a> Translator<'a> {
         self.out.term_dag.to_string(t)
     }
 
-    fn prop_string(&self, p: SlottedProofId) -> String {
+    fn prop_string(&self, p: LiftedId) -> String {
         self.out.proposition_to_string(self.out.proposition(p))
     }
 
@@ -414,7 +411,7 @@ impl<'a> Translator<'a> {
     // ----- proof algebra --------------------------------------------------------
 
     /// Record that `proof` proves `lhs = …`, so `lhs`'s reflexivity is available.
-    fn note(&mut self, proof: SlottedProofId) -> SlottedProofId {
+    fn note(&mut self, proof: LiftedId) -> LiftedId {
         let p = self.out.proposition(proof).clone();
         self.known.entry(p.lhs).or_insert(proof);
         if p.rhs != p.lhs {
@@ -426,7 +423,7 @@ impl<'a> Translator<'a> {
 
     /// `t = t`: by fiat for a term the program built, else from any proof
     /// stating something about it.
-    fn reflexive(&mut self, t: TermId) -> R<SlottedProofId> {
+    fn reflexive(&mut self, t: TermId) -> R<LiftedId> {
         if self.program.is_built(&self.out.term_dag, t) {
             return Ok(self.out.fiat(t, t));
         }
@@ -435,7 +432,7 @@ impl<'a> Translator<'a> {
             return self.out.trans(p, s).map_err(|e| e.0);
         }
         // a term the same as a built or known one up to a renaming of its slots:
-        // its reflexivity follows by shifting the other's back and forth
+        // its reflexivity follows by equivariance of the known equality
         let candidates: Vec<TermId> = self
             .program
             .built_terms(&self.out.term_dag)
@@ -451,9 +448,9 @@ impl<'a> Translator<'a> {
                 continue;
             };
             let r = self.reflexive(other)?; // other = other
-            let shifted = self.out.shift(r, sigma); // other = σ⁻¹·t
-            let s = self.out.sym(shifted); // t = σ·other
-            let back = self.out.trans(s, shifted).map_err(|e| e.0)?; // t = t
+            let reframed = self.out.reframe(r, sigma); // other = σ⁻¹·t
+            let s = self.out.sym(reframed); // t = σ·other
+            let back = self.out.trans(s, reframed).map_err(|e| e.0)?; // t = t
             return Ok(self.note(back));
         }
         Err(format!(
@@ -462,25 +459,23 @@ impl<'a> Translator<'a> {
         ))
     }
 
-    fn trans(&mut self, p: SlottedProofId, q: SlottedProofId) -> R<SlottedProofId> {
+    fn trans(&mut self, p: LiftedId, q: LiftedId) -> R<LiftedId> {
         let r = self.out.trans(p, q).map_err(|e| e.0)?;
         Ok(self.note(r))
     }
 
     /// `σ·t1 = (σ∘m)·t2` from `t1 = m·t2`.
-    fn rename_both(&mut self, p: SlottedProofId, sigma: &Renaming) -> SlottedProofId {
+    fn rename_both(&mut self, p: LiftedId, sigma: &Renaming) -> LiftedId {
         if sigma.is_identity() {
             return p;
         }
-        let s = self.out.sym(p);
-        let sh = self.out.shift(s, sigma.clone());
-        let r = self.out.sym(sh);
+        let r = self.out.equivariance(p, sigma);
         self.note(r)
     }
 
-    /// Shift `p`'s right-hand side onto `target`, which must be the same term up
+    /// Reframe `p`'s right-hand side onto `target`, which must be the same term up
     /// to a bijection of slot names.
-    fn align(&mut self, p: SlottedProofId, target: TermId) -> R<SlottedProofId> {
+    fn align(&mut self, p: LiftedId, target: TermId) -> R<LiftedId> {
         let rhs = self.out.proposition(p).rhs;
         if rhs == target {
             return Ok(p);
@@ -500,7 +495,7 @@ impl<'a> Translator<'a> {
                 self.out_string(target)
             )
         })?;
-        let r = self.out.shift(p, sigma);
+        let r = self.out.reframe(p, sigma);
         let got = self.out.proposition(r).rhs;
         if got != target {
             return Err(format!(
@@ -552,7 +547,7 @@ impl<'a> Translator<'a> {
     /// The slotted proof of the equality an egglog proof denotes: for a carrier
     /// equality, that equality; for a row, the equality the row as the consumer
     /// reads it (its right-hand side) denotes.
-    fn eq(&mut self, id: ProofId) -> R<SlottedProofId> {
+    fn eq(&mut self, id: ProofId) -> R<LiftedId> {
         if let Some(&p) = self.eq_memo.get(&id) {
             return Ok(p);
         }
@@ -567,7 +562,7 @@ impl<'a> Translator<'a> {
     }
 
     /// The equality an egglog proof denotes, by its justification.
-    fn eq_direct(&mut self, id: ProofId) -> R<SlottedProofId> {
+    fn eq_direct(&mut self, id: ProofId) -> R<LiftedId> {
         let proof = self.egg.get(id).clone();
         let (lhs, rhs) = (proof.lhs(), proof.rhs());
         let result = match proof.justification() {
@@ -648,7 +643,7 @@ impl<'a> Translator<'a> {
     }
 
     /// A row stated at the top level.
-    fn row_fiat(&mut self, row: TermId) -> R<SlottedProofId> {
+    fn row_fiat(&mut self, row: TermId) -> R<LiftedId> {
         let (head, args) = self.app(row).ok_or("not a row")?;
         match row_kind(head) {
             RowKind::Edge => {
@@ -671,7 +666,7 @@ impl<'a> Translator<'a> {
     /// Decoding gives binders fresh names, independently of the source reader.
     /// Only the recorded source union is Fiat; transport it to the decoded
     /// spellings using the proof algebra, keeping the source's free slots fixed.
-    fn source_union(&mut self, lhs: TermId, m: &Renaming, rhs: TermId) -> R<SlottedProofId> {
+    fn source_union(&mut self, lhs: TermId, m: &Renaming, rhs: TermId) -> R<LiftedId> {
         let target = rename(&mut self.out.term_dag, m, rhs);
         for u in &self.program.unions {
             for (a, b) in [(u.lhs, u.rhs), (u.rhs, u.lhs)] {
@@ -724,7 +719,7 @@ impl<'a> Translator<'a> {
         child_index: usize,
         child_proof: ProofId,
         conclusion_rhs: TermId,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let base = self.egg.get(proof).clone();
         let (base_lhs, base_rhs) = (base.lhs(), base.rhs());
         if self.is_carrier_term(base_rhs) {
@@ -801,7 +796,7 @@ impl<'a> Translator<'a> {
         subst: &IndexMap<String, TermId>,
         lhs: TermId,
         rhs: TermId,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let (owner, kind) = rule_kind(self.program, name);
         match (owner, kind) {
             ("slotted", "orient-max") => self.eq(prems[0]),
@@ -844,7 +839,7 @@ impl<'a> Translator<'a> {
                     return Ok(p);
                 }
                 let sigma = Renaming::new([(slot, 0), (0, slot)]).unwrap();
-                let r = self.out.shift(p, sigma);
+                let r = self.out.reframe(p, sigma);
                 Ok(self.note(r))
             }
             ("slotted", "invocation") => {
@@ -918,11 +913,11 @@ impl<'a> Translator<'a> {
     /// built term's surface form and turn the proof the way the step states it.
     fn finish_union(
         &mut self,
-        p: SlottedProofId,
+        p: LiftedId,
         lhs: TermId,
         rhs: TermId,
         origin: TermId,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let built = if lhs == rhs {
             lhs
         } else if lhs == origin {
@@ -978,7 +973,7 @@ impl<'a> Translator<'a> {
 
     /// Turn `p` (an equality between the surface forms of the egglog proof's
     /// two sides, in some direction) around to match the egglog proposition.
-    fn orient(&mut self, p: SlottedProofId, lhs: TermId, rhs: TermId) -> R<SlottedProofId> {
+    fn orient(&mut self, p: LiftedId, lhs: TermId, rhs: TermId) -> R<LiftedId> {
         let (l, r) = (self.dec(lhs)?, self.dec(rhs)?);
         let prop = self.out.proposition(p).clone();
         if l == r {
@@ -1014,10 +1009,10 @@ impl<'a> Translator<'a> {
     /// applied by congruence, then the renaming back.
     fn shape_form(
         &mut self,
-        row_eq: SlottedProofId,
+        row_eq: LiftedId,
         row: TermId,
         groups: &[(TermId, ProofId)],
-    ) -> R<(SlottedProofId, TermId)> {
+    ) -> R<(LiftedId, TermId)> {
         let (head, args) = self.app(row).ok_or("not a row")?;
         let head = head.to_string();
         let ctor = self
@@ -1094,7 +1089,7 @@ impl<'a> Translator<'a> {
             self.shape_terms.insert(key, n);
             n
         };
-        // `p` now ends in the row spelled through the readings; shift it onto the shape node
+        // `p` now ends in the row spelled through the readings; align its coordinates with the shape node
         let aligned = self.align(p, node)?;
         Ok((aligned, node))
     }
@@ -1104,7 +1099,7 @@ impl<'a> Translator<'a> {
         &mut self,
         prems: &[ProofId],
         subst: &IndexMap<String, TermId>,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         // premises: c = row, g1.., shapeof-edges row, (vec-get facts), c0 = shape-class row, back0 row, guard
         let row_eq = self.eq(prems[0])?;
         let row = self.egg.get(prems[0]).rhs();
@@ -1148,11 +1143,7 @@ impl<'a> Translator<'a> {
     }
 
     /// Two rows of one class with one shape: the symmetry between them.
-    fn shape_dedup(
-        &mut self,
-        prems: &[ProofId],
-        subst: &IndexMap<String, TermId>,
-    ) -> R<SlottedProofId> {
+    fn shape_dedup(&mut self, prems: &[ProofId], subst: &IndexMap<String, TermId>) -> R<LiftedId> {
         let row1_eq = self.eq(prems[0])?;
         let row1 = self.egg.get(prems[0]).rhs();
         let n = self.slotted_columns(row1)?;
@@ -1188,7 +1179,7 @@ impl<'a> Translator<'a> {
 
     /// Through the proof of a `_shape_class_F` row: the stored class's row
     /// equality, the row, and the group rows its index firing read.
-    fn shape_entry(&mut self, proof: ProofId) -> R<(SlottedProofId, TermId, SymmetryPremises)> {
+    fn shape_entry(&mut self, proof: ProofId) -> R<(LiftedId, TermId, SymmetryPremises)> {
         let p = self.egg.get(proof).clone();
         match p.justification() {
             Justification::Rule {
@@ -1241,7 +1232,7 @@ impl<'a> Translator<'a> {
 
     /// `dec(c) = g·dec(c)` for an element `g` of `c`'s group, through the proof
     /// of the group row.
-    fn symmetry(&mut self, c: TermId, g: &SlotMap, grp_proof: ProofId) -> R<SlottedProofId> {
+    fn symmetry(&mut self, c: TermId, g: &SlotMap, grp_proof: ProofId) -> R<LiftedId> {
         self.symmetry_inner(c, g, grp_proof).map_err(|e| {
             format!(
                 "symmetry {} of {} through {}: {e}",
@@ -1252,7 +1243,7 @@ impl<'a> Translator<'a> {
         })
     }
 
-    fn symmetry_inner(&mut self, c: TermId, g: &SlotMap, grp_proof: ProofId) -> R<SlottedProofId> {
+    fn symmetry_inner(&mut self, c: TermId, g: &SlotMap, grp_proof: ProofId) -> R<LiftedId> {
         if is_identity(g) {
             let t = self.dec(c)?;
             return self.reflexive(t);
@@ -1406,7 +1397,7 @@ impl<'a> Translator<'a> {
     /// The symmetries a group row's provenance states outright, as proofs
     /// `dec(c) = m̂·dec(c)` with their full renamings: the rows that equate the
     /// class with a renaming of itself, before restriction to its slots.
-    fn symmetry_sources(&mut self, grp_proof: ProofId) -> R<Vec<SlottedProofId>> {
+    fn symmetry_sources(&mut self, grp_proof: ProofId) -> R<Vec<LiftedId>> {
         let proof = self.egg.get(grp_proof).clone();
         match proof.justification().clone() {
             Justification::Rule {
@@ -1474,7 +1465,7 @@ impl<'a> Translator<'a> {
         g: &SlotMap,
         elements: &[SlotMap],
         source: ProofId,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         // breadth-first products, remembering how each was formed
         let mut seen: BTreeMap<SlotMap, Vec<usize>> = BTreeMap::new();
         let mut frontier: Vec<SlotMap> = vec![];
@@ -1502,7 +1493,7 @@ impl<'a> Translator<'a> {
             .get(g)
             .cloned()
             .ok_or_else(|| format!("{} is not generated by the group", slot_map_string(g)))?;
-        let mut proof: Option<SlottedProofId> = None;
+        let mut proof: Option<LiftedId> = None;
         for i in path {
             let s = self.symmetry(c, &elements[i], source)?;
             proof = Some(match proof {
@@ -1515,7 +1506,7 @@ impl<'a> Translator<'a> {
 
     /// `p` proves `dec(c) = m·dec(c)`; it is the symmetry `g` when `m` and `g`
     /// agree on the class's slots.
-    fn symmetry_matches(&mut self, p: SlottedProofId, c: TermId, g: &SlotMap) -> R<SlottedProofId> {
+    fn symmetry_matches(&mut self, p: LiftedId, c: TermId, g: &SlotMap) -> R<LiftedId> {
         let t = self.dec(c)?;
         let prop = self.out.proposition(p).clone();
         if prop.lhs != t || prop.rhs != t {
@@ -1539,12 +1530,12 @@ impl<'a> Translator<'a> {
     /// the row's canonical edges again.
     fn node_symmetry(
         &mut self,
-        row_eq: SlottedProofId,
+        row_eq: LiftedId,
         row: TermId,
         groups: &[(TermId, ProofId)],
         c: TermId,
         g: &SlotMap,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let (head, args) = self.app(row).ok_or("not a row")?;
         let ctor = self
             .program
@@ -1603,14 +1594,14 @@ impl<'a> Translator<'a> {
                 p = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
                 p = self.note(p);
             }
-            // the right-hand side is now σ·dec(row) up to fresh names: shift it back
+            // the right-hand side is now σ·dec(row) up to fresh names: align its coordinates
             let row_term = self.out.proposition(row_eq).rhs;
             let sigma = Renaming::completing(symmetry.iter().map(|(k, v)| (*k, *v)))
                 .ok_or("node symmetry is not injective")?;
             let target = rename(&mut self.out.term_dag, &sigma, row_term);
             let aligned = self.align(p, target)?;
-            // dec(row) = σ'·(σ·row) → shift by σ⁻¹ to state it on the row itself
-            let r = self.out.shift(aligned, sigma.inverse());
+            // dec(row) = σ'·(σ·row) → reframe by σ⁻¹ to state it on the row itself
+            let r = self.out.reframe(aligned, sigma.inverse());
             let r = self.note(r);
             // and the class is the row
             let s = self.out.sym(row_eq);
@@ -1641,7 +1632,7 @@ impl<'a> Translator<'a> {
         subst: &IndexMap<String, TermId>,
         lhs: TermId,
         rhs: TermId,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let rewrite = self
             .program
             .rewrites
@@ -1879,13 +1870,12 @@ impl<'a> Translator<'a> {
             let p = self.rename_both(p, &rho); // σ(v) = ·call[σ]
             premises.push(p);
         }
-        let rule_step = self.out.add(
+        let rule_step = self.out.rule(
             SlottedProposition::equal(instance_lhs, instance_rhs),
-            SlottedJustification::Rule {
-                name: name.to_string(),
-                substitution: sigma_order.clone(),
-                premises: premises.clone(),
-            },
+            name.to_string(),
+            sigma_order.clone(),
+            premises.clone(),
+            self.program,
         );
         self.note(rule_step);
         let p = self.trans(root, rule_step)?; // cls_p = ·R[σ]
@@ -1897,18 +1887,17 @@ impl<'a> Translator<'a> {
                 .find_subterm_like(instance_rhs, built)
                 .or(self.find_subterm_like(instance_lhs, built));
             if let Some(sub) = found {
-                let refl = self.out.add(
+                let refl = self.out.rule(
                     SlottedProposition::equal(sub, sub),
-                    SlottedJustification::Rule {
-                        name: name.to_string(),
-                        substitution: sigma_order,
-                        premises,
-                    },
+                    name.to_string(),
+                    sigma_order,
+                    premises,
+                    self.program,
                 );
                 let refl = self.note(refl);
-                let shifted = self.align(refl, built)?; // sub = ·built
-                let s = self.out.sym(shifted); // built = ·sub
-                return self.trans(s, shifted);
+                let reframed = self.align(refl, built)?; // sub = ·built
+                let s = self.out.sym(reframed); // built = ·sub
+                return self.trans(s, reframed);
             }
         }
         if !self.is_carrier_term(lhs) {
@@ -2074,11 +2063,11 @@ impl<'a> Translator<'a> {
     /// needed for the other.
     fn lift(
         &mut self,
-        p: SlottedProofId,
+        p: LiftedId,
         frame: &crate::slotted::runtime::Fr,
         atom: Option<&str>,
         nested: &[(i64, i64)],
-    ) -> (SlottedProofId, Renaming) {
+    ) -> (LiftedId, Renaming) {
         let content = self.out.proposition(p).rhs;
         let slots = all_slots(&self.out.term_dag, content);
         let mut pairs: Vec<(i64, i64)> = vec![];
@@ -2108,7 +2097,7 @@ impl<'a> Translator<'a> {
         let Some(pi) = Renaming::completing(pairs) else {
             return (p, Renaming::identity());
         };
-        let r = self.out.shift(p, pi.clone());
+        let r = self.out.reframe(p, pi.clone());
         (self.note(r), pi)
     }
 
@@ -2131,9 +2120,9 @@ impl<'a> Translator<'a> {
 
     /// `t1 = m·t2` restated as `t1 = (m·t2)`: the renaming applied, so the
     /// right-hand side is the term the proposition is about.
-    fn content_form(&mut self, p: SlottedProofId) -> SlottedProofId {
+    fn content_form(&mut self, p: LiftedId) -> LiftedId {
         let m = self.out.proposition(p).renaming.clone();
-        let r = self.out.shift(p, m);
+        let r = self.out.reframe(p, m);
         self.note(r)
     }
 
@@ -2192,7 +2181,7 @@ impl<'a> Translator<'a> {
     /// The equality denoted by one side of a row proof's proposition. A row proof
     /// may relate a row to its re-keyed form, or state a row reflexively through
     /// a composition; the consumer wants the equality of the row as it reads it.
-    fn row_eq(&mut self, id: ProofId, rhs_side: bool) -> R<SlottedProofId> {
+    fn row_eq(&mut self, id: ProofId, rhs_side: bool) -> R<LiftedId> {
         let proof = self.egg.get(id).clone();
         let (lhs, rhs) = (proof.lhs(), proof.rhs());
         if lhs == rhs {
@@ -2266,7 +2255,7 @@ impl<'a> Translator<'a> {
     }
 
     /// A re-key's child proof as `old = ·new`, whichever way it was stated.
-    fn bridge_eq(&mut self, bridge: ProofId, old: TermId) -> R<(SlottedProofId, TermId)> {
+    fn bridge_eq(&mut self, bridge: ProofId, old: TermId) -> R<(LiftedId, TermId)> {
         let pr = self.egg.get(bridge);
         let (l, r) = (pr.lhs(), pr.rhs());
         let e = self.eq(bridge)?;
@@ -2409,7 +2398,7 @@ impl<'a> Translator<'a> {
                         && !v.starts_with('$')
                     {
                         let mut current = child;
-                        let mut bridged: Option<SlottedProofId> = None;
+                        let mut bridged: Option<LiftedId> = None;
                         while let Some(&bridge) = ctx.bridges.get(&current) {
                             let (e, new) = self.bridge_eq(bridge, current)?; // old = ·new
                             bridged = Some(match bridged {
@@ -2458,7 +2447,7 @@ impl<'a> Translator<'a> {
                                     Renaming::completing(g.iter().map(|(k, v)| (*k, *v)))
                                         .ok_or("reading is not injective")?;
                                 let renamed = self.rename_both(sub, &completion);
-                                let s = self.out.shift(s, completion.clone());
+                                let s = self.out.reframe(s, completion.clone());
                                 let s = self.note(s);
                                 sub = self.trans(s, renamed)?;
                             }
@@ -2740,7 +2729,7 @@ impl<'a> Translator<'a> {
     /// `dec(c) = (s f)·dec(c)`: slot `s` of `c`'s term is one its class does not
     /// depend on, so it may be renamed to the unused `f`. Derived from how the
     /// class's slot set came to exclude `s`.
-    fn class_cert(&mut self, c: TermId, s: i64, f: i64) -> R<SlottedProofId> {
+    fn class_cert(&mut self, c: TermId, s: i64, f: i64) -> R<LiftedId> {
         let t = self.dec(c)?;
         log::debug!("class_cert {} slot {s} -> {f}", self.out_string(t));
         if !all_slots(&self.out.term_dag, t).contains(&s) {
@@ -2757,7 +2746,7 @@ impl<'a> Translator<'a> {
         r
     }
 
-    fn class_cert_inner(&mut self, c: TermId, s: i64, f: i64) -> R<SlottedProofId> {
+    fn class_cert_inner(&mut self, c: TermId, s: i64, f: i64) -> R<LiftedId> {
         let t = self.dec(c)?;
         let proofs = self.free_vars_proofs(c);
         let mut errors = vec![];
@@ -2785,7 +2774,7 @@ impl<'a> Translator<'a> {
 
     /// The certificate for `(c, s, f)` through one proof of a `FreeVars` row
     /// that excludes `s`.
-    fn cert_from(&mut self, proof: ProofId, c: TermId, s: i64, f: i64) -> R<SlottedProofId> {
+    fn cert_from(&mut self, proof: ProofId, c: TermId, s: i64, f: i64) -> R<LiftedId> {
         let p = self.egg.get(proof).clone();
         match p.justification().clone() {
             Justification::Rule {
@@ -2830,12 +2819,12 @@ impl<'a> Translator<'a> {
                                 let fi = completion.inverse().apply(f_row);
                                 let cert = self.class_cert(child, r, fi)?;
                                 let lifted = self.rename_both(cert, &completion); // occ = ·child
-                                let lifted = self.out.shift(lifted, completion.clone()); // occ = (s f)·occ
+                                let lifted = self.out.reframe(lifted, completion.clone()); // occ = (s f)·occ
                                 let lifted = self.note(lifted);
                                 let refl = self.reflexive(prop.rhs)?;
                                 let r = self.out.congr(refl, j, lifted).map_err(|e| e.0)?; // row = ·row[s->f]
                                 let r = self.note(r);
-                                let r = self.out.shift(
+                                let r = self.out.reframe(
                                     r,
                                     Renaming::new([(s_row, f_row), (f_row, s_row)]).unwrap(),
                                 );
@@ -2888,7 +2877,7 @@ impl<'a> Translator<'a> {
                     // the symmetries behind the group, as stated: a group element
                     // restricted to the class's slots may have lost the entry
                     // that drops the slot
-                    let mut syms: Vec<SlottedProofId> = vec![];
+                    let mut syms: Vec<LiftedId> = vec![];
                     for g in grp.iter().filter(|g| !is_identity(g)) {
                         if let Ok(sp) = self.symmetry(c, g, prems[0]) {
                             syms.push(sp);
@@ -2997,7 +2986,7 @@ impl<'a> Translator<'a> {
 
     /// From `P: L = m·R` whose content (`m·R`) does not mention `s`, with `s` a
     /// slot of `L` and `f` unused: `L = (s f)·L`.
-    fn lemma(&mut self, p: SlottedProofId, s: i64, f: i64) -> R<SlottedProofId> {
+    fn lemma(&mut self, p: LiftedId, s: i64, f: i64) -> R<LiftedId> {
         let pc = self.content_form(p); // L = C
         let content = self.out.proposition(pc).rhs;
         let slots = all_slots(&self.out.term_dag, content);
@@ -3017,15 +3006,15 @@ impl<'a> Translator<'a> {
         }
         let tau = Renaming::new([(s, f), (f, s)]).unwrap();
         let rb = self.rename_both(pc, &tau); // τL = τ·C
-        let rb = self.out.shift(rb, tau.clone()); // τL = C, since τ·C is C
+        let rb = self.out.reframe(rb, tau.clone()); // τL = C, since τ·C is C
         let back = self.out.sym(rb); // C = τL
         let r = self.trans(pc, back)?; // L = τL
-        let r = self.out.shift(r, tau); // L = τ·L
+        let r = self.out.reframe(r, tau); // L = τ·L
         Ok(self.note(r))
     }
 
     /// `L = (s f)·L` from `L = (s g)·L`, for `f` and `g` both absent from `L`.
-    fn retarget(&mut self, r: SlottedProofId, g: i64, f: i64) -> SlottedProofId {
+    fn retarget(&mut self, r: LiftedId, g: i64, f: i64) -> LiftedId {
         if g == f {
             return r;
         }
@@ -3034,7 +3023,7 @@ impl<'a> Translator<'a> {
     }
 
     /// From `cert: X = τ·X` and `q: Y = N·X`: `Y = (N∘τ∘N⁻¹)·Y`.
-    fn transport(&mut self, cert: SlottedProofId, q: SlottedProofId) -> R<SlottedProofId> {
+    fn transport(&mut self, cert: LiftedId, q: LiftedId) -> R<LiftedId> {
         let left = self.trans(q, cert)?; // Y = (N∘τ)·X
         let back = self.out.sym(q); // X = N⁻¹·Y
         self.trans(left, back)
@@ -3043,7 +3032,7 @@ impl<'a> Translator<'a> {
     /// `O = (x y)·O` for the occurrence term `O` of class `c` (a renaming of its
     /// term), where `x` is a slot of `O` the class does not depend on and `y` is
     /// not in `O`.
-    fn occurrence_cert(&mut self, o: Occurrence, occ: TermId, x: i64, y: i64) -> R<SlottedProofId> {
+    fn occurrence_cert(&mut self, o: Occurrence, occ: TermId, x: i64, y: i64) -> R<LiftedId> {
         // the occurrence is a renaming of the class's term, or of the row the
         // atom there matched
         let d = self.dec(o.cls)?;
@@ -3094,19 +3083,13 @@ impl<'a> Translator<'a> {
             }
         };
         let lifted = self.rename_both(cert, &rho); // ρX = (ρ∘(s f))·X
-        let lifted = self.out.shift(lifted, rho); // ρX = (ρ∘(s f)∘ρ⁻¹)·ρX
+        let lifted = self.out.reframe(lifted, rho); // ρX = (ρ∘(s f)∘ρ⁻¹)·ρX
         Ok(self.note(lifted))
     }
 
     /// `O = (x y ..)·O` for the occurrence term `O` of class `c`: a symmetry of
     /// the class that sends `x` to `y`, spelled on the occurrence.
-    fn occurrence_symmetry(
-        &mut self,
-        o: Occurrence,
-        occ: TermId,
-        x: i64,
-        y: i64,
-    ) -> R<SlottedProofId> {
+    fn occurrence_symmetry(&mut self, o: Occurrence, occ: TermId, x: i64, y: i64) -> R<LiftedId> {
         let d = self.dec(o.cls)?;
         let mut pairs = BTreeMap::new();
         let (base, rho) = if self.unify_slots(d, occ, &mut pairs).is_ok()
@@ -3135,7 +3118,7 @@ impl<'a> Translator<'a> {
         };
         let (cs, cf) = (n.apply(s), n.apply(f));
         let mut errors = vec![];
-        let mut sym: Option<SlottedProofId> = None;
+        let mut sym: Option<LiftedId> = None;
         for proof in self.group_proofs(o.cls) {
             let elements = match self.group_of_row(self.egg.get(proof).lhs()) {
                 Ok(e) => e,
@@ -3177,7 +3160,7 @@ impl<'a> Translator<'a> {
             }
         };
         let lifted = self.rename_both(cert, &rho);
-        let lifted = self.out.shift(lifted, rho);
+        let lifted = self.out.reframe(lifted, rho);
         Ok(self.note(lifted))
     }
 
@@ -3194,12 +3177,12 @@ impl<'a> Translator<'a> {
     /// congruences through the recorded occurrences.
     fn congr_at(
         &mut self,
-        p: SlottedProofId,
+        p: LiftedId,
         path: &[usize],
-        cert: SlottedProofId,
+        cert: LiftedId,
         occ: &HashMap<Vec<usize>, Occurrence>,
         prefix: &mut Vec<usize>,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let (first, rest) = path.split_first().ok_or("empty path")?;
         if rest.is_empty() {
             let r = self.out.congr(p, *first, cert).map_err(|e| e.0)?;
@@ -3240,14 +3223,14 @@ impl<'a> Translator<'a> {
         Ok(self.note(r))
     }
 
-    /// Shift `p`'s content onto `target`, renaming redundant slots at the
+    /// Reframe `p`'s content onto `target`, renaming redundant slots at the
     /// occurrences where a plain bijection fails.
     fn fit(
         &mut self,
-        p: SlottedProofId,
+        p: LiftedId,
         target: TermId,
         occ: &HashMap<Vec<usize>, Occurrence>,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let mut p = self.content_form(p);
         for _ in 0..64 {
             let content = self.out.proposition(p).rhs;
@@ -3282,7 +3265,7 @@ impl<'a> Translator<'a> {
                 inverse_beta.iter().map(|(k, (v, _))| (*k, *v)).collect();
             let Some(candidates) = conflict else {
                 let sigma = Renaming::completing(beta.into_iter()).ok_or("non-bijective fit")?;
-                let r = self.out.shift(p, sigma);
+                let r = self.out.reframe(p, sigma);
                 let got = self.out.proposition(r).rhs;
                 if got != target {
                     return Err(format!(
@@ -3313,7 +3296,7 @@ impl<'a> Translator<'a> {
                 attempts.push((path.clone(), *x, f));
             }
             let mut errors: Vec<String> = vec![];
-            let mut found: Option<(Vec<usize>, SlottedProofId)> = None;
+            let mut found: Option<(Vec<usize>, LiftedId)> = None;
             let mut any = false;
             'attempts: for (path, x, want) in attempts {
                 // the occurrences holding this position, innermost first: the
@@ -3388,14 +3371,14 @@ impl<'a> Translator<'a> {
     }
 
     /// Rename the free slots of `p`'s content, one certificate at a time, until
-    /// they are the target's; bound names are left to a final shift. Fails where
+    /// they are the target's; bound names are left to the final coordinate alignment. Fails where
     /// a free slot that differs is not redundant.
     fn fit_content(
         &mut self,
-        p: SlottedProofId,
+        p: LiftedId,
         target: TermId,
         occ: &HashMap<Vec<usize>, Occurrence>,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let mut p = self.content_form(p);
         for _ in 0..64 {
             let content = self.out.proposition(p).rhs;
@@ -3514,7 +3497,7 @@ impl<'a> Translator<'a> {
 
     // ----- the claim ----------------------------------------------------------------
 
-    fn claim(&mut self, root: ProofId, claim: &Claim, classes: [&str; 2]) -> R<SlottedProofId> {
+    fn claim(&mut self, root: ProofId, claim: &Claim, classes: [&str; 2]) -> R<LiftedId> {
         // A view's existence proof may reflexivize the rule's conclusion.
         let (root, _) = self.unwrap_match(root)?;
         let proof = self.egg.get(root).clone();
@@ -3638,14 +3621,14 @@ impl<'a> Translator<'a> {
     #[allow(clippy::too_many_arguments)]
     fn finish_claim(
         &mut self,
-        result: SlottedProofId,
-        pb: SlottedProofId,
+        result: LiftedId,
+        pb: LiftedId,
         claim: &Claim,
         cls_a: TermId,
         premise_proofs: &[ProofId],
         substitution: &IndexMap<String, TermId>,
         occ_b: &HashMap<Vec<usize>, Occurrence>,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         if claim.kind == super::source::ClaimKind::RenamingEq {
             return Ok(result);
         }
@@ -3736,14 +3719,9 @@ impl<'a> Translator<'a> {
 
     /// Split a transitivity chain at the proof whose right-hand side is `mid`:
     /// `(lhs = ·mid, mid = ·rhs)`.
-    fn chain_to(
-        &mut self,
-        proof: SlottedProofId,
-        mid: TermId,
-    ) -> Option<(SlottedProofId, SlottedProofId)> {
-        let p = self.out.get(proof).clone();
-        match p.justification {
-            SlottedJustification::Trans(a, b) => {
+    fn chain_to(&mut self, proof: LiftedId, mid: TermId) -> Option<(LiftedId, LiftedId)> {
+        match self.out.chain(proof) {
+            Some((a, b)) => {
                 if self.out.proposition(a).rhs == mid {
                     return Some((a, b));
                 }
@@ -3767,11 +3745,11 @@ impl<'a> Translator<'a> {
     /// in fixes `s`.
     fn fix_redundant(
         &mut self,
-        mut result: SlottedProofId,
-        pb: SlottedProofId,
+        mut result: LiftedId,
+        pb: LiftedId,
         src_b: TermId,
         free: &BTreeSet<i64>,
-    ) -> R<SlottedProofId> {
+    ) -> R<LiftedId> {
         let src_slots = all_slots(&self.out.term_dag, src_b);
         let to_class = self.out.sym(pb); // src_b = ·cls_b
         for _ in 0..free.len() + 1 {
@@ -3797,7 +3775,7 @@ impl<'a> Translator<'a> {
             }
             let back = self.out.sym(renamed);
             let cert = self.trans(to_class, back)?; // src_b = ·(τ·src_b)
-            let cert = self.out.shift(cert, tau.inverse()); // src_b = τ·src_b
+            let cert = self.out.reframe(cert, tau.inverse()); // src_b = τ·src_b
             let cert = self.note(cert);
             result = self.trans(result, cert)?;
         }

@@ -10,61 +10,7 @@ Source:
 (check (= (Mul $b (Zero)) (Zero)))
 
 Proof:
-#0: (Zero) = (Zero)
+#0: (Mul $a (Zero)) = (Zero)
     by fiat
-#1: (Zero) = (Zero)
-    by sym #0
-#2: (Zero) = (Zero)
-    by trans #1 #0
-#3: (Zero) = (Zero)
-    by sym #2
-#4: $v0 = $v0
-    by fiat
-#5: $v0 = $v0
-    by sym #4
-#6: $v0 = {a->v0, v0->a}·$a
-    by shift #5 by {a->v0, v0->a}
-#7: $a = {a->v0, v0->a}·$v0
-    by sym #6
-#8: $v0 = $v0
-    by sym #5
-#9: $v0 = {a->v0, v0->a}·$a
-    by shift #8 by {a->v0, v0->a}
-#10: $a = {a->v0, v0->a}·$v0
-    by sym #9
-#11: (Mul $a (Zero)) = (Mul $a (Zero))
-    by fiat
-#12: (Mul $a (Zero)) = (Mul $a (Zero))
-    by congr #11 at 0 with #10
-#13: (Mul $a (Zero)) = (Mul $a (Zero))
-    by congr #12 at 1 with #1
-#14: (Mul $a (Zero)) = (Mul $a (Zero))
-    by sym #13
-#15: (Mul $a (Zero)) = (Mul $a (Zero))
-    by trans #14 #13
-#16: (Zero) = (Zero)
-    by sym #1
-#17: (Zero) = (Zero)
-    by sym #16
-#18: (Mul $a (Zero)) = (Zero)
-    by fiat
-#19: (Mul $a (Zero)) = (Zero)
-    by trans #18 #17
-#20: (Zero) = (Mul $a (Zero))
-    by sym #19
-#21: (Zero) = (Mul $a (Zero))
-    by trans #20 #15
-#22: (Zero) = (Mul $a (Zero))
-    by congr #21 at 0 with #7
-#23: (Zero) = (Mul $a (Zero))
-    by congr #22 at 1 with #3
-#24: (Zero) = {a->b, b->a}·(Mul $b (Zero))
-    by shift #23 by {a->b, b->a}
-#25: (Mul $b (Zero)) = (Zero)
-    by sym #24
-#26: (Mul $b (Zero)) = (Zero)
-    by trans #25 #0
-#27: (Mul $b (Zero)) = (Zero)
-    by trans #26 #3
-#28: (Mul $b (Zero)) = (Zero)
-    by shift #27 by {a->b, b->a}
+#1: (Mul $b (Zero)) = (Zero)
+    by equivariance #0 by {a->b, b->a}

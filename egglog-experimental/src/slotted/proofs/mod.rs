@@ -5,6 +5,8 @@
 
 pub mod checker;
 pub mod format;
+mod lifting;
+mod normalize;
 pub(crate) mod pipeline;
 pub mod source;
 pub mod terms;
@@ -12,7 +14,8 @@ pub(crate) mod translate;
 
 pub use checker::{Checked, SlottedCheckError, check_claim, check_proof};
 pub use format::{
-    SlottedJustification, SlottedProof, SlottedProofId, SlottedProofStore, SlottedProposition,
+    SlottedConclusion, SlottedJustification, SlottedProof, SlottedProofId, SlottedProofStore,
+    SlottedProposition,
 };
 pub use source::{Claim, ClaimKind, Condition, Constructor, Rewrite, Rhs, SlottedProgram, Union};
 pub use terms::Renaming;

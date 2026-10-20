@@ -1,4 +1,4 @@
-//! The slotted proof format: propositions `lhs = m·rhs` over surface terms and the
+//! The slotted proof format: ordinary equalities over surface terms and the
 //! justifications of `slotted/PROOFS.md`, in a hash-consed store.
 
 use super::HashMap;
@@ -10,28 +10,30 @@ use std::fmt::Write;
 /// An index into a [`SlottedProofStore`].
 pub type SlottedProofId = usize;
 
-/// `lhs = renaming·rhs`: the left term equals the right term with its slots
-/// renamed.
+/// An ordinary equality between two surface terms.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SlottedProposition {
     /// The term on the left.
     pub lhs: TermId,
-    /// The permutation applied to the right-hand term.
-    pub renaming: Renaming,
-    /// The term on the right, before renaming.
+    /// The term on the right.
     pub rhs: TermId,
 }
 
 impl SlottedProposition {
-    /// State an equality with an explicit right-hand renaming.
-    pub fn new(lhs: TermId, renaming: Renaming, rhs: TermId) -> Self {
-        Self { lhs, renaming, rhs }
-    }
-
-    /// State an equality with the identity renaming.
+    /// State an equality. Any renaming has already been applied to the terms.
     pub fn equal(lhs: TermId, rhs: TermId) -> Self {
-        Self::new(lhs, Renaming::identity(), rhs)
+        Self { lhs, rhs }
     }
+}
+
+/// An ordinary proof of `lhs = rename(renaming, rhs)` for a surface claim.
+/// The witness belongs to the claim, not to the proof's equality propositions.
+#[derive(Clone, Debug)]
+pub struct SlottedConclusion {
+    /// The ordinary equality proof.
+    pub proof: SlottedProofId,
+    /// How the requested right-hand term is named in the proof.
+    pub renaming: Renaming,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -49,7 +51,7 @@ pub enum SlottedJustification {
         /// Proofs of the rewrite's pattern premises, in source order.
         premises: Vec<SlottedProofId>,
     },
-    /// Reverse an equality and invert its renaming.
+    /// Reverse an equality.
     Sym(SlottedProofId),
     /// Compose equalities with matching middle terms.
     Trans(SlottedProofId, SlottedProofId),
@@ -62,12 +64,11 @@ pub enum SlottedJustification {
         /// The equality used to replace the child.
         child_proof: SlottedProofId,
     },
-    /// The right-hand side renamed by a permutation, with the proposition's
-    /// renaming adjusted to say the same thing.
-    Shift {
-        /// The equality being restated.
+    /// Apply one finite slot permutation to both sides of a proved equality.
+    Equivariance {
+        /// The equality being transported.
         proof: SlottedProofId,
-        /// The permutation applied to its right-hand term.
+        /// The permutation applied to both terms.
         renaming: Renaming,
     },
 }
@@ -134,17 +135,7 @@ impl SlottedProofStore {
         &self.proofs[id].proposition
     }
 
-    /// The proposition with its renaming restricted to the slots of its right-hand
-    /// side: renamings that agree there describe the same renamed term.
-    pub fn normalize(&self, p: SlottedProposition) -> SlottedProposition {
-        let slots = all_slots(&self.term_dag, p.rhs);
-        SlottedProposition::new(p.lhs, p.renaming.restricted(&slots), p.rhs)
-    }
-
-    /// Record a proof as stated. The checker decides whether it is valid. The
-    /// renaming is kept whole, not restricted to the right-hand side's slots:
-    /// a derived step composes it with others, and where their images leave
-    /// the right-hand side's slots the whole permutation says what it means.
+    /// Record a proof as stated. The checker decides whether it is valid.
     pub fn add(
         &mut self,
         proposition: SlottedProposition,
@@ -171,16 +162,16 @@ impl SlottedProofStore {
         )
     }
 
-    /// `t2 = m⁻¹·t1` from `t1 = m·t2`.
+    /// Reverse the endpoints of an equality.
     pub fn sym(&mut self, proof: SlottedProofId) -> SlottedProofId {
         let p = self.proposition(proof).clone();
         self.add(
-            SlottedProposition::new(p.rhs, p.renaming.inverse(), p.lhs),
+            SlottedProposition::equal(p.rhs, p.lhs),
             SlottedJustification::Sym(proof),
         )
     }
 
-    /// `t1 = (m∘n)·t3` from `t1 = m·t2` and `t2 = n·t3`.
+    /// Compose equalities whose middle terms match exactly.
     pub fn trans(
         &mut self,
         left: SlottedProofId,
@@ -198,12 +189,12 @@ impl SlottedProofStore {
             )));
         }
         Ok(self.add(
-            SlottedProposition::new(l.lhs, l.renaming.compose(&r.renaming), r.rhs),
+            SlottedProposition::equal(l.lhs, r.rhs),
             SlottedJustification::Trans(left, right),
         ))
     }
 
-    /// `t1 = m·F(.., n·c', ..)` from `t1 = m·F(.., c, ..)` and `c = n·c'`.
+    /// Replace a child using an ordinary equality `c = c'`.
     pub fn congr(
         &mut self,
         proof: SlottedProofId,
@@ -227,12 +218,11 @@ impl SlottedProofStore {
                 self.term_dag.to_string(c.lhs)
             )));
         }
-        let renamed_child = rename(&mut self.term_dag, &c.renaming, c.rhs);
         let mut children = children;
-        children[child_index] = renamed_child;
+        children[child_index] = c.rhs;
         let rhs = self.term_dag.app(head, children);
         Ok(self.add(
-            SlottedProposition::new(p.lhs, p.renaming, rhs),
+            SlottedProposition::equal(p.lhs, rhs),
             SlottedJustification::Congr {
                 proof,
                 child_index,
@@ -241,16 +231,17 @@ impl SlottedProofStore {
         ))
     }
 
-    /// `t1 = (m∘σ⁻¹)·(σ·t2)` from `t1 = m·t2`.
-    pub fn shift(&mut self, proof: SlottedProofId, sigma: Renaming) -> SlottedProofId {
+    /// Derive `sigma(lhs) = sigma(rhs)` by equivariance of the slotted theory.
+    pub fn equivariance(&mut self, proof: SlottedProofId, sigma: Renaming) -> SlottedProofId {
         if sigma.is_identity() {
             return proof;
         }
         let p = self.proposition(proof).clone();
+        let lhs = rename(&mut self.term_dag, &sigma, p.lhs);
         let rhs = rename(&mut self.term_dag, &sigma, p.rhs);
         self.add(
-            SlottedProposition::new(p.lhs, p.renaming.compose(&sigma.inverse()), rhs),
-            SlottedJustification::Shift {
+            SlottedProposition::equal(lhs, rhs),
+            SlottedJustification::Equivariance {
                 proof,
                 renaming: sigma,
             },
@@ -287,7 +278,9 @@ impl SlottedProofStore {
         match &self.proofs[id].justification {
             SlottedJustification::Fiat => vec![],
             SlottedJustification::Rule { premises, .. } => premises.clone(),
-            SlottedJustification::Sym(p) | SlottedJustification::Shift { proof: p, .. } => vec![*p],
+            SlottedJustification::Sym(p) | SlottedJustification::Equivariance { proof: p, .. } => {
+                vec![*p]
+            }
             SlottedJustification::Trans(a, b) => vec![*a, *b],
             SlottedJustification::Congr {
                 proof, child_proof, ..
@@ -295,18 +288,18 @@ impl SlottedProofStore {
         }
     }
 
-    /// The proposition printed with its renaming restricted to the slots it
-    /// acts on.
+    /// Display an ordinary equality in source slot names.
     pub fn proposition_to_string(&self, p: &SlottedProposition) -> String {
-        self.named_proposition(
-            p,
-            &self.display_names(p.renaming.entries().flat_map(|(a, b)| [a, b])),
-        )
+        self.named_proposition(p, &self.display_names(None, []))
     }
 
     /// One injective naming for all terms and permutations, including coordinates
-    /// that occur only in a Shift. Reserve rule-local variables as well as source slots.
-    fn display_names(&self, extra: impl IntoIterator<Item = i64>) -> BTreeMap<i64, String> {
+    /// that occur only in an equivariance step. Reserve rule-local variables as well as source slots.
+    fn display_names(
+        &self,
+        root: Option<SlottedProofId>,
+        extra: impl IntoIterator<Item = i64>,
+    ) -> BTreeMap<i64, String> {
         let mut names = self.slot_names.clone();
         let mut used: BTreeSet<String> = names.values().cloned().collect();
         for t in 0..self.term_dag.size() {
@@ -314,19 +307,15 @@ impl SlottedProofStore {
                 used.insert(format!("${}", v.trim_start_matches('$')));
             }
         }
-        let mut slots = (0..self.term_dag.size())
-            .filter_map(|t| slot_of(&self.term_dag, t))
-            .collect::<Vec<_>>();
-        for proof in &self.proofs {
-            slots.extend(
-                proof
-                    .proposition
-                    .renaming
-                    .entries()
-                    .flat_map(|(a, b)| [a, b]),
-            );
+        let mut slots = vec![];
+        let ids = root
+            .map(|p| self.dependencies(p))
+            .unwrap_or_else(|| (0..self.len()).collect());
+        for id in ids {
+            let proof = self.get(id);
+            let mut terms = vec![proof.proposition.rhs, proof.proposition.lhs];
             match &proof.justification {
-                SlottedJustification::Shift { renaming, .. } => {
+                SlottedJustification::Equivariance { renaming, .. } => {
                     slots.extend(renaming.entries().flat_map(|(a, b)| [a, b]));
                 }
                 SlottedJustification::Rule { substitution, .. } => {
@@ -335,9 +324,20 @@ impl SlottedProofStore {
                             .iter()
                             .map(|(v, _)| format!("${}", v.trim_start_matches('$'))),
                     );
+                    terms.extend(substitution.iter().rev().map(|(_, t)| *t));
                 }
                 _ => {}
             }
+            while let Some(term) = terms.pop() {
+                if let Some(slot) = slot_of(&self.term_dag, term) {
+                    slots.push(slot);
+                } else if let Term::App(_, children) = self.term_dag.get(term) {
+                    terms.extend(children.iter().rev().copied());
+                }
+            }
+        }
+        if root.is_none() {
+            slots.extend((0..self.term_dag.size()).filter_map(|t| slot_of(&self.term_dag, t)));
         }
         let mut next = 0;
         for slot in slots.into_iter().chain(extra) {
@@ -389,21 +389,21 @@ impl SlottedProofStore {
     }
 
     fn named_proposition(&self, p: &SlottedProposition, names: &BTreeMap<i64, String>) -> String {
-        let p = self.normalize(p.clone());
-        let lhs = self.named_term(p.lhs, names);
-        let rhs = self.named_term(p.rhs, names);
-        if p.renaming.is_identity() {
-            format!("{lhs} = {rhs}")
-        } else {
-            format!("{lhs} = {}·{rhs}", Self::named_renaming(&p.renaming, names))
-        }
+        format!(
+            "{} = {}",
+            self.named_term(p.lhs, names),
+            self.named_term(p.rhs, names)
+        )
     }
 
     /// The proof and everything it depends on, one numbered line each, in
     /// dependency order.
     pub fn proof_to_string(&self, root: SlottedProofId) -> String {
+        self.proof_with_names(root, &self.display_names(Some(root), []))
+    }
+
+    fn proof_with_names(&self, root: SlottedProofId, names: &BTreeMap<i64, String>) -> String {
         let order = self.dependencies(root);
-        let names = self.display_names([]);
         let number: HashMap<SlottedProofId, usize> =
             order.iter().enumerate().map(|(n, &id)| (id, n)).collect();
         let mut out = String::new();
@@ -413,7 +413,7 @@ impl SlottedProofStore {
                 out,
                 "#{}: {}",
                 number[&id],
-                self.named_proposition(&proof.proposition, &names)
+                self.named_proposition(&proof.proposition, names)
             );
             let _ = match &proof.justification {
                 SlottedJustification::Fiat => writeln!(out, "\n    by fiat"),
@@ -424,7 +424,7 @@ impl SlottedProofStore {
                 } => {
                     let subst: Vec<String> = substitution
                         .iter()
-                        .map(|(v, t)| format!("{v} := {}", self.named_term(*t, &names)))
+                        .map(|(v, t)| format!("{v} := {}", self.named_term(*t, names)))
                         .collect();
                     let prems: Vec<String> =
                         premises.iter().map(|p| format!("#{}", number[p])).collect();
@@ -452,17 +452,41 @@ impl SlottedProofStore {
                     "\n    by congr #{} at {child_index} with #{}",
                     number[proof], number[child_proof]
                 ),
-                SlottedJustification::Shift { proof, renaming } => {
+                SlottedJustification::Equivariance { proof, renaming } => {
                     writeln!(
                         out,
-                        "\n    by shift #{} by {}",
+                        "\n    by equivariance #{} by {}",
                         number[proof],
-                        Self::named_renaming(renaming, &names)
+                        Self::named_renaming(renaming, names)
                     )
                 }
             };
         }
         out
+    }
+
+    /// Display the ordinary derivation followed by its final renaming witness.
+    pub fn conclusion_to_string(&mut self, conclusion: &SlottedConclusion) -> String {
+        let p = self.proposition(conclusion.proof).clone();
+        let rhs = rename(&mut self.term_dag, &conclusion.renaming.inverse(), p.rhs);
+        let witness = conclusion
+            .renaming
+            .restricted(&all_slots(&self.term_dag, rhs));
+        let names = self.display_names(
+            Some(conclusion.proof),
+            witness.entries().flat_map(|(a, b)| [a, b]),
+        );
+        let mut text = self.proof_with_names(conclusion.proof, &names);
+        if rhs != p.rhs {
+            let _ = writeln!(
+                text,
+                "claim: {} = {}·{}",
+                self.named_term(p.lhs, &names),
+                Self::named_renaming(&witness, &names),
+                self.named_term(rhs, &names)
+            );
+        }
+        text
     }
 }
 
@@ -479,10 +503,10 @@ mod tests {
         let mut store = SlottedProofStore::new(dag)
             .with_slot_names(&BTreeMap::from([("$a".into(), 10), ("$v0".into(), 20)]));
         let refl = store.fiat(a, a);
-        let proof = store.shift(refl, Renaming::new([(30, 31), (31, 30)]).unwrap());
+        let proof = store.equivariance(refl, Renaming::new([(30, 31), (31, 30)]).unwrap());
         assert_eq!(
             store.proof_to_string(proof),
-            "#0: $a = $a\n    by fiat\n#1: $a = $a\n    by shift #0 by {v2->v3, v3->v2}\n"
+            "#0: $a = $a\n    by fiat\n#1: $a = $a\n    by equivariance #0 by {v2->v3, v3->v2}\n"
         );
     }
 }
