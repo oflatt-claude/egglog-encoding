@@ -1,9 +1,9 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests benchmark-smoke nightly nightly-uv nightly-rustup \
+	proof-tests benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
-	rust-format-check rust-clippy rust-test
+	rust-format-check rust-clippy rust-doc-links rust-test
 
 BENCHMARK_SMOKE_REPORT ?= /tmp/egglog-encoding-bench-smoke.jsonl
 
@@ -47,39 +47,42 @@ python-test:
 
 rust-check: rust-nits rust-test
 
-rust-nits: rust-format-check rust-clippy
+rust-nits: rust-format-check rust-clippy rust-doc-links
 
 rust-format-check:
 	cargo fmt --all -- --check
 
 rust-test:
 	cargo test --workspace
-	cargo test -p egglog-experimental --features dd-backend --test timing_summary_cli
 
 rust-clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
-	cargo clippy -p egglog-experimental --features dd-backend --all-targets -- -D warnings
+
+# Clippy does not resolve doc links, and plain `cargo doc` skips the private
+# items most of this codebase documents, so a rename leaves stale links behind
+# unless rustdoc is run over them too.
+rust-doc-links:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --workspace
 
 # This is a name-filtered subset of rust-test, useful for proof iteration.
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
 
-# Use a disposable report path, keeping the default report cache untouched.
+# Smoke the runner on small files, not the full local benchmark suite.
 benchmark-smoke:
 	rm -f -- "$(BENCHMARK_SMOKE_REPORT)"
-	uv run --locked ./bench.py --rounds 1 \
-		--report "$(BENCHMARK_SMOKE_REPORT)" --format markdown \
-		egglog/tests/integer_math.egg > /dev/null
+	uv run --locked ./bench.py \
+		egglog-experimental/tests/math-microbenchmark-rational.egg \
+		egglog-experimental/tests/disequality/congruence.egg --rounds 1 \
+		--report "$(BENCHMARK_SMOKE_REPORT)" --format markdown > /dev/null
 	uv run --locked python -c \
 		'from pathlib import Path; import sys; from benchmarking.reports.store import ReportStore; assert ReportStore(Path(sys.argv[1])).row_count > 0' \
 		"$(BENCHMARK_SMOKE_REPORT)"
 
-# Benchmark every endpoint on this checkout and on main, then copy eval-live's
-# interactive report to nightly/output/. The egraphs-good nightly service
-# (nightly.cs.washington.edu) runs this target and serves that directory,
-# matching `report=` in the nightly configuration.
+# Publish nightly/output/ for the egraphs-good nightly service
+# (nightly.cs.washington.edu), which runs this target and serves that directory.
 nightly: nightly-uv nightly-rustup
-	$(NIGHTLY_UV) run --locked python scripts/nightly_bench.py
+	CARGO_HOME="$(CARGO_HOME_DIR)" $(NIGHTLY_UV) run --locked python scripts/nightly_bench.py
 
 nightly-uv:
 	@command -v uv >/dev/null || test -x "$(UV_BOOTSTRAP_DIR)/uv" || \
@@ -92,9 +95,49 @@ nightly-rustup:
 			| env CARGO_HOME="$(CARGO_HOME_DIR)" sh -s -- \
 				-y --no-modify-path --default-toolchain none
 
+# The nightly host's run at one round, for trying it locally. nightly/output/ is
+# git-ignored, so this writes it just as the host does.
+nightly-local: nightly-uv nightly-rustup
+	CARGO_HOME="$(CARGO_HOME_DIR)" $(NIGHTLY_UV) run --locked python scripts/nightly_bench.py --rounds 1
+
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details
 
 format:
 	uv run --locked ruff format .
 	cargo fmt --all
+
+# Same committed input, six implementations, no proof recording or extraction.
+PARAMETER_FILE := benchmarks/disequality/parameter-analysis.egg
+PARAMETER_ROUNDS ?= 10
+PARAMETER_TIMEOUT_SEC ?= 300
+PARAMETER_ARGS = $(PARAMETER_FILE) --target figures=. --rounds $(PARAMETER_ROUNDS) --timeout-sec $(PARAMETER_TIMEOUT_SEC)
+
+.PHONY: parameter-test parameter-bench figures-parameter figures-parameter-test
+parameter-test:
+	uv run --locked pytest -q benchmarks/disequality/native/test_original.py
+
+parameter-bench:
+	./bench.py $(PARAMETER_ARGS) \
+		--treatment off --compare-treatment off --disequality-encoding ee --compare-disequality-encoding nee
+	./bench.py $(PARAMETER_ARGS) \
+		--treatment egg-de --compare-treatment egg-nee
+	./bench.py $(PARAMETER_ARGS) \
+		--treatment egg-ee --compare-treatment egg-oee
+
+figures-parameter: parameter-bench
+	$(MAKE) figures/parameter-analysis.svg figures/parameter-analysis.png
+	@printf '%s\n' "$(abspath figures/parameter-analysis.svg)" "$(abspath figures/parameter-analysis.png)"
+
+.DELETE_ON_ERROR:
+NPX ?= npx --yes
+VEGA = $(NPX) --package=vega@6.4.0 --package=vega-lite@6.4.3 --package=vega-cli@6.4.0 --package=canvas@3.2.3
+
+figures/parameter-analysis.svg: figures/parameter-analysis.vl.json .reports-grouped.json Makefile
+	cd figures && $(VEGA) vl2svg $(notdir $<) $(notdir $@)
+
+figures/parameter-analysis.png: figures/parameter-analysis.vl.json .reports-grouped.json Makefile
+	cd figures && $(VEGA) vl2png $(notdir $<) $(notdir $@) -s 3
+
+figures-parameter-test:
+	cd figures && $(VEGA) node --test parameter.test.mjs

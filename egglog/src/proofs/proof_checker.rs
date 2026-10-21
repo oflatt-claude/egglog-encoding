@@ -15,8 +15,7 @@ use crate::{
     },
     core::ResolvedCall,
     proofs::proof_format::{Justification, ProofId, ProofStore, Proposition},
-    typechecking::FuncType,
-    util::{HashMap, HashSet, SymbolGen},
+    util::{HashMap, HashSet, IndexMap, SymbolGen},
 };
 use thiserror::Error;
 
@@ -346,6 +345,29 @@ pub enum ProofCheckErrorKind {
     /// Congruence proof: lhs doesn't match base proof lhs
     #[error("Proof {proof_id}: congruence error - proof lhs doesn't match base proof lhs")]
     CongruenceLhsMismatch { proof_id: ProofId },
+    /// Projection proof: sub-proof rhs is not a function application
+    #[error("Proof {proof_id}: projection error - sub-proof rhs is not a function application")]
+    ProjectionBaseNotApp { proof_id: ProofId },
+    /// Projection proof: child index out of bounds
+    #[error(
+        "Proof {proof_id}: projection error - child index {child_index} out of bounds for term with {num_children} children"
+    )]
+    ProjectionChildIndexOutOfBounds {
+        proof_id: ProofId,
+        child_index: usize,
+        num_children: usize,
+    },
+    /// Projection proof: the conclusion is not the projected child's reflexivity
+    #[error(
+        "Proof {proof_id}: projection error - proof {proof_lhs:?} = {proof_rhs:?} is not the reflexivity of child {child_index}, {base_child:?}"
+    )]
+    ProjectionResultMismatch {
+        proof_id: ProofId,
+        proof_lhs: TermId,
+        proof_rhs: TermId,
+        base_child: TermId,
+        child_index: usize,
+    },
     /// Rule application has wrong number of premises
     #[error(
         "Proof {proof_id}: rule '{rule_name}' expects {expected} premises, but proof has {actual}"
@@ -565,9 +587,12 @@ fn format_term(term_dag: &TermDag, term_id: TermId) -> String {
 }
 
 /// Helper function to format a substitution as a string
-fn format_substitution(term_dag: &TermDag, substitution: &HashMap<String, TermId>) -> String {
+fn format_substitution<'a>(
+    term_dag: &TermDag,
+    substitution: impl IntoIterator<Item = (&'a String, &'a TermId)>,
+) -> String {
     substitution
-        .iter()
+        .into_iter()
         .map(|(k, v)| format!("{} -> {}", k, format_term(term_dag, *v)))
         .collect::<Vec<_>>()
         .join(", ")
@@ -940,6 +965,37 @@ impl ProofStore {
                 Ok(Proposition::new(proof.lhs(), proof.rhs()))
             }
 
+            Justification::Proj {
+                proof: base_id,
+                child_index,
+            } => {
+                // The sub-proof establishes `t1 = f(..., ci, ...)`; the child at
+                // `child_index` is the `ci` this may conclude is reflexive.
+                let base_prop = self.check_proof_with_context(*base_id, program, ctx)?;
+                let Term::App(_, children) = self.term_dag.get(base_prop.rhs) else {
+                    return Err(ProofCheckErrorKind::ProjectionBaseNotApp { proof_id }.into());
+                };
+                let Some(&base_child) = children.get(*child_index) else {
+                    return Err(ProofCheckErrorKind::ProjectionChildIndexOutOfBounds {
+                        proof_id,
+                        child_index: *child_index,
+                        num_children: children.len(),
+                    }
+                    .into());
+                };
+                if proof.lhs() != base_child || proof.rhs() != base_child {
+                    return Err(ProofCheckErrorKind::ProjectionResultMismatch {
+                        proof_id,
+                        proof_lhs: proof.lhs(),
+                        proof_rhs: proof.rhs(),
+                        base_child,
+                        child_index: *child_index,
+                    }
+                    .into());
+                }
+                Ok(Proposition::new(base_child, base_child))
+            }
+
             Justification::ContainerNormalize { proof: inner_id } => {
                 // The sub-proof establishes `t1 = raw`; normalize `raw` to its
                 // canonical container form via the validator for its head.
@@ -1111,17 +1167,10 @@ impl ProofStore {
             // In the term representation, custom functions store output as last arg: f(args..., v)
             ResolvedFact::Eq(
                 _,
-                ResolvedExpr::Call(
-                    _,
-                    ResolvedCall::Func(FuncType {
-                        subtype: FunctionSubtype::Custom,
-                        name,
-                        ..
-                    }),
-                    args,
-                ),
+                ResolvedExpr::Call(_, call @ ResolvedCall::Func(_), args),
                 ResolvedExpr::Var(_, v),
-            ) => {
+            ) if call.is_custom_func() => {
+                let name = call.name();
                 // Get the output variable's term
                 let var_term = subst_with_globals.get(&v.name).copied().ok_or_else(|| {
                     ProofCheckErrorKind::UnboundVariable {
@@ -1147,7 +1196,7 @@ impl ProofStore {
                 // Add the output variable as the last argument
                 arg_terms.push(var_term);
 
-                let expected_term_id = self.term_dag.app(name.clone(), arg_terms);
+                let expected_term_id = self.term_dag.app(name.to_owned(), arg_terms);
 
                 // The proposition should be a reflexive equality for this term
                 if lhs != expected_term_id || rhs != expected_term_id {
@@ -1269,7 +1318,7 @@ impl ProofStore {
     fn check_rule_produces_equality(
         &mut self,
         rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>,
-        substitution: &HashMap<String, TermId>,
+        substitution: &IndexMap<String, TermId>,
         subst_with_globals: &HashMap<String, TermId>,
         claimed: &Proposition,
         rule_name: &str,

@@ -1,0 +1,7 @@
+---
+source: egglog-experimental/tests/files.rs
+expression: snapshot
+---
+((@GeneratedFreshTable 1)
+ (Let 2)
+ (Var 2))

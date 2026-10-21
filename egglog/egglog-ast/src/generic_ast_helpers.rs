@@ -66,7 +66,7 @@ where
             "".into()
         };
         let name = if !self.name.is_empty() {
-            format!(":name \"{}\"", &self.name)
+            format!(":name {}", Literal::String(self.name.clone()))
         } else {
             "".into()
         };
@@ -148,7 +148,9 @@ where
                     )
                 }
             }
-            GenericAction::Panic(_, msg) => write!(f, "(panic \"{msg}\")"),
+            GenericAction::Panic(_, msg) => {
+                write!(f, "(panic {})", Literal::String(msg.clone()))
+            }
             GenericAction::Expr(_, e) => write!(f, "{e}"),
         }
     }
@@ -816,7 +818,21 @@ impl Display for Literal {
                 }
             }
             Literal::Bool(b) => Display::fmt(b, f),
-            Literal::String(s) => write!(f, "\"{s}\""),
+            // Escape backslashes and quotes so the output round-trips through the
+            // lexer; otherwise a string holding either character produces text
+            // that fails to re-parse. Other characters (newlines, tabs, ...) are
+            // accepted verbatim by the lexer, so we leave them as-is.
+            Literal::String(s) => {
+                write!(f, "\"")?;
+                for c in s.chars() {
+                    match c {
+                        '\\' => write!(f, "\\\\")?,
+                        '"' => write!(f, "\\\"")?,
+                        c => write!(f, "{c}")?,
+                    }
+                }
+                write!(f, "\"")
+            }
             Literal::Unit => write!(f, "()"),
         }
     }
@@ -850,5 +866,37 @@ mod tests {
 
         assert_eq!(delete.to_string(), "(delete (foo))");
         assert_eq!(subsume.to_string(), "(subsume (foo))");
+    }
+
+    #[test]
+    fn display_string_literal_escapes_special_characters() {
+        assert_eq!(Literal::String("plain".into()).to_string(), "\"plain\"");
+        assert_eq!(Literal::String("a\"b".into()).to_string(), "\"a\\\"b\"");
+        assert_eq!(Literal::String("a\\b".into()).to_string(), "\"a\\\\b\"");
+        // Newlines and tabs are accepted verbatim by the lexer, so they are not escaped.
+        assert_eq!(Literal::String("a\nb".into()).to_string(), "\"a\nb\"");
+    }
+
+    #[test]
+    fn display_rule_name_escapes_special_characters() {
+        let rule = GenericRule::<String, String> {
+            span: Span::Panic,
+            head: GenericActions(vec![]),
+            body: vec![],
+            name: "a\"b\\c".into(),
+            ruleset: String::new(),
+            eval_mode: RuleEvalMode::Seminaive,
+            no_decomp: false,
+            include_subsumed: false,
+        };
+
+        assert!(rule.to_string().contains(r#":name "a\"b\\c""#));
+    }
+
+    #[test]
+    fn display_panic_message_escapes_special_characters() {
+        let action = GenericAction::<String, String>::Panic(Span::Panic, "a\"b\\c".into());
+
+        assert_eq!(action.to_string(), r#"(panic "a\"b\\c")"#);
     }
 }

@@ -18,11 +18,13 @@ use std::{
 
 use crate::core_relations::{
     BaseValue, BaseValueId, BaseValues, ColumnId, Constraint, ContainerValue, ContainerValues,
-    CounterId, Database, DisplacedTable, ExecutionState, ExternalFunction, ExternalFunctionId,
-    MergeVal, Offset, PlanStrategy, SortedWritesTable, TableId, TaggedRowBuffer, Value,
-    WrappedTable, make_external_func,
+    CounterId, Database, DisplacedTable, ExecutionState, ExternalContext, ExternalFunction,
+    ExternalFunctionBatch, ExternalFunctionId, FlatTable, MergeVal, Offset, PlanStrategy,
+    SortedWritesTable, TableId, TableIdentity, TaggedRowBuffer, Value, WrappedTable,
+    make_external_func,
 };
 use crate::numeric_id::{DenseIdMap, DenseIdMapWithReuse, NumericId, define_id};
+use egglog_concurrency::{ReadOptimizedLock, ThreadPool};
 use egglog_core_relations as core_relations;
 use egglog_numeric_id as numeric_id;
 use egglog_reports::{IterationReport, ReportLevel, RuleSetReport};
@@ -34,12 +36,14 @@ use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use web_time::{Duration, Instant};
 
+const FRESH_ID_RESERVATION_SIZE: usize = 256;
+
 pub mod macros;
 pub(crate) mod rule;
 #[cfg(test)]
 mod tests;
 
-pub use rule::{Function, QueryEntry, RuleBuilder, Variable, VariableId};
+pub use rule::{Function, QueryEntry, RuleBuilder};
 use thiserror::Error;
 
 /// A live registry of action handles for use by typed primitives.
@@ -49,13 +53,22 @@ use thiserror::Error;
 /// bridge `EGraph`. The state wrappers (`PureState`/`ReadState`/
 /// `WriteState`/`FullState`) live in the `egglog` crate; they read
 /// from this registry at invoke time to back name-indexed action
-/// methods. Held by the bridge `EGraph` inside an `Arc<RwLock<_>>`.
+/// methods. Held by the bridge `EGraph` inside an `Arc<ReadOptimizedLock<_>>`.
 #[derive(Clone)]
 pub struct ActionRegistry {
     table_actions: hashbrown::HashMap<String, TableAction>,
     union_action: UnionAction,
     default_panic_id: ExternalFunctionId,
 }
+
+/// Shared live directory of table-operation handles.
+pub type SharedActionRegistry = Arc<ReadOptimizedLock<ActionRegistry>>;
+
+// Keep this instantiation safe even with the lock’s currently weaker Sync bound.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ActionRegistry>();
+};
 
 impl ActionRegistry {
     pub(crate) fn new(union_action: UnionAction, default_panic_id: ExternalFunctionId) -> Self {
@@ -67,19 +80,28 @@ impl ActionRegistry {
     }
 
     pub(crate) fn register_table(&mut self, name: String, action: TableAction) {
+        assert!(
+            action.identity.is_some(),
+            "registered table must be installed"
+        );
         self.table_actions.insert(name, action);
     }
 
     /// Look up the [`TableAction`] for a table by name, or `None` if
-    /// no table with that name has been registered.
+    /// no table with that name has been registered. The registry may become
+    /// obsolete because of `push`/`pop`, so a hit may name a table a given
+    /// execution state no longer has; check it with [`TableAction::is_live`]
+    /// before use.
     pub fn lookup_table(&self, name: &str) -> Option<&TableAction> {
         self.table_actions.get(name)
     }
 
-    /// Snapshot the registered table names and their current row counts.
+    /// Snapshot the names and row counts of the registered tables that exist
+    /// in `state`.
     pub fn table_sizes(&self, state: &ExecutionState) -> Vec<(&str, usize)> {
         self.table_actions
             .iter()
+            .filter(|(_, action)| action.is_live(state))
             .map(|(name, action)| (name.as_str(), action.row_count(state)))
             .collect()
     }
@@ -126,93 +148,66 @@ pub struct EGraph {
     /// around allows us to cache external function ids with repeat panic messages and they can
     /// also serve as a debugging tool in the case that the number of panic messages grows without
     /// bound.
-    panic_funcs: HashMap<String, CachedPanic>,
-    /// Reverse index `id -> message` for [`EGraph::panic_funcs`]. Lets
-    /// [`EGraph::free_external_func`] find a cached panic's entry — or determine
-    /// that a func is not a cached panic at all — in O(1), instead of scanning
-    /// the whole (id-unindexed) `panic_funcs` map on every free. That scan made
-    /// freeing one-shot action rules O(number of cached panics), which grows with
-    /// the program, so a long run of one-shot actions was quadratic.
-    // `BTreeMap` (not `HashMap`) on purpose: it introduces no new randomly-seeded
-    // hasher, so the seed sequence of the other hash tables is unchanged. Some
-    // backends' row iteration order (which order-dependent proof extraction reads)
-    // depends on that sequence, so a `HashMap` here would needlessly shift it.
-    // Lookups are by a small integer id, so a `BTreeMap` is more than fast enough.
-    panic_func_ids: BTreeMap<ExternalFunctionId, String>,
+    panic_funcs: HashMap<String, ExternalFunctionId>,
     report_level: ReportLevel,
     /// Live registry of name-indexed action handles. Shared (via
-    /// `Arc<RwLock<_>>`) with state wrappers and primitive callbacks
+    /// `Arc<ReadOptimizedLock<_>>`) with state wrappers and primitive callbacks
     /// in the egglog crate so name-indexed action methods on
-    /// [`WriteState`] / [`FullState`] can resolve table actions at
+    /// `WriteState` / `FullState` can resolve table actions at
     /// invoke time. Mutated in place from [`add_table`](EGraph::add_table).
-    action_registry: Arc<std::sync::RwLock<ActionRegistry>>,
+    action_registry: SharedActionRegistry,
+    /// Table each row-inserting external function writes, by name. A merge body
+    /// calling one declares the same write dependency an explicit `set` on that
+    /// table would (see [`MergeFn::fill_deps`]).
+    // Avoid introducing another randomly seeded hash table: row iteration order
+    // in proof extraction can depend on the seed sequence of existing maps.
+    external_write_deps: BTreeMap<ExternalFunctionId, String>,
+    /// Lowering data for the encoding's write primitives, keyed by the runtime
+    /// id their call sites resolve to. See [`EGraph::mint_insert_plan`].
+    ///
+    /// Each spec names its table rather than holding a [`TableId`], and the
+    /// lowering resolves the name once, when the rule is built. The external
+    /// path re-resolves it per call, so the two agree only because a table
+    /// name is bound at most once (the typechecker rejects a redefinition).
+    mint_specs: BTreeMap<ExternalFunctionId, MintSpec>,
+    set_if_empty_specs: BTreeMap<ExternalFunctionId, SetIfEmptySpec>,
+    view_col_specs: BTreeMap<ExternalFunctionId, ViewColSpec>,
+    threads: usize,
+    thread_pool: Option<Arc<ThreadPool>>,
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;
 
-#[derive(Clone, Copy)]
-struct CachedPanic {
-    id: ExternalFunctionId,
-    references: usize,
+fn normalize_thread_count(threads: usize) -> usize {
+    #[cfg(target_family = "wasm")]
+    {
+        if threads > 1 {
+            panic!("cannot use more than 1 thread on wasm");
+        }
+        1
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if threads == 0 {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+        } else {
+            threads
+        }
+    }
+}
+
+fn install_thread_pool<R>(thread_pool: Option<Arc<ThreadPool>>, f: impl FnOnce() -> R) -> R {
+    match thread_pool {
+        Some(thread_pool) => thread_pool.install(f),
+        None => egglog_concurrency::without_current_pool(f),
+    }
 }
 
 impl Default for EGraph {
     fn default() -> Self {
-        let mut db = Database::new();
-        let uf_table = db.add_table_named(
-            DisplacedTable::default(),
-            "$uf".into(),
-            iter::empty(),
-            iter::empty(),
-        );
-        let id_counter = db.add_counter();
-        let ts_counter = db.add_counter();
-        // Start the timestamp counter at 1.
-        db.inc_counter(ts_counter);
-
-        // Register a default panic external function so the typed
-        // state wrappers' `panic()` method has an id to call. This
-        // also seeds `panic_funcs` so a later `new_panic` with the
-        // same message reuses the id.
-        let panic_message: SideChannel<String> = Default::default();
-        let mut panic_funcs: HashMap<String, CachedPanic> = Default::default();
-        let mut panic_func_ids: BTreeMap<ExternalFunctionId, String> = Default::default();
-        let default_panic_msg = "primitive panicked".to_string();
-        let default_panic_id = db.add_external_function(Box::new(Panic(
-            default_panic_msg.clone(),
-            panic_message.clone(),
-        )));
-        panic_func_ids.insert(default_panic_id, default_panic_msg.clone());
-        panic_funcs.insert(
-            default_panic_msg,
-            CachedPanic {
-                id: default_panic_id,
-                references: 1,
-            },
-        );
-
-        let union_action = UnionAction {
-            table: uf_table,
-            timestamp: ts_counter,
-        };
-        let action_registry = Arc::new(std::sync::RwLock::new(ActionRegistry::new(
-            union_action,
-            default_panic_id,
-        )));
-
-        Self {
-            db,
-            uf_table,
-            id_counter,
-            timestamp_counter: ts_counter,
-            rules: Default::default(),
-            funcs: Default::default(),
-            panic_message,
-            panic_funcs,
-            panic_func_ids,
-            report_level: Default::default(),
-            action_registry,
-        }
+        Self::new(1)
     }
 }
 
@@ -240,7 +235,102 @@ pub struct FunctionConfig {
     pub can_subsume: bool,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum TableStorage {
+    SortedWrites,
+    Flat,
+}
+
 impl EGraph {
+    /// Create an e-graph configured to use `threads` worker threads.
+    ///
+    /// Passing `1` keeps execution serial and does not allocate a thread pool.
+    /// Passing `0` uses the host's available parallelism.
+    pub fn new(threads: usize) -> Self {
+        let threads = normalize_thread_count(threads);
+        let thread_pool = (threads > 1).then(|| Arc::new(ThreadPool::new(threads)));
+        let (mut db, uf_table, id_counter, ts_counter) =
+            install_thread_pool(thread_pool.clone(), || {
+                let mut db = Database::new();
+                let uf_table = db.add_table_named(
+                    DisplacedTable::default(),
+                    "$uf".into(),
+                    iter::empty(),
+                    iter::empty(),
+                );
+                let id_counter = db.add_reservable_counter(FRESH_ID_RESERVATION_SIZE);
+                let ts_counter = db.add_counter();
+                // Start the timestamp counter at 1.
+                db.inc_counter(ts_counter);
+                (db, uf_table, id_counter, ts_counter)
+            });
+
+        // Register a default panic external function so the typed
+        // state wrappers' `panic()` method has an id to call. This
+        // also seeds `panic_funcs` so a later `new_panic` with the
+        // same message reuses the id.
+        let panic_message: SideChannel<String> = Default::default();
+        let mut panic_funcs: HashMap<String, ExternalFunctionId> = Default::default();
+        let default_panic_msg = "primitive panicked".to_string();
+        let default_panic_id = db.add_external_function(Box::new(Panic(
+            default_panic_msg.clone(),
+            panic_message.clone(),
+        )));
+        panic_funcs.insert(default_panic_msg, default_panic_id);
+
+        let union_action = UnionAction {
+            table: uf_table,
+            timestamp: ts_counter,
+        };
+        let action_registry = Arc::new(ReadOptimizedLock::new(ActionRegistry::new(
+            union_action,
+            default_panic_id,
+        )));
+
+        Self {
+            db,
+            uf_table,
+            id_counter,
+            timestamp_counter: ts_counter,
+            rules: Default::default(),
+            funcs: Default::default(),
+            panic_message,
+            panic_funcs,
+            report_level: Default::default(),
+            action_registry,
+            external_write_deps: Default::default(),
+            mint_specs: Default::default(),
+            set_if_empty_specs: Default::default(),
+            view_col_specs: Default::default(),
+            threads,
+            thread_pool,
+        }
+    }
+
+    /// Return a copy of this e-graph configured with a different thread count.
+    pub fn with_num_threads(mut self, threads: usize) -> Self {
+        self.set_num_threads(threads);
+        self
+    }
+
+    /// Set the number of worker threads used by this e-graph.
+    ///
+    /// Passing `1` disables the pool. Passing `0` uses available parallelism.
+    pub fn set_num_threads(&mut self, threads: usize) {
+        let threads = normalize_thread_count(threads);
+        self.threads = threads;
+        self.thread_pool = (threads > 1).then(|| Arc::new(ThreadPool::new(threads)));
+    }
+
+    /// Return the configured thread count.
+    pub fn num_threads(&self) -> usize {
+        self.threads
+    }
+
+    fn thread_pool(&self) -> Option<Arc<ThreadPool>> {
+        self.thread_pool.clone()
+    }
+
     fn next_ts(&self) -> Timestamp {
         Timestamp::from_usize(self.db.read_counter(self.timestamp_counter))
     }
@@ -269,8 +359,12 @@ impl EGraph {
     /// Intern the given container value into the EGraph.
     pub fn get_container_value<C: ContainerValue>(&mut self, val: C) -> Value {
         self.register_container_ty::<C>();
-        self.db
-            .with_execution_state(|state| state.clone().container_values().register_val(val, state))
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            self.db.with_execution_state(None, |state| {
+                state.clone().container_values().register_val(val, state)
+            })
+        })
     }
 
     /// Register the given [`ContainerValue`] type with this EGraph.
@@ -330,31 +424,47 @@ impl EGraph {
 
     /// Register the term encoder's `set-if-empty` canonicalize op for the FD
     /// view table named `view_name` (`n_keys` key columns), returning the
-    /// [`ExternalFunctionId`] its mint sites resolve to. At invoke: look up
-    /// `(view keys)`; if a row exists return its first output (the eclass);
-    /// otherwise insert `(keys, trailing-default-columns)` and return the first
-    /// default column. Serviced over this backend's db view table.
+    /// [`ExternalFunctionId`] its mint sites resolve to.
+    ///
+    /// Invoked as `(keys…, vals…)`, it returns the view's first output column
+    /// (the e-class) for `keys`: the existing row's when the key is present, and
+    /// otherwise the first of `vals` after staging `(keys, vals)`. A second
+    /// invocation with the same key inside one action batch sees the first one's
+    /// staged row, so the two agree — see
+    /// [`TableAction::lookup_or_insert_vals`].
     pub fn register_set_if_empty(
         &mut self,
         view_name: String,
         n_keys: usize,
-        _out_arity: usize,
+        out_arity: usize,
     ) -> ExternalFunctionId {
         let registry = self.action_registry.clone();
-        self.register_external_func(Box::new(make_external_func(
+        let spec_name = view_name.clone();
+        let id = self.register_external_func(Box::new(make_external_func(
             move |state: &mut ExecutionState, args: &[Value]| {
-                let registry = registry.read().unwrap();
-                let action = registry.lookup_table(&view_name)?.clone();
+                let registry = registry.read();
+                let action = registry.lookup_table(&view_name)?;
+                // Too few vals and the row is staged short of its value columns;
+                // too many and the surplus lands on the timestamp.
+                debug_assert_eq!(
+                    args.len(),
+                    n_keys + out_arity,
+                    "set-if-empty on view `{view_name}` takes {n_keys} keys and \
+                     {out_arity} values"
+                );
                 let keys = &args[..n_keys];
-                if let Some(vals) = action.lookup_values(state, keys) {
-                    // Already canonicalized: reuse the committed eclass and skip
-                    // the insert, so the fresh id never enters the table.
-                    return Some(vals[0]);
-                }
-                action.insert(state, args.iter().copied());
-                Some(args[n_keys])
+                Some(action.lookup_or_insert_vals(state, keys, &args[n_keys..]))
             },
-        )))
+        )));
+        self.set_if_empty_specs.insert(
+            id,
+            SetIfEmptySpec {
+                view_name: spec_name,
+                n_keys,
+                out_arity,
+            },
+        );
+        id
     }
 
     /// Register a reader for output column `col_idx` of the FD view named
@@ -368,40 +478,227 @@ impl EGraph {
         col_idx: usize,
     ) -> ExternalFunctionId {
         let registry = self.action_registry.clone();
-        self.register_external_func(Box::new(make_external_func(
+        let spec_name = view_name.clone();
+        let id = self.register_external_func(Box::new(make_external_func(
             move |state: &mut ExecutionState, args: &[Value]| {
-                let registry = registry.read().unwrap();
-                let action = registry.lookup_table(&view_name)?.clone();
+                let registry = registry.read();
+                let action = registry.lookup_table(&view_name)?;
                 let fallback = args[n_keys];
-                Some(match action.lookup_values(state, &args[..n_keys]) {
-                    Some(vals) => vals[col_idx],
-                    None => fallback,
-                })
+                Some(
+                    action
+                        .lookup_value_col(state, &args[..n_keys], col_idx)
+                        .unwrap_or(fallback),
+                )
             },
-        )))
+        )));
+        self.view_col_specs.insert(
+            id,
+            ViewColSpec {
+                view_name: spec_name,
+                n_keys,
+                col_idx,
+            },
+        );
+        id
+    }
+
+    /// Register the term encoder's mint op for the term-node relation named
+    /// `table_name`, returning the [`ExternalFunctionId`] its call sites resolve
+    /// to.
+    ///
+    /// Invoked as `(args…)`, it mints a fresh id — from the same counter as
+    /// `get-fresh!`, so never one already in use — stages the row
+    /// `(args…, fresh, vals…)`, and returns `fresh`.
+    pub fn register_mint_row(
+        &mut self,
+        table_name: String,
+        n_args: usize,
+        vals: Vec<Value>,
+    ) -> ExternalFunctionId {
+        #[derive(Clone)]
+        struct MintRows {
+            registry: SharedActionRegistry,
+            table_name: String,
+            n_args: usize,
+            counter: CounterId,
+            vals: Vec<Value>,
+        }
+
+        impl ExternalFunction for MintRows {
+            fn invoke(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+                let registry = self.registry.read();
+                let action = registry.lookup_table(&self.table_name)?;
+                debug_assert_eq!(
+                    args.len(),
+                    self.n_args,
+                    "mint into `{}` takes {} arguments",
+                    self.table_name,
+                    self.n_args
+                );
+                let fresh = Value::from_usize(state.inc_counter(self.counter));
+                action.insert(
+                    state,
+                    args.iter()
+                        .copied()
+                        .chain([fresh])
+                        .chain(self.vals.iter().copied()),
+                );
+                Some(fresh)
+            }
+
+            fn invoke_batch(&self, state: &mut ExecutionState, batch: ExternalFunctionBatch<'_>) {
+                if batch.is_empty() {
+                    return;
+                }
+                let registry = self.registry.read();
+                let Some(action) = registry.lookup_table(&self.table_name) else {
+                    batch.map(|_| None);
+                    return;
+                };
+                // Mint ids before borrowing the table buffer, in the same order
+                // as scalar calls. Reuse the row scratch and notify only once.
+                let fresh: Vec<_> = (0..batch.len())
+                    .map(|_| Value::from_usize(state.inc_counter(self.counter)))
+                    .collect();
+                let mut fresh = fresh.into_iter();
+                let ts = Value::from_usize(state.read_counter(action.timestamp));
+                let mut row = SmallVec::<[Value; 8]>::new();
+                state.stage_batch(action.table, |buffer| {
+                    batch.map(|args| {
+                        debug_assert_eq!(args.len(), self.n_args);
+                        let fresh = fresh.next().unwrap();
+                        row.clear();
+                        row.extend_from_slice(args);
+                        row.push(fresh);
+                        row.extend_from_slice(&self.vals);
+                        action.table_math.write_table_row(
+                            &mut row,
+                            RowVals {
+                                timestamp: ts,
+                                subsume: action.table_math.subsume.then_some(NOT_SUBSUMED),
+                                ret_val: None,
+                            },
+                        );
+                        buffer.stage_insert(&row);
+                        Some(fresh)
+                    });
+                });
+            }
+        }
+
+        let dep = table_name.clone();
+        let spec = MintSpec {
+            table_name: table_name.clone(),
+            n_args,
+            vals: vals.clone(),
+            counter: self.id_counter,
+        };
+        let id = self.register_external_func(Box::new(MintRows {
+            registry: self.action_registry.clone(),
+            table_name,
+            n_args,
+            counter: self.id_counter,
+            vals,
+        }));
+        self.external_write_deps.insert(id, dep);
+        self.mint_specs.insert(id, spec);
+        id
+    }
+
+    /// The batched-instruction lowering of a `mint-<Relation>!` primitive
+    /// called with `n_args` arguments, or `None` if `func` is not one, its
+    /// table is not installed yet, or the call does not fill the row. A `None`
+    /// here is not an error: the call site stays on the per-row external path,
+    /// which validates the same shape itself.
+    pub(crate) fn mint_insert_plan(
+        &self,
+        func: ExternalFunctionId,
+        n_args: usize,
+    ) -> Option<MintInsertPlan> {
+        let spec = self.mint_specs.get(&func)?;
+        let registry = self.action_registry.read();
+        let action = registry.lookup_table(&spec.table_name)?;
+        let math = action.table_math;
+        // The row is `args ++ [fresh] ++ vals`, so the minted id sits at
+        // `n_args` and the three together must cover every function column.
+        if n_args != spec.n_args || n_args + 1 + spec.vals.len() != math.func_cols {
+            return None;
+        }
+        Some(MintInsertPlan {
+            table: action.table,
+            tail: spec.vals.clone(),
+            counter: spec.counter,
+            math,
+            minted_col: ColumnId::from_usize(n_args),
+        })
+    }
+
+    /// The instruction lowering of a `set-if-empty-<View>!` primitive called
+    /// with `n_args` arguments, or `None` if `func` is not one, its table is not
+    /// installed yet, or the call does not supply exactly one value per value
+    /// column. A short row would push the timestamp into a value column.
+    pub(crate) fn set_if_empty_plan(
+        &self,
+        func: ExternalFunctionId,
+        n_args: usize,
+    ) -> Option<SetIfEmptyPlan> {
+        let spec = self.set_if_empty_specs.get(&func)?;
+        let registry = self.action_registry.read();
+        let action = registry.lookup_table(&spec.view_name)?;
+        let math = action.table_math;
+        if math.num_keys() != spec.n_keys
+            || math.n_vals() != spec.out_arity
+            || n_args != spec.n_keys + spec.out_arity
+        {
+            return None;
+        }
+        Some(SetIfEmptyPlan {
+            table: action.table,
+            n_keys: spec.n_keys,
+            ret_val_col: ColumnId::from_usize(math.ret_val_col()),
+            subsume: math.subsume,
+        })
+    }
+
+    /// The instruction lowering of a view-column read called with `n_args`
+    /// arguments (the keys plus the fallback), or `None` if `func` is not one or
+    /// its table is not installed yet.
+    pub(crate) fn view_col_plan(
+        &self,
+        func: ExternalFunctionId,
+        n_args: usize,
+    ) -> Option<ViewColPlan> {
+        let spec = self.view_col_specs.get(&func)?;
+        let registry = self.action_registry.read();
+        let action = registry.lookup_table(&spec.view_name)?;
+        let math = action.table_math;
+        if math.num_keys() != spec.n_keys
+            || spec.col_idx >= math.n_vals()
+            || n_args != spec.n_keys + 1
+        {
+            return None;
+        }
+        Some(ViewColPlan {
+            table: action.table,
+            n_keys: spec.n_keys,
+            dst_col: ColumnId::from_usize(math.num_keys() + spec.col_idx),
+        })
+    }
+
+    /// The table an external function inserts into, for the merge dependency
+    /// graph. `None` for a function that writes no table, or one whose table is
+    /// not declared yet.
+    fn external_write_table(&self, func: ExternalFunctionId) -> Option<TableId> {
+        let name = self.external_write_deps.get(&func)?;
+        Some(self.action_registry.read().lookup_table(name)?.table)
     }
 
     pub fn free_external_func(&mut self, func: ExternalFunctionId) {
-        // A cached panic with more than one reference is kept alive (just
-        // decrement); one at its last reference — or any func that is not a
-        // cached panic — is freed from the database. The reverse index makes the
-        // "is this a cached panic, and which entry?" question O(1); previously we
-        // scanned all of `panic_funcs` on every call (see `panic_func_ids`).
-        let mut free = true;
-        if let Some(message) = self.panic_func_ids.get(&func).cloned()
-            && let Some(cached) = self.panic_funcs.get_mut(&message)
-        {
-            if cached.references > 1 {
-                cached.references -= 1;
-                free = false;
-            } else {
-                self.panic_funcs.remove(&message);
-                self.panic_func_ids.remove(&func);
-            }
-        }
-        if free {
-            self.db.free_external_function(func);
-        }
+        self.external_write_deps.remove(&func);
+        self.mint_specs.remove(&func);
+        self.set_if_empty_specs.remove(&func);
+        self.view_col_specs.remove(&func);
+        self.db.free_external_function(func);
     }
 
     /// Generate a fresh id.
@@ -520,6 +817,21 @@ impl EGraph {
         self.db.get_table(self.funcs[table].table).len()
     }
 
+    /// Whether a function uses the internal append-and-scan storage.
+    #[doc(hidden)]
+    pub fn table_is_flat(&self, table: FunctionId) -> bool {
+        let table = self.db.get_table(self.funcs[table].table);
+        if table.as_any().is::<FlatTable>() {
+            true
+        } else {
+            assert!(
+                table.as_any().is::<SortedWritesTable>(),
+                "function table uses an unknown storage implementation"
+            );
+            false
+        }
+    }
+
     /// Remove every row from the given function's backing table.
     ///
     /// This is the bulk counterpart to staging a `remove` for every key in the
@@ -535,50 +847,6 @@ impl EGraph {
     pub fn clear_table(&mut self, func: FunctionId) {
         let table_id = self.funcs[func].table;
         self.db.clear_table(table_id);
-    }
-
-    /// Remove the most recently registered function and its backing table.
-    ///
-    /// This is a rollback operation for callers whose later registration work
-    /// failed. It rejects older functions because later rules or merge
-    /// callbacks may already depend on them.
-    pub fn remove_last_table(&mut self, func: FunctionId) -> Result<()> {
-        anyhow::ensure!(
-            self.funcs.get(func).is_some(),
-            "cannot remove unknown function {func:?}"
-        );
-        let removed_action = TableAction::new(self, func);
-        let info = self.funcs.pop_last(func).ok_or_else(|| {
-            anyhow::anyhow!("can only remove the most recently registered function")
-        })?;
-        if !self.db.remove_last_table(info.table) {
-            self.funcs.insert(func, info);
-            anyhow::bail!("function's backing table was not the most recently registered table");
-        }
-
-        self.free_rule(info.nonincremental_rebuild_rule);
-        for rule in info.incremental_rebuild_rules.iter().rev() {
-            self.free_rule(*rule);
-        }
-
-        let replacement = self
-            .funcs
-            .iter()
-            .filter(|(_, candidate)| candidate.name == info.name)
-            .map(|(id, _)| TableAction::new(self, id))
-            .last();
-        let mut registry = self.action_registry.write().unwrap();
-        if registry.table_actions.get(info.name.as_ref()) == Some(&removed_action) {
-            match replacement {
-                Some(action) => {
-                    registry.register_table(info.name.to_string(), action);
-                }
-                None => {
-                    registry.table_actions.remove(info.name.as_ref());
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Read the contents of the given function.
@@ -607,7 +875,7 @@ impl EGraph {
         // `dyn`-compatibility on `Table` or dynamic dispatch per row.
         macro_rules! drain_buf {
             ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
+                for (_, row) in $buf.iter() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
                     if !f(ScanEntry {
@@ -651,11 +919,11 @@ impl EGraph {
         let mut cur = Offset::new(0);
         let mut out = TaggedRowBuffer::new(table.spec().arity());
         while let Some(next) = table.scan_bounded(all.as_ref(), cur, BATCH_SIZE, &mut out) {
-            out.non_stale().for_each(|(_, row)| f(row));
+            out.iter().for_each(|(_, row)| f(row));
             out.clear();
             cur = next;
         }
-        out.non_stale().for_each(|(_, row)| f(row));
+        out.iter().for_each(|(_, row)| f(row));
     }
 
     /// Register a function in this EGraph.
@@ -667,6 +935,56 @@ impl EGraph {
     }
 
     pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
+        self.add_table_with_storage(config, TableStorage::SortedWrites, None)
+    }
+
+    /// Add a function whose name-indexed read APIs expose a logical row layout
+    /// different from its physical table schema.
+    ///
+    /// This is public only so the sibling `egglog` crate can install the views
+    /// generated by term/proof encoding. It is not a general-purpose storage
+    /// option.
+    #[doc(hidden)]
+    pub fn add_table_with_read_projection(
+        &mut self,
+        config: FunctionConfig,
+        kind: TableKind,
+        input_arity: usize,
+        output_arity: usize,
+    ) -> FunctionId {
+        self.add_table_with_storage(
+            config,
+            TableStorage::SortedWrites,
+            Some(TableReadProjection {
+                kind,
+                input_arity,
+                output_arity,
+            }),
+        )
+    }
+
+    /// Add a trusted internal function backed by append-and-scan storage.
+    ///
+    /// The caller must guarantee that the function is only directly inserted
+    /// and scanned: lookup, removal, conflict resolution, and rebuilding are
+    /// unsupported. In particular, any id columns must be immutable snapshots
+    /// that never require canonicalization. Violating that contract can panic
+    /// or leave stale ids in the table.
+    ///
+    /// This is public only so the sibling `egglog` crate can install its
+    /// internal proof-record tables. It is hidden because it is a semantic
+    /// trust boundary, not a general-purpose storage option.
+    #[doc(hidden)]
+    pub fn add_internal_flat_table(&mut self, config: FunctionConfig) -> FunctionId {
+        self.add_table_with_storage(config, TableStorage::Flat, None)
+    }
+
+    fn add_table_with_storage(
+        &mut self,
+        config: FunctionConfig,
+        storage: TableStorage,
+        read_projection: Option<TableReadProjection>,
+    ) -> FunctionId {
         let FunctionConfig {
             schema,
             n_vals,
@@ -695,6 +1013,28 @@ impl EGraph {
                 "function {name} declares {k} identity columns but has {n_vals} value columns"
             );
         }
+        if storage == TableStorage::Flat {
+            assert_eq!(
+                n_vals, 1,
+                "flat function `{name}` must have exactly one inert value column"
+            );
+            assert!(
+                n_identity_vals.is_none(),
+                "flat function `{name}` cannot declare identity value columns"
+            );
+            assert!(
+                matches!(default, DefaultVal::Fail),
+                "flat function `{name}` cannot provide a lookup default"
+            );
+            assert!(
+                matches!(&merge, MergeFn::AssertEq),
+                "flat function `{name}` cannot provide merge behavior"
+            );
+            assert!(
+                !can_subsume,
+                "flat function `{name}` cannot support subsumption"
+            );
+        }
         merge.check_value_col_indices(n_vals, &name);
         let to_rebuild: Vec<ColumnId> = schema
             .iter()
@@ -703,6 +1043,22 @@ impl EGraph {
             .map(|(i, _)| ColumnId::from_usize(i))
             .collect();
         let n_keys = schema.len() - n_vals;
+        let physical_kind = match default {
+            DefaultVal::FreshId => TableKind::Constructor,
+            DefaultVal::Fail | DefaultVal::Const(_) => TableKind::Function,
+        };
+        let read_projection = read_projection.unwrap_or(TableReadProjection {
+            kind: physical_kind,
+            input_arity: n_keys,
+            output_arity: n_vals,
+        });
+        assert!(
+            read_projection.output_arity > 0
+                && read_projection.input_arity + read_projection.output_arity <= schema.len()
+                && (read_projection.kind != TableKind::Constructor
+                    || read_projection.output_arity == 1),
+            "invalid read projection for table `{name}`"
+        );
         let schema_math = SchemaMath {
             subsume: can_subsume,
             n_keys,
@@ -731,6 +1087,7 @@ impl EGraph {
             default_val: default,
             can_subsume,
             name: name.clone(),
+            read_projection,
         });
         // Not a debug_assert: a mismatch here silently mis-maps every future reference to this
         // function's table (see the knot-tying comment above), so pay the one-time check in release.
@@ -749,65 +1106,193 @@ impl EGraph {
             !read_deps.contains(&table_id),
             "self-referential merge for `{name}` may only write to its own table, not read it"
         );
-        let merge_fn = merge.to_callback(schema_math, &name, self);
-        let table = SortedWritesTable::new(
-            n_args,
-            n_cols,
-            Some(ColumnId::from_usize(schema.len())),
-            to_rebuild,
-            merge_fn,
-        );
-        let assigned_table_id = self.db.add_table_named(
-            table,
-            name.clone(),
-            read_deps.iter().copied(),
-            write_deps.iter().copied(),
-        );
+        let assigned_table_id = match storage {
+            TableStorage::SortedWrites => {
+                let merge_fn = merge.to_callback(schema_math, &name, self);
+                let table = install_thread_pool(self.thread_pool(), || {
+                    SortedWritesTable::new(
+                        n_args,
+                        n_cols,
+                        Some(ColumnId::from_usize(schema.len())),
+                        to_rebuild,
+                        merge_fn,
+                    )
+                });
+                self.db.add_table_named(
+                    table,
+                    name.clone(),
+                    read_deps.iter().copied(),
+                    write_deps.iter().copied(),
+                )
+            }
+            TableStorage::Flat => {
+                let table = install_thread_pool(self.thread_pool(), || FlatTable::new(n_cols));
+                self.db.add_table_named(
+                    table,
+                    name.clone(),
+                    read_deps.iter().copied(),
+                    write_deps.iter().copied(),
+                )
+            }
+        };
         assert_eq!(
             assigned_table_id, table_id,
             "reserved table id did not match the id assigned by add_table_named"
         );
-        let incremental_rebuild_rules = self.incremental_rebuild_rules(res, &schema);
-        let nonincremental_rebuild_rule = self.nonincremental_rebuild(res, &schema);
+        let (incremental_rebuild_rules, nonincremental_rebuild_rule) = match storage {
+            TableStorage::SortedWrites => (
+                self.incremental_rebuild_rules(res, &schema),
+                self.nonincremental_rebuild(res, &schema),
+            ),
+            // The fallback rebuild scheduler expects one bookkeeping rule per
+            // function. Flat proof records are immutable, so give them an
+            // inert rule instead of generating keyed remove/reinsert actions.
+            TableStorage::Flat => (Vec::new(), self.inert_rebuild_rule(res)),
+        };
         let info = &mut self.funcs[res];
         info.incremental_rebuild_rules = incremental_rebuild_rules;
         info.nonincremental_rebuild_rule = nonincremental_rebuild_rule;
         let action = TableAction::new(self, res);
         let table_name = self.funcs[res].name.to_string();
         self.action_registry
-            .write()
-            .unwrap()
+            .lock()
             .register_table(table_name, action);
         res
     }
 
     /// A handle to the live [`ActionRegistry`] for this EGraph.
-    /// The handle is shared (`Arc<RwLock<_>>`); cloning the outer
+    /// The handle is shared (`Arc<ReadOptimizedLock<_>>`); cloning the outer
     /// `Arc` does not duplicate the underlying registry. Used by the
     /// egglog crate's primitive machinery to thread the registry into
     /// state wrappers at invoke time.
-    pub fn action_registry(&self) -> &Arc<std::sync::RwLock<ActionRegistry>> {
+    pub fn action_registry(&self) -> &SharedActionRegistry {
         &self.action_registry
     }
 
-    /// Run the given rules, returning whether the database changed.
+    /// Run the given rules for one iteration and return its report.
+    ///
+    /// `context` is visible to any external function the rules reach; pass
+    /// `None` if there is nothing to share.
+    ///
+    /// If a rule action raises an egglog-level panic, actions completed before
+    /// it remain applied. A successful recovery rebuild leaves the e-graph
+    /// canonical and reusable; it does not roll effects back or guarantee that
+    /// the failed action will be retried. If rebuilding also fails, the returned
+    /// error reports both failures and the e-graph has no reuse guarantee.
     ///
     /// If the given rules are malformed, this method can return an error.
-    pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
-        self.run_rules_inner(rules)
+    pub fn run_rules(
+        &mut self,
+        rules: &[RuleId],
+        context: ExternalContext<'_>,
+    ) -> Result<IterationReport> {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.run_rules_inner(rules, context))
     }
 
-    fn run_rules_inner(&mut self, rules: &[RuleId]) -> Result<IterationReport> {
+    /// Run `rules` for one iteration like [`EGraph::run_rules`], but without
+    /// rebuilding afterwards. Unions made by the rules are recorded in the
+    /// union-find but ids in the tables are not canonicalized until
+    /// [`EGraph::rebuild_now`] is called; until then, rebuilding may increase
+    /// or decrease table sizes. This lets a runner apply rules one at a time
+    /// and rebuild at most once per iteration, as egg does.
+    ///
+    /// Completed actions are not rolled back on error, and this method does not
+    /// rebuild on either success or error; the caller retains responsibility
+    /// for calling [`EGraph::rebuild_now`].
+    pub fn run_rules_no_rebuild(
+        &mut self,
+        rules: &[RuleId],
+        context: ExternalContext<'_>,
+    ) -> Result<IterationReport> {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let ts = self.next_ts();
+            let (assembly_time, rule_set_report) = run_rules_impl(
+                &mut self.db,
+                &mut self.rules,
+                rules,
+                ts,
+                self.report_level,
+                context,
+            )?;
+            if let Some(message) = self.panic_message.lock().unwrap().take() {
+                return Err(PanicError(message).into());
+            }
+            self.inc_ts();
+            Ok(IterationReport {
+                assembly_time,
+                rule_set_report,
+                rebuild_time: Duration::ZERO,
+            })
+        })
+    }
+
+    /// Flush the pending update buffers without rebuilding, for use with
+    /// [`EGraph::run_rules_no_rebuild`]. Returns `true` if the database is
+    /// updated.
+    pub fn flush_updates_no_rebuild(&mut self) -> bool {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let updated = self.db.merge_all();
+            self.inc_ts();
+            updated
+        })
+    }
+
+    /// Canonicalize the database after deferred-rebuild runs. Returns the time
+    /// spent rebuilding.
+    pub fn rebuild_now(&mut self) -> Result<Duration> {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            let timer = Instant::now();
+            self.rebuild()?;
+            if let Some(message) = self.panic_message.lock().unwrap().take() {
+                return Err(PanicError(message).into());
+            }
+            Ok(timer.elapsed())
+        })
+    }
+
+    fn run_rules_inner(
+        &mut self,
+        rules: &[RuleId],
+        context: ExternalContext<'_>,
+    ) -> Result<IterationReport> {
         let ts = self.next_ts();
 
         let uf_size_before = self.db.get_table(self.uf_table).len();
-        let rule_set_report =
-            run_rules_impl(&mut self.db, &mut self.rules, rules, ts, self.report_level)?;
-        if let Some(message) = self.panic_message.lock().unwrap().take() {
-            return Err(PanicError(message).into());
+        let (assembly_time, rule_set_report) = run_rules_impl(
+            &mut self.db,
+            &mut self.rules,
+            rules,
+            ts,
+            self.report_level,
+            context,
+        )?;
+        let panic_message = self.panic_message.lock().unwrap().take();
+        if let Some(message) = panic_message {
+            let action_error = PanicError(message);
+
+            // Some actions may already have changed the database. Canonicalize
+            // those effects before surfacing the catchable egglog error.
+            let rebuild_error = self.rebuild().err();
+            let rebuild_panic = self.panic_message.lock().unwrap().take();
+            let recovery_error = match (rebuild_error, rebuild_panic) {
+                (None, None) => return Err(action_error.into()),
+                (Some(error), None) => error.to_string(),
+                (None, Some(message)) => PanicError(message).to_string(),
+                (Some(error), Some(message)) => {
+                    format!("{error}; {}", PanicError(message))
+                }
+            };
+            return Err(anyhow::anyhow!(
+                "{action_error}; rebuilding after the failed rule action also failed: {recovery_error}"
+            ));
         }
 
         let mut iteration_report = IterationReport {
+            assembly_time,
             rule_set_report,
             rebuild_time: Duration::ZERO,
         };
@@ -833,7 +1318,7 @@ impl EGraph {
     }
 
     fn rebuild(&mut self) -> Result<()> {
-        let do_parallel = rayon::current_num_threads() > 1;
+        let do_parallel = egglog_concurrency::current_num_threads() > 1;
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
@@ -925,7 +1410,9 @@ impl EGraph {
                                 &[*rule],
                                 ts,
                                 ReportLevel::TimeOnly,
+                                None,
                             )?
+                            .1
                             .changed;
                         }
                         // Reset the rule we did not run. These two should be equivalent.
@@ -940,7 +1427,9 @@ impl EGraph {
                             &[info.nonincremental_rebuild_rule],
                             ts,
                             ReportLevel::TimeOnly,
+                            None,
                         )?
+                        .1
                         .changed;
                         for rule in &info.incremental_rebuild_rules {
                             self.rules[*rule].last_run_at = ts;
@@ -1013,7 +1502,9 @@ impl EGraph {
                 &scratch,
                 ts,
                 ReportLevel::TimeOnly,
+                None,
             )?
+            .1
             .changed;
             scratch.clear();
             let ts = self.next_ts();
@@ -1029,7 +1520,9 @@ impl EGraph {
                     &scratch,
                     ts,
                     ReportLevel::TimeOnly,
+                    None,
                 )?
+                .1
                 .changed;
                 scratch.clear();
             }
@@ -1049,6 +1542,11 @@ impl EGraph {
                 ColumnTy::Base(_) => None,
             })
             .collect()
+    }
+
+    fn inert_rebuild_rule(&mut self, table: FunctionId) -> RuleId {
+        self.new_rule(&format!("inert rebuild {table:?}"), false)
+            .build()
     }
 
     fn incremental_rebuild_rule(
@@ -1140,6 +1638,9 @@ impl EGraph {
     /// The staged updates are not immediately reflected in the EGraph, so you may want to
     /// manually flush the updates using [`EGraph::flush_updates`].
     ///
+    /// `context` is visible to any external function the closure reaches; pass
+    /// `None` if there is nothing to share.
+    ///
     /// # Seminaive-safety trust boundary
     ///
     /// This method hands out a raw `&mut ExecutionState`, which bypasses
@@ -1149,8 +1650,13 @@ impl EGraph {
     /// / global-action context: appropriate for one-shot database
     /// manipulation from outside any rule, not for use inside
     /// primitive implementations.
-    pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState<'_>) -> R) -> R {
-        self.db.with_execution_state(f)
+    pub fn with_execution_state<R>(
+        &self,
+        context: ExternalContext<'_>,
+        f: impl FnOnce(&mut ExecutionState<'_>) -> R,
+    ) -> R {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.db.with_execution_state(context, f))
     }
 
     /// Like [`EGraph::with_execution_state`], but also reports whether `f`
@@ -1159,14 +1665,23 @@ impl EGraph {
     /// no-op merge plus a spurious timestamp bump.
     pub fn with_execution_state_tracked<R>(
         &self,
+        context: ExternalContext<'_>,
         f: impl FnOnce(&mut ExecutionState<'_>) -> R,
     ) -> (R, bool) {
-        self.db.with_execution_state_tracked(f)
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || {
+            self.db.with_execution_state_tracked(context, f)
+        })
     }
 
     /// Flush the pending update buffers to the EGraph.
     /// Returns `true` if the database is updated.
     pub fn flush_updates(&mut self) -> bool {
+        let thread_pool = self.thread_pool();
+        install_thread_pool(thread_pool, || self.flush_updates_inner())
+    }
+
+    fn flush_updates_inner(&mut self) -> bool {
         let uf_size_before = self.db.get_table(self.uf_table).len();
         let updated = self.db.merge_all();
         self.inc_ts();
@@ -1188,7 +1703,6 @@ impl EGraph {
 struct RuleInfo {
     last_run_at: Timestamp,
     query: rule::Query,
-    owned_external_funcs: Vec<ExternalFunctionId>,
     cached_plan: Option<CachedPlanInfo>,
     desc: Arc<str>,
 }
@@ -1215,6 +1729,9 @@ struct FunctionInfo {
     default_val: DefaultVal,
     can_subsume: bool,
     name: Arc<str>,
+    /// User-visible row projection. This equals the physical layout unless the
+    /// table is an encoded view with internal columns.
+    read_projection: TableReadProjection,
 }
 
 impl FunctionInfo {
@@ -1315,10 +1832,16 @@ impl MergeFn {
     ) {
         use MergeFn::*;
         match self {
-            Primitive(_, args) => {
+            Primitive(id, args) => {
                 args.iter()
                     .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
                 write_deps.insert(egraph.uf_table);
+                // A primitive that inserts rows writes its table just as a
+                // `set` on it would, and the merge must be ordered and
+                // buffered against that table the same way.
+                if let Some(table) = egraph.external_write_table(*id) {
+                    write_deps.insert(table);
+                }
             }
             Function(func, args) => {
                 read_deps.insert(egraph.funcs[*func].table);
@@ -1808,16 +2331,51 @@ pub enum TableKind {
     Constructor,
 }
 
+impl TableKind {
+    /// How this kind of table is spelled in a program, and in diagnostics.
+    pub fn label(self) -> &'static str {
+        match self {
+            TableKind::Function => "function",
+            TableKind::Constructor => "constructor",
+        }
+    }
+}
+
+/// User-visible table shape used by read-only, name-indexed APIs.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+struct TableReadProjection {
+    kind: TableKind,
+    input_arity: usize,
+    output_arity: usize,
+}
+
+/// A requested read operation does not apply to the table's visible shape.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[doc(hidden)]
+pub enum TableReadProjectionError {
+    WrongKind { actual: TableKind },
+    MultipleOutputs,
+}
+
 /// This is an intern-able struct that holds all the data needed
 /// to do table operations with an [`ExecutionState`], assuming
 /// that the [`FunctionId`] for the table is known ahead of time.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct TableAction {
     table: TableId,
+    // A self-referential merge is resolved before its backing table is installed.
+    // Its internal actions need only the reserved TableId; name-indexed handles
+    // are created after installation and must have an allocation identity.
+    identity: Option<TableIdentity>,
+    name: Arc<str>,
     table_math: SchemaMath,
     default: Option<MergeVal>,
     timestamp: CounterId,
+    /// Physical classification used by write operations.
     kind: TableKind,
+    /// User-visible row projection. This equals the physical layout unless the
+    /// table is an encoded view with internal columns.
+    read_projection: TableReadProjection,
 }
 
 impl TableAction {
@@ -1831,6 +2389,8 @@ impl TableAction {
         };
         TableAction {
             table: func_info.table,
+            identity: egraph.db.table_identity(func_info.table),
+            name: Arc::clone(&func_info.name),
             table_math: func_info.schema_math(),
             default: match &func_info.default_val {
                 DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
@@ -1839,23 +2399,100 @@ impl TableAction {
             },
             timestamp: egraph.timestamp_counter,
             kind,
+            read_projection: func_info.read_projection,
         }
     }
 
-    /// Whether this table is a `Function` (no auto-insert) or a
+    /// Whether this still names the same table allocation in `state`.
+    ///
+    /// A table declared inside a `push` is dropped by the corresponding `pop`.
+    /// Its [`TableId`] may then be reused by a different table, while handles
+    /// handed out before the pop still hold the old id.
+    pub fn is_live(&self, state: &ExecutionState) -> bool {
+        self.identity.is_some()
+            && state.table_identity(self.table) == self.identity
+            && state.table_name(self.table) == Some(self.name.as_ref())
+    }
+
+    /// Whether this physical table is a `Function` (no auto-insert) or a
     /// `Constructor` (mints a fresh eclass id on miss).
     pub fn kind(&self) -> TableKind {
         self.kind
     }
 
-    /// Number of input (key) columns.
+    /// Number of physical input (key) columns.
     pub fn input_arity(&self) -> usize {
         self.table_math.num_keys()
     }
 
-    /// Number of output (value) columns.
+    /// Number of physical output (value) columns.
     pub fn output_arity(&self) -> usize {
         self.table_math.n_vals()
+    }
+
+    /// Validate a read operation against the user-visible kind and output
+    /// shape, returning the input arity needed for its arity check. Physical
+    /// kind/arity remain available separately for write operations.
+    #[doc(hidden)]
+    pub fn validate_read_projection(
+        &self,
+        expected_kind: Option<TableKind>,
+        require_single_output: bool,
+    ) -> std::result::Result<usize, TableReadProjectionError> {
+        if expected_kind.is_some_and(|expected| expected != self.read_projection.kind) {
+            return Err(TableReadProjectionError::WrongKind {
+                actual: self.read_projection.kind,
+            });
+        }
+        if require_single_output && self.read_projection.output_arity != 1 {
+            return Err(TableReadProjectionError::MultipleOutputs);
+        }
+        Ok(self.read_projection.input_arity)
+    }
+
+    /// Look up the output selected by the user-visible row projection. The
+    /// common layout remains a direct keyed lookup; layouts whose visible key
+    /// differs from the physical key fall back to a projected scan.
+    #[doc(hidden)]
+    pub fn lookup_visible(&self, state: &ExecutionState, key: &[Value]) -> Option<Value> {
+        debug_assert_eq!(key.len(), self.read_projection.input_arity);
+        let physical_input_arity = self.table_math.num_keys();
+        if physical_input_arity == self.read_projection.input_arity {
+            return self.lookup_value_col(state, key, 0);
+        }
+
+        let mut found = None;
+        self.for_each_visible_while(state, |inputs, output, _| {
+            if inputs == key {
+                found = Some(output);
+                false
+            } else {
+                true
+            }
+        });
+        found
+    }
+
+    /// Look up value column `col_idx` for `key`, or `None` if the key is absent.
+    /// This is a pure read and never inserts a default row.
+    pub fn lookup_value_col(
+        &self,
+        state: &ExecutionState,
+        key: &[Value],
+        col_idx: usize,
+    ) -> Option<Value> {
+        // The timestamp column sits right after the value columns, so an
+        // out-of-range `col_idx` would read one of the table's own bookkeeping
+        // columns back as a value.
+        debug_assert!(
+            col_idx < self.table_math.n_vals(),
+            "value column {col_idx} is past this table's {} value columns",
+            self.table_math.n_vals()
+        );
+        state.get_table(self.table).get_row_column(
+            key,
+            ColumnId::from_usize(self.table_math.num_keys() + col_idx),
+        )
     }
 
     /// Look up all output columns for `key`. This is a pure read and never
@@ -1903,7 +2540,7 @@ impl TableAction {
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
         macro_rules! drain_buf {
             ($buf:expr) => {
-                for (_, row) in $buf.non_stale() {
+                for (_, row) in $buf.iter() {
                     let subsumed =
                         schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
                     if !f(ScanEntry {
@@ -1921,6 +2558,42 @@ impl TableAction {
             cur = next;
         }
         drain_buf!(buf);
+    }
+
+    /// Iterate rows after applying the user-visible prefix/output projection,
+    /// excluding internal columns such as an encoded view's proof.
+    #[doc(hidden)]
+    pub fn for_each_visible_while(
+        &self,
+        state: &ExecutionState,
+        mut f: impl FnMut(&[Value], Value, bool) -> bool,
+    ) {
+        let input_arity = self.read_projection.input_arity;
+        self.for_each_while(state, |row| {
+            f(
+                &row.vals[..input_arity],
+                row.vals[input_arity],
+                row.subsumed,
+            )
+        });
+    }
+
+    /// Call `f` on each row whose output column is `value`.
+    pub fn for_each_output_value(
+        &self,
+        state: &ExecutionState,
+        value: Value,
+        mut f: impl FnMut(ScanEntry<'_>),
+    ) {
+        let schema_math = self.table_math;
+        let output_col = ColumnId::from_usize(self.read_projection.input_arity);
+        state.for_each_matching_col(self.table, output_col, value, |row| {
+            let subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+            f(ScanEntry {
+                vals: &row[0..schema_math.func_cols],
+                subsumed,
+            });
+        });
     }
 
     /// Look up a row, inserting the configured default value if absent.
@@ -2004,6 +2677,39 @@ impl TableAction {
         }
     }
 
+    /// Get-or-insert with caller-supplied value columns, reading this batch's
+    /// own pending inserts.
+    ///
+    /// Returns the first value column of the row for `key`: the committed row's
+    /// if the key is present, the pending row's if an earlier call in this same
+    /// action batch already inserted it, and otherwise `vals`' first entry after
+    /// staging `(key, vals)`.
+    pub fn lookup_or_insert_vals(
+        &self,
+        state: &mut ExecutionState,
+        key: &[Value],
+        vals: &[Value],
+    ) -> Value {
+        debug_assert_eq!(
+            vals.len(),
+            self.table_math.n_vals(),
+            "lookup_or_insert_vals: vals must fill every value column"
+        );
+        let timestamp = MergeVal::Constant(Value::from_usize(state.read_counter(self.timestamp)));
+        let mut merge_vals = SmallVec::<[MergeVal; 4]>::new();
+        merge_vals.extend(vals.iter().map(|v| MergeVal::Constant(*v)));
+        merge_vals.push(timestamp);
+        if self.table_math.subsume {
+            merge_vals.push(MergeVal::Constant(NOT_SUBSUMED));
+        }
+        state.predict_col(
+            self.table,
+            key,
+            merge_vals.iter().copied(),
+            ColumnId::from_usize(self.table_math.ret_val_col()),
+        )
+    }
+
     /// Insert a row into this table.
     pub fn insert(&self, state: &mut ExecutionState, row: impl Iterator<Item = Value>) {
         let ts = Value::from_usize(state.read_counter(self.timestamp));
@@ -2024,7 +2730,9 @@ impl TableAction {
         state.stage_remove(self.table, key);
     }
 
-    /// Subsume a row in this table.
+    /// Subsume a row in a table with subsumption enabled. For a constructor,
+    /// the configured default is inserted if the key is absent. Rows predicted
+    /// earlier in the same action are reused.
     pub fn subsume(&self, state: &mut ExecutionState, key: impl Iterator<Item = Value>) {
         assert!(
             self.table_math.subsume,
@@ -2032,9 +2740,15 @@ impl TableAction {
         );
         let ts = Value::from_usize(state.read_counter(self.timestamp));
         let mut scratch = key.collect::<SmallVec<[_; 8]>>();
-        let values = self
-            .lookup_values(state, &scratch)
-            .expect("subsume lookup failed");
+        let values = if self.table_math.n_vals() == 1 {
+            vec![
+                self.lookup_or_insert(state, &scratch)
+                    .expect("subsume lookup failed"),
+            ]
+        } else {
+            self.lookup_values(state, &scratch)
+                .expect("subsume lookup failed")
+        };
         scratch.extend(values);
         scratch.push(ts);
         scratch.push(SUBSUMED);
@@ -2072,7 +2786,9 @@ fn run_rules_impl(
     rules: &[RuleId],
     next_ts: Timestamp,
     report_level: ReportLevel,
-) -> Result<RuleSetReport> {
+    context: ExternalContext<'_>,
+) -> Result<(Duration, RuleSetReport)> {
+    let assembly_timer = Instant::now();
     for rule in rules {
         let info = &mut rule_info[*rule];
         if info.cached_plan.is_none() {
@@ -2088,7 +2804,11 @@ fn run_rules_impl(
         info.last_run_at = next_ts;
     }
     let ruleset = rsb.build();
-    Ok(db.run_rule_set(&ruleset, report_level))
+    let assembly_time = assembly_timer.elapsed();
+    Ok((
+        assembly_time,
+        db.run_rule_set(&ruleset, report_level, context),
+    ))
 }
 
 // These markers are just used to make it easy to distinguish time spent in
@@ -2153,15 +2873,12 @@ struct Panic(String, SideChannel<String>);
 impl EGraph {
     /// Create a new `ExternalFunction` that panics with the given message.
     pub fn new_panic(&mut self, message: String) -> ExternalFunctionId {
-        if let Some(cached) = self.panic_funcs.get_mut(&message) {
-            cached.references += 1;
-            return cached.id;
+        if let Some(cached) = self.panic_funcs.get(&message) {
+            return *cached;
         }
         let panic = Panic(message.clone(), self.panic_message.clone());
         let id = self.db.add_external_function(Box::new(panic));
-        self.panic_func_ids.insert(id, message.clone());
-        self.panic_funcs
-            .insert(message, CachedPanic { id, references: 1 });
+        self.panic_funcs.insert(message, id);
         id
     }
 
@@ -2227,6 +2944,65 @@ struct SchemaMath {
     func_cols: usize,
     /// Opt-in identity-column guard (see [`FunctionConfig::n_identity_vals`]).
     n_identity_vals: Option<usize>,
+}
+
+/// What a `mint-<Relation>!` primitive would do, kept so the rule builder can
+/// lower a call site to a batched [`core_relations`] instruction.
+#[derive(Clone)]
+struct MintSpec {
+    table_name: String,
+    n_args: usize,
+    vals: Vec<Value>,
+    counter: CounterId,
+}
+
+/// What a `set-if-empty-<View>!` primitive would do, kept so the rule builder
+/// can lower a call site to the existing `LookupOrInsertDefault` instruction.
+#[derive(Clone)]
+struct SetIfEmptySpec {
+    view_name: String,
+    n_keys: usize,
+    out_arity: usize,
+}
+
+/// A lowered `set-if-empty`: the view table plus the layout its default row needs.
+#[derive(Clone)]
+pub(crate) struct SetIfEmptyPlan {
+    pub(crate) table: TableId,
+    pub(crate) n_keys: usize,
+    pub(crate) ret_val_col: ColumnId,
+    pub(crate) subsume: bool,
+}
+
+/// What a view-column read (`view-proof-<View>`, `@UF_<S>_canon`,
+/// `@UF_<S>_canon_proof`) would do, kept so the rule builder can lower a call
+/// site to the existing `LookupWithDefault` instruction.
+#[derive(Clone)]
+struct ViewColSpec {
+    view_name: String,
+    n_keys: usize,
+    col_idx: usize,
+}
+
+/// A lowered view-column read: which table and which physical column.
+#[derive(Clone)]
+pub(crate) struct ViewColPlan {
+    pub(crate) table: TableId,
+    pub(crate) n_keys: usize,
+    pub(crate) dst_col: ColumnId,
+}
+
+/// A lowered mint: what the rule builder needs to stage the row.
+#[derive(Clone)]
+pub(crate) struct MintInsertPlan {
+    pub(crate) table: TableId,
+    /// Constant value columns written after the minted id.
+    pub(crate) tail: Vec<Value>,
+    /// Counter minting the fresh id.
+    pub(crate) counter: CounterId,
+    pub(crate) math: SchemaMath,
+    /// The column the minted id lands in.
+    pub(crate) minted_col: ColumnId,
 }
 
 /// A struct containing possible non-key portions of a table row. To be used with

@@ -1,2 +1,5 @@
 # Syrupy's Amber serializer indents blank snapshot lines by design.
 tests/__snapshots__/*.ambr -whitespace
+
+# Imported PLDI artifact facts are data inputs, not hand-reviewed source.
+benchmarks/data/pointer-analysis-initdb/*.csv linguist-generated=true

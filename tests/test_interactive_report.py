@@ -21,7 +21,7 @@ from benchmarking.reports.interactive_runtime import (
     scope_for_comparison,
 )
 from benchmarking.reports.presentation import build_report_catalog
-from benchmarking.reports.store import ReportRecord, ReportStore
+from benchmarking.reports.store import ReportRecord, ReportStore, serialize_grouped_report
 
 from .report_fixtures import make_endpoint, make_record, write_report
 
@@ -33,10 +33,10 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     files = cast(list[dict[str, JsonValue]], selectors["files"])
 
     assert {endpoint["label"] for endpoint in endpoints} == {
-        "alternative · abc123 · dd/proofs",
-        "baseline · abc123 · main/off",
-        "candidate · abc123 · main/proofs",
-        "historical · abc123 · main/term",
+        "alternative · abc123 · proofs/nee",
+        "baseline · abc123 · off/nee",
+        "candidate · abc123 · proofs/nee",
+        "historical · abc123 · term/nee",
     }
     assert {file["label"] for file in files} == {"one.egg", "two.egg", "three.egg"}
     assert selectors["timeouts_sec"] == [60, 120]
@@ -44,7 +44,7 @@ def test_runtime_discovers_entire_cache_and_retargets_all_sections(tmp_path: Pat
     assert selectors["max_rounds"] == 2
     assert _section_ids(payload) == ["selection", "summary", "files", "phases", "rulesets"]
 
-    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "dd")
+    alternative = next(endpoint for endpoint in endpoints if endpoint["target"] == "alternative")
     baseline = next(endpoint for endpoint in endpoints if endpoint["treatment"] == "off")
     first_file = next(file for file in files if file["label"] == "one.egg")
     second_file = next(file for file in files if file["label"] == "two.egg")
@@ -76,7 +76,7 @@ def test_incomplete_scope_publishes_missing_cells_but_invalid_scope_rolls_back(t
     selectors = cast(dict[str, JsonValue], payload["selectors"])
     endpoints = cast(list[dict[str, JsonValue]], selectors["endpoints"])
     files = cast(list[dict[str, JsonValue]], selectors["files"])
-    alternative = next(endpoint for endpoint in endpoints if endpoint["backend"] == "dd")
+    alternative = next(endpoint for endpoint in endpoints if endpoint["target"] == "alternative")
     baseline = next(endpoint for endpoint in endpoints if endpoint["treatment"] == "off")
     first_file = next(file for file in files if file["label"] == "one.egg")
 
@@ -175,7 +175,7 @@ def test_runtime_uses_loaded_snapshot_without_reparsing_jsonl(tmp_path: Path) ->
     assert cast(dict[str, JsonValue], updated["selectors"])["rounds"] == 1
 
 
-def test_html_embeds_exact_jsonl_initial_catalog_runtime_and_safe_data(tmp_path: Path) -> None:
+def test_html_embeds_exact_grouped_snapshot_initial_catalog_runtime_and_safe_data(tmp_path: Path) -> None:
     _runtime, _payload, store, comparison = _interactive_case(tmp_path)
     unsafe = make_record(
         99,
@@ -190,16 +190,19 @@ def test_html_embeds_exact_jsonl_initial_catalog_runtime_and_safe_data(tmp_path:
     store.append(unsafe)
     destination = tmp_path / "nested" / "report.html"
 
-    written = interactive.write_interactive_report(store, comparison, destination)
+    written = interactive.write_interactive_report(store.grouped_report(), comparison, destination)
 
     assert written == destination.resolve()
     assert not list(destination.parent.glob(f".{destination.name}.*.tmp"))
     html = destination.read_text(encoding="utf-8")
     envelope = _embedded_envelope(html)
-    assert base64.b64decode(cast(str, envelope["report_jsonl_base64"])) == store.path.read_bytes()
+    assert base64.b64decode(cast(str, envelope["report_grouped_base64"])) == serialize_grouped_report(
+        store.grouped_report()
+    )
     assert cast(str, envelope["pyodide_base_url"]) == interactive.PYODIDE_BASE_URL
     assert set(cast(dict[str, str], envelope["python_modules"])) == {
         "benchmarking/__init__.py",
+        "benchmarking/engines.py",
         "benchmarking/models.py",
         "benchmarking/reports/__init__.py",
         "benchmarking/reports/analysis.py",
@@ -253,36 +256,97 @@ def test_initial_html_uses_native_provenance_file_order_and_selector_labels(tmp_
     )
     destination = tmp_path / "native-comparison.html"
 
-    interactive.write_interactive_report(store, comparison, destination)
+    interactive.write_interactive_report(store.grouped_report(), comparison, destination)
 
     envelope = _embedded_envelope(destination.read_text(encoding="utf-8"))
     initial_scope = cast(dict[str, JsonValue], envelope["initial_scope"])
     initial_payload = cast(dict[str, JsonValue], envelope["initial_payload"])
-    assert initial_payload["sections"] == _catalog_payload(build_report_catalog(store, comparison, "rulesets"))
+    assert initial_payload["sections"] == _catalog_payload(
+        build_report_catalog(store.grouped_report(), comparison, "rulesets")
+    )
     selectors = cast(dict[str, JsonValue], initial_payload["selectors"])
     endpoints = cast(list[dict[str, JsonValue]], selectors["endpoints"])
     assert endpoints[:2] == [
         {
             "id": initial_scope["baseline_endpoint_id"],
-            "label": "feedface0001 dirty · main/off",
+            "label": "feedface0001 dirty · off/nee",
             "target": "feedface0001",
             "git_sha": "feedface0001",
             "dirty": True,
-            "backend": "main",
             "treatment": "off",
         },
         {
             "id": initial_scope["candidate_endpoint_id"],
-            "label": "working-candidate · feedface0002 · main/proofs",
+            "label": "working-candidate · feedface0002 · proofs/nee",
             "target": "working-candidate",
             "git_sha": "feedface0002",
             "dirty": False,
-            "backend": "main",
             "treatment": "proofs",
         },
     ]
     files = cast(list[dict[str, JsonValue]], selectors["files"])
     assert [file["label"] for file in files if file["selected"]] == ["two.egg", "one.egg"]
+
+
+@pytest.mark.parametrize("native_only", [False, True], ids=["mixed", "native-only"])
+def test_grouped_runtime_restores_logical_workload_physical_input_bindings(tmp_path: Path, native_only: bool) -> None:
+    physical = models.FileSpec("source.in", tmp_path / "source.in", "sha256:native-input")
+    logical = models.FileSpec(
+        "source.egg",
+        tmp_path / "source.egg",
+        "sha256:egglog-input",
+        engine_inputs=(("egg-de", physical), ("egg-ee", physical)),
+    )
+    baseline = make_endpoint(binary_sha256="sha256:baseline", treatment="off")
+    if native_only:
+        baseline = models.BenchmarkEndpoint(
+            replace(baseline.target, engine_binaries=(models.EngineBinary("egg-ee", "sha256:baseline", None),)),
+            "egg-ee",
+        )
+    target = replace(
+        baseline.target,
+        engine_binaries=(models.EngineBinary("egg-de", "sha256:native", None),),
+    )
+    candidate = models.BenchmarkEndpoint(target, "egg-de")
+    comparison = models.ComparisonSpec(baseline, candidate, (logical,), 1, 120)
+    path = tmp_path / "report.jsonl"
+    records: list[ReportRecord] = []
+    for endpoint, file in ((baseline, physical if native_only else logical), (candidate, physical)):
+        record = make_record(
+            len(records),
+            started_at="2026-09-30T00:00:00Z",
+            binary_sha256=endpoint.target.binary_sha256_for(endpoint.treatment),
+            treatment=endpoint.treatment,
+            file_sha256=file.sha256,
+        )
+        record["file_path"] = file.display_path
+        records.append(record)
+    write_report(path, *records)
+    snapshot = ReportStore(path).grouped_report()
+    if native_only:
+        assert {group["key"]["file_sha256"] for group in snapshot.data["groups"]} == {physical.sha256}
+    grouped_path = tmp_path / "grouped.json"
+    grouped_path.write_bytes(serialize_grouped_report(snapshot))
+    destination = tmp_path / "report.html"
+    interactive.write_interactive_report(snapshot, comparison, destination)
+    envelope = _embedded_envelope(destination.read_text())
+    scope = cast(dict[str, JsonValue], envelope["initial_scope"])
+
+    runtime = InteractiveRuntime.from_path(grouped_path, str(path), json.dumps(scope))
+
+    expected = _catalog_payload(build_report_catalog(snapshot, comparison, "rulesets"))
+    assert envelope["initial_payload"]["sections"] == expected
+    assert runtime.payload()["sections"] == expected
+    assert "missing 1 row(s)" not in json.dumps(runtime.payload())
+    swapped = scope | {
+        "baseline_endpoint_id": scope["candidate_endpoint_id"],
+        "candidate_endpoint_id": scope["baseline_endpoint_id"],
+    }
+    assert runtime.apply(swapped)["sections"] == _catalog_payload(
+        build_report_catalog(snapshot, replace(comparison, baseline=candidate, candidate=baseline), "rulesets")
+    )
+    assert runtime.apply(scope)["sections"] == expected
+    assert grouped_path.read_bytes() == serialize_grouped_report(snapshot)
 
 
 def test_interactive_path_and_best_effort_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -308,7 +372,7 @@ def test_write_rejects_the_jsonl_path_itself(tmp_path: Path) -> None:
     before = store.path.read_bytes()
 
     with pytest.raises(ValueError, match="must differ"):
-        interactive.write_interactive_report(store, comparison, store.path)
+        interactive.write_interactive_report(store.grouped_report(), comparison, store.path)
 
     assert store.path.read_bytes() == before
 
@@ -342,7 +406,6 @@ def _interactive_case(
         make_endpoint(
             target_label="alternative",
             binary_sha256="sha256:alternative",
-            backend="dd",
             treatment="proofs",
         ),
         make_endpoint(target_label="historical", binary_sha256="sha256:historical", treatment="term"),
@@ -358,7 +421,6 @@ def _interactive_case(
             target_label=endpoint.target.row.label,
             binary_sha256=endpoint.target.binary_sha256,
             file_sha256=file.sha256,
-            backend=endpoint.backend,
             treatment=endpoint.treatment,
             timeout_sec=timeout_sec,
             wall_sec=1.0 + endpoint_order * 0.2 + file_order * 0.1 + round_index * 0.01,
@@ -376,7 +438,7 @@ def _interactive_case(
     comparison = models.ComparisonSpec(endpoints[0], endpoints[1], files[:2], 2, 120)
     store = ReportStore(report_path)
     runtime = InteractiveRuntime(
-        store,
+        store.grouped_report(),
         scope_for_comparison(comparison),
     )
     return runtime, runtime.payload(), store, comparison

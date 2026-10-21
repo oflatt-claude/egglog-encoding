@@ -327,6 +327,19 @@ impl ProofStore {
                     changed = true;
                 }
             }
+            Justification::Proj {
+                proof: base,
+                child_index,
+            } => {
+                let mapped_base = f(self, *base);
+                if mapped_base != *base {
+                    *base = mapped_base;
+                    let child = self.term_child(self.get(*base).rhs(), *child_index);
+                    proof.proposition.lhs = child;
+                    proof.proposition.rhs = child;
+                    changed = true;
+                }
+            }
             Justification::ContainerNormalize { proof: inner } => {
                 let mapped_inner = f(self, *inner);
                 if mapped_inner != *inner {
@@ -383,6 +396,10 @@ impl Proof {
             } => {}
             Justification::Trans(_, _) => {}
             Justification::Sym(_) => {}
+            Justification::Proj {
+                proof: _,
+                child_index: _,
+            } => {}
             Justification::ContainerNormalize { proof: _ } => {}
             // The only term (the result) lives in the proposition, already mapped.
             Justification::Eval => {}

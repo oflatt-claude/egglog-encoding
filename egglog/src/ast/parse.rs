@@ -380,8 +380,7 @@ impl Parser {
                 // Parse sort - the :internal-* annotations and container sorts are mutually exclusive
                 // (sort <name>)
                 // (sort <name> :internal-uf <uf-function>)
-                // (sort <name> :internal-proof-func <internal-proof-func-name>)
-                // (sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat>)
+                // (sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj> <proj-prim>)
                 // (sort <name> (<container sort> <argument sort>*))
                 match tail {
                     [name] => vec![Command::Sort {
@@ -389,31 +388,24 @@ impl Parser {
                         name: self.parse_name(name, "sort name")?,
                         presort_and_args: None,
                         uf: None,
-                        proof_func: None,
                         container_rebuild: None,
                         proof_constructors: None,
                         unionable: true,
                     }],
                     [name, call @ Sexp::List(..), rest @ ..] => {
                         let (func, args, _) = call.expect_call("container sort declaration")?;
-                        // Container sorts may carry :internal-proof-func (their
-                        // `<CSort>Proof` table) and an :internal-container-rebuild
-                        // spec (both emitted by the term/proof encoder).
-                        let mut proof_func = None;
+                        // Container sorts may carry an :internal-container-rebuild
+                        // spec (emitted by the term/proof encoder).
                         let mut container_rebuild = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
-                                (":internal-proof-func", [pf]) => {
-                                    proof_func =
-                                        Some(pf.expect_atom("internal-proof-func function name")?);
-                                }
                                 (":internal-container-rebuild", [spec]) => {
                                     container_rebuild = Some(parse_container_rebuild_spec(spec)?);
                                 }
                                 _ => {
                                     return error!(
                                         span,
-                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-proof-func <name>] [:internal-container-rebuild <spec>])"
+                                        "usage:\n(sort <name> (<container sort> <argument sort>*) [:internal-container-rebuild <spec>])"
                                     );
                                 }
                             }
@@ -426,17 +418,15 @@ impl Parser {
                                 map_fallible(args, self, Self::parse_expr)?,
                             )),
                             uf: None,
-                            proof_func,
                             container_rebuild,
                             proof_constructors: None,
                             unionable: true,
                         }]
                     }
                     [name, rest @ ..] => {
-                        // Parse :internal-uf / :internal-proof-func and the
-                        // :internal-proof-names global proof-constructor record.
+                        // Parse :internal-uf and the :internal-proof-names global
+                        // proof-constructor record.
                         let mut uf: Option<(String, Option<String>)> = None;
-                        let mut proof_func = None;
                         let mut proof_constructors = None;
                         for (key, val) in self.parse_options(rest)? {
                             match (key, val) {
@@ -449,13 +439,18 @@ impl Parser {
                                         Some(uf_index.expect_atom("uf index function name")?),
                                     ));
                                 }
-                                (":internal-proof-func", [pf]) => {
-                                    proof_func =
-                                        Some(pf.expect_atom("internal-proof-func function name")?);
-                                }
                                 (
                                     ":internal-proof-names",
-                                    [congr, congr_all, trans, sym, normalize, fiat],
+                                    [
+                                        congr,
+                                        congr_all,
+                                        trans,
+                                        sym,
+                                        normalize,
+                                        fiat,
+                                        proj,
+                                        proj_prim,
+                                    ],
                                 ) => {
                                     proof_constructors = Some(ProofConstructorNames {
                                         congr: congr.expect_atom("congr constructor")?,
@@ -466,12 +461,15 @@ impl Parser {
                                         normalize: normalize
                                             .expect_atom("container-normalize constructor")?,
                                         fiat: fiat.expect_atom("fiat constructor")?,
+                                        proj: proj.expect_atom("proj constructor")?,
+                                        proj_prim: proj_prim
+                                            .expect_atom("proj-prim constructor")?,
                                     });
                                 }
                                 _ => {
                                     return error!(
                                         span,
-                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-constructor> [<uf-index>])\n(sort <name> :internal-proof-func <internal-proof-func-name>)\n(sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat>)\n(sort <name> (<container sort> <argument sort>*))"
+                                        "usages:\n(sort <name>)\n(sort <name> :internal-uf <uf-constructor> [<uf-index>])\n(sort <name> :internal-proof-names <congr> <congr-all> <trans> <sym> <normalize> <fiat> <proj> <proj-prim>)\n(sort <name> (<container sort> <argument sort>*))"
                                     );
                                 }
                             }
@@ -481,7 +479,6 @@ impl Parser {
                             name: self.parse_name(name, "sort name")?,
                             presort_and_args: None,
                             uf,
-                            proof_func,
                             container_rebuild: None,
                             proof_constructors,
                             unionable: true,
@@ -512,7 +509,7 @@ impl Parser {
                     let mut merge = None;
                     let mut hidden = false;
                     let mut let_binding = false;
-                    let mut term_constructor = None;
+                    let mut internal_view = None;
                     let mut unextractable = false;
                     let mut identity_vals = None;
                     let mut cost = None;
@@ -570,8 +567,19 @@ impl Parser {
                             (":internal-hidden", []) => hidden = true,
                             (":internal-let", []) => let_binding = true,
                             (":unextractable", []) => unextractable = true,
-                            (":internal-term-constructor", [tc]) => {
-                                term_constructor = Some(tc.expect_atom("term constructor name")?)
+                            (":internal-view", [kind]) => {
+                                internal_view =
+                                    Some(match kind.expect_atom("view kind")?.as_str() {
+                                        "constructor" => ViewKind::Constructor,
+                                        "function" => ViewKind::Function,
+                                        other => {
+                                            return error!(
+                                                span,
+                                                "unknown :internal-view kind {other}, expected \
+                                             `constructor` or `function`"
+                                            );
+                                        }
+                                    })
                             }
                             (":internal-identity-vals", [k]) => {
                                 identity_vals =
@@ -597,7 +605,7 @@ impl Parser {
                         merge,
                         hidden,
                         let_binding,
-                        term_constructor,
+                        internal_view,
                         unextractable,
                         identity_vals,
                         cost,
@@ -617,7 +625,7 @@ impl Parser {
                 // (constructor <name> (<input sort>*) <output sort>)
                 // (constructor <name> (<input sort>*) <output sort> :cost <cost>)
                 // (constructor <name> (<input sort>*) <output sort> :unextractable)
-                // (constructor <name> (<input sort>*) <output sort> :internal-term-constructor <constructor name>)
+                // (constructor <name> (<input sort>*) <output sort>)
                 match tail {
                     [name, inputs, output, rest @ ..] => {
                         let mut cost = None;
@@ -642,7 +650,6 @@ impl Parser {
                             unextractable,
                             hidden,
                             let_binding,
-                            term_constructor: None,
                         }]
                     }
                     _ => {
@@ -662,6 +669,26 @@ impl Parser {
                     })?,
                 }],
                 _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
+            },
+            "index" => match tail {
+                [name, function, key] => {
+                    let key = key.expect_list("index key")?;
+                    let [extractor, cols @ ..] = key else {
+                        return error!(span, "usage: (index <name> <function> (any <column>*))");
+                    };
+                    if extractor.expect_atom("index extractor")? != "any" {
+                        return error!(span, "the only index extractor is `any`");
+                    }
+                    vec![Command::Index {
+                        span,
+                        name: self.parse_name(name, "index name")?,
+                        function: function.expect_atom("indexed function name")?,
+                        any_of: map_fallible(cols, self, |_, sexp| {
+                            sexp.expect_uint("index column")
+                        })?,
+                    }]
+                }
+                _ => return error!(span, "usage: (index <name> <function> (any <column>*))"),
             },
             "ruleset" => match tail {
                 [name] => vec![Command::AddRuleset(span, name.expect_atom("ruleset name")?)],
@@ -966,7 +993,21 @@ impl Parser {
                     span,
                     name: name.expect_atom("table name")?,
                     file: file.expect_string("file name")?,
+                    proof_base: None,
                 }],
+                // `:internal-proof-base` survives a re-parse of the encoded
+                // program, which is where the loader reads it (see
+                // `EGraph::native_input`).
+                [name, file, base_kw, base]
+                    if base_kw.expect_atom("keyword")? == ":internal-proof-base" =>
+                {
+                    vec![Command::Input {
+                        span,
+                        name: name.expect_atom("table name")?,
+                        file: file.expect_string("file name")?,
+                        proof_base: Some(base.expect_uint("proof base")?),
+                    }]
+                }
                 _ => return error!(span, "usage: (input <table name> \"<file name>\")"),
             },
             "output" => match tail {
@@ -1522,6 +1563,53 @@ mod tests {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
         let e = Parser::default().get_expr_from_string(None, s).unwrap();
         assert_eq!(format!("{e}"), s);
+    }
+
+    /// The proof encoding declares its views with `:internal-view`, and
+    /// round-tripping a program through `Display` has to preserve them.
+    #[test]
+    fn a_view_declaration_round_trips_through_display() {
+        for kind in ["constructor", "function"] {
+            let s = format!("(function V (i64) i64 :no-merge :internal-view {kind})");
+            let parsed = Parser::default().get_program_from_string(None, &s).unwrap();
+            assert_eq!(format!("{}", parsed[0]), s);
+        }
+    }
+
+    #[test]
+    fn test_file_command_display_roundtrip() {
+        let file = "quoted\"-backslash\\-combining\u{300}";
+        let commands = [
+            Command::PrintOverallStatistics(Span::Panic, Some(file.into())),
+            Command::PrintFunction(
+                Span::Panic,
+                "f".into(),
+                None,
+                Some(file.into()),
+                PrintFunctionMode::Default,
+            ),
+            Command::Input {
+                span: Span::Panic,
+                name: "f".into(),
+                file: file.into(),
+                proof_base: None,
+            },
+            Command::Output {
+                span: Span::Panic,
+                file: file.into(),
+                exprs: vec![],
+            },
+            Command::Include(Span::Panic, file.into()),
+        ];
+
+        for command in commands {
+            let displayed = command.to_string();
+            let reparsed = Parser::default()
+                .get_program_from_string(None, &displayed)
+                .unwrap();
+            assert_eq!(reparsed.len(), 1);
+            assert_eq!(reparsed[0].to_string(), displayed);
+        }
     }
 
     #[test]

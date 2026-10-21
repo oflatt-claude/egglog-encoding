@@ -23,14 +23,8 @@ from rich.console import Console
 from rich.text import Text
 
 from . import samply_analysis
-from .models import (
-    BACKEND_SPECS,
-    Backend,
-    FileSpec,
-    TargetRequest,
-    Treatment,
-    validate_backend_treatment,
-)
+from .engines import TREATMENT_SPECS, TREATMENTS, Treatment, validate_engine_workload
+from .models import FileSpec, TargetRequest
 from .processes import run_command, terminate_process_group
 from .targets import git_root_for_path, parse_target, resolve_profile_target, workload_command
 from .workloads import require_workload_unchanged, resolve_files
@@ -40,7 +34,7 @@ DEFAULT_PROFILE_SECONDS = 10
 DEFAULT_PROFILE_TOP = 15
 DEFAULT_TIMEOUT_SEC = 120
 MAX_PROFILE_ITERATIONS = 10_000
-PROFILE_CACHE_VERSION = "v3"
+PROFILE_CACHE_VERSION = "v4"
 PROFILE_SAMPLY_RATE_HZ = 1000
 OutputFormat = Literal["rich", "markdown"]
 
@@ -66,7 +60,6 @@ class ProfileRequest:
 
     file: FileSpec
     target_request: TargetRequest
-    backend: Backend
     treatment: Treatment
     timeout_sec: int
     profiles_dir: Path
@@ -82,9 +75,9 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse profile arguments without importing the benchmark data stack."""
     parser = argparse.ArgumentParser(
         prog=f"{Path(sys.argv[0]).name} profile",
-        description="Record or reuse a cached Samply CPU profile for one egglog workload.",
+        description="Record or reuse a cached Samply CPU profile for one benchmark workload.",
     )
-    parser.add_argument("file", help="egglog file to profile")
+    parser.add_argument("file", help="benchmark workload file to profile")
     parser.add_argument(
         "--fact-directory",
         default=None,
@@ -96,14 +89,8 @@ def parse_profile_args(argv: Sequence[str]) -> argparse.Namespace:
         help="target source: ., /path, @git-ref, #pr, or label=source; cache-only label= is not supported",
     )
     parser.add_argument(
-        "--backend",
-        choices=tuple(BACKEND_SPECS),
-        default="main",
-        help="backend to profile (default: main)",
-    )
-    parser.add_argument(
         "--treatment",
-        choices=("off", "term", "proofs", "proof-extraction"),
+        choices=TREATMENTS,
         default="proofs",
         help="treatment to profile (default: proofs)",
     )
@@ -171,7 +158,6 @@ def profile_cache_path(
     profiles_dir: Path,
     binary_sha256: str,
     file_sha256: str,
-    backend: Backend,
     treatment: Treatment,
     mode: ProfileMode,
     fact_directory_sha256: str = "",
@@ -182,7 +168,7 @@ def profile_cache_path(
         / profile_hash_component(binary_sha256)
         / profile_hash_component(file_sha256)
         / (profile_hash_component(fact_directory_sha256) if fact_directory_sha256 else "no-facts")
-        / f"{backend}-{treatment}-{mode.cache_label}.json.gz"
+        / f"{treatment}-{mode.cache_label}.json.gz"
     )
 
 
@@ -213,7 +199,6 @@ def calculate_profile_iterations(
 
 def profile_name(
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
     mode: ProfileMode,
     iterations: int,
@@ -223,7 +208,7 @@ def profile_name(
     file_hash = profile_hash_component(file_spec.sha256)[:8]
     binary_hash = profile_hash_component(binary_sha256)[:8]
     mode_label = mode.cache_label if mode.iterations is not None else f"auto>={mode.profile_seconds}s"
-    return f"{stem} {backend}/{treatment} {mode_label} x{iterations} [bin:{binary_hash} file:{file_hash}]"
+    return f"{stem} {treatment} {mode_label} x{iterations} [bin:{binary_hash} file:{file_hash}]"
 
 
 def profile_temp_path(artifact: Path) -> Path:
@@ -329,9 +314,9 @@ def open_samply_profile(artifact: Path, checkout_path: Path) -> None:
 
 def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> ProfileRequest:
     files = resolve_files([str(args.file)], invocation_cwd, args.fact_directory)
-    backend = cast(Backend, str(args.backend))
     treatment = cast(Treatment, str(args.treatment))
-    validate_backend_treatment(backend, treatment)
+    file = files[0].for_engine(TREATMENT_SPECS[treatment].engine)
+    validate_engine_workload(file, treatment)
     if args.iterations is not None:
         mode = ProfileMode(iterations=args.iterations, profile_seconds=None)
     else:
@@ -341,9 +326,8 @@ def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> P
     if not profiles_dir.is_absolute():
         profiles_dir = invocation_cwd / profiles_dir
     request = ProfileRequest(
-        file=files[0],
+        file=file,
         target_request=parse_target(str(args.target)),
-        backend=backend,
         treatment=treatment,
         timeout_sec=int(args.timeout_sec),
         profiles_dir=profiles_dir,
@@ -359,16 +343,17 @@ def resolve_profile_request(args: argparse.Namespace, invocation_cwd: Path) -> P
 
 def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path, repo_root: Path) -> None:
     request = resolve_profile_request(args, invocation_cwd)
-    target = resolve_profile_target(request.target_request, request.backend, invocation_cwd, repo_root, console)
-    if target.binary_path is None:
+    target = resolve_profile_target(request.target_request, request.treatment, invocation_cwd, repo_root, console)
+    binary_path = target.binary_path_for(request.treatment)
+    binary_sha256 = target.binary_sha256_for(request.treatment)
+    if binary_path is None:
         raise ValueError(f"target {target.display_label} needs a profiling binary")
     checkout_path = Path(target.row.path)
-    workload = workload_command(target.binary_path, request.file, request.backend, request.treatment)
+    workload = workload_command(binary_path, request.file, request.treatment)
     artifact = profile_cache_path(
         request.profiles_dir,
-        target.binary_sha256,
+        binary_sha256,
         request.file.sha256,
-        request.backend,
         request.treatment,
         request.mode,
         request.file.fact_directory_sha256,
@@ -393,7 +378,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
                     ("Calibrating", "bold"),
                     " ",
                     request.file.display_path,
-                    f" {request.backend}/{request.treatment} for {request.mode.profile_seconds}s",
+                    f" {request.treatment} for {request.mode.profile_seconds}s",
                 )
             )
             calibration = run_command(workload, checkout_path, request.timeout_sec)
@@ -416,11 +401,10 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
         assert iterations is not None
         name = profile_name(
             request.file,
-            request.backend,
             request.treatment,
             request.mode,
             iterations,
-            target.binary_sha256,
+            binary_sha256,
         )
         console.print(Text.assemble(("Recording profile", "bold"), " ", str(artifact)))
         profile = run_samply_record(
@@ -439,7 +423,7 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
         summary: samply_analysis.ProfileCpuSummary | None = None
         if sys.platform == "darwin":
             try:
-                summary = samply_analysis.summarize(profile, target.binary_path)
+                summary = samply_analysis.summarize(profile, binary_path)
             except ValueError as error:
                 console.print(Text.assemble(("warning:", "yellow"), " CPU profile summary unavailable: ", str(error)))
             if summary is not None:
@@ -454,7 +438,6 @@ def run_profile(args: argparse.Namespace, console: Console, invocation_cwd: Path
             artifact=display_artifact,
             cache_status=cache_status,
             workload=request.file.display_path,
-            backend=request.backend,
             treatment=request.treatment,
             top=request.top,
             cpu_summary=summary,

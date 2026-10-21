@@ -1,7 +1,7 @@
 use std::{
     fmt::Debug,
     hash::Hash,
-    iter, slice,
+    slice,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -11,8 +11,7 @@ use std::{
 
 use crate::core_relations;
 use crate::core_relations::{
-    ContainerValue, ExternalFunctionId, SortedWritesTable, Value, ValueRebuilder,
-    make_external_func,
+    ContainerValue, ExternalFunctionId, Value, ValueRebuilder, make_external_func,
 };
 use crate::numeric_id::NumericId;
 use log::debug;
@@ -21,195 +20,221 @@ use once_cell::sync::Lazy;
 
 use crate::{
     ColumnTy, DefaultVal, EGraph, FunctionConfig, FunctionId, MergeAction, MergeFn, QueryEntry,
-    TableAction, add_expressions, define_rule,
+    TableAction, TableKind, add_expressions, define_rule,
 };
 
-#[test]
-fn dropped_rule_builder_releases_panics() {
-    let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let register = |egraph: &mut EGraph| {
-        egraph.register_external_func(Box::new(make_external_func(
-            |state: &mut core_relations::ExecutionState<'_>, _args: &[Value]| {
-                Some(state.base_values().get(()))
-            },
-        )))
-    };
-    let target = register(&mut egraph);
-    let reusable = register(&mut egraph);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    builder.call_external_func(target, &[], ColumnTy::Base(unit_type), || "failed".into());
-    drop(builder);
-
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    assert_eq!(builder.new_panic("direct panic".into()), reusable);
-    drop(builder);
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    builder.panic("rule panic".into());
-    drop(builder);
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let mut builder = egraph.new_rule("dropped", false);
-    let first = builder.new_panic("shared panic".into());
-    let second = builder.new_panic("shared panic".into());
-    assert_eq!(first, reusable);
-    assert_eq!(second, reusable);
-    drop(builder);
-    assert_eq!(register(&mut egraph), reusable);
-    egraph.free_external_func(reusable);
-
-    let rule = {
-        let mut builder = egraph.new_rule("built", false);
-        builder.panic("built panic".into());
-        builder.build()
-    };
-    let occupied = register(&mut egraph);
-    assert_ne!(occupied, reusable);
-    egraph.free_external_func(occupied);
-    egraph.free_rule(rule);
-    assert_eq!(register(&mut egraph), reusable);
-}
-
-#[test]
-fn removing_last_table_restores_shadowed_registry_entry_and_id() {
-    let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let unit = egraph.base_values().get(());
-    let config = || FunctionConfig {
-        schema: vec![ColumnTy::Base(unit_type)],
+fn valid_flat_config(name: &str) -> FunctionConfig {
+    FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
         n_vals: 1,
         n_identity_vals: None,
-        default: DefaultVal::Const(unit),
-        merge: MergeFn::AssertEq,
-        name: "temporary".into(),
-        can_subsume: false,
-    };
-
-    let original = egraph.add_table(config());
-    let original_action = egraph
-        .action_registry()
-        .read()
-        .unwrap()
-        .lookup_table("temporary")
-        .unwrap()
-        .clone();
-    let temporary = egraph.add_table(config());
-
-    egraph.remove_last_table(temporary).unwrap();
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("temporary"),
-        Some(&original_action)
-    );
-    assert_eq!(egraph.add_table(config()), temporary);
-    assert_ne!(original, temporary);
-}
-
-#[test]
-fn removing_unknown_or_non_last_function_preserves_registrations() {
-    let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let unit = egraph.base_values().get(());
-    let config = |name: &str| FunctionConfig {
-        schema: vec![ColumnTy::Base(unit_type)],
-        n_vals: 1,
-        n_identity_vals: None,
-        default: DefaultVal::Const(unit),
+        default: DefaultVal::Fail,
         merge: MergeFn::AssertEq,
         name: name.into(),
         can_subsume: false,
-    };
-    let first = egraph.add_table(config("first"));
-    let second = egraph.add_table(config("second"));
-    let first_action = TableAction::new(&egraph, first);
-    let second_action = TableAction::new(&egraph, second);
+    }
+}
 
-    assert!(egraph.remove_last_table(FunctionId::new(u32::MAX)).is_err());
-    assert_eq!(egraph.table_size(first), 0);
-    assert_eq!(egraph.table_size(second), 0);
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("first"),
-        Some(&first_action)
-    );
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("second"),
-        Some(&second_action)
-    );
-
-    assert!(egraph.remove_last_table(first).is_err());
-    assert_eq!(egraph.table_size(first), 0);
-    assert_eq!(egraph.table_size(second), 0);
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("first"),
-        Some(&first_action)
-    );
-    assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("second"),
-        Some(&second_action)
+#[test]
+fn flat_storage_accepts_append_and_scan_semantics() {
+    let mut egraph = EGraph::default();
+    let table = egraph.add_internal_flat_table(valid_flat_config("flat"));
+    assert!(egraph.table_is_flat(table));
+    assert!(egraph.funcs[table].incremental_rebuild_rules.is_empty());
+    assert_ne!(
+        egraph.funcs[table].nonincremental_rebuild_rule,
+        crate::RuleId::new(!0)
     );
 }
 
 #[test]
-fn failed_database_table_removal_restores_function_registration() {
+fn mint_batches_preserve_rows_and_fresh_ids() {
+    for n_args in [0, 2, 12] {
+        let mut egraph = EGraph::default();
+        let int = egraph.base_values_mut().register_type::<i64>();
+        let unit_ty = egraph.base_values_mut().register_type::<()>();
+        let unit = egraph.base_values_mut().get(());
+        // Mint primitives can be registered before their destination table.
+        let mint = egraph.register_mint_row("proof-row".into(), n_args, vec![unit]);
+        let mut schema = vec![ColumnTy::Base(int); n_args];
+        schema.extend([ColumnTy::Id, ColumnTy::Base(unit_ty)]);
+        let proof = egraph.add_internal_flat_table(FunctionConfig {
+            schema,
+            n_vals: 1,
+            n_identity_vals: None,
+            default: DefaultVal::Fail,
+            merge: MergeFn::AssertEq,
+            name: "proof-row".into(),
+            can_subsume: false,
+        });
+        let input = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Base(int), ColumnTy::Id],
+            n_vals: 1,
+            n_identity_vals: None,
+            default: DefaultVal::FreshId,
+            merge: MergeFn::AssertEq,
+            name: "input".into(),
+            can_subsume: false,
+        });
+        let output = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Base(int), ColumnTy::Id, ColumnTy::Id],
+            n_vals: 2,
+            n_identity_vals: None,
+            default: DefaultVal::Fail,
+            merge: MergeFn::Columns(vec![MergeFn::AssertEq, MergeFn::AssertEq]),
+            name: "output".into(),
+            can_subsume: false,
+        });
+        let fixed = egraph.base_value_constant(42i64);
+        let rule = {
+            let mut rb = egraph.new_rule("mint twice", true);
+            let x: QueryEntry = rb.new_var(ColumnTy::Base(int)).into();
+            let id: QueryEntry = rb.new_var(ColumnTy::Id).into();
+            rb.query_table(input, &[x.clone(), id], Some(false))
+                .unwrap();
+            let args: Vec<_> = (0..n_args)
+                .map(|i| if i % 2 == 0 { x.clone() } else { fixed.clone() })
+                .collect();
+            let a = rb.call_external_func(mint, &args, ColumnTy::Id, String::new);
+            let b = rb.call_external_func(mint, &args, ColumnTy::Id, String::new);
+            rb.set(output, &[x, a.into(), b.into()]);
+            rb.build()
+        };
+        assert!(!egraph.run_rules(&[rule], None).unwrap().changed());
+        let mut used_ids = hashbrown::HashSet::new();
+        for i in 0..600 {
+            let value = egraph.base_values_mut().get(i as i64);
+            used_ids.insert(egraph.add_term(input, &[value]));
+        }
+        assert!(egraph.run_rules(&[rule], None).unwrap().changed());
+        let mut expected = hashbrown::HashMap::new();
+        egraph.for_each(output, |row| {
+            for &id in &row.vals[1..] {
+                assert!(
+                    used_ids.insert(id),
+                    "mint ids must not collide with term ids"
+                );
+                assert!(
+                    expected.insert(id, row.vals[0]).is_none(),
+                    "minted ids must be unique"
+                );
+            }
+        });
+        assert_eq!(expected.len(), 1200);
+        let mut count = 0;
+        egraph.for_each(proof, |row| {
+            let x = expected.remove(&row.vals[n_args]).unwrap();
+            for i in 0..n_args {
+                let expected = if i % 2 == 0 {
+                    x
+                } else {
+                    egraph.base_values().get(42i64)
+                };
+                assert_eq!(row.vals[i], expected);
+            }
+            assert_eq!(row.vals[n_args + 1], unit);
+            count += 1;
+        });
+        assert_eq!(count, 1200);
+        assert!(expected.is_empty());
+        // Scalar calls share the same counter and still stage visible rows.
+        let args = vec![egraph.base_values().get(42i64); n_args];
+        let scalar = egraph
+            .with_execution_state(None, |state| state.call_external_func(mint, &args).unwrap());
+        assert!(used_ids.insert(scalar));
+        assert_ne!(scalar, egraph.fresh_id());
+        egraph.flush_updates();
+        let mut found = false;
+        egraph.for_each(proof, |row| {
+            if row.vals[n_args] == scalar {
+                assert_eq!(&row.vals[..n_args], &args);
+                assert_eq!(row.vals[n_args + 1], unit);
+                found = true;
+            }
+        });
+        assert!(found);
+    }
+}
+
+#[test]
+fn read_projection_is_part_of_table_construction() {
     let mut egraph = EGraph::default();
-    let unit_type = egraph.base_values_mut().register_type::<()>();
-    let unit = egraph.base_values().get(());
-    let function = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Base(unit_type)],
-        n_vals: 1,
-        n_identity_vals: None,
-        default: DefaultVal::Const(unit),
-        merge: MergeFn::AssertEq,
-        name: "function".into(),
-        can_subsume: false,
-    });
-    let action = TableAction::new(&egraph, function);
-    let blocker = egraph.db.add_table(
-        SortedWritesTable::new(1, 1, None, vec![], Box::new(|_, _, _, _| false)),
-        iter::empty(),
-        iter::empty(),
+    let table = egraph.add_table_with_read_projection(
+        FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            n_vals: 1,
+            n_identity_vals: None,
+            default: DefaultVal::Fail,
+            merge: MergeFn::AssertEq,
+            name: "encoded-view".into(),
+            can_subsume: false,
+        },
+        TableKind::Constructor,
+        1,
+        1,
     );
 
-    assert!(egraph.remove_last_table(function).is_err());
-    assert_eq!(egraph.table_size(function), 0);
+    let direct = TableAction::new(&egraph, table);
     assert_eq!(
-        egraph
-            .action_registry()
-            .read()
-            .unwrap()
-            .lookup_table("function"),
-        Some(&action)
+        direct.validate_read_projection(Some(TableKind::Constructor), true),
+        Ok(1)
     );
-    assert!(egraph.db.remove_last_table(blocker));
-    egraph.remove_last_table(function).unwrap();
+
+    let registry = egraph.action_registry().read();
+    let registered = registry.lookup_table("encoded-view").unwrap();
+    assert_eq!(
+        registered.validate_read_projection(Some(TableKind::Constructor), true),
+        Ok(1)
+    );
+}
+
+#[test]
+#[should_panic(expected = "must have exactly one inert value column")]
+fn flat_storage_rejects_multiple_value_columns() {
+    let mut config = valid_flat_config("multiple-values");
+    config.n_vals = 2;
+    EGraph::default().add_internal_flat_table(config);
+}
+
+#[test]
+#[should_panic(expected = "cannot declare identity value columns")]
+fn flat_storage_rejects_identity_value_columns() {
+    let mut config = valid_flat_config("identity-values");
+    config.n_identity_vals = Some(1);
+    EGraph::default().add_internal_flat_table(config);
+}
+
+#[test]
+#[should_panic(expected = "cannot provide a lookup default")]
+fn flat_storage_rejects_lookup_defaults() {
+    let mut config = valid_flat_config("lookup-default");
+    config.default = DefaultVal::FreshId;
+    EGraph::default().add_internal_flat_table(config);
+}
+
+#[test]
+#[should_panic(expected = "cannot provide merge behavior")]
+fn flat_storage_rejects_merge_behavior() {
+    let mut config = valid_flat_config("merge");
+    config.merge = MergeFn::UnionId;
+    EGraph::default().add_internal_flat_table(config);
+}
+
+#[test]
+#[should_panic(expected = "cannot support subsumption")]
+fn flat_storage_rejects_subsumption() {
+    let mut config = valid_flat_config("subsumption");
+    config.can_subsume = true;
+    EGraph::default().add_internal_flat_table(config);
+}
+
+#[test]
+#[should_panic(expected = "unknown storage implementation")]
+fn flat_storage_introspection_rejects_unknown_table_types() {
+    let mut egraph = EGraph::default();
+    let table = egraph.add_table(valid_flat_config("displaced"));
+    egraph.funcs[table].table = egraph.uf_table;
+    egraph.table_is_flat(table);
 }
 
 /// Run a simple associativity/commutativity test.
@@ -251,7 +276,12 @@ fn ac_test(can_subsume: bool) {
     };
 
     // Running these rules on an empty database should change nothing.
-    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed());
+    assert!(
+        !egraph
+            .run_rules(&[add_comm, add_assoc], None)
+            .unwrap()
+            .changed()
+    );
 
     // Fill the database.
     let mut ids = Vec::new();
@@ -280,7 +310,11 @@ fn ac_test(can_subsume: bool) {
         (left_root, right_root)
     };
     // Saturate
-    while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed() {}
+    while egraph
+        .run_rules(&[add_comm, add_assoc], None)
+        .unwrap()
+        .changed()
+    {}
     let canon_left = egraph.get_canon_in_uf(left_root);
     let canon_right = egraph.get_canon_in_uf(right_root);
     assert_eq!(canon_left, canon_right, "failed to reassociate!");
@@ -333,7 +367,12 @@ fn ac_fail() {
     };
 
     // Running these rules on an empty database should change nothing.
-    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed());
+    assert!(
+        !egraph
+            .run_rules(&[add_comm, add_assoc], None)
+            .unwrap()
+            .changed()
+    );
 
     // Fill the database.
     let mut ids = Vec::new();
@@ -371,7 +410,11 @@ fn ac_fail() {
         (left_root, right_root)
     };
     // Saturate
-    while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed() {}
+    while egraph
+        .run_rules(&[add_comm, add_assoc], None)
+        .unwrap()
+        .changed()
+    {}
     let canon_left = egraph.get_canon_in_uf(left_root);
     let canon_right = egraph.get_canon_in_uf(right_root);
     assert_ne!(canon_left, canon_right);
@@ -632,7 +675,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     }
 
     for _ in 0..N {
-        if !egraph.run_rules(&rules).unwrap().changed() {
+        if !egraph.run_rules(&rules, None).unwrap().changed() {
             break;
         }
     }
@@ -904,20 +947,20 @@ fn container_test() {
         vec![vec![], vec![egraph.get_canon_in_uf(ids[1])]],
     );
 
-    assert!(egraph.run_rules(&[vec_expand]).unwrap().changed());
+    assert!(egraph.run_rules(&[vec_expand], None).unwrap().changed());
     assert_eq!(dump_vecs(&egraph).len(), 4);
     // We have 2 new vectors with a last element. Each of those should spawn two more, adding 4.
-    assert!(egraph.run_rules(&[vec_expand]).unwrap().changed());
+    assert!(egraph.run_rules(&[vec_expand], None).unwrap().changed());
     assert_eq!(dump_vecs(&egraph).len(), 8);
     // We have 4 new vectors with a last element. Each of those should spawn two more, adding 8.
-    assert!(egraph.run_rules(&[vec_expand]).unwrap().changed());
+    assert!(egraph.run_rules(&[vec_expand], None).unwrap().changed());
     assert_eq!(dump_vecs(&egraph).len(), 16);
 
     // Now we want to saturate `eval_add`. This should collapse a bunch of new vectors.
 
     let mut saturated = false;
     for _ in 0..20 {
-        saturated = !egraph.run_rules(&[eval_add]).unwrap().changed();
+        saturated = !egraph.run_rules(&[eval_add], None).unwrap().changed();
         if saturated {
             break;
         }
@@ -1029,7 +1072,10 @@ fn run_query_prim_container_match_case(seminaive: bool, seed_canonical: bool) ->
 
     let mut saturated = false;
     for _ in 0..8 {
-        saturated = !egraph.run_rules(&[w_rewrite, l_rewrite]).unwrap().changed();
+        saturated = !egraph
+            .run_rules(&[w_rewrite, l_rewrite], None)
+            .unwrap()
+            .changed();
         if saturated {
             break;
         }
@@ -1076,7 +1122,7 @@ fn rhs_only_rule() {
     let mut contents = Vec::new();
 
     assert!(contents.is_empty());
-    assert!(egraph.run_rules(&[add_data]).unwrap().changed());
+    assert!(egraph.run_rules(&[add_data], None).unwrap().changed());
     egraph.for_each(num_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push(func_row.vals.to_vec());
@@ -1105,9 +1151,19 @@ fn rhs_only_rule_only_runs_once() {
         rb.build()
     };
 
-    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap().changed());
+    assert!(
+        !egraph
+            .run_rules(&[inc_counter_rule], None)
+            .unwrap()
+            .changed()
+    );
     assert_eq!(counter.load(Ordering::SeqCst), 1);
-    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap().changed());
+    assert!(
+        !egraph
+            .run_rules(&[inc_counter_rule], None)
+            .unwrap()
+            .changed()
+    );
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -1178,7 +1234,7 @@ fn mergefn_arithmetic() {
     };
 
     // Run the first rule and check state
-    assert!(egraph.run_rules(&[rule1]).unwrap().changed());
+    assert!(egraph.run_rules(&[rule1], None).unwrap().changed());
     let mut contents = Vec::new();
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
@@ -1201,7 +1257,7 @@ fn mergefn_arithmetic() {
     // Run the second rule and check state
     // Expected: (f 1 1) because 1 + (0 * 5) = 1
     // Expected: (f 2 7) because 1 + (1 * 6) = 7
-    assert!(egraph.run_rules(&[rule2]).unwrap().changed());
+    assert!(egraph.run_rules(&[rule2], None).unwrap().changed());
     contents.clear();
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
@@ -1224,7 +1280,7 @@ fn mergefn_arithmetic() {
     // Run the third rule and check state
     // Expected: (f 1 4) because 1 + (1 * 3) = 4
     // Expected: (f 2 29) because 1 + (7 * 4) = 29
-    assert!(egraph.run_rules(&[rule3]).unwrap().changed());
+    assert!(egraph.run_rules(&[rule3], None).unwrap().changed());
     contents.clear();
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
@@ -1310,7 +1366,7 @@ fn mergefn_nested_function() {
     };
 
     // First run of the rule
-    assert!(egraph.run_rules(&[write_rule]).unwrap().changed());
+    assert!(egraph.run_rules(&[write_rule], None).unwrap().changed());
     let f_entries_1 = get_f_entries(&egraph);
     let g_entries_1 = get_g_entries(&egraph);
     assert_eq!(f_entries_1.len(), 2);
@@ -1335,7 +1391,7 @@ fn mergefn_nested_function() {
     };
 
     // Second run of the rule - should trigger merging with previous values
-    assert!(egraph.run_rules(&[set_rule]).unwrap().changed());
+    assert!(egraph.run_rules(&[set_rule], None).unwrap().changed());
     let f_entries_2 = get_f_entries(&egraph);
     let g_entries_2 = get_g_entries(&egraph);
     assert_eq!(f_entries_2.len(), 2);
@@ -1444,13 +1500,13 @@ fn constrain_prims_simple() {
 
     assert!(get_entries(&egraph, f_table).is_empty());
     assert!(get_entries(&egraph, g_table).is_empty());
-    egraph.run_rules(&[write_f]).unwrap();
+    egraph.run_rules(&[write_f], None).unwrap();
     let f = get_entries(&egraph, f_table);
     assert_eq!(f.len(), 3);
-    egraph.run_rules(&[copy_to_g]).unwrap();
+    egraph.run_rules(&[copy_to_g], None).unwrap();
     let invocations_after_first = query_prim_invocations.load(Ordering::Relaxed);
     assert!(invocations_after_first > 0);
-    assert!(!egraph.run_rules(&[copy_to_g]).unwrap().changed());
+    assert!(!egraph.run_rules(&[copy_to_g], None).unwrap().changed());
     assert_eq!(
         query_prim_invocations.load(Ordering::Relaxed),
         invocations_after_first
@@ -1552,10 +1608,10 @@ fn constrain_prims_abstract() {
 
     assert!(get_entries(&egraph, f_table).is_empty());
     assert!(get_entries(&egraph, g_table).is_empty());
-    egraph.run_rules(&[write_f]).unwrap();
+    egraph.run_rules(&[write_f], None).unwrap();
     let f = get_entries(&egraph, f_table);
     assert_eq!(f.len(), 3);
-    egraph.run_rules(&[copy_to_g]).unwrap();
+    egraph.run_rules(&[copy_to_g], None).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!(g.len(), 2);
     assert_eq!(g, f[0..2])
@@ -1630,18 +1686,18 @@ fn basic_subsumption() {
 
     assert!(get_entries(&egraph, f_table).0.is_empty());
     assert!(get_entries(&egraph, g_table).0.is_empty());
-    egraph.run_rules(&[write_f]).unwrap();
+    egraph.run_rules(&[write_f], None).unwrap();
     let f = get_entries(&egraph, f_table);
     assert_eq!((f.0.len(), f.1), (2, 0));
     assert_eq!(f.0.iter().map(|(x, _)| *x).collect::<Vec<_>>(), vec![1, 2]);
-    egraph.run_rules(&[subsume_f]).unwrap();
+    egraph.run_rules(&[subsume_f], None).unwrap();
     let f = get_entries(&egraph, f_table);
     assert_eq!((f.0.len(), f.1), (3, 2));
     assert_eq!(
         f.0.iter().map(|(x, _)| *x).collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
-    egraph.run_rules(&[copy_to_g]).unwrap();
+    egraph.run_rules(&[copy_to_g], None).unwrap();
     let g = get_entries(&egraph, g_table);
     assert_eq!((g.0.len(), g.1), (1, 0));
     assert_eq!(g.0[0], f.0[0])
@@ -1674,21 +1730,21 @@ fn lookup_failure_panics() {
         rb.set(f, &[value_2.clone(), value_2.clone()]);
         rb.build()
     };
-    egraph.run_rules(&[write_f]).unwrap();
+    egraph.run_rules(&[write_f], None).unwrap();
 
     let lookup_success = {
         let mut rb = egraph.new_rule("lookup_success", true);
         rb.lookup(f, slice::from_ref(&value_1), String::new);
         rb.build()
     };
-    egraph.run_rules(&[lookup_success]).unwrap();
+    egraph.run_rules(&[lookup_success], None).unwrap();
 
     let lookup_failure = {
         let mut rb = egraph.new_rule("lookup_fail", true);
         rb.lookup(f, slice::from_ref(&value_3), String::new);
         rb.build()
     };
-    egraph.run_rules(&[lookup_failure]).err().unwrap();
+    egraph.run_rules(&[lookup_failure], None).err().unwrap();
 }
 
 #[test]
@@ -1731,7 +1787,61 @@ fn primitive_failure_panics() {
         rb.build()
     };
 
-    egraph.run_rules(&[assert_odd_rule]).err().unwrap();
+    egraph.run_rules(&[assert_odd_rule], None).err().unwrap();
+}
+
+#[test]
+fn action_panic_rebuilds_before_returning() {
+    let mut egraph = EGraph::default();
+    let facts = egraph.add_table(FunctionConfig {
+        n_vals: 1,
+        n_identity_vals: None,
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "facts".into(),
+        can_subsume: false,
+    });
+    let a = egraph.fresh_id();
+    let b = egraph.fresh_id();
+    egraph.add_values([(facts, vec![a, a]), (facts, vec![b, b])]);
+    assert_eq!(egraph.table_size(facts), 2);
+
+    let id = |val| QueryEntry::Const {
+        val,
+        ty: ColumnTy::Id,
+    };
+    let union_then_panic = {
+        let mut rb = egraph.new_rule("union_then_panic", true);
+        rb.union(id(a), id(b));
+        rb.panic("boom".to_string());
+        rb.build()
+    };
+
+    let error = egraph.run_rules(&[union_then_panic], None).unwrap_err();
+    assert_eq!(error.to_string(), "Panic: boom");
+    assert_eq!(
+        egraph.get_canon_repr(a, ColumnTy::Id),
+        egraph.get_canon_repr(b, ColumnTy::Id)
+    );
+    assert_eq!(
+        egraph.table_size(facts),
+        1,
+        "effects before the panic should be canonicalized before Err"
+    );
+
+    let c = egraph.fresh_id();
+    let continue_after_error = {
+        let mut rb = egraph.new_rule("continue_after_error", true);
+        rb.union(id(a), id(c));
+        rb.build()
+    };
+    egraph.run_rules(&[continue_after_error], None).unwrap();
+    assert_eq!(
+        egraph.get_canon_repr(a, ColumnTy::Id),
+        egraph.get_canon_repr(c, ColumnTy::Id),
+        "the egraph should remain usable after the action error"
+    );
 }
 
 #[test]
@@ -1740,7 +1850,7 @@ fn panic_functions_trigger_early_stop() {
 
     let channel: crate::SideChannel<String> = Default::default();
     let panic_fn = super::Panic("panic".to_string(), channel.clone());
-    let stopped = db.with_execution_state(|state| {
+    let stopped = db.with_execution_state(None, |state| {
         assert!(!state.should_stop());
         let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[Value::new(1)]);
         assert!(res.is_none());
@@ -1752,7 +1862,7 @@ fn panic_functions_trigger_early_stop() {
     let channel: crate::SideChannel<String> = Default::default();
     let lazy = Lazy::new(|| "lazy panic".to_string());
     let panic_fn = super::LazyPanic(Arc::new(lazy), channel.clone());
-    let stopped = db.with_execution_state(|state| {
+    let stopped = db.with_execution_state(None, |state| {
         assert!(!state.should_stop());
         let res = core_relations::ExternalFunction::invoke(&panic_fn, state, &[]);
         assert!(res.is_none());
@@ -1767,7 +1877,7 @@ fn self_referential_merge_union_find() {
     // A merge that writes back into its OWN table, like the term encoding's single-table UF. On a
     // conflicting parent it keeps the smaller endpoint and re-inserts the displaced edge into
     // itself. Exercises `peek_next_function_id`, `MergeFn::TableInsert` into self, `Seq`, and the
-    // backend's self-write buffer pre-seed.
+    // e-graph's self-write buffer pre-seed.
     let mut egraph = EGraph::default();
     let int_base = egraph.base_values_mut().register_type::<i64>();
     let min_func = egraph.register_external_func(Box::new(core_relations::make_external_func(
@@ -1821,7 +1931,7 @@ fn self_referential_merge_union_find() {
             rb.set(uf, &[c, p]);
             rb.build()
         };
-        egraph.run_rules(&[r]).unwrap();
+        egraph.run_rules(&[r], None).unwrap();
     };
     let parent_of = |egraph: &mut EGraph, node: i64| -> Option<i64> {
         let k = egraph.base_values_mut().get(node);
@@ -1888,7 +1998,7 @@ fn identity_column_guard_skips_payload_only_conflicts() {
             rb.set(f, &[k, va, vb]);
             rb.build()
         };
-        egraph.run_rules(&[r]).unwrap();
+        egraph.run_rules(&[r], None).unwrap();
     };
     let read_row = |egraph: &EGraph| -> (i64, i64) {
         let mut out = None;
@@ -1937,13 +2047,13 @@ fn tuple_subsume_preserves_all_outputs() {
     let first = egraph.base_values_mut().get(10_i64);
     let second = egraph.base_values_mut().get(20_i64);
     let action = TableAction::new(&egraph, f);
-    egraph
-        .db
-        .with_execution_state(|state| action.insert(state, [key, first, second].into_iter()));
+    egraph.db.with_execution_state(None, |state| {
+        action.insert(state, [key, first, second].into_iter())
+    });
     egraph.flush_updates();
     egraph
         .db
-        .with_execution_state(|state| action.subsume(state, std::iter::once(key)));
+        .with_execution_state(None, |state| action.subsume(state, std::iter::once(key)));
     egraph.flush_updates();
 
     let mut rows = Vec::new();

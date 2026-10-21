@@ -60,23 +60,30 @@ use crate::{
     common::{HashMap, HashSet, IndexSet},
     offsets::Subset,
     pool::Pooled,
-    query::{Atom, Query, VarColumnMap},
+    query::{Atom, OccurrenceKey, Query, VarColumnMap},
     table_spec::Constraint,
 };
 
-use super::{ActionId, AtomId, ColumnId, SubAtom, VarInfo, Variable};
+use super::{ActionId, AtomId, ColumnId, ColumnIds, SubAtom, VarInfo, Variable};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScanSpec {
     pub to_index: SubAtom,
     // Only yield rows where the given constraints match.
     pub constraints: Vec<Constraint>,
+    /// Set when this scan reaches the atom through its occurrence variable: the
+    /// columns to read disjunctively (see [`Atom::occurrence`]).
+    pub occurrence_cols: Option<SmallVec<[ColumnId; 4]>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SingleScanSpec {
     pub atom: AtomId,
     pub column: ColumnId,
+    /// Set when this scan binds the atom's occurrence variable: the columns to
+    /// read disjunctively (see [`Atom::occurrence`]). `column` is then only the
+    /// first of them.
+    pub occurrence_cols: Option<SmallVec<[ColumnId; 4]>>,
     pub cs: Vec<Constraint>,
 }
 
@@ -146,14 +153,30 @@ pub(crate) enum JoinStage {
         cover: ScanSpec,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
         // to_intersect.1 is the index into the cover atom.
-        to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+        to_intersect: Vec<(ScanSpec, ColumnIds)>,
     },
     FusedIntersectMat {
         cover: MatId,
         mode: MatScanMode,
         bind: SmallVec<[(ColumnId, Variable); 2]>,
-        to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)>,
+        to_intersect: Vec<(ScanSpec, ColumnIds)>,
     },
+}
+
+/// The occurrence columns this subatom reads, if it is the atom's occurrence
+/// variable rather than one of its column variables.
+///
+/// A constant occurrence binds nothing, so no scan reads its columns.
+fn occurrence_cols_of(
+    atoms: &DenseIdMap<AtomId, Atom>,
+    subatom: &SubAtom,
+) -> Option<SmallVec<[ColumnId; 4]>> {
+    atoms[subatom.atom]
+        .occurrence
+        .as_ref()
+        .filter(|occ| matches!(occ.key, OccurrenceKey::Var(_)))
+        .filter(|occ| occ.cols.as_slice() == subatom.vars.as_slice())
+        .map(|occ| occ.cols.clone())
 }
 
 /// Merge every `FusedIntersect { to_intersect: [] }` into the first earlier such stage on the
@@ -256,6 +279,24 @@ pub(crate) struct SinglePlan {
 #[derive(Debug, Clone)]
 pub(crate) struct JoinStages {
     pub instrs: Arc<Vec<JoinStage>>,
+    /// Bounded lookahead only permutes ordinary mixed/fused stages. Keep
+    /// this immutable eligibility test out of the recursive executor.
+    pub(super) supports_lookahead: bool,
+}
+
+impl JoinStages {
+    pub(crate) fn new(instrs: Vec<JoinStage>) -> Self {
+        let supports_lookahead = instrs
+            .iter()
+            .any(|s| matches!(s, JoinStage::FusedIntersect { .. }))
+            && !instrs
+                .iter()
+                .any(|s| matches!(s, JoinStage::FusedIntersectMat { .. }));
+        Self {
+            instrs: Arc::new(instrs),
+            supports_lookahead,
+        }
+    }
 }
 
 /// Specification of the materialization of the intermediate results, as required by tree decomposition.
@@ -428,8 +469,9 @@ fn next_var_to_eliminate(
         .map(|(var, vinfo)| {
             let subquery_vars = atoms
                 .iter()
-                // every atom that contains this variable
-                .filter(|(_, atom)| atom.get_col(var).is_some())
+                // every atom that contains this variable, as a column or as the
+                // value an occurrence index is read by
+                .filter(|(_, atom)| atom.binds(var))
                 // every variable of those atoms
                 .flat_map(|(_, atom)| atom.vars());
 
@@ -445,16 +487,19 @@ fn next_var_to_eliminate(
             let size_estimation = vinfo
                 .occurrences
                 .iter()
-                .filter_map(|occ| {
+                .flat_map(|occ| {
                     let atom = &atoms[occ.atom];
                     let table = atom.table;
                     if table.is_dummy() {
-                        return None;
+                        return SmallVec::<[ColUniqueness; 4]>::new();
                     }
-                    let col = atom.get_col(var).unwrap();
+                    // An occurrence variable is not a column of its atom, so it is
+                    // estimated from the columns it can occur in.
                     // TODO: plan header before query decomposition so we know the exact
                     // subset we are handling
-                    Some(col_est.col_uniqueness(table, col))
+                    atom.columns_bound_by(var)
+                        .map(|col| col_est.col_uniqueness(table, col))
+                        .collect()
                 })
                 .fold(ColUniqueness::default(), |a, b| a.join(&b));
             ((occ, size_estimation), var, subquery_vars)
@@ -527,6 +572,7 @@ fn update_hypergraph(
         var_columns,
         constraints: ProcessedConstraints::dummy(),
         table: TableId::dummy(),
+        occurrence: None,
     });
 
     // Update variable occurrences to include the covering atom
@@ -910,7 +956,7 @@ fn plan_single_bag(
                     .enumerate()
                     .map(|(j, var)| (ColumnId::from_usize(j), *var))
                     .collect();
-                let mut to_intersect: Vec<(ScanSpec, SmallVec<[ColumnId; 2]>)> = vec![];
+                let mut to_intersect: Vec<(ScanSpec, ColumnIds)> = vec![];
                 for (col, var) in prev_block.1.msg_vars.iter().enumerate() {
                     let vinfo = &bag.vars[*var];
                     for occ in vinfo.occurrences.iter() {
@@ -927,6 +973,11 @@ fn plan_single_bag(
                                             vars: smallvec![],
                                         },
                                         constraints: vec![],
+                                        // This path merges subatoms across an
+                                        // atom's variables, which an occurrence
+                                        // read cannot share; such a query is
+                                        // planned without decomposition.
+                                        occurrence_cols: None,
                                     },
                                     smallvec![],
                                 ));
@@ -965,9 +1016,7 @@ fn plan_single_bag(
     instrs.splice(0..0, prologue);
     instrs.extend(epilogue);
 
-    let stages = JoinStages {
-        instrs: Arc::new(instrs),
-    };
+    let stages = JoinStages::new(instrs);
 
     (header, stages, MatSpec { msg_vars, val_vars })
 }
@@ -1010,9 +1059,7 @@ fn build_result_block(blocks: &[(JoinStages, MatSpec)]) -> JoinStages {
         });
     }
 
-    JoinStages {
-        instrs: Arc::new(result_block),
-    }
+    JoinStages::new(result_block)
 }
 
 /// The last stage and the result block have the following structure:
@@ -1050,23 +1097,23 @@ fn fuse_last_stage(
     }
 
     // Fuse the instructions
-    let mut last_block = last_block.0;
-    let mut instrs = Arc::unwrap_or_clone(last_block.instrs);
+    let mut instrs = Arc::unwrap_or_clone(last_block.0.instrs);
     instrs.extend(result_block.instrs[1..].iter().cloned());
-    last_block.instrs = Arc::new(instrs);
 
-    (blocks, last_block)
+    (blocks, JoinStages::new(instrs))
 }
 
 /// Eagerly lift materialization lookups up
 ///
 /// For example, in the following, looking up of `r` can be lifted up before `z`
 ///
+/// ```text
 /// for x in R isec S:
 ///  R = R[x]; S = S[x]
 ///  for z in R:
 ///   if r in Mat[x]:
 ///     yield
+/// ```
 fn loop_lifting(stages: JoinStages) -> JoinStages {
     let mut instrs = Arc::unwrap_or_clone(stages.instrs);
     for i in 1..instrs.len() {
@@ -1094,9 +1141,7 @@ fn loop_lifting(stages: JoinStages) -> JoinStages {
             }
         }
     }
-    JoinStages {
-        instrs: Arc::new(instrs),
-    }
+    JoinStages::new(instrs)
 }
 
 /// This is the main entry point for query optimization using tree decomposition.
@@ -1109,9 +1154,7 @@ pub(crate) fn tree_decompose_and_plan(
     macro_rules! fast_path {
         () => {{
             let (header, instrs) = plan_stages(&ctx, strat);
-            let stages = JoinStages {
-                instrs: Arc::new(instrs),
-            };
+            let stages = JoinStages::new(instrs);
 
             Plan::SinglePlan(SinglePlan {
                 atoms: Arc::new(ctx.atoms),
@@ -1196,14 +1239,14 @@ pub(crate) fn plan_query<'a>(query: Query, col_est: ColumnCardEst<'a>) -> Plan {
 /// JoinStage, but it still contains variable information.
 ///
 /// This separation makes it easier for us to iterate with different planning
-/// algorithms while sharing the same "backend" that generates a concrete plan.
+/// algorithms while sharing the same machinery that generates a concrete plan.
 #[derive(Debug)]
 struct StageInfo {
     cover: SubAtom,
     vars: SmallVec<[Variable; 1]>,
     filters: Vec<(
-        SubAtom,                 /* the subatom to index */
-        SmallVec<[ColumnId; 2]>, /* how to build a key for that index from the cover atom */
+        SubAtom,   /* the subatom to index */
+        ColumnIds, /* how to build a key for that index from the cover atom */
     )>,
 }
 
@@ -1391,7 +1434,13 @@ fn plan_headers<'a, 'b>(
                 &atom_info.constraints.slow,
             ),
         );
-        if !atom_info.constraints.fast.is_empty() {
+        // An atom restricted by a constant occurrence needs a header even with no
+        // fast constraints, since that restriction lives only in its subset.
+        let const_occurrence = atom_info
+            .occurrence
+            .as_ref()
+            .is_some_and(|occ| matches!(occ.key, OccurrenceKey::Const(_)));
+        if !atom_info.constraints.fast.is_empty() || const_occurrence {
             header.push(JoinHeader {
                 atom,
                 constraints: Pooled::cloned(&atom_info.constraints.fast),
@@ -1469,7 +1518,7 @@ fn get_next_freejoin_stage(
     state: &mut PlanningState,
     ordering: &mut impl Iterator<Item = AtomId>,
 ) -> Option<StageInfo> {
-    let mut scratch_subatom: HashMap<AtomId, SmallVec<[ColumnId; 2]>> = Default::default();
+    let mut scratch_subatom: HashMap<AtomId, ColumnIds> = Default::default();
 
     loop {
         let mut covered = false;
@@ -1506,7 +1555,7 @@ fn get_next_freejoin_stage(
 
         let mut filters = Vec::new();
         for (atom, cols) in scratch_subatom.drain() {
-            let mut form_key = SmallVec::<[ColumnId; 2]>::new();
+            let mut form_key = ColumnIds::new();
             for var_ix in &cols {
                 let var = ctx.atoms[atom].get_var(*var_ix).unwrap();
                 // form_key is an index _into the subatom forming the cover_.
@@ -1526,9 +1575,10 @@ fn get_next_freejoin_stage(
 
 /// Plan generic join queries (one variable per stage).
 ///
-/// Variables are visited in their natural id order. Runtime `sort_plan_by_size` reorders stages
-/// anyway, so static ordering only needs to be deterministic; [`fuse_single_scans`] collapses
-/// any same-atom single-scans afterwards regardless of where they ended up.
+/// Variables are visited in their natural id order. Runtime `sort_plan_by_size`
+/// reorders stages anyway, so static ordering only needs to be deterministic;
+/// [`fuse_single_scans`] collapses any same-atom single-scans afterwards
+/// regardless of where they ended up.
 fn plan_gj(
     ctx: &PlanningContext,
     state: &mut PlanningState,
@@ -1610,9 +1660,14 @@ fn compile_stage(
                 .chain(filters.iter().map(|(x, _)| x))
                 .map(|subatom| {
                     let atom = subatom.atom;
+                    // A subatom whose columns are the atom's occurrence set binds
+                    // the occurrence variable, so the scan reads them
+                    // disjunctively instead of collapsing to `vars[0]`.
+                    let occurrence_cols = occurrence_cols_of(&ctx.atoms, subatom);
                     SingleScanSpec {
                         atom,
                         column: subatom.vars[0],
+                        occurrence_cols,
                         cs: take_atom_constraints_if_new(ctx, state, atom),
                     }
                 }),
@@ -1628,19 +1683,29 @@ fn compile_stage(
     let atom = cover.atom;
 
     let cover_spec = ScanSpec {
+        occurrence_cols: occurrence_cols_of(&ctx.atoms, &cover),
         to_index: cover,
         constraints: take_atom_constraints_if_new(ctx, state, atom),
     };
 
     let mut bind = SmallVec::new();
     for var in vars {
-        bind.push((ctx.atoms[atom].get_col(var).unwrap(), var));
+        // Scanning a cover binds each variable from the column it occupies; an
+        // occurrence variable has none, so a plan that covers it is unsupported.
+        let col = ctx.atoms[atom].get_col(var).unwrap_or_else(|| {
+            panic!(
+                "unsupported plan: {var:?} is bound by scanning an atom where it \
+                 occupies no column"
+            )
+        });
+        bind.push((col, var));
     }
 
     let mut to_intersect = Vec::with_capacity(filters.len());
     for (subatom, key_spec) in filters {
         let atom = subatom.atom;
         let scan = ScanSpec {
+            occurrence_cols: occurrence_cols_of(&ctx.atoms, &subatom),
             to_index: subatom,
             constraints: take_atom_constraints_if_new(ctx, state, atom),
         };

@@ -161,7 +161,6 @@ def test_profile_rich_and_markdown_render_same_summary(tmp_path: Path) -> None:
         artifact=artifact,
         cache_status="hit",
         workload="dir\\name|file\nnext.egg",
-        backend="main",
         treatment="proofs",
         top=1,
         cpu_summary=summary,

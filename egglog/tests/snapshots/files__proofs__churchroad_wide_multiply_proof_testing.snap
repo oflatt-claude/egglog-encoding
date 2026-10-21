@@ -1,0 +1,653 @@
+---
+source: egglog/tests/files.rs
+expression: proof_snapshot
+---
+(let t0 (Op1 (ZeroExtend 32) (Wire "v0" 16)))
+(let t1 (HasType (Wire "v2" 32) (Bitvector 32)))
+(let t2 (HasType (Wire "v0" 16) (Bitvector 16)))
+(let t3 (HasType (Wire "v1" 32) (Bitvector 32)))
+(let prf0 (Fiat (= () ())))
+(Rule
+  (=
+    (Wire "v2" 32)
+    (Op2
+      (Add)
+      (Op2 (Mul) t0 (Op1 (ZeroExtend 32) (Op1 (Extract 15 0) (Wire "v1" 32))))
+      (Op2
+        (Shl)
+        (Op2
+          (Mul)
+          t0
+          (Op1 (ZeroExtend 32) (Op1 (Extract 31 16) (Wire "v1" 32))))
+        (Op0 (BV 16 32)))))
+  (name
+    "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+  (premises
+    (Fiat (= (Wire "v2" 32) (Op2 (Mul) t0 (Wire "v1" 32))))
+    (Rule
+      (= t1 t1)
+      (name
+        "(rule ((Wire name bw))
+      ((HasType (Wire name bw) (Bitvector bw)))
+        :ruleset typing )")
+      (premises (Fiat (= (Wire "v2" 32) (Wire "v2" 32))))
+      (substitution (name "v2") (bw 32)))
+    (Rule
+      (= t2 t2)
+      (name
+        "(rule ((Wire name bw))
+      ((HasType (Wire name bw) (Bitvector bw)))
+        :ruleset typing )")
+      (premises (Fiat (= (Wire "v0" 16) (Wire "v0" 16))))
+      (substitution (name "v0") (bw 16)))
+    (Rule
+      (= t3 t3)
+      (name
+        "(rule ((Wire name bw))
+      ((HasType (Wire name bw) (Bitvector bw)))
+        :ruleset typing )")
+      (premises (Fiat (= (Wire "v1" 32) (Wire "v1" 32))))
+      (substitution (name "v1") (bw 32)))
+    prf0
+    prf0
+    prf0
+    (Fiat (= 0 0)))
+  (substitution
+    (expr (Wire "v2" 32))
+    (b-bw 32)
+    (a (Wire "v0" 16))
+    (b (Wire "v1" 32))
+    (expr-bw 32)
+    (a-bw 16)))
+(let t0 (Op1 (ZeroExtend 32) (Wire "v0" 16)))
+(let t1 (Op1 (Extract 15 0) (Wire "v1" 32)))
+(let t2 (Op1 (ZeroExtend 32) t1))
+(let t3 (Op2 (Mul) t0 t2))
+(let t4 (HasType (Wire "v2" 32) (Bitvector 32)))
+(let t5 (HasType (Wire "v0" 16) (Bitvector 16)))
+(let prf0
+  (Rule
+            (= t5 t5)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v0" 16) (Wire "v0" 16))))
+            (substitution (name "v0") (bw 16))))
+(let t6 (HasType (Wire "v1" 32) (Bitvector 32)))
+(let prf1
+  (Rule
+            (= t6 t6)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v1" 32) (Wire "v1" 32))))
+            (substitution (name "v1") (bw 32))))
+(let prf2 (Fiat (= () ())))
+(let t7
+  (premises
+          (Fiat (= (Wire "v2" 32) (Op2 (Mul) t0 (Wire "v1" 32))))
+          (Rule
+            (= t4 t4)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v2" 32) (Wire "v2" 32))))
+            (substitution (name "v2") (bw 32)))
+          prf0
+          prf1
+          prf2
+          prf2
+          prf2
+          (Fiat (= 0 0))))
+(let t8
+  (substitution
+          (expr (Wire "v2" 32))
+          (b-bw 32)
+          (a (Wire "v0" 16))
+          (b (Wire "v1" 32))
+          (expr-bw 32)
+          (a-bw 16)))
+(let prf3
+  (Rule
+        (= t3 t3)
+        (name
+          "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+         (HasType expr (Bitvector expr-bw))
+         (HasType a (Bitvector a-bw))
+         (HasType b (Bitvector b-bw))
+         (<= expr-bw 48)
+         (<= a-bw 16)
+         (<= b-bw 32)
+         (= 0 (% expr-bw 2)))
+        ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+          :ruleset transform )")
+        t7
+        t8))
+(let t9 (HasType t3 (Bitvector 32)))
+(let t10 (HasType t0 (Bitvector 32)))
+(let t11 (HasType t2 (Bitvector 32)))
+(let t12 (HasType t1 (Bitvector 16)))
+(Rule
+  (= t3 (PrimitiveInterfaceDSP (Wire "v0" 16) t1))
+  (name
+    "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend ?n) ?a) (Op1 (ZeroExtend ?n) ?b)))
+       (HasType expr (Bitvector ?n))
+       (HasType ?a (Bitvector ?a-bw))
+       (HasType ?b (Bitvector ?b-bw))
+       (<= ?a-bw 16)
+       (<= ?b-bw 16)
+       (< ?n 36))
+      ((union expr (PrimitiveInterfaceDSP ?a ?b)))
+        :ruleset mapping )")
+  (premises
+    prf3
+    (Rule
+      (= t9 t9)
+      (name
+        "(rule ((Op2 op i0 i1)
+       (HasType i0 (Bitvector bw))
+       (HasType i1 (Bitvector bw))
+       (AllBitwidthsMatch op))
+      ((HasType (Op2 op i0 i1) (Bitvector bw)))
+        :ruleset typing )")
+      (premises
+        prf3
+        (Rule
+          (= t10 t10)
+          (name
+            "(rule ((Op1 (ZeroExtend bitwidth) expr))
+      ((HasType (Op1 (ZeroExtend bitwidth) expr) (Bitvector bitwidth)))
+        :ruleset typing )")
+          (premises (Fiat (= t0 t0)))
+          (substitution (bitwidth 32) (expr (Wire "v0" 16))))
+        (Rule
+          (= t11 t11)
+          (name
+            "(rule ((Op1 (ZeroExtend bitwidth) expr))
+      ((HasType (Op1 (ZeroExtend bitwidth) expr) (Bitvector bitwidth)))
+        :ruleset typing )")
+          (premises
+            (Rule
+              (= t2 t2)
+              (name
+                "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+              t7
+              t8))
+          (substitution (bitwidth 32) (expr t1)))
+        (Fiat (= (AllBitwidthsMatch (Mul)) (AllBitwidthsMatch (Mul)))))
+      (substitution (op (Mul)) (i0 t0) (i1 t2) (bw 32)))
+    prf0
+    (Rule
+      (= t12 t12)
+      (name
+        "(rule ((Op1 (Extract high low) expr)
+       (HasType expr (Bitvector n))
+       (>= low 0)
+       (< high n))
+      ((HasType (Op1 (Extract high low) expr) (Bitvector (+ 1 (- high low)))))
+        :ruleset typing )")
+      (premises
+        (Rule
+          (= t1 t1)
+          (name
+            "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+          t7
+          t8)
+        prf1
+        prf2
+        prf2)
+      (substitution (high 15) (low 0) (expr (Wire "v1" 32)) (n 32)))
+    prf2
+    prf2
+    prf2)
+  (substitution
+    (expr t3)
+    (?n 32)
+    (?a (Wire "v0" 16))
+    (?b t1)
+    (?a-bw 16)
+    (?b-bw 16)))
+(let t0 (Op1 (ZeroExtend 32) (Wire "v0" 16)))
+(let t1 (Op1 (Extract 31 16) (Wire "v1" 32)))
+(let t2 (Op1 (ZeroExtend 32) t1))
+(let t3 (Op2 (Mul) t0 t2))
+(let t4 (HasType (Wire "v2" 32) (Bitvector 32)))
+(let t5 (HasType (Wire "v0" 16) (Bitvector 16)))
+(let prf0
+  (Rule
+            (= t5 t5)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v0" 16) (Wire "v0" 16))))
+            (substitution (name "v0") (bw 16))))
+(let t6 (HasType (Wire "v1" 32) (Bitvector 32)))
+(let prf1
+  (Rule
+            (= t6 t6)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v1" 32) (Wire "v1" 32))))
+            (substitution (name "v1") (bw 32))))
+(let prf2 (Fiat (= () ())))
+(let t7
+  (premises
+          (Fiat (= (Wire "v2" 32) (Op2 (Mul) t0 (Wire "v1" 32))))
+          (Rule
+            (= t4 t4)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v2" 32) (Wire "v2" 32))))
+            (substitution (name "v2") (bw 32)))
+          prf0
+          prf1
+          prf2
+          prf2
+          prf2
+          (Fiat (= 0 0))))
+(let t8
+  (substitution
+          (expr (Wire "v2" 32))
+          (b-bw 32)
+          (a (Wire "v0" 16))
+          (b (Wire "v1" 32))
+          (expr-bw 32)
+          (a-bw 16)))
+(let prf3
+  (Rule
+        (= t3 t3)
+        (name
+          "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+         (HasType expr (Bitvector expr-bw))
+         (HasType a (Bitvector a-bw))
+         (HasType b (Bitvector b-bw))
+         (<= expr-bw 48)
+         (<= a-bw 16)
+         (<= b-bw 32)
+         (= 0 (% expr-bw 2)))
+        ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+          :ruleset transform )")
+        t7
+        t8))
+(let t9 (HasType t3 (Bitvector 32)))
+(let t10 (HasType t0 (Bitvector 32)))
+(let t11 (HasType t2 (Bitvector 32)))
+(let t12 (HasType t1 (Bitvector 16)))
+(Rule
+  (= t3 (PrimitiveInterfaceDSP (Wire "v0" 16) t1))
+  (name
+    "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend ?n) ?a) (Op1 (ZeroExtend ?n) ?b)))
+       (HasType expr (Bitvector ?n))
+       (HasType ?a (Bitvector ?a-bw))
+       (HasType ?b (Bitvector ?b-bw))
+       (<= ?a-bw 16)
+       (<= ?b-bw 16)
+       (< ?n 36))
+      ((union expr (PrimitiveInterfaceDSP ?a ?b)))
+        :ruleset mapping )")
+  (premises
+    prf3
+    (Rule
+      (= t9 t9)
+      (name
+        "(rule ((Op2 op i0 i1)
+       (HasType i0 (Bitvector bw))
+       (HasType i1 (Bitvector bw))
+       (AllBitwidthsMatch op))
+      ((HasType (Op2 op i0 i1) (Bitvector bw)))
+        :ruleset typing )")
+      (premises
+        prf3
+        (Rule
+          (= t10 t10)
+          (name
+            "(rule ((Op1 (ZeroExtend bitwidth) expr))
+      ((HasType (Op1 (ZeroExtend bitwidth) expr) (Bitvector bitwidth)))
+        :ruleset typing )")
+          (premises (Fiat (= t0 t0)))
+          (substitution (bitwidth 32) (expr (Wire "v0" 16))))
+        (Rule
+          (= t11 t11)
+          (name
+            "(rule ((Op1 (ZeroExtend bitwidth) expr))
+      ((HasType (Op1 (ZeroExtend bitwidth) expr) (Bitvector bitwidth)))
+        :ruleset typing )")
+          (premises
+            (Rule
+              (= t2 t2)
+              (name
+                "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+              t7
+              t8))
+          (substitution (bitwidth 32) (expr t1)))
+        (Fiat (= (AllBitwidthsMatch (Mul)) (AllBitwidthsMatch (Mul)))))
+      (substitution (op (Mul)) (i0 t0) (i1 t2) (bw 32)))
+    prf0
+    (Rule
+      (= t12 t12)
+      (name
+        "(rule ((Op1 (Extract high low) expr)
+       (HasType expr (Bitvector n))
+       (>= low 0)
+       (< high n))
+      ((HasType (Op1 (Extract high low) expr) (Bitvector (+ 1 (- high low)))))
+        :ruleset typing )")
+      (premises
+        (Rule
+          (= t1 t1)
+          (name
+            "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+          t7
+          t8)
+        prf1
+        prf2
+        prf2)
+      (substitution (high 31) (low 16) (expr (Wire "v1" 32)) (n 32)))
+    prf2
+    prf2
+    prf2)
+  (substitution
+    (expr t3)
+    (?n 32)
+    (?a (Wire "v0" 16))
+    (?b t1)
+    (?a-bw 16)
+    (?b-bw 16)))
+(let t0 (Op1 (Extract 15 0) (Wire "v1" 32)))
+(let t1 (Op1 (ZeroExtend 32) (Wire "v0" 16)))
+(let t2 (Op1 (Extract 31 16) (Wire "v1" 32)))
+(let t3 (Op1 (ZeroExtend 32) t2))
+(let t4 (Op2 (Mul) t1 t3))
+(let t5 (Op0 (BV 16 32)))
+(let t6 (Op2 (Shl) t4 t5))
+(let t7 (HasType (Wire "v2" 32) (Bitvector 32)))
+(let prf0
+  (Rule
+            (= t7 t7)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v2" 32) (Wire "v2" 32))))
+            (substitution (name "v2") (bw 32))))
+(let t8 (HasType (Wire "v0" 16) (Bitvector 16)))
+(let prf1
+  (Rule
+            (= t8 t8)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v0" 16) (Wire "v0" 16))))
+            (substitution (name "v0") (bw 16))))
+(let t9 (HasType (Wire "v1" 32) (Bitvector 32)))
+(let prf2
+  (Rule
+            (= t9 t9)
+            (name
+              "(rule ((Wire name bw))
+        ((HasType (Wire name bw) (Bitvector bw)))
+          :ruleset typing )")
+            (premises (Fiat (= (Wire "v1" 32) (Wire "v1" 32))))
+            (substitution (name "v1") (bw 32))))
+(let prf3 (Fiat (= () ())))
+(let t10
+  (premises
+          (Fiat (= (Wire "v2" 32) (Op2 (Mul) t1 (Wire "v1" 32))))
+          prf0
+          prf1
+          prf2
+          prf3
+          prf3
+          prf3
+          (Fiat (= 0 0))))
+(let t11 (expr (Wire "v2" 32)))
+(let t12
+  (substitution
+          t11
+          (b-bw 32)
+          (a (Wire "v0" 16))
+          (b (Wire "v1" 32))
+          (expr-bw 32)
+          (a-bw 16)))
+(let t13 (HasType t0 (Bitvector 16)))
+(let t14 (HasType t6 (Bitvector 32)))
+(let t15 (HasType t4 (Bitvector 32)))
+(let t16 (HasType t1 (Bitvector 32)))
+(let t17 (HasType t3 (Bitvector 32)))
+(let t18 (HasType t5 (Bitvector 32)))
+(Rule
+  (= (Wire "v2" 32) (PrimitiveInterfaceDSP3 (Wire "v0" 16) t0 t6))
+  (name
+    "(rule ((= expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend ?n) ?a) (Op1 (ZeroExtend ?n) ?b)) ?c))
+       (HasType expr (Bitvector ?n))
+       (HasType ?a (Bitvector ?a-bw))
+       (HasType ?b (Bitvector ?b-bw))
+       (HasType ?c (Bitvector ?c-bw))
+       (<= ?a-bw 16)
+       (<= ?b-bw 16)
+       (<= ?c-bw 48)
+       (< ?n 36))
+      ((union expr (PrimitiveInterfaceDSP3 ?a ?b ?c)))
+        :ruleset mapping )")
+  (premises
+    (Rule
+      (= (Wire "v2" 32) (Op2 (Add) (Op2 (Mul) t1 (Op1 (ZeroExtend 32) t0)) t6))
+      (name
+        "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+      t10
+      t12)
+    prf0
+    prf1
+    (Rule
+      (= t13 t13)
+      (name
+        "(rule ((Op1 (Extract high low) expr)
+       (HasType expr (Bitvector n))
+       (>= low 0)
+       (< high n))
+      ((HasType (Op1 (Extract high low) expr) (Bitvector (+ 1 (- high low)))))
+        :ruleset typing )")
+      (premises
+        (Rule
+          (= t0 t0)
+          (name
+            "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+          t10
+          t12)
+        prf2
+        prf3
+        prf3)
+      (substitution (high 15) (low 0) (expr (Wire "v1" 32)) (n 32)))
+    (Rule
+      (= t14 t14)
+      (name
+        "(rule ((Op2 op i0 i1)
+       (HasType i0 (Bitvector bw))
+       (HasType i1 (Bitvector bw))
+       (AllBitwidthsMatch op))
+      ((HasType (Op2 op i0 i1) (Bitvector bw)))
+        :ruleset typing )")
+      (premises
+        (Rule
+          (= t6 t6)
+          (name
+            "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+          t10
+          t12)
+        (Rule
+          (= t15 t15)
+          (name
+            "(rule ((Op2 op i0 i1)
+       (HasType i0 (Bitvector bw))
+       (HasType i1 (Bitvector bw))
+       (AllBitwidthsMatch op))
+      ((HasType (Op2 op i0 i1) (Bitvector bw)))
+        :ruleset typing )")
+          (premises
+            (Rule
+              (= t4 t4)
+              (name
+                "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+              t10
+              t12)
+            (Rule
+              (= t16 t16)
+              (name
+                "(rule ((Op1 (ZeroExtend bitwidth) expr))
+      ((HasType (Op1 (ZeroExtend bitwidth) expr) (Bitvector bitwidth)))
+        :ruleset typing )")
+              (premises (Fiat (= t1 t1)))
+              (substitution (bitwidth 32) (expr (Wire "v0" 16))))
+            (Rule
+              (= t17 t17)
+              (name
+                "(rule ((Op1 (ZeroExtend bitwidth) expr))
+      ((HasType (Op1 (ZeroExtend bitwidth) expr) (Bitvector bitwidth)))
+        :ruleset typing )")
+              (premises
+                (Rule
+                  (= t3 t3)
+                  (name
+                    "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+                  t10
+                  t12))
+              (substitution (bitwidth 32) (expr t2)))
+            (Fiat (= (AllBitwidthsMatch (Mul)) (AllBitwidthsMatch (Mul)))))
+          (substitution (op (Mul)) (i0 t1) (i1 t3) (bw 32)))
+        (Rule
+          (= t18 t18)
+          (name
+            "(rule ((Op0 (BV val bw)))
+      ((HasType (Op0 (BV val bw)) (Bitvector bw)))
+        :ruleset typing )")
+          (premises
+            (Rule
+              (= t5 t5)
+              (name
+                "(rule ((= expr (Op2 (Mul) (Op1 (ZeroExtend b-bw) a) b))
+       (HasType expr (Bitvector expr-bw))
+       (HasType a (Bitvector a-bw))
+       (HasType b (Bitvector b-bw))
+       (<= expr-bw 48)
+       (<= a-bw 16)
+       (<= b-bw 32)
+       (= 0 (% expr-bw 2)))
+      ((union expr (Op2 (Add) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- (/ expr-bw 2) 1) 0) b))) (Op2 (Shl) (Op2 (Mul) (Op1 (ZeroExtend expr-bw) a) (Op1 (ZeroExtend expr-bw) (Op1 (Extract (- expr-bw 1) (/ expr-bw 2)) b))) (Op0 (BV (/ expr-bw 2) expr-bw))))))
+        :ruleset transform )")
+              t10
+              t12))
+          (substitution (val 16) (bw 32)))
+        (Fiat (= (AllBitwidthsMatch (Shl)) (AllBitwidthsMatch (Shl)))))
+      (substitution (op (Shl)) (i0 t4) (i1 t5) (bw 32)))
+    prf3
+    prf3
+    prf3
+    prf3)
+  (substitution
+    t11
+    (?n 32)
+    (?a (Wire "v0" 16))
+    (?b t0)
+    (?c t6)
+    (?a-bw 16)
+    (?b-bw 16)
+    (?c-bw 32)))

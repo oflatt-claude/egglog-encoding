@@ -1,6 +1,5 @@
 ---
 source: egglog-experimental/tests/files.rs
-assertion_line: 52
 expression: snapshot
 ---
 (let t0 (Let (Var "x") (Var "y")))
@@ -21,4 +20,4 @@ expression: snapshot
       (premises prf0)
       (substitution (a (Var "x")) (b (Var "y"))))
     (Fiat (= () ())))
-  (substitution (?y t1) (?x (Var "x"))))
+  (substitution (?x (Var "x")) (?y t1)))

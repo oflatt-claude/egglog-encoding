@@ -1,11 +1,10 @@
 use crate::*;
-use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::str::FromStr;
 
 use clap::Parser;
-use egglog_reports::TimingSummaryV2;
 use env_logger::Env;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -83,10 +82,12 @@ struct Args {
     /// Run with proof generation enabled
     #[clap(long)]
     proofs: bool,
-    /// Enable proof testing, turning all `check` statements into `prove` statements
+    /// Enable proof testing, turning every `check` outside `fail` into a `prove` statement.
+    /// Checks inside `fail` remain negative assertions.
     #[clap(long)]
     proof_testing: bool,
-    /// Extract proofs for all `check` statements without verifying them
+    /// Extract proofs for every `check` outside `fail` without verifying them.
+    /// Checks inside `fail` remain negative assertions.
     #[clap(long, conflicts_with_all = ["proofs", "proof_testing"])]
     proof_extraction: bool,
 }
@@ -97,15 +98,12 @@ struct Args {
 /// should also call this function.
 #[allow(clippy::disallowed_macros)]
 pub fn cli(egraph: EGraph) {
-    cli_with_args(egraph, std::env::args_os());
+    cli_from(egraph, std::env::args_os())
 }
 
-/// Start a command-line interface with an explicit argv.
-///
-/// Custom binaries can pre-parse their own flags and pass the remaining
-/// arguments here while still using egglog's standard CLI behavior.
+/// Run the standard CLI after an extension consumes its own arguments.
 #[allow(clippy::disallowed_macros)]
-pub fn cli_with_args<I, T>(mut egraph: EGraph, args: I)
+pub fn cli_from<I, T>(mut egraph: EGraph, args: I)
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
@@ -140,7 +138,7 @@ where
         egraph = egraph.with_proof_extraction();
     }
 
-    EGraph::set_num_threads(args.threads);
+    egraph.set_num_threads(args.threads);
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
     egraph.no_decomp = !args.decomp;
@@ -158,14 +156,18 @@ where
         }
     } else {
         for input in &args.inputs {
-            let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
-                let arg = input.to_string_lossy();
-                panic!("Failed to read file {arg}")
-            });
+            let program = match std::fs::read_to_string(input) {
+                Ok(program) => program,
+                Err(e) => {
+                    let arg = input.to_string_lossy();
+                    log::error!("Failed to read file {arg}: {e}");
+                    std::process::exit(1)
+                }
+            };
 
             match run_commands(
                 &mut egraph,
-                Some(input.to_str().unwrap().into()),
+                Some(input.to_string_lossy().into_owned()),
                 &program,
                 io::stdout(),
                 args.mode,
@@ -195,28 +197,36 @@ where
                 let serialize_filename = if args.serialize_split_primitive_outputs {
                     input.with_file_name(format!(
                         "{}-split",
-                        input.file_stem().unwrap().to_str().unwrap()
+                        input
+                            .file_stem()
+                            .map(|s| s.to_string_lossy())
+                            .unwrap_or_default()
                     ))
                 } else {
                     input.clone()
                 };
                 if args.to_dot {
                     let dot_path = serialize_filename.with_extension("dot");
-                    serialized
-                        .to_dot_file(dot_path.clone())
-                        .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
+                    if let Err(e) = serialized.to_dot_file(dot_path.clone()) {
+                        log::error!("Failed to write dot file to {dot_path:?}: {e}");
+                        std::process::exit(1)
+                    }
                 }
                 if args.to_svg {
                     let svg_path = serialize_filename.with_extension("svg");
-                    serialized.to_svg_file(svg_path.clone()).unwrap_or_else( |_|
-                        panic!("Failed to write svg file to {svg_path:?}. Make sure you have the `dot` executable installed")
-                    );
+                    if let Err(e) = serialized.to_svg_file(svg_path.clone()) {
+                        log::error!(
+                            "Failed to write svg file to {svg_path:?}: {e}. Make sure you have the `dot` executable installed"
+                        );
+                        std::process::exit(1)
+                    }
                 }
                 if args.to_json {
                     let json_path = serialize_filename.with_extension("json");
-                    serialized
-                        .to_json_file(json_path.clone())
-                        .unwrap_or_else(|_| panic!("Failed to write json file to {json_path:?}"));
+                    if let Err(e) = serialized.to_json_file(json_path.clone()) {
+                        log::error!("Failed to write json file to {json_path:?}: {e}");
+                        std::process::exit(1)
+                    }
                 }
             }
         }
@@ -224,21 +234,25 @@ where
 
     if let Some(report_path) = args.save_report {
         let report = egraph.get_overall_run_report();
-        serde_json::to_writer(
-            std::fs::File::create(&report_path)
-                .unwrap_or_else(|_| panic!("Failed to create report file at {report_path:?}")),
-            &report,
-        )
-        .expect("Failed to serialize report");
+        let file = match std::fs::File::create(&report_path) {
+            Ok(file) => file,
+            Err(e) => {
+                log::error!("Failed to create report file at {report_path:?}: {e}");
+                std::process::exit(1)
+            }
+        };
+        if let Err(e) = serde_json::to_writer(file, &report) {
+            log::error!("Failed to serialize report: {e}");
+            std::process::exit(1)
+        }
         log::info!("Saved report to {report_path:?}");
     }
 
     if let Some(summary_path) = args.timing_summary {
-        let summary = TimingSummaryV2::from_run_report(egraph.get_overall_run_report())
-            .unwrap_or_else(|error| {
-                log::error!("failed to create timing summary: {error}");
-                std::process::exit(1);
-            });
+        let summary = egraph.timing_summary().unwrap_or_else(|error| {
+            log::error!("failed to create timing summary: {error}");
+            std::process::exit(1);
+        });
         let mut file = std::fs::File::create(&summary_path)
             .unwrap_or_else(|_| panic!("Failed to create timing summary file at {summary_path:?}"));
         serde_json::to_writer(&mut file, &summary).expect("Failed to serialize timing summary");
@@ -393,6 +407,20 @@ impl FromStr for RunMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_decomposition_is_opt_in_on_the_cli() {
+        let args = Args::try_parse_from(["egglog"]).unwrap();
+        assert!(!args.decomp);
+        let args = Args::try_parse_from(["egglog", "--decomp"]).unwrap();
+        assert!(args.decomp);
+        let args = Args::try_parse_from(["egglog", "--no-decomp"]).unwrap();
+        assert!(!args.decomp);
+
+        let error = Args::try_parse_from(["egglog", "--decomp", "--no-decomp"])
+            .expect_err("decomposition flags should conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
 
     #[test]
     fn proof_extraction_is_a_distinct_cli_mode() {

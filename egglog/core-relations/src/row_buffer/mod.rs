@@ -5,7 +5,6 @@ use std::{cell::Cell, mem, ops::Deref};
 
 use crate::numeric_id::NumericId;
 use egglog_concurrency::{ParallelVecWriter, parallel_writer::write_cell_slice};
-use rayon::iter::ParallelIterator;
 use smallvec::SmallVec;
 
 use crate::{
@@ -27,7 +26,7 @@ pub trait ValueVec {
     fn push(&mut self, value: Cell<Value>);
     fn extend_from_values(&mut self, values: &[Value]);
     /// Refresh the backing allocation from a pool, if applicable.
-    /// The default implementation is a no-op, used by non-pooled backends.
+    /// The default implementation is a no-op for non-pooled buffers.
     fn refresh(&mut self) {}
 }
 
@@ -143,7 +142,7 @@ impl Clone for RowBuffer {
     }
 }
 
-// Generic methods available for any ValueVec backend.
+// Generic methods available for any ValueVec implementation.
 impl<V: ValueVec> RowBuffer<V> {
     /// The size of the rows accepted by this buffer.
     pub(crate) fn arity(&self) -> usize {
@@ -288,20 +287,6 @@ impl RowBuffer {
         self.total_rows = count;
     }
 
-    /// A parallel version of [`RowBuffer::iter`].
-    pub(crate) fn parallel_iter(&self) -> impl ParallelIterator<Item = &[Value]> {
-        use rayon::prelude::*;
-        // SAFETY: This kind of transmutation is safe so long as no one
-        // modifies any of the values behind the `Cell` while this value is
-        // borrowed.
-        //
-        // The only time we modify these values is in safe methods requiring
-        // a mutable reference (`set_stale`, `get_row_mut`), or in the
-        // unsafe `set_stale_shared` method whose safety requirements imply
-        // that no call will overlap with borrowing such a row.
-        unsafe { mem::transmute::<&[Cell<Value>], &[Value]>(&self.data) }.par_chunks(self.n_columns)
-    }
-
     /// Mark a row as stale in the buffer with shared access to it. Returns
     /// whether the row was already stale.
     ///
@@ -322,6 +307,11 @@ impl RowBuffer {
     }
 
     /// Get the row corresponding to the given RowId without bounds checking.
+    ///
+    /// # Safety
+    /// The caller must ensure that `row` is within bounds of the buffer. Note that this method
+    /// does not check whether the row is stale, so it should not be used if stale rows are
+    /// undesired.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         unsafe {
             slice::from_raw_parts(
@@ -399,11 +389,6 @@ impl TaggedRowBuffer {
             inner: RowBuffer::new(n_columns + 1),
         }
     }
-
-    /// A parallel iterator over the contents of the buffer.
-    pub fn par_iter(&self) -> impl ParallelIterator<Item = (RowId, &[Value])> {
-        self.inner.parallel_iter().map(|row| self.unwrap_row(row))
-    }
 }
 
 impl TaggedRowBuffer<SmallValueVec> {
@@ -461,6 +446,38 @@ impl<V: ValueVec> TaggedRowBuffer<V> {
         self.inner.data.extend_from_values(row);
         self.inner.data.push(Cell::new(Value::new(row_id.rep())));
         self.inner.total_rows += 1;
+        res
+    }
+
+    /// Add the given row and RowId to the buffer, then let `patch` edit the
+    /// copied row in place. Equivalent to copying `row` into a scratch
+    /// buffer, editing it, and calling [`TaggedRowBuffer::add_row`], without
+    /// the intermediate copy.
+    #[inline]
+    pub fn add_row_with(
+        &mut self,
+        row_id: RowId,
+        row: &[Value],
+        patch: impl FnOnce(&mut [Value]),
+    ) -> RowId {
+        debug_assert_eq!(
+            row.len(),
+            self.base_arity(),
+            "attempting to add a row with mismatched arity to table"
+        );
+        if self.inner.total_rows == 0 {
+            self.inner.data.refresh();
+        }
+        let res = RowId::from_usize(self.inner.total_rows);
+        self.inner.data.extend_from_values(row);
+        self.inner.data.push(Cell::new(Value::new(row_id.rep())));
+        self.inner.total_rows += 1;
+        let vals = self.inner.data.as_values_mut();
+        let end = vals.len() - 1;
+        let dst = &mut vals[end - row.len()..end];
+        // SAFETY: see the comment in `RowBuffer::non_stale`; this is the same
+        // Cell-to-Value transmute used by `get_row_mut`.
+        patch(unsafe { mem::transmute::<&mut [Cell<Value>], &mut [Value]>(dst) });
         res
     }
 
@@ -577,7 +594,8 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
     /// The caller must ensure that either `row` is within bounds of the buffer at the creation of
     /// this handle, or that the row was successfully written to the buffer before it was called.
     ///
-    /// Furthermore, no calls to `set_stale_shared` may overlap with this call.
+    /// Furthermore, no calls to `set_stale_shared` or `replace_row_shared` may
+    /// overlap with this call.
     pub(crate) unsafe fn get_row_unchecked(&self, row: RowId) -> &[Value] {
         // SAFETY: ParallelVecWriter guarantees that data within bounds is not
         // being modified concurrently.
@@ -586,6 +604,31 @@ impl<T: Deref<Target = [Cell<Value>]>> ReadHandle<'_, T> {
                 self.data.as_ptr().add(row.index() * self.buf.n_columns) as *const Value,
                 self.buf.n_columns,
             )
+        }
+    }
+
+    /// Replace a row in the buffer through shared access.
+    ///
+    /// The row may be beyond the vector's original length if it is covered by
+    /// a completed write to the underlying [`ParallelVecWriter`].
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `row` is covered by the original vector or
+    /// a completed write and that no other reads or writes overlap this row.
+    pub(crate) unsafe fn replace_row_shared(&self, row: RowId, values: &[Value]) {
+        assert_eq!(
+            values.len(),
+            self.buf.n_columns,
+            "attempting to replace a row with mismatched arity"
+        );
+        let cells: &[Cell<Value>] = &self.data;
+        let cell_ptr = cells.as_ptr();
+        let start = row.index() * self.buf.n_columns;
+        for (offset, value) in values.iter().copied().enumerate() {
+            unsafe {
+                (&*cell_ptr.add(start + offset)).set(value);
+            }
         }
     }
 

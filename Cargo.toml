@@ -5,15 +5,14 @@ members = [
   "egglog/concurrency",
   "egglog/core-relations",
   "egglog/egglog-ast",
-  "egglog/egglog-backend-trait",
   "egglog/egglog-bridge",
   "egglog/egglog-reports",
   "egglog/numeric-id",
   "egglog/union-find",
   "egglog/src/sort/add_primitive",
   "egglog/wasm-example",
+  "egg-math-benchmark",
   "egglog-experimental",
-  "egglog-experimental/dd",
 ]
 
 [workspace.package]
@@ -49,6 +48,7 @@ fixedbitset = "0.5"
 smallvec = "1.10"
 bumpalo = "3.12"
 anyhow = "1.0"
+egg = { version = "=0.11.0", default-features = false, features = ["deterministic"] }
 crossbeam-queue = "0.3.11"
 crossbeam = "0.8.4"
 dashmap = "6.1.0"
@@ -83,7 +83,6 @@ egglog-numeric-id = { path = "egglog/numeric-id", version = "2.0.0" }
 egglog-union-find = { path = "egglog/union-find", version = "2.0.0" }
 egglog-add-primitive = { path = "egglog/src/sort/add_primitive", version = "2.0.0" }
 egglog-reports = { path = "egglog/egglog-reports", version = "2.0.0" }
-egglog-backend-trait = { path = "egglog/egglog-backend-trait", version = "2.0.0" }
 egglog = { path = "egglog", default-features = false, version = "2.0.0" }
 
 ######################

@@ -10,6 +10,7 @@ from benchmarking.reports.store import (
     ReportRecord,
     ReportStore,
     RulesetTimingRecord,
+    RulesetTimingRole,
     TimingSummaryRecord,
 )
 
@@ -26,8 +27,8 @@ def make_record(
     binary_sha256: str = "sha256:bin",
     file_sha256: str = "sha256:file",
     fact_directory_sha256: str = "",
-    backend: models.Backend = "main",
     treatment: models.Treatment = "off",
+    disequality_encoding: models.DisequalityEncoding = "nee",
     timeout_sec: int = 120,
     target_label: str | None = None,
     timing_summary: TimingSummaryRecord | None = None,
@@ -49,8 +50,8 @@ def make_record(
         "file_sha256": file_sha256,
         "fact_directory_path": None,
         "fact_directory_sha256": fact_directory_sha256,
-        "backend": backend,
         "treatment": treatment,
+        "disequality_encoding": disequality_encoding,
         "timeout_sec": timeout_sec,
         "wall_sec": None if status == "timed-out" else wall_sec,
         "max_rss_bytes": None if status == "timed-out" else max_rss_bytes,
@@ -64,29 +65,49 @@ def make_record(
 def make_ruleset_timing(
     name: str = "rules",
     *,
+    assembly_ns: int = 0,
     search_ns: int = 400_000_000,
     apply_ns: int = 200_000_000,
-    unattributed_ns: int = 0,
+    execution_ns: int = 0,
     merge_ns: int = 200_000_000,
-    rebuild_ns: int = 100_000_000,
+    role: RulesetTimingRole = "program",
 ) -> RulesetTimingRecord:
     """Construct one valid ruleset timing fixture."""
 
     return {
         "name": name,
+        "role": role,
+        "assembly_ns": assembly_ns,
         "search_ns": search_ns,
         "apply_ns": apply_ns,
-        "unattributed_ns": unattributed_ns,
+        "execution_ns": execution_ns,
         "merge_ns": merge_ns,
-        "rebuild_ns": rebuild_ns,
     }
 
 
-def make_timing_summary(*rulesets: RulesetTimingRecord) -> TimingSummaryRecord:
-    """Construct a valid v2 timing-summary fixture."""
+def make_timing_summary(
+    *rulesets: RulesetTimingRecord,
+    typecheck_ns: int = 0,
+    frontend_parse_ns: int = 0,
+    frontend_other_ns: int = 0,
+    frontend_install_ns: int = 0,
+    commands_actions_ns: int = 0,
+    commands_check_ns: int = 0,
+    commands_other_ns: int = 0,
+    native_rebuild_ns: int = 100_000_000,
+) -> TimingSummaryRecord:
+    """Construct a valid dense timing-summary fixture."""
 
     return {
-        "schema_version": 2,
+        "schema_version": 4,
+        "typecheck_ns": typecheck_ns,
+        "frontend_parse_ns": frontend_parse_ns,
+        "frontend_other_ns": frontend_other_ns,
+        "frontend_install_ns": frontend_install_ns,
+        "commands_actions_ns": commands_actions_ns,
+        "commands_check_ns": commands_check_ns,
+        "commands_other_ns": commands_other_ns,
+        "native_rebuild_ns": native_rebuild_ns,
         "rulesets": list(rulesets or (make_ruleset_timing(),)),
     }
 
@@ -124,13 +145,11 @@ def make_endpoint(
     *,
     target_label: str | None = None,
     binary_sha256: str = "sha256:bin",
-    backend: models.Backend = "main",
     treatment: models.Treatment = "off",
 ) -> models.BenchmarkEndpoint:
     """Construct one resolved endpoint used by pair-report tests."""
 
     return models.BenchmarkEndpoint(
         make_target(target_label=target_label, binary_sha256=binary_sha256),
-        backend,
         treatment,
     )

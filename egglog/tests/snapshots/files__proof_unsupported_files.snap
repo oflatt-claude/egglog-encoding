@@ -6,6 +6,7 @@ before-proofs.egg
 begin-block.egg
 bignum.egg
 complex-merge-prim.egg
+container-query-built-read.egg
 container-rebuild.egg
 cykjson.egg
 eggcc-extraction.egg
@@ -15,11 +16,12 @@ factoring-multisets.egg
 fusion.egg
 hardboiled_conv1d_128.egg
 herbie-tutorial.egg
+index_any.egg
+index_probe.egg
 interval.egg
 lambda.egg
 levenshtein-distance.egg
 looking_up_global.egg
-luminal-llama.egg
 map.egg
 merge-action-block.egg
 merge_read.egg

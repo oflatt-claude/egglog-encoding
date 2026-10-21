@@ -1,0 +1,34 @@
+---
+source: egglog/tests/files.rs
+expression: snapshot_content_across_treatments
+---
+5832
+342
+((A 6887)
+ (RAW_alloc_matches 5222)
+ (RAW_alloc_subregion_at_path 15846)
+ (alloc_aliases 10291)
+ (alloc_matches 2385)
+ (alloc_subregion_at_path 8557)
+ (allocation 6885)
+ (allocation_by_instruction 434)
+ (assign_instruction 155)
+ (call_instruction_arg 1911)
+ (call_instruction_fn_target 1088)
+ (constant_points_to 4363)
+ (constant_ptr_points_to 799)
+ (expr_points_to 5832)
+ (function_name 103)
+ (function_nparams 103)
+ (function_param 137)
+ (gep_var_points_to 1726)
+ (getelementptr_instruction_base 900)
+ (instruction_assigns_to 6471)
+ (instruction_in_function 9526)
+ (load_instruction 2750)
+ (load_instruction_address 2750)
+ (ptr_points_to 342)
+ (ret_instruction 103)
+ (ret_instruction_value 55)
+ (store_instruction_address 1123)
+ (store_instruction_value 1123))

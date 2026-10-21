@@ -1,0 +1,7 @@
+---
+source: egglog-experimental/tests/files.rs
+expression: snapshot
+---
+((R 0)
+ (range 3)
+ (range-copy 3))

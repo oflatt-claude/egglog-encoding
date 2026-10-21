@@ -1,0 +1,23 @@
+---
+source: egglog/tests/files.rs
+expression: snapshot_content_across_treatments
+---
+((gemm 0)
+ (gemv 0)
+ (histogram 0)
+ (parseIR_Val_constant_int 0)
+ (parseIR_Val_constant_real 0)
+ (parseIR_Val_name 0)
+ (parseIR_abstraction1 0)
+ (parseIR_add 0)
+ (parseIR_array 0)
+ (parseIR_constant_int 0)
+ (parseIR_constant_real 0)
+ (parseIR_fold 0)
+ (parseIR_gt 0)
+ (parseIR_ifthenelse 0)
+ (parseIR_lt 0)
+ (parseIR_mul 0)
+ (parseIR_select1 0)
+ (parseIR_select2 0)
+ (parseIR_store1 0))

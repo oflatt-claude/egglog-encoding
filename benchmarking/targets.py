@@ -1,6 +1,6 @@
 """Parse, materialize, build, describe, and construct commands for targets.
 
-This module owns backend/treatment workload command construction. Subprocess
+This module owns treatment-specific workload command construction. Subprocess
 measurement and report persistence belong in their dedicated modules.
 """
 
@@ -19,23 +19,10 @@ from typing import Literal
 from rich.console import Console
 from rich.text import Text
 
-from .models import Backend, FileSpec, ResolvedTarget, TargetRequest, TargetRow, Treatment, backend_spec
+from .engines import TREATMENT_SPECS, Engine, Treatment, validate_engine_workload
+from .models import EngineBinary, FileSpec, ResolvedTarget, TargetRequest, TargetRow
 
 BuildProfile = Literal["release", "profiling"]
-
-
-def treatment_flags(treatment: Treatment) -> list[str]:
-    if treatment == "off":
-        return []
-    if treatment == "term":
-        return ["--term-encoding"]
-    if treatment == "proof-extraction":
-        return ["--proof-extraction"]
-    return ["--proofs"]
-
-
-def backend_flags(backend: Backend) -> list[str]:
-    return list(backend_spec(backend).flags)
 
 
 def parse_target(raw: str) -> TargetRequest:
@@ -221,25 +208,38 @@ def build_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile = "release",
-    cargo_features: Sequence[str] = (),
+    engine: Engine = "egglog",
 ) -> tuple[Path, str]:
     checkout_path = Path(row.path)
-    console.print(Text.assemble(("Building", "bold"), " ", _display_target(row)))
+    engine_label = "" if engine == "egglog" else f" · {engine}"
+    console.print(Text.assemble(("Building", "bold"), " ", _display_target(row), engine_label))
+    package = {"egglog": "egglog-experimental", "egg": "egg-math-benchmark"}.get(engine)
+    target_dir = checkout_path / "target"
+    build_args = ["cargo", "build"]
     if build_profile == "release":
-        build_args = ["cargo", "build", "--release", "-p", "egglog-experimental"]
+        build_args.append("--release")
     else:
-        build_args = ["cargo", "build", "--profile", "profiling", "-p", "egglog-experimental"]
-    if cargo_features:
-        build_args.extend(("--features", ",".join(cargo_features)))
-    subprocess.run(
-        build_args,
-        cwd=checkout_path,
-        check=True,
-        stdout=sys.stderr,
-        stderr=sys.stderr,
-    )
-    binary_name = "egglog-experimental.exe" if os.name == "nt" else "egglog-experimental"
-    binary_path = checkout_path / "target" / build_profile / binary_name
+        build_args.extend(("--profile", build_profile))
+    if package is None:
+        native = checkout_path / "benchmarks/disequality/native"
+        target_dir = checkout_path / "benchmarks/local/parameter-native/target"
+        build_args.extend(
+            (
+                "--locked",
+                "--manifest-path",
+                str(native / "Cargo.toml"),
+                "--target-dir",
+                str(target_dir),
+                "--bin",
+                engine,
+            )
+        )
+    else:
+        build_args.extend(("-p", package))
+    subprocess.run(build_args, cwd=checkout_path, check=True, stdout=sys.stderr, stderr=sys.stderr)
+    binary_stem = package or engine
+    binary_name = f"{binary_stem}.exe" if os.name == "nt" else binary_stem
+    binary_path = target_dir / build_profile / binary_name
     if not binary_path.is_file():
         raise FileNotFoundError(f"{build_profile} binary was not produced: {binary_path}")
     binary_sha256 = sha256_file(binary_path)
@@ -251,16 +251,31 @@ def build_resolved_target(
     row: TargetRow,
     console: Console,
     build_profile: BuildProfile,
-    cargo_features: Sequence[str],
+    engines: Sequence[Engine] = ("egglog",),
 ) -> ResolvedTarget:
-    binary_path, binary_sha256 = build_target(row, console, build_profile, cargo_features)
+    required_engines = tuple(dict.fromkeys(engines))
+    if not required_engines:
+        raise ValueError("target build requires at least one engine")
+    binaries = tuple(
+        EngineBinary(engine, binary_sha256, binary_path)
+        for engine in required_engines
+        for binary_path, binary_sha256 in (build_target(row, console, build_profile, engine),)
+    )
+    primary = binaries[0]
     row = replace(row, is_dirty=git_dirty(Path(row.path)))
-    return ResolvedTarget(request=request, row=row, binary_sha256=binary_sha256, binary_path=binary_path)
+    return ResolvedTarget(
+        request=request,
+        row=row,
+        binary_sha256=primary.sha256,
+        binary_path=primary.path,
+        engine_binaries=binaries,
+        primary_engine=primary.engine,
+    )
 
 
 def resolve_profile_target(
     request: TargetRequest,
-    backend: Backend,
+    treatment: Treatment,
     invocation_cwd: Path,
     repo_root: Path,
     console: Console,
@@ -268,7 +283,13 @@ def resolve_profile_target(
     if request.is_label_lookup:
         raise ValueError("profile mode does not support cache-only label= targets; use label=SOURCE")
     row = materialize_target_request(request, invocation_cwd, repo_root)
-    return build_resolved_target(request, row, console, "profiling", backend_spec(backend).cargo_features)
+    return build_resolved_target(
+        request,
+        row,
+        console,
+        "profiling",
+        (TREATMENT_SPECS[treatment].engine,),
+    )
 
 
 def _display_target(row: TargetRow) -> str:
@@ -284,17 +305,26 @@ def _display_target(row: TargetRow) -> str:
 def workload_command(
     binary_path: Path,
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
+    disequality_encoding: str = "nee",
 ) -> list[str]:
+    specification = TREATMENT_SPECS[treatment]
+    file_spec = file_spec.for_engine(specification.engine)
+    if specification.engine != "egglog":
+        if disequality_encoding != "nee":
+            raise ValueError("disequality encoding selection is only supported by egglog treatments")
+        validate_engine_workload(file_spec, treatment)
+        if specification.engine != "egg":
+            return [str(binary_path), str(file_spec.absolute_path), "100000", "10000"]
+        return [str(binary_path), *specification.flags]
     return [
         str(binary_path),
         "--mode",
         "no-messages",
         "-j",
         "1",
+        *(["--disequality-encoding", disequality_encoding] if disequality_encoding != "nee" else []),
         *(["--fact-directory", str(file_spec.fact_directory)] if file_spec.fact_directory is not None else []),
-        *backend_flags(backend),
-        *treatment_flags(treatment),
+        *specification.flags,
         str(file_spec.absolute_path),
     ]

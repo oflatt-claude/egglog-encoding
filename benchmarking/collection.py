@@ -26,17 +26,18 @@ from rich.progress import (
 from rich.table import Column
 from rich.text import Text
 
+from .engines import TREATMENT_SPECS
 from .models import (
-    Backend,
     BenchmarkEndpoint,
+    DisequalityEncoding,
     EndpointRequest,
+    EngineBinary,
     FileSpec,
     ResolvedTarget,
     Status,
     TargetRequest,
     TargetRow,
     Treatment,
-    backend_cargo_features,
 )
 from .processes import TimingResult, run_command
 from .reports.store import (
@@ -62,11 +63,11 @@ class BenchmarkRunPlan:
     """Cached and missing observations for one endpoint/file result."""
 
     file: FileSpec
-    backend: Backend
     treatment: Treatment
     required_rows: int
     cached_statuses: tuple[Status, ...]
     missing_observations: int
+    disequality_encoding: DisequalityEncoding = "nee"
 
 
 @dataclass(frozen=True)
@@ -123,27 +124,26 @@ def build_collection_plan(
 
     requests = tuple(
         (
-            file_spec,
-            endpoint.backend,
+            file_spec.for_engine(TREATMENT_SPECS[endpoint.treatment].engine),
             endpoint.treatment,
             CacheKey.for_endpoint(endpoint, file_spec, timeout_sec),
         )
         for file_spec in files
         for endpoint in endpoints
     )
-    selected = store.selected_statuses_for_keys(tuple(request[3] for request in requests), rounds)
+    selected = store.selected_statuses_for_keys(tuple(request[2] for request in requests), rounds)
     runs: list[BenchmarkRunPlan] = []
-    for file_spec, backend, treatment, cache_key in requests:
+    for file_spec, treatment, cache_key in requests:
         cached = selected[cache_key]
         missing = rounds if force_run else max(0, rounds - len(cached))
         runs.append(
             BenchmarkRunPlan(
                 file=file_spec,
-                backend=backend,
                 treatment=treatment,
                 required_rows=rounds,
                 cached_statuses=cached,
                 missing_observations=missing,
+                disequality_encoding=cache_key.disequality_encoding,
             )
         )
     return CollectionPlan(target=target, runs=tuple(runs))
@@ -163,9 +163,8 @@ def resolve_targets(
     """Resolve every request, then build once per canonical checkout path.
 
     Materializing all requests before building prevents distinct aliases for the
-    same checkout from overwriting one another's feature-specific executable.
-    Each alias retains its own request and row provenance while sharing the
-    executable path and hash produced from the union of required backends.
+    same checkout from rebuilding the same executable. Each alias retains its
+    own request and row provenance while sharing the executable path and hash.
     """
 
     resolved: dict[TargetRequest, ResolvedTarget] = {}
@@ -192,14 +191,20 @@ def resolve_targets(
         git_shas = {target.row.git_sha for target in pending_targets}
         if len(git_shas) != 1:
             raise ValueError(f"target selectors resolved checkout {checkout_path} at different git commits")
-        backends = tuple(endpoint.backend for target in pending_targets for endpoint in target.endpoint_requests)
+        engines = tuple(
+            dict.fromkeys(
+                TREATMENT_SPECS[endpoint.treatment].engine
+                for target in pending_targets
+                for endpoint in target.endpoint_requests
+            )
+        )
         representative = pending_targets[0]
         built = build_resolved_target(
             representative.request,
             representative.row,
             console,
             "release",
-            backend_cargo_features(backends),
+            engines,
         )
         for target in pending_targets:
             resolved[target.request] = ResolvedTarget(
@@ -207,6 +212,8 @@ def resolve_targets(
                 row=replace(target.row, is_dirty=built.row.is_dirty),
                 binary_sha256=built.binary_sha256,
                 binary_path=built.binary_path,
+                engine_binaries=built.engine_binaries,
+                primary_engine=built.primary_engine,
             )
 
     return {request: resolved[request] for request, _endpoint_requests in request_groups}
@@ -229,24 +236,39 @@ def _resolve_or_materialize_target(
         raise ValueError("target resolution requires its exact endpoint requests")
     if request.is_label_lookup:
         assert request.label is not None
+        required_engines = tuple(
+            dict.fromkeys(TREATMENT_SPECS[endpoint.treatment].engine for endpoint in endpoint_requests)
+        )
+        engine_pointers = tuple(
+            (engine, store.find_label_pointer(request.label, engine)) for engine in required_engines
+        )
+        pointers = tuple(pointer for _engine, pointer in engine_pointers if pointer is not None)
+        if len(pointers) == len(engine_pointers) and all(pointer.row == pointers[0].row for pointer in pointers):
+            binaries = tuple(
+                EngineBinary(engine, pointer.binary_sha256, None)
+                for engine, pointer in engine_pointers
+                if pointer is not None
+            )
+            cached_target = ResolvedTarget(
+                request=request,
+                row=pointers[0].row,
+                binary_sha256=binaries[0].sha256,
+                binary_path=None,
+                engine_binaries=binaries,
+                primary_engine=binaries[0].engine,
+            )
+            if not force_run and label_has_enough_rows(
+                store,
+                cached_target,
+                endpoint_requests,
+                files,
+                rounds,
+                timeout_sec,
+            ):
+                return cached_target
         pointer = store.find_label_pointer(request.label)
         if pointer is None:
             raise ValueError(f"no cached rows found for label {request.label!r}")
-        cached_target = ResolvedTarget(
-            request=request,
-            row=pointer.row,
-            binary_sha256=pointer.binary_sha256,
-            binary_path=None,
-        )
-        if not force_run and label_has_enough_rows(
-            store,
-            pointer.binary_sha256,
-            endpoint_requests,
-            files,
-            rounds,
-            timeout_sec,
-        ):
-            return cached_target
         if pointer.row.is_dirty:
             raise ValueError(
                 f"label {request.label!r} points to a dirty checkout; provide label=SOURCE to collect fresh rows"
@@ -261,7 +283,7 @@ def _resolve_or_materialize_target(
 
 def label_has_enough_rows(
     store: ReportStore,
-    binary_sha256: str,
+    target: ResolvedTarget,
     endpoint_requests: tuple[EndpointRequest, ...],
     files: tuple[FileSpec, ...],
     rounds: int,
@@ -271,15 +293,16 @@ def label_has_enough_rows(
 
     keys = tuple(
         CacheKey(
-            binary_sha256,
+            target.binary_sha256_for(endpoint.treatment),
             file_spec.sha256,
             endpoint.treatment,
             timeout_sec,
-            endpoint.backend,
             file_spec.fact_directory_sha256,
+            endpoint.disequality_encoding,
         )
-        for file_spec in files
+        for logical_file in files
         for endpoint in endpoint_requests
+        for file_spec in (logical_file.for_engine(TREATMENT_SPECS[endpoint.treatment].engine),)
     )
     selected = store.selected_statuses_for_keys(keys, rounds)
     return all(len(selected[key]) >= rounds for key in keys)
@@ -289,15 +312,19 @@ def run_process(
     binary_path: Path,
     checkout_path: Path,
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
     timeout_sec: int,
+    disequality_encoding: DisequalityEncoding = "nee",
 ) -> ProcessObservation:
     """Run one measured workload and read the summary it emitted on success."""
 
     with tempfile.TemporaryDirectory(prefix="egglog-benchmark-") as directory:
         summary_path = Path(directory) / "timing-summary.json"
-        workload = workload_command(binary_path, file_spec, backend, treatment)
+        workload = workload_command(binary_path, file_spec, treatment, disequality_encoding)
+        if not TREATMENT_SPECS[treatment].timing_summary:
+            result = run_command(workload, checkout_path, timeout_sec)
+            require_workload_unchanged(file_spec)
+            return ProcessObservation(result=result, timing_summary=None)
         command = [workload[0], "--timing-summary", str(summary_path), *workload[1:]]
         result = run_command(command, checkout_path, timeout_sec)
         require_workload_unchanged(file_spec)
@@ -340,30 +367,46 @@ def preflight_collection(plan: CollectionPlan, timeout_sec: int) -> None:
     if plan.total_missing_observations == 0:
         return
     target = plan.target
-    if target.binary_path is None:
-        raise ValueError(f"target {target.display_label} needs fresh rows but has no build path")
-    required_outputs: tuple[str, ...] = ("--timing-summary",)
-    if any(run.treatment == "proof-extraction" and run.missing_observations > 0 for run in plan.runs):
-        required_outputs += ("--proof-extraction",)
-    result = run_preflight(target.binary_path, Path(target.row.path), timeout_sec, required_outputs)
-    if result.status != "success":
-        message = f"target {target.display_label} preflight failed"
-        if result.error is not None:
-            message = f"{message}: {result.error.message}"
-        raise ValueError(message)
+    missing = tuple(run for run in plan.runs if run.missing_observations > 0)
+    for engine in dict.fromkeys(TREATMENT_SPECS[run.treatment].engine for run in missing):
+        engine_runs = tuple(run for run in missing if TREATMENT_SPECS[run.treatment].engine == engine)
+        binary_path = target.binary_path_for(engine_runs[0].treatment)
+        if binary_path is None:
+            raise ValueError(f"target {target.display_label} needs a fresh {engine} binary")
+        if engine not in ("egglog", "egg"):
+            continue
+        required_outputs = ["--timing-summary"]
+        if engine == "egglog":
+            if any(run.disequality_encoding != "nee" for run in engine_runs):
+                required_outputs.append("--disequality-encoding")
+            required_outputs.extend(
+                flag for run in engine_runs for flag in TREATMENT_SPECS[run.treatment].flags if flag.startswith("--")
+            )
+        result = run_preflight(
+            binary_path,
+            Path(target.row.path),
+            timeout_sec,
+            tuple(dict.fromkeys(required_outputs)),
+        )
+        if result.status != "success":
+            message = f"target {target.display_label} {engine} preflight failed"
+            if result.error is not None:
+                message = f"{message}: {result.error.message}"
+            raise ValueError(message)
 
 
 def collection_label(
     file_spec: FileSpec,
-    backend: Backend,
     treatment: Treatment,
     round_index: int,
     rounds: int,
+    disequality_encoding: DisequalityEncoding = "nee",
 ) -> str:
     """Return a concise progress label for one measured observation."""
 
     filename = Path(file_spec.display_path).name
-    return f"{filename} · {backend}/{treatment} · {round_index + 1}/{rounds}"
+    encoding = f"/{disequality_encoding}" if disequality_encoding != "nee" else ""
+    return f"{filename} · {treatment}{encoding} · {round_index + 1}/{rounds}"
 
 
 def format_timing_result(result: TimingResult) -> str:
@@ -430,13 +473,13 @@ def flat_report_record(
         "target_git_ref": target.row.git_ref,
         "target_git_sha": target.row.git_sha,
         "target_is_dirty": target.row.is_dirty,
-        "binary_sha256": target.binary_sha256,
+        "binary_sha256": target.binary_sha256_for(run.treatment),
         "file_path": run.file.display_path,
         "file_sha256": run.file.sha256,
         "fact_directory_path": (str(run.file.fact_directory) if run.file.fact_directory is not None else None),
         "fact_directory_sha256": run.file.fact_directory_sha256,
-        "backend": run.backend,
         "treatment": run.treatment,
+        "disequality_encoding": run.disequality_encoding,
         "timeout_sec": timeout_sec,
         "wall_sec": result.timing.wall_sec,
         "max_rss_bytes": result.timing.max_rss_bytes,
@@ -458,9 +501,6 @@ def collect_rows(
     target = plan.target
     if plan.total_missing_observations == 0:
         return
-    if target.binary_path is None:
-        raise ValueError(f"target {target.display_label} needs fresh rows but has no build path")
-    binary_path = target.binary_path
     total_observations = plan.total_missing_observations
     max_deficit = max(run.missing_observations for run in plan.runs)
     completed_observations = 0
@@ -496,23 +536,28 @@ def collect_rows(
                 observation_number = completed_observations + 1
                 label = collection_label(
                     run.file,
-                    run.backend,
                     run.treatment,
                     round_index,
                     run.missing_observations,
+                    run.disequality_encoding,
                 )
                 progress.update(
                     process_task,
                     current=label,
                 )
                 started_at = _now_iso()
+                binary_path = target.binary_path_for(run.treatment)
+                if binary_path is None:
+                    raise ValueError(
+                        f"target {target.display_label} needs a fresh {TREATMENT_SPECS[run.treatment].engine} binary"
+                    )
                 observation = run_process(
                     binary_path,
                     Path(target.row.path),
                     run.file,
-                    run.backend,
                     run.treatment,
                     timeout_sec,
+                    run.disequality_encoding,
                 )
                 store.append(
                     flat_report_record(
