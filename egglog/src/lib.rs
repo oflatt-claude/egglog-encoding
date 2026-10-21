@@ -346,6 +346,8 @@ pub struct EGraph {
     rulesets: IndexMap<String, Ruleset>,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    /// Skip tree decomposition during query planning (the default).
+    /// Set to `false` to opt in; a rule's `:no-decomp` option still overrides it.
     pub no_decomp: bool,
     type_info: TypeInfo,
     /// Cumulative run and process reporting state.
@@ -481,7 +483,7 @@ impl EGraph {
             rulesets: Default::default(),
             fact_directory: None,
             seminaive: true,
-            no_decomp: false,
+            no_decomp: true,
             overall_report: Default::default(),
             type_info: Default::default(),
             schedulers: Default::default(),
@@ -1528,9 +1530,8 @@ impl EGraph {
         // Pure/Write to Read/Full, so primitives that read or write the
         // database can run inside this rule.
         let seminaive = self.seminaive && !rule.eval_mode.is_naive();
-        // The `:no-decomp` rule option (and the global `--no-decomp`
-        // flag) skips tree-decomposition in query planning, forcing
-        // the single-bag fast path.
+        // Tree decomposition is opt-in. A rule's `:no-decomp` option
+        // keeps the single-bag fast path even when enabled globally.
         let no_decomp = self.no_decomp || rule.no_decomp;
         let requires_read_context = !seminaive
             || matches!(
@@ -2085,7 +2086,7 @@ impl EGraph {
             name: fresh_name.clone(),
             ruleset: fresh_ruleset.clone(),
             eval_mode: RuleEvalMode::default(),
-            no_decomp: false,
+            no_decomp: self.no_decomp,
             include_subsumed: false,
         };
         let core_rule = rule.to_canonicalized_core_rule(
@@ -2119,7 +2120,7 @@ impl EGraph {
             &[],
             egglog_bridge::ColumnTy::Id,
         );
-        let id = translator.build(false);
+        let id = translator.build(rule.no_decomp);
         let run_result = self.backend.run_rules(&[id], Some(&self.type_info));
         self.backend.free_rule(id);
         self.backend.free_external_func(ext_id);
@@ -4006,6 +4007,37 @@ mod tests {
     use crate::*;
 
     use crate::PureState;
+
+    #[test]
+    fn tree_decomposition_is_opt_in_with_a_per_rule_override() {
+        for no_decomp in [true, false] {
+            let mut egraph = EGraph::default();
+            assert!(egraph.no_decomp);
+            egraph.no_decomp = no_decomp;
+            egraph
+                .parse_and_run_program(
+                    None,
+                    r#"
+                    (relation Edge (i64 i64))
+                    (relation Reach (i64 i64))
+                    (rule ((Edge a b) (Edge b c)) ((Reach a c)) :name "normal")
+                    (rule ((Edge a b) (Edge b c)) ((Reach a c))
+                          :name "single-bag" :no-decomp)
+                    (Edge 1 2)
+                    (Edge 2 3)
+                    (run 1)
+                    (check (Reach 1 3))
+                    (fail (check (Reach 3 1)))
+                    "#,
+                )
+                .unwrap();
+            let RulesetKind::Rules(rules) = &egraph.rulesets[""].kind else {
+                panic!("expected a plain ruleset");
+            };
+            assert_eq!(rules["normal"].no_decomp, no_decomp);
+            assert!(rules["single-bag"].no_decomp);
+        }
+    }
 
     #[test]
     fn execution_drops_resolved_commands_but_keeps_proof_history() {
