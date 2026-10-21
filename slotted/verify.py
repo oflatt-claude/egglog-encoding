@@ -36,7 +36,7 @@ def collect_graph(workload, row, timeout, progress=quiet_progress, *, config=Non
 def reference_counts(spec, row, timeout, progress=quiet_progress, *, config=None):
     """Keep direct counts even if the reference cannot enumerate its symmetry groups."""
     config = config or Config()
-    env = oracle_env(row.side, config.group_cap)
+    env = oracle_env(row.side, config.group_limit)
     progress(row, "counts + graph dump")
     try:
         r = subprocess.run(

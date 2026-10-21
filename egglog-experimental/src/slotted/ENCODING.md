@@ -1258,8 +1258,8 @@ the variable row and excluding auxiliary tables. This raw count must agree with
 the exported graph. Reconstruction preserves every row, even when two rows
 translate to identical nodes: retiring duplicates is the encoding's responsibility.
 Reference counts are collected directly before graph dumping and checked against
-the parsed dump. Counts remain available when symmetry enumeration exceeds its
-slot cap or a graph dump times out. A count mismatch rejects the comparison before
+the parsed dump. Counts remain available when a symmetry group exceeds the export element
+limit or a graph dump times out. A count mismatch rejects the comparison before
 isomorphism search. Unexpected exporter or checker errors propagate. The regression suite also
 checks class reconstruction against an independent count computed inside egglog.
 
@@ -1280,16 +1280,15 @@ messages identifying slow phases. Tables go to stdout and can be redirected to a
 file. `--timeout` defaults to 300 seconds per engine subprocess. Rust isomorphism
 search uses work limits. Graph reconstruction and input/witness validation have
 no wall-clock timeout, so correctness checks can take longer than the timed runs.
-`--group-cap` on `check.py` controls reference symmetry enumeration and has factorial
-cost. Graph collection stops at
-the requested rewrite budget; it does not execute an extra round to probe saturation.
-
-The full array sweep includes graphs beyond the default 10-slot export cap:
-N=6–10 cannot complete their required isomorphism checks at that cap, even when
-their goals and raw counts agree. `check.py array` reports those comparisons as
-incomplete and exits nonzero. Raising the cap permits factorial enumeration;
-it is not a practical way to check every large case. This reference-export limit
-does not affect the timing runner.
+`--group-limit` on `check.py` bounds the actual number of symmetries exported per
+reference class (default 100,000, including identity). The exporter reads the
+reference's stored generators and enumerates their complete group; it does not
+search every possible permutation of the live slots. Wide classes with small
+groups remain cheap. Exceeding the limit rejects the entire graph export, so a
+partial group can never certify equality. Direct counts remain available, and
+required comparisons report the missing graph as inconclusive. This export limit
+does not affect the timing runner. Graph collection stops at the requested rewrite
+budget; it does not execute an extra round to probe saturation.
 
 Three things had to
 be made the same, each established on a minimal case the harness keeps:

@@ -326,7 +326,7 @@ def graph_failure_reasons():
     timed = subprocess.CompletedProcess([], 0, "GOAL yes\nCONFIG substitution=snapshot\n", "")
     real_run = subprocess.run
     for code, stdout, stderr, reason in (
-        (1, "", "REFERENCE_LIMIT: symmetry enumeration is capped", "symmetry enumeration"),
+        (1, "", "REFERENCE_LIMIT: group export limit exceeded", "group export limit"),
         (
             0,
             'GRAPH {"nodes":{},"slotted":{"classes":{"c":{"slots":["x"],"group":[]}},"nodes":{}}}\n',
@@ -441,7 +441,7 @@ def parallel_collection():
     selected = selected[:1]
     sides = ("encoding-no-aliasing", "ref-nested-snapshot")
     (limited,) = collect(
-        2, sides, run.Config(CHECK_CONFIG.egglog, CHECK_CONFIG.xmulti, group_cap=0, checker=CHECK_CONFIG.checker)
+        2, sides, run.Config(CHECK_CONFIG.egglog, CHECK_CONFIG.xmulti, group_limit=0, checker=CHECK_CONFIG.checker)
     )
     enc, ref = limited
     assert enc.goal == ref.goal == "no"

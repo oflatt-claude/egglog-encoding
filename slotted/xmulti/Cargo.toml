@@ -15,7 +15,9 @@ num-bigint = "0.4"
 # Pinned to a REV rather than a local path, so a runner with no checkout of the
 # reference can build this and the differential half can run in CI.
 #
-# This is upstream `main` at 48cefee: PR 46 (the multipattern matcher with mid-match
+# This is upstream `main` at 48cefee plus one read-only symmetry-generators
+# accessor (4480b8f in the fork); matching and rewriting are unchanged.
+# Upstream includes: PR 46 (the multipattern matcher with mid-match
 # `unify`), PR 50 (a symmetric class's every reading is matched), and the maintainer's
 # fix for the weak shape of a node that reuses one printed name in bound and free
 # positions (`let $x := $x in $x`), which https://github.com/memoryleak47/slotted-egraphs/pull/51
@@ -32,7 +34,7 @@ num-bigint = "0.4"
 # substitution. The separate nested performance baseline keeps the artifact's
 # syntactic substitution. The `checks` feature and explicit `eg.check()` calls
 # make malformed reference state a hard failure.
-slotted-egraphs = { git = "https://github.com/memoryleak47/slotted-egraphs.git", rev = "48cefee5503822224257e4f2e81681fef212ae89" }
+slotted-egraphs = { git = "https://github.com/oflatt-claude/slotted-egraphs.git", rev = "4480b8f3085b61d93a576ea3eb5e2390ac6a507f" }
 
 [features]
 # The differential harness wants malformed reference state to be a hard failure, so

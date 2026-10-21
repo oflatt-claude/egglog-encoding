@@ -217,7 +217,7 @@ def test_reference_environment_ignores_ambient_debug_and_substitution(monkeypatc
             env = run.oracle_env(side, 10)
             assert not any(flag in env for flag in flags)
             assert env["XMULTI_SUBST"] == treatment.substitution
-            assert env["XMULTI_GROUP_SLOT_CAP"] == "10"
+            assert env["XMULTI_GROUP_LIMIT"] == "10"
             assert env["PATH"] == os.environ["PATH"]
 
 

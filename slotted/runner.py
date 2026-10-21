@@ -20,11 +20,10 @@ SCRATCH = ROOT / "target" / "slotted"
 #: Release builds of both sides: egglog, and the reference through `xmulti` without the
 #: crate's `checks` feature, the way the paper's experiments ran it.
 EGGLOG = ROOT / "target" / "release" / "egglog-experimental"
-#: `--group-cap`: how many live slots the oracle enumerates a symmetry group over when it
-#: dumps its graph; past it the exact comparison is unavailable, but direct counts remain.
-#: The oracle's own default is 6. Larger SDQL graphs exceed even 10; raising the
-#: cap has factorial cost, so keep counts available independently of that limit.
-GROUP_CAP = 10
+#: Maximum actual symmetries exported per reference class, including identity.
+#: Wide classes with small groups remain cheap; exceeding this limit makes the
+#: comparison inconclusive while preserving direct class/node counts.
+GROUP_LIMIT = 100_000
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "release" / "xmulti"
 BUILDS = (
     ("cargo", "build", "--release", "-p", "egglog-experimental"),
@@ -73,7 +72,7 @@ class Row:
 class Config:
     egglog: Path = EGGLOG
     xmulti: Path = XMULTI
-    group_cap: int = GROUP_CAP
+    group_limit: int = GROUP_LIMIT
     checker: Path = ROOT / "target/release/egraph-isomorphism"
 
 
@@ -152,7 +151,7 @@ def build(*, env=None):
         subprocess.run(cmd, cwd=ROOT, stdout=sys.stderr, env=env, check=True)
 
 
-def oracle_env(side, group_cap):
+def oracle_env(side, group_limit):
     """Use the selected substitution policy without reference debugging overhead."""
     return {
         **{
@@ -160,7 +159,7 @@ def oracle_env(side, group_cap):
             for key, value in os.environ.items()
             if key not in ("XMULTI_DEBUG", "XMULTI_DEBUG_RULE", "XMULTI_TRACE")
         },
-        "XMULTI_GROUP_SLOT_CAP": str(group_cap),
+        "XMULTI_GROUP_LIMIT": str(group_limit),
         "XMULTI_SUBST": TREATMENTS[side].substitution,
     }
 
@@ -168,7 +167,7 @@ def oracle_env(side, group_cap):
 def run_reference(spec, row, timeout, progress=quiet_progress, *, config=None):
     """Time the reference goal check with an explicit substitution policy."""
     config = config or Config()
-    env = oracle_env(row.side, config.group_cap)
+    env = oracle_env(row.side, config.group_limit)
     row.substitution = env["XMULTI_SUBST"]
     progress(row, "goal")
     t0 = time.perf_counter()

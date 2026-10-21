@@ -76,17 +76,17 @@ def report(selected, results):
 def main(argv=None):
     parser = run.parser(__doc__.splitlines()[0])
     parser.add_argument(
-        "--group-cap",
+        "--group-limit",
         type=int,
-        default=run.GROUP_CAP,
-        help="reference symmetry enumeration slot limit (default 10; factorial cost)",
+        default=run.GROUP_LIMIT,
+        help="maximum exported symmetries per reference class (default 100000)",
     )
     args = parser.parse_args(argv)
-    if args.group_cap < 0:
-        parser.error("--group-cap must be nonnegative")
+    if args.group_limit < 0:
+        parser.error("--group-limit must be nonnegative")
     try:
         selected = workloads.select(args)
-        config = run.setup(args, selected, config=run.Config(group_cap=args.group_cap))
+        config = run.setup(args, selected, config=run.Config(group_limit=args.group_limit))
         if not args.no_build:
             subprocess.run(
                 ["cargo", "build", "--release", "-p", "egraph-isomorphism"], cwd=run.ROOT, check=True, stdout=sys.stderr
