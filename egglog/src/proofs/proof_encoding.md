@@ -303,8 +303,9 @@ per-column rules, so a subsumed row stays subsumed after its children move.
 
 # Globals
 
-*Before the term encoding*, [`crate::ast::remove_globals`] desugars every global
-variable to a nullary function, so execution need not treat them specially:
+[`crate::ast::remove_globals`] is the global-lowering pass used by both native
+execution and term/proof encoding. It turns each global into a function with no
+arguments before the term encoding runs:
 
 ```text
 (let g1 (Add (Num 1) (Num 2)))
@@ -317,11 +318,22 @@ becomes
 (set (g1) (Add (Num 1) (Num 2)))
 ```
 
-and references to `g1` become the lookup `(g1)`. The encoding then treats
-`:internal-let` like a nullary constructor: it gets an FD view
+and references to `g1` become the lookup `(g1)`. An eq-sort global is encoded
+like a nullary constructor: it gets an FD view
 `g1 : () -> (Math, proof)` with the congruence `:merge`, a rebuild index, and
 rebuild rules like any other function. Because the definition is a `set` and not
 a `union`, a global adds no e-class merge of its own.
+
+Primitive globals, such as `(let $two 2)`, keep the function emitted by
+`remove_globals`. Their values never change under union, so the encoding adds
+no proof column or rebuild rule. A query reading one uses a reflexive proof over the
+value; the checker evaluates global references from the program's own bindings.
+Merge bodies read globals and carry the proof from their written value to its
+canonical representative. That proof also updates the merge's output row when
+the result has been canonicalized. A container built in a merge uses the same
+element proofs and rebuilding as one built in an action. Proof checking supplies
+global bindings alongside `old` and `new`. Container-valued globals remain
+unsupported.
 
 The pass also appends a lookup fact to the body of every rule whose *head*
 mentions a global, so the head can read the global's current value. Those facts

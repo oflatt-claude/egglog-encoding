@@ -52,7 +52,11 @@ impl ProofInstrumentor<'_> {
                 ResolvedExpr::Call(_span2, head @ ResolvedCall::Func(_), args),
                 // TODO this could actually be arbitrary pretty easily, it's just nested functions that are hard.
                 ResolvedExpr::Var(_span3, v),
-            ) if head.is_custom_func() => {
+            ) if head.is_custom_func()
+                && (v.sort.is_eq_sort() || !self.egraph.type_info.is_global(head.name())) =>
+            {
+                // Eq-sort globals retain this direct view read. Primitive globals
+                // have no proof column and use `instrument_fact_expr` instead.
                 let mut new_args = vec![];
                 let mut arg_proofs = vec![];
                 for arg in args {
@@ -178,6 +182,18 @@ impl ProofInstrumentor<'_> {
                 }
                 match resolved_call {
                     ResolvedCall::Func(func_type) => {
+                        if self.egraph.type_info.is_global(&func_type.name)
+                            && !func_type.output().is_eq_sort()
+                        {
+                            let value = self.fresh_var();
+                            res.push(format!("(= {value} ({}))", func_type.name));
+                            let proof = if self.proofs_enabled() {
+                                self.reflexive_fiat_proof(func_type.output().name(), &value)
+                            } else {
+                                "()".to_string()
+                            };
+                            return (value, proof);
+                        }
                         // Constructors and encoded globals both have the FD view
                         // `(children) -> (eclass, proof)`, so the same view read binds
                         // the e-class + proof.

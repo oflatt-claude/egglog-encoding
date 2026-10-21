@@ -1566,7 +1566,7 @@ impl TypeInfo {
     }
 
     /// Check if an expression contains non-global function lookups (FunctionSubtype::Custom calls).
-    /// Global function calls are allowed since they get desugared to constructors.
+    /// Global reads are allowed; the term/proof encoding handles them separately.
     /// Returns Some(span) if a lookup is found, None otherwise.
     pub fn expr_has_function_lookup(&self, expr: &ResolvedExpr) -> Option<Span> {
         use ast::GenericExpr;

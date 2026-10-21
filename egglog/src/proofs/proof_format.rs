@@ -6,7 +6,8 @@ use crate::{
     },
     proofs::{
         proof_checker::{
-            ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, gather_globals, run_merge,
+            ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, eval_merge_expr,
+            gather_globals, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, Skeleton, holds_sort, recomputable_premises},
         proof_head::{Firing, HeadPlan, HeadWalk, ProofAlgebra},
@@ -68,13 +69,11 @@ fn run_merge_subexpr(
     term_dag: &mut TermDag,
     func_name: &str,
     prog: &[ResolvedNCommand],
+    globals: &HashMap<String, TermId>,
     old_term: TermId,
     new_term: TermId,
     idx: usize,
 ) -> Result<(TermId, HashSet<Proposition>), ProofCheckError> {
-    let mut subst = HashMap::default();
-    subst.insert("old".to_string(), old_term);
-    subst.insert("new".to_string(), new_term);
     for cmd in prog {
         if let GenericNCommand::Function(func_decl) = cmd
             && func_decl.name == func_name
@@ -89,7 +88,7 @@ fn run_merge_subexpr(
                     function_name: format!("{func_name} (merge subexpr index {idx} out of range)"),
                 })
             })?;
-            return eval_expr_with_subst("merge_function", subexpr, term_dag, &subst);
+            return eval_merge_expr(term_dag, subexpr, globals, old_term, new_term);
         }
     }
     Err(ProofCheckErrorKind::FunctionNotFound {
@@ -1152,6 +1151,7 @@ impl ProofStore {
                     &mut self.term_dag,
                     function,
                     prog,
+                    globals,
                     old_output,
                     new_output,
                     *idx,
@@ -1168,9 +1168,15 @@ impl ProofStore {
                 // `merged` is the whole merge body evaluated on the two premise outputs.
                 let (view_head, input_args, old_output, new_output) =
                     self.merge_premise_view(old_proof_id, new_proof_id);
-                let (merged_child, _props) =
-                    run_merge(&mut self.term_dag, function, prog, old_output, new_output)
-                        .unwrap_or_else(|e| panic!("failed to run merge for {function}: {e}"));
+                let (merged_child, _props) = run_merge(
+                    &mut self.term_dag,
+                    function,
+                    prog,
+                    globals,
+                    old_output,
+                    new_output,
+                )
+                .unwrap_or_else(|e| panic!("failed to run merge for {function}: {e}"));
                 let mut merged_args = input_args;
                 merged_args.push(merged_child);
                 let to_prove = self.term_dag.app(view_head, merged_args);
