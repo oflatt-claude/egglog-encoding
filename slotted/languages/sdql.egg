@@ -27,15 +27,14 @@
 ;;; `Sum(A, Bind<Bind<A>>)` is `(Sum R $k $v body)`, so the two bound slots are
 ;;; columns 1 and 2. `Merge`'s three are columns 2, 3 and 4, and `Let`'s one is column 1.
 ;;;
-;;; `$Var` enables variable terms in `U`: a variable occurrence is `$s` in an
-;;; ordinary child column, backed by a single variable class.
+;;; A variable occurrence is `$s` in an ordinary `U` child column, backed by a
+;;; single variable class. Every carrier supports variables automatically.
 ;;; This port also uses `Num(i64)` where the artifact uses `Num(u32)`, and adds `Null`
 ;;; for encoding tests. Neither extension occurs in the pinned BATAX artifact terms.
 ;;;
 ;;; The rules are NOT confluent -- `get-to-sum` and `sum-to-get` alone loop -- so any
 ;;; test over them asks for a bounded number of steps.
 (sort U)
-(constructor $Var () U)
 
 (constructor Lambda (U U) U :binder 0)            ; Lam(Bind<AppliedId>)          "lambda"
 (constructor Sing (U U) U)                        ; Sing(A, A)                    "sing"

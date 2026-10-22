@@ -16,7 +16,6 @@
 ;;; Compile with: target/debug/egglog-experimental --slotted slotted/languages/toy.egg --mode desugar
 
 (sort U)
-(constructor $Var () U)
 
 (constructor Lam (U U) U :binder 0)              ; Lam(Bind<AppliedId>)      "lam"
 (constructor F (U U) U)                          ; F(AppliedId, AppliedId)   "f"

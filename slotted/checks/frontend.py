@@ -12,7 +12,7 @@ from slotted import test_program as driver  # noqa: E402
 
 FORMS_TMP = ROOT / "target" / "slotted" / "forms.egg"
 
-L = "(datatype M ($Var) (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n"
+L = "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n"
 
 #: (expected verdict, what, program)
 PROBES = [
@@ -37,6 +37,7 @@ PROBES = [
     ("refused", ":ruleset", "(ruleset rs)\n" + L + '(rewrite (Add x y) (Nil) :ruleset rs :name "r")\n'),
     ("refused", ":subsume", L + '(rewrite (Add x y) (Nil) :subsume :name "r")\n'),
     # ---- declarations -------------------------------------------------------------
+    ("ok", "slots without user constructors", "(sort M)\n(run 0)\n(check (!= $a $b))\n"),
     ("ok", "datatype", L + "(let a (N 1))\n(run 0)\n"),
     (
         "ok",
@@ -112,7 +113,7 @@ PROBES = [
     (
         "ok",
         "constructor names colliding with derived RHS locals",
-        "(datatype U ($Var) (Start U) (F U) (F_slots U) (F_edge U) (Pair U U))\n"
+        "(datatype U (Start U) (F U) (F_slots U) (F_edge U) (Pair U U))\n"
         "(let start (Start $0))\n"
         "(rewrite (Start a) (Pair (F a) (Pair (F_slots a) (F_edge a))))\n"
         "(run 1)\n(check (= start (Pair (F $0) (Pair (F_slots $0) (F_edge $0)))))\n",
@@ -191,15 +192,15 @@ def repeatable_compilation():
 
 REFUSALS_TMP = ROOT / "target" / "slotted" / "refusal.egg"
 
-LANG = "(datatype M ($Var) (Null) (IConst) (Succ M) (Mul M M) (Lam M M :binder 0))\n"
+LANG = "(datatype M (Null) (IConst) (Succ M) (Mul M M) (Lam M M :binder 0))\n"
 
 #: (what is refused, program, a phrase the message must carry)
 CASES = [
-    ("a slot in a sort without $Var", "(datatype M (F M)) (let bad (F $a))", "does not declare $Var"),
+    ("a slot in a payload column", "(datatype M (Num i64)) (let bad (Num $a))", "ground payloads must be literals"),
     (
-        "a binder without a variable variant",
-        "(datatype M (Lam M M :binder 0))\n",
-        "must declare $Var",
+        "a binder over payload columns",
+        "(datatype M (Lam i64 M :binder 0))\n",
+        "must cover a following child",
     ),
     ("a term in a ground binder column", LANG + "(let bad (Lam (Null) (Null)))\n", "takes a slot literal"),
     (
@@ -213,9 +214,9 @@ CASES = [
         "takes a slot literal",
     ),
     (
-        "a variable variant with columns",
+        "a constructor name starting with $",
         "(datatype M ($Var M) (N))\n",
-        "$Var takes no columns or options",
+        "constructor names cannot start with $",
     ),
     ("an out-of-range numeric slot", LANG + "(let bad (Succ $9223372036854775808))\n", "signed 64-bit"),
     ("an empty slot name", LANG + "(let bad (Succ $))\n", "invalid slot literal"),
@@ -369,7 +370,11 @@ CASES = [
         LANG + "(rewrite (Lam x (Succ x)) (Null))\n",
         "takes a slot literal",
     ),
-    ("a sort with no constructors", "(sort A)\n(run 1)\n", "no constructors declared"),
+    (
+        "a binder of a different carrier",
+        "(datatype* (A (A0)) (B (Lam A B :binder 0)))\n",
+        "cross-sort slotted children are not supported",
+    ),
     (
         "an unbound rewrite root",
         LANG + '(rewrite x (Mul x x) :name "r")\n',

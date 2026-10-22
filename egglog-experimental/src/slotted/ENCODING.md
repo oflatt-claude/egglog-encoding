@@ -27,7 +27,6 @@ The running example is:
 
 ```
 (sort Math)
-(constructor $Var () Math)
 (constructor Add (Math Math) Math)
 (let a (Add $0 $1))
 (let b (Add $1 $0))
@@ -163,10 +162,8 @@ in front of its own variables.
 **`Renaming`** is a partial injection on slots, spelled as a map from `i64` to
 `i64`. `compose`, `inverse`, `map-image` and `map-domain` are primitives on it.
 
-**`Var`** is the one variable class for a carrier declaring `($Var)`.
-The implementation declares its internal table for every carrier but seeds it
-only when the source enables variables; `SlottedVariableSort` records this for
-export validation. Every variable is `(Var 0)` reached by an
+**`Var`** is the one variable class seeded for every carrier. Every variable is
+`(Var 0)` reached by an
 edge `0 -> s`, so *which* slot a variable names lives in the renaming and not in
 the value. Its class slots are seeded outright:
 
@@ -537,8 +534,8 @@ Part II explains how the current implementation keeps one.
 
 ## Binders
 
-The source variant `($Var)` enables slot literals such as `$a` or `$0` in its
-carrier. For example, `(datatype Expr ($Var) (Lam Expr Expr :binder 0))`
+Every carrier accepts slot literals such as `$a` or `$0`.
+For example, `(datatype Expr (Lam Expr Expr :binder 0))`
 uses `Expr` for both the binder and body. `:binder i` marks a carrier column
 whose argument must be a slot literal. It lowers to a variable child and its
 renaming, using the constructor's carrier. The bound slot is

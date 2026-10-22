@@ -70,9 +70,6 @@ def read_language(path, sorts=("U",)):
         head, _, rest = line[len("(constructor ") :].partition("(")
         cols_text, _, tail = rest.partition(")")
         name = head.strip()
-        # Slot terms already use the reference's intrinsic variable node.
-        if name == "$Var":
-            continue
         # `tail` is the output sort, then the options, then the closing paren
         tokens = tail.rstrip(")").split()
         opts = next((i for i, t in enumerate(tokens) if t.startswith(":")), len(tokens))
@@ -772,8 +769,6 @@ class Source:
         self._read(path, text=text)
         self.carriers = carrier_symbols(self.sorts)
         for form in self._ctors:
-            if form[1] == "$Var":
-                continue
             name, sig, output, children = read_typed_language_form(form, self.sorts)
             self.spec[name] = sig
             self.output_sorts[name] = output

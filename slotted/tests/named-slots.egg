@@ -1,6 +1,5 @@
-;;; $Var enables slot literals; :binder gives a slot scope.
+;;; Every carrier accepts slot literals; :binder gives a slot scope.
 (datatype Expr
-  ($Var)
   (Lam Expr Expr :binder 0)
   (Pair Expr Expr)
   (Occurrence Expr)

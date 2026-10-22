@@ -10,7 +10,6 @@
 ;;; taken out of the class's slot set, so renaming either is invisible from outside.
 
 (sort U)
-(constructor $Var () U)
 
 (constructor Sing (U U) U)
 (constructor Sum (U U U U) U :binder 1 2)

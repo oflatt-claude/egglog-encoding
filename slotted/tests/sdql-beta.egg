@@ -24,7 +24,6 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/sdql-beta.egg
 
 (sort U)
-(constructor $Var () U)
 
 (constructor Let (U U U) U :binder 1)
 (constructor Add (U U) U)

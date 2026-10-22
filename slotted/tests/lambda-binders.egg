@@ -10,7 +10,6 @@
 ;;; last section a test rather than a tautology.
 
 (sort U)
-(constructor $Var () U)
 
 (constructor Lam (U U) U :binder 0)
 (constructor App (U U) U)

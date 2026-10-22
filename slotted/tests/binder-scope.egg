@@ -27,7 +27,6 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/binder-scope.egg
 
 (sort U)
-(constructor $Var () U)
 
 (constructor Let (U U U) U :binder 0)
 (constructor App (U U) U)

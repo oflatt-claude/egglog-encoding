@@ -26,7 +26,6 @@
 ;;; already here; and the slide, transpose and dot-product rules, which need
 ;;; constructors this language does not declare.
 (sort U)
-(constructor $Var () U)
 
 (constructor Lam (U U) U :binder 0)
 (constructor App (U U) U)

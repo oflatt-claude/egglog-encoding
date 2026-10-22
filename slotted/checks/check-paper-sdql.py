@@ -99,7 +99,6 @@ MMM_RULES = {
 ARTIFACT_RULE_SEMANTICS_SHA256 = "b1cb9ae78abfa9a8f46bad55e794c73a704afd3a1116870f0ead7c6e06450030"
 
 SELECTED_CONSTRUCTORS = {
-    "$Var",
     "Lambda",
     "Sing",
     "Add",

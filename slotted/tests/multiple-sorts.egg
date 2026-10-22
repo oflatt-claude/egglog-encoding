@@ -2,7 +2,6 @@
 ;; each has its own variable, class, equality, and substitution machinery.
 (datatype*
   (Expr
-    ($Var)
     (EZero)
     (ESucc Expr)
     (EPrev Expr)
@@ -10,7 +9,6 @@
     (ELam Expr Expr :binder 0)
     (ELet Expr Expr Expr :binder 1))
   (Ty
-    ($Var)
     (TZero)
     (TSucc Ty)
     (TPrev Ty)

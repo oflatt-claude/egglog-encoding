@@ -7,7 +7,6 @@
 ;;; and since the two share no slot, every slot would go redundant: every variable one
 ;;; variable, every term of one constructor one term.
 (sort U)
-(constructor $Var () U)
 (constructor Let (U U U) U :binder 1)
 (constructor Get (U U) U)
 

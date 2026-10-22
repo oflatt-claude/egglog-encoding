@@ -9,7 +9,6 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/rewrite-tests.egg
 
 (sort U)
-(constructor $Var () U)
 
 (constructor F (U U) U)
 (constructor G (U U) U)

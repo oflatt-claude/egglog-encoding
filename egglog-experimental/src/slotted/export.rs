@@ -88,13 +88,7 @@ pub fn export_named(
         },
     };
     for symbols in &layouts.carriers {
-        let snapshot = Snapshot::read(
-            graph,
-            symbols,
-            layouts.variable_sorts.contains(&symbols.sort),
-            &layouts.constructors,
-            names,
-        )?;
+        let snapshot = Snapshot::read(graph, symbols, &layouts.constructors, names)?;
         out.counts.nodes += snapshot.raw_nodes;
         out.counts.classes += snapshot.append(&mut out.graph, &symbols.sort, names.is_empty())?;
     }
@@ -142,7 +136,7 @@ struct Snapshot {
     links: Vec<Link>,
     groups: BTreeMap<Value, Vec<Map>>,
     rows: Vec<Row>,
-    variable: Option<Value>,
+    variable: Value,
     raw_nodes: usize,
 }
 
@@ -183,7 +177,6 @@ impl Snapshot {
     fn read(
         graph: &EGraph,
         symbols: &Symbols,
-        has_variable: bool,
         constructors: &BTreeMap<String, Constructor>,
         names: &BTreeMap<String, OperatorName>,
     ) -> Result<Self, String> {
@@ -246,14 +239,13 @@ impl Snapshot {
                 });
             })
             .map_err(|e| e.to_string())?;
-        if rows.len() != usize::from(has_variable) {
+        if rows.len() != 1 {
             return Err(format!(
-                "expected {} raw variable rows, found {}",
-                usize::from(has_variable),
+                "expected one raw variable row, found {}",
                 rows.len()
             ));
         }
-        let variable = rows.first().map(|row| row.class);
+        let variable = rows[0].class;
         let mut raw_nodes = graph.get_size(&symbols.var);
         for op in constructors.values().filter(|op| op.sort == symbols.sort) {
             raw_nodes += graph.get_size(&op.name);
@@ -492,7 +484,7 @@ impl Snapshot {
             for &i in &row.binders {
                 let edge = &row.edges[i];
                 if edge.map.keys().copied().collect::<Vec<_>>() != [0]
-                    || self.variable.map(|var| reps[&var]) != Some(reps[&edge.class])
+                    || reps[&edge.class] != reps[&self.variable]
                 {
                     return Err(
                         "binder must point to the variable class with exactly domain {0}".into(),

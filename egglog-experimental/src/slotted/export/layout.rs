@@ -11,7 +11,6 @@ use super::super::model::{Column, Constructor, Symbols};
 
 pub(super) struct Layouts {
     pub carriers: Vec<Symbols>,
-    pub variable_sorts: BTreeSet<String>,
     pub constructors: BTreeMap<String, Constructor>,
 }
 
@@ -42,10 +41,6 @@ impl Layouts {
     pub fn load(graph: &EGraph) -> Result<Self, String> {
         let text = |v| graph.value_to_base::<S>(v).into_inner();
         let integer = |v| graph.value_to_base::<i64>(v);
-        let variable_sorts: BTreeSet<_> = rows(graph, "SlottedVariableSort", &["String"])?
-            .iter()
-            .map(|row| text(row[0]))
-            .collect();
         let mut arities = BTreeMap::new();
         for row in rows(graph, "SlottedNodeLayout", &["String", "i64"])? {
             let name = text(row[0]);
@@ -176,7 +171,6 @@ impl Layouts {
             constructors.insert(name, op);
         }
         if carriers.is_empty()
-            || variable_sorts.iter().any(|s| !carriers.contains_key(s))
             || !columns.is_empty()
             || !covered.is_empty()
             || constructors
@@ -234,7 +228,6 @@ impl Layouts {
         }
         Ok(Self {
             carriers: carriers.into_values().collect(),
-            variable_sorts,
             constructors,
         })
     }

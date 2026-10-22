@@ -15,7 +15,6 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/redundancy-tests.egg
 
 (sort U)
-(constructor $Var () U)
 
 (constructor F (U U) U)
 (constructor H (U U) U)

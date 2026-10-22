@@ -11,7 +11,6 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/datatype.egg
 
 (datatype M
-  ($Var)
   (Num i64)
   (Succ M)
   (Prev M)

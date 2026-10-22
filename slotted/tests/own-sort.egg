@@ -11,7 +11,6 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/own-sort.egg
 
 (sort S)
-(constructor $Var () S)
 
 (constructor Null () S)
 (constructor Succ (S) S)

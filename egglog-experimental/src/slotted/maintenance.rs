@@ -1,6 +1,6 @@
 //! Invariant maintenance, emitted independently of user rewrites.
 use super::model::*;
-use super::syntax::{machinery, quote};
+use super::syntax::machinery;
 
 pub(super) const MACHINERY: &str = "(seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read)))";
 
@@ -211,19 +211,4 @@ pub(super) fn constructor(op: &Constructor, s: &Symbols) -> String {
         }
     }
     machinery(&out.join("\n"))
-}
-
-/// Enable the single canonical variable node only for sorts declaring `$Var`.
-pub(super) fn variable(s: &Symbols) -> String {
-    format!(
-        "(set (SlottedVariableSort {sort}) ())\n\
-         (set ({class_slots} ({var} 0)) (map-of 0 0))\n\
-         ({renames} ({var} 0) (map-insert (map-empty) 0 0) ({var} 0))\n\
-         (set ({group} ({var} 0)) (set-of (map-insert (map-empty) 0 0)))",
-        sort = quote(&s.sort),
-        class_slots = s.class_slots,
-        var = s.var,
-        renames = s.renames,
-        group = s.group,
-    )
 }

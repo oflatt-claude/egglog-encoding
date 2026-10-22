@@ -16,7 +16,6 @@
 ;;; the test that separates `=` from `renaming-=`.
 
 (sort U)
-(constructor $Var () U)
 
 (constructor F (U U) U)
 (constructor G (U U) U)

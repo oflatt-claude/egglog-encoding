@@ -140,37 +140,6 @@ impl Compiler {
             self.state.lang.carriers.push(s);
         }
         for f in ctors {
-            if let Ok(("constructor", args)) = f.call()
-                && args.first().and_then(|a| a.atom().ok()) == Some("$Var")
-            {
-                if args.len() != 3 || !args[1].list().is_ok_and(|cols| cols.is_empty()) {
-                    return Err(ParseError(
-                        fallback.clone(),
-                        "$Var takes no columns or options".into(),
-                    ));
-                }
-                let sort = args[2]
-                    .symbol()
-                    .map_err(|e| ParseError(fallback.clone(), e))?;
-                if !self.state.lang.carriers.iter().any(|s| s.sort == sort) {
-                    return Err(ParseError(
-                        fallback.clone(),
-                        format!("$Var: {sort} is not a declared equality sort"),
-                    ));
-                }
-                if !self.state.lang.variable_sorts.insert(sort.into()) {
-                    return Err(ParseError(
-                        fallback.clone(),
-                        format!("$Var is declared more than once for {sort}"),
-                    ));
-                }
-                self.emit(
-                    &mut out,
-                    maintenance::variable(self.state.lang.symbols(sort)),
-                    None,
-                );
-                continue;
-            }
             let op = self
                 .constructor(&f)
                 .map_err(|e| ParseError(fallback.clone(), e))?;
@@ -180,17 +149,6 @@ impl Compiler {
                 Some(&op.name),
             );
             self.state.lang.constructors.insert(op.name.clone(), op);
-        }
-        for op in self.state.lang.constructors.values() {
-            if !op.binders().is_empty() && !self.state.lang.variable_sorts.contains(&op.sort) {
-                return Err(ParseError(
-                    fallback.clone(),
-                    format!(
-                        "constructor {}: binder sort {} must declare $Var",
-                        op.name, op.sort
-                    ),
-                ));
-            }
         }
         self.state.declared.extend(declared);
         if let Some(name) = self
@@ -234,9 +192,7 @@ impl Compiler {
         }
         let name = args[0].symbol()?.to_owned();
         if name.starts_with('$') {
-            return Err(
-                "constructor names cannot start with $; use $Var to enable slot literals".into(),
-            );
+            return Err("constructor names cannot start with $".into());
         }
         let sort = args[2].symbol()?.to_owned();
         if self.state.lang.constructors.contains_key(&name) {
@@ -367,11 +323,6 @@ impl Compiler {
                 if self.state.lang.carriers.is_empty() {
                     return Err("no equality sort is declared".into());
                 }
-                if self.state.lang.constructors.is_empty()
-                    && self.state.lang.variable_sorts.is_empty()
-                {
-                    return Err("no constructors declared".into());
-                }
                 if args.len() != 1 {
                     return Err("slotted run expects a nonnegative round count".into());
                 }
@@ -422,8 +373,7 @@ impl Compiler {
     }
 
     fn sort_of(&self, t: &Term) -> Result<String, String> {
-        let sort = self
-            .state
+        self.state
             .lang
             .sort_of(t)
             .map(str::to_owned)
@@ -432,10 +382,8 @@ impl Compiler {
                     .then(|| self.state.lang.carriers[0].sort.clone())
             })
             .ok_or_else(|| {
-                "bare slot has no equality-sort context; put it under a constructor".to_owned()
-            })?;
-        self.validate_slots(t, &sort)?;
-        Ok(sort)
+                "bare slot has no equality-sort context; put it under a constructor".into()
+            })
     }
     fn common(&mut self, forms: &[Form]) -> Result<(String, Vec<Term>), String> {
         let terms = forms
@@ -454,33 +402,7 @@ impl Compiler {
         {
             return Err("cannot compare terms of different equality sorts".into());
         }
-        for term in &terms {
-            self.validate_slots(term, &sort)?;
-        }
         Ok((sort, terms))
-    }
-
-    /// Bare slots and substitution operands acquire their carrier from context.
-    fn validate_slots(&self, term: &Term, sort: &str) -> Result<(), String> {
-        match term {
-            Term::Slot(_) if !self.state.lang.variable_sorts.contains(sort) => {
-                return Err(format!(
-                    "sort {sort} does not declare $Var; slot literals require ($Var) in its datatype"
-                ));
-            }
-            Term::Node(name, args) => {
-                for arg in args {
-                    self.validate_slots(arg, &self.state.lang.constructors[name].sort)?;
-                }
-            }
-            Term::Subst(args) => {
-                for arg in args.iter() {
-                    self.validate_slots(arg, sort)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
     }
 
     fn term(&mut self, f: &Form, ground: bool, expected: Option<&str>) -> Result<Term, String> {
@@ -569,9 +491,6 @@ impl Compiler {
             && want != actual
         {
             return Err(format!("term has sort {actual}, expected {want}"));
-        }
-        if let Some(sort) = expected {
-            self.validate_slots(&term, sort)?;
         }
         let mut term = term;
         if ground {
@@ -751,7 +670,6 @@ impl Compiler {
             return Err(format!("rewrite root {root:?} is not bound by a pattern"));
         }
         let sort = &self.state.lang.constructors[&first.op].sort;
-        self.validate_slots(&rhs, sort)?;
         if atoms
             .iter()
             .any(|a| self.state.lang.constructors[&a.op].sort != *sort)

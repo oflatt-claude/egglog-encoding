@@ -13,7 +13,6 @@
 ;;; independently.
 
 (sort U)
-(constructor $Var () U)
 
 (constructor C (U U) U)
 (constructor I (U U) U)

@@ -1,7 +1,6 @@
 ; This file emulates the use of rules / relations.
 
 (sort U)
-(constructor $Var () U)
 (constructor Thingy (U U U) U)
 
 (constructor RelA (U) U)

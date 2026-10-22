@@ -13,7 +13,6 @@
 ;;; by the same argument. The reference asserts `eg.slots(id).is_empty()`.
 
 (sort U)
-(constructor $Var () U)
 
 (constructor F (U U) U)
 

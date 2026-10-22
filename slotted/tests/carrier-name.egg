@@ -8,7 +8,6 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/carrier-name.egg
 
 (sort U)
-(constructor $Var () U)
 
 (constructor Null () U)
 (constructor Succ (U) U)

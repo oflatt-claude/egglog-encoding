@@ -27,7 +27,7 @@ def test_constructor_names_translate_to_reference_syntax(name: str, term: Any, r
 
 def source(tmp_path: Path) -> Any:
     path = tmp_path / "language.egg"
-    path.write_text("(datatype U ($Var) (F U U) (G U U) (Null))")
+    path.write_text("(datatype U (F U U) (G U U) (Null))")
     src = syntax.Source(path)
     for op in src.lang.ops.values():
         op.ref = op.ctor
@@ -37,13 +37,12 @@ def source(tmp_path: Path) -> Any:
 @pytest.mark.parametrize(
     "declaration",
     [
-        "(datatype Var ($Var) (Lam Var Var :binder 0) (Pair Var Var))",
-        "(datatype* (Var (Lam Var Var :binder 0) ($Var) (Pair Var Var)))",
-        "(sort Var) (constructor $Var () Var) "
-        "(constructor Lam (Var Var) Var :binder 0) (constructor Pair (Var Var) Var)",
+        "(datatype Var (Lam Var Var :binder 0) (Pair Var Var))",
+        "(datatype* (Var (Lam Var Var :binder 0) (Pair Var Var)))",
+        "(sort Var) (constructor Lam (Var Var) Var :binder 0) (constructor Pair (Var Var) Var)",
     ],
 )
-def test_variable_variant_is_not_a_reference_operator(tmp_path: Path, declaration: str) -> None:
+def test_var_is_an_ordinary_carrier_name(tmp_path: Path, declaration: str) -> None:
     path = tmp_path / "language.egg"
     path.write_text(declaration)
     src = syntax.Source(path)

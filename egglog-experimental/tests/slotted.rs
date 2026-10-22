@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const LANGUAGE: &str = "(datatype U ($Var) (Null) (F U U) (G U U) (H U U) (Lam U U :binder 0))";
+const LANGUAGE: &str = "(datatype U (Null) (F U U) (G U U) (H U U) (Lam U U :binder 0))";
 
 fn evaluate(compiler: &mut Compiler, graph: &mut egglog::EGraph, source: &str) {
     let encoded = compiler.compile(None, source).unwrap();
@@ -18,7 +18,7 @@ fn string_payloads_preserve_quotes_and_backslashes() {
     evaluate(
         &mut compiler,
         &mut graph,
-        r#"(datatype U ($Var) (Text String)) (let value (Text "a\"b\\c"))"#,
+        r#"(datatype U (Text String)) (let value (Text "a\"b\\c"))"#,
     );
     graph
         .parse_and_run_program(None, r#"(check (= text (Text "a\"b\\c")))"#)
@@ -112,64 +112,27 @@ fn binder_columns_require_slots() {
 }
 
 #[test]
-fn slots_require_an_explicit_variant_and_follow_scopes() {
-    let mut compiler = Compiler::default();
-    let mut graph = egglog_experimental::slotted::new_egraph();
-    evaluate(
-        &mut compiler,
-        &mut graph,
-        "(datatype Expr (Null) (F Expr Expr))",
-    );
-    for source in [
-        "(let bad (F $a (Null)))",
-        "(check (= $a $a))",
-        "(union (Null) $a)",
-        "(rewrite (F a b) $fresh)",
-        "(rewrite (F a b) (subst a $x b))",
-        "(constructor Lam (Expr Expr) Expr :binder 0)",
-        "(constructor $Var (Expr) Expr)",
-        "(constructor $Var () Expr :binder 0)",
-        "(constructor $Var () Missing)",
-        "(constructor $Other () Expr)",
-        "(constructor $Var () Expr) (let bad missing)",
-    ] {
-        assert!(
-            compiler.compile(None, source).is_err(),
-            "accepted: {source}"
+fn sorts_support_slots_without_user_constructors() {
+    for declaration in ["(sort Expr)", "(datatype Expr)"] {
+        let mut compiler = Compiler::default();
+        let mut graph = egglog_experimental::slotted::new_egraph();
+        evaluate(&mut compiler, &mut graph, declaration);
+        evaluate(
+            &mut compiler,
+            &mut graph,
+            r#"
+            (run 0)
+            (check (= $a $a))
+            (check (!= $a $b))
+            (check (renaming-= $a $b))
+        "#,
         );
-        assert!(compiler.compile(None, "(let bad (F $a $b))").is_err());
+        assert_eq!(graph.get_size("SlottedVar_0"), 1);
     }
-    evaluate(
-        &mut compiler,
-        &mut graph,
-        "(push) (constructor $Var () Expr) (let a (F $a $b)) (run 0)",
-    );
-    assert_eq!(graph.get_size("SlottedVar_0"), 1);
-    assert!(
-        compiler
-            .compile(None, "(constructor $Var () Expr)")
-            .is_err()
-    );
-    evaluate(&mut compiler, &mut graph, "(pop)");
-    assert_eq!(graph.get_size("SlottedVar_0"), 0);
-    assert!(compiler.compile(None, "(let bad (F $a $b))").is_err());
-    evaluate(
-        &mut compiler,
-        &mut graph,
-        r#"
-        (constructor $Var () Expr)
-        (constructor Lam (Expr Expr) Expr :binder 0)
-        (let id (Lam $a $a))
-        (let value (F $a (Null)))
-        (run 0)
-        (check (= id (Lam $b $b)))
-        (check (slots value $a))
-    "#,
-    );
 }
 
 #[test]
-fn variable_variants_are_per_sort_and_var_is_an_ordinary_name() {
+fn slots_work_in_every_carrier_and_var_is_an_ordinary_name() {
     let mut compiler = Compiler::default();
     let mut graph = egglog_experimental::slotted::new_egraph();
     evaluate(
@@ -177,28 +140,25 @@ fn variable_variants_are_per_sort_and_var_is_an_ordinary_name() {
         &mut graph,
         r#"
         (datatype*
-            (Expr (Lam Expr Expr :binder 0) ($Var))
+            (Expr (Lam Expr Expr :binder 0))
             (Var (Name String) (Wrap Var))
-            (Ty ($Var) (Pair Ty Ty)))
+            (Ty (Pair Ty Ty)))
         (let id (Lam $a $a))
         (let name (Wrap (Name "x")))
+        (let variable (Wrap $a))
         (let ty (Pair $a $b))
         (run 0)
         (check (= id (Lam $b $b)))
         (check (slots name))
+        (check (slots variable $a))
         (check (slots ty $a $b))
     "#,
     );
-    assert_eq!(graph.get_size("SlottedVar_0"), 1);
-    assert_eq!(graph.get_size("SlottedVar_1"), 0);
-    assert_eq!(graph.get_size("SlottedVar_2"), 1);
-    assert!(compiler.compile(None, "(let bad (Wrap $a))").is_err());
-    assert!(compiler.compile(None, "(let bad ($Var))").is_err());
-    assert!(
-        compiler
-            .compile(None, "(datatype Bad ($Var) ($Var))")
-            .is_err()
-    );
+    for table in ["SlottedVar_0", "SlottedVar_1", "SlottedVar_2"] {
+        assert_eq!(graph.get_size(table), 1);
+    }
+    assert!(compiler.compile(None, "(let bad (Lam $a name))").is_err());
+    assert!(compiler.compile(None, "(datatype Bad ($Var))").is_err());
 }
 
 #[test]
@@ -210,11 +170,11 @@ fn scopes_restore_declarations_globals_and_rules() {
         &mut graph,
         r#"
         (push)
-        (datatype U ($Var) (F U))
+        (datatype U (F U))
         (let local (F $0))
         (rewrite (F a) (F (F a)))
         (pop)
-        (datatype U ($Var) (F U U))
+        (datatype U (F U U))
         (let local (F $1 $2))
         (run 0)
         (check (slots local $1 $2))
@@ -223,12 +183,12 @@ fn scopes_restore_declarations_globals_and_rules() {
     evaluate(
         &mut compiler,
         &mut graph,
-        "(push) (datatype V ($Var) (Zero)) (let n (Zero)) (run 0)",
+        "(push) (datatype V (Zero)) (let n (Zero)) (run 0)",
     );
     evaluate(
         &mut compiler,
         &mut graph,
-        "(pop) (datatype V ($Var) (One)) (let n (One)) (run 0)",
+        "(pop) (datatype V (One)) (let n (One)) (run 0)",
     );
     assert!(compiler.compile(None, "(let bad (Zero))").is_err());
 }
@@ -239,7 +199,7 @@ fn compilation_errors_are_transactional_and_located() {
     let error = compiler
         .compile(
             Some("bad.egg".into()),
-            "(datatype U ($Var) (F U))\n(let x missing)",
+            "(datatype U (F U))\n(let x missing)",
         )
         .unwrap_err();
     assert!(error.to_string().contains("bad.egg"));
@@ -250,7 +210,7 @@ fn compilation_errors_are_transactional_and_located() {
         r#"(constructor "bad)" () U)"#,
         "(let x (F $0 $1)) (let x x)",
         "(constructor SlottedVar_0 () U)",
-        "(sort Idx) (constructor $Var () Idx)",
+        "(sort Idx)",
         "(rewrite (F a b) a :when (= a b))",
         "(rewrite (Lam x a) a)",
         "(constructor Broken (U U) U :binder 18446744073709551615)",
@@ -379,18 +339,18 @@ fn cli_transforms_complete_stdin_commands() {
 #[test]
 fn cli_recovers_compiler_and_egraph_after_failed_inputs() {
     let result = repl(
-        "(datatype U ($Var) (Null)) (function broken)\n\
-         (datatype U ($Var) (Null) (One))\n\
+        "(datatype U (Null)) (function broken)\n\
+         (datatype U (Null) (One))\n\
          (let transient (Null)) (check (= (Null) (One))) (let later (One))\n\
          (fail (check (= (Null) (Null))))\n\
          (let transient (One)) (let later (Null)) (run 0)\n\
          (check (holds transient One)) (check (holds later Null))\n\
          (push)\n\
-         (pop) (datatype V ($Var) (Gone)) (check (= (Null) (One)))\n\
+         (pop) (datatype V (Gone)) (check (= (Null) (One)))\n\
          (pop)\n\
-         (datatype V ($Var) (Kept)) (let x (Kept)) (run 0) (check (holds x Kept))\n\
-         (datatype W ($Var) (BadCtor)) (function cost (Missing) i64 :no-merge)\n\
-         (datatype W ($Var) (GoodCtor))\n\
+         (datatype V (Kept)) (let x (Kept)) (run 0) (check (holds x Kept))\n\
+         (datatype W (BadCtor)) (function cost (Missing) i64 :no-merge)\n\
+         (datatype W (GoodCtor))\n\
          (let typed (GoodCtor)) (run 0) (check (holds typed GoodCtor))",
     );
     let stdout = String::from_utf8(result.stdout).unwrap();

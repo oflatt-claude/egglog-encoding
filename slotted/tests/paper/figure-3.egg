@@ -13,7 +13,6 @@
 ;;; a different node and must not come along.
 
 (sort U)
-(constructor $Var () U)
 
 (constructor Mul (U U) U)
 (constructor Null () U)
