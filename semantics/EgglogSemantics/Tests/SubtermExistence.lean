@@ -16,14 +16,14 @@ example : (child, child) ∉ stored.eqs := by
   simp [stored, Database.addTerm, Database.empty, child, parent]
 
 theorem child_exists : child ∈ stored.terms :=
-  Cong.subterm (Database.mem_addTerm parent Database.empty)
+  stored.subtermClosed parent (Database.mem_addTerm parent Database.empty)
     (Term.arg_subterms (by simp) child.self_mem_subterms)
 
 example : (Database.empty.addEq parent child).eqs = {(parent, child)} := by
   simp [Database.addEq, Database.empty]
 
 example : child ∈ (Database.empty.addEq parent child).terms :=
-  (Cong.direct (Set.mem_insert _ _)).mem_right
+  (StoredCong.direct (Set.mem_insert _ _)).mem_right
 
 private def other : Term := .lit (.int 1)
 private def parentsEqual : Database :=
@@ -35,7 +35,7 @@ example : ¬ Cong parentsEqual child other := by
     rintro p (rfl | hp)
     · simp [parent, Term.isLit]
     · exact (Set.notMem_empty p hp).elim
-  have he := Cong.eq_of_isLit hl hc (Or.inl (by trivial))
+  have he := InferredFacts.infers_eq_of_isLit ⟨hl⟩ (InferredFacts.congr_iff_infers.mp hc) (Or.inl (by trivial))
   cases he
 
 /-- Saturation ignores a redundant explicit child assertion. -/

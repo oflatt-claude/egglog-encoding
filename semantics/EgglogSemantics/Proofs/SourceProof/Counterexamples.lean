@@ -1,31 +1,23 @@
 import EgglogSemantics.Proofs.SourceProof.Support
 
 /-! One stored `Table(A)` row and `A = B` can justify the spelling `Table(B)`.
-They do not establish a second row or authorize running its merge body. -/
+The second spelling need not occur as an explicit assertion. -/
 
 namespace Egglog.SourceProof.Counterexamples
 
 set_option linter.hashCommand false
 
-private def ctor : FnDecl := ⟨0, 1, none, none⟩
 private def a : Term := .app "A" []
 private def b : Term := .app "B" []
 private def c : Term := .app "C" []
 private def row (x : Term) : Term := .app "Table" [x]
-private def body : List Action := [.union (.var "old") c.toExpr]
 
 private def seedActions : List Action :=
   [.expr (row a).toExpr, .union a.toExpr b.toExpr, .expr c.toExpr]
 
-private def program : Program :=
-  [.decl "A" ctor, .decl "B" ctor, .decl "C" ctor,
-   .decl "Table" ⟨0, 1, some (.merge ["old"] ["new"] body [.var "old"]), none⟩,
-   .rule ⟨[], seedActions, "R"⟩, .saturate "R"]
-
--- An empty-query rule supplies both anchors.
-#guard (contextOf program).any fun C =>
-  (actionsFacts C.sig [] seedActions).any fun fs =>
-    decide ((⟨row a, row a⟩ : Claim) ∈ fs ∧ (⟨a, b⟩ : Claim) ∈ fs)
+-- An empty-query firing supplies both anchors.
+#guard (actionsFacts [] seedActions).any fun fs =>
+  decide ((⟨row a, row a⟩ : Claim) ∈ fs ∧ (⟨a, b⟩ : Claim) ∈ fs)
 
 private def snapshot : Database :=
   { Database.empty with eqs := {(row a, row a), (a, b), (c, c)} }
@@ -45,7 +37,7 @@ private theorem same_isC {s t : Term} (h : Cong snapshot s t) : isC s = isC t :=
   | congr => rfl
   | nil | cons => trivial
 
-private theorem merge_equality_absent : ¬ Cong snapshot a c := by
+private theorem unrelated_equality_absent : ¬ Cong snapshot a c := by
   intro h
   have he := same_isC h
   change false = true at he
@@ -54,17 +46,14 @@ private theorem merge_equality_absent : ¬ Cong snapshot a c := by
 private theorem second_row_absent : (row b, row b) ∉ snapshot.eqs := by
   simp [snapshot, row, a, b, c]
 
--- Running the merge body at two row spellings would assert the unsupported equality.
-#guard (contextOf program).any fun C =>
-  (actionsFacts C.sig (mergeEnv ["old"] ["new"] [a] [b]) body).any fun fs =>
-    decide ((⟨a, c⟩ : Claim) ∈ fs)
-
-/-- Congruence establishes the second spelling without establishing a collision. -/
+/-- Congruence establishes a spelling even without a second explicit row. -/
 private theorem second_spelling {db : Database} (hw : db.WF)
     (hrow : Cong db (row a) (row a)) (hab : Cong db a b) :
     Claim.Supported db ⟨row b, row b⟩ := by
-  have base := Claim.Holds.supported (c := ⟨row a, row a⟩) hw hrow
-  have child := Claim.Holds.supported (c := ⟨a, b⟩) hw hab
+  have base := Claim.Supported.of_completion (c := ⟨row a, row a⟩) hw
+    (.direct (InferredFacts.congr_infers hrow))
+  have child := Claim.Supported.of_completion (c := ⟨a, b⟩) hw
+    (.direct (InferredFacts.congr_infers hab))
   have rewritten := base.congr (i := 0) child rfl
   exact rewritten.symm.trans rewritten
 

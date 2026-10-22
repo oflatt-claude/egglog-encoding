@@ -18,7 +18,7 @@ inductive UsesVocabulary (names : Set FnName) (literals : Set Lit) : Term → Pr
   vocabulary $V$ and bound $t$, the set $\{s\in T(V)\mid s\prec t\}$ is finite.
   The expression $\min(s,t)$ selects the smaller operand.
   Finite lower sets are required only within a fixed finite vocabulary.
-  Compiler correctness uses the concrete size-first order certified below. -/)]
+  The model's concrete order compares node counts first and breaks ties structurally. -/)]
 structure AdmissibleOrder (lt : Term → Term → Prop) : Prop where
   irrefl : ∀ t, ¬ lt t t
   trans : ∀ s t u, lt s t → lt t u → lt s u

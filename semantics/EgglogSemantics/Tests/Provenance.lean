@@ -1,6 +1,9 @@
 import EgglogSemantics.Provenance.Extract
-import EgglogSemantics.Proofs.Provenance.Soundness
+import EgglogSemantics.Congruence.Encode
 import EgglogSemantics.Congruence.Relational
+
+/-! The firing log: an instrumented program builds the data of the original, and every
+data row of the final state has a checked proof read off the log. -/
 
 namespace Egglog.Provenance.Tests
 
@@ -8,154 +11,90 @@ set_option linter.hashCommand false
 
 private def atom (f : FnName) : Expr := .app f []
 private def term (f : FnName) : Term := .app f []
-private def int (n : Int) : Expr := .lit (.int n)
+private def global (as : List Action) : Cmd := .run [⟨[], as⟩]
+private def prog (cs : List Cmd) : Program := ⟨cs, []⟩
 
-/-- Check data preservation and every live function row's extracted certificate. -/
+/-- The instrumented run holds the original's terms plus the log, and every data row has
+a proof. -/
 def validates (P : Program) : Bool := (do
-  let C ← SourceProof.contextOf P
   let encoded ← encode P
-  let original ← Relational.execProgram FDatabase.empty P
-  let annotated ← Relational.execProgram FDatabase.empty encoded
-  let rows := annotated.rows.filterMap fun row =>
-    (eraseRow C.sig row.toEntry).map fun e => (⟨e.name, e.key, e.value⟩ : Row)
-  let proofs := retainedRows C.sig annotated.terms
-  some (unionFree encoded && decide (rows.toFinset = original.rows.toFinset) &&
-    decide ((annotated.terms.filterMap (eraseFact C.sig)).toFinset = original.terms.toFinset) &&
-    proofs.all fun r => (extractRow P r).isSome)).getD false
+  let original ← Relational.execProgram FDatabase.empty P.commands
+  let annotated ← Relational.execProgram FDatabase.empty encoded.commands
+  let proofs ← extract P annotated.terms
+  some (unionFree encoded &&
+    decide ((eraseLog annotated.terms).toFinset = original.terms.toFinset) &&
+    decide ((proofs.map Prod.fst).toFinset = (dataRows P original.terms).toFinset))).getD false
 
 private def nestedUnion : Program :=
-  [.decl "A" (ctor 0), .decl "B" (ctor 0), .decl "F" (ctor 1),
-   .rule ⟨[], [.expr (.app "F" [atom "A"]), .expr (.app "F" [atom "B"]),
-     .union (atom "A") (atom "B")], "seed"⟩, .run "seed"]
+  prog [global [.expr (.app "F" [atom "A"]), .expr (.app "F" [atom "B"]),
+    .union (atom "A") (atom "B")]]
 
 #guard validates (Congruence.encode nestedUnion)
 
 private def equalityRule : Program :=
-  [.decl "A" (ctor 0), .decl "F" (ctor 1), .decl "G" (ctor 1),
-   .rule ⟨[], [.expr (.app "F" [atom "A"])], "seed"⟩, .run "seed",
-   .rule ⟨[.eq (.app "F" [.var "x"]) (.app "F" [.var "x"])],
-     [.expr (.app "G" [.var "x"])], "R"⟩,
-   .saturate "R"]
+  prog [global [.expr (.app "F" [atom "A"])],
+    .saturate [⟨[.eq (.app "F" [.var "x"]) (.app "F" [.var "x"])],
+      [.expr (.app "G" [.var "x"])]⟩]]
 
 #guard validates (Congruence.encode equalityRule)
 
-private def emptyQuery : Program :=
-  [.decl "A" (ctor 0), .rule ⟨[], [.expr (atom "A")], "R"⟩, .saturate "R"]
+private def emptyQuery : Program := prog [.saturate [⟨[], [.expr (atom "A")]⟩]]
 
 #guard validates (Congruence.encode emptyQuery)
 
 private def missingPremise : Program :=
-  [.decl "A" (ctor 0), .decl "Missing" (ctor 0),
-   .rule ⟨[.expr (atom "Missing")], [.expr (atom "A")], "R"⟩, .saturate "R"]
+  prog [.saturate [⟨[.expr (atom "Missing")], [.expr (atom "A")]⟩]]
 
 #guard validates (Congruence.encode missingPremise)
 
-private def tablesWith (firstOld firstNew : Var) : Program :=
-  [.decl "Key" (ctor 0),
-   .decl "Audit" ⟨2, 1, some (.merge ["old"] ["new"] [] [.var "old"]), none⟩,
-   .decl "Bounds" ⟨1, 2, some (.merge [firstOld, "old1"] [firstNew, "new1"]
-     [.expr (.app "Audit" [.var firstOld, .var firstNew, .var "new1"])]
-     [.min (.var firstOld) (.var firstNew),
-      .min (.var "new1") (.var "old1")]), none⟩,
-   .rule ⟨[], [.expr (.app "Bounds" [atom "Key", int 2, int 3])], "seed0"⟩, .run "seed0",
-   .rule ⟨[], [.expr (.app "Bounds" [atom "Key", int 4, int 1])], "seed1"⟩, .run "seed1"]
+/-- A rule that rewrites a row of its own relation: the replaced row is gone from the
+state, and the replacement's proof cites the firing that replaced it. -/
+private def rewriting : Program :=
+  prog [global [.expr (.app "T" [.lit (.int 3)]), .expr (.app "Goal" [.lit (.int 2)])],
+    .saturate [⟨[.expr (.app "T" [.var "x"]), .expr (.app "Goal" [.var "y"]),
+      .ne (.var "x") (.var "y")], [.delete (.app "T" [.var "x"]), .expr (.app "T" [.var "y"])]⟩]]
 
-private def tables : Program := tablesWith "old0" "new0"
-
-#guard validates tables
-#guard validates (tablesWith "lowerBefore" "lowerIncoming")
-
--- Metadata-only collisions must not execute an otherwise unconditional merge.
-private def sameData : Program :=
-  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [.min (.var "old") (int 9)]), none⟩,
-   .rule ⟨[], [.expr (.app "T" [int 1])], "seed0"⟩, .run "seed0",
-   .rule ⟨[], [.expr (.app "T" [int 1])], "seed1"⟩, .run "seed1"]
-
-#guard validates sameData
-
-private def zeroOutputs : Program :=
-  [.decl "T" ⟨1, 0, some (.merge [] [] [] []), none⟩,
-   .rule ⟨[], [.expr (.app "T" [int 1])], "seed0"⟩, .run "seed0",
-   .rule ⟨[], [.expr (.app "T" [int 1])], "seed1"⟩, .run "seed1"]
-
-#guard validates zeroOutputs
-
-private def partialIdentity : Program :=
-  [.decl "T" ⟨0, 2, some (.merge ["old0", "old1"] ["new0", "new1"]
-     [] [.var "new0", .var "new1"]), some 1⟩,
-   .rule ⟨[], [.expr (.app "T" [int 1, int 2])], "seed0"⟩, .run "seed0",
-   .rule ⟨[], [.expr (.app "T" [int 1, int 3])], "seed1"⟩, .run "seed1"]
-
-#guard validates partialIdentity
-
--- An over-wide identity prefix must not include the appended proof column.
-private def wideIdentity : Program :=
-  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [int 9]), some 2⟩,
-   .rule ⟨[], [.expr (.app "T" [int 1])], "seed0"⟩, .run "seed0",
-   .rule ⟨[], [.expr (.app "T" [int 1])], "seed1"⟩, .run "seed1"]
-
-#guard validates wideIdentity
-
--- No implicit `old`/`new` aliases: only declared names are in scope.
-private def parameterProgram (os ns : List Var) (e : Expr) : Program :=
-  [.decl "T" ⟨0, 1, some (.merge os ns [] [e]), none⟩]
-
-#guard (encode (parameterProgram ["before"] ["incoming"] (.var "incoming"))).isSome
-#guard (encode (parameterProgram ["before"] ["incoming"] (.var "new"))).isNone
-#guard (encode (parameterProgram [] ["incoming"] (int 0))).isNone
-#guard (encode (parameterProgram ["x"] ["x"] (int 0))).isNone
-#guard (encode (parameterProgram [proofVar 0] ["incoming"] (int 0))).isNone
-#guard (encode (parameterProgram ["before"] [proofVar 1] (int 0))).isNone
-
-private def bounds (a b : Int) : Term :=
-  .app "Bounds" [term "Key", .lit (.int a), .lit (.int b)]
-
-private def old : Proof := .rule (bounds 2 3) 3 [] []
-private def new : Proof := .rule (bounds 4 1) 5 [] []
-
-#guard (check tables (.merge (bounds 2 1) "Bounds" old new)).isSome
-#guard (check tables
-  (.merge (.app "Audit" [.lit (.int 2), .lit (.int 4), .lit (.int 1)]) "Bounds" old new)).isSome
-#guard (check tables (.merge (bounds 4 3) "Bounds" old new)).isNone
-#guard (check tables (.merge (bounds 2 1) "Audit" old new)).isNone
-#guard (check tables (.merge (bounds 2 1) "Bounds" old old)).isNone
-
-private def distinctKeys : Program :=
-  [.decl "T" ⟨1, 1, some (.merge ["old"] ["new"] [] [.var "new"]), none⟩,
-   .rule ⟨[], [.expr (.app "T" [int 1, int 3])], "seed0"⟩, .run "seed0",
-   .rule ⟨[], [.expr (.app "T" [int 2, int 4])], "seed1"⟩, .run "seed1"]
-
-#guard (check distinctKeys (.merge (.app "T" [.lit (.int 1), .lit (.int 4)]) "T"
-  (.rule (.app "T" [.lit (.int 1), .lit (.int 3)]) 1 [] [])
-  (.rule (.app "T" [.lit (.int 2), .lit (.int 4)]) 3 [] []))).isNone
+#guard validates rewriting
 
 private def table (n : Int) : Term := .app "T" [.lit (.int n)]
-private def tProgram : Program :=
-  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [.min (.var "old") (.var "new")]), none⟩,
-   .rule ⟨[], [.expr (.app "T" [int 3])], "seed"⟩, .run "seed",
-   .rule ⟨[.expr (.app "T" [.var "x"])], [.expr (.app "T" [int 2])], "R"⟩,
-   .saturate "R"]
-private def stored : Proof := .rule (table 3) 1 [] []
+private def goalRow : Term := .app "Goal" [.lit (.int 2)]
+private def stored : Proof := .rule (table 3) 0 [] []
+private def goal : Proof := .rule goalRow 0 [] []
+private def three : Term := .lit (.int 3)
+private def rewritten : Proof :=
+  .rule (table 2) 1 [("x", three), ("y", .lit (.int 2))] [stored, goal, .subterm three stored]
 
-#guard validates tProgram
-#guard check tProgram stored == some (table 3)
-#guard (check tProgram (.rule (table 2) 1 [] [])).isNone
-#guard (check tProgram (.rule (table 2) 3 [] [])).isNone
-#guard (check tProgram (.subterm (table 2) stored)).isNone
+#guard check rewriting stored == some (table 3)
+#guard check rewriting rewritten == some (table 2)
+#guard (check rewriting (.rule (table 2) 0 [] [])).isNone
+#guard (check rewriting (.rule (table 2) 1 [] [])).isNone
+-- The disequality must hold between the bound values.
+#guard (check rewriting (.rule (table 2) 1 [("x", .lit (.int 2)), ("y", .lit (.int 2))]
+  [stored, goal, .subterm (.lit (.int 2)) goal])).isNone
 -- Every node is checked, not only the root.
-#guard (check tProgram (.subterm (table 3) (.rule (table 2) 1 [] []))).isNone
-#guard (check tProgram (.rule (table 2) 3 [("x", .lit (.int 3))] [stored])).isSome
-#guard (check tProgram (.rule (table 2) 3 [("x", .lit (.int 2))] [stored])).isNone
-#guard (check tProgram (.rule (table 2) 3 [] [stored])).isNone
-#guard (check tProgram (.rule (table 2) 3 [("x", .lit (.int 3))] [])).isNone
-#guard (extract tProgram (.app (ruleName 3 0) [])).isNone
-#guard (extract tProgram (.app (ruleName 1 0) [term "Missing"])).isNone
-#guard (extract tProgram (.app subtermName [table 2, .app (ruleName 1 0) []])).isNone
-#guard (extractRow tProgram ⟨"T", [], [.lit (.int 2), .app (ruleName 1 0) []]⟩).isNone
+#guard (check rewriting (.subterm (table 3) (.rule (table 2) 0 [] []))).isNone
 
--- Equality-only variables have no table evidence and are outside this pass's input fragment.
-#guard (encode [.rule ⟨[.eq (.var "x") (.var "x")], [], "R"⟩]).isNone
-#guard (encode [.decl (namePrefix ++ "user") (ctor 0)]).isNone
+-- The log is what the extraction reads: without it no row has a proof.
+private def uninstrumented : Option FDatabase :=
+  Relational.execProgram FDatabase.empty rewriting.commands
+#guard uninstrumented.map (fun d => (extractEach rewriting d.terms).all (·.2.isNone)) == some true
+#guard uninstrumented.map (fun d =>
+  let rows := dataRows rewriting d.terms
+  rows.length == 2 && rows.contains (table 2) && rows.contains goalRow) == some true
+
+-- Instrumentation keeps every rule and adds one log write per rule, numbered by position.
+#guard (encode rewriting).map (·.rules.length) == some rewriting.rules.length
+#guard (encode rewriting).any fun p => p.rules.zipIdx.all fun rk =>
+  rk.1.actions.any fun a => match a with
+    | .expr (.app f _) => fireIndex f == some rk.2
+    | _ => false
+#guard fireIndex (fireName 12) == some 12
+#guard fireIndex "@prov:fire:" == none
+#guard fireIndex "T" == none
+
+-- Unions, reserved names, and names used both as rows and as values are rejected.
 #guard (encode nestedUnion).isNone
+#guard (encode (prog [global [.expr (.app (namePrefix ++ "user") [])]])).isNone
+#guard (encode (prog [global [.expr (.app "T" [.app "T" []])]])).isNone
 
 end Egglog.Provenance.Tests

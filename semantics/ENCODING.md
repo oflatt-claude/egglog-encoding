@@ -1,5 +1,141 @@
 # Encoding passes
 
+## Constructor-and-delete encoding (October 2026)
+
+The modelled language is untyped and has no declarations: applying any name to any
+arguments builds a term, and a relation is a name whose applications are never nested
+(`Spec/Syntax.lean`). It has no rulesets and no rule store either: `run ρ̄` and
+`saturate ρ̄` name the rules they fire, so the state is one set of equations, and a program
+is a command sequence ending in the single check that decides its outcome. egglog's named
+rulesets and `rule` commands are resolved by the parser, which expands a run of a ruleset
+into a run of the rules registered in it so far; the emitter does the reverse with one
+ruleset per command. The congruence compiler emits no merge function. Its tables
+`@UF(key, parent)` and `@fView(children…, id)` are relations, and every change to a row is a
+rule that deletes the stale row and writes its replacement. Two language features support
+this: a `delete` action and a disequality pattern `e ≠ e`. Source programs use neither
+(`Program.Fragment.monotone`).
+
+### Semantics
+
+- `delete e` writes no equation and erases the row `⟦e⟧`: `W_σ(delete e) = ∅` and
+  `X_σ(delete e) = {⟦e⟧}` (`Action.write`, `Action.erase` in `Spec/Eval.lean`).
+- A round collects the writes `W` and erasures `X` of every firing in the pre-state, then
+  removes every spelling of an erased row and adds the writes:
+  `RunRules ρ̄ E = (E ⊖ X) ∪ W`. `E ⊖ X` removes the reflexive assertion of every held
+  `f(s̄)` with `s̄ ~ t̄` for some `f(t̄) ∈ X` and keeps the columns `s_i` existing
+  (`Database.deleteRows`); deleting an absent row changes nothing. Deletions before
+  writes mirrors egglog, whose table merge runs
+  `do_delete` before `do_insert` (`core-relations/src/table/mod.rs`): a row that one firing
+  deletes and another writes survives the round.
+- `e₁ ≠ e₂` holds when both sides evaluate to existing terms that are not congruent
+  (`Matches.unequal`). In the union-free target this is structural inequality.
+- The sequential reading in `Spec/Sequential.lean` applies a delete in the current state;
+  it agrees with the round for heads that neither assert an equation before a delete nor
+  delete a row they also write. The proofs use delete-free heads.
+
+### Rules
+
+With `m = min b c` in the model's term order (egglog: `ordering-min`), the generated
+maintenance rules are
+
+| Origin | Query | Actions |
+| --- | --- | --- |
+| `compress` | `(@UF a b) (@UF b c) (≠ b c)` | `delete (@UF a b)`, `(@UF a c)` |
+| `collide` | `(@UF a b) (@UF a c) (= b (min b c)) (≠ b c)` | `delete (@UF a c)`, `(@UF c b)` |
+| `eclass f` | `(@fView cs e) (@UF e x) (≠ e x)` | `delete (@fView cs e)`, `(@fView cs x)` |
+| `child f i` | `(@fView cs e) (@UF cᵢ x) (≠ cᵢ x)` | `delete (@fView cs e)`, `(@fView cs[i := x] e)` |
+| `viewCollide f` | `(@fView cs y) (@fView cs z) (= y (min y z)) (≠ y z)` | `delete (@fView cs z)`, `(@UF z y)` |
+
+Builds write `(@fView args (f args))` and the self-loop `(@UF t t)`; a union writes
+`(@UF a m)` and `(@UF b m)`. A self-loop written for a value that already has a parent is
+stale, and `compress` with `a = b` removes it. The two collision rules keep the smaller id,
+delete the other row, and link the larger id under the smaller; a UF collision whose loser
+already has a parent produces a collision one level up, so unions still meet at roots.
+A source `run ρ̄` compiles to the run of the compiled rules followed by a saturation of the
+maintenance rules; a source `saturate ρ̄` saturates the compiled rules together with the
+maintenance rules, so rebuilding interleaves with every round, and is followed by the same
+maintenance saturation. That trailing saturation is needed: every round refires every
+source rule, so a source rule can rewrite a stale view row in the round that deletes it,
+writes win, and the row survives until a round without source rules. The final check is
+flattened like a query.
+
+The disequality guards are necessary, not cosmetic. Because writes win over deletes, a rule
+whose write equals one of its premises keeps that row alive against every other rule's
+deletion. Without the guard, `compress` fires on a self-loop `(@UF m m)`, `(@UF m m)` and
+rewrites it, so a displaced self-loop is immortal; and `collide` fires on the pair
+`(@UF a c)`, `(@UF a c)` and rewrites the larger parent, so a displaced parent is immortal.
+With the guards no rule fires on a canonical row, and every rule's write is strictly more
+canonical than the row it deletes.
+
+There is no leader query. Query variables are bound through view rows, whose children and
+outputs are canonical at a rebuild fixpoint, so a source rule head already sees canonical
+ids; the previous encoding needed leaders because stale keys stayed represented.
+
+### Fixpoints, informally
+
+At a rebuild fixpoint no maintenance rule matches. `compress` not matching means every
+parent is a root; `collide` not matching means every key has one parent; the view rules
+not matching means every view row has canonical children and output and no two rows share
+a key. A stale row is deleted every round and is only rewritten from a strictly staler row,
+so staleness is well founded and the fixpoint is reached; the formal argument is part of
+the pending proof work.
+
+### Provenance: a firing log
+
+The provenance pass (`Provenance/Encode.lean`) adds one action to every rule: a row
+`@prov:fire:<i>(x₁, …, xₙ)` that records a firing of rule `i`, the rule's position in
+`Program.rules`, under the values of its query variables. No rule reads these rows, so the instrumented program builds exactly the data of
+the original, round for round, deletes the same rows, and settles when the original does.
+The difftest checks this literally: the instrumented final state minus the log is the
+original final state (`difftest provenance 64`).
+
+Proofs are read off the log afterwards (`Provenance/Extract.lean`). A firing is justified
+once every premise is established: a row premise by a proof of its instance, an equality
+or disequality premise by a `subterm` proof from a row of the same firing carrying the side
+in question. Passes over the log justify firings until none is left that can be, each data
+row keeps the first proof found for it, and every returned proof is checked with
+`Provenance.check`. Proof lifting (`Resugar/Lift.lean`) is unchanged in format: every
+relational proof becomes a source proof that `SourceProof.check` and the Rust checker
+accept.
+
+The previous design, a proof column on every row with rules firing once per proof,
+does not work with deletes: a row re-derived with a new proof is a new row for one round,
+and in that round it breeds further variants before a deduplication rule can remove it, so
+instrumented saturations of two-premise rules never settled (the instrumented
+`commutativity` case grew from 36 to 2936 rows in four rounds). The log keeps proof
+identity out of the data entirely.
+
+### Status
+
+- Executable: `difftest congruence 64` passes all 101 corpus cases; `difftest provenance
+  64` and `difftest resugar 64` pass all 101 in about three seconds each; the 14
+  hand-written programs under `tests/` have `.congruence.egg`, `.provenance.egg` and
+  `.proofs.txt` snapshots (`difftest egg 64`). `scripts/compiled-difftest.sh` runs the
+  compiled programs in Rust egglog, with generated `@` names spelled `at_`, and compares
+  the view relations' row counts, which are the numbers of canonical e-nodes and
+  independent of representative choice: 101 of 101 agree. `scripts/difftest.sh` (source
+  programs, Lean against egglog) passes 101 of 101, and the Rust checker judges the 120
+  exported source certificates like the Lean checker (`make lean-certificate-test`).
+- Interpreter: `execRunRules` matches every rule against the pre-state, deletes every
+  firing's rows, then unions every firing's writes. The relational runtime
+  (`Congruence/Relational.lean`, structural identity only) agrees with the general
+  interpreter on every case.
+- Proofs: the specification-level proof modules and the certificate soundness proofs are
+  ported to the declaration-free specification (`PROOF-PORT-A.md`, `PROOF-PORT-B.md`,
+  `PROOF-PORT-C.md` record every statement change). `SourceProof.check_infers` and
+  `Resugar.extractAll_infers` give checked and lifted certificates their meaning in the
+  reached, saturated source state. The reference interpreter refines the specification
+  up to `SameMeaning` for delete-free programs (`exec_programStep`) and for union-free
+  programs with deletes, disequalities and `min` (`exec_programStep_noUnions`,
+  `Congruence.exec_encode_programStep`), which is what the compiler emits; mixed
+  union-and-delete programs are not covered. The compiler-correctness proofs under
+  `Proofs/Congruence/` are about the previous, merge-function encoding and do not
+  transfer; the paper displays the theorem (`Congruence.Correctness`) as a statement, and
+  its proof for this encoding is open.
+
+The sections below describe the previous, merge-function-based encoding and its proofs.
+
+
 ## Current compiler correctness: live tables and bounded source schedules
 
 The mathematical specification stores value equations and reflexive function atoms

@@ -5,10 +5,10 @@ namespace Egglog
 theorem behaves_success_iff {d : Database} {P : Program} :
     Behaves d P .success ↔ ∃ r, Eval d P r ∧ r.succeeded = true := by
   constructor
-  · rintro ⟨e, he⟩; exact ⟨.ok e, he, rfl⟩
+  · intro h; exact ⟨.ok, h, rfl⟩
   · rintro ⟨r, hr, hb⟩
     cases r with
-    | ok e => exact ⟨e, hr⟩
+    | ok => exact hr
     | checkFailed => contradiction
 
 theorem behaves_failure_iff {d : Database} {P : Program} :
@@ -17,7 +17,7 @@ theorem behaves_failure_iff {d : Database} {P : Program} :
   · intro h; exact ⟨.checkFailed, h, rfl⟩
   · rintro ⟨r, hr, hb⟩
     cases r with
-    | ok e => contradiction
+    | ok => contradiction
     | checkFailed => exact hr
 
 end Egglog

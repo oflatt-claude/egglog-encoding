@@ -10,8 +10,8 @@ inductive Behavior where
 
 /-- Finite outcomes and infinite execution, observed without exposing the final store. -/
 def Behaves (db : Database) (P : Program) : Behavior → Prop
-  | .success => ∃ d, Eval db P (.ok d)
+  | .success => Eval db P .ok
   | .checkFailed => Eval db P .checkFailed
-  | .diverges => ProgramDiverges db P
+  | .diverges => ProgramDiverges db P.commands
 
 end Egglog

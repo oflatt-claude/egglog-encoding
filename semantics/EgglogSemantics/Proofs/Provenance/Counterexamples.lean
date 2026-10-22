@@ -1,26 +1,19 @@
 import EgglogSemantics.Provenance.Checker
-import EgglogSemantics.Proofs.Provenance.Countermodel
+import EgglogSemantics.Congruence.Relational
 
 namespace Egglog.Provenance.Counterexamples
 
 set_option linter.hashCommand false
 
-private def row (n : Int) : Term := .app "T" [.lit (.int n)]
-private def write (n : Int) : Cmd := .rule ⟨[], [.expr (row n).toExpr], "init"⟩
-private def constant : Program :=
-  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"] [] [.lit (.int 9)])⟩,
-   write 1, .run "init", .saturate "R"]
-private def original : Proof := .rule (row 1) 1 [] []
-
--- A self-merge cannot justify a new row.
-#guard check constant (.merge (row 9) "T" original original) == none
-
+private def row : Term := .app "T" [.lit (.int 2)]
 private def replacement : Program :=
-  [.decl "T" ⟨0, 1, some (.merge ["old"] ["new"]
-    [] [.min (.var "old") (.var "new")])⟩,
-   write 2, write 1, .run "init", .saturate "R"]
+  ⟨[.run [⟨[], [.expr row.toExpr]⟩], .run [⟨[], [.delete row.toExpr]⟩]], []⟩
 
--- Acceptance alone does not assert that a certified row is still live.
-#guard check replacement (.rule (row 2) 1 [] []) == some (row 2)
+-- A certificate records a historical firing, even if its row has since been deleted.
+#guard check replacement (.rule row 0 [] []) == some row
+#guard (Relational.execProgram FDatabase.empty replacement.commands).any
+  fun d => !d.terms.contains row
+-- A delete itself supplies no new fact.
+#guard (check replacement (.rule row 1 [] [])).isNone
 
 end Egglog.Provenance.Counterexamples

@@ -1,63 +1,87 @@
-import EgglogSemantics.Tests.GeneratedProvenance
+import EgglogSemantics.Congruence.Relational
 import EgglogSemantics.Proofs.Resugar.Soundness
 
 namespace Egglog.Tests.ProofPass
 
-open GeneratedProvenance
+set_option linter.hashCommand false
 
-private def seedCommand : Nat := match oldCertificate with
-  | .rule _ command _ _ => command
-  | _ => 0
+def a : Term := .app "A" []
+def b : Term := .app "B" []
+def seed : Rule := ⟨[], [.union a.toExpr b.toExpr]⟩
+def program : Program := ⟨[.run [seed]], [.eq a.toExpr b.toExpr]⟩
 
--- The first union emits UF(C, B) at action 5.
-def certificateTerm : Term := .app (Provenance.ruleName seedCommand 5) []
-def annotatedRow : Entry := ⟨ufName, [c], [b, certificateTerm]⟩
+/-- Execute the actual firing-log instrumentation of the congruence compilation. -/
+def run : Option FDatabase := do
+  let annotated ← Provenance.encode (Congruence.encode program)
+  Relational.execProgram FDatabase.empty annotated.commands
 
-theorem instrumentation_writes_certificate :
-    ((Provenance.encode (Congruence.encode program)).bind fun encoded => do
-      let C ← SourceProof.contextOf encoded
-      some (encoded.any fun cmd => match cmd with
-        | .rule r => r.query.isEmpty && r.actions.any fun action =>
-            Provenance.actionRoot C.sig [] action == some annotatedRow.atom
-        | _ => false)) = some true := by decide +kernel
+def proofs : Option (List SourceProof.Proof) := do
+  let d ← run
+  Resugar.extractAll program d.terms
 
-theorem extracts_seed_certificate :
-    ((Provenance.extractRow (Congruence.encode program) annotatedRow).bind
-      (Provenance.check (Congruence.encode program))) = some oldRow := by decide +kernel
+#guard run.isSome
+#guard run.any fun d => d.terms.any fun t => match t with
+  | .app f _ => (Provenance.fireIndex f).isSome
+  | .lit _ => false
+#guard proofs.any fun ps => !ps.isEmpty && ps.all fun p =>
+  SourceProof.check program p == some p.claim
+#guard proofs.any fun ps => ps.any fun p =>
+  p.claim == (⟨a, b⟩ : SourceProof.Claim) || p.claim == (⟨b, a⟩ : SourceProof.Claim)
+-- With the firing log removed, extraction cannot justify any of the data rows.
+#guard run.any fun d =>
+  (Provenance.extract (Congruence.encode program) (Provenance.eraseLog d.terms)).isNone
 
-theorem lifts_seed_certificate :
-    ((Resugar.extractRow program annotatedRow).bind (SourceProof.check program)) =
-      some ⟨c, b⟩ := by decide +kernel
+/-- The computed extraction is subject to the general checked-output guarantee. -/
+theorem proofs_checked {ps : List SourceProof.Proof} (h : proofs = some ps) :
+    ∀ p ∈ ps, SourceProof.check program p = some p.claim := by
+  obtain ⟨_, _, he⟩ := Option.bind_eq_some_iff.mp h
+  exact Resugar.extractAll_checked he
 
-theorem altered_row_rejected :
-    (Provenance.extractRow (Congruence.encode program)
-      { annotatedRow with value := [a, certificateTerm] }).isNone = true := by decide +kernel
+private def registered : Database :=
+  Database.empty
+def reached : Database := RunRules [seed] registered
 
-theorem missing_proof_column_rejected :
-    (Provenance.extractRow (Congruence.encode program)
-      { annotatedRow with value := [b] }).isNone = true := by decide +kernel
+theorem source_reached : ProgramStep Database.empty program.commands reached :=
+  .cons rfl .nil
 
-theorem compression_lifts :
-    ((Resugar.lift program compressedCertificate).bind (SourceProof.check program)) =
-      some ⟨c, a⟩ := by decide +kernel
+private theorem registered_deleteFree : ∀ r ∈ [seed], r.DeleteFree := by
+  intro r hr
+  have he : r = seed := List.mem_singleton.mp hr
+  subst r
+  simp [Rule.DeleteFree, Actions.DeleteFree, seed, Action.DeleteFree, Action.monotoneB]
 
-theorem merge_lifts :
-    ((Resugar.lift program mergedCertificate).bind (SourceProof.check program)) =
-      some ⟨b, a⟩ := by decide +kernel
+private theorem equality_asserted : (a, b) ∈ reached.eqs := by
+  have hf : registered.addEq a b ∈ RuleResults registered seed :=
+    ⟨[], ⟨[], .nil, .nil⟩, rfl⟩
+  have hc := SourceMeaning.firing_contained_round registered_deleteFree
+    (by simp) hf
+  exact hc.eqs (Set.mem_insert _ _)
 
-/-- The concrete extraction meets every premise of source soundness. -/
-theorem extracted_claim_infers : reached.Infers c b := by
-  have hw := (source_reached.ctorState Database.CtorState.empty source_fragment.ctorsOnly).wf
-  obtain ⟨output, ho, _⟩ := Option.bind_eq_some_iff.mp lifts_seed_certificate
-  apply Resugar.extractRow_infers source_reached hw source_saturated
-    (C := (SourceProof.contextOf program).getD ⟨fun _ => none⟩)
-    (target := (SourceProof.contextOf (Congruence.encode program)).getD ⟨fun _ => none⟩)
-    (row := annotatedRow) (decl := Congruence.tableDecl 1)
-    (claim := ⟨c, b⟩) (output := output)
-  · rfl
-  · rfl
-  · rfl
-  · rfl
-  · exact ho
+theorem source_saturated (c : Cmd) (hc : c ∈ program.commands) :
+    RunSaturated c.rules reached := by
+  have hc : c = .run [seed] := List.mem_singleton.mp hc
+  subst c
+  have hfixed : RunRules [seed] reached = reached := by
+    apply (runRules_eq_self_iff [seed] reached registered_deleteFree).mpr
+    intro r hr out hout
+    have he : r = seed := List.mem_singleton.mp hr
+    subst r
+    obtain ⟨σ, _, hf⟩ := hout
+    have he : evalActions σ reached seed.actions = some (reached.addEq a b) := rfl
+    rw [he] at hf
+    obtain rfl := Option.some.inj hf
+    constructor
+    rintro p (rfl | hp)
+    · exact equality_asserted
+    · exact hp
+  rw [RunSaturated, Cmd.rules, hfixed]
+  exact Database.SameMeaning.refl _
+
+/-- The actual instrumented run's extracted certificates infer their source claims. -/
+theorem extracted_claim_infers {ps : List SourceProof.Proof} (h : proofs = some ps) :
+    ∀ p ∈ ps, reached.Infers p.claim.lhs p.claim.rhs := by
+  obtain ⟨_, _, he⟩ := Option.bind_eq_some_iff.mp h
+  exact Resugar.extractAll_infers source_reached (source_reached.wf Database.WF.empty)
+    source_saturated he
 
 end Egglog.Tests.ProofPass

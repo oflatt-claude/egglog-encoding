@@ -31,21 +31,19 @@ theorem Env.lookup_zip : ∀ (vs : List Var) (as : List Term), vs.length = as.le
       exact Env.lookup_zip vs as (by simpa using hlen) hnd.2 i hi hi'
 
 /-- **A list of variables evaluates to what the environment binds them to.** -/
-theorem Expr.evalList_map_var {sig : Signature} : ∀ (vs : List Var) (as : List Term) (ρ : Env),
+theorem Expr.evalList_map_var : ∀ (vs : List Var) (as : List Term) (ρ : Env),
     vs.length = as.length →
     (∀ (i : Nat) (hi : i < vs.length) (hi' : i < as.length), Env.lookup vs[i] ρ = some as[i]) →
-    (∀ t ∈ as, t.IsValue sig) →
-    Expr.evalList sig (vs.map Expr.var) ρ = some as
-  | [], [], _, _, _, _ => rfl
-  | [], _ :: _, _, hlen, _, _ => by simp at hlen
-  | _ :: _, [], _, hlen, _, _ => by simp at hlen
-  | v :: vs, a :: as, ρ, hlen, h, hv => by
+    Expr.evalList (vs.map Expr.var) ρ = some as
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, hlen, _ => by simp at hlen
+  | _ :: _, [], _, hlen, _ => by simp at hlen
+  | v :: vs, a :: as, ρ, hlen, h => by
       have h0 : Env.lookup v ρ = some a := h 0 (by simp) (by simp)
-      have hrest : Expr.evalList sig (vs.map Expr.var) ρ = some as :=
+      have hrest : Expr.evalList (vs.map Expr.var) ρ = some as :=
         Expr.evalList_map_var vs as ρ (by simpa using hlen)
           (fun i hi hi' => h (i + 1) (by simpa using hi) (by simpa using hi'))
-          (fun t ht => hv t (List.mem_cons_of_mem _ ht))
-      have hev : Expr.eval sig (.var v) ρ = some a := h0
+      have hev : Expr.eval (.var v) ρ = some a := h0
       rw [List.map_cons, Expr.evalList, hev, Option.bind_some, hrest]
       rfl
 
@@ -76,8 +74,8 @@ theorem Expr.mem_freeVarsList_map_var : ∀ (vs : List Var) (σ : Env) {v : Var}
 mutual
 
 /-- Evaluating a constructor expression binds every variable it mentions. -/
-theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
-    ∀ {e : Expr} {t : Term}, e.OrderingFree → Expr.eval sig e ρ = some t →
+theorem Expr.lookup_isSome_of_mem_vars {ρ : Env} {v : Var} :
+    ∀ {e : Expr} {t : Term}, e.OrderingFree → Expr.eval e ρ = some t →
       v ∈ e.vars → (Env.lookup v ρ).isSome
   | .lit _, _, _, _, hv => by simp [Expr.vars] at hv
   | .var w, _, _, he, hv => by
@@ -86,20 +84,18 @@ theorem Expr.lookup_isSome_of_mem_vars {sig : Signature} {ρ : Env} {v : Var} :
       rw [he]; rfl
   | .app f args, t, ho, he, hv => by
       rw [Expr.vars] at hv
-      have hl : ∃ ts, Expr.evalList sig args ρ = some ts := by
+      have hl : ∃ ts, Expr.evalList args ρ = some ts := by
         rw [Expr.eval] at he
-        split at he
-        · obtain ⟨ts, hts, -⟩ := Option.map_eq_some_iff.mp he; exact ⟨ts, hts⟩
-        · exact absurd he (by simp)
+        obtain ⟨ts, hts, -⟩ := Option.map_eq_some_iff.mp he
+        exact ⟨ts, hts⟩
       obtain ⟨ts, hts⟩ := hl
       exact Expr.lookup_isSome_of_mem_varsList ho hts hv
   | .min _ _, _, ho, _, _ => by simp [Expr.OrderingFree, Expr.hasMin] at ho
-  | .ite _ _ _ _, _, ho, _, _ => by simp [Expr.OrderingFree, Expr.hasMin] at ho
 
 @[inherit_doc Expr.lookup_isSome_of_mem_vars]
-theorem Expr.lookup_isSome_of_mem_varsList {sig : Signature} {ρ : Env} {v : Var} :
+theorem Expr.lookup_isSome_of_mem_varsList {ρ : Env} {v : Var} :
     ∀ {es : List Expr} {ts : List Term}, Expr.OrderingFreeList es →
-      Expr.evalList sig es ρ = some ts → v ∈ Expr.varsList es → (Env.lookup v ρ).isSome
+      Expr.evalList es ρ = some ts → v ∈ Expr.varsList es → (Env.lookup v ρ).isSome
   | [], _, _, _, hv => by simp [Expr.varsList] at hv
   | e :: es, _, ho, he, hv => by
       have ho' : e.OrderingFree ∧ Expr.OrderingFreeList es := Bool.or_eq_false_iff.mp ho
@@ -114,10 +110,10 @@ end
 
 
 /-- Replacing one operand replaces one value: what a column rule's key expression is. -/
-theorem Expr.evalList_set {sig : Signature} {ρ : Env} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
-      ∀ (i : Nat) {e : Expr} {t : Term}, e.eval sig ρ = some t →
-        Expr.evalList sig (es.set i e) ρ = some (ts.set i t)
+theorem Expr.evalList_set {ρ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList es ρ = some ts →
+      ∀ (i : Nat) {e : Expr} {t : Term}, e.eval ρ = some t →
+        Expr.evalList (es.set i e) ρ = some (ts.set i t)
   | [], _, h, _, _, _, _ => by
       rw [Expr.evalList, Option.some.injEq] at h
       cases h
@@ -137,10 +133,10 @@ theorem Expr.evalList_set {sig : Signature} {ρ : Env} :
       rfl
 
 /-- The value at one position is that operand's. -/
-theorem Expr.getElem?_of_evalList {sig : Signature} {ρ : Env} :
-    ∀ {es : List Expr} {ts : List Term}, Expr.evalList sig es ρ = some ts →
+theorem Expr.getElem?_of_evalList {ρ : Env} :
+    ∀ {es : List Expr} {ts : List Term}, Expr.evalList es ρ = some ts →
       ∀ (i : Nat) {e : Expr}, es[i]? = some e →
-        ∃ t, ts[i]? = some t ∧ e.eval sig ρ = some t
+        ∃ t, ts[i]? = some t ∧ e.eval ρ = some t
   | [], _, _, i, _, hi => by simp at hi
   | e :: es, _, h, 0, e', hi => by
       rw [Expr.evalList] at h
@@ -156,17 +152,17 @@ theorem Expr.getElem?_of_evalList {sig : Signature} {ρ : Env} :
       exact ⟨t, by simpa using ht, hev⟩
 
 /-- A one-element operand list. -/
-theorem Expr.evalList_singleton {sig : Signature} {σ : Env} {e : Expr} {ts : List Term}
-    (h : Expr.evalList sig [e] σ = some ts) : ∃ t, e.eval sig σ = some t ∧ ts = [t] := by
+theorem Expr.evalList_singleton {σ : Env} {e : Expr} {ts : List Term}
+    (h : Expr.evalList [e] σ = some ts) : ∃ t, e.eval σ = some t ∧ ts = [t] := by
   rw [Expr.evalList] at h
   obtain ⟨t, ht, h⟩ := Option.bind_eq_some_iff.mp h
   rw [Expr.evalList, Option.map_some, Option.some.injEq] at h
   exact ⟨t, ht, h.symm⟩
 
 /-- Evaluate a pair of operands. -/
-theorem Expr.evalList_pair {sig : Signature} {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
-    (h : Expr.evalList sig [e₁, e₂] σ = some ts) :
-    ∃ t₁ t₂, e₁.eval sig σ = some t₁ ∧ e₂.eval sig σ = some t₂ ∧ ts = [t₁, t₂] := by
+theorem Expr.evalList_pair {σ : Env} {e₁ e₂ : Expr} {ts : List Term}
+    (h : Expr.evalList [e₁, e₂] σ = some ts) :
+    ∃ t₁ t₂, e₁.eval σ = some t₁ ∧ e₂.eval σ = some t₂ ∧ ts = [t₁, t₂] := by
   rw [Expr.evalList] at h
   obtain ⟨t₁, ht₁, h⟩ := Option.bind_eq_some_iff.mp h
   obtain ⟨us, hus, rfl⟩ := Option.map_eq_some_iff.mp h

@@ -1,235 +1,144 @@
-import EgglogSemantics.Proofs.Merge
+import EgglogSemantics.Proofs.Interp
+import EgglogSemantics.Proofs.Source.Domain
 
-/-! Monotonicity of recorded terms and equations through executable commands and runs. -/
-
-namespace Egglog.FDatabase
-
-theorem execRunRules_terms {R : RulesetName} {d : FDatabase} :
-    ∀ t ∈ d.terms, t ∈ (execRunRules R d).terms :=
-  execRunRules_induction (P := fun x => ∀ t ∈ d.terms, t ∈ x.terms) (fun _ h => h)
-    fun _ _ _ _ hacc _ _ _ t ht => mem_terms_union.mpr (Or.inl (hacc t ht))
-
-theorem runRoundM_terms {R : RulesetName} {d e : FDatabase} (h : d.runRoundM R = some e) :
-    ∀ t ∈ d.terms, t ∈ e.terms :=
-  fun t ht => mergeSaturateF_terms h t (execRunRules_terms t ht)
-
-theorem runSaturateM_terms {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
-    d.runSaturateM R n = some e → ∀ t ∈ d.terms, t ∈ e.terms := by
-  intro n
-  induction n with
-  | zero =>
-    intro d e hs
-    rw [FDatabase.runSaturateM] at hs
-    obtain ⟨x, -, hxe⟩ := Option.bind_eq_some_iff.mp hs
-    split at hxe
-    · rw [Option.some.injEq] at hxe; exact hxe ▸ fun _ h => h
-    · exact absurd hxe (by simp)
-  | succ n ih =>
-    intro d e hs
-    rw [FDatabase.runSaturateM] at hs
-    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
-    split at hxe
-    · rw [Option.some.injEq] at hxe; exact hxe ▸ fun _ h => h
-    · exact fun t ht => ih hxe t (runRoundM_terms hx t ht)
-
-theorem execCmdM_terms {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') :
-    ∀ t ∈ d.terms, t ∈ d'.terms := by
-  cases c with
-  | action a =>
-    rw [FDatabase.execCmdM] at hs
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact fun t ht =>
-      mergeSaturateF_terms h₂ t ((execAction_lists (h₁)).1 t ht)
-  | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
-  | run R => exact runRoundM_terms hs
-  | saturate R => exact runSaturateM_terms _ hs
-  | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
-  | check q => rw [FDatabase.execCheck_eq hs]; exact fun _ h => h
-
-theorem execProgramM_terms {p : Program} : ∀ {d d' : FDatabase},
-    d.execProgramM p = some d' → ∀ t ∈ d.terms, t ∈ d'.terms := by
-  induction p with
-  | nil =>
-    intro d d' hs
-    rw [FDatabase.execProgramM, Option.some.injEq] at hs
-    exact hs ▸ fun _ h => h
-  | cons c cs ih =>
-    intro d d' hs
-    rw [FDatabase.execProgramM] at hs
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact fun t ht => ih h₂ t (execCmdM_terms h₁ t ht)
-
-/-! Retained equations make historical table readings monotone too. -/
-
-theorem mergeSaturateF_eqs {n : Nat} : ∀ {d e : FDatabase},
-    d.mergeSaturateF n = some e → ∀ p ∈ d.eqs, p ∈ e.eqs := by
-  induction n with
-  | zero =>
-    intro d e hs
-    rw [FDatabase.mergeSaturateF] at hs
-    split at hs
-    · rw [Option.some.injEq] at hs; exact fun p hp => hs ▸ hp
-    · exact absurd hs (by simp)
-  | succ n ih =>
-    intro d e hs
-    rw [FDatabase.mergeSaturateF] at hs
-    split at hs
-    · rw [Option.some.injEq] at hs; exact fun p hp => hs ▸ hp
-    · exact fun p hp => ih hs p (mergeRound_confined.2.1 p hp)
-
-theorem execRunRules_eqs {R : RulesetName} {d : FDatabase} :
-    ∀ p ∈ d.eqs, p ∈ (execRunRules R d).eqs :=
-  execRunRules_induction (P := fun x => ∀ p ∈ d.eqs, p ∈ x.eqs) (fun _ h => h)
-    fun _ _ _ _ hacc _ _ _ p hp => mem_eqs_union.mpr (Or.inl (hacc p hp))
-
-theorem runRoundM_eqs {R : RulesetName} {d e : FDatabase} (h : d.runRoundM R = some e) :
-    ∀ p ∈ d.eqs, p ∈ e.eqs :=
-  fun p hp => mergeSaturateF_eqs h p (execRunRules_eqs p hp)
-
-theorem runSaturateM_eqs {R : RulesetName} : ∀ (n : Nat) {d e : FDatabase},
-    d.runSaturateM R n = some e → ∀ p ∈ d.eqs, p ∈ e.eqs := by
-  intro n
-  induction n with
-  | zero =>
-    intro d e hs
-    rw [FDatabase.runSaturateM] at hs
-    obtain ⟨x, -, hxe⟩ := Option.bind_eq_some_iff.mp hs
-    split at hxe
-    · rw [Option.some.injEq] at hxe; exact hxe ▸ fun _ h => h
-    · exact absurd hxe (by simp)
-  | succ n ih =>
-    intro d e hs
-    rw [FDatabase.runSaturateM] at hs
-    obtain ⟨x, hx, hxe⟩ := Option.bind_eq_some_iff.mp hs
-    split at hxe
-    · rw [Option.some.injEq] at hxe; exact hxe ▸ fun _ h => h
-    · exact fun p hp => ih hxe p (runRoundM_eqs hx p hp)
-
-theorem execCmdM_eqs {d d' : FDatabase} {c : Cmd} (hs : d.execCmdM c = some d') :
-    ∀ p ∈ d.eqs, p ∈ d'.eqs := by
-  cases c with
-  | action a =>
-    rw [FDatabase.execCmdM] at hs
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact fun p hp =>
-      mergeSaturateF_eqs h₂ p ((execAction_lists (h₁)).2 p hp)
-  | rule r => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
-  | run R => exact runRoundM_eqs hs
-  | saturate R => exact runSaturateM_eqs _ hs
-  | decl f dc => rw [FDatabase.execCmdM, Option.some.injEq] at hs; exact hs ▸ fun _ h => h
-  | check q => rw [FDatabase.execCheck_eq hs]; exact fun _ h => h
-
-theorem execProgramM_eqs {p : Program} : ∀ {d d' : FDatabase},
-    d.execProgramM p = some d' → ∀ q ∈ d.eqs, q ∈ d'.eqs := by
-  induction p with
-  | nil =>
-    intro d d' hs
-    rw [FDatabase.execProgramM, Option.some.injEq] at hs
-    exact hs ▸ fun _ h => h
-  | cons c cs ih =>
-    intro d d' hs
-    rw [FDatabase.execProgramM] at hs
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-    exact fun q hq => ih h₂ q (execCmdM_eqs h₁ q hq)
-
-/-- **A block only adds, at the denotation.** `FDatabase.execProgramM_contained` is the
-*specification*-relative statement and needs `Program.NoSaturate`; this is the one between the
-interpreter's own two states, and it holds of every program. -/
-theorem execProgramM_toDatabase_contained {p : Program} {d d' : FDatabase}
-    (hs : d.execProgramM p = some d') : d.toDatabase.Contained d'.toDatabase :=
-  toDatabase_contained_of_lists (execProgramM_terms hs) (execProgramM_eqs hs)
-
-/-- A round retains every recorded fact even when its merge phase replaces live rows. -/
-theorem runRoundM_toDatabase_contained {R : RulesetName} {d e : FDatabase}
-    (run : d.runRoundM R = some e) : d.toDatabase.Contained e.toDatabase :=
-  toDatabase_contained_of_lists (runRoundM_terms run) (runRoundM_eqs run)
-
-/-- Saturation retains every recorded fact from its initial state. -/
-theorem runSaturateM_toDatabase_contained {R : RulesetName} {n : Nat} {d e : FDatabase}
-    (run : d.runSaturateM R n = some e) : d.toDatabase.Contained e.toDatabase :=
-  toDatabase_contained_of_lists (runSaturateM_terms n run) (runSaturateM_eqs n run)
-
-/-- Every command preserves its input environment. -/
-theorem execCmdM_env {d d' : FDatabase} {c : Cmd}
-    (hs : d.execCmdM c = some d') : d'.env = d.env := by
-  cases c with
-  | action a =>
-      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp hs
-      exact (mergeSaturateF_fields h₂).2.1.trans (FDatabase.execAction_env h₁)
-  | rule r => cases Option.some.inj hs; rfl
-  | run R => exact (runRoundM_fields hs).2.1
-  | saturate R => exact (runSaturateM_fields runFuel hs).2.1
-  | decl f dc => cases Option.some.inj hs; rfl
-  | check q => rw [FDatabase.execCheck_eq hs]
-
-/-- Executing a program preserves its initial environment. -/
-theorem execProgramM_env {p : Program} {d D : FDatabase}
-    (h : d.execProgramM p = some D) : D.env = d.env := by
-  induction p generalizing d with
-  | nil => cases Option.some.inj h; rfl
-  | cons c cs ih =>
-      obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
-      exact (ih h₂).trans (execCmdM_env h₁)
-
-end Egglog.FDatabase
+/-! Persistent assertions and delete-free term growth in executable programs. -/
 
 namespace Egglog
 
-/-- A complete atom, which is all a build emits. -/
+theorem FDatabase.toDatabase_contained_of_lists {d e : FDatabase}
+    (ht : d.terms ⊆ e.terms) (he : d.eqs ⊆ e.eqs) : d.toDatabase.Contained e.toDatabase := by
+  constructor
+  rintro p (⟨hp, hm⟩ | ⟨hp, h1, h2⟩)
+  · exact Or.inl ⟨hp, ht hm⟩
+  · exact Or.inr ⟨he hp, ht h1, ht h2⟩
+
+theorem execWrites_lists {σ : Env} {d e : FDatabase} {as : List Action}
+    (h : execWrites σ d as = some e) : d.terms ⊆ e.terms ∧ d.eqs ⊆ e.eqs := by
+  apply execWrites_preserves (P := fun e => d.terms ⊆ e.terms ∧ d.eqs ⊆ e.eqs) ?_ ?_ ⟨fun _ h => h, fun _ h => h⟩ h
+  · intro e t he
+    exact ⟨fun _ hm => FDatabase.mem_addTerm_of_mem (he.1 hm), he.2⟩
+  · intro e a b he _
+    refine ⟨fun _ hm => FDatabase.mem_addTerm_of_mem (FDatabase.mem_addTerm_of_mem (he.1 hm)), ?_⟩
+    intro p hp
+    exact List.mem_dedup.mpr (List.mem_cons_of_mem _ (he.2 hp))
+
+theorem fireWritesInto_lists (r : Rule) (d : FDatabase) (σ : Env) :
+    d.terms ⊆ (fireWritesInto r d σ).terms ∧ d.eqs ⊆ (fireWritesInto r d σ).eqs := by
+  unfold fireWritesInto
+  cases h : execWrites σ d r.actions with
+  | none => exact ⟨fun _ h => h, fun _ h => h⟩
+  | some e => exact execWrites_lists h
+
+private theorem foldl_mono {α β : Type} (f : FDatabase → α → FDatabase)
+    (field : FDatabase → List β) (hf : ∀ d a, field d ⊆ field (f d a))
+    (xs : List α) (d : FDatabase) : field d ⊆ field (xs.foldl f d) := by
+  induction xs generalizing d with
+  | nil => exact fun _ h => h
+  | cons x xs ih => exact List.Subset.trans (hf d x) (ih _)
+
+namespace FDatabase
+
+theorem execRunRules_terms {R : List Rule} {d : FDatabase} (hd : ∀ r ∈ R, r.DeleteFree) :
+    d.terms ⊆ (execRunRules R d).terms := by
+  rw [execRunRules_eq_fold_of_deleteFree R hd]
+  exact foldl_mono _ FDatabase.terms
+    (fun acc (rs : Rule × List Env) => foldl_mono _ FDatabase.terms (fun d σ => (fireWritesInto_lists rs.1 d σ).1) _ acc) _ d
+
+theorem execRunRules_eqs {R : List Rule} {d : FDatabase} :
+    d.eqs ⊆ (execRunRules R d).eqs := by
+  apply execRunRules_induction_ruleset (P := fun e => d.eqs ⊆ e.eqs)
+  · intro X
+    unfold deleteAtoms
+    split <;> exact fun _ h => h
+  · intro r _ σ _ acc h
+    exact List.Subset.trans h (fireWritesInto_lists r acc σ).2
+
+
+theorem runSaturateF_terms {R : List Rule} : ∀ (n : Nat) {d e : FDatabase},
+    (∀ r ∈ R, r.DeleteFree) → d.runSaturateF R n = some e → d.terms ⊆ e.terms := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e _ h
+    unfold runSaturateF at h
+    split at h
+    · cases Option.some.inj h; exact fun _ h => h
+    · cases h
+  | succ n ih =>
+    intro d e hd h
+    unfold runSaturateF at h
+    split at h
+    · cases Option.some.inj h; exact fun _ h => h
+    · exact List.Subset.trans (execRunRules_terms hd)
+        (ih hd h)
+
+theorem runSaturateF_eqs {R : List Rule} : ∀ (n : Nat) {d e : FDatabase},
+    d.runSaturateF R n = some e → d.eqs ⊆ e.eqs := by
+  intro n
+  induction n with
+  | zero =>
+    intro d e h
+    unfold runSaturateF at h
+    split at h
+    · cases Option.some.inj h; exact fun _ h => h
+    · cases h
+  | succ n ih =>
+    intro d e h
+    unfold runSaturateF at h
+    split at h
+    · cases Option.some.inj h; exact fun _ h => h
+    · exact List.Subset.trans execRunRules_eqs (ih h)
+
+theorem execCmd_terms {d e : FDatabase} {c : Cmd} (hd : ∀ r ∈ c.rules, r.DeleteFree)
+    (h : execCmd d c = some e) : d.terms ⊆ e.terms := by
+  cases c with
+  | run R => cases Option.some.inj h; exact execRunRules_terms hd
+  | saturate R => exact runSaturateF_terms _ hd h
+
+theorem execCmd_eqs {d e : FDatabase} {c : Cmd} (h : execCmd d c = some e) :
+    d.eqs ⊆ e.eqs := by
+  cases c with
+  | run R => cases Option.some.inj h; exact execRunRules_eqs
+  | saturate R => exact runSaturateF_eqs _ h
+
+theorem execProgram_terms {p : List Cmd} {d e : FDatabase}
+    (hp : ∀ c ∈ p, c.monotoneB = true) (h : execProgram d p = some e) :
+    d.terms ⊆ e.terms := by
+  induction p generalizing d with
+  | nil => cases Option.some.inj h; exact fun _ h => h
+  | cons c cs ih =>
+    obtain ⟨m, hc, hm⟩ := Option.bind_eq_some_iff.mp h
+    exact List.Subset.trans (execCmd_terms (Cmd.deleteFree_of_monotone (hp c (by simp))) hc)
+      (ih (fun c hc => hp c (by simp [hc])) hm)
+
+theorem execProgram_eqs {p : List Cmd} {d e : FDatabase}
+    (h : execProgram d p = some e) : d.eqs ⊆ e.eqs := by
+  induction p generalizing d with
+  | nil => cases Option.some.inj h; exact fun _ h => h
+  | cons c cs ih =>
+    obtain ⟨m, hc, hm⟩ := Option.bind_eq_some_iff.mp h
+    exact List.Subset.trans (execCmd_eqs hc) (ih hm)
+
+theorem execProgram_toDatabase_contained {p : List Cmd} {d e : FDatabase}
+    (hp : ∀ c ∈ p, c.monotoneB = true) (h : execProgram d p = some e) :
+    d.toDatabase.Contained e.toDatabase :=
+  toDatabase_contained_of_lists (execProgram_terms hp h) (execProgram_eqs h)
+
+theorem execProgram_append {p q : List Cmd} : ∀ {d e : FDatabase},
+    execProgram d (p ++ q) = some e ↔
+      ∃ m, execProgram d p = some m ∧ execProgram m q = some e := by
+  induction p with
+  | nil => simp [execProgram]
+  | cons c cs ih =>
+    intro d e
+    simp only [List.cons_append, execProgram, Option.bind_eq_some_iff, ih]
+    aesop
+
+end FDatabase
+
+/-- A syntactic build action; unions and deletes are excluded. -/
 def Action.IsAtomWrite : Action → Prop
-  | .expr (.app _ _) => True
+  | .expr _ => True
   | _ => False
-
-/-- Atom writes evaluate identically under equal signatures and environments. -/
-theorem execActions_parallel {as : List Action} (hs : ∀ a ∈ as, a.IsAtomWrite) :
-    ∀ {d₁ d₂ e₂ : FDatabase}, d₂.sig = d₁.sig → d₂.env = d₁.env → d₂.SubtermClosed →
-      (∀ t ∈ d₁.terms, t ∈ d₂.terms) → execActions d₂ as = some e₂ →
-      ∃ e₁, execActions d₁ as = some e₁ ∧ (∀ t ∈ e₁.terms, t ∈ e₂.terms) := by
-  induction as with
-  | nil =>
-    intro d₁ d₂ e₂ _ _ _ hmem h
-    rw [execActions, Option.some.injEq] at h
-    exact ⟨d₁, rfl, h ▸ hmem⟩
-  | cons a as ih =>
-    intro d₁ d₂ e₂ hsig henv hc hmem h
-    cases a with
-    | union _ _ => exact (hs _ List.mem_cons_self).elim
-    | expr e =>
-      obtain ⟨m₂, hm₂, hrest⟩ := Option.bind_eq_some_iff.mp h
-      obtain ⟨t, ht, rfl⟩ := Option.map_eq_some_iff.mp hm₂
-      rw [hsig, henv] at ht
-      have hm₁ : execAction d₁ (.expr e) = some (d₁.addAtom t) := by simp [execAction, ht]
-      obtain ⟨e₁, he₁, hmem₁⟩ :=
-        ih (fun b hb => hs b (List.mem_cons_of_mem _ hb))
-          (d₁ := d₁.addAtom t) (d₂ := d₂.addAtom t) hsig henv (hc.addTerm t)
-          (fun u hu => (FDatabase.mem_addTerm_terms hc).mpr
-            ((FDatabase.mem_addTerm_terms_imp hu).imp id (hmem u))) hrest
-      exact ⟨e₁, by rw [execActions, hm₁, Option.bind_some]; exact he₁, hmem₁⟩
-
-/-- Retained writes of a block survive interleaved top-level merge phases. -/
-theorem exists_execActions_of_execProgramM {as : List Action} (hs : ∀ a ∈ as, a.IsAtomWrite) :
-    ∀ {d D : FDatabase}, d.Closed → d.execProgramM (as.map Cmd.action) = some D →
-      ∃ e, execActions d as = some e ∧ (∀ t ∈ e.terms, t ∈ D.terms) := by
-  induction as with
-  | nil =>
-    intro d D _ h
-    rw [List.map_nil, FDatabase.execProgramM, Option.some.injEq] at h
-    exact ⟨d, rfl, h ▸ fun _ ht => ht⟩
-  | cons a as ih =>
-    intro d D hc h
-    rw [List.map_cons, FDatabase.execProgramM] at h
-    obtain ⟨d₁, h₁, h₂⟩ := Option.bind_eq_some_iff.mp h
-    rw [FDatabase.execCmdM] at h₁
-    obtain ⟨d₀, hact, hmerge⟩ := Option.bind_eq_some_iff.mp h₁
-    replace hact : execAction d a = some d₀ := hact
-    have hc₁ : d₁.Closed := FDatabase.mergeSaturateF_closed (execAction_closed hc hact) hmerge
-    obtain ⟨e₁, he₁, hmem₁⟩ := ih (fun b hb => hs b (List.mem_cons_of_mem _ hb)) hc₁ h₂
-    obtain ⟨hsig, henv, -⟩ := FDatabase.mergeSaturateF_fields hmerge
-    obtain ⟨e₀, he₀, hmem₀⟩ :=
-      execActions_parallel (fun b hb => hs b (List.mem_cons_of_mem _ hb))
-        (d₁ := d₀) (d₂ := d₁) hsig henv hc₁.subterms (FDatabase.mergeSaturateF_terms hmerge) he₁
-    exact ⟨e₀, by rw [execActions, hact, Option.bind_some]; exact he₀,
-      fun t ht => hmem₁ t (hmem₀ t ht)⟩
-
 
 end Egglog

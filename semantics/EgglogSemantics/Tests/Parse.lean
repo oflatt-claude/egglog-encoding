@@ -4,9 +4,9 @@ import EgglogSemantics.Tests.Egg
 # Parsing egglog source
 
 The inverse of `Program.toEgg`: reads the fragment the emitter writes, so programs can be
-kept as `.egg` files and hand-written in egglog's own syntax. Sorts are read for arity
-only, since the model is untyped. `(sort …)`, `(ruleset …)` and `(print-size)` carry no
-command.
+kept as `.egg` files and hand-written in egglog's own syntax. The model is untyped and has
+no declarations, so `(sort …)`, `(ruleset …)`, `(constructor …)`, `(relation …)`, and
+`(print-size)` carry no command; a `(function …)` with a merge is outside the language.
 -/
 
 namespace Egglog
@@ -84,41 +84,15 @@ def expr : Sexp → Except String Expr
   | .list (.atom f :: args) => do pure (.app f (← args.mapM expr))
   | .list _ => .error "an application starts with a name"
 
-/-- One expression per value column: `(values e…)` or a single expression. -/
-def values : Sexp → Except String (List Expr)
-  | .list (.atom "values" :: es) => es.mapM expr
-  | s => do pure [← expr s]
-
-/-- `(f k…)` for a declared merge function `f` with its key columns. -/
-def entry (sig : Signature) : Sexp → Option (FnName × FnDecl × List Sexp)
-  | .list (.atom f :: ks) => do
-    let d ← sig f
-    if d.merge.isSome && ks.length == d.arity then some (f, d, ks) else none
-  | _ => none
-
-def entryExpr (f : FnName) (d : FnDecl) (ks : List Sexp) (vs : Sexp) :
-    Except String Expr := do
-  let keys ← ks.mapM expr
-  let vals ← values vs
-  if vals.length != d.outArity then
-    .error s!"{f} has {d.outArity} value columns, not {vals.length}"
-  else pure (.app f (keys ++ vals))
-
-/-- A query fact. `(= v (f k…))` reads an entry of a merge function; otherwise `=` is an
-equality between value expressions. -/
-def pattern (sig : Signature) : Sexp → Except String Pattern
-  | .list [.atom "=", a, b] =>
-    match entry sig b with
-    | some (f, d, ks) => do pure (.expr (← entryExpr f d ks a))
-    | none => do pure (.eq (← expr a) (← expr b))
+def pattern : Sexp → Except String Pattern
+  | .list [.atom "=", a, b] => do pure (.eq (← expr a) (← expr b))
+  | .list [.atom "!=", a, b] => do pure (.ne (← expr a) (← expr b))
   | s => do pure (.expr (← expr s))
 
-def action (sig : Signature) : Sexp → Except String Action
+def action : Sexp → Except String Action
   | .list [.atom "union", a, b] => do pure (.union (← expr a) (← expr b))
-  | .list [.atom "set", target, v] =>
-    match entry sig target with
-    | some (f, d, ks) => do pure (.expr (← entryExpr f d ks v))
-    | none => .error "set of something that is not a merge function entry"
+  | .list [.atom "delete", target] => do pure (.delete (← expr target))
+  | .list (.atom "set" :: _) => .error "`set` writes a merge function, which the model has no longer"
   | s => do pure (.expr (← expr s))
 
 /-- Keyword options such as `:ruleset R`, as (keyword, argument) pairs; a keyword with no
@@ -135,41 +109,8 @@ def options : List Sexp → Except String (List (String × Option Sexp))
   | [.atom k] => if k.startsWith ":" then .ok [(k, none)] else .error s!"unexpected {k}"
   | s :: _ => .error s!"unexpected {repr s}"
 
-def mergeSpec (sig : Signature) (width : Nat) : Sexp → Except String MergeSpec
-  | .list (first :: rest) =>
-    match first with
-    | .list _ => do
-      let body := first :: rest
-      let some res := body.getLast? | .error "empty merge block"
-      let actions ← (body.dropLast).mapM (action sig)
-      pure (.merge (mergeParamsToEgg "old" width) (mergeParamsToEgg "new" width)
-        actions (← values res))
-    | _ => do
-      pure (.merge (mergeParamsToEgg "old" width) (mergeParamsToEgg "new" width)
-        [] (← values (.list (first :: rest))))
-  | s => do
-    pure (.merge (mergeParamsToEgg "old" width) (mergeParamsToEgg "new" width) [] (← values s))
-
-def columns : Sexp → Nat
-  | .list xs => xs.length
-  | _ => 1
-
-def decl (sig : Signature) (f : FnName) (ins : Sexp) (out : Sexp) (opts : List Sexp)
-    (isCtor : Bool) : Except String FnDecl := do
-  let .list sorts := ins | .error s!"{f}: input sorts are a list"
-  let opts ← options opts
-  if isCtor then
-    if opts.any (fun o => o.1 != ":cost" && o.1 != ":unextractable") then
-      .error s!"{f}: unsupported constructor option"
-    else pure ⟨sorts.length, 1, none, none⟩
-  else
-    let merge ← match opts.find? (·.1 == ":merge") with
-      | some (_, some m) => mergeSpec sig (columns out) m
-      | _ => .error s!"{f}: a function needs `:merge`"
-    pure ⟨sorts.length, columns out, some merge, none⟩
-
-def rule (sig : Signature) (query actions : Sexp) (opts : List Sexp) :
-    Except String Rule := do
+/-- A rule and the ruleset it joins; the unnamed ruleset is `""`. -/
+def rule (query actions : Sexp) (opts : List Sexp) : Except String (Rule × String) := do
   let .list qs := query | .error "a rule's query is a list"
   let .list as := actions | .error "a rule's actions are a list"
   let opts ← options opts
@@ -177,51 +118,95 @@ def rule (sig : Signature) (query actions : Sexp) (opts : List Sexp) :
     | some (_, some (.atom r)) => pure r
     | some _ => .error "`:ruleset` takes a name"
     | none => pure ""
-  pure ⟨← qs.mapM (pattern sig), ← as.mapM (action sig), ruleset⟩
+  pure (⟨← qs.mapM pattern, ← as.mapM action⟩, ruleset)
 
-def runTarget : Sexp → Except String RulesetName
+def runTarget : Sexp → Except String String
   | .atom r => .ok r
   | .list [.atom "run"] => .ok ""
   | .list [.atom "run", .atom r] => .ok r
   | _ => .error "unsupported schedule"
 
-/-- The commands of one top-level form, under the signature so far. -/
-def command (sig : Signature) : Sexp → Except String (List Cmd)
-  | .list (.atom "check" :: facts) => return [.check (← facts.mapM (pattern sig))]
-  | .list (.atom "sort" :: _) | .list (.atom "ruleset" :: _) | .list [.atom "print-size"] =>
-    .ok []
-  | .list (.atom "constructor" :: .atom f :: ins :: out :: opts) => do
-    pure [.decl f (← decl sig f ins out opts true)]
-  | .list (.atom "function" :: .atom f :: ins :: out :: opts) => do
-    pure [.decl f (← decl sig f ins out opts false)]
+/-- A parsed top-level form. -/
+inductive Form where
+  /-- Register a rule in a ruleset. -/
+  | rule (r : Rule) (ruleset : String)
+  /-- Fire the ruleset's rules once, `n` times over. -/
+  | run (ruleset : String) (n : Nat)
+  /-- Fire the ruleset's rules until nothing changes. -/
+  | saturate (ruleset : String)
+  | check (q : Query)
+  /-- A top-level action, run once. -/
+  | action (a : Action)
+  | nothing
+
+/-- One top-level form. Declarations carry nothing: the model is untyped, and the emitter
+reinvents them from the program's uses. -/
+def command : Sexp → Except String Form
+  | .list (.atom "check" :: facts) => return .check (← facts.mapM pattern)
+  | .list (.atom "sort" :: _) | .list (.atom "ruleset" :: _) | .list [.atom "print-size"]
+  | .list (.atom "constructor" :: _) | .list (.atom "relation" :: _) => .ok .nothing
+  | .list (.atom "function" :: _) => .error "`function` declares a merge, which the model has no longer"
   | .list (.atom "rule" :: query :: actions :: opts) => do
-    pure [.rule (← rule sig query actions opts)]
+    let (r, R) ← rule query actions opts
+    pure (.rule r R)
   | .list [.atom "run", .atom n] =>
     match n.toNat? with
-    | some n => .ok (List.replicate n (.run ""))
-    | none => .ok [.run n]
+    | some n => .ok (.run "" n)
+    | none => .ok (.run n 1)
   | .list [.atom "run", .atom r, .atom n] =>
     match n.toNat? with
-    | some n => .ok (List.replicate n (.run r))
+    | some n => .ok (.run r n)
     | none => .error "`run` takes a ruleset and a count"
   | .list [.atom "run-schedule", .list [.atom "saturate", target]] => do
-    pure [.saturate (← runTarget target)]
+    pure (.saturate (← runTarget target))
   | .list (.atom "datatype" :: _) => .error "`datatype` is not supported; use `constructor`"
   | s@(.list (.atom head :: _)) =>
     if head.startsWith ":" then .error s!"unsupported command {head}"
-    else do pure [.action (← action sig s)]
+    else do pure (.action (← action s))
   | s => .error s!"unsupported command {repr s}"
+
+/-- The rulesets registered so far, the commands, and the final check once seen. -/
+structure State where
+  rulesets : List (String × List Rule) := []
+  commands : Array Cmd := #[]
+  check : Option Query := none
+
+/-- The rules registered in `R` so far, in registration order. -/
+def State.rules (st : State) (R : String) : List Rule :=
+  ((st.rulesets.find? (·.1 == R)).map Prod.snd).getD []
+
+def State.register (st : State) (R : String) (r : Rule) : State :=
+  { st with rulesets :=
+      if st.rulesets.any (·.1 == R) then
+        st.rulesets.map fun e => if e.1 == R then (e.1, e.2 ++ [r]) else e
+      else st.rulesets ++ [(R, [r])] }
+
+/-- Add a command. Nothing may follow the check. -/
+def State.push (st : State) (c : Cmd) : Except String State :=
+  if st.check.isSome then .error "`check` must be the last command" else
+    .ok { st with commands := st.commands.push c }
+
+def State.step (st : State) : Form → Except String State
+  | .nothing => .ok st
+  | .rule r R =>
+      if st.check.isSome then .error "`check` must be the last command" else
+        .ok (st.register R r)
+  | .run R n => (List.replicate n (Cmd.run (st.rules R))).foldlM State.push st
+  | .saturate R => st.push (.saturate (st.rules R))
+  | .action a => st.push (.run [⟨[], [a]⟩])
+  | .check q =>
+      if st.check.isSome then .error "a program has one `check`" else
+        .ok { st with check := some q }
 
 end Parse
 
-/-- Parse a program from egglog source. -/
+/-- Parse a program from egglog source. A run of a ruleset fires the rules registered in
+it so far; a top-level action is a run of an empty-query rule; the check, if any, comes
+last, and a program without one ends in the empty check. -/
 def Program.ofEgg (src : String) : Except String Program := do
   let forms ← Sexp.parseAll src
-  let (_, cmds) ← forms.foldlM (fun (state : Signature × Array Cmd) form => do
-    let cmds ← Parse.command state.1 form
-    pure (cmds.foldl (fun sig c => c.sigBind sig) state.1, state.2 ++ cmds.toArray))
-    ((fun _ => none), #[])
-  pure cmds.toList
+  let st ← forms.foldlM (fun st form => do st.step (← Parse.command form)) ({} : Parse.State)
+  pure { commands := st.commands.toList, check := st.check.getD [] }
 
 end Egglog
 
@@ -232,18 +217,36 @@ set_option linter.hashCommand false
 /-- Parsing rendered source gives it back. -/
 private def roundTrip (src : String) : Bool :=
   match Program.ofEgg src with
-  | .ok p => p.render == src
+  | .ok p =>
+    match Program.ofEgg p.render with
+    | .ok q => q.render == p.render
+    | .error _ => false
   | .error _ => false
 
 #guard roundTrip "(sort Math)\n(ruleset R)\n(constructor A () Math)\n(constructor F (Math) Math)\n\
-  (F (A))\n(rule ((F x)) ((union (F x) x)) :ruleset R)\n(run-schedule (saturate R))\n(run 1)\n"
-#guard roundTrip "(sort Math)\n(constructor A () Math)\n(function Log (Math) i64 :merge new)\n\
-  (function Dist (Math) i64 :merge ((set (Log (A)) old) (min old new)))\n\
-  (set (Dist (A)) 3)\n(rule ((= v (Dist x))) ((set (Dist x) (max v -2))))\n(run 1)\n"
-#guard roundTrip "(sort Math)\n(constructor K () Math)\n\
-  (function Bounds (Math) (i64 i64) :merge (values (min old0 new0) (min old1 new1)))\n\
-  (set (Bounds (K)) (values 3 7))\n"
+  (F (A))\n(rule ((F x)) ((union (F x) x)) :ruleset R)\n(run-schedule (saturate R))\n(run 1)\n\
+  (check (F x))\n"
+-- A top-level action is a run of one empty-query rule; every run gets a ruleset of its
+-- own, named by position; the declarations come from the uses.
+#guard ((Program.ofEgg "(constructor A () Math) (A) (A)").map Program.render).toOption ==
+  some "(sort Math)\n(ruleset r0)\n(ruleset r1)\n(constructor A () Math)\n\
+    (rule () ((A)) :ruleset r0)\n(run r0 1)\n(rule () ((A)) :ruleset r1)\n(run r1 1)\n"
+-- A run fires the rules registered in its ruleset so far; rules never run are dropped.
+#guard ((Program.ofEgg "(rule ((A)) ((B))) (run 1) (rule ((B)) ((C))) (run 1)").map
+    fun p => p.commands.map fun c => c.rules.length).toOption == some [1, 2]
+#guard ((Program.ofEgg "(rule ((A)) ((B))) (rule ((B)) ((C)) :ruleset R)").map
+    fun p => p.commands.length).toOption == some 0
+-- The generated tables: relations, disequality guards, and deletes.
+#guard roundTrip "(sort Math)\n(ruleset r0)\n(relation @UF (Math Math))\n\
+  (rule ((@UF @a @b) (@UF @b @c) (!= @b @c)) ((delete (@UF @a @b)) (@UF @a @c)) \
+  :ruleset r0)\n(run-schedule (saturate r0))\n"
+-- The check is last and unique; a program without one ends in the empty check.
+#guard (Program.ofEgg "(check (A)) (A)").isOk == false
+#guard (Program.ofEgg "(check (A)) (check (B))").isOk == false
+#guard ((Program.ofEgg "(A)").map (·.check.isEmpty)).toOption == some true
+#guard ((Program.ofEgg "(A) (check (A) (= (A) (A)))").map (·.check.length)).toOption == some 2
 #guard (Program.ofEgg "(datatype Math (A))").isOk == false
+#guard (Program.ofEgg "(function Dist (Math) i64 :merge new)").isOk == false
 #guard (Program.ofEgg "(constructor A () Math").isOk == false
 #guard (Program.ofEgg "; a comment\n(sort Math) (constructor A () Math) (A)").isOk
 

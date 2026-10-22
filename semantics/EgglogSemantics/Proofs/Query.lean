@@ -7,7 +7,7 @@ namespace Egglog
 
 /-- Atom and equality matching read the single semantic relation. -/
 theorem Matches.expr_iff_cong {db : Database} {e : Expr} {σ : Env} :
-    Matches db (.expr e) σ ↔ ∃ t, e.evalAtom db.sig σ = some t ∧ Cong db t t := by
+    Matches db (.expr e) σ ↔ ∃ t, e.eval σ = some t ∧ Cong db t t := by
   constructor
   · rintro h
     cases h with | atom he hc => exact ⟨_, he, hc⟩
@@ -16,7 +16,7 @@ theorem Matches.expr_iff_cong {db : Database} {e : Expr} {σ : Env} :
 
 theorem Matches.eq_iff_cong {db : Database} {a b : Expr} {σ : Env} :
     Matches db (.eq a b) σ ↔
-      ∃ s t, a.eval db.sig σ = some s ∧ b.eval db.sig σ = some t ∧ Cong db s t := by
+      ∃ s t, a.eval σ = some s ∧ b.eval σ = some t ∧ Cong db s t := by
   constructor
   · rintro h
     cases h with | equal ha hb hc => exact ⟨_, _, ha, hb, hc⟩
@@ -24,12 +24,12 @@ theorem Matches.eq_iff_cong {db : Database} {a b : Expr} {σ : Env} :
     exact .equal ha hb hc
 
 theorem Matches.expr_iff_infers {db : Database} {e : Expr} {σ : Env} :
-    Matches db (.expr e) σ ↔ ∃ t, e.evalAtom db.sig σ = some t ∧ db.Infers t t := by
+    Matches db (.expr e) σ ↔ ∃ t, e.eval σ = some t ∧ db.Infers t t := by
   simp only [expr_iff_cong, InferredFacts.congr_iff_infers]
 
 theorem Matches.eq_iff_infers {db : Database} {a b : Expr} {σ : Env} :
     Matches db (.eq a b) σ ↔
-      ∃ s t, a.eval db.sig σ = some s ∧ b.eval db.sig σ = some t ∧ db.Infers s t := by
+      ∃ s t, a.eval σ = some s ∧ b.eval σ = some t ∧ db.Infers s t := by
   simp only [eq_iff_cong, InferredFacts.congr_iff_infers]
 
 private def selectEnv (vars : List Var) (σ : Env) : Env :=
@@ -114,10 +114,10 @@ theorem querySubst_of_matches_terms {db : Database} {q : Query} {σ : Env}
   rw [hcanon p hp]
   exact p.mem_freeVars.mpr ⟨hvp, by simp [Env.dom]⟩
 theorem querySubst_of_matches {db : Database} {q : Query} {σ : Env}
-    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.values)
+    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.terms)
     (hm : ∀ p ∈ q, Matches db p σ) :
     ∃ τ, ValidQuerySubst db q τ ∧ Env.Agree τ σ :=
-  querySubst_of_matches_terms hdom (fun b hb => (hval b hb).1) hm
+  querySubst_of_matches_terms hdom hval hm
 
 /-- Query variables are deduplicated. -/
 theorem Query.vars_nodup (q : Query) : q.vars.Nodup := by
@@ -187,13 +187,13 @@ theorem queryHolds_iff_validQuerySubst {db : Database} {q : Query} :
 /-- Rule firings produce exactly the same databases under either representation. -/
 theorem mem_ruleResults_iff_queryMatches {db d : Database} {r : Rule} :
     d ∈ RuleResults db r ↔
-      ∃ σ, QueryMatches db r.query σ ∧ evalLocalActions db r.actions σ = some d := by
+      ∃ σ, QueryMatches db r.query σ ∧ evalActions σ db r.actions = some d := by
   constructor
   · rintro ⟨σ, hσ, he⟩
     obtain ⟨τ, hτ, hag⟩ := hσ.exists_queryMatches
-    exact ⟨τ, hτ, (evalLocalActions_agree r.actions hag).trans he⟩
+    exact ⟨τ, hτ, (evalActions_agree hag db r.actions).trans he⟩
   · rintro ⟨σ, hσ, he⟩
     obtain ⟨τ, hτ, hag⟩ := hσ.exists_validQuerySubst
-    exact ⟨τ, hτ, (evalLocalActions_agree r.actions hag).trans he⟩
+    exact ⟨τ, hτ, (evalActions_agree hag db r.actions).trans he⟩
 
 end Egglog

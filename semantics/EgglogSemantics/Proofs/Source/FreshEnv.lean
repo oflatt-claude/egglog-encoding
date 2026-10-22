@@ -5,7 +5,7 @@ import EgglogSemantics.Impl.Interp
 
 namespace Egglog
 
-abbrev FreshEnv (d : FDatabase) := FreshBindings {t | t ∈ d.valueTerms}
+abbrev FreshEnv (d : FDatabase) := FreshBindings {t | t ∈ d.terms}
 
 namespace FreshEnv
 

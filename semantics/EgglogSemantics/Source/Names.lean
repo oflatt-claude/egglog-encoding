@@ -10,11 +10,6 @@ namespace Egglog
 `@UF_<Sort>` per sort there is one table here. -/
 def ufName : FnName := "@UF"
 
-/-- Maintenance saturates here after each source round.
-Copies inside a source saturation only interleave maintenance; the paper excludes
-source saturation with `Program.NoSaturate`. -/
-def rebuildRuleset : RulesetName := "@rebuild"
-
 /-- The view table for source constructor `f`; its key is the tuple of child ids. -/
 def viewName (f : FnName) : FnName := "@" ++ f ++ "View"
 

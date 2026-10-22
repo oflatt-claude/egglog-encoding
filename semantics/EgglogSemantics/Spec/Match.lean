@@ -20,8 +20,6 @@ def Expr.freeVars : Expr → Env → List Var
   | .var v, σ => if (Env.lookup v σ).isSome then [] else [v]
   | .app _ args, σ => Expr.freeVarsList args σ
   | .min a b, σ => a.freeVars σ ∪ b.freeVars σ
-  | .ite lhs rhs yes no, σ =>
-      (Expr.freeVarsList lhs σ ∪ Expr.freeVarsList rhs σ) ∪ (yes.freeVars σ ∪ no.freeVars σ)
 
 /-- `Expr.freeVars` over an argument list, deduplicated. -/
 def Expr.freeVarsList : List Expr → Env → List Var
@@ -33,6 +31,7 @@ end
 def Pattern.freeVars : Pattern → Env → List Var
   | .expr e, σ => e.freeVars σ
   | .eq e₁ e₂, σ => e₁.freeVars σ ∪ e₂.freeVars σ
+  | .ne e₁ e₂, σ => e₁.freeVars σ ∪ e₂.freeVars σ
 
 namespace Env
 /-- Append, requiring the two to agree wherever both bind. The result may bind a variable
@@ -55,24 +54,32 @@ def ValidEnv (vars : List Var) (db : Database) (σ : Env) : Prop :=
   (Env.dom σ).Perm vars ∧ ∀ b ∈ σ, b.2 ∈ db.terms
 
 /-! ### Matching -/
-/-- Match evaluated terms through semantic congruence. Bindings remain local to the query. -/
+/-- Match evaluated terms through semantic congruence. Bindings remain local to the query.
+A disequality holds when both sides exist and are not congruent. -/
 inductive Matches (db : Database) : Pattern → Env → Prop where
   | atom {e : Expr} {σ : Env} {t : Term} :
-      e.evalAtom db.sig σ = some t → Cong db t t → Matches db (.expr e) σ
+      e.eval σ = some t → Cong db t t → Matches db (.expr e) σ
   | equal {e₁ e₂ : Expr} {σ : Env} {t₁ t₂ : Term} :
-      e₁.eval db.sig σ = some t₁ → e₂.eval db.sig σ = some t₂ →
+      e₁.eval σ = some t₁ → e₂.eval σ = some t₂ →
       Cong db t₁ t₂ → Matches db (.eq e₁ e₂) σ
+  | unequal {e₁ e₂ : Expr} {σ : Env} {t₁ t₂ : Term} :
+      e₁.eval σ = some t₁ → e₂.eval σ = some t₂ →
+      Cong db t₁ t₁ → Cong db t₂ t₂ → ¬ Cong db t₁ t₂ → Matches db (.ne e₁ e₂) σ
 
 /-- One substitution binds the query's variables to held terms and satisfies every conjunct. -/
 @[blueprint "def:query"
   (statement := /--
 \[
-  \ir{Atom}{\eval e=t\\t\sim_E t}{D,\sigma\models e}\quad
+  \ir{Atom}{\eval e=t\\t\sim_E t}{E,\sigma\models e}\quad
   \ir{Equal}{\eval{e_1}=s\\\eval{e_2}=t\\s\sim_E t}
-    {D,\sigma\models e_1=e_2}\quad
+    {E,\sigma\models e_1=e_2}\quad
+  \ir{Unequal}{\eval{e_1}=s\\\eval{e_2}=t\\s\sim_E s\\t\sim_E t\\s\not\sim_E t}
+    {E,\sigma\models e_1\ne e_2}
+  \]
+  \[
   \ir{Query}{\sigma:\operatorname{FV}(Q)\to\operatorname{terms}(E)\\\\
-    \forall p\in Q.\ D,\sigma\models p}
-    {D,\sigma\models Q}
+    \forall p\in Q.\ E,\sigma\models p}
+    {E,\sigma\models Q}
   \]
   -/)
   (latexEnv := "paperfragment")]

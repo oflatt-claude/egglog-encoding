@@ -10,23 +10,13 @@ theorem Claim.Supported.addEq_wf {A db : Database} (hA : A.WF) (hw : db.WF)
   intro p hp hl
   exact (show p ∈ db.eqs ∨ p.1 = p.2 from hp).elim (fun hp => hw.litsIsolated p hp hl) id
 
-def ledger (sig : Signature) : List Claim → Database
-  | [] => { Database.empty with sig := sig }
-  | c :: cs => (ledger sig cs).addEq c.lhs c.rhs
-
-@[simp] theorem ledger_sig (sig : Signature) (cs : List Claim) : (ledger sig cs).sig = sig := by
-  induction cs with
-  | nil => rfl
-  | cons c cs ih => exact ih
-
-@[simp] theorem ledger_env (sig : Signature) (cs : List Claim) : (ledger sig cs).env = [] := by
-  induction cs with
-  | nil => rfl
-  | cons c cs ih => exact ih
+def ledger : List Claim → Database
+  | [] => Database.empty
+  | c :: cs => (ledger cs).addEq c.lhs c.rhs
 
 theorem ledger_contained_completion {db : Database} (hw : db.WF)
-    (sig : Signature) {cs : List Claim} (hc : ∀ c ∈ cs, c.Supported db) :
-    (ledger sig cs).Contained db.completion := by
+    {cs : List Claim} (hc : ∀ c ∈ cs, c.Supported db) :
+    (ledger cs).Contained db.completion := by
   induction cs with
   | nil => exact ⟨by simp [ledger, Database.empty]⟩
   | cons c cs ih =>
@@ -38,15 +28,15 @@ theorem ledger_contained_completion {db : Database} (hw : db.WF)
       · exact (Database.cong_completion_iff hw).mp hclaim
       · exact htail.eqs hp
 
-theorem ledger_wf {db : Database} (hw : db.WF) (sig : Signature) {cs : List Claim}
-    (hc : ∀ c ∈ cs, c.Supported db) : (ledger sig cs).WF := by
+theorem ledger_wf {db : Database} (hw : db.WF) {cs : List Claim}
+    (hc : ∀ c ∈ cs, c.Supported db) : (ledger cs).WF := by
   induction cs with
-  | nil => exact Database.WF.congr Database.WF.empty rfl rfl
+  | nil => exact Database.WF.empty
   | cons c cs ih =>
       exact (hc c (by simp)).addEq_wf (ih fun c h => hc c (by simp [h])) hw
 
-theorem ledger_holds {sig : Signature} {cs : List Claim} {c : Claim} (hc : c ∈ cs) :
-    c.Holds (ledger sig cs) := by
+theorem ledger_holds {cs : List Claim} {c : Claim} (hc : c ∈ cs) :
+    c.Holds (ledger cs) := by
   induction cs with
   | nil => simp at hc
   | cons d ds ih =>

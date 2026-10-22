@@ -9,19 +9,15 @@
 # canonical argument tuple, which on the Lean side is one per congruence class of
 # argument lists.
 #
-# Cases come in four kinds. The curated ones are the Redex test.rkt programs plus
-# variations, and are only as good as whoever chose them; likewise the curated :merge ones
-# for M9. The two random families remove that bias -- rand-* over the constructor fragment
-# (RANDOM_CASES) and mrand-* over M9's :merge functions (MERGE_CASES). See DiffTest.lean
-# for why every generated merge is idempotent, and for how a row count reports which of two
-# colliding values a merge kept.
+# Cases come in two kinds. The curated ones are the Redex test.rkt programs plus
+# variations, and are only as good as whoever chose them; the random family rand-* over the
+# constructor fragment (RANDOM_CASES) removes that bias.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 out="${DIFFTEST_OUT:-$root/.difftest}"
 egglog="${EGGLOG_BIN:-$root/target/release/egglog}"
 random_cases="${RANDOM_CASES:-60}"
-merge_cases="${MERGE_CASES:-30}"
 # A generated program can blow up in either engine; cap both rather than hang the run. The
 # binding constraint is the Lean side, whose matcher is |terms| ^ |vars| by construction,
 # so this is a budget for the reference interpreter rather than a pathology detector.
@@ -42,7 +38,6 @@ rm -rf -- "$out"
 mkdir -p -- "$out"
 
 "$gen" "$out" curated >/dev/null || exit 1
-"$gen" "$out" merge >/dev/null || exit 1
 skipped=0
 fail=0
 pass=0
@@ -65,7 +60,6 @@ generate() { # <mode> <seed> <case-name>
   rm -f -- "$out/$3.genlog"
 }
 for ((i = 0; i < random_cases; i++)); do generate seed "$i" "rand-$i"; done
-for ((i = 0; i < merge_cases; i++)); do generate mergeseed "$i" "mrand-$i"; done
 
 for egg in "$out"/*.egg; do
   name="$(basename "$egg" .egg)"
@@ -90,8 +84,7 @@ for egg in "$out"/*.egg; do
 done
 
 # Report how much work the random cases actually did: a case whose rules never fire has
-# only its seeded terms, and tests little beyond action evaluation. Per family, because a
-# pooled number would hide one family's distribution collapsing behind the other's spread.
+# only its seeded terms, and tests little beyond action evaluation.
 profiles() { # <label> <glob-prefix>
   compgen -G "$out/$2-*.want" >/dev/null || return 0
   echo "difftest: $1 total row counts:"
@@ -101,6 +94,5 @@ profiles() { # <label> <glob-prefix>
     sort -u | wc -l) distinct $1 profiles"
 }
 profiles "random-case" rand
-profiles "random-merge-case" mrand
 echo "difftest: $pass passed, $fail failed, $skipped skipped (not generated)"
 [[ $fail -eq 0 ]]

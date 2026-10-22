@@ -1,307 +1,37 @@
-(G (F (A))) = (G (F (A)))  congr 0
-  (G (F (A))) = (G (F (B)))  trans
-    (G (F (A))) = (G (F (B)))  symm
-      (G (F (B))) = (G (F (A)))  congr 0
-        (G (F (B))) = (G (F (B)))  fiat
-        (F (B)) = (F (A))  congr 0
-          (F (B)) = (F (B))  fiat
-          (B) = (A)  fiat
-    (G (F (B))) = (G (F (B)))  fiat
-  (F (B)) = (F (A))  congr 0
-    (F (B)) = (F (B))  fiat
-    (B) = (A)  fiat
-
-(G (F (A))) = (G (F (B)))  trans
-  (G (F (A))) = (G (F (A)))  symm
-    (G (F (A))) = (G (F (A)))  congr 0
-      (G (F (A))) = (G (F (A)))  fiat
-      (F (A)) = (F (A))  congr 0
-        (F (A)) = (F (A))  fiat
-        (A) = (A)  fiat
-  (G (F (A))) = (G (F (B)))  trans
-    (G (F (A))) = (G (F (B)))  symm
-      (G (F (B))) = (G (F (A)))  congr 0
-        (G (F (B))) = (G (F (B)))  fiat
-        (F (B)) = (F (A))  congr 0
-          (F (B)) = (F (B))  fiat
-          (B) = (A)  fiat
-    (G (F (B))) = (G (F (B)))  fiat
-
-(G (F (A))) = (G (F (B)))  trans
-  (G (F (A))) = (G (F (B)))  symm
-    (G (F (B))) = (G (F (A)))  congr 0
-      (G (F (B))) = (G (F (B)))  fiat
-      (F (B)) = (F (A))  congr 0
-        (F (B)) = (F (B))  fiat
-        (B) = (A)  fiat
-  (G (F (B))) = (G (F (B)))  fiat
-
-(G (F (A))) = (G (F (A)))  trans
-  (G (F (A))) = (G (F (B)))  trans
-    (G (F (A))) = (G (F (B)))  symm
-      (G (F (B))) = (G (F (A)))  congr 0
-        (G (F (B))) = (G (F (B)))  fiat
-        (F (B)) = (F (A))  congr 0
-          (F (B)) = (F (B))  fiat
-          (B) = (A)  fiat
-    (G (F (B))) = (G (F (B)))  fiat
-  (G (F (B))) = (G (F (A)))  symm
-    (G (F (A))) = (G (F (B)))  trans
-      (G (F (A))) = (G (F (B)))  symm
-        (G (F (B))) = (G (F (A)))  congr 0
-          (G (F (B))) = (G (F (B)))  fiat
-          (F (B)) = (F (A))  congr 0
-            (F (B)) = (F (B))  fiat
-            (B) = (A)  fiat
-      (G (F (B))) = (G (F (B)))  fiat
-
-(G (F (B))) = (G (F (A)))  symm
-  (G (F (A))) = (G (F (B)))  trans
-    (G (F (A))) = (G (F (B)))  symm
-      (G (F (B))) = (G (F (A)))  congr 0
-        (G (F (B))) = (G (F (B)))  fiat
-        (F (B)) = (F (A))  congr 0
-          (F (B)) = (F (B))  fiat
-          (B) = (A)  fiat
-    (G (F (B))) = (G (F (B)))  fiat
-
-(F (A)) = (F (A))  congr 0
-  (F (A)) = (F (B))  trans
-    (F (A)) = (F (B))  symm
-      (F (B)) = (F (A))  congr 0
-        (F (B)) = (F (B))  fiat
-        (B) = (A)  fiat
-    (F (B)) = (F (B))  fiat
-  (B) = (A)  fiat
-
-(F (A)) = (F (B))  trans
-  (F (A)) = (F (A))  symm
-    (F (A)) = (F (A))  congr 0
-      (F (A)) = (F (A))  fiat
-      (A) = (A)  fiat
-  (F (A)) = (F (B))  trans
-    (F (A)) = (F (B))  symm
-      (F (B)) = (F (A))  congr 0
-        (F (B)) = (F (B))  fiat
-        (B) = (A)  fiat
-    (F (B)) = (F (B))  fiat
-
-(G (F (A))) = (G (F (B)))  trans
-  (G (F (A))) = (G (F (B)))  symm
-    (G (F (B))) = (G (F (A)))  congr 0
-      (G (F (B))) = (G (F (B)))  fiat
-      (F (B)) = (F (A))  congr 0
-        (F (B)) = (F (B))  fiat
-        (B) = (A)  fiat
-  (G (F (B))) = (G (F (B)))  fiat
-
-(G (F (A))) = (G (F (A)))  trans
-  (G (F (A))) = (G (F (A)))  symm
-    (G (F (A))) = (G (F (A)))  congr 0
-      (G (F (A))) = (G (F (A)))  fiat
-      (F (A)) = (F (A))  congr 0
-        (F (A)) = (F (A))  fiat
-        (A) = (A)  fiat
-  (G (F (A))) = (G (F (A)))  fiat
-
 (G (F (B))) = (G (F (A)))  trans
   (G (F (B))) = (G (F (A)))  congr 0
-    (G (F (B))) = (G (F (B)))  fiat
-    (F (B)) = (F (A))  congr 0
-      (F (B)) = (F (B))  fiat
-      (B) = (A)  fiat
-  (G (F (A))) = (G (F (A)))  congr 0
-    (G (F (A))) = (G (F (A)))  fiat
-    (F (A)) = (F (A))  congr 0
-      (F (A)) = (F (A))  fiat
-      (A) = (A)  fiat
-
-(G (F (A))) = (G (F (A)))  trans
-  (G (F (A))) = (G (F (A)))  congr 0
-    (G (F (A))) = (G (F (A)))  fiat
-    (F (A)) = (F (A))  congr 0
-      (F (A)) = (F (A))  fiat
-      (A) = (A)  fiat
-  (G (F (A))) = (G (F (A)))  congr 0
-    (G (F (A))) = (G (F (A)))  fiat
-    (F (A)) = (F (A))  congr 0
-      (F (A)) = (F (A))  fiat
-      (A) = (A)  fiat
-
-(G (F (A))) = (G (F (A)))  congr 0
-  (G (F (A))) = (G (F (A)))  fiat
-  (F (A)) = (F (A))  congr 0
-    (F (A)) = (F (A))  fiat
-    (A) = (A)  fiat
-
-(G (F (B))) = (G (F (A)))  congr 0
-  (G (F (B))) = (G (F (B)))  fiat
-  (F (B)) = (F (A))  congr 0
-    (F (B)) = (F (B))  fiat
-    (B) = (A)  fiat
-
-(G (F (A))) = (G (F (A)))  congr 0
-  (G (F (A))) = (G (F (A)))  fiat
-  (F (A)) = (F (A))  congr 0
-    (F (A)) = (F (A))  fiat
-    (A) = (A)  fiat
-
-(F (A)) = (F (B))  trans
-  (F (A)) = (F (B))  symm
-    (F (B)) = (F (A))  congr 0
-      (F (B)) = (F (B))  fiat
-      (B) = (A)  fiat
-  (F (B)) = (F (B))  fiat
-
-(F (A)) = (F (A))  trans
-  (F (A)) = (F (B))  trans
-    (F (A)) = (F (B))  symm
+    (G (F (B))) = (G (F (B)))  rule 1 {}
+    (F (B)) = (F (A))  trans
       (F (B)) = (F (A))  congr 0
-        (F (B)) = (F (B))  fiat
-        (B) = (A)  fiat
-    (F (B)) = (F (B))  fiat
-  (F (B)) = (F (A))  symm
-    (F (A)) = (F (B))  trans
-      (F (A)) = (F (B))  symm
-        (F (B)) = (F (A))  congr 0
-          (F (B)) = (F (B))  fiat
-          (B) = (A)  fiat
-      (F (B)) = (F (B))  fiat
-
-(F (B)) = (F (A))  symm
-  (F (A)) = (F (B))  trans
-    (F (A)) = (F (B))  symm
-      (F (B)) = (F (A))  congr 0
-        (F (B)) = (F (B))  fiat
-        (B) = (A)  fiat
-    (F (B)) = (F (B))  fiat
-
-(A) = (B)  trans
-  (A) = (A)  symm
-    (A) = (A)  fiat
-  (A) = (B)  trans
-    (A) = (B)  symm
-      (B) = (A)  fiat
-    (B) = (B)  fiat
-
-(F (A)) = (F (B))  trans
-  (F (A)) = (F (B))  symm
-    (F (B)) = (F (A))  congr 0
-      (F (B)) = (F (B))  fiat
-      (B) = (A)  fiat
-  (F (B)) = (F (B))  fiat
-
-(F (A)) = (F (A))  trans
-  (F (A)) = (F (A))  symm
-    (F (A)) = (F (A))  congr 0
-      (F (A)) = (F (A))  fiat
-      (A) = (A)  fiat
-  (F (A)) = (F (A))  fiat
-
-(G (F (B))) = (G (F (A)))  congr 0
-  (G (F (B))) = (G (F (B)))  fiat
-  (F (B)) = (F (A))  congr 0
-    (F (B)) = (F (B))  fiat
-    (B) = (A)  fiat
-
-(G (F (A))) = (G (F (A)))  congr 0
-  (G (F (A))) = (G (F (A)))  fiat
-  (F (A)) = (F (A))  congr 0
-    (F (A)) = (F (A))  fiat
-    (A) = (A)  fiat
+        (F (B)) = (F (B))  rule 1 {}
+        (B) = (A)  rule 2 {}
+      (F (A)) = (F (A))  symm
+        (F (A)) = (F (A))  rule 0 {}
+  (G (F (A))) = (G (F (A)))  symm
+    (G (F (A))) = (G (F (A)))  rule 0 {}
 
 (F (B)) = (F (A))  trans
   (F (B)) = (F (A))  congr 0
-    (F (B)) = (F (B))  fiat
-    (B) = (A)  fiat
-  (F (A)) = (F (A))  congr 0
-    (F (A)) = (F (A))  fiat
-    (A) = (A)  fiat
-
-(F (A)) = (F (A))  trans
-  (F (A)) = (F (A))  congr 0
-    (F (A)) = (F (A))  fiat
-    (A) = (A)  fiat
-  (F (A)) = (F (A))  congr 0
-    (F (A)) = (F (A))  fiat
-    (A) = (A)  fiat
-
-(F (A)) = (F (A))  congr 0
-  (F (A)) = (F (A))  fiat
-  (A) = (A)  fiat
-
-(F (B)) = (F (A))  congr 0
-  (F (B)) = (F (B))  fiat
-  (B) = (A)  fiat
-
-(F (A)) = (F (A))  congr 0
-  (F (A)) = (F (A))  fiat
-  (A) = (A)  fiat
+    (F (B)) = (F (B))  rule 1 {}
+    (B) = (A)  rule 2 {}
+  (F (A)) = (F (A))  symm
+    (F (A)) = (F (A))  rule 0 {}
 
 (A) = (B)  trans
   (A) = (B)  symm
-    (B) = (A)  fiat
-  (B) = (B)  fiat
+    (B) = (A)  rule 2 {}
+  (B) = (B)  rule 2 {}
 
-(A) = (A)  trans
-  (A) = (B)  trans
-    (A) = (B)  symm
-      (B) = (A)  fiat
-    (B) = (B)  fiat
-  (B) = (A)  symm
-    (A) = (B)  trans
-      (A) = (B)  symm
-        (B) = (A)  fiat
-      (B) = (B)  fiat
+(B) = (A)  rule 2 {}
 
-(B) = (A)  symm
-  (A) = (B)  trans
-    (A) = (B)  symm
-      (B) = (A)  fiat
-    (B) = (B)  fiat
+(G (F (A))) = (G (F (A)))  rule 0 {}
 
-(A) = (B)  trans
-  (A) = (B)  symm
-    (B) = (A)  fiat
-  (B) = (B)  fiat
+(G (F (A))) = (G (F (A)))  rule 0 {}
 
-(A) = (A)  trans
-  (A) = (A)  symm
-    (A) = (A)  fiat
-  (A) = (A)  fiat
+(F (A)) = (F (A))  rule 0 {}
 
-(F (B)) = (F (A))  congr 0
-  (F (B)) = (F (B))  fiat
-  (B) = (A)  fiat
+(F (A)) = (F (A))  rule 0 {}
 
-(F (A)) = (F (A))  congr 0
-  (F (A)) = (F (A))  fiat
-  (A) = (A)  fiat
+(A) = (A)  rule 2 {}
 
-(B) = (A)  trans
-  (B) = (A)  fiat
-  (A) = (A)  fiat
-
-(A) = (A)  trans
-  (A) = (A)  fiat
-  (A) = (A)  fiat
-
-(B) = (A)  fiat
-
-(A) = (A)  fiat
-
-(B) = (B)  fiat
-
-(A) = (A)  fiat
-
-(G (F (B))) = (G (F (B)))  fiat
-
-(F (B)) = (F (B))  fiat
-
-(B) = (B)  fiat
-
-(G (F (A))) = (G (F (A)))  fiat
-
-(F (A)) = (F (A))  fiat
-
-(A) = (A)  fiat
+(A) = (A)  rule 2 {}

@@ -1,24 +1,22 @@
 import EgglogSemantics.SourceProof.Checker
-import EgglogSemantics.Proofs.SourceProof.Ledger
+import EgglogSemantics.Proofs.SourceProof.Actions
 import EgglogSemantics.Proofs.Query
 
 namespace Egglog.SourceProof
 
 theorem premiseMatches_sound {db : Database} {σ : Env} {p : Pattern} {c : Claim}
-    (hc : c.Holds db) (h : premiseMatches db.sig σ p c = true) : Matches db p σ := by
+    (hc : c.Holds db) (h : premiseMatches σ p c = true) : Matches db p σ := by
   cases p with
   | expr e =>
       simp only [premiseMatches, beq_iff_eq] at h
-      exact .expr (eqsInTerms_free hc).1 (Expr.evalAtom_of_eval h)
-        (StoredCong.mono (Database.Contained.addTerms _ _) hc)
+      exact .atom h (hc.symm.trans hc).toCong
   | eq a b =>
       simp only [premiseMatches, Bool.and_eq_true_iff, beq_iff_eq] at h
-      exact .eq (eqsInTerms_free hc).1 h.1 h.2
-        (StoredCong.mono (Database.Contained.addTerms _ _) (eqsInTerms_free hc).1)
-        (StoredCong.mono (Database.Contained.addTerms _ _) hc)
+      exact .equal h.1 h.2 hc.toCong
+  | ne _ _ => simp [premiseMatches] at h
 
 theorem premisesMatch_sound {db : Database} {σ : Env} {q : Query} {cs : List Claim}
-    (hc : ∀ c ∈ cs, c.Holds db) (h : premisesMatch db.sig σ q cs = true) :
+    (hc : ∀ c ∈ cs, c.Holds db) (h : premisesMatch σ q cs = true) :
     ∀ p ∈ q, Matches db p σ := by
   induction q generalizing cs with
   | nil => simp
@@ -44,9 +42,9 @@ theorem supportedValue_sound {db : Database} (hw : db.WF) {cs : List Claim}
       ((Term.mem_subtermList _).mp hr)
 
 theorem querySubst_of_matches {db : Database} {q : Query} {σ : Env}
-    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.values)
+    (hdom : (Env.dom σ).Perm q.vars) (hval : ∀ b ∈ σ, b.2 ∈ db.terms)
     (hm : ∀ p ∈ q, Matches db p σ) :
     ∃ τ, ValidQuerySubst db q τ ∧ Env.Agree τ σ :=
-  Egglog.querySubst_of_matches_terms hdom (fun b hb => (hval b hb).1) hm
+  Egglog.querySubst_of_matches_terms hdom hval hm
 
 end Egglog.SourceProof

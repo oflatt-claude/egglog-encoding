@@ -26,7 +26,7 @@ PAPER_MODULES = (
     "EgglogSemantics.Source.Domain",
     "EgglogSemantics.Source.WellFormed",
     "EgglogSemantics.Proofs.OrderFinite",
-    "EgglogSemantics.Proofs.Congruence.Correctness",
+    "EgglogSemantics.Congruence.Correctness",
 )
 
 
@@ -186,6 +186,9 @@ class Checks:
 
     def lean_difftest(self) -> None:
         self._run("./scripts/difftest.sh")
+
+    def lean_compiled_difftest(self) -> None:
+        self._run("./scripts/compiled-difftest.sh")
 
     def paper(self) -> None:
         self("paper-check")

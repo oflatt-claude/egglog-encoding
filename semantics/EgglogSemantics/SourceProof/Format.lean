@@ -7,12 +7,13 @@ structure Claim where
   rhs : Term
   deriving DecidableEq
 
-/-- Every node states its claim. Rule leaves cite empty-query commands. -/
+/-- Every node states its claim. A rule node cites a rule by its position in
+`Program.rules`; initial facts are empty-query rules. -/
 inductive Proof where
   | symm (claim : Claim) (proof : Proof)
   | trans (claim : Claim) (left right : Proof)
   | congr (claim : Claim) (base : Proof) (childIndex : Nat) (child : Proof)
-  | rule (claim : Claim) (command : Nat) (subst : Env) (premises : List Proof)
+  | rule (claim : Claim) (ruleIndex : Nat) (subst : Env) (premises : List Proof)
   deriving BEq
 
 def Proof.claim : Proof → Claim

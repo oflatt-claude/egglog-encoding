@@ -1,5 +1,5 @@
 import EgglogSemantics.Impl.Closure
-import EgglogSemantics.Proofs.Congruence
+import EgglogSemantics.Proofs.SameMeaning
 
 namespace Egglog
 theorem mem_candidates {terms : Finset Term} {p : Term × Term} :
@@ -79,11 +79,12 @@ theorem congStep_sound {db : Database} {terms : Finset Term} {rel : Finset (Term
     unfold stepAdds at hstep
     simp only [Bool.or_eq_true, decide_eq_true_eq] at hstep
     rcases hstep with ((heq | hsym) | ⟨m, _, hm₁, hm₂⟩) | hcongr
-    · exact heq ▸ hmem.1
+    · exact heq ▸ Database.toCong hmem.1
     · exact (hrel _ hsym).symm
     · exact (hrel _ hm₁).trans (hrel _ hm₂)
     · obtain ⟨f, as, bs, rfl, rfl, hz⟩ := congrPair_elim hcongr
-      exact Cong.congr' hmem.1 hmem.2 (hz.imp fun {x y} hxy => hrel (x, y) hxy)
+      exact Cong.congr (Database.toCong hmem.1)
+        (CongList.forall₂.mpr (hz.imp fun {x y} hxy => hrel (x, y) hxy))
 
 theorem closure_sound {db : Database} {terms : Finset Term}
     (hterms : db.terms = ↑terms) : ∀ (rel : Finset (Term × Term))
@@ -97,15 +98,18 @@ theorem closure_sound {db : Database} {terms : Finset Term}
     rw [closure, dif_neg hfix]
     exact ih (congStep_sound hterms hrel)
 
-/-- The procedure decides `Cong` for a database whose terms and asserted equalities are
-finite. -/
+/-- The procedure decides `Cong` between held terms when the store is finite.
+Semantic congruence can also relate spellings outside this finite universe. -/
 theorem mem_closure_iff {db : Database} {terms : Finset Term} {rel : Finset (Term × Term)}
     (hterms : db.terms = ↑terms) (heqs : db.eqs = ↑rel) (h : rel ⊆ candidates terms)
-    {a b : Term} : (a, b) ∈ closure terms rel h ↔ Cong db a b := by
+    {a b : Term} (ha : a ∈ db.terms) (hb : b ∈ db.terms) :
+    (a, b) ∈ closure terms rel h ↔ Cong db a b := by
   have hassert : ∀ p ∈ rel, Cong db p.1 p.2 := fun p hp =>
     Cong.direct (by rw [heqs]; exact hp)
   refine ⟨fun hp => closure_sound hterms rel h hassert (a, b) hp, fun hc => ?_⟩
-  refine hc.le (R := fun x y => (x, y) ∈ closure terms rel h) ?_ ?_ ?_ ?_
+  have hs : StoredCong db a b := InferredFacts.infers_iff_cong_of_held_core ha hb |>.mp
+    (InferredFacts.congr_iff_infers.mp hc)
+  refine hs.le (R := fun x y => (x, y) ∈ closure terms rel h) ?_ ?_ ?_ ?_ ?_
   · exact fun x y hxy => subset_closure h (by rw [heqs] at hxy; exact hxy)
   · intro x y hxy
     have hcand := mem_candidates.mp (closure_subset h hxy)
@@ -126,15 +130,27 @@ theorem mem_closure_iff {db : Database} {terms : Finset Term} {rel : Finset (Ter
     · rw [hterms] at ha hb; exact ⟨ha, hb⟩
     · simp only [stepAdds, Bool.or_eq_true]
       exact Or.inr (congrPair_app_iff.mpr ⟨rfl, hz⟩)
+  · intro t s ht hst
+    have hst' : s ∈ db.terms := by
+      have ht' : t ∈ db.terms := by
+        rw [hterms]
+        exact (mem_candidates.mp (closure_subset h ht)).1
+      exact (StoredCong.subterm (Database.toStored ht') hst).toHeld
+    rw [← closure_fixpoint h]
+    refine mem_congStep.mpr (Or.inr ⟨mem_candidates.mpr ?_, ?_⟩)
+    · rw [hterms] at hst'
+      exact ⟨hst', hst'⟩
+    · simp [stepAdds]
+
 
 theorem mem_closureTotal_iff {db : Database} {terms : Finset Term}
     {rel : Finset (Term × Term)} (hterms : db.terms = ↑terms) (heqs : db.eqs = ↑rel)
-    (h : rel ⊆ candidates terms) {a b : Term} :
+    (h : rel ⊆ candidates terms) {a b : Term} (ha : a ∈ db.terms) (hb : b ∈ db.terms) :
     (a, b) ∈ closureTotal terms rel ↔ Cong db a b := by
   have hfil : (candidates terms).filter (· ∈ rel) = rel := by
     ext p
     simp only [Finset.mem_filter]
     exact ⟨fun hp => hp.2, fun hp => ⟨h hp, hp⟩⟩
-  exact mem_closure_iff hterms (by rw [hfil]; exact heqs) (Finset.filter_subset _ _)
+  exact mem_closure_iff hterms (by rw [hfil]; exact heqs) (Finset.filter_subset _ _) ha hb
 
 end Egglog

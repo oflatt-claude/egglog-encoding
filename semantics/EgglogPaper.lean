@@ -1,38 +1,58 @@
-import EgglogSemantics.Proofs.Congruence.Correctness
-import EgglogSemantics.Proofs.Provenance.Soundness
-import EgglogSemantics.Proofs.Provenance.DistinctMerge
-import EgglogSemantics.Proofs.Resugar.Soundness
-import EgglogSemantics.Proofs.Query
-import EgglogSemantics.Proofs.Presentation
+import EgglogSemantics.Spec.Syntax
+import EgglogSemantics.Spec.Term
+import EgglogSemantics.Spec.Database
+import EgglogSemantics.Spec.Congruence
+import EgglogSemantics.Spec.Eval
+import EgglogSemantics.Spec.Match
+import EgglogSemantics.Spec.Step
+import EgglogSemantics.Spec.Divergence
+import EgglogSemantics.Spec.Behavior
+import EgglogSemantics.Spec.Order
+import EgglogSemantics.Source.Domain
+import EgglogSemantics.Source.WellFormed
 import EgglogSemantics.Proofs.OrderFinite
-import EgglogSemantics.Tests.ConditionalMerge
-import EgglogSemantics.Tests.SemanticCong
-import EgglogSemantics.Tests.CongruenceCorrectness
+import EgglogSemantics.Congruence.Correctness
+import EgglogSemantics.Proofs.InterpDeletes
+import EgglogSemantics.Proofs.Deletes
+import EgglogSemantics.Proofs.Provenance.GeneratedSoundness
+import EgglogSemantics.Proofs.Resugar.Soundness
 import Mathlib.Util.AssertNoSorry
 
--- The mathematical proof closure used to build the paper.
-assert_no_sorry Egglog.Congruence.preservesBehaviors
-assert_no_sorry Egglog.Congruence.correctness
-assert_no_sorry Egglog.Provenance.check_sound
-assert_no_sorry Egglog.Provenance.encodedMerge_equal_data
-assert_no_sorry Egglog.Provenance.encodedMerge_data_distinct
-assert_no_sorry Egglog.Resugar.extractRow_infers
-assert_no_sorry Egglog.queryHolds_iff_queryMatches
-assert_no_sorry Egglog.mem_ruleResults_iff_queryMatches
-assert_no_sorry Egglog.Matches.expr_iff_cong
-assert_no_sorry Egglog.Matches.eq_iff_cong
-assert_no_sorry Egglog.evalActions_eq_writes
-assert_no_sorry Egglog.RunRules.eq_sUnion
-assert_no_sorry Egglog.mergeStep_iff
-assert_no_sorry Egglog.SaturateReach.induction
-assert_no_sorry Egglog.Eval.empty_env
-assert_no_sorry Egglog.Expr.eval_eq_evaluate
-assert_no_sorry Egglog.Expr.evalAtom_eq_evaluate
-assert_no_sorry Egglog.Action.writes_singleton
-assert_no_sorry Egglog.Action.writes_append
+/-! The modules whose blueprint nodes the paper displays, and the proof closure the paper
+relies on. The congruence pass theorem is displayed as a statement
+(`Congruence.Correctness`); its proof for the constructor-and-delete encoding is open. -/
+
+-- The term order the compiled rebuilding uses.
 assert_no_sorry Egglog.Term.blt_admissible
 
-assert_no_sorry Egglog.InferredFacts.congr_iff_infers
-assert_no_sorry Egglog.Tests.CongruenceCorrectness.finite_congruence_check
-assert_no_sorry Egglog.Tests.CongruenceCorrectness.rejects_empty_behavior_compiler
-assert_no_sorry Egglog.Tests.CongruenceCorrectness.rejects_diverging_behavior_compiler
+-- Matching, deletion, rounds, and evaluation agree with their presentations and are
+-- deterministic.
+assert_no_sorry Egglog.queryHolds_iff_validQuerySubst
+assert_no_sorry Egglog.Database.deleteRows_eq
+assert_no_sorry Egglog.RunErases.eq_empty
+assert_no_sorry Egglog.RunRules.eq_addEqs
+assert_no_sorry Egglog.RunRules.eq_sUnion
+assert_no_sorry Egglog.RunRules.wf
+assert_no_sorry Egglog.Eval.det
+assert_no_sorry Egglog.SourceMeaning.completion_closed_of_saturated
+
+-- The reference interpreter refines the specification, up to meaning, for delete-free
+-- programs and for union-free programs with deletes (the compiler's output), and decides
+-- the final check as the specification does.
+assert_no_sorry Egglog.patternHolds_iff
+assert_no_sorry Egglog.FDatabase.holds_iff_queryHolds
+assert_no_sorry Egglog.exec_programStep
+assert_no_sorry Egglog.exec_complete
+assert_no_sorry Egglog.observe_eval
+assert_no_sorry Egglog.exec_programStep_noUnions
+assert_no_sorry Egglog.exec_complete_noUnions
+assert_no_sorry Egglog.observe_eval_noUnions
+assert_no_sorry Egglog.Congruence.exec_encode_programStep
+
+-- Certificates: checked source proofs infer their claims, and so does everything the
+-- firing-log extraction and lifting return.
+assert_no_sorry Egglog.SourceProof.check_infers
+assert_no_sorry Egglog.Provenance.extract_checked
+assert_no_sorry Egglog.Provenance.Generated.check_uf_infers
+assert_no_sorry Egglog.Resugar.extractAll_infers
+assert_no_sorry Egglog.Resugar.certificates_infers

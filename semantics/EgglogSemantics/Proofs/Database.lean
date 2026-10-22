@@ -1,5 +1,6 @@
 import EgglogSemantics.Spec.Congruence
-import EgglogSemantics.Proofs.AtomEntries
+import EgglogSemantics.Proofs.Term
+import EgglogSemantics.Proofs.StoredCong
 
 namespace Egglog
 namespace Env
@@ -231,12 +232,6 @@ theorem terms_eq_of_eqs_eq {d₁ d₂ : Database} (h : d₁.eqs = d₂.eqs) :
 @[simp] theorem addTerm_eqs {t : Term} {db : Database} :
     (db.addTerm t).eqs = insert (t, t) db.eqs := rfl
 
-@[simp] theorem addTerm_sig {t : Term} {db : Database} : (db.addTerm t).sig = db.sig := rfl
-
-@[simp] theorem addTerm_env {t : Term} {db : Database} : (db.addTerm t).env = db.env := rfl
-
-@[simp] theorem addTerm_rules {t : Term} {db : Database} :
-    (db.addTerm t).rules = db.rules := rfl
 
 theorem mem_addTerm (t : Term) (db : Database) : t ∈ (db.addTerm t).terms :=
   (StoredCong.direct (Set.mem_insert _ _)).toHeld
@@ -264,12 +259,6 @@ theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb :
   rw [addEq_terms, Set.union_eq_self_of_subset_right (db.subtermClosed a ha),
     Set.union_eq_self_of_subset_right (db.subtermClosed b hb)]
 
-@[simp] theorem addEq_env {a b : Term} {db : Database} : (db.addEq a b).env = db.env := rfl
-
-@[simp] theorem addEq_rules {a b : Term} {db : Database} :
-    (db.addEq a b).rules = db.rules := rfl
-
-@[simp] theorem addEq_sig {a b : Term} {db : Database} : (db.addEq a b).sig = db.sig := rfl
 
 @[simp] theorem sUnion_eqs {db : Database} {S : Set Database} :
     (db.sUnion S).eqs = db.eqs ∪ ⋃ d ∈ S, d.eqs := rfl
@@ -286,22 +275,6 @@ theorem terms_insert_eq {db : Database} {a b : Term} (ha : a ∈ db.terms) (hb :
     · exact ⟨p, Or.inl hp, hs⟩
     · exact ⟨p, Or.inr ⟨d, hd, hp⟩, hs⟩
 
-@[simp] theorem sUnion_env {db : Database} {S : Set Database} :
-    (db.sUnion S).env = db.env := rfl
-
-@[simp] theorem sUnion_rules {db : Database} {S : Set Database} :
-    (db.sUnion S).rules = db.rules := rfl
-
-@[simp] theorem sUnion_sig {db : Database} {S : Set Database} :
-    (db.sUnion S).sig = db.sig := rfl
-
-/-- Two `EnvAgree` databases with the same environment and rules imposed are equal.
-This is what turns agreement back into equality once `evalLocalActions` restores the
-caller's environment. -/
-theorem EnvAgree.eq_of_env_rules {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (σ : Env)
-    (R : Set Rule) :
-    ({ d₁ with env := σ, rules := R } : Database) = { d₂ with env := σ, rules := R } := by
-  rw [h.sig, h.eqs]
 
 /-! ### `addTerms`
 
@@ -314,23 +287,6 @@ theorem addTerms_append {db : Database} {ts us : List Term} :
     db.addTerms (ts ++ us) = (db.addTerms ts).addTerms us :=
   List.foldl_append ..
 
-@[simp] theorem addTerms_sig {db : Database} {ts : List Term} :
-    (db.addTerms ts).sig = db.sig := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih
-
-@[simp] theorem addTerms_env {db : Database} {ts : List Term} :
-    (db.addTerms ts).env = db.env := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih
-
-@[simp] theorem addTerms_rules {db : Database} {ts : List Term} :
-    (db.addTerms ts).rules = db.rules := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih
 
 @[simp] theorem addTerms_eqs {db : Database} {ts : List Term} :
     (db.addTerms ts).eqs = db.eqs ∪ {p | ∃ t ∈ ts, p = (t, t)} := by
@@ -374,70 +330,7 @@ theorem mem_addTerms {db : Database} {ts : List Term} {t : Term} (h : t ∈ ts) 
     t ∈ (db.addTerms ts).terms :=
   addTerms_terms ▸ Or.inr ⟨t, h, t.self_mem_subterms⟩
 
-theorem addTerms_setRules (db : Database) (R : Set Rule) (ts : List Term) :
-    ({ db with rules := R } : Database).addTerms ts = { db.addTerms ts with rules := R } := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih (db.addTerm t)
 
-theorem addTerms_setSig (db : Database) (sig : Signature) (ts : List Term) :
-    ({ db with sig := sig } : Database).addTerms ts = { db.addTerms ts with sig := sig } := by
-  induction ts generalizing db with
-  | nil => rfl
-  | cons t ts ih => exact ih (db.addTerm t)
-
-/-! ### Current function entries -/
-
-@[simp] theorem putEntry_eqs {db : Database} {e : Entry} :
-    (db.putEntry e).eqs = insert (e.atom, e.atom) db.eqs := rfl
-@[simp] theorem putEntry_sig {db : Database} {e : Entry} :
-    (db.putEntry e).sig = db.sig := rfl
-@[simp] theorem putEntry_env {db : Database} {e : Entry} :
-    (db.putEntry e).env = db.env := rfl
-@[simp] theorem putEntry_rules {db : Database} {e : Entry} :
-    (db.putEntry e).rules = db.rules := rfl
-@[simp] theorem putEntry_terms {db : Database} {e : Entry} :
-    (db.putEntry e).terms = db.terms ∪ e.atom.subterms := addTerm_terms
-
-@[simp] theorem eraseEntry_sig {db : Database} {e : Entry} :
-    (db.eraseEntry e).sig = db.sig := rfl
-@[simp] theorem eraseEntry_env {db : Database} {e : Entry} :
-    (db.eraseEntry e).env = db.env := rfl
-@[simp] theorem eraseEntry_rules {db : Database} {e : Entry} :
-    (db.eraseEntry e).rules = db.rules := rfl
-@[simp] theorem eraseEntry_eqs {db : Database} {e : Entry} :
-    (db.eraseEntry e).eqs = (db.eqs \ {(e.atom, e.atom)}) ∪
-      {p | ∃ t ∈ e.columns, p = (t, t)} := rfl
-
-@[simp] theorem putEntry_setRules (db : Database) (R : Set Rule) (e : Entry) :
-    ({ db with rules := R } : Database).putEntry e = { db.putEntry e with rules := R } := by
-  rfl
-
-@[simp] theorem putEntry_setSig (db : Database) (sig : Signature) (e : Entry) :
-    ({ db with sig := sig } : Database).putEntry e = { db.putEntry e with sig := sig } := by
-  rfl
-
-theorem mem_putEntry_columns {db : Database} {e : Entry} {t : Term}
-    (ht : t ∈ e.columns) : t ∈ (db.putEntry e).terms := by
-  rw [putEntry_terms]
-  exact Or.inr (Term.arg_subterms ht (Term.self_mem_subterms t))
-
-namespace EnvAgree
-theorem addTerm {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (t : Term) :
-    (d₁.addTerm t).EnvAgree (d₂.addTerm t) :=
-  ⟨h.sig, by simp only [addTerm_eqs, h.eqs], h.rules, h.env⟩
-
-theorem addTerms {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (ts : List Term) :
-    (d₁.addTerms ts).EnvAgree (d₂.addTerms ts) := by
-  induction ts generalizing d₁ d₂ with
-  | nil => exact h
-  | cons t ts ih => exact ih (h.addTerm t)
-
-theorem putEntry {d₁ d₂ : Database} (h : d₁.EnvAgree d₂) (e : Entry) :
-    (d₁.putEntry e).EnvAgree (d₂.putEntry e) := by
-  exact h.addTerm e.atom
-
-end EnvAgree
 namespace Contained
 theorem refl (db : Database) : Contained db db := ⟨subset_rfl⟩
 
@@ -475,12 +368,6 @@ theorem addEq_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (a b : Term)
     (d₁.addEq a b).Contained (d₂.addEq a b) :=
   ⟨Set.insert_subset_insert h.eqs⟩
 
-theorem putEntry (e : Entry) (db : Database) : Contained db (db.putEntry e) :=
-  addTerm e.atom db
-
-theorem putEntry_mono {d₁ d₂ : Database} (h : d₁.Contained d₂) (e : Entry) :
-    (d₁.putEntry e).Contained (d₂.putEntry e) := h.addTerm_mono e.atom
-
 theorem sUnion (db : Database) (S : Set Database) : Contained db (db.sUnion S) :=
   ⟨Set.subset_union_left⟩
 
@@ -491,12 +378,9 @@ theorem mem_sUnion {db d : Database} {S : Set Database} (h : d ∈ S) :
 end Contained
 namespace WF
 theorem empty : WF Database.empty where
-  envInTerms := by simp [Database.empty]
   litsIsolated := by simp [Database.empty, LitsIsolated]
 
 theorem addTerm {db : Database} (h : WF db) (t : Term) : WF (db.addTerm t) where
-  envInTerms b hb := by
-    simp only [addTerm_terms]; exact Or.inl (h.envInTerms b hb)
   litsIsolated := by
     rintro p (rfl | hp)
     exacts [fun _ => rfl, h.litsIsolated p hp]
@@ -508,8 +392,6 @@ theorem addTerms {db : Database} (h : WF db) (ts : List Term) : WF (db.addTerms 
 
 theorem addEq {db : Database} (h : WF db) (a b : Term)
     (hlit : a.isLit ∨ b.isLit → a = b) : WF (db.addEq a b) where
-  envInTerms b hb := by
-    simp only [addEq_terms]; exact Or.inl (Or.inl (h.envInTerms b hb))
   litsIsolated := by
     rintro p (rfl | hp)
     · exact hlit
@@ -517,8 +399,6 @@ theorem addEq {db : Database} (h : WF db) (a b : Term)
 
 theorem sUnion {db : Database} (h : WF db) {S : Set Database}
     (hS : ∀ d ∈ S, WF d) : WF (db.sUnion S) where
-  envInTerms b hb := by
-    simp only [sUnion_terms]; exact Or.inl (h.envInTerms b hb)
   litsIsolated := by
     rintro p (hp | hp)
     · exact h.litsIsolated p hp

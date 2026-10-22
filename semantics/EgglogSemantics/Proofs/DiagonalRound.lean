@@ -1,259 +1,42 @@
-import EgglogSemantics.Proofs.StatePreservation
 import EgglogSemantics.Proofs.DiagonalPreservation
-import EgglogSemantics.Proofs.LiveTables
 
-/-! Redundant value assertions commute with completed diagonal rounds. -/
+/-! An unchanged diagonal, delete-free round absorbs its redundant assertions. -/
 
 namespace Egglog
 
-theorem Database.StoreOk.entries_eq_of_terms_eq {d e : Database}
-    (hd : d.StoreOk) (he : e.StoreOk) (hsig : d.sig = e.sig)
-    (ht : d.terms = e.terms) : d.entries = e.entries := by
-  ext row
-  constructor
-  · intro hr
-    exact he.entry_of_held_atom (hsig ▸ hd.entry_valid hr) (ht ▸ (StoredCong.direct hr.2).toHeld)
-  · intro hr
-    exact hd.entry_of_held_atom (hsig.symm ▸ he.entry_valid hr) (ht.symm ▸ (StoredCong.direct hr.2).toHeld)
-
-private def overlay (d : Database) (E : Set (Term × Term)) : Database :=
-  { d with eqs := d.eqs ∪ E }
-
-private theorem overlay_contained (d : Database) (E : Set (Term × Term)) :
-    d.Contained (overlay d E) := ⟨Set.subset_union_left⟩
-
-private theorem overlay_entries {d : Database} {E : Set (Term × Term)}
-    (hE : ∀ p ∈ E, p.1.IsValue d.sig) : (overlay d E).entries = d.entries := by
-  ext row
-  constructor
-  · rintro ⟨hv, hp | hp⟩
-    · exact ⟨hv, hp⟩
-    · exact (hv.atom_not_value (hE _ hp)).elim
-  · rintro ⟨hv, hp⟩
-    exact ⟨hv, Or.inl hp⟩
-
-private theorem overlay_addTerm (d : Database) (E : Set (Term × Term)) (t : Term) :
-    (overlay d E).addTerm t = overlay (d.addTerm t) E := by
-  apply Database.ext <;> try rfl
-  exact Set.insert_union.symm
-
-private theorem overlay_addEq (d : Database) (E : Set (Term × Term)) (a b : Term) :
-    (overlay d E).addEq a b = overlay (d.addEq a b) E := by
-  apply Database.ext <;> try rfl
-  exact Set.insert_union.symm
-
-private theorem evalAction_overlay (d : Database) (E : Set (Term × Term)) (a : Action) :
-    evalAction (overlay d E) a = (evalAction d a).map (overlay · E) := by
-  cases a with
-  | expr e =>
-      simp only [evalAction, overlay, Option.map_map]
-      congr 1
-      funext t
-      exact overlay_addTerm d E t
-  | union a b =>
-      simp only [evalAction, overlay]
-      cases ha : a.eval d.sig d.env <;> simp only [Option.bind_none, Option.map_none,
-        Option.bind_some]
-      rename_i ta
-      cases hb : b.eval d.sig d.env <;> simp only [Option.bind_none, Option.map_none,
-        Option.bind_some]
-      split <;> simp only [Option.map_none, Option.map_some]
-      exact congrArg some (overlay_addEq d E _ _)
-
-private theorem evalActions_overlay (d : Database) (E : Set (Term × Term))
-    (as : List Action) :
-    evalActions (overlay d E) as = (evalActions d as).map (overlay · E) := by
-  induction as generalizing d with
-  | nil => rfl
-  | cons a as ih =>
-      simp only [evalActions, evalAction_overlay]
-      cases he : evalAction d a <;> simp only [Option.map_none, Option.bind_none,
-        Option.map_some, Option.bind_some]
-      exact ih _
-
-private theorem evalLocalActions_overlay (d : Database) (E : Set (Term × Term))
-    (as : List Action) (σ : Env) :
-    evalLocalActions (overlay d E) as σ = (evalLocalActions d as σ).map (overlay · E) := by
-  change (evalActions (overlay { d with env := σ } E) as).map _ = _
-  rw [evalActions_overlay]
-  simp only [evalLocalActions, Option.map_map]
-  rfl
-
-private theorem overlay_eraseEntry {d : Database} {E : Set (Term × Term)}
-    (hE : ∀ p ∈ E, p.1.IsValue d.sig) {row : Entry} (hv : row.Shape d.sig) :
-    (overlay d E).eraseEntry row = overlay (d.eraseEntry row) E := by
-  apply Database.ext <;> try rfl
-  ext p
-  have hn : p ∈ E → p ≠ (row.atom, row.atom) := by
-    rintro hp rfl
-    exact hv.atom_not_value (hE _ hp)
-  simp only [Database.eraseEntry_eqs, overlay, Set.mem_union, Set.mem_sdiff,
-    Set.mem_singleton_iff, Set.mem_setOf_eq]
-  constructor
-  · rintro (⟨hp | hp, hne⟩ | hp)
-    · exact Or.inl (Or.inl ⟨hp, hne⟩)
-    · exact Or.inr hp
-    · exact Or.inl (Or.inr hp)
-  · rintro ((⟨hp, hne⟩ | hp) | hp)
-    · exact Or.inl ⟨Or.inl hp, hne⟩
-    · exact Or.inr hp
-    · exact Or.inl ⟨Or.inr hp, hn hp⟩
-
-private theorem evalMerge_overlay (d : Database) (E : Set (Term × Term))
-    (body : List Action) (res : List Expr) :
-    evalMerge (overlay d E) body res =
-      (evalMerge d body res).map fun p => (overlay p.1 E, p.2) := by
-  unfold evalMerge
-  rw [evalActions_overlay]
-  cases hb : evalActions d body <;>
-    simp [hb, overlay, Option.map_map, Function.comp_def]
-
-private theorem MergeValues.with_overlay {d e : Database} {decl : FnDecl}
-    {old new vs : List Term} (hm : MergeValues d decl old new e vs)
-    (E : Set (Term × Term)) : MergeValues (overlay d E) decl old new (overlay e E) vs := by
-  cases hm with
-  | @eval post vs ovs nvs body res hd hb =>
-      apply MergeValues.eval (d := overlay post E) hd
-      change evalMerge (overlay { d with env := mergeEnv ovs nvs old new } E) body res = _
-      rw [evalMerge_overlay, hb]
-      rfl
-
-private theorem MergeStep.with_overlay {d e : Database} (hm : MergeStep d e)
-    {E : Set (Term × Term)} (hE : ∀ p ∈ E, p.1.IsValue d.sig) :
-    MergeStep (overlay d E) (overlay e E) := by
-  obtain ⟨old, new, decl, post, vs, ho, hn, hne, hname, hd, hk, hv, rfl⟩ := mergeStep_iff.mp hm
-  change MergeStep (overlay d E) (overlay (post.addTerm _) E)
-  rw [← overlay_addTerm]
-  apply MergeStep.collide' (db := overlay d E)
-    ((overlay_entries hE).symm ▸ ho) ((overlay_entries hE).symm ▸ hn)
-    hne hname hd (hk.mono (overlay_contained d E))
-  rw [overlay_eraseEntry hE ho.1,
-    overlay_eraseEntry (d := d.eraseEntry old) hE hn.1]
-  exact hv.with_overlay E
-
-private theorem MergeClosure.with_overlay {d e : Database} (hm : MergeClosure d e)
-    {E : Set (Term × Term)} (hE : ∀ p ∈ E, p.1.IsValue d.sig) :
-    MergeClosure (overlay d E) (overlay e E) := by
-  induction hm with
-  | refl => exact .refl
-  | tail hc hs ih => exact ih.tail (hs.with_overlay (by simpa only [MergeClosure.sig hc] using hE))
-
-private theorem MergeStep.value_eqs {d e : Database} (hm : MergeStep d e)
-    {p : Term × Term} (hv : p.1.IsValue d.sig) (hp : p ∈ d.eqs) : p ∈ e.eqs := by
-  obtain ⟨old, new, decl, post, vs, ho, hn, hne, hname, hd, hk, hvals, rfl⟩ := mergeStep_iff.mp hm
-  have keep : p ∈ ((d.eraseEntry old).eraseEntry new).eqs := by
-    apply Or.inl
-    refine ⟨Or.inl ⟨hp, ?_⟩, ?_⟩ <;> intro he
-    · have he := Set.mem_singleton_iff.mp he
-      subst p
-      exact ho.1.atom_not_value hv
-    · have he := Set.mem_singleton_iff.mp he
-      subst p
-      exact hn.1.atom_not_value hv
-  apply Or.inr
-  cases hvals with
-  | eval _ hb => exact (evalMerge_contained hb).eqs keep
-
-private theorem MergeClosure.value_eqs {d e : Database} (hm : MergeClosure d e)
-    {p : Term × Term} (hv : p.1.IsValue d.sig) (hp : p ∈ d.eqs) : p ∈ e.eqs := by
-  induction hm with
-  | refl => exact hp
-  | tail hc hs ih => exact hs.value_eqs ((MergeClosure.sig hc).symm ▸ hv) ih
-
-private theorem matches_of_diag_terms {d e : Database} (hd : d.Diag)
-    (hsig : d.sig = e.sig) (ht : d.terms = e.terms) {p : Pattern} {σ : Env}
+private theorem matches_same {d e : Database} (h : d.SameMeaning e) {p : Pattern} {σ : Env}
     (hm : Matches d p σ) : Matches e p σ := by
-  cases hm using Matches.storedCases with
-  | expr hw he hc =>
-      have hwt := congOn_eq_of_diag hd hc
-      subst hwt
-      exact .expr (ht ▸ hw) (hsig ▸ he)
-        ((Database.toStored (ht ▸ hw)).mono (Database.Contained.addTerms [_] e))
-  | eq hw ha hb hwa hab =>
-      have hwt := congOn_eq_of_diag hd hwa
-      have hab := congOn_eq_of_diag hd hab
-      subst hwt
-      subst hab
-      apply Matches.eq (ht ▸ hw) (hsig ▸ ha) (hsig ▸ hb)
-      · exact (Database.toStored (ht ▸ hw)).mono (Database.Contained.addTerms _ e)
-      · exact (Database.toStored (ht ▸ hw)).mono (Database.Contained.addTerms _ e)
+  cases hm with
+  | atom hv hc => exact .atom hv ((h.congr _ _).mp hc)
+  | equal hv hw hc => exact .equal hv hw ((h.congr _ _).mp hc)
+  | unequal hv hw ha hb hn =>
+    exact .unequal hv hw ((h.congr _ _).mp ha)
+      ((h.congr _ _).mp hb) (fun hc => hn ((h.congr _ _).mpr hc))
 
-private theorem query_of_diag_terms {d e : Database} (hd : d.Diag)
-    (hsig : d.sig = e.sig) (ht : d.terms = e.terms) {q : Query} {σ : Env}
-    (hq : ValidQuerySubst d q σ) : ValidQuerySubst e q σ := by
-  obtain ⟨σs, hσs, hu⟩ := hq
-  refine ⟨σs, hσs.imp ?_, hu⟩
-  intro p σ hp
-  exact ⟨⟨hp.1.1, fun b hb => ht ▸ hp.1.2 b hb⟩,
-    matches_of_diag_terms hd hsig ht hp.2⟩
+private theorem query_same {d e : Database} (h : d.SameMeaning e) (ht : d.terms = e.terms)
+    {q : Query} {σ : Env} (hm : QueryMatches d q σ) : QueryMatches e q σ :=
+  ⟨⟨hm.1.1, fun b hb => ht ▸ hm.1.2 b hb⟩, fun p hp => matches_same h (hm.2 p hp)⟩
 
-private theorem runRules_overlay (d : Database) (E : Set (Term × Term))
-    (hquery : ∀ q σ, ValidQuerySubst (overlay d E) q σ ↔ ValidQuerySubst d q σ)
-    (R : RulesetName) : RunRules R (overlay d E) = overlay (RunRules R d) E := by
-  rw [RunRules.eq_sUnion, RunRules.eq_sUnion]
-  apply Database.ext <;> try rfl
+/-- With unchanged congruence and held terms, the same substitutions write the same pairs. -/
+theorem RunWrites.eq_of_sameMeaning_terms {d e : Database} (h : d.SameMeaning e)
+    (ht : d.terms = e.terms) (R : List Rule) : RunWrites R d = RunWrites R e := by
   ext p
   constructor
-  · rintro ((hp | hp) | hp)
-    · exact Or.inl (Or.inl hp)
-    · exact Or.inr hp
-    · obtain ⟨out, ⟨r, hr, hR, σ, hσ, he⟩, hp⟩ := Set.mem_iUnion₂.mp hp
-      rw [evalLocalActions_overlay] at he
-      obtain ⟨raw, hraw, rfl⟩ := Option.map_eq_some_iff.mp he
-      rcases hp with hp | hp
-      · exact Or.inl (Or.inr (Set.mem_iUnion₂.mpr
-          ⟨raw, ⟨r, hr, hR, σ, (hquery _ _).mp hσ, hraw⟩, hp⟩))
-      · exact Or.inr hp
-  · rintro ((hp | hp) | hp)
-    · exact Or.inl (Or.inl hp)
-    · obtain ⟨out, ⟨r, hr, hR, σ, hσ, he⟩, hp⟩ := Set.mem_iUnion₂.mp hp
-      refine Or.inr (Set.mem_iUnion₂.mpr
-        ⟨overlay out E, ⟨r, hr, hR, σ, (hquery _ _).mpr hσ, ?_⟩, Or.inl hp⟩)
-      rw [evalLocalActions_overlay, he]
-      rfl
-    · exact Or.inl (Or.inr hp)
+  · rintro ⟨W, ⟨r, hr, σ, hσ, hw⟩, hp⟩
+    exact ⟨W, ⟨r, hr, σ, query_same h ht hσ, hw⟩, hp⟩
+  · rintro ⟨W, ⟨r, hr, σ, hσ, hw⟩, hp⟩
+    exact ⟨W, ⟨r, hr, σ, query_same h.symm ht.symm hσ, hw⟩, hp⟩
 
-/-- A completed unchanged diagonal round has absorbed all redundant root assertions. -/
-theorem RunStep.self_of_sameMeaning {d e : Database} {R : RulesetName}
-    (hn : d.NoUnions) (hs : d.StoreOk) (hq : d.RulesSafe) (hmw : d.sig.MergesWidthOk)
-    (hr : RunStep R d e) (heq : d.SameMeaning e) : RunStep R e e := by
-  have hen := hr.noUnions hn
-  have hes := hr.storeOk hs hq hmw
-  have ht := heq.terms_eq_of_diag hn.diag hen.diag
-  have hrows := hs.entries_eq_of_terms_eq hes heq.sig ht
-  have hde : d.eqs ⊆ e.eqs := by
-    intro p hp
-    rcases hs.typed p hp with hv | ⟨row, hv, rfl⟩
-    · exact hr.1.value_eqs hv.1 (Or.inl hp)
-    · exact (hrows ▸ (show row ∈ d.entries from ⟨hv.shape, hp⟩)).2
-  let E := e.eqs \ d.eqs
-  have hE : ∀ p ∈ E, p.1.IsValue d.sig ∧ p.1 = p.2 := by
-    intro p hp
-    refine ⟨?_, hen.diag p hp.1⟩
-    rcases hes.typed p hp.1 with hv | ⟨row, hv, he⟩
-    · exact heq.sig.symm ▸ hv.1
-    · subst p
-      exact (hp.2 ((hrows.symm ▸ (show row ∈ e.entries from ⟨hv.shape, hp.1⟩)).2)).elim
-  have hover : e = overlay d E := by
-    apply Database.ext
-    · exact hr.1.sig
-    · change e.eqs = d.eqs ∪ (e.eqs \ d.eqs)
-      exact (Set.union_sdiff_cancel hde).symm
-    · exact hr.1.envRules.1
-    · exact hr.1.envRules.2
-  have hquery : ∀ q σ, ValidQuerySubst (overlay d E) q σ ↔ ValidQuerySubst d q σ := by
-    rw [← hover]
-    intro q σ
-    exact ⟨query_of_diag_terms hen.diag heq.sig.symm ht.symm,
-      query_of_diag_terms hn.diag heq.sig ht⟩
-  have hraw : RunRules R e = overlay (RunRules R d) E := by
-    rw [hover]
-    exact runRules_overlay d E hquery R
-  have hfinish : overlay e E = e := by
-    apply Database.ext <;> try rfl
-    exact Set.union_eq_self_of_subset_right Set.sdiff_subset
-  refine ⟨?_, hr.2⟩
-  rw [hraw, ← hfinish]
-  exact MergeClosure.with_overlay hr.1 (fun p hp => (hE p hp).1)
+/-- After a semantically unchanged diagonal round, the next round changes no assertions. -/
+theorem RunRules.self_of_sameMeaning {d e : Database} {R : List Rule}
+    (hn : d.NoUnions) (hu : ∀ r ∈ R, r.UnionFree) (hdf : ∀ r ∈ R, r.DeleteFree)
+    (hr : e = RunRules R d)
+    (heq : d.SameMeaning e) : RunRules R e = e := by
+  subst e
+  have ht := heq.terms_eq_of_diag hn.diag (RunRules.noUnions hn hu).diag
+  have hw := RunWrites.eq_of_sameMeaning_terms heq ht R
+  rw [RunRules.eq_addEqs hdf, ← hw, RunRules.eq_addEqs hdf]
+  apply Database.ext
+  · simp [Database.addEqs, Set.union_assoc]
 
 end Egglog

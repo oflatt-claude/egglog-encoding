@@ -1,143 +1,95 @@
 import EgglogSemantics.Provenance.Encode
 
+/-! Proofs from the firing log. A firing is justified once every premise is established:
+a row premise by a proof of its instance, an equality or disequality premise by a proof of
+a row carrying the side in question. Passes over the log justify firings until none is
+left that can be, and each data row keeps the first proof found for it. -/
+
 namespace Egglog.Provenance
 
-inductive ProofKind where
-  | rule (command action : Nat)
-  | body (function : FnName) (action : Nat)
-  | result (function : FnName)
-  | subterm
+/-- The firings the held terms record: a rule index and its substitution. -/
+def firings (P : Program) (terms : List Term) : List (Nat × Env) :=
+  terms.filterMap fun t => match t with
+    | .app f args => do
+        let i ← fireIndex f
+        let r ← P.rules[i]?
+        if args.length == r.query.vars.length then some (i, r.query.vars.zip args) else none
+    | .lit _ => none
 
-def proofKinds (P : Program) : List (FnName × ProofKind) :=
-  (subtermName, .subterm) :: P.zipIdx.flatMap fun ci => match ci.1 with
-    | .decl f d => match d.merge with
-      | some (.merge _ _ body _) => (resultName f, .result f) ::
-          body.zipIdx.map fun aj => (bodyName f aj.2, .body f aj.2)
-      | _ => []
-    | .rule r => r.actions.zipIdx.map fun aj => (ruleName ci.2 aj.2, .rule ci.2 aj.2)
-    | _ => []
+/-- Proofs of rows, by row. -/
+abbrev Facts := List (Term × Proof)
 
-/-- Validate a node as it is decoded. -/
-def node (P : Program) (sig : Signature) (pf : Proof) : Option Proof :=
-  if SourceProof.atomOk sig pf.fact && checkReason P sig pf then some pf else none
+/-- A proof establishing `t`: a row's proof, or a subterm of one. The proofs at hand come
+first, so that a premise is witnessed by a row of the same firing when it can be. -/
+def establish (facts : Facts) (near : List Proof) (t : Term) : Option Proof :=
+  match near.find? (·.fact == t) with
+  | some p => some p
+  | none =>
+  match near.find? fun p => decide (t ∈ p.fact.subtermList) with
+  | some p => some (.subterm t p)
+  | none =>
+  match facts.find? (·.1 == t) with
+  | some fp => some fp.2
+  | none => (facts.find? fun fp => decide (t ∈ fp.1.subtermList)).map fun fp => .subterm t fp.2
 
-def actionRoot (sig : Signature) (σ : Env) : Action → Option Term
-  | .expr e => e.evalAtom sig σ
-  | .union _ _ => none
+/-- The proof of a premise: a row premise's instance, the common value of an equality, or
+the first side of a disequality. -/
+def premiseProof (facts : Facts) (rows : List Proof) (σ : Env) : Pattern → Option Proof
+  | .expr e => do establish facts rows (← e.eval σ)
+  | .eq a b => do
+      let x ← a.eval σ
+      let y ← b.eval σ
+      if x == y then establish facts rows x else none
+  | .ne a b => do
+      let x ← a.eval σ
+      let y ← b.eval σ
+      if x == y then none else establish facts rows x
 
-def mergeBodyRoot (sig : Signature) (f : FnName) (j : Nat)
-    (old new : Term) : Option Term := do
-  let d ← sig f
-  let some (.merge oldVars newVars body _) := d.merge | none
-  let .app _ oc := old | none
-  let .app _ nc := new | none
-  let a ← body[j]?
-  actionRoot sig (mergeEnv oldVars newVars (oc.drop d.arity) (nc.drop d.arity)) a
+/-- The rows a firing writes, with their proofs, once its premises are established. -/
+def justify (P : Program) (facts : Facts) (i : Nat) (σ : Env) : Option Facts := do
+  let r ← P.rules[i]?
+  let rows ← (r.query.filterMap fun p => match p with | .expr e => some e | _ => none).mapM
+    fun e => do establish facts [] (← e.eval σ)
+  let ps ← r.query.mapM (premiseProof facts rows σ)
+  some <| r.actions.filterMap fun a => match a with
+    | .expr e => (e.eval σ).map fun t => (t, .rule t i σ ps)
+    | _ => none
 
-private theorem sizeOf_tail_le (ts : List Term) : sizeOf ts.tail ≤ sizeOf ts := by
-  cases ts with
-  | nil => simp
-  | cons t ts => simp only [List.tail_cons, List.cons.sizeOf_spec]; omega
+/-- Justify the pending firings in order, repeatedly, until a pass justifies none. -/
+def passes (P : Program) : Nat → Facts → List (Nat × Env) → Facts
+  | 0, facts, _ => facts
+  | n + 1, facts, pending =>
+    let (facts', pending', progress) :=
+      pending.foldl (init := (facts, ([] : List (Nat × Env)), false)) fun (fs, rest, prog) f =>
+        match justify P fs f.1 f.2 with
+        | some new => ((new.filter fun tp => !(fs.any (·.1 == tp.1))) ++ fs, rest, true)
+        | none => (fs, f :: rest, prog)
+    if progress then passes P n facts' pending'.reverse else facts'
 
-private theorem sizeOf_drop_le (n : Nat) (ts : List Term) : sizeOf (ts.drop n) ≤ sizeOf ts := by
-  induction ts generalizing n with
-  | nil => simp
-  | cons t ts ih =>
-    cases n with
-    | zero => simp
-    | succ n =>
-      have := ih n
-      simp only [List.drop_succ_cons, List.cons.sizeOf_spec]
-      omega
+/-- The rows of the uninstrumented program among the held terms. -/
+def dataRows (P : Program) (terms : List Term) : List Term :=
+  let heads := rowHeads P
+  terms.filter fun t => match t with
+    | .app f _ => heads.contains f
+    | .lit _ => false
 
-mutual
+/-- The held terms without the log. -/
+def eraseLog (terms : List Term) : List Term :=
+  terms.filter fun t => match t with
+    | .app f _ => (fireIndex f).isNone
+    | .lit _ => true
 
-/-- Decode a proof constructor against the uninstrumented program. -/
-def decode (P : Program) (sig : Signature) (kinds : List (FnName × ProofKind)) :
-    Term → Option Proof
-  | .lit _ => none
-  | .app f args => do
-    let (_, kind) ← kinds.find? (fun kv => kv.1 == f)
-    match kind with
-    | .rule i j => do
-      let .rule r ← P[i]? | none
-      let n := r.query.vars.length
-      if args.length != n + r.query.length then none else do
-        let σ := r.query.vars.zip (args.take n)
-        let ps ← decodeAll P sig kinds (args.drop n)
-        let a ← r.actions[j]?
-        let fact ← actionRoot sig σ a
-        node P sig (.rule fact i σ ps)
-    | .body fn j => do
-      let [old, new] ← decodeAll P sig kinds args | none
-      let fact ← mergeBodyRoot sig fn j old.fact new.fact
-      node P sig (.merge fact fn old new)
-    | .result fn => do
-      let [old, new] ← decodeAll P sig kinds args | none
-      let fs ← mergeFacts sig fn old.fact new.fact
-      node P sig (.merge fs.result fn old new)
-    | .subterm => do
-      let fact ← args[0]?
-      let [p] ← decodeAll P sig kinds args.tail | none
-      node P sig (.subterm fact p)
-termination_by t => sizeOf t
-decreasing_by all_goals
-  simp_wf
-  all_goals first
-    | omega
-    | exact Nat.lt_of_le_of_lt (sizeOf_drop_le _ _) (by omega)
-    | exact Nat.lt_of_le_of_lt (sizeOf_tail_le _) (by omega)
+/-- Every data row with its checked proof from the log, or `none` where no proof checks. -/
+def extractEach (P : Program) (terms : List Term) : List (Term × Option Proof) :=
+  let fs := firings P terms
+  let facts := passes P (fs.length + 1) [] fs
+  (dataRows P terms).map fun t =>
+    (t, (facts.find? (·.1 == t)).bind fun fp =>
+      if check P fp.2 == some t then some fp.2 else none)
 
-def decodeAll (P : Program) (sig : Signature) (kinds : List (FnName × ProofKind)) :
-    List Term → Option (List Proof)
-  | [] => some []
-  | t :: ts => do
-    let p ← decode P sig kinds t
-    let ps ← decodeAll P sig kinds ts
-    some (p :: ps)
-termination_by ts => sizeOf ts
-decreasing_by all_goals (simp_wf; omega)
-
-end
-
-def extract (P : Program) (pf : Term) : Option Proof := do
-  let C ← SourceProof.contextOf P
-  if !programOk P C.sig then none else do
-    let p ← decode P C.sig (proofKinds P) pf
-    if (check P p).isSome then some p else none
-
-/-- The selected proof must establish exactly the row's original data columns. -/
-def extractRow (P : Program) (r : Entry) : Option Proof := do
-  let C ← SourceProof.contextOf P
-  let d ← C.sig r.name
-  if d.merge.isNone || r.key.length != d.arity || r.value.length != d.outArity + 1 then
-    none
-  else do
-    let pf ← r.value[d.outArity]?
-    let p ← extract P pf
-    if check P p == some (.app r.name (r.key ++ r.value.take d.outArity)) then
-      some p
-    else none
-
-def eraseRow (sig : Signature) (r : Entry) : Option Entry := do
-  let d ← sig r.name
-  if d.merge.isSome then some { r with value := r.value.take d.outArity }
-  else some r
-
-def eraseFact (sig : Signature) (t : Term) : Option Term := do
-  if SourceProof.valueOk sig t then some t else do
-    let .app f cols := t | none
-    let d ← sig f
-    if d.merge.isSome && cols.length == d.entryWidth + 1 then
-      some (.app f (cols.take d.entryWidth))
-    else none
-
-def retainedRows (sig : Signature) (terms : List Term) : List Entry :=
-  terms.filterMap fun t => do
-    let .app f cols := t | none
-    let d ← sig f
-    if d.merge.isSome && cols.length == d.entryWidth + 1 then
-      some ⟨f, cols.take d.arity, cols.drop d.arity⟩
-    else none
+/-- A checked proof of every data row. -/
+def extract (P : Program) (terms : List Term) : Option (List (Term × Proof)) := do
+  if !programOk P then none else
+    (extractEach P terms).mapM fun tp => tp.2.map (tp.1, ·)
 
 end Egglog.Provenance

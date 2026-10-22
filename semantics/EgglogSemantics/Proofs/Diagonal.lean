@@ -1,4 +1,4 @@
-import EgglogSemantics.Proofs.Out
+import EgglogSemantics.Proofs.Step
 
 /-! Structural equality in mathematical union-free states, and syntax inversion for
 ordering-free source expressions. No executable state is involved. -/
@@ -8,13 +8,9 @@ namespace Egglog
 /-- Every asserted equation is reflexive. -/
 def Database.Diag (db : Database) : Prop := ∀ p ∈ db.eqs, p.1 = p.2
 
-/-- A state whose merge bodies and rule heads assert nothing either. The three fields are
-what the three phases read: `diag` is the state, `sig` is what a `MergeStep` runs, `rules`
-is what a `RunRules` runs. -/
+/-- A state whose equations contain no nontrivial unions. -/
 structure Database.NoUnions (db : Database) : Prop where
   diag : db.Diag
-  sig : Signature.UnionFree db.sig
-  rules : ∀ r ∈ db.rules, Actions.UnionFree r.actions
 
 namespace Database
 
@@ -37,14 +33,11 @@ theorem Diag.addTerms {db : Database} (h : db.Diag) (ts : List Term) :
 theorem Diag.withOperands {db : Database} (h : db.Diag) (ts : List Term) :
     (db.withOperands ts).Diag := h.addTerms ts
 
-theorem Diag.eraseEntry {db : Database} (h : db.Diag) (row : Entry) :
-    (db.eraseEntry row).Diag := by
-  rintro p (hp | ⟨t, _, rfl⟩)
+theorem Diag.deleteRows {db : Database} (h : db.Diag) (X : Set Term) :
+    (db.deleteRows X).Diag := by
+  rintro p (hp | ⟨t, _, c, _, rfl⟩)
   · exact h p hp.1
   · rfl
-
-theorem Diag.putEntry {db : Database} (h : db.Diag) (row : Entry) :
-    (db.putEntry row).Diag := h.addTerm row.atom
 
 end Database
 
@@ -105,30 +98,12 @@ theorem StoredCongList.eq_of_diag {d : Database} (h : d.Diag) {as bs : List Term
   | nil => rfl
   | cons hc _ ih => exact congrArg₂ List.cons (StoredCong.eq_of_diag h hc) ih
 
-theorem Database.Out.entry {d : Database} (h : d.Diag) {f : FnName} {as vs : List Term}
-    (ho : d.Out f as vs) : Entry.mk f as vs ∈ d.entries := by
-  obtain ⟨bs, hc, ht⟩ := ho
-  exact CongList.eq_of_diag h hc ▸ ht
-
-theorem Database.Out.term {d : Database} (h : d.Diag) {f : FnName} {as vs : List Term}
-    (ho : d.Out f as vs) : Term.app f (as ++ vs) ∈ d.terms :=
-  (StoredCong.direct (ho.entry h).2).toHeld
-
-theorem Database.Out.columns {d : Database} (h : d.Diag) {f : FnName} {as vs : List Term}
-    (ho : d.Out f as vs) : ∀ t ∈ as ++ vs, t ∈ d.terms := by
-  intro t ht
-  exact d.subtermClosed _ (ho.term h) (Term.arg_subterms ht t.self_mem_subterms)
-
 /-- `Expr.OrderingFree`, read off an application: its arguments are. -/
 theorem Expr.orderingFree_app {f : FnName} {args : List Expr}
     (h : Expr.OrderingFree (.app f args)) : Expr.OrderingFreeList args := h
 
 /-- `Expr.OrderingFree`, read off a `min`: there is none. -/
 theorem Expr.not_orderingFree_min {a b : Expr} (h : Expr.OrderingFree (.min a b)) : False := by
-  simp [Expr.OrderingFree, Expr.hasMin] at h
-
-theorem Expr.not_orderingFree_ite {lhs rhs : List Expr} {yes no : Expr}
-    (h : Expr.OrderingFree (.ite lhs rhs yes no)) : False := by
   simp [Expr.OrderingFree, Expr.hasMin] at h
 
 /-- `Expr.OrderingFreeList`, read off a cons. -/

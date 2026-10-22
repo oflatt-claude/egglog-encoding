@@ -1,46 +1,52 @@
-import EgglogSemantics.Proofs.Provenance.GeneratedClaim
 import EgglogSemantics.Provenance.Extract
+import EgglogSemantics.Proofs.Provenance.Model
 
-/-! Accepted provenance proves equalities in a reached, saturated source model,
-including when the certified rows were replaced. -/
+/-! Extraction returns only certificates accepted by the relational checker. This
+statement is independent of the origin of the supplied firing log. -/
 
 namespace Egglog.Provenance
 
-/-- Accepted generated provenance establishes its mapped claim in the source. -/
-theorem check_sound {P : Program} {src : Database} (hp : P.Fragment)
-    (hs : ProgramStep Database.empty P src) (hclosed : ∀ R, RunSaturated R src)
-    {C : SourceProof.Context} (hC : SourceProof.contextOf P = some C)
-    {pf : Proof} {t : Term} {claim : SourceProof.Claim}
-    (hc : check (Congruence.encode P) pf = some t)
-    (hm : Resugar.factClaim P C t = some claim) : src.Infers claim.lhs claim.rhs :=
-  Generated.check_claim_infers hp hs hclosed hC hc hm
+/-- Every successful entry of `extractEach` has been checked against its row. -/
+theorem extractEach_checked {P : Program} {terms : List Term} {t : Term} {pf : Proof}
+    (h : (t, some pf) ∈ extractEach P terms) : check P pf = some t := by
+  obtain ⟨row, _, hrow⟩ := List.mem_map.mp h
+  have hpair := Prod.mk.inj hrow
+  obtain rfl := hpair.1
+  obtain ⟨fp, _, hp⟩ := Option.bind_eq_some_iff.mp hpair.2
+  split at hp
+  · rename_i hc
+    cases Option.some.inj hp
+    exact beq_iff_eq.mp hc
+  · contradiction
 
-theorem extractRow_checked {P : Program} {C : SourceProof.Context} {r : Entry}
-    {d : FnDecl} {pf : Proof}
-    (hC : SourceProof.contextOf P = some C) (hd : C.sig r.name = some d)
-    (h : extractRow P r = some pf) :
-    check P pf = some (.app r.name (r.key ++ r.value.take d.outArity)) := by
-  simp only [extractRow, hC, Option.bind_eq_bind, Option.bind_some, hd] at h
+/-- Successful extraction checks every returned proof against the associated term. -/
+theorem extract_checked {P : Program} {terms : List Term} {facts : Facts}
+    (h : extract P terms = some facts) :
+    ∀ tp ∈ facts, check P tp.2 = some tp.1 := by
+  unfold extract at h
   split at h
   · contradiction
-  · obtain ⟨t, _, ht⟩ := Option.bind_eq_some_iff.mp h
-    obtain ⟨p, _, hp⟩ := Option.bind_eq_some_iff.mp ht
-    split at hp
-    · rename_i hcheck
-      cases Option.some.inj hp
-      simpa only [beq_iff_eq] using hcheck
-    · contradiction
+  · have aux : ∀ (xs : List (Term × Option Proof)) (ys : Facts),
+        xs.mapM (fun tp => tp.2.map (tp.1, ·)) = some ys →
+        ∀ tp ∈ ys, (tp.1, some tp.2) ∈ xs := by
+      intro xs
+      induction xs with
+      | nil => intro ys he tp hm; simp at he; subst ys; simp at hm
+      | cons x xs ih =>
+        intro ys he tp hm
+        simp only [List.mapM_cons, Option.bind_eq_bind] at he
+        obtain ⟨y, hy, he⟩ := Option.bind_eq_some_iff.mp he
+        obtain ⟨ys', hys, he⟩ := Option.bind_eq_some_iff.mp he
+        cases Option.some.inj he
+        obtain ⟨pf, hpf, rfl⟩ := Option.map_eq_some_iff.mp hy
+        rcases List.mem_cons.mp hm with rfl | hm
+        · exact List.mem_cons.mpr (Or.inl (by cases x; simp_all))
+        · exact List.mem_cons_of_mem _ (ih _ hys _ hm)
+    exact fun tp ht => extractEach_checked (aux _ _ h tp ht)
 
-/-- Extraction's data columns determine the source claim, independently of proof metadata. -/
-theorem extractRow_sound {P : Program} {src : Database} (hp : P.Fragment)
-    (hs : ProgramStep Database.empty P src) (hclosed : ∀ R, RunSaturated R src)
-    {C target : SourceProof.Context} (hC : SourceProof.contextOf P = some C)
-    (hT : SourceProof.contextOf (Congruence.encode P) = some target)
-    {r : Entry} {d : FnDecl} {pf : Proof} {claim : SourceProof.Claim}
-    (hd : target.sig r.name = some d)
-    (h : extractRow (Congruence.encode P) r = some pf)
-    (hm : Resugar.factClaim P C (.app r.name (r.key ++ r.value.take d.outArity)) =
-      some claim) : src.Infers claim.lhs claim.rhs :=
-  check_sound hp hs hclosed hC (extractRow_checked hT hd h) hm
+/-- Extraction is sound in any interpretation closed under the checker rules. -/
+theorem extract_sound {P : Program} {terms : List Term} {facts : Facts} {H : Term → Prop}
+    (model : Model P H) (h : extract P terms = some facts) : ∀ tp ∈ facts, H tp.1 :=
+  fun tp ht => check_sound_in_model model (extract_checked h tp ht)
 
 end Egglog.Provenance

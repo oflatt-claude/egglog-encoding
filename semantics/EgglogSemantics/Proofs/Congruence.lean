@@ -236,23 +236,5 @@ def setoid (db : Database) : Setoid {t : Term // t ∈ db.terms} where
   iseqv := ⟨fun a => a.property, .symm, .trans⟩
 
 end StoredCong
-theorem StoredCong.isValue_iff {db : Database} (hs : db.StoreOk) {a b : Term}
-    (h : StoredCong db a b) : a.IsValue db.sig ↔ b.IsValue db.sig := by
-  induction h using StoredCong.rec
-      (motive_2 := fun as bs _ =>
-        (∀ a ∈ as, a.IsValue db.sig) ↔ ∀ b ∈ bs, b.IsValue db.sig) with
-  | direct he =>
-    rcases hs.typed _ he with hv | ⟨row, _, heq⟩
-    · exact iff_of_true hv.1 hv.2
-    · have hab := congrArg Prod.fst heq
-      have hbb := congrArg Prod.snd heq
-      dsimp only at hab hbb
-      rw [hab, hbb]
-  | subterm => exact Iff.rfl
-  | symm _ ih => exact ih.symm
-  | trans _ _ ih₁ ih₂ => exact ih₁.trans ih₂
-  | congr _ _ _ _ _ ih => simp only [Term.isValue_app_iff, ih]
-  | nil => simp
-  | cons _ _ ih₁ ih₂ => simp only [List.forall_mem_cons, ih₁, ih₂]
 
 end Egglog

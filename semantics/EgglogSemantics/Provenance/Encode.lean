@@ -1,146 +1,72 @@
 import EgglogSemantics.Provenance.Checker
 
+/-!
+# Provenance instrumentation
+
+Every rule gets one more action: a row that records the firing, under the rule's index,
+with the values of the rule's query variables. No rule reads these rows, so the
+instrumented program builds the same data as the original, round for round, deletes the
+same rows, and settles when it does. Proofs are read off the log afterwards (`Extract`).
+-/
+
 namespace Egglog.Provenance
 
 def namePrefix : String := "@prov:"
-def ruleName (i j : Nat) : FnName := namePrefix ++ "rule:" ++ toString i ++ ":" ++ toString j
-def bodyName (f : FnName) (j : Nat) : FnName := namePrefix ++ "body:" ++ f ++ ":" ++ toString j
-def resultName (f : FnName) : FnName := namePrefix ++ "result:" ++ f
-def subtermName : FnName := namePrefix ++ "subterm"
-def proofVar (i : Nat) : Var := namePrefix ++ "p" ++ toString i
+def firePrefix : String := namePrefix ++ "fire:"
+def fireName (i : Nat) : FnName := firePrefix ++ toString i
 
-def ctor (n : Nat) : FnDecl := ⟨n, 1, none⟩
+/-- The rule index a firing-log name carries. -/
+def fireIndex (f : FnName) : Option Nat :=
+  if firePrefix.isPrefixOf f then (f.drop firePrefix.length).toNat? else none
 
-def leaf : Expr → Bool
-  | .lit _ => true
-  | .var v => !namePrefix.isPrefixOf v
-  | _ => false
+/-- The names applied at the root of a row atom. -/
+def rowHeads (P : Program) : List FnName :=
+  ((P.rules.flatMap fun r => (r.query.filterMap fun p => match p with
+        | .expr (.app f _) => some f | _ => none) ++
+      (r.actions.filterMap fun a => match a with
+        | .expr (.app f _) | .delete (.app f _) => some f | _ => none)) ++
+    P.check.filterMap fun p => match p with | .expr (.app f _) => some f | _ => none).dedup
 
-def sameLeaf : Expr → Expr → Bool
-  | .lit a, .lit b => a == b
-  | .var a, .var b => a == b
-  | _, _ => false
+/-- The names applied inside a column. -/
+def Pattern.innerFns : Pattern → List FnName
+  | .expr (.app _ cols) => Expr.fnsList cols
+  | .expr _ => []
+  | .eq a b | .ne a b => a.fns ++ b.fns
 
-mutual
+@[inherit_doc Pattern.innerFns]
+def valueHeads (P : Program) : List FnName :=
+  ((P.rules.flatMap fun r => r.query.flatMap Pattern.innerFns ++
+      (r.actions.flatMap fun a => match a with
+        | .expr (.app _ cols) | .delete (.app _ cols) => Expr.fnsList cols
+        | _ => [])) ++
+    P.check.flatMap Pattern.innerFns).dedup
 
-def valueExprOk (sig : Signature) (vars : List Var) : Expr → Bool
-  | .lit _ => true
-  | .var v => vars.contains v && !namePrefix.isPrefixOf v
-  | .app f args =>
-      !namePrefix.isPrefixOf f && valueExprsOk sig vars args &&
-        (sig f).any fun d => d.merge.isNone && args.length == d.arity
-  | .min a b => valueExprOk sig vars a && valueExprOk sig vars b
-  | .ite lhs rhs yes no => valueExprsOk sig vars lhs && valueExprsOk sig vars rhs &&
-      valueExprOk sig vars yes && valueExprOk sig vars no
+/-- No union, no reserved name, and no name used both as a row head and as a value, so
+that rows, values and the log can be told apart. This covers the congruence compiler's
+output. -/
+def programOk (P : Program) : Bool :=
+  unionFree P &&
+  (rowHeads P ++ valueHeads P).all (fun f => !namePrefix.isPrefixOf f) &&
+  (rowHeads P).all fun f => !(valueHeads P).contains f
 
-def valueExprsOk (sig : Signature) (vars : List Var) : List Expr → Bool
-  | [] => true
-  | e :: es => valueExprOk sig vars e && valueExprsOk sig vars es
+/-- The row recording a firing of rule `k`. -/
+def fireAction (k : Nat) (r : Rule) : Action :=
+  .expr (.app (fireName k) (r.query.vars.map Expr.var))
 
-end
+def encodeRule (k : Nat) (r : Rule) : Rule :=
+  { r with actions := r.actions ++ [fireAction k r] }
 
-def tableActionOk (sig : Signature) (vars : List Var) : Action → Bool
-  | .expr (.app f cols) => (sig f).any fun d =>
-      d.merge.isSome && cols.length == d.entryWidth && valueExprsOk sig vars cols
-  | _ => false
+/-- Instrument a command's rules, numbered from `k` in `Program.rules`. -/
+def encodeCmd (k : Nat) : Cmd → Cmd
+  | .run rs => .run (rs.zipIdx.map fun ri => encodeRule (k + ri.2) ri.1)
+  | .saturate rs => .saturate (rs.zipIdx.map fun ri => encodeRule (k + ri.2) ri.1)
 
-/-- Find a table premise that establishes a leaf's existence. -/
-def witness (q : Query) (e : Expr) : Option Nat :=
-  (q.zipIdx.find? fun pi => match pi.1 with
-    | .expr (.app _ cols) => cols.any (sameLeaf e)
-    | _ => false).map Prod.snd
+def encodeCmds : List Cmd → Nat → List Cmd
+  | [], _ => []
+  | c :: cs, k => encodeCmd k c :: encodeCmds cs (k + c.rules.length)
 
-def queryOk (sig : Signature) (q : Query) : Bool := q.all fun p => match p with
-  | .expr (.app f cols) => (sig f).any fun d =>
-      d.merge.isSome && cols.length == d.entryWidth && cols.all leaf
-  | .eq a b => leaf a && leaf b && ((witness q a).isSome || (witness q b).isSome)
-  | _ => false
-
-def programOk (P : Program) (sig : Signature) : Bool := P.all fun c => match c with
-  | .decl f d => !namePrefix.isPrefixOf f && match d.merge with
-    | none => true
-    | some (.merge oldVars newVars body res) =>
-        decide (MergeSpec.BindersOk (.merge oldVars newVars body res) d.outArity) &&
-          (oldVars ++ newVars).all (fun v => !namePrefix.isPrefixOf v) &&
-          body.all (tableActionOk sig (oldVars ++ newVars)) &&
-          res.length == d.outArity && valueExprsOk sig (oldVars ++ newVars) res
-  | .check q => queryOk sig q && q.vars.all (fun v => !namePrefix.isPrefixOf v)
-  | .rule r => queryOk sig r.query &&
-      r.query.vars.all (fun v => (witness r.query (.var v)).isSome) &&
-      r.actions.all (tableActionOk sig r.query.vars)
-  | _ => true
-
-def encodePattern (i : Nat) : Pattern → Pattern
-  | .expr (.app f cols) => .expr (.app f (cols ++ [.var (proofVar i)]))
-  | p => p
-
-def premiseExpr (q : Query) (i : Nat) (p : Pattern) : Option Expr := match p with
-  | .expr _ => some (.var (proofVar i))
-  | .eq a b => do
-      let j ← witness q a <|> witness q b
-      some (.app subtermName [a, .var (proofVar j)])
-
-def encodeAction (pf : Expr) : Action → Action
-  | .expr (.app f cols) => .expr (.app f (cols ++ [pf]))
-  | a => a
-
-def encodeRule (i : Nat) (r : Rule) : Option Rule := do
-  let ps ← r.query.zipIdx.mapM fun pi => premiseExpr r.query pi.2 pi.1
-  let payload := r.query.vars.map Expr.var ++ ps
-  some { r with
-    query := r.query.zipIdx.map fun pi => encodePattern pi.2 pi.1
-    actions := r.actions.zipIdx.map fun aj =>
-      encodeAction (.app (ruleName i aj.2) payload) aj.1 }
-
-/-- An inactive table write reasserts the existing proof term. -/
-def encodeMergeBody (f : FnName) (oldVars newVars : List Var) (body : List Action) :
-    List Action :=
-  body.zipIdx.map fun aj =>
-    match encodeAction (.app (bodyName f aj.2)
-        [.var (proofVar 0), .var (proofVar 1)]) aj.1 with
-    | .expr e => .expr (.ite (oldVars.map Expr.var) (newVars.map Expr.var)
-        (.var (proofVar 0)) e)
-    | a => a
-
-/-- Equal data retains the old outputs and their proof. -/
-def encodeMergeResult (f : FnName) (oldVars newVars : List Var) (res : List Expr) :
-    List Expr :=
-  let select := Expr.ite (oldVars.map Expr.var) (newVars.map Expr.var)
-  (oldVars.zip res).map (fun ve => select (.var ve.1) ve.2) ++
-    [select (.var (proofVar 0))
-      (.app (resultName f) [.var (proofVar 0), .var (proofVar 1)])]
-
-def encodeDecl (f : FnName) (d : FnDecl) : FnDecl :=
-  match d.merge with
-  | some (.merge oldVars newVars body res) =>
-    { d with
-      outArity := d.outArity + 1
-      merge := some (.merge (oldVars ++ [proofVar 0]) (newVars ++ [proofVar 1])
-        (encodeMergeBody f oldVars newVars body) (encodeMergeResult f oldVars newVars res)) }
-  | _ => d
-
-def proofDecls (P : Program) : Program :=
-  .decl subtermName (ctor 2) :: P.zipIdx.flatMap fun ci => match ci.1 with
-    | .decl f d => match d.merge with
-      | some (.merge _ _ body _) => .decl (resultName f) (ctor 2) ::
-          body.zipIdx.map fun aj => .decl (bodyName f aj.2) (ctor 2)
-      | _ => []
-    | .rule r => r.actions.zipIdx.map fun aj =>
-        .decl (ruleName ci.2 aj.2) (ctor (r.query.vars.length + r.query.length))
-    | _ => []
-
-def encodeCmd (i : Nat) : Cmd → Option Cmd
-  | .decl f d => some (.decl f (encodeDecl f d))
-  | .rule r => (encodeRule i r).map Cmd.rule
-  | .check q => some (.check (q.zipIdx.map fun pi => encodePattern pi.2 pi.1))
-  | c => some c
-
-/-- Instrument flat table programs, including every congruence-compiled program in
-the current source fragment. Equality witnesses come from their table premises. -/
-def encode (P : Program) : Option Program := do
-  let C ← SourceProof.contextOf P
-  if !programOk P C.sig then none else do
-    let body ← P.zipIdx.mapM fun ci => encodeCmd ci.2 ci.1
-    some (proofDecls P ++ body)
+/-- Instrument a union-free program: every rule also logs its firings. -/
+def encode (P : Program) : Option Program :=
+  if programOk P then some { commands := encodeCmds P.commands 0, check := P.check } else none
 
 end Egglog.Provenance

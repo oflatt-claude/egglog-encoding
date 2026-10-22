@@ -2,34 +2,6 @@ import Mathlib.Data.List.Basic
 import EgglogSemantics.Spec.Syntax
 
 namespace Egglog
-/-! ### Signatures -/
-/-- A constructor has no merge specification. The converse fails at an undeclared name,
-which is what "declaration is required" means. -/
-theorem Signature.IsCtor.mergeOf {sig : Signature} {f : FnName} (h : sig.IsCtor f) :
-    sig.mergeOf f = none := by
-  obtain ⟨d, hd, hm⟩ := h
-  rw [Signature.mergeOf, hd, Option.bind_some, hm]
-
-/-- A name with a merge specification is not a constructor. -/
-theorem Signature.not_isCtor {sig : Signature} {f : FnName} {m : MergeSpec}
-    (hm : sig.mergeOf f = some m) : ¬ sig.IsCtor f := fun h => by
-  rw [h.mergeOf] at hm; exact absurd hm (by simp)
-
-/-- **An undeclared name is not a constructor.** The one direction the old reading had
-backwards, and the whole content of the change: `Expr.eval` gets stuck on such a name. -/
-theorem Signature.not_isCtor_of_none {sig : Signature} {f : FnName} (h : sig f = none) :
-    ¬ sig.IsCtor f := fun ⟨_, hd, _⟩ => by rw [h] at hd; exact absurd hd (by simp)
-
-/-- A declaration whose entry has no merge is a constructor. -/
-theorem Signature.isCtor_of_decl {sig : Signature} {f : FnName} {d : FnDecl}
-    (hd : sig f = some d) (hm : d.merge = none) : sig.IsCtor f := ⟨d, hd, hm⟩
-
-/-- Under `AllConstructors` nothing has a merge specification, so every premise naming
-one — a `MergeStep.collide`'s, say — is contradictory. -/
-theorem Signature.AllConstructors.elim {sig : Signature} (h : sig.AllConstructors)
-    {f : FnName} {m : MergeSpec} (hm : sig.mergeOf f = some m) : False := by
-  rw [h f] at hm; exact absurd hm (by simp)
-
 namespace Expr
 /-- Structural induction over `Expr`, with the induction hypothesis given for every element
 of an application's argument list. `Term.recTerm`'s twin. -/
@@ -37,11 +9,9 @@ of an application's argument list. `Term.recTerm`'s twin. -/
 theorem recExpr {motive : Expr → Prop} (lit : ∀ l, motive (.lit l)) (var : ∀ v, motive (.var v))
     (app : ∀ f args, (∀ a ∈ args, motive a) → motive (.app f args))
     (min : ∀ a b, motive a → motive b → motive (.min a b))
-    (ite : ∀ lhs rhs yes no, (∀ a ∈ lhs, motive a) → (∀ a ∈ rhs, motive a) →
-      motive yes → motive no → motive (.ite lhs rhs yes no)) (e : Expr) : motive e :=
+    (e : Expr) : motive e :=
   Expr.rec (motive_1 := motive) (motive_2 := fun args => ∀ a ∈ args, motive a) lit var
     (fun f args ih => app f args ih) (fun a b iha ihb => min a b iha ihb)
-    (fun lhs rhs yes no ihlhs ihrhs ihyes ihno => ite lhs rhs yes no ihlhs ihrhs ihyes ihno)
     (fun a ha => by simp at ha)
     (fun _ _ iht ihts a ha => (List.mem_cons.mp ha).elim (fun h => h ▸ iht) (ihts a)) e
 

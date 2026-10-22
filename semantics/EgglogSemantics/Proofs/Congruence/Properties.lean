@@ -14,11 +14,10 @@ private theorem actions_unionFree_append {as bs : List Action}
 
 mutual
 
-/-- Compiled constructions write entries and never assert a built-in union. -/
+/-- Compiled constructions write rows and never assert a built-in union. -/
 theorem encodeBuild_unionFree : ∀ e : Expr, Actions.UnionFree (encodeBuild e)
   | .lit _ | .var _ => ⟨trivial, trivial⟩
   | .min a b => actions_unionFree_append (encodeBuild_unionFree a) (encodeBuild_unionFree b)
-  | .ite _ _ _ _ => trivial
   | .app _ es => actions_unionFree_append (encodeBuildArgs_unionFree es) ⟨trivial, trivial, trivial⟩
 
 theorem encodeBuildArgs_unionFree : ∀ es : List Expr, Actions.UnionFree (encodeBuildArgs es)
@@ -35,112 +34,85 @@ theorem encodeAction_unionFree (a : Action) : Actions.UnionFree (encodeAction a)
     exact actions_unionFree_append
       (actions_unionFree_append (encodeBuild_unionFree a) (encodeBuild_unionFree b))
       ⟨trivial, trivial, trivial⟩
+  | delete _ => trivial
 
 theorem encodeActions_unionFree (as : List Action) : Actions.UnionFree (encodeActions as) := by
   induction as with
   | nil => trivial
   | cons a as ih => exact actions_unionFree_append (encodeAction_unionFree a) ih
 
-private theorem mem_actions_unionFree {as : List Action} (h : Actions.UnionFree as) :
-    ∀ a ∈ as, a.UnionFree := by
-  induction as with
-  | nil => simp
-  | cons a as ih =>
-      intro b hb
-      rcases List.mem_cons.mp hb with rfl | hb
-      · exact h.1
-      · exact ih h.2 b hb
+theorem encodeRule_unionFree (r : Rule) : (encodeRule r).UnionFree :=
+  encodeActions_unionFree r.actions
+
+/-- Every maintenance rule deletes a row and writes a row; none unions. -/
+private theorem rebuildRules_unionFree (f : FnName) (k : Nat) :
+    ∀ ro ∈ rebuildRules f k, ro.1.UnionFree := by
+  intro ro hro
+  unfold rebuildRules at hro
+  rcases List.mem_cons.mp hro with rfl | hro
+  · exact ⟨trivial, trivial, trivial⟩
+  rcases List.mem_append.mp hro with hro | hro
+  · obtain ⟨i, _, rfl⟩ := List.mem_map.mp hro
+    exact ⟨trivial, trivial, trivial⟩
+  · rw [List.mem_singleton] at hro
+    subst hro
+    exact ⟨trivial, trivial, trivial⟩
 
 private theorem maintenance_unionFree (P : Program) :
-    ∀ c ∈ maintenanceRules P, c.command.UnionFree := by
-  intro c hc
-  simp only [maintenanceRules, List.mem_cons, List.mem_flatMap] at hc
-  rcases hc with rfl | ⟨⟨f, k⟩, _, hc⟩
-  · exact ⟨trivial, trivial⟩
-  · simp only [rebuildRules, List.mem_cons, List.mem_map] at hc
-    rcases hc with rfl | ⟨i, _, rfl⟩ <;> exact ⟨trivial, trivial⟩
+    ∀ ro ∈ maintenanceRules P, ro.1.UnionFree := by
+  intro ro hro
+  simp only [maintenanceRules, List.mem_cons, List.mem_flatMap] at hro
+  rcases hro with rfl | rfl | ⟨⟨f, k⟩, _, hro⟩
+  · exact ⟨trivial, trivial, trivial⟩
+  · exact ⟨trivial, trivial, trivial⟩
+  · exact rebuildRules_unionFree f k ro hro
 
-private theorem inRuleset_unionFree (R : RulesetName) (c : Command)
-    (hc : c.command.UnionFree) : (inRuleset R c).command.UnionFree := by
-  unfold inRuleset
-  split <;> simp_all only [Cmd.UnionFree, Rule.UnionFree]
+private theorem encodeRules_unionFree (i : Nat) (rs : List Rule) :
+    ∀ ro ∈ encodeRules i rs, ro.1.UnionFree := by
+  intro ro hro
+  obtain ⟨ri, _, rfl⟩ := List.mem_map.mp hro
+  exact encodeRule_unionFree ri.1
 
-private theorem allMaintenance_unionFree (P : Program) :
-    ∀ c ∈ allMaintenanceRules P, c.command.UnionFree := by
-  intro c hc
-  simp only [allMaintenanceRules, List.mem_append, List.mem_flatMap, List.mem_map] at hc
-  rcases hc with hc | ⟨R, _, c, hc, rfl⟩
-  · exact maintenance_unionFree P c hc
-  · exact inRuleset_unionFree R c (maintenance_unionFree P c hc)
-
-private theorem tableDecl_unionFree (arity : Nat) : (tableDecl arity).UnionFree := by
-  simp [FnDecl.UnionFree, tableDecl, mergeBody, Action.UnionFree]
-
-private theorem prelude_unionFree (P : Program) :
-    ∀ c ∈ encodePrelude P, c.command.UnionFree := by
-  intro c hc
-  simp only [encodePrelude, List.mem_cons, List.mem_append, List.mem_flatMap,
-    List.not_mem_nil, or_false] at hc
-  rcases hc with (rfl | ⟨⟨f, k⟩, _, hc⟩) | hc
-  · exact tableDecl_unionFree 1
-  · rcases hc with rfl | rfl
-    · simp [Cmd.UnionFree, FnDecl.UnionFree, ctorDecl]
-    · exact tableDecl_unionFree k
-  · exact allMaintenance_unionFree P c hc
-
-private theorem cmd_unionFree (i : Nat) (c : Cmd) :
-    ∀ d ∈ encodeCmd i c, d.command.UnionFree := by
-  intro d hd
+private theorem cmd_unionFree (P : Program) (i : Nat) (c : Cmd) :
+    ∀ co ∈ encodeCmd P i c, co.1.UnionFree := by
+  intro co hco r hr
   cases c with
-  | decl f decl => simp [encodeCmd] at hd
-  | rule r =>
-      simp only [encodeCmd, List.mem_singleton] at hd
-      subst d
-      exact encodeActions_unionFree (r.actions.map leaderAction)
-  | check q =>
-      simp only [encodeCmd, List.mem_singleton] at hd
-      subst d
-      trivial
-  | run R | saturate R =>
-      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hd
-      rcases hd with rfl | rfl <;> trivial
+  | run rs =>
+      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hco
+      rcases hco with rfl | rfl
+      · simp only [Cmd.rules] at hr
+        obtain ⟨ro, hro, rfl⟩ := List.mem_map.mp hr
+        exact encodeRules_unionFree i rs ro hro
+      · simp only [Cmd.rules] at hr
+        obtain ⟨ro, hro, rfl⟩ := List.mem_map.mp hr
+        exact maintenance_unionFree P ro hro
+  | saturate rs =>
+      simp only [encodeCmd, List.mem_cons, List.not_mem_nil, or_false] at hco
+      rcases hco with rfl | rfl
+      · simp only [Cmd.rules] at hr
+        obtain ⟨ro, hro, rfl⟩ := List.mem_map.mp hr
+        rcases List.mem_append.mp hro with hro | hro
+        · exact encodeRules_unionFree i rs ro hro
+        · exact maintenance_unionFree P ro hro
+      · simp only [Cmd.rules] at hr
+        obtain ⟨ro, hro, rfl⟩ := List.mem_map.mp hr
+        exact maintenance_unionFree P ro hro
 
-private theorem cmds_unionFree (P : Program) (i : Nat) :
-    ∀ c ∈ encodeCmds P i, c.command.UnionFree := by
-  induction P generalizing i with
+private theorem cmds_unionFree (P : Program) (cs : List Cmd) (i : Nat) :
+    ∀ co ∈ encodeCmds P cs i, co.1.UnionFree := by
+  induction cs generalizing i with
   | nil => simp [encodeCmds]
   | cons c cs ih =>
-      intro d hd
-      rcases List.mem_append.mp hd with hd | hd
-      · exact cmd_unionFree i c d hd
-      · exact ih (i + 1) d hd
+      intro co hco
+      rcases List.mem_append.mp hco with hco | hco
+      · exact cmd_unionFree P i c co hco
+      · exact ih _ co hco
 
-/-- No source union survives in a command, rule head, or merge body. -/
+/-- No source union survives in a compiled rule. -/
 theorem encode_unionFree (P : Program) : Program.UnionFree (encode P) := by
-  have hall : ∀ c ∈ encode P, c.UnionFree := by
-    intro c hc
-    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hc
-    rcases List.mem_append.mp hd with hd | hd
-    · exact prelude_unionFree P d hd
-    · exact cmds_unionFree P 0 d hd
-  generalize encode P = q at *
-  induction q with
-  | nil => trivial
-  | cons c cs ih => exact ⟨hall c (by simp), ih fun d hd => hall d (by simp [hd])⟩
-
-/-- Any compiled prefix is union-free, with the prelude of any complete program. -/
-theorem encodePrefix_unionFree (P pre : Program) (i : Nat) :
-    Program.UnionFree ((encodePrelude P ++ encodeCmds pre i).map Command.command) := by
-  have hall : ∀ c ∈ (encodePrelude P ++ encodeCmds pre i).map Command.command,
-      c.UnionFree := by
-    intro c hc
-    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hc
-    rcases List.mem_append.mp hd with hd | hd
-    · exact prelude_unionFree P d hd
-    · exact cmds_unionFree pre i d hd
-  generalize (encodePrelude P ++ encodeCmds pre i).map Command.command = q at *
-  induction q with
-  | nil => trivial
-  | cons c cs ih => exact ⟨hall c (by simp), ih fun d hd => hall d (by simp [hd])⟩
+  intro c hc
+  simp only [encode, compile] at hc
+  obtain ⟨co, hco, rfl⟩ := List.mem_map.mp hc
+  exact cmds_unionFree P P.commands 0 co hco
 
 end Egglog.Congruence

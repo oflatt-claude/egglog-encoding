@@ -5,7 +5,7 @@ import EgglogSemantics.Proofs.Step
 namespace Egglog
 
 /-- Split a successful mathematical execution at a command-list boundary. -/
-theorem ProgramStep.append_inv {p q : Program} {d e : Database}
+theorem ProgramStep.append_inv {p q : List Cmd} {d e : Database}
     (hr : ProgramStep d (p ++ q) e) : ∃ mid, ProgramStep d p mid ∧ ProgramStep mid q e := by
   induction p generalizing d with
   | nil => exact ⟨d, .nil, hr⟩

@@ -1,7 +1,8 @@
 # Validation recipes live in scripts/check.py; these names remain public aliases.
 CHECK_TARGETS := \
 	check nits test python-check python-nits rust-check rust-nits proof-tests \
-	lean-check lean-difftest lean-congruence-test lean-provenance-test lean-resugar-test \
+	lean-check lean-difftest lean-compiled-difftest lean-congruence-test lean-provenance-test \
+	lean-resugar-test \
 	lean-certificate-test lean-update-fixtures lean-egg-test lean-update-egg-snapshots \
 	paper paper-check paper-extract update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \

@@ -1,19 +1,7 @@
-import EgglogSemantics.Proofs.Congruence.Match
-import EgglogSemantics.Proofs.Congruence.Flatten
+import EgglogSemantics.Congruence.Reader
 import EgglogSemantics.Congruence.Relational
-import EgglogSemantics.Proofs.Congruence.State
-import EgglogSemantics.Proofs.Congruence.UnionFind
-import EgglogSemantics.Proofs.Congruence.Execution
-import EgglogSemantics.Proofs.Congruence.Merge
-import EgglogSemantics.Proofs.Congruence.Maintenance
-import EgglogSemantics.Proofs.Congruence.Head
-import EgglogSemantics.Proofs.Congruence.MaintenanceDescent
-import EgglogSemantics.Proofs.Congruence.ForwardHead
-import EgglogSemantics.Proofs.Congruence.RunState
-import EgglogSemantics.Proofs.Congruence.Rounds
-import EgglogSemantics.Proofs.Congruence.Prelude
-import EgglogSemantics.Proofs.Congruence.Globals
-import EgglogSemantics.Proofs.Congruence.Complete
+import EgglogSemantics.Proofs.Congruence.Properties
+import EgglogSemantics.Tests.Parse
 
 /-! Executable regressions for rebuilding, existence, and ordered query flattening. -/
 
@@ -23,31 +11,34 @@ set_option linter.hashCommand false
 
 private def atom (f : FnName) : Expr := .app f []
 private def term (f : FnName) : Term := .app f []
+private def global (a : Action) : Cmd := .run [⟨[], [a]⟩]
 
 private def nestedUnion : Program :=
-  [.decl "A" (ctorDecl 0), .decl "B" (ctorDecl 0), .decl "F" (ctorDecl 1),
-   .action (.expr (.app "F" [atom "A"])), .action (.expr (.app "F" [atom "B"])),
-   .action (.union (atom "A") (atom "B"))]
+  ⟨[global (.expr (.app "F" [atom "A"])), global (.expr (.app "F" [atom "B"])),
+    global (.union (atom "A") (atom "B"))], []⟩
 
 private def runSameClass (P : Program) (a b : Term) : Bool :=
-  (execM P).any fun d => sameClassF d a b
+  (exec P).any fun d => sameClassF d a b
 
 -- Child re-keying and the view collision must make the parents equal.
 #guard runSameClass (encode nestedUnion) (.app "F" [term "A"]) (.app "F" [term "B"])
 
--- This would pass vacuously if the reader ignored the rebuild: removing the schedule
+-- This would pass vacuously if the reader ignored the rebuild: removing the saturations
 -- must lose the parent equality. The source has no run that could fire maintenance.
-#guard !(runSameClass ((encode nestedUnion).filter fun c => match c with
-    | .saturate _ => false | _ => true) (.app "F" [term "A"]) (.app "F" [term "B"]))
+#guard !(runSameClass ⟨(encode nestedUnion).commands.filter fun c => match c with
+    | .saturate _ => false | _ => true, []⟩ (.app "F" [term "A"]) (.app "F" [term "B"]))
+
+-- Rebuilding leaves one union-find row per value and one view row per class.
+#guard (exec (encode nestedUnion)).any fun d =>
+  d.rowCount ufName == 4 && d.rowCount (viewName "F") == 1 &&
+    d.rowCount (viewName "A") == 1 && d.rowCount (viewName "B") == 1
 
 private def missingPremise : Program :=
-  [.decl "A" (ctorDecl 0), .decl "B" (ctorDecl 0), .decl "Missing" (ctorDecl 0),
-   .action (.expr (atom "A")), .action (.expr (atom "B")),
-   .rule ⟨[.expr (atom "Missing")], [.union (atom "A") (atom "B")], "R"⟩,
-   .saturate "R"]
+  ⟨[global (.expr (atom "A")), global (.expr (atom "B")),
+    .saturate [⟨[.expr (atom "Missing")], [.union (atom "A") (atom "B")]⟩]], []⟩
 
--- Declaration is not existence. An absent premise cannot justify this union.
-#guard (execM (encode missingPremise)).isSome
+-- A premise that was never built cannot justify this union.
+#guard (exec (encode missingPremise)).isSome
 #guard !(runSameClass (encode missingPremise) (term "A") (term "B"))
 #guard !(runSameClass (encode missingPremise) (term "Missing") (term "Missing"))
 
@@ -63,6 +54,13 @@ private def missingPremise : Program :=
   (.eq (.var "x") (.var "x")) [("x", term "Missing")]
 #guard Relational.patternHolds (FDatabase.empty.addTerm (term "A"))
   (.eq (.var "x") (.var "x")) [("x", term "A")]
+-- A disequality needs both sides held and distinct.
+#guard !Relational.patternHolds (FDatabase.empty.addTerm (term "A"))
+  (.ne (.var "x") (.var "y")) [("x", term "A"), ("y", term "B")]
+#guard Relational.patternHolds ((FDatabase.empty.addTerm (term "A")).addTerm (term "B"))
+  (.ne (.var "x") (.var "y")) [("x", term "A"), ("y", term "B")]
+#guard !Relational.patternHolds ((FDatabase.empty.addTerm (term "A")).addTerm (term "B"))
+  (.ne (.var "x") (.var "y")) [("x", term "A"), ("y", term "A")]
 
 private def orderedQuery : Query :=
   [.eq (.app "F" [.app "G" [.var "x"], .app "G" [.var "x"]])
@@ -78,20 +76,21 @@ example : encodeQuery orderedQuery 0 =
     .expr (.app (viewName "H") [.var "@v3", .var "@v4"]),
     .eq (.var "@v2") (.var "@v4")], 5) := rfl
 
--- Source tags are original command positions, even though declarations and builds expand.
-#guard ((compile missingPremise).filterMap (·.ruleOrigin)).contains (.source 5)
-#guard ((allMaintenanceRules missingPremise).filterMap (·.ruleOrigin)).count
-  (.rebuild .compress) == 2
-#guard ((rebuildRules "F" 2).filterMap (·.ruleOrigin)) ==
-  [.rebuild (.eclass "F"), .rebuild (.child "F" 0), .rebuild (.child "F" 1)]
+-- One origin per compiled rule, in `Program.rules` order; the source tag is the rule's
+-- position among the source rules, here the third rule.
+#guard (compile missingPremise).origins.length == (encode missingPremise).rules.length
+#guard (compile missingPremise).origins.contains (.source 2)
+#guard ((maintenanceRules missingPremise).map Prod.snd).count (.rebuild .compress) == 1
+#guard ((rebuildRules "F" 2).map Prod.snd) ==
+  [.rebuild (.eclass "F"), .rebuild (.child "F" 0), .rebuild (.child "F" 1),
+   .rebuild (.viewCollide "F")]
 #guard tableRole nestedUnion ufName == some .unionFind
 #guard tableRole nestedUnion (viewName "F") == some (.view "F")
 #guard tableRole nestedUnion "F" == none
 
--- No proof declaration or history relation is emitted, and tables have one value column.
-#guard (encode nestedUnion).all fun c => match c with
-  | .decl f d => d.outArity == 1 && (f == ufName ||
-      nestedUnion.ctors.any fun fk => f == fk.1 || f == viewName fk.1)
-  | _ => true
+-- Every source command compiles to itself and a rebuild.
+#guard (encode missingPremise).commands.length == 2 * 3
+#guard (encode ⟨[.run [⟨[], [.expr (atom "A")]⟩]], [.expr (atom "A")]⟩).check.map Pattern.toEgg ==
+  ["(@AView @v0)"]
 
 end Egglog.Congruence

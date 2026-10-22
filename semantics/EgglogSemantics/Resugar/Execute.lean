@@ -5,13 +5,11 @@ namespace Egglog.Resugar
 
 open SourceProof (Proof)
 
-/-- Run the instrumented compilation of `P` with `exec` and lift every retained row. -/
+/-- Run the instrumented compilation of `P` with `exec` and lift a proof of every row. -/
 def certificates (exec : Program → Option FDatabase) (P : Program) :
     Option (List Proof) := do
-  let target := Congruence.encode P
-  let C ← SourceProof.contextOf target
-  let annotated ← Provenance.encode target
+  let annotated ← Provenance.encode (Congruence.encode P)
   let d ← exec annotated
-  (Provenance.retainedRows C.sig d.terms).mapM (extractRow P ·)
+  extractAll P d.terms
 
 end Egglog.Resugar

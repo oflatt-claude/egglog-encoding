@@ -1,7 +1,7 @@
-import EgglogSemantics.Impl.Merge
+import EgglogSemantics.Impl.Interp
 
 /-! Outcomes for executable sanity checks. `none` means the interpreter did not produce
-an outcome (for example, exhausted fuel); it never means that a language check failed. -/
+an outcome (for example, exhausted fuel); it never means that the check failed. -/
 
 namespace Egglog
 
@@ -13,17 +13,14 @@ def ExecutionResult.succeeded : ExecutionResult → Bool
   | .ok _ => true
   | .checkFailed => false
 
-/-- Execute checks with an explicit failure result. The ordinary command runner retains
-its existing `Option` interface; its inability to execute is outside the result type. -/
+/-- Run the commands with `step`, then decide the final check with `holds`. -/
 def observeWith (step : FDatabase → Cmd → Option FDatabase)
-    (holds : FDatabase → Query → Bool) (db : FDatabase) : Program → Option ExecutionResult
-  | [] => some (.ok db)
-  | .check q :: cs =>
-      if holds db q then observeWith step holds db cs else some .checkFailed
-  | c :: cs => (step db c).bind fun db' => observeWith step holds db' cs
+    (holds : FDatabase → Query → Bool) (db : FDatabase) (P : Program) :
+    Option ExecutionResult :=
+  (P.commands.foldlM step db).map fun d => if holds d P.check then .ok d else .checkFailed
 
-/-- The general interpreter with observable check failure, for sanity tests. -/
-def observeM (P : Program) : Option ExecutionResult :=
-  observeWith FDatabase.execCmdM (fun d q => !(matchQuery d q).isEmpty) FDatabase.empty P
+/-- `Eval`, computed: the general interpreter with observable check failure. -/
+def observe (P : Program) : Option ExecutionResult :=
+  observeWith execCmd FDatabase.holds FDatabase.empty P
 
 end Egglog

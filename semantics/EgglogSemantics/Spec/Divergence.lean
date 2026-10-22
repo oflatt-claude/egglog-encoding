@@ -8,28 +8,23 @@ namespace Egglog
 def InfiniteTrace (rel : Database → Database → Prop) (d : Database) : Prop :=
   ∃ trace : Nat → Database, trace 0 = d ∧ ∀ n, rel (trace n) (trace (n + 1))
 
-def MergeDiverges (d : Database) : Prop := InfiniteTrace MergeStep d
-
 /-- A run that changes congruence, so saturation continues past it. -/
-def ChangingRunStep (R : RulesetName) (d e : Database) : Prop :=
-  RunStep R d e ∧ Cong d ≠ Cong e
+def ChangingRun (rs : List Rule) (d e : Database) : Prop :=
+  e = RunRules rs d ∧ Cong d ≠ Cong e
 
-/-- Saturation can diverge between rounds or inside a reached merge phase. -/
-def SaturateDiverges (R : RulesetName) (d : Database) : Prop :=
-  InfiniteTrace (ChangingRunStep R) d ∨
-    ∃ mid, Relation.ReflTransGen (ChangingRunStep R) d mid ∧
-      MergeDiverges (RunRules R mid)
+/-- Saturation diverges when every round changes congruence. -/
+def SaturateDiverges (rs : List Rule) (d : Database) : Prop :=
+  InfiniteTrace (ChangingRun rs) d
 
-/-- Only runs and saturations can diverge. -/
+/-- Only saturations can diverge. -/
 inductive CmdDiverges (d : Database) : Cmd → Prop where
-  | run {R : RulesetName} : MergeDiverges (RunRules R d) → CmdDiverges d (.run R)
-  | saturate {R : RulesetName} : SaturateDiverges R d → CmdDiverges d (.saturate R)
+  | saturate {rs : List Rule} : SaturateDiverges rs d → CmdDiverges d (.saturate rs)
 
-/-- A finite command list diverges at a command after a successful finite prefix. -/
-inductive ProgramDiverges : Database → Program → Prop where
-  | head {d : Database} {c : Cmd} {cs : Program} :
+/-- A command list diverges at a command after a successful finite prefix. -/
+inductive ProgramDiverges : Database → List Cmd → Prop where
+  | head {d : Database} {c : Cmd} {cs : List Cmd} :
       CmdDiverges d c → ProgramDiverges d (c :: cs)
-  | tail {d mid : Database} {c : Cmd} {cs : Program} :
+  | tail {d mid : Database} {c : Cmd} {cs : List Cmd} :
       CmdStep d c mid → ProgramDiverges mid cs → ProgramDiverges d (c :: cs)
 
 end Egglog

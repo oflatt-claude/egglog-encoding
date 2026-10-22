@@ -6,119 +6,100 @@ namespace Egglog.Tests.SourceProofCorrectness
 
 open SourceProof
 
-private def ctor : FnDecl := ⟨0, 1, none, none⟩
 def premise : Term := .app "A" []
 def conclusion : Term := .app "B" []
 def derive : Rule :=
-  ⟨[.expr (.app "A" [])], [.expr (.app "B" [])], "R"⟩
-def initial : Rule := ⟨[], [.expr premise.toExpr], "seed"⟩
-def program : Program :=
-  [.decl "A" ctor, .decl "B" ctor, .rule initial, .run "seed", .rule derive, .run "R"]
+  ⟨[.expr (.app "A" [])], [.expr (.app "B" [])]⟩
+def initial : Rule := ⟨[], [.expr premise.toExpr]⟩
+def program : Program := ⟨[.run [initial], .run [derive]], [.expr conclusion.toExpr]⟩
 def certificate : Proof :=
-  .rule ⟨conclusion, conclusion⟩ 4 [] [.rule ⟨premise, premise⟩ 2 [] []]
+  .rule ⟨conclusion, conclusion⟩ 1 [] [.rule ⟨premise, premise⟩ 0 [] []]
 
-private def declaredA : Database :=
-  { Database.empty with sig := Function.update Database.empty.sig "A" (some ctor) }
-private def declared : Database :=
-  { declaredA with sig := Function.update declaredA.sig "B" (some ctor) }
-private def seeded : Database := { declared with rules := insert initial ∅ }
-private def built : Database := RunRules "seed" seeded
-private def registered : Database := { built with rules := insert derive built.rules }
-def reached : Database := RunRules "R" registered
+private def seeded : Database := Database.empty
+private def registered : Database := RunRules [initial] seeded
+def reached : Database := RunRules [derive] registered
 
-private theorem constructors : declared.sig.AllConstructors := by
-  intro f
-  by_cases hb : f = "B"
-  · subst f; rfl
-  · by_cases ha : f = "A"
-    · subst f; rfl
-    · simp [declared, declaredA, Database.empty, Signature.mergeOf, hb, ha]
+theorem source_reached : ProgramStep Database.empty program.commands reached :=
+  .cons rfl (.cons rfl .nil)
 
-private theorem normal {d : Database} (hc : d.sig.AllConstructors) : MergeNormal d := by
-  intro row hr
-  obtain ⟨dc, hd, hm, _⟩ := hr.1
-  exact (hm (by simpa [Signature.mergeOf, hd] using hc row.name)).elim
-
-private theorem empty_normal {d : Database} (he : d.eqs = ∅) : MergeNormal d := by
-  intro row hr
-  exact (he ▸ hr.2).elim
-
-theorem source_reached : ProgramStep Database.empty program reached := by
-  exact .cons (.of_reach rfl (empty_normal rfl))
-    (.cons (.of_reach rfl (empty_normal rfl))
-      (.cons (.of_reach rfl (normal constructors))
-        (.cons (.of_reach rfl (normal constructors))
-          (.cons (.of_reach rfl (normal constructors))
-            (.cons (.of_reach rfl (normal constructors)) .nil)))))
-
-private theorem source_fragment : program.Fragment := by
-  refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide, by decide⟩
-  intro n hn
-  have hnames : ∀ n ∈ program.names, ¬ "@".isPrefixOf n := by
-    simp only [String.isPrefixOf, String.startsWith_string_iff]
-    decide
-  exact hnames n hn
+theorem source_fragment : program.Fragment := by
+  refine ⟨by decide, by decide, ?_, by decide, by decide, by decide, by decide⟩
+  simp only [String.isPrefixOf, String.startsWith_string_iff]
+  decide
 
 theorem certificate_accepted :
     check program certificate = some ⟨conclusion, conclusion⟩ := by
-  have hok : sourceOk program = true := by
-    exact decide_eq_true source_fragment
+  have hok : sourceOk program = true := decide_eq_true source_fragment
   simp only [check, hok, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   decide
 
+private theorem initial_deleteFree : ∀ r ∈ [initial], r.DeleteFree := by
+  simp [Rule.DeleteFree, Actions.DeleteFree, initial, Action.DeleteFree, Action.monotoneB]
+
+private theorem derive_deleteFree : ∀ r ∈ [derive], r.DeleteFree := by
+  simp [Rule.DeleteFree, Actions.DeleteFree, derive, Action.DeleteFree, Action.monotoneB]
+
 private theorem premise_asserted : (premise, premise) ∈ registered.eqs := by
-  have hc : (seeded.addTerm premise).Contained built :=
-    Database.Contained.mem_sUnion ⟨initial, by simp [seeded], rfl,
-      [], ⟨[], .nil, .nil⟩, rfl⟩
+  have hf : seeded.addTerm premise ∈ RuleResults seeded initial :=
+    ⟨[], ⟨[], .nil, .nil⟩, rfl⟩
+  have hc := SourceMeaning.firing_contained_round initial_deleteFree
+    (by simp) hf
   exact hc.eqs (Set.mem_insert _ _)
 
 private theorem initial_match : ValidQuerySubst registered derive.query [] := by
-  have ha : premise ∈ registered.terms := Cong.direct premise_asserted
   refine ⟨[[]], .cons ⟨⟨List.Perm.refl [], by simp⟩, ?_⟩ .nil, .single []⟩
-  exact .expr ha rfl (ha.mono (Database.Contained.addTerms _ _))
+  exact .atom rfl (.direct premise_asserted)
+
+private theorem premise_retained : (premise, premise) ∈ reached.eqs := by
+  change (premise, premise) ∈ (RunRules [derive] registered).eqs
+  rw [RunRules.eq_addEqs derive_deleteFree]
+  exact Or.inl premise_asserted
 
 theorem premise_exists : premise ∈ reached.terms :=
-  (Database.Contained.sUnion registered _).terms (Cong.direct premise_asserted)
+  (StoredCong.direct premise_retained).mem_left
 
 private theorem conclusion_asserted : (conclusion, conclusion) ∈ reached.eqs := by
-  have hc : (registered.addTerm conclusion).Contained reached :=
-    Database.Contained.mem_sUnion ⟨derive, by simp [registered], rfl,
-      [], initial_match, rfl⟩
+  have hf : registered.addTerm conclusion ∈ RuleResults registered derive :=
+    ⟨[], initial_match, rfl⟩
+  have hc := SourceMeaning.firing_contained_round derive_deleteFree
+    (by simp) hf
   exact hc.eqs (Set.mem_insert _ _)
 
-theorem conclusion_exists : conclusion ∈ reached.terms := by
-  have hf : evalLocalActions registered derive.actions [] =
-      some (registered.addTerm conclusion) := rfl
-  have hc : (registered.addTerm conclusion).Contained reached :=
-    Database.Contained.mem_sUnion ⟨derive, by simp [registered], rfl,
-      [], initial_match, hf⟩
-  exact hc.terms (Database.mem_addTerm _ _)
+theorem conclusion_exists : conclusion ∈ reached.terms :=
+  (StoredCong.direct conclusion_asserted).mem_left
 
 theorem conclusion_not_initial :
-    check program (.rule ⟨conclusion, conclusion⟩ 2 [] []) = none := by
+    check program (.rule ⟨conclusion, conclusion⟩ 0 [] []) = none := by
   have hok : sourceOk program = true := decide_eq_true source_fragment
   simp only [check, hok, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   decide
 
 theorem missing_premise_rejected :
-    check program (.rule ⟨conclusion, conclusion⟩ 4 [] []) = none := by
+    check program (.rule ⟨conclusion, conclusion⟩ 1 [] []) = none := by
   have hok : sourceOk program = true := decide_eq_true source_fragment
   simp only [check, hok, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
   decide
 
-private theorem reached_wf : reached.WF :=
-  (source_reached.ctorState Database.CtorState.empty source_fragment.ctorsOnly).wf
+private theorem reached_wf : reached.WF := source_reached.wf Database.WF.empty
 
-theorem source_saturated (R : RulesetName) : RunSaturated R reached := by
-  have hfixed : RunRules R reached = reached := by
-    apply (runRules_eq_self_iff R reached).mpr
-    intro r hr _ out hout
+theorem source_saturated (c : Cmd) (hc : c ∈ program.commands) :
+    RunSaturated c.rules reached := by
+  have hdf : ∀ r ∈ c.rules, r.DeleteFree := by
+    simp only [program, List.mem_cons, List.not_mem_nil, or_false] at hc
+    rcases hc with rfl | rfl
+    · exact initial_deleteFree
+    · exact derive_deleteFree
+  have hfixed : RunRules c.rules reached = reached := by
+    apply (runRules_eq_self_iff c.rules reached hdf).mpr
+    intro r hr out hout
     have hr' : r = derive ∨ r = initial := by
-      change r ∈ insert derive (insert initial (∅ : Set Rule)) at hr
-      simpa using hr
+      simp only [program, List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl
+      · exact Or.inr (List.mem_singleton.mp hr)
+      · exact Or.inl (List.mem_singleton.mp hr)
     rcases hr' with rfl | rfl
     · obtain ⟨σ, _, hf⟩ := hout
-      have he : evalLocalActions reached derive.actions σ =
+      have he : evalActions σ reached derive.actions =
           some (reached.addTerm conclusion) := rfl
       rw [he] at hf
       obtain rfl := Option.some.inj hf
@@ -127,26 +108,26 @@ theorem source_saturated (R : RulesetName) : RunSaturated R reached := by
       · exact conclusion_asserted
       · exact hp
     · obtain ⟨σ, _, hf⟩ := hout
-      have he : evalLocalActions reached initial.actions σ =
+      have he : evalActions σ reached initial.actions =
           some (reached.addTerm premise) := rfl
       rw [he] at hf
       obtain rfl := Option.some.inj hf
       constructor
       rintro p (rfl | hp)
-      · exact (Database.Contained.sUnion registered _).eqs premise_asserted
+      · exact premise_retained
       · exact hp
-  have hn : MergeNormal reached := normal constructors
-  refine ⟨hn, reached, ?_, Database.SameMeaning.refl _⟩
-  change MergeNormalize (RunRules R reached) reached
-  rw [hfixed]
-  exact ⟨.refl, hn⟩
+  rw [RunSaturated, hfixed]
+  exact Database.SameMeaning.refl _
 
 /-- The checker theorem is instantiated with a real premise and a derived conclusion. -/
 theorem accepted_rule_is_supported : Claim.Supported reached ⟨conclusion, conclusion⟩ :=
   check_supported source_reached reached_wf source_saturated certificate_accepted
 
+theorem accepted_rule_infers : reached.Infers conclusion conclusion :=
+  check_infers source_reached reached_wf source_saturated certificate_accepted
+
 theorem accepted_rule_is_sound : Cong reached conclusion conclusion :=
-  check_sound source_reached reached_wf source_saturated certificate_accepted
-    conclusion_exists conclusion_exists
+  (check_sound source_reached reached_wf source_saturated certificate_accepted
+    conclusion_exists conclusion_exists).toCong
 
 end Egglog.Tests.SourceProofCorrectness

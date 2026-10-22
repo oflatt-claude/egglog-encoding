@@ -3,7 +3,8 @@ import EgglogSemantics.Tests.Egg
 import Lean.Data.Json
 
 /-! Source proofs as JSON, for checking the same proof with Rust egglog. A case carries its
-program as `.egg` source, with every rule named `lean-rule-<index>` after its command index,
+program as `.egg` source, with every rule named `lean-rule-<index>` after its position in
+`Program.rules`,
 and one object per proof with the Lean verdict. A proof tree is written as its nodes in
 postorder, sharing repeated subtrees, so every reference is to an earlier node. -/
 
@@ -77,19 +78,10 @@ def certificate (P : Program) (pf : SourceProof.Proof) : Json :=
   Json.mkObj [("nodes", .arr flat.nodes), ("root", toJson root),
     ("accepted", toJson (SourceProof.check P pf).isSome)]
 
-/-- The program as `.egg` source with rules named by command index. -/
+/-- The program as `.egg` source with rules named by their position in `Program.rules`. -/
 def program (P : Program) : Option String := do
-  if !SourceProof.sourceOk P then none else do
-    let C ← SourceProof.contextOf P
-    let commands := P.zipIdx.map fun ci => match ci.1 with
-      | .rule r =>
-        "(rule (" ++ String.intercalate " " (r.query.map (Pattern.toEgg C.sig)) ++ ") (" ++
-          String.intercalate " " (r.actions.map (Action.toEgg C.sig)) ++ ") :name \"" ++
-          ruleName ci.2 ++ "\"" ++
-          (if r.ruleset == "" then "" else " :ruleset " ++ r.ruleset) ++ ")"
-      | c => c.toEgg C.sig
-    some (String.intercalate "\n" (P.eggHeader :: P.rulesetDecls ++
-      commands.filter (· != "")))
+  if !SourceProof.sourceOk P then none else
+    some (P.renderWith fun k => some (ruleName k))
 
 def caseJson (name : String) (P : Program) (cs : List SourceProof.Proof) :
     Option Json := do
@@ -98,8 +90,8 @@ def caseJson (name : String) (P : Program) (cs : List SourceProof.Proof) :
     ("certificates", .arr (cs.map (certificate P)).toArray)])
 
 /-- The curated fixtures, which both checkers must judge alike. -/
-def fixtures : Option (List Json) := do
-  let fs ← Fixtures.all
+def fixtures (_ : Unit) : Option (List Json) := do
+  let fs ← Fixtures.all ()
   fs.mapM fun f => caseJson f.name f.program f.certificates
 
 end Egglog.Resugar.Export

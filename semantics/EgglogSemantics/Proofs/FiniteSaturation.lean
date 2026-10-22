@@ -5,11 +5,9 @@ import EgglogSemantics.Proofs.Writes
 
 /-! Existence of finite normalization and saturation requires actual progress.
 
-A finite equation universe still supplies a maximal equation set, but no longer proves
-normalization: destructive changes to current entries can cycle while
-equations remain unchanged. The execution theorems below instead require well-founded
-progress and totality at reachable states. The generated compiler must prove those
-premises for its merge bodies and rules. -/
+A finite equation universe supplies a maximal reachable equation set, but deleting
+and rebuilding rows can cycle within that universe. The execution theorems below
+therefore require well-founded progress at reachable states. -/
 
 namespace Egglog
 
@@ -54,58 +52,31 @@ theorem exists_reachable_normal_of_wellFounded {α : Type*}
         exact ⟨last, (Relation.ReflTransGen.single hs).trans hreach, hlast⟩
   exact aux d .refl
 
-/-- A principled replacement for the former finite-equation-bound normalization
-helper. The hypothesis includes both availability of a merge and well-founded progress
-whenever current-entry collisions remain. -/
-theorem mergeNormalize_exists_of_wellFounded (d : Database)
+/-- Saturation terminates when every changing round decreases a well-founded relation. -/
+theorem saturateReach_exists_of_wellFounded (R : List Rule) (d : Database)
     (lt : Database → Database → Prop) (hwf : WellFounded lt)
-    (hprogress : ∀ e, MergeClosure d e → ¬ MergeNormal e →
-      ∃ e', MergeStep e e' ∧ lt e' e) :
-    ∃ e, MergeNormalize d e := by
-  obtain ⟨e, hc, hn⟩ :=
-    exists_reachable_normal_of_wellFounded MergeStep MergeNormal d lt hwf hprogress
-  exact ⟨e, .of_normal hc hn⟩
-
-/-- A natural-number potential is enough when generated merges each
-have a strictly decreasing weighted store size. -/
-theorem mergeNormalize_exists_of_measure (d : Database) (rank : Database → Nat)
-    (hprogress : ∀ e, MergeClosure d e → ¬ MergeNormal e →
-      ∃ e', MergeStep e e' ∧ rank e' < rank e) :
-    ∃ e, MergeNormalize d e :=
-  mergeNormalize_exists_of_wellFounded d (fun e' e => rank e' < rank e)
-    (measure rank).wf hprogress
-
-/-- Repeated completed rounds terminate when a round always exists and every round
-that changes meaning decreases a well-founded relation. The constructed execution stops
-at its first unchanged round, as required by `SaturateReach`. -/
-theorem saturateReach_exists_of_wellFounded (R : RulesetName) (d : Database)
-    (lt : Database → Database → Prop) (hwf : WellFounded lt)
-    (htotal : ∀ e, Relation.ReflTransGen (RunStep R) d e → ∃ e', RunStep R e e')
-    (hprogress : ∀ e e', Relation.ReflTransGen (RunStep R) d e →
-      RunStep R e e' → ¬ e.SameMeaning e' → lt e' e) :
+    (hprogress : ∀ e, Relation.ReflTransGen (fun a b => b = RunRules R a) d e →
+      Cong e ≠ Cong (RunRules R e) → lt (RunRules R e) e) :
     ∃ e, SaturateReach R d e := by
   classical
-  have aux : ∀ e, Relation.ReflTransGen (RunStep R) d e →
+  have aux : ∀ e, Relation.ReflTransGen (fun a b => b = RunRules R a) d e →
       ∃ e', SaturateReach R e e' := by
     intro e
     induction e using hwf.induction with
     | h e ih =>
       intro he
-      obtain ⟨mid, hs⟩ := htotal e he
-      by_cases hm : e.SameMeaning mid
-      · exact ⟨mid, .done hs hm⟩
-      · obtain ⟨last, hlast⟩ := ih mid (hprogress e mid he hs hm) (he.tail hs)
-        exact ⟨last, .step hs hm hlast⟩
+      by_cases hm : Cong e = Cong (RunRules R e)
+      · exact ⟨_, .fixpoint hm⟩
+      · obtain ⟨last, hlast⟩ := ih _ (hprogress e he hm) (he.tail rfl)
+        exact ⟨last, .again hm hlast⟩
   exact aux d .refl
 
-/-- Specialization to a natural-number potential on completed rounds. -/
-theorem saturateReach_exists_of_measure (R : RulesetName) (d : Database)
+theorem saturateReach_exists_of_measure (R : List Rule) (d : Database)
     (rank : Database → Nat)
-    (htotal : ∀ e, Relation.ReflTransGen (RunStep R) d e → ∃ e', RunStep R e e')
-    (hprogress : ∀ e e', Relation.ReflTransGen (RunStep R) d e →
-      RunStep R e e' → ¬ e.SameMeaning e' → rank e' < rank e) :
+    (hprogress : ∀ e, Relation.ReflTransGen (fun a b => b = RunRules R a) d e →
+      Cong e ≠ Cong (RunRules R e) → rank (RunRules R e) < rank e) :
     ∃ e, SaturateReach R d e :=
   saturateReach_exists_of_wellFounded R d (fun e' e => rank e' < rank e)
-    (measure rank).wf htotal hprogress
+    (measure rank).wf hprogress
 
 end Egglog

@@ -1,4 +1,4 @@
-import EgglogSemantics.Proofs.SourceProof.Context
+import EgglogSemantics.Proofs.SourceProof.Actions
 import EgglogSemantics.Proofs.Completion
 
 namespace Egglog.SourceProof

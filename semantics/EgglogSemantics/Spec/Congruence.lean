@@ -56,25 +56,16 @@ end
 def Database.terms (db : Database) : Set Term :=
   {t | ∃ p ∈ db.eqs, t ∈ p.1.subterms ∨ t ∈ p.2.subterms}
 
-/-- Every application the database holds is a **declared** function's entry: its head is
-declared, and it carries that declaration's `entryWidth` children. -/
-def Database.DeclaredTerms (db : Database) : Prop :=
-  ∀ f as, Term.app f as ∈ db.terms → ∃ d, db.sig f = some d ∧ as.length = d.entryWidth
-
 /-- Literals only occur beside themselves in asserted equations. -/
 def Database.LitsIsolated (db : Database) : Prop :=
   ∀ p ∈ db.eqs, p.1.isLit ∨ p.2.isLit → p.1 = p.2
 
-/-- Environment bindings exist, and literals have singleton equivalence classes. -/
+/-- Literals have singleton equivalence classes. -/
 structure Database.WF (db : Database) : Prop where
-  envInTerms : ∀ b ∈ db.env, b.2 ∈ db.terms
   litsIsolated : db.LitsIsolated
 
-/-- Completed states agree on semantic equality and represented existence. -/
+/-- States agree on semantic equality and represented existence. -/
 structure Database.SameMeaning (d₁ d₂ : Database) : Prop where
-  sig : d₁.sig = d₂.sig
-  env : d₁.env = d₂.env
-  rules : d₁.rules = d₂.rules
   congr : ∀ a b, Cong d₁ a b ↔ Cong d₂ a b
 
 end Egglog

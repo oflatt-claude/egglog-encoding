@@ -1,41 +1,7 @@
-(F (A)) = (F (A))  congr 0
-  (F (A)) = (F (A))  fiat
-  (A) = (A)  fiat
+(F (A)) = (F (A))  rule 1 {}
 
-(F (A)) = (F (A))  trans
-  (F (A)) = (F (A))  symm
-    (F (A)) = (F (A))  fiat
-  (F (A)) = (F (A))  fiat
+(F (A)) = (F (A))  rule 1 {}
 
-(F (A)) = (F (A))  trans
-  (F (A)) = (F (A))  fiat
-  (F (A)) = (F (A))  fiat
+(A) = (A)  rule 1 {}
 
-(F (A)) = (F (A))  fiat
-
-(F (A)) = (F (A))  fiat
-
-(F (A)) = (F (A))  fiat
-
-(A) = (A)  fiat
-
-(F (A)) = (F (A))  fiat
-
-(A) = (A)  fiat
-
-(A) = (A)  trans
-  (A) = (A)  symm
-    (A) = (A)  fiat
-  (A) = (A)  fiat
-
-(A) = (A)  trans
-  (A) = (A)  fiat
-  (A) = (A)  fiat
-
-(A) = (A)  fiat
-
-(A) = (A)  fiat
-
-(A) = (A)  fiat
-
-(A) = (A)  fiat
+(A) = (A)  rule 1 {}

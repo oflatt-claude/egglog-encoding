@@ -4,73 +4,65 @@ import EgglogSemantics.Resugar.Claim
 
 namespace Egglog.Resugar
 
-open SourceProof (Claim Context Proof)
+open SourceProof (Claim Proof)
 
 def sourceSubst (vars : List Var) (σ : Env) : Option Env :=
   vars.mapM fun v => (Env.lookup v σ).map (v, ·)
 
-def rebuild (P : Program) (C : Context) (kind : Congruence.RebuildOrigin)
+/-- A maintenance firing's written row, justified from its first two premises, the rows.
+Path compression chains two edges; a UF collision chains the two parents through their
+key; moving an output chains the edge into the view; moving a child is congruence at that
+position; a view collision chains the two outputs through their application. -/
+def rebuild (P : Program) (kind : Congruence.RebuildOrigin)
     (ps : List Proof) : Option Proof := do
-  let [p, q] := ps | none
+  let p :: q :: _ := ps | none
   match kind with
-  | .compress => trans P C p q
+  | .compress => trans P p q
+  | .collide => do
+    let rev ← symm P q
+    trans P rev p
   | .eclass _ => do
-    let rev ← symm P C q
-    trans P C rev p
-  | .child _ k => congr P C p k q
-
-def merge (P : Program) (C : Context) (f : FnName) (old new : Proof)
-    (c : Claim) : Option Proof :=
-  finish P C old c <|> finish P C new c <|> do
-    let p ← match Congruence.tableRole P f with
-      | some .unionFind => do
-        let rev ← symm P C old
-        trans P C rev new
-      | some (.view _) => do
-        let rev ← symm P C new
-        trans P C old rev
-      | none => none
-    finish P C p c
+    let rev ← symm P q
+    trans P rev p
+  | .child _ k => congr P p k q
+  | .viewCollide _ => do
+    let rev ← symm P p
+    trans P q rev
 
 /-- The proof `k` builds must establish the source claim of the relational fact. -/
-def expect (P : Program) (C : Context) (fact : Term) (k : Claim → Option Proof) :
-    Option Proof := do
-  let c ← factClaim P C fact
+def expect (P : Program) (fact : Term) (k : Claim → Option Proof) : Option Proof := do
+  let c ← factClaim P fact
   let p ← k c
   if p.claim == c then some p else none
 
 mutual
 
-/-- Lift relational provenance to a source proof of the same fact's claim. -/
-def liftProof (P : Program) (C : Context) (compiled : List Congruence.Command) :
+/-- Lift relational provenance to a source proof of the same fact's claim. `origins` has
+one entry per rule of the compiled program, in the order of `Program.rules`. -/
+def liftProof (P : Program) (origins : List Congruence.RuleOrigin) :
     Provenance.Proof → Option Proof
-  | .subterm t parent => expect P C t fun c => do
-      let p ← liftProof P C compiled parent
-      finish P C p c
-  | .merge t f old new => expect P C t fun c => do
-      let p ← liftProof P C compiled old
-      let q ← liftProof P C compiled new
-      merge P C f p q c
-  | .rule t command σ premises => expect P C t fun c => do
-      let tagged ← compiled[command]?
-      let origin ← tagged.ruleOrigin
-      let ps ← liftAll P C compiled premises
+  | .subterm t parent => expect P t fun c => do
+      let p ← liftProof P origins parent
+      finish P p c
+  | .rule t k σ premises => expect P t fun c => do
+      let origin ← origins[k]?
+      let ps ← liftAll P origins premises
       match origin with
       | .source index => do
-        let .rule r ← P[index]? | none
+        let r ← P.rules[index]?
         let σ' ← sourceSubst r.query.vars σ
-        let sourcePremises ← query P C σ' r.query ps
-        node P C (.rule c index σ' sourcePremises)
+        let sourcePremises ← query P σ' r.query ps
+        node P (.rule c index σ' sourcePremises)
       | .rebuild kind => do
-        let p ← rebuild P C kind ps
-        finish P C p c
+        let p ← rebuild P kind ps
+        finish P p c
 
-def liftAll (P : Program) (C : Context) (compiled : List Congruence.Command) :
+def liftAll (P : Program) (origins : List Congruence.RuleOrigin) :
     List Provenance.Proof → Option (List Proof)
   | [] => some []
   | p :: ps => do
-    let q ← liftProof P C compiled p
-    let qs ← liftAll P C compiled ps
+    let q ← liftProof P origins p
+    let qs ← liftAll P origins ps
     some (q :: qs)
 
 end
@@ -79,15 +71,16 @@ end
 original source claim. -/
 def lift (P : Program) (pf : Provenance.Proof) : Option Proof := do
   if !SourceProof.sourceOk P then none else do
-    let C ← SourceProof.contextOf P
     let compiled := Congruence.compile P
-    let fact ← Provenance.check (compiled.map Congruence.Command.command) pf
-    let wanted ← factClaim P C fact
-    let result ← liftProof P C compiled pf
+    let fact ← Provenance.check compiled.program pf
+    let wanted ← factClaim P fact
+    let result ← liftProof P compiled.origins pf
     if SourceProof.check P result == some wanted then some result else none
 
-def extractRow (P : Program) (r : Entry) : Option Proof := do
-  let intermediate ← Provenance.extractRow (Congruence.encode P) r
-  lift P intermediate
+/-- Lift a source proof of every data row of the compiled program from the final state of
+its instrumented run. -/
+def extractAll (P : Program) (terms : List Term) : Option (List Proof) := do
+  let rows ← Provenance.extract (Congruence.encode P) terms
+  rows.mapM fun tp => lift P tp.2
 
 end Egglog.Resugar

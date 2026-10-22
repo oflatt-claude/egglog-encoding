@@ -4,12 +4,9 @@ import EgglogSemantics.Spec.Term
 /-!
 # The front end's static checks
 
-Six checks: `Scoped` — every variable used is bound; `Evaluable` — every applied name is a
-declared constructor; `UnionLegal` — no `union` operand is a literal; `WidthOk` — every
-application carries its declaration's column counts; `DeclsFresh` — no name is declared
-twice; `MergeDeclared` — every name a `:merge` applies is declared. `Scoped` checks each
-block in a fixed `Scope`; queries bind their pattern variables; `UnionLegal` reads no
-context; the other four thread a `Signature`, moved only by `Cmd.sigBind`.
+`Scoped` — every variable used is bound, and a fact or build is an application;
+`UnionLegal` — no `union` operand is a literal; `UnionFree` — no `union` at all;
+`OrderingFree` — no `min`. The untyped language has no declarations to check against.
 -/
 
 namespace Egglog
@@ -23,21 +20,24 @@ abbrev Scope := List Var
 def Expr.Scoped (e : Expr) (Γ : Scope) : Prop := ∀ v ∈ e.vars, v ∈ Γ
 
 /-- `e` is an application. Query facts and `expr` actions are restricted to applications;
-an `.eq` fact is not. -/
+an equality or disequality fact is not. -/
 def Expr.IsApp : Expr → Prop
   | .app _ _ => True
   | _ => False
 
-/-- Query facts must be applications; equality patterns have no shape restriction. -/
+/-- Query facts must be applications; equality and disequality patterns have no shape
+restriction. -/
 def Pattern.Scoped : Pattern → Prop
   | .expr e => e.IsApp
   | .eq _ _ => True
+  | .ne _ _ => True
 
 /-- An action scopes when each expression it evaluates does, plus the application
-restriction on a bare `expr`. -/
+restriction on a bare `expr` and on a delete. -/
 def Action.Scoped : Action → Scope → Prop
   | .expr e, Γ => e.IsApp ∧ e.Scoped Γ
   | .union e₁ e₂, Γ => e₁.Scoped Γ ∧ e₂.Scoped Γ
+  | .delete e, Γ => e.IsApp ∧ e.Scoped Γ
 
 /-- The scope a query's patterns bind. -/
 def Query.bind (q : Query) (Γ : Scope) : Scope := Γ ∪ Query.vars q
@@ -51,85 +51,21 @@ def Query.bind (q : Query) (Γ : Scope) : Scope := Γ ∪ Query.vars q
 @[simp] def Rule.Scoped (r : Rule) (Γ : Scope) : Prop :=
   (∀ p ∈ r.query, p.Scoped) ∧ Actions.Scoped r.actions (Query.bind r.query Γ)
 
-/-- A `:merge` body is walked into by `MergeDeclared` alone: it runs in the environment
-`mergeEnv` builds rather than in the ambient context, so `Scoped` and `Evaluable` say
-nothing about one. -/
-@[simp] def Cmd.Scoped : Cmd → Scope → Prop
-  | .rule r, Γ => r.Scoped Γ
-  | .run _, _ => True
-  | .saturate _, _ => True
-  | .decl _ _, _ => True
-  | .check q, _ => ∀ p ∈ q, p.Scoped
+/-- Every rule the command fires. -/
+@[simp] def Cmd.Scoped (c : Cmd) (Γ : Scope) : Prop := ∀ r ∈ c.rules, r.Scoped Γ
 
-/-- Every command in the same initial scope. -/
-@[simp] def Program.Scoped : Program → Scope → Prop
-  | [], _ => True
-  | c :: cs, Γ => c.Scoped Γ ∧ Program.Scoped cs Γ
+/-- Every command in the same initial scope, and the final check's facts. -/
+@[simp] def Program.Scoped (P : Program) (Γ : Scope) : Prop :=
+  (∀ c ∈ P.commands, c.Scoped Γ) ∧ ∀ p ∈ P.check, p.Scoped
 
 /-- A program with no free variables: `Program.Scoped` from the empty scope. -/
-def WellScoped (p : Program) : Prop := Program.Scoped p []
-
-/-! ### Evaluability
-
-`Scoped` is not enough for `Expr.eval` to return a term: an application may be a *lookup*
-or a *primitive*. `Evaluable` rules both out. -/
-
-/-- The signature after a command: only a declaration writes it, as in `CmdStep`. -/
-def Cmd.sigBind : Cmd → Signature → Signature
-  | .decl f d, sig => Function.update sig f (some d)
-  | _, sig => sig
-
-/-- Every application in `e` **builds**: its head is a declared constructor, so evaluating
-`e` cannot get stuck on it. -/
-def Expr.Evaluable (e : Expr) (sig : Signature) : Prop :=
-  ∀ f ∈ e.fns, sig.IsCtor f
-
-/-- A complete atom has a declared head and value-producing columns. -/
-def Expr.AtomEvaluable : Expr → Signature → Prop
-  | .app f cols, sig => (sig f).isSome = true ∧ ∀ g ∈ Expr.fnsList cols, sig.IsCtor g
-  | .ite lhs rhs yes no, sig =>
-      (∀ e ∈ lhs ++ rhs, e.Evaluable sig) ∧ yes.AtomEvaluable sig ∧ no.AtomEvaluable sig
-  | e, sig => e.Evaluable sig
-
-/-- `Action.Scoped`'s companion: every expression the action evaluates builds, and a
-`union` operand is an application — the strongest sound stand-in for egglog's eq-sort
-requirement, which `Action.write` refuses dynamically. A variable operand may hold a literal,
-since a query binds one under a literal argument, so no check reading the expression alone
-admits it. -/
-def Action.Evaluable : Action → Signature → Prop
-  | .expr e, sig => e.AtomEvaluable sig
-  | .union e₁ e₂, sig => (e₁.IsApp ∧ e₁.Evaluable sig) ∧ e₂.IsApp ∧ e₂.Evaluable sig
-
-@[simp] def Actions.Evaluable : List Action → Signature → Prop
-  | [], _ => True
-  | a :: as, sig => a.Evaluable sig ∧ Actions.Evaluable as sig
-
-/-- Nothing is asked of a query fact, which is matched rather than evaluated. -/
-@[simp] def Rule.Evaluable (r : Rule) (sig : Signature) : Prop :=
-  Actions.Evaluable r.actions sig
-
-@[simp] def Cmd.Evaluable : Cmd → Signature → Prop
-  | .rule r, sig => r.Evaluable sig
-  | .run _, _ => True
-  | .saturate _, _ => True
-  | .decl _ _, _ => True
-  | .check q, sig => ∀ p ∈ q, match p with
-      | .expr e => e.AtomEvaluable sig
-      | .eq a b => a.Evaluable sig ∧ b.Evaluable sig
-
-/-- Each command in the signature the earlier ones leave. -/
-@[simp] def Program.Evaluable : Program → Signature → Prop
-  | [], _ => True
-  | c :: cs, sig => c.Evaluable sig ∧ Program.Evaluable cs (c.sigBind sig)
+def WellScoped (P : Program) : Prop := Program.Scoped P []
 
 /-! ### `union` legality
 
-egglog rejects a `union` on a sort that is not an eq sort statically (`constraint.rs:697-701`
-against `typechecking.rs:966-969`, and `core.rs:514` of the lowering) where `Spec/Eval.lean`'s
-`Action.write` only gets stuck on it. The typed rule needs base sorts, which this model does not
-have, so this is its syntactic half: an operand is not a literal *expression*.
-`Action.Evaluable` asks the stronger `Expr.IsApp` of one and its docstring records the same gap,
-so the reach this adds is a `:merge` body, which no `Evaluable` walks into. -/
+egglog rejects a `union` on a sort that is not an eq sort statically, where
+`Spec/Eval.lean`'s `Action.write` only gets stuck on it. This is its syntactic half: an
+operand is not a literal *expression*. -/
 
 /-- Neither operand of a `union` is a literal. -/
 def Action.UnionLegal : Action → Prop
@@ -140,158 +76,16 @@ def Action.UnionLegal : Action → Prop
   | [] => True
   | a :: as => a.UnionLegal ∧ Actions.UnionLegal as
 
-@[simp] def MergeSpec.UnionLegal : MergeSpec → Prop
-  | .merge _ _ body _ => Actions.UnionLegal body
+@[simp] def Cmd.UnionLegal (c : Cmd) : Prop := ∀ r ∈ c.rules, Actions.UnionLegal r.actions
 
-/-- Its actions, and its `:merge` bodies: a `union` runs in either. -/
-@[simp] def Cmd.UnionLegal : Cmd → Prop
-  | .rule r => Actions.UnionLegal r.actions
-  | .run _ => True
-  | .saturate _ => True
-  | .decl _ d => ∀ ms ∈ d.merge, ms.UnionLegal
-  | .check _ => True
-
-@[simp] def Program.UnionLegal : Program → Prop
-  | [] => True
-  | c :: cs => c.UnionLegal ∧ Program.UnionLegal cs
-
-/-! ### Column widths
-
-A complete atom carries every declared column; its children, and equality or union
-operands, use value-expression widths. Evaluability and widths are separate because
-`Expr.Evaluable` records names rather than application argument counts. -/
-
-mutual
-
-/-- Every application in `e` carries the argument count its declaration fixes. A name with
-no entry has nothing to disagree with; that a program declares what it applies is
-`Evaluable`'s business. -/
-def Expr.WidthOk : Expr → Signature → Prop
-  | .lit _, _ => True
-  | .var _, _ => True
-  | .app f args, sig =>
-      (∀ d, sig f = some d → args.length = d.arity) ∧ Expr.WidthOkList args sig
-  | .min a b, sig => Expr.WidthOk a sig ∧ Expr.WidthOk b sig
-  | .ite lhs rhs yes no, sig =>
-      Expr.WidthOkList lhs sig ∧ Expr.WidthOkList rhs sig ∧
-        yes.WidthOk sig ∧ no.WidthOk sig
-
-/-- `Expr.WidthOk` over an argument list. -/
-def Expr.WidthOkList : List Expr → Signature → Prop
-  | [], _ => True
-  | e :: es, sig => Expr.WidthOk e sig ∧ Expr.WidthOkList es sig
-
-end
-
-/-- A complete atom uses the entry width at its root and value widths in its columns. -/
-def Expr.AtomWidthOk : Expr → Signature → Prop
-  | .app f cols, sig =>
-      (∀ d, sig f = some d → cols.length = d.entryWidth) ∧ Expr.WidthOkList cols sig
-  | .min a b, sig => Expr.WidthOk a sig ∧ Expr.WidthOk b sig
-  | .ite lhs rhs yes no, sig =>
-      Expr.WidthOkList lhs sig ∧ Expr.WidthOkList rhs sig ∧
-        yes.AtomWidthOk sig ∧ no.AtomWidthOk sig
-  | _, _ => True
-
-/-- Complete atoms have their declared entry width; union operands use value widths. -/
-def Action.WidthOk : Action → Signature → Prop
-  | .expr e, sig => e.AtomWidthOk sig
-  | .union e₁ e₂, sig => e₁.WidthOk sig ∧ e₂.WidthOk sig
-
-@[simp] def Actions.WidthOk : List Action → Signature → Prop
-  | [], _ => True
-  | a :: as, sig => a.WidthOk sig ∧ Actions.WidthOk as sig
-
-/-- Nothing is asked of a query fact, which is matched rather than evaluated. -/
-@[simp] def Rule.WidthOk (r : Rule) (sig : Signature) : Prop :=
-  Actions.WidthOk r.actions sig
-
-/-- Every branch returns the declared number of columns. -/
-@[simp] def MergeSpec.WidthOk : MergeSpec → Nat → Signature → Prop
-  | .merge _ _ body res, n, sig =>
-      res.length = n ∧ Actions.WidthOk body sig ∧ Expr.WidthOkList res sig
-
-/-- Asked of the signature the declaration **installs**, as `Cmd.MergeDeclared` and unlike
-`Cmd.DeclFresh`, so a `:merge` may name the function it resolves. -/
-@[simp] def Cmd.WidthOk : Cmd → Signature → Prop
-  | .rule r, sig => r.WidthOk sig
-  | .run _, _ => True
-  | .saturate _, _ => True
-  | .decl f d, sig => ∀ ms ∈ d.merge, ms.WidthOk d.outArity ((Cmd.decl f d).sigBind sig)
-  | .check q, sig => ∀ p ∈ q, match p with
-      | .expr e => e.AtomWidthOk sig
-      | .eq a b => a.WidthOk sig ∧ b.WidthOk sig
-
-/-- Check each command in the signature left by the earlier commands. -/
-@[simp] def Program.WidthOk : Program → Signature → Prop
-  | [], _ => True
-  | c :: cs, sig => c.WidthOk sig ∧ Program.WidthOk cs (c.sigBind sig)
-
-/-! ### Freshness of a declaration
-
-A redeclaration changes what the signature says of a name the state already has terms of,
-breaking `Database.DeclaredTerms`. -/
-
-@[simp] def Cmd.DeclFresh : Cmd → Signature → Prop
-  | .decl f _, sig => sig f = none
-  | .rule _, _ => True
-  | .run _, _ => True
-  | .saturate _, _ => True
-  | .check _, _ => True
-
-/-- Each command is asked **before** `Cmd.sigBind` installs its declaration; asked after,
-the check would read back `Function.update`'s own entry and always fail. -/
-@[simp] def Program.DeclsFresh : Program → Signature → Prop
-  | [], _ => True
-  | c :: cs, sig => c.DeclFresh sig ∧ Program.DeclsFresh cs (c.sigBind sig)
-
-/-! ### Declaredness of a `:merge`
-
-The one check that walks into a `:merge`. `Evaluable` is the wrong demand there: a merge
-body may `set` another merge function. -/
-
-/-- Every name applied in `e` is a declared function, of any kind. -/
-def Expr.Declared (e : Expr) (sig : Signature) : Prop :=
-  ∀ f ∈ e.fns, sig f ≠ none
-
-/-- A `set` head must be declared outright. -/
-def Action.Declared : Action → Signature → Prop
-  | .expr e, sig => e.Declared sig
-  | .union e₁ e₂, sig => e₁.Declared sig ∧ e₂.Declared sig
-
-@[simp] def Actions.Declared : List Action → Signature → Prop
-  | [], _ => True
-  | a :: as, sig => a.Declared sig ∧ Actions.Declared as sig
-
-@[simp] def MergeSpec.Declared : MergeSpec → Signature → Prop
-  | .merge _ _ body res, sig => Actions.Declared body sig ∧ ∀ e ∈ res, e.Declared sig
-
-/-- Asked of the signature the declaration **installs**, so a `:merge` may name the function
-it resolves. The opposite of `Cmd.DeclFresh`, which is asked before. -/
-@[simp] def Cmd.MergeDeclared : Cmd → Signature → Prop
-  | .decl f d, sig => ∀ ms ∈ d.merge, ms.Declared ((Cmd.decl f d).sigBind sig)
-  | .rule _, _ => True
-  | .run _, _ => True
-  | .saturate _, _ => True
-  | .check _, _ => True
-
-@[simp] def Program.MergeDeclared : Program → Signature → Prop
-  | [], _ => True
-  | c :: cs, sig => c.MergeDeclared sig ∧ Program.MergeDeclared cs (c.sigBind sig)
+@[simp] def Program.UnionLegal (P : Program) : Prop := ∀ c ∈ P.commands, c.UnionLegal
 
 /-! ### Union-freedom
 
-The one check that reads no signature, because it is about *positions* rather than names:
-where a program may assert an equation. `Action.union` is the only action that asserts one
-between distinct terms — every other write goes through `Database.addTerm`, which records
-reflexive pairs alone — so a program with none keeps every state it reaches **diagonal**,
-and on a diagonal state nothing is congruent to anything but itself. That is what makes
-`Database.Recorded` and `Database.Contained` agree there, which is one of the two things
-`Proofs/Merge.lean`'s two `Recorded` transports can be given; `Database.Diag` is the
-state-level reading and `Proofs/Merge.lean` carries it. The other is `OrderingFree` below,
-and neither condition implies the other.
-
-It walks into a rule and into a `:merge`, since a `union` runs in either. -/
+Where a program may assert an equation. `Action.union` is the only action that asserts
+one between distinct terms — every other write records a reflexive pair — so a program
+with none keeps every state it reaches **diagonal**, and on a diagonal state nothing is
+congruent to anything but itself. The compiled target is union-free. -/
 
 /-- The action that asserts an equation between distinct terms, ruled out. -/
 def Action.UnionFree : Action → Prop
@@ -304,41 +98,15 @@ def Action.UnionFree : Action → Prop
 
 @[simp] def Rule.UnionFree (r : Rule) : Prop := Actions.UnionFree r.actions
 
-@[simp] def MergeSpec.UnionFree : MergeSpec → Prop
-  | .merge _ _ body _ => Actions.UnionFree body
+@[simp] def Cmd.UnionFree (c : Cmd) : Prop := ∀ r ∈ c.rules, r.UnionFree
 
-/-- A declaration is union-free when its `:merge` body is: the body is what a collision
-runs. -/
-def FnDecl.UnionFree (d : FnDecl) : Prop := ∀ ms ∈ d.merge, ms.UnionFree
-
-/-- Every declared function's `:merge` body is union-free. Read of a *signature* because a
-`MergeStep` reads the body it runs from one. -/
-def Signature.UnionFree (sig : Signature) : Prop := ∀ f d, sig f = some d → d.UnionFree
-
-@[simp] def Cmd.UnionFree : Cmd → Prop
-  | .rule r => r.UnionFree
-  | .run _ => True
-  | .saturate _ => True
-  | .decl _ d => d.UnionFree
-  | .check _ => True
-
-/-- No signature threading: which actions a command carries does not depend on what is
-declared. -/
-@[simp] def Program.UnionFree : Program → Prop
-  | [] => True
-  | c :: cs => c.UnionFree ∧ Program.UnionFree cs
+@[simp] def Program.UnionFree (P : Program) : Prop := ∀ c ∈ P.commands, c.UnionFree
 
 /-! ### Ordering-freedom
 
-The other condition, and it is about where a program may apply `min`. It compares two terms
-by `Term.blt`, a structural order, where egglog compares by e-class id. It is therefore not
-stable under congruence: `union (f 1) (g 1)` lets `min (f 1) (f 2)` and `min (g 1) (f 2)`
-settle on incongruent terms. On literals it is stable because their classes are singletons, but this untyped
-model cannot tell the two uses apart, so the
-condition excludes `min` outright.
-
-It walks into a rule — both its query, which evaluates its patterns, and its head — and
-into a `:merge`, since a body and its result are evaluated too. -/
+Where a program may apply `min`. It compares two terms by `Term.blt`, a structural order,
+where egglog compares by e-class id. It is therefore not stable under congruence, and the
+source fragment excludes it; the compiled rebuilding is where it is used. -/
 
 mutual
 
@@ -347,7 +115,7 @@ def Expr.hasMin : Expr → Bool
   | .lit _ => false
   | .var _ => false
   | .app _ args => Expr.hasMinList args
-  | .min _ _ | .ite _ _ _ _ => true
+  | .min _ _ => true
 
 def Expr.hasMinList : List Expr → Bool
   | [] => false
@@ -355,7 +123,7 @@ def Expr.hasMinList : List Expr → Bool
 
 end
 
-/-- No order-sensitive minimum or structural conditional in `e`. -/
+/-- No order-sensitive minimum in `e`. -/
 def Expr.OrderingFree (e : Expr) : Prop := e.hasMin = false
 
 /-- `Expr.OrderingFree` over an argument list. -/
@@ -365,10 +133,12 @@ def Expr.OrderingFreeList (es : List Expr) : Prop := Expr.hasMinList es = false
 def Pattern.OrderingFree : Pattern → Prop
   | .expr e => e.OrderingFree
   | .eq e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
+  | .ne e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
 
 def Action.OrderingFree : Action → Prop
   | .expr e => e.OrderingFree
   | .union e₁ e₂ => e₁.OrderingFree ∧ e₂.OrderingFree
+  | .delete e => e.OrderingFree
 
 @[simp] def Actions.OrderingFree : List Action → Prop
   | [] => True
@@ -379,29 +149,11 @@ the substitution. -/
 @[simp] def Rule.OrderingFree (r : Rule) : Prop :=
   (∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions
 
-/-- Pure returns without order-sensitive expressions form the transport fragment. -/
-@[simp] def MergeSpec.OrderingFree : MergeSpec → Prop
-  | .merge _ _ body res => body = [] ∧ Expr.OrderingFreeList res
+@[simp] def Cmd.OrderingFree (c : Cmd) : Prop := ∀ r ∈ c.rules, r.OrderingFree
 
-def FnDecl.OrderingFree (d : FnDecl) : Prop :=
-  ∀ ms ∈ d.merge, ms.OrderingFree
-
-/-- Read of a *signature*, because a `MergeStep` reads the body it runs from one, as
-`Signature.UnionFree`. -/
-def Signature.OrderingFree (sig : Signature) : Prop :=
-  ∀ f d, sig f = some d → d.OrderingFree
-
-@[simp] def Cmd.OrderingFree : Cmd → Prop
-  | .rule r => r.OrderingFree
-  | .run _ => True
-  | .saturate _ => True
-  | .decl _ d => d.OrderingFree
-  | .check q => ∀ p ∈ q, p.OrderingFree
-
-/-- No signature threading, as `Program.UnionFree`. -/
-@[simp] def Program.OrderingFree : Program → Prop
-  | [] => True
-  | c :: cs => c.OrderingFree ∧ Program.OrderingFree cs
+/-- Every rule, and the final check. -/
+@[simp] def Program.OrderingFree (P : Program) : Prop :=
+  (∀ c ∈ P.commands, c.OrderingFree) ∧ ∀ p ∈ P.check, p.OrderingFree
 
 instance (e : Expr) : Decidable e.OrderingFree := inferInstanceAs (Decidable (_ = false))
 instance (es : List Expr) : Decidable (Expr.OrderingFreeList es) :=
@@ -409,28 +161,22 @@ instance (es : List Expr) : Decidable (Expr.OrderingFreeList es) :=
 instance : ∀ p : Pattern, Decidable p.OrderingFree
   | .expr e => inferInstanceAs (Decidable e.OrderingFree)
   | .eq a b => inferInstanceAs (Decidable (a.OrderingFree ∧ b.OrderingFree))
+  | .ne a b => inferInstanceAs (Decidable (a.OrderingFree ∧ b.OrderingFree))
 instance : ∀ a : Action, Decidable a.OrderingFree
   | .expr e => inferInstanceAs (Decidable e.OrderingFree)
   | .union a b => inferInstanceAs (Decidable (a.OrderingFree ∧ b.OrderingFree))
+  | .delete e => inferInstanceAs (Decidable e.OrderingFree)
 instance instDecidableActionsOrderingFree : ∀ as : List Action, Decidable (Actions.OrderingFree as)
   | [] => inferInstanceAs (Decidable True)
   | a :: as => @instDecidableAnd _ _ inferInstance (instDecidableActionsOrderingFree as)
 instance (r : Rule) : Decidable r.OrderingFree :=
   inferInstanceAs (Decidable ((∀ p ∈ r.query, p.OrderingFree) ∧ Actions.OrderingFree r.actions))
-instance : ∀ ms : MergeSpec, Decidable ms.OrderingFree
-  | .merge _ _ body res => inferInstanceAs (Decidable (body = [] ∧ Expr.OrderingFreeList res))
-instance (d : FnDecl) : Decidable d.OrderingFree :=
-  decidable_of_iff (∀ ms ∈ d.merge.toList, ms.OrderingFree)
-    (by unfold FnDecl.OrderingFree; rcases d.merge with _ | ms <;> simp)
-instance : ∀ c : Cmd, Decidable c.OrderingFree
-  | .rule r => inferInstanceAs (Decidable r.OrderingFree)
-  | .run _ => inferInstanceAs (Decidable True)
-  | .saturate _ => inferInstanceAs (Decidable True)
-  | .decl _ d => inferInstanceAs (Decidable d.OrderingFree)
-  | .check q => inferInstanceAs (Decidable (∀ p ∈ q, p.OrderingFree))
-instance instDecidableProgramOrderingFree : ∀ P : Program, Decidable (Program.OrderingFree P)
-  | [] => inferInstanceAs (Decidable True)
-  | c :: cs => @instDecidableAnd _ _ inferInstance (instDecidableProgramOrderingFree cs)
+instance (c : Cmd) : Decidable c.OrderingFree :=
+  inferInstanceAs (Decidable (∀ r ∈ c.rules, r.OrderingFree))
+instance (P : Program) : Decidable (Program.OrderingFree P) :=
+  inferInstanceAs (Decidable ((∀ c ∈ P.commands, c.OrderingFree) ∧ ∀ p ∈ P.check, p.OrderingFree))
+
+/-! ### Keyed variables -/
 
 mutual
 
@@ -441,7 +187,6 @@ def Expr.ArgVar (v : Var) : Expr → Prop
   | .var _ => False
   | .app _ args => Expr.var v ∈ args ∨ Expr.ArgVarList v args
   | .min a b => Expr.ArgVar v a ∨ Expr.ArgVar v b
-  | .ite _ _ _ _ => False
 
 /-- `Expr.ArgVar` over an argument list. -/
 def Expr.ArgVarList (v : Var) : List Expr → Prop
@@ -454,8 +199,8 @@ end
 def Pattern.ArgVar (v : Var) : Pattern → Prop
   | .expr e => Expr.ArgVar v e
   | .eq e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
+  | .ne e₁ e₂ => Expr.ArgVar v e₁ ∨ Expr.ArgVar v e₂
 
 def Query.VarsKeyed (q : Query) : Prop := ∀ v ∈ Query.vars q, ∃ p ∈ q, Pattern.ArgVar v p
-
 
 end Egglog
