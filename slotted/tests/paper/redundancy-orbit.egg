@@ -12,6 +12,7 @@
 ;;; `(Null)`.
 
 (sort U)
+(constructor $Var () U)
 
 (constructor F (U U) U)
 (constructor G (U U) U)

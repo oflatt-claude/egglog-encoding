@@ -11,6 +11,7 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/egglog-surface.egg
 
 (sort U)
+(constructor $Var () U)
 
 (constructor Null () U)
 (constructor Succ (U) U)
@@ -18,7 +19,7 @@
 (constructor Pair (U U) U)
 (constructor IConst () U)
 (constructor Mul (U U) U)
-(constructor Lam (Var U) U :binder 0)
+(constructor Lam (U U) U :binder 0)
 (constructor G (U U) U)
 
 

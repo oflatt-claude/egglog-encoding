@@ -1,4 +1,5 @@
 (sort U)
+(constructor $Var () U)
 
 (constructor Lam (U U) U)
 (constructor App (U U) U)

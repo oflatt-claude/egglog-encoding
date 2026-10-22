@@ -30,7 +30,7 @@ use egglog_experimental::slotted::{Compiler, new_egraph};
 
 let mut compiler = Compiler::default();
 let program = compiler.compile(None, r#"
-    (datatype Expr (Lam Var Expr :binder 0))
+    (datatype Expr ($Var) (Lam Expr Expr :binder 0))
     (let id (Lam $a $a))
     (run 0)
     (check (= id (Lam $b $b)))
@@ -49,14 +49,16 @@ that rollback for REPL inputs.
 
 ```text
 (datatype Expr
-  (Lam Var Expr :binder 0)
-  (Let Expr Var Expr :binder 1)
+  ($Var)
+  (Lam Expr Expr :binder 0)
+  (Let Expr Expr Expr :binder 1)
   (App Expr Expr)
   (Num i64))
 ```
 
-The equivalent long form uses `(sort Expr)` followed by declarations such as
-`(constructor Lam (Var Expr) Expr :binder 0)`.
+The equivalent long form uses `(sort Expr)` and `(constructor $Var () Expr)`,
+followed by declarations such as
+`(constructor Lam (Expr Expr) Expr :binder 0)`.
 
 Every declared equality sort is a **carrier** for slotted terms. Programs may
 have several carriers, including through `datatype*`, but a constructor's term
@@ -64,16 +66,18 @@ children must have the same carrier as its result. Cross-carrier edges are
 rejected. A rewrite, its side patterns, and both sides of a union or equality
 check must also use one carrier.
 
-`Var` is a built-in sort for slot-only columns; it needs no declaration and
-cannot be redeclared. A `Var` argument must be a slot literal such as `$a` or
-`$0`. Terms, globals, and pattern variables are rejected in these positions.
-A `Var` column without a binder annotation is a free slot occurrence.
+`($Var)` enables slot literals such as `$a` or `$0` as terms of that sort.
+It takes no columns or options, and is declared at most once per sort. It is
+a declaration marker: write `$a` in terms, not `($Var ...)`. Sorts without this
+variant accept ordinary constructor terms but reject slot literals and binder
+declarations. There is no built-in `Var` sort.
 
-`:binder` lists the positions that bind slots, counting carrier and `Var`
-columns together and skipping payload columns. Those positions must be distinct,
-contiguous, and followed by the term child they cover. Each binder position must
-have sort `Var`. Multiple binder columns act as nested binders around that one
-covered child; other children remain outside their scope. For `Let` above, the
+`:binder` lists the positions that bind slots, counting carrier columns and
+skipping payload columns. Those positions must be distinct, contiguous, and
+followed by the term child they cover. A binder has the same sort as the other
+children but must be supplied a slot literal: compound terms, globals, and
+pattern variables are rejected in binder positions. Multiple binder columns act
+as nested binders around that one covered child; other children remain outside their scope. For `Let` above, the
 initializer is outside the binder and the body is inside it.
 
 Payload columns currently support `i64` and `String`. Payloads carry no slots.
@@ -93,7 +97,7 @@ and `$-0` means `$0`. Named and numbered slots are distinct. Source spellings
 do not affect alpha-equivalence:
 
 ```slotted
-(datatype Expr (Lam Var Expr :binder 0) (App Expr Expr))
+(datatype Expr ($Var) (Lam Expr Expr :binder 0) (App Expr Expr))
 (let id (Lam $a $a))
 (let constant (Lam $a $a0))
 (run 0)
@@ -107,7 +111,7 @@ names; `$` always introduces a slot. A global name starting with `$` is rejected
 and a global cannot currently store a bare slot invocation such as `(let v $7)`.
 
 ```slotted
-(datatype M (IConst) (Mul M M) (Lam Var M :binder 0))
+(datatype M ($Var) (IConst) (Mul M M) (Lam M M :binder 0))
 
 (let j (IConst))
 (rewrite (Mul a j) a :name "id-right")
@@ -172,7 +176,7 @@ A rewrite's left side may be a constructor pattern or a variable bound by its
 side patterns. An unbound left-hand variable is rejected:
 
 ```slotted
-(datatype U (F U U) (G U) (N))
+(datatype U ($Var) (F U U) (G U) (N))
 (let start (F (N) (N)))
 (rewrite child (G child) :when ((= parent (F child other))))
 (run 1)
@@ -183,6 +187,7 @@ Side patterns may nest, and their variables need not appear on the left:
 
 ```slotted
 (sort U)
+(constructor $Var () U)
 (constructor Null () U)
 (constructor Succ (U) U)
 (constructor Prev (U) U)
@@ -203,6 +208,7 @@ the load to the store, and `p` requires the same address:
 
 ```slotted
 (sort U)
+(constructor $Var () U)
 (constructor Num (i64) U)
 (constructor Mem0 () U)
 (constructor Store (U U U) U)
@@ -225,8 +231,9 @@ bodies. Share a body pattern variable to require that relationship:
 
 ```slotted
 (sort U)
+(constructor $Var () U)
 (constructor Num (i64) U)
-(constructor Lam (Var U) U :binder 0)
+(constructor Lam (U U) U :binder 0)
 (constructor Pair (U U) U)
 (constructor Fired () U)
 
@@ -300,7 +307,8 @@ The following claims are accepted in `check`:
 
 ```slotted
 (sort U)
-(constructor Lam (Var U) U :binder 0)
+(constructor $Var () U)
+(constructor Lam (U U) U :binder 0)
 (constructor Mult (U U) U)
 (constructor Null () U)
 
@@ -321,7 +329,8 @@ not. These constant functions return different free variables:
 
 ```slotted
 (sort U)
-(constructor Lam (Var U) U :binder 0)
+(constructor $Var () U)
+(constructor Lam (U U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
 (run 0)
@@ -333,6 +342,7 @@ A symmetry can make different slot spellings denote equal terms:
 
 ```slotted
 (sort U)
+(constructor $Var () U)
 (constructor F (U U) U)
 (rewrite (F x y) (F y x) :name "comm")
 (let a (F $1 $2))
@@ -346,6 +356,7 @@ Within each carrier, all variable terms belong to one class. Consequently,
 
 ```slotted
 (sort U)
+(constructor $Var () U)
 (constructor F (U U) U)
 (let a (F $1 $2))                 ; something for the graph to hold
 (run 0)
@@ -365,7 +376,8 @@ invariants, and reference-comparison requirements.
 
 ```slotted
 (sort U)
-(constructor Lam (Var U) U :binder 0)
+(constructor $Var () U)
+(constructor Lam (U U) U :binder 0)
 (let p (Lam $0 $3))
 (let q (Lam $0 $4))
 (run 0)
@@ -387,7 +399,8 @@ user rewrites. Export does not run additional rules. For example:
 
 ```slotted
 (sort U)
-(constructor Lam (Var U) U :binder 0)
+(constructor $Var () U)
+(constructor Lam (U U) U :binder 0)
 (let identity (Lam $x $x))
 (run 0)
 (slotted-export "/tmp/slotted-language-example.json")

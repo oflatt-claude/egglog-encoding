@@ -30,6 +30,7 @@ input_file: slotted/tests/multiple-sorts.egg
 (ruleset slotted-apply)
 
 (function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedVariableSort (String) Unit :no-merge :internal-hidden)
 (function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)
 (function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)
 (function SlottedPayloadLayout (String i64 String) Unit :no-merge :internal-hidden)
@@ -573,7 +574,6 @@ input_file: slotted/tests/multiple-sorts.egg
 (relation Reading_0 (Expr Renaming Renaming))
 
 (set (SlottedNodeLayout "SlottedVar_0" 1) ())
-(set (ClassSlots_0 (SlottedVar_0 0)) (map-of 0 0))
 
 (rule ((Equated_0 _a _m _b)
        (!= _a _b)
@@ -679,8 +679,6 @@ input_file: slotted/tests/multiple-sorts.egg
       ((Equated_0 _e (map-insert (map-empty) 0 _v) (SlottedVar_0 0))
        (delete (SlottedVar_0 _v))) :ruleset slotted)
 
-(RenamesToLeader_0 (SlottedVar_0 0) (map-insert (map-empty) 0 0) (SlottedVar_0 0))
-(set (EclassGroup_0 (SlottedVar_0 0)) (set-of (map-insert (map-empty) 0 0)))
 
 (rule ((RenamesToLeader_0 _a _m _c)
        (= _grp (EclassGroup_0 _c))
@@ -745,7 +743,6 @@ input_file: slotted/tests/multiple-sorts.egg
 (relation Reading_1 (Ty Renaming Renaming))
 
 (set (SlottedNodeLayout "SlottedVar_1" 1) ())
-(set (ClassSlots_1 (SlottedVar_1 0)) (map-of 0 0))
 
 (rule ((Equated_1 _a _m _b)
        (!= _a _b)
@@ -851,8 +848,6 @@ input_file: slotted/tests/multiple-sorts.egg
       ((Equated_1 _e (map-insert (map-empty) 0 _v) (SlottedVar_1 0))
        (delete (SlottedVar_1 _v))) :ruleset slotted)
 
-(RenamesToLeader_1 (SlottedVar_1 0) (map-insert (map-empty) 0 0) (SlottedVar_1 0))
-(set (EclassGroup_1 (SlottedVar_1 0)) (set-of (map-insert (map-empty) 0 0)))
 
 (rule ((RenamesToLeader_1 _a _m _c)
        (= _grp (EclassGroup_1 _c))
@@ -898,6 +893,10 @@ input_file: slotted/tests/multiple-sorts.egg
       ((Equated_1 _root (compose _q (compose _mr _cs)) _r))
       :ruleset slotted)
 
+(set (SlottedVariableSort "Expr") ())
+(set (ClassSlots_0 (SlottedVar_0 0)) (map-of 0 0))
+(RenamesToLeader_0 (SlottedVar_0 0) (map-insert (map-empty) 0 0) (SlottedVar_0 0))
+(set (EclassGroup_0 (SlottedVar_0 0)) (set-of (map-insert (map-empty) 0 0)))
 (constructor EZero () Expr)
 (set (SlottedNodeLayout "EZero" 0) ())
 (rule ((= _e1 (EZero))) ((set (ClassSlots_0 _e1) (map-empty))) :ruleset slotted)
@@ -981,6 +980,10 @@ input_file: slotted/tests/multiple-sorts.egg
 (rule ((RenamesToLeader_0 _c3 _m _c') (= _node (ELet _m1 _c1 _m2 _c2 _m3 _c3)) (= _c3 (ordering-max _c3 _c')) (guard (or (bool-!= _c3 _c') (bool= (compose _m _m) _m))) (guard (or (bool-!= _c3 _c') (bool-!= (compose _m3 _m) _m3)))) ((union _node (ELet _m1 _c1 _m2 _c2 (compose _m3 _m) _c')) (delete (ELet _m1 _c1 _m2 _c2 _m3 _c3))) :ruleset slotted-migrate)
 (rule ((RenamesToLeader_0 (ELet _m1 _c1 _mvar0 (SlottedVar_0 0) _m3 _c3) _ml _l) (= _v0 (map-get _mvar0 0)) (map-not-contains (map-image _m1) _v0)) ((Equated_0 (ELet _m1 _c1 _mvar0 (SlottedVar_0 0) _m3 _c3) (inverse (map-remove (inverse _ml) _v0)) _l)) :ruleset slotted)
 (rule ((= _node (ELet _m1 _c1 _mvar0 (SlottedVar_0 0) _m3 _c3)) (= _v0 (map-get _mvar0 0)) (map-contains (map-image _m1) _v0) (= _used (map-union (map-union (map-image _m1) (map-image _mvar0)) (map-image _m3))) (= _fresh0 (find-mapping-total _used (map-of 0 0) (map-empty) (map-empty))) (= _w0 (map-get _fresh0 0))) ((union _node (ELet _m1 _c1 (map-of 0 _w0) (SlottedVar_0 0) (compose (map-insert (map-image _m3) _v0 _w0) _m3) _c3)) (delete (ELet _m1 _c1 _mvar0 (SlottedVar_0 0) _m3 _c3))) :ruleset slotted)
+(set (SlottedVariableSort "Ty") ())
+(set (ClassSlots_1 (SlottedVar_1 0)) (map-of 0 0))
+(RenamesToLeader_1 (SlottedVar_1 0) (map-insert (map-empty) 0 0) (SlottedVar_1 0))
+(set (EclassGroup_1 (SlottedVar_1 0)) (set-of (map-insert (map-empty) 0 0)))
 (constructor TZero () Ty)
 (set (SlottedNodeLayout "TZero" 0) ())
 (rule ((= _e1 (TZero))) ((set (ClassSlots_1 _e1) (map-empty))) :ruleset slotted)

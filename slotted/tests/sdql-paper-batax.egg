@@ -18,8 +18,9 @@
 ;;; `slotted/checks/check-paper-sdql.py` keeps these definitions semantically identical to the
 ;;; corresponding rules in `languages/sdql.egg` and checks both fixture transcriptions.
 (sort U)
+(constructor $Var () U)
 
-(constructor Lambda (Var U) U :binder 0)
+(constructor Lambda (U U) U :binder 0)
 (constructor Sing (U U) U)
 (constructor Add (U U) U)
 (constructor Mult (U U) U)
@@ -30,8 +31,8 @@
 (constructor IfThen (U U) U)
 (constructor SubArray (U U U) U)
 (constructor Unique (U) U)
-(constructor Sum (U Var Var U) U :binder 1 2)
-(constructor Let (U Var U) U :binder 1)
+(constructor Sum (U U U U) U :binder 1 2)
+(constructor Let (U U U) U :binder 1)
 (constructor Num (i64) U)
 
 (rewrite (Let t $x body) (subst body $x t) :name "beta")

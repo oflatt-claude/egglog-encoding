@@ -42,7 +42,6 @@ impl Symbols {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Column {
     Child,
-    Slot,
     Binder,
     Payload(String),
 }
@@ -123,6 +122,7 @@ pub(super) enum Term {
 #[derive(Clone, Default)]
 pub(super) struct Language {
     pub carriers: Vec<Symbols>,
+    pub variable_sorts: BTreeSet<String>,
     pub constructors: BTreeMap<String, Constructor>,
     pub globals: BTreeMap<String, Term>,
     pub slot_names: Slots,

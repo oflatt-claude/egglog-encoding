@@ -17,7 +17,6 @@
 (relation {reading} ({sort} Renaming Renaming))
 
 (set (SlottedNodeLayout "{var}" 1) ())
-(set ({class_slots} ({var} 0)) (map-of 0 0))
 
 (rule (({equated} _a _m _b)
        (!= _a _b)
@@ -123,8 +122,6 @@
       (({equated} _e (map-insert (map-empty) 0 _v) ({var} 0))
        (delete ({var} _v))) :ruleset slotted)
 
-({renames} ({var} 0) (map-insert (map-empty) 0 0) ({var} 0))
-(set ({group} ({var} 0)) (set-of (map-insert (map-empty) 0 0)))
 
 (rule (({renames} _a _m _c)
        (= _grp ({group} _c))

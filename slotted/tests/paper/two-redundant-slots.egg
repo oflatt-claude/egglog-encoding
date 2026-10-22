@@ -12,6 +12,7 @@
 ;;; while an unrelated `k($1,$2)` stays out.
 
 (sort U)
+(constructor $Var () U)
 
 (constructor Mul (U U) U)
 (constructor Swp (U U) U)

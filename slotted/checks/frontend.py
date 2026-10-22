@@ -12,7 +12,7 @@ from slotted import test_program as driver  # noqa: E402
 
 FORMS_TMP = ROOT / "target" / "slotted" / "forms.egg"
 
-L = "(datatype M (N i64) (Add M M) (Mul M M) (Lam Var M :binder 0) (App M M) (Nil))\n"
+L = "(datatype M ($Var) (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n"
 
 #: (expected verdict, what, program)
 PROBES = [
@@ -38,7 +38,11 @@ PROBES = [
     ("refused", ":subsume", L + '(rewrite (Add x y) (Nil) :subsume :name "r")\n'),
     # ---- declarations -------------------------------------------------------------
     ("ok", "datatype", L + "(let a (N 1))\n(run 0)\n"),
-    ("ok", "sort plus constructor", "(sort M)\n(constructor N (i64) M)\n(let a (N 1))\n(run 0)\n"),
+    (
+        "ok",
+        "sort plus constructor",
+        "(sort M)\n(constructor N (i64) M)\n(let a (N 1))\n(run 0)\n",
+    ),
     ("ok", "relation", L + "(relation R (M M))\n"),
     ("ok", "function with :merge", L + "(function Cost (M) i64 :merge (min old new))\n"),
     ("refused", "constructor :cost", "(sort M)\n(constructor N (i64) M :cost 5)\n"),
@@ -108,7 +112,7 @@ PROBES = [
     (
         "ok",
         "constructor names colliding with derived RHS locals",
-        "(datatype U (Start U) (F U) (F_slots U) (F_edge U) (Pair U U))\n"
+        "(datatype U ($Var) (Start U) (F U) (F_slots U) (F_edge U) (Pair U U))\n"
         "(let start (Start $0))\n"
         "(rewrite (Start a) (Pair (F a) (Pair (F_slots a) (F_edge a))))\n"
         "(run 1)\n(check (= start (Pair (F $0) (Pair (F_slots $0) (F_edge $0)))))\n",
@@ -187,31 +191,31 @@ def repeatable_compilation():
 
 REFUSALS_TMP = ROOT / "target" / "slotted" / "refusal.egg"
 
-LANG = "(datatype M (Null) (IConst) (Succ M) (Mul M M) (Lam Var M :binder 0))\n"
+LANG = "(datatype M ($Var) (Null) (IConst) (Succ M) (Mul M M) (Lam M M :binder 0))\n"
 
 #: (what is refused, program, a phrase the message must carry)
 CASES = [
-    ("redeclaring the built-in slot sort", "(datatype Var (V))\n", "reserved"),
+    ("a slot in a sort without $Var", "(datatype M (F M)) (let bad (F $a))", "does not declare $Var"),
     (
-        "a carrier-typed binder column",
+        "a binder without a variable variant",
         "(datatype M (Lam M M :binder 0))\n",
-        "must have sort Var",
+        "must declare $Var",
     ),
-    ("a term in a ground Var column", LANG + "(let bad (Lam (Null) (Null)))\n", "takes a slot literal"),
+    ("a term in a ground binder column", LANG + "(let bad (Lam (Null) (Null)))\n", "takes a slot literal"),
     (
-        "a global in a Var column",
+        "a global in a binder column",
         LANG + "(let alias (Succ $a))\n(let bad (Lam alias (Null)))\n",
         "takes a slot literal",
     ),
     (
-        "a pattern variable in a Var result column",
+        "a pattern variable in a binder result column",
         LANG + "(rewrite (Succ x) (Lam x x))\n",
         "takes a slot literal",
     ),
     (
-        "a term in a nonbinding Var column",
-        "(datatype M (N) (Occurrence Var))\n(let bad (Occurrence (N)))\n",
-        "takes a slot literal",
+        "a variable variant with columns",
+        "(datatype M ($Var M) (N))\n",
+        "$Var takes no columns or options",
     ),
     ("an out-of-range numeric slot", LANG + "(let bad (Succ $9223372036854775808))\n", "signed 64-bit"),
     ("an empty slot name", LANG + "(let bad (Succ $))\n", "invalid slot literal"),
@@ -236,7 +240,11 @@ CASES = [
         "(sort M)\n(constructor Succ (M) M :cost 5)\n",
         "option :cost is not supported",
     ),
-    ("an unknown declaration option", "(sort M)\n(constructor Succ (M) M :wat 1)\n", "option :wat is not supported"),
+    (
+        "an unknown declaration option",
+        "(sort M)\n(constructor Succ (M) M :wat 1)\n",
+        "option :wat is not supported",
+    ),
     # egglog refuses the bare spelling in both positions -- `Unbound symbol` where a term
     # is wanted, `Shadowing is not allowed` where a rule variable would be -- so reading
     # it as a call here was a divergence that bought nothing.
@@ -258,17 +266,17 @@ CASES = [
     ),
     (
         "duplicate binder positions",
-        "(sort M)\n(constructor F (Var M) M :binder 0 0)\n",
+        "(sort M)\n(constructor F (M M) M :binder 0 0)\n",
         "duplicate",
     ),
     (
         "non-contiguous nested binders",
-        "(sort M)\n(constructor F (Var M Var M) M :binder 0 2)\n",
+        "(sort M)\n(constructor F (M M M M) M :binder 0 2)\n",
         "contiguous",
     ),
     (
         "a binder without a covered child",
-        "(sort M)\n(constructor F (M Var) M :binder 1)\n",
+        "(sort M)\n(constructor F (M M) M :binder 1)\n",
         "following child",
     ),
     (
@@ -280,7 +288,11 @@ CASES = [
     # which is the only naming a program may not use. Naming one after a rule VARIABLE
     # used to be refused too, because the carrier was substituted into a hand-written
     # file's text; the machinery is generated now, so `(sort m)` and `(sort N)` are fine.
-    ("a sort the machinery already declares", "(sort Idx)\n(constructor F (Idx) Idx)\n", "is reserved"),
+    (
+        "a sort the machinery already declares",
+        "(sort Idx)\n(constructor F (Idx) Idx)\n",
+        "is reserved",
+    ),
     (
         "a cross-sort union",
         "(datatype* (A (A0)) (B (B0)))\n(let a (A0))\n(let b (B0))\n(union a b)\n",

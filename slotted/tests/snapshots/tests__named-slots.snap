@@ -30,6 +30,7 @@ input_file: slotted/tests/named-slots.egg
 (ruleset slotted-apply)
 
 (function SlottedNodeLayout (String i64) Unit :no-merge :internal-hidden)
+(function SlottedVariableSort (String) Unit :no-merge :internal-hidden)
 (function SlottedEdgeLayout (String i64) Unit :no-merge :internal-hidden)
 (function SlottedBinderLayout (String i64 i64 i64 String) Unit :no-merge :internal-hidden)
 (function SlottedPayloadLayout (String i64 String) Unit :no-merge :internal-hidden)
@@ -573,7 +574,6 @@ input_file: slotted/tests/named-slots.egg
 (relation Reading_0 (Expr Renaming Renaming))
 
 (set (SlottedNodeLayout "SlottedVar_0" 1) ())
-(set (ClassSlots_0 (SlottedVar_0 0)) (map-of 0 0))
 
 (rule ((Equated_0 _a _m _b)
        (!= _a _b)
@@ -679,8 +679,6 @@ input_file: slotted/tests/named-slots.egg
       ((Equated_0 _e (map-insert (map-empty) 0 _v) (SlottedVar_0 0))
        (delete (SlottedVar_0 _v))) :ruleset slotted)
 
-(RenamesToLeader_0 (SlottedVar_0 0) (map-insert (map-empty) 0 0) (SlottedVar_0 0))
-(set (EclassGroup_0 (SlottedVar_0 0)) (set-of (map-insert (map-empty) 0 0)))
 
 (rule ((RenamesToLeader_0 _a _m _c)
        (= _grp (EclassGroup_0 _c))
@@ -726,6 +724,10 @@ input_file: slotted/tests/named-slots.egg
       ((Equated_0 _root (compose _q (compose _mr _cs)) _r))
       :ruleset slotted)
 
+(set (SlottedVariableSort "Expr") ())
+(set (ClassSlots_0 (SlottedVar_0 0)) (map-of 0 0))
+(RenamesToLeader_0 (SlottedVar_0 0) (map-insert (map-empty) 0 0) (SlottedVar_0 0))
+(set (EclassGroup_0 (SlottedVar_0 0)) (set-of (map-insert (map-empty) 0 0)))
 (constructor Lam (Renaming Expr Renaming Expr) Expr)
 (set (SlottedEdgeLayout "Lam" 0) ())
 (set (SlottedEdgeLayout "Lam" 2) ())
@@ -782,6 +784,7 @@ input_file: slotted/tests/named-slots.egg
 (let $limits (Pair (map-of 0 -9223372036854775808) (SlottedVar_0 0) (map-of 0 -9223372036854775806) (SlottedVar_0 0)))
 (let $numbered (Pair (map-of 0 1) (SlottedVar_0 0) (map-of 0 1) (SlottedVar_0 0)))
 (let $variable (Occurrence (map-of 0 -9223372036854775808) (SlottedVar_0 0)))
+(let $compound (Occurrence (map-empty) (Done)))
 (let $pattern (Pair (map-of 0 -9223372036854775808) (SlottedVar_0 0) (map-of 0 -9223372036854775807) (SlottedVar_0 0)))
 (let $positive (Pair (map-of -9223372036854775808 -9223372036854775808 -9223372036854775807 -9223372036854775807) $pattern (map-of 0 -9223372036854775808) (SlottedVar_0 0)))
 (let $negative (Pair (map-of -9223372036854775808 -9223372036854775808 -9223372036854775807 -9223372036854775807) $pattern (map-of 0 -9223372036854775807) (SlottedVar_0 0)))
@@ -807,13 +810,13 @@ input_file: slotted/tests/named-slots.egg
  (= refined (refinements (anchor atom_0 "_p")))
  (= refined_len (vec-length refined))
  (> refined_len 0)) ((_slotted_match_1 refined refined_len cls_p)
- (Idx refined_len 0)) :name "slot-only-field")
+ (Idx refined_len 0)) :name "slot-occurrence")
 (rule ((_slotted_match_1 refined refined_len cls_p)
  (Idx refined_len choice)
  (= m (vec-get refined choice))) ((let built_pair (Pair (ren m "$s") (SlottedVar_0 0) (ren m "$s") (SlottedVar_0 0)))
  (let built_pair_slots (node-slots m (names "$s" "$s") (names) (names)))
- (union built_pair cls_p)) :ruleset slotted-apply :name "slot-only-field/apply")
-(rule ((_slotted_match_1 refined refined_len cls_p)) ((delete (_slotted_match_1 refined refined_len cls_p))) :ruleset slotted-apply :name "slot-only-field/drain")
+ (union built_pair cls_p)) :ruleset slotted-apply :name "slot-occurrence/apply")
+(rule ((_slotted_match_1 refined refined_len cls_p)) ((delete (_slotted_match_1 refined refined_len cls_p))) :ruleset slotted-apply :name "slot-occurrence/drain")
 (run-schedule (seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read))) (repeat 1 (seq (run) (saturate (run slotted-refine)) (run slotted-apply) (seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read))))))
 (check (= _c0cls_c0 (Lam _c0e0_lit__b1 (SlottedVar_0 0) _c0e0_lit__b1_1 (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (bound "$_b1" _c0e0_lit__b1) (lit "$_b1" _c0e0_lit__b1_1))) (= _c0m _c0atom_0) (= _c1cls_c1 (Lam _c1e0_lit__b1 (SlottedVar_0 0) _c1e0_lit__b1_1 (SlottedVar_0 0))) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)) (bound "$_b1" _c1e0_lit__b1) (lit "$_b1" _c1e0_lit__b1_1))) (= _c1m _c1atom_0) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-empty) (ren _c0m "_c0")) (compose (map-empty) (ren _c1m "_c1")) _grp))
 (fail (check (= _c0cls_c0 (Lam _c0e0_lit__b1 (SlottedVar_0 0) _c0e0_lit__b1_1 (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (bound "$_b1" _c0e0_lit__b1) (lit "$_b1" _c0e0_lit__b1_1))) (= _c0m _c0atom_0) (= _c1cls_c1 (Lam _c1e0_lit__b1 (SlottedVar_0 0) _c1e0_lit_a0 (SlottedVar_0 0))) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)) (bound "$_b1" _c1e0_lit__b1) (lit "$a0" _c1e0_lit_a0))) (= _c1m _c1atom_0) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-empty) (ren _c0m "_c0")) (compose (map-of (map-get (ren _c1m "$a0") 0) -9223372036854775807) (ren _c1m "_c1")) _grp)))
@@ -823,6 +826,7 @@ input_file: slotted/tests/named-slots.egg
 (check (= _c0cls_c0 (Pair _c0e0_lit_a (SlottedVar_0 0) _c0e0_lit_-9223372036854775808 (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (lit "$a" _c0e0_lit_a) (lit "$-9223372036854775808" _c0e0_lit_-9223372036854775808))) (= _c0m _c0atom_0) (= (map-image (compose (map-of (map-get (ren _c0m "$a") 0) -9223372036854775808 (map-get (ren _c0m "$-9223372036854775808") 0) -9223372036854775806) (ren _c0m "_c0"))) (map-of -9223372036854775808 -9223372036854775808 -9223372036854775806 -9223372036854775806)))
 (check (= _c0cls_c0 (Pair _c0e0_lit_1 (SlottedVar_0 0) _c0e0_lit_1_1 (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (lit "$1" _c0e0_lit_1) (lit "$1" _c0e0_lit_1_1))) (= _c0m _c0atom_0) (= (map-image (compose (map-of (map-get (ren _c0m "$1") 0) 1) (ren _c0m "_c0"))) (map-of 1 1)))
 (check (= _c0cls_c0 (Occurrence _c0e0_lit_a (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (lit "$a" _c0e0_lit_a))) (= _c0m _c0atom_0) (= (map-image (compose (map-of (map-get (ren _c0m "$a") 0) -9223372036854775808) (ren _c0m "_c0"))) (map-of -9223372036854775808 -9223372036854775808)))
+(check (= _c0cls_c0 (Occurrence _c0e0_leaf0 _c0leaf0_0)) (RenamesToLeader_0 (Done) _c0leafren0_0 _c0leaf0_0) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (leaf _c0e0_leaf0))) (= _c0m _c0atom_0) (= (map-image (compose (map-empty) (ren _c0m "_c0"))) (map-empty)))
 (check (= _c0cls_c0 (Occurrence _c0e0_lit_a (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (lit "$a" _c0e0_lit_a))) (= _c0m _c0atom_0) (= _c1cls_c1 (Pair _c1e0_lit_a (SlottedVar_0 0) _c1e0_lit_a_1 (SlottedVar_0 0))) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)) (lit "$a" _c1e0_lit_a) (lit "$a" _c1e0_lit_a_1))) (= _c1m _c1atom_0) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-of (map-get (ren _c0m "$a") 0) -9223372036854775808) (ren _c0m "_c0")) (compose (map-of (map-get (ren _c1m "$a") 0) -9223372036854775808) (ren _c1m "_c1")) _grp))
 (check (= _c0cls_c0 (Pair _c0e0_c0t1 _c0cls_c0t1 _c0e0_lit_a (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (child "_c0t1" _c0e0_c0t1 (ClassSlots_0 _c0cls_c0t1)) (lit "$a" _c0e0_lit_a))) (= _c0cls_c0t1 (Pair _c0e1_lit_a (SlottedVar_0 0) _c0e1_lit_a0 (SlottedVar_0 0))) (= _c0pinned_c0t1 (_pinned_Pair _c0e0_c0t1 _c0cls_c0t1 _c0e0_lit_a (SlottedVar_0 0) 1)) (Reading_0 _c0cls_c0t1 _c0pinned_c0t1 _c0sym_c0t1) (= _c0atom_1 (atom "@atom:1" (root "_c0t1" (ClassSlots_0 _c0cls_c0t1) _c0sym_c0t1) (lit "$a" _c0e1_lit_a) (lit "$a0" _c0e1_lit_a0))) (= _c0f (frame-join _c0atom_0 _c0atom_1)) (= _c0m _c0f) (= _c1cls_c1 (Done)) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)))) (= _c1m _c1atom_0) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-of (map-get (ren _c0m "$a") 0) -9223372036854775808 (map-get (ren _c0m "$a0") 0) -9223372036854775807) (ren _c0m "_c0")) (compose (map-empty) (ren _c1m "_c1")) _grp))
 (fail (check (= _c0cls_c0 (Pair _c0e0_c0t1 _c0cls_c0t1 _c0e0_lit_a0 (SlottedVar_0 0))) (= _c0atom_0 (atom "@atom:0" (root "_c0" (ClassSlots_0 _c0cls_c0)) (child "_c0t1" _c0e0_c0t1 (ClassSlots_0 _c0cls_c0t1)) (lit "$a0" _c0e0_lit_a0))) (= _c0cls_c0t1 (Pair _c0e1_lit_a (SlottedVar_0 0) _c0e1_lit_a0 (SlottedVar_0 0))) (= _c0pinned_c0t1 (_pinned_Pair _c0e0_c0t1 _c0cls_c0t1 _c0e0_lit_a0 (SlottedVar_0 0) 1)) (Reading_0 _c0cls_c0t1 _c0pinned_c0t1 _c0sym_c0t1) (= _c0atom_1 (atom "@atom:1" (root "_c0t1" (ClassSlots_0 _c0cls_c0t1) _c0sym_c0t1) (lit "$a" _c0e1_lit_a) (lit "$a0" _c0e1_lit_a0))) (= _c0f (frame-join _c0atom_0 _c0atom_1)) (= _c0m _c0f) (= _c1cls_c1 (Done)) (= _c1atom_0 (atom "@atom:0" (root "_c1" (ClassSlots_0 _c1cls_c1)))) (= _c1m _c1atom_0) (= _c0cls_c0 _c1cls_c1) (= _grp (EclassGroup_0 _c0cls_c0)) (coset-same (compose (map-of (map-get (ren _c0m "$a") 0) -9223372036854775808 (map-get (ren _c0m "$a0") 0) -9223372036854775807) (ren _c0m "_c0")) (compose (map-empty) (ren _c1m "_c1")) _grp)))

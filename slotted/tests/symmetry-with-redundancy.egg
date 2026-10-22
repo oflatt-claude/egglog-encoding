@@ -1,5 +1,5 @@
 ;; Restricting a group's redundant slot must preserve its remaining symmetry.
-(datatype U (F U U U))
+(datatype U ($Var) (F U U U))
 (let a (F $0 $1 $2))
 (union a (F $1 $0 $2))
 (union a (F $0 $1 $3))

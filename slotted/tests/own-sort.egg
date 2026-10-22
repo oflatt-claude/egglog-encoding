@@ -11,11 +11,12 @@
 ;;;     target/debug/egglog-experimental --slotted slotted/tests/own-sort.egg
 
 (sort S)
+(constructor $Var () S)
 
 (constructor Null () S)
 (constructor Succ (S) S)
 (constructor Prev (S) S)
-(constructor Lam (Var S) S :binder 0)
+(constructor Lam (S S) S :binder 0)
 (constructor G (S S) S)
 
 

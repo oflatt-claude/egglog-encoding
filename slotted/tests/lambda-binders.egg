@@ -10,10 +10,11 @@
 ;;; last section a test rather than a tautology.
 
 (sort U)
+(constructor $Var () U)
 
-(constructor Lam (Var U) U :binder 0)
+(constructor Lam (U U) U :binder 0)
 (constructor App (U U) U)
-(constructor Let (Var U U) U :binder 0)
+(constructor Let (U U U) U :binder 0)
 (constructor Null () U)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

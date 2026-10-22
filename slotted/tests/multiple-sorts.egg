@@ -2,19 +2,21 @@
 ;; each has its own variable, class, equality, and substitution machinery.
 (datatype*
   (Expr
+    ($Var)
     (EZero)
     (ESucc Expr)
     (EPrev Expr)
     (EPair Expr Expr)
-    (ELam Var Expr :binder 0)
-    (ELet Expr Var Expr :binder 1))
+    (ELam Expr Expr :binder 0)
+    (ELet Expr Expr Expr :binder 1))
   (Ty
+    ($Var)
     (TZero)
     (TSucc Ty)
     (TPrev Ty)
     (TPair Ty Ty)
-    (TLam Var Ty :binder 0)
-    (TLet Ty Var Ty :binder 1)))
+    (TLam Ty Ty :binder 0)
+    (TLet Ty Ty Ty :binder 1)))
 
 ;; Both rule families run in the same phased schedule without crossing sorts.
 (push)

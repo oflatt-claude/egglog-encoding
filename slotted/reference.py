@@ -10,9 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHILD = object()
-SLOT = object()
 BINDER = object()
-SLOTTED = (CHILD, SLOT, BINDER)
+SLOTTED = (CHILD, BINDER)
 SUBST = "subst"
 TOKEN = re.compile(r'\(|\)|"(?:\\.|[^"\\])*"|;[^\n]*|[^\s()]+')
 SLOT_LITERAL = re.compile(r"\$(?:[+-]?\d+|\w+)\Z")
@@ -71,6 +70,9 @@ def read_language(path, sorts=("U",)):
         head, _, rest = line[len("(constructor ") :].partition("(")
         cols_text, _, tail = rest.partition(")")
         name = head.strip()
+        # Slot terms already use the reference's intrinsic variable node.
+        if name == "$Var":
+            continue
         # `tail` is the output sort, then the options, then the closing paren
         tokens = tail.rstrip(")").split()
         opts = next((i for i, t in enumerate(tokens) if t.startswith(":")), len(tokens))
@@ -89,7 +91,7 @@ def constructor_options(name, tokens):
 
 def signature(cols, binders, sorts=("U",), name="constructor"):
     """Columns and the binding child positions as the encoder's signature."""
-    child_count = sum(col in sorts or col == "Var" for col in cols)
+    child_count = sum(col in sorts for col in cols)
     if len(set(binders)) != len(binders):
         raise SystemExit(f"constructor {name}: duplicate `:binder` position")
     if any(pos < 0 or pos >= child_count for pos in binders):
@@ -103,10 +105,8 @@ def signature(cols, binders, sorts=("U",), name="constructor"):
 
     sig, seen_kids = [], 0
     for col in cols:
-        if col == "Var" or col in sorts:
-            if seen_kids in binders and col != "Var":
-                raise SystemExit(f"constructor {name}: binder column {seen_kids} must have sort Var")
-            sig.append(BINDER if seen_kids in binders else SLOT if col == "Var" else CHILD)
+        if col in sorts:
+            sig.append(BINDER if seen_kids in binders else CHILD)
             seen_kids += 1
         else:
             sig.append(col)
@@ -122,7 +122,7 @@ def read_typed_language_form(form, sorts=("U",)):
             f"constructor {name}: output sort {output!r} is not one of the declared equality sorts ({', '.join(sorts)})"
         )
     sig = signature(cols, constructor_options(name, form[4:]), sorts, name)
-    return name, sig, output, tuple(output if col == "Var" else col for col in cols if col == "Var" or col in sorts)
+    return name, sig, output, tuple(col for col in cols if col in sorts)
 
 
 def read_correspondence(path):
@@ -352,7 +352,7 @@ class TermLang:
             for kind, arg in zip(op.arg_kinds(), x[1:], strict=True):
                 if kind is BINDER:
                     out.add(self.slot(arg))
-                elif kind in (CHILD, SLOT):
+                elif kind is CHILD:
                     out |= all_slots(arg)
             return out
 
@@ -424,7 +424,7 @@ class TermLang:
             return (t[0], t[1] + k)
         out = []
         for kind, a in zip(self.ops[t[0]].arg_kinds(), t[1:], strict=True):
-            if kind in (CHILD, SLOT):
+            if kind is CHILD:
                 out.append(self.shift(a, k))
             elif kind is BINDER:
                 out.append(self.shift(a, k) if isinstance(a, tuple) else a + k)
@@ -772,6 +772,8 @@ class Source:
         self._read(path, text=text)
         self.carriers = carrier_symbols(self.sorts)
         for form in self._ctors:
+            if form[1] == "$Var":
+                continue
             name, sig, output, children = read_typed_language_form(form, self.sorts)
             self.spec[name] = sig
             self.output_sorts[name] = output
@@ -988,7 +990,7 @@ def as_pattern(lang, t, slot_name=lambda n: f"${n}"):
     for kind, a in zip(op.arg_kinds(), t[1:], strict=True):
         if kind is BINDER:
             out.append(a if isinstance(a, str) else slot_name(lang.slot(a)))
-        elif kind in (CHILD, SLOT):
+        elif kind is CHILD:
             out.append(as_pattern(lang, a, slot_name))
         else:
             out.append(a)
