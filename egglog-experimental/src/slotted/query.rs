@@ -129,11 +129,59 @@ pub(super) fn connected(mut atoms: Vec<Atom>, first: usize) -> Result<Vec<Atom>,
     Ok(out)
 }
 
+/// Equality of applied terms, or just their classes. Checks and rule guards use
+/// the same lowering; ground checks negate the whole query for disequality.
+#[derive(Clone, Copy)]
+pub(super) struct Comparison {
+    pub modulo_renaming: bool,
+    pub negated: bool,
+}
+
+impl Comparison {
+    pub fn parse(name: &str) -> Option<Self> {
+        let (modulo_renaming, negated) = match name {
+            "=" => (false, false),
+            "!=" => (false, true),
+            "renaming-=" => (true, false),
+            "renaming-!=" => (true, true),
+            _ => return None,
+        };
+        Some(Self {
+            modulo_renaming,
+            negated,
+        })
+    }
+
+    /// Class constraints can filter candidates before slot refinement.
+    pub fn classes(self, a: &str, b: &str) -> Option<String> {
+        if !self.negated {
+            Some(format!("(= {a} {b})"))
+        } else if self.modulo_renaming {
+            Some(format!("(guard (bool-!= {a} {b}))"))
+        } else {
+            None
+        }
+    }
+
+    /// Compare two (class, renaming) invocations in a common slot frame, allowing
+    /// the class's known symmetries. Class-only comparisons need no slot guard.
+    pub fn invocations(self, group: &str, a: (&str, &str), b: (&str, &str)) -> Option<String> {
+        if self.modulo_renaming {
+            return None;
+        }
+        let same = format!("(coset-same {} {} ({group} {}))", a.1, b.1, a.0);
+        Some(if self.negated {
+            format!("(guard (or (bool-!= {} {}) (not {same})))", a.0, b.0)
+        } else {
+            format!("(guard {same})")
+        })
+    }
+}
+
 #[derive(Default, Clone)]
 pub(super) struct Conditions {
     pub free: Vec<(bool, String, Vec<String>)>,
-    pub same: Vec<(String, String)>,
-    pub distinct: Vec<(String, String)>,
+    pub comparisons: Vec<(Comparison, String, String)>,
     pub fresh: BTreeSet<String>,
 }
 
@@ -397,12 +445,12 @@ pub(super) fn compile(
         ));
         avs.push(av);
     }
-    for (a, b) in &conditions.same {
+    for (comparison, a, b) in &conditions.comparisons {
         let (ca, cb) = (q.class(a)?, q.class(b)?);
         if q.sorts[a] != q.sorts[b] {
             return Err("equality compares different carrier sorts".into());
         }
-        q.body.push(format!("(= {ca} {cb})"));
+        q.body.extend(comparison.classes(&ca, &cb));
     }
     let mut frame = avs.first().cloned().unwrap_or_else(|| "(frame)".into());
     for av in avs.iter().skip(1) {
@@ -466,24 +514,12 @@ pub(super) fn compile(
             names_expr(pvars.iter().map(|s| fname(s).into()))
         ));
     }
-    for (a, b) in &conditions.same {
-        q.body.push(format!(
-            "(same {} {} {})",
-            q.frame,
-            quote(fname(a)),
-            quote(fname(b))
-        ));
-    }
-    for (a, b) in &conditions.distinct {
+    for (comparison, a, b) in &conditions.comparisons {
         let (ca, cb) = (q.class(a)?, q.class(b)?);
-        if q.sorts[a] != q.sorts[b] {
-            return Err("disequality compares different carrier sorts".into());
-        }
-        q.body.push(format!(
-            "(guard (or (bool-!= {ca} {cb}) (not (bool-same {} {} {}))))",
-            q.frame,
-            quote(fname(a)),
-            quote(fname(b))
+        q.body.extend(comparison.invocations(
+            &lang.symbols(&q.sorts[a]).group,
+            (&ca, &q.maps[a]),
+            (&cb, &q.maps[b]),
         ));
     }
     Ok(q)

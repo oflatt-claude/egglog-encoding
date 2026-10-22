@@ -45,6 +45,93 @@ fn transformation_emits_ordinary_egglog() {
 }
 
 #[test]
+fn checks_and_rule_guards_agree_on_equality() {
+    // Each case runs in its own graph: firing a rule must not change another
+    // case's premise. Expected answers distinguish class identity, free slots,
+    // alpha-equivalence, sharing, symmetries, and redundant slots.
+    let cases = [
+        ("", "$a", "$a", true, true),
+        ("", "$a", "$b", false, true),
+        ("", "(Null)", "(Hit)", false, false),
+        ("", "(F $a $b)", "(G $a $b)", false, false),
+        ("", "(F $a $b)", "(F $b $a)", false, true),
+        ("", "(F $a $a)", "(F $a $b)", false, false),
+        ("", "(Lam $a $a)", "(Lam $b $b)", true, true),
+        ("", "(Lam $x $a)", "(Lam $x $b)", false, true),
+        ("", "(Lam $a $a)", "(Lam $x $a)", false, false),
+        (
+            "(union (F $a $b) (F $b $a))",
+            "(F $a $b)",
+            "(F $b $a)",
+            true,
+            true,
+        ),
+        (
+            "(union (F $a $b) (G $a (Null)))",
+            "(F $a $b)",
+            "(F $a $c)",
+            true,
+            true,
+        ),
+        (
+            "(union (F $a $b) (G $a (Null)))",
+            "(F $a $b)",
+            "(F $b $c)",
+            false,
+            true,
+        ),
+    ];
+    for no_aliasing in [false, true] {
+        for (prelude, lhs, rhs, equal, renamed) in cases {
+            for (op, expected) in [
+                ("=", equal),
+                ("!=", !equal),
+                ("renaming-=", renamed),
+                ("renaming-!=", !renamed),
+            ] {
+                let mut compiler = Compiler::new(Options { no_aliasing });
+                let mut graph = egglog_experimental::slotted::new_egraph();
+                let check = format!("(check ({op} {lhs} {rhs}))");
+                let check = if expected {
+                    check
+                } else {
+                    format!("(fail {check})")
+                };
+                evaluate(
+                    &mut compiler,
+                    &mut graph,
+                    &format!(
+                        "{LANGUAGE}
+                         (constructor Pair (U U) U)
+                         (constructor Hit () U)
+                         {prelude}
+                         (let pair (Pair {lhs} {rhs}))
+                         (run 0)
+                         {check}
+                         (rewrite (Pair a b) (Hit) :when (({op} a b)))
+                         (run 1)
+                         (check ({} pair Hit))",
+                        if expected { "holds" } else { "not-holds" }
+                    ),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn rule_comparisons_require_two_bound_variables() {
+    let mut compiler = Compiler::default();
+    compiler.compile(None, LANGUAGE).unwrap();
+    for op in ["=", "!=", "renaming-=", "renaming-!="] {
+        for args in ["a", "a b c", "a missing", "missing b", "a $x"] {
+            let source = format!("(rewrite (F a b) a :when (({op} {args})))");
+            assert!(compiler.compile(None, &source).is_err(), "{source}");
+        }
+    }
+}
+
+#[test]
 fn named_slots_persist_across_inputs_and_scopes() {
     let mut compiler = Compiler::default();
     let mut graph = egglog_experimental::slotted::new_egraph();

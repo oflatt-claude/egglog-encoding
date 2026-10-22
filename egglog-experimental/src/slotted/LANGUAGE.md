@@ -161,8 +161,28 @@ bare fact without the surrounding list are rejected.
 | `(not-free $x a b)` | `$x` occurs in none of the listed terms |
 | `(= v (Ctor ...))` | An additional constructor pattern rooted at `v` |
 | `(= a b)` | Identify two matched terms |
+| `(renaming-= a b)` | Require the same e-class, allowing different free-slot mappings |
 | `(Ctor ...)` | Require a matching constructor term |
 | `(!= a b)` | Require different invocations at match time |
+| `(renaming-!= a b)` | Require different e-classes at match time |
+
+The four comparisons between bound pattern variables have the same meaning as
+in `check`. Ordinary equality preserves free-slot identities and allows known
+class symmetries; equality modulo renaming compares only the classes. For example:
+
+```slotted
+(datatype Expr (Pair Expr Expr) (Related Expr Expr))
+(let pair (Pair $a $b))
+(rewrite (Pair a b) (Related a b) :when ((renaming-= a b)))
+(run 1)
+(check (holds pair Related))
+(check (renaming-= $a $b))
+(check (!= $a $b))
+```
+
+Replacing the rule's `renaming-=` with `=` would prevent this match. Repeating a
+pattern variable, as in `(Pair a a)`, also requires the same invocation. Patterns
+can be renamed consistently, but their shared variables retain these constraints.
 
 Disequality is non-monotonic: terms that differ now may be unioned later, and a
 previously admitted match is not withdrawn. Literal payloads and payload pattern

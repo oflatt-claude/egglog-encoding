@@ -650,11 +650,6 @@ impl Frame {
         )
     }
 
-    /// The same invocation: equal renamings into the pattern's slots.
-    pub fn same(&self, a: &str, b: &str) -> Option<bool> {
-        Some(self.ren(a)? == self.ren(b)?)
-    }
-
     /// Fresh slots for a right-hand side, apart from everything the match named.
     pub fn mint(&self, names: &[Name]) -> Option<Frame> {
         let mut out = self.clone();
@@ -872,9 +867,6 @@ impl BaseSort for FrameSort {
         // conditions, read after refinement
         add_primitive!(eg, "free"     = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), &vs.0.0).filter(|b| *b).map(|_| ()) });
         add_primitive!(eg, "not-free" = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), &vs.0.0).filter(|b| !*b).map(|_| ()) });
-        // two variables are the same invocation
-        add_primitive!(eg, "same"      = |f: Fr, a: S, b: S| -?> () { f.same(a.as_str(), b.as_str()).filter(|b| *b).map(|_| ()) });
-        add_primitive!(eg, "bool-same" = |f: Fr, a: S, b: S| -?> bool { f.same(a.as_str(), b.as_str()) });
         // right-hand-side slots the pattern never pinned
         add_primitive!(eg, "mint" = |f: Fr, xs: Ns| -?> Fr { f.mint(&xs.0.0).map(Fr::new) });
         // the frame spelled in a variable's slot names -- the rule's root, so that its

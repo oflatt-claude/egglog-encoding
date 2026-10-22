@@ -21,6 +21,8 @@ PROBES = [
     ("ok", "(= v <call>), a second pattern", L + '(rewrite (Add x y) (Nil) :when ((= x (Mul p q))) :name "r")\n'),
     ("ok", "(= x y), two variables identified", L + '(rewrite (Add x y) (Nil) :when ((= x y)) :name "r")\n'),
     ("ok", "(!= x y)", L + '(rewrite (Add x y) (Nil) :when ((!= x y)) :name "r")\n'),
+    ("ok", "(renaming-= x y)", L + '(rewrite (Add x y) (Nil) :when ((renaming-= x y)) :name "r")\n'),
+    ("ok", "(renaming-!= x y)", L + '(rewrite (Add x y) (Nil) :when ((renaming-!= x y)) :name "r")\n'),
     ("ok", "a bare call, meaning it exists", L + '(rewrite (Add x y) (Nil) :when ((Mul x y)) :name "r")\n'),
     ("refused", "a nullary constructor without its parens", L + "(let n Nil)\n"),
     ("ok", "a payload literal", L + '(rewrite (Add x y) (Nil) :when ((= x (N 2))) :name "r")\n'),

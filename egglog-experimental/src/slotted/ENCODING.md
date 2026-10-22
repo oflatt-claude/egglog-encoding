@@ -689,7 +689,6 @@ The primitives:
 | `(refinements f)` | every consistent way to decide the readings left to the frame, and then to merge the blocks refinement may touch, as a `Vec` of frames; `vec-get` reads one and is partial past the last |
 | `(mint f (names "$z"...))` | fresh slots for a right-hand side, apart from everything named |
 | `(free m "$x" (names v...))`, `(not-free ...)` | is the literal's slot in one of the variables' images |
-| `(same m "a" "b")`, `(bool-same ...)` | the two variables are one invocation |
 | `(ren m "v")` | `v`'s renaming into the pattern's slots; a literal comes back as `{0 -> slot}` |
 | `(node-slots m uncovered covered bound)` | a built node's free slots from its named columns; `(without m slots bound)` for a built child under a binder |
 
@@ -1116,8 +1115,12 @@ since readings that differ elsewhere are related by a symmetry of the parent's c
 the shape index derives, and hands `sym_x` to its binding. Any other repeated
 occurrence hands its binding the whole group, `(EclassGroup cls_x)`, and
 `refinements` decides the element once the rest of the frame has pinned both
-occurrences' slots. A claim compares the two terms' renamings up to the root class's
-group with `coset-same`.
+occurrences' slots. Checks and explicit rule comparisons share the same lowering:
+`=` requires one class and compares the two renamings with the boolean
+`coset-same` primitive using that class's group. `renaming-=` requires only one
+class. Their negations test different invocations and different classes,
+respectively. Ground checks negate the entire equality query, so a failed match
+cannot hide another representative that proves equality.
 
 **C6. Where two atoms agree on a variable, their occurrences are one.** The join
 identifies `Node(a, e(t))` and `Node(b, e'(t))` through `Var(v, t)`, which is the

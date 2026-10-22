@@ -181,9 +181,9 @@ pub(super) fn register_set(eg: &mut EGraph, arc: ArcSort, renaming: ArcSort) {
         let bv = state.base_values();
         Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_set(bv, &cs.data)?, reading: Reading::Group(Arc::new(group)) }))
     }});
-    add_primitive!(eg, "coset-same" = {arc.clone(): ArcSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> () {{
+    add_primitive!(eg, "coset-same" = {arc.clone(): ArcSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> bool {{
         let maps = value_maps(&state, s.data.iter().copied())?;
-        group::coset_same(&m1.data, &m2.data, &maps).then_some(())
+        Some(group::coset_same(&m1.data, &m2.data, &maps))
     }});
     add_primitive!(eg, "group-slot-closure" = {arc.clone(): ArcSort} |s: @SetContainer (arc.clone()), slots: @MapContainer (renaming.clone())| -?> @MapContainer (renaming.clone()) {{
         let maps = value_maps(&state, s.data.iter().copied())?;

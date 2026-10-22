@@ -596,23 +596,21 @@ impl Compiler {
                     for fact in facts {
                         let (kind, rest) = fact.call()?;
                         let mut extra = Vec::new();
-                        match kind {
-                            "=" | "!=" if rest.len() == 2 && matches!(rest[1], Form::Atom(_)) => {
-                                let pair = (
+                        match (kind, query::Comparison::parse(kind)) {
+                            (_, Some(comparison))
+                                if rest.len() == 2 && matches!(rest[1], Form::Atom(_)) =>
+                            {
+                                conditions.comparisons.push((
+                                    comparison,
                                     rest[0].atom()?.trim_start_matches('?').to_owned(),
                                     rest[1].atom()?.trim_start_matches('?').to_owned(),
-                                );
-                                if kind == "=" {
-                                    conditions.same.push(pair)
-                                } else {
-                                    conditions.distinct.push(pair)
-                                }
+                                ));
                             }
-                            "=" if rest.len() == 2 => extra.push((
+                            ("=", _) if rest.len() == 2 => extra.push((
                                 rest[0].atom()?.trim_start_matches('?').to_owned(),
                                 rest[1].clone(),
                             )),
-                            "free" | "not-free" if rest.len() >= 2 => {
+                            ("free" | "not-free", _) if rest.len() >= 2 => {
                                 let slot = rest[0].atom()?.to_owned();
                                 let mut pvars = Vec::new();
                                 for f in &rest[1..] {
@@ -630,7 +628,7 @@ impl Compiler {
                                 }
                                 conditions.free.push((kind == "free", slot, pvars));
                             }
-                            kind if self.state.lang.constructors.contains_key(kind) => {
+                            (kind, _) if self.state.lang.constructors.contains_key(kind) => {
                                 let v = names.fresh(&format!("_fact{side}"));
                                 side += 1;
                                 extra.push((v, fact.clone()));
@@ -783,8 +781,8 @@ impl Compiler {
             return Ok(f.render());
         }
         let (kind, terms) = args[0].call()?;
-        let (mut facts, negative) = match kind {
-            "=" | "!=" | "renaming-=" | "renaming-!=" => {
+        let (mut facts, negative) = match (kind, query::Comparison::parse(kind)) {
+            (_, Some(comparison)) => {
                 if terms.len() != 2 {
                     return Err("equality requires two terms".into());
                 }
@@ -794,18 +792,21 @@ impl Compiler {
                     invocations: matched,
                 } = self.matches(&ts, &sort)?;
                 let (a, b) = (&matched[0], &matched[1]);
-                facts.push(format!("(= {} {})", a.0, b.0));
-                if kind == "=" || kind == "!=" {
-                    facts.push(format!(
-                        "(= _grp ({} {}))",
-                        self.state.lang.symbols(&sort).group,
-                        a.0
-                    ));
-                    facts.push(format!("(coset-same {} {} _grp)", a.1, b.1));
-                }
-                (facts, kind.ends_with("!="))
+                // Negate existence of an equal invocation, not individual
+                // matches: another representative may still prove equality.
+                let positive = query::Comparison {
+                    negated: false,
+                    ..comparison
+                };
+                facts.extend(positive.classes(&a.0, &b.0));
+                facts.extend(positive.invocations(
+                    &self.state.lang.symbols(&sort).group,
+                    (&a.0, &a.1),
+                    (&b.0, &b.1),
+                ));
+                (facts, comparison.negated)
             }
-            "slots" | "holds" | "not-holds" => {
+            ("slots" | "holds" | "not-holds", _) => {
                 let t = self.term(terms.first().ok_or("claim requires a term")?, true, None)?;
                 let sort = self.sort_of(&t)?;
                 let Claim {
