@@ -274,10 +274,9 @@ impl ProofStore {
                 if mapped_old != *old_proof || mapped_new != *new_proof {
                     *old_proof = mapped_old;
                     *new_proof = mapped_new;
-                    let old = self.get(*old_proof);
-                    let new = self.get(*new_proof);
-                    proof.proposition.lhs = old.lhs();
-                    proof.proposition.rhs = new.rhs();
+                    // The conclusion comes from evaluating the merge, not from
+                    // equating its two input rows. Simplifying those premises
+                    // preserves the merge's original conclusion.
                     changed = true;
                 }
             }

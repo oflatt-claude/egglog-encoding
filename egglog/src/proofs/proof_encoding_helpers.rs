@@ -901,9 +901,9 @@ pub enum ProofEncodingUnsupportedReason {
     #[error("`output` commands are not supported when proofs are enabled.")]
     OutputCommand,
     #[error(
-        "let binding with a primitive in the body. For silly internal reasons, we don't support primitive bindings for proofs at the moment, sorry."
+        "container-valued global bindings are not supported by the term/proof encoding; bind the container inside a rule instead"
     )]
-    LetBindingWithNonEqSort,
+    LetBindingWithContainer,
     #[error(
         "rule uses `:unsafe-seminaive`. Arbitrary RHS database reads are not representable by the term/proof encoding."
     )]
@@ -1504,7 +1504,7 @@ fn command_supports_proof_encoding_impl(
 
     // Check actions (not queries) for function lookups
     // Egglog supports lookups in actions at the global level, but not in proofs mode
-    // (global function calls are allowed - they get desugared to constructors)
+    // Global reads are supported by the encoding.
     let mut has_function_lookup_in_action = false;
     command.clone().visit_actions(&mut |action| {
         has_function_lookup_in_action |=
@@ -1574,7 +1574,7 @@ fn command_supports_proof_encoding_impl(
         }
         // Extract commands can't have non-global function lookups
         // because instrument_action_expr doesn't support them
-        // (global function calls are fine - they get desugared to constructors)
+        // Global reads are supported by the encoding.
         GenericCommand::Extract(_, expr, variants) => {
             if expr_has_non_global_lookup(expr, type_info, extra_globals)
                 || expr_has_non_global_lookup(variants, type_info, extra_globals)
@@ -1595,22 +1595,21 @@ fn command_supports_proof_encoding_impl(
             }
             Ok(())
         }
-        // let binding with non-eq sort not supported by proof_global_desugar
         ResolvedCommand::Action(ResolvedAction::Let(_, _, expr)) => {
-            // let binding with non-eq sort not supported by proof_global_desugar
-            // we detect as setting something that is no-merge to a primitive not supported (global primitive binding)
-            if expr.output_type().is_eq_sort() {
-                Ok(())
+            if expr.output_type().is_container_sort() {
+                Err(ProofEncodingUnsupportedReason::LetBindingWithContainer)
             } else {
-                Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
+                Ok(())
             }
         }
         // After global desugar it may look like this
         ResolvedCommand::Action(ResolvedAction::Set(_span, head, _children, expr)) => {
-            if !type_info.is_global(head.name()) || expr.output_type().is_eq_sort() {
-                Ok(())
+            if (type_info.is_global(head.name()) || extra_globals.contains(head.name()))
+                && expr.output_type().is_container_sort()
+            {
+                Err(ProofEncodingUnsupportedReason::LetBindingWithContainer)
             } else {
-                Err(ProofEncodingUnsupportedReason::LetBindingWithNonEqSort)
+                Ok(())
             }
         }
         _ => Ok(()),

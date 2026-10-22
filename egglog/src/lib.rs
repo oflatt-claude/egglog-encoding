@@ -2979,7 +2979,7 @@ impl EGraph {
 
     /// Resolves an egglog program by parsing, typechecking, and desugaring each command.
     /// Outputs a new egglog program without any syntactic sugar, either user provided ([`CommandMacro`]) or built-in (e.g., `rewrite` commands).
-    /// Also removes globals from the program by replacing with new constructors.
+    /// Also lowers global bindings to functions with no arguments.
     pub fn resolve_program(
         &mut self,
         filename: Option<String>,
