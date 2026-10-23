@@ -421,6 +421,17 @@ NUL = ("Null",)
 def curated():
     cs = []
 
+    cs.append(
+        Case(
+            "literal-variable-names",
+            [("F", ("G", V0, V1), V2)],
+            [],
+            [("x", "F", "?x", "??x"), ("?x", "G", "a", "b")],
+            ("x", "H", "??x", "a"),
+            [("F", ("G", V0, V1), V2), ("H", V2, V0), ("H", V0, V2)],
+        )
+    )
+
     # C1 -- plain repeated variable, live slots
     cs.append(
         Case(

@@ -186,7 +186,7 @@ fn accepted_source_forms() {
         ),
         (
             true,
-            "a sigiled source variable named like the generated root",
+            "a source variable containing a question mark",
             "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $1 $2))\n(rewrite (Add ?_p b) (Mul b ?_p))\n(run 1)\n(check (= start (Mul $2 $1)))\n",
         ),
         (
@@ -229,6 +229,16 @@ fn accepted_source_forms() {
 #[test]
 fn refused_source_forms_have_diagnostics() {
     let cases = [
+        (
+            "a matching-order annotation",
+            "(datatype M (F M M))\n(rewrite (F a b) a :lead 0)\n",
+            "unsupported rewrite option :lead",
+        ),
+        (
+            "an unbound variable whose name differs by a question mark",
+            "(datatype M (F M))\n(rewrite (F ?x) x)\n",
+            "is not bound",
+        ),
         (
             "a fresh annotation for a right-hand-side slot",
             "(datatype M (F M) (Lam M M :binder 0))\n(rewrite (F e) (Lam $s e) :fresh $s)\n",

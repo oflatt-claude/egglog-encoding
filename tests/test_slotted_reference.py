@@ -1,4 +1,4 @@
-"""Reference translation must preserve side patterns and reject omitted constraints."""
+"""Reference translation must preserve multipatterns and reject omitted constraints."""
 
 import importlib
 from pathlib import Path
@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 syntax = importlib.import_module("slotted.reference")
+driver = importlib.import_module("slotted.test_program")
 LANGUAGES = Path(__file__).resolve().parents[1] / "egglog-experimental/tests/slotted/languages"
 
 
@@ -75,7 +76,37 @@ def test_generated_reference_variables_do_not_alias_user_variables(tmp_path: Pat
     assert lhs_root not in {"_sl1", "_p", *variable_roots}
 
 
-@pytest.mark.parametrize("options", [":when ((= a b))", ":when ((!= a b))", ":lead 1"])
+def test_question_marks_are_preserved_in_reference_variables(tmp_path: Path) -> None:
+    src = source(tmp_path)
+    rule = syntax.parse("(rewrite (F x ?x) (G ?x x) :when ((not-free $s ?x)))")[0]
+    for nested in (False, True):
+        lines = syntax.rule_lines(src, src.lang, rule, nested=nested)
+        assert lines[-1] == "cond notin $s ?x"
+        assert any(line.endswith("(G ??x ?x)") for line in lines)
+        lhs = "nested (F ?x ??x)" if nested else "atom _p F x ?x"
+        assert lhs in lines
+
+    multi = syntax.parse("(rewrite x (G ??x a) :when ((= x (F ?x ??x)) (= ?x (G a b))))")[0]
+    lines = syntax.rule_lines(src, src.lang, multi)
+    assert {"atom x F ?x ??x", "atom ?x G a b", "rhs x (G ???x ?a)"} <= set(lines)
+
+
+def test_reordering_preserves_patterns_action_and_guards(tmp_path: Path) -> None:
+    src = source(tmp_path)
+    form = syntax.parse('(rewrite (F (G a b) ?a) b :when ((not-free $s ?a)) :name "test")')[0]
+    rule = driver.Rule(src, src.lang, form)
+    original = syntax.rewrite_parts(src, form)
+    root, atoms = syntax.rule_atoms(src, src.lang, original)
+    for first in range(len(atoms)):
+        reordered = syntax.rewrite_parts(src, syntax.parse(rule.source(first_atom=first))[0])
+        reordered_root, reordered_atoms = syntax.rule_atoms(src, src.lang, reordered)
+        assert reordered_root == root
+        assert reordered_atoms == [atoms[first], *atoms[:first], *atoms[first + 1 :]]
+        for field in ("rhs", "conds", "name"):
+            assert reordered[field] == original[field]
+
+
+@pytest.mark.parametrize("options", [":when ((= a b))", ":when ((!= a b))"])
 def test_unrepresented_reference_constraints_are_rejected(tmp_path: Path, options: str) -> None:
     src = source(tmp_path)
     rule = syntax.parse(f"(rewrite (F a b) a {options})")[0]
@@ -84,12 +115,12 @@ def test_unrepresented_reference_constraints_are_rejected(tmp_path: Path, option
             syntax.rule_lines(src, src.lang, rule, nested=nested)
 
 
-@pytest.mark.parametrize("slot", ["$new", "$x"])
-def test_fresh_annotation_is_rejected(tmp_path: Path, slot: str) -> None:
+@pytest.mark.parametrize("option", [":fresh $new", ":fresh $x", ":lead 0", ":lead 1"])
+def test_unknown_rewrite_options_are_rejected(tmp_path: Path, option: str) -> None:
     src = source(tmp_path)
-    rule = syntax.parse(f"(rewrite (F $x a) a :fresh {slot})")[0]
+    rule = syntax.parse(f"(rewrite (F $x a) a {option})")[0]
     for nested in (False, True):
-        with pytest.raises(SystemExit, match="got ':fresh'"):
+        with pytest.raises(SystemExit, match=f"got '{option.split()[0]}'"):
             syntax.rule_lines(src, src.lang, rule, nested=nested)
 
 

@@ -11,20 +11,19 @@ pub(super) struct Atom {
     pub pays: Vec<Term>,
 }
 
-/// Names shared by all patterns in one rule. Frames erase a leading `?`, so
-/// freshness must use that same spelling even when generated roots retain it.
+/// Names shared by all patterns in one rule, including generated names.
 #[derive(Default)]
 pub(super) struct PatternNames(BTreeSet<String>);
 
 impl PatternNames {
     pub fn reserve(&mut self, name: &str) {
-        self.0.insert(fname(name).to_owned());
+        self.0.insert(name.to_owned());
     }
 
     pub fn fresh(&mut self, stem: &str) -> String {
         let mut name = stem.to_owned();
         let mut suffix = 0;
-        while !self.0.insert(fname(&name).to_owned()) {
+        while !self.0.insert(name.clone()) {
             suffix += 1;
             name = format!("{stem}_{suffix}");
         }
@@ -105,11 +104,9 @@ fn children(a: &Atom) -> BTreeSet<String> {
         })
         .collect()
 }
-pub(super) fn connected(mut atoms: Vec<Atom>, first: usize) -> Result<Vec<Atom>, String> {
-    if first >= atoms.len() {
-        return Err(":lead is outside the flattened pattern".into());
-    }
-    let a = atoms.remove(first);
+/// Order a nonempty multipattern to join connected atoms before disconnected ones.
+pub(super) fn connected(mut atoms: Vec<Atom>) -> Vec<Atom> {
+    let a = atoms.remove(0);
     let mut seen = variables(&a);
     let mut roots = BTreeSet::from([a.root.clone()]);
     let mut kids = children(&a);
@@ -126,7 +123,7 @@ pub(super) fn connected(mut atoms: Vec<Atom>, first: usize) -> Result<Vec<Atom>,
         kids.extend(children(&a));
         out.push(a);
     }
-    Ok(out)
+    out
 }
 
 /// Equality of applied terms, or just their classes. Checks and rule guards use
@@ -265,11 +262,8 @@ impl Query {
     }
 }
 fn label(s: &str) -> &str {
-    let s = s.trim_start_matches('?').trim_start_matches('_');
+    let s = s.trim_start_matches('_');
     if s.is_empty() { "v" } else { s }
-}
-pub(super) fn fname(s: &str) -> &str {
-    s.trim_start_matches('?')
 }
 pub(super) fn names_expr(xs: impl IntoIterator<Item = String>) -> String {
     call("names", xs.into_iter().map(|x| quote(&x)))
@@ -286,7 +280,7 @@ fn occurrence(
 ) -> Result<String, String> {
     let symbols = lang.symbols(&q.sorts[pv]);
     if root
-        && fname(pv).starts_with('_')
+        && pv.starts_with('_')
         && let Some((op, cols, j)) = parents.get(pv)
     {
         let sym = q.fresh(&format!("sym_{}", label(pv)));
@@ -394,7 +388,7 @@ pub(super) fn compile(
         };
         bindings.push(format!(
             "(root {} ({} {rv}){reading})",
-            quote(fname(&a.root)),
+            quote(&a.root),
             sy.free_vars
         ));
         seen.insert(a.root.clone());
@@ -410,7 +404,7 @@ pub(super) fn compile(
                     };
                     bindings.push(format!(
                         "(child {} {e} ({} {c}){reading})",
-                        quote(fname(pv)),
+                        quote(pv),
                         sy.free_vars
                     ));
                     seen.insert(pv.clone());
@@ -490,7 +484,7 @@ pub(super) fn compile(
     if let Some(root) = anchor
         && !atoms.is_empty()
     {
-        frame = format!("(anchor {frame} {})", quote(fname(root)));
+        frame = format!("(anchor {frame} {})", quote(root));
     }
     if refine && !atoms.is_empty() {
         q.refined = q.fresh("refined");
@@ -514,10 +508,8 @@ pub(super) fn compile(
     q.frame = q.fresh("m");
     q.body.push(format!("(= {} {frame})", q.frame));
     for (pv, _) in &q.classes {
-        q.maps.insert(
-            pv.clone(),
-            format!("(ren {} {})", q.frame, quote(fname(pv))),
-        );
+        q.maps
+            .insert(pv.clone(), format!("(ren {} {})", q.frame, quote(pv)));
     }
     for lit in literals.union(&conditions.fresh) {
         q.slots.insert(

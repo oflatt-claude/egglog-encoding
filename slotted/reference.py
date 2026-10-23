@@ -15,7 +15,7 @@ SLOTTED = (CHILD, BINDER)
 SUBST = "subst"
 TOKEN = re.compile(r'\(|\)|"(?:\\.|[^"\\])*"|;[^\n]*|[^\s()]+')
 SLOT_LITERAL = re.compile(r"\$(?:[+-]?\d+|\w+)\Z")
-KEYWORDS = (":name", ":lead", ":when")
+KEYWORDS = (":name", ":when")
 
 
 @dataclass(frozen=True)
@@ -522,14 +522,14 @@ def plain_pays(t):
 
 
 class PatternNames:
-    """Fresh pattern names, using the frame's spelling without a leading `?`."""
+    """Fresh pattern names that do not collide with source names."""
 
     def __init__(self, form):
         self.used = set()
 
         def reserve(value):
             if isinstance(value, str):
-                self.used.add(value.lstrip("?"))
+                self.used.add(value)
             elif isinstance(value, (list, tuple)):
                 for child in value:
                     reserve(child)
@@ -538,22 +538,22 @@ class PatternNames:
 
     def fresh(self, stem):
         name, suffix = stem, 0
-        while name.lstrip("?") in self.used:
+        while name in self.used:
             suffix += 1
             name = f"{stem}_{suffix}"
-        self.used.add(name.lstrip("?"))
+        self.used.add(name)
         return name
 
 
-def flatten(lang, term, root=None, tmp="?_t", *, names=None):
+def flatten(lang, term, root=None, tmp="_t", *, names=None):
     """A nested pattern as depth-1 atoms, pre-order, so every atom's root is a child
     of an earlier one -- which is the connectivity the recipe requires."""
     term = lang.refresh_shadowed_binders(term)
     names = names or PatternNames(term)
     if root is None:
-        root = names.fresh("?_p")
+        root = names.fresh("_p")
     else:
-        names.used.add(root.lstrip("?"))
+        names.used.add(root)
     atoms, ctr = [], [0]
 
     def go(t, name):
@@ -594,8 +594,8 @@ def rhs_of(lang, t):
 def atom_lines(lang, root, atoms, var="var", *, names=None):
     """A flattened pattern as the oracle's `MultiPattern` atom lines.
 
-    `(root_name, lines)`, with the leading `?` stripped as those lines want. An atom's
-    children are pattern variables and slot literals, so:
+    `(root_name, lines)`, preserving source variable names. The reference protocol
+    adds its own `?` prefix. An atom's children are pattern variables and slot literals, so:
 
       * a slot literal in a BINDER column is the bare `$x` that `Bind` holds; a pattern
         variable there is refused by the compiler, and is an error here;
@@ -616,9 +616,7 @@ def atom_lines(lang, root, atoms, var="var", *, names=None):
         for i, (kind, c) in enumerate(kids):
             if kind == "pv" and i in binders:
                 raise SystemExit(f"a pattern variable ({c}) cannot stand in {op}'s binder column")
-            if kind == "pv":
-                spelled.append(c.lstrip("?"))
-            elif kind == "sl" and i in binders:
+            if kind == "pv" or (kind == "sl" and i in binders):
                 spelled.append(c)
             elif kind == "sl":
                 extra[0] += 1
@@ -639,8 +637,8 @@ def atom_lines(lang, root, atoms, var="var", *, names=None):
                 else:
                     out.append(f"atom {v} {leaf}")
                 spelled.append(v)
-        out.append(f"atom {name.lstrip('?')} {lang[op].ref or op} {' '.join(spelled)}")
-    return root.lstrip("?"), out
+        out.append(f"atom {name} {lang[op].ref or op} {' '.join(spelled)}")
+    return root, out
 
 
 def pat_sexpr(lang, t, binder=False):
@@ -845,7 +843,7 @@ class Source:
             if form in self.lang.bound:
                 return self.global_ref(form, ground)
             if not ground:
-                return form.lstrip("?")
+                return form
             raise ValueError(f"{self.path.name}: unbound fixture term {form!r}")
         head, *args = form
         if head == SUBST:
@@ -884,21 +882,19 @@ def rewrite_parts(src, form):
     """Read a fixture rewrite for translation to the reference's pattern language."""
     assert form[0] == "rewrite", form
     names = PatternNames(form)
-    out = dict(names=names, name=None, lhs=form[1], rhs=form[2], conds=[], equalities=[], diseq=[], same=[], lead=0)
+    out = dict(names=names, name=None, lhs=form[1], rhs=form[2], conds=[], equalities=[], diseq=[], same=[])
     for key, vals in keywords(src, form[3:]):
         if key == ":name":
             out["name"] = unquote(vals[0])
-        elif key == ":lead":
-            out["lead"] = int(vals[0])
         elif key == ":when":
             for cond in vals[0]:
                 want, *rest = cond
                 if want in src.spec:
                     out["equalities"].append((names.fresh("_fact"), cond))
                 elif want in ("=", "!=") and isinstance(rest[1], str):
-                    out["same" if want == "=" else "diseq"].append(tuple(v.lstrip("?") for v in rest))
+                    out["same" if want == "=" else "diseq"].append(tuple(rest))
                 elif want == "=":
-                    out["equalities"].append((rest[0].lstrip("?"), rest[1]))
+                    out["equalities"].append((rest[0], rest[1]))
                 elif want in ("free", "not-free"):
                     slot, *pvars = rest
                     variables = []
@@ -908,7 +904,7 @@ def rewrite_parts(src, form):
                             out["equalities"].append((fresh, v))
                             variables.append(fresh)
                         else:
-                            variables.append(v.lstrip("?"))
+                            variables.append(v)
                     out["conds"].append((want == "free", slot, variables))
                 else:
                     raise ValueError(f"unsupported reference condition: {cond}")
@@ -937,9 +933,9 @@ def rule_atoms(src, lang, parts):
     for name, pattern in parts["equalities"]:
         _, extra = flatten(lang, src.term(pattern, ground=False), root=name, names=names)
         atoms.extend(extra)
-    bound = {a[0].lstrip("?") for a in atoms}
-    bound.update(child.lstrip("?") for _, _, kids, _ in atoms for kind, child in kids if kind == "pv")
-    if root.lstrip("?") not in bound:
+    bound = {a[0] for a in atoms}
+    bound.update(child for _, _, kids, _ in atoms for kind, child in kids if kind == "pv")
+    if root not in bound:
         raise ValueError("reference rewrite root must be bound by a constructor pattern")
     return root, atoms
 
@@ -951,7 +947,7 @@ def rule_lines(src, lang, form, *, nested=False):
     weaker rule. All atoms share a fresh-name supply, including literal leaves.
     """
     parts = rewrite_parts(src, form)
-    if parts["same"] or parts["diseq"] or parts["lead"]:
+    if parts["same"] or parts["diseq"]:
         raise ValueError(f"{src.path.name}: unsupported reference rewrite options: {render(form)}")
     lhs = src.term(parts["lhs"], ground=False)
     rhs = pat_sexpr(lang, rhs_of(lang, src.term(parts["rhs"], ground=False)))

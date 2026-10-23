@@ -6,24 +6,38 @@ significant unless a query explicitly compares terms modulo renaming.
 
 ## Slotted features
 
-The slotted language adds the following syntax and behavior to egglog.
+With `--slotted`, the following syntax is added to vanilla egglog:
 
 | Feature | Syntax | Meaning |
 | --- | --- | --- |
 | [Slots](#slots-and-terms) | `$a`, `$a0` | Variable terms in any equality sort; names in rewrites are rule-local |
 | [Binders](#binder-columns) | `:binder i ...` | Constructor columns that bind slots in the following term child |
-| [Pattern variables](#slots-and-terms) | `x`, `?x` | Two spellings of the same pattern variable |
-| [Fresh slots](#fresh-slots) | RHS-only `$x` | Slots absent from the multipattern are implicitly fresh |
-| [Multipatterns](#multipatterns) | `:when ((= v (Ctor ...)) ...)` | Additional constructor patterns joined through shared pattern variables |
-| [Matching order](#matching-order) | `:lead N` | Select the starting constructor pattern in the multipattern; defaults to `0` |
-| [Term equality](#equality) | `(= a b)`, `(!= a b)` | Equality or inequality preserving free-variable identities and respecting alpha-equivalence and known symmetries |
 | [Equality modulo renaming](#equality) | `(renaming-= a b)`, `(renaming-!= a b)` | Equality or inequality allowing renaming of free variables |
 | [Free names](#free-names) | `(free $x a ...)` | `$x` is free in at least one listed term |
 | [Free names](#free-names) | `(not-free $x a ...)` | `$x` is free in none of the listed terms |
 | [Exact free names](#free-names) | `(free-names-are a $x ...)` | The term's live free names are exactly the listed set; no names means closed |
-| [Rewrite rounds](#run) | `(run N)` | Apply user rewrites with slotted maintenance around each round |
-| [Extraction](#extract) | `(extract term)` | Extract an encoded tree from the class leader |
 | [Nested-matcher compatibility](#nested-matcher-compatibility) | `--slotted-no-aliasing` | Restrict matching to the reference nested matcher's aliasing policy |
+
+Existing egglog forms have these slotted semantics:
+
+| Form | Behavior in slotted mode |
+| --- | --- |
+| [Sorts and constructors](#sorts-and-constructors) | Every equality sort accepts slots; a constructor's term children must use its result sort |
+| [`let`](#let) | Globals in rewrite patterns expand to their defining source terms |
+| [`union`](#union), [`=` and `!=`](#equality) | Equality respects bound-variable alpha-equivalence and known symmetries while preserving free-variable identities |
+| [`rewrite`](#rewrite) | Pattern slots are rule-local; distinct names match distinct slots, and RHS-only slots are implicitly fresh |
+| [`run`](#run) | Slotted maintenance surrounds each round of user rewrites |
+| [`extract`](#extract) | Returns an encoded tree from the class leader, including renamings and binder markers |
+
+Pattern variables, `:name`, and `:when` use egglog's existing syntax. The
+[multipattern](#multipatterns) section describes how constructor patterns in
+`rewrite` and `:when` match slotted terms together.
+
+Slotted mode supports a subset of vanilla egglog. General `rule` and `birewrite`
+commands, named rulesets, `run-schedule`, and `run-report` are unsupported.
+Constructor payloads are limited to `i64` and `String`; cross-sort term edges,
+containers, and payload computations are unsupported. The sections below give
+the restrictions for each declaration, command, and predicate.
 
 The rest of this guide describes these features in more detail, including
 their syntax, constraints, and examples.
@@ -96,7 +110,8 @@ and has no scope over `initializer`.
 | `$a`, `$a0`, `$outer_var` | A variable term, or a binding occurrence in a binder column |
 | `(Ctor arg ...)` | A constructor application; nullary constructors also require parentheses |
 | `name` | A previously declared global, or a pattern variable in a rewrite |
-| `?name` | A pattern variable in a rewrite; equivalent to `name` |
+
+Identifiers retain their spelling: `x` and `?x` are different names.
 
 Slot names contain letters, digits, or underscores. Every carrier accepts
 slots without a variable declaration, even if it has no user constructors.
@@ -145,12 +160,12 @@ unioning it with `(F $b $c)` makes both slots redundant.
 ### `rewrite`
 
 ```text
-(rewrite lhs rhs :name "name" :when (fact ...) :lead N)
+(rewrite lhs rhs :name "name" :when (fact ...))
 ```
 
 Asserts `lhs = rhs` for each match. Options are optional. `:name` assigns the
 rule name. `:when` takes one list of facts; repeated `:when` clauses or facts
-without the surrounding list are rejected. `:lead` selects the matching order.
+without the surrounding list are rejected.
 
 The left side is a constructor pattern or a variable bound by the multipattern.
 The right side is a matched variable or a constructed term. Literal payloads
@@ -193,15 +208,6 @@ An unbound left-hand variable is rejected. The multipattern can bind it:
 (run 1)
 (check (= (N) (G (N))))
 ```
-
-#### Matching order
-
-`:lead N` selects the first flattened constructor pattern to match, using a
-zero-based index. Patterns are numbered in preorder, starting with the left
-side and then the patterns in `:when`. Ground leaf constructors used as
-arguments are literals and do not get an index. The default is `0`; an index
-outside the pattern is an error. This option controls matching order, not the
-equation the rewrite asserts.
 
 #### Fresh slots
 

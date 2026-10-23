@@ -1,5 +1,5 @@
 use super::model::*;
-use super::query::{self, Atom, Conditions, Query, fname, names_expr};
+use super::query::{self, Atom, Conditions, Query, names_expr};
 use super::syntax::quote;
 
 enum Slots {
@@ -31,7 +31,7 @@ fn build(
             Ok(Built {
                 edge: q.maps[pv].clone(),
                 value,
-                slots: Slots::Name(fname(pv).into()),
+                slots: Slots::Name(pv.clone()),
             })
         }
         Term::Slot(s) => Ok(Built {

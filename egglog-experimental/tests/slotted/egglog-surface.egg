@@ -1,8 +1,7 @@
 ;;; egglog's surface spelling: bare pattern variables, and `:when` as a list of facts.
 ;;;
-;;; The corpus is written bare, and this file is the cover for a rewrite whose
-;;; multipattern comes from `:when`, for the two spellings of a variable naming one
-;;; variable, and for a global's scope. `own-sort.egg` covers a sort other than `U`.
+;;; Multipatterns from `:when`, distinct variable names, and global scope.
+;;; `own-sort.egg` covers a sort other than `U`.
 ;;;
 ;;; Every `:when` case asserts BOTH halves: that the rule fires where the condition
 ;;; holds, and that it does NOT where the condition fails. Only the second has teeth --
@@ -36,15 +35,15 @@
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; The two spellings name the SAME variable, so a rule may mix them: the sigil is
-;;; stripped, and `?x` and `x` are one variable rather than two.
+;;; Question marks are ordinary identifier characters: `x` and `?x` are distinct.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (push)
-(rewrite (Prev (Succ ?x)) x :name "mixed")
+(rewrite (Pair x ?x) (G ?x x) :name "distinct-names")
 
-(let two (Prev (Succ (Succ (Null)))))
-(run 5)
-(check (= two (Succ (Null))))
+(let pair (Pair $left $right))
+(run 1)
+(check (= pair (G $right $left)))
+(fail (check (= pair (G $left $right))))
 (pop)
 
 

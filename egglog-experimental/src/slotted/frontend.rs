@@ -424,7 +424,7 @@ impl Compiler {
                     self.expand(&self.state.lang.globals[s])
                 }
             }
-            Form::Atom(s) if !ground => Term::Variable(s.trim_start_matches('?').into()),
+            Form::Atom(s) if !ground => Term::Variable(s.clone()),
             Form::Atom(s) => return Err(format!("global {s:?} is not bound")),
             Form::List(_) => {
                 let (head, args) = f.call()?;
@@ -471,7 +471,7 @@ impl Compiler {
                             } else if ground {
                                 return Err("ground payloads must be literals".into());
                             } else {
-                                Term::PayloadVariable(text.trim_start_matches('?').into())
+                                Term::PayloadVariable(text.into())
                             }
                         }
                         Column::Child => self.term(a, ground, Some(&op.sort))?,
@@ -541,12 +541,12 @@ impl Compiler {
         let (root, mut atoms) = if let Term::Variable(v) = &lhs {
             (v.clone(), Vec::new())
         } else {
-            let root = names.fresh("?_p");
-            let atoms = query::flatten(&self.state.lang, &lhs, &root, "?_t", &mut names)?;
+            let root = names.fresh("_p");
+            let atoms = query::flatten(&self.state.lang, &lhs, &root, "_t", &mut names)?;
             (root, atoms)
         };
         let mut conditions = query::Conditions::default();
-        let (mut name, mut lead) = (None, 0);
+        let mut name = None;
         let mut side = 0;
         let mut when_seen = false;
         let mut i = 2;
@@ -562,15 +562,11 @@ impl Compiler {
                 ":ruleset" => {
                     return Err("named rulesets are not supported by the slotted schedule; omit :ruleset and use (run N)".into());
                 }
-                ":name" | ":lead" => {
+                ":name" => {
                     if values.len() != 1 {
                         return Err(format!("{key} expects one argument"));
                     }
-                    let value = values[0].atom()?;
-                    match key {
-                        ":name" => name = Some(unquote(value)?),
-                        _ => lead = value.parse().map_err(|_| "invalid :lead index")?,
-                    }
+                    name = Some(unquote(values[0].atom()?)?);
                 }
                 ":when" => {
                     if when_seen {
@@ -593,22 +589,19 @@ impl Compiler {
                             {
                                 conditions.comparisons.push((
                                     comparison,
-                                    rest[0].atom()?.trim_start_matches('?').to_owned(),
-                                    rest[1].atom()?.trim_start_matches('?').to_owned(),
+                                    rest[0].atom()?.to_owned(),
+                                    rest[1].atom()?.to_owned(),
                                 ));
                             }
-                            ("=", _) if rest.len() == 2 => extra.push((
-                                rest[0].atom()?.trim_start_matches('?').to_owned(),
-                                rest[1].clone(),
-                            )),
+                            ("=", _) if rest.len() == 2 => {
+                                extra.push((rest[0].atom()?.to_owned(), rest[1].clone()))
+                            }
                             ("free" | "not-free", _) if rest.len() >= 2 => {
                                 let slot = rest[0].atom()?.to_owned();
                                 let mut pvars = Vec::new();
                                 for f in &rest[1..] {
                                     match f {
-                                        Form::Atom(v) => {
-                                            pvars.push(v.trim_start_matches('?').into())
-                                        }
+                                        Form::Atom(v) => pvars.push(v.clone()),
                                         _ => {
                                             let v = names.fresh(&format!("_cond{side}"));
                                             side += 1;
@@ -621,7 +614,7 @@ impl Compiler {
                             }
                             ("free-names-are", _) if !rest.is_empty() => {
                                 let v = match &rest[0] {
-                                    Form::Atom(v) => v.trim_start_matches('?').to_owned(),
+                                    Form::Atom(v) => v.clone(),
                                     f => {
                                         let v = names.fresh(&format!("_cond{side}"));
                                         side += 1;
@@ -653,7 +646,7 @@ impl Compiler {
                                 &self.state.lang,
                                 &t,
                                 &v,
-                                &format!("?_w{side}_"),
+                                &format!("_w{side}_"),
                                 &mut names,
                             )?);
                             side += 1;
@@ -681,7 +674,7 @@ impl Compiler {
         {
             return Err("cross-sort multipatterns are not supported".into());
         }
-        let atoms = query::connected(atoms, lead)?;
+        let atoms = query::connected(atoms);
         let result = rewrite::compile(
             &self.state.lang,
             rewrite::Rewrite {
@@ -720,15 +713,15 @@ impl Compiler {
             let mut used = BTreeSet::new();
             pattern.slot_literals(&mut used);
             rename_binders(lang, &mut pattern, &BTreeMap::new(), &mut used, &mut 0);
-            let root = format!("?_c{i}");
+            let root = format!("_c{i}");
             let atoms = query::flatten(
                 lang,
                 &pattern,
                 &root,
-                &format!("?_c{i}t"),
+                &format!("_c{i}t"),
                 &mut query::PatternNames::default(),
             )?;
-            let atoms = query::connected(atoms, 0)?;
+            let atoms = query::connected(atoms);
             let q = query::compile(
                 lang,
                 &atoms,

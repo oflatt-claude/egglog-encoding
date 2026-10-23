@@ -89,7 +89,7 @@ def egg_program(case, atom_order=None, mult=3, defer_probes=False):
     return driver.program(
         "array",
         LANG,
-        [r.source(lead=atom_order) for r in case.rules],
+        [r.source(first_atom=atom_order) for r in case.rules],
         case.terms,
         case.unions,
         case.probes,
@@ -157,7 +157,9 @@ def check_case(case, order_check=True, shift_check=True):
     if order_check and not fails:
         for k in range(1, max(len(r.atoms) for r in case.rules)):
             ys, y = run_encoding(case, atom_order=k)
-            if ys == "OK" and y != ev:
+            if ys != "OK":
+                fails.append(f"{case.name}: atom {k} first: encoding {ys}: {y}")
+            elif y != ev:
                 fails.append(
                     f"{case.name}: ENCODING depends on the leading atom "
                     f"({k})\n    atom 0 first {ev}\n    atom {k} first {y}"

@@ -38,15 +38,17 @@ class Rule:
     def atoms(self):
         return ref.rule_atoms(self.src, self.lang, ref.rewrite_parts(self.src, self.form))[1]
 
-    def source(self, lead=None):
-        form = self.form
-        if lead is not None:
-            form = form[:3]
-            for key, values in ref.keywords(self.src, self.form[3:]):
-                if key != ":lead":
-                    form.extend([key, *values])
-            form.extend([":lead", str(min(lead, len(self.atoms) - 1))])
-        return ref.render(form)
+    def source(self, first_atom=None):
+        """Render the rewrite, optionally moving one flattened pattern first."""
+        if first_atom is None:
+            return ref.render(self.form)
+        parts = ref.rewrite_parts(self.src, self.form)
+        if parts["same"] or parts["diseq"]:
+            raise ValueError("cannot reorder a reference rule with unsupported comparison guards")
+        root, atoms = ref.rule_atoms(self.src, self.lang, parts)
+        atoms.insert(0, atoms.pop(min(first_atom, len(atoms) - 1)))
+        rhs = ref.rhs_of(self.lang, self.src.term(parts["rhs"], ground=False))
+        return rewrite(self.lang, atoms, root, rhs, conds=parts["conds"], name=parts["name"])
 
     def spec_lines(self):
         return ref.rule_lines(self.src, self.lang, self.form)
@@ -185,14 +187,14 @@ def pattern(lang, t):
     return node(op, [pattern(lang, k) for k in kids], pays)
 
 
-def rewrite(lang, atoms, root, rhs, *, conds=(), name=None, lead=0):
+def rewrite(lang, atoms, root, rhs, *, conds=(), name=None):
     """Spell a generated multipattern rule as a source rewrite."""
     facts = []
     for r, op, kids, *payloads in atoms:
         pays = payloads[0] if payloads else lang[op].pays
         facts.append(f"(= {r} {node(lang[op], [pattern(lang, k) for k in kids], pays)})")
     facts.extend(f"({'free' if want else 'not-free'} {slot} {' '.join(pvars)})" for want, slot, pvars in conds)
-    options = f" :when ({' '.join(facts)}) :lead {lead}"
+    options = f" :when ({' '.join(facts)})"
     if name:
         options += " :name " + json.dumps(name)
     return f"(rewrite {root} {pattern(lang, rhs)}{options})"
