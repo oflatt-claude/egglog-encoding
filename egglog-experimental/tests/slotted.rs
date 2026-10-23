@@ -91,7 +91,10 @@ fn checks_and_rule_guards_agree_on_equality() {
                 ("renaming-=", renamed),
                 ("renaming-!=", !renamed),
             ] {
-                let mut compiler = Compiler::new(Options { no_aliasing });
+                let mut compiler = Compiler::new(Options {
+                    no_aliasing,
+                    ..Default::default()
+                });
                 let mut graph = egglog_experimental::slotted::new_egraph();
                 let check = format!("(check ({op} left right))");
                 let check = if expected {
@@ -375,7 +378,10 @@ fn compatibility_cli_uses_the_same_matching_policy_for_checks_and_rules() {
     let encoded = String::from_utf8(output.stdout).unwrap();
     assert!(encoded.contains("(nested-atom ") && !encoded.contains("(atom "));
 
-    let mut compiler = Compiler::new(Options { no_aliasing: true });
+    let mut compiler = Compiler::new(Options {
+        no_aliasing: true,
+        ..Default::default()
+    });
     compiler.compile(None, LANGUAGE).unwrap();
     let error = compiler
         .compile(None, "(rewrite (F a b) a :when ((= b (G x y))))")
@@ -396,7 +402,10 @@ fn checks_and_rule_guards_agree_on_free_names() {
             ("(Lam $bound $bound)", "free-names-are body", true),
             ("(F $a $b)", "free-names-are body $a", false),
         ] {
-            let mut compiler = Compiler::new(Options { no_aliasing });
+            let mut compiler = Compiler::new(Options {
+                no_aliasing,
+                ..Default::default()
+            });
             let mut graph = egglog_experimental::slotted::new_egraph();
             let check = format!(
                 "(check ({}))",

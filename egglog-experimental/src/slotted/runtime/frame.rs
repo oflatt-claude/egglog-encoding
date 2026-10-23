@@ -994,29 +994,6 @@ fn atom_validator(
     }
 }
 
-/// `(free f lit vs)` or `(not-free f lit vs)` on term forms; see [`Frame::is_free`].
-fn free_validator(
-    expect: bool,
-) -> impl Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync + 'static {
-    move |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-        let [f, lit, vs] = args else { return None };
-        let f = frame_from_term(termdag, *f)?;
-        let lit = string_from_term(termdag, *lit)?;
-        let vs = names_from_term(termdag, *vs)?;
-        (f.is_free(lit, &vs.0)? == expect).then(|| unit_term(termdag))
-    }
-}
-
-/// `(same f a b)` on term forms; see [`Frame::same`].
-fn same_validator(termdag: &TermDag, args: &[TermId]) -> Option<bool> {
-    let [f, a, b] = args else { return None };
-    let f = frame_from_term(termdag, *f)?;
-    f.same(
-        string_from_term(termdag, *a)?,
-        string_from_term(termdag, *b)?,
-    )
-}
-
 #[derive(Debug)]
 pub struct FrameSort;
 
@@ -1029,9 +1006,7 @@ impl BaseSort for FrameSort {
 
     #[rustfmt::skip]
     fn register_primitives(&self, eg: &mut EGraph) {
-        // Each validator parses its arguments' term forms (see `super::terms`),
-        // runs the same `Frame` method as the runtime primitive, and termifies
-        // the result the way `reconstruct_termdag` does.
+        // Validators and runtime primitives use the same Frame operations.
         let frame_validator = |termdag: &mut TermDag, _: &[TermId]| -> Option<TermId> {
             Some(frame_to_term(termdag, &Frame::default()))
         };
@@ -1039,13 +1014,6 @@ impl BaseSort for FrameSort {
             let [a, b] = args else { return None };
             let (a, b) = (frame_from_term(termdag, *a)?, frame_from_term(termdag, *b)?);
             Some(frame_to_term(termdag, &a.join(&b)?))
-        };
-        let same_unit_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            same_validator(termdag, args)?.then(|| unit_term(termdag))
-        };
-        let bool_same_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
-            let same = same_validator(termdag, args)?;
-            Some(termdag.lit(Literal::Bool(same)))
         };
         let mint_validator = |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
             let [f, xs] = args else { return None };
