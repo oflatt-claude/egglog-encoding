@@ -40,6 +40,11 @@ design reasoning in documents whose purpose is explanation.
 
 ## Strip these from public reference and doc comments
 
+- **Invented terminology** — Reuse terms supplied by the user or established in
+  existing code, documentation, or cited references. Do not coin new labels,
+  acronyms, or synonyms for existing concepts. A term introduced by an earlier
+  agent edit is not evidence of established usage; use a plain description when
+  no established term exists.
 - **Edit history** — AI-written docs often narrate the changes the agent just
   made, including changes relative to earlier versions of the same branch.
   Describe what exists now for a reader who knows none of that history. For

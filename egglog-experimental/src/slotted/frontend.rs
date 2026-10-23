@@ -521,7 +521,7 @@ impl Compiler {
         let lhs = self.term(&args[0], false, None)?;
         let rhs = self.term(&args[1], false, None)?;
         // Reserve the entire source rule before allocating roots, including
-        // names introduced only by side patterns or used on the right-hand side.
+        // names introduced only in :when or used on the right-hand side.
         fn reserve(form: &Form, names: &mut query::PatternNames) {
             match form {
                 Form::Atom(name) => names.reserve(name),
@@ -536,7 +536,7 @@ impl Compiler {
         for form in args {
             reserve(form, &mut names);
         }
-        // A named root can be bound by the side patterns. This also permits a
+        // A named root can be bound by the multipattern. This also permits a
         // rewrite of a child matched inside another atom of a multipattern.
         let (root, mut atoms) = if let Term::Variable(v) = &lhs {
             (v.clone(), Vec::new())

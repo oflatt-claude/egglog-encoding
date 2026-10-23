@@ -1381,8 +1381,8 @@ Thus the mode prevents new aliases both when joining repeated pattern variables
 or literals and when enumerating optional refinements. Merely disabling final
 refinement would still permit aliases forced during a join. Sharing already present
 in a stored edge remains valid. The mode supports a single nested left-hand pattern;
-additional equality side patterns are rejected. Conditions still apply, and
-observational checks retain ordinary matching semantics.
+additional constructor patterns in `:when` are rejected. Conditions still apply,
+and observational checks retain ordinary matching semantics.
 
 Compatibility evaluation uses the same snapshot substitution on both sides, so
 representative selection does not confound the matcher comparison. The

@@ -45,7 +45,7 @@ The equivalent datatype declaration is:
 Every equality sort is a **carrier** for slotted terms and accepts slot
 literals. Several carriers may be declared, including through `datatype*`.
 A constructor's term children must have the same carrier as its result.
-A rewrite and its side patterns must also use one carrier, as must the terms
+All patterns in a rewrite must also use one carrier, as must the terms
 in a union or comparison. Cross-carrier operations are rejected.
 
 Constructor columns are either term columns or payload columns. Payloads
@@ -129,19 +129,21 @@ rule name. `:when` takes one list of facts; repeated `:when` clauses or facts
 without the surrounding list are rejected. `:fresh` declares fresh slots;
 slots appearing only on the right-hand side are fresh without this option.
 
-The left side is a constructor pattern or a variable bound by a side pattern.
+The left side is a constructor pattern or a variable bound by the multipattern.
 The right side is a matched variable or a constructed term. Literal payloads
 and payload pattern variables are supported; payload computations and
 primitive calls are unsupported. Only the default ruleset is supported.
 `:ruleset`, `rule`, and `birewrite` are rejected. Two `rewrite` commands express
 a bidirectional equation.
 
-#### Side patterns
+#### Multipatterns
 
-A `:when` fact can be a [query predicate](#query-predicates), an equality
+A multipattern combines the rewrite's left-hand pattern with additional
+patterns introduced by `:when`. A `:when` fact can be a
+[query predicate](#query-predicates), an equality
 `(= v (Ctor ...))` that binds a constructor pattern to `v`, or a constructor
 pattern `(Ctor ...)` whose presence is required. Patterns may nest. Variables
-introduced in side patterns may be used on the right-hand side.
+bound by the multipattern may be used on the right-hand side.
 
 Shared pattern variables join the patterns' matches and require equal term
 invocations, including their free-variable identities. In this example, `m`
@@ -159,7 +161,7 @@ identifies the stored memory and `p` requires the same address:
 (fail (check (= other (Num 42))))
 ```
 
-An unbound left-hand variable is rejected. A side pattern can bind it:
+An unbound left-hand variable is rejected. The multipattern can bind it:
 
 ```slotted
 (datatype Expr (F Expr Expr) (G Expr) (N))
@@ -248,9 +250,9 @@ cost. Conversion back to slotted source syntax is unsupported.
 
 These predicates are available in `check` and rewrite `:when` clauses. Checks
 accept ground terms and globals. Comparisons in guards take bound pattern
-variables; `=` can also introduce a side pattern. Free-name predicates accept
-matched variables or constructor patterns. Slot arguments in guards refer to
-rule-local pattern slots.
+variables; `=` can also add a constructor pattern to the multipattern. Free-name
+predicates accept matched variables or constructor patterns. Slot arguments in
+guards refer to rule-local pattern slots.
 
 | Predicate | Meaning |
 | --- | --- |
