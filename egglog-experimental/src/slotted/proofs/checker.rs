@@ -1,6 +1,4 @@
-//! Checks a slotted proof against the slotted source program, by the rules of
-//! `egglog-experimental/src/slotted/PROOFS.md`. The checker reads only the program: it knows nothing of
-//! the encoding the proof was translated from.
+//! Checks surface proofs against the slotted source program.
 
 use super::format::{
     SlottedConclusion, SlottedJustification, SlottedProofId, SlottedProofStore, SlottedProposition,
@@ -91,12 +89,9 @@ pub enum SlottedCheckError {
     },
 }
 
-/// What a checked proof establishes: its proposition, and the carrier sort its
-/// derivation is about when some term in it names one. A proof over bare slots
-/// and literals alone, such as `$0 = $0`, names no sort and holds in every one;
-/// every other fact came from a built term, a union or a rewrite, and carries
-/// its sort from there, so an equality derived in one sort cannot be used in
-/// another.
+/// A verified equality and its carrier sort. Sort-independent equalities, such
+/// as slot reflexivity, may be used in any carrier; other equalities retain
+/// the sort of their source axiom or rewrite.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checked {
     /// The equality established by the derivation.
@@ -446,6 +441,7 @@ fn check_rule(
                 literals.extend(pattern_vars(&store.term_dag, *lhs));
                 literals.extend(pattern_vars(&store.term_dag, *rhs));
             }
+            Condition::FreeNames { slots, .. } => literals.extend(slots.iter().cloned()),
             Condition::Free { slot, .. } | Condition::NotFree { slot, .. } => {
                 literals.push(slot.clone())
             }
@@ -516,18 +512,34 @@ fn check_rule(
                 let slot_number = slot_of(&store.term_dag, slot_term)
                     .ok_or_else(|| fail(format!("{slot} is bound to a non-slot")))?;
                 let want_free = matches!(condition, Condition::Free { .. });
+                let mut free = BTreeSet::new();
                 for var in vars {
                     let term = *subst.get(var).ok_or_else(|| unbound(var.clone()))?;
-                    let free = program.free_slots(&store.term_dag, term);
-                    let is_free = free.contains(&slot_number);
-                    if is_free != want_free {
-                        return Err(fail(format!(
-                            "({} {slot} {}) fails: {slot} is ${slot_number}, {var} is {} with free slots {free:?}",
-                            if want_free { "free" } else { "not-free" },
-                            vars.join(" "),
-                            store.term_dag.to_string(term)
-                        )));
-                    }
+                    free.extend(program.free_slots(&store.term_dag, term));
+                }
+                if free.contains(&slot_number) != want_free {
+                    return Err(fail(format!(
+                        "({} {slot} {}) fails: {slot} is ${slot_number}, free slots are {free:?}",
+                        if want_free { "free" } else { "not-free" },
+                        vars.join(" ")
+                    )));
+                }
+            }
+            Condition::FreeNames { var, slots } => {
+                let term = *subst.get(var).ok_or_else(|| unbound(var.clone()))?;
+                let wanted = slots
+                    .iter()
+                    .map(|slot| {
+                        let term = *subst.get(slot).ok_or_else(|| unbound(slot.clone()))?;
+                        slot_of(&store.term_dag, term)
+                            .ok_or_else(|| fail(format!("{slot} is bound to a non-slot")))
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()?;
+                let free = program.free_slots(&store.term_dag, term);
+                if free != wanted {
+                    return Err(fail(format!(
+                        "free-names-are {var}: expected {wanted:?}, found {free:?}"
+                    )));
                 }
             }
             Condition::Neq { lhs, rhs } => {
@@ -786,6 +798,49 @@ mod tests {
         );
         let wrong = store.fiat(null, bogus);
         assert!(check_proof(&mut store, &program, wrong).is_err());
+    }
+
+    #[test]
+    fn free_name_guards_check_the_instantiated_terms() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("F", vec![ColumnKind::Child; 3]);
+        program.add_let(&mut dag, "input", "(F $0 $1 $0)").unwrap();
+        let cases = [
+            ("free $s x y", true),
+            ("not-free $s x y", false),
+            ("free-names-are x $s", false),
+            ("free-names-are y $s", true),
+            ("free-names-are y", false),
+        ];
+        for (i, (condition, _)) in cases.iter().enumerate() {
+            program
+                .add_rewrite(
+                    &mut dag,
+                    &format!("(rewrite (F $s x y) y :name \"guard{i}\" :when (({condition})))"),
+                )
+                .unwrap();
+        }
+        let mut store = SlottedProofStore::new(dag);
+        let input = program.lets["input"];
+        let zero = slot_term(&mut store.term_dag, 0);
+        let one = slot_term(&mut store.term_dag, 1);
+        let root = store.fiat(input, input);
+        for (i, (condition, valid)) in cases.iter().enumerate() {
+            let proof = store.add(
+                SlottedProposition::equal(input, zero),
+                SlottedJustification::Rule {
+                    name: format!("guard{i}"),
+                    substitution: vec![("$s".into(), zero), ("x".into(), one), ("y".into(), zero)],
+                    premises: vec![root],
+                },
+            );
+            assert_eq!(
+                check_proof(&mut store, &program, proof).is_ok(),
+                *valid,
+                "{condition}"
+            );
+        }
     }
 
     #[test]

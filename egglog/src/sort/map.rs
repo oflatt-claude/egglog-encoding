@@ -98,10 +98,8 @@ pub fn normalize_map_term(termdag: &mut TermDag, args: &[TermId]) -> Option<Term
     Some(termdag.app("map-of".to_string(), flat))
 }
 
-/// A `(map-of ...)` term's entries keyed by [`TermId`]. Terms are hash-consed,
-/// so equal entries have equal ids and the pure map functions below apply to
-/// them as they do to runtime values; only the canonical order differs, which
-/// [`id_map_term`] restores.
+/// A `(map-of ...)` term's entries keyed by [`TermId`]. Use [`id_map_term`] to
+/// convert the result back to canonical term order.
 pub(crate) fn map_term_to_id_map(
     termdag: &TermDag,
     term_id: TermId,
@@ -186,9 +184,8 @@ pub fn find_mapping<T: Copy + Ord>(
     Some(mapping)
 }
 
-/// The validator of a primitive over one map: the map term's entries keyed by
-/// [`TermId`] through `f`, back to the canonical `(map-of ...)` term. `None`
-/// where `f` is, or for a malformed map term.
+/// Apply `f` to a map term's entries and return a canonical map term.
+/// Returns `None` for malformed input or when `f` does.
 fn unary_map_validator(
     f: impl Fn(&BTreeMap<TermId, TermId>) -> Option<BTreeMap<TermId, TermId>> + Send + Sync + 'static,
 ) -> impl Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync + 'static {

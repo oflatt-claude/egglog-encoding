@@ -1,36 +1,22 @@
-Proofs for the slotted encoding: the proof format over surface terms, the checker
-that verifies it against the slotted source program, and how a proof is obtained
-from the egglog proof encoding.
+# Slotted proofs
 
-# Overview
+`egglog-experimental --slotted --proofs source.egg` extracts and checks proofs
+for positive equality claims in [slotted programs](LANGUAGE.md). Each proof uses
+source terms, rewrites, and unions. The slotted checker verifies the translated
+proof against the source program before and after normalization.
 
-A slotted program run with `egglog-experimental --slotted --proofs` uses egglog's
-term/proof encoding (`egglog/src/proofs/proof_encoding.md`). Every `=` and
-`renaming-=` claim becomes a `(prove-slotted <claim> <facts>)`: a `prove` of the
-facts the claim's `check` would have had, carrying the claim over the source terms
-that those facts encode. egglog extracts a proof of the facts over the *encoded*
-program: terms like `(Add (map-of 0 1) (SlottedVar_0 0) ...)`, rows of
-`RenamesToLeader`, firings of the maintenance rules. That proof is unreadable, and
-it is a proof about the encoding, not about the program a person wrote. So it is
-translated into the format below, whose terms are the surface terms of
-[the slotted language](LANGUAGE.md) and whose rules are the program's own rewrites and unions,
-and the translated proof is checked by an independent checker that knows nothing
-about the encoding. The slotted checker is the arbiter in this mode: egglog's own
-proof checker and simplifier are not run on the encoded proof. The experimental
-handler requests its unsimplified premises with `with_proofs_for_translation`,
-then translates and verifies the result before returning it.
+The compiler emits a variant of the [slotted encoding](ENCODING.md) supported by
+egglog's term/proof encoding. The translator consumes unsimplified egglog proofs;
+egglog's own proof checker and simplifier are skipped in this mode.
 
-```
-source.egg --Rust compiler--> encoded program --egglog--> egglog proof
-                                                            | translate
-                                                            v
-                                       slotted proof --check--> surface claim
+```text
+source → encoded program → egglog proof → surface proof → checked claim
 ```
 
 # Terms
 
 A term is what the language writes: a constructor applied to children, a payload
-literal, or a slot such as `$a`. A `Var` binder column holds the bound slot itself.
+literal, or a slot such as `$a`. A binder column holds the bound slot itself.
 Ordinary proof steps compare terms syntactically: `(Lam $a $a)` and
 `(Lam $b $b)` are different terms. Equivariance explicitly transports proofs
 between slot names. Source equality conditions compare bound names by scope,
@@ -43,21 +29,14 @@ slot has one name throughout the proof, including permutation coordinates that
 appear only in an equivariance step or the final witness. Numbered source slots
 remain numbered.
 
-When terms are *read*, every `let`, `union` and claim term, and every rule
-instance the checker builds, has its bound slots named apart -- each binder
-occurrence gets a name of its own, apart from every other slot of the term,
-deterministically (`refresh_binders`); names already distinct from other binders
-and free slots are preserved. Two spellings of one term that differ only
-in how they share bound names then differ by a bijection of slots, and a built
-term never shares a bound name with a free one. The translator reads terms the same way, which is how a proof states the program's
-terms by name.
+When source terms and rule instances are read, each binder receives a name
+separate from other binders and free slots. Names already distinct are preserved.
+This lets alpha-equivalent terms differ by a permutation of slot names. The
+translator and checker use the same binder refresh.
 
-A term belongs to the carrier sort of its head constructor; a bare slot or a
-literal belongs to none. The checker carries a sort with every proof it checks: a
-fact that came from a built term, a union or a rewrite is about that sort, and it
-can only be composed with, and used by congruence in, terms of the same sort. A
-proof over bare slots alone, `$0 = $0`, is about no sort and holds in every one;
-every other equality between bare slots was derived in some sort and stays there.
+The checker associates each equality with its carrier sort. An equality derived
+from a source union or rewrite retains that sort through composition and
+congruence. Reflexivity of bare slots and literals is sort-independent.
 
 # Propositions
 
@@ -80,25 +59,23 @@ rules have the same ordinary semantics.
 subterm of a `let` or a `union` -- and `a = b` for a source `(union a b)`, in
 either direction. Reflexivity is not assumed for terms the program never built.
 
-**Rule.** `(rewrite L R :name n :when (...))` instantiated by a substitution σ from
-the rule's variables to terms. A pattern variable maps to a term of the sort the
-columns it stands in require; a slot literal `$x` maps to a slot, and different slot
-literals map to different slots (`(F $x $y)` does not match `(F $0 $0)`, as
-`LANGUAGE.md` says). Premises, in order: an ordinary proof `t = L[σ]` for the root
-pattern,
-then for each `:when` pattern `(= v call)` an ordinary proof whose endpoints
-are `σ(v)` and `call[σ]` up to alpha-equivalence. This source-condition comparison
-allows scoped bound names to differ, but checks every free name exactly. Each
-`free`/`not-free` condition is
-evaluated on σ, over each variable it names, which needs the binder positions of
-the constructors. `(!= a b)` holds when the two instantiated terms differ: that is
-what the firing saw, two invocations, and as in egglog's own proofs the step records
-that the guard held when the rule fired, not that it holds still -- a later union
-may identify the two (the guard is non-monotonic, `LANGUAGE.md`). A slot literal
-that occurs only on the right-hand side is *minted*: σ binds it to a slot that
-occurs nowhere in any other binding. The conclusion is `L[σ] = R[σ]` or its
-reverse, or `s = s` for a subterm `s` of either side. A right-hand side `subst`
-is not supported.
+**Rule.** Instantiate `(rewrite L R :name n :when (...))` by a substitution σ.
+Pattern variables take terms of their declared sorts; slot literals take distinct
+slots, as required by the [language](LANGUAGE.md#fresh-slots).
+
+Premises are ordered: first a proof `t = L[σ]`, then one proof for each
+multipattern condition `(= v call)`. Each condition's endpoints must be `σ(v)`
+and `call[σ]` up to alpha-equivalence, with identical free names.
+
+Guards are evaluated on σ with the constructors' binding scopes. `free` tests
+membership in the union of the listed terms' free slots; `not-free` tests absence
+from that union. `free-names-are` requires exactly the listed free slots.
+`(!= a b)` requires different instantiated terms. This guard records the state
+when the rule fired; a later union may equate its terms.
+
+RHS-only slot literals must be fresh for every other binding. The conclusion is
+`L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side. A
+right-hand side using `subst` is unsupported.
 
 **Sym.** From `a = b`, derive `b = a`.
 
@@ -150,7 +127,6 @@ The pass also removes reflexive congruence, symmetry and transitivity steps and
 double symmetry. It memoizes by proof ID and accumulated permutation: shared
 subproofs stay shared when used in the same coordinates. Slot names are assigned
 to the resulting displayed proof, reserving all source names and rule variables.
-There is no Shift rule or permutation field on an equality proposition.
 
 # The proof profile
 
@@ -162,13 +138,13 @@ source names, with `/apply` and `/drain` on their companion rules.
 `group-coset-reps` returns a vector sorted by content in both profiles, so the index
 a `Reading` row was read at means the same in every run, which a proof citing it needs.
 
-**What the proof profile avoids**, and how each table is respelled:
+The proof-compatible encoding represents these operations as follows:
 
-- *No tuple outputs.* `_shape_F` becomes `_shape_class_F (key...) <sort> :merge old`
+- *Shape tables.* `_shape_F` becomes `_shape_class_F (key...) <sort> :merge old`
   and `_shape_back_F (key...) Renaming :merge old`, both set by the index rule;
   `_shapeof_F` becomes `_shapeof_edges_F (...) Renamings :no-merge`, holding
   `[s1 .. sn, back]`, and `_shapeof_syms_F (...) Group :no-merge`.
-- *No `:merge` action blocks.* The collision a merge block stated is a rule,
+- *Shape collisions.* The collision a merge block stated is a rule,
   `shape-collision`, in the shape phase: a row `c` whose memoized shape finds a
   stored pair `(c0, back0)` under its key other than its own `(c, back)` states
   `(ShapeEqual c (compose back (inverse back0)) c0)` -- a symmetry of `c` when only
@@ -177,7 +153,7 @@ a `Reading` row was read at means the same in every run, which a proof citing it
   also states the symmetry between the two rows it compares as it deletes one.
   `Invocation` becomes `(relation Invocation_N (<sort> Renaming <sort>))`, written
   `(Invocation c name a)`, and `invocation-merge` unions two members under one name.
-- *No eq-sort `:no-merge` functions.* None remain: the `:no-merge` tables are
+- *Merge behavior.* The `:no-merge` tables are
   `Unit`- or container-valued, and the extract helper `_leaderN` has its
   `(ordering-min old new)` merge in both profiles.
 - *Claims.* A positive `=` or `renaming-=` claim compiles to `(prove-slotted <claim>
@@ -186,8 +162,8 @@ a `Reading` row was read at means the same in every run, which a proof citing it
   sort and the two source terms as written, each with the fact variable that holds
   the class it matched (a bare slot's side binds `(= _cNcls (SlottedVar_N 0))` for
   the purpose), and is what
-  egglog translates the proof to and checks it against (see *Claims*). `fail`-wrapped,
-  `!=`, `slots` and `holds` claims stay as they are. Plain egglog refuses
+  the slotted checker verifies (see [Claims](#claims)). Negative equality claims
+  and other predicates use ordinary checks. Plain egglog refuses
   `prove-slotted` outside proof mode, so `--slotted-proof-checks` keeps every claim a
   `check`. Both modes use the same maintenance and query compiler.
 
@@ -213,21 +189,12 @@ command macro backed by e-graph extension state, so recording follows execution 
 and `push`/`pop` restore the source together with the database. A claim's terms follow
 the same conventions inside its `prove-slotted` header.
 
-# What the checker reads
-
-The compiler publishes the source program in hidden rows next to the layout
-metadata: `SlottedCarrier`, `SlottedRuleSource`, `SlottedLetSource`,
-`SlottedUnionSource` (see *The proof profile* above). Binder
-positions come from `SlottedBinderLayout`, and each constructor's column and output
-sorts from its declaration. The claim itself travels with its command:
-`(prove-slotted (= U ("a" _c0cls) ("b" _c1cls) "slot-name map") ...)` names the carrier sort, the
-two source terms and, for each, the fact variable holding the encoded class it
-matched, which is how the translator finds the two sides in the proof. The checker resolves
-globals through the `let` rows, parses each rewrite's source form, and checks a
-proof against those alone; it never looks at the encoded tables. The optional JSON
-map records source slot spellings and their interned IDs, including names introduced
-by earlier checks or inputs. It is carried only by proof claims. Rewrites record
-their expanded source patterns so globals retain the compiler's slot-variable names.
+The source recorder resolves globals through `SlottedLetSource` and reads
+binder positions from `SlottedBinderLayout`. Constructor declarations provide
+column and output sorts. Each claim also carries a JSON map of source slot
+spellings to interned IDs, including names from earlier inputs. These records
+provide the source program used by the checker; the checker does not inspect
+encoded tables.
 
 # Translation
 
@@ -250,7 +217,7 @@ derivations, and fresh-slot supply across expansions. Its core is a denotation
 `dec` from encoded terms to surface terms:
 `dec(F(m1, c1, ..., mk, ck)) = F(m̂1·dec(c1), ...)`, where
 each edge is completed to a bijection by naming the child's redundant slots with
-fresh names, and `dec(SlottedVar_N 0)` is `$0`. Every encoded fact then denotes a
+fresh names, and `dec(SlottedVar_N 0)` is `$0`. Every encoded fact then denotes an
 ordinary proposition, and every maintenance rule firing has a fixed derivation.
 A private lifting context also retains the encoded edge coordinates needed by
 later reconstruction. Restating an edge in different coordinates reuses the same
@@ -262,10 +229,10 @@ ordinary proof; transporting its endpoints emits Equivariance:
 | `RenamesToLeader a m b`, `Equated a m b`, `ShapeEqual a m b` | `dec(a) = rename(m̂, dec(b))` |
 | `g` in `EclassGroup c`, `Reading c _ g` | `dec(c) = rename(ĝ, dec(c))` |
 | `Invocation c n a` | `dec(a) = rename(n̂, dec(c))` |
-| slot `r` of `c` outside `ClassSlots c` | `dec(c) = rename(swap(r, r'), dec(c))` for fresh `r'` |
+| slot `r` of `c` outside `FreeVars c` | `dec(c) = rename(swap(r, r'), dec(c))` for fresh `r'` |
 
 The last row is a *redundancy certificate*. It is derived on demand from the
-derivation of the `ClassSlots` row: the merge chain of intersections says which
+derivation of the `FreeVars` row: the merge chain of intersections says which
 `set` dropped the slot, and transport along an edge and group slot closure each
 have a short Sym/Equivariance/Trans derivation. Group membership is derived through a
 provenance-aware closure, since the stored group is closed and an element has to
@@ -305,7 +272,8 @@ and evaluate the result with `new_egraph_with_proofs()`.
 `make slotted-proof-tests` runs the supported source corpus through the Rust API,
 including each positive equality claim. The same tests run in `make check`.
 Sources using `subst` are ignored because it has no proof translation;
-the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
+the CLI refuses them. Rewrite guards using `renaming-=` or `renaming-!=`
+are also unsupported by proof translation. `--slotted-proof-checks` runs the same encoding with ordinary
 checks for comparison.
 
 The command and source recorder use egglog's extension APIs. Their state is stored

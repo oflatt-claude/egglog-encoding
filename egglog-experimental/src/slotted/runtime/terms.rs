@@ -1,13 +1,6 @@
-//! Proof term forms of the slotted values, and back.
-//!
-//! A primitive's validator re-evaluates it on the term forms of its arguments
-//! (see `proofs/proof_encoding.md`), so every slotted primitive parses its
-//! arguments with these helpers, runs the same algorithm as at runtime, and
-//! termifies the result with them. A renaming is the canonical `(map-of k0 v0
-//! ...)` of `i64` literals, a group the canonical `(set-of ...)` of renamings, a
-//! vector of renamings or frames `(vec-of ...)` (or `(vec-empty)`), and the base
-//! sorts `Frame`, `Binding` and `Names` are JSON string literals (see
-//! [`json_to_term`]).
+//! Convert slotted runtime values to and from their proof terms. Renamings,
+//! groups, and vectors use canonical map, set, and vector terms. `Frame`,
+//! `Binding`, and `Names` use JSON string literals.
 use super::*;
 use egglog::sort::{map_term_to_btreemap, normalize_map_term};
 use egglog::sort::{normalize_set_term, set_term_to_btreeset};
@@ -28,10 +21,6 @@ pub(crate) fn string_from_term(termdag: &TermDag, id: TermId) -> Option<&str> {
         Term::Lit(Literal::String(s)) => Some(s),
         _ => None,
     }
-}
-
-pub(crate) fn unit_term(termdag: &mut TermDag) -> TermId {
-    termdag.lit(Literal::Unit)
 }
 
 /// `(map-of k0 v0 ...)` of `i64` literals as a renaming; `None` otherwise.
@@ -97,8 +86,8 @@ pub(crate) fn renamings_to_term(
     vec_term(termdag, elements)
 }
 
-/// A string literal holding `value`'s JSON. The derived serializers walk
-/// ordered collections, so equal values have equal term forms.
+/// A string literal holding `value`'s JSON. Callers must provide a deterministic
+/// serialization so equal values have equal proof terms.
 pub(crate) fn json_to_term<T: Serialize>(termdag: &mut TermDag, value: &T) -> TermId {
     let json = serde_json::to_string(value).expect("slotted values serialize");
     termdag.lit(Literal::String(json))

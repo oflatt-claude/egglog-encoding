@@ -1,5 +1,4 @@
-//! The slotted proof format: ordinary equalities over surface terms and the
-//! justifications of `egglog-experimental/src/slotted/PROOFS.md`, in a hash-consed store.
+//! Ordinary equalities over slotted surface terms and their justifications.
 
 use super::HashMap;
 use super::terms::{Renaming, all_slots, rename, slot_of};
@@ -82,7 +81,7 @@ pub struct SlottedProof {
     pub justification: SlottedJustification,
 }
 
-/// A hash-consed arena of slotted proofs over one [`TermDag`].
+/// Distinct slotted proof steps over one [`TermDag`].
 #[derive(Clone, Debug, Default)]
 pub struct SlottedProofStore {
     /// Shared storage for source terms and instantiated terms.
@@ -293,8 +292,8 @@ impl SlottedProofStore {
         self.named_proposition(p, &self.display_names(None, []))
     }
 
-    /// One injective naming for all terms and permutations, including coordinates
-    /// that occur only in an equivariance step. Reserve rule-local variables as well as source slots.
+    /// Name terms and permutation coordinates without colliding with source slots
+    /// or rule variables.
     fn display_names(
         &self,
         root: Option<SlottedProofId>,

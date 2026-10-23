@@ -276,14 +276,14 @@ pub(super) fn register_set(eg: &mut EGraph, arc: ArcSort, renaming: ArcSort) {
         let group = group_from_term(termdag, *grp)?;
         Some(Binding::Child { var: var(termdag, *v)?, edge: renaming_from_term(termdag, *e)?, free_vars: slot_set_from_term(termdag, *cs)?, reading: Reading::Group(Arc::new(group)) })
     }));
-    add_primitive_with_validator!(eg, "coset-same" = {arc.clone(): ArcSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> () {{
+    add_primitive_with_validator!(eg, "coset-same" = {arc.clone(): ArcSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> bool {{
         let maps = value_maps(&state, s.data.iter().copied())?;
-        group::coset_same(&m1.data, &m2.data, &maps).then_some(())
+        Some(group::coset_same(&m1.data, &m2.data, &maps))
     }}, |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
         let [m1, m2, s] = args else { return None };
         let (m1, m2) = (renaming_from_term(termdag, *m1)?, renaming_from_term(termdag, *m2)?);
         let same = group::coset_same(&m1.0, &m2.0, &group_from_term(termdag, *s)?);
-        same.then(|| unit_term(termdag))
+        Some(termdag.lit(Literal::Bool(same)))
     });
     add_primitive_with_validator!(eg, "group-slot-closure" = {arc.clone(): ArcSort} |s: @SetContainer (arc.clone()), slots: @MapContainer (renaming.clone())| -?> @MapContainer (renaming.clone()) {{
         let maps = value_maps(&state, s.data.iter().copied())?;

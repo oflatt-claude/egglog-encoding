@@ -1,7 +1,4 @@
-//! Runs the slotted proof pipeline inside an e-graph: records the source
-//! metadata the compiler publishes as the program runs, and on each
-//! `prove-slotted` translates the egglog proof to a slotted proof of the
-//! command's claim and checks it.
+//! Source recording and checked proof extraction for `prove-slotted` commands.
 
 use super::HashMap;
 use super::checker::check_claim;

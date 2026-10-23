@@ -36,14 +36,14 @@ fn demo_proof_snapshots() {
         ),
         (
             "demo_alpha_renaming",
-            "(datatype U (Lam Var U :binder 0))\n\
+            "(datatype U (Lam U U :binder 0))\n\
              (let input (Lam $a $a))\n\
              (run 0)\n\
              (check (= input (Lam $b $b)))",
         ),
         (
             "demo_binder_congruence",
-            r#"(datatype U (Wrap U) (Lam Var U :binder 0) (F U) (G U))
+            r#"(datatype U (Wrap U) (Lam U U :binder 0) (F U) (G U))
 (let input (Wrap (Lam $a (F $a))))
 (rewrite (F x) (G x) :name "f-to-g")
 (run 1)
@@ -109,14 +109,14 @@ fn named_slots_survive_scopes_and_successive_inputs() {
 #[test]
 fn rust_frontend_lifts_and_checks_surface_proofs() {
     for source in [
-        include_str!("../../slotted/tests/paper/figure-3.egg"),
-        include_str!("../../slotted/tests/proof-conditions.egg"),
-        include_str!("../../slotted/tests/binder-scope.egg"),
-        include_str!("../../slotted/tests/bare-slot-union.egg"),
-        include_str!("../../slotted/tests/symmetry-with-redundancy.egg"),
-        include_str!("../../slotted/tests/named-slots.egg"),
-        include_str!("../../slotted/benchmarks/logic/first-order-logic.egg"),
-        include_str!("../../slotted/benchmarks/logic/first-order-logic2.egg"),
+        include_str!("slotted/paper/figure-3.egg"),
+        include_str!("slotted/proof-conditions.egg"),
+        include_str!("slotted/binder-scope.egg"),
+        include_str!("slotted/bare-slot-union.egg"),
+        include_str!("slotted/symmetry-with-redundancy.egg"),
+        include_str!("slotted/named-slots.egg"),
+        include_str!("../benches/slotted/logic/first-order-logic.egg"),
+        include_str!("../benches/slotted/logic/first-order-logic2.egg"),
     ] {
         let proofs = prove(
             &mut compiler(ProofMode::Prove),
@@ -254,7 +254,7 @@ fn binder_freshness_handles_the_smallest_slot() {
         &mut compiler(ProofMode::Prove),
         &mut new_egraph_with_proofs(),
         &format!(
-            "(datatype U (Lam Var U :binder 0))
+            "(datatype U (Lam U U :binder 0))
              (let x (Lam ${0} ${0}))
              (run 0)
              (check (= x (Lam $1 $1)))",

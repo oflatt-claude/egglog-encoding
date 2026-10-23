@@ -14,7 +14,7 @@ use egglog::{
     sort::{MapContainer, S, SetContainer},
 };
 use egraph_isomorphism::{
-    AnnotatedEGraph, Argument, FreeVars, Graph, NodeSlots, Slotted,
+    AnnotatedEGraph, Argument, ClassSlots, Graph, NodeSlots, Slotted,
     egraph_serialize::{ClassData, ClassId, Node, NodeId},
 };
 use serde::Serialize;
@@ -397,7 +397,7 @@ impl Snapshot {
                 slots.iter().enumerate().map(|(i, s)| (*s, i)).collect();
             slotted.classes.insert(
                 class_id(rep),
-                FreeVars {
+                ClassSlots {
                     slots: slots.iter().map(ToString::to_string).collect(),
                     group: groups[&rep]
                         .iter()

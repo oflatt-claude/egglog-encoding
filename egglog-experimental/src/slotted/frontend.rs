@@ -747,12 +747,20 @@ impl Compiler {
         let atoms = query::connected(atoms, lead)?;
         let name = name.unwrap_or_else(|| format!("_slotted_match_{}", self.state.rules));
         let mut source_facts = source_patterns;
-        source_facts.extend(conditions.same.iter().map(|(a, b)| format!("(= {a} {b})")));
+        source_facts.extend(conditions.comparisons.iter().map(|(comparison, a, b)| {
+            let kind = match (comparison.modulo_renaming, comparison.negated) {
+                (false, false) => "=",
+                (false, true) => "!=",
+                (true, false) => "renaming-=",
+                (true, true) => "renaming-!=",
+            };
+            format!("({kind} {a} {b})")
+        }));
         source_facts.extend(
             conditions
-                .distinct
+                .free_names
                 .iter()
-                .map(|(a, b)| format!("(!= {a} {b})")),
+                .map(|(var, slots)| format!("(free-names-are {var} {})", slots.join(" "))),
         );
         source_facts.extend(conditions.free.iter().map(|(free, slot, vars)| {
             format!(
