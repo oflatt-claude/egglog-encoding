@@ -56,7 +56,7 @@ impl Default for State {
 }
 
 /// Compiler state for successive input files or complete REPL commands.
-/// Source push/pop scopes are mirrored while ordinary egglog performs evaluation.
+/// Tracks declarations, globals, rewrites, and push/pop scopes.
 #[derive(Clone, Default)]
 pub struct Compiler {
     options: Options,
@@ -74,7 +74,7 @@ impl Compiler {
     }
 
     /// Compile a program without evaluating it. Includes resolve from the process
-    /// working directory, as they do in the normal egglog CLI.
+    /// working directory.
     /// A failed compilation leaves this compiler unchanged.
     pub fn compile(
         &mut self,

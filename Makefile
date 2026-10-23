@@ -1,6 +1,6 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
-	proof-tests slotted-check slotted-eval slotted-check-no-oracle benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	proof-tests slotted-eval benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -25,6 +25,10 @@ check: nits test
 nits: python-nits rust-nits
 
 test: python-test rust-test
+	cargo build -p egglog-experimental -p egraph-isomorphism --bins
+	cargo build --manifest-path slotted/xmulti/Cargo.toml
+	cargo test --manifest-path slotted/xmulti/Cargo.toml
+	uv run --locked python slotted/checks/check-slotted.py
 
 python-check: python-nits python-test
 
@@ -68,25 +72,11 @@ rust-doc-links:
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
 
-# Slotted fixtures, compiler snapshots, reference comparisons, and mutation tests.
-# The Python runner's --quick flag skips fuzzing; --no-oracle skips reference checks.
-slotted-check:
-	cargo build
-	cargo test -p egglog-experimental --test 'slotted*' --test 'api_slotted*'
-	cargo build --manifest-path slotted/xmulti/Cargo.toml
-	cargo test --manifest-path slotted/xmulti/Cargo.toml
-	uv run --locked python slotted/checks/check-slotted.py
-
 # The paper's case studies -- the S4.1 array goal and the S4.2 SDQL workloads -- on the
 # encoding and on the reference through both of its matchers, at the artifact's budgets.
 # Release builds of both binaries, since these are the numbers a graph is drawn from.
 slotted-eval:
 	uv run --locked python slotted/eval.py
-
-slotted-check-no-oracle:
-	cargo build
-	cargo test -p egglog-experimental --test 'slotted*' --test 'api_slotted*'
-	uv run --locked python slotted/checks/check-slotted.py --no-oracle
 
 # Smoke the runner on small files, not the full local benchmark suite.
 benchmark-smoke:

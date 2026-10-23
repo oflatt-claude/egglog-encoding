@@ -22,7 +22,7 @@ Hygiene checks and tests can be run independently. `nits` never runs tests:
 
 ```bash
 make nits           # lockfile, formatting checks, linting, and type checking
-make test           # Python and Rust tests
+make test           # Python, Rust, and slotted reference/differential tests
 make python-check   # complete Python validation
 make rust-check     # complete Rust validation
 make python-nits    # Python hygiene only
@@ -59,9 +59,9 @@ for substitution policies and comparison requirements.
 Case-study programs live in `egglog-experimental/benches/slotted/`; regression
 fixtures, shared languages, and compiler snapshots live in
 `egglog-experimental/tests/slotted/`. Artifact inputs and generators live in
-[`slotted/benchmarks/`](slotted/benchmarks/). `make check` runs the Rust regressions.
-`make slotted-check` runs the language, differential, and fuzz tests, including
-the benchmarks' shared generators. The
+[`slotted/benchmarks/`](slotted/benchmarks/). `make test` (also part of `make check`)
+runs the Rust regressions, reference comparisons, and differential fuzz tests,
+including the benchmarks' shared generators. The
 [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also
 included in the Rust documentation for `egglog_experimental::slotted`.
 
