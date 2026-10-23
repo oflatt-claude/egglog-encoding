@@ -118,10 +118,22 @@ slots without a variable declaration, even if it has no user constructors.
 The carrier is inferred from context; a bare slot is ambiguous when several
 carriers are declared and no constructor determines its sort.
 
-Outside rewrites, a free slot name retains its identity across inputs.
-Binders shadow names within their scope. Inside a rewrite, slot names are
-local to that rule: pattern `$a` can match a ground slot of any name,
-including `$a`. Its spelling does not refer to the ground `$a`.
+Free slot names have the following meanings:
+
+| Context | Meaning of `$a` |
+| --- | --- |
+| Ground terms, including `let`, `union`, and `check` | The concrete slot named `a`, with the same identity across commands and inputs |
+| Rewrite pattern or `:when` guard | A rule-local slot matched against the graph |
+| Rewrite RHS, when `$a` occurs in the pattern | The slot selected by that match |
+| Rewrite RHS, when `$a` is absent from the pattern | A fresh slot, distinct from the slots in that match |
+
+`check` introduces no pattern-slot scope. Its free slots refer to concrete
+names, just as they do in `let`. In a rewrite, spelling a slot `$a` does not
+refer to the concrete slot named `a`. A pattern slot can match a concrete
+slot regardless of its name.
+
+Binders introduce a scope for their bound occurrences in every context.
+Bound names may change under alpha-equivalence; free names remain significant.
 
 ```slotted
 (datatype Expr (Lam Expr Expr :binder 0))
@@ -215,16 +227,24 @@ A slot appearing on the right-hand side but absent from the multipattern is
 implicitly fresh with respect to the match, including free slots inside matched
 terms.
 
-The ground slot `$new` remains free under the newly introduced binder:
+Here `$binder` names the fresh slot in the rewrite, and `$free` is a concrete
+slot in the input. The rewrite wraps that input in a lambda without capturing
+its free slot:
 
 ```slotted
 (datatype Expr (Wrap Expr) (Lam Expr Expr :binder 0))
-(rewrite (Wrap e) (Lam $new e))
-(let result (Wrap $new))
+(rewrite (Wrap e) (Lam $binder e))
+(let result (Wrap $free))
 (run 1)
-(check (= result (Lam $bound $new)))
-(check (free-names-are result $new))
+(check (= result (Lam $bound $free)))
+(check (free-names-are result $free))
+(fail (check (= result (Lam $bound $bound))))
 ```
+
+The checks use the same concrete `$free` as the input. `$bound` is bound by
+`Lam`; its spelling need not match the rewrite's `$binder`. The last check
+rejects the identity lambda, whose body would refer to the binder instead of
+the input's free slot.
 
 #### Slot constraints and capture
 
@@ -278,6 +298,9 @@ applying user rewrites. `run-schedule` and `run-report` are unsupported.
 `check` queries the current graph without adding terms or applying user
 rewrites. It fails if the predicate does not hold. Each slotted assertion
 requires its own `check`. `fail` succeeds when its enclosed check fails.
+Terms in a check are ground: globals must already be defined, and free slot
+names denote concrete slots. A check cannot introduce pattern variables or
+rule-local slots.
 
 ### `push` and `pop`
 
