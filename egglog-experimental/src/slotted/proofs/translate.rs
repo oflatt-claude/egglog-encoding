@@ -1,14 +1,8 @@
 //! Translation of an egglog proof over the encoded program to a slotted proof
 //! over surface terms; see *Translation* in `egglog-experimental/src/slotted/PROOFS.md`.
 //!
-//! The translator is demand driven: starting from the existence proof of the
-//! claim it follows only the premises the claim needs, translating each egglog
-//! proof of an equality between encoded carrier terms, or of a row that denotes
-//! one (`RenamesToLeader`, `Equated`, `ShapeEqual`, `Invocation`), into a slotted
-//! proof of `dec(lhs) = rename(m, dec(rhs))`. The lifting context retains the
-//! applied-class coordinates needed to interpret later encoded rows, while every
-//! emitted proof proposition is an ordinary equality. Coordinate changes do not
-//! emit proof steps; transporting an equality emits explicit equivariance.
+//! Encoded rows are interpreted as ordinary surface equalities. The translation
+//! rules and their derivations are described in the proof guide above.
 
 use super::format::{SlottedConclusion, SlottedProofStore, SlottedProposition};
 use super::lifting::{LiftedId, Lifting};
@@ -113,9 +107,7 @@ struct Occurrence {
     row: Option<(TermId, LiftedId)>,
 }
 
-/// A pattern expansion and the bindings it established. Keeping these local
-/// lets translating a premise recursively apply another rule without saving
-/// or restoring the enclosing match's state.
+/// A pattern expansion and its local bindings.
 struct Expansion {
     proof: LiftedId,
     variables: HashMap<String, TermId>,

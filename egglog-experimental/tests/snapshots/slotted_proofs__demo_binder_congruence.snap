@@ -3,7 +3,7 @@ source: egglog-experimental/tests/slotted_proofs.rs
 expression: "format!(\"Source:\\n{source}\\n\\nProof:\\n{}\", proofs[0])"
 ---
 Source:
-(datatype U (Wrap U) (Lam Var U :binder 0) (F U) (G U))
+(datatype U (Wrap U) (Lam U U :binder 0) (F U) (G U))
 (let input (Wrap (Lam $a (F $a))))
 (rewrite (F x) (G x) :name "f-to-g")
 (run 1)

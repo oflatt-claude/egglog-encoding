@@ -10,15 +10,14 @@ fn main() {
     std::env::set_current_dir(root).unwrap();
     let mut tests = Vec::new();
     for pattern in [
-        "slotted/tests/**/*.egg",
-        "slotted/benchmarks/**/*.egg",
-        "slotted/languages/*.egg",
+        "egglog-experimental/tests/slotted/**/*.egg",
+        "egglog-experimental/benches/slotted/**/*.egg",
     ] {
         for path in glob::glob(pattern).unwrap() {
             let path = path.unwrap();
             let source = std::fs::read_to_string(&path).unwrap();
             let mut compiler = Compiler::new(Options {
-                no_aliasing: path.starts_with("slotted/tests/nested"),
+                no_aliasing: path.starts_with("egglog-experimental/tests/slotted/nested"),
                 proof_mode: ProofMode::Prove,
             });
             let encoded = compiler.compile(Some(path.display().to_string()), &source);
@@ -28,7 +27,11 @@ fn main() {
                     .to_string()
                     .contains("uses subst, which has no proof translation")
             });
-            let name = path.strip_prefix("slotted").unwrap().display().to_string();
+            let name = path
+                .strip_prefix("egglog-experimental")
+                .unwrap()
+                .display()
+                .to_string();
             tests.push(
                 Trial::test(name, move || {
                     let encoded = encoded?;

@@ -138,9 +138,7 @@ impl Renaming {
         )
     }
 
-    /// The least permutation that agrees with this one on `slots`. Two renamings
-    /// that agree on the slots of a term describe the same renamed term, so a
-    /// displayed claim witness can omit coordinates outside those slots.
+    /// The least permutation that agrees with this one on `slots`.
     pub fn restricted(&self, slots: &BTreeSet<i64>) -> Self {
         Self::completing(
             self.0

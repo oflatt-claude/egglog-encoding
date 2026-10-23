@@ -14,9 +14,7 @@ pub(super) struct Atom {
     pub pays: Vec<Term>,
 }
 
-/// Only the names reconstruction needs, chosen by the compiler's fresh-name
-/// generators. Like egglog's `EncodingNames`, these record identities rather
-/// than making the reader repeat the allocation policy.
+/// Compiler-generated names used to reconstruct source rule applications.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct ProofNames {
     /// Root pattern (empty for a variable), then additional equality patterns.

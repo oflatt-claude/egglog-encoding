@@ -1,6 +1,4 @@
-//! The slotted source program as the checker sees it: constructors with their
-//! binder columns, rewrites, globals, unions and claims, parsed from the source
-//! text the compiler publishes in hidden metadata rows.
+//! Source declarations, rewrites, and claims used by the slotted proof checker.
 
 use super::terms::{FreshSlots, is_pattern_var, slot_of};
 use super::{HashMap, HashSet};
@@ -58,11 +56,11 @@ pub enum Rhs {
 #[derive(Clone, Debug)]
 /// An additional premise of a source rewrite.
 pub enum Condition {
-    /// `(free $x v ...)`: the slot is free in each of the variables.
+    /// `(free $x v ...)`: the slot is free in at least one of the variables.
     Free {
         /// The slot-pattern variable being tested.
         slot: String,
-        /// The class variables whose terms must contain the slot freely.
+        /// The matched variables whose combined free slots are tested.
         vars: Vec<String>,
     },
     /// `(not-free $x v ...)`: the slot is free in none of the variables.
@@ -71,6 +69,13 @@ pub enum Condition {
         slot: String,
         /// The class variables whose terms must not contain the slot freely.
         vars: Vec<String>,
+    },
+    /// `(free-names-are v $x ...)`: exactly these slots occur freely.
+    FreeNames {
+        /// The matched variable.
+        var: String,
+        /// Slot-pattern variables naming its free slots.
+        slots: Vec<String>,
     },
     /// `(= v call)`: another pattern, joined on its variables.
     Eq {
@@ -335,7 +340,7 @@ impl SlottedProgram {
                     }
                     i += 2;
                 }
-                Some(":fresh") => i += 2,
+                Some(":lead") => i += 2,
                 Some(other) => {
                     return Err(SourceError(format!("unsupported rewrite option {other}")));
                 }
@@ -393,6 +398,24 @@ impl SlottedProgram {
                     Condition::Free { slot, vars }
                 } else {
                     Condition::NotFree { slot, vars }
+                })
+            }
+            [h, var, slots @ ..] if h.atom() == Some("free-names-are") => {
+                let var = var
+                    .atom()
+                    .ok_or_else(|| SourceError("free-names-are needs a variable".into()))?;
+                let slots = slots
+                    .iter()
+                    .map(|slot| {
+                        slot.atom()
+                            .filter(|s| s.starts_with('$'))
+                            .map(str::to_owned)
+                            .ok_or_else(|| SourceError("free-names-are needs slot literals".into()))
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(Condition::FreeNames {
+                    var: strip_sigil(var).into(),
+                    slots,
                 })
             }
             [h, var, call] if h.atom() == Some("=") => {
@@ -541,10 +564,8 @@ impl SlottedProgram {
         }
     }
 
-    /// The term with every binder occurrence named apart from other binders and
-    /// free slots, preserving source names when they are already distinct. Two terms that differ
-    /// only in how they share bound names then differ by a bijection of slots,
-    /// which is what a renaming step can express.
+    /// Give each binder a name distinct from other binders and free slots,
+    /// preserving names that are already distinct.
     pub fn refresh_binders(&self, dag: &mut TermDag, term: TermId) -> TermId {
         let mut slots = FreshSlots::new(
             super::terms::all_slots(dag, term)
