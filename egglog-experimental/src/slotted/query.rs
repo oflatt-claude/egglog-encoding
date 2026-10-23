@@ -1,14 +1,35 @@
 //! Multipattern matching, shared by rewrite lowering and read-only claims.
 use super::model::*;
 use super::syntax::quote;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug)]
 pub(super) struct Atom {
     pub root: String,
+    /// Position in the surface pattern, before matching reorders the atoms.
+    pub path: Vec<usize>,
     pub op: String,
     pub kids: Vec<Term>,
     pub pays: Vec<Term>,
+}
+
+/// Compiler-generated names used to reconstruct source rule applications.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct ProofNames {
+    /// Root pattern (empty for a variable), then additional equality patterns.
+    pub patterns: Vec<Vec<(Vec<usize>, String)>>,
+    /// Generated class bindings for pattern variables and atoms.
+    pub classes: BTreeMap<String, String>,
+    pub readings: BTreeMap<String, String>,
+    pub frame: String,
+}
+
+pub(super) fn pattern_names(atoms: &[Atom]) -> Vec<(Vec<usize>, String)> {
+    atoms
+        .iter()
+        .map(|a| (a.path.clone(), fname(&a.root).to_owned()))
+        .collect()
 }
 
 /// Names shared by all patterns in one rule. Frames erase a leading `?`, so
@@ -42,7 +63,7 @@ pub(super) fn flatten(
     fn go(
         lang: &Language,
         t: &Term,
-        root: String,
+        at: (String, Vec<usize>),
         tmp: &str,
         id: &mut usize,
         names: &mut PatternNames,
@@ -51,10 +72,17 @@ pub(super) fn flatten(
         let Term::Node(n, args) = t else {
             return Err("a pattern's root must be a constructor call".into());
         };
-        let (children, pays) = lang.constructors[n].split(args);
+        let (root, path) = at;
+        let op = &lang.constructors[n];
+        let (children, pays) = op.split(args);
         let mut kids = Vec::new();
         let mut nested = Vec::new();
-        for c in children {
+        let columns = op
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| (!matches!(c, Column::Payload(_))).then_some(i));
+        for (j, c) in columns.zip(children) {
             match c {
                 Term::Variable(_) | Term::Slot(_) => kids.push(c.clone()),
                 Term::Node(n, _)
@@ -66,13 +94,16 @@ pub(super) fn flatten(
                     *id += 1;
                     let name = names.fresh(&format!("{tmp}{id}"));
                     kids.push(Term::Variable(name.clone()));
-                    nested.push((c, name));
+                    let mut subpath = path.clone();
+                    subpath.push(j);
+                    nested.push((c, (name, subpath)));
                 }
                 _ => return Err("unsupported term in pattern".into()),
             }
         }
         out.push(Atom {
             root,
+            path,
             op: n.clone(),
             kids,
             pays: pays.into_iter().cloned().collect(),
@@ -86,7 +117,15 @@ pub(super) fn flatten(
     lang.refresh_shadowed(&mut t);
     let mut out = Vec::new();
     names.reserve(root);
-    go(lang, &t, root.into(), tmp, &mut 0, names, &mut out)?;
+    go(
+        lang,
+        &t,
+        (root.into(), vec![]),
+        tmp,
+        &mut 0,
+        names,
+        &mut out,
+    )?;
     Ok(out)
 }
 
@@ -223,6 +262,7 @@ pub(super) struct Query {
     pub split: Option<usize>,
     pub refined: String,
     pub length: String,
+    pub readings: BTreeMap<String, String>,
     used: BTreeSet<String>,
     prefix: String,
     id: usize,
@@ -290,6 +330,7 @@ fn occurrence(
         && let Some((op, cols, j)) = parents.get(pv)
     {
         let sym = q.fresh(&format!("sym_{}", label(pv)));
+        q.readings.insert(fname(pv).to_owned(), sym.clone());
         let pinned = q.fresh(&format!("pinned_{}", label(pv)));
         facts.push(format!("(= {pinned} (_pinned_{op} {cols} {j}))"));
         facts.push(format!(

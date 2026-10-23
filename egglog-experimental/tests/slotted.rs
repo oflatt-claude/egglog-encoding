@@ -89,7 +89,10 @@ fn checks_and_rule_guards_agree_on_equality() {
                 ("renaming-=", renamed),
                 ("renaming-!=", !renamed),
             ] {
-                let mut compiler = Compiler::new(Options { no_aliasing });
+                let mut compiler = Compiler::new(Options {
+                    no_aliasing,
+                    ..Default::default()
+                });
                 let mut graph = egglog_experimental::slotted::new_egraph();
                 let check = format!("(check ({op} {lhs} {rhs}))");
                 let check = if expected {
@@ -316,7 +319,10 @@ fn compilation_errors_are_transactional_and_located() {
 #[test]
 fn matching_policy_changes_aliasing_and_checks_remain_unrestricted() {
     for no_aliasing in [false, true] {
-        let mut compiler = Compiler::new(Options { no_aliasing });
+        let mut compiler = Compiler::new(Options {
+            no_aliasing,
+            ..Default::default()
+        });
         let mut graph = egglog_experimental::slotted::new_egraph();
         evaluate(&mut compiler, &mut graph, LANGUAGE);
         evaluate(
@@ -358,7 +364,10 @@ fn compatibility_cli_restricts_rules_but_not_checks() {
     let encoded = String::from_utf8(output.stdout).unwrap();
     assert!(encoded.contains("(nested-atom ") && encoded.contains("(atom "));
 
-    let mut compiler = Compiler::new(Options { no_aliasing: true });
+    let mut compiler = Compiler::new(Options {
+        no_aliasing: true,
+        ..Default::default()
+    });
     compiler.compile(None, LANGUAGE).unwrap();
     let error = compiler
         .compile(None, "(rewrite (F a b) a :when ((= b (G x y))))")
@@ -379,7 +388,10 @@ fn checks_and_rule_guards_agree_on_free_names() {
             ("(Lam $bound $bound)", "free-names-are body", true),
             ("(F $a $b)", "free-names-are body $a", false),
         ] {
-            let mut compiler = Compiler::new(Options { no_aliasing });
+            let mut compiler = Compiler::new(Options {
+                no_aliasing,
+                ..Default::default()
+            });
             let mut graph = egglog_experimental::slotted::new_egraph();
             let check = format!("(check ({}))", predicate.replace("body", body));
             let check = if expected {
@@ -533,7 +545,10 @@ fn cli_explains_flags_and_rejects_incompatible_modes() {
             .unwrap()
             .contains("--slotted")
     );
-    for flags in [vec!["--slotted-no-aliasing"], vec!["--slotted", "--proofs"]] {
+    for flags in [
+        vec!["--slotted-no-aliasing"],
+        vec!["--slotted", "--proof-testing"],
+    ] {
         let result = cli().args(flags).output().unwrap();
         assert_eq!(result.status.code(), Some(2));
         assert!(

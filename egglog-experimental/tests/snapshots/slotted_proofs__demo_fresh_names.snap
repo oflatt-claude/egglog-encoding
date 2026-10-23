@@ -1,0 +1,17 @@
+---
+source: egglog-experimental/tests/slotted_proofs.rs
+expression: "format!(\"Source:\\n{source}\\n\\nProof:\\n{}\", proofs[0])"
+---
+Source:
+(datatype U (F U) (Pair U U))
+(let reserved (Pair $v0 $v2))
+(let input (F $a))
+(rewrite (F v1) v1 :name "unwrap")
+(run 1)
+(check (= input $a))
+
+Proof:
+#0: (F $a) = (F $a)
+    by fiat
+#1: (F $a) = $a
+    by rule "unwrap" [v1 := $a] from #0
