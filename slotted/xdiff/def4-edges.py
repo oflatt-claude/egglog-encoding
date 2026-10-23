@@ -1,10 +1,10 @@
 """Check edge domains against their children's live slot sets (Definition 4).
 
-Ordinary child edges must satisfy `(map-domain m) = (ClassSlots c)`.
+Ordinary child edges must satisfy `(map-domain m) = (FreeVars c)`.
 Binder-marker edges instead have domain `{0}` and point to the variable class:
 they name a bound slot rather than an invocation of that class.
 
-Observer rules cover the constructors in `slotted/languages/toy.egg`.
+Observer rules cover the constructors in `egglog-experimental/tests/slotted/languages/toy.egg`.
 
 Usage:
     python3 slotted/xdiff/def4-edges.py            curated cases
@@ -51,7 +51,7 @@ def obs():
                 continue
             out.append(
                 f"(rule ((= v {pat})\n"
-                f"       (= s ({X.SYM.class_slots} {kids[i]}))\n"
+                f"       (= s ({X.SYM.free_vars} {kids[i]}))\n"
                 f"       (!= (map-domain {edges[i]}) s))\n"
                 f"      ((BadDomain {where} {edges[i]} s)) :ruleset def4)"
             )

@@ -1,6 +1,6 @@
 //! `slotted-subst`: substitution for the slotted e-graph encoding.
 //!
-//! `(slotted-subst body x var t_ren t [class_slots])` replaces, inside `body`, the variable
+//! `(slotted-subst body x var t_ren t [free_vars])` replaces, inside `body`, the variable
 //! sitting at slot `x` of `body`'s frame with the invocation `t_ren * t`, and
 //! returns a class spelled in `body`'s frame whose slots are
 //! `(slots(body) \ {x}) ∪ im(t_ren)`.
@@ -63,7 +63,7 @@ type Rows = HashMap<Value, Vec<(usize, SmallVec<[Value; 8]>)>>;
 struct CarrierKey {
     renaming_sort: String,
     var: Value,
-    class_slots: String,
+    free_vars: String,
 }
 
 /// Inputs to one substitution within a carrier's immutable snapshot.
@@ -83,21 +83,21 @@ struct Substitutions(Mutex<HashMap<CarrierKey, SubstSnapshot>>);
 /// Validated and extracted once per carrier in a rule-application phase.
 struct SubstSnapshot {
     var: Value,
-    class_slots: String,
+    free_vars: String,
     terms: Terms,
     slots_used: BTreeSet<Slot>,
     results: HashMap<ResultKey, Option<(Value, Renaming)>>,
 }
 
 impl SubstSnapshot {
-    fn load(state: &FullState<'_, '_>, var: Value, class_slots: String) -> Result<Self, String> {
-        let layouts = Layouts::load(state, &class_slots)?;
+    fn load(state: &FullState<'_, '_>, var: Value, free_vars: String) -> Result<Self, String> {
+        let layouts = Layouts::load(state, &free_vars)?;
         let mut names: Vec<String> = layouts.constructors.keys().cloned().collect();
         names.sort();
-        let (terms, slots_used) = build_terms(state, &layouts, var, &class_slots, &names)?;
+        let (terms, slots_used) = build_terms(state, &layouts, var, &free_vars, &names)?;
         Ok(Self {
             var,
-            class_slots,
+            free_vars,
             terms,
             slots_used,
             results: HashMap::new(),
@@ -125,7 +125,7 @@ const BINDER_LAYOUT: &str = "SlottedBinderLayout";
 /// Optional: `(ctor, column, sort)` for payload columns, so a payload is spelt as its
 /// value rather than as an internal id when the smallest term is chosen.
 const PAYLOAD_LAYOUT: &str = "SlottedPayloadLayout";
-const CLASS_SLOTS: &str = "ClassSlots";
+const CLASS_SLOTS: &str = "FreeVars";
 
 /// One child edge, at its physical renaming column in the constructor.
 #[derive(Clone, Debug)]
@@ -238,19 +238,19 @@ fn substitute(
     t: Value,
     cache: &SubstSnapshot,
 ) -> Result<Option<(Value, Renaming)>, String> {
-    let class_slots = cache.class_slots.as_str();
+    let free_vars = cache.free_vars.as_str();
     if !cache.terms.best.contains_key(&body) {
         return Ok(None);
     }
 
     // A class can hold nodes with redundant slots, so the chosen node's edge
-    // images are only an upper bound. `ClassSlots` is the encoding's exact public
+    // images are only an upper bound. `FreeVars` is the encoding's exact public
     // frame and is therefore required at the root.
-    let frame = class_slots_if_present(state, class_slots, body)?
-        .ok_or_else(|| format!("{class_slots} has no row for the substitution body"))?;
+    let frame = free_vars_if_present(state, free_vars, body)?
+        .ok_or_else(|| format!("{free_vars} has no row for the substitution body"))?;
     if frame.iter().any(|(from, to)| from != to) {
         return Err(format!(
-            "{class_slots} returned a non-identity slot set for {body:?}: {frame:?}"
+            "{free_vars} returned a non-identity slot set for {body:?}: {frame:?}"
         ));
     }
 
@@ -267,7 +267,7 @@ fn substitute(
         t,
         memo: HashMap::new(),
         fresh: Fresh::new(used),
-        class_slots: class_slots.to_owned(),
+        free_vars: free_vars.to_owned(),
     };
     Ok(rebuild.go(state, body, frame))
 }
@@ -280,7 +280,7 @@ struct Rebuild<'t> {
     t: Value,
     memo: HashMap<(Value, Renaming), (Value, Renaming)>,
     fresh: Fresh,
-    class_slots: String,
+    free_vars: String,
 }
 
 impl Rebuild<'_> {
@@ -378,7 +378,7 @@ impl Rebuild<'_> {
                 return None;
             }
         };
-        match class_slots_if_present(state, &self.class_slots, out) {
+        match free_vars_if_present(state, &self.free_vars, out) {
             Ok(Some(existing)) => slots.retain(|slot, _| existing.contains_key(slot)),
             Ok(None) => {}
             Err(err) => {
@@ -406,12 +406,12 @@ fn intern(state: &mut FullState<'_, '_>, ren: &Renaming) -> Value {
 }
 
 /// Every class's parsed nodes and smallest-term choice in this execution's snapshot.
-/// Uses ClassSlots for public slots and layout metadata for physical columns.
+/// Uses FreeVars for public slots and layout metadata for physical columns.
 fn build_terms(
     state: &FullState<'_, '_>,
     layouts: &Layouts,
     var: Value,
-    class_slots: &str,
+    free_vars: &str,
     names: &[String],
 ) -> Result<(Terms, BTreeSet<Slot>), String> {
     let mut rows: Rows = HashMap::new();
@@ -435,7 +435,7 @@ fn build_terms(
         // a number.
         public.insert(
             *eclass,
-            class_slots_if_present(state, class_slots, *eclass)?
+            free_vars_if_present(state, free_vars, *eclass)?
                 .map(|frame| frame.keys().copied().collect())
                 .unwrap_or_default(),
         );
@@ -794,35 +794,35 @@ fn index(value: i64, what: &str) -> Result<usize, String> {
     usize::try_from(value).map_err(|_| format!("{what} must be a nonnegative column index"))
 }
 
-fn class_slots_if_present(
+fn free_vars_if_present(
     state: &FullState<'_, '_>,
-    class_slots: &str,
+    free_vars: &str,
     class: Value,
 ) -> Result<Option<Renaming>, String> {
     let Some(value) = state
-        .lookup(class_slots, RawValues(vec![class]))
-        .map_err(|err| format!("reading {class_slots} for {class:?}: {err}"))?
+        .lookup(free_vars, RawValues(vec![class]))
+        .map_err(|err| format!("reading {free_vars} for {class:?}: {err}"))?
     else {
         return Ok(None);
     };
     let slots = decode_renaming(state, value)?;
     if slots.iter().any(|(from, to)| from != to) {
         return Err(format!(
-            "{class_slots} for {class:?} is not an identity map: {slots:?}"
+            "{free_vars} for {class:?} is not an identity map: {slots:?}"
         ));
     }
     Ok(Some(slots))
 }
 
-fn validate_class_slots(state: &FullState<'_, '_>, class_slots: &str) -> Result<(), String> {
-    let action = live_schema(state, class_slots)?;
+fn validate_free_vars(state: &FullState<'_, '_>, free_vars: &str) -> Result<(), String> {
+    let action = live_schema(state, free_vars)?;
     if action.kind != FunctionSubtype::Custom
         || action.input_arity != 1
         || action.output_arity != 1
         || action.schema != [ColumnTy::Id, ColumnTy::Id]
     {
         return Err(format!(
-            "{class_slots} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
+            "{free_vars} has an unsupported schema; proof-encoded or user-replaced metadata is not supported"
         ));
     }
     Ok(())
@@ -932,7 +932,7 @@ fn validate_constructor_layout(
 }
 
 impl Layouts {
-    fn load(state: &FullState<'_, '_>, class_slots: &str) -> Result<Self, String> {
+    fn load(state: &FullState<'_, '_>, free_vars: &str) -> Result<Self, String> {
         let string = ColumnTy::Base(state.base_values().get_ty::<S>());
         let integer = ColumnTy::Base(state.base_values().get_ty::<i64>());
 
@@ -1000,7 +1000,7 @@ impl Layouts {
                 .sort_by_key(|binder| (binder.marker, binder.covered, binder.discriminator));
             validate_constructor_layout(state, ctor, layout, string)?;
         }
-        validate_class_slots(state, class_slots)?;
+        validate_free_vars(state, free_vars)?;
         Ok(layouts)
     }
 
@@ -1100,15 +1100,15 @@ impl Primitive for SlottedSubst {
 
 impl FullPrim for SlottedSubst {
     fn apply<'a, 'db>(&self, mut state: FullState<'a, 'db>, args: &[Value]) -> Option<Value> {
-        let (body, x, var, t_ren, t, class_slots) = match args {
+        let (body, x, var, t_ren, t, free_vars) = match args {
             [body, x, var, t_ren, t] => (*body, *x, *var, *t_ren, *t, CLASS_SLOTS.to_owned()),
-            [body, x, var, t_ren, t, class_slots] => (
+            [body, x, var, t_ren, t, free_vars] => (
                 *body,
                 *x,
                 *var,
                 *t_ren,
                 *t,
-                state.value_to_base::<S>(*class_slots).into_inner(),
+                state.value_to_base::<S>(*free_vars).into_inner(),
             ),
             _ => panic!(
                 "{} takes five or six arguments; the typechecker admitted {}",
@@ -1144,12 +1144,12 @@ impl FullPrim for SlottedSubst {
         let carrier = CarrierKey {
             renaming_sort: self.renaming.name().to_owned(),
             var,
-            class_slots: class_slots.clone(),
+            free_vars: free_vars.clone(),
         };
         let cache = match guard.entry(carrier) {
             hashbrown::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             hashbrown::hash_map::Entry::Vacant(entry) => {
-                match SubstSnapshot::load(&state, var, class_slots) {
+                match SubstSnapshot::load(&state, var, free_vars) {
                     Ok(snapshot) => entry.insert(snapshot),
                     Err(err) => {
                         log::error!("{}: {err}", self.name());
@@ -1186,8 +1186,8 @@ impl FullPrim for SlottedSubst {
     }
 }
 
-/// `(slotted-subst body x var t_ren t [class_slots])`, where the optional string
-/// names the carrier's class-slot function (default: `ClassSlots`).
+/// `(slotted-subst body x var t_ren t [free_vars])`, where the optional string
+/// names the carrier's class-slot function (default: `FreeVars`).
 /// `slotted-subst-frame` has the same inputs and a `Renaming` result.
 struct SlottedSubstTypeConstraint {
     half: Half,
@@ -1203,10 +1203,10 @@ impl TypeConstraint for SlottedSubstTypeConstraint {
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
-        let (body, x, var, t_ren, t, class_slots, out) = match arguments {
+        let (body, x, var, t_ren, t, free_vars, out) = match arguments {
             [body, x, var, t_ren, t, out] => (body, x, var, t_ren, t, None, out),
-            [body, x, var, t_ren, t, class_slots, out] => {
-                (body, x, var, t_ren, t, Some(class_slots), out)
+            [body, x, var, t_ren, t, free_vars, out] => {
+                (body, x, var, t_ren, t, Some(free_vars), out)
             }
             _ => {
                 return vec![constraint::impossible(
@@ -1226,9 +1226,9 @@ impl TypeConstraint for SlottedSubstTypeConstraint {
             constraint::assign(x.clone(), self.slot.clone()),
             constraint::assign(t_ren.clone(), self.renaming.clone()),
         ];
-        if let Some(class_slots) = class_slots {
+        if let Some(free_vars) = free_vars {
             cs.push(constraint::assign(
-                class_slots.clone(),
+                free_vars.clone(),
                 StringSort.to_arcsort(),
             ));
         }

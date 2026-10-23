@@ -43,7 +43,7 @@ def graphs(name, program, spec, lang=X.LANG):
 
 def source_graphs(name, rounds):
     """Compare a small SDQL fixture's start, unions, rewrites, and final goal."""
-    path = ROOT / "slotted" / "tests" / f"{name}.egg"
+    path = ROOT / "egglog-experimental" / "tests" / "slotted" / f"{name}.egg"
     src = W.syntax.Source(path)
     lang = W.pf.reference_language()
     forms = W.syntax.parse(path.read_text())
@@ -90,7 +90,7 @@ def symmetry_case(depth, swapped):
     for _ in range(depth):
         chain = ("G", ("Null",), chain)
     terms = [term, chain]
-    source = '(include "slotted/languages/toy.egg")\n'
+    source = '(include "egglog-experimental/tests/slotted/languages/toy.egg")\n'
     source += "\n".join(f"(let seed{i} {X.driver.term(X.LANG, t)})" for i, t in enumerate(terms))
     program = X.driver.compile_source(source + "\n(run 0)")
     spec = "\n".join(f"term {X.sexpr(t)}" for t in terms) + "\n"
@@ -105,7 +105,7 @@ def complete_refinement():
     rhs = ("pv", "a5")
     for i in reversed(range(5)):
         rhs = ("G", ("pv", f"a{i}"), rhs)
-    source = '(include "slotted/languages/toy.egg")\n'
+    source = '(include "egglog-experimental/tests/slotted/languages/toy.egg")\n'
     source += X.driver.rewrite(X.LANG, atoms, "root", rhs, name="all-refinements")
     program = X.driver.compile_source(source + "\n(let n (Null))\n(let f (F $0 $0))\n(run 1)")
     root, lines = X.syntax.atom_lines(X.LANG, "root", atoms)
@@ -130,7 +130,8 @@ def count_round_budget():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "budget.egg"
         path.write_text(
-            '(include "slotted/languages/toy.egg")\n(rewrite (Null) (F $0 $0))\n(let start (Null))\n(run 1)\n'
+            '(include "egglog-experimental/tests/slotted/languages/toy.egg")\n'
+            "(rewrite (Null) (F $0 $0))\n(let start (Null))\n(run 1)\n"
         )
         program = X.driver.compile_source(path.read_text())
     # Installed after the requested run: any additional user-rule step is an error.
@@ -146,7 +147,7 @@ def independent_class_counts():
     """Cross-check the graph reader against counts computed inside egglog.
 
     Each slotted class has one minimal member among its linked egglog values.
-    Count ClassSlots rows minus nonminimal members, independently of the native
+    Count FreeVars rows minus nonminimal members, independently of the native
     exporter's component traversal. The isomorphism suite compares these same cases
     to the reference.
     """
@@ -159,7 +160,7 @@ def independent_class_counts():
 (rule (({X.SYM.renames} a m b) (!= a b) (= b (ordering-max a b)))
       ((Nonminimal b)) :ruleset count-classes)
 (run count-classes 1)
-(print-size {X.SYM.class_slots})
+(print-size {X.SYM.free_vars})
 (print-size Nonminimal)
 """
     with tempfile.TemporaryDirectory(prefix="slotted-class-counts-") as tmp:

@@ -72,7 +72,7 @@ proof-tests:
 # The Python runner's --quick flag skips fuzzing; --no-oracle skips reference checks.
 slotted-check:
 	cargo build
-	cargo test -p egglog-experimental --test slotted_snapshots
+	cargo test -p egglog-experimental --test 'slotted*' --test 'api_slotted*'
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	cargo test --manifest-path slotted/xmulti/Cargo.toml
 	uv run --locked python slotted/checks/check-slotted.py
@@ -85,7 +85,7 @@ slotted-eval:
 
 slotted-check-no-oracle:
 	cargo build
-	cargo test -p egglog-experimental --test slotted_snapshots
+	cargo test -p egglog-experimental --test 'slotted*' --test 'api_slotted*'
 	uv run --locked python slotted/checks/check-slotted.py --no-oracle
 
 # Smoke the runner on small files, not the full local benchmark suite.
@@ -122,7 +122,7 @@ nightly-local: nightly-uv nightly-rustup
 
 update-snapshots:
 	uv run --locked pytest -q --snapshot-update --snapshot-details
-	INSTA_UPDATE=always cargo test -p egglog-experimental --test slotted_snapshots
+	INSTA_UPDATE=always cargo test -p egglog-experimental --test slotted_files
 
 format:
 	uv run --locked ruff format .

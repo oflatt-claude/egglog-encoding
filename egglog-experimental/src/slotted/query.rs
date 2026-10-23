@@ -181,8 +181,34 @@ impl Comparison {
 #[derive(Default, Clone)]
 pub(super) struct Conditions {
     pub free: Vec<(bool, String, Vec<String>)>,
+    pub free_names: Vec<(String, Vec<String>)>,
     pub comparisons: Vec<(Comparison, String, String)>,
     pub fresh: BTreeSet<String>,
+}
+
+/// Slot sets are identity maps; membership and exact-set queries use the same
+/// representation for ground claims and matched rule invocations.
+pub(super) fn free_condition(want: bool, slot: &str, maps: &[String]) -> String {
+    let image = maps.iter().fold("(map-empty)".to_owned(), |set, map| {
+        format!("(map-union {set} (map-image {map}))")
+    });
+    format!(
+        "({} {image} {slot})",
+        if want {
+            "map-contains"
+        } else {
+            "map-not-contains"
+        }
+    )
+}
+
+pub(super) fn free_names_condition(map: &str, slots: &[String]) -> String {
+    let wanted = if slots.is_empty() {
+        "(map-empty)".into()
+    } else {
+        call("map-of", slots.iter().flat_map(|s| [s.clone(), s.clone()]))
+    };
+    format!("(= (map-image {map}) {wanted})")
 }
 
 #[derive(Default)]
@@ -369,7 +395,7 @@ pub(super) fn compile(
         bindings.push(format!(
             "(root {} ({} {rv}){reading})",
             quote(fname(&a.root)),
-            sy.class_slots
+            sy.free_vars
         ));
         seen.insert(a.root.clone());
         for (j, (k, e)) in a.kids.iter().zip(&edges).enumerate() {
@@ -385,7 +411,7 @@ pub(super) fn compile(
                     bindings.push(format!(
                         "(child {} {e} ({} {c}){reading})",
                         quote(fname(pv)),
-                        sy.class_slots
+                        sy.free_vars
                     ));
                     seen.insert(pv.clone());
                 }
@@ -503,16 +529,27 @@ pub(super) fn compile(
         if !q.slots.contains_key(slot) {
             return Err(format!("slot {slot} is not bound by the pattern"));
         }
-        for v in pvars {
-            q.class(v)?;
-        }
-        q.body.push(format!(
-            "({} {} {} {})",
-            if *want { "free" } else { "not-free" },
-            q.frame,
-            quote(slot),
-            names_expr(pvars.iter().map(|s| fname(s).into()))
-        ));
+        let maps = pvars
+            .iter()
+            .map(|v| {
+                q.class(v)?;
+                Ok(q.maps[v].clone())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        q.body.push(free_condition(*want, &q.slots[slot], &maps));
+    }
+    for (v, slots) in &conditions.free_names {
+        q.class(v)?;
+        let slots = slots
+            .iter()
+            .map(|s| {
+                q.slots
+                    .get(s)
+                    .cloned()
+                    .ok_or_else(|| format!("slot {s} is not bound by the pattern"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        q.body.push(free_names_condition(&q.maps[v], &slots));
     }
     for (comparison, a, b) in &conditions.comparisons {
         let (ca, cb) = (q.class(a)?, q.class(b)?);

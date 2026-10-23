@@ -202,18 +202,18 @@ def rewrite(lang, atoms, root, rhs, *, conds=(), fresh=(), name=None, lead=0):
 
 @cache
 def machinery(language):
-    return compile_source(f'(include "slotted/languages/{language}.egg")')
+    return compile_source(f'(include "egglog-experimental/tests/slotted/languages/{language}.egg")')
 
 
 @lru_cache(maxsize=1)
 def maintenance():
     """Use the compiler's actual maintenance schedule in internal-table tests."""
-    text = compile_source('(include "slotted/languages/toy.egg")\n(run 0)')
+    text = compile_source('(include "egglog-experimental/tests/slotted/languages/toy.egg")\n(run 0)')
     return ref.render(next(f for f in ref.parse(text) if f[0] == "run-schedule"))
 
 
 def program(language, lang, rules, terms, unions, probes, rounds, *, defer_probes=False):
-    source = [f'(include "slotted/languages/{language}.egg")', *dict.fromkeys(rules)]
+    source = [f'(include "egglog-experimental/tests/slotted/languages/{language}.egg")', *dict.fromkeys(rules)]
     source.extend(f"(let _t{i} {term(lang, t)})" for i, t in enumerate(terms))
     source.extend(f"(union {term(lang, a)} {term(lang, b)})" for a, b in unions)
     # A bare slot has no source-level global representation. The partition

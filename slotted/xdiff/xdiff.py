@@ -101,11 +101,11 @@ USEBIND_PROB = float(os.environ.get("XDIFF_USEBIND", "0"))
 # ---------------------------------------------------------------- neutral terms
 # term := ('var', n) | ('Null',) | (ctor, t1, t2) | ('Lam', ('var', n), body)
 #
-# The language is `slotted/languages/toy.egg`, one constructor per
+# The language is `egglog-experimental/tests/slotted/languages/toy.egg`, one constructor per
 # operator, with `toy.ref` beside it saying what the reference calls each one. Nothing
 # here restates a signature or a binder column: `Lam` binds its column 0 because that
 # file's `:binder` says so, so this cannot disagree with the rules generated for it.
-LANG_DIR = ROOT / "slotted" / "languages"
+LANG_DIR = ROOT / "egglog-experimental" / "tests" / "slotted" / "languages"
 LANG = syntax.language(LANG_DIR / "toy.egg", LANG_DIR / "toy.ref")
 
 # `BINOPS` is what generated terms are built from, so it must be every operator that
@@ -1021,7 +1021,7 @@ def curated():
         )
     )
 
-    # ---- shapes taught by slotted/tests/multipattern.egg ---------------------
+    # ---- shapes taught by egglog-experimental/tests/slotted/multipattern.egg ---------------------
     # That file states what a multipattern means, in the surface syntax, and checks it
     # with its own claims. Claims are not the reference, so each shape it teaches is
     # also asked of the reference here -- in the toy language, since that is what the

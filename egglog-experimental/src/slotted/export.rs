@@ -185,12 +185,12 @@ impl Snapshot {
         let mut groups = BTreeMap::new();
         let mut error = None;
         graph
-            .function_entries(&symbols.class_slots, |row| {
+            .function_entries(&symbols.free_vars, |row| {
                 match renaming(graph, row.output) {
                     Ok(map) if map.iter().all(|(a, b)| a == b) => {
                         slots.insert(row.inputs[0], map);
                     }
-                    Ok(_) => error = Some("ClassSlots is not an identity map".into()),
+                    Ok(_) => error = Some("FreeVars is not an identity map".into()),
                     Err(e) => error = Some(e),
                 }
             })
@@ -297,7 +297,7 @@ impl Snapshot {
             adjacency.entry(class).or_default();
         }
         if let Some(class) = adjacency.keys().find(|c| !self.slots.contains_key(c)) {
-            return Err(format!("{class:?}: no ClassSlots row"));
+            return Err(format!("{class:?}: no FreeVars row"));
         }
         let mut reps = BTreeMap::new();
         let mut frames = BTreeMap::new();
@@ -367,7 +367,7 @@ impl Snapshot {
                     || permutation.values().copied().collect::<BTreeSet<_>>()
                         != self.slots[&class].keys().copied().collect()
                 {
-                    return Err("recorded group element is not a permutation of ClassSlots".into());
+                    return Err("recorded group element is not a permutation of FreeVars".into());
                 }
                 let rep = reps[&class];
                 let sym = compose(&up[&class], &compose(permutation, &frames[&class]));
@@ -497,7 +497,7 @@ impl Snapshot {
                     continue;
                 }
                 if edge.map.keys().ne(self.slots[&edge.class].keys()) {
-                    return Err("edge domain differs from child ClassSlots".into());
+                    return Err("edge domain differs from child FreeVars".into());
                 }
                 free.extend(
                     edge.map

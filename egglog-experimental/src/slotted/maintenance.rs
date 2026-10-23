@@ -31,7 +31,7 @@ pub(super) fn carrier(s: &Symbols) -> String {
         var = s.var,
         renames = s.renames,
         equated = s.equated,
-        class_slots = s.class_slots,
+        free_vars = s.free_vars,
         subst_pending = s.subst_pending,
         shape_equal = s.shape_equal,
         invocation = s.invocation,
@@ -89,7 +89,7 @@ pub(super) fn constructor(op: &Constructor, s: &Symbols) -> String {
     }
     out.push(format!(
         "(rule ((= e1 {node})) ((set ({} e1) {slots})))",
-        s.class_slots
+        s.free_vars
     ));
     if n == 0 {
         return machinery(&out.join("\n"));
@@ -129,7 +129,7 @@ pub(super) fn constructor(op: &Constructor, s: &Symbols) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     out.push(format!("(rule ((= c {node}) {group_facts} (= sh (node-shape (vec-of {}) (vec-of {})))) ((set {key} (values c (vec-get sh {n}))) (set {cached} (values {shape_outputs} (symmetries-of sh {})))) :ruleset slotted-shape)",edges.join(" "),groups.join(" "),n+1));
-    out.push(format!("(rule ((= c {node}) {group_facts} (= (values {} back syms) {cached}) (= cs ({} c))) ((set ({} c) (group-restrict syms cs))) :ruleset slotted-group)",shapes.join(" "),s.class_slots,s.group));
+    out.push(format!("(rule ((= c {node}) {group_facts} (= (values {} back syms) {cached}) (= cs ({} c))) ((set ({} c) (group-restrict syms cs))) :ruleset slotted-group)",shapes.join(" "),s.free_vars,s.group));
     let other = names("n", n);
     let other_node = op.node(name, &other, &kids, &pays);
     let other_cached = cache(&other);

@@ -9,7 +9,7 @@ is the program its egg baseline extracted after saturating. Table 1 compares ext
 costs, and "finds the best program" there means reaching that cost; the tests here ask
 for more, that the input's class comes to contain the target itself.
 `slotted/checks/check-paper-sdql.py` pins the fixtures' hashes and checks that each test
-under `slotted/tests/sdql-paper/` is what `test_text` writes for it; `slotted/eval.py` runs
+under `egglog-experimental/tests/slotted/sdql-paper/` is what `test_text` writes for it; `slotted/eval.py` runs
 every workload from those same forms.
 
 The artifact spells a variable `$name`, `name`, or `$var_NN`; its targets are alpha-numbered
@@ -21,7 +21,7 @@ writes `(let $x value body)` and `(sum $k $v range body)`; the language here has
 The runner's budgets are per workload: 13 iterations for `batax_1st`, 12 for `batax_2nd`,
 30 for everything else, under a 300 s timeout and 1.5 GB.
 
-    python3 slotted/benchmarks/sdql.py --write    rewrite the suite's tests under slotted/tests/sdql-paper/
+    python3 slotted/benchmarks/sdql.py --write    regenerate the suite's .egg tests
     python3 slotted/benchmarks/sdql.py            list the workloads and Table 1's slotted row for each
 """
 
@@ -34,8 +34,8 @@ sys.path.insert(0, str(ROOT))
 from slotted import reference as syntax  # noqa: E402
 
 FIXTURES = ROOT / "slotted" / "benchmarks" / "sdql"
-TESTS = ROOT / "slotted" / "tests" / "sdql-paper"
-RULES = ROOT / "slotted" / "languages" / "sdql-rules.egg"
+TESTS = ROOT / "egglog-experimental" / "tests" / "slotted" / "sdql-paper"
+RULES = ROOT / "egglog-experimental" / "tests" / "slotted" / "languages" / "sdql-rules.egg"
 ARTIFACT_COMMIT = "83f2e5bee2b3aa45bf97ef1e3a8abe953790c735"
 
 KERNELS = ("mmm_sum", "mttkrp", "mmm", "ttm", "batax")  # Table 1's order: ΣMMM, MTTKRP, MMM, TTM, BATAX
@@ -189,7 +189,7 @@ def test_forms(kernel, phase, rounds=None):
     inp, tgt = workload(kernel, phase)
     rounds = iteration_limit(kernel, phase) if rounds is None else rounds
     return [
-        ["include", '"slotted/languages/sdql-rules.egg"'],
+        ["include", '"egglog-experimental/tests/slotted/languages/sdql-rules.egg"'],
         ["let", "paper-input", inp],
         ["run", str(rounds)],
         ["let", "paper-target", tgt],
@@ -199,7 +199,7 @@ def test_forms(kernel, phase, rounds=None):
 
 
 def test_text(kernel, phase):
-    """One workload's test, as `slotted/tests/sdql-paper/<kernel>_<phase>.egg` holds it."""
+    """One workload's test, as `egglog-experimental/tests/slotted/sdql-paper/<kernel>_<phase>.egg` holds it."""
     src_name, tgt_name = fixture_names(kernel, phase)
     iters, nodes, classes, saturated = TABLE1[(kernel, phase)]
     label = {"mmm_sum": "ΣMMM", "mttkrp": "MTTKRP", "mmm": "MMM", "ttm": "TTM", "batax": "BATAX"}[kernel]

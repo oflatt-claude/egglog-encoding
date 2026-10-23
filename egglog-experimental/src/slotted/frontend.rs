@@ -628,6 +628,22 @@ impl Compiler {
                                 }
                                 conditions.free.push((kind == "free", slot, pvars));
                             }
+                            ("free-names-are", _) if !rest.is_empty() => {
+                                let v = match &rest[0] {
+                                    Form::Atom(v) => v.trim_start_matches('?').to_owned(),
+                                    f => {
+                                        let v = names.fresh(&format!("_cond{side}"));
+                                        side += 1;
+                                        extra.push((v.clone(), f.clone()));
+                                        v
+                                    }
+                                };
+                                let slots = rest[1..]
+                                    .iter()
+                                    .map(|s| s.atom().map(str::to_owned))
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                conditions.free_names.push((v, slots));
+                            }
                             (kind, _) if self.state.lang.constructors.contains_key(kind) => {
                                 let v = names.fresh(&format!("_fact{side}"));
                                 side += 1;
@@ -704,7 +720,7 @@ impl Compiler {
                     format!(
                         "(compose (map-of 0 {}) ({} {c}))",
                         lang.slot_names.id(s),
-                        sy.class_slots
+                        sy.free_vars
                     ),
                 ));
                 continue;
@@ -806,7 +822,22 @@ impl Compiler {
                 ));
                 (facts, comparison.negated)
             }
-            ("slots" | "holds" | "not-holds", _) => {
+            ("free" | "not-free", _) => {
+                if terms.len() < 2 {
+                    return Err(format!("{kind} expects a slot and at least one term"));
+                }
+                let name = self.state.lang.slot_names.intern(terms[0].atom()?)?;
+                let slot = self.state.lang.slot_names.id(&name).to_string();
+                let (sort, ts) = self.common(&terms[1..])?;
+                let Claim {
+                    mut facts,
+                    invocations,
+                } = self.matches(&ts, &sort)?;
+                let maps = invocations.into_iter().map(|(_, m)| m).collect::<Vec<_>>();
+                facts.push(query::free_condition(true, &slot, &maps));
+                (facts, kind == "not-free")
+            }
+            ("free-names-are" | "__internal-holds" | "__internal-not-holds", _) => {
                 let t = self.term(terms.first().ok_or("claim requires a term")?, true, None)?;
                 let sort = self.sort_of(&t)?;
                 let Claim {
@@ -814,19 +845,14 @@ impl Compiler {
                     invocations: matched,
                 } = self.matches(&[t], &sort)?;
                 let (c, m) = &matched[0];
-                if kind == "slots" {
-                    let mut pairs = Vec::new();
+                if kind == "free-names-are" {
+                    let mut slots = Vec::new();
                     for s in &terms[1..] {
                         let name = self.state.lang.slot_names.intern(s.atom()?)?;
                         let s = self.state.lang.slot_names.id(&name).to_string();
-                        pairs.extend([s.clone(), s]);
+                        slots.push(s);
                     }
-                    let wanted = if pairs.is_empty() {
-                        "(map-empty)".into()
-                    } else {
-                        call("map-of", pairs)
-                    };
-                    facts.push(format!("(= (map-image {m}) {wanted})"));
+                    facts.push(query::free_names_condition(m, &slots));
                 } else {
                     if terms.len() != 2 {
                         return Err("holds expects a term and constructor name".into());
@@ -860,7 +886,7 @@ impl Compiler {
                         format!("(= _hn {row})"),
                     ]);
                 }
-                (facts, kind == "not-holds")
+                (facts, kind == "__internal-not-holds")
             }
             _ => {
                 return Ok(if negated {

@@ -16,8 +16,8 @@ from slotted.benchmarks import sdql as pf
 from slotted.treatments import TREATMENTS
 
 ROOT = Path(__file__).resolve().parents[1]
-BATAX_SUBSET = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
-LOGIC_FIXTURES = ROOT / "slotted/benchmarks/logic"
+BATAX_SUBSET = ROOT / "egglog-experimental" / "tests" / "slotted" / "sdql-paper-batax.egg"
+LOGIC_FIXTURES = ROOT / "egglog-experimental/benches/slotted/logic"
 
 
 @dataclass(frozen=True)
@@ -175,7 +175,7 @@ def array_program(start, target, rounds, *, with_target):
                 args.append(json.dumps(arg))
         return "(" + " ".join([op.ctor, *args]) + ")"
 
-    lines = ['(include "slotted/languages/array-rules.egg")']
+    lines = ['(include "egglog-experimental/tests/slotted/languages/array-rules.egg")']
     lines.append(f"(let input0 {term(start)})")
     lines.append(f"(run {rounds})")
     if with_target:

@@ -39,7 +39,7 @@ fn transformation_emits_ordinary_egglog() {
         (run 1)
         (check (= start (G $2 $1)))
         (check (!= start (G $1 $2)))
-        (check (slots start $1 $2))
+        (check (free-names-are start $1 $2))
     "#,
     );
 }
@@ -111,7 +111,11 @@ fn checks_and_rule_guards_agree_on_equality() {
                          (rewrite (Pair a b) (Hit) :when (({op} a b)))
                          (run 1)
                          (check ({} pair Hit))",
-                        if expected { "holds" } else { "not-holds" }
+                        if expected {
+                            "__internal-holds"
+                        } else {
+                            "__internal-not-holds"
+                        }
                     ),
                 );
             }
@@ -149,8 +153,8 @@ fn named_slots_persist_across_inputs_and_scopes() {
         (let b (F $a $-9223372036854775808))
         (run 0)
         (check (= a (F $a $a0)))
-        (check (slots a $a $a0))
-        (check (slots b $a $-9223372036854775808))
+        (check (free-names-are a $a $a0))
+        (check (free-names-are b $a $-9223372036854775808))
         (check (!= a b))
         (check (!= $a $-9223372036854775808))
     "#,
@@ -163,7 +167,7 @@ fn named_slots_persist_across_inputs_and_scopes() {
     evaluate(
         &mut compiler,
         &mut graph,
-        "(let valid (F $fresh $a)) (run 0) (check (slots valid $fresh $a))",
+        "(let valid (F $fresh $a)) (run 0) (check (free-names-are valid $fresh $a))",
     );
 }
 
@@ -193,7 +197,7 @@ fn binder_columns_require_slots() {
         (let id (Tagged "lambda" $a $a))
         (run 0)
         (check (= id (Tagged "lambda" $b $b)))
-        (check (slots id))
+        (check (free-names-are id))
     "#,
     );
 }
@@ -236,9 +240,9 @@ fn slots_work_in_every_carrier_and_var_is_an_ordinary_name() {
         (let ty (Pair $a $b))
         (run 0)
         (check (= id (Lam $b $b)))
-        (check (slots name))
-        (check (slots variable $a))
-        (check (slots ty $a $b))
+        (check (free-names-are name))
+        (check (free-names-are variable $a))
+        (check (free-names-are ty $a $b))
     "#,
     );
     for table in ["SlottedVar_0", "SlottedVar_1", "SlottedVar_2"] {
@@ -264,7 +268,7 @@ fn scopes_restore_declarations_globals_and_rules() {
         (datatype U (F U U))
         (let local (F $1 $2))
         (run 0)
-        (check (slots local $1 $2))
+        (check (free-names-are local $1 $2))
     "#,
     );
     evaluate(
@@ -332,6 +336,78 @@ fn matching_policy_changes_aliasing_and_checks_remain_unrestricted() {
             claim.to_owned()
         };
         evaluate(&mut compiler, &mut graph, &claim);
+    }
+}
+
+#[test]
+fn compatibility_cli_restricts_rules_but_not_checks() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_egglog-experimental"))
+        .args(["--slotted", "--slotted-no-aliasing", "--mode", "desugar"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(child.stdin.take().unwrap(), "{LANGUAGE}\n(rewrite (F a (G b n)) (H a b))\n(check (= (F $a (G $b (Null))) (F $a (G $b (Null)))))").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let encoded = String::from_utf8(output.stdout).unwrap();
+    assert!(encoded.contains("(nested-atom ") && encoded.contains("(atom "));
+
+    let mut compiler = Compiler::new(Options { no_aliasing: true });
+    compiler.compile(None, LANGUAGE).unwrap();
+    let error = compiler
+        .compile(None, "(rewrite (F a b) a :when ((= b (G x y))))")
+        .unwrap_err();
+    assert!(error.to_string().contains("single nested pattern"));
+}
+
+#[test]
+fn checks_and_rule_guards_agree_on_free_names() {
+    for no_aliasing in [false, true] {
+        for (body, predicate, expected) in [
+            ("(Lam $bound $a)", "free $a body", true),
+            ("(Lam $bound $b)", "free $a body", false),
+            ("(Lam $bound $a)", "not-free $a body", false),
+            ("(Lam $bound $b)", "not-free $a body", true),
+            ("(Lam $bound $a)", "free-names-are body $a", true),
+            ("(Lam $bound $b)", "free-names-are body $a", false),
+            ("(Lam $bound $bound)", "free-names-are body", true),
+            ("(F $a $b)", "free-names-are body $a", false),
+        ] {
+            let mut compiler = Compiler::new(Options { no_aliasing });
+            let mut graph = egglog_experimental::slotted::new_egraph();
+            let check = format!("(check ({}))", predicate.replace("body", body));
+            let check = if expected {
+                check
+            } else {
+                format!("(fail {check})")
+            };
+            let result = if expected {
+                "__internal-holds"
+            } else {
+                "__internal-not-holds"
+            };
+            evaluate(
+                &mut compiler,
+                &mut graph,
+                &format!(
+                    r#"
+{LANGUAGE}
+(let seed (F $a {body}))
+(run 0)
+{check}
+(rewrite (F $a body) (Null) :when (({predicate})))
+(run 1)
+(check ({result} seed Null))
+"#
+                ),
+            );
+        }
     }
 }
 
@@ -411,7 +487,7 @@ fn repl(source: &str) -> std::process::Output {
 #[test]
 fn cli_transforms_complete_stdin_commands() {
     let result = repl(&format!(
-        "{LANGUAGE}\n(let input (F $a\n $a0))\n(run 0)\n(check (slots input $a $a0))"
+        "{LANGUAGE}\n(let input (F $a\n $a0))\n(run 0)\n(check (free-names-are input $a $a0))"
     ));
     assert!(
         result.status.success(),
@@ -431,14 +507,14 @@ fn cli_recovers_compiler_and_egraph_after_failed_inputs() {
          (let transient (Null)) (check (= (Null) (One))) (let later (One))\n\
          (fail (check (= (Null) (Null))))\n\
          (let transient (One)) (let later (Null)) (run 0)\n\
-         (check (holds transient One)) (check (holds later Null))\n\
+         (check (__internal-holds transient One)) (check (__internal-holds later Null))\n\
          (push)\n\
          (pop) (datatype V (Gone)) (check (= (Null) (One)))\n\
          (pop)\n\
-         (datatype V (Kept)) (let x (Kept)) (run 0) (check (holds x Kept))\n\
+         (datatype V (Kept)) (let x (Kept)) (run 0) (check (__internal-holds x Kept))\n\
          (datatype W (BadCtor)) (function cost (Missing) i64 :no-merge)\n\
          (datatype W (GoodCtor))\n\
-         (let typed (GoodCtor)) (run 0) (check (holds typed GoodCtor))",
+         (let typed (GoodCtor)) (run 0) (check (__internal-holds typed GoodCtor))",
     );
     let stdout = String::from_utf8(result.stdout).unwrap();
     let stderr = String::from_utf8(result.stderr).unwrap();

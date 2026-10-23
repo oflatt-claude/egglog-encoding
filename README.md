@@ -56,8 +56,10 @@ case studies. See
 [the reference comparison documentation](egglog-experimental/src/slotted/ENCODING.md#against-the-reference)
 for substitution policies and comparison requirements.
 
-Benchmark inputs and generators live in [`slotted/benchmarks/`](slotted/benchmarks/);
-regression fixtures and compiler snapshots live in `slotted/tests/`.
+Case-study programs live in `egglog-experimental/benches/slotted/`; regression
+fixtures, shared languages, and compiler snapshots live in
+`egglog-experimental/tests/slotted/`. Artifact inputs and generators live in
+[`slotted/benchmarks/`](slotted/benchmarks/). `make check` runs the Rust regressions.
 `make slotted-check` runs the language, differential, and fuzz tests, including
 the benchmarks' shared generators. The
 [source language guide](egglog-experimental/src/slotted/LANGUAGE.md) is also

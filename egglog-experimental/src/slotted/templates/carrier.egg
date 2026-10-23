@@ -1,12 +1,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; carrier {sort}: {renames}, {group}, {equated}, {class_slots}
+;;; carrier {sort}: {renames}, {group}, {equated}, {free_vars}
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (sort {sort})
 (constructor {var} (i64) {sort})
 (relation {renames} ({sort} Renaming {sort}))
 (relation {equated} ({sort} Renaming {sort}))
-(function {class_slots} ({sort}) Renaming :merge (map-intersect old new))
+(function {free_vars} ({sort}) Renaming :merge (map-intersect old new))
 (relation {subst_pending} ({sort} Renaming Renaming {sort}))
 (function {shape_equal} ({sort} Renaming {sort}) Unit :no-merge)
 (function {invocation} ({sort} Renaming) {sort} :merge ((union old new) old))
@@ -17,32 +17,32 @@
 (relation {reading} ({sort} Renaming Renaming))
 
 (set (SlottedNodeLayout "{var}" 1) ())
-(set ({class_slots} ({var} 0)) (map-of 0 0))
+(set ({free_vars} ({var} 0)) (map-of 0 0))
 
 (rule (({equated} _a _m _b)
        (!= _a _b)
        (= _a (ordering-max _a _b))
-       (= _csa ({class_slots} _a))
-       (= _csb ({class_slots} _b)))
+       (= _csa ({free_vars} _a))
+       (= _csb ({free_vars} _b)))
       (({renames} _a (compose _csa (compose _m _csb)) _b)) :ruleset slotted)
 
 (rule (({equated} _a _m _b)
        (!= _a _b)
        (= _b (ordering-max _a _b))
-       (= _csa ({class_slots} _a))
-       (= _csb ({class_slots} _b)))
+       (= _csa ({free_vars} _a))
+       (= _csb ({free_vars} _b)))
       (({renames} _b (compose _csb (compose (inverse _m) _csa)) _a)) :ruleset slotted)
 
 (rule (({equated} _a _m _a)
-       (= _cs ({class_slots} _a)))
+       (= _cs ({free_vars} _a)))
       ((set ({group} _a) (set-of (compose _cs (compose _m _cs))))) :ruleset slotted)
 
-(rule ((= _cs ({class_slots} _c)))
+(rule ((= _cs ({free_vars} _c)))
       (({renames} _c _cs _c)
        (set ({group} _c) (set-of _cs))) :ruleset slotted)
 
 (rule (({renames} _c _m _c)
-       (= _cs ({class_slots} _c))
+       (= _cs ({free_vars} _c))
        (!= _m _cs))
       ((set ({group} _c) (set-of (compose _cs (compose _m _cs))))
        (delete ({renames} _c _m _c))) :ruleset slotted)
@@ -52,15 +52,15 @@
        (= _l (ordering-max _f _l)))
       ((delete ({renames} _f _m _l))) :ruleset slotted)
 
-(rule (({renames} _a _m _b) (= _slots ({class_slots} _a)))
-      ((set ({class_slots} _b) (map-image (compose (inverse _m) _slots))))
+(rule (({renames} _a _m _b) (= _slots ({free_vars} _a)))
+      ((set ({free_vars} _b) (map-image (compose (inverse _m) _slots))))
       :ruleset slotted)
-(rule (({renames} _a _m _b) (= _slots ({class_slots} _b)))
-      ((set ({class_slots} _a) (map-image (compose _m _slots))))
+(rule (({renames} _a _m _b) (= _slots ({free_vars} _b)))
+      ((set ({free_vars} _a) (map-image (compose _m _slots))))
       :ruleset slotted)
 
-(rule ((= _grp ({group} _c)) (= _slots ({class_slots} _c)))
-      ((set ({class_slots} _c) (group-slot-closure _grp _slots)))
+(rule ((= _grp ({group} _c)) (= _slots ({free_vars} _c)))
+      ((set ({free_vars} _c) (group-slot-closure _grp _slots)))
       :ruleset slotted)
 
 (rule (({renames} _e1 _m12 _e2)
@@ -72,9 +72,9 @@
        ({renames} _a _m2 _c)
        (!= _a _c)
        (!= _a _b)
-       (= _csa ({class_slots} _a))
-       (= _csb ({class_slots} _b))
-       (= _csc ({class_slots} _c))
+       (= _csa ({free_vars} _a))
+       (= _csb ({free_vars} _b))
+       (= _csc ({free_vars} _c))
        (= _m1 (compose _csa (compose _m1 _csb)))
        (= _m2 (compose _csa (compose _m2 _csc)))
        (= (ordering-max _b _c) _b)
@@ -100,7 +100,7 @@
       ((delete ({renames} _f _g _f))) :ruleset slotted)
 
 (rule ((= _s ({group} _c))
-       (= _cs ({class_slots} _c))
+       (= _cs ({free_vars} _c))
        (= _s2 (group-close (group-restrict _s _cs)))
        (!= _s _s2))
       ((delete ({group} _c))
@@ -111,8 +111,8 @@
        (delete ({group_replace} _c))) :ruleset slotted-restore)
 
 (rule (({renames} _f _m _l)
-       (= _csf ({class_slots} _f))
-       (= _csl ({class_slots} _l))
+       (= _csf ({free_vars} _f))
+       (= _csl ({free_vars} _l))
        (= _m2 (compose _csf (compose _m _csl)))
        (!= _m _m2))
       ((delete ({renames} _f _m _l))
@@ -166,6 +166,6 @@
       (({equated} _a _m _b)) :ruleset slotted)
 
 (rule (({subst_pending} _root _q _mr _r)
-       (= _cs ({class_slots} _r)))
+       (= _cs ({free_vars} _r)))
       (({equated} _root (compose _q (compose _mr _cs)) _r))
       :ruleset slotted)

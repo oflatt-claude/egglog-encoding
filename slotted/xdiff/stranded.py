@@ -4,7 +4,7 @@ A visible class has a nonempty symmetry group. Each stranded row must have a
 visible row with the same operator and children, and edges equal under one
 injective renaming of the node's slots.
 
-Observer rules cover the constructors in `slotted/languages/toy.egg`.
+Observer rules cover the constructors in `egglog-experimental/tests/slotted/languages/toy.egg`.
 
 Usage:
     python3 slotted/xdiff/stranded.py            two migration cases

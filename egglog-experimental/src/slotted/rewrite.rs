@@ -182,11 +182,7 @@ fn substitute(
         q.fresh("t_ren"),
         q.fresh("back"),
     );
-    let inputs = format!(
-        "{bc} {bx} ({} 0) {tr} {tc} {}",
-        s.var,
-        quote(&s.class_slots)
-    );
+    let inputs = format!("{bc} {bx} ({} 0) {tr} {tc} {}", s.var, quote(&s.free_vars));
     Ok(vec![
         format!(
             "(let {needed} (map-union (map-image {bm}) (map-union (map-image {tm}) (map-of {x} {x}))))"

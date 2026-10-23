@@ -36,14 +36,14 @@ RUN_TIMEOUT = int(os.environ.get("XSDQL_TIMEOUT", "180"))
 # orchestration and expected partitions, but the terms and the two scope-sensitive
 # patterns below come from these runnable `.egg` files rather than being restated as
 # Python tuples.
-BETA_FIXTURE = ROOT / "slotted" / "tests" / "sdql-beta.egg"
-BINDER_FIXTURE = ROOT / "slotted" / "tests" / "sdql-binders.egg"
+BETA_FIXTURE = ROOT / "egglog-experimental" / "tests" / "slotted" / "sdql-beta.egg"
+BINDER_FIXTURE = ROOT / "egglog-experimental" / "tests" / "slotted" / "sdql-binders.egg"
 
 
 # Constructor signatures and reference names are data, shared with evaluation.
 # sdql.ref documents the reference's `let` tag and symbol-payload naming constraints.
-SDQL_SRC = ROOT / "slotted" / "languages" / "sdql.egg"
-SDQL_SRC_RULES = ROOT / "slotted" / "languages" / "sdql-rules.egg"
+SDQL_SRC = ROOT / "egglog-experimental" / "tests" / "slotted" / "languages" / "sdql.egg"
+SDQL_SRC_RULES = ROOT / "egglog-experimental" / "tests" / "slotted" / "languages" / "sdql-rules.egg"
 LANG = syntax.language(SDQL_SRC, SDQL_SRC.with_suffix(".ref"))
 sexpr, shift = LANG.sexpr, LANG.shift
 RULES = driver.load_rules(SDQL_SRC_RULES, LANG)

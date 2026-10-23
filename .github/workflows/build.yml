@@ -51,11 +51,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      # The whole thing, differential half included: `xmulti` now pins the reference
-      # to an upstream rev rather than a local checkout, so a runner can build it.
-      # That covers the .egg files, the slotted-language tests, the four drift gates
-      # keeping generated files, snapshots, tutorial and correspondence honest, and
-      # every suite that compares against the reference.
+      # Rust runs the source fixtures and compiler/runtime regressions. Python
+      # checks artifact provenance and compares against the pinned reference,
+      # including fixed-seed differential fuzzing and checker mutations.
       - uses: astral-sh/setup-uv@v6
       - run: make slotted-check
 

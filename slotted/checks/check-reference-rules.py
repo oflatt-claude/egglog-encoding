@@ -60,12 +60,12 @@ REF = reference_root()
 #: the names we spell differently)
 SUITES = {
     "sdql": (
-        ROOT / "slotted" / "languages" / "sdql-rules.egg",
+        ROOT / "egglog-experimental" / "tests" / "slotted" / "languages" / "sdql-rules.egg",
         REF / "benches" / "sdql.rs",
         {},
     ),
     "array": (
-        ROOT / "slotted" / "languages" / "array-rules.egg",
+        ROOT / "egglog-experimental" / "tests" / "slotted" / "languages" / "array-rules.egg",
         REF / "tests" / "rise" / "rewrite.rs",
         # the reference's name -> ours, where the two chose different words for one rule
         {"beta": "let-intro", "my-let-unused": "let-unused"},

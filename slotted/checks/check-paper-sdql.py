@@ -4,7 +4,7 @@
 The runnable tests are written in this repository's slotted surface syntax. This check
 keeps their source terms, expected terms, selected rewrite rules, and schedules tied to
 the original artifact instead of trusting a hand transcription: the twenty-one vendored
-fixtures by hash, the full-rule tests under `slotted/tests/sdql-paper/` as exactly what
+fixtures by hash, the full-rule tests under `egglog-experimental/tests/slotted/sdql-paper/` as exactly what
 `slotted/benchmarks/sdql.py` writes from those fixtures, the goal-directed BATAX test's
 copied rules and constructors against the rule library and an independent translation of
 the artifact's `rewrite.rs`, and the MMM subset test's input and rules.
@@ -25,9 +25,9 @@ from slotted.benchmarks import sdql as pf  # noqa: E402
 
 ARTIFACT_COMMIT = pf.ARTIFACT_COMMIT
 FIXTURES = pf.FIXTURES
-TEST = ROOT / "slotted" / "tests" / "sdql-paper-batax.egg"
-MMM_TEST = ROOT / "slotted" / "tests" / "sdql-paper-mmm.egg"
-RULES = ROOT / "slotted" / "languages" / "sdql-rules.egg"
+TEST = ROOT / "egglog-experimental" / "tests" / "slotted" / "sdql-paper-batax.egg"
+MMM_TEST = ROOT / "egglog-experimental" / "tests" / "slotted" / "sdql-paper-mmm.egg"
+RULES = ROOT / "egglog-experimental" / "tests" / "slotted" / "languages" / "sdql-rules.egg"
 XMULTI = ROOT / "slotted" / "xmulti" / "target" / "debug" / "xmulti"
 
 # SHA-256 of the files at ARTIFACT_COMMIT, excluding a trailing newline.  The

@@ -3,7 +3,7 @@
 An injective map has as many image slots as domain slots. An idempotent
 self-loop on a child witnesses a set containing its live slots; a wider edge
 therefore violates Definition 4. This check only detects over-wide edges.
-`def4-edges.py` checks exact domains against ClassSlots.
+`def4-edges.py` checks exact domains against FreeVars.
 """
 
 import subprocess

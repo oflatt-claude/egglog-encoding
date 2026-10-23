@@ -14,7 +14,7 @@ name = "files"
 
 [[test]]
 harness = false
-name = "slotted_snapshots"
+name = "slotted_files"
 
 [[bench]]
 harness = false

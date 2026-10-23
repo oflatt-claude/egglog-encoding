@@ -10,7 +10,7 @@ from pathlib import Path
 from slotted import reference as syntax
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "slotted/languages/array.egg"
+SOURCE = ROOT / "egglog-experimental/tests/slotted/languages/array.egg"
 RULES = SOURCE.with_name("array-rules.egg")
 LANG = syntax.language(SOURCE, SOURCE.with_suffix(".ref"))
 MAP = ("Sym", "map")

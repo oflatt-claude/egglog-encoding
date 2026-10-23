@@ -80,9 +80,9 @@ fn export_checks_actual_groups_and_does_not_run_maintenance() {
         Some(2)
     );
     graph
-        .parse_and_run_program(None, "(delete (ClassSlots_0 (SlottedVar_0 0)))")
+        .parse_and_run_program(None, "(delete (FreeVars_0 (SlottedVar_0 0)))")
         .unwrap();
-    assert!(export(&graph).unwrap_err().contains("ClassSlots"));
+    assert!(export(&graph).unwrap_err().contains("FreeVars"));
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn raw_edges_are_checked_before_projection() {
     mutants.push(("class slots absent from node", bad));
     let mut bad = original.clone();
     bad.slots.remove(&null);
-    mutants.push(("missing ClassSlots", bad));
+    mutants.push(("missing FreeVars", bad));
     for (name, bad) in mutants {
         assert!(document(&bad).is_err(), "accepted {name}");
     }
@@ -193,10 +193,10 @@ fn native_reads_reject_invalid_variables_renamings_and_metadata() {
         graph.parse_and_run_program(None, mutation).unwrap();
         assert!(export(&graph).is_err(), "accepted {mutation}");
     }
-    // An identity map and a nonidentity ClassSlots map can share the same keys;
+    // An identity map and a nonidentity FreeVars map can share the same keys;
     // replace the row instead of invoking its intersection merge.
     let mut graph = run(source);
-    graph.parse_and_run_program(None, "(delete (ClassSlots_0 (SlottedVar_0 0))) (set (ClassSlots_0 (SlottedVar_0 0)) (map-of 0 1))").unwrap();
+    graph.parse_and_run_program(None, "(delete (FreeVars_0 (SlottedVar_0 0))) (set (FreeVars_0 (SlottedVar_0 0)) (map-of 0 1))").unwrap();
     assert!(export(&graph).unwrap_err().contains("identity"));
 }
 

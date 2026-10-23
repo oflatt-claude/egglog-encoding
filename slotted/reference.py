@@ -26,7 +26,7 @@ class CarrierSymbols:
     var: str
     renames: str
     equated: str
-    class_slots: str
+    free_vars: str
     subst_pending: str
     shape_equal: str
     invocation: str
@@ -43,7 +43,7 @@ class CarrierSymbols:
             f"SlottedVar_{index}",
             f"RenamesToLeader_{index}",
             f"Equated_{index}",
-            f"ClassSlots_{index}",
+            f"FreeVars_{index}",
             f"SubstPending_{index}",
             f"ShapeEqual_{index}",
             f"Invocation_{index}",

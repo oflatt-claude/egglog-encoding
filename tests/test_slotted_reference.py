@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 syntax = importlib.import_module("slotted.reference")
-LANGUAGES = Path(__file__).resolve().parents[1] / "slotted/languages"
+LANGUAGES = Path(__file__).resolve().parents[1] / "egglog-experimental/tests/slotted/languages"
 
 
 @pytest.mark.parametrize(

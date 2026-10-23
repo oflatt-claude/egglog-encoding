@@ -3,7 +3,7 @@
 //! The encoding here is the smallest one that exercises it: a `Renaming` sort,
 //! a class sort `U`, the normalised variable `(Var 0)`, and constructors whose
 //! children each occupy a `Renaming` column followed by a `U` column. This fixture
-//! publishes the same physical-layout metadata and exact `ClassSlots` rows as the
+//! publishes the same physical-layout metadata and exact `FreeVars` rows as the
 //! compiler, without pulling in the rest of `RenamesToLeader` maintenance.
 
 use egglog::Error;
@@ -38,22 +38,22 @@ const SLOTTED: &str = r#"
 (set (SlottedEdgeLayout "App" 0) ())
 (set (SlottedEdgeLayout "App" 2) ())
 
-(function ClassSlots (U) Renaming :merge (map-intersect old new))
-(set (ClassSlots (Var 0)) (map-of 0 0))
-(set (ClassSlots (Null)) (map-empty))
+(function FreeVars (U) Renaming :merge (map-intersect old new))
+(set (FreeVars (Var 0)) (map-of 0 0))
+(set (FreeVars (Null)) (map-empty))
 (ruleset slots)
 (rule ((= e (H m1 c1 m2 c2)))
-      ((set (ClassSlots e) (map-union (map-image m1) (map-image m2))))
+      ((set (FreeVars e) (map-union (map-image m1) (map-image m2))))
       :ruleset slots)
 (rule ((= e (Lbl p m c)))
-      ((set (ClassSlots e) (map-image m)))
+      ((set (FreeVars e) (map-image m)))
       :ruleset slots)
 (rule ((= e (Lam mx (Var 0) mb body))
        (= x (map-get mx 0)))
-      ((set (ClassSlots e) (map-remove (map-image mb) x)))
+      ((set (FreeVars e) (map-remove (map-image mb) x)))
       :ruleset slots)
 (rule ((= e (App m1 c1 m2 c2)))
-      ((set (ClassSlots e) (map-union (map-image m1) (map-image m2))))
+      ((set (FreeVars e) (map-union (map-image m1) (map-image m2))))
       :ruleset slots)
 "#;
 
@@ -88,7 +88,7 @@ fn a_reachable_constructor_without_layout_is_rejected() {
         r#"
 (constructor Mystery (Renaming U) U)
 (let $body (Mystery (map-of 0 0) (Var 0)))
-(set (ClassSlots $body) (map-of 0 0))
+(set (FreeVars $body) (map-of 0 0))
 (let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
 "#,
     );
@@ -105,7 +105,7 @@ fn a_container_payload_is_rejected() {
 (constructor Boxed (Ints) U)
 (set (SlottedNodeLayout "Boxed" 1) ())
 (let $body (Boxed (vec-of 1 2)))
-(set (ClassSlots $body) (map-empty))
+(set (FreeVars $body) (map-empty))
 (let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null)))
 "#,
     );
@@ -130,16 +130,16 @@ fn substitutes_an_occurring_slot() -> Result<(), Error> {
 
 /// The optional final argument selects a carrier's class-slot function.
 #[test]
-fn accepts_an_explicit_class_slots_table() -> Result<(), Error> {
+fn accepts_an_explicit_free_vars_table() -> Result<(), Error> {
     egraph(
         r#"
-(function ClassSlots_1 (U) Renaming :merge (map-intersect old new))
-(set (ClassSlots_1 (Var 0)) (map-of 0 0))
-(set (ClassSlots_1 (Null)) (map-empty))
+(function FreeVars_1 (U) Renaming :merge (map-intersect old new))
+(set (FreeVars_1 (Var 0)) (map-of 0 0))
+(set (FreeVars_1 (Null)) (map-empty))
 (let $body (H (map-of 0 0) (Var 0) (map-of 0 1) (Var 0)))
-(set (ClassSlots_1 $body) (map-of 0 0 1 1))
-(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "ClassSlots_1"))
-(let $frame (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null) "ClassSlots_1"))
+(set (FreeVars_1 $body) (map-of 0 0 1 1))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "FreeVars_1"))
+(let $frame (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null) "FreeVars_1"))
 (check (= $out (H (map-empty) (Null) (map-of 0 1) (Var 0))))
 (check (= $frame (map-of 1 1)))
 "#,
@@ -150,18 +150,18 @@ fn accepts_an_explicit_class_slots_table() -> Result<(), Error> {
 /// The table name is metadata, not an unchecked dynamic lookup. A missing or
 /// differently shaped table is rejected before traversal.
 #[test]
-fn rejects_an_invalid_explicit_class_slots_table() {
+fn rejects_an_invalid_explicit_free_vars_table() {
     assert_subst_rejected(
         r#"
 (let $body (H (map-of 0 0) (Var 0) (map-empty) (Null)))
-(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "MissingClassSlots"))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "MissingFreeVars"))
 "#,
     );
     assert_subst_rejected(
         r#"
-(function WrongClassSlots (i64) Renaming :no-merge)
+(function WrongFreeVars (i64) Renaming :no-merge)
 (let $body (H (map-of 0 0) (Var 0) (map-empty) (Null)))
-(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "WrongClassSlots"))
+(let $out (slotted-subst $body 0 (Var 0) (map-empty) (Null) "WrongFreeVars"))
 "#,
     );
 }
@@ -418,14 +418,14 @@ fn substitution_after_clone_uses_its_own_database() -> Result<(), Error> {
 }
 
 #[test]
-fn substitution_observes_class_slots_without_constructor_changes() -> Result<(), Error> {
+fn substitution_observes_free_vars_without_constructor_changes() -> Result<(), Error> {
     egraph(
         r#"
 (let $body (H (map-of 0 1) (Var 0) (map-of 0 2) (Var 0)))
 (run-schedule (saturate (run slots)))
 (let $before (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null)))
 (check (= $before (map-of 1 1 2 2)))
-(set (ClassSlots $body) (map-empty))
+(set (FreeVars $body) (map-empty))
 (let $after (slotted-subst-frame $body 0 (Var 0) (map-empty) (Null)))
 (check (= $after (map-empty)))
 "#,

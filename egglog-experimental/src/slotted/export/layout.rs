@@ -195,7 +195,7 @@ impl Layouts {
         for s in carriers.values() {
             for (name, kind, input, output) in [
                 (
-                    &s.class_slots,
+                    &s.free_vars,
                     FunctionSubtype::Custom,
                     vec![s.sort.as_str()],
                     Some("Renaming"),

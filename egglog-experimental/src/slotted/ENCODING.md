@@ -152,7 +152,7 @@ in front of its own variables.
 (constructor Var (i64) Math)
 (relation RenamesToLeader (Math Renaming Math))
 (relation Equated (Math Renaming Math))
-(function ClassSlots (Math) Renaming :merge (map-intersect old new))
+(function FreeVars (Math) Renaming :merge (map-intersect old new))
 (relation SubstPending (Math Renaming Renaming Math))
 (function ShapeEqual (Math Renaming Math) Unit :no-merge)
 (function Invocation (Math Renaming) Math :merge ((union old new) old))
@@ -168,7 +168,7 @@ edge `0 -> s`, so *which* slot a variable names lives in the renaming and not in
 the value. Its class slots are seeded outright:
 
 ```
-(set (ClassSlots (Var 0)) (map-of 0 0))
+(set (FreeVars (Var 0)) (map-of 0 0))
 ```
 
 **`RenamesToLeader f m l`** reads `f = m * l`: `m` carries `l`'s slots to `f`'s.
@@ -185,7 +185,7 @@ one; `Equated` is what the machinery derives `RenamesToLeader` from, and a stale
 row is deleted and re-derived rather than repaired in place. Repairing in place
 does not converge — transitivity keeps re-deriving the backwards row.
 
-**`ClassSlots c`** is the slots the class actually depends on, as an identity
+**`FreeVars c`** is the slots the class actually depends on, as an identity
 renaming. It is held directly rather than read off the group, because it is
 what every renaming is spelled on (C15), so it has to come first. Its merge is
 `map-intersect`, so it only ever shrinks. Equating `f($x,$y)` with `g($x)` makes
@@ -230,12 +230,12 @@ many rows, which every closure rule below then multiplies.
 
 ```
 (rule ((Equated a m b) (!= a b) (= a (ordering-max a b))
-       (= csa (ClassSlots a)) (= csb (ClassSlots b)))
+       (= csa (FreeVars a)) (= csb (FreeVars b)))
       ((RenamesToLeader a (compose csa (compose m csb)) b)) :ruleset slotted)
 (rule ((Equated a m b) (!= a b) (= b (ordering-max a b))
-       (= csa (ClassSlots a)) (= csb (ClassSlots b)))
+       (= csa (FreeVars a)) (= csb (FreeVars b)))
       ((RenamesToLeader b (compose csb (compose (inverse m) csa)) a)) :ruleset slotted)
-(rule ((Equated a m a) (= cs (ClassSlots a)))
+(rule ((Equated a m a) (= cs (FreeVars a)))
       ((set (EclassGroup a) (set-of (compose cs (compose m cs))))) :ruleset slotted)
 ```
 
@@ -247,10 +247,10 @@ renaming, so it is a symmetry and is moved into the group. That is what lets eve
 below read this relation as followers and identities.
 
 ```
-(rule ((= cs (ClassSlots c)))
+(rule ((= cs (FreeVars c)))
       ((RenamesToLeader c cs c)
        (set (EclassGroup c) (set-of cs))) :ruleset slotted)
-(rule ((RenamesToLeader c m c) (= cs (ClassSlots c)) (!= m cs))
+(rule ((RenamesToLeader c m c) (= cs (FreeVars c)) (!= m cs))
       ((set (EclassGroup c) (set-of (compose cs (compose m cs))))
        (delete (RenamesToLeader c m c))) :ruleset slotted)
 ```
@@ -269,10 +269,10 @@ taken through the renaming, bounds the other's; the merge intersects, so the who
 component settles on the slots every member has.
 
 ```
-(rule ((RenamesToLeader a m b) (= slots (ClassSlots a)))
-      ((set (ClassSlots b) (map-image (compose (inverse m) slots)))) :ruleset slotted)
-(rule ((RenamesToLeader a m b) (= slots (ClassSlots b)))
-      ((set (ClassSlots a) (map-image (compose m slots)))) :ruleset slotted)
+(rule ((RenamesToLeader a m b) (= slots (FreeVars a)))
+      ((set (FreeVars b) (map-image (compose (inverse m) slots)))) :ruleset slotted)
+(rule ((RenamesToLeader a m b) (= slots (FreeVars b)))
+      ((set (FreeVars a) (map-image (compose m slots)))) :ruleset slotted)
 ```
 
 **A class's slots are closed under its symmetries.** If `c = g * c` and `g` sends a slot
@@ -283,8 +283,8 @@ settles `f($0,$1) = f($1,$2)` on the empty slot set: no slot survives being rena
 its successor forever.
 
 ```
-(rule ((= grp (EclassGroup c)) (= slots (ClassSlots c)))
-      ((set (ClassSlots c) (group-slot-closure grp slots))) :ruleset slotted)
+(rule ((= grp (EclassGroup c)) (= slots (FreeVars c)))
+      ((set (FreeVars c) (group-slot-closure grp slots))) :ruleset slotted)
 ```
 
 **Transitivity.** Two edges compose into an equation. The middle of a path is never its
@@ -311,7 +311,7 @@ differently between an edge and its restatement.
 (rule ((RenamesToLeader a m1 b)
        (RenamesToLeader a m2 c)
        (!= a c) (!= a b)
-       (= csa (ClassSlots a)) (= csb (ClassSlots b)) (= csc (ClassSlots c))
+       (= csa (FreeVars a)) (= csb (FreeVars b)) (= csc (FreeVars c))
        (= m1 (compose csa (compose m1 csb)))
        (= m2 (compose csa (compose m2 csc)))
        (= (ordering-max b c) b)
@@ -321,14 +321,14 @@ differently between an edge and its restatement.
        (Equated b (compose (inverse m1) m2) c)) :ruleset slotted)
 ```
 
-**A renaming outlives a narrowing.** `ClassSlots` only ever shrinks, and an edge
+**A renaming outlives a narrowing.** `FreeVars` only ever shrinks, and an edge
 oriented before a class dropped a slot still names it. The edge is restated on what the
 classes have now; this is the one rule that deletes an edge without a leader having
 changed.
 
 ```
 (rule ((RenamesToLeader f m l)
-       (= csf (ClassSlots f)) (= csl (ClassSlots l))
+       (= csf (FreeVars f)) (= csl (FreeVars l))
        (= m2 (compose csf (compose m csl)))
        (!= m m2))
       ((delete (RenamesToLeader f m l))
@@ -355,7 +355,7 @@ where no other rule's write to the key can land between them.
 ```
 (function GroupReplace (Math) Group :merge new)
 (rule ((= s (EclassGroup c))
-       (= cs (ClassSlots c))
+       (= cs (FreeVars c))
        (= s2 (group-close (group-restrict s cs)))
        (!= s s2))
       ((delete (EclassGroup c))
@@ -402,7 +402,7 @@ pending row becomes an equation between the root and that class in the root's sl
 names.
 
 ```
-(rule ((SubstPending root q mr r) (= cs (ClassSlots r)))
+(rule ((SubstPending root q mr r) (= cs (FreeVars r)))
       ((Equated root (compose q (compose mr cs)) r)) :ruleset slotted)
 ```
 
@@ -432,7 +432,7 @@ column.
 
 ```
 (rule ((= e1 (Add m1 c1 m2 c2)))
-      ((set (ClassSlots e1) (map-union (map-image m1) (map-image m2)))) :ruleset slotted)
+      ((set (FreeVars e1) (map-union (map-image m1) (map-image m2)))) :ruleset slotted)
 ```
 
 **The shape index**, which is the heart of it. Two rows are one node up to renaming
@@ -462,7 +462,7 @@ the reference's hashcons on shapes: one lookup per row.
 (rule ((= c (Add m1 c1 m2 c2))
        (= g1 (EclassGroup c1)) (= g2 (EclassGroup c2))
        (= (values s1 s2 back syms) (_shapeof_Add m1 g1 m2 g2))
-       (= cs (ClassSlots c)))
+       (= cs (FreeVars c)))
       ((set (EclassGroup c) (group-restrict syms cs))) :ruleset slotted)
 ```
 
@@ -653,8 +653,8 @@ A **frame** is the closure of these equations. Its **blocks** are the pattern's
 slots: two occurrences in one block are one slot, and the blocks are numbered
 canonically, `anchor` making the root's class slots their own numbers. Above, anchored
 at `_p`, the blocks are slots 0, 1, 2, 3 in the order written, so `(ren m "e1")` is
-`{0 -> 1}`, `(ren m "e2")` and `(ren m "$x")` are `{0 -> 2}`, and `(not-free m "$x"
-(names "e1"))` asks whether slot 2 lies in `e1`'s image `{1}`: it does not, and the
+`{0 -> 1}`, `(ren m "e2")` and `(ren m "$x")` are `{0 -> 2}`, and `(map-not-contains (map-image (ren m "e1"))
+(map-get (ren m "$x") 0))` asks whether slot 2 lies in `e1`'s image `{1}`: it does not, and the
 rule fires. Had `e1` been `(var $x)`, `Lit("$x")` and `Var(e1, 0)` would share a
 block and the condition would refuse.
 
@@ -688,7 +688,7 @@ The primitives:
 | `(anchor f "p")` | the frame spelled in `p`'s slot names: the rule's root, so its renaming is the identity and the action is egglog's `union` |
 | `(refinements f)` | every consistent way to decide the readings left to the frame, and then to merge the blocks refinement may touch, as a `Vec` of frames; `vec-get` reads one and is partial past the last |
 | `(mint f (names "$z"...))` | fresh slots for a right-hand side, apart from everything named |
-| `(free m "$x" (names v...))`, `(not-free ...)` | is the literal's slot in one of the variables' images |
+| `(map-contains image slot)`, `(map-not-contains image slot)` | test membership in the union of the matched terms' renaming images |
 | `(ren m "v")` | `v`'s renaming into the pattern's slots; a literal comes back as `{0 -> slot}` |
 | `(node-slots m uncovered covered bound)` | a built node's free slots from its named columns; `(without m slots bound)` for a built child under a binder |
 
@@ -715,13 +715,13 @@ that schedule. Part II gives the emitted arrangement.
        (= grp_t1 (EclassGroup cls_t1))
        ;; what each atom's columns say about slots: each binding names the column's
        ;; variable or literal, its edge, and the exact slots of its class (C2, C4, C7)
-       (= atom_p (atom "_p" (root "_p" (ClassSlots cls_p))
-                            (child "R" e0_R (ClassSlots cls_R))
+       (= atom_p (atom "_p" (root "_p" (FreeVars cls_p))
+                            (child "R" e0_R (FreeVars cls_R))
                             (bound "$x" e0_lit_x) (bound "$y" e0_lit_y)
-                            (child "_t1" e0_t1 (ClassSlots cls_t1))))
-       (= atom_t1 (atom "_t1" (root "_t1" (ClassSlots cls_t1) grp_t1)
-                              (child "e1" e1_e1 (ClassSlots cls_e1))
-                              (child "e2" e1_e2 (ClassSlots cls_e2))))
+                            (child "_t1" e0_t1 (FreeVars cls_t1))))
+       (= atom_t1 (atom "_t1" (root "_t1" (FreeVars cls_t1) grp_t1)
+                              (child "e1" e1_e1 (FreeVars cls_e1))
+                              (child "e2" e1_e2 (FreeVars cls_e2))))
        ;; the two joined: where they share _t1 the occurrences are identified (C6);
        ;; nothing here if a clique breaks
        (= f (frame-join atom_p atom_t1))
@@ -733,8 +733,8 @@ that schedule. Part II gives the emitted arrangement.
        (Idx refined_len choice)
        (= m (vec-get refined choice))
        ;; the side conditions, read off the refined frame (C9)
-       (not-free m "$x" (names "e1"))
-       (not-free m "$y" (names "e1")))
+       (map-not-contains (map-image (ren m "e1")) (map-get (ren m "$x") 0))
+       (map-not-contains (map-image (ren m "e1")) (map-get (ren m "$y") 0)))
       (;; the right-hand side bottom-up, each column's renaming read out of m
        (let built_sum (Sum (ren m "R") cls_R (ren m "$x") (Var 0) (ren m "$y") (Var 0) (ren m "e2") cls_e2))
        ;; the built node's free slots: R's image, and e2's with the bound $x, $y taken out
@@ -922,7 +922,7 @@ handed to the binding:
 ```
        (= pinned_t1 (_pinned_Sum e0_R cls_R e0_lit_x (Var 0) e0_lit_y (Var 0) e0_t1 cls_t1 4))
        (Reading cls_t1 pinned_t1 sym_t1)
-       (= atom_t1 (atom "_t1" (root "_t1" (ClassSlots cls_t1) sym_t1) ...))
+       (= atom_t1 (atom "_t1" (root "_t1" (FreeVars cls_t1) sym_t1) ...))
 ```
 
 A repeated occurrence that is not a nested root — a pattern variable written twice —
@@ -964,8 +964,8 @@ join rather than a primitive filter applied after joining all lengths.
 (rule ((_matched_sum-fact-3 refined refined_len cls_p cls_R cls_t1 cls_e1 cls_e2)
        (Idx refined_len choice)
        (= m (vec-get refined choice))
-       (not-free m "$x" (names "e1"))
-       (not-free m "$y" (names "e1")))
+       (map-not-contains (map-image (ren m "e1")) (map-get (ren m "$x") 0))
+       (map-not-contains (map-image (ren m "e1")) (map-get (ren m "$y") 0)))
       (...the right-hand side, as below...
        (union built_sing cls_p))
       :ruleset slotted-apply :name "sum-fact-3/apply")
@@ -1101,7 +1101,7 @@ convention for readable output; the answer does not depend on it, and `xarray.py
 checks that.
 
 **C4. A variable's renaming is no wider than its class.** Every binding carries the
-class's exact slots, `(ClassSlots cls)`, and the frame's occurrences of `v` are those
+class's exact slots, `(FreeVars cls)`, and the frame's occurrences of `v` are those
 slots and no others; a node may carry a slot its class has made redundant, and that
 slot is the node's alone -- an occurrence like any other, which a variable bound
 through it may meet again elsewhere (*Against the reference*, below).
@@ -1138,8 +1138,8 @@ reads one per `(Idx refined_len choice)` with `vec-get`.
 `slotted-refine` generates every required index before any match is applied, so
 all alternatives act within the same user round. This is the reference's `final_refine`.
 
-**C9. Conditions are read after refinement.** `free` and `not-free` are facts over the
-refined frame. A matched binder's slot may be read as any name, a free variable's
+**C9. Conditions are read after refinement.** `free`, `not-free`, and
+`free-names-are` inspect renaming images from the refined frame. A matched binder's slot may be read as any name, a free variable's
 included, so a rule whose right-hand side rebinds such a slot over a variable matched
 outside the binder owes `(not-free $s v)`; `capture_guards` derives what it owes.
 
@@ -1151,7 +1151,7 @@ refinement, apart from every slot the match named; the reference writes
 rule's root, so the root's renaming is the identity by construction, and the right-hand
 side, built bottom-up in the frame's slots -- one `let` per node and one `node-slots`
 for its slot set -- is an invocation in the root's own frame. egglog's `union` is then
-exactly the equation the rule means, and the machinery's `ClassSlots` merge makes any
+exactly the equation the rule means, and the machinery's `FreeVars` merge makes any
 slot the two sides disagree on redundant. The one action that is not a union is a
 right-hand side that is a bare variable `a`: `a`'s renaming need not be the identity,
 so the rule states `(Equated cls_root (ren m "a") cls_a)` and the machinery orients it.
@@ -1417,7 +1417,7 @@ transformation and evaluation in one process.
 | `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
 | `egglog-experimental/src/slotted/export.rs` | native logical graph export, raw row counts, and encoding invariant validation |
 | `slotted/benchmarks/` | array generator, SDQL artifact inputs, and logic case studies |
-| `slotted/tests/` | regression fixtures and compiler snapshots |
+| `egglog-experimental/tests/slotted/` | regression fixtures and compiler snapshots |
 | `slotted/checks/` | language, frontend, maintenance, and evaluation regression checks |
 | `slotted/xdiff/` | the differential harness against `memoryleak47/slotted-egraphs` |
 | `slotted/xmulti/` | the reference oracle, pinned to an exact revision |
@@ -1434,3 +1434,19 @@ The shared and per-carrier maintenance rules live in the Rust compiler's
 `templates/` directory. Constructor-dependent rules are generated from the declared
 signatures. Run a source example through `--slotted --mode desugar` to inspect the
 ordinary egglog program that is evaluated.
+
+## Testing and inspection commands
+
+`__internal-holds` and `__internal-not-holds` test whether a class has a node
+of a particular constructor, without fixing its children. They are regression
+helpers, not source-language predicates. Ordinary equality and `renaming-=` are
+public and distinguish equality of invocations from equality of classes.
+
+`--slotted-encoded` evaluates an already lowered program. Tests use it to append
+observer rules over the encoding's tables. `(slotted-export "graph.json")` exports
+the logical graph, including slots, symmetry groups, and independently collected
+row counts. It requires completed maintenance and never runs user rules. The
+native exporter validates raw edges before translating slot frames; the
+isomorphism checker then compares the complete annotated graphs and verifies its
+witness. These paths belong to reference testing and inspection, rather than the
+public source-language API.

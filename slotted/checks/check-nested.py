@@ -2,7 +2,6 @@
 """Check both matching modes against their own reference, including lost aliases."""
 
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -59,46 +58,6 @@ CASES = [
 ]
 
 
-def compiler_flag(tmp):
-    path = Path(tmp) / "flag.egg"
-    path.write_text(
-        '(include "slotted/languages/toy.egg")\n'
-        "(rewrite (F a (G b n)) (H a b))\n"
-        "(check (= (F $0 (G $1 (Null))) (F $0 (G $1 (Null)))))\n"
-    )
-    result = subprocess.run(
-        [
-            str(ROOT / "target/debug/egglog-experimental"),
-            "--slotted",
-            "--slotted-no-aliasing",
-            "--mode",
-            "desugar",
-            path,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "(nested-atom " in result.stdout and "(atom " in result.stdout
-    path.write_text('(include "slotted/languages/toy.egg")\n(rewrite (F a b) a :when ((= b (G x y))))\n')
-    result = subprocess.run(
-        [
-            str(ROOT / "target/debug/egglog-experimental"),
-            "--slotted",
-            "--slotted-no-aliasing",
-            "--mode",
-            "desugar",
-            path,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode != 0 and "single nested pattern" in result.stderr
-    assert "Traceback" not in result.stderr
-
-
 def reference_term(src, form):
     text = X.LANG.sexpr(src.term(form, ground=True))
     # Exercise the reference's own named-slot parser as well.
@@ -112,11 +71,10 @@ def main():
         checker=ROOT / "target/debug/egraph-isomorphism",
     )
     with tempfile.TemporaryDirectory(prefix="slotted-nested-") as tmp:
-        compiler_flag(tmp)
         for name, unions, start, lhs, rhs, differs in CASES:
             path = Path(tmp) / f"{name}.egg"
             path.write_text(
-                '(include "slotted/languages/toy.egg")\n'
+                '(include "egglog-experimental/tests/slotted/languages/toy.egg")\n'
                 f"{unions}\n(let start {start})\n(rewrite {lhs} {rhs})\n(run 1)\n"
             )
             sizes = []

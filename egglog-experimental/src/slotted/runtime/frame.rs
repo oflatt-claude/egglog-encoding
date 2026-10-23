@@ -175,14 +175,14 @@ pub enum Binding {
     /// the atom's node is an invocation of this variable's class
     Root {
         var: PVarId,
-        class_slots: SlotSet,
+        free_vars: SlotSet,
         reading: Reading,
     },
     /// a child column carrying a variable by an edge
     Child {
         var: PVarId,
         edge: Renaming,
-        class_slots: SlotSet,
+        free_vars: SlotSet,
         reading: Reading,
     },
     /// a slot literal; `carried` when the column is an ordinary one, whose slot
@@ -227,7 +227,7 @@ pub struct Frame {
     /// ordinary cliques are implicit: `apart` reads them off the occurrences.
     blocks: Vec<Vec<Occ>>,
     /// per variable, the slots of its class: the domain of its renaming
-    class_slots: BTreeMap<PVarId, SlotSet>,
+    free_vars: BTreeMap<PVarId, SlotSet>,
     /// every literal, and whether refinement may merge a placeholder into its block
     literals: BTreeMap<Name, bool>,
     /// the variable whose class slots name the pattern's slots: a block holding
@@ -279,9 +279,9 @@ impl Frame {
         let mut roots = bindings.iter().filter_map(|b| match b {
             Binding::Root {
                 var,
-                class_slots,
+                free_vars,
                 reading,
-            } => Some((var, class_slots, reading)),
+            } => Some((var, free_vars, reading)),
             _ => None,
         });
         let (root_var, root_slots, root_reading) = roots.next()?;
@@ -292,7 +292,7 @@ impl Frame {
         let mut node_slots: BTreeSet<i64> = BTreeSet::new();
         let mut eqs: Vec<(Occ, Occ)> = Vec::new();
         let mut occs: BTreeSet<Occ> = BTreeSet::new();
-        let mut class_slots: BTreeMap<PVarId, SlotSet> = BTreeMap::new();
+        let mut free_vars: BTreeMap<PVarId, SlotSet> = BTreeMap::new();
         let mut literals: BTreeMap<Name, bool> = BTreeMap::new();
         let mut pending: Vec<Pending> = Vec::new();
 
@@ -315,7 +315,7 @@ impl Frame {
             }
         }
         node_slots.extend(cs.iter().copied());
-        class_slots.insert(root_var.clone(), cs);
+        free_vars.insert(root_var.clone(), cs);
 
         for b in bindings {
             match b {
@@ -323,7 +323,7 @@ impl Frame {
                 Binding::Child {
                     var,
                     edge,
-                    class_slots: cls,
+                    free_vars: cls,
                     reading,
                 } => {
                     let cs = cls.clone();
@@ -349,7 +349,7 @@ impl Frame {
                             eqs.push((Occ::Node(atom.clone(), s), Occ::Var(var.clone(), u)));
                         }
                     }
-                    if let Some(prev) = class_slots.insert(var.clone(), cs.clone())
+                    if let Some(prev) = free_vars.insert(var.clone(), cs.clone())
                         && prev != cs
                     {
                         return None;
@@ -381,7 +381,7 @@ impl Frame {
         });
         let frame = Frame {
             blocks: close(occs, &eqs),
-            class_slots,
+            free_vars,
             literals,
             anchor: None,
             pending,
@@ -401,9 +401,9 @@ impl Frame {
                 eqs.push((pair[0].clone(), pair[1].clone()));
             }
         }
-        let mut class_slots = self.class_slots.clone();
-        for (v, cs) in &other.class_slots {
-            if let Some(prev) = class_slots.insert(v.clone(), cs.clone())
+        let mut free_vars = self.free_vars.clone();
+        for (v, cs) in &other.free_vars {
+            if let Some(prev) = free_vars.insert(v.clone(), cs.clone())
                 && prev != *cs
             {
                 return None;
@@ -415,7 +415,7 @@ impl Frame {
         }
         let frame = Frame {
             blocks: close(occs, &eqs),
-            class_slots,
+            free_vars,
             literals,
             anchor: self.anchor.clone().or_else(|| other.anchor.clone()),
             pending: self.pending.iter().chain(&other.pending).cloned().collect(),
@@ -524,7 +524,7 @@ impl Frame {
     /// The frame spelled in this variable's slot names.
     pub fn anchored(&self, var: &str) -> Option<Frame> {
         let var = PVarId::new(var);
-        let slots = self.class_slots.get(&var)?;
+        let slots = self.free_vars.get(&var)?;
         let mut frame = Frame {
             anchor: Some(var.clone()),
             ..self.clone()
@@ -631,17 +631,18 @@ impl Frame {
             }
             return Some(Renaming::from([(0, numbers[self.block_of_lit(name)?])]));
         }
-        let cs = self.class_slots.get(name)?;
+        let cs = self.free_vars.get(name)?;
         cs.iter()
             .map(|&t| Some((t, numbers[self.block_of_var(name, t)?])))
             .collect()
     }
 
     /// Does the literal's slot lie in any of these variables' images?
-    pub fn is_free(&self, lit: &str, vars: &[Name]) -> Option<bool> {
+    #[cfg(test)]
+    fn is_free(&self, lit: &str, vars: &[Name]) -> Option<bool> {
         let i = self.block_of_lit(&Name::new(lit))?;
         for v in vars {
-            self.class_slots.get(v)?;
+            self.free_vars.get(v)?;
         }
         Some(
             self.blocks[i]
@@ -865,8 +866,6 @@ impl BaseSort for FrameSort {
         // both frames' constraints, closed; fails where a clique breaks
         add_primitive!(eg, "frame-join" = |a: Fr, b: Fr| -?> Fr { a.join(&b).map(Fr::new) });
         // conditions, read after refinement
-        add_primitive!(eg, "free"     = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), &vs.0.0).filter(|b| *b).map(|_| ()) });
-        add_primitive!(eg, "not-free" = |f: Fr, lit: S, vs: Ns| -?> () { f.is_free(lit.as_str(), &vs.0.0).filter(|b| !*b).map(|_| ()) });
         // right-hand-side slots the pattern never pinned
         add_primitive!(eg, "mint" = |f: Fr, xs: Ns| -?> Fr { f.mint(&xs.0.0).map(Fr::new) });
         // the frame spelled in a variable's slot names -- the rule's root, so that its
@@ -1050,7 +1049,7 @@ mod tests {
     fn root(v: &str, cs: &[i64]) -> Binding {
         Binding::Root {
             var: v.into(),
-            class_slots: ident(cs),
+            free_vars: ident(cs),
             reading: Reading::Identity,
         }
     }
@@ -1059,7 +1058,7 @@ mod tests {
         Binding::Child {
             var: v.into(),
             edge: m(edge),
-            class_slots: ident(cs),
+            free_vars: ident(cs),
             reading: Reading::Identity,
         }
     }
@@ -1137,7 +1136,7 @@ mod tests {
                 Binding::Child {
                     var: "a".into(),
                     edge: m(&[(0, 1), (1, 0)]),
-                    class_slots: ident(&[0, 1]),
+                    free_vars: ident(&[0, 1]),
                     reading: Reading::Fixed(m(&[(0, 1), (1, 0)])),
                 },
             ],

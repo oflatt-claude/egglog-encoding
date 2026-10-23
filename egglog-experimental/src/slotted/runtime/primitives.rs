@@ -83,19 +83,19 @@ pub(super) fn register_map(eg: &mut EGraph, arc: ArcSort) {
     // e-nodes and hand renamings back: the bindings an `atom` is made of,
     // a variable's renaming out of a frame, and a built node's slot set.
     add_primitive!(eg, "root" = |v: S, cs: @MapContainer (arc)| -?> Bd {
-        Some(Bd::new(Binding::Root { var: PVarId::new(v.as_str()), class_slots: slot_set(state.base_values(), &cs.data)?, reading: Reading::Identity }))
+        Some(Bd::new(Binding::Root { var: PVarId::new(v.as_str()), free_vars: slot_set(state.base_values(), &cs.data)?, reading: Reading::Identity }))
     });
     add_primitive!(eg, "root" = |v: S, cs: @MapContainer (arc), sym: @MapContainer (arc)| -?> Bd {{
         let bv = state.base_values();
-        Some(Bd::new(Binding::Root { var: PVarId::new(v.as_str()), class_slots: slot_set(bv, &cs.data)?, reading: Reading::Fixed(slot_map(bv, &sym.data)) }))
+        Some(Bd::new(Binding::Root { var: PVarId::new(v.as_str()), free_vars: slot_set(bv, &cs.data)?, reading: Reading::Fixed(slot_map(bv, &sym.data)) }))
     }});
     add_primitive!(eg, "child" = |v: S, e: @MapContainer (arc), cs: @MapContainer (arc)| -?> Bd {{
         let bv = state.base_values();
-        Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_set(bv, &cs.data)?, reading: Reading::Identity }))
+        Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), free_vars: slot_set(bv, &cs.data)?, reading: Reading::Identity }))
     }});
     add_primitive!(eg, "child" = |v: S, e: @MapContainer (arc), cs: @MapContainer (arc), sym: @MapContainer (arc)| -?> Bd {{
         let bv = state.base_values();
-        Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_set(bv, &cs.data)?, reading: Reading::Fixed(slot_map(bv, &sym.data)) }))
+        Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), free_vars: slot_set(bv, &cs.data)?, reading: Reading::Fixed(slot_map(bv, &sym.data)) }))
     }});
     add_primitive!(eg, "lit" = |x: S, e: @MapContainer (arc)| -> Bd {
         Bd::new(Binding::Lit { name: Name::new(x.as_str()), edge: slot_map(state.base_values(), &e.data), carried: true })
@@ -173,13 +173,13 @@ pub(super) fn register_set(eg: &mut EGraph, arc: ArcSort, renaming: ArcSort) {
     // of the pattern has pinned what it can (C5); see `Frame::refinements`.
     add_primitive!(eg, "root" = {arc.clone(): ArcSort} |v: S, cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
         let group = slot_maps(&state, grp.data.iter().copied())?;
-        let class_slots = slot_set(state.base_values(), &cs.data)?;
-        Some(Bd::new(Binding::Root { var: PVarId::new(v.as_str()), class_slots, reading: Reading::Group(Arc::new(group)) }))
+        let free_vars = slot_set(state.base_values(), &cs.data)?;
+        Some(Bd::new(Binding::Root { var: PVarId::new(v.as_str()), free_vars, reading: Reading::Group(Arc::new(group)) }))
     }});
     add_primitive!(eg, "child" = {arc.clone(): ArcSort} |v: S, e: @MapContainer (renaming.clone()), cs: @MapContainer (renaming.clone()), grp: @SetContainer (arc.clone())| -?> Bd {{
         let group = slot_maps(&state, grp.data.iter().copied())?;
         let bv = state.base_values();
-        Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), class_slots: slot_set(bv, &cs.data)?, reading: Reading::Group(Arc::new(group)) }))
+        Some(Bd::new(Binding::Child { var: PVarId::new(v.as_str()), edge: slot_map(bv, &e.data), free_vars: slot_set(bv, &cs.data)?, reading: Reading::Group(Arc::new(group)) }))
     }});
     add_primitive!(eg, "coset-same" = {arc.clone(): ArcSort} |m1: @MapContainer (renaming.clone()), m2: @MapContainer (renaming.clone()), s: @SetContainer (arc.clone())| -?> bool {{
         let maps = value_maps(&state, s.data.iter().copied())?;

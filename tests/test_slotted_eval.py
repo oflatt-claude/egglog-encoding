@@ -194,7 +194,7 @@ def test_timing_tables_and_goal_status_are_separate(capsys: pytest.CaptureFixtur
 
 def test_logic_inputs_keep_fixture_budgets_and_source(tmp_path: Path) -> None:
     path = tmp_path / "logic.egg"
-    path.write_text((ROOT / "slotted/benchmarks/logic/first-order-logic2.egg").read_text())
+    path.write_text((ROOT / "egglog-experimental/benches/slotted/logic/first-order-logic2.egg").read_text())
     workload = W.logic_workload(path)
     assert workload.rounds == 5
     assert "(run 5)" in workload.program and workload.multi.startswith("rounds 5\n")
