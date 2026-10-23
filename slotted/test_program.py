@@ -185,16 +185,14 @@ def pattern(lang, t):
     return node(op, [pattern(lang, k) for k in kids], pays)
 
 
-def rewrite(lang, atoms, root, rhs, *, conds=(), fresh=(), name=None, lead=0):
-    """Spell a generated conjunctive rule as a source rewrite with side patterns."""
+def rewrite(lang, atoms, root, rhs, *, conds=(), name=None, lead=0):
+    """Spell a generated multipattern rule as a source rewrite."""
     facts = []
     for r, op, kids, *payloads in atoms:
         pays = payloads[0] if payloads else lang[op].pays
         facts.append(f"(= {r} {node(lang[op], [pattern(lang, k) for k in kids], pays)})")
     facts.extend(f"({'free' if want else 'not-free'} {slot} {' '.join(pvars)})" for want, slot, pvars in conds)
     options = f" :when ({' '.join(facts)}) :lead {lead}"
-    if fresh:
-        options += " :fresh " + " ".join(fresh)
     if name:
         options += " :name " + json.dumps(name)
     return f"(rewrite {root} {pattern(lang, rhs)}{options})"

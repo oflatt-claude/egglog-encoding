@@ -13,7 +13,7 @@ The slotted language adds the following syntax and behavior to egglog.
 | [Slots](#slots-and-terms) | `$a`, `$a0` | Variable terms in any equality sort; names in rewrites are rule-local |
 | [Binders](#binder-columns) | `:binder i ...` | Constructor columns that bind slots in the following term child |
 | [Pattern variables](#slots-and-terms) | `x`, `?x` | Two spellings of the same pattern variable |
-| [Fresh slots](#fresh-slots) | RHS-only `$x`; optional `:fresh $x ...` | Slots absent from the multipattern are implicitly fresh; `:fresh` repeats that declaration for RHS-only slots |
+| [Fresh slots](#fresh-slots) | RHS-only `$x` | Slots absent from the multipattern are implicitly fresh |
 | [Multipatterns](#multipatterns) | `:when ((= v (Ctor ...)) ...)` | Additional constructor patterns joined through shared pattern variables |
 | [Matching order](#matching-order) | `:lead N` | Select the starting constructor pattern in the multipattern; defaults to `0` |
 | [Term equality](#equality) | `(= a b)`, `(!= a b)` | Equality or inequality preserving free-variable identities and respecting alpha-equivalence and known symmetries |
@@ -145,13 +145,12 @@ unioning it with `(F $b $c)` makes both slots redundant.
 ### `rewrite`
 
 ```text
-(rewrite lhs rhs :name "name" :when (fact ...) :fresh $s ... :lead N)
+(rewrite lhs rhs :name "name" :when (fact ...) :lead N)
 ```
 
 Asserts `lhs = rhs` for each match. Options are optional. `:name` assigns the
 rule name. `:when` takes one list of facts; repeated `:when` clauses or facts
-without the surrounding list are rejected. `:fresh` declares fresh slots, and
-`:lead` selects the matching order.
+without the surrounding list are rejected. `:lead` selects the matching order.
 
 The left side is a constructor pattern or a variable bound by the multipattern.
 The right side is a matched variable or a constructed term. Literal payloads
@@ -208,27 +207,18 @@ equation the rewrite asserts.
 
 A slot appearing on the right-hand side but absent from the multipattern is
 implicitly fresh with respect to the match, including free slots inside matched
-terms. `:fresh $x ...` adds names to the same fresh-slot set, so it is redundant
-for these right-hand-side slots. This option belongs to the slotted frontend.
+terms.
 
-The following rewrites have the same freshness behavior. The ground slot
-`$new` remains free under the newly introduced binder:
+The ground slot `$new` remains free under the newly introduced binder:
 
 ```slotted
-(datatype Expr (Wrap Expr) (WrapExplicit Expr) (Lam Expr Expr :binder 0))
+(datatype Expr (Wrap Expr) (Lam Expr Expr :binder 0))
 (rewrite (Wrap e) (Lam $new e))
-(rewrite (WrapExplicit e) (Lam $new e) :fresh $new)
-(let implicit (Wrap $new))
-(let explicit (WrapExplicit $new))
+(let result (Wrap $new))
 (run 1)
-(check (= implicit explicit))
-(check (= implicit (Lam $bound $new)))
-(check (free-names-are implicit $new))
+(check (= result (Lam $bound $new)))
+(check (free-names-are result $new))
 ```
-
-A slot listed in `:fresh` must not already occur in the multipattern. Declaring
-a matched slot fresh prevents the rule from matching; it does not rename that
-slot.
 
 #### Slot constraints and capture
 

@@ -75,12 +75,21 @@ def test_generated_reference_variables_do_not_alias_user_variables(tmp_path: Pat
     assert lhs_root not in {"_sl1", "_p", *variable_roots}
 
 
-@pytest.mark.parametrize("options", [":when ((= a b))", ":when ((!= a b))", ":fresh $new", ":lead 1"])
+@pytest.mark.parametrize("options", [":when ((= a b))", ":when ((!= a b))", ":lead 1"])
 def test_unrepresented_reference_constraints_are_rejected(tmp_path: Path, options: str) -> None:
     src = source(tmp_path)
     rule = syntax.parse(f"(rewrite (F a b) a {options})")[0]
     for nested in (False, True):
         with pytest.raises(ValueError, match="unsupported reference rewrite options"):
+            syntax.rule_lines(src, src.lang, rule, nested=nested)
+
+
+@pytest.mark.parametrize("slot", ["$new", "$x"])
+def test_fresh_annotation_is_rejected(tmp_path: Path, slot: str) -> None:
+    src = source(tmp_path)
+    rule = syntax.parse(f"(rewrite (F $x a) a :fresh {slot})")[0]
+    for nested in (False, True):
+        with pytest.raises(SystemExit, match="got ':fresh'"):
             syntax.rule_lines(src, src.lang, rule, nested=nested)
 
 

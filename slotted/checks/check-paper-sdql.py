@@ -96,7 +96,7 @@ MMM_RULES = {
 # independent translation of those twelve definitions from the artifact's
 # `sdql/slotted/src/rewrite.rs` at ARTIFACT_COMMIT.  Comparing the runnable copy only
 # with `languages/sdql-rules.egg` would let both copies drift together and still pass.
-ARTIFACT_RULE_SEMANTICS_SHA256 = "b1cb9ae78abfa9a8f46bad55e794c73a704afd3a1116870f0ead7c6e06450030"
+ARTIFACT_RULE_SEMANTICS_SHA256 = "6e3bd146e08bf0fc5036a469236d612cd6bd7176357a9c6e7877e4d09effbaa2"
 
 SELECTED_CONSTRUCTORS = {
     "Lambda",
@@ -152,9 +152,7 @@ def rewrites(path: pathlib.Path) -> dict[str, tuple[Any, ...]]:
         owed = syntax.capture_guards(src.lang, lhs, rhs)
         conds = [c for c in rule["conds"] if c[0] or not all((c[1], v) in owed for v in c[2])]
         semantics = dict(rule, conds=conds)
-        out[rule["name"]] = tuple(
-            semantics[key] for key in ("lhs", "rhs", "conds", "equalities", "diseq", "same", "fresh")
-        )
+        out[rule["name"]] = tuple(semantics[key] for key in ("lhs", "rhs", "conds", "equalities", "diseq", "same"))
     return out
 
 

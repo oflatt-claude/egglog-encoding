@@ -572,15 +572,6 @@ impl Compiler {
                         _ => lead = value.parse().map_err(|_| "invalid :lead index")?,
                     }
                 }
-                ":fresh" => {
-                    for f in values {
-                        let s = f.atom()?;
-                        if !s.starts_with('$') {
-                            return Err(":fresh expects slots".into());
-                        }
-                        conditions.fresh.insert(s.into());
-                    }
-                }
                 ":when" => {
                     if when_seen {
                         return Err("several :when clauses; use one list of facts".into());

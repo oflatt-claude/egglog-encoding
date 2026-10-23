@@ -230,6 +230,16 @@ fn accepted_source_forms() {
 fn refused_source_forms_have_diagnostics() {
     let cases = [
         (
+            "a fresh annotation for a right-hand-side slot",
+            "(datatype M (F M) (Lam M M :binder 0))\n(rewrite (F e) (Lam $s e) :fresh $s)\n",
+            "unsupported rewrite option :fresh",
+        ),
+        (
+            "a fresh annotation for a matched slot",
+            "(datatype M (F M) (G M))\n(rewrite (F $x) (G $x) :fresh $x)\n",
+            "unsupported rewrite option :fresh",
+        ),
+        (
             "a slot in a payload column",
             "(datatype M (Num i64)) (let bad (Num $a))",
             "ground payloads must be literals",

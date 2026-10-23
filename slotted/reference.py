@@ -15,7 +15,7 @@ SLOTTED = (CHILD, BINDER)
 SUBST = "subst"
 TOKEN = re.compile(r'\(|\)|"(?:\\.|[^"\\])*"|;[^\n]*|[^\s()]+')
 SLOT_LITERAL = re.compile(r"\$(?:[+-]?\d+|\w+)\Z")
-KEYWORDS = (":name", ":lead", ":fresh", ":when")
+KEYWORDS = (":name", ":lead", ":when")
 
 
 @dataclass(frozen=True)
@@ -884,16 +884,12 @@ def rewrite_parts(src, form):
     """Read a fixture rewrite for translation to the reference's pattern language."""
     assert form[0] == "rewrite", form
     names = PatternNames(form)
-    out = dict(
-        names=names, name=None, lhs=form[1], rhs=form[2], conds=[], equalities=[], diseq=[], same=[], fresh=[], lead=0
-    )
+    out = dict(names=names, name=None, lhs=form[1], rhs=form[2], conds=[], equalities=[], diseq=[], same=[], lead=0)
     for key, vals in keywords(src, form[3:]):
         if key == ":name":
             out["name"] = unquote(vals[0])
         elif key == ":lead":
             out["lead"] = int(vals[0])
-        elif key == ":fresh":
-            out["fresh"].extend(vals)
         elif key == ":when":
             for cond in vals[0]:
                 want, *rest = cond
@@ -929,7 +925,7 @@ class NestedPatternUnsupported(ValueError):
 
 
 def rule_atoms(src, lang, parts):
-    """Flatten a rewrite and its side patterns using one fresh-name supply."""
+    """Flatten a rewrite's multipattern using one fresh-name supply."""
     lhs = src.term(parts["lhs"], ground=False)
     names = parts["names"]
     if isinstance(lhs, str):
@@ -949,13 +945,13 @@ def rule_atoms(src, lang, parts):
 
 
 def rule_lines(src, lang, form, *, nested=False):
-    """Translate one source rewrite, including its side patterns, to oracle spec lines.
+    """Translate one source rewrite, including its multipattern, to oracle spec lines.
 
     Reject conditions the oracle protocol cannot express instead of comparing a
     weaker rule. All atoms share a fresh-name supply, including literal leaves.
     """
     parts = rewrite_parts(src, form)
-    if parts["same"] or parts["diseq"] or parts["fresh"] or parts["lead"]:
+    if parts["same"] or parts["diseq"] or parts["lead"]:
         raise ValueError(f"{src.path.name}: unsupported reference rewrite options: {render(form)}")
     lhs = src.term(parts["lhs"], ground=False)
     rhs = pat_sexpr(lang, rhs_of(lang, src.term(parts["rhs"], ground=False)))
