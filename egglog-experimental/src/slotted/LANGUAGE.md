@@ -4,6 +4,30 @@ The slotted language represents terms with free variables and binders.
 Equality respects bound-variable alpha-equivalence. Free-variable names are
 significant unless a query explicitly compares terms modulo renaming.
 
+## Slotted features
+
+The slotted language adds the following syntax and behavior to egglog.
+
+| Feature | Syntax | Meaning |
+| --- | --- | --- |
+| [Slots](#slots-and-terms) | `$a`, `$a0` | Variable terms in any equality sort; names in rewrites are rule-local |
+| [Binders](#binder-columns) | `:binder i ...` | Constructor columns that bind slots in the following term child |
+| [Pattern variables](#slots-and-terms) | `x`, `?x` | Two spellings of the same pattern variable |
+| [Fresh slots](#fresh-slots) | RHS-only `$x`; optional `:fresh $x ...` | Slots absent from the multipattern are implicitly fresh; `:fresh` repeats that declaration for RHS-only slots |
+| [Multipatterns](#multipatterns) | `:when ((= v (Ctor ...)) ...)` | Additional constructor patterns joined through shared pattern variables |
+| [Matching order](#matching-order) | `:lead N` | Select the starting constructor pattern in the multipattern; defaults to `0` |
+| [Term equality](#equality) | `(= a b)`, `(!= a b)` | Equality or inequality preserving free-variable identities and respecting alpha-equivalence and known symmetries |
+| [Equality modulo renaming](#equality) | `(renaming-= a b)`, `(renaming-!= a b)` | Equality or inequality allowing renaming of free variables |
+| [Free names](#free-names) | `(free $x a ...)` | `$x` is free in at least one listed term |
+| [Free names](#free-names) | `(not-free $x a ...)` | `$x` is free in none of the listed terms |
+| [Exact free names](#free-names) | `(free-names-are a $x ...)` | The term's live free names are exactly the listed set; no names means closed |
+| [Rewrite rounds](#run) | `(run N)` | Apply user rewrites with slotted maintenance around each round |
+| [Extraction](#extract) | `(extract term)` | Extract an encoded tree from the class leader |
+| [Nested-matcher compatibility](#nested-matcher-compatibility) | `--slotted-no-aliasing` | Restrict matching to the reference nested matcher's aliasing policy |
+
+The rest of this guide describes these features in more detail, including
+their syntax, constraints, and examples.
+
 ## Invocation
 
 ```text
@@ -121,13 +145,13 @@ unioning it with `(F $b $c)` makes both slots redundant.
 ### `rewrite`
 
 ```text
-(rewrite lhs rhs :name "name" :when (fact ...) :fresh $s ...)
+(rewrite lhs rhs :name "name" :when (fact ...) :fresh $s ... :lead N)
 ```
 
 Asserts `lhs = rhs` for each match. Options are optional. `:name` assigns the
 rule name. `:when` takes one list of facts; repeated `:when` clauses or facts
-without the surrounding list are rejected. `:fresh` declares fresh slots;
-slots appearing only on the right-hand side are fresh without this option.
+without the surrounding list are rejected. `:fresh` declares fresh slots, and
+`:lead` selects the matching order.
 
 The left side is a constructor pattern or a variable bound by the multipattern.
 The right side is a matched variable or a constructed term. Literal payloads
@@ -170,6 +194,41 @@ An unbound left-hand variable is rejected. The multipattern can bind it:
 (run 1)
 (check (= (N) (G (N))))
 ```
+
+#### Matching order
+
+`:lead N` selects the first flattened constructor pattern to match, using a
+zero-based index. Patterns are numbered in preorder, starting with the left
+side and then the patterns in `:when`. Ground leaf constructors used as
+arguments are literals and do not get an index. The default is `0`; an index
+outside the pattern is an error. This option controls matching order, not the
+equation the rewrite asserts.
+
+#### Fresh slots
+
+A slot appearing on the right-hand side but absent from the multipattern is
+implicitly fresh with respect to the match, including free slots inside matched
+terms. `:fresh $x ...` adds names to the same fresh-slot set, so it is redundant
+for these right-hand-side slots. This option belongs to the slotted frontend.
+
+The following rewrites have the same freshness behavior. The ground slot
+`$new` remains free under the newly introduced binder:
+
+```slotted
+(datatype Expr (Wrap Expr) (WrapExplicit Expr) (Lam Expr Expr :binder 0))
+(rewrite (Wrap e) (Lam $new e))
+(rewrite (WrapExplicit e) (Lam $new e) :fresh $new)
+(let implicit (Wrap $new))
+(let explicit (WrapExplicit $new))
+(run 1)
+(check (= implicit explicit))
+(check (= implicit (Lam $bound $new)))
+(check (free-names-are implicit $new))
+```
+
+A slot listed in `:fresh` must not already occur in the multipattern. Declaring
+a matched slot fresh prevents the rule from matching; it does not rename that
+slot.
 
 #### Slot constraints and capture
 
@@ -254,16 +313,6 @@ variables; `=` can also add a constructor pattern to the multipattern. Free-name
 predicates accept matched variables or constructor patterns. Slot arguments in
 guards refer to rule-local pattern slots.
 
-| Predicate | Meaning |
-| --- | --- |
-| `(= a b)` | Equal terms, preserving free-variable identities |
-| `(!= a b)` | Terms are not equal at query time |
-| `(renaming-= a b)` | Equal modulo a renaming of free variables |
-| `(renaming-!= a b)` | Terms are not equal under any free-variable renaming |
-| `(free $x a ...)` | `$x` is free in at least one listed term; requires at least one term |
-| `(not-free $x a ...)` | `$x` is free in none of the listed terms; requires at least one term |
-| `(free-names-are a $x ...)` | The term's free names are exactly the listed set; no names means closed |
-
 ### Equality
 
 `=` respects bound-variable alpha-equivalence and known class symmetries while
@@ -315,7 +364,8 @@ later. Consequences of an earlier rewrite match are not withdrawn.
 ### Free names
 
 Free-name predicates inspect the term's live dependencies, excluding bound
-slots and slots made redundant by equations.
+slots and slots made redundant by equations. `free` and `not-free` require at
+least one term. `free-names-are` takes one term and zero or more slot names.
 
 ```slotted
 (datatype Expr (Lam Expr Expr :binder 0) (Mult Expr Expr) (Null))
