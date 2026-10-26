@@ -128,6 +128,13 @@ pub(super) struct Language {
 }
 
 impl Language {
+    pub fn global_slot(&self, name: &str) -> Option<&str> {
+        match &self.globals[name] {
+            Term::Slot(slot) => Some(slot),
+            Term::Global(other) => self.global_slot(other),
+            _ => None,
+        }
+    }
     pub fn symbols(&self, sort: &str) -> &Symbols {
         self.carriers
             .iter()
@@ -171,6 +178,9 @@ impl Language {
     pub fn encode(&self, t: &Term, sort: &str) -> String {
         match t {
             Term::Slot(_) => format!("({} 0)", self.symbols(sort).var),
+            Term::Global(n) if self.global_slot(n).is_some() => {
+                format!("({} 0)", self.symbols(sort).var)
+            }
             Term::Global(n) => format!("${n}"),
             Term::Node(n, args) => {
                 let op = &self.constructors[n];
@@ -193,6 +203,9 @@ impl Language {
         }
     }
     pub fn edge(&self, t: &Term) -> String {
+        if let Term::Global(n) = t {
+            return self.edge(&self.globals[n]);
+        }
         if let Term::Slot(s) = t {
             return format!("(map-of 0 {})", self.slot_names.id(s));
         }
@@ -214,6 +227,11 @@ impl Language {
         }
     }
     pub fn encode_top(&self, t: &Term, sort: &str) -> String {
+        if let Term::Global(n) = t
+            && let Some(slot) = self.global_slot(n)
+        {
+            return self.encode_top(&Term::Slot(slot.into()), sort);
+        }
         if let Term::Slot(s) = t {
             format!("({} {})", self.symbols(sort).var, self.slot_names.id(s))
         } else {

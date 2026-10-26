@@ -37,9 +37,11 @@ fn transformation_emits_ordinary_egglog() {
         (rewrite (F a b) (G b a) :when () :name "swap")
         (let start (F $1 $2))
         (run 1)
-        (check (= start (G $2 $1)))
-        (check (!= start (G $1 $2)))
-        (check (free-names-are start $1 $2))
+        (let slot_2 $2)
+        (let slot_1 $1)
+        (check (= start (G slot_2 slot_1)))
+        (check (!= start (G slot_1 slot_2)))
+        (check (free-names-are start slot_1 slot_2))
     "#,
     );
 }
@@ -91,7 +93,7 @@ fn checks_and_rule_guards_agree_on_equality() {
             ] {
                 let mut compiler = Compiler::new(Options { no_aliasing });
                 let mut graph = egglog_experimental::slotted::new_egraph();
-                let check = format!("(check ({op} {lhs} {rhs}))");
+                let check = format!("(check ({op} left right))");
                 let check = if expected {
                     check
                 } else {
@@ -106,6 +108,8 @@ fn checks_and_rule_guards_agree_on_equality() {
                          (constructor Hit () U)
                          {prelude}
                          (let pair (Pair {lhs} {rhs}))
+                         (let left {lhs})
+                         (let right {rhs})
                          (run 0)
                          {check}
                          (rewrite (Pair a b) (Hit) :when (({op} a b)))
@@ -128,7 +132,7 @@ fn rule_comparisons_require_two_bound_variables() {
     let mut compiler = Compiler::default();
     compiler.compile(None, LANGUAGE).unwrap();
     for op in ["=", "!=", "renaming-=", "renaming-!="] {
-        for args in ["a", "a b c", "a missing", "missing b", "a $x"] {
+        for args in ["a", "a b c", "a missing", "missing b"] {
             let source = format!("(rewrite (F a b) a :when (({op} {args})))");
             assert!(compiler.compile(None, &source).is_err(), "{source}");
         }
@@ -152,11 +156,14 @@ fn named_slots_persist_across_inputs_and_scopes() {
         r#"
         (let b (F $a $-9223372036854775808))
         (run 0)
-        (check (= a (F $a $a0)))
-        (check (free-names-are a $a $a0))
-        (check (free-names-are b $a $-9223372036854775808))
+        (let slot_a $a)
+        (let slot_a0 $a0)
+        (check (= a (F slot_a slot_a0)))
+        (check (free-names-are a slot_a slot_a0))
+        (let slot_minus_9223372036854775808 $-9223372036854775808)
+        (check (free-names-are b slot_a slot_minus_9223372036854775808))
         (check (!= a b))
-        (check (!= $a $-9223372036854775808))
+        (check (!= slot_a slot_minus_9223372036854775808))
     "#,
     );
     assert!(
@@ -167,7 +174,7 @@ fn named_slots_persist_across_inputs_and_scopes() {
     evaluate(
         &mut compiler,
         &mut graph,
-        "(let valid (F $fresh $a)) (run 0) (check (free-names-are valid $fresh $a))",
+        "(let valid (F $fresh $a)) (run 0) (let slot_fresh $fresh)\n(check (free-names-are valid slot_fresh slot_a))",
     );
 }
 
@@ -213,9 +220,11 @@ fn sorts_support_slots_without_user_constructors() {
             &mut graph,
             r#"
             (run 0)
-            (check (= $a $a))
-            (check (!= $a $b))
-            (check (renaming-= $a $b))
+            (let slot_a $a)
+(check (= slot_a slot_a))
+            (let slot_b $b)
+(check (!= slot_a slot_b))
+            (check (renaming-= slot_a slot_b))
         "#,
         );
         assert_eq!(graph.get_size("SlottedVar_0"), 1);
@@ -241,8 +250,10 @@ fn slots_work_in_every_carrier_and_var_is_an_ordinary_name() {
         (run 0)
         (check (= id (Lam $b $b)))
         (check (free-names-are name))
-        (check (free-names-are variable $a))
-        (check (free-names-are ty $a $b))
+        (let slot_a $a)
+        (check (free-names-are variable slot_a))
+        (let slot_b $b)
+        (check (free-names-are ty slot_a slot_b))
     "#,
     );
     for table in ["SlottedVar_0", "SlottedVar_1", "SlottedVar_2"] {
@@ -268,7 +279,9 @@ fn scopes_restore_declarations_globals_and_rules() {
         (datatype U (F U U))
         (let local (F $1 $2))
         (run 0)
-        (check (free-names-are local $1 $2))
+        (let slot_1 $1)
+        (let slot_2 $2)
+        (check (free-names-are local slot_1 slot_2))
     "#,
     );
     evaluate(
@@ -314,7 +327,7 @@ fn compilation_errors_are_transactional_and_located() {
 }
 
 #[test]
-fn matching_policy_changes_aliasing_and_checks_remain_unrestricted() {
+fn matching_policy_changes_aliasing() {
     for no_aliasing in [false, true] {
         let mut compiler = Compiler::new(Options { no_aliasing });
         let mut graph = egglog_experimental::slotted::new_egraph();
@@ -325,11 +338,12 @@ fn matching_policy_changes_aliasing_and_checks_remain_unrestricted() {
             r#"
             (union (G $0 (Null)) (Null))
             (let start (F $1 (Null)))
+            (let slot_1 $1)
             (rewrite (F a (G b n)) (H a b))
             (run 1)
         "#,
         );
-        let claim = "(check (= start (H $1 $1)))";
+        let claim = "(check (= start (H slot_1 slot_1)))";
         let claim = if no_aliasing {
             format!("(fail {claim})")
         } else {
@@ -340,7 +354,7 @@ fn matching_policy_changes_aliasing_and_checks_remain_unrestricted() {
 }
 
 #[test]
-fn compatibility_cli_restricts_rules_but_not_checks() {
+fn compatibility_cli_uses_the_same_matching_policy_for_checks_and_rules() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_egglog-experimental"))
         .args(["--slotted", "--slotted-no-aliasing", "--mode", "desugar"])
         .stdin(Stdio::piped())
@@ -356,7 +370,7 @@ fn compatibility_cli_restricts_rules_but_not_checks() {
         String::from_utf8_lossy(&output.stderr)
     );
     let encoded = String::from_utf8(output.stdout).unwrap();
-    assert!(encoded.contains("(nested-atom ") && encoded.contains("(atom "));
+    assert!(encoded.contains("(nested-atom ") && !encoded.contains("(atom "));
 
     let mut compiler = Compiler::new(Options { no_aliasing: true });
     compiler.compile(None, LANGUAGE).unwrap();
@@ -381,7 +395,12 @@ fn checks_and_rule_guards_agree_on_free_names() {
         ] {
             let mut compiler = Compiler::new(Options { no_aliasing });
             let mut graph = egglog_experimental::slotted::new_egraph();
-            let check = format!("(check ({}))", predicate.replace("body", body));
+            let check = format!(
+                "(check ({}))",
+                predicate
+                    .replace("body", "checked_body")
+                    .replace("$a", "concrete_a")
+            );
             let check = if expected {
                 check
             } else {
@@ -399,6 +418,8 @@ fn checks_and_rule_guards_agree_on_free_names() {
                     r#"
 {LANGUAGE}
 (let seed (F $a {body}))
+(let checked_body {body})
+(let concrete_a $a)
 (run 0)
 {check}
 (rewrite (F $a body) (Null) :when (({predicate})))
@@ -444,7 +465,7 @@ fn cli_reuses_files_includes_serialization_and_timing_reports() {
     .unwrap();
     std::fs::write(
         temp.0.join("second.egg"),
-        "(rewrite (F a b) (G b a))\n(run 1)\n(check (= input (G $a0 $a)))",
+        "(rewrite (F a b) (G b a))\n(run 1)\n(let slot_a0 $a0)\n(let slot_a $a)\n(check (= input (G slot_a0 slot_a)))",
     )
     .unwrap();
     let result = cli()
@@ -487,7 +508,7 @@ fn repl(source: &str) -> std::process::Output {
 #[test]
 fn cli_transforms_complete_stdin_commands() {
     let result = repl(&format!(
-        "{LANGUAGE}\n(let input (F $a\n $a0))\n(run 0)\n(check (free-names-are input $a $a0))"
+        "{LANGUAGE}\n(let input (F $a\n $a0))\n(let slot_a $a)\n(let slot_a0 $a0)\n(run 0)\n(check (free-names-are input slot_a slot_a0))"
     ));
     assert!(
         result.status.success(),
@@ -496,7 +517,7 @@ fn cli_transforms_complete_stdin_commands() {
     );
     let stdout = String::from_utf8(result.stdout).unwrap();
     assert!(!stdout.contains("(error)"), "{stdout}");
-    assert_eq!(stdout.matches("(done)").count(), 4, "{stdout}");
+    assert_eq!(stdout.matches("(done)").count(), 6, "{stdout}");
 }
 
 #[test]

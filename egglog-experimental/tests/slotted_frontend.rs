@@ -112,7 +112,7 @@ fn accepted_source_forms() {
         (
             true,
             "slots without user constructors",
-            "(sort M)\n(run 0)\n(check (!= $a $b))\n",
+            "(sort M)\n(run 0)\n(let slot_a $a)\n(let slot_b $b)\n(check (!= slot_a slot_b))\n",
         ),
         (
             true,
@@ -182,42 +182,42 @@ fn accepted_source_forms() {
         (
             true,
             "a source variable named like the generated root",
-            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $1 $2))\n(rewrite (Add _p b) (Mul b _p))\n(run 1)\n(check (= start (Mul $2 $1)))\n",
+            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $1 $2))\n(rewrite (Add _p b) (Mul b _p))\n(run 1)\n(let slot_2 $2)\n(let slot_1 $1)\n(check (= start (Mul slot_2 slot_1)))\n",
         ),
         (
             true,
             "a source variable containing a question mark",
-            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $1 $2))\n(rewrite (Add ?_p b) (Mul b ?_p))\n(run 1)\n(check (= start (Mul $2 $1)))\n",
+            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $1 $2))\n(rewrite (Add ?_p b) (Mul b ?_p))\n(run 1)\n(let slot_2 $2)\n(let slot_1 $1)\n(check (= start (Mul slot_2 slot_1)))\n",
         ),
         (
             true,
             "a source variable named like a nested temporary",
-            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add (Mul $1 $2) $3))\n(rewrite (Add (Mul _t1 b) c) (Mul c _t1))\n(run 1)\n(check (= start (Mul $3 $1)))\n",
+            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add (Mul $1 $2) $3))\n(rewrite (Add (Mul _t1 b) c) (Mul c _t1))\n(run 1)\n(let slot_3 $3)\n(let slot_1 $1)\n(check (= start (Mul slot_3 slot_1)))\n",
         ),
         (
             true,
             "a source variable named like a side-pattern root",
-            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $1 $2))\n(let other (Mul $1 $2))\n(rewrite (Add _fact0 b) (Mul b _fact0) :when ((Mul _fact0 b)))\n(run 1)\n(check (= start (Mul $2 $1)))\n",
+            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $1 $2))\n(let other (Mul $1 $2))\n(rewrite (Add _fact0 b) (Mul b _fact0) :when ((Mul _fact0 b)))\n(run 1)\n(let slot_2 $2)\n(let slot_1 $1)\n(check (= start (Mul slot_2 slot_1)))\n",
         ),
         (
             true,
             "a source variable named like a guard root",
-            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Lam $1 $2))\n(rewrite (Lam $v _cond0) (App _cond0 _cond0) :when ((not-free $v (Lam $v _cond0))))\n(run 1)\n(check (= start (App $2 $2)))\n",
+            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Lam $1 $2))\n(rewrite (Lam $v _cond0) (App _cond0 _cond0) :when ((not-free $v (Lam $v _cond0))))\n(run 1)\n(let slot_2 $2)\n(check (= start (App slot_2 slot_2)))\n",
         ),
         (
             true,
             "a source variable named like a nested side-pattern temporary",
-            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add (Mul (Mul $1 $2) $3) $4))\n(rewrite (Add a _w0_1) (Mul _w0_1 p) :when ((= a (Mul (Mul p q) r))))\n(run 1)\n(check (= start (Mul $4 $1)))\n",
+            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add (Mul (Mul $1 $2) $3) $4))\n(rewrite (Add a _w0_1) (Mul _w0_1 p) :when ((= a (Mul (Mul p q) r))))\n(run 1)\n(let slot_4 $4)\n(let slot_1 $1)\n(check (= start (Mul slot_4 slot_1)))\n",
         ),
         (
             true,
             "equivalent numbered slot spellings",
-            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $01 $+1))\n(let zero (Add $-0 $+0))\n(run 0)\n(check (free-names-are start $1))\n(check (= start (Add $1 $1)))\n(check (free-names-are zero $0))\n(check (= zero (Add $0 $0)))\n",
+            "(datatype M (N i64) (Add M M) (Mul M M) (Lam M M :binder 0) (App M M) (Nil))\n(let start (Add $01 $+1))\n(let zero (Add $-0 $+0))\n(run 0)\n(let slot_1 $1)\n(check (free-names-are start slot_1))\n(check (= start (Add slot_1 slot_1)))\n(let slot_0 $0)\n(check (free-names-are zero slot_0))\n(check (= zero (Add slot_0 slot_0)))\n",
         ),
         (
             true,
             "constructor names colliding with derived RHS locals",
-            "(datatype U (Start U) (F U) (F_slots U) (F_edge U) (Pair U U))\n(let start (Start $0))\n(rewrite (Start a) (Pair (F a) (Pair (F_slots a) (F_edge a))))\n(run 1)\n(check (= start (Pair (F $0) (Pair (F_slots $0) (F_edge $0)))))\n",
+            "(datatype U (Start U) (F U) (F_slots U) (F_edge U) (Pair U U))\n(let start (Start $0))\n(rewrite (Start a) (Pair (F a) (Pair (F_slots a) (F_edge a))))\n(run 1)\n(let slot_0 $0)\n(check (= start (Pair (F slot_0) (Pair (F_slots slot_0) (F_edge slot_0)))))\n",
         ),
     ];
     for (accepted, name, source) in cases {
@@ -295,9 +295,9 @@ fn refused_source_forms_have_diagnostics() {
             "must not start with $",
         ),
         (
-            "a global bound to a bare slot invocation",
-            "(datatype M (Null) (IConst) (Succ M) (Mul M M) (Lam M M :binder 0))\n(let v $7)\n",
-            "cannot currently store",
+            "an unbound slot in a query guard",
+            "(datatype M (Null))\n(let n (Null))\n(check (free $unbound n))\n",
+            "not bound",
         ),
         (
             "a bare `:when` fact without the list",
@@ -401,7 +401,7 @@ fn refused_source_forms_have_diagnostics() {
         ),
         (
             "an ambiguous top-level slot comparison",
-            "(datatype* (A (A0)) (B (B0)))\n(check (= $0 $1))\n",
+            "(datatype* (A (A0)) (B (B0)))\n(let slot_0 $0)\n(let slot_1 $1)\n(check (= slot_0 slot_1))\n",
             "no equality-sort context",
         ),
         (

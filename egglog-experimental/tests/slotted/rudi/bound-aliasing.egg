@@ -17,4 +17,5 @@
 
 (run 10)
 
-(check (= g (GG $0)))
+(let slot_0 $0)
+(check (= g (GG slot_0)))

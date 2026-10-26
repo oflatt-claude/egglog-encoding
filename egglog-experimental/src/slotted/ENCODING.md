@@ -1119,8 +1119,16 @@ occurrences' slots. Checks and explicit rule comparisons share the same lowering
 `=` requires one class and compares the two renamings with the boolean
 `coset-same` primitive using that class's group. `renaming-=` requires only one
 class. Their negations test different invocations and different classes,
-respectively. Ground checks negate the entire equality query, so a failed match
-cannot hide another representative that proves equality.
+respectively. `check` requires one assignment satisfying every fact; `fail` negates
+that entire existential query. A disequality guard rejects only the current
+assignment, so `(check (!= a b))` and `(fail (check (= a b)))` differ when the
+variables range over multiple matches.
+
+Globals are fixed invocations: their current leaders and renamings are read through
+`RenamesToLeader`. A `global-frame` places their concrete slots in one shared frame,
+keeping distinct concrete names apart while permitting local pattern slots to match
+them. Thus `(let concrete_a $a)` followed by `(check (= concrete_a $x))` binds a
+query-local `$x` to that concrete slot. Globals are never expanded into patterns.
 
 **C6. Where two atoms agree on a variable, their occurrences are one.** The join
 identifies `Node(a, e(t))` and `Node(b, e'(t))` through `Var(v, t)`, which is the
@@ -1137,6 +1145,10 @@ two slots of one node or class -- as a `Vec` with the frame itself first, and th
 reads one per `(Idx refined_len choice)` with `vec-get`.
 `slotted-refine` generates every required index before any match is applied, so
 all alternatives act within the same user round. This is the reference's `final_refine`.
+Checks use the same candidate query and guards, but iterate the refinement vector
+directly through the experimental runtime's `slotted-check` command. This avoids
+inserting index rows or running maintenance merely to answer a query. The source
+language has one `check` form.
 
 **C9. Conditions are read after refinement.** `free`, `not-free`, and
 `free-names-are` inspect renaming images from the refined frame. A matched binder's slot may be read as any name, a free variable's
@@ -1367,7 +1379,7 @@ entire historical implementation.
 python3 slotted/check.py array
 ```
 
-The compiler emits `nested-atom` instead of `atom` for rewrite patterns. This adds
+The compiler emits `nested-atom` instead of `atom` for query patterns. This adds
 one match-wide disequality clique whose members are the outer class's live slots
 and every matched node's slots outside that node's class slot set. These are the
 origins of the concrete names the nested matcher assigns: it preserves the outer
@@ -1382,7 +1394,7 @@ or literals and when enumerating optional refinements. Merely disabling final
 refinement would still permit aliases forced during a join. Sharing already present
 in a stored edge remains valid. The mode supports a single nested left-hand pattern;
 additional constructor patterns in `:when` are rejected. Conditions still apply,
-and observational checks retain ordinary matching semantics.
+and checks use the same aliasing constraints.
 
 Compatibility evaluation uses the same snapshot substitution on both sides, so
 representative selection does not confound the matcher comparison. The

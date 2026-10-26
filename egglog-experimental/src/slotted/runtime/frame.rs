@@ -261,6 +261,25 @@ impl std::ops::Deref for Fr {
 impl egglog::BaseValue for Fr {}
 
 impl Frame {
+    /// Fix the relative identities of concrete globals while allowing pattern
+    /// slots to match them. The root's slot set keeps distinct concrete names apart.
+    fn globals(root: &str, bindings: &[Binding]) -> Option<Frame> {
+        let mut slots = BTreeSet::new();
+        for binding in bindings {
+            let edge = match binding {
+                Binding::Child { edge, .. } | Binding::Leaf { edge } => edge,
+                _ => return None,
+            };
+            slots.extend(edge.values().copied());
+        }
+        let mut bindings = bindings.to_vec();
+        bindings.push(Binding::Root {
+            var: PVarId::new(root),
+            free_vars: slots.into_iter().collect(),
+            reading: Reading::Identity,
+        });
+        Self::atom("@globals", &bindings)
+    }
     /// One atom's constraints: its label, exactly one `Root` among the bindings, and
     /// every other binding a column of that node. `None` when the columns already
     /// contradict each other.
@@ -852,10 +871,10 @@ impl BaseSort for FrameSort {
         // one atom's constraints: `(atom "label" binding...)`, the label first because the
         // macro's varargs are of one sort
         let [string, binding, frame] = ["String", "Binding", "Frame"].map(|name| eg.type_info().get_sort_by_name(name).unwrap().clone());
-        for nested in [false, true] {
+        for kind in [AtomKind::Pattern, AtomKind::Nested, AtomKind::Globals] {
             eg.add_pure_primitive(
                 AtomPrim {
-                    nested,
+                    kind,
                     string: string.clone(),
                     binding: binding.clone(),
                     frame: frame.clone(),
@@ -884,10 +903,17 @@ impl BaseSort for FrameSort {
     }
 }
 
-/// `(atom "label" binding...)`: one atom's constraints as a frame.
+#[derive(Debug, Clone, Copy)]
+enum AtomKind {
+    Pattern,
+    Nested,
+    Globals,
+}
+
+/// Construct a frame from bindings in a pattern or concrete global values.
 #[derive(Debug, Clone)]
 struct AtomPrim {
-    nested: bool,
+    kind: AtomKind,
     string: ArcSort,
     binding: ArcSort,
     frame: ArcSort,
@@ -895,7 +921,11 @@ struct AtomPrim {
 
 impl Primitive for AtomPrim {
     fn name(&self) -> &str {
-        if self.nested { "nested-atom" } else { "atom" }
+        match self.kind {
+            AtomKind::Pattern => "atom",
+            AtomKind::Nested => "nested-atom",
+            AtomKind::Globals => "global-frame",
+        }
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -915,10 +945,10 @@ impl PurePrim for AtomPrim {
         let (label, rest) = args.split_first()?;
         let label = bv.unwrap::<S>(*label).0;
         let bindings: Vec<Binding> = rest.iter().map(|v| bv.unwrap::<Bd>(*v).0).collect();
-        let frame = if self.nested {
-            Frame::nested_atom(&label, &bindings)
-        } else {
-            Frame::atom(&label, &bindings)
+        let frame = match self.kind {
+            AtomKind::Pattern => Frame::atom(&label, &bindings),
+            AtomKind::Nested => Frame::nested_atom(&label, &bindings),
+            AtomKind::Globals => Frame::globals(&label, &bindings),
         }?;
         Some(bv.get::<Fr>(Fr::new(frame)))
     }

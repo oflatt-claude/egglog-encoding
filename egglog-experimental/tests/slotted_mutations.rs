@@ -105,7 +105,8 @@ fn multipattern_assertions_detect_missing_joins() {
         let mut claim = 0;
         let mut broken = None;
         for command in commands {
-            let is_check = matches!(command, Command::Check(..) | Command::Fail(..));
+            let is_check = matches!(command, Command::Check(..) | Command::Fail(..))
+                || matches!(&command, Command::UserDefined(_, name, _) if name == "slotted-check");
             match graph.run_program(vec![command]) {
                 Ok(_) => {}
                 Err(Error::CheckError(..) | Error::ExpectFail(..)) if is_check => {

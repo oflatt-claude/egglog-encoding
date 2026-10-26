@@ -44,7 +44,8 @@
 
 (check (!= id5 const))
 ;; and the constant function keeps $7 free
-(check (free-names-are const $7))
+(let slot_7 $7)
+(check (free-names-are const slot_7))
 
 (pop)
 
@@ -76,6 +77,7 @@
 
 (check (!= a l))
 ;; `App` binds nothing, so $5 stays free
-(check (free-names-are a $5))
+(let slot_5 $5)
+(check (free-names-are a slot_5))
 
 (pop)

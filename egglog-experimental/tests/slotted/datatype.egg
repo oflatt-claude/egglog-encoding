@@ -47,7 +47,8 @@
 
 (check (= id0 id7))
 (check (free-names-are id0))          ; its own slot is bound, so it depends on none
-(check (free-names-are k $3))
+(let slot_3 $3)
+(check (free-names-are k slot_3))
 (pop)
 
 

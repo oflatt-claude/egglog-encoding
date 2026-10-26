@@ -1,4 +1,4 @@
-//! Multipattern matching, shared by rewrite lowering and read-only claims.
+//! Multipattern matching, shared by rewrites and checks.
 use super::model::*;
 use super::syntax::quote;
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +11,7 @@ pub(super) struct Atom {
     pub pays: Vec<Term>,
 }
 
-/// Names shared by all patterns in one rule, including generated names.
+/// Names shared by all patterns in one query, including generated names.
 #[derive(Default)]
 pub(super) struct PatternNames(BTreeSet<String>);
 
@@ -126,8 +126,7 @@ pub(super) fn connected(mut atoms: Vec<Atom>) -> Vec<Atom> {
     out
 }
 
-/// Equality of applied terms, or just their classes. Checks and rule guards use
-/// the same lowering; ground checks negate the whole query for disequality.
+/// Equality of applied terms, or just their classes.
 #[derive(Clone, Copy)]
 pub(super) struct Comparison {
     pub modulo_renaming: bool,
@@ -181,10 +180,13 @@ pub(super) struct Conditions {
     pub free_names: Vec<(String, Vec<String>)>,
     pub comparisons: Vec<(Comparison, String, String)>,
     pub fresh: BTreeSet<String>,
+    pub values: Vec<(String, Term, String)>,
+    pub concrete_slots: BTreeMap<String, i64>,
+    pub global_frame: String,
 }
 
 /// Slot sets are identity maps; membership and exact-set queries use the same
-/// representation for ground claims and matched rule invocations.
+/// representation for checks and rewrite guards.
 pub(super) fn free_condition(want: bool, slot: &str, maps: &[String]) -> String {
     let image = maps.iter().fold("(map-empty)".to_owned(), |set, map| {
         format!("(map-union {set} (map-image {map}))")
@@ -220,6 +222,7 @@ pub(super) struct Query {
     pub split: Option<usize>,
     pub refined: String,
     pub length: String,
+    pub filter_start: usize,
     used: BTreeSet<String>,
     prefix: String,
     id: usize,
@@ -314,6 +317,9 @@ pub(super) fn compile(
         prefix: prefix.into(),
         ..Default::default()
     };
+    for (root, _, sort) in &conditions.values {
+        q.sorts.insert(root.clone(), sort.clone());
+    }
     for a in atoms {
         let sort = &lang.constructors[&a.op].sort;
         for pv in variables(a) {
@@ -331,6 +337,54 @@ pub(super) fn compile(
     let mut avs = Vec::new();
     let mut parents = BTreeMap::new();
     let mut groups = BTreeMap::new();
+    let mut globals = Vec::new();
+    for (root, value, sort) in &conditions.values {
+        let sy = lang.symbols(sort);
+        let class = q.bind(root);
+        let label = q.fresh("value");
+        match value {
+            Term::Global(_) => {
+                let edge = q.fresh("global_edge");
+                q.body.push(format!(
+                    "({} {} {edge} {class})",
+                    sy.renames,
+                    lang.encode(value, sort)
+                ));
+                globals.push(format!(
+                    "(child {} (compose {} {edge}) ({} {class}))",
+                    quote(root),
+                    lang.edge(value),
+                    sy.free_vars
+                ));
+            }
+            Term::Slot(slot) => {
+                q.body.push(format!("(= {class} ({} 0))", sy.var));
+                q.body.push(format!(
+                    "(= {label} (atom {} (root {} ({} {class})) (lit {} (map-of 0 0))))",
+                    quote(&label),
+                    quote(root),
+                    sy.free_vars,
+                    quote(slot)
+                ));
+                literals.insert(slot.clone());
+                avs.push(label);
+            }
+            _ => unreachable!("query values are globals or slots"),
+        }
+        seen.insert(root.clone());
+    }
+    for id in conditions.concrete_slots.values() {
+        globals.push(format!("(leaf (map-of 0 {id}))"));
+    }
+    if !globals.is_empty() {
+        let label = q.fresh("globals");
+        q.body.push(format!(
+            "(= {label} (global-frame {} {}))",
+            quote(&conditions.global_frame),
+            globals.join(" ")
+        ));
+        avs.push(label);
+    }
     for (idx, a) in atoms.iter().enumerate() {
         let op = &lang.constructors[&a.op];
         let sy = lang.symbols(&op.sort);
@@ -482,11 +536,11 @@ pub(super) fn compile(
         frame = f;
     }
     if let Some(root) = anchor
-        && !atoms.is_empty()
+        && !avs.is_empty()
     {
         frame = format!("(anchor {frame} {})", quote(root));
     }
-    if refine && !atoms.is_empty() {
+    if refine && !avs.is_empty() {
         q.refined = q.fresh("refined");
         let choice = q.fresh("choice");
         q.length = q.fresh("refined_len");
@@ -517,6 +571,17 @@ pub(super) fn compile(
             format!("(map-get (ren {} {}) 0)", q.frame, quote(lit)),
         );
     }
+    for (name, id) in &conditions.concrete_slots {
+        q.slots.insert(
+            name.clone(),
+            format!(
+                "(map-get (ren {} {}) {id})",
+                q.frame,
+                quote(&conditions.global_frame)
+            ),
+        );
+    }
+    q.filter_start = q.body.len();
     for (want, slot, pvars) in &conditions.free {
         if !q.slots.contains_key(slot) {
             return Err(format!("slot {slot} is not bound by the pattern"));

@@ -42,8 +42,10 @@
 
 (let pair (Pair $left $right))
 (run 1)
-(check (= pair (G $right $left)))
-(fail (check (= pair (G $left $right))))
+(let slot_right $right)
+(let slot_left $left)
+(check (= pair (G slot_right slot_left)))
+(fail (check (= pair (G slot_left slot_right))))
 (pop)
 
 

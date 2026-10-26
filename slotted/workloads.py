@@ -179,7 +179,7 @@ def array_program(start, target, rounds, *, with_target):
     lines.append(f"(let input0 {term(start)})")
     lines.append(f"(run {rounds})")
     if with_target:
-        lines.append(f"(check (= {term(start)} {term(target)}))")
+        lines.append(f"(check (= input0 {term(target)}))")
     return "\n".join(lines) + "\n"
 
 

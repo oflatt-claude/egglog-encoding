@@ -36,5 +36,7 @@
 
 (run 10)
 
-(check (= (Rel $0 $0) (Truth)))
-(check (= (Rel $0 $1) (Truth)))
+(let slot_0 $0)
+(check (= (Rel slot_0 slot_0) (Truth)))
+(let slot_1 $1)
+(check (= (Rel slot_0 slot_1) (Truth)))

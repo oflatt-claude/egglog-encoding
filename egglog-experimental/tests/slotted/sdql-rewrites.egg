@@ -66,8 +66,9 @@
 (run 2)
 
 ;; the sum IS the variable at $5
-(check (= a $5))
-(check (free-names-are a $5))
+(let slot_5 $5)
+(check (= a slot_5))
+(check (free-names-are a slot_5))
 
 (pop)
 
@@ -102,14 +103,16 @@
 (run 2)
 
 ;; the whole sum is the variable at $9
-(check (= s $9))
-(check (free-names-are s $9))
+(let slot_9 $9)
+(check (= s slot_9))
+(check (free-names-are s slot_9))
 
 ;; and it does not fire when the two `sing` children are the SAME slot: that would
 ;; need `$k` and `$v` to be one slot, which the binder columns forbid
 (let s2 (Sum $8 $5 $6 (Sing $5 $5)))
 (run 2)
-(check (!= s2 $8))
+(let slot_8 $8)
+(check (!= s2 slot_8))
 
 (pop)
 

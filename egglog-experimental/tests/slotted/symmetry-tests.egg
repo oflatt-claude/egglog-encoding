@@ -41,9 +41,11 @@
 (check (!= a b))
 (check (renaming-= a b))
 
-(check (= $3 $3))
-(check (!= $3 $4))
-(check (renaming-= $3 $4))
+(let slot_3 $3)
+(check (= slot_3 slot_3))
+(let slot_4 $4)
+(check (!= slot_3 slot_4))
+(check (renaming-= slot_3 slot_4))
 
 (pop)
 

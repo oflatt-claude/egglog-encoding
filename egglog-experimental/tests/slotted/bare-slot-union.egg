@@ -15,9 +15,13 @@
 (run 1)
 
 ;; the let is variable 3, whatever sits in slot 1
-(check (= (Let $1 $2 $3) $3))
-(check (= (Let $5 $2 $3) $3))
-(check (= t (Get $3 $4)))
+(let slot_1 $1)
+(let slot_3 $3)
+(check (= (Let slot_1 $2 slot_3) slot_3) (not-free $2 slot_1 slot_3))
+(let slot_5 $5)
+(check (= (Let slot_5 $2 slot_3) slot_3) (not-free $2 slot_5 slot_3))
+(let slot_4 $4)
+(check (= t (Get slot_3 slot_4)))
 ;; and variables stay distinct
-(fail (check (= $3 $4)))
-(fail (check (= (Get $3 $4) (Get $4 $3))))
+(fail (check (= slot_3 slot_4)))
+(fail (check (= (Get slot_3 slot_4) (Get slot_4 slot_3))))

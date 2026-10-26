@@ -10,7 +10,7 @@ With `--slotted`, the following syntax is added to vanilla egglog:
 
 | Feature | Syntax | Meaning |
 | --- | --- | --- |
-| [Slots](#slots-and-terms) | `$a`, `$a0` | Variable terms in any equality sort; names in rewrites are rule-local |
+| [Slots](#slots-and-terms) | `$a`, `$a0` | Variable terms in any equality sort; names in queries are local to the query |
 | [Binders](#binder-columns) | `:binder i ...` | Constructor columns that bind slots in the following term child |
 | [Equality modulo renaming](#equality) | `(renaming-= a b)`, `(renaming-!= a b)` | Equality or inequality allowing renaming of free variables |
 | [Free names](#free-names) | `(free $x a ...)` | `$x` is free in at least one listed term |
@@ -23,9 +23,10 @@ Existing egglog forms have these slotted semantics:
 | Form | Behavior in slotted mode |
 | --- | --- |
 | [Sorts and constructors](#sorts-and-constructors) | Every equality sort accepts slots; a constructor's term children must use its result sort |
-| [`let`](#let) | Globals in rewrite patterns expand to their defining source terms |
+| [`let`](#let) | Binds a term or concrete slot; references preserve its free-slot identities |
 | [`union`](#union), [`=` and `!=`](#equality) | Equality respects bound-variable alpha-equivalence and known symmetries while preserving free-variable identities |
 | [`rewrite`](#rewrite) | Pattern slots are rule-local; distinct names match distinct slots, and RHS-only slots are implicitly fresh |
+| [`check`](#check-and-fail) | Facts form an existential query, with the same local slots and matching semantics as rewrite queries |
 | [`run`](#run) | Slotted maintenance surrounds each round of user rewrites |
 | [`extract`](#extract) | Returns an encoded tree from the class leader, including renamings and binder markers |
 
@@ -52,7 +53,7 @@ egglog-experimental --slotted [OPTIONS] [FILE ...]
 | --- | --- |
 | `--slotted` | Evaluate slotted source |
 | `--mode desugar` | Print the compiled egglog program |
-| `--slotted-no-aliasing` | Restrict rewrite matching to the reference nested matcher's aliasing policy; requires `--slotted` |
+| `--slotted-no-aliasing` | Restrict matching to the reference nested matcher's aliasing policy; requires `--slotted` |
 
 With no files, the executable reads commands from stdin. Successive inputs
 share declarations, globals, rewrites, and graph state. Include paths are
@@ -83,7 +84,7 @@ The equivalent datatype declaration is:
 Every equality sort is a **carrier** for slotted terms and accepts slot
 literals. Several carriers may be declared, including through `datatype*`.
 A constructor's term children must have the same carrier as its result.
-All patterns in a rewrite must also use one carrier, as must the terms
+All patterns in a query must also use one carrier, as must the terms
 in a union or comparison. Cross-carrier operations are rejected.
 
 Constructor columns are either term columns or payload columns. Payloads
@@ -109,7 +110,7 @@ and has no scope over `initializer`.
 | --- | --- |
 | `$a`, `$a0`, `$outer_var` | A variable term, or a binding occurrence in a binder column |
 | `(Ctor arg ...)` | A constructor application; nullary constructors also require parentheses |
-| `name` | A previously declared global, or a pattern variable in a rewrite |
+| `name` | A previously declared global, or a pattern variable in a query |
 
 Identifiers retain their spelling: `x` and `?x` are different names.
 
@@ -122,15 +123,15 @@ Free slot names have the following meanings:
 
 | Context | Meaning of `$a` |
 | --- | --- |
-| Ground terms, including `let`, `union`, and `check` | The concrete slot named `a`, with the same identity across commands and inputs |
-| Rewrite pattern or `:when` guard | A rule-local slot matched against the graph |
+| Ground terms in `let`, `union`, and `extract` | The concrete slot named `a`, with the same identity across commands and inputs |
+| `check`, rewrite pattern, or `:when` guard | A slot local to that query, matched against the graph |
 | Rewrite RHS, when `$a` occurs in the pattern | The slot selected by that match |
 | Rewrite RHS, when `$a` is absent from the pattern | A fresh slot, distinct from the slots in that match |
 
-`check` introduces no pattern-slot scope. Its free slots refer to concrete
-names, just as they do in `let`. In a rewrite, spelling a slot `$a` does not
-refer to the concrete slot named `a`. A pattern slot can match a concrete
-slot regardless of its name.
+Each `check` and rewrite has its own pattern-slot scope. Writing `$a` in a
+query does not refer to a concrete slot named `a`. To query a specific slot,
+bind it with `(let concrete_a $a)` and use `concrete_a` in the query. A pattern
+slot can match a concrete slot regardless of its name.
 
 Binders introduce a scope for their bound occurrences in every context.
 Bound names may change under alpha-equivalence; free names remain significant.
@@ -138,11 +139,12 @@ Bound names may change under alpha-equivalence; free names remain significant.
 ```slotted
 (datatype Expr (Lam Expr Expr :binder 0))
 (let id (Lam $a $a))
-(let constant (Lam $a $a0))
+(let free_a0 $a0)
+(let constant (Lam $a free_a0))
 (run 0)
 (check (= id (Lam $renamed $renamed)))
 (check (!= id constant))
-(check (free-names-are constant $a0))
+(check (free-names-are constant free_a0))
 ```
 
 ## Commands
@@ -154,9 +156,11 @@ Bound names may change under alpha-equivalence; free names remain significant.
 ```
 
 Constructs `term` and binds a global to it. Global names cannot start with `$`
-or be rebound. A bare slot cannot be stored as a global, so `(let v $x)` is
-rejected. Globals in rewrite patterns expand to their defining source terms;
-slots in those patterns have rule-local scope.
+or be rebound. `(let v $x)` binds the concrete slot named `x`; a slot global
+gets its carrier from the context where it is used, like a slot literal.
+References to a global preserve its free-slot identities and follow its
+e-class through subsequent unions and maintenance. This applies in both
+checks and rewrites.
 
 ### `union`
 
@@ -227,28 +231,30 @@ A slot appearing on the right-hand side but absent from the multipattern is
 implicitly fresh with respect to the match, including free slots inside matched
 terms.
 
-Here `$binder` names the fresh slot in the rewrite, and `$free` is a concrete
-slot in the input. The rewrite wraps that input in a lambda without capturing
-its free slot:
+Here `$binder` names the fresh slot in the rewrite. The global `free_slot`
+refers to a concrete slot in the input. The rewrite wraps that input in a
+lambda without capturing its free slot:
 
 ```slotted
 (datatype Expr (Wrap Expr) (Lam Expr Expr :binder 0))
+(let free_slot $free)
 (rewrite (Wrap e) (Lam $binder e))
-(let result (Wrap $free))
+(let result (Wrap free_slot))
 (run 1)
-(check (= result (Lam $bound $free)))
-(check (free-names-are result $free))
+(check (= result (Lam $bound free_slot)) (not-free $bound free_slot))
+(check (free-names-are result free_slot))
 (fail (check (= result (Lam $bound $bound))))
 ```
 
-The checks use the same concrete `$free` as the input. `$bound` is bound by
-`Lam`; its spelling need not match the rewrite's `$binder`. The last check
-rejects the identity lambda, whose body would refer to the binder instead of
-the input's free slot.
+The checks use the global `free_slot` to refer to the input's concrete slot.
+`$bound` is a pattern slot in a binder column; its spelling need not match the
+rewrite's `$binder`. The `not-free` guard keeps it distinct from `free_slot`.
+The last check rejects the identity lambda, whose body
+would refer to the binder instead of the input's free slot.
 
 #### Slot constraints and capture
 
-Different explicit slot names in a rewrite must match distinct slots:
+Different explicit slot names in a query must match distinct slots:
 `(F $x $y)` does not match `(F $a $a)`. A pattern slot may coincide with a free
 slot inside a matched term. Repeating a slot name in independent binder
 columns does not require the binders' bodies to be equal; sharing a body
@@ -275,7 +281,7 @@ both roles. `(Let $free $bound $bound)` distinguishes them. See
 in the pattern, preserving sharing already present in child edges. It requires
 one nested left-hand pattern and rejects side conditions that introduce
 additional constructor patterns. Predicates over already matched variables
-remain available. This option does not change ground checks.
+remain available. Checks use the same aliasing restriction.
 
 ### `run`
 
@@ -291,16 +297,33 @@ applying user rewrites. `run-schedule` and `run-report` are unsupported.
 ### `check` and `fail`
 
 ```text
-(check predicate)
-(fail (check predicate))
+(check fact ...)
+(fail (check fact ...))
 ```
 
-`check` queries the current graph without adding terms or applying user
-rewrites. It fails if the predicate does not hold. Each slotted assertion
-requires its own `check`. `fail` succeeds when its enclosed check fails.
-Terms in a check are ground: globals must already be defined, and free slot
-names denote concrete slots. A check cannot introduce pattern variables or
-rule-local slots.
+`check` succeeds when one match satisfies all its facts. It uses the same
+patterns, shared variables, slot constraints, and predicates as rewrite
+queries. It does not add terms or apply user rewrites. `fail` asserts that
+there is no matching assignment. Run maintenance with `(run 0)` after inserting
+terms before querying them, or use `(run N)` to apply rewrites as well.
+
+```slotted
+(datatype Expr (Pair Expr Expr))
+(let a $a)
+(let b $b)
+(let pair (Pair a b))
+(run 0)
+(check (= pair (Pair $x body)) (not-free $x body))
+(check (= a $local))
+(check (= b $local))
+(fail (check (= a $shared) (= b $shared)))
+(check (!= a b))
+```
+
+The two `$local` occurrences belong to separate checks. Within the single
+check using `$shared`, both facts must use the same slot, so it has no match.
+Disequality filters each candidate match; `(check (!= x y))` is not the
+negation of `(check (= x y))` when `x` and `y` range over several candidates.
 
 ### `push` and `pop`
 
@@ -326,11 +349,11 @@ cost. Conversion back to slotted source syntax is unsupported.
 
 ## Query predicates
 
-These predicates are available in `check` and rewrite `:when` clauses. Checks
-accept ground terms and globals. Comparisons in guards take bound pattern
-variables; `=` can also add a constructor pattern to the multipattern. Free-name
-predicates accept matched variables or constructor patterns. Slot arguments in
-guards refer to rule-local pattern slots.
+These predicates are available in `check` and rewrite `:when` clauses.
+Comparisons accept matched variables, globals, and constructor patterns;
+`=` can bind a variable to a pattern. Free-name predicates accept matched
+variables, globals, or constructor patterns. A slot argument must be bound
+by a pattern or be a global bound to a concrete slot.
 
 ### Equality
 
@@ -388,14 +411,16 @@ least one term. `free-names-are` takes one term and zero or more slot names.
 
 ```slotted
 (datatype Expr (Lam Expr Expr :binder 0) (Mult Expr Expr) (Null))
+(let a $a)
+(let c $c)
 (let k (Lam $bound $c))
 (let id (Lam $bound $bound))
 (let m (Mult $a (Null)))
 (run 0)
-(check (free-names-are k $c))
+(check (free-names-are k c))
 (check (free-names-are id))
-(check (free $a m))
-(check (not-free $a k id))
+(check (free a m))
+(check (not-free a k id))
 ```
 
 ## Rust API

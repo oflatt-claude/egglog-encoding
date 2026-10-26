@@ -14,4 +14,6 @@
                 (= p5 (F a5 a5)))
          :name "six-independent-slots")
 (run 1)
-(check (= result (G $0 (G $0 (G $0 (G $0 (G $0 $1)))))))
+(let slot_0 $0)
+(let slot_1 $1)
+(check (= result (G slot_0 (G slot_0 (G slot_0 (G slot_0 (G slot_0 slot_1)))))))

@@ -21,5 +21,7 @@
 
 (run 10)
 
-(check (= t (GG $0 $0)))
-(check (= t (GG $0 $1)))
+(let slot_0 $0)
+(check (= t (GG slot_0 slot_0)))
+(let slot_1 $1)
+(check (= t (GG slot_0 slot_1)))

@@ -826,12 +826,6 @@ class Source:
         return out
 
     # ------------------------------------------------------------------ terms
-    def global_ref(self, name, ground):
-        """A `let`-bound global, as a ground reference or as something a pattern can match."""
-        return (
-            ("name", name) if ground else as_pattern(self.lang, self.lang.bound[name], self.slots.sources.__getitem__)
-        )
-
     def term(self, form, column=CHILD, ground=True):
         """Read a fixture term for reference translation, without lowering it."""
         if isinstance(form, str):
@@ -841,7 +835,9 @@ class Source:
                 slot = self.slots.intern(form)
                 return slot if column is BINDER else ("var", slot)
             if form in self.lang.bound:
-                return self.global_ref(form, ground)
+                if not ground:
+                    raise ValueError("reference rule translation does not support globals")
+                return ("name", form)
             if not ground:
                 return form
             raise ValueError(f"{self.path.name}: unbound fixture term {form!r}")
@@ -962,23 +958,3 @@ def rule_lines(src, lang, form, *, nested=False):
     for want, slot, pvars in parts["conds"]:
         out.append(f"cond {'in' if want else 'notin'} {slot} {' '.join(pvars)}")
     return out
-
-
-def as_pattern(lang, t, slot_name=lambda n: f"${n}"):
-    """A term read as GROUND, written the way a pattern writes it."""
-    if isinstance(t, str):
-        return t
-    if t[0] == "name":
-        return as_pattern(lang, lang.bound[t[1]], slot_name)
-    if t[0] == lang.VAR:
-        return slot_name(t[1])
-    op = lang[t[0]]
-    out = []
-    for kind, a in zip(op.arg_kinds(), t[1:], strict=True):
-        if kind is BINDER:
-            out.append(a if isinstance(a, str) else slot_name(lang.slot(a)))
-        elif kind is CHILD:
-            out.append(as_pattern(lang, a, slot_name))
-        else:
-            out.append(a)
-    return (t[0], *out)

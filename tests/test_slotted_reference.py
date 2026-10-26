@@ -76,6 +76,17 @@ def test_generated_reference_variables_do_not_alias_user_variables(tmp_path: Pat
     assert lhs_root not in {"_sl1", "_p", *variable_roots}
 
 
+@pytest.mark.parametrize("term", ["$a", "(F $a $b)", "(Null)"])
+def test_reference_translation_does_not_expand_globals_into_patterns(tmp_path: Path, term: str) -> None:
+    src = source(tmp_path)
+    src.lang.bound["fixed"] = src.term(syntax.parse(term)[0])
+    assert src.term("fixed", ground=True) == ("name", "fixed")
+    rule = syntax.parse("(rewrite (F fixed x) x)")[0]
+    for nested in (False, True):
+        with pytest.raises(ValueError, match="does not support globals"):
+            syntax.rule_lines(src, src.lang, rule, nested=nested)
+
+
 def test_question_marks_are_preserved_in_reference_variables(tmp_path: Path) -> None:
     src = source(tmp_path)
     rule = syntax.parse("(rewrite (F x ?x) (G ?x x) :when ((not-free $s ?x)))")[0]

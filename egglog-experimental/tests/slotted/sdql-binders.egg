@@ -146,7 +146,8 @@
 
 (check (= seed free))
 (check (!= seed captured))
-(check (free-names-are seed $9))
+(let slot_9 $9)
+(check (free-names-are seed slot_9))
 
 (pop)
 
@@ -160,7 +161,8 @@
 (run 0)
 
 ;; $9 is neither bound slot, so the class depends on it and on nothing else
-(check (free-names-are free $9))
+(let slot_9_1 $9)
+(check (free-names-are free slot_9_1))
 
 (pop)
 

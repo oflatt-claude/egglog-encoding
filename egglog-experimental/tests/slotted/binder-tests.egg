@@ -38,7 +38,8 @@
 (check (!= i0 k3a))
 ;; the identity binds its only slot, the constant keeps $3 free
 (check (free-names-are i0))
-(check (free-names-are k3a $3))
+(let slot_3 $3)
+(check (free-names-are k3a slot_3))
 (pop)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; nested binders, and the renaming that would CAPTURE

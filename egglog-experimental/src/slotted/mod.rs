@@ -1,6 +1,7 @@
 //! Source-to-source slotted e-graph encoding.
 #![doc = include_str!("LANGUAGE.md")]
 
+mod check;
 pub mod export;
 mod frontend;
 mod maintenance;
@@ -27,6 +28,12 @@ pub fn new_egraph() -> egglog::EGraph {
 /// extended schedule interpreter disabled.
 pub fn register(graph: &mut egglog::EGraph) {
     runtime::register(graph);
+    graph
+        .add_command(
+            "slotted-check".into(),
+            std::sync::Arc::new(check::CheckCommand),
+        )
+        .unwrap();
     graph
         .add_command(
             "slotted-export".into(),

@@ -187,9 +187,11 @@
 
 (run 10)
 
-(check (= live (GG $0)))
-(check (free-names-are live $0))
-(fail (check (= live (GG $1))))
+(let slot_0 $0)
+(check (= live (GG slot_0)))
+(check (free-names-are live slot_0))
+(let slot_1 $1)
+(fail (check (= live (GG slot_1))))
 
 (pop)
 
@@ -205,12 +207,14 @@
 
 ;; the slot is redundant twice over: in `lam`, from the union, and in `g`, because
 ;; the rule fired once per slot `a` could have been at
-(check (free-names-are (Lam $0 $0)))
+(let slot_0_1 $0)
+(check (free-names-are (Lam slot_0_1 slot_0_1)))
 (check (free-names-are g))
 
 ;; so every invocation of the answer is the same invocation, whichever slot it names
-(check (= g (GG $0)))
-(check (= g (GG $1)))
+(check (= g (GG slot_0_1)))
+(let slot_1_1 $1)
+(check (= g (GG slot_1_1)))
 (check (__internal-holds g GG))
 
 (pop)

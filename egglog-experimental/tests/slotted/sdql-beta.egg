@@ -56,9 +56,11 @@
 (push)
 (let b (Let $7 $5 $5))
 (run 2)
-(check (= b $7))
+(let slot_7 $7)
+(check (= b slot_7))
 ;; and not the answer a dropped renaming would give
-(check (!= b $5))
+(let slot_5 $5)
+(check (!= b slot_5))
 (pop)
 
 
@@ -73,7 +75,8 @@
 (push)
 (let c (Let (Num 0) $5 $9))
 (run 2)
-(check (= c $9))
+(let slot_9 $9)
+(check (= c slot_9))
 (pop)
 
 

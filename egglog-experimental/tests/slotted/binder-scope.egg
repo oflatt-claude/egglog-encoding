@@ -44,8 +44,9 @@
 (run 0)
 
 ;; the value's occurrence keeps slot 0 free in both, and only that one
-(check (free-names-are l0 $0))
-(check (free-names-are l1 $0))
+(let slot_0 $0)
+(check (free-names-are l0 slot_0))
+(check (free-names-are l1 slot_0))
 
 ;; and renaming a bound slot changes nothing, so the two are equal
 (check (= l0 l1))

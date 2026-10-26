@@ -46,7 +46,8 @@
 
 (check (= id0 id7))          ; alpha-equivalent, so equal
 (check (free-names-are id0))          ; the identity depends on no slot: its own is bound
-(check (free-names-are k $3))         ; this one depends on the slot it returns
+(let slot_3 $3)
+(check (free-names-are k slot_3))         ; this one depends on the slot it returns
 (pop)
 
 

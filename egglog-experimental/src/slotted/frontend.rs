@@ -6,7 +6,7 @@ use super::{
     syntax::{self, Form},
 };
 use egglog::ast::{ParseError, Span};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Default)]
 /// Control source-level slotted matching semantics.
@@ -15,9 +15,34 @@ pub struct Options {
     pub no_aliasing: bool,
 }
 
-struct Claim {
-    facts: Vec<String>,
-    invocations: Vec<(String, String)>,
+#[derive(Default)]
+struct Pattern {
+    names: query::PatternNames,
+    atoms: Vec<query::Atom>,
+    conditions: query::Conditions,
+    values: Vec<(String, Term, Option<String>)>,
+    patterns: usize,
+}
+
+impl Pattern {
+    fn new(forms: &[Form]) -> Self {
+        fn reserve(form: &Form, names: &mut query::PatternNames) {
+            match form {
+                Form::Atom(name) => names.reserve(name),
+                Form::List(forms) => {
+                    for form in forms {
+                        reserve(form, names);
+                    }
+                }
+            }
+        }
+        let mut pattern = Self::default();
+        for form in forms {
+            reserve(form, &mut pattern.names);
+        }
+        pattern.conditions.global_frame = pattern.names.fresh("_concrete");
+        pattern
+    }
 }
 
 #[derive(Clone)]
@@ -297,15 +322,18 @@ impl Compiler {
                     );
                 }
                 let t = self.term(&args[1], true, None)?;
-                if matches!(t, Term::Slot(_)) {
-                    return Err(
-                        "a global cannot currently store the invocation of a bare slot".into(),
-                    );
-                }
-                let sort = self.sort_of(&t)?;
-                let encoded = self.state.lang.encode_top(&t, &sort);
+                let bare_slot = matches!(t, Term::Slot(_))
+                    || matches!(&t, Term::Global(n) if self.state.lang.global_slot(n).is_some());
+                let encoded = if bare_slot {
+                    String::new()
+                } else {
+                    format!(
+                        "(let ${name} {})",
+                        self.state.lang.encode(&t, &self.sort_of(&t)?)
+                    )
+                };
                 self.state.lang.globals.insert(name.into(), t);
-                Ok(format!("(let ${name} {encoded})"))
+                Ok(encoded)
             }
             "union" => {
                 if args.len() != 2 {
@@ -349,7 +377,7 @@ impl Compiler {
                     .ok_or("pop without a corresponding push")?;
                 Ok(f.render())
             }
-            "check" | "fail" => self.check(f),
+            "check" | "fail" => self.check(f, false),
             "extract" => {
                 let t = self.term(args.first().ok_or("extract expects a term")?, true, None)?;
                 let sort = self.sort_of(&t)?;
@@ -417,13 +445,7 @@ impl Compiler {
             Form::Atom(s) if self.state.lang.constructors.contains_key(s) => {
                 return Err(format!("constructor {s} needs parentheses: ({s})"));
             }
-            Form::Atom(s) if self.state.lang.globals.contains_key(s) => {
-                if ground {
-                    Term::Global(s.clone())
-                } else {
-                    self.expand(&self.state.lang.globals[s])
-                }
-            }
+            Form::Atom(s) if self.state.lang.globals.contains_key(s) => Term::Global(s.clone()),
             Form::Atom(s) if !ground => Term::Variable(s.clone()),
             Form::Atom(s) => return Err(format!("global {s:?} is not bound")),
             Form::List(_) => {
@@ -504,14 +526,184 @@ impl Compiler {
         Ok(term)
     }
 
-    fn expand(&self, t: &Term) -> Term {
-        match t {
-            Term::Global(n) => self.expand(&self.state.lang.globals[n]),
-            Term::Node(n, args) => {
-                Term::Node(n.clone(), args.iter().map(|a| self.expand(a)).collect())
+    fn global_terms(&self, p: &mut Pattern, term: &mut Term, sort: Option<&str>) {
+        match term {
+            Term::Global(_) => {
+                let root = p.names.fresh("_global");
+                p.values
+                    .push((root.clone(), term.clone(), sort.map(str::to_owned)));
+                *term = Term::Variable(root);
             }
-            _ => t.clone(),
+            Term::Node(op, args) => {
+                let sort = &self.state.lang.constructors[op].sort;
+                for arg in args {
+                    self.global_terms(p, arg, Some(sort));
+                }
+            }
+            Term::Subst(args) => {
+                for arg in args.iter_mut() {
+                    self.global_terms(p, arg, sort);
+                }
+            }
+            _ => {}
         }
+    }
+
+    fn pattern_at(&self, p: &mut Pattern, root: String, mut term: Term) -> Result<(), String> {
+        match &term {
+            Term::Node(_, _) => {
+                self.global_terms(p, &mut term, None);
+                let tmp = if p.patterns == 0 {
+                    "_t".into()
+                } else {
+                    format!("_w{}_", p.patterns)
+                };
+                p.atoms.extend(query::flatten(
+                    &self.state.lang,
+                    &term,
+                    &root,
+                    &tmp,
+                    &mut p.names,
+                )?);
+                p.patterns += 1;
+            }
+            Term::Slot(_) | Term::Global(_) => {
+                let sort = self.state.lang.sort_of(&term).map(str::to_owned);
+                p.values.push((root, term, sort));
+            }
+            _ => return Err("expected a constructor pattern, global, or slot".into()),
+        }
+        Ok(())
+    }
+
+    fn pattern_value(&self, p: &mut Pattern, term: Term) -> Result<String, String> {
+        if let Term::Variable(name) = term {
+            return Ok(name);
+        }
+        let root = p.names.fresh("_p");
+        self.pattern_at(p, root.clone(), term)?;
+        Ok(root)
+    }
+
+    fn pattern_slot(&self, p: &mut Pattern, form: &Form) -> Result<String, String> {
+        let name = form.atom()?;
+        if name.starts_with('$') {
+            return Ok(name.into());
+        }
+        if self.state.lang.globals.contains_key(name)
+            && let Some(slot) = self.state.lang.global_slot(name)
+        {
+            p.conditions
+                .concrete_slots
+                .insert(name.into(), self.state.lang.slot_names.id(slot));
+            return Ok(name.into());
+        }
+        Err(format!(
+            "expected a pattern slot or a global bound to a slot, got {name:?}"
+        ))
+    }
+
+    /// Facts in checks and rewrite guards share names, bindings, and predicates.
+    fn pattern_fact(&mut self, p: &mut Pattern, fact: &Form) -> Result<(), String> {
+        let (kind, args) = fact.call()?;
+        if let Some(comparison) = query::Comparison::parse(kind) {
+            if args.len() != 2 {
+                return Err(format!("{kind} requires two terms"));
+            }
+            if kind == "="
+                && let Form::Atom(name) = &args[0]
+                && !name.starts_with('$')
+                && !self.state.lang.globals.contains_key(name)
+                && matches!(&args[1], Form::List(_))
+            {
+                let term = self.term(&args[1], false, None)?;
+                return self.pattern_at(p, name.clone(), term);
+            }
+            let a = self.term(&args[0], false, None)?;
+            let b = self.term(&args[1], false, None)?;
+            if kind == "=" {
+                match (&a, &b) {
+                    (Term::Variable(v), other) | (other, Term::Variable(v))
+                        if !matches!(other, Term::Variable(_)) =>
+                    {
+                        return self.pattern_at(p, v.clone(), other.clone());
+                    }
+                    _ => {}
+                }
+            }
+            let a = self.pattern_value(p, a)?;
+            let b = self.pattern_value(p, b)?;
+            p.conditions.comparisons.push((comparison, a, b));
+        } else {
+            match kind {
+                "free" | "not-free" => {
+                    if args.len() < 2 {
+                        return Err(format!("{kind} expects a slot and at least one term"));
+                    }
+                    let slot = self.pattern_slot(p, &args[0])?;
+                    let mut terms = Vec::new();
+                    for form in &args[1..] {
+                        let term = self.term(form, false, None)?;
+                        terms.push(self.pattern_value(p, term)?);
+                    }
+                    p.conditions.free.push((kind == "free", slot, terms));
+                }
+                "free-names-are" => {
+                    let form = args.first().ok_or("free-names-are expects a term")?;
+                    let term = self.term(form, false, None)?;
+                    let root = self.pattern_value(p, term)?;
+                    let slots = args[1..]
+                        .iter()
+                        .map(|f| self.pattern_slot(p, f))
+                        .collect::<Result<_, _>>()?;
+                    p.conditions.free_names.push((root, slots));
+                }
+                _ if self.state.lang.constructors.contains_key(kind) => {
+                    let term = self.term(fact, false, None)?;
+                    self.pattern_value(p, term)?;
+                }
+                _ => return Err(format!("unsupported slotted query predicate {kind}")),
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_pattern(&self, p: &mut Pattern) -> Result<(), String> {
+        let mut sorts = p
+            .atoms
+            .iter()
+            .map(|a| self.state.lang.constructors[&a.op].sort.clone())
+            .collect::<BTreeSet<_>>();
+        for (_, term, expected) in &p.values {
+            if let Some(sort) = expected
+                .as_deref()
+                .or_else(|| self.state.lang.sort_of(term))
+            {
+                sorts.insert(sort.to_owned());
+            }
+        }
+        if sorts.len() > 1 {
+            return Err(
+                "cross-sort multipatterns cannot compare terms of different equality sorts".into(),
+            );
+        }
+        let sort = sorts
+            .into_iter()
+            .next()
+            .or_else(|| {
+                (self.state.lang.carriers.len() == 1)
+                    .then(|| self.state.lang.carriers[0].sort.clone())
+            })
+            .ok_or("bare slot has no equality-sort context; put it under a constructor")?;
+        p.conditions.values = p
+            .values
+            .drain(..)
+            .map(|(root, term, _)| (root, term, sort.clone()))
+            .collect();
+        if !p.atoms.is_empty() {
+            p.atoms = query::connected(std::mem::take(&mut p.atoms));
+        }
+        Ok(())
     }
 
     fn rewrite(&mut self, args: &[Form]) -> Result<String, String> {
@@ -519,52 +711,25 @@ impl Compiler {
             return Err("rewrite needs a left- and right-hand side".into());
         }
         let lhs = self.term(&args[0], false, None)?;
-        let rhs = self.term(&args[1], false, None)?;
-        // Reserve the entire source rule before allocating roots, including
-        // names introduced only in :when or used on the right-hand side.
-        fn reserve(form: &Form, names: &mut query::PatternNames) {
-            match form {
-                Form::Atom(name) => names.reserve(name),
-                Form::List(forms) => {
-                    for form in forms {
-                        reserve(form, names);
-                    }
-                }
-            }
-        }
-        let mut names = query::PatternNames::default();
-        for form in args {
-            reserve(form, &mut names);
-        }
-        // A named root can be bound by the multipattern. This also permits a
-        // rewrite of a child matched inside another atom of a multipattern.
-        let (root, mut atoms) = if let Term::Variable(v) = &lhs {
-            (v.clone(), Vec::new())
-        } else {
-            let root = names.fresh("_p");
-            let atoms = query::flatten(&self.state.lang, &lhs, &root, "_t", &mut names)?;
-            (root, atoms)
-        };
-        let mut conditions = query::Conditions::default();
+        let mut rhs = self.term(&args[1], false, None)?;
+        let mut p = Pattern::new(args);
+        let root = self.pattern_value(&mut p, lhs)?;
         let mut name = None;
-        let mut side = 0;
         let mut when_seen = false;
         let mut i = 2;
         while i < args.len() {
             let key = args[i].atom()?;
             i += 1;
             let start = i;
-            while i < args.len() && !matches!(&args[i],Form::Atom(s) if s.starts_with(':')) {
+            while i < args.len() && !matches!(&args[i], Form::Atom(s) if s.starts_with(':')) {
                 i += 1;
             }
             let values = &args[start..i];
             match key {
-                ":ruleset" => {
-                    return Err("named rulesets are not supported by the slotted schedule; omit :ruleset and use (run N)".into());
-                }
+                ":ruleset" => return Err("named rulesets are not supported by the slotted schedule; omit :ruleset and use (run N)".into()),
                 ":name" => {
                     if values.len() != 1 {
-                        return Err(format!("{key} expects one argument"));
+                        return Err(":name expects one argument".into());
                     }
                     name = Some(unquote(values[0].atom()?)?);
                 }
@@ -581,107 +746,37 @@ impl Compiler {
                         return Err(":when takes a list of facts".into());
                     }
                     for fact in facts {
-                        let (kind, rest) = fact.call()?;
-                        let mut extra = Vec::new();
-                        match (kind, query::Comparison::parse(kind)) {
-                            (_, Some(comparison))
-                                if rest.len() == 2 && matches!(rest[1], Form::Atom(_)) =>
-                            {
-                                conditions.comparisons.push((
-                                    comparison,
-                                    rest[0].atom()?.to_owned(),
-                                    rest[1].atom()?.to_owned(),
-                                ));
-                            }
-                            ("=", _) if rest.len() == 2 => {
-                                extra.push((rest[0].atom()?.to_owned(), rest[1].clone()))
-                            }
-                            ("free" | "not-free", _) if rest.len() >= 2 => {
-                                let slot = rest[0].atom()?.to_owned();
-                                let mut pvars = Vec::new();
-                                for f in &rest[1..] {
-                                    match f {
-                                        Form::Atom(v) => pvars.push(v.clone()),
-                                        _ => {
-                                            let v = names.fresh(&format!("_cond{side}"));
-                                            side += 1;
-                                            pvars.push(v.clone());
-                                            extra.push((v, f.clone()));
-                                        }
-                                    }
-                                }
-                                conditions.free.push((kind == "free", slot, pvars));
-                            }
-                            ("free-names-are", _) if !rest.is_empty() => {
-                                let v = match &rest[0] {
-                                    Form::Atom(v) => v.clone(),
-                                    f => {
-                                        let v = names.fresh(&format!("_cond{side}"));
-                                        side += 1;
-                                        extra.push((v.clone(), f.clone()));
-                                        v
-                                    }
-                                };
-                                let slots = rest[1..]
-                                    .iter()
-                                    .map(|s| s.atom().map(str::to_owned))
-                                    .collect::<Result<Vec<_>, _>>()?;
-                                conditions.free_names.push((v, slots));
-                            }
-                            (kind, _) if self.state.lang.constructors.contains_key(kind) => {
-                                let v = names.fresh(&format!("_fact{side}"));
-                                side += 1;
-                                extra.push((v, fact.clone()));
-                            }
-                            _ => return Err(format!("unsupported slotted side condition {kind}")),
-                        }
-                        for (v, f) in extra {
-                            if self.options.no_aliasing {
-                                return Err(
-                                    "no-aliasing mode requires a single nested pattern".into()
-                                );
-                            }
-                            let t = self.term(&f, false, None)?;
-                            atoms.extend(query::flatten(
-                                &self.state.lang,
-                                &t,
-                                &v,
-                                &format!("_w{side}_"),
-                                &mut names,
-                            )?);
-                            side += 1;
-                        }
+                        self.pattern_fact(&mut p, fact)?;
                     }
                 }
                 _ => return Err(format!("unsupported rewrite option {key}")),
             }
         }
-        let first = atoms
-            .first()
-            .ok_or("a rewrite needs a constructor pattern on the left or in :when")?;
-        if !atoms.iter().any(|a| {
-            a.root == root
-                || a.kids
-                    .iter()
-                    .any(|k| matches!(k, Term::Variable(v) if *v == root))
-        }) {
+        if self.options.no_aliasing && p.patterns > 1 {
+            return Err("no-aliasing mode requires a single nested pattern".into());
+        }
+        if p.atoms.is_empty() && p.values.is_empty() {
+            return Err("a rewrite needs a constructor pattern on the left or in :when".into());
+        }
+        if !p.values.iter().any(|(v, _, _)| v == &root)
+            && !p.atoms.iter().any(|a| {
+                a.root == root
+                    || a.kids
+                        .iter()
+                        .any(|k| matches!(k, Term::Variable(v) if *v == root))
+            })
+        {
             return Err(format!("rewrite root {root:?} is not bound by a pattern"));
         }
-        let sort = &self.state.lang.constructors[&first.op].sort;
-        if atoms
-            .iter()
-            .any(|a| self.state.lang.constructors[&a.op].sort != *sort)
-        {
-            return Err("cross-sort multipatterns are not supported".into());
-        }
-        let atoms = query::connected(atoms);
+        self.global_terms(&mut p, &mut rhs, None);
+        self.finish_pattern(&mut p)?;
         let result = rewrite::compile(
             &self.state.lang,
             rewrite::Rewrite {
                 root: &root,
-                atoms: &atoms,
+                atoms: &p.atoms,
                 rhs: &rhs,
-                conditions,
+                conditions: p.conditions,
                 name: name.as_deref(),
                 ordinal: self.state.rules,
                 nested: self.options.no_aliasing,
@@ -691,258 +786,76 @@ impl Compiler {
         Ok(result)
     }
 
-    fn matches(&self, terms: &[Term], sort: &str) -> Result<Claim, String> {
-        let lang = &self.state.lang;
-        let sy = lang.symbols(sort);
-        let mut facts = Vec::new();
-        let mut matched = Vec::new();
-        for (i, t) in terms.iter().enumerate() {
-            if let Term::Slot(s) = t {
-                let c = format!("({} 0)", sy.var);
-                matched.push((
-                    c.clone(),
-                    format!(
-                        "(compose (map-of 0 {}) ({} {c}))",
-                        lang.slot_names.id(s),
-                        sy.free_vars
-                    ),
-                ));
-                continue;
-            }
-            let mut pattern = self.expand(t);
-            let mut used = BTreeSet::new();
-            pattern.slot_literals(&mut used);
-            rename_binders(lang, &mut pattern, &BTreeMap::new(), &mut used, &mut 0);
-            let root = format!("_c{i}");
-            let atoms = query::flatten(
-                lang,
-                &pattern,
-                &root,
-                &format!("_c{i}t"),
-                &mut query::PatternNames::default(),
-            )?;
-            let atoms = query::connected(atoms);
-            let q = query::compile(
-                lang,
-                &atoms,
-                &query::Conditions::default(),
-                &format!("_c{i}"),
-                false,
-                None,
-                false,
-            )?;
-            let c = q.class(&root)?;
-            let mut free = lang
-                .slots(t)
-                .into_iter()
-                .map(|s| (lang.slot_names.id(&s), s))
-                .collect::<Vec<_>>();
-            free.sort();
-            let mut pairs = Vec::new();
-            for (id, s) in free {
-                pairs.push(
-                    q.slots
-                        .get(&s)
-                        .ok_or_else(|| format!("claim lost free slot {s}"))?
-                        .clone(),
-                );
-                pairs.push(id.to_string());
-            }
-            let frame = if pairs.is_empty() {
-                "(map-empty)".into()
-            } else {
-                call("map-of", pairs)
-            };
-            matched.push((c, format!("(compose {frame} {})", q.maps[&root])));
-            facts.extend(q.body);
-        }
-        Ok(Claim {
-            facts,
-            invocations: matched,
-        })
-    }
-
-    fn check(&mut self, f: &Form) -> Result<String, String> {
-        let (head, mut args) = f.call()?;
-        let negated = head == "fail";
-        let mut command = f;
-        if negated {
-            if args.len() != 1 {
-                return Err("fail takes one check".into());
-            }
-            command = &args[0];
-            let (h, a) = command.call()?;
-            if h != "check" {
+    fn check(&mut self, f: &Form, negated: bool) -> Result<String, String> {
+        let (head, args) = f.call()?;
+        if head == "fail" {
+            if args.len() != 1 || args[0].call()?.0 != "check" {
                 return Err("slotted fail takes a check".into());
             }
-            args = a;
+            return self.check(&args[0], !negated);
         }
-        if args.len() != 1 {
-            return Ok(f.render());
+        if args.is_empty() {
+            return Ok(if negated { "(fail (check))" } else { "(check)" }.into());
         }
-        let (kind, terms) = args[0].call()?;
-        let (mut facts, negative) = match (kind, query::Comparison::parse(kind)) {
-            (_, Some(comparison)) => {
-                if terms.len() != 2 {
-                    return Err("equality requires two terms".into());
-                }
-                let (sort, ts) = self.common(terms)?;
-                let Claim {
-                    mut facts,
-                    invocations: matched,
-                } = self.matches(&ts, &sort)?;
-                let (a, b) = (&matched[0], &matched[1]);
-                // Negate existence of an equal invocation, not individual
-                // matches: another representative may still prove equality.
-                let positive = query::Comparison {
-                    negated: false,
-                    ..comparison
+        if let [fact] = args
+            && let (kind @ ("__internal-holds" | "__internal-not-holds"), values) = fact.call()?
+        {
+            if values.len() != 2 {
+                return Err("holds expects a term and constructor name".into());
+            }
+            let ctor = values[1].atom()?;
+            let op = self
+                .state
+                .lang
+                .constructors
+                .get(ctor)
+                .ok_or("unknown constructor in holds")?
+                .clone();
+            let term = self.term(&values[0], false, None)?;
+            if self.state.lang.sort_of(&term).is_some_and(|s| s != op.sort) {
+                return Err("holds compares different carrier sorts".into());
+            }
+            let mut names = Pattern::new(args).names;
+            let mut pattern = vec![Form::Atom(ctor.into())];
+            for column in op.columns {
+                let stem = if column == Column::Binder {
+                    "$_bound"
+                } else {
+                    "_child"
                 };
-                facts.extend(positive.classes(&a.0, &b.0));
-                facts.extend(positive.invocations(
-                    &self.state.lang.symbols(&sort).group,
-                    (&a.0, &a.1),
-                    (&b.0, &b.1),
-                ));
-                (facts, comparison.negated)
+                pattern.push(Form::Atom(names.fresh(stem)));
             }
-            ("free" | "not-free", _) => {
-                if terms.len() < 2 {
-                    return Err(format!("{kind} expects a slot and at least one term"));
-                }
-                let name = self.state.lang.slot_names.intern(terms[0].atom()?)?;
-                let slot = self.state.lang.slot_names.id(&name).to_string();
-                let (sort, ts) = self.common(&terms[1..])?;
-                let Claim {
-                    mut facts,
-                    invocations,
-                } = self.matches(&ts, &sort)?;
-                let maps = invocations.into_iter().map(|(_, m)| m).collect::<Vec<_>>();
-                facts.push(query::free_condition(true, &slot, &maps));
-                (facts, kind == "not-free")
-            }
-            ("free-names-are" | "__internal-holds" | "__internal-not-holds", _) => {
-                let t = self.term(terms.first().ok_or("claim requires a term")?, true, None)?;
-                let sort = self.sort_of(&t)?;
-                let Claim {
-                    mut facts,
-                    invocations: matched,
-                } = self.matches(&[t], &sort)?;
-                let (c, m) = &matched[0];
-                if kind == "free-names-are" {
-                    let mut slots = Vec::new();
-                    for s in &terms[1..] {
-                        let name = self.state.lang.slot_names.intern(s.atom()?)?;
-                        let s = self.state.lang.slot_names.id(&name).to_string();
-                        slots.push(s);
-                    }
-                    facts.push(query::free_names_condition(m, &slots));
-                } else {
-                    if terms.len() != 2 {
-                        return Err("holds expects a term and constructor name".into());
-                    }
-                    let name = terms[1].atom()?;
-                    let op = self
-                        .state
-                        .lang
-                        .constructors
-                        .get(name)
-                        .ok_or_else(|| format!("unknown constructor {name}"))?;
-                    if op.sort != sort {
-                        return Err("holds compares different carrier sorts".into());
-                    }
-                    let n = op
-                        .columns
-                        .iter()
-                        .map(|c| {
-                            if matches!(c, Column::Payload(_)) {
-                                1
-                            } else {
-                                2
-                            }
-                        })
-                        .sum();
-                    let row = call(name, (0..n).map(|i| format!("_hc{i}")));
-                    let table = &self.state.lang.symbols(&sort).renames;
-                    facts.extend([
-                        format!("({table} {c} _hm1 _hl)"),
-                        format!("({table} _hn _hm2 _hl)"),
-                        format!("(= _hn {row})"),
-                    ]);
-                }
-                (facts, kind == "__internal-not-holds")
-            }
-            _ => {
-                return Ok(if negated {
-                    format!("(fail {})", command.render())
-                } else {
-                    command.render()
-                });
-            }
-        };
-        let check = call("check", facts.drain(..));
-        Ok(if negative != negated {
-            format!("(fail {check})")
-        } else {
-            check
-        })
-    }
-}
-
-fn rename_binders(
-    lang: &Language,
-    t: &mut Term,
-    outer: &BTreeMap<String, String>,
-    used: &mut BTreeSet<String>,
-    counter: &mut usize,
-) {
-    match t {
-        Term::Slot(s) => {
-            if let Some(n) = outer.get(s) {
-                *s = n.clone();
-            }
+            let check = Form::List(vec![
+                Form::Atom("check".into()),
+                Form::List(vec![
+                    Form::Atom("=".into()),
+                    values[0].clone(),
+                    Form::List(pattern),
+                ]),
+            ]);
+            return self.check(&check, negated != (kind == "__internal-not-holds"));
         }
-        Term::Node(n, args) => {
-            let op = &lang.constructors[n];
-            let mut inner = outer.clone();
-            for (col, arg) in op.columns.iter().zip(args.iter_mut()) {
-                if *col == Column::Binder
-                    && let Term::Slot(s) = arg
-                {
-                    let fresh = loop {
-                        *counter += 1;
-                        let n = format!("$_b{counter}");
-                        if used.insert(n.clone()) {
-                            break n;
-                        }
-                    };
-                    inner.insert(s.clone(), fresh.clone());
-                    *s = fresh;
-                }
-            }
-            let mut child = 0;
-            for (col, arg) in op.columns.iter().zip(args) {
-                match col {
-                    Column::Child => {
-                        rename_binders(
-                            lang,
-                            arg,
-                            if Some(child) == op.covered() {
-                                &inner
-                            } else {
-                                outer
-                            },
-                            used,
-                            counter,
-                        );
-                        child += 1;
-                    }
-                    Column::Binder => child += 1,
-                    _ => {}
-                }
-            }
+        let mut p = Pattern::new(args);
+        for fact in args {
+            self.pattern_fact(&mut p, fact)?;
         }
-        _ => {}
+        self.finish_pattern(&mut p)?;
+        let anchor = p.atoms.first().map(|a| a.root.as_str()).or_else(|| {
+            p.conditions
+                .values
+                .first()
+                .map(|(root, _, _)| root.as_str())
+        });
+        let q = query::compile(
+            &self.state.lang,
+            &p.atoms,
+            &p.conditions,
+            "_check_",
+            true,
+            anchor,
+            self.options.no_aliasing,
+        )?;
+        Ok(super::check::emit(&q, f, !negated))
     }
 }
 
