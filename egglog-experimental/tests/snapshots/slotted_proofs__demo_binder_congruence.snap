@@ -10,16 +10,21 @@ Source:
 (check (= input (Wrap (Lam $b (G $b)))))
 
 Proof:
-#0: (F $a) = (F $a)
-    by fiat
-#1: (F $a) = (G $a)
-    by rule "f-to-g" [x := $a] from #0
-#2: (Lam $a (F $a)) = (Lam $a (F $a))
-    by fiat
-#3: (Lam $a (F $a)) = (Lam $a (G $a))
-    by congr #2 at 1 with #1
-#4: (Wrap (Lam $a (F $a))) = (Wrap (Lam $a (F $a)))
-    by fiat
-#5: (Wrap (Lam $a (F $a))) = (Wrap (Lam $a (G $a)))
-    by congr #4 at 0 with #3
-claim: (Wrap (Lam $a (F $a))) = {a->b, b->a}·(Wrap (Lam $b (G $b)))
+(let t0 (Lam $a (F $a)))
+(let t1 (Wrap t0))
+(let t2 (Lam $a (G $a)))
+(Claim
+  (= t1 (rename (renaming ($a $b) ($b $a)) (Wrap (Lam $b (G $b)))))
+  (Congr
+    (= t1 (Wrap t2))
+    (Fiat (= t1 t1))
+    (Congr
+      (= t0 t2)
+      (Fiat (= t0 t0))
+      (Rule
+        (= (F $a) (G $a))
+        (name "f-to-g")
+        (premises (Fiat (= (F $a) (F $a))))
+        (substitution (x $a)))
+      1)
+    0))

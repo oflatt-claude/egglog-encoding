@@ -9,6 +9,6 @@ Source:
 (check (= input (Lam $b $b)))
 
 Proof:
-#0: (Lam $a $a) = (Lam $a $a)
-    by fiat
-claim: (Lam $a $a) = {a->b, b->a}·(Lam $b $b)
+(Claim
+  (= (Lam $a $a) (rename (renaming ($a $b) ($b $a)) (Lam $b $b)))
+  (Fiat (= (Lam $a $a) (Lam $a $a))))
