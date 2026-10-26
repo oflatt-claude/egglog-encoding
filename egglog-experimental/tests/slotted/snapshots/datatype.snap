@@ -808,6 +808,7 @@ input_file: egglog-experimental/tests/slotted/datatype.egg
 (constructor Same () M)
 (set (SlottedNodeLayout "Same" 0) ())
 (rule ((= _e1 (Same))) ((set (FreeVars_0 _e1) (map-empty))) :ruleset slotted)
+(run-schedule (seq (saturate (seq (saturate (seq (saturate (run slotted)) (run slotted-empty) (run slotted-restore))) (saturate (run slotted-migrate)) (saturate (seq (saturate (run slotted-group)) (run slotted-shrink) (run slotted-restore))) (run slotted-shape))) (saturate (run slotted-read))))
 (push)
 (relation _slotted_match_0 (Frames i64 M M M))
 (rule ((= cls_p (Prev e0_t1 cls_t1))

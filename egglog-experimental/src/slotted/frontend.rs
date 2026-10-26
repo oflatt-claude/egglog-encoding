@@ -49,6 +49,7 @@ impl Pattern {
 struct State {
     lang: Language,
     initialized: bool,
+    dirty: bool,
     rules: usize,
     extracts: usize,
     reserved: BTreeSet<String>,
@@ -60,6 +61,7 @@ impl Default for State {
         Self {
             lang: Language::default(),
             initialized: false,
+            dirty: false,
             rules: 0,
             extracts: 0,
             reserved: [
@@ -138,6 +140,7 @@ impl Compiler {
         for (f, span) in forms {
             declarations(f, &mut sorts, &mut ctors).map_err(|e| ParseError(span.clone(), e))?;
         }
+        self.state.dirty |= !sorts.is_empty() || !ctors.is_empty();
         let fallback = forms
             .first()
             .map(|(_, s)| s.clone())
@@ -188,13 +191,46 @@ impl Compiler {
             ));
         }
         for (f, span) in forms {
-            out.push(self.command(f).map_err(|e| ParseError(span.clone(), e))?);
+            let head = f.call().map_err(|e| ParseError(span.clone(), e))?.0;
+            if !matches!(
+                head,
+                "sort"
+                    | "constructor"
+                    | "datatype"
+                    | "datatype*"
+                    | "let"
+                    | "union"
+                    | "rewrite"
+                    | "run"
+                    | "extract"
+            ) {
+                self.maintain(&mut out);
+            }
+            let command = self.command(f).map_err(|e| ParseError(span.clone(), e))?;
+            match head {
+                "run" | "extract" => self.state.dirty = false,
+                "let" | "union" if !command.is_empty() => self.state.dirty = true,
+                "sort" | "constructor" | "datatype" | "datatype*" | "rewrite" | "let" | "check"
+                | "fail" | "print-size" | "print-function" | "slotted-export" => {}
+                _ => self.state.dirty = self.state.initialized,
+            }
+            out.push(command);
         }
+        self.maintain(&mut out);
         Ok(out
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("\n"))
+    }
+
+    /// Batch insertions, but finish invariant maintenance before an observation
+    /// or returning a compiled input to the caller.
+    fn maintain(&mut self, out: &mut Vec<String>) {
+        if self.state.dirty {
+            out.push(maintenance::schedule(0, false));
+            self.state.dirty = false;
+        }
     }
 
     fn emit(&mut self, out: &mut Vec<String>, source: String, source_name: Option<&str>) {
@@ -379,15 +415,26 @@ impl Compiler {
             }
             "check" | "fail" => self.check(f, false),
             "extract" => {
-                let t = self.term(args.first().ok_or("extract expects a term")?, true, None)?;
+                if args.len() != 1 {
+                    return Err("slotted extract expects one term".into());
+                }
+                let t = self.term(&args[0], true, None)?;
                 let sort = self.sort_of(&t)?;
                 self.state.extracts += 1;
                 let i = self.state.extracts;
-                let sy = self.state.lang.symbols(&sort);
+                let names = self
+                    .state
+                    .lang
+                    .slot_names
+                    .entries()
+                    .map(|(name, id)| format!("(slot {id} {})", syntax::quote(name)))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 Ok(format!(
-                    "(function _leader{i} () {sort} :merge (ordering-min old new))\n(ruleset _extract{i})\n(rule (({} {} _m _l)) ((set (_leader{i}) _l)) :ruleset _extract{i})\n(run-schedule (saturate (run _extract{i})))\n(extract (_leader{i}))",
-                    sy.renames,
-                    self.state.lang.encode_top(&t, &sort)
+                    "(let $$slotted_extract{i} {})\n{}\n(slotted-extract $$slotted_extract{i} {} {names})",
+                    self.state.lang.encode(&t, &sort),
+                    maintenance::schedule(0, false),
+                    self.state.lang.edge(&t),
                 ))
             }
             "rule" | "birewrite" => Err(format!(

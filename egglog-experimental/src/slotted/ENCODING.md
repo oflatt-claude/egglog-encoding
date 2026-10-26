@@ -1146,9 +1146,9 @@ reads one per `(Idx refined_len choice)` with `vec-get`.
 `slotted-refine` generates every required index before any match is applied, so
 all alternatives act within the same user round. This is the reference's `final_refine`.
 Checks use the same candidate query and guards, but iterate the refinement vector
-directly through the experimental runtime's `slotted-check` command. This avoids
-inserting index rows or running maintenance merely to answer a query. The source
-language has one `check` form.
+directly through the experimental runtime's `slotted-check` command. The compiler
+finishes pending maintenance before queries and at input boundaries; answering a
+query itself inserts no terms or index rows. The source language has one `check` form.
 
 **C9. Conditions are read after refinement.** `free`, `not-free`, and
 `free-names-are` inspect renaming images from the refined frame. A matched binder's slot may be read as any name, a free variable's
@@ -1428,6 +1428,7 @@ transformation and evaluation in one process.
 | `slotted/test_program.py` | Rust CLI adapter and observer rules for differential tests |
 | `egglog-experimental/src/slotted/runtime/` | matching frames, substitution, renaming and group algorithms, and their primitive registration |
 | `egglog-experimental/src/slotted/export.rs` | native logical graph export, raw row counts, and encoding invariant validation |
+| `egglog-experimental/src/slotted/extract.rs` | source-tree extraction, slot names, and binder reconstruction |
 | `slotted/benchmarks/` | array generator, SDQL artifact inputs, and logic case studies |
 | `egglog-experimental/tests/slotted/` | regression fixtures and compiler snapshots |
 | `slotted/checks/` | language, frontend, maintenance, and evaluation regression checks |

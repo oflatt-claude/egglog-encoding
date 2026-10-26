@@ -171,3 +171,20 @@ fn checks_do_not_insert_terms_or_run_user_rules() {
     graph.parse_and_run_program(None, &checks).unwrap();
     assert_eq!(before, graph.num_tuples());
 }
+
+#[test]
+fn maintenance_is_automatic_without_applying_user_rewrites() {
+    let mut compiler = Compiler::default();
+    let mut graph = new_egraph();
+    for source in [
+        format!("{LANGUAGE} (rewrite (F x y) (G y x)) (let seed (F $a $b))"),
+        "(check (F $x $y)) (fail (check (G $x $y)))".into(),
+        "(union (N 1) (N 2)) (check (= (N 1) (N 2)))".into(),
+        "(push) (let scoped (Lam $x $x)) (check (free-names-are scoped)) (pop)".into(),
+        "(check (F $x $y)) (fail (check (G $x $y))) (run 1) (check (G $x $y))".into(),
+    ] {
+        let encoded = compiler.compile(None, &source).unwrap();
+        graph.parse_and_run_program(None, &encoded).unwrap();
+        egglog_experimental::slotted::export::export(&graph).unwrap();
+    }
+}

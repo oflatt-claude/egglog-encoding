@@ -19,10 +19,10 @@ use egraph_isomorphism::{
 };
 use serde::Serialize;
 
-use super::model::{Column, Constructor, Symbols};
-
-mod layout;
-use layout::Layouts;
+use super::{
+    layout::Layouts,
+    model::{Column, Constructor, Symbols},
+};
 
 type Map = BTreeMap<i64, i64>;
 

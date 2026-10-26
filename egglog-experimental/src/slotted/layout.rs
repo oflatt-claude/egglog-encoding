@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use egglog::{EGraph, Value, ast::FunctionSubtype, sort::S};
 
-use super::super::model::{Column, Constructor, Symbols};
+use super::model::{Column, Constructor, Symbols};
 
 pub(super) struct Layouts {
     pub carriers: Vec<Symbols>,

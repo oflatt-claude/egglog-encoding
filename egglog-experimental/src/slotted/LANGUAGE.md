@@ -28,8 +28,7 @@ Existing egglog forms have these slotted semantics:
 | [`union`](#union), [`=` and `!=`](#equality) | Equality respects bound-variable alpha-equivalence and known symmetries while preserving free-variable identities |
 | [`rewrite`](#rewrite) | Pattern slots are rule-local; distinct names match distinct slots, and RHS-only slots are implicitly fresh |
 | [`check`](#check-and-fail) | Facts form an existential query, with the same local slots and matching semantics as rewrite queries |
-| [`run`](#run) | Slotted maintenance surrounds each round of user rewrites |
-| [`extract`](#extract) | Returns an encoded tree from the class leader, including renamings and binder markers |
+| [`extract`](#extract) | Returns a source term with named slots, preserving free names and avoiding capture |
 
 Pattern variables, `:name`, and `:when` use egglog's existing syntax. The
 [multipattern](#multipatterns) section describes how constructor patterns in
@@ -142,13 +141,16 @@ Bound names may change under alpha-equivalence; free names remain significant.
 (let id (Lam $a $a))
 (let free_a0 $a0)
 (let constant (Lam $a free_a0))
-(run 0)
 (check (= id (Lam $renamed $renamed)))
 (check (!= id constant))
 (check (free-names-are constant free_a0))
 ```
 
 ## Commands
+
+Slotted invariants are maintained automatically before queries and extraction,
+between rewrite iterations, and at the end of each input. `run` controls user
+rewrites.
 
 ### `let`
 
@@ -314,10 +316,8 @@ available. Checks use the same aliasing restriction.
 (run N)
 ```
 
-Performs `N` rounds of user rewrites. Each round matches against a snapshot
-before applying actions, with slotted maintenance saturated around the round.
-`N` must be a nonnegative integer. `(run 0)` performs maintenance without
-applying user rewrites. `run-schedule` and `run-report` are unsupported.
+Performs `N` rounds of user rewrites. `N` must be a nonnegative integer.
+`run-schedule` and `run-report` are unsupported.
 
 ### `check` and `fail`
 
@@ -329,15 +329,13 @@ applying user rewrites. `run-schedule` and `run-report` are unsupported.
 `check` succeeds when one match satisfies all its facts. It uses the same
 patterns, shared variables, slot constraints, and predicates as rewrite
 queries. It does not add terms or apply user rewrites. `fail` asserts that
-there is no matching assignment. Run maintenance with `(run 0)` after inserting
-terms before querying them, or use `(run N)` to apply rewrites as well.
+there is no matching assignment.
 
 ```slotted
 (datatype Expr (Pair Expr Expr))
 (let a $a)
 (let b $b)
 (let pair (Pair a b))
-(run 0)
 (check (= pair (Pair $x body)) (not-free $x body))
 (check (= a $local))
 (check (= b $local))
@@ -371,10 +369,28 @@ a matching `push` is an error.
 (extract term)
 ```
 
-Returns an encoded tree from the term's class leader. The output contains
-renamings and binder-marker children and uses the leader's slot frame, which
-may differ from the requested term's frame. The cost is egglog's encoded-tree
-cost. Conversion back to slotted source syntax is unsupported.
+Returns a minimum-size tree using the source constructors and `$name` slots.
+Free names are preserved. Binders and other slots private to the chosen
+representative receive fresh names such as `$0` and `$1`.
+
+```slotted
+(datatype Expr (Lam Expr Expr :binder 0) (Pair Expr Expr))
+(let term (Lam $bound (Pair $bound $free)))
+(extract term)
+```
+
+Output:
+
+```text
+(Lam $0 (Pair $0 $free))
+```
+
+The result can be read back as a slotted term. In the Rust output, slots use
+[`egglog::Term::Var`] nodes in the [`egglog::TermDag`].
+
+Tree size counts constructor and variable occurrences; payloads and binder
+declarations contribute no additional cost. A missing finite tree is an error.
+Only the single-term form is supported; a variant count is rejected.
 
 ## Query predicates
 
@@ -398,7 +414,6 @@ bare slots are equal modulo renaming.
 (let id (Lam $bound $bound))
 (let p (Lam $bound c))
 (let q (Lam $bound d))
-(run 0)
 (check (= id (Lam $other $other)))
 (check (renaming-= p q))
 (check (!= p q))
@@ -447,7 +462,6 @@ least one term. `free-names-are` takes one term and zero or more slot names.
 (let k (Lam $bound $c))
 (let id (Lam $bound $bound))
 (let m (Mult $a (Null)))
-(run 0)
 (check (free-names-are k c))
 (check (free-names-are id))
 (check (free a m))
@@ -466,7 +480,6 @@ let mut compiler = Compiler::default();
 let program = compiler.compile(None, r#"
     (datatype Expr (Lam Expr Expr :binder 0))
     (let id (Lam $a $a))
-    (run 0)
     (check (= id (Lam $b $b)))
 "#)?;
 let mut egraph = new_egraph();

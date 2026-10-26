@@ -3,7 +3,9 @@
 
 mod check;
 pub mod export;
+mod extract;
 mod frontend;
+mod layout;
 mod maintenance;
 mod model;
 mod query;
@@ -28,6 +30,12 @@ pub fn new_egraph() -> egglog::EGraph {
 /// extended schedule interpreter disabled.
 pub fn register(graph: &mut egglog::EGraph) {
     runtime::register(graph);
+    graph
+        .add_command(
+            "slotted-extract".into(),
+            std::sync::Arc::new(extract::ExtractCommand),
+        )
+        .unwrap();
     graph
         .add_command(
             "slotted-check".into(),
