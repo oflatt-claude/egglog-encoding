@@ -2687,7 +2687,8 @@ impl<'a> ProofInstrumentor<'a> {
             | ResolvedNCommand::UnstableCombinedRuleset(..)
             | ResolvedNCommand::PrintOverallStatistics(..)
             | ResolvedNCommand::PrintFunction(..)
-            | ResolvedNCommand::ProveExists(..) => {
+            | ResolvedNCommand::ProveExists(..)
+            | ResolvedNCommand::ProveExtract(..) => {
                 res.push(command.to_command().make_unresolved());
             }
 

@@ -62,6 +62,7 @@ const RESERVED_KEYWORDS: &[&str] = &[
     "run-schedule",
     "check",
     "extract",
+    "prove-extract",
     "push",
     "pop",
     "print-function",
@@ -893,6 +894,19 @@ impl Parser {
                     self.parse_expr(v)?,
                 )],
                 _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
+            },
+            "prove-extract" => match tail {
+                [e] => vec![Command::ProveExtract(
+                    span.clone(),
+                    self.parse_expr(e)?,
+                    Expr::Lit(span, Literal::Int(0)),
+                )],
+                [e, v] => vec![Command::ProveExtract(
+                    span,
+                    self.parse_expr(e)?,
+                    self.parse_expr(v)?,
+                )],
+                _ => return error!(span, "usage: (prove-extract <expr> <number of variants>?)"),
             },
             "check" => vec![Command::Check(
                 span,

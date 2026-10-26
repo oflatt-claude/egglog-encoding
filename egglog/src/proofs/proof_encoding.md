@@ -916,3 +916,43 @@ break the rule-head check for the container's proof. Each element's
 `@UF_<E>`, so the standard rebuild and path compression canonicalize the natural
 like any other stale term. That edge's proof column is the element's connector,
 which is therefore one of the few connectors a rule head does write a row for.
+
+
+## Certifying extraction
+
+`(prove-extract e)` looks up `e`, extracts its cheapest representative, and
+returns both the extraction and a proof of equality to `e`. An optional positive
+variant count requests several extractions and a proof for each. Lookup never
+inserts either endpoint; an absent term reports `Could not find term … in the
+e-graph`. Ordinary `extract` retains its existing evaluation behavior.
+
+The same certification is available independently of the extractor through
+[`EGraph::prove_extracted_terms`](crate::EGraph::prove_extracted_terms): supply a
+`TermDag`, an input root, result roots, and their sort. A single proof store
+shares dependencies across all results. Primitive expressions have their
+validated, evaluated meaning in proof endpoints, and globals retain the term
+in their original source definition.
+
+The passes are:
+
+1. [`TypedTermDag`](crate::TypedTermDag) resolves ground syntax bottom-up using
+   the existing type constraints. A shared syntactic node can have several
+   typings, selected by its parents or an expected root sort. Unresolved
+   ambiguity is an error. Typing performs no evaluation or table mutation.
+2. Read-only lookup evaluates literals and validated read primitives and reads
+   constructor/function views with canonical child values as keys. It collects
+   the existing row proofs and union-find connections.
+3. Materialization shares those proofs in one store. Their endpoints and
+   projected subterms supply existence witnesses, including containers nested
+   inside parent rows and historical container forms in rebuild dependencies.
+   A container root can also obtain its witness from another row containing it,
+   or from an actual source action that already established it.
+4. Composition proves both `e = leader` and `t = leader`, then concludes
+   `e = t` with symmetry and transitivity. Container steps use the existing
+   `Proj`, `Congr`, and `ContainerNormalize` rules. No new proof rule or checker
+   behavior is needed.
+
+Only propositions needed for the final certificates are constructed. For
+example, evaluating `vec-length` to a literal does not require asserting the
+existence of a temporary vector expression. Missing row lookups remain errors,
+including for constructor arguments used during primitive evaluation.

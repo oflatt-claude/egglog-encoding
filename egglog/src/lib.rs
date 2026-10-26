@@ -16,6 +16,7 @@ mod serialize;
 pub mod sort;
 mod termdag;
 mod typechecking;
+mod typed_termdag;
 pub mod util;
 pub use command_macro::{CommandMacro, CommandMacroRegistry};
 
@@ -80,6 +81,7 @@ pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
+pub use typed_termdag::{GroundTypeError, TypedTerm, TypedTermDag, TypedTermId, TypedTermNode};
 use util::*;
 
 use crate::ast::desugar::desugar_command;
@@ -178,6 +180,11 @@ pub enum CommandOutput {
         proof_store: ProofStore,
         proof_id: ProofId,
     },
+    /// Equality proofs for extraction results, sharing one proof store.
+    ProveExtract {
+        proof_store: ProofStore,
+        proof_ids: Vec<ProofId>,
+    },
     /// The report from all runs
     OverallStatistics(RunReport),
     /// A printed function and all its values
@@ -203,7 +210,9 @@ impl CommandOutput {
         outputs
             .iter()
             .filter_map(|output| match output {
-                CommandOutput::ProveExists { .. } => Some(output.to_string()),
+                CommandOutput::ProveExists { .. } | CommandOutput::ProveExtract { .. } => {
+                    Some(output.to_string())
+                }
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -226,7 +235,11 @@ impl CommandOutput {
                     Some(format!("(extraction-costs {cost})\n"))
                 }
                 CommandOutput::ExtractVariants(..) => None,
-                CommandOutput::ProveExists { .. } if !include_proofs => None,
+                CommandOutput::ProveExists { .. } | CommandOutput::ProveExtract { .. }
+                    if !include_proofs =>
+                {
+                    None
+                }
                 other => Some(other.to_string()),
             })
             .collect::<Vec<_>>()
@@ -269,6 +282,15 @@ impl std::fmt::Display for CommandOutput {
                 proof_store,
                 proof_id,
             } => writeln!(f, "{}", proof_store.proof_to_string(*proof_id)),
+            CommandOutput::ProveExtract {
+                proof_store,
+                proof_ids,
+            } => {
+                for proof in proof_ids {
+                    writeln!(f, "{}", proof_store.proof_to_string(*proof))?;
+                }
+                Ok(())
+            }
             CommandOutput::OverallStatistics(run_report) => {
                 write!(f, "Overall statistics:\n{run_report}")
             }
@@ -2286,6 +2308,9 @@ impl EGraph {
             }
             ResolvedNCommand::LetBegin(..) => {
                 unreachable!("LetBegin is removed by remove_globals")
+            }
+            ResolvedNCommand::ProveExtract(_, expr, variants) => {
+                return self.run_prove_extract(&expr, &variants);
             }
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();

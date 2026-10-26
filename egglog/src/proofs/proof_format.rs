@@ -133,12 +133,43 @@ pub(crate) fn proof_store_from_term(
     container_normalizers: HashMap<String, PrimitiveValidator>,
     prim_value_constructors: HashSet<String>,
 ) -> (ProofStore, ProofId) {
-    let (raw_store, raw_proof_id) =
-        RawProofStore::from_extracted(encoding_names, term_dag, proof_term);
+    let (store, roots) = proof_store_from_terms(
+        encoding_names,
+        term_dag,
+        &[proof_term],
+        prog,
+        container_normalizers,
+        prim_value_constructors,
+    );
+    (store, roots[0])
+}
+
+/// Materialize several roots into one store, sharing their proof dependencies.
+pub(super) fn proof_store_from_terms(
+    encoding_names: &EncodingNames,
+    term_dag: TermDag,
+    proof_terms: &[TermId],
+    prog: &Vec<ResolvedNCommand>,
+    container_normalizers: HashMap<String, PrimitiveValidator>,
+    prim_value_constructors: HashSet<String>,
+) -> (ProofStore, Vec<ProofId>) {
+    let mut raw_store = RawProofStore {
+        term_dag,
+        names: encoding_names.clone(),
+        store: IndexSet::default(),
+        term_to_proof: HashMap::default(),
+    };
+    let roots = proof_terms
+        .iter()
+        .map(|&term| {
+            raw_store.parse_nested_first(term);
+            raw_store.parse_proof(term)
+        })
+        .collect::<Vec<_>>();
     ProofStore::from_raw(
         prog,
         raw_store,
-        raw_proof_id,
+        &roots,
         container_normalizers,
         prim_value_constructors,
     )
@@ -427,6 +458,7 @@ struct ProofShape {
 
 impl RawProofStore {
     /// After extracting a proof from the e-graph, convert it to a [`RawProof`].
+    #[cfg(test)]
     pub(crate) fn from_extracted(
         encoding_names: &EncodingNames,
         term_dag: TermDag,
@@ -455,7 +487,7 @@ impl RawProofStore {
                 self.parse_proof(id);
                 continue;
             }
-            if !seen.insert(id) {
+            if self.term_to_proof.contains_key(&id) || !seen.insert(id) {
                 continue;
             }
             stack.push((id, true));
@@ -959,10 +991,10 @@ impl ProofStore {
     fn from_raw(
         prog: &Vec<ResolvedNCommand>,
         raw_store: RawProofStore,
-        raw_proof_id: RawProofId,
+        raw_proof_ids: &[RawProofId],
         container_normalizers: HashMap<String, PrimitiveValidator>,
         prim_value_constructors: HashSet<String>,
-    ) -> (ProofStore, ProofId) {
+    ) -> (ProofStore, Vec<ProofId>) {
         let mut store = ProofStore::new(
             raw_store.term_dag.clone(),
             container_normalizers,
@@ -976,8 +1008,11 @@ impl ProofStore {
         let globals = gather_globals(prog, &mut store.term_dag)
             .unwrap_or_else(|_| panic!("failed to gather globals from program"));
 
-        let proof_id = store.convert_raw_proof(prog, &globals, &raw_store, raw_proof_id);
-        (store, proof_id)
+        let roots = raw_proof_ids
+            .iter()
+            .map(|&root| store.convert_raw_proof(prog, &globals, &raw_store, root))
+            .collect();
+        (store, roots)
     }
 
     /// Reflexivize a (possibly non-reflexive) proof for use where the checker
@@ -1657,7 +1692,7 @@ impl ProofStore {
 
     /// `proof` followed by the canonicalization of its right-hand side, or
     /// `proof` unchanged when that container is already canonical.
-    fn normalize_step(&mut self, proof: ProofId) -> ProofId {
+    pub(super) fn normalize_step(&mut self, proof: ProofId) -> ProofId {
         let lhs = self.id_to_proof[proof].lhs();
         let rhs = self.id_to_proof[proof].rhs();
         let normalized = self.normalize_container(rhs);
@@ -1704,7 +1739,7 @@ impl ProofStore {
 
     /// Construct a positional projection, sharing it with every projection
     /// from the same proof and child index.
-    fn push_projection(&mut self, proof: ProofId, child_index: usize) -> ProofId {
+    pub(super) fn push_projection(&mut self, proof: ProofId, child_index: usize) -> ProofId {
         let child = self.term_child(self.id_to_proof[proof].rhs(), child_index);
         self.push_shared_proof(
             SynthKey::Proj(proof, child_index),
@@ -2083,7 +2118,7 @@ mod tests {
         raw.term_dag.app(head, args)
     }
 
-    /// [`RawProofStore::from_extracted`]'s parse of one packed row.
+    /// the raw proof parser's parse of one packed row.
     fn parse(raw: &mut RawProofStore, term: TermId) -> RawProofId {
         raw.parse_nested_first(term);
         raw.parse_proof(term)
