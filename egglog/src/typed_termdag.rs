@@ -12,75 +12,42 @@ use crate::sort::literal_sort;
 use crate::util::{HashMap, HashSet, IndexMap};
 use crate::{
     ArcSort, Atom, AtomTerm, Context, ResolvedCall, Term, TermDag, TermId, TypeError, TypeInfo,
+    TypedTerm, TypedTermDag,
 };
-use egglog_ast::{generic_ast::Literal, span::Span};
+use egglog_ast::span::Span;
 
-/// An index into one [`TypedTermDag`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TypedTermId(usize);
-
-/// Ground syntax with each application resolved to a concrete signature.
-#[derive(Clone, Debug)]
-pub enum TypedTerm {
-    Lit(Literal),
-    App(ResolvedCall, Vec<TypedTermId>),
-}
-
-/// One typing of a syntactic term. Different nodes may have the same
-/// [`TermId`], but different sorts or application signatures.
-#[derive(Clone, Debug)]
-pub struct TypedTermNode {
-    term: TermId,
-    expression: TypedTerm,
-}
-
-impl TypedTermNode {
-    pub fn term(&self) -> TermId {
-        self.term
-    }
-
-    pub fn expression(&self) -> &TypedTerm {
-        &self.expression
-    }
-
-    pub fn sort(&self) -> ArcSort {
-        match &self.expression {
-            TypedTerm::Lit(lit) => literal_sort(lit),
-            TypedTerm::App(call, _) => call.output().clone(),
-        }
-    }
-}
-
-/// A ground term DAG whose applications have been typechecked in one scope
-/// and primitive execution context. Nodes are stored in children-first order.
+/// The result of ground typechecking: a resolved DAG, selected roots, and the
+/// source term corresponding to each resolved node. Several resolved nodes can
+/// refer to the same source term when context selects different typings.
 ///
-/// Typechecking neither evaluates primitives nor reads or writes function
-/// tables. It establishes types, not the existence of the terms in an e-graph.
+/// Typechecking neither evaluates primitives nor reads or writes function tables.
 #[derive(Clone, Debug)]
-pub struct TypedTermDag {
+pub struct GroundTyping {
     terms: TermDag,
-    nodes: Vec<TypedTermNode>,
-    roots: Vec<TypedTermId>,
+    dag: TypedTermDag,
+    source_terms: Vec<TermId>,
+    roots: Vec<TermId>,
     context: Context,
 }
 
-impl TypedTermDag {
+impl TypeInfo {
     /// Typecheck the reachable ground terms, optionally constraining each
     /// root's sort. The same syntax may be requested at several root sorts.
     /// Unreachable terms do not participate in inference.
-    pub fn new(
-        types: &TypeInfo,
+    pub fn typecheck_term_dag(
+        &self,
         terms: &TermDag,
         roots: &[(TermId, Option<ArcSort>)],
         context: Context,
-    ) -> Result<Self, GroundTypeError> {
+    ) -> Result<GroundTyping, GroundTypeError> {
         let order = reachable_terms(terms, roots.iter().map(|(term, _)| *term))?;
         let mut inference = Inference {
-            types,
+            types: self,
             terms,
             context,
             candidates: HashMap::default(),
-            nodes: vec![],
+            dag: TypedTermDag::default(),
+            source_terms: vec![],
         };
         for term in order {
             let candidates = inference.infer(term)?;
@@ -116,56 +83,57 @@ impl TypedTermDag {
         let mut pending = selected.clone();
         while let Some(id) = pending.pop() {
             if reachable.insert(id)
-                && let TypedTerm::App(_, children) = &inference.nodes[id.0].expression
+                && let TypedTerm::App(_, children) = inference.dag.get(id)
             {
                 pending.extend(children.iter().copied());
             }
         }
         let mut remap = HashMap::default();
-        let mut nodes = Vec::with_capacity(reachable.len());
-        for (index, mut node) in inference.nodes.into_iter().enumerate() {
-            let old = TypedTermId(index);
+        let mut dag = TypedTermDag::default();
+        let mut source_terms = Vec::with_capacity(reachable.len());
+        for (old, expression) in inference.dag.nodes() {
             if !reachable.contains(&old) {
                 continue;
             }
-            if let TypedTerm::App(_, children) = &mut node.expression {
+            let mut expression = expression.clone();
+            if let TypedTerm::App(_, children) = &mut expression {
                 for child in children {
                     *child = remap[child];
                 }
             }
-            remap.insert(old, TypedTermId(nodes.len()));
-            nodes.push(node);
+            remap.insert(old, dag.add_node(&expression));
+            source_terms.push(inference.source_terms[old]);
         }
-        Ok(Self {
+        Ok(GroundTyping {
             terms: terms.clone(),
-            nodes,
+            dag,
+            source_terms,
             roots: selected.into_iter().map(|id| remap[&id]).collect(),
             context,
         })
     }
+}
 
+impl GroundTyping {
+    /// The original syntax, whose IDs appear in [`Self::source_term`].
     pub fn terms(&self) -> &TermDag {
         &self.terms
     }
 
-    pub fn get(&self, id: TypedTermId) -> &TypedTermNode {
-        &self.nodes[id.0]
+    pub fn dag(&self) -> &TypedTermDag {
+        &self.dag
     }
 
-    pub fn roots(&self) -> &[TypedTermId] {
+    pub fn source_term(&self, id: TermId) -> TermId {
+        self.source_terms[id]
+    }
+
+    pub fn roots(&self) -> &[TermId] {
         &self.roots
     }
 
     pub fn context(&self) -> Context {
         self.context
-    }
-
-    /// Visit nodes in children-first order.
-    pub fn nodes(&self) -> impl ExactSizeIterator<Item = (TypedTermId, &TypedTermNode)> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .map(|(i, node)| (TypedTermId(i), node))
     }
 }
 
@@ -192,7 +160,7 @@ pub enum GroundTypeError {
 
 struct Candidate {
     sort: ArcSort,
-    node: Result<TypedTermId, GroundTypeError>,
+    node: Result<TermId, GroundTypeError>,
 }
 
 struct Inference<'a> {
@@ -200,7 +168,8 @@ struct Inference<'a> {
     terms: &'a TermDag,
     context: Context,
     candidates: HashMap<TermId, IndexMap<String, Candidate>>,
-    nodes: Vec<TypedTermNode>,
+    dag: TypedTermDag,
+    source_terms: Vec<TermId>,
 }
 
 impl Inference<'_> {
@@ -358,9 +327,11 @@ impl Inference<'_> {
         Ok(result)
     }
 
-    fn push(&mut self, term: TermId, expression: TypedTerm) -> TypedTermId {
-        let id = TypedTermId(self.nodes.len());
-        self.nodes.push(TypedTermNode { term, expression });
+    fn push(&mut self, term: TermId, expression: TypedTerm) -> TermId {
+        let id = self.dag.add_node(&expression);
+        if id == self.source_terms.len() {
+            self.source_terms.push(term);
+        }
         id
     }
 }

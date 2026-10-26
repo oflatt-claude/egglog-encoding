@@ -924,7 +924,8 @@ which is therefore one of the few connectors a rule head does write a row for.
 returns both the extraction and a proof of equality to `e`. An optional positive
 variant count requests several extractions and a proof for each. Lookup never
 inserts either endpoint; an absent term reports `Could not find term … in the
-e-graph`. Ordinary `extract` retains its existing evaluation behavior.
+e-graph`. Proof-testing mode rewrites ordinary `extract` commands to
+`prove-extract`, checking the equality proof for every result.
 
 The same certification is available independently of the extractor through
 [`EGraph::prove_extracted_terms`](crate::EGraph::prove_extracted_terms): supply a
@@ -935,10 +936,12 @@ in their original source definition.
 
 The passes are:
 
-1. [`TypedTermDag`](crate::TypedTermDag) resolves ground syntax bottom-up using
-   the existing type constraints. A shared syntactic node can have several
+1. [`TypeInfo::typecheck_term_dag`](crate::TypeInfo::typecheck_term_dag) resolves
+   ground syntax bottom-up using the existing type constraints. A shared syntactic node can have several
    typings, selected by its parents or an expected root sort. Unresolved
-   ambiguity is an error. Typing performs no evaluation or table mutation.
+   ambiguity is an error. The result contains a `TypedTermDag`, a specialization
+   of the same `GenericTermDag` storage as unresolved terms, with resolved heads
+   and no variable leaves. Typing performs no evaluation or table mutation.
 2. Read-only lookup evaluates literals and validated read primitives and reads
    constructor/function views with canonical child values as keys. It collects
    the existing row proofs and union-find connections.

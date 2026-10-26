@@ -400,3 +400,47 @@ fn container_primitives_use_the_types_of_their_result_elements() {
     );
     assert_eq!(proofs[0].0, "(Wrap (set-of (B)))");
 }
+
+#[test]
+fn proof_testing_certifies_plain_extracts_and_delimits_each_proof() {
+    use egglog::{CommandOutput, ast::parse_sexps};
+
+    let mut graph = EGraph::new_with_proofs().with_proof_testing();
+    graph
+        .parse_and_run_program(
+            None,
+            r#"
+        (datatype E (A) (B) (C) (Missing)) (A)
+        (rule ((= a (A))) ((B) (C) (union a (B)) (union a (C))) :name "derive")
+        (run 1)
+    "#,
+        )
+        .unwrap();
+    let before = graph.num_nodes();
+    let outputs = graph
+        .parse_and_run_program(None, "(extract (C) 3) (extract (B))")
+        .unwrap();
+    let counts = outputs
+        .iter()
+        .filter_map(|output| match output {
+            CommandOutput::ProveExtract { proof_ids, .. } => Some(proof_ids.len()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(counts, vec![3, 1]);
+    let printed = CommandOutput::snapshot_proofs_only(&outputs);
+    // Local let bindings must stay inside their proof's block. Parsing the
+    // whole stream must recover exactly one top-level expression per proof.
+    assert!(printed.contains("(let "));
+    assert_eq!(parse_sexps(None, &printed).unwrap().len(), 4);
+    assert_eq!(graph.num_nodes(), before);
+    let error = graph
+        .parse_and_run_program(None, "(extract (Missing))")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Could not find term (Missing) in the e-graph")
+    );
+    assert_eq!(graph.num_nodes(), before);
+}

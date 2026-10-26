@@ -75,13 +75,15 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-pub use termdag::{OrdTerm, Term, TermDag, TermId};
+pub use termdag::{
+    GenericTerm, GenericTermDag, OrdTerm, Term, TermDag, TermId, TypedTerm, TypedTermDag,
+};
 use thiserror::Error;
 pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
-pub use typed_termdag::{GroundTypeError, TypedTerm, TypedTermDag, TypedTermId, TypedTermNode};
+pub use typed_termdag::{GroundTypeError, GroundTyping};
 use util::*;
 
 use crate::ast::desugar::desugar_command;
@@ -220,7 +222,7 @@ impl CommandOutput {
     }
 
     /// Render the non-proof outputs that should still match the normal-mode
-    /// shared snapshot when proof-testing rewrites checks into prove commands.
+    /// shared snapshot when proof-testing rewrites checks and extracts into proof commands.
     pub fn snapshot_non_proof_stable_under_proof_encoding(outputs: &[CommandOutput]) -> String {
         Self::snapshot_stable(outputs, false)
     }
@@ -728,8 +730,8 @@ impl EGraph {
         self
     }
 
-    /// Enable testing of getting proofs for every `check` outside `fail`.
-    /// Checks inside `fail` remain negative assertions.
+    /// Prove every `check` and certify every `extract` outside `fail`.
+    /// Commands inside `fail` retain their ordinary behavior.
     pub fn with_proof_testing(mut self) -> Self {
         self.proof_state.proof_testing = true;
         self
@@ -1127,6 +1129,7 @@ impl EGraph {
             Some(func_type) => {
                 debug_assert!(
                     func_type.subtype == decl.subtype
+                        && func_type.internal_view == decl.internal_view
                         && func_type.input.len() == decl.schema.input.len()
                         && func_type
                             .input
@@ -1155,6 +1158,7 @@ impl EGraph {
                 let func_type = Arc::new(FuncType {
                     name: decl.name.clone(),
                     subtype: decl.subtype,
+                    internal_view: decl.internal_view,
                     input: decl
                         .schema
                         .input
@@ -1320,8 +1324,8 @@ impl EGraph {
 
     /// Provide a program for use in proof checking.
     /// This enables testing of a desugared egglog proof program outside of proof mode.
-    /// When proof_testing is true, turns every `check` outside `fail` into a `prove` command.
-    /// Checks inside `fail` remain negative assertions.
+    /// When proof_testing is true, rewrites checks and extracts outside `fail` into proof commands.
+    /// Commands inside `fail` retain their ordinary behavior.
     /// Not intended for general use but needed in files.rs, so public but hidden.
     #[doc(hidden)]
     pub fn set_proof_checking_program(

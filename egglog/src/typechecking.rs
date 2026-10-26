@@ -115,6 +115,8 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
+    /// The source operation represented by an encoded view, when applicable.
+    pub internal_view: Option<ViewKind>,
     pub input: Vec<ArcSort>,
     /// The output (value-column) sorts, primary first. A tuple-output function has more than one;
     /// ordinary functions have exactly one. Always non-empty.
@@ -142,6 +144,7 @@ impl PartialEq for FuncType {
     fn eq(&self, other: &Self) -> bool {
         if self.name == other.name
             && self.subtype == other.subtype
+            && self.internal_view == other.internal_view
             && self.num_outputs() == other.num_outputs()
             && self
                 .outputs
@@ -170,6 +173,7 @@ impl Hash for FuncType {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.subtype.hash(state);
+        self.internal_view.hash(state);
         for out in &self.outputs {
             out.name().hash(state);
         }
@@ -238,8 +242,6 @@ pub struct TypeInfo {
     pub(crate) sorts: HashMap<String, Arc<dyn Sort>>,
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, Arc<FuncType>>,
-    /// The declaration metadata needed to recover a view's source signature.
-    view_kinds: HashMap<String, ViewKind>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
@@ -534,6 +536,7 @@ impl EGraph {
             Arc::new(FuncType {
                 name: name.to_owned(),
                 subtype: FunctionSubtype::Custom,
+                internal_view: None,
                 input,
                 outputs: vec![unit],
             }),
@@ -1052,6 +1055,7 @@ impl TypeInfo {
         Ok(FuncType {
             name: func.name.clone(),
             subtype: func.subtype,
+            internal_view: func.internal_view,
             input,
             outputs,
         })
@@ -1191,9 +1195,6 @@ impl TypeInfo {
             None => None,
         };
 
-        if let Some(kind) = fdecl.internal_view {
-            self.view_kinds.insert(fdecl.name.clone(), kind);
-        }
         Ok(ResolvedFunctionDecl {
             name: fdecl.name.clone(),
             subtype: fdecl.subtype,
@@ -1594,11 +1595,17 @@ impl TypeInfo {
     /// replay agree even when function tables have not been created yet.
     pub(crate) fn proof_source_types(&self) -> Self {
         let mut types = self.clone();
-        for (name, kind) in &self.view_kinds {
-            let mut signature = (*self.func_types[name]).clone();
+        for function in self.func_types.values() {
+            let Some(kind) = function.internal_view else {
+                continue;
+            };
+            let mut signature = (**function).clone();
+            signature.internal_view = None;
             signature.outputs.truncate(1);
             signature.subtype = match kind {
-                ViewKind::Constructor if !self.is_global(name) => FunctionSubtype::Constructor,
+                ViewKind::Constructor if !self.is_global(&function.name) => {
+                    FunctionSubtype::Constructor
+                }
                 _ => FunctionSubtype::Custom,
             };
             types.declare_func_type(Arc::new(signature));

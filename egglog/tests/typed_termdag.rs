@@ -1,5 +1,5 @@
 use egglog::ast::Literal;
-use egglog::{Context, EGraph, GroundTypeError, TermDag, TypedTerm, TypedTermDag};
+use egglog::{Context, EGraph, GroundTypeError, TermDag, TypedTerm};
 
 #[test]
 fn shared_polymorphic_syntax_has_independent_typings() {
@@ -18,16 +18,19 @@ fn shared_polymorphic_syntax_has_independent_typings() {
     let mut terms = TermDag::default();
     let empty = terms.app("vec-empty".into(), vec![]);
     let wrap = terms.app("Wrap".into(), vec![empty, empty]);
-    let typed = TypedTermDag::new(eg.type_info(), &terms, &[(wrap, None)], Context::Read).unwrap();
-    let TypedTerm::App(_, children) = typed.get(typed.roots()[0]).expression() else {
+    let typed = eg
+        .type_info()
+        .typecheck_term_dag(&terms, &[(wrap, None)], Context::Read)
+        .unwrap();
+    let TypedTerm::App(_, children) = typed.dag().get(typed.roots()[0]) else {
         panic!()
     };
     assert_ne!(children[0], children[1]);
-    assert_eq!(typed.get(children[0]).term(), empty);
-    assert_eq!(typed.get(children[1]).term(), empty);
-    assert_eq!(typed.get(children[0]).sort().name(), "As");
-    assert_eq!(typed.get(children[1]).sort().name(), "Bs");
-    assert_eq!(typed.nodes().len(), 3);
+    assert_eq!(typed.source_term(children[0]), empty);
+    assert_eq!(typed.source_term(children[1]), empty);
+    assert_eq!(typed.dag().get(children[0]).sort().name(), "As");
+    assert_eq!(typed.dag().get(children[1]).sort().name(), "Bs");
+    assert_eq!(typed.dag().nodes().len(), 3);
 }
 
 #[test]
@@ -46,13 +49,15 @@ fn nested_primitives_constrain_overloads_bottom_up() {
     let value = terms.lit(Literal::Int(42));
     let map = terms.app("map-of".into(), vec![key, value]);
     let length = terms.app("map-length".into(), vec![map]);
-    let typed =
-        TypedTermDag::new(eg.type_info(), &terms, &[(length, None)], Context::Read).unwrap();
-    let TypedTerm::App(_, children) = typed.get(typed.roots()[0]).expression() else {
+    let typed = eg
+        .type_info()
+        .typecheck_term_dag(&terms, &[(length, None)], Context::Read)
+        .unwrap();
+    let TypedTerm::App(_, children) = typed.dag().get(typed.roots()[0]) else {
         panic!()
     };
-    assert_eq!(typed.get(typed.roots()[0]).sort().name(), "i64");
-    assert_eq!(typed.get(children[0]).sort().name(), "Numbers");
+    assert_eq!(typed.dag().get(typed.roots()[0]).sort().name(), "i64");
+    assert_eq!(typed.dag().get(children[0]).sort().name(), "Numbers");
     assert_eq!(eg.num_nodes(), 0, "typing must not insert any terms");
 }
 
@@ -67,24 +72,18 @@ fn expected_root_sort_selects_an_overload_but_not_ambiguous_children() {
     let empty = terms.app("vec-empty".into(), vec![]);
     let length = terms.app("vec-length".into(), vec![empty]);
     assert!(matches!(
-        TypedTermDag::new(eg.type_info(), &terms, &[(empty, None)], Context::Read),
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(empty, None)], Context::Read),
         Err(GroundTypeError::Ambiguous { .. })
     ));
-    let typed = TypedTermDag::new(
-        eg.type_info(),
-        &terms,
-        &[(empty, Some(ints))],
-        Context::Read,
-    )
-    .unwrap();
-    assert_eq!(typed.get(typed.roots()[0]).sort().name(), "Ints");
+    let typed = eg
+        .type_info()
+        .typecheck_term_dag(&terms, &[(empty, Some(ints))], Context::Read)
+        .unwrap();
+    assert_eq!(typed.dag().get(typed.roots()[0]).sort().name(), "Ints");
     assert!(matches!(
-        TypedTermDag::new(
-            eg.type_info(),
-            &terms,
-            &[(length, Some(i64_sort))],
-            Context::Read
-        ),
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(length, Some(i64_sort))], Context::Read),
         Err(GroundTypeError::Ambiguous { .. })
     ));
 }
@@ -102,11 +101,13 @@ fn shared_ground_dag_stays_shared_and_does_not_use_the_call_stack() {
             for _ in 0..2000 {
                 root = terms.app("Pair".into(), vec![root, root]);
             }
-            let typed =
-                TypedTermDag::new(eg.type_info(), &terms, &[(root, None)], Context::Read).unwrap();
-            assert_eq!(typed.nodes().len(), terms.size());
-            for (_, node) in typed.nodes() {
-                if let TypedTerm::App(_, children) = node.expression()
+            let typed = eg
+                .type_info()
+                .typecheck_term_dag(&terms, &[(root, None)], Context::Read)
+                .unwrap();
+            assert_eq!(typed.dag().nodes().len(), terms.size());
+            for (_, node) in typed.dag().nodes() {
+                if let TypedTerm::App(_, children) = node
                     && children.len() == 2
                 {
                     assert_eq!(children[0], children[1]);
@@ -126,32 +127,31 @@ fn rejects_wrong_types_variables_and_invalid_references() {
     let word = terms.lit(Literal::String("hello".into()));
     let bad = terms.app("+".into(), vec![one, word]);
     let variable = terms.var("x".into());
-    assert!(TypedTermDag::new(eg.type_info(), &terms, &[(bad, None)], Context::Read).is_err());
+    assert!(
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(bad, None)], Context::Read)
+            .is_err()
+    );
     assert!(matches!(
-        TypedTermDag::new(eg.type_info(), &terms, &[(variable, None)], Context::Read),
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(variable, None)], Context::Read),
         Err(GroundTypeError::Variable { .. })
     ));
     assert!(matches!(
-        TypedTermDag::new(
-            eg.type_info(),
-            &terms,
-            &[(terms.size(), None)],
-            Context::Read
-        ),
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(terms.size(), None)], Context::Read),
         Err(GroundTypeError::InvalidTerm { .. })
     ));
     let string = eg.type_info().get_sort_by_name("String").unwrap().clone();
     assert!(matches!(
-        TypedTermDag::new(
-            eg.type_info(),
-            &terms,
-            &[(one, Some(string))],
-            Context::Read
-        ),
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(one, Some(string))], Context::Read),
         Err(GroundTypeError::WrongSort { .. })
     ));
     // Neither the bad application nor the unbound variable is reachable here.
-    TypedTermDag::new(eg.type_info(), &terms, &[(one, None)], Context::Read).unwrap();
+    eg.type_info()
+        .typecheck_term_dag(&terms, &[(one, None)], Context::Read)
+        .unwrap();
 }
 
 #[test]
@@ -162,8 +162,14 @@ fn primitive_resolution_obeys_the_requested_capability_context() {
     let mut terms = TermDag::default();
     let empty = terms.app("vec-empty".into(), vec![]);
     let union = terms.app("vec-union".into(), vec![empty, empty]);
-    assert!(TypedTermDag::new(eg.type_info(), &terms, &[(union, None)], Context::Read).is_err());
-    TypedTermDag::new(eg.type_info(), &terms, &[(union, None)], Context::Full).unwrap();
+    assert!(
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(union, None)], Context::Read)
+            .is_err()
+    );
+    eg.type_info()
+        .typecheck_term_dag(&terms, &[(union, None)], Context::Full)
+        .unwrap();
 }
 
 #[test]
@@ -205,11 +211,14 @@ fn indistinguishable_primitive_registrations_are_rejected() {
     let bad = terms.app("identity".into(), vec![one]);
     let good = terms.app("identity".into(), vec![word]);
     assert!(matches!(
-        TypedTermDag::new(eg.type_info(), &terms, &[(bad, None)], Context::Read),
+        eg.type_info()
+            .typecheck_term_dag(&terms, &[(bad, None)], Context::Read),
         Err(GroundTypeError::Type {
             source: egglog::TypeError::AmbiguousPrimitive { .. },
             ..
         })
     ));
-    TypedTermDag::new(eg.type_info(), &terms, &[(good, None)], Context::Read).unwrap();
+    eg.type_info()
+        .typecheck_term_dag(&terms, &[(good, None)], Context::Read)
+        .unwrap();
 }
