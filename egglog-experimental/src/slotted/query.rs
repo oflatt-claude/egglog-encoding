@@ -14,10 +14,10 @@ pub(super) struct Atom {
     pub pays: Vec<Term>,
 }
 
-/// Compiler-generated names used to reconstruct source rule applications.
+/// Compiler-generated names used to reconstruct source rules and query witnesses.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct ProofNames {
-    /// Root pattern (empty for a variable), then additional equality patterns.
+    /// Patterns in source order, empty for terms without constructor atoms.
     pub patterns: Vec<Vec<(Vec<usize>, String)>>,
     /// Generated class bindings for pattern variables and atoms.
     pub classes: BTreeMap<String, String>,
@@ -327,7 +327,7 @@ fn occurrence(
         && let Some((op, cols, j)) = parents.get(pv)
     {
         let sym = q.fresh(&format!("sym_{}", label(pv)));
-        q.readings.insert(fname(pv).to_owned(), sym.clone());
+        q.readings.insert(pv.to_owned(), sym.clone());
         let pinned = q.fresh(&format!("pinned_{}", label(pv)));
         facts.push(format!("(= {pinned} (_pinned_{op} {cols} {j}))"));
         facts.push(format!(

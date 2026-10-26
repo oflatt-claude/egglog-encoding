@@ -6,7 +6,7 @@ use super::format::{
 use super::source::{Claim, ClaimKind, Condition, Rhs, SlottedProgram};
 use super::terms::{all_slots, instantiate, is_subterm, pattern_vars, rename, slot_of};
 use super::{HashMap, HashSet};
-use egglog::{Term, TermId};
+use egglog::{Term, TermDag, TermId};
 use std::collections::BTreeSet;
 use thiserror::Error;
 
@@ -322,7 +322,7 @@ fn check_one(
 /// The sort each variable of a pattern must take, from the columns it occurs in.
 fn variable_sorts(
     program: &SlottedProgram,
-    dag: &crate::TermDag,
+    dag: &TermDag,
     pattern: TermId,
     out: &mut HashMap<String, String>,
 ) -> Result<(), String> {
@@ -622,7 +622,6 @@ fn check_rule(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TermDag;
     use crate::slotted::proofs::source::ColumnKind;
     use crate::slotted::proofs::terms::{Renaming, slot_term};
 

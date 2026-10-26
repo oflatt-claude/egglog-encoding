@@ -19,5 +19,8 @@ pub use format::{
 pub use source::{Claim, ClaimKind, Condition, Constructor, Rewrite, Rhs, SlottedProgram, Union};
 pub use terms::Renaming;
 
-type HashMap<K, V> = hashbrown::HashMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
-type HashSet<K> = hashbrown::HashSet<K, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
+use rustc_hash::FxHasher;
+use std::hash::BuildHasherDefault;
+
+type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>;
+type HashSet<K> = hashbrown::HashSet<K, BuildHasherDefault<FxHasher>>;

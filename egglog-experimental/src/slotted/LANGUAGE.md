@@ -58,7 +58,8 @@ With no files, the executable reads commands from stdin. Successive inputs
 share declarations, globals, rewrites, and graph state. Include paths are
 relative to the invocation directory. A failed complete REPL input restores
 both compiler and graph state, including changes from earlier commands in that
-input. `--slotted` cannot be combined with `--term-encoding`.
+input. `--slotted` cannot be combined with `--term-encoding`, `--proof-testing`,
+or `--proof-extraction`.
 
 ## Sorts and constructors
 
@@ -497,11 +498,10 @@ invariants.
 
 ## Getting proofs
 
-`egglog-experimental --slotted --proofs source.egg` prints a checked proof for
-each positive `=` or `renaming-=` claim. Proofs use source constructors and slot
-names. Other claims are checked without extracting a proof.
+```text
+egglog-experimental --slotted --proofs source.egg
+```
 
-`--slotted-proof-checks` evaluates the proof-compatible encoding with ordinary
-checks. Rust callers select `ProofMode::Prove` in `Options` and evaluate with
-`new_egraph_with_proofs()`. See [the proof guide](PROOFS.md) for supported forms,
-proof rules, and examples.
+For supported `=` and `renaming-=` checks, this prints a checked proof using
+source constructors and slot names. Other predicates use ordinary checks.
+See [the proof guide](PROOFS.md) for supported forms, Rust API usage, and examples.

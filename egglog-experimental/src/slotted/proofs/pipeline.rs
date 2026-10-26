@@ -2,17 +2,20 @@
 
 use super::HashMap;
 use super::checker::check_claim;
+use super::format::SlottedConclusion;
 use super::source::{ColumnKind, SlottedProgram, SourceError};
-use super::translate::translate;
+use super::terms::FreshSlots;
+use super::translate::{matched_frame, translate};
 use crate::slotted::query::ProofNames;
 use egglog::TermDag;
-use egglog::ast::GenericExpr;
-use egglog::ast::{Command, GenericAction};
-use egglog::ast::{Expr, Literal};
+use egglog::ast::{
+    Command, Expr, Fact, GenericAction, GenericExpr, Literal, Macro, ParseError, Parser, Sexp, Span,
+};
 use egglog::proof::{ProofId, ProofStore};
 use egglog::util::SymbolGen;
 use egglog::{CommandMacro, CommandOutput, EGraph, Error, TypeInfo, UserDefinedCommand};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -20,14 +23,15 @@ struct SlottedClaim {
     kind: String,
     sort: String,
     lhs: String,
-    lhs_class: String,
+    lhs_root: String,
     rhs: String,
-    rhs_class: String,
+    rhs_root: String,
     slot_names: BTreeMap<String, i64>,
+    names: ProofNames,
 }
 
-impl std::fmt::Display for SlottedClaim {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SlottedClaim {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "({} {} {} {})", self.kind, self.sort, self.lhs, self.rhs)
     }
 }
@@ -45,8 +49,8 @@ pub(crate) fn register(graph: &mut EGraph) {
         .register(Arc::new(SourceMetadata));
 }
 
-fn error(message: impl std::fmt::Display) -> Error {
-    Error::ParseError(egglog::ast::ParseError(
+fn error(message: impl Display) -> Error {
+    Error::ParseError(ParseError(
         egglog::span!(),
         format!("slotted proof: {message}"),
     ))
@@ -131,22 +135,21 @@ impl UserDefinedCommand for RecordSource {
 
 struct ProveSlotted;
 
-impl egglog::ast::Macro<Vec<Command>> for ProveSlotted {
+impl Macro<Vec<Command>> for ProveSlotted {
     fn name(&self) -> &str {
         "prove-slotted"
     }
 
     fn parse(
         &self,
-        args: &[egglog::ast::Sexp],
-        span: egglog::ast::Span,
-        parser: &mut egglog::ast::Parser,
-    ) -> Result<Vec<Command>, egglog::ast::ParseError> {
-        use egglog::ast::{ParseError, Sexp};
+        args: &[Sexp],
+        span: Span,
+        parser: &mut Parser,
+    ) -> Result<Vec<Command>, ParseError> {
         let bad = || {
             ParseError(
                 span.clone(),
-                "expected (prove-slotted (<kind> <sort> (\"lhs\" class) (\"rhs\" class) [\"slot names\"]) facts...)"
+                "expected (prove-slotted (<kind> <sort> (\"lhs\" root) (\"rhs\" root) \"slot names\" \"query names\") facts...)"
                     .into(),
             )
         };
@@ -164,14 +167,10 @@ impl egglog::ast::Macro<Vec<Command>> for ProveSlotted {
             return Err(bad());
         };
         let side = |xs: &[Sexp]| -> Result<[String; 2], ParseError> {
-            let [
-                Sexp::Literal(Literal::String(text), _),
-                Sexp::Atom(class, _),
-            ] = xs
-            else {
+            let [Sexp::Literal(Literal::String(text), _), Sexp::Atom(root, _)] = xs else {
                 return Err(bad());
             };
-            Ok([text.clone(), class.clone()])
+            Ok([text.clone(), root.clone()])
         };
         let mut parsed = [kind.clone(), sort.clone()]
             .into_iter()
@@ -179,12 +178,14 @@ impl egglog::ast::Macro<Vec<Command>> for ProveSlotted {
             .chain(side(rhs)?)
             .map(|s| Expr::Lit(span.clone(), Literal::String(s)))
             .collect::<Vec<_>>();
-        let names = match names {
-            [] => "{}".to_owned(),
-            [Sexp::Literal(Literal::String(names), _)] => names.clone(),
-            _ => return Err(bad()),
+        let [
+            Sexp::Literal(Literal::String(slots), _),
+            Sexp::Literal(Literal::String(names), _),
+        ] = names
+        else {
+            return Err(bad());
         };
-        parsed.push(Expr::Lit(span.clone(), Literal::String(names)));
+        parsed.extend([slots, names].map(|s| Expr::Lit(span.clone(), Literal::String(s.clone()))));
         parsed.extend(
             facts
                 .iter()
@@ -209,36 +210,34 @@ impl UserDefinedCommand for ProveSlotted {
             Expr::Lit(_, Literal::String(kind)),
             Expr::Lit(_, Literal::String(sort)),
             Expr::Lit(_, Literal::String(lhs)),
-            Expr::Lit(_, Literal::String(lhs_class)),
+            Expr::Lit(_, Literal::String(lhs_root)),
             Expr::Lit(_, Literal::String(rhs)),
-            Expr::Lit(_, Literal::String(rhs_class)),
+            Expr::Lit(_, Literal::String(rhs_root)),
             Expr::Lit(_, Literal::String(slot_names)),
+            Expr::Lit(_, Literal::String(names)),
             facts @ ..,
         ] = args
         else {
-            return Err(error("expected seven claim strings followed by facts"));
+            return Err(error("expected eight claim strings followed by facts"));
         };
         let claim = SlottedClaim {
             kind: kind.clone(),
             sort: sort.clone(),
             lhs: lhs.clone(),
             rhs: rhs.clone(),
-            lhs_class: lhs_class.clone(),
-            rhs_class: rhs_class.clone(),
+            lhs_root: lhs_root.clone(),
+            rhs_root: rhs_root.clone(),
             slot_names: serde_json::from_str(slot_names).map_err(error)?,
+            names: serde_json::from_str(names).map_err(error)?,
         };
         let facts = facts
             .iter()
             .map(|f| match f {
                 Expr::Call(span, head, args) if head == "=" => match args.as_slice() {
-                    [lhs, rhs] => Ok(egglog::ast::Fact::Eq(
-                        span.clone(),
-                        lhs.clone(),
-                        rhs.clone(),
-                    )),
+                    [lhs, rhs] => Ok(Fact::Eq(span.clone(), lhs.clone(), rhs.clone())),
                     _ => Err(error("equality facts need two terms")),
                 },
-                other => Ok(egglog::ast::Fact::Fact(other.clone())),
+                other => Ok(Fact::Fact(other.clone())),
             })
             .collect::<Result<Vec<_>, _>>()?;
         let outputs = graph.run_program(vec![Command::Prove(egglog::span!(), facts)])?;
@@ -440,7 +439,36 @@ impl SlottedProofState {
         claim: &SlottedClaim,
     ) -> Result<String, String> {
         let (program, mut dag) = self.program(&claim.slot_names).map_err(|e| e.to_string())?;
-        let source = program
+        let frame = matched_frame(egg, root, &claim.names)?;
+        let mut coordinates = BTreeMap::new();
+        for &slot in program.slot_names.values() {
+            if let Some(coordinate) = frame.node_slot("@globals", slot) {
+                coordinates.insert(coordinate, slot);
+            }
+        }
+        let mut fresh = FreshSlots::new(program.slot_names.values().copied());
+        let mut query_program = program.clone();
+        for name in frame.literal_names() {
+            let coordinate = frame
+                .ren(&name)
+                .and_then(|r| r.get(&0).copied())
+                .ok_or_else(|| format!("query slot {name} has no matched coordinate"))?;
+            let slot = if let Some(&slot) = coordinates.get(&coordinate) {
+                slot
+            } else {
+                let slot = program
+                    .slot_names
+                    .get(&name)
+                    .copied()
+                    .filter(|s| !coordinates.values().any(|v| v == s))
+                    .unwrap_or_else(|| fresh.fresh());
+                coordinates.insert(coordinate, slot);
+                slot
+            };
+            query_program.slot_names.insert(name, slot);
+        }
+        // The globals were parsed before assigning query-local slot witnesses.
+        let source = query_program
             .claim(&mut dag, &claim.kind, &claim.sort, &claim.lhs, &claim.rhs)
             .map_err(|e| format!("claim {claim}: {e}"))?;
         log::debug!(
@@ -454,7 +482,8 @@ impl SlottedProofState {
             egg,
             root,
             &source,
-            [&claim.lhs_class, &claim.rhs_class],
+            &claim.names,
+            [&claim.lhs_root, &claim.rhs_root],
         )
         .map_err(|e| format!("claim {claim}: {e}"))?;
         check_claim(&mut store, &program, &source, &proof).map_err(|e| {
@@ -463,7 +492,7 @@ impl SlottedProofState {
                 store.conclusion_to_string(&proof)
             )
         })?;
-        let proof = super::format::SlottedConclusion {
+        let proof = SlottedConclusion {
             proof: store.simplify(proof.proof),
             ..proof
         };

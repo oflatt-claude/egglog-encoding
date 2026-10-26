@@ -974,9 +974,9 @@ pub fn names_from_term(termdag: &TermDag, id: TermId) -> Option<Names> {
     json_from_term(termdag, id)
 }
 
-/// `(atom "label" binding...)` on term forms; see [`Frame::atom`].
+/// Evaluate a pattern or global frame from term-encoded bindings.
 fn atom_validator(
-    nested: bool,
+    kind: AtomKind,
 ) -> impl Fn(&mut TermDag, &[TermId]) -> Option<TermId> + Send + Sync + 'static {
     move |termdag: &mut TermDag, args: &[TermId]| -> Option<TermId> {
         let (label, rest) = args.split_first()?;
@@ -985,10 +985,10 @@ fn atom_validator(
             .iter()
             .map(|b| binding_from_term(termdag, *b))
             .collect::<Option<_>>()?;
-        let frame = if nested {
-            Frame::nested_atom(&label, &bindings)?
-        } else {
-            Frame::atom(&label, &bindings)?
+        let frame = match kind {
+            AtomKind::Pattern => Frame::atom(&label, &bindings)?,
+            AtomKind::Nested => Frame::nested_atom(&label, &bindings)?,
+            AtomKind::Globals => Frame::globals(&label, &bindings)?,
         };
         Some(frame_to_term(termdag, &frame))
     }
@@ -1039,7 +1039,7 @@ impl BaseSort for FrameSort {
                     binding: binding.clone(),
                     frame: frame.clone(),
                 },
-                Some(Arc::new(atom_validator(nested))),
+                Some(Arc::new(atom_validator(kind))),
             );
         }
         // both frames' constraints, closed; fails where a clique breaks

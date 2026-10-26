@@ -31,11 +31,9 @@ source language into ordinary egglog before evaluating it through the normal CLI
 this crate. See [the source language](src/slotted/LANGUAGE.md) and
 [the encoding](src/slotted/ENCODING.md) for its supported syntax and semantics.
 
-Slotted proofs run with `cargo run -p egglog-experimental -- --slotted --proofs file.egg`.
-Each positive equality claim is translated from an egglog proof to a proof over the
-source terms and checked independently. `--slotted-proof-checks` evaluates the same
-encoding with ordinary checks. Substitution is not supported by proof translation.
-See [the proof guide](src/slotted/PROOFS.md) for the format and supported steps.
+Run `cargo run -p egglog-experimental -- --slotted --proofs file.egg` to print checked
+proofs over source terms. See [Getting proofs](src/slotted/LANGUAGE.md#getting-proofs)
+for usage and [the proof guide](src/slotted/PROOFS.md) for supported forms and the format.
 
 ## Documentation
 

@@ -10,11 +10,13 @@ use super::pipeline::EncodingNames;
 use super::source::{Claim, ColumnKind, Condition, Rhs, SlottedProgram};
 use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term};
 
-use super::HashMap;
+use super::{HashMap, HashSet};
+use crate::slotted::query::ProofNames;
 use crate::slotted::runtime::frame_from_term;
 use crate::slotted::runtime::renaming::shape;
 use crate::slotted::runtime::terms::{group_from_term, renaming_from_term, renamings_from_term};
-use crate::slotted::runtime::{Renaming as SlotMap, SlotSet};
+use crate::slotted::runtime::{Fr, Renaming as SlotMap, SlotSet};
+use egglog::ast::Literal;
 use egglog::proof::{Justification, ProofId, ProofStore};
 use egglog::util::IndexMap;
 use egglog::{Term, TermDag, TermId};
@@ -27,8 +29,8 @@ type ConditionProof = (String, TermId, LiftedId, HashMap<Vec<usize>, Occurrence>
 
 /// Translate the egglog proof `root`, which proves the encoded form of `claim`,
 /// into a slotted proof of the claim over `dag`, the program's term dag.
-/// `classes` names the `prove-slotted`'s variables holding the encoded class
-/// each side matched, which the existence rule's substitution resolves.
+/// `query` records the generated bindings and `roots` identifies its two sides.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn translate(
     program: &SlottedProgram,
     dag: TermDag,
@@ -36,7 +38,8 @@ pub(super) fn translate(
     egg: &ProofStore,
     root: ProofId,
     claim: &Claim,
-    classes: [&str; 2],
+    query: &ProofNames,
+    roots: [&str; 2],
 ) -> R<(SlottedProofStore, SlottedConclusion)> {
     // Every encoded slot/renaming coordinate is an integer term. Reserving all
     // integer literals also excludes payloads, harmlessly, without guessing the
@@ -48,7 +51,7 @@ pub(super) fn translate(
             .chain(program.slot_names.values().copied())
             .chain(
                 (0..egg.term_dag().size()).filter_map(|t| match egg.term_dag().get(t) {
-                    Term::Lit(egglog::ast::Literal::Int(n)) => Some(*n),
+                    Term::Lit(Literal::Int(n)) => Some(*n),
                     _ => None,
                 }),
             ),
@@ -70,8 +73,30 @@ pub(super) fn translate(
         fresh,
         reserved_terms,
     };
-    let id = tr.claim(root, claim, classes)?;
+    let id = tr.claim(root, claim, query, roots)?;
     Ok(tr.out.finish(id))
+}
+
+fn query_firing(egg: &ProofStore, root: ProofId, frame: &str) -> R<ProofId> {
+    match egg.get(root).justification() {
+        Justification::Rule { substitution, .. } if substitution.contains_key(frame) => Ok(root),
+        Justification::Congr { proof, .. } | Justification::Sym(proof) => {
+            query_firing(egg, *proof, frame)
+        }
+        Justification::Trans(a, b) => {
+            query_firing(egg, *a, frame).or_else(|_| query_firing(egg, *b, frame))
+        }
+        _ => Err(format!("existence proof has no query binding {frame}")),
+    }
+}
+
+pub(super) fn matched_frame(egg: &ProofStore, root: ProofId, names: &ProofNames) -> R<Fr> {
+    let root = query_firing(egg, root, &names.frame)?;
+    let Justification::Rule { substitution, .. } = egg.get(root).justification() else {
+        unreachable!("query_firing returns a rule firing")
+    };
+    frame_from_term(egg.term_dag(), substitution[&names.frame])
+        .ok_or_else(|| "query frame is not a frame".into())
 }
 
 struct Translator<'a> {
@@ -95,7 +120,7 @@ struct Translator<'a> {
     free_vars_index: Option<HashMap<TermId, Vec<ProofId>>>,
     group_index: Option<HashMap<TermId, Vec<ProofId>>>,
     /// The `(class, slot)` certificates being derived, against circularity.
-    cert_stack: super::HashSet<(TermId, i64)>,
+    cert_stack: HashSet<(TermId, i64)>,
     fresh: FreshSlots,
     reserved_terms: usize,
 }
@@ -126,12 +151,6 @@ struct ExpandCtx<'a> {
     /// Classes the stored match was re-keyed to after its firing: the class a
     /// premise row mentions -> the proof that it equals the class it became.
     bridges: &'a HashMap<TermId, ProofId>,
-}
-
-/// A pattern variable as it appears in an egglog variable name.
-fn label(name: &str) -> &str {
-    let l = name.trim_start_matches('?').trim_start_matches('_');
-    if l.is_empty() { "v" } else { l }
 }
 
 /// What a relation row stands for.
@@ -240,7 +259,8 @@ impl<'a> Translator<'a> {
     /// The group a row's second column holds, naming the row on failure.
     fn group_of_row(&self, row: TermId) -> R<Vec<SlotMap>> {
         let (_, args) = self.app(row).ok_or("not a row")?;
-        group_from_term(self.egg(), args[1])
+        args.get(1)
+            .and_then(|group| group_from_term(self.egg(), *group))
             .ok_or_else(|| format!("row {} holds no group", self.egg_string(row)))
     }
 
@@ -279,7 +299,7 @@ impl<'a> Translator<'a> {
             .ok_or_else(|| format!("not an encoded carrier term: {}", self.egg_string(t)))?;
         let out = if self.names.is_var_constructor(head) {
             let slot = match self.egg().get(args[0]) {
-                Term::Lit(egglog::ast::Literal::Int(n)) => *n,
+                Term::Lit(Literal::Int(n)) => *n,
                 _ => return Err(format!("variable without a slot: {}", self.egg_string(t))),
             };
             slot_term(&mut self.out.term_dag, slot)
@@ -449,6 +469,42 @@ impl<'a> Translator<'a> {
             "no proof establishes the term {}",
             self.out_string(t)
         ))
+    }
+
+    /// Establish a class from the carrier equalities in a premise's derivation.
+    fn establish(&mut self, class: TermId, premise: ProofId) -> R<LiftedId> {
+        let term = self.dec(class)?;
+        let mut pending = vec![premise];
+        let mut seen = HashSet::default();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let proof = self.egg.get(id);
+            if (proof.lhs() == class || proof.rhs() == class)
+                && self.eq(id).is_ok()
+                && let Ok(proof) = self.reflexive(term)
+            {
+                return Ok(proof);
+            }
+            match proof.justification() {
+                Justification::Rule { premise_proofs, .. } => pending.extend(premise_proofs),
+                Justification::MergeFn {
+                    old_proof,
+                    new_proof,
+                    ..
+                } => pending.extend([*old_proof, *new_proof]),
+                Justification::Trans(a, b) => pending.extend([*a, *b]),
+                Justification::Congr {
+                    proof, child_proof, ..
+                } => pending.extend([*proof, *child_proof]),
+                Justification::Sym(proof)
+                | Justification::Proj { proof, .. }
+                | Justification::ContainerNormalize { proof } => pending.push(*proof),
+                Justification::Fiat | Justification::Eval => {}
+            }
+        }
+        self.reflexive(term)
     }
 
     fn trans(&mut self, p: LiftedId, q: LiftedId) -> R<LiftedId> {
@@ -713,7 +769,7 @@ impl<'a> Translator<'a> {
         conclusion_rhs: TermId,
     ) -> R<LiftedId> {
         let base = self.egg.get(proof).clone();
-        let (base_lhs, base_rhs) = (base.lhs(), base.rhs());
+        let base_rhs = base.rhs();
         if self.is_carrier_term(base_rhs) {
             // `t1 = F(.., c, ..)` and `c = c'`: congruence at the surface column.
             let p = self.eq(proof)?;
@@ -736,7 +792,7 @@ impl<'a> Translator<'a> {
         } else {
             // A row re-keyed by a union: the same statement about an equal term.
             let old = self.eq(proof)?;
-            let (head, args) = self.app(base_lhs).ok_or("congr on a non-row")?;
+            let (head, args) = self.app(base_rhs).ok_or("congr on a non-row")?;
             // the child proof relates the column's old class with the new, in
             // whichever direction the union-find stated it
             let c = self.eq(child_proof)?;
@@ -754,7 +810,7 @@ impl<'a> Translator<'a> {
                 RowKind::Other => {
                     return Err(format!(
                         "congruence on a row that denotes no equality: {}",
-                        self.egg_string(base_lhs)
+                        self.egg_string(base_rhs)
                     ));
                 }
             };
@@ -762,7 +818,7 @@ impl<'a> Translator<'a> {
             let context = |this: &Self, e: String| {
                 format!(
                     "re-keying {} at {child_index} by {}: {e}",
-                    this.egg_string(base_lhs),
+                    this.egg_string(base_rhs),
                     this.prop_string(c)
                 )
             };
@@ -774,7 +830,7 @@ impl<'a> Translator<'a> {
             } else {
                 Err(format!(
                     "congruence on the renaming column of {}",
-                    self.egg_string(base_lhs)
+                    self.egg_string(base_rhs)
                 ))
             }
         }
@@ -800,7 +856,7 @@ impl<'a> Translator<'a> {
             ("slotted", "seed-identity") => {
                 let c = self.sub(subst, "_c")?;
                 let t = self.dec(c)?;
-                self.reflexive(t)
+                self.reflexive(t).or_else(|_| self.establish(c, prems[0]))
             }
             ("slotted", "transitivity") => {
                 let (p, q) = (self.eq(prems[0])?, self.eq(prems[1])?);
@@ -1095,11 +1151,13 @@ impl<'a> Translator<'a> {
         // premises: c = row, g1.., shapeof-edges row, (vec-get facts), c0 = shape-class row, back0 row, guard
         let row_eq = self.eq(prems[0])?;
         let row = self.egg.get(prems[0]).rhs();
-        let ngroups = self.slotted_columns(row)?;
-        let groups: Vec<(TermId, ProofId)> = (0..ngroups)
-            .map(|k| {
+        let classes = self.slotted_classes(row)?;
+        let groups: Vec<(TermId, ProofId)> = classes
+            .iter()
+            .enumerate()
+            .map(|(k, &class)| {
                 let g = self.sub(subst, &format!("_g{}", k + 1))?;
-                Ok((g, prems[1 + k]))
+                Ok((g, self.group_premise(prems, class)?))
             })
             .collect::<R<_>>()?;
         let (to_shape, node) = self.shape_form(row_eq, row, &groups)?;
@@ -1139,8 +1197,16 @@ impl<'a> Translator<'a> {
         let row1_eq = self.eq(prems[0])?;
         let row1 = self.egg.get(prems[0]).rhs();
         let n = self.slotted_columns(row1)?;
-        let groups: Vec<(TermId, ProofId)> = (0..n)
-            .map(|k| Ok((self.sub(subst, &format!("_g{}", k + 1))?, prems[1 + k])))
+        let classes = self.slotted_classes(row1)?;
+        let groups: Vec<(TermId, ProofId)> = classes
+            .iter()
+            .enumerate()
+            .map(|(k, &class)| {
+                Ok((
+                    self.sub(subst, &format!("_g{}", k + 1))?,
+                    self.group_premise(prems, class)?,
+                ))
+            })
             .collect::<R<_>>()?;
         // the second row's premise is the one after the first shapeof row
         let row2_prem = prems[1 + n + 1];
@@ -1181,12 +1247,14 @@ impl<'a> Translator<'a> {
             } if rule_kind(self.program, name).1 == "shape-index" => {
                 let row_eq = self.eq(premise_proofs[0])?;
                 let row = self.egg.get(premise_proofs[0]).rhs();
-                let n = self.slotted_columns(row)?;
-                let groups = (0..n)
-                    .map(|k| {
+                let classes = self.slotted_classes(row)?;
+                let groups = classes
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &class)| {
                         Ok((
                             self.sub(substitution, &format!("_g{}", k + 1))?,
-                            premise_proofs[1 + k],
+                            self.group_premise(premise_proofs, class)?,
                         ))
                     })
                     .collect::<R<_>>()?;
@@ -1305,7 +1373,9 @@ impl<'a> Translator<'a> {
                 for side in [old_proof, new_proof] {
                     let t = self.egg.get(side).lhs();
                     if let Some((_, args)) = self.app(t)
-                        && let Some(set) = group_from_term(self.egg(), args[1])
+                        && let Some(set) = args
+                            .get(1)
+                            .and_then(|group| group_from_term(self.egg(), *group))
                         && set.iter().any(|h| h == g)
                     {
                         return self.symmetry(c, g, side);
@@ -1339,14 +1409,7 @@ impl<'a> Translator<'a> {
                 self.symmetry(c, g, a).or_else(|_| self.symmetry(c, g, b))
             }
             Justification::Sym(a) => self.symmetry(c, g, *a),
-            Justification::Fiat => {
-                let t = self.egg.get(grp_proof).lhs();
-                if self.group_of_row(t)?.iter().all(is_identity) {
-                    Err(format!("{} is not the identity", slot_map_string(g)))
-                } else {
-                    Err("a group stated by fiat".into())
-                }
-            }
+            Justification::Fiat => Err("a group stated by fiat".into()),
             other => Err(format!("no symmetry provenance through {other:?}")),
         }
     }
@@ -1956,7 +2019,7 @@ impl<'a> Translator<'a> {
     /// atom's node slots.
     fn atom_label(
         &self,
-        frame: &crate::slotted::runtime::Fr,
+        frame: &Fr,
         var: &str,
         pattern: TermId,
         occ: Option<&Occurrence>,
@@ -2013,7 +2076,7 @@ impl<'a> Translator<'a> {
     /// the renaming its occurrence spells it with.
     fn nested_node_slots(
         &mut self,
-        frame: &crate::slotted::runtime::Fr,
+        frame: &Fr,
         pattern: TermId,
         occ: &HashMap<Vec<usize>, Occurrence>,
         names: &HashMap<Vec<usize>, String>,
@@ -2056,7 +2119,7 @@ impl<'a> Translator<'a> {
     fn lift(
         &mut self,
         p: LiftedId,
-        frame: &crate::slotted::runtime::Fr,
+        frame: &Fr,
         atom: Option<&str>,
         nested: &[(i64, i64)],
     ) -> (LiftedId, Renaming) {
@@ -2313,6 +2376,66 @@ impl<'a> Translator<'a> {
             });
         };
         let prems = ctx.prems;
+        if !ctx.names.contains_key(path)
+            && super::terms::pattern_vars(&self.out.term_dag, pattern)
+                .iter()
+                .all(|v| v.starts_with('$'))
+        {
+            for &premise in prems {
+                let row = self.egg.get(premise).rhs();
+                let Some((head, args)) = self.app(row) else {
+                    continue;
+                };
+                if !row_kind(head).is_edge() || args.len() < 3 || args[2] != cls {
+                    continue;
+                }
+                let node = args[0];
+                let sources = std::iter::once((node, None))
+                    .chain(self.egg.proofs().filter_map(|(p, proof)| {
+                        if proof.rhs() == node && self.is_carrier_term(proof.lhs()) {
+                            Some((proof.lhs(), Some((p, false))))
+                        } else if proof.lhs() == node && self.is_carrier_term(proof.rhs()) {
+                            Some((proof.rhs(), Some((p, true))))
+                        } else {
+                            None
+                        }
+                    }))
+                    .collect::<Vec<_>>();
+                for (source, bridge) in sources {
+                    let decoded = self.dec(source)?;
+                    if !self
+                        .program
+                        .alpha_eq(&mut self.out.term_dag, decoded, pattern)
+                    {
+                        continue;
+                    }
+                    let mut proof = self.eq(premise)?;
+                    if let Some((bridge, reversed)) = bridge {
+                        let mut bridge = self.eq(bridge)?;
+                        if reversed {
+                            bridge = self.out.sym(bridge);
+                        }
+                        proof = self.trans(bridge, proof)?;
+                    }
+                    let row_eq = self.out.sym(proof);
+                    if let Ok(proof) = self.align(row_eq, pattern) {
+                        occurrences.insert(
+                            path.to_vec(),
+                            Occurrence {
+                                cls,
+                                row: Some((source, row_eq)),
+                            },
+                        );
+                        self.global_occurrences(source, path, &mut occurrences)?;
+                        return Ok(Expansion {
+                            proof,
+                            variables,
+                            occurrences,
+                        });
+                    }
+                }
+            }
+        }
         if self.is_leaf_pattern(pattern) {
             // a leaf: its class reaches the constructor's own class by an edge,
             // or is that class
@@ -2500,47 +2623,93 @@ impl<'a> Translator<'a> {
         })
     }
 
-    /// The flattener's names for a pattern's atoms, by path: the root first, then
-    /// each atom's nested calls in column order, numbered before any is descended.
-    fn atom_names(&self, pattern: TermId, root: &str, tmp: &str) -> HashMap<Vec<usize>, String> {
-        let mut names = HashMap::default();
-        let mut counter = 0;
-        self.assign_names(
-            pattern,
-            vec![],
-            root.to_string(),
-            tmp,
-            &mut counter,
-            &mut names,
-        );
-        names
-    }
-
-    fn assign_names(
-        &self,
-        pattern: TermId,
-        path: Vec<usize>,
-        name: String,
-        tmp: &str,
-        counter: &mut usize,
-        names: &mut HashMap<Vec<usize>, String>,
-    ) {
-        names.insert(path.clone(), name);
-        let Term::App(_, kids) = self.out.term_dag.get(pattern).clone() else {
-            return;
+    // Prefer a proved representative with fewer free slots so certificates can
+    // reach a child whose source spelling still includes a redundant slot.
+    fn global_occurrence(&mut self, child: TermId) -> R<Occurrence> {
+        let head = self
+            .app(child)
+            .ok_or("global child is not a constructor")?
+            .0;
+        let term = self.dec(child)?;
+        let mut free = self.program.free_slots(&self.out.term_dag, term).len();
+        let mut occurrence = Occurrence {
+            cls: child,
+            row: None,
         };
-        let mut nested = vec![];
-        for (j, kid) in kids.iter().enumerate() {
-            if matches!(self.out.term_dag.get(*kid), Term::App(..)) && !self.is_leaf_pattern(*kid) {
-                *counter += 1;
-                let mut sub = path.clone();
-                sub.push(j);
-                nested.push((*kid, sub, format!("{tmp}{counter}")));
+        let candidates = self
+            .egg
+            .proofs()
+            .filter_map(|(id, proof)| {
+                (proof.lhs() != proof.rhs()
+                    && self.is_carrier_term(proof.lhs())
+                    && self.is_carrier_term(proof.rhs()))
+                .then_some((id, proof.lhs(), proof.rhs()))
+            })
+            .collect::<Vec<_>>();
+        for (id, lhs, rhs) in candidates {
+            for (row, cls, reversed) in [(rhs, lhs, false), (lhs, rhs, true)] {
+                if self.app(row).is_none_or(|(h, _)| h != head) {
+                    continue;
+                }
+                let decoded = self.dec(row)?;
+                let mut pairs = BTreeMap::new();
+                if self.unify_slots(decoded, term, &mut pairs).is_err()
+                    || Renaming::completing(pairs.into_iter()).is_none()
+                {
+                    continue;
+                }
+                let target = self.dec(cls)?;
+                let target_free = self.program.free_slots(&self.out.term_dag, target).len();
+                if target_free >= free {
+                    continue;
+                }
+                let mut proof = self.eq(id)?;
+                if reversed {
+                    proof = self.out.sym(proof);
+                }
+                occurrence = Occurrence {
+                    cls,
+                    row: Some((row, proof)),
+                };
+                free = target_free;
             }
         }
-        for (kid, sub, nm) in nested {
-            self.assign_names(kid, sub, nm, tmp, counter, names);
+        Ok(occurrence)
+    }
+
+    fn global_occurrences(
+        &mut self,
+        node: TermId,
+        path: &[usize],
+        occurrences: &mut HashMap<Vec<usize>, Occurrence>,
+    ) -> R<()> {
+        let (head, args) = self.app(node).ok_or("global node is not a constructor")?;
+        let Some(constructor) = self.program.constructors.get(head) else {
+            return Ok(());
+        };
+        let mut physical = 0;
+        for (column, kind) in constructor.columns.iter().enumerate() {
+            match kind {
+                ColumnKind::Child => {
+                    let child = *args
+                        .get(physical + 1)
+                        .ok_or("short global constructor row")?;
+                    if self
+                        .app(child)
+                        .is_some_and(|(h, _)| self.program.constructors.contains_key(h))
+                    {
+                        let mut child_path = path.to_vec();
+                        child_path.push(column);
+                        occurrences.insert(child_path.clone(), self.global_occurrence(child)?);
+                        self.global_occurrences(child, &child_path, occurrences)?;
+                    }
+                    physical += 2;
+                }
+                ColumnKind::Binder => physical += 2,
+                ColumnKind::Payload => physical += 1,
+            }
         }
+        Ok(())
     }
 
     /// The group row a `Reading` row for `(child, g)` among the premises derives
@@ -3489,9 +3658,16 @@ impl<'a> Translator<'a> {
 
     // ----- the claim ----------------------------------------------------------------
 
-    fn claim(&mut self, root: ProofId, claim: &Claim, classes: [&str; 2]) -> R<LiftedId> {
-        // A view's existence proof may reflexivize the rule's conclusion.
-        let (root, _) = self.unwrap_match(root)?;
+    fn claim(
+        &mut self,
+        root: ProofId,
+        claim: &Claim,
+        query: &ProofNames,
+        roots: [&str; 2],
+    ) -> R<LiftedId> {
+        let frame = matched_frame(self.egg, root, query)?;
+        let coset = Self::coset_symmetry(&frame, roots)?;
+        let root = query_firing(self.egg, root, &query.frame)?;
         let proof = self.egg.get(root).clone();
         let Justification::Rule {
             premise_proofs,
@@ -3499,11 +3675,17 @@ impl<'a> Translator<'a> {
             ..
         } = proof.justification().clone()
         else {
-            unreachable!("unwrap_match returns a rule firing")
+            unreachable!("query_firing returns a rule firing")
         };
-        // the encoded class each side matched, from the command's class variables
-        let cls_a = self.sub(&substitution, classes[0])?;
-        let cls_b = self.sub(&substitution, classes[1])?;
+        let classes = roots.map(|root| {
+            query
+                .classes
+                .get(root)
+                .ok_or_else(|| format!("no class binding for claim root {root}"))
+        });
+        let [class_a, class_b] = classes;
+        let cls_a = self.sub(&substitution, class_a?)?;
+        let cls_b = self.sub(&substitution, class_b?)?;
         let bare = |this: &Self, t: TermId| super::terms::slot_of(&this.out.term_dag, t).is_some();
         if bare(self, claim.lhs) && bare(self, claim.rhs) {
             // both sides are bare slots: one class, the variable's
@@ -3528,30 +3710,21 @@ impl<'a> Translator<'a> {
                 claim,
                 cls_a,
                 &premise_proofs,
-                &substitution,
+                Some(&coset),
                 &HashMap::default(),
             );
         }
-        // Claims are ground, so their generated pattern names cannot collide
-        // with source variables. Rule firings use the actual names recorded by
-        // the compiler instead.
         let bridges = HashMap::default();
-        let side = |this: &Self, i: usize, pattern: TermId| {
-            let names = this.atom_names(pattern, &format!("_c{i}"), &format!("_c{i}t"));
-            ExpandCtx {
+        let side = |i: usize| -> R<ExpandCtx<'_>> {
+            let names = query.patterns.get(i).ok_or("missing claim pattern names")?;
+            Ok(ExpandCtx {
                 prems: &premise_proofs,
                 subst: &substitution,
-                classes: names
-                    .values()
-                    .map(|n| (n.clone(), format!("_c{i}cls_{}", label(n))))
-                    .collect(),
-                readings: names
-                    .values()
-                    .map(|n| (n.clone(), format!("_c{i}sym_{}", label(n))))
-                    .collect(),
-                names,
+                classes: query.classes.clone(),
+                readings: query.readings.clone(),
+                names: names.iter().cloned().collect(),
                 bridges: &bridges,
-            }
+            })
         };
         let src_a = self
             .program
@@ -3559,14 +3732,14 @@ impl<'a> Translator<'a> {
         let src_b = self
             .program
             .refresh_binders(&mut self.out.term_dag, claim.rhs);
-        let ctx_a = side(self, 0, claim.lhs);
+        let ctx_a = side(0)?;
         let Expansion {
             proof: pa,
             occurrences: occ_a,
             ..
         } = self.expand(cls_a, claim.lhs, &[], &ctx_a, HashMap::default())?;
         let pa = self.fit(pa, src_a, &occ_a)?; // cls_a = ·src_a
-        let ctx_b = side(self, 1, claim.rhs);
+        let ctx_b = side(1)?;
         let Expansion {
             proof: pb,
             occurrences: occ_b,
@@ -3602,7 +3775,7 @@ impl<'a> Translator<'a> {
             claim,
             cls_a,
             &premise_proofs,
-            &substitution,
+            Some(&coset),
             &occ_b,
         )
     }
@@ -3618,7 +3791,7 @@ impl<'a> Translator<'a> {
         claim: &Claim,
         cls_a: TermId,
         premise_proofs: &[ProofId],
-        substitution: &IndexMap<String, TermId>,
+        coset: Option<&SlotMap>,
         occ_b: &HashMap<Vec<usize>, Occurrence>,
     ) -> R<LiftedId> {
         if claim.kind == super::source::ClaimKind::RenamingEq {
@@ -3641,7 +3814,7 @@ impl<'a> Translator<'a> {
             return Ok(result);
         }
         // try the symmetry coset-same picked, in either direction
-        if let Some(g) = self.coset_symmetry(substitution)? {
+        if let Some(g) = coset {
             let grp_proof = premise_proofs
                 .iter()
                 .copied()
@@ -3654,7 +3827,7 @@ impl<'a> Translator<'a> {
                 .ok_or("claim without a group row")?;
             let t = self.dec(cls_a)?;
             let mut notes: Vec<String> = vec![];
-            for cand in [g.clone(), inverse(&g)] {
+            for cand in [g.clone(), inverse(g)] {
                 let s = match self.symmetry(cls_a, &cand, grp_proof) {
                     Ok(s) => s,
                     Err(e) => {
@@ -3774,41 +3947,11 @@ impl<'a> Translator<'a> {
         Ok(result)
     }
 
-    /// The group element the claim's `coset-same` relates the two sides by:
-    /// `mp_a = mp_b ∘ g`, with each side's renaming into the source's slot names.
-    fn coset_symmetry(&self, subst: &IndexMap<String, TermId>) -> R<Option<SlotMap>> {
-        let mut sides: Vec<SlotMap> = vec![];
-        for prefix in ["_c0", "_c1"] {
-            let Ok(m) = self.sub(subst, &format!("{prefix}m")) else {
-                continue;
-            };
-            let frame = frame_from_term(self.egg(), m).ok_or("claim frame is not a frame")?;
-            let root = frame.ren(prefix).ok_or("claim frame without its root")?;
-            let mut source: BTreeMap<i64, i64> = BTreeMap::new();
-            for name in frame.literal_names() {
-                if let Some(k) = name.strip_prefix('$').and_then(|k| k.parse::<i64>().ok())
-                    && let Some(r) = frame.ren(&name)
-                    && let Some(&slot) = r.get(&0)
-                {
-                    source.insert(slot, k);
-                }
-            }
-            let mp: SlotMap = root
-                .iter()
-                .filter_map(|(cs, fs)| source.get(fs).map(|k| (*cs, *k)))
-                .collect();
-            sides.push(mp);
-        }
-        let [mp_a, mp_b] = sides.as_slice() else {
-            return Ok(None);
-        };
-        // g = mp_b⁻¹ ∘ mp_a on the class slots
-        let inv_b: BTreeMap<i64, i64> = mp_b.iter().map(|(k, v)| (*v, *k)).collect();
-        let g: SlotMap = mp_a
-            .iter()
-            .filter_map(|(cs, k)| inv_b.get(k).map(|t| (*cs, *t)))
-            .collect();
-        Ok(Some(g))
+    /// The group element relating the roots in their shared query frame.
+    fn coset_symmetry(frame: &Fr, roots: [&str; 2]) -> R<SlotMap> {
+        let a = frame.ren(roots[0]).ok_or("claim frame has no left root")?;
+        let b = frame.ren(roots[1]).ok_or("claim frame has no right root")?;
+        Ok(compose(&inverse(&b), &a))
     }
 }
 

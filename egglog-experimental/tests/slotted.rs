@@ -1,4 +1,5 @@
-use egglog_experimental::slotted::{Compiler, Options};
+use egglog::CommandOutput;
+use egglog_experimental::slotted::{Compiler, Options, ProofMode, new_egraph_with_proofs};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -602,4 +603,42 @@ fn side_patterns_can_bind_the_rewrite_root() {
     ] {
         assert!(compiler.compile(None, source).is_err(), "{source}");
     }
+}
+
+#[test]
+fn proofs_keep_reused_rule_names_distinct_across_scopes() {
+    let mut compiler = Compiler::new(Options {
+        proof_mode: ProofMode::Prove,
+        ..Default::default()
+    });
+    let program = compiler
+        .compile(
+            None,
+            r#"
+        (datatype U (Num i64) (Wrap U))
+        (push)
+        (rewrite (Num n) (Wrap (Num n)) :name "repeat")
+        (let a (Num 1))
+        (run 1)
+        (check (= a (Wrap (Num 1))))
+        (pop)
+        (push)
+        (rewrite (Wrap x) x :name "repeat")
+        (let b (Wrap (Num 2)))
+        (run 1)
+        (check (= b (Num 2)))
+        (pop)
+    "#,
+        )
+        .unwrap();
+    let outputs = new_egraph_with_proofs()
+        .parse_and_run_program(None, &program)
+        .unwrap();
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|o| matches!(o, CommandOutput::UserDefined(_)))
+            .count(),
+        2
+    );
 }

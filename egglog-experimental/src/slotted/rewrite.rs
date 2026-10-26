@@ -287,7 +287,7 @@ pub(super) fn compile(
     names.classes = q
         .classes
         .iter()
-        .map(|(v, c)| (fname(v).to_owned(), c.clone()))
+        .map(|(v, c)| (v.to_owned(), c.clone()))
         .collect();
     names.readings = q.readings.clone();
     names.frame = q.frame.clone();

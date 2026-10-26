@@ -65,6 +65,7 @@ use scheduler::{SchedulerId, SchedulerRecord};
 pub use serialize::{SerializeConfig, SerializeOutput, SerializedNode};
 use sort::*;
 use std::any::{Any, TypeId};
+use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -476,16 +477,15 @@ impl Default for EGraph {
     }
 }
 
-/// Compare literals only when their runtime value ids can be recovered without
-/// an intern table. Boxed strings, floats and large integers have allocation-
-/// dependent ids, so source-level value ordering cannot validate them.
-fn literal_order(termdag: &TermDag, a: TermId, b: TermId) -> Option<std::cmp::Ordering> {
+/// Compare equal literals or distinct literals with recoverable runtime value IDs.
+/// Returns `None` for distinct strings, floats, and boxed integers.
+fn literal_order(termdag: &TermDag, a: TermId, b: TermId) -> Option<Ordering> {
     use core_relations::BaseValue;
     let (Term::Lit(x), Term::Lit(y)) = (termdag.get(a), termdag.get(b)) else {
         return None;
     };
     if x == y {
-        return Some(std::cmp::Ordering::Equal);
+        return Some(Ordering::Equal);
     }
     match (x, y) {
         (Literal::Int(x), Literal::Int(y)) => Some(x.try_box()?.cmp(&y.try_box()?)),
@@ -4189,14 +4189,11 @@ mod tests {
         let large = terms.lit(Literal::Int(i64::MAX));
         let a = terms.lit(Literal::String("a".into()));
         let b = terms.lit(Literal::String("b".into()));
-        assert_eq!(
-            literal_order(&terms, one, two),
-            Some(std::cmp::Ordering::Less)
-        );
+        assert_eq!(literal_order(&terms, one, two), Some(Ordering::Less));
         for (lhs, rhs) in [(negative, one), (one, large), (a, b)] {
             assert_eq!(literal_order(&terms, lhs, rhs), None);
         }
-        assert_eq!(literal_order(&terms, a, a), Some(std::cmp::Ordering::Equal));
+        assert_eq!(literal_order(&terms, a, a), Some(Ordering::Equal));
     }
 
     #[derive(Clone)]
