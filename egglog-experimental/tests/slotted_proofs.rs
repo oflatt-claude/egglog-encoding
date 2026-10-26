@@ -1,5 +1,7 @@
 use egglog::{CommandOutput, EGraph};
-use egglog_experimental::slotted::{Compiler, Options, ProofMode, new_egraph_with_proofs};
+use egglog_experimental::slotted::{
+    Compiler, Options, ProofMode, new_egraph, new_egraph_with_proofs,
+};
 
 fn compiler(mode: ProofMode) -> Compiler {
     Compiler::new(Options {
@@ -11,7 +13,9 @@ fn compiler(mode: ProofMode) -> Compiler {
 fn prove(compiler: &mut Compiler, graph: &mut EGraph, source: &str) -> Vec<String> {
     let encoded = compiler.compile(None, source).unwrap();
     let count = encoded.matches("(prove-slotted ").count();
-    let outputs = graph.parse_and_run_program(None, &encoded).unwrap();
+    let outputs = graph
+        .parse_and_run_program(None, &encoded)
+        .unwrap_or_else(|error| panic!("{source}\n{error}"));
     let proofs = outputs
         .into_iter()
         .filter_map(|o| match o {
@@ -78,6 +82,41 @@ fn demo_proof_snapshots() {
 }
 
 #[test]
+fn claims_instantiate_query_slots_without_renaming_globals() {
+    for source in [
+        "(datatype U (F U)) (let p (F $a)) (check (= p (F $b)))",
+        "(datatype U (F U)) (let p (F $a)) (let fixed $b)
+         (check (= p (F $b))) (fail (check (= p (F fixed))))",
+        "(datatype U (F U)) (let fixed $a) (let p (F fixed))
+         (check (= (F fixed) (F $b)))",
+        "(datatype U (F U)) (let p (F $a)) (let q (F $b))
+         (check (renaming-= p q)) (fail (check (= p q)))",
+        "(datatype U (Pair U U)) (let p (Pair $a $b))
+         (check (= p (Pair $b $a)))",
+        "(datatype U (Pair U U)) (let p (Pair $a $a))
+         (check (= p (Pair $b $b)))",
+        "(datatype U (Lam U U :binder 0) (Pair U U))
+         (let p (Lam $a (Pair $a $b)))
+         (check (= p (Lam $b (Pair $b $c))))",
+        "(datatype U (F U)) (let _p (F $a))
+         (check (= _p (F $b)))",
+        "(datatype U (F U)) (let p (F $a))
+         (check (= p (F $+0)))",
+        "(datatype U (Pair U U)) (let p (Pair $a $b))
+         (check (= p (Pair $+0 $0)))",
+    ] {
+        let ordinary = compiler(ProofMode::Disabled).compile(None, source).unwrap();
+        new_egraph().parse_and_run_program(None, &ordinary).unwrap();
+        let proofs = prove(
+            &mut compiler(ProofMode::Prove),
+            &mut new_egraph_with_proofs(),
+            source,
+        );
+        assert_eq!(proofs.len(), 1, "{source}");
+    }
+}
+
+#[test]
 fn named_slots_survive_scopes_and_successive_inputs() {
     let mut compiler = compiler(ProofMode::Prove);
     let mut graph = new_egraph_with_proofs();
@@ -139,7 +178,7 @@ fn reconstruction_uses_the_compilers_fresh_names() {
         ),
         (
             "(F (G (A)) (B))",
-            r#"(rewrite (F (G a) p) (G p) :lead 1 :name "reordered")"#,
+            r#"(rewrite (F (G a) p) (G p) :name "reordered")"#,
             "(G (B))",
         ),
         (

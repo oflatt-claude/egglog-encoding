@@ -6,6 +6,8 @@ use egglog::ast::Literal;
 use egglog::util::IndexMap;
 use egglog::{Term, TermDag, TermId};
 use std::collections::{BTreeMap, BTreeSet};
+use std::error::Error;
+use std::fmt::{self, Display, Formatter};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// How a surface constructor column participates in binding and renaming.
@@ -147,13 +149,13 @@ pub struct SlottedProgram {
 /// A malformed or unsupported source form.
 pub struct SourceError(pub String);
 
-impl std::fmt::Display for SourceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for SourceError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
 }
 
-impl std::error::Error for SourceError {}
+impl Error for SourceError {}
 
 /// The carrier sort of a program that has only one, as the convenience
 /// constructors below assume.
@@ -304,9 +306,9 @@ impl SlottedProgram {
         let rhs = match rhs {
             Sexp::Atom(name) if !name.starts_with('$') && !is_number(name) => {
                 // a bare name that is a global means that global
-                match self.lets.get(strip_sigil(name)) {
+                match self.lets.get(name) {
                     Some(&global) => Rhs::Term(global),
-                    None => Rhs::Var(strip_sigil(name).to_string()),
+                    None => Rhs::Var(name.to_string()),
                 }
             }
             Sexp::List(items) if items.first().and_then(Sexp::atom) == Some("subst") => {
@@ -340,7 +342,6 @@ impl SlottedProgram {
                     }
                     i += 2;
                 }
-                Some(":lead") => i += 2,
                 Some(other) => {
                     return Err(SourceError(format!("unsupported rewrite option {other}")));
                 }
@@ -388,7 +389,7 @@ impl SlottedProgram {
                 let vars = vars
                     .iter()
                     .map(|v| {
-                        v.atom().map(|v| strip_sigil(v).to_string()).ok_or_else(|| {
+                        v.atom().map(|v| v.to_string()).ok_or_else(|| {
                             SourceError(format!("{} needs a variable", h.atom().unwrap()))
                         })
                     })
@@ -414,7 +415,7 @@ impl SlottedProgram {
                     })
                     .collect::<Result<_, _>>()?;
                 Ok(Condition::FreeNames {
-                    var: strip_sigil(var).into(),
+                    var: var.into(),
                     slots,
                 })
             }
@@ -423,7 +424,7 @@ impl SlottedProgram {
                     .atom()
                     .ok_or_else(|| SourceError("(= v call) needs a variable".into()))?;
                 Ok(Condition::Eq {
-                    var: strip_sigil(var).to_string(),
+                    var: var.to_string(),
                     call: self.pattern_term(dag, call)?,
                 })
             }
@@ -471,7 +472,8 @@ impl SlottedProgram {
                 let name = number.map_or_else(|| a.clone(), |n| format!("${n}"));
                 let slot = self
                     .slot_names
-                    .get(&name)
+                    .get(a)
+                    .or_else(|| self.slot_names.get(&name))
                     .copied()
                     .or(number)
                     .ok_or_else(|| SourceError(format!("unknown slot {name}")))?;
@@ -709,10 +711,6 @@ fn is_number(a: &str) -> bool {
     a.parse::<i64>().is_ok() || a.parse::<f64>().is_ok() && a.contains('.')
 }
 
-fn strip_sigil(name: &str) -> &str {
-    name.strip_prefix('?').unwrap_or(name)
-}
-
 /// A symbol as a term: a number, a boolean, a slot, or whatever `var` makes of a
 /// name.
 fn atom_term(
@@ -734,7 +732,7 @@ fn atom_term(
     {
         return Ok(dag.lit(Literal::Float(f.into())));
     }
-    var(dag, strip_sigil(a))
+    var(dag, a)
 }
 
 /// A parsed s-expression.
@@ -765,8 +763,8 @@ impl Sexp {
     }
 }
 
-impl std::fmt::Display for Sexp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for Sexp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Sexp::Atom(a) => f.write_str(a),
             Sexp::Str(s) => write!(f, "{s:?}"),

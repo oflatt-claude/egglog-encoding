@@ -59,10 +59,6 @@ impl Slots {
         self.names[name]
     }
 
-    pub fn names(&self) -> &BTreeMap<String, i64> {
-        &self.names
-    }
-
     pub fn entries(&self) -> impl Iterator<Item = (&str, i64)> {
         self.names.iter().map(|(name, id)| (name.as_str(), *id))
     }
