@@ -83,7 +83,7 @@ pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
 pub use typechecking::TypeInfo;
-pub use typed_termdag::{GroundTypeError, GroundTyping};
+pub use typed_termdag::GroundTypeError;
 use util::*;
 
 use crate::ast::desugar::desugar_command;

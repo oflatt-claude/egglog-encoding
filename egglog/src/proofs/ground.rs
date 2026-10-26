@@ -35,7 +35,8 @@ struct Node {
 
 struct Lookup<'a> {
     egraph: &'a EGraph,
-    terms: &'a GroundTyping,
+    terms: &'a TypedTermDag,
+    roots: &'a [TermId],
     nodes: HashMap<TermId, Node>,
     evidence: Vec<Value>,
     evidence_ids: HashMap<Value, usize>,
@@ -117,13 +118,13 @@ impl EGraph {
     fn lookup_ground_expr(&self, expr: &ResolvedExpr) -> Result<Value, Error> {
         let mut terms = TermDag::default();
         let root = ground_expr(&mut terms, expr)?;
-        let typed = self
+        let (typed, roots) = self
             .type_info
             .proof_source_types()
             .typecheck_term_dag(&terms, &[(root, Some(expr.output_type()))], Context::Read)
             .map_err(|error| fail(error.to_string()))?;
-        let lookup = Lookup::new(self, &typed)?;
-        Ok(lookup.nodes[&typed.roots()[0]].value)
+        let lookup = Lookup::new(self, &typed, &roots)?;
+        Ok(lookup.nodes[&roots[0]].value)
     }
     /// Prove that existing ground terms are equal, without inserting either
     /// term. Both terms are looked up and proved to their common leader.
@@ -153,18 +154,18 @@ impl EGraph {
             .chain(outputs.iter().copied())
             .map(|root| (root, Some(sort.clone())))
             .collect::<Vec<_>>();
-        let typed = self
+        let (typed, roots) = self
             .type_info
             .proof_source_types()
             .typecheck_term_dag(terms, &roots, Context::Read)
             .map_err(|error| fail(error.to_string()))?;
-        let mut lookup = Lookup::new(self, &typed)?;
+        let mut lookup = Lookup::new(self, &typed, &roots)?;
         lookup.find_root_container_anchors()?;
         let (mut store, certificates) = lookup.compose()?;
-        let input = typed.roots()[0];
+        let input = roots[0];
         let mut proofs = Vec::with_capacity(outputs.len());
         let mut simplified = Default::default();
-        for &output in &typed.roots()[1..] {
+        for &output in &roots[1..] {
             let left = certificates[&input];
             let right = certificates[&output];
             if store.get(left).rhs() != store.get(right).rhs() {
@@ -196,7 +197,11 @@ impl EGraph {
 }
 
 impl<'a> Lookup<'a> {
-    fn new(egraph: &'a EGraph, terms: &'a GroundTyping) -> Result<Self, Error> {
+    fn new(
+        egraph: &'a EGraph,
+        terms: &'a TypedTermDag,
+        roots: &'a [TermId],
+    ) -> Result<Self, Error> {
         if egraph
             .get_sort_by_name(&egraph.proof_state.proof_names.proof_datatype)
             .is_none()
@@ -206,12 +211,13 @@ impl<'a> Lookup<'a> {
         let mut this = Self {
             egraph,
             terms,
+            roots,
             nodes: HashMap::default(),
             evidence: vec![],
             evidence_ids: HashMap::default(),
             unanchored_container_roots: vec![],
         };
-        for (id, node) in terms.dag().nodes() {
+        for (id, node) in terms.nodes() {
             let sort = node.sort();
             let (value, row) = match node {
                 TypedTerm::Var(never) => match *never {},
@@ -277,7 +283,7 @@ impl<'a> Lookup<'a> {
                         .ok_or_else(|| {
                             fail(format!(
                                 "Could not find term {} in the e-graph",
-                                terms.terms().to_string(terms.source_term(id))
+                                terms.to_string(id)
                             ))
                         })?;
                     let raw = row[key.len()];
@@ -308,8 +314,8 @@ impl<'a> Lookup<'a> {
             };
             this.nodes.insert(id, Node { value, row });
         }
-        let input = this.nodes[&terms.roots()[0]].value;
-        if terms.roots()[1..]
+        let input = this.nodes[&roots[0]].value;
+        if roots[1..]
             .iter()
             .any(|root| this.nodes[root].value != input)
         {
@@ -401,11 +407,10 @@ impl<'a> Lookup<'a> {
     // needed for container roots; ordinary constructor lookup stays fully keyed.
     fn find_root_container_anchors(&mut self) -> Result<(), Error> {
         let mut wanted = self
-            .terms
-            .roots()
+            .roots
             .iter()
             .filter_map(|id| {
-                let sort = self.terms.dag().get(*id).sort();
+                let sort = self.terms.get(*id).sort();
                 sort.is_container_sort()
                     .then(|| (sort.name().to_owned(), self.nodes[id].value))
             })
@@ -450,13 +455,12 @@ impl<'a> Lookup<'a> {
             }
         }
         self.unanchored_container_roots = self
-            .terms
-            .roots()
+            .roots
             .iter()
             .copied()
             .filter(|id| {
                 wanted.contains(&(
-                    self.terms.dag().get(*id).sort().name().to_owned(),
+                    self.terms.get(*id).sort().name().to_owned(),
                     self.nodes[id].value,
                 ))
             })
@@ -465,7 +469,7 @@ impl<'a> Lookup<'a> {
     }
 
     fn compose(self) -> Result<(ProofStore, HashMap<TermId, ProofId>), Error> {
-        let mut dag = self.terms.terms().clone();
+        let mut dag = TermDag::default();
         let sort = self
             .egraph
             .get_sort_by_name(&self.egraph.proof_state.proof_names.proof_datatype)
@@ -562,21 +566,17 @@ impl<'a> Lookup<'a> {
                 return Err(fail(error.to_string()));
             }
             for &id in &composition.lookup.unanchored_container_roots {
-                let node = composition.lookup.terms.dag().get(id);
+                let node = composition.lookup.terms.get(id);
                 let sort = node.sort().name().to_owned();
-                if !composition.lookup.terms.roots().iter().any(|root| {
-                    composition.lookup.terms.dag().get(*root).sort().name() == sort
+                if !composition.lookup.roots.iter().any(|root| {
+                    composition.lookup.terms.get(*root).sort().name() == sort
                         && (source_containers.contains(&(sort.clone(), composition.selected[root]))
                             || source_containers
                                 .contains(&(sort.clone(), composition.canonical[root])))
                 }) {
                     return Err(fail(format!(
                         "Could not find term {} in the e-graph",
-                        composition
-                            .lookup
-                            .terms
-                            .terms()
-                            .to_string(composition.lookup.terms.source_term(id))
+                        composition.lookup.terms.to_string(id)
                     )));
                 }
             }
@@ -606,26 +606,19 @@ impl<'a> Lookup<'a> {
         // temporary arguments need not themselves be existence claims (for
         // example vec-length(vec-of(a)) proves a literal, not a fresh vector).
         let mut needed = HashSet::default();
-        let mut pending = composition.lookup.terms.roots().to_vec();
-        pending.extend(
-            composition
-                .lookup
-                .terms
-                .dag()
-                .nodes()
-                .filter_map(|(id, _)| {
-                    matches!(
-                        composition.lookup.nodes[&id].row.map(|r| r.kind),
-                        Some(RowKind::Constructor)
-                    )
-                    .then_some(id)
-                }),
-        );
+        let mut pending = composition.lookup.roots.to_vec();
+        pending.extend(composition.lookup.terms.nodes().filter_map(|(id, _)| {
+            matches!(
+                composition.lookup.nodes[&id].row.map(|r| r.kind),
+                Some(RowKind::Constructor)
+            )
+            .then_some(id)
+        }));
         while let Some(id) = pending.pop() {
             if !needed.insert(id) {
                 continue;
             }
-            let typed = composition.lookup.terms.dag().get(id);
+            let typed = composition.lookup.terms.get(id);
             let constructor = matches!(
                 composition.lookup.nodes[&id].row.map(|r| r.kind),
                 Some(RowKind::Constructor)
@@ -646,8 +639,7 @@ impl<'a> Lookup<'a> {
         let mut seen = HashSet::default();
         let mut pending = composition
             .lookup
-            .terms
-            .roots()
+            .roots
             .iter()
             .rev()
             .map(|&id| (id, false))
@@ -661,7 +653,7 @@ impl<'a> Lookup<'a> {
                 continue;
             }
             pending.push((id, true));
-            if let TypedTerm::App(_, children) = composition.lookup.terms.dag().get(id) {
+            if let TypedTerm::App(_, children) = composition.lookup.terms.get(id) {
                 pending.extend(children.iter().rev().map(|&child| (child, false)));
             }
         }
@@ -680,14 +672,7 @@ impl<'a> Lookup<'a> {
             composition.proofs.insert(id, proof);
             composition.typed_certificates.insert(
                 (
-                    composition
-                        .lookup
-                        .terms
-                        .dag()
-                        .get(id)
-                        .sort()
-                        .name()
-                        .to_owned(),
+                    composition.lookup.terms.get(id).sort().name().to_owned(),
                     composition.selected[&id],
                 ),
                 proof,
@@ -724,7 +709,7 @@ impl Composition<'_> {
     // leaders are named by existing view/UF proofs; container leaders are the
     // normalized containers of those same element witnesses.
     fn name_endpoints(&mut self, globals: &HashMap<String, TermId>) -> Result<(), Error> {
-        for (id, typed) in self.lookup.terms.dag().nodes() {
+        for (id, typed) in self.lookup.terms.nodes() {
             let node = &self.lookup.nodes[&id];
             let row_proof = node.row.as_ref().map(|row| {
                 let proof = self.evidence[row.proof];
@@ -750,9 +735,9 @@ impl Composition<'_> {
                 .map(|child| self.canonical[child])
                 .collect::<Vec<_>>();
             let (selected, fallback_canonical) = match typed {
-                TypedTerm::Lit(_) => {
-                    let source = self.lookup.terms.source_term(id);
-                    (source, source)
+                TypedTerm::Lit(literal) => {
+                    let term = self.store.term_dag.lit(literal.clone());
+                    (term, term)
                 }
                 TypedTerm::App(ResolvedCall::Primitive(primitive), _) => {
                     let validator = primitive.validator().unwrap();
@@ -816,7 +801,6 @@ impl Composition<'_> {
         let containers = self
             .lookup
             .terms
-            .dag()
             .nodes()
             .filter_map(|(id, node)| node.sort().is_container_sort().then_some(id))
             .collect::<Vec<_>>();
@@ -825,32 +809,29 @@ impl Composition<'_> {
         }
         let roots = containers
             .iter()
-            .map(|id| {
-                (
-                    self.selected[id],
-                    Some(self.lookup.terms.dag().get(*id).sort()),
-                )
-            })
+            .map(|id| (self.selected[id], Some(self.lookup.terms.get(*id).sort())))
             .collect::<Vec<_>>();
-        let forms = self
+        let (forms, typed_roots) = self
             .lookup
             .egraph
             .type_info
             .proof_source_types()
             .typecheck_term_dag(&self.store.term_dag, &roots, Context::Read)
             .map_err(|error| fail(error.to_string()))?;
-        for (&id, &root) in containers.iter().zip(forms.roots()) {
-            let TypedTerm::App(_, children) = forms.dag().get(root) else {
+        for (&id, &root) in containers.iter().zip(&typed_roots) {
+            let (TypedTerm::App(_, typed_children), Term::App(_, children)) =
+                (forms.get(root), self.store.term_dag.get(self.selected[&id]))
+            else {
                 return Err(fail("container result is not an application"));
             };
+            // Typechecking preserves child positions, so each resolved child
+            // sort describes the corresponding existing proof term.
             self.container_elements.insert(
                 id,
-                children
+                typed_children
                     .iter()
-                    .map(|child| {
-                        let node = forms.dag().get(*child);
-                        (node.sort().name().to_owned(), forms.source_term(*child))
-                    })
+                    .zip(children)
+                    .map(|(&typed, &term)| (forms.get(typed).sort().name().to_owned(), term))
                     .collect(),
             );
         }
@@ -898,7 +879,7 @@ impl Composition<'_> {
     }
 
     fn prove_node(&mut self, id: TermId) -> Result<ProofId, Error> {
-        let typed = self.lookup.terms.dag().get(id);
+        let typed = self.lookup.terms.get(id);
         if let Some(row) = self.lookup.nodes[&id].row {
             let mut proof = self.row_proofs[&id];
             match row.kind {
@@ -977,10 +958,7 @@ impl Composition<'_> {
             .ok_or_else(|| {
                 fail(format!(
                     "Could not find term {} in the e-graph",
-                    self.lookup
-                        .terms
-                        .terms()
-                        .to_string(self.lookup.terms.source_term(id))
+                    self.lookup.terms.to_string(id)
                 ))
             })?;
         let mut proof = self.store.reflexive(anchor);

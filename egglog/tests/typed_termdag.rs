@@ -18,19 +18,31 @@ fn shared_polymorphic_syntax_has_independent_typings() {
     let mut terms = TermDag::default();
     let empty = terms.app("vec-empty".into(), vec![]);
     let wrap = terms.app("Wrap".into(), vec![empty, empty]);
-    let typed = eg
+    let a_sort = eg.type_info().get_sort_by_name("As").unwrap().clone();
+    let b_sort = eg.type_info().get_sort_by_name("Bs").unwrap().clone();
+    let (typed, roots) = eg
         .type_info()
-        .typecheck_term_dag(&terms, &[(wrap, None)], Context::Read)
+        .typecheck_term_dag(
+            &terms,
+            &[
+                (wrap, None),
+                (empty, Some(b_sort)),
+                (empty, Some(a_sort)),
+                (wrap, None),
+            ],
+            Context::Read,
+        )
         .unwrap();
-    let TypedTerm::App(_, children) = typed.dag().get(typed.roots()[0]) else {
+    let TypedTerm::App(_, children) = typed.get(roots[0]) else {
         panic!()
     };
     assert_ne!(children[0], children[1]);
-    assert_eq!(typed.source_term(children[0]), empty);
-    assert_eq!(typed.source_term(children[1]), empty);
-    assert_eq!(typed.dag().get(children[0]).sort().name(), "As");
-    assert_eq!(typed.dag().get(children[1]).sort().name(), "Bs");
-    assert_eq!(typed.dag().nodes().len(), 3);
+    assert_eq!(roots, [roots[0], children[1], children[0], roots[0]]);
+    assert_eq!(typed.to_string(children[0]), terms.to_string(empty));
+    assert_eq!(typed.to_string(children[1]), terms.to_string(empty));
+    assert_eq!(typed.get(children[0]).sort().name(), "As");
+    assert_eq!(typed.get(children[1]).sort().name(), "Bs");
+    assert_eq!(typed.nodes().len(), 3);
 }
 
 #[test]
@@ -49,15 +61,15 @@ fn nested_primitives_constrain_overloads_bottom_up() {
     let value = terms.lit(Literal::Int(42));
     let map = terms.app("map-of".into(), vec![key, value]);
     let length = terms.app("map-length".into(), vec![map]);
-    let typed = eg
+    let (typed, roots) = eg
         .type_info()
         .typecheck_term_dag(&terms, &[(length, None)], Context::Read)
         .unwrap();
-    let TypedTerm::App(_, children) = typed.dag().get(typed.roots()[0]) else {
+    let TypedTerm::App(_, children) = typed.get(roots[0]) else {
         panic!()
     };
-    assert_eq!(typed.dag().get(typed.roots()[0]).sort().name(), "i64");
-    assert_eq!(typed.dag().get(children[0]).sort().name(), "Numbers");
+    assert_eq!(typed.get(roots[0]).sort().name(), "i64");
+    assert_eq!(typed.get(children[0]).sort().name(), "Numbers");
     assert_eq!(eg.num_nodes(), 0, "typing must not insert any terms");
 }
 
@@ -76,11 +88,11 @@ fn expected_root_sort_selects_an_overload_but_not_ambiguous_children() {
             .typecheck_term_dag(&terms, &[(empty, None)], Context::Read),
         Err(GroundTypeError::Ambiguous { .. })
     ));
-    let typed = eg
+    let (typed, roots) = eg
         .type_info()
         .typecheck_term_dag(&terms, &[(empty, Some(ints))], Context::Read)
         .unwrap();
-    assert_eq!(typed.dag().get(typed.roots()[0]).sort().name(), "Ints");
+    assert_eq!(typed.get(roots[0]).sort().name(), "Ints");
     assert!(matches!(
         eg.type_info()
             .typecheck_term_dag(&terms, &[(length, Some(i64_sort))], Context::Read),
@@ -101,12 +113,12 @@ fn shared_ground_dag_stays_shared_and_does_not_use_the_call_stack() {
             for _ in 0..2000 {
                 root = terms.app("Pair".into(), vec![root, root]);
             }
-            let typed = eg
+            let (typed, _) = eg
                 .type_info()
                 .typecheck_term_dag(&terms, &[(root, None)], Context::Read)
                 .unwrap();
-            assert_eq!(typed.dag().nodes().len(), terms.size());
-            for (_, node) in typed.dag().nodes() {
+            assert_eq!(typed.nodes().len(), terms.size());
+            for (_, node) in typed.nodes() {
                 if let TypedTerm::App(_, children) = node
                     && children.len() == 2
                 {

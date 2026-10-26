@@ -937,11 +937,11 @@ in their original source definition.
 The passes are:
 
 1. [`TypeInfo::typecheck_term_dag`](crate::TypeInfo::typecheck_term_dag) resolves
-   ground syntax bottom-up using the existing type constraints. A shared syntactic node can have several
-   typings, selected by its parents or an expected root sort. Unresolved
-   ambiguity is an error. The result contains a `TypedTermDag`, a specialization
-   of the same `GenericTermDag` storage as unresolved terms, with resolved heads
-   and no variable leaves. Typing performs no evaluation or table mutation.
+   ground syntax bottom-up using the existing type constraints. A shared syntactic
+   node can have several typings, selected by its parents or an expected root
+   sort. Unresolved ambiguity is an error. The pass returns a `TypedTermDag` and its root IDs.
+   It uses the same `GenericTermDag` storage as unresolved terms, with resolved
+   heads and no variable leaves. Typing performs no evaluation or table mutation.
 2. Read-only lookup evaluates literals and validated read primitives and reads
    constructor/function views with canonical child values as keys. It collects
    the existing row proofs and union-find connections.
