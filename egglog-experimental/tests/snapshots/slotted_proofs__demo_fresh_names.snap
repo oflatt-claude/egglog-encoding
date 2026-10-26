@@ -11,7 +11,8 @@ Source:
 (check (= input $a))
 
 Proof:
-#0: (F $a) = (F $a)
-    by fiat
-#1: (F $a) = $a
-    by rule "unwrap" [v1 := $a] from #0
+(Rule
+  (= (F $a) $a)
+  (name "unwrap")
+  (premises (Fiat (= (F $a) (F $a))))
+  (substitution (v1 $a)))

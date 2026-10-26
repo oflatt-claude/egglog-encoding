@@ -2,9 +2,8 @@
 
 use super::HashMap;
 use super::terms::{Renaming, all_slots, rename, slot_of};
-use egglog::{Term, TermDag, TermId};
+use egglog::{Term, TermDag, TermId, ast::Literal, proof::proof_term_to_string};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write;
 
 /// An index into a [`SlottedProofStore`].
 pub type SlottedProofId = usize;
@@ -370,21 +369,41 @@ impl SlottedProofStore {
         }
     }
 
-    fn named_renaming(renaming: &Renaming, names: &BTreeMap<i64, String>) -> String {
-        format!(
-            "{{{}}}",
-            renaming
-                .entries()
-                .map(|(a, b)| {
-                    format!(
-                        "{}->{}",
-                        names[&a].trim_start_matches('$'),
-                        names[&b].trim_start_matches('$')
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
+    fn named_dag(&self, names: &BTreeMap<i64, String>) -> (TermDag, Vec<TermId>) {
+        let mut dag = TermDag::default();
+        let mut terms = Vec::with_capacity(self.term_dag.size());
+        for id in 0..self.term_dag.size() {
+            let term = match self.term_dag.get(id) {
+                Term::Var(v) => dag.var(
+                    slot_of(&self.term_dag, id)
+                        .and_then(|slot| names.get(&slot))
+                        .unwrap_or(v)
+                        .clone(),
+                ),
+                Term::Lit(lit) => dag.lit(lit.clone()),
+                Term::App(head, children) => dag.app(
+                    head.clone(),
+                    children.iter().map(|&child| terms[child]).collect(),
+                ),
+            };
+            terms.push(term);
+        }
+        (dag, terms)
+    }
+
+    fn renaming_term(
+        dag: &mut TermDag,
+        renaming: &Renaming,
+        names: &BTreeMap<i64, String>,
+    ) -> TermId {
+        let entries = renaming
+            .entries()
+            .map(|(a, b)| {
+                let target = dag.var(names[&b].clone());
+                dag.app(names[&a].clone(), vec![target])
+            })
+            .collect();
+        dag.app("renaming".into(), entries)
     }
 
     fn named_proposition(&self, p: &SlottedProposition, names: &BTreeMap<i64, String>) -> String {
@@ -395,76 +414,77 @@ impl SlottedProofStore {
         )
     }
 
-    /// The proof and everything it depends on, one numbered line each, in
-    /// dependency order.
+    /// Print a proof in egglog's S-expression format, with source slot names.
     pub fn proof_to_string(&self, root: SlottedProofId) -> String {
-        self.proof_with_names(root, &self.display_names(Some(root), []))
+        let names = self.display_names(Some(root), []);
+        let (mut dag, terms) = self.named_dag(&names);
+        let proof = self.proof_term(root, &mut dag, &terms, &names);
+        proof_term_to_string(&dag, proof)
     }
 
-    fn proof_with_names(&self, root: SlottedProofId, names: &BTreeMap<i64, String>) -> String {
-        let order = self.dependencies(root);
-        let number: HashMap<SlottedProofId, usize> =
-            order.iter().enumerate().map(|(n, &id)| (id, n)).collect();
-        let mut out = String::new();
-        for &id in &order {
+    fn proof_term(
+        &self,
+        root: SlottedProofId,
+        dag: &mut TermDag,
+        terms: &[TermId],
+        names: &BTreeMap<i64, String>,
+    ) -> TermId {
+        let mut proofs = HashMap::default();
+        for id in self.dependencies(root) {
             let proof = &self.proofs[id];
-            let _ = write!(
-                out,
-                "#{}: {}",
-                number[&id],
-                self.named_proposition(&proof.proposition, names)
+            let equality = dag.app(
+                "=".into(),
+                vec![terms[proof.proposition.lhs], terms[proof.proposition.rhs]],
             );
-            let _ = match &proof.justification {
-                SlottedJustification::Fiat => writeln!(out, "\n    by fiat"),
+            let term = match &proof.justification {
+                SlottedJustification::Fiat => dag.app("Fiat".into(), vec![equality]),
                 SlottedJustification::Rule {
                     name,
                     substitution,
                     premises,
                 } => {
-                    let subst: Vec<String> = substitution
+                    let name = dag.lit(Literal::String(name.clone()));
+                    let name = dag.app("name".into(), vec![name]);
+                    let premises = dag.app(
+                        "premises".into(),
+                        premises.iter().map(|p| proofs[p]).collect(),
+                    );
+                    let substitution = substitution
                         .iter()
-                        .map(|(v, t)| format!("{v} := {}", self.named_term(*t, names)))
+                        .map(|(var, term)| dag.app(var.clone(), vec![terms[*term]]))
                         .collect();
-                    let prems: Vec<String> =
-                        premises.iter().map(|p| format!("#{}", number[p])).collect();
-                    writeln!(
-                        out,
-                        "\n    by rule {name:?} [{}] from {}",
-                        subst.join(", "),
-                        if prems.is_empty() {
-                            "nothing".to_string()
-                        } else {
-                            prems.join(" ")
-                        }
-                    )
+                    let substitution = dag.app("substitution".into(), substitution);
+                    dag.app("Rule".into(), vec![equality, name, premises, substitution])
                 }
-                SlottedJustification::Sym(p) => writeln!(out, "\n    by sym #{}", number[p]),
+                SlottedJustification::Sym(p) => dag.app("Sym".into(), vec![equality, proofs[p]]),
                 SlottedJustification::Trans(a, b) => {
-                    writeln!(out, "\n    by trans #{} #{}", number[a], number[b])
+                    dag.app("Trans".into(), vec![equality, proofs[a], proofs[b]])
                 }
                 SlottedJustification::Congr {
                     proof,
                     child_index,
                     child_proof,
-                } => writeln!(
-                    out,
-                    "\n    by congr #{} at {child_index} with #{}",
-                    number[proof], number[child_proof]
-                ),
+                } => {
+                    let index = dag.lit(Literal::Int(*child_index as i64));
+                    dag.app(
+                        "Congr".into(),
+                        vec![equality, proofs[proof], proofs[child_proof], index],
+                    )
+                }
                 SlottedJustification::Equivariance { proof, renaming } => {
-                    writeln!(
-                        out,
-                        "\n    by equivariance #{} by {}",
-                        number[proof],
-                        Self::named_renaming(renaming, names)
+                    let renaming = Self::renaming_term(dag, renaming, names);
+                    dag.app(
+                        "Equivariance".into(),
+                        vec![equality, proofs[proof], renaming],
                     )
                 }
             };
+            proofs.insert(id, term);
         }
-        out
+        proofs[&root]
     }
 
-    /// Display the ordinary derivation followed by its final renaming witness.
+    /// Print the proof, wrapped in a `Claim` when a renaming witness is needed.
     pub fn conclusion_to_string(&mut self, conclusion: &SlottedConclusion) -> String {
         let p = self.proposition(conclusion.proof).clone();
         let rhs = rename(&mut self.term_dag, &conclusion.renaming.inverse(), p.rhs);
@@ -475,17 +495,15 @@ impl SlottedProofStore {
             Some(conclusion.proof),
             witness.entries().flat_map(|(a, b)| [a, b]),
         );
-        let mut text = self.proof_with_names(conclusion.proof, &names);
+        let (mut dag, terms) = self.named_dag(&names);
+        let mut proof = self.proof_term(conclusion.proof, &mut dag, &terms, &names);
         if rhs != p.rhs {
-            let _ = writeln!(
-                text,
-                "claim: {} = {}·{}",
-                self.named_term(p.lhs, &names),
-                Self::named_renaming(&witness, &names),
-                self.named_term(rhs, &names)
-            );
+            let renaming = Self::renaming_term(&mut dag, &witness, &names);
+            let rhs = dag.app("rename".into(), vec![renaming, terms[rhs]]);
+            let equality = dag.app("=".into(), vec![terms[p.lhs], rhs]);
+            proof = dag.app("Claim".into(), vec![equality, proof]);
         }
-        text
+        proof_term_to_string(&dag, proof)
     }
 }
 
@@ -505,7 +523,7 @@ mod tests {
         let proof = store.equivariance(refl, Renaming::new([(30, 31), (31, 30)]).unwrap());
         assert_eq!(
             store.proof_to_string(proof),
-            "#0: $a = $a\n    by fiat\n#1: $a = $a\n    by equivariance #0 by {v2->v3, v3->v2}\n"
+            "(Equivariance (= $a $a) (Fiat (= $a $a)) (renaming ($v2 $v3) ($v3 $v2)))"
         );
     }
 }

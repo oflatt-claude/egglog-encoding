@@ -23,6 +23,8 @@ between slot names. Source equality conditions compare bound names by scope,
 and the final claim records how its requested terms are named in the proof.
 
 Printed proofs preserve source slot names in terms, substitutions, and renamings.
+They use egglog's S-expression format, with `let` bindings for shared subproofs
+and terms.
 Internal slots without a source name print as `$v0`, `$v1`, …, skipping source names
 and rule variables, even when they do not occur in the printed proof. The same
 slot has one name throughout the proof, including permutation coordinates that
@@ -85,6 +87,8 @@ be syntactically identical and their carrier sorts must agree.
 **Congr.** From `a = F(..., c, ...)` and `c = d`, derive `a = F(..., d, ...)`.
 The selected child must match the child proof's left endpoint exactly; the
 child proof must have the column's sort. No renaming is performed by this rule.
+The printed form is `(Congr (= lhs rhs) parent-proof child-proof index)`, where
+`index` is the zero-based constructor argument position, including binder columns.
 
 **Equivariance.** From `a = b`, derive `rename(m, a) = rename(m, b)` for a finite
 slot permutation `m`. The checker recomputes both endpoints and preserves the
@@ -110,14 +114,15 @@ but still checks the actual ordinary equality proof and its endpoints. The
 proof must have the claim's carrier sort, or no sort at all. Negative claims
 and other claim forms are checked, not proved.
 
-When the witness changes the spelling of `b`, the display ends with one
-`claim: a = m·b` line. This is a checked interpretation of the root equality,
-not another inference rule. For example, alpha-renaming needs only:
+When the witness changes the spelling of `b`, the display wraps the proof in
+`(Claim (= a (rename m b)) proof)`. A renaming prints as
+`(renaming ($from $to) ...)`. The wrapper records a checked interpretation of the
+root equality, not another inference rule. For example, alpha-renaming needs only:
 
-```text
-#0: (Lam $a $a) = (Lam $a $a)
-    by fiat
-claim: (Lam $a $a) = {a->b, b->a}·(Lam $b $b)
+```lisp
+(Claim
+  (= (Lam $a $a) (rename (renaming ($a $b) ($b $a)) (Lam $b $b)))
+  (Fiat (= (Lam $a $a) (Lam $a $a))))
 ```
 
 # Normalization

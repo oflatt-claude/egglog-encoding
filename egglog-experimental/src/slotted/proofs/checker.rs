@@ -666,7 +666,7 @@ mod tests {
         .unwrap();
         let text = store.proof_to_string(proof);
         assert!(
-            text.contains("by equivariance #1 by {7->9, 9->7}"),
+            text.contains("(Equivariance") && text.contains("(renaming ($7 $9) ($9 $7))"),
             "{text}"
         );
     }

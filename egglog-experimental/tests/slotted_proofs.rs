@@ -163,7 +163,7 @@ fn rust_frontend_lifts_and_checks_surface_proofs() {
             source,
         );
         assert!(!proofs.is_empty());
-        assert!(proofs.iter().all(|p| p.contains("by ")));
+        assert!(proofs.iter().all(|p| p.contains("(= ")));
     }
 }
 
@@ -240,7 +240,7 @@ fn side_patterns_can_bind_the_proved_rewrite_root() {
             &source,
         );
         assert_eq!(proofs.len(), 1);
-        assert!(proofs[0].contains("by rule \"child\""));
+        assert!(proofs[0].contains("(name \"child\")"));
     }
 }
 
@@ -262,8 +262,8 @@ fn recursive_rule_premises_keep_their_own_bindings() {
             ),
         );
         assert_eq!(proofs.len(), 1);
-        assert!(proofs[0].contains("by rule \"inner\""));
-        assert!(proofs[0].contains("by rule \"outer\""));
+        assert!(proofs[0].contains("(name \"inner\")"));
+        assert!(proofs[0].contains("(name \"outer\")"));
     }
 }
 

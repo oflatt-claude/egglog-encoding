@@ -10,7 +10,7 @@ Source:
 (check (= (Mul $b (Zero)) (Zero)))
 
 Proof:
-#0: (Mul $a (Zero)) = (Zero)
-    by fiat
-#1: (Mul $b (Zero)) = (Zero)
-    by equivariance #0 by {a->b, b->a}
+(Equivariance
+  (= (Mul $b (Zero)) (Zero))
+  (Fiat (= (Mul $a (Zero)) (Zero)))
+  (renaming ($a $b) ($b $a)))
