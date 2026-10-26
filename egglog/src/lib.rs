@@ -1868,6 +1868,8 @@ impl EGraph {
     /// tied to that binding. `output_sort` constrains overload resolution and
     /// output-type inference for the expression. Global references are rewritten
     /// into the same shared-table reads used during command execution.
+    /// This shares the command pipeline's source typechecking and global lowering;
+    /// it does not instrument the expression with terms or proofs.
     /// `context` should match the runtime context where the resolved expression
     /// will be evaluated.
     pub fn typecheck_expr_with_bindings_and_output(
@@ -1887,14 +1889,24 @@ impl EGraph {
                 return Err(TypeError::AlreadyDefined(name.clone(), span.clone()));
             }
         }
-        let resolved = self.type_info.typecheck_expr_with_output(
-            &mut self.parser.symbol_gen,
-            expr,
-            &binding_map,
-            output_sort,
-            context,
-        )?;
-        Ok(self.type_info.global_tables.expr(resolved))
+        let resolved = self.typecheck_source(|source| {
+            source.type_info.typecheck_expr_with_output(
+                &mut source.parser.symbol_gen,
+                expr,
+                &binding_map,
+                output_sort,
+                context,
+            )
+        })?;
+        let commands = self.lower_source_globals(vec![ResolvedNCommand::CoreAction(
+            ResolvedAction::Expr(expr.span(), resolved),
+        )]);
+        let ResolvedNCommand::CoreAction(ResolvedAction::Expr(_, resolved)) =
+            commands.into_iter().next().unwrap()
+        else {
+            unreachable!("lowering an expression does not introduce global bindings")
+        };
+        Ok(resolved)
     }
 
     /// Replace literal `(unstable-fn "...")` targets with hidden evaluator bindings.
@@ -2778,19 +2790,43 @@ impl EGraph {
         self.proof_state.proofs_enabled
     }
 
+    /// Commands and expression APIs resolve names in the source environment,
+    /// before term encoding changes function signatures and global storage.
+    fn typecheck_source<T>(
+        &mut self,
+        typecheck: impl FnOnce(&mut EGraph) -> Result<T, TypeError>,
+    ) -> Result<T, TypeError> {
+        let timer = Instant::now();
+        let result = match self.proof_state.original_typechecking.as_mut() {
+            Some(source) => typecheck(source),
+            None => typecheck(self),
+        };
+        self.overall_report.typecheck += timer.elapsed();
+        result
+    }
+
+    fn lower_source_globals(&mut self, commands: Vec<ResolvedNCommand>) -> Vec<ResolvedNCommand> {
+        let source_types = self
+            .proof_state
+            .original_typechecking
+            .as_mut()
+            .map(|source| &mut source.type_info)
+            .unwrap_or(&mut self.type_info);
+        remove_globals::remove_globals(
+            commands,
+            &mut self.parser.symbol_gen,
+            &mut source_types.global_tables,
+        )
+    }
+
     fn resolve_command_before_proofs(
         &mut self,
         command: Command,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let desugared = desugar_command(command, &mut self.parser, self.proof_state.proof_testing)?;
+        let typechecked = self.typecheck_source(|source| source.typecheck_program(&desugared))?;
         let proofs_enabled = self.proof_state.proofs_enabled;
         if let Some(original_typechecking) = self.proof_state.original_typechecking.as_mut() {
-            // Typecheck using the original egraph
-            // TODO this is ugly- we don't need an entire e-graph just for type information.
-            let typecheck_timer = Instant::now();
-            let typechecked = original_typechecking.typecheck_program(&desugared)?;
-            self.overall_report.typecheck += typecheck_timer.elapsed();
-
             for command in &typechecked {
                 if let Err(reason) = command_supports_proof_encoding(
                     &command.to_command(),
@@ -2807,19 +2843,10 @@ impl EGraph {
 
             Ok(proof_form(typechecked, &mut self.parser.symbol_gen))
         } else {
-            let typecheck_timer = Instant::now();
-            let mut typechecked = self.typecheck_program(&desugared)?;
-            self.overall_report.typecheck += typecheck_timer.elapsed();
-
             for command in &typechecked {
                 self.names.check_shadowing(command)?;
             }
-            typechecked = remove_globals::remove_globals(
-                typechecked,
-                &mut self.parser.symbol_gen,
-                &mut self.type_info.global_tables,
-            );
-            Ok(typechecked)
+            Ok(self.lower_source_globals(typechecked))
         }
     }
 
@@ -2856,17 +2883,7 @@ impl EGraph {
             for command in &resolved_before_proofs {
                 self.names.check_shadowing(command)?;
             }
-            let source_types = &mut self
-                .proof_state
-                .original_typechecking
-                .as_mut()
-                .unwrap()
-                .type_info;
-            let typechecked_no_globals = remove_globals::remove_globals(
-                resolved_before_proofs,
-                &mut self.parser.symbol_gen,
-                &mut source_types.global_tables,
-            );
+            let typechecked_no_globals = self.lower_source_globals(resolved_before_proofs);
             let numbered_before = self.proof_state.global_actions_numbered;
             let term_encoding_added =
                 ProofInstrumentor::add_term_encoding(self, typechecked_no_globals)?;
@@ -4436,32 +4453,37 @@ mod tests {
 
     #[test]
     fn test_typecheck_expr_with_bindings_and_output_uses_context() {
-        let mut egraph = EGraph::default();
-        egraph.add_full_primitive(FullOnly, None);
-        let mut parser = crate::ast::Parser::default();
-        let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            egraph.add_full_primitive(FullOnly, None);
+            let mut parser = crate::ast::Parser::default();
+            let expr = parser.get_expr_from_string(None, "(full-only)").unwrap();
 
-        let resolved = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Full,
-            )
-            .unwrap();
-        assert_eq!(resolved.output_type().name(), I64Sort.name());
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Full,
+                )
+                .unwrap();
+            assert_eq!(resolved.output_type().name(), I64Sort.name());
 
-        let err = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Pure,
-            )
-            .unwrap_err();
-        match err {
-            TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
-            other => panic!("expected unbound function, got {other:?}"),
+            let err = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Pure,
+                )
+                .unwrap_err();
+            match err {
+                TypeError::UnboundFunction(name, _) => assert_eq!(name, "full-only"),
+                other => panic!("expected unbound function, got {other:?}"),
+            }
         }
     }
 
@@ -4492,22 +4514,89 @@ mod tests {
 
     #[test]
     fn test_typecheck_expr_with_bindings_and_output_rewrites_globals() {
-        let mut egraph = EGraph::default();
-        egraph.parse_and_run_program(None, "(let $x 1)").unwrap();
-        let mut parser = crate::ast::Parser::default();
-        let expr = parser.get_expr_from_string(None, "$x").unwrap();
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            egraph
+                .parse_and_run_program(None, "(let $x 1) (let $y (+ $x 1))")
+                .unwrap();
+            let mut parser = crate::ast::Parser::default();
+            for (text, expected) in [("$x", 1), ("(+ $x $y)", 3)] {
+                let expr = parser.get_expr_from_string(None, text).unwrap();
+                let resolved = egraph
+                    .typecheck_expr_with_bindings_and_output(
+                        &expr,
+                        &[],
+                        I64Sort.to_arcsort(),
+                        Context::Read,
+                    )
+                    .unwrap();
 
-        let resolved = egraph
-            .typecheck_expr_with_bindings_and_output(
-                &expr,
-                &[],
-                I64Sort.to_arcsort(),
-                Context::Read,
-            )
-            .unwrap();
+                let value = egraph.eval_resolved_expr(span!(), &resolved).unwrap();
+                assert_eq!(egraph.value_to_base::<i64>(value), expected);
+            }
 
-        let value = egraph.eval_resolved_expr(span!(), &resolved).unwrap();
-        assert_eq!(egraph.value_to_base::<i64>(value), 1);
+            let expr = parser.get_expr_from_string(None, "(+ $x local)").unwrap();
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[("local".into(), span!(), I64Sort.to_arcsort())],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            assert_eq!(resolved.output_type().name(), I64Sort.name());
+        }
+    }
+
+    #[test]
+    fn test_typecheck_expr_with_bindings_and_output_restores_global_scope() {
+        for mut egraph in [
+            EGraph::default(),
+            EGraph::new_with_term_encoding(),
+            EGraph::new_with_proofs(),
+        ] {
+            let mut parser = crate::ast::Parser::default();
+            let expr = parser.get_expr_from_string(None, "$scoped").unwrap();
+            egraph
+                .parse_and_run_program(None, "(push) (let $scoped 1)")
+                .unwrap();
+            egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+
+            egraph.parse_and_run_program(None, "(pop)").unwrap();
+            assert!(matches!(
+                egraph.typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    I64Sort.to_arcsort(),
+                    Context::Read,
+                ),
+                Err(TypeError::Unbound(name, _)) if name == "$scoped"
+            ));
+
+            egraph
+                .parse_and_run_program(None, "(let $scoped true)")
+                .unwrap();
+            let resolved = egraph
+                .typecheck_expr_with_bindings_and_output(
+                    &expr,
+                    &[],
+                    BoolSort.to_arcsort(),
+                    Context::Read,
+                )
+                .unwrap();
+            let value = egraph.eval_resolved_expr(span!(), &resolved).unwrap();
+            assert!(egraph.value_to_base::<bool>(value));
+        }
     }
 
     // Test that an `EGraph` is `Send` & `Sync`
