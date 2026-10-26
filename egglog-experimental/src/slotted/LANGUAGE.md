@@ -16,6 +16,7 @@ With `--slotted`, the following syntax is added to vanilla egglog:
 | [Free names](#free-names) | `(free $x a ...)` | `$x` is free in at least one listed term |
 | [Free names](#free-names) | `(not-free $x a ...)` | `$x` is free in none of the listed terms |
 | [Exact free names](#free-names) | `(free-names-are a $x ...)` | The term's live free names are exactly the listed set; no names means closed |
+| [Substitution](#substitution) | `(subst body $x replacement)` | Capture-avoiding substitution on a rewrite's right-hand side |
 | [Nested-matcher compatibility](#nested-matcher-compatibility) | `--slotted-no-aliasing` | Restrict matching to the reference nested matcher's aliasing policy |
 
 Existing egglog forms have these slotted semantics:
@@ -37,10 +38,9 @@ Pattern variables, `:name`, and `:when` use egglog's existing syntax. The
 Slotted mode supports a subset of vanilla egglog. General `rule` and `birewrite`
 commands, named rulesets, `run-schedule`, and `run-report` are unsupported.
 Constructor payloads are limited to `i64` and `String`; cross-sort term edges,
-containers, and payload computations are unsupported. The sections below give
-the restrictions for each declaration, command, and predicate.
+containers, and payload computations are unsupported.
 
-The rest of this guide describes these features in more detail, including
+The rest of this reference describes these features in more detail, including
 their syntax, constraints, and examples.
 
 ## Invocation
@@ -114,8 +114,9 @@ and has no scope over `initializer`.
 
 Identifiers retain their spelling: `x` and `?x` are different names.
 
-Slot names contain letters, digits, or underscores. Every carrier accepts
-slots without a variable declaration, even if it has no user constructors.
+Slot names contain letters, digits, or underscores; signed 64-bit numeric names
+such as `$0` and `$-1` are also accepted. Every carrier accepts slots without a
+variable declaration, even if it has no user constructors.
 The carrier is inferred from context; a bare slot is ambiguous when several
 carriers are declared and no constructor determines its sort.
 
@@ -179,14 +180,15 @@ unioning it with `(F $b $c)` makes both slots redundant.
 (rewrite lhs rhs :name "name" :when (fact ...))
 ```
 
-Asserts `lhs = rhs` for each match. Options are optional. `:name` assigns the
-rule name. `:when` takes one list of facts; repeated `:when` clauses or facts
-without the surrounding list are rejected.
+Asserts `lhs = rhs` for each match. `:name` and `:when` are optional. `:name`
+assigns the rule name. `:when` takes one list of facts; repeated `:when` clauses
+or facts without the surrounding list are rejected.
 
-The left side is a constructor pattern or a variable bound by the multipattern.
-The right side is a matched variable or a constructed term. Literal payloads
-and payload pattern variables are supported; payload computations and
-primitive calls are unsupported. Only the default ruleset is supported.
+The left side is a constructor pattern, slot, global, or variable bound by the
+multipattern. The right side is a matched variable, global, slot, constructed
+term, or [substitution](#substitution). Literal payloads and payload pattern
+variables are supported; payload computations and other primitive calls are
+unsupported. Only the default ruleset is supported.
 `:ruleset`, `rule`, and `birewrite` are rejected. Two `rewrite` commands express
 a bidirectional equation.
 
@@ -249,8 +251,31 @@ lambda without capturing its free slot:
 The checks use the global `free_slot` to refer to the input's concrete slot.
 `$bound` is a pattern slot in a binder column; its spelling need not match the
 rewrite's `$binder`. The `not-free` guard keeps it distinct from `free_slot`.
-The last check rejects the identity lambda, whose body
-would refer to the binder instead of the input's free slot.
+The last check rejects the identity lambda, whose body would refer to the
+binder instead of the input's free slot.
+
+#### Substitution
+
+```text
+(subst body $x replacement)
+```
+
+Replaces free occurrences of `$x` in `body` with `replacement`, avoiding
+capture by binders. It must be the complete right-hand side of a rewrite.
+`body` and `replacement` must be matched variables or globals of the rewrite's
+carrier; the middle argument must be a slot literal.
+
+Substitution uses a minimum-size tree representative from the start of the
+round, with deterministic tie-breaking. It can fail if a class requiring
+substitution has no finite tree representative.
+
+```slotted
+(datatype Expr (Let Expr Expr Expr :binder 1) (Num i64))
+(rewrite (Let value $x body) (subst body $x value))
+(let result (Let (Num 7) $bound $bound))
+(run 1)
+(check (= result (Num 7)))
+```
 
 #### Slot constraints and capture
 
@@ -278,10 +303,10 @@ both roles. `(Let $free $bound $bound)` distinguishes them. See
 #### Nested-matcher compatibility
 
 `--slotted-no-aliasing` restricts aliasing between slots not explicitly named
-in the pattern, preserving sharing already present in child edges. It requires
-one nested left-hand pattern and rejects side conditions that introduce
-additional constructor patterns. Predicates over already matched variables
-remain available. Checks use the same aliasing restriction.
+in the pattern, preserving sharing already present in child edges. Rewrites
+must use one nested left-hand pattern; additional constructor patterns in
+`:when` are rejected. Predicates over already matched variables remain
+available. Checks use the same aliasing restriction.
 
 ### `run`
 
@@ -322,8 +347,12 @@ terms before querying them, or use `(run N)` to apply rewrites as well.
 
 The two `$local` occurrences belong to separate checks. Within the single
 check using `$shared`, both facts must use the same slot, so it has no match.
-Disequality filters each candidate match; `(check (!= x y))` is not the
-negation of `(check (= x y))` when `x` and `y` range over several candidates.
+Pattern variables must be bound by a constructor pattern, slot, or global
+in the query; `(check (= x y))` alone does not bind `x` or `y`.
+
+Disequality filters each candidate match. For example,
+`(check (Pair x y) (!= x y))` requires a pair with unequal children.
+`(fail (check (Pair x y) (= x y)))` requires that no pair have equal children.
 
 ### `push` and `pop`
 
@@ -364,16 +393,18 @@ bare slots are equal modulo renaming.
 
 ```slotted
 (datatype Expr (Lam Expr Expr :binder 0))
+(let c $c)
+(let d $d)
 (let id (Lam $bound $bound))
-(let p (Lam $bound $c))
-(let q (Lam $bound $d))
+(let p (Lam $bound c))
+(let q (Lam $bound d))
 (run 0)
 (check (= id (Lam $other $other)))
 (check (renaming-= p q))
 (check (!= p q))
 (check (renaming-!= p id))
-(check (renaming-= $c $d))
-(check (!= $c $d))
+(check (renaming-= c d))
+(check (!= c d))
 ```
 
 The same distinctions apply to comparisons between matched variables:
@@ -383,7 +414,7 @@ The same distinctions apply to comparisons between matched variables:
 (let pair (Pair $a $b))
 (rewrite (Pair a b) (Related a b) :when ((renaming-= a b)))
 (run 1)
-(check (= pair (Related $a $b)))
+(check (= pair (Related $left $right)))
 ```
 
 Here `a` and `b` are equal modulo renaming. A guard `(= a b)` or the repeated
