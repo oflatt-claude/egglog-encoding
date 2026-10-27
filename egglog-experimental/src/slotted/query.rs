@@ -1,18 +1,9 @@
 //! Multipattern matching, shared by rewrites and checks.
+use super::flatten::Atom;
 use super::model::*;
 use super::syntax::quote;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-
-#[derive(Clone, Debug)]
-pub(super) struct Atom {
-    pub root: String,
-    /// Position in the surface pattern, before matching reorders the atoms.
-    pub path: Vec<usize>,
-    pub op: String,
-    pub kids: Vec<Term>,
-    pub pays: Vec<Term>,
-}
 
 /// Compiler-generated names used to reconstruct source rules and query witnesses.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -23,109 +14,6 @@ pub(crate) struct ProofNames {
     pub classes: BTreeMap<String, String>,
     pub readings: BTreeMap<String, String>,
     pub frame: String,
-}
-
-pub(super) fn pattern_names(atoms: &[Atom]) -> Vec<(Vec<usize>, String)> {
-    atoms
-        .iter()
-        .map(|a| (a.path.clone(), a.root.clone()))
-        .collect()
-}
-
-/// Names shared by all patterns in one query, including generated names.
-#[derive(Default)]
-pub(super) struct PatternNames(BTreeSet<String>);
-
-impl PatternNames {
-    pub fn reserve(&mut self, name: &str) {
-        self.0.insert(name.to_owned());
-    }
-
-    pub fn fresh(&mut self, stem: &str) -> String {
-        let mut name = stem.to_owned();
-        let mut suffix = 0;
-        while !self.0.insert(name.clone()) {
-            suffix += 1;
-            name = format!("{stem}_{suffix}");
-        }
-        name
-    }
-}
-
-pub(super) fn flatten(
-    lang: &Language,
-    t: &Term,
-    root: &str,
-    tmp: &str,
-    names: &mut PatternNames,
-) -> Result<Vec<Atom>, String> {
-    fn go(
-        lang: &Language,
-        t: &Term,
-        at: (String, Vec<usize>),
-        tmp: &str,
-        id: &mut usize,
-        names: &mut PatternNames,
-        out: &mut Vec<Atom>,
-    ) -> Result<(), String> {
-        let Term::Node(n, args) = t else {
-            return Err("a pattern's root must be a constructor call".into());
-        };
-        let (root, path) = at;
-        let op = &lang.constructors[n];
-        let (children, pays) = op.split(args);
-        let mut kids = Vec::new();
-        let mut nested = Vec::new();
-        let columns = op
-            .columns
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| (!matches!(c, Column::Payload(_))).then_some(i));
-        for (j, c) in columns.zip(children) {
-            match c {
-                Term::Variable(_) | Term::Slot(_) => kids.push(c.clone()),
-                Term::Node(n, _)
-                    if lang.constructors[n].children().is_empty() && !c.has_payload_variable() =>
-                {
-                    kids.push(c.clone())
-                }
-                Term::Node(_, _) => {
-                    *id += 1;
-                    let name = names.fresh(&format!("{tmp}{id}"));
-                    kids.push(Term::Variable(name.clone()));
-                    let mut subpath = path.clone();
-                    subpath.push(j);
-                    nested.push((c, (name, subpath)));
-                }
-                _ => return Err("unsupported term in pattern".into()),
-            }
-        }
-        out.push(Atom {
-            root,
-            path,
-            op: n.clone(),
-            kids,
-            pays: pays.into_iter().cloned().collect(),
-        });
-        for (c, name) in nested {
-            go(lang, c, name, tmp, id, names, out)?;
-        }
-        Ok(())
-    }
-    let mut t = t.clone();
-    lang.refresh_shadowed(&mut t);
-    let mut out = Vec::new();
-    names.reserve(root);
-    go(
-        lang,
-        &t,
-        (root.into(), vec![]),
-        tmp,
-        &mut 0,
-        names,
-        &mut out,
-    )?;
-    Ok(out)
 }
 
 fn variables(a: &Atom) -> BTreeSet<String> {

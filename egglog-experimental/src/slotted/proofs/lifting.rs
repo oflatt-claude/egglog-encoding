@@ -83,13 +83,29 @@ impl Lifting {
         id
     }
 
-    fn plain(&mut self, proof: SlottedProofId) -> LiftedId {
+    pub fn plain(&mut self, proof: SlottedProofId) -> LiftedId {
         let p = self.store.proposition(proof);
         self.record(
             AppliedEquality {
                 lhs: p.lhs,
                 renaming: Renaming::identity(),
                 rhs: p.rhs,
+            },
+            proof,
+            None,
+        )
+    }
+
+    pub fn proof(&self, id: LiftedId) -> SlottedProofId {
+        self.views[id].proof
+    }
+
+    pub fn view(&mut self, proof: SlottedProofId, rhs: TermId, renaming: Renaming) -> LiftedId {
+        self.record(
+            AppliedEquality {
+                lhs: self.store.proposition(proof).lhs,
+                rhs,
+                renaming,
             },
             proof,
             None,

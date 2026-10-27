@@ -503,5 +503,6 @@ egglog-experimental --slotted --proofs source.egg
 ```
 
 For supported `=` and `renaming-=` checks, this prints a checked proof using
-source constructors and slot names. Other predicates use ordinary checks.
+source terms and original rewrites, including their `:when` clauses.
+Other predicates use ordinary checks.
 See [the proof guide](PROOFS.md) for supported forms, Rust API usage, and examples.

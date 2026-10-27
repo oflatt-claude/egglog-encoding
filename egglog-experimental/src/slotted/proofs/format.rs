@@ -62,6 +62,13 @@ pub enum SlottedJustification {
         /// The equality used to replace the child.
         child_proof: SlottedProofId,
     },
+    /// Establish a right-hand child's reflexivity from its parent's proof.
+    Proj {
+        /// The proof whose right-hand term contains the child.
+        proof: SlottedProofId,
+        /// The child's zero-based surface column.
+        child_index: usize,
+    },
     /// Apply one finite slot permutation to both sides of a proved equality.
     Equivariance {
         /// The equality being transported.
@@ -246,6 +253,24 @@ impl SlottedProofStore {
         )
     }
 
+    /// Establish that a child of the proved right-hand term exists.
+    pub fn project(
+        &mut self,
+        proof: SlottedProofId,
+        child_index: usize,
+    ) -> Result<SlottedProofId, MalformedStep> {
+        let Term::App(_, children) = self.term_dag.get(self.proposition(proof).rhs) else {
+            return Err(MalformedStep("projection needs an application".into()));
+        };
+        let child = *children
+            .get(child_index)
+            .ok_or_else(|| MalformedStep("projection index out of bounds".into()))?;
+        Ok(self.add(
+            SlottedProposition::equal(child, child),
+            SlottedJustification::Proj { proof, child_index },
+        ))
+    }
+
     /// The proofs `root` depends on, dependencies first, `root` last.
     pub fn dependencies(&self, root: SlottedProofId) -> Vec<SlottedProofId> {
         let mut order = vec![];
@@ -279,6 +304,7 @@ impl SlottedProofStore {
             SlottedJustification::Sym(p) | SlottedJustification::Equivariance { proof: p, .. } => {
                 vec![*p]
             }
+            SlottedJustification::Proj { proof, .. } => vec![*proof],
             SlottedJustification::Trans(a, b) => vec![*a, *b],
             SlottedJustification::Congr {
                 proof, child_proof, ..
@@ -477,6 +503,10 @@ impl SlottedProofStore {
                         "Equivariance".into(),
                         vec![equality, proofs[proof], renaming],
                     )
+                }
+                SlottedJustification::Proj { proof, child_index } => {
+                    let index = dag.lit(Literal::Int(*child_index as i64));
+                    dag.app("Proj".into(), vec![equality, proofs[proof], index])
                 }
             };
             proofs.insert(id, term);

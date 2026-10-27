@@ -6,6 +6,7 @@ use egglog::EGraph;
 mod check;
 pub mod export;
 mod extract;
+mod flatten;
 mod frontend;
 mod layout;
 mod maintenance;

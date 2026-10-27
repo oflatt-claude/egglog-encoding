@@ -43,6 +43,9 @@ impl SlottedProofStore {
             let result = match proof.justification {
                 Step::Equivariance { .. } => children[0],
                 Step::Sym(_) => self.simple_sym(children[0]),
+                Step::Proj { child_index, .. } => self
+                    .project(children[0], child_index)
+                    .expect("normalizing preserves projected children"),
                 Step::Trans(..) => {
                     let (a, b) = (children[0], children[1]);
                     if self.reflexive(a) {

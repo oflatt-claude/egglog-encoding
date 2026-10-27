@@ -1,5 +1,6 @@
+use super::flatten::Atom;
 use super::model::*;
-use super::query::{self, Atom, Conditions, Query, names_expr};
+use super::query::{self, Conditions, Query, names_expr};
 use super::syntax::quote;
 
 enum Slots {

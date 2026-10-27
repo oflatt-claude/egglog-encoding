@@ -1,6 +1,6 @@
 //! An explicit slotted-source to ordinary-egglog pass. Evaluation stays in egglog.
 use super::{
-    maintenance,
+    flatten, maintenance,
     model::*,
     query, rewrite,
     syntax::{self, Form, quote},
@@ -31,18 +31,17 @@ pub struct Options {
 
 #[derive(Default)]
 struct Pattern {
-    names: query::PatternNames,
-    atoms: Vec<query::Atom>,
+    names: flatten::PatternNames,
+    atoms: Vec<flatten::Atom>,
     conditions: query::Conditions,
     values: Vec<(String, Term, Option<String>)>,
     patterns: usize,
     proof_names: query::ProofNames,
-    source_patterns: Vec<String>,
 }
 
 impl Pattern {
     fn new(forms: &[Form]) -> Self {
-        fn reserve(form: &Form, names: &mut query::PatternNames) {
+        fn reserve(form: &Form, names: &mut flatten::PatternNames) {
             match form {
                 Form::Atom(name) => names.reserve(name),
                 Form::List(forms) => {
@@ -657,16 +656,14 @@ impl Compiler {
     fn pattern_at(&self, p: &mut Pattern, root: String, mut term: Term) -> Result<(), String> {
         match &term {
             Term::Node(_, _) => {
-                let source = source_text(&term);
                 self.global_terms(p, &mut term, None);
                 let tmp = if p.patterns == 0 {
                     "_t".into()
                 } else {
                     format!("_w{}_", p.patterns)
                 };
-                let atoms = query::flatten(&self.state.lang, &term, &root, &tmp, &mut p.names)?;
-                p.proof_names.patterns.push(query::pattern_names(&atoms));
-                p.source_patterns.push(format!("(= {root} {source})"));
+                let atoms = flatten::flatten(&self.state.lang, &term, &root, &tmp, &mut p.names)?;
+                p.proof_names.patterns.push(flatten::pattern_names(&atoms));
                 p.atoms.extend(atoms);
                 p.patterns += 1;
             }
@@ -822,6 +819,7 @@ impl Compiler {
         }
         let mut name = None;
         let mut when_seen = false;
+        let mut source = format!("(rewrite {} {}", args[0].render(), args[1].render());
         let mut i = 2;
         while i < args.len() {
             let key = args[i].atom()?;
@@ -847,6 +845,7 @@ impl Compiler {
                     if values.len() != 1 {
                         return Err(":when takes one list of facts".into());
                     }
+                    source.push_str(&format!(" :when {}", values[0].render()));
                     let facts = values[0].list()?;
                     if facts.iter().any(|f| !matches!(f, Form::List(_))) {
                         return Err(":when takes a list of facts".into());
@@ -874,7 +873,6 @@ impl Compiler {
         {
             return Err(format!("rewrite root {root:?} is not bound by a pattern"));
         }
-        let source_rhs = source_text(&rhs);
         self.global_terms(&mut p, &mut rhs, None);
         self.finish_pattern(&mut p)?;
         let name = name.unwrap_or_else(|| format!("_slotted_match_{}", self.next_rule));
@@ -889,38 +887,15 @@ impl Compiler {
             }
             unique
         };
-        let mut source_facts = p.source_patterns.clone();
-        if matches!(lhs, Term::Node(_, _)) {
-            source_facts.remove(0);
-        }
-        let conditions = &p.conditions;
-        source_facts.extend(conditions.comparisons.iter().map(|(comparison, a, b)| {
-            let kind = match (comparison.modulo_renaming, comparison.negated) {
-                (false, false) => "=",
-                (false, true) => "!=",
-                (true, false) => "renaming-=",
-                (true, true) => "renaming-!=",
-            };
-            format!("({kind} {a} {b})")
-        }));
-        source_facts.extend(
-            conditions
-                .free_names
-                .iter()
-                .map(|(var, slots)| format!("(free-names-are {var} {})", slots.join(" "))),
-        );
-        source_facts.extend(conditions.free.iter().map(|(free, slot, vars)| {
-            format!(
-                "({} {slot} {})",
-                if *free { "free" } else { "not-free" },
-                vars.join(" ")
-            )
-        }));
-        let source = format!(
-            "(rewrite {} {} :when ({}))",
-            source_text(&lhs),
-            source_rhs,
-            source_facts.join(" ")
+        source.push(')');
+        let flattened = flatten::rewrite(
+            &self.state.lang,
+            &root,
+            &lhs,
+            &rhs,
+            &p.atoms,
+            &p.conditions,
+            p.proof_names,
         );
         let (result, proof_names) = rewrite::compile(
             &self.state.lang,
@@ -933,7 +908,7 @@ impl Compiler {
                 ordinal: self.state.rules,
                 nested: self.options.no_aliasing,
             },
-            p.proof_names,
+            flattened.names,
         )?;
         self.state.rules += 1;
         self.next_rule += 1;
@@ -941,7 +916,13 @@ impl Compiler {
             format!(
                 "\n(slotted-record \"rule-names\" {} {})",
                 quote(&name),
-                quote(&serde_json::to_string(&proof_names).unwrap()),
+                quote(
+                    &serde_json::to_string(&flatten::Rewrite {
+                        source: flattened.source,
+                        names: proof_names
+                    })
+                    .unwrap()
+                ),
             )
         } else {
             String::new()
@@ -1211,17 +1192,5 @@ fn unquote(s: &str) -> Result<String, String> {
         Ok(s)
     } else {
         Err("expected a string".into())
-    }
-}
-
-fn source_text(term: &Term) -> String {
-    match term {
-        Term::Slot(s)
-        | Term::Variable(s)
-        | Term::Global(s)
-        | Term::Payload(s)
-        | Term::PayloadVariable(s) => s.clone(),
-        Term::Node(head, args) => call(head, args.iter().map(source_text)),
-        Term::Subst(args) => call("subst", args.iter().map(source_text)),
     }
 }

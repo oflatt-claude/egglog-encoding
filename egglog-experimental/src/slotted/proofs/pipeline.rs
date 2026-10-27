@@ -6,6 +6,7 @@ use super::format::SlottedConclusion;
 use super::source::{ColumnKind, SlottedProgram, SourceError};
 use super::terms::FreshSlots;
 use super::translate::{matched_frame, translate};
+use crate::slotted::flatten::Rewrite as FlatRewrite;
 use crate::slotted::query::ProofNames;
 use egglog::TermDag;
 use egglog::ast::{
@@ -282,7 +283,7 @@ struct RawLayout {
 pub(super) struct EncodingNames {
     /// Surface sort name -> carrier index.
     pub carriers: HashMap<String, i64>,
-    pub rules: HashMap<String, ProofNames>,
+    pub rules: HashMap<String, FlatRewrite>,
 }
 
 impl EncodingNames {
@@ -369,7 +370,7 @@ impl SlottedProofState {
     fn program(
         &self,
         slot_names: &BTreeMap<String, i64>,
-    ) -> Result<(SlottedProgram, TermDag), SourceError> {
+    ) -> Result<(SlottedProgram, SlottedProgram, TermDag), SourceError> {
         let mut dag = TermDag::default();
         let mut program = SlottedProgram {
             slot_names: slot_names.clone(),
@@ -418,16 +419,28 @@ impl SlottedProofState {
             }
             program.add_sorted_constructor(name, output, columns);
         }
+        let mut flattened = program.clone();
         for source in &self.sources {
             match source {
-                Source::Let(name, text) => program.add_let(&mut dag, name, text)?,
-                Source::Union(a, b, sort) => program.add_union(&mut dag, a, b, sort)?,
+                Source::Let(name, text) => {
+                    program.add_let(&mut dag, name, text)?;
+                    flattened.add_let(&mut dag, name, text)?;
+                }
+                Source::Union(a, b, sort) => {
+                    program.add_union(&mut dag, a, b, sort)?;
+                    flattened.add_union(&mut dag, a, b, sort)?;
+                }
                 Source::Rule(name, text) => {
                     program.add_named_rewrite(&mut dag, Some(name), text)?;
+                    let rule =
+                        self.names.rules.get(name).ok_or_else(|| {
+                            SourceError(format!("missing flattened rewrite {name}"))
+                        })?;
+                    flattened.add_named_rewrite(&mut dag, Some(name), &rule.source)?;
                 }
             }
         }
-        Ok((program, dag))
+        Ok((program, flattened, dag))
     }
 
     /// Translate the egglog proof `root` of a `prove-slotted` to a slotted proof
@@ -438,7 +451,8 @@ impl SlottedProofState {
         root: ProofId,
         claim: &SlottedClaim,
     ) -> Result<String, String> {
-        let (program, mut dag) = self.program(&claim.slot_names).map_err(|e| e.to_string())?;
+        let (program, flattened, mut dag) =
+            self.program(&claim.slot_names).map_err(|e| e.to_string())?;
         let frame = matched_frame(egg, root, &claim.names)?;
         let mut coordinates = BTreeMap::new();
         for &slot in program.slot_names.values() {
@@ -475,8 +489,8 @@ impl SlottedProofState {
             "egglog proof of claim {claim}:\n{}",
             egg.proof_to_string(root)
         );
-        let (mut store, proof) = translate(
-            &program,
+        let (store, proof) = translate(
+            &flattened,
             dag,
             &self.names,
             egg,
@@ -486,6 +500,7 @@ impl SlottedProofState {
             [&claim.lhs_root, &claim.rhs_root],
         )
         .map_err(|e| format!("claim {claim}: {e}"))?;
+        let (mut store, proof) = super::unflatten::lift(store, &program, proof)?;
         check_claim(&mut store, &program, &source, &proof).map_err(|e| {
             format!(
                 "the translated proof does not check: {e}\n{}",

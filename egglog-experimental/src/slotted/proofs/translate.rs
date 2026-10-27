@@ -7,7 +7,7 @@
 use super::format::{SlottedConclusion, SlottedProofStore, SlottedProposition};
 use super::lifting::{LiftedId, Lifting};
 use super::pipeline::EncodingNames;
-use super::source::{Claim, ColumnKind, Condition, Rhs, SlottedProgram};
+use super::source::{Claim, ColumnKind, Rhs, SlottedProgram};
 use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term};
 
 use super::{HashMap, HashSet};
@@ -1699,6 +1699,7 @@ impl<'a> Translator<'a> {
             .rules
             .get(name)
             .ok_or_else(|| format!("no generated names for rule {name}"))?;
+        let names = &names.names;
         let root_name = match self.out.term_dag.get(rewrite.lhs) {
             Term::Var(v) => v.clone(),
             _ => names.patterns[0][0].1.clone(),
@@ -1754,7 +1755,8 @@ impl<'a> Translator<'a> {
         let mut contents: Vec<(TermId, TermId)> = vec![(rewrite.lhs, content)];
         let mut condition_proofs: Vec<ConditionProof> = vec![];
         for (i, cond) in rewrite.conditions.iter().enumerate() {
-            if let Condition::Eq { var, call } = cond {
+            if let Some((var, call)) = cond.binding(&self.out.term_dag) {
+                let var = var.clone();
                 let cond_names = names
                     .patterns
                     .get(i + 1)
@@ -1764,63 +1766,37 @@ impl<'a> Translator<'a> {
                     names: cond_names,
                     ..ctx.clone()
                 };
-                let cls_v = match variables.get(var).copied() {
+                let cls_v = match variables.get(&var).copied() {
                     Some(c) => c,
                     None => {
-                        // the premise row of the call's constructor whose columns
-                        // agree with what the match bound: its payloads and the
-                        // classes of the variables already placed
-                        let Term::App(head, kids) = self.out.term_dag.get(*call).clone() else {
-                            return Err(format!("condition on {var} is not a call"));
-                        };
-                        let columns = self
-                            .program
-                            .constructors
-                            .get(&head)
-                            .ok_or_else(|| format!("unknown constructor {head}"))?
-                            .columns
-                            .clone();
-                        let c = match_prems
-                            .iter()
-                            .map(|q| self.egg.get(*q))
-                            .find(|pr| {
-                                self.app(pr.rhs()).is_some_and(|(h, a)| {
-                                    h == head
-                                        && self.columns_match(
-                                            a,
-                                            &columns,
-                                            &kids,
-                                            &[],
-                                            &cond_ctx,
-                                            &variables,
-                                        )
-                                }) && self.is_carrier_term(pr.lhs())
-                            })
-                            .map(|pr| pr.lhs())
-                            .ok_or_else(|| format!("no row for the condition on {var}"))?;
-                        variables.insert(var.clone(), c);
-                        c
+                        let binding = names
+                            .classes
+                            .get(&var)
+                            .ok_or_else(|| format!("no class binding for {var}"))?;
+                        let class = self.sub(&match_subst, binding)?;
+                        variables.insert(var.clone(), class);
+                        class
                     }
                 };
                 let Expansion {
                     proof: p,
                     variables: expanded,
                     occurrences: occ_v,
-                } = self.expand(cls_v, *call, &[], &cond_ctx, variables)?;
+                } = self.expand(cls_v, call, &[], &cond_ctx, variables)?;
                 variables = expanded;
                 let p = self.content_form(p); // cls_v = C_v
-                let atom = self.atom_label(&frame, var, *call, occ_v.get(&vec![]));
+                let atom = self.atom_label(&frame, &var, call, occ_v.get(&vec![]));
                 let nested = self.nested_node_slots(
                     &frame,
-                    *call,
+                    call,
                     &occ_v,
                     &cond_ctx.names,
                     self.out.proposition(p).rhs,
                 )?;
                 let (p, _) = self.lift(p, &frame, atom.as_deref(), &nested);
                 let c_v = self.out.proposition(p).rhs;
-                contents.push((*call, c_v));
-                condition_proofs.push((var.clone(), *call, p, occ_v));
+                contents.push((call, c_v));
+                condition_proofs.push((var.clone(), call, p, occ_v));
             }
         }
         // Each class variable is its class under the frame's renaming of it, as
@@ -1837,7 +1813,7 @@ impl<'a> Translator<'a> {
         }
         let mut literals: Vec<String> = vec![];
         for (pattern, _) in &contents {
-            for v in super::terms::pattern_vars(&self.out.term_dag, *pattern) {
+            for v in rewrite.pattern_vars(&self.out.term_dag, *pattern) {
                 if v.starts_with('$') && !literals.contains(&v) {
                     literals.push(v);
                 }
@@ -1856,7 +1832,7 @@ impl<'a> Translator<'a> {
         }
         // minted slots: right-hand-side literals the body never mentions
         if let Rhs::Term(r) = &rewrite.rhs {
-            for v in super::terms::pattern_vars(&self.out.term_dag, *r) {
+            for v in rewrite.pattern_vars(&self.out.term_dag, *r) {
                 if !sigma.contains_key(&v) {
                     if !v.starts_with('$') {
                         return Err(format!("{v} occurs only on the right-hand side of {name}"));
@@ -1867,13 +1843,14 @@ impl<'a> Translator<'a> {
             }
         }
         let sigma_order: Vec<(String, TermId)> = {
-            let mut order = super::terms::pattern_vars(&self.out.term_dag, rewrite.lhs);
+            let mut order = rewrite.pattern_vars(&self.out.term_dag, rewrite.lhs);
             for cond in &rewrite.conditions {
-                if let Condition::Eq { var, call } = cond {
-                    if !order.contains(var) {
+                if let Some((var, call)) = cond.binding(&self.out.term_dag) {
+                    let var = var.clone();
+                    if !order.contains(&var) {
                         order.push(var.clone());
                     }
-                    for v in super::terms::pattern_vars(&self.out.term_dag, *call) {
+                    for v in rewrite.pattern_vars(&self.out.term_dag, call) {
                         if !order.contains(&v) {
                             order.push(v);
                         }
@@ -1881,7 +1858,7 @@ impl<'a> Translator<'a> {
                 }
             }
             if let Rhs::Term(r) = &rewrite.rhs {
-                for v in super::terms::pattern_vars(&self.out.term_dag, *r) {
+                for v in rewrite.pattern_vars(&self.out.term_dag, *r) {
                     if !order.contains(&v) {
                         order.push(v);
                     }
@@ -1892,12 +1869,12 @@ impl<'a> Translator<'a> {
         for (v, s) in &sigma_order {
             log::debug!("rule {name}: {v} := {}", self.out_string(*s));
         }
-        let instance_lhs = super::terms::instantiate(&mut self.out.term_dag, rewrite.lhs, &sigma)?;
+        let instance_lhs = rewrite.instantiate(&mut self.out.term_dag, rewrite.lhs, &sigma)?;
         let instance_lhs = self
             .program
             .refresh_binders(&mut self.out.term_dag, instance_lhs);
         let instance_rhs = match &rewrite.rhs {
-            Rhs::Term(r) => super::terms::instantiate(&mut self.out.term_dag, *r, &sigma)?,
+            Rhs::Term(r) => rewrite.instantiate(&mut self.out.term_dag, *r, &sigma)?,
             Rhs::Var(v) => *sigma
                 .get(v)
                 .ok_or_else(|| format!("the match of {name} binds no class for {v}"))?,
@@ -1906,14 +1883,18 @@ impl<'a> Translator<'a> {
             .program
             .refresh_binders(&mut self.out.term_dag, instance_rhs);
         // the root premise: cls_p = ·L[σ]
-        let root = self.fit(root, instance_lhs, &root_occ)?;
+        let root = self
+            .fit(root, instance_lhs, &root_occ)
+            .map_err(|e| format!("root of {name}: {e}"))?;
         let mut premises = vec![root];
         for (var, call, p, occ_v) in condition_proofs {
-            let call_inst = super::terms::instantiate(&mut self.out.term_dag, call, &sigma)?;
+            let call_inst = rewrite.instantiate(&mut self.out.term_dag, call, &sigma)?;
             let call_inst = self
                 .program
                 .refresh_binders(&mut self.out.term_dag, call_inst);
-            let p = self.fit(p, call_inst, &occ_v)?; // dec(cls_v) = ·call[σ]
+            let p = self
+                .fit(p, call_inst, &occ_v)
+                .map_err(|e| format!("condition {var} of {name}: {e}"))?; // dec(cls_v) = ·call[σ]
             // from the class to σ(v), a renaming of it
             let d = self.dec(variables[&var])?;
             let target = sigma[&var];
@@ -1923,6 +1904,7 @@ impl<'a> Translator<'a> {
             let rho =
                 Renaming::completing(pairs.into_iter()).ok_or("non-injective class renaming")?;
             let p = self.rename_both(p, &rho); // σ(v) = ·call[σ]
+            let p = self.fit_content(p, call_inst, &occ_v)?;
             premises.push(p);
         }
         let rule_step = self.out.rule(
@@ -1982,7 +1964,9 @@ impl<'a> Translator<'a> {
                 .into_iter()
                 .collect(),
         };
-        let p = self.fit(p, target, &rhs_occ)?;
+        let p = self
+            .fit(p, target, &rhs_occ)
+            .map_err(|e| format!("result of {name}: {e}"))?;
         self.orient(p, lhs, rhs)
     }
 
@@ -2340,6 +2324,42 @@ impl<'a> Translator<'a> {
         ctx: &ExpandCtx<'_>,
         variables: HashMap<String, TermId>,
     ) -> R<Expansion> {
+        let cls = if let Term::App(head, _) = self.out.term_dag.get(pattern) {
+            let has_row = |class| {
+                ctx.prems.iter().any(|&p| {
+                    let p = self.egg.get(p);
+                    p.lhs() == class && self.app(p.rhs()).is_some_and(|(h, _)| h == head)
+                })
+            };
+            if has_row(cls) {
+                cls
+            } else {
+                ctx.bridges
+                    .keys()
+                    .copied()
+                    .find(|&old| {
+                        if !has_row(old) {
+                            return false;
+                        }
+                        let mut current = old;
+                        let mut seen = HashSet::default();
+                        while seen.insert(current) {
+                            if current == cls {
+                                return true;
+                            }
+                            let Some(&p) = ctx.bridges.get(&current) else {
+                                break;
+                            };
+                            let p = self.egg.get(p);
+                            current = if p.lhs() == current { p.rhs() } else { p.lhs() };
+                        }
+                        false
+                    })
+                    .unwrap_or(cls)
+            }
+        } else {
+            cls
+        };
         let mut expanded = self.expand_old(cls, pattern, path, ctx, variables)?;
         // the class may have been re-keyed since the firing, perhaps more than
         // once: state it from the class it became
@@ -2349,6 +2369,23 @@ impl<'a> Translator<'a> {
             let s = self.out.sym(e);
             expanded.proof = self.trans(s, expanded.proof)?;
             current = new;
+        }
+        // A flattened atom retains the symmetry selected for this occurrence.
+        if let Some(name) = ctx.names.get(path)
+            && let Some(reading) = ctx.readings.get(name)
+            && let Ok(g) = self.sub(ctx.subst, reading)
+        {
+            let g = self.slot_map(g)?;
+            if !is_identity(&g) {
+                let group = self.reading_group_proof(cls, &g, ctx.prems)?;
+                let symmetry = self.symmetry(cls, &g, group)?;
+                let completion = Renaming::completing(g.iter().map(|(k, v)| (*k, *v)))
+                    .ok_or("reading is not injective")?;
+                let renamed = self.rename_both(expanded.proof, &completion);
+                let symmetry = self.out.reframe(symmetry, completion);
+                let symmetry = self.note(symmetry);
+                expanded.proof = self.trans(symmetry, renamed)?;
+            }
         }
         Ok(expanded)
     }
@@ -2543,30 +2580,12 @@ impl<'a> Translator<'a> {
                         let mut sub_path = path.to_vec();
                         sub_path.push(j);
                         let Expansion {
-                            proof: mut sub,
+                            proof: sub,
                             variables: expanded,
                             occurrences: nested,
                         } = self.expand(child, kid, &sub_path, ctx, variables)?;
                         variables = expanded;
                         occurrences.extend(nested);
-                        // the reading the match chose for this nested atom
-                        if let Some(name) = ctx.names.get(&sub_path)
-                            && let Some(reading) = ctx.readings.get(name)
-                            && let Ok(g) = self.sub(ctx.subst, reading)
-                        {
-                            let g = self.slot_map(g)?;
-                            if !is_identity(&g) {
-                                let grp = self.reading_group_proof(child, &g, prems)?;
-                                let s = self.symmetry(child, &g, grp)?;
-                                let completion =
-                                    Renaming::completing(g.iter().map(|(k, v)| (*k, *v)))
-                                        .ok_or("reading is not injective")?;
-                                let renamed = self.rename_both(sub, &completion);
-                                let s = self.out.reframe(s, completion.clone());
-                                let s = self.note(s);
-                                sub = self.trans(s, renamed)?;
-                            }
-                        }
                         let completion = self.edge_memo[&(row, j)].clone();
                         let renamed = self.rename_both(sub, &completion);
                         p = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
@@ -3568,24 +3587,20 @@ impl<'a> Translator<'a> {
                 self.out_string(content),
                 self.out_string(target)
             );
-            // the whole content is one occurrence of the class the claim matched
             let mut occ_path = path.clone();
-            let o = loop {
+            let mut errors = Vec::new();
+            let (sub, cert) = loop {
                 if let Some(&o) = occ.get(&occ_path) {
-                    break o;
+                    let sub = self.subterm_at(content, &occ_path)?;
+                    match self.occurrence_cert(o, sub, x, want) {
+                        Ok(cert) => break (sub, cert),
+                        Err(error) => errors.push(error),
+                    }
                 }
                 if occ_path.pop().is_none() {
-                    return Err(format!("no occurrence holds ${x}"));
+                    return Err(errors.join("; "));
                 }
             };
-            let sub = self.subterm_at(content, &occ_path)?;
-            if all_slots(&self.out.term_dag, sub).contains(&want) {
-                return Err(format!(
-                    "${x} would have to become ${want}, which {} holds",
-                    self.out_string(sub)
-                ));
-            }
-            let cert = self.occurrence_cert(o, sub, x, want)?;
             log::debug!("content fit certificate: {}", self.prop_string(cert));
             p = if occ_path.is_empty() {
                 self.trans(p, cert)?
