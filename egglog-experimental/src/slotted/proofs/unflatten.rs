@@ -4,11 +4,11 @@ use super::format::{
     SlottedProposition,
 };
 use super::lifting::Lifting;
-use super::source::{ColumnKind, Condition, Requirement, Rhs, SlottedProgram};
-use super::terms::{Renaming, slot_of, term_renaming};
+use super::source::{Condition, Requirement, Rhs, SlottedProgram};
+use super::terms::{Renaming, term_renaming};
 use super::{HashMap, HashSet};
 use egglog::{Term, TermId};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -54,8 +54,18 @@ pub(super) fn lift(
                 child_index,
                 child_proof,
             } => {
+                // Restore RHS names without changing the child matched by the parent.
+                let mut child = lifted[child_proof];
+                let actual = SlottedProofStore::proposition(&out, out.proof(child));
+                let wanted = out.proposition(child);
+                if let Some(renaming) = term_renaming(
+                    &out.term_dag,
+                    &[(actual.lhs, wanted.lhs), (actual.rhs, wanted.rhs)],
+                ) {
+                    child = out.equivariance(child, &renaming);
+                }
                 let p = out
-                    .congr(lifted[parent], *child_index, lifted[child_proof])
+                    .congr(lifted[parent], *child_index, child)
                     .map_err(|e| e.0)?;
                 let rhs = out.proposition(p).rhs;
                 let renaming = term_renaming(&out.term_dag, &[(rhs, proof.proposition.rhs)])
@@ -65,14 +75,7 @@ pub(super) fn lift(
             Step::Proj {
                 proof: parent,
                 child_index,
-            } => {
-                let parent = lifted[parent];
-                let inverse = out.proposition(parent).renaming.inverse();
-                let ordinary = out.proof(parent);
-                let p = out.project(ordinary, *child_index).map_err(|e| e.0)?;
-                let p = SlottedProofStore::equivariance(&mut out, p, inverse);
-                out.plain(p)
-            }
+            } => out.project(lifted[parent], *child_index).map_err(|e| e.0)?,
             Step::Equivariance { proof, renaming } => {
                 let p = out.equivariance(lifted[proof], renaming);
                 out.reframe(p, renaming.clone())
@@ -157,10 +160,20 @@ fn lift_rule(
     if claimed.lhs == claimed.rhs {
         return witnesses.reflexive(claimed.lhs);
     }
-    let before = witnesses.equality(claimed.lhs, lhs)?;
-    let after = witnesses.equality(rhs, claimed.rhs)?;
+    witnesses.exists(claimed.lhs)?;
+    let before = witnesses.reconstruct(claimed.lhs, lhs, true)?;
+    let start = witnesses.store.proposition(before).lhs;
+    let renaming = witnesses
+        .renaming(&[(start, claimed.lhs)])
+        .ok_or("reconstruction changes the left-hand term's shape")?;
     let middle = witnesses.store.trans(before, source).map_err(|e| e.0)?;
-    witnesses.store.trans(middle, after).map_err(|e| e.0)
+    let result = if witnesses.renaming(&[(rhs, claimed.rhs)]).is_some() {
+        middle
+    } else {
+        let after = witnesses.equality(rhs, claimed.rhs)?;
+        witnesses.store.trans(middle, after).map_err(|e| e.0)?
+    };
+    Ok(witnesses.store.equivariance(result, renaming))
 }
 
 /// Ordinary equalities for the atoms of one match. Reconstruction depends only
@@ -170,8 +183,8 @@ struct Witnesses<'a> {
     program: &'a SlottedProgram,
     edges: Vec<SlottedProofId>,
     known: HashMap<TermId, SlottedProofId>,
-    memo: HashMap<(TermId, TermId), SlottedProofId>,
-    active: HashSet<(TermId, TermId)>,
+    memo: HashMap<(TermId, TermId, bool), SlottedProofId>,
+    active: HashSet<(TermId, TermId, bool)>,
 }
 
 impl<'a> Witnesses<'a> {
@@ -228,46 +241,9 @@ impl<'a> Witnesses<'a> {
         }
         let mut candidates: Vec<_> = self.known.keys().copied().collect();
         candidates.sort_unstable();
-        for mut candidate in candidates {
-            if let Some(renaming) = self.renaming(&[(candidate, term)]) {
-                let proof = self.store.equivariance(self.known[&candidate], renaming);
-                self.known.insert(term, proof);
-                return Ok(proof);
-            }
-            let mut bindings = BTreeMap::new();
-            let mut work = vec![(candidate, term)];
-            while let Some((a, b)) = work.pop() {
-                let (Term::App(head, xs), Term::App(want, ys)) =
-                    (self.store.term_dag.get(a), self.store.term_dag.get(b))
-                else {
-                    continue;
-                };
-                if head != want || xs.len() != ys.len() {
-                    continue;
-                }
-                if let Some(ctor) = self.program.constructors.get(head) {
-                    for (column, (&x, &y)) in ctor.columns.iter().zip(xs.iter().zip(ys)) {
-                        if *column == ColumnKind::Binder
-                            && let (Some(x), Some(y)) = (
-                                slot_of(&self.store.term_dag, x),
-                                slot_of(&self.store.term_dag, y),
-                            )
-                        {
-                            bindings.insert(x, y);
-                        }
-                    }
-                }
-                work.extend(xs.iter().copied().zip(ys.iter().copied()));
-            }
-            if let Some(renaming) = Renaming::completing(bindings)
-                && !renaming.is_identity()
-            {
-                let proof = self.store.equivariance(self.known[&candidate], renaming);
-                candidate = self.store.proposition(proof).rhs;
+        for candidate in candidates {
+            if let Ok(proof) = self.reconstruct(candidate, term, true) {
                 self.add(proof);
-            }
-            if let Ok(proof) = self.equality(candidate, term) {
-                self.known.insert(term, proof);
                 return Ok(proof);
             }
         }
@@ -347,21 +323,33 @@ impl<'a> Witnesses<'a> {
     }
 
     fn equality(&mut self, from: TermId, to: TermId) -> Result<SlottedProofId> {
-        if let Some(&p) = self.memo.get(&(from, to)) {
+        self.reconstruct(from, to, false)
+    }
+
+    // Existence allows a permutation of the whole derivation. An equality must
+    // preserve its starting term as well as end at the requested target.
+    fn reconstruct(
+        &mut self,
+        from: TermId,
+        to: TermId,
+        rename_source: bool,
+    ) -> Result<SlottedProofId> {
+        let key = (from, to, rename_source);
+        if let Some(&p) = self.memo.get(&key) {
             return Ok(p);
         }
-        if !self.active.insert((from, to)) {
+        if !self.active.insert(key) {
             return Err("cyclic atom expansion".into());
         }
-        let result = self.search(from, to);
-        self.active.remove(&(from, to));
+        let result = self.search(from, to, rename_source);
+        self.active.remove(&key);
         if let Ok(p) = result {
-            self.memo.insert((from, to), p);
+            self.memo.insert(key, p);
         }
         result
     }
 
-    fn search(&mut self, from: TermId, to: TermId) -> Result<SlottedProofId> {
+    fn search(&mut self, from: TermId, to: TermId, rename_source: bool) -> Result<SlottedProofId> {
         for edge in self.edges.clone() {
             let p = self.store.proposition(edge).clone();
             if let Some(renaming) = self.renaming(&[(p.lhs, from), (p.rhs, to)]) {
@@ -380,15 +368,21 @@ impl<'a> Witnesses<'a> {
         let back = self.store.sym(initial);
         let initial = self.store.trans(back, initial).map_err(|e| e.0)?;
         let mut work = VecDeque::from([initial]);
-        let mut seen = HashSet::default();
+        let mut seen = Vec::new();
         while let Some(proof) = work.pop_front() {
             let current = self.store.proposition(proof).rhs;
             if current == to {
                 return Ok(proof);
             }
-            if !seen.insert(current) {
+            if rename_source && let Some(renaming) = self.renaming(&[(current, to)]) {
+                return Ok(self.store.equivariance(proof, renaming));
+            }
+            if seen.iter().any(|&term| {
+                current == term || rename_source && self.renaming(&[(current, term)]).is_some()
+            }) {
                 continue;
             }
+            seen.push(current);
             if let (Term::App(head, children), Term::App(want, targets)) = (
                 self.store.term_dag.get(current).clone(),
                 self.store.term_dag.get(to).clone(),
@@ -396,13 +390,38 @@ impl<'a> Witnesses<'a> {
                 && children.len() == targets.len()
             {
                 let mut expanded = Ok(proof);
-                for (index, (child, target)) in children.into_iter().zip(targets).enumerate() {
-                    if child == target {
-                        continue;
-                    }
-                    expanded = expanded.and_then(|parent| {
-                        let child = self.equality(child, target)?;
-                        self.store.congr(parent, index, child).map_err(|e| e.0)
+                for (index, &target) in targets.iter().enumerate() {
+                    expanded = expanded.and_then(|mut parent| {
+                        let Term::App(_, children) = self
+                            .store
+                            .term_dag
+                            .get(self.store.proposition(parent).rhs)
+                            .clone()
+                        else {
+                            unreachable!()
+                        };
+                        let child = children[index];
+                        if child == target {
+                            return Ok(parent);
+                        }
+                        let projection = self.store.project(parent, index).map_err(|e| e.0)?;
+                        self.known.entry(child).or_insert(projection);
+                        let proof = self.equality(child, target).or_else(|error| {
+                            if rename_source {
+                                self.reconstruct(child, target, true)
+                            } else {
+                                Err(error)
+                            }
+                        })?;
+                        if rename_source {
+                            let left = self.store.proposition(proof).lhs;
+                            let mut pairs = vec![(child, left)];
+                            pairs.extend(targets[..index].iter().map(|&t| (t, t)));
+                            let renaming =
+                                self.renaming(&pairs).ok_or("inconsistent sibling names")?;
+                            parent = self.store.equivariance(parent, renaming);
+                        }
+                        self.store.congr(parent, index, proof).map_err(|e| e.0)
                     });
                     if expanded.is_err() {
                         break;
@@ -413,15 +432,21 @@ impl<'a> Witnesses<'a> {
                 }
             }
             for edge in self.edges.clone() {
-                let p = self.store.proposition(edge);
-                let edge = if p.lhs == current {
-                    edge
-                } else if p.rhs == current {
-                    self.store.sym(edge)
-                } else {
-                    continue;
-                };
-                work.push_back(self.store.trans(proof, edge).map_err(|e| e.0)?);
+                let p = self.store.proposition(edge).clone();
+                for (left, reversed) in [(p.lhs, false), (p.rhs, true)] {
+                    let renaming = if left == current {
+                        Renaming::identity()
+                    } else if rename_source
+                        && let Some(renaming) = self.renaming(&[(left, current)])
+                    {
+                        renaming
+                    } else {
+                        continue;
+                    };
+                    let edge = if reversed { self.store.sym(edge) } else { edge };
+                    let edge = self.store.equivariance(edge, renaming);
+                    work.push_back(self.store.trans(proof, edge).map_err(|e| e.0)?);
+                }
             }
         }
         Err(format!(
@@ -434,9 +459,86 @@ impl<'a> Witnesses<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::source::ColumnKind;
     use super::*;
     use crate::slotted::proofs::check_proof;
     use egglog::TermDag;
+
+    #[test]
+    fn reconstructs_nested_binders_after_a_shape_change() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        for head in ["F", "G"] {
+            program.add_constructor(head, vec![ColumnKind::Child]);
+        }
+        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
+        program
+            .add_let(&mut dag, "input", "(F (G (Lam $0 $0)))")
+            .unwrap();
+        program
+            .add_let(&mut dag, "target", "(F (Lam $3 (Lam $4 $4)))")
+            .unwrap();
+        program
+            .add_union(&mut dag, "(G (Lam $1 $1))", "(Lam $2 (Lam $1 $1))", "U")
+            .unwrap();
+        let target = program.lets.shift_remove("target").unwrap();
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(program.lets["input"], program.lets["input"]);
+        let union = store.fiat(program.unions[0].lhs, program.unions[0].rhs);
+        let mut witnesses = Witnesses::new(&mut store, &program, vec![root, union]);
+        let proof = witnesses.exists(target).unwrap();
+        assert_eq!(witnesses.store.proposition(proof).rhs, target);
+        assert!(witnesses.equality(program.lets["input"], target).is_err());
+        check_proof(&mut store, &program, proof).unwrap();
+    }
+
+    #[test]
+    fn reconstruction_preserves_shared_sibling_names() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        program.add_let(&mut dag, "input", "(Pair $0 $0)").unwrap();
+        program.add_let(&mut dag, "target", "(Pair $1 $2)").unwrap();
+        let target = program.lets.shift_remove("target").unwrap();
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(program.lets["input"], program.lets["input"]);
+        let mut witnesses = Witnesses::new(&mut store, &program, vec![root]);
+        assert!(witnesses.exists(target).is_err());
+    }
+
+    #[test]
+    fn reconstruction_tries_equal_children_before_renaming_them() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        for head in ["F", "G", "H"] {
+            program.add_constructor(head, vec![ColumnKind::Child]);
+        }
+        program
+            .add_let(&mut dag, "input", "(Pair $0 (G $0))")
+            .unwrap();
+        program
+            .add_let(&mut dag, "target", "(Pair $0 (F $0))")
+            .unwrap();
+        for (lhs, rhs) in [
+            ("(G $0)", "(H $1)"),
+            ("(G $0)", "(H $0)"),
+            ("(H $0)", "(F $0)"),
+        ] {
+            program.add_union(&mut dag, lhs, rhs, "U").unwrap();
+        }
+        let target = program.lets.shift_remove("target").unwrap();
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(program.lets["input"], program.lets["input"]);
+        let mut premises = vec![root];
+        for union in &program.unions {
+            premises.push(store.fiat(union.lhs, union.rhs));
+        }
+        let mut witnesses = Witnesses::new(&mut store, &program, premises);
+        let proof = witnesses.exists(target).unwrap();
+        assert_eq!(witnesses.store.proposition(proof).rhs, target);
+        check_proof(&mut store, &program, proof).unwrap();
+    }
 
     #[test]
     fn renaming_guard_lifts_child_equalities_through_congruence() {

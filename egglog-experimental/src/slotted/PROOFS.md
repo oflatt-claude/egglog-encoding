@@ -301,8 +301,10 @@ To replay lowered code, use
 `egglog-experimental --slotted-encoded --proofs encoded.egg`.
 From Rust, compile with `Options { proof_mode: ProofMode::Prove, ..Default::default() }`
 and evaluate the result with `new_egraph_with_proofs()`.
-`make slotted-proof-tests` runs the supported source corpus through the Rust API,
-including its supported equality checks. The same tests run in `make check`.
+`make slotted-proof-tests` runs the supported source corpus through the Rust API
+and checks the generated benchmark goals with proofs in both matching modes.
+The benchmark checks use the same workload generators and iteration budgets as
+`slotted/eval.py`. The same tests run in `make check`.
 Sources using `subst` are ignored because it has no proof translation;
 the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
 checks for comparison.
