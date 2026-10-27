@@ -1,14 +1,12 @@
 use crate::util::{FreshGen, HashMap, HashSet, SymbolGen};
 use crate::*;
-use std::fmt::Write;
+use std::{convert::Infallible, fmt::Write};
 
 pub type TermId = usize;
 
 #[allow(rustdoc::private_intra_doc_links)]
-/// Like [`Expr`]s but with sharing and deduplication.
-///
-/// Terms refer to their children indirectly via opaque [TermId]s (internally
-/// these are just `usize`s) that map into an ambient [`TermDag`].
+/// A literal, variable, or application whose children are [`TermId`]s in a
+/// [`GenericTermDag`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum GenericTerm<Head, Leaf> {
     Lit(Literal),
@@ -19,8 +17,8 @@ pub enum GenericTerm<Head, Leaf> {
 /// Unresolved syntax, using the same head and leaf types as [`Expr`].
 pub type Term = GenericTerm<String, String>;
 
-/// A resolved ground term. The uninhabited leaf type rules out variables.
-pub type TypedTerm = GenericTerm<ResolvedCall, std::convert::Infallible>;
+/// A resolved ground term with no variables.
+pub type TypedTerm = GenericTerm<ResolvedCall, Infallible>;
 
 impl TypedTerm {
     pub fn sort(&self) -> ArcSort {
@@ -32,9 +30,7 @@ impl TypedTerm {
     }
 }
 
-/// A hashconsing arena for terms parameterized like [`GenericExpr`].
-/// Resolved heads participate in deduplication, so distinct type specializations
-/// of the same written application remain distinct nodes.
+/// A DAG of terms with shared, deduplicated nodes.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GenericTermDag<Head: Eq + Hash, Leaf: Eq + Hash> {
     nodes: IndexSet<GenericTerm<Head, Leaf>>,
@@ -52,7 +48,7 @@ impl<Head: Eq + Hash, Leaf: Eq + Hash> Default for GenericTermDag<Head, Leaf> {
 pub type TermDag = GenericTermDag<String, String>;
 
 /// A DAG of resolved ground terms, with no variable leaves.
-pub type TypedTermDag = GenericTermDag<ResolvedCall, std::convert::Infallible>;
+pub type TypedTermDag = GenericTermDag<ResolvedCall, Infallible>;
 
 /// A [`TermId`] paired with its [`TermDag`] so it can be ordered by
 /// [`TermDag::ast_cmp`], for use in ordered collections like
@@ -199,26 +195,22 @@ impl<Head: Clone + Eq + Hash, Leaf: Clone + Eq + Hash> GenericTermDag<Head, Leaf
         self.nodes.iter().enumerate()
     }
 
-    /// Make and return a [`GenericTerm::App`] with the given head symbol and children,
-    /// and insert into the DAG if it is not already present.
-    ///
-    /// Panics if any of the children are not already in the DAG.
+    /// Intern an application and return its [`TermId`].
+    /// Every child ID must already belong to this DAG.
     pub fn app(&mut self, sym: Head, children: Vec<TermId>) -> TermId {
         let node = GenericTerm::App(sym, children);
 
         self.add_node(&node)
     }
 
-    /// Make a [`GenericTerm::Lit`] with the given literal and return its [`TermId`],
-    /// inserting it into the DAG if it is not already present.
+    /// Intern a literal and return its [`TermId`].
     pub fn lit(&mut self, lit: Literal) -> TermId {
         let node = GenericTerm::Lit(lit);
 
         self.add_node(&node)
     }
 
-    /// Make and return a [`GenericTerm::Var`] with the given symbol, and insert into
-    /// the DAG if it is not already present.
+    /// Intern a variable and return its [`TermId`].
     pub fn var(&mut self, sym: Leaf) -> TermId {
         let node = GenericTerm::Var(sym);
 
@@ -233,11 +225,7 @@ impl<Head: Clone + Eq + Hash, Leaf: Clone + Eq + Hash> GenericTermDag<Head, Leaf
         })
     }
 
-    /// Recursively converts the given expression to a term.
-    ///
-    /// This involves inserting every subexpression into this DAG. Because
-    /// TermDags are hashconsed, the resulting term is guaranteed to maximally
-    /// share subterms.
+    /// Intern an expression and return its root ID, sharing identical subexpressions.
     pub fn expr_to_term(&mut self, expr: &GenericExpr<Head, Leaf>) -> TermId {
         let res = match expr {
             GenericExpr::Lit(_, lit) => GenericTerm::Lit(lit.clone()),
@@ -250,9 +238,9 @@ impl<Head: Clone + Eq + Hash, Leaf: Clone + Eq + Hash> GenericTermDag<Head, Leaf
         self.add_node(&res)
     }
 
-    /// Recursively converts the given term to an expression.
+    /// Convert a term to an expression.
     ///
-    /// Panics if the term contains subterms that are not in the DAG.
+    /// Panics if the term or any of its child IDs are outside this DAG.
     pub fn term_to_expr(&self, term: &TermId, span: Span) -> GenericExpr<Head, Leaf> {
         let term = self.get(*term);
         match term {

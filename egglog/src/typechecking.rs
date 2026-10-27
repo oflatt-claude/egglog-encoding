@@ -2,6 +2,7 @@ use std::hash::Hasher;
 
 use crate::Context;
 use crate::proofs::proof_container_rebuild::register_container_rebuild_from_spec;
+use crate::proofs::proof_fresh::{register_mint, register_set_if_empty};
 use crate::{
     core::{CoreActionContext, GenericActionsExt, ResolvedCall},
     *,
@@ -115,7 +116,6 @@ impl<T: Clone + Send + Sync + 'static, S: RegistryWrap<T> + 'static> ExternalFun
 pub struct FuncType {
     pub name: String,
     pub subtype: FunctionSubtype,
-    /// The declaration's role in the lowered program.
     pub role: FunctionRole,
     pub input: Vec<ArcSort>,
     /// The output (value-column) sorts, primary first. A tuple-output function has more than one;
@@ -251,9 +251,7 @@ pub struct TypeInfo {
     pub(crate) hidden_functions: HashSet<String>,
 }
 
-/// A borrowed type environment selecting table or source-term signatures.
-/// Creating one does not copy maps or scan declarations. The source interpretation
-/// is shared by expression inference and ground DAG inference.
+/// A borrowed type environment for table or source-term signatures.
 #[derive(Clone, Copy)]
 pub struct TypeInfoView<'a> {
     types: &'a TypeInfo,
@@ -282,8 +280,7 @@ impl<'a> TypeInfoView<'a> {
         self.types.get_prims(name)
     }
 
-    /// Resolve only the requested function. Ordinary signatures reuse their Arc;
-    /// source signatures of views omit the evidence column and recover the source role.
+    /// Return a function's signature in this environment, or `None` if it is unbound.
     pub fn get_func_type(self, name: &str) -> Option<Arc<FuncType>> {
         let function = self.types.get_func_type(name)?;
         if !self.source_terms || !function.role.is_view() {
@@ -304,9 +301,9 @@ impl<'a> TypeInfoView<'a> {
         Some(Arc::new(source))
     }
 
-    /// Infer a whole action block, including constraints on local bindings.
-    /// Top-level commands pass `Full`; function `:merge` uses `Write` because
-    /// merge expressions run during table updates.
+    /// Infer an action block using `binding` for locals and `context` for
+    /// primitive capabilities. Top-level actions use [`Context::Full`]; merge
+    /// expressions use [`Context::Write`].
     pub fn typecheck_standalone_actions(
         self,
         symbol_gen: &mut SymbolGen,
@@ -324,7 +321,6 @@ impl<'a> TypeInfoView<'a> {
 
         problem.add_actions(&actions, self, symbol_gen, context)?;
 
-        // add bindings from the context
         for (var, (span, sort)) in binding {
             problem.assign_local_var_type(var, span.clone(), sort.clone())?;
         }
@@ -658,7 +654,7 @@ impl EGraph {
             Arc::new(FuncType {
                 name: name.to_owned(),
                 subtype: FunctionSubtype::Custom,
-                role: crate::ast::FunctionRole::Ordinary,
+                role: FunctionRole::Ordinary,
                 input,
                 outputs: vec![unit],
             }),
@@ -679,23 +675,17 @@ impl EGraph {
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
                 let resolved = self.type_info.typecheck_function(symbol_gen, fdecl)?;
-                // An FD view (a function with a view role, with a tuple
-                // `(eclass, proof)` output) gets a `set-if-empty` primitive (+ a
-                // proof-column reader) so the encoding can canonicalize a term to
-                // the view's e-class at insertion time. Registered here so it
-                // survives re-parse of the desugared program.
+                // Register view primitives during typechecking so encoded replay
+                // can resolve them before the tables exist.
                 if resolved.role.is_view()
                     && let Some(ft) = self.type_info.get_func_type(&resolved.name)
                     && ft.outputs.len() >= 2
                 {
                     let (name, input, outputs) =
                         (resolved.name.clone(), ft.input.clone(), ft.outputs.clone());
-                    crate::proofs::proof_fresh::register_set_if_empty(self, &name, input, outputs);
+                    register_set_if_empty(self, &name, input, outputs);
                 }
-                // An internal proof-node relation (whose last input is the minted
-                // id) gets a mint primitive, so the encoding writes a node in one
-                // statement. Registered here for the same reason as `set-if-empty`
-                // above.
+                // Term-node mint primitives must also be available during replay.
                 if resolved.role.is_term_node()
                     && let Some(ft) = self.type_info.get_func_type(&resolved.name)
                     && let Some((id_sort, arg_sorts)) = ft.input.split_last()
@@ -711,7 +701,7 @@ impl EGraph {
                     );
                     let (name, id_sort, arg_sorts) =
                         (resolved.name.clone(), id_sort.clone(), arg_sorts.to_vec());
-                    crate::proofs::proof_fresh::register_mint(self, &name, arg_sorts, id_sort);
+                    register_mint(self, &name, arg_sorts, id_sort);
                 }
                 // If this is a let binding, add it to global_sorts
                 // This preserves behavior for lets after desugaring
@@ -1669,8 +1659,9 @@ impl TypeInfo {
         self.func_types.get(sym)
     }
 
-    /// Borrow this environment using the source signatures of encoded views.
-    /// Sorts and primitives are shared; only a looked-up view's signature is adapted.
+    /// Interpret encoded views as source operations for typechecking.
+    /// View signatures omit the evidence column and recover their source role;
+    /// other function signatures are unchanged.
     pub fn source_types(&self) -> TypeInfoView<'_> {
         TypeInfoView {
             types: self,

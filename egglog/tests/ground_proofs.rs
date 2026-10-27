@@ -1,4 +1,4 @@
-use egglog::{EGraph, TermDag};
+use egglog::{CommandOutput, EGraph, TermDag};
 
 fn graph(program: &str) -> EGraph {
     let mut graph = EGraph::new_with_proofs();
@@ -133,12 +133,12 @@ fn extracted(graph: &mut EGraph, command: &str) -> Vec<(String, String)> {
         before,
         "prove-extract must not insert rows"
     );
-    let egglog::CommandOutput::ProveExtract {
+    let CommandOutput::ProveExtract {
         proof_store,
         proof_ids,
     } = outputs
         .iter()
-        .find(|output| matches!(output, egglog::CommandOutput::ProveExtract { .. }))
+        .find(|output| matches!(output, CommandOutput::ProveExtract { .. }))
         .unwrap()
     else {
         panic!("expected extraction proofs");
@@ -282,7 +282,7 @@ fn encoded_replay_preserves_prove_extract() {
     replay.set_proof_checking_program(program, false).unwrap();
     replay.ensure_no_reserved_symbols(false);
     let outputs = replay.parse_and_run_program(None, &encoded).unwrap();
-    assert!(!egglog::CommandOutput::snapshot_proofs_only(&outputs).is_empty());
+    assert!(!CommandOutput::snapshot_proofs_only(&outputs).is_empty());
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn container_primitives_use_the_types_of_their_result_elements() {
 
 #[test]
 fn proof_testing_certifies_plain_extracts_and_delimits_each_proof() {
-    use egglog::{CommandOutput, ast::parse_sexps};
+    use egglog::ast::parse_sexps;
 
     let mut graph = EGraph::new_with_proofs().with_proof_testing();
     graph

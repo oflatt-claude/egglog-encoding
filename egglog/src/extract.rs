@@ -829,18 +829,12 @@ impl Function {
         self.decl.role.is_view() && self.func_type.outputs.len() > 1
     }
 
-    /// A proof-node relation created by the proof encoding, marked
-    /// `:internal-role term-node`. Its rows are reconstructed during extraction with
-    /// the minted id as the last input column and the earlier inputs as the
-    /// proof's children. Views and plain bookkeeping relations such as the
-    /// subsumption markers are unmarked, so extraction never reads them.
+    /// Whether this is a term/proof relation with its id in the last input column.
     pub(crate) fn is_proof_node_relation(&self) -> bool {
         self.decl.role.is_term_node()
     }
 
-    /// Whether this relation's rows are the proof encoding's own, which is what
-    /// puts them on append-and-scan storage: a proof node marked
-    /// `:internal-role term-node` whose minted last input is a `Proof`.
+    /// Whether this term node's id belongs to `proof_sort`.
     #[cfg(test)]
     pub(crate) fn is_proof_node_of(&self, proof_sort: &str) -> bool {
         self.is_proof_node_relation()

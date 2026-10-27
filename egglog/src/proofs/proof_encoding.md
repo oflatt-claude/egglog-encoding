@@ -928,7 +928,7 @@ e-graph`. Proof-testing mode rewrites ordinary `extract` commands to
 `prove-extract`, checking the equality proof for every result.
 
 The same certification is available independently of the extractor through
-[`EGraph::prove_extracted_terms`](crate::EGraph::prove_extracted_terms): supply a
+[`EGraph::prove_extracted_terms`]: supply a
 `TermDag`, an input root, result roots, and their sort. A single proof store
 shares dependencies across all results. Primitive expressions have their
 validated, evaluated meaning in proof endpoints, and globals retain the term
@@ -936,17 +936,14 @@ in their original source definition.
 
 The passes are:
 
-1. [`TypeInfo::typecheck_term_dag`](crate::TypeInfo::typecheck_term_dag) resolves
-   ground syntax bottom-up using the existing type constraints. A shared syntactic
-   node can have several typings, selected by its parents or an expected root
-   sort. Unresolved ambiguity is an error. The pass returns a `TypedTermDag` and its root IDs.
-   It uses the same `GenericTermDag` storage as unresolved terms, with resolved
-   heads and no variable leaves. Typing performs no evaluation or table mutation.
-   For encoded programs, [`TypeInfo::source_types`](crate::TypeInfo::source_types)
-   borrows the environment and adapts only the function signatures it looks up;
-   it does not clone the environment or scan all declarations. The
-   `:internal-role` annotation distinguishes constructor, function, and global
-   views, so source types can be recovered during desugared replay as well.
+1. [`TypeInfo::source_types`] interprets encoded views as source operations.
+   The `:internal-role` annotation distinguishes constructor, function, and
+   global views, so desugared replay can recover the same signatures.
+   [`TypeInfoView::typecheck_term_dag`] resolves ground syntax bottom-up using
+   the existing type constraints. Shared syntax can have several typings,
+   selected by its parents or an expected root sort. Unresolved ambiguity is
+   an error. The result is a typed DAG and its root IDs; this pass performs no
+   evaluation or table mutation.
 2. Read-only lookup evaluates literals and validated read primitives and reads
    constructor/function views with canonical child values as keys. It collects
    the existing row proofs and union-find connections.

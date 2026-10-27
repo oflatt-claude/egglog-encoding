@@ -2,7 +2,14 @@
 
 ## [Unreleased] - ReleaseDate
 
-- Add `(prove-extract e [variants])` and `EGraph::prove_extracted_terms` to certify extraction against an existing input without inserting either endpoint. Both endpoints are proved to their common representative using existing view and union proofs; container witnesses come from proof projections. The proof algebra and checker are unchanged. `TypeInfo::typecheck_term_dag` provides contextual overload resolution and independent typings of shared polymorphic syntax, using the same generic DAG storage as unresolved terms. Proof-testing mode certifies ordinary extracts as well as checks. Printed proofs enclose their local bindings and final proof in one parenthesized block.
+- Add `(prove-extract e [variants])` and `EGraph::prove_extracted_terms` to prove
+  equality between an existing input and extraction results without inserting
+  either endpoint. Proof-testing mode also checks ordinary extracts. Each printed
+  proof is enclosed in a parenthesized block.
+- Add ground-term typing through `TypeInfo::typecheck_term_dag`, with contextual
+  overload resolution and independent typings of shared polymorphic syntax.
+- Generated function declarations use `:internal-role` for globals, views, and
+  term nodes, replacing `:internal-let`, `:internal-view`, and `:internal-term-node`.
 
 - Free-join plans with 65 to 128 stages now use constant-time tail metadata (128-bit stage masks) instead of rescanning the remaining stages; smaller plans keep their 64-bit masks. `paged_llama` runs about 17% faster.
 - **Breaking reporting formats.** `--save-report` now stores each iteration with its ruleset name and timing responsibility, and no longer serializes the redundant `ruleset_timings` or `search_and_apply_time_per_rule` aggregates. `--timing-summary` now emits the typed version-4 timing partition used by the benchmark runner; the runner's JSONL schema is also version 4, so older disposable benchmark caches must be recomputed.

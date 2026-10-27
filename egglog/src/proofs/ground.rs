@@ -1,8 +1,6 @@
-//! Read-only certificates for ground terms, independent of term extraction.
-//!
-//! Lookup computes values bottom-up and collects existing view/union proofs.
-//! Composition uses those proofs to connect each requested term to its leader.
-//! Containers use existence witnesses projected from those same rows.
+//! Equality proofs for existing ground terms, independent of the extractor.
+
+use std::iter::once;
 
 use super::proof_checker::{eval_expr_with_subst, gather_global_actions, process_actions};
 use super::proof_container_rebuild::rebuild_container_value_rec;
@@ -46,8 +44,8 @@ fn fail(message: impl Into<String>) -> Error {
     Error::ExtractError(message.into())
 }
 
-/// Append source syntax to the same DAG as the extractor's results. Globals
-/// are zero-argument lookups, resolved to their original definitions in proofs.
+/// Append an expression to `dag`, representing globals as zero-argument calls.
+/// Errors if the expression contains a local variable.
 fn ground_expr(dag: &mut TermDag, root: &ResolvedExpr) -> Result<TermId, Error> {
     let mut pending = vec![(root, false)];
     let mut values = Vec::new();
@@ -125,9 +123,8 @@ impl EGraph {
         let lookup = Lookup::new(self, &typed, &roots)?;
         Ok(lookup.nodes[&roots[0]].value)
     }
-    /// Prove that existing ground terms are equal, without inserting either
-    /// term. Both terms are looked up and proved to their common leader.
-    /// Primitive syntax has the same evaluated meaning as in the proof checker.
+    /// Prove equality of two existing ground terms without inserting them.
+    /// See [`Self::prove_extracted_terms`] for input requirements and errors.
     pub fn prove_equal_terms(
         &self,
         terms: &TermDag,
@@ -139,9 +136,14 @@ impl EGraph {
         Ok((store, ids[0]))
     }
 
-    /// Certify results from any extractor against one existing input. All terms
-    /// belong to `terms`; result order is preserved, with shared proof evidence.
-    /// This method performs no extraction and writes no e-graph rows.
+    /// Prove equality of `input` to each term in `outputs`, in that order.
+    /// Root IDs refer to `terms`, and every root must have the supplied `sort`.
+    /// Globals are zero-argument calls. Proof endpoints use their source definitions
+    /// and the evaluated forms of primitive expressions.
+    /// Primitives must support read-only evaluation and proof validation.
+    ///
+    /// Errors on invalid or ambiguous typings, unavailable terms or proof evidence,
+    /// or unequal roots. Performs no extraction and writes no e-graph rows.
     pub fn prove_extracted_terms(
         &self,
         terms: &TermDag,
@@ -149,7 +151,7 @@ impl EGraph {
         outputs: &[TermId],
         sort: ArcSort,
     ) -> Result<(ProofStore, Vec<ProofId>), Error> {
-        let roots = std::iter::once(input)
+        let roots = once(input)
             .chain(outputs.iter().copied())
             .map(|root| (root, Some(sort.clone())))
             .collect::<Vec<_>>();
@@ -241,7 +243,7 @@ impl<'a> Lookup<'a> {
                         .input()
                         .iter()
                         .cloned()
-                        .chain(std::iter::once(sort.clone()))
+                        .chain(once(sort.clone()))
                         .collect::<Vec<_>>();
                     let ResolvedCall::Primitive(runtime) = ResolvedCall::from_resolution(
                         primitive.name(),
@@ -389,9 +391,8 @@ impl<'a> Lookup<'a> {
         Ok(Some(self.evidence.insert_full(row[2]).0))
     }
 
-    // A root container has no parent from which to project existence. Look for
-    // a source view column already containing its value. This fallback is only
-    // needed for container roots; ordinary constructor lookup stays fully keyed.
+    // A root container has no parent to prove its existence. Find a source view
+    // column containing the same value and sort.
     fn find_root_container_anchors(&mut self) -> Result<(), Error> {
         let mut wanted = self
             .roots
@@ -621,7 +622,6 @@ impl<'a> Lookup<'a> {
         }
         // Visit the input before the extracted results. Its container proof
         // can provide a canonical witness for a result without an enclosing row.
-        // The walk remains children-first and visits each shared node once.
         let mut order = vec![];
         let mut seen = HashSet::default();
         let mut pending = composition
@@ -781,9 +781,7 @@ impl Composition<'_> {
         Ok(())
     }
 
-    /// Type the evaluated container forms together. A primitive such as
-    /// set-intersect takes sets but returns a set-of element terms. Reusing the
-    /// ground DAG checker here resolves those element sorts and preserves sharing.
+    /// Record the element sorts of the evaluated container terms.
     fn type_container_elements(&mut self) -> Result<(), Error> {
         let containers = self
             .lookup
@@ -811,8 +809,6 @@ impl Composition<'_> {
             else {
                 return Err(fail("container result is not an application"));
             };
-            // Typechecking preserves child positions, so each resolved child
-            // sort describes the corresponding existing proof term.
             self.container_elements.insert(
                 id,
                 typed_children

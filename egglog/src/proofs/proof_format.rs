@@ -144,7 +144,7 @@ pub(crate) fn proof_store_from_term(
     (store, roots[0])
 }
 
-/// Materialize several roots into one store, sharing their proof dependencies.
+/// Parse proof terms into one store, returning root IDs in the supplied order.
 pub(super) fn proof_store_from_terms(
     encoding_names: &EncodingNames,
     term_dag: TermDag,
@@ -957,12 +957,10 @@ impl ProofStore {
         id
     }
 
-    /// Get a string representation of the proof with the given id.
-    /// The string representation is a pretty-printed s-expression block with
-    /// let bindings for sub-proofs and sub-terms. The enclosing parentheses
-    /// delimit this proof and its bindings from other printed proofs.
+    /// Format a proof as one parenthesized s-expression containing its local
+    /// bindings and final proof term.
     pub fn proof_to_string(&self, proof_id: ProofId) -> String {
-        let symbol_gen = &mut crate::util::SymbolGen::new("".to_string());
+        let symbol_gen = &mut SymbolGen::new("".to_string());
         let mut buffer = String::new();
         symbol_gen.include_zero(true);
         let res = self.print_to_buffer(symbol_gen, proof_id, &mut buffer);
@@ -2119,7 +2117,7 @@ mod tests {
         raw.term_dag.app(head, args)
     }
 
-    /// the raw proof parser's parse of one packed row.
+    /// Parse one packed row and its nested proofs.
     fn parse(raw: &mut RawProofStore, term: TermId) -> RawProofId {
         raw.parse_nested_first(term);
         raw.parse_proof(term)

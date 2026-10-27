@@ -84,8 +84,9 @@ Proof-specific file tests use the `proofs/` filter: explicit `(prove ...)`
 fixtures under `tests/proofs` plus every proof-compatible file under
 proof-testing mode. Proof testing turns checks outside `fail` into proof queries
 and extracts into `prove-extract` commands, verifies each proof, and snapshots
-the certificates. Commands inside `fail` retain their ordinary behavior. Use `make proof-tests` for focused iteration and
-`make rust-check` or `make check` for the final compatibility gate.
+the certificates. Commands inside `fail` retain their ordinary behavior. Use
+`make proof-tests` for focused iteration and `make rust-check` or `make check`
+for complete validation.
 
 ## Benchmarking
 

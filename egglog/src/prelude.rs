@@ -776,7 +776,7 @@ pub fn add_function(
         schema,
         merge: merge.map(GenericMerge::result_only),
         hidden: false,
-        role: crate::ast::FunctionRole::Ordinary,
+        role: FunctionRole::Ordinary,
         unextractable: false,
         identity_vals: None,
         cost: None,
@@ -798,7 +798,7 @@ pub fn add_constructor(
         cost,
         unextractable,
         hidden: false,
-        role: crate::ast::FunctionRole::Ordinary,
+        role: FunctionRole::Ordinary,
     }])
 }
 

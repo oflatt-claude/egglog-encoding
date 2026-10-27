@@ -60,7 +60,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
     ResolvedCall::Func(Arc::new(FuncType {
         name: var.name.clone(),
         subtype: FunctionSubtype::Custom,
-        role: crate::ast::FunctionRole::Global,
+        role: FunctionRole::Global,
         input: vec![],
         outputs: vec![var.sort.clone()],
     }))
@@ -97,7 +97,7 @@ impl GlobalRemover<'_> {
                     let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                         name: name.name.clone(),
                         subtype: FunctionSubtype::Custom,
-                        role: crate::ast::FunctionRole::Global,
+                        role: FunctionRole::Global,
                         input: vec![],
                         outputs: vec![ty.clone()],
                     }));
@@ -112,7 +112,7 @@ impl GlobalRemover<'_> {
                         cost: None,
                         unextractable: true,
                         internal_hidden: false,
-                        role: crate::ast::FunctionRole::Global,
+                        role: FunctionRole::Global,
                         span: span.clone(),
                         identity_vals: None,
                     };
@@ -146,7 +146,7 @@ impl GlobalRemover<'_> {
                 let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                     name: name.name.clone(),
                     subtype: FunctionSubtype::Custom,
-                    role: crate::ast::FunctionRole::Global,
+                    role: FunctionRole::Global,
                     input: vec![],
                     outputs: vec![ty.clone()],
                 }));
@@ -162,7 +162,7 @@ impl GlobalRemover<'_> {
                     cost: None,
                     unextractable: true,
                     internal_hidden: false,
-                    role: crate::ast::FunctionRole::Global,
+                    role: FunctionRole::Global,
                     span: span.clone(),
                     identity_vals: None,
                 };

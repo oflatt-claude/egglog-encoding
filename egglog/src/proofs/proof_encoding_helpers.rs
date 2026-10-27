@@ -9,8 +9,8 @@ use egglog_concurrency::ReadOptimizedLock;
 use crate::{
     ArcSort, EGraph, TypeInfo, Value,
     ast::{
-        Command, Expr, Fact, GenericCommand, ResolvedAction, ResolvedCommand, ResolvedExpr,
-        ResolvedExprExt, ResolvedFact, ResolvedNCommand, Schedule, Span,
+        Command, Expr, Fact, FunctionRole, GenericCommand, ResolvedAction, ResolvedCommand,
+        ResolvedExpr, ResolvedExprExt, ResolvedFact, ResolvedNCommand, Schedule, Span,
     },
     core::ResolvedCall,
     proofs::{proof_checker::is_container_side_condition, proof_encoding::ProofInstrumentor},
@@ -939,7 +939,7 @@ pub fn program_supports_proofs(commands: &[ResolvedCommand], type_info: &TypeInf
         .filter_map(|c| match c {
             GenericCommand::Function {
                 name,
-                role: crate::ast::FunctionRole::Global,
+                role: FunctionRole::Global,
                 ..
             } => Some(name.clone()),
             _ => None,
@@ -1469,7 +1469,7 @@ fn command_supports_proof_encoding_impl(
     // `file_supports_proofs` uses) have their own FD-view encoding — both excluded.
     if let crate::ast::GenericCommand::Function {
         merge: None,
-        role: crate::ast::FunctionRole::Ordinary,
+        role: FunctionRole::Ordinary,
         schema,
         ..
     } = command

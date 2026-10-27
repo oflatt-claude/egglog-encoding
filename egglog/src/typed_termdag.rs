@@ -1,10 +1,9 @@
-//! Typechecking ground syntax without expanding its shared subterms into trees.
+//! Ground-term typechecking with contextual overload resolution.
 //!
-//! Sharing in a [`TermDag`] is syntactic: `(vec-empty)` may occur at several
-//! sorts. Inference therefore keeps a set of possible result sorts for each
-//! term, working from children to parents. A parent selects its children's
-//! typings through the ordinary application constraints. Only the selected,
-//! unambiguous typings become nodes in the returned [`TypedTermDag`].
+//! Shared syntax such as `(vec-empty)` may have different sorts in different
+//! contexts. Each selected typing has its own node in the [`TypedTermDag`].
+
+use std::iter::once;
 
 use crate::constraint::{Problem, assign};
 use crate::core::StringOrEq;
@@ -17,8 +16,9 @@ use crate::{
 use egglog_ast::span::Span;
 
 impl TypeInfo {
-    /// Typecheck ground terms against table signatures. Use `source_types()` to
-    /// typecheck original terms against a proof-encoded program's declarations.
+    /// Typecheck ground terms against table signatures.
+    /// See [`TypeInfoView::typecheck_term_dag`] for root typing and errors, and
+    /// [`Self::source_types`] to interpret encoded views as source operations.
     pub fn typecheck_term_dag(
         &self,
         terms: &TermDag,
@@ -33,8 +33,9 @@ impl TypeInfoView<'_> {
     /// Typecheck the reachable ground terms, optionally constraining each
     /// root's sort. The same syntax may be requested at several root sorts.
     /// Returns the typed DAG and its root IDs in the requested order.
-    /// Unreachable terms do not participate in inference. Typechecking neither
-    /// evaluates primitives nor reads or writes function tables.
+    /// Unreachable terms are ignored. Errors on variables, invalid references,
+    /// type mismatches, ambiguous typings, or primitives unavailable in `context`.
+    /// Does not evaluate primitives or read or write function tables.
     pub fn typecheck_term_dag(
         self,
         terms: &TermDag,
@@ -184,7 +185,7 @@ impl Inference<'_> {
                 Term::Lit(lit) => AtomTerm::Literal(Span::Panic, lit.clone()),
                 _ => AtomTerm::Var(Span::Panic, format!("arg-{i}")),
             })
-            .chain(std::iter::once(AtomTerm::Var(Span::Panic, "result".into())))
+            .chain(once(AtomTerm::Var(Span::Panic, "result".into())))
             .collect();
         let atom = Atom {
             span: Span::Panic,
@@ -207,9 +208,7 @@ impl Inference<'_> {
         outputs.sort_by(|a, b| a.name().cmp(b.name()));
         domains.push(outputs);
 
-        // Reuse the normal solver to propagate each partial signature before
-        // branching. Fixed constructor/primitive signatures usually settle the
-        // entire application immediately, including polymorphic child syntax.
+        // Propagate constraints before enumerating unconstrained sorts.
         let mut pending = vec![constraints];
         let mut signatures = HashSet::default();
         let mut last_error = None;
@@ -309,8 +308,7 @@ fn reachable_terms(
         if seen.insert(term)
             && let Term::App(_, children) = terms.get(term)
         {
-            // TermDag normally interns children before parents. Validate this
-            // here because its public app method also accepts arbitrary IDs.
+            // Reject forward references and cycles before bottom-up inference.
             for &child in children {
                 if child >= term {
                     return Err(GroundTypeError::InvalidTerm { term: child });

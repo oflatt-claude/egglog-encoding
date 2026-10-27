@@ -9,8 +9,8 @@ use std::{collections::BTreeMap, str::FromStr, sync::Arc};
 use egglog::{
     ArcSort, CommandMacro, Context, EGraph, Error, TypeError, TypeInfo,
     ast::{
-        Action, Actions, Command, Expr, Fact, Macro, ParseError, Parser, Rule, RuleEvalMode,
-        RunConfig, Schedule, Schema, Sexp, Span,
+        Action, Actions, Command, Expr, Fact, FunctionDecl, FunctionRole, Macro, ParseError,
+        Parser, Rule, RuleEvalMode, RunConfig, Schedule, Schema, Sexp, Span,
     },
     util::{FreshGen, SymbolGen},
 };
@@ -158,7 +158,7 @@ impl CommandMacro for LowerDisequality {
                     role,
                 } = &command
             {
-                let mut declaration = egglog::ast::FunctionDecl::constructor(
+                let mut declaration = FunctionDecl::constructor(
                     span.clone(),
                     name.clone(),
                     schema.clone(),
@@ -475,7 +475,7 @@ fn constructor(span: &Span, name: String, input: Vec<String>, output: &str) -> C
         cost: None,
         unextractable: true,
         hidden: true,
-        role: egglog::ast::FunctionRole::Ordinary,
+        role: FunctionRole::Ordinary,
     }
 }
 

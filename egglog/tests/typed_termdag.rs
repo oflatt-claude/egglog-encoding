@@ -1,5 +1,7 @@
+use std::thread::Builder;
+
 use egglog::ast::Literal;
-use egglog::{Context, EGraph, GroundTypeError, TermDag, TypedTerm};
+use egglog::{Context, EGraph, GroundTypeError, TermDag, TypeError, TypedTerm};
 
 #[test]
 fn source_signatures_are_available_from_unexecuted_encoded_declarations() {
@@ -178,7 +180,7 @@ fn expected_root_sort_selects_an_overload_but_not_ambiguous_children() {
 
 #[test]
 fn shared_ground_dag_stays_shared_and_does_not_use_the_call_stack() {
-    std::thread::Builder::new()
+    Builder::new()
         .stack_size(128 * 1024)
         .spawn(|| {
             let mut eg = EGraph::default();
@@ -264,10 +266,10 @@ fn primitive_resolution_obeys_the_requested_capability_context() {
 fn indistinguishable_primitive_registrations_are_rejected() {
     use egglog::ast::Span;
     use egglog::constraint::{SimpleTypeConstraint, TypeConstraint};
-    use egglog::{Primitive, PurePrim, PureState, Value};
+    use egglog::{ArcSort, Primitive, PurePrim, PureState, Value};
 
     #[derive(Clone)]
-    struct Identity(egglog::ArcSort);
+    struct Identity(ArcSort);
     impl Primitive for Identity {
         fn name(&self) -> &str {
             "identity"
@@ -302,7 +304,7 @@ fn indistinguishable_primitive_registrations_are_rejected() {
         eg.type_info()
             .typecheck_term_dag(&terms, &[(bad, None)], Context::Read),
         Err(GroundTypeError::Type {
-            source: egglog::TypeError::AmbiguousPrimitive { .. },
+            source: TypeError::AmbiguousPrimitive { .. },
             ..
         })
     ));
