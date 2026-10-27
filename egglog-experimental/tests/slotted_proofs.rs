@@ -48,6 +48,16 @@ fn demo_proof_snapshots() {
 (check (= input side))"#,
         ),
         (
+            "demo_renaming_guard",
+            r#"(datatype U (Pair U U) (F U) (G U) (Hit))
+(union (F $a) (G $a))
+(let input (Pair $a $b))
+(let side (G $b))
+(rewrite (Pair $x $y) (Hit) :when ((renaming-= (F $x) (G $y))) :name "guard")
+(run 1)
+(check (= input (Hit)))"#,
+        ),
+        (
             "demo_alpha_renaming",
             "(datatype U (Lam U U :binder 0))\n\
              (let input (Lam $a $a))\n\
@@ -87,6 +97,29 @@ fn demo_proof_snapshots() {
         );
         assert_eq!(proofs.len(), 1);
         insta::assert_snapshot!(name, format!("Source:\n{source}\n\nProof:\n{}", proofs[0]));
+    }
+}
+
+#[test]
+fn nested_guards_with_globals_use_source_terms() {
+    for predicate in ["=", "renaming-="] {
+        for (lhs, term_slot, guard_slot) in [("input", "$a", "$s"), ("(Pair x y)", "slot", "slot")]
+        {
+            let source = format!(
+                r#"(datatype U (Pair U U) (F U) (G U) (H U) (Hit))
+(let slot $a)
+(union (G {term_slot}) (H {term_slot}))
+(let input (Pair (F (G {term_slot})) (F (H {term_slot}))))
+(rewrite {lhs} (Hit) :when (({predicate} (F (G {guard_slot})) (F (H {guard_slot})))) :name "same")
+(run 1)
+(check (= input (Hit)))"#,
+            );
+            prove(
+                &mut compiler(ProofMode::Prove),
+                &mut new_egraph_with_proofs(),
+                &source,
+            );
+        }
     }
 }
 

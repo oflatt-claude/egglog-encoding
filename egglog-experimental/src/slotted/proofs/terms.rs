@@ -316,6 +316,30 @@ pub fn is_subterm(dag: &TermDag, needle: TermId, haystack: TermId) -> bool {
     false
 }
 
+/// A permutation mapping each pair of terms exactly, or `None` if none exists.
+pub(super) fn term_renaming(dag: &TermDag, pairs: &[(TermId, TermId)]) -> Option<Renaming> {
+    let mut work = pairs.to_vec();
+    let mut names = BTreeMap::new();
+    while let Some((a, b)) = work.pop() {
+        match (slot_of(dag, a), slot_of(dag, b)) {
+            (Some(a), Some(b)) => {
+                if names.insert(a, b).is_some_and(|old| old != b) {
+                    return None;
+                }
+            }
+            (None, None) => match (dag.get(a), dag.get(b)) {
+                (Term::App(f, xs), Term::App(g, ys)) if f == g && xs.len() == ys.len() => {
+                    work.extend(xs.iter().copied().zip(ys.iter().copied()))
+                }
+                (x, y) if x == y => (),
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    Renaming::completing(names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

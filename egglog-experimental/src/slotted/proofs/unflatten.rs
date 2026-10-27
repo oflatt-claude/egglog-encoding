@@ -5,9 +5,9 @@ use super::format::{
 };
 use super::lifting::Lifting;
 use super::source::{ColumnKind, Condition, Requirement, Rhs, SlottedProgram};
-use super::terms::{Renaming, slot_of};
+use super::terms::{Renaming, slot_of, term_renaming};
 use super::{HashMap, HashSet};
-use egglog::{Term, TermDag, TermId};
+use egglog::{Term, TermId};
 use std::collections::{BTreeMap, VecDeque};
 
 type Result<T> = std::result::Result<T, String>;
@@ -127,6 +127,11 @@ fn lift_rule(
             Requirement::Exists(t) => {
                 let t = instance(witnesses.store, t)?;
                 witnesses.exists(t)?
+            }
+            Requirement::RenamingEqual(a, b) => {
+                let a = instance(witnesses.store, a)?;
+                let b = instance(witnesses.store, b)?;
+                witnesses.renaming_equality(a, b)?
             }
             Requirement::Equal(a, b) => {
                 let a = instance(witnesses.store, a)?;
@@ -301,6 +306,46 @@ impl<'a> Witnesses<'a> {
         self.equality(a, b)
     }
 
+    fn renaming_equality(&mut self, a: TermId, b: TermId) -> Result<SlottedProofId> {
+        for term in [a, b] {
+            let proof = self.exists(term)?;
+            self.add(proof);
+        }
+        if let Ok(proof) = self.equality(a, b) {
+            return Ok(proof);
+        }
+        let initial = self.reflexive(a)?;
+        let mut work = VecDeque::from([initial]);
+        let mut seen = Vec::new();
+        while let Some(proof) = work.pop_front() {
+            let current = self.store.proposition(proof).rhs;
+            if self
+                .program
+                .eq_modulo_renaming(&mut self.store.term_dag, current, b)
+            {
+                return Ok(proof);
+            }
+            if seen.iter().any(|&term| {
+                self.program
+                    .eq_modulo_renaming(&mut self.store.term_dag, current, term)
+            }) {
+                continue;
+            }
+            seen.push(current);
+            for edge in self.edges.clone() {
+                let p = self.store.proposition(edge).clone();
+                for (left, reversed) in [(p.lhs, false), (p.rhs, true)] {
+                    if let Some(renaming) = self.renaming(&[(left, current)]) {
+                        let edge = if reversed { self.store.sym(edge) } else { edge };
+                        let edge = self.store.equivariance(edge, renaming);
+                        work.push_back(self.store.trans(proof, edge).map_err(|e| e.0)?);
+                    }
+                }
+            }
+        }
+        Err("no equality up to renaming between the guard's terms".into())
+    }
+
     fn equality(&mut self, from: TermId, to: TermId) -> Result<SlottedProofId> {
         if let Some(&p) = self.memo.get(&(from, to)) {
             return Ok(p);
@@ -387,25 +432,33 @@ impl<'a> Witnesses<'a> {
     }
 }
 
-fn term_renaming(dag: &TermDag, pairs: &[(TermId, TermId)]) -> Option<Renaming> {
-    let mut work = pairs.to_vec();
-    let mut names = BTreeMap::new();
-    while let Some((a, b)) = work.pop() {
-        match (slot_of(dag, a), slot_of(dag, b)) {
-            (Some(a), Some(b)) => {
-                if names.insert(a, b).is_some_and(|old| old != b) {
-                    return None;
-                }
-            }
-            (None, None) => match (dag.get(a), dag.get(b)) {
-                (Term::App(f, xs), Term::App(g, ys)) if f == g && xs.len() == ys.len() => {
-                    work.extend(xs.iter().copied().zip(ys.iter().copied()))
-                }
-                (x, y) if x == y => (),
-                _ => return None,
-            },
-            _ => return None,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::slotted::proofs::check_proof;
+    use egglog::TermDag;
+
+    #[test]
+    fn renaming_guard_lifts_child_equalities_through_congruence() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        for head in ["F", "G", "H"] {
+            program.add_constructor(head, vec![ColumnKind::Child]);
         }
+        program.add_let(&mut dag, "a", "(F (G $0))").unwrap();
+        program.add_let(&mut dag, "b", "(F (H $0))").unwrap();
+        program.add_let(&mut dag, "input", "(Pair a b)").unwrap();
+        program
+            .add_union(&mut dag, "(G $0)", "(H $0)", "U")
+            .unwrap();
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(program.lets["input"], program.lets["input"]);
+        let union = store.fiat(program.unions[0].lhs, program.unions[0].rhs);
+        let mut witnesses = Witnesses::new(&mut store, &program, vec![root, union]);
+        let proof = witnesses
+            .renaming_equality(program.lets["a"], program.lets["b"])
+            .unwrap();
+        check_proof(&mut store, &program, proof).unwrap();
     }
-    Renaming::completing(names)
 }

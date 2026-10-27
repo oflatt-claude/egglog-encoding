@@ -74,6 +74,20 @@ pub enum Condition {
         /// Right source expression.
         rhs: TermId,
     },
+    /// An equality allowing a permutation of the right term's slots.
+    RenamingEq {
+        /// Left source expression.
+        lhs: TermId,
+        /// Right source expression.
+        rhs: TermId,
+    },
+    /// Two source terms that differ under every slot permutation.
+    RenamingNeq {
+        /// Left source expression.
+        lhs: TermId,
+        /// Right source expression.
+        rhs: TermId,
+    },
     /// The slot occurs freely in at least one of the terms.
     Free {
         /// Source expression naming the tested slot.
@@ -101,6 +115,7 @@ pub enum Condition {
 pub(super) enum Requirement {
     Exists(TermId),
     Equal(TermId, TermId),
+    RenamingEqual(TermId, TermId),
 }
 
 impl Condition {
@@ -108,7 +123,10 @@ impl Condition {
     pub fn terms(&self) -> Vec<TermId> {
         match self {
             Self::Fact(t) => vec![*t],
-            Self::Eq { lhs, rhs } | Self::Neq { lhs, rhs } => vec![*lhs, *rhs],
+            Self::Eq { lhs, rhs }
+            | Self::Neq { lhs, rhs }
+            | Self::RenamingEq { lhs, rhs }
+            | Self::RenamingNeq { lhs, rhs } => vec![*lhs, *rhs],
             Self::Free { slot, terms } | Self::NotFree { slot, terms } => std::iter::once(*slot)
                 .chain(terms.iter().copied())
                 .collect(),
@@ -121,11 +139,14 @@ impl Condition {
     pub(super) fn requirements(&self) -> Vec<Requirement> {
         match self {
             Self::Eq { lhs, rhs } => vec![Requirement::Equal(*lhs, *rhs)],
+            Self::RenamingEq { lhs, rhs } => vec![Requirement::RenamingEqual(*lhs, *rhs)],
             Self::Fact(term) | Self::FreeNames { term, .. } => vec![Requirement::Exists(*term)],
             Self::Free { terms, .. } | Self::NotFree { terms, .. } => {
                 terms.iter().copied().map(Requirement::Exists).collect()
             }
-            Self::Neq { lhs, rhs } => vec![Requirement::Exists(*lhs), Requirement::Exists(*rhs)],
+            Self::Neq { lhs, rhs } | Self::RenamingNeq { lhs, rhs } => {
+                vec![Requirement::Exists(*lhs), Requirement::Exists(*rhs)]
+            }
         }
     }
 
@@ -476,13 +497,17 @@ impl SlottedProgram {
                     .collect::<Result<_, _>>()?;
                 Ok(Condition::FreeNames { term, slots })
             }
-            [h, lhs, rhs] if matches!(h.atom(), Some("=" | "!=")) => {
+            [h, lhs, rhs]
+                if matches!(h.atom(), Some("=" | "!=" | "renaming-=" | "renaming-!=")) =>
+            {
                 let lhs = Self::pattern_term(dag, lhs)?;
                 let rhs = Self::pattern_term(dag, rhs)?;
-                Ok(if h.atom() == Some("=") {
-                    Condition::Eq { lhs, rhs }
-                } else {
-                    Condition::Neq { lhs, rhs }
+                Ok(match h.atom().unwrap() {
+                    "=" => Condition::Eq { lhs, rhs },
+                    "!=" => Condition::Neq { lhs, rhs },
+                    "renaming-=" => Condition::RenamingEq { lhs, rhs },
+                    "renaming-!=" => Condition::RenamingNeq { lhs, rhs },
+                    _ => unreachable!(),
                 })
             }
             [head, ..]
@@ -580,6 +605,13 @@ impl SlottedProgram {
             self.refresh_binders_from(dag, term, &mut |_| fresh.fresh())
         };
         canonical(dag, lhs) == canonical(dag, rhs)
+    }
+
+    /// Compare terms up to scoped bound names and a bijection of free slots.
+    pub(super) fn eq_modulo_renaming(&self, dag: &mut TermDag, lhs: TermId, rhs: TermId) -> bool {
+        let lhs = self.refresh_binders(dag, lhs);
+        let rhs = self.refresh_binders(dag, rhs);
+        super::terms::term_renaming(dag, &[(lhs, rhs)]).is_some()
     }
 
     fn free_slots_into(&self, dag: &TermDag, term: TermId, out: &mut BTreeSet<i64>) {
@@ -1037,6 +1069,37 @@ mod tests {
                 program.alpha_eq(&mut dag, terms.rhs, terms.lhs),
                 equal,
                 "{b} versus {a}"
+            );
+        }
+    }
+
+    #[test]
+    fn renaming_comparison_preserves_aliasing_payloads_and_binding() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
+        program.add_constructor("Num", vec![ColumnKind::Payload]);
+        for (a, b, equal) in [
+            ("(Pair $0 $1)", "(Pair $1 $0)", true),
+            ("(Pair $0 $0)", "(Pair $1 $2)", false),
+            ("(Lam $0 $0)", "(Lam $1 $2)", false),
+            ("(Lam $0 (Pair $0 $1))", "(Lam $2 (Pair $2 $3))", true),
+            ("(Pair (Lam $0 $0) $0)", "(Pair (Lam $1 $1) $2)", true),
+            ("(Lam $0 (Lam $0 $0))", "(Lam $1 (Lam $2 $2))", true),
+            ("(Lam $0 (Lam $0 $0))", "(Lam $1 (Lam $2 $1))", false),
+            ("(Num 1)", "(Num 2)", false),
+        ] {
+            let lhs = program
+                .ground_term(&mut dag, &parse_sexp(a).unwrap())
+                .unwrap();
+            let rhs = program
+                .ground_term(&mut dag, &parse_sexp(b).unwrap())
+                .unwrap();
+            assert_eq!(
+                program.eq_modulo_renaming(&mut dag, lhs, rhs),
+                equal,
+                "{a} vs {b}"
             );
         }
     }
