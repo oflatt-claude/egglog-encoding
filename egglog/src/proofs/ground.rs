@@ -38,8 +38,7 @@ struct Lookup<'a> {
     terms: &'a TypedTermDag,
     roots: &'a [TermId],
     nodes: HashMap<TermId, Node>,
-    evidence: Vec<Value>,
-    evidence_ids: HashMap<Value, usize>,
+    evidence: IndexSet<Value>,
     unanchored_container_roots: Vec<TermId>,
 }
 
@@ -213,8 +212,7 @@ impl<'a> Lookup<'a> {
             terms,
             roots,
             nodes: HashMap::default(),
-            evidence: vec![],
-            evidence_ids: HashMap::default(),
+            evidence: IndexSet::default(),
             unanchored_container_roots: vec![],
         };
         for (id, node) in terms.nodes() {
@@ -298,7 +296,7 @@ impl<'a> Lookup<'a> {
                         } else {
                             RowKind::Constructor
                         };
-                        let proof = this.evidence(row[key.len() + 1]);
+                        let proof = this.evidence.insert_full(row[key.len() + 1]).0;
                         let union = this.union(raw, value, &sort)?;
                         Some(Row { kind, proof, union })
                     } else if egraph.type_info.is_global(&function.name) && !sort.is_eq_sort() {
@@ -352,16 +350,6 @@ impl<'a> Lookup<'a> {
         origin
     }
 
-    fn evidence(&mut self, proof: Value) -> usize {
-        if let Some(&index) = self.evidence_ids.get(&proof) {
-            return index;
-        }
-        let index = self.evidence.len();
-        self.evidence.push(proof);
-        self.evidence_ids.insert(proof, index);
-        index
-    }
-
     fn canonical(&self, value: Value, sort: &ArcSort) -> Result<Value, Error> {
         if sort.is_eq_container_sort() {
             self.egraph
@@ -399,7 +387,7 @@ impl<'a> Lookup<'a> {
         if row[1] != leader {
             return Err(fail("union proof does not reach the leader"));
         }
-        Ok(Some(self.evidence(row[2])))
+        Ok(Some(self.evidence.insert_full(row[2]).0))
     }
 
     // A root container has no parent from which to project existence. Look for
@@ -451,7 +439,7 @@ impl<'a> Lookup<'a> {
                 }
             });
             for proof in proofs {
-                self.evidence(proof);
+                self.evidence.insert(proof);
             }
         }
         self.unanchored_container_roots = self
