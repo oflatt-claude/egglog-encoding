@@ -19,6 +19,31 @@ impl TypeInfo {
     /// Typecheck ground terms against table signatures.
     /// See [`TypeInfoView::typecheck_term_dag`] for root typing and errors, and
     /// [`Self::source_types`] to interpret encoded views as source operations.
+    ///
+    /// # Example
+    ///
+    /// One unresolved `(vec-empty)` node can be used at two different sorts.
+    /// The returned root IDs refer to separate nodes in the typed DAG.
+    ///
+    /// ```
+    /// use egglog::{Context, EGraph, TermDag};
+    ///
+    /// let mut graph = EGraph::default();
+    /// graph.parse_and_run_program(None, "
+    ///     (sort Ints (Vec i64))
+    ///     (sort Strings (Vec String))
+    /// ").unwrap();
+    /// let types = graph.type_info();
+    /// let mut terms = TermDag::default();
+    /// let empty = terms.app("vec-empty".into(), vec![]);
+    /// let roots = ["Ints", "Strings"].map(|name| {
+    ///     (empty, Some(types.get_sort_by_name(name).unwrap().clone()))
+    /// });
+    /// let (typed, roots) = types.typecheck_term_dag(&terms, &roots, Context::Read).unwrap();
+    /// assert_ne!(roots[0], roots[1]);
+    /// assert_eq!(typed.get(roots[0]).sort().name(), "Ints");
+    /// assert_eq!(typed.get(roots[1]).sort().name(), "Strings");
+    /// ```
     pub fn typecheck_term_dag(
         &self,
         terms: &TermDag,
@@ -33,6 +58,10 @@ impl TypeInfoView<'_> {
     /// Typecheck the reachable ground terms, optionally constraining each
     /// root's sort. The same syntax may be requested at several root sorts.
     /// Returns the typed DAG and its root IDs in the requested order.
+    /// Returned IDs belong to the new DAG, which contains only selected typings.
+    /// Each child ID must precede its parent in the input DAG. Empty roots produce
+    /// an empty DAG and root list; duplicate roots are preserved.
+    ///
     /// Unreachable terms are ignored. Errors on variables, invalid references,
     /// type mismatches, ambiguous typings, or primitives unavailable in `context`.
     /// Does not evaluate primitives or read or write function tables.
@@ -128,6 +157,7 @@ pub enum GroundTypeError {
     Type { term: TermId, source: TypeError },
 }
 
+/// One possible result sort and its resolved node, or the error for that typing.
 struct Candidate {
     sort: ArcSort,
     node: Result<TermId, GroundTypeError>,
@@ -137,6 +167,7 @@ struct Inference<'a> {
     types: TypeInfoView<'a>,
     terms: &'a TermDag,
     context: Context,
+    /// Input node ID, then result sort name. Candidate node IDs belong to `dag`.
     candidates: HashMap<TermId, IndexMap<String, Candidate>>,
     dag: TypedTermDag,
 }

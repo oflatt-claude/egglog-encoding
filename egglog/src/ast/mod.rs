@@ -1482,6 +1482,9 @@ pub type FunctionDecl = GenericFunctionDecl<String, String>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
 /// A function's role in the lowered program.
+/// Encoded view declarations return the source result followed by its evidence
+/// (`Unit` when proofs are disabled). Their role preserves the source operation's
+/// meaning for [`TypeInfo::source_types`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FunctionRole {
     #[default]

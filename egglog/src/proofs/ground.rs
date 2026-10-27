@@ -1,4 +1,13 @@
 //! Equality proofs for existing ground terms, independent of the extractor.
+//!
+//! [`Lookup`] reads values and existing evidence. It is consumed by preparation,
+//! which names the proof endpoints and resolves evidence to [`ProofId`]s.
+//! [`PreparedProofs`] then collects existence witnesses and composes a certificate
+//! from each requested root to its leader. Only lookup and preparation need the
+//! e-graph; composition operates on the proof store.
+//!
+//! Typed node IDs belong to the input [`TypedTermDag`]. Endpoint IDs in
+//! [`Proposition`]s belong to [`ProofStore::term_dag`]. The two are unrelated.
 
 use std::iter::once;
 
@@ -14,23 +23,30 @@ use crate::*;
 
 #[derive(Clone, Copy)]
 enum RowKind {
+    /// The row proves `representative = constructor(canonical children)`.
     Constructor,
+    /// The row connects a global to its source definition.
     Global,
+    /// Project this column from a custom function's row proof.
     Output(usize),
 }
 
+/// A view proof and an optional edge from its representative to the leader.
+/// `P` is an evidence index during lookup and a [`ProofId`] after preparation.
 #[derive(Clone, Copy)]
-struct Row {
+struct Row<P> {
     kind: RowKind,
-    proof: usize,
-    union: Option<usize>,
+    proof: P,
+    union: Option<P>,
 }
 
 struct Node {
     value: Value,
-    row: Option<Row>,
+    row: Option<Row<usize>>,
 }
 
+/// Existing values and evidence for every node in `terms`.
+/// All roots have the same canonical value; no e-graph rows are inserted.
 struct Lookup<'a> {
     egraph: &'a EGraph,
     terms: &'a TypedTermDag,
@@ -144,6 +160,34 @@ impl EGraph {
     ///
     /// Errors on invalid or ambiguous typings, unavailable terms or proof evidence,
     /// or unequal roots. Performs no extraction and writes no e-graph rows.
+    /// An empty `outputs` slice still validates and proves `input` to its leader,
+    /// but returns no equality proofs. Duplicate outputs retain their positions.
+    ///
+    /// # Example
+    ///
+    /// An extractor may return `F(B)` even though the source only inserted `F(A)`.
+    /// Existing evidence for `A = B` and `F(A)` suffices to certify that result.
+    ///
+    /// ```
+    /// use egglog::{EGraph, Error, TermDag};
+    ///
+    /// let mut graph = EGraph::new_with_proofs();
+    /// graph.parse_and_run_program(None, "
+    ///     (datatype E (A) (B) (F E))
+    ///     (F (A)) (B) (union (A) (B)) (run 1)
+    /// ")?;
+    /// let mut terms = TermDag::default();
+    /// let a = terms.app("A".into(), vec![]);
+    /// let b = terms.app("B".into(), vec![]);
+    /// let input = terms.app("F".into(), vec![a]);
+    /// let output = terms.app("F".into(), vec![b]);
+    /// let sort = graph.type_info().get_sort_by_name("E").unwrap().clone();
+    /// let (store, proofs) = graph.prove_extracted_terms(&terms, input, &[output], sort)?;
+    /// let equality = store.get(proofs[0]);
+    /// assert_eq!(store.term_dag().to_string(equality.lhs()), "(F (A))");
+    /// assert_eq!(store.term_dag().to_string(equality.rhs()), "(F (B))");
+    /// # Ok::<(), Error>(())
+    /// ```
     pub fn prove_extracted_terms(
         &self,
         terms: &TermDag,
@@ -160,15 +204,13 @@ impl EGraph {
             .source_types()
             .typecheck_term_dag(terms, &roots, Context::Read)
             .map_err(|error| fail(error.to_string()))?;
-        let mut lookup = Lookup::new(self, &typed, &roots)?;
-        lookup.find_root_container_anchors()?;
-        let (mut store, certificates) = lookup.compose()?;
-        let input = roots[0];
+        let lookup = Lookup::new(self, &typed, &roots)?;
+        let prepared = lookup.prepare()?;
+        let (mut store, certificates) = prepared.compose()?;
         let mut proofs = Vec::with_capacity(outputs.len());
         let mut simplified = Default::default();
-        for &output in &roots[1..] {
-            let left = certificates[&input];
-            let right = certificates[&output];
+        for &right in &certificates[1..] {
+            let left = certificates[0];
             if store.get(left).rhs() != store.get(right).rhs() {
                 return Err(fail("requested terms have different leaders"));
             }
@@ -456,7 +498,9 @@ impl<'a> Lookup<'a> {
         Ok(())
     }
 
-    fn compose(self) -> Result<(ProofStore, HashMap<TermId, ProofId>), Error> {
+    /// Resolve existing evidence and proof endpoints, consuming runtime lookup data.
+    fn prepare(mut self) -> Result<PreparedProofs<'a>, Error> {
+        self.find_root_container_anchors()?;
         let mut dag = TermDag::default();
         let sort = self
             .egraph
@@ -510,204 +554,47 @@ impl<'a> Lookup<'a> {
             &mut store.term_dag,
         )
         .map_err(|error| fail(error.to_string()))?;
-        let mut composition = Composition {
-            lookup: self,
-            store,
-            evidence,
-            row_proofs: HashMap::default(),
-            selected: HashMap::default(),
-            canonical: HashMap::default(),
-            witnesses: HashMap::default(),
-            proofs: HashMap::default(),
-            certificates_by_terms: HashMap::default(),
-            typed_certificates: HashMap::default(),
-            container_elements: HashMap::default(),
-        };
-        composition.name_endpoints(&globals.var_bindings)?;
-        composition.type_container_elements()?;
-        // Proof syntax is untyped. In particular `(vec-empty)` at one sort is
-        // not evidence that the value exists at every other vector sort. Roots
-        // with no matching typed view column need a typed source witness.
-        if !composition.lookup.unanchored_container_roots.is_empty() {
-            let mut source_containers = HashSet::default();
-            let mut error = None;
-            for action in &actions {
-                (*action).clone().visit_exprs(&mut |expr| {
-                    if expr.output_type().is_container_sort() {
-                        match eval_expr_with_subst(
-                            "global_actions",
-                            &expr,
-                            &mut composition.store.term_dag,
-                            &globals.var_bindings,
-                        ) {
-                            Ok((term, _)) => {
-                                source_containers
-                                    .insert((expr.output_type().name().to_owned(), term));
-                            }
-                            Err(err) => error = Some(err),
-                        }
-                    }
-                    expr
-                });
-            }
-            if let Some(error) = error {
-                return Err(fail(error.to_string()));
-            }
-            for &id in &composition.lookup.unanchored_container_roots {
-                let node = composition.lookup.terms.get(id);
-                let sort = node.sort().name().to_owned();
-                if !composition.lookup.roots.iter().any(|root| {
-                    composition.lookup.terms.get(*root).sort().name() == sort
-                        && (source_containers.contains(&(sort.clone(), composition.selected[root]))
-                            || source_containers
-                                .contains(&(sort.clone(), composition.canonical[root])))
-                }) {
-                    return Err(fail(format!(
-                        "Could not find term {} in the e-graph",
-                        composition.lookup.terms.to_string(id)
-                    )));
-                }
-            }
-        }
-        composition.collect_anchors();
-        // A bare container action can have no enclosing view row. Reuse only
-        // propositions actually established by the original source actions.
-        for &term in composition
-            .selected
-            .values()
-            .chain(composition.canonical.values())
-        {
-            if !composition.witnesses.contains_key(&term)
-                && globals.propositions.contains(&Proposition::new(term, term))
-            {
-                let proof = composition.store.push_shared_proof(
-                    SynthKey::Fiat(term, term),
-                    Proof {
-                        proposition: Proposition::new(term, term),
-                        justification: Justification::Fiat,
-                    },
-                );
-                composition.witnesses.insert(term, proof);
-            }
-        }
-        // Primitive validators evaluate expressions to proof terms. Their
-        // temporary arguments need not themselves be existence claims (for
-        // example vec-length(vec-of(a)) proves a literal, not a fresh vector).
-        let mut needed = HashSet::default();
-        let mut pending = composition.lookup.roots.to_vec();
-        pending.extend(composition.lookup.terms.nodes().filter_map(|(id, _)| {
-            matches!(
-                composition.lookup.nodes[&id].row.map(|r| r.kind),
-                Some(RowKind::Constructor)
-            )
-            .then_some(id)
-        }));
-        while let Some(id) = pending.pop() {
-            if !needed.insert(id) {
-                continue;
-            }
-            let typed = composition.lookup.terms.get(id);
-            let constructor = matches!(
-                composition.lookup.nodes[&id].row.map(|r| r.kind),
-                Some(RowKind::Constructor)
-            );
-            let rewrite_container = composition.lookup.nodes[&id].row.is_none()
-                && typed.sort().is_container_sort()
-                && composition.selected[&id] != composition.canonical[&id];
-            if (constructor || rewrite_container)
-                && let TypedTerm::App(_, children) = typed
-            {
-                pending.extend(children);
-            }
-        }
-        // Visit the input before the extracted results. Its container proof
-        // can provide a canonical witness for a result without an enclosing row.
-        let mut order = vec![];
-        let mut seen = HashSet::default();
-        let mut pending = composition
-            .lookup
-            .roots
+        let mut nodes = self.name_endpoints(&mut store, &evidence, &globals.var_bindings)?;
+        type_container_elements(
+            self.terms,
+            &mut nodes,
+            self.egraph.type_info.source_types(),
+            &mut store,
+        )?;
+        self.check_container_roots(&nodes, &mut store, &actions, &globals.var_bindings)?;
+        let source_witnesses = nodes
             .iter()
-            .rev()
-            .map(|&id| (id, false))
-            .collect::<Vec<_>>();
-        while let Some((id, ready)) = pending.pop() {
-            if ready {
-                order.push(id);
-                continue;
-            }
-            if !seen.insert(id) {
-                continue;
-            }
-            pending.push((id, true));
-            if let TypedTerm::App(_, children) = composition.lookup.terms.get(id) {
-                pending.extend(children.iter().rev().map(|&child| (child, false)));
-            }
-        }
-        for id in order {
-            if !needed.contains(&id) {
-                continue;
-            }
-            let proof = composition.prove_node(id)?;
-            if composition.store.get(proof).lhs() != composition.selected[&id]
-                || composition.store.get(proof).rhs() != composition.canonical[&id]
-            {
-                return Err(fail(
-                    "certificate does not connect the requested term to its leader",
-                ));
-            }
-            composition.proofs.insert(id, proof);
-            composition.typed_certificates.insert(
-                (
-                    composition.lookup.terms.get(id).sort().name().to_owned(),
-                    composition.selected[&id],
-                ),
-                proof,
-            );
-            composition
-                .witnesses
-                .entry(composition.canonical[&id])
-                .or_insert(proof);
-            composition.certificates_by_terms.insert(
-                (composition.selected[&id], composition.canonical[&id]),
-                proof,
-            );
-        }
-        Ok((composition.store, composition.proofs))
+            .flat_map(|node| [node.endpoints.lhs(), node.endpoints.rhs()])
+            .filter(|&term| globals.propositions.contains(&Proposition::new(term, term)))
+            .collect();
+        Ok(PreparedProofs {
+            terms: self.terms,
+            roots: self.roots,
+            nodes,
+            store,
+            source_witnesses,
+        })
     }
-}
 
-struct Composition<'a> {
-    lookup: Lookup<'a>,
-    store: ProofStore,
-    evidence: Vec<ProofId>,
-    row_proofs: HashMap<TermId, ProofId>,
-    selected: HashMap<TermId, TermId>,
-    canonical: HashMap<TermId, TermId>,
-    witnesses: HashMap<TermId, ProofId>,
-    proofs: HashMap<TermId, ProofId>,
-    certificates_by_terms: HashMap<(TermId, TermId), ProofId>,
-    typed_certificates: HashMap<(String, TermId), ProofId>,
-    container_elements: HashMap<TermId, Vec<(String, TermId)>>,
-}
-
-impl Composition<'_> {
     // These are names for proof endpoints, not new e-graph terms. Constructor
     // leaders are named by existing view/UF proofs; container leaders are the
     // normalized containers of those same element witnesses.
-    fn name_endpoints(&mut self, globals: &HashMap<String, TermId>) -> Result<(), Error> {
-        for (id, typed) in self.lookup.terms.nodes() {
-            let node = &self.lookup.nodes[&id];
+    fn name_endpoints(
+        &self,
+        store: &mut ProofStore,
+        evidence: &[ProofId],
+        globals: &HashMap<String, TermId>,
+    ) -> Result<Vec<ProofNode>, Error> {
+        let mut nodes: Vec<ProofNode> = Vec::with_capacity(self.terms.size());
+        for (id, typed) in self.terms.nodes() {
+            let node = &self.nodes[&id];
             let row_proof = node.row.as_ref().map(|row| {
-                let proof = self.evidence[row.proof];
+                let proof = evidence[row.proof];
                 match row.kind {
-                    RowKind::Output(column) => self.store.push_projection(proof, column),
+                    RowKind::Output(column) => store.push_projection(proof, column),
                     _ => proof,
                 }
             });
-            if let Some(proof) = row_proof {
-                self.row_proofs.insert(id, proof);
-            }
             let children = match typed {
                 TypedTerm::Var(never) => match *never {},
                 TypedTerm::Lit(_) => &[][..],
@@ -715,22 +602,22 @@ impl Composition<'_> {
             };
             let selected_children = children
                 .iter()
-                .map(|child| self.selected[child])
+                .map(|child| nodes[*child].endpoints.lhs())
                 .collect::<Vec<_>>();
             let canonical_children = children
                 .iter()
-                .map(|child| self.canonical[child])
+                .map(|child| nodes[*child].endpoints.rhs())
                 .collect::<Vec<_>>();
             let (selected, fallback_canonical) = match typed {
                 TypedTerm::Lit(literal) => {
-                    let term = self.store.term_dag.lit(literal.clone());
+                    let term = store.term_dag.lit(literal.clone());
                     (term, term)
                 }
                 TypedTerm::App(ResolvedCall::Primitive(primitive), _) => {
                     let validator = primitive.validator().unwrap();
-                    let selected = validator(&mut self.store.term_dag, &selected_children)
+                    let selected = validator(&mut store.term_dag, &selected_children)
                         .ok_or_else(|| fail(format!("cannot validate {}", primitive.name())))?;
-                    let canonical = validator(&mut self.store.term_dag, &canonical_children)
+                    let canonical = validator(&mut store.term_dag, &canonical_children)
                         .ok_or_else(|| {
                             fail(format!(
                                 "cannot validate {} at leader arguments",
@@ -748,19 +635,17 @@ impl Composition<'_> {
                         node.row.as_ref().map(|row| row.kind),
                         Some(RowKind::Output(_))
                     ) {
-                        self.store.get(row_proof.unwrap()).rhs()
+                        store.get(row_proof.unwrap()).rhs()
                     } else {
-                        self.store
-                            .term_dag
-                            .app(function.name.clone(), selected_children)
+                        store.term_dag.app(function.name.clone(), selected_children)
                     };
                     let canonical = match row_proof {
-                        Some(proof) => self.store.get(proof).lhs(),
+                        Some(proof) => store.get(proof).lhs(),
                         None if !typed.sort().is_eq_sort() && !typed.sort().is_container_sort() => {
                             typed.sort().reconstruct_termdag_base(
-                                self.lookup.egraph.backend.base_values(),
+                                self.egraph.backend.base_values(),
                                 node.value,
-                                &mut self.store.term_dag,
+                                &mut store.term_dag,
                             )
                         }
                         _ => return Err(fail("a nonliteral value needs existing proof evidence")),
@@ -773,61 +658,253 @@ impl Composition<'_> {
                 .row
                 .as_ref()
                 .and_then(|row| row.union)
-                .map(|union| self.store.get(self.evidence[union]).rhs())
+                .map(|union| store.get(evidence[union]).rhs())
                 .unwrap_or(fallback_canonical);
-            self.selected.insert(id, selected);
-            self.canonical.insert(id, canonical);
+            nodes.push(ProofNode {
+                endpoints: Proposition::new(selected, canonical),
+                row: node.row.map(|row| Row {
+                    kind: row.kind,
+                    proof: row_proof.unwrap(),
+                    union: row.union.map(|union| evidence[union]),
+                }),
+                container_elements: vec![],
+            });
+        }
+        Ok(nodes)
+    }
+
+    fn check_container_roots(
+        &self,
+        nodes: &[ProofNode],
+        store: &mut ProofStore,
+        actions: &[&ResolvedAction],
+        globals: &HashMap<String, TermId>,
+    ) -> Result<(), Error> {
+        // Proof syntax is untyped. In particular `(vec-empty)` at one sort is
+        // not evidence that the value exists at every other vector sort. Roots
+        // with no matching typed view column need a typed source witness.
+        if !self.unanchored_container_roots.is_empty() {
+            let mut source_containers = HashSet::default();
+            let mut error = None;
+            for action in actions {
+                (*action).clone().visit_exprs(&mut |expr| {
+                    if expr.output_type().is_container_sort() {
+                        match eval_expr_with_subst(
+                            "global_actions",
+                            &expr,
+                            &mut store.term_dag,
+                            globals,
+                        ) {
+                            Ok((term, _)) => {
+                                source_containers
+                                    .insert((expr.output_type().name().to_owned(), term));
+                            }
+                            Err(err) => error = Some(err),
+                        }
+                    }
+                    expr
+                });
+            }
+            if let Some(error) = error {
+                return Err(fail(error.to_string()));
+            }
+            for &id in &self.unanchored_container_roots {
+                let node = self.terms.get(id);
+                let sort = node.sort().name().to_owned();
+                if !self.roots.iter().any(|root| {
+                    self.terms.get(*root).sort().name() == sort
+                        && (source_containers
+                            .contains(&(sort.clone(), nodes[*root].endpoints.lhs()))
+                            || source_containers
+                                .contains(&(sort.clone(), nodes[*root].endpoints.rhs())))
+                }) {
+                    return Err(fail(format!(
+                        "Could not find term {} in the e-graph",
+                        self.terms.to_string(id)
+                    )));
+                }
+            }
         }
         Ok(())
     }
+}
 
-    /// Record the element sorts of the evaluated container terms.
-    fn type_container_elements(&mut self) -> Result<(), Error> {
-        let containers = self
-            .lookup
-            .terms
-            .nodes()
-            .filter_map(|(id, node)| node.sort().is_container_sort().then_some(id))
-            .collect::<Vec<_>>();
-        if containers.is_empty() {
-            return Ok(());
-        }
-        let roots = containers
-            .iter()
-            .map(|id| (self.selected[id], Some(self.lookup.terms.get(*id).sort())))
-            .collect::<Vec<_>>();
-        let (forms, typed_roots) = self
-            .lookup
-            .egraph
-            .type_info
-            .source_types()
-            .typecheck_term_dag(&self.store.term_dag, &roots, Context::Read)
-            .map_err(|error| fail(error.to_string()))?;
-        for (&id, &root) in containers.iter().zip(&typed_roots) {
-            let (TypedTerm::App(_, typed_children), Term::App(_, children)) =
-                (forms.get(root), self.store.term_dag.get(self.selected[&id]))
-            else {
-                return Err(fail("container result is not an application"));
-            };
-            self.container_elements.insert(
-                id,
-                typed_children
-                    .iter()
-                    .zip(children)
-                    .map(|(&typed, &term)| (forms.get(typed).sort().name().to_owned(), term))
-                    .collect(),
+/// Proof endpoints and existing row evidence for one typed node.
+struct ProofNode {
+    /// Equality to prove, from the requested term to its leader. IDs belong to the proof store.
+    endpoints: Proposition,
+    row: Option<Row<ProofId>>,
+    /// `(sort, proof term)` for each element of an evaluated container endpoint.
+    container_elements: Vec<(String, TermId)>,
+}
+
+/// Proof obligations and evidence, with `nodes` indexed by IDs from `terms`.
+/// Globals and primitives have their source/evaluated meanings in the endpoints.
+struct PreparedProofs<'a> {
+    terms: &'a TypedTermDag,
+    roots: &'a [TermId],
+    nodes: Vec<ProofNode>,
+    store: ProofStore,
+    /// Endpoint terms whose reflexivity is established by actual source actions.
+    source_witnesses: Vec<TermId>,
+}
+
+impl PreparedProofs<'_> {
+    /// Prove each root equal to its leader, returning proofs in root order.
+    fn compose(self) -> Result<(ProofStore, Vec<ProofId>), Error> {
+        let Self {
+            terms,
+            roots,
+            nodes,
+            mut store,
+            source_witnesses,
+        } = self;
+        let witnesses = Witnesses::collect(&mut store, source_witnesses);
+        let mut composition = Composition {
+            store,
+            witnesses,
+            typed_certificates: HashMap::default(),
+        };
+        let mut proofs = vec![None; nodes.len()];
+        for id in proof_order(terms, roots, &nodes) {
+            let node = &nodes[id];
+            let proof = composition.prove_node(terms, id, node, &proofs)?;
+            if composition.store.get(proof).proposition() != &node.endpoints {
+                return Err(fail(
+                    "certificate does not connect the requested term to its leader",
+                ));
+            }
+            proofs[id] = Some(proof);
+            composition.typed_certificates.insert(
+                (terms.get(id).sort().name().to_owned(), node.endpoints.lhs()),
+                proof,
             );
+            composition
+                .witnesses
+                .by_term
+                .entry(node.endpoints.rhs())
+                .or_insert(proof);
+            composition
+                .witnesses
+                .by_equality
+                .insert(node.endpoints.clone(), proof);
         }
-        Ok(())
+        Ok((
+            composition.store,
+            roots.iter().map(|&id| proofs[id].unwrap()).collect(),
+        ))
     }
+}
 
-    fn collect_anchors(&mut self) {
+/// Record the element sorts of the evaluated container terms.
+fn type_container_elements(
+    terms: &TypedTermDag,
+    nodes: &mut [ProofNode],
+    types: TypeInfoView<'_>,
+    store: &mut ProofStore,
+) -> Result<(), Error> {
+    // A primitive's result can have different children from its arguments:
+    // set-intersect takes sets but evaluates to set-of with element children.
+    // Resolve those children's sorts before looking up their certificates.
+    let containers = terms
+        .nodes()
+        .filter_map(|(id, node)| node.sort().is_container_sort().then_some(id))
+        .collect::<Vec<_>>();
+    if containers.is_empty() {
+        return Ok(());
+    }
+    let roots = containers
+        .iter()
+        .map(|id| (nodes[*id].endpoints.lhs(), Some(terms.get(*id).sort())))
+        .collect::<Vec<_>>();
+    let (forms, typed_roots) = types
+        .typecheck_term_dag(&store.term_dag, &roots, Context::Read)
+        .map_err(|error| fail(error.to_string()))?;
+    for (&id, &root) in containers.iter().zip(&typed_roots) {
+        let (TypedTerm::App(_, typed_children), Term::App(_, children)) = (
+            forms.get(root),
+            store.term_dag.get(nodes[id].endpoints.lhs()),
+        ) else {
+            return Err(fail("container result is not an application"));
+        };
+        nodes[id].container_elements = typed_children
+            .iter()
+            .zip(children)
+            .map(|(&typed, &term)| (forms.get(typed).sort().name().to_owned(), term))
+            .collect();
+    }
+    Ok(())
+}
+
+/// Needed certificates in children-first order, visiting the input root first.
+fn proof_order(terms: &TypedTermDag, roots: &[TermId], nodes: &[ProofNode]) -> Vec<TermId> {
+    // Primitive validators evaluate expressions to proof terms. Their
+    // temporary arguments need not themselves be existence claims (for
+    // example vec-length(vec-of(a)) proves a literal, not a fresh vector).
+    let mut needed = HashSet::default();
+    let mut pending = roots.to_vec();
+    pending.extend(terms.nodes().filter_map(|(id, _)| {
+        matches!(nodes[id].row.map(|r| r.kind), Some(RowKind::Constructor)).then_some(id)
+    }));
+    while let Some(id) = pending.pop() {
+        if !needed.insert(id) {
+            continue;
+        }
+        let typed = terms.get(id);
+        let constructor = matches!(nodes[id].row.map(|r| r.kind), Some(RowKind::Constructor));
+        let rewrite_container = nodes[id].row.is_none()
+            && typed.sort().is_container_sort()
+            && nodes[id].endpoints.lhs() != nodes[id].endpoints.rhs();
+        if (constructor || rewrite_container)
+            && let TypedTerm::App(_, children) = typed
+        {
+            pending.extend(children);
+        }
+    }
+    // Visit the input before the extracted results. Its container proof
+    // can provide a canonical witness for a result without an enclosing row.
+    let mut order = vec![];
+    let mut seen = HashSet::default();
+    let mut pending = roots
+        .iter()
+        .rev()
+        .map(|&id| (id, false))
+        .collect::<Vec<_>>();
+    while let Some((id, ready)) = pending.pop() {
+        if ready {
+            if needed.contains(&id) {
+                order.push(id);
+            }
+            continue;
+        }
+        if !seen.insert(id) {
+            continue;
+        }
+        pending.push((id, true));
+        if let TypedTerm::App(_, children) = terms.get(id) {
+            pending.extend(children.iter().rev().map(|&child| (child, false)));
+        }
+    }
+    order
+}
+
+/// Established equalities and existence witnesses in a single proof store.
+#[derive(Default)]
+struct Witnesses {
+    /// Each proof ends at its key term, so reflexivity and projection are justified.
+    by_term: HashMap<TermId, ProofId>,
+    by_equality: HashMap<Proposition, ProofId>,
+}
+
+impl Witnesses {
+    /// Include existing proof dependencies, their projected subterms, and source actions.
+    fn collect(store: &mut ProofStore, source_witnesses: Vec<TermId>) -> Self {
+        let mut witnesses = Self::default();
         // Every endpoint of an existing proof, and every subterm projected
         // from it, is an existence witness. Include the dependencies too: a
         // container rebuild may have normalized away part of the original term.
         // Eval is only a side-condition marker and proves no proposition alone.
-        let existing = self
-            .store
+        let existing = store
             .id_to_proof
             .iter()
             .filter(|(_, proof)| !matches!(proof.justification, Justification::Eval))
@@ -835,57 +912,92 @@ impl Composition<'_> {
             .collect::<Vec<_>>();
         let mut pending = vec![];
         for (proof, left, right) in existing {
-            self.certificates_by_terms
-                .entry((left, right))
+            witnesses
+                .by_equality
+                .entry(Proposition::new(left, right))
                 .or_insert(proof);
             pending.push((right, proof));
             if left != right {
-                let back = self.store.sym(proof);
-                self.certificates_by_terms
-                    .entry((right, left))
+                let back = store.sym(proof);
+                witnesses
+                    .by_equality
+                    .entry(Proposition::new(right, left))
                     .or_insert(back);
                 pending.push((left, back));
             }
         }
         while let Some((term, proof)) = pending.pop() {
-            if self.witnesses.contains_key(&term) {
+            if witnesses.by_term.contains_key(&term) {
                 continue;
             }
-            self.witnesses.insert(term, proof);
-            if let Term::App(_, children) = self.store.term_dag.get(term).clone() {
+            witnesses.by_term.insert(term, proof);
+            if let Term::App(_, children) = store.term_dag.get(term).clone() {
                 for (index, child) in children.into_iter().enumerate() {
-                    let projected = self.store.push_projection(proof, index);
+                    let projected = store.push_projection(proof, index);
                     pending.push((child, projected));
                 }
             }
         }
+        // These terms were checked against source actions during preparation;
+        // constructing a new container here would not establish its existence.
+        for term in source_witnesses {
+            witnesses.by_term.entry(term).or_insert_with(|| {
+                store.push_shared_proof(
+                    SynthKey::Fiat(term, term),
+                    Proof {
+                        proposition: Proposition::new(term, term),
+                        justification: Justification::Fiat,
+                    },
+                )
+            });
+        }
+        witnesses
     }
+}
 
-    fn prove_node(&mut self, id: TermId) -> Result<ProofId, Error> {
-        let typed = self.lookup.terms.get(id);
-        if let Some(row) = self.lookup.nodes[&id].row {
-            let mut proof = self.row_proofs[&id];
+/// Composes certificates using prepared endpoints and existing witnesses.
+/// Every term ID in these indexes belongs to `store.term_dag`.
+struct Composition {
+    store: ProofStore,
+    witnesses: Witnesses,
+    /// Completed `term = leader` proofs, keyed by source sort and evaluated term.
+    typed_certificates: HashMap<(String, TermId), ProofId>,
+}
+
+impl Composition {
+    /// Prove `node.endpoints`; every required child certificate must already exist.
+    fn prove_node(
+        &mut self,
+        terms: &TypedTermDag,
+        id: TermId,
+        node: &ProofNode,
+        proofs: &[Option<ProofId>],
+    ) -> Result<ProofId, Error> {
+        let typed = terms.get(id);
+        if let Some(row) = node.row {
+            let mut proof = row.proof;
             match row.kind {
                 RowKind::Constructor => {
                     let TypedTerm::App(_, children) = typed else {
                         unreachable!()
                     };
                     for (index, child) in children.iter().enumerate() {
-                        let step = self.store.sym(self.proofs[child]);
+                        let step = self
+                            .store
+                            .sym(proofs[*child].expect("child certificate precedes its parent"));
                         proof = self.congr(proof, index, step)?;
                     }
                     proof = self.store.sym(proof);
                 }
                 RowKind::Global => {
-                    if self.store.get(proof).rhs() == self.selected[&id] {
+                    if self.store.get(proof).rhs() == node.endpoints.lhs() {
                         proof = self.store.sym(proof);
-                    } else if self.store.get(proof).lhs() == self.selected[&id] {
+                    } else if self.store.get(proof).lhs() == node.endpoints.lhs() {
                         let back = self.store.sym(proof);
                         proof = self.store.trans(proof, back);
-                    } else if let Some(&connector) = self
-                        .certificates_by_terms
-                        .get(&(self.selected[&id], self.store.get(proof).lhs()))
-                    {
+                    } else if let Some(&connector) = self.witnesses.by_equality.get(
+                        &Proposition::new(node.endpoints.lhs(), self.store.get(proof).lhs()),
+                    ) {
                         proof = connector;
                     } else {
                         return Err(fail(
@@ -895,8 +1007,7 @@ impl Composition<'_> {
                 }
                 RowKind::Output(_) => {}
             }
-            if let Some(union) = row.union {
-                let edge = self.evidence[union];
+            if let Some(edge) = row.union {
                 if self.store.get(proof).rhs() != self.store.get(edge).lhs() {
                     return Err(fail("union evidence does not connect to the view witness"));
                 }
@@ -904,25 +1015,25 @@ impl Composition<'_> {
             }
             return Ok(proof);
         }
-        let endpoints = (self.selected[&id], self.canonical[&id]);
-        if let Some(&proof) = self.certificates_by_terms.get(&endpoints) {
+        let endpoints = &node.endpoints;
+        if let Some(&proof) = self.witnesses.by_equality.get(endpoints) {
             return Ok(proof);
         }
-        if endpoints.0 == endpoints.1
-            && let Some(&witness) = self.witnesses.get(&endpoints.0)
+        if endpoints.lhs() == endpoints.rhs()
+            && let Some(&witness) = self.witnesses.by_term.get(&endpoints.lhs())
         {
             return Ok(self.store.reflexive(witness));
         }
         if typed.sort().is_container_sort() {
-            return self.prove_container(id);
+            return self.prove_container(terms, id, node);
         }
         if typed.sort().is_eq_sort() {
             return Err(fail(
                 "internal proof lookup error: no proof for an existing element",
             ));
         }
-        let term = self.selected[&id];
-        if term != self.canonical[&id] || !self.store.reflexive_value_term(term) {
+        let term = node.endpoints.lhs();
+        if term != node.endpoints.rhs() || !self.store.reflexive_value_term(term) {
             return Err(fail("primitive value has no valid reflexive proof"));
         }
         Ok(self.store.push_shared_proof(
@@ -934,14 +1045,21 @@ impl Composition<'_> {
         ))
     }
 
-    fn prove_container(&mut self, id: TermId) -> Result<ProofId, Error> {
-        let forward = self.witnesses.get(&self.selected[&id]).copied();
+    fn prove_container(
+        &mut self,
+        terms: &TypedTermDag,
+        id: TermId,
+        node: &ProofNode,
+    ) -> Result<ProofId, Error> {
+        // Either endpoint can witness existence. Rewrite its elements toward the
+        // other endpoint, normalize, and reverse the result if starting at the leader.
+        let forward = self.witnesses.by_term.get(&node.endpoints.lhs()).copied();
         let anchor = forward
-            .or_else(|| self.witnesses.get(&self.canonical[&id]).copied())
+            .or_else(|| self.witnesses.by_term.get(&node.endpoints.rhs()).copied())
             .ok_or_else(|| {
                 fail(format!(
                     "Could not find term {} in the e-graph",
-                    self.lookup.terms.to_string(id)
+                    terms.to_string(id)
                 ))
             })?;
         let mut proof = self.store.reflexive(anchor);
@@ -949,7 +1067,8 @@ impl Composition<'_> {
         else {
             return Err(fail("container witness is not an application"));
         };
-        let mut targets = self.container_elements[&id]
+        let mut targets = node
+            .container_elements
             .iter()
             .map(|key| {
                 let wanted = key.1;
@@ -961,6 +1080,8 @@ impl Composition<'_> {
             })
             .collect::<Vec<_>>();
         for (index, term) in actual.into_iter().enumerate() {
+            // Consume one target occurrence, not every equal term: a vector can
+            // contain different representatives of one e-class at different positions.
             let target = targets
                 .iter_mut()
                 .find(|target| {

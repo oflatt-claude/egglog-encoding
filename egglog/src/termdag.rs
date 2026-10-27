@@ -2,6 +2,7 @@ use crate::util::{FreshGen, HashMap, HashSet, SymbolGen};
 use crate::*;
 use std::{convert::Infallible, fmt::Write};
 
+/// A node's index within one DAG. IDs from different DAGs are unrelated.
 pub type TermId = usize;
 
 #[allow(rustdoc::private_intra_doc_links)]
@@ -48,6 +49,7 @@ impl<Head: Eq + Hash, Leaf: Eq + Hash> Default for GenericTermDag<Head, Leaf> {
 pub type TermDag = GenericTermDag<String, String>;
 
 /// A DAG of resolved ground terms, with no variable leaves.
+/// Use [`TypeInfo::typecheck_term_dag`] to resolve an untyped [`TermDag`].
 pub type TypedTermDag = GenericTermDag<ResolvedCall, Infallible>;
 
 /// A [`TermId`] paired with its [`TermDag`] so it can be ordered by

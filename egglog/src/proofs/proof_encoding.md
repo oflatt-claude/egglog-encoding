@@ -934,30 +934,100 @@ shares dependencies across all results. Primitive expressions have their
 validated, evaluated meaning in proof endpoints, and globals retain the term
 in their original source definition.
 
-The passes are:
+### Ground-term typing
 
-1. [`TypeInfo::source_types`] interprets encoded views as source operations.
-   The `:internal-role` annotation distinguishes constructor, function, and
-   global views, so desugared replay can recover the same signatures.
-   [`TypeInfoView::typecheck_term_dag`] resolves ground syntax bottom-up using
-   the existing type constraints. Shared syntax can have several typings,
-   selected by its parents or an expected root sort. Unresolved ambiguity is
-   an error. The result is a typed DAG and its root IDs; this pass performs no
-   evaluation or table mutation.
-2. Read-only lookup evaluates literals and validated read primitives and reads
-   constructor/function views with canonical child values as keys. It collects
-   the existing row proofs and union-find connections.
-3. Materialization shares those proofs in one store. Their endpoints and
-   projected subterms supply existence witnesses, including containers nested
-   inside parent rows and historical container forms in rebuild dependencies.
-   A container root can also obtain its witness from another row containing it,
-   or from an actual source action that already established it.
-4. Composition proves both `e = leader` and `t = leader`, then concludes
-   `e = t` with symmetry and transitivity. Container steps use the existing
-   `Proj`, `Congr`, and `ContainerNormalize` rules. No new proof rule or checker
-   behavior is needed.
+A well-typed term need not exist in the e-graph. Typing only resolves the
+operations and sorts; lookup must separately find their values and evidence.
 
-Only propositions needed for the final certificates are constructed. For
-example, evaluating `vec-length` to a literal does not require asserting the
-existence of a temporary vector expression. Missing row lookups remain errors,
-including for constructor arguments used during primitive evaluation.
+[`TypeInfoView::typecheck_term_dag`] starts from an untyped `TermDag`. Shared
+syntax can have several typings: one `(vec-empty)` node may occur beneath both
+`WrapInts` and `WrapStrings`. The checker retains candidates by result sort,
+letting each parent's signature select the appropriate child typing. An expected
+root sort can make the same selection. If two typings have the same result sort
+but differ in an argument, knowing the root sort does not resolve that ambiguity;
+the checker retains the error until that candidate is selected.
+
+The returned `TypedTermDag` contains only selected typings, with separate nodes
+for different specializations of shared syntax. Root IDs refer to this new DAG
+and preserve the requested order. Typing performs no evaluation or table access.
+
+[`TypeInfo::source_types`] supplies source signatures when checking against an
+encoded program. A view's first output is the source result; the evidence output
+is omitted, and `FunctionRole` restores whether the operation is a constructor,
+custom function, or global. The printed `:internal-role` annotation preserves
+this distinction during desugared replay. Sorts and primitives come from the same
+environment.
+
+### Lookup, preparation, and composition
+
+The implementation in `ground.rs` separates runtime lookup from proof
+construction. Each pass finishes before the next one starts:
+
+| Pass | Result and invariant | State that ends with the pass |
+| --- | --- | --- |
+| `Lookup` | Canonical values for the typed nodes, references to view/union proofs, and equal values for all roots. | Traversal scratch. |
+| `Lookup::prepare` | `PreparedProofs`: one `ProofNode` per typed node, a shared proof store, and witnesses from source actions. Each node has its requested endpoints, materialized row evidence, and any container element types. | Runtime values, the mapping from evidence indices to proof IDs, and global substitutions. `Lookup` is consumed. |
+| `Witnesses::collect` | Existing equalities indexed by endpoints, and proofs of existence indexed by the term they reach. | Projection traversal and the list of terms established by source actions. |
+| `PreparedProofs::compose` | One `term = leader` certificate per requested root, in root order. | Per-node certificates and the indexes used to assemble them. |
+
+Preparation converts the collected evidence into one `ProofStore`, preserving
+shared dependencies. It also names each node's requested term and leader in the
+store's term DAG. Naming an endpoint does not insert it into the e-graph or prove
+it exists. Globals use their original source definitions, and primitive
+validators produce evaluated terms. A custom function's result is obtained by
+projecting its existing row proof.
+
+There are two independent ID domains. The `PreparedProofs::nodes` vector and the
+completed per-node certificates are indexed by the typed input DAG. The
+`Proposition` in each node, the witness indexes, and container element terms use
+IDs in `ProofStore::term_dag`. An index from one DAG cannot be used in the other.
+
+Witness collection includes the dependencies of materialized proofs, because
+container rebuilding may have removed an original term from the current row.
+It indexes equalities in both directions and projects their subterms. A witness
+for `t` is a proof ending at `t`; symmetry and transitivity then justify `t = t`.
+An `Eval` side-condition marker alone is not an existence proof. A bare source
+container action can also provide a witness, but only for a proposition that
+processing the actual source actions established.
+
+Composition uses these prepared terms and witnesses without access to the
+e-graph. It checks that every completed certificate has exactly the prepared
+endpoints. The input is visited before extraction results, with children before
+parents, so a certificate for an input container can supply the witness needed
+for another representative. Finally, the caller combines `e = leader` with the
+reverse of `t = leader` to prove `e = t`, and checks the proof before and after
+simplification when proof verification is enabled.
+
+### Constructing a certificate
+
+For a constructor `F(b)`, suppose the child certificate is `b = a`, the view
+proof is `r = F(a)`, and the union proof is `r = leader`. Reverse the child
+certificate and apply congruence to the view proof to obtain `r = F(b)`. Reversing
+that proof and composing with the union proof gives `F(b) = leader`. This works
+even if the exact syntax `F(b)` was never inserted: the existing view row is
+looked up using the canonical child value.
+
+Containers need an additional existence witness because they have no constructor
+view of their own. For example, a proof ending at `Wrap(vec-of(a))` can be
+projected to prove `vec-of(a) = vec-of(a)`. Given `a = b`, congruence then proves
+`vec-of(a) = vec-of(b)`. `ContainerNormalize` handles the container's normal form,
+including set ordering and duplicate removal. If only the leader endpoint has
+a witness, composition performs the element rewrites in reverse and reverses
+the resulting equality. Having a proof about `a` alone does not justify assuming
+that `vec-of(a)` exists.
+
+Proof terms are untyped, so preparation also checks that a container root has a
+witness at the requested sort. Evidence for `(vec-empty)` as `Vec A` cannot
+establish its existence as `Vec B`. Element certificates are indexed by both
+sort and evaluated term for the same reason.
+
+Those element types must describe the evaluated result, not the primitive's
+arguments. For example, `set-intersect` takes sets but evaluates to `set-of` with
+element children. Preparation typechecks the evaluated container endpoints to
+recover those element sorts before composition looks up their certificates.
+
+Only propositions needed for certificates are constructed. Evaluating
+`vec-length(vec-of(a))` to a literal does not require asserting the existence of
+the temporary vector. Constructor arguments still require successful view
+lookups, even when used during primitive evaluation. Missing terms remain errors;
+no new proof rule or checker behavior is needed.

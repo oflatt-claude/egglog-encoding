@@ -252,6 +252,9 @@ pub struct TypeInfo {
 }
 
 /// A borrowed type environment for table or source-term signatures.
+/// Obtain source signatures with [`TypeInfo::source_types`]; conversion from
+/// `&TypeInfo` keeps table signatures. Sort and primitive lookup have the same
+/// meaning in both interpretations.
 #[derive(Clone, Copy)]
 pub struct TypeInfoView<'a> {
     types: &'a TypeInfo,

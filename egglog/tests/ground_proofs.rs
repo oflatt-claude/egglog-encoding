@@ -36,6 +36,47 @@ fn both_endpoints_can_be_rule_derived() {
 }
 
 #[test]
+fn certification_preserves_requested_order_and_duplicate_outputs() {
+    let mut graph = graph(
+        "(datatype E (A) (B) (C) (Missing)) (A)
+        (rule ((= a (A))) ((B) (C) (union a (B)) (union a (C)))) (run 1)",
+    );
+    let sort = graph.type_info().get_sort_by_name("E").unwrap().clone();
+    let mut terms = TermDag::default();
+    let c = terms.app("C".into(), vec![]);
+    let a = terms.app("A".into(), vec![]);
+    let b = terms.app("B".into(), vec![]);
+    let missing = terms.app("Missing".into(), vec![]);
+    let before = graph.num_nodes();
+    let (store, proofs) = graph
+        .prove_extracted_terms(&terms, b, &[c, a, c, b], sort.clone())
+        .unwrap();
+    let endpoints = proofs
+        .into_iter()
+        .map(|id| {
+            let proof = store.get(id);
+            assert_eq!(store.term_dag().to_string(proof.lhs()), "(B)");
+            store.term_dag().to_string(proof.rhs())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(endpoints, ["(C)", "(A)", "(C)", "(B)"]);
+
+    let (_, proofs) = graph
+        .prove_extracted_terms(&terms, b, &[], sort.clone())
+        .unwrap();
+    assert!(proofs.is_empty());
+    let error = graph
+        .prove_extracted_terms(&terms, missing, &[], sort)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Could not find term (Missing) in the e-graph")
+    );
+    assert_eq!(graph.num_nodes(), before);
+}
+
+#[test]
 fn congruence_certifies_syntax_that_was_never_inserted() {
     let mut graph = graph(
         "(datatype E (A) (B) (F E)) (F (A))
