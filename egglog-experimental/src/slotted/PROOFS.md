@@ -69,17 +69,19 @@ slots, as required by the [language](LANGUAGE.md#fresh-slots).
 Premises are ordered: first a proof `t = L[σ]`, then evidence for the original
 `:when` facts in source order. An equality `(= a b)` requires a proof with
 endpoints `a[σ]` and `b[σ]`, up to alpha-equivalence with identical free names.
+A renaming equality `(renaming-= a b)` requires an ordinary equality proof
+`a[σ] = c`, where `c` matches `b[σ]` up to bound names and a bijection of free slots.
 A constructor fact requires an existence proof ending at its instantiated term.
-Guards require existence proofs for their term operands, followed by the checks
+The remaining guards require existence proofs for their term operands and the checks
 below. Nested terms stay nested; generated pattern variables do not appear in
 source rule substitutions. Globals retain their bindings at rule declaration.
 
 Guards are evaluated on σ with the constructors' binding scopes. `free` tests
 membership in the union of the listed terms' free slots; `not-free` tests absence
 from that union. `free-names-are` requires exactly the listed free slots.
-`(!= a b)` rejects alpha-equivalent instantiated terms. It does not certify
-that their e-classes were distinct when the rule fired; this requires evidence
-of the execution state that the proof format does not currently record.
+`(!= a b)` compares instantiated proof terms, following egglog's `!=` validation
+convention, and rejects alpha-equivalent terms. `(renaming-!= a b)` additionally
+rejects terms that differ only by a bijection of their free slots.
 
 RHS-only slot literals must be fresh for every other binding and the globals
 in scope at the rule declaration. The conclusion is
@@ -252,14 +254,21 @@ ordinary proof; transporting its endpoints emits Equivariance:
 The last row is a *redundancy certificate*. It is derived on demand from the
 derivation of the `FreeVars` row: the merge chain of intersections says which
 `set` dropped the slot, and transport along an edge and group slot closure each
-have a short Sym/Equivariance/Trans derivation. Group membership is derived through a
-provenance-aware closure, since the stored group is closed and an element has to
-be expressed as a product of symmetries the translator has proofs for.
+have a short Sym/Equivariance/Trans derivation.
+
+`group-shrink` computes `group-close(group-restrict old-group slots)` and stages
+it in `GroupReplace`; `group-restore` publishes the result. To prove a restricted
+group element, the translator finds a product of the restricted generators and
+composes the corresponding proofs for the original generators. The full equality
+retains any action on redundant slots and must agree with the requested symmetry
+on the surviving slots. `EclassGroup` merges use `set-union`, so each generator
+keeps the proof from its contributing side. `GroupReplace` merges select `new`.
 
 | rule firing | derivation |
 | --- | --- |
 | orient, restate on narrower slots | Change edge coordinates; use certificates for slots the restriction dropped |
 | self-equation, self-edge into the group | the premise, respelled |
+| group shrink and restore | compose the original symmetry proofs for a product on the surviving slots |
 | transitivity | Trans of the first edge with the second |
 | one leader per follower | Sym, Trans, Equivariance |
 | migration | Sym of the edge, Equivariance by the total extension `R` |
@@ -275,6 +284,7 @@ be expressed as a product of symmetries the translator has proofs for.
 The end-to-end demo snapshots show the source alongside its translated, checked
 proof: [a rewrite](../../tests/snapshots/slotted_proofs__demo_rewrite.snap),
 [a nested rewrite with original conditions](../../tests/snapshots/slotted_proofs__demo_nested_conditions.snap),
+[a renaming equality guard](../../tests/snapshots/slotted_proofs__demo_renaming_guard.snap),
 [bound-slot renaming](../../tests/snapshots/slotted_proofs__demo_alpha_renaming.snap),
 [congruence through a binder](../../tests/snapshots/slotted_proofs__demo_binder_congruence.snap),
 [a redundant slot](../../tests/snapshots/slotted_proofs__demo_redundant_slot.snap),
@@ -294,10 +304,8 @@ and evaluate the result with `new_egraph_with_proofs()`.
 `make slotted-proof-tests` runs the supported source corpus through the Rust API,
 including its supported equality checks. The same tests run in `make check`.
 Sources using `subst` are ignored because it has no proof translation;
-the CLI refuses them. Rewrite guards using `renaming-=` or `renaming-!=`
-are also unsupported by proof translation. Some symmetry proofs after restricting
-a class's group to fewer slots cannot yet be reconstructed. `--slotted-proof-checks`
-runs the same encoding with ordinary checks for comparison.
+the CLI refuses them. `--slotted-proof-checks` runs the same encoding with ordinary
+checks for comparison.
 
 The command and source recorder use egglog's extension APIs. Their state is stored
 on the e-graph and restored by `push`/`pop`. The core crate has no slotted commands,

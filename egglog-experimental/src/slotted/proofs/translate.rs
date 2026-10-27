@@ -41,38 +41,7 @@ pub(super) fn translate(
     query: &ProofNames,
     roots: [&str; 2],
 ) -> R<(SlottedProofStore, SlottedConclusion)> {
-    // Every encoded slot/renaming coordinate is an integer term. Reserving all
-    // integer literals also excludes payloads, harmlessly, without guessing the
-    // types of extracted primitive values. Reserve surface names as well: a
-    // claim may mention slots that the encoding has already canonicalized away.
-    let fresh = FreshSlots::new(
-        (0..dag.size())
-            .filter_map(|t| slot_of(&dag, t))
-            .chain(program.slot_names.values().copied())
-            .chain(
-                (0..egg.term_dag().size()).filter_map(|t| match egg.term_dag().get(t) {
-                    Term::Lit(Literal::Int(n)) => Some(*n),
-                    _ => None,
-                }),
-            ),
-    );
-    let reserved_terms = dag.size();
-    let mut tr = Translator {
-        program,
-        names,
-        egg,
-        out: Lifting::new(SlottedProofStore::new(dag).with_slot_names(&program.slot_names)),
-        dec_memo: HashMap::default(),
-        edge_memo: HashMap::default(),
-        eq_memo: HashMap::default(),
-        known: HashMap::default(),
-        shape_terms: HashMap::default(),
-        free_vars_index: None,
-        group_index: None,
-        cert_stack: Default::default(),
-        fresh,
-        reserved_terms,
-    };
+    let mut tr = Translator::new(program, dag, names, egg);
     let id = tr.claim(root, claim, query, roots)?;
     Ok(tr.out.finish(id))
 }
@@ -208,6 +177,46 @@ fn rule_kind<'n>(program: &SlottedProgram, name: &'n str) -> (&'n str, &'n str) 
 }
 
 impl<'a> Translator<'a> {
+    fn new(
+        program: &'a SlottedProgram,
+        dag: TermDag,
+        names: &'a EncodingNames,
+        egg: &'a ProofStore,
+    ) -> Self {
+        // Every encoded slot/renaming coordinate is an integer term. Reserving all
+        // integer literals also excludes payloads, harmlessly, without guessing the
+        // types of extracted primitive values. Reserve surface names as well: a
+        // claim may mention slots that the encoding has already canonicalized away.
+        let fresh = FreshSlots::new(
+            (0..dag.size())
+                .filter_map(|t| slot_of(&dag, t))
+                .chain(program.slot_names.values().copied())
+                .chain(
+                    (0..egg.term_dag().size()).filter_map(|t| match egg.term_dag().get(t) {
+                        Term::Lit(Literal::Int(n)) => Some(*n),
+                        _ => None,
+                    }),
+                ),
+        );
+        let reserved_terms = dag.size();
+        Self {
+            program,
+            names,
+            egg,
+            out: Lifting::new(SlottedProofStore::new(dag).with_slot_names(&program.slot_names)),
+            dec_memo: HashMap::default(),
+            edge_memo: HashMap::default(),
+            eq_memo: HashMap::default(),
+            known: HashMap::default(),
+            shape_terms: HashMap::default(),
+            free_vars_index: None,
+            group_index: None,
+            cert_stack: Default::default(),
+            fresh,
+            reserved_terms,
+        }
+    }
+
     fn egg(&self) -> &'a TermDag {
         self.egg.term_dag()
     }
@@ -1340,51 +1349,39 @@ impl<'a> Translator<'a> {
                             .collect::<R<_>>()?;
                         self.node_symmetry(row_eq, row, &groups, c, g)
                     }
-                    "group-restore" => {
-                        // the staged set is close(restrict(s, cs)) of the shrink's premise
-                        let staged = self.egg.get(prems[0]).clone();
-                        let Justification::Rule {
-                            name: shrink,
-                            premise_proofs: shrink_prems,
-                            ..
-                        } = staged.justification()
-                        else {
-                            return Err("group-restore without a shrink".into());
-                        };
-                        if rule_kind(self.program, shrink).1 == "group-empty" {
-                            return Err("an emptied group has no elements".into());
-                        }
-                        let source = shrink_prems[0];
-                        let elements = {
-                            let t = self.egg.get(source).lhs();
-                            self.group_of_row(t)?
-                        };
-                        self.product_symmetry(c, g, &elements, source)
+                    "group-restore" => self.symmetry(c, g, prems[0]),
+                    "group-empty" => Err("an emptied group has no elements".into()),
+                    "group-shrink" => {
+                        let source = prems[0];
+                        let elements = self
+                            .group_of_row(self.egg.get(source).lhs())?
+                            .into_iter()
+                            .map(|element| (element, source))
+                            .collect::<Vec<_>>();
+                        let slots = self.slot_map(self.sub(&subst, "_cs")?)?;
+                        self.product_symmetry(c, g, &elements, Some(&slots))
                     }
                     other => Err(format!("no symmetry provenance through {other}")),
                 }
             }
             Justification::MergeFn {
+                function,
                 old_proof,
                 new_proof,
-                ..
             } => {
                 let (old_proof, new_proof) = (*old_proof, *new_proof);
+                if function.starts_with("GroupReplace_") {
+                    return self.symmetry(c, g, new_proof);
+                }
+                let mut elements = Vec::new();
                 for side in [old_proof, new_proof] {
-                    let t = self.egg.get(side).lhs();
-                    if let Some((_, args)) = self.app(t)
-                        && let Some(set) = args
-                            .get(1)
-                            .and_then(|group| group_from_term(self.egg(), *group))
-                        && set.iter().any(|h| h == g)
-                    {
+                    let maps = self.group_of_row(self.egg.get(side).lhs())?;
+                    if maps.contains(g) {
                         return self.symmetry(c, g, side);
                     }
+                    elements.extend(maps.into_iter().map(|element| (element, side)));
                 }
-                // neither side holds it outright: it is a product in one of them
-                let t = self.egg.get(old_proof).lhs();
-                let elements = self.group_of_row(t)?;
-                self.product_symmetry(c, g, &elements, old_proof)
+                self.product_symmetry(c, g, &elements, None)
             }
             Justification::Congr {
                 proof: base,
@@ -1464,26 +1461,17 @@ impl<'a> Translator<'a> {
                     let p = self.eq(prems[0])?;
                     Ok(vec![p])
                 }
-                "group-restore" => {
-                    let staged = self.egg.get(prems[0]).clone();
-                    match staged.justification() {
-                        Justification::Rule {
-                            premise_proofs: shrink_prems,
-                            ..
-                        } => {
-                            let source = shrink_prems[0];
-                            self.symmetry_sources(source)
-                        }
-                        _ => Ok(vec![]),
-                    }
-                }
+                "group-restore" | "group-shrink" => self.symmetry_sources(prems[0]),
                 _ => Ok(vec![]),
             },
             Justification::MergeFn {
+                function,
                 old_proof,
                 new_proof,
-                ..
             } => {
+                if function.starts_with("GroupReplace_") {
+                    return self.symmetry_sources(new_proof);
+                }
                 let mut out = self.symmetry_sources(old_proof)?;
                 out.extend(self.symmetry_sources(new_proof)?);
                 Ok(out)
@@ -1513,18 +1501,27 @@ impl<'a> Translator<'a> {
         }
     }
 
-    /// `g` as a product of `elements`, each a symmetry of `c` through `source`.
+    /// Prove a product of witnessed symmetries, optionally restricted to `slots`.
     fn product_symmetry(
         &mut self,
         c: TermId,
         g: &SlotMap,
-        elements: &[SlotMap],
-        source: ProofId,
+        elements: &[(SlotMap, ProofId)],
+        slots: Option<&SlotMap>,
     ) -> R<LiftedId> {
-        // breadth-first products, remembering how each was formed
+        let generators: Vec<_> = elements
+            .iter()
+            .map(|(element, _)| {
+                slots.map_or_else(
+                    || element.clone(),
+                    |slots| compose(slots, &compose(element, slots)),
+                )
+            })
+            .collect();
+        // Find the word on the surviving slots, retaining its original witnesses.
         let mut seen: BTreeMap<SlotMap, Vec<usize>> = BTreeMap::new();
         let mut frontier: Vec<SlotMap> = vec![];
-        for (i, e) in elements.iter().enumerate() {
+        for (i, e) in generators.iter().enumerate() {
             if seen.insert(e.clone(), vec![i]).is_none() {
                 frontier.push(e.clone());
             }
@@ -1532,7 +1529,7 @@ impl<'a> Translator<'a> {
         while !seen.contains_key(g) && !frontier.is_empty() {
             let mut next = vec![];
             for h in &frontier {
-                for (i, e) in elements.iter().enumerate() {
+                for (i, e) in generators.iter().enumerate() {
                     let prod = compose(h, e);
                     if !seen.contains_key(&prod) {
                         let mut path = seen[h].clone();
@@ -1550,13 +1547,14 @@ impl<'a> Translator<'a> {
             .ok_or_else(|| format!("{} is not generated by the group", slot_map_string(g)))?;
         let mut proof: Option<LiftedId> = None;
         for i in path {
-            let s = self.symmetry(c, &elements[i], source)?;
+            let s = self.symmetry(c, &elements[i].0, elements[i].1)?;
             proof = Some(match proof {
                 None => s,
                 Some(p) => self.trans(p, s)?,
             });
         }
-        proof.ok_or_else(|| "empty symmetry product".into())
+        let proof = proof.ok_or("empty symmetry product")?;
+        self.symmetry_matches(proof, c, g)
     }
 
     /// `p` proves `dec(c) = m·dec(c)`; it is the symmetry `g` when `m` and `g`
@@ -1778,11 +1776,15 @@ impl<'a> Translator<'a> {
                         class
                     }
                 };
+                let pattern = match self.out.term_dag.get(call) {
+                    Term::Var(name) => rewrite.globals.get(name).copied().unwrap_or(call),
+                    _ => call,
+                };
                 let Expansion {
                     proof: p,
                     variables: expanded,
                     occurrences: occ_v,
-                } = self.expand(cls_v, call, &[], &cond_ctx, variables)?;
+                } = self.expand(cls_v, pattern, &[], &cond_ctx, variables)?;
                 variables = expanded;
                 let p = self.content_form(p); // cls_v = C_v
                 let atom = self.atom_label(&frame, &var, call, occ_v.get(&vec![]));
@@ -1829,6 +1831,15 @@ impl<'a> Translator<'a> {
         }
         for (pattern, content) in contents {
             self.bind_from_content(pattern, content, &mut sigma)?;
+        }
+        let coordinates = rewrite
+            .globals
+            .values()
+            .flat_map(|&term| all_slots(&self.out.term_dag, term))
+            .filter_map(|slot| frame.node_slot("@globals", slot).map(|at| (at, slot)));
+        let to_source = Renaming::completing(coordinates).ok_or("non-injective global frame")?;
+        for term in sigma.values_mut() {
+            *term = rename(&mut self.out.term_dag, &to_source, *term);
         }
         // minted slots: right-hand-side literals the body never mentions
         if let Rhs::Term(r) = &rewrite.rhs {
@@ -4043,4 +4054,77 @@ fn slot_set_string(s: &SlotSet) -> String {
 #[allow(dead_code)]
 fn renamings_of(dag: &TermDag, t: TermId) -> Option<Vec<SlotMap>> {
     renamings_from_term(dag, t)
+}
+
+#[cfg(test)]
+pub(super) fn check_restricted_symmetries(
+    program: &SlottedProgram,
+    dag: TermDag,
+    names: &EncodingNames,
+    egg: &ProofStore,
+) -> R<usize> {
+    let mut tr = Translator::new(program, dag, names, egg);
+    let mut checked = 0;
+    for (id, proof) in egg.proofs() {
+        let Justification::Rule {
+            name,
+            substitution,
+            premise_proofs,
+        } = proof.justification()
+        else {
+            continue;
+        };
+        if rule_kind(program, name).1 != "group-shrink" {
+            continue;
+        }
+        let old = tr.group(substitution["_s"])?;
+        let slots = tr.slot_map(substitution["_cs"])?;
+        if old
+            .iter()
+            .all(|g| g.keys().all(|slot| slots.contains_key(slot)))
+        {
+            continue;
+        }
+        let restored = egg
+            .proofs()
+            .find_map(|(restored, proof)| match proof.justification() {
+                Justification::Rule {
+                    name,
+                    premise_proofs,
+                    ..
+                } if rule_kind(program, name).1 == "group-restore"
+                    && premise_proofs.first() == Some(&id) =>
+                {
+                    Some(restored)
+                }
+                _ => None,
+            })
+            .ok_or("restricted group has no restore proof")?;
+        let (_, args) = tr.app(proof.lhs()).ok_or("expected staged group row")?;
+        let class = args[0];
+        for generator in old {
+            let restricted = compose(&slots, &compose(&generator, &slots));
+            if is_identity(&restricted) || restricted.len() == generator.len() {
+                continue;
+            }
+            let symmetry = tr.product_symmetry(
+                class,
+                &restricted,
+                &[(generator, premise_proofs[0])],
+                Some(&slots),
+            )?;
+            let proof = tr.out.proof(symmetry);
+            super::checker::check_proof(&mut tr.out, program, proof).map_err(|e| e.to_string())?;
+            checked += 1;
+        }
+        for g in tr.group(args[1])? {
+            if is_identity(&g) {
+                continue;
+            }
+            let symmetry = tr.symmetry(class, &g, restored)?;
+            let proof = tr.out.proof(symmetry);
+            super::checker::check_proof(&mut tr.out, program, proof).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(checked)
 }

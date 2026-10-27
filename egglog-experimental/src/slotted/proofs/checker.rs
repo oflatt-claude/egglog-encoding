@@ -497,7 +497,7 @@ fn check_rule(
     for (requirement, premise) in requirements.iter().zip(&premises[1..]) {
         let (left, right) = match *requirement {
             Requirement::Exists(term) => (None, term),
-            Requirement::Equal(lhs, rhs) => (Some(lhs), rhs),
+            Requirement::Equal(lhs, rhs) | Requirement::RenamingEqual(lhs, rhs) => (Some(lhs), rhs),
         };
         let condition_sort = join_sorts(
             pattern_sort(&store.term_dag, &expected_sorts, right),
@@ -517,7 +517,12 @@ fn check_rule(
         } else {
             true
         };
-        if !left_matches || !program.alpha_eq(&mut store.term_dag, got.rhs, right) {
+        let right_matches = if matches!(requirement, Requirement::RenamingEqual(..)) {
+            program.eq_modulo_renaming(&mut store.term_dag, got.rhs, right)
+        } else {
+            program.alpha_eq(&mut store.term_dag, got.rhs, right)
+        };
+        if !left_matches || !right_matches {
             return Err(fail(format!(
                 "premise {} does not establish the original :when fact {requirement:?}",
                 store.proposition_to_string(got)
@@ -576,21 +581,28 @@ fn check_rule(
                     )));
                 }
             }
-            Condition::Neq { lhs, rhs } => {
+            Condition::Neq { lhs, rhs } | Condition::RenamingNeq { lhs, rhs } => {
                 let a = rule
                     .instantiate(&mut store.term_dag, *lhs, &subst)
                     .map_err(unbound)?;
                 let b = rule
                     .instantiate(&mut store.term_dag, *rhs, &subst)
                     .map_err(unbound)?;
-                if program.alpha_eq(&mut store.term_dag, a, b) {
+                let modulo = matches!(condition, Condition::RenamingNeq { .. });
+                let equal = if modulo {
+                    program.eq_modulo_renaming(&mut store.term_dag, a, b)
+                } else {
+                    program.alpha_eq(&mut store.term_dag, a, b)
+                };
+                if equal {
                     return Err(fail(format!(
-                        "(!= ...) fails: both sides are {}",
+                        "{} fails for {}",
+                        if modulo { "renaming-!=" } else { "!=" },
                         store.term_dag.to_string(a)
                     )));
                 }
             }
-            Condition::Eq { .. } | Condition::Fact(_) => {}
+            Condition::Eq { .. } | Condition::RenamingEq { .. } | Condition::Fact(_) => {}
         }
     }
 
@@ -866,6 +878,83 @@ mod tests {
                     name: "nested".into(),
                     substitution: vec![("x".into(), a), ("y".into(), g)],
                     premises,
+                },
+            );
+            assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
+        }
+    }
+
+    #[test]
+    fn renaming_guard_checks_an_equality_witness() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        program.add_constructor("F", vec![ColumnKind::Child]);
+        program.add_constructor("G", vec![ColumnKind::Child]);
+        program.add_constructor("Hit", vec![]);
+        program.add_let(&mut dag, "a", "(F $0)").unwrap();
+        program.add_let(&mut dag, "b", "(G $1)").unwrap();
+        program.add_let(&mut dag, "input", "(Pair a b)").unwrap();
+        program.add_union(&mut dag, "a", "(G $0)", "U").unwrap();
+        for predicate in ["=", "renaming-="] {
+            program.add_rewrite(&mut dag, &format!(
+                r#"(rewrite (Pair x y) (Hit) :when (({predicate} x y)) :name "{predicate}")"#,
+            )).unwrap();
+        }
+        let (a, b, input) = (program.lets["a"], program.lets["b"], program.lets["input"]);
+        let hit = dag.app("Hit".into(), vec![]);
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(input, input);
+        let union = store.fiat(a, program.unions[0].rhs);
+        let reflexive = store.fiat(a, a);
+        for (predicate, side, valid) in [
+            ("renaming-=", union, true),
+            ("=", union, false),
+            ("renaming-=", reflexive, false),
+        ] {
+            let proof = store.add(
+                SlottedProposition::equal(input, hit),
+                SlottedJustification::Rule {
+                    name: predicate.into(),
+                    substitution: vec![("x".into(), a), ("y".into(), b)],
+                    premises: vec![root, side],
+                },
+            );
+            assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
+        }
+    }
+
+    #[test]
+    fn renaming_disequality_rejects_different_spellings_of_the_same_term() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        program.add_constructor("F", vec![ColumnKind::Child]);
+        program.add_constructor("Hit", vec![]);
+        program
+            .add_let(&mut dag, "input", "(Pair (F $0) (F $1))")
+            .unwrap();
+        for predicate in ["!=", "renaming-!="] {
+            program.add_rewrite(&mut dag, &format!(
+                r#"(rewrite (Pair x y) (Hit) :when (({predicate} x y)) :name "{predicate}")"#,
+            )).unwrap();
+        }
+        let input = program.lets["input"];
+        let Term::App(_, children) = dag.get(input).clone() else {
+            unreachable!()
+        };
+        let hit = dag.app("Hit".into(), vec![]);
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(input, input);
+        let x = store.project(root, 0).unwrap();
+        let y = store.project(root, 1).unwrap();
+        for (predicate, valid) in [("!=", true), ("renaming-!=", false)] {
+            let proof = store.add(
+                SlottedProposition::equal(input, hit),
+                SlottedJustification::Rule {
+                    name: predicate.into(),
+                    substitution: vec![("x".into(), children[0]), ("y".into(), children[1])],
+                    premises: vec![root, x, y],
                 },
             );
             assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
