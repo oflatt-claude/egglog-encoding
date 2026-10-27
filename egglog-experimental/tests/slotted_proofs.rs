@@ -39,6 +39,15 @@ fn demo_proof_snapshots() {
 (check (= input $a))"#,
         ),
         (
+            "demo_nested_conditions",
+            r#"(datatype U (F U) (G U) (H U) (A))
+(let input (F (G (A))))
+(let side (H (A)))
+(rewrite (F (G x)) (H x) :when ((= (G x) y) (H x)) :name "nested")
+(run 1)
+(check (= input side))"#,
+        ),
+        (
             "demo_alpha_renaming",
             "(datatype U (Lam U U :binder 0))\n\
              (let input (Lam $a $a))\n\
@@ -400,4 +409,69 @@ fn unsupported_substitution_does_not_change_compiler_state() {
         .unwrap_err();
     assert!(error.to_string().contains("no proof translation"));
     assert!(compiler.compile(None, "(datatype U (F U U))").is_ok());
+}
+
+#[test]
+fn original_guards_are_checked_independently_of_flattening() {
+    let source = r#"(datatype U (F U) (G U))
+(let input (F $a))
+(rewrite (F $s) (G $s) :when ((free $s (F $s))) :name "guard")
+(run 1)
+(check (= input (G $a)))"#;
+    let encoded = compiler(ProofMode::Prove).compile(None, source).unwrap();
+    new_egraph_with_proofs()
+        .parse_and_run_program(None, &encoded)
+        .unwrap();
+    let corrupt = encoded
+        .lines()
+        .map(|line| {
+            if line.starts_with("(set (SlottedRuleSource ") {
+                line.replace("(free $s (F $s))", "(not-free $s (F $s))")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(encoded, corrupt);
+    let error = new_egraph_with_proofs()
+        .parse_and_run_program(None, &corrupt)
+        .unwrap_err();
+    assert!(error.to_string().contains("not-free fails"), "{error}");
+}
+
+#[test]
+fn source_rule_globals_keep_their_declaration_scope() {
+    for source in [
+        r#"(datatype U (F U) (G U) (A))
+(rewrite (F x) (G x) :name "local")
+(let x (F (A)))
+(run 1)
+(check (= x (G (A))))"#,
+        r#"(datatype U (F U) (G U))
+(let fixed $a)
+(let input (F fixed))
+(rewrite (F fixed) (G fixed) :name "global")
+(run 1)
+(check (= input (G fixed)))"#,
+        r#"(datatype U (F U) (G U))
+(let fixed $a)
+(let input (F fixed))
+(rewrite input (G fixed) :name "global-root")
+(run 1)
+(check (= input (G fixed)))"#,
+        r#"(datatype U (F U) (G U) (H U))
+(let fixed (F $a))
+(let input (H fixed))
+(rewrite (H fixed) (G fixed) :name "global-term")
+(run 1)
+(check (= input (G fixed)))"#,
+    ] {
+        let proofs = prove(
+            &mut compiler(ProofMode::Prove),
+            &mut new_egraph_with_proofs(),
+            source,
+        );
+        assert_eq!(proofs.len(), 1);
+    }
 }

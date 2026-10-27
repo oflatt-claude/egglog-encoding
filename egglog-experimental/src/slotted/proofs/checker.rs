@@ -3,8 +3,8 @@
 use super::format::{
     SlottedConclusion, SlottedJustification, SlottedProofId, SlottedProofStore, SlottedProposition,
 };
-use super::source::{Claim, ClaimKind, Condition, Rhs, SlottedProgram};
-use super::terms::{all_slots, instantiate, is_subterm, pattern_vars, rename, slot_of};
+use super::source::{Claim, ClaimKind, Condition, Requirement, Rhs, SlottedProgram};
+use super::terms::{all_slots, is_subterm, rename, slot_of};
 use super::{HashMap, HashSet};
 use egglog::{Term, TermDag, TermId};
 use std::collections::BTreeSet;
@@ -293,6 +293,21 @@ fn check_one(
                 p.sort.or(Some(ctor.output.clone())),
             )
         }
+        SlottedJustification::Proj { proof, child_index } => {
+            let p = premise(proof)?;
+            let Term::App(head, children) = store.term_dag.get(p.proposition.rhs) else {
+                return Err(step("proj", "parent is not an application".into()));
+            };
+            let child = *children
+                .get(*child_index)
+                .ok_or_else(|| step("proj", "index out of bounds".into()))?;
+            let sort = program
+                .constructors
+                .get(head)
+                .and_then(|c| c.sorts.get(*child_index))
+                .cloned();
+            (SlottedProposition::equal(child, child), sort)
+        }
         SlottedJustification::Equivariance {
             proof: inner,
             renaming,
@@ -380,16 +395,12 @@ fn check_rule(
         variable,
     };
 
-    // The premises: the root pattern, then each `(= v call)` in order.
-    let equalities: Vec<(&String, TermId)> = rule
+    let requirements: Vec<_> = rule
         .conditions
         .iter()
-        .filter_map(|c| match c {
-            Condition::Eq { var, call } => Some((var, *call)),
-            _ => None,
-        })
+        .flat_map(Condition::requirements)
         .collect();
-    let expected = 1 + equalities.len();
+    let expected = 1 + requirements.len();
     if premises.len() != expected {
         return Err(SlottedCheckError::PremiseCount {
             proof: id,
@@ -402,23 +413,34 @@ fn check_rule(
     // The sorts: the rewrite is about its left-hand side's, each premise must be
     // about the sort of the pattern it matches, and each binding must have the
     // sort of the columns its variable stands in.
-    let mut sort = program.sort_of(&store.term_dag, rule.lhs);
-    let mut expected_sorts: HashMap<String, String> = HashMap::default();
-    variable_sorts(program, &store.term_dag, rule.lhs, &mut expected_sorts).map_err(&fail)?;
-    for (_, call) in &equalities {
-        variable_sorts(program, &store.term_dag, *call, &mut expected_sorts).map_err(&fail)?;
+    let rhs_pattern = match &rule.rhs {
+        Rhs::Term(term) => *term,
+        Rhs::Var(var) => store.term_dag.var(var.clone()),
+    };
+    let mut expected_sorts = HashMap::default();
+    for term in [rule.lhs, rhs_pattern]
+        .into_iter()
+        .chain(rule.conditions.iter().flat_map(Condition::terms))
+    {
+        variable_sorts(program, &store.term_dag, term, &mut expected_sorts).map_err(&fail)?;
     }
-    if let Term::Var(root) = store.term_dag.get(rule.lhs) {
-        sort = expected_sorts.get(root).cloned().or_else(|| {
-            equalities
-                .iter()
-                .find(|(var, _)| *var == root)
-                .and_then(|(_, call)| program.sort_of(&store.term_dag, *call))
-        });
-    }
-    if let Rhs::Term(t) = &rule.rhs {
-        variable_sorts(program, &store.term_dag, *t, &mut expected_sorts).map_err(&fail)?;
-    }
+    let pattern_sort =
+        |dag: &TermDag, variables: &HashMap<String, String>, term| match dag.get(term) {
+            Term::Var(var) => variables.get(var).cloned().or_else(|| {
+                rule.globals
+                    .get(var)
+                    .and_then(|&term| program.sort_of(dag, term))
+            }),
+            _ => program.sort_of(dag, term),
+        };
+    // All carrier patterns in a slotted match share one sort.
+    let mut sort = [rule.lhs, rhs_pattern]
+        .into_iter()
+        .chain(rule.conditions.iter().flat_map(Condition::terms))
+        .try_fold(None, |sort, term| {
+            join_sorts(sort, pattern_sort(&store.term_dag, &expected_sorts, term))
+        })
+        .map_err(|(a, b)| fail(format!("rewrite matches both {a} and {b}")))?;
     for (var, term) in substitution {
         if let Some(want) = expected_sorts.get(var)
             && let Some(got) = program.sort_of(&store.term_dag, *term)
@@ -433,22 +455,12 @@ fn check_rule(
 
     // Slot literals: each is bound to a slot, and different literals to different
     // slots -- `(F $x $y)` does not match `(F $0 $0)`.
-    let mut literals: Vec<String> = pattern_vars(&store.term_dag, rule.lhs);
-    for condition in &rule.conditions {
-        match condition {
-            Condition::Eq { call, .. } => literals.extend(pattern_vars(&store.term_dag, *call)),
-            Condition::Neq { lhs, rhs } => {
-                literals.extend(pattern_vars(&store.term_dag, *lhs));
-                literals.extend(pattern_vars(&store.term_dag, *rhs));
-            }
-            Condition::FreeNames { slots, .. } => literals.extend(slots.iter().cloned()),
-            Condition::Free { slot, .. } | Condition::NotFree { slot, .. } => {
-                literals.push(slot.clone())
-            }
-        }
+    let mut literals: Vec<String> = rule.pattern_vars(&store.term_dag, rule.lhs);
+    for term in rule.conditions.iter().flat_map(Condition::terms) {
+        literals.extend(rule.pattern_vars(&store.term_dag, term));
     }
     if let Rhs::Term(t) = &rule.rhs {
-        literals.extend(pattern_vars(&store.term_dag, *t));
+        literals.extend(rule.pattern_vars(&store.term_dag, *t));
     }
     let mut by_slot: HashMap<i64, String> = HashMap::default();
     for literal in literals.iter().filter(|v| v.starts_with('$')) {
@@ -468,7 +480,9 @@ fn check_rule(
         }
     }
 
-    let lhs = instantiate(&mut store.term_dag, rule.lhs, &subst).map_err(unbound)?;
+    let lhs = rule
+        .instantiate(&mut store.term_dag, rule.lhs, &subst)
+        .map_err(unbound)?;
     let lhs = program.refresh_binders(&mut store.term_dag, lhs);
     let root = &premises[0].proposition;
     if root.rhs != lhs {
@@ -480,100 +494,120 @@ fn check_rule(
     }
     sort = join_sorts(sort, premises[0].sort.clone())
         .map_err(|(a, b)| fail(format!("the rewrite is in {a}, its root premise in {b}")))?;
-    for ((var, call), premise) in equalities.iter().zip(&premises[1..]) {
-        let want_lhs = *subst.get(*var).ok_or_else(|| unbound((*var).clone()))?;
-        let want_rhs = instantiate(&mut store.term_dag, *call, &subst).map_err(unbound)?;
-        let want_rhs = program.refresh_binders(&mut store.term_dag, want_rhs);
+    for (requirement, premise) in requirements.iter().zip(&premises[1..]) {
+        let (left, right) = match *requirement {
+            Requirement::Exists(term) => (None, term),
+            Requirement::Equal(lhs, rhs) => (Some(lhs), rhs),
+        };
+        let condition_sort = join_sorts(
+            pattern_sort(&store.term_dag, &expected_sorts, right),
+            left.and_then(|term| pattern_sort(&store.term_dag, &expected_sorts, term)),
+        )
+        .map_err(|(a, b)| fail(format!("condition compares {a} with {b}")))?;
+        let right = rule
+            .instantiate(&mut store.term_dag, right, &subst)
+            .map_err(unbound)?;
+        let right = program.refresh_binders(&mut store.term_dag, right);
         let got = &premise.proposition;
-        // Source equality patterns are alpha-invariant. This does not permit
-        // changing free slots; ordinary proof steps still compare exact terms.
-        if !program.alpha_eq(&mut store.term_dag, got.lhs, want_lhs)
-            || !program.alpha_eq(&mut store.term_dag, got.rhs, want_rhs)
-        {
+        let left_matches = if let Some(left) = left {
+            let left = rule
+                .instantiate(&mut store.term_dag, left, &subst)
+                .map_err(unbound)?;
+            program.alpha_eq(&mut store.term_dag, got.lhs, left)
+        } else {
+            true
+        };
+        if !left_matches || !program.alpha_eq(&mut store.term_dag, got.rhs, right) {
             return Err(fail(format!(
-                "the premise for (= {var} ...) proves {}, not {} = {}",
-                store.proposition_to_string(got),
-                store.term_dag.to_string(want_lhs),
-                store.term_dag.to_string(want_rhs)
+                "premise {} does not establish the original :when fact {requirement:?}",
+                store.proposition_to_string(got)
             )));
         }
-        let call_sort = program.sort_of(&store.term_dag, want_rhs);
-        join_sorts(call_sort, premise.sort.clone()).map_err(|(a, b)| {
-            fail(format!(
-                "the pattern for (= {var} ...) is in {a}, its premise in {b}"
-            ))
-        })?;
+        join_sorts(
+            condition_sort
+                .or_else(|| sort.clone())
+                .or_else(|| program.sort_of(&store.term_dag, right)),
+            premise.sort.clone(),
+        )
+        .map_err(|(a, b)| fail(format!("condition is in {a}, its premise in {b}")))?;
     }
 
     for condition in &rule.conditions {
         match condition {
-            Condition::Free { slot, vars } | Condition::NotFree { slot, vars } => {
-                let slot_term = *subst.get(slot).ok_or_else(|| unbound(slot.clone()))?;
+            Condition::Free { slot, terms } | Condition::NotFree { slot, terms } => {
+                let slot_term = rule
+                    .instantiate(&mut store.term_dag, *slot, &subst)
+                    .map_err(unbound)?;
                 let slot_number = slot_of(&store.term_dag, slot_term)
-                    .ok_or_else(|| fail(format!("{slot} is bound to a non-slot")))?;
+                    .ok_or_else(|| fail("free/not-free requires a slot".into()))?;
                 let want_free = matches!(condition, Condition::Free { .. });
                 let mut free = BTreeSet::new();
-                for var in vars {
-                    let term = *subst.get(var).ok_or_else(|| unbound(var.clone()))?;
+                for term in terms {
+                    let term = rule
+                        .instantiate(&mut store.term_dag, *term, &subst)
+                        .map_err(unbound)?;
                     free.extend(program.free_slots(&store.term_dag, term));
                 }
                 if free.contains(&slot_number) != want_free {
                     return Err(fail(format!(
-                        "({} {slot} {}) fails: {slot} is ${slot_number}, free slots are {free:?}",
-                        if want_free { "free" } else { "not-free" },
-                        vars.join(" ")
+                        "{} fails for ${slot_number}: free slots are {free:?}",
+                        if want_free { "free" } else { "not-free" }
                     )));
                 }
             }
-            Condition::FreeNames { var, slots } => {
-                let term = *subst.get(var).ok_or_else(|| unbound(var.clone()))?;
+            Condition::FreeNames { term, slots } => {
+                let term = rule
+                    .instantiate(&mut store.term_dag, *term, &subst)
+                    .map_err(unbound)?;
                 let wanted = slots
                     .iter()
                     .map(|slot| {
-                        let term = *subst.get(slot).ok_or_else(|| unbound(slot.clone()))?;
+                        let term = rule
+                            .instantiate(&mut store.term_dag, *slot, &subst)
+                            .map_err(unbound)?;
                         slot_of(&store.term_dag, term)
-                            .ok_or_else(|| fail(format!("{slot} is bound to a non-slot")))
+                            .ok_or_else(|| fail("free-names-are requires slots".into()))
                     })
                     .collect::<Result<BTreeSet<_>, _>>()?;
                 let free = program.free_slots(&store.term_dag, term);
                 if free != wanted {
                     return Err(fail(format!(
-                        "free-names-are {var}: expected {wanted:?}, found {free:?}"
+                        "free-names-are: expected {wanted:?}, found {free:?}"
                     )));
                 }
             }
             Condition::Neq { lhs, rhs } => {
-                // two different terms: what the firing saw as two invocations
-                let a = instantiate(&mut store.term_dag, *lhs, &subst).map_err(unbound)?;
-                let b = instantiate(&mut store.term_dag, *rhs, &subst).map_err(unbound)?;
-                if a == b {
+                let a = rule
+                    .instantiate(&mut store.term_dag, *lhs, &subst)
+                    .map_err(unbound)?;
+                let b = rule
+                    .instantiate(&mut store.term_dag, *rhs, &subst)
+                    .map_err(unbound)?;
+                if program.alpha_eq(&mut store.term_dag, a, b) {
                     return Err(fail(format!(
                         "(!= ...) fails: both sides are {}",
                         store.term_dag.to_string(a)
                     )));
                 }
             }
-            Condition::Eq { .. } => {}
+            Condition::Eq { .. } | Condition::Fact(_) => {}
         }
     }
 
-    // Minted slots: right-hand-side slot literals the body never mentions must be
-    // bound to slots that occur in no other binding. The body is the root
-    // pattern and each `(= v call)`, `v` included.
-    let mut body_vars: HashSet<String> = pattern_vars(&store.term_dag, rule.lhs)
-        .into_iter()
+    // Right-hand-side slot literals absent from the body must be fresh.
+    let body_vars: HashSet<String> = std::iter::once(rule.lhs)
+        .chain(rule.conditions.iter().flat_map(Condition::terms))
+        .flat_map(|term| rule.pattern_vars(&store.term_dag, term))
         .collect();
-    for (var, call) in &equalities {
-        body_vars.insert((*var).clone());
-        body_vars.extend(pattern_vars(&store.term_dag, *call));
-    }
     let rhs = match &rule.rhs {
-        Rhs::Term(t) => instantiate(&mut store.term_dag, *t, &subst).map_err(unbound)?,
+        Rhs::Term(t) => rule
+            .instantiate(&mut store.term_dag, *t, &subst)
+            .map_err(unbound)?,
         Rhs::Var(v) => *subst.get(v).ok_or_else(|| unbound(v.clone()))?,
     };
     let rhs = program.refresh_binders(&mut store.term_dag, rhs);
     if let Rhs::Term(t) = &rule.rhs {
-        for var in pattern_vars(&store.term_dag, *t) {
+        for var in rule.pattern_vars(&store.term_dag, *t) {
             if body_vars.contains(&var) {
                 continue;
             }
@@ -586,7 +620,9 @@ fn check_rule(
             let used: BTreeSet<i64> = substitution
                 .iter()
                 .filter(|(name, _)| *name != var)
-                .flat_map(|(_, t)| all_slots(&store.term_dag, *t))
+                .map(|(_, t)| t)
+                .chain(rule.globals.values())
+                .flat_map(|t| all_slots(&store.term_dag, *t))
                 .collect();
             if used.contains(&slot) {
                 return Err(fail(format!(
@@ -609,6 +645,17 @@ fn check_rule(
             store.term_dag.to_string(lhs),
             store.term_dag.to_string(rhs)
         )));
+    }
+    if instance && claimed.lhs != claimed.rhs && sort.is_none() {
+        let carriers: BTreeSet<_> = program
+            .constructors
+            .values()
+            .map(|ctor| ctor.output.clone())
+            .collect();
+        if carriers.len() != 1 {
+            return Err(fail("cannot determine the rewrite's carrier sort".into()));
+        }
+        sort = carriers.into_iter().next();
     }
     // reflexivity of a subterm is about that subterm's sort
     let sort = if instance {
@@ -784,6 +831,48 @@ mod tests {
     }
 
     #[test]
+    fn original_conditions_require_evidence_in_source_order() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        for name in ["F", "G", "H"] {
+            program.add_constructor(name, vec![ColumnKind::Child]);
+        }
+        program.add_constructor("A", vec![]);
+        program.add_let(&mut dag, "input", "(F (G (A)))").unwrap();
+        program.add_let(&mut dag, "side", "(H (A))").unwrap();
+        program
+            .add_rewrite(
+                &mut dag,
+                r#"(rewrite (F (G x)) (H x) :when ((= (G x) y) (H x)) :name "nested")"#,
+            )
+            .unwrap();
+        let input = program.lets["input"];
+        let side = program.lets["side"];
+        let a = dag.app("A".into(), vec![]);
+        let g = dag.app("G".into(), vec![a]);
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(input, input);
+        let equality = store.fiat(g, g);
+        let existence = store.fiat(side, side);
+        for (premises, valid) in [
+            (vec![root, equality, existence], true),
+            (vec![root, existence, equality], false),
+            (vec![root, equality], false),
+            (vec![root, equality, equality], false),
+        ] {
+            let proof = store.add(
+                SlottedProposition::equal(input, side),
+                SlottedJustification::Rule {
+                    name: "nested".into(),
+                    substitution: vec![("x".into(), a), ("y".into(), g)],
+                    premises,
+                },
+            );
+            assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
+        }
+    }
+
+    #[test]
     fn fiat_needs_a_built_term_or_a_union() {
         let (mut store, program, _claim) = figure_3();
         let s9 = slot_term(&mut store.term_dag, 9);
@@ -825,13 +914,21 @@ mod tests {
         let zero = slot_term(&mut store.term_dag, 0);
         let one = slot_term(&mut store.term_dag, 1);
         let root = store.fiat(input, input);
+        let x = store.project(root, 1).unwrap();
+        let y = store.project(root, 2).unwrap();
         for (i, (condition, valid)) in cases.iter().enumerate() {
             let proof = store.add(
                 SlottedProposition::equal(input, zero),
                 SlottedJustification::Rule {
                     name: format!("guard{i}"),
                     substitution: vec![("$s".into(), zero), ("x".into(), one), ("y".into(), zero)],
-                    premises: vec![root],
+                    premises: if i < 2 {
+                        vec![root, x, y]
+                    } else if i == 2 {
+                        vec![root, x]
+                    } else {
+                        vec![root, y]
+                    },
                 },
             );
             assert_eq!(
@@ -895,7 +992,7 @@ mod tests {
             SlottedJustification::Rule {
                 name: "eta".into(),
                 substitution: vec![("$x".into(), s4), ("f".into(), t)],
-                premises: vec![wrap],
+                premises: vec![wrap, root],
             },
         );
         check_proof(&mut store, &program, eta).unwrap();
@@ -920,6 +1017,176 @@ mod tests {
         let err = check_proof(&mut store, &program, bad).unwrap_err();
         assert!(err.to_string().contains("minted"), "{err}");
     }
+    #[test]
+    fn minted_slots_avoid_source_globals() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_constructor("F", vec![ColumnKind::Child]);
+        program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
+        program.add_let(&mut dag, "fixed", "$0").unwrap();
+        program.add_let(&mut dag, "input", "(F $1)").unwrap();
+        program
+            .add_rewrite(&mut dag, r#"(rewrite (F x) (Pair fixed $fresh) :name "r")"#)
+            .unwrap();
+        let input = program.lets["input"];
+        let zero = slot_term(&mut dag, 0);
+        let one = slot_term(&mut dag, 1);
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(input, input);
+        for (slot, valid) in [(0, false), (2, true)] {
+            let fresh = slot_term(&mut store.term_dag, slot);
+            let rhs = store.term_dag.app("Pair".into(), vec![zero, fresh]);
+            let proof = store.add(
+                SlottedProposition::equal(input, rhs),
+                SlottedJustification::Rule {
+                    name: "r".into(),
+                    substitution: vec![("x".into(), one), ("$fresh".into(), fresh)],
+                    premises: vec![root],
+                },
+            );
+            assert_eq!(check_proof(&mut store, &program, proof).is_ok(), valid);
+        }
+    }
+
+    #[test]
+    fn equality_conditions_keep_their_source_sort() {
+        for condition in ["(= x y)", "(= fixed other)"] {
+            let mut dag = TermDag::default();
+            let mut program = SlottedProgram::default();
+            program.add_sorted_constructor("PairA", "A", vec![(ColumnKind::Child, "A".into()); 2]);
+            program.add_sorted_constructor("HitA", "A", vec![]);
+            program.add_let(&mut dag, "input", "(PairA $0 $1)").unwrap();
+            program.add_let(&mut dag, "fixed", "$0").unwrap();
+            program.add_let(&mut dag, "other", "$1").unwrap();
+            program.add_union(&mut dag, "$0", "$1", "B").unwrap();
+            program
+                .add_rewrite(
+                    &mut dag,
+                    &format!(r#"(rewrite (PairA x y) (HitA) :when ({condition}) :name "r")"#),
+                )
+                .unwrap();
+            let input = program.lets["input"];
+            let zero = slot_term(&mut dag, 0);
+            let one = slot_term(&mut dag, 1);
+            let hit = dag.app("HitA".into(), vec![]);
+            let mut store = SlottedProofStore::new(dag);
+            let root = store.fiat(input, input);
+            let side = store.fiat(zero, one);
+            let proof = store.add(
+                SlottedProposition::equal(input, hit),
+                SlottedJustification::Rule {
+                    name: "r".into(),
+                    substitution: vec![("x".into(), zero), ("y".into(), one)],
+                    premises: vec![root, side],
+                },
+            );
+            let error = check_proof(&mut store, &program, proof).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("condition is in A, its premise in B"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn global_root_rules_keep_their_source_sort() {
+        for source in [
+            r#"(rewrite fixed (WA fixed) :name "r")"#,
+            r#"(rewrite fixed other :name "r")"#,
+            r#"(rewrite fixed x :when ((= x (WA y))) :name "r")"#,
+        ] {
+            let mut dag = TermDag::default();
+            let mut program = SlottedProgram::default();
+            program.add_sorted_constructor("WA", "A", vec![(ColumnKind::Child, "A".into())]);
+            program.add_sorted_constructor("WB", "B", vec![(ColumnKind::Child, "B".into())]);
+            program.add_let(&mut dag, "fixed", "$0").unwrap();
+            program.add_let(&mut dag, "other", "(WA $0)").unwrap();
+            program.add_let(&mut dag, "b", "(WB $0)").unwrap();
+            program.add_rewrite(&mut dag, source).unwrap();
+            let (fixed, other, b) = (
+                program.lets["fixed"],
+                program.lets["other"],
+                program.lets["b"],
+            );
+            let mut store = SlottedProofStore::new(dag);
+            let root = store.fiat(fixed, fixed);
+            let side = store.fiat(other, other);
+            let premises = if program.rewrites["r"].conditions.is_empty() {
+                vec![root]
+            } else {
+                vec![root, side]
+            };
+            let proof = store.add(
+                SlottedProposition::equal(fixed, other),
+                SlottedJustification::Rule {
+                    name: "r".into(),
+                    substitution: vec![("x".into(), other), ("y".into(), fixed)],
+                    premises,
+                },
+            );
+            assert_eq!(
+                check_proof(&mut store, &program, proof)
+                    .unwrap()
+                    .sort
+                    .as_deref(),
+                Some("A")
+            );
+            let parent = store.fiat(b, b);
+            let crossed = store.congr(parent, 0, proof).unwrap();
+            let error = check_proof(&mut store, &program, crossed).unwrap_err();
+            assert!(
+                error.to_string().contains("column 0 of WB is B"),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_conditions_determine_a_slot_rules_carrier() {
+        let mut dag = TermDag::default();
+        let mut program = SlottedProgram::default();
+        program.add_sorted_constructor("WA", "A", vec![(ColumnKind::Child, "A".into())]);
+        program.add_sorted_constructor("WB", "B", vec![(ColumnKind::Child, "B".into())]);
+        program.add_let(&mut dag, "fixed", "$0").unwrap();
+        program.add_let(&mut dag, "side", "(WA $0)").unwrap();
+        program.add_let(&mut dag, "b", "(WB $0)").unwrap();
+        program
+            .add_rewrite(
+                &mut dag,
+                r#"(rewrite fixed $fresh :when ((WA x)) :name "r")"#,
+            )
+            .unwrap();
+        let (fixed, side, b) = (
+            program.lets["fixed"],
+            program.lets["side"],
+            program.lets["b"],
+        );
+        let fresh = slot_term(&mut dag, 2);
+        let mut store = SlottedProofStore::new(dag);
+        let root = store.fiat(fixed, fixed);
+        let side = store.fiat(side, side);
+        let proof = store.add(
+            SlottedProposition::equal(fixed, fresh),
+            SlottedJustification::Rule {
+                name: "r".into(),
+                substitution: vec![("x".into(), fixed), ("$fresh".into(), fresh)],
+                premises: vec![root, side],
+            },
+        );
+        assert_eq!(
+            check_proof(&mut store, &program, proof)
+                .unwrap()
+                .sort
+                .as_deref(),
+            Some("A")
+        );
+        let parent = store.fiat(b, b);
+        let crossed = store.congr(parent, 0, proof).unwrap();
+        assert!(check_proof(&mut store, &program, crossed).is_err());
+    }
+
     #[test]
     fn slot_literals_are_distinct_slots() {
         let mut dag = TermDag::default();

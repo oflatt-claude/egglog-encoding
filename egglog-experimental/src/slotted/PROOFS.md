@@ -10,7 +10,8 @@ egglog's term/proof encoding. The translator consumes unsimplified egglog proofs
 egglog's own proof checker and simplifier are skipped in this mode.
 
 ```text
-source → encoded program → egglog proof → surface proof → checked claim
+source program → flattened program → encoded program
+source proof   ← flattened proof   ← egglog proof
 ```
 
 # Terms
@@ -65,17 +66,23 @@ either direction. Reflexivity is not assumed for terms the program never built.
 Pattern variables take terms of their declared sorts; slot literals take distinct
 slots, as required by the [language](LANGUAGE.md#fresh-slots).
 
-Premises are ordered: first a proof `t = L[σ]`, then one proof for each
-multipattern condition `(= v call)`. Each condition's endpoints must be `σ(v)`
-and `call[σ]` up to alpha-equivalence, with identical free names.
+Premises are ordered: first a proof `t = L[σ]`, then evidence for the original
+`:when` facts in source order. An equality `(= a b)` requires a proof with
+endpoints `a[σ]` and `b[σ]`, up to alpha-equivalence with identical free names.
+A constructor fact requires an existence proof ending at its instantiated term.
+Guards require existence proofs for their term operands, followed by the checks
+below. Nested terms stay nested; generated pattern variables do not appear in
+source rule substitutions. Globals retain their bindings at rule declaration.
 
 Guards are evaluated on σ with the constructors' binding scopes. `free` tests
 membership in the union of the listed terms' free slots; `not-free` tests absence
 from that union. `free-names-are` requires exactly the listed free slots.
-`(!= a b)` requires different instantiated terms. This guard records the state
-when the rule fired; a later union may equate its terms.
+`(!= a b)` rejects alpha-equivalent instantiated terms. It does not certify
+that their e-classes were distinct when the rule fired; this requires evidence
+of the execution state that the proof format does not currently record.
 
-RHS-only slot literals must be fresh for every other binding. The conclusion is
+RHS-only slot literals must be fresh for every other binding and the globals
+in scope at the rule declaration. The conclusion is
 `L[σ] = R[σ]`, its reverse, or reflexivity of a subterm of either side. A
 right-hand side using `subst` is unsupported.
 
@@ -89,6 +96,10 @@ The selected child must match the child proof's left endpoint exactly; the
 child proof must have the column's sort. No renaming is performed by this rule.
 The printed form is `(Congr (= lhs rhs) parent-proof child-proof index)`, where
 `index` is the zero-based constructor argument position, including binder columns.
+
+**Proj.** From `a = F(..., c, ...)`, derive `c = c`. The argument index must
+exist, and the result has that argument's sort. This establishes existence of a
+subterm without requiring a separate source axiom.
 
 **Equivariance.** From `a = b`, derive `rename(m, a) = rename(m, b)` for a finite
 slot permutation `m`. The checker recomputes both endpoints and preserves the
@@ -178,14 +189,13 @@ and filled by the compiler, carry the source a translator needs:
 | row | holds |
 | --- | --- |
 | `(SlottedCarrier "Sort" n)` | the equality sort with carrier index `n`, the suffix of its tables |
-| `(SlottedRuleSource "name" "(rewrite LHS RHS :when (...) :name \"name\")")` | a rewrite's canonical source under its rule name |
+| `(SlottedRuleSource "name" "(rewrite LHS RHS :when (...))")` | the original rewrite and `:when` clause under its proof name |
 | `(SlottedLetSource "x" "(Mul $7 (Null))")` | a global and the term text it was bound to |
 | `(SlottedUnionSource "a" "b" "U")` | the two terms of a top-level `union`, as written, and their carrier sort |
 
 Source text preserves identifier spelling: `x` and `?x` are distinct variables.
 Slot literals keep their `$`; globals are resolved through `SlottedLetSource`.
-A rewrite's conditions record the compiler's resolved pattern names, including
-generated variables for bare constructor facts and nested condition terms.
+A rewrite retains its original nested expressions and condition order.
 Unnamed rewrites receive names unique across scopes and successive inputs.
 Source recording follows execution order; `push` and `pop` restore the recorded
 source together with the database.
@@ -199,11 +209,18 @@ encoded tables.
 
 # Translation
 
-For user rewrites, the compiler records the pattern, class, reading, and
-frame names it actually allocated with `slotted-record`. This small name map
-survives serialization and push/pop; reconstruction does not repeat the
-compiler's fresh-name allocation. It carries no lowered rule bodies or proof
-derivations, and the surface checker does not consult it.
+Flattening turns nested constructor patterns into atoms. For each rewrite,
+`slotted-record` retains the flattened rewrite and the pattern, class, reading,
+and frame names allocated by the compiler. These records survive serialization
+and push/pop. The source checker does not consult them.
+
+Encoding translation produces proofs over those flattened rewrites. A separate
+pass in [`proofs/unflatten.rs`](proofs/unflatten.rs) reconstructs nested terms
+using the atom equalities, congruence, projection, and equivariance. It replaces
+each flattened rule application with an application of the original rewrite,
+reconstructs evidence for the original `:when` facts, and removes generated
+variables from substitutions. The final checker uses only the original source
+program and the resulting ordinary equality proof.
 
 Generated slots come from one supply that reserves all interned source slots, the input terms' slots,
 encoded renaming coordinates, and names introduced during translation. Negative
@@ -257,6 +274,7 @@ be expressed as a product of symmetries the translator has proofs for.
 
 The end-to-end demo snapshots show the source alongside its translated, checked
 proof: [a rewrite](../../tests/snapshots/slotted_proofs__demo_rewrite.snap),
+[a nested rewrite with original conditions](../../tests/snapshots/slotted_proofs__demo_nested_conditions.snap),
 [bound-slot renaming](../../tests/snapshots/slotted_proofs__demo_alpha_renaming.snap),
 [congruence through a binder](../../tests/snapshots/slotted_proofs__demo_binder_congruence.snap),
 [a redundant slot](../../tests/snapshots/slotted_proofs__demo_redundant_slot.snap),
