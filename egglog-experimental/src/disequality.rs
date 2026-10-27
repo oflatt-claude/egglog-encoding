@@ -155,7 +155,7 @@ impl CommandMacro for LowerDisequality {
                     cost,
                     unextractable,
                     hidden,
-                    let_binding,
+                    role,
                 } = &command
             {
                 let mut declaration = egglog::ast::FunctionDecl::constructor(
@@ -166,7 +166,7 @@ impl CommandMacro for LowerDisequality {
                     *unextractable,
                     *hidden,
                 );
-                declaration.internal_let = *let_binding;
+                declaration.role = *role;
                 local_types
                     .to_mut()
                     .typecheck_function(symbols, &declaration)?;
@@ -475,7 +475,7 @@ fn constructor(span: &Span, name: String, input: Vec<String>, output: &str) -> C
         cost: None,
         unextractable: true,
         hidden: true,
-        let_binding: false,
+        role: egglog::ast::FunctionRole::Ordinary,
     }
 }
 

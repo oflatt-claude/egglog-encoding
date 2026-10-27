@@ -76,7 +76,7 @@ A constructor becomes an e-node table — its **view** — plus a rebuild index:
 (function Add (Math Math) (Math Unit)
     :merge ((set (@UF_Math (ordering-max old0 new0)) (values (ordering-min old0 new0) ()))
             (values (ordering-min old0 new0) ()))
-    :internal-view constructor :internal-identity-vals 1)
+    :internal-role constructor-view :internal-identity-vals 1)
 (index @AddOcc_Math Add (any 0 1 2))
 ```
 
@@ -191,7 +191,7 @@ constructors it has covered in the e-graph's own state, where `push`/`pop` roll
 the memo back together with the declarations it tracks.
 
 The marker is a plain `Unit` relation keyed on the children, with no minted id
-and no `:internal-term-node`, so extraction never reads it as a term.
+and no `:internal-role term-node`, so extraction never reads it as a term.
 
 # Queries
 
@@ -314,7 +314,7 @@ arguments before the term encoding runs:
 becomes
 
 ```text
-(function g1 () Math :internal-let)
+(function g1 () Math :internal-role global)
 (set (g1) (Add (Num 1) (Num 2)))
 ```
 
@@ -942,6 +942,11 @@ The passes are:
    sort. Unresolved ambiguity is an error. The pass returns a `TypedTermDag` and its root IDs.
    It uses the same `GenericTermDag` storage as unresolved terms, with resolved
    heads and no variable leaves. Typing performs no evaluation or table mutation.
+   For encoded programs, [`TypeInfo::source_types`](crate::TypeInfo::source_types)
+   borrows the environment and adapts only the function signatures it looks up;
+   it does not clone the environment or scan all declarations. The
+   `:internal-role` annotation distinguishes constructor, function, and global
+   views, so source types can be recovered during desugared replay as well.
 2. Read-only lookup evaluates literals and validated read primitives and reads
    constructor/function views with canonical child values as keys. It collects
    the existing row proofs and union-find connections.

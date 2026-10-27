@@ -156,7 +156,7 @@ impl EGraph {
                 let inps = &row.vals[..n_keys];
                 let out = &row.vals[n_keys];
                 let class_id = self.value_to_class_id(function.func_type.output(), *out);
-                if function.decl.internal_let {
+                if function.decl.role.is_global() {
                     let_bindings
                         .entry(class_id.clone())
                         .or_insert_with(Vec::new)

@@ -12,18 +12,31 @@ use crate::sort::literal_sort;
 use crate::util::{HashMap, HashSet, IndexMap};
 use crate::{
     ArcSort, Atom, AtomTerm, Context, ResolvedCall, Term, TermDag, TermId, TypeError, TypeInfo,
-    TypedTerm, TypedTermDag,
+    TypeInfoView, TypedTerm, TypedTermDag,
 };
 use egglog_ast::span::Span;
 
 impl TypeInfo {
+    /// Typecheck ground terms against table signatures. Use `source_types()` to
+    /// typecheck original terms against a proof-encoded program's declarations.
+    pub fn typecheck_term_dag(
+        &self,
+        terms: &TermDag,
+        roots: &[(TermId, Option<ArcSort>)],
+        context: Context,
+    ) -> Result<(TypedTermDag, Vec<TermId>), GroundTypeError> {
+        TypeInfoView::from(self).typecheck_term_dag(terms, roots, context)
+    }
+}
+
+impl TypeInfoView<'_> {
     /// Typecheck the reachable ground terms, optionally constraining each
     /// root's sort. The same syntax may be requested at several root sorts.
     /// Returns the typed DAG and its root IDs in the requested order.
     /// Unreachable terms do not participate in inference. Typechecking neither
     /// evaluates primitives nor reads or writes function tables.
     pub fn typecheck_term_dag(
-        &self,
+        self,
         terms: &TermDag,
         roots: &[(TermId, Option<ArcSort>)],
         context: Context,
@@ -120,7 +133,7 @@ struct Candidate {
 }
 
 struct Inference<'a> {
-    types: &'a TypeInfo,
+    types: TypeInfoView<'a>,
     terms: &'a TermDag,
     context: Context,
     candidates: HashMap<TermId, IndexMap<String, Candidate>>,
@@ -190,7 +203,7 @@ impl Inference<'_> {
                     .collect()
             })
             .collect();
-        let mut outputs: Vec<_> = self.types.sorts.values().cloned().collect();
+        let mut outputs: Vec<_> = self.types.type_info().sorts.values().cloned().collect();
         outputs.sort_by(|a, b| a.name().cmp(b.name()));
         domains.push(outputs);
 

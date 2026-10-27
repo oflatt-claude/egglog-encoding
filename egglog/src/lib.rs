@@ -82,7 +82,7 @@ use thiserror::Error;
 pub use typechecking::FuncType;
 pub use typechecking::PrimitiveValidator;
 pub use typechecking::TypeError;
-pub use typechecking::TypeInfo;
+pub use typechecking::{TypeInfo, TypeInfoView};
 pub use typed_termdag::GroundTypeError;
 use util::*;
 
@@ -433,7 +433,7 @@ impl Function {
 
     /// Whether this is a let binding
     pub fn is_let_binding(&self) -> bool {
-        self.decl.internal_let
+        self.decl.role.is_global()
     }
 
     /// Whether this function is internally hidden (e.g., compiler-generated
@@ -445,7 +445,7 @@ impl Function {
     /// Whether this table is a view created by the term/proof encoding: the
     /// function's own rows, keyed on canonicalized children.
     pub fn is_view(&self) -> bool {
-        self.decl.internal_view.is_some()
+        self.decl.role.is_view()
     }
 
     /// The source-level row layout exposed by the Rust APIs. Encoded views use
@@ -1129,7 +1129,7 @@ impl EGraph {
             Some(func_type) => {
                 debug_assert!(
                     func_type.subtype == decl.subtype
-                        && func_type.internal_view == decl.internal_view
+                        && func_type.role == decl.role
                         && func_type.input.len() == decl.schema.input.len()
                         && func_type
                             .input
@@ -1158,7 +1158,7 @@ impl EGraph {
                 let func_type = Arc::new(FuncType {
                     name: decl.name.clone(),
                     subtype: decl.subtype,
-                    internal_view: decl.internal_view,
+                    role: decl.role,
                     input: decl
                         .schema
                         .input
@@ -1183,7 +1183,7 @@ impl EGraph {
         let can_subsume = match decl.subtype {
             FunctionSubtype::Constructor => true,
             // View tables need subsumption support
-            FunctionSubtype::Custom => decl.internal_view.is_some(),
+            FunctionSubtype::Custom => decl.role.is_view(),
         };
 
         use egglog_bridge::{DefaultVal, MergeFn};
@@ -1203,7 +1203,7 @@ impl EGraph {
         };
         // Proof-node relations are write-once records identified by a freshly
         // minted final id; extraction only scans them.
-        let is_proof_node = decl.internal_term_node
+        let is_proof_node = decl.role.is_term_node()
             && input
                 .last()
                 .is_some_and(|sort| sort.name() == self.proof_state.proof_names.proof_datatype);
@@ -1217,11 +1217,6 @@ impl EGraph {
             assert!(
                 decl.merge.is_none(),
                 "proof-node relation `{}` cannot declare merge behavior",
-                decl.name
-            );
-            assert!(
-                decl.internal_view.is_none(),
-                "proof-node relation `{}` cannot be an FD view",
                 decl.name
             );
             assert!(
@@ -1357,7 +1352,7 @@ impl EGraph {
                 .get(sym)
                 .ok_or(TypeError::UnboundFunction(sym.to_owned(), span!()))?;
             // Skip hidden and let_binding functions
-            if f.decl.internal_hidden || f.decl.internal_let {
+            if f.decl.internal_hidden || f.decl.role.is_global() {
                 return Err(TypeError::UnboundFunction(sym.to_owned(), span!()).into());
             }
             let size = self.backend.table_size(f.backend_id);
@@ -1368,7 +1363,7 @@ impl EGraph {
             let mut lens = self
                 .functions
                 .iter()
-                .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.internal_let)
+                .filter(|(_, f)| !f.decl.internal_hidden && !f.decl.role.is_global())
                 .map(|(sym, f)| (sym.clone(), self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
@@ -2860,7 +2855,7 @@ impl EGraph {
             // while encoding.
             for command in &typechecked_no_globals {
                 if let GenericNCommand::Function(fdecl) = command
-                    && fdecl.internal_let
+                    && fdecl.role.is_global()
                     && let Some(output_sort) = self.type_info.sorts.get(fdecl.schema.output())
                 {
                     self.type_info

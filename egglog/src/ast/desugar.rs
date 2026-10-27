@@ -16,22 +16,18 @@ pub(crate) fn desugar_command(
             schema,
             merge,
             hidden,
-            let_binding,
-            internal_view,
+            role,
             unextractable,
             identity_vals,
             cost,
-            term_node,
         } => {
             let mut fdecl = FunctionDecl::function(span, name, schema, merge);
             fdecl.internal_hidden = hidden;
-            fdecl.internal_let = let_binding;
-            fdecl.internal_view = internal_view;
+            fdecl.role = role;
             fdecl.identity_vals = identity_vals;
             fdecl.cost = cost;
-            fdecl.internal_term_node = term_node;
             // A view table is extractable unless explicitly marked unextractable
-            if fdecl.internal_view.is_some() {
+            if fdecl.role.is_view() {
                 fdecl.unextractable = unextractable;
             } else if unextractable {
                 fdecl.unextractable = true;
@@ -47,11 +43,11 @@ pub(crate) fn desugar_command(
             cost,
             unextractable,
             hidden,
-            let_binding,
+            role,
         } => {
             let mut fdecl =
                 FunctionDecl::constructor(span, name, schema, cost, unextractable, hidden);
-            fdecl.internal_let = let_binding;
+            fdecl.role = role;
             std::iter::once(NCommand::Function(fdecl)).collect()
         }
         Command::Relation { span, name, inputs } => desugar_relation(parser, span, name, inputs),

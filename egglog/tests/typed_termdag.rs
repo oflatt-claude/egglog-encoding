@@ -2,6 +2,82 @@ use egglog::ast::Literal;
 use egglog::{Context, EGraph, GroundTypeError, TermDag, TypedTerm};
 
 #[test]
+fn source_signatures_are_available_from_unexecuted_encoded_declarations() {
+    use egglog::ResolvedCall;
+    use egglog::ast::{FunctionRole, FunctionSubtype};
+
+    let mut eg = EGraph::default();
+    // No original typechecker and no runtime tables: everything needed to type
+    // source terms must come from these encoded declarations.
+    eg.resolve_program(
+        None,
+        r#"
+        (sort E)
+        (sort Es (Vec E))
+        (sort Ints (Vec i64))
+        (function C (Es) (E Unit) :no-merge :internal-role constructor-view)
+        (function F (E) (E Unit) :no-merge :internal-role function-view)
+        (function g () (E Unit) :no-merge :internal-role global-view)
+        (function TupleEntry () (E Unit) :no-merge)
+        (prove-extract (F (C (vec-empty))))
+        (prove-extract g)
+        "#,
+    )
+    .unwrap();
+
+    let mut terms = TermDag::default();
+    let empty = terms.app("vec-empty".into(), vec![]);
+    let constructor = terms.app("C".into(), vec![empty]);
+    let function = terms.app("F".into(), vec![constructor]);
+    let global = terms.app("g".into(), vec![]);
+    let types = eg.type_info();
+    let source = types.source_types();
+    let (typed, roots) = source
+        .typecheck_term_dag(
+            &terms,
+            &[(constructor, None), (function, None), (global, None)],
+            Context::Read,
+        )
+        .unwrap();
+    for (id, subtype, role) in [
+        (
+            roots[0],
+            FunctionSubtype::Constructor,
+            FunctionRole::Ordinary,
+        ),
+        (roots[1], FunctionSubtype::Custom, FunctionRole::Ordinary),
+        (roots[2], FunctionSubtype::Custom, FunctionRole::Global),
+    ] {
+        let TypedTerm::App(ResolvedCall::Func(call), _) = typed.get(id) else {
+            panic!("expected a resolved source function");
+        };
+        assert_eq!(call.subtype, subtype);
+        assert_eq!(call.role, role);
+        assert_eq!(call.num_outputs(), 1);
+        assert_eq!(call.output().name(), "E");
+    }
+    let TypedTerm::App(_, children) = typed.get(roots[0]) else {
+        unreachable!();
+    };
+    assert_eq!(typed.get(children[0]).sort().name(), "Es");
+
+    // Table typing retains all columns, and an unmarked tuple function is not
+    // silently treated as a view just because its shape matches one.
+    assert_eq!(types.get_func_type("C").unwrap().num_outputs(), 2);
+    assert!(
+        types
+            .typecheck_term_dag(&terms, &[(constructor, None)], Context::Read)
+            .is_err()
+    );
+    let pair = terms.app("TupleEntry".into(), vec![]);
+    assert!(
+        source
+            .typecheck_term_dag(&terms, &[(pair, None)], Context::Read)
+            .is_err()
+    );
+}
+
+#[test]
 fn shared_polymorphic_syntax_has_independent_typings() {
     let mut eg = EGraph::default();
     eg.parse_and_run_program(

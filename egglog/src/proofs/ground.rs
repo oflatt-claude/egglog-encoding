@@ -119,7 +119,7 @@ impl EGraph {
         let root = ground_expr(&mut terms, expr)?;
         let (typed, roots) = self
             .type_info
-            .proof_source_types()
+            .source_types()
             .typecheck_term_dag(&terms, &[(root, Some(expr.output_type()))], Context::Read)
             .map_err(|error| fail(error.to_string()))?;
         let lookup = Lookup::new(self, &typed, &roots)?;
@@ -155,7 +155,7 @@ impl EGraph {
             .collect::<Vec<_>>();
         let (typed, roots) = self
             .type_info
-            .proof_source_types()
+            .source_types()
             .typecheck_term_dag(terms, &roots, Context::Read)
             .map_err(|error| fail(error.to_string()))?;
         let mut lookup = Lookup::new(self, &typed, &roots)?;
@@ -286,24 +286,23 @@ impl<'a> Lookup<'a> {
                         })?;
                     let raw = row[key.len()];
                     let value = this.canonical(raw, &sort)?;
-                    let proof_row = if table.decl.internal_view.is_some()
-                        && table.func_type.outputs.len() == 2
-                    {
-                        let kind = if egraph.type_info.is_global(&function.name) {
-                            RowKind::Global
-                        } else if table.decl.internal_view == Some(ViewKind::Function) {
-                            RowKind::Output(key.len())
+                    let proof_row =
+                        if table.decl.role.is_view() && table.func_type.outputs.len() == 2 {
+                            let kind = if function.role.is_global() {
+                                RowKind::Global
+                            } else if table.decl.role == FunctionRole::FunctionView {
+                                RowKind::Output(key.len())
+                            } else {
+                                RowKind::Constructor
+                            };
+                            let proof = this.evidence.insert_full(row[key.len() + 1]).0;
+                            let union = this.union(raw, value, &sort)?;
+                            Some(Row { kind, proof, union })
+                        } else if function.role.is_global() && !sort.is_eq_sort() {
+                            None
                         } else {
-                            RowKind::Constructor
+                            return Err(fail(format!("{} has no proof column", function.name)));
                         };
-                        let proof = this.evidence.insert_full(row[key.len() + 1]).0;
-                        let union = this.union(raw, value, &sort)?;
-                        Some(Row { kind, proof, union })
-                    } else if egraph.type_info.is_global(&function.name) && !sort.is_eq_sort() {
-                        None
-                    } else {
-                        return Err(fail(format!("{} has no proof column", function.name)));
-                    };
                     (value, proof_row)
                 }
                 TypedTerm::App(ResolvedCall::Values(_), _) => {
@@ -412,11 +411,11 @@ impl<'a> Lookup<'a> {
             if wanted.is_empty() {
                 break;
             }
-            if table.decl.internal_view.is_none() || table.func_type.outputs.len() != 2 {
+            if !table.decl.role.is_view() || table.func_type.outputs.len() != 2 {
                 continue;
             }
             let mut sorts = table.func_type.input.clone();
-            if table.decl.internal_view == Some(ViewKind::Function) {
+            if table.decl.role == FunctionRole::FunctionView {
                 sorts.push(table.func_type.output().clone());
             }
             let mut proofs = vec![];
@@ -741,7 +740,7 @@ impl Composition<'_> {
                     (selected, canonical)
                 }
                 TypedTerm::App(ResolvedCall::Func(function), _) => {
-                    let selected = if self.lookup.egraph.type_info.is_global(&function.name) {
+                    let selected = if function.role.is_global() {
                         *globals.get(&function.name).ok_or_else(|| {
                             fail(format!("missing source definition for {}", function.name))
                         })?
@@ -803,7 +802,7 @@ impl Composition<'_> {
             .lookup
             .egraph
             .type_info
-            .proof_source_types()
+            .source_types()
             .typecheck_term_dag(&self.store.term_dag, &roots, Context::Read)
             .map_err(|error| fail(error.to_string()))?;
         for (&id, &root) in containers.iter().zip(&typed_roots) {

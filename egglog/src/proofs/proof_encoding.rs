@@ -901,7 +901,7 @@ impl<'a> ProofInstrumentor<'a> {
     /// Primitive globals keep the function emitted by `remove_globals`: their values
     /// never need rebuilding and can be justified directly in a proof.
     pub(super) fn is_encoded_global(&self, fdecl: &ResolvedFunctionDecl) -> bool {
-        fdecl.internal_let && self.sort_by_name(fdecl.schema.output()).is_eq_sort()
+        fdecl.role.is_global() && self.sort_by_name(fdecl.schema.output()).is_eq_sort()
     }
 
     /// Whether the function's output value *is* its e-class,
@@ -1007,9 +1007,6 @@ impl<'a> ProofInstrumentor<'a> {
         if fdecl.internal_hidden {
             view_flags.push_str(" :internal-hidden");
         }
-        if fdecl.internal_let {
-            view_flags.push_str(" :internal-let");
-        }
         // The view carries the user operation's extraction cost; the extractor
         // reads it here.
         if let Some(cost) = fdecl.cost {
@@ -1020,6 +1017,11 @@ impl<'a> ProofInstrumentor<'a> {
         // differ in how the `:merge` resolves a children-key collision.
         let mut packed_decl = String::new();
         let view_decl = if output_is_eclass {
+            let role = if fdecl.role.is_global() {
+                FunctionRole::GlobalView
+            } else {
+                FunctionRole::ConstructorView
+            };
             // Two rows conflicting on the same children are congruent: keep the
             // smaller eclass and union the two eclasses in the sort's `@UF`.
             let uf_name = self.uf_name(schema.output());
@@ -1030,14 +1032,14 @@ impl<'a> ProofInstrumentor<'a> {
                 .ordered_union_merge(&uf_name, Skeleton::Leaf(0).trans(Skeleton::Leaf(1).sym()));
             packed_decl = decl;
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-view constructor{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {congruence_merge} :internal-role {role}{view_flags} :internal-identity-vals 1)"
             )
         } else if fdecl.merge.is_some() {
             // Custom function with a `:merge`: the view `:merge` runs the user
             // merge once (see `custom_view_merge`). No `@UF` union.
             let custom_merge = self.custom_view_merge(fdecl);
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-view function{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :merge {custom_merge} :internal-role function-view{view_flags} :internal-identity-vals 1)"
             )
         } else {
             // Primitive/`Unit`-output `:no-merge` custom: the view is declared native
@@ -1051,7 +1053,7 @@ impl<'a> ProofInstrumentor<'a> {
                 "eq-sort `:no-merge` must be rejected by command_supports_proof_encoding"
             );
             format!(
-                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-view function{view_flags} :internal-identity-vals 1)"
+                "(function {view_name} ({in_sorts}) ({out_type} {proof_type}) :no-merge :internal-role function-view{view_flags} :internal-identity-vals 1)"
             )
         };
         // `fresh_sort` is the term's e-class sort only for a custom function whose
@@ -1614,7 +1616,7 @@ impl<'a> ProofInstrumentor<'a> {
         {
             let proof = self.proof_sort();
             self.pending_decls.push(format!(
-                "(function {name} ({sort} {sort} {proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+                "(function {name} ({sort} {sort} {proof}) Unit :no-merge :internal-hidden :internal-role term-node)\n"
             ));
         }
         name
@@ -1640,7 +1642,7 @@ impl<'a> ProofInstrumentor<'a> {
         let proof = self.proof_sort();
         let columns: String = std::iter::repeat_n(format!("{proof} "), args).collect();
         self.pending_decls.push(format!(
-            "(function {name} (String i64 {columns}{proof}) Unit :no-merge :internal-hidden :internal-term-node)\n"
+            "(function {name} (String i64 {columns}{proof}) Unit :no-merge :internal-hidden :internal-role term-node)\n"
         ));
         name
     }
@@ -2191,7 +2193,7 @@ impl<'a> ProofInstrumentor<'a> {
                         if func_type.subtype == FunctionSubtype::Custom {
                             // Proof normal form bans looking up custom functions in
                             // actions, except encoded globals: a nullary
-                            // `:internal-let` function whose value is read from its
+                            // `:internal-role global` function whose value is read from its
                             // FD view (see `lookup_global`). This is the only custom
                             // lookup allowed here.
                             if self.egraph.type_info.is_global(&func_type.name) {
@@ -2561,7 +2563,7 @@ impl<'a> ProofInstrumentor<'a> {
                 res.extend(self.declare_sort(name, is_container));
             }
             ResolvedNCommand::Function(fdecl) => {
-                if fdecl.internal_let && !self.is_encoded_global(fdecl) {
+                if fdecl.role.is_global() && !self.is_encoded_global(fdecl) {
                     res.push(command.to_command().make_unresolved());
                 } else {
                     res.extend(self.term_and_view(fdecl));

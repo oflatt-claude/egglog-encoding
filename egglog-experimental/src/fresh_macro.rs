@@ -93,7 +93,7 @@ fn desugar_fresh_rule(
         cost: first_opts.cost,
         unextractable: first_opts.unextractable,
         hidden: false,
-        let_binding: false,
+        role: egglog::ast::FunctionRole::Ordinary,
     };
 
     // Get just the variable names for rewriting

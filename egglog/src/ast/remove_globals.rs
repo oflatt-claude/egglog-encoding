@@ -60,7 +60,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
     ResolvedCall::Func(Arc::new(FuncType {
         name: var.name.clone(),
         subtype: FunctionSubtype::Custom,
-        internal_view: None,
+        role: crate::ast::FunctionRole::Global,
         input: vec![],
         outputs: vec![var.sort.clone()],
     }))
@@ -97,7 +97,7 @@ impl GlobalRemover<'_> {
                     let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                         name: name.name.clone(),
                         subtype: FunctionSubtype::Custom,
-                        internal_view: None,
+                        role: crate::ast::FunctionRole::Global,
                         input: vec![],
                         outputs: vec![ty.clone()],
                     }));
@@ -112,11 +112,9 @@ impl GlobalRemover<'_> {
                         cost: None,
                         unextractable: true,
                         internal_hidden: false,
-                        internal_let: true,
+                        role: crate::ast::FunctionRole::Global,
                         span: span.clone(),
-                        internal_view: None,
                         identity_vals: None,
-                        internal_term_node: false,
                     };
                     vec![
                         GenericNCommand::Function(func_decl),
@@ -148,7 +146,7 @@ impl GlobalRemover<'_> {
                 let resolved_call = ResolvedCall::Func(Arc::new(FuncType {
                     name: name.name.clone(),
                     subtype: FunctionSubtype::Custom,
-                    internal_view: None,
+                    role: crate::ast::FunctionRole::Global,
                     input: vec![],
                     outputs: vec![ty.clone()],
                 }));
@@ -164,11 +162,9 @@ impl GlobalRemover<'_> {
                     cost: None,
                     unextractable: true,
                     internal_hidden: false,
-                    internal_let: true,
+                    role: crate::ast::FunctionRole::Global,
                     span: span.clone(),
-                    internal_view: None,
                     identity_vals: None,
-                    internal_term_node: false,
                 };
                 let mut new_acts: Vec<_> = acts.into_iter().map(remove_globals_action).collect();
                 new_acts.push(GenericAction::Set(
