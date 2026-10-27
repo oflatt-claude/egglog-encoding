@@ -1181,7 +1181,7 @@ impl<'a> Translator<'a> {
             })
             .ok_or("shape-collision without its class row")?;
         let (c0_eq, c0_row, c0_groups) = self.shape_entry(class_row_proof)?;
-        if c0_row == row {
+        if c0_row == row && self.sub(subst, "_c")? == self.sub(subst, "_c0")? {
             // the row met its own entry under another reading: a symmetry of its class
             let c = self.sub(subst, "_c")?;
             let back = self.slot_map(self.sub(subst, "_back")?)?;
@@ -3364,53 +3364,16 @@ impl<'a> Translator<'a> {
             .unwrap_or_default()
     }
 
-    /// Apply a child proof at a path below the right-hand side of `p`, by
-    /// congruences through the recorded occurrences.
-    fn congr_at(
-        &mut self,
-        p: LiftedId,
-        path: &[usize],
-        cert: LiftedId,
-        occ: &HashMap<Vec<usize>, Occurrence>,
-        prefix: &mut Vec<usize>,
-    ) -> R<LiftedId> {
+    /// Apply a child proof at a path below the right-hand side of `p`.
+    fn congr_at(&mut self, p: LiftedId, path: &[usize], cert: LiftedId) -> R<LiftedId> {
         let (first, rest) = path.split_first().ok_or("empty path")?;
-        if rest.is_empty() {
-            let r = self.out.congr(p, *first, cert).map_err(|e| e.0)?;
-            return Ok(self.note(r));
-        }
-        let rhs = self.out.proposition(p).rhs;
-        let child = match self.out.term_dag.get(rhs) {
-            Term::App(_, kids) => kids[*first],
-            _ => return Err("congruence below a non-application".into()),
-        };
-        prefix.push(*first);
-        let o = *occ
-            .get(prefix)
-            .ok_or_else(|| format!("no occurrence at {prefix:?}"))?;
-        let d = self.dec(o.cls)?;
-        let mut pairs = BTreeMap::new();
-        let base = if self.unify_slots(d, child, &mut pairs).is_ok() {
-            d
-        } else if let Some((row, _)) = o.row {
-            pairs.clear();
-            let dr = self.dec(row)?;
-            self.unify_slots(dr, child, &mut pairs)?;
-            dr
+        let child = if rest.is_empty() {
+            cert
         } else {
-            return Err(format!(
-                "{} is not an occurrence of {}",
-                self.out_string(child),
-                self.out_string(d)
-            ));
+            let refl = self.out.project(p, *first).map_err(|e| e.0)?;
+            self.congr_at(refl, rest, cert)?
         };
-        let rho = Renaming::completing(pairs.into_iter()).ok_or("non-injective occurrence")?;
-        let refl = self.reflexive(base)?;
-        let refl = self.rename_both(refl, &rho); // child = ·base
-        let refl = self.content_form(refl); // child = child
-        let inner = self.congr_at(refl, rest, cert, occ, prefix)?;
-        prefix.pop();
-        let r = self.out.congr(p, *first, inner).map_err(|e| e.0)?;
+        let r = self.out.congr(p, *first, child).map_err(|e| e.0)?;
         Ok(self.note(r))
     }
 
@@ -3540,7 +3503,7 @@ impl<'a> Translator<'a> {
                 p = self.trans(p, cert)?;
                 p = self.content_form(p);
             } else {
-                p = self.congr_at(p, &occ_path, cert, occ, &mut vec![])?;
+                p = self.congr_at(p, &occ_path, cert)?;
                 p = self.content_form(p);
             }
             if self.out.proposition(p).rhs == content {
@@ -3616,7 +3579,7 @@ impl<'a> Translator<'a> {
             p = if occ_path.is_empty() {
                 self.trans(p, cert)?
             } else {
-                self.congr_at(p, &occ_path, cert, occ, &mut vec![])?
+                self.congr_at(p, &occ_path, cert)?
             };
             p = self.content_form(p);
             if self.out.proposition(p).rhs == content {

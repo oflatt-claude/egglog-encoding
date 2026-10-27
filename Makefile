@@ -29,6 +29,7 @@ test: python-test rust-test
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	cargo test --manifest-path slotted/xmulti/Cargo.toml
 	uv run --locked python slotted/checks/check-slotted.py
+	uv run --locked python slotted/checks/check-proofs.py
 
 python-check: python-nits python-test
 
@@ -74,6 +75,8 @@ proof-tests:
 
 slotted-proof-tests:
 	cargo test -p egglog-experimental --test slotted_proof_files
+	cargo build -p egglog-experimental --bin egglog-experimental
+	uv run --locked python slotted/checks/check-proofs.py
 
 # The paper's case studies -- the S4.1 array goal and the S4.2 SDQL workloads -- on the
 # encoding and on the reference through both of its matchers, at the artifact's budgets.

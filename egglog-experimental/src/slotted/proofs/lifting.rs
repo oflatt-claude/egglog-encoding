@@ -191,6 +191,13 @@ impl Lifting {
         Ok(self.record(AppliedEquality { rhs, ..p }, proof, None))
     }
 
+    pub fn project(&mut self, id: LiftedId, child_index: usize) -> Result<LiftedId, MalformedStep> {
+        let inverse = self.proposition(id).renaming.inverse();
+        let proof = self.store.project(self.views[id].proof, child_index)?;
+        let proof = self.store.equivariance(proof, inverse);
+        Ok(self.plain(proof))
+    }
+
     /// Change edge coordinates, leaving its ordinary proof untouched.
     pub fn reframe(&mut self, id: LiftedId, sigma: Renaming) -> LiftedId {
         let p = self.proposition(id).clone();
