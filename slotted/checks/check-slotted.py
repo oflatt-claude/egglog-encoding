@@ -84,6 +84,13 @@ def starts_ok(out):
     return None if out.lstrip().startswith("OK:") else "no OK line"
 
 
+def proof_coverage(count):
+    def rewrites(out):
+        return None if re.search(r"\b[1-9]\d* cases used rewrite steps", out) else "no proofs used rewrite steps"
+
+    return both(ratio(r"(\d+)/(\d+) proof cases checked", count), rewrites)
+
+
 # Check name, Python script/arguments, output validator, fuzzing flag, reference flag.
 CHECKS = [
     ("evaluation-correctness", ("slotted/checks/check-eval.py",), starts_ok, False, True),
@@ -276,6 +283,26 @@ for seed in (0, 1):
             ),
         ]
     )
+    for language, count, flags in (("toy", 40, ()), ("array", 20, ()), ("array-no-aliasing", 20, ("--no-aliasing",))):
+        CHECKS.append(
+            (
+                f"proof-fuzz-{language}-{seed}",
+                ("slotted/xdiff/proofs.py", str(count), str(seed), "--language", language.split("-")[0], *flags),
+                proof_coverage(count),
+                True,
+                False,
+            )
+        )
+
+CHECKS.append(
+    (
+        "proof-fuzz-deep-0",
+        ("slotted/xdiff/proofs.py", "40", "0", "--deep"),
+        proof_coverage(40),
+        True,
+        False,
+    )
+)
 
 
 def main():

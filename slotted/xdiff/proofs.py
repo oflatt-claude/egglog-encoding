@@ -42,6 +42,7 @@ def main():
     parser.add_argument("seed", nargs="?", type=int, default=0)
     parser.add_argument("--language", choices=("toy", "array"), default="toy")
     parser.add_argument("--no-aliasing", action="store_true")
+    parser.add_argument("--deep", action="store_true", help="toy terms with more binders, sharing, and symmetry")
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--failures", type=Path)
     args = parser.parse_args()
@@ -51,6 +52,15 @@ def main():
         parser.error("timeout must be positive")
     if args.no_aliasing and args.language != "array":
         parser.error("--no-aliasing requires --language array; toy rules use multipatterns")
+    if args.deep and args.language != "toy":
+        parser.error("--deep requires --language toy")
+    if args.deep:
+        xdiff.MAX_DEPTH = 3
+        xdiff.DUP_PROB = 0.3
+        xdiff.SYM_PROB = 0.9
+        xdiff.LAM_PROB = 0.55
+        xdiff.SHARE_PROB = 0.7
+        xdiff.USEBIND_PROB = 0.6
     generator = xarray if args.language == "array" else xdiff
     rng = random.Random(args.seed)
     if args.failures:
