@@ -29,13 +29,19 @@ enum RowKind {
 #[derive(Clone, Copy)]
 struct Row {
     kind: RowKind,
+    /// An e-graph value of the proof sort, to be materialized before use.
     proof: Value,
+    /// Existing proof from the view representative to its current leader.
     to_leader: Option<Value>,
 }
 
-/// A canonical runtime value and the view evidence found by lookup.
+/// The lookup result for one node of the input typed DAG.
+/// Its position in the returned vector is that node's `TermId`.
 struct Node {
+    /// Canonical at the input node's sort, including nested container elements.
     value: Value,
+    /// Absent for literals, primitives, and globals without a proof-bearing view.
+    /// Having a value alone does not establish a container's existence.
     row: Option<Row>,
 }
 
@@ -71,6 +77,8 @@ fn ground_expr(dag: &mut TermDag, root: &ResolvedExpr) -> Result<TermId, Error> 
 }
 
 impl EGraph {
+    /// Look up `expr`, extract representatives, and certify each equality.
+    /// Returns the extraction output followed by its proofs; adds no e-graph rows.
     pub(crate) fn run_prove_extract(
         &self,
         expr: &ResolvedExpr,
@@ -111,6 +119,8 @@ impl EGraph {
         ])
     }
 
+    /// Resolve a ground expression to its canonical runtime value without
+    /// inserting rows. Container existence is checked later during certification.
     fn lookup_ground_expr(&self, expr: &ResolvedExpr) -> Result<Value, Error> {
         let mut terms = TermDag::default();
         let root = ground_expr(&mut terms, expr)?;
@@ -232,6 +242,17 @@ impl EGraph {
     }
 }
 
+/// Look up canonical values and available view evidence for every node in `terms`.
+/// The result has `terms.size()` entries: entry `id` describes `terms.get(id)`,
+/// including non-root children. It can be passed directly to [`GroundProofs::build`].
+///
+/// `terms` must have children before parents. `roots` must be nonempty, contain
+/// valid IDs from this DAG, and refer to terms of the same sort. On success,
+/// every root has the same canonical value. No e-graph rows are inserted.
+///
+/// Errors on missing rows or proof columns, unsupported or failed primitive
+/// evaluation, or unequal root values. Container values may still lack an
+/// existence witness; this is checked when their certificates are completed.
 fn lookup(egraph: &EGraph, terms: &TypedTermDag, roots: &[TermId]) -> Result<Vec<Node>, Error> {
     if egraph
         .get_sort_by_name(&egraph.proof_state.proof_names.proof_datatype)
@@ -346,6 +367,8 @@ fn lookup(egraph: &EGraph, terms: &TypedTermDag, roots: &[TermId]) -> Result<Vec
     Ok(nodes)
 }
 
+/// Follow source global aliases to the binding that supplies their evidence.
+/// A name with no source alias is returned unchanged.
 fn global_origin(egraph: &EGraph, name: &str) -> String {
     let mut origin = name.to_owned();
     let mut seen = HashSet::default();
@@ -373,6 +396,9 @@ fn global_origin(egraph: &EGraph, name: &str) -> String {
     origin
 }
 
+/// Return `value` with equality-sort elements replaced by their leaders,
+/// including inside nested containers. Errors if a container cannot be rebuilt.
+/// The value must belong to `sort`; no e-graph rows are inserted.
 fn canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Result<Value, Error> {
     if sort.is_eq_container_sort() {
         egraph
@@ -391,6 +417,9 @@ fn canonical(egraph: &EGraph, value: Value, sort: &ArcSort) -> Result<Value, Err
     }
 }
 
+/// Read the union-find proof connecting a view's output to `leader`.
+/// Returns `None` when the values already agree or `sort` is not an equality sort.
+/// Otherwise errors if the stored edge is missing or ends at a different value.
 fn to_leader(
     egraph: &EGraph,
     raw: Value,
@@ -440,6 +469,7 @@ struct ContainerProof {
 }
 
 impl TermProof {
+    /// Return the certificate if it is already available, without completing a recipe.
     fn ready(&self) -> Option<RawProofId> {
         match &self.proof {
             ProofResult::Ready(proof) => Some(*proof),
@@ -448,6 +478,7 @@ impl TermProof {
     }
 }
 
+/// A typed input node's runtime value and proof obligation in the lifter's DAG.
 struct TermEvidence {
     value: Value,
     proof: Rc<TermProof>,
@@ -463,6 +494,8 @@ struct GroundProofs<'a> {
 }
 
 impl<'a> GroundProofs<'a> {
+    /// Start certification against this e-graph's proof-checking source program.
+    /// Requires valid source actions; errors on ambiguous primitive value constructors.
     fn new(egraph: &'a EGraph) -> Result<Self, Error> {
         let normalizers = egraph
             .type_info
@@ -494,6 +527,8 @@ impl<'a> GroundProofs<'a> {
         })
     }
 
+    /// Materialize an existing proof-sort value into the shared raw proof store.
+    /// Errors if the proof sort or a reconstructable proof term is unavailable.
     fn import(&mut self, value: Value) -> Result<RawProofId, Error> {
         let sort = self
             .egraph
@@ -507,8 +542,10 @@ impl<'a> GroundProofs<'a> {
         Ok(self.proofs.parse(term))
     }
 
-    /// Return evidence in typed-node order. `values` must come from lookup of
-    /// the same DAG. Container evidence may still need an existence witness.
+    /// Return one evidence entry per typed node, indexed by its input `TermId`.
+    /// `values` must be the complete result of [`lookup`] for this same DAG.
+    /// Container evidence may still need an existence witness. Errors if existing
+    /// evidence cannot certify a node or a primitive result cannot be validated.
     fn build(
         &mut self,
         terms: &TypedTermDag,
@@ -620,8 +657,11 @@ impl<'a> GroundProofs<'a> {
         Ok(results)
     }
 
-    /// Resolve the evaluated result of a primitive. Its elements need not be
-    /// the primitive's syntactic arguments, as with set-intersect or vec-get.
+    /// Return evidence for an evaluated term in the lifter's DAG at `sort`.
+    /// Container results may be deferred. Errors if typing, normalization, or
+    /// finding evidence for non-value elements fails.
+    // Result elements need not be the primitive's syntactic arguments:
+    // set-intersect returns a set-of, while vec-get returns one element.
     fn for_term(&mut self, term: TermId, sort: ArcSort) -> Result<Rc<TermProof>, Error> {
         let key = (sort.name().to_owned(), term);
         if let Some(proof) = self.terms.get(&key) {
@@ -685,8 +725,10 @@ impl<'a> GroundProofs<'a> {
         Ok(result)
     }
 
-    /// Complete a container recipe using a witness from its parent or root lookup.
-    /// The caller must establish existence at the requested sort.
+    /// Prove `term.term = term.leader`, completing a container recipe if needed.
+    /// The caller must establish existence at the requested sort. `witness` may
+    /// end at either endpoint; otherwise imported evidence is searched for one.
+    /// Errors if no suitable witness or element rewrite can establish the equality.
     /// Only successful completions are memoized, so missing context is not cached.
     fn complete(
         &mut self,
@@ -774,6 +816,7 @@ impl<'a> GroundProofs<'a> {
 
     /// Certify a root, looking up typed container evidence when needed.
     /// `equal_root`, if supplied, must certify the same sort and runtime value.
+    /// Errors if existing rows and source actions cannot establish the requested term.
     fn root(
         &mut self,
         evidence: &TermEvidence,
@@ -858,6 +901,8 @@ impl<'a> GroundProofs<'a> {
         self.complete(term, None)
     }
 
+    /// Compose raw proofs, returning an error if their middle terms differ.
+    /// Inspecting the endpoints lifts the supplied proofs on demand.
     fn trans(&mut self, left: RawProofId, right: RawProofId) -> Result<RawProofId, Error> {
         if self.proofs.proposition(left).rhs() != self.proofs.proposition(right).lhs() {
             return Err(fail("proof evidence does not connect at the leader"));
@@ -865,6 +910,9 @@ impl<'a> GroundProofs<'a> {
         Ok(self.proofs.trans(left, right))
     }
 
+    /// Replace child `index` of the right endpoint using `child`.
+    /// Lifts the premises to check that the child's left endpoint matches;
+    /// returns an error on an invalid index or a different term.
     fn congr(
         &mut self,
         proof: RawProofId,
