@@ -266,6 +266,25 @@ fn container_normalization_and_nesting() {
 }
 
 #[test]
+fn normalization_cannot_invent_discarded_container_elements() {
+    let mut graph = graph(
+        "(datatype E (A) (B)) (sort S (Set E)) (datatype Box (Wrap S))
+        (Wrap (set-of (A))) (B) (union (A) (B)) (run 1)",
+    );
+    let before = graph.num_nodes();
+    let error = graph
+        .parse_and_run_program(None, "(prove-extract (Wrap (set-of (A) (B))))")
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Could not find term (set-of (A) (B)) in the e-graph"),
+        "{error}"
+    );
+    assert_eq!(graph.num_nodes(), before);
+}
+
+#[test]
 fn contextual_empty_containers_and_base_containers() {
     let mut graph = graph(
         r#"(datatype E (A)) (sort V (Vec E)) (sort VI (Vec i64))
@@ -316,6 +335,13 @@ fn container_selectors_project_elements_from_existing_functions() {
     );
     extracted(&mut graph, "(prove-extract (vec-get (vec-get (root) 0) 0))");
     extracted(&mut graph, "(prove-extract (vec-get (root) 0))");
+    assert_eq!(
+        extracted(
+            &mut graph,
+            "(prove-extract (+ (vec-length (vec-get (root) 0)) 2))"
+        )[0],
+        ("3".into(), "3".into())
+    );
 }
 
 #[test]
