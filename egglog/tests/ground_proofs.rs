@@ -131,6 +131,28 @@ fn containers_reuse_existing_row_projections() {
 }
 
 #[test]
+fn shared_container_can_be_evaluated_then_proved_in_different_parents() {
+    let mut graph = graph(
+        "(datatype E (A) (B)) (sort V (Vec E))
+        (datatype Box (Measured i64 V) (Wrap V) (Both Box Box))
+        (Both (Measured 1 (vec-of (A))) (Wrap (vec-of (A))))
+        (B) (union (A) (B)) (run 1)",
+    );
+    // The same vector is first an argument to scalar evaluation, then needs
+    // existence evidence from two different constructor rows.
+    let proofs = extracted(
+        &mut graph,
+        "(prove-extract (Both
+            (Measured (vec-length (vec-of (B))) (vec-of (B)))
+            (Wrap (vec-of (B)))))",
+    );
+    assert_eq!(
+        proofs[0].0,
+        "(Both (Measured 1 (vec-of (B))) (Wrap (vec-of (B))))"
+    );
+}
+
+#[test]
 fn an_unwitnessed_container_is_not_assumed_by_fiat() {
     let mut graph = graph("(datatype E (A)) (sort V (Vec E)) (A)");
     let sort = graph.type_info().get_sort_by_name("V").unwrap().clone();

@@ -6,8 +6,8 @@ use crate::{
     },
     proofs::{
         proof_checker::{
-            ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst, eval_merge_expr,
-            gather_globals, run_merge,
+            ActionContext, ProofCheckError, ProofCheckErrorKind, eval_expr_with_subst,
+            eval_merge_expr, gather_global_actions, process_actions, run_merge,
         },
         proof_encoding_helpers::{EncodingNames, Skeleton, holds_sort, recomputable_premises},
         proof_head::{Firing, HeadPlan, HeadWalk, ProofAlgebra},
@@ -17,10 +17,10 @@ use crate::{
 };
 use egglog_ast::generic_ast::Literal;
 use egglog_numeric_id::{DenseIdMap, NumericId, define_id};
-use std::{fmt, rc::Rc};
+use std::{fmt, mem::swap, rc::Rc};
 
 define_id!(
-    RawProofId,
+    pub(super) RawProofId,
     u32,
     "An identifier for a proof in a RawProofStore"
 );
@@ -125,6 +125,195 @@ struct RawProofStore {
     term_to_proof: HashMap<TermId, RawProofId>,
 }
 
+/// A shared raw-proof builder using the normal lifter for conclusions on demand.
+/// Raw proof IDs and term IDs remain valid until this builder is finished.
+pub(super) struct ProofLifter<'a> {
+    raw: RawProofStore,
+    lifted: ProofStore,
+    program: &'a Vec<ResolvedNCommand>,
+    pub(super) source: ActionContext,
+}
+
+impl<'a> ProofLifter<'a> {
+    pub(super) fn new(
+        names: &EncodingNames,
+        program: &'a Vec<ResolvedNCommand>,
+        normalizers: HashMap<String, PrimitiveValidator>,
+        value_heads: HashSet<String>,
+    ) -> Self {
+        Self::from_raw(
+            RawProofStore {
+                term_dag: TermDag::default(),
+                names: names.clone(),
+                store: IndexSet::default(),
+                term_to_proof: HashMap::default(),
+            },
+            program,
+            normalizers,
+            value_heads,
+        )
+    }
+
+    fn from_raw(
+        mut raw: RawProofStore,
+        program: &'a Vec<ResolvedNCommand>,
+        normalizers: HashMap<String, PrimitiveValidator>,
+        value_heads: HashSet<String>,
+    ) -> Self {
+        let actions = gather_global_actions(program).collect::<Vec<_>>();
+        let source = process_actions(
+            "global_actions",
+            HashMap::default(),
+            &actions,
+            &mut raw.term_dag,
+        )
+        .expect("proof lifting requires valid source actions");
+        let mut lifted = ProofStore::new(TermDag::default(), normalizers, value_heads);
+        for (at, command) in program.iter().enumerate() {
+            if let ResolvedNCommand::NormRule { rule } = command {
+                lifted.rule_at.entry(rule.name.clone()).or_insert(at);
+            }
+        }
+        Self {
+            raw,
+            lifted,
+            program,
+            source,
+        }
+    }
+
+    pub(super) fn terms(&self) -> &TermDag {
+        &self.raw.term_dag
+    }
+
+    pub(super) fn terms_mut(&mut self) -> &mut TermDag {
+        &mut self.raw.term_dag
+    }
+
+    pub(super) fn source_expr(&mut self, expr: &ResolvedExpr) -> Result<TermId, ProofCheckError> {
+        eval_expr_with_subst(
+            "global_actions",
+            expr,
+            &mut self.raw.term_dag,
+            &self.source.var_bindings,
+        )
+        .map(|(term, _)| term)
+    }
+
+    pub(super) fn parse(&mut self, term: TermId) -> RawProofId {
+        self.raw.parse_nested_first(term);
+        self.raw.parse_proof(term)
+    }
+
+    pub(super) fn add(&mut self, proof: RawProof) -> RawProofId {
+        self.raw.add_proof(proof)
+    }
+
+    pub(super) fn project(&mut self, proof: RawProofId, child: usize) -> RawProofId {
+        self.add(RawProof::Proj(proof, child))
+    }
+
+    pub(super) fn normalize(&mut self, proof: RawProofId) -> RawProofId {
+        self.add(RawProof::ContainerNormalize(proof))
+    }
+
+    // Both parsing and lifting append to the same term DAG. Conversion reads
+    // parsed raw nodes, so it does not need the parser's term DAG while running.
+    fn with_store<T>(&mut self, f: impl FnOnce(&mut ProofStore, &RawProofStore) -> T) -> T {
+        swap(&mut self.raw.term_dag, &mut self.lifted.term_dag);
+        let result = f(&mut self.lifted, &self.raw);
+        swap(&mut self.raw.term_dag, &mut self.lifted.term_dag);
+        result
+    }
+
+    pub(super) fn lift(&mut self, proof: RawProofId) -> ProofId {
+        let program = self.program;
+        // The conversion callback also reads globals while appending endpoint terms.
+        swap(&mut self.raw.term_dag, &mut self.lifted.term_dag);
+        let id =
+            self.lifted
+                .convert_raw_proof(program, &self.source.var_bindings, &self.raw, proof);
+        swap(&mut self.raw.term_dag, &mut self.lifted.term_dag);
+        id
+    }
+
+    pub(super) fn proposition(&mut self, proof: RawProofId) -> Proposition {
+        let id = self.lift(proof);
+        self.lifted.get(id).proposition().clone()
+    }
+
+    pub(super) fn is_value(&mut self, term: TermId) -> bool {
+        self.with_store(|store, _| store.reflexive_value_term(term))
+    }
+
+    /// Find an existing raw equality with exactly these endpoints.
+    pub(super) fn equality(&mut self, wanted: &Proposition) -> Option<RawProofId> {
+        for at in 0..self.raw.store.len() {
+            if matches!(self.raw.store[at], RawProof::Eval) {
+                continue;
+            }
+            let id = RawProofId::from_usize(at);
+            let prop = self.proposition(id);
+            if &prop == wanted {
+                return Some(id);
+            }
+            if prop.lhs() == wanted.rhs() && prop.rhs() == wanted.lhs() {
+                return Some(self.sym(id));
+            }
+        }
+        None
+    }
+
+    /// Find an existing proof ending at `term`, projecting an endpoint if needed.
+    /// The caller must establish the requested sort's provenance separately.
+    pub(super) fn witness(&mut self, term: TermId) -> Option<RawProofId> {
+        for at in 0..self.raw.store.len() {
+            if matches!(self.raw.store[at], RawProof::Eval) {
+                continue;
+            }
+            let id = RawProofId::from_usize(at);
+            let prop = self.proposition(id);
+            for (endpoint, reverse) in [(prop.rhs(), false), (prop.lhs(), true)] {
+                let path = if endpoint == term {
+                    Some(vec![])
+                } else {
+                    self.with_store(|store, _| store.projection_path_to_descendant(endpoint, term))
+                };
+                if let Some(path) = path {
+                    let mut proof = if reverse { self.sym(id) } else { id };
+                    for child in path {
+                        proof = self.project(proof, child);
+                    }
+                    return Some(proof);
+                }
+            }
+        }
+        None
+    }
+
+    /// Return all lifted proofs. Call `lift` on each desired root before finishing.
+    pub(super) fn finish(mut self) -> ProofStore {
+        swap(&mut self.raw.term_dag, &mut self.lifted.term_dag);
+        self.lifted
+    }
+}
+
+impl ProofAlgebra for ProofLifter<'_> {
+    type Proof = RawProofId;
+
+    fn sym(&mut self, proof: RawProofId) -> RawProofId {
+        self.add(RawProof::Sym(proof))
+    }
+
+    fn trans(&mut self, left: RawProofId, right: RawProofId) -> RawProofId {
+        self.add(RawProof::Trans(left, right))
+    }
+
+    fn congr(&mut self, proof: RawProofId, child: usize, step: RawProofId) -> RawProofId {
+        self.add(RawProof::Congr(proof, child, step))
+    }
+}
+
 pub(crate) fn proof_store_from_term(
     encoding_names: &EncodingNames,
     term_dag: TermDag,
@@ -181,7 +370,7 @@ pub(super) fn proof_store_from_terms(
 /// leaves off the implicit rule substitution.
 /// Converting to a [`Proof`] with [`ProofStore::from_raw`] fills in these details.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-enum RawProof {
+pub(super) enum RawProof {
     /// Equalities added at the top level are justified by fiat.
     Fiat(TermId, TermId),
     /// A top-level `union`, named by which global action it is rather than by
@@ -994,24 +1183,17 @@ impl ProofStore {
         container_normalizers: HashMap<String, PrimitiveValidator>,
         prim_value_constructors: HashSet<String>,
     ) -> (ProofStore, Vec<ProofId>) {
-        let mut store = ProofStore::new(
-            raw_store.term_dag.clone(),
+        let mut lifter = ProofLifter::from_raw(
+            raw_store,
+            prog,
             container_normalizers,
             prim_value_constructors,
         );
-        for (at, command) in prog.iter().enumerate() {
-            if let ResolvedNCommand::NormRule { rule } = command {
-                store.rule_at.entry(rule.name.clone()).or_insert(at);
-            }
-        }
-        let globals = gather_globals(prog, &mut store.term_dag)
-            .unwrap_or_else(|_| panic!("failed to gather globals from program"));
-
         let roots = raw_proof_ids
             .iter()
-            .map(|&root| store.convert_raw_proof(prog, &globals, &raw_store, root))
+            .map(|&root| lifter.lift(root))
             .collect();
-        (store, roots)
+        (lifter.finish(), roots)
     }
 
     /// Reflexivize a (possibly non-reflexive) proof for use where the checker

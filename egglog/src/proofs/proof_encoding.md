@@ -958,76 +958,81 @@ custom function, or global. The printed `:internal-role` annotation preserves
 this distinction during desugared replay. Sorts and primitives come from the same
 environment.
 
-### Lookup, preparation, and composition
+### Looking up values and building evidence
 
-The implementation in `ground.rs` separates runtime lookup from proof
-construction. Each pass finishes before the next one starts:
+`ground.rs` first looks up each typed node's canonical value and any view proof
+or union-find proof. It rejects missing rows and roots with different values.
+This pass evaluates primitives without requiring proofs for temporary containers:
+`vec-length(vec-of(a))` can evaluate to a literal even when that vector has no
+existence witness.
 
-| Pass | Result and invariant | State that ends with the pass |
-| --- | --- | --- |
-| `Lookup` | Canonical values for the typed nodes, references to view/union proofs, and equal values for all roots. | Traversal scratch. |
-| `Lookup::prepare` | `PreparedProofs`: one `ProofNode` per typed node, a shared proof store, and witnesses from source actions. Each node has its requested endpoints, materialized row evidence, and any container element types. | Runtime values, the mapping from evidence indices to proof IDs, and global substitutions. `Lookup` is consumed. |
-| `Witnesses::collect` | Existing equalities indexed by endpoints, and proofs of existence indexed by the term they reach. | Projection traversal and the list of terms established by source actions. |
-| `PreparedProofs::compose` | One `term = leader` certificate per requested root, in root order. | Per-node certificates and the indexes used to assemble them. |
+The evidence builder visits the typed DAG with children before parents. Each
+node returns its runtime value and a shared `TermProof`: the evaluated source
+term, its leader, and one of two proof results:
 
-Preparation converts the collected evidence into one `ProofStore`, preserving
-shared dependencies. It also names each node's requested term and leader in the
-store's term DAG. Naming an endpoint does not insert it into the e-graph or prove
-it exists. Globals use their original source definitions, and primitive
-validators produce evaluated terms. A custom function's result is obtained by
-projecting its existing row proof.
+- `Ready` contains a raw proof of `term = leader`.
+- `NeedsWitness` contains a container recipe: evidence for its elements and a
+  slot for a completed proof. The recipe can be completed once a parent row or
+  root lookup supplies an existence witness.
 
-There are two independent ID domains. The `PreparedProofs::nodes` vector and the
-completed per-node certificates are indexed by the typed input DAG. The
-`Proposition` in each node, the witness indexes, and container element terms use
-IDs in `ProofStore::term_dag`. An index from one DAG cannot be used in the other.
+Evidence is memoized by sort and evaluated term. Successful completion fills
+that recipe's slot, so multiple parents reuse the same proof. Temporary
+containers used only during primitive evaluation need never be completed.
 
-Witness collection includes the dependencies of materialized proofs, because
-container rebuilding may have removed an original term from the current row.
-It indexes equalities in both directions and projects their subterms. A witness
-for `t` is a proof ending at `t`; symmetry and transitivity then justify `t = t`.
-An `Eval` side-condition marker alone is not an existence proof. A bare source
-container action can also provide a witness, but only for a proposition that
-processing the actual source actions established.
+There are two independent ID domains. Traversal results are indexed by the
+typed input DAG. Evaluated terms and raw proof endpoints belong to the lifter's
+term DAG; IDs from one DAG cannot be used in the other.
 
-Composition uses these prepared terms and witnesses without access to the
-e-graph. It checks that every completed certificate has exactly the prepared
-endpoints. The input is visited before extraction results, with children before
-parents, so a certificate for an input container can supply the witness needed
-for another representative. Finally, the caller combines `e = leader` with the
-reverse of `t = leader` to prove `e = t`, and checks the proof before and after
-simplification when proof verification is enabled.
-
-### Constructing a certificate
+### Completing a certificate
 
 For a constructor `F(b)`, suppose the child certificate is `b = a`, the view
-proof is `r = F(a)`, and the union proof is `r = leader`. Reverse the child
+proof is `r = F(a)`, and the union-find proof is `r = leader`. Reverse the child
 certificate and apply congruence to the view proof to obtain `r = F(b)`. Reversing
-that proof and composing with the union proof gives `F(b) = leader`. This works
-even if the exact syntax `F(b)` was never inserted: the existing view row is
-looked up using the canonical child value.
+that proof and composing with the union-find proof gives `F(b) = leader`. The
+existing view row is looked up using the canonical child value, so the exact
+syntax `F(b)` need not have been inserted.
 
-Containers need an additional existence witness because they have no constructor
-view of their own. For example, a proof ending at `Wrap(vec-of(a))` can be
-projected to prove `vec-of(a) = vec-of(a)`. Given `a = b`, congruence then proves
-`vec-of(a) = vec-of(b)`. `ContainerNormalize` handles the container's normal form,
-including set ordering and duplicate removal. If only the leader endpoint has
-a witness, composition performs the element rewrites in reverse and reverses
-the resulting equality. Having a proof about `a` alone does not justify assuming
-that `vec-of(a)` exists.
+Containers have no constructor view of their own. For `Wrap(vec-of(b))`, the
+child initially returns a deferred recipe. The `Wrap` row supplies a proof
+ending at `Wrap(vec-of(a))`; projecting it supplies the container's witness.
+The recipe uses the element proof `b = a` and congruence to connect `vec-of(b)`
+to `vec-of(a)`, then the enclosing constructor certificate can be completed.
+A nested container receives a witness projected from its enclosing container.
+Having evidence for `a` alone does not establish that `vec-of(a)` exists.
 
-Proof terms are untyped, so preparation also checks that a container root has a
-witness at the requested sort. Evidence for `(vec-empty)` as `Vec A` cannot
-establish its existence as `Vec B`. Element certificates are indexed by both
-sort and evaluated term for the same reason.
+A recipe can start from either endpoint's witness. `ContainerNormalize` handles
+ordering and duplicate removal after the element rewrites. When normalization
+has discarded elements, the recipe needs the original container witness from
+the existing row proof's dependencies: a smaller canonical container cannot
+supply the missing occurrences. Element occurrences remain distinct when doing
+positional congruence, even when several elements belong to the same e-class.
 
-Those element types must describe the evaluated result, not the primitive's
-arguments. For example, `set-intersect` takes sets but evaluates to `set-of` with
-element children. Preparation typechecks the evaluated container endpoints to
-recover those element sorts before composition looks up their certificates.
+A container root has no parent, so lookup searches typed view columns, including
+nested containers, or actual source actions. Proof terms themselves are untyped:
+a witness for `(vec-empty)` at `Vec A` cannot establish its existence at `Vec B`.
+The input root's completed certificate can witness another result with the same
+sort and canonical value. Source actions justify only propositions actually
+established by processing those actions; certification never inserts a new
+container and assumes it by fiat.
 
-Only propositions needed for certificates are constructed. Evaluating
-`vec-length(vec-of(a))` to a literal does not require asserting the existence of
-the temporary vector. Constructor arguments still require successful view
-lookups, even when used during primitive evaluation. Missing terms remain errors;
-no new proof rule or checker behavior is needed.
+Element types describe the evaluated result. For example, `set-intersect` takes
+sets but evaluates to `set-of` with element children. The builder typechecks
+that evaluated form against its known result sort before constructing a recipe.
+Globals retain their original source definitions; custom function results use
+projection from their existing row evidence.
+
+### Reusing the proof lifter
+
+`ProofLifter` accepts both materialized e-graph proofs and raw proof steps built
+by certification. It uses the ordinary conversion to the public proof format,
+with shared dependencies and a single term DAG. Conversion runs on demand when
+the builder needs an endpoint, such as a custom function's result, a global's
+source connector, or an existence witness in historical evidence. The builder
+does not maintain separate global indexes of every endpoint, projection, and
+equality. An `Eval` side-condition marker alone is never treated as an existence
+proof.
+
+Finally, certification combines `e = leader` with the reverse of `t = leader`
+to prove `e = t`, lifts that proof, and checks it before and after simplification
+when proof verification is enabled. The raw proof algebra, public proof format,
+and checker rules are unchanged.
