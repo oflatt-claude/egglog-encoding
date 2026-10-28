@@ -226,20 +226,25 @@ def program(language, lang, rules, terms, unions, probes, rounds, *, defer_probe
     source.append(f"(run {rounds})")
     if defer_probes:
         source.extend(probe_terms)
+    # Capture probe values while source globals are still in scope. Desugaring
+    # can replace their bindings with shared-table rows, so appended observers
+    # must not refer to the original global names.
+    source.append(f"(relation ProbeId ({symbols.sort} i64))")
+    bindings = [f"(ProbeId {var if t[0] == 'var' else f'$_p{i}'} {i})" for i, t in enumerate(probes)]
+    if bindings:
+        source.append("(begin " + " ".join(bindings) + ")")
     source.append("(run 0)")
     encoded = compile_source("\n".join(source))
-    # Observations run after the budget, without another rewrite or maintenance round.
+    # Partition queries run after the budget and final maintenance.
     observer = [
         f"""
 (ruleset probes)
-(relation ProbeId ({symbols.sort} i64))
 (relation SameClass (i64 i64))
 (rule ((ProbeId a i) (ProbeId b j)
        ({symbols.renames} a m1 l) ({symbols.renames} b m2 l))
       ((SameClass i j)) :ruleset probes)
 """
     ]
-    observer.extend(f"(ProbeId {var if t[0] == 'var' else f'$_p{i}'} {i})" for i, t in enumerate(probes))
     observer += ["(run-schedule (saturate (run probes)))", "(print-function SameClass 100000)"]
     return encoded + "\n".join(observer) + "\n"
 

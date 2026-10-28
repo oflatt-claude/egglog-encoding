@@ -326,7 +326,9 @@ impl Inference<'_> {
     }
 }
 
-fn reachable_terms(
+/// Return reachable IDs in child-before-parent order.
+/// Errors on invalid IDs, forward references, or cycles; ignores unreachable nodes.
+pub(crate) fn reachable_terms(
     terms: &TermDag,
     roots: impl Iterator<Item = TermId>,
 ) -> Result<Vec<TermId>, GroundTypeError> {

@@ -456,6 +456,27 @@ fn global_aliases_keep_their_provenance() {
         (rewrite (B) (A)) (run 1) (let first (B)) (let second first) (delete (B))"#,
     );
     assert_eq!(extracted(&mut graph, "(prove-extract second)")[0].0, "(B)");
+
+    let mut terms = TermDag::default();
+    let alias = terms.app("second".into(), vec![]);
+    let a = terms.app("A".into(), vec![]);
+    // Unreachable malformed syntax does not affect certification.
+    let invalid = terms.app("missing".into(), vec![usize::MAX]);
+    let sort = graph.type_info().get_sort_by_name("E").unwrap().clone();
+    let before = graph.num_nodes();
+    let (store, proof) = graph
+        .prove_equal_terms(&terms, alias, a, sort.clone())
+        .unwrap();
+    assert_eq!(store.term_dag().to_string(store.get(proof).lhs()), "(B)");
+    assert_eq!(store.term_dag().to_string(store.get(proof).rhs()), "(A)");
+    assert_eq!(graph.num_nodes(), before);
+    for root in [invalid, usize::MAX] {
+        assert!(
+            graph
+                .prove_equal_terms(&terms, root, a, sort.clone())
+                .is_err()
+        );
+    }
 }
 
 #[test]

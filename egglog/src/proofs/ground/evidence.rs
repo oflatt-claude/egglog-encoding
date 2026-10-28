@@ -411,7 +411,7 @@ impl Proofs {
         Ok(proof)
     }
 
-    /// Lift completed roots with the ordinary converter, preserving their order.
+    /// Lift completed roots with the ordinary lifter, preserving their order.
     pub(super) fn lift(
         self,
         program: &Vec<ResolvedNCommand>,

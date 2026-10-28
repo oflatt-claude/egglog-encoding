@@ -243,6 +243,7 @@ pub struct TypeInfo {
     primitives: HashMap<String, Vec<PrimitiveWithId>>,
     func_types: HashMap<String, Arc<FuncType>>,
     pub(crate) global_sorts: HashMap<String, ArcSort>,
+    pub(crate) global_tables: crate::ast::remove_globals::GlobalTables,
     /// Sorts that do not allow union (e.g., from `:no-union` sorts or relations).
     pub(crate) non_unionable_sorts: HashSet<String>,
     /// Declared indexes, by the name their atoms are written with.
@@ -705,14 +706,6 @@ impl EGraph {
                     let (name, id_sort, arg_sorts) =
                         (resolved.name.clone(), id_sort.clone(), arg_sorts.to_vec());
                     register_mint(self, &name, arg_sorts, id_sort);
-                }
-                // If this is a let binding, add it to global_sorts
-                // This preserves behavior for lets after desugaring
-                if resolved.role.is_global() {
-                    let output_sort = self.type_info.sorts.get(fdecl.schema.output()).unwrap();
-                    self.type_info
-                        .global_sorts
-                        .insert(fdecl.name.clone(), output_sort.clone());
                 }
                 ResolvedNCommand::Function(resolved)
             }
@@ -1692,6 +1685,7 @@ impl TypeInfo {
 
     /// Check if an expression contains non-global function lookups (FunctionSubtype::Custom calls).
     /// Global reads are allowed; the term/proof encoding handles them separately.
+    /// Use the resolved function's flag so this also works after its scope is popped.
     /// Returns Some(span) if a lookup is found, None otherwise.
     pub fn expr_has_function_lookup(&self, expr: &ResolvedExpr) -> Option<Span> {
         use ast::GenericExpr;
@@ -1699,7 +1693,7 @@ impl TypeInfo {
         expr.find(&mut |e| {
             if let GenericExpr::Call(span, ResolvedCall::Func(func_type), _) = e
                 && func_type.subtype == FunctionSubtype::Custom
-                && !self.is_global(&func_type.name)
+                && !func_type.role.is_global()
             {
                 return Some(span.clone());
             }
