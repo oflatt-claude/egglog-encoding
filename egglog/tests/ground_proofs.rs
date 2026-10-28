@@ -126,8 +126,6 @@ fn containers_reuse_existing_row_projections() {
     let wa = terms.app("Wrap".into(), vec![va]);
     let wb = terms.app("Wrap".into(), vec![vb]);
     prove(&mut graph, &terms, wb, wa, "Box");
-    // Container roots obtain their anchor from the existing Wrap row too.
-    prove(&mut graph, &terms, vb, va, "V");
 }
 
 #[test]
@@ -153,7 +151,7 @@ fn shared_container_can_be_evaluated_then_proved_in_different_parents() {
 }
 
 #[test]
-fn an_unwitnessed_container_is_not_assumed_by_fiat() {
+fn container_roots_are_rejected_without_insertion() {
     let mut graph = graph("(datatype E (A)) (sort V (Vec E)) (A)");
     let sort = graph.type_info().get_sort_by_name("V").unwrap().clone();
     let mut terms = TermDag::default();
@@ -166,7 +164,7 @@ fn an_unwitnessed_container_is_not_assumed_by_fiat() {
     assert!(
         error
             .to_string()
-            .contains("Could not find term (vec-of (A)) in the e-graph")
+            .contains("proof extraction does not support container roots (sort V)")
     );
     assert_eq!(graph.num_nodes(), before);
 }
@@ -266,6 +264,23 @@ fn container_normalization_and_nesting() {
 }
 
 #[test]
+fn a_rule_derived_container_reuses_its_pre_rebuild_witness() {
+    let mut graph = graph(
+        r#"(datatype E (A) (B)) (sort S (Set E)) (sort V (Vec S))
+        (datatype Box (Wrap V)) (A) (B)
+        (rule ((= a (A)) (= b (B)))
+              ((Wrap (vec-of (set-of a b)))) :name "build-container")
+        (run 1) (union (A) (B)) (run 1)"#,
+    );
+    let proofs = extracted(
+        &mut graph,
+        "(prove-extract (Wrap (vec-of (set-of (A) (B)))))",
+    );
+    assert_eq!(proofs[0].0, "(Wrap (vec-of (set-of (A) (B))))");
+    assert_eq!(proofs[0].1, "(Wrap (vec-of (set-of (A))))");
+}
+
+#[test]
 fn normalization_cannot_invent_discarded_container_elements() {
     let mut graph = graph(
         "(datatype E (A) (B)) (sort S (Set E)) (datatype Box (Wrap S))
@@ -308,22 +323,36 @@ fn custom_function_container_arguments() {
 }
 
 #[test]
-fn root_containers_can_be_nested_or_source_actions() {
+fn container_roots_are_rejected_even_when_evidence_exists() {
     let mut graph = graph(
         r#"(datatype E (A)) (sort V (Vec E)) (sort VV (Vec V))
-        (datatype Box (Wrap VV)) (Wrap (vec-of (vec-of (A))))"#,
+        (datatype Box (Wrap VV)) (Wrap (vec-of (vec-of (A))))
+        (function root () V :merge old) (set (root) (vec-of (A)))"#,
     );
-    assert_eq!(
-        extracted(&mut graph, "(prove-extract (vec-of (A)))")[0].0,
-        "(vec-of (A))"
+    let before = graph.num_nodes();
+    for command in ["(prove-extract (vec-of (A)))", "(prove-extract (root))"] {
+        let error = graph.parse_and_run_program(None, command).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support container roots"),
+            "{error}"
+        );
+        assert_eq!(graph.num_nodes(), before);
+    }
+    let mut terms = TermDag::default();
+    let root = terms.app("root".into(), vec![]);
+    let sort = graph.type_info().get_sort_by_name("V").unwrap().clone();
+    let error = graph
+        .prove_extracted_terms(&terms, root, &[], sort)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("does not support container roots")
     );
-    let mut bare = EGraph::new_with_proofs();
-    bare.parse_and_run_program(None, "(datatype E (A)) (sort V (Vec E)) (vec-of (A))")
-        .unwrap();
-    assert_eq!(
-        extracted(&mut bare, "(prove-extract (vec-of (A)))")[0].0,
-        "(vec-of (A))"
-    );
+    assert_eq!(graph.num_nodes(), before);
+    extracted(&mut graph, "(prove-extract (Wrap (vec-of (vec-of (A)))))");
 }
 
 #[test]
@@ -334,7 +363,6 @@ fn container_selectors_project_elements_from_existing_functions() {
         (rewrite (A) (B)) (run 1)"#,
     );
     extracted(&mut graph, "(prove-extract (vec-get (vec-get (root) 0) 0))");
-    extracted(&mut graph, "(prove-extract (vec-get (root) 0))");
     assert_eq!(
         extracted(
             &mut graph,
@@ -449,33 +477,24 @@ fn repeated_equal_elements_keep_the_requested_representative_at_each_position() 
 }
 
 #[test]
-fn empty_container_existence_is_specific_to_its_sort() {
+fn empty_container_roots_are_rejected_at_each_sort() {
     let mut graph = graph(
         "(datatype A (MakeA)) (datatype B (MakeB)) (sort As (Vec A)) (sort Bs (Vec B)) (datatype Box (Wrap Bs)) (Wrap (vec-empty))",
     );
     let mut terms = TermDag::default();
     let empty = terms.app("vec-empty".into(), vec![]);
-    let as_sort = graph.type_info().get_sort_by_name("As").unwrap().clone();
-    let bs_sort = graph.type_info().get_sort_by_name("Bs").unwrap().clone();
-    let error = graph
-        .prove_equal_terms(&terms, empty, empty, as_sort)
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("Could not find term (vec-empty) in the e-graph")
-    );
-    graph
-        .prove_equal_terms(&terms, empty, empty, bs_sort)
-        .unwrap();
-}
-
-#[test]
-fn bare_container_source_certifies_a_different_extraction() {
-    let mut graph =
-        graph("(datatype E (A) (B)) (sort V (Vec E)) (A) (B) (union (A) (B)) (run 1) (vec-of (B))");
-    let proofs = extracted(&mut graph, "(prove-extract (vec-of (B)))");
-    assert_eq!(proofs[0], ("(vec-of (B))".into(), "(vec-of (A))".into()));
+    for name in ["As", "Bs"] {
+        let sort = graph.type_info().get_sort_by_name(name).unwrap().clone();
+        let error = graph
+            .prove_equal_terms(&terms, empty, empty, sort)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support container roots")
+        );
+    }
+    extracted(&mut graph, "(prove-extract (Wrap (vec-empty)))");
 }
 
 #[test]

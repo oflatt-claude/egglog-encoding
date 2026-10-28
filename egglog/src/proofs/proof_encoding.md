@@ -924,8 +924,9 @@ which is therefore one of the few connectors a rule head does write a row for.
 returns both the extraction and a proof of equality to `e`. An optional positive
 variant count requests several extractions and a proof for each. Lookup never
 inserts either endpoint; an absent term reports `Could not find term … in the
-e-graph`. Proof-testing mode rewrites ordinary `extract` commands to
-`prove-extract`, checking the equality proof for every result.
+e-graph`. Container roots are unsupported; containers may occur within a term
+whose root has a non-container sort. Proof-testing mode rewrites ordinary
+`extract` commands to `prove-extract`, checking the equality proof for every result.
 
 The same certification is available independently of the extractor through
 [`EGraph::prove_extracted_terms`]: supply a
@@ -958,72 +959,66 @@ custom function, or global. The printed `:internal-role` annotation preserves
 this distinction during desugared replay. Sorts and primitives come from the same
 environment.
 
-### Looking up values and constructing raw proofs
+### Looking up values and decoding evidence
 
-`ground.rs` first looks up each typed node's canonical value and any view proof
-or union-find proof. The returned vector has one entry per typed-DAG node,
-indexed by that node's `TermId`, including non-root children. Missing rows and
-roots with different values are errors. Lookup adds no e-graph rows.
+`ground.rs` looks up each typed node's canonical value and any view or union-find
+proof. The returned vector has one entry per typed-DAG node, indexed by its
+`TermId`, including non-root children. Missing rows and roots with different
+values are errors. Lookup adds no e-graph rows.
 
-The builder then visits the same DAG with children before parents, returning
-one `RawProofId` per node. Constructor proofs combine existing row evidence and
-child certificates using symmetry, transitivity, and congruence. Custom function
-results use raw projections. No proof conclusions are computed or inspected
-during construction. After all roots have been assembled, one ordinary lifting
-pass produces their `ProofStore`.
+The ordinary lifter then decodes the imported proofs and their dependencies.
+Their conclusions identify the evidence available for composition, including
+containers appearing before a row was rebuilt. A rule-derived container can
+have elements determined by the rule substitution, so its raw proof alone does
+not spell out that witness. This decoding uses the existing lifter; evidence
+search and ground-term construction remain in `ground.rs` and its private
+`evidence` module.
+
+### Constructing raw proofs
+
+A memoized recursive traversal returns either an ordinary raw proof or a deferred
+container recipe. Constructor proofs combine existing row evidence and child
+certificates using symmetry, transitivity, and congruence. Custom function
+results use raw projections. Globals recover their source connector from the
+imported evidence.
 
 For a constructor `F(b)`, suppose the child certificate is `b = a`, the view
-proof is `r = F(a)`, and the union-find proof is `r = leader`. The raw composition
-is `Trans(Sym(Congr(view, 0, Sym(child))), union_find)`. Its shape follows from
-the view's contract; construction does not need the terms naming `r`, `a`, or
-`leader`. Finally, `e = leader` and the reverse of `t = leader` produce `e = t`.
+proof is `r = F(a)`, and the union-find proof is `r = leader`. The composition is
+`Trans(Sym(Congr(view, 0, Sym(child))), union_find)`. Finally, `e = leader` and
+the reverse of `t = leader` produce `e = t`.
 
-### Deferred primitive and global nodes
+Resolved primitive validators compute the endpoint terms used during
+construction. For example, `vec-get(root(), 0)` selects an element from the
+decoded function output; its certificate comes from existing evidence and
+projections. A temporary container can also be evaluated without asserting its
+existence: `vec-length(vec-of(a))` needs a proof of the resulting literal.
+Container-producing operations retain their argument certificates until an
+enclosing row provides an existence witness.
 
-The internal raw representation includes primitive expressions with resolved
-signatures, argument proof references, and an optional existence witness. These
-nodes are built by certification; they add no encoded constructor or public
-checker rule. A raw global node retains its source name and view evidence so
-lifting can recover the original definition and its connector.
-
-Primitive evaluation happens during lifting. For example, `vec-get(root(), 0)`
-can retain a raw projection of the function's output as its argument. The lifter
-first reconstructs that output, then invokes the resolved primitive's validator.
-Nested primitive arguments can be evaluated without claiming their existence:
-`vec-length(vec-of(a))` needs a proof of the resulting literal, without asserting
-that the temporary vector exists. Ordinary argument proofs and their dependencies
-supply the certificates for equality-sort elements of evaluated results.
-
-This separation also handles results whose elements differ from their syntactic
-arguments, such as `set-intersect`: the lifter evaluates the operation first,
-then composes certificates for the elements of its resulting container.
-
-### Container existence
+### Resolving deferred containers
 
 Containers have no constructor view of their own. For `Wrap(vec-of(b))`, the
-builder supplies the deferred vector node with a raw projection of the `Wrap`
-row. Lifting uses that witness and the element certificate to construct the
-container equality. A shared container node retains its first supplied witness
-so subsequent parents reuse its raw certificate.
+builder supplies the deferred vector with a projection of the `Wrap` row's
+proof. The recipe is resolved inside ground-term construction, and shared uses
+of that node reuse the completed certificate. The argument certificates remain
+available when another primitive consumes that same container.
 
-A container root has no parent, so lookup searches typed view columns, including
-nested containers, or actual source actions. A completed input root can also
-witness an extraction with the same sort and canonical value. Proof terms are
-untyped: an empty vector witnessed at `Vec A` does not establish its existence
-at `Vec B`. That distinction is checked using the typed runtime values before
-raw proof construction finishes.
+A witness may name either the requested container or its canonical form.
+Historical witnesses are sought in the supplied evidence's dependencies. With
+a witness of the requested container, construction uses the same raw operations
+as runtime rebuilding: `CongrAll` applies element equalities throughout nested
+containers, and `ContainerNormalize` canonicalizes the result. With a witness
+of the canonical container, positional congruence restores the requested
+elements. Equal vector elements retain their separate positions.
 
-Container expansion uses existing projections, positional congruence, symmetry,
-transitivity, and `ContainerNormalize`. A witness may name either the requested
-source term or its canonical form. Historical witnesses are sought only in the
-supplied evidence's dependencies. If normalization discarded elements, the
-original container must have a witness there; a smaller canonical container
-cannot supply those occurrences. Equal vector elements retain their individual
-positions. Failure to find the required evidence returns an extraction error.
+For example, rebuilding `set-of(A, B)` to `set-of(A)` retains the original
+container witness and its equality to the rebuilt value. That evidence can
+certify the original expression. A smaller canonical container alone cannot
+supply the discarded occurrences. Missing evidence produces an extraction
+error; constructing an interned container value is not an existence proof.
 
-The raw and lifted stores have separate proof-ID domains. Typed input node IDs
-index lookup and construction results; term IDs in the proof store name the
-terms reconstructed by lifting. `ground.rs` never needs those lifted term IDs.
-
-The resulting public proof format and checker rules are unchanged. Proof
-verification checks the finished equalities before and after simplification.
+Container roots are rejected, including calls with an empty output list. Every
+accepted root therefore produces an ordinary raw proof. The completed roots
+are passed to the ordinary lifter, then checked before and after simplification.
+Neither the raw proof operations nor the public proof format gains a deferred
+container or primitive case.

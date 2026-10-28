@@ -1,16 +1,18 @@
 //! Construct raw extraction certificates from typed ground terms.
 //!
-//! Lookup returns runtime values and existing proof references. Construction
-//! composes those raw proofs without inspecting their conclusions. Deferred
-//! primitive expressions and global connectors are resolved during final lifting.
+//! Lookup finds view and union-find evidence. The ordinary lifter decodes that
+//! evidence before construction, so container witnesses can be identified.
+//! A memoized traversal resolves deferred containers and produces raw proofs;
+//! the ordinary lifter then reconstructs the completed equality proofs.
 
+mod evidence;
+
+use evidence::{Proofs, RawEquality};
 use std::iter::once;
 
-use super::proof_checker::{eval_expr_with_subst, gather_global_actions, process_actions};
+use super::proof_checker::{gather_global_actions, gather_globals};
 use super::proof_container_rebuild::rebuild_container_value_rec;
-use super::proof_extractor::RootExtractor;
-use super::proof_format::{ProofId, ProofStore, Proposition, RawProof, RawProofId, RawProofStore};
-use super::proof_head::ProofAlgebra;
+use super::proof_format::{ProofId, ProofStore, RawProof};
 use crate::extract::find_canonical;
 use crate::*;
 
@@ -25,27 +27,40 @@ enum RowKind {
 }
 
 /// Existing row evidence and its optional connection to the current leader.
+/// `P` is a stored proof value before import and a raw equality afterwards.
 #[derive(Clone, Copy)]
-struct Row {
+struct Row<P = Value> {
     kind: RowKind,
-    /// An e-graph value of the proof sort, to be materialized before use.
-    proof: Value,
+    /// Proof of this view row's equality.
+    proof: P,
     /// Existing proof from the view representative to its current leader.
-    to_leader: Option<Value>,
+    to_leader: Option<P>,
 }
 
 /// The lookup result for one node of the input typed DAG.
 /// Its position in the returned vector is that node's `TermId`.
-struct Node {
+struct Node<P = Value> {
     /// Canonical at the input node's sort, including nested container elements.
     value: Value,
     /// Absent for literals, primitives, and globals without a proof-bearing view.
     /// Having a value alone does not establish a container's existence.
-    row: Option<Row>,
+    row: Option<Row<P>>,
 }
 
 fn fail(message: impl Into<String>) -> Error {
     Error::ExtractError(message.into())
+}
+
+/// Reject container roots, including containers whose values have stored evidence.
+fn require_non_container_root(sort: &ArcSort) -> Result<(), Error> {
+    if sort.is_container_sort() {
+        Err(fail(format!(
+            "proof extraction does not support container roots (sort {})",
+            sort.name()
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 /// Append an expression to `dag`, representing globals as zero-argument calls.
@@ -84,6 +99,7 @@ impl EGraph {
         variants: &ResolvedExpr,
     ) -> Result<Vec<CommandOutput>, Error> {
         let sort = expr.output_type();
+        require_non_container_root(&sort)?;
         let value = self.lookup_ground_expr(expr)?;
         let count = self.lookup_ground_expr(variants)?;
         let count: i64 = self.backend.base_values().unwrap(count);
@@ -150,8 +166,9 @@ impl EGraph {
     /// and the evaluated forms of primitive expressions.
     /// Primitives must support read-only evaluation and proof validation.
     ///
-    /// Errors on invalid or ambiguous typings, unavailable terms or proof evidence,
-    /// or unequal roots. Performs no extraction and writes no e-graph rows.
+    /// Errors on container roots, invalid or ambiguous typings, unavailable terms
+    /// or proof evidence, or unequal roots. Containers may occur below a root.
+    /// Performs no extraction and writes no e-graph rows.
     /// An empty `outputs` slice still validates and proves `input` to its leader,
     /// but returns no equality proofs. Duplicate outputs retain their positions.
     ///
@@ -187,6 +204,7 @@ impl EGraph {
         outputs: &[TermId],
         sort: ArcSort,
     ) -> Result<(ProofStore, Vec<ProofId>), Error> {
+        require_non_container_root(&sort)?;
         let roots = once(input)
             .chain(outputs.iter().copied())
             .map(|root| (root, Some(sort.clone())))
@@ -197,28 +215,25 @@ impl EGraph {
             .typecheck_term_dag(terms, &roots, Context::Read)
             .map_err(|error| fail(error.to_string()))?;
         let values = lookup(self, &typed, &roots)?;
-        let mut builder = GroundProofs::new(self);
-        let evidence = builder.build(&typed, &values)?;
-        let input = builder.root(
-            evidence[roots[0]],
-            &sort,
-            values[roots[0]].value,
-            &typed.to_string(roots[0]),
-            None,
-        )?;
-        let mut raw_proofs = vec![input];
+        let (mut proofs, nodes) = Proofs::import(self, values)?;
+        let globals = gather_globals(&self.proof_check_program, &mut proofs.raw.term_dag)
+            .map_err(|error| fail(error.to_string()))?;
+        let mut builder = GroundProofs {
+            terms: &typed,
+            nodes: &nodes,
+            proofs,
+            globals,
+            memo: vec![None; typed.size()],
+        };
+        let input = builder.finish(roots[0], None)?;
+        let mut raw_proofs = vec![input.proof];
         for &id in &roots[1..] {
-            let right = builder.root(
-                evidence[id],
-                &sort,
-                values[id].value,
-                &typed.to_string(id),
-                Some(input),
-            )?;
-            let back = builder.raw.sym(right);
-            raw_proofs.push(builder.raw.trans(input, back));
+            let right = builder.finish(id, None)?;
+            let back = builder.proofs.sym(right);
+            raw_proofs.push(builder.proofs.trans(input, back).proof);
         }
-        let (mut store, mut proof_ids) = builder.lift(&raw_proofs)?;
+        let (mut store, mut proof_ids) =
+            builder.proofs.lift(&self.proof_check_program, &raw_proofs);
         proof_ids.remove(0);
         store
             .remove_globals(&self.proof_check_program)
@@ -251,7 +266,7 @@ impl EGraph {
 
 /// Look up canonical values and available view evidence for every node in `terms`.
 /// The result has `terms.size()` entries: entry `id` describes `terms.get(id)`,
-/// including non-root children. It can be passed directly to [`GroundProofs::build`].
+/// including non-root children. [`Proofs::import`] resolves its proof references.
 ///
 /// `terms` must have children before parents. `roots` must be nonempty, contain
 /// valid IDs from this DAG, and refer to terms of the same sort. On success,
@@ -452,222 +467,172 @@ fn to_leader(
     Ok(Some(row[2]))
 }
 
-/// Builds raw certificates using runtime values and existing proof references.
-/// No proof is lifted until all requested roots have been assembled.
-struct GroundProofs<'a> {
-    egraph: &'a EGraph,
-    raw: RawProofStore,
-    extractor: RootExtractor,
+/// Evidence for a typed node. Only containers may wait for a parent's witness.
+#[derive(Clone)]
+enum GroundProof {
+    Proof(RawEquality),
+    Container {
+        lhs: TermId,
+        rhs: TermId,
+        arguments: Vec<RawEquality>,
+        /// Retains a completed certificate when the DAG shares this container.
+        proof: Option<RawEquality>,
+    },
 }
 
-impl<'a> GroundProofs<'a> {
-    fn new(egraph: &'a EGraph) -> Self {
-        Self {
-            egraph,
-            raw: RawProofStore::new(&egraph.proof_state.proof_names),
-            extractor: RootExtractor::new(),
+impl GroundProof {
+    /// The evaluated source term and its leader term.
+    fn endpoints(&self) -> (TermId, TermId) {
+        match self {
+            Self::Proof(proof) => (proof.lhs, proof.rhs),
+            Self::Container { lhs, rhs, .. } => (*lhs, *rhs),
         }
     }
 
-    /// Materialize an existing proof value without computing its conclusion.
-    fn import(&mut self, value: Value) -> Result<RawProofId, Error> {
-        let sort = self
-            .egraph
-            .get_sort_by_name(&self.egraph.proof_state.proof_names.proof_datatype)
-            .ok_or_else(|| fail("missing proof sort"))?
-            .clone();
-        let term = self
-            .extractor
-            .extract(self.egraph, &mut self.raw.term_dag, value, &sort)
-            .ok_or_else(|| fail("could not materialize existing proof evidence"))?;
-        Ok(self.raw.parse(term))
-    }
-
-    /// Return raw certificates indexed by input `TermId`. `values` must be the
-    /// complete result of lookup on this DAG. Container primitive nodes remain
-    /// deferred until a parent or root supplies their existence witness.
-    fn build(&mut self, terms: &TypedTermDag, values: &[Node]) -> Result<Vec<RawProofId>, Error> {
-        let mut proofs: Vec<RawProofId> = Vec::with_capacity(terms.size());
-        for ((_, term), value) in terms.nodes().zip(values) {
-            let mut proof = match term {
-                TypedTerm::Lit(literal) => {
-                    let term = self.raw.term_dag.lit(literal.clone());
-                    self.raw.add_proof(RawProof::Fiat(term, term))
-                }
-                TypedTerm::App(ResolvedCall::Primitive(primitive), children) => {
-                    let arguments = children.iter().map(|&id| proofs[id]).collect();
-                    self.raw
-                        .add_proof(RawProof::Primitive(primitive.clone(), arguments, None))
-                }
-                TypedTerm::App(ResolvedCall::Func(function), children) => {
-                    if let Some(row) = value.row {
-                        let row_proof = self.import(row.proof)?;
-                        match row.kind {
-                            RowKind::Constructor => {
-                                let mut proof = row_proof;
-                                for (index, &child) in children.iter().enumerate() {
-                                    let witness =
-                                        self.raw.add_proof(RawProof::Proj(row_proof, index));
-                                    proofs[child] = self.raw.anchored(proofs[child], witness);
-                                    let back = self.raw.sym(proofs[child]);
-                                    proof = self.raw.congr(proof, index, back);
-                                }
-                                self.raw.sym(proof)
-                            }
-                            RowKind::Output(column) => {
-                                self.raw.add_proof(RawProof::Proj(row_proof, column))
-                            }
-                            RowKind::Global => self
-                                .raw
-                                .add_proof(RawProof::Global(function.name.clone(), row_proof)),
-                        }
-                    } else {
-                        self.raw
-                            .add_proof(RawProof::GlobalValue(function.name.clone()))
-                    }
-                }
-                _ => return Err(fail("unsupported ground term")),
-            };
-            if let Some(edge) = value.row.and_then(|row| row.to_leader) {
-                let edge = self.import(edge)?;
-                proof = self.raw.trans(proof, edge);
-            }
-            proofs.push(proof);
+    /// Ordinary certificates available to a primitive consuming this node.
+    /// A temporary container contributes element evidence without claiming existence.
+    fn arguments(&self) -> &[RawEquality] {
+        match self {
+            Self::Proof(proof) => std::slice::from_ref(proof),
+            Self::Container { arguments, .. } => arguments,
         }
-        Ok(proofs)
     }
+}
 
-    /// Supply a deferred container root with evidence at its requested sort.
-    /// `equal_root` must already certify the same sort and canonical runtime value.
-    fn root(
-        &mut self,
-        proof: RawProofId,
-        sort: &ArcSort,
-        value: Value,
-        written: &str,
-        equal_root: Option<RawProofId>,
-    ) -> Result<RawProofId, Error> {
-        if !sort.is_container_sort()
-            || !matches!(self.raw.get(proof), RawProof::Primitive(_, _, None))
-        {
-            return Ok(proof);
+/// Memoized construction over the typed DAG and decoded row evidence.
+struct GroundProofs<'a> {
+    terms: &'a TypedTermDag,
+    nodes: &'a [Node<RawEquality>],
+    proofs: Proofs,
+    globals: HashMap<String, TermId>,
+    memo: Vec<Option<GroundProof>>,
+}
+
+impl GroundProofs<'_> {
+    /// Return a node's raw proof or a container recipe awaiting enclosing evidence.
+    fn build(&mut self, id: TermId) -> Result<GroundProof, Error> {
+        if let Some(proof) = &self.memo[id] {
+            return Ok(proof.clone());
         }
-        let witness = if let Some(root) = equal_root {
-            root
-        } else if let Some(row) = self.container_row(sort, value) {
-            self.import(row)?
-        } else {
-            self.source_container(sort, value)?
-                .ok_or_else(|| fail(format!("Could not find term {written} in the e-graph")))?
-        };
-        Ok(self.raw.anchored(proof, witness))
-    }
-
-    /// Find an existing view containing this typed container value, possibly nested.
-    fn container_row(&self, wanted: &ArcSort, value: Value) -> Option<Value> {
-        let mut found = None;
-        let mut tables = self.egraph.functions.values().collect::<Vec<_>>();
-        tables.sort_by_key(|table| table.name());
-        for table in tables {
-            if !table.decl.role.is_view() || table.func_type.outputs.len() != 2 {
-                continue;
+        let term = self.terms.get(id).clone();
+        let mut result = match term {
+            TypedTerm::Lit(literal) => {
+                let term = self.proofs.raw.term_dag.lit(literal);
+                GroundProof::Proof(self.proofs.add(RawProof::Fiat(term, term), term, term))
             }
-            let mut sorts = table.func_type.input.clone();
-            if table.decl.role == FunctionRole::FunctionView {
-                sorts.push(table.func_type.output().clone());
-            }
-            self.egraph.backend.for_each(table.backend_id, |row| {
-                if found.is_some() {
-                    return;
-                }
-                let mut pending = sorts
+            TypedTerm::App(ResolvedCall::Primitive(primitive), children) => {
+                let children = children
+                    .into_iter()
+                    .map(|id| self.build(id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let left = children
                     .iter()
-                    .cloned()
-                    .zip(row.vals.iter().copied())
+                    .map(|proof| proof.endpoints().0)
                     .collect::<Vec<_>>();
-                let mut seen = HashSet::default();
-                while let Some((sort, held)) = pending.pop() {
-                    if !sort.is_container_sort() || !seen.insert((sort.name().to_owned(), held)) {
-                        continue;
+                let right = children
+                    .iter()
+                    .map(|proof| proof.endpoints().1)
+                    .collect::<Vec<_>>();
+                let validate = primitive.validator().expect("lookup requires validators");
+                let lhs = validate(&mut self.proofs.raw.term_dag, &left).ok_or_else(|| {
+                    fail(format!("primitive {} failed validation", primitive.name()))
+                })?;
+                let rhs = validate(&mut self.proofs.raw.term_dag, &right).ok_or_else(|| {
+                    fail(format!(
+                        "primitive {} failed validation at leaders",
+                        primitive.name()
+                    ))
+                })?;
+                let arguments = children
+                    .iter()
+                    .flat_map(GroundProof::arguments)
+                    .copied()
+                    .collect::<Vec<_>>();
+                if primitive.output().is_container_sort() {
+                    GroundProof::Container {
+                        lhs,
+                        rhs,
+                        arguments,
+                        proof: None,
                     }
-                    if sort.name() == wanted.name() && held == value {
-                        found = Some(row.vals[table.func_type.input.len() + 1]);
-                        break;
-                    }
-                    pending.extend(sort.inner_values(self.egraph.backend.container_values(), held));
+                } else {
+                    let evidence = self.proofs.dependencies(&arguments);
+                    GroundProof::Proof(self.proofs.certificate(lhs, rhs, &arguments, &evidence)?)
                 }
-            });
-            if found.is_some() {
-                break;
             }
+            TypedTerm::App(ResolvedCall::Func(function), children) => {
+                let proof = if let Some(row) = self.nodes[id].row {
+                    match row.kind {
+                        RowKind::Constructor => {
+                            let mut proof = row.proof;
+                            for (index, child) in children.into_iter().enumerate() {
+                                let witness = self.proofs.project(row.proof, index);
+                                let child = self.finish(child, Some(witness))?;
+                                let back = self.proofs.sym(child);
+                                proof = self.proofs.congr(proof, index, back);
+                            }
+                            self.proofs.sym(proof)
+                        }
+                        RowKind::Output(column) => self.proofs.project(row.proof, column),
+                        RowKind::Global => {
+                            let source = self.globals[&function.name];
+                            if row.proof.rhs == source {
+                                self.proofs.sym(row.proof)
+                            } else if row.proof.lhs == source {
+                                let back = self.proofs.sym(row.proof);
+                                self.proofs.trans(row.proof, back)
+                            } else {
+                                let evidence = self.proofs.dependencies(&[row.proof]);
+                                self.proofs
+                                    .equality(source, row.proof.lhs, &evidence)
+                                    .ok_or_else(|| fail("global view has no source connector"))?
+                            }
+                        }
+                    }
+                } else {
+                    let term = self.globals[&function.name];
+                    self.proofs.add(RawProof::Fiat(term, term), term, term)
+                };
+                GroundProof::Proof(proof)
+            }
+            _ => return Err(fail("unsupported ground term")),
+        };
+        if let Some(edge) = self.nodes[id].row.and_then(|row| row.to_leader) {
+            let GroundProof::Proof(proof) = result else {
+                unreachable!("only view rows carry union-find edges")
+            };
+            result = GroundProof::Proof(self.proofs.trans(proof, edge));
         }
-        found
+        self.memo[id] = Some(result.clone());
+        Ok(result)
     }
 
-    /// Find a source action establishing the requested typed container.
-    /// Only terms actually established by those actions receive a Fiat proof.
-    fn source_container(
-        &mut self,
-        sort: &ArcSort,
-        value: Value,
-    ) -> Result<Option<RawProofId>, Error> {
-        let actions = gather_global_actions(&self.egraph.proof_check_program).collect::<Vec<_>>();
-        let source = process_actions(
-            "global_actions",
-            HashMap::default(),
-            &actions,
-            &mut self.raw.term_dag,
-        )
-        .map_err(|error| fail(error.to_string()))?;
-        let mut found = None;
-        for action in actions {
-            action.clone().visit_exprs(&mut |expr| {
-                if found.is_none()
-                    && expr.output_type().name() == sort.name()
-                    && self.egraph.lookup_ground_expr(&expr).ok() == Some(value)
-                    && let Ok((term, _)) = eval_expr_with_subst(
-                        "global_actions",
-                        &expr,
-                        &mut self.raw.term_dag,
-                        &source.var_bindings,
-                    )
-                    && source.propositions.contains(&Proposition::new(term, term))
-                {
-                    found = Some(term);
-                }
-                expr
-            });
-        }
-        Ok(found.map(|term| self.raw.add_proof(RawProof::Fiat(term, term))))
-    }
-
-    /// Lift the finished raw proof DAG through the ordinary proof conversion.
-    fn lift(self, roots: &[RawProofId]) -> Result<(ProofStore, Vec<ProofId>), Error> {
-        let normalizers = self
-            .egraph
-            .type_info
-            .sorts
-            .values()
-            .filter_map(|sort| sort.rebuild_container_normalizer())
-            .collect();
-        let mut value_heads = HashSet::default();
-        for sort in self.egraph.type_info.sorts.values() {
-            if let Some(head) = sort.prim_value_constructor() {
-                if self.egraph.type_info.get_prims(&head).map_or(0, <[_]>::len) != 1 {
-                    return Err(fail(format!(
-                        "ambiguous primitive value constructor {head}"
-                    )));
-                }
-                value_heads.insert(head);
+    /// Complete a node's certificate. Deferred containers require an enclosing
+    /// witness; successful certificates are shared by later uses of that node.
+    fn finish(&mut self, id: TermId, witness: Option<RawEquality>) -> Result<RawEquality, Error> {
+        match self.build(id)? {
+            GroundProof::Proof(proof)
+            | GroundProof::Container {
+                proof: Some(proof), ..
+            } => Ok(proof),
+            GroundProof::Container {
+                lhs,
+                rhs,
+                arguments,
+                ..
+            } => {
+                let witness =
+                    witness.ok_or_else(|| fail("container proof requires enclosing evidence"))?;
+                let mut roots = vec![witness];
+                roots.extend_from_slice(&arguments);
+                let evidence = self.proofs.dependencies(&roots);
+                let proof = self.proofs.certificate(lhs, rhs, &arguments, &evidence)?;
+                let Some(GroundProof::Container { proof: saved, .. }) = &mut self.memo[id] else {
+                    unreachable!()
+                };
+                *saved = Some(proof);
+                Ok(proof)
             }
         }
-        self.raw
-            .lift(
-                &self.egraph.proof_check_program,
-                roots,
-                normalizers,
-                value_heads,
-            )
-            .map_err(fail)
     }
 }
