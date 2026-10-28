@@ -8,7 +8,7 @@ use super::format::{SlottedConclusion, SlottedProofStore, SlottedProposition};
 use super::lifting::{LiftedId, Lifting};
 use super::pipeline::EncodingNames;
 use super::source::{Claim, ColumnKind, Rhs, SlottedProgram};
-use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term};
+use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term, term_renaming};
 
 use super::{HashMap, HashSet};
 use crate::slotted::query::ProofNames;
@@ -791,9 +791,19 @@ impl<'a> Translator<'a> {
                 )
             })?;
             let c = self.eq(child_proof)?;
-            let renamed = self.rename_both(c, &completion);
-            let r = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
+            let mut renamed = self.rename_both(c, &completion);
             let target = self.dec(conclusion_rhs)?;
+            let child = self.subterm_at(target, &[j])?;
+            let actual = self.out.proposition(renamed).clone();
+            let content = rename(&mut self.out.term_dag, &actual.renaming, actual.rhs);
+            // Choose new RHS names before congruence can identify them with siblings.
+            if let Some(renaming) = term_renaming(
+                &self.out.term_dag,
+                &[(actual.lhs, actual.lhs), (content, child)],
+            ) {
+                renamed = self.rename_both(renamed, &renaming);
+            }
+            let r = self.out.congr(p, j, renamed).map_err(|e| e.0)?;
             let aligned = self.align(r, target)?;
             // A congruence whose base is reflexive may be read in either
             // direction later; both endpoints are now known.
@@ -1455,11 +1465,20 @@ impl<'a> Translator<'a> {
             Justification::Rule {
                 name,
                 premise_proofs: prems,
-                ..
+                substitution,
             } => match rule_kind(self.program, &name).1 {
                 "self-symmetry" | "self-edge-symmetry" => {
                     let p = self.eq(prems[0])?;
                     Ok(vec![p])
+                }
+                "node-symmetry" => {
+                    let c = self.sub(&substitution, "_c")?;
+                    let group = self.group(self.sub(&substitution, "_syms")?)?;
+                    group
+                        .iter()
+                        .filter(|g| !is_identity(g))
+                        .map(|g| self.symmetry(c, g, grp_proof))
+                        .collect()
                 }
                 "group-restore" | "group-shrink" => self.symmetry_sources(prems[0]),
                 _ => Ok(vec![]),
@@ -2923,8 +2942,16 @@ impl<'a> Translator<'a> {
     fn class_cert(&mut self, c: TermId, s: i64, f: i64) -> R<LiftedId> {
         let t = self.dec(c)?;
         log::debug!("class_cert {} slot {s} -> {f}", self.out_string(t));
-        if !all_slots(&self.out.term_dag, t).contains(&s) {
-            return self.reflexive(t);
+        let slots = all_slots(&self.out.term_dag, t);
+        if !slots.contains(&s) {
+            if slots.contains(&f) {
+                return Err("redundancy certificate target is not fresh".into());
+            }
+            let proof = self.reflexive(t)?;
+            // Transport still needs this swap when neither name occurs in t.
+            let swap = Renaming::new([(s, f), (f, s)]).unwrap();
+            let proof = self.out.reframe(proof, swap);
+            return Ok(self.note(proof));
         }
         if !self.cert_stack.insert((c, s)) {
             return Err(format!(
@@ -3555,17 +3582,16 @@ impl<'a> Translator<'a> {
             let Some((path, x, t)) = chosen else {
                 return self.fit(p, target, occ);
             };
-            let want = if slots.contains(&t) { self.fresh() } else { t };
-            log::debug!(
-                "content fit: {} onto {}: ${x} at {path:?} -> ${want}",
-                self.out_string(content),
-                self.out_string(target)
-            );
             let mut occ_path = path.clone();
             let mut errors = Vec::new();
             let (sub, cert) = loop {
                 if let Some(&o) = occ.get(&occ_path) {
                     let sub = self.subterm_at(content, &occ_path)?;
+                    let want = if all_slots(&self.out.term_dag, sub).contains(&t) {
+                        self.fresh()
+                    } else {
+                        t
+                    };
                     match self.occurrence_cert(o, sub, x, want) {
                         Ok(cert) => break (sub, cert),
                         Err(error) => errors.push(error),

@@ -305,9 +305,11 @@ and evaluate the result with `new_egraph_with_proofs()`.
 and checks the generated benchmark goals with proofs in both matching modes.
 The benchmark checks use the same workload generators and iteration budgets as
 `slotted/eval.py`. The same tests run in `make check`.
-For randomized proof checks, run
-`uv run --locked python slotted/xdiff/proofs.py 100 0` (case count, seed).
-`--language array` selects the Array generator; it also supports `--no-aliasing`.
+`make test` also runs bounded, seeded proof fuzzing over toy terms, deeper terms
+with binders and shared variables, and Array in both matching modes. For larger
+runs, use `uv run --locked python slotted/xdiff/proofs.py 100 0` (case count, seed).
+`--deep` selects the deeper toy terms; `--language array` selects the Array
+generator and supports `--no-aliasing`.
 The fuzzer checks equivalent probe pairs, reports cases whose proofs use rewrites,
 and saves failing source programs and diagnostics under `/tmp` or `--failures DIR`.
 Sources using `subst` are ignored because it has no proof translation;
