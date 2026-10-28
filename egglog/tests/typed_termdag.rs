@@ -4,6 +4,48 @@ use egglog::ast::Literal;
 use egglog::{Context, EGraph, GroundTypeError, TermDag, TypeError, TypedTerm};
 
 #[test]
+fn egraph_typing_resolves_globals_without_requiring_term_rows() {
+    use egglog::ResolvedCall;
+    use egglog::ast::FunctionRole;
+
+    for mut graph in [EGraph::default(), EGraph::new_with_proofs()] {
+        graph
+            .parse_and_run_program(None, "(datatype E (A) (F E)) (let g (A))")
+            .unwrap();
+        let before = graph.num_nodes();
+        let mut terms = TermDag::default();
+        terms.var("unreachable".into());
+        let global = terms.app("g".into(), vec![]);
+        let f = terms.app("F".into(), vec![global]);
+        let (typed, roots) = graph
+            .typecheck_term_dag(
+                &terms,
+                &[(f, None), (global, None), (f, None)],
+                Context::Read,
+            )
+            .unwrap();
+        assert_eq!(roots[0], roots[2]);
+        assert_eq!(typed.get(roots[0]).sort().name(), "E");
+        let TypedTerm::App(ResolvedCall::Func(function), children) = typed.get(roots[1]) else {
+            panic!("expected a resolved global table call");
+        };
+        assert_eq!(function.role, FunctionRole::Global);
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            typed.get(children[0]),
+            &TypedTerm::Lit(Literal::String("g".into()))
+        );
+
+        let wrong_sort = graph.type_info().get_sort_by_name("i64").unwrap().clone();
+        assert!(matches!(
+            graph.typecheck_term_dag(&terms, &[(global, Some(wrong_sort))], Context::Read),
+            Err(GroundTypeError::WrongSort { term, .. }) if term == global
+        ));
+        assert_eq!(graph.num_nodes(), before);
+    }
+}
+
+#[test]
 fn source_signatures_are_available_from_unexecuted_encoded_declarations() {
     use egglog::ResolvedCall;
     use egglog::ast::{FunctionRole, FunctionSubtype};
@@ -260,6 +302,12 @@ fn primitive_resolution_obeys_the_requested_capability_context() {
     );
     eg.type_info()
         .typecheck_term_dag(&terms, &[(union, None)], Context::Full)
+        .unwrap();
+    assert!(
+        eg.typecheck_term_dag(&terms, &[(union, None)], Context::Read)
+            .is_err()
+    );
+    eg.typecheck_term_dag(&terms, &[(union, None)], Context::Full)
         .unwrap();
 }
 

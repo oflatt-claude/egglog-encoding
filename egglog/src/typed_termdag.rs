@@ -4,16 +4,39 @@
 //! contexts. Each selected typing has its own node in the [`TypedTermDag`].
 
 use std::iter::once;
+use std::sync::Arc;
 
 use crate::constraint::{Problem, assign};
 use crate::core::StringOrEq;
 use crate::sort::literal_sort;
 use crate::util::{HashMap, HashSet, IndexMap};
 use crate::{
-    ArcSort, Atom, AtomTerm, Context, ResolvedCall, Term, TermDag, TermId, TypeError, TypeInfo,
-    TypeInfoView, TypedTerm, TypedTermDag,
+    ArcSort, Atom, AtomTerm, Context, EGraph, FuncType, ResolvedCall, Term, TermDag, TermId,
+    TypeError, TypeInfo, TypeInfoView, TypedTerm, TypedTermDag,
 };
+use egglog_ast::generic_ast::Literal;
 use egglog_ast::span::Span;
+
+impl EGraph {
+    /// Typecheck ground terms against source signatures, resolving zero-argument
+    /// global calls to their binding tables. Works with or without proof encoding.
+    /// Global bindings must exist; other terms need not exist in the e-graph.
+    /// Does not evaluate terms or insert rows.
+    ///
+    /// See [`TypeInfoView::typecheck_term_dag`] for root ordering, expected sorts,
+    /// and errors. Error IDs refer to `terms`; returned IDs belong to the typed DAG.
+    pub fn typecheck_term_dag(
+        &self,
+        terms: &TermDag,
+        roots: &[(TermId, Option<ArcSort>)],
+        context: Context,
+    ) -> Result<(TypedTermDag, Vec<TermId>), GroundTypeError> {
+        let types = self.type_info.source_types();
+        types.typecheck_with_globals(terms, roots, context, &|name| {
+            types.get_func_type(self.global_table(name)?.name())
+        })
+    }
+}
 
 impl TypeInfo {
     /// Typecheck ground terms against table signatures.
@@ -71,11 +94,24 @@ impl TypeInfoView<'_> {
         roots: &[(TermId, Option<ArcSort>)],
         context: Context,
     ) -> Result<(TypedTermDag, Vec<TermId>), GroundTypeError> {
+        self.typecheck_with_globals(terms, roots, context, &|_| None)
+    }
+
+    /// Typecheck roots with a resolver for zero-argument global calls.
+    /// Each resolved signature must take a string binding name and return one value.
+    fn typecheck_with_globals(
+        self,
+        terms: &TermDag,
+        roots: &[(TermId, Option<ArcSort>)],
+        context: Context,
+        resolve_global: &dyn Fn(&str) -> Option<Arc<FuncType>>,
+    ) -> Result<(TypedTermDag, Vec<TermId>), GroundTypeError> {
         let order = reachable_terms(terms, roots.iter().map(|(term, _)| *term))?;
         let mut inference = Inference {
             types: self,
             terms,
             context,
+            resolve_global,
             candidates: HashMap::default(),
             dag: TypedTermDag::default(),
         };
@@ -167,6 +203,7 @@ struct Inference<'a> {
     types: TypeInfoView<'a>,
     terms: &'a TermDag,
     context: Context,
+    resolve_global: &'a dyn Fn(&str) -> Option<Arc<FuncType>>,
     /// Input node ID, then result sort name. Candidate node IDs belong to `dag`.
     candidates: HashMap<TermId, IndexMap<String, Candidate>>,
     dag: TypedTermDag,
@@ -196,6 +233,23 @@ impl Inference<'_> {
             }
             Term::App(head, children) => (head, children),
         };
+        if children.is_empty()
+            && self.types.get_func_type(head).is_none()
+            && self.types.get_prims(head).is_none()
+            && let Some(function) = (self.resolve_global)(head)
+        {
+            let sort = function.output().clone();
+            let key = self.dag.lit(Literal::String(head.clone()));
+            let node = self.dag.app(ResolvedCall::Func(function), vec![key]);
+            result.insert(
+                sort.name().to_owned(),
+                Candidate {
+                    sort,
+                    node: Ok(node),
+                },
+            );
+            return Ok(result);
+        }
         if self
             .types
             .get_func_type(head)
@@ -328,7 +382,7 @@ impl Inference<'_> {
 
 /// Return reachable IDs in child-before-parent order.
 /// Errors on invalid IDs, forward references, or cycles; ignores unreachable nodes.
-pub(crate) fn reachable_terms(
+fn reachable_terms(
     terms: &TermDag,
     roots: impl Iterator<Item = TermId>,
 ) -> Result<Vec<TermId>, GroundTypeError> {

@@ -12,7 +12,6 @@ use super::proof_checker::{gather_global_actions, gather_globals};
 use super::proof_container_rebuild::rebuild_container_value_rec;
 use super::proof_format::{ProofId, ProofStore, RawProof};
 use crate::extract::find_canonical;
-use crate::typed_termdag::reachable_terms;
 use crate::*;
 
 #[derive(Clone, Copy)]
@@ -90,46 +89,6 @@ fn ground_expr(dag: &mut TermDag, root: &ResolvedExpr) -> Result<TermId, Error> 
 }
 
 impl EGraph {
-    /// Typecheck ground roots after resolving zero-argument global references.
-    /// Root order and expected sorts are preserved; returned IDs belong to the typed DAG.
-    fn typecheck_ground_terms(
-        &self,
-        terms: &TermDag,
-        roots: &[(TermId, Option<ArcSort>)],
-    ) -> Result<(TypedTermDag, Vec<TermId>), Error> {
-        let mut lowered = TermDag::default();
-        let mut ids = HashMap::default();
-        let order = reachable_terms(terms, roots.iter().map(|(id, _)| *id))
-            .map_err(|error| fail(error.to_string()))?;
-        for original in order {
-            let id = match terms.get(original) {
-                Term::Lit(literal) => lowered.lit(literal.clone()),
-                Term::Var(name) => lowered.var(name.clone()),
-                Term::App(name, children) => {
-                    if children.is_empty()
-                        && self.type_info.get_func_type(name).is_none()
-                        && self.type_info.get_prims(name).is_none()
-                        && let Some(table) = self.global_table(name)
-                    {
-                        let key = lowered.lit(Literal::String(name.clone()));
-                        lowered.app(table.name().to_owned(), vec![key])
-                    } else {
-                        lowered.app(name.clone(), children.iter().map(|id| ids[id]).collect())
-                    }
-                }
-            };
-            ids.insert(original, id);
-        }
-        let roots = roots
-            .iter()
-            .map(|(id, sort)| (ids[id], sort.clone()))
-            .collect::<Vec<_>>();
-        self.type_info
-            .source_types()
-            .typecheck_term_dag(&lowered, &roots, Context::Read)
-            .map_err(|error| fail(error.to_string()))
-    }
-
     /// Look up `expr`, extract representatives, and certify each equality.
     /// Returns the extraction output followed by its proofs; adds no e-graph rows.
     pub(crate) fn run_prove_extract(
@@ -178,8 +137,9 @@ impl EGraph {
     fn lookup_ground_expr(&self, expr: &ResolvedExpr) -> Result<Value, Error> {
         let mut terms = TermDag::default();
         let root = ground_expr(&mut terms, expr)?;
-        let (typed, roots) =
-            self.typecheck_ground_terms(&terms, &[(root, Some(expr.output_type()))])?;
+        let (typed, roots) = self
+            .typecheck_term_dag(&terms, &[(root, Some(expr.output_type()))], Context::Read)
+            .map_err(|error| fail(error.to_string()))?;
         let values = lookup(self, &typed, &roots)?;
         Ok(values[roots[0]].value)
     }
@@ -245,7 +205,9 @@ impl EGraph {
             .chain(outputs.iter().copied())
             .map(|root| (root, Some(sort.clone())))
             .collect::<Vec<_>>();
-        let (typed, roots) = self.typecheck_ground_terms(terms, &roots)?;
+        let (typed, roots) = self
+            .typecheck_term_dag(terms, &roots, Context::Read)
+            .map_err(|error| fail(error.to_string()))?;
         let values = lookup(self, &typed, &roots)?;
         let (mut proofs, nodes) = Proofs::import(self, values)?;
         let globals = gather_globals(&self.proof_check_program, &mut proofs.raw.term_dag)

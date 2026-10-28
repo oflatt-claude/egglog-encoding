@@ -977,6 +977,11 @@ The returned `TypedTermDag` contains only selected typings, with separate nodes
 for different specializations of shared syntax. Root IDs refer to this new DAG
 and preserve the requested order. Typing performs no evaluation or table access.
 
+[`EGraph::typecheck_term_dag`] also resolves zero-argument global references to
+their binding tables and uses source signatures. It works with or without proof
+encoding; only the global bindings need to exist. Extraction certification uses
+this API and translates typing errors into extraction errors.
+
 [`TypeInfo::source_types`] supplies source signatures when checking against an
 encoded program. A view's first output is the source result; the evidence output
 is omitted, and `FunctionRole` restores whether the operation is a constructor,
