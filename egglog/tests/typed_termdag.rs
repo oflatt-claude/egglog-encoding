@@ -19,10 +19,10 @@ fn source_signatures_are_available_from_unexecuted_encoded_declarations() {
         (sort Ints (Vec i64))
         (function C (Es) (E Unit) :no-merge :internal-role constructor-view)
         (function F (E) (E Unit) :no-merge :internal-role function-view)
-        (function g () (E Unit) :no-merge :internal-role global-view)
+        (function Globals (String) (E Unit) :no-merge :internal-role global-view)
         (function TupleEntry () (E Unit) :no-merge)
         (prove-extract (F (C (vec-empty))))
-        (prove-extract g)
+        (prove-extract (Globals "g"))
         "#,
     )
     .unwrap();
@@ -31,7 +31,8 @@ fn source_signatures_are_available_from_unexecuted_encoded_declarations() {
     let empty = terms.app("vec-empty".into(), vec![]);
     let constructor = terms.app("C".into(), vec![empty]);
     let function = terms.app("F".into(), vec![constructor]);
-    let global = terms.app("g".into(), vec![]);
+    let key = terms.lit(Literal::String("g".into()));
+    let global = terms.app("Globals".into(), vec![key]);
     let types = eg.type_info();
     let source = types.source_types();
     let (typed, roots) = source
