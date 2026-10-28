@@ -996,8 +996,7 @@ Their conclusions identify the evidence available for composition, including
 containers appearing before a row was rebuilt. A rule-derived container can
 have elements determined by the rule substitution, so its raw proof alone does
 not spell out that witness. This decoding uses the existing lifter; evidence
-search and ground-term construction remain in `ground.rs` and its private
-`evidence` module.
+search and ground-term construction remain in `ground.rs` and `ground_evidence.rs`.
 
 ### Constructing raw proofs
 

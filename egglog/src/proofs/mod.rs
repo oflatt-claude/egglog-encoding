@@ -1,4 +1,5 @@
 pub(crate) mod ground;
+mod ground_evidence;
 pub(crate) mod proof_checker;
 pub(crate) mod proof_container_rebuild;
 pub(crate) mod proof_encoding;

@@ -1,8 +1,8 @@
 //! Import existing evidence and compose ordinary raw proofs for ground terms.
 
-use super::{Node, Row, fail};
-use crate::proofs::proof_extractor::RootExtractor;
-use crate::proofs::proof_format::{ProofId, ProofStore, RawProof, RawProofId, RawProofStore};
+use super::ground::{Node, Row, fail};
+use super::proof_extractor::RootExtractor;
+use super::proof_format::{ProofId, ProofStore, RawProof, RawProofId, RawProofStore};
 use crate::*;
 use std::iter::once;
 

@@ -5,11 +5,9 @@
 //! A memoized traversal resolves deferred containers and produces raw proofs;
 //! the ordinary lifter then reconstructs the completed equality proofs.
 
-mod evidence;
-
-use evidence::{Proofs, RawEquality};
 use std::iter::once;
 
+use super::ground_evidence::{Proofs, RawEquality};
 use super::proof_checker::{gather_global_actions, gather_globals};
 use super::proof_container_rebuild::rebuild_container_value_rec;
 use super::proof_format::{ProofId, ProofStore, RawProof};
@@ -18,7 +16,7 @@ use crate::typed_termdag::reachable_terms;
 use crate::*;
 
 #[derive(Clone, Copy)]
-enum RowKind {
+pub(super) enum RowKind {
     /// The row proves `representative = constructor(canonical children)`.
     Constructor,
     /// The row connects a global to its source definition.
@@ -30,25 +28,25 @@ enum RowKind {
 /// Existing row evidence and its optional connection to the current leader.
 /// `P` is a stored proof value before import and a raw equality afterwards.
 #[derive(Clone, Copy)]
-struct Row<P = Value> {
-    kind: RowKind,
+pub(super) struct Row<P = Value> {
+    pub(super) kind: RowKind,
     /// Proof of this view row's equality.
-    proof: P,
+    pub(super) proof: P,
     /// Existing proof from the view representative to its current leader.
-    to_leader: Option<P>,
+    pub(super) to_leader: Option<P>,
 }
 
 /// The lookup result for one node of the input typed DAG.
 /// Its position in the returned vector is that node's `TermId`.
-struct Node<P = Value> {
+pub(super) struct Node<P = Value> {
     /// Canonical at the input node's sort, including nested container elements.
-    value: Value,
+    pub(super) value: Value,
     /// Absent for literals, primitives, and globals without a proof-bearing view.
     /// Having a value alone does not establish a container's existence.
-    row: Option<Row<P>>,
+    pub(super) row: Option<Row<P>>,
 }
 
-fn fail(message: impl Into<String>) -> Error {
+pub(super) fn fail(message: impl Into<String>) -> Error {
     Error::ExtractError(message.into())
 }
 
