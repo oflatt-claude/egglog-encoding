@@ -96,7 +96,7 @@ impl CommandMacro for SourceMetadata {
 struct RecordSource;
 
 impl UserDefinedCommand for RecordSource {
-    fn supports_term_encoding(&self) -> bool {
+    fn supports_proofs(&self) -> bool {
         true
     }
 
@@ -202,7 +202,7 @@ impl Macro<Vec<Command>> for ProveSlotted {
 }
 
 impl UserDefinedCommand for ProveSlotted {
-    fn supports_term_encoding(&self) -> bool {
+    fn supports_proofs(&self) -> bool {
         true
     }
 

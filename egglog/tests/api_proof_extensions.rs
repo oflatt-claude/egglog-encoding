@@ -4,7 +4,7 @@ use std::sync::Arc;
 struct ProveFromExtension(bool);
 
 impl UserDefinedCommand for ProveFromExtension {
-    fn supports_term_encoding(&self) -> bool {
+    fn supports_proofs(&self) -> bool {
         self.0
     }
 

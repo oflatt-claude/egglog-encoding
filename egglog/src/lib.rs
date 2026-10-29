@@ -373,9 +373,10 @@ pub struct EGraph {
 /// Compared to an external function, a user-defined command is more powerful because
 /// it has an exclusive access to the e-graph.
 pub trait UserDefinedCommand: Send + Sync {
-    /// Whether this command can run on a term-encoded e-graph. Opt-in commands
-    /// must use encoded-safe APIs (for example, `run_program`) for database work.
-    fn supports_term_encoding(&self) -> bool {
+    /// Whether this command can run with proofs enabled. Opt-in commands must
+    /// also support term encoding without proofs and use APIs such as
+    /// [`EGraph::run_program`] that preserve proof instrumentation for database work.
+    fn supports_proofs(&self) -> bool {
         false
     }
 
@@ -2858,10 +2859,7 @@ impl EGraph {
 
     fn resolve_command_inner(&mut self, command: Command) -> Result<ResolvedNCommands, Error> {
         if let Command::UserDefined(span, name, args) = &command
-            && self
-                .commands
-                .get(name)
-                .is_some_and(|c| c.supports_term_encoding())
+            && self.commands.get(name).is_some_and(|c| c.supports_proofs())
         {
             return Ok(ResolvedNCommands {
                 desugared: vec![ResolvedNCommand::UserDefined(
