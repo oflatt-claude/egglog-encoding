@@ -889,7 +889,7 @@ no atom reads, though its edge pins its slot. A claim's subterms are read the sa
 parent first.
 
 ```
-(function CosetReps (Math Renaming) Renamings :merge new)
+(function CosetReps (Math Renaming) Group :merge new)
 (relation Reading (Math Renaming Renaming))
 (function _pinned_Add (Renaming Math Renaming Math i64) Renaming :merge new)
 
@@ -898,14 +898,14 @@ parent first.
        (= pinned (map-domain (compose (map-image m2) m1))))
       ((set (_pinned_Add m1 c1 m2 c2 1) pinned)
        (set (CosetReps c1 pinned) (group-coset-reps grp pinned))) :ruleset slotted)
-(rule ((GroupIdx i) (= s (CosetReps c pinned)) (= g (vec-get s i)))
+(rule ((GroupIdx i) (= s (CosetReps c pinned)) (= g (vec-get (group-elements s) i)))
       ((Reading c pinned g)) :ruleset slotted)
-(rule ((Reading c pinned g) (= s (CosetReps c pinned)) (vec-not-contains s g))
+(rule ((Reading c pinned g) (= s (CosetReps c pinned)) (set-not-contains s g))
       ((delete (Reading c pinned g))) :ruleset slotted)
 (rule ((= s (CosetReps c pinned)) (= grp (EclassGroup c))
        (= fresh (group-coset-reps grp pinned)) (!= s fresh))
       ((set (CosetReps c pinned) fresh)) :ruleset slotted)
-(rule ((= s (CosetReps c pinned)) (> (vec-length s) 512))
+(rule ((= s (CosetReps c pinned)) (> (set-length s) 512))
       ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted)
 ```
 

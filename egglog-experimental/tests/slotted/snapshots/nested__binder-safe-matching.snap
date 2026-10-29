@@ -568,7 +568,7 @@ input_file: egglog-experimental/tests/slotted/nested/binder-safe-matching.egg
 (function Invocation_0 (U Renaming) U :merge ((union old new) old))
 (function EclassGroup_0 (U) Group :merge (set-union old new))
 (function GroupReplace_0 (U) Group :merge new)
-(function CosetReps_0 (U Renaming) Renamings :merge new)
+(function CosetReps_0 (U Renaming) Group :merge new)
 (relation BigReading_0 (U Renaming))
 (relation Reading_0 (U Renaming Renaming))
 
@@ -691,23 +691,23 @@ input_file: egglog-experimental/tests/slotted/nested/binder-safe-matching.egg
 
 (rule ((GroupIdxSmall _i)
        (= _s (CosetReps_0 _c _pinned))
-       (= _g (vec-get _s _i)))
+       (= _g (vec-get (group-elements _s) _i)))
       ((Reading_0 _c _pinned _g)) :ruleset slotted-read :name "slotted/reading-small/0")
 
 (rule ((= _s (CosetReps_0 _c _pinned))
-       (> (vec-length _s) 8))
+       (> (set-length _s) 8))
       ((BigReading_0 _c _pinned)) :ruleset slotted-read :name "slotted/reading-big-mark/0")
 
 (rule ((BigReading_0 _c _pinned)
        (= _s (CosetReps_0 _c _pinned))
        (GroupIdx _i)
        (>= _i 8)
-       (= _g (vec-get _s _i)))
+       (= _g (vec-get (group-elements _s) _i)))
       ((Reading_0 _c _pinned _g)) :ruleset slotted-read :name "slotted/reading-big/0")
 
 (rule ((Reading_0 _c _pinned _g)
        (= _s (CosetReps_0 _c _pinned))
-       (vec-not-contains _s _g))
+       (set-not-contains _s _g))
       ((delete (Reading_0 _c _pinned _g))) :ruleset slotted-read :name "slotted/reading-cleanup/0")
 
 (rule ((= _s (CosetReps_0 _c _pinned))
@@ -717,7 +717,7 @@ input_file: egglog-experimental/tests/slotted/nested/binder-safe-matching.egg
       ((set (CosetReps_0 _c _pinned) _fresh)) :ruleset slotted-read :name "slotted/coset-repair/0")
 
 (rule ((= _s (CosetReps_0 _c _pinned))
-       (> (vec-length _s) 512))
+       (> (set-length _s) 512))
       ((panic "a class has more readings than GroupIdx indexes")) :ruleset slotted-read :name "slotted/coset-panic/0")
 
 (rule ((ShapeEqual_0 _a _m _b))
