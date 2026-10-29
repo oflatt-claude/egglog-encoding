@@ -201,7 +201,7 @@ impl Decoder<'_> {
 pub(super) struct ExtractCommand;
 
 impl UserDefinedCommand for ExtractCommand {
-    fn supports_term_encoding(&self) -> bool {
+    fn supports_proofs(&self) -> bool {
         true
     }
 
