@@ -41,7 +41,7 @@ pub fn proof_term_to_string(dag: &TermDag, proof: TermId) -> String {
         match head {
             "=" => "prop",
             "Fiat" | "Rule" | "Merge" | "Trans" | "Sym" | "Congr" | "Proj"
-            | "ContainerNormalize" | "Eval" | "Equivariance" => "prf",
+            | "ContainerNormalize" | "Eval" | "Equivariance" | "Alpha" => "prf",
             _ => "t",
         }
         .to_string()
@@ -775,6 +775,11 @@ impl ProofStore {
         &self.term_dag
     }
 
+    /// Intern terms used by proofs and their checking context.
+    pub fn term_dag_mut(&mut self) -> &mut TermDag {
+        &mut self.term_dag
+    }
+
     /// Recompute a container term's canonical form by applying the constructor
     /// validator registered for its head (the container's own term normalizer).
     /// Non-container terms, and heads with no validator, are returned unchanged.
@@ -958,8 +963,10 @@ impl ProofStore {
         proof_term_to_string(&dag, proof)
     }
 
-    /// An empty store over `term_dag`.
-    pub(super) fn new(
+    /// An empty store over `term_dag`. The caller supplies trusted container
+    /// normalizers by constructor head and the base-value constructor heads
+    /// whose applications to base values are self-evident.
+    pub fn new(
         term_dag: TermDag,
         container_normalizers: HashMap<String, PrimitiveValidator>,
         prim_value_constructors: HashSet<String>,
@@ -1920,6 +1927,14 @@ impl ProofStore {
 }
 
 impl Proof {
+    /// Construct an unchecked proof step.
+    pub fn new(proposition: Proposition, justification: Justification) -> Self {
+        Self {
+            proposition,
+            justification,
+        }
+    }
+
     /// Get the proposition the proof proves
     pub fn proposition(&self) -> &Proposition {
         &self.proposition

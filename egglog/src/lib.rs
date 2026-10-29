@@ -57,8 +57,12 @@ pub use proofs::proof_encoding_helpers::{
     file_supports_proofs, file_supports_proofs_with_egraph, program_supports_proofs,
 };
 
-/// Read-only proof reconstruction API.
+/// Proof reconstruction and checking APIs.
 pub mod proof {
+    pub use crate::proofs::proof_checker::{
+        ProofCheckContext, ProofCheckError, ProofCheckErrorKind, check_actions_produce_equality,
+        check_fact_matches_proposition,
+    };
     pub use crate::proofs::proof_format::{
         Justification, Proof, ProofId, ProofStore, Proposition, proof_term_to_string,
     };
@@ -1345,6 +1349,11 @@ impl EGraph {
             }
             None => Ok(Some(output)),
         }
+    }
+
+    /// The resolved source program retained for proof checking, before instrumentation.
+    pub fn proof_checking_program(&self) -> &[ResolvedNCommand] {
+        &self.proof_check_program
     }
 
     /// Provide a program for use in proof checking.

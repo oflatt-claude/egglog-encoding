@@ -14,7 +14,7 @@ use crate::{
         ResolvedNCommand,
     },
     core::ResolvedCall,
-    proofs::proof_format::{Justification, ProofId, ProofStore, Proposition},
+    proofs::proof_format::{Justification, Proof, ProofId, ProofStore, Proposition},
     util::{HashMap, HashSet, IndexMap, SymbolGen},
 };
 use thiserror::Error;
@@ -557,22 +557,20 @@ pub enum ProofCheckErrorKind {
     ContainerPrimitiveNotSideCondition { rule_name: String, prim: String },
 }
 
-/// Context needed for proof checking
-pub(crate) struct ProofCheckContext {
+/// Source axioms and global bindings shared by checks over one term dag.
+pub struct ProofCheckContext {
     /// Set of equalities established by global union/set actions
     /// Each entry is a pair (lhs, rhs) that was unified
     /// This includes reflexive equalities (term, term) for all globals
     global_equalities: HashSet<Proposition>,
     /// Map of global variable names to their TermIds
     global_bindings: HashMap<String, TermId>,
-    /// Cache of already-checked proofs
-    checked_proofs: HashMap<ProofId, Proposition>,
 }
 
 impl ProofCheckContext {
     /// Create a new proof check context by analyzing the program.
     /// This gathers all equalities established by global actions (unions and sets).
-    fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Result<Self, ProofCheckError> {
+    pub fn new(prog: &[ResolvedNCommand], term_dag: &mut TermDag) -> Result<Self, ProofCheckError> {
         // Check for duplicate rule names
         let mut seen_rule_names: HashSet<&str> = HashSet::default();
         for cmd in prog {
@@ -592,7 +590,6 @@ impl ProofCheckContext {
 
         Ok(ProofCheckContext {
             global_equalities: action_ctx.propositions,
-            checked_proofs: HashMap::default(),
             global_bindings: action_ctx.var_bindings,
         })
     }
@@ -645,24 +642,45 @@ impl ProofStore {
         proof_id: ProofId,
         program: &[ResolvedNCommand],
     ) -> Result<Proposition, ProofCheckError> {
-        let mut ctx = ProofCheckContext::new(program, &mut self.term_dag)?;
-        self.check_proof_with_context(proof_id, program, &mut ctx)
+        let ctx = ProofCheckContext::new(program, &mut self.term_dag)?;
+        self.check_proof_with_context(proof_id, program, &ctx, &mut HashMap::default())
     }
 
-    /// Internal recursive proof checker with context
     fn check_proof_with_context(
         &mut self,
         proof_id: ProofId,
         program: &[ResolvedNCommand],
-        ctx: &mut ProofCheckContext,
+        ctx: &ProofCheckContext,
+        checked: &mut HashMap<ProofId, Proposition>,
     ) -> Result<Proposition, ProofCheckError> {
-        // Check cache first
-        if let Some(prop) = ctx.checked_proofs.get(&proof_id) {
+        if let Some(prop) = checked.get(&proof_id) {
             return Ok(prop.clone());
         }
-
         let proof = self.id_to_proof[proof_id].clone();
-        let result = match &proof.justification {
+        let result = self.check_step(proof_id, &proof, program, ctx, |store, premise| {
+            store.check_proof_with_context(premise, program, ctx, checked)
+        });
+        if let Ok(ref prop) = result {
+            checked.insert(proof_id, prop.clone());
+        }
+        result
+    }
+
+    /// Check one ordinary step, delegating its premise proofs to `check_premise`.
+    /// The callback must validate each requested premise in the same theory.
+    /// `ctx` must come from `program` and this store's term dag; all term IDs in
+    /// the step and returned propositions must belong to that dag.
+    /// Callers must ensure terms and substitutions are well-typed and respect
+    /// the rule's variable scopes; this method does not recheck those properties.
+    pub fn check_step(
+        &mut self,
+        proof_id: ProofId,
+        proof: &Proof,
+        program: &[ResolvedNCommand],
+        ctx: &ProofCheckContext,
+        mut check_premise: impl FnMut(&mut Self, ProofId) -> Result<Proposition, ProofCheckError>,
+    ) -> Result<Proposition, ProofCheckError> {
+        match &proof.justification {
             Justification::Fiat => {
                 // Accept a reflexive equality over a literal or a
                 // primitive-closed term (re-evaluated from the term alone), or
@@ -732,14 +750,21 @@ impl ProofStore {
                     if is_container_side_condition(fact) {
                         self.check_side_condition(fact, &mut working_subst, name)?;
                     } else {
-                        let prop = self.check_proof_with_context(premise_id, program, ctx)?;
-                        self.check_fact_matches_proposition(fact, &prop, &working_subst, name)?;
+                        let prop = check_premise(self, premise_id)?;
+                        check_fact_matches_proposition(
+                            &mut self.term_dag,
+                            fact,
+                            &prop,
+                            &working_subst,
+                            name,
+                        )?;
                     }
                 }
 
                 // Verify that the conclusion matches what the rule produces
-                self.check_rule_produces_equality(
-                    rule,
+                check_actions_produce_equality(
+                    &mut self.term_dag,
+                    &rule.head,
                     substitution,
                     &working_subst,
                     proof.proposition(),
@@ -755,8 +780,8 @@ impl ProofStore {
                 new_proof,
             } => {
                 // Check both sub-proofs - they should be reflexive proofs
-                let old_prop = self.check_proof_with_context(*old_proof, program, ctx)?;
-                let new_prop = self.check_proof_with_context(*new_proof, program, ctx)?;
+                let old_prop = check_premise(self, *old_proof)?;
+                let new_prop = check_premise(self, *new_proof)?;
 
                 let (old_lhs, old_rhs) = (old_prop.lhs, old_prop.rhs);
                 let (new_lhs, new_rhs) = (new_prop.lhs, new_prop.rhs);
@@ -868,8 +893,8 @@ impl ProofStore {
 
             Justification::Trans(left_id, right_id) => {
                 // Check both sub-proofs
-                let left_prop = self.check_proof_with_context(*left_id, program, ctx)?;
-                let right_prop = self.check_proof_with_context(*right_id, program, ctx)?;
+                let left_prop = check_premise(self, *left_id)?;
+                let right_prop = check_premise(self, *right_id)?;
 
                 let (left_lhs, left_rhs) = (left_prop.lhs, left_prop.rhs);
                 let (right_lhs, right_rhs) = (right_prop.lhs, right_prop.rhs);
@@ -901,7 +926,7 @@ impl ProofStore {
 
             Justification::Sym(inner_id) => {
                 // Check the inner proof
-                let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
+                let inner_prop = check_premise(self, *inner_id)?;
                 let (inner_lhs, inner_rhs) = (inner_prop.lhs, inner_prop.rhs);
 
                 // Symmetry swaps lhs and rhs
@@ -925,11 +950,11 @@ impl ProofStore {
                 child_proof: child_id,
             } => {
                 // Check the base proof (proves t1 = f(..., ci, ...))
-                let base_prop = self.check_proof_with_context(*base_id, program, ctx)?;
+                let base_prop = check_premise(self, *base_id)?;
                 let (base_lhs, base_rhs) = (base_prop.lhs, base_prop.rhs);
 
                 // Check the child proof (proves ci = c2)
-                let child_prop = self.check_proof_with_context(*child_id, program, ctx)?;
+                let child_prop = check_premise(self, *child_id)?;
                 let (child_lhs, child_rhs) = (child_prop.lhs, child_prop.rhs);
 
                 // base_rhs should be an application f(...)
@@ -998,7 +1023,7 @@ impl ProofStore {
             } => {
                 // The sub-proof establishes `t1 = f(..., ci, ...)`; the child at
                 // `child_index` is the `ci` this may conclude is reflexive.
-                let base_prop = self.check_proof_with_context(*base_id, program, ctx)?;
+                let base_prop = check_premise(self, *base_id)?;
                 let Term::App(_, children) = self.term_dag.get(base_prop.rhs) else {
                     return Err(ProofCheckErrorKind::ProjectionBaseNotApp { proof_id }.into());
                 };
@@ -1026,7 +1051,7 @@ impl ProofStore {
             Justification::ContainerNormalize { proof: inner_id } => {
                 // The sub-proof establishes `t1 = raw`; normalize `raw` to its
                 // canonical container form via the validator for its head.
-                let inner_prop = self.check_proof_with_context(*inner_id, program, ctx)?;
+                let inner_prop = check_premise(self, *inner_id)?;
                 let raw = inner_prop.rhs;
                 let normalized = self.normalize_container(raw);
                 let lhs_ok = proof.lhs() == inner_prop.lhs;
@@ -1050,14 +1075,7 @@ impl ProofStore {
                 // appeared outside a side condition, which is malformed.
                 Err(ProofCheckErrorKind::EvalOutsideSideCondition { proof_id }.into())
             }
-        };
-
-        // Cache the result
-        if let Ok(ref prop) = result {
-            ctx.checked_proofs.insert(proof_id, prop.clone());
         }
-
-        result
     }
 
     /// Check a container side condition by re-evaluating it against the rule
@@ -1179,196 +1197,196 @@ impl ProofStore {
         }
         Ok(())
     }
+}
 
-    /// Check that a fact matches a proposition under a substitution
-    fn check_fact_matches_proposition(
-        &mut self,
-        fact: &ResolvedFact,
-        prop: &Proposition,
-        subst_with_globals: &HashMap<String, TermId>,
-        rule_name: &str,
-    ) -> Result<(), ProofCheckError> {
-        let (lhs, rhs) = (prop.lhs, prop.rhs);
-        match fact {
-            // proof normal form for functions: (= (f args...) v)
-            // In the term representation, custom functions store output as last arg: f(args..., v)
-            ResolvedFact::Eq(
-                _,
-                ResolvedExpr::Call(_, call @ ResolvedCall::Func(_), args),
-                ResolvedExpr::Var(_, v),
-            ) if call.is_custom_func() => {
-                let name = call.name();
-                // Get the output variable's term
-                let var_term = subst_with_globals.get(&v.name).copied().ok_or_else(|| {
-                    ProofCheckErrorKind::UnboundVariable {
-                        rule_name: rule_name.to_string(),
-                        variable: v.name.clone(),
-                        available: subst_with_globals
-                            .keys()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    }
-                })?;
-
-                // Evaluate all the input arguments
-                let mut arg_terms = Vec::new();
-                for arg in args {
-                    arg_terms.push(self.eval_expr_with_subst(
-                        rule_name,
-                        arg,
-                        subst_with_globals,
-                    )?);
+/// Match a fact against a checked proposition under the supplied bindings.
+/// Terms and bindings must be well-typed; custom functions must be in proof normal form.
+pub fn check_fact_matches_proposition(
+    term_dag: &mut TermDag,
+    fact: &ResolvedFact,
+    prop: &Proposition,
+    subst_with_globals: &HashMap<String, TermId>,
+    rule_name: &str,
+) -> Result<(), ProofCheckError> {
+    let (lhs, rhs) = (prop.lhs, prop.rhs);
+    match fact {
+        // proof normal form for functions: (= (f args...) v)
+        // In the term representation, custom functions store output as last arg: f(args..., v)
+        ResolvedFact::Eq(
+            _,
+            ResolvedExpr::Call(_, call @ ResolvedCall::Func(_), args),
+            ResolvedExpr::Var(_, v),
+        ) if call.is_custom_func() => {
+            let name = call.name();
+            // Get the output variable's term
+            let var_term = subst_with_globals.get(&v.name).copied().ok_or_else(|| {
+                ProofCheckErrorKind::UnboundVariable {
+                    rule_name: rule_name.to_string(),
+                    variable: v.name.clone(),
+                    available: subst_with_globals
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 }
-                // Add the output variable as the last argument
-                arg_terms.push(var_term);
+            })?;
 
-                let expected_term_id = self.term_dag.app(name.to_owned(), arg_terms);
-
-                // The proposition should be a reflexive equality for this term
-                if lhs != expected_term_id || rhs != expected_term_id {
-                    return Err(ProofCheckErrorKind::FunctionFactMismatch {
-                        rule_name: rule_name.to_string(),
-                        expected: format_term(&self.term_dag, expected_term_id),
-                        actual_lhs: format_term(&self.term_dag, lhs),
-                        actual_rhs: format_term(&self.term_dag, rhs),
-                    }
-                    .into());
-                }
-
-                Ok(())
+            // Evaluate all the input arguments
+            let mut arg_terms = Vec::new();
+            for arg in args {
+                arg_terms.push(eval_fact_expr(
+                    term_dag,
+                    rule_name,
+                    arg,
+                    subst_with_globals,
+                )?);
             }
-            ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
-                let fact_lhs =
-                    self.eval_expr_with_subst(rule_name, lhs_expr, subst_with_globals)?;
-                let fact_rhs =
-                    self.eval_expr_with_subst(rule_name, rhs_expr, subst_with_globals)?;
-                if fact_lhs != lhs || fact_rhs != rhs {
-                    return Err(ProofCheckErrorKind::EqualityFactMismatch {
-                        rule_name: rule_name.to_string(),
-                        fact: format!("{fact}"),
-                        substituted_lhs: self.term_dag.to_string(fact_lhs),
-                        substituted_rhs: self.term_dag.to_string(fact_rhs),
-                        proven_lhs: format_term(&self.term_dag, lhs),
-                        proven_rhs: format_term(&self.term_dag, rhs),
-                    }
-                    .into());
+            // Add the output variable as the last argument
+            arg_terms.push(var_term);
+
+            let expected_term_id = term_dag.app(name.to_owned(), arg_terms);
+
+            // The proposition should be a reflexive equality for this term
+            if lhs != expected_term_id || rhs != expected_term_id {
+                return Err(ProofCheckErrorKind::FunctionFactMismatch {
+                    rule_name: rule_name.to_string(),
+                    expected: format_term(term_dag, expected_term_id),
+                    actual_lhs: format_term(term_dag, lhs),
+                    actual_rhs: format_term(term_dag, rhs),
                 }
-
-                Ok(())
+                .into());
             }
-            // For a plain expr, the proof should have the form t1 = t2 where t2 matches the expr under substitution
-            ResolvedFact::Fact(expr) => {
-                let fact_term = self.eval_expr_with_subst(rule_name, expr, subst_with_globals)?;
 
-                if fact_term != rhs {
-                    return Err(ProofCheckErrorKind::FactMismatch {
-                        rule_name: rule_name.to_string(),
-                        fact: format!("{fact}"),
-                        substitution: format_substitution(&self.term_dag, subst_with_globals),
-                        actual: format_term(&self.term_dag, rhs),
-                        expected: format_term(&self.term_dag, fact_term),
-                    }
-                    .into());
+            Ok(())
+        }
+        ResolvedFact::Eq(_, lhs_expr, rhs_expr) => {
+            let fact_lhs = eval_fact_expr(term_dag, rule_name, lhs_expr, subst_with_globals)?;
+            let fact_rhs = eval_fact_expr(term_dag, rule_name, rhs_expr, subst_with_globals)?;
+            if fact_lhs != lhs || fact_rhs != rhs {
+                return Err(ProofCheckErrorKind::EqualityFactMismatch {
+                    rule_name: rule_name.to_string(),
+                    fact: format!("{fact}"),
+                    substituted_lhs: term_dag.to_string(fact_lhs),
+                    substituted_rhs: term_dag.to_string(fact_rhs),
+                    proven_lhs: format_term(term_dag, lhs),
+                    proven_rhs: format_term(term_dag, rhs),
                 }
-
-                Ok(())
+                .into());
             }
+
+            Ok(())
+        }
+        // For a plain expr, the proof should have the form t1 = t2 where t2 matches the expr under substitution
+        ResolvedFact::Fact(expr) => {
+            let fact_term = eval_fact_expr(term_dag, rule_name, expr, subst_with_globals)?;
+
+            if fact_term != rhs {
+                return Err(ProofCheckErrorKind::FactMismatch {
+                    rule_name: rule_name.to_string(),
+                    fact: format!("{fact}"),
+                    substitution: format_substitution(term_dag, subst_with_globals),
+                    actual: format_term(term_dag, rhs),
+                    expected: format_term(term_dag, fact_term),
+                }
+                .into());
+            }
+
+            Ok(())
         }
     }
+}
 
-    /// Evaluate an expression with a variable substitution
-    fn eval_expr_with_subst(
-        &mut self,
-        rule_name: &str,
-        expr: &ResolvedExpr,
-        substitution: &HashMap<String, TermId>,
-    ) -> Result<TermId, ProofCheckError> {
-        match expr {
-            ResolvedExpr::Lit(_, lit) => Ok(self.term_dag.lit(lit.clone())),
-            ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
-                ProofCheckError::from(ProofCheckErrorKind::UnboundVariable {
-                    rule_name: rule_name.to_string(),
-                    variable: var.name.clone(),
-                    available: substitution.keys().cloned().collect::<Vec<_>>().join(", "),
-                })
-            }),
-            ResolvedExpr::Call(_, head, args) => {
-                // Evaluate all arguments first
-                let mut arg_terms = Vec::new();
-                for arg in args {
-                    arg_terms.push(self.eval_expr_with_subst(rule_name, arg, substitution)?);
-                }
+/// Evaluate an expression with a variable substitution
+fn eval_fact_expr(
+    term_dag: &mut TermDag,
+    rule_name: &str,
+    expr: &ResolvedExpr,
+    substitution: &HashMap<String, TermId>,
+) -> Result<TermId, ProofCheckError> {
+    match expr {
+        ResolvedExpr::Lit(_, lit) => Ok(term_dag.lit(lit.clone())),
+        ResolvedExpr::Var(_, var) => substitution.get(&var.name).copied().ok_or_else(|| {
+            ProofCheckError::from(ProofCheckErrorKind::UnboundVariable {
+                rule_name: rule_name.to_string(),
+                variable: var.name.clone(),
+                available: substitution.keys().cloned().collect::<Vec<_>>().join(", "),
+            })
+        }),
+        ResolvedExpr::Call(_, head, args) => {
+            // Evaluate all arguments first
+            let mut arg_terms = Vec::new();
+            for arg in args {
+                arg_terms.push(eval_fact_expr(term_dag, rule_name, arg, substitution)?);
+            }
 
-                match head {
-                    ResolvedCall::Primitive(prim) => {
-                        // Use the validator to compute the primitive result
-                        if let Some(validator) = prim.validator() {
-                            let result =
-                                validator(&mut self.term_dag, &arg_terms).ok_or_else(|| {
-                                    ProofCheckErrorKind::PrimitiveValidatorFailed {
-                                        function_name: prim.name().to_string(),
-                                    }
-                                })?;
-                            Ok(result)
-                        } else {
-                            // No validator available - primitives without validators can't be checked in proofs
-                            Err(ProofCheckErrorKind::PrimitiveNoValidator {
+            match head {
+                ResolvedCall::Primitive(prim) => {
+                    // Use the validator to compute the primitive result
+                    if let Some(validator) = prim.validator() {
+                        let result = validator(term_dag, &arg_terms).ok_or_else(|| {
+                            ProofCheckErrorKind::PrimitiveValidatorFailed {
                                 function_name: prim.name().to_string(),
                             }
-                            .into())
+                        })?;
+                        Ok(result)
+                    } else {
+                        // No validator available - primitives without validators can't be checked in proofs
+                        Err(ProofCheckErrorKind::PrimitiveNoValidator {
+                            function_name: prim.name().to_string(),
                         }
+                        .into())
                     }
-                    ResolvedCall::Func(func) => {
-                        match func.subtype {
-                            FunctionSubtype::Constructor => {
-                                Ok(self.term_dag.app(func.name.clone(), arg_terms))
-                            }
-                            FunctionSubtype::Custom => {
-                                // Custom functions should not appear in proof normal form!
-                                // They should be in the form (= (f args...) v) in the rule body
-                                panic!(
-                                    "Custom function {} should not appear in expression evaluation during proof checking. \
-                                    Functions should be in proof normal form: (= (function args...) output_var)",
-                                    func.name
-                                );
-                            }
-                        }
-                    }
-                    ResolvedCall::Values(_) => panic!("`values` is not supported in proofs"),
                 }
+                ResolvedCall::Func(func) => {
+                    match func.subtype {
+                        FunctionSubtype::Constructor => {
+                            Ok(term_dag.app(func.name.clone(), arg_terms))
+                        }
+                        FunctionSubtype::Custom => {
+                            // Custom functions should not appear in proof normal form!
+                            // They should be in the form (= (f args...) v) in the rule body
+                            panic!(
+                                "Custom function {} should not appear in expression evaluation during proof checking. \
+                                Functions should be in proof normal form: (= (function args...) output_var)",
+                                func.name
+                            );
+                        }
+                    }
+                }
+                ResolvedCall::Values(_) => panic!("`values` is not supported in proofs"),
             }
         }
     }
+}
 
-    /// Check that a rule produces the claimed equality
-    fn check_rule_produces_equality(
-        &mut self,
-        rule: &crate::ast::GenericRule<ResolvedCall, crate::ast::ResolvedVar>,
-        substitution: &IndexMap<String, TermId>,
-        subst_with_globals: &HashMap<String, TermId>,
-        claimed: &Proposition,
-        rule_name: &str,
-    ) -> Result<(), ProofCheckError> {
-        // Use process_actions to get propositions from the rule head
-        // Note: process_actions expects global variable bindings, but substitution
-        // has the same structure, so we can pass it directly
-        let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
-            rule.head.0.iter().collect();
-        let bindings = subst_with_globals.clone();
-        let action_ctx = process_actions(rule_name, bindings, &action_refs, &mut self.term_dag)?;
+/// Check that the instantiated actions establish the claimed equality.
+/// Bindings must include the rule's captured globals and a well-typed substitution.
+pub fn check_actions_produce_equality(
+    term_dag: &mut TermDag,
+    actions: &crate::ast::ResolvedActions,
+    substitution: &IndexMap<String, TermId>,
+    subst_with_globals: &HashMap<String, TermId>,
+    claimed: &Proposition,
+    rule_name: &str,
+) -> Result<(), ProofCheckError> {
+    // Use process_actions to get propositions from the rule head
+    // Note: process_actions expects global variable bindings, but substitution
+    // has the same structure, so we can pass it directly
+    let action_refs: Vec<&GenericAction<ResolvedCall, crate::ast::ResolvedVar>> =
+        actions.0.iter().collect();
+    let bindings = subst_with_globals.clone();
+    let action_ctx = process_actions(rule_name, bindings, &action_refs, term_dag)?;
 
-        // Check if the claimed equality is in the propositions
-        if action_ctx.propositions.contains(claimed) {
-            return Ok(());
-        }
-
-        Err(ProofCheckErrorKind::RuleHeadMismatch {
-            rule_name: rule_name.to_string(),
-            claimed_lhs: format_term(&self.term_dag, claimed.lhs()),
-            claimed_rhs: format_term(&self.term_dag, claimed.rhs()),
-            substitution: format_substitution(&self.term_dag, substitution),
-        }
-        .into())
+    // Check if the claimed equality is in the propositions
+    if action_ctx.propositions.contains(claimed) {
+        return Ok(());
     }
+
+    Err(ProofCheckErrorKind::RuleHeadMismatch {
+        rule_name: rule_name.to_string(),
+        claimed_lhs: format_term(term_dag, claimed.lhs()),
+        claimed_rhs: format_term(term_dag, claimed.rhs()),
+        substitution: format_substitution(term_dag, substitution),
+    }
+    .into())
 }
