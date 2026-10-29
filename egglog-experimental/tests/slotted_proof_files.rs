@@ -33,7 +33,7 @@ fn main() {
                 .display()
                 .to_string();
             tests.push(
-                Trial::test(name, move || {
+                Trial::test(format!("proofs/slotted/{name}"), move || {
                     let encoded = encoded?;
                     let expected = encoded.matches("(prove-slotted ").count();
                     let outputs = new_egraph_with_proofs().parse_and_run_program(None, &encoded)?;

@@ -309,6 +309,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true", help="skip the fuzzers")
     ap.add_argument("-k", metavar="SUBSTRING", help="only checks whose name contains this")
+    ap.add_argument("--exclude", metavar="SUBSTRING", help="skip checks whose name contains this")
     ap.add_argument(
         "--no-oracle",
         action="store_true",
@@ -329,7 +330,10 @@ def main():
     picked = [
         c
         for c in CHECKS
-        if not (args.quick and c[3]) and not (args.no_oracle and c[4]) and (not args.k or args.k in c[0])
+        if not (args.quick and c[3])
+        and not (args.no_oracle and c[4])
+        and (not args.k or args.k in c[0])
+        and (not args.exclude or args.exclude not in c[0])
     ]
     failed = []
     for name, cmd, expect, _, _needs_oracle in picked:

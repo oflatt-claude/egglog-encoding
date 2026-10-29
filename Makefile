@@ -1,6 +1,7 @@
 .PHONY: \
 	check nits test python-check python-nits rust-check rust-nits \
 	proof-tests slotted-proof-tests slotted-eval benchmark-smoke nightly nightly-local nightly-uv nightly-rustup \
+	slotted-tests slotted-proof-corpus-tests slotted-test-binaries \
 	update-snapshots format \
 	python-lock python-format-check python-lint python-typecheck python-test \
 	rust-format-check rust-clippy rust-doc-links rust-test
@@ -24,12 +25,15 @@ check: nits test
 # Nits are intentionally test-free.
 nits: python-nits rust-nits
 
-test: python-test rust-test
+test: python-test rust-test slotted-tests slotted-proof-tests
+
+slotted-test-binaries:
 	cargo build -p egglog-experimental -p egraph-isomorphism --bins
+
+slotted-tests: slotted-test-binaries
 	cargo build --manifest-path slotted/xmulti/Cargo.toml
 	cargo test --manifest-path slotted/xmulti/Cargo.toml
-	uv run --locked python slotted/checks/check-slotted.py
-	uv run --locked python slotted/checks/check-proofs.py
+	uv run --locked python slotted/checks/check-slotted.py --exclude proof-fuzz
 
 python-check: python-nits python-test
 
@@ -57,8 +61,9 @@ rust-nits: rust-format-check rust-clippy rust-doc-links
 rust-format-check:
 	cargo fmt --all -- --check
 
-rust-test:
-	cargo test --workspace
+# The shared prerequisite runs this corpus for both Rust and slotted proof tests.
+rust-test: slotted-proof-corpus-tests
+	cargo test --workspace -- --skip proofs/slotted/
 
 rust-clippy:
 	cargo clippy --workspace --all-targets -- -D warnings
@@ -73,10 +78,12 @@ rust-doc-links:
 proof-tests:
 	cargo test --workspace --test files 'proofs/'
 
-slotted-proof-tests:
+slotted-proof-corpus-tests:
 	cargo test -p egglog-experimental --test slotted_proof_files
-	cargo build -p egglog-experimental --bin egglog-experimental
+
+slotted-proof-tests: slotted-proof-corpus-tests slotted-test-binaries
 	uv run --locked python slotted/checks/check-proofs.py
+	uv run --locked python slotted/checks/check-slotted.py --no-oracle -k proof-fuzz
 
 # The paper's case studies -- the S4.1 array goal and the S4.2 SDQL workloads -- on the
 # encoding and on the reference through both of its matchers, at the artifact's budgets.
