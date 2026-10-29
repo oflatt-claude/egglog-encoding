@@ -40,37 +40,58 @@ impl Symbols {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Column {
+/// A source constructor argument's role in binding and renaming.
+pub enum Column {
+    /// A child in the constructor's carrier sort.
     Child,
+    /// A slot binding the following child column.
     Binder,
+    /// A literal or variable of the named payload sort.
     Payload(String),
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct Constructor {
+/// A source constructor's carrier sort and argument roles.
+pub struct Constructor {
+    /// The constructor name.
     pub name: String,
+    /// The result sort, also used by child and binder columns.
     pub sort: String,
+    /// Argument roles in source order.
     pub columns: Vec<Column>,
 }
 
 impl Constructor {
-    pub fn children(&self) -> Vec<&Column> {
+    /// The sort of an argument, or `None` for an out-of-range index.
+    pub fn column_sort(&self, index: usize) -> Option<&str> {
+        self.columns.get(index).map(|column| match column {
+            Column::Payload(sort) => sort.as_str(),
+            _ => self.sort.as_str(),
+        })
+    }
+
+    /// Argument sorts in source order.
+    pub fn input_sorts(&self) -> impl Iterator<Item = &str> {
+        (0..self.columns.len()).map(|i| self.column_sort(i).unwrap())
+    }
+
+    pub(super) fn children(&self) -> Vec<&Column> {
         self.columns
             .iter()
             .filter(|c| !matches!(c, Column::Payload(_)))
             .collect()
     }
-    pub fn binders(&self) -> Vec<usize> {
+    pub(super) fn binders(&self) -> Vec<usize> {
         self.children()
             .iter()
             .enumerate()
             .filter_map(|(i, c)| (**c == Column::Binder).then_some(i))
             .collect()
     }
-    pub fn covered(&self) -> Option<usize> {
+    pub(super) fn covered(&self) -> Option<usize> {
         self.binders().last().map(|i| i + 1)
     }
-    pub fn types(&self) -> String {
+    pub(super) fn types(&self) -> String {
         self.columns
             .iter()
             .map(|c| match c {
@@ -80,7 +101,13 @@ impl Constructor {
             .collect::<Vec<_>>()
             .join(" ")
     }
-    pub fn node(&self, head: &str, edges: &[String], kids: &[String], pays: &[String]) -> String {
+    pub(super) fn node(
+        &self,
+        head: &str,
+        edges: &[String],
+        kids: &[String],
+        pays: &[String],
+    ) -> String {
         let (mut k, mut p) = (0, 0);
         let mut args = Vec::new();
         for col in &self.columns {
@@ -94,7 +121,7 @@ impl Constructor {
         }
         call(head, args)
     }
-    pub fn split<'a>(&self, args: &'a [Term]) -> (Vec<&'a Term>, Vec<&'a Term>) {
+    pub(super) fn split<'a>(&self, args: &'a [Term]) -> (Vec<&'a Term>, Vec<&'a Term>) {
         let mut kids = Vec::new();
         let mut pays = Vec::new();
         for (c, t) in self.columns.iter().zip(args) {
@@ -326,14 +353,21 @@ pub(super) fn names(prefix: &str, n: usize) -> Vec<String> {
     (1..=n).map(|i| format!("{prefix}{i}")).collect()
 }
 
-pub(super) fn source_text(term: &Term) -> String {
+pub(super) fn source_expr(term: &Term) -> egglog::ast::Expr {
+    use egglog::ast::{Expr, Parser};
+    let span = egglog::span!();
     match term {
-        Term::Slot(s)
-        | Term::Variable(s)
-        | Term::Global(s)
-        | Term::Payload(s)
-        | Term::PayloadVariable(s) => s.clone(),
-        Term::Node(head, args) => call(head, args.iter().map(source_text)),
-        Term::Subst(args) => call("subst", args.iter().map(source_text)),
+        Term::Slot(s) | Term::Variable(s) | Term::Global(s) | Term::PayloadVariable(s) => {
+            Expr::Var(span, s.clone())
+        }
+        Term::Payload(s) => Parser::default()
+            .get_expr_from_string(None, s)
+            .expect("validated payload literal"),
+        Term::Node(head, args) => {
+            Expr::Call(span, head.clone(), args.iter().map(source_expr).collect())
+        }
+        Term::Subst(args) => {
+            Expr::Call(span, "subst".into(), args.iter().map(source_expr).collect())
+        }
     }
 }

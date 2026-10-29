@@ -13,11 +13,8 @@ pub(super) fn schedule(steps: usize, has_rules: bool) -> String {
     )
 }
 
-pub(super) fn shared(proofs: bool) -> String {
+pub(super) fn shared() -> String {
     let mut s = include_str!("templates/shared.egg").to_owned();
-    if proofs {
-        s.push_str("(function SlottedCarrier (String i64) Unit :no-merge :internal-hidden)\n(function SlottedRuleSource (String String) Unit :no-merge :internal-hidden)\n(function SlottedLetSource (String String) Unit :no-merge :internal-hidden)\n(function SlottedUnionSource (String String String) Unit :no-merge :internal-hidden)\n");
-    }
     for i in 0..512 {
         s.push_str(&format!("(GroupIdx {i})\n"));
     }

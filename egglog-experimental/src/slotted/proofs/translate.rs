@@ -4,10 +4,11 @@
 //! Encoded rows are interpreted as ordinary surface equalities. The translation
 //! rules and their derivations are described in the proof guide above.
 
+use super::format::Claim;
 use super::format::{SlottedConclusion, SlottedProofStore, SlottedProposition};
 use super::lifting::{LiftedId, Lifting};
 use super::pipeline::EncodingNames;
-use super::source::{Claim, ColumnKind, Rhs, SlottedProgram};
+use super::source::{ColumnKind, SlottedProgram, SourceFact, pattern_term};
 use super::terms::{FreshSlots, Renaming, all_slots, rename, slot_of, slot_term, term_renaming};
 
 use super::{HashMap, HashSet};
@@ -388,7 +389,7 @@ impl<'a> Translator<'a> {
                     i += 2;
                     k += 1;
                 }
-                ColumnKind::Payload => {
+                ColumnKind::Payload(_) => {
                     let lit = match self.egg().get(args[i]) {
                         Term::Lit(l) => l.clone(),
                         _ => return Err(format!("payload is not a literal in {head}")),
@@ -412,7 +413,7 @@ impl<'a> Translator<'a> {
         for (j, col) in ctor.columns.iter().enumerate() {
             let width = match col {
                 ColumnKind::Child | ColumnKind::Binder => 2,
-                ColumnKind::Payload => 1,
+                ColumnKind::Payload(_) => 1,
             };
             if physical == i + width - 1 && width == 2 {
                 return Ok(j);
@@ -1031,7 +1032,7 @@ impl<'a> Translator<'a> {
                         i += 2;
                     }
                     ColumnKind::Binder => i += 2,
-                    ColumnKind::Payload => i += 1,
+                    ColumnKind::Payload(_) => i += 1,
                 }
             }
         }
@@ -1100,7 +1101,7 @@ impl<'a> Translator<'a> {
                     classes.push(args[i + 1]);
                     i += 2;
                 }
-                ColumnKind::Payload => {
+                ColumnKind::Payload(_) => {
                     payloads.push(args[i]);
                     i += 1;
                 }
@@ -1125,7 +1126,7 @@ impl<'a> Translator<'a> {
         let mut p = row_eq;
         let mut slotted_j = 0;
         for (j, col) in ctor.columns.iter().enumerate() {
-            if matches!(col, ColumnKind::Payload) {
+            if matches!(col, ColumnKind::Payload(_)) {
                 continue;
             }
             let k = slotted_j;
@@ -1250,7 +1251,7 @@ impl<'a> Translator<'a> {
         Ok(ctor
             .columns
             .iter()
-            .filter(|c| !matches!(c, ColumnKind::Payload))
+            .filter(|c| !matches!(c, ColumnKind::Payload(_)))
             .count())
     }
 
@@ -1437,7 +1438,7 @@ impl<'a> Translator<'a> {
                     out.push(args[i + 1]);
                     i += 2;
                 }
-                ColumnKind::Payload => i += 1,
+                ColumnKind::Payload(_) => i += 1,
             }
         }
         Ok(out)
@@ -1625,7 +1626,7 @@ impl<'a> Translator<'a> {
                     classes.push(args[i + 1]);
                     i += 2;
                 }
-                ColumnKind::Payload => i += 1,
+                ColumnKind::Payload(_) => i += 1,
             }
         }
         let group_values: Vec<Vec<SlotMap>> = groups
@@ -1650,7 +1651,7 @@ impl<'a> Translator<'a> {
             let mut p = self.reflexive(self.out.proposition(row_eq).rhs)?;
             let mut k = 0;
             for (j, col) in ctor.columns.iter().enumerate() {
-                if matches!(col, ColumnKind::Payload) {
+                if matches!(col, ColumnKind::Payload(_)) {
                     continue;
                 }
                 let gi = &gs[k];
@@ -1711,13 +1712,16 @@ impl<'a> Translator<'a> {
             .get(name)
             .cloned()
             .ok_or_else(|| format!("no source for rule {name}"))?;
+        let (lhs_expr, rhs_expr) = rewrite.endpoints();
+        let lhs_pattern = pattern_term(&mut self.out.term_dag, lhs_expr);
+        let rhs_pattern = pattern_term(&mut self.out.term_dag, rhs_expr);
         let names = self
             .names
             .rules
             .get(name)
             .ok_or_else(|| format!("no generated names for rule {name}"))?;
         let names = &names.names;
-        let root_name = match self.out.term_dag.get(rewrite.lhs) {
+        let root_name = match self.out.term_dag.get(lhs_pattern) {
             Term::Var(v) => v.clone(),
             _ => names.patterns[0][0].1.clone(),
         };
@@ -1754,14 +1758,14 @@ impl<'a> Translator<'a> {
             proof: root,
             mut variables,
             occurrences: root_occ,
-        } = self.expand(cls_p, rewrite.lhs, &[], &ctx, HashMap::default())?;
+        } = self.expand(cls_p, lhs_pattern, &[], &ctx, HashMap::default())?;
         let root = self.content_form(root); // cls_p = C
         let root_atom = self
-            .atom_label(&frame, &root_name, rewrite.lhs, root_occ.get(&vec![]))
+            .atom_label(&frame, &root_name, lhs_pattern, root_occ.get(&vec![]))
             .or(Some("@atom:0".to_string()));
         let nested = self.nested_node_slots(
             &frame,
-            rewrite.lhs,
+            lhs_pattern,
             &root_occ,
             &ctx.names,
             self.out.proposition(root).rhs,
@@ -1769,11 +1773,12 @@ impl<'a> Translator<'a> {
         let (root, _) = self.lift(root, &frame, root_atom.as_deref(), &nested);
         let content = self.out.proposition(root).rhs;
         let mut sigma: HashMap<String, TermId> = HashMap::default();
-        let mut contents: Vec<(TermId, TermId)> = vec![(rewrite.lhs, content)];
+        let mut contents: Vec<(TermId, TermId)> = vec![(lhs_pattern, content)];
         let mut condition_proofs: Vec<ConditionProof> = vec![];
-        for (i, cond) in rewrite.conditions.iter().enumerate() {
-            if let Some((var, call)) = cond.binding(&self.out.term_dag) {
+        for (i, cond) in rewrite.conditions().iter().enumerate() {
+            if let Some((var, call)) = cond.binding() {
                 let var = var.clone();
+                let call = pattern_term(&mut self.out.term_dag, call);
                 let cond_names = names
                     .patterns
                     .get(i + 1)
@@ -1861,8 +1866,8 @@ impl<'a> Translator<'a> {
             *term = rename(&mut self.out.term_dag, &to_source, *term);
         }
         // minted slots: right-hand-side literals the body never mentions
-        if let Rhs::Term(r) = &rewrite.rhs {
-            for v in rewrite.pattern_vars(&self.out.term_dag, *r) {
+        {
+            for v in rewrite.pattern_vars(&self.out.term_dag, rhs_pattern) {
                 if !sigma.contains_key(&v) {
                     if !v.starts_with('$') {
                         return Err(format!("{v} occurs only on the right-hand side of {name}"));
@@ -1873,10 +1878,11 @@ impl<'a> Translator<'a> {
             }
         }
         let sigma_order: Vec<(String, TermId)> = {
-            let mut order = rewrite.pattern_vars(&self.out.term_dag, rewrite.lhs);
-            for cond in &rewrite.conditions {
-                if let Some((var, call)) = cond.binding(&self.out.term_dag) {
+            let mut order = rewrite.pattern_vars(&self.out.term_dag, lhs_pattern);
+            for cond in rewrite.conditions() {
+                if let Some((var, call)) = cond.binding() {
                     let var = var.clone();
+                    let call = pattern_term(&mut self.out.term_dag, call);
                     if !order.contains(&var) {
                         order.push(var.clone());
                     }
@@ -1887,8 +1893,8 @@ impl<'a> Translator<'a> {
                     }
                 }
             }
-            if let Rhs::Term(r) = &rewrite.rhs {
-                for v in rewrite.pattern_vars(&self.out.term_dag, *r) {
+            {
+                for v in rewrite.pattern_vars(&self.out.term_dag, rhs_pattern) {
                     if !order.contains(&v) {
                         order.push(v);
                     }
@@ -1899,16 +1905,11 @@ impl<'a> Translator<'a> {
         for (v, s) in &sigma_order {
             log::debug!("rule {name}: {v} := {}", self.out_string(*s));
         }
-        let instance_lhs = rewrite.instantiate(&mut self.out.term_dag, rewrite.lhs, &sigma)?;
+        let instance_lhs = rewrite.instantiate(&mut self.out.term_dag, lhs_pattern, &sigma)?;
         let instance_lhs = self
             .program
             .refresh_binders(&mut self.out.term_dag, instance_lhs);
-        let instance_rhs = match &rewrite.rhs {
-            Rhs::Term(r) => rewrite.instantiate(&mut self.out.term_dag, *r, &sigma)?,
-            Rhs::Var(v) => *sigma
-                .get(v)
-                .ok_or_else(|| format!("the match of {name} binds no class for {v}"))?,
-        };
+        let instance_rhs = rewrite.instantiate(&mut self.out.term_dag, rhs_pattern, &sigma)?;
         let instance_rhs = self
             .program
             .refresh_binders(&mut self.out.term_dag, instance_rhs);
@@ -1986,14 +1987,7 @@ impl<'a> Translator<'a> {
             return Err("the step relates neither side with the matched class".into());
         };
         let target = self.dec(built)?;
-        let rhs_occ = match &rewrite.rhs {
-            Rhs::Term(r) => self.pattern_occurrences(*r, &variables),
-            Rhs::Var(v) => variables
-                .get(v)
-                .map(|&cls| (vec![], Occurrence { cls, row: None }))
-                .into_iter()
-                .collect(),
-        };
+        let rhs_occ = self.pattern_occurrences(rhs_pattern, &variables);
         let p = self
             .fit(p, target, &rhs_occ)
             .map_err(|e| format!("result of {name}: {e}"))?;
@@ -2079,7 +2073,7 @@ impl<'a> Translator<'a> {
                     }
                     i += 2;
                 }
-                ColumnKind::Payload => i += 1,
+                ColumnKind::Payload(_) => i += 1,
             }
         }
         candidates.and_then(|c| c.into_iter().next())
@@ -2222,7 +2216,7 @@ impl<'a> Translator<'a> {
                 Ok(())
             }
             Term::Lit(_) => Ok(()),
-            Term::App(_, kids) => {
+            Term::App(head, kids) => {
                 let Term::App(_, ckids) = self.out.term_dag.get(content).clone() else {
                     return Err(format!(
                         "pattern {} met a non-application {}",
@@ -2233,8 +2227,16 @@ impl<'a> Translator<'a> {
                 if kids.len() != ckids.len() {
                     return Err("pattern and instance differ in arity".into());
                 }
-                for (k, c) in kids.iter().zip(ckids.iter()) {
-                    self.bind_from_content(*k, *c, sigma)?;
+                for (i, (k, c)) in kids.iter().zip(ckids.iter()).enumerate() {
+                    if matches!(
+                        self.program.constructors[&head].columns[i],
+                        ColumnKind::Payload(_)
+                    ) && let Term::Var(var) = self.out.term_dag.get(*k)
+                    {
+                        sigma.entry(var.clone()).or_insert(*c);
+                    } else {
+                        self.bind_from_content(*k, *c, sigma)?;
+                    }
                 }
                 Ok(())
             }
@@ -2623,7 +2625,7 @@ impl<'a> Translator<'a> {
                     }
                 }
                 ColumnKind::Binder => i += 2,
-                ColumnKind::Payload => i += 1,
+                ColumnKind::Payload(_) => i += 1,
             }
         }
         Ok(Expansion {
@@ -2642,7 +2644,9 @@ impl<'a> Translator<'a> {
         let Some(c) = self.program.constructors.get(ctor) else {
             return false;
         };
-        c.columns.iter().all(|k| matches!(k, ColumnKind::Payload))
+        c.columns
+            .iter()
+            .all(|k| matches!(k, ColumnKind::Payload(_)))
             && kids
                 .iter()
                 .all(|k| !matches!(self.out.term_dag.get(*k), Term::Var(_)))
@@ -2755,7 +2759,7 @@ impl<'a> Translator<'a> {
                     physical += 2;
                 }
                 ColumnKind::Binder => physical += 2,
-                ColumnKind::Payload => physical += 1,
+                ColumnKind::Payload(_) => physical += 1,
             }
         }
         Ok(())
@@ -2897,7 +2901,7 @@ impl<'a> Translator<'a> {
                     i += 2;
                 }
                 ColumnKind::Binder => i += 2,
-                ColumnKind::Payload => {
+                ColumnKind::Payload(_) => {
                     // a literal must be the row's value; a payload variable the
                     // substitution binds must be bound to it
                     let Some(&value) = args.get(i) else {
@@ -3051,7 +3055,7 @@ impl<'a> Translator<'a> {
                                 return self.transport(r, row_eq);
                             }
                             ColumnKind::Binder => i += 2,
-                            ColumnKind::Payload => i += 1,
+                            ColumnKind::Payload(_) => i += 1,
                         }
                     }
                     Err(format!("${s} is in no child of {}", self.egg_string(row)))
@@ -3752,14 +3756,14 @@ impl<'a> Translator<'a> {
             proof: pa,
             occurrences: occ_a,
             ..
-        } = self.expand(cls_a, claim.lhs, &[], &ctx_a, HashMap::default())?;
+        } = self.expand(cls_a, src_a, &[], &ctx_a, HashMap::default())?;
         let pa = self.fit(pa, src_a, &occ_a)?; // cls_a = ·src_a
         let ctx_b = side(1)?;
         let Expansion {
             proof: pb,
             occurrences: occ_b,
             ..
-        } = self.expand(cls_b, claim.rhs, &[], &ctx_b, HashMap::default())?;
+        } = self.expand(cls_b, src_b, &[], &ctx_b, HashMap::default())?;
         for (path, o) in &occ_b {
             log::debug!(
                 "claim side b occurrence {path:?}: {}",
@@ -3809,7 +3813,7 @@ impl<'a> Translator<'a> {
         coset: Option<&SlotMap>,
         occ_b: &HashMap<Vec<usize>, Occurrence>,
     ) -> R<LiftedId> {
-        if claim.kind == super::source::ClaimKind::RenamingEq {
+        if claim.kind == super::format::ClaimKind::RenamingEq {
             return Ok(result);
         }
         let src_b = self.out.proposition(pb).rhs;

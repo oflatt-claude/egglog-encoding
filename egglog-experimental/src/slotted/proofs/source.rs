@@ -1,38 +1,21 @@
-//! Source declarations, rewrites, and claims used by the slotted proof checker.
+//! Native source rules, declaration scopes, and binding semantics for proof checking.
 
-use super::terms::{FreshSlots, is_pattern_var, slot_of};
+use super::format::{Claim, ClaimKind};
+use super::terms::{FreshSlots, Renaming, slot_of};
 use super::{HashMap, HashSet};
-use egglog::ast::Literal;
-use egglog::util::IndexMap;
-use egglog::{Term, TermDag, TermId};
+use egglog::ast::{
+    Expr, Fact, FunctionDecl, GenericAction, GenericActions, ResolvedExpr, ResolvedFact,
+    ResolvedRule, Rule, Schema, Span,
+};
+use egglog::prelude::BaseSort;
+use egglog::sort::{EqSort, UnitSort};
+use egglog::util::{FreshGen, INTERNAL_SYMBOL_PREFIX, IndexMap, SymbolGen};
+use egglog::{EGraph, Primitive, PurePrim, PureState, ResolvedCall, Term, TermDag, TermId, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// How a surface constructor column participates in binding and renaming.
-pub enum ColumnKind {
-    /// A slotted child.
-    Child,
-    /// A column whose slot the node binds over the next child column.
-    Binder,
-    /// A payload: an `i64`, a `String`, …
-    Payload,
-}
-
-#[derive(Clone, Debug)]
-/// A source constructor's surface layout and sort signature.
-pub struct Constructor {
-    /// The constructor's source name.
-    pub name: String,
-    /// The role of each surface argument, in order.
-    pub columns: Vec<ColumnKind>,
-    /// The sort of each column: a carrier sort for a child or binder column, the
-    /// payload's sort otherwise.
-    pub sorts: Vec<String>,
-    /// The carrier sort the constructor builds.
-    pub output: String,
-}
+pub use crate::slotted::model::{Column as ColumnKind, Constructor};
 
 /// A top-level `(union a b)`, with the carrier sort the compiler gave it: two bare
 /// slots carry no sort of their own.
@@ -46,156 +29,64 @@ pub struct Union {
     pub sort: String,
 }
 
-/// A rewrite's right-hand side: a term to build, or one of its variables.
+/// A native source rule with its declaration-scoped global bindings.
 #[derive(Clone, Debug)]
-pub enum Rhs {
-    /// A constructor pattern instantiated by the rule application.
-    Term(TermId),
-    /// A variable whose matched term is reused directly.
-    Var(String),
-}
-
-#[derive(Clone, Debug)]
-/// A fact written in a rewrite's `:when` clause.
-pub enum Condition {
-    /// A constructor pattern that must exist.
-    Fact(TermId),
-    /// An equality between two source terms.
-    Eq {
-        /// Left source expression.
-        lhs: TermId,
-        /// Right source expression.
-        rhs: TermId,
-    },
-    /// Two source terms that must differ.
-    Neq {
-        /// Left source expression.
-        lhs: TermId,
-        /// Right source expression.
-        rhs: TermId,
-    },
-    /// An equality allowing a permutation of the right term's slots.
-    RenamingEq {
-        /// Left source expression.
-        lhs: TermId,
-        /// Right source expression.
-        rhs: TermId,
-    },
-    /// Two source terms that differ under every slot permutation.
-    RenamingNeq {
-        /// Left source expression.
-        lhs: TermId,
-        /// Right source expression.
-        rhs: TermId,
-    },
-    /// The slot occurs freely in at least one of the terms.
-    Free {
-        /// Source expression naming the tested slot.
-        slot: TermId,
-        /// Terms whose combined free slots are tested.
-        terms: Vec<TermId>,
-    },
-    /// The slot occurs freely in none of the terms.
-    NotFree {
-        /// Source expression naming the tested slot.
-        slot: TermId,
-        /// Terms whose combined free slots are tested.
-        terms: Vec<TermId>,
-    },
-    /// The term has exactly these free slots.
-    FreeNames {
-        /// Source expression whose free slots are tested.
-        term: TermId,
-        /// Source expressions naming the required slots.
-        slots: Vec<TermId>,
-    },
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) enum Requirement {
-    Exists(TermId),
-    Equal(TermId, TermId),
-    RenamingEqual(TermId, TermId),
-}
-
-impl Condition {
-    /// The source expressions in this fact, in written order.
-    pub fn terms(&self) -> Vec<TermId> {
-        match self {
-            Self::Fact(t) => vec![*t],
-            Self::Eq { lhs, rhs }
-            | Self::Neq { lhs, rhs }
-            | Self::RenamingEq { lhs, rhs }
-            | Self::RenamingNeq { lhs, rhs } => vec![*lhs, *rhs],
-            Self::Free { slot, terms } | Self::NotFree { slot, terms } => std::iter::once(*slot)
-                .chain(terms.iter().copied())
-                .collect(),
-            Self::FreeNames { term, slots } => std::iter::once(*term)
-                .chain(slots.iter().copied())
-                .collect(),
-        }
-    }
-
-    pub(super) fn requirements(&self) -> Vec<Requirement> {
-        match self {
-            Self::Eq { lhs, rhs } => vec![Requirement::Equal(*lhs, *rhs)],
-            Self::RenamingEq { lhs, rhs } => vec![Requirement::RenamingEqual(*lhs, *rhs)],
-            Self::Fact(term) | Self::FreeNames { term, .. } => vec![Requirement::Exists(*term)],
-            Self::Free { terms, .. } | Self::NotFree { terms, .. } => {
-                terms.iter().copied().map(Requirement::Exists).collect()
-            }
-            Self::Neq { lhs, rhs } | Self::RenamingNeq { lhs, rhs } => {
-                vec![Requirement::Exists(*lhs), Requirement::Exists(*rhs)]
-            }
-        }
-    }
-
-    pub(super) fn binding<'a>(&self, dag: &'a TermDag) -> Option<(&'a String, TermId)> {
-        let Self::Eq { lhs, rhs } = self else {
-            return None;
-        };
-        let Term::Var(var) = dag.get(*lhs) else {
-            return None;
-        };
-        Some((var, *rhs))
-    }
-}
-
-#[derive(Clone, Debug)]
-/// A named source rewrite with its matching premises.
-pub struct Rewrite {
-    /// Globals in scope when the rewrite was declared.
+pub struct SourceRule {
+    /// The original rewrite desugared to a typed rule.
+    pub rule: ResolvedRule,
+    /// Captured globals keyed by their resolved identities.
     pub globals: IndexMap<String, TermId>,
-    /// The name used by proof rule applications.
-    pub name: String,
-    /// The root pattern matched by the rewrite.
-    pub lhs: TermId,
-    /// The term or variable produced by the rewrite.
-    pub rhs: Rhs,
-    /// The original `:when` facts, in source order.
-    pub conditions: Vec<Condition>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Whether a claim fixes free slots or permits a renaming between its sides.
-pub enum ClaimKind {
-    /// `(= a b)`: the same invocation.
-    Eq,
-    /// `(renaming-= a b)`: the same class under some renaming.
-    RenamingEq,
+pub(super) enum Requirement<'a> {
+    Exists(&'a ResolvedExpr),
+    Equal(&'a ResolvedExpr, &'a ResolvedExpr),
+    RenamingEqual(&'a ResolvedExpr, &'a ResolvedExpr),
 }
 
-/// A `prove-slotted`'s claim over source terms.
-#[derive(Clone, Debug)]
-pub struct Claim {
-    /// The requested notion of equality.
-    pub kind: ClaimKind,
-    /// The carrier sort the two terms belong to.
-    pub sort: String,
-    /// The claim's left source term.
-    pub lhs: TermId,
-    /// The claim's right source term.
-    pub rhs: TermId,
+pub(super) trait SourceFact {
+    fn terms(&self) -> Vec<&ResolvedExpr>;
+    fn requirements(&self) -> Vec<Requirement<'_>>;
+    fn binding(&self) -> Option<(&String, &ResolvedExpr)>;
+}
+
+impl SourceFact for ResolvedFact {
+    fn terms(&self) -> Vec<&ResolvedExpr> {
+        match self {
+            Self::Eq(_, a, b) => vec![a, b],
+            Self::Fact(ResolvedExpr::Call(_, ResolvedCall::Primitive(_), args)) => {
+                args.iter().collect()
+            }
+            Self::Fact(expr) => vec![expr],
+        }
+    }
+
+    fn requirements(&self) -> Vec<Requirement<'_>> {
+        match self {
+            Self::Eq(_, a, b) => vec![Requirement::Equal(a, b)],
+            Self::Fact(ResolvedExpr::Call(_, ResolvedCall::Primitive(head), args)) => {
+                match head.name() {
+                    "renaming-=" => vec![Requirement::RenamingEqual(&args[0], &args[1])],
+                    "!=" | "renaming-!=" => args.iter().map(Requirement::Exists).collect(),
+                    "free" | "not-free" => args[1..].iter().map(Requirement::Exists).collect(),
+                    "free-names-are" => vec![Requirement::Exists(&args[0])],
+                    _ => vec![Requirement::Exists(self.terms()[0])],
+                }
+            }
+            Self::Fact(expr) => vec![Requirement::Exists(expr)],
+        }
+    }
+
+    fn binding(&self) -> Option<(&String, &ResolvedExpr)> {
+        match self {
+            Self::Eq(_, ResolvedExpr::Var(_, var), rhs) => Some((&var.name, rhs)),
+            _ => None,
+        }
+    }
+}
+
+pub(super) fn pattern_term(dag: &mut TermDag, expr: &ResolvedExpr) -> TermId {
+    dag.expr_to_term(&expr.clone().make_unresolved())
 }
 
 #[derive(Clone, Debug, Default)]
@@ -203,10 +94,12 @@ pub struct Claim {
 pub struct SlottedProgram {
     /// Ground source slot spellings and their identities in the encoding.
     pub slot_names: BTreeMap<String, i64>,
+    /// Carrier sorts visible at this point in the source program.
+    pub sorts: BTreeSet<String>,
     /// Constructor signatures indexed by source name.
     pub constructors: HashMap<String, Constructor>,
     /// Source rewrites indexed by their proof names.
-    pub rewrites: HashMap<String, Rewrite>,
+    pub rewrites: HashMap<String, SourceRule>,
     /// Globals, with their terms resolved: a global's term never mentions a global.
     pub lets: IndexMap<String, TermId>,
     /// Equalities explicitly asserted by source unions.
@@ -229,7 +122,25 @@ impl Error for SourceError {}
 /// constructors below assume.
 pub const SINGLE_SORT: &str = "U";
 
-impl Rewrite {
+impl SourceRule {
+    pub(super) fn endpoints(&self) -> (&ResolvedExpr, &ResolvedExpr) {
+        let [GenericAction::Union(_, lhs, rhs)] = self.rule.head.0.as_slice() else {
+            unreachable!("source rewrites have one union action")
+        };
+        (lhs, rhs)
+    }
+
+    pub(super) fn conditions(&self) -> &[ResolvedFact] {
+        &self.rule.body[1..]
+    }
+
+    pub(super) fn patterns(&self) -> impl Iterator<Item = &ResolvedExpr> {
+        let (lhs, rhs) = self.endpoints();
+        [lhs, rhs]
+            .into_iter()
+            .chain(self.conditions().iter().flat_map(SourceFact::terms))
+    }
+
     /// Instantiate a source pattern, resolving globals to their fixed terms.
     pub fn instantiate(
         &self,
@@ -256,37 +167,20 @@ impl Rewrite {
 }
 
 impl SlottedProgram {
-    /// A constructor of a program with the single carrier sort [`SINGLE_SORT`]; a
-    /// payload column gets the sort `payload`.
+    /// Declare a constructor in the single-sort convenience program.
     pub fn add_constructor(&mut self, name: &str, columns: Vec<ColumnKind>) {
-        let columns = columns
-            .into_iter()
-            .map(|c| {
-                let sort = match c {
-                    ColumnKind::Child | ColumnKind::Binder => SINGLE_SORT,
-                    ColumnKind::Payload => "payload",
-                };
-                (c, sort.to_string())
-            })
-            .collect();
         self.add_sorted_constructor(name, SINGLE_SORT, columns);
     }
 
-    /// A constructor building `output`, each column with its kind and sort.
-    pub fn add_sorted_constructor(
-        &mut self,
-        name: &str,
-        output: &str,
-        columns: Vec<(ColumnKind, String)>,
-    ) {
-        let (columns, sorts) = columns.into_iter().unzip();
+    /// A source constructor's column roles and carrier sort.
+    pub fn add_sorted_constructor(&mut self, name: &str, sort: &str, columns: Vec<ColumnKind>) {
+        self.sorts.insert(sort.to_owned());
         self.constructors.insert(
-            name.to_string(),
+            name.to_owned(),
             Constructor {
-                name: name.to_string(),
+                name: name.to_owned(),
+                sort: sort.to_owned(),
                 columns,
-                sorts,
-                output: output.to_string(),
             },
         );
     }
@@ -295,36 +189,33 @@ impl SlottedProgram {
     /// literal names none.
     pub fn sort_of(&self, dag: &TermDag, term: TermId) -> Option<String> {
         match dag.get(term) {
-            Term::App(head, _) => self.constructors.get(head).map(|c| c.output.clone()),
+            Term::App(head, _) => self.constructors.get(head).map(|c| c.sort.clone()),
             _ => None,
         }
     }
 
-    /// Parse a global's term, resolve earlier globals, and refresh its binders.
+    /// Parse a global's term and resolve earlier globals.
     pub fn add_let(
         &mut self,
         dag: &mut TermDag,
         name: &str,
         text: &str,
     ) -> Result<(), SourceError> {
-        let term = self.ground_term(dag, &parse_sexp(text)?)?;
-        // kept with its binders named apart (see `refresh_binders`), so a term
-        // spelled with other bound names differs from it by a bijection of slots
-        let term = self.refresh_binders(dag, term);
+        self.add_let_expr(dag, name, &parse_expr(text)?)
+    }
+
+    pub(super) fn add_let_expr(
+        &mut self,
+        dag: &mut TermDag,
+        name: &str,
+        expr: &Expr,
+    ) -> Result<(), SourceError> {
+        let term = self.ground_term(dag, expr)?;
         self.lets.insert(name.to_string(), term);
         Ok(())
     }
 
-    /// A repeated union's first string carries a ` #n` suffix to keep the row
-    /// distinct; it is not part of the term.
-    fn strip_union_suffix(text: &str) -> &str {
-        match text.rsplit_once(" #") {
-            Some((head, n)) if n.parse::<u64>().is_ok() => head,
-            _ => text,
-        }
-    }
-
-    /// Record a source union after resolving globals and refreshing binders.
+    /// Record a source union after resolving globals.
     pub fn add_union(
         &mut self,
         dag: &mut TermDag,
@@ -332,10 +223,18 @@ impl SlottedProgram {
         rhs: &str,
         sort: &str,
     ) -> Result<(), SourceError> {
-        let lhs = self.ground_term(dag, &parse_sexp(Self::strip_union_suffix(lhs))?)?;
-        let lhs = self.refresh_binders(dag, lhs);
-        let rhs = self.ground_term(dag, &parse_sexp(rhs)?)?;
-        let rhs = self.refresh_binders(dag, rhs);
+        self.add_union_expr(dag, &parse_expr(lhs)?, &parse_expr(rhs)?, sort)
+    }
+
+    pub(super) fn add_union_expr(
+        &mut self,
+        dag: &mut TermDag,
+        lhs: &Expr,
+        rhs: &Expr,
+        sort: &str,
+    ) -> Result<(), SourceError> {
+        let lhs = self.ground_term(dag, lhs)?;
+        let rhs = self.ground_term(dag, rhs)?;
         self.unions.push(Union {
             lhs,
             rhs,
@@ -353,13 +252,24 @@ impl SlottedProgram {
         lhs: &str,
         rhs: &str,
     ) -> Result<Claim, SourceError> {
+        self.claim_expr(dag, kind, sort, &parse_expr(lhs)?, &parse_expr(rhs)?)
+    }
+
+    pub(super) fn claim_expr(
+        &self,
+        dag: &mut TermDag,
+        kind: &str,
+        sort: &str,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Result<Claim, SourceError> {
         let kind = match kind {
             "=" => ClaimKind::Eq,
             "renaming-=" => ClaimKind::RenamingEq,
             other => return Err(SourceError(format!("unsupported claim kind {other}"))),
         };
-        let lhs = self.ground_term(dag, &parse_sexp(lhs)?)?;
-        let rhs = self.ground_term(dag, &parse_sexp(rhs)?)?;
+        let lhs = self.ground_term(dag, lhs)?;
+        let rhs = self.ground_term(dag, rhs)?;
         Ok(Claim {
             kind,
             sort: sort.to_string(),
@@ -381,202 +291,333 @@ impl SlottedProgram {
         name: Option<&str>,
         text: &str,
     ) -> Result<String, SourceError> {
-        let form = parse_sexp(text)?;
-        let Sexp::List(items) = &form else {
-            return Err(SourceError(format!("not a rewrite: {text}")));
+        let forms =
+            crate::slotted::syntax::parse(None, text).map_err(|e| SourceError(e.to_string()))?;
+        let [(form, _)] = forms.as_slice() else {
+            return Err(SourceError("expected one source rewrite".into()));
         };
-        let [head, lhs, rhs, options @ ..] = items.as_slice() else {
-            return Err(SourceError(format!("not a rewrite: {text}")));
+        let ("rewrite", args) = form.call().map_err(SourceError)? else {
+            return Err(SourceError("expected a source rewrite".into()));
         };
-        if head.atom() != Some("rewrite") {
-            return Err(SourceError(format!("not a rewrite: {text}")));
-        }
-        let lhs = Self::pattern_term(dag, lhs)?;
-        if !matches!(dag.get(lhs), Term::App(..)) && !is_class_var(dag, lhs) {
-            return Err(SourceError(
-                "a rewrite's left side must be a call or a pattern variable".into(),
-            ));
-        }
-        let rhs = match rhs {
-            Sexp::Atom(name) if !name.starts_with('$') && !is_number(name) => {
-                // a bare name that is a global means that global
-                match self.lets.get(name) {
-                    Some(_) => Rhs::Term(dag.var(name.to_string())),
-                    None => Rhs::Var(name.to_string()),
-                }
-            }
-            Sexp::List(items) if items.first().and_then(Sexp::atom) == Some("subst") => {
-                return Err(SourceError(
-                    "subst right-hand sides are not supported in proofs".into(),
-                ));
-            }
-            other => Rhs::Term(Self::pattern_term(dag, other)?),
-        };
-        let mut name = name.map(str::to_string);
-        let mut conditions = vec![];
-        let mut i = 0;
-        while i < options.len() {
-            match options[i].atom() {
-                Some(":name") => {
-                    name = Some(
-                        options
-                            .get(i + 1)
-                            .and_then(|s| s.string_or_atom())
-                            .ok_or_else(|| SourceError(":name needs a value".into()))?
-                            .to_string(),
-                    );
-                    i += 2;
-                }
-                Some(":when") => {
-                    let Some(Sexp::List(facts)) = options.get(i + 1) else {
-                        return Err(SourceError(":when needs a list of facts".into()));
-                    };
-                    for fact in facts {
-                        conditions.push(self.condition(dag, fact)?);
-                    }
-                    i += 2;
-                }
-                Some(other) => {
-                    return Err(SourceError(format!("unsupported rewrite option {other}")));
-                }
-                None => return Err(SourceError("malformed rewrite options".into())),
-            }
-        }
-        if let Term::Var(root) = dag.get(lhs)
-            && !self.lets.contains_key(root)
-            && !conditions.iter().any(|condition| {
-                condition
-                    .terms()
-                    .iter()
-                    .any(|&term| super::terms::pattern_vars(dag, term).contains(root))
-            })
+        let source = crate::slotted::frontend::source_rewrite(args).map_err(SourceError)?;
+        if let Some(name) = name
+            && !source.name.is_empty()
+            && name != source.name
         {
             return Err(SourceError(format!(
-                "rewrite root {root:?} is not bound by a pattern"
+                "rewrite name {:?} disagrees with {name:?}",
+                source.name
             )));
         }
-        let name = name.ok_or_else(|| SourceError("a rewrite needs a :name".into()))?;
-        self.rewrites.insert(
-            name.clone(),
-            Rewrite {
-                name: name.clone(),
-                lhs,
-                rhs,
-                conditions,
-                globals: self.lets.clone(),
-            },
-        );
+        let mut source = source.clone();
+        if source.name.is_empty() {
+            source.name = name
+                .ok_or_else(|| SourceError("a rewrite needs a :name".into()))?
+                .to_owned();
+        }
+        self.add_rewrite_ast(dag, &source)
+    }
+
+    pub(super) fn add_rewrite_ast(
+        &mut self,
+        dag: &mut TermDag,
+        source: &egglog::ast::Rewrite,
+    ) -> Result<String, SourceError> {
+        let name = source.name.clone();
+        let rule = self.resolve_rewrite(dag, source)?;
+        self.rewrites.insert(name.clone(), rule);
         Ok(name)
     }
 
-    fn condition(&self, dag: &mut TermDag, fact: &Sexp) -> Result<Condition, SourceError> {
-        let Sexp::List(items) = fact else {
-            return Err(SourceError(format!("malformed :when fact {fact}")));
-        };
-        match items.as_slice() {
-            [h, slot, terms @ ..] if matches!(h.atom(), Some("free" | "not-free")) => {
-                if terms.is_empty() {
-                    return Err(SourceError("free/not-free needs at least one term".into()));
+    fn resolve_rewrite(
+        &self,
+        dag: &TermDag,
+        source: &egglog::ast::Rewrite,
+    ) -> Result<SourceRule, SourceError> {
+        let err = |e: &dyn Display| SourceError(e.to_string());
+        let mut graph = EGraph::default();
+        let source_terms: Vec<_> = std::iter::once(&source.lhs)
+            .chain(std::iter::once(&source.rhs))
+            .chain(source.conditions.iter().flat_map(|fact| match fact {
+                Fact::Eq(_, a, b) => vec![a, b],
+                Fact::Fact(Expr::Call(_, head, args)) if is_guard(head) => args.iter().collect(),
+                Fact::Fact(expr) => vec![expr],
+            }))
+            .collect();
+        let source_names: BTreeSet<_> = source_terms
+            .iter()
+            .flat_map(|expr| expr.vars())
+            .chain(self.lets.keys().cloned())
+            .collect();
+        let mut prefix = format!("{INTERNAL_SYMBOL_PREFIX}slotted-resolve-");
+        while source_names.iter().any(|name| name.starts_with(&prefix)) {
+            prefix.push('-');
+        }
+        let mut symbols = SymbolGen::new(prefix);
+        let carriers = &self.sorts;
+        for name in carriers {
+            graph
+                .add_sort(EqSort { name: name.clone() }, source.span.clone())
+                .map_err(|e| err(&e))?;
+        }
+        for op in self.constructors.values() {
+            let decl = FunctionDecl::constructor(
+                source.span.clone(),
+                op.name.clone(),
+                Schema {
+                    input: op.input_sorts().map(str::to_owned).collect(),
+                    outputs: vec![op.sort.clone()],
+                },
+                None,
+                false,
+                false,
+            );
+            graph
+                .type_info()
+                .typecheck_function(&mut symbols, &decl)
+                .map_err(|e| err(&e))?;
+        }
+        for name in [
+            "renaming-=",
+            "renaming-!=",
+            "free",
+            "not-free",
+            "free-names-are",
+        ] {
+            graph.add_pure_primitive(GuardSignature(name), None);
+        }
+
+        // Captured carrier globals and local payload variables have distinct scopes.
+        let mut payload_vars = BTreeSet::new();
+        for expr in &source_terms {
+            expr.fold(&mut |expr, _: Vec<()>| {
+                if let Expr::Call(_, head, args) = expr
+                    && let Some(op) = self.constructors.get(head)
+                {
+                    for (arg, column) in args.iter().zip(&op.columns) {
+                        if matches!(column, ColumnKind::Payload(_)) {
+                            payload_vars.extend(arg.vars());
+                        }
+                    }
                 }
-                let slot = Self::pattern_term(dag, slot)?;
-                let terms = terms
-                    .iter()
-                    .map(|t| Self::pattern_term(dag, t))
-                    .collect::<Result<_, _>>()?;
-                Ok(if h.atom() == Some("free") {
-                    Condition::Free { slot, terms }
+            });
+        }
+        let aliases: BTreeMap<_, _> = self
+            .lets
+            .keys()
+            .map(|name| {
+                let alias = if payload_vars.contains(name) {
+                    symbols.fresh(format!("captured-{name}").as_str())
                 } else {
-                    Condition::NotFree { slot, terms }
-                })
-            }
-            [h, term, slots @ ..] if h.atom() == Some("free-names-are") => {
-                let term = Self::pattern_term(dag, term)?;
-                let slots = slots
-                    .iter()
-                    .map(|s| Self::pattern_term(dag, s))
-                    .collect::<Result<_, _>>()?;
-                Ok(Condition::FreeNames { term, slots })
-            }
-            [h, lhs, rhs]
-                if matches!(h.atom(), Some("=" | "!=" | "renaming-=" | "renaming-!=")) =>
-            {
-                let lhs = Self::pattern_term(dag, lhs)?;
-                let rhs = Self::pattern_term(dag, rhs)?;
-                Ok(match h.atom().unwrap() {
-                    "=" => Condition::Eq { lhs, rhs },
-                    "!=" => Condition::Neq { lhs, rhs },
-                    "renaming-=" => Condition::RenamingEq { lhs, rhs },
-                    "renaming-!=" => Condition::RenamingNeq { lhs, rhs },
-                    _ => unreachable!(),
-                })
-            }
-            [head, ..]
-                if head
-                    .atom()
-                    .is_some_and(|h| self.constructors.contains_key(h)) =>
-            {
-                Ok(Condition::Fact(Self::pattern_term(dag, fact)?))
-            }
-            _ => Err(SourceError(format!("unsupported :when fact {fact}"))),
-        }
-    }
-
-    /// A rewrite's pattern: atoms are variables (slot literals keep their `$`),
-    /// lists are constructor applications.
-    fn pattern_term(dag: &mut TermDag, s: &Sexp) -> Result<TermId, SourceError> {
-        match s {
-            Sexp::Atom(a) => atom_term(dag, a, |dag, name| Ok(dag.var(name.to_string()))),
-            Sexp::Str(text) => Ok(dag.lit(Literal::String(text.clone()))),
-            Sexp::List(items) => {
-                let (head, args) = items
-                    .split_first()
-                    .ok_or_else(|| SourceError("empty application".into()))?;
-                let head = head
-                    .atom()
-                    .ok_or_else(|| SourceError("application head must be a symbol".into()))?;
-                let args = args
-                    .iter()
-                    .map(|a| Self::pattern_term(dag, a))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(dag.app(head.to_string(), args))
+                    name.clone()
+                };
+                (name.clone(), alias)
+            })
+            .collect();
+        let globals: IndexMap<_, _> = self
+            .lets
+            .iter()
+            .map(|(name, &term)| (aliases[name].clone(), term))
+            .collect();
+        fn capture(
+            program: &SlottedProgram,
+            expr: &Expr,
+            payload: bool,
+            aliases: &BTreeMap<String, String>,
+        ) -> Expr {
+            match expr {
+                Expr::Var(span, name) if !payload && aliases.contains_key(name) => {
+                    Expr::Var(span.clone(), aliases[name].clone())
+                }
+                Expr::Call(span, head, args) => Expr::Call(
+                    span.clone(),
+                    head.clone(),
+                    args.iter()
+                        .enumerate()
+                        .map(|(i, arg)| {
+                            let payload = program.constructors.get(head).is_some_and(|op| {
+                                matches!(op.columns.get(i), Some(ColumnKind::Payload(_)))
+                            });
+                            capture(program, arg, payload, aliases)
+                        })
+                        .collect(),
+                ),
+                _ => expr.clone(),
             }
         }
+        let lhs = capture(self, &source.lhs, false, &aliases);
+        let rhs = capture(self, &source.rhs, false, &aliases);
+        let mut body = vec![Fact::Fact(lhs.clone())];
+        body.extend(source.conditions.iter().map(|fact| {
+            match fact {
+                Fact::Eq(span, a, b) => Fact::Eq(
+                    span.clone(),
+                    capture(self, a, false, &aliases),
+                    capture(self, b, false, &aliases),
+                ),
+                Fact::Fact(Expr::Call(span, head, args)) if is_guard(head) => {
+                    Fact::Fact(Expr::Call(
+                        span.clone(),
+                        head.clone(),
+                        args.iter()
+                            .map(|arg| capture(self, arg, false, &aliases))
+                            .collect(),
+                    ))
+                }
+                Fact::Fact(expr) => Fact::Fact(capture(self, expr, false, &aliases)),
+            }
+        }));
+        let mut rule = Rule {
+            span: source.span.clone(),
+            head: GenericActions(vec![GenericAction::Union(source.span.clone(), lhs, rhs)]),
+            body,
+            name: source.name.clone(),
+            ruleset: String::new(),
+            eval_mode: Default::default(),
+            no_decomp: false,
+            include_subsumed: false,
+        };
+        let mut sorts = BTreeSet::new();
+        fn carrier(
+            program: &SlottedProgram,
+            dag: &TermDag,
+            expr: &Expr,
+            sorts: &mut BTreeSet<String>,
+        ) {
+            match expr {
+                Expr::Call(_, head, args) => {
+                    if let Some(op) = program.constructors.get(head) {
+                        sorts.insert(op.sort.clone());
+                    } else {
+                        for arg in args {
+                            carrier(program, dag, arg, sorts);
+                        }
+                    }
+                }
+                Expr::Var(_, name) => {
+                    if let Some(sort) = program
+                        .lets
+                        .get(name)
+                        .and_then(|&term| program.sort_of(dag, term))
+                    {
+                        sorts.insert(sort);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for expr in &source_terms {
+            carrier(self, dag, expr, &mut sorts);
+        }
+        let sort = if sorts.len() == 1 {
+            sorts.first()
+        } else if sorts.is_empty() && carriers.len() == 1 {
+            carriers.first()
+        } else {
+            None
+        }
+        .ok_or_else(|| SourceError("cannot determine one carrier sort for the rewrite".into()))?;
+        let ty = graph
+            .get_sort_by_name(sort)
+            .ok_or_else(|| SourceError(format!("unknown sort {sort}")))?
+            .clone();
+        let binding_names: BTreeSet<_> = source_terms
+            .iter()
+            .flat_map(|expr| expr.vars())
+            .filter(|name| name.starts_with('$') && !payload_vars.contains(name))
+            .chain(globals.keys().cloned())
+            .collect();
+        let mut bindings: IndexMap<_, _> = binding_names
+            .into_iter()
+            .map(|name| (name, (source.span.clone(), ty.clone())))
+            .collect();
+        // Infer plain facts in their source context: guards return Unit, while
+        // constructor patterns return the carrier. Remove these type constraints
+        // after resolution; the checker sees the original facts.
+        let plain_facts: Vec<_> = rule
+            .body
+            .iter_mut()
+            .enumerate()
+            .map(|(i, fact)| {
+                let Fact::Fact(expr) = fact else { return false };
+                let guard = i > 0 && matches!(expr, Expr::Call(_, head, _) if is_guard(head));
+                let name = symbols.fresh("source-fact");
+                let sort = if guard {
+                    UnitSort.to_arcsort()
+                } else {
+                    ty.clone()
+                };
+                bindings.insert(name.clone(), (expr.span(), sort));
+                *fact = Fact::Eq(expr.span(), Expr::Var(expr.span(), name), expr.clone());
+                true
+            })
+            .collect();
+        let bindings = bindings
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.clone()))
+            .collect();
+        let mut rule = graph
+            .type_info()
+            .typecheck_rule_with_bindings(&mut symbols, &rule, false, &bindings)
+            .map_err(|e| err(&e))?;
+        for (fact, plain) in rule.body.iter_mut().zip(plain_facts) {
+            if plain {
+                let ResolvedFact::Eq(_, _, expr) = fact else {
+                    unreachable!("resolved fact retains its syntax")
+                };
+                *fact = ResolvedFact::Fact(expr.clone());
+            }
+        }
+        for fact in &rule.body {
+            if let ResolvedFact::Fact(ResolvedExpr::Call(_, ResolvedCall::Primitive(head), args)) =
+                fact
+            {
+                let head = head.name();
+                let valid = match head {
+                    "!=" | "renaming-=" | "renaming-!=" => args.len() == 2,
+                    "free" | "not-free" => args.len() >= 2,
+                    "free-names-are" => !args.is_empty(),
+                    _ => true,
+                };
+                if !valid {
+                    return Err(SourceError(format!("wrong arity for {head}")));
+                }
+            }
+        }
+        Ok(SourceRule { rule, globals })
     }
 
-    /// A term written at the top level: bare symbols are globals.
-    fn ground_term(&self, dag: &mut TermDag, s: &Sexp) -> Result<TermId, SourceError> {
-        match s {
-            Sexp::Atom(a) if a.starts_with('$') => {
-                let number = a[1..].parse::<i64>().ok();
-                let name = number.map_or_else(|| a.clone(), |n| format!("${n}"));
+    /// Resolve a ground source expression against its globals and slot names.
+    pub(super) fn ground_term(
+        &self,
+        dag: &mut TermDag,
+        expr: &Expr,
+    ) -> Result<TermId, SourceError> {
+        match expr {
+            Expr::Var(_, name) if name.starts_with('$') => {
+                let number = name[1..].parse::<i64>().ok();
+                let canonical = number.map_or_else(|| name.clone(), |n| format!("${n}"));
                 let slot = self
                     .slot_names
-                    .get(a)
-                    .or_else(|| self.slot_names.get(&name))
+                    .get(name)
+                    .or_else(|| self.slot_names.get(&canonical))
                     .copied()
                     .or(number)
                     .ok_or_else(|| SourceError(format!("unknown slot {name}")))?;
                 Ok(super::terms::slot_term(dag, slot))
             }
-            Sexp::Atom(a) => atom_term(dag, a, |_, name| {
-                self.lets
-                    .get(name)
-                    .copied()
-                    .ok_or_else(|| SourceError(format!("unknown global {name}")))
-            }),
-            Sexp::Str(text) => Ok(dag.lit(Literal::String(text.clone()))),
-            Sexp::List(items) => {
-                let (head, args) = items
-                    .split_first()
-                    .ok_or_else(|| SourceError("empty application".into()))?;
-                let head = head
-                    .atom()
-                    .ok_or_else(|| SourceError("application head must be a symbol".into()))?;
+            Expr::Var(_, name) => self
+                .lets
+                .get(name)
+                .copied()
+                .ok_or_else(|| SourceError(format!("unknown global {name}"))),
+            Expr::Lit(_, lit) => Ok(dag.lit(lit.clone())),
+            Expr::Call(_, head, args) => {
                 let args = args
                     .iter()
                     .map(|a| self.ground_term(dag, a))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(dag.app(head.to_string(), args))
+                    .collect::<Result<_, _>>()?;
+                Ok(dag.app(head.clone(), args))
             }
         }
     }
@@ -588,30 +629,43 @@ impl SlottedProgram {
         out
     }
 
-    /// Compare source-condition endpoints, allowing only scoped bound names to
-    /// differ. Free slots, constructor heads and payloads must match exactly.
-    pub(super) fn alpha_eq(&self, dag: &mut TermDag, lhs: TermId, rhs: TermId) -> bool {
+    /// Compare well-formed source terms up to scoped bound names.
+    /// Free slots, constructor heads, and payloads must match exactly.
+    pub fn alpha_eq(&self, dag: &mut TermDag, lhs: TermId, rhs: TermId) -> bool {
         if lhs == rhs {
             return true;
         }
+        let (lhs, rhs) = self.canonical_binders(dag, lhs, rhs);
+        lhs == rhs
+    }
+
+    fn canonical_binders(&self, dag: &mut TermDag, lhs: TermId, rhs: TermId) -> (TermId, TermId) {
         let slots: BTreeSet<_> = super::terms::all_slots(dag, lhs)
             .into_iter()
             .chain(super::terms::all_slots(dag, rhs))
             .collect();
-        // Reuse the source reader's scope-aware refresh, giving both terms the
-        // same fresh binder names. No free name is changed by this operation.
         let canonical = |dag: &mut TermDag, term| {
             let mut fresh = FreshSlots::new(slots.iter().copied());
             self.refresh_binders_from(dag, term, &mut |_| fresh.fresh())
         };
-        canonical(dag, lhs) == canonical(dag, rhs)
+        (canonical(dag, lhs), canonical(dag, rhs))
+    }
+
+    pub(super) fn renaming_between(
+        &self,
+        dag: &mut TermDag,
+        lhs: TermId,
+        rhs: TermId,
+    ) -> Option<Renaming> {
+        let free = self.free_slots(dag, lhs);
+        let (lhs, rhs) = self.canonical_binders(dag, lhs, rhs);
+        let renaming = super::terms::term_renaming(dag, &[(lhs, rhs)])?;
+        Renaming::completing(free.into_iter().map(|slot| (slot, renaming.apply(slot))))
     }
 
     /// Compare terms up to scoped bound names and a bijection of free slots.
     pub(super) fn eq_modulo_renaming(&self, dag: &mut TermDag, lhs: TermId, rhs: TermId) -> bool {
-        let lhs = self.refresh_binders(dag, lhs);
-        let rhs = self.refresh_binders(dag, rhs);
-        super::terms::term_renaming(dag, &[(lhs, rhs)]).is_some()
+        self.renaming_between(dag, lhs, rhs).is_some()
     }
 
     fn free_slots_into(&self, dag: &TermDag, term: TermId, out: &mut BTreeSet<i64>) {
@@ -632,7 +686,7 @@ impl SlottedProgram {
                 let mut bound: Vec<i64> = vec![];
                 for (col, &child) in ctor.columns.iter().zip(children) {
                     match col {
-                        ColumnKind::Payload => {}
+                        ColumnKind::Payload(_) => {}
                         ColumnKind::Binder => {
                             if let Some(slot) = slot_of(dag, child) {
                                 bound.push(slot);
@@ -720,7 +774,7 @@ impl SlottedProgram {
                             children[bj] = super::terms::slot_term(dag, f);
                         }
                     }
-                    ColumnKind::Payload => {}
+                    ColumnKind::Payload(_) => {}
                 }
             }
         }
@@ -793,174 +847,40 @@ impl SlottedProgram {
     }
 }
 
-fn is_number(a: &str) -> bool {
-    a.parse::<i64>().is_ok() || a.parse::<f64>().is_ok() && a.contains('.')
+fn is_guard(name: &str) -> bool {
+    matches!(
+        name,
+        "!=" | "renaming-=" | "renaming-!=" | "free" | "not-free" | "free-names-are"
+    )
 }
 
-/// A symbol as a term: a number, a boolean, a slot, or whatever `var` makes of a
-/// name.
-fn atom_term(
-    dag: &mut TermDag,
-    a: &str,
-    var: impl FnOnce(&mut TermDag, &str) -> Result<TermId, SourceError>,
-) -> Result<TermId, SourceError> {
-    if let Ok(n) = a.parse::<i64>() {
-        return Ok(dag.lit(Literal::Int(n)));
-    }
-    if a == "true" || a == "false" {
-        return Ok(dag.lit(Literal::Bool(a == "true")));
-    }
-    if a.starts_with('$') {
-        return Ok(dag.var(a.to_string()));
-    }
-    if a.contains('.')
-        && let Ok(f) = a.parse::<f64>()
-    {
-        return Ok(dag.lit(Literal::Float(f.into())));
-    }
-    var(dag, a)
-}
+#[derive(Clone)]
+struct GuardSignature(&'static str);
 
-/// A parsed s-expression.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Sexp {
-    /// An unquoted symbol or numeric literal.
-    Atom(String),
-    /// The decoded contents of a quoted string.
-    Str(String),
-    /// A parenthesized sequence of forms.
-    List(Vec<Sexp>),
-}
-
-impl Sexp {
-    /// The spelling of an unquoted atom, if this form is one.
-    pub fn atom(&self) -> Option<&str> {
-        match self {
-            Sexp::Atom(a) => Some(a),
-            _ => None,
-        }
+impl Primitive for GuardSignature {
+    fn name(&self) -> &str {
+        self.0
     }
-
-    fn string_or_atom(&self) -> Option<&str> {
-        match self {
-            Sexp::Atom(a) | Sexp::Str(a) => Some(a),
-            Sexp::List(_) => None,
-        }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn egglog::constraint::TypeConstraint> {
+        egglog::constraint::AllEqualTypeConstraint::new(self.0, span.clone())
+            .with_output_sort(UnitSort.to_arcsort())
+            .into_box()
     }
 }
 
-impl Display for Sexp {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Sexp::Atom(a) => f.write_str(a),
-            Sexp::Str(s) => write!(f, "{s:?}"),
-            Sexp::List(items) => {
-                write!(f, "(")?;
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{item}")?;
-                }
-                write!(f, ")")
-            }
-        }
+impl PurePrim for GuardSignature {
+    fn apply(&self, _: PureState<'_, '_>, _: &[Value]) -> Option<Value> {
+        None
     }
 }
 
-/// Parse one s-expression; comments (`;` to end of line) are skipped.
-pub fn parse_sexp(text: &str) -> Result<Sexp, SourceError> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut pos = 0;
-    let out = parse_at(&chars, &mut pos)?;
-    skip_space(&chars, &mut pos);
-    if pos != chars.len() {
-        return Err(SourceError(format!(
-            "trailing text after s-expression in {text}"
-        )));
-    }
-    Ok(out)
-}
-
-fn skip_space(chars: &[char], pos: &mut usize) {
-    while *pos < chars.len() {
-        if chars[*pos].is_whitespace() {
-            *pos += 1;
-        } else if chars[*pos] == ';' {
-            while *pos < chars.len() && chars[*pos] != '\n' {
-                *pos += 1;
-            }
-        } else {
-            break;
-        }
-    }
-}
-
-fn parse_at(chars: &[char], pos: &mut usize) -> Result<Sexp, SourceError> {
-    skip_space(chars, pos);
-    let Some(&c) = chars.get(*pos) else {
-        return Err(SourceError("unexpected end of s-expression".into()));
+fn parse_expr(text: &str) -> Result<Expr, SourceError> {
+    let forms =
+        crate::slotted::syntax::parse(None, text).map_err(|e| SourceError(e.to_string()))?;
+    let [(form, _)] = forms.as_slice() else {
+        return Err(SourceError("expected one source expression".into()));
     };
-    match c {
-        '(' => {
-            *pos += 1;
-            let mut items = vec![];
-            loop {
-                skip_space(chars, pos);
-                match chars.get(*pos) {
-                    Some(')') => {
-                        *pos += 1;
-                        return Ok(Sexp::List(items));
-                    }
-                    Some(_) => items.push(parse_at(chars, pos)?),
-                    None => return Err(SourceError("unclosed parenthesis".into())),
-                }
-            }
-        }
-        ')' => Err(SourceError("unexpected )".into())),
-        '"' => {
-            *pos += 1;
-            let mut s = String::new();
-            loop {
-                match chars.get(*pos) {
-                    Some('"') => {
-                        *pos += 1;
-                        return Ok(Sexp::Str(s));
-                    }
-                    Some('\\') => {
-                        *pos += 1;
-                        match chars.get(*pos) {
-                            Some('n') => s.push('\n'),
-                            Some('t') => s.push('\t'),
-                            Some(&other) => s.push(other),
-                            None => return Err(SourceError("unterminated string".into())),
-                        }
-                        *pos += 1;
-                    }
-                    Some(&other) => {
-                        s.push(other);
-                        *pos += 1;
-                    }
-                    None => return Err(SourceError("unterminated string".into())),
-                }
-            }
-        }
-        _ => {
-            let start = *pos;
-            while *pos < chars.len()
-                && !chars[*pos].is_whitespace()
-                && !matches!(chars[*pos], '(' | ')' | '"' | ';')
-            {
-                *pos += 1;
-            }
-            Ok(Sexp::Atom(chars[start..*pos].iter().collect()))
-        }
-    }
-}
-
-/// Is this a variable of a pattern (not a slot literal)?
-pub fn is_class_var(dag: &TermDag, term: TermId) -> bool {
-    is_pattern_var(dag, term) && !matches!(dag.get(term), Term::Var(name) if name.starts_with('$'))
+    form.expr().map_err(SourceError)
 }
 
 #[cfg(test)]
@@ -971,6 +891,7 @@ mod tests {
     fn parses_rewrites_lets_unions_and_claims() {
         let mut dag = TermDag::default();
         let mut program = SlottedProgram::default();
+        program.add_constructor("App", vec![ColumnKind::Child, ColumnKind::Child]);
         program.add_constructor("Mul", vec![ColumnKind::Child, ColumnKind::Child]);
         program.add_constructor("Null", vec![]);
         program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
@@ -988,11 +909,10 @@ mod tests {
             .unwrap();
         assert_eq!(name, "eta");
         let eta = &program.rewrites["eta"];
-        assert_eq!(dag.to_string(eta.lhs), "(Lam $x (App f $x))");
-        assert!(matches!(&eta.rhs, Rhs::Var(v) if v == "f"));
-        assert!(
-            matches!(&eta.conditions[0], Condition::NotFree { slot, terms } if dag.to_string(*slot) == "$x" && terms.iter().map(|t| dag.to_string(*t)).collect::<Vec<_>>() == ["f"])
-        );
+        let (lhs, rhs) = eta.endpoints();
+        assert_eq!(lhs.to_string(), "(Lam $x (App f $x))");
+        assert_eq!(rhs.to_string(), "f");
+        assert_eq!(eta.conditions()[0].to_string(), "(not-free $x f)");
         // a condition names as many variables as it likes
         program
             .add_rewrite(
@@ -1000,8 +920,9 @@ mod tests {
                 r#"(rewrite (App (Lam $z x) y) (App x y) :name "two" :when ((not-free $z x y)))"#,
             )
             .unwrap();
-        assert!(
-            matches!(&program.rewrites["two"].conditions[0], Condition::NotFree { terms, .. } if terms.iter().map(|t| dag.to_string(*t)).collect::<Vec<_>>() == ["x", "y"])
+        assert_eq!(
+            program.rewrites["two"].conditions()[0].to_string(),
+            "(not-free $z x y)"
         );
         let Union { lhs: a, rhs: b, .. } = program.unions[0].clone();
         assert_eq!(program.unions[0].sort, "U");
@@ -1079,7 +1000,7 @@ mod tests {
         let mut program = SlottedProgram::default();
         program.add_constructor("Pair", vec![ColumnKind::Child; 2]);
         program.add_constructor("Lam", vec![ColumnKind::Binder, ColumnKind::Child]);
-        program.add_constructor("Num", vec![ColumnKind::Payload]);
+        program.add_constructor("Num", vec![ColumnKind::Payload("i64".into())]);
         for (a, b, equal) in [
             ("(Pair $0 $1)", "(Pair $1 $0)", true),
             ("(Pair $0 $0)", "(Pair $1 $2)", false),
@@ -1091,10 +1012,10 @@ mod tests {
             ("(Num 1)", "(Num 2)", false),
         ] {
             let lhs = program
-                .ground_term(&mut dag, &parse_sexp(a).unwrap())
+                .ground_term(&mut dag, &parse_expr(a).unwrap())
                 .unwrap();
             let rhs = program
-                .ground_term(&mut dag, &parse_sexp(b).unwrap())
+                .ground_term(&mut dag, &parse_expr(b).unwrap())
                 .unwrap();
             assert_eq!(
                 program.eq_modulo_renaming(&mut dag, lhs, rhs),
@@ -1108,6 +1029,10 @@ mod tests {
     fn subst_is_refused() {
         let mut dag = TermDag::default();
         let mut program = SlottedProgram::default();
+        program.add_constructor(
+            "Let",
+            vec![ColumnKind::Child, ColumnKind::Binder, ColumnKind::Child],
+        );
         let err = program
             .add_rewrite(
                 &mut dag,

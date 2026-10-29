@@ -15,5 +15,7 @@ Proof:
 (Rule
   (= (Pair $a $b) (Hit))
   (name "guard")
-  (premises (Fiat (= (Pair $a $b) (Pair $a $b))) (Fiat (= (F $a) (G $a))))
+  (premises
+    (Fiat (= (Pair $a $b) (Pair $a $b)))
+    (RenamingGuard (Fiat (= (F $a) (G $a))) (renaming ($a $b) ($b $a))))
   (substitution ($x $a) ($y $b)))

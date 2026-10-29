@@ -233,7 +233,7 @@ impl Lifting {
         premises: Vec<LiftedId>,
         program: &SlottedProgram,
     ) -> LiftedId {
-        let premises = premises
+        let premises: Vec<_> = premises
             .into_iter()
             .enumerate()
             .map(|(i, id)| {
@@ -257,7 +257,7 @@ impl Lifting {
             SlottedJustification::Rule {
                 name,
                 substitution,
-                premises,
+                premises: premises.into_iter().map(Into::into).collect(),
             },
         );
         self.plain(proof)

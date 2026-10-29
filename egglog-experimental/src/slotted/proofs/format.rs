@@ -24,6 +24,28 @@ impl SlottedProposition {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether a claim fixes free slots or permits a renaming between its sides.
+pub enum ClaimKind {
+    /// `(= a b)`: the same invocation.
+    Eq,
+    /// `(renaming-= a b)`: the same class under some renaming.
+    RenamingEq,
+}
+
+/// A `prove-slotted`'s claim over source terms.
+#[derive(Clone, Debug)]
+pub struct Claim {
+    /// The requested notion of equality.
+    pub kind: ClaimKind,
+    /// The carrier sort the two terms belong to.
+    pub sort: String,
+    /// The claim's left source term.
+    pub lhs: TermId,
+    /// The claim's right source term.
+    pub rhs: TermId,
+}
+
 /// An ordinary proof of `lhs = rename(renaming, rhs)` for a surface claim.
 /// The witness belongs to the claim, not to the proof's equality propositions.
 #[derive(Clone, Debug)]
@@ -34,23 +56,65 @@ pub struct SlottedConclusion {
     pub renaming: Renaming,
 }
 
+/// Evidence for a source rule's root pattern or a `:when` condition.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum SlottedPremise {
+    /// An ordinary proof matching the fact exactly.
+    Equality(SlottedProofId),
+    /// For `(renaming-= a b)`, a proof `a = c` and a permutation taking `b`
+    /// to a term alpha-equivalent to `c`.
+    Renaming {
+        /// The equality connecting the left operand to the representative.
+        proof: SlottedProofId,
+        /// The right operand's permutation.
+        renaming: Renaming,
+    },
+}
+
+impl SlottedPremise {
+    /// The ordinary equality proof supplying this evidence.
+    pub fn proof(&self) -> SlottedProofId {
+        match self {
+            Self::Equality(proof) | Self::Renaming { proof, .. } => *proof,
+        }
+    }
+
+    pub(super) fn with_proof(&self, proof: SlottedProofId) -> Self {
+        match self {
+            Self::Equality(_) => Self::Equality(proof),
+            Self::Renaming { renaming, .. } => Self::Renaming {
+                proof,
+                renaming: renaming.clone(),
+            },
+        }
+    }
+}
+
+impl From<SlottedProofId> for SlottedPremise {
+    fn from(proof: SlottedProofId) -> Self {
+        Self::Equality(proof)
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 /// A source axiom, rewrite application, or operation on earlier proof steps.
 pub enum SlottedJustification {
     /// A term the program built, or a source `union`.
     Fiat,
-    /// A rewrite instantiated by the substitution, given proofs of its premises:
-    /// the root pattern first, then each `:when` equality pattern in order.
+    /// Instantiate a rewrite using evidence for its root pattern, followed by
+    /// each original `:when` fact in source order.
     Rule {
         /// The source rewrite's name.
         name: String,
         /// Source variables and the terms substituted for them.
         substitution: Vec<(String, TermId)>,
-        /// Proofs of the rewrite's pattern premises, in source order.
-        premises: Vec<SlottedProofId>,
+        /// Evidence for the root pattern and original conditions.
+        premises: Vec<SlottedPremise>,
     },
     /// Reverse an equality.
     Sym(SlottedProofId),
+    /// Replace the right endpoint by an alpha-equivalent term.
+    Alpha(SlottedProofId),
     /// Compose equalities with matching middle terms.
     Trans(SlottedProofId, SlottedProofId),
     /// Replace one right-hand child using an equality proof.
@@ -173,6 +237,15 @@ impl SlottedProofStore {
         self.add(
             SlottedProposition::equal(p.rhs, p.lhs),
             SlottedJustification::Sym(proof),
+        )
+    }
+
+    /// State an alpha-conversion of the right endpoint; the checker validates it.
+    pub fn alpha(&mut self, proof: SlottedProofId, rhs: TermId) -> SlottedProofId {
+        let lhs = self.proposition(proof).lhs;
+        self.add(
+            SlottedProposition::equal(lhs, rhs),
+            SlottedJustification::Alpha(proof),
         )
     }
 
@@ -300,8 +373,12 @@ impl SlottedProofStore {
     pub fn children(&self, id: SlottedProofId) -> Vec<SlottedProofId> {
         match &self.proofs[id].justification {
             SlottedJustification::Fiat => vec![],
-            SlottedJustification::Rule { premises, .. } => premises.clone(),
-            SlottedJustification::Sym(p) | SlottedJustification::Equivariance { proof: p, .. } => {
+            SlottedJustification::Rule { premises, .. } => {
+                premises.iter().map(SlottedPremise::proof).collect()
+            }
+            SlottedJustification::Sym(p)
+            | SlottedJustification::Alpha(p)
+            | SlottedJustification::Equivariance { proof: p, .. } => {
                 vec![*p]
             }
             SlottedJustification::Proj { proof, .. } => vec![*proof],
@@ -342,7 +419,16 @@ impl SlottedProofStore {
                 SlottedJustification::Equivariance { renaming, .. } => {
                     slots.extend(renaming.entries().flat_map(|(a, b)| [a, b]));
                 }
-                SlottedJustification::Rule { substitution, .. } => {
+                SlottedJustification::Rule {
+                    substitution,
+                    premises,
+                    ..
+                } => {
+                    for premise in premises {
+                        if let SlottedPremise::Renaming { renaming, .. } = premise {
+                            slots.extend(renaming.entries().flat_map(|(a, b)| [a, b]));
+                        }
+                    }
                     used.extend(
                         substitution
                             .iter()
@@ -471,10 +557,20 @@ impl SlottedProofStore {
                 } => {
                     let name = dag.lit(Literal::String(name.clone()));
                     let name = dag.app("name".into(), vec![name]);
-                    let premises = dag.app(
-                        "premises".into(),
-                        premises.iter().map(|p| proofs[p]).collect(),
-                    );
+                    let premises = premises
+                        .iter()
+                        .map(|premise| {
+                            let proof = proofs[&premise.proof()];
+                            match premise {
+                                SlottedPremise::Equality(_) => proof,
+                                SlottedPremise::Renaming { renaming, .. } => {
+                                    let renaming = Self::renaming_term(dag, renaming, names);
+                                    dag.app("RenamingGuard".into(), vec![proof, renaming])
+                                }
+                            }
+                        })
+                        .collect();
+                    let premises = dag.app("premises".into(), premises);
                     let substitution = substitution
                         .iter()
                         .map(|(var, term)| dag.app(var.clone(), vec![terms[*term]]))
@@ -483,6 +579,9 @@ impl SlottedProofStore {
                     dag.app("Rule".into(), vec![equality, name, premises, substitution])
                 }
                 SlottedJustification::Sym(p) => dag.app("Sym".into(), vec![equality, proofs[p]]),
+                SlottedJustification::Alpha(p) => {
+                    dag.app("Alpha".into(), vec![equality, proofs[p]])
+                }
                 SlottedJustification::Trans(a, b) => {
                     dag.app("Trans".into(), vec![equality, proofs[a], proofs[b]])
                 }
